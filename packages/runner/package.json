@@ -1,0 +1,33 @@
+{
+	"name": "@fabrika/runner",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": {
+			"bun": "./src/index.ts",
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		}
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test",
+		"serve": "bun src/serve.ts",
+		"docker:build": "docker build -f Dockerfile -t vozka-runner ../..",
+		"oblaka": "bunx oblaka oblaka.ts",
+		"oblaka:deploy": "bunx oblaka oblaka.ts --remote",
+		"bootstrap": "bun run scripts/bootstrap-runner.ts"
+	},
+	"dependencies": {
+		"@cloudflare/containers": "^0.0.30",
+		"@fabrika/config": "workspace:*",
+		"@fabrika/engine": "workspace:*"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20251001.0",
+		"@types/bun": "latest",
+		"oblaka-iac": "^0.0.18",
+		"wrangler": "4.72.0"
+	}
+}

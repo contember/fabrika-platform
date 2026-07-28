@@ -1,0 +1,29 @@
+# decisions (ADR)
+
+One file per significant architectural/product decision: `NNNN-<slug>.md`
+(monotonic, never reused). Copy [`_template.md`](_template.md).
+
+**Immutable.** Once a decision is Accepted, don't rewrite it — to change course,
+write a _new_ ADR and set the old one's status to `Superseded by NNNN`.
+
+Write one when the choice (a) constrains future work, (b) rejected a real
+alternative, or (c) someone will later ask "why did we do it this way?". Otherwise
+a commit message suffices.
+
+0001–0008 are the founding set: they record the design conversation that produced
+fabrika-platform. Read them in order — 0002 through 0008 all assume the framing in
+0001, and several rest on facts collected in
+[`../reference/zerops-platform.md`](../reference/zerops-platform.md).
+
+## Log
+
+<!-- newest last; one line each: NNNN — title — status (date) -->
+
+- [0001](0001-merge-propustka-and-vozka.md) — Merge propustka and vozka into fabrika-platform under the `@fabrika/*` scope — accepted (2026-07-28)
+- [0002](0002-deploy-driver-owns-the-plan.md) — Multi-cloud through a `DeployDriver`; the deploy plan belongs to the driver — accepted (2026-07-28)
+- [0003](0003-no-deploy-runner-on-zerops.md) — No deploy runner on Zerops — the platform executes the deploy — accepted (2026-07-28)
+- [0004](0004-secrets-live-in-the-platform.md) — The platform holds secret values; fabrika holds only references — accepted (2026-07-28)
+- [0005](0005-compile-app-config-to-static-manifest.md) — Compile app config to a static manifest; the control plane never executes app code — accepted (2026-07-28)
+- [0006](0006-zerops-project-topology-is-a-registry-field.md) — Zerops project topology is a registry field, defaulting to project-per-environment — accepted (2026-07-28)
+- [0007](0007-proxy-based-auth-enforcement.md) — Enforce auth in a proxy instead of an in-process SDK — accepted (2026-07-28)
+- [0008](0008-caddy-forward-auth-proxy.md) — Caddy + `forward_auth` on Zerops, a thin Worker on Cloudflare, over one shared TypeScript auth service — accepted (2026-07-28)

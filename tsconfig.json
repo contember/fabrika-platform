@@ -1,0 +1,15 @@
+{
+	"files": [],
+	"references": [
+		{ "path": "./packages/auth-core" },
+		{ "path": "./packages/auth" },
+		{ "path": "./packages/iam" },
+		{ "path": "./packages/iam-ui" },
+		{ "path": "./packages/config" },
+		{ "path": "./packages/engine" },
+		{ "path": "./packages/control" },
+		{ "path": "./packages/cli" },
+		{ "path": "./packages/dashboard" },
+		{ "path": "./packages/runner" }
+	]
+}

@@ -1,0 +1,19 @@
+# Template for packages/iam/.dev.vars (which is gitignored). Copy it to
+# `.dev.vars` for local dev: `cp .dev.vars.example .dev.vars`.
+#
+# lopata loads `.dev.vars` on top of the wrangler `vars` (`.dev.vars` overrides
+# `vars`), so the Worker boots locally without these secrets living in the
+# generated wrangler.jsonc. These are dummy values, never real credentials. Do NOT
+# put real secrets here.
+#
+# Remote (stage/prod) provisioning is out-of-band: `wrangler secret put
+# PROPUSTKA_SIGNING_KEYS` and `wrangler secret put OIDC_CLIENT_SECRET`. See
+# packages/iam/oblaka.ts.
+
+# propustka-native auth secrets. Empty PROPUSTKA_SIGNING_KEYS → an ephemeral ES256 key is
+# generated per isolate (dev only; sessions reset on restart). Real keys (stage/prod) are a JSON
+# array of EC P-256 private JWKs, provisioned via `wrangler secret put PROPUSTKA_SIGNING_KEYS`.
+PROPUSTKA_SIGNING_KEYS=
+# OIDC client secret — dummy locally (no real OIDC upstream in dev). The provider is generic:
+# OIDC_ISSUER (a var) selects ANY OIDC provider via discovery; only the secret lives here.
+OIDC_CLIENT_SECRET=local-oidc-client-secret
