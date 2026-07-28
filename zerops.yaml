@@ -1,0 +1,126 @@
+# GENERATED FILE — DO NOT EDIT BY HAND.
+#
+# Source: deploy/zerops/setups.ts  (which is where the per-field commentary lives)
+# Regenerate: bun run --filter @fabrika/deploy gen
+#
+# Zerops reads `zerops.yaml` from the REPOSITORY ROOT, so fabrika's three deployable services share
+# ONE file with three named setups. A service selects its setup by name; the name defaults to the
+# service hostname, which is why `iam`, `control` and `proxy` below are also the hostnames in
+# deploy/zerops/generated/*.zerops-import.yaml.
+#
+# NO SECRETS AND NO PER-INSTALLATION VALUES ARE IN HERE. `${x_y}` is a REFERENCE to another
+# service's platform-held variable, never a value. Public origins, OIDC coordinates and every
+# secret are service-level variables written through the env API (ADR-0004).
+#
+zerops:
+  - setup: iam
+    build:
+      base:
+        - alpine/bun@1.3
+      buildCommands:
+        - "bun install --frozen-lockfile"
+        - "bun run --filter @fabrika/iam-ui build"
+      deployFiles:
+        - package.json
+        - bun.lock
+        - node_modules
+        - packages
+      cache:
+        - node_modules
+    run:
+      base: alpine/bun@1.3
+      initCommands:
+        - "bun packages/iam/src/node/migrate.ts"
+      start: "bun packages/iam/src/node/server.ts"
+      ports:
+        - port: 3000
+          httpSupport: true
+      healthCheck:
+        httpGet:
+          port: 3000
+          path: "/healthz"
+      crontab:
+        - timing: "0 3 * * *"
+          command: "bun packages/iam/src/node/prune.ts"
+          allContainers: false
+      envVariables:
+        PORT: "3000"
+        PROPUSTKA_DATABASE_URL: "${db_connectionString}"
+        PROPUSTKA_ASSETS_DIR: packages/iam-ui/dist
+        ENVIRONMENT: prod
+  - setup: control
+    build:
+      base:
+        - alpine/bun@1.3
+      buildCommands:
+        - "bun install --frozen-lockfile"
+        - "bun run --filter @fabrika/dashboard build"
+      deployFiles:
+        - package.json
+        - bun.lock
+        - node_modules
+        - packages
+      cache:
+        - node_modules
+    run:
+      base: alpine/bun@1.3
+      initCommands:
+        - "bun packages/control/src/node/migrate.ts"
+      start: "bun packages/control/src/node/server.ts"
+      ports:
+        - port: 3000
+          httpSupport: true
+      healthCheck:
+        httpGet:
+          port: 3000
+          path: "/healthz"
+      crontab:
+        - timing: "*/5 * * * *"
+          command: "bun packages/control/src/node/cron.ts"
+          allContainers: false
+      envVariables:
+        PORT: "3000"
+        VOZKA_DATABASE_URL: "${db_connectionString}"
+        VOZKA_ASSETS_DIR: packages/dashboard/dist
+        ENVIRONMENT: prod
+        PROPUSTKA_URL: "http://iam:3000"
+        VOZKA_RUN_LOGS_BUCKET: "${storage_bucketName}"
+        VOZKA_RUN_LOGS_ENDPOINT: "${storage_apiUrl}"
+        VOZKA_RUN_LOGS_ACCESS_KEY_ID: "${storage_accessKeyId}"
+        VOZKA_RUN_LOGS_SECRET_ACCESS_KEY: "${storage_secretAccessKey}"
+        VOZKA_RUN_LOGS_REGION: us-east-1
+  - setup: proxy
+    build:
+      base:
+        - alpine/go@latest
+        - alpine/bun@1.3
+      prepareCommands:
+        - "CGO_ENABLED=0 GOBIN=/tmp/gobin go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.10.2"
+      buildCommands:
+        - "bun install --frozen-lockfile"
+        - "printf %s \"${FABRIKA_PROXY_MANIFEST_JSON}\" > ./proxy.manifest.json"
+        - "bun run packages/proxy/src/generate-config.ts ./proxy.manifest.json ./caddy.json --auth-upstream 127.0.0.1:9000"
+        - "bun build --compile --target=bun-linux-x64-musl ./packages/proxy/src/main.ts --outfile ./fabrika-proxy"
+        - "cp /tmp/gobin/caddy ./caddy"
+      deployFiles:
+        - caddy
+        - fabrika-proxy
+        - caddy.json
+        - proxy.manifest.json
+        - packages/proxy/start.sh
+      cache:
+        - node_modules
+        - "/root/go/pkg/mod"
+    run:
+      base: alpine@3.21
+      ports:
+        - port: 8080
+          httpSupport: true
+      healthCheck:
+        httpGet:
+          port: 8081
+          path: "/healthz"
+      envVariables:
+        FABRIKA_PROXY_MANIFEST: "/var/www/proxy.manifest.json"
+        FABRIKA_PROXY_PORT: "9000"
+      start: "sh /var/www/packages/proxy/start.sh"
