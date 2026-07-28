@@ -1,13 +1,14 @@
 // Offline full-path proof: run deploy() in dry-run with a fake provisioner (oblaka's real deploy()
 // always hits the cf-state KV even in dryRun, so we substitute just that collaborator — exactly the
-// injection seam the engine is built around). Everything else is the real engine + real fixture.
+// injection seam the Cloudflare driver is built around). Everything else is the real engine + real fixture.
 import { deploy } from '../src/deploy'
-import { defaultRuntime, type DeployRuntime } from '../src/runtime'
-import type { DeployContext } from '../src/types'
+import { createCloudflareDriver } from '../src/drivers/cloudflare'
+import { type CloudflareCollaborators, defaultCloudflareCollaborators } from '../src/drivers/cloudflare/collaborators'
+import type { CloudflareTarget, DeployContext } from '../src/types'
 import config from './fabrika.config'
 
-const runtime: DeployRuntime = {
-	...defaultRuntime,
+const collaborators: CloudflareCollaborators = {
+	...defaultCloudflareCollaborators,
 	provision: async (input) => {
 		console.log(`  [fake-oblaka] materialized graph for ${input.env}, dryRun=${input.dryRun}`)
 		return {
@@ -17,11 +18,10 @@ const runtime: DeployRuntime = {
 	},
 }
 
-const ctx: DeployContext = {
+const ctx: DeployContext<CloudflareTarget> = {
 	env: 'stage',
 	domain: 'stage.sample.example.com',
-	accountId: 'dummy-acc',
-	apiToken: 'dummy-tok',
+	target: { platform: 'cloudflare', accountId: 'dummy-acc', apiToken: 'dummy-tok' },
 	propustkaUrl: 'https://iam.example.com',
 	adminKey: 'px_dummy-admin',
 	secrets: { SAMPLE_API_KEY: 'dummy-secret' },
@@ -29,7 +29,7 @@ const ctx: DeployContext = {
 	dryRun: true,
 }
 
-const result = await deploy(config, ctx, runtime)
+const result = await deploy(config, ctx, { drivers: { cloudflare: createCloudflareDriver(collaborators) } })
 console.log('\n=== RESULT ===')
 console.log('overall:', result.status)
 for (const s of result.steps) console.log(' ', s.status.padEnd(10), s.spec.id)

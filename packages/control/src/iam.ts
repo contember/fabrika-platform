@@ -66,6 +66,29 @@ export interface IamEnv {
 	 * (see `withProvisioningKey`). Empty/unset disables it.
 	 */
 	PROPUSTKA_PROVISIONING_KEY?: string
+	/**
+	 * The control plane's own public domain. Read here for ONE reason: it is the authority on whether the
+	 * BROWSER spoke HTTPS, which decides the `px_token` cookie's `Secure` flag — see `secureCookies`.
+	 */
+	VOZKA_DOMAIN?: string
+}
+
+/**
+ * Whether the freshly minted `px_token` cookie must carry `Secure`.
+ *
+ * `PropustkaAuth` otherwise derives it from the REQUEST's protocol, and that is wrong behind a
+ * TLS-TERMINATING BALANCER — Zerops' project L7 balancer, or any reverse proxy: the browser spoke
+ * HTTPS, the process sees plain HTTP on the private network, and a permission-token cookie set without
+ * `Secure` there is one downgrade away from being sent in the clear. The configured public domain is
+ * the authority on what the browser actually spoke, so a configured domain forces `Secure`.
+ *
+ * Returning `undefined` (no domain: local dev, or a *.workers.dev stage) keeps the derived behaviour.
+ * WIDENING ONLY — everything that was `Secure` before still is, so the Cloudflare path is unchanged
+ * (there the request protocol is https either way).
+ */
+function secureCookies(env: IamEnv): boolean | undefined {
+	const domain = env.VOZKA_DOMAIN
+	return domain !== undefined && domain.trim() !== '' ? true : undefined
 }
 
 /**
@@ -190,7 +213,8 @@ function realAuthenticator(env: IamEnv): Authenticator {
 	if (issuer === undefined || issuer === '') {
 		throw new Error('PROPUSTKA_URL is missing off-local — required as the PropustkaAuth issuer (propustka origin).')
 	}
-	const auth = new PropustkaAuth(env.IAM, VOZKA_APP_ID, { issuer, gates: VOZKA_GATES })
+	const secure = secureCookies(env)
+	const auth = new PropustkaAuth(env.IAM, VOZKA_APP_ID, { issuer, gates: VOZKA_GATES, ...(secure === undefined ? {} : { secure }) })
 	let lastSetCookie: string | undefined
 	return {
 		async authenticate(request: Request): Promise<VozkaAuth> {

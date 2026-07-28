@@ -20,15 +20,21 @@ another Zerops project, you'll need to use public access methods since different
 projects don't share private networks."
 ([internal access](https://docs.zerops.io/references/networking/internal-access))
 
-The "service isolation" setting governs **environment-variable references between
+The `envIsolation` setting governs **environment-variable visibility between
 services**, not network reachability — a service with isolation on is still
-reachable by hostname from every other service in the project. The
-cross-service variable mechanism itself is documented (prefix the key with the
-service hostname, e.g. `mariadb1_connectionString`)
-([env variables](https://docs.zerops.io/nodejs/how-to/env-variables)), but a
-documented on/off _isolation_ toggle was **not located** in the public docs. The
-load-bearing half — that nothing in a project isolates the network — is confirmed
-by the internal-access page above.
+reachable by hostname from every other service in the project. It is a real field at
+BOTH project and service level, with two values: `none` (every service sees every
+variable) and `service` (each service sees only its own); a service-level value
+overrides the project's, and "explicit variable referencing is still possible
+regardless of the isolation setting". The cross-service reference mechanism is
+prefixing the key with the service hostname, e.g. `mariadb1_connectionString`
+([import JSON schema](https://api.app-prg1.zerops.io/api/rest/public/settings/import-project-yml-json-schema.json),
+[env variables](https://docs.zerops.io/nodejs/how-to/env-variables)).
+
+`envIsolation: none` is why ADR-0004's invariant has a second half: without
+`envIsolation: service`, every service also sees every OTHER service's service-level
+variables, so "never write to project level" alone does not prevent app A's
+credentials reaching app B.
 
 ## Public access
 
@@ -107,10 +113,43 @@ Incus detail is **not stated** on the pipeline page.
 ## REST API
 
 Base URL `https://api.app-prg1.zerops.io/api/rest/public`, Bearer auth with a
-**personal access token** generated in the GUI. Endpoint groups relevant here:
-`/app-version` (deploys), `/service-stack` (services), `/project`, `/project-env`,
-`/user-data` (environment variables).
+**personal access token** generated in the GUI. The token is sent verbatim — there is
+no exchange step; `/auth/*` is for email+password sessions, not for a PAT.
 ([REST API reference](https://docs.zerops.io/references/api))
+
+**A machine-readable OpenAPI document exists** and is the authoritative contract for
+every request/response shape:
+`https://api.app-prg1.zerops.io/api/rest/public/swagger/openapi.yml` (served behind
+the Swagger UI at `/swagger`; `/openapi.json` and `/swagger.json` both 404). Prefer it
+over prose. The endpoints fabrika's driver uses, all confirmed there:
+
+| Purpose                                | Endpoint                                                                   | Body / response                                                                                  |
+| -------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Apply an import to an existing project | `POST /project/{id}/service-stack/import`                                  | `{ yaml }` → `{ projectId, projectName, serviceStacks[] }`                                       |
+| Create a project from an import        | `POST /client/{id}/project/import`                                         | same shapes                                                                                      |
+| Trigger build+deploy                   | `PUT /service-stack/{id}/trigger-pipeline`                                 | `{ buildFromGit?, zeropsYaml?, zeropsSetup?, startWithoutCode?, userData?, … }` → `{ process? }` |
+| Poll a version                         | `GET /app-version/{id}`                                                    | `{ id, status, sequence, serviceStackId, build{…} }`                                             |
+| List versions                          | `GET /service-stack/{id}/app-version`                                      | `{ list[], totalCount }`, `limit`/`offset`/`statuses`                                            |
+| Cancel a build                         | `PUT /app-version/{id}/cancel-build`                                       | → `{ success }`                                                                                  |
+| Service-level env vars                 | `GET`/`POST /service-stack/{id}/user-data`, `PUT`/`DELETE /user-data/{id}` | `{ key, content }`                                                                               |
+| Project-level env vars                 | `POST /project/{id}/env`, `PUT /project-env/{id}`                          | `{ key, content, sensitive }` — **fabrika never calls these** (ADR-0004)                         |
+| Log access                             | `GET /project/{id}/log`                                                    | `{ accessToken, expiration, url, urlPlain, urlInfo, urlUi }`                                     |
+
+`app-version.status` is a closed enum: `UPLOADING`, `WAITING_TO_BUILD`, `BUILDING`,
+`BUILD_FAILED`, `BUILD_VALIDATION_FAILED`, `WAITING_TO_DEPLOY`, `DEPLOYING`,
+`DEPLOY_FAILED`, `PREPARING_RUNTIME`, `PREPARING_RUNTIME_FAILED`, `ACTIVE`, `BACKUP`,
+`CANCELLED`. `ACTIVE` is the only success.
+
+Two things the OpenAPI document does **not** cover:
+
+- **The log service itself.** `GET /project/{id}/log` returns URLs plus a bearer for a
+  SEPARATE service; that service's own request/response contract appears in no
+  published document. fabrika's client marks `readBuildLog` unverified and treats a
+  failure there as non-fatal.
+- **`envIsolation` cannot be changed after project creation.** It is settable on
+  `POST /client/{id}/project` and in the import `project:` section, but
+  `RequestPutProject` has no such field. Service-level `envIsolation` overrides the
+  project's, which is fabrika's compensating control.
 
 **The personal access token carries account-wide admin privileges** — no finer
 scoping was found. Treat it as a root credential: it is the single most dangerous
@@ -138,11 +177,16 @@ Whether secret **values can be read back** through the API is an open question �
 Zerops has an Alpine service type: "a minimal base environment for running
 applications built with technologies that aren't officially supported by Zerops, or
 for custom setups requiring full control over the runtime environment". Combined
-with `run.os: alpine`, `run.base`, `run.prepareCommands` (which run in a fresh base
-container) and an arbitrary `run.start`, a **static binary is a first-class
-deployment target**.
+with an `alpine@3.x` **service type**, `run.base`, `run.prepareCommands` (which run in
+a fresh base container) and an arbitrary `run.start`, a **static binary is a
+first-class deployment target**.
 ([Alpine overview](https://docs.zerops.io/alpine/overview),
 [zerops.yaml specification](https://docs.zerops.io/zerops-yaml/specification))
+
+**Two fields the import JSON schema marks deprecated**, so don't reach for them: `mode`
+("use Type version only" — availability is encoded in the service type, e.g.
+`postgresql:ha@18` vs `postgresql:single@18`) and `os` (survives only for a
+`startWithoutCode` runtime service; select an `alpine@3.x` type instead of setting it).
 
 This is what makes the Caddy proxy deployable —
 [ADR-0008](../decisions/0008-caddy-forward-auth-proxy.md). Since the project L7

@@ -1,8 +1,11 @@
 {
 	"files": [],
 	"references": [
+		{ "path": "./packages/platform" },
+		{ "path": "./packages/platform-node" },
 		{ "path": "./packages/auth-core" },
 		{ "path": "./packages/auth" },
+		{ "path": "./packages/proxy" },
 		{ "path": "./packages/iam" },
 		{ "path": "./packages/iam-ui" },
 		{ "path": "./packages/config" },
@@ -10,6 +13,7 @@
 		{ "path": "./packages/control" },
 		{ "path": "./packages/cli" },
 		{ "path": "./packages/dashboard" },
-		{ "path": "./packages/runner" }
+		{ "path": "./packages/runner" },
+		{ "path": "./deploy" }
 	]
 }

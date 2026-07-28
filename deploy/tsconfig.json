@@ -1,0 +1,14 @@
+{
+	"extends": "../tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"types": ["@types/bun"],
+		// Same relaxation, same reason, as packages/config and packages/engine: importing
+		// `@fabrika/engine` pulls `@fabrika/config`, which re-exports oblaka-iac's raw TS source, and that
+		// source is authored against plain `strict`. Relaxed ONLY to accommodate the dependency — every
+		// file under `zerops/` is fully strict otherwise and uses bracket access throughout.
+		"noUncheckedIndexedAccess": false,
+		"noPropertyAccessFromIndexSignature": false
+	},
+	"include": ["zerops/**/*"]
+}

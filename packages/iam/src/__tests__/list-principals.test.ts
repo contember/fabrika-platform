@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { createHarness, seedInlineGrant, seedService, seedUser } from './helpers/harness'
+import { createHarness, type Harness, seedInlineGrant, seedService, seedUser } from './helpers/harness'
 
 // listPrincipals (the app's people directory): the DB layer's app-scoped, user-only,
 // deduped enumeration (`getPrincipalsForApp`) — an operator only ever sees the roster of
-// the app it is scoped to.
+// the app it is scoped to. Plus `Db.listPrincipals`, the admin directory + its `q` search.
 
 describe('Db.getPrincipalsForApp', () => {
 	test('returns app + cross-app users, excludes other apps and services, dedups, flags disabled', () => {
@@ -53,8 +53,8 @@ describe('Db.getPrincipalsForApp', () => {
 		const expired = seedUser(h.sqlite, { sub: 'x', email: 'x@poplach.test' })
 		// expires_at in the past → not an active member.
 		h.sqlite.run(
-			'INSERT INTO grants (id, principal_id, permissions, app, expires_at) VALUES (?, ?, ?, ?, ?)',
-			['g-exp', expired, JSON.stringify(['project.read']), 'poplach', 1],
+			'INSERT INTO grants (id, principal_id, permissions, app, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+			['g-exp', expired, JSON.stringify(['project.read']), 'poplach', 1, Math.floor(Date.now() / 1000)],
 		)
 		expect(await h.db.getPrincipalsForApp('poplach')).toEqual([])
 	})
@@ -71,5 +71,64 @@ describe('Db.getPrincipalsForApp', () => {
 		const emails = (await h.db.getPrincipalsForApp('poplach')).map((r) => r.email)
 		expect(new Set(emails)).toEqual(new Set(['op@poplach.test', 'teammate@poplach.test']))
 		expect(emails).not.toContain('someone@opice.test')
+	})
+})
+
+/**
+ * Force SQLite's `LIKE` to behave the way Postgres's does — case-SENSITIVE.
+ *
+ * This is the whole point of the test below. SQLite case-folds ASCII in `LIKE` and Postgres does
+ * not, so a query written as `label LIKE ?` passes here and then silently stops matching 'Alice'
+ * for 'alice' once the same SQL runs on Postgres. With the pragma on, that divergence becomes a
+ * failing test instead of a production surprise: only the portable form (`LOWER()` on both sides)
+ * survives. Reverting `listPrincipals` to a bare `LIKE` makes every assertion in the block fail.
+ */
+function withPostgresLikeSemantics(h: Harness): void {
+	h.sqlite.exec('PRAGMA case_sensitive_like = ON')
+}
+
+describe('Db.listPrincipals — q search', () => {
+	test('matches label and email case-INSENSITIVELY, under case-sensitive LIKE semantics', async () => {
+		const h = createHarness()
+		withPostgresLikeSemantics(h)
+		const alice = seedUser(h.sqlite, { sub: 'a', email: 'Alice@Firma.cz', label: 'Alice Nováková' })
+		const bob = seedUser(h.sqlite, { sub: 'b', email: 'bob@firma.cz', label: 'Bob Dvořák' })
+
+		// Lowercase needle vs. capitalised label.
+		expect((await h.db.listPrincipals({ q: 'alice' })).map((r) => r.id)).toEqual([alice])
+		// Uppercase needle vs. lowercase label.
+		expect((await h.db.listPrincipals({ q: 'BOB' })).map((r) => r.id)).toEqual([bob])
+		// The email column is normalised too, not just the label.
+		expect((await h.db.listPrincipals({ q: 'alice@firma' })).map((r) => r.id)).toEqual([alice])
+		// A needle matching neither still matches nothing.
+		expect(await h.db.listPrincipals({ q: 'carol' })).toEqual([])
+	})
+
+	test('q composes with the type filter, and services (email NULL) are searchable by label', async () => {
+		const h = createHarness()
+		withPostgresLikeSemantics(h)
+		const user = seedUser(h.sqlite, { sub: 'r', email: 'reporter@firma.cz', label: 'Reports Person' })
+		const service = seedService(h.sqlite, { commonName: 'ci', label: 'Reports Exporter' })
+
+		expect(new Set((await h.db.listPrincipals({ q: 'reports' })).map((r) => r.id))).toEqual(new Set([user, service]))
+		expect((await h.db.listPrincipals({ type: 'service', q: 'REPORTS' })).map((r) => r.id)).toEqual([service])
+	})
+})
+
+describe('Db.listPrincipals — ordering', () => {
+	test('rows sharing a created_at second are ordered deterministically by id', async () => {
+		// created_at is whole seconds, so same-second rows have no order of their own; without the
+		// `id DESC` tiebreak the engine picks one arbitrarily (and SQLite and Postgres pick
+		// differently). Ids here are 'user-N' with N increasing, so newest-first means id DESC.
+		const h = createHarness()
+		const at = 1_782_896_400
+		const first = seedUser(h.sqlite, { sub: 'o1', email: 'o1@firma.cz', createdAt: at })
+		const second = seedUser(h.sqlite, { sub: 'o2', email: 'o2@firma.cz', createdAt: at })
+		const third = seedUser(h.sqlite, { sub: 'o3', email: 'o3@firma.cz', createdAt: at })
+
+		const seeded = new Set([first, second, third])
+		const expected = [first, second, third].sort((a, b) => (a < b ? 1 : -1))
+		// Filtered because migration 0008 seeds `provisioning-admin`, which is older than these.
+		expect((await h.db.listPrincipals({})).map((r) => r.id).filter((id) => seeded.has(id))).toEqual(expected)
 	})
 })

@@ -19,7 +19,7 @@ CREATE TABLE credentials (
 	issued_by    TEXT REFERENCES principals(id),    -- resolved server-side at issue, never self-asserted
 	expires_at   INTEGER,                           -- absolute expiry (unix seconds); NULL = no expiry
 	revoked_at   INTEGER,                           -- explicit revoke; NULL = active
-	created_at   INTEGER NOT NULL DEFAULT (unixepoch())
+	created_at   INTEGER NOT NULL                   -- unix seconds, bound by the writer (no DDL default — see 0001's header)
 );
 
 CREATE INDEX idx_credentials_principal ON credentials(principal_id);

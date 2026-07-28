@@ -1,0 +1,156 @@
+// What this app is responsible for, proven without a database, without a proxy and without IAM.
+//
+// The gates themselves are NOT tested here — they are not this process's job (ADR-0007), and the proxy
+// package has its own deny-matrix tests. What is tested is the half the proxy cannot do: verifying the
+// injected token and authorizing a specific action on a specific workspace.
+
+import { type AccessTokenClaims, type PermissionEntry, TOKEN_ALG } from '@fabrika/auth-core'
+import { beforeAll, describe, expect, test } from 'bun:test'
+import { createLocalJWKSet, exportJWK, generateKeyPair, type JWK, type KeyLike, SignJWT } from 'jose'
+import { createHandler } from '../app'
+import { createTokenReader, PROXY_TOKEN_HEADER } from '../authz'
+import type { Note, NotesStore } from '../notes'
+
+const ISSUER = 'https://iam.example.test'
+const APP_ID = 'notes'
+
+class MemoryNotes implements NotesStore {
+	private readonly rows: Note[] = []
+	list(workspace: string): Promise<Note[]> {
+		return Promise.resolve(this.rows.filter((row) => row.workspace === workspace))
+	}
+	create(note: Note): Promise<void> {
+		this.rows.push(note)
+		return Promise.resolve()
+	}
+	remove(workspace: string, id: string): Promise<boolean> {
+		const index = this.rows.findIndex((row) => row.workspace === workspace && row.id === id)
+		if (index === -1) {
+			return Promise.resolve(false)
+		}
+		this.rows.splice(index, 1)
+		return Promise.resolve(true)
+	}
+}
+
+let signingKey: KeyLike
+let publicJwk: JWK
+let sign: (claims: Partial<AccessTokenClaims> & { aud: string; iss: string }) => Promise<string>
+
+beforeAll(async () => {
+	const pair = await generateKeyPair(TOKEN_ALG, { extractable: true })
+	signingKey = pair.privateKey
+	publicJwk = { ...(await exportJWK(pair.publicKey)), alg: TOKEN_ALG, kid: 'test-1' }
+	sign = (claims) =>
+		new SignJWT({ perms: claims.perms ?? [], label: claims.label ?? null, ...(claims.ptype === undefined ? {} : { ptype: claims.ptype }) })
+			.setProtectedHeader({ alg: TOKEN_ALG, kid: 'test-1' })
+			.setIssuer(claims.iss)
+			.setAudience(claims.aud)
+			.setSubject(claims.sub ?? 'principal-1')
+			.setIssuedAt()
+			.setExpirationTime('5m')
+			.sign(signingKey)
+})
+
+const grant = (action: string, workspace?: string): PermissionEntry => ({
+	action,
+	scope: workspace === undefined ? null : { type: 'workspace', value: workspace },
+	source: 'grant',
+})
+
+const handlerFor = (notes: NotesStore = new MemoryNotes()): (request: Request) => Promise<Response> =>
+	createHandler({
+		readCaller: createTokenReader({ issuer: ISSUER, appId: APP_ID, keys: createLocalJWKSet({ keys: [publicJwk] }) }),
+		notes,
+		newId: () => 'note-1',
+	})
+
+const withToken = (url: string, token: string, init: RequestInit = {}): Request =>
+	new Request(url, { ...init, headers: { ...(init.headers ?? {}), [PROXY_TOKEN_HEADER]: token } })
+
+describe('public routes need no credential at all', () => {
+	test('/healthz answers without a token — the platform health check carries none', async () => {
+		const response = await handlerFor()(new Request('https://notes.test/healthz'))
+		expect(response.status).toBe(200)
+	})
+
+	test('/public/* is anonymous, and an anonymous caller can do nothing', async () => {
+		const response = await handlerFor()(new Request('https://notes.test/public/info'))
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({ app: 'notes', caller: 'anonymous' })
+	})
+})
+
+describe('the proxy-injected token is verified again, here', () => {
+	test('a gated route with no token is 401 — the header is never trusted for its presence alone', async () => {
+		const response = await handlerFor()(new Request('https://notes.test/api/notes?workspace=acme'))
+		expect(response.status).toBe(401)
+	})
+
+	test('a token minted for ANOTHER app is rejected — this is what stops a leaked token being replayed', async () => {
+		const token = await sign({ iss: ISSUER, aud: 'some-other-app', perms: [grant('notes.read')] })
+		const response = await handlerFor()(withToken('https://notes.test/api/notes?workspace=acme', token))
+		expect(response.status).toBe(401)
+	})
+
+	test('a token from another issuer is rejected', async () => {
+		const token = await sign({ iss: 'https://evil.example.test', aud: APP_ID, perms: [grant('notes.read')] })
+		const response = await handlerFor()(withToken('https://notes.test/api/notes?workspace=acme', token))
+		expect(response.status).toBe(401)
+	})
+
+	test('a garbage token is 401 rather than a 500', async () => {
+		const response = await handlerFor()(withToken('https://notes.test/api/notes?workspace=acme', 'not.a.jwt'))
+		expect(response.status).toBe(401)
+	})
+})
+
+describe('authorization is PER OBJECT — the check a per-path gate cannot make', () => {
+	test('a grant scoped to one workspace does not reach another', async () => {
+		const token = await sign({ iss: ISSUER, aud: APP_ID, perms: [grant('notes.read', 'acme')] })
+		const handler = handlerFor()
+		expect((await handler(withToken('https://notes.test/api/notes?workspace=acme', token))).status).toBe(200)
+		expect((await handler(withToken('https://notes.test/api/notes?workspace=other', token))).status).toBe(403)
+	})
+
+	test('the `author` role writes but does not delete — separate actions, separately checked', async () => {
+		const notes = new MemoryNotes()
+		await notes.create({ id: 'note-0', workspace: 'acme', title: 'existing' })
+		const handler = handlerFor(notes)
+		const author = await sign({ iss: ISSUER, aud: APP_ID, perms: [grant('notes.read', 'acme'), grant('notes.write', 'acme')] })
+
+		const created = await handler(
+			withToken('https://notes.test/api/notes?workspace=acme', author, { method: 'POST', body: JSON.stringify({ title: 'hello' }) }),
+		)
+		expect(created.status).toBe(201)
+
+		const deleted = await handler(withToken('https://notes.test/api/notes/note-0?workspace=acme', author, { method: 'DELETE' }))
+		expect(deleted.status).toBe(403)
+		expect(await notes.list('acme')).toHaveLength(2)
+	})
+
+	test('a `notes.*` grant covers every action in the namespace, including delete', async () => {
+		const notes = new MemoryNotes()
+		await notes.create({ id: 'note-0', workspace: 'acme', title: 'existing' })
+		const admin = await sign({ iss: ISSUER, aud: APP_ID, perms: [grant('notes.*', 'acme')] })
+		const response = await handlerFor(notes)(withToken('https://notes.test/api/notes/note-0?workspace=acme', admin, { method: 'DELETE' }))
+		expect(response.status).toBe(200)
+		expect(await notes.list('acme')).toHaveLength(0)
+	})
+
+	test('an `/api/*` request with no workspace is a 400, never "all workspaces"', async () => {
+		const token = await sign({ iss: ISSUER, aud: APP_ID, perms: [grant('notes.read')] })
+		const response = await handlerFor()(withToken('https://notes.test/api/notes', token))
+		expect(response.status).toBe(400)
+	})
+
+	test('the UI route reports the readable workspaces; an unscoped grant reports null, meaning ALL', async () => {
+		const scoped = await sign({ iss: ISSUER, aud: APP_ID, perms: [grant('notes.read', 'acme'), grant('notes.read', 'globex')] })
+		const scopedBody: unknown = await (await handlerFor()(withToken('https://notes.test/', scoped))).json()
+		expect(scopedBody).toEqual({ caller: 'principal-1', label: null, workspaces: ['acme', 'globex'] })
+
+		const global = await sign({ iss: ISSUER, aud: APP_ID, perms: [grant('notes.read')] })
+		const globalBody: unknown = await (await handlerFor()(withToken('https://notes.test/', global))).json()
+		expect(globalBody).toEqual({ caller: 'principal-1', label: null, workspaces: null })
+	})
+})

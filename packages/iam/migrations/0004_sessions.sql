@@ -16,7 +16,7 @@ CREATE TABLE sessions (
 	principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
 	idp_sub      TEXT NOT NULL,                      -- upstream IdP subject (Google `sub`)
 	email        TEXT,                               -- snapshot, for the admin session list / display
-	created_at   INTEGER NOT NULL DEFAULT (unixepoch()),
+	created_at   INTEGER NOT NULL,                   -- unix seconds, bound by the writer (no DDL default — see 0001's header)
 	expires_at   INTEGER NOT NULL,                   -- absolute session expiry (unix seconds)
 	revoked_at   INTEGER                             -- explicit logout / admin kill; NULL = active
 );

@@ -13,5 +13,5 @@
 		// `process.env.CLOUDFLARE_*` with dot access and trips `noPropertyAccessFromIndexSignature`.
 		"noPropertyAccessFromIndexSignature": false
 	},
-	"include": ["src/**/*"]
+	"include": ["src/**/*", "scripts/**/*"]
 }

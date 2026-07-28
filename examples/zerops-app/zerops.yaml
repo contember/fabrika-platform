@@ -1,0 +1,91 @@
+# The build/run descriptor for this app, at ITS repository root.
+#
+# Zerops reads `zerops.yaml` from the root of the repository it builds, so in a real deployment this
+# file sits beside `package.json` at the top of the app's own repo. It lives here because this example
+# IS that repo, checked into fabrika's monorepo for convenience — the paths below are relative to this
+# directory, and copying the directory somewhere else needs no path changes.
+#
+# `setup` must match the service hostname (`notesapi`), which is also what `zeropsSetup` in
+# `fabrika.config.ts` selects. One setup here, because one service in this repo carries code; the
+# `notesdb` PostgreSQL service is provisioned by the import document and has nothing to build.
+#
+# Hand-written, unlike fabrika's own root `zerops.yaml` (which is generated from
+# `deploy/zerops/setups.ts`). The line between them: generate a file that must AGREE with something
+# else — fabrika's has to stay in step with the hostnames in its import documents — and write by hand a
+# file that stands alone, which is every app's. Both are validated against Zerops' published
+# `zerops.yaml` JSON schema by `deploy/zerops/__tests__/zerops-yaml.test.ts`, so "hand-written" does not
+# mean "unchecked".
+#
+# ── Where the secrets are ──────────────────────────────────────────────────────────────────────────
+#
+# Not here. This file is committed and plaintext, so it carries only what is true for every deployment
+# of this app: ports, and `${service_variable}` REFERENCES that the platform resolves at container
+# start. Two categories live elsewhere, both addressed BY SERVICE through the env API (ADR-0004):
+#
+#   per-environment config   FABRIKA_IAM_ISSUER   the IAM service's public origin — the `iss` of every
+#                                                 token this app verifies, and the JWKS it fetches.
+#                                                 Differs per installation, so it is not committed;
+#                                                 `src/env.ts` refuses to boot without it.
+#   secrets                  NOTES_SESSION_PEPPER, NOTES_WEBHOOK_SIGNING_KEY — declared in
+#                                                 `fabrika.config.ts` under `pipeline.secrets` purely as
+#                                                 documentation. Nothing in fabrika transports their
+#                                                 values on Zerops; the platform holds them.
+
+zerops:
+  - setup: notesapi
+
+    build:
+      # Bun on Alpine. `build.os` is deprecated in the published schema — the OS is part of the base id.
+      base:
+        - alpine/bun@1.3
+      buildCommands:
+        - bun install --frozen-lockfile
+      # `node_modules` is deployed rather than reinstalled at runtime: the runtime container has no
+      # network guarantee and no package manager step, and the build container already resolved
+      # everything against the committed lockfile.
+      deployFiles:
+        - package.json
+        - bun.lock
+        - node_modules
+        - src
+      cache:
+        - node_modules
+
+    run:
+      base: alpine/bun@1.3
+
+      # Migrations run at CONTAINER START, which is why the Zerops deploy plan has no `migrate` step at
+      # all. Safe to repeat and safe to run concurrently: the statements are idempotent and the runner
+      # takes a session-level advisory lock on the DIRECT Postgres port, so two containers booting at
+      # once cannot both migrate.
+      initCommands:
+        - bun src/migrate.ts
+
+      start: bun src/server.ts
+
+      ports:
+        # `protocol` is omitted deliberately: TCP is the default at both ends, and the two published
+        # sources disagree about its spelling (the JSON schema's enum is lowercase `tcp`, while its own
+        # description and every doc example say `TCP`).
+        - port: 3000
+          # The project's L7 balancer terminates TLS and the proxy forwards plain HTTP over the private
+          # network, so this process holds no certificates.
+          httpSupport: true
+
+      # Liveness, not readiness: it answers "is this process serving?" and never touches Postgres. A
+      # health check that queried the database would let one slow query restart every container at once,
+      # turning a degraded dependency into an outage. `/healthz` is also a `public` gate — the check
+      # arrives with no credential and must not be answered with a 401.
+      healthCheck:
+        httpGet:
+          port: 3000
+          path: /healthz
+
+      envVariables:
+        PORT: "3000"
+        # The DIRECT Postgres port (5432), not pgBouncer on 6432: the migration lock is session-level and
+        # pgBouncer's transaction pooling does not preserve session state across statements. `${notesdb_…}`
+        # is a reference to the `notesdb` service's own variable — the value never appears in this file.
+        NOTES_DATABASE_URL: ${notesdb_connectionString}
+        # Must equal `id` in fabrika.config.ts and the `aud` of every token minted for this app.
+        NOTES_APP_ID: notes

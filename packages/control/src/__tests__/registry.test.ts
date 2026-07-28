@@ -27,10 +27,12 @@ function makeDeps(
 				return Promise.resolve()
 			},
 		},
+		// An in-memory stand-in for the `BlobStore` port's read side (the R2 bucket vozka-runner streams
+		// logs into). `body` is part of the port even though the log handlers only ever read `text()`.
 		logs: {
 			get: (key) => {
 				const v = logStore.get(key)
-				return Promise.resolve(v === undefined ? null : { text: () => Promise.resolve(v) })
+				return Promise.resolve(v === undefined ? null : { body: new Blob([v]).stream(), text: () => Promise.resolve(v) })
 			},
 		},
 		repoSource: new FakeRepoSource({ fakeInstallationId: opts.installationId ?? null }),
@@ -189,11 +191,9 @@ describe('run history API', () => {
 		const all = await handleApi(req('GET', '/api/runs'), deps)
 		const allBody = (await all.json()) as { items: { id: string }[] }
 		expect(allBody.items).toHaveLength(2)
-		// Returned in descending id order (UUIDv7 is time-sortable). Within the same millisecond the
-		// random bits decide, so assert the query's ORDER BY id DESC rather than a fixed r1/r2 order.
-		const ids = allBody.items.map((i) => i.id)
-		expect(ids).toEqual([...ids].sort().reverse())
-		expect(new Set(ids)).toEqual(new Set([r1, r2]))
+		// Returned in descending id order. UUIDv7 carries the RFC 9562 §6.2 monotonic counter, so r2 > r1
+		// even though the two were minted inside one millisecond — the exact order is assertable.
+		expect(allBody.items.map((i) => i.id)).toEqual([r2, r1])
 
 		const filtered = await handleApi(req('GET', '/api/runs?app=a'), deps)
 		const filteredBody = (await filtered.json()) as { items: { id: string }[] }

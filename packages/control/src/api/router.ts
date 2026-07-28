@@ -30,7 +30,7 @@ import {
 	type RegistryContext,
 	updateApp,
 } from './registry'
-import { cancelRun, type DeployQueue, getRun, getRunLog, listRuns, type R2Reader, type RunsContext, tailRunLog, triggerDeploy } from './runs'
+import { cancelRun, type DeployQueue, getRun, getRunLog, listRuns, type LogReader, type RunsContext, tailRunLog, triggerDeploy } from './runs'
 import { deleteAppSecretValue, rotateAppSecretValue, setAppSecretValue, type VaultContext } from './vault'
 
 /**
@@ -44,7 +44,7 @@ export interface ApiDeps {
 	/** The auth guard (the router only ever calls `authenticate`); `createIam` wraps the bootstrap-admin fallback in. */
 	iam: Authenticator
 	queue: DeployQueue
-	logs: R2Reader
+	logs: LogReader
 	/** Used by the registry handlers to auto-detect an app's GitHub installation id at onboarding. */
 	repoSource: RepoSource
 	/** Cancel a run: destroy its container (off-local) + mark failed + free the deploy lock. */

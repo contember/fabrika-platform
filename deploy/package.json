@@ -1,0 +1,23 @@
+{
+	"name": "@fabrika/deploy",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test",
+		"gen": "bun zerops/render.ts",
+		"gen:check": "bun zerops/render.ts --check",
+		"gen:schemas": "bun zerops/schemas/refresh.ts"
+	},
+	"dependencies": {
+		"@fabrika/config": "workspace:*",
+		"@fabrika/engine": "workspace:*",
+		"@fabrika/example-zerops-app": "workspace:*"
+	},
+	"devDependencies": {
+		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/proxy": "workspace:*",
+		"@types/bun": "latest"
+	}
+}

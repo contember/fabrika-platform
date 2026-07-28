@@ -3,7 +3,7 @@
  * Self-deploy FABRIKA ITSELF through fabrika's own engine — the dogfood path: the same `deploy()`
  * (@fabrika/engine) that deploys every other app, fed fabrika's own `fabrika.config.ts`. Run it FROM A LAPTOP
  * for the first bring-up AND as a break-glass redeploy/recovery when the live control plane can't
- * self-deploy (bad self-deploy, wedged D1, stuck DeployLock) — it does NOT depend on a running fabrika.
+ * self-deploy (bad self-deploy, wedged D1, a stuck `deploy_locks` row) — it does NOT depend on a running fabrika.
  *
  * IDEMPOTENT — safe to re-run. The engine is declarative (oblaka provision, D1 migrations apply only the
  * new ones, `wrangler deploy` / `secret put` overwrite, propustka reconcile is an idempotent PUT), so a
@@ -66,7 +66,7 @@
  */
 
 import { deploy } from '@fabrika/engine'
-import type { DeployContext } from '@fabrika/engine'
+import type { CloudflareTarget, DeployContext } from '@fabrika/engine'
 import { resolve } from 'node:path'
 
 const DRY_RUN = process.argv.includes('--dry-run')
@@ -113,11 +113,14 @@ async function main(): Promise<void> {
 		PROPUSTKA_PROVISIONING_KEY: required('PROPUSTKA_PROVISIONING_KEY'),
 	}
 
-	const ctx: DeployContext = {
+	const ctx: DeployContext<CloudflareTarget> = {
 		env,
 		domain: required('VOZKA_DOMAIN'),
-		accountId: required('CLOUDFLARE_ACCOUNT_ID'),
-		apiToken: secrets.CLOUDFLARE_API_TOKEN,
+		target: {
+			platform: 'cloudflare',
+			accountId: required('CLOUDFLARE_ACCOUNT_ID'),
+			apiToken: secrets.CLOUDFLARE_API_TOKEN,
+		},
 		propustkaUrl: required('PROPUSTKA_URL'),
 		adminKey: secrets.PROPUSTKA_PROVISIONING_KEY,
 		secrets,

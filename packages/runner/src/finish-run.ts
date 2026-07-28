@@ -1,4 +1,4 @@
-// The ONE D1 write vozka-runner makes: move a run to its terminal state (`succeeded` | `failed`),
+// The ONE database write vozka-runner makes: move a run to its terminal state (`succeeded` | `failed`),
 // stamping the exit code + `finished_at`. vozka-runner writes this DIRECTLY (rather than letting the
 // fabrika control plane record it after the relay returns) so a run is recorded even when the caller —
 // fabrika's queue consumer — was reset mid-deploy. That happens precisely for fabrika's OWN self-deploy:
@@ -8,40 +8,42 @@
 // This deliberately DUPLICATES `@fabrika/control`'s `Db.markRunFinished` (same guarded UPDATE) instead of
 // importing it — @fabrika/control depends on @fabrika/runner for the wire protocol, so a back-import would
 // be a cycle. The control plane owns the `runs` schema + migrations; this is a single, stable column
-// write that must stay in sync with that method. Keep the two identical.
+// write that must stay in sync with that method. Keep the two identical — same SQL text, same bind
+// order (status, exit_code, finished_at, id). `finished_at` is stamped CALLER-side in unix seconds
+// (never `unixepoch()`, which does not exist in Postgres), exactly as `Db.markRunFinished` does.
 //
 // The `WHERE status IN ('pending','running')` guard makes the write idempotent and order-independent:
 // whichever of vozka-runner / the (possibly still-alive) control plane writes FIRST wins the
 // pending|running → terminal transition; the other finds no matching row and is a harmless no-op.
 
+import type { SqlDatabase } from '@fabrika/platform'
 import type { RunnerStatus } from './protocol'
-
-/** The slice of a D1 database this module needs. Real `D1Database` satisfies it. */
-export interface D1Like {
-	prepare: (query: string) => {
-		bind: (...values: unknown[]) => {
-			run: () => Promise<{ meta: { changes?: number } }>
-			first: <T>() => Promise<T | null>
-		}
-	}
-}
 
 /**
  * Record a run's terminal outcome. Returns true if THIS call performed the transition (the run was
  * still pending|running), false if it was already terminal (a no-op — the control plane beat us to it).
- * Never throws on a no-op; a thrown D1 error propagates to the caller (logged as a short message).
+ * Never throws on a no-op; a thrown database error propagates to the caller (logged as a short message).
+ *
+ * `now` is injectable so the stamp is deterministic in tests; it returns unix SECONDS, the unit
+ * `runs.finished_at` uses (the control plane's `Db` carries the same clock on its constructor).
  */
-export const finishRun = async (db: D1Like, runId: string, status: 'succeeded' | 'failed', exitCode: number | null): Promise<boolean> => {
+export const finishRun = async (
+	db: SqlDatabase,
+	runId: string,
+	status: 'succeeded' | 'failed',
+	exitCode: number | null,
+	now: () => number = () => Math.floor(Date.now() / 1000),
+): Promise<boolean> => {
 	const result = await db
-		.prepare(`UPDATE runs SET status = ?, exit_code = ?, finished_at = unixepoch()
+		.prepare(`UPDATE runs SET status = ?, exit_code = ?, finished_at = ?
 			WHERE id = ? AND status IN ('pending','running')`)
-		.bind(status, exitCode, runId)
+		.bind(status, exitCode, now(), runId)
 		.run()
 	return (result.meta.changes ?? 0) > 0
 }
 
 /** True when the run has already reached a terminal state (so the backstop can skip its work). */
-export const isRunFinished = async (db: D1Like, runId: string): Promise<boolean> => {
+export const isRunFinished = async (db: SqlDatabase, runId: string): Promise<boolean> => {
 	const row = await db
 		.prepare(`SELECT status FROM runs WHERE id = ? AND status IN ('succeeded','failed')`)
 		.bind(runId)

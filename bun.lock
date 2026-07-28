@@ -11,6 +11,20 @@
         "typescript": "^5.9.3",
       },
     },
+    "deploy": {
+      "name": "@fabrika/deploy",
+      "version": "0.0.1",
+      "dependencies": {
+        "@fabrika/config": "workspace:*",
+        "@fabrika/engine": "workspace:*",
+        "@fabrika/example-zerops-app": "workspace:*",
+      },
+      "devDependencies": {
+        "@fabrika/auth-core": "workspace:*",
+        "@fabrika/proxy": "workspace:*",
+        "@types/bun": "latest",
+      },
+    },
     "examples/app": {
       "name": "@fabrika/example-app",
       "dependencies": {
@@ -23,6 +37,17 @@
         "lopata": "latest",
         "oblaka-iac": "latest",
         "wrangler": "^4.24.0",
+      },
+    },
+    "examples/zerops-app": {
+      "name": "@fabrika/example-zerops-app",
+      "dependencies": {
+        "@fabrika/auth-core": "workspace:*",
+        "jose": "^5.9.0",
+      },
+      "devDependencies": {
+        "@fabrika/config": "workspace:*",
+        "@types/bun": "latest",
       },
     },
     "packages/auth": {
@@ -72,6 +97,8 @@
         "@fabrika/auth": "workspace:*",
         "@fabrika/config": "workspace:*",
         "@fabrika/engine": "workspace:*",
+        "@fabrika/platform": "workspace:*",
+        "@fabrika/platform-node": "workspace:*",
         "@fabrika/runner": "workspace:*",
       },
       "devDependencies": {
@@ -127,6 +154,8 @@
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/config": "workspace:*",
+        "@fabrika/platform": "workspace:*",
+        "@fabrika/platform-node": "workspace:*",
         "jose": "^5.9.0",
       },
       "devDependencies": {
@@ -156,6 +185,34 @@
         "vite": "^7.0.0",
       },
     },
+    "packages/platform": {
+      "name": "@fabrika/platform",
+      "version": "0.0.1",
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
+    "packages/platform-node": {
+      "name": "@fabrika/platform-node",
+      "version": "0.0.1",
+      "dependencies": {
+        "@fabrika/platform": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
+    "packages/proxy": {
+      "name": "@fabrika/proxy",
+      "version": "0.0.1",
+      "dependencies": {
+        "@fabrika/auth-core": "workspace:*",
+        "jose": "^5.9.0",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
     "packages/runner": {
       "name": "@fabrika/runner",
       "version": "0.0.1",
@@ -163,6 +220,7 @@
         "@cloudflare/containers": "^0.0.30",
         "@fabrika/config": "workspace:*",
         "@fabrika/engine": "workspace:*",
+        "@fabrika/platform": "workspace:*",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "^4.20251001.0",
@@ -346,13 +404,23 @@
 
     "@fabrika/dashboard": ["@fabrika/dashboard@workspace:packages/dashboard"],
 
+    "@fabrika/deploy": ["@fabrika/deploy@workspace:deploy"],
+
     "@fabrika/engine": ["@fabrika/engine@workspace:packages/engine"],
 
     "@fabrika/example-app": ["@fabrika/example-app@workspace:examples/app"],
 
+    "@fabrika/example-zerops-app": ["@fabrika/example-zerops-app@workspace:examples/zerops-app"],
+
     "@fabrika/iam": ["@fabrika/iam@workspace:packages/iam"],
 
     "@fabrika/iam-ui": ["@fabrika/iam-ui@workspace:packages/iam-ui"],
+
+    "@fabrika/platform": ["@fabrika/platform@workspace:packages/platform"],
+
+    "@fabrika/platform-node": ["@fabrika/platform-node@workspace:packages/platform-node"],
+
+    "@fabrika/proxy": ["@fabrika/proxy@workspace:packages/proxy"],
 
     "@fabrika/runner": ["@fabrika/runner@workspace:packages/runner"],
 

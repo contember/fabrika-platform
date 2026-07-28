@@ -31,6 +31,9 @@ fabrika-platform is and how the pieces fit — then skim
 - **Phase 0 — the merge itself**: importing propustka + vozka into `packages/`,
   renaming everything to `@fabrika/*`, green build, no behaviour change
   ([ADR-0001](decisions/0001-merge-propustka-and-vozka.md)).
+- The phase ladder (ports → Postgres/Bun → driver seam → Zerops driver) has since
+  shipped; those backlog items were deleted on ship, per this folder's own rule.
 - Next rung:
-  [`backlog/01-phase-1-platform-ports.md`](backlog/01-phase-1-platform-ports.md) —
-  extract the platform ports and retire the `DeployLock` Durable Object.
+  [`backlog/05-bring-up-on-a-real-zerops-account.md`](backlog/05-bring-up-on-a-real-zerops-account.md)
+  — everything below the account line is built and schema-valid, but **nothing has
+  ever run against a real Zerops account**.

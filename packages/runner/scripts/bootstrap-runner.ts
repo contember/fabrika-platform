@@ -30,7 +30,7 @@
  */
 
 import { deploy } from '@fabrika/engine'
-import type { DeployContext } from '@fabrika/engine'
+import type { CloudflareTarget, DeployContext } from '@fabrika/engine'
 import { resolve } from 'node:path'
 
 const DRY_RUN = process.argv.includes('--dry-run')
@@ -54,10 +54,13 @@ async function main(): Promise<void> {
 	const { default: config } = await import('../fabrika-runner.config')
 	const env = optional('VOZKA_ENV') ?? 'prod'
 
-	const ctx: DeployContext = {
+	const ctx: DeployContext<CloudflareTarget> = {
 		env,
-		accountId: required('CLOUDFLARE_ACCOUNT_ID'),
-		apiToken: required('CLOUDFLARE_API_TOKEN'),
+		target: {
+			platform: 'cloudflare',
+			accountId: required('CLOUDFLARE_ACCOUNT_ID'),
+			apiToken: required('CLOUDFLARE_API_TOKEN'),
+		},
 		// No propustka coords (vozka-runner has no access/schema → no reconcile) and no runtime secrets.
 		secrets: {},
 		// The config + its workerDir resolve against packages/runner (this script's parent dir).

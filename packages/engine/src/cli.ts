@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
-import type { AppConfig } from '@fabrika/config'
+import { type AnyAppConfig, type AppConfig, appPlatform } from '@fabrika/config'
 import { resolve } from 'node:path'
 import { parseArgs, type ParsedArgs, platformComponents } from './cli-args'
 import { deploy } from './deploy'
-import type { DeployContext, DeployResult } from './types'
+import type { CloudflareTarget, DeployContext, DeployResult } from './types'
 
 const USAGE = `fabrika — deploy control plane
 
@@ -45,22 +45,26 @@ const die = (message: string): never => {
 	process.exit(1)
 }
 
-const isAppConfig = (value: unknown): value is AppConfig => {
-	return (
-		typeof value === 'object'
-		&& value !== null
-		&& 'id' in value
-		&& typeof value.id === 'string'
-		&& 'resources' in value
-		&& typeof value.resources === 'function'
-	)
-}
+const hasAppId = (value: unknown): value is AnyAppConfig =>
+	typeof value === 'object' && value !== null && 'id' in value && typeof value.id === 'string'
 
+const isCloudflareAppConfig = (value: unknown): value is AppConfig => hasAppId(value) && typeof value.resources === 'function'
+
+/**
+ * Load a config file. The CLI is CLOUDFLARE-ONLY by design — it shells out to `wrangler` in a checkout,
+ * which ADR-0003 says a Zerops deploy has no use for — so a Zerops config is rejected with a message that
+ * says where it IS deployed from, rather than "this isn't a config".
+ */
 const loadConfig = async (path: string): Promise<{ config: AppConfig; dir: string }> => {
 	const absolute = resolve(process.cwd(), path)
 	const module: { default?: unknown } = await import(absolute)
 	const config = module.default
-	if (!isAppConfig(config)) {
+	if (!isCloudflareAppConfig(config)) {
+		if (hasAppId(config) && appPlatform(config) === 'zerops') {
+			return die(
+				`Config at ${absolute} targets Zerops. The \`fabrika\` CLI deploys to Cloudflare; a Zerops deploy is driven by the control plane (ADR-0003).`,
+			)
+		}
 		return die(`Config at ${absolute} must \`export default defineApp({ ... })\``)
 	}
 	// Relative paths (workerDir, build) resolve against the config file's directory, not the cwd.
@@ -100,13 +104,22 @@ const gatherVars = (config: AppConfig): Record<string, string> => {
 	return vars
 }
 
-const buildContext = (config: AppConfig, env: string, dir: string, dryRun: boolean): DeployContext => {
+/**
+ * Build the deploy context from the environment. The CLI deploys to CLOUDFLARE — it shells out to
+ * `wrangler` in a checkout, which is what ADR-0003 says Zerops does not need — so it builds the
+ * `cloudflare` arm of the discriminated target. A Zerops deploy is driven by the control plane, not
+ * by this CLI, and would build the `zerops` arm from its own env vars.
+ */
+const buildContext = (config: AppConfig, env: string, dir: string, dryRun: boolean): DeployContext<CloudflareTarget> => {
 	return {
 		env,
 		domain: process.env['VOZKA_DOMAIN'],
-		// Creds are required even in dry-run (oblaka needs them to materialize the resource graph).
-		accountId: requireEnv('CLOUDFLARE_ACCOUNT_ID'),
-		apiToken: requireEnv('CLOUDFLARE_API_TOKEN'),
+		target: {
+			platform: 'cloudflare',
+			// Creds are required even in dry-run (oblaka needs them to materialize the resource graph).
+			accountId: requireEnv('CLOUDFLARE_ACCOUNT_ID'),
+			apiToken: requireEnv('CLOUDFLARE_API_TOKEN'),
+		},
 		propustkaUrl: process.env['PROPUSTKA_URL'],
 		adminKey: process.env['PROPUSTKA_PROVISIONING_KEY'],
 		secrets: gatherSecrets(config),

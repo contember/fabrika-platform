@@ -39,26 +39,18 @@
 			]
 		},
 		{
-			"tag": "v0002",
-			"new_sqlite_classes": [
-				"DeployLock"
-			]
-		},
-		{
 			"tag": "v0003",
 			"deleted_classes": [
 				"RunnerContainer"
 			]
+		},
+		{
+			"tag": "v0004",
+			"deleted_classes": [
+				"DeployLock"
+			]
 		}
 	],
-	"durable_objects": {
-		"bindings": [
-			{
-				"name": "DEPLOY_LOCK",
-				"class_name": "DeployLock"
-			}
-		]
-	},
 	"r2_buckets": [
 		{
 			"binding": "RUN_LOGS",

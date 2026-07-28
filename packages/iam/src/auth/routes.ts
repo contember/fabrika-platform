@@ -11,7 +11,7 @@
  */
 
 import { SESSION_COOKIE } from '@fabrika/auth-core'
-import type { Env } from '../env'
+import type { Env, RequestContext } from '../env'
 import { generatePkce, randomToken } from '../oidc'
 import { resolveUserPrincipal } from '../resolve'
 import { hashToken } from '../secret'
@@ -28,9 +28,9 @@ const OIDC_TTL_SECONDS = 600
 /** The only env the auth surface touches directly is the signing config (for the JWKS endpoint). */
 type AuthEnv = Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'ENVIRONMENT'>
 
-export async function handleAuth(request: Request, services: Services, env: AuthEnv, ctx: ExecutionContext): Promise<Response> {
+export async function handleAuth(request: Request, services: Services, env: AuthEnv, ctx: RequestContext): Promise<Response> {
 	const url = new URL(request.url)
-	const secure = url.protocol === 'https:'
+	const secure = secureCookies(url, services.config)
 
 	if (url.pathname === '/.well-known/jwks.json') {
 		return handleJwks(env)
@@ -78,7 +78,7 @@ async function handleLogin(request: Request, services: Services, secure: boolean
 
 // ── /auth/callback ───────────────────────────────────────────────────────────────
 
-async function handleCallback(request: Request, services: Services, secure: boolean, ctx: ExecutionContext): Promise<Response> {
+async function handleCallback(request: Request, services: Services, secure: boolean, ctx: RequestContext): Promise<Response> {
 	const url = new URL(request.url)
 	const code = url.searchParams.get('code')
 	const state = url.searchParams.get('state')
@@ -185,6 +185,29 @@ function admitted(email: string, config: Config): boolean {
 		return true
 	}
 	return config.bootstrapAdmins.has(email)
+}
+
+/**
+ * Whether the auth cookies must carry `Secure`.
+ *
+ * The request's own protocol is not a sufficient signal behind a TLS-TERMINATING BALANCER — Zerops'
+ * project L7 balancer, or any reverse proxy: the browser spoke HTTPS, the process sees plain HTTP on
+ * the private network, and an SSO session cookie set without `Secure` there is one downgrade away
+ * from being sent in the clear. The service's configured public origin (`ISSUER`) is the authority on
+ * what the BROWSER actually spoke, so an https issuer forces `Secure` regardless of the socket.
+ *
+ * Widening only: everything that was `Secure` before still is, so the Cloudflare path is unchanged
+ * (there the request protocol and the issuer agree anyway).
+ */
+function secureCookies(url: URL, config: Config): boolean {
+	if (url.protocol === 'https:') {
+		return true
+	}
+	try {
+		return new URL(config.issuer).protocol === 'https:'
+	} catch {
+		return false
+	}
 }
 
 /** Build the long-lived SSO session `Set-Cookie` (parent-domain when configured). */

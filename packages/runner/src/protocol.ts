@@ -34,6 +34,11 @@ export interface RunnerJob {
 	/**
 	 * Cloudflare + propustka credentials, injected into the `fabrika` child's environment. NEVER
 	 * logged, NEVER placed on argv. Only the keys present are forwarded.
+	 *
+	 * The two `CLOUDFLARE_*` values are how the engine's `cloudflare` deploy target (ADR-0009) is
+	 * carried across the Worker→container→CLI hop; the CLI reads them back out of the environment and
+	 * builds the target from them. This bag is deliberately NOT discriminated by platform: ADR-0003
+	 * says Zerops has no deploy runner, so a `RunnerJob` is Cloudflare-only by construction.
 	 */
 	credentials: {
 		CLOUDFLARE_ACCOUNT_ID: string

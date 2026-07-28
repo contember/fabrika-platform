@@ -1,16 +1,16 @@
 #!/usr/bin/env bun
 /**
  * Offline full-path proof that fabrika can deploy ITSELF: run the engine's `deploy()` in dry-run against
- * fabrika's OWN `fabrika.config.ts`, substituting just the oblaka provisioner (oblaka's real `deploy()`
- * hits the cf-state KV even in dryRun — the same injection seam packages/engine/fixtures/dryrun-verify.ts
- * uses). Everything else is the real engine + the real fabrika config. NO Cloudflare, NO propustka, NO
- * real creds. Proves the plan builds and every step walks in plan-only mode.
+ * fabrika's OWN `fabrika.config.ts`, substituting just the oblaka provisioner in the Cloudflare driver's
+ * collaborator bundle (oblaka's real `deploy()` hits the cf-state KV even in dryRun — the same injection
+ * seam packages/engine/fixtures/dryrun-verify.ts uses). Everything else is the real engine + the real
+ * fabrika config. NO Cloudflare, NO propustka, NO real creds. Proves the plan builds and every step walks
+ * in plan-only mode.
  *
  *   bun run scripts/dryrun-verify.ts
  */
-import { deploy } from '@fabrika/engine'
-import type { DeployContext, DeployRuntime } from '@fabrika/engine'
-import { defaultRuntime } from '@fabrika/engine'
+import { createCloudflareDriver, defaultCloudflareCollaborators, deploy } from '@fabrika/engine'
+import type { CloudflareCollaborators, CloudflareTarget, DeployContext } from '@fabrika/engine'
 import { resolve } from 'node:path'
 
 // fabrika.config's `access` declaration throws without VOZKA_DOMAIN (eager, like propustka/poplach) —
@@ -19,9 +19,9 @@ process.env['VOZKA_DOMAIN'] = process.env['VOZKA_DOMAIN'] ?? 'vozka.stage.exampl
 
 const { default: config } = await import('../fabrika.config')
 
-// Substitute ONLY the oblaka provisioner; the rest of the engine runs for real (in dry-run mode).
-const runtime: DeployRuntime = {
-	...defaultRuntime,
+// Substitute ONLY the oblaka provisioner; the rest of the driver runs for real (in dry-run mode).
+const collaborators: CloudflareCollaborators = {
+	...defaultCloudflareCollaborators,
 	provision: (input) => {
 		console.log(`  [fake-oblaka] materialized vozka graph for ${input.env}, dryRun=${input.dryRun}`)
 		return Promise.resolve({
@@ -31,11 +31,10 @@ const runtime: DeployRuntime = {
 	},
 }
 
-const ctx: DeployContext = {
+const ctx: DeployContext<CloudflareTarget> = {
 	env: 'stage',
 	domain: process.env['VOZKA_DOMAIN'],
-	accountId: 'dummy-acc',
-	apiToken: 'dummy-tok',
+	target: { platform: 'cloudflare', accountId: 'dummy-acc', apiToken: 'dummy-tok' },
 	propustkaUrl: 'https://iam.example.com',
 	adminKey: 'px_dummy-admin',
 	// The runtime worker secrets fabrika.config declares in pipeline.secrets — dummy values offline.
@@ -50,7 +49,7 @@ const ctx: DeployContext = {
 	dryRun: true,
 }
 
-const result = await deploy(config, ctx, runtime)
+const result = await deploy(config, ctx, { drivers: { cloudflare: createCloudflareDriver(collaborators) } })
 console.log('\n=== RESULT ===')
 console.log('overall:', result.status)
 for (const s of result.steps) {

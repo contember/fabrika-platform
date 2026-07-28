@@ -23,6 +23,11 @@ export type {
 	PersonaSpec,
 } from './iam'
 export type { AuthCarrier, Middleware } from './middleware'
+// The HTTP transport for the SAME `IamRpc` contract, for a runtime with no Cloudflare service binding
+// (a long-running Bun/Node process). Drops into anywhere a binding goes — `PropustkaAuth`, `IamClient`,
+// `env.IAM` — because the contract is unchanged and only the transport differs.
+export { HttpIamRpc, IamTransportError } from './rpc-http'
+export type { FetchLike, HttpIamRpcOptions } from './rpc-http'
 // propustka-native session auth: the middleware an app puts in front of its request handler. It
 // enforces the per-path gate schema (`AppGates`) in-process, then verifies a per-app permission
 // token LOCALLY (no per-request RPC), minting a fresh one from the SSO session when needed.

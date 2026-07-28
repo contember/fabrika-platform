@@ -1,0 +1,35 @@
+{
+	"name": "@fabrika/example-zerops-app",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": {
+			"bun": "./fabrika.config.ts",
+			"types": "./fabrika.config.ts",
+			"default": "./fabrika.config.ts"
+		},
+		"./gates": {
+			"bun": "./fabrika.gates.ts",
+			"types": "./fabrika.gates.ts",
+			"default": "./fabrika.gates.ts"
+		},
+		"./schema": {
+			"bun": "./fabrika.schema.ts",
+			"types": "./fabrika.schema.ts",
+			"default": "./fabrika.schema.ts"
+		}
+	},
+	"scripts": {
+		"dev": "bun src/server.ts",
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@fabrika/auth-core": "workspace:*",
+		"jose": "^5.9.0"
+	},
+	"devDependencies": {
+		"@fabrika/config": "workspace:*",
+		"@types/bun": "latest"
+	}
+}

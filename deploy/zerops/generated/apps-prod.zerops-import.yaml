@@ -1,0 +1,29 @@
+# GENERATED FILE — DO NOT EDIT BY HAND.
+#
+# Source: deploy/zerops/topology.ts
+# Regenerate: bun run --filter @fabrika/deploy gen
+#
+# Apply with: POST /project/{projectId}/service-stack/import  { yaml }
+#
+# `envIsolation: service` at BOTH levels and the absence of any project-level `envVariables` are
+# written by the compiler, not by the declaration, and re-checked before serialization (ADR-0004).
+#
+project:
+  name: apps-prod
+  envIsolation: service
+  description: "Deployed fabrika apps for the prod environment. One project per environment (ADR-0006)."
+  corePackage: SERIOUS
+  tags:
+    - fabrika
+    - apps
+    - prod
+services:
+  - hostname: proxy
+    type: alpine@3.21
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: false
+    priority: 10
+    minContainers: 2
+    maxContainers: 6
+    zeropsSetup: proxy

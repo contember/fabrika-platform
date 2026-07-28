@@ -13,7 +13,7 @@
 // NAME in `pipeline.secrets` and provisioned out-of-band (`wrangler secret put` / `.dev.vars`).
 
 import type { AppSchema, ResourceContext } from '@fabrika/config'
-import { D1Database, defineApp, DurableObject, Queue, R2Bucket, ServiceReference, Worker } from '@fabrika/config'
+import { D1Database, defineApp, Queue, R2Bucket, ServiceReference, Worker } from '@fabrika/config'
 import { ACTIONS, SCOPES, VOZKA_APP_ID } from './src/actions'
 
 /**
@@ -72,13 +72,12 @@ export const buildVozkaWorker = (ctx: ResourceContext): Worker => {
 			GITHUB_APP_ID: process.env['GITHUB_APP_ID'] ?? '',
 		},
 		bindings: {
-			// Per-app-env deploy lock — serializes deploys of the same (app, env) so two triggers can't
-			// race on cf-state / wrangler / propustka. DO class in src/DeployLock.ts, re-exported from the
-			// Worker entry (src/index.ts) so wrangler finds it.
-			DEPLOY_LOCK: new DurableObject({ name: 'vozka-deploy-lock', className: 'DeployLock' }),
 			// Run logs + terminal status, keyed by run id (runs/<id>/logs.ndjson, runs/<id>/status.json).
 			RUN_LOGS: new R2Bucket({ name: 'vozka-run-logs' }),
-			// Registry + run history. D1 is region-specific → pinned to EU West. Migrations in ./migrations.
+			// Registry + run history + the per-app-env deploy LOCKS: a `deploy_locks` row per `<app>:<env>`
+			// serializes deploys of the same target (it replaced a Durable Object — see src/deploy-locks.ts),
+			// so two triggers can't race on cf-state / wrangler / propustka. D1 is region-specific → pinned
+			// to EU West. Migrations in ./migrations.
 			DB: new D1Database({ name: 'vozka', migrationsDir: './migrations', locationHint: 'weur' }),
 			// Deploy job queue: producer (POST /webhooks/github + triggerDeploy) + consumer (queue()).
 			// A run is enqueued by id; the consumer loads it from D1, assembles the job, and runs it.

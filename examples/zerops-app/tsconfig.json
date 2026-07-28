@@ -1,0 +1,13 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"types": ["@types/bun"],
+		// `fabrika.config.ts` imports `@fabrika/config`, which re-exports oblaka-iac's raw TS source —
+		// authored against plain `strict`, so it trips these two. Relaxed ONLY for that reason, exactly as
+		// packages/config and packages/engine do; the app's own code stays strict.
+		"noUncheckedIndexedAccess": false,
+		"noPropertyAccessFromIndexSignature": false
+	},
+	"include": ["src/**/*", "fabrika.config.ts", "fabrika.gates.ts", "fabrika.schema.ts"]
+}

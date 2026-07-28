@@ -35,6 +35,12 @@ export type StartRun = (job: RunnerJob) => Promise<RunOutcome>
  * single-account, so there is one CF account + token for the whole control plane; the propustka coords
  * are the one propustka this account runs. WHETHER a deploy reconciles is decided by the app's config
  * (`access`/`schema` presence) — these are always available; an app without access/schema ignores them.
+ *
+ * CLOUDFLARE-SHAPED ON PURPOSE, and it stays that way: this is the RUNNER path, and ADR-0003 says there
+ * is no deploy runner on Zerops — a Zerops deploy is HTTP driven by the control plane itself, never a
+ * `RunnerJob`. These two values are what the container hands the `fabrika` CLI as env, and what the CLI
+ * turns back into the engine's `cloudflare` target arm (ADR-0009). A Zerops run needs a different
+ * carrier, not a discriminated `RunnerJob`.
  */
 export interface DeployConfig {
 	/** The CF account id every deploy targets. */
@@ -48,9 +54,11 @@ export interface DeployConfig {
 }
 
 /**
- * The per-app-env deploy lock seam (backed by the DeployLock DO, src/DeployLock.ts). `executeDeploy`
- * takes the lock for `<app>:<env>` before starting a run and releases it after, so the same target never
- * deploys twice concurrently. Injected so the lifecycle stays unit-testable with an in-memory fake.
+ * The per-app-env deploy lock seam (the `DeployLocks` port, backed by `deploy_locks` rows —
+ * src/deploy-locks.ts). `executeDeploy` takes the lock for `<app>:<env>` before starting a run and
+ * releases it after, so the same target never deploys twice concurrently. The lease TTL is bound at the
+ * Worker (src/index.ts), not here — the lifecycle has no opinion on how long a deploy may take.
+ * Injected so the lifecycle stays unit-testable with an in-memory fake.
  */
 export interface DeployLockGate {
 	/** Take the lock for `key`, held by `holder` (the run id). False when another run holds it. */

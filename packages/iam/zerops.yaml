@@ -1,0 +1,124 @@
+# The IAM service on Zerops — build, deploy and run descriptor for `@fabrika/iam`.
+#
+# WHERE THIS FILE GOES. Zerops reads `zerops.yaml` from the REPOSITORY ROOT. It is kept here, next to
+# the service it describes, because the other fabrika services are not ported yet; the format is a
+# list keyed by `setup:` precisely so several services share one file, so when `control` and the proxy
+# land these blocks merge into a single root `zerops.yaml` rather than each getting their own. Until
+# then, copy this block up (or point the service's build at this path) — it is not read from here.
+#
+# `setup` must equal the Zerops service HOSTNAME, and the hostname is also how other services address
+# it on the project's private network (`http://iam:3000`). Renaming the service renames the address.
+#
+# Fields here are the ones the published JSON schema accepts
+# (https://api.app-prg1.zerops.io/api/rest/public/settings/zerops-yml-json-schema.json). Note that the
+# prose docs still describe `run.os`/`build.os`; the schema marks BOTH deprecated in favour of an
+# OS-qualified base (`alpine/bun@1.3`), which is what this file uses.
+#
+# ── What is NOT in this file, deliberately ────────────────────────────────────────────────────────
+#
+# Every secret. `envVariables` below is committed plaintext, so the following are set as service-level
+# `envSecrets` (GUI or import YAML) and never here — see ADR-0004, secrets live in the platform:
+#
+#   PROPUSTKA_SIGNING_KEYS       JSON array of ES256 private JWKs. Required off-local; an empty value
+#                                is refused at boot rather than silently issuing ephemeral tokens.
+#   OIDC_CLIENT_SECRET           The OIDC code-exchange credential.
+#   PROPUSTKA_RPC_KEY            Shared secret gating the MANAGEMENT surface `/rpc/*` (the full
+#                                `IamRpc`). UNSET DISABLES THAT SURFACE (it 404s) — the fail-closed
+#                                default, not a broken state.
+#   PROPUSTKA_PROXY_KEY          Shared secret gating the PROXY surface `/auth/mint/*`, which the auth
+#                                proxy calls on the cold path of every request. A SEPARATE secret from
+#                                the one above by least privilege: the proxy is the only publicly
+#                                routed component, and it must not also be able to write audit rows.
+#                                The proxy is configured with the same value. Unset disables minting,
+#                                which the proxy reads as "IAM unavailable" and denies on — so if the
+#                                proxy is deployed, this must be set.
+#   PROPUSTKA_PROVISIONING_KEY   Optional bootstrap `px_` key; empty disables it.
+#
+# Both shared secrets must be at least 32 characters; a shorter one fails the boot rather than
+# standing in front of an internet-reachable surface while looking configured.
+#
+# ── The database ──────────────────────────────────────────────────────────────────────────────────
+#
+# `${db_connectionString}` references the `db` PostgreSQL service in the same project — the DIRECT
+# port (5432), not pgBouncer on 6432. That is load-bearing: the migration runner takes a
+# session-level advisory lock so two booting containers cannot migrate at once, and pgBouncer's
+# transaction pooling does not preserve session state across statements.
+#
+zerops:
+  - setup: iam
+
+    build:
+      # Bun on Alpine. `build.os` is deprecated — the OS is part of the base identifier now.
+      base: alpine/bun@1.3
+      buildCommands:
+        - bun install --frozen-lockfile
+        # The admin SPA. Its output (`packages/iam-ui/dist`) is what the service serves for every
+        # non-API path — the replacement for Cloudflare's ASSETS binding.
+        - bun run --filter @fabrika/iam-ui build
+      # Whole top-level directories, on purpose. The workspace links `node_modules/@fabrika/*` at
+      # `packages/*`, so copying `node_modules` and `packages` as complete trees keeps those links
+      # resolvable whether the platform preserves symlinks or dereferences them. Listing the leaf
+      # packages individually would break on the dereferencing case.
+      deployFiles:
+        - package.json
+        - bun.lock
+        - node_modules
+        - packages
+      cache:
+        - node_modules
+
+    run:
+      base: alpine/bun@1.3
+
+      # Migrations run at container start — the Zerops analog of a discrete migrate step in a
+      # Cloudflare deploy plan. Safe to repeat: the runner records what it applied and serializes
+      # concurrent containers behind an advisory lock, so every start after the first is a no-op.
+      # Runs in /var/www.
+      initCommands:
+        - bun packages/iam/src/node/migrate.ts
+
+      start: bun packages/iam/src/node/server.ts
+
+      ports:
+        - port: 3000
+          protocol: TCP
+          # The project's L7 balancer terminates TLS and forwards plain HTTP over the private
+          # network, so the process holds no certificates and speaks HTTP on this port.
+          httpSupport: true
+
+      # Liveness, not readiness: it answers "is this process serving?" and never touches Postgres.
+      # A health check that queried the database would let one slow query restart every container at
+      # once, turning a degraded dependency into an outage.
+      healthCheck:
+        httpGet:
+          port: 3000
+          path: /healthz
+
+      # The `scheduled` handler's replacement. `triggers.crons` on Cloudflare, platform cron here —
+      # same schedule, same code path (`src/cron.ts`). `allContainers: false` so a horizontally
+      # scaled service still prunes once; the prune is an idempotent DELETE either way.
+      crontab:
+        - timing: 0 3 * * *
+          command: bun packages/iam/src/node/prune.ts
+          allContainers: false
+
+      envVariables:
+        PORT: 3000
+        # Direct Postgres (5432), not pgBouncer — see the header.
+        PROPUSTKA_DATABASE_URL: ${db_connectionString}
+        # The built admin SPA, relative to /var/www.
+        PROPUSTKA_ASSETS_DIR: packages/iam-ui/dist
+        ENVIRONMENT: prod
+        # The service's own public origin: the `iss` of every minted token AND the OIDC redirect base.
+        # Must match the custom domain routed to this service, or logins fail at the provider.
+        ISSUER: https://iam.example.com
+        SESSION_COOKIE_DOMAIN: .example.com
+        # Login admission — who may self-provision as a human. `["*"]` in either list admits everyone.
+        HUMAN_EMAIL_DOMAINS: '[]'
+        HUMAN_EMAILS: '[]'
+        # Normally empty; set for the FIRST operator, then emptied.
+        IAM_BOOTSTRAP_ADMINS: '[]'
+        OIDC_ISSUER: https://accounts.google.com
+        OIDC_CLIENT_ID: ''
+        OIDC_SCOPES: ''
+        OIDC_REQUIRE_VERIFIED_EMAIL: 'true'

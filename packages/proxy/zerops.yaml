@@ -1,0 +1,78 @@
+# Zerops build/run descriptor for the auth enforcement proxy.
+#
+# Topology (ADR-0007 / ADR-0008): this is the ONLY publicly routed service in an environment project.
+# The app services stay internal and are reached over the project's private network — on Zerops that
+# is the default, since services are not publicly accessible until you opt in.
+#
+# The service TYPE is `alpine@3.21`, declared in `zerops-import.yaml`:
+#
+#   services:
+#     - hostname: proxy
+#       type: alpine@3.21
+#       enableSubdomainAccess: true      # or a custom domain
+#
+# `run.os` and `mode` are DEPRECATED — the service type carries that information now, so neither
+# appears below.
+#
+# No TLS config anywhere on purpose: the project's L7 balancer terminates TLS, so Caddy serves plain
+# HTTP behind it and needs no ACME, no certificate storage and therefore no disk. That removes Caddy's
+# main operational burden (docs/reference/zerops-platform.md).
+
+zerops:
+  - setup: proxy
+
+    build:
+      # Two toolchains: Go builds Caddy, Bun compiles the auth service to a single musl binary so the
+      # runtime container needs no interpreter at all.
+      base:
+        - go@1.23
+        - bun@1.2
+
+      prepareCommands:
+        # Pinned by module version, so the Go checksum database verifies the download — a stronger
+        # supply-chain guarantee than a release tarball with a hand-copied hash. CGO off makes the
+        # binary static, which is what lets it run on Alpine/musl.
+        - CGO_ENABLED=0 GOBIN=/tmp/gobin go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.10.2
+
+      buildCommands:
+        - bun install --frozen-lockfile
+        # `proxy.manifest.json` is written into the artifact by the deploy driver before the build:
+        # gates are a reconciled, IAM-stored artifact (ADR-0007) that reaches the proxy by REDEPLOY
+        # (docs/backlog/08-distribute-gate-config-to-proxy.md), not by a live config push.
+        - bun run packages/proxy/src/generate-config.ts ./proxy.manifest.json ./caddy.json --auth-upstream 127.0.0.1:9000
+        - bun build --compile --target=bun-linux-x64-musl ./packages/proxy/src/main.ts --outfile ./fabrika-proxy
+        - cp /tmp/gobin/caddy ./caddy
+
+      deployFiles:
+        - caddy
+        - fabrika-proxy
+        - caddy.json
+        - proxy.manifest.json
+        - packages/proxy/start.sh
+
+      cache:
+        - node_modules
+        - /root/go/pkg/mod
+
+    run:
+      base: alpine@3.21
+
+      ports:
+        # Public listener, plain HTTP behind the balancer.
+        - port: 8080
+          httpSupport: true
+
+      healthCheck:
+        # Deliberately NOT on 8080: a health path on the public listener would be one path per proxy
+        # that answers 200 without consulting the gates, and would shadow an app path of the same name.
+        httpGet:
+          port: 8081
+          path: /healthz
+
+      envVariables:
+        FABRIKA_PROXY_MANIFEST: /var/www/proxy.manifest.json
+        FABRIKA_PROXY_PORT: "9000"
+        # FABRIKA_IAM_URL is set per environment (the global IAM service's origin).
+        # FABRIKA_IAM_KEY, if used, is a SECRET variable — never a plain envVariable.
+
+      start: sh /var/www/packages/proxy/start.sh

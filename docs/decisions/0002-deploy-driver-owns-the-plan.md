@@ -66,8 +66,7 @@ Per-layer, the drivers differ by exactly as much as the platforms do:
   logs, failure handling, and cancellation — which is genuinely platform-neutral.
 - Phase 3 must move Cloudflare's plan derivation into the CF driver **with
   behaviour unchanged**, so that the refactor is verifiable against existing tests
-  before Zerops introduces any new behaviour
-  ([`../backlog/03-phase-3-deploy-driver.md`](../backlog/03-phase-3-deploy-driver.md)).
+  before Zerops introduces any new behaviour.
 - Two seams now exist in the same area (driver and runtime) and can be confused.
   The rule is: _what happens and in what order_ → driver; _what actually touches
   the network/filesystem_ → runtime.

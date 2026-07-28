@@ -3,9 +3,10 @@
 //   - getRunLog / tailRunLog      — read the streamed NDJSON log from R2 (full + live-ish tail).
 //   - triggerDeploy               — the manual "Deploy" button: create a pending run + enqueue it.
 //
-// The queue producer is injected (a `DeployQueue`) so this stays testable without a real Queue. The
+// The queue producer is injected (a `JobQueue`) so this stays testable without a real Queue. The
 // run row is created BEFORE the enqueue so a trigger is durable even if delivery is delayed.
 
+import type { BlobStore, JobQueue } from '@fabrika/platform'
 import { type LogLine, logsKey } from '@fabrika/runner'
 import type { Db, RunRow } from '../db'
 import { uuidv7 } from '../db'
@@ -15,23 +16,20 @@ import { stringField } from '../json'
 import { isRefPattern } from '../ref-match'
 import type { DeployJobMessage } from '../run-lifecycle'
 
-/**
- * The slice of a Cloudflare Queue producer the trigger needs. `send` returns `unknown` so the real
- * `Queue<DeployJobMessage>` (which resolves a `QueueSendResponse`) satisfies it structurally.
- */
-export interface DeployQueue {
-	send(message: DeployJobMessage): Promise<unknown>
-}
+/** The deploy queue producer — the platform `JobQueue` port, carrying the run pointer. */
+export type DeployQueue = JobQueue<DeployJobMessage>
 
-/** The slice of R2 the log reads need. Real `R2Bucket.get` (→ `R2ObjectBody | null`) satisfies it. */
-export interface R2Reader {
-	get(key: string): Promise<{ text(): Promise<string> } | null>
-}
+/**
+ * The blob-store slice the log reads need. Narrowed to `get` on purpose: the control plane only READS
+ * run logs (vozka-runner's relay is what writes them), so a handler that could overwrite a log would be
+ * a wider dependency than the code has any use for.
+ */
+export type LogReader = Pick<BlobStore, 'get'>
 
 export interface RunsContext {
 	db: Db
 	queue: DeployQueue
-	logs: R2Reader
+	logs: LogReader
 	/** Cancel seam: destroy the run's container (off-local) + mark it failed + free the deploy lock. */
 	cancel(run: RunRow): Promise<void>
 	request: Request

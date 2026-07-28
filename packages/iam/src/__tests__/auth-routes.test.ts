@@ -238,3 +238,32 @@ describe('GET /auth/logout', () => {
 		expect(await h.db.getActiveSessionByHash(await hashToken(sessionToken))).toBeNull()
 	})
 })
+
+describe('cookie Secure flag behind a TLS-terminating balancer', () => {
+	// Zerops' project L7 balancer (and any reverse proxy) terminates TLS and forwards plain HTTP on
+	// the private network. The request the process sees is `http://…`, but the browser spoke HTTPS —
+	// so `Secure` has to come from the configured public origin, not from the socket.
+	const secureFlags = (res: Response): boolean[] => res.headers.getSetCookie().map((header) => /;\s*Secure(;|$)/i.test(header))
+
+	test('an https ISSUER forces Secure even on a plain-HTTP request', async () => {
+		const h = createHarness()
+		const services = h.makeServices({ issuer: 'https://iam.example.com' })
+		const res = await handleAuth(new Request('http://iam:3000/auth/login'), services, AUTH_ENV, ctx())
+		expect(res.status).toBe(302)
+		expect(secureFlags(res)).toEqual([true])
+	})
+
+	test('an http ISSUER on a plain-HTTP request stays insecure — local dev is unchanged', async () => {
+		const h = createHarness()
+		const services = h.makeServices({ issuer: ISSUER })
+		const res = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, ctx())
+		expect(secureFlags(res)).toEqual([false])
+	})
+
+	test('an https request is Secure regardless of the issuer', async () => {
+		const h = createHarness()
+		const services = h.makeServices({ issuer: ISSUER })
+		const res = await handleAuth(new Request('https://iam.example.com/auth/logout'), services, AUTH_ENV, ctx())
+		expect(secureFlags(res)).toEqual([true])
+	})
+})

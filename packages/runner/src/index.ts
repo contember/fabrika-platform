@@ -18,7 +18,6 @@ export { bunSpawner } from './spawn'
 // The run relay + its keys — used by the control plane's run-lifecycle (the R2 log key) and by tests.
 // Side-effect-light (imports only the protocol), safe to re-export as values.
 export { finishRun } from './finish-run'
-export type { D1Like } from './finish-run'
 export { logsKey, relayRun, statusKey } from './relay'
 export type { ContainerLike, R2Like, RelayOptions, RelayResult } from './relay'
 

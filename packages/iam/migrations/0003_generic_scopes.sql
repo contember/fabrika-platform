@@ -56,16 +56,18 @@ CREATE TABLE app_actions (
 -- Named permission BUNDLES (AWS "managed policies"). Either reconciled from app code
 -- (origin='app' — the app ships a canonical 'editor'/'viewer') or composed by an
 -- admin in the UI (origin='custom'). `permissions` is a JSON array of action patterns
--- (e.g. ["project.read","report.*"]); json_valid keeps malformed JSON out at write
--- time so the read path can JSON-parse without defensive guards. PK (app, role_key).
+-- (e.g. ["project.read","report.*"]). JSON validity is NOT a DB constraint: `json_valid()`
+-- is SQLite-only (Postgres has no equivalent in the common subset), so the guarantee lives
+-- at the two ends instead — the only writer JSON-encodes, and the read path parses
+-- defensively (`rolePermissions`, admin/handlers.ts). PK (app, role_key).
 CREATE TABLE roles (
 	app         TEXT NOT NULL,
 	role_key    TEXT NOT NULL,
 	name        TEXT NOT NULL,
 	description TEXT,
-	permissions TEXT NOT NULL CHECK (json_valid(permissions)),     -- JSON array of action patterns
+	permissions TEXT NOT NULL,                                     -- JSON array of action patterns
 	origin      TEXT NOT NULL CHECK (origin IN ('app', 'custom')),  -- 'app'=reconciled from code, 'custom'=admin-made
-	created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+	created_at  INTEGER NOT NULL,
 	PRIMARY KEY (app, role_key)
 );
 
@@ -83,12 +85,12 @@ CREATE TABLE grants_new (
 	principal_id TEXT NOT NULL REFERENCES principals(id) ON DELETE CASCADE,
 	app          TEXT,                              -- NULL = all apps (cross-app, e.g. super-admin)
 	role_key     TEXT,                              -- named role/policy; XOR permissions
-	permissions  TEXT CHECK (permissions IS NULL OR json_valid(permissions)),  -- inline action set; XOR role_key
+	permissions  TEXT,                              -- inline action set (JSON array); XOR role_key. No json_valid CHECK — see roles above.
 	scope_type   TEXT,                              -- NULL = global (all scopes)
 	scope_value  TEXT,                              -- opaque, app-owned; NULL = global
 	granted_by   TEXT REFERENCES principals(id),
 	expires_at   INTEGER,                           -- NULL = permanent
-	created_at   INTEGER NOT NULL DEFAULT (unixepoch()),
+	created_at   INTEGER NOT NULL,
 	CHECK ((role_key IS NULL) <> (permissions IS NULL)),  -- exactly one of role_key / inline permissions
 	CHECK ((scope_type IS NULL) = (scope_value IS NULL))  -- scope is both-or-neither
 );
@@ -133,7 +135,7 @@ CREATE TABLE group_role_mappings_new (
 	app        TEXT,                                -- NULL = all apps (from 0002)
 	scope_type TEXT,                                -- NULL = global
 	scope_value TEXT,                               -- opaque, app-owned; NULL = global
-	created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+	created_at INTEGER NOT NULL,
 	CHECK ((scope_type IS NULL) = (scope_value IS NULL))  -- scope is both-or-neither
 );
 

@@ -10,8 +10,9 @@ import {
 	principalStatus,
 	type RoleRow,
 } from '../db'
+import type { RequestContext } from '../env'
 import { issueKey } from '../issue'
-import { arrayField, booleanField, nullableStringField, numberField, parseJson, prop, stringField } from '../json'
+import { arrayField, booleanField, nullableStringField, numberField, parseJsonOrNull, prop, stringField } from '../json'
 import { computePermissions } from '../resolve'
 import { BUILTIN_ROLES, isKnownRole, makeRoleSource } from '../roles'
 import { generateToken, hashToken } from '../secret'
@@ -50,7 +51,7 @@ export interface AdminContext {
 	app: string
 	/** Correlation id for this admin request (cf-ray or a generated uuid). */
 	requestId: string
-	ctx: ExecutionContext
+	ctx: RequestContext
 }
 
 // ── DTO mappers ───────────────────────────────────────────────────────────────
@@ -67,9 +68,9 @@ function toPrincipalListItem(row: PrincipalRow): PrincipalListItem {
 	}
 }
 
-/** Parse a `roles` row's JSON permissions into a string array (fail-closed on junk). */
+/** Parse a `roles` row's JSON permissions into a string array (fail-closed on junk, incl. unparseable text). */
 function rolePermissions(json: string): string[] {
-	const parsed = parseJson(json)
+	const parsed = parseJsonOrNull(json)
 	if (!Array.isArray(parsed)) {
 		return []
 	}
@@ -161,15 +162,20 @@ function toAuditEventDto(row: AuditEventRow): AuditEventDto {
 		action: row.action,
 		resourceType: row.resource_type,
 		resourceId: row.resource_id,
-		diff: row.diff === null ? null : parseJson(row.diff),
-		metadata: row.metadata === null ? null : parseJson(row.metadata),
+		// Unparseable JSON reads as null rather than throwing — the DB no longer guarantees
+		// validity (the `json_valid` CHECK was SQLite-only; see `parseJsonOrNull`).
+		diff: row.diff === null ? null : parseJsonOrNull(row.diff),
+		metadata: row.metadata === null ? null : parseJsonOrNull(row.metadata),
 		createdAt: row.created_at,
 	}
 }
 
 function toAuthLogDto(row: AuthLogRow): AuthLogDto {
 	return {
-		id: row.id,
+		// The one backend-dependent column: a `number` on D1, a `string` on Postgres (a BIGINT identity,
+		// which Bun decodes by column OID). Normalised HERE, once, so the DTO stays a plain number for
+		// the SPA and for the `before=` cursor. Precision holds to 2^53 rows, far past any real auth log.
+		id: typeof row.id === 'string' ? Number(row.id) : row.id,
 		requestId: row.request_id,
 		app: row.app,
 		kind: row.kind,

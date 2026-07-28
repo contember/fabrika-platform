@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { PrincipalRow } from '../db'
 import { resolveUserPrincipal, type UserPrincipalStore } from '../resolve'
+import { createHarness, seedUser } from './helpers/harness'
 
 // Minimal in-memory stand-in for the store resolveUserPrincipal touches. Keeps the
 // test pure (no D1) while exercising the real 3-step claim-then-lazy logic. Declared
@@ -124,5 +125,42 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 		expect(res).toEqual({ ok: false, reason: 'unknown_principal' })
 		// No second user was created.
 		expect(db.rows).toHaveLength(1)
+	})
+})
+
+// The step-1 refresh above runs against FakeStore, so its SQL is otherwise untested. These run it
+// against the real schema — the guard is `IS DISTINCT FROM`, whose whole job is to treat NULL as
+// "different" (SQLite's `IS NOT <expr>` did the same, but does not exist in Postgres).
+describe('Db.refreshUserLabel — null-safe change detection', () => {
+	test('fills in a NULL email/label (the invited-row case IS DISTINCT FROM exists for)', async () => {
+		const h = createHarness()
+		h.sqlite.run('INSERT INTO principals (id, type, external_id, email, label, created_at) VALUES (?, ?, ?, ?, ?, ?)', [
+			'p-null',
+			'user',
+			'sub-null',
+			null,
+			'placeholder',
+			1_782_896_400,
+		])
+
+		await h.db.refreshUserLabel('p-null', 'new@x.com')
+
+		const row = await h.db.getPrincipalById('p-null')
+		expect(row?.email).toBe('new@x.com')
+		expect(row?.label).toBe('new@x.com')
+	})
+
+	test('updates a changed email, and is a no-op when already equal', async () => {
+		const h = createHarness()
+		const id = seedUser(h.sqlite, { sub: 'sub-eq', email: 'old@x.com', label: 'old@x.com' })
+
+		await h.db.refreshUserLabel(id, 'new@x.com')
+		expect((await h.db.getPrincipalById(id))?.email).toBe('new@x.com')
+
+		// Second call matches no rows (the guard is false on both sides) — same visible state.
+		await h.db.refreshUserLabel(id, 'new@x.com')
+		const row = await h.db.getPrincipalById(id)
+		expect(row?.email).toBe('new@x.com')
+		expect(row?.label).toBe('new@x.com')
 	})
 })

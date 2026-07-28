@@ -6,6 +6,7 @@
 // Decoupled from the Worker (takes a Db + RepoSource + queue) so it's unit-testable with FakeRepoSource
 // and an in-memory queue — no GitHub, no Cloudflare.
 
+import type { JobQueue } from '@fabrika/platform'
 import { type Db } from './db'
 import { uuidv7 } from './db'
 import { error, json } from './http'
@@ -16,7 +17,7 @@ import type { DeployJobMessage } from './run-lifecycle'
 export interface WebhookDeps {
 	db: Db
 	repoSource: RepoSource
-	queue: { send(message: DeployJobMessage): Promise<unknown> }
+	queue: JobQueue<DeployJobMessage>
 }
 
 /**

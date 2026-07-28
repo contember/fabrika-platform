@@ -3,7 +3,15 @@ id: 0008
 title: Caddy + forward_auth on Zerops, a thin Worker on Cloudflare, over one shared TypeScript auth service
 status: accepted
 date: 2026-07-28
+amended-by: 0010
 ---
+
+> **Amended by [ADR-0010](0010-gate-evaluation-stays-in-the-auth-service.md).** The
+> core decision below stands — Caddy + `forward_auth`, not a Go plugin — but this
+> ADR's assumption that gate rules would compile into Caddy route matchers is
+> wrong, and implementation disproved it. Gates are evaluated entirely in the auth
+> service; Caddy's routes are a fixed chain. Read ADR-0010 before acting on any
+> statement here about gates and Caddy routing.
 
 # 0008 — Caddy + `forward_auth` on Zerops, a thin Worker on Cloudflare, over one shared TypeScript auth service
 

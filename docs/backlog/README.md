@@ -35,13 +35,11 @@ not filed here.**
 
 <!-- one line each: NN — short summary (link). Keep it short. -->
 
-- [01](01-phase-1-platform-ports.md) — Phase 1: extract platform ports, CF impls only; retire the `DeployLock` Durable Object.
-- [02](02-phase-2-node-bun-and-postgres.md) — Phase 2: Node/Bun entrypoints + Postgres; **port the test harness first**.
-- [03](03-phase-3-deploy-driver.md) — Phase 3: introduce `DeployDriver`, move plan derivation into the CF driver, behaviour unchanged.
-- [04](04-phase-4-zerops-driver.md) — Phase 4: the Zerops driver (pure HTTP, no runner).
-- [05](05-phase-5-self-host-on-zerops.md) — Phase 5: self-host fabrika on Zerops.
+- [05](05-bring-up-on-a-real-zerops-account.md) — **Next.** Everything below the account line is built and schema-valid; nothing has run against a real Zerops account.
 - [06](06-can-zerops-secrets-be-read-back.md) — Open: can secret _values_ be read back from the Zerops API?
 - [07](07-rename-env-var-prefixes.md) — Sweep `VOZKA_*` → `FABRIKA_*`; decide whether `PROPUSTKA_*` follows.
-- [08](08-distribute-gate-config-to-proxy.md) — Open: distribute gate config to Caddy via admin API or redeploy (start with redeploy).
+- [08](08-distribute-gate-config-to-proxy.md) — Open: how gate config reaches the running auth service (NOT Caddy — see ADR-0010).
 - [09](09-confirm-multi-domain-per-service.md) — Open: does Zerops allow multiple custom domains on one service?
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented when environments are separate Zerops projects.
+- [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.
+- [12](12-ratify-the-proxy-manifest-path.md) — Ratify (or replace) how the proxy gets its manifest on Zerops.

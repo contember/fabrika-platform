@@ -1,4 +1,4 @@
-import type { AppConfig } from '@fabrika/config'
+import type { AnyAppConfig, AppConfig } from '@fabrika/config'
 
 /**
  * Where a secret lives in the control plane's scoping hierarchy, widest → narrowest:
@@ -19,19 +19,89 @@ export interface SecretRef {
 }
 
 /**
- * Everything the engine needs to deploy one app to one environment: the target coordinates,
- * the Cloudflare + propustka credentials, the resolved secret values, and the working directory
- * the config was loaded from (build commands + relative paths resolve against it).
+ * WHERE a deploy goes on Cloudflare: the account it lands in, the token that authorizes it, and the
+ * oblaka state namespace its resource state is keyed under. Read ONLY by the Cloudflare driver.
  */
-export interface DeployContext {
+export interface CloudflareTarget {
+	/** The discriminant — what selects the Cloudflare driver. */
+	platform: 'cloudflare'
+	/** Cloudflare account id to deploy into. */
+	accountId: string
+	/** Cloudflare API token with deploy permissions. Never logged. */
+	apiToken: string
+	/**
+	 * oblaka state KV namespace name — where the deploy's resource state lives in the target account.
+	 * Defaults to `<app id>-state` (the per-app convention the legacy `oblaka … --state-namespace=<app>-state`
+	 * pipelines used). Per-app so deploys of different apps into the SAME account never collide (oblaka keys
+	 * state by env within the namespace), and so a migrated app's first fabrika deploy CONTINUES its existing
+	 * state instead of re-provisioning. Override only for an app whose existing namespace differs from the default.
+	 */
+	stateNamespace?: string
+}
+
+/**
+ * WHERE a deploy goes on Zerops: the project + service it targets and the personal access token that
+ * authorizes the REST calls. Read ONLY by the Zerops driver.
+ *
+ * `projectId` is the registry field ADR-0006 makes the topology decision with — nothing here or in the
+ * driver assumes a particular app→project mapping, and nothing keys off a naming convention.
+ */
+export interface ZeropsTarget {
+	/** The discriminant — what selects the Zerops driver. */
+	platform: 'zerops'
+	/** The Zerops project the service lives in (`app_envs.zerops_project_id`, ADR-0006). */
+	projectId: string
+	/** The Zerops service being deployed — the one `/app-version` builds and activates. */
+	serviceId: string
+	/**
+	 * A Zerops PERSONAL ACCESS TOKEN, sent verbatim as `Authorization: Bearer` (the API has no
+	 * exchange step — `/auth/*` is for email+password sessions). It carries account-wide admin rights:
+	 * treat it as a root credential and never log it.
+	 */
+	accessToken: string
+	/**
+	 * Public Git repository URL for a ONE-TIME build, when the deploy supplies its own source. Per-run,
+	 * not per-app: the control plane resolves the ref it is deploying. Omit — the normal production case —
+	 * to let Zerops build from the service's configured GitHub/GitLab integration, which is the only path
+	 * that works for a PRIVATE repository.
+	 */
+	buildFromGit?: string
+	/** Override the API host (a different Zerops region). Defaults to `api.app-prg1.zerops.io`. */
+	apiBaseUrl?: string
+}
+
+/**
+ * The registry of deploy targets, keyed by their discriminant. This map IS the engine's entire
+ * knowledge of platforms: adding one means adding a key here and a driver under that key, never a
+ * branch in the orchestrator (ADR-0009).
+ */
+export interface DeployTargets {
+	cloudflare: CloudflareTarget
+	zerops: ZeropsTarget
+}
+
+/** The discriminant values — the set of platforms a deploy can target. */
+export type PlatformId = keyof DeployTargets
+
+/** Any deploy target. Discriminated on `platform`; a driver reads only its own variant. */
+export type DeployTarget = DeployTargets[PlatformId]
+
+/**
+ * Everything the engine needs to deploy one app to one environment. The top level is UNIVERSAL — it
+ * holds only what every platform has (the environment, the domain, the resolved secrets/vars, the
+ * working directory, dry-run, and the IAM coordinates). Every platform credential and platform handle
+ * lives in the discriminated `target`, which is also what selects the driver (ADR-0009).
+ *
+ * `T` narrows the target: `DeployContext` (the default) is a context for ANY platform, while
+ * `DeployContext<CloudflareTarget>` is one a Cloudflare driver can read without a check.
+ */
+export interface DeployContext<T extends DeployTarget = DeployTarget> {
 	/** Target environment, e.g. `staging` / `production`. */
 	env: string
 	/** Public domain for this stage, when known. */
 	domain?: string
-	/** Cloudflare account id to deploy into. */
-	accountId: string
-	/** Cloudflare API token with deploy permissions. */
-	apiToken: string
+	/** WHERE this deploy goes — the platform credentials + handles, keyed by the `platform` discriminant. */
+	target: T
 	/** Base URL of the propustka IAM service, when reconciling the schema. */
 	propustkaUrl?: string
 	/**
@@ -52,31 +122,29 @@ export interface DeployContext {
 	/** Absolute path the config was loaded from; build + relative paths resolve here. */
 	cwd: string
 	/**
-	 * oblaka state KV namespace name — where the deploy's resource state lives in the target account.
-	 * Defaults to `<app id>-state` (the per-app convention the legacy `oblaka … --state-namespace=<app>-state`
-	 * pipelines used). Per-app so deploys of different apps into the SAME account never collide (oblaka keys
-	 * state by env within the namespace), and so a migrated app's first fabrika deploy CONTINUES its existing
-	 * state instead of re-provisioning. Override only for an app whose existing namespace differs from the default.
-	 */
-	stateNamespace?: string
-	/**
-	 * Plan-only mode. When set, the engine builds the plan, runs oblaka with `dryRun:true` (never
-	 * `remote`), and SKIPS every real Cloudflare/propustka mutation — `wrangler deploy`,
-	 * `wrangler d1 migrations apply`, `wrangler secret put`, and the propustka reconciles — logging
-	 * what it WOULD do instead. This is the only way to exercise the full path without real creds.
+	 * Plan-only mode. When set, the engine builds the plan, runs the driver's steps with every real
+	 * mutation SKIPPED — on Cloudflare `wrangler deploy`, `wrangler d1 migrations apply`,
+	 * `wrangler secret put` and the propustka reconcile, with oblaka in plan-only mode — logging what
+	 * it WOULD do instead. It stays on the RUN rather than in a driver bundle: it is a property of the
+	 * deploy, and every driver must honour it. The only way to exercise the full path without real creds.
 	 */
 	dryRun?: boolean
 }
 
 /**
- * One unit of work in a deploy. The engine (M1) materializes a `DeployPlan` of these from the
- * app's config + context, then executes them in order, surfacing each as a `DeployStep`.
+ * One unit of work in a deploy. The target's `DeployDriver` materializes a `DeployPlan` of these from
+ * the app's config + context; the engine then executes them in the order given, surfacing each as a
+ * `DeployStep`.
  */
 export interface JobSpec {
-	/** Stable id of the step within a plan. */
+	/** Stable id of the step within a plan — its primary key (`dependsOn` and execution both use it). */
 	id: string
-	/** Coarse kind of work — drives ordering and how the runner reports progress. */
-	kind: 'build' | 'provision-resources' | 'migrate' | 'deploy-worker' | 'reconcile-schema' | 'sync-secrets'
+	/**
+	 * Coarse kind of work, for logs and progress reporting. The VOCABULARY belongs to the driver
+	 * (Cloudflare's is `CloudflareStepKind`), so this is an open string: the engine never interprets it,
+	 * and another platform's plan legitimately consists of different kinds in a different order.
+	 */
+	kind: string
 	/** Human-readable description for logs / the dashboard. */
 	description: string
 	/** Ids of steps that must complete before this one runs. */
@@ -98,7 +166,7 @@ export interface DeployStep {
 	finishedAt?: number
 }
 
-/** The full ordered plan the engine computes for one `deploy()` before executing anything. */
+/** The full ordered plan the target's driver derives for one `deploy()` before executing anything. */
 export interface DeployPlan {
 	/** The app being deployed. */
 	appId: string
@@ -123,4 +191,4 @@ export interface DeployResult {
 }
 
 /** Re-exported for callers that build a `deploy()` invocation. */
-export type { AppConfig }
+export type { AnyAppConfig, AppConfig }

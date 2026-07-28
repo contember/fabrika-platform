@@ -102,6 +102,20 @@ describe('computePermissions — inline grants', () => {
 		expect(has(entries, 'project.read', null, 'grant')).toBe(true)
 		expect(has(entries, 'report.export', TEAM('acme'), 'grant')).toBe(true)
 	})
+
+	test('malformed inline permissions resolve to zero permissions instead of throwing', () => {
+		// The `CHECK (json_valid(permissions))` that used to make this unreachable was SQLite-only,
+		// so it is gone from the migrations — which puts an unparseable row on the AUTHZ path.
+		// It must fail closed, never throw: a 500 here would take down authenticate().
+		const junk: GrantRow = { ...inlineGrant([], null), permissions: 'not json' }
+		expect(computePermissions({ ...base, grants: [junk] }, roles)).toEqual([])
+
+		// Valid JSON of the wrong shape is the same story, and a non-string element is dropped.
+		const notAnArray: GrantRow = { ...inlineGrant([], null), permissions: '{"report.read":true}' }
+		expect(computePermissions({ ...base, grants: [notAnArray] }, roles)).toEqual([])
+		const mixed: GrantRow = { ...inlineGrant([], null), permissions: '["report.read", 7]' }
+		expect(computePermissions({ ...base, grants: [mixed] }, roles)).toEqual([{ action: 'report.read', scope: null, source: 'grant' }])
+	})
 })
 
 describe('computePermissions — built-in admin & per-app resolution', () => {

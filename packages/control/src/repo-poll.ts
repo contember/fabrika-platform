@@ -11,6 +11,7 @@
 // the repo-source header describes; it is standalone (no webhook HMAC applies to a public feed) rather
 // than a `RepoSource` implementation.
 
+import type { JobQueue } from '@fabrika/platform'
 import { type Db, uuidv7 } from './db'
 import { refMatches } from './ref-match'
 import { normalizeRepoUrl } from './repo-source'
@@ -28,8 +29,8 @@ export interface PollDeps {
 	/** `fetch` for the conditional GET of the Atom feed. The real global, or a fake in tests. */
 	fetch: FetchFn
 	/** The deploy queue producer — same message a webhook trigger enqueues. */
-	queue: { send(message: DeployJobMessage): Promise<unknown> }
-	/** Monotonic-ish wall clock in unix SECONDS for `last_polled_at` (matches the SQL `unixepoch()`). */
+	queue: JobQueue<DeployJobMessage>
+	/** Monotonic-ish wall clock in unix SECONDS for `last_polled_at` (the unit every `*_at` column uses). */
 	now: () => number
 }
 

@@ -1,0 +1,60 @@
+# GENERATED FILE — DO NOT EDIT BY HAND.
+#
+# Source: deploy/zerops/topology.ts
+# Regenerate: bun run --filter @fabrika/deploy gen
+#
+# Apply with: POST /project/{projectId}/service-stack/import  { yaml }
+#
+# `envIsolation: service` at BOTH levels and the absence of any project-level `envVariables` are
+# written by the compiler, not by the declaration, and re-checked before serialization (ADR-0004).
+#
+project:
+  name: platform
+  envIsolation: service
+  description: "fabrika control plane, IAM and the auth proxy. Separate from the apps project by ADR-0006."
+  corePackage: SERIOUS
+  tags:
+    - fabrika
+    - platform
+    - prod
+services:
+  - hostname: db
+    type: "postgresql:ha@18"
+    envIsolation: service
+    override: true
+    priority: 100
+  - hostname: storage
+    type: object-storage
+    envIsolation: service
+    override: true
+    objectStorageSize: 25
+    objectStoragePolicy: private
+    priority: 100
+    enableCdn: false
+  - hostname: iam
+    type: alpine/bun@1.3
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: false
+    priority: 50
+    minContainers: 2
+    maxContainers: 4
+    zeropsSetup: iam
+  - hostname: control
+    type: alpine/bun@1.3
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: false
+    priority: 50
+    minContainers: 1
+    maxContainers: 2
+    zeropsSetup: control
+  - hostname: proxy
+    type: alpine@3.21
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: false
+    priority: 10
+    minContainers: 2
+    maxContainers: 6
+    zeropsSetup: proxy

@@ -22,7 +22,8 @@
 	"dependencies": {
 		"@cloudflare/containers": "^0.0.30",
 		"@fabrika/config": "workspace:*",
-		"@fabrika/engine": "workspace:*"
+		"@fabrika/engine": "workspace:*",
+		"@fabrika/platform": "workspace:*"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20251001.0",

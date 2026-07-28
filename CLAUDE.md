@@ -4,16 +4,24 @@ An application platform: identity/policy/audit (the IAM half) plus declare-provi
 control-plane half), for a small fleet of apps, on more than one cloud. Merged from **propustka**
 (IAM) and **vozka** (deploy control plane), both of which were Cloudflare-only.
 
-**Phase 0.** The merge has landed and the Cloudflare path works. The multi-cloud seams — platform
-ports, deploy drivers, the Zerops driver, the auth proxy — are decided but NOT built. Read
-`docs/decisions/` before changing anything structural: much of what looks odd here is odd on purpose,
-and several current invariants are already scheduled to be retired.
+**Status.** The merge has landed, the Cloudflare path works, and the multi-cloud seams are built: the
+platform ports, the `DeployDriver` seam and its target union, a Postgres/S3/Bun implementation set, a
+Zerops driver, and the auth proxy. **None of it has been run against a real Zerops account** — the
+generated artifacts validate against Zerops' published JSON schema and the driver is proven in
+dry-run, which is not the same as a deploy that worked. Treat "Zerops support" as well-formed but
+unexercised until someone with an account says otherwise.
+
+Read `docs/decisions/` before changing anything structural: much of what looks odd here is odd on
+purpose, and some invariants have already been retired by a later ADR (ADR-0010 amends ADR-0008;
+ADR-0009 extends ADR-0002).
 
 ## Tech Stack
 
 - **Bun** — runtime + workspaces. Libraries run TypeScript directly (`exports.bun` → `src`); no build step.
 - **TypeScript** strict, ESM (`"type": "module"`) everywhere.
-- **Cloudflare Workers** — Worker + Durable Objects + Containers + D1 + Queues + R2. Zerops is the second target (not built).
+- **Cloudflare Workers** — Worker + Durable Objects + Containers + D1 + Queues + R2. **Zerops** is the second
+  target: `@fabrika/config` has a discriminated `target` arm for it and `@fabrika/engine` a driver (pure HTTP,
+  no runner — ADR-0003). Not yet exercised against a real account.
 - `oblaka-iac` (CF provisioning DSL), `@buzola/*` (SPA router), `jose` (token signing).
 
 ## Commands
@@ -21,13 +29,18 @@ and several current invariants are already scheduled to be retired.
 ```bash
 bun install
 bun run typecheck                    # all packages (bun run --filter '*' typecheck)
-bun test                             # all tests (518)
+bun test                             # all tests; some suites skip without Postgres/S3 (see below)
 bun test packages/engine/src/__tests__/deploy.test.ts   # a single file
 bun run lint                         # biome
 bun run format                       # dprint fmt  (format:check to verify only)
 ```
 
 CPU-heavy runs (full typecheck, full test suite) go through `cpu-lease run -n 4 -- …`.
+
+Suites that need a real backend **skip cleanly** when it is absent and print the variables and the
+docker command to get one: `FABRIKA_TEST_POSTGRES_URL` (the Postgres driver, and the Postgres schemas
+for `iam`/`control`) and `FABRIKA_TEST_S3_*` (the S3 blob store). A green `bun test` with everything
+skipped does NOT mean the Postgres path works — run them before trusting that half.
 
 Per-package dev/build commands live in each package's own CLAUDE.md.
 
@@ -42,11 +55,17 @@ packages/auth/        # @fabrika/auth — the app-facing SDK (the only published
 packages/iam/         # @fabrika/iam — the IAM service: OIDC login, token minting, /admin API, D1.
 packages/iam-ui/      # @fabrika/iam-ui — the IAM admin SPA.
 packages/config/      # @fabrika/config — the app-authoring surface (defineApp + re-exports).
+packages/platform/    # @fabrika/platform — the runtime PORTS (SqlDatabase, BlobStore, JobQueue, DeployLocks,
+                      #   AssetServer, WaitUntil) + the implementations that need nothing but a port.
+packages/platform-node/ # @fabrika/platform-node — those ports for a long-running Bun process
+                      #   (Postgres, S3/MinIO, a jobs table, a directory). Second impl set behind the ports.
 packages/engine/      # @fabrika/engine — deploy engine + the `fabrika` CLI.        → CLAUDE.md
 packages/control/     # @fabrika/control — the control-plane Worker.                → CLAUDE.md
 packages/cli/         # @fabrika/cli — operator bring-up (`fabrika init <account>`). → CLAUDE.md
 packages/dashboard/   # @fabrika/dashboard — the control-plane SPA.                 → CLAUDE.md
 packages/runner/      # @fabrika/runner — the CF deploy runner + the runner executor worker. → CLAUDE.md
+packages/proxy/       # @fabrika/proxy — the auth ENFORCEMENT point: a Caddy `forward_auth` service.
+                      #   Nothing reaches an app until its gates pass. → ADR-0007, ADR-0008, ADR-0010
 examples/app/         # a worked example app (authz vocabulary, gates, audit).
 ```
 
@@ -91,13 +110,14 @@ resource primitive and the authz declaration types, so a `fabrika.config.ts` nev
 
 ## Module-Specific Context
 
-- `packages/engine/CLAUDE.md` — the deploy engine, the plan, the CLI, the runtime seam.
+- `packages/engine/CLAUDE.md` — the deploy engine, the driver seam, the target union, the plan, the CLI.
 - `packages/control/CLAUDE.md` — the control plane: API/ACL, vault, secret resolution, run lifecycle, webhook, D1.
 - `packages/runner/CLAUDE.md` — the container image, the Worker↔container protocol, the executor worker.
 - `packages/dashboard/CLAUDE.md` — the SPA: routes, API client, DTOs, buzola codegen.
 
 <!-- AGENT-DOCS:POINTER (managed by the agent-docs skill — edit the body freely,
      keep the markers) -->
+
 ## Docs
 
 Project docs live in [`docs/`](./docs/) and follow a fixed structure — start at
@@ -105,11 +125,12 @@ Project docs live in [`docs/`](./docs/) and follow a fixed structure — start a
 [`docs/INDEX.md`](./docs/INDEX.md) (the map). In short:
 
 - `docs/reference/` — how the system works now.
-- `docs/decisions/` — ADRs (the *why*), immutable.
+- `docs/decisions/` — ADRs (the _why_), immutable.
 - `docs/backlog/` — decided work not yet scheduled · `docs/sprints/` — active
   work-plans · `docs/archive/` — shipped.
 - `docs/ideas/` — proposals, no commitment.
 
 Path is the status (no `status:` fields); when you finish or supersede something,
 move/delete it per `docs/CLAUDE.md`.
+
 <!-- /AGENT-DOCS:POINTER -->

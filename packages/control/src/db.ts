@@ -1,14 +1,20 @@
-// All D1 access for the fabrika control plane. Prepared statements via `db.prepare(...).bind(...)`,
+// All database access for the fabrika control plane. Prepared statements via `db.prepare(...).bind(...)`,
 // grouped by the resource they touch: apps, app_envs, app_secrets, runs. Mirrors propustka's `Db`
 // pattern (snake_case row shapes matching migrations/0001_init.sql, `firstRow` for RETURNING
-// statements). Caller-generated UUIDv7 ids are stamped in the Worker, never by SQL.
+// statements). Caller-generated UUIDv7 ids AND timestamps are stamped in the Worker, never by SQL —
+// `unixepoch()` is SQLite-only, so every `*_at` this class writes is bound from the injected clock.
+//
+// The handle is the `SqlDatabase` PORT, not `D1Database` — a real D1 binding satisfies it structurally
+// (the port's shape is D1's, deliberately), so this is the same code against either backend. The cost
+// lands on the SQL: every statement here must stay inside the SQLite ∩ Postgres common subset.
 //
 // fabrika is single-account (see migrations/0003): the CF account/token + propustka coords are fabrika's
 // OWN Worker config (src/env.ts), not a per-account registry table, so there is no `accounts` access here.
 
+import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import { uuidv7 } from './uuid'
 
-// ── D1 row shapes (snake_case, as migrations/0001_init.sql defines) ────────────
+// ── Row shapes (snake_case, as migrations/0001_init.sql defines) ───────────────
 
 export interface AppRow {
 	id: string
@@ -89,7 +95,7 @@ export interface RepoPollStateRow {
  * matched). `.first<T>()` is typed `T | null`; this narrows it to `T`, throwing if the row is
  * unexpectedly absent (a programming/DB error, not normal flow). Mirrors propustka's `firstRow`.
  */
-async function firstRow<T>(statement: D1PreparedStatement): Promise<T> {
+async function firstRow<T>(statement: SqlStatement): Promise<T> {
 	const row = await statement.first<T>()
 	if (row === null) {
 		throw new Error('expected a row from a RETURNING statement, got none')
@@ -97,9 +103,14 @@ async function firstRow<T>(statement: D1PreparedStatement): Promise<T> {
 	return row
 }
 
-/** All D1 access for the control plane. */
+/** All database access for the control plane. */
 export class Db {
-	constructor(private readonly d1: D1Database) {}
+	/**
+	 * `now` is injectable so caller-stamped timestamps are deterministic in tests (same approach as
+	 * `SqlDeployLocks`); production passes the real clock. It returns unix SECONDS — the unit every
+	 * `*_at` column in this schema uses.
+	 */
+	constructor(private readonly d1: SqlDatabase, private readonly now: () => number = () => Math.floor(Date.now() / 1000)) {}
 
 	// ── Apps ────────────────────────────────────────────────────────────────────
 
@@ -252,11 +263,16 @@ export class Db {
 
 	/**
 	 * The secret rows that apply when deploying `app` to `env`: the all-env layer (env IS NULL) plus
-	 * the env-specific layer. The SecretResolver layers narrower (env-specific) over wider (all-env).
+	 * the env-specific layer. The caller layers by iterating in order, so the ORDER BY must put the
+	 * WIDER (all-env) row of a name BEFORE the narrower one — last write wins. `ORDER BY name` alone
+	 * leaves that tie unordered, and the two dialects break it differently (SQLite falls back to rowid;
+	 * Postgres is free to return either, and its default NULLS LAST would invert it), so the layer is
+	 * ranked explicitly with a CASE rather than left to `env` sorting.
 	 */
 	async getAppSecretsForEnv(appId: string, env: string): Promise<AppSecretRow[]> {
 		const { results } = await this.d1
-			.prepare('SELECT * FROM app_secrets WHERE app_id = ? AND (env IS NULL OR env = ?) ORDER BY name')
+			.prepare(`SELECT * FROM app_secrets WHERE app_id = ? AND (env IS NULL OR env = ?)
+				ORDER BY name, CASE WHEN env IS NULL THEN 0 ELSE 1 END`)
 			.bind(appId, env)
 			.all<AppSecretRow>()
 		return results
@@ -306,10 +322,14 @@ export class Db {
 
 	// ── App vars (non-secret deploy-time config; PLAINTEXT, mirrors app_secrets' env layering) ──
 
-	/** Vars visible to a deploy of `env`: the all-env layer (NULL) PLUS this env's, narrower wins (caller layers). */
+	/**
+	 * Vars visible to a deploy of `env`: the all-env layer (NULL) PLUS this env's, narrower wins (caller
+	 * layers). Same explicit layer ranking as `getAppSecretsForEnv` — the all-env row must come first.
+	 */
 	async getAppVarsForEnv(appId: string, env: string): Promise<AppVarRow[]> {
 		const { results } = await this.d1
-			.prepare('SELECT * FROM app_vars WHERE app_id = ? AND (env IS NULL OR env = ?) ORDER BY name')
+			.prepare(`SELECT * FROM app_vars WHERE app_id = ? AND (env IS NULL OR env = ?)
+				ORDER BY name, CASE WHEN env IS NULL THEN 0 ELSE 1 END`)
 			.bind(appId, env)
 			.all<AppVarRow>()
 		return results
@@ -381,8 +401,10 @@ export class Db {
 	}
 
 	/**
-	 * List runs, newest first, optionally filtered by app and/or env. `id` is UUIDv7 (time-sortable),
-	 * so ordering by id DESC is chronological; `before` is a keyset cursor for pagination.
+	 * List runs, newest first, optionally filtered by app and/or env. `id` is UUIDv7 with the RFC 9562
+	 * §6.2 monotonic counter (`src/uuid.ts`), so a TEXT `ORDER BY id DESC` is chronological down to the
+	 * individual mint — two runs created in the SAME millisecond still order by which was created
+	 * first. That is what makes `before` a sound keyset cursor: no page can skip or repeat a row.
 	 */
 	async listRuns(filter: { appId?: string; env?: string; before?: string; limit: number }): Promise<RunRow[]> {
 		const where: string[] = []
@@ -412,9 +434,9 @@ export class Db {
 	 */
 	async markRunStarted(id: string, logKey: string): Promise<boolean> {
 		const result = await this.d1
-			.prepare(`UPDATE runs SET status = 'running', started_at = unixepoch(), log_key = ?
+			.prepare(`UPDATE runs SET status = 'running', started_at = ?, log_key = ?
 				WHERE id = ? AND status = 'pending'`)
-			.bind(logKey, id)
+			.bind(this.now(), logKey, id)
 			.run()
 		return (result.meta.changes ?? 0) > 0
 	}
@@ -427,12 +449,15 @@ export class Db {
 	/**
 	 * Move a run to a terminal state (`succeeded` | `failed`): stamp `finished_at` + the exit code.
 	 * Returns true iff the row transitioned (it was still `running`/`pending`).
+	 *
+	 * The statement + bind order are DUPLICATED verbatim by `@fabrika/runner`'s `finishRun`, whose
+	 * co-write the `WHERE status IN ('pending','running')` guard makes idempotent. Change both together.
 	 */
 	async markRunFinished(id: string, status: 'succeeded' | 'failed', exitCode: number | null): Promise<boolean> {
 		const result = await this.d1
-			.prepare(`UPDATE runs SET status = ?, exit_code = ?, finished_at = unixepoch()
+			.prepare(`UPDATE runs SET status = ?, exit_code = ?, finished_at = ?
 				WHERE id = ? AND status IN ('pending','running')`)
-			.bind(status, exitCode, id)
+			.bind(status, exitCode, this.now(), id)
 			.run()
 		return (result.meta.changes ?? 0) > 0
 	}
@@ -447,10 +472,13 @@ export class Db {
 	 * deadline (~18 min) so a genuinely in-flight run is never reaped.
 	 */
 	async sweepStaleRuns(maxAgeSeconds: number): Promise<number> {
+		// One clock read for both the cutoff and the stamp, so a sweep can never reap by a later `now`
+		// than the one it records.
+		const now = this.now()
 		const result = await this.d1
-			.prepare(`UPDATE runs SET status = 'failed', finished_at = unixepoch()
-				WHERE status IN ('pending','running') AND COALESCE(started_at, created_at) < unixepoch() - ?`)
-			.bind(maxAgeSeconds)
+			.prepare(`UPDATE runs SET status = 'failed', finished_at = ?
+				WHERE status IN ('pending','running') AND COALESCE(started_at, created_at) < ?`)
+			.bind(now, now - maxAgeSeconds)
 			.run()
 		return result.meta.changes ?? 0
 	}

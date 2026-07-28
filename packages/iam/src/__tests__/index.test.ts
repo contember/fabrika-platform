@@ -144,8 +144,8 @@ function freshDb(): Database {
 	db.exec(migration)
 	// Seed the local-dev-admin principal so auth_log / audit_events FK lookups resolve.
 	db.run(
-		"INSERT INTO principals (id, type, external_id, email, label) VALUES (?, 'user', ?, 'admin@local.test', 'local-dev-admin')",
-		[LOCAL_DEV_ADMIN_ID, LOCAL_DEV_ADMIN_ID],
+		"INSERT INTO principals (id, type, external_id, email, label, created_at) VALUES (?, 'user', ?, 'admin@local.test', 'local-dev-admin', ?)",
+		[LOCAL_DEV_ADMIN_ID, LOCAL_DEV_ADMIN_ID, Math.floor(Date.now() / 1000)],
 	)
 	return db
 }

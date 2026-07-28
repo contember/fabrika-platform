@@ -1,0 +1,31 @@
+{
+	"name": "@fabrika/proxy",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/contember/fabrika-platform.git",
+		"directory": "packages/proxy"
+	},
+	"exports": {
+		".": {
+			"bun": "./src/index.ts",
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		}
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test",
+		"dev": "bun run src/main.ts",
+		"build": "bun run src/generate-config.ts && bun build --compile --target=bun-linux-x64-musl ./src/main.ts --outfile ./dist/fabrika-proxy"
+	},
+	"dependencies": {
+		"@fabrika/auth-core": "workspace:*",
+		"jose": "^5.9.0"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	}
+}

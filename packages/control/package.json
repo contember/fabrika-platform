@@ -16,12 +16,17 @@
 		"oblaka": "bunx oblaka oblaka.ts",
 		"oblaka:deploy": "bunx oblaka oblaka.ts --remote",
 		"bootstrap": "bun run scripts/bootstrap.ts",
-		"seed": "bun run scripts/seed.ts"
+		"seed": "bun run scripts/seed.ts",
+		"serve": "bun src/node/server.ts",
+		"migrate:postgres": "bun src/node/migrate.ts",
+		"maintenance": "bun src/node/cron.ts"
 	},
 	"dependencies": {
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/config": "workspace:*",
 		"@fabrika/engine": "workspace:*",
+		"@fabrika/platform": "workspace:*",
+		"@fabrika/platform-node": "workspace:*",
 		"@fabrika/runner": "workspace:*"
 	},
 	"devDependencies": {

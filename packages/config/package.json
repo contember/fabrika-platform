@@ -23,7 +23,8 @@
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",
-		"test": "bun test"
+		"test": "bun test",
+		"gen:zerops": "bun scripts/generate-zerops-types.ts"
 	},
 	"peerDependencies": {
 		"@fabrika/auth-core": "^0.0.1",

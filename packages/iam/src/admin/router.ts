@@ -1,7 +1,7 @@
 import { type PermissionEntry, permits, type PrincipalType, SESSION_COOKIE } from '@fabrika/auth-core'
 import { resolveCaller } from '../auth'
 import { principalStatus } from '../db'
-import type { Env } from '../env'
+import type { Env, RequestContext } from '../env'
 import { resolveUserPermissions } from '../resolve'
 import { hashToken } from '../secret'
 import type { Services } from '../services'
@@ -196,7 +196,7 @@ export async function handleAdmin(
 	request: Request,
 	services: Services,
 	env: Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'PROPUSTKA_PROVISIONING_KEY' | 'ENVIRONMENT'>,
-	ctx: ExecutionContext,
+	ctx: RequestContext,
 ): Promise<Response> {
 	const url = new URL(request.url)
 	const creds = extractCredentials(request)

@@ -113,6 +113,43 @@ describe('assembleJob', () => {
 		expect(job.vars).toEqual({ ACCESS_APPS: '{"aud":"app"}', TEAM: 'prod-team' })
 	})
 
+	test('the narrower env layer wins regardless of INSERTION order (the layering is the query, not the rowids)', async () => {
+		const { db } = createHarness()
+		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await db.upsertAppEnv({ appId: 'app', env: 'prod' })
+		// Deliberately REVERSED: the env-specific row is written FIRST, the all-env row second. The
+		// layering must come from the ORDER BY, not from the order rows happen to sit in on disk —
+		// SQLite falls back to rowid for an unordered tie and Postgres makes no such promise at all.
+		await db.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'literal:prod-value' })
+		await db.upsertAppSecret({ appId: 'app', env: null, name: 'API_KEY', valueRef: 'literal:all-env-value' })
+		await db.upsertAppVar({ appId: 'app', env: 'prod', name: 'TEAM', value: 'prod-team' })
+		await db.upsertAppVar({ appId: 'app', env: null, name: 'TEAM', value: 'all-env-team' })
+
+		// The query itself must hand back the WIDER row first so the caller's last-write-wins loop lands
+		// on the narrower one.
+		expect((await db.getAppSecretsForEnv('app', 'prod')).map((r) => r.env)).toEqual([null, 'prod'])
+		expect((await db.getAppVarsForEnv('app', 'prod')).map((r) => r.env)).toEqual([null, 'prod'])
+
+		const runId = uuidv7()
+		await db.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', commitSha: null })
+		const job = await assembleJob(
+			{
+				db,
+				repoSource: new FakeRepoSource(),
+				secrets: new EnvSecretResolver({}),
+				deploy: DEPLOY,
+				lock: makeFakeLock(),
+				startRun: () => Promise.reject(new Error('unused')),
+			},
+			(await db.getRun(runId))!,
+			(await db.getApp('app'))!,
+			(await db.getAppEnv('app', 'prod'))!,
+		)
+
+		expect(job.secrets).toEqual({ API_KEY: 'prod-value' })
+		expect(job.vars).toEqual({ TEAM: 'prod-team' })
+	})
+
 	test('dryRun flows through to the job', async () => {
 		const { db } = createHarness()
 		const { runId } = await seedRun(db)

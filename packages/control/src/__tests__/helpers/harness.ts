@@ -143,13 +143,16 @@ export interface Harness {
 	d1: D1Database
 }
 
-/** Stand up a fresh in-memory DB + Db. Call once per test for isolation. */
-export function createHarness(): Harness {
+/**
+ * Stand up a fresh in-memory DB + Db. Call once per test for isolation. `now` (unix SECONDS) overrides
+ * `Db`'s clock so tests that assert on caller-stamped `*_at` columns are deterministic.
+ */
+export function createHarness(now?: () => number): Harness {
 	const sqlite = new Database(':memory:')
 	sqlite.exec('PRAGMA foreign_keys = ON')
 	sqlite.exec(migration)
 	const d1 = new TestD1Database(sqlite)
-	const db = new Db(d1)
+	const db = new Db(d1, now)
 	return { sqlite, db, d1 }
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { handleAdmin } from '../admin/router'
 import type { Env } from '../env'
+import { prop } from '../json'
 import type { Services } from '../services'
 import { createHarness, type Harness, seedGrant, seedRole, seedUser } from './helpers/harness'
 
@@ -179,5 +180,34 @@ describe('handleAdmin — same-origin CSRF guard (SEC-2)', () => {
 		expect(res.status).toBe(403)
 		const body: unknown = await res.json()
 		expect(body).toEqual({ error: 'admin permission required' })
+	})
+})
+
+describe('handleAdmin — audit read path tolerates malformed JSON columns', () => {
+	test('a row whose diff/metadata is not JSON reads as null instead of 500-ing', async () => {
+		// `audit_events.diff`/`metadata` used to carry `CHECK (json_valid(...))`, which let the DTO
+		// mapper JSON-parse with no guard. That CHECK is SQLite-only, so it is gone from the
+		// migrations and a hand-written / out-of-band row can now hold anything. The read path
+		// must degrade to null, not throw.
+		const h = createHarness()
+		const id = seedUser(h.sqlite, { sub: 'sub-audit', email: 'audit@example.com' })
+		seedGrant(h.sqlite, id, 'admin', null)
+		h.sqlite.run(
+			`INSERT INTO audit_events (id, request_id, principal_id, principal_label, app, action, resource_type, diff, metadata, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			['aud-junk', 'req-1', id, 'audit@example.com', 'opice', 'x.update', 'x', 'not json', '{"ok":', 1_782_896_400],
+		)
+
+		const session = await h.signSession(id)
+		const res = await run(h, adminRequest('/admin/audit', { session }))
+
+		expect(res.status).toBe(200)
+		const body: unknown = await res.json()
+		const items = prop(body, 'items')
+		expect(Array.isArray(items)).toBe(true)
+		const first = Array.isArray(items) ? items[0] : undefined
+		expect(prop(first, 'id')).toBe('aud-junk')
+		expect(prop(first, 'diff')).toBeNull()
+		expect(prop(first, 'metadata')).toBeNull()
 	})
 })

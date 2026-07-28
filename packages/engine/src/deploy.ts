@@ -1,177 +1,32 @@
-import type { AppConfig } from '@fabrika/config'
-import { resolve } from 'node:path'
-import type { Worker } from 'oblaka-iac'
-import { buildPlan, findMigratableDatabases } from './plan'
-import { defaultRuntime, type DeployRuntime } from './runtime'
-import type { DeployContext, DeployResult, DeployStep, JobSpec, RunStatus } from './types'
+// The orchestrator. It EXECUTES a plan; it does not decide what the plan is — that belongs to the
+// `DeployDriver` (ADR-0002), and WHICH driver belongs to the target's discriminant (ADR-0009).
+// Everything left here is platform-neutral: driver lookup by discriminant, deploy-var injection,
+// progress logging, cancellation, step status transitions, fail-stop, and the result shape. Nothing in
+// this file knows a Cloudflare step kind or a Cloudflare credential, and nothing may start to.
 
-/** Resolve the absolute directory the Worker source lives in (`pipeline.workerDir` over `cwd`). */
-const workerDir = (config: AppConfig, ctx: DeployContext): string => resolve(ctx.cwd, config.pipeline?.workerDir ?? '.')
+import { type AnyAppConfig, appPlatform } from '@fabrika/config'
+import { CANCELLED, type DeploySession, type DriverRegistry, type DriverRun } from './driver'
+import { defaultDrivers } from './drivers'
+import type { DeployContext, DeployResult, DeployStep, JobSpec, PlatformId, RunStatus } from './types'
 
-/** The cred env every real `wrangler` child needs — oblaka uses the SDK, wrangler reads these. */
-const wranglerEnv = (ctx: DeployContext): Record<string, string> => ({
-	CLOUDFLARE_API_TOKEN: ctx.apiToken,
-	CLOUDFLARE_ACCOUNT_ID: ctx.accountId,
-})
-
-/** Throw a uniform error from a failed shell-out, folding stderr/stdout into the message. */
-const commandError = (label: string, result: { exitCode: number; stdout: string; stderr: string }): Error => {
-	const detail = (result.stderr.trim() || result.stdout.trim() || '(no output)').slice(0, 2000)
-	return new Error(`${label} failed (exit ${result.exitCode}): ${detail}`)
-}
-
-/**
- * Everything one step's executor needs: the config, context, materialized worker graph, its dir,
- * the runtime, and whether this is a dry-run. Bundled so the per-kind handlers stay small.
- */
-interface StepEnv {
-	config: AppConfig
-	ctx: DeployContext
-	worker: Worker
-	dir: string
-	runtime: DeployRuntime
-	dryRun: boolean
-}
-
-/** Run one step's effect. Resolves on success, throws on failure (caught + recorded by the loop). */
-const runStep = async (spec: JobSpec, env: StepEnv): Promise<void> => {
-	const { config, ctx, worker, dir, runtime, dryRun } = env
-
-	switch (spec.kind) {
-		case 'build': {
-			const build = config.pipeline?.build
-			if (build === undefined) {
-				return
-			}
-			if (dryRun) {
-				runtime.log(`  [dry-run] would run build: \`${build}\` in ${dir}`)
-				return
-			}
-			const result = await runtime.runCommand({ command: 'sh', args: ['-c', build], cwd: dir })
-			if (result.exitCode !== 0) {
-				throw commandError(`build (\`${build}\`)`, result)
-			}
-			return
-		}
-
-		case 'provision-resources': {
-			// Per-app state namespace (`<app id>-state` by default) so apps sharing one account don't
-			// collide on oblaka's env-keyed state, and a migrated app continues its existing state.
-			const stateNamespace = ctx.stateNamespace ?? `${config.id}-state`
-			// oblaka always runs — in dry-run it provisions in plan-only mode (no remote, no writes),
-			// which still materializes the resource graph + wrangler config so the path is exercised.
-			const result = await runtime.provision({
-				definition: worker,
-				accountId: ctx.accountId,
-				apiToken: ctx.apiToken,
-				env: ctx.env,
-				cwd: dir,
-				stateNamespace,
-				dryRun,
-			})
-			const names = result.wranglerConfigs.map((c) => c.config.name ?? '(unnamed)').join(', ')
-			runtime.log(dryRun ? `  [dry-run] provisioned (plan-only): ${names}` : `  provisioned: ${names}`)
-			return
-		}
-
-		case 'migrate': {
-			// `migrate:<binding>` — apply by the D1 BINDING (env-stable), not the oblaka resource name (env-prefixed in wrangler.jsonc).
-			const binding = spec.id.slice('migrate:'.length)
-			const database = findMigratableDatabases(worker).find((d) => d.binding === binding)
-			if (database === undefined) {
-				throw new Error(`migrate: no migratable D1 database for binding \`${binding}\``)
-			}
-			if (dryRun) {
-				runtime.log(`  [dry-run] would run: wrangler d1 migrations apply ${database.binding} --remote`)
-				return
-			}
-			const result = await runtime.runCommand({
-				command: 'wrangler',
-				args: ['d1', 'migrations', 'apply', database.binding, '--remote'],
-				cwd: dir,
-				env: wranglerEnv(ctx),
-			})
-			if (result.exitCode !== 0) {
-				throw commandError(`wrangler d1 migrations apply ${database.binding}`, result)
-			}
-			return
-		}
-
-		case 'deploy-worker': {
-			if (dryRun) {
-				runtime.log(`  [dry-run] would run: wrangler deploy in ${dir}`)
-				return
-			}
-			const result = await runtime.runCommand({ command: 'wrangler', args: ['deploy'], cwd: dir, env: wranglerEnv(ctx) })
-			if (result.exitCode !== 0) {
-				throw commandError('wrangler deploy', result)
-			}
-			return
-		}
-
-		case 'reconcile-schema': {
-			const schema = config.schema
-			const propustkaUrl = ctx.propustkaUrl
-			if (schema === undefined || propustkaUrl === undefined) {
-				return
-			}
-			if (dryRun) {
-				runtime.log(`  [dry-run] would reconcile schema for \`${config.id}\` against ${propustkaUrl}`)
-				return
-			}
-			// propustka is fully native: `PUT /admin/apps/:app/schema` SELF-REGISTERS a new app (no
-			// ACCESS_APPS gate, so no 404 "unknown app"). Any error is a real failure and propagates.
-			await runtime.reconcileSchema({ url: propustkaUrl, app: config.id, schema, adminKey: ctx.adminKey })
-			return
-		}
-
-		case 'sync-secrets': {
-			const secrets = config.pipeline?.secrets ?? []
-			for (const name of secrets) {
-				const value = ctx.secrets[name]
-				if (value === undefined) {
-					throw new Error(`sync-secrets: missing value for secret \`${name}\` (not in ctx.secrets)`)
-				}
-				if (dryRun) {
-					runtime.log(`  [dry-run] would run: wrangler secret put ${name} (value piped from ctx.secrets)`)
-					continue
-				}
-				const result = await runtime.runCommand({
-					command: 'wrangler',
-					args: ['secret', 'put', name],
-					cwd: dir,
-					env: wranglerEnv(ctx),
-					stdin: value,
-				})
-				if (result.exitCode !== 0) {
-					throw commandError(`wrangler secret put ${name}`, result)
-				}
-			}
-			return
-		}
-	}
-}
+/** A signal that never fires — what a caller that passed none effectively has. */
+const NEVER_CANCELLED: AbortSignal = new AbortController().signal
 
 /** Roll a list of plan specs into pending `DeployStep`s. */
 const initSteps = (specs: JobSpec[]): DeployStep[] => specs.map((spec) => ({ spec, status: 'pending' as RunStatus }))
 
 /**
- * Deploy one app to one environment: build the plan from `config` + `ctx`, execute its steps in
- * order (build, provision via oblaka, D1 migrations, `wrangler deploy`, propustka reconciles, secret
- * sync), and return the result. Stops on the first failure and marks the rest `skipped`.
+ * Inject the app's NON-SECRET deploy vars (`ctx.vars`, the per-app-env registry config) into
+ * `process.env`, then assert every DECLARED var resolved. This runs BEFORE the driver opens, because a
+ * driver materializes the app's config there and the config reads its vars via `process.env['NAME']` —
+ * the same way a migrated `oblaka.ts` does. The whole registry set is injected (so optional vars work
+ * too); `pipeline.vars` is what's asserted. Required even in dry-run (the graph needs them to
+ * materialize, like creds); a declared var with no value is a hard error — never ship a
+ * half-configured deploy. Only the NAME is ever logged, never a value.
  *
- * All side effects go through an injectable `DeployRuntime` (default: real Bun spawn + oblaka +
- * propustka) so this is fully unit-testable and so `ctx.dryRun` can short-circuit every real
- * Cloudflare/propustka mutation while still exercising the whole path.
+ * `pipeline.vars` is a `@fabrika/config` surface, not a platform surface, so this stays in the engine.
  */
-export const deploy = async (config: AppConfig, ctx: DeployContext, runtime: DeployRuntime = defaultRuntime): Promise<DeployResult> => {
-	const dryRun = ctx.dryRun ?? false
-	// Inject the app's NON-SECRET deploy vars (`ctx.vars`, the per-app-env registry config) into
-	// `process.env` BEFORE materializing the resource graph, so the config reads them via
-	// `process.env['NAME']` — the same way a migrated `oblaka.ts` does. The whole registry set is injected
-	// (so optional vars work too); `pipeline.vars` then asserts each REQUIRED name resolved. Required even
-	// in dry-run (the graph needs them to materialize, like creds); a declared var with no value is a hard
-	// error — never ship a half-configured deploy. Only the NAME is ever logged, never a value.
+const injectDeployVars = (config: AnyAppConfig, ctx: DeployContext): void => {
 	for (const [name, value] of Object.entries(ctx.vars ?? {})) {
 		process.env[name] = value
 	}
@@ -180,35 +35,123 @@ export const deploy = async (config: AppConfig, ctx: DeployContext, runtime: Dep
 			throw new Error(`deploy: missing value for declared pipeline var \`${name}\` (not in ctx.vars)`)
 		}
 	}
-	const worker = config.resources({ env: ctx.env, domain: ctx.domain })
-	const dir = workerDir(config, ctx)
-	const plan = buildPlan(config, ctx, worker)
-	const steps = initSteps(plan.steps)
-	const stepEnv: StepEnv = { config, ctx, worker, dir, runtime, dryRun }
+}
 
-	runtime.log(`Deploy ${plan.appId} → ${plan.env}${dryRun ? ' (dry-run)' : ''} — ${steps.length} step(s):`)
+/**
+ * The ONE place a target selects its driver: index the registry by the run's discriminant. Generic over
+ * the platform so the lookup and the run stay correlated — `drivers['cloudflare']` is the driver whose
+ * `open()` takes a Cloudflare-narrowed run — which is what lets this be a map instead of a `switch`,
+ * with no cast anywhere.
+ */
+const openSession = <K extends PlatformId>(
+	drivers: DriverRegistry,
+	run: DriverRun<K> & { ctx: { target: { platform: K } } },
+): Promise<DeploySession> => {
+	const driver = drivers[run.ctx.target.platform]
+	if (driver === undefined) {
+		throw new Error(`deploy: no driver registered for target platform \`${run.ctx.target.platform}\``)
+	}
+	// The config's arm and the target's arm are inferred independently, so pair them ONCE, here, before any
+	// driver sees the run. This is not the engine branching on a platform — it never names one — it is what
+	// keeps `DriverRun.config` honestly narrowed, which is what lets every driver read its own arm unguarded.
+	if (appPlatform(run.config) !== run.ctx.target.platform) {
+		throw new Error(
+			`deploy: app \`${run.config.id}\` declares a \`${appPlatform(run.config)}\` target but the deploy targets \`${run.ctx.target.platform}\``,
+		)
+	}
+	return driver.open(run)
+}
+
+/**
+ * Abandon `promise` the moment `signal` fires. The step keeps running in the background — a driver
+ * cannot be forced to stop — but the run stops WAITING for it, so one unresponsive step can never
+ * wedge a cancelled deploy. Drivers honour the signal too, which is what actually kills the work.
+ */
+const untilCancelled = <T>(promise: Promise<T>, signal: AbortSignal): Promise<T> => {
+	if (signal.aborted) {
+		return Promise.reject(new Error(CANCELLED))
+	}
+	return new Promise<T>((resolve, reject) => {
+		const onAbort = (): void => reject(new Error(CANCELLED))
+		signal.addEventListener('abort', onAbort, { once: true })
+		void promise.then(resolve, reject).finally(() => {
+			signal.removeEventListener('abort', onAbort)
+		})
+	})
+}
+
+/** Knobs `deploy()` takes beyond the app + its target. All optional; the defaults are production's. */
+export interface DeployOptions {
+	/**
+	 * NEUTRAL run collaborator: where progress / dry-run lines go. Defaults to `console.log`. Passed
+	 * through to every driver. NEVER write a secret value into it.
+	 */
+	log?: (line: string) => void
+	/**
+	 * Cancels the run. The step in flight is abandoned and reported `failed` with `deploy cancelled`;
+	 * every step after it is `skipped` and the run's status is `failed`. Drivers receive the same
+	 * signal and honour it in anything long-running (Cloudflare kills the `wrangler` child).
+	 */
+	signal?: AbortSignal
+	/**
+	 * Driver lookup by target discriminant. Defaults to `defaultDrivers`. Tests override the entry for
+	 * the platform under test with a driver built over fake collaborators.
+	 */
+	drivers?: DriverRegistry
+}
+
+/**
+ * Deploy one app to one environment: look the target's `DeployDriver` up by `ctx.target.platform`, open
+ * a run against it, execute the plan the driver derived — in the order it gave them — and return the
+ * result. Stops on the first failure (or on cancellation) and marks the rest `skipped`.
+ *
+ * WHAT the plan is (which steps, in what order, and what each does) is the driver's. WHAT actually
+ * touches the network/filesystem is the driver's OWN collaborator bundle, supplied when the driver is
+ * constructed — not a parameter here (ADR-0009). What this function owns is neutral: var injection,
+ * progress, cancellation, status transitions, and `ctx.dryRun`, which every driver must honour.
+ */
+export const deploy = async (config: AnyAppConfig, ctx: DeployContext, options: DeployOptions = {}): Promise<DeployResult> => {
+	const log = options.log ?? ((line: string) => console.log(line))
+	const signal = options.signal ?? NEVER_CANCELLED
+	const dryRun = ctx.dryRun ?? false
+	injectDeployVars(config, ctx)
+
+	const session = await openSession(options.drivers ?? defaultDrivers, { config, ctx, log, signal, dryRun })
+	const { plan } = session
+	const steps = initSteps(plan.steps)
+
+	log(`Deploy ${plan.appId} → ${plan.env}${dryRun ? ' (dry-run)' : ''} — ${steps.length} step(s):`)
 	for (const step of steps) {
-		runtime.log(`  • ${step.spec.id} — ${step.spec.description}`)
+		log(`  • ${step.spec.id} — ${step.spec.description}`)
 	}
 
-	let failed = false
+	// Set once a step fails OR the run is cancelled: every remaining step is reported `skipped` and the
+	// run's status is `failed`. A run cancelled AFTER its last step still succeeded — nothing was lost.
+	let stopped = false
 	for (const step of steps) {
-		if (failed) {
+		if (stopped) {
 			step.status = 'skipped'
+			continue
+		}
+		if (signal.aborted) {
+			// Cancelled between steps: this one never started, so it is skipped rather than failed.
+			stopped = true
+			step.status = 'skipped'
+			log(`∅ ${step.spec.id}: ${CANCELLED}`)
 			continue
 		}
 
 		step.status = 'running'
 		step.startedAt = Date.now()
-		runtime.log(`→ ${step.spec.id}`)
+		log(`→ ${step.spec.id}`)
 		try {
-			await runStep(step.spec, stepEnv)
+			await untilCancelled(session.execute(step.spec.id), signal)
 			step.status = 'succeeded'
 		} catch (error) {
 			step.status = 'failed'
 			step.error = error instanceof Error ? error.message : String(error)
-			failed = true
-			runtime.log(`✗ ${step.spec.id}: ${step.error}`)
+			stopped = true
+			log(`✗ ${step.spec.id}: ${step.error}`)
 		}
 		step.finishedAt = Date.now()
 	}
@@ -216,7 +159,7 @@ export const deploy = async (config: AppConfig, ctx: DeployContext, runtime: Dep
 	return {
 		appId: plan.appId,
 		env: plan.env,
-		status: failed ? 'failed' : 'succeeded',
+		status: stopped ? 'failed' : 'succeeded',
 		plan,
 		steps,
 	}

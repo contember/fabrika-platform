@@ -1,3 +1,4 @@
+import type { SqlDatabase, SqlQueryResult, SqlRunResult, SqlStatement } from '@fabrika/platform'
 import { Database, type SQLQueryBindings } from 'bun:sqlite'
 import { Db } from '../../db'
 import { OidcClient, type OidcMetadata } from '../../oidc'
@@ -8,8 +9,8 @@ import { allMigrations } from './migrations'
 /**
  * Shared test harness for the worker's auth/admin flows. Stands up:
  *   - a real in-memory `bun:sqlite` DB with the production migration applied,
- *     wrapped in a small D1-compatible adapter so `new Db(...)` runs against it
- *     exactly as it does over D1 (mirrors the schema.test.ts pattern);
+ *     wrapped in a small `SqlDatabase` adapter so `new Db(...)` runs against it
+ *     through the same port it reaches D1 by (mirrors the schema.test.ts pattern);
  *   - `signSession`, minting a real `px_session` SSO session for a seeded principal;
  *   - `makeServices({ environment, human, bootstrapAdmins, oidc })` assembling a
  *     plain native `Services`.
@@ -25,79 +26,49 @@ export const HARNESS_OIDC_METADATA: OidcMetadata = {
 	jwksUri: 'https://idp.test/jwks',
 }
 
-// ── D1-compatible adapter over bun:sqlite ─────────────────────────────────────
-// `Db` talks to the async D1 surface (`prepare().bind().first()/.all()/.run()` and
-// `batch()`). bun:sqlite is synchronous, so we wrap it. Typed end-to-end (the bun
-// `Statement<ReturnType>` generic carries the row type through), so no casts.
+// ── `SqlDatabase` adapter over bun:sqlite ─────────────────────────────────────
+// `Db` talks to the async SQL port (`prepare().bind().first()/.all()/.run()` and `batch()`) — the
+// same surface a real `D1Database` satisfies structurally. bun:sqlite is synchronous, so we wrap
+// it. Implementing the PORT (not D1) is deliberate: the tests then exercise exactly what a future
+// Postgres driver has to provide, and nothing more. Typed end-to-end (the bun `Statement<ReturnType>`
+// generic carries the row type through), so no casts.
 
-class TestD1PreparedStatement implements D1PreparedStatement {
+class TestSqlStatement implements SqlStatement {
 	private params: SQLQueryBindings[] = []
 
 	constructor(private readonly db: Database, private readonly sql: string) {}
 
-	bind(...values: unknown[]): D1PreparedStatement {
-		const next = new TestD1PreparedStatement(this.db, this.sql)
+	bind(...values: unknown[]): SqlStatement {
+		const next = new TestSqlStatement(this.db, this.sql)
 		next.params = values.map((v) => toBinding(v))
 		return next
 	}
 
-	first<T = Record<string, unknown>>(colName: string): Promise<T | null>
-	first<T = Record<string, unknown>>(): Promise<T | null>
-	first<T = Record<string, unknown>>(colName?: string): Promise<T | null> {
+	first<T = Record<string, unknown>>(): Promise<T | null> {
 		const row = this.db.query<T, SQLQueryBindings[]>(this.sql).get(...this.params)
-		if (row === null) {
-			return Promise.resolve(null)
-		}
-		if (colName !== undefined) {
-			return Promise.resolve(pluck<T>(row, colName))
-		}
 		return Promise.resolve(row)
 	}
 
-	all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
+	all<T = Record<string, unknown>>(): Promise<SqlQueryResult<T>> {
 		const results = this.db.query<T, SQLQueryBindings[]>(this.sql).all(...this.params)
-		return Promise.resolve(this.wrap(results))
+		return Promise.resolve({ results })
 	}
 
-	run<T = Record<string, unknown>>(): Promise<D1Result<T>> {
-		const changes = this.db.query<T, SQLQueryBindings[]>(this.sql).run(...this.params)
-		const result = this.wrap<T>([])
-		result.meta.changes = changes.changes
-		return Promise.resolve(result)
-	}
-
-	raw<T = unknown[]>(options: { columnNames: true }): Promise<[string[], ...T[]]>
-	raw<T = unknown[]>(options?: { columnNames?: false }): Promise<T[]>
-	raw<T = unknown[]>(_options?: { columnNames?: boolean }): Promise<T[] | [string[], ...T[]]> {
-		throw new Error('raw() is not used by Db and is not implemented in the test adapter')
-	}
-
-	private wrap<T>(results: T[]): D1Result<T> {
-		return {
-			results,
-			success: true,
-			meta: {
-				duration: 0,
-				size_after: 0,
-				rows_read: 0,
-				rows_written: 0,
-				last_row_id: 0,
-				changed_db: false,
-				changes: 0,
-			},
-		}
+	run(): Promise<SqlRunResult> {
+		const changes = this.db.query<Record<string, unknown>, SQLQueryBindings[]>(this.sql).run(...this.params)
+		return Promise.resolve({ meta: { changes: changes.changes } })
 	}
 }
 
-class TestD1Database implements D1Database {
+class TestSqlDatabase implements SqlDatabase {
 	constructor(private readonly db: Database) {}
 
-	prepare(query: string): D1PreparedStatement {
-		return new TestD1PreparedStatement(this.db, query)
+	prepare(query: string): SqlStatement {
+		return new TestSqlStatement(this.db, query)
 	}
 
-	async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
-		const out: D1Result<T>[] = []
+	async batch<T = Record<string, unknown>>(statements: SqlStatement[]): Promise<SqlQueryResult<T>[]> {
+		const out: SqlQueryResult<T>[] = []
 		this.db.run('BEGIN')
 		try {
 			for (const stmt of statements) {
@@ -110,35 +81,6 @@ class TestD1Database implements D1Database {
 		}
 		return out
 	}
-
-	exec(_query: string): Promise<D1ExecResult> {
-		throw new Error('exec() is not used by Db and is not implemented in the test adapter')
-	}
-
-	withSession(_constraintOrBookmark?: string): D1DatabaseSession {
-		throw new Error('withSession() is not used by Db and is not implemented in the test adapter')
-	}
-
-	dump(): Promise<ArrayBuffer> {
-		throw new Error('dump() is not used by Db and is not implemented in the test adapter')
-	}
-}
-
-/**
- * Narrow a single result row to one named column. `Db` never calls `first(colName)`
- * (it always reads whole rows), so this path is unexercised by these tests; it
- * exists only to satisfy the D1 overload. Kept honest (no `as`) via an unknown
- * JSON round-trip into the generic.
- */
-function pluck<T>(row: T, colName: string): T | null {
-	const box: { v: unknown } = { v: row }
-	const reread: { v: Record<string, unknown> } = JSON.parse(JSON.stringify(box))
-	const value: unknown = reread.v[colName]
-	if (value === undefined || value === null) {
-		return null
-	}
-	const out: { v: T } = JSON.parse(JSON.stringify({ v: value }))
-	return out.v
 }
 
 /** Coerce a bound value into a bun:sqlite-acceptable binding (no `as`). */
@@ -165,7 +107,7 @@ const migration = allMigrations()
 export interface Harness {
 	/** Raw sqlite connection — seed rows directly with `.run(...)`. */
 	sqlite: Database
-	/** The production `Db` over the in-memory sqlite, via the D1 adapter. */
+	/** The production `Db` over the in-memory sqlite, via the `SqlDatabase` adapter. */
 	db: Db
 	/**
 	 * Create an active SSO session for a principal and return the plaintext `px_session` cookie value
@@ -205,7 +147,7 @@ export function createHarness(): Harness {
 	const sqlite = new Database(':memory:')
 	sqlite.exec('PRAGMA foreign_keys = ON')
 	sqlite.exec(migration)
-	const db = new Db(new TestD1Database(sqlite))
+	const db = new Db(new TestSqlDatabase(sqlite))
 
 	function makeServices(options: MakeServicesOptions = {}): Services {
 		const issuer = options.issuer ?? 'http://localhost:18191'
@@ -259,19 +201,30 @@ function nextId(prefix: string): string {
 	return `${prefix}-${seq}`
 }
 
+/**
+ * `created_at` has no DDL default any more (`unixepoch()` is SQLite-only — see the header of
+ * `migrations/0001_init.sql`), so every INSERT must bind it, these seeds included. Tests that
+ * care about a specific creation time pass `createdAt`; the rest get "now".
+ */
+function nowSeconds(): number {
+	return Math.floor(Date.now() / 1000)
+}
+
 export interface SeedUserOptions {
 	/** Access `sub`. Null → an unclaimed invite. */
 	sub?: string | null
 	email: string
 	label?: string
 	disabled?: boolean
+	/** `created_at` in unix seconds; defaults to now. */
+	createdAt?: number
 }
 
 /** Insert a user principal; returns its id. */
 export function seedUser(sqlite: Database, options: SeedUserOptions): string {
 	const id = nextId('user')
 	sqlite.run(
-		'INSERT INTO principals (id, type, external_id, email, label, disabled_at) VALUES (?, ?, ?, ?, ?, ?)',
+		'INSERT INTO principals (id, type, external_id, email, label, disabled_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
 		[
 			id,
 			'user',
@@ -279,6 +232,7 @@ export function seedUser(sqlite: Database, options: SeedUserOptions): string {
 			options.email,
 			options.label ?? options.email,
 			options.disabled ? 1 : null,
+			options.createdAt ?? nowSeconds(),
 		],
 	)
 	return id
@@ -289,14 +243,24 @@ export interface SeedServiceOptions {
 	commonName: string
 	label?: string
 	disabled?: boolean
+	/** `created_at` in unix seconds; defaults to now. */
+	createdAt?: number
 }
 
 /** Insert a service principal; returns its id. */
 export function seedService(sqlite: Database, options: SeedServiceOptions): string {
 	const id = nextId('svc')
 	sqlite.run(
-		'INSERT INTO principals (id, type, external_id, email, label, disabled_at) VALUES (?, ?, ?, ?, ?, ?)',
-		[id, 'service', options.commonName, null, options.label ?? options.commonName, options.disabled ? 1 : null],
+		'INSERT INTO principals (id, type, external_id, email, label, disabled_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+		[
+			id,
+			'service',
+			options.commonName,
+			null,
+			options.label ?? options.commonName,
+			options.disabled ? 1 : null,
+			options.createdAt ?? nowSeconds(),
+		],
 	)
 	return id
 }
@@ -321,8 +285,8 @@ export function seedGrant(
 ): string {
 	const id = nextId('grant')
 	sqlite.run(
-		'INSERT INTO grants (id, principal_id, role_key, scope_type, scope_value, app) VALUES (?, ?, ?, ?, ?, ?)',
-		[id, principalId, roleKey, scope?.type ?? null, scope?.value ?? null, app],
+		'INSERT INTO grants (id, principal_id, role_key, scope_type, scope_value, app, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+		[id, principalId, roleKey, scope?.type ?? null, scope?.value ?? null, app, nowSeconds()],
 	)
 	return id
 }
@@ -337,8 +301,8 @@ export function seedInlineGrant(
 ): string {
 	const id = nextId('grant')
 	sqlite.run(
-		'INSERT INTO grants (id, principal_id, permissions, scope_type, scope_value, app) VALUES (?, ?, ?, ?, ?, ?)',
-		[id, principalId, JSON.stringify(permissions), scope?.type ?? null, scope?.value ?? null, app],
+		'INSERT INTO grants (id, principal_id, permissions, scope_type, scope_value, app, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+		[id, principalId, JSON.stringify(permissions), scope?.type ?? null, scope?.value ?? null, app, nowSeconds()],
 	)
 	return id
 }
@@ -352,8 +316,8 @@ export function seedRole(
 	options: { name?: string; description?: string | null; origin?: 'app' | 'custom' } = {},
 ): void {
 	sqlite.run(
-		'INSERT INTO roles (app, role_key, name, description, permissions, origin) VALUES (?, ?, ?, ?, ?, ?)',
-		[app, roleKey, options.name ?? roleKey, options.description ?? null, JSON.stringify(permissions), options.origin ?? 'app'],
+		'INSERT INTO roles (app, role_key, name, description, permissions, origin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+		[app, roleKey, options.name ?? roleKey, options.description ?? null, JSON.stringify(permissions), options.origin ?? 'app', nowSeconds()],
 	)
 }
 

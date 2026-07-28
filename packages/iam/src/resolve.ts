@@ -1,6 +1,6 @@
 import type { PermissionEntry, PermissionSource, RoleDef, RoleSource, Scope } from '@fabrika/auth-core'
 import type { Db, GrantRow, PrincipalRow, RoleRow } from './db'
-import { parseJson } from './json'
+import { parseJsonOrNull } from './json'
 import { makeRoleSource } from './roles'
 
 // ── Pure resolution (no I/O) — testable with in-memory rows ───────────────────
@@ -29,12 +29,13 @@ function rowScope(scopeType: string | null, scopeValue: string | null): Scope | 
 }
 
 /**
- * Parse a grant's inline `permissions` JSON into an array of action patterns. The
- * migration's `json_valid` CHECK keeps malformed JSON out at write time; a row whose
- * JSON isn't a string array (shouldn't happen) yields no patterns (fail-closed).
+ * Parse a grant's inline `permissions` JSON into an array of action patterns. Fail-closed
+ * twice over: unparseable text and JSON that isn't a string array both yield no patterns.
+ * The DB no longer guarantees validity (the `json_valid` CHECK was SQLite-only — see
+ * `parseJsonOrNull`), and this runs on the authz path, so it must never throw.
  */
 function inlinePatterns(json: string): string[] {
-	const parsed = parseJson(json)
+	const parsed = parseJsonOrNull(json)
 	if (!Array.isArray(parsed)) {
 		return []
 	}

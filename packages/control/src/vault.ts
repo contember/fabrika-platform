@@ -28,6 +28,7 @@
 // API. Losing it makes every vault value unrecoverable (by design).
 
 import type { SecretScope } from '@fabrika/engine'
+import type { SqlStatement } from '@fabrika/platform'
 import { uuidv7 } from './uuid'
 
 const ALG = 'AES-GCM'
@@ -49,9 +50,9 @@ export interface VaultRow {
 	rotated_at: number | null
 }
 
-/** The D1 surface the vault needs — the real `D1Database` (and the test adapter) satisfy it. */
+/** The database surface the vault needs — a `SqlDatabase` (so a real `D1Database`) satisfies it. */
 export interface VaultD1 {
-	prepare(query: string): D1PreparedStatement
+	prepare(query: string): SqlStatement
 }
 
 // ── byte/base64 helpers (no Buffer; Worker + Bun both have atob/btoa) ──────────
@@ -185,11 +186,19 @@ export function parseVaultRef(ref: string): string | null {
  * `rotate` and returned ONLY by `getSecret`; they are never logged and never persisted in the clear.
  */
 export class Vault {
-	constructor(private readonly d1: VaultD1, private readonly masterKey: CryptoKey) {}
+	/**
+	 * `now` is injectable so `rotated_at` is deterministic in tests (same approach as `SqlDeployLocks`
+	 * and `Db`); it returns unix SECONDS, the unit the `vault` table's timestamps use.
+	 */
+	constructor(
+		private readonly d1: VaultD1,
+		private readonly masterKey: CryptoKey,
+		private readonly now: () => number = () => Math.floor(Date.now() / 1000),
+	) {}
 
 	/** Construct a Vault from the base64 master key (the `VOZKA_VAULT_KEY` Worker secret). */
-	static async create(d1: VaultD1, base64MasterKey: string): Promise<Vault> {
-		return new Vault(d1, await importMasterKey(base64MasterKey))
+	static async create(d1: VaultD1, base64MasterKey: string, now?: () => number): Promise<Vault> {
+		return new Vault(d1, await importMasterKey(base64MasterKey), now)
 	}
 
 	/**
@@ -219,8 +228,8 @@ export class Vault {
 		await this.loadRow(ref)
 		const env = await seal(this.masterKey, newValue)
 		await this.d1
-			.prepare(`UPDATE vault SET ciphertext = ?, value_iv = ?, wrapped_dek = ?, dek_iv = ?, rotated_at = unixepoch() WHERE id = ?`)
-			.bind(env.ciphertext, env.valueIv, env.wrappedDek, env.dekIv, id)
+			.prepare(`UPDATE vault SET ciphertext = ?, value_iv = ?, wrapped_dek = ?, dek_iv = ?, rotated_at = ? WHERE id = ?`)
+			.bind(env.ciphertext, env.valueIv, env.wrappedDek, env.dekIv, this.now(), id)
 			.run()
 	}
 
@@ -244,8 +253,8 @@ export class Vault {
 		for (const row of results) {
 			const rewrapped = await rewrapDek(this.masterKey, newKey, { wrappedDek: row.wrapped_dek, dekIv: row.dek_iv })
 			await this.d1
-				.prepare('UPDATE vault SET wrapped_dek = ?, dek_iv = ?, rotated_at = unixepoch() WHERE id = ?')
-				.bind(rewrapped.wrappedDek, rewrapped.dekIv, row.id)
+				.prepare('UPDATE vault SET wrapped_dek = ?, dek_iv = ?, rotated_at = ? WHERE id = ?')
+				.bind(rewrapped.wrappedDek, rewrapped.dekIv, this.now(), row.id)
 				.run()
 			count++
 		}
