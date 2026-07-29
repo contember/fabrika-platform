@@ -21,14 +21,14 @@ fabrika-platform is and how the pieces fit — then skim
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
-_None._
+- [Zerops control path (2026-07-29)](sprints/sprint-2026-07-29-zerops-control-path.md)
+  — execute the static-manifest Zerops control path through crash-safe deploys.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
 
-- **Zerops critical path:** the driver and topology are built, but
-  [`backlog/13-control-plane-cannot-target-zerops.md`](backlog/13-control-plane-cannot-target-zerops.md)
-  still has no caller. A real-account bring-up cannot complete until that path is
-  wired.
+- **Zerops critical path:** the active sprint is wiring the manifest, deploy,
+  proxy, secret, and restart paths required before
+  [`backlog/05-bring-up-on-a-real-zerops-account.md`](backlog/05-bring-up-on-a-real-zerops-account.md).
