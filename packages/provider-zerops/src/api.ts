@@ -137,6 +137,10 @@ export interface ZeropsService {
 	/** Full service-type identifier, e.g. `alpine/bun@1.3`. VERIFIED: `ResponseServiceStack.base`. */
 	base?: string
 	activeAppVersionId?: string
+	/** Whether Zerops' public subdomain routes this service. VERIFIED: `ResponseServiceStack.subdomainAccess`. */
+	subdomainAccess?: boolean
+	/** Provider profile identifier, e.g. `oltp-production`. VERIFIED: `ResponseServiceStack.autoscalingProfileId`. */
+	autoscalingProfileId?: string
 }
 
 /** One project. VERIFIED: `ResponseProject` (narrowed). */
@@ -146,6 +150,10 @@ export interface ZeropsProject {
 	status?: ZeropsProjectStatus
 	/** The wire calls the import schema's `corePackage` choice `mode`. */
 	mode?: ZeropsProjectMode
+	/** VERIFIED: `ResponseProject.description`. */
+	description?: string
+	/** VERIFIED: `ResponseProject.tagList`. */
+	tagList?: string[]
 }
 
 /**
@@ -378,9 +386,22 @@ const num = (value: unknown, key: string): number | undefined => {
 	return typeof found === 'number' ? found : undefined
 }
 
+const bool = (value: unknown, key: string): boolean | undefined => {
+	const found = prop(value, key)
+	return typeof found === 'boolean' ? found : undefined
+}
+
 const arr = (value: unknown, key: string): unknown[] => {
 	const found = prop(value, key)
 	return Array.isArray(found) ? found : []
+}
+
+const stringList = (value: unknown, key: string): string[] | undefined => {
+	const found = prop(value, key)
+	if (!Array.isArray(found) || found.some((entry) => typeof entry !== 'string')) {
+		return undefined
+	}
+	return found.filter((entry): entry is string => typeof entry === 'string')
 }
 
 /** Every valid `ZeropsAppVersionStatus`, in pipeline order. The array's element type keeps it exhaustive. */
@@ -496,6 +517,8 @@ const readService = (value: unknown): ZeropsService => ({
 	status: asServiceStatus(prop(value, 'status')),
 	base: str(value, 'base'),
 	activeAppVersionId: str(prop(value, 'activeAppVersion'), 'id'),
+	...(bool(value, 'subdomainAccess') !== undefined ? { subdomainAccess: bool(value, 'subdomainAccess') } : {}),
+	...(str(value, 'autoscalingProfileId') !== undefined ? { autoscalingProfileId: str(value, 'autoscalingProfileId') } : {}),
 })
 
 const readProject = (value: unknown): ZeropsProject => ({
@@ -503,6 +526,8 @@ const readProject = (value: unknown): ZeropsProject => ({
 	name: str(value, 'name') ?? '',
 	status: asProjectStatus(prop(value, 'status')),
 	mode: asProjectMode(prop(value, 'mode')),
+	...(str(value, 'description') !== undefined ? { description: str(value, 'description') } : {}),
+	...(stringList(value, 'tagList') !== undefined ? { tagList: stringList(value, 'tagList') } : {}),
 })
 
 const readServiceEnv = (value: unknown): ZeropsServiceEnv => ({
