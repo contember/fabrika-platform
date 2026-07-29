@@ -16,14 +16,14 @@ import { configureEnvironment, triggerPlatformWorkflow } from './environment'
 import { createAppViaManifest, type CreatedGitHubApp, promptInstall } from './github-app'
 import { action, detail, info, ok, step, url, warn } from './log'
 import { confirm, retry, secret, secretOrEnv, text } from './prompt'
-import { defaultCheckoutDir, readVozkaRef, scaffoldPlatformRepo } from './scaffold'
+import { defaultCheckoutDir, readFabrikaRef, scaffoldPlatformRepo } from './scaffold'
 
 /** Everything collected before the scaffold + environment write. */
 interface Collected {
 	account: string
 	accountId: string
 	apiToken: string
-	vozkaDomain: string
+	controlPlaneDomain: string
 	githubOrg: string
 	platformRepo: string
 	propustkaUrl: string
@@ -50,7 +50,7 @@ const PLACEHOLDER_OIDC_CLIENT_SECRET = 'placeholder-oidc-client-secret-rotate-wh
 
 /** Run the full bring-up for `<account>`. */
 export async function runInit(account: string): Promise<void> {
-	console.log(`\nvozka init — bring up the ${account} control-plane base\n`)
+	console.log(`\nfabrika init — bring up the ${account} control-plane base\n`)
 
 	const collected = await collect(account)
 	const vaultKey = await ensureVaultKey()
@@ -83,7 +83,7 @@ export async function runInit(account: string): Promise<void> {
 			PROPUSTKA_OIDC_CLIENT_SECRET: oidcClientSecret,
 		},
 		vars: {
-			VOZKA_DOMAIN: collected.vozkaDomain,
+			VOZKA_DOMAIN: collected.controlPlaneDomain,
 			GH_APP_ID: String(app.id),
 			PROPUSTKA_URL: collected.propustkaUrl,
 			VOZKA_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
@@ -98,13 +98,13 @@ export async function runInit(account: string): Promise<void> {
 	})
 
 	await triggerDeploy(collected.platformRepo)
-	finalNotes(collected.platformRepo, collected.account, dir, await readVozkaRef(dir))
+	finalNotes(collected.platformRepo, collected.account, dir, await readFabrikaRef(dir))
 }
 
 /** Collect the CF token + account, then the smart-default prompts. */
 async function collect(account: string): Promise<Collected> {
 	step('Cloudflare API token')
-	info("Only hard input. It authenticates the deploy AND becomes vozka's runtime CLOUDFLARE_API_TOKEN secret.")
+	info("Only hard input. It authenticates the deploy AND becomes the control plane's runtime CLOUDFLARE_API_TOKEN secret.")
 	const verified = await retry('Cloudflare API token', async () => {
 		const apiToken = await secretOrEnv('CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_API_TOKEN')
 		detail(`Resolving the Cloudflare account for this token (${apiToken.length} chars)…`)
@@ -128,20 +128,20 @@ async function collect(account: string): Promise<Collected> {
 	step('Account details (Enter accepts the default)')
 	const zones = await listZones(apiToken, cfAccount.id)
 	const primaryZone = zones[0]?.name
-	const vozkaDomain = await text('vozka domain', primaryZone !== undefined ? `vozka.${primaryZone}` : undefined)
-	if (vozkaDomain === '') {
-		throw new Error('A vozka domain is required.')
+	const controlPlaneDomain = await text('fabrika control-plane domain', primaryZone !== undefined ? `fabrika.${primaryZone}` : undefined)
+	if (controlPlaneDomain === '') {
+		throw new Error('A fabrika control-plane domain is required.')
 	}
-	const zone = await findZone(apiToken, vozkaDomain).catch(() => null)
+	const zone = await findZone(apiToken, controlPlaneDomain).catch(() => null)
 	if (zone === null) {
-		warn(`No Cloudflare zone found for ${vozkaDomain} — a custom-domain bind would fail. Add the zone before the deploy.`)
+		warn(`No Cloudflare zone found for ${controlPlaneDomain} — a custom-domain bind would fail. Add the zone before the deploy.`)
 	} else {
 		ok(`Zone found: ${zone.name}`)
 	}
-	const githubOrg = await text('GitHub org that owns the vozka App + platform repo', account)
-	const platformRepo = await text('Platform repo (org/vozka-platform)', `${githubOrg}/vozka-platform`)
-	const propustkaUrl = await retry('propustka base URL', async () => {
-		const raw = (await text('propustka base URL', primaryZone !== undefined ? `https://propustka.${primaryZone}` : undefined)).replace(/\/+$/, '')
+	const githubOrg = await text('GitHub org that owns the fabrika App + platform repo', account)
+	const platformRepo = await text('Platform repo (org/fabrika-platform)', `${githubOrg}/fabrika-platform`)
+	const propustkaUrl = await retry('IAM base URL', async () => {
+		const raw = (await text('IAM base URL', primaryZone !== undefined ? `https://propustka.${primaryZone}` : undefined)).replace(/\/+$/, '')
 		if (!URL.canParse(raw)) {
 			throw new Error(`Not a valid URL: ${raw === '' ? '(empty)' : raw}`)
 		}
@@ -156,23 +156,23 @@ async function collect(account: string): Promise<Collected> {
 	// `iss`), the OIDC upstream it federates human login to, and the email-domain allowlist. The OIDC client
 	// id may be left blank to bring the base up with PLACEHOLDER OIDC — propustka boots and machine auth +
 	// the bootstrap-admin hatch work immediately; only human SSO login waits for a real provider.
-	step('propustka auth config (Stage 1)')
+	step('IAM auth config (Stage 1)')
 	const propustkaHostname = new URL(propustkaUrl).host
-	ok(`propustka hostname (from URL): ${propustkaHostname}`)
-	const oidcIssuer = await text('propustka OIDC issuer URL', 'https://accounts.google.com')
-	const oidcClientIdRaw = await text('propustka OIDC client id (blank = placeholder OIDC for now)', '')
+	ok(`IAM hostname (from URL): ${propustkaHostname}`)
+	const oidcIssuer = await text('IAM OIDC issuer URL', 'https://accounts.google.com')
+	const oidcClientIdRaw = await text('IAM OIDC client id (blank = placeholder OIDC for now)', '')
 	if (oidcClientIdRaw === '') {
 		warn('Placeholder OIDC — human SSO login is inert until you set real PROPUSTKA_OIDC_CLIENT_ID + _SECRET.')
 	}
 	const oidcClientId = oidcClientIdRaw === '' ? PLACEHOLDER_OIDC_CLIENT_ID : oidcClientIdRaw
-	const humanRaw = await text('propustka human email domains, comma-separated (who may self-provision at login)', '')
+	const humanRaw = await text('IAM human email domains, comma-separated (who may self-provision at login)', '')
 	const humanEmailDomains = humanRaw.split(',').map((s) => s.trim()).filter(Boolean)
 
 	return {
 		account,
 		accountId: cfAccount.id,
 		apiToken,
-		vozkaDomain,
+		controlPlaneDomain,
 		githubOrg,
 		platformRepo,
 		propustkaUrl,
@@ -200,7 +200,7 @@ async function ensureVaultKey(): Promise<string> {
 	const key = randomBytes(32).toString('base64')
 	await persistEnv('VOZKA_VAULT_KEY', key)
 	action('SAVED to .env (gitignored) — ALSO copy it to your password manager: vault KEK, UNRECOVERABLE if lost', [
-		"It is the master key for vozka's encrypted secret vault.",
+		"It is the master key for fabrika's encrypted secret vault.",
 		'',
 		`  VOZKA_VAULT_KEY=${key}`,
 	])
@@ -224,7 +224,7 @@ async function ensureProvisioningKey(): Promise<string> {
 	const key = `px_${randomBytes(20).toString('base64url')}`
 	await persistEnv('PROPUSTKA_PROVISIONING_KEY', key)
 	ok('Provisioning key generated + saved to .env.')
-	detail('propustka Stage 1 seeds this as an admin credential; vozka Stage 2 reconciles with it.')
+	detail('IAM Stage 1 seeds this as an admin credential; the control plane reconciles with it in Stage 2.')
 	return key
 }
 
@@ -245,7 +245,7 @@ function generateEs256Jwk(): JsonWebKey & { kid: string } {
  * DURABLE — rotating it invalidates every live token (so we never regenerate when one already exists).
  */
 async function ensureSigningKeys(): Promise<string> {
-	step('Generate the propustka signing key (PROPUSTKA_SIGNING_KEYS)')
+	step('Generate the IAM signing key (PROPUSTKA_SIGNING_KEYS)')
 	const existing = fromEnv('PROPUSTKA_SIGNING_KEYS')
 	if (existing !== undefined) {
 		ok('Reusing PROPUSTKA_SIGNING_KEYS from .env (resume).')
@@ -253,7 +253,7 @@ async function ensureSigningKeys(): Promise<string> {
 	}
 	const keys = JSON.stringify([generateEs256Jwk()])
 	await persistEnv('PROPUSTKA_SIGNING_KEYS', keys)
-	ok('propustka signing key generated (1 × ES256) + saved to .env.')
+	ok('IAM signing key generated (1 × ES256) + saved to .env.')
 	return keys
 }
 
@@ -263,13 +263,13 @@ async function ensureSigningKeys(): Promise<string> {
  * so a re-run reuses it. NEVER logged.
  */
 async function ensureOidcClientSecret(placeholder: boolean): Promise<string> {
-	step('propustka OIDC client secret (PROPUSTKA_OIDC_CLIENT_SECRET)')
+	step('IAM OIDC client secret (PROPUSTKA_OIDC_CLIENT_SECRET)')
 	const existing = fromEnv('PROPUSTKA_OIDC_CLIENT_SECRET')
 	if (existing !== undefined) {
 		ok('Reusing PROPUSTKA_OIDC_CLIENT_SECRET from .env (resume).')
 		return existing
 	}
-	const value = placeholder ? PLACEHOLDER_OIDC_CLIENT_SECRET : await secret('propustka OIDC client secret')
+	const value = placeholder ? PLACEHOLDER_OIDC_CLIENT_SECRET : await secret('IAM OIDC client secret')
 	await persistEnv('PROPUSTKA_OIDC_CLIENT_SECRET', value)
 	ok(placeholder ? 'Placeholder OIDC client secret saved to .env.' : 'OIDC client secret saved to .env.')
 	return value
@@ -277,11 +277,11 @@ async function ensureOidcClientSecret(placeholder: boolean): Promise<string> {
 
 /** Create the GitHub App via the manifest flow (or reuse from .env), then prompt to install it. */
 async function ensureGitHubApp(collected: Collected): Promise<CreatedGitHubApp> {
-	step('Create the vozka GitHub App (manifest flow)')
+	step('Create the fabrika GitHub App (manifest flow)')
 	const pem = fromEnv('GITHUB_APP_PRIVATE_KEY')
 	const webhookSecret = fromEnv('GITHUB_WEBHOOK_SECRET')
 	if (pem !== undefined && webhookSecret !== undefined) {
-		const slug = fromEnv('GITHUB_APP_SLUG') ?? 'vozka'
+		const slug = fromEnv('GITHUB_APP_SLUG') ?? 'fabrika'
 		ok('Reusing the GitHub App from .env (resume) — skipping manifest creation.')
 		const app: CreatedGitHubApp = {
 			id: Number(fromEnv('GITHUB_APP_ID') ?? '0'),
@@ -293,13 +293,18 @@ async function ensureGitHubApp(collected: Collected): Promise<CreatedGitHubApp> 
 		detail(`Install (if needed): ${url(`https://github.com/apps/${app.slug}/installations/new`)}`)
 		return app
 	}
-	const appName = await text('GitHub App name', `vozka-${collected.account}`)
+	const appName = await text('GitHub App name', `fabrika-${collected.account}`)
 	// PUBLIC iff installed across orgs: GitHub only lets a private App install on its OWNER's repos, so an
 	// App owned by this account's org but deploying repos in another org (e.g. manGoweb-owned, deploying
 	// contember/poplach) must be public. Same-org installs stay private.
 	const ownerOrg = collected.githubOrg.toLowerCase()
 	const isPublic = collected.installRepos.some((repo) => (repo.split('/')[0] ?? '').toLowerCase() !== ownerOrg)
-	const app = await createAppViaManifest({ org: collected.githubOrg, appName, vozkaDomain: collected.vozkaDomain, public: isPublic })
+	const app = await createAppViaManifest({
+		org: collected.githubOrg,
+		appName,
+		controlPlaneDomain: collected.controlPlaneDomain,
+		public: isPublic,
+	})
 	await persistEnv('GITHUB_APP_PRIVATE_KEY', app.pem)
 	await persistEnv('GITHUB_WEBHOOK_SECRET', app.webhookSecret)
 	await persistEnv('GITHUB_APP_ID', String(app.id))
@@ -309,7 +314,7 @@ async function ensureGitHubApp(collected: Collected): Promise<CreatedGitHubApp> 
 	if (collected.installRepos.length > 0) {
 		await promptInstall(app, collected.installRepos)
 	} else {
-		detail(`Install the App on the repos vozka will deploy when you onboard them: ${url(`https://github.com/apps/${app.slug}/installations/new`)}`)
+		detail(`Install the App on the repos fabrika will deploy when you onboard them: ${url(`https://github.com/apps/${app.slug}/installations/new`)}`)
 	}
 	return app
 }
@@ -317,7 +322,7 @@ async function ensureGitHubApp(collected: Collected): Promise<CreatedGitHubApp> 
 /** Trigger the platform workflow (first bring-up builds the runner image into this account's registry). */
 async function triggerDeploy(repo: string): Promise<void> {
 	step('Trigger the platform deploy (GitHub Actions)')
-	info('GitHub Actions runs the real deploy — vozka-runner then vozka. The first run builds the runner')
+	info('GitHub Actions runs the real deploy — fabrika runner then control plane. The first run builds the runner')
 	info('container image into this account (CI has docker); this laptop deploys nothing.')
 	const go = await confirm(`Run the platform workflow on ${repo} now (build_runner_image=true)?`, true)
 	if (!go) {
@@ -335,12 +340,12 @@ async function triggerDeploy(repo: string): Promise<void> {
 /** Closing notes: the local checkout, the escape hatch, and what runs in CI. */
 function finalNotes(repo: string, account: string, dir: string, ref: string): void {
 	step('Done')
-	ok(`Base repo: ${repo} (pinned vozka ref: ${ref})`)
+	ok(`Base repo: ${repo} (pinned fabrika ref: ${ref})`)
 	ok(`Local checkout + .env: ${dir}`)
-	info('vozka came up with the bootstrap-admin escape hatch OPEN (VOZKA_BOOTSTRAP_ADMINS set).')
-	action('OPERATOR ACTION — close the hatch after propustka grants you the vozka admin role', [
+	info('The fabrika control plane came up with the bootstrap-admin escape hatch OPEN (VOZKA_BOOTSTRAP_ADMINS set).')
+	action('OPERATOR ACTION — close the hatch after IAM grants you the fabrika admin role', [
 		`1. gh variable set VOZKA_BOOTSTRAP_ADMINS --repo ${repo} --env ${account} --body '[]'`,
 		`2. gh workflow run platform.yml --repo ${repo}`,
-		'3. Authorization is then fully propustka-owned.',
+		'3. Authorization is then fully IAM-owned.',
 	])
 }

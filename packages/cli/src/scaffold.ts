@@ -1,11 +1,11 @@
 /**
- * Scaffold the per-account base repo `<org>/vozka-platform`: ensure it exists on GitHub, materialize the
- * pipeline (`.github/workflows/platform.yml`), `vozka.ref`, `README.md`, `.gitignore` from the templates
+ * Scaffold the per-account base repo `<org>/fabrika-platform`: ensure it exists on GitHub, materialize the
+ * pipeline (`.github/workflows/platform.yml`), `fabrika.ref`, `README.md`, `.gitignore` from the templates
  * checked into this package, and push. Idempotent:
  *   - repo absent  → create a fresh local checkout, commit the scaffold, `gh repo create … --source --push`,
  *   - repo present → clone it (if not already local), refresh the CLI-owned files, commit + push on drift.
  *
- * `vozka.ref` is written ONLY when absent (operator-owned after creation — bumping it is how you roll a new
+ * `fabrika.ref` is written ONLY when absent (operator-owned after creation — bumping it is how you roll a new
  * base); `platform.yml` / `README.md` / `.gitignore` are CLI-owned and refreshed every run.
  */
 
@@ -20,13 +20,13 @@ const TEMPLATES = resolve(import.meta.dir, 'templates')
 /** The CLI-owned files, refreshed on every run (rendered from templates). */
 const OWNED_FILES = ['.gitignore', 'README.md', '.github/workflows/platform.yml']
 /**
- * All scaffold files we ever `git add` (OWNED_FILES + the operator-owned, write-once pin files
- * `vozka.ref` / `propustka.ref` — bumping either is how you roll a new base).
+ * All scaffold files we ever `git add` (OWNED_FILES + the operator-owned, write-once `fabrika.ref` pin).
  */
-const ALL_FILES = ['.gitignore', 'README.md', 'vozka.ref', 'propustka.ref', '.github/workflows/platform.yml']
+const ALL_FILES = ['.gitignore', 'README.md', 'fabrika.ref', '.github/workflows/platform.yml']
+const LEGACY_REF_FILES = ['vozka.ref', 'propustka.ref']
 
 export interface ScaffoldInput {
-	/** The base repo, e.g. `manGoweb/vozka-platform`. */
+	/** The base repo, e.g. `manGoweb/fabrika-platform`. */
 	repo: string
 	/** The account label (positional `init` arg) — substituted into the templates + the env/summary names. */
 	account: string
@@ -51,16 +51,26 @@ async function writeFile(dir: string, rel: string, content: string): Promise<voi
 	await Bun.write(resolve(dir, rel), content)
 }
 
-/** Materialize the CLI-owned files (rendered) + `vozka.ref` only when absent. */
-async function materialize(dir: string, account: string): Promise<void> {
+/**
+ * Materialize the CLI-owned files and the write-once source pin.
+ *
+ * Legacy two-repository pins need an operator-chosen merged-repository ref. Stop before writing anything
+ * so a refresh cannot hide the migration requirement or delete operator-owned files.
+ */
+export async function materializePlatformScaffold(dir: string, account: string): Promise<void> {
+	const legacyRefs = LEGACY_REF_FILES.filter((name) => existsSync(resolve(dir, name)))
+	if (legacyRefs.length > 0) {
+		throw new Error(
+			`Legacy two-repository scaffold detected (${legacyRefs.join(', ')}). Choose the matching `
+				+ 'contember/fabrika-platform commit or tag, write it to fabrika.ref, then remove the legacy '
+				+ 'pin files manually and run fabrika init again. The CLI cannot infer the merged ref.',
+		)
+	}
 	await writeFile(dir, '.gitignore', await Bun.file(resolve(TEMPLATES, 'gitignore')).text())
 	await writeFile(dir, 'README.md', await renderTemplate('README.md', account))
 	await writeFile(dir, '.github/workflows/platform.yml', await renderTemplate('platform.yml', account))
-	if (!existsSync(resolve(dir, 'vozka.ref'))) {
-		await writeFile(dir, 'vozka.ref', await Bun.file(resolve(TEMPLATES, 'vozka.ref')).text())
-	}
-	if (!existsSync(resolve(dir, 'propustka.ref'))) {
-		await writeFile(dir, 'propustka.ref', await Bun.file(resolve(TEMPLATES, 'propustka.ref')).text())
+	if (!existsSync(resolve(dir, 'fabrika.ref'))) {
+		await writeFile(dir, 'fabrika.ref', await Bun.file(resolve(TEMPLATES, 'fabrika.ref')).text())
 	}
 }
 
@@ -70,7 +80,7 @@ async function hasStagedChanges(dir: string): Promise<boolean> {
 }
 
 /**
- * Ensure `<org>/vozka-platform` exists + carries the current scaffold. Returns the local checkout dir.
+ * Ensure `<org>/fabrika-platform` exists + carries the current scaffold. Returns the local checkout dir.
  * Requires `gh` authed with rights to create/admin the repo.
  */
 export async function scaffoldPlatformRepo(input: ScaffoldInput): Promise<ScaffoldResult> {
@@ -95,13 +105,13 @@ async function updateExisting(input: ScaffoldInput): Promise<ScaffoldResult> {
 	} else {
 		detail(`Reusing existing checkout at ${dir}`)
 	}
-	await materialize(dir, account)
+	await materializePlatformScaffold(dir, account)
 	await run({ command: 'git', args: ['add', ...ALL_FILES], cwd: dir })
 	if (!(await hasStagedChanges(dir))) {
 		ok('Platform repo already up to date (no scaffold drift).')
 		return { dir, created: false }
 	}
-	await run({ command: 'git', args: ['commit', '-m', 'chore: refresh vozka platform scaffold'], cwd: dir })
+	await run({ command: 'git', args: ['commit', '-m', 'chore: refresh fabrika platform scaffold'], cwd: dir })
 	await run({ command: 'git', args: ['push'], cwd: dir })
 	ok('Platform repo scaffold updated + pushed.')
 	return { dir, created: false }
@@ -115,9 +125,9 @@ async function createFresh(input: ScaffoldInput): Promise<ScaffoldResult> {
 	}
 	detail(`Creating a fresh checkout at ${dir}`)
 	await run({ command: 'git', args: ['init', '-b', 'main', dir], cwd: process.cwd() })
-	await materialize(dir, account)
+	await materializePlatformScaffold(dir, account)
 	await run({ command: 'git', args: ['add', ...ALL_FILES], cwd: dir })
-	await run({ command: 'git', args: ['commit', '-m', 'chore: initial vozka platform scaffold'], cwd: dir })
+	await run({ command: 'git', args: ['commit', '-m', 'chore: initial fabrika platform scaffold'], cwd: dir })
 	detail(`Creating ${repo} (private) and pushing`)
 	await run({
 		command: 'gh',
@@ -128,14 +138,14 @@ async function createFresh(input: ScaffoldInput): Promise<ScaffoldResult> {
 	return { dir, created: true }
 }
 
-/** The default local checkout dir for an account: `./vozka-platform-<account>` under the cwd. */
+/** The default local checkout dir for an account: `./fabrika-platform-<account>` under the cwd. */
 export function defaultCheckoutDir(account: string): string {
-	return resolve(process.cwd(), `vozka-platform-${account}`)
+	return resolve(process.cwd(), `fabrika-platform-${account}`)
 }
 
-/** Read the configured `vozka.ref` (for display), or 'main' when absent. Used in the final summary. */
-export async function readVozkaRef(dir: string): Promise<string> {
-	const file = Bun.file(resolve(dir, 'vozka.ref'))
+/** Read the configured `fabrika.ref` (for display), or 'main' when absent. Used in the final summary. */
+export async function readFabrikaRef(dir: string): Promise<string> {
+	const file = Bun.file(resolve(dir, 'fabrika.ref'))
 	if (!(await file.exists())) {
 		return 'main'
 	}

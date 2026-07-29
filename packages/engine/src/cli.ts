@@ -13,8 +13,8 @@ Usage:
 
 Commands:
   deploy            Deploy ONE app config (build → provision → migrate → deploy-worker → reconcile → secrets).
-  platform deploy   Bring up / redeploy the control-plane BASE for an account, in order: vozka-runner (the
-                    deploy executor) THEN vozka (the control plane). Idempotent — safe to re-run for a first
+  platform deploy   Bring up / redeploy the control-plane BASE for an account, in order: the runner (the
+                    deploy executor) THEN the fabrika control plane. Idempotent — safe to re-run for a first
                     bring-up OR a routine redeploy. Each component deploys via the SAME engine as \`deploy\`,
                     gathering its own pipeline.secrets/vars from the environment. Run it from a checkout of
                     the fabrika-platform repo (the configs live in it).
@@ -22,8 +22,8 @@ Commands:
 Options:
   --env=<env>            Target environment. \`deploy\`: required. \`platform deploy\`: defaults to \`prod\`.
   --config=<path>        (deploy) Path to the app config file (default: ./fabrika.config.ts).
-  --runner-config=<path> (platform) vozka-runner's config, e.g. packages/runner/fabrika-runner.config.ts.
-  --worker-config=<path> (platform) vozka's config, e.g. packages/control/fabrika.config.ts.
+  --runner-config=<path> (platform) Runner config, e.g. packages/runner/fabrika-runner.config.ts.
+  --worker-config=<path> (platform) Control-plane config, e.g. packages/control/fabrika.config.ts.
   --build-runner-image   (platform) Build + push the runner container image from its Dockerfile (sets
                          RUNNER_BUILD=1) instead of referencing the pinned registry image. Needed for the
                          FIRST bring-up on an account (the image isn't in that account's registry yet) or a
@@ -156,8 +156,8 @@ const printResult = (result: DeployResult): void => {
 }
 
 /**
- * `platform deploy` — bring up / redeploy an account's control-plane BASE: vozka-runner THEN fabrika, in
- * that order (fabrika binds RUNNER_SVC → vozka-runner). Each component deploys via the same `deploy()` engine
+ * `platform deploy` — bring up / redeploy an account's control-plane base: runner then control plane.
+ * The control plane binds `RUNNER_SVC` to the runner. Each component deploys via the same `deploy()` engine
  * the runner uses for apps, so it's identical to a normal deploy minus the running control plane — this is
  * what lets the per-account IaC pipeline deploy fabrika WITHOUT fabrika deploying itself. Idempotent.
  */
@@ -186,7 +186,7 @@ const runPlatformDeploy = async (args: ParsedArgs, env: string): Promise<void> =
 			const result = await deploy(config, ctx)
 			printResult(result)
 			if (result.status === 'failed') {
-				// Stop the chain — never deploy fabrika against a vozka-runner that failed to come up.
+				// Stop the chain so the control plane never binds to a runner that failed to deploy.
 				process.exit(1)
 			}
 		} finally {

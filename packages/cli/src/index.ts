@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * `@fabrika/cli` entry point. The operator-facing CLI for standing up a CF account's fabrika control-plane
- * base. Today it has one command — `init <account>` — which scaffolds the per-account `<org>/vozka-platform`
+ * base. Today it has one command — `init <account>` — which scaffolds the per-account `<org>/fabrika-platform`
  * repo, creates the GitHub App, writes the GitHub Environment, and triggers the deploy (the real work runs
  * in GitHub Actions). The deploy ENGINE lives in `@fabrika/engine`; this package is the bring-up surface.
  */
@@ -11,7 +11,7 @@ import { runInit } from './init'
 const USAGE = `fabrika — control-plane CLI
 
 Usage:
-  fabrika init <account>    Bring up a CF account's vozka control-plane base (propustka + vozka-runner + vozka)
+  fabrika init <account>    Bring up a CF account's fabrika base (IAM + runner + control plane)
 
 Examples:
   bunx @fabrika/cli init mangoweb

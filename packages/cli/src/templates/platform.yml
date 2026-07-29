@@ -1,15 +1,14 @@
 name: platform
 
-# Deploys the {{ACCOUNT}} account's vozka control-plane BASE: propustka (Stage 1, root authz) → vozka-runner
-# + vozka (Stage 2, the executor + control plane). THIS repo is the per-account root of trust — it deploys
-# the base so vozka never has to deploy itself. Idempotent: re-run for a first bring-up OR a routine redeploy.
-# The concrete apps (poplach, revizor, …) deploy THROUGH vozka, not here.
+# Deploys the {{ACCOUNT}} account's fabrika BASE: IAM (Stage 1, root authz) → runner + control plane
+# (Stage 2). THIS repo is the per-account root of trust, so the control plane never deploys itself.
+# Idempotent: re-run for a first bring-up OR a routine redeploy. Concrete apps deploy through fabrika.
 #
 # Generated + maintained by `fabrika init {{ACCOUNT}}`. Secrets + variables live in the `{{ACCOUNT}}` GitHub
 # Environment (Settings → Environments → {{ACCOUNT}}) and are written there by the CLI — don't hand-edit them.
 #
-# contember/vozka + contember/propustka are PUBLIC, so both are checked out tokenless. The versions this
-# account runs are pinned in `vozka.ref` + `propustka.ref` (bump one + push to roll out a new base).
+# contember/fabrika-platform is public and checked out tokenless. The version this account runs is pinned
+# in `fabrika.ref` (bump it and push to roll out a new base).
 
 on:
   workflow_dispatch:
@@ -28,7 +27,7 @@ on:
   push:
     branches: [main]
     # Only a version bump (or a workflow edit) redeploys — not a README tweak.
-    paths: ['vozka.ref', 'propustka.ref', '.github/workflows/platform.yml']
+    paths: ['fabrika.ref', '.github/workflows/platform.yml']
 
 concurrency:
   group: platform-deploy
@@ -54,27 +53,14 @@ jobs:
 
       - name: Resolve pinned refs
         id: ref
-        run: |
-          echo "vozka=$(tr -d '[:space:]' < vozka.ref)" >> "$GITHUB_OUTPUT"
-          if [ -f propustka.ref ]; then
-            echo "propustka=$(tr -d '[:space:]' < propustka.ref)" >> "$GITHUB_OUTPUT"
-          else
-            echo "propustka=main" >> "$GITHUB_OUTPUT"
-          fi
+        run: echo "fabrika=$(tr -d '[:space:]' < fabrika.ref)" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout contember/vozka@${{ steps.ref.outputs.vozka }}
+      - name: Checkout contember/fabrika-platform@${{ steps.ref.outputs.fabrika }}
         uses: actions/checkout@v5
         with:
-          repository: contember/vozka
-          ref: ${{ steps.ref.outputs.vozka }}
-          path: vozka
-
-      - name: Checkout contember/propustka@${{ steps.ref.outputs.propustka }}
-        uses: actions/checkout@v5
-        with:
-          repository: contember/propustka
-          ref: ${{ steps.ref.outputs.propustka }}
-          path: propustka
+          repository: contember/fabrika-platform
+          ref: ${{ steps.ref.outputs.fabrika }}
+          path: fabrika-platform
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -84,13 +70,13 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Install (vozka)
-        working-directory: vozka
+      - name: Install fabrika
+        working-directory: fabrika-platform
         run: bun install
 
       # The deploy engine spawns a BARE `wrangler` (Bun.spawn), so the workspace bins must be on PATH.
-      - name: Put vozka workspace bins on PATH
-        working-directory: vozka
+      - name: Put fabrika workspace bins on PATH
+        working-directory: fabrika-platform
         run: |
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
           echo "$PWD/packages/control/node_modules/.bin" >> "$GITHUB_PATH"
@@ -110,22 +96,15 @@ jobs:
         # detaches its Custom Domain. If the domain attach below races a just-freed hostname, re-run (idempotent).
         run: bunx wrangler delete --name "$LEGACY"
 
-      # ── Stage 1 — propustka (root authz) ─────────────────────────────────────────────────────────────
-      # propustka is native-auth: it deploys via its OWN oblaka.ts + wrangler (NOT vozka's engine — oblaka
-      # objects can't cross the vozka↔propustka node_modules realms, so `fabrika deploy` of a foreign checkout
-      # would mis-provision). This mirrors propustka's own deploy.yml, pinned to `propustka.ref`, at env=prod.
-      # NO PROPUSTKA_URL here → no self-reconcile; propustka's empty schema needs none. vozka (Stage 2)
-      # reconciles its schema against the now-live propustka.
-      - name: Install (propustka)
-        working-directory: propustka
-        run: bun install
-
-      - name: Build propustka admin SPA
-        working-directory: propustka/packages/admin-ui
+      # ── Stage 1 — IAM (root authz) ───────────────────────────────────────────────────────────────────
+      # IAM deploys through its own oblaka adapter + wrangler. There is no PROPUSTKA_URL here because its
+      # empty schema needs no self-reconcile. The control plane reconciles against the live IAM service.
+      - name: Build IAM admin SPA
+        working-directory: fabrika-platform/packages/iam-ui
         run: bun run build
 
-      - name: Provision propustka D1 + write wrangler.jsonc (oblaka --remote)
-        working-directory: propustka/packages/worker
+      - name: Provision IAM D1 + write wrangler.jsonc (oblaka --remote)
+        working-directory: fabrika-platform/packages/iam
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -144,20 +123,20 @@ jobs:
           PROPUSTKA_OIDC_CLIENT_SECRET: ${{ secrets.PROPUSTKA_OIDC_CLIENT_SECRET }}
         run: bunx oblaka oblaka.ts --env=prod --state-namespace=propustka-state --remote
 
-      - name: Apply propustka D1 migrations (remote)
-        working-directory: propustka/packages/worker
+      - name: Apply IAM D1 migrations (remote)
+        working-directory: fabrika-platform/packages/iam
         run: bunx wrangler d1 migrations apply DB --remote
 
-      - name: Deploy propustka Worker
-        working-directory: propustka/packages/worker
+      - name: Deploy IAM Worker
+        working-directory: fabrika-platform/packages/iam
         run: bunx wrangler deploy
 
       # The native-auth runtime secrets (oblaka can't express secrets): ES256 signing keys + the OIDC client
-      # secret, plus the SEEDED provisioning key the control plane (vozka) reconciles with. The wrangler secret
-      # names are the Worker binding names (propustka env.ts): PROPUSTKA_SIGNING_KEYS, OIDC_CLIENT_SECRET,
+      # secret, plus the SEEDED provisioning key the control plane reconciles with. The wrangler secret
+      # names are the IAM Worker binding names: PROPUSTKA_SIGNING_KEYS, OIDC_CLIENT_SECRET,
       # PROPUSTKA_PROVISIONING_KEY. Idempotent; persists across deploys.
-      - name: Set propustka Worker secrets (native auth + provisioning)
-        working-directory: propustka/packages/worker
+      - name: Set IAM Worker secrets (native auth + provisioning)
+        working-directory: fabrika-platform/packages/iam
         env:
           PROPUSTKA_SIGNING_KEYS: ${{ secrets.PROPUSTKA_SIGNING_KEYS }}
           PROPUSTKA_OIDC_CLIENT_SECRET: ${{ secrets.PROPUSTKA_OIDC_CLIENT_SECRET }}
@@ -169,9 +148,9 @@ jobs:
             printf '%s' "$PROPUSTKA_PROVISIONING_KEY" | bunx wrangler secret put PROPUSTKA_PROVISIONING_KEY
           fi
 
-      # ── Stage 2 — vozka platform (executor + control plane) ──────────────────────────────────────────
-      - name: Deploy vozka-runner + vozka (platform deploy)
-        working-directory: vozka
+      # ── Stage 2 — fabrika platform (executor + control plane) ────────────────────────────────────────
+      - name: Deploy fabrika runner + control plane
+        working-directory: fabrika-platform
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -180,7 +159,7 @@ jobs:
           # are stored as GH_* and mapped to the GITHUB_* env vars the deploy + Worker bindings expect here.
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
           GITHUB_WEBHOOK_SECRET: ${{ secrets.GH_WEBHOOK_SECRET }}
-          # The seeded propustka provisioning key — vozka reconciles its own schema with it (Bearer px_).
+          # The seeded IAM provisioning key — the control plane reconciles its own schema with it (Bearer px_).
           PROPUSTKA_PROVISIONING_KEY: ${{ secrets.PROPUSTKA_PROVISIONING_KEY }}
           # Non-secret config (Environment Variables).
           VOZKA_DOMAIN: ${{ vars.VOZKA_DOMAIN }}
@@ -201,8 +180,7 @@ jobs:
           {
             echo "### platform deploy → {{ACCOUNT}}"
             echo ""
-            echo "- vozka ref: \`${{ steps.ref.outputs.vozka }}\`"
-            echo "- propustka ref: \`${{ steps.ref.outputs.propustka }}\`"
+            echo "- fabrika ref: \`${{ steps.ref.outputs.fabrika }}\`"
             echo "- build runner image: \`${{ inputs.build_runner_image || 'false' }}\`"
             echo "- retired legacy propustka: \`${{ inputs.retire_legacy_propustka_worker || '(none)' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -27,7 +27,7 @@ export interface CreatedGitHubApp {
 interface ManifestInput {
 	org: string
 	appName: string
-	vozkaDomain: string
+	controlPlaneDomain: string
 	/** Public App — required when it will be installed on repos OUTSIDE its owner org (cross-org). GitHub
 	 *  only lets a PRIVATE App install on its owner's own repos. */
 	public: boolean
@@ -146,7 +146,7 @@ async function handleCallback(requestUrl: URL, expectedState: string): Promise<C
 		method: 'POST',
 		headers: {
 			Accept: 'application/vnd.github+json',
-			'User-Agent': 'vozka-cli',
+			'User-Agent': 'fabrika-cli',
 		},
 	})
 	const body: unknown = await response.json().catch(() => null)
@@ -170,8 +170,8 @@ async function handleCallback(requestUrl: URL, expectedState: string): Promise<C
 function buildManifest(input: ManifestInput): Record<string, unknown> {
 	return {
 		name: input.appName,
-		url: `https://${input.vozkaDomain}`,
-		hook_attributes: { url: `https://${input.vozkaDomain}/webhooks/github`, active: true },
+		url: `https://${input.controlPlaneDomain}`,
+		hook_attributes: { url: `https://${input.controlPlaneDomain}/webhooks/github`, active: true },
 		public: input.public,
 		default_permissions: { contents: 'read' },
 		default_events: ['push'],
@@ -232,9 +232,9 @@ function renderFormPage(org: string, manifest: Record<string, unknown>, state: s
 	// attribute value. No secrets here — the manifest is non-sensitive app metadata.
 	const manifestJson = htmlEscape(JSON.stringify(manifest))
 	return `<!doctype html>
-<html><head><meta charset="utf-8"><title>Create vozka GitHub App</title></head>
+<html><head><meta charset="utf-8"><title>Create fabrika GitHub App</title></head>
 <body style="font-family: system-ui; max-width: 40rem; margin: 4rem auto; text-align: center;">
-	<h1>Creating the vozka GitHub App…</h1>
+	<h1>Creating the fabrika GitHub App…</h1>
 	<p>Submitting the manifest to GitHub. If nothing happens, click the button below.</p>
 	<form id="manifest-form" method="post" action="${htmlEscape(githubUrl)}">
 		<input type="hidden" name="manifest" value="${manifestJson}">

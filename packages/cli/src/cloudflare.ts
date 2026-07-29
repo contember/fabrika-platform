@@ -128,7 +128,7 @@ export async function resolveAccountId(token: string, preferred?: string): Promi
 	}
 	if (accounts.length > 1) {
 		return select(
-			'Which Cloudflare account should vozka deploy into?',
+			'Which Cloudflare account should fabrika deploy into?',
 			accounts.map((a) => ({ label: `${a.name} (${a.id})`, value: a })),
 		)
 	}
@@ -139,8 +139,8 @@ export async function resolveAccountId(token: string, preferred?: string): Promi
 
 /**
  * List the account's zones (`GET /zones?account.id=<id>`), used to SUGGEST a control-plane domain
- * (`vozka.<zone>` — the default hostname is unchanged by the rename). Best-effort: returns [] on any error (the token may lack Zone:Read) — the caller
- * then just prompts for the domain with no default.
+ * (`fabrika.<zone>`). Best-effort: returns [] on any error (the token may lack Zone:Read), so the
+ * caller then prompts for the domain with no default.
  */
 export async function listZones(token: string, accountId: string): Promise<CfZone[]> {
 	try {
@@ -167,7 +167,7 @@ export async function listZones(token: string, accountId: string): Promise<CfZon
 
 /**
  * Best-effort zone lookup for the registrable domain of `hostname`. Naively takes the last two
- * dot-labels (e.g. `vozka.example.com` → `example.com`) and queries `GET /zones?name=<domain>`.
+ * dot-labels (e.g. `fabrika.example.com` → `example.com`) and queries `GET /zones?name=<domain>`.
  * Returns the zone or null. The CLI WARNS on null (a custom-domain bind needs the zone) but never
  * fails on it — the operator may add the zone before the real deploy.
  */
