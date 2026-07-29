@@ -1,4 +1,5 @@
 export * from './authoring'
+export * from './control'
 export * from './deploy'
 export * from './json'
 export * from './provider'
