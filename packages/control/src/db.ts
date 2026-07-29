@@ -46,7 +46,7 @@ export interface AppSecretRow {
 	/** NULL = applies to every env of the app; set = that env only (narrower wins). */
 	env: string | null
 	name: string
-	/** REFERENCE into the M4 vault — never the plaintext value. */
+	/** Store reference (`vault:`, `secretstore:`, or `zerops:`) — never the plaintext value. */
 	value_ref: string
 	created_at: number
 }

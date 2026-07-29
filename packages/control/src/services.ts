@@ -12,6 +12,7 @@ import { configFromManifest, createZeropsApi, deploy, type DeployOptions, parseF
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { RelayResult, RunnerJob } from '@fabrika/runner'
 import type { ApiDeps } from './api/router'
+import type { ZeropsSecretWriter } from './api/vault'
 import { Db, type RunRow } from './db'
 import type { Env } from './env'
 import { createIam } from './iam'
@@ -90,6 +91,23 @@ export async function startRun(env: Env, job: RunnerJob): Promise<RelayResult> {
 		)
 	}
 	return env.RUNNER.startRun(job)
+}
+
+/** Build the service-addressed Zerops secret writer. Values are never returned or logged. */
+export function zeropsSecretWriter(env: Env): ZeropsSecretWriter | undefined {
+	const token = env.ZEROPS_ACCESS_TOKEN
+	if (token === undefined || token === '') return undefined
+	const api = createZeropsApi({ token, baseUrl: env.ZEROPS_API_BASE_URL })
+	return {
+		put: (serviceId, name, value) => api.putServiceEnv({ serviceId, key: name, value, signal: new AbortController().signal }),
+		async delete(serviceId, name) {
+			const variables = await api.listServiceEnv({ serviceId, signal: new AbortController().signal })
+			const found = variables.find((variable) => variable.key === name)
+			if (found === undefined) return false
+			await api.deleteServiceEnv({ envId: found.id, signal: new AbortController().signal })
+			return true
+		},
+	}
 }
 
 /** Execute a callback-free registered Zerops manifest through the HTTP driver in this process. */
@@ -228,6 +246,7 @@ export async function buildRunDeps(env: Env): Promise<RunDeps> {
 
 /** Assemble the `/api/*` router deps. `vault` stays a FACTORY so non-vault routes work without a key. */
 export function buildApiDeps(env: Env): ApiDeps {
+	const zeropsSecrets = zeropsSecretWriter(env)
 	return {
 		db: db(env),
 		iam: createIam(env),
@@ -236,5 +255,6 @@ export function buildApiDeps(env: Env): ApiDeps {
 		repoSource: repoSource(env),
 		cancelRun: (run) => cancelRun(env, run),
 		vault: () => vault(env),
+		...(zeropsSecrets !== undefined ? { zeropsSecrets } : {}),
 	}
 }

@@ -15,7 +15,7 @@
 // ref; deleting the row itself is the registry's job).
 
 import type { SecretScope } from '@fabrika/engine'
-import type { Db } from '../db'
+import type { AppEnvRow, Db } from '../db'
 import { error, json, readJson } from '../http'
 import type { Authorized } from '../iam'
 import { stringField } from '../json'
@@ -24,10 +24,17 @@ import { parseVaultRef, type Vault } from '../vault'
 /** Context the vault handlers receive — the Db, the (constructed) Vault, and the auditing caller. */
 export interface VaultContext {
 	db: Db
-	vault: Vault
+	vault?: () => Promise<Vault>
+	zerops?: ZeropsSecretWriter
 	request: Request
 	url: URL
 	authorized: Authorized
+}
+
+/** Service-addressed Zerops secret mutation seam. No project-level operation is representable. */
+export interface ZeropsSecretWriter {
+	put(serviceId: string, name: string, value: string): Promise<void>
+	delete(serviceId: string, name: string): Promise<boolean>
 }
 
 /**
@@ -45,19 +52,25 @@ export async function setAppSecretValue(c: VaultContext, appId: string, name: st
 		return error(400, 'value required')
 	}
 	const env = readEnv(c.url, body)
+	const target = await secretTarget(c, appId, env)
+	if (target instanceof Response) return target
+	if (target.kind === 'zerops') {
+		await target.writer.put(target.serviceId, name, value)
+		const ref = zeropsRef(target.serviceId, name)
+		await c.db.upsertAppSecret({ appId, env: target.appEnv.env, name, valueRef: ref })
+		await audit(c, 'app.secret.set', appId, target.appEnv.env, name, ref)
+		return json({ ok: true, valueRef: ref })
+	}
+	const vault = await requireVault(c)
+	if (vault instanceof Response) return vault
 	const scope: SecretScope = env === null ? 'app' : 'app-env'
 	const prior = await findAppSecretRef(c.db, appId, env, name)
-	const ref = await c.vault.putSecret(scope, `${scope}:${appId}/${env ?? '*'}/${name}`, value)
+	const ref = await vault.putSecret(scope, `${scope}:${appId}/${env ?? '*'}/${name}`, value)
 	await c.db.upsertAppSecret({ appId, env, name, valueRef: ref })
 	if (prior !== null) {
-		await deletePriorVaultEntry(c.vault, prior)
+		await deletePriorVaultEntry(vault, prior)
 	}
-	await c.authorized.auth.audit({
-		action: 'app.secret.set',
-		resourceType: 'app_secret',
-		resourceId: `${appId}/${env ?? '*'}/${name}`,
-		metadata: { name, env, valueRef: ref },
-	})
+	await audit(c, 'app.secret.set', appId, env, name, ref)
 	return json({ ok: true, valueRef: ref })
 }
 
@@ -76,10 +89,24 @@ export async function rotateAppSecretValue(c: VaultContext, appId: string, name:
 	if (ref === null) {
 		return error(404, 'secret not found')
 	}
+	const target = await secretTarget(c, appId, env)
+	if (target instanceof Response) return target
+	if (target.kind === 'zerops') {
+		await target.writer.put(target.serviceId, name, value)
+		await c.authorized.auth.audit({
+			action: 'app.secret.rotate',
+			resourceType: 'app_secret',
+			resourceId: `${appId}/${target.appEnv.env}/${name}`,
+			metadata: { name, env: target.appEnv.env },
+		})
+		return json({ ok: true })
+	}
 	if (parseVaultRef(ref) === null) {
 		return error(409, 'secret is not stored in the vault — set it first')
 	}
-	await c.vault.rotate(ref, value)
+	const vault = await requireVault(c)
+	if (vault instanceof Response) return vault
+	await vault.rotate(ref, value)
 	await c.authorized.auth.audit({
 		action: 'app.secret.rotate',
 		resourceType: 'app_secret',
@@ -99,10 +126,24 @@ export async function deleteAppSecretValue(c: VaultContext, appId: string, name:
 	if (ref === null) {
 		return error(404, 'secret not found')
 	}
+	const target = await secretTarget(c, appId, env)
+	if (target instanceof Response) return target
+	if (target.kind === 'zerops') {
+		const removed = await target.writer.delete(target.serviceId, name)
+		await c.authorized.auth.audit({
+			action: 'app.secret.value.delete',
+			resourceType: 'app_secret',
+			resourceId: `${appId}/${target.appEnv.env}/${name}`,
+			metadata: { name, env: target.appEnv.env },
+		})
+		return json({ ok: removed })
+	}
 	if (parseVaultRef(ref) === null) {
 		return error(409, 'secret is not stored in the vault')
 	}
-	const removed = await c.vault.delete(ref)
+	const vault = await requireVault(c)
+	if (vault instanceof Response) return vault
+	const removed = await vault.delete(ref)
 	await c.authorized.auth.audit({
 		action: 'app.secret.value.delete',
 		resourceType: 'app_secret',
@@ -133,4 +174,61 @@ async function deletePriorVaultEntry(vault: Vault, priorRef: string): Promise<vo
 	if (parseVaultRef(priorRef) !== null) {
 		await vault.delete(priorRef)
 	}
+}
+
+type SecretTarget =
+	| { kind: 'vault' }
+	| { kind: 'zerops'; appEnv: AppEnvRow; serviceId: string; writer: ZeropsSecretWriter }
+
+async function secretTarget(c: VaultContext, appId: string, env: string | null): Promise<SecretTarget | Response> {
+	if (env === null) {
+		const envs = await c.db.listAppEnvs(appId)
+		if (envs.some((candidate) => candidate.platform === 'zerops')) {
+			return error(400, 'Zerops secret values require an explicit env')
+		}
+		return { kind: 'vault' }
+	}
+	const appEnv = await c.db.getAppEnv(appId, env)
+	if (appEnv === null) {
+		return error(404, 'app env not found')
+	}
+	if (appEnv.platform === 'cloudflare') {
+		return { kind: 'vault' }
+	}
+	if (appEnv.zerops_service_id === null) {
+		return error(409, 'Zerops app env has no service id')
+	}
+	if (c.zerops === undefined) {
+		return error(500, 'Zerops secret writer not configured')
+	}
+	return { kind: 'zerops', appEnv, serviceId: appEnv.zerops_service_id, writer: c.zerops }
+}
+
+async function requireVault(c: VaultContext): Promise<Vault | Response> {
+	if (c.vault === undefined) {
+		return error(500, 'vault not configured (VOZKA_VAULT_KEY missing)')
+	}
+	try {
+		return await c.vault()
+	} catch {
+		return error(500, 'vault unavailable (check VOZKA_VAULT_KEY)')
+	}
+}
+
+const zeropsRef = (serviceId: string, name: string): string => `zerops:${serviceId}/${encodeURIComponent(name)}`
+
+async function audit(
+	c: VaultContext,
+	action: string,
+	appId: string,
+	env: string | null,
+	name: string,
+	valueRef: string,
+): Promise<void> {
+	await c.authorized.auth.audit({
+		action,
+		resourceType: 'app_secret',
+		resourceId: `${appId}/${env ?? '*'}/${name}`,
+		metadata: { name, env, valueRef },
+	})
 }

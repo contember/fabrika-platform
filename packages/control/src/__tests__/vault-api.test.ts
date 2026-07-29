@@ -132,6 +132,65 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		const response = await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { env: 'prod' }), deps)
 		expect(response.status).toBe(400)
 	})
+
+	test('Zerops set, rotate, and delete write through to one service without a vault', async () => {
+		const { db } = createHarness()
+		const calls: string[] = []
+		const deps: ApiDeps = {
+			db,
+			iam: secretManager(),
+			queue: { send: () => Promise.resolve() },
+			logs: { get: () => Promise.resolve(null) },
+			repoSource: new FakeRepoSource(),
+			cancelRun: () => Promise.resolve(),
+			zeropsSecrets: {
+				put(serviceId, name, value) {
+					calls.push(`put:${serviceId}:${name}:${value}`)
+					return Promise.resolve()
+				},
+				delete(serviceId, name) {
+					calls.push(`delete:${serviceId}:${name}`)
+					return Promise.resolve(true)
+				},
+			},
+		}
+		await db.createApp({ id: 'zerops-app', repoUrl: 'github.com/acme/zerops-app' })
+		await db.upsertAppEnv({
+			appId: 'zerops-app',
+			env: 'prod',
+			platform: 'zerops',
+			zeropsProjectId: 'project-1',
+			zeropsServiceId: 'service-1',
+			manifestJson: '{}',
+		})
+
+		expect((await handleApi(req('PUT', '/api/apps/zerops-app/secrets/API_KEY/value', { value: 'v1', env: 'prod' }), deps)).status).toBe(200)
+		const stored = (await db.listAppSecrets('zerops-app')).find((secret) => secret.name === 'API_KEY')
+		expect(stored?.value_ref).toBe('zerops:service-1/API_KEY')
+		expect(parseVaultRef(stored?.value_ref ?? '')).toBeNull()
+		expect((await handleApi(req('PATCH', '/api/apps/zerops-app/secrets/API_KEY/value', { value: 'v2', env: 'prod' }), deps)).status).toBe(200)
+		expect((await handleApi(req('DELETE', '/api/apps/zerops-app/secrets/API_KEY/value?env=prod'), deps)).status).toBe(200)
+		expect(calls).toEqual([
+			'put:service-1:API_KEY:v1',
+			'put:service-1:API_KEY:v2',
+			'delete:service-1:API_KEY',
+		])
+	})
+
+	test('Zerops rejects an all-env secret instead of guessing a replication topology', async () => {
+		const { deps } = makeDeps(secretManager())
+		await deps.db.createApp({ id: 'zerops-app', repoUrl: 'github.com/acme/zerops-app' })
+		await deps.db.upsertAppEnv({
+			appId: 'zerops-app',
+			env: 'prod',
+			platform: 'zerops',
+			zeropsProjectId: 'project-1',
+			zeropsServiceId: 'service-1',
+			manifestJson: '{}',
+		})
+		const response = await handleApi(req('PUT', '/api/apps/zerops-app/secrets/API_KEY/value', { value: 'v1' }), deps)
+		expect(response.status).toBe(400)
+	})
 })
 
 describe('vault not configured', () => {

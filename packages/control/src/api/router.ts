@@ -31,7 +31,7 @@ import {
 	updateApp,
 } from './registry'
 import { cancelRun, type DeployQueue, getRun, getRunLog, listRuns, type LogReader, type RunsContext, tailRunLog, triggerDeploy } from './runs'
-import { deleteAppSecretValue, rotateAppSecretValue, setAppSecretValue, type VaultContext } from './vault'
+import { deleteAppSecretValue, rotateAppSecretValue, setAppSecretValue, type VaultContext, type ZeropsSecretWriter } from './vault'
 
 /**
  * Everything the router needs (the Worker assembles this from its bindings). `vault` is a FACTORY
@@ -50,6 +50,8 @@ export interface ApiDeps {
 	/** Cancel a run: destroy its container (off-local) + mark failed + free the deploy lock. */
 	cancelRun: (run: RunRow) => Promise<void>
 	vault?: () => Promise<Vault>
+	/** Direct service-level writer used only for Zerops app-env secret values. */
+	zeropsSecrets?: ZeropsSecretWriter
 }
 
 /**
@@ -96,19 +98,17 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 	}
 	// Build a vault context (constructs the Vault via the factory; a missing/invalid master key is a
 	// clean 500 here, isolated to vault routes). Returns the error/Response otherwise.
-	const vaultCtx = async (authorized: Awaited<ReturnType<typeof authorize>>): Promise<VaultContext | Response> => {
+	const vaultCtx = (authorized: Awaited<ReturnType<typeof authorize>>): VaultContext | Response => {
 		if (!authorized.ok) {
 			return authorized.response
 		}
-		if (deps.vault === undefined) {
-			return error(500, 'vault not configured (VOZKA_VAULT_KEY missing)')
-		}
-		try {
-			const vault = await deps.vault()
-			return { db: deps.db, vault, request, url, authorized }
-		} catch {
-			// Never echo the master-key error detail; a generic message is enough for the client.
-			return error(500, 'vault unavailable (check VOZKA_VAULT_KEY)')
+		return {
+			db: deps.db,
+			request,
+			url,
+			authorized,
+			...(deps.vault !== undefined ? { vault: deps.vault } : {}),
+			...(deps.zeropsSecrets !== undefined ? { zerops: deps.zeropsSecrets } : {}),
 		}
 	}
 
@@ -156,7 +156,7 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 				// PUT = set (re-encrypts under a fresh entry), PATCH = rotate in place, DELETE = drop entry.
 				if (subId !== undefined && subSub === 'value') {
 					const a = await authorize(deps.iam, request, ACTIONS.SECRET_MANAGE, appScope(id))
-					const c = await vaultCtx(a)
+					const c = vaultCtx(a)
 					if (c instanceof Response) return c
 					if (method === 'PUT') return setAppSecretValue(c, id, subId)
 					if (method === 'PATCH') return rotateAppSecretValue(c, id, subId)
