@@ -16,6 +16,7 @@ export default createPage()
 		const [env, setEnv] = useState('prod')
 		const [domain, setDomain] = useState('')
 		const [triggerRef, setTriggerRef] = useState('')
+		const [configPath, setConfigPath] = useState('fabrika.config.ts')
 		const [installationId, setInstallationId] = useState('')
 		const [busy, setBusy] = useState(false)
 		const [error, setError] = useState<string | null>(null)
@@ -34,6 +35,8 @@ export default createPage()
 				env: env.trim(),
 				...(domain.trim() === '' ? {} : { domain: domain.trim() }),
 				...(triggerRef.trim() === '' ? {} : { triggerRef: triggerRef.trim() }),
+				target: { provider: 'cloudflare', version: 1, payload: {} },
+				artifact: { provider: 'cloudflare', version: 1, payload: { configPath: configPath.trim() } },
 				...installField,
 			}
 			setBusy(true)
@@ -111,6 +114,17 @@ export default createPage()
 							autoComplete="off"
 						/>
 						<span className="hint">Push to this git ref auto-deploys this env. Leave empty for manual-only (Deploy button).</span>
+					</label>
+					<label>
+						Cloudflare config path
+						<input
+							required
+							value={configPath}
+							onChange={(e) => setConfigPath(e.target.value)}
+							placeholder="fabrika.config.ts"
+							autoComplete="off"
+						/>
+						<span className="hint">Path to the deploy config, relative to the configured worker directory.</span>
 					</label>
 					<label>
 						GitHub installation id (optional)

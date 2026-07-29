@@ -77,7 +77,6 @@ export default createPage()
 					<h2>Build config</h2>
 					<div className="detail-grid">
 						<Field label="Worker dir" value={app.workerDir} mono />
-						<Field label="Config path" value={app.configPath} mono />
 						<Field label="Build command" value={app.buildCmd} mono />
 						<InstallationIdField app={app} onDone={invalidate} />
 					</div>
@@ -88,7 +87,7 @@ export default createPage()
 						<h2>Environments</h2>
 					</div>
 					<Table
-						colSpan={4}
+						colSpan={5}
 						isEmpty={envs.length === 0}
 						empty="No environments. Add one below."
 						head={
@@ -96,6 +95,7 @@ export default createPage()
 								<th>Env</th>
 								<th>Domain</th>
 								<th>Trigger ref</th>
+								<th>Config path</th>
 								<th />
 							</tr>
 						}
@@ -324,6 +324,9 @@ function EnvRow({ appId, env, onDone }: { appId: string; env: AppEnvDto; onDone:
 			</td>
 			<td>{env.domain === null ? <span className="muted">—</span> : env.domain}</td>
 			<td>{env.triggerRef === null ? <span className="muted">manual-only</span> : <code>{shortRef(env.triggerRef)}</code>}</td>
+			<td>
+				<code>{env.artifact.payload.configPath}</code>
+			</td>
 			<td className="row-actions">
 				<DeployButton appId={appId} env={env} />
 				<button type="button" className="small" onClick={() => setEditing(true)}>Edit</button>
@@ -360,6 +363,7 @@ function EnvForm(
 	const [envName, setEnvName] = useState(env)
 	const [domain, setDomain] = useState(initial?.domain ?? '')
 	const [triggerRef, setTriggerRef] = useState(initial?.triggerRef ?? '')
+	const [configPath, setConfigPath] = useState(initial?.artifact.payload.configPath ?? 'fabrika.config.ts')
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 
@@ -370,6 +374,8 @@ function EnvForm(
 			const body: PutAppEnvRequest = {
 				domain: domain.trim() === '' ? null : domain.trim(),
 				triggerRef: triggerRef.trim() === '' ? null : triggerRef.trim(),
+				target: initial?.target ?? { provider: 'cloudflare', version: 1, payload: {} },
+				artifact: { provider: 'cloudflare', version: 1, payload: { configPath: configPath.trim() } },
 			}
 			await api.put(`/apps/${appId}/envs/${envName.trim()}`, body)
 			onDone()
@@ -393,8 +399,17 @@ function EnvForm(
 				<input aria-label="Trigger ref" value={triggerRef} onChange={(e) => setTriggerRef(e.target.value)} placeholder="refs/heads/main" />
 				{error && <div className="error-text small">{error}</div>}
 			</td>
+			<td>
+				<input
+					required
+					aria-label="Config path"
+					value={configPath}
+					onChange={(e) => setConfigPath(e.target.value)}
+					placeholder="fabrika.config.ts"
+				/>
+			</td>
 			<td className="row-actions">
-				<button type="button" className="primary small" onClick={save} disabled={busy || envName.trim() === ''}>
+				<button type="button" className="primary small" onClick={save} disabled={busy || envName.trim() === '' || configPath.trim() === ''}>
 					{busy ? 'Saving…' : 'Save'}
 				</button>
 				<button type="button" className="small" onClick={onCancel} disabled={busy}>Cancel</button>

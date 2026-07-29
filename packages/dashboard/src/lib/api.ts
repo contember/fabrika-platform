@@ -89,12 +89,33 @@ export interface AppEnvDto {
 	domain: string | null
 	/** Git ref that triggers a deploy here, e.g. `refs/heads/deploy/prod`. null = manual-only. */
 	triggerRef: string | null
+	provider: 'cloudflare'
+	target: CloudflareTargetEnvelope
+	artifact: CloudflareArtifactEnvelope
 	createdAt: number
 }
 
 export interface PutAppEnvRequest {
 	domain?: string | null
 	triggerRef?: string | null
+	target: CloudflareTargetEnvelope
+	artifact: CloudflareArtifactEnvelope
+}
+
+export interface CloudflareTargetEnvelope {
+	provider: 'cloudflare'
+	version: 1
+	payload: {
+		stateNamespace?: string
+	}
+}
+
+export interface CloudflareArtifactEnvelope {
+	provider: 'cloudflare'
+	version: 1
+	payload: {
+		configPath: string
+	}
 }
 
 // ── App secrets (mirror toAppSecretDto — refs only, values never leave the vault) ──
@@ -144,6 +165,8 @@ export interface RegisterAppRequest extends AppOptionalFields {
 	env: string
 	domain?: string | null
 	triggerRef?: string | null
+	target: CloudflareTargetEnvelope
+	artifact: CloudflareArtifactEnvelope
 }
 
 export interface RegisterAppResponse {
