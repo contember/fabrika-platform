@@ -83,13 +83,58 @@ export interface ZeropsImportResult {
 	services: ZeropsImportedService[]
 }
 
-/** One service. VERIFIED: `ResponseServiceStack` (narrowed to the fields the driver reads). */
+/** Every documented project lifecycle state. VERIFIED: `ResponseProject.status`. */
+export type ZeropsProjectStatus = 'NEW' | 'CREATING' | 'ACTIVE' | 'DELETING' | 'FAILED' | 'STOPPING' | 'STOPPED' | 'STARTING'
+
+/** Project compute tier. The import schema calls the same choice `corePackage`. VERIFIED: `ResponseProject.mode`. */
+export type ZeropsProjectMode = 'LIGHT' | 'SERIOUS'
+
+/** Every documented service-stack lifecycle state. VERIFIED: `ResponseServiceStack.status`. */
+export type ZeropsServiceStatus =
+	| 'NEW'
+	| 'CREATING'
+	| 'ACTIVE'
+	| 'STOPPING'
+	| 'STOPPED'
+	| 'STARTING'
+	| 'RESTARTING'
+	| 'RELOADING'
+	| 'DELETING'
+	| 'DELETED'
+	| 'FAILED'
+	| 'ACTION_FAILED'
+	| 'UPGRADING'
+	| 'READY_TO_DEPLOY'
+	| 'SERVICE_CREATING'
+	| 'SERVICE_ACTIVE'
+	| 'SERVICE_STOPPING'
+	| 'SERVICE_STOPPED'
+	| 'SERVICE_STARTING'
+	| 'SERVICE_RESTARTING'
+	| 'SERVICE_RELOADING'
+	| 'SERVICE_DELETING'
+	| 'SERVICE_DELETED'
+	| 'SERVICE_FAILED'
+	| 'SERVICE_ACTION_FAILED'
+	| 'SERVICE_REPAIRING'
+	| 'SERVICE_CONTAINER_FAILED'
+	| 'SERVICE_MOVING_CONTAINER'
+	| 'SERVICE_UPGRADING'
+	| 'SERVICE_SCALING'
+	| 'SERVICE_REPAIR_FAILED'
+	| 'REPAIRING'
+	| 'CONTAINER_FAILED'
+	| 'MOVING_CONTAINER'
+	| 'SCALING'
+	| 'REPAIR_FAILED'
+
+/** One service. VERIFIED: `ResponseServiceStack` (narrowed to the fields fabrika reads). */
 export interface ZeropsService {
 	id: string
 	name: string
 	projectId?: string
-	status?: string
-	/** Full service-type identifier, e.g. `alpine/bun@1.3`. */
+	status?: ZeropsServiceStatus
+	/** Full service-type identifier, e.g. `alpine/bun@1.3`. VERIFIED: `ResponseServiceStack.base`. */
 	base?: string
 	activeAppVersionId?: string
 }
@@ -98,9 +143,9 @@ export interface ZeropsService {
 export interface ZeropsProject {
 	id: string
 	name: string
-	status?: string
-	/** `LIGHT` / `SERIOUS` — the `corePackage` tier, which cannot be downgraded (ADR-0006). */
-	mode?: string
+	status?: ZeropsProjectStatus
+	/** The wire calls the import schema's `corePackage` choice `mode`. */
+	mode?: ZeropsProjectMode
 }
 
 /**
@@ -233,6 +278,24 @@ export interface ZeropsApi {
 	/** One project by id. VERIFIED: `GET /project/{id}`. */
 	getProject(input: { projectId: string; signal: AbortSignal }): Promise<ZeropsProject>
 
+	/**
+	 * Every project under a client. VERIFIED: `GET /client/{id}/project`.
+	 * The implementation follows the response's `totalCount` with explicit `limit`/`offset` pages.
+	 */
+	listProjects(input: { clientId: string; signal: AbortSignal }): Promise<ZeropsProject[]>
+
+	/**
+	 * Every exact-name match under a client. VERIFIED: `GET /client/{id}/projects-by-name/{name}`.
+	 * Zerops returns an array, so duplicate names remain visible to the caller.
+	 */
+	findProjects(input: { clientId: string; name: string; signal: AbortSignal }): Promise<ZeropsProject[]>
+
+	/**
+	 * Every service stack under a project. VERIFIED: `GET /project/{id}/service-stack`.
+	 * The implementation follows the response's `totalCount` with explicit `limit`/`offset` pages.
+	 */
+	listProjectServices(input: { projectId: string; signal: AbortSignal }): Promise<ZeropsService[]>
+
 	// ── user-data: SERVICE-level environment variables (ADR-0004) ─────────────────
 
 	/** Every environment variable of ONE service. VERIFIED: `GET /service-stack/{id}/user-data`. */
@@ -337,11 +400,69 @@ const STATUSES: readonly ZeropsAppVersionStatus[] = [
 	'CANCELLED',
 ]
 
+const PROJECT_STATUSES: readonly ZeropsProjectStatus[] = [
+	'NEW',
+	'CREATING',
+	'ACTIVE',
+	'DELETING',
+	'FAILED',
+	'STOPPING',
+	'STOPPED',
+	'STARTING',
+]
+
+const PROJECT_MODES: readonly ZeropsProjectMode[] = ['LIGHT', 'SERIOUS']
+
+const SERVICE_STATUSES: readonly ZeropsServiceStatus[] = [
+	'NEW',
+	'CREATING',
+	'ACTIVE',
+	'STOPPING',
+	'STOPPED',
+	'STARTING',
+	'RESTARTING',
+	'RELOADING',
+	'DELETING',
+	'DELETED',
+	'FAILED',
+	'ACTION_FAILED',
+	'UPGRADING',
+	'READY_TO_DEPLOY',
+	'SERVICE_CREATING',
+	'SERVICE_ACTIVE',
+	'SERVICE_STOPPING',
+	'SERVICE_STOPPED',
+	'SERVICE_STARTING',
+	'SERVICE_RESTARTING',
+	'SERVICE_RELOADING',
+	'SERVICE_DELETING',
+	'SERVICE_DELETED',
+	'SERVICE_FAILED',
+	'SERVICE_ACTION_FAILED',
+	'SERVICE_REPAIRING',
+	'SERVICE_CONTAINER_FAILED',
+	'SERVICE_MOVING_CONTAINER',
+	'SERVICE_UPGRADING',
+	'SERVICE_SCALING',
+	'SERVICE_REPAIR_FAILED',
+	'REPAIRING',
+	'CONTAINER_FAILED',
+	'MOVING_CONTAINER',
+	'SCALING',
+	'REPAIR_FAILED',
+]
+
 /**
  * Narrow a wire string to a known status. `undefined` means Zerops sent something this build does not
  * know — which the poll loop must treat as "keep waiting", never as success or failure.
  */
 export const asAppVersionStatus = (value: unknown): ZeropsAppVersionStatus | undefined => STATUSES.find((status) => status === value)
+
+const asProjectStatus = (value: unknown): ZeropsProjectStatus | undefined => PROJECT_STATUSES.find((status) => status === value)
+
+const asProjectMode = (value: unknown): ZeropsProjectMode | undefined => PROJECT_MODES.find((mode) => mode === value)
+
+const asServiceStatus = (value: unknown): ZeropsServiceStatus | undefined => SERVICE_STATUSES.find((status) => status === value)
 
 const readAppVersion = (value: unknown): ZeropsAppVersion => ({
 	id: str(value, 'id') ?? '',
@@ -372,9 +493,16 @@ const readService = (value: unknown): ZeropsService => ({
 	id: str(value, 'id') ?? '',
 	name: str(value, 'name') ?? '',
 	projectId: str(value, 'projectId'),
-	status: str(value, 'status'),
+	status: asServiceStatus(prop(value, 'status')),
 	base: str(value, 'base'),
 	activeAppVersionId: str(prop(value, 'activeAppVersion'), 'id'),
+})
+
+const readProject = (value: unknown): ZeropsProject => ({
+	id: str(value, 'id') ?? '',
+	name: str(value, 'name') ?? '',
+	status: asProjectStatus(prop(value, 'status')),
+	mode: asProjectMode(prop(value, 'mode')),
 })
 
 const readServiceEnv = (value: unknown): ZeropsServiceEnv => ({
@@ -440,6 +568,34 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		})),
 	})
 
+	const PAGE_SIZE = 100
+	const readAllPages = async <Item>(
+		label: string,
+		path: string,
+		signal: AbortSignal,
+		readItem: (value: unknown) => Item,
+	): Promise<Item[]> => {
+		const items: Item[] = []
+		let offset = 0
+		while (true) {
+			const separator = path.includes('?') ? '&' : '?'
+			const payload = await request(label, 'GET', `${path}${separator}limit=${PAGE_SIZE}&offset=${offset}`, { signal })
+			const page = arr(payload, 'list')
+			const totalCount = num(payload, 'totalCount')
+			if (totalCount === undefined || !Number.isInteger(totalCount) || totalCount < 0) {
+				throw new Error(`zerops: ${label} returned an invalid totalCount`)
+			}
+			items.push(...page.map(readItem))
+			if (items.length >= totalCount) {
+				return items
+			}
+			if (page.length === 0) {
+				throw new Error(`zerops: ${label} ended before totalCount`)
+			}
+			offset += page.length
+		}
+	}
+
 	return {
 		importServices: async ({ projectId, yaml, signal }) =>
 			readImportResult(await request('service-stack import', 'POST', `/project/${projectId}/service-stack/import`, { body: { yaml }, signal })),
@@ -496,8 +652,23 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 
 		getProject: async ({ projectId, signal }) => {
 			const payload = await request('get project', 'GET', `/project/${projectId}`, { signal })
-			return { id: str(payload, 'id') ?? '', name: str(payload, 'name') ?? '', status: str(payload, 'status'), mode: str(payload, 'mode') }
+			return readProject(payload)
 		},
+
+		listProjects: async ({ clientId, signal }) => readAllPages('list projects', `/client/${clientId}/project`, signal, readProject),
+
+		findProjects: async ({ clientId, name, signal }) => {
+			const payload = await request(
+				'find projects',
+				'GET',
+				`/client/${clientId}/projects-by-name/${encodeURIComponent(name)}`,
+				{ signal },
+			)
+			return arr(payload, 'projects').map(readProject)
+		},
+
+		listProjectServices: async ({ projectId, signal }) =>
+			readAllPages('list project services', `/project/${projectId}/service-stack`, signal, readService),
 
 		listServiceEnv: async ({ serviceId, signal }) => {
 			const payload = await request('list service env', 'GET', `/service-stack/${serviceId}/user-data`, { signal })

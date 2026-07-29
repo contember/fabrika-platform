@@ -63,6 +63,9 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		getService: async ({ serviceId }) => ({ id: serviceId, name: 'api' }),
 		findService: async ({ hostname }) => ({ id: 'service-1', name: hostname }),
 		getProject: async ({ projectId }) => ({ id: projectId, name: 'project' }),
+		listProjects: async () => [],
+		findProjects: async () => [],
+		listProjectServices: async () => [],
 		listServiceEnv: async () => [],
 		putServiceEnv: async () => {
 			recorded.calls.push('putServiceEnv')

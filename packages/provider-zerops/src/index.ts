@@ -11,8 +11,11 @@ export type {
 	ZeropsLogLine,
 	ZeropsProcess,
 	ZeropsProject,
+	ZeropsProjectMode,
+	ZeropsProjectStatus,
 	ZeropsService,
 	ZeropsServiceEnv,
+	ZeropsServiceStatus,
 } from './api'
 export { defineApp } from './authoring'
 export { parseZeropsCliArgs } from './cli-args'

@@ -97,6 +97,9 @@ const makeApi = (recorded: Recorded, status: () => ZeropsAppVersionStatus = () =
 	getService: async ({ serviceId }) => ({ id: serviceId, name: 'notes' }),
 	findService: async ({ hostname }) => ({ id: 'service-1', name: hostname }),
 	getProject: async ({ projectId }) => ({ id: projectId, name: 'project' }),
+	listProjects: async () => [],
+	findProjects: async () => [],
+	listProjectServices: async () => [],
 	listServiceEnv: async () => [{ id: 'env-1', key: 'TOKEN', content: 'blurred' }],
 	putServiceEnv: async ({ serviceId, key, value }) => {
 		recorded.envWrites.push({ serviceId, key, value })
