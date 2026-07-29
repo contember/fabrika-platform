@@ -15,15 +15,14 @@
 		"test": "bun test",
 		"serve": "bun src/serve.ts",
 		"docker:build": "docker build -f Dockerfile -t vozka-runner ../..",
-		"docker:smoke": "docker run --rm --entrypoint fabrika vozka-runner --help && docker run --rm -e CLOUDFLARE_ACCOUNT_ID=smoke-account -e CLOUDFLARE_API_TOKEN=smoke-token --entrypoint fabrika vozka-runner deploy --env=smoke --config=/opt/fabrika/packages/runner/docker/smoke/fabrika.config.ts --dry-run",
+		"docker:smoke": "docker run --rm --entrypoint fabrika-cloudflare vozka-runner --help && docker run --rm -e CLOUDFLARE_ACCOUNT_ID=smoke-account -e CLOUDFLARE_API_TOKEN=smoke-token --entrypoint fabrika-cloudflare vozka-runner deploy --env=smoke --config=/opt/fabrika/packages/runner/docker/smoke/fabrika.config.ts --dry-run",
 		"oblaka": "bunx oblaka oblaka.ts",
 		"oblaka:deploy": "bunx oblaka oblaka.ts --remote",
 		"bootstrap": "bun run scripts/bootstrap-runner.ts"
 	},
 	"dependencies": {
 		"@cloudflare/containers": "^0.0.30",
-		"@fabrika/config": "workspace:*",
-		"@fabrika/engine": "workspace:*",
+		"@fabrika/provider-cloudflare": "workspace:*",
 		"@fabrika/platform": "workspace:*"
 	},
 	"devDependencies": {

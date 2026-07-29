@@ -2,8 +2,8 @@
 
 This package has TWO faces:
 
-1. **The CI deploy runner** — a container that clones a target repo, `bun install`s it, and runs `fabrika
-   deploy`. One container = one run. Plain-Bun code; no Cloudflare runtime.
+1. **The CI deploy runner** — a container that clones a target repo, installs it, and runs
+   `fabrika-cloudflare deploy`. One container = one run. Plain-Bun code; no Cloudflare runtime.
 2. **The vozka-runner WORKER** — the deploy EXECUTOR, split out of the control plane. It owns the
    per-run container DO + the relay, so a deploy of fabrika never resets the container running that deploy
    (the self-reset that orphaned fabrika's own runs). fabrika calls it over a service binding
@@ -27,11 +27,11 @@ bun run bootstrap        # deploy vozka-runner itself, out-of-band (needs real C
 
 In-container engine (face 1):
 
-- `protocol.ts` — **the Worker↔container wire contract** (`RunnerJob`, `RunnerStatus`, `LogLine`, ports).
-  The single source of truth shared with `@fabrika/control`; change both sides together.
+- `protocol.ts` — transport-only status, log and port types. The provider owns `CloudflareRunnerJob`
+  and its boundary validator.
 - `server.ts` — the in-container HTTP server: `POST /run`, `GET /logs` (NDJSON stream), `/status`, `/health`.
-- `runner.ts` / `spawn.ts` — the clone → install → `fabrika deploy` pipeline.
-- `Dockerfile` + `docker/` — the image (Ubuntu + git + node 22 + bun + wrangler + the baked `fabrika` CLI).
+- `runner.ts` / `spawn.ts` — the clone → install → `fabrika-cloudflare deploy` pipeline.
+- `Dockerfile` + `docker/` — the image with the baked provider CLI.
 - `image.json` — the PINNED runner image tag (bumped by `.github/workflows/runner-image.yml`); the config
   builds the registry ref from it. `RUNNER_BUILD=1` (or env=local) builds from the Dockerfile instead.
 
@@ -43,7 +43,7 @@ vozka-runner worker (face 2):
 - `src/RunnerContainer.ts` — the per-run container DO (`@cloudflare/containers`). Moved here from the worker.
 - `src/relay.ts` — the Worker→container relay (logs → R2 + terminal status). Moved here from the worker.
 - `src/finish-run.ts` — the ONE D1 write: a guarded terminal-status UPDATE (see invariants).
-- `fabrika-runner.config.ts` — the deploy surface (dogfoods @fabrika/config). `oblaka.ts` — the local-dev shim.
+- `fabrika-runner.config.ts` — the provider authoring surface. `oblaka.ts` — the local-dev shim.
 - `scripts/bootstrap-runner.ts` — out-of-band deploy of vozka-runner (it can't deploy itself through itself).
 
 `src/index.ts` exports the LIGHT shared surface (protocol + relay helpers + the `VozkaRunner` TYPE) — NOT
@@ -51,15 +51,15 @@ the worker as a value, so importers don't pull the Workers runtime. `@fabrika/co
 
 ## Invariants
 
-- **Secrets + credentials go to the `fabrika` child via ENV only** — never on argv, never echoed in a
-  response, never in a log line verbatim (the runner redacts them). They arrive in the `POST /run` body.
+- **Credentials, secrets, vars and state namespace go to the provider CLI via ENV only** — never on
+  argv, never echoed in a response, never in a log line verbatim. They arrive in `POST /run`.
 - **One run per process:** a second `POST /run` while one is active → 409.
 - **Every `@fabrika/*` image dependency is copied into the slim workspace.** `oblaka-iac` is the only
   deploy-engine dependency installed from npm (pinned in `docker/package.json`, in lockstep with the
   workspace). The Docker build context is the repo ROOT.
 - **`wrangler` must be on PATH globally** in the image — the deploy step shells out to a bare `wrangler` with cwd = the target repo.
 - **vozka-runner is SEPARATE so a fabrika deploy never resets it.** It's INFRA, not a registered app: no
-  Access, no propustka schema, no runtime secrets (every credential arrives per-run in the `RunnerJob`).
+  Access, no propustka schema, no runtime secrets (every credential arrives per-run in the provider job).
   Deployed RARELY + OUT-OF-BAND (`bun run bootstrap`) — deploying it through itself would self-reset its
   own container. It changes only when the relay / container / image changes.
 - **RUN_LOGS (R2) + DB (D1) are SHARED with the control plane** — oblaka ADOPTS them by remote name

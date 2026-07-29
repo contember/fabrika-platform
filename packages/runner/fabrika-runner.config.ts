@@ -3,7 +3,7 @@
 //
 // vozka-runner is INFRA, not a registered app: no Cloudflare Access front door (it's reachable only via
 // fabrika's `RUNNER_SVC` service binding, never publicly), no propustka access/schema, no runtime secrets
-// (every credential arrives per-run in the `RunnerJob` over the binding). It is deployed RARELY and
+// (every credential arrives per-run in the provider job over the binding). It is deployed RARELY and
 // OUT-OF-BAND (scripts/bootstrap-runner.ts) — it can't deploy itself through itself (same self-reset),
 // and it only changes when the relay / container / runner image changes.
 //
@@ -14,8 +14,7 @@
 //
 // Local dev still uses oblaka directly via the `oblaka.ts` shim, which calls `buildRunnerWorker` below.
 
-import type { ResourceContext } from '@fabrika/config'
-import { Container, D1Database, defineApp, R2Bucket, Worker } from '@fabrika/config'
+import { Container, D1Database, defineApp, R2Bucket, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 import runnerImageManifest from './image.json'
 
 /** Container instance type per stage — dev locally, larger off-local; any other env → basic. */
@@ -31,7 +30,7 @@ const instanceTypeFor = (env: string): 'dev' | 'basic' | 'standard' => {
 
 /**
  * Build vozka-runner's Cloudflare resource graph for one environment. The SINGLE source of the graph —
- * both the `fabrika deploy` / bootstrap path (via `defineApp` below) and the local-dev `oblaka.ts` shim
+ * both the provider deploy/bootstrap path (via `defineApp` below) and the local-dev `oblaka.ts` shim
  * call this, so the two never drift.
  */
 export const buildRunnerWorker = (ctx: ResourceContext): Worker => {
@@ -92,7 +91,7 @@ export default defineApp({
 	resources: buildRunnerWorker,
 	pipeline: {
 		// vozka-runner's Worker source lives alongside this config (packages/runner). No build step (no
-		// assets), and NO secrets — every credential arrives per-run in the RunnerJob over the binding.
+		// assets), and NO secrets — every credential arrives per-run in the provider job over the binding.
 		workerDir: '.',
 	},
 })

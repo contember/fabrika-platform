@@ -1,6 +1,6 @@
 // The per-run container Durable Object. Mirrors the preventado pattern: a subclass of
 // `@cloudflare/containers` `Container` whose `defaultPort` matches the in-container server, with a
-// generous `sleepAfter` so a long clone + `bun install` + `fabrika deploy` is never reaped mid-run.
+// generous `sleepAfter` so a long clone + install + provider deploy is never reaped mid-run.
 //
 // One DO instance == one container == one run. The vozka-runner Worker addresses a fresh instance per
 // run (`idFromName(runId)`), `startAndWaitForPorts()`, then relays the job through it. This DO lives in

@@ -1,11 +1,12 @@
 // The in-container run engine — pure of HTTP, so it's unit-testable with a fake command runner.
 //
-// A `Runner` drives one job through clone → install → `fabrika deploy`, narrating progress and
+// A `Runner` drives one job through clone → install → `fabrika-cloudflare deploy`, narrating progress and
 // streaming child stdout/stderr line-by-line into an in-memory log buffer. Secret values and
 // credentials are redacted from every line before it lands in the buffer; they only ever reach
 // the `fabrika` child through its environment, never argv, never a log.
 
-import type { LogLine, RunnerJob, RunnerState, RunnerStatus } from './protocol'
+import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare'
+import type { LogLine, RunnerState, RunnerStatus } from './protocol'
 
 /**
  * Upper bound on the in-memory log replay buffer. A pathologically chatty build (verbose installs,
@@ -48,7 +49,7 @@ export interface RunnerEnv {
 }
 
 /** Build the redactor: a function that masks every sensitive value found in a line. */
-const makeRedactor = (job: RunnerJob): (text: string) => string => {
+const makeRedactor = (job: CloudflareRunnerJob): (text: string) => string => {
 	const sensitive = new Set<string>()
 	for (const value of Object.values(job.credentials)) {
 		if (typeof value === 'string' && value.length >= 4) {
@@ -56,6 +57,11 @@ const makeRedactor = (job: RunnerJob): (text: string) => string => {
 		}
 	}
 	for (const value of Object.values(job.secrets ?? {})) {
+		if (value.length >= 4) {
+			sensitive.add(value)
+		}
+	}
+	for (const value of Object.values(job.vars ?? {})) {
 		if (value.length >= 4) {
 			sensitive.add(value)
 		}
@@ -86,10 +92,10 @@ const stripUserinfo = (url: string): string => url.replace(/(\/\/)[^@/]*@/, '$1'
 
 /**
  * Drives one job to completion. Construct, subscribe to `onLine` (the Worker relays these to R2),
- * then `await run()`. The terminal `status()` carries the `fabrika deploy` exit code.
+ * then `await run()`. The terminal `status()` carries the provider CLI exit code.
  */
 export class Runner {
-	private readonly job: RunnerJob
+	private readonly job: CloudflareRunnerJob
 	private readonly env: Required<RunnerEnv>
 	private readonly redact: (text: string) => string
 	private readonly buffer: LogLine[] = []
@@ -101,7 +107,7 @@ export class Runner {
 	private finishedAt: number | undefined
 	private done = false
 
-	constructor(job: RunnerJob, env: RunnerEnv) {
+	constructor(job: CloudflareRunnerJob, env: RunnerEnv) {
 		this.job = job
 		this.env = { now: () => Date.now(), ...env }
 		this.redact = makeRedactor(job)
@@ -174,7 +180,7 @@ export class Runner {
 		})
 	}
 
-	/** Build the child env for the `fabrika deploy` step: creds + secret values, by name. */
+	/** Build the provider CLI environment without putting sensitive values on argv. */
 	private deployEnv(): Record<string, string> {
 		const env: Record<string, string> = {}
 		for (const [key, value] of Object.entries(this.job.credentials)) {
@@ -184,6 +190,9 @@ export class Runner {
 		}
 		if (this.job.domain !== undefined) {
 			env['VOZKA_DOMAIN'] = this.job.domain
+		}
+		if (this.job.stateNamespace !== undefined) {
+			env['CLOUDFLARE_STATE_NAMESPACE'] = this.job.stateNamespace
 		}
 		// Secrets are read by the CLI from the environment by their own name.
 		for (const [name, value] of Object.entries(this.job.secrets ?? {})) {
@@ -206,8 +215,7 @@ export class Runner {
 	}
 
 	/**
-	 * Run the full pipeline: clone → install → `fabrika deploy`. Resolves once terminal (never rejects;
-	 * failures land in `status()`). Faithful to M1's CLI: `fabrika deploy --env=<env> [--config] [--dry-run]`.
+	 * Run clone → install → provider deploy. Resolves once terminal; failures land in `status()`.
 	 */
 	async run(): Promise<RunnerStatus> {
 		// ── clone ──
@@ -248,9 +256,9 @@ export class Runner {
 		if (this.job.dryRun === true) {
 			deployArgs.push('--dry-run')
 		}
-		this.emit('meta', `Running: fabrika ${deployArgs.join(' ')}`)
-		const deploy = await this.step({ command: 'fabrika', args: deployArgs, cwd: dir, env: this.deployEnv() })
-		this.emit('meta', `fabrika deploy exited with code ${deploy.exitCode}`)
+		this.emit('meta', `Running: fabrika-cloudflare ${deployArgs.join(' ')}`)
+		const deploy = await this.step({ command: 'fabrika-cloudflare', args: deployArgs, cwd: dir, env: this.deployEnv() })
+		this.emit('meta', `fabrika-cloudflare deploy exited with code ${deploy.exitCode}`)
 		this.finish(deploy.exitCode === 0 ? 'succeeded' : 'failed', { exitCode: deploy.exitCode })
 		return this.status()
 	}

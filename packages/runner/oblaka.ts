@@ -1,5 +1,5 @@
 // LOCAL-DEV / oblaka entry for vozka-runner's infrastructure. THIN by design: the resource graph
-// lives in `fabrika-runner.config.ts` (the single source of truth, dogfooding @fabrika/config), and this
+// lives in `fabrika-runner.config.ts` (the single source of truth, using the provider authoring API), and this
 // file just adapts it to oblaka's `define` so the local flows keep working:
 //   - `bun run oblaka`        → regenerate wrangler.jsonc (plan/dry)
 //   - `bun run oblaka:deploy` → remote provision (off-local, manual)

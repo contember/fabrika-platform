@@ -1,5 +1,6 @@
+import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare'
 import { describe, expect, test } from 'bun:test'
-import type { LogLine, RunnerJob, RunnerStatus } from '../protocol'
+import type { LogLine, RunnerStatus } from '../protocol'
 import { type ContainerLike, logsKey, type R2Like, relayRun, statusKey } from '../relay'
 
 // The relay is the testable core of vozka-runner's `startRun`. These tests drive it against a FAKE
@@ -42,7 +43,7 @@ const makeContainer = (status: RunnerStatus, lines: LogLine[], heartbeats: { cou
 	},
 })
 
-const job: RunnerJob = {
+const job: CloudflareRunnerJob = {
 	runId: 'run-relay-1',
 	repoUrl: 'https://github.com/acme/app.git',
 	ref: 'main',

@@ -5,12 +5,13 @@
 	"workspaces": [
 		"packages/auth-core",
 		"packages/auth",
-		"packages/config",
+		"packages/provider-contract",
+		"packages/provider-cloudflare",
 		"packages/engine",
 		"packages/platform",
 		"packages/runner"
 	],
-	"//": "Slimmed workspace root baked into the runner image. Local @fabrika packages resolve from the copied workspaces. oblaka-iac is pinned to the version that ships the programmatic deploy() the engine calls; wrangler is installed globally in the image.",
+	"//": "Slim workspace baked into the runner image. The provider CLI and runner resolve local workspace packages; wrangler is installed globally.",
 	"dependencies": {
 		"oblaka-iac": "^0.0.18"
 	}

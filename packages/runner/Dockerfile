@@ -1,8 +1,7 @@
 # fabrika CI runner image.
 #
-# Bakes in the unpublished fabrika workspace packages needed by @fabrika/engine (the `fabrika` CLI)
-# and @fabrika/runner (the in-container server) alongside git, node, bun and wrangler, so a spawned
-# container can clone a target app, `bun install` it, and run `fabrika deploy` against its config.
+# Bakes in the Cloudflare provider CLI and the runner server alongside git, node, bun and wrangler,
+# so a spawned container can clone a target app, install it and run `fabrika-cloudflare deploy`.
 #
 # BUILD CONTEXT = the fabrika-platform repo ROOT (so we can copy the workspace packages). Run via
 # `bun run docker:build` (from packages/runner):
@@ -35,7 +34,7 @@ ENV PATH="/root/.bun/bin:${PATH}"
 
 # wrangler on PATH globally: the deploy step shells out to a bare `wrangler` (deploy-worker /
 # d1 migrations / secret put) with cwd = the target repo, so it must resolve regardless of cwd.
-# Pinned to match the version @fabrika/engine + @fabrika/config build against (no version skew at deploy).
+# Pinned to match the version the Cloudflare provider builds against.
 RUN bun install -g wrangler@4.72.0
 
 WORKDIR /opt/fabrika
@@ -45,7 +44,8 @@ WORKDIR /opt/fabrika
 COPY packages/runner/docker/package.json ./package.json
 COPY packages/auth-core ./packages/auth-core
 COPY packages/auth ./packages/auth
-COPY packages/config ./packages/config
+COPY packages/provider-contract ./packages/provider-contract
+COPY packages/provider-cloudflare ./packages/provider-cloudflare
 COPY packages/engine ./packages/engine
 COPY packages/platform ./packages/platform
 COPY packages/runner/src ./packages/runner/src
@@ -54,9 +54,9 @@ COPY packages/runner/package.json ./packages/runner/package.json
 
 RUN bun install
 
-# Expose the `fabrika` CLI on PATH (it's the bin of @fabrika/engine, run via bun).
-RUN printf '#!/usr/bin/env bash\nexec bun /opt/fabrika/packages/engine/src/cli.ts "$@"\n' > /usr/local/bin/fabrika \
-	&& chmod +x /usr/local/bin/fabrika
+# Expose the provider-specific CLI on PATH.
+RUN printf '#!/usr/bin/env bash\nexec bun /opt/fabrika/packages/provider-cloudflare/src/cli.ts "$@"\n' > /usr/local/bin/fabrika-cloudflare \
+	&& chmod +x /usr/local/bin/fabrika-cloudflare
 
 # Where target repos are cloned. The runner server creates one sub-dir per run.
 ENV VOZKA_WORKSPACE=/workspace

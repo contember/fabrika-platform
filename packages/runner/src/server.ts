@@ -1,16 +1,17 @@
 // The in-container HTTP server implementing the job protocol. One container = one run:
 //
-//   POST /run      — accept a `RunnerJob`, kick off the pipeline (clone → install → fabrika deploy).
+//   POST /run      — accept a provider-owned job, then clone → install → provider deploy.
 //   GET  /logs     — replay the log buffer then stream new lines live (newline-delimited JSON),
 //                    closing once the run is terminal.
 //   GET  /status   — the current `RunnerStatus` (`{ state, exitCode, ... }`).
 //   GET  /health   — readiness probe (what the DO's `startAndWaitForPorts()` polls).
 //
-// Secrets/credentials arrive in the POST body and are forwarded to the `fabrika` child via env only;
+// Secrets/credentials arrive in the POST body and are forwarded to the provider CLI via env only;
 // they are never echoed back and (via the Runner) never reach a log line verbatim.
 
+import { isCloudflareRunnerJob } from '@fabrika/provider-cloudflare'
 import type { LogLine } from './protocol'
-import { isRunnerJob, RUNNER_HEALTH_PATH, RUNNER_PORT } from './protocol'
+import { RUNNER_HEALTH_PATH, RUNNER_PORT } from './protocol'
 import { Runner, type RunnerEnv } from './runner'
 
 const json = (body: unknown, status = 200): Response =>
@@ -43,8 +44,8 @@ export const createServer = (env: RunnerEnv): RunnerServer => {
 		} catch {
 			return json({ error: 'invalid JSON body' }, 400)
 		}
-		if (!isRunnerJob(body)) {
-			return json({ error: 'body is not a valid RunnerJob' }, 400)
+		if (!isCloudflareRunnerJob(body)) {
+			return json({ error: 'body is not a valid CloudflareRunnerJob' }, 400)
 		}
 		const active = new Runner(body, env)
 		runner = active

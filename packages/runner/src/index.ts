@@ -7,8 +7,8 @@
 //      vozka-runner deploy references it directly via its `main` entry; the control plane needs only
 //      the LIGHT surface below (the relay helpers + the binding TYPE).
 
-export type { LogLine, RunnerJob, RunnerState, RunnerStatus, SecretName } from './protocol'
-export { isRunnerJob, RUNNER_HEALTH_PATH, RUNNER_PORT } from './protocol'
+export type { LogLine, RunnerState, RunnerStatus } from './protocol'
+export { RUNNER_HEALTH_PATH, RUNNER_PORT } from './protocol'
 export { Runner } from './runner'
 export type { RunnerEnv, Spawner, SpawnHandlers, SpawnResult, SpawnSpec } from './runner'
 export { createServer } from './server'

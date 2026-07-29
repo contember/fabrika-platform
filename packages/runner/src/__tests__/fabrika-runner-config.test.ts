@@ -1,8 +1,8 @@
-import { Container, D1Database, R2Bucket, type Worker } from '@fabrika/config'
+import { Container, D1Database, R2Bucket, type Worker } from '@fabrika/provider-cloudflare'
 import { describe, expect, test } from 'bun:test'
 import config, { buildRunnerWorker } from '../../fabrika-runner.config'
 
-// vozka-runner's OWN deploy surface (packages/runner/fabrika-runner.config.ts) — DOGFOODING @fabrika/config.
+// vozka-runner's own deploy surface uses the Cloudflare provider authoring API.
 // These tests prove: defineApp accepts it, the resource graph materializes the executor's binding set
 // (the RunnerContainer DO + the SHARED, adopted-by-name R2/D1), and it is INFRA — no Access, no schema,
 // no runtime secrets. The shared D1 must NOT declare a migrations dir (the control plane owns the schema).

@@ -12,9 +12,9 @@
 // `cancelRun(runId)` destroys an in-flight run's container and records it failed. There is no HTTP
 // surface; vozka-runner has no public route and is reachable ONLY via the binding.
 
+import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { finishRun } from './finish-run'
-import type { RunnerJob } from './protocol'
 import { type ContainerLike, type RelayResult, relayRun } from './relay'
 import type { Env } from './worker-env'
 
@@ -27,7 +27,7 @@ export class VozkaRunner extends WorkerEntrypoint<Env> {
 	 * Returns the terminal status to the caller — best-effort, since the caller may have been reset
 	 * mid-deploy; the D1 write is what guarantees the run is recorded regardless.
 	 */
-	async startRun(job: RunnerJob): Promise<RelayResult> {
+	async startRun(job: CloudflareRunnerJob): Promise<RelayResult> {
 		const id = this.env.RUNNER.idFromName(job.runId)
 		const container = this.env.RUNNER.get(id)
 		await container.startAndWaitForPorts()

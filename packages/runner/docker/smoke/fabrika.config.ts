@@ -1,4 +1,4 @@
-import { defineApp, Worker } from '@fabrika/config'
+import { defineApp, Worker } from '@fabrika/provider-cloudflare'
 
 const stateNamespaceUrl = 'https://api.cloudflare.com/client/v4/accounts/smoke-account/storage/kv/namespaces'
 

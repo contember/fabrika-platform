@@ -1,5 +1,5 @@
+import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare'
 import { describe, expect, test } from 'bun:test'
-import type { RunnerJob } from '../protocol'
 import { Runner, type RunnerEnv, type SpawnHandlers, type SpawnResult, type SpawnSpec } from '../runner'
 
 // The Runner routes every child process through an injected `Spawner`, so these tests drive a full
@@ -19,7 +19,7 @@ async (spec: SpawnSpec, handlers: SpawnHandlers): Promise<SpawnResult> => {
 	return script(spec, handlers)
 }
 
-const baseJob = (overrides: Partial<RunnerJob> = {}): RunnerJob => ({
+const baseJob = (overrides: Partial<CloudflareRunnerJob> = {}): CloudflareRunnerJob => ({
 	runId: 'run-1',
 	repoUrl: 'https://github.com/acme/app.git',
 	ref: 'main',
@@ -40,14 +40,14 @@ describe('Runner pipeline', () => {
 		const runner = new Runner(baseJob({ workerDir: 'worker', configPath: 'fabrika.config.ts', dryRun: true }), makeEnv(spawn))
 		const status = await runner.run()
 
-		expect(rec.map((r) => r.spec.command)).toEqual(['git', 'bun', 'fabrika'])
+		expect(rec.map((r) => r.spec.command)).toEqual(['git', 'bun', 'fabrika-cloudflare'])
 		// clone into the run-keyed checkout dir
 		expect(rec[0]?.spec.args).toEqual(['clone', '--depth', '1', '--branch', 'main', 'https://github.com/acme/app.git', '/workspace/run-1'])
 		// install + deploy run in workerDir
 		expect(rec[1]?.spec).toMatchObject({ command: 'bun', args: ['install'], cwd: '/workspace/run-1/worker' })
 		// deploy is faithful to M1's CLI contract
 		expect(rec[2]?.spec).toMatchObject({
-			command: 'fabrika',
+			command: 'fabrika-cloudflare',
 			args: ['deploy', '--env=stage', '--config=fabrika.config.ts', '--dry-run'],
 			cwd: '/workspace/run-1/worker',
 		})
@@ -82,44 +82,50 @@ describe('Runner pipeline', () => {
 		expect(lines.some((l) => l.text === 'Cloning https://github.com/acme/app.git @ main')).toBe(true)
 	})
 
-	test('credentials + secrets go into the deploy child env (never argv)', async () => {
+	test('credentials, secrets, vars and state namespace go into child env only', async () => {
 		const rec: RecordedSpawn[] = []
 		const spawn = makeSpawner(rec, () => ({ exitCode: 0 }))
 		const job = baseJob({
 			domain: 'stage.acme.com',
+			stateNamespace: 'legacy-state',
 			credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef', PROPUSTKA_URL: 'https://iam.acme.com' },
 			secrets: { SAMPLE_API_KEY: 'super-secret-value' },
+			vars: { PUBLIC_ORIGIN: 'public-value' },
 		})
 		await new Runner(job, makeEnv(spawn)).run()
 
-		const deploy = rec.find((r) => r.spec.command === 'fabrika')?.spec
+		const deploy = rec.find((r) => r.spec.command === 'fabrika-cloudflare')?.spec
 		expect(deploy?.env).toMatchObject({
 			CLOUDFLARE_ACCOUNT_ID: 'acc-123456',
 			CLOUDFLARE_API_TOKEN: 'tok-abcdef',
 			PROPUSTKA_URL: 'https://iam.acme.com',
 			VOZKA_DOMAIN: 'stage.acme.com',
+			CLOUDFLARE_STATE_NAMESPACE: 'legacy-state',
 			SAMPLE_API_KEY: 'super-secret-value',
+			PUBLIC_ORIGIN: 'public-value',
 		})
 		// No secret/cred value ever appears on argv.
 		const argvAll = rec.flatMap((r) => r.spec.args).join(' ')
 		expect(argvAll).not.toContain('super-secret-value')
 		expect(argvAll).not.toContain('tok-abcdef')
+		expect(argvAll).not.toContain('public-value')
 	})
 
-	test('secret + credential values are redacted from log lines', async () => {
+	test('credential, secret and var values are redacted from log lines', async () => {
 		const spawn = makeSpawner([], (spec, handlers) => {
-			if (spec.command === 'fabrika') {
-				handlers.onStdout('deploying with token tok-abcdef and key super-secret-value\n')
+			if (spec.command === 'fabrika-cloudflare') {
+				handlers.onStdout('deploying with token tok-abcdef, key super-secret-value and var public-value\n')
 			}
 			return { exitCode: 0 }
 		})
-		const job = baseJob({ secrets: { SAMPLE_API_KEY: 'super-secret-value' } })
+		const job = baseJob({ secrets: { SAMPLE_API_KEY: 'super-secret-value' }, vars: { PUBLIC_ORIGIN: 'public-value' } })
 		const runner = new Runner(job, makeEnv(spawn))
 		await runner.run()
 
 		const joined = runner.lines().map((l) => l.text).join('\n')
 		expect(joined).not.toContain('tok-abcdef')
 		expect(joined).not.toContain('super-secret-value')
+		expect(joined).not.toContain('public-value')
 		expect(joined).toContain('***')
 	})
 
@@ -134,8 +140,8 @@ describe('Runner pipeline', () => {
 		expect(status.exitCode).toBeUndefined()
 	})
 
-	test('non-zero fabrika deploy exit fails the run and carries the exit code', async () => {
-		const spawn = makeSpawner([], (spec) => ({ exitCode: spec.command === 'fabrika' ? 1 : 0 }))
+	test('non-zero provider deploy exit fails the run and carries the exit code', async () => {
+		const spawn = makeSpawner([], (spec) => ({ exitCode: spec.command === 'fabrika-cloudflare' ? 1 : 0 }))
 		const status = await new Runner(baseJob(), makeEnv(spawn)).run()
 		expect(status.state).toBe('failed')
 		expect(status.exitCode).toBe(1)
@@ -144,7 +150,7 @@ describe('Runner pipeline', () => {
 	test('subscribers receive streamed lines live', async () => {
 		const seen: string[] = []
 		const spawn = makeSpawner([], (spec, handlers) => {
-			if (spec.command === 'fabrika') {
+			if (spec.command === 'fabrika-cloudflare') {
 				handlers.onStdout('line-a\nline-b\n')
 			}
 			return { exitCode: 0 }
