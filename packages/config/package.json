@@ -23,18 +23,16 @@
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",
-		"test": "bun test",
-		"gen:zerops": "bun scripts/generate-zerops-types.ts"
+		"test": "bun test"
 	},
 	"peerDependencies": {
-		"@fabrika/auth-core": "^0.0.1",
-		"oblaka-iac": ">=0.0.18"
+		"@fabrika/auth-core": "^0.0.1"
+	},
+	"dependencies": {
+		"@fabrika/provider-contract": "workspace:*"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^4.20260702.1",
 		"@fabrika/auth-core": "workspace:*",
-		"@types/bun": "latest",
-		"oblaka-iac": "^0.0.18",
-		"wrangler": "4.72.0"
+		"@types/bun": "latest"
 	}
 }

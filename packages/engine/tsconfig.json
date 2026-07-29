@@ -2,15 +2,7 @@
 	"extends": "../../tsconfig.base.json",
 	"compilerOptions": {
 		"noEmit": true,
-		"types": ["@cloudflare/workers-types", "@types/bun"],
-		// See the note in packages/config/tsconfig.json: `@fabrika/engine` imports `@fabrika/config`, which
-		// re-exports oblaka-iac's raw TS source, so the same one-flag relaxation applies here. Our own
-		// code stays fully strict otherwise.
-		"noUncheckedIndexedAccess": false,
-		// `deploy()` pulls oblaka's `commands/` source (e.g. `input.ts`) into this program; it reads
-		// `process.env.CLOUDFLARE_*` with dot access, which trips `noPropertyAccessFromIndexSignature`.
-		// Relaxed ONLY to accommodate the dependency's source — our own code uses bracket access.
-		"noPropertyAccessFromIndexSignature": false
+		"types": ["@types/bun"]
 	},
-	"include": ["src/**/*", "fixtures/**/*"]
+	"include": ["src/**/*"]
 }

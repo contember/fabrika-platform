@@ -10,9 +10,6 @@
 	"publishConfig": {
 		"access": "public"
 	},
-	"bin": {
-		"fabrika": "./src/cli.ts"
-	},
 	"files": [
 		"src",
 		"!src/**/__tests__/**"
@@ -29,17 +26,9 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@fabrika/config": "workspace:*"
-	},
-	"peerDependencies": {
-		"@fabrika/auth": "^0.0.1",
-		"oblaka-iac": ">=0.0.18"
+		"@fabrika/provider-contract": "workspace:*"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^4.20260702.1",
-		"@fabrika/auth": "workspace:*",
-		"@types/bun": "latest",
-		"oblaka-iac": "^0.0.18",
-		"wrangler": "4.72.0"
+		"@types/bun": "latest"
 	}
 }
