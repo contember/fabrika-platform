@@ -52,26 +52,33 @@ opice); the rename is a deliberate, one-time break — see
 
 ## How a deploy works
 
-Today (Cloudflare): the control plane accepts a deploy request, takes a lock, and
-hands the run to a **Cloudflare Container** which clones the repo, installs
-dependencies, and runs the engine. The engine executes a fixed ordered plan —
-build → provision → migrate → deploy-worker → reconcile-schema → sync-secrets. The
-runner is a separate Worker so that a self-deploy does not reset the container
-executing it.
+The control plane accepts a deploy request, takes a per-app-environment lock, and
+dispatches through a platform-specific **`DeployDriver`**
+([ADR-0002](../decisions/0002-deploy-driver-owns-the-plan.md)).
 
-Decided (both platforms): plan derivation moves out of the engine and into a
-**`DeployDriver`** per platform
-([ADR-0002](../decisions/0002-deploy-driver-owns-the-plan.md)), because that fixed
-order is a Cloudflare artifact. On Zerops there is **no runner and no container** at
-all — a deploy is a handful of HTTP calls, because the platform runs the build
-itself ([ADR-0003](../decisions/0003-no-deploy-runner-on-zerops.md)).
+On Cloudflare, a separate runner Worker starts a Cloudflare Container. The
+container clones the repository, installs dependencies, and executes the
+Cloudflare plan. Keeping the runner separate lets the control plane deploy itself
+without resetting the container that owns the run.
+
+On Zerops, the app build runs `fabrika build --env=<env>` and produces a versioned
+`fabrika.manifest.json`. Registration stores that validated static data with the
+app-env's project and service ids. A queued deploy never imports app TypeScript:
+the Bun control process applies the compiled import, triggers the service pipeline,
+polls its app-version, and reconciles the IAM schema. It stores the app-version id
+as soon as Zerops accepts the pipeline. Startup and scheduled maintenance poll
+unfinished platform-owned versions, so a self-deploy or restart does not lose the
+terminal run state ([ADR-0003](../decisions/0003-no-deploy-runner-on-zerops.md)).
+
+Secret edits follow the same registered service address but are not a deploy step.
+The control plane writes or deletes them immediately through the service-env API
+and stores only a `zerops:` reference. It never writes an app secret at project
+scope.
 
 ## How auth works
 
-Today: `PropustkaAuth` is middleware **inside** each app — enforcement depends on
-the app wiring it up correctly.
-
-Decided: enforcement moves into a **proxy**
+Cloudflare apps can still enforce authorization through `PropustkaAuth` inside the
+app. The Zerops topology enforces access in a **proxy**
 ([ADR-0007](../decisions/0007-proxy-based-auth-enforcement.md)). Only the proxy is
 publicly routed; app services stay internal, so bypassing auth stops being possible
 rather than merely discouraged. The proxy is not new code — it is the same
@@ -96,10 +103,9 @@ variable for this path.
 
 ## Where it's going
 
-The work is sequenced as a ladder of independently shippable phases; each rung is a
-backlog item — see [`../backlog/README.md`](../backlog/README.md). Phase 0 is the
-merge itself (rename, green build, no behaviour change); the last rung is
-self-hosting fabrika on Zerops.
+The portable runtime and Zerops control path are built and locally verified. The
+remaining portability milestone is a real-account bring-up — see
+[`backlog 05`](../backlog/05-bring-up-on-a-real-zerops-account.md).
 
 ## Related reference
 

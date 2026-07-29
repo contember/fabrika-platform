@@ -21,6 +21,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 <!-- one line per active sprint; empty between sprints -->
 
-- [Zerops control path (2026-07-29)](sprint-2026-07-29-zerops-control-path.md)
-  — static manifests, in-process deploys, service-level secrets, and restart
-  reconciliation.
+None.

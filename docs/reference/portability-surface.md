@@ -1,9 +1,9 @@
 # Portability surface
 
 Where fabrika touches Cloudflare, and what each touch point becomes when the
-control plane has to run somewhere else. The left column is the current code; the
-right column is decided (see the linked ADR / backlog item) but, except where
-noted, **not yet built** — the repo is Cloudflare-only today.
+control plane runs on Zerops. Both runtime adapter sets are implemented. The
+Cloudflare entrypoints use native bindings; the Bun entrypoints use Postgres,
+S3-compatible storage, HTTP, static files, and platform cron.
 
 ## Control plane — port inventory
 
@@ -37,6 +37,14 @@ From the per-layer analysis behind
 | Build            | **Per-provider**  | Cloudflare builds in a fabrika-controlled container; Zerops builds it itself.                                                      |
 | Artifact deploy  | **Per-provider**  | `wrangler deploy` vs an `/app-version` API call — and on Zerops build and deploy are one indivisible platform-side step.           |
 | Migrations       | **Per-provider**  | A discrete plan step on Cloudflare; `run.initCommands` at container start on Zerops.                                               |
+
+Zerops app configuration crosses a static boundary. `fabrika build` evaluates the
+app-owned TypeScript and emits a versioned `fabrika.manifest.json`; the control
+plane validates and stores that document, then deploys it without executing
+repository code. The app-env registry supplies the Zerops project and service ids.
+The same service address is used for deploys and immediate secret write-through.
+The triggered app-version id is persisted so startup and cron can reconcile a run
+after the initiating process disappears.
 
 ## IAM (`@fabrika/iam`) — port assessment
 

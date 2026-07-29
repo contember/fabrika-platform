@@ -1,3 +1,17 @@
+> **OUTCOME — shipped 2026-07-29.** A registered Zerops app now crosses a
+> versioned static-manifest boundary, deploys from the control process through
+> the Zerops API, updates the project's proxy manifest, writes secret edits
+> directly to its service, and survives control-process restarts. Commit map:
+> WU1 → `3ecc8ce`, WU2 → `f3ea61a`, WU3 → `762c7ce`, WU4 → `5ecfbde`,
+> WU5 → `62e9bce`; integration correction → `046fd51`. Verification: the root
+> typecheck and all 16 workspace typechecks; 1006 tests passed, 115 opt-in
+> Postgres/S3 tests skipped, 0 failed across 90 files; lint checked 344 files with
+> 0 errors; dprint passed.
+> No push, publish, or live Zerops deployment was performed. Backlog 12–16 was
+> deleted. Backlog 08 was archived because WU1 completed its duplicate acceptance
+> criteria and three ADRs retain it as decision context. Real-account bring-up
+> remains in backlog 05.
+
 # Sprint — Zerops control path (2026-07-29)
 
 **Goal.** Make a registered Zerops app deployable from the control plane without
@@ -167,3 +181,15 @@ reconciliation.
 
 - 2026-07-29 — Planning confirmed that no live-account credential is needed for
   the five code paths. Real bring-up stays in backlog 05.
+- 2026-07-29 — WU2 shipped the versioned manifest and `fabrika build`; WU3
+  connected registered Zerops app-envs to the in-process driver.
+- 2026-07-29 — WU1 shipped the baked proxy-manifest path with fail-closed
+  witnesses; WU4 shipped service-scoped secret write-through.
+- 2026-07-29 — WU5 persists the app-version id and reconciles it before queue
+  consumption and during maintenance. Platform-owned runs are exempt from the
+  generic stale sweep.
+- 2026-07-29 — Full workspace typecheck caught a source/compiled target widening
+  in generated platform topology. Commit `046fd51` narrowed that topology to its
+  actual source-only contract.
+- 2026-07-29 — Backlog 08 duplicated WU1 but remains useful as context for three
+  accepted ADRs, so it was archived instead of deleted.

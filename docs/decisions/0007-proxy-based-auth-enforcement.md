@@ -66,7 +66,7 @@ token locally and never leaves the project.
   app-internal checks the proxy cannot make.
 - Gate configuration now has a distribution problem — how it reaches the running
   proxy —
-  [`../backlog/08-distribute-gate-config-to-proxy.md`](../backlog/08-distribute-gate-config-to-proxy.md).
+  [`../archive/08-distribute-gate-config-to-proxy.md`](../archive/08-distribute-gate-config-to-proxy.md).
 - The proxy is on every request to every app, so it is a per-project single point of
   failure. It must stay thin — see
   [ADR-0008](0008-caddy-forward-auth-proxy.md) for how that is mitigated.

@@ -7,9 +7,10 @@ blocked-by: []
 # 05 — Bring the platform up on a real Zerops account
 
 Everything below the account line is built: the Postgres/Bun implementations, the
-Zerops driver, the proxy, the topology in [`deploy/zerops/`](../../deploy/zerops/),
-and an example app. All of it validates against Zerops' **published JSON schemas**
-and the driver is proven in dry-run.
+Zerops driver and control path, the static app manifest, the proxy, the topology
+in [`deploy/zerops/`](../../deploy/zerops/), and an example app. All of it
+validates against Zerops' **published JSON schemas** and the driver is proven in
+dry-run.
 
 **None of it has ever touched a real account.** Well-formed is not deployable. This
 item is the gap, and it can only be closed by someone with credentials.
@@ -34,8 +35,10 @@ item is the gap, and it can only be closed by someone with credentials.
 4. **Connect the GitHub/GitLab integration per service.** `buildFromGit` is
    public-repo only, so the topology deliberately leaves it unset.
 5. **Trigger the first build per service**, then re-apply the steady-state documents.
-6. **Ratify or replace the proxy manifest mechanism** — see
-   [`12-ratify-the-proxy-manifest-path.md`](./12-ratify-the-proxy-manifest-path.md).
+6. **Confirm the proxy build sees service-level variables.** The control plane
+   writes `FABRIKA_PROXY_MANIFEST_JSON` to the proxy service and triggers its
+   pipeline. Verify that the build container receives the value and that an empty
+   manifest remains fail-closed.
 
 ## The four behaviours to verify while you are in there
 

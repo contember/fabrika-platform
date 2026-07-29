@@ -14,32 +14,18 @@ unwieldy; numbers stay folder-local.
 
 ## The phase ladder
 
-Items 01–05 are the portability ladder. **Each rung is independently shippable** —
-that is the point of the sequencing, not an aspiration. They form a `blocked-by`
-chain, so work them in order.
+Items 01–05 formed the portability ladder. Phases 0–4 are complete. Phase 5 is
+the live-account bring-up in item 05.
 
-**Phase 0 — merge, rename, green build, no behaviour change
-([ADR-0001](../decisions/0001-merge-propustka-and-vozka.md)) — is complete.
-CI/release restoration remains explicit item 25.**
-
-> **Gap, flagged rather than invented:** the ladder covers the portability spine
-> only. The work implied by
-> [ADR-0005](../decisions/0005-compile-app-config-to-static-manifest.md) (the
-> `fabrika build` → `fabrika.manifest.json` step) and by
-> [ADR-0007](../decisions/0007-proxy-based-auth-enforcement.md) /
-> [ADR-0008](../decisions/0008-caddy-forward-auth-proxy.md) (the auth proxy) has
-> **no assigned rung**. Item 04 depends on the manifest existing, so at minimum the
-> manifest work must land before phase 4. Someone needs to place both explicitly.
+Phase 0 merged and renamed the repositories. The portable runtime, static
+manifest, proxy, and Zerops control path are built and locally verified. CI and
+release restoration remains explicit item 25.
 
 ## Items
 
 <!-- one line each: NN — short summary (link). Keep it short. -->
 
 - [05](05-bring-up-on-a-real-zerops-account.md) — **Next.** Everything below the account line is built and schema-valid; nothing has run against a real Zerops account.
-- [13](13-control-plane-cannot-target-zerops.md) — **Blocker.** The control plane builds no `zerops` target and `app_envs.zerops_project_id` does not exist — the driver has no caller.
-- [14](14-wire-edit-time-secret-write-through.md) — `putServiceEnv` exists; nothing calls it, so ADR-0004's write-through has no route.
-- [15](15-reconcile-in-flight-runs-at-startup.md) — ADR-0003's crash-safe requirement: poll `/app-version` on boot for runs left pending.
-- [16](16-compile-app-config-to-a-manifest.md) — ADR-0005 is unbuilt; the Zerops target is still a function, so the control plane would execute app code.
 - [17](17-one-gate-matcher-not-two.md) — The gate matcher is duplicated between the SDK and the proxy — the second implementation ADR-0008 rejected.
 - [18](18-shrink-the-app-sdk.md) — Delete in-process enforcement from `@fabrika/auth` now the proxy does it. Keep `redeemKey`.
 - [19](19-cancellation-gaps.md) — `reconcileSchema` takes no `AbortSignal`, so the one shared step is the one that cannot be cancelled.
@@ -48,8 +34,6 @@ CI/release restoration remains explicit item 25.**
 - [25](25-migrate-the-ci-workflows.md) — No CI at all. Restore deploy, release (OIDC trusted publishing) and the runner image build.
 - [06](06-can-zerops-secrets-be-read-back.md) — Open: can secret _values_ be read back from the Zerops API?
 - [07](07-rename-env-var-prefixes.md) — Sweep `VOZKA_*` → `FABRIKA_*`; decide whether `PROPUSTKA_*` follows.
-- [08](08-distribute-gate-config-to-proxy.md) — Open: how gate config reaches the running auth service (NOT Caddy — see ADR-0010).
 - [09](09-confirm-multi-domain-per-service.md) — Open: does Zerops allow multiple custom domains on one service?
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.
-- [12](12-ratify-the-proxy-manifest-path.md) — Ratify (or replace) how the proxy gets its manifest on Zerops.

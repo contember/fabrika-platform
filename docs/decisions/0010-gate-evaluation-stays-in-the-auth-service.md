@@ -77,7 +77,7 @@ single publicly-routed process. It does not get a vote on authorization.
   therefore pinned in the generated route (`?app=<id>`), with host lookup only as
   a fallback.
 - Gate distribution is still a real problem, just not a Caddy one — see
-  [`../backlog/08-distribute-gate-config-to-proxy.md`](../backlog/08-distribute-gate-config-to-proxy.md).
+  [`../archive/08-distribute-gate-config-to-proxy.md`](../archive/08-distribute-gate-config-to-proxy.md).
 
 ## Alternatives rejected
 

@@ -254,11 +254,11 @@ before new Zerops control-plane work builds on it.
   may then land with it.
 - The Zerops control-plane critical path
   ([10](../backlog/10-app-scope-secrets-on-zerops.md),
-  [12](../backlog/12-ratify-the-proxy-manifest-path.md),
-  [13](../backlog/13-control-plane-cannot-target-zerops.md),
-  [14](../backlog/14-wire-edit-time-secret-write-through.md),
-  [15](../backlog/15-reconcile-in-flight-runs-at-startup.md), and
-  [16](../backlog/16-compile-app-config-to-a-manifest.md)). This sprint makes the
+  [12](sprint-2026-07-29-zerops-control-path.md#wu1--ratify-the-proxy-manifest-path-backlog-12-effort-m),
+  [13](sprint-2026-07-29-zerops-control-path.md#wu3--drive-zerops-deploys-in-process-backlog-13-effort-l),
+  [14](sprint-2026-07-29-zerops-control-path.md#wu4--write-zerops-secret-edits-through-immediately-backlog-14-effort-m),
+  [15](sprint-2026-07-29-zerops-control-path.md#wu5--reconcile-in-flight-zerops-runs-backlog-15-effort-m), and
+  [16](sprint-2026-07-29-zerops-control-path.md#wu2--compile-app-config-to-a-static-manifest-backlog-16-effort-l)). This sprint makes the
   base honest; it does not add a Zerops caller.
 - Environment-prefix renames from
   [07](../backlog/07-rename-env-var-prefixes.md). Existing `VOZKA_*` and

@@ -73,7 +73,7 @@ Explicitly **not** a Go plugin implementing the auth logic inside Caddy.
   thin: stateless, so it scales horizontally and any instance can serve any request.
   Resist every future temptation to give it state.
 - Gate configuration has to reach Caddy somehow —
-  [`../backlog/08-distribute-gate-config-to-proxy.md`](../backlog/08-distribute-gate-config-to-proxy.md).
+  [`../archive/08-distribute-gate-config-to-proxy.md`](../archive/08-distribute-gate-config-to-proxy.md).
 - The proxy needs multiple custom domains pointing at one service on Zerops, which
   is unconfirmed —
   [`../backlog/09-confirm-multi-domain-per-service.md`](../backlog/09-confirm-multi-domain-per-service.md).
