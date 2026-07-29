@@ -9,6 +9,9 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Zerops deployment namespaces (2026-07-29)](sprint-2026-07-29-zerops-deployment-namespaces.md)
+  — added provider-owned placement boundaries with shared and exclusive Zerops
+  projects, proxy ownership, and optional shared PostgreSQL.
 - [Fabrika application runtime (2026-07-29)](sprint-2026-07-29-fabrika-app-runtime.md)
   — absorbed Trasa as `@fabrika/app` with explicit Cloudflare and Bun runtime
   entrypoints.

@@ -1,5 +1,37 @@
 # Sprint — Zerops deployment namespaces (2026-07-29)
 
+## OUTCOME
+
+Shipped first-class provider-owned deployment namespaces for Zerops.
+
+- `e431670` records the ownership and isolation model in ADR-0014.
+- `7916470`, `c7f0d56`, `4ef9a76`, `9ba400f`, `43c7a9c`, and `0617b91`
+  establish the open provider contract, persistence, APIs, and reconciliation
+  coordinates.
+- `bfd7549`, `a1c5213`, `c32f679`, `91e7a1c`, and `3344f02` provision Zerops
+  projects, enforce immutable service ownership, and deliver cheap, mid, and
+  full topologies including namespace-owned PostgreSQL.
+- `960f00e`, `9b8bf77`, and `74b7b21` add the dashboard, operator API/CLI, target
+  v2 migration, and namespace-aware deploy, proxy, secret, cancellation, and
+  reconciliation lifecycle.
+- `51da752` documents the resulting contract and operator workflows in
+  [`deployment-namespaces.md`](../reference/deployment-namespaces.md).
+
+Verification:
+
+- `cpu-lease run -n 4 -- bun run typecheck` passed every workspace package.
+- `cpu-lease run -n 4 -- bun test` passed 1,090 tests with no failures; 117
+  Postgres/S3 integration tests skipped because their external services were not
+  configured.
+- The dashboard route generator and its 16 tests passed.
+- The namespace operator and lifecycle targeted suites passed 101 tests.
+- Format checking, lint, tracked-document lint, and `git diff --check` passed.
+
+Moving deployed applications or data, destructive namespace deletion, per-app
+database/user brokerage inside cheap PostgreSQL, and automatic custom-domain
+binding remain outside this feature. Credentialed Zerops validation remains in
+[backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md).
+
 **Goal.** Make Zerops projects first-class deployment namespaces with cheap,
 mid, and full isolation presets, including a namespace-owned shared PostgreSQL
 service for the cheap preset.
@@ -278,3 +310,10 @@ The durable rationale and binding ownership rules are ratified by
 - 2026-07-29 — WU1 ratified namespace ownership, isolation presets, shared
   PostgreSQL semantics, and migration restrictions →
   [ADR-0014](../decisions/0014-provider-owned-deployment-namespaces.md).
+- 2026-07-29 — The public Zerops project response does not expose
+  `envIsolation`; reconciliation therefore reapplies observable service-level
+  isolation. Public documentation also does not establish an immutable
+  `buildFromGit` revision pin.
+- 2026-07-29 — WU2-WU8 shipped the open namespace contract, atomic ownership
+  claims, all three Zerops presets, target v2, namespace-routed lifecycle, and
+  operator API, CLI, and dashboard surfaces.
