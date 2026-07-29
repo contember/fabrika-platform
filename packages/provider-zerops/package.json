@@ -1,0 +1,37 @@
+{
+	"name": "@fabrika/provider-zerops",
+	"version": "0.0.1",
+	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/contember/fabrika-platform.git",
+		"directory": "packages/provider-zerops"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"src",
+		"!src/**/__tests__/**"
+	],
+	"exports": {
+		".": {
+			"bun": "./src/index.ts",
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		}
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test",
+		"gen:schema": "bun scripts/generate-zerops-types.ts"
+	},
+	"dependencies": {
+		"@fabrika/auth": "workspace:*",
+		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/provider-contract": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	}
+}
