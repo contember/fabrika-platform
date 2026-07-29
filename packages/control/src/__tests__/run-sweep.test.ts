@@ -47,4 +47,29 @@ describe('Db.sweepStaleRuns', () => {
 		expect(await db.sweepStaleRuns(30 * 60)).toBe(0)
 		expect(queryRows(sqlite, 'SELECT status FROM runs WHERE id = ?', 'fresh')[0]?.status).toBe('running')
 	})
+
+	test('does not reap a Zerops run once the platform owns an app version', async () => {
+		const { db, sqlite } = createHarness(() => NOW)
+		await db.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.upsertAppEnv({
+			appId: 'app',
+			env: 'prod',
+			platform: 'zerops',
+			zeropsProjectId: 'project',
+			zeropsServiceId: 'service',
+			manifestJson: '{}',
+		})
+		const old = NOW - 40 * 60
+		sqlite.exec(
+			`INSERT INTO runs (
+				id, app_id, env, ref, trigger, status, created_at, started_at, platform_run_id
+			) VALUES (
+				'platform-owned', 'app', 'prod', 'refs/heads/main', 'manual', 'running',
+				${old}, ${old}, 'version'
+			)`,
+		)
+
+		expect(await db.sweepStaleRuns(30 * 60)).toBe(0)
+		expect(queryRows(sqlite, 'SELECT status FROM runs WHERE id = ?', 'platform-owned')[0]?.status).toBe('running')
+	})
 })

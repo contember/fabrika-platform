@@ -11,10 +11,13 @@
 import type { Env } from './env'
 import { type FetchFn, pollPublicRepos, type PollSummary } from './repo-poll'
 import { db as makeDb, STALE_RUN_MAX_AGE_S } from './services'
+import { reconcileZeropsRunsFromEnv, type ZeropsReconcileSummary } from './zerops-reconcile'
 
 /** What one maintenance pass did. Returned for the tests + the log line; counts only, never a URL. */
 export interface MaintenanceSummary {
 	poll: PollSummary
+	/** Platform-owned Zerops runs observed or completed. */
+	zerops: ZeropsReconcileSummary
 	/** Orphaned runs marked failed by the sweep. */
 	swept: number
 }
@@ -48,9 +51,16 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	console.info(
 		`repo poll: polled=${poll.polled} triggered=${poll.triggered} unchanged=${poll.unchanged} errored=${poll.errored} skipped=${poll.skipped}`,
 	)
+	const zerops = await reconcileZeropsRunsFromEnv(env)
+	if (zerops.checked > 0 || zerops.waiting > 0) {
+		console.info(
+			`Zerops reconcile: checked=${zerops.checked} succeeded=${zerops.succeeded} failed=${zerops.failed} `
+				+ `in-progress=${zerops.inProgress} waiting=${zerops.waiting}`,
+		)
+	}
 	const swept = await db.sweepStaleRuns(STALE_RUN_MAX_AGE_S)
 	if (swept > 0) {
 		console.warn(`run sweep: marked ${swept} stale run(s) failed (> ${STALE_RUN_MAX_AGE_S}s in pending/running)`)
 	}
-	return { poll, swept }
+	return { poll, zerops, swept }
 }

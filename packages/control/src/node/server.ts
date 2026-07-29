@@ -24,6 +24,7 @@ import { decodeDeployJobMessage, runDeployJob } from '../consumer'
 import type { Env } from '../env'
 import { handleFetch } from '../routes'
 import { DEPLOY_LOCK_TTL_MS } from '../services'
+import { reconcileZeropsRunsFromEnv } from '../zerops-reconcile'
 import { createRuntime, type Runtime } from './runtime'
 
 /** Build the server's fetch handler for an assembled env. Exported so a test can drive it directly. */
@@ -94,6 +95,11 @@ export function createConsumer(runtime: Runtime): PostgresJobConsumer<{ runId: s
 async function main(): Promise<void> {
 	const runtime = createRuntime()
 	const consumer = createConsumer(runtime)
+	const reconciliation = await reconcileZeropsRunsFromEnv(runtime.env)
+	console.info(
+		`Zerops startup reconcile: checked=${reconciliation.checked} succeeded=${reconciliation.succeeded} `
+			+ `failed=${reconciliation.failed} in-progress=${reconciliation.inProgress} waiting=${reconciliation.waiting}`,
+	)
 	consumer.start()
 
 	const server = Bun.serve({

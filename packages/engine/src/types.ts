@@ -68,6 +68,8 @@ export interface ZeropsTarget {
 	buildFromGit?: string
 	/** Override the API host (a different Zerops region). Defaults to `api.app-prg1.zerops.io`. */
 	apiBaseUrl?: string
+	/** Persist the platform-owned application-version id as soon as the trigger resolves it. */
+	onAppVersion?: (appVersionId: string) => Promise<void>
 }
 
 /**

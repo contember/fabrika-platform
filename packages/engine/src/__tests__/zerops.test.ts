@@ -402,6 +402,23 @@ describe('execution', () => {
 		expect(rec.polls).toEqual(['ver-7'])
 	})
 
+	test('reports the resolved app-version immediately so a control plane can persist it', async () => {
+		const ids: string[] = []
+		await deploy(
+			makeConfig(),
+			makeCtx({
+				target: makeTarget({
+					onAppVersion: (id) => {
+						ids.push(id)
+						return Promise.resolve()
+					},
+				}),
+			}),
+			makeOptions(rec, { triggerVersionId: 'ver-persisted' }),
+		)
+		expect(ids).toEqual(['ver-persisted'])
+	})
+
 	test('await-deploy polls until ACTIVE, sleeping between iterations', async () => {
 		const result = await deploy(makeConfig(), makeCtx(), makeOptions(rec, { statuses: ['WAITING_TO_BUILD', 'BUILDING', 'DEPLOYING', 'ACTIVE'] }))
 		expect(result.status).toBe('succeeded')

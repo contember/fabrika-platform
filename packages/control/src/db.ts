@@ -296,6 +296,17 @@ export class Db {
 		return (result.meta.changes ?? 0) > 0
 	}
 
+	/** Pending/running runs whose work is owned by Zerops and must survive process restarts. */
+	async listInFlightZeropsRuns(): Promise<RunRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT r.* FROM runs r
+				JOIN app_envs e ON e.app_id = r.app_id AND e.env = r.env
+				WHERE e.platform = 'zerops' AND r.status IN ('pending', 'running')
+				ORDER BY r.id`)
+			.all<RunRow>()
+		return results
+	}
+
 	async deleteAppEnv(appId: string, env: string): Promise<boolean> {
 		const result = await this.d1.prepare('DELETE FROM app_envs WHERE app_id = ? AND env = ?').bind(appId, env).run()
 		return (result.meta.changes ?? 0) > 0
@@ -519,7 +530,15 @@ export class Db {
 		const now = this.now()
 		const result = await this.d1
 			.prepare(`UPDATE runs SET status = 'failed', finished_at = ?
-				WHERE status IN ('pending','running') AND COALESCE(started_at, created_at) < ?`)
+				WHERE status IN ('pending','running')
+					AND COALESCE(started_at, created_at) < ?
+					AND NOT EXISTS (
+						SELECT 1 FROM app_envs e
+						WHERE e.app_id = runs.app_id
+							AND e.env = runs.env
+							AND e.platform = 'zerops'
+							AND runs.platform_run_id IS NOT NULL
+					)`)
 			.bind(now, now - maxAgeSeconds)
 			.run()
 		return result.meta.changes ?? 0

@@ -159,6 +159,7 @@ export async function startZeropsRun(
 				...(env.ZEROPS_API_BASE_URL !== undefined && env.ZEROPS_API_BASE_URL !== ''
 					? { apiBaseUrl: env.ZEROPS_API_BASE_URL }
 					: {}),
+				onAppVersion: (appVersionId) => db(env).setRunPlatformId(input.run.id, appVersionId).then(() => {}),
 			},
 			...(env.PROPUSTKA_URL !== undefined && env.PROPUSTKA_URL !== '' ? { propustkaUrl: env.PROPUSTKA_URL } : {}),
 			...(env.PROPUSTKA_PROVISIONING_KEY !== undefined && env.PROPUSTKA_PROVISIONING_KEY !== ''
