@@ -17,7 +17,8 @@ Assumes the root CLAUDE.md.
 ```bash
 bun run serve            # run the in-container HTTP server locally (src/serve.ts)
 bun test                 # protocol + server + runner + relay + finish-run unit tests
-bun run docker:build     # docker build (context = repo ROOT); deps resolve from npm
+bun run docker:build     # docker build (context = repo ROOT); local @fabrika packages are copied in
+bun run docker:smoke     # verify the baked CLI and its offline Cloudflare dry-run fixture
 bun run oblaka           # regenerate vozka-runner's wrangler.jsonc (plan/dry) from oblaka.ts
 bun run bootstrap        # deploy vozka-runner itself, out-of-band (needs real CF creds; see the script header)
 ```
@@ -53,8 +54,9 @@ the worker as a value, so importers don't pull the Workers runtime. `@fabrika/co
 - **Secrets + credentials go to the `fabrika` child via ENV only** — never on argv, never echoed in a
   response, never in a log line verbatim (the runner redacts them). They arrive in the `POST /run` body.
 - **One run per process:** a second `POST /run` while one is active → 409.
-- **`oblaka-iac` installs from npm** (pinned in `docker/package.json`, in lockstep with the workspace) — the
-  published oblaka now ships the programmatic `deploy()`. The Docker build context is the repo ROOT.
+- **Every `@fabrika/*` image dependency is copied into the slim workspace.** `oblaka-iac` is the only
+  deploy-engine dependency installed from npm (pinned in `docker/package.json`, in lockstep with the
+  workspace). The Docker build context is the repo ROOT.
 - **`wrangler` must be on PATH globally** in the image — the deploy step shells out to a bare `wrangler` with cwd = the target repo.
 - **vozka-runner is SEPARATE so a fabrika deploy never resets it.** It's INFRA, not a registered app: no
   Access, no propustka schema, no runtime secrets (every credential arrives per-run in the `RunnerJob`).

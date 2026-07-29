@@ -40,7 +40,7 @@ export const buildRunnerWorker = (ctx: ResourceContext): Worker => {
 	const instanceType = instanceTypeFor(env)
 
 	// The runner image: off-local, reference a pre-built image PINNED in the repo (./image.json, bumped by
-	// the runner-image CI workflow on packages/runner|engine|config changes) — so a deploy needs NO docker AND
+	// runner-image CI when any copied workspace changes) — so a deploy needs NO docker AND
 	// the image ref travels WITH the code (like a lockfile; no drift vs a mutable registry var). Local dev
 	// builds from the Dockerfile; RUNNER_BUILD=1 forces a Dockerfile build (first bring-up, or a deliberate
 	// rebuild on a docker host). The CF registry namespace is the account id.
@@ -71,8 +71,8 @@ export const buildRunnerWorker = (ctx: ResourceContext): Worker => {
 				name: 'vozka-deploy-runner',
 				className: 'RunnerContainer',
 				image: runnerImage,
-				// `image_build_context` only applies to a Dockerfile build — it lets the Dockerfile COPY sibling
-				// packages (config/core/runner) from the repo ROOT (relative to packages/runner). A pre-built
+				// `image_build_context` only applies to a Dockerfile build — it lets the Dockerfile COPY all
+				// required local @fabrika packages from the repo ROOT (relative to packages/runner). A pre-built
 				// registry image needs no build context, so it's omitted there. (Build context requires oblaka-iac >=0.0.18.)
 				...(runnerFromDockerfile ? { imageBuildContext: '../..' } : {}),
 				maxInstances: env === 'prod' ? 10 : 3,

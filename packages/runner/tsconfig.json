@@ -12,5 +12,5 @@
 		"noUncheckedIndexedAccess": false,
 		"noPropertyAccessFromIndexSignature": false
 	},
-	"include": ["src/**/*", "oblaka.ts", "fabrika-runner.config.ts", "scripts/**/*"]
+	"include": ["src/**/*", "oblaka.ts", "fabrika-runner.config.ts", "scripts/**/*", "docker/**/*.ts"]
 }

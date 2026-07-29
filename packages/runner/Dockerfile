@@ -1,16 +1,15 @@
 # fabrika CI runner image.
 #
-# Bakes in the (unpublished) fabrika deploy toolchain — @fabrika/config + @fabrika/engine (the `fabrika`
-# CLI) + @fabrika/runner (the in-container server) — alongside git, node, bun and wrangler, so a
-# spawned container can clone a target app, `bun install` it, and run `fabrika deploy` against its
-# config.
+# Bakes in the unpublished fabrika workspace packages needed by @fabrika/engine (the `fabrika` CLI)
+# and @fabrika/runner (the in-container server) alongside git, node, bun and wrangler, so a spawned
+# container can clone a target app, `bun install` it, and run `fabrika deploy` against its config.
 #
 # BUILD CONTEXT = the fabrika-platform repo ROOT (so we can copy the workspace packages). Run via
 # `bun run docker:build` (from packages/runner):
 # docker build -f packages/runner/Dockerfile -t vozka-runner <repo-root>
 #
-# oblaka-iac, @fabrika/auth* and wrangler all resolve from npm; oblaka-iac is pinned (docker/package.json)
-# to the version that ships the programmatic `deploy()` the engine calls.
+# Only oblaka-iac and wrangler resolve from npm. oblaka-iac is pinned in docker/package.json to the
+# version that ships the programmatic `deploy()` the engine calls.
 
 FROM ubuntu:24.04
 
@@ -41,12 +40,16 @@ RUN bun install -g wrangler@4.72.0
 
 WORKDIR /opt/fabrika
 
-# A self-contained workspace: just the three packages the runner needs at runtime. `bun install`
-# resolves oblaka-iac + @fabrika/auth* from npm (wrangler is installed globally above).
+# A self-contained workspace containing every local package the runner and deploy CLI resolve.
+# oblaka-iac comes from npm; wrangler is installed globally above.
 COPY packages/runner/docker/package.json ./package.json
+COPY packages/auth-core ./packages/auth-core
+COPY packages/auth ./packages/auth
 COPY packages/config ./packages/config
 COPY packages/engine ./packages/engine
+COPY packages/platform ./packages/platform
 COPY packages/runner/src ./packages/runner/src
+COPY packages/runner/docker/smoke ./packages/runner/docker/smoke
 COPY packages/runner/package.json ./packages/runner/package.json
 
 RUN bun install

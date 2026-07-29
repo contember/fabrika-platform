@@ -3,14 +3,15 @@
 	"private": true,
 	"type": "module",
 	"workspaces": [
+		"packages/auth-core",
+		"packages/auth",
 		"packages/config",
 		"packages/engine",
+		"packages/platform",
 		"packages/runner"
 	],
-	"//": "Slimmed workspace root baked into the runner image. oblaka-iac, @fabrika/auth* and wrangler all resolve from npm; oblaka-iac is pinned to the version that ships the programmatic deploy() the engine calls (kept in lockstep with the workspace packages). wrangler is installed globally in the image (on PATH).",
+	"//": "Slimmed workspace root baked into the runner image. Local @fabrika packages resolve from the copied workspaces. oblaka-iac is pinned to the version that ships the programmatic deploy() the engine calls; wrangler is installed globally in the image.",
 	"dependencies": {
-		"@fabrika/auth": "^0.0.1",
-		"@fabrika/auth-core": "^0.0.1",
 		"oblaka-iac": "^0.0.18"
 	}
 }
