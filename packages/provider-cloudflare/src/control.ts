@@ -65,6 +65,12 @@ export interface CloudflareRunnerJob {
 	readonly vars?: Readonly<Record<string, string>>
 }
 
+const isStringRecord = (value: unknown): boolean =>
+	typeof value === 'object'
+	&& value !== null
+	&& !Array.isArray(value)
+	&& Object.values(value).every((entry) => typeof entry === 'string')
+
 /** Minimal structural validation for the Worker-to-runner JSON boundary. */
 export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunnerJob => {
 	if (
@@ -79,14 +85,31 @@ export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunner
 		return false
 	}
 	const credentials = value.credentials
-	return (
-		'CLOUDFLARE_ACCOUNT_ID' in credentials
+	const requiredCredentials = 'CLOUDFLARE_ACCOUNT_ID' in credentials
 		&& typeof credentials.CLOUDFLARE_ACCOUNT_ID === 'string'
 		&& credentials.CLOUDFLARE_ACCOUNT_ID !== ''
 		&& 'CLOUDFLARE_API_TOKEN' in credentials
 		&& typeof credentials.CLOUDFLARE_API_TOKEN === 'string'
 		&& credentials.CLOUDFLARE_API_TOKEN !== ''
-	)
+	if (!requiredCredentials) {
+		return false
+	}
+	if (
+		('PROPUSTKA_URL' in credentials && credentials.PROPUSTKA_URL !== undefined && typeof credentials.PROPUSTKA_URL !== 'string')
+		|| ('PROPUSTKA_PROVISIONING_KEY' in credentials
+			&& credentials.PROPUSTKA_PROVISIONING_KEY !== undefined
+			&& typeof credentials.PROPUSTKA_PROVISIONING_KEY !== 'string')
+		|| ('workerDir' in value && value.workerDir !== undefined && typeof value.workerDir !== 'string')
+		|| ('configPath' in value && value.configPath !== undefined && typeof value.configPath !== 'string')
+		|| ('stateNamespace' in value && value.stateNamespace !== undefined && typeof value.stateNamespace !== 'string')
+		|| ('domain' in value && value.domain !== undefined && typeof value.domain !== 'string')
+		|| ('dryRun' in value && value.dryRun !== undefined && typeof value.dryRun !== 'boolean')
+		|| ('secrets' in value && value.secrets !== undefined && !isStringRecord(value.secrets))
+		|| ('vars' in value && value.vars !== undefined && !isStringRecord(value.vars))
+	) {
+		return false
+	}
+	return true
 }
 
 export interface ResolvedCloudflareSource {

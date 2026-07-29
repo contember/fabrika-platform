@@ -113,4 +113,20 @@ describe('Cloudflare control provider', () => {
 			})
 		).toThrow('expected "cloudflare"')
 	})
+
+	test('rejects malformed optional runner fields', () => {
+		const valid = {
+			runId: 'run-1',
+			repoUrl: 'https://github.com/example/api.git',
+			ref: 'main',
+			env: 'prod',
+			credentials: {
+				CLOUDFLARE_ACCOUNT_ID: 'account-1',
+				CLOUDFLARE_API_TOKEN: 'token-1',
+			},
+		}
+		expect(isCloudflareRunnerJob({ ...valid, dryRun: 'yes' })).toBe(false)
+		expect(isCloudflareRunnerJob({ ...valid, secrets: { API_KEY: 42 } })).toBe(false)
+		expect(isCloudflareRunnerJob({ ...valid, credentials: { ...valid.credentials, PROPUSTKA_URL: 42 } })).toBe(false)
+	})
 })
