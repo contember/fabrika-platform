@@ -8,13 +8,13 @@
  *   bun run scripts/dryrun-verify.ts
  */
 import { deploy } from '@fabrika/engine'
-import type { RuntimeProviderRun } from '@fabrika/provider-contract'
 import {
 	cloudflareArtifact,
+	type CloudflareCollaborators,
 	createCloudflareProvider,
 	defaultCloudflareCollaborators,
-	type CloudflareCollaborators,
 } from '@fabrika/provider-cloudflare'
+import type { RuntimeProviderRun } from '@fabrika/provider-contract'
 import { resolve } from 'node:path'
 
 // fabrika.config's `access` declaration throws without VOZKA_DOMAIN (eager, like propustka/poplach) —

@@ -1,10 +1,4 @@
-import {
-	compileFabrikaManifest,
-	defineApp,
-	type ZeropsAppVersion,
-	zeropsArtifactCodec,
-	zeropsStoredTargetCodec,
-} from '@fabrika/provider-zerops'
+import { compileFabrikaManifest, defineApp, type ZeropsAppVersion, zeropsArtifactCodec, zeropsStoredTargetCodec } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { compileProjectProxyManifest, PROXY_MANIFEST_VARIABLE, syncZeropsProxy } from '../zerops-proxy'
 import { createHarness } from './helpers/harness'

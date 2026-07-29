@@ -13,7 +13,7 @@
 // NAME in `pipeline.secrets` and provisioned out-of-band (`wrangler secret put` / `.dev.vars`).
 
 import type { AppSchema } from '@fabrika/auth'
-import { D1Database, defineApp, Queue, R2Bucket, ServiceReference, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
+import { D1Database, defineApp, Queue, R2Bucket, type ResourceContext, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
 import { ACTIONS, SCOPES, VOZKA_APP_ID } from './src/actions'
 
 /**

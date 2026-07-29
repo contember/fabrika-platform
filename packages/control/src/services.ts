@@ -1,5 +1,5 @@
-import type { ControlProvider } from '@fabrika/provider-contract'
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
+import type { ControlProvider } from '@fabrika/provider-contract'
 import type { ApiDeps } from './api/router'
 import { Db, type RunRow } from './db'
 import type { Env } from './env'

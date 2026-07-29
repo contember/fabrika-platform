@@ -479,7 +479,6 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 		expect(results).toHaveLength(1)
 		expect(results[0]?.attempts).toBe(0)
 	})
-
 })
 
 describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () => {

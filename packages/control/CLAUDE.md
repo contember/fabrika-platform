@@ -34,7 +34,7 @@ FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres 
 | deploy consumer | `queue()` → `runDeployJob`                     | `PostgresJobConsumer` → `runDeployJob`                              |
 | cron            | `scheduled()` → `runMaintenance`               | `run.crontab` → `src/node/cron.ts` → `runMaintenance`               |
 | migrations      | `wrangler d1 migrations apply` (`migrations/`) | `run.initCommands` → `src/node/migrate.ts` (`migrations-postgres/`) |
-| provider        | `@fabrika/provider-cloudflare` + `RUNNER_SVC` | `@fabrika/provider-zerops` + neutral engine                         |
+| provider        | `@fabrika/provider-cloudflare` + `RUNNER_SVC`  | `@fabrika/provider-zerops` + neutral engine                         |
 
 The shared layer is `routes.ts` · `consumer.ts` · `cron.ts` · `services.ts` and everything they reach.
 It imports only `@fabrika/provider-contract`. `src/index.ts` statically selects Cloudflare;

@@ -100,15 +100,17 @@ async function main(): Promise<void> {
 	// `pipeline.secrets`. Read from the environment; never inlined, never logged. CLOUDFLARE_API_TOKEN +
 	// the propustka provisioning key are fabrika's RUNTIME platform creds (it injects them into every
 	// deploy it runs), so they are required Worker secrets — a fabrika without them can't deploy/reconcile.
-	for (const name of [
-		'CLOUDFLARE_ACCOUNT_ID',
-		'CLOUDFLARE_API_TOKEN',
-		'PROPUSTKA_URL',
-		'PROPUSTKA_PROVISIONING_KEY',
-		'VOZKA_VAULT_KEY',
-		'GITHUB_APP_PRIVATE_KEY',
-		'GITHUB_WEBHOOK_SECRET',
-	]) {
+	for (
+		const name of [
+			'CLOUDFLARE_ACCOUNT_ID',
+			'CLOUDFLARE_API_TOKEN',
+			'PROPUSTKA_URL',
+			'PROPUSTKA_PROVISIONING_KEY',
+			'VOZKA_VAULT_KEY',
+			'GITHUB_APP_PRIVATE_KEY',
+			'GITHUB_WEBHOOK_SECRET',
+		]
+	) {
 		required(name)
 	}
 

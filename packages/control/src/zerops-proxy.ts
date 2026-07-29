@@ -4,10 +4,10 @@ import {
 	type FabrikaManifestV1,
 	parseFabrikaManifest,
 	ZEROPS_ACTIVE,
-	zeropsArtifactCodec,
-	type ZeropsApi,
-	zeropsStoredTargetCodec,
 	ZEROPS_TERMINAL,
+	type ZeropsApi,
+	zeropsArtifactCodec,
+	zeropsStoredTargetCodec,
 } from '@fabrika/provider-zerops'
 import type { Db } from './db'
 import { parseProviderEnvelope } from './run-lifecycle'

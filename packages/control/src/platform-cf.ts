@@ -8,13 +8,13 @@
 // D1 and Fetcher satisfy the neutral ports structurally. R2 and Queues need small return-type adapters.
 // The runner is not a core port: it is consumed only while composing the Cloudflare provider below.
 
-import { createCloudflareControlProvider, type CloudflareRunnerJob } from '@fabrika/provider-cloudflare'
-import type { ControlProvider, ProviderSource, ProviderTerminalOutcome } from '@fabrika/provider-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
+import { type CloudflareRunnerJob, createCloudflareControlProvider } from '@fabrika/provider-cloudflare'
+import type { ControlProvider, ProviderSource, ProviderTerminalOutcome } from '@fabrika/provider-contract'
 import type { VozkaRunner } from '@fabrika/runner'
 import type { Env } from './env'
-import { repoSource } from './services'
 import type { DeployJobMessage } from './run-lifecycle'
+import { repoSource } from './services'
 
 /**
  * The control-plane Worker's raw Cloudflare bindings + vars/secrets — what `WorkerEntrypoint` fills

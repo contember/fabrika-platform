@@ -1,11 +1,4 @@
-import {
-	type CloudflareAppConfig,
-	D1Database,
-	Queue,
-	R2Bucket,
-	ServiceReference,
-	type Worker,
-} from '@fabrika/provider-cloudflare'
+import { type CloudflareAppConfig, D1Database, Queue, R2Bucket, ServiceReference, type Worker } from '@fabrika/provider-cloudflare'
 import { beforeAll, describe, expect, test } from 'bun:test'
 import type { buildVozkaWorker as BuildVozkaWorker } from '../../fabrika.config'
 import { ACTIONS, SCOPES, VOZKA_APP_ID } from '../actions'

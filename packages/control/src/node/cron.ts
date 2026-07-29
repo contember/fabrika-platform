@@ -19,11 +19,12 @@ async function main(): Promise<void> {
 	const runtime = createRuntime()
 	try {
 		await runMaintenance(runtime.env, {
-			reconcile: () => reconcileProviderRuns({
-				database: db(runtime.env),
-				provider: runtime.provider,
-				releaseLock: (key, holder) => locks(runtime.env).release(key, holder),
-			}),
+			reconcile: () =>
+				reconcileProviderRuns({
+					database: db(runtime.env),
+					provider: runtime.provider,
+					releaseLock: (key, holder) => locks(runtime.env).release(key, holder),
+				}),
 		})
 	} finally {
 		await runtime.shutdown()
