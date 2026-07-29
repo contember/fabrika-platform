@@ -3,12 +3,10 @@
 A small notes API, deployed by fabrika **to Zerops**. It is a worked example meant to be copied: every
 file here is one an app author writes, and nothing in it is a stub.
 
-The Cloudflare example lives next door in [`../app`](../app). This is a **second example**, not a
-second target arm on that one, for a reason that shows up in the type system: `AppConfig` is a
-discriminated union where the Cloudflare arm carries `target?: undefined` and the Zerops arm carries
-`resources?: undefined`, so a single config cannot declare both. That restriction is honest — the two
-deployments disagree about the thing that matters most. On Cloudflare the app imports the SDK and
-enforces its own gates in-process; here it does not enforce them at all, because the proxy does
+The Cloudflare example lives next door in [`../app`](../app). This is a **second example** because each
+provider owns its authoring surface and build command. A config imports only the provider it targets,
+so provider-specific resource types do not leak into a shared union. On Cloudflare the app imports the
+SDK and enforces its own gates in-process; here it does not enforce them at all, because the proxy does
 ([ADR-0007](../../docs/decisions/0007-proxy-based-auth-enforcement.md)).
 
 ## What is where
@@ -43,8 +41,9 @@ Four steps, and the differences from Cloudflare's plan are all deliberate
   ([ADR-0004](../../docs/decisions/0004-secrets-live-in-the-platform.md)), so a deploy-time push would
   silently overwrite a client's GUI edit.
 
-`deploy/zerops/__tests__/example-app.test.ts` drives the real driver over a recording fake and asserts
-that exact plan, and the exact ordered sequence of API calls a real run would make.
+`deploy/zerops/__tests__/example-app.test.ts` drives the neutral deploy executor with the Zerops
+provider over a recording fake. It asserts that exact plan and the exact ordered sequence of API calls
+a real run would make.
 
 ## Where the secrets go
 

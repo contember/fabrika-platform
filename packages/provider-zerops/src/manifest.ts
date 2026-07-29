@@ -231,7 +231,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 
 export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): FabrikaManifestV1 {
 	if (config.target.services === undefined) {
-		throw new Error('fabrika build requires a source Zerops config, not an already compiled target')
+		throw new Error('fabrika-zerops build requires a source Zerops config')
 	}
 	const declaredVars = config.pipeline?.vars ?? []
 	const prior: Record<string, string | undefined> = {}
@@ -244,7 +244,7 @@ export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): Fa
 		const serviceHostnames = document.services.map((service) => service.hostname)
 		const deployService = config.target.deployService ?? (serviceHostnames.length === 1 ? serviceHostnames[0] : undefined)
 		if (deployService === undefined || !serviceHostnames.includes(deployService)) {
-			throw new Error('fabrika build: a multi-service Zerops app must name a valid deployService')
+			throw new Error('fabrika-zerops build: a multi-service Zerops app must name a valid deployService')
 		}
 		return {
 			manifestVersion: FABRIKA_MANIFEST_VERSION,

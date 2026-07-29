@@ -11,11 +11,21 @@
 //
 // NOT PROVEN: that Zerops accepts any of it. No request in this file leaves the process.
 
-import { compileImport, compileImportYaml, deploy, type DeployContext, type DeployOptions, type ZeropsTarget } from '@fabrika/engine'
-import type { ZeropsApi, ZeropsAppVersionStatus, ZeropsCollaborators } from '@fabrika/engine'
+import { deploy, type RuntimeProviderRun } from '@fabrika/engine'
 import notesConfig, { NOTES_DATABASE_SERVICE, NOTES_SERVICE, NOTES_UPSTREAM } from '@fabrika/example-zerops-app'
 import { notesGates } from '@fabrika/example-zerops-app/gates'
 import { NOTES_APP_ID } from '@fabrika/example-zerops-app/schema'
+import {
+	compileFabrikaManifest,
+	compileImport,
+	compileImportYaml,
+	createZeropsProvider,
+	type ZeropsApi,
+	type ZeropsAppVersionStatus,
+	type ZeropsCollaborators,
+	type ZeropsProvider,
+	type ZeropsRuntimeTarget,
+} from '@fabrika/provider-zerops'
 import { applicableGates, buildCaddyConfig, compileGates, parseProxyManifest, PROXY_TOKEN_HEADER, type ProxyManifest } from '@fabrika/proxy'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { PROXY_TOKEN_HEADER as APP_TOKEN_HEADER } from '../../../examples/zerops-app/src/authz'
@@ -96,38 +106,48 @@ const makeCollaborators = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): Z
 	},
 })
 
-/** The Zerops driver, built over the fake. Imported lazily so the fake is per test. */
-const makeOptions = async (rec: Recorded, statuses: ZeropsAppVersionStatus[] = ['ACTIVE']): Promise<DeployOptions> => {
-	const { createZeropsDriver } = await import('@fabrika/engine')
-	return {
-		log: (line) => {
-			rec.logs.push(line)
-		},
-		drivers: { zerops: createZeropsDriver(() => makeCollaborators(rec, statuses)) },
-	}
-}
-
 /**
  * The deploy's coordinates. `projectId` is the registry field ADR-0006 makes the topology decision with —
  * the `apps-prod` project this example's services are imported INTO. The token is a fake and is asserted
  * never to be logged.
  */
-const TARGET: ZeropsTarget = {
-	platform: 'zerops',
+const TARGET: ZeropsRuntimeTarget = {
 	projectId: 'proj-apps-prod',
 	serviceId: 'svc-api',
 	accessToken: 'zt-not-a-real-token',
-}
-
-const makeCtx = (overrides: Partial<DeployContext<ZeropsTarget>> = {}): DeployContext<ZeropsTarget> => ({
-	env: 'prod',
-	target: TARGET,
-	secrets: {},
-	cwd: '/repo',
 	propustkaUrl: 'https://iam.example.test',
 	adminKey: 'px_admin_placeholder',
+}
+
+const MANIFEST = compileFabrikaManifest(notesConfig, 'prod')
+
+const makeRun = (provider: ZeropsProvider, recorded: Recorded, overrides: Partial<RuntimeProviderRun> = {}): RuntimeProviderRun => ({
+	appId: notesConfig.id,
+	env: 'prod',
+	target: provider.encodeTarget(TARGET),
+	artifact: provider.encodeArtifact(MANIFEST),
+	secrets: {},
+	vars: {},
+	cwd: '/repo',
+	dryRun: false,
+	signal: new AbortController().signal,
+	events: {
+		log: (line) => {
+			recorded.logs.push(line)
+		},
+		externalId: () => Promise.resolve(),
+	},
 	...overrides,
 })
+
+const deployExample = (
+	recorded: Recorded,
+	statuses: ZeropsAppVersionStatus[] = ['ACTIVE'],
+	overrides: Partial<RuntimeProviderRun> = {},
+) => {
+	const provider = createZeropsProvider(() => makeCollaborators(recorded, statuses))
+	return deploy(provider.runtime, makeRun(provider, recorded, overrides))
+}
 
 let rec: Recorded
 beforeEach(() => {
@@ -183,7 +203,7 @@ describe('the app compiles to an import that is applied INTO an existing project
 
 describe('dryRun makes NO call at all, and says what each step would have done', () => {
 	test('the plan is Zerops-shaped: no build, no migrate, no sync-secrets', async () => {
-		const result = await deploy(notesConfig, makeCtx({ dryRun: true }), await makeOptions(rec))
+		const result = await deployExample(rec, ['ACTIVE'], { dryRun: true })
 		expect(result.status).toBe('succeeded')
 		expect(result.plan.steps.map((step) => step.id)).toEqual(['apply-import', 'trigger-deploy', 'await-deploy', 'reconcile-schema'])
 		expect(result.plan.steps.map((step) => step.kind)).toEqual(['apply-import', 'trigger-deploy', 'await-deploy', 'reconcile-schema'])
@@ -192,12 +212,12 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 	})
 
 	test('not one collaborator call is made', async () => {
-		await deploy(notesConfig, makeCtx({ dryRun: true }), await makeOptions(rec))
+		await deployExample(rec, ['ACTIVE'], { dryRun: true })
 		expect(rec.calls).toEqual([])
 	})
 
 	test('the narrative names all four effects, in order', async () => {
-		await deploy(notesConfig, makeCtx({ dryRun: true }), await makeOptions(rec))
+		await deployExample(rec, ['ACTIVE'], { dryRun: true })
 		const narrative = rec.logs.filter((line) => line.includes('[dry-run]')).map((line) => line.trim())
 		expect(narrative).toEqual([
 			`[dry-run] would POST the import for 2 service(s) to project ${TARGET.projectId}:`,
@@ -208,7 +228,7 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 	})
 
 	test('the import it would POST is echoed in full, so a plan is reviewable without credentials', async () => {
-		await deploy(notesConfig, makeCtx({ dryRun: true }), await makeOptions(rec))
+		await deployExample(rec, ['ACTIVE'], { dryRun: true })
 		const echoed = rec.logs.filter((line) => line.startsWith('  │ ')).map((line) => line.slice(4)).join('\n')
 		expect(validateYaml('import', echoed)).toEqual([])
 		expect(echoed).toContain(`hostname: ${NOTES_SERVICE}`)
@@ -216,14 +236,14 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 	})
 
 	test('and the access token never reaches the log', async () => {
-		await deploy(notesConfig, makeCtx({ dryRun: true }), await makeOptions(rec))
+		await deployExample(rec, ['ACTIVE'], { dryRun: true })
 		expect(rec.logs.join('\n')).not.toContain(TARGET.accessToken)
 	})
 })
 
 describe('a real run makes exactly these calls, in exactly this order', () => {
 	test('import → trigger → open the log → poll → relay → reconcile', async () => {
-		const result = await deploy(notesConfig, makeCtx(), await makeOptions(rec, ['BUILDING', 'DEPLOYING', 'ACTIVE']))
+		const result = await deployExample(rec, ['BUILDING', 'DEPLOYING', 'ACTIVE'])
 		expect(result.status).toBe('succeeded')
 		expect(rec.calls).toEqual([
 			// 1. apply the import (`override: true` makes re-applying safe)
@@ -247,32 +267,32 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 	})
 
 	test('the import goes to the project the REGISTRY named, and carries the compiled document', async () => {
-		await deploy(notesConfig, makeCtx(), await makeOptions(rec))
+		await deployExample(rec)
 		expect(rec.imports).toHaveLength(1)
 		expect(rec.imports[0]?.projectId).toBe(TARGET.projectId)
 		expect(validateYaml('import', rec.imports[0]?.yaml ?? '')).toEqual([])
 	})
 
 	test("the pipeline trigger selects the app's named setup from its repository-root zerops.yaml", async () => {
-		await deploy(notesConfig, makeCtx(), await makeOptions(rec))
+		await deployExample(rec)
 		expect(rec.triggers).toEqual([{ serviceId: TARGET.serviceId, buildFromGit: undefined, zeropsSetup: NOTES_SERVICE }])
 	})
 
 	test("the schema reconcile names the app id the token's `aud` will carry", async () => {
-		await deploy(notesConfig, makeCtx(), await makeOptions(rec))
+		await deployExample(rec)
 		expect(rec.schemas).toEqual([{ url: 'https://iam.example.test', app: NOTES_APP_ID }])
 	})
 
 	test('NO secret is pushed as part of the deploy, even though the app declares two', async () => {
 		expect(notesConfig.pipeline?.secrets).toEqual(['NOTES_SESSION_PEPPER', 'NOTES_WEBHOOK_SIGNING_KEY'])
-		await deploy(notesConfig, makeCtx({ secrets: { NOTES_SESSION_PEPPER: 'x', NOTES_WEBHOOK_SIGNING_KEY: 'y' } }), await makeOptions(rec))
+		await deployExample(rec, ['ACTIVE'], { secrets: { NOTES_SESSION_PEPPER: 'x', NOTES_WEBHOOK_SIGNING_KEY: 'y' } })
 		// On Zerops the platform is the system of record; a deploy-time write would silently correct a
 		// client's GUI edit (ADR-0004). So: no env write, and no `sync-secrets` step to make one.
 		expect(rec.calls).not.toContain('putServiceEnv')
 	})
 
 	test('a failed pipeline fails the run and SKIPS the reconcile — a broken build never touches IAM', async () => {
-		const result = await deploy(notesConfig, makeCtx(), await makeOptions(rec, ['BUILDING', 'BUILD_FAILED']))
+		const result = await deployExample(rec, ['BUILDING', 'BUILD_FAILED'])
 		expect(result.status).toBe('failed')
 		expect(result.steps.find((step) => step.spec.id === 'reconcile-schema')?.status).toBe('skipped')
 		expect(rec.calls).not.toContain('reconcileSchema')

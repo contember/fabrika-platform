@@ -1,8 +1,8 @@
-// Invariants asserted on a COMPILED Zerops import document, on top of the two the engine's compiler
+// Invariants asserted on a COMPILED Zerops import document, on top of the provider compiler
 // already enforces (`assertZeropsInvariants` — no project-level env, `envIsolation: service`, no secret
 // values, no duplicate hostnames; ADR-0004).
 //
-// These three are here rather than in `@fabrika/engine` because each needs a fact the compiler does not
+// These three are here rather than in `@fabrika/provider-zerops` because each needs a fact the compiler does not
 // have:
 //
 //   • WHICH service is allowed to be public is a property of the topology (ADR-0007 says "the proxy"),
@@ -15,7 +15,7 @@
 // Everything here throws rather than returning a report: these are all cases where emitting the
 // document would be worse than emitting nothing.
 
-import type { ZeropsImportDocument } from '@fabrika/engine'
+import type { ZeropsImportDocument } from '@fabrika/provider-zerops'
 
 /**
  * The hostname rule, quoted from the published schema's own description: "duplicates in the same

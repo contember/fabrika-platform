@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Generates `src/zerops/schema.generated.ts` from Zerops' PUBLISHED JSON schema for `zerops-import.yaml`.
+// Generates `src/schema.generated.ts` from Zerops' PUBLISHED JSON schema for `zerops-import.yaml`.
 //
 // Why generated: the schema carries a 202-value service-type enum and a deeply nested inline `zerops.yaml`
 // object, both of which move whenever Zerops adds a runtime version. Hand-transcribing it guarantees drift;

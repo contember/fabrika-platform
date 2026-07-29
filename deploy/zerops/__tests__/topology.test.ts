@@ -5,7 +5,7 @@
 // require holds in them. They prove NOTHING about whether the platform accepts them, whether the
 // services boot, or whether anything is reachable. Nobody has run this against a real account.
 
-import { compileImport, type ZeropsImportDocument } from '@fabrika/engine'
+import { compileImport, type ZeropsImportDocument } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'

@@ -10,6 +10,9 @@
 	"publishConfig": {
 		"access": "public"
 	},
+	"bin": {
+		"fabrika-zerops": "./src/cli.ts"
+	},
 	"files": [
 		"src",
 		"!src/**/__tests__/**"

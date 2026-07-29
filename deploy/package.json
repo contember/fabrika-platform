@@ -11,9 +11,9 @@
 		"gen:schemas": "bun zerops/schemas/refresh.ts"
 	},
 	"dependencies": {
-		"@fabrika/config": "workspace:*",
 		"@fabrika/engine": "workspace:*",
-		"@fabrika/example-zerops-app": "workspace:*"
+		"@fabrika/example-zerops-app": "workspace:*",
+		"@fabrika/provider-zerops": "workspace:*"
 	},
 	"devDependencies": {
 		"@fabrika/auth-core": "workspace:*",

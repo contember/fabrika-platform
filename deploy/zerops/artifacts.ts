@@ -6,7 +6,7 @@
 // what an operator actually feeds to the platform, so it should be reviewable in a diff — but nobody
 // should hand-edit it, because the types are upstream of it.
 
-import { renderYaml } from '@fabrika/engine'
+import { renderYaml } from '@fabrika/provider-zerops'
 import { resolve } from 'node:path'
 import { fabrikaZeropsYaml } from './setups'
 import { compileTopology, fabrikaTopologies } from './topology'

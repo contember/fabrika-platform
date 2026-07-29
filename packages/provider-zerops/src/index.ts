@@ -14,6 +14,9 @@ export type {
 	ZeropsService,
 	ZeropsServiceEnv,
 } from './api'
+export { defineApp } from './authoring'
+export { parseZeropsCliArgs } from './cli-args'
+export type { ZeropsCliArgs } from './cli-args'
 export { zeropsTargetCodec } from './codec'
 export { defaultSleep, defaultZeropsCollaborators } from './collaborators'
 export type { Sleeper, ZeropsCollaboratorFactory, ZeropsCollaborators } from './collaborators'

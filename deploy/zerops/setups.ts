@@ -24,7 +24,7 @@
 //   3. Setup name == service hostname is the platform's own default matching rule, so option A needs no
 //      extra wiring for the common case, and `zeropsSetup` stays available for the uncommon one.
 //   4. It keeps `zeropsYaml` free for what it is genuinely good at: a targeted per-deploy OVERRIDE. The
-//      engine's compiler still supports it (`ZeropsServiceSpec.zeropsYaml`); it is simply not how a
+//      provider compiler still supports it (`ZeropsServiceSpec.zeropsYaml`); it is simply not how a
 //      service's normal build is described.
 //
 // ── The rule for `envVariables` in here ────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@
 // `SESSION_COOKIE_DOMAIN: .example.com`. Those are per-installation, and a placeholder domain in a
 // committed file is a value that boots wrong rather than not booting.)
 
-import type { ZeropsYaml, ZeropsYamlSetup } from '@fabrika/config'
+import type { ZeropsYaml, ZeropsYamlSetup } from '@fabrika/provider-zerops'
 
 /**
  * Deploy the whole workspace as complete top-level trees, not the individual packages.

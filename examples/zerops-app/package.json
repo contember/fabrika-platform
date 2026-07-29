@@ -20,18 +20,17 @@
 		}
 	},
 	"scripts": {
-		"build:manifest": "fabrika build --env=prod",
+		"build:manifest": "fabrika-zerops build --env=prod",
 		"dev": "bun src/server.ts",
 		"typecheck": "tsc --noEmit",
 		"test": "bun test"
 	},
 	"dependencies": {
 		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/provider-zerops": "workspace:*",
 		"jose": "^5.9.0"
 	},
 	"devDependencies": {
-		"@fabrika/config": "workspace:*",
-		"@fabrika/engine": "workspace:*",
 		"@types/bun": "latest"
 	}
 }

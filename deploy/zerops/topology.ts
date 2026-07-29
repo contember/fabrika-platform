@@ -1,6 +1,6 @@
 // fabrika's OWN Zerops topology: the two projects an installation is made of, declared in TypeScript and
 // compiled to `zerops-import.yaml` by the same compiler the deploy driver uses
-// (`compileImportYaml` / `compileProvisioningYaml` from `@fabrika/engine`).
+// (`compileImportYaml` / `compileProvisioningYaml` from `@fabrika/provider-zerops`).
 //
 // ── The two projects, and why two ─────────────────────────────────────────────────────────────────
 //
@@ -40,8 +40,13 @@
 // needs are listed in `./setups.ts` next to the setup that consumes them; they are written through the
 // env API, addressed by service, after the provisioning import creates it (ADR-0004).
 
-import type { ZeropsServiceSpec, ZeropsSourceTarget } from '@fabrika/config'
-import { compileImportYaml, compileProvisioningYaml, type ZeropsImportDocument } from '@fabrika/engine'
+import {
+	compileImportYaml,
+	compileProvisioningYaml,
+	type ZeropsImportDocument,
+	type ZeropsServiceSpec,
+	type ZeropsSourceTarget,
+} from '@fabrika/provider-zerops'
 import { assertTopologyInvariants } from './invariants'
 
 /**

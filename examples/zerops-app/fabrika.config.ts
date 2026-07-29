@@ -2,16 +2,14 @@
 //
 // The Cloudflare example (`examples/app`) declares `resources()` — an oblaka `Worker` graph. This one
 // declares `target: { platform: 'zerops', … }`, which is a set of SERVICES in a project. The two are
-// separate examples rather than two arms of one config, and that is not a stylistic choice: the
-// `AppConfig` union types the Cloudflare arm with `target?: undefined` and the Zerops arm with
-// `resources?: undefined`, so ONE config carrying both would not compile. It should not: the two
-// deployments disagree about the thing that matters most — on Cloudflare the app enforces its own gates
+// separate examples because each provider owns its authoring contract, so one config cannot accidentally
+// mix both. The deployments disagree about the thing that matters most — on Cloudflare the app enforces its own gates
 // in-process, and here it does not enforce them at all, because the proxy does (ADR-0007).
 //
 // ── What is deliberately NOT here ─────────────────────────────────────────────────────────────────
 //
 // `project`. The Zerops project already exists and its id is a REGISTRY field — `app_envs.zerops_project_id`
-// (ADR-0006). Nothing in this file, in the engine or in the driver assumes an app→project mapping, and
+// (ADR-0006). Nothing in this file or the provider assumes an app→project mapping, and
 // nothing keys off a naming convention. This app's services are imported INTO the project the registry
 // names; `deploy/zerops/generated/apps-prod.zerops-import.yaml` is the import that created it.
 //
@@ -22,7 +20,7 @@
 // A `build` command. Zerops has its own CI; `zerops.yaml` in this directory describes the build, and the
 // deploy TRIGGERS it rather than running it (ADR-0003).
 
-import { defineApp, type ResourceContext, type ZeropsServiceSpec } from '@fabrika/config'
+import { defineApp, type ZeropsResourceContext, type ZeropsServiceSpec } from '@fabrika/provider-zerops'
 import { notesGates } from './fabrika.gates'
 import { NOTES_APP_ID, notesSchema } from './fabrika.schema'
 
@@ -46,7 +44,7 @@ export const NOTES_UPSTREAM = `${NOTES_SERVICE}:3000`
  * means `notesapi` in `apps-stage` and `notesapi` in `apps-prod` are different services on different
  * private networks, and staging genuinely cannot reach production's database.
  */
-const services = (ctx: ResourceContext): ZeropsServiceSpec[] => [
+const services = (ctx: ZeropsResourceContext): ZeropsServiceSpec[] => [
 	{
 		hostname: NOTES_DATABASE_SERVICE,
 		// Availability is encoded in the TYPE, deliberately: `mode` is deprecated in the published schema
