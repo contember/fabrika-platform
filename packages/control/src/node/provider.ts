@@ -13,6 +13,23 @@ const required = (source: Record<string, string | undefined>, name: string): str
 	return value
 }
 
+export interface ZeropsNamespaceProcessConfig {
+	readonly clientId: string
+	readonly proxyBuildFromGit: string
+	readonly iamUrl: string
+	readonly iamKey: string
+}
+
+/** Read the installation-specific namespace inputs without hiding any behind provider defaults. */
+export const zeropsNamespaceProcessConfig = (
+	source: Record<string, string | undefined>,
+): ZeropsNamespaceProcessConfig => ({
+	clientId: required(source, 'ZEROPS_CLIENT_ID'),
+	proxyBuildFromGit: required(source, 'ZEROPS_PROXY_BUILD_FROM_GIT'),
+	iamUrl: required(source, 'ZEROPS_PROXY_IAM_URL'),
+	iamKey: required(source, 'ZEROPS_PROXY_IAM_KEY'),
+})
+
 /** Compose the only provider available in the process installation. */
 export function zeropsControlProvider(
 	env: Env,
@@ -27,6 +44,7 @@ export function zeropsControlProvider(
 		...(env.PROPUSTKA_PROVISIONING_KEY === undefined
 			? {}
 			: { adminKey: env.PROPUSTKA_PROVISIONING_KEY }),
+		namespaces: zeropsNamespaceProcessConfig(source),
 		execute: async (provider, run) => {
 			const result = await deploy(provider, run)
 			return { state: result.status === 'succeeded' ? 'succeeded' : 'failed' }
