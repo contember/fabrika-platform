@@ -1,5 +1,6 @@
 import type {
 	ControlProvider,
+	JsonValue,
 	ProviderDeploymentNamespace,
 	ProviderNamespaceCapabilities,
 	ProviderNamespaceMutationInput,
@@ -8,7 +9,7 @@ import { type Db, type DeploymentNamespaceRow, NamespaceResourceClaimConflictErr
 import { error, json, readJson } from '../http'
 import type { Authorized } from '../iam'
 import { nullableStringField, prop, stringField } from '../json'
-import { envelopeField, parseStoredEnvelope } from './provider-envelope'
+import { envelopeField, isJsonValue, parseStoredEnvelope } from './provider-envelope'
 
 export interface NamespaceContext {
 	db: Db
@@ -17,7 +18,7 @@ export interface NamespaceContext {
 	authorized: Authorized
 }
 
-function toNamespaceDto(row: DeploymentNamespaceRow): unknown {
+function toNamespaceDto(row: DeploymentNamespaceRow) {
 	return {
 		id: row.id,
 		env: row.env,
@@ -27,6 +28,21 @@ function toNamespaceDto(row: DeploymentNamespaceRow): unknown {
 		state: row.state,
 		lastError: row.last_error,
 		createdAt: row.created_at,
+	}
+}
+
+function toNamespaceDetail(c: NamespaceContext, row: DeploymentNamespaceRow): unknown | Response {
+	const operator = c.provider.namespaces?.operator
+	if (operator === undefined) {
+		return { ...toNamespaceDto(row), presentation: null }
+	}
+	try {
+		return {
+			...toNamespaceDto(row),
+			presentation: operator.present(toProviderNamespace(row)),
+		}
+	} catch (cause) {
+		return error(400, cause instanceof Error ? cause.message : 'invalid namespace presentation')
 	}
 }
 
@@ -199,7 +215,11 @@ async function auditMutation(
 
 export async function listNamespaces(c: NamespaceContext): Promise<Response> {
 	const rows = await c.db.listDeploymentNamespaces()
-	return json({ items: rows.filter((row) => row.provider === c.provider.id).map(toNamespaceDto) })
+	const operator = c.provider.namespaces?.operator
+	return json({
+		items: rows.filter((row) => row.provider === c.provider.id).map(toNamespaceDto),
+		operator: operator === undefined ? null : { presets: operator.presets },
+	})
 }
 
 export async function getNamespace(c: NamespaceContext, id: string): Promise<Response> {
@@ -210,7 +230,61 @@ export async function getNamespace(c: NamespaceContext, id: string): Promise<Res
 	if (row.provider !== c.provider.id) {
 		return error(409, `deployment namespace belongs to provider ${row.provider}`)
 	}
-	return json(toNamespaceDto(row))
+	const detail = toNamespaceDetail(c, row)
+	return detail instanceof Response ? detail : json(detail)
+}
+
+export async function planNamespace(c: NamespaceContext): Promise<Response> {
+	const capabilities = c.provider.namespaces
+	const operator = capabilities?.operator
+	if (capabilities === undefined || operator === undefined) {
+		return error(409, `provider ${c.provider.id} does not support namespace planning`)
+	}
+	const body = await readJson(c.request)
+	const id = stringField(body, 'id')
+	const env = stringField(body, 'env')
+	const preset = stringField(body, 'preset')
+	if (id === undefined || id.trim() === '' || env === undefined || env.trim() === '' || preset === undefined || preset.trim() === '') {
+		return error(400, 'id, env, and preset required')
+	}
+	const rawExclusiveAppId = prop(body, 'exclusiveAppId')
+	const exclusiveAppId = nullableStringField(body, 'exclusiveAppId')
+	if (rawExclusiveAppId !== undefined && (exclusiveAppId === undefined || exclusiveAppId === '')) {
+		return error(400, 'exclusiveAppId must be a non-empty string or null')
+	}
+	if (exclusiveAppId !== undefined && exclusiveAppId !== null && await c.db.getApp(exclusiveAppId) === null) {
+		return error(404, 'exclusive app not found')
+	}
+	const rawOptions = prop(body, 'options')
+	let options: JsonValue | undefined
+	if (rawOptions !== undefined) {
+		if (!isJsonValue(rawOptions)) {
+			return error(400, 'options must be JSON')
+		}
+		options = rawOptions
+	}
+	try {
+		const planned = operator.plan({
+			id,
+			env,
+			preset,
+			...(exclusiveAppId === undefined || exclusiveAppId === null ? {} : { exclusiveAppId }),
+			...(options === undefined ? {} : { options }),
+		})
+		if (
+			planned.namespace.id !== id
+			|| planned.namespace.env !== env
+			|| planned.namespace.exclusiveAppId !== (exclusiveAppId ?? undefined)
+			|| planned.namespace.target.provider !== c.provider.id
+		) {
+			return error(400, 'provider returned a namespace plan for different coordinates')
+		}
+		const normalized = normalizeNamespace(capabilities, c.provider.id, planned.namespace)
+		if (normalized instanceof Response) return normalized
+		return json({ namespace: normalized, presentation: operator.present(normalized) })
+	} catch (cause) {
+		return error(400, cause instanceof Error ? cause.message : 'invalid namespace plan')
+	}
 }
 
 export async function createNamespace(c: NamespaceContext): Promise<Response> {
@@ -235,7 +309,9 @@ export async function createNamespace(c: NamespaceContext): Promise<Response> {
 	const result = await mutateNamespace(c, created, 'provision')
 	const audited = result instanceof Response ? await c.db.getDeploymentNamespace(created.id) : result
 	if (audited !== null) await auditMutation(c, 'namespace.create', audited)
-	return result instanceof Response ? result : json(toNamespaceDto(result), { status: 201 })
+	if (result instanceof Response) return result
+	const detail = toNamespaceDetail(c, result)
+	return detail instanceof Response ? detail : json(detail, { status: 201 })
 }
 
 export async function adoptNamespace(c: NamespaceContext, id: string): Promise<Response> {
@@ -260,7 +336,9 @@ export async function adoptNamespace(c: NamespaceContext, id: string): Promise<R
 	const result = await mutateNamespace(c, created, 'reconcile')
 	const audited = result instanceof Response ? await c.db.getDeploymentNamespace(created.id) : result
 	if (audited !== null) await auditMutation(c, 'namespace.adopt', audited)
-	return result instanceof Response ? result : json(toNamespaceDto(result), { status: 201 })
+	if (result instanceof Response) return result
+	const detail = toNamespaceDetail(c, result)
+	return detail instanceof Response ? detail : json(detail, { status: 201 })
 }
 
 export async function reconcileNamespace(c: NamespaceContext, id: string): Promise<Response> {
@@ -293,5 +371,7 @@ export async function reconcileNamespace(c: NamespaceContext, id: string): Promi
 	const result = await mutateNamespace(c, row, 'reconcile')
 	const audited = result instanceof Response ? await c.db.getDeploymentNamespace(row.id) : result
 	if (audited !== null) await auditMutation(c, 'namespace.reconcile', audited)
-	return result instanceof Response ? result : json(toNamespaceDto(result))
+	if (result instanceof Response) return result
+	const detail = toNamespaceDetail(c, result)
+	return detail instanceof Response ? detail : json(detail)
 }

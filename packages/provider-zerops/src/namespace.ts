@@ -5,6 +5,10 @@ import type {
 	ProviderEnvelope,
 	ProviderNamespaceCapabilities,
 	ProviderNamespaceMutationInput,
+	ProviderNamespaceOperator,
+	ProviderNamespacePlanInput,
+	ProviderNamespacePresentation,
+	ProviderNamespacePreset,
 	ProviderRegistration,
 } from '@fabrika/provider-contract'
 import {
@@ -100,6 +104,17 @@ export interface ZeropsNamespacePresetInput {
 	readonly corePackage?: ZeropsProjectMode
 	readonly publicAccess?: ZeropsNamespacePublicAccess
 	readonly proxyBuildFromGit: string
+	readonly postgres?: ZeropsNamespacePostgres
+}
+
+export interface ZeropsNamespaceOperatorOptions {
+	readonly proxyBuildFromGit: string
+}
+
+export interface ZeropsNamespacePlanOptions {
+	readonly projectName?: string
+	readonly corePackage?: ZeropsProjectMode
+	readonly publicAccess?: ZeropsNamespacePublicAccess
 	readonly postgres?: ZeropsNamespacePostgres
 }
 
@@ -367,6 +382,140 @@ export const compileZeropsNamespaceTopology = (
 		createYaml: compileProvisioningYaml({ target: source, ctx: { env: namespace.env } }).yaml,
 		servicesProvisionYaml: compileProvisioningYaml({ target: serviceSource, ctx: { env: namespace.env } }).yaml,
 		servicesSteadyYaml: compileImportYaml({ target: serviceSource, ctx: { env: namespace.env } }).yaml,
+	}
+}
+
+const ZEROPS_NAMESPACE_PRESETS: readonly ProviderNamespacePreset[] = [
+	{
+		id: 'cheap',
+		label: 'Cheap',
+		description: 'Several apps share one project, proxy, and namespace-owned PostgreSQL service.',
+		requiresExclusiveApp: false,
+	},
+	{
+		id: 'mid',
+		label: 'Mid',
+		description: 'Several apps share one project and proxy; each app owns its prefixed database services.',
+		requiresExclusiveApp: false,
+	},
+	{
+		id: 'full',
+		label: 'Full',
+		description: 'One project and proxy are reserved for exactly one app.',
+		requiresExclusiveApp: true,
+	},
+]
+
+const parsePlanOptions = (value: JsonValue | undefined): ZeropsNamespacePlanOptions => {
+	if (value === undefined) return {}
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+		throw new Error('Zerops namespace plan options must be an object')
+	}
+	const supported = new Set(['projectName', 'corePackage', 'publicAccess', 'postgres'])
+	for (const key of Object.keys(value)) {
+		if (!supported.has(key)) {
+			throw new Error(`Zerops namespace plan option ${key} is not supported`)
+		}
+	}
+	const projectName = optionalString(value, 'projectName')
+	const corePackage = optionalString(value, 'corePackage')
+	if (corePackage !== undefined && corePackage !== 'LIGHT' && corePackage !== 'SERIOUS') {
+		throw new Error('Zerops namespace plan corePackage must be LIGHT or SERIOUS')
+	}
+	const publicAccess = optionalString(value, 'publicAccess')
+	if (publicAccess !== undefined && publicAccess !== 'custom-domain' && publicAccess !== 'zerops-subdomain') {
+		throw new Error('Zerops namespace plan publicAccess is not supported')
+	}
+	const postgres = parsePostgres(value)
+	return {
+		...(projectName === undefined ? {} : { projectName }),
+		...(corePackage === undefined ? {} : { corePackage }),
+		...(publicAccess === undefined ? {} : { publicAccess }),
+		...(postgres === undefined ? {} : { postgres }),
+	}
+}
+
+const namespacePresentation = (
+	namespace: ProviderDeploymentNamespace,
+	target: ZeropsNamespaceTarget,
+): ProviderNamespacePresentation => {
+	const preset = target.postgres !== undefined ? 'cheap' : namespace.exclusiveAppId === undefined ? 'mid' : 'full'
+	const projectName = target.projectName ?? namespace.id
+	const corePackage = target.corePackage ?? (namespace.env === 'prod' ? 'SERIOUS' : 'LIGHT')
+	const publicAccess = target.publicAccess ?? 'custom-domain'
+	const postgres = target.postgres === undefined
+		? 'App-owned database services'
+		: `Shared ${target.postgres.type}${target.postgres.profile === undefined ? '' : ` (${target.postgres.profile})`}`
+	const instructions = [
+		...(publicAccess === 'custom-domain'
+			? [`Bind each application domain to the \`proxy\` service in Zerops project \`${projectName}\`; keep every app service private.`]
+			: ['Use the proxy Zerops subdomain only for non-production access; app services must remain private.']),
+		...(target.postgres === undefined
+			? []
+			: ['Every app consuming the shared PostgreSQL binding shares its physical service and provider-issued credential.']),
+	]
+	return {
+		preset,
+		title: `${ZEROPS_NAMESPACE_PRESETS.find((candidate) => candidate.id === preset)?.label ?? preset} namespace`,
+		facts: [
+			{ label: 'Project', value: projectName },
+			{ label: 'Environment', value: namespace.env },
+			{ label: 'Core package', value: corePackage },
+			{ label: 'Placement', value: namespace.exclusiveAppId === undefined ? 'Shared' : `Exclusive to ${namespace.exclusiveAppId}` },
+			{ label: 'PostgreSQL', value: postgres },
+			{ label: 'Public access', value: publicAccess },
+		],
+		instructions,
+	}
+}
+
+/** Build the provider-owned namespace planning surface without any network collaborators. */
+export const createZeropsNamespaceOperator = (
+	options: ZeropsNamespaceOperatorOptions,
+): ProviderNamespaceOperator => {
+	if (options.proxyBuildFromGit.trim() === '') {
+		throw new Error('Zerops namespace proxyBuildFromGit must be a non-empty string')
+	}
+	return {
+		presets: ZEROPS_NAMESPACE_PRESETS,
+		plan(input: ProviderNamespacePlanInput) {
+			if (input.id.trim() === '' || input.env.trim() === '') {
+				throw new Error('Zerops namespace plan id and env must be non-empty')
+			}
+			if (input.preset !== 'cheap' && input.preset !== 'mid' && input.preset !== 'full') {
+				throw new Error(`Zerops namespace preset ${input.preset} is not supported`)
+			}
+			const exclusiveAppId = input.exclusiveAppId?.trim()
+			if (input.preset === 'full' && (exclusiveAppId === undefined || exclusiveAppId === '')) {
+				throw new Error('Zerops full namespace plan requires exclusiveAppId')
+			}
+			if (input.preset !== 'full' && exclusiveAppId !== undefined) {
+				throw new Error(`Zerops ${input.preset} namespace plan cannot reserve an exclusive app`)
+			}
+			const planOptions = parsePlanOptions(input.options)
+			if (input.preset !== 'cheap' && planOptions.postgres !== undefined) {
+				throw new Error(`Zerops ${input.preset} namespace plan cannot own PostgreSQL`)
+			}
+			const target = zeropsNamespacePreset({
+				preset: input.preset,
+				env: input.env,
+				projectName: planOptions.projectName ?? input.id,
+				proxyBuildFromGit: options.proxyBuildFromGit,
+				...(planOptions.corePackage === undefined ? {} : { corePackage: planOptions.corePackage }),
+				...(planOptions.publicAccess === undefined ? {} : { publicAccess: planOptions.publicAccess }),
+				...(planOptions.postgres === undefined ? {} : { postgres: planOptions.postgres }),
+			})
+			const namespace: ProviderDeploymentNamespace = {
+				id: input.id,
+				env: input.env,
+				...(exclusiveAppId === undefined ? {} : { exclusiveAppId }),
+				target: envelope(target),
+			}
+			return { namespace, presentation: namespacePresentation(namespace, target) }
+		},
+		present(namespace) {
+			return namespacePresentation(namespace, decodeEnvelope(namespace.target))
+		},
 	}
 }
 
@@ -777,5 +926,6 @@ export const createZeropsNamespaceCapabilities = (options: ZeropsNamespaceOption
 		registrationResourceClaims,
 		provision: (input) => mutateNamespace(input, options, 'provision'),
 		reconcile: (input) => mutateNamespace(input, options, 'reconcile'),
+		operator: createZeropsNamespaceOperator({ proxyBuildFromGit: options.proxyBuildFromGit }),
 	}
 }

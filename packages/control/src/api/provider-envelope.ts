@@ -2,7 +2,7 @@ import type { JsonValue, ProviderEnvelope } from '@fabrika/provider-contract'
 import { error } from '../http'
 import { numberField, prop, stringField } from '../json'
 
-const isJsonValue = (value: unknown): value is JsonValue => {
+export const isJsonValue = (value: unknown): value is JsonValue => {
 	if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
 		return true
 	}

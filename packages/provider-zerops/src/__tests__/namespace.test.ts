@@ -6,6 +6,7 @@ import { compileFabrikaManifest, manifestServiceHostnames } from '../manifest'
 import {
 	compileZeropsNamespaceTopology,
 	createZeropsNamespaceCapabilities,
+	createZeropsNamespaceOperator,
 	ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
 	ZEROPS_NAMESPACE_IAM_URL_VARIABLE,
 	ZEROPS_NAMESPACE_PROXY_MANIFEST_VARIABLE,
@@ -228,6 +229,31 @@ const run = async (
 	})
 
 describe('Zerops namespace policy and topology', () => {
+	test('exposes provider-owned cheap, mid, and full operator plans', () => {
+		const operator = createZeropsNamespaceOperator({
+			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+		})
+		expect(operator.presets.map((preset) => [preset.id, preset.requiresExclusiveApp])).toEqual([
+			['cheap', false],
+			['mid', false],
+			['full', true],
+		])
+
+		const cheap = operator.plan({ id: 'apps-prod', env: 'prod', preset: 'cheap' })
+		const mid = operator.plan({ id: 'apps-stage', env: 'stage', preset: 'mid' })
+		const full = operator.plan({ id: 'billing-prod', env: 'prod', preset: 'full', exclusiveAppId: 'billing' })
+		expect(zeropsNamespaceTargetCodec.decode(cheap.namespace.target.payload)).toMatchObject({
+			projectName: 'apps-prod',
+			corePackage: 'SERIOUS',
+			postgres: { type: 'postgresql:ha@18' },
+		})
+		expect(zeropsNamespaceTargetCodec.decode(mid.namespace.target.payload).postgres).toBeUndefined()
+		expect(full.namespace.exclusiveAppId).toBe('billing')
+		expect(full.presentation.facts).toContainEqual({ label: 'Placement', value: 'Exclusive to billing' })
+		expect(cheap.presentation.instructions.join(' ')).toContain('shares its physical service')
+		expect(() => operator.plan({ id: 'billing-prod', env: 'prod', preset: 'full' })).toThrow('requires exclusiveAppId')
+	})
+
 	test('resolves cheap, mid, and full presets without putting the presets in the neutral contract', () => {
 		const cheap = zeropsNamespacePreset({
 			preset: 'cheap',

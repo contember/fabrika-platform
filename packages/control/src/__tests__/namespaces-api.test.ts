@@ -68,6 +68,39 @@ function namespacedProvider(recording: ProviderRecording): ControlProvider {
 				recording.reconciles.push(input.namespace.id)
 				return withTarget(input.namespace, target('reconciled'))
 			},
+			operator: {
+				presets: [{
+					id: 'shared',
+					label: 'Shared',
+					description: 'Shared test namespace.',
+					requiresExclusiveApp: false,
+				}],
+				plan(input) {
+					const namespace: ProviderDeploymentNamespace = {
+						id: input.id,
+						env: input.env,
+						...(input.exclusiveAppId === undefined ? {} : { exclusiveAppId: input.exclusiveAppId }),
+						target: target(`planned-${input.preset}`),
+					}
+					return {
+						namespace,
+						presentation: {
+							preset: input.preset,
+							title: 'Planned namespace',
+							facts: [{ label: 'Environment', value: input.env }],
+							instructions: ['Review the plan.'],
+						},
+					}
+				},
+				present(namespace) {
+					return {
+						preset: namespace.exclusiveAppId === undefined ? 'shared' : 'exclusive',
+						title: 'Test namespace',
+						facts: [{ label: 'Environment', value: namespace.env }],
+						instructions: [],
+					}
+				},
+			},
 		},
 	}
 }
@@ -146,6 +179,36 @@ function registrationBody(namespaceId?: string): {
 }
 
 describe('deployment namespace API', () => {
+	test('publishes provider presets and plans without persistence or provider mutation', async () => {
+		const recording = providerRecording()
+		const { deps } = makeDeps(namespacedProvider(recording))
+
+		const listed = await handleApi(request('GET', '/namespaces'), deps)
+		const listBody: { operator: { presets: Array<{ id: string }> } } = await listed.json()
+		expect(listBody.operator.presets.map((preset) => preset.id)).toEqual(['shared'])
+
+		const planned = await handleApi(
+			request('POST', '/namespaces/plan', { id: 'apps-prod', env: 'prod', preset: 'shared' }),
+			deps,
+		)
+		expect(planned.status).toBe(200)
+		const planBody: {
+			namespace: { id: string; env: string; target: ProviderEnvelope }
+			presentation: { preset: string; facts: Array<{ label: string; value: string }> }
+		} = await planned.json()
+		expect(planBody.namespace).toEqual({
+			id: 'apps-prod',
+			env: 'prod',
+			target: target('planned-shared'),
+		})
+		expect(planBody.presentation).toMatchObject({
+			preset: 'shared',
+			facts: [{ label: 'Environment', value: 'prod' }],
+		})
+		expect(await deps.db.getDeploymentNamespace('apps-prod')).toBeNull()
+		expect(recording.provisions).toEqual([])
+	})
+
 	test('creates, lists, gets, adopts, and reconciles namespaces with audit events', async () => {
 		const recording = providerRecording()
 		const { deps, audits } = makeDeps(namespacedProvider(recording))
@@ -158,10 +221,13 @@ describe('deployment namespace API', () => {
 		expect((await deps.db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual(['service:proxy'])
 
 		const listed = await handleApi(request('GET', '/namespaces'), deps)
-		const listBody: { items: Array<{ id: string }> } = await listed.json()
+		const listBody: { items: Array<{ id: string }>; operator: { presets: Array<{ id: string }> } } = await listed.json()
 		expect(listBody.items.map((item) => item.id)).toEqual(['apps-prod'])
+		expect(listBody.operator.presets.map((preset) => preset.id)).toEqual(['shared'])
 		const got = await handleApi(request('GET', '/namespaces/apps-prod'), deps)
 		expect(got.status).toBe(200)
+		const gotBody: { presentation: { title: string } } = await got.json()
+		expect(gotBody.presentation.title).toBe('Test namespace')
 
 		const adopted = await handleApi(
 			request('POST', '/namespaces/legacy/adopt', { env: 'prod', target: target('existing') }),
@@ -246,6 +312,12 @@ describe('deployment namespace API', () => {
 		}
 		const unsupported = makeDeps(withoutNamespaces)
 		expect((await handleApi(request('POST', '/namespaces', namespaceBody('unsupported')), unsupported.deps)).status).toBe(409)
+		expect(
+			(await handleApi(
+				request('POST', '/namespaces/plan', { id: 'unsupported', env: 'prod', preset: 'shared' }),
+				unsupported.deps,
+			)).status,
+		).toBe(409)
 	})
 
 	test('requires namespace.manage on every namespace route', async () => {

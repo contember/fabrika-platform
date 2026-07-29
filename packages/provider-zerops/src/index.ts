@@ -48,6 +48,7 @@ export type { FabrikaImportDocument, FabrikaManifest, ManifestExpectation } from
 export {
 	compileZeropsNamespaceTopology,
 	createZeropsNamespaceCapabilities,
+	createZeropsNamespaceOperator,
 	ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
 	ZEROPS_NAMESPACE_IAM_URL_VARIABLE,
 	ZEROPS_NAMESPACE_POSTGRES_HOSTNAME,
@@ -58,13 +59,17 @@ export {
 	zeropsNamespaceTargetCodec,
 } from './namespace'
 export type {
+	ZeropsNamespaceOperatorOptions,
 	ZeropsNamespaceOptions,
+	ZeropsNamespacePlanOptions,
 	ZeropsNamespacePostgres,
 	ZeropsNamespacePresetInput,
 	ZeropsNamespacePublicAccess,
 	ZeropsNamespaceTarget,
 	ZeropsNamespaceTopology,
 } from './namespace'
+export { runZeropsNamespaceCommand } from './namespace-command'
+export type { ZeropsNamespaceCommandDependencies } from './namespace-command'
 export { buildZeropsPlan, resolveDeployHostname } from './plan'
 export type { ZeropsJobSpec, ZeropsPlan, ZeropsStepKind } from './plan'
 export { CANCELLED, createZeropsProvider, interpolateManifest, zeropsProvider } from './provider'

@@ -1,5 +1,5 @@
 import type { ProviderRunEvents } from './deploy'
-import type { ProviderEnvelope } from './json'
+import type { JsonValue, ProviderEnvelope } from './json'
 
 /** Provider-neutral coordinates for obtaining one app revision. */
 export interface ProviderSource {
@@ -114,6 +114,50 @@ export interface ProviderNamespaceMutationInput {
 	readonly events: ProviderNamespaceEvents
 }
 
+/** One provider-defined operator choice. Core does not interpret its id or description. */
+export interface ProviderNamespacePreset {
+	readonly id: string
+	readonly label: string
+	readonly description: string
+	readonly requiresExclusiveApp: boolean
+}
+
+/** Provider-neutral coordinates plus opaque provider options for a namespace preview. */
+export interface ProviderNamespacePlanInput {
+	readonly id: string
+	readonly env: string
+	readonly preset: string
+	readonly exclusiveAppId?: string
+	readonly options?: JsonValue
+}
+
+/** One safe, human-readable provider fact. Values must never contain credentials. */
+export interface ProviderNamespaceFact {
+	readonly label: string
+	readonly value: string
+}
+
+/** Provider-owned operator copy for a planned or persisted namespace. */
+export interface ProviderNamespacePresentation {
+	readonly preset: string
+	readonly title: string
+	readonly facts: readonly ProviderNamespaceFact[]
+	readonly instructions: readonly string[]
+}
+
+/** A mutation-free preview that can be submitted unchanged to namespace creation. */
+export interface ProviderNamespacePlan {
+	readonly namespace: ProviderDeploymentNamespace
+	readonly presentation: ProviderNamespacePresentation
+}
+
+/** Optional operator surface for providers that offer opinionated namespace presets. */
+export interface ProviderNamespaceOperator {
+	readonly presets: readonly ProviderNamespacePreset[]
+	plan(input: ProviderNamespacePlanInput): ProviderNamespacePlan
+	present(namespace: ProviderDeploymentNamespace): ProviderNamespacePresentation
+}
+
 /** Optional placement lifecycle owned by providers that use deployment namespaces. */
 export interface ProviderNamespaceCapabilities {
 	normalize(namespace: ProviderDeploymentNamespace): ProviderDeploymentNamespace
@@ -123,6 +167,7 @@ export interface ProviderNamespaceCapabilities {
 	registrationResourceClaims(registration: ProviderRegistration): readonly string[]
 	provision(input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace>
 	reconcile(input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace>
+	readonly operator?: ProviderNamespaceOperator
 }
 
 /**
