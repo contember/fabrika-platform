@@ -49,7 +49,7 @@ export interface AdminContext {
 	admin: { id: string; type: PrincipalType; label: string | null; permissions: PermissionEntry[] }
 	/** propustka's own app id — the audience the admin was resolved against; used for audit labeling. */
 	app: string
-	/** Correlation id for this admin request (cf-ray or a generated uuid). */
+	/** Correlation id supplied by the proxy/edge or generated at IAM. */
 	requestId: string
 	ctx: RequestContext
 }

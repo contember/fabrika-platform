@@ -13,6 +13,7 @@
 import { SESSION_COOKIE } from '@fabrika/auth-core'
 import type { Env, RequestContext } from '../env'
 import { generatePkce, randomToken } from '../oidc'
+import { requestId } from '../request-id'
 import { resolveUserPrincipal } from '../resolve'
 import { hashToken } from '../secret'
 import type { Config, Services } from '../services'
@@ -128,7 +129,7 @@ async function handleCallback(request: Request, services: Services, secure: bool
 	})
 	ctx.waitUntil(
 		services.db.writeAuthLog({
-			requestId: request.headers.get('cf-ray') ?? crypto.randomUUID(),
+			requestId: requestId(request),
 			app: 'propustka',
 			kind: 'authenticate',
 			principalId: resolved.principal.id,

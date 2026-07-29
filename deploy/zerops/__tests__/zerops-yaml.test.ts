@@ -1,13 +1,9 @@
-// Every `zerops.yaml` in the repository, checked against Zerops' PUBLISHED `zerops.yaml` JSON schema.
-//
-// Two of them are the live ones — fabrika's generated repository-root file and the example app's
-// hand-written one — and they must be clean. Two are the superseded per-package files, and their
-// deviations are RECORDED rather than tolerated: the assertions below name the exact error each one
-// produces, so fixing or deleting the file fails this test and forces the record to be updated.
+// Every live `zerops.yaml` in the repository, checked against Zerops' published JSON schema.
+// The generated repository-root file owns fabrika's three setups; the example app owns its fixture.
 
 import notesConfig from '@fabrika/example-zerops-app'
 import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { generatedArtifacts, REPO_ROOT } from '../artifacts'
 import { compileTopology, fabrikaTopologies } from '../topology'
@@ -126,22 +122,10 @@ describe('nothing committed carries a secret VALUE', () => {
 	}
 })
 
-describe('the superseded per-package files — deviations RECORDED, not tolerated', () => {
-	// These two predate the merged root file and are no longer read by anything: Zerops loads
-	// `zerops.yaml` from the repository ROOT. Their content lives on in `deploy/zerops/setups.ts`. Each
-	// assertion below names the exact deviation, so deleting or fixing the file fails here on purpose.
-
-	test('packages/iam/zerops.yaml: `protocol: TCP` is not a value the published schema accepts', () => {
-		// The schema contradicts itself here — the enum is lowercase (`tcp`/`udp`) while the field's own
-		// description, and every doc example, says `TCP`. The generated root file omits `protocol`
-		// entirely rather than pick a side.
-		expect(errorsIn('packages/iam/zerops.yaml')).toEqual(['zerops[0].run.ports[0].protocol: "TCP" is not one of the 2 allowed values'])
-	})
-
-	test('packages/proxy/zerops.yaml: `base: [go@1.23, bun@1.2]` names no build base the schema knows', () => {
-		// Build bases are OS-qualified (`alpine/go@…`), and there is no `go@1.23` at any spelling — the
-		// newest PINNED Go in the enum is 1.22. The generated root file uses `alpine/go@latest`, because
-		// Caddy v2.10.2 needs a newer toolchain than the newest pin.
-		expect(errorsIn('packages/proxy/zerops.yaml')).toEqual(['zerops[0].build.base: matched 0 of the `oneOf` branches, expected exactly 1'])
-	})
+describe('the generated root file is the only fabrika platform build specification', () => {
+	for (const path of ['packages/control/zerops.yaml', 'packages/iam/zerops.yaml', 'packages/proxy/zerops.yaml']) {
+		test(`${path} stays deleted`, () => {
+			expect(existsSync(resolve(REPO_ROOT, path))).toBe(false)
+		})
+	}
 })

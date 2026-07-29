@@ -6,7 +6,7 @@
 import type { AppGates } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { MemoryTokenCache } from '../cache'
-import { PROXY_TOKEN_HEADER } from '../constants'
+import { PROXY_TOKEN_HEADER, REQUEST_ID_HEADER } from '../constants'
 import { createVerifyService } from '../service'
 import { APP, FakeIam, type FakeIamOptions, HOST, ISSUER, manifestWith, signToken, signUserToken, verifyRequest } from './helpers'
 
@@ -34,6 +34,12 @@ describe('allow — public', () => {
 		const response = await verify(verifyRequest({ path: '/x', headers: { [PROXY_TOKEN_HEADER]: forged } }))
 		expect(response.status).toBe(204)
 		expect(response.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
+	})
+
+	test('the normalized request id is returned for Caddy to copy upstream', async () => {
+		const { verify } = service({ rules: [{ path: '/*', kind: 'public' }] })
+		const response = await verify(verifyRequest({ headers: { [REQUEST_ID_HEADER]: 'request-1' } }))
+		expect(response.headers.get(REQUEST_ID_HEADER)).toBe('request-1')
 	})
 })
 

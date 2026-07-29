@@ -43,14 +43,14 @@ source of truth for what the app checks.
 
 A provisioning step reconciles that declaration into Propustka via the idempotent admin
 endpoint `PUT /admin/apps/:app/schema`. The first reconcile is what REGISTERS the app with
-Propustka. Run [`scripts/provision-schemas.ts`](../../scripts/provision-schemas.ts):
+Propustka. Run [`scripts/provision-schema.ts`](./scripts/provision-schema.ts):
 
 ```bash
 # from this dir — dry-run prints the intended reconcile, pushes nothing
 bun run provision-schema -- --dry-run
 
 # push against a running Worker (local: ENVIRONMENT=local dev bypass → no auth needed)
-PROPUSTKA_URL=http://127.0.0.1:18190 bun run provision-schema
+PROPUSTKA_URL=http://127.0.0.1:18191 bun run provision-schema
 
 # remote: the admin API is gated by Propustka itself — supply a propustka-issued `px_` admin key
 PROPUSTKA_URL=https://propustka.example.com \
@@ -62,8 +62,9 @@ Reconcile is idempotent: it upserts the app's scopes/actions/`origin='app'` role
 app-origin rows you removed, and never touches admin-composed `origin='custom'` policies. The
 first reconcile registers the app id (`example-app`); after that it self-mirrors on every push.
 
-To add a NEW app: give it a `propustka.schema.ts` exporting a typed `AppSchema` + its app id,
-register it in `DECLARATIONS` in `scripts/provision-schemas.ts`, then run the script.
+In a real app, put the same schema on its `fabrika.config.ts`; the deploy engine runs this
+reconcile automatically. This example keeps the command explicit so the IAM flow can be
+exercised without a full deploy.
 
 ## Note: the harmless `auth_log` error
 

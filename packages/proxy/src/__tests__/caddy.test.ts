@@ -19,7 +19,7 @@ import {
 	type CaddySubrouteHandler,
 	uriRedactionPattern,
 } from '../caddy'
-import { PROXY_TOKEN_HEADER } from '../constants'
+import { PROXY_TOKEN_HEADER, REQUEST_ID_HEADER } from '../constants'
 import type { ProxyManifest } from '../manifest'
 
 const GATES: AppGates = { rules: [{ path: '/public/*', kind: 'public' }, { path: '/*', kind: 'human' }] }
@@ -170,6 +170,16 @@ describe('the forward_auth expansion matches Caddy v2.10.2', () => {
 		expect(copy?.handle[0]).toEqual({
 			handler: 'headers',
 			request: { set: { [PROXY_TOKEN_HEADER]: [placeholder] } },
+		})
+	})
+
+	test('the normalized request id is copied onto the upstream request', () => {
+		const copy = auth.handle_response?.[0]?.routes?.[2]
+		const placeholder = `{http.reverse_proxy.header.${REQUEST_ID_HEADER}}`
+		expect(copy?.match).toEqual([{ not: [{ vars: { [placeholder]: [''] } }] }])
+		expect(copy?.handle[0]).toEqual({
+			handler: 'headers',
+			request: { set: { [REQUEST_ID_HEADER]: [placeholder] } },
 		})
 	})
 })

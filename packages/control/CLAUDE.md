@@ -152,6 +152,6 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   On the Bun target that catch-all is NOT optional: `Bun.serve`'s default error page puts the exception
   AND the surrounding source lines in the response body, so `createFetchHandler` wraps every request and
   `Bun.serve`'s `error()` backstops anything raised outside it. Both answer a bare `internal error`.
-- **`zerops.yaml` lives here but Zerops reads it from the REPOSITORY ROOT.** `packages/iam/zerops.yaml`
-  and `packages/proxy/zerops.yaml` are the other blocks; merging the three `- setup:` entries into one
-  root file is a separate, deliberate step. Never edit a sibling package's block to do it.
+- **The generated root `zerops.yaml` is the only platform build specification.**
+  `deploy/zerops/setups.ts` owns the typed IAM, control, and proxy setups; do not add per-package
+  `zerops.yaml` files.

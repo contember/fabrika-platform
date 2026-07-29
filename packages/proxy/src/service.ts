@@ -89,7 +89,8 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 	const authorizer = new Authorizer(authorizerOptions)
 
 	return async (request: Request): Promise<Response> => {
-		const requestId = request.headers.get(REQUEST_ID_HEADER) ?? uuidv7()
+		const suppliedRequestId = request.headers.get(REQUEST_ID_HEADER)
+		const requestId = suppliedRequestId === null || suppliedRequestId === '' ? uuidv7() : suppliedRequestId
 		try {
 			const url = new URL(request.url)
 			if (url.pathname === healthPath) {
@@ -127,7 +128,7 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 			}
 			if (decision.outcome === 'allow') {
 				logger.info('allow', { ...fields, gate: decision.gate, subject: decision.subject })
-				const headers = new Headers({ 'cache-control': 'no-store' })
+				const headers = new Headers({ 'cache-control': 'no-store', [REQUEST_ID_HEADER]: requestId })
 				if (decision.token !== null) {
 					headers.set(tokenHeader, decision.token)
 				}

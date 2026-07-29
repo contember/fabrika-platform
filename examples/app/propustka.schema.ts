@@ -4,7 +4,7 @@ import type { AppSchema } from '@fabrika/auth-core'
  * The example app's authz vocabulary, declared in code (Access-as-code, authz edition).
  *
  * Each app OWNS its scope dimensions, action catalog, and roles and DECLARES them here.
- * `scripts/provision-schemas.ts` reconciles this into Propustka via the idempotent
+ * `scripts/provision-schema.ts` reconciles this into Propustka via the idempotent
  * `PUT /admin/apps/:app/schema` endpoint, so the IAM Worker's DB always mirrors what the
  * app actually checks at runtime (the `can()` / `scopedTo()` calls in `src/index.ts`).
  *
@@ -56,7 +56,7 @@ export const exampleAppSchema: AppSchema = {
 /**
  * The app id this schema is reconciled under — the SAME id the app passes to
  * `new PropustkaAuth(env.IAM, 'example-app', …)` in `src/index.ts`. The first schema
- * reconcile is what REGISTERS the app with Propustka. The reconcile script reads this so
+ * reconcile is what REGISTERS the app with Propustka. The example script reads this so
  * the declaration is the single source of truth for both the id and the vocabulary.
  */
 export const exampleAppId = 'example-app'

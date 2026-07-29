@@ -34,7 +34,14 @@
 
 import type { GateRule } from '@fabrika/auth-core'
 import { API_KEY_PREFIX } from '@fabrika/auth-core'
-import { APP_QUERY_PARAM, DEFAULT_VERIFY_PATH, FORWARDED_METHOD_HEADER, FORWARDED_URI_HEADER, PROXY_TOKEN_HEADER } from './constants'
+import {
+	APP_QUERY_PARAM,
+	DEFAULT_VERIFY_PATH,
+	FORWARDED_METHOD_HEADER,
+	FORWARDED_URI_HEADER,
+	PROXY_TOKEN_HEADER,
+	REQUEST_ID_HEADER,
+} from './constants'
 import type { ProxyApp, ProxyManifest } from './manifest'
 
 // ── The subset of Caddy's JSON schema we emit (field names verified against v2.10.2) ──────────────
@@ -234,13 +241,12 @@ function appRoute(app: ProxyApp, authUpstream: string, verifyPath: string, token
  * The `forward_auth` directive, expanded by hand. Matches what
  * `forwardauth/caddyfile.go` produces for:
  *
- *   forward_auth <authUpstream> { uri <verifyPath>?app=<id>; copy_headers <tokenHeader> }
+ *   forward_auth <authUpstream> { uri <verifyPath>?app=<id>; copy_headers <tokenHeader> <requestIdHeader> }
  *
  * including the no-op `vars` route (reverse_proxy skips a `handle_response` entry with no routes) and
  * the `not vars ""` guard on the copy (the headers handler would otherwise write an empty value).
  */
 function forwardAuth(app: ProxyApp, authUpstream: string, verifyPath: string, tokenHeader: string): CaddyReverseProxyHandler {
-	const placeholder = `{http.reverse_proxy.header.${tokenHeader}}`
 	return {
 		handler: 'reverse_proxy',
 		upstreams: [{ dial: authUpstream }],
@@ -259,12 +265,18 @@ function forwardAuth(app: ProxyApp, authUpstream: string, verifyPath: string, to
 			match: { status_code: [2] },
 			routes: [
 				{ handle: [{ handler: 'vars' }] },
-				{
-					match: [{ not: [{ vars: { [placeholder]: [''] } }] }],
-					handle: [{ handler: 'headers', request: { set: { [tokenHeader]: [placeholder] } } }],
-				},
+				copyResponseHeader(tokenHeader),
+				copyResponseHeader(REQUEST_ID_HEADER),
 			],
 		}],
+	}
+}
+
+function copyResponseHeader(header: string): CaddyRoute {
+	const placeholder = `{http.reverse_proxy.header.${header}}`
+	return {
+		match: [{ not: [{ vars: { [placeholder]: [''] } }] }],
+		handle: [{ handler: 'headers', request: { set: { [header]: [placeholder] } } }],
 	}
 }
 

@@ -2,6 +2,7 @@ import { type PermissionEntry, permits, type PrincipalType, SESSION_COOKIE } fro
 import { resolveCaller } from '../auth'
 import { principalStatus } from '../db'
 import type { Env, RequestContext } from '../env'
+import { requestId } from '../request-id'
 import { resolveUserPermissions } from '../resolve'
 import { hashToken } from '../secret'
 import type { Services } from '../services'
@@ -57,8 +58,7 @@ function extractCredentials(request: Request): {
 } {
 	const bearer = readBearer(request.headers.get('Authorization'))
 	const session = parseCookie(request.headers.get('Cookie'), SESSION_COOKIE)
-	const requestId = request.headers.get('cf-ray') ?? crypto.randomUUID()
-	return { bearer, session, requestId }
+	return { bearer, session, requestId: requestId(request) }
 }
 
 /** Read the token out of an `Authorization: Bearer <token>` header. Null when absent/non-bearer. */

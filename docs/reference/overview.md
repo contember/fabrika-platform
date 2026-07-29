@@ -82,6 +82,9 @@ over one shared TypeScript auth service
 
 The IAM service stays **global** — one identity database, one audit log, one admin
 UI. The proxy is **per environment project**, stateless and horizontally scalable.
+For correlation, the proxy preserves or creates `X-Request-Id` and Caddy copies it
+onto the allowed upstream request. IAM prefers that value, then `cf-ray`, then a
+locally generated UUID for audit records.
 
 ## Where it's going
 

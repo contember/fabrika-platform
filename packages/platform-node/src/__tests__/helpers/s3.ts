@@ -14,31 +14,55 @@
 import type { S3BlobStoreOptions } from '../../blob-s3'
 
 const PREFIX = 'FABRIKA_TEST_S3_'
+const REQUIRED_NAMES = [`${PREFIX}BUCKET`, `${PREFIX}ACCESS_KEY_ID`, `${PREFIX}SECRET_ACCESS_KEY`]
+
+export interface S3TestEnvironment {
+	[name: string]: string | undefined
+}
 
 /** Connection options from the environment, or null when these tests should skip. */
-export const s3Options: S3BlobStoreOptions | null = readOptions()
+export const s3Options: S3BlobStoreOptions | null = readS3Options(process.env)
 
 /** True when a real S3-compatible endpoint is configured. Use as `describe.skipIf(!hasS3)`. */
 export const hasS3 = s3Options !== null
 
-export const skipReason =
-	`skipped: set ${PREFIX}ENDPOINT / ${PREFIX}BUCKET / ${PREFIX}ACCESS_KEY_ID / ${PREFIX}SECRET_ACCESS_KEY to run the S3-backed tests`
+export const skipReason = `skipped: set ${PREFIX}BUCKET / ${PREFIX}ACCESS_KEY_ID / ${PREFIX}SECRET_ACCESS_KEY to run the S3-backed tests`
 
-function readOptions(): S3BlobStoreOptions | null {
-	const bucket = process.env[`${PREFIX}BUCKET`]
-	const accessKeyId = process.env[`${PREFIX}ACCESS_KEY_ID`]
-	const secretAccessKey = process.env[`${PREFIX}SECRET_ACCESS_KEY`]
-	if (bucket === undefined || accessKeyId === undefined || secretAccessKey === undefined) {
+/** No configuration skips; a partial configuration is an error rather than a false green. */
+export function readS3Options(environment: S3TestEnvironment): S3BlobStoreOptions | null {
+	const configured = REQUIRED_NAMES.filter((name) => present(environment[name]))
+	if (configured.length === 0) {
 		return null
 	}
-	const endpoint = process.env[`${PREFIX}ENDPOINT`]
+	const missing = REQUIRED_NAMES.filter((name) => !present(environment[name]))
+	if (missing.length > 0) {
+		throw new Error(`Incomplete S3 test configuration; missing ${missing.join(', ')}`)
+	}
+
+	const endpoint = optional(environment[`${PREFIX}ENDPOINT`])
 	return {
-		bucket,
-		accessKeyId,
-		secretAccessKey,
+		bucket: required(environment, `${PREFIX}BUCKET`),
+		accessKeyId: required(environment, `${PREFIX}ACCESS_KEY_ID`),
+		secretAccessKey: required(environment, `${PREFIX}SECRET_ACCESS_KEY`),
 		// MinIO defaults to path-style addressing; R2 and AWS accept it too, so it is the portable default.
 		virtualHostedStyle: false,
-		region: process.env[`${PREFIX}REGION`] ?? 'auto',
+		region: optional(environment[`${PREFIX}REGION`]) ?? 'auto',
 		...(endpoint !== undefined ? { endpoint } : {}),
 	}
+}
+
+function present(value: string | undefined): boolean {
+	return value !== undefined && value !== ''
+}
+
+function optional(value: string | undefined): string | undefined {
+	return present(value) ? value : undefined
+}
+
+function required(environment: S3TestEnvironment, name: string): string {
+	const value = environment[name]
+	if (value === undefined || value === '') {
+		throw new Error(`Missing ${name}`)
+	}
+	return value
 }
