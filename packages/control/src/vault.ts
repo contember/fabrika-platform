@@ -27,9 +27,10 @@
 // it, then swap the binding (or run reencryptAll as a one-shot maintenance task) — see the management
 // API. Losing it makes every vault value unrecoverable (by design).
 
-import type { SecretScope } from '@fabrika/engine'
 import type { SqlStatement } from '@fabrika/platform'
 import { uuidv7 } from './uuid'
+
+export type SecretScope = 'app' | 'app-env'
 
 const ALG = 'AES-GCM'
 /** GCM standard nonce length: 96 bits. A fresh random IV per encryption (value + DEK wrap). */

@@ -1,3 +1,4 @@
+import type { ControlProvider, ProviderEnvelope } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import type { ApiDeps } from '../api/router'
 import { handleApi } from '../api/router'
@@ -19,6 +20,26 @@ function testKey(): string {
 	return btoa(binary)
 }
 
+const envelope = (provider: string, payload: string): ProviderEnvelope => ({
+	provider,
+	version: 1,
+	payload,
+})
+
+const vaultProvider: ControlProvider = {
+	id: 'memory',
+	normalizeRegistration: (input) => input,
+	deploy: async () => ({ state: 'succeeded' }),
+}
+
+const storedEnvironment = (provider = 'memory') => ({
+	appId: 'app',
+	env: 'prod',
+	provider,
+	providerTargetJson: JSON.stringify(envelope(provider, 'target')),
+	providerArtifactJson: JSON.stringify(envelope(provider, 'artifact')),
+})
+
 /** Router deps over a real sqlite D1, a recording queue, and a vault factory bound to the SAME db. */
 function makeDeps(iam: Authenticator): { deps: ApiDeps; vault: Promise<Vault>; queue: DeployJobMessage[] } {
 	const { db, d1 } = createHarness()
@@ -35,6 +56,7 @@ function makeDeps(iam: Authenticator): { deps: ApiDeps; vault: Promise<Vault>; q
 		},
 		logs: { get: () => Promise.resolve(null) },
 		repoSource: new FakeRepoSource(),
+		provider: vaultProvider,
 		cancelRun: () => Promise.resolve(),
 		vault: () => vault,
 	}
@@ -79,7 +101,7 @@ function noSecretManager(): Authenticator {
 describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 	async function seedApp(deps: ApiDeps): Promise<void> {
 		await deps.db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		await deps.db.upsertAppEnv({ appId: 'app', env: 'prod' })
+		await deps.db.upsertAppEnv(storedEnvironment())
 	}
 
 	test('PUT .../secrets/:name/value stores in the vault + upserts the ref; value not returned', async () => {
@@ -133,62 +155,66 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		expect(response.status).toBe(400)
 	})
 
-	test('Zerops set, rotate, and delete write through to one service without a vault', async () => {
+	test('provider-managed set, rotate, and delete bypass the vault', async () => {
 		const { db } = createHarness()
 		const calls: string[] = []
+		const provider: ControlProvider = {
+			id: 'harbor',
+			normalizeRegistration: (input) => input,
+			deploy: async () => ({ state: 'succeeded' }),
+			secrets: {
+				put: async ({ environment, name, value }) => {
+					calls.push(`put:${environment.env}:${name}:${value}`)
+					return { valueRef: `harbor:${environment.env}/${name}` }
+				},
+				delete: async ({ environment, name }) => {
+					calls.push(`delete:${environment.env}:${name}`)
+				},
+			},
+		}
 		const deps: ApiDeps = {
 			db,
 			iam: secretManager(),
 			queue: { send: () => Promise.resolve() },
 			logs: { get: () => Promise.resolve(null) },
 			repoSource: new FakeRepoSource(),
+			provider,
 			cancelRun: () => Promise.resolve(),
-			zeropsSecrets: {
-				put(serviceId, name, value) {
-					calls.push(`put:${serviceId}:${name}:${value}`)
-					return Promise.resolve()
-				},
-				delete(serviceId, name) {
-					calls.push(`delete:${serviceId}:${name}`)
-					return Promise.resolve(true)
-				},
-			},
 		}
-		await db.createApp({ id: 'zerops-app', repoUrl: 'github.com/acme/zerops-app' })
+		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
 		await db.upsertAppEnv({
-			appId: 'zerops-app',
-			env: 'prod',
-			platform: 'zerops',
-			zeropsProjectId: 'project-1',
-			zeropsServiceId: 'service-1',
-			manifestJson: '{}',
+			...storedEnvironment('harbor'),
 		})
 
-		expect((await handleApi(req('PUT', '/api/apps/zerops-app/secrets/API_KEY/value', { value: 'v1', env: 'prod' }), deps)).status).toBe(200)
-		const stored = (await db.listAppSecrets('zerops-app')).find((secret) => secret.name === 'API_KEY')
-		expect(stored?.value_ref).toBe('zerops:service-1/API_KEY')
+		expect((await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { value: 'v1', env: 'prod' }), deps)).status).toBe(200)
+		const stored = (await db.listAppSecrets('app')).find((secret) => secret.name === 'API_KEY')
+		expect(stored?.value_ref).toBe('harbor:prod/API_KEY')
 		expect(parseVaultRef(stored?.value_ref ?? '')).toBeNull()
-		expect((await handleApi(req('PATCH', '/api/apps/zerops-app/secrets/API_KEY/value', { value: 'v2', env: 'prod' }), deps)).status).toBe(200)
-		expect((await handleApi(req('DELETE', '/api/apps/zerops-app/secrets/API_KEY/value?env=prod'), deps)).status).toBe(200)
+		expect((await handleApi(req('PATCH', '/api/apps/app/secrets/API_KEY/value', { value: 'v2', env: 'prod' }), deps)).status).toBe(200)
+		expect((await handleApi(req('DELETE', '/api/apps/app/secrets/API_KEY/value?env=prod'), deps)).status).toBe(200)
 		expect(calls).toEqual([
-			'put:service-1:API_KEY:v1',
-			'put:service-1:API_KEY:v2',
-			'delete:service-1:API_KEY',
+			'put:prod:API_KEY:v1',
+			'put:prod:API_KEY:v2',
+			'delete:prod:API_KEY',
 		])
 	})
 
-	test('Zerops rejects an all-env secret instead of guessing a replication topology', async () => {
+	test('provider-managed storage rejects an all-env secret instead of guessing replication', async () => {
 		const { deps } = makeDeps(secretManager())
-		await deps.db.createApp({ id: 'zerops-app', repoUrl: 'github.com/acme/zerops-app' })
+		deps.provider = {
+			id: 'harbor',
+			normalizeRegistration: (input) => input,
+			deploy: async () => ({ state: 'succeeded' }),
+			secrets: {
+				put: async () => ({ valueRef: 'harbor:secret' }),
+				delete: async () => {},
+			},
+		}
+		await deps.db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
 		await deps.db.upsertAppEnv({
-			appId: 'zerops-app',
-			env: 'prod',
-			platform: 'zerops',
-			zeropsProjectId: 'project-1',
-			zeropsServiceId: 'service-1',
-			manifestJson: '{}',
+			...storedEnvironment('harbor'),
 		})
-		const response = await handleApi(req('PUT', '/api/apps/zerops-app/secrets/API_KEY/value', { value: 'v1' }), deps)
+		const response = await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { value: 'v1' }), deps)
 		expect(response.status).toBe(400)
 	})
 })
@@ -202,6 +228,7 @@ describe('vault not configured', () => {
 			queue: { send: () => Promise.resolve() },
 			logs: { get: () => Promise.resolve(null) },
 			repoSource: new FakeRepoSource(),
+			provider: vaultProvider,
 			cancelRun: () => Promise.resolve(),
 			// no `vault` factory
 		}

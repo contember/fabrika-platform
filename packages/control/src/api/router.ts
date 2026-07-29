@@ -32,7 +32,7 @@ import {
 	updateApp,
 } from './registry'
 import { cancelRun, type DeployQueue, getRun, getRunLog, listRuns, type LogReader, type RunsContext, tailRunLog, triggerDeploy } from './runs'
-import { deleteAppSecretValue, rotateAppSecretValue, setAppSecretValue, type VaultContext, type ZeropsSecretWriter } from './vault'
+import { deleteAppSecretValue, rotateAppSecretValue, setAppSecretValue, type VaultContext } from './vault'
 
 /**
  * Everything the router needs (the Worker assembles this from its bindings). `vault` is a FACTORY
@@ -53,8 +53,6 @@ export interface ApiDeps {
 	/** Cancel a run: destroy its container (off-local) + mark failed + free the deploy lock. */
 	cancelRun: (run: RunRow) => Promise<void>
 	vault?: () => Promise<Vault>
-	/** Direct service-level writer used only for Zerops app-env secret values. */
-	zeropsSecrets?: ZeropsSecretWriter
 }
 
 /**
@@ -110,8 +108,8 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 			request,
 			url,
 			authorized,
+			provider: deps.provider,
 			...(deps.vault !== undefined ? { vault: deps.vault } : {}),
-			...(deps.zeropsSecrets !== undefined ? { zerops: deps.zeropsSecrets } : {}),
 		}
 	}
 

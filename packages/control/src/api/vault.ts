@@ -14,27 +14,22 @@
 // the row's existing vault ref in place. DELETE removes the vault entry (the row keeps its now-dangling
 // ref; deleting the row itself is the registry's job).
 
-import type { SecretScope } from '@fabrika/engine'
+import type { ControlProvider, ProviderManagedSecrets } from '@fabrika/provider-contract'
 import type { AppEnvRow, Db } from '../db'
 import { error, json, readJson } from '../http'
 import type { Authorized } from '../iam'
 import { stringField } from '../json'
-import { parseVaultRef, type Vault } from '../vault'
+import { providerEnvironment } from '../run-lifecycle'
+import { parseVaultRef, type SecretScope, type Vault } from '../vault'
 
 /** Context the vault handlers receive — the Db, the (constructed) Vault, and the auditing caller. */
 export interface VaultContext {
 	db: Db
 	vault?: () => Promise<Vault>
-	zerops?: ZeropsSecretWriter
+	provider: ControlProvider
 	request: Request
 	url: URL
 	authorized: Authorized
-}
-
-/** Service-addressed Zerops secret mutation seam. No project-level operation is representable. */
-export interface ZeropsSecretWriter {
-	put(serviceId: string, name: string, value: string): Promise<void>
-	delete(serviceId: string, name: string): Promise<boolean>
 }
 
 /**
@@ -54,9 +49,12 @@ export async function setAppSecretValue(c: VaultContext, appId: string, name: st
 	const env = readEnv(c.url, body)
 	const target = await secretTarget(c, appId, env)
 	if (target instanceof Response) return target
-	if (target.kind === 'zerops') {
-		await target.writer.put(target.serviceId, name, value)
-		const ref = zeropsRef(target.serviceId, name)
+	if (target.kind === 'provider') {
+		const { valueRef: ref } = await target.secrets.put({
+			environment: providerEnvironment(target.appEnv),
+			name,
+			value,
+		})
 		await c.db.upsertAppSecret({ appId, env: target.appEnv.env, name, valueRef: ref })
 		await audit(c, 'app.secret.set', appId, target.appEnv.env, name, ref)
 		return json({ ok: true, valueRef: ref })
@@ -91,8 +89,12 @@ export async function rotateAppSecretValue(c: VaultContext, appId: string, name:
 	}
 	const target = await secretTarget(c, appId, env)
 	if (target instanceof Response) return target
-	if (target.kind === 'zerops') {
-		await target.writer.put(target.serviceId, name, value)
+	if (target.kind === 'provider') {
+		await target.secrets.put({
+			environment: providerEnvironment(target.appEnv),
+			name,
+			value,
+		})
 		await c.authorized.auth.audit({
 			action: 'app.secret.rotate',
 			resourceType: 'app_secret',
@@ -128,15 +130,18 @@ export async function deleteAppSecretValue(c: VaultContext, appId: string, name:
 	}
 	const target = await secretTarget(c, appId, env)
 	if (target instanceof Response) return target
-	if (target.kind === 'zerops') {
-		const removed = await target.writer.delete(target.serviceId, name)
+	if (target.kind === 'provider') {
+		await target.secrets.delete({
+			environment: providerEnvironment(target.appEnv),
+			name,
+		})
 		await c.authorized.auth.audit({
 			action: 'app.secret.value.delete',
 			resourceType: 'app_secret',
 			resourceId: `${appId}/${target.appEnv.env}/${name}`,
 			metadata: { name, env: target.appEnv.env },
 		})
-		return json({ ok: removed })
+		return json({ ok: true })
 	}
 	if (parseVaultRef(ref) === null) {
 		return error(409, 'secret is not stored in the vault')
@@ -178,30 +183,24 @@ async function deletePriorVaultEntry(vault: Vault, priorRef: string): Promise<vo
 
 type SecretTarget =
 	| { kind: 'vault' }
-	| { kind: 'zerops'; appEnv: AppEnvRow; serviceId: string; writer: ZeropsSecretWriter }
+	| { kind: 'provider'; appEnv: AppEnvRow; secrets: ProviderManagedSecrets }
 
 async function secretTarget(c: VaultContext, appId: string, env: string | null): Promise<SecretTarget | Response> {
-	if (env === null) {
-		const envs = await c.db.listAppEnvs(appId)
-		if (envs.some((candidate) => candidate.platform === 'zerops')) {
-			return error(400, 'Zerops secret values require an explicit env')
-		}
+	const secrets = c.provider.secrets
+	if (secrets === undefined) {
 		return { kind: 'vault' }
+	}
+	if (env === null) {
+		return error(400, 'provider-managed secret values require an explicit env')
 	}
 	const appEnv = await c.db.getAppEnv(appId, env)
 	if (appEnv === null) {
 		return error(404, 'app env not found')
 	}
-	if (appEnv.platform === 'cloudflare') {
-		return { kind: 'vault' }
+	if (appEnv.provider !== c.provider.id) {
+		return error(409, `app env belongs to provider ${appEnv.provider}`)
 	}
-	if (appEnv.zerops_service_id === null) {
-		return error(409, 'Zerops app env has no service id')
-	}
-	if (c.zerops === undefined) {
-		return error(500, 'Zerops secret writer not configured')
-	}
-	return { kind: 'zerops', appEnv, serviceId: appEnv.zerops_service_id, writer: c.zerops }
+	return { kind: 'provider', appEnv, secrets }
 }
 
 async function requireVault(c: VaultContext): Promise<Vault | Response> {
@@ -214,8 +213,6 @@ async function requireVault(c: VaultContext): Promise<Vault | Response> {
 		return error(500, 'vault unavailable (check VOZKA_VAULT_KEY)')
 	}
 }
-
-const zeropsRef = (serviceId: string, name: string): string => `zerops:${serviceId}/${encodeURIComponent(name)}`
 
 async function audit(
 	c: VaultContext,

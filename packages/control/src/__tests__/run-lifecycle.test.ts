@@ -1,392 +1,249 @@
-import type { RunnerJob } from '@fabrika/runner'
+import type {
+	ControlProvider,
+	ProviderDeployInput,
+	ProviderEnvelope,
+	ProviderRegistration,
+	ProviderRegistrationInput,
+} from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import type { Db } from '../db'
+import type { Db, RunRow } from '../db'
 import { uuidv7 } from '../db'
-import { FakeRepoSource } from '../repo-source'
-import { assembleJob, type DeployJobMessage, executeDeploy, type RunDeps, type RunOutcome } from '../run-lifecycle'
-import { EnvSecretResolver } from '../secret-resolver'
+import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelope, type RunDeps, type RunOutcome } from '../run-lifecycle'
+import { EnvSecretResolver, type SecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
 import { makeFakeLock } from './helpers/lock'
 
-// The run lifecycle is the testable core of the queue consumer. These tests drive it with a
-// FakeRepoSource, a fake SecretResolver, and a fake startRun — no Cloudflare, no container — covering
-// (1) job assembly (creds + secrets resolved through the seam, never on argv/logged), and (2) the
-// run-row state transitions (pending → running → succeeded|failed, with the idempotent status guard).
+const envelope = (provider: string, payload: string): ProviderEnvelope => ({
+	provider,
+	version: 1,
+	payload,
+})
 
-/** fabrika's build-time platform deploy config — single CF account/token + propustka coords. */
-const DEPLOY = {
-	cloudflareAccountId: 'cf-acct-123',
-	cloudflareApiToken: 'cf-token-xyz',
-	propustkaUrl: 'https://iam.example',
-	propustkaProvisioningKey: 'px_provision',
+const normalize = (provider: string, input: ProviderRegistrationInput): ProviderRegistration => {
+	if (
+		input.app.id !== input.environment.appId
+		|| input.environment.target.provider !== provider
+		|| input.environment.artifact.provider !== provider
+	) {
+		throw new Error('foreign provider registration')
+	}
+	return input
 }
 
-/** Seed app (one secret) + env; return the created pending run row. */
-async function seedRun(db: Db, options: { dryRun?: boolean; commitSha?: string } = {}): Promise<{ runId: string }> {
-	await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app', workerDir: 'worker', configPath: 'fabrika.config.ts' })
-	await db.upsertAppEnv({ appId: 'app', env: 'prod', domain: 'app.example.com' })
-	await db.upsertAppSecret({ appId: 'app', env: null, name: 'API_KEY', valueRef: 'literal:all-env-value' })
-	await db.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'literal:prod-value' })
+async function seedRun(
+	db: Db,
+	options: { provider?: string; secretRef?: string; externalId?: string } = {},
+): Promise<string> {
+	const provider = options.provider ?? 'memory'
+	await db.createApp({
+		id: 'app',
+		repoUrl: 'https://github.com/acme/app.git',
+		workerDir: 'worker',
+		configPath: 'fabrika.config.ts',
+		githubInstallationId: 42,
+	})
+	await db.upsertAppEnv({
+		appId: 'app',
+		env: 'prod',
+		domain: 'app.example.com',
+		provider,
+		providerTargetJson: JSON.stringify(envelope(provider, 'target')),
+		providerArtifactJson: JSON.stringify(envelope(provider, 'artifact')),
+	})
+	await db.upsertAppSecret({
+		appId: 'app',
+		env: null,
+		name: 'API_KEY',
+		valueRef: options.secretRef ?? 'literal:all-env',
+	})
+	await db.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'literal:prod' })
+	await db.upsertAppVar({ appId: 'app', env: null, name: 'TEAM', value: 'all-env' })
+	await db.upsertAppVar({ appId: 'app', env: 'prod', name: 'TEAM', value: 'prod' })
 	const runId = uuidv7()
-	await db.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'refs/heads/deploy/prod', trigger: 'manual', commitSha: options.commitSha ?? null })
-	return { runId }
+	await db.createRun({
+		id: runId,
+		appId: 'app',
+		env: 'prod',
+		ref: 'refs/heads/deploy/prod',
+		trigger: 'manual',
+	})
+	if (options.externalId !== undefined) {
+		await db.markRunStarted(runId, `runs/${runId}/logs.ndjson`)
+		await db.setRunExternalId(runId, options.externalId)
+	}
+	return runId
 }
 
-/** Build deps with a recording fake startRun returning the given terminal outcome + an in-memory lock. */
+function makeProvider(
+	inputs: ProviderDeployInput[],
+	outcome: RunOutcome,
+	options: { id?: string; managedSecrets?: boolean; cancelled?: string[] } = {},
+): ControlProvider {
+	const id = options.id ?? 'memory'
+	return {
+		id,
+		normalizeRegistration: (input) => normalize(id, input),
+		deploy: async (input) => {
+			inputs.push(input)
+			await input.events.externalId(`${id}-run-1`)
+			return outcome
+		},
+		cancel: async (input) => {
+			options.cancelled?.push(input.externalId)
+		},
+		...(options.managedSecrets
+			? {
+				secrets: {
+					put: async () => ({ valueRef: `${id}:secret` }),
+					delete: async () => {},
+				},
+			}
+			: {}),
+	}
+}
+
 function makeDeps(
 	db: Db,
-	outcome: RunOutcome,
+	provider: ControlProvider,
+	secrets: SecretResolver = new EnvSecretResolver({}),
 	lock = makeFakeLock(),
-): { deps: RunDeps; jobs: RunnerJob[]; lock: ReturnType<typeof makeFakeLock> } {
-	const jobs: RunnerJob[] = []
-	const deps: RunDeps = {
-		db,
-		repoSource: new FakeRepoSource(),
-		secrets: new EnvSecretResolver({}),
-		deploy: DEPLOY,
-		lock,
-		startRun: (job) => {
-			jobs.push(job)
-			return Promise.resolve(outcome)
-		},
-	}
-	return { deps, jobs, lock }
+): RunDeps {
+	return { db, provider, secrets, lock }
 }
 
-describe('assembleJob', () => {
-	test('injects platform creds + resolves per-env secrets (narrower env wins) into the RunnerJob', async () => {
+const requireRun = async (db: Db, id: string): Promise<RunRow> => {
+	const run = await db.getRun(id)
+	if (run === null) {
+		throw new Error(`missing run ${id}`)
+	}
+	return run
+}
+
+describe('provider-neutral run lifecycle', () => {
+	test('resolves layered values and records a successful provider run', async () => {
 		const { db } = createHarness()
-		const { runId } = await seedRun(db)
-		const run = await db.getRun(runId)
-		const app = await db.getApp('app')
-		const appEnv = await db.getAppEnv('app', 'prod')
-		const secrets = new EnvSecretResolver({})
-
-		const job = await assembleJob(
-			{ db, repoSource: new FakeRepoSource(), secrets, deploy: DEPLOY, lock: makeFakeLock(), startRun: () => Promise.reject(new Error('unused')) },
-			run!,
-			app!,
-			appEnv!,
-		)
-
-		expect(job.runId).toBe(runId)
-		expect(job.env).toBe('prod')
-		expect(job.repoUrl).toBe('github.com/acme/app')
-		expect(job.workerDir).toBe('worker')
-		expect(job.configPath).toBe('fabrika.config.ts')
-		expect(job.domain).toBe('app.example.com')
-		// Platform creds come from the build-time deploy config, not the registry.
-		expect(job.credentials.CLOUDFLARE_ACCOUNT_ID).toBe('cf-acct-123')
-		expect(job.credentials.CLOUDFLARE_API_TOKEN).toBe('cf-token-xyz')
-		expect(job.credentials.PROPUSTKA_URL).toBe('https://iam.example')
-		expect(job.credentials.PROPUSTKA_PROVISIONING_KEY).toBe('px_provision')
-		// The env-specific secret layer wins over the all-env layer for the same name.
-		expect(job.secrets).toEqual({ API_KEY: 'prod-value' })
-	})
-
-	test('resolves per-env NON-secret vars (narrower env wins, plaintext, no vault) into the RunnerJob', async () => {
-		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv({ appId: 'app', env: 'prod', domain: 'app.example.com' })
-		// All-env layer + a prod override of the same name; the env-specific value must win.
-		await db.upsertAppVar({ appId: 'app', env: null, name: 'TEAM', value: 'all-env-team' })
-		await db.upsertAppVar({ appId: 'app', env: 'prod', name: 'TEAM', value: 'prod-team' })
-		await db.upsertAppVar({ appId: 'app', env: null, name: 'ACCESS_APPS', value: '{"aud":"app"}' })
-		const runId = uuidv7()
-		await db.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'refs/heads/deploy/prod', trigger: 'manual', commitSha: null })
-
-		const job = await assembleJob(
-			{
-				db,
-				repoSource: new FakeRepoSource(),
-				secrets: new EnvSecretResolver({}),
-				deploy: DEPLOY,
-				lock: makeFakeLock(),
-				startRun: () => Promise.reject(new Error('unused')),
-			},
-			(await db.getRun(runId))!,
-			(await db.getApp('app'))!,
-			(await db.getAppEnv('app', 'prod'))!,
-		)
-
-		// Plaintext values straight from the registry; env-specific wins over all-env; no vault resolution.
-		expect(job.vars).toEqual({ ACCESS_APPS: '{"aud":"app"}', TEAM: 'prod-team' })
-	})
-
-	test('the narrower env layer wins regardless of INSERTION order (the layering is the query, not the rowids)', async () => {
-		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv({ appId: 'app', env: 'prod' })
-		// Deliberately REVERSED: the env-specific row is written FIRST, the all-env row second. The
-		// layering must come from the ORDER BY, not from the order rows happen to sit in on disk —
-		// SQLite falls back to rowid for an unordered tie and Postgres makes no such promise at all.
-		await db.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'literal:prod-value' })
-		await db.upsertAppSecret({ appId: 'app', env: null, name: 'API_KEY', valueRef: 'literal:all-env-value' })
-		await db.upsertAppVar({ appId: 'app', env: 'prod', name: 'TEAM', value: 'prod-team' })
-		await db.upsertAppVar({ appId: 'app', env: null, name: 'TEAM', value: 'all-env-team' })
-
-		// The query itself must hand back the WIDER row first so the caller's last-write-wins loop lands
-		// on the narrower one.
-		expect((await db.getAppSecretsForEnv('app', 'prod')).map((r) => r.env)).toEqual([null, 'prod'])
-		expect((await db.getAppVarsForEnv('app', 'prod')).map((r) => r.env)).toEqual([null, 'prod'])
-
-		const runId = uuidv7()
-		await db.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', commitSha: null })
-		const job = await assembleJob(
-			{
-				db,
-				repoSource: new FakeRepoSource(),
-				secrets: new EnvSecretResolver({}),
-				deploy: DEPLOY,
-				lock: makeFakeLock(),
-				startRun: () => Promise.reject(new Error('unused')),
-			},
-			(await db.getRun(runId))!,
-			(await db.getApp('app'))!,
-			(await db.getAppEnv('app', 'prod'))!,
-		)
-
-		expect(job.secrets).toEqual({ API_KEY: 'prod-value' })
-		expect(job.vars).toEqual({ TEAM: 'prod-team' })
-	})
-
-	test('dryRun flows through to the job', async () => {
-		const { db } = createHarness()
-		const { runId } = await seedRun(db)
-		const run = await db.getRun(runId)
-		const app = await db.getApp('app')
-		const appEnv = await db.getAppEnv('app', 'prod')
-		const job = await assembleJob(
-			{
-				db,
-				repoSource: new FakeRepoSource(),
-				secrets: new EnvSecretResolver({}),
-				deploy: DEPLOY,
-				lock: makeFakeLock(),
-				startRun: () => Promise.reject(new Error('x')),
-			},
-			run!,
-			app!,
-			appEnv!,
-			{ dryRun: true },
-		)
-		expect(job.dryRun).toBe(true)
-	})
-
-	test('throws when the platform CF credentials are unconfigured (never deploy empty)', async () => {
-		const { db } = createHarness()
-		const { runId } = await seedRun(db)
-		const run = await db.getRun(runId)
-		const app = await db.getApp('app')
-		const appEnv = await db.getAppEnv('app', 'prod')
-		const emptyDeploy = { ...DEPLOY, cloudflareApiToken: '' }
-		await expect(
-			assembleJob(
-				{
-					db,
-					repoSource: new FakeRepoSource(),
-					secrets: new EnvSecretResolver({}),
-					deploy: emptyDeploy,
-					lock: makeFakeLock(),
-					startRun: () => Promise.reject(new Error('x')),
-				},
-				run!,
-				app!,
-				appEnv!,
-			),
-		).rejects.toThrow(/Cloudflare credentials not configured/)
-	})
-
-	test('embeds an installation clone token when the app has an installation id', async () => {
-		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: 'https://github.com/acme/app.git', githubInstallationId: 42 })
-		await db.upsertAppEnv({ appId: 'app', env: 'prod' })
-		const runId = uuidv7()
-		await db.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		const run = await db.getRun(runId)
-		const app = await db.getApp('app')
-		const appEnv = await db.getAppEnv('app', 'prod')
-
-		const job = await assembleJob(
-			{
-				db,
-				repoSource: new FakeRepoSource({ fakeToken: 'ghs-installtok' }),
-				secrets: new EnvSecretResolver({}),
-				deploy: DEPLOY,
-				lock: makeFakeLock(),
-				startRun: () => Promise.reject(new Error('x')),
-			},
-			run!,
-			app!,
-			appEnv!,
-		)
-		expect(job.repoUrl).toContain('x-access-token:ghs-installtok@')
-	})
-})
-
-describe('Zerops run dispatch', () => {
-	test('executes a static Zerops target in process without assembling a RunnerJob', async () => {
-		const { db } = createHarness()
-		await db.createApp({ id: 'zerops-app', repoUrl: 'github.com/acme/zerops-app' })
-		await db.upsertAppEnv({
-			appId: 'zerops-app',
-			env: 'prod',
-			platform: 'zerops',
-			zeropsProjectId: 'project-1',
-			zeropsServiceId: 'service-1',
-			manifestJson: '{"manifestVersion":1}',
-		})
-		const runId = uuidv7()
-		await db.createRun({ id: runId, appId: 'zerops-app', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
-		const { deps, jobs } = makeDeps(db, { status: { state: 'succeeded' } })
-		const seen: string[] = []
-		deps.startZeropsRun = (input) => {
-			seen.push(`${input.app.id}:${input.appEnv.zerops_project_id}:${input.appEnv.zerops_service_id}`)
-			return Promise.resolve({ status: { state: 'succeeded' } })
-		}
-
-		expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
-		expect(seen).toEqual(['zerops-app:project-1:service-1'])
-		expect(jobs).toEqual([])
-		expect((await db.getRun(runId))?.status).toBe('succeeded')
-	})
-})
-
-describe('executeDeploy (run-row state transitions)', () => {
-	test('pending → running → succeeded; records the exit code', async () => {
-		const { db } = createHarness()
-		const { runId } = await seedRun(db)
-		const { deps, jobs } = makeDeps(db, { status: { state: 'succeeded', exitCode: 0 } })
-
-		const result = await executeDeploy(deps, { runId })
-
-		expect(result.status).toBe('succeeded')
-		expect(jobs).toHaveLength(1)
-		const run = await db.getRun(runId)
-		expect(run?.status).toBe('succeeded')
-		expect(run?.exit_code).toBe(0)
-		expect(run?.started_at).not.toBeNull()
-		expect(run?.finished_at).not.toBeNull()
-		expect(run?.log_key).toBe(`runs/${runId}/logs.ndjson`)
-	})
-
-	test('pending → running → failed; records the failure exit code', async () => {
-		const { db } = createHarness()
-		const { runId } = await seedRun(db)
-		const { deps } = makeDeps(db, { status: { state: 'failed', exitCode: 1 } })
-
-		const result = await executeDeploy(deps, { runId })
-
-		expect(result.status).toBe('failed')
-		const run = await db.getRun(runId)
-		expect(run?.status).toBe('failed')
-		expect(run?.exit_code).toBe(1)
-		expect(run?.finished_at).not.toBeNull()
-	})
-
-	test('a redelivered message for an already-running run is a no-op (idempotent guard)', async () => {
-		const { db } = createHarness()
-		const { runId } = await seedRun(db)
-		// First delivery wins and starts the run.
-		await db.markRunStarted(runId, `runs/${runId}/logs.ndjson`)
-		const { deps, jobs } = makeDeps(db, { status: { state: 'succeeded', exitCode: 0 } })
-
-		const result = await executeDeploy(deps, { runId })
-
-		expect(result.status).toBe('skipped')
-		expect(jobs).toHaveLength(0) // never ran the job a second time
-	})
-
-	test('a missing run row is skipped (its app was deleted)', async () => {
-		const { db } = createHarness()
-		const { deps } = makeDeps(db, { status: { state: 'succeeded' } })
-		const result = await executeDeploy(deps, { runId: 'nonexistent' })
-		expect(result.status).toBe('skipped')
-	})
-
-	test('an assembly error (unresolvable secret ref) records the run as failed, never throws', async () => {
-		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv({ appId: 'app', env: 'prod' })
-		// Secret ref points at an env var that does not exist → resolveSecret throws during assembly.
-		await db.upsertAppSecret({ appId: 'app', env: null, name: 'API_KEY', valueRef: 'env:MISSING' })
-		const runId = uuidv7()
-		await db.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		const { deps } = makeDeps(db, { status: { state: 'succeeded' } })
-
-		const result = await executeDeploy(deps, { runId })
-
-		expect(result.status).toBe('failed')
-		const run = await db.getRun(runId)
-		expect(run?.status).toBe('failed')
-		expect(run?.exit_code).toBeNull()
-	})
-
-	test('dryRun on the message flows into the assembled job', async () => {
-		const { db } = createHarness()
-		const { runId } = await seedRun(db)
-		const { deps, jobs } = makeDeps(db, { status: { state: 'succeeded', exitCode: 0 } })
+		const runId = await seedRun(db)
+		const inputs: ProviderDeployInput[] = []
+		const lock = makeFakeLock()
 		const message: DeployJobMessage = { runId, dryRun: true }
-		await executeDeploy(deps, message)
-		expect(jobs[0]?.dryRun).toBe(true)
+
+		const result = await executeDeploy(
+			makeDeps(db, makeProvider(inputs, { state: 'succeeded', exitCode: 0 }), new EnvSecretResolver({}), lock),
+			message,
+		)
+
+		expect(result).toEqual({ runId, status: 'succeeded' })
+		expect(inputs).toHaveLength(1)
+		const input = inputs[0]
+		if (input === undefined) throw new Error('expected provider input')
+		expect(input.app).toEqual({
+			id: 'app',
+			source: {
+				repoUrl: 'https://github.com/acme/app.git',
+				ref: 'refs/heads/deploy/prod',
+				workerDir: 'worker',
+				configPath: 'fabrika.config.ts',
+				githubInstallationId: 42,
+			},
+		})
+		expect(input.environment.domain).toBe('app.example.com')
+		expect(input.secrets).toEqual({ API_KEY: 'prod' })
+		expect(input.vars).toEqual({ TEAM: 'prod' })
+		expect(input.dryRun).toBe(true)
+
+		const run = await requireRun(db, runId)
+		expect(run.status).toBe('succeeded')
+		expect(run.exit_code).toBe(0)
+		expect(run.external_run_id).toBe('memory-run-1')
+		expect(run.log_key).toBe(`runs/${runId}/logs.ndjson`)
+		expect(lock.held.size).toBe(0)
+	})
+
+	test('provider-managed secrets remain at the provider and are not resolved into a run', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const inputs: ProviderDeployInput[] = []
+		const resolver: SecretResolver = {
+			resolveSecret: async () => {
+				throw new Error('must not resolve provider-managed refs')
+			},
+		}
+		const provider = makeProvider(inputs, { state: 'succeeded' }, { managedSecrets: true })
+
+		expect((await executeDeploy(makeDeps(db, provider, resolver), { runId })).status).toBe('succeeded')
+		expect(inputs[0]?.secrets).toEqual({})
+	})
+
+	test('fails closed when persisted data belongs to another provider', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db, { provider: 'other' })
+		const inputs: ProviderDeployInput[] = []
+
+		expect((await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), { runId })).status).toBe('failed')
+		expect(inputs).toEqual([])
+		expect((await requireRun(db, runId)).status).toBe('failed')
+	})
+
+	test('skips redelivery and defers while another run owns the lock', async () => {
+		const { db } = createHarness()
+		const runningId = await seedRun(db)
+		await db.markRunStarted(runningId, `runs/${runningId}/logs.ndjson`)
+		const inputs: ProviderDeployInput[] = []
+		expect(
+			(await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), { runId: runningId })).status,
+		).toBe('skipped')
+
+		const pendingId = uuidv7()
+		await db.createRun({ id: pendingId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		const lock = makeFakeLock()
+		await lock.acquire('app:prod', 'other-run')
+		expect(
+			(await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' }), new EnvSecretResolver({}), lock), {
+				runId: pendingId,
+			})).status,
+		).toBe('deferred')
+		expect((await requireRun(db, pendingId)).status).toBe('pending')
+		expect(inputs).toEqual([])
+	})
+
+	test('records resolution and provider failures without leaking the exception', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		await db.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'env:MISSING' })
+
+		expect(
+			(await executeDeploy(
+				makeDeps(db, makeProvider([], { state: 'succeeded' }), new EnvSecretResolver({})),
+				{ runId },
+			)).status,
+		).toBe('failed')
+		expect((await requireRun(db, runId)).exit_code).toBeNull()
+	})
+
+	test('cancels provider work by generic external id and releases the lock', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db, { externalId: 'provider-operation-1' })
+		const cancelled: string[] = []
+		const lock = makeFakeLock()
+		await lock.acquire('app:prod', runId)
+		const deps = makeDeps(db, makeProvider([], { state: 'failed' }, { cancelled }), new EnvSecretResolver({}), lock)
+
+		await cancelDeploy(deps, await requireRun(db, runId))
+
+		expect(cancelled).toEqual(['provider-operation-1'])
+		expect((await requireRun(db, runId)).status).toBe('failed')
+		expect(lock.held.size).toBe(0)
 	})
 })
 
-describe('executeDeploy (per-app-env deploy lock)', () => {
-	test('takes the app-env lock, runs, then releases it on success', async () => {
-		const { db } = createHarness()
-		const { runId } = await seedRun(db)
-		const { deps, lock } = makeDeps(db, { status: { state: 'succeeded', exitCode: 0 } })
-
-		const result = await executeDeploy(deps, { runId })
-
-		expect(result.status).toBe('succeeded')
-		expect(lock.held.size).toBe(0) // released
-	})
-
-	test('releases the app-env lock after a failed run', async () => {
-		const { db } = createHarness()
-		const { runId } = await seedRun(db)
-		const { deps, lock } = makeDeps(db, { status: { state: 'failed', exitCode: 1 } })
-
-		await executeDeploy(deps, { runId })
-
-		expect(lock.held.size).toBe(0)
-	})
-
-	test('defers (leaves the run pending, never starts) when another deploy holds the app-env lock', async () => {
-		const { db } = createHarness()
-		const { runId } = await seedRun(db)
-		const lock = makeFakeLock()
-		// A concurrent deploy of the SAME app-env already holds the lock.
-		await lock.acquire('app:prod', 'other-run')
-		const { deps, jobs } = makeDeps(db, { status: { state: 'succeeded', exitCode: 0 } }, lock)
-
-		const result = await executeDeploy(deps, { runId })
-
-		expect(result.status).toBe('deferred')
-		expect(jobs).toHaveLength(0) // never started the job
-		const run = await db.getRun(runId)
-		expect(run?.status).toBe('pending') // still pending — the consumer re-enqueues it
-		// The other deploy's lease is untouched (non-reentrant acquire; no steal, no release).
-		expect(lock.held.get('app:prod')).toBe('other-run')
-	})
-
-	test('a deferred run proceeds once the lock frees (the re-enqueue path)', async () => {
-		const { db } = createHarness()
-		const { runId } = await seedRun(db)
-		const lock = makeFakeLock()
-		await lock.acquire('app:prod', 'other-run')
-		const { deps, jobs } = makeDeps(db, { status: { state: 'succeeded', exitCode: 0 } }, lock)
-
-		// First delivery defers (lock held by the other deploy)…
-		expect((await executeDeploy(deps, { runId })).status).toBe('deferred')
-		// …the other deploy finishes and frees the slot…
-		await lock.release('app:prod', 'other-run')
-		// …and the re-delivered message now runs to completion.
-		const result = await executeDeploy(deps, { runId })
-		expect(result.status).toBe('succeeded')
-		expect(jobs).toHaveLength(1)
-		expect(lock.held.size).toBe(0)
+describe('parseProviderEnvelope', () => {
+	test('accepts arbitrary provider ids and rejects invalid persisted data', () => {
+		expect(parseProviderEnvelope('{"provider":"third","version":1,"payload":{"region":"eu"}}', 'target')).toEqual({
+			provider: 'third',
+			version: 1,
+			payload: { region: 'eu' },
+		})
+		expect(() => parseProviderEnvelope('{"provider":"third","version":1}', 'target')).toThrow('provider envelope')
+		expect(() => parseProviderEnvelope('{', 'target')).toThrow('valid JSON')
 	})
 })
