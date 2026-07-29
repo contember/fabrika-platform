@@ -27,6 +27,8 @@ export {
 	renderYaml,
 } from './compile'
 export type { CompileInput, ZeropsImportDocument } from './compile'
+export { createZeropsControlProvider, zeropsStoredTargetCodec } from './control'
+export type { ZeropsBeforeDeploy, ZeropsBeforeDeployInput, ZeropsControlProviderOptions, ZeropsProviderExecutor, ZeropsStoredTarget } from './control'
 export { compileFabrikaManifest, FABRIKA_MANIFEST_VERSION, parseFabrikaManifest, zeropsArtifactCodec } from './manifest'
 export type { FabrikaManifestV1, ManifestExpectation } from './manifest'
 export { buildZeropsPlan, resolveDeployHostname } from './plan'
