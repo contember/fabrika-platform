@@ -8,6 +8,7 @@ import type {
 } from '@fabrika/provider-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import type { ZeropsApi, ZeropsAppVersionStatus } from '../api'
+import { useSharedPostgres } from '../authoring'
 import { zeropsTargetCodec } from '../codec'
 import { createZeropsControlProvider, zeropsStoredTargetCodec } from '../control'
 import { compileFabrikaManifest, zeropsArtifactCodec } from '../manifest'
@@ -22,6 +23,7 @@ interface Recorded {
 	envWrites: Array<{ serviceId: string; key: string; value: string }>
 	envDeletes: string[]
 	beforeDeploy: string[]
+	imports: Array<{ projectId: string; yaml: string }>
 }
 
 const fresh = (): Recorded => ({
@@ -31,6 +33,7 @@ const fresh = (): Recorded => ({
 	envWrites: [],
 	envDeletes: [],
 	beforeDeploy: [],
+	imports: [],
 })
 
 const config: ZeropsAppConfig = {
@@ -50,14 +53,29 @@ const app: ProviderApp = {
 	},
 }
 
+const readyNamespace = (): ProviderDeploymentNamespace => ({
+	id: 'apps-prod',
+	env: 'prod',
+	target: {
+		provider: 'zerops',
+		version: zeropsNamespaceTargetCodec.version,
+		payload: zeropsNamespaceTargetCodec.encode({
+			projectId: 'project-1',
+			proxyServiceId: 'proxy-service-1',
+			ready: true,
+		}),
+	},
+})
+
 const environment = (overrides: Partial<ProviderEnvironment> = {}): ProviderEnvironment => ({
 	appId: 'notes',
 	env: 'prod',
 	domain: 'notes.example.test',
+	namespace: readyNamespace(),
 	target: {
 		provider: 'zerops',
 		version: zeropsStoredTargetCodec.version,
-		payload: zeropsStoredTargetCodec.encode({ projectId: 'project-1', serviceId: 'service-1' }),
+		payload: zeropsStoredTargetCodec.encode({ serviceId: 'service-1' }),
 	},
 	artifact: {
 		provider: 'zerops',
@@ -86,8 +104,9 @@ const deployInput = (recorded: Recorded): ProviderDeployInput => ({
 })
 
 const makeApi = (recorded: Recorded, status: () => ZeropsAppVersionStatus = () => 'ACTIVE'): ZeropsApi => ({
-	importServices: async ({ projectId }) => {
+	importServices: async ({ projectId, yaml }) => {
 		recorded.calls.push('importServices')
+		recorded.imports.push({ projectId, yaml })
 		return { projectId, services: [{ id: 'service-1', name: 'notes', processes: [] }] }
 	},
 	importProject: async ({ clientId }) => ({ projectId: clientId, services: [] }),
@@ -132,7 +151,7 @@ describe('Zerops ControlProvider registration', () => {
 	test('normalizes a stored target and static artifact without persisting credentials', () => {
 		const control = createZeropsControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
 		const normalized = control.normalizeRegistration({ app, environment: environment() })
-		expect(normalized.environment.target.payload).toEqual({ projectId: 'project-1', serviceId: 'service-1' })
+		expect(normalized.environment.target.payload).toEqual({ serviceId: 'service-1' })
 		expect(JSON.stringify(normalized.environment)).not.toContain('zt-secret')
 	})
 
@@ -147,7 +166,7 @@ describe('Zerops ControlProvider registration', () => {
 		expect(() =>
 			control.normalizeRegistration({
 				app,
-				environment: environment({ target: { provider: 'zerops', version: 2, payload: {} } }),
+				environment: environment({ target: { provider: 'zerops', version: 1, payload: {} } }),
 			})
 		).toThrow('schema version')
 		expect(() => control.normalizeRegistration({ app: { ...app, id: 'other' }, environment: environment() })).toThrow('belongs to app')
@@ -158,7 +177,16 @@ describe('Zerops ControlProvider registration', () => {
 					env: 'stage',
 				}),
 			})
-		).toThrow('environment drift')
+		).toThrow('different environment coordinates')
+		expect(() => control.normalizeRegistration({ app, environment: environment({ namespace: undefined }) })).toThrow(
+			'requires a deployment namespace',
+		)
+		expect(() =>
+			control.normalizeRegistration({
+				app,
+				environment: environment({ namespace: { ...readyNamespace(), exclusiveAppId: 'other' } }),
+			})
+		).toThrow('exclusive')
 	})
 
 	test('exposes namespace lifecycle only when its installation configuration is composed', () => {
@@ -356,8 +384,9 @@ describe('Zerops ControlProvider lifecycle', () => {
 			propustkaUrl: 'https://iam.test',
 			adminKey: 'px-secret',
 			api: makeApi(recorded),
-			beforeDeploy: async ({ appId, target }) => {
-				recorded.beforeDeploy.push(`${appId}:${target.projectId}`)
+			beforeDeploy: async ({ appId, namespaceId, target }) => {
+				recorded.beforeDeploy.push(`${appId}:${namespaceId}:${target.projectId}:${target.proxyServiceId}`)
+				recorded.calls.push('beforeDeploy')
 			},
 			execute: async (provider, run) => {
 				observedRun = run
@@ -382,11 +411,92 @@ describe('Zerops ControlProvider lifecycle', () => {
 			adminKey: 'px-secret',
 		})
 		expect(outcome).toEqual({ state: 'succeeded' })
-		expect(recorded.beforeDeploy).toEqual(['notes:project-1'])
+		expect(recorded.beforeDeploy).toEqual(['notes:apps-prod:project-1:proxy-service-1'])
 		expect(recorded.externalIds).toEqual(['version-1'])
-		expect(recorded.calls).toContain('importServices')
+		expect(recorded.calls.indexOf('beforeDeploy')).toBeLessThan(recorded.calls.indexOf('importServices'))
 		expect(recorded.logs.join('\n')).not.toContain('zt-secret')
 		expect(JSON.stringify(deployInput(recorded).environment)).not.toContain('zt-secret')
+	})
+
+	test('places an app that consumes shared PostgreSQL into its namespace project', async () => {
+		const sharedConfig: ZeropsAppConfig = {
+			id: 'notes',
+			target: {
+				platform: 'zerops',
+				services: () => [{ hostname: 'notesapi', type: 'alpine/bun@1.3' }],
+				deployService: 'notesapi',
+				namespaceResources: [useSharedPostgres()],
+			},
+		}
+		const control = createZeropsControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			sleep: () => Promise.resolve(),
+		})
+		const manifest = compileFabrikaManifest(sharedConfig, 'prod')
+		const input = deployInput(recorded)
+		await control.deploy({
+			...input,
+			environment: environment({
+				namespace: {
+					...readyNamespace(),
+					target: {
+						provider: 'zerops',
+						version: zeropsNamespaceTargetCodec.version,
+						payload: zeropsNamespaceTargetCodec.encode({
+							projectId: 'project-1',
+							proxyServiceId: 'proxy-service-1',
+							postgres: { type: 'postgresql:ha@18' },
+							postgresServiceId: 'postgres-service-1',
+							ready: true,
+						}),
+					},
+				},
+				artifact: {
+					provider: 'zerops',
+					version: zeropsArtifactCodec.version,
+					payload: zeropsArtifactCodec.encode(manifest),
+				},
+			}),
+		})
+
+		expect(recorded.imports).toHaveLength(1)
+		expect(recorded.imports[0]?.projectId).toBe('project-1')
+		expect(recorded.imports[0]?.yaml).not.toContain('hostname: postgres')
+		expect(manifest.target.namespaceResources).toEqual([{
+			resourceKey: 'service:postgres',
+			hostname: 'postgres',
+			connectionString: '${postgres_connectionString}',
+		}])
+	})
+
+	test('fails before proxy or app mutation when namespace placement is not ready', async () => {
+		const control = createZeropsControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			beforeDeploy: async () => {
+				recorded.beforeDeploy.push('called')
+			},
+		})
+		await expect(control.deploy({
+			...deployInput(recorded),
+			environment: environment({
+				namespace: {
+					...readyNamespace(),
+					target: {
+						provider: 'zerops',
+						version: zeropsNamespaceTargetCodec.version,
+						payload: zeropsNamespaceTargetCodec.encode({
+							projectId: 'project-1',
+							proxyServiceId: 'proxy-service-1',
+							ready: false,
+						}),
+					},
+				},
+			}),
+		})).rejects.toThrow('is not ready')
+		expect(recorded.beforeDeploy).toEqual([])
+		expect(recorded.calls).toEqual([])
 	})
 
 	test('cancels by external id and maps active, terminal, and pending statuses', async () => {

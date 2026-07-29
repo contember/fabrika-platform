@@ -428,7 +428,7 @@ describe('app environment namespace assignment', () => {
 		expect((await handleApi(request('PUT', '/apps/app/envs/stage', registrationBody('unsupported')), deps)).status).toBe(409)
 	})
 
-	test('allows placement changes only before the first successful deploy', async () => {
+	test('allows placement changes only without in-flight or successful deploys', async () => {
 		const recording = providerRecording()
 		const { deps } = makeDeps(namespacedProvider(recording))
 		await deps.db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
@@ -447,10 +447,15 @@ describe('app environment namespace assignment', () => {
 		expect((await deps.db.listNamespaceResourceClaims('first')).map((claim) => claim.resource_key)).toEqual(['service:app'])
 		expect((await deps.db.listNamespaceResourceClaims('second')).map((claim) => claim.resource_key)).toEqual(['service:app'])
 
+		await deps.db.createRun({ id: 'pending-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('first')), deps)).status).toBe(409)
+		await deps.db.markRunFinished('pending-run', 'failed', null)
+		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('first')), deps)).status).toBe(200)
+
 		await deps.db.createRun({ id: 'successful-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
 		await deps.db.markRunFinished('successful-run', 'succeeded', 0)
-		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('first')), deps)).status).toBe(409)
-		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('second')), deps)).status).toBe(200)
+		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('second')), deps)).status).toBe(409)
+		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('first')), deps)).status).toBe(200)
 	})
 
 	test('onboards directly into a shared namespace and leaves no app after invalid assignment', async () => {

@@ -78,7 +78,7 @@ const providerApp = (app: AppRow, run: RunRow): ProviderApp => ({
 	},
 })
 
-/** Convert the generic database row into the provider contract. */
+/** Convert one validated namespace row into the provider contract. */
 const providerNamespace = (row: DeploymentNamespaceRow): ProviderDeploymentNamespace => ({
 	id: row.id,
 	env: row.env,
@@ -86,7 +86,7 @@ const providerNamespace = (row: DeploymentNamespaceRow): ProviderDeploymentNames
 	target: parseProviderEnvelope(row.provider_target_json, `target for namespace ${row.id}`),
 })
 
-export const providerEnvironment = (
+const storedProviderEnvironment = (
 	row: AppEnvRow,
 	namespace?: ProviderDeploymentNamespace,
 ): ProviderEnvironment => ({
@@ -97,6 +97,45 @@ export const providerEnvironment = (
 	target: parseProviderEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),
 	artifact: parseProviderEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
 })
+
+/**
+ * Hydrate one persisted environment at the generic control-provider boundary.
+ *
+ * Deploys require a ready namespace. Cancellation, reconciliation, and managed-secret cleanup still
+ * need the original coordinates while a namespace is degraded, so those callers omit that guard.
+ */
+export const providerEnvironment = async (
+	db: Pick<Db, 'getDeploymentNamespace'>,
+	row: AppEnvRow,
+	options: { requireReadyNamespace?: boolean } = {},
+): Promise<ProviderEnvironment> => {
+	let namespace: ProviderDeploymentNamespace | undefined
+	if (row.namespace_id !== null) {
+		const stored = await db.getDeploymentNamespace(row.namespace_id)
+		if (stored === null) {
+			throw new Error(`deployment namespace "${row.namespace_id}" is missing`)
+		}
+		if (stored.provider !== row.provider || stored.env !== row.env) {
+			throw new Error(`deployment namespace "${stored.id}" has incompatible provider coordinates`)
+		}
+		if (stored.exclusive_app_id !== null && stored.exclusive_app_id !== row.app_id) {
+			throw new Error(`deployment namespace "${stored.id}" is exclusive to another app`)
+		}
+		if (options.requireReadyNamespace === true && stored.state !== 'ready') {
+			throw new Error(`deployment namespace "${stored.id}" is not ready`)
+		}
+		namespace = providerNamespace(stored)
+	}
+	const environment = storedProviderEnvironment(row, namespace)
+	if (
+		environment.target.provider !== row.provider
+		|| environment.artifact.provider !== row.provider
+		|| (environment.namespace !== undefined && environment.namespace.target.provider !== row.provider)
+	) {
+		throw new Error('persisted deploy registration belongs to another provider')
+	}
+	return environment
+}
 
 const assertNamespaceResourceClaims = async (
 	db: Db,
@@ -192,26 +231,8 @@ export async function executeDeploy(
 				`configured provider "${deps.provider.id}" cannot deploy ${app.id}/${appEnv.env} owned by "${appEnv.provider}"`,
 			)
 		}
-		let namespace: ProviderDeploymentNamespace | undefined
-		if (appEnv.namespace_id !== null) {
-			const row = await deps.db.getDeploymentNamespace(appEnv.namespace_id)
-			if (row === null || row.provider !== deps.provider.id || row.env !== appEnv.env || row.state !== 'ready') {
-				throw new Error(`deployment namespace "${appEnv.namespace_id}" is missing, incompatible, or not ready`)
-			}
-			if (row.exclusive_app_id !== null && row.exclusive_app_id !== app.id) {
-				throw new Error(`deployment namespace "${row.id}" is exclusive to another app`)
-			}
-			namespace = providerNamespace(row)
-		}
 		const appInput = providerApp(app, run)
-		const environmentInput = providerEnvironment(appEnv, namespace)
-		if (
-			environmentInput.target.provider !== deps.provider.id
-			|| environmentInput.artifact.provider !== deps.provider.id
-			|| (environmentInput.namespace !== undefined && environmentInput.namespace.target.provider !== deps.provider.id)
-		) {
-			throw new Error('persisted deploy registration belongs to another provider')
-		}
+		const environmentInput = await providerEnvironment(deps.db, appEnv, { requireReadyNamespace: true })
 		const registration = deps.provider.normalizeRegistration({
 			app: appInput,
 			environment: environmentInput,
@@ -272,7 +293,7 @@ export async function cancelDeploy(
 		await deps.provider.cancel({
 			runId: run.id,
 			externalId: run.external_run_id,
-			environment: providerEnvironment(appEnv),
+			environment: await providerEnvironment(deps.db, appEnv),
 		})
 	}
 	await deps.db.markRunFinished(run.id, 'failed', null)

@@ -3,11 +3,12 @@ import type {
 	JsonValue,
 	ProviderCodec,
 	ProviderDeployInput,
+	ProviderDeploymentNamespace,
 	ProviderEnvelope,
+	ProviderEnvironment,
 	ProviderReconcileOutcome,
 	ProviderRegistration,
 	ProviderRegistrationInput,
-	ProviderRunReference,
 	ProviderTerminalOutcome,
 	RuntimeProvider,
 	RuntimeProviderRun,
@@ -16,13 +17,12 @@ import type {
 import { createZeropsApi, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi } from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
 import { type FabrikaManifest, parseFabrikaManifest, zeropsArtifactCodec } from './manifest'
-import { createZeropsNamespaceCapabilities } from './namespace'
+import { createZeropsNamespaceCapabilities, type ZeropsNamespaceTarget, zeropsNamespaceTargetCodec } from './namespace'
 import { createZeropsProvider } from './provider'
 import type { ZeropsRuntimeTarget } from './types'
 
 /** Provider coordinates that are safe to persist. Credentials are composed only for a live run. */
 export interface ZeropsStoredTarget {
-	projectId: string
 	serviceId: string
 }
 
@@ -42,10 +42,9 @@ const requiredString = (payload: JsonValue, key: string): string => {
 }
 
 export const zeropsStoredTargetCodec: ProviderCodec<ZeropsStoredTarget> = {
-	version: 1,
-	encode: (target) => ({ projectId: target.projectId, serviceId: target.serviceId }),
+	version: 2,
+	encode: (target) => ({ serviceId: target.serviceId }),
 	decode: (payload) => ({
-		projectId: requiredString(payload, 'projectId'),
 		serviceId: requiredString(payload, 'serviceId'),
 	}),
 }
@@ -69,7 +68,11 @@ const envelope = <T>(codec: ProviderCodec<T>, value: T): ProviderEnvelope => ({
 export interface ZeropsBeforeDeployInput {
 	readonly appId: string
 	readonly env: string
-	readonly target: ZeropsStoredTarget
+	readonly namespaceId: string
+	readonly target: ZeropsStoredTarget & {
+		readonly projectId: string
+		readonly proxyServiceId: string
+	}
 	readonly artifact: FabrikaManifest
 	readonly api: ZeropsApi
 	readonly signal: AbortSignal
@@ -112,11 +115,59 @@ const executeSession: ZeropsProviderExecutor = async (provider, run) => {
 	}
 }
 
+interface DecodedZeropsEnvironment {
+	readonly target: ZeropsStoredTarget
+	readonly namespace: ProviderDeploymentNamespace
+	readonly namespaceTarget: ZeropsNamespaceTarget
+}
+
+const decodeEnvironment = (environment: ProviderEnvironment): DecodedZeropsEnvironment => {
+	const target = decodeEnvelope('target', environment.target, zeropsStoredTargetCodec)
+	const namespace = environment.namespace
+	if (namespace === undefined) {
+		throw new Error('Zerops environment requires a deployment namespace')
+	}
+	if (namespace.id === '' || namespace.env !== environment.env) {
+		throw new Error('Zerops deployment namespace has different environment coordinates')
+	}
+	if (namespace.exclusiveAppId !== undefined && namespace.exclusiveAppId !== environment.appId) {
+		throw new Error(`Zerops deployment namespace is exclusive to app \`${namespace.exclusiveAppId}\``)
+	}
+	return {
+		target,
+		namespace,
+		namespaceTarget: decodeEnvelope('namespace target', namespace.target, zeropsNamespaceTargetCodec),
+	}
+}
+
+const resolvedEnvironment = (
+	environment: ProviderEnvironment,
+	options: { requireReady: boolean },
+): DecodedZeropsEnvironment & { projectId: string; proxyServiceId?: string } => {
+	const decoded = decodeEnvironment(environment)
+	const projectId = decoded.namespaceTarget.projectId
+	if (projectId === undefined) {
+		throw new Error(`Zerops deployment namespace \`${decoded.namespace.id}\` has no project id`)
+	}
+	if (options.requireReady && decoded.namespaceTarget.ready !== true) {
+		throw new Error(`Zerops deployment namespace \`${decoded.namespace.id}\` is not ready`)
+	}
+	const proxyServiceId = decoded.namespaceTarget.proxyServiceId
+	if (options.requireReady && proxyServiceId === undefined) {
+		throw new Error(`Zerops deployment namespace \`${decoded.namespace.id}\` has no proxy service id`)
+	}
+	return {
+		...decoded,
+		projectId,
+		...(proxyServiceId === undefined ? {} : { proxyServiceId }),
+	}
+}
+
 const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegistration => {
 	if (input.app.id !== input.environment.appId) {
 		throw new Error(`Zerops environment belongs to app \`${input.environment.appId}\`, expected \`${input.app.id}\``)
 	}
-	const target = decodeEnvelope('target', input.environment.target, zeropsStoredTargetCodec)
+	const decoded = decodeEnvironment(input.environment)
 	const artifact = parseFabrikaManifest(
 		decodeEnvelope('artifact', input.environment.artifact, zeropsArtifactCodec),
 		{ appId: input.app.id, env: input.environment.env },
@@ -125,7 +176,11 @@ const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegist
 		app: input.app,
 		environment: {
 			...input.environment,
-			target: envelope(zeropsStoredTargetCodec, target),
+			namespace: {
+				...decoded.namespace,
+				target: envelope(zeropsNamespaceTargetCodec, decoded.namespaceTarget),
+			},
+			target: envelope(zeropsStoredTargetCodec, decoded.target),
 			artifact: envelope(zeropsArtifactCodec, artifact),
 		},
 	}
@@ -149,26 +204,33 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 	})
 	const execute = options.execute ?? executeSession
 
-	const storedTarget = (reference: ProviderRunReference): ZeropsStoredTarget =>
-		decodeEnvelope('target', reference.environment.target, zeropsStoredTargetCodec)
-
 	return {
 		id: 'zerops',
 		normalizeRegistration,
 		deploy: async (input: ProviderDeployInput): Promise<ProviderTerminalOutcome> => {
 			const registration = normalizeRegistration({ app: input.app, environment: input.environment })
-			const target = decodeEnvelope('target', registration.environment.target, zeropsStoredTargetCodec)
+			const placement = resolvedEnvironment(registration.environment, { requireReady: true })
+			const proxyServiceId = placement.proxyServiceId
+			if (proxyServiceId === undefined) {
+				throw new Error(`Zerops deployment namespace \`${placement.namespace.id}\` has no proxy service id`)
+			}
 			const artifact = decodeEnvelope('artifact', registration.environment.artifact, zeropsArtifactCodec)
 			await options.beforeDeploy?.({
 				appId: input.app.id,
 				env: input.environment.env,
-				target,
+				namespaceId: placement.namespace.id,
+				target: {
+					serviceId: placement.target.serviceId,
+					projectId: placement.projectId,
+					proxyServiceId,
+				},
 				artifact,
 				api,
 				signal: input.signal,
 			})
 			const runtimeTarget: ZeropsRuntimeTarget = {
-				...target,
+				projectId: placement.projectId,
+				serviceId: placement.target.serviceId,
 				accessToken: options.accessToken,
 				...(options.apiBaseUrl !== undefined ? { apiBaseUrl: options.apiBaseUrl } : {}),
 				...(options.propustkaUrl !== undefined ? { propustkaUrl: options.propustkaUrl } : {}),
@@ -189,11 +251,11 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			})
 		},
 		cancel: async (input) => {
-			storedTarget(input)
+			resolvedEnvironment(input.environment, { requireReady: false })
 			await api.cancelBuild({ appVersionId: input.externalId, signal: abortSignal() })
 		},
 		reconcile: async (input): Promise<ProviderReconcileOutcome> => {
-			storedTarget(input)
+			resolvedEnvironment(input.environment, { requireReady: false })
 			const version = await api.getAppVersion({ appVersionId: input.externalId, signal: abortSignal() })
 			if (version.status === ZEROPS_ACTIVE) {
 				return { state: 'succeeded' }
@@ -205,7 +267,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		},
 		secrets: {
 			put: async (input) => {
-				const target = decodeEnvelope('target', input.environment.target, zeropsStoredTargetCodec)
+				const target = decodeEnvironment(input.environment).target
 				await api.putServiceEnv({
 					serviceId: target.serviceId,
 					key: input.name,
@@ -215,7 +277,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				return { valueRef: `zerops:${target.serviceId}/${encodeURIComponent(input.name)}` }
 			},
 			delete: async (input) => {
-				const target = decodeEnvelope('target', input.environment.target, zeropsStoredTargetCodec)
+				const target = decodeEnvironment(input.environment).target
 				const variables = await api.listServiceEnv({ serviceId: target.serviceId, signal: abortSignal() })
 				const found = variables.find((variable) => variable.key === input.name)
 				if (found !== undefined) {

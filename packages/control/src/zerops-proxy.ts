@@ -7,7 +7,6 @@ import {
 	ZEROPS_TERMINAL,
 	type ZeropsApi,
 	zeropsArtifactCodec,
-	zeropsStoredTargetCodec,
 } from '@fabrika/provider-zerops'
 import type { Db } from './db'
 import { parseProviderEnvelope } from './run-lifecycle'
@@ -25,7 +24,7 @@ export interface CompiledProxyManifest {
 	}>
 }
 
-type ProxyApi = Pick<ZeropsApi, 'findService' | 'putServiceEnv' | 'triggerPipeline' | 'latestAppVersion' | 'getAppVersion'>
+type ProxyApi = Pick<ZeropsApi, 'putServiceEnv' | 'triggerPipeline' | 'latestAppVersion' | 'getAppVersion'>
 
 const decodeEnvelope = <T>(kind: string, envelope: ProviderEnvelope, codec: ProviderCodec<T>): T => {
 	if (envelope.provider !== 'zerops' || envelope.version !== codec.version) {
@@ -34,20 +33,15 @@ const decodeEnvelope = <T>(kind: string, envelope: ProviderEnvelope, codec: Prov
 	return codec.decode(envelope.payload)
 }
 
-/** Compile every public app in one Zerops environment project into the proxy's strict manifest shape. */
-export async function compileProjectProxyManifest(db: Db, projectId: string): Promise<CompiledProxyManifest> {
-	const rows = await db.listAppEnvsByProvider('zerops')
+/** Compile every public app assigned to one deployment namespace into its strict proxy manifest. */
+export async function compileNamespaceProxyManifest(db: Db, namespaceId: string): Promise<CompiledProxyManifest> {
+	const rows = await db.listAppEnvsByNamespace(namespaceId)
 	const apps: CompiledProxyManifest['apps'] = []
 	const ids = new Set<string>()
 	const hosts = new Set<string>()
 	for (const row of rows) {
-		const target = decodeEnvelope(
-			'target',
-			parseProviderEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),
-			zeropsStoredTargetCodec,
-		)
-		if (target.projectId !== projectId) {
-			continue
+		if (row.provider !== 'zerops') {
+			throw new Error(`deployment namespace ${namespaceId} contains an app owned by provider ${row.provider}`)
 		}
 		const artifact = decodeEnvelope(
 			'artifact',
@@ -64,10 +58,10 @@ export async function compileProjectProxyManifest(db: Db, projectId: string): Pr
 		}
 		const host = row.domain.toLowerCase()
 		if (ids.has(row.app_id)) {
-			throw new Error(`duplicate proxy app id \`${row.app_id}\` in Zerops project ${projectId}`)
+			throw new Error(`duplicate proxy app id \`${row.app_id}\` in deployment namespace ${namespaceId}`)
 		}
 		if (hosts.has(host)) {
-			throw new Error(`duplicate proxy host \`${host}\` in Zerops project ${projectId}`)
+			throw new Error(`duplicate proxy host \`${host}\` in deployment namespace ${namespaceId}`)
 		}
 		ids.add(row.app_id)
 		hosts.add(host)
@@ -79,9 +73,8 @@ export async function compileProjectProxyManifest(db: Db, projectId: string): Pr
 export interface SyncZeropsProxyInput {
 	db: Db
 	api: ProxyApi
-	projectId: string
-	/** Defaults to the repository topology's `proxy` hostname. */
-	proxyServiceName?: string
+	namespaceId: string
+	proxyServiceId: string
 	signal?: AbortSignal
 	sleep?: (ms: number) => Promise<void>
 }
@@ -92,24 +85,16 @@ export interface SyncZeropsProxyInput {
  */
 export async function syncZeropsProxy(input: SyncZeropsProxyInput): Promise<void> {
 	const signal = input.signal ?? new AbortController().signal
-	const proxy = await input.api.findService({
-		projectId: input.projectId,
-		hostname: input.proxyServiceName ?? 'proxy',
-		signal,
-	})
-	if (proxy === null) {
-		throw new Error(`Zerops project ${input.projectId} has no proxy service`)
-	}
-	const manifest = await compileProjectProxyManifest(input.db, input.projectId)
+	const manifest = await compileNamespaceProxyManifest(input.db, input.namespaceId)
 	await input.api.putServiceEnv({
-		serviceId: proxy.id,
+		serviceId: input.proxyServiceId,
 		key: PROXY_MANIFEST_VARIABLE,
 		value: JSON.stringify(manifest),
 		signal,
 	})
-	const process = await input.api.triggerPipeline({ serviceId: proxy.id, zeropsSetup: 'proxy', signal })
+	const process = await input.api.triggerPipeline({ serviceId: input.proxyServiceId, zeropsSetup: 'proxy', signal })
 	const version = process?.appVersionId === undefined
-		? await input.api.latestAppVersion({ serviceId: proxy.id, signal })
+		? await input.api.latestAppVersion({ serviceId: input.proxyServiceId, signal })
 		: { id: process.appVersionId }
 	if (version === null || version.id === '') {
 		throw new Error('Zerops proxy deploy did not expose an app-version')

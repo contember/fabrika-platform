@@ -1,6 +1,13 @@
-import { compileFabrikaManifest, defineApp, type ZeropsAppVersion, zeropsArtifactCodec, zeropsStoredTargetCodec } from '@fabrika/provider-zerops'
+import {
+	compileFabrikaManifest,
+	defineApp,
+	type ZeropsAppVersion,
+	zeropsArtifactCodec,
+	zeropsNamespaceTargetCodec,
+	zeropsStoredTargetCodec,
+} from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
-import { compileProjectProxyManifest, PROXY_MANIFEST_VARIABLE, syncZeropsProxy } from '../zerops-proxy'
+import { compileNamespaceProxyManifest, PROXY_MANIFEST_VARIABLE, syncZeropsProxy } from '../zerops-proxy'
 import { createHarness } from './helpers/harness'
 
 const appManifest = (id: string, env: string, upstream: string) =>
@@ -23,23 +30,45 @@ const envelope = <T>(codec: { version: number; encode(value: T): unknown }, valu
 })
 
 describe('Zerops proxy manifest delivery', () => {
-	test('compiles all apps in a project, writes one service variable, and rolls the proxy', async () => {
+	test('groups manifests by namespace and rolls the selected namespace proxy directly', async () => {
 		const { db } = createHarness()
+		for (const id of ['alpha', 'beta', 'gamma']) {
+			await db.createApp({ id, repoUrl: `github.com/acme/${id}` })
+		}
 		for (
-			const entry of [
-				{ id: 'alpha', domain: 'Alpha.Example.com', upstream: 'alpha:3000' },
-				{ id: 'beta', domain: 'beta.example.com', upstream: 'beta:8080' },
+			const namespace of [
+				{ id: 'apps-prod', projectId: 'project-shared', proxyServiceId: 'proxy-shared', exclusiveAppId: null },
+				{ id: 'gamma-prod', projectId: 'project-gamma', proxyServiceId: 'proxy-gamma', exclusiveAppId: 'gamma' },
 			]
 		) {
-			await db.createApp({ id: entry.id, repoUrl: `github.com/acme/${entry.id}` })
+			await db.createDeploymentNamespace({
+				id: namespace.id,
+				env: 'prod',
+				provider: 'zerops',
+				exclusiveAppId: namespace.exclusiveAppId,
+				providerTargetJson: JSON.stringify(envelope(zeropsNamespaceTargetCodec, {
+					projectId: namespace.projectId,
+					proxyServiceId: namespace.proxyServiceId,
+					ready: true,
+				})),
+				state: 'ready',
+			})
+		}
+		for (
+			const entry of [
+				{ id: 'alpha', namespaceId: 'apps-prod', domain: 'Alpha.Example.com', upstream: 'alpha:3000' },
+				{ id: 'beta', namespaceId: 'apps-prod', domain: 'beta.example.com', upstream: 'beta:8080' },
+				{ id: 'gamma', namespaceId: 'gamma-prod', domain: 'gamma.example.com', upstream: 'gamma:3000' },
+			]
+		) {
 			await db.upsertAppEnv({
 				appId: entry.id,
 				env: 'prod',
 				domain: entry.domain,
-				namespaceId: null,
+				namespaceId: entry.namespaceId,
 				provider: 'zerops',
 				providerTargetJson: JSON.stringify(
-					envelope(zeropsStoredTargetCodec, { projectId: 'project-1', serviceId: `${entry.id}-service` }),
+					envelope(zeropsStoredTargetCodec, { serviceId: `${entry.id}-service` }),
 				),
 				providerArtifactJson: JSON.stringify(
 					envelope(zeropsArtifactCodec, appManifest(entry.id, 'prod', entry.upstream)),
@@ -51,7 +80,6 @@ describe('Zerops proxy manifest delivery', () => {
 		let written = ''
 		const active: ZeropsAppVersion = { id: 'version-1', status: 'ACTIVE' }
 		const api = {
-			findService: () => Promise.resolve({ id: 'proxy-service', name: 'proxy' }),
 			putServiceEnv: (input: { serviceId: string; key: string; value: string; signal: AbortSignal }) => {
 				calls.push(`put:${input.serviceId}:${input.key}`)
 				written = input.value
@@ -68,8 +96,15 @@ describe('Zerops proxy manifest delivery', () => {
 			},
 		}
 
-		await syncZeropsProxy({ db, api, projectId: 'project-1', sleep: () => Promise.resolve() })
-		expect(calls).toEqual([`put:proxy-service:${PROXY_MANIFEST_VARIABLE}`, 'trigger', 'poll'])
+		expect((await compileNamespaceProxyManifest(db, 'gamma-prod')).apps.map((app) => app.id)).toEqual(['gamma'])
+		await syncZeropsProxy({
+			db,
+			api,
+			namespaceId: 'apps-prod',
+			proxyServiceId: 'proxy-shared',
+			sleep: () => Promise.resolve(),
+		})
+		expect(calls).toEqual([`put:proxy-shared:${PROXY_MANIFEST_VARIABLE}`, 'trigger', 'poll'])
 		expect(JSON.parse(written)).toEqual({
 			apps: [
 				{
@@ -88,35 +123,33 @@ describe('Zerops proxy manifest delivery', () => {
 		})
 	})
 
-	test('fails before writing when a public app has no domain or the proxy is unavailable', async () => {
+	test('fails before writing when a public app in the namespace has no domain', async () => {
 		const { db } = createHarness()
 		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.createDeploymentNamespace({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'zerops',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(envelope(zeropsNamespaceTargetCodec, {
+				projectId: 'project-1',
+				proxyServiceId: 'proxy-service',
+				ready: true,
+			})),
+			state: 'ready',
+		})
 		await db.upsertAppEnv({
 			appId: 'alpha',
 			env: 'prod',
-			namespaceId: null,
+			namespaceId: 'apps-prod',
 			provider: 'zerops',
 			providerTargetJson: JSON.stringify(
-				envelope(zeropsStoredTargetCodec, { projectId: 'project-1', serviceId: 'alpha-service' }),
+				envelope(zeropsStoredTargetCodec, { serviceId: 'alpha-service' }),
 			),
 			providerArtifactJson: JSON.stringify(
 				envelope(zeropsArtifactCodec, appManifest('alpha', 'prod', 'alpha:3000')),
 			),
 		})
-		await expect(compileProjectProxyManifest(db, 'project-1')).rejects.toThrow('requires a public domain')
-
-		await expect(
-			syncZeropsProxy({
-				db,
-				projectId: 'missing',
-				api: {
-					findService: () => Promise.resolve(null),
-					putServiceEnv: () => Promise.resolve(),
-					triggerPipeline: () => Promise.resolve(null),
-					latestAppVersion: () => Promise.resolve(null),
-					getAppVersion: () => Promise.resolve({ id: 'unused' }),
-				},
-			}),
-		).rejects.toThrow('has no proxy service')
+		await expect(compileNamespaceProxyManifest(db, 'apps-prod')).rejects.toThrow('requires a public domain')
 	})
 })

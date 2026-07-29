@@ -10,7 +10,9 @@ function provider(outcomes: Readonly<Record<string, ProviderReconcileOutcome>>, 
 		normalizeRegistration: (input) => input,
 		deploy: () => Promise.resolve({ state: 'succeeded' }),
 		reconcile: (input) => {
-			environments.push(`${input.environment.target.provider}:${JSON.stringify(input.environment.target.payload)}`)
+			environments.push(
+				`${input.environment.namespace?.id ?? 'none'}:${input.environment.target.provider}:${JSON.stringify(input.environment.target.payload)}`,
+			)
 			const outcome = outcomes[input.externalId]
 			if (outcome === undefined) {
 				return Promise.reject(new Error(`unexpected external run ${input.externalId}`))
@@ -24,7 +26,15 @@ describe('reconcileProviderRuns', () => {
 	test('finishes terminal operations through a third provider and leaves pending work untouched', async () => {
 		const { db } = createHarness()
 		await db.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
-		await db.upsertAppEnv(providerEnvironment('app', 'prod'))
+		await db.createDeploymentNamespace({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: TEST_PROVIDER_ID,
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify({ provider: TEST_PROVIDER_ID, version: 1, payload: { dock: 'shared' } }),
+			state: 'failed',
+		})
+		await db.upsertAppEnv({ ...providerEnvironment('app', 'prod'), namespaceId: 'apps-prod' })
 		await db.upsertAppEnv({
 			appId: 'app',
 			env: 'foreign',
@@ -81,9 +91,9 @@ describe('reconcileProviderRuns', () => {
 		expect((await db.getRun('foreign'))?.status).toBe('running')
 		expect(released).toEqual(['app:prod/active', 'app:prod/failed'])
 		expect(environments).toEqual([
-			'harbor:{"kind":"target"}',
-			'harbor:{"kind":"target"}',
-			'harbor:{"kind":"target"}',
+			'apps-prod:harbor:{"kind":"target"}',
+			'apps-prod:harbor:{"kind":"target"}',
+			'apps-prod:harbor:{"kind":"target"}',
 		])
 	})
 

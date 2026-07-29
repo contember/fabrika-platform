@@ -165,11 +165,11 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 			deploy: async () => ({ state: 'succeeded' }),
 			secrets: {
 				put: async ({ environment, name, value }) => {
-					calls.push(`put:${environment.env}:${name}:${value}`)
+					calls.push(`put:${environment.namespace?.id ?? 'none'}:${environment.env}:${name}:${value}`)
 					return { valueRef: `harbor:${environment.env}/${name}` }
 				},
 				delete: async ({ environment, name }) => {
-					calls.push(`delete:${environment.env}:${name}`)
+					calls.push(`delete:${environment.namespace?.id ?? 'none'}:${environment.env}:${name}`)
 				},
 			},
 		}
@@ -183,8 +183,17 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 			cancelRun: () => Promise.resolve(),
 		}
 		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await db.createDeploymentNamespace({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(envelope('harbor', 'namespace')),
+			state: 'failed',
+		})
 		await db.upsertAppEnv({
 			...storedEnvironment('harbor'),
+			namespaceId: 'apps-prod',
 		})
 
 		expect((await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { value: 'v1', env: 'prod' }), deps)).status).toBe(200)
@@ -194,9 +203,9 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		expect((await handleApi(req('PATCH', '/api/apps/app/secrets/API_KEY/value', { value: 'v2', env: 'prod' }), deps)).status).toBe(200)
 		expect((await handleApi(req('DELETE', '/api/apps/app/secrets/API_KEY/value?env=prod'), deps)).status).toBe(200)
 		expect(calls).toEqual([
-			'put:prod:API_KEY:v1',
-			'put:prod:API_KEY:v2',
-			'delete:prod:API_KEY',
+			'put:apps-prod:prod:API_KEY:v1',
+			'put:apps-prod:prod:API_KEY:v2',
+			'delete:apps-prod:prod:API_KEY',
 		])
 	})
 

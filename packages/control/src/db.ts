@@ -626,6 +626,16 @@ export class Db {
 		return row !== null
 	}
 
+	async hasInFlightRun(appId: string, env: string): Promise<boolean> {
+		const row = await this.d1
+			.prepare(`SELECT id FROM runs
+				WHERE app_id = ? AND env = ? AND status IN ('pending', 'running')
+				LIMIT 1`)
+			.bind(appId, env)
+			.first<{ id: string }>()
+		return row !== null
+	}
+
 	// ── App secrets (the pipeline.secrets resolution seam; values live in the M4 vault) ──
 
 	/**

@@ -11,7 +11,7 @@ export interface ProviderReconcileSummary {
 }
 
 export interface ProviderReconcileDeps {
-	database: Pick<Db, 'getAppEnv' | 'listInFlightRuns' | 'markRunFinished'>
+	database: Pick<Db, 'getAppEnv' | 'getDeploymentNamespace' | 'listInFlightRuns' | 'markRunFinished'>
 	provider: ControlProvider
 	releaseLock: (key: string, holder: string) => Promise<void>
 }
@@ -46,7 +46,7 @@ export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promis
 		const outcome = await reconcile({
 			runId: run.id,
 			externalId: run.external_run_id,
-			environment: providerEnvironment(appEnv),
+			environment: await providerEnvironment(deps.database, appEnv),
 		})
 		summary.checked++
 

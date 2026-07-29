@@ -51,7 +51,7 @@ export async function setAppSecretValue(c: VaultContext, appId: string, name: st
 	if (target instanceof Response) return target
 	if (target.kind === 'provider') {
 		const { valueRef: ref } = await target.secrets.put({
-			environment: providerEnvironment(target.appEnv),
+			environment: await providerEnvironment(c.db, target.appEnv),
 			name,
 			value,
 		})
@@ -91,7 +91,7 @@ export async function rotateAppSecretValue(c: VaultContext, appId: string, name:
 	if (target instanceof Response) return target
 	if (target.kind === 'provider') {
 		await target.secrets.put({
-			environment: providerEnvironment(target.appEnv),
+			environment: await providerEnvironment(c.db, target.appEnv),
 			name,
 			value,
 		})
@@ -132,7 +132,7 @@ export async function deleteAppSecretValue(c: VaultContext, appId: string, name:
 	if (target instanceof Response) return target
 	if (target.kind === 'provider') {
 		await target.secrets.delete({
-			environment: providerEnvironment(target.appEnv),
+			environment: await providerEnvironment(c.db, target.appEnv),
 			name,
 		})
 		await c.authorized.auth.audit({

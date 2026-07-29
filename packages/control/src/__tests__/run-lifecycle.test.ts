@@ -78,7 +78,7 @@ async function seedRun(
 function makeProvider(
 	inputs: ProviderDeployInput[],
 	outcome: RunOutcome,
-	options: { id?: string; managedSecrets?: boolean; cancelled?: string[] } = {},
+	options: { id?: string; managedSecrets?: boolean; cancelled?: string[]; cancelledNamespaces?: string[] } = {},
 ): ControlProvider {
 	const id = options.id ?? 'memory'
 	return {
@@ -91,6 +91,7 @@ function makeProvider(
 		},
 		cancel: async (input) => {
 			options.cancelled?.push(input.externalId)
+			options.cancelledNamespaces?.push(input.environment.namespace?.id ?? 'none')
 		},
 		...(options.managedSecrets
 			? {
@@ -307,13 +308,40 @@ describe('provider-neutral run lifecycle', () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db, { externalId: 'provider-operation-1' })
 		const cancelled: string[] = []
+		const cancelledNamespaces: string[] = []
+		await db.createDeploymentNamespace({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'memory',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(envelope('memory', 'namespace-target')),
+			state: 'failed',
+		})
+		const appEnv = await db.getAppEnv('app', 'prod')
+		if (appEnv === null) throw new Error('expected app environment')
+		await db.upsertAppEnv({
+			appId: appEnv.app_id,
+			env: appEnv.env,
+			domain: appEnv.domain,
+			triggerRef: appEnv.trigger_ref,
+			namespaceId: 'apps-prod',
+			provider: appEnv.provider,
+			providerTargetJson: appEnv.provider_target_json,
+			providerArtifactJson: appEnv.provider_artifact_json,
+		})
 		const lock = makeFakeLock()
 		await lock.acquire('app:prod', runId)
-		const deps = makeDeps(db, makeProvider([], { state: 'failed' }, { cancelled }), new EnvSecretResolver({}), lock)
+		const deps = makeDeps(
+			db,
+			makeProvider([], { state: 'failed' }, { cancelled, cancelledNamespaces }),
+			new EnvSecretResolver({}),
+			lock,
+		)
 
 		await cancelDeploy(deps, await requireRun(db, runId))
 
 		expect(cancelled).toEqual(['provider-operation-1'])
+		expect(cancelledNamespaces).toEqual(['apps-prod'])
 		expect((await requireRun(db, runId)).status).toBe('failed')
 		expect(lock.held.size).toBe(0)
 	})

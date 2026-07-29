@@ -351,4 +351,47 @@ describe('generic provider persistence', () => {
 			])
 		).toThrow()
 	})
+
+	test('moves Zerops project coordinates from app target v1 to its namespace', () => {
+		const migrate = (namespaceProjectId: string): Database => {
+			const sqlite = new Database(':memory:')
+			sqlite.exec('PRAGMA foreign_keys = ON')
+			applySqliteMigrationsThrough(sqlite, '0011_namespace_resource_claim_owner_coordinates.sql')
+			sqlite.query('INSERT INTO apps (id, repo_url) VALUES (?, ?)').run('alpha', 'github.com/acme/alpha')
+			sqlite.query(`INSERT INTO deployment_namespaces (
+					id, env, provider, exclusive_app_id, provider_target_json, state
+				) VALUES (?, 'prod', 'zerops', NULL, ?, 'ready')`)
+				.run(
+					'apps-prod',
+					JSON.stringify({
+						provider: 'zerops',
+						version: 1,
+						payload: { projectId: namespaceProjectId, proxyServiceId: 'proxy-1', ready: true },
+					}),
+				)
+			sqlite.query(`INSERT INTO app_envs (
+					app_id, env, namespace_id, provider, provider_target_json, provider_artifact_json
+				) VALUES ('alpha', 'prod', 'apps-prod', 'zerops', ?, ?)`)
+				.run(
+					JSON.stringify({
+						provider: 'zerops',
+						version: 1,
+						payload: { projectId: 'project-1', serviceId: 'service-alpha' },
+					}),
+					JSON.stringify({ provider: 'zerops', version: 1, payload: { kind: 'artifact' } }),
+				)
+			applySqliteMigrationStrictly(sqlite, '0012_zerops_namespace_app_targets.sql')
+			return sqlite
+		}
+
+		const sqlite = migrate('project-1')
+		const environment = queryRows(sqlite, 'SELECT provider_target_json FROM app_envs')[0]
+		expect(JSON.parse(`${rowValue(environment, 'provider_target_json')}`)).toEqual({
+			provider: 'zerops',
+			version: 2,
+			payload: { serviceId: 'service-alpha' },
+		})
+		sqlite.close()
+		expect(() => migrate('different-project')).toThrow()
+	})
 })

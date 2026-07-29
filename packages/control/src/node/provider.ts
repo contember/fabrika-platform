@@ -53,11 +53,9 @@ export function zeropsControlProvider(
 			await syncZeropsProxy({
 				db: db(env),
 				api: input.api,
-				projectId: input.target.projectId,
+				namespaceId: input.namespaceId,
+				proxyServiceId: input.target.proxyServiceId,
 				signal: input.signal,
-				...(source['ZEROPS_PROXY_SERVICE_NAME'] === undefined
-					? {}
-					: { proxyServiceName: source['ZEROPS_PROXY_SERVICE_NAME'] }),
 			})
 		},
 	})

@@ -316,8 +316,13 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 	const namespace = await resolveRegistrationNamespace(c, body, appId, env, existing)
 	if (namespace instanceof Response) return namespace
 	const nextNamespaceId = namespace?.id ?? null
-	if (existing?.namespace_id !== nextNamespaceId && await c.db.hasSuccessfulRun(appId, env)) {
-		return error(409, 'deployment namespace cannot change after a successful deploy')
+	if (existing?.namespace_id !== nextNamespaceId) {
+		if (await c.db.hasInFlightRun(appId, env)) {
+			return error(409, 'deployment namespace cannot change while a deploy is in progress')
+		}
+		if (await c.db.hasSuccessfulRun(appId, env)) {
+			return error(409, 'deployment namespace cannot change after a successful deploy')
+		}
 	}
 	const registration = registrationEnvironment(body, c.provider, toProviderApp(app), env, domain, namespace)
 	if (registration instanceof Response) return registration

@@ -105,6 +105,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			'0005_deployment_namespaces.sql',
 			'0006_immutable_namespace_resource_claim_owners.sql',
 			'0007_namespace_resource_claim_owner_coordinates.sql',
+			'0008_zerops_namespace_app_targets.sql',
 		])
 	})
 
