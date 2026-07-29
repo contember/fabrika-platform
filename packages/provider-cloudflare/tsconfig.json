@@ -1,0 +1,10 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"types": ["@cloudflare/workers-types", "@types/bun"],
+		"noUncheckedIndexedAccess": false,
+		"noPropertyAccessFromIndexSignature": false
+	},
+	"include": ["src/**/*"]
+}
