@@ -3,6 +3,7 @@ import { FakeRepoSource, normalizeRepoUrl } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { handleWebhook } from '../webhook'
 import { createHarness, pushWebhookRequest, signWebhook } from './helpers/harness'
+import { providerEnvironment } from './helpers/provider'
 
 // The webhook is the one unauthenticated route, HMAC-gated. These tests exercise: (1) signature
 // verification (good/bad), (2) repo+ref → (app, env) mapping driving run creation + enqueue, (3) the
@@ -29,7 +30,7 @@ function makeQueue(): { sent: DeployJobMessage[]; send(message: DeployJobMessage
  */
 async function seedRegistry(db: ReturnType<typeof createHarness>['db'], cloneUrl: string): Promise<void> {
 	await db.createApp({ id: 'app', repoUrl: normalizeRepoUrl(cloneUrl) })
-	await db.upsertAppEnv({ appId: 'app', env: 'prod', triggerRef: 'refs/heads/deploy/prod' })
+	await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/deploy/prod' }))
 }
 
 describe('handleWebhook (HMAC + ref→env)', () => {
@@ -118,7 +119,7 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 		const { db } = createHarness()
 		const cloneUrl = 'https://github.com/acme/app.git'
 		await db.createApp({ id: 'app', repoUrl: normalizeRepoUrl(cloneUrl) })
-		await db.upsertAppEnv({ appId: 'app', env: 'release', triggerRef: 'refs/tags/v*' })
+		await db.upsertAppEnv(providerEnvironment('app', 'release', { triggerRef: 'refs/tags/v*' }))
 		const queue = makeQueue()
 		const request = await pushWebhookRequest({ ref: 'refs/tags/v1.2.3', cloneUrl, after: 'sha-tag', secret: SECRET })
 
@@ -137,7 +138,7 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 		const { db } = createHarness()
 		const cloneUrl = 'https://github.com/acme/app.git'
 		await db.createApp({ id: 'app', repoUrl: normalizeRepoUrl(cloneUrl) })
-		await db.upsertAppEnv({ appId: 'app', env: 'release', triggerRef: 'refs/tags/v*' })
+		await db.upsertAppEnv(providerEnvironment('app', 'release', { triggerRef: 'refs/tags/v*' }))
 		const queue = makeQueue()
 		const request = await pushWebhookRequest({ ref: 'refs/tags/release-1', cloneUrl, secret: SECRET })
 
@@ -150,7 +151,7 @@ describe('handleWebhook (HMAC + ref→env)', () => {
 		const { db } = createHarness()
 		// Registered WITHOUT .git; pushed WITH .git and mixed case host — must still match.
 		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/App' })
-		await db.upsertAppEnv({ appId: 'app', env: 'prod', triggerRef: 'refs/heads/deploy/prod' })
+		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/deploy/prod' }))
 		const queue = makeQueue()
 		const request = await pushWebhookRequest({ ref: 'refs/heads/deploy/prod', cloneUrl: 'https://GitHub.com/acme/App.git', secret: SECRET })
 

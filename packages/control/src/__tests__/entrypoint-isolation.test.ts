@@ -92,6 +92,8 @@ const CLOUDFLARE_ONLY = (specifier: string): boolean => specifier.startsWith('cl
 const PROCESS_ONLY = (specifier: string): boolean =>
 	specifier.startsWith('node:') || specifier.startsWith('bun:') || specifier === '@fabrika/platform-node'
 
+const PROVIDERS = new Set(['@fabrika/provider-cloudflare', '@fabrika/provider-zerops'])
+
 /** The layer both entrypoints sit on — every shared module either one enters through. */
 const SHARED = ['routes.ts', 'consumer.ts', 'cron.ts', 'services.ts', 'db.ts', 'env.ts', 'iam.ts', 'api/router.ts', 'webhook.ts', 'repo-poll.ts']
 
@@ -108,6 +110,8 @@ describe('entrypoint isolation', () => {
 		expect(graph.files).toContain('db.ts')
 		expect(graph.files).toContain('platform-cf.ts')
 		expect([...graph.externals]).toContain('cloudflare:workers')
+		expect([...graph.externals]).toContain('@fabrika/provider-cloudflare')
+		expect([...graph.externals]).not.toContain('@fabrika/provider-zerops')
 	})
 
 	test('the Bun entrypoint reaches no Cloudflare-only module', () => {
@@ -125,6 +129,8 @@ describe('entrypoint isolation', () => {
 		expect(graph.files).toContain('services.ts')
 		expect(graph.files).toContain('db.ts')
 		expect([...graph.externals]).toContain('@fabrika/platform-node')
+		expect([...graph.externals]).toContain('@fabrika/provider-zerops')
+		expect([...graph.externals]).not.toContain('@fabrika/provider-cloudflare')
 	})
 
 	test('the cron command and the migration runner stay on the process side too', () => {
@@ -155,6 +161,12 @@ describe('entrypoint isolation', () => {
 		// a machine without workers-types.
 		for (const entry of SHARED) {
 			expect(`${entry} → ${walk(entry).files.filter((f) => f === 'platform-cf.ts').join('')}`).toBe(`${entry} → `)
+		}
+	})
+
+	test('the shared layer reaches no concrete provider package', () => {
+		for (const entry of SHARED) {
+			expect(`${entry}: ${[...walk(entry).externals].filter((specifier) => PROVIDERS.has(specifier)).join(',')}`).toBe(`${entry}: `)
 		}
 	})
 })

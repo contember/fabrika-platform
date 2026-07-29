@@ -1,11 +1,10 @@
 #!/usr/bin/env bun
 /**
- * Self-deploy FABRIKA ITSELF through fabrika's own engine — the dogfood path: the same `deploy()`
- * (@fabrika/engine) that deploys every other app, fed fabrika's own `fabrika.config.ts`. Run it FROM A LAPTOP
+ * Self-deploy FABRIKA through its Cloudflare provider, using `fabrika.config.ts`. Run it FROM A LAPTOP
  * for the first bring-up AND as a break-glass redeploy/recovery when the live control plane can't
  * self-deploy (bad self-deploy, wedged D1, a stuck `deploy_locks` row) — it does NOT depend on a running fabrika.
  *
- * IDEMPOTENT — safe to re-run. The engine is declarative (oblaka provision, D1 migrations apply only the
+ * IDEMPOTENT — safe to re-run. The provider is declarative (oblaka provision, D1 migrations apply only the
  * new ones, `wrangler deploy` / `secret put` overwrite, propustka reconcile is an idempotent PUT), so a
  * re-run converges. The ONLY stateful knob is the escape hatch: `VOZKA_BOOTSTRAP_ADMINS` makes the FIRST
  * operator an admin before propustka has any grant for them (src/iam.ts `withBootstrapAdmins`), breaking
@@ -65,8 +64,7 @@
  *   bun run scripts/bootstrap.ts --dry-run                                  # plan-only — graph + every step, no CF
  */
 
-import { deploy } from '@fabrika/engine'
-import type { CloudflareTarget, DeployContext } from '@fabrika/engine'
+import { deployCloudflareConfig } from '@fabrika/provider-cloudflare'
 import { resolve } from 'node:path'
 
 const DRY_RUN = process.argv.includes('--dry-run')
@@ -96,37 +94,22 @@ async function main(): Promise<void> {
 	// else nobody — not even you — can authorize and you lock yourself out (the warning in main() is loud).
 	const bootstrapAdmins = optional('VOZKA_BOOTSTRAP_ADMINS') ?? '[]'
 
-	// Import AFTER the env guards: fabrika.config materializes `access` at import (needs VOZKA_DOMAIN).
-	const { default: config } = await import('../fabrika.config')
-
 	const env = optional('VOZKA_ENV') ?? 'prod'
 
 	// The secret VALUES fabrika needs at deploy, gathered by the SAME names the config declares in
 	// `pipeline.secrets`. Read from the environment; never inlined, never logged. CLOUDFLARE_API_TOKEN +
 	// the propustka provisioning key are fabrika's RUNTIME platform creds (it injects them into every
 	// deploy it runs), so they are required Worker secrets — a fabrika without them can't deploy/reconcile.
-	const secrets: Record<string, string> = {
-		VOZKA_VAULT_KEY: required('VOZKA_VAULT_KEY'),
-		GITHUB_APP_PRIVATE_KEY: required('GITHUB_APP_PRIVATE_KEY'),
-		GITHUB_WEBHOOK_SECRET: required('GITHUB_WEBHOOK_SECRET'),
-		CLOUDFLARE_API_TOKEN: required('CLOUDFLARE_API_TOKEN'),
-		PROPUSTKA_PROVISIONING_KEY: required('PROPUSTKA_PROVISIONING_KEY'),
-	}
-
-	const ctx: DeployContext<CloudflareTarget> = {
-		env,
-		domain: required('VOZKA_DOMAIN'),
-		target: {
-			platform: 'cloudflare',
-			accountId: required('CLOUDFLARE_ACCOUNT_ID'),
-			apiToken: secrets.CLOUDFLARE_API_TOKEN,
-		},
-		propustkaUrl: required('PROPUSTKA_URL'),
-		adminKey: secrets.PROPUSTKA_PROVISIONING_KEY,
-		secrets,
-		// fabrika.config + its workerDir resolve against packages/control (this script's parent dir).
-		cwd: resolve(import.meta.dir, '..'),
-		dryRun: DRY_RUN,
+	for (const name of [
+		'CLOUDFLARE_ACCOUNT_ID',
+		'CLOUDFLARE_API_TOKEN',
+		'PROPUSTKA_URL',
+		'PROPUSTKA_PROVISIONING_KEY',
+		'VOZKA_VAULT_KEY',
+		'GITHUB_APP_PRIVATE_KEY',
+		'GITHUB_WEBHOOK_SECRET',
+	]) {
+		required(name)
 	}
 
 	// The bootstrap admin list is set on the deploy's environment (the engine's `wrangler secret put` /
@@ -152,13 +135,19 @@ async function main(): Promise<void> {
 		console.warn('    If this is the FIRST bring-up, abort now and set VOZKA_BOOTSTRAP_ADMINS, or you will lock yourself out.')
 	}
 
-	// oblaka's programmatic deploy() READS the existing wrangler.jsonc relative to process.cwd() but
-	// WRITES it relative to ctx.cwd — so when this script is launched from the repo root the read misses
+	// oblaka's programmatic deploy reads the existing wrangler.jsonc relative to process.cwd() but
+	// writes it relative to the provider cwd. When launched from the repo root the read otherwise misses
 	// the committed config and oblaka fresh-gens the DO migrations (losing history → tag-shift → wrangler
 	// 10074 when a DO class is removed). chdir into the worker dir so read + write agree and the committed
 	// migration history is preserved. (The runner path already runs with cwd = the worker dir.)
-	process.chdir(ctx.cwd)
-	const result = await deploy(config, ctx)
+	const cwd = resolve(import.meta.dir, '..')
+	process.chdir(cwd)
+	const result = await deployCloudflareConfig({
+		env,
+		configPath: resolve(cwd, 'fabrika.config.ts'),
+		cwd,
+		dryRun: DRY_RUN,
+	})
 
 	console.log(`\n${result.appId} → ${result.env}: ${result.status}`)
 	for (const step of result.steps) {

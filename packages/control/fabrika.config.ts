@@ -1,8 +1,8 @@
-// fabrika's OWN deploy surface — DOGFOODING `@fabrika/config`. fabrika is just another app the control
+// fabrika's OWN Cloudflare deploy surface. fabrika is just another app the control
 // plane deploys: this single file is the source of truth for fabrika's Cloudflare resource graph, its
 // authz vocabulary, and its deploy pipeline. fabrika gates its own `/api/*` in-process via PropustkaAuth
 // (src/iam.ts) — propustka is fully native now, there is no Cloudflare Access front door to reconcile.
-// The `fabrika deploy` path (packages/engine CLI / scripts/bootstrap.ts) loads THIS to self-deploy.
+// The Cloudflare provider CLI and scripts/bootstrap.ts load THIS to self-deploy.
 //
 // Local dev still uses oblaka directly: `oblaka.ts` is a thin shim that imports `buildVozkaWorker`
 // from here and feeds it to oblaka's `define`, so `bunx oblaka oblaka.ts` (wrangler.jsonc generation)
@@ -12,16 +12,16 @@
 // Secrets are never inlined: the GitHub App key/webhook secret + the M4 vault key are declared by
 // NAME in `pipeline.secrets` and provisioned out-of-band (`wrangler secret put` / `.dev.vars`).
 
-import type { AppSchema, ResourceContext } from '@fabrika/config'
-import { D1Database, defineApp, Queue, R2Bucket, ServiceReference, Worker } from '@fabrika/config'
+import type { AppSchema } from '@fabrika/auth'
+import { D1Database, defineApp, Queue, R2Bucket, ServiceReference, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 import { ACTIONS, SCOPES, VOZKA_APP_ID } from './src/actions'
 
 /**
  * Build fabrika's full Cloudflare resource graph for one environment. This is the SINGLE source of the
- * graph — consolidated out of the old `oblaka.ts`. Both the `fabrika deploy` path (via `defineApp`
+ * graph — consolidated out of the old `oblaka.ts`. Both the provider deploy path (via `defineApp`
  * below) and the local-dev `oblaka.ts` shim call this, so the two never drift.
  *
- * `ctx.domain` (from `VOZKA_DOMAIN` on the `fabrika deploy` path) is surfaced as a runtime var so the
+ * `ctx.domain` (from `VOZKA_DOMAIN` on the provider deploy path) is surfaced as a runtime var so the
  * Worker can build absolute URLs (e.g. webhook callbacks); it's empty locally, where oblaka's
  * `define` has no domain to pass.
  */
@@ -61,9 +61,8 @@ export const buildVozkaWorker = (ctx: ResourceContext): Worker => {
 			// when propustka denies / the IAM binding isn't wired yet. Empty by default; the bootstrap
 			// script (scripts/bootstrap.ts) sets the first operator's email here for initial bring-up.
 			VOZKA_BOOTSTRAP_ADMINS: process.env['VOZKA_BOOTSTRAP_ADMINS'] ?? '[]',
-			// The SINGLE Cloudflare account fabrika deploys every app into (single-account; not secret),
-			// and the propustka coords every deploy reconciles against. Surfaced from the deploy env (the
-			// CLI/bootstrap always set them); the running Worker injects them into every RunnerJob.
+			// The selected Cloudflare provider's account id and propustka origin. The composition root
+			// injects them into provider jobs without persisting credentials in the registry.
 			CLOUDFLARE_ACCOUNT_ID: process.env['CLOUDFLARE_ACCOUNT_ID'] ?? '',
 			PROPUSTKA_URL: process.env['PROPUSTKA_URL'] ?? '',
 			// The GitHub App's numeric id (public, not a secret) — it's the `iss` of the App JWT that mints

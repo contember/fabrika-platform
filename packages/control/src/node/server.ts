@@ -22,13 +22,16 @@
 import { PostgresJobConsumer } from '@fabrika/platform-node'
 import { decodeDeployJobMessage, runDeployJob } from '../consumer'
 import type { Env } from '../env'
+import { reconcileProviderRuns } from '../provider-reconcile'
 import { handleFetch } from '../routes'
-import { DEPLOY_LOCK_TTL_MS } from '../services'
-import { reconcileZeropsRunsFromEnv } from '../zerops-reconcile'
+import { db, DEPLOY_LOCK_TTL_MS, locks } from '../services'
 import { createRuntime, type Runtime } from './runtime'
 
 /** Build the server's fetch handler for an assembled env. Exported so a test can drive it directly. */
-export function createFetchHandler(env: Env): (request: Request) => Promise<Response> {
+export function createFetchHandler(
+	env: Env,
+	provider: Runtime['provider'],
+): (request: Request) => Promise<Response> {
 	return async (request: Request): Promise<Response> => {
 		try {
 			const url = new URL(request.url)
@@ -38,7 +41,7 @@ export function createFetchHandler(env: Env): (request: Request) => Promise<Resp
 			if (url.pathname === '/healthz') {
 				return Response.json({ status: 'ok' })
 			}
-			return await handleFetch(request, env)
+			return await handleFetch(request, env, provider)
 		} catch (err) {
 			// NOT optional on this runtime. Bun's default error page embeds the exception AND the
 			// surrounding SOURCE LINES in the response body; the Workers runtime returns an opaque 500
@@ -73,7 +76,7 @@ export function createConsumer(runtime: Runtime): PostgresJobConsumer<{ runId: s
 		handler: async (job) => {
 			// The lifecycle's answer is for the LOG, not for the consumer: every non-throwing outcome is a
 			// handled message, so nothing here branches on it (see the contract in src/consumer.ts).
-			const result = await runDeployJob(runtime.env, job.payload)
+			const result = await runDeployJob(runtime.env, runtime.provider, job.payload)
 			console.info(`deploy run ${result.runId}: ${result.status}`)
 		},
 		visibilityTimeoutMs: DEPLOY_LOCK_TTL_MS,
@@ -95,9 +98,13 @@ export function createConsumer(runtime: Runtime): PostgresJobConsumer<{ runId: s
 async function main(): Promise<void> {
 	const runtime = createRuntime()
 	const consumer = createConsumer(runtime)
-	const reconciliation = await reconcileZeropsRunsFromEnv(runtime.env)
+	const reconciliation = await reconcileProviderRuns({
+		database: db(runtime.env),
+		provider: runtime.provider,
+		releaseLock: (key, holder) => locks(runtime.env).release(key, holder),
+	})
 	console.info(
-		`Zerops startup reconcile: checked=${reconciliation.checked} succeeded=${reconciliation.succeeded} `
+		`Provider startup reconcile: checked=${reconciliation.checked} succeeded=${reconciliation.succeeded} `
 			+ `failed=${reconciliation.failed} in-progress=${reconciliation.inProgress} waiting=${reconciliation.waiting}`,
 	)
 	consumer.start()
@@ -108,7 +115,7 @@ async function main(): Promise<void> {
 		// listener speaks HTTP and holds no certificates. The `px_token` cookie is still marked `Secure`:
 		// `src/iam.ts` decides that from the configured public domain (`VOZKA_DOMAIN`), not from the
 		// socket, precisely because behind a terminating balancer the socket is the wrong signal.
-		fetch: createFetchHandler(runtime.env),
+		fetch: createFetchHandler(runtime.env, runtime.provider),
 		// Backstop for anything raised outside the handler. The handler already catches its own throws
 		// (see `createFetchHandler`); without this, Bun's default page would answer with source lines.
 		error(err: unknown): Response {
@@ -122,7 +129,7 @@ async function main(): Promise<void> {
 	const state = (on: boolean): string => (on ? 'enabled' : 'disabled')
 	console.info(
 		`vozka listening on :${server.port} (env=${runtime.env.ENVIRONMENT}, iam=${state(runtime.env.IAM !== undefined)}, `
-			+ `vault=${state(runtime.env.VOZKA_VAULT_KEY !== undefined)}, runner=${state(runtime.env.RUNNER !== undefined)})`,
+			+ `vault=${state(runtime.env.VOZKA_VAULT_KEY !== undefined)}, provider=${runtime.provider.id})`,
 	)
 
 	// SIGTERM is what the platform sends on redeploy/scale-down. Stop accepting, let in-flight requests

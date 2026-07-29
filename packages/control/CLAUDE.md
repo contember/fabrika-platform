@@ -34,23 +34,21 @@ FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres 
 | deploy consumer | `queue()` → `runDeployJob`                     | `PostgresJobConsumer` → `runDeployJob`                              |
 | cron            | `scheduled()` → `runMaintenance`               | `run.crontab` → `src/node/cron.ts` → `runMaintenance`               |
 | migrations      | `wrangler d1 migrations apply` (`migrations/`) | `run.initCommands` → `src/node/migrate.ts` (`migrations-postgres/`) |
-| deploy executor | `RUNNER_SVC` → vozka-runner + container        | **none** (ADR-0003 — the platform builds and deploys)               |
+| provider        | `@fabrika/provider-cloudflare` + `RUNNER_SVC` | `@fabrika/provider-zerops` + neutral engine                         |
 
 The shared layer is `routes.ts` · `consumer.ts` · `cron.ts` · `services.ts` and everything they reach.
-**Neither entrypoint may reach the other's runtime**, and `src/__tests__/entrypoint-isolation.test.ts`
-walks both import graphs and fails if one does — including reaching `platform-cf.ts`, whose Cloudflare
-coupling is _ambient types_ and therefore invisible to a specifier check.
+It imports only `@fabrika/provider-contract`. `src/index.ts` statically selects Cloudflare;
+`src/node/provider.ts` statically selects Zerops. `entrypoint-isolation.test.ts` proves that neither
+entrypoint reaches the other provider or runtime.
 
 ## Architecture
 
-`fetch` routes: `/api/health` → ok · `POST /webhooks/github` → webhook · `POST /api/runs` → the M2 raw
-relay · `/api/*` → ACL-gated control surface · everything else → dashboard `ASSETS`. (`/healthz` is
+`fetch` routes: `/api/health` → ok · `POST /webhooks/github` → webhook · `/api/*` → ACL-gated control
+surface · everything else → dashboard `ASSETS`. (`/healthz` is
 added by the Bun server only, for the platform health check.) A trigger writes a `pending` run to the
-database then enqueues; the consumer runs one run per message → `executeDeploy` → `startRun`, which on
-Cloudflare HANDS THE RUN OFF to **vozka-runner** (a SEPARATE worker, `@fabrika/runner`) over the
-`RUNNER_SVC` service binding. vozka-runner boots the per-run container, relays logs→R2, and writes the
-terminal status→D1 (so the run is recorded even if THIS worker is reset mid-deploy — see invariants).
-The control plane keeps the registry/run writes, the lock, secret resolution + assembly.
+database then enqueues. The consumer resolves the statically selected `ControlProvider` and calls its
+capabilities. Cloudflare hands the provider-owned job to vozka-runner. Zerops executes its provider
+session in process. Core owns registry/run writes, locking, secret resolution, and generic envelopes.
 
 Runtime surface: `src/env.ts` (ports + vars) · `src/platform-cf.ts` (the raw CF bindings + their
 adapters) · `src/services.ts` (how every dependency bag is built). Schema: `migrations/*.sql` (SQLite/D1)
@@ -90,18 +88,14 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
 - **Secrets resolve by ref scheme** (`src/secret-resolver.ts`): `vault:` / `secretstore:` / `env:` / `literal:`.
   An unknown / unresolvable ref THROWS — never deploy with an empty credential. The resolver handles ONLY
   per-app `pipeline.secrets`; platform creds are fabrika's own Worker config (below).
-- **Single-account + build-time deploy config.** fabrika deploys into ONE Cloudflare account (its own).
-  The CF account/token (`CLOUDFLARE_ACCOUNT_ID` var + `CLOUDFLARE_API_TOKEN` secret) and propustka coords
-  (`PROPUSTKA_URL` var + the seeded `PROPUSTKA_PROVISIONING_KEY` secret) live in `src/env.ts`, are declared
-  in `fabrika.config.ts`, and are injected into EVERY deploy job by `run-lifecycle.assembleJob`. There is NO
-  `accounts` registry table; WHETHER a deploy reconciles is decided by the app's `schema` presence.
+- **One static provider per installation.** Core persists versioned target/artifact envelopes and calls
+  `ControlProvider`; it has no provider registry and no provider-id branch. Cloudflare credentials live
+  only in `WorkerBindings`; Zerops credentials live only in the process composition. Provider packages
+  validate envelopes and own deploy, cancel, reconcile, and provider-managed secret behavior.
 - **Run lifecycle is status-guarded + idempotent** (`src/run-lifecycle.ts`): `markRunStarted` only moves
   pending→running, so a redelivered queue message is a no-op. ack handled runs; retry only on an unexpected throw.
-- **The deploy EXECUTOR is CLOUDFLARE-ONLY (`@fabrika/runner` / `vozka-runner`), reached via `RUNNER_SVC`.**
-  Off Cloudflare `env.RUNNER` is absent and `startRun` (`src/services.ts`) REJECTS with a message naming
-  both reasons it can be missing (local dev has no binding; a Zerops installation has no runner at all,
-  ADR-0003 — the platform builds and deploys there). Never make it a silent no-op: a run must never be
-  recorded as anything other than what actually happened.
+- **The Cloudflare provider owns the runner boundary.** `CloudflareRunnerJob` and its validator live in
+  `@fabrika/provider-cloudflare`; `@fabrika/runner` contains only transport and execution machinery.
   The control plane has NO `Container` binding. The split exists because a deploy's final
   step runs `wrangler deploy` INSIDE the container, and when the target is fabrika that resets fabrika's DOs —
   so a container hosted in fabrika would reset ITSELF mid-deploy. Hosting it in vozka-runner means a fabrika
@@ -125,10 +119,9 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
 
 - All database access goes through `src/db.ts` (prepared statements, snake_case rows, caller-stamped UUIDv7).
   It takes the `SqlDatabase` PORT (`@fabrika/platform`), which `D1Database` satisfies structurally — so every
-  statement must stay in the SQLite ∩ Postgres common subset. `src/env.ts` declares EVERY handle as a port;
-  `D1Database`/`Fetcher` satisfy theirs structurally, R2/Queues/`RUNNER_SVC` do not and are adapted in
-  `src/platform-cf.ts`, which also owns the raw `WorkerBindings` shape. `src/platform-cf.ts` is the ONLY
-  file outside `src/index.ts` allowed to name a Cloudflare binding type.
+  statement must stay in the SQLite ∩ Postgres common subset. `src/env.ts` declares EVERY core handle as
+  a port; D1/Fetcher satisfy theirs structurally, while R2/Queues are adapted in `src/platform-cf.ts`.
+  `RUNNER_SVC` is not a core port; the Cloudflare composition passes it directly to its provider.
 - **TIMESTAMPS ARE CALLER-STAMPED, never `unixepoch()`** (Postgres has no such function). `Db` and `Vault`
   each carry an injectable `now()` in unix SECONDS (default `Math.floor(Date.now() / 1000)`), like
   `SqlDeployLocks` does in milliseconds — so the stamp is deterministic in tests. The CREATION stamps are

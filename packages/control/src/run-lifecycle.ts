@@ -176,7 +176,7 @@ export async function executeDeploy(
 
 /** Cancel provider-owned work, mark the run failed, and release its deploy lock. */
 export async function cancelDeploy(
-	deps: Pick<RunDeps, 'db' | 'provider' | 'lock'>,
+	deps: Pick<RunDeps, 'db' | 'provider'> & { lock: Pick<DeployLockGate, 'release'> },
 	run: RunRow,
 ): Promise<void> {
 	const appEnv = await deps.db.getAppEnv(run.app_id, run.env)

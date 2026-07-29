@@ -6,6 +6,7 @@ import { FakeRepoSource } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { createHarness } from './helpers/harness'
 import { allowAllIam } from './helpers/iam'
+import { fakeControlProvider, providerEnvironment } from './helpers/provider'
 
 // ACL enforcement at the API boundary, exercised with the dev authenticator (no propustka, no IAM
 // Worker). Each persona carries a permissions array that `can()` checks against the requested action +
@@ -36,6 +37,7 @@ function makeDeps(iam: Authenticator): { deps: ApiDeps; queue: DeployJobMessage[
 		},
 		logs: { get: () => Promise.resolve(null) },
 		repoSource: new FakeRepoSource(),
+		provider: fakeControlProvider,
 		cancelRun: () => Promise.resolve(),
 	}
 	return { deps, queue, sqlite }
@@ -66,7 +68,7 @@ describe('ACL enforcement (dev authenticator)', () => {
 		const { deps } = makeDeps(personaIam('r@vozka.test', ['deploy.read']))
 		// Seed an app + env so trigger gets past lookups (it should still 403 on the can-check first).
 		await deps.db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		await deps.db.upsertAppEnv({ appId: 'app', env: 'prod' })
+		await deps.db.upsertAppEnv(providerEnvironment('app', 'prod'))
 
 		const read = await handleApi(req('GET', '/api/runs'), deps)
 		expect(read.status).toBe(200)
@@ -78,7 +80,7 @@ describe('ACL enforcement (dev authenticator)', () => {
 	test('a persona with deploy.* can trigger a deploy (enqueues + creates the run)', async () => {
 		const { deps, queue } = makeDeps(personaIam('op@vozka.test', ['deploy.*']))
 		await deps.db.createApp({ id: 'app', repoUrl: 'github.com/acme/app', defaultBranch: 'main' })
-		await deps.db.upsertAppEnv({ appId: 'app', env: 'prod' })
+		await deps.db.upsertAppEnv(providerEnvironment('app', 'prod'))
 
 		const response = await handleApi(req('POST', '/api/deploy', { appId: 'app', env: 'prod' }), deps)
 		expect(response.status).toBe(201)

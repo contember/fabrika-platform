@@ -22,9 +22,9 @@ import type { Env } from '../env'
 import { applyMigrations } from '../node/migrate'
 import { createFetchHandler } from '../node/server'
 import type { DeployJobMessage } from '../run-lifecycle'
-import { startRun } from '../services'
 import { Vault } from '../vault'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
+import { fakeControlProvider } from './helpers/provider'
 
 if (!hasPostgres) {
 	console.warn(`postgres-schema.test.ts ${skipReason}`)
@@ -443,15 +443,17 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 		expect(await queue.claim({ limit: 5, visibilityTimeoutMs: 60_000, decode: (p) => decode(p) })).toHaveLength(0)
 	})
 
-	test('a run whose deploy has nowhere to go is recorded FAILED, not left pending', async () => {
+	test('a provider failure is recorded instead of leaving the run pending', async () => {
 		await reset()
 		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 		await db.upsertAppEnv(providerEnvironment('acme', 'prod'))
 		const run = await db.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
 
-		// No RUNNER (ADR-0003) and no Cloudflare credentials: `assembleJob` refuses before anything else,
-		// `executeDeploy` records the failure, and `runDeployJob` returns normally so the message is acked.
-		const result = await runDeployJob(env(), { runId: run.id })
+		const failingProvider = {
+			...fakeControlProvider,
+			deploy: () => Promise.reject(new Error('provider unavailable')),
+		}
+		const result = await runDeployJob(env(), failingProvider, { runId: run.id })
 		expect(result.status).toBe('failed')
 		const after = await db.getRun(run.id)
 		expect(after?.status).toBe('failed')
@@ -469,7 +471,7 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 		await new SqlDeployLocks(raw).acquire('acme:prod', 'other-run', 60_000)
 
 		const assembled = env()
-		expect((await runDeployJob(assembled, { runId: run.id })).status).toBe('deferred')
+		expect((await runDeployJob(assembled, fakeControlProvider, { runId: run.id })).status).toBe('deferred')
 
 		// Left pending, and a FRESH message is waiting (delayed) rather than a retry being consumed.
 		expect((await db.getRun(run.id))?.status).toBe('pending')
@@ -478,29 +480,13 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 		expect(results[0]?.attempts).toBe(0)
 	})
 
-	test('startRun fails LOUDLY when no runner exists, naming both reasons it can be missing', async () => {
-		const job = {
-			runId: 'r',
-			repoUrl: 'https://github.com/acme/app.git',
-			ref: 'refs/heads/main',
-			env: 'prod',
-			credentials: { CLOUDFLARE_ACCOUNT_ID: 'a', CLOUDFLARE_API_TOKEN: 't' },
-		}
-		await expect(startRun(env(), job)).rejects.toThrow(/no deploy runner is available/)
-		// …and the same failure reaches the M2 compatibility route as an opaque 500, never a half-run.
-		const response = await createFetchHandler(env())(
-			new Request('http://localhost:18291/api/runs', { method: 'POST', body: JSON.stringify(job), headers: { 'content-type': 'application/json' } }),
-		)
-		expect(response.status).toBe(500)
-		expect(await response.text()).toBe('internal error')
-	})
 })
 
 describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () => {
 	test('serves liveness, the API and the SPA fallback from one handler', async () => {
 		await reset()
 		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		const handler = createFetchHandler(env())
+		const handler = createFetchHandler(env(), fakeControlProvider)
 
 		// The process-level liveness route, claimed before `handleFetch` could hand it to the SPA.
 		expect((await handler(new Request('http://localhost:18291/healthz'))).status).toBe(200)
@@ -520,14 +506,17 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		// Bun's default error page embeds the exception message AND the surrounding source lines in the
 		// response body. The Workers runtime does not, so this is the one place the two entrypoints would
 		// have differed in what they show an attacker. Reproduced with an ASSETS port that throws.
-		const handler = createFetchHandler({
-			...env(),
-			ASSETS: {
-				fetch: () => {
-					throw new Error('assets exploded with CLOUDFLARE_API_TOKEN=looks-like-a-secret')
+		const handler = createFetchHandler(
+			{
+				...env(),
+				ASSETS: {
+					fetch: () => {
+						throw new Error('assets exploded with CLOUDFLARE_API_TOKEN=looks-like-a-secret')
+					},
 				},
 			},
-		})
+			fakeControlProvider,
+		)
 		const response = await handler(new Request('http://localhost:18291/anything'))
 		expect(response.status).toBe(500)
 		const text = await response.text()
@@ -573,7 +562,7 @@ function decode(payload: unknown): DeployJobMessage {
  * SCHEMA-SCOPED pool this fixture owns instead of opening a second one. Everything else — the routing,
  * the consumer, the maintenance pass — is exactly what runs in production.
  *
- * DEV='true' selects the dev-persona authenticator, and RUNNER is absent, which is the Zerops shape.
+ * DEV='true' selects the dev-persona authenticator. Provider selection is injected separately.
  */
 function env(): Env {
 	const blobs = new Map<string, string>()

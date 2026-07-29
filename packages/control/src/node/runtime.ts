@@ -16,8 +16,10 @@
 
 import { HttpIamRpc } from '@fabrika/auth'
 import { FileSystemAssetServer, PostgresDatabase, PostgresJobQueue, S3BlobStore } from '@fabrika/platform-node'
+import type { ControlProvider } from '@fabrika/provider-contract'
 import type { Env } from '../env'
 import type { DeployJobMessage } from '../run-lifecycle'
+import { zeropsControlProvider } from './provider'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
 export interface ProcessConfig {
@@ -29,6 +31,8 @@ export interface ProcessConfig {
 
 export interface Runtime {
 	env: Env
+	/** The single provider selected by this process composition root. */
+	provider: ControlProvider
 	config: ProcessConfig
 	/** The deploy queue, as the concrete producer the in-process consumer is built from. */
 	queue: PostgresJobQueue<DeployJobMessage>
@@ -82,8 +86,6 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		ASSETS: new FileSystemAssetServer(config.assetsDir, { spaFallback: true }),
 		RUN_LOGS: blobStore(source),
 		DEPLOY_QUEUE: queue,
-		// RUNNER is deliberately absent — ADR-0003. `startRun` explains what that means when a
-		// Cloudflare-shaped deploy is triggered anyway.
 		...(dev === 'true' ? {} : { IAM: iamRpc(source) }),
 		ENVIRONMENT: environment,
 		DEV: dev,
@@ -92,22 +94,20 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		// master key instead of running the env/literal path, and `VOZKA_DOMAIN: ''` would be read as
 		// "no public domain" — which is exactly what it means, but only when it really is unset.
 		...(source['VOZKA_DOMAIN'] !== undefined ? { VOZKA_DOMAIN: source['VOZKA_DOMAIN'] } : {}),
-		...(source['CLOUDFLARE_ACCOUNT_ID'] !== undefined ? { CLOUDFLARE_ACCOUNT_ID: source['CLOUDFLARE_ACCOUNT_ID'] } : {}),
 		...(source['PROPUSTKA_URL'] !== undefined ? { PROPUSTKA_URL: source['PROPUSTKA_URL'] } : {}),
 		...(source['VOZKA_BOOTSTRAP_ADMINS'] !== undefined ? { VOZKA_BOOTSTRAP_ADMINS: source['VOZKA_BOOTSTRAP_ADMINS'] } : {}),
 		...(source['GITHUB_WEBHOOK_SECRET'] !== undefined ? { GITHUB_WEBHOOK_SECRET: source['GITHUB_WEBHOOK_SECRET'] } : {}),
 		...(source['GITHUB_APP_ID'] !== undefined ? { GITHUB_APP_ID: source['GITHUB_APP_ID'] } : {}),
 		...(source['GITHUB_APP_PRIVATE_KEY'] !== undefined ? { GITHUB_APP_PRIVATE_KEY: source['GITHUB_APP_PRIVATE_KEY'] } : {}),
-		...(source['CLOUDFLARE_API_TOKEN'] !== undefined ? { CLOUDFLARE_API_TOKEN: source['CLOUDFLARE_API_TOKEN'] } : {}),
-		...(source['PROPUSTKA_PROVISIONING_KEY'] !== undefined ? { PROPUSTKA_PROVISIONING_KEY: source['PROPUSTKA_PROVISIONING_KEY'] } : {}),
-		...(source['ZEROPS_ACCESS_TOKEN'] !== undefined ? { ZEROPS_ACCESS_TOKEN: source['ZEROPS_ACCESS_TOKEN'] } : {}),
-		...(source['ZEROPS_API_BASE_URL'] !== undefined ? { ZEROPS_API_BASE_URL: source['ZEROPS_API_BASE_URL'] } : {}),
-		...(source['ZEROPS_PROXY_SERVICE_NAME'] !== undefined ? { ZEROPS_PROXY_SERVICE_NAME: source['ZEROPS_PROXY_SERVICE_NAME'] } : {}),
+		...(source['PROPUSTKA_PROVISIONING_KEY'] !== undefined
+			? { PROPUSTKA_PROVISIONING_KEY: source['PROPUSTKA_PROVISIONING_KEY'] }
+			: {}),
 		...(source['VOZKA_VAULT_KEY'] !== undefined && source['VOZKA_VAULT_KEY'] !== '' ? { VOZKA_VAULT_KEY: source['VOZKA_VAULT_KEY'] } : {}),
 	}
 
 	return {
 		env,
+		provider: zeropsControlProvider(env, source),
 		config,
 		queue,
 		shutdown: () => db.close(),

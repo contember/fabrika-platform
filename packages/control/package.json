@@ -23,11 +23,12 @@
 	},
 	"dependencies": {
 		"@fabrika/auth": "workspace:*",
-		"@fabrika/config": "workspace:*",
 		"@fabrika/engine": "workspace:*",
 		"@fabrika/platform": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",
+		"@fabrika/provider-cloudflare": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
+		"@fabrika/provider-zerops": "workspace:*",
 		"@fabrika/runner": "workspace:*"
 	},
 	"devDependencies": {

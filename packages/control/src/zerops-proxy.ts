@@ -1,6 +1,16 @@
-import type { AppGates } from '@fabrika/config'
-import { type FabrikaManifestV1, parseFabrikaManifest, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi } from '@fabrika/engine'
+import type { AppGates } from '@fabrika/auth'
+import type { ProviderCodec, ProviderEnvelope } from '@fabrika/provider-contract'
+import {
+	type FabrikaManifestV1,
+	parseFabrikaManifest,
+	ZEROPS_ACTIVE,
+	zeropsArtifactCodec,
+	type ZeropsApi,
+	zeropsStoredTargetCodec,
+	ZEROPS_TERMINAL,
+} from '@fabrika/provider-zerops'
 import type { Db } from './db'
+import { parseProviderEnvelope } from './run-lifecycle'
 
 export const PROXY_MANIFEST_VARIABLE = 'FABRIKA_PROXY_MANIFEST_JSON'
 const POLL_INTERVAL_MS = 3000
@@ -17,23 +27,34 @@ export interface CompiledProxyManifest {
 
 type ProxyApi = Pick<ZeropsApi, 'findService' | 'putServiceEnv' | 'triggerPipeline' | 'latestAppVersion' | 'getAppVersion'>
 
+const decodeEnvelope = <T>(kind: string, envelope: ProviderEnvelope, codec: ProviderCodec<T>): T => {
+	if (envelope.provider !== 'zerops' || envelope.version !== codec.version) {
+		throw new Error(`Zerops ${kind} envelope is not supported`)
+	}
+	return codec.decode(envelope.payload)
+}
+
 /** Compile every public app in one Zerops environment project into the proxy's strict manifest shape. */
 export async function compileProjectProxyManifest(db: Db, projectId: string): Promise<CompiledProxyManifest> {
-	const rows = await db.listAppEnvsByZeropsProject(projectId)
+	const rows = await db.listAppEnvsByProvider('zerops')
 	const apps: CompiledProxyManifest['apps'] = []
 	const ids = new Set<string>()
 	const hosts = new Set<string>()
 	for (const row of rows) {
-		if (row.manifest_json === null) {
-			throw new Error(`Zerops target ${row.app_id}/${row.env} has no static manifest`)
+		const target = decodeEnvelope(
+			'target',
+			parseProviderEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),
+			zeropsStoredTargetCodec,
+		)
+		if (target.projectId !== projectId) {
+			continue
 		}
-		let raw: unknown
-		try {
-			raw = JSON.parse(row.manifest_json)
-		} catch {
-			throw new Error(`Zerops target ${row.app_id}/${row.env} has invalid manifest JSON`)
-		}
-		const manifest: FabrikaManifestV1 = parseFabrikaManifest(raw, { appId: row.app_id, env: row.env })
+		const artifact = decodeEnvelope(
+			'artifact',
+			parseProviderEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
+			zeropsArtifactCodec,
+		)
+		const manifest: FabrikaManifestV1 = parseFabrikaManifest(artifact, { appId: row.app_id, env: row.env })
 		const proxy = manifest.target.proxy
 		if (proxy === undefined) {
 			continue

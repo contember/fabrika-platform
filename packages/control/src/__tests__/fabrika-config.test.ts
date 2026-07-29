@@ -1,9 +1,16 @@
-import { D1Database, Queue, R2Bucket, ServiceReference, type Worker } from '@fabrika/config'
+import {
+	type CloudflareAppConfig,
+	D1Database,
+	Queue,
+	R2Bucket,
+	ServiceReference,
+	type Worker,
+} from '@fabrika/provider-cloudflare'
 import { beforeAll, describe, expect, test } from 'bun:test'
 import type { buildVozkaWorker as BuildVozkaWorker } from '../../fabrika.config'
 import { ACTIONS, SCOPES, VOZKA_APP_ID } from '../actions'
 
-// fabrika's OWN deploy surface (packages/control/fabrika.config.ts) — DOGFOODING @fabrika/config. These
+// fabrika's OWN deploy surface (packages/control/fabrika.config.ts). These
 // tests prove: defineApp accepts fabrika's config, the resource graph materializes with fabrika's full
 // binding set, the Access carve-out is PUBLIC for ONLY the webhook route, and the authz schema's
 // actions/scopes match src/actions.ts exactly (no drift between declaration and enforcement).
@@ -11,8 +18,7 @@ import { ACTIONS, SCOPES, VOZKA_APP_ID } from '../actions'
 // fabrika.config materializes `access` at import from VOZKA_DOMAIN (falling back to a placeholder when
 // unset — it must NOT throw, since the local-dev oblaka shim imports it without a domain). Set a real
 // domain here so the destination assertions below are deterministic, then load the module.
-type VozkaConfig = import('@fabrika/config').AppConfig
-let config: VozkaConfig
+let config: CloudflareAppConfig
 let buildVozkaWorker: typeof BuildVozkaWorker
 
 beforeAll(async () => {

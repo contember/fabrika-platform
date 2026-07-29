@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { createHarness, queryRows } from './helpers/harness'
+import { providerEnvironment } from './helpers/provider'
 
 // Db.sweepStaleRuns is the cron-driven backstop-to-the-backstop: it reaps runs left in pending/running
 // past the age threshold (the per-run DO backstop should have finished them within ~18 min). Driven
@@ -12,7 +13,7 @@ describe('Db.sweepStaleRuns', () => {
 	test('reaps stale pending/running runs, spares recent + already-terminal ones', async () => {
 		const { db, sqlite } = createHarness(() => NOW)
 		await db.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
-		await db.upsertAppEnv({ appId: 'app', env: 'prod' })
+		await db.upsertAppEnv(providerEnvironment('app', 'prod'))
 
 		const OLD = NOW - 40 * 60 // beyond the 30-min threshold
 		const RECENT = NOW - 5 * 60 // within it
@@ -39,7 +40,7 @@ describe('Db.sweepStaleRuns', () => {
 	test('a fresh run loop is never reaped (the age guard protects in-flight deploys)', async () => {
 		const { db, sqlite } = createHarness(() => NOW)
 		await db.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
-		await db.upsertAppEnv({ appId: 'app', env: 'prod' })
+		await db.upsertAppEnv(providerEnvironment('app', 'prod'))
 		sqlite.exec(
 			`INSERT INTO runs (id, app_id, env, ref, trigger, status, created_at)
 				VALUES ('fresh','app','prod','refs/heads/main','manual','running',${NOW})`,
@@ -48,21 +49,14 @@ describe('Db.sweepStaleRuns', () => {
 		expect(queryRows(sqlite, 'SELECT status FROM runs WHERE id = ?', 'fresh')[0]?.status).toBe('running')
 	})
 
-	test('does not reap a Zerops run once the platform owns an app version', async () => {
+	test('does not reap a run once its provider owns an external operation', async () => {
 		const { db, sqlite } = createHarness(() => NOW)
 		await db.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
-		await db.upsertAppEnv({
-			appId: 'app',
-			env: 'prod',
-			platform: 'zerops',
-			zeropsProjectId: 'project',
-			zeropsServiceId: 'service',
-			manifestJson: '{}',
-		})
+		await db.upsertAppEnv(providerEnvironment('app', 'prod'))
 		const old = NOW - 40 * 60
 		sqlite.exec(
 			`INSERT INTO runs (
-				id, app_id, env, ref, trigger, status, created_at, started_at, platform_run_id
+				id, app_id, env, ref, trigger, status, created_at, started_at, external_run_id
 			) VALUES (
 				'platform-owned', 'app', 'prod', 'refs/heads/main', 'manual', 'running',
 				${old}, ${old}, 'version'

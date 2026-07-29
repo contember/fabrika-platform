@@ -1,5 +1,10 @@
-import { defineApp } from '@fabrika/config'
-import { compileFabrikaManifest, type ZeropsAppVersion } from '@fabrika/engine'
+import {
+	compileFabrikaManifest,
+	defineApp,
+	type ZeropsAppVersion,
+	zeropsArtifactCodec,
+	zeropsStoredTargetCodec,
+} from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { compileProjectProxyManifest, PROXY_MANIFEST_VARIABLE, syncZeropsProxy } from '../zerops-proxy'
 import { createHarness } from './helpers/harness'
@@ -17,6 +22,12 @@ const appManifest = (id: string, env: string, upstream: string) =>
 		env,
 	)
 
+const envelope = <T>(codec: { version: number; encode(value: T): unknown }, value: T) => ({
+	provider: 'zerops',
+	version: codec.version,
+	payload: codec.encode(value),
+})
+
 describe('Zerops proxy manifest delivery', () => {
 	test('compiles all apps in a project, writes one service variable, and rolls the proxy', async () => {
 		const { db } = createHarness()
@@ -31,10 +42,13 @@ describe('Zerops proxy manifest delivery', () => {
 				appId: entry.id,
 				env: 'prod',
 				domain: entry.domain,
-				platform: 'zerops',
-				zeropsProjectId: 'project-1',
-				zeropsServiceId: `${entry.id}-service`,
-				manifestJson: JSON.stringify(appManifest(entry.id, 'prod', entry.upstream)),
+				provider: 'zerops',
+				providerTargetJson: JSON.stringify(
+					envelope(zeropsStoredTargetCodec, { projectId: 'project-1', serviceId: `${entry.id}-service` }),
+				),
+				providerArtifactJson: JSON.stringify(
+					envelope(zeropsArtifactCodec, appManifest(entry.id, 'prod', entry.upstream)),
+				),
 			})
 		}
 
@@ -85,10 +99,13 @@ describe('Zerops proxy manifest delivery', () => {
 		await db.upsertAppEnv({
 			appId: 'alpha',
 			env: 'prod',
-			platform: 'zerops',
-			zeropsProjectId: 'project-1',
-			zeropsServiceId: 'alpha-service',
-			manifestJson: JSON.stringify(appManifest('alpha', 'prod', 'alpha:3000')),
+			provider: 'zerops',
+			providerTargetJson: JSON.stringify(
+				envelope(zeropsStoredTargetCodec, { projectId: 'project-1', serviceId: 'alpha-service' }),
+			),
+			providerArtifactJson: JSON.stringify(
+				envelope(zeropsArtifactCodec, appManifest('alpha', 'prod', 'alpha:3000')),
+			),
 		})
 		await expect(compileProjectProxyManifest(db, 'project-1')).rejects.toThrow('requires a public domain')
 

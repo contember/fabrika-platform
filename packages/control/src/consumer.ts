@@ -14,6 +14,7 @@
 //     below), so a caller that retried instead would double-schedule the run.
 //   * a THROW means something unexpected happened before/around the lifecycle — retry it.
 
+import type { ControlProvider } from '@fabrika/provider-contract'
 import type { Env } from './env'
 import { type DeployJobMessage, executeDeploy } from './run-lifecycle'
 import { buildRunDeps, DEPLOY_LOCK_REQUEUE_DELAY_S } from './services'
@@ -29,8 +30,12 @@ export type DeployJobResult = Awaited<ReturnType<typeof executeDeploy>>
  * re-delivered as a FRESH message after a short delay. Fresh, not a retry: lock contention is normal
  * and must not spend the retry budget reserved for genuine errors.
  */
-export async function runDeployJob(env: Env, message: DeployJobMessage): Promise<DeployJobResult> {
-	const deps = await buildRunDeps(env)
+export async function runDeployJob(
+	env: Env,
+	provider: ControlProvider,
+	message: DeployJobMessage,
+): Promise<DeployJobResult> {
+	const deps = await buildRunDeps(env, provider)
 	const result = await executeDeploy(deps, message)
 	if (result.status === 'deferred') {
 		await env.DEPLOY_QUEUE.send(message, { delaySeconds: DEPLOY_LOCK_REQUEUE_DELAY_S })

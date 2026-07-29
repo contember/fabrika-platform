@@ -2,7 +2,7 @@
 // secret values, backed by the `vault` D1 table (migrations/0002_vault.sql).
 //
 // THREAT MODEL: D1 at rest (or a leaked DB dump) must not reveal any secret value. The control-plane
-// Worker decrypts in memory only at deploy time, places the plaintext on the in-flight RunnerJob, and
+// Worker decrypts in memory only at deploy time, passes the plaintext to the selected provider, and
 // never logs it. The vault does NOT defend against a fully compromised Worker runtime (which holds the
 // master key) — that is out of scope, the same trust boundary as Workers Secrets themselves.
 //

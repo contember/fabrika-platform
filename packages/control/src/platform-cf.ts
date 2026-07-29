@@ -5,17 +5,15 @@
 // that uses it, not in @fabrika/platform (which is types only) — the port declares the capability, the
 // worker binds it to whatever the runtime actually offers.
 //
-// Two of the five handles need no adapter: `D1Database` satisfies `SqlDatabase` and `Fetcher` satisfies
-// `AssetServer` structurally, because those ports were shaped from those bindings deliberately. The
-// other three are pure shape-narrowing: R2, Queues and the runner service already do exactly what
-// `BlobStore` / `JobQueue` / `RunnerGateway` describe, they just report richer results (`R2Object`,
-// `QueueSendResponse`) than the ports promise, so the bindings do not satisfy them structurally.
-// Awaiting and discarding those results is the whole adapter — there is no behaviour here to keep in
-// sync with anything.
+// D1 and Fetcher satisfy the neutral ports structurally. R2 and Queues need small return-type adapters.
+// The runner is not a core port: it is consumed only while composing the Cloudflare provider below.
 
+import { createCloudflareControlProvider, type CloudflareRunnerJob } from '@fabrika/provider-cloudflare'
+import type { ControlProvider, ProviderSource, ProviderTerminalOutcome } from '@fabrika/provider-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
 import type { VozkaRunner } from '@fabrika/runner'
-import type { Env, RunnerGateway } from './env'
+import type { Env } from './env'
+import { repoSource } from './services'
 import type { DeployJobMessage } from './run-lifecycle'
 
 /**
@@ -23,7 +21,7 @@ import type { DeployJobMessage } from './run-lifecycle'
  * `this.env` with. It differs from `Env` in exactly the five handles and in nothing else: every var and
  * secret is inherited, so there is one place to add one.
  */
-export interface WorkerBindings extends Omit<Env, 'DB' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'RUNNER'> {
+export interface WorkerBindings extends Omit<Env, 'DB' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE'> {
 	/** Registry + run history + vault + deploy locks. Migrations in `./migrations` (SQLite dialect). */
 	DB: D1Database
 	/** Control-plane SPA static assets. */
@@ -32,6 +30,10 @@ export interface WorkerBindings extends Omit<Env, 'DB' | 'ASSETS' | 'RUN_LOGS' |
 	RUN_LOGS: R2Bucket
 	/** Deploy job queue — producer here, consumer via the Worker's `queue()` handler. */
 	DEPLOY_QUEUE: Queue<DeployJobMessage>
+	/** The single Cloudflare account selected by this composition root. */
+	CLOUDFLARE_ACCOUNT_ID?: string
+	/** Account-wide deploy credential. It is passed to the runner only for a live deploy. */
+	CLOUDFLARE_API_TOKEN?: string
 	/**
 	 * vozka-runner — the deploy EXECUTOR, over a service binding. Split into its own worker so a deploy
 	 * of fabrika never resets the container running that deploy. OPTIONAL because it is declared
@@ -48,7 +50,6 @@ export function controlEnv(bindings: WorkerBindings): Env {
 		ASSETS: bindings.ASSETS,
 		RUN_LOGS: r2BlobStore(bindings.RUN_LOGS),
 		DEPLOY_QUEUE: cfJobQueue(bindings.DEPLOY_QUEUE),
-		...(bindings.RUNNER_SVC !== undefined ? { RUNNER: serviceRunner(bindings.RUNNER_SVC) } : {}),
 	}
 }
 
@@ -76,14 +77,58 @@ export function cfJobQueue<T>(queue: Queue<T>): JobQueue<T> {
 	}
 }
 
-/** Present the vozka-runner service binding as the `RunnerGateway` port. */
-export function serviceRunner(service: Service<VozkaRunner>): RunnerGateway {
-	return {
-		startRun(job) {
-			return service.startRun(job)
-		},
-		async cancelRun(runId) {
-			await service.cancelRun(runId)
-		},
+const runner = (bindings: WorkerBindings): Service<VozkaRunner> => {
+	if (bindings.RUNNER_SVC === undefined) {
+		throw new Error('Cloudflare provider requires the RUNNER_SVC service binding')
 	}
+	return bindings.RUNNER_SVC
+}
+
+const required = (value: string | undefined, name: string): string => {
+	if (value === undefined || value === '') {
+		throw new Error(`Cloudflare provider requires ${name}`)
+	}
+	return value
+}
+
+const resolveSource = async (env: Env, source: ProviderSource) => {
+	const target = await repoSource(env).clone(
+		source.repoUrl,
+		source.ref,
+		source.githubInstallationId,
+	)
+	return { repoUrl: target.cloneUrl, ref: target.ref }
+}
+
+const startRun = async (
+	bindings: WorkerBindings,
+	job: CloudflareRunnerJob,
+): Promise<ProviderTerminalOutcome> => {
+	const result = await runner(bindings).startRun(job)
+	const state = result.status.state === 'succeeded' ? 'succeeded' : 'failed'
+	return {
+		state,
+		...(result.status.exitCode === undefined ? {} : { exitCode: result.status.exitCode }),
+	}
+}
+
+/** Compose the only provider available in the Cloudflare installation. */
+export function cloudflareControlProvider(bindings: WorkerBindings, env: Env): ControlProvider {
+	return createCloudflareControlProvider({
+		accountId: bindings.CLOUDFLARE_ACCOUNT_ID ?? '',
+		apiToken: bindings.CLOUDFLARE_API_TOKEN ?? '',
+		...(bindings.PROPUSTKA_URL === undefined ? {} : { propustkaUrl: bindings.PROPUSTKA_URL }),
+		...(bindings.PROPUSTKA_PROVISIONING_KEY === undefined
+			? {}
+			: { propustkaProvisioningKey: bindings.PROPUSTKA_PROVISIONING_KEY }),
+		resolveSource: (source) => resolveSource(env, source),
+		startRun: (job) => {
+			required(bindings.CLOUDFLARE_ACCOUNT_ID, 'CLOUDFLARE_ACCOUNT_ID')
+			required(bindings.CLOUDFLARE_API_TOKEN, 'CLOUDFLARE_API_TOKEN')
+			return startRun(bindings, job)
+		},
+		cancelRun: async (runId) => {
+			await runner(bindings).cancelRun(runId)
+		},
+	})
 }

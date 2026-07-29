@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { feedUrlFor, type FetchFn, parseLatestEntry, parseLatestTag, pollPublicRepos } from '../repo-poll'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { createHarness } from './helpers/harness'
+import { providerEnvironment } from './helpers/provider'
 
 // Public-repo polling: the pull-based deploy trigger for apps with no GitHub App install. These tests
 // cover the pure feed-URL selection + Atom parse, and the full poll loop over the in-memory harness
@@ -176,7 +177,7 @@ describe('pollPublicRepos', () => {
 	test('200 with a new sha creates a poll run, enqueues it, and stores the etag + last_seen_sha', async () => {
 		const { db } = createHarness()
 		await db.createApp({ id: 'app', repoUrl: REPO }) // public: no installation
-		await db.upsertAppEnv({ appId: 'app', env: 'prod', triggerRef: 'refs/heads/main' })
+		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
 		const queue = makeQueue()
 		const { fetch, calls } = fakeFetch({
 			'https://github.com/acme/app/commits/main.atom': { status: 200, ok: true, etag: '"etag-1"', body: commitsFeed(SHA_A) },
@@ -211,7 +212,7 @@ describe('pollPublicRepos', () => {
 	test('a stored etag is sent as If-None-Match; a 304 creates no run and only bumps last_polled_at', async () => {
 		const { db } = createHarness()
 		await db.createApp({ id: 'app', repoUrl: REPO })
-		await db.upsertAppEnv({ appId: 'app', env: 'prod', triggerRef: 'refs/heads/main' })
+		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
 		// Seed prior state as if a previous poll saw SHA_A with etag-1.
 		await db.upsertRepoPollState({ appId: 'app', env: 'prod', etag: '"etag-1"', lastSeenSha: SHA_A, lastPolledAt: NOW - 300 })
 		const queue = makeQueue()
@@ -237,7 +238,7 @@ describe('pollPublicRepos', () => {
 	test('200 whose newest sha equals last_seen_sha creates no run (counts as unchanged)', async () => {
 		const { db } = createHarness()
 		await db.createApp({ id: 'app', repoUrl: REPO })
-		await db.upsertAppEnv({ appId: 'app', env: 'prod', triggerRef: 'refs/heads/main' })
+		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
 		await db.upsertRepoPollState({ appId: 'app', env: 'prod', etag: '"old"', lastSeenSha: SHA_A, lastPolledAt: NOW - 300 })
 		const queue = makeQueue()
 		const { fetch } = fakeFetch({
@@ -258,7 +259,7 @@ describe('pollPublicRepos', () => {
 	test('a private app (installation set) is NOT polled', async () => {
 		const { db } = createHarness()
 		await db.createApp({ id: 'app', repoUrl: REPO, githubInstallationId: 42 })
-		await db.upsertAppEnv({ appId: 'app', env: 'prod', triggerRef: 'refs/heads/main' })
+		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
 		const queue = makeQueue()
 		const { fetch, calls } = fakeFetch({})
 
@@ -272,7 +273,7 @@ describe('pollPublicRepos', () => {
 	test('a manual-only env (null trigger_ref) is NOT polled', async () => {
 		const { db } = createHarness()
 		await db.createApp({ id: 'app', repoUrl: REPO })
-		await db.upsertAppEnv({ appId: 'app', env: 'prod', triggerRef: null })
+		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: null }))
 		const queue = makeQueue()
 		const { fetch, calls } = fakeFetch({})
 
@@ -286,9 +287,9 @@ describe('pollPublicRepos', () => {
 		const { db } = createHarness()
 		// Two public apps; the first errors (network throw), the second succeeds.
 		await db.createApp({ id: 'bad', repoUrl: 'https://github.com/acme/bad.git' })
-		await db.upsertAppEnv({ appId: 'bad', env: 'prod', triggerRef: 'refs/heads/main' })
+		await db.upsertAppEnv(providerEnvironment('bad', 'prod', { triggerRef: 'refs/heads/main' }))
 		await db.createApp({ id: 'good', repoUrl: 'https://github.com/acme/good.git' })
-		await db.upsertAppEnv({ appId: 'good', env: 'prod', triggerRef: 'refs/heads/main' })
+		await db.upsertAppEnv(providerEnvironment('good', 'prod', { triggerRef: 'refs/heads/main' }))
 		const queue = makeQueue()
 		const { fetch } = fakeFetch({
 			'https://github.com/acme/bad/commits/main.atom': () => Promise.reject(new Error('boom')),
@@ -312,7 +313,7 @@ describe('pollPublicRepos', () => {
 	test('a non-2xx-non-304 response records a short last_error (status only, no body)', async () => {
 		const { db } = createHarness()
 		await db.createApp({ id: 'app', repoUrl: REPO })
-		await db.upsertAppEnv({ appId: 'app', env: 'prod', triggerRef: 'refs/heads/main' })
+		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
 		const queue = makeQueue()
 		const { fetch } = fakeFetch({
 			'https://github.com/acme/app/commits/main.atom': { status: 404, ok: false, body: 'a very long not-found body that must never be stored' },
@@ -330,7 +331,7 @@ describe('pollPublicRepos', () => {
 		const { db } = createHarness()
 		await db.createApp({ id: 'app', repoUrl: REPO })
 		// A subscribed but non-pollable ref (e.g. a PR ref): eligible by the query, not pollable by feed.
-		await db.upsertAppEnv({ appId: 'app', env: 'prod', triggerRef: 'refs/pull/9/head' })
+		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/pull/9/head' }))
 		const queue = makeQueue()
 		const { fetch, calls } = fakeFetch({})
 
@@ -343,7 +344,7 @@ describe('pollPublicRepos', () => {
 	test('a v* tag-pattern env polls the tags feed and deploys the newest matching tag (concrete ref)', async () => {
 		const { db } = createHarness()
 		await db.createApp({ id: 'app', repoUrl: REPO })
-		await db.upsertAppEnv({ appId: 'app', env: 'release', triggerRef: 'refs/tags/v*' })
+		await db.upsertAppEnv(providerEnvironment('app', 'release', { triggerRef: 'refs/tags/v*' }))
 		const queue = makeQueue()
 		const { fetch, calls } = fakeFetch({
 			'https://github.com/acme/app/tags.atom': { status: 200, ok: true, etag: '"t1"', body: tagsFeed('v2.0.0', 'v1.0.0') },
@@ -367,7 +368,7 @@ describe('pollPublicRepos', () => {
 	test('a tag env whose newest matching tag is unchanged creates no run', async () => {
 		const { db } = createHarness()
 		await db.createApp({ id: 'app', repoUrl: REPO })
-		await db.upsertAppEnv({ appId: 'app', env: 'release', triggerRef: 'refs/tags/v*' })
+		await db.upsertAppEnv(providerEnvironment('app', 'release', { triggerRef: 'refs/tags/v*' }))
 		await db.upsertRepoPollState({ appId: 'app', env: 'release', etag: '"old"', lastSeenSha: 'v2.0.0', lastPolledAt: NOW - 300 })
 		const queue = makeQueue()
 		const { fetch } = fakeFetch({
@@ -383,7 +384,7 @@ describe('pollPublicRepos', () => {
 	test('a tag env with no matching tag yet is unchanged (no run), not an error', async () => {
 		const { db } = createHarness()
 		await db.createApp({ id: 'app', repoUrl: REPO })
-		await db.upsertAppEnv({ appId: 'app', env: 'release', triggerRef: 'refs/tags/v*' })
+		await db.upsertAppEnv(providerEnvironment('app', 'release', { triggerRef: 'refs/tags/v*' }))
 		const queue = makeQueue()
 		const { fetch } = fakeFetch({
 			'https://github.com/acme/app/tags.atom': { status: 200, ok: true, etag: '"t"', body: tagsFeed('release-1', 'alpha') },
@@ -403,13 +404,13 @@ describe('Db repo-poll methods', () => {
 		const { db } = createHarness()
 		// Eligible: public + trigger_ref.
 		await db.createApp({ id: 'pub', repoUrl: REPO })
-		await db.upsertAppEnv({ appId: 'pub', env: 'prod', triggerRef: 'refs/heads/main' })
+		await db.upsertAppEnv(providerEnvironment('pub', 'prod', { triggerRef: 'refs/heads/main' }))
 		// Excluded: has an installation (private).
 		await db.createApp({ id: 'priv', repoUrl: 'https://github.com/acme/priv.git', githubInstallationId: 1 })
-		await db.upsertAppEnv({ appId: 'priv', env: 'prod', triggerRef: 'refs/heads/main' })
+		await db.upsertAppEnv(providerEnvironment('priv', 'prod', { triggerRef: 'refs/heads/main' }))
 		// Excluded: public but manual-only (null trigger_ref).
 		await db.createApp({ id: 'manual', repoUrl: 'https://github.com/acme/manual.git' })
-		await db.upsertAppEnv({ appId: 'manual', env: 'prod', triggerRef: null })
+		await db.upsertAppEnv(providerEnvironment('manual', 'prod', { triggerRef: null }))
 
 		const eligible = await db.getPollEligibleEnvs()
 		expect(eligible).toHaveLength(1)

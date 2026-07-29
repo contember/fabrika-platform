@@ -1,23 +1,22 @@
 // Scheduled maintenance — the work behind the Worker's `scheduled` handler, extracted so the
 // long-running process runs exactly the same code on exactly the same schedule.
 //
-// Cloudflare drives it from `triggers.crons` in the Worker config (`*/5 * * * *`); Zerops drives it
-// from `run.crontab` in `zerops.yaml`, which invokes `node/cron.ts`. That is the mapping the
-// portability surface calls "`scheduled` handler → platform cron": no in-process timer, because a
-// timer in a horizontally-scaled service fires once per container and its schedule silently resets on
-// every redeploy. Both operations tolerate an overlapping run — the poll is a conditional GET whose
-// only mutation is guarded by a changed head sha, and the sweep is a guarded UPDATE by age.
+// Event-driven targets call this from a scheduled handler; long-running targets invoke `node/cron.ts`
+// from their platform scheduler. There is no in-process timer: in a horizontally-scaled service it
+// would fire once per container and silently reset on every deploy. Both operations tolerate an
+// overlapping run — the poll is a conditional GET whose only mutation is guarded by a changed head
+// sha, and the sweep is a guarded UPDATE by age.
 
 import type { Env } from './env'
+import type { ProviderReconcileSummary } from './provider-reconcile'
 import { type FetchFn, pollPublicRepos, type PollSummary } from './repo-poll'
 import { db as makeDb, STALE_RUN_MAX_AGE_S } from './services'
-import { reconcileZeropsRunsFromEnv, type ZeropsReconcileSummary } from './zerops-reconcile'
 
 /** What one maintenance pass did. Returned for the tests + the log line; counts only, never a URL. */
 export interface MaintenanceSummary {
 	poll: PollSummary
-	/** Platform-owned Zerops runs observed or completed. */
-	zerops: ZeropsReconcileSummary
+	/** Provider-owned runs observed or completed. */
+	reconcile: ProviderReconcileSummary
 	/** Orphaned runs marked failed by the sweep. */
 	swept: number
 }
@@ -28,6 +27,8 @@ export interface MaintenanceOptions {
 	now?: () => number
 	/** The conditional GET of a repo's Atom feed. Injected so no test reaches github.com. */
 	fetch?: FetchFn
+	/** Provider-specific composition root injects reconciliation when the capability is available. */
+	reconcile?: () => Promise<ProviderReconcileSummary>
 }
 
 /**
@@ -51,16 +52,18 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	console.info(
 		`repo poll: polled=${poll.polled} triggered=${poll.triggered} unchanged=${poll.unchanged} errored=${poll.errored} skipped=${poll.skipped}`,
 	)
-	const zerops = await reconcileZeropsRunsFromEnv(env)
-	if (zerops.checked > 0 || zerops.waiting > 0) {
+	const reconcile = options.reconcile === undefined
+		? { checked: 0, succeeded: 0, failed: 0, inProgress: 0, waiting: 0 }
+		: await options.reconcile()
+	if (reconcile.checked > 0 || reconcile.waiting > 0) {
 		console.info(
-			`Zerops reconcile: checked=${zerops.checked} succeeded=${zerops.succeeded} failed=${zerops.failed} `
-				+ `in-progress=${zerops.inProgress} waiting=${zerops.waiting}`,
+			`provider reconcile: checked=${reconcile.checked} succeeded=${reconcile.succeeded} failed=${reconcile.failed} `
+				+ `in-progress=${reconcile.inProgress} waiting=${reconcile.waiting}`,
 		)
 	}
 	const swept = await db.sweepStaleRuns(STALE_RUN_MAX_AGE_S)
 	if (swept > 0) {
 		console.warn(`run sweep: marked ${swept} stale run(s) failed (> ${STALE_RUN_MAX_AGE_S}s in pending/running)`)
 	}
-	return { poll, zerops, swept }
+	return { poll, reconcile, swept }
 }

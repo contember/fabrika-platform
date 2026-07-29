@@ -1,12 +1,12 @@
 // The APP-SECRET resolution seam.
 //
 // The registry stores `app_secrets.value_ref` as a REFERENCE, never plaintext. At deploy time those
-// refs must become actual values to put in the `RunnerJob` (the app's `pipeline.secrets` values the
+// refs must become actual values passed to a provider deploy (the app's `pipeline.secrets` values the
 // runner `wrangler secret put`s). A ref encodes WHICH BACKEND holds the value (its scheme prefix), and
 // the resolver dispatches on it — so the same interface serves both the encrypted D1 vault and CF
 // Secrets Store, with env/literal kept for dev/local. Everything downstream (queue consumer, job
 // assembly) depends ONLY on the `SecretResolver` interface, so swapping backends never touches a
-// caller. Resolved values are NEVER logged and live only on the in-flight `RunnerJob`.
+// caller. Resolved values are NEVER logged and live only in the provider invocation.
 //
 // Platform credentials (the CF API token, propustka provisioning creds) are NOT resolved here — fabrika
 // is single-account, so they are fabrika's own Worker secrets (src/env.ts), injected into every job as

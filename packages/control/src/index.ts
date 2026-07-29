@@ -1,22 +1,18 @@
-import type { RelayResult, RunnerJob } from '@fabrika/runner'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { runDeployJob } from './consumer'
 import { runMaintenance } from './cron'
-import type { RunRow } from './db'
 import type { Env } from './env'
-import { controlEnv, type WorkerBindings } from './platform-cf'
+import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './platform-cf'
 import { handleFetch } from './routes'
 import type { DeployJobMessage } from './run-lifecycle'
-import { cancelRun, startRun } from './services'
 
 /**
  * The fabrika control plane — the CLOUDFLARE entrypoint, and nothing more. A single `WorkerEntrypoint`
- * carrying `startRun`/`cancelRun` (the RPC surface), `fetch`, `queue` (the deploy consumer) and
- * `scheduled` (the repo poll + stale-run sweep).
+ * carrying `fetch`, `queue` (the deploy consumer) and `scheduled` (repo poll + stale-run sweep).
  *
  * There is no logic here. Every method delegates to a runtime-neutral function — `handleFetch`
- * (src/routes.ts), `runDeployJob` (src/consumer.ts), `runMaintenance` (src/cron.ts), `startRun` /
- * `cancelRun` (src/services.ts) — the same functions the Bun entrypoint (src/node/server.ts) calls.
+ * (src/routes.ts), `runDeployJob` (src/consumer.ts), and `runMaintenance` (src/cron.ts) — the same
+ * functions the Bun entrypoint calls. This composition root selects Cloudflare once.
  * This file's whole job is to bind `cloudflare:workers` to them, and it is the ONLY file in the
  * package that imports it: the Bun process must never load this module, and it must never load
  * `bun:*`/`node:*`. `src/__tests__/entrypoint-isolation.test.ts` walks both graphs and enforces that.
@@ -30,22 +26,9 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 		return controlEnv(this.env)
 	}
 
-	/**
-	 * Start one deploy run by handing it to vozka-runner (the deploy EXECUTOR) over the `RUNNER_SVC`
-	 * service binding. The queue consumer drives this; it's also reachable via the M2 `POST /api/runs`
-	 * compatibility route.
-	 */
-	startRun(job: RunnerJob): Promise<RelayResult> {
-		return startRun(this.control, job)
-	}
-
-	/** Cancel an in-flight run: destroy its container, record it failed, free the per-app-env lock. */
-	cancelRun(run: RunRow): Promise<void> {
-		return cancelRun(this.control, run)
-	}
-
 	override fetch(request: Request): Promise<Response> {
-		return handleFetch(request, this.control)
+		const env = this.control
+		return handleFetch(request, env, cloudflareControlProvider(this.env, env))
 	}
 
 	/**
@@ -55,9 +38,10 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 	 */
 	override async queue(batch: MessageBatch<DeployJobMessage>): Promise<void> {
 		const env = this.control
+		const provider = cloudflareControlProvider(this.env, env)
 		for (const message of batch.messages) {
 			try {
-				await runDeployJob(env, message.body)
+				await runDeployJob(env, provider, message.body)
 				message.ack()
 			} catch (err) {
 				console.error('deploy consumer error', err instanceof Error ? err.message : 'unknown error')
