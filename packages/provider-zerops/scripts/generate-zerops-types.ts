@@ -5,7 +5,7 @@
 // object, both of which move whenever Zerops adds a runtime version. Hand-transcribing it guarantees drift;
 // regenerating is one command. The emitted file is TYPES ONLY (no runtime value), so it costs nothing.
 //
-//   bun packages/config/scripts/generate-zerops-types.ts
+//   bun packages/provider-zerops/scripts/generate-zerops-types.ts
 //
 // The schema is fetched live by default; pass a path to generate from a local copy instead.
 

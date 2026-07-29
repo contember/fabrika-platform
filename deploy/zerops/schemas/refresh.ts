@@ -9,7 +9,7 @@
 // change show up as a reviewable diff.
 //
 // After refreshing, also regenerate the TypeScript view of the import schema:
-//   bun packages/config/scripts/generate-zerops-types.ts
+//   bun packages/provider-zerops/scripts/generate-zerops-types.ts
 // and re-run `bun run --filter @fabrika/deploy gen` — the generated import documents are derived from
 // those types, so a contract change should move both or neither.
 
