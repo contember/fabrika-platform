@@ -21,19 +21,14 @@ fabrika-platform is and how the pieces fit — then skim
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
-- _none active_
+_None._
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
 
-- **Phase 0 — the merge itself**: importing propustka + vozka into `packages/`,
-  renaming everything to `@fabrika/*`, green build, no behaviour change
-  ([ADR-0001](decisions/0001-merge-propustka-and-vozka.md)).
-- The phase ladder (ports → Postgres/Bun → driver seam → Zerops driver) has since
-  shipped; those backlog items were deleted on ship, per this folder's own rule.
-- Next rung:
-  [`backlog/05-bring-up-on-a-real-zerops-account.md`](backlog/05-bring-up-on-a-real-zerops-account.md)
-  — everything below the account line is built and schema-valid, but **nothing has
-  ever run against a real Zerops account**.
+- **Zerops critical path:** the driver and topology are built, but
+  [`backlog/13-control-plane-cannot-target-zerops.md`](backlog/13-control-plane-cannot-target-zerops.md)
+  still has no caller. A real-account bring-up cannot complete until that path is
+  wired.

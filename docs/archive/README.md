@@ -8,3 +8,6 @@ rare backlog/spec item with standalone reference value. Items arrive here by
 that ships — only what genuinely helps a future reader. The git log holds the rest.
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
+
+- [Post-merge readiness (2026-07-29)](sprint-2026-07-29-post-merge-readiness.md)
+  — unified the merged deployment surfaces and updated the toolchain.

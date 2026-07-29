@@ -19,8 +19,8 @@ that is the point of the sequencing, not an aspiration. They form a `blocked-by`
 chain, so work them in order.
 
 **Phase 0 — merge, rename, green build, no behaviour change
-([ADR-0001](../decisions/0001-merge-propustka-and-vozka.md)) — is in flight and is
-not filed here.**
+([ADR-0001](../decisions/0001-merge-propustka-and-vozka.md)) — is complete.
+CI/release restoration remains explicit item 25.**
 
 > **Gap, flagged rather than invented:** the ladder covers the portability spine
 > only. The work implied by
@@ -43,14 +43,9 @@ not filed here.**
 - [17](17-one-gate-matcher-not-two.md) — The gate matcher is duplicated between the SDK and the proxy — the second implementation ADR-0008 rejected.
 - [18](18-shrink-the-app-sdk.md) — Delete in-process enforcement from `@fabrika/auth` now the proxy does it. Keep `redeemKey`.
 - [19](19-cancellation-gaps.md) — `reconcileSchema` takes no `AbortSignal`, so the one shared step is the one that cannot be cancelled.
-- [20](20-iam-violates-the-config-source-of-truth-invariant.md) — `oblaka.ts` and `fabrika.config.ts` are duplicate graphs that have already drifted.
 - [21](21-rate-limit-the-iam-mint-surface.md) — Deferred with reasons; the limit belongs at the proxy, which can identify a client.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
-- [23](23-cli-template-still-assumes-two-repos.md) — `fabrika init`'s template still checks out `vozka` and `propustka` separately.
-- [24](24-runner-image-cannot-resolve-auth-packages.md) — The Docker image installs the auth packages from npm, where they no longer exist.
 - [25](25-migrate-the-ci-workflows.md) — No CI at all. Restore deploy, release (OIDC trusted publishing) and the runner image build.
-- [26](26-merge-leftovers.md) — Dangling script, orphaned per-package `zerops.yaml`, `.dev.vars` drift, `cf-ray`, partial-config skips.
-- [27](27-unpin-the-toolchain.md) — The merge-time pins have served their purpose; both findings behind them are real.
 - [06](06-can-zerops-secrets-be-read-back.md) — Open: can secret _values_ be read back from the Zerops API?
 - [07](07-rename-env-var-prefixes.md) — Sweep `VOZKA_*` → `FABRIKA_*`; decide whether `PROPUSTKA_*` follows.
 - [08](08-distribute-gate-config-to-proxy.md) — Open: how gate config reaches the running auth service (NOT Caddy — see ADR-0010).
