@@ -21,15 +21,14 @@ fabrika-platform is and how the pieces fit — then skim
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
-None.
+- [Static provider bundles (2026-07-29)](sprints/sprint-2026-07-29-static-provider-bundles.md)
+  — make engine, control lifecycle, persistence, and composition provider-neutral.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
 
-- **Next:** run the built control path against a real Zerops account and record
-  the undocumented platform semantics in
+- **Active:** extract Cloudflare and Zerops behind static provider bundles.
+- **Afterwards:** run the resulting Zerops composition against a real account in
   [`backlog/05-bring-up-on-a-real-zerops-account.md`](backlog/05-bring-up-on-a-real-zerops-account.md).
-- **Delivery gap:** restore CI and release automation in
-  [`backlog/25-migrate-the-ci-workflows.md`](backlog/25-migrate-the-ci-workflows.md).

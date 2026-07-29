@@ -21,4 +21,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 <!-- one line per active sprint; empty between sprints -->
 
-None.
+- [Static provider bundles (2026-07-29)](sprint-2026-07-29-static-provider-bundles.md)
+  — extract both cloud implementations behind one installation-level provider
+  contract.
