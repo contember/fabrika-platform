@@ -98,8 +98,10 @@ opaque `{ provider, version, payload }` JSON envelopes. The selected provider
 validates and normalizes those envelopes. Shared control owns registry rows,
 locks, run status, secret resolution, and queue semantics; the provider owns
 deploy, cancellation, reconciliation, and optional provider-managed secret
-operations. Adding another statically linked provider does not require a core
-schema column or a core provider branch.
+operations. Providers may also own deployment namespaces: placement lifecycle,
+resource claims, and operator plans behind the same static contract. Adding
+another statically linked provider does not require a core schema column or a
+core provider branch.
 
 Runtime portability is separate from deployment-cloud semantics.
 `@fabrika/platform` defines SQL, blob, queue, lock, asset, and lifecycle ports.
@@ -121,14 +123,16 @@ Cloudflare plan. Keeping the runner separate lets the control plane deploy itsel
 without resetting the container that owns the run.
 
 On Zerops, the app build runs `fabrika-zerops build --env=<env>` and produces a
-versioned `fabrika.manifest.json`. Registration stores that validated static data
-in the provider artifact envelope and the project/service address in the provider
-target envelope. A queued deploy never imports app TypeScript: the Bun control
-process applies the compiled import, triggers the service pipeline, polls its
-app-version, and reconciles the IAM schema. It stores the app-version id as soon
-as Zerops accepts the pipeline. Startup and scheduled maintenance call the
-provider reconciliation capability for unfinished platform-owned runs, so a
-self-deploy or restart does not lose the terminal state
+versioned `fabrika.manifest.json`. Registration stores manifest version 2 in the
+Zerops artifact envelope version 2. Its structured import document is the source
+for both service claims and the YAML sent to Zerops. The app target envelope
+version 2 stores only the app service id; the assigned deployment namespace
+supplies the Zerops project and proxy coordinates. A queued deploy never imports
+app TypeScript: the Bun control process applies the compiled import, triggers the
+service pipeline, polls its app-version, and reconciles the IAM schema. It stores
+the app-version id as soon as Zerops accepts the pipeline. Startup and scheduled
+maintenance call the provider reconciliation capability for unfinished
+platform-owned runs, so a self-deploy or restart does not lose the terminal state
 ([ADR-0003](../decisions/0003-no-deploy-runner-on-zerops.md)).
 
 Secret edits follow the same registered service address but are not a deploy step.
@@ -149,27 +153,23 @@ over one shared TypeScript auth service
 ([ADR-0008](../decisions/0008-caddy-forward-auth-proxy.md)).
 
 The IAM service stays **global** — one identity database, one audit log, one admin
-UI. The proxy is **per environment project**, stateless and horizontally scalable.
-For correlation, the proxy preserves or creates `X-Request-Id` and Caddy copies it
-onto the allowed upstream request. IAM prefers that value, then `cf-ray`, then a
-locally generated UUID for audit records.
+UI. The proxy is **per deployment namespace**, stateless and horizontally
+scalable. For correlation, the proxy preserves or creates `X-Request-Id` and
+Caddy copies it onto the allowed upstream request. IAM prefers that value, then
+`cf-ray`, then a locally generated UUID for audit records.
 
 On Zerops the proxy manifest is a baked deploy artefact. Before an app deploy, the
-control plane compiles every registered app manifest in that environment project,
-writes the JSON to the proxy's service-level
+control plane compiles every registered app manifest assigned to that namespace,
+writes the JSON to the namespace proxy's service-level
 `FABRIKA_PROXY_MANIFEST_JSON` variable, and rolls the proxy. Missing or malformed
 JSON fails the proxy build. A valid empty app list routes no app and the auth
 service denies every request. The control plane never uses a project-level
 variable for this path.
 
-## Where it's going
-
-The portable runtime and Zerops control path are built and locally verified. The
-remaining portability milestone is a real-account bring-up — see
-[`backlog 05`](../backlog/05-bring-up-on-a-real-zerops-account.md).
-
 ## Related reference
 
+- [`deployment-namespaces.md`](deployment-namespaces.md) — placement lifecycle,
+  resource claims, Zerops presets, and operator interfaces.
 - [`zerops-platform.md`](zerops-platform.md) — the established facts about Zerops
   that the decisions rest on, with sources.
 - [`portability-surface.md`](portability-surface.md) — every Cloudflare primitive

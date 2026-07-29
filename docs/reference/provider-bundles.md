@@ -51,9 +51,18 @@ A provider may also implement:
 - `cancel` for platform-owned work;
 - `reconcile` for unfinished external operations;
 - `secrets` for immediate writes to provider-managed secret storage.
+- `namespaces` for provider-owned placement validation, resource claims,
+  provisioning, reconciliation, and operator planning.
 
 Shared lifecycle code calls these capabilities directly. It does not select from
 a runtime registry and does not branch on `cloudflare` or `zerops`.
+
+The namespace capability receives the provider-neutral
+`ProviderDeploymentNamespace` coordinates and an opaque target envelope. Its
+optional operator surface publishes provider-defined presets, produces a
+mutation-free plan, and renders safe facts and instructions. The control plane
+does not interpret provider preset ids or plan options. See
+[`deployment-namespaces.md`](deployment-namespaces.md).
 
 ## Persistence boundary
 
@@ -72,6 +81,12 @@ The registry stores the canonical target and artifact envelopes in
 the provider operation id in `runs.external_run_id`. Provider credentials do not
 belong in these envelopes; each composition root supplies them only for live
 operations.
+
+Deployment namespaces have their own provider envelope in
+`deployment_namespaces.provider_target_json`. `app_envs.namespace_id` assigns an
+environment to a placement. Core stores provider resource keys in
+`namespace_resource_claims`; the provider derives the keys, while shared
+persistence owns their atomic and immutable assignment.
 
 The selected provider rejects an envelope with a different provider id or an
 unsupported codec version. A new provider can define a different payload without
@@ -126,6 +141,19 @@ fabrika-zerops build --env=<env> [--config=<path>] [--output=<path>]
 The resulting `fabrika.manifest.json` is the provider-owned artifact. The control
 plane validates and stores it, then performs deployments without importing the
 app's TypeScript.
+
+The Zerops CLI also exposes the provider-owned namespace operator:
+
+```text
+fabrika-zerops namespace plan --id=<id> --env=<env> --preset=<cheap|mid|full>
+fabrika-zerops namespace create --id=<id> --env=<env> --preset=<cheap|mid|full>
+fabrika-zerops namespace adopt --id=<id> --env=<env> --preset=<cheap|mid|full> --project-id=<id>
+fabrika-zerops namespace reconcile --id=<id>
+```
+
+`plan` runs without mutation. `create` and `adopt` submit the provider-generated
+namespace envelope to the control API. `reconcile` resumes the stored,
+checkpointed lifecycle.
 
 The architectural constraints and rejected dynamic-registry alternative are in
 [ADR-0011](../decisions/0011-static-provider-bundles.md).

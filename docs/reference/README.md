@@ -21,3 +21,6 @@ behaviour.
   assessment.
 - [`provider-bundles.md`](provider-bundles.md) — the static provider contract,
   versioned persistence boundary, composition roots, and provider CLIs.
+- [`deployment-namespaces.md`](deployment-namespaces.md) — provider-neutral
+  placement lifecycle, assignment and resource claims, Zerops isolation presets,
+  and operator interfaces.

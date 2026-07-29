@@ -39,13 +39,22 @@ Provider packages own the per-cloud implementations behind the open contract in
 | Migrations       | **Per-provider**  | A discrete plan step on Cloudflare; `run.initCommands` at container start on Zerops.                                               |
 
 Zerops app configuration crosses a static boundary. `fabrika-zerops build`
-evaluates the app-owned TypeScript and emits a versioned
-`fabrika.manifest.json`; the control plane validates and stores that document in
-the provider artifact envelope, then deploys it without executing repository
-code. The app-env target envelope supplies the Zerops project and service ids.
-The same service address is used for deploys and immediate secret write-through.
+evaluates the app-owned TypeScript and emits manifest version 2 in a provider
+artifact envelope version 2. The control plane validates and stores its canonical
+structured import document, then deploys it without executing repository code.
+The app-env target envelope version 2 supplies only the Zerops service id. The
+assigned deployment namespace target supplies project and proxy coordinates.
+The same app service id is used for deploys and immediate secret write-through.
 The triggered app-version id is stored in the generic `external_run_id` field so
 startup and cron can reconcile a run after the initiating process disappears.
+
+Placement is part of the open provider contract, not a Zerops branch in shared
+control. A provider may implement namespace normalization, resource claims,
+checkpointed provision/reconcile operations, and provider-authored operator
+plans. Core persists opaque namespace targets and enforces assignment, claim, and
+deploy-time coordinate invariants. The Zerops provider maps one namespace to one
+project and offers `cheap`, `mid`, and `full` isolation presets. See
+[`deployment-namespaces.md`](deployment-namespaces.md).
 
 The Cloudflare provider keeps the executable Oblaka config as its source
 artifact. Its control adapter resolves a checkout and sends the provider-owned

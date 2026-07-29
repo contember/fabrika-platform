@@ -31,10 +31,10 @@ prefixing the key with the service hostname, e.g. `mariadb1_connectionString`
 ([import JSON schema](https://api.app-prg1.zerops.io/api/rest/public/settings/import-project-yml-json-schema.json),
 [env variables](https://docs.zerops.io/nodejs/how-to/env-variables)).
 
-`envIsolation: none` is why ADR-0004's invariant has a second half: without
-`envIsolation: service`, every service also sees every OTHER service's service-level
-variables, so "never write to project level" alone does not prevent app A's
-credentials reaching app B.
+The public project read response does not expose the project's `envIsolation`
+setting, so a client cannot verify that value after creation. Fabrika writes
+`envIsolation: service` on every managed service and reimports those service
+definitions during namespace provision and reconcile.
 
 ## Public access
 
@@ -47,9 +47,9 @@ project's **L7 HTTP balancer handles domain routing and SSL termination**.
 [import reference](https://docs.zerops.io/references/import) for
 `enableSubdomainAccess`, default `false`)
 
-Whether **multiple custom domains** may point at a single service is **not stated**
-on the access page — open question, see
-[`../backlog/09-confirm-multi-domain-per-service.md`](../backlog/09-confirm-multi-domain-per-service.md).
+Whether **multiple custom domains** may point at a single service is not stated on
+the access page. Fabrika does not automate custom-domain binding: the operator
+binds each application domain to its namespace's `proxy` service in Zerops.
 
 ## corePackage
 
@@ -59,8 +59,8 @@ cannot be downgraded"; upgrades cause a brief disruption and are partially
 destructive (logs and statistics are lost).
 ([import reference](https://docs.zerops.io/references/import))
 
-This is why the default topology is one project per environment — see
-[ADR-0006](../decisions/0006-zerops-project-topology-is-a-registry-field.md).
+Fabrika sets `corePackage` per deployment namespace project. The provider default
+is `SERIOUS` for `prod` and `LIGHT` for other environments.
 
 ## The two config files
 
@@ -86,6 +86,10 @@ private repos fail during clone
 ([import reference](https://docs.zerops.io/references/import)). Private-repo builds
 go through the GitHub/GitLab integration instead
 ([GitHub integration](https://docs.zerops.io/references/github-integration)).
+
+Fabrika persists the proxy's public `buildFromGit` URL in the namespace target
+and reuses it for proxy pipeline triggers. The public documentation does not
+establish that this URL is an immutable content pin.
 
 ## Zerops has its own CI
 
@@ -140,16 +144,17 @@ over prose. The endpoints fabrika's Zerops provider uses, all confirmed there:
 `DEPLOY_FAILED`, `PREPARING_RUNTIME`, `PREPARING_RUNTIME_FAILED`, `ACTIVE`, `BACKUP`,
 `CANCELLED`. `ACTIVE` is the only success.
 
-Two things the OpenAPI document does **not** cover:
+The OpenAPI document has these relevant limits:
 
 - **The log service itself.** `GET /project/{id}/log` returns URLs plus a bearer for a
   SEPARATE service; that service's own request/response contract appears in no
   published document. fabrika's client marks `readBuildLog` unverified and treats a
   failure there as non-fatal.
-- **`envIsolation` cannot be changed after project creation.** It is settable on
-  `POST /client/{id}/project` and in the import `project:` section, but
-  `RequestPutProject` has no such field. Service-level `envIsolation` overrides the
-  project's, which is fabrika's compensating control.
+- **Project `envIsolation` is write-only through the relevant public shapes.** It
+  is settable on `POST /client/{id}/project` and in the import `project:` section,
+  absent from `RequestPutProject`, and absent from the project read response.
+  Service-level `envIsolation` is importable and overrides the project setting;
+  Fabrika reapplies it during namespace reconciliation.
 
 **The personal access token carries account-wide admin privileges** — no finer
 scoping was found. Treat it as a root credential: it is the single most dangerous
@@ -169,8 +174,21 @@ Project-level injection into every service is exactly why
 [ADR-0004](../decisions/0004-secrets-live-in-the-platform.md) forbids fabrika from
 ever putting an app secret at project level.
 
-Whether secret **values can be read back** through the API is an open question —
-[`../backlog/06-can-zerops-secrets-be-read-back.md`](../backlog/06-can-zerops-secrets-be-read-back.md).
+The public contract does not establish a secret-value read-back operation.
+
+## Fabrika placement mapping
+
+One Fabrika deployment namespace maps to one Zerops project and its
+namespace-owned proxy. The optional namespace-owned `postgres` service is present
+for the `cheap` preset. The app target envelope version 2 stores only its service
+id; the namespace target envelope version 1 supplies project, proxy, policy, and
+durable lifecycle coordinates. The app artifact envelope version 2 stores
+manifest version 2 with the structured import document used for claims and API
+YAML.
+
+The full lifecycle, isolation presets, shared PostgreSQL trust domain, and
+operator interfaces are described in
+[`deployment-namespaces.md`](deployment-namespaces.md).
 
 ## Alpine custom runtime
 
