@@ -28,6 +28,7 @@ describe('reconcileProviderRuns', () => {
 		await db.upsertAppEnv({
 			appId: 'app',
 			env: 'foreign',
+			namespaceId: null,
 			provider: 'other',
 			providerTargetJson: JSON.stringify({ provider: 'other', version: 1, payload: {} }),
 			providerArtifactJson: JSON.stringify({ provider: 'other', version: 1, payload: {} }),

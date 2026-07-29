@@ -46,6 +46,7 @@ async function seedRun(
 		appId: 'app',
 		env: 'prod',
 		domain: 'app.example.com',
+		namespaceId: null,
 		provider,
 		providerTargetJson: JSON.stringify(envelope(provider, 'target')),
 		providerArtifactJson: JSON.stringify(envelope(provider, 'artifact')),

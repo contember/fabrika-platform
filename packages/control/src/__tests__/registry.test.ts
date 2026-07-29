@@ -101,6 +101,7 @@ const storedEnvironment = (
 		appId,
 		env,
 		...options,
+		namespaceId: null,
 		provider: 'harbor',
 		providerTargetJson: JSON.stringify(envelopes.target),
 		providerArtifactJson: JSON.stringify(envelopes.artifact),

@@ -49,7 +49,21 @@ afterAll(async () => {
 
 /** Remove everything a test may have written. `apps` cascades to envs/secrets/vars/runs/poll state. */
 async function reset(): Promise<void> {
-	for (const table of ['jobs', 'deploy_locks', 'runs', 'repo_poll_state', 'app_vars', 'app_secrets', 'app_envs', 'apps', 'vault']) {
+	for (
+		const table of [
+			'namespace_resource_claims',
+			'jobs',
+			'deploy_locks',
+			'runs',
+			'repo_poll_state',
+			'app_vars',
+			'app_secrets',
+			'app_envs',
+			'deployment_namespaces',
+			'apps',
+			'vault',
+		]
+	) {
 		await raw.prepare(`DELETE FROM ${table}`).run()
 	}
 }
@@ -66,6 +80,7 @@ const providerEnvironment = (
 	appId,
 	env,
 	...options,
+	namespaceId: null,
 	provider: 'harbor',
 	providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: { region: 'eu' } }),
 	providerArtifactJson: JSON.stringify({ provider: 'harbor', version: 1, payload: { image: 'app:v1' } }),
@@ -87,6 +102,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			'0002_jobs.sql',
 			'0003_zerops_targets.sql',
 			'0004_provider_envelopes.sql',
+			'0005_deployment_namespaces.sql',
 		])
 	})
 
@@ -96,7 +112,21 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			.bind(fixture?.schema ?? '')
 			.all<{ name: string }>()
 		const names = results.map((r) => r.name)
-		for (const table of ['apps', 'app_envs', 'app_secrets', 'app_vars', 'runs', 'repo_poll_state', 'vault', 'deploy_locks', 'jobs']) {
+		for (
+			const table of [
+				'apps',
+				'app_envs',
+				'deployment_namespaces',
+				'namespace_resource_claims',
+				'app_secrets',
+				'app_vars',
+				'runs',
+				'repo_poll_state',
+				'vault',
+				'deploy_locks',
+				'jobs',
+			]
+		) {
 			expect(names).toContain(table)
 		}
 		// Retired by migrations/0003 — this set never creates it in the first place.
@@ -232,6 +262,45 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 
 		await db.deleteApp('acme')
 		expect(await db.listAppEnvs('acme')).toHaveLength(0)
+	})
+
+	test('deployment namespaces and resource claims enforce the same ownership constraints', async () => {
+		await reset()
+		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
+		const target = JSON.stringify({ provider: 'harbor', version: 1, payload: { dock: 'eu' } })
+		await db.createDeploymentNamespace({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: target,
+		})
+		await db.upsertAppEnv({ ...providerEnvironment('alpha', 'prod'), namespaceId: 'apps-prod' })
+		await db.upsertAppEnv({ ...providerEnvironment('beta', 'prod'), namespaceId: 'apps-prod' })
+		await db.createNamespaceResourceClaim({
+			namespaceId: 'apps-prod',
+			resourceKey: 'proxy',
+			ownerAppId: null,
+			ownerEnv: null,
+		})
+		await db.createNamespaceResourceClaim({
+			namespaceId: 'apps-prod',
+			resourceKey: 'alpha-api',
+			ownerAppId: 'alpha',
+			ownerEnv: 'prod',
+		})
+
+		expect((await db.listDeploymentNamespaces()).map((namespace) => namespace.id)).toEqual(['apps-prod'])
+		expect((await db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual(['alpha-api', 'proxy'])
+		await expect(db.upsertAppEnv({ ...providerEnvironment('alpha', 'stage'), namespaceId: 'apps-prod' })).rejects.toThrow()
+		await expect(db.createNamespaceResourceClaim({
+			namespaceId: 'apps-prod',
+			resourceKey: 'alpha-api',
+			ownerAppId: 'beta',
+			ownerEnv: 'prod',
+		})).rejects.toThrow()
+		await expect(db.deleteAppEnv('alpha', 'prod')).rejects.toThrow()
 	})
 
 	test('a trigger ref is unique within an app, and NULLs do not contend', async () => {

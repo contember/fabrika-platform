@@ -35,6 +35,7 @@ const vaultProvider: ControlProvider = {
 const storedEnvironment = (provider = 'memory') => ({
 	appId: 'app',
 	env: 'prod',
+	namespaceId: null,
 	provider,
 	providerTargetJson: JSON.stringify(envelope(provider, 'target')),
 	providerArtifactJson: JSON.stringify(envelope(provider, 'artifact')),

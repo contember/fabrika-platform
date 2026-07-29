@@ -31,6 +31,8 @@ export interface AppEnvRow {
 	app_id: string
 	env: string
 	domain: string | null
+	/** Optional provider-owned placement boundary. */
+	namespace_id: string | null
 	/** The statically composed provider that owns both envelopes. */
 	provider: string
 	/** Canonical target envelope returned by ControlProvider.normalizeRegistration. */
@@ -39,6 +41,28 @@ export interface AppEnvRow {
 	provider_artifact_json: string
 	/** Git ref that triggers a deploy here, e.g. `refs/heads/deploy/prod`. NULL = manual-only. */
 	trigger_ref: string | null
+	created_at: number
+}
+
+export type DeploymentNamespaceState = 'pending' | 'provisioning' | 'ready' | 'failed'
+
+export interface DeploymentNamespaceRow {
+	id: string
+	env: string
+	provider: string
+	exclusive_app_id: string | null
+	provider_target_json: string
+	state: DeploymentNamespaceState
+	last_error: string | null
+	created_at: number
+}
+
+export interface NamespaceResourceClaimRow {
+	namespace_id: string
+	resource_key: string
+	/** NULL with owner_env means the namespace itself owns the resource. */
+	owner_app_id: string | null
+	owner_env: string | null
 	created_at: number
 }
 
@@ -200,6 +224,85 @@ export class Db {
 		return (result.meta.changes ?? 0) > 0
 	}
 
+	// ── Deployment namespaces ─────────────────────────────────────────────────
+
+	async listDeploymentNamespaces(): Promise<DeploymentNamespaceRow[]> {
+		const { results } = await this.d1
+			.prepare('SELECT * FROM deployment_namespaces ORDER BY env, id')
+			.all<DeploymentNamespaceRow>()
+		return results
+	}
+
+	async getDeploymentNamespace(id: string): Promise<DeploymentNamespaceRow | null> {
+		return this.d1.prepare('SELECT * FROM deployment_namespaces WHERE id = ?').bind(id).first<DeploymentNamespaceRow>()
+	}
+
+	async createDeploymentNamespace(input: {
+		id: string
+		env: string
+		provider: string
+		exclusiveAppId: string | null
+		providerTargetJson: string
+		state?: DeploymentNamespaceState
+		lastError?: string | null
+	}): Promise<DeploymentNamespaceRow> {
+		return firstRow<DeploymentNamespaceRow>(
+			this.d1
+				.prepare(`INSERT INTO deployment_namespaces (
+						id, env, provider, exclusive_app_id, provider_target_json, state, last_error
+					)
+					VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`)
+				.bind(
+					input.id,
+					input.env,
+					input.provider,
+					input.exclusiveAppId,
+					input.providerTargetJson,
+					input.state ?? 'pending',
+					input.lastError ?? null,
+				),
+		)
+	}
+
+	/** Persist a provider checkpoint or a core-owned namespace lifecycle transition. */
+	async updateDeploymentNamespace(input: {
+		id: string
+		providerTargetJson: string
+		state: DeploymentNamespaceState
+		lastError: string | null
+	}): Promise<DeploymentNamespaceRow | null> {
+		return this.d1
+			.prepare(`UPDATE deployment_namespaces
+				SET provider_target_json = ?, state = ?, last_error = ?
+				WHERE id = ? RETURNING *`)
+			.bind(input.providerTargetJson, input.state, input.lastError, input.id)
+			.first<DeploymentNamespaceRow>()
+	}
+
+	async listNamespaceResourceClaims(namespaceId: string): Promise<NamespaceResourceClaimRow[]> {
+		const { results } = await this.d1
+			.prepare('SELECT * FROM namespace_resource_claims WHERE namespace_id = ? ORDER BY resource_key')
+			.bind(namespaceId)
+			.all<NamespaceResourceClaimRow>()
+		return results
+	}
+
+	async createNamespaceResourceClaim(input: {
+		namespaceId: string
+		resourceKey: string
+		ownerAppId: string | null
+		ownerEnv: string | null
+	}): Promise<NamespaceResourceClaimRow> {
+		return firstRow<NamespaceResourceClaimRow>(
+			this.d1
+				.prepare(`INSERT INTO namespace_resource_claims (
+						namespace_id, resource_key, owner_app_id, owner_env
+					)
+					VALUES (?, ?, ?, ?) RETURNING *`)
+				.bind(input.namespaceId, input.resourceKey, input.ownerAppId, input.ownerEnv),
+		)
+	}
+
 	// ── App environments ──────────────────────────────────────────────────────
 
 	async listAppEnvs(appId: string): Promise<AppEnvRow[]> {
@@ -221,6 +324,16 @@ export class Db {
 				WHERE provider = ?
 				ORDER BY app_id, env`)
 			.bind(provider)
+			.all<AppEnvRow>()
+		return results
+	}
+
+	async listAppEnvsByNamespace(namespaceId: string): Promise<AppEnvRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT * FROM app_envs
+				WHERE namespace_id = ?
+				ORDER BY app_id, env`)
+			.bind(namespaceId)
 			.all<AppEnvRow>()
 		return results
 	}
@@ -255,6 +368,7 @@ export class Db {
 		env: string
 		domain?: string | null
 		triggerRef?: string | null
+		namespaceId: string | null
 		provider: string
 		providerTargetJson: string
 		providerArtifactJson: string
@@ -262,13 +376,14 @@ export class Db {
 		return firstRow<AppEnvRow>(
 			this.d1
 				.prepare(`INSERT INTO app_envs (
-						app_id, env, domain, trigger_ref, provider,
+						app_id, env, domain, trigger_ref, namespace_id, provider,
 						provider_target_json, provider_artifact_json
 					)
-					VALUES (?, ?, ?, ?, ?, ?, ?)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 					ON CONFLICT (app_id, env) DO UPDATE SET
 						domain = excluded.domain,
 						trigger_ref = excluded.trigger_ref,
+						namespace_id = excluded.namespace_id,
 						provider = excluded.provider,
 						provider_target_json = excluded.provider_target_json,
 						provider_artifact_json = excluded.provider_artifact_json
@@ -278,6 +393,7 @@ export class Db {
 					input.env,
 					input.domain ?? null,
 					input.triggerRef ?? null,
+					input.namespaceId,
 					input.provider,
 					input.providerTargetJson,
 					input.providerArtifactJson,
@@ -551,6 +667,7 @@ export class Db {
 					a.build_cmd AS a_build_cmd, a.config_path AS a_config_path, a.github_installation_id AS a_github_installation_id,
 					a.created_at AS a_created_at,
 						e.app_id AS e_app_id, e.env AS e_env, e.domain AS e_domain, e.trigger_ref AS e_trigger_ref,
+						e.namespace_id AS e_namespace_id,
 						e.provider AS e_provider, e.provider_target_json AS e_provider_target_json,
 						e.provider_artifact_json AS e_provider_artifact_json,
 						e.created_at AS e_created_at
@@ -575,6 +692,7 @@ export class Db {
 				env: r.e_env,
 				domain: r.e_domain,
 				trigger_ref: r.e_trigger_ref,
+				namespace_id: r.e_namespace_id,
 				provider: r.e_provider,
 				provider_target_json: r.e_provider_target_json,
 				provider_artifact_json: r.e_provider_artifact_json,
@@ -632,6 +750,7 @@ interface PollEligibleJoinRow {
 	e_env: string
 	e_domain: string | null
 	e_trigger_ref: string | null
+	e_namespace_id: string | null
 	e_provider: string
 	e_provider_target_json: string
 	e_provider_artifact_json: string

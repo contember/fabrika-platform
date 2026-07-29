@@ -36,6 +36,7 @@ describe('Zerops proxy manifest delivery', () => {
 				appId: entry.id,
 				env: 'prod',
 				domain: entry.domain,
+				namespaceId: null,
 				provider: 'zerops',
 				providerTargetJson: JSON.stringify(
 					envelope(zeropsStoredTargetCodec, { projectId: 'project-1', serviceId: `${entry.id}-service` }),
@@ -93,6 +94,7 @@ describe('Zerops proxy manifest delivery', () => {
 		await db.upsertAppEnv({
 			appId: 'alpha',
 			env: 'prod',
+			namespaceId: null,
 			provider: 'zerops',
 			providerTargetJson: JSON.stringify(
 				envelope(zeropsStoredTargetCodec, { projectId: 'project-1', serviceId: 'alpha-service' }),

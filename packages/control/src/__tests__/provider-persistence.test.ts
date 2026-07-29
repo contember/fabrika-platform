@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHarness, queryRows } from './helpers/harness'
 
@@ -10,12 +10,28 @@ const artifactJson = JSON.stringify({ provider: 'harbor', version: 4, payload: {
 const appEnvironment = (appId: string, env: string) => ({
 	appId,
 	env,
+	namespaceId: null,
 	provider: 'harbor',
 	providerTargetJson: targetJson,
 	providerArtifactJson: artifactJson,
 })
 
 const rowValue = (row: Record<string, unknown> | undefined, key: string): unknown => row?.[key]
+
+const sqliteMigrations = join(import.meta.dir, '..', '..', 'migrations')
+
+const applySqliteMigrationsThrough = (sqlite: Database, last: string): void => {
+	for (const filename of readdirSync(sqliteMigrations).filter((name) => name.endsWith('.sql') && name <= last).sort()) {
+		sqlite.exec(readFileSync(join(sqliteMigrations, filename), 'utf8'))
+	}
+}
+
+const applySqliteMigrationStrictly = (sqlite: Database, filename: string): void => {
+	const sql = readFileSync(join(sqliteMigrations, filename), 'utf8')
+	for (const statement of sql.split(';').map((part) => part.trim()).filter((part) => part !== '')) {
+		sqlite.run(statement)
+	}
+}
 
 describe('generic provider persistence', () => {
 	test('round-trips a third provider without changing the schema or query surface', async () => {
@@ -48,27 +64,97 @@ describe('generic provider persistence', () => {
 		expect((await db.getRun(run.id))?.status).toBe('running')
 	})
 
+	test('round-trips namespaces and namespace-owned or app-owned resource claims', async () => {
+		const { db } = createHarness()
+		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
+		const namespace = await db.createDeploymentNamespace({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: targetJson,
+		})
+		await db.upsertAppEnv({ ...appEnvironment('alpha', 'prod'), namespaceId: namespace.id })
+		await db.upsertAppEnv({ ...appEnvironment('beta', 'prod'), namespaceId: namespace.id })
+		await db.createNamespaceResourceClaim({
+			namespaceId: namespace.id,
+			resourceKey: 'proxy',
+			ownerAppId: null,
+			ownerEnv: null,
+		})
+		await db.createNamespaceResourceClaim({
+			namespaceId: namespace.id,
+			resourceKey: 'alpha-api',
+			ownerAppId: 'alpha',
+			ownerEnv: 'prod',
+		})
+		const ready = await db.updateDeploymentNamespace({
+			id: namespace.id,
+			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 3, payload: { dock: '7' } }),
+			state: 'ready',
+			lastError: null,
+		})
+
+		expect((await db.listDeploymentNamespaces()).map((row) => row.id)).toEqual(['apps-prod'])
+		expect(ready?.state).toBe('ready')
+		expect((await db.getAppEnv('alpha', 'prod'))?.namespace_id).toBe('apps-prod')
+		expect((await db.listAppEnvsByNamespace('apps-prod')).map((row) => row.app_id)).toEqual(['alpha', 'beta'])
+		expect((await db.listNamespaceResourceClaims(namespace.id)).map((claim) => [
+			claim.resource_key,
+			claim.owner_app_id,
+		])).toEqual([
+			['alpha-api', 'alpha'],
+			['proxy', null],
+		])
+	})
+
+	test('enforces namespace coordinates and resource ownership constraints', async () => {
+		const { db } = createHarness()
+		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.createDeploymentNamespace({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: targetJson,
+		})
+		await db.createDeploymentNamespace({
+			id: 'other-prod',
+			env: 'prod',
+			provider: 'other',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify({ provider: 'other', version: 1, payload: {} }),
+		})
+
+		await expect(db.upsertAppEnv({ ...appEnvironment('alpha', 'stage'), namespaceId: 'apps-prod' })).rejects.toThrow()
+		await expect(db.upsertAppEnv({ ...appEnvironment('alpha', 'prod'), namespaceId: 'other-prod' })).rejects.toThrow()
+		await db.upsertAppEnv({ ...appEnvironment('alpha', 'prod'), namespaceId: 'apps-prod' })
+		await db.createNamespaceResourceClaim({
+			namespaceId: 'apps-prod',
+			resourceKey: 'alpha-api',
+			ownerAppId: 'alpha',
+			ownerEnv: 'prod',
+		})
+		await expect(db.createNamespaceResourceClaim({
+			namespaceId: 'apps-prod',
+			resourceKey: 'alpha-api',
+			ownerAppId: null,
+			ownerEnv: null,
+		})).rejects.toThrow()
+		await expect(db.createNamespaceResourceClaim({
+			namespaceId: 'apps-prod',
+			resourceKey: 'broken-owner',
+			ownerAppId: 'alpha',
+			ownerEnv: null,
+		})).rejects.toThrow()
+		await expect(db.deleteAppEnv('alpha', 'prod')).rejects.toThrow()
+	})
+
 	test('migrates existing Cloudflare and Zerops rows into envelopes before dropping named columns', () => {
 		const sqlite = new Database(':memory:')
 		sqlite.exec('PRAGMA foreign_keys = ON')
-		const sqliteMigrations = join(import.meta.dir, '..', '..', 'migrations')
-		for (let version = 1; version <= 7; version++) {
-			const name = String(version).padStart(4, '0')
-			const filename = version === 1
-				? `${name}_init.sql`
-				: version === 2
-				? `${name}_vault.sql`
-				: version === 3
-				? `${name}_single_account.sql`
-				: version === 4
-				? `${name}_repo_poll.sql`
-				: version === 5
-				? `${name}_app_vars.sql`
-				: version === 6
-				? `${name}_deploy_locks.sql`
-				: `${name}_zerops_targets.sql`
-			sqlite.exec(readFileSync(join(sqliteMigrations, filename), 'utf8'))
-		}
+		applySqliteMigrationsThrough(sqlite, '0007_zerops_targets.sql')
 
 		sqlite.query(`INSERT INTO apps (id, repo_url, config_path) VALUES (?, ?, ?)`).run('cf', 'github.com/acme/cf', 'deploy/config.ts')
 		sqlite.query(`INSERT INTO apps (id, repo_url) VALUES (?, ?)`).run('zp', 'github.com/acme/zp')
@@ -95,5 +181,97 @@ describe('generic provider persistence', () => {
 			JSON.stringify({ provider: 'zerops', version: 1, payload: { projectId: 'project-1', serviceId: 'service-1' } }),
 		)
 		expect(rowValue(queryRows(sqlite, 'SELECT external_run_id FROM runs')[0], 'external_run_id')).toBe('version-1')
+	})
+
+	test('groups existing Zerops targets into pending namespaces without changing app targets', () => {
+		const sqlite = new Database(':memory:')
+		sqlite.exec('PRAGMA foreign_keys = ON')
+		applySqliteMigrationsThrough(sqlite, '0008_provider_envelopes.sql')
+		for (const id of ['alpha', 'beta', 'cf', 'third']) {
+			sqlite.query('INSERT INTO apps (id, repo_url) VALUES (?, ?)').run(id, `github.com/acme/${id}`)
+		}
+		const zeropsTarget = (serviceId: string): string =>
+			JSON.stringify({ provider: 'zerops', version: 1, payload: { projectId: 'project-1', serviceId } })
+		const artifact = (provider: string): string => JSON.stringify({ provider, version: 1, payload: { kind: 'artifact' } })
+		for (const [appId, serviceId] of [['alpha', 'service-alpha'], ['beta', 'service-beta']]) {
+			sqlite.query(`INSERT INTO app_envs (
+					app_id, env, provider, provider_target_json, provider_artifact_json
+				) VALUES (?, 'prod', 'zerops', ?, ?)`)
+				.run(appId, zeropsTarget(serviceId), artifact('zerops'))
+		}
+		const cloudflareTarget = JSON.stringify({ provider: 'cloudflare', version: 1, payload: {} })
+		const thirdTarget = JSON.stringify({ provider: 'harbor', version: 7, payload: { region: 'eu' } })
+		sqlite.query(`INSERT INTO app_envs (
+				app_id, env, provider, provider_target_json, provider_artifact_json
+			) VALUES ('cf', 'prod', 'cloudflare', ?, ?)`)
+			.run(cloudflareTarget, artifact('cloudflare'))
+		sqlite.query(`INSERT INTO app_envs (
+				app_id, env, provider, provider_target_json, provider_artifact_json
+			) VALUES ('third', 'prod', 'harbor', ?, ?)`)
+			.run(thirdTarget, artifact('harbor'))
+
+		applySqliteMigrationStrictly(sqlite, '0009_deployment_namespaces.sql')
+
+		const namespaces = queryRows(sqlite, 'SELECT * FROM deployment_namespaces')
+		expect(namespaces).toHaveLength(1)
+		expect(rowValue(namespaces[0], 'id')).toBe('zerops-project-project-1')
+		expect(rowValue(namespaces[0], 'state')).toBe('pending')
+		expect(rowValue(namespaces[0], 'exclusive_app_id')).toBeNull()
+		expect(JSON.parse(`${rowValue(namespaces[0], 'provider_target_json')}`)).toEqual({
+			provider: 'zerops',
+			version: 1,
+			payload: { projectId: 'project-1' },
+		})
+		const environments = queryRows(
+			sqlite,
+			'SELECT app_id, namespace_id, provider_target_json FROM app_envs ORDER BY app_id',
+		)
+		expect(environments.map((row) => [rowValue(row, 'app_id'), rowValue(row, 'namespace_id')])).toEqual([
+			['alpha', 'zerops-project-project-1'],
+			['beta', 'zerops-project-project-1'],
+			['cf', null],
+			['third', null],
+		])
+		expect(rowValue(environments[0], 'provider_target_json')).toBe(zeropsTarget('service-alpha'))
+		expect(rowValue(environments[2], 'provider_target_json')).toBe(cloudflareTarget)
+		expect(rowValue(environments[3], 'provider_target_json')).toBe(thirdTarget)
+	})
+
+	test('rejects inconsistent legacy Zerops groupings instead of guessing ownership', () => {
+		const migrate = (rows: Array<{ appId: string; env: string; serviceId: string }>): void => {
+			const sqlite = new Database(':memory:')
+			sqlite.exec('PRAGMA foreign_keys = ON')
+			applySqliteMigrationsThrough(sqlite, '0008_provider_envelopes.sql')
+			for (const row of rows) {
+				sqlite.query('INSERT INTO apps (id, repo_url) VALUES (?, ?)').run(row.appId, `github.com/acme/${row.appId}`)
+				sqlite.query(`INSERT INTO app_envs (
+						app_id, env, provider, provider_target_json, provider_artifact_json
+					) VALUES (?, ?, 'zerops', ?, ?)`)
+					.run(
+						row.appId,
+						row.env,
+						JSON.stringify({
+							provider: 'zerops',
+							version: 1,
+							payload: { projectId: 'project-1', serviceId: row.serviceId },
+						}),
+						JSON.stringify({ provider: 'zerops', version: 1, payload: null }),
+					)
+			}
+			applySqliteMigrationStrictly(sqlite, '0009_deployment_namespaces.sql')
+		}
+
+		expect(() =>
+			migrate([
+				{ appId: 'prod-app', env: 'prod', serviceId: 'prod-service' },
+				{ appId: 'stage-app', env: 'stage', serviceId: 'stage-service' },
+			])
+		).toThrow()
+		expect(() =>
+			migrate([
+				{ appId: 'alpha', env: 'prod', serviceId: 'shared-service' },
+				{ appId: 'beta', env: 'prod', serviceId: 'shared-service' },
+			])
+		).toThrow()
 	})
 })

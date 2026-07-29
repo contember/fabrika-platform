@@ -35,6 +35,7 @@ async function seed(db: Db, valueRef: string): Promise<string> {
 	await db.upsertAppEnv({
 		appId: 'app',
 		env: 'prod',
+		namespaceId: null,
 		provider: 'memory',
 		providerTargetJson: JSON.stringify(envelope('target')),
 		providerArtifactJson: JSON.stringify(envelope('artifact')),

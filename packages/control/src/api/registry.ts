@@ -47,6 +47,7 @@ function toAppEnvDto(row: AppEnvRow): unknown {
 		env: row.env,
 		domain: row.domain,
 		triggerRef: row.trigger_ref,
+		namespaceId: row.namespace_id,
 		provider: row.provider,
 		target: JSON.parse(row.provider_target_json),
 		artifact: JSON.parse(row.provider_artifact_json),
@@ -262,11 +263,13 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 	const triggerRef = nullableStringField(body, 'triggerRef') ?? null
 	const registration = registrationEnvironment(body, c.provider, toProviderApp(app), env, domain)
 	if (registration instanceof Response) return registration
+	const existing = await c.db.getAppEnv(appId, env)
 	const row = await c.db.upsertAppEnv({
 		appId,
 		env,
 		domain: registration.environment.domain ?? null,
 		triggerRef,
+		namespaceId: existing?.namespace_id ?? null,
 		provider: c.provider.id,
 		providerTargetJson: JSON.stringify(registration.environment.target),
 		providerArtifactJson: JSON.stringify(registration.environment.artifact),
@@ -437,6 +440,7 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 		env: registration.environment.env,
 		domain: registration.environment.domain ?? null,
 		triggerRef,
+		namespaceId: null,
 		provider: c.provider.id,
 		providerTargetJson: JSON.stringify(registration.environment.target),
 		providerArtifactJson: JSON.stringify(registration.environment.artifact),

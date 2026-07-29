@@ -17,6 +17,7 @@ export function providerEnvironment(
 		appId,
 		env,
 		...options,
+		namespaceId: null,
 		provider: TEST_PROVIDER_ID,
 		providerTargetJson: JSON.stringify(envelope('target')),
 		providerArtifactJson: JSON.stringify(envelope('artifact')),
