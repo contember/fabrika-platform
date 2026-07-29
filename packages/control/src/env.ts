@@ -113,6 +113,8 @@ export interface Env {
 	ZEROPS_ACCESS_TOKEN?: string
 	/** Optional regional Zerops REST API base URL. */
 	ZEROPS_API_BASE_URL?: string
+	/** Hostname of the per-project auth proxy service. Defaults to `proxy`. */
+	ZEROPS_PROXY_SERVICE_NAME?: string
 	/**
 	 * The vault MASTER key (KEK) for the encrypted secret vault — 32 raw bytes, base64. Seals every
 	 * per-value data key (src/vault.ts). Provisioned out-of-band, once per environment:

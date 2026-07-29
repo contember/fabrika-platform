@@ -8,7 +8,7 @@
 // Nothing in this file (or anything it reaches) imports `cloudflare:workers`, `bun:*` or `node:*` —
 // every handle arrives through a port. `src/__tests__/entrypoint-isolation.test.ts` enforces that.
 
-import { configFromManifest, deploy, type DeployOptions, parseFabrikaManifest } from '@fabrika/engine'
+import { configFromManifest, createZeropsApi, deploy, type DeployOptions, parseFabrikaManifest } from '@fabrika/engine'
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { RelayResult, RunnerJob } from '@fabrika/runner'
 import type { ApiDeps } from './api/router'
@@ -19,6 +19,7 @@ import { GitHubAppRepoSource, type RepoSource } from './repo-source'
 import type { RunDeps, RunOutcome, StartZeropsRun } from './run-lifecycle'
 import { VaultSecretResolver } from './secret-resolver'
 import { Vault } from './vault'
+import { syncZeropsProxy } from './zerops-proxy'
 
 /**
  * How long a deploy may hold its per-app-env lock before it's treated as stale and auto-released. A
@@ -95,7 +96,7 @@ export async function startRun(env: Env, job: RunnerJob): Promise<RelayResult> {
 export async function startZeropsRun(
 	env: Env,
 	input: Parameters<StartZeropsRun>[0],
-	options: DeployOptions = {},
+	options: DeployOptions & { syncProxy?: () => Promise<void> } = {},
 ): Promise<RunOutcome> {
 	const { appEnv } = input
 	if (
@@ -105,6 +106,8 @@ export async function startZeropsRun(
 	) {
 		throw new Error(`Zerops target ${appEnv.app_id}/${appEnv.env} is incomplete`)
 	}
+	const projectId = appEnv.zerops_project_id
+	const serviceId = appEnv.zerops_service_id
 	const accessToken = env.ZEROPS_ACCESS_TOKEN
 	if (accessToken === undefined || accessToken === '') {
 		throw new Error('ZEROPS_ACCESS_TOKEN is not configured')
@@ -117,6 +120,14 @@ export async function startZeropsRun(
 	}
 	const manifest = parseFabrikaManifest(raw, { appId: input.app.id, env: appEnv.env })
 	const config = configFromManifest(manifest)
+	const api = createZeropsApi({ token: accessToken, baseUrl: env.ZEROPS_API_BASE_URL })
+	await (options.syncProxy ?? (() =>
+		syncZeropsProxy({
+			db: db(env),
+			api,
+			projectId,
+			proxyServiceName: env.ZEROPS_PROXY_SERVICE_NAME,
+		})))()
 	const result = await deploy(
 		config,
 		{
@@ -124,8 +135,8 @@ export async function startZeropsRun(
 			...(appEnv.domain !== null ? { domain: appEnv.domain } : {}),
 			target: {
 				platform: 'zerops',
-				projectId: appEnv.zerops_project_id,
-				serviceId: appEnv.zerops_service_id,
+				projectId,
+				serviceId,
 				accessToken,
 				...(env.ZEROPS_API_BASE_URL !== undefined && env.ZEROPS_API_BASE_URL !== ''
 					? { apiBaseUrl: env.ZEROPS_API_BASE_URL }

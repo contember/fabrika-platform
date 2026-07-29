@@ -74,6 +74,7 @@ describe('in-process Zerops control path', () => {
 		const outcome = await startZeropsRun(env, { app, appEnv, run, vars: { IMAGE: 'registry/image:v1' }, dryRun: false }, {
 			drivers: { zerops: driver },
 			log: () => {},
+			syncProxy: () => Promise.resolve(),
 		})
 		expect(outcome.status.state).toBe('succeeded')
 		expect(seen[0]).toBe('notes:project-1:service-1')

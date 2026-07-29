@@ -86,6 +86,14 @@ For correlation, the proxy preserves or creates `X-Request-Id` and Caddy copies 
 onto the allowed upstream request. IAM prefers that value, then `cf-ray`, then a
 locally generated UUID for audit records.
 
+On Zerops the proxy manifest is a baked deploy artefact. Before an app deploy, the
+control plane compiles every registered app manifest in that environment project,
+writes the JSON to the proxy's service-level
+`FABRIKA_PROXY_MANIFEST_JSON` variable, and rolls the proxy. Missing or malformed
+JSON fails the proxy build. A valid empty app list routes no app and the auth
+service denies every request. The control plane never uses a project-level
+variable for this path.
+
 ## Where it's going
 
 The work is sequenced as a ladder of independently shippable phases; each rung is a

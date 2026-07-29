@@ -7,6 +7,8 @@
 import { describe, expect, test } from 'bun:test'
 import { ProxyEnvError, readProxyEnv } from '../env'
 import { parseProxyManifest } from '../manifest'
+import { createVerifyService } from '../service'
+import { FakeIam, ISSUER, verifyRequest } from './helpers'
 
 const VALID = {
 	apps: [{
@@ -41,6 +43,13 @@ describe('parseProxyManifest — accepts', () => {
 
 	test('an empty app list', () => {
 		expect(parseProxyManifest({ apps: [] })).toEqual({ apps: [] })
+	})
+
+	test('an empty app list denies every forwarded request', async () => {
+		const manifest = parseProxyManifest({ apps: [] })
+		if (manifest === null) throw new Error('test manifest rejected')
+		const verify = createVerifyService({ manifest, iam: new FakeIam({}), issuer: ISSUER })
+		expect((await verify(verifyRequest({ app: 'anything' }))).status).toBe(403)
 	})
 })
 

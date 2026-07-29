@@ -196,15 +196,15 @@ const control: ZeropsYamlSetup = {
  * Cloudflare path can. The only write channel it has is the service-level env API, the same one it uses
  * for secrets, so the manifest travels as a service variable and the build materializes it to a file.
  *
- * TWO THINGS ARE UNPROVEN HERE. (a) That a Zerops BUILD container is given the service's own runtime
- * variables — it is documented for `build.envVariables`, and not clearly for service variables; if it is
- * not, this line moves into `run.initCommands` and the config is regenerated at container start instead.
- * (b) Nothing in fabrika writes `FABRIKA_PROXY_MANIFEST_JSON` today; the control plane's gate reconcile
- * is the missing half (`docs/backlog/08`).
+ * The control plane writes `FABRIKA_PROXY_MANIFEST_JSON` through the service-level env API and rolls
+ * this service before each app deploy (`packages/control/src/zerops-proxy.ts`). One live-account fact
+ * remains to verify: Zerops documents build variables but does not clearly state whether a build sees
+ * its service's runtime variables. If it does not, materialization moves into `run.initCommands`; the
+ * delivery channel and fail-closed parser stay unchanged.
  *
- * What IS structural: this build FAILS CLOSED. An empty or malformed manifest makes
- * `generate-config.ts` exit non-zero, so the pipeline fails and the previous version keeps serving. A
- * proxy never boots with a gate list nobody wrote.
+ * What IS structural: missing or malformed JSON makes `generate-config.ts` exit non-zero, so the
+ * pipeline fails and the previous version keeps serving. A valid empty app list generates only the
+ * terminal 404 route, and the auth service denies every forwarded request.
  */
 const proxy: ZeropsYamlSetup = {
 	setup: 'proxy',
@@ -225,7 +225,7 @@ const proxy: ZeropsYamlSetup = {
 			// See the header: the manifest arrives as a service variable because the driver has no
 			// filesystem. `printf` rather than `echo` so a leading `-` or a backslash survives intact.
 			'printf %s "${FABRIKA_PROXY_MANIFEST_JSON}" > ./proxy.manifest.json',
-			// Fails the build on an empty or malformed manifest — the fail-closed property.
+			// Missing/malformed JSON fails the build; an empty app list emits only deny/404 routes.
 			'bun run packages/proxy/src/generate-config.ts ./proxy.manifest.json ./caddy.json --auth-upstream 127.0.0.1:9000',
 			'bun build --compile --target=bun-linux-x64-musl ./packages/proxy/src/main.ts --outfile ./fabrika-proxy',
 			'cp /tmp/gobin/caddy ./caddy',

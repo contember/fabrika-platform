@@ -213,6 +213,17 @@ export class Db {
 		return this.d1.prepare('SELECT * FROM app_envs WHERE app_id = ? AND env = ?').bind(appId, env).first<AppEnvRow>()
 	}
 
+	/** Every app target sharing one Zerops environment project, in stable manifest order. */
+	async listAppEnvsByZeropsProject(projectId: string): Promise<AppEnvRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT * FROM app_envs
+				WHERE platform = 'zerops' AND zerops_project_id = ?
+				ORDER BY app_id, env`)
+			.bind(projectId)
+			.all<AppEnvRow>()
+		return results
+	}
+
 	/**
 	 * Find the (app, env) a push ref triggers by EXACT trigger_ref. Kept for exact lookups; the webhook
 	 * uses `listTriggerEnvs` + `refMatches` instead so a glob trigger_ref (`refs/tags/v*`) also matches.
