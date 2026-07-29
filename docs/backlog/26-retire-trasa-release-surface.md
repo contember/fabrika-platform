@@ -31,4 +31,4 @@ package before its replacement is published would leave no installable path.
 Fabrika release workflow, npm package metadata, and the standalone Trasa
 repository.
 
-<!-- Origin: ../sprints/sprint-2026-07-29-fabrika-app-runtime.md -->
+<!-- Origin: ../archive/sprint-2026-07-29-fabrika-app-runtime.md -->

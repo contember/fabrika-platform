@@ -9,6 +9,9 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Fabrika application runtime (2026-07-29)](sprint-2026-07-29-fabrika-app-runtime.md)
+  — absorbed Trasa as `@fabrika/app` with explicit Cloudflare and Bun runtime
+  entrypoints.
 - [Static provider bundles (2026-07-29)](sprint-2026-07-29-static-provider-bundles.md)
   — extracted Cloudflare and Zerops behind open contracts and static composition
   roots.

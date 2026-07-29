@@ -1,5 +1,29 @@
 # Sprint — Fabrika application runtime (2026-07-29)
 
+## OUTCOME
+
+Completed in `cace795` (`feat(app): add first-party application runtime`).
+`@fabrika/app` now owns the runtime-neutral Fetch request pipeline, typed routing
+and RPC, middleware, structural errors, object authorization, and the browser
+client. Cloudflare and Bun lifecycle adapters use explicit
+`@fabrika/app/cloudflare` and `@fabrika/app/bun` entrypoints. Both example
+applications consume the new framework.
+
+Verification:
+
+- `cpu-lease run -n 4 -- bun run typecheck` passed every workspace package.
+- `cpu-lease run -n 4 -- bun test` passed 1,013 tests with 3,287 assertions and
+  no failures; 114 Postgres/S3 integration tests skipped because their external
+  services were not configured.
+- `@fabrika/app` passed 59 tests across its runtime-neutral core and both
+  adapters.
+- Lint, format checking, and `git diff --check` passed.
+
+Publishing `@fabrika/app` and retiring the external Trasa release surface remain
+in [backlog 26](../backlog/26-retire-trasa-release-surface.md), blocked by CI and
+release restoration in
+[backlog 25](../backlog/25-migrate-the-ci-workflows.md).
+
 **Goal.** Replace the standalone Trasa package with a tested `@fabrika/app`
 workspace package for Worker and Bun applications.
 

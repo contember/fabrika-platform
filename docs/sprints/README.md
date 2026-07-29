@@ -21,7 +21,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 <!-- one line per active sprint; empty between sprints -->
 
-- [Fabrika application runtime (2026-07-29)](sprint-2026-07-29-fabrika-app-runtime.md)
-  — absorb the standalone server framework as `@fabrika/app`.
 - [Zerops deployment namespaces (2026-07-29)](sprint-2026-07-29-zerops-deployment-namespaces.md)
   — add shared and exclusive project placement with proxy and PostgreSQL ownership.
