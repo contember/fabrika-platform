@@ -26,11 +26,21 @@ export interface ZeropsProxySpec {
 	gates: AppGates
 }
 
+/** A typed reference to the namespace-owned PostgreSQL service; it never contains its credential. */
+export interface ZeropsSharedPostgresBinding {
+	readonly resourceKey: 'service:postgres'
+	readonly hostname: 'postgres'
+	readonly connectionString: '${postgres_connectionString}'
+}
+
+export type ZeropsNamespaceResourceRequirement = ZeropsSharedPostgresBinding
+
 export interface ZeropsSourceTarget {
 	platform: 'zerops'
 	deployService?: string
 	zeropsSetup?: string
 	proxy?: ZeropsProxySpec
+	namespaceResources?: ZeropsNamespaceResourceRequirement[]
 	services: (ctx: ZeropsResourceContext) => ZeropsServiceSpec[]
 	project?: ZeropsProjectSpec
 }

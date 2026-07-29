@@ -16,6 +16,7 @@ import type {
 import { createZeropsApi, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi } from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
 import { type FabrikaManifestV1, parseFabrikaManifest, zeropsArtifactCodec } from './manifest'
+import { createZeropsNamespaceCapabilities } from './namespace'
 import { createZeropsProvider } from './provider'
 import type { ZeropsRuntimeTarget } from './types'
 
@@ -91,6 +92,12 @@ export interface ZeropsControlProviderOptions {
 	readonly sleep?: Sleeper
 	readonly execute?: ZeropsProviderExecutor
 	readonly beforeDeploy?: ZeropsBeforeDeploy
+	readonly namespaces?: {
+		readonly clientId: string
+		readonly proxyBuildFromGit: string
+		readonly iamUrl: string
+		readonly iamKey: string
+	}
 }
 
 const executeSession: ZeropsProviderExecutor = async (provider, run) => {
@@ -216,5 +223,14 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				}
 			},
 		},
+		...(options.namespaces === undefined
+			? {}
+			: {
+				namespaces: createZeropsNamespaceCapabilities({
+					...options.namespaces,
+					api,
+					...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
+				}),
+			}),
 	}
 }

@@ -1,9 +1,17 @@
-import type { ProviderApp, ProviderDeployInput, ProviderEnvironment, ProviderReconcileOutcome, RuntimeProviderRun } from '@fabrika/provider-contract'
+import type {
+	ProviderApp,
+	ProviderDeployInput,
+	ProviderDeploymentNamespace,
+	ProviderEnvironment,
+	ProviderReconcileOutcome,
+	RuntimeProviderRun,
+} from '@fabrika/provider-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import type { ZeropsApi, ZeropsAppVersionStatus } from '../api'
 import { zeropsTargetCodec } from '../codec'
 import { createZeropsControlProvider, zeropsStoredTargetCodec } from '../control'
 import { compileFabrikaManifest, zeropsArtifactCodec } from '../manifest'
+import { zeropsNamespaceTargetCodec } from '../namespace'
 import type { ZeropsAppConfig } from '../types'
 
 interface Recorded {
@@ -150,6 +158,40 @@ describe('Zerops ControlProvider registration', () => {
 				}),
 			})
 		).toThrow('environment drift')
+	})
+
+	test('exposes namespace lifecycle only when its installation configuration is composed', () => {
+		const withoutNamespaces = createZeropsControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		const withNamespaces = createZeropsControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			namespaces: {
+				clientId: 'client-1',
+				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				iamUrl: 'https://iam.example.test',
+				iamKey: 'proxy-key',
+			},
+		})
+		const value: ProviderDeploymentNamespace = {
+			id: 'apps-prod',
+			env: 'prod',
+			target: {
+				provider: 'zerops',
+				version: zeropsNamespaceTargetCodec.version,
+				payload: {},
+			},
+		}
+		if (withNamespaces.namespaces === undefined) {
+			throw new Error('expected namespace capabilities')
+		}
+
+		expect(withoutNamespaces.namespaces).toBeUndefined()
+		expect(zeropsNamespaceTargetCodec.decode(withNamespaces.namespaces.normalize(value).target.payload)).toMatchObject({
+			projectName: 'apps-prod',
+			corePackage: 'SERIOUS',
+			managed: true,
+			ready: false,
+		})
 	})
 })
 

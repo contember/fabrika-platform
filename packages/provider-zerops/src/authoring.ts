@@ -1,4 +1,12 @@
-import type { ZeropsAppConfig } from './types'
+import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING } from './namespace'
+import type { ZeropsAppConfig, ZeropsSharedPostgresBinding } from './types'
+
+/** Declare consumption of the namespace-owned `postgres` service without resolving its credential. */
+export const useSharedPostgres = (): ZeropsSharedPostgresBinding => ({
+	resourceKey: 'service:postgres',
+	hostname: 'postgres',
+	connectionString: ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
+})
 
 /** Provider-specific authoring identity with complete Zerops contextual typing. */
 export const defineApp = (config: ZeropsAppConfig): ZeropsAppConfig => {

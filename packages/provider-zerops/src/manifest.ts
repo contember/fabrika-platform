@@ -1,7 +1,7 @@
 import type { AppActionDef, AppGates, AppSchema, AppScopeDef, GateRule, RoleDef } from '@fabrika/auth-core'
 import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
 import { compileImportYaml } from './compile'
-import type { ZeropsAppConfig, ZeropsProxySpec } from './types'
+import type { ZeropsAppConfig, ZeropsNamespaceResourceRequirement, ZeropsProxySpec } from './types'
 
 export const FABRIKA_MANIFEST_VERSION = 1
 
@@ -23,6 +23,7 @@ export interface FabrikaManifestV1 {
 		deployService: string
 		zeropsSetup?: string
 		proxy?: ZeropsProxySpec
+		namespaceResources?: ZeropsNamespaceResourceRequirement[]
 	}
 }
 
@@ -141,6 +142,29 @@ function parseGates(value: unknown): AppGates | null {
 	return { rules }
 }
 
+const parseNamespaceResources = (value: unknown): ZeropsNamespaceResourceRequirement[] | null => {
+	if (!Array.isArray(value)) return null
+	const resources: ZeropsNamespaceResourceRequirement[] = []
+	let hasPostgres = false
+	for (const resource of value) {
+		if (
+			string(resource, 'resourceKey') !== 'service:postgres'
+			|| string(resource, 'hostname') !== 'postgres'
+			|| string(resource, 'connectionString') !== '${postgres_connectionString}'
+		) {
+			return null
+		}
+		if (hasPostgres) return null
+		hasPostgres = true
+		resources.push({
+			resourceKey: 'service:postgres',
+			hostname: 'postgres',
+			connectionString: '${postgres_connectionString}',
+		})
+	}
+	return resources
+}
+
 function parseProxy(value: unknown): ZeropsProxySpec | null {
 	const upstream = nonEmptyString(value, 'upstream')
 	const gates = parseGates(prop(value, 'gates'))
@@ -209,6 +233,18 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 		}
 		proxy = parsed
 	}
+	const rawNamespaceResources = prop(rawTarget, 'namespaceResources')
+	let namespaceResources: ZeropsNamespaceResourceRequirement[] | undefined
+	if (rawNamespaceResources !== undefined) {
+		const parsed = parseNamespaceResources(rawNamespaceResources)
+		if (parsed === null) {
+			throw new Error('invalid fabrika manifest namespace resources')
+		}
+		namespaceResources = parsed
+	}
+	if (namespaceResources?.some((resource) => serviceHostnames.includes(resource.hostname)) === true) {
+		throw new Error('invalid fabrika manifest: an app cannot declare a namespace-owned service')
+	}
 
 	return {
 		manifestVersion: FABRIKA_MANIFEST_VERSION,
@@ -225,6 +261,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 			deployService,
 			...(zeropsSetup !== null ? { zeropsSetup } : {}),
 			...(proxy !== undefined ? { proxy } : {}),
+			...(namespaceResources !== undefined ? { namespaceResources } : {}),
 		},
 	}
 }
@@ -246,6 +283,9 @@ export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): Fa
 		if (deployService === undefined || !serviceHostnames.includes(deployService)) {
 			throw new Error('fabrika-zerops build: a multi-service Zerops app must name a valid deployService')
 		}
+		if (config.target.namespaceResources?.some((resource) => serviceHostnames.includes(resource.hostname)) === true) {
+			throw new Error('fabrika-zerops build: an app cannot declare a namespace-owned service')
+		}
 		return {
 			manifestVersion: FABRIKA_MANIFEST_VERSION,
 			app: {
@@ -264,6 +304,7 @@ export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): Fa
 				deployService,
 				...(config.target.zeropsSetup !== undefined ? { zeropsSetup: config.target.zeropsSetup } : {}),
 				...(config.target.proxy !== undefined ? { proxy: config.target.proxy } : {}),
+				...(config.target.namespaceResources !== undefined ? { namespaceResources: [...config.target.namespaceResources] } : {}),
 			},
 		}
 	} finally {

@@ -17,7 +17,7 @@ export type {
 	ZeropsServiceEnv,
 	ZeropsServiceStatus,
 } from './api'
-export { defineApp } from './authoring'
+export { defineApp, useSharedPostgres } from './authoring'
 export { parseZeropsCliArgs } from './cli-args'
 export type { ZeropsCliArgs } from './cli-args'
 export { zeropsTargetCodec } from './codec'
@@ -37,6 +37,26 @@ export { createZeropsControlProvider, zeropsStoredTargetCodec } from './control'
 export type { ZeropsBeforeDeploy, ZeropsBeforeDeployInput, ZeropsControlProviderOptions, ZeropsProviderExecutor, ZeropsStoredTarget } from './control'
 export { compileFabrikaManifest, FABRIKA_MANIFEST_VERSION, parseFabrikaManifest, zeropsArtifactCodec } from './manifest'
 export type { FabrikaManifestV1, ManifestExpectation } from './manifest'
+export {
+	compileZeropsNamespaceTopology,
+	createZeropsNamespaceCapabilities,
+	ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
+	ZEROPS_NAMESPACE_IAM_URL_VARIABLE,
+	ZEROPS_NAMESPACE_POSTGRES_HOSTNAME,
+	ZEROPS_NAMESPACE_PROXY_HOSTNAME,
+	ZEROPS_NAMESPACE_PROXY_MANIFEST_VARIABLE,
+	ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
+	zeropsNamespacePreset,
+	zeropsNamespaceTargetCodec,
+} from './namespace'
+export type {
+	ZeropsNamespaceOptions,
+	ZeropsNamespacePostgres,
+	ZeropsNamespacePresetInput,
+	ZeropsNamespacePublicAccess,
+	ZeropsNamespaceTarget,
+	ZeropsNamespaceTopology,
+} from './namespace'
 export { buildZeropsPlan, resolveDeployHostname } from './plan'
 export type { ZeropsJobSpec, ZeropsPlan, ZeropsStepKind } from './plan'
 export { CANCELLED, createZeropsProvider, interpolateManifest, zeropsProvider } from './provider'
@@ -46,10 +66,12 @@ export type {
 	ZeropsAppConfig,
 	ZeropsCompilerOwnedProjectField,
 	ZeropsCompilerOwnedServiceField,
+	ZeropsNamespaceResourceRequirement,
 	ZeropsProjectSpec,
 	ZeropsProxySpec,
 	ZeropsResourceContext,
 	ZeropsRuntimeTarget,
 	ZeropsServiceSpec,
+	ZeropsSharedPostgresBinding,
 	ZeropsSourceTarget,
 } from './types'
