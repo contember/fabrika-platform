@@ -17,6 +17,8 @@ export type {
 	CloudflareAppTarget,
 	ResourceContext,
 	ZeropsAppConfig,
+	ZeropsCompiledAppConfig,
+	ZeropsRuntimeConfig,
 } from './types'
 
 // The ZEROPS authoring surface: what an app may declare (`./zerops/types`) plus the full generated
@@ -25,16 +27,17 @@ export type {
 export type * from './zerops/schema.generated'
 export type {
 	ZeropsAppTarget,
+	ZeropsCompiledTarget,
 	ZeropsCompilerOwnedProjectField,
 	ZeropsCompilerOwnedServiceField,
 	ZeropsProjectSpec,
+	ZeropsProxySpec,
 	ZeropsServiceSpec,
+	ZeropsSourceTarget,
 } from './zerops/types'
 
 // Re-export oblaka's resource primitives so apps author their resource graph from this package.
 export * from 'oblaka-iac'
 
-// Re-export the propustka declaration types apps need to author `schema` (authz vocabulary).
-// Per-path gates (CF Access's native successor) are pure runtime SDK config in each app, NOT a fabrika
-// deploy concern, so they are not re-exported here.
-export type { AppActionDef, AppSchema, AppScopeDef, RoleDef } from '@fabrika/auth-core'
+// Re-export the propustka declaration types apps need to author the schema and proxy gates.
+export type { AppActionDef, AppGates, AppSchema, AppScopeDef, CredentialLocation, GateKind, GateRule, RoleDef } from '@fabrika/auth-core'

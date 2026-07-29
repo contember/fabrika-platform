@@ -23,6 +23,7 @@
 // deploy TRIGGERS it rather than running it (ADR-0003).
 
 import { defineApp, type ResourceContext, type ZeropsServiceSpec } from '@fabrika/config'
+import { notesGates } from './fabrika.gates'
 import { NOTES_APP_ID, notesSchema } from './fabrika.schema'
 
 /** The runtime service — the one the app's code deploys to. Also the `zerops.yaml` setup name. */
@@ -89,6 +90,10 @@ export default defineApp({
 	target: {
 		platform: 'zerops',
 		services,
+		proxy: {
+			upstream: NOTES_UPSTREAM,
+			gates: notesGates,
+		},
 		// Required because the app declares more than one service: guessing which one carries the code
 		// would deploy the app into the database the day someone reorders the array.
 		deployService: NOTES_SERVICE,

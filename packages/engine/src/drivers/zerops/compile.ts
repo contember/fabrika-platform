@@ -25,6 +25,7 @@ import type {
 	ZeropsImportService,
 	ZeropsProjectSpec,
 	ZeropsServiceSpec,
+	ZeropsSourceTarget,
 } from '@fabrika/config'
 
 /** The ONLY value fabrika ever writes for `envIsolation`, at either level. Not a default — an assertion. */
@@ -39,7 +40,7 @@ export interface ZeropsImportDocument {
 
 /** What the compiler needs beyond the app's declaration. */
 export interface CompileInput {
-	target: ZeropsAppTarget
+	target: ZeropsSourceTarget
 	ctx: ResourceContext
 	/**
 	 * Provision every service WITHOUT code — the answer to ADR-0004's "no secret can be set before the

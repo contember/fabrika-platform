@@ -50,6 +50,8 @@ export {
 export type { CompileInput, ZeropsImportDocument } from './drivers/zerops/compile'
 export { buildZeropsPlan, resolveDeployHostname } from './drivers/zerops/plan'
 export type { ZeropsJobSpec, ZeropsPlan, ZeropsStepKind } from './drivers/zerops/plan'
+export { compileFabrikaManifest, configFromManifest, FABRIKA_MANIFEST_VERSION, parseFabrikaManifest } from './manifest'
+export type { FabrikaManifestV1, ManifestExpectation } from './manifest'
 export type {
 	AnyAppConfig,
 	AppConfig,

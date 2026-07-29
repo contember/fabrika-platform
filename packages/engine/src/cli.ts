@@ -1,17 +1,20 @@
 #!/usr/bin/env bun
-import { type AnyAppConfig, type AppConfig, appPlatform } from '@fabrika/config'
+import { type AnyAppConfig, type AppConfig, appPlatform, type ZeropsAppConfig } from '@fabrika/config'
 import { resolve } from 'node:path'
 import { parseArgs, type ParsedArgs, platformComponents } from './cli-args'
 import { deploy } from './deploy'
+import { compileFabrikaManifest } from './manifest'
 import type { CloudflareTarget, DeployContext, DeployResult } from './types'
 
 const USAGE = `fabrika — deploy control plane
 
 Usage:
+  fabrika build --env=<env> [--config=<path>] [--output=<path>]
   fabrika deploy --env=<env> [--config=<path>] [--dry-run]
   fabrika platform deploy [--env=<env>] --runner-config=<path> --worker-config=<path> [--build-runner-image] [--dry-run]
 
 Commands:
+  build             Compile a Zerops app config to static fabrika.manifest.json.
   deploy            Deploy ONE app config (build → provision → migrate → deploy-worker → reconcile → secrets).
   platform deploy   Bring up / redeploy the control-plane BASE for an account, in order: the runner (the
                     deploy executor) THEN the fabrika control plane. Idempotent — safe to re-run for a first
@@ -22,6 +25,7 @@ Commands:
 Options:
   --env=<env>            Target environment. \`deploy\`: required. \`platform deploy\`: defaults to \`prod\`.
   --config=<path>        (deploy) Path to the app config file (default: ./fabrika.config.ts).
+  --output=<path>        (build) Manifest output path (default: ./fabrika.manifest.json).
   --runner-config=<path> (platform) Runner config, e.g. packages/runner/fabrika-runner.config.ts.
   --worker-config=<path> (platform) Control-plane config, e.g. packages/control/fabrika.config.ts.
   --build-runner-image   (platform) Build + push the runner container image from its Dockerfile (sets
@@ -55,20 +59,38 @@ const isCloudflareAppConfig = (value: unknown): value is AppConfig => hasAppId(v
  * which ADR-0003 says a Zerops deploy has no use for — so a Zerops config is rejected with a message that
  * says where it IS deployed from, rather than "this isn't a config".
  */
-const loadConfig = async (path: string): Promise<{ config: AppConfig; dir: string }> => {
+const loadAnyConfig = async (path: string): Promise<{ config: AnyAppConfig; dir: string }> => {
 	const absolute = resolve(process.cwd(), path)
 	const module: { default?: unknown } = await import(absolute)
 	const config = module.default
-	if (!isCloudflareAppConfig(config)) {
-		if (hasAppId(config) && appPlatform(config) === 'zerops') {
-			return die(
-				`Config at ${absolute} targets Zerops. The \`fabrika\` CLI deploys to Cloudflare; a Zerops deploy is driven by the control plane (ADR-0003).`,
-			)
-		}
+	if (!hasAppId(config)) {
 		return die(`Config at ${absolute} must \`export default defineApp({ ... })\``)
 	}
-	// Relative paths (workerDir, build) resolve against the config file's directory, not the cwd.
 	return { config, dir: resolve(absolute, '..') }
+}
+
+const loadConfig = async (path: string): Promise<{ config: AppConfig; dir: string }> => {
+	const loaded = await loadAnyConfig(path)
+	if (!isCloudflareAppConfig(loaded.config)) {
+		return die(
+			`Config at ${resolve(process.cwd(), path)} targets Zerops. Use \`fabrika build\`; Zerops deploys are driven by the control plane (ADR-0003).`,
+		)
+	}
+	return { config: loaded.config, dir: loaded.dir }
+}
+
+const isZeropsAppConfig = (config: AnyAppConfig): config is ZeropsAppConfig => config.target !== undefined && config.target.compiled === undefined
+
+const runBuild = async (args: ParsedArgs, env: string): Promise<void> => {
+	const { config } = await loadAnyConfig(args.config)
+	if (isZeropsAppConfig(config)) {
+		const manifest = compileFabrikaManifest(config, env)
+		const output = resolve(process.cwd(), args.output)
+		await Bun.write(output, `${JSON.stringify(manifest, null, '\t')}\n`)
+		console.info(`wrote ${output} (${manifest.target.serviceHostnames.length} service(s))`)
+		return
+	}
+	die('`fabrika build` currently emits the static Zerops manifest; the Cloudflare runner still builds its own resource graph')
 }
 
 const requireEnv = (name: string): string => {
@@ -207,6 +229,11 @@ const main = async (): Promise<void> => {
 	// single env). Distinct from `deploy` (one app) which requires an explicit --env.
 	if (args.command === 'platform' && args.subcommand === 'deploy') {
 		await runPlatformDeploy(args, args.env ?? 'prod')
+		return
+	}
+
+	if (args.command === 'build') {
+		await runBuild(args, args.env ?? die(`Missing --env=<env>\n\n${USAGE}`))
 		return
 	}
 

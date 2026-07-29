@@ -20,6 +20,7 @@
 		}
 	},
 	"scripts": {
+		"build:manifest": "fabrika build --env=prod",
 		"dev": "bun src/server.ts",
 		"typecheck": "tsc --noEmit",
 		"test": "bun test"
@@ -30,6 +31,7 @@
 	},
 	"devDependencies": {
 		"@fabrika/config": "workspace:*",
+		"@fabrika/engine": "workspace:*",
 		"@types/bun": "latest"
 	}
 }

@@ -16,6 +16,11 @@ describe('parseArgs', () => {
 		expect(parseArgs(['deploy', '--env=stage']).config).toBe('./fabrika.config.ts')
 	})
 
+	test('build: output defaults and can be overridden', () => {
+		expect(parseArgs(['build', '--env=stage']).output).toBe('./fabrika.manifest.json')
+		expect(parseArgs(['build', '--env=stage', '--output=dist/app.json']).output).toBe('dist/app.json')
+	})
+
 	test('platform deploy: subcommand + runner/worker configs + build flag', () => {
 		const a = parseArgs([
 			'platform',

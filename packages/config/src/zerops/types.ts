@@ -16,6 +16,7 @@
 // `override` and the two `@deprecated` fields are subtracted for the same reason: they are the driver's
 // levers (idempotent re-import), not the app's.
 
+import type { AppGates } from '@fabrika/auth-core'
 import type { ResourceContext } from '../types'
 import type { ZeropsImportProject, ZeropsImportService } from './schema.generated'
 
@@ -70,9 +71,29 @@ export type ZeropsProjectSpec = Omit<ZeropsImportProject, ZeropsCompilerOwnedPro
  * `services` is a function of the environment for the same reason Cloudflare's `resources` is: hostnames,
  * autoscaling and public access differ per stage.
  */
-export interface ZeropsAppTarget {
+export interface ZeropsProxySpec {
+	/** Private address the shared proxy dials after authorization, for example `api:3000`. */
+	upstream: string
+	/** Ordered, fail-closed request gates enforced by the proxy auth service. */
+	gates: AppGates
+}
+
+interface ZeropsTargetBase {
 	/** The discriminant — what selects the Zerops driver. */
 	platform: 'zerops'
+	/**
+	 * Hostname of the service the app's CODE deploys to — the one `/app-version` builds and activates.
+	 * Optional when the app declares exactly one service; required when it declares several.
+	 */
+	deployService?: string
+	/** Select one setup when the repository's `zerops.yaml` declares several. */
+	zeropsSetup?: string
+	/** Private ingress and ordered gate declaration compiled into the shared proxy manifest. */
+	proxy?: ZeropsProxySpec
+}
+
+/** The TypeScript authoring arm. It is evaluated only by `fabrika build`. */
+export interface ZeropsSourceTarget extends ZeropsTargetBase {
 	/**
 	 * The services this app is made of, for one environment. Order does not matter; use `priority` when a
 	 * database must exist before the runtime that migrates into it.
@@ -83,15 +104,24 @@ export interface ZeropsAppTarget {
 	 * pre-existing (the usual case — `app_envs.zerops_project_id` is a registry field, ADR-0006).
 	 */
 	project?: ZeropsProjectSpec
-	/**
-	 * Hostname of the service the app's CODE deploys to — the one `/app-version` builds and activates.
-	 * Optional when the app declares exactly one service; required when it declares several (a database
-	 * plus a runtime), because guessing which one carries the code is not a decision a driver should make.
-	 */
-	deployService?: string
-	/**
-	 * The `zerops.yaml` setup name to select when the repo's own `zerops.yaml` declares several. Omit to
-	 * let Zerops match the setup by service name.
-	 */
-	zeropsSetup?: string
+	/** A source target has no precompiled payload. */
+	compiled?: undefined
 }
+
+/**
+ * The static arm decoded from `fabrika.manifest.json`. The control plane may construct this arm from
+ * validated JSON; it contains no callback and cannot execute repository code.
+ */
+export interface ZeropsCompiledTarget extends ZeropsTargetBase {
+	/** A compiled target has no executable service builder. */
+	services?: undefined
+	project?: undefined
+	compiled: {
+		/** Deterministic import document emitted by fabrika's invariant-checking compiler. */
+		importYaml: string
+		/** Declared service hostnames, used for deploy-service validation and planning. */
+		serviceHostnames: string[]
+	}
+}
+
+export type ZeropsAppTarget = ZeropsSourceTarget | ZeropsCompiledTarget

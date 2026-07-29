@@ -1,6 +1,6 @@
 import type { AppSchema } from '@fabrika/auth-core'
 import type { Worker } from 'oblaka-iac'
-import type { ZeropsAppTarget } from './zerops/types'
+import type { ZeropsAppTarget, ZeropsCompiledTarget, ZeropsSourceTarget } from './zerops/types'
 
 /**
  * The context handed to an app's `resources()` builder when fabrika materializes a deploy.
@@ -88,8 +88,20 @@ export interface CloudflareAppConfig extends AppConfigBase {
  */
 export interface ZeropsAppConfig extends AppConfigBase {
 	/** The Zerops declaration — services, and optionally the managed project. */
-	target: ZeropsAppTarget
+	target: ZeropsSourceTarget
 	/** Never set on the Zerops arm: there is no `Worker`, no bindings, and no `wrangler` on Zerops. */
+	resources?: undefined
+}
+
+/** A callback-free Zerops config decoded from a static manifest. Not accepted by `defineApp`. */
+export interface ZeropsCompiledAppConfig extends AppConfigBase {
+	target: ZeropsCompiledTarget
+	resources?: undefined
+}
+
+/** Either build-time authoring data or its static runtime representation. */
+export interface ZeropsRuntimeConfig extends AppConfigBase {
+	target: ZeropsAppTarget
 	resources?: undefined
 }
 
@@ -100,7 +112,7 @@ export interface ZeropsAppConfig extends AppConfigBase {
  */
 export interface AppConfigs {
 	cloudflare: CloudflareAppConfig
-	zerops: ZeropsAppConfig
+	zerops: ZeropsRuntimeConfig
 }
 
 /**

@@ -1,4 +1,5 @@
-import type { AnyAppConfig, AppTarget } from './types'
+import type { AnyAppConfig, AppTarget, CloudflareAppConfig, CloudflareAppTarget, ZeropsAppConfig, ZeropsCompiledAppConfig } from './types'
+import type { ZeropsCompiledTarget, ZeropsSourceTarget } from './zerops/types'
 
 /**
  * Resolve an app config to its discriminated deploy target — the ONE place the two authoring forms are
@@ -8,7 +9,11 @@ import type { AnyAppConfig, AppTarget } from './types'
  * it is lifted into one here rather than every consumer knowing the shorthand. A Zerops app declares
  * `target` explicitly, because there is no oblaka `Worker` for the shorthand to carry.
  */
-export const appTarget = (config: AnyAppConfig): AppTarget => {
+export function appTarget(config: CloudflareAppConfig): CloudflareAppTarget
+export function appTarget(config: ZeropsAppConfig): ZeropsSourceTarget
+export function appTarget(config: ZeropsCompiledAppConfig): ZeropsCompiledTarget
+export function appTarget(config: AnyAppConfig): AppTarget
+export function appTarget(config: AnyAppConfig): AppTarget {
 	if (config.target === undefined) {
 		return { platform: 'cloudflare', resources: config.resources }
 	}

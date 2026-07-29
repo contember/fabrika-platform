@@ -10,6 +10,8 @@ export interface ParsedArgs {
 	env: string | undefined
 	/** (deploy) the single app config path. */
 	config: string
+	/** (build) static manifest output path. */
+	output: string
 	/** (platform deploy) vozka-runner's config path. */
 	runnerConfig: string | undefined
 	/** (platform deploy) fabrika's config path. */
@@ -25,6 +27,7 @@ export const parseArgs = (argv: string[]): ParsedArgs => {
 	let subcommand: string | undefined
 	let env: string | undefined
 	let config = './fabrika.config.ts'
+	let output = './fabrika.manifest.json'
 	let runnerConfig: string | undefined
 	let workerConfig: string | undefined
 	let buildRunnerImage = false
@@ -42,6 +45,8 @@ export const parseArgs = (argv: string[]): ParsedArgs => {
 			env = arg.slice('--env='.length)
 		} else if (arg.startsWith('--config=')) {
 			config = arg.slice('--config='.length)
+		} else if (arg.startsWith('--output=')) {
+			output = arg.slice('--output='.length)
 		} else if (arg.startsWith('--runner-config=')) {
 			runnerConfig = arg.slice('--runner-config='.length)
 		} else if (arg.startsWith('--worker-config=')) {
@@ -56,7 +61,7 @@ export const parseArgs = (argv: string[]): ParsedArgs => {
 		}
 	}
 
-	return { command, subcommand, env, config, runnerConfig, workerConfig, buildRunnerImage, dryRun, help }
+	return { command, subcommand, env, config, output, runnerConfig, workerConfig, buildRunnerImage, dryRun, help }
 }
 
 export interface PlatformComponent {
