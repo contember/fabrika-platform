@@ -20,16 +20,16 @@
 		"test": "bun test",
 		"dev": "bunx lopata dev --env local --port 18191 --listen 0.0.0.0",
 		"oblaka": "bunx oblaka oblaka.ts",
-		"oblaka:deploy": "bunx oblaka oblaka.ts --remote",
+		"deploy:cloudflare": "fabrika-cloudflare deploy",
 		"serve": "bun src/node/server.ts",
 		"migrate:postgres": "bun src/node/migrate.ts",
 		"prune:auth-log": "bun src/node/prune.ts"
 	},
 	"dependencies": {
 		"@fabrika/auth-core": "workspace:*",
-		"@fabrika/config": "workspace:*",
 		"@fabrika/platform": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",
+		"@fabrika/provider-cloudflare": "workspace:*",
 		"jose": "^5.9.0"
 	},
 	"devDependencies": {

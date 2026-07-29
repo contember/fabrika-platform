@@ -1,4 +1,4 @@
-import { D1Database, Worker } from '@fabrika/config'
+import { D1Database, Worker } from '@fabrika/provider-cloudflare'
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import config, { buildPropustkaWorker } from './fabrika.config'
 import oblakaDefinition from './oblaka'
@@ -8,7 +8,7 @@ const REMOTE_SOURCE: Record<string, string> = {
 	PROPUSTKA_OIDC_ISSUER: 'https://oidc.example.com',
 	PROPUSTKA_OIDC_CLIENT_ID: 'client-id',
 	PROPUSTKA_SIGNING_KEYS: 'private-signing-key-material',
-	PROPUSTKA_OIDC_CLIENT_SECRET: 'private-oidc-secret',
+	OIDC_CLIENT_SECRET: 'private-oidc-secret',
 }
 const REMOTE_DOMAIN = 'iam.example.com'
 const ENV_NAMES = [...Object.keys(REMOTE_SOURCE), 'PROPUSTKA_HOSTNAME']
@@ -76,10 +76,9 @@ describe('IAM resource graph', () => {
 		const serializedOptions = JSON.stringify(worker.options)
 
 		expect(worker.options.vars?.['PROPUSTKA_SIGNING_KEYS']).toBeUndefined()
-		expect(worker.options.vars?.['PROPUSTKA_OIDC_CLIENT_SECRET']).toBeUndefined()
 		expect(worker.options.vars?.['OIDC_CLIENT_SECRET']).toBeUndefined()
 		expect(serializedOptions).not.toContain(REMOTE_SOURCE['PROPUSTKA_SIGNING_KEYS'])
-		expect(serializedOptions).not.toContain(REMOTE_SOURCE['PROPUSTKA_OIDC_CLIENT_SECRET'])
+		expect(serializedOptions).not.toContain(REMOTE_SOURCE['OIDC_CLIENT_SECRET'])
 	})
 
 	test('unknown environments fail through both entry paths', () => {

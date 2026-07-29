@@ -62,9 +62,9 @@ Reconcile is idempotent: it upserts the app's scopes/actions/`origin='app'` role
 app-origin rows you removed, and never touches admin-composed `origin='custom'` policies. The
 first reconcile registers the app id (`example-app`); after that it self-mirrors on every push.
 
-In a real app, put the same schema on its `fabrika.config.ts`; the deploy engine runs this
-reconcile automatically. This example keeps the command explicit so the IAM flow can be
-exercised without a full deploy.
+The schema is attached to [`fabrika.config.ts`](./fabrika.config.ts), so a Cloudflare provider
+deploy reconciles it automatically. This example keeps the explicit command too, so the IAM
+flow can be exercised without a full deploy.
 
 ## Note: the harmless `auth_log` error
 

@@ -6,8 +6,8 @@
 // them as plaintext. The Custom Domain route comes from `ctx.domain` (`PROPUSTKA_HOSTNAME` in the
 // standalone Oblaka adapter).
 
-import type { AppSchema, ResourceContext } from '@fabrika/config'
-import { D1Database, defineApp, Worker } from '@fabrika/config'
+import type { AppSchema } from '@fabrika/auth-core'
+import { D1Database, defineApp, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 
 // Keep the legacy Oblaka namespace so the first fabrika deploy continues the existing cf-state.
 const PROPUSTKA_APP_ID = 'propustka'
@@ -16,7 +16,7 @@ const REQUIRED_VARS = ['PROPUSTKA_HUMAN_EMAIL_DOMAINS', 'PROPUSTKA_OIDC_ISSUER',
 const REQUIRED_REMOTE_INPUTS = [
 	...REQUIRED_VARS,
 	'PROPUSTKA_SIGNING_KEYS',
-	'PROPUSTKA_OIDC_CLIENT_SECRET',
+	'OIDC_CLIENT_SECRET',
 ]
 const KNOWN_ENVS = new Set(['local', 'stage', 'prod', 'mangoweb'])
 
@@ -145,7 +145,7 @@ export default defineApp({
 		workerDir: '.',
 		build: 'bun run --filter @fabrika/iam-ui build',
 		// Values stay in fabrika's vault and are provisioned out-of-band from Worker plaintext vars.
-		secrets: ['PROPUSTKA_SIGNING_KEYS', 'PROPUSTKA_OIDC_CLIENT_SECRET', 'PROPUSTKA_PROVISIONING_KEY'],
+		secrets: ['PROPUSTKA_SIGNING_KEYS', 'OIDC_CLIENT_SECRET', 'PROPUSTKA_PROVISIONING_KEY'],
 		// Optional list values use safe empty-array defaults and do not belong in this required set.
 		vars: REQUIRED_VARS,
 	},

@@ -10,7 +10,8 @@
 	},
 	"dependencies": {
 		"@fabrika/auth": "workspace:*",
-		"@fabrika/auth-core": "workspace:*"
+		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/provider-cloudflare": "workspace:*"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260702.1",
