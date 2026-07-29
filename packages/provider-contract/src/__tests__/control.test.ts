@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import type { ControlProvider, ProviderDeployInput, ProviderEnvelope, ProviderEnvironment, ProviderRegistration, ProviderRegistrationInput } from '..'
+import type {
+	ControlProvider,
+	ProviderDeployInput,
+	ProviderDeploymentNamespace,
+	ProviderEnvelope,
+	ProviderEnvironment,
+	ProviderRegistration,
+	ProviderRegistrationInput,
+} from '..'
 
 const providerEnvelope = (provider: string, payload: string): ProviderEnvelope => ({
 	provider,
@@ -124,5 +132,69 @@ describe('ControlProvider', () => {
 		expect(() => harbor.normalizeRegistration({ app: input.app, environment: input.environment })).toThrow(
 			'registration belongs to another provider',
 		)
+	})
+
+	test('supports provider-owned namespace lifecycle with durable checkpoints', async () => {
+		const checkpoints: ProviderDeploymentNamespace[] = []
+		const harbor: ControlProvider = {
+			id: 'harbor',
+			normalizeRegistration: normalizeHarborRegistration,
+			deploy: async () => ({ state: 'succeeded' }),
+			namespaces: {
+				normalize: (namespace) => ({
+					...namespace,
+					target: providerEnvelope('harbor', `${namespace.target.payload}`.toLowerCase()),
+				}),
+				provision: async (input) => {
+					const namespace = {
+						...input.namespace,
+						target: providerEnvelope('harbor', 'dock-7'),
+					}
+					await input.events.checkpoint(namespace)
+					return namespace
+				},
+				reconcile: async (input) => input.namespace,
+			},
+		}
+		const namespace: ProviderDeploymentNamespace = {
+			id: 'production',
+			env: 'prod',
+			exclusiveAppId: 'api',
+			target: providerEnvelope('harbor', 'EU-WEST'),
+		}
+		if (harbor.namespaces === undefined) {
+			throw new Error('expected namespace capabilities')
+		}
+
+		const normalized = harbor.namespaces.normalize(namespace)
+		const provisioned = await harbor.namespaces.provision({
+			namespace: normalized,
+			signal: new AbortController().signal,
+			events: {
+				checkpoint: async (checkpoint) => {
+					checkpoints.push(checkpoint)
+				},
+			},
+		})
+
+		expect(normalized.target.payload).toBe('eu-west')
+		expect(provisioned.target.payload).toBe('dock-7')
+		expect(checkpoints).toEqual([provisioned])
+	})
+
+	test('does not require namespaces from providers without placement lifecycle', () => {
+		const harbor: ControlProvider = {
+			id: 'harbor',
+			normalizeRegistration: normalizeHarborRegistration,
+			deploy: async () => ({ state: 'succeeded' }),
+		}
+
+		expect(harbor.namespaces).toBeUndefined()
+		expect(
+			harbor.normalizeRegistration({
+				app: deployInput('harbor').app,
+				environment: environment('harbor'),
+			}).environment.namespace,
+		).toBeUndefined()
 	})
 })

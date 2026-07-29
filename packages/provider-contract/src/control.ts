@@ -17,11 +17,20 @@ export interface ProviderApp {
 	readonly source: ProviderSource
 }
 
+/** One provider-owned placement boundary shared by zero or more app environments. */
+export interface ProviderDeploymentNamespace {
+	readonly id: string
+	readonly env: string
+	readonly exclusiveAppId?: string
+	readonly target: ProviderEnvelope
+}
+
 /** Persisted deploy data for one app environment. */
 export interface ProviderEnvironment {
 	readonly appId: string
 	readonly env: string
 	readonly domain?: string
+	readonly namespace?: ProviderDeploymentNamespace
 	readonly target: ProviderEnvelope
 	readonly artifact: ProviderEnvelope
 }
@@ -93,6 +102,25 @@ export interface ProviderManagedSecrets {
 	delete(input: ProviderSecretDeleteInput): Promise<void>
 }
 
+/** Persist a canonical namespace target immediately after one external mutation succeeds. */
+export interface ProviderNamespaceEvents {
+	checkpoint(namespace: ProviderDeploymentNamespace): Promise<void>
+}
+
+/** One idempotent namespace lifecycle invocation. */
+export interface ProviderNamespaceMutationInput {
+	readonly namespace: ProviderDeploymentNamespace
+	readonly signal: AbortSignal
+	readonly events: ProviderNamespaceEvents
+}
+
+/** Optional placement lifecycle owned by providers that use deployment namespaces. */
+export interface ProviderNamespaceCapabilities {
+	normalize(namespace: ProviderDeploymentNamespace): ProviderDeploymentNamespace
+	provision(input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace>
+	reconcile(input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace>
+}
+
 /**
  * The control-plane capability bundle selected statically by one composition root.
  *
@@ -106,4 +134,5 @@ export interface ControlProvider {
 	cancel?(input: ProviderCancelInput): Promise<void>
 	reconcile?(input: ProviderReconcileInput): Promise<ProviderReconcileOutcome>
 	readonly secrets?: ProviderManagedSecrets
+	readonly namespaces?: ProviderNamespaceCapabilities
 }
