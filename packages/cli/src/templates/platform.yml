@@ -74,7 +74,7 @@ jobs:
         working-directory: fabrika-platform
         run: bun install
 
-      # The deploy engine spawns a BARE `wrangler` (Bun.spawn), so the workspace bins must be on PATH.
+      # The Cloudflare provider spawns a BARE `wrangler` (Bun.spawn), so the workspace bins must be on PATH.
       - name: Put fabrika workspace bins on PATH
         working-directory: fabrika-platform
         run: |
@@ -97,19 +97,15 @@ jobs:
         run: bunx wrangler delete --name "$LEGACY"
 
       # ── Stage 1 — IAM (root authz) ───────────────────────────────────────────────────────────────────
-      # IAM deploys through its own oblaka adapter + wrangler. There is no PROPUSTKA_URL here because its
-      # empty schema needs no self-reconcile. The control plane reconciles against the live IAM service.
-      - name: Build IAM admin SPA
-        working-directory: fabrika-platform/packages/iam-ui
-        run: bun run build
-
-      - name: Provision IAM D1 + write wrangler.jsonc (oblaka --remote)
+      # IAM is a regular Cloudflare provider bundle. Its empty schema needs no self-reconcile.
+      - name: Deploy IAM
         working-directory: fabrika-platform/packages/iam
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          # Non-secret config (Environment Variables). HUMAN_* / OIDC_* / SESSION_* are read by oblaka.ts.
-          PROPUSTKA_HOSTNAME: ${{ vars.PROPUSTKA_HOSTNAME }}
+          CLOUDFLARE_STATE_NAMESPACE: propustka-state
+          VOZKA_DOMAIN: ${{ vars.PROPUSTKA_HOSTNAME }}
+          # Non-secret config (Environment Variables).
           PROPUSTKA_HUMAN_EMAIL_DOMAINS: ${{ vars.PROPUSTKA_HUMAN_EMAIL_DOMAINS }}
           PROPUSTKA_HUMAN_EMAILS: ${{ vars.PROPUSTKA_HUMAN_EMAILS }}
           PROPUSTKA_BOOTSTRAP_ADMINS: ${{ vars.PROPUSTKA_BOOTSTRAP_ADMINS }}
@@ -118,35 +114,10 @@ jobs:
           PROPUSTKA_OIDC_SCOPES: ${{ vars.PROPUSTKA_OIDC_SCOPES }}
           PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL: ${{ vars.PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL }}
           PROPUSTKA_SESSION_COOKIE_DOMAIN: ${{ vars.PROPUSTKA_SESSION_COOKIE_DOMAIN }}
-          # Validated-present by oblaka (it throws if absent) but pushed as Worker secrets after deploy.
           PROPUSTKA_SIGNING_KEYS: ${{ secrets.PROPUSTKA_SIGNING_KEYS }}
-          PROPUSTKA_OIDC_CLIENT_SECRET: ${{ secrets.PROPUSTKA_OIDC_CLIENT_SECRET }}
-        run: bunx oblaka oblaka.ts --env=prod --state-namespace=propustka-state --remote
-
-      - name: Apply IAM D1 migrations (remote)
-        working-directory: fabrika-platform/packages/iam
-        run: bunx wrangler d1 migrations apply DB --remote
-
-      - name: Deploy IAM Worker
-        working-directory: fabrika-platform/packages/iam
-        run: bunx wrangler deploy
-
-      # The native-auth runtime secrets (oblaka can't express secrets): ES256 signing keys + the OIDC client
-      # secret, plus the SEEDED provisioning key the control plane reconciles with. The wrangler secret
-      # names are the IAM Worker binding names: PROPUSTKA_SIGNING_KEYS, OIDC_CLIENT_SECRET,
-      # PROPUSTKA_PROVISIONING_KEY. Idempotent; persists across deploys.
-      - name: Set IAM Worker secrets (native auth + provisioning)
-        working-directory: fabrika-platform/packages/iam
-        env:
-          PROPUSTKA_SIGNING_KEYS: ${{ secrets.PROPUSTKA_SIGNING_KEYS }}
-          PROPUSTKA_OIDC_CLIENT_SECRET: ${{ secrets.PROPUSTKA_OIDC_CLIENT_SECRET }}
+          OIDC_CLIENT_SECRET: ${{ secrets.PROPUSTKA_OIDC_CLIENT_SECRET }}
           PROPUSTKA_PROVISIONING_KEY: ${{ secrets.PROPUSTKA_PROVISIONING_KEY }}
-        run: |
-          printf '%s' "$PROPUSTKA_SIGNING_KEYS" | bunx wrangler secret put PROPUSTKA_SIGNING_KEYS
-          printf '%s' "$PROPUSTKA_OIDC_CLIENT_SECRET" | bunx wrangler secret put OIDC_CLIENT_SECRET
-          if [ -n "$PROPUSTKA_PROVISIONING_KEY" ]; then
-            printf '%s' "$PROPUSTKA_PROVISIONING_KEY" | bunx wrangler secret put PROPUSTKA_PROVISIONING_KEY
-          fi
+        run: fabrika-cloudflare deploy --env=prod --config=fabrika.config.ts
 
       # ── Stage 2 — fabrika platform (executor + control plane) ────────────────────────────────────────
       - name: Deploy fabrika runner + control plane
@@ -169,7 +140,7 @@ jobs:
         run: |
           BUILD_FLAG=""
           if [ "${{ inputs.build_runner_image }}" = "true" ]; then BUILD_FLAG="--build-runner-image"; fi
-          bun packages/engine/src/cli.ts platform deploy \
+          fabrika-cloudflare platform deploy \
             --runner-config=packages/runner/fabrika-runner.config.ts \
             --worker-config=packages/control/fabrika.config.ts \
             $BUILD_FLAG

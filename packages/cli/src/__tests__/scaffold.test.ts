@@ -12,6 +12,8 @@ const FORBIDDEN_GENERATED_REFERENCES = [
 	'propustka.ref',
 	'packages/admin-ui',
 	'packages/worker',
+	'packages/engine/src/cli.ts',
+	'bunx oblaka oblaka.ts --env=prod',
 ]
 
 async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
@@ -39,8 +41,9 @@ describe('platform scaffold', () => {
 			expect(files['fabrika.ref']).toBe('main\n')
 			expect(files['README.md']).toContain('# fabrika-platform (mangoweb)')
 			expect(files['.github/workflows/platform.yml']).toContain('repository: contember/fabrika-platform')
-			expect(files['.github/workflows/platform.yml']).toContain('working-directory: fabrika-platform/packages/iam-ui')
 			expect(files['.github/workflows/platform.yml']).toContain('working-directory: fabrika-platform/packages/iam')
+			expect(files['.github/workflows/platform.yml']).toContain('fabrika-cloudflare deploy --env=prod --config=fabrika.config.ts')
+			expect(files['.github/workflows/platform.yml']).toContain('fabrika-cloudflare platform deploy')
 			expect(files['.github/workflows/platform.yml']).toContain('--runner-config=packages/runner/fabrika-runner.config.ts')
 			expect(files['.github/workflows/platform.yml']).toContain('--worker-config=packages/control/fabrika.config.ts')
 
