@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import type { AdoptDeploymentNamespaceRequest, AppEnvDto, CreateDeploymentNamespaceRequest, DeploymentNamespaceDto } from '../lib/api'
+import type {
+	AdoptDeploymentNamespaceRequest,
+	AppEnvDto,
+	CreateDeploymentNamespaceRequest,
+	DeploymentNamespaceDetailDto,
+	DeploymentNamespaceDto,
+	PlanDeploymentNamespaceRequest,
+	PlanDeploymentNamespaceResponse,
+} from '../lib/api'
 
 const target = {
 	provider: 'harbor',
@@ -35,14 +43,37 @@ describe('namespace API DTOs', () => {
 			domain: null,
 			triggerRef: null,
 			namespaceId: namespace.id,
-			provider: 'cloudflare',
-			target: { provider: 'cloudflare', version: 1, payload: {} },
-			artifact: { provider: 'cloudflare', version: 1, payload: { configPath: 'fabrika.config.ts' } },
+			provider: 'harbor',
+			target,
+			artifact: { provider: 'harbor', version: 2, payload: { services: ['billing'] } },
 			createdAt: 1,
+		}
+		const planRequest: PlanDeploymentNamespaceRequest = {
+			id: namespace.id,
+			env: namespace.env,
+			preset: 'shared',
+		}
+		const plan: PlanDeploymentNamespaceResponse = {
+			namespace: {
+				id: create.id,
+				env: create.env,
+				target: create.target,
+			},
+			presentation: {
+				preset: planRequest.preset,
+				title: 'Shared production placement',
+				facts: [{ label: 'Proxy', value: 'shared' }],
+				instructions: ['Provision before assigning apps.'],
+			},
+		}
+		const detail: DeploymentNamespaceDetailDto = {
+			...namespace,
+			presentation: plan.presentation,
 		}
 
 		expect(create.id).toBe(namespace.id)
 		expect(adopt.exclusiveAppId).toBe('billing')
 		expect(appEnv.namespaceId).toBe(namespace.id)
+		expect(detail.presentation?.facts[0]?.value).toBe('shared')
 	})
 })

@@ -98,9 +98,9 @@ export interface AppEnvDto {
 	/** Git ref that triggers a deploy here, e.g. `refs/heads/deploy/prod`. null = manual-only. */
 	triggerRef: string | null
 	namespaceId: string | null
-	provider: 'cloudflare'
-	target: CloudflareTargetEnvelope
-	artifact: CloudflareArtifactEnvelope
+	provider: string
+	target: ProviderEnvelopeDto
+	artifact: ProviderEnvelopeDto
 	createdAt: number
 }
 
@@ -108,11 +108,11 @@ export interface PutAppEnvRequest {
 	domain?: string | null
 	triggerRef?: string | null
 	namespaceId?: string | null
-	target: CloudflareTargetEnvelope
-	artifact: CloudflareArtifactEnvelope
+	target: ProviderEnvelopeDto
+	artifact: ProviderEnvelopeDto
 }
 
-export interface CloudflareTargetEnvelope {
+export interface CloudflareTargetEnvelope extends ProviderEnvelopeDto {
 	provider: 'cloudflare'
 	version: 1
 	payload: {
@@ -120,7 +120,7 @@ export interface CloudflareTargetEnvelope {
 	}
 }
 
-export interface CloudflareArtifactEnvelope {
+export interface CloudflareArtifactEnvelope extends ProviderEnvelopeDto {
 	provider: 'cloudflare'
 	version: 1
 	payload: {
@@ -143,6 +143,10 @@ export interface DeploymentNamespaceDto {
 	createdAt: number
 }
 
+export interface DeploymentNamespaceDetailDto extends DeploymentNamespaceDto {
+	presentation: DeploymentNamespacePresentationDto | null
+}
+
 export interface CreateDeploymentNamespaceRequest {
 	id: string
 	env: string
@@ -154,6 +158,54 @@ export interface AdoptDeploymentNamespaceRequest {
 	env: string
 	exclusiveAppId?: string | null
 	target: ProviderEnvelopeDto
+}
+
+export interface DeploymentNamespaceFactDto {
+	label: string
+	value: string
+}
+
+export interface DeploymentNamespacePresentationDto {
+	preset: string
+	title: string
+	facts: DeploymentNamespaceFactDto[]
+	instructions: string[]
+}
+
+export interface DeploymentNamespacePresetDto {
+	id: string
+	label: string
+	description: string
+	requiresExclusiveApp: boolean
+}
+
+export interface DeploymentNamespaceOperatorDto {
+	presets: DeploymentNamespacePresetDto[]
+}
+
+export interface DeploymentNamespaceListResponse {
+	items: DeploymentNamespaceDto[]
+	operator: DeploymentNamespaceOperatorDto | null
+}
+
+export interface PlanDeploymentNamespaceRequest {
+	id: string
+	env: string
+	preset: string
+	exclusiveAppId?: string
+	options?: JsonValue
+}
+
+export interface PlannedDeploymentNamespaceDto {
+	id: string
+	env: string
+	exclusiveAppId?: string
+	target: ProviderEnvelopeDto
+}
+
+export interface PlanDeploymentNamespaceResponse {
+	namespace: PlannedDeploymentNamespaceDto
+	presentation: DeploymentNamespacePresentationDto
 }
 
 // ── App secrets (mirror toAppSecretDto — refs only, values never leave the vault) ──

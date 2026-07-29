@@ -1,7 +1,7 @@
 import { Link, Outlet, useRoute } from '@buzola/router'
 import { RouteError } from '../components/RouteError'
 
-type Page = 'index' | 'apps' | 'runs'
+type Page = 'index' | 'apps' | 'namespaces' | 'runs'
 
 interface NavItem {
 	to: Page
@@ -13,6 +13,7 @@ interface NavItem {
 const NAV: NavItem[] = [
 	{ to: 'index', label: 'Onboarding', match: '/' },
 	{ to: 'apps', label: 'Apps', match: '/apps' },
+	{ to: 'namespaces', label: 'Namespaces', match: '/namespaces' },
 	{ to: 'runs', label: 'Runs', match: '/runs' },
 ]
 

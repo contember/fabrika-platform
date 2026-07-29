@@ -11,6 +11,8 @@ import {
 	type AppSecretDto,
 	type AppVarDto,
 	type CursorList,
+	type DeploymentNamespaceDto,
+	type DeploymentNamespaceListResponse,
 	type ListResponse,
 	type PutAppEnvRequest,
 	type PutAppSecretRequest,
@@ -20,6 +22,7 @@ import {
 	type TriggerDeployRequest,
 } from '../../lib/api'
 import { fmtDate, qs, shortRef, shortSha } from '../../lib/format'
+import { compatibleNamespaces, namespaceAssignmentRequest } from '../../lib/namespaces'
 
 // App detail — the per-app registry + operations view: its meta, its environments (each with a
 // Deploy button + edit/delete), its secret references (names + layer + vault ref, values never shown),
@@ -28,18 +31,19 @@ import { fmtDate, qs, shortRef, shortSha } from '../../lib/format'
 export default createPage()
 	.params({ id: 'string' })
 	.loader(async ({ params }) => {
-		const [app, envs, secrets, vars, runs] = await Promise.all([
+		const [app, envs, secrets, vars, runs, namespaces] = await Promise.all([
 			api.get<AppDto>(`/apps/${params.id}`),
 			api.get<ListResponse<AppEnvDto>>(`/apps/${params.id}/envs`),
 			api.get<ListResponse<AppSecretDto>>(`/apps/${params.id}/secrets`),
 			api.get<ListResponse<AppVarDto>>(`/apps/${params.id}/vars`),
 			api.get<CursorList<RunDto>>(`/runs${qs({ app: params.id, limit: 10 })}`),
+			api.get<DeploymentNamespaceListResponse>('/namespaces'),
 		])
-		return { app, envs: envs.items, secrets: secrets.items, vars: vars.items, runs: runs.items }
+		return { app, envs: envs.items, secrets: secrets.items, vars: vars.items, runs: runs.items, namespaces: namespaces.items }
 	})
 	.route('/apps/:id')
 	.render(({ data, invalidate }) => {
-		const { app, envs, secrets, vars, runs } = data
+		const { app, envs, secrets, vars, runs, namespaces } = data
 		const [confirming, setConfirming] = useState(false)
 		const navigate = useNavigate()
 
@@ -87,7 +91,7 @@ export default createPage()
 						<h2>Environments</h2>
 					</div>
 					<Table
-						colSpan={5}
+						colSpan={6}
 						isEmpty={envs.length === 0}
 						empty="No environments. Add one below."
 						head={
@@ -95,12 +99,13 @@ export default createPage()
 								<th>Env</th>
 								<th>Domain</th>
 								<th>Trigger ref</th>
-								<th>Config path</th>
+								<th>Placement</th>
+								<th>Provider config</th>
 								<th />
 							</tr>
 						}
 					>
-						{envs.map((env) => <EnvRow key={env.env} appId={app.id} env={env} onDone={invalidate} />)}
+						{envs.map((env) => <EnvRow key={env.env} appId={app.id} env={env} namespaces={namespaces} onDone={invalidate} />)}
 					</Table>
 					<AddEnvForm appId={app.id} existing={envs} onDone={invalidate} />
 				</section>
@@ -293,7 +298,14 @@ function DeployButton({ appId, env }: { appId: string; env: AppEnvDto }) {
 	)
 }
 
-function EnvRow({ appId, env, onDone }: { appId: string; env: AppEnvDto; onDone: () => void }) {
+function EnvRow(
+	{ appId, env, namespaces, onDone }: {
+		appId: string
+		env: AppEnvDto
+		namespaces: DeploymentNamespaceDto[]
+		onDone: () => void
+	},
+) {
 	const [editing, setEditing] = useState(false)
 	const [confirming, setConfirming] = useState(false)
 
@@ -325,7 +337,10 @@ function EnvRow({ appId, env, onDone }: { appId: string; env: AppEnvDto; onDone:
 			<td>{env.domain === null ? <span className="muted">—</span> : env.domain}</td>
 			<td>{env.triggerRef === null ? <span className="muted">manual-only</span> : <code>{shortRef(env.triggerRef)}</code>}</td>
 			<td>
-				<code>{env.artifact.payload.configPath}</code>
+				<NamespaceAssignment appId={appId} environment={env} namespaces={namespaces} onDone={onDone} />
+			</td>
+			<td>
+				<ProviderConfig environment={env} />
 			</td>
 			<td className="row-actions">
 				<DeployButton appId={appId} env={env} />
@@ -349,6 +364,103 @@ function EnvRow({ appId, env, onDone }: { appId: string; env: AppEnvDto; onDone:
 	)
 }
 
+function ProviderConfig({ environment }: { environment: AppEnvDto }) {
+	const configPath = cloudflareConfigPath(environment.artifact)
+	return configPath === null
+		? <code>{environment.provider}@{environment.artifact.version}</code>
+		: <code>{configPath}</code>
+}
+
+function NamespaceAssignment(
+	{ appId, environment, namespaces, onDone }: {
+		appId: string
+		environment: AppEnvDto
+		namespaces: DeploymentNamespaceDto[]
+		onDone: () => void
+	},
+) {
+	const compatible = compatibleNamespaces(appId, environment, namespaces)
+	const currentIsCompatible = environment.namespaceId === null || compatible.some((namespace) => namespace.id === environment.namespaceId)
+	const [selected, setSelected] = useState(environment.namespaceId ?? '')
+	const [busy, setBusy] = useState(false)
+	const [error, setError] = useState<string | null>(null)
+
+	async function assign() {
+		setBusy(true)
+		setError(null)
+		try {
+			const body = namespaceAssignmentRequest(environment, selected === '' ? null : selected)
+			await api.put(`/apps/${appId}/envs/${environment.env}`, body)
+			setBusy(false)
+			onDone()
+		} catch (cause) {
+			setError(cause instanceof ApiError ? cause.message : 'Placement assignment failed.')
+			setBusy(false)
+		}
+	}
+
+	return (
+		<div className="namespace-assignment">
+			<div className="row-actions">
+				<select
+					aria-label={`Placement for ${environment.env}`}
+					value={selected}
+					disabled={busy}
+					onChange={(event) => setSelected(event.target.value)}
+				>
+					{environment.namespaceId === null && <option value="">Unassigned</option>}
+					{!currentIsCompatible && environment.namespaceId !== null && (
+						<option value={environment.namespaceId} disabled>{environment.namespaceId} (not compatible)</option>
+					)}
+					{compatible.map((namespace) => (
+						<option key={namespace.id} value={namespace.id}>
+							{namespace.id}
+							{namespace.exclusiveAppId === null ? '' : ' (exclusive)'}
+						</option>
+					))}
+				</select>
+				<button
+					type="button"
+					className="small"
+					disabled={busy || selected === (environment.namespaceId ?? '')}
+					onClick={assign}
+				>
+					{busy ? 'Assigning…' : 'Assign'}
+				</button>
+			</div>
+			{compatible.length === 0 && environment.namespaceId === null && <div className="hint">No compatible ready placement.</div>}
+			{error && <div className="error-text small" role="alert">{error}</div>}
+		</div>
+	)
+}
+
+function cloudflareConfigPath(envelope: AppEnvDto['artifact']): string | null {
+	if (
+		envelope.provider !== 'cloudflare'
+		|| envelope.version !== 1
+		|| typeof envelope.payload !== 'object'
+		|| envelope.payload === null
+		|| Array.isArray(envelope.payload)
+	) {
+		return null
+	}
+	const configPath = envelope.payload['configPath']
+	return typeof configPath === 'string' ? configPath : null
+}
+
+function cloudflareArtifactWithConfigPath(envelope: AppEnvDto['artifact'], configPath: string): AppEnvDto['artifact'] {
+	if (
+		envelope.provider !== 'cloudflare'
+		|| envelope.version !== 1
+		|| typeof envelope.payload !== 'object'
+		|| envelope.payload === null
+		|| Array.isArray(envelope.payload)
+	) {
+		return envelope
+	}
+	return { ...envelope, payload: { ...envelope.payload, configPath } }
+}
+
 /** Shared env editor — an inline table row form for both edit and add. */
 function EnvForm(
 	{ appId, env, initial, onDone, onCancel, lockEnv = true }: {
@@ -363,7 +475,8 @@ function EnvForm(
 	const [envName, setEnvName] = useState(env)
 	const [domain, setDomain] = useState(initial?.domain ?? '')
 	const [triggerRef, setTriggerRef] = useState(initial?.triggerRef ?? '')
-	const [configPath, setConfigPath] = useState(initial?.artifact.payload.configPath ?? 'fabrika.config.ts')
+	const initialConfigPath = initial === null ? 'fabrika.config.ts' : cloudflareConfigPath(initial.artifact)
+	const [configPath, setConfigPath] = useState(initialConfigPath ?? '')
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 
@@ -374,8 +487,13 @@ function EnvForm(
 			const body: PutAppEnvRequest = {
 				domain: domain.trim() === '' ? null : domain.trim(),
 				triggerRef: triggerRef.trim() === '' ? null : triggerRef.trim(),
+				namespaceId: initial?.namespaceId ?? null,
 				target: initial?.target ?? { provider: 'cloudflare', version: 1, payload: {} },
-				artifact: { provider: 'cloudflare', version: 1, payload: { configPath: configPath.trim() } },
+				artifact: initial === null
+					? { provider: 'cloudflare', version: 1, payload: { configPath: configPath.trim() } }
+					: initialConfigPath === null
+					? initial.artifact
+					: cloudflareArtifactWithConfigPath(initial.artifact, configPath.trim()),
 			}
 			await api.put(`/apps/${appId}/envs/${envName.trim()}`, body)
 			onDone()
@@ -400,16 +518,28 @@ function EnvForm(
 				{error && <div className="error-text small">{error}</div>}
 			</td>
 			<td>
-				<input
-					required
-					aria-label="Config path"
-					value={configPath}
-					onChange={(e) => setConfigPath(e.target.value)}
-					placeholder="fabrika.config.ts"
-				/>
+				{initial?.namespaceId === null || initial === null ? <span className="muted">unassigned</span> : <code>{initial.namespaceId}</code>}
+			</td>
+			<td>
+				{initial !== null && initialConfigPath === null
+					? <code>{initial.provider}@{initial.artifact.version}</code>
+					: (
+						<input
+							required
+							aria-label="Config path"
+							value={configPath}
+							onChange={(e) => setConfigPath(e.target.value)}
+							placeholder="fabrika.config.ts"
+						/>
+					)}
 			</td>
 			<td className="row-actions">
-				<button type="button" className="primary small" onClick={save} disabled={busy || envName.trim() === '' || configPath.trim() === ''}>
+				<button
+					type="button"
+					className="primary small"
+					onClick={save}
+					disabled={busy || envName.trim() === '' || (initialConfigPath !== null && configPath.trim() === '')}
+				>
 					{busy ? 'Saving…' : 'Save'}
 				</button>
 				<button type="button" className="small" onClick={onCancel} disabled={busy}>Cancel</button>

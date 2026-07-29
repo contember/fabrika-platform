@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import type { RunStatus } from '../lib/api'
+import type { DeploymentNamespaceState, RunStatus } from '../lib/api'
 
 type Tone = 'neutral' | 'good' | 'warn' | 'bad' | 'muted'
 
@@ -36,4 +36,10 @@ export function RunStatusBadge({ status }: { status: RunStatus }) {
 			{status}
 		</span>
 	)
+}
+
+/** Placement lifecycle status, using the same quiet operational tones as deploy runs. */
+export function NamespaceStateBadge({ state }: { state: DeploymentNamespaceState }) {
+	const tone: Tone = state === 'ready' ? 'good' : state === 'failed' ? 'bad' : state === 'provisioning' ? 'warn' : 'neutral'
+	return <Badge tone={tone}>{state}</Badge>
 }
