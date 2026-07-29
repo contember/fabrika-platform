@@ -40,6 +40,14 @@ export interface CursorList<T> {
 	nextCursor: string | null
 }
 
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
+
+export interface ProviderEnvelopeDto {
+	provider: string
+	version: number
+	payload: JsonValue
+}
+
 /**
  * Write-only request to set / rotate an app-secret VALUE in the encrypted vault. The value never comes
  * back out over the API — it goes to the dedicated value endpoint (PUT to set, PATCH to rotate):
@@ -89,6 +97,7 @@ export interface AppEnvDto {
 	domain: string | null
 	/** Git ref that triggers a deploy here, e.g. `refs/heads/deploy/prod`. null = manual-only. */
 	triggerRef: string | null
+	namespaceId: string | null
 	provider: 'cloudflare'
 	target: CloudflareTargetEnvelope
 	artifact: CloudflareArtifactEnvelope
@@ -98,6 +107,7 @@ export interface AppEnvDto {
 export interface PutAppEnvRequest {
 	domain?: string | null
 	triggerRef?: string | null
+	namespaceId?: string | null
 	target: CloudflareTargetEnvelope
 	artifact: CloudflareArtifactEnvelope
 }
@@ -116,6 +126,34 @@ export interface CloudflareArtifactEnvelope {
 	payload: {
 		configPath: string
 	}
+}
+
+// ── Deployment namespaces (mirror toNamespaceDto) ─────────────────────────────
+
+export type DeploymentNamespaceState = 'pending' | 'provisioning' | 'ready' | 'failed'
+
+export interface DeploymentNamespaceDto {
+	id: string
+	env: string
+	provider: string
+	exclusiveAppId: string | null
+	target: ProviderEnvelopeDto
+	state: DeploymentNamespaceState
+	lastError: string | null
+	createdAt: number
+}
+
+export interface CreateDeploymentNamespaceRequest {
+	id: string
+	env: string
+	exclusiveAppId?: string | null
+	target: ProviderEnvelopeDto
+}
+
+export interface AdoptDeploymentNamespaceRequest {
+	env: string
+	exclusiveAppId?: string | null
+	target: ProviderEnvelopeDto
 }
 
 // ── App secrets (mirror toAppSecretDto — refs only, values never leave the vault) ──
@@ -165,6 +203,7 @@ export interface RegisterAppRequest extends AppOptionalFields {
 	env: string
 	domain?: string | null
 	triggerRef?: string | null
+	namespaceId?: string | null
 	target: CloudflareTargetEnvelope
 	artifact: CloudflareArtifactEnvelope
 }
