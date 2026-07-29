@@ -109,6 +109,46 @@ describe('generic provider persistence', () => {
 		])
 	})
 
+	test('acquires claims idempotently and atomically with an environment upsert', async () => {
+		const { db } = createHarness()
+		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
+		await db.createDeploymentNamespace({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: targetJson,
+		})
+
+		const first = await db.upsertAppEnvWithNamespaceResourceClaims(
+			{ ...appEnvironment('alpha', 'prod'), namespaceId: 'apps-prod', domain: 'alpha.example' },
+			['z-shared', 'alpha-worker', 'alpha-worker'],
+		)
+		expect(first.resourceClaims.map((claim) => claim.resource_key)).toEqual(['alpha-worker', 'z-shared'])
+
+		const retried = await db.upsertAppEnvWithNamespaceResourceClaims(
+			{ ...appEnvironment('alpha', 'prod'), namespaceId: 'apps-prod', domain: 'new-alpha.example' },
+			['z-shared'],
+		)
+		expect(retried.appEnv.domain).toBe('new-alpha.example')
+		expect(retried.resourceClaims[0]?.created_at).toBe(first.resourceClaims[1]?.created_at)
+		expect((await db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual([
+			'alpha-worker',
+			'z-shared',
+		])
+
+		await expect(db.upsertAppEnvWithNamespaceResourceClaims(
+			{ ...appEnvironment('beta', 'prod'), namespaceId: 'apps-prod' },
+			['beta-worker', 'z-shared'],
+		)).rejects.toThrow('namespace resource claim owner is immutable')
+		expect(await db.getAppEnv('beta', 'prod')).toBeNull()
+		expect((await db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual([
+			'alpha-worker',
+			'z-shared',
+		])
+	})
+
 	test('enforces namespace coordinates and resource ownership constraints', async () => {
 		const { db } = createHarness()
 		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
@@ -135,6 +175,17 @@ describe('generic provider persistence', () => {
 			resourceKey: 'alpha-api',
 			ownerAppId: 'alpha',
 			ownerEnv: 'prod',
+		})
+		await expect(db.createNamespaceResourceClaim({
+			namespaceId: 'apps-prod',
+			resourceKey: 'alpha-api',
+			ownerAppId: 'alpha',
+			ownerEnv: 'prod',
+		})).resolves.toMatchObject({
+			namespace_id: 'apps-prod',
+			resource_key: 'alpha-api',
+			owner_app_id: 'alpha',
+			owner_env: 'prod',
 		})
 		await expect(db.createNamespaceResourceClaim({
 			namespaceId: 'apps-prod',

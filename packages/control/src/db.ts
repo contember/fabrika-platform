@@ -66,6 +66,24 @@ export interface NamespaceResourceClaimRow {
 	created_at: number
 }
 
+export interface AppEnvInput {
+	appId: string
+	env: string
+	domain?: string | null
+	triggerRef?: string | null
+	namespaceId: string | null
+	provider: string
+	providerTargetJson: string
+	providerArtifactJson: string
+}
+
+export interface NamespaceResourceClaimOwner {
+	namespaceId: string
+	ownerAppId: string | null
+	ownerEnv: string | null
+	resourceKeys: readonly string[]
+}
+
 export interface AppSecretRow {
 	app_id: string
 	/** NULL = applies to every env of the app; set = that env only (narrower wins). */
@@ -293,14 +311,37 @@ export class Db {
 		ownerAppId: string | null
 		ownerEnv: string | null
 	}): Promise<NamespaceResourceClaimRow> {
-		return firstRow<NamespaceResourceClaimRow>(
-			this.d1
-				.prepare(`INSERT INTO namespace_resource_claims (
-						namespace_id, resource_key, owner_app_id, owner_env
-					)
-					VALUES (?, ?, ?, ?) RETURNING *`)
-				.bind(input.namespaceId, input.resourceKey, input.ownerAppId, input.ownerEnv),
-		)
+		const [claim] = await this.acquireNamespaceResourceClaims({
+			namespaceId: input.namespaceId,
+			ownerAppId: input.ownerAppId,
+			ownerEnv: input.ownerEnv,
+			resourceKeys: [input.resourceKey],
+		})
+		if (claim === undefined) {
+			throw new Error('expected an acquired namespace resource claim')
+		}
+		return claim
+	}
+
+	/**
+	 * Atomically acquires every requested key for one owner. Existing keys owned by the same owner
+	 * are idempotent; the schema trigger aborts the whole batch when any key has another owner.
+	 */
+	async acquireNamespaceResourceClaims(input: NamespaceResourceClaimOwner): Promise<NamespaceResourceClaimRow[]> {
+		const statements = this.namespaceResourceClaimStatements(input)
+		if (statements.length === 0) {
+			return []
+		}
+		const results = await this.d1.batch<NamespaceResourceClaimRow>(statements)
+		const claims: NamespaceResourceClaimRow[] = []
+		for (const result of results) {
+			const [claim] = result.results
+			if (claim === undefined || result.results.length !== 1) {
+				throw new Error('expected one row from a namespace resource claim acquisition')
+			}
+			claims.push(claim)
+		}
+		return claims
 	}
 
 	// ── App environments ──────────────────────────────────────────────────────
@@ -363,41 +404,88 @@ export class Db {
 	}
 
 	/** Upsert an (app, env) target. ON CONFLICT (app_id, env) overwrites the mutable columns. */
-	async upsertAppEnv(input: {
-		appId: string
-		env: string
-		domain?: string | null
-		triggerRef?: string | null
-		namespaceId: string | null
-		provider: string
-		providerTargetJson: string
-		providerArtifactJson: string
-	}): Promise<AppEnvRow> {
-		return firstRow<AppEnvRow>(
+	async upsertAppEnv(input: AppEnvInput): Promise<AppEnvRow> {
+		return firstRow<AppEnvRow>(this.appEnvUpsertStatement(input))
+	}
+
+	/**
+	 * Atomically upsert an environment and acquire its current resource keys. Keys omitted by a
+	 * later call remain claimed; releasing a provider resource requires a separate explicit policy.
+	 */
+	async upsertAppEnvWithNamespaceResourceClaims(
+		input: AppEnvInput,
+		resourceKeys: readonly string[],
+	): Promise<{ appEnv: AppEnvRow; resourceClaims: NamespaceResourceClaimRow[] }> {
+		if (input.namespaceId === null) {
+			throw new Error('namespace resource claims require an environment namespace')
+		}
+		const results = await this.d1.batch<AppEnvRow | NamespaceResourceClaimRow>([
+			this.appEnvUpsertStatement(input),
+			...this.namespaceResourceClaimStatements({
+				namespaceId: input.namespaceId,
+				ownerAppId: input.appId,
+				ownerEnv: input.env,
+				resourceKeys,
+			}),
+		])
+		const [appResult, ...claimResults] = results
+		const appEnv = appResult?.results[0]
+		if (appEnv === undefined || !('provider' in appEnv) || appResult?.results.length !== 1) {
+			throw new Error('expected one row from an app environment upsert')
+		}
+		const resourceClaims: NamespaceResourceClaimRow[] = []
+		for (const result of claimResults) {
+			const [claim] = result.results
+			if (claim === undefined || !('resource_key' in claim) || result.results.length !== 1) {
+				throw new Error('expected one row from a namespace resource claim acquisition')
+			}
+			resourceClaims.push(claim)
+		}
+		return { appEnv, resourceClaims }
+	}
+
+	private appEnvUpsertStatement(input: AppEnvInput): SqlStatement {
+		return this.d1
+			.prepare(`INSERT INTO app_envs (
+					app_id, env, domain, trigger_ref, namespace_id, provider,
+					provider_target_json, provider_artifact_json
+				)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT (app_id, env) DO UPDATE SET
+					domain = excluded.domain,
+					trigger_ref = excluded.trigger_ref,
+					namespace_id = excluded.namespace_id,
+					provider = excluded.provider,
+					provider_target_json = excluded.provider_target_json,
+					provider_artifact_json = excluded.provider_artifact_json
+				RETURNING *`)
+			.bind(
+				input.appId,
+				input.env,
+				input.domain ?? null,
+				input.triggerRef ?? null,
+				input.namespaceId,
+				input.provider,
+				input.providerTargetJson,
+				input.providerArtifactJson,
+			)
+	}
+
+	private namespaceResourceClaimStatements(input: NamespaceResourceClaimOwner): SqlStatement[] {
+		if ((input.ownerAppId === null) !== (input.ownerEnv === null)) {
+			throw new Error('namespace resource claim owner app and environment must both be set or both be null')
+		}
+		return [...new Set(input.resourceKeys)].sort().map((resourceKey) =>
 			this.d1
-				.prepare(`INSERT INTO app_envs (
-						app_id, env, domain, trigger_ref, namespace_id, provider,
-						provider_target_json, provider_artifact_json
+				.prepare(`INSERT INTO namespace_resource_claims (
+						namespace_id, resource_key, owner_app_id, owner_env
 					)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-					ON CONFLICT (app_id, env) DO UPDATE SET
-						domain = excluded.domain,
-						trigger_ref = excluded.trigger_ref,
-						namespace_id = excluded.namespace_id,
-						provider = excluded.provider,
-						provider_target_json = excluded.provider_target_json,
-						provider_artifact_json = excluded.provider_artifact_json
+					VALUES (?, ?, ?, ?)
+					ON CONFLICT (namespace_id, resource_key) DO UPDATE SET
+						owner_app_id = excluded.owner_app_id,
+						owner_env = excluded.owner_env
 					RETURNING *`)
-				.bind(
-					input.appId,
-					input.env,
-					input.domain ?? null,
-					input.triggerRef ?? null,
-					input.namespaceId,
-					input.provider,
-					input.providerTargetJson,
-					input.providerArtifactJson,
-				),
+				.bind(input.namespaceId, resourceKey, input.ownerAppId, input.ownerEnv)
 		)
 	}
 

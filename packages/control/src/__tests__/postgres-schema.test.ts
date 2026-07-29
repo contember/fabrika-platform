@@ -13,7 +13,7 @@
 // Skips cleanly (with a reason) when FABRIKA_TEST_POSTGRES_URL is unset — see helpers/postgres.ts.
 
 import { type BlobStore, SqlDeployLocks } from '@fabrika/platform'
-import { type PostgresDatabase, PostgresJobQueue } from '@fabrika/platform-node'
+import { PostgresDatabase, PostgresJobQueue } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { runDeployJob } from '../consumer'
 import { runMaintenance } from '../cron'
@@ -23,7 +23,7 @@ import { applyMigrations } from '../node/migrate'
 import { createFetchHandler } from '../node/server'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { Vault } from '../vault'
-import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
+import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 import { fakeControlProvider } from './helpers/provider'
 
 if (!hasPostgres) {
@@ -103,6 +103,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			'0003_zerops_targets.sql',
 			'0004_provider_envelopes.sql',
 			'0005_deployment_namespaces.sql',
+			'0006_immutable_namespace_resource_claim_owners.sql',
 		])
 	})
 
@@ -290,6 +291,17 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 			ownerAppId: 'alpha',
 			ownerEnv: 'prod',
 		})
+		await expect(db.createNamespaceResourceClaim({
+			namespaceId: 'apps-prod',
+			resourceKey: 'alpha-api',
+			ownerAppId: 'alpha',
+			ownerEnv: 'prod',
+		})).resolves.toMatchObject({
+			namespace_id: 'apps-prod',
+			resource_key: 'alpha-api',
+			owner_app_id: 'alpha',
+			owner_env: 'prod',
+		})
 
 		expect((await db.listDeploymentNamespaces()).map((namespace) => namespace.id)).toEqual(['apps-prod'])
 		expect((await db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual(['alpha-api', 'proxy'])
@@ -299,8 +311,86 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 			resourceKey: 'alpha-api',
 			ownerAppId: 'beta',
 			ownerEnv: 'prod',
-		})).rejects.toThrow()
+		})).rejects.toThrow('namespace resource claim owner is immutable')
 		await expect(db.deleteAppEnv('alpha', 'prod')).rejects.toThrow()
+	})
+
+	test('app environment and claim acquisition roll back together without releasing omitted claims', async () => {
+		await reset()
+		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
+		await db.createDeploymentNamespace({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: { dock: 'eu' } }),
+		})
+
+		await db.upsertAppEnvWithNamespaceResourceClaims(
+			{ ...providerEnvironment('alpha', 'prod'), namespaceId: 'apps-prod' },
+			['alpha-worker', 'z-shared'],
+		)
+		await db.upsertAppEnvWithNamespaceResourceClaims(
+			{ ...providerEnvironment('alpha', 'prod'), namespaceId: 'apps-prod', domain: 'alpha.example' },
+			['z-shared'],
+		)
+
+		await expect(db.upsertAppEnvWithNamespaceResourceClaims(
+			{ ...providerEnvironment('beta', 'prod'), namespaceId: 'apps-prod' },
+			['beta-worker', 'z-shared'],
+		)).rejects.toThrow('namespace resource claim owner is immutable')
+		expect(await db.getAppEnv('beta', 'prod')).toBeNull()
+		expect((await db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual([
+			'alpha-worker',
+			'z-shared',
+		])
+	})
+
+	test('concurrent claim acquisitions have exactly one winner', async () => {
+		await reset()
+		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
+		await db.createDeploymentNamespace({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: { dock: 'eu' } }),
+		})
+		if (postgresUrl === null || fixture === null) {
+			throw new Error('Postgres fixture is required')
+		}
+		const contenderRaw = PostgresDatabase.connect(postgresUrl, {
+			connection: { search_path: fixture.schema },
+			max: 1,
+		})
+		const contender = new Db(contenderRaw)
+		try {
+			const outcomes = await Promise.allSettled([
+				db.upsertAppEnvWithNamespaceResourceClaims(
+					{ ...providerEnvironment('alpha', 'prod'), namespaceId: 'apps-prod' },
+					['shared-service'],
+				),
+				contender.upsertAppEnvWithNamespaceResourceClaims(
+					{ ...providerEnvironment('beta', 'prod'), namespaceId: 'apps-prod' },
+					['shared-service'],
+				),
+			])
+			expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+			expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
+
+			const claims = await db.listNamespaceResourceClaims('apps-prod')
+			const environments = await db.listAppEnvsByNamespace('apps-prod')
+			expect(claims).toHaveLength(1)
+			const ownerAppId = claims[0]?.owner_app_id
+			if (ownerAppId === null || ownerAppId === undefined) {
+				throw new Error('expected an app-owned resource claim')
+			}
+			expect(environments.map((environment) => environment.app_id)).toEqual([ownerAppId])
+		} finally {
+			await contenderRaw.close()
+		}
 	})
 
 	test('a trigger ref is unique within an app, and NULLs do not contend', async () => {
