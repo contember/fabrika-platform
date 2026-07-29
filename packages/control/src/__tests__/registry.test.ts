@@ -1,5 +1,4 @@
-import { defineApp } from '@fabrika/config'
-import { compileFabrikaManifest } from '@fabrika/engine'
+import type { ControlProvider, JsonValue, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
 import { logsKey } from '@fabrika/runner'
 import { describe, expect, test } from 'bun:test'
 import type { ApiDeps } from '../api/router'
@@ -15,7 +14,7 @@ import { allowAllIam } from './helpers/iam'
 // the data path here; ACL is covered separately in acl.test.ts.
 
 function makeDeps(
-	opts: { installationId?: number | null } = {},
+	opts: { installationId?: number | null; provider?: ControlProvider } = {},
 ): { deps: ApiDeps; queue: DeployJobMessage[]; logStore: Map<string, string> } {
 	const { db } = createHarness()
 	const queue: DeployJobMessage[] = []
@@ -38,57 +37,133 @@ function makeDeps(
 			},
 		},
 		repoSource: new FakeRepoSource({ fakeInstallationId: opts.installationId ?? null }),
+		provider: opts.provider ?? fakeProvider,
 		// Stand in for the runner: mark the run failed (the real seam destroys the container + frees the lock).
 		cancelRun: (run) => db.markRunFinished(run.id, 'failed', null).then(() => {}),
 	}
 	return { deps, queue, logStore }
 }
 
+const payloadObject = (envelope: ProviderEnvelope): { readonly [key: string]: JsonValue } => {
+	const payload = envelope.payload
+	if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+		throw new Error('fake provider payload must be an object')
+	}
+	return payload
+}
+
+const payloadString = (envelope: ProviderEnvelope, name: string): string => {
+	const value = payloadObject(envelope)[name]
+	if (typeof value !== 'string') {
+		throw new Error(`fake provider ${name} must be a string`)
+	}
+	return value
+}
+
+const fakeProvider: ControlProvider = {
+	id: 'harbor',
+	normalizeRegistration: (input: ProviderRegistrationInput) => {
+		if (input.environment.target.provider !== 'harbor' || input.environment.artifact.provider !== 'harbor') {
+			throw new Error('fake provider rejects foreign envelopes')
+		}
+		return {
+			app: input.app,
+			environment: {
+				...input.environment,
+				target: {
+					provider: 'harbor',
+					version: 1,
+					payload: { region: payloadString(input.environment.target, 'region').trim().toLowerCase() },
+				},
+				artifact: {
+					provider: 'harbor',
+					version: 1,
+					payload: { image: payloadString(input.environment.artifact, 'image').trim() },
+				},
+			},
+		}
+	},
+	deploy: () => Promise.resolve({ state: 'succeeded' }),
+}
+
+const registrationEnvelopes = (): { target: ProviderEnvelope; artifact: ProviderEnvelope } => ({
+	target: { provider: 'harbor', version: 1, payload: { region: 'eu' } },
+	artifact: { provider: 'harbor', version: 1, payload: { image: 'registry.example/app:v1' } },
+})
+
+const storedEnvironment = (
+	appId: string,
+	env: string,
+	options: { domain?: string | null; triggerRef?: string | null } = {},
+) => {
+	const envelopes = registrationEnvelopes()
+	return {
+		appId,
+		env,
+		...options,
+		provider: 'harbor',
+		providerTargetJson: JSON.stringify(envelopes.target),
+		providerArtifactJson: JSON.stringify(envelopes.artifact),
+	}
+}
+
 function req(method: string, path: string, body?: unknown): Request {
+	const withRegistration = (
+			(method === 'POST' && path === '/api/register-app')
+			|| (method === 'PUT' && /^\/api\/apps\/[^/]+\/envs\/[^/]+$/.test(path))
+		)
+			&& typeof body === 'object'
+			&& body !== null
+			&& !Array.isArray(body)
+		? { ...body, ...registrationEnvelopes() }
+		: body
 	return new Request(`https://vozka.example${path}`, {
 		method,
-		...(body !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
+		...(withRegistration !== undefined
+			? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(withRegistration) }
+			: {}),
 	})
 }
 
 describe('onboarding + registry CRUD', () => {
-	test('stores only a validated static manifest for a Zerops app env', async () => {
+	test('normalizes and round-trips a third provider without a registry branch', async () => {
 		const { deps } = makeDeps()
-		const manifest = compileFabrikaManifest(
-			defineApp({
-				id: 'zerops-app',
-				target: { platform: 'zerops', services: () => [{ hostname: 'api', type: 'alpine/bun@1.3' }] },
-			}),
-			'prod',
-		)
-		await handleApi(req('POST', '/api/apps', { id: 'zerops-app', repoUrl: 'https://github.com/acme/zerops-app' }), deps)
+		await handleApi(req('POST', '/api/apps', { id: 'harbor-app', repoUrl: 'https://github.com/acme/harbor-app' }), deps)
 		const response = await handleApi(
-			req('PUT', '/api/apps/zerops-app/envs/prod', {
-				platform: 'zerops',
-				zeropsProjectId: 'project-1',
-				zeropsServiceId: 'service-1',
-				manifest,
+			new Request('https://vozka.example/api/apps/harbor-app/envs/prod', {
+				method: 'PUT',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					domain: 'app.example.com',
+					target: { provider: 'harbor', version: 1, payload: { region: ' EU-WEST ' } },
+					artifact: { provider: 'harbor', version: 1, payload: { image: ' registry.example/app:v4 ' } },
+				}),
 			}),
 			deps,
 		)
 		expect(response.status).toBe(200)
-		const row = await deps.db.getAppEnv('zerops-app', 'prod')
-		expect(row?.platform).toBe('zerops')
-		expect(row?.zerops_project_id).toBe('project-1')
-		expect(row?.zerops_service_id).toBe('service-1')
-		expect(row?.manifest_json).toBe(JSON.stringify(manifest))
+		const row = await deps.db.getAppEnv('harbor-app', 'prod')
+		expect(row?.provider).toBe('harbor')
+		expect(row?.provider_target_json).toBe(
+			JSON.stringify({ provider: 'harbor', version: 1, payload: { region: 'eu-west' } }),
+		)
+		expect(row?.provider_artifact_json).toBe(
+			JSON.stringify({ provider: 'harbor', version: 1, payload: { image: 'registry.example/app:v4' } }),
+		)
 
-		const drifted = await handleApi(
-			req('PUT', '/api/apps/zerops-app/envs/stage', {
-				platform: 'zerops',
-				zeropsProjectId: 'project-1',
-				zeropsServiceId: 'service-1',
-				manifest,
+		const foreign = await handleApi(
+			new Request('https://vozka.example/api/apps/harbor-app/envs/stage', {
+				method: 'PUT',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					target: { provider: 'other', version: 1, payload: { region: 'eu' } },
+					artifact: { provider: 'harbor', version: 1, payload: { image: 'image' } },
+				}),
 			}),
 			deps,
 		)
-		expect(drifted.status).toBe(400)
-		expect(await deps.db.getAppEnv('zerops-app', 'stage')).toBeNull()
+		expect(foreign.status).toBe(400)
+		expect(await deps.db.getAppEnv('harbor-app', 'stage')).toBeNull()
 	})
 
 	test('registerApp creates the app + its first app_env in one call', async () => {
@@ -222,8 +297,8 @@ describe('run history API', () => {
 		const { deps } = makeDeps()
 		await deps.db.createApp({ id: 'a', repoUrl: 'r1' })
 		await deps.db.createApp({ id: 'b', repoUrl: 'r2' })
-		await deps.db.upsertAppEnv({ appId: 'a', env: 'prod' })
-		await deps.db.upsertAppEnv({ appId: 'b', env: 'prod' })
+		await deps.db.upsertAppEnv(storedEnvironment('a', 'prod'))
+		await deps.db.upsertAppEnv(storedEnvironment('b', 'prod'))
 		const r1 = uuidv7()
 		await deps.db.createRun({ id: r1, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
 		const r2 = uuidv7()
@@ -245,7 +320,7 @@ describe('run history API', () => {
 	test('getRunLog reads + parses the NDJSON log from R2', async () => {
 		const { deps, logStore } = makeDeps()
 		await deps.db.createApp({ id: 'a', repoUrl: 'r' })
-		await deps.db.upsertAppEnv({ appId: 'a', env: 'prod' })
+		await deps.db.upsertAppEnv(storedEnvironment('a', 'prod'))
 		const runId = uuidv7()
 		await deps.db.createRun({ id: runId, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
 		await deps.db.markRunStarted(runId, logsKey(runId))
@@ -277,7 +352,7 @@ describe('run history API', () => {
 	test('cancel marks a running run failed; 409 once terminal, 404 unknown', async () => {
 		const { deps } = makeDeps()
 		await deps.db.createApp({ id: 'a', repoUrl: 'r' })
-		await deps.db.upsertAppEnv({ appId: 'a', env: 'prod' })
+		await deps.db.upsertAppEnv(storedEnvironment('a', 'prod'))
 		const runId = uuidv7()
 		await deps.db.createRun({ id: runId, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
 		await deps.db.markRunStarted(runId, logsKey(runId))

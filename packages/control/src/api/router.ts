@@ -6,6 +6,7 @@
 // scope (app / environment). `authorize` authenticates via propustka and `can`-checks; on failure it
 // returns the 401/403 Response the router returns verbatim. Mutations audit via the AuthContext.
 
+import type { ControlProvider } from '@fabrika/provider-contract'
 import { ACTIONS } from '../actions'
 import type { Db, RunRow } from '../db'
 import { error } from '../http'
@@ -47,6 +48,8 @@ export interface ApiDeps {
 	logs: LogReader
 	/** Used by the registry handlers to auto-detect an app's GitHub installation id at onboarding. */
 	repoSource: RepoSource
+	/** The installation's one statically composed provider. */
+	provider: ControlProvider
 	/** Cancel a run: destroy its container (off-local) + mark failed + free the deploy lock. */
 	cancelRun: (run: RunRow) => Promise<void>
 	vault?: () => Promise<Vault>
@@ -88,7 +91,7 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 		if (!authorized.ok) {
 			return authorized.response
 		}
-		return { db: deps.db, repoSource: deps.repoSource, request, url, authorized }
+		return { db: deps.db, repoSource: deps.repoSource, provider: deps.provider, request, url, authorized }
 	}
 	const runsCtx = (authorized: Awaited<ReturnType<typeof authorize>>): RunsContext | Response => {
 		if (!authorized.ok) {

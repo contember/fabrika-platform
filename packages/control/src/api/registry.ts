@@ -7,7 +7,7 @@
 // a ref, never a raw value. fabrika is single-account, so there is no `accounts` resource: the CF
 // account/token + propustka coords are fabrika's own Worker config (src/env.ts).
 
-import { parseFabrikaManifest } from '@fabrika/engine'
+import type { ControlProvider, JsonValue, ProviderApp, ProviderEnvelope, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
 import type { AppEnvRow, AppRow, AppSecretRow, AppVarRow, Db } from '../db'
 import { error, json, readJson } from '../http'
 import type { Authorized } from '../iam'
@@ -21,6 +21,8 @@ export interface RegistryContext {
 	url: URL
 	/** The RepoSource — used to auto-detect an app's GitHub installation id at onboarding time. */
 	repoSource: RepoSource
+	/** The installation's one statically composed provider. */
+	provider: ControlProvider
 	/** The authenticated caller (already `can`-checked by the router); used to `audit` mutations. */
 	authorized: Authorized
 }
@@ -45,12 +47,93 @@ function toAppEnvDto(row: AppEnvRow): unknown {
 		env: row.env,
 		domain: row.domain,
 		triggerRef: row.trigger_ref,
-		platform: row.platform,
-		zeropsProjectId: row.zerops_project_id,
-		zeropsServiceId: row.zerops_service_id,
-		manifest: row.manifest_json === null ? null : JSON.parse(row.manifest_json),
+		provider: row.provider,
+		target: JSON.parse(row.provider_target_json),
+		artifact: JSON.parse(row.provider_artifact_json),
 		createdAt: row.created_at,
 	}
+}
+
+const isJsonValue = (value: unknown): value is JsonValue => {
+	if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
+		return true
+	}
+	if (Array.isArray(value)) {
+		return value.every(isJsonValue)
+	}
+	return typeof value === 'object' && Object.values(value).every(isJsonValue)
+}
+
+function envelopeField(body: unknown, name: string): ProviderEnvelope | Response {
+	const raw = prop(body, name)
+	const provider = stringField(raw, 'provider')
+	const version = numberField(raw, 'version')
+	const payload = prop(raw, 'payload')
+	if (
+		provider === undefined
+		|| version === undefined
+		|| !Number.isInteger(version)
+		|| version < 1
+		|| payload === undefined
+		|| !isJsonValue(payload)
+	) {
+		return error(400, `${name} must be a versioned provider envelope`)
+	}
+	return { provider, version, payload }
+}
+
+const toProviderApp = (row: AppRow): ProviderApp => ({
+	id: row.id,
+	source: {
+		repoUrl: row.repo_url,
+		ref: row.default_branch,
+		...(row.worker_dir === null ? {} : { workerDir: row.worker_dir }),
+		...(row.build_cmd === null ? {} : { buildCommand: row.build_cmd }),
+		...(row.config_path === null ? {} : { configPath: row.config_path }),
+		...(row.github_installation_id === null ? {} : { githubInstallationId: row.github_installation_id }),
+	},
+})
+
+function normalizeRegistration(
+	provider: ControlProvider,
+	app: ProviderApp,
+	environment: ProviderEnvironment,
+): ProviderRegistration | Response {
+	try {
+		const registration = provider.normalizeRegistration({ app, environment })
+		if (
+			registration.app.id !== app.id
+			|| registration.environment.appId !== app.id
+			|| registration.environment.env !== environment.env
+			|| registration.environment.target.provider !== provider.id
+			|| registration.environment.artifact.provider !== provider.id
+		) {
+			return error(400, 'provider returned a registration for different coordinates')
+		}
+		return registration
+	} catch (cause) {
+		return error(400, cause instanceof Error ? cause.message : 'invalid provider registration')
+	}
+}
+
+function registrationEnvironment(
+	body: unknown,
+	provider: ControlProvider,
+	app: ProviderApp,
+	env: string,
+	domain: string | null,
+): ProviderRegistration | Response {
+	const target = envelopeField(body, 'target')
+	if (target instanceof Response) return target
+	const artifact = envelopeField(body, 'artifact')
+	if (artifact instanceof Response) return artifact
+	return normalizeRegistration(provider, app, {
+		appId: app.id,
+		env,
+		...(domain === null ? {} : { domain }),
+		target,
+		artifact,
+	})
 }
 function toAppSecretDto(row: AppSecretRow): unknown {
 	// value_ref IS exposed (it's a reference, not the value) — the dashboard needs to show which ref a
@@ -170,17 +253,24 @@ export async function listAppEnvs(c: RegistryContext, appId: string): Promise<Re
 }
 
 export async function putAppEnv(c: RegistryContext, appId: string, env: string): Promise<Response> {
-	if (!(await c.db.getApp(appId))) {
+	const app = await c.db.getApp(appId)
+	if (app === null) {
 		return error(404, 'app not found')
 	}
 	const body = await readJson(c.request)
 	const domain = nullableStringField(body, 'domain') ?? null
 	const triggerRef = nullableStringField(body, 'triggerRef') ?? null
-	const target = parseAppEnvTarget(body, appId, env)
-	if (target instanceof Response) {
-		return target
-	}
-	const row = await c.db.upsertAppEnv({ appId, env, domain, triggerRef, ...target })
+	const registration = registrationEnvironment(body, c.provider, toProviderApp(app), env, domain)
+	if (registration instanceof Response) return registration
+	const row = await c.db.upsertAppEnv({
+		appId,
+		env,
+		domain: registration.environment.domain ?? null,
+		triggerRef,
+		provider: c.provider.id,
+		providerTargetJson: JSON.stringify(registration.environment.target),
+		providerArtifactJson: JSON.stringify(registration.environment.artifact),
+	})
 	await c.authorized.auth.audit({
 		action: 'app.env.upsert',
 		resourceType: 'app_env',
@@ -189,41 +279,6 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 	})
 	return json(toAppEnvDto(row))
 }
-
-function parseAppEnvTarget(
-	body: unknown,
-	appId: string,
-	env: string,
-):
-	| {
-		platform: 'cloudflare' | 'zerops'
-		zeropsProjectId?: string
-		zeropsServiceId?: string
-		manifestJson?: string
-	}
-	| Response
-{
-	const platform = stringField(body, 'platform') ?? 'cloudflare'
-	if (platform === 'cloudflare') {
-		return { platform }
-	}
-	if (platform !== 'zerops') {
-		return error(400, 'platform must be `cloudflare` or `zerops`')
-	}
-	const zeropsProjectId = stringField(body, 'zeropsProjectId')
-	const zeropsServiceId = stringField(body, 'zeropsServiceId')
-	const rawManifest = prop(body, 'manifest')
-	if (!zeropsProjectId || !zeropsServiceId || rawManifest === undefined) {
-		return error(400, 'Zerops app env requires zeropsProjectId, zeropsServiceId and manifest')
-	}
-	try {
-		const manifest = parseFabrikaManifest(rawManifest, { appId, env })
-		return { platform, zeropsProjectId, zeropsServiceId, manifestJson: JSON.stringify(manifest) }
-	} catch (cause) {
-		return error(400, cause instanceof Error ? cause.message : 'invalid fabrika manifest')
-	}
-}
-
 export async function deleteAppEnv(c: RegistryContext, appId: string, env: string): Promise<Response> {
 	const ok = await c.db.deleteAppEnv(appId, env)
 	if (!ok) {
@@ -347,15 +402,45 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 	if (await c.db.getApp(id)) {
 		return error(409, 'an app with this id already exists')
 	}
-	const target = parseAppEnvTarget(body, id, env)
-	if (target instanceof Response) {
-		return target
-	}
 	const normalized = normalizeRepoUrl(repoUrl)
-	const app = await c.db.createApp({ id, repoUrl: normalized, ...optionalAppFields(body), ...(await installationIdField(c, body, normalized)) })
+	const optional = optionalAppFields(body)
+	const installation = await installationIdField(c, body, normalized)
 	const domain = nullableStringField(body, 'domain') ?? null
 	const triggerRef = nullableStringField(body, 'triggerRef') ?? null
-	const appEnv = await c.db.upsertAppEnv({ appId: id, env, domain, triggerRef, ...target })
+	const providerApp: ProviderApp = {
+		id,
+		source: {
+			repoUrl: normalized,
+			ref: optional.defaultBranch ?? 'main',
+			...(optional.workerDir === undefined || optional.workerDir === null ? {} : { workerDir: optional.workerDir }),
+			...(optional.buildCmd === undefined || optional.buildCmd === null ? {} : { buildCommand: optional.buildCmd }),
+			...(optional.configPath === undefined || optional.configPath === null ? {} : { configPath: optional.configPath }),
+			...(installation.githubInstallationId === undefined || installation.githubInstallationId === null
+				? {}
+				: { githubInstallationId: installation.githubInstallationId }),
+		},
+	}
+	const registration = registrationEnvironment(body, c.provider, providerApp, env, domain)
+	if (registration instanceof Response) return registration
+	const source = registration.app.source
+	const app = await c.db.createApp({
+		id: registration.app.id,
+		repoUrl: source.repoUrl,
+		defaultBranch: source.ref,
+		workerDir: source.workerDir ?? null,
+		buildCmd: source.buildCommand ?? null,
+		configPath: source.configPath ?? null,
+		githubInstallationId: source.githubInstallationId ?? null,
+	})
+	const appEnv = await c.db.upsertAppEnv({
+		appId: registration.app.id,
+		env: registration.environment.env,
+		domain: registration.environment.domain ?? null,
+		triggerRef,
+		provider: c.provider.id,
+		providerTargetJson: JSON.stringify(registration.environment.target),
+		providerArtifactJson: JSON.stringify(registration.environment.artifact),
+	})
 	await c.authorized.auth.audit({
 		action: 'app.create',
 		resourceType: 'app',

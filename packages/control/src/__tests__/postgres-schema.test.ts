@@ -58,6 +58,19 @@ function now(): number {
 	return Math.floor(Date.now() / 1000)
 }
 
+const providerEnvironment = (
+	appId: string,
+	env: string,
+	options: { domain?: string | null; triggerRef?: string | null } = {},
+) => ({
+	appId,
+	env,
+	...options,
+	provider: 'harbor',
+	providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: { region: 'eu' } }),
+	providerArtifactJson: JSON.stringify({ provider: 'harbor', version: 1, payload: { image: 'app:v1' } }),
+})
+
 /** A 32-byte base64 KEK, generated per call — never a fixed key, not even in a test. */
 function kek(): string {
 	return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
@@ -69,7 +82,12 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 		// so "already current" must be the normal, silent outcome and not an error.
 		expect(await applyMigrations(raw)).toEqual([])
 		const { results } = await raw.prepare('SELECT name FROM schema_migrations ORDER BY name').all<{ name: string }>()
-		expect(results.map((r) => r.name)).toEqual(['0001_init.sql', '0002_jobs.sql'])
+		expect(results.map((r) => r.name)).toEqual([
+			'0001_init.sql',
+			'0002_jobs.sql',
+			'0003_zerops_targets.sql',
+			'0004_provider_envelopes.sql',
+		])
 	})
 
 	test('creates exactly the tables the service reads/writes, and none of the retired ones', async () => {
@@ -193,14 +211,16 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		await reset()
 		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 
-		const prod = await db.upsertAppEnv({ appId: 'acme', env: 'prod', domain: 'acme.example', triggerRef: 'refs/heads/main' })
+		const prod = await db.upsertAppEnv(providerEnvironment('acme', 'prod', { domain: 'acme.example', triggerRef: 'refs/heads/main' }))
 		expect(prod.domain).toBe('acme.example')
+		expect(prod.provider).toBe('harbor')
+		expect(JSON.parse(prod.provider_target_json)).toEqual({ provider: 'harbor', version: 1, payload: { region: 'eu' } })
 		// ON CONFLICT (app_id, env) DO UPDATE — the upsert path and its RETURNING row.
-		const again = await db.upsertAppEnv({ appId: 'acme', env: 'prod', domain: 'acme2.example', triggerRef: 'refs/tags/v*' })
+		const again = await db.upsertAppEnv(providerEnvironment('acme', 'prod', { domain: 'acme2.example', triggerRef: 'refs/tags/v*' }))
 		expect(again.domain).toBe('acme2.example')
 		expect(again.trigger_ref).toBe('refs/tags/v*')
 
-		await db.upsertAppEnv({ appId: 'acme', env: 'stage' })
+		await db.upsertAppEnv(providerEnvironment('acme', 'stage'))
 		expect((await db.listAppEnvs('acme')).map((e) => e.env)).toEqual(['prod', 'stage'])
 		expect((await db.getAppEnv('acme', 'prod'))?.env).toBe('prod')
 		expect((await db.getAppEnvByTriggerRef('acme', 'refs/tags/v*'))?.env).toBe('prod')
@@ -217,11 +237,11 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 	test('a trigger ref is unique within an app, and NULLs do not contend', async () => {
 		await reset()
 		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv({ appId: 'acme', env: 'prod', triggerRef: 'refs/heads/main' })
-		await expect(db.upsertAppEnv({ appId: 'acme', env: 'stage', triggerRef: 'refs/heads/main' })).rejects.toThrow()
+		await db.upsertAppEnv(providerEnvironment('acme', 'prod', { triggerRef: 'refs/heads/main' }))
+		await expect(db.upsertAppEnv(providerEnvironment('acme', 'stage', { triggerRef: 'refs/heads/main' }))).rejects.toThrow()
 		// Two manual-only envs coexist: the index is partial, so NULLs are skipped entirely.
-		await db.upsertAppEnv({ appId: 'acme', env: 'a' })
-		await db.upsertAppEnv({ appId: 'acme', env: 'b' })
+		await db.upsertAppEnv(providerEnvironment('acme', 'a'))
+		await db.upsertAppEnv(providerEnvironment('acme', 'b'))
 	})
 
 	test('app_secrets: the two LAYERS, their partial-index upserts, and the precedence ORDER BY', async () => {
@@ -277,7 +297,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 	test('runs: create, the status-guarded transitions, keyset paging, and the stale sweep', async () => {
 		await reset()
 		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv({ appId: 'acme', env: 'prod' })
+		await db.upsertAppEnv(providerEnvironment('acme', 'prod'))
 
 		const first = await db.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'webhook' })
 		expect(first.status).toBe('pending')
@@ -300,6 +320,9 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 
 		await db.setRunCommit(first.id, 'deadbeef')
 		expect((await db.getRun(first.id))?.commit_sha).toBe('deadbeef')
+		expect(await db.setRunExternalId(first.id, 'harbor-operation-1')).toBe(true)
+		expect((await db.listInFlightRuns('harbor')).map((run) => run.id)).toEqual([first.id])
+		expect((await db.getRun(first.id))?.external_run_id).toBe('harbor-operation-1')
 
 		// The terminal write is guarded too — it is co-written by vozka-runner's `finishRun`.
 		expect(await db.markRunFinished(first.id, 'succeeded', 0)).toBe(true)
@@ -318,10 +341,10 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		await reset()
 		// PUBLIC (no installation id) + a trigger ref → pollable. The other three combinations are not.
 		await db.createApp({ id: 'public-app', repoUrl: 'github.com/acme/public' })
-		await db.upsertAppEnv({ appId: 'public-app', env: 'prod', triggerRef: 'refs/heads/main' })
-		await db.upsertAppEnv({ appId: 'public-app', env: 'manual' })
+		await db.upsertAppEnv(providerEnvironment('public-app', 'prod', { triggerRef: 'refs/heads/main' }))
+		await db.upsertAppEnv(providerEnvironment('public-app', 'manual'))
 		await db.createApp({ id: 'private-app', repoUrl: 'github.com/acme/private', githubInstallationId: 99 })
-		await db.upsertAppEnv({ appId: 'private-app', env: 'prod', triggerRef: 'refs/heads/main' })
+		await db.upsertAppEnv(providerEnvironment('private-app', 'prod', { triggerRef: 'refs/heads/main' }))
 
 		const eligible = await db.getPollEligibleEnvs()
 		expect(eligible.map((e) => `${e.app.id}:${e.appEnv.env}`)).toEqual(['public-app:prod'])
@@ -403,7 +426,7 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 	test('a message survives send → claim → handler → ack, and the payload round-trips', async () => {
 		await reset()
 		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv({ appId: 'acme', env: 'prod' })
+		await db.upsertAppEnv(providerEnvironment('acme', 'prod'))
 		const run = await db.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
 
 		const queue = new PostgresJobQueue<DeployJobMessage>(raw, { queue: 'vozka-deploy' })
@@ -423,7 +446,7 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 	test('a run whose deploy has nowhere to go is recorded FAILED, not left pending', async () => {
 		await reset()
 		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv({ appId: 'acme', env: 'prod' })
+		await db.upsertAppEnv(providerEnvironment('acme', 'prod'))
 		const run = await db.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
 
 		// No RUNNER (ADR-0003) and no Cloudflare credentials: `assembleJob` refuses before anything else,
@@ -440,7 +463,7 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 	test('a CONTENDED run is deferred and re-enqueued, never double-run', async () => {
 		await reset()
 		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv({ appId: 'acme', env: 'prod' })
+		await db.upsertAppEnv(providerEnvironment('acme', 'prod'))
 		const run = await db.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
 		// Somebody else holds the app-env lease.
 		await new SqlDeployLocks(raw).acquire('acme:prod', 'other-run', 60_000)
@@ -515,7 +538,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 	test('the maintenance pass polls, enqueues and sweeps against the real schema', async () => {
 		await reset()
 		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv({ appId: 'acme', env: 'prod', triggerRef: 'refs/heads/main' })
+		await db.upsertAppEnv(providerEnvironment('acme', 'prod', { triggerRef: 'refs/heads/main' }))
 		const stale = await db.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
 		await raw.prepare('UPDATE runs SET created_at = ? WHERE id = ?').bind(now() - 86_400, stale.id).run()
 

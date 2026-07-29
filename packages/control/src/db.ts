@@ -31,11 +31,12 @@ export interface AppEnvRow {
 	app_id: string
 	env: string
 	domain: string | null
-	platform: 'cloudflare' | 'zerops'
-	zerops_project_id: string | null
-	zerops_service_id: string | null
-	/** Canonical, validated `fabrika.manifest.json`; never executable source. */
-	manifest_json: string | null
+	/** The statically composed provider that owns both envelopes. */
+	provider: string
+	/** Canonical target envelope returned by ControlProvider.normalizeRegistration. */
+	provider_target_json: string
+	/** Canonical artifact envelope returned by ControlProvider.normalizeRegistration. */
+	provider_artifact_json: string
 	/** Git ref that triggers a deploy here, e.g. `refs/heads/deploy/prod`. NULL = manual-only. */
 	trigger_ref: string | null
 	created_at: number
@@ -78,8 +79,8 @@ export interface RunRow {
 	created_at: number
 	started_at: number | null
 	finished_at: number | null
-	/** Zerops application-version id. NULL on Cloudflare and before the platform accepts a build. */
-	platform_run_id: string | null
+	/** Provider-owned operation id, persisted as soon as the provider accepts asynchronous work. */
+	external_run_id: string | null
 }
 
 /**
@@ -213,13 +214,13 @@ export class Db {
 		return this.d1.prepare('SELECT * FROM app_envs WHERE app_id = ? AND env = ?').bind(appId, env).first<AppEnvRow>()
 	}
 
-	/** Every app target sharing one Zerops environment project, in stable manifest order. */
-	async listAppEnvsByZeropsProject(projectId: string): Promise<AppEnvRow[]> {
+	/** Every app environment owned by one statically composed provider. */
+	async listAppEnvsByProvider(provider: string): Promise<AppEnvRow[]> {
 		const { results } = await this.d1
 			.prepare(`SELECT * FROM app_envs
-				WHERE platform = 'zerops' AND zerops_project_id = ?
+				WHERE provider = ?
 				ORDER BY app_id, env`)
-			.bind(projectId)
+			.bind(provider)
 			.all<AppEnvRow>()
 		return results
 	}
@@ -254,55 +255,53 @@ export class Db {
 		env: string
 		domain?: string | null
 		triggerRef?: string | null
-		platform?: 'cloudflare' | 'zerops'
-		zeropsProjectId?: string | null
-		zeropsServiceId?: string | null
-		manifestJson?: string | null
+		provider: string
+		providerTargetJson: string
+		providerArtifactJson: string
 	}): Promise<AppEnvRow> {
 		return firstRow<AppEnvRow>(
 			this.d1
 				.prepare(`INSERT INTO app_envs (
-						app_id, env, domain, trigger_ref, platform,
-						zerops_project_id, zerops_service_id, manifest_json
+						app_id, env, domain, trigger_ref, provider,
+						provider_target_json, provider_artifact_json
 					)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+					VALUES (?, ?, ?, ?, ?, ?, ?)
 					ON CONFLICT (app_id, env) DO UPDATE SET
 						domain = excluded.domain,
 						trigger_ref = excluded.trigger_ref,
-						platform = excluded.platform,
-						zerops_project_id = excluded.zerops_project_id,
-						zerops_service_id = excluded.zerops_service_id,
-						manifest_json = excluded.manifest_json
+						provider = excluded.provider,
+						provider_target_json = excluded.provider_target_json,
+						provider_artifact_json = excluded.provider_artifact_json
 					RETURNING *`)
 				.bind(
 					input.appId,
 					input.env,
 					input.domain ?? null,
 					input.triggerRef ?? null,
-					input.platform ?? 'cloudflare',
-					input.zeropsProjectId ?? null,
-					input.zeropsServiceId ?? null,
-					input.manifestJson ?? null,
+					input.provider,
+					input.providerTargetJson,
+					input.providerArtifactJson,
 				),
 		)
 	}
 
-	/** Persist the platform-owned operation id as soon as Zerops reports it. */
-	async setRunPlatformId(id: string, platformRunId: string): Promise<boolean> {
+	/** Persist a provider-owned operation id as soon as asynchronous work is accepted. */
+	async setRunExternalId(id: string, externalRunId: string): Promise<boolean> {
 		const result = await this.d1
-			.prepare(`UPDATE runs SET platform_run_id = ? WHERE id = ? AND status = 'running'`)
-			.bind(platformRunId, id)
+			.prepare(`UPDATE runs SET external_run_id = ? WHERE id = ? AND status = 'running'`)
+			.bind(externalRunId, id)
 			.run()
 		return (result.meta.changes ?? 0) > 0
 	}
 
-	/** Pending/running runs whose work is owned by Zerops and must survive process restarts. */
-	async listInFlightZeropsRuns(): Promise<RunRow[]> {
+	/** Pending/running runs whose work is owned by a provider and must survive process restarts. */
+	async listInFlightRuns(provider: string): Promise<RunRow[]> {
 		const { results } = await this.d1
 			.prepare(`SELECT r.* FROM runs r
 				JOIN app_envs e ON e.app_id = r.app_id AND e.env = r.env
-				WHERE e.platform = 'zerops' AND r.status IN ('pending', 'running')
+				WHERE e.provider = ? AND r.status IN ('pending', 'running')
 				ORDER BY r.id`)
+			.bind(provider)
 			.all<RunRow>()
 		return results
 	}
@@ -532,13 +531,7 @@ export class Db {
 			.prepare(`UPDATE runs SET status = 'failed', finished_at = ?
 				WHERE status IN ('pending','running')
 					AND COALESCE(started_at, created_at) < ?
-					AND NOT EXISTS (
-						SELECT 1 FROM app_envs e
-						WHERE e.app_id = runs.app_id
-							AND e.env = runs.env
-							AND e.platform = 'zerops'
-							AND runs.platform_run_id IS NOT NULL
-					)`)
+					AND external_run_id IS NULL`)
 			.bind(now, now - maxAgeSeconds)
 			.run()
 		return result.meta.changes ?? 0
@@ -558,8 +551,8 @@ export class Db {
 					a.build_cmd AS a_build_cmd, a.config_path AS a_config_path, a.github_installation_id AS a_github_installation_id,
 					a.created_at AS a_created_at,
 						e.app_id AS e_app_id, e.env AS e_env, e.domain AS e_domain, e.trigger_ref AS e_trigger_ref,
-						e.platform AS e_platform, e.zerops_project_id AS e_zerops_project_id,
-						e.zerops_service_id AS e_zerops_service_id, e.manifest_json AS e_manifest_json,
+						e.provider AS e_provider, e.provider_target_json AS e_provider_target_json,
+						e.provider_artifact_json AS e_provider_artifact_json,
 						e.created_at AS e_created_at
 				FROM apps a
 				JOIN app_envs e ON e.app_id = a.id
@@ -582,10 +575,9 @@ export class Db {
 				env: r.e_env,
 				domain: r.e_domain,
 				trigger_ref: r.e_trigger_ref,
-				platform: r.e_platform,
-				zerops_project_id: r.e_zerops_project_id,
-				zerops_service_id: r.e_zerops_service_id,
-				manifest_json: r.e_manifest_json,
+				provider: r.e_provider,
+				provider_target_json: r.e_provider_target_json,
+				provider_artifact_json: r.e_provider_artifact_json,
 				created_at: r.e_created_at,
 			},
 		}))
@@ -640,10 +632,9 @@ interface PollEligibleJoinRow {
 	e_env: string
 	e_domain: string | null
 	e_trigger_ref: string | null
-	e_platform: 'cloudflare' | 'zerops'
-	e_zerops_project_id: string | null
-	e_zerops_service_id: string | null
-	e_manifest_json: string | null
+	e_provider: string
+	e_provider_target_json: string
+	e_provider_artifact_json: string
 	e_created_at: number
 }
 

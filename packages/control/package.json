@@ -27,6 +27,7 @@
 		"@fabrika/engine": "workspace:*",
 		"@fabrika/platform": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",
+		"@fabrika/provider-contract": "workspace:*",
 		"@fabrika/runner": "workspace:*"
 	},
 	"devDependencies": {
