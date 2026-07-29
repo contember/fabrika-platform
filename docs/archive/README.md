@@ -9,6 +9,9 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Static provider bundles (2026-07-29)](sprint-2026-07-29-static-provider-bundles.md)
+  — extracted Cloudflare and Zerops behind open contracts and static composition
+  roots.
 - [Post-merge readiness (2026-07-29)](sprint-2026-07-29-post-merge-readiness.md)
   — unified the merged deployment surfaces and updated the toolchain.
 - [Zerops control path (2026-07-29)](sprint-2026-07-29-zerops-control-path.md)

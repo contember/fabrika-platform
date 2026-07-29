@@ -33,42 +33,83 @@ platform_, never _an app runs on both_.
 
 ## The packages
 
-| Package              | Was                   | What it is                                                     |
-| -------------------- | --------------------- | -------------------------------------------------------------- |
-| `@fabrika/auth-core` | `@propustka/core`     | Shared IAM domain: policy model, scope dimensions, evaluation. |
-| `@fabrika/auth`      | `@propustka/client`   | The published SDK apps depend on.                              |
-| `@fabrika/iam`       | `@propustka/worker`   | The IAM service itself (identity, keys, policies, audit).      |
-| `@fabrika/iam-ui`    | `@propustka/admin-ui` | IAM admin UI.                                                  |
-| `@fabrika/config`    | `vozka-config`        | App-facing config (`fabrika.config.ts`) and its types.         |
-| `@fabrika/engine`    | `@vozka/core`         | The deploy engine: plan derivation and execution.              |
-| `@fabrika/control`   | `@vozka/worker`       | The control plane: registry, runs, orchestration.              |
-| `@fabrika/cli`       | `@vozka/cli`          | CLI.                                                           |
-| `@fabrika/dashboard` | `@vozka/dashboard`    | Deploy dashboard UI.                                           |
-| `@fabrika/runner`    | `@vozka/runner`       | Deploy runner — Cloudflare-only, see below.                    |
+| Package                        | What it is                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------------- |
+| `@fabrika/auth-core`           | Shared IAM domain: policy model, scope dimensions, evaluation.                              |
+| `@fabrika/auth`                | The published SDK apps depend on.                                                           |
+| `@fabrika/iam`                 | The IAM service itself: identity, keys, policies, and audit.                                |
+| `@fabrika/iam-ui`              | IAM admin UI.                                                                               |
+| `@fabrika/provider-contract`   | Open runtime and control-provider interfaces plus versioned JSON envelopes.                 |
+| `@fabrika/provider-cloudflare` | Cloudflare app authoring, deploy plan, control adapter, runner job contract, and CLI.       |
+| `@fabrika/provider-zerops`     | Zerops app authoring, manifest compiler, API client, deploy plan, control adapter, and CLI. |
+| `@fabrika/engine`              | Provider-neutral execution of an explicit `RuntimeProvider` session.                        |
+| `@fabrika/platform`            | Runtime ports shared by the control plane and IAM.                                          |
+| `@fabrika/platform-node`       | Bun/Postgres/S3 implementations of those runtime ports.                                     |
+| `@fabrika/control`             | Shared control-plane core plus separate Cloudflare Worker and Zerops/Bun composition roots. |
+| `@fabrika/cli`                 | Operator bring-up CLI.                                                                      |
+| `@fabrika/dashboard`           | Deploy dashboard UI.                                                                        |
+| `@fabrika/runner`              | Cloudflare-only transport and execution for provider-owned runner jobs.                     |
+| `@fabrika/proxy`               | Shared auth enforcement service used by the provider-specific edge proxy.                   |
 
 `@fabrika/auth` is a published SDK with downstream consumers (poplach, revizor,
 opice); the rename is a deliberate, one-time break — see
 [ADR-0001](../decisions/0001-merge-propustka-and-vozka.md).
 
+## Provider composition
+
+One installation has exactly one provider. The Cloudflare Worker entrypoint
+statically imports `@fabrika/provider-cloudflare`; the Zerops Bun entrypoint
+statically imports `@fabrika/provider-zerops`. Shared engine and control code do
+not contain a provider registry, a provider-id union, or branches for either
+provider ([ADR-0011](../decisions/0011-static-provider-bundles.md)).
+
+App configs use the selected provider package as their authoring surface:
+
+- Cloudflare configs import `defineApp` and Oblaka resources from
+  `@fabrika/provider-cloudflare`. `fabrika-cloudflare deploy` executes an app
+  deployment; `fabrika-cloudflare platform deploy` deploys the platform Worker
+  and runner composition.
+- Zerops configs import `defineApp` and Zerops resource types from
+  `@fabrika/provider-zerops`. `fabrika-zerops build` evaluates the config and
+  writes the static `fabrika.manifest.json` consumed during registration.
+
+The control-plane registry persists provider-owned target and artifact data as
+opaque `{ provider, version, payload }` JSON envelopes. The selected provider
+validates and normalizes those envelopes. Shared control owns registry rows,
+locks, run status, secret resolution, and queue semantics; the provider owns
+deploy, cancellation, reconciliation, and optional provider-managed secret
+operations. Adding another statically linked provider does not require a core
+schema column or a core provider branch.
+
+Runtime portability is separate from deployment-cloud semantics.
+`@fabrika/platform` defines SQL, blob, queue, lock, asset, and lifecycle ports.
+The installation composition root binds those runtime ports and its provider
+bundle together. See [`provider-bundles.md`](provider-bundles.md) for the
+boundary in detail.
+
 ## How a deploy works
 
 The control plane accepts a deploy request, takes a per-app-environment lock, and
-dispatches through a platform-specific **`DeployDriver`**
-([ADR-0002](../decisions/0002-deploy-driver-owns-the-plan.md)).
+calls the statically selected `ControlProvider`. The provider opens or delegates
+an explicit runtime session. `@fabrika/engine` executes the provider-supplied
+ordered plan without interpreting provider target data, artifact data, or step
+kinds.
 
 On Cloudflare, a separate runner Worker starts a Cloudflare Container. The
 container clones the repository, installs dependencies, and executes the
 Cloudflare plan. Keeping the runner separate lets the control plane deploy itself
 without resetting the container that owns the run.
 
-On Zerops, the app build runs `fabrika build --env=<env>` and produces a versioned
-`fabrika.manifest.json`. Registration stores that validated static data with the
-app-env's project and service ids. A queued deploy never imports app TypeScript:
-the Bun control process applies the compiled import, triggers the service pipeline,
-polls its app-version, and reconciles the IAM schema. It stores the app-version id
-as soon as Zerops accepts the pipeline. Startup and scheduled maintenance poll
-unfinished platform-owned versions, so a self-deploy or restart does not lose the
-terminal run state ([ADR-0003](../decisions/0003-no-deploy-runner-on-zerops.md)).
+On Zerops, the app build runs `fabrika-zerops build --env=<env>` and produces a
+versioned `fabrika.manifest.json`. Registration stores that validated static data
+in the provider artifact envelope and the project/service address in the provider
+target envelope. A queued deploy never imports app TypeScript: the Bun control
+process applies the compiled import, triggers the service pipeline, polls its
+app-version, and reconciles the IAM schema. It stores the app-version id as soon
+as Zerops accepts the pipeline. Startup and scheduled maintenance call the
+provider reconciliation capability for unfinished platform-owned runs, so a
+self-deploy or restart does not lose the terminal state
+([ADR-0003](../decisions/0003-no-deploy-runner-on-zerops.md)).
 
 Secret edits follow the same registered service address but are not a deploy step.
 The control plane writes or deletes them immediately through the service-env API
@@ -113,3 +154,5 @@ remaining portability milestone is a real-account bring-up — see
   that the decisions rest on, with sources.
 - [`portability-surface.md`](portability-surface.md) — every Cloudflare primitive
   currently in use and its portable counterpart, plus the IAM port assessment.
+- [`provider-bundles.md`](provider-bundles.md) — the static provider contract,
+  persistence boundary, and composition roots.

@@ -121,7 +121,7 @@ no exchange step; `/auth/*` is for email+password sessions, not for a PAT.
 every request/response shape:
 `https://api.app-prg1.zerops.io/api/rest/public/swagger/openapi.yml` (served behind
 the Swagger UI at `/swagger`; `/openapi.json` and `/swagger.json` both 404). Prefer it
-over prose. The endpoints fabrika's driver uses, all confirmed there:
+over prose. The endpoints fabrika's Zerops provider uses, all confirmed there:
 
 | Purpose                                | Endpoint                                                                   | Body / response                                                                                  |
 | -------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |

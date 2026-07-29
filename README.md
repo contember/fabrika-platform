@@ -8,10 +8,9 @@ fabrika is the merger of two Cloudflare-only projects: **propustka** (IAM & audi
 (deploy control plane). The merge exists to break the Cloudflare assumption: a client picks **one**
 platform — Cloudflare or [zerops.io](https://zerops.io) — and the whole stack runs there.
 
-> **Status: phase 0.** The two codebases have just been merged and renamed under `@fabrika/*`. The
-> Cloudflare path is the one that works today; the multi-cloud seams (platform ports, deploy drivers,
-> the Zerops driver, the auth proxy) are designed but not built. See `docs/` for the decision record
-> and the phase ladder.
+> **Status.** The Cloudflare path works. The portable runtime, static provider boundary, Zerops
+> provider, and auth proxy are implemented and locally verified. Zerops support has not yet been run
+> against a real account, so treat it as well-formed but unexercised.
 
 ## What it does
 
@@ -23,16 +22,24 @@ platform — Cloudflare or [zerops.io](https://zerops.io) — and the whole stac
 
 ## Packages
 
-Bun monorepo (`packages/*`). Two halves that meet at the config surface.
+Bun monorepo (`packages/*`). Each installation statically selects one provider bundle.
 
 **Auth** — `@fabrika/auth-core` (the pure kernel: policy matching, token shape, the IAM contract) ·
-`@fabrika/auth` (the app-facing SDK, the only published one) · `@fabrika/iam` (the IAM service) ·
+`@fabrika/auth` (the app-facing SDK) · `@fabrika/iam` (the IAM service) ·
 `@fabrika/iam-ui` (its admin SPA).
 
-**Deploy** — `@fabrika/config` (the app-authoring surface: `defineApp`) · `@fabrika/engine` (the
-deploy engine + the `fabrika` CLI) · `@fabrika/control` (the control plane) · `@fabrika/cli`
-(operator bring-up) · `@fabrika/dashboard` (the control-plane SPA) · `@fabrika/runner` (the
-Cloudflare deploy runner).
+**Deploy contract and core** — `@fabrika/provider-contract` (open provider interfaces and versioned
+JSON envelopes) · `@fabrika/engine` (provider-neutral plan executor) · `@fabrika/control` (registry,
+run lifecycle, and composition roots) · `@fabrika/platform` (runtime ports) ·
+`@fabrika/platform-node` (Bun/Postgres/S3 adapters).
+
+**Providers** — `@fabrika/provider-cloudflare` (Oblaka authoring, deploy implementation, control
+adapter, and `fabrika-cloudflare`) · `@fabrika/provider-zerops` (authoring, static manifest compiler,
+API client, deploy implementation, control adapter, and `fabrika-zerops`). The Cloudflare-only
+`@fabrika/runner` transports and executes provider-owned runner jobs.
+
+**Operations** — `@fabrika/cli` (installation bring-up) · `@fabrika/dashboard` (the control-plane
+SPA) · `@fabrika/proxy` (auth enforcement for private app services).
 
 ## Quick start
 
@@ -48,9 +55,8 @@ bun run format        # dprint
 
 ## Documentation
 
-`docs/` holds the decision record — what was chosen, and why the alternatives lost. Start there
-before changing anything structural; most of the surprising parts of this codebase are surprising on
-purpose.
+Start with [`docs/reference/overview.md`](docs/reference/overview.md) for the current architecture
+and [`docs/decisions/README.md`](docs/decisions/README.md) for the decisions behind it.
 
 ## License
 

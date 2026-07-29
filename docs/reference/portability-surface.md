@@ -26,8 +26,8 @@ with the workers that use them; the Bun/Postgres/S3 set is
 
 ## Deploy layers — how portable each one actually is
 
-From the per-layer analysis behind
-[ADR-0002](../decisions/0002-deploy-driver-owns-the-plan.md):
+Provider packages own the per-cloud implementations behind the open contract in
+[`provider-bundles.md`](provider-bundles.md). The layer split remains:
 
 | Layer            | Portability       | Why                                                                                                                                |
 | ---------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -38,13 +38,20 @@ From the per-layer analysis behind
 | Artifact deploy  | **Per-provider**  | `wrangler deploy` vs an `/app-version` API call — and on Zerops build and deploy are one indivisible platform-side step.           |
 | Migrations       | **Per-provider**  | A discrete plan step on Cloudflare; `run.initCommands` at container start on Zerops.                                               |
 
-Zerops app configuration crosses a static boundary. `fabrika build` evaluates the
-app-owned TypeScript and emits a versioned `fabrika.manifest.json`; the control
-plane validates and stores that document, then deploys it without executing
-repository code. The app-env registry supplies the Zerops project and service ids.
+Zerops app configuration crosses a static boundary. `fabrika-zerops build`
+evaluates the app-owned TypeScript and emits a versioned
+`fabrika.manifest.json`; the control plane validates and stores that document in
+the provider artifact envelope, then deploys it without executing repository
+code. The app-env target envelope supplies the Zerops project and service ids.
 The same service address is used for deploys and immediate secret write-through.
-The triggered app-version id is persisted so startup and cron can reconcile a run
-after the initiating process disappears.
+The triggered app-version id is stored in the generic `external_run_id` field so
+startup and cron can reconcile a run after the initiating process disappears.
+
+The Cloudflare provider keeps the executable Oblaka config as its source
+artifact. Its control adapter resolves a checkout and sends the provider-owned
+runner job to the separate Cloudflare runner. The runner invokes
+`fabrika-cloudflare deploy`; the neutral engine and shared control core do not
+import Oblaka or interpret Cloudflare steps.
 
 ## IAM (`@fabrika/iam`) — port assessment
 

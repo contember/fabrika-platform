@@ -17,3 +17,5 @@ behaviour.
 - [`portability-surface.md`](portability-surface.md) — every Cloudflare primitive in
   use and its portable counterpart; how portable each deploy layer is; the IAM port
   assessment.
+- [`provider-bundles.md`](provider-bundles.md) — the static provider contract,
+  versioned persistence boundary, composition roots, and provider CLIs.

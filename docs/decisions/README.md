@@ -15,18 +15,23 @@ fabrika-platform. Read them in order — 0002 through 0008 all assume the framin
 0001, and several rest on facts collected in
 [`../reference/zerops-platform.md`](../reference/zerops-platform.md).
 
+ADR-0011 extends the provider-owned plan and target decisions in ADR-0002 and
+ADR-0009 across authoring, persistence, and the control lifecycle. It replaces
+their closed driver-registry mechanics with static provider bundles while
+retaining their provider-owned plan and collaborator boundaries.
+
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
 
 - [0001](0001-merge-propustka-and-vozka.md) — Merge propustka and vozka into fabrika-platform under the `@fabrika/*` scope — accepted (2026-07-28)
-- [0002](0002-deploy-driver-owns-the-plan.md) — Multi-cloud through a `DeployDriver`; the deploy plan belongs to the driver — accepted (2026-07-28)
+- [0002](0002-deploy-driver-owns-the-plan.md) — Multi-cloud through a `DeployDriver`; the deploy plan belongs to the driver — accepted; extended by 0011 (2026-07-28)
 - [0003](0003-no-deploy-runner-on-zerops.md) — No deploy runner on Zerops — the platform executes the deploy — accepted (2026-07-28)
 - [0004](0004-secrets-live-in-the-platform.md) — The platform holds secret values; fabrika holds only references — accepted (2026-07-28)
 - [0005](0005-compile-app-config-to-static-manifest.md) — Compile app config to a static manifest; the control plane never executes app code — accepted (2026-07-28)
 - [0006](0006-zerops-project-topology-is-a-registry-field.md) — Zerops project topology is a registry field, defaulting to project-per-environment — accepted (2026-07-28)
 - [0007](0007-proxy-based-auth-enforcement.md) — Enforce auth in a proxy instead of an in-process SDK — accepted (2026-07-28)
 - [0008](0008-caddy-forward-auth-proxy.md) — Caddy + `forward_auth` on Zerops, a thin Worker on Cloudflare, over one shared TypeScript auth service — accepted (2026-07-28)
-- [0009](0009-per-driver-target-and-collaborators.md) — A deploy targets a discriminated platform; collaborators belong to the driver, not to `deploy()` — accepted (2026-07-28)
+- [0009](0009-per-driver-target-and-collaborators.md) — A deploy targets a discriminated platform; collaborators belong to the driver, not to `deploy()` — accepted; extended by 0011 (2026-07-28)
 - [0010](0010-gate-evaluation-stays-in-the-auth-service.md) — Gate evaluation stays in the auth service; Caddy routes are a fixed chain (amends 0008) — accepted (2026-07-28)
 - [0011](0011-static-provider-bundles.md) — Compose one static provider bundle per installation — accepted (2026-07-29)

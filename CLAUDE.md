@@ -5,9 +5,9 @@ control-plane half), for a small fleet of apps, on more than one cloud. Merged f
 (IAM) and **vozka** (deploy control plane), both of which were Cloudflare-only.
 
 **Status.** The merge has landed, the Cloudflare path works, and the multi-cloud seams are built: the
-platform ports, the `DeployDriver` seam and its target union, a Postgres/S3/Bun implementation set, a
-Zerops driver, and the auth proxy. **None of it has been run against a real Zerops account** — the
-generated artifacts validate against Zerops' published JSON schema and the driver is proven in
+platform ports, static provider bundles, a Postgres/S3/Bun implementation set, a Zerops provider, and
+the auth proxy. **None of it has been run against a real Zerops account** — the generated artifacts
+validate against Zerops' published JSON schema and the provider is proven in
 dry-run, which is not the same as a deploy that worked. Treat "Zerops support" as well-formed but
 unexercised until someone with an account says otherwise.
 
@@ -20,8 +20,9 @@ ADR-0009 extends ADR-0002).
 - **Bun** — runtime + workspaces. Libraries run TypeScript directly (`exports.bun` → `src`); no build step.
 - **TypeScript** strict, ESM (`"type": "module"`) everywhere.
 - **Cloudflare Workers** — Worker + Durable Objects + Containers + D1 + Queues + R2. **Zerops** is the second
-  target: `@fabrika/config` has a discriminated `target` arm for it and `@fabrika/engine` a driver (pure HTTP,
-  no runner — ADR-0003). Not yet exercised against a real account.
+  target. Each installation statically composes one provider bundle; the shared engine and control core
+  depend only on `@fabrika/provider-contract` (ADR-0011). Zerops uses its platform API directly and has no
+  runner (ADR-0003). Not yet exercised against a real account.
 - `oblaka-iac` (CF provisioning DSL), `@buzola/*` (SPA router), `jose` (token signing).
 
 ## Commands
@@ -46,32 +47,36 @@ Per-package dev/build commands live in each package's own CLAUDE.md.
 
 ## Project Structure
 
-Two halves that meet at the config surface (`@fabrika/config`).
+The runtime ports and provider contract are independent axes. A composition root binds one runtime
+implementation set to one provider bundle.
 
 ```
 packages/auth-core/   # @fabrika/auth-core — pure kernel: action matcher, permits(), token build/parse,
                       #   gate types, the IamRpc contract. No I/O, no deps.
-packages/auth/        # @fabrika/auth — the app-facing SDK (the only published package).
+packages/auth/        # @fabrika/auth — the app-facing SDK.
 packages/iam/         # @fabrika/iam — the IAM service: OIDC login, token minting, /admin API, D1.
 packages/iam-ui/      # @fabrika/iam-ui — the IAM admin SPA.
-packages/config/      # @fabrika/config — the app-authoring surface (defineApp + re-exports).
 packages/platform/    # @fabrika/platform — the runtime PORTS (SqlDatabase, BlobStore, JobQueue, DeployLocks,
                       #   AssetServer, WaitUntil) + the implementations that need nothing but a port.
 packages/platform-node/ # @fabrika/platform-node — those ports for a long-running Bun process
                       #   (Postgres, S3/MinIO, a jobs table, a directory). Second impl set behind the ports.
-packages/engine/      # @fabrika/engine — deploy engine + the `fabrika` CLI.        → CLAUDE.md
+packages/provider-contract/ # @fabrika/provider-contract — open runtime/control contracts + JSON envelopes.
+packages/provider-cloudflare/ # @fabrika/provider-cloudflare — Cloudflare authoring, deploy, control + CLI.
+packages/provider-zerops/ # @fabrika/provider-zerops — Zerops authoring, manifest, API, deploy, control + CLI.
+packages/engine/      # @fabrika/engine — provider-neutral deploy executor.          → CLAUDE.md
 packages/control/     # @fabrika/control — the control-plane Worker.                → CLAUDE.md
 packages/cli/         # @fabrika/cli — operator bring-up (`fabrika init <account>`). → CLAUDE.md
 packages/dashboard/   # @fabrika/dashboard — the control-plane SPA.                 → CLAUDE.md
 packages/runner/      # @fabrika/runner — the CF deploy runner + the runner executor worker. → CLAUDE.md
 packages/proxy/       # @fabrika/proxy — the auth ENFORCEMENT point: a Caddy `forward_auth` service.
                       #   Nothing reaches an app until its gates pass. → ADR-0007, ADR-0008, ADR-0010
-examples/app/         # a worked example app (authz vocabulary, gates, audit).
+examples/app/         # a worked Cloudflare app (authz vocabulary, gates, audit).
+examples/zerops-app/  # a worked Zerops app and static manifest build.
 ```
 
-`@fabrika/config` is the single import an app authors from — it bundles `defineApp` with every oblaka
-resource primitive and the authz declaration types, so a `fabrika.config.ts` never imports
-`oblaka-iac` or `@fabrika/auth-core` directly.
+An app imports `defineApp` and provider-owned resource types from its selected provider package.
+Cloudflare configs import `@fabrika/provider-cloudflare`; Zerops configs import
+`@fabrika/provider-zerops`. There is no shared `@fabrika/config` package or closed provider union.
 
 ## Code Conventions
 
@@ -89,7 +94,7 @@ resource primitive and the authz declaration types, so a `fabrika.config.ts` nev
   change and commit the result. Never hand-edit it.
 - **`oblaka-iac` resolves from npm, pinned to `^0.0.18`.** fabrika + oblaka are co-versioned — bump the
   pin deliberately, in every package plus the runner image's `docker/package.json`.
-- **`config`, `engine`, `control`, `runner` relax exactly two strict flags**
+- **`provider-cloudflare`, `control`, and `runner` relax exactly two strict flags**
   (`noUncheckedIndexedAccess`, `noPropertyAccessFromIndexSignature`) ONLY to tolerate oblaka's raw-TS
   source. Keep our own code strict; never widen the relaxation and never work around oblaka with a
   cast — ask first.
@@ -103,7 +108,7 @@ resource primitive and the authz declaration types, so a `fabrika.config.ts` nev
 
 ## Module-Specific Context
 
-- `packages/engine/CLAUDE.md` — the deploy engine, the driver seam, the target union, the plan, the CLI.
+- `packages/engine/CLAUDE.md` — the provider-neutral executor and runtime provider contract.
 - `packages/control/CLAUDE.md` — the control plane: API/ACL, vault, secret resolution, run lifecycle, webhook, D1.
 - `packages/runner/CLAUDE.md` — the container image, the Worker↔container protocol, the executor worker.
 - `packages/dashboard/CLAUDE.md` — the SPA: routes, API client, DTOs, buzola codegen.
