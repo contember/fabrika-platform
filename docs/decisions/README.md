@@ -24,6 +24,11 @@ ADR-0013 refines the application runtime boundary from ADR-0012. The package roo
 is runtime-neutral; Cloudflare and Bun lifecycle APIs use explicit subpath
 entrypoints.
 
+ADR-0014 extends the registry placement decision in ADR-0006 through the static
+provider boundary from ADR-0011. It makes shared placement, resource ownership,
+and its failure boundaries explicit without adding Zerops presets to the neutral
+contract.
+
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
@@ -41,3 +46,4 @@ entrypoints.
 - [0011](0011-static-provider-bundles.md) — Compose one static provider bundle per installation — accepted (2026-07-29)
 - [0012](0012-fabrika-app-runtime.md) — Absorb the Trasa server framework as `@fabrika/app` — accepted (2026-07-29)
 - [0013](0013-explicit-runtime-adapter-entrypoints.md) — Expose runtime adapters through explicit package entrypoints — accepted (2026-07-29)
+- [0014](0014-provider-owned-deployment-namespaces.md) — Model deployment namespaces as provider-owned placement boundaries — accepted (2026-07-29)

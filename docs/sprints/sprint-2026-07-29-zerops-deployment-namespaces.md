@@ -241,6 +241,9 @@ Zerops concepts into the neutral control core.
 
 ## Decisions
 
+The durable rationale and binding ownership rules are ratified by
+[ADR-0014](../decisions/0014-provider-owned-deployment-namespaces.md).
+
 - One deployment namespace is one provider-owned placement boundary. On Zerops,
   it maps one-to-one to a project and owns exactly one proxy.
 - The `platform` project is not an app namespace. Global IAM, control, their
@@ -272,3 +275,6 @@ Zerops concepts into the neutral control core.
 
 - 2026-07-29 — User requested opt-in Zerops namespaces with cheap, mid, and full
   isolation, and explicitly included shared PostgreSQL in sprint scope.
+- 2026-07-29 — WU1 ratified namespace ownership, isolation presets, shared
+  PostgreSQL semantics, and migration restrictions →
+  [ADR-0014](../decisions/0014-provider-owned-deployment-namespaces.md).
