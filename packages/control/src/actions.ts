@@ -25,6 +25,8 @@ export const ACTIONS = {
 	DEPLOY_READ: 'deploy.read',
 	/** Manage the app registry (apps + app_envs CRUD, onboarding). Scoped by app (global to create). */
 	APP_MANAGE: 'app.manage',
+	/** Manage provider-owned deployment namespaces and their lifecycle. Global because namespaces may span apps. */
+	NAMESPACE_MANAGE: 'namespace.manage',
 	/**
 	 * Manage SECRET VALUES + their references. Gates the app_secrets reference CRUD (scoped by app) AND
 	 * writing/rotating/deleting the encrypted per-app/app-env VALUES in the vault. The value is

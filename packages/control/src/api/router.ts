@@ -13,6 +13,7 @@ import { error } from '../http'
 import { appScope, type Authenticator, authorize, envScope } from '../iam'
 import type { RepoSource } from '../repo-source'
 import type { Vault } from '../vault'
+import { adoptNamespace, createNamespace, getNamespace, listNamespaces, type NamespaceContext, reconcileNamespace } from './namespaces'
 import {
 	createApp,
 	deleteApp,
@@ -96,6 +97,12 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 			return authorized.response
 		}
 		return { db: deps.db, queue: deps.queue, logs: deps.logs, cancel: deps.cancelRun, request, url, authorized }
+	}
+	const namespaceCtx = (authorized: Awaited<ReturnType<typeof authorize>>): NamespaceContext | Response => {
+		if (!authorized.ok) {
+			return authorized.response
+		}
+		return { db: deps.db, provider: deps.provider, request, authorized }
 	}
 	// Build a vault context (constructs the Vault via the factory; a missing/invalid master key is a
 	// clean 500 here, isolated to vault routes). Returns the error/Response otherwise.
@@ -199,6 +206,28 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 			if (method === 'PUT' || method === 'PATCH') return updateApp(c, id)
 			if (method === 'DELETE') return deleteApp(c, id)
 			return methodNotAllowed()
+		}
+
+		// ── Deployment namespaces (namespace.manage, global) ───────────────────
+		case 'namespaces': {
+			const a = await authorize(deps.iam, request, ACTIONS.NAMESPACE_MANAGE)
+			const c = namespaceCtx(a)
+			if (c instanceof Response) return c
+			if (id === undefined) {
+				if (method === 'GET') return listNamespaces(c)
+				if (method === 'POST') return createNamespace(c)
+				return methodNotAllowed()
+			}
+			if (sub === undefined) {
+				return method === 'GET' ? getNamespace(c, id) : methodNotAllowed()
+			}
+			if (sub === 'adopt') {
+				return method === 'POST' ? adoptNamespace(c, id) : methodNotAllowed()
+			}
+			if (sub === 'reconcile') {
+				return method === 'POST' ? reconcileNamespace(c, id) : methodNotAllowed()
+			}
+			return error(404, 'not found')
 		}
 
 		// ── Runs (deploy.read to read; deploy.trigger to deploy) ────────────────

@@ -124,6 +124,7 @@ const schema: AppSchema = {
 		{ action: ACTIONS.DEPLOY_TRIGGER, description: 'Trigger a deploy run' },
 		{ action: ACTIONS.DEPLOY_READ, description: 'Read deploy runs + their logs' },
 		{ action: ACTIONS.APP_MANAGE, description: 'Manage the app registry (apps + app_envs)' },
+		{ action: ACTIONS.NAMESPACE_MANAGE, description: 'Manage deployment namespaces' },
 		{ action: ACTIONS.SECRET_MANAGE, description: 'Manage secret values + their references' },
 	],
 	roles: {

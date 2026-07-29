@@ -7,12 +7,13 @@
 // a ref, never a raw value. fabrika is single-account, so there is no `accounts` resource: the CF
 // account/token + propustka coords are fabrika's own Worker config (src/env.ts).
 
-import type { ControlProvider, JsonValue, ProviderApp, ProviderEnvelope, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
+import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
 import type { AppEnvRow, AppRow, AppSecretRow, AppVarRow, Db } from '../db'
 import { error, json, readJson } from '../http'
 import type { Authorized } from '../iam'
 import { arrayField, booleanField, nullableStringField, numberField, prop, stringField } from '../json'
 import { normalizeRepoUrl, type RepoSource } from '../repo-source'
+import { envelopeField, parseStoredEnvelope } from './provider-envelope'
 
 /** Context every registry handler receives. */
 export interface RegistryContext {
@@ -55,34 +56,6 @@ function toAppEnvDto(row: AppEnvRow): unknown {
 	}
 }
 
-const isJsonValue = (value: unknown): value is JsonValue => {
-	if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
-		return true
-	}
-	if (Array.isArray(value)) {
-		return value.every(isJsonValue)
-	}
-	return typeof value === 'object' && Object.values(value).every(isJsonValue)
-}
-
-function envelopeField(body: unknown, name: string): ProviderEnvelope | Response {
-	const raw = prop(body, name)
-	const provider = stringField(raw, 'provider')
-	const version = numberField(raw, 'version')
-	const payload = prop(raw, 'payload')
-	if (
-		provider === undefined
-		|| version === undefined
-		|| !Number.isInteger(version)
-		|| version < 1
-		|| payload === undefined
-		|| !isJsonValue(payload)
-	) {
-		return error(400, `${name} must be a versioned provider envelope`)
-	}
-	return { provider, version, payload }
-}
-
 const toProviderApp = (row: AppRow): ProviderApp => ({
 	id: row.id,
 	source: {
@@ -108,6 +81,7 @@ function normalizeRegistration(
 			|| registration.environment.env !== environment.env
 			|| registration.environment.target.provider !== provider.id
 			|| registration.environment.artifact.provider !== provider.id
+			|| !sameNamespaceCoordinates(registration.environment.namespace, environment.namespace, provider.id)
 		) {
 			return error(400, 'provider returned a registration for different coordinates')
 		}
@@ -117,12 +91,27 @@ function normalizeRegistration(
 	}
 }
 
+function sameNamespaceCoordinates(
+	actual: ProviderDeploymentNamespace | undefined,
+	expected: ProviderDeploymentNamespace | undefined,
+	providerId: string,
+): boolean {
+	if (actual === undefined || expected === undefined) {
+		return actual === expected
+	}
+	return actual.id === expected.id
+		&& actual.env === expected.env
+		&& actual.exclusiveAppId === expected.exclusiveAppId
+		&& actual.target.provider === providerId
+}
+
 function registrationEnvironment(
 	body: unknown,
 	provider: ControlProvider,
 	app: ProviderApp,
 	env: string,
 	domain: string | null,
+	namespace?: ProviderDeploymentNamespace,
 ): ProviderRegistration | Response {
 	const target = envelopeField(body, 'target')
 	if (target instanceof Response) return target
@@ -132,9 +121,53 @@ function registrationEnvironment(
 		appId: app.id,
 		env,
 		...(domain === null ? {} : { domain }),
+		...(namespace === undefined ? {} : { namespace }),
 		target,
 		artifact,
 	})
+}
+
+async function resolveRegistrationNamespace(
+	c: RegistryContext,
+	body: unknown,
+	appId: string,
+	env: string,
+	existing: AppEnvRow | null,
+): Promise<ProviderDeploymentNamespace | undefined | Response> {
+	const rawNamespaceId = prop(body, 'namespaceId')
+	const parsedNamespaceId = nullableStringField(body, 'namespaceId')
+	if (rawNamespaceId !== undefined && (parsedNamespaceId === undefined || parsedNamespaceId === '')) {
+		return error(400, 'namespaceId must be a non-empty string or null')
+	}
+	const namespaceId = rawNamespaceId === undefined ? existing?.namespace_id ?? null : parsedNamespaceId ?? null
+	if (c.provider.namespaces === undefined) {
+		return namespaceId === null ? undefined : error(409, `provider ${c.provider.id} does not support deployment namespaces`)
+	}
+	if (namespaceId === null) {
+		return error(400, 'namespaceId is required by this provider')
+	}
+	const row = await c.db.getDeploymentNamespace(namespaceId)
+	if (row === null) {
+		return error(404, 'deployment namespace not found')
+	}
+	if (row.provider !== c.provider.id) {
+		return error(409, `deployment namespace belongs to provider ${row.provider}`)
+	}
+	if (row.env !== env) {
+		return error(409, `deployment namespace belongs to environment ${row.env}`)
+	}
+	if (row.exclusive_app_id !== null && row.exclusive_app_id !== appId) {
+		return error(409, `deployment namespace is exclusive to app ${row.exclusive_app_id}`)
+	}
+	if (existing?.namespace_id !== namespaceId && row.state !== 'ready') {
+		return error(409, `deployment namespace is ${row.state}`)
+	}
+	return {
+		id: row.id,
+		env: row.env,
+		...(row.exclusive_app_id === null ? {} : { exclusiveAppId: row.exclusive_app_id }),
+		target: parseStoredEnvelope(row.provider_target_json, `target for namespace ${row.id}`),
+	}
 }
 function toAppSecretDto(row: AppSecretRow): unknown {
 	// value_ref IS exposed (it's a reference, not the value) — the dashboard needs to show which ref a
@@ -261,15 +294,21 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 	const body = await readJson(c.request)
 	const domain = nullableStringField(body, 'domain') ?? null
 	const triggerRef = nullableStringField(body, 'triggerRef') ?? null
-	const registration = registrationEnvironment(body, c.provider, toProviderApp(app), env, domain)
-	if (registration instanceof Response) return registration
 	const existing = await c.db.getAppEnv(appId, env)
+	const namespace = await resolveRegistrationNamespace(c, body, appId, env, existing)
+	if (namespace instanceof Response) return namespace
+	const nextNamespaceId = namespace?.id ?? null
+	if (existing?.namespace_id !== nextNamespaceId && await c.db.hasSuccessfulRun(appId, env)) {
+		return error(409, 'deployment namespace cannot change after a successful deploy')
+	}
+	const registration = registrationEnvironment(body, c.provider, toProviderApp(app), env, domain, namespace)
+	if (registration instanceof Response) return registration
 	const row = await c.db.upsertAppEnv({
 		appId,
 		env,
 		domain: registration.environment.domain ?? null,
 		triggerRef,
-		namespaceId: existing?.namespace_id ?? null,
+		namespaceId: registration.environment.namespace?.id ?? null,
 		provider: c.provider.id,
 		providerTargetJson: JSON.stringify(registration.environment.target),
 		providerArtifactJson: JSON.stringify(registration.environment.artifact),
@@ -278,7 +317,7 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 		action: 'app.env.upsert',
 		resourceType: 'app_env',
 		resourceId: `${appId}/${env}`,
-		metadata: { triggerRef },
+		metadata: { triggerRef, namespaceId: row.namespace_id, previousNamespaceId: existing?.namespace_id ?? null },
 	})
 	return json(toAppEnvDto(row))
 }
@@ -423,7 +462,9 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 				: { githubInstallationId: installation.githubInstallationId }),
 		},
 	}
-	const registration = registrationEnvironment(body, c.provider, providerApp, env, domain)
+	const namespace = await resolveRegistrationNamespace(c, body, id, env, null)
+	if (namespace instanceof Response) return namespace
+	const registration = registrationEnvironment(body, c.provider, providerApp, env, domain, namespace)
 	if (registration instanceof Response) return registration
 	const source = registration.app.source
 	const app = await c.db.createApp({
@@ -440,7 +481,7 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 		env: registration.environment.env,
 		domain: registration.environment.domain ?? null,
 		triggerRef,
-		namespaceId: null,
+		namespaceId: registration.environment.namespace?.id ?? null,
 		provider: c.provider.id,
 		providerTargetJson: JSON.stringify(registration.environment.target),
 		providerArtifactJson: JSON.stringify(registration.environment.artifact),
@@ -449,7 +490,7 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 		action: 'app.create',
 		resourceType: 'app',
 		resourceId: id,
-		metadata: { repoUrl, env, onboarding: true },
+		metadata: { repoUrl, env, namespaceId: appEnv.namespace_id, onboarding: true },
 	})
 	return json({ app: toAppDto(app), env: toAppEnvDto(appEnv) }, { status: 201 })
 }
