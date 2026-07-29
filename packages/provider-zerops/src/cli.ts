@@ -2,7 +2,7 @@
 import { resolve } from 'node:path'
 import { defineApp } from './authoring'
 import { parseZeropsCliArgs } from './cli-args'
-import { compileFabrikaManifest } from './manifest'
+import { compileFabrikaManifest, manifestServiceHostnames } from './manifest'
 import type { ZeropsAppConfig } from './types'
 
 const USAGE = `fabrika-zerops — Zerops provider tools
@@ -53,7 +53,7 @@ const main = async (): Promise<void> => {
 	const manifest = compileFabrikaManifest(config, args.env)
 	const output = resolve(process.cwd(), args.output)
 	await Bun.write(output, `${JSON.stringify(manifest, null, '\t')}\n`)
-	console.info(`wrote ${output} (${manifest.target.serviceHostnames.length} service(s))`)
+	console.info(`wrote ${output} (${manifestServiceHostnames(manifest).length} service(s))`)
 }
 
 await main().catch((error: unknown) => {

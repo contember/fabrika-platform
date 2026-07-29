@@ -2,11 +2,12 @@ import type {
 	ControlProvider,
 	JsonValue,
 	ProviderApp,
+	ProviderDeploymentNamespace,
 	ProviderEnvelope,
 	ProviderEnvironment,
 	ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
-import { type AppEnvRow, type AppRow, type Db, type RunRow } from './db'
+import { type AppEnvRow, type AppRow, type Db, type DeploymentNamespaceRow, type RunRow } from './db'
 import type { SecretResolver } from './secret-resolver'
 
 export type RunOutcome = ProviderTerminalOutcome
@@ -78,13 +79,57 @@ const providerApp = (app: AppRow, run: RunRow): ProviderApp => ({
 })
 
 /** Convert the generic database row into the provider contract. */
-export const providerEnvironment = (row: AppEnvRow): ProviderEnvironment => ({
+const providerNamespace = (row: DeploymentNamespaceRow): ProviderDeploymentNamespace => ({
+	id: row.id,
+	env: row.env,
+	...(row.exclusive_app_id === null ? {} : { exclusiveAppId: row.exclusive_app_id }),
+	target: parseProviderEnvelope(row.provider_target_json, `target for namespace ${row.id}`),
+})
+
+export const providerEnvironment = (
+	row: AppEnvRow,
+	namespace?: ProviderDeploymentNamespace,
+): ProviderEnvironment => ({
 	appId: row.app_id,
 	env: row.env,
 	...(row.domain === null ? {} : { domain: row.domain }),
+	...(namespace === undefined ? {} : { namespace }),
 	target: parseProviderEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),
 	artifact: parseProviderEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
 })
+
+const assertNamespaceResourceClaims = async (
+	db: Db,
+	provider: ControlProvider,
+	registration: { app: ProviderApp; environment: ProviderEnvironment },
+): Promise<void> => {
+	const namespace = registration.environment.namespace
+	if (namespace === undefined) {
+		return
+	}
+	const capabilities = provider.namespaces
+	if (capabilities === undefined) {
+		throw new Error(`provider "${provider.id}" cannot verify deployment namespace claims`)
+	}
+	const claims = await db.listNamespaceResourceClaims(namespace.id)
+	const byKey = new Map(claims.map((claim) => [claim.resource_key, claim]))
+	for (const key of capabilities.namespaceResourceClaims(namespace)) {
+		const claim = byKey.get(key)
+		if (claim === undefined || claim.owner_app_id !== null || claim.owner_env !== null) {
+			throw new Error(`deployment namespace resource claim "${key}" is missing or has another owner`)
+		}
+	}
+	for (const key of capabilities.registrationResourceClaims(registration)) {
+		const claim = byKey.get(key)
+		if (
+			claim === undefined
+			|| claim.owner_app_id !== registration.app.id
+			|| claim.owner_env !== registration.environment.env
+		) {
+			throw new Error(`application resource claim "${key}" is missing or has another owner`)
+		}
+	}
+}
 
 const resolveVars = async (db: Db, appId: string, env: string): Promise<Record<string, string>> => {
 	const vars: Record<string, string> = {}
@@ -147,11 +192,49 @@ export async function executeDeploy(
 				`configured provider "${deps.provider.id}" cannot deploy ${app.id}/${appEnv.env} owned by "${appEnv.provider}"`,
 			)
 		}
+		let namespace: ProviderDeploymentNamespace | undefined
+		if (appEnv.namespace_id !== null) {
+			const row = await deps.db.getDeploymentNamespace(appEnv.namespace_id)
+			if (row === null || row.provider !== deps.provider.id || row.env !== appEnv.env || row.state !== 'ready') {
+				throw new Error(`deployment namespace "${appEnv.namespace_id}" is missing, incompatible, or not ready`)
+			}
+			if (row.exclusive_app_id !== null && row.exclusive_app_id !== app.id) {
+				throw new Error(`deployment namespace "${row.id}" is exclusive to another app`)
+			}
+			namespace = providerNamespace(row)
+		}
+		const appInput = providerApp(app, run)
+		const environmentInput = providerEnvironment(appEnv, namespace)
+		if (
+			environmentInput.target.provider !== deps.provider.id
+			|| environmentInput.artifact.provider !== deps.provider.id
+			|| (environmentInput.namespace !== undefined && environmentInput.namespace.target.provider !== deps.provider.id)
+		) {
+			throw new Error('persisted deploy registration belongs to another provider')
+		}
+		const registration = deps.provider.normalizeRegistration({
+			app: appInput,
+			environment: environmentInput,
+		})
+		if (
+			registration.app.id !== app.id
+			|| registration.environment.appId !== app.id
+			|| registration.environment.env !== appEnv.env
+			|| registration.environment.target.provider !== deps.provider.id
+			|| registration.environment.artifact.provider !== deps.provider.id
+			|| registration.environment.namespace?.id !== environmentInput.namespace?.id
+			|| registration.environment.namespace?.env !== environmentInput.namespace?.env
+			|| registration.environment.namespace?.exclusiveAppId !== environmentInput.namespace?.exclusiveAppId
+			|| registration.environment.namespace?.target.provider !== environmentInput.namespace?.target.provider
+		) {
+			throw new Error('provider returned a deploy registration for different coordinates')
+		}
+		await assertNamespaceResourceClaims(deps.db, deps.provider, registration)
 
 		const outcome = await deps.provider.deploy({
 			runId: run.id,
-			app: providerApp(app, run),
-			environment: providerEnvironment(appEnv),
+			app: registration.app,
+			environment: registration.environment,
 			secrets: await resolveSecrets(deps, app.id, appEnv.env),
 			vars: await resolveVars(deps.db, app.id, appEnv.env),
 			dryRun: message.dryRun === true,

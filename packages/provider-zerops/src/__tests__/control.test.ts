@@ -11,7 +11,8 @@ import type { ZeropsApi, ZeropsAppVersionStatus } from '../api'
 import { zeropsTargetCodec } from '../codec'
 import { createZeropsControlProvider, zeropsStoredTargetCodec } from '../control'
 import { compileFabrikaManifest, zeropsArtifactCodec } from '../manifest'
-import { zeropsNamespaceTargetCodec } from '../namespace'
+import { zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
+import { zeropsSharedServiceHostname } from '../service-names'
 import type { ZeropsAppConfig } from '../types'
 
 interface Recorded {
@@ -193,9 +194,160 @@ describe('Zerops ControlProvider registration', () => {
 			ready: false,
 		})
 	})
+
+	test('derives reserved and app-owned claims from the canonical structured import', () => {
+		const control = createZeropsControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			namespaces: {
+				clientId: 'client-1',
+				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				iamUrl: 'https://iam.example.test',
+				iamKey: 'proxy-key',
+			},
+		})
+		if (control.namespaces === undefined) throw new Error('expected namespace capabilities')
+		const namespace = control.namespaces.normalize({
+			id: 'apps-prod',
+			env: 'prod',
+			target: {
+				provider: 'zerops',
+				version: zeropsNamespaceTargetCodec.version,
+				payload: zeropsNamespaceTargetCodec.encode(zeropsNamespacePreset({
+					preset: 'cheap',
+					env: 'prod',
+					projectName: 'apps-prod',
+					proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				})),
+			},
+		})
+		const namespacedConfig: ZeropsAppConfig = {
+			id: 'notes',
+			target: {
+				platform: 'zerops',
+				services: () => [
+					{ hostname: zeropsSharedServiceHostname('notes', 'api'), type: 'alpine/bun@1.3' },
+					{ hostname: zeropsSharedServiceHostname('notes', 'db'), type: 'postgresql:single@18' },
+				],
+				deployService: 'notesapi',
+				proxy: { upstream: 'notesapi:3000', gates: { rules: [] } },
+			},
+		}
+		const registration = control.normalizeRegistration({
+			app,
+			environment: environment({
+				namespace,
+				artifact: {
+					provider: 'zerops',
+					version: zeropsArtifactCodec.version,
+					payload: zeropsArtifactCodec.encode(compileFabrikaManifest(namespacedConfig, 'prod')),
+				},
+			}),
+		})
+
+		expect(control.namespaces.namespaceResourceClaims(namespace)).toEqual(['service:proxy', 'service:postgres'])
+		expect(control.namespaces.registrationResourceClaims(registration)).toEqual(['service:notesapi', 'service:notesdb'])
+	})
+
+	test('rejects shared prefix, reserved service, and missing namespace resource requirements', () => {
+		const control = createZeropsControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			namespaces: {
+				clientId: 'client-1',
+				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				iamUrl: 'https://iam.example.test',
+				iamKey: 'proxy-key',
+			},
+		})
+		if (control.namespaces === undefined) throw new Error('expected namespace capabilities')
+		const namespace = control.namespaces.normalize({
+			id: 'apps-prod',
+			env: 'prod',
+			target: {
+				provider: 'zerops',
+				version: zeropsNamespaceTargetCodec.version,
+				payload: zeropsNamespaceTargetCodec.encode(zeropsNamespacePreset({
+					preset: 'mid',
+					env: 'prod',
+					projectName: 'apps-prod',
+					proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				})),
+			},
+		})
+		const claimsFor = (candidate: ZeropsAppConfig, selectedNamespace = namespace): readonly string[] => {
+			const registration = control.normalizeRegistration({
+				app,
+				environment: environment({
+					namespace: selectedNamespace,
+					artifact: {
+						provider: 'zerops',
+						version: zeropsArtifactCodec.version,
+						payload: zeropsArtifactCodec.encode(compileFabrikaManifest(candidate, 'prod')),
+					},
+				}),
+			})
+			return control.namespaces?.registrationResourceClaims(registration) ?? []
+		}
+		const target = (hostname: string): ZeropsAppConfig => ({
+			id: 'notes',
+			target: { platform: 'zerops', services: () => [{ hostname, type: 'alpine/bun@1.3' }] },
+		})
+
+		expect(() => claimsFor(target('otherapi'))).toThrow('app prefix')
+		const exclusive = { ...namespace, exclusiveAppId: 'notes' }
+		expect(() => claimsFor(target('proxy'), exclusive)).toThrow('reserved')
+		expect(() =>
+			claimsFor({
+				...target('notesapi'),
+				target: {
+					...target('notesapi').target,
+					namespaceResources: [{
+						resourceKey: 'service:postgres',
+						hostname: 'postgres',
+						connectionString: '${postgres_connectionString}',
+					}],
+				},
+			})
+		).toThrow('does not provide')
+		expect(claimsFor(target('api'), exclusive)).toEqual(['service:api'])
+	})
 })
 
 describe('Zerops ControlProvider lifecycle', () => {
+	test('rejects structured manifest drift before beforeDeploy or the Zerops API', async () => {
+		const manifest = compileFabrikaManifest(config, 'prod')
+		const service = manifest.target.importDocument.services[0]
+		if (service === undefined) throw new Error('expected a service')
+		const drifted = {
+			...manifest,
+			target: {
+				...manifest.target,
+				importDocument: { services: [{ ...service, override: false }] },
+			},
+		}
+		const control = createZeropsControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			beforeDeploy: async () => {
+				recorded.beforeDeploy.push('called')
+			},
+		})
+
+		await expect(control.deploy({
+			...deployInput(recorded),
+			environment: environment({
+				artifact: {
+					provider: 'zerops',
+					version: zeropsArtifactCodec.version,
+					payload: zeropsArtifactCodec.encode(drifted),
+				},
+			}),
+		})).rejects.toThrow('invariants')
+		expect(recorded.beforeDeploy).toEqual([])
+		expect(recorded.calls).toEqual([])
+	})
+
 	test('composes ephemeral credentials, runs beforeDeploy, and routes run events', async () => {
 		let observedRun: RuntimeProviderRun | undefined
 		const control = createZeropsControlProvider({

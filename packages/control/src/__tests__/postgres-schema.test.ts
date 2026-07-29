@@ -104,6 +104,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			'0004_provider_envelopes.sql',
 			'0005_deployment_namespaces.sql',
 			'0006_immutable_namespace_resource_claim_owners.sql',
+			'0007_namespace_resource_claim_owner_coordinates.sql',
 		])
 	})
 
@@ -326,6 +327,13 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 			exclusiveAppId: null,
 			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: { dock: 'eu' } }),
 		})
+		await db.createDeploymentNamespace({
+			id: 'other-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: { dock: 'other' } }),
+		})
 
 		await db.upsertAppEnvWithNamespaceResourceClaims(
 			{ ...providerEnvironment('alpha', 'prod'), namespaceId: 'apps-prod' },
@@ -341,6 +349,15 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 			['beta-worker', 'z-shared'],
 		)).rejects.toThrow('namespace resource claim owner is immutable')
 		expect(await db.getAppEnv('beta', 'prod')).toBeNull()
+		expect((await db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual([
+			'alpha-worker',
+			'z-shared',
+		])
+		await db.upsertAppEnvWithNamespaceResourceClaims(
+			{ ...providerEnvironment('alpha', 'prod'), namespaceId: 'other-prod' },
+			['alpha-worker'],
+		)
+		expect((await db.getAppEnv('alpha', 'prod'))?.namespace_id).toBe('other-prod')
 		expect((await db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual([
 			'alpha-worker',
 			'z-shared',

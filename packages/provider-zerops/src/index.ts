@@ -17,7 +17,7 @@ export type {
 	ZeropsServiceEnv,
 	ZeropsServiceStatus,
 } from './api'
-export { defineApp, useSharedPostgres } from './authoring'
+export { defineApp, useSharedPostgres, zeropsSharedServiceHostname, zeropsSharedServicePrefix } from './authoring'
 export { parseZeropsCliArgs } from './cli-args'
 export type { ZeropsCliArgs } from './cli-args'
 export { zeropsTargetCodec } from './codec'
@@ -35,8 +35,16 @@ export {
 export type { CompileInput, ZeropsImportDocument } from './compile'
 export { createZeropsControlProvider, zeropsStoredTargetCodec } from './control'
 export type { ZeropsBeforeDeploy, ZeropsBeforeDeployInput, ZeropsControlProviderOptions, ZeropsProviderExecutor, ZeropsStoredTarget } from './control'
-export { compileFabrikaManifest, FABRIKA_MANIFEST_VERSION, parseFabrikaManifest, zeropsArtifactCodec } from './manifest'
-export type { FabrikaManifestV1, ManifestExpectation } from './manifest'
+export {
+	compileFabrikaManifest,
+	FABRIKA_MANIFEST_VERSION,
+	manifestServiceHostnames,
+	parseFabrikaManifest,
+	renderFabrikaImportYaml,
+	ZEROPS_SERVICE_HOSTNAME_PATTERN,
+	zeropsArtifactCodec,
+} from './manifest'
+export type { FabrikaImportDocument, FabrikaManifest, ManifestExpectation } from './manifest'
 export {
 	compileZeropsNamespaceTopology,
 	createZeropsNamespaceCapabilities,

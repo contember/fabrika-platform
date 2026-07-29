@@ -13,13 +13,13 @@ import { createProvider, type ProviderDeploySession, type ProviderModule, type T
 import { ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsAppVersion, type ZeropsLogAccess } from './api'
 import { zeropsTargetCodec } from './codec'
 import { defaultZeropsCollaborators, type ZeropsCollaboratorFactory, type ZeropsCollaborators } from './collaborators'
-import { type FabrikaManifestV1, zeropsArtifactCodec } from './manifest'
+import { type FabrikaManifest, manifestServiceHostnames, renderFabrikaImportYaml, zeropsArtifactCodec } from './manifest'
 import { buildZeropsPlan, resolveDeployHostname, type ZeropsJobSpec, type ZeropsPlan } from './plan'
 import type { ZeropsRuntimeTarget } from './types'
 
 export const CANCELLED = 'deploy cancelled'
 
-type ZeropsRun = TypedProviderRun<ZeropsRuntimeTarget, FabrikaManifestV1>
+type ZeropsRun = TypedProviderRun<ZeropsRuntimeTarget, FabrikaManifest>
 
 /** How often `await-deploy` asks Zerops for the version's status. */
 const POLL_INTERVAL_MS = 3000
@@ -246,7 +246,7 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
  * A factory rather than a bundle because the Zerops client is authenticated with a token that lives on the
  * run's target, so it cannot be constructed once at module load the way Cloudflare's bundle is.
  */
-export type ZeropsProvider = ProviderModule<'zerops', ZeropsRuntimeTarget, FabrikaManifestV1>
+export type ZeropsProvider = ProviderModule<'zerops', ZeropsRuntimeTarget, FabrikaManifest>
 
 /** Construct an independently testable Zerops provider against one collaborator factory. */
 export const createZeropsProvider = (
@@ -263,9 +263,10 @@ export const createZeropsProvider = (
 			if (run.artifact.app.env !== run.env) {
 				throw new Error(`zerops: artifact environment drift: expected \`${run.env}\`, got \`${run.artifact.app.env}\``)
 			}
+			const hostnames = manifestServiceHostnames(run.artifact)
 			const compiled = {
-				yaml: interpolateManifest(run.artifact.target.importYaml, run.artifact.app.pipeline.vars, run.vars),
-				hostnames: run.artifact.target.serviceHostnames,
+				yaml: interpolateManifest(renderFabrikaImportYaml(run.artifact), run.artifact.app.pipeline.vars, run.vars),
+				hostnames,
 			}
 			const deployHostname = resolveDeployHostname(run.artifact)
 			const plan: ZeropsPlan = buildZeropsPlan(run.artifact, run.target, run.env)

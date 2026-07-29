@@ -5,6 +5,7 @@ import type {
 	ProviderEnvelope,
 	ProviderNamespaceCapabilities,
 	ProviderNamespaceMutationInput,
+	ProviderRegistration,
 } from '@fabrika/provider-contract'
 import {
 	ZEROPS_ACTIVE,
@@ -17,6 +18,8 @@ import {
 } from './api'
 import { defaultSleep, type Sleeper } from './collaborators'
 import { compileImportYaml, compileProvisioningYaml } from './compile'
+import { manifestServiceHostnames, parseFabrikaManifest, zeropsArtifactCodec } from './manifest'
+import { zeropsSharedServicePrefix } from './service-names'
 import type { ZeropsServiceSpec, ZeropsSourceTarget } from './types'
 
 export const ZEROPS_NAMESPACE_PROXY_HOSTNAME = 'proxy'
@@ -249,6 +252,57 @@ const decodeEnvelope = (value: ProviderEnvelope): ZeropsNamespaceTarget => {
 		throw new Error(`namespace schema version ${value.version} is not supported by provider "zerops"`)
 	}
 	return zeropsNamespaceTargetCodec.decode(value.payload)
+}
+
+const namespaceResourceClaims = (namespace: ProviderDeploymentNamespace): string[] => {
+	const target = decodeEnvelope(namespace.target)
+	return [
+		`service:${ZEROPS_NAMESPACE_PROXY_HOSTNAME}`,
+		...(target.postgres === undefined ? [] : [`service:${ZEROPS_NAMESPACE_POSTGRES_HOSTNAME}`]),
+	]
+}
+
+const registrationResourceClaims = (registration: ProviderRegistration): string[] => {
+	const namespace = registration.environment.namespace
+	if (namespace === undefined) {
+		throw new Error('Zerops registration requires a deployment namespace')
+	}
+	if (
+		namespace.exclusiveAppId !== undefined
+		&& namespace.exclusiveAppId !== registration.app.id
+	) {
+		throw new Error(`Zerops namespace is exclusive to app \`${namespace.exclusiveAppId}\``)
+	}
+	const artifactEnvelope = registration.environment.artifact
+	if (artifactEnvelope.provider !== 'zerops' || artifactEnvelope.version !== zeropsArtifactCodec.version) {
+		throw new Error('Zerops registration artifact envelope is not supported')
+	}
+	const manifest = parseFabrikaManifest(zeropsArtifactCodec.decode(artifactEnvelope.payload), {
+		appId: registration.app.id,
+		env: registration.environment.env,
+	})
+	const namespaceClaims = new Set(namespaceResourceClaims(namespace))
+	for (const requirement of manifest.target.namespaceResources ?? []) {
+		if (!namespaceClaims.has(requirement.resourceKey)) {
+			throw new Error(`Zerops namespace does not provide required resource \`${requirement.resourceKey}\``)
+		}
+	}
+	const hostnames = manifestServiceHostnames(manifest)
+	for (const hostname of hostnames) {
+		const key = `service:${hostname}`
+		if (namespaceClaims.has(key)) {
+			throw new Error(`Zerops service hostname \`${hostname}\` is reserved by the namespace`)
+		}
+	}
+	if (namespace.exclusiveAppId === undefined) {
+		const prefix = zeropsSharedServicePrefix(registration.app.id)
+		for (const hostname of hostnames) {
+			if (!hostname.startsWith(prefix) || hostname.length === prefix.length) {
+				throw new Error(`Zerops shared namespace service \`${hostname}\` must use app prefix \`${prefix}\``)
+			}
+		}
+	}
+	return hostnames.map((hostname) => `service:${hostname}`).sort()
 }
 
 const defaultPostgres = (env: string): ZeropsNamespacePostgres => env === 'prod' ? { type: 'postgresql:ha@18' } : { type: 'postgresql:single@18' }
@@ -719,6 +773,8 @@ export const createZeropsNamespaceCapabilities = (options: ZeropsNamespaceOption
 	required('iamKey', options.iamKey)
 	return {
 		normalize: (namespace) => normalizedNamespace(namespace, options),
+		namespaceResourceClaims,
+		registrationResourceClaims,
 		provision: (input) => mutateNamespace(input, options, 'provision'),
 		reconcile: (input) => mutateNamespace(input, options, 'reconcile'),
 	}

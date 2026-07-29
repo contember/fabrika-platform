@@ -145,6 +145,8 @@ describe('ControlProvider', () => {
 					...namespace,
 					target: providerEnvelope('harbor', `${namespace.target.payload}`.toLowerCase()),
 				}),
+				namespaceResourceClaims: () => ['dock:control'],
+				registrationResourceClaims: (registration) => [`dock:${registration.app.id}`],
 				provision: async (input) => {
 					const namespace = {
 						...input.namespace,
@@ -178,6 +180,11 @@ describe('ControlProvider', () => {
 		})
 
 		expect(normalized.target.payload).toBe('eu-west')
+		expect(harbor.namespaces.namespaceResourceClaims(normalized)).toEqual(['dock:control'])
+		expect(harbor.namespaces.registrationResourceClaims(normalizeHarborRegistration({
+			app: deployInput('harbor').app,
+			environment: { ...environment('harbor'), namespace: normalized },
+		}))).toEqual(['dock:api'])
 		expect(provisioned.target.payload).toBe('dock-7')
 		expect(checkpoints).toEqual([provisioned])
 	})

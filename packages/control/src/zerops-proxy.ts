@@ -1,7 +1,7 @@
 import type { AppGates } from '@fabrika/auth'
 import type { ProviderCodec, ProviderEnvelope } from '@fabrika/provider-contract'
 import {
-	type FabrikaManifestV1,
+	type FabrikaManifest,
 	parseFabrikaManifest,
 	ZEROPS_ACTIVE,
 	ZEROPS_TERMINAL,
@@ -54,7 +54,7 @@ export async function compileProjectProxyManifest(db: Db, projectId: string): Pr
 			parseProviderEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
 			zeropsArtifactCodec,
 		)
-		const manifest: FabrikaManifestV1 = parseFabrikaManifest(artifact, { appId: row.app_id, env: row.env })
+		const manifest: FabrikaManifest = parseFabrikaManifest(artifact, { appId: row.app_id, env: row.env })
 		const proxy = manifest.target.proxy
 		if (proxy === undefined) {
 			continue

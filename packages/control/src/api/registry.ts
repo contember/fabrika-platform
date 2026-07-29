@@ -8,7 +8,7 @@
 // account/token + propustka coords are fabrika's own Worker config (src/env.ts).
 
 import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
-import type { AppEnvRow, AppRow, AppSecretRow, AppVarRow, Db } from '../db'
+import { type AppEnvRow, type AppRow, type AppSecretRow, type AppVarRow, type Db, NamespaceResourceClaimConflictError } from '../db'
 import { error, json, readJson } from '../http'
 import type { Authorized } from '../iam'
 import { arrayField, booleanField, nullableStringField, numberField, prop, stringField } from '../json'
@@ -125,6 +125,24 @@ function registrationEnvironment(
 		target,
 		artifact,
 	})
+}
+
+function registrationResourceClaims(
+	provider: ControlProvider,
+	registration: ProviderRegistration,
+): readonly string[] | Response {
+	if (registration.environment.namespace === undefined) {
+		return []
+	}
+	const capabilities = provider.namespaces
+	if (capabilities === undefined) {
+		return error(409, `provider ${provider.id} does not support deployment namespaces`)
+	}
+	try {
+		return capabilities.registrationResourceClaims(registration)
+	} catch (cause) {
+		return error(400, cause instanceof Error ? cause.message : 'invalid namespace resource claims')
+	}
 }
 
 async function resolveRegistrationNamespace(
@@ -303,7 +321,9 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 	}
 	const registration = registrationEnvironment(body, c.provider, toProviderApp(app), env, domain, namespace)
 	if (registration instanceof Response) return registration
-	const row = await c.db.upsertAppEnv({
+	const resourceClaims = registrationResourceClaims(c.provider, registration)
+	if (resourceClaims instanceof Response) return resourceClaims
+	const input = {
 		appId,
 		env,
 		domain: registration.environment.domain ?? null,
@@ -312,7 +332,18 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 		provider: c.provider.id,
 		providerTargetJson: JSON.stringify(registration.environment.target),
 		providerArtifactJson: JSON.stringify(registration.environment.artifact),
-	})
+	}
+	let row: AppEnvRow
+	try {
+		row = registration.environment.namespace === undefined
+			? await c.db.upsertAppEnv(input)
+			: (await c.db.upsertAppEnvWithNamespaceResourceClaims(input, resourceClaims)).appEnv
+	} catch (cause) {
+		if (cause instanceof NamespaceResourceClaimConflictError) {
+			return error(409, cause.message)
+		}
+		throw cause
+	}
 	await c.authorized.auth.audit({
 		action: 'app.env.upsert',
 		resourceType: 'app_env',
@@ -466,8 +497,10 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 	if (namespace instanceof Response) return namespace
 	const registration = registrationEnvironment(body, c.provider, providerApp, env, domain, namespace)
 	if (registration instanceof Response) return registration
+	const resourceClaims = registrationResourceClaims(c.provider, registration)
+	if (resourceClaims instanceof Response) return resourceClaims
 	const source = registration.app.source
-	const app = await c.db.createApp({
+	const appInput = {
 		id: registration.app.id,
 		repoUrl: source.repoUrl,
 		defaultBranch: source.ref,
@@ -475,8 +508,8 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 		buildCmd: source.buildCommand ?? null,
 		configPath: source.configPath ?? null,
 		githubInstallationId: source.githubInstallationId ?? null,
-	})
-	const appEnv = await c.db.upsertAppEnv({
+	}
+	const environmentInput = {
 		appId: registration.app.id,
 		env: registration.environment.env,
 		domain: registration.environment.domain ?? null,
@@ -485,7 +518,24 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 		provider: c.provider.id,
 		providerTargetJson: JSON.stringify(registration.environment.target),
 		providerArtifactJson: JSON.stringify(registration.environment.artifact),
-	})
+	}
+	let app: AppRow
+	let appEnv: AppEnvRow
+	try {
+		if (registration.environment.namespace === undefined) {
+			app = await c.db.createApp(appInput)
+			appEnv = await c.db.upsertAppEnv(environmentInput)
+		} else {
+			const created = await c.db.createAppWithEnvironmentAndNamespaceResourceClaims(appInput, environmentInput, resourceClaims)
+			app = created.app
+			appEnv = created.appEnv
+		}
+	} catch (cause) {
+		if (cause instanceof NamespaceResourceClaimConflictError) {
+			return error(409, cause.message)
+		}
+		throw cause
+	}
 	await c.authorized.auth.audit({
 		action: 'app.create',
 		resourceType: 'app',

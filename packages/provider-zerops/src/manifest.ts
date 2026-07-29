@@ -1,11 +1,17 @@
 import type { AppActionDef, AppGates, AppSchema, AppScopeDef, GateRule, RoleDef } from '@fabrika/auth-core'
 import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
-import { compileImportYaml } from './compile'
+import { compileImport, ENV_ISOLATION, renderYaml } from './compile'
 import type { ZeropsAppConfig, ZeropsNamespaceResourceRequirement, ZeropsProxySpec } from './types'
 
-export const FABRIKA_MANIFEST_VERSION = 1
+export const FABRIKA_MANIFEST_VERSION = 2
+export const ZEROPS_SERVICE_HOSTNAME_PATTERN = /^[a-z0-9]{1,25}$/
 
-export interface FabrikaManifestV1 {
+export interface FabrikaImportDocument {
+	readonly project?: { readonly [key: string]: JsonValue }
+	readonly services: ReadonlyArray<{ readonly [key: string]: JsonValue }>
+}
+
+export interface FabrikaManifest {
 	manifestVersion: typeof FABRIKA_MANIFEST_VERSION
 	app: {
 		id: string
@@ -18,8 +24,8 @@ export interface FabrikaManifestV1 {
 	}
 	target: {
 		platform: 'zerops'
-		importYaml: string
-		serviceHostnames: string[]
+		/** The canonical document used both for resource claims and the Zerops API payload. */
+		importDocument: FabrikaImportDocument
 		deployService: string
 		zeropsSetup?: string
 		proxy?: ZeropsProxySpec
@@ -33,6 +39,33 @@ export interface ManifestExpectation {
 }
 
 const prop = (value: unknown, key: string): unknown => typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined
+
+const jsonValue = (value: unknown): JsonValue => {
+	if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+		return value
+	}
+	if (Array.isArray(value)) {
+		return value.map(jsonValue)
+	}
+	if (typeof value === 'object') {
+		const result: { [key: string]: JsonValue } = {}
+		for (const [key, entry] of Object.entries(value)) {
+			if (entry !== undefined) {
+				result[key] = jsonValue(entry)
+			}
+		}
+		return result
+	}
+	throw new Error(`Fabrika manifest contains a non-JSON ${typeof value} value`)
+}
+
+const jsonObject = (value: unknown, label: string): { [key: string]: JsonValue } => {
+	const parsed = jsonValue(value)
+	if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+		throw new Error(`invalid fabrika manifest ${label}`)
+	}
+	return parsed
+}
 
 const string = (value: unknown, key: string): string | undefined => {
 	const candidate = prop(value, key)
@@ -171,9 +204,65 @@ function parseProxy(value: unknown): ZeropsProxySpec | null {
 	return upstream === undefined || gates === null ? null : { upstream, gates }
 }
 
-const hasForbiddenImportField = (yaml: string): boolean => /(^|\n)\s*(envSecrets|dotEnvSecrets|envVariables)\s*:/.test(yaml)
+const parseImportDocument = (value: unknown): FabrikaImportDocument => {
+	if (value === undefined) {
+		throw new Error('invalid fabrika manifest Zerops import document')
+	}
+	const raw = jsonObject(value, 'Zerops import document')
+	const unknownKeys = Object.keys(raw).filter((key) => key !== 'project' && key !== 'services')
+	if (unknownKeys.length > 0) {
+		throw new Error(`invalid fabrika manifest Zerops import document field \`${unknownKeys[0]}\``)
+	}
+	const rawServices = raw['services']
+	if (!Array.isArray(rawServices) || rawServices.length === 0) {
+		throw new Error('invalid fabrika manifest Zerops import services')
+	}
+	const services: Array<{ readonly [key: string]: JsonValue }> = []
+	const hostnames = new Set<string>()
+	for (const [index, rawService] of rawServices.entries()) {
+		const service = jsonObject(rawService, `Zerops import service ${index}`)
+		const hostname = service['hostname']
+		if (typeof hostname !== 'string' || !ZEROPS_SERVICE_HOSTNAME_PATTERN.test(hostname)) {
+			throw new Error(`invalid fabrika manifest Zerops service hostname at index ${index}`)
+		}
+		if (hostnames.has(hostname)) {
+			throw new Error(`invalid fabrika manifest: duplicate Zerops service hostname \`${hostname}\``)
+		}
+		if (typeof service['type'] !== 'string' || service['type'] === '') {
+			throw new Error(`invalid fabrika manifest Zerops service type for \`${hostname}\``)
+		}
+		if (service['envIsolation'] !== ENV_ISOLATION || service['override'] !== true) {
+			throw new Error(`invalid fabrika manifest Zerops service invariants for \`${hostname}\``)
+		}
+		if (service['envSecrets'] !== undefined || service['dotEnvSecrets'] !== undefined) {
+			throw new Error('invalid fabrika manifest: Zerops import contains a forbidden environment field')
+		}
+		hostnames.add(hostname)
+		services.push(service)
+	}
+	const rawProject = raw['project']
+	let project: { readonly [key: string]: JsonValue } | undefined
+	if (rawProject !== undefined) {
+		project = jsonObject(rawProject, 'Zerops import project')
+		if (project['envIsolation'] !== ENV_ISOLATION || project['envVariables'] !== undefined) {
+			throw new Error('invalid fabrika manifest: Zerops import contains a forbidden project environment field')
+		}
+	}
+	return project === undefined ? { services } : { project, services }
+}
 
-export function parseFabrikaManifest(value: unknown, expected: ManifestExpectation = {}): FabrikaManifestV1 {
+export const manifestServiceHostnames = (manifest: FabrikaManifest): string[] =>
+	manifest.target.importDocument.services.map((service) => {
+		const hostname = service['hostname']
+		if (typeof hostname !== 'string') {
+			throw new Error('invalid canonical Zerops service hostname')
+		}
+		return hostname
+	})
+
+export const renderFabrikaImportYaml = (manifest: FabrikaManifest): string => renderYaml(manifest.target.importDocument)
+
+export function parseFabrikaManifest(value: unknown, expected: ManifestExpectation = {}): FabrikaManifest {
 	if (prop(value, 'manifestVersion') !== FABRIKA_MANIFEST_VERSION) {
 		throw new Error(`unsupported fabrika manifest version (expected ${FABRIKA_MANIFEST_VERSION})`)
 	}
@@ -203,22 +292,24 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	}
 
 	const rawTarget = prop(value, 'target')
-	const importYaml = nonEmptyString(rawTarget, 'importYaml')
-	const serviceHostnames = stringArray(rawTarget, 'serviceHostnames')
+	const rawImportDocument = prop(rawTarget, 'importDocument')
 	const deployService = nonEmptyString(rawTarget, 'deployService')
 	if (
 		string(rawTarget, 'platform') !== 'zerops'
-		|| importYaml === undefined
-		|| serviceHostnames === undefined
-		|| serviceHostnames.length === 0
-		|| new Set(serviceHostnames).size !== serviceHostnames.length
 		|| deployService === undefined
-		|| !serviceHostnames.includes(deployService)
 	) {
 		throw new Error('invalid fabrika manifest Zerops target')
 	}
-	if (hasForbiddenImportField(importYaml)) {
-		throw new Error('invalid fabrika manifest: Zerops import contains a forbidden environment field')
+	const importDocument = parseImportDocument(rawImportDocument)
+	const serviceHostnames = importDocument.services.map((service) => {
+		const hostname = service['hostname']
+		if (typeof hostname !== 'string') {
+			throw new Error('invalid fabrika manifest Zerops service hostname')
+		}
+		return hostname
+	})
+	if (!serviceHostnames.includes(deployService)) {
+		throw new Error('invalid fabrika manifest Zerops deploy service')
 	}
 	const zeropsSetup = optionalString(rawTarget, 'zeropsSetup')
 	if (prop(rawTarget, 'zeropsSetup') !== undefined && zeropsSetup === null) {
@@ -232,6 +323,11 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 			throw new Error('invalid fabrika manifest proxy declaration')
 		}
 		proxy = parsed
+		const separator = parsed.upstream.indexOf(':')
+		const upstreamHostname = separator === -1 ? parsed.upstream : parsed.upstream.slice(0, separator)
+		if (!serviceHostnames.includes(upstreamHostname)) {
+			throw new Error(`invalid fabrika manifest: proxy upstream service \`${upstreamHostname}\` is not owned by this app`)
+		}
 	}
 	const rawNamespaceResources = prop(rawTarget, 'namespaceResources')
 	let namespaceResources: ZeropsNamespaceResourceRequirement[] | undefined
@@ -256,8 +352,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 		},
 		target: {
 			platform: 'zerops',
-			importYaml,
-			serviceHostnames,
+			importDocument,
 			deployService,
 			...(zeropsSetup !== null ? { zeropsSetup } : {}),
 			...(proxy !== undefined ? { proxy } : {}),
@@ -266,7 +361,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	}
 }
 
-export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): FabrikaManifestV1 {
+export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): FabrikaManifest {
 	if (config.target.services === undefined) {
 		throw new Error('fabrika-zerops build requires a source Zerops config')
 	}
@@ -277,7 +372,7 @@ export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): Fa
 		process.env[name] = `\${${name}}`
 	}
 	try {
-		const { document, yaml } = compileImportYaml({ target: config.target, ctx: { env } })
+		const document = compileImport({ target: config.target, ctx: { env } })
 		const serviceHostnames = document.services.map((service) => service.hostname)
 		const deployService = config.target.deployService ?? (serviceHostnames.length === 1 ? serviceHostnames[0] : undefined)
 		if (deployService === undefined || !serviceHostnames.includes(deployService)) {
@@ -286,7 +381,7 @@ export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): Fa
 		if (config.target.namespaceResources?.some((resource) => serviceHostnames.includes(resource.hostname)) === true) {
 			throw new Error('fabrika-zerops build: an app cannot declare a namespace-owned service')
 		}
-		return {
+		const manifest: FabrikaManifest = {
 			manifestVersion: FABRIKA_MANIFEST_VERSION,
 			app: {
 				id: config.id,
@@ -299,14 +394,14 @@ export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): Fa
 			},
 			target: {
 				platform: 'zerops',
-				importYaml: yaml,
-				serviceHostnames,
+				importDocument: parseImportDocument(document),
 				deployService,
 				...(config.target.zeropsSetup !== undefined ? { zeropsSetup: config.target.zeropsSetup } : {}),
 				...(config.target.proxy !== undefined ? { proxy: config.target.proxy } : {}),
 				...(config.target.namespaceResources !== undefined ? { namespaceResources: [...config.target.namespaceResources] } : {}),
 			},
 		}
+		return parseFabrikaManifest(manifest, { appId: config.id, env })
 	} finally {
 		for (const name of declaredVars) {
 			const value = prior[name]
@@ -319,28 +414,9 @@ export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): Fa
 	}
 }
 
-const jsonValue = (value: unknown): JsonValue => {
-	if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-		return value
-	}
-	if (Array.isArray(value)) {
-		return value.map(jsonValue)
-	}
-	if (typeof value === 'object') {
-		const result: { [key: string]: JsonValue } = {}
-		for (const [key, entry] of Object.entries(value)) {
-			if (entry !== undefined) {
-				result[key] = jsonValue(entry)
-			}
-		}
-		return result
-	}
-	throw new Error(`Fabrika manifest contains a non-JSON ${typeof value} value`)
-}
-
 /** Provider artifact codec. Its envelope version and manifest payload version advance independently. */
-export const zeropsArtifactCodec: ProviderCodec<FabrikaManifestV1> = {
-	version: 1,
+export const zeropsArtifactCodec: ProviderCodec<FabrikaManifest> = {
+	version: 2,
 	encode: jsonValue,
 	decode: (payload) => parseFabrikaManifest(payload),
 }

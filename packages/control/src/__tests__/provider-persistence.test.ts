@@ -149,6 +149,32 @@ describe('generic provider persistence', () => {
 		])
 	})
 
+	test('keeps historical claims when an undeployed environment moves namespaces', async () => {
+		const { db } = createHarness()
+		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		for (const id of ['first', 'second']) {
+			await db.createDeploymentNamespace({
+				id,
+				env: 'prod',
+				provider: 'harbor',
+				exclusiveAppId: null,
+				providerTargetJson: targetJson,
+			})
+		}
+		await db.upsertAppEnvWithNamespaceResourceClaims(
+			{ ...appEnvironment('alpha', 'prod'), namespaceId: 'first' },
+			['alpha-api'],
+		)
+		await db.upsertAppEnvWithNamespaceResourceClaims(
+			{ ...appEnvironment('alpha', 'prod'), namespaceId: 'second' },
+			['alpha-api'],
+		)
+
+		expect((await db.getAppEnv('alpha', 'prod'))?.namespace_id).toBe('second')
+		expect((await db.listNamespaceResourceClaims('first')).map((claim) => claim.resource_key)).toEqual(['alpha-api'])
+		expect((await db.listNamespaceResourceClaims('second')).map((claim) => claim.resource_key)).toEqual(['alpha-api'])
+	})
+
 	test('enforces namespace coordinates and resource ownership constraints', async () => {
 		const { db } = createHarness()
 		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })

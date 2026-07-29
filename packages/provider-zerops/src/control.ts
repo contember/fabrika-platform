@@ -15,7 +15,7 @@ import type {
 } from '@fabrika/provider-contract'
 import { createZeropsApi, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi } from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
-import { type FabrikaManifestV1, parseFabrikaManifest, zeropsArtifactCodec } from './manifest'
+import { type FabrikaManifest, parseFabrikaManifest, zeropsArtifactCodec } from './manifest'
 import { createZeropsNamespaceCapabilities } from './namespace'
 import { createZeropsProvider } from './provider'
 import type { ZeropsRuntimeTarget } from './types'
@@ -70,7 +70,7 @@ export interface ZeropsBeforeDeployInput {
 	readonly appId: string
 	readonly env: string
 	readonly target: ZeropsStoredTarget
-	readonly artifact: FabrikaManifestV1
+	readonly artifact: FabrikaManifest
 	readonly api: ZeropsApi
 	readonly signal: AbortSignal
 }

@@ -214,7 +214,7 @@ describe('cheap, mid, and full namespace fixtures', () => {
 
 		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual(['postgres', PROXY_HOSTNAME])
 		expect(namespace.steady.document.services.find((service) => service.hostname === 'postgres')?.type).toBe('postgresql:ha@18')
-		expect(app.target.importDocument.services.map((service) => service.hostname)).toEqual([NOTES_SERVICE])
+		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_SERVICE])
 		expect(app.target.namespaceResources).toEqual([{
 			resourceKey: 'service:postgres',
 			hostname: 'postgres',
@@ -240,7 +240,7 @@ describe('cheap, mid, and full namespace fixtures', () => {
 
 		expect(namespace.topology.namespacePreset).toBe('mid')
 		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual([PROXY_HOSTNAME])
-		expect(app.target.importDocument.services.map((service) => service.hostname)).toEqual([NOTES_DATABASE_SERVICE, NOTES_SERVICE])
+		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_DATABASE_SERVICE, NOTES_SERVICE])
 		expect(app.target.namespaceResources).toBeUndefined()
 	})
 
@@ -261,7 +261,7 @@ describe('cheap, mid, and full namespace fixtures', () => {
 		expect(namespace.topology.exclusiveAppId).toBe(notesConfig.id)
 		expect(namespace.steady.document.project?.name).toBe('notes-prod')
 		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual([PROXY_HOSTNAME])
-		expect(app.target.importDocument.services.map((service) => service.hostname)).toEqual([NOTES_DATABASE_SERVICE, NOTES_SERVICE])
+		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_DATABASE_SERVICE, NOTES_SERVICE])
 	})
 
 	test('exclusive ownership is accepted only by the full preset', () => {

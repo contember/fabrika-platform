@@ -2,7 +2,7 @@ import type { ProviderDeploymentNamespace } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import type { ZeropsApi, ZeropsAppVersion, ZeropsImportResult, ZeropsProject, ZeropsService, ZeropsServiceEnv } from '../api'
 import { useSharedPostgres } from '../authoring'
-import { compileFabrikaManifest } from '../manifest'
+import { compileFabrikaManifest, manifestServiceHostnames } from '../manifest'
 import {
 	compileZeropsNamespaceTopology,
 	createZeropsNamespaceCapabilities,
@@ -310,7 +310,7 @@ describe('Zerops namespace policy and topology', () => {
 				hostname: 'postgres',
 				connectionString: ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
 			}])
-			expect(manifest.target.serviceHostnames).not.toContain('postgres')
+			expect(manifestServiceHostnames(manifest)).not.toContain('postgres')
 			expect(JSON.stringify(manifest)).not.toContain('postgres://')
 		}
 	})

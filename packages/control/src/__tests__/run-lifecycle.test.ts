@@ -185,6 +185,88 @@ describe('provider-neutral run lifecycle', () => {
 		expect((await requireRun(db, runId)).status).toBe('failed')
 	})
 
+	test('verifies namespace and app resource claims before calling the provider', async () => {
+		const { db, sqlite } = createHarness()
+		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await db.createDeploymentNamespaceWithResourceClaims({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'memory',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(envelope('memory', 'namespace')),
+			state: 'ready',
+		}, ['service:proxy'])
+		await db.upsertAppEnvWithNamespaceResourceClaims({
+			appId: 'app',
+			env: 'prod',
+			namespaceId: 'apps-prod',
+			provider: 'memory',
+			providerTargetJson: JSON.stringify(envelope('memory', 'target')),
+			providerArtifactJson: JSON.stringify(envelope('memory', 'artifact')),
+		}, ['service:app'])
+		const inputs: ProviderDeployInput[] = []
+		const provider: ControlProvider = {
+			...makeProvider(inputs, { state: 'succeeded' }),
+			namespaces: {
+				normalize: (namespace) => namespace,
+				namespaceResourceClaims: () => ['service:proxy'],
+				registrationResourceClaims: () => ['service:app'],
+				provision: async (input) => input.namespace,
+				reconcile: async (input) => input.namespace,
+			},
+		}
+		const deploy = async (): Promise<string> => {
+			const runId = uuidv7()
+			await db.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+			return (await executeDeploy(makeDeps(db, provider), { runId })).status
+		}
+
+		expect(await deploy()).toBe('succeeded')
+		expect(inputs[0]?.environment.namespace?.id).toBe('apps-prod')
+
+		sqlite.query(`DELETE FROM namespace_resource_claims WHERE namespace_id = ? AND resource_key = ?`).run('apps-prod', 'service:app')
+		expect(await deploy()).toBe('failed')
+		expect(inputs).toHaveLength(1)
+	})
+
+	test('rejects namespace coordinate drift before calling the provider', async () => {
+		const { db } = createHarness()
+		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await db.createApp({ id: 'other', repoUrl: 'github.com/acme/other' })
+		await db.createDeploymentNamespaceWithResourceClaims({
+			id: 'exclusive',
+			env: 'prod',
+			provider: 'memory',
+			exclusiveAppId: 'other',
+			providerTargetJson: JSON.stringify(envelope('memory', 'namespace')),
+			state: 'ready',
+		}, ['service:proxy'])
+		await db.upsertAppEnv({
+			appId: 'app',
+			env: 'prod',
+			namespaceId: 'exclusive',
+			provider: 'memory',
+			providerTargetJson: JSON.stringify(envelope('memory', 'target')),
+			providerArtifactJson: JSON.stringify(envelope('memory', 'artifact')),
+		})
+		const runId = uuidv7()
+		await db.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		const inputs: ProviderDeployInput[] = []
+		const provider: ControlProvider = {
+			...makeProvider(inputs, { state: 'succeeded' }),
+			namespaces: {
+				normalize: (namespace) => namespace,
+				namespaceResourceClaims: () => ['service:proxy'],
+				registrationResourceClaims: () => [],
+				provision: async (input) => input.namespace,
+				reconcile: async (input) => input.namespace,
+			},
+		}
+
+		expect((await executeDeploy(makeDeps(db, provider), { runId })).status).toBe('failed')
+		expect(inputs).toEqual([])
+	})
+
 	test('skips redelivery and defers while another run owns the lock', async () => {
 		const { db } = createHarness()
 		const runningId = await seedRun(db)

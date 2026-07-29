@@ -77,11 +77,38 @@ export interface AppEnvInput {
 	providerArtifactJson: string
 }
 
+export interface AppInput {
+	id: string
+	repoUrl: string
+	defaultBranch?: string
+	workerDir?: string | null
+	buildCmd?: string | null
+	configPath?: string | null
+	githubInstallationId?: number | null
+}
+
 export interface NamespaceResourceClaimOwner {
 	namespaceId: string
 	ownerAppId: string | null
 	ownerEnv: string | null
 	resourceKeys: readonly string[]
+}
+
+export class NamespaceResourceClaimConflictError extends Error {
+	constructor(readonly namespaceId: string, readonly resourceKey: string) {
+		super(`namespace resource claim owner is immutable: ${namespaceId}/${resourceKey}`)
+		this.name = 'NamespaceResourceClaimConflictError'
+	}
+}
+
+export interface DeploymentNamespaceInput {
+	id: string
+	env: string
+	provider: string
+	exclusiveAppId: string | null
+	providerTargetJson: string
+	state?: DeploymentNamespaceState
+	lastError?: string | null
 }
 
 export interface AppSecretRow {
@@ -183,29 +210,23 @@ export class Db {
 		return results
 	}
 
-	async createApp(input: {
-		id: string
-		repoUrl: string
-		defaultBranch?: string
-		workerDir?: string | null
-		buildCmd?: string | null
-		configPath?: string | null
-		githubInstallationId?: number | null
-	}): Promise<AppRow> {
-		return firstRow<AppRow>(
-			this.d1
-				.prepare(`INSERT INTO apps (id, repo_url, default_branch, worker_dir, build_cmd, config_path, github_installation_id)
-					VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`)
-				.bind(
-					input.id,
-					input.repoUrl,
-					input.defaultBranch ?? 'main',
-					input.workerDir ?? null,
-					input.buildCmd ?? null,
-					input.configPath ?? null,
-					input.githubInstallationId ?? null,
-				),
-		)
+	async createApp(input: AppInput): Promise<AppRow> {
+		return firstRow<AppRow>(this.appInsertStatement(input))
+	}
+
+	private appInsertStatement(input: AppInput): SqlStatement {
+		return this.d1
+			.prepare(`INSERT INTO apps (id, repo_url, default_branch, worker_dir, build_cmd, config_path, github_installation_id)
+				VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`)
+			.bind(
+				input.id,
+				input.repoUrl,
+				input.defaultBranch ?? 'main',
+				input.workerDir ?? null,
+				input.buildCmd ?? null,
+				input.configPath ?? null,
+				input.githubInstallationId ?? null,
+			)
 	}
 
 	async updateApp(id: string, patch: {
@@ -255,31 +276,46 @@ export class Db {
 		return this.d1.prepare('SELECT * FROM deployment_namespaces WHERE id = ?').bind(id).first<DeploymentNamespaceRow>()
 	}
 
-	async createDeploymentNamespace(input: {
-		id: string
-		env: string
-		provider: string
-		exclusiveAppId: string | null
-		providerTargetJson: string
-		state?: DeploymentNamespaceState
-		lastError?: string | null
-	}): Promise<DeploymentNamespaceRow> {
-		return firstRow<DeploymentNamespaceRow>(
-			this.d1
-				.prepare(`INSERT INTO deployment_namespaces (
-						id, env, provider, exclusive_app_id, provider_target_json, state, last_error
-					)
-					VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`)
-				.bind(
-					input.id,
-					input.env,
-					input.provider,
-					input.exclusiveAppId,
-					input.providerTargetJson,
-					input.state ?? 'pending',
-					input.lastError ?? null,
-				),
-		)
+	async createDeploymentNamespace(input: DeploymentNamespaceInput): Promise<DeploymentNamespaceRow> {
+		return firstRow<DeploymentNamespaceRow>(this.deploymentNamespaceInsertStatement(input))
+	}
+
+	/** Create a namespace and reserve all provider-owned keys in one transaction. */
+	async createDeploymentNamespaceWithResourceClaims(
+		input: DeploymentNamespaceInput,
+		resourceKeys: readonly string[],
+	): Promise<DeploymentNamespaceRow> {
+		const results = await this.d1.batch<DeploymentNamespaceRow | NamespaceResourceClaimRow>([
+			this.deploymentNamespaceInsertStatement(input),
+			...this.namespaceResourceClaimStatements({
+				namespaceId: input.id,
+				ownerAppId: null,
+				ownerEnv: null,
+				resourceKeys,
+			}),
+		])
+		const namespace = results[0]?.results[0]
+		if (namespace === undefined || !('state' in namespace) || results[0]?.results.length !== 1) {
+			throw new Error('expected one row from a deployment namespace insert')
+		}
+		return namespace
+	}
+
+	private deploymentNamespaceInsertStatement(input: DeploymentNamespaceInput): SqlStatement {
+		return this.d1
+			.prepare(`INSERT INTO deployment_namespaces (
+					id, env, provider, exclusive_app_id, provider_target_json, state, last_error
+				)
+				VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`)
+			.bind(
+				input.id,
+				input.env,
+				input.provider,
+				input.exclusiveAppId,
+				input.providerTargetJson,
+				input.state ?? 'pending',
+				input.lastError ?? null,
+			)
 	}
 
 	/** Persist a provider checkpoint or a core-owned namespace lifecycle transition. */
@@ -332,7 +368,7 @@ export class Db {
 		if (statements.length === 0) {
 			return []
 		}
-		const results = await this.d1.batch<NamespaceResourceClaimRow>(statements)
+		const results = await this.withNamespaceResourceClaimConflict(input, () => this.d1.batch<NamespaceResourceClaimRow>(statements))
 		const claims: NamespaceResourceClaimRow[] = []
 		for (const result of results) {
 			const [claim] = result.results
@@ -419,15 +455,17 @@ export class Db {
 		if (input.namespaceId === null) {
 			throw new Error('namespace resource claims require an environment namespace')
 		}
-		const results = await this.d1.batch<AppEnvRow | NamespaceResourceClaimRow>([
-			this.appEnvUpsertStatement(input),
-			...this.namespaceResourceClaimStatements({
-				namespaceId: input.namespaceId,
-				ownerAppId: input.appId,
-				ownerEnv: input.env,
-				resourceKeys,
-			}),
-		])
+		const owner: NamespaceResourceClaimOwner = {
+			namespaceId: input.namespaceId,
+			ownerAppId: input.appId,
+			ownerEnv: input.env,
+			resourceKeys,
+		}
+		const results = await this.withNamespaceResourceClaimConflict(owner, () =>
+			this.d1.batch<AppEnvRow | NamespaceResourceClaimRow>([
+				this.appEnvUpsertStatement(input),
+				...this.namespaceResourceClaimStatements(owner),
+			]))
 		const [appResult, ...claimResults] = results
 		const appEnv = appResult?.results[0]
 		if (appEnv === undefined || !('provider' in appEnv) || appResult?.results.length !== 1) {
@@ -442,6 +480,49 @@ export class Db {
 			resourceClaims.push(claim)
 		}
 		return { appEnv, resourceClaims }
+	}
+
+	/** Create an app, its first namespaced environment, and all claims in one transaction. */
+	async createAppWithEnvironmentAndNamespaceResourceClaims(
+		appInput: AppInput,
+		environmentInput: AppEnvInput,
+		resourceKeys: readonly string[],
+	): Promise<{ app: AppRow; appEnv: AppEnvRow; resourceClaims: NamespaceResourceClaimRow[] }> {
+		if (environmentInput.namespaceId === null) {
+			throw new Error('namespace resource claims require an environment namespace')
+		}
+		if (appInput.id !== environmentInput.appId) {
+			throw new Error('app and environment coordinates do not match')
+		}
+		const owner: NamespaceResourceClaimOwner = {
+			namespaceId: environmentInput.namespaceId,
+			ownerAppId: environmentInput.appId,
+			ownerEnv: environmentInput.env,
+			resourceKeys,
+		}
+		const results = await this.withNamespaceResourceClaimConflict(owner, () =>
+			this.d1.batch<AppRow | AppEnvRow | NamespaceResourceClaimRow>([
+				this.appInsertStatement(appInput),
+				this.appEnvUpsertStatement(environmentInput),
+				...this.namespaceResourceClaimStatements(owner),
+			]))
+		const app = results[0]?.results[0]
+		const appEnv = results[1]?.results[0]
+		if (app === undefined || !('id' in app) || results[0]?.results.length !== 1) {
+			throw new Error('expected one row from an app insert')
+		}
+		if (appEnv === undefined || !('provider' in appEnv) || results[1]?.results.length !== 1) {
+			throw new Error('expected one row from an app environment upsert')
+		}
+		const resourceClaims: NamespaceResourceClaimRow[] = []
+		for (const result of results.slice(2)) {
+			const claim = result.results[0]
+			if (claim === undefined || !('resource_key' in claim) || result.results.length !== 1) {
+				throw new Error('expected one row from a namespace resource claim acquisition')
+			}
+			resourceClaims.push(claim)
+		}
+		return { app, appEnv, resourceClaims }
 	}
 
 	private appEnvUpsertStatement(input: AppEnvInput): SqlStatement {
@@ -487,6 +568,26 @@ export class Db {
 					RETURNING *`)
 				.bind(input.namespaceId, resourceKey, input.ownerAppId, input.ownerEnv)
 		)
+	}
+
+	private async withNamespaceResourceClaimConflict<T>(
+		input: NamespaceResourceClaimOwner,
+		operation: () => Promise<T>,
+	): Promise<T> {
+		try {
+			return await operation()
+		} catch (cause) {
+			const claims = await this.listNamespaceResourceClaims(input.namespaceId)
+			const requested = new Set(input.resourceKeys)
+			const conflict = claims.find((claim) =>
+				requested.has(claim.resource_key)
+				&& (claim.owner_app_id !== input.ownerAppId || claim.owner_env !== input.ownerEnv)
+			)
+			if (conflict !== undefined) {
+				throw new NamespaceResourceClaimConflictError(input.namespaceId, conflict.resource_key)
+			}
+			throw cause
+		}
 	}
 
 	/** Persist a provider-owned operation id as soon as asynchronous work is accepted. */

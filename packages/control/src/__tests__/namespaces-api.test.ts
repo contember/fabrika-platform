@@ -53,6 +53,8 @@ function namespacedProvider(recording: ProviderRecording): ControlProvider {
 				}
 				return namespace
 			},
+			namespaceResourceClaims: () => ['service:proxy'],
+			registrationResourceClaims: (registration) => [`service:${registration.app.id}`],
 			async provision(input) {
 				recording.provisions.push(input.namespace.id)
 				const checkpoint = withTarget(input.namespace, target('checkpoint'))
@@ -153,6 +155,7 @@ describe('deployment namespace API', () => {
 		const createdBody: { id: string; state: string; target: ProviderEnvelope } = await created.json()
 		expect(createdBody).toEqual(expect.objectContaining({ id: 'apps-prod', state: 'ready', target: target('ready') }))
 		expect(recording.provisions).toEqual(['apps-prod'])
+		expect((await deps.db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual(['service:proxy'])
 
 		const listed = await handleApi(request('GET', '/namespaces'), deps)
 		const listBody: { items: Array<{ id: string }> } = await listed.json()
@@ -175,6 +178,28 @@ describe('deployment namespace API', () => {
 			'namespace.adopt',
 			'namespace.reconcile',
 		])
+	})
+
+	test('reserves missing namespace-owned claims before reconciling a legacy namespace', async () => {
+		const recording = providerRecording()
+		const { deps } = makeDeps(namespacedProvider(recording))
+		await deps.db.createDeploymentNamespace({
+			id: 'legacy',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(target('legacy')),
+			state: 'ready',
+		})
+
+		const reconciled = await handleApi(request('POST', '/namespaces/legacy/reconcile'), deps)
+
+		expect(reconciled.status).toBe(200)
+		expect(recording.reconciles).toEqual(['legacy'])
+		expect((await deps.db.listNamespaceResourceClaims('legacy')).map((claim) => [
+			claim.resource_key,
+			claim.owner_app_id,
+		])).toEqual([['service:proxy', null]])
 	})
 
 	test('preserves the last checkpoint and records a generic failure', async () => {
@@ -347,6 +372,8 @@ describe('app environment namespace assignment', () => {
 		}
 		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('first')), deps)).status).toBe(200)
 		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('second')), deps)).status).toBe(200)
+		expect((await deps.db.listNamespaceResourceClaims('first')).map((claim) => claim.resource_key)).toEqual(['service:app'])
+		expect((await deps.db.listNamespaceResourceClaims('second')).map((claim) => claim.resource_key)).toEqual(['service:app'])
 
 		await deps.db.createRun({ id: 'successful-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
 		await deps.db.markRunFinished('successful-run', 'succeeded', 0)
@@ -390,5 +417,45 @@ describe('app environment namespace assignment', () => {
 		)
 		expect(invalid.status).toBe(404)
 		expect(await deps.db.getApp('broken')).toBeNull()
+	})
+
+	test('claim collision leaves no orphan onboarding app', async () => {
+		const recording = providerRecording()
+		const provider = namespacedProvider(recording)
+		if (provider.namespaces === undefined) {
+			throw new Error('expected namespace capabilities')
+		}
+		const collidingProvider: ControlProvider = {
+			...provider,
+			namespaces: {
+				...provider.namespaces,
+				registrationResourceClaims: () => ['service:shared'],
+			},
+		}
+		const { deps } = makeDeps(collidingProvider)
+		await deps.db.createDeploymentNamespaceWithResourceClaims({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(target('namespace')),
+			state: 'ready',
+		}, ['service:proxy'])
+		const body = (id: string): unknown => ({
+			id,
+			repoUrl: `github.com/acme/${id}`,
+			env: 'prod',
+			namespaceId: 'apps-prod',
+			...registrationBody(),
+		})
+
+		const alpha = await handleApi(request('POST', '/register-app', body('alpha')), deps)
+		const beta = await handleApi(request('POST', '/register-app', body('beta')), deps)
+
+		expect([alpha.status, beta.status].sort()).toEqual([201, 409])
+		const winner = (await deps.db.listAppEnvsByNamespace('apps-prod'))[0]?.app_id
+		expect(winner === 'alpha' || winner === 'beta').toBe(true)
+		const loser = winner === 'alpha' ? 'beta' : 'alpha'
+		expect(await deps.db.getApp(loser)).toBeNull()
 	})
 })

@@ -1,5 +1,5 @@
 import type { ProviderDeployPlan, ProviderJobSpec } from '@fabrika/provider-contract'
-import type { FabrikaManifestV1 } from './manifest'
+import { type FabrikaManifest, manifestServiceHostnames } from './manifest'
 import type { ZeropsRuntimeTarget } from './types'
 
 export type ZeropsStepKind = 'apply-import' | 'trigger-deploy' | 'await-deploy' | 'reconcile-schema'
@@ -13,8 +13,9 @@ export interface ZeropsPlan extends ProviderDeployPlan {
 }
 
 /** Resolve the one declared service that receives this repository's code. */
-export const resolveDeployHostname = (manifest: FabrikaManifestV1): string => {
-	const { deployService, serviceHostnames } = manifest.target
+export const resolveDeployHostname = (manifest: FabrikaManifest): string => {
+	const { deployService } = manifest.target
+	const serviceHostnames = manifestServiceHostnames(manifest)
 	if (!serviceHostnames.includes(deployService)) {
 		throw new Error(`zerops: \`deployService: ${deployService}\` names no declared service (have: ${serviceHostnames.join(', ') || 'none'})`)
 	}
@@ -23,10 +24,11 @@ export const resolveDeployHostname = (manifest: FabrikaManifestV1): string => {
 
 /** Build the provider-owned deploy order without touching the platform. */
 export const buildZeropsPlan = (
-	manifest: FabrikaManifestV1,
+	manifest: FabrikaManifest,
 	target: ZeropsRuntimeTarget,
 	env: string,
 ): ZeropsPlan => {
+	const serviceHostnames = manifestServiceHostnames(manifest)
 	const steps: ZeropsJobSpec[] = []
 	let previous: string | undefined
 	const add = (spec: Omit<ZeropsJobSpec, 'dependsOn'>): void => {
@@ -37,7 +39,7 @@ export const buildZeropsPlan = (
 	add({
 		id: 'apply-import',
 		kind: 'apply-import',
-		description: `Apply the Zerops import for ${manifest.target.serviceHostnames.length} service(s): ${manifest.target.serviceHostnames.join(', ')}`,
+		description: `Apply the Zerops import for ${serviceHostnames.length} service(s): ${serviceHostnames.join(', ')}`,
 	})
 	add({ id: 'trigger-deploy', kind: 'trigger-deploy', description: 'Trigger the Zerops build+deploy pipeline' })
 	add({ id: 'await-deploy', kind: 'await-deploy', description: 'Await the Zerops pipeline and relay its build log' })

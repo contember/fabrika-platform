@@ -1,4 +1,5 @@
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING } from './namespace'
+export { zeropsSharedServiceHostname, zeropsSharedServicePrefix } from './service-names'
 import type { ZeropsAppConfig, ZeropsSharedPostgresBinding } from './types'
 
 /** Declare consumption of the namespace-owned `postgres` service without resolving its credential. */

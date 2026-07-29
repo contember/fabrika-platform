@@ -117,6 +117,10 @@ export interface ProviderNamespaceMutationInput {
 /** Optional placement lifecycle owned by providers that use deployment namespaces. */
 export interface ProviderNamespaceCapabilities {
 	normalize(namespace: ProviderDeploymentNamespace): ProviderDeploymentNamespace
+	/** Namespace-owned resources that must be reserved before provisioning starts. */
+	namespaceResourceClaims(namespace: ProviderDeploymentNamespace): readonly string[]
+	/** App-owned resources derived from one canonical normalized registration. */
+	registrationResourceClaims(registration: ProviderRegistration): readonly string[]
 	provision(input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace>
 	reconcile(input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace>
 }

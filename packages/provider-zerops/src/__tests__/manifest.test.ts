@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { compileFabrikaManifest, parseFabrikaManifest, zeropsArtifactCodec } from '../manifest'
+import { compileFabrikaManifest, manifestServiceHostnames, parseFabrikaManifest, renderFabrikaImportYaml, zeropsArtifactCodec } from '../manifest'
 import { interpolateManifest } from '../provider'
 import type { ZeropsAppConfig } from '../types'
 
@@ -24,21 +24,42 @@ describe('Zerops static artifact', () => {
 	test('compiles environment-specific services and declared vars as placeholders', () => {
 		process.env['IMAGE_TAG'] = 'must-not-leak'
 		const manifest = compileFabrikaManifest(config, 'prod')
-		expect(manifest.target.serviceHostnames).toEqual(['notes'])
-		expect(manifest.target.importYaml).toContain('${IMAGE_TAG}')
-		expect(manifest.target.importYaml).not.toContain('must-not-leak')
+		expect(manifestServiceHostnames(manifest)).toEqual(['notes'])
+		expect(renderFabrikaImportYaml(manifest)).toContain('${IMAGE_TAG}')
+		expect(renderFabrikaImportYaml(manifest)).not.toContain('must-not-leak')
 		expect(process.env['IMAGE_TAG']).toBe('must-not-leak')
 		expect(parseFabrikaManifest(zeropsArtifactCodec.encode(manifest))).toEqual(manifest)
 	})
 
-	test('rejects version, identity, environment, proxy, and forbidden import drift', () => {
+	test('rejects version, identity, environment, proxy ownership, and forbidden structured import drift', () => {
 		const manifest = compileFabrikaManifest(config, 'prod')
-		expect(() => parseFabrikaManifest({ ...manifest, manifestVersion: 2 })).toThrow('version')
+		const service = manifest.target.importDocument.services[0]
+		if (service === undefined) throw new Error('expected a service')
+		expect(() => parseFabrikaManifest({ ...manifest, manifestVersion: 1 })).toThrow('version')
 		expect(() => parseFabrikaManifest(manifest, { appId: 'other' })).toThrow('app drift')
 		expect(() => parseFabrikaManifest(manifest, { env: 'stage' })).toThrow('environment drift')
 		expect(() => parseFabrikaManifest({ ...manifest, target: { ...manifest.target, proxy: { upstream: '', gates: { rules: [] } } } })).toThrow('proxy')
-		expect(() => parseFabrikaManifest({ ...manifest, target: { ...manifest.target, importYaml: 'services: []\nenvSecrets:\n  X: value\n' } }))
-			.toThrow('forbidden')
+		expect(() =>
+			parseFabrikaManifest({
+				...manifest,
+				target: { ...manifest.target, proxy: { upstream: 'other:3000', gates: { rules: [] } } },
+			})
+		).toThrow('not owned')
+		expect(() =>
+			parseFabrikaManifest({
+				...manifest,
+				target: {
+					...manifest.target,
+					importDocument: { services: [{ ...service, envSecrets: { X: 'value' } }] },
+				},
+			})
+		).toThrow('forbidden')
+		expect(() =>
+			parseFabrikaManifest({
+				...manifest,
+				target: { ...manifest.target, importDocument: undefined, importYaml: 'services: []', serviceHostnames: ['notes'] },
+			})
+		).toThrow('import')
 	})
 
 	test('interpolates only declared variables', () => {
