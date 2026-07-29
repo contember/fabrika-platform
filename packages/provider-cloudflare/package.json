@@ -10,6 +10,9 @@
 	"publishConfig": {
 		"access": "public"
 	},
+	"bin": {
+		"fabrika-cloudflare": "./src/cli.ts"
+	},
 	"files": [
 		"src",
 		"!src/**/__tests__/**"
@@ -27,6 +30,7 @@
 	},
 	"dependencies": {
 		"@fabrika/auth": "workspace:*",
+		"@fabrika/engine": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
 		"oblaka-iac": "^0.0.18"
 	},

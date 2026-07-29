@@ -1,5 +1,7 @@
 export * from 'oblaka-iac'
 export { type CloudflareAppConfig, defineApp, isCloudflareAppConfig, type ResourceContext } from './authoring'
+export { parseCloudflareArgs, platformComponents } from './cli-args'
+export type { ParsedCloudflareArgs, PlatformComponent } from './cli-args'
 export { type CloudflareArtifact, cloudflareArtifact, cloudflareArtifactCodec, type CloudflareTarget, cloudflareTargetCodec } from './codec'
 export {
 	type CloudflareCollaborators,
@@ -13,6 +15,8 @@ export {
 	type ProvisionInput,
 	type SchemaReconciler,
 } from './collaborators'
+export { deployCloudflareConfig, loadCloudflareCommandConfig } from './command'
+export type { CloudflareCommandDeployOptions, LoadedCloudflareCommandConfig } from './command'
 export { cloudflareStoredTargetCodec, createCloudflareControlProvider, isCloudflareRunnerJob } from './control'
 export type { CloudflareControlOptions, CloudflareRunnerJob, CloudflareStoredTarget, ResolvedCloudflareSource } from './control'
 export { buildPlan, findMigratableDatabases } from './plan'
