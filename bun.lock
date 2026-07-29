@@ -202,6 +202,16 @@
         "@types/bun": "latest",
       },
     },
+    "packages/provider-contract": {
+      "name": "@fabrika/provider-contract",
+      "version": "0.0.1",
+      "dependencies": {
+        "@fabrika/auth-core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
     "packages/proxy": {
       "name": "@fabrika/proxy",
       "version": "0.0.1",
@@ -416,6 +426,8 @@
     "@fabrika/platform": ["@fabrika/platform@workspace:packages/platform"],
 
     "@fabrika/platform-node": ["@fabrika/platform-node@workspace:packages/platform-node"],
+
+    "@fabrika/provider-contract": ["@fabrika/provider-contract@workspace:packages/provider-contract"],
 
     "@fabrika/proxy": ["@fabrika/proxy@workspace:packages/proxy"],
 

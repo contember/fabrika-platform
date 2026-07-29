@@ -25,6 +25,9 @@
 		"typecheck": "tsc --noEmit",
 		"test": "bun test"
 	},
+	"dependencies": {
+		"@fabrika/auth-core": "workspace:*"
+	},
 	"devDependencies": {
 		"@types/bun": "latest"
 	}
