@@ -126,14 +126,17 @@ const iam: ZeropsYamlSetup = {
 /**
  * The control plane — registry, run lifecycle, vault, webhook, and the dashboard SPA.
  *
- * Per-installation variables (env API): `VOZKA_DOMAIN`, `CLOUDFLARE_ACCOUNT_ID`, `VOZKA_BOOTSTRAP_ADMINS`.
+ * Per-installation variables (env API): `VOZKA_DOMAIN`, `CLOUDFLARE_ACCOUNT_ID`,
+ * `VOZKA_BOOTSTRAP_ADMINS`, `ZEROPS_CLIENT_ID`, `ZEROPS_PROXY_BUILD_FROM_GIT`, and
+ * `ZEROPS_PROXY_IAM_URL` (the public IAM origin reachable from application projects).
  *
  * Secrets (`envSecrets`): `PROPUSTKA_RPC_KEY` (authenticates this process to IAM's RPC surface — the
  * same value IAM holds), `VOZKA_VAULT_KEY` (the vault KEK; its loss is unrecoverable by design),
  * `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `CLOUDFLARE_API_TOKEN`,
- * `PROPUSTKA_PROVISIONING_KEY`, and — when this control plane deploys to Zerops — the Zerops personal
- * access token, which carries account-wide admin rights and is the single most dangerous thing an
- * installation holds.
+ * `PROPUSTKA_PROVISIONING_KEY`, `ZEROPS_PROXY_IAM_KEY` (the same credential IAM receives as
+ * `PROPUSTKA_PROXY_KEY`), and — when this control plane deploys to Zerops — `ZEROPS_ACCESS_TOKEN`, the
+ * Zerops personal access token. It carries account-wide admin rights and is the single most dangerous
+ * thing an installation holds.
  *
  * There is NO runner service anywhere in this topology, and that is ADR-0003, not an omission: Zerops
  * has its own CI, so a deploy here is five HTTP calls made by this process.

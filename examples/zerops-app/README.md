@@ -11,16 +11,18 @@ SDK and enforces its own gates in-process; here it does not enforce them at all,
 
 ## What is where
 
-| File                | What it is                                                                                              |
-| ------------------- | ------------------------------------------------------------------------------------------------------- |
-| `fabrika.config.ts` | The deploy surface: a Zerops `target` — two services in a project — plus the app's schema.              |
-| `fabrika.schema.ts` | The authorization vocabulary (scopes, actions, roles), reconciled into IAM by the deploy.               |
-| `fabrika.gates.ts`  | The per-path gates. Enforced by the **proxy**, never by this process.                                   |
-| `zerops.yaml`       | The build/run descriptor Zerops reads from the repository root.                                         |
-| `src/server.ts`     | `run.start` — the `@fabrika/app` Bun adapter. Listens on the project's private network only.            |
-| `src/migrate.ts`    | `run.initCommands` — migrations at container start, which is why the deploy plan has no `migrate` step. |
-| `src/authz.ts`      | Verifies the proxy-injected token and answers `can()` / `scopedTo()`.                                   |
-| `src/app.ts`        | The Fetch app: one route per gate, auth middleware, and the per-object checks gates cannot express.     |
+| File                          | What it is                                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `fabrika.config.ts`           | The deploy surface: a Zerops `target` — two services in a project — plus the app's schema.              |
+| `fabrika.cheap.config.ts`     | Cheap-tier variant: one runtime that claims the namespace-owned `postgres` service.                     |
+| `fabrika.schema.ts`           | The authorization vocabulary (scopes, actions, roles), reconciled into IAM by the deploy.               |
+| `fabrika.gates.ts`            | The per-path gates. Enforced by the **proxy**, never by this process.                                   |
+| `zerops.yaml`                 | The build/run descriptor Zerops reads from the repository root.                                         |
+| `zerops.shared-postgres.yaml` | Cheap-tier build descriptor using `${postgres_connectionString}`.                                       |
+| `src/server.ts`               | `run.start` — the `@fabrika/app` Bun adapter. Listens on the project's private network only.            |
+| `src/migrate.ts`              | `run.initCommands` — migrations at container start, which is why the deploy plan has no `migrate` step. |
+| `src/authz.ts`                | Verifies the proxy-injected token and answers `can()` / `scopedTo()`.                                   |
+| `src/app.ts`                  | The Fetch app: one route per gate, auth middleware, and the per-object checks gates cannot express.     |
 
 ## The shape of a Zerops deploy
 
@@ -59,6 +61,20 @@ service, so the service has to exist before its secrets can be set. Bring-up is
 
 `zerops.yaml` carries `${notesdb_connectionString}`, which is a _reference_ to another service's
 platform-held variable, not a value.
+
+## Namespace isolation fixtures
+
+The example covers all three namespace tiers without changing the application protocol:
+
+- **cheap** — use `fabrika.cheap.config.ts` and copy `zerops.shared-postgres.yaml` to
+  `zerops.yaml`. The app imports only `notesapi` and claims the namespace-owned `postgres`.
+- **mid** — use the default `fabrika.config.ts` and `zerops.yaml`. The app imports its own
+  `notesdb` plus `notesapi` into a shared namespace.
+- **full** — use the same default app files as mid, but assign the environment to a namespace whose
+  `exclusiveAppId` is `notes`. The project then contains only the proxy and this app's services.
+
+`deploy/zerops/__tests__/topology.test.ts` compiles these fixtures and proves their exact service
+ownership boundaries.
 
 ## Running it
 

@@ -11,11 +11,12 @@
 project:
   name: apps-prod
   envIsolation: service
-  description: "Deployed fabrika apps for the prod environment. One project per environment (ADR-0006)."
+  description: "Managed by Fabrika namespace apps-prod (prod)."
   corePackage: SERIOUS
   tags:
     - fabrika
-    - apps
+    - namespace
+    - apps-prod
     - prod
 services:
   - hostname: proxy

@@ -5,7 +5,9 @@
 // require holds in them. They prove NOTHING about whether the platform accepts them, whether the
 // services boot, or whether anything is reachable. Nobody has run this against a real account.
 
-import { compileImport, type ZeropsImportDocument } from '@fabrika/provider-zerops'
+import notesConfig, { NOTES_DATABASE_SERVICE, NOTES_SERVICE } from '@fabrika/example-zerops-app'
+import cheapNotesConfig from '@fabrika/example-zerops-app/cheap'
+import { compileFabrikaManifest, compileImport, renderYaml, type ZeropsImportDocument } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -199,6 +201,74 @@ describe('a per-environment apps project is one call away', () => {
 		expect(document.project?.corePackage).toBe('LIGHT')
 		// The point of ADR-0006: this is a DIFFERENT project, so nothing in it can reach production's db.
 		expect(document.project?.name).not.toBe(apps?.steady.document.project?.name)
+	})
+})
+
+describe('cheap, mid, and full namespace fixtures', () => {
+	test('cheap owns one shared Postgres service and the app imports only its runtime', () => {
+		const namespace = compileTopology(
+			appsTopology({ env: 'prod', corePackage: 'SERIOUS', preset: 'cheap', projectName: 'cheap-prod' }),
+			'prod',
+		)
+		const app = compileFabrikaManifest(cheapNotesConfig, 'prod')
+
+		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual(['postgres', PROXY_HOSTNAME])
+		expect(namespace.steady.document.services.find((service) => service.hostname === 'postgres')?.type).toBe('postgresql:ha@18')
+		expect(app.target.importDocument.services.map((service) => service.hostname)).toEqual([NOTES_SERVICE])
+		expect(app.target.namespaceResources).toEqual([{
+			resourceKey: 'service:postgres',
+			hostname: 'postgres',
+			connectionString: '${postgres_connectionString}',
+		}])
+		expect(validateYaml('import', renderYaml(app.target.importDocument))).toEqual([])
+	})
+
+	test('cheap uses single-node Postgres outside production unless policy overrides it', () => {
+		const namespace = compileTopology(
+			appsTopology({ env: 'stage', corePackage: 'LIGHT', preset: 'cheap', projectName: 'cheap-stage' }),
+			'stage',
+		)
+		expect(namespace.steady.document.services.find((service) => service.hostname === 'postgres')?.type).toBe('postgresql:single@18')
+	})
+
+	test('mid owns only the proxy while the app imports its prefixed database and runtime', () => {
+		const namespace = compileTopology(
+			appsTopology({ env: 'prod', corePackage: 'SERIOUS', preset: 'mid' }),
+			'prod',
+		)
+		const app = compileFabrikaManifest(notesConfig, 'prod')
+
+		expect(namespace.topology.namespacePreset).toBe('mid')
+		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual([PROXY_HOSTNAME])
+		expect(app.target.importDocument.services.map((service) => service.hostname)).toEqual([NOTES_DATABASE_SERVICE, NOTES_SERVICE])
+		expect(app.target.namespaceResources).toBeUndefined()
+	})
+
+	test('full uses the same app-owned services but reserves the namespace for that app', () => {
+		const namespace = compileTopology(
+			appsTopology({
+				env: 'prod',
+				corePackage: 'SERIOUS',
+				preset: 'full',
+				projectName: 'notes-prod',
+				exclusiveAppId: notesConfig.id,
+			}),
+			'prod',
+		)
+		const app = compileFabrikaManifest(notesConfig, 'prod')
+
+		expect(namespace.topology.namespacePreset).toBe('full')
+		expect(namespace.topology.exclusiveAppId).toBe(notesConfig.id)
+		expect(namespace.steady.document.project?.name).toBe('notes-prod')
+		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual([PROXY_HOSTNAME])
+		expect(app.target.importDocument.services.map((service) => service.hostname)).toEqual([NOTES_DATABASE_SERVICE, NOTES_SERVICE])
+	})
+
+	test('exclusive ownership is accepted only by the full preset', () => {
+		expect(() => appsTopology({ env: 'prod', corePackage: 'SERIOUS', preset: 'full' })).toThrow('requires exclusiveAppId')
+		expect(() => appsTopology({ env: 'prod', corePackage: 'SERIOUS', preset: 'mid', exclusiveAppId: notesConfig.id })).toThrow(
+			'cannot reserve an exclusive app',
+		)
 	})
 })
 

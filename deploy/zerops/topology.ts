@@ -43,7 +43,10 @@
 import {
 	compileImportYaml,
 	compileProvisioningYaml,
+	compileZeropsNamespaceTopology,
 	type ZeropsImportDocument,
+	type ZeropsNamespacePostgres,
+	zeropsNamespacePreset,
 	type ZeropsServiceSpec,
 	type ZeropsSourceTarget,
 } from '@fabrika/provider-zerops'
@@ -75,10 +78,16 @@ export interface ProjectTopology {
 	target: ZeropsSourceTarget
 	/** The one service allowed to be publicly routed (ADR-0007). Always the proxy. */
 	publicService: string
+	/** Present on app namespaces so fixtures can prove the selected isolation tier. */
+	namespacePreset?: 'cheap' | 'mid' | 'full'
+	/** Present only when this namespace is reserved for one app. */
+	exclusiveAppId?: string
 }
 
 /** The proxy's hostname, in every project. Also the `zerops.yaml` setup name it builds from. */
 export const PROXY_HOSTNAME = 'proxy'
+/** Public source used when the namespace lifecycle builds a newly provisioned proxy. */
+export const FABRIKA_PROXY_SOURCE = 'https://github.com/contember/fabrika-platform'
 
 /**
  * A runtime service, with the two fields that must never be left to a default written explicitly.
@@ -189,42 +198,54 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 }
 
 /**
- * An **apps** project: the deployed applications for one environment.
+ * An application namespace: one proxy plus the namespace-owned resources selected by its preset.
  *
- * Almost empty on purpose. The project and its proxy are all that fabrika creates up front; every app
- * adds its own services by its own import into this project, keyed off `app_envs.zerops_project_id`
- * (ADR-0006) rather than off any naming convention. `examples/zerops-app` is exactly that second import.
+ * This is only an adapter over the provider-owned namespace compiler. The control plane uses that same
+ * compiler for live create/adopt/reconcile operations, so generated bring-up artifacts cannot drift
+ * into a second definition of what an application namespace contains.
  *
- * One project per environment, so staging cannot reach production's database and each environment picks
- * its own `corePackage` — the two facts ADR-0006 rests on.
+ * `mid` stays the default for the committed apps-prod artifact: each app imports its own prefixed
+ * database. `cheap` adds namespace-owned Postgres. `full` reserves the project for one app, while the
+ * app's own import still owns its runtime services and database.
  */
-export const appsTopology = (options: TopologyOptions & { corePackage: 'LIGHT' | 'SERIOUS' }): ProjectTopology => {
-	const publicAccess = options.publicAccess ?? 'custom-domain'
+export interface AppsTopologyOptions extends TopologyOptions {
+	readonly corePackage: 'LIGHT' | 'SERIOUS'
+	readonly preset?: 'cheap' | 'mid' | 'full'
+	readonly projectName?: string
+	readonly exclusiveAppId?: string
+	readonly postgres?: ZeropsNamespacePostgres
+}
+
+export const appsTopology = (options: AppsTopologyOptions): ProjectTopology => {
+	const preset = options.preset ?? 'mid'
+	const id = options.projectName ?? `apps-${options.env}`
+	if (preset === 'full' && options.exclusiveAppId === undefined) {
+		throw new Error('A full Zerops namespace requires exclusiveAppId')
+	}
+	if (preset !== 'full' && options.exclusiveAppId !== undefined) {
+		throw new Error(`A ${preset} Zerops namespace cannot reserve an exclusive app`)
+	}
+	const namespaceTarget = zeropsNamespacePreset({
+		preset,
+		env: options.env,
+		projectName: id,
+		corePackage: options.corePackage,
+		publicAccess: options.publicAccess ?? 'custom-domain',
+		proxyBuildFromGit: FABRIKA_PROXY_SOURCE,
+		...(options.postgres === undefined ? {} : { postgres: options.postgres }),
+	})
+	const namespace = compileZeropsNamespaceTopology({
+		id,
+		env: options.env,
+		...(options.exclusiveAppId === undefined ? {} : { exclusiveAppId: options.exclusiveAppId }),
+		target: { provider: 'zerops', version: 1, payload: {} },
+	}, namespaceTarget)
 	return {
-		id: `apps-${options.env}`,
+		id,
 		publicService: PROXY_HOSTNAME,
-		target: {
-			platform: 'zerops',
-			project: {
-				name: `apps-${options.env}`,
-				description: `Deployed fabrika apps for the ${options.env} environment. One project per environment (ADR-0006).`,
-				corePackage: options.corePackage,
-				tags: ['fabrika', 'apps', options.env],
-			},
-			// A single service, and it is the front door. An app that forgets to check auth is still
-			// unreachable, because nothing in this project has a public route except the proxy — that
-			// structural unreachability IS ADR-0007.
-			services: () => [
-				runtime({
-					hostname: PROXY_HOSTNAME,
-					type: 'alpine@3.21',
-					priority: 10,
-					public: publicAccess === 'zerops-subdomain',
-					minContainers: 2,
-					maxContainers: 6,
-				}),
-			],
-		},
+		target: namespace.source,
+		namespacePreset: preset,
+		...(options.exclusiveAppId === undefined ? {} : { exclusiveAppId: options.exclusiveAppId }),
 	}
 }
 

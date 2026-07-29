@@ -32,6 +32,10 @@ describe('the live files are valid against the published contract', () => {
 	test("the example app's zerops.yaml — zero errors", () => {
 		expect(errorsIn('examples/zerops-app/zerops.yaml')).toEqual([])
 	})
+
+	test("the example app's shared-Postgres variant — zero errors", () => {
+		expect(errorsIn('examples/zerops-app/zerops.shared-postgres.yaml')).toEqual([])
+	})
 })
 
 describe('one root file, several named setups — the merged-file decision, checked', () => {
@@ -88,7 +92,7 @@ describe('nothing committed carries a secret VALUE', () => {
 	// first belongs in a committed file (ADR-0004). Scanned over the PARSED document rather than the raw
 	// text, because comments never reach the platform and prose is allowed to talk about a reference.
 	const REFERENCE = /^\$\{([a-z][a-z0-9]*_[A-Za-z][A-Za-z0-9]*|[A-Z][A-Z0-9_]*)\}$/
-	const files = ['zerops.yaml', 'examples/zerops-app/zerops.yaml']
+	const files = ['zerops.yaml', 'examples/zerops-app/zerops.yaml', 'examples/zerops-app/zerops.shared-postgres.yaml']
 
 	const stringsIn = (value: unknown): string[] => {
 		if (typeof value === 'string') {

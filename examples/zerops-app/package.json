@@ -8,6 +8,11 @@
 			"types": "./fabrika.config.ts",
 			"default": "./fabrika.config.ts"
 		},
+		"./cheap": {
+			"bun": "./fabrika.cheap.config.ts",
+			"types": "./fabrika.cheap.config.ts",
+			"default": "./fabrika.cheap.config.ts"
+		},
 		"./gates": {
 			"bun": "./fabrika.gates.ts",
 			"types": "./fabrika.gates.ts",
