@@ -30,7 +30,7 @@
 		"@fabrika/runner": "workspace:*"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^4.20251001.0",
+		"@cloudflare/workers-types": "^4.20260702.1",
 		"@types/bun": "latest",
 		"lopata": "latest",
 		"oblaka-iac": "^0.0.18",

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { handleAdmin } from '../admin/router'
 import type { AppSchemaDto, GrantDto, PolicyDto, RoleDto } from '../admin/types'
-import type { Env } from '../env'
+import type { Env, RequestContext } from '../env'
 import type { Services } from '../services'
 import { createHarness, type Harness, seedAppAction, seedGrant, seedUser } from './helpers/harness'
 
@@ -22,13 +22,11 @@ const ADMIN_ENV: Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'PROPUSTKA_PROVISIONING_KE
 
 const ORIGIN = 'https://iam.example.com'
 
-class FakeExecutionContext implements ExecutionContext {
-	readonly props: unknown = undefined
+class FakeRequestContext implements RequestContext {
 	readonly pending: Promise<unknown>[] = []
 	waitUntil(promise: Promise<unknown>): void {
 		this.pending.push(promise)
 	}
-	passThroughOnException(): void {}
 }
 
 // The target app ('opice') registers itself by reconciling its schema (`PUT …/opice/schema`), which
@@ -55,7 +53,7 @@ function req(path: string, method: string, session: string, body?: unknown): Req
 }
 
 async function run(h: Harness, request: Request): Promise<Response> {
-	return handleAdmin(request, adminServices(h), ADMIN_ENV, new FakeExecutionContext())
+	return handleAdmin(request, adminServices(h), ADMIN_ENV, new FakeRequestContext())
 }
 
 const SCHEMA = {

@@ -425,8 +425,13 @@ describe('pipeline.vars — non-secret deploy vars injected into process.env', (
 		})
 		const result = await deploy(config, makeCtx({ vars: { MY_DEPLOY_VAR: 'injected-value' } }), makeOptions(rec))
 		expect(result.status).toBe('succeeded')
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any -- inspecting the recorded oblaka Worker
-		expect((rec.provisions[0]?.definition as unknown as { options: { vars: Record<string, string> } }).options.vars.FROM_ENV).toBe('injected-value')
+		expect(rec.provisions).toHaveLength(1)
+		const provision = rec.provisions[0]
+		expect(provision).toBeDefined()
+		if (provision === undefined) {
+			throw new Error('expected one recorded provision')
+		}
+		expect(provision.definition.options.vars?.FROM_ENV).toBe('injected-value')
 		delete process.env['MY_DEPLOY_VAR']
 	})
 

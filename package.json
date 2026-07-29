@@ -15,13 +15,10 @@
 		"format:check": "dprint check"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.5.0",
+		"@biomejs/biome": "^2.5.6",
 		"@types/bun": "latest",
 		"dprint": "^0.51.1",
 		"typescript": "^5.9.3"
-	},
-	"overrides": {
-		"@cloudflare/workers-types": "4.20260610.1"
 	},
 	"license": "MIT"
 }

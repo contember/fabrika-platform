@@ -82,12 +82,6 @@ resource primitive and the authz declaration types, so a `fabrika.config.ts` nev
 
 ## Critical Invariants
 
-- **The toolchain is PINNED, deliberately.** `@cloudflare/workers-types` is pinned to `4.20260610.1`
-  via a root `overrides` entry and biome to `2.5.0` — the versions the merged code was written
-  against. A float to newer versions surfaces real findings (a newer `ExecutionContext` requires
-  `tracing`; a newer biome flags an unsafe optional chain in `engine`'s tests), but mixing those fixes
-  into the merge would make it impossible to tell merge damage from toolchain drift. Bumping the
-  toolchain and fixing what it finds is its own task — see `docs/backlog/`.
 - **`wrangler.jsonc` is generated but COMMITTED for `control` and `runner`** (and ignored everywhere
   else — see `.gitignore`). Its `migrations` array is the only durable record of a worker's Durable
   Object migration history; regenerating from scratch shifts tags when a DO class is added or removed
@@ -102,8 +96,7 @@ resource primitive and the authz declaration types, so a `fabrika.config.ts` nev
 - **NEVER log credentials or secret values.** They flow control-plane → `RunnerJob` → child env only;
   on error log a short message, never an error object that may carry a clone URL with an embedded token.
 - **`fabrika.config.ts` is the single source of truth** for a worker's own resources; `oblaka.ts` is a
-  thin shim over it. Never re-declare resources in `oblaka.ts`. (`packages/iam` currently VIOLATES
-  this — its two files are near-duplicate graphs that have already drifted. Known; do not copy the pattern.)
+  thin shim over it. Never re-declare resources in `oblaka.ts`.
 - **The deploy EXECUTOR is a separate worker** reached via a service binding, because a deploy's final
   step runs `wrangler deploy` inside a container — a container hosted in the control plane would reset
   itself mid-deploy. It is deployed out-of-band.

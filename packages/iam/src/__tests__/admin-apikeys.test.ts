@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { createLocalJWKSet, jwtVerify } from 'jose'
 import { handleAdmin } from '../admin/router'
 import type { ProvisionApiKeyResponse, RotateApiKeyResponse } from '../admin/types'
+import type { RequestContext } from '../env'
 import type { Services } from '../services'
 import { getSigner } from '../signing'
 import { mintFromKey } from '../tokens'
@@ -18,10 +19,8 @@ const SIGN_ENV = { PROPUSTKA_SIGNING_KEYS: '', PROPUSTKA_PROVISIONING_KEY: '', E
 // env slice handleAdmin needs; 'stage' keeps the local-dev bypass off so the session path runs.
 const ADMIN_ENV = { PROPUSTKA_SIGNING_KEYS: '', PROPUSTKA_PROVISIONING_KEY: '', ENVIRONMENT: 'stage' }
 
-class FakeExecutionContext implements ExecutionContext {
-	readonly props: unknown = undefined
+class FakeRequestContext implements RequestContext {
 	waitUntil(_promise: Promise<unknown>): void {}
-	passThroughOnException(): void {}
 }
 
 function services(h: Harness): Services {
@@ -44,7 +43,7 @@ function req(path: string, method: string, session: string, body?: unknown): Req
 }
 
 function run(h: Harness, request: Request): Promise<Response> {
-	return handleAdmin(request, services(h), ADMIN_ENV, new FakeExecutionContext())
+	return handleAdmin(request, services(h), ADMIN_ENV, new FakeRequestContext())
 }
 
 /** Resolve a `px_` key into an access token via mintFromKey, returning the verified claims (or null). */

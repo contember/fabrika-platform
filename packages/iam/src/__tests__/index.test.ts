@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite'
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import { LOCAL_DEV_ADMIN_ID } from '../auth'
-import type { Env } from '../env'
+import type { Env, RequestContext } from '../env'
 import { allMigrations } from './helpers/migrations'
 
 // TEST-4: the RPC entrypoint (`Propustka` in src/index.ts) wires several spec-mandated
@@ -23,7 +23,7 @@ import { allMigrations } from './helpers/migrations'
 // a source change: it must run BEFORE importing the class under test.
 mock.module('cloudflare:workers', () => ({
 	WorkerEntrypoint: class<E> {
-		constructor(public readonly ctx: ExecutionContext, public readonly env: E) {}
+		constructor(public readonly ctx: RequestContext, public readonly env: E) {}
 	},
 }))
 
@@ -170,9 +170,9 @@ function makeEnv(db: Database, overrides: Partial<Pick<Env, 'ENVIRONMENT'>> = {}
 	}
 }
 
-// A fake ExecutionContext that records the fire-and-forget promises so we can await
+// A fake request context that records the fire-and-forget promises so we can await
 // them before querying the DB (all of Propustka's DB writes go through this.ctx.waitUntil).
-interface FakeCtx extends ExecutionContext {
+interface FakeCtx extends RequestContext {
 	promises: Promise<unknown>[]
 }
 
@@ -183,9 +183,15 @@ function makeCtx(): FakeCtx {
 		waitUntil(p: Promise<unknown>): void {
 			promises.push(p)
 		},
-		passThroughOnException(): void {},
-		props: {},
 	}
+}
+
+function makeEntrypoint(ctx: FakeCtx, env: Env): InstanceType<typeof Propustka> {
+	const worker: unknown = Reflect.construct(Propustka, [ctx, env])
+	if (!(worker instanceof Propustka)) {
+		throw new Error('failed to construct the mocked Worker entrypoint')
+	}
+	return worker
 }
 
 async function settle(ctx: FakeCtx): Promise<void> {
@@ -234,7 +240,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 
 	test('mintFromKey DENY (unknown key) writes one authenticate auth_log row, credential_id null', async () => {
 		const ctx = makeCtx()
-		const worker = new Propustka(ctx, makeEnv(db))
+		const worker = makeEntrypoint(ctx, makeEnv(db))
 
 		const result = await worker.mintFromKey({ app: 'reports', key: 'px_does-not-exist', requestId: 'req-mint' })
 		expect(result).toEqual({ ok: false, reason: 'invalid_key' })
@@ -256,7 +262,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		// Local bypass resolves the issuer to the global-admin (permissions: [{ action: '*' }]),
 		// so the requested grant is fully covered and a credential is issued.
 		const ctx = makeCtx()
-		const worker = new Propustka(ctx, makeEnv(db))
+		const worker = makeEntrypoint(ctx, makeEnv(db))
 
 		const permissions = [{ action: 'report.read', scope: null }]
 		const result = await worker.issueKey({
@@ -294,7 +300,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 
 	test('revokeKey: issueKey → revokeKey flips the credential, audits the revoke, and the credential no longer mints', async () => {
 		const ctx = makeCtx()
-		const worker = new Propustka(ctx, makeEnv(db))
+		const worker = makeEntrypoint(ctx, makeEnv(db))
 
 		// Issue an anonymous share link under the local-bypass admin so the grant is covered.
 		const issued = await worker.issueKey({
@@ -343,7 +349,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 
 	test('revokeKey: unknown id → not_found', async () => {
 		const ctx = makeCtx()
-		const worker = new Propustka(ctx, makeEnv(db))
+		const worker = makeEntrypoint(ctx, makeEnv(db))
 		const result = await worker.revokeKey({
 			app: 'reports',
 			credential: null,
@@ -355,7 +361,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 
 	test('listPrincipals: the local-dev bypass scopes the roster to the SDK-passed app', async () => {
 		const ctx = makeCtx()
-		const worker = new Propustka(ctx, makeEnv(db))
+		const worker = makeEntrypoint(ctx, makeEnv(db))
 		// The native local-dev bypass resolves a global-admin caller whose verified app IS the
 		// SDK-passed `app` (unlike the old CF-Access bypass, which had no aud). So the read succeeds
 		// and is scoped to that app — here an empty roster (no users are seeded for 'poplach').

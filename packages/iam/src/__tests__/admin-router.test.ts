@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { handleAdmin } from '../admin/router'
-import type { Env } from '../env'
+import type { Env, RequestContext } from '../env'
 import { prop } from '../json'
 import type { Services } from '../services'
 import { createHarness, type Harness, seedGrant, seedRole, seedUser } from './helpers/harness'
@@ -25,18 +25,15 @@ const ADMIN_ENV: Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'PROPUSTKA_PROVISIONING_KE
 	ENVIRONMENT: 'stage',
 }
 
-// A minimal ExecutionContext. `handleAdmin` only ever calls ctx.waitUntil /
-// passThroughOnException (via handlers); we record waitUntil promises but never
+// A minimal request context. `handleAdmin` only ever calls ctx.waitUntil; we record
+// those promises but never
 // need them here, since the gate decisions assert on the response status alone.
-class FakeExecutionContext implements ExecutionContext {
-	readonly props: unknown = undefined
+class FakeRequestContext implements RequestContext {
 	readonly pending: Promise<unknown>[] = []
 
 	waitUntil(promise: Promise<unknown>): void {
 		this.pending.push(promise)
 	}
-
-	passThroughOnException(): void {}
 }
 
 interface RequestOptions {
@@ -69,7 +66,7 @@ function adminServices(h: Harness): Services {
 }
 
 async function run(h: Harness, request: Request): Promise<Response> {
-	return handleAdmin(request, adminServices(h), ADMIN_ENV, new FakeExecutionContext())
+	return handleAdmin(request, adminServices(h), ADMIN_ENV, new FakeRequestContext())
 }
 
 describe('handleAdmin — admin gate (scope-less iam.admin)', () => {

@@ -30,6 +30,6 @@
 		"jose": "^5.9.0"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^4.20251001.0"
+		"@cloudflare/workers-types": "^4.20260702.1"
 	}
 }
