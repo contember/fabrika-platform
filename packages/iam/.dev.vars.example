@@ -8,7 +8,7 @@
 #
 # Remote (stage/prod) provisioning is out-of-band: `wrangler secret put
 # PROPUSTKA_SIGNING_KEYS` and `wrangler secret put OIDC_CLIENT_SECRET`. See
-# packages/iam/oblaka.ts.
+# packages/iam/fabrika.config.ts.
 
 # propustka-native auth secrets. Empty PROPUSTKA_SIGNING_KEYS → an ephemeral ES256 key is
 # generated per isolate (dev only; sessions reset on restart). Real keys (stage/prod) are a JSON

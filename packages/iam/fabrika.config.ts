@@ -1,37 +1,77 @@
-// propustka's deploy surface for VOZKA — folds `oblaka.ts` into ONE `@fabrika/config` `defineApp`. vozka's
-// engine loads this to deploy propustka itself: materialize the resource graph (provision via oblaka) and
-// run the pipeline. `oblaka.ts` stays as the local-dev shim (imports `buildPropustkaWorker`). propustka
-// gates its OWN /admin + /auth surface natively now — there is no Cloudflare Access front door to reconcile.
+// propustka's deploy surface. This file owns its environment contract and Cloudflare resource graph.
+// fabrika loads the default `defineApp` config; the local Oblaka entry imports the same builder.
 //
-// propustka is config-heavy: its non-secret deploy vars (HUMAN_* / OIDC_*) are environment/account-specific
-// and live in vozka's per-app-env registry, declared in `pipeline.vars` and injected into `process.env`
-// before `resources()` runs (the SAME `process.env` reads the old `oblaka.ts` did). The real secrets are
-// the native-auth ones — `PROPUSTKA_SIGNING_KEYS` + `PROPUSTKA_OIDC_CLIENT_SECRET` (`pipeline.secrets`,
-// vault → `wrangler secret put`). The Custom Domain route comes from `ctx.domain` (≙ PROPUSTKA_HOSTNAME).
+// Non-secret deploy vars come from fabrika's per-app environment registry. Native-auth secrets are
+// validated before remote materialization but never enter Worker `vars`, where Oblaka would serialize
+// them as plaintext. The Custom Domain route comes from `ctx.domain` (`PROPUSTKA_HOSTNAME` in the
+// standalone Oblaka adapter).
 
 import type { AppSchema, ResourceContext } from '@fabrika/config'
 import { D1Database, defineApp, Worker } from '@fabrika/config'
 
-// Stable app id — the legacy `propustka-state` oblaka namespace prefix, so the first vozka deploy
-// CONTINUES existing cf-state.
+// Keep the legacy Oblaka namespace so the first fabrika deploy continues the existing cf-state.
 const PROPUSTKA_APP_ID = 'propustka'
 
-/** The non-secret deploy vars propustka REQUIRES off-local (validated + injected by vozka's engine). */
 const REQUIRED_VARS = ['PROPUSTKA_HUMAN_EMAIL_DOMAINS', 'PROPUSTKA_OIDC_ISSUER', 'PROPUSTKA_OIDC_CLIENT_ID']
+const REQUIRED_REMOTE_INPUTS = [
+	...REQUIRED_VARS,
+	'PROPUSTKA_SIGNING_KEYS',
+	'PROPUSTKA_OIDC_CLIENT_SECRET',
+]
+const KNOWN_ENVS = new Set(['local', 'stage', 'prod', 'mangoweb'])
+
+type EnvironmentSource = Readonly<Record<string, string | undefined>>
+
+interface RemoteConfig {
+	domain: string
+	humanEmailDomains: string
+	oidcIssuer: string
+	oidcClientId: string
+}
+
+const requiredValue = (source: EnvironmentSource, name: string): string => {
+	const value = source[name]
+	if (value === undefined || value === '') {
+		throw new Error(`Missing ${name}`)
+	}
+	return value
+}
+
+const requiredDomain = (domain: string | undefined): string => {
+	if (domain === undefined || domain === '') {
+		throw new Error('Missing PROPUSTKA_HOSTNAME')
+	}
+	return domain
+}
+
+const remoteConfig = (env: string, domain: string | undefined, source: EnvironmentSource): RemoteConfig => {
+	const missing = REQUIRED_REMOTE_INPUTS.filter((name) => !source[name])
+	if (domain === undefined || domain === '') {
+		missing.push('PROPUSTKA_HOSTNAME')
+	}
+	if (missing.length > 0) {
+		throw new Error(`Missing ${missing.join(', ')} for env=${env}. Configure them before materializing IAM resources.`)
+	}
+
+	return {
+		domain: requiredDomain(domain),
+		humanEmailDomains: requiredValue(source, 'PROPUSTKA_HUMAN_EMAIL_DOMAINS'),
+		oidcIssuer: requiredValue(source, 'PROPUSTKA_OIDC_ISSUER'),
+		oidcClientId: requiredValue(source, 'PROPUSTKA_OIDC_CLIENT_ID'),
+	}
+}
 
 /**
- * propustka's Worker vars per env. Local inlines safe dev placeholders; off-local reads the injected
- * `pipeline.vars` from `process.env` (vozka's engine guarantees the REQUIRED ones are present, so no
- * re-validation here). The native-auth SECRETS (`PROPUSTKA_SIGNING_KEYS`, `PROPUSTKA_OIDC_CLIENT_SECRET`)
- * are `pipeline.secrets` (vault → wrangler secret put), never placed in `vars` (oblaka serializes vars
- * verbatim into wrangler.jsonc — plaintext).
+ * Build propustka's Worker vars. Remote secrets are validated above but excluded here because
+ * Oblaka serializes this object into the plaintext `vars` section of `wrangler.jsonc`.
  */
-const buildVars = (env: string): Record<string, string> => {
-	if (env === 'local') {
+const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): Record<string, string> => {
+	if (config === 'local') {
 		return {
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '[]',
 			IAM_BOOTSTRAP_ADMINS: '[]',
+			ISSUER: 'http://localhost:18191',
 			SESSION_COOKIE_DOMAIN: '',
 			OIDC_ISSUER: 'https://accounts.google.com',
 			OIDC_CLIENT_ID: '',
@@ -39,46 +79,49 @@ const buildVars = (env: string): Record<string, string> => {
 			OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
 		}
 	}
+
 	return {
-		HUMAN_EMAIL_DOMAINS: process.env['PROPUSTKA_HUMAN_EMAIL_DOMAINS'] ?? '[]',
-		// Optional (default '[]'): present only if set in the registry + injected.
-		HUMAN_EMAILS: process.env['PROPUSTKA_HUMAN_EMAILS'] ?? '[]',
-		IAM_BOOTSTRAP_ADMINS: process.env['PROPUSTKA_BOOTSTRAP_ADMINS'] ?? '[]',
-		SESSION_COOKIE_DOMAIN: process.env['PROPUSTKA_SESSION_COOKIE_DOMAIN'] ?? '',
-		OIDC_ISSUER: process.env['PROPUSTKA_OIDC_ISSUER'] ?? '',
-		OIDC_CLIENT_ID: process.env['PROPUSTKA_OIDC_CLIENT_ID'] ?? '',
-		OIDC_SCOPES: process.env['PROPUSTKA_OIDC_SCOPES'] ?? '',
-		OIDC_REQUIRE_VERIFIED_EMAIL: process.env['PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL'] ?? 'true',
+		HUMAN_EMAIL_DOMAINS: config.humanEmailDomains,
+		HUMAN_EMAILS: source['PROPUSTKA_HUMAN_EMAILS'] ?? '[]',
+		IAM_BOOTSTRAP_ADMINS: source['PROPUSTKA_BOOTSTRAP_ADMINS'] ?? '[]',
+		ISSUER: `https://${config.domain}`,
+		SESSION_COOKIE_DOMAIN: source['PROPUSTKA_SESSION_COOKIE_DOMAIN'] ?? '',
+		OIDC_ISSUER: config.oidcIssuer,
+		OIDC_CLIENT_ID: config.oidcClientId,
+		OIDC_SCOPES: source['PROPUSTKA_OIDC_SCOPES'] ?? '',
+		OIDC_REQUIRE_VERIFIED_EMAIL: source['PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL'] ?? 'true',
 	}
 }
 
 /**
- * propustka's full Cloudflare resource graph for one environment — consolidated out of `oblaka.ts`. Both
- * the vozka deploy path (`defineApp` below) and the local-dev `oblaka.ts` shim call this.
+ * Build propustka's only Cloudflare resource graph. Both fabrika and the standalone Oblaka adapter
+ * call this function.
  */
-export const buildPropustkaWorker = (ctx: ResourceContext): Worker => {
-	const { env, domain } = ctx
+export const buildPropustkaWorker = (ctx: ResourceContext, source: EnvironmentSource = process.env): Worker => {
+	const { env } = ctx
+	if (!KNOWN_ENVS.has(env)) {
+		throw new Error(`Unknown environment ${env}`)
+	}
+
+	const runtimeConfig: RemoteConfig | 'local' = env === 'local' ? 'local' : remoteConfig(env, ctx.domain, source)
+	const domain = runtimeConfig === 'local' ? undefined : runtimeConfig.domain
 
 	return new Worker({
 		dir: '.',
-		name: 'propustka-worker', // app workers reference this name via ServiceReference
+		name: 'propustka-worker',
 		main: './src/index.ts',
 		compatibility_flags: ['nodejs_compat_v2'],
 		compatibility_date: '2025-10-01',
-		// Bind the admin hostname (`ctx.domain`) as a Custom Domain (auto DNS + cert + route); it serves
-		// the admin SPA + the native auth/admin HTTP surface. App workers reach the IAM Worker via the
-		// service binding, so this domain is only the human-facing surface. No domain → *.workers.dev.
-		routes: domain !== undefined && domain !== '' ? [{ pattern: domain, custom_domain: true }] : [],
+		// This is the human-facing admin and auth surface. App Workers use a service binding.
+		routes: domain === undefined ? [] : [{ pattern: domain, custom_domain: true }],
 		observability: { enabled: true },
-		// Daily prune of auth_log (retention: weeks); see scheduled() in src/index.ts.
+		// Daily prune of auth_log; see scheduled() in src/index.ts.
 		triggers: { crons: ['0 3 * * *'] },
 		assets: {
 			directory: '../iam-ui/dist',
 			binding: 'ASSETS',
-			// SPA deep links fall through to index.html.
 			not_found_handling: 'single-page-application',
-			// fetch() runs before static assets so /admin/* + /auth/* route to the Worker and the native
-			// admin gate / login flow apply before any asset is served.
+			// Run fetch() first so the native admin and auth gates protect their routes.
 			run_worker_first: true,
 		},
 		bindings: {
@@ -86,18 +129,12 @@ export const buildPropustkaWorker = (ctx: ResourceContext): Worker => {
 		},
 		vars: {
 			ENVIRONMENT: env,
-			// propustka's own origin (iss + OIDC redirect base) is its admin hostname.
-			...(domain !== undefined && domain !== '' ? { ISSUER: `https://${domain}` } : { ISSUER: 'http://localhost:18191' }),
-			...buildVars(env),
+			...buildVars(runtimeConfig, source),
 		},
 	})
 }
 
-/**
- * propustka has NO app-level authz vocabulary of its own — it IS the IAM system; its admin endpoints are
- * gated by the built-in `iam.admin` action + bootstrap admins, not an app schema. Empty schema mirrors the
- * live propustka schema exactly (first reconcile is a no-op).
- */
+// propustka is the IAM system, so its own app schema is intentionally empty.
 const schema: AppSchema = { scopes: [], actions: [], roles: {} }
 
 export default defineApp({
@@ -105,16 +142,11 @@ export default defineApp({
 	resources: buildPropustkaWorker,
 	schema,
 	pipeline: {
-		// propustka's Worker source lives alongside this config (packages/iam).
 		workerDir: '.',
-		// Build the admin SPA into ../iam-ui/dist (the ASSETS directory) before deploy.
 		build: 'bun run --filter @fabrika/iam-ui build',
-		// The native-auth secrets: the token signing keys + the OIDC client secret. Held in vozka's vault.
-		// PROPUSTKA_PROVISIONING_KEY is the seeded provisioning bearer the control plane (vozka) uses to
-		// reconcile schemas (resolveCaller admits it as a synthetic admin); optional, empty = disabled.
+		// Values stay in fabrika's vault and are provisioned out-of-band from Worker plaintext vars.
 		secrets: ['PROPUSTKA_SIGNING_KEYS', 'PROPUSTKA_OIDC_CLIENT_SECRET', 'PROPUSTKA_PROVISIONING_KEY'],
-		// Non-secret, environment/account-specific config (per-app-env registry), injected into process.env
-		// before materialization. HUMAN_EMAILS + BOOTSTRAP_ADMINS are optional (default '[]'), so not required.
+		// Optional list values use safe empty-array defaults and do not belong in this required set.
 		vars: REQUIRED_VARS,
 	},
 })
