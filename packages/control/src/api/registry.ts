@@ -7,10 +7,11 @@
 // a ref, never a raw value. fabrika is single-account, so there is no `accounts` resource: the CF
 // account/token + propustka coords are fabrika's own Worker config (src/env.ts).
 
+import { parseFabrikaManifest } from '@fabrika/engine'
 import type { AppEnvRow, AppRow, AppSecretRow, AppVarRow, Db } from '../db'
 import { error, json, readJson } from '../http'
 import type { Authorized } from '../iam'
-import { arrayField, booleanField, nullableStringField, numberField, stringField } from '../json'
+import { arrayField, booleanField, nullableStringField, numberField, prop, stringField } from '../json'
 import { normalizeRepoUrl, type RepoSource } from '../repo-source'
 
 /** Context every registry handler receives. */
@@ -44,6 +45,10 @@ function toAppEnvDto(row: AppEnvRow): unknown {
 		env: row.env,
 		domain: row.domain,
 		triggerRef: row.trigger_ref,
+		platform: row.platform,
+		zeropsProjectId: row.zerops_project_id,
+		zeropsServiceId: row.zerops_service_id,
+		manifest: row.manifest_json === null ? null : JSON.parse(row.manifest_json),
 		createdAt: row.created_at,
 	}
 }
@@ -171,7 +176,11 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 	const body = await readJson(c.request)
 	const domain = nullableStringField(body, 'domain') ?? null
 	const triggerRef = nullableStringField(body, 'triggerRef') ?? null
-	const row = await c.db.upsertAppEnv({ appId, env, domain, triggerRef })
+	const target = parseAppEnvTarget(body, appId, env)
+	if (target instanceof Response) {
+		return target
+	}
+	const row = await c.db.upsertAppEnv({ appId, env, domain, triggerRef, ...target })
 	await c.authorized.auth.audit({
 		action: 'app.env.upsert',
 		resourceType: 'app_env',
@@ -179,6 +188,40 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 		metadata: { triggerRef },
 	})
 	return json(toAppEnvDto(row))
+}
+
+function parseAppEnvTarget(
+	body: unknown,
+	appId: string,
+	env: string,
+):
+	| {
+		platform: 'cloudflare' | 'zerops'
+		zeropsProjectId?: string
+		zeropsServiceId?: string
+		manifestJson?: string
+	}
+	| Response
+{
+	const platform = stringField(body, 'platform') ?? 'cloudflare'
+	if (platform === 'cloudflare') {
+		return { platform }
+	}
+	if (platform !== 'zerops') {
+		return error(400, 'platform must be `cloudflare` or `zerops`')
+	}
+	const zeropsProjectId = stringField(body, 'zeropsProjectId')
+	const zeropsServiceId = stringField(body, 'zeropsServiceId')
+	const rawManifest = prop(body, 'manifest')
+	if (!zeropsProjectId || !zeropsServiceId || rawManifest === undefined) {
+		return error(400, 'Zerops app env requires zeropsProjectId, zeropsServiceId and manifest')
+	}
+	try {
+		const manifest = parseFabrikaManifest(rawManifest, { appId, env })
+		return { platform, zeropsProjectId, zeropsServiceId, manifestJson: JSON.stringify(manifest) }
+	} catch (cause) {
+		return error(400, cause instanceof Error ? cause.message : 'invalid fabrika manifest')
+	}
 }
 
 export async function deleteAppEnv(c: RegistryContext, appId: string, env: string): Promise<Response> {
@@ -304,11 +347,15 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 	if (await c.db.getApp(id)) {
 		return error(409, 'an app with this id already exists')
 	}
+	const target = parseAppEnvTarget(body, id, env)
+	if (target instanceof Response) {
+		return target
+	}
 	const normalized = normalizeRepoUrl(repoUrl)
 	const app = await c.db.createApp({ id, repoUrl: normalized, ...optionalAppFields(body), ...(await installationIdField(c, body, normalized)) })
 	const domain = nullableStringField(body, 'domain') ?? null
 	const triggerRef = nullableStringField(body, 'triggerRef') ?? null
-	const appEnv = await c.db.upsertAppEnv({ appId: id, env, domain, triggerRef })
+	const appEnv = await c.db.upsertAppEnv({ appId: id, env, domain, triggerRef, ...target })
 	await c.authorized.auth.audit({
 		action: 'app.create',
 		resourceType: 'app',

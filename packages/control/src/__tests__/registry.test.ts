@@ -1,3 +1,5 @@
+import { defineApp } from '@fabrika/config'
+import { compileFabrikaManifest } from '@fabrika/engine'
 import { logsKey } from '@fabrika/runner'
 import { describe, expect, test } from 'bun:test'
 import type { ApiDeps } from '../api/router'
@@ -50,6 +52,45 @@ function req(method: string, path: string, body?: unknown): Request {
 }
 
 describe('onboarding + registry CRUD', () => {
+	test('stores only a validated static manifest for a Zerops app env', async () => {
+		const { deps } = makeDeps()
+		const manifest = compileFabrikaManifest(
+			defineApp({
+				id: 'zerops-app',
+				target: { platform: 'zerops', services: () => [{ hostname: 'api', type: 'alpine/bun@1.3' }] },
+			}),
+			'prod',
+		)
+		await handleApi(req('POST', '/api/apps', { id: 'zerops-app', repoUrl: 'https://github.com/acme/zerops-app' }), deps)
+		const response = await handleApi(
+			req('PUT', '/api/apps/zerops-app/envs/prod', {
+				platform: 'zerops',
+				zeropsProjectId: 'project-1',
+				zeropsServiceId: 'service-1',
+				manifest,
+			}),
+			deps,
+		)
+		expect(response.status).toBe(200)
+		const row = await deps.db.getAppEnv('zerops-app', 'prod')
+		expect(row?.platform).toBe('zerops')
+		expect(row?.zerops_project_id).toBe('project-1')
+		expect(row?.zerops_service_id).toBe('service-1')
+		expect(row?.manifest_json).toBe(JSON.stringify(manifest))
+
+		const drifted = await handleApi(
+			req('PUT', '/api/apps/zerops-app/envs/stage', {
+				platform: 'zerops',
+				zeropsProjectId: 'project-1',
+				zeropsServiceId: 'service-1',
+				manifest,
+			}),
+			deps,
+		)
+		expect(drifted.status).toBe(400)
+		expect(await deps.db.getAppEnv('zerops-app', 'stage')).toBeNull()
+	})
+
 	test('registerApp creates the app + its first app_env in one call', async () => {
 		const { deps } = makeDeps()
 

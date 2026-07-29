@@ -224,6 +224,34 @@ describe('assembleJob', () => {
 	})
 })
 
+describe('Zerops run dispatch', () => {
+	test('executes a static Zerops target in process without assembling a RunnerJob', async () => {
+		const { db } = createHarness()
+		await db.createApp({ id: 'zerops-app', repoUrl: 'github.com/acme/zerops-app' })
+		await db.upsertAppEnv({
+			appId: 'zerops-app',
+			env: 'prod',
+			platform: 'zerops',
+			zeropsProjectId: 'project-1',
+			zeropsServiceId: 'service-1',
+			manifestJson: '{"manifestVersion":1}',
+		})
+		const runId = uuidv7()
+		await db.createRun({ id: runId, appId: 'zerops-app', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
+		const { deps, jobs } = makeDeps(db, { status: { state: 'succeeded' } })
+		const seen: string[] = []
+		deps.startZeropsRun = (input) => {
+			seen.push(`${input.app.id}:${input.appEnv.zerops_project_id}:${input.appEnv.zerops_service_id}`)
+			return Promise.resolve({ status: { state: 'succeeded' } })
+		}
+
+		expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
+		expect(seen).toEqual(['zerops-app:project-1:service-1'])
+		expect(jobs).toEqual([])
+		expect((await db.getRun(runId))?.status).toBe('succeeded')
+	})
+})
+
 describe('executeDeploy (run-row state transitions)', () => {
 	test('pending → running → succeeded; records the exit code', async () => {
 		const { db } = createHarness()

@@ -31,6 +31,11 @@ export interface AppEnvRow {
 	app_id: string
 	env: string
 	domain: string | null
+	platform: 'cloudflare' | 'zerops'
+	zerops_project_id: string | null
+	zerops_service_id: string | null
+	/** Canonical, validated `fabrika.manifest.json`; never executable source. */
+	manifest_json: string | null
 	/** Git ref that triggers a deploy here, e.g. `refs/heads/deploy/prod`. NULL = manual-only. */
 	trigger_ref: string | null
 	created_at: number
@@ -73,6 +78,8 @@ export interface RunRow {
 	created_at: number
 	started_at: number | null
 	finished_at: number | null
+	/** Zerops application-version id. NULL on Cloudflare and before the platform accepts a build. */
+	platform_run_id: string | null
 }
 
 /**
@@ -236,22 +243,46 @@ export class Db {
 		env: string
 		domain?: string | null
 		triggerRef?: string | null
+		platform?: 'cloudflare' | 'zerops'
+		zeropsProjectId?: string | null
+		zeropsServiceId?: string | null
+		manifestJson?: string | null
 	}): Promise<AppEnvRow> {
 		return firstRow<AppEnvRow>(
 			this.d1
-				.prepare(`INSERT INTO app_envs (app_id, env, domain, trigger_ref)
-					VALUES (?, ?, ?, ?)
+				.prepare(`INSERT INTO app_envs (
+						app_id, env, domain, trigger_ref, platform,
+						zerops_project_id, zerops_service_id, manifest_json
+					)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 					ON CONFLICT (app_id, env) DO UPDATE SET
 						domain = excluded.domain,
-						trigger_ref = excluded.trigger_ref
+						trigger_ref = excluded.trigger_ref,
+						platform = excluded.platform,
+						zerops_project_id = excluded.zerops_project_id,
+						zerops_service_id = excluded.zerops_service_id,
+						manifest_json = excluded.manifest_json
 					RETURNING *`)
 				.bind(
 					input.appId,
 					input.env,
 					input.domain ?? null,
 					input.triggerRef ?? null,
+					input.platform ?? 'cloudflare',
+					input.zeropsProjectId ?? null,
+					input.zeropsServiceId ?? null,
+					input.manifestJson ?? null,
 				),
 		)
+	}
+
+	/** Persist the platform-owned operation id as soon as Zerops reports it. */
+	async setRunPlatformId(id: string, platformRunId: string): Promise<boolean> {
+		const result = await this.d1
+			.prepare(`UPDATE runs SET platform_run_id = ? WHERE id = ? AND status = 'running'`)
+			.bind(platformRunId, id)
+			.run()
+		return (result.meta.changes ?? 0) > 0
 	}
 
 	async deleteAppEnv(appId: string, env: string): Promise<boolean> {
@@ -496,7 +527,10 @@ export class Db {
 					a.id AS a_id, a.repo_url AS a_repo_url, a.default_branch AS a_default_branch, a.worker_dir AS a_worker_dir,
 					a.build_cmd AS a_build_cmd, a.config_path AS a_config_path, a.github_installation_id AS a_github_installation_id,
 					a.created_at AS a_created_at,
-					e.app_id AS e_app_id, e.env AS e_env, e.domain AS e_domain, e.trigger_ref AS e_trigger_ref, e.created_at AS e_created_at
+						e.app_id AS e_app_id, e.env AS e_env, e.domain AS e_domain, e.trigger_ref AS e_trigger_ref,
+						e.platform AS e_platform, e.zerops_project_id AS e_zerops_project_id,
+						e.zerops_service_id AS e_zerops_service_id, e.manifest_json AS e_manifest_json,
+						e.created_at AS e_created_at
 				FROM apps a
 				JOIN app_envs e ON e.app_id = a.id
 				WHERE a.github_installation_id IS NULL AND e.trigger_ref IS NOT NULL
@@ -518,6 +552,10 @@ export class Db {
 				env: r.e_env,
 				domain: r.e_domain,
 				trigger_ref: r.e_trigger_ref,
+				platform: r.e_platform,
+				zerops_project_id: r.e_zerops_project_id,
+				zerops_service_id: r.e_zerops_service_id,
+				manifest_json: r.e_manifest_json,
 				created_at: r.e_created_at,
 			},
 		}))
@@ -572,6 +610,10 @@ interface PollEligibleJoinRow {
 	e_env: string
 	e_domain: string | null
 	e_trigger_ref: string | null
+	e_platform: 'cloudflare' | 'zerops'
+	e_zerops_project_id: string | null
+	e_zerops_service_id: string | null
+	e_manifest_json: string | null
 	e_created_at: number
 }
 

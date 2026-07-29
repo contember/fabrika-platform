@@ -29,6 +29,15 @@ export interface RunOutcome {
 /** The injected runner: M2's `Fabrika.startRun`. Typed structurally so tests pass a fake. */
 export type StartRun = (job: RunnerJob) => Promise<RunOutcome>
 
+/** In-process Zerops executor. It receives static registry data and never a checkout or app module. */
+export type StartZeropsRun = (input: {
+	run: RunRow
+	app: AppRow
+	appEnv: AppEnvRow
+	vars: Record<string, string>
+	dryRun: boolean
+}) => Promise<RunOutcome>
+
 /**
  * fabrika's build-time deploy config — the platform credentials + propustka coordinates injected into
  * EVERY deploy job, sourced from fabrika's own Worker vars/secrets (not the per-app registry). fabrika is
@@ -51,6 +60,10 @@ export interface DeployConfig {
 	propustkaUrl?: string
 	/** propustka admin/provisioning `px_` bearer key (the seeded provisioning key), when configured. Never logged. */
 	propustkaProvisioningKey?: string
+	/** Zerops personal access token. It carries account-wide admin rights and is never logged. */
+	zeropsAccessToken?: string
+	/** Optional regional API endpoint override. */
+	zeropsApiBaseUrl?: string
 }
 
 /**
@@ -73,6 +86,8 @@ export interface RunDeps {
 	repoSource: RepoSource
 	secrets: SecretResolver
 	startRun: StartRun
+	/** Present on a Zerops control plane; Cloudflare-only deployments never call it. */
+	startZeropsRun?: StartZeropsRun
 	/** Per-app-env mutual exclusion so two triggers can't deploy the same target concurrently. */
 	lock: DeployLockGate
 	/** fabrika's own platform deploy config (CF account/token + propustka coords), build-time. */
@@ -189,9 +204,27 @@ export async function executeDeploy(
 			return { runId: run.id, status: 'failed' }
 		}
 
-		const job = await assembleJob(deps, run, app, appEnv, { ...(message.dryRun ? { dryRun: true } : {}) })
-
-		const outcome = await deps.startRun(job)
+		let outcome: RunOutcome
+		if (appEnv.platform === 'zerops') {
+			if (deps.startZeropsRun === undefined) {
+				throw new Error('Zerops deploy executor is not configured')
+			}
+			const varRows = await deps.db.getAppVarsForEnv(app.id, appEnv.env)
+			const vars: Record<string, string> = {}
+			for (const row of varRows) {
+				vars[row.name] = row.value
+			}
+			outcome = await deps.startZeropsRun({
+				run,
+				app,
+				appEnv,
+				vars,
+				dryRun: message.dryRun === true,
+			})
+		} else {
+			const job = await assembleJob(deps, run, app, appEnv, { ...(message.dryRun ? { dryRun: true } : {}) })
+			outcome = await deps.startRun(job)
+		}
 		const status = outcome.status.state
 		await deps.db.markRunFinished(run.id, status, outcome.status.exitCode ?? null)
 		return { runId: run.id, status }

@@ -8,6 +8,7 @@
 // Nothing in this file (or anything it reaches) imports `cloudflare:workers`, `bun:*` or `node:*` —
 // every handle arrives through a port. `src/__tests__/entrypoint-isolation.test.ts` enforces that.
 
+import { configFromManifest, deploy, type DeployOptions, parseFabrikaManifest } from '@fabrika/engine'
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { RelayResult, RunnerJob } from '@fabrika/runner'
 import type { ApiDeps } from './api/router'
@@ -15,7 +16,7 @@ import { Db, type RunRow } from './db'
 import type { Env } from './env'
 import { createIam } from './iam'
 import { GitHubAppRepoSource, type RepoSource } from './repo-source'
-import type { RunDeps, RunOutcome } from './run-lifecycle'
+import type { RunDeps, RunOutcome, StartZeropsRun } from './run-lifecycle'
 import { VaultSecretResolver } from './secret-resolver'
 import { Vault } from './vault'
 
@@ -90,6 +91,63 @@ export async function startRun(env: Env, job: RunnerJob): Promise<RelayResult> {
 	return env.RUNNER.startRun(job)
 }
 
+/** Execute a callback-free registered Zerops manifest through the HTTP driver in this process. */
+export async function startZeropsRun(
+	env: Env,
+	input: Parameters<StartZeropsRun>[0],
+	options: DeployOptions = {},
+): Promise<RunOutcome> {
+	const { appEnv } = input
+	if (
+		appEnv.zerops_project_id === null
+		|| appEnv.zerops_service_id === null
+		|| appEnv.manifest_json === null
+	) {
+		throw new Error(`Zerops target ${appEnv.app_id}/${appEnv.env} is incomplete`)
+	}
+	const accessToken = env.ZEROPS_ACCESS_TOKEN
+	if (accessToken === undefined || accessToken === '') {
+		throw new Error('ZEROPS_ACCESS_TOKEN is not configured')
+	}
+	let raw: unknown
+	try {
+		raw = JSON.parse(appEnv.manifest_json)
+	} catch {
+		throw new Error(`Zerops target ${appEnv.app_id}/${appEnv.env} has invalid manifest JSON`)
+	}
+	const manifest = parseFabrikaManifest(raw, { appId: input.app.id, env: appEnv.env })
+	const config = configFromManifest(manifest)
+	const result = await deploy(
+		config,
+		{
+			env: appEnv.env,
+			...(appEnv.domain !== null ? { domain: appEnv.domain } : {}),
+			target: {
+				platform: 'zerops',
+				projectId: appEnv.zerops_project_id,
+				serviceId: appEnv.zerops_service_id,
+				accessToken,
+				...(env.ZEROPS_API_BASE_URL !== undefined && env.ZEROPS_API_BASE_URL !== ''
+					? { apiBaseUrl: env.ZEROPS_API_BASE_URL }
+					: {}),
+			},
+			...(env.PROPUSTKA_URL !== undefined && env.PROPUSTKA_URL !== '' ? { propustkaUrl: env.PROPUSTKA_URL } : {}),
+			...(env.PROPUSTKA_PROVISIONING_KEY !== undefined && env.PROPUSTKA_PROVISIONING_KEY !== ''
+				? { adminKey: env.PROPUSTKA_PROVISIONING_KEY }
+				: {}),
+			secrets: {},
+			vars: input.vars,
+			cwd: '.',
+			dryRun: input.dryRun,
+		},
+		{
+			...options,
+			log: options.log ?? ((line) => console.info(`deploy run ${input.run.id}: ${line}`)),
+		},
+	)
+	return { status: { state: result.status === 'succeeded' ? 'succeeded' : 'failed' } }
+}
+
 /**
  * Cancel an in-flight run: have vozka-runner DESTROY the run's container, then free the per-app-env
  * deploy lock so the target can be redeployed immediately. Destroying the container is what makes the
@@ -129,6 +187,7 @@ export async function buildRunDeps(env: Env): Promise<RunDeps> {
 			},
 		}),
 		startRun: run,
+		startZeropsRun: (input) => startZeropsRun(env, input),
 		// Per-app-env mutual exclusion, one `deploy_locks` row per `<app>:<env>`. The TTL is bound here so
 		// the lifecycle never has to know how long a deploy may legitimately take.
 		lock: {
@@ -145,6 +204,12 @@ export async function buildRunDeps(env: Env): Promise<RunDeps> {
 			...(env.PROPUSTKA_URL !== undefined && env.PROPUSTKA_URL !== '' ? { propustkaUrl: env.PROPUSTKA_URL } : {}),
 			...(env.PROPUSTKA_PROVISIONING_KEY !== undefined && env.PROPUSTKA_PROVISIONING_KEY !== ''
 				? { propustkaProvisioningKey: env.PROPUSTKA_PROVISIONING_KEY }
+				: {}),
+			...(env.ZEROPS_ACCESS_TOKEN !== undefined && env.ZEROPS_ACCESS_TOKEN !== ''
+				? { zeropsAccessToken: env.ZEROPS_ACCESS_TOKEN }
+				: {}),
+			...(env.ZEROPS_API_BASE_URL !== undefined && env.ZEROPS_API_BASE_URL !== ''
+				? { zeropsApiBaseUrl: env.ZEROPS_API_BASE_URL }
 				: {}),
 		},
 	}

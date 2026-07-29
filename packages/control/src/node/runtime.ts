@@ -100,6 +100,8 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		...(source['GITHUB_APP_PRIVATE_KEY'] !== undefined ? { GITHUB_APP_PRIVATE_KEY: source['GITHUB_APP_PRIVATE_KEY'] } : {}),
 		...(source['CLOUDFLARE_API_TOKEN'] !== undefined ? { CLOUDFLARE_API_TOKEN: source['CLOUDFLARE_API_TOKEN'] } : {}),
 		...(source['PROPUSTKA_PROVISIONING_KEY'] !== undefined ? { PROPUSTKA_PROVISIONING_KEY: source['PROPUSTKA_PROVISIONING_KEY'] } : {}),
+		...(source['ZEROPS_ACCESS_TOKEN'] !== undefined ? { ZEROPS_ACCESS_TOKEN: source['ZEROPS_ACCESS_TOKEN'] } : {}),
+		...(source['ZEROPS_API_BASE_URL'] !== undefined ? { ZEROPS_API_BASE_URL: source['ZEROPS_API_BASE_URL'] } : {}),
 		...(source['VOZKA_VAULT_KEY'] !== undefined && source['VOZKA_VAULT_KEY'] !== '' ? { VOZKA_VAULT_KEY: source['VOZKA_VAULT_KEY'] } : {}),
 	}
 

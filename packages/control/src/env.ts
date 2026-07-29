@@ -109,6 +109,10 @@ export interface Env {
 	 * reconcile step (propustka admits it as a synthetic admin). NEVER logged.
 	 */
 	PROPUSTKA_PROVISIONING_KEY?: string
+	/** Zerops personal access token used by the in-process deploy driver. Never logged. */
+	ZEROPS_ACCESS_TOKEN?: string
+	/** Optional regional Zerops REST API base URL. */
+	ZEROPS_API_BASE_URL?: string
 	/**
 	 * The vault MASTER key (KEK) for the encrypted secret vault — 32 raw bytes, base64. Seals every
 	 * per-value data key (src/vault.ts). Provisioned out-of-band, once per environment:
