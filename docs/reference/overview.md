@@ -33,27 +33,47 @@ platform_, never _an app runs on both_.
 
 ## The packages
 
-| Package                        | What it is                                                                                  |
-| ------------------------------ | ------------------------------------------------------------------------------------------- |
-| `@fabrika/auth-core`           | Shared IAM domain: policy model, scope dimensions, evaluation.                              |
-| `@fabrika/auth`                | The published SDK apps depend on.                                                           |
-| `@fabrika/iam`                 | The IAM service itself: identity, keys, policies, and audit.                                |
-| `@fabrika/iam-ui`              | IAM admin UI.                                                                               |
-| `@fabrika/provider-contract`   | Open runtime and control-provider interfaces plus versioned JSON envelopes.                 |
-| `@fabrika/provider-cloudflare` | Cloudflare app authoring, deploy plan, control adapter, runner job contract, and CLI.       |
-| `@fabrika/provider-zerops`     | Zerops app authoring, manifest compiler, API client, deploy plan, control adapter, and CLI. |
-| `@fabrika/engine`              | Provider-neutral execution of an explicit `RuntimeProvider` session.                        |
-| `@fabrika/platform`            | Runtime ports shared by the control plane and IAM.                                          |
-| `@fabrika/platform-node`       | Bun/Postgres/S3 implementations of those runtime ports.                                     |
-| `@fabrika/control`             | Shared control-plane core plus separate Cloudflare Worker and Zerops/Bun composition roots. |
-| `@fabrika/cli`                 | Operator bring-up CLI.                                                                      |
-| `@fabrika/dashboard`           | Deploy dashboard UI.                                                                        |
-| `@fabrika/runner`              | Cloudflare-only transport and execution for provider-owned runner jobs.                     |
-| `@fabrika/proxy`               | Shared auth enforcement service used by the provider-specific edge proxy.                   |
+| Package                        | What it is                                                                                     |
+| ------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `@fabrika/auth-core`           | Shared IAM domain: policy model, scope dimensions, evaluation.                                 |
+| `@fabrika/auth`                | The published SDK apps depend on.                                                              |
+| `@fabrika/app`                 | Fetch routing, middleware, typed RPC, object authorization, client, explicit runtime adapters. |
+| `@fabrika/iam`                 | The IAM service itself: identity, keys, policies, and audit.                                   |
+| `@fabrika/iam-ui`              | IAM admin UI.                                                                                  |
+| `@fabrika/provider-contract`   | Open runtime and control-provider interfaces plus versioned JSON envelopes.                    |
+| `@fabrika/provider-cloudflare` | Cloudflare app authoring, deploy plan, control adapter, runner job contract, and CLI.          |
+| `@fabrika/provider-zerops`     | Zerops app authoring, manifest compiler, API client, deploy plan, control adapter, and CLI.    |
+| `@fabrika/engine`              | Provider-neutral execution of an explicit `RuntimeProvider` session.                           |
+| `@fabrika/platform`            | Runtime ports shared by the control plane and IAM.                                             |
+| `@fabrika/platform-node`       | Bun/Postgres/S3 implementations of those runtime ports.                                        |
+| `@fabrika/control`             | Shared control-plane core plus separate Cloudflare Worker and Zerops/Bun composition roots.    |
+| `@fabrika/cli`                 | Operator bring-up CLI.                                                                         |
+| `@fabrika/dashboard`           | Deploy dashboard UI.                                                                           |
+| `@fabrika/runner`              | Cloudflare-only transport and execution for provider-owned runner jobs.                        |
+| `@fabrika/proxy`               | Shared auth enforcement service used by the provider-specific edge proxy.                      |
 
 `@fabrika/auth` is a published SDK with downstream consumers (poplach, revizor,
 opice); the rename is a deliberate, one-time break — see
 [ADR-0001](../decisions/0001-merge-propustka-and-vozka.md).
+
+## Application runtime
+
+`@fabrika/app` is the server framework for Fabrika applications. It owns the
+Fetch-based request pipeline: typed HTTP routes, middleware, nested RPC routers,
+Standard Schema validation, structural error responses, and the typed browser RPC
+client.
+
+The package root is runtime-neutral. Cloudflare and Bun lifecycle APIs live under
+`@fabrika/app/cloudflare` and `@fabrika/app/bun`.
+
+The proxy and the application perform different checks. The proxy evaluates
+static path gates before a request reaches the private app service. App middleware
+verifies the injected Fabrika token and provides the canonical
+`@fabrika/auth` `AuthContext`. An RPC procedure's `.require(action, scope)` then
+checks the application-owned object coordinate that a path gate cannot know. See
+[`application-runtime.md`](application-runtime.md) and
+[ADR-0012](../decisions/0012-fabrika-app-runtime.md) and
+[ADR-0013](../decisions/0013-explicit-runtime-adapter-entrypoints.md).
 
 ## Provider composition
 

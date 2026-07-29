@@ -4,10 +4,11 @@
 // package has its own deny-matrix tests. What is tested is the half the proxy cannot do: verifying the
 // injected token and authorizing a specific action on a specific workspace.
 
+import { createBunHandler } from '@fabrika/app/bun'
 import { type AccessTokenClaims, type PermissionEntry, TOKEN_ALG } from '@fabrika/auth-core'
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, type JWK, type KeyLike, SignJWT } from 'jose'
-import { createHandler } from '../app'
+import { notesApp } from '../app'
 import { createTokenReader, PROXY_TOKEN_HEADER } from '../authz'
 import type { Note, NotesStore } from '../notes'
 
@@ -30,6 +31,19 @@ class MemoryNotes implements NotesStore {
 		}
 		this.rows.splice(index, 1)
 		return Promise.resolve(true)
+	}
+}
+
+class FailingNotes implements NotesStore {
+	constructor(private readonly failure: Error) {}
+	list(_workspace: string): Promise<Note[]> {
+		return Promise.reject(this.failure)
+	}
+	create(_note: Note): Promise<void> {
+		return Promise.reject(this.failure)
+	}
+	remove(_workspace: string, _id: string): Promise<boolean> {
+		return Promise.reject(this.failure)
 	}
 }
 
@@ -59,11 +73,15 @@ const grant = (action: string, workspace?: string): PermissionEntry => ({
 })
 
 const handlerFor = (notes: NotesStore = new MemoryNotes()): (request: Request) => Promise<Response> =>
-	createHandler({
-		readCaller: createTokenReader({ issuer: ISSUER, appId: APP_ID, keys: createLocalJWKSet({ keys: [publicJwk] }) }),
-		notes,
-		newId: () => 'note-1',
-	})
+	createBunHandler(
+		notesApp,
+		{
+			readCaller: createTokenReader({ issuer: ISSUER, appId: APP_ID, keys: createLocalJWKSet({ keys: [publicJwk] }) }),
+			notes,
+			newId: () => 'note-1',
+		},
+		{ onBackgroundError: () => undefined },
+	).fetch
 
 const withToken = (url: string, token: string, init: RequestInit = {}): Request =>
 	new Request(url, { ...init, headers: { ...(init.headers ?? {}), [PROXY_TOKEN_HEADER]: token } })
@@ -75,7 +93,7 @@ describe('public routes need no credential at all', () => {
 	})
 
 	test('/public/* is anonymous, and an anonymous caller can do nothing', async () => {
-		const response = await handlerFor()(new Request('https://notes.test/public/info'))
+		const response = await handlerFor()(new Request('https://notes.test/public/docs/info'))
 		expect(response.status).toBe(200)
 		expect(await response.json()).toEqual({ app: 'notes', caller: 'anonymous' })
 	})
@@ -152,5 +170,27 @@ describe('authorization is PER OBJECT — the check a per-path gate cannot make'
 		const global = await sign({ iss: ISSUER, aud: APP_ID, perms: [grant('notes.read')] })
 		const globalBody: unknown = await (await handlerFor()(withToken('https://notes.test/', global))).json()
 		expect(globalBody).toEqual({ caller: 'principal-1', label: null, workspaces: null })
+	})
+})
+
+describe('unhandled request errors stay opaque', () => {
+	test('a backend error is reported internally but its message never reaches the response', async () => {
+		const failure = new Error('postgres://user:secret@database.internal/notes')
+		const reported: unknown[] = []
+		const handler = createBunHandler(
+			notesApp,
+			{
+				readCaller: createTokenReader({ issuer: ISSUER, appId: APP_ID, keys: createLocalJWKSet({ keys: [publicJwk] }) }),
+				notes: new FailingNotes(failure),
+				onError: (error) => reported.push(error),
+			},
+			{ onBackgroundError: () => undefined },
+		).fetch
+		const token = await sign({ iss: ISSUER, aud: APP_ID, perms: [grant('notes.read', 'acme')] })
+		const response = await handler(withToken('https://notes.test/api/notes?workspace=acme', token))
+
+		expect(response.status).toBe(500)
+		expect(await response.json()).toEqual({ error: 'internal error' })
+		expect(reported).toEqual([failure])
 	})
 })

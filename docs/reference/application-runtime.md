@@ -1,0 +1,76 @@
+# Application runtime
+
+`@fabrika/app` is the first-party server framework for applications deployed by
+Fabrika. It combines Fetch-based HTTP routing, middleware, typed RPC, structural
+error handling, object-level authorization, and a typed browser client.
+
+## Request pipeline
+
+`defineApp()` builds the runtime-neutral request application. For each request it:
+
+1. builds the caller-owned context;
+2. runs global middleware in declaration order;
+3. matches an HTTP or RPC route;
+4. runs route-scoped middleware;
+5. invokes the handler or RPC dispatcher;
+6. maps thrown structural errors to a response;
+7. serves the optional asset fallback for an unmatched `GET`.
+
+Middleware may mutate context, short-circuit with a response, or wrap the
+downstream response. `@fabrika/auth` owns the canonical `Middleware` type;
+`@fabrika/app` consumes and re-exports it.
+
+HTTP route patterns support typed `:segment` parameters and one optional terminal
+wildcard such as `/public/*path`. The wildcard captures the decoded remaining
+path.
+
+## Authorization boundary
+
+Proxy gates and procedure requirements are complementary:
+
+- The proxy evaluates the ordered static gate list and prevents unauthorized
+  requests from reaching the private app service.
+- App auth middleware verifies the proxy-injected token and builds the canonical
+  `AuthContext` from `@fabrika/auth`.
+- `.require(action, scopeResolver?)` calls `ctx.auth.can()` before the procedure
+  handler. The optional resolver maps validated input and context to an
+  application-owned `{ type, value }` coordinate.
+
+A `.require()` check does not replace a proxy gate. A proxy gate cannot replace an
+object-level check whose scope depends on application data.
+
+## Typed RPC
+
+`initRpc<Ctx>()` creates immutable procedure builders and nested routers. A
+procedure may declare:
+
+- an input Standard Schema;
+- an optional output Standard Schema;
+- one or more authorization requirements;
+- a query, mutation, or neutral handler.
+
+The wire protocol uses one POST endpoint:
+
+- request: `{ method, input }` or `{ batch: [...] }`;
+- response: `{ result }`, `{ error }`, or `{ batch: [...] }`.
+
+`createRpcClient<Router>()` derives the browser call surface directly from the
+server router type. No code generation is required.
+
+## Runtime boundary
+
+Routing, middleware, RPC, validation, and the client use Web Fetch API types.
+Runtime adapters add process lifecycle without changing request behavior:
+
+- `@fabrika/app/cloudflare` exports `createCloudflareWorker()`. It builds a
+  Worker-shaped `{ fetch, scheduled?, queue? }` module from a `FabrikaApp`.
+  Minimal structural types for the execution context, cron, and queues remain in
+  this entrypoint.
+- `@fabrika/app/bun` exports `createBunHandler()`. It binds one `FabrikaApp` to
+  its process dependencies and returns `fetch()` plus `drain()`. It tracks every
+  `waitUntil()` promise, reports rejected background tasks through a required
+  callback, and drains all pending work during shutdown.
+
+Provider authoring remains separate: an app's `fabrika.config.ts` imports its
+selected provider package. Portable request code imports `@fabrika/app`; only the
+deployment entrypoint imports its runtime adapter.

@@ -1,8 +1,7 @@
 /**
- * The SHARED middleware contract — structurally identical to the one a server framework (trasa) is
- * built against in parallel, so the functions `createIam(...)` produces drop straight into trasa's
- * pipeline. There is NO import from trasa: a `Middleware<Ctx>` here is just a function of this exact
- * shape, and trasa accepts any function of this shape.
+ * The shared middleware contract consumed by `@fabrika/app`. The auth package owns
+ * the shape so middleware produced by `createIam(...)` drops directly into the
+ * application request pipeline without a duplicate compatibility interface.
  *
  * A middleware runs in order; it may:
  *   - mutate `ctx` (e.g. set `ctx.auth`),

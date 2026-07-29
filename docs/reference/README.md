@@ -12,6 +12,8 @@ behaviour.
 
 - [`overview.md`](overview.md) — what fabrika-platform is, why it exists, the
   packages, and how a deploy and an auth check flow. **Start here.**
+- [`application-runtime.md`](application-runtime.md) — the `@fabrika/app` request
+  pipeline, typed RPC, and authorization boundary.
 - [`zerops-platform.md`](zerops-platform.md) — the Zerops facts the decisions rest
   on, each with a source (and each unverified claim marked as such).
 - [`portability-surface.md`](portability-surface.md) — every Cloudflare primitive in

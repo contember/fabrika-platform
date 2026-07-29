@@ -54,6 +54,7 @@ implementation set to one provider bundle.
 packages/auth-core/   # @fabrika/auth-core — pure kernel: action matcher, permits(), token build/parse,
                       #   gate types, the IamRpc contract. No I/O, no deps.
 packages/auth/        # @fabrika/auth — the app-facing SDK.
+packages/app/         # @fabrika/app — HTTP routing, middleware, typed RPC, object authorization, client.
 packages/iam/         # @fabrika/iam — the IAM service: OIDC login, token minting, /admin API, D1.
 packages/iam-ui/      # @fabrika/iam-ui — the IAM admin SPA.
 packages/platform/    # @fabrika/platform — the runtime PORTS (SqlDatabase, BlobStore, JobQueue, DeployLocks,
@@ -109,6 +110,7 @@ Cloudflare configs import `@fabrika/provider-cloudflare`; Zerops configs import
 ## Module-Specific Context
 
 - `packages/engine/CLAUDE.md` — the provider-neutral executor and runtime provider contract.
+- `packages/app/CLAUDE.md` — the application request pipeline, typed RPC, and auth integration.
 - `packages/control/CLAUDE.md` — the control plane: API/ACL, vault, secret resolution, run lifecycle, webhook, D1.
 - `packages/runner/CLAUDE.md` — the container image, the Worker↔container protocol, the executor worker.
 - `packages/dashboard/CLAUDE.md` — the SPA: routes, API client, DTOs, buzola codegen.

@@ -1,10 +1,10 @@
 /**
  * Typed request-time errors + a small authorization helper.
  *
- * These are the SHARED structural HTTP-error contract a server framework (trasa) maps without any
+ * These are the shared structural HTTP-error contract `@fabrika/app` maps without any
  * cross-package `instanceof`: each error exposes `{ httpStatus, type, message }` plus an optional
  * `issues` (validation detail) and an optional `loginUrl` (a human SSO bounce). A mapper reads those
- * fields structurally — it never imports these classes — so the shapes here and trasa's reader are the
+ * fields structurally — it never imports these classes — so these shapes and the framework reader are the
  * single contract. They live in `@fabrika/auth` because `requirePermission` consumes an
  * `AuthContext` (a client type) and `loginUrl` is a request concept, not core logic.
  */

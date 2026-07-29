@@ -21,10 +21,14 @@ fabrika-platform is and how the pieces fit — then skim
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
+- [Fabrika application runtime (2026-07-29)](sprints/sprint-2026-07-29-fabrika-app-runtime.md)
+  — absorb the standalone server framework as `@fabrika/app`.
+
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
 
+- **Active:** establish `@fabrika/app` as Fabrika's server framework.
 - **Next:** run the resulting Zerops composition against a real account in
   [`backlog/05-bring-up-on-a-real-zerops-account.md`](backlog/05-bring-up-on-a-real-zerops-account.md).

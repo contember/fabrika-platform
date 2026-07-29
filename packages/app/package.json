@@ -1,0 +1,46 @@
+{
+	"name": "@fabrika/app",
+	"version": "0.0.1",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/contember/fabrika-platform.git",
+		"directory": "packages/app"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"src",
+		"!src/**/__tests__/**"
+	],
+	"exports": {
+		".": {
+			"bun": "./src/index.ts",
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		},
+		"./bun": {
+			"bun": "./src/bun.ts",
+			"types": "./src/bun.ts",
+			"default": "./src/bun.ts"
+		},
+		"./cloudflare": {
+			"bun": "./src/cloudflare.ts",
+			"types": "./src/cloudflare.ts",
+			"default": "./src/cloudflare.ts"
+		}
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@fabrika/auth": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"zod": "^3.24.0"
+	}
+}

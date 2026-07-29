@@ -28,6 +28,7 @@
     "examples/app": {
       "name": "@fabrika/example-app",
       "dependencies": {
+        "@fabrika/app": "workspace:*",
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
@@ -43,12 +44,24 @@
     "examples/zerops-app": {
       "name": "@fabrika/example-zerops-app",
       "dependencies": {
+        "@fabrika/app": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",
         "jose": "^5.9.0",
       },
       "devDependencies": {
         "@types/bun": "latest",
+      },
+    },
+    "packages/app": {
+      "name": "@fabrika/app",
+      "version": "0.0.1",
+      "dependencies": {
+        "@fabrika/auth": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "zod": "^3.24.0",
       },
     },
     "packages/auth": {
@@ -408,6 +421,8 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.27.3", "", { "os": "win32", "cpu": "x64" }, "sha512-4uJGhsxuptu3OcpVAzli+/gWusVGwZZHTlS63hh++ehExkVT8SgiEf7/uC/PclrPPkLhZqGgCTjd0VWLo6xMqA=="],
 
+    "@fabrika/app": ["@fabrika/app@workspace:packages/app"],
+
     "@fabrika/auth": ["@fabrika/auth@workspace:packages/auth"],
 
     "@fabrika/auth-core": ["@fabrika/auth-core@workspace:packages/auth-core"],
@@ -705,6 +720,8 @@
     "youch": ["youch@4.1.0-beta.10", "", { "dependencies": { "@poppinss/colors": "^4.1.5", "@poppinss/dumper": "^0.6.4", "@speed-highlight/core": "^1.2.7", "cookie": "^1.0.2", "youch-core": "^0.3.3" } }, "sha512-rLfVLB4FgQneDr0dv1oddCVZmKjcJ6yX6mS4pU82Mq/Dt9a3cLZQ62pDBL4AUO+uVrCvtWz3ZFUL2HFAFJ/BXQ=="],
 
     "youch-core": ["youch-core@0.3.3", "", { "dependencies": { "@poppinss/exception": "^1.2.2", "error-stack-parser-es": "^1.0.5" } }, "sha512-ho7XuGjLaJ2hWHoK8yFnsUGy2Y5uDpqSTq1FkHLK4/oqKtyUU1AFbOOxY4IpC9f0fTLjwYbslUz0Po5BpD1wrA=="],
+
+    "zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 
     "@babel/generator/@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 

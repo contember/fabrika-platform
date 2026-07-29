@@ -28,6 +28,9 @@ Bun monorepo (`packages/*`). Each installation statically selects one provider b
 `@fabrika/auth` (the app-facing SDK) · `@fabrika/iam` (the IAM service) ·
 `@fabrika/iam-ui` (its admin SPA).
 
+**Application runtime** — `@fabrika/app` (Fetch-based HTTP routing, middleware, typed RPC, structural
+errors, object-level authorization, a typed browser client, and Worker/Bun lifecycle adapters).
+
 **Deploy contract and core** — `@fabrika/provider-contract` (open provider interfaces and versioned
 JSON envelopes) · `@fabrika/engine` (provider-neutral plan executor) · `@fabrika/control` (registry,
 run lifecycle, and composition roots) · `@fabrika/platform` (runtime ports) ·

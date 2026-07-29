@@ -5,6 +5,7 @@
 		{ "path": "./packages/platform-node" },
 		{ "path": "./packages/auth-core" },
 		{ "path": "./packages/auth" },
+		{ "path": "./packages/app" },
 		{ "path": "./packages/proxy" },
 		{ "path": "./packages/iam" },
 		{ "path": "./packages/iam-ui" },

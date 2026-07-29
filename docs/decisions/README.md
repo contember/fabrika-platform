@@ -20,6 +20,10 @@ ADR-0009 across authoring, persistence, and the control lifecycle. It replaces
 their closed driver-registry mechanics with static provider bundles while
 retaining their provider-owned plan and collaborator boundaries.
 
+ADR-0013 refines the application runtime boundary from ADR-0012. The package root
+is runtime-neutral; Cloudflare and Bun lifecycle APIs use explicit subpath
+entrypoints.
+
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
@@ -35,3 +39,5 @@ retaining their provider-owned plan and collaborator boundaries.
 - [0009](0009-per-driver-target-and-collaborators.md) — A deploy targets a discriminated platform; collaborators belong to the driver, not to `deploy()` — accepted; extended by 0011 (2026-07-28)
 - [0010](0010-gate-evaluation-stays-in-the-auth-service.md) — Gate evaluation stays in the auth service; Caddy routes are a fixed chain (amends 0008) — accepted (2026-07-28)
 - [0011](0011-static-provider-bundles.md) — Compose one static provider bundle per installation — accepted (2026-07-29)
+- [0012](0012-fabrika-app-runtime.md) — Absorb the Trasa server framework as `@fabrika/app` — accepted (2026-07-29)
+- [0013](0013-explicit-runtime-adapter-entrypoints.md) — Expose runtime adapters through explicit package entrypoints — accepted (2026-07-29)

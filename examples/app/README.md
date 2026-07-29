@@ -1,9 +1,10 @@
 # Example app — consuming Propustka over a service binding
 
-A minimal app Worker that uses **`@fabrika/auth`** to authenticate a request through the
-IAM Worker via a service binding (`oblaka` `ServiceReference('propustka-worker')`), then does
-local `can()` / `scopedTo()` checks and emits a fire-and-forget audit event. See
-[`src/index.ts`](./src/index.ts).
+A minimal `@fabrika/app` Worker that uses **`@fabrika/auth`** middleware to authenticate a request
+through the IAM Worker via a service binding (`oblaka` `ServiceReference('propustka-worker')`), then
+does local `can()` / `scopedTo()` checks and emits a fire-and-forget audit event. See
+the portable [`src/app.ts`](./src/app.ts) application and its
+[`src/index.ts`](./src/index.ts) Cloudflare entrypoint.
 
 In a real app you would add only the `IAM` binding to your existing Worker; here it is a whole
 tiny Worker so the example runs standalone.

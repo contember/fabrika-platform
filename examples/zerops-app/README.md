@@ -17,10 +17,10 @@ SDK and enforces its own gates in-process; here it does not enforce them at all,
 | `fabrika.schema.ts` | The authorization vocabulary (scopes, actions, roles), reconciled into IAM by the deploy.               |
 | `fabrika.gates.ts`  | The per-path gates. Enforced by the **proxy**, never by this process.                                   |
 | `zerops.yaml`       | The build/run descriptor Zerops reads from the repository root.                                         |
-| `src/server.ts`     | `run.start` — a long-running Bun process. Listens on the project's private network only.                |
+| `src/server.ts`     | `run.start` — the `@fabrika/app` Bun adapter. Listens on the project's private network only.            |
 | `src/migrate.ts`    | `run.initCommands` — migrations at container start, which is why the deploy plan has no `migrate` step. |
 | `src/authz.ts`      | Verifies the proxy-injected token and answers `can()` / `scopedTo()`.                                   |
-| `src/app.ts`        | The request handler: one route per gate, plus the per-object checks the gates cannot express.           |
+| `src/app.ts`        | The Fetch app: one route per gate, auth middleware, and the per-object checks gates cannot express.     |
 
 ## The shape of a Zerops deploy
 

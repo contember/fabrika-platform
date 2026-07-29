@@ -26,6 +26,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"@fabrika/app": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*",
 		"jose": "^5.9.0"
