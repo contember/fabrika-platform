@@ -40,7 +40,7 @@
 // needs are listed in `./setups.ts` next to the setup that consumes them; they are written through the
 // env API, addressed by service, after the provisioning import creates it (ADR-0004).
 
-import type { ZeropsAppTarget, ZeropsServiceSpec } from '@fabrika/config'
+import type { ZeropsServiceSpec, ZeropsSourceTarget } from '@fabrika/config'
 import { compileImportYaml, compileProvisioningYaml, type ZeropsImportDocument } from '@fabrika/engine'
 import { assertTopologyInvariants } from './invariants'
 
@@ -66,8 +66,8 @@ export interface TopologyOptions {
 export interface ProjectTopology {
 	/** Stem of the generated filenames, and how this topology is referred to in prose. */
 	id: string
-	/** The declaration itself — the same shape an app's `fabrika.config.ts` puts in `target`. */
-	target: ZeropsAppTarget
+	/** The source declaration compiled into the generated topology artifacts. */
+	target: ZeropsSourceTarget
 	/** The one service allowed to be publicly routed (ADR-0007). Always the proxy. */
 	publicService: string
 }
