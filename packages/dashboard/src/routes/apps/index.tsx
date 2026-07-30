@@ -1,11 +1,13 @@
 import { createPage, Link } from '@buzola/router'
 import { useState } from 'react'
-import { Table } from '../../components/Table'
+import { Icon } from '../../components/Icon'
+import { Chip } from '../../components/Status'
+import { EmptyState, Table } from '../../components/Table'
 import { api, type AppDto, type ListResponse } from '../../lib/api'
 import { fmtDate, shortRef } from '../../lib/format'
 
 // Apps — every registered app. The detail page (apps/:id) holds its envs, secrets, and per-env Deploy.
-// New apps are onboarded from the Onboarding screen (the headline flow); this is the registry view.
+// New apps are onboarded at /apps/new; this is the registry view.
 
 export default createPage()
 	.loader(async () => {
@@ -22,26 +24,50 @@ export default createPage()
 			<>
 				<div className="page-head">
 					<div className="page-head-row">
-						<h1>Apps</h1>
-						<Link to="index" className="nav-cta">+ Onboard app</Link>
+						<div>
+							<h1>Applications</h1>
+							<p className="hint">Every source repository fabrika knows how to build and release.</p>
+						</div>
+						<Link to="apps/new" className="btn primary">
+							<Icon name="plus" />
+							New app
+						</Link>
 					</div>
 				</div>
 
 				<div className="toolbar">
-					<input type="search" placeholder="Search id / repo" value={query} onChange={(e) => setQuery(e.target.value)} />
-					<span className="count muted">{filtered.length} of {data.apps.length}</span>
+					<span className="field-search">
+						<Icon name="search" size={14} />
+						<input
+							type="search"
+							placeholder="Search id or repository"
+							value={query}
+							onChange={(e) => setQuery(e.target.value)}
+							aria-label="Search apps"
+						/>
+					</span>
+					<span className="count">{filtered.length} of {data.apps.length}</span>
 				</div>
 
 				<Table
 					colSpan={4}
 					isEmpty={filtered.length === 0}
-					empty={data.apps.length === 0 ? 'No apps registered yet. Onboard one.' : 'No apps match.'}
+					empty={data.apps.length === 0
+						? (
+							<EmptyState
+								icon="app"
+								title="No apps registered yet"
+								body="Onboarding points fabrika at a repository and places its first environment."
+								action={<Link to="apps/new" className="btn small primary">Onboard an app</Link>}
+							/>
+						)
+						: <EmptyState icon="search" title="No apps match" body="Try a different id or repository fragment." />}
 					head={
 						<tr>
 							<th>App</th>
-							<th>Repo</th>
+							<th>Repository</th>
 							<th>Default branch</th>
-							<th>Created</th>
+							<th>Registered</th>
 						</tr>
 					}
 				>
@@ -53,12 +79,15 @@ export default createPage()
 								</Link>
 							</td>
 							<td>
-								<code className="small">{app.repoUrl}</code>
+								<code className="small">{app.repoUrl.replace(/^https?:\/\//, '')}</code>
 							</td>
 							<td>
-								<code>{shortRef(`refs/heads/${app.defaultBranch}`)}</code>
+								<Chip>
+									<Icon name="branch" size={11} />
+									{shortRef(`refs/heads/${app.defaultBranch}`)}
+								</Chip>
 							</td>
-							<td>{fmtDate(app.createdAt)}</td>
+							<td className="muted small">{fmtDate(app.createdAt)}</td>
 						</tr>
 					))}
 				</Table>
