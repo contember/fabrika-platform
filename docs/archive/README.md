@@ -9,6 +9,9 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Repository capabilities (2026-07-30)](sprint-2026-07-30-repository-capabilities.md)
+  — made complete repository operations the SQLite/Postgres portability seam for
+  IAM and control.
 - [Unified Fabrika console (2026-07-30)](sprint-2026-07-30-unified-console.md)
   — composed Delivery and Access into one professional control-plane console
   while preserving IAM as an independent authority.

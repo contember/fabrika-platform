@@ -21,8 +21,6 @@ fabrika-platform is and how the pieces fit — then skim
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
-- [Repository capabilities](sprints/sprint-2026-07-30-repository-capabilities.md)
-
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.

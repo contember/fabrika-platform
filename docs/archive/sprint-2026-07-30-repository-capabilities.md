@@ -1,5 +1,26 @@
 # Sprint — Repository capabilities (2026-07-30)
 
+## OUTCOME
+
+Shipped operation-level SQL portability seams for IAM and control without duplicating their portable
+query surfaces.
+
+- `5d3d3f7` splits both monolithic database classes into statically composed capability repositories,
+  updates all callers, and records the boundary in ADR-0015.
+
+Verification:
+
+- IAM and control SQLite suites passed 405 tests; 54 Postgres-dependent tests skipped when their
+  backend was absent.
+- The real-Postgres IAM and control suites passed all 54 tests.
+- IAM and control package typechecks passed.
+- Targeted lint completed with no errors. Format and `git diff --check` passed.
+- The workspace typecheck reached the affected packages successfully, then failed in unrelated
+  concurrent `iam-ui` route moves.
+
+No sprint work was deferred. Dialect-specific subclasses remain intentionally absent until an
+operation has a real correctness, atomicity, or performance reason to diverge.
+
 **Goal.** Split IAM and control persistence into capability repositories whose implementations can
 diverge by runtime at the operation boundary.
 
