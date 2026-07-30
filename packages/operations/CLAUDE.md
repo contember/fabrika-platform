@@ -19,5 +19,20 @@ replace that correctness source with sampled Analytics Engine data. Blob storage
 holds raw bodies, while SQL indexes every event, source map, and dead event; the
 `BlobStore` port deliberately has no listing operation.
 
+Issue triage uses an optimistic `revision` plus `last_mutation_id`; the guarded
+issue update and its activity insert must stay in one `SqlDatabase.batch`.
+Occurrence transitions are staged on the unapplied occurrence so duplicate
+queue delivery cannot repeat a regression or unsnooze activity.
+Ingest resolves one `merged_into` hop before choosing the blob key or counting
+the occurrence; merge targets must therefore remain canonical. Worker batches
+group at most 50 events by source and effective fingerprint and perform one
+issue write for an open/new group.
+
+Notification delivery is an outbox with leased claims and six attempts.
+External senders receive the stable outbox dedup key as their idempotency key.
+Logs may contain the notification id and attempt number, never the target,
+payload, or caught error detail. Cloudflare owns scheduled invocation; the Bun
+consumer owns its abortable loop and can restart after `stop()`.
+
 `import/poplach-source-inventory.ts` pins and accounts for the Poplach source
 import at commit `8e0c79d662c187fe41eacd0fee9fe77fde668f1f`.

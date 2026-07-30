@@ -75,5 +75,45 @@ describe.skipIf(!hasPostgres)('Operations repositories on real Postgres', () => 
 			{ fingerprint: 'fp-a', bucket: 0, count: 1 },
 			{ fingerprint: 'fp-a', bucket: 1, count: 1 },
 		])
+
+		await db.prepare(`UPDATE issues SET status = 'resolved', resolved_in_release = NULL
+			WHERE source_id = ? AND fingerprint = ?`).bind('source-a', 'fp-a').run()
+		expect((await repositories.ingest.record(occurrence('event-c', 3_000))).issue.status).toBe('open')
+		expect((await repositories.ingest.record(occurrence('event-c', 3_000))).duplicate).toBe(true)
+		expect((await repositories.issues.activity('source-a', 'fp-a')).map((item) => item.kind)).toEqual(['regressed'])
+
+		await repositories.alerts.upsertChannel({
+			id: 'channel-a',
+			sourceId: 'source-a',
+			scope: 'new_issue',
+			type: 'webhook',
+			target: 'https://example.test/hook',
+			enabled: true,
+		})
+		await repositories.alerts.enqueueNotification({
+			dedupKey: 'new:source-a:fp-a',
+			sourceId: 'source-a',
+			channelId: 'channel-a',
+			kind: 'new_issue',
+			payload: { fingerprint: 'fp-a' },
+		})
+		const claimed = await repositories.alerts.claimNotifications({ limit: 1, leaseMs: 1_000 })
+		expect(claimed).toHaveLength(1)
+		const notification = claimed[0]
+		if (!notification) throw new Error('expected claimed notification')
+		expect(
+			await repositories.alerts.completeNotification({
+				id: notification.id,
+				claimToken: notification.claimToken,
+				delivered: true,
+			}),
+		).toBe(true)
+
+		const grouped = await repositories.ingest.recordGroup(
+			Array.from({ length: 25 }, (_, index) => occurrence(`storm-${index}`, 4_000 + index)),
+		)
+		expect(grouped).toHaveLength(25)
+		expect(grouped.every((result) => !result.duplicate)).toBe(true)
+		expect((await repositories.ingest.counts({ sourceId: 'source-a', fingerprint: 'fp-a' }))[0]?.count).toBe(28)
 	})
 })

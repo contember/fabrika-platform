@@ -41,20 +41,55 @@ export function eventBlobKey(message: IngestMessage): string {
 	return `events/${message.projectId}/${message.fingerprint}/${reverseTime}_${message.eventId}.json`
 }
 
+export async function effectiveIngestMessage(env: Pick<OperationsDataEnv, 'repositories'>, message: IngestMessage): Promise<IngestMessage> {
+	const fingerprint = await env.repositories.issues.canonicalFingerprint(message.projectId, message.fingerprint)
+	return fingerprint === message.fingerprint ? message : { ...message, fingerprint }
+}
+
 export async function persistIngest(env: OperationsDataEnv, message: IngestMessage): Promise<RecordOccurrenceResult> {
-	const blobKey = eventBlobKey(message)
-	await env.payloads.put(blobKey, JSON.stringify(message.payload))
+	const effective = await effectiveIngestMessage(env, message)
+	const blobKey = eventBlobKey(effective)
+	await env.payloads.put(blobKey, JSON.stringify(effective.payload))
 	return env.repositories.ingest.record({
-		sourceId: message.projectId,
-		fingerprint: message.fingerprint,
-		eventId: message.eventId,
-		title: message.title,
-		culprit: message.culprit,
-		level: message.level,
-		release: message.release ?? null,
-		receivedAt: message.receivedAt,
+		sourceId: effective.projectId,
+		fingerprint: effective.fingerprint,
+		eventId: effective.eventId,
+		title: effective.title,
+		culprit: effective.culprit,
+		level: effective.level,
+		release: effective.release ?? null,
+		receivedAt: effective.receivedAt,
 		blobKey,
 	})
+}
+
+export async function persistIngestGroup(
+	env: OperationsDataEnv,
+	messages: IngestMessage[],
+): Promise<RecordOccurrenceResult[]> {
+	if (messages.length === 0) return []
+	if (messages.length > 50) throw new RangeError('ingest group exceeds 50 events')
+	const first = messages[0]
+	if (!first) return []
+	if (messages.some((message) => message.projectId !== first.projectId || message.fingerprint !== first.fingerprint)) {
+		throw new Error('ingest group must share one source and effective fingerprint')
+	}
+	const inputs = messages.map((message) => {
+		const blobKey = eventBlobKey(message)
+		return {
+			sourceId: message.projectId,
+			fingerprint: message.fingerprint,
+			eventId: message.eventId,
+			title: message.title,
+			culprit: message.culprit,
+			level: message.level,
+			release: message.release ?? null,
+			receivedAt: message.receivedAt,
+			blobKey,
+		}
+	})
+	await Promise.all(messages.map((message) => env.payloads.put(eventBlobKey(message), JSON.stringify(message.payload))))
+	return env.repositories.ingest.recordGroup(inputs)
 }
 
 export async function archiveDeadEvent(

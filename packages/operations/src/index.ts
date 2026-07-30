@@ -9,9 +9,21 @@ export {
 	resolveFingerprint,
 	sha256Hex,
 } from './ingest.js'
+export { OperationsMaintenance, WebhookNotificationSender } from './maintenance.js'
+export type { NotificationFetch, NotificationSender, OperationsLogger, OperationsMaintenanceOptions } from './maintenance.js'
 export { applyIssueMutation, decideOccurrenceTransition, evaluateSpike, parseEventDetail, resolveFrames, sourceMapKey } from './operator.js'
 export type { ObjectReader, SpikeDecision, SpikeInput } from './operator.js'
-export { archiveDeadEvent, credentialVerifier, enqueueIngest, eventBlobKey, persistIngest, prepareIngestMessage, storeSourceMap } from './pipeline.js'
+export {
+	archiveDeadEvent,
+	credentialVerifier,
+	effectiveIngestMessage,
+	enqueueIngest,
+	eventBlobKey,
+	persistIngest,
+	persistIngestGroup,
+	prepareIngestMessage,
+	storeSourceMap,
+} from './pipeline.js'
 export type { OperationsDataEnv } from './pipeline.js'
 export {
 	AlertsRepository,
@@ -20,14 +32,21 @@ export {
 	createSqliteOperationsRepositories,
 	DeadEventsRepository,
 	ErrorIngestRepository,
+	IssuesRepository,
+	PostgresAlertsRepository,
 	PostgresErrorIngestRepository,
 	SourcesRepository,
+	SqliteAlertsRepository,
 	SqliteErrorIngestRepository,
 } from './repositories.js'
 export type {
+	AlertConfigRow,
+	AlertRuleRow,
+	ClaimedNotification,
 	CountBucket,
 	CountResult,
 	IssueRow,
+	NotificationChannelRow,
 	OperationsRepositories,
 	RecordOccurrenceInput,
 	RecordOccurrenceResult,

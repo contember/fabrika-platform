@@ -20,14 +20,14 @@ export const POPLACH_SOURCE_COMMIT = '8e0c79d662c187fe41eacd0fee9fe77fde668f1f'
 export const POPLACH_SOURCE_INVENTORY: readonly PoplachInventoryEntry[] = [
 	{ path: 'src/api/ingest.ts', classification: 'cloudflare-adapter', disposition: 'deferred', target: 'WU2/WU4 runtime ingest adapters' },
 	{ path: 'src/context.ts', classification: 'cloudflare-adapter', disposition: 'deferred', target: 'WU3 operator authorization composition' },
-	{ path: 'src/cron.ts', classification: 'cloudflare-adapter', disposition: 'deferred', target: 'WU2 scheduler adapters' },
+	{ path: 'src/cron.ts', classification: 'cloudflare-adapter', disposition: 'replaced', target: 'operations Cloudflare scheduled seam' },
 	{
 		path: 'src/lib/activity.ts',
 		classification: 'domain',
 		disposition: 'replaced',
 		target: 'operations-contract ActivityKind and operations issue decisions',
 	},
-	{ path: 'src/lib/alerts.ts', classification: 'domain', disposition: 'replaced', target: 'operations alert decision; delivery deferred to WU2' },
+	{ path: 'src/lib/alerts.ts', classification: 'domain', disposition: 'replaced', target: 'operations alert decision and notification maintenance' },
 	{ path: 'src/lib/cf-analytics.ts', classification: 'cloudflare-adapter', disposition: 'deferred', target: 'WU2 signal-store adapters' },
 	{
 		path: 'src/lib/consume.ts',
@@ -147,18 +147,23 @@ export const POPLACH_SOURCE_INVENTORY: readonly PoplachInventoryEntry[] = [
 		disposition: 'replaced',
 		target: 'Access owns identities; no Operations migration',
 	},
-	{ path: 'seeds/_lib.ts', classification: 'fixture', disposition: 'deferred', target: 'WU2 runtime-neutral repository fixtures' },
+	{ path: 'seeds/_lib.ts', classification: 'fixture', disposition: 'replaced', target: 'operations SQLite repository harness' },
 	{
 		path: 'seeds/alert-config.sql',
 		classification: 'fixture',
 		disposition: 'replaced',
-		target: 'operations alert decision tests; storage fixture deferred to WU2',
+		target: 'operations alert decision and repository tests',
 	},
-	{ path: 'seeds/issues-mixed.sql', classification: 'fixture', disposition: 'deferred', target: 'WU2 D1 and Postgres repository fixtures' },
+	{
+		path: 'seeds/issues-mixed.sql',
+		classification: 'fixture',
+		disposition: 'replaced',
+		target: 'operations SQLite and Postgres repository contracts',
+	},
 	{ path: 'seeds/issues-mixed.ts', classification: 'fixture', disposition: 'migrated', target: 'operations event-detail tests' },
 	{ path: 'seeds/project.sql', classification: 'fixture', disposition: 'deferred', target: 'WU2/WU3 projected source fixture' },
 	{ path: 'seeds/project.ts', classification: 'fixture', disposition: 'replaced', target: 'operations testing envelope and ingest-key fixtures' },
-	{ path: 'seeds/release-sourcemap.sql', classification: 'fixture', disposition: 'deferred', target: 'WU2 release repositories' },
+	{ path: 'seeds/release-sourcemap.sql', classification: 'fixture', disposition: 'replaced', target: 'operations release repository tests' },
 	{ path: 'seeds/release-sourcemap.ts', classification: 'fixture', disposition: 'migrated', target: 'operations source-map tests' },
 	{
 		path: 'tests/browser/_helpers.ts',
@@ -183,7 +188,7 @@ export const POPLACH_SOURCE_INVENTORY: readonly PoplachInventoryEntry[] = [
 		path: 'tests/browser/email-channel.test.ts',
 		classification: 'browser-contract',
 		disposition: 'deferred',
-		target: 'WU2/WU9 portable notification witness',
+		target: 'WU6/WU9 email transport decision and browser witness',
 	},
 	{
 		path: 'tests/browser/ingest-and-group.test.ts',

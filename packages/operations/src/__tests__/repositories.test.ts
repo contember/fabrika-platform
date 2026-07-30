@@ -146,10 +146,135 @@ describe('Operations portable repositories', () => {
 		])
 	})
 
+	test('applies regressions and unsnoozes once across duplicate delivery', async () => {
+		const harness = createHarness(() => 10_000)
+		const env = {
+			repositories: harness.repositories,
+			payloads: new MemoryBlobs(),
+			ingestQueue: new MemoryQueue<IngestMessage>(),
+		}
+		await source(harness, 'source-a')
+		await persistIngest(env, message({ sourceId: 'source-a', eventId: 'before', receivedAt: 1_000 }))
+		harness.sqlite.run(
+			`UPDATE issues SET status = 'resolved', resolved_in_release = NULL
+			 WHERE source_id = 'source-a' AND fingerprint = 'fp-shared'`,
+		)
+		const regression = message({ sourceId: 'source-a', eventId: 'regression', receivedAt: 2_000 })
+		expect((await persistIngest(env, regression)).issue.status).toBe('open')
+		expect((await persistIngest(env, regression)).duplicate).toBe(true)
+		await persistIngest(env, message({ sourceId: 'source-a', eventId: 'after-regression', receivedAt: 3_000 }))
+		harness.sqlite.run(
+			`UPDATE issues SET status = 'ignored', snooze_until_count = 4
+			 WHERE source_id = 'source-a' AND fingerprint = 'fp-shared'`,
+		)
+		const unsnooze = message({ sourceId: 'source-a', eventId: 'unsnooze', receivedAt: 4_000 })
+		expect((await persistIngest(env, unsnooze)).issue.status).toBe('open')
+		expect((await persistIngest(env, unsnooze)).duplicate).toBe(true)
+		const issue = await harness.repositories.issues.get('source-a', 'fp-shared')
+		expect(issue?.regressed_at).toBe(2_000)
+		expect(await harness.repositories.issues.activity('source-a', 'fp-shared')).toMatchObject([
+			{ kind: 'regressed', at: 2_000 },
+			{ kind: 'unsnoozed', at: 4_000 },
+		])
+	})
+
+	test('persists triage activity and keeps merge targets inside a source', async () => {
+		const harness = createHarness(() => 10_000)
+		const blobs = new MemoryBlobs()
+		const env = {
+			repositories: harness.repositories,
+			payloads: blobs,
+			ingestQueue: new MemoryQueue<IngestMessage>(),
+		}
+		await source(harness, 'source-a')
+		await source(harness, 'source-b')
+		await persistIngest(env, message({ sourceId: 'source-a', eventId: 'issue', fingerprint: 'issue' }))
+		await persistIngest(env, message({ sourceId: 'source-a', eventId: 'target', fingerprint: 'target' }))
+		await persistIngest(env, message({ sourceId: 'source-b', eventId: 'foreign', fingerprint: 'issue' }))
+		await harness.repositories.issues.mutate({
+			sourceId: 'source-a',
+			fingerprint: 'issue',
+			mutation: { kind: 'comment', text: 'Investigating' },
+			actorId: 'user-a',
+			actorLabel: 'Operator',
+		})
+		await harness.repositories.issues.mutate({
+			sourceId: 'source-a',
+			fingerprint: 'issue',
+			mutation: { kind: 'assign', principalId: 'user-b', principalLabel: 'Owner' },
+			actorId: 'user-a',
+			actorLabel: 'Operator',
+		})
+		const merged = await harness.repositories.issues.mutate({
+			sourceId: 'source-a',
+			fingerprint: 'issue',
+			mutation: { kind: 'merge', target: 'target' },
+			actorId: 'user-a',
+			actorLabel: 'Operator',
+		})
+		expect(merged?.assigned_to).toBe('user-b')
+		expect(merged?.merged_into).toBe('target')
+		expect((await harness.repositories.issues.activity('source-a', 'issue')).map((item) => item.kind)).toEqual([
+			'comment',
+			'assigned',
+			'merged',
+		])
+		await persistIngest(env, message({ sourceId: 'source-a', eventId: 'post-merge', fingerprint: 'issue', receivedAt: 2_000 }))
+		await persistIngest(env, message({ sourceId: 'source-b', eventId: 'same-fingerprint', fingerprint: 'issue', receivedAt: 3_000 }))
+		expect(await harness.repositories.ingest.counts({ sourceId: 'source-a', fingerprint: 'issue' })).toEqual([
+			{ fingerprint: 'issue', count: 1, first: 1_000, last: 1_000 },
+		])
+		expect(await harness.repositories.ingest.counts({ sourceId: 'source-a', fingerprint: 'target' })).toEqual([
+			{ fingerprint: 'target', count: 2, first: 1_000, last: 2_000 },
+		])
+		expect(await harness.repositories.ingest.counts({ sourceId: 'source-b', fingerprint: 'issue' })).toEqual([
+			{ fingerprint: 'issue', count: 2, first: 1_000, last: 3_000 },
+		])
+		expect(blobs.values.has('events/source-a/target/9999999997999_post-merge.json')).toBe(true)
+		await expect(
+			harness.repositories.issues.mutate({
+				sourceId: 'source-a',
+				fingerprint: 'issue',
+				mutation: { kind: 'merge', target: 'foreign' },
+				actorId: null,
+				actorLabel: null,
+			}),
+		).rejects.toThrow('Merge target does not exist in this source.')
+
+		await persistIngest(env, message({ sourceId: 'source-a', eventId: 'final', fingerprint: 'final' }))
+		await harness.repositories.issues.mutate({
+			sourceId: 'source-a',
+			fingerprint: 'target',
+			mutation: { kind: 'merge', target: 'final' },
+			actorId: null,
+			actorLabel: null,
+		})
+		await expect(
+			harness.repositories.issues.mutate({
+				sourceId: 'source-a',
+				fingerprint: 'issue',
+				mutation: { kind: 'merge', target: 'target' },
+				actorId: null,
+				actorLabel: null,
+			}),
+		).rejects.toThrow('Merge target must be a canonical issue.')
+	})
+
 	test('claims alert windows atomically and deduplicates the notification outbox', async () => {
 		let now = 1_000
 		const harness = createHarness(() => now)
 		await source(harness, 'source-a')
+		await source(harness, 'source-b')
+		await harness.repositories.alerts.setConfig('source-a', { threshold: 12, enabled: true })
+		await harness.repositories.alerts.setRule('source-a', 'regression', true)
+		expect(await harness.repositories.alerts.getConfig('source-a')).toEqual({
+			source_id: 'source-a',
+			threshold: 12,
+			enabled: 1,
+		})
+		expect(await harness.repositories.alerts.listRules('source-a')).toEqual([
+			{ source_id: 'source-a', type: 'regression', enabled: 1 },
+		])
 		harness.sqlite.run(
 			`INSERT INTO notification_channels (id, source_id, scope, type, target, enabled)
 			 VALUES ('channel-a', 'source-a', 'spike', 'webhook', 'https://example.test/hook', 1)`,
@@ -177,6 +302,17 @@ describe('Operations portable repositories', () => {
 				payload: { count: 10 },
 			}),
 		).toBe(false)
+		expect(
+			await harness.repositories.alerts.enqueueNotification({
+				dedupKey: 'cross-source',
+				sourceId: 'source-b',
+				channelId: 'channel-a',
+				kind: 'spike',
+				payload: {},
+			}),
+		).toBe(false)
+		expect(await harness.repositories.alerts.deleteRule('source-a', 'regression')).toBe(true)
+		expect(await harness.repositories.alerts.deleteConfig('source-a')).toBe(true)
 	})
 
 	test('indexes dead payloads and source maps durably', async () => {

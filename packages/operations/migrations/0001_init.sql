@@ -36,6 +36,8 @@ CREATE TABLE issues (
 	snooze_until_count    INTEGER,
 	resolved_in_release   TEXT,
 	merged_into           TEXT,
+	revision              INTEGER NOT NULL DEFAULT 0,
+	last_mutation_id      TEXT,
 	PRIMARY KEY (source_id, fingerprint)
 );
 CREATE INDEX idx_issues_source_status_seen ON issues(source_id, status, last_seen);
@@ -48,6 +50,7 @@ CREATE TABLE occurrences (
 	received_at   INTEGER NOT NULL,
 	release       TEXT,
 	blob_key      TEXT NOT NULL,
+	transition_kind TEXT,
 	applied_at    INTEGER,
 	UNIQUE (source_id, event_id)
 );
@@ -104,10 +107,15 @@ CREATE TABLE notification_outbox (
 	kind          TEXT NOT NULL,
 	payload       TEXT NOT NULL,
 	created_at    INTEGER NOT NULL,
+	attempts      INTEGER NOT NULL DEFAULT 0,
+	max_attempts  INTEGER NOT NULL DEFAULT 6,
+	visible_at    INTEGER NOT NULL,
+	claimed_until INTEGER,
+	claim_token   TEXT,
 	delivered_at  INTEGER,
 	abandoned_at  INTEGER
 );
-CREATE INDEX idx_notification_outbox_pending ON notification_outbox(delivered_at, abandoned_at, created_at);
+CREATE INDEX idx_notification_outbox_pending ON notification_outbox(delivered_at, abandoned_at, visible_at, created_at);
 
 CREATE TABLE notification_attempts (
 	id                TEXT PRIMARY KEY,

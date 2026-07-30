@@ -1,4 +1,5 @@
 import type { BlobStore, JobQueue } from '@fabrika/platform'
+import type { OperationsMaintenance } from './maintenance.js'
 
 export interface CloudflareBucketLike {
 	put(key: string, value: string | ArrayBuffer | ReadableStream): Promise<unknown>
@@ -30,4 +31,15 @@ export function cloudflareJobQueue<T>(queue: CloudflareQueueLike<T>): JobQueue<T
 			await queue.send(message, options)
 		},
 	}
+}
+
+export interface CloudflareScheduledContextLike {
+	waitUntil(promise: Promise<unknown>): void
+}
+
+export function runCloudflareScheduledMaintenance(
+	maintenance: OperationsMaintenance,
+	context: CloudflareScheduledContextLike,
+): void {
+	context.waitUntil(maintenance.run())
 }

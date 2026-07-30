@@ -7,6 +7,7 @@ const sharedFiles = [
 	'repositories.ts',
 	'pipeline.ts',
 	'consumer.ts',
+	'maintenance.ts',
 	'ingest.ts',
 	'issues.ts',
 	'alerts.ts',
