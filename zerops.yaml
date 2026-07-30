@@ -83,7 +83,7 @@ zerops:
         VOZKA_DATABASE_URL: "${db_connectionString}"
         VOZKA_ASSETS_DIR: packages/dashboard/dist
         ENVIRONMENT: prod
-        PROPUSTKA_URL: "http://iam:3000"
+        PROPUSTKA_RPC_URL: "http://iam:3000"
         VOZKA_RUN_LOGS_BUCKET: "${storage_bucketName}"
         VOZKA_RUN_LOGS_ENDPOINT: "${storage_apiUrl}"
         VOZKA_RUN_LOGS_ACCESS_KEY_ID: "${storage_accessKeyId}"

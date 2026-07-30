@@ -73,7 +73,8 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   a human via SSO (`px_session` → minted `px_token`) or a machine via an `Authorization: Bearer px_` key
   (gates: `VOZKA_GATES` = service + human) — then `can(action, scope?)` + audit. `env.IAM` is the
   `IamRpc` CONTRACT, so it is a service binding on Cloudflare and `HttpIamRpc` (`@fabrika/auth`, bearer
-  `PROPUSTKA_RPC_KEY` against IAM's `/rpc/*`) in a process. ONE instance per process, never per request:
+  `PROPUSTKA_RPC_KEY` against IAM's `/rpc/*` at the private `PROPUSTKA_RPC_URL`) in a process.
+  `PROPUSTKA_URL` remains the public issuer. ONE instance per process, never per request:
   `PropustkaAuth` caches the JWKS in a WeakMap keyed by that object.
 - **Local vs off-local auth by the `DEV` var:** `DEV='true'` → a fabrika-synthesized AuthContext from a
   fixed dev persona (no propustka, selected by the `X-Dev-Principal` header / cookie); `DEV=''` →

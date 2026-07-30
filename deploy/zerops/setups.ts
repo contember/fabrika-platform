@@ -126,7 +126,8 @@ const iam: ZeropsYamlSetup = {
 /**
  * The control plane — registry, run lifecycle, vault, webhook, and the dashboard SPA.
  *
- * Per-installation variables (env API): `VOZKA_DOMAIN`, `CLOUDFLARE_ACCOUNT_ID`,
+ * Per-installation variables (env API): `VOZKA_DOMAIN`, `PROPUSTKA_URL` (the public IAM issuer),
+ * `CLOUDFLARE_ACCOUNT_ID`,
  * `VOZKA_BOOTSTRAP_ADMINS`, `ZEROPS_CLIENT_ID`, `ZEROPS_PROXY_BUILD_FROM_GIT`, and
  * `ZEROPS_PROXY_IAM_URL` (the public IAM origin reachable from application projects).
  *
@@ -161,9 +162,9 @@ const control: ZeropsYamlSetup = {
 			VOZKA_DATABASE_URL: '${db_connectionString}',
 			VOZKA_ASSETS_DIR: 'packages/dashboard/dist',
 			ENVIRONMENT: 'prod',
-			// Intra-project, over the private network: the control plane never leaves the project to reach
-			// IAM. Same for every installation of this topology, which is why it is allowed to be here.
-			PROPUSTKA_URL: 'http://iam:3000',
+			// Intra-project transport for management RPC. `PROPUSTKA_URL` is deliberately absent here:
+			// it is the public token issuer and is supplied per installation through the env API.
+			PROPUSTKA_RPC_URL: 'http://iam:3000',
 			// Run logs, in the project's own S3-compatible object storage. All four are REFERENCES to the
 			// `storage` service's generated variables; the credentials themselves live in the platform and
 			// are resolved at container start. Nothing secret is committed by writing a pointer to it.

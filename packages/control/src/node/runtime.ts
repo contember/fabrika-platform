@@ -142,12 +142,28 @@ function blobStore(source: Record<string, string | undefined>): S3BlobStore {
  * isolate's lifetime; this lives for the process's.
  */
 function iamRpc(source: Record<string, string | undefined>): HttpIamRpc {
-	const origin = required(source, 'PROPUSTKA_URL')
+	const { origin, key } = readIamRpcProcessConfig(source)
+	return new HttpIamRpc({ origin, key })
+}
+
+export interface IamRpcProcessConfig {
+	/** Private origin used only for control-to-IAM management calls. */
+	origin: string
+	/** Bearer that guards IAM's management surface. */
+	key: string
+}
+
+/**
+ * Keep transport addressing separate from `PROPUSTKA_URL`, which is the public token issuer.
+ * The two happen to match in a single-process dev setup, but never across Zerops projects.
+ */
+export function readIamRpcProcessConfig(source: Record<string, string | undefined>): IamRpcProcessConfig {
+	const origin = required(source, 'PROPUSTKA_RPC_URL')
 	const key = required(source, 'PROPUSTKA_RPC_KEY')
 	if (key.length < MIN_RPC_KEY_LENGTH) {
 		throw new Error(`PROPUSTKA_RPC_KEY must be at least ${MIN_RPC_KEY_LENGTH} characters (it is the only thing guarding IAM's RPC surface)`)
 	}
-	return new HttpIamRpc({ origin, key })
+	return { origin, key }
 }
 
 function required(source: Record<string, string | undefined>, name: string): string {
