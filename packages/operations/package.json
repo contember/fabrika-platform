@@ -27,6 +27,16 @@
 			"types": "./src/ingest.ts",
 			"default": "./src/ingest.ts"
 		},
+		"./direct-ingest": {
+			"bun": "./src/direct-ingest.ts",
+			"types": "./src/direct-ingest.ts",
+			"default": "./src/direct-ingest.ts"
+		},
+		"./credentials": {
+			"bun": "./src/credentials.ts",
+			"types": "./src/credentials.ts",
+			"default": "./src/credentials.ts"
+		},
 		"./operator": {
 			"bun": "./src/operator.ts",
 			"types": "./src/operator.ts",

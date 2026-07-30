@@ -1,6 +1,7 @@
 import { PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { applyMigrations } from '../node/migrate.js'
+import { credentialVerifier } from '../pipeline.js'
 import { createPostgresOperationsRepositories, type OperationsRepositories, type RecordOccurrenceInput } from '../repositories.js'
 
 const postgresUrl = process.env['FABRIKA_TEST_POSTGRES_URL'] ?? null
@@ -58,6 +59,29 @@ describe.skipIf(!hasPostgres)('Operations repositories on real Postgres', () => 
 			displayName: 'App A',
 			enabled: true,
 		})
+		expect(await repositories.sources.ensureIngestProjectId('source-a', '123456')).toBe('123456')
+		expect(
+			await repositories.sources.rotateCredential({
+				id: 'credential-a',
+				sourceId: 'source-a',
+				verifier: await credentialVerifier('0123456789abcdef0123456789abcdef'),
+				overlapUntil: 3_000,
+			}),
+		).toBe(true)
+		expect(
+			await repositories.sources.resolveIngestCredential(
+				await credentialVerifier('0123456789abcdef0123456789abcdef'),
+			),
+		).toEqual({ sourceId: 'source-a', ingestProjectId: '123456' })
+		const rateDecisions = await Promise.all(
+			Array.from({ length: 4 }, () =>
+				repositories.ingestRateLimits.consume({
+					sourceId: 'source-a',
+					windowStart: 0,
+					limit: 3,
+				})),
+		)
+		expect(rateDecisions.filter(Boolean)).toHaveLength(3)
 		expect((await repositories.ingest.record(occurrence('event-a', 1_000))).duplicate).toBe(false)
 		expect((await repositories.ingest.record(occurrence('event-a', 1_000))).duplicate).toBe(true)
 		expect((await repositories.ingest.record(occurrence('event-b', 2_000))).duplicate).toBe(false)

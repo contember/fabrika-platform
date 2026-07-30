@@ -22,8 +22,14 @@ export interface SourceRow {
 	disabled_at: number | string | null
 	origin: string
 	public_origin: string | null
+	ingest_project_id: string | null
 	created_at: number | string
 	updated_at: number | string
+}
+
+export interface IngestCredentialResolution {
+	sourceId: string
+	ingestProjectId: string
 }
 
 export interface CatalogCursorRow {
@@ -147,32 +153,83 @@ export class SourcesRepository {
 		return this.db.prepare('SELECT * FROM sources WHERE id = ?').bind(id).first<SourceRow>()
 	}
 
-	async addCredential(input: { sourceId: string; verifier: string; expiresAt?: number }): Promise<string> {
-		const id = uuidv7(this.now())
-		await this.db
-			.prepare(`INSERT INTO ingest_credentials (id, source_id, verifier, created_at, expires_at, revoked_at)
-				VALUES (?, ?, ?, ?, ?, NULL)`)
-			.bind(id, input.sourceId, input.verifier, this.now(), input.expiresAt ?? null)
-			.run()
-		return id
+	async ensureIngestProjectId(sourceId: string, candidate: string): Promise<string | null> {
+		const updated = await this.db
+			.prepare(`UPDATE sources SET ingest_project_id = ?, updated_at = ?
+				WHERE id = ? AND enabled = 1 AND ingest_project_id IS NULL
+				RETURNING ingest_project_id`)
+			.bind(candidate, this.now(), sourceId)
+			.first<{ ingest_project_id: string }>()
+		if (updated) return updated.ingest_project_id
+		const source = await this.db
+			.prepare('SELECT ingest_project_id FROM sources WHERE id = ? AND enabled = 1')
+			.bind(sourceId)
+			.first<{ ingest_project_id: string | null }>()
+		return source?.ingest_project_id ?? null
 	}
 
-	async resolveCredential(verifier: string, at: number = this.now()): Promise<string | null> {
+	async rotateCredential(input: {
+		id: string
+		sourceId: string
+		verifier: string
+		overlapUntil: number
+	}): Promise<boolean> {
+		const now = this.now()
+		const results = await this.db.batch<{ id: string }>([
+			this.db
+				.prepare(`INSERT INTO ingest_credentials (id, source_id, verifier, created_at, expires_at, revoked_at)
+					SELECT ?, id, ?, ?, NULL, NULL FROM sources
+					WHERE id = ? AND enabled = 1 AND ingest_project_id IS NOT NULL
+					ON CONFLICT DO NOTHING
+					RETURNING id`)
+				.bind(input.id, input.verifier, now, input.sourceId),
+			this.db
+				.prepare(`UPDATE ingest_credentials SET expires_at = CASE
+						WHEN expires_at IS NULL OR expires_at > ? THEN ?
+						ELSE expires_at
+					END
+					WHERE source_id = ? AND id <> ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)
+						AND EXISTS (
+							SELECT 1 FROM ingest_credentials replacement
+							WHERE replacement.id = ? AND replacement.source_id = ? AND replacement.verifier = ?
+								AND replacement.revoked_at IS NULL
+						)`)
+				.bind(
+					input.overlapUntil,
+					input.overlapUntil,
+					input.sourceId,
+					input.id,
+					input.overlapUntil,
+					input.id,
+					input.sourceId,
+					input.verifier,
+				),
+		])
+		if (results[0]?.results.length === 1) return true
+		const existing = await this.db
+			.prepare(`SELECT id FROM ingest_credentials
+				WHERE id = ? AND source_id = ? AND verifier = ? AND revoked_at IS NULL`)
+			.bind(input.id, input.sourceId, input.verifier)
+			.first<{ id: string }>()
+		return existing !== null
+	}
+
+	async resolveIngestCredential(verifier: string, at: number = this.now()): Promise<IngestCredentialResolution | null> {
 		const row = await this.db
-			.prepare(`SELECT c.source_id FROM ingest_credentials c
+			.prepare(`SELECT c.source_id, s.ingest_project_id FROM ingest_credentials c
 				JOIN sources s ON s.id = c.source_id
 				WHERE c.verifier = ? AND c.revoked_at IS NULL
 					AND (c.expires_at IS NULL OR c.expires_at > ?)
-					AND s.enabled = 1`)
+					AND s.enabled = 1 AND s.ingest_project_id IS NOT NULL`)
 			.bind(verifier, at)
-			.first<{ source_id: string }>()
-		return row?.source_id ?? null
+			.first<{ source_id: string; ingest_project_id: string }>()
+		return row ? { sourceId: row.source_id, ingestProjectId: row.ingest_project_id } : null
 	}
 
-	async revokeCredential(id: string): Promise<boolean> {
+	async revokeSourceCredential(sourceId: string, id: string): Promise<boolean> {
 		const result = await this.db
-			.prepare('UPDATE ingest_credentials SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
-			.bind(this.now(), id)
+			.prepare('UPDATE ingest_credentials SET revoked_at = ? WHERE id = ? AND source_id = ? AND revoked_at IS NULL')
+			.bind(this.now(), id, sourceId)
 			.run()
 		return result.meta.changes === 1
 	}
@@ -1052,6 +1109,38 @@ export class PostgresAlertsRepository extends AlertsRepository {
 	}
 }
 
+export class IngestRateLimitsRepository {
+	constructor(protected readonly db: SqlDatabase, protected readonly now: () => number = Date.now) {}
+
+	async consume(input: {
+		sourceId: string
+		windowStart: number
+		amount?: number
+		limit: number
+	}): Promise<boolean> {
+		const amount = input.amount ?? 1
+		if (!Number.isInteger(amount) || amount < 1) throw new RangeError('rate-limit amount must be a positive integer')
+		if (!Number.isInteger(input.limit) || input.limit < 1) throw new RangeError('rate limit must be a positive integer')
+		if (amount > input.limit) return false
+		const row = await this.db
+			.prepare(`INSERT INTO ingest_rate_limits (source_id, window_start, consumed_count, updated_at)
+				SELECT id, ?, ?, ? FROM sources WHERE id = ? AND enabled = 1
+				ON CONFLICT (source_id, window_start) DO UPDATE SET
+					consumed_count = ingest_rate_limits.consumed_count + excluded.consumed_count,
+					updated_at = excluded.updated_at
+				WHERE ingest_rate_limits.consumed_count + excluded.consumed_count <= ?
+				RETURNING consumed_count`)
+			.bind(input.windowStart, amount, this.now(), input.sourceId, input.limit)
+			.first<{ consumed_count: number }>()
+		return row !== null
+	}
+
+	async prune(beforeWindowStart: number): Promise<number> {
+		const result = await this.db.prepare('DELETE FROM ingest_rate_limits WHERE window_start < ?').bind(beforeWindowStart).run()
+		return result.meta.changes
+	}
+}
+
 export class DeadEventsRepository {
 	constructor(protected readonly db: SqlDatabase) {}
 
@@ -1151,6 +1240,7 @@ export interface OperationsRepositories {
 	ingest: ErrorIngestRepository
 	issues: IssuesRepository
 	alerts: AlertsRepository
+	ingestRateLimits: IngestRateLimitsRepository
 	deadEvents: DeadEventsRepository
 	artifacts: ArtifactsRepository
 }
@@ -1167,6 +1257,7 @@ export function createSqliteOperationsRepositories(
 		ingest: replacements.ingest ?? new SqliteErrorIngestRepository(db, now),
 		issues: replacements.issues ?? new IssuesRepository(db, now),
 		alerts: replacements.alerts ?? new SqliteAlertsRepository(db, now),
+		ingestRateLimits: replacements.ingestRateLimits ?? new IngestRateLimitsRepository(db, now),
 		deadEvents: replacements.deadEvents ?? new DeadEventsRepository(db),
 		artifacts: replacements.artifacts ?? new ArtifactsRepository(db, now),
 	}
@@ -1184,6 +1275,7 @@ export function createPostgresOperationsRepositories(
 		ingest: replacements.ingest ?? new PostgresErrorIngestRepository(db, now),
 		issues: replacements.issues ?? new IssuesRepository(db, now),
 		alerts: replacements.alerts ?? new PostgresAlertsRepository(db, now),
+		ingestRateLimits: replacements.ingestRateLimits ?? new IngestRateLimitsRepository(db, now),
 		deadEvents: replacements.deadEvents ?? new DeadEventsRepository(db),
 		artifacts: replacements.artifacts ?? new ArtifactsRepository(db, now),
 	}

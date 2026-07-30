@@ -3,32 +3,51 @@ import {
 	buildParsedEvent,
 	computeFingerprint,
 	extractIngestKey,
-	ingestKeyLookup,
 	issueCulprit,
 	issueTitle,
 	parseEnvelope,
+	parseEventEnvelope,
+	parseIngestAuth,
 	resolveFingerprint,
 } from '../ingest.js'
 import { buildSentryEnvelope } from '../testing.js'
 
 describe('Sentry-compatible ingest kernel', () => {
 	test('extracts DSN keys from both supported transports', () => {
-		expect(extractIngestKey(new Request('https://ops.test/api/app/envelope?sentry_key=query-key'))).toBe('query-key')
+		const queryKey = '0123456789abcdef0123456789abcdef'
+		const headerKey = 'abcdef0123456789abcdef0123456789'
+		expect(extractIngestKey(new Request(`https://ops.test/api/1/envelope/?sentry_key=${queryKey}`))).toBe(queryKey)
 		expect(
 			extractIngestKey(
-				new Request('https://ops.test/api/app/envelope', {
-					headers: { 'x-sentry-auth': 'Sentry sentry_version=7, sentry_key=header-key, sentry_client=test' },
+				new Request('https://ops.test/api/1/envelope/', {
+					headers: { 'x-sentry-auth': `Sentry sentry_version=7, sentry_key=${headerKey}, sentry_client=test` },
 				}),
 			),
-		).toBe('header-key')
+		).toBe(headerKey)
+		expect(parseIngestAuth(new Request(`https://ops.test/api/1/envelope/?sentry_key=${queryKey}&sentry_key=${queryKey}`))).toEqual({
+			ok: false,
+			reason: 'ambiguous',
+		})
 		expect(
-			extractIngestKey(
-				new Request('https://ops.test/api/app/envelope', {
-					headers: { 'x-sentry-auth': 'Sentry sentry_key=%E0%A4%A' },
+			parseIngestAuth(
+				new Request(`https://ops.test/api/1/envelope/?sentry_key=${queryKey}`, {
+					headers: { 'x-sentry-auth': `Sentry sentry_key=${headerKey}` },
 				}),
 			),
-		).toBeNull()
-		expect(ingestKeyLookup('header-key')).toBe('ingest-key:header-key')
+		).toEqual({ ok: false, reason: 'ambiguous' })
+	})
+
+	test('parses length-delimited events and reports ignored item kinds', () => {
+		const payload = JSON.stringify({ message: 'line one\\nline two' })
+		const body = new TextEncoder().encode(
+			`${JSON.stringify({ event_id: 'a'.repeat(32) })}\n`
+				+ `${JSON.stringify({ type: 'attachment', length: 3 })}\nabc\n`
+				+ `${JSON.stringify({ type: 'event', length: new TextEncoder().encode(payload).length })}\n${payload}\n`,
+		)
+		expect(parseEventEnvelope(body)).toEqual({
+			eventPayloads: [{ message: 'line one\\nline two' }],
+			ignoredItemTypes: ['attachment'],
+		})
 	})
 
 	test('parses an envelope and preserves grouping inputs', async () => {

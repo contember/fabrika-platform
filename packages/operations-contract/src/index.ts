@@ -16,7 +16,26 @@ export type {
 	OperationsCatalogSourceV1,
 	OperationsSourceCoordinateV1,
 } from './catalog.js'
-export type { IngestMessage, IngestRejectReason, ParsedEvent, ParsedException, StackFrame } from './ingest.js'
+export {
+	buildOperationsDsn,
+	FABRIKA_APP_ID,
+	FABRIKA_ENVIRONMENT,
+	FABRIKA_OPERATIONS_DSN,
+	FABRIKA_SERVICE_KEY,
+	OPERATIONS_MANAGED_ENVIRONMENT_KEYS,
+	operationsEnvelopeUrl,
+	operationsManagedEnvironment,
+	operationsManagedEnvironmentCollisions,
+} from './ingest.js'
+export type {
+	IngestMessage,
+	IngestRejectReason,
+	OperationsIngestConfiguration,
+	OperationsManagedEnvironmentKey,
+	ParsedEvent,
+	ParsedException,
+	StackFrame,
+} from './ingest.js'
 export type {
 	ActivityDraft,
 	ActivityItem,

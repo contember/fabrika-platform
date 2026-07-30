@@ -1,7 +1,7 @@
 import type { IngestMessage } from '@fabrika/operations-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
-import { archiveDeadEvent, credentialVerifier, persistIngest, storeSourceMap } from '../pipeline.js'
+import { archiveDeadEvent, persistIngest, storeSourceMap } from '../pipeline.js'
 import { createSqliteOperationsRepositories } from '../repositories.js'
 import { createHarness } from './helpers/sqlite.js'
 
@@ -72,24 +72,21 @@ describe('Operations portable repositories', () => {
 		expect(repositories.alerts).toBeDefined()
 	})
 
-	test('stores only credential verifiers and enforces source lifecycle', async () => {
-		let now = 1_000
-		const harness = createHarness(() => now)
+	test('reserves a numeric ingest id once and consumes the portable rate window atomically', async () => {
+		const harness = createHarness(() => 1_000)
 		await source(harness, 'source-a')
-		const raw = 'public-dsn-key'
-		const verifier = await credentialVerifier(raw)
-		const id = await harness.repositories.sources.addCredential({
-			sourceId: 'source-a',
-			verifier,
-			expiresAt: 2_000,
-		})
-
-		expect(await harness.repositories.sources.resolveCredential(verifier)).toBe('source-a')
-		expect(JSON.stringify(harness.sqlite.query('SELECT * FROM ingest_credentials').all())).not.toContain(raw)
-		now = 2_000
-		expect(await harness.repositories.sources.resolveCredential(verifier)).toBeNull()
-		expect(await harness.repositories.sources.revokeCredential(id)).toBe(true)
-		expect(await harness.repositories.sources.revokeCredential(id)).toBe(false)
+		expect(await harness.repositories.sources.ensureIngestProjectId('source-a', '123456')).toBe('123456')
+		expect(await harness.repositories.sources.ensureIngestProjectId('source-a', '999999')).toBe('123456')
+		const decisions = await Promise.all(
+			Array.from({ length: 305 }, () =>
+				harness.repositories.ingestRateLimits.consume({
+					sourceId: 'source-a',
+					windowStart: 0,
+					limit: 300,
+				})),
+		)
+		expect(decisions.filter(Boolean)).toHaveLength(300)
+		expect(await harness.repositories.ingestRateLimits.prune(60_000)).toBe(1)
 	})
 
 	test('records the first source disable time and clears it on re-enable', async () => {

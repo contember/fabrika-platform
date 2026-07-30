@@ -18,7 +18,7 @@ export interface PoplachInventoryEntry {
 export const POPLACH_SOURCE_COMMIT = '8e0c79d662c187fe41eacd0fee9fe77fde668f1f'
 
 export const POPLACH_SOURCE_INVENTORY: readonly PoplachInventoryEntry[] = [
-	{ path: 'src/api/ingest.ts', classification: 'cloudflare-adapter', disposition: 'deferred', target: 'WU2/WU4 runtime ingest adapters' },
+	{ path: 'src/api/ingest.ts', classification: 'cloudflare-adapter', disposition: 'replaced', target: 'operations/src/direct-ingest.ts' },
 	{ path: 'src/context.ts', classification: 'cloudflare-adapter', disposition: 'deferred', target: 'WU3 operator authorization composition' },
 	{ path: 'src/cron.ts', classification: 'cloudflare-adapter', disposition: 'replaced', target: 'operations Cloudflare scheduled seam' },
 	{
@@ -37,7 +37,7 @@ export const POPLACH_SOURCE_INVENTORY: readonly PoplachInventoryEntry[] = [
 	},
 	{ path: 'src/lib/count-store.ts', classification: 'cloudflare-adapter', disposition: 'replaced', target: 'operations exact SQL occurrence queries' },
 	{ path: 'src/lib/format.ts', classification: 'ui', disposition: 'migrated', target: 'operations-ui/src/format.ts' },
-	{ path: 'src/lib/http.ts', classification: 'cloudflare-adapter', disposition: 'deferred', target: 'WU4 direct ingest HTTP adapter' },
+	{ path: 'src/lib/http.ts', classification: 'cloudflare-adapter', disposition: 'replaced', target: 'direct ingest Response helpers' },
 	{ path: 'src/lib/ingest-metrics.ts', classification: 'cloudflare-adapter', disposition: 'deferred', target: 'WU2 signal-store port and adapters' },
 	{ path: 'src/lib/ingest.ts', classification: 'domain', disposition: 'migrated', target: 'operations/src/ingest.ts' },
 	{ path: 'src/lib/sourcemaps.ts', classification: 'domain', disposition: 'migrated', target: 'operations/src/source-maps.ts' },

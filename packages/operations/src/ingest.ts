@@ -4,6 +4,20 @@ export interface ParsedEnvelope {
 	eventPayload: Record<string, unknown> | null
 }
 
+export interface ParsedEventEnvelope {
+	eventPayloads: Record<string, unknown>[]
+	ignoredItemTypes: string[]
+}
+
+export class EnvelopeParseError extends Error {
+	constructor(
+		message: string,
+		readonly reason: 'malformed' | 'too_many_events' = 'malformed',
+	) {
+		super(message)
+	}
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -127,52 +141,115 @@ function parseSdkFingerprint(event: Record<string, unknown>): string[] | null {
 	return parts.length > 0 ? parts : null
 }
 
-export function extractIngestKey(request: Request): string | null {
+export type IngestAuthResult =
+	| { ok: true; publicKey: string }
+	| { ok: false; reason: 'missing' | 'invalid' | 'ambiguous' }
+
+export function parseIngestAuth(request: Request): IngestAuthResult {
 	const url = new URL(request.url)
-	const fromQuery = url.searchParams.get('sentry_key')
-	if (fromQuery) return fromQuery
+	const queryValues = url.searchParams.getAll('sentry_key')
+	if (queryValues.length > 1) return { ok: false, reason: 'ambiguous' }
+	const queryKey = queryValues[0]
+	if (queryKey !== undefined && !/^[0-9a-f]{32}$/.test(queryKey)) return { ok: false, reason: 'invalid' }
+
 	const authHeader = request.headers.get('x-sentry-auth')
-	if (!authHeader) return null
-	const match = authHeader.match(/sentry_key=([^,\s]+)/i)
-	if (!match?.[1]) return null
-	try {
-		return decodeURIComponent(match[1])
-	} catch {
-		return null
+	let headerKey: string | undefined
+	if (authHeader !== null) {
+		if (!/^Sentry\s+/i.test(authHeader)) return { ok: false, reason: 'invalid' }
+		const values = authHeader.replace(/^Sentry\s+/i, '').split(',')
+			.map((part) => part.trim())
+			.filter((part) => part.toLowerCase().startsWith('sentry_key='))
+		if (values.length !== 1) return { ok: false, reason: values.length > 1 ? 'ambiguous' : 'invalid' }
+		headerKey = values[0]?.slice('sentry_key='.length)
+		if (headerKey === undefined || !/^[0-9a-f]{32}$/.test(headerKey)) return { ok: false, reason: 'invalid' }
 	}
+
+	if (queryKey !== undefined && headerKey !== undefined && queryKey !== headerKey) return { ok: false, reason: 'ambiguous' }
+	const publicKey = queryKey ?? headerKey
+	return publicKey === undefined ? { ok: false, reason: 'missing' } : { ok: true, publicKey }
 }
 
-export function ingestKeyLookup(key: string): string {
-	return `ingest-key:${key}`
+export function extractIngestKey(request: Request): string | null {
+	const auth = parseIngestAuth(request)
+	return auth.ok ? auth.publicKey : null
 }
 
 export function parseEnvelope(body: string): ParsedEnvelope {
-	const lines = body.split('\n')
-	let index = 1
-	while (index < lines.length) {
-		const headerLine = lines[index]
-		if (headerLine === undefined || headerLine.trim() === '') {
-			index++
+	try {
+		return { eventPayload: parseEventEnvelope(new TextEncoder().encode(body)).eventPayloads[0] ?? null }
+	} catch {
+		return { eventPayload: null }
+	}
+}
+
+export function parseEventEnvelope(body: Uint8Array, maxEventItems = 32): ParsedEventEnvelope {
+	if (!Number.isInteger(maxEventItems) || maxEventItems < 1) throw new RangeError('event item limit must be positive')
+	let offset = 0
+	const envelopeHeader = readLine(body, offset)
+	if (!envelopeHeader) throw new EnvelopeParseError('missing envelope header')
+	offset = envelopeHeader.next
+	parseJsonRecord(envelopeHeader.bytes, 'invalid envelope header')
+
+	const eventPayloads: Record<string, unknown>[] = []
+	const ignoredItemTypes = new Set<string>()
+	while (offset < body.length) {
+		if (body[offset] === 10) {
+			offset++
 			continue
 		}
-		let header: unknown
-		try {
-			header = JSON.parse(headerLine)
-		} catch {
-			return { eventPayload: null }
+		const itemHeaderLine = readLine(body, offset)
+		if (!itemHeaderLine) throw new EnvelopeParseError('missing item header terminator')
+		offset = itemHeaderLine.next
+		if (itemHeaderLine.bytes.length === 0) continue
+		const itemHeader = parseJsonRecord(itemHeaderLine.bytes, 'invalid item header')
+		const type = itemHeader['type']
+		if (typeof type !== 'string' || type.length === 0) throw new EnvelopeParseError('invalid item type')
+		const length = itemHeader['length']
+		if (length !== undefined && (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0)) {
+			throw new EnvelopeParseError('invalid item length')
 		}
-		const payloadLine = lines[index + 1]
-		index += 2
-		if (payloadLine === undefined) break
-		if (!isRecord(header) || header['type'] !== 'event') continue
-		try {
-			const payload: unknown = JSON.parse(payloadLine)
-			return { eventPayload: isRecord(payload) ? payload : null }
-		} catch {
-			return { eventPayload: null }
+
+		let payload: Uint8Array
+		if (typeof length === 'number') {
+			if (offset + length > body.length) throw new EnvelopeParseError('truncated item payload')
+			payload = body.subarray(offset, offset + length)
+			offset += length
+			if (body[offset] === 13 && body[offset + 1] === 10) offset += 2
+			else if (body[offset] === 10) offset++
+		} else {
+			const payloadLine = readLine(body, offset, true)
+			if (!payloadLine) throw new EnvelopeParseError('missing item payload')
+			payload = payloadLine.bytes
+			offset = payloadLine.next
 		}
+
+		if (type !== 'event') {
+			ignoredItemTypes.add(type)
+			continue
+		}
+		if (eventPayloads.length >= maxEventItems) throw new EnvelopeParseError('too many event items', 'too_many_events')
+		eventPayloads.push(parseJsonRecord(payload, 'invalid event payload'))
 	}
-	return { eventPayload: null }
+	return { eventPayloads, ignoredItemTypes: [...ignoredItemTypes].sort() }
+}
+
+function readLine(body: Uint8Array, offset: number, allowEof = false): { bytes: Uint8Array; next: number } | null {
+	let end = offset
+	while (end < body.length && body[end] !== 10) end++
+	if (end === body.length && !allowEof) return null
+	const contentEnd = end > offset && body[end - 1] === 13 ? end - 1 : end
+	return { bytes: body.subarray(offset, contentEnd), next: end < body.length ? end + 1 : end }
+}
+
+function parseJsonRecord(bytes: Uint8Array, message: string): Record<string, unknown> {
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+	} catch {
+		throw new EnvelopeParseError(message)
+	}
+	if (!isRecord(parsed)) throw new EnvelopeParseError(message)
+	return parsed
 }
 
 export function buildParsedEvent(

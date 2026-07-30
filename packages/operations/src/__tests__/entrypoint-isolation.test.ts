@@ -9,6 +9,8 @@ const sharedFiles = [
 	'consumer.ts',
 	'maintenance.ts',
 	'ingest.ts',
+	'direct-ingest.ts',
+	'credentials.ts',
 	'issues.ts',
 	'alerts.ts',
 	'event-detail.ts',
