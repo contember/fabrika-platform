@@ -57,6 +57,7 @@ const run: RuntimeProviderRun = {
 		GITHUB_WEBHOOK_SECRET: 'dummy-hmac',
 		CLOUDFLARE_API_TOKEN: 'dummy-tok',
 		PROPUSTKA_PROVISIONING_KEY: 'px_dummy-admin',
+		OPERATIONS_SYNC_KEY: 'offline-dry-run-operations-sync-key',
 	},
 	vars: {},
 	managedEnvironment: {},
