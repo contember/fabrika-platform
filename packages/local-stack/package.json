@@ -18,6 +18,7 @@
 	},
 	"dependencies": {
 		"@fabrika/example-zerops-app": "workspace:*",
+		"@fabrika/operations-contract": "workspace:*",
 		"@fabrika/proxy": "workspace:*",
 		"@fabrika/proxy-contract": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*"

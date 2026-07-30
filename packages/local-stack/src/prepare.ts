@@ -53,6 +53,7 @@ const generateSecrets = async (): Promise<void> => {
 	const proxyKey = `px_${randomSecret()}`
 	const provisioningKey = `px_${randomSecret()}`
 	const operationsSyncKey = randomSecret()
+	const githubWebhookSecret = randomSecret()
 	const emulatorToken = randomSecret()
 	const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
 	const signingKeys = JSON.stringify([privateKey.export({ format: 'jwk' })])
@@ -82,6 +83,7 @@ const generateSecrets = async (): Promise<void> => {
 			PROPUSTKA_RPC_KEY: rpcKey,
 			PROPUSTKA_PROVISIONING_KEY: provisioningKey,
 			OPERATIONS_SYNC_KEY: operationsSyncKey,
+			GITHUB_WEBHOOK_SECRET: githubWebhookSecret,
 			VOZKA_VAULT_KEY: randomBase64Key(),
 			ZEROPS_ACCESS_TOKEN: emulatorToken,
 			ZEROPS_PROXY_IAM_KEY: proxyKey,
