@@ -3,26 +3,30 @@
 	"version": "0.0.1",
 	"private": true,
 	"type": "module",
+	"exports": {
+		"./route-error": "./src/components/RouteError.tsx",
+		"./routes/api-keys": "./src/routes/api-keys/index.tsx",
+		"./routes/audit": "./src/routes/audit/index.tsx",
+		"./routes/auth-log": "./src/routes/audit/auth-log.tsx",
+		"./routes/policies": "./src/routes/policies/index.tsx",
+		"./routes/principal": "./src/routes/principals/detail.tsx",
+		"./routes/principals": "./src/routes/principals/index.tsx",
+		"./routes/roles": "./src/routes/roles.tsx",
+		"./routes/schema": "./src/routes/schema/index.tsx",
+		"./routes/share-links": "./src/routes/share-links/index.tsx",
+		"./styles.css": "./src/styles.css",
+		"./use-me": "./src/lib/useMe.ts"
+	},
 	"scripts": {
-		"dev": "vite",
-		"gen": "bun scripts/gen.ts",
-		"build": "bun run gen && tsc --noEmit && vite build",
-		"typecheck": "bun run gen && tsc --noEmit",
-		"preview": "vite preview"
+		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@buzola/router": "^0.0.11",
-		"react": "^19.0.0",
-		"react-dom": "^19.0.0"
+		"@buzola/router": "^0.0.12",
+		"@fabrika/iam": "workspace:*",
+		"react": "^19.0.0"
 	},
 	"devDependencies": {
-		"@buzola/vite-plugin": "^0.0.11",
-		"@cloudflare/workers-types": "^4.20260702.1",
-		"@fabrika/iam": "workspace:*",
 		"@types/react": "^19.0.0",
-		"@types/react-dom": "^19.0.0",
-		"@vitejs/plugin-react": "^5.0.0",
-		"typescript": "^5.9.3",
-		"vite": "^7.0.0"
+		"typescript": "^5.9.3"
 	}
 }

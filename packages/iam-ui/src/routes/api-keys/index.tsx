@@ -25,7 +25,7 @@ export default createPage()
 		])
 		return { apiKeys: apiKeys.items, apps: apps.items }
 	})
-	.route('/api-keys')
+	.route('/access/api-keys')
 	.render(({ data, invalidate }) => {
 		const grantSummary = (grants: GrantDto[]) => {
 			if (grants.length === 0) return <span className="muted">no grants</span>

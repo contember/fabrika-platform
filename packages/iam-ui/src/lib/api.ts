@@ -1,33 +1,40 @@
 // Typed fetch helper for the admin JSON API.
 //
-// Same-origin (`/admin/...`), `credentials: 'include'`, JSON in/out. Non-2xx maps to a
-// typed `ApiError`. Session-expiry handling: a 401 (no/expired `px_session`) bounces the
-// browser to propustka's own native login (`/auth/login`), which re-authenticates via OIDC
-// and returns here — no Cloudflare Access in the loop anymore.
+// Same-origin through the control plane (`/iam/admin/...`), `credentials: 'include'`,
+// JSON in/out. Non-2xx maps to a typed `ApiError`. A 401 may carry the public IAM login
+// URL, which returns the user to the current console page after OIDC.
 
 /** A typed non-2xx API failure surfaced to pages / error boundaries. */
 export class ApiError extends Error {
 	readonly status: number
+	readonly loginUrl?: string
 
-	constructor(status: number, message: string) {
+	constructor(status: number, message: string, loginUrl?: string) {
 		super(message)
 		this.name = 'ApiError'
 		this.status = status
+		if (loginUrl !== undefined) this.loginUrl = loginUrl
 	}
 }
 
-const BASE = '/admin'
+const BASE = '/iam/admin'
+const LOGIN_BOUNCE_KEY = 'fabrika.access.login-bounce'
+const LOGIN_BOUNCE_WINDOW_MS = 10_000
 
-/** Bounce to propustka's native login (same origin) so the user re-authenticates, then returns here. */
-function redirectToLogin(): never {
-	location.assign(`/auth/login?redirect=${encodeURIComponent(location.href)}`)
-	// `location.assign` doesn't actually return; throw to satisfy the type system and stop any
-	// further processing while the navigation kicks in.
-	throw new ApiError(401, 'Session expired — redirecting to sign in.')
+function redirectToLogin(loginUrl: string): boolean {
+	const now = Date.now()
+	const last = Number(sessionStorage.getItem(LOGIN_BOUNCE_KEY) ?? '0')
+	if (Number.isFinite(last) && now - last < LOGIN_BOUNCE_WINDOW_MS) return false
+	sessionStorage.setItem(LOGIN_BOUNCE_KEY, String(now))
+	const target = new URL(loginUrl)
+	target.searchParams.set('redirect', location.href)
+	location.assign(target.toString())
+	return true
 }
 
 async function readError(res: Response): Promise<ApiError> {
 	let message = `Request failed (${res.status})`
+	let loginUrl: string | undefined
 	try {
 		const contentType = res.headers.get('content-type') ?? ''
 		if (contentType.includes('application/json')) {
@@ -47,6 +54,14 @@ async function readError(res: Response): Promise<ApiError> {
 			) {
 				message = body.error
 			}
+			if (
+				body !== null
+				&& typeof body === 'object'
+				&& 'loginUrl' in body
+				&& typeof body.loginUrl === 'string'
+			) {
+				loginUrl = body.loginUrl
+			}
 		} else {
 			const text = await res.text()
 			if (text.trim().length > 0 && text.length < 500) message = text
@@ -54,7 +69,7 @@ async function readError(res: Response): Promise<ApiError> {
 	} catch {
 		// Keep the default message.
 	}
-	return new ApiError(res.status, message)
+	return new ApiError(res.status, message, loginUrl)
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -75,10 +90,13 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 		throw new ApiError(0, message)
 	}
 
-	// 401 (no/expired session) → bounce to the native login to re-authenticate.
-	if (res.status === 401) redirectToLogin()
-
-	if (!res.ok) throw await readError(res)
+	if (!res.ok) {
+		const error = await readError(res)
+		if (error.status === 401 && error.loginUrl !== undefined && redirectToLogin(error.loginUrl)) {
+			throw new ApiError(401, 'Session expired — redirecting to sign in.')
+		}
+		throw error
+	}
 
 	// Read the body as text and parse it. An empty body (204 / no content) normalizes to
 	// `null` so mutation callers that ignore the result get a defined value. `JSON.parse`

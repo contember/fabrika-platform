@@ -25,7 +25,7 @@ export default createPage()
 		const roles = await api.get<ListResponse<RoleDto>>(path)
 		return { apps: apps.items, app, roles: roles.items }
 	})
-	.route('/roles')
+	.route('/access/roles')
 	.render(({ data }) => {
 		const navigate = useNavigate()
 
@@ -43,7 +43,7 @@ export default createPage()
 						App{' '}
 						<select
 							value={data.app ?? ''}
-							onChange={(e) => navigate('roles', { params: { app: e.target.value || undefined }, replace: true })}
+							onChange={(e) => navigate('access/roles', { params: { app: e.target.value || undefined }, replace: true })}
 						>
 							<option value="">Built-in only</option>
 							{data.apps.map((a) => <option key={a.id} value={a.id}>{a.id}</option>)}

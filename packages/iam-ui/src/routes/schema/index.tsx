@@ -16,7 +16,7 @@ export default createPage()
 		const schema = app === null ? null : await api.get<AppSchemaDto>(`/apps/${encodeURIComponent(app)}/schema`)
 		return { apps: apps.items, app, schema }
 	})
-	.route('/schema')
+	.route('/access/schema')
 	.render(({ data }) => {
 		const navigate = useNavigate()
 		const roleEntries = data.schema ? Object.entries(data.schema.roles) : []
@@ -35,7 +35,7 @@ export default createPage()
 						App{' '}
 						<select
 							value={data.app ?? ''}
-							onChange={(e) => navigate('schema', { params: { app: e.target.value || undefined }, replace: true })}
+							onChange={(e) => navigate('access/schema', { params: { app: e.target.value || undefined }, replace: true })}
 						>
 							<option value="">Select an app…</option>
 							{data.apps.map((a) => <option key={a.id} value={a.id}>{a.id}</option>)}

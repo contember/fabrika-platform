@@ -22,7 +22,7 @@ export default createPage()
 		const shareLinks = await api.get<ListResponse<ShareLinkListItem>>('/share-links')
 		return { shareLinks: shareLinks.items }
 	})
-	.route('/share-links')
+	.route('/access/share-links')
 	.render(({ data, invalidate }) => (
 		<>
 			<div className="page-head">

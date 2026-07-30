@@ -21,7 +21,7 @@ export default createPage()
 			apps: apps.items,
 		}
 	})
-	.route('/principals')
+	.route('/access/principals')
 	.render(({ data, invalidate }) => {
 		const [type, setType] = useState<TypeFilter>('')
 		const [query, setQuery] = useState('')
@@ -83,7 +83,7 @@ export default createPage()
 						<tr key={p.id}>
 							<td>{p.type}</td>
 							<td>
-								<Link to="principals/detail" params={{ id: p.id }}>{p.label}</Link>
+								<Link to="access/principals/detail" params={{ id: p.id }}>{p.label}</Link>
 								{p.email && <div className="muted small">{p.email}</div>}
 							</td>
 							<td>{p.externalId ?? <span className="muted">—</span>}</td>
@@ -139,7 +139,7 @@ function InviteForm({ apps, onDone }: { apps: AppDto[]; onDone: () => void }) {
 			composer.reset()
 			setExpiry('')
 			onDone()
-			navigate('principals/detail', { params: { id: invited.id } })
+			navigate('access/principals/detail', { params: { id: invited.id } })
 		} catch (cause) {
 			setError(cause instanceof ApiError ? cause.message : 'Invite failed.')
 		} finally {

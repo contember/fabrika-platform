@@ -115,6 +115,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@buzola/router": "^0.0.12",
+        "@fabrika/iam-ui": "workspace:*",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
       },
@@ -160,19 +161,13 @@
       "name": "@fabrika/iam-ui",
       "version": "0.0.1",
       "dependencies": {
-        "@buzola/router": "^0.0.11",
+        "@buzola/router": "^0.0.12",
+        "@fabrika/iam": "workspace:*",
         "react": "^19.0.0",
-        "react-dom": "^19.0.0",
       },
       "devDependencies": {
-        "@buzola/vite-plugin": "^0.0.11",
-        "@cloudflare/workers-types": "^4.20260702.1",
-        "@fabrika/iam": "workspace:*",
         "@types/react": "^19.0.0",
-        "@types/react-dom": "^19.0.0",
-        "@vitejs/plugin-react": "^5.0.0",
         "typescript": "^5.9.3",
-        "vite": "^7.0.0",
       },
     },
     "packages/local-stack": {
@@ -737,10 +732,6 @@
     "zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 
     "@babel/generator/@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
-
-    "@fabrika/iam-ui/@buzola/router": ["@buzola/router@0.0.11", "", { "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-lru6ARJeeU2LlZsPkXxVHAMzpziUqggAVKG+r3E4f3oZ3mWL7Xfr+dF0mY+POrqPhupahGsFivtC/FYkZ2kZDg=="],
-
-    "@fabrika/iam-ui/@buzola/vite-plugin": ["@buzola/vite-plugin@0.0.11", "", { "dependencies": { "@buzola/router": "^0.0.11" }, "bin": { "buzola": "dist/cli.js" } }, "sha512-qpXOeh3sVbYCta/69xU7BMG6aky+ZCYtbZB5oy/gKIG7FTA/30kTii6gSTr5w8XWGO++abDhviCO1pMWzzVbXA=="],
 
     "@jridgewell/gen-mapping/@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 

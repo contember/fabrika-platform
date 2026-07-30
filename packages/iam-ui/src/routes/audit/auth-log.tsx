@@ -26,20 +26,20 @@ export default createPage()
 		const page = await api.get<CursorList<AuthLogDto>>(`/auth-log${query}`)
 		return { page }
 	})
-	.route('/audit/auth-log')
+	.route('/access/audit/auth-log')
 	.render(({ params, data }) => {
 		const navigate = useNavigate()
 		const rows = data.page.items
 
 		function applyFilters(next: { principalId?: string; requestId?: string; decision?: string }) {
-			navigate('audit/auth-log', {
+			navigate('access/audit/auth-log', {
 				params: { ...next, before: undefined },
 				replace: true,
 			})
 		}
 		function nextPage() {
 			if (data.page.nextCursor === null) return
-			navigate('audit/auth-log', {
+			navigate('access/audit/auth-log', {
 				params: {
 					principalId: params.principalId,
 					requestId: params.requestId,

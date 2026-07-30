@@ -2,11 +2,21 @@
 	"extends": "../../tsconfig.base.json",
 	"compilerOptions": {
 		"jsx": "react-jsx",
-		"types": ["vite/client", "@cloudflare/workers-types"],
 		"noEmit": true,
 		"declaration": false,
 		"declarationMap": false,
 		"allowImportingTsExtensions": false
 	},
-	"include": ["src/**/*", "vite.config.ts"]
+	"include": [
+		"src/route-map.d.ts",
+		"src/components/**/*",
+		"src/lib/**/*",
+		"src/routes/api-keys/**/*",
+		"src/routes/audit/**/*",
+		"src/routes/policies/**/*",
+		"src/routes/principals/**/*",
+		"src/routes/schema/**/*",
+		"src/routes/share-links/**/*",
+		"src/routes/roles.tsx"
+	]
 }

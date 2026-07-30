@@ -38,7 +38,7 @@ export default createPage()
 		const page = await api.get<CursorList<AuditEventDto>>(`/audit${query}`)
 		return { page }
 	})
-	.route('/audit')
+	.route('/access/audit')
 	.render(({ params, data }) => {
 		const navigate = useNavigate()
 		const events = data.page.items
@@ -52,12 +52,12 @@ export default createPage()
 
 		function applyFilters(next: FilterParams) {
 			// Reset the cursor whenever filters change.
-			navigate('audit', { params: { ...next, before: undefined }, replace: true })
+			navigate('access/audit', { params: { ...next, before: undefined }, replace: true })
 		}
 
 		function nextPage() {
 			if (data.page.nextCursor === null) return
-			navigate('audit', { params: { ...current, before: data.page.nextCursor } })
+			navigate('access/audit', { params: { ...current, before: data.page.nextCursor } })
 		}
 
 		return (
@@ -171,7 +171,7 @@ function AuditRow({ event }: { event: AuditEventDto }) {
 				</td>
 				<td>
 					<Link
-						to="audit"
+						to="access/audit"
 						params={{ requestId: event.requestId }}
 						title="Filter to this request"
 					>

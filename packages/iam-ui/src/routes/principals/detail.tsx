@@ -17,7 +17,7 @@ export default createPage()
 		])
 		return { principal, apps: apps.items }
 	})
-	.route('/principals/:id')
+	.route('/access/principals/:id')
 	.render(({ data, invalidate }) => {
 		const { principal, apps } = data
 

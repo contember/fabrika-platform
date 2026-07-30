@@ -26,7 +26,7 @@ export default createPage()
 		])
 		return { apps: apps.items, app, policies: policies.items, schema }
 	})
-	.route('/policies')
+	.route('/access/policies')
 	.render(({ data, invalidate }) => {
 		const navigate = useNavigate()
 
@@ -44,7 +44,7 @@ export default createPage()
 						App{' '}
 						<select
 							value={data.app ?? ''}
-							onChange={(e) => navigate('policies', { params: { app: e.target.value || undefined }, replace: true })}
+							onChange={(e) => navigate('access/policies', { params: { app: e.target.value || undefined }, replace: true })}
 						>
 							<option value="">Select an app…</option>
 							{data.apps.map((a) => <option key={a.id} value={a.id}>{a.id}</option>)}
