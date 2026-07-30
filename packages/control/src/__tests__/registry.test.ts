@@ -14,7 +14,7 @@ import { allowAllIam } from './helpers/iam'
 // the data path here; ACL is covered separately in acl.test.ts.
 
 function makeDeps(
-	opts: { installationId?: number | null; provider?: ControlProvider } = {},
+	opts: { installationId?: number | null; provider?: ControlProvider; catalogChanged?: () => void } = {},
 ): { deps: ApiDeps; queue: DeployJobMessage[]; logStore: Map<string, string> } {
 	const { db } = createHarness()
 	const queue: DeployJobMessage[] = []
@@ -40,6 +40,7 @@ function makeDeps(
 		provider: opts.provider ?? fakeProvider,
 		// Stand in for the runner: mark the run failed (the real seam destroys the container + frees the lock).
 		cancelRun: (run) => db.runs.markRunFinished(run.id, 'failed', null).then(() => {}),
+		...(opts.catalogChanged === undefined ? {} : { catalogChanged: opts.catalogChanged }),
 	}
 	return { deps, queue, logStore }
 }
@@ -127,6 +128,33 @@ function req(method: string, path: string, body?: unknown): Request {
 }
 
 describe('onboarding + registry CRUD', () => {
+	test('schedules every catalog-affecting mutation without letting a scheduling failure change the response', async () => {
+		let scheduled = 0
+		const { deps } = makeDeps({
+			catalogChanged: () => {
+				scheduled++
+				throw new Error('operations unavailable')
+			},
+		})
+
+		expect((await handleApi(req('POST', '/api/apps', { id: 'app-a', repoUrl: 'https://github.com/acme/app-a' }), deps)).status).toBe(201)
+		expect((await handleApi(req('PATCH', '/api/apps/app-a', { defaultBranch: 'next' }), deps)).status).toBe(200)
+		expect((await handleApi(req('PUT', '/api/apps/app-a/envs/prod', {}), deps)).status).toBe(200)
+		expect((await handleApi(req('DELETE', '/api/apps/app-a/envs/prod'), deps)).status).toBe(200)
+		expect((await handleApi(req('DELETE', '/api/apps/app-a'), deps)).status).toBe(200)
+		expect(
+			(await handleApi(
+				req('POST', '/api/register-app', {
+					id: 'app-b',
+					repoUrl: 'https://github.com/acme/app-b',
+					env: 'stage',
+				}),
+				deps,
+			)).status,
+		).toBe(201)
+		expect(scheduled).toBe(6)
+	})
+
 	test('normalizes and round-trips a third provider without a registry branch', async () => {
 		const { deps } = makeDeps()
 		await handleApi(req('POST', '/api/apps', { id: 'harbor-app', repoUrl: 'https://github.com/acme/harbor-app' }), deps)

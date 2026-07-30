@@ -23,7 +23,7 @@ import type { DeployJobMessage } from './run-lifecycle'
 export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 	/** The runtime-neutral view of this Worker's bindings. Cheap — three closures and a spread. */
 	private get control(): Env {
-		return controlEnv(this.env)
+		return controlEnv(this.env, (promise) => this.ctx.waitUntil(promise))
 	}
 
 	override fetch(request: Request): Promise<Response> {

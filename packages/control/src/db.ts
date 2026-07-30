@@ -165,6 +165,34 @@ export interface RepoPollStateRow {
 	last_error: string | null
 }
 
+export interface OperationsCatalogProjectionRow {
+	app_id: string
+	env: string
+	domain: string | null
+}
+
+interface OperationsCatalogSyncStateRow {
+	desired_revision: number | string
+	applied_revision: number | string
+	attempted_revision: number | string | null
+	last_snapshot_hash: string
+	applied_snapshot_hash: string
+	last_attempt_at: number | string | null
+	last_success_at: number | string | null
+	last_error: string | null
+}
+
+export interface OperationsCatalogSyncState {
+	desiredRevision: number
+	appliedRevision: number
+	attemptedRevision: number | null
+	lastSnapshotHash: string
+	appliedSnapshotHash: string
+	lastAttemptAt: number | null
+	lastSuccessAt: number | null
+	lastError: string | null
+}
+
 /**
  * Run a statement that always returns exactly one row (an `INSERT/UPDATE … RETURNING` we know
  * matched). `.first<T>()` is typed `T | null`; this narrows it to `T`, throwing if the row is
@@ -960,11 +988,146 @@ export class RepoPollingRepository {
 	}
 }
 
+/**
+ * Owns the apps⋈app_envs projection and its delivery cursor. The query deliberately excludes
+ * provider envelopes: Operations receives only canonical registry coordinates and display metadata.
+ */
+export class OperationsCatalogRepository {
+	constructor(protected readonly db: SqlDatabase, protected readonly now: () => number = () => Math.floor(Date.now() / 1000)) {}
+
+	/** Record a registry mutation. Every mutation advances the desired revision, even while one is in flight. */
+	async markDirty(): Promise<number> {
+		const row = await firstRow<{ desired_revision: number | string }>(
+			this.db
+				.prepare(`UPDATE operations_catalog_sync
+					SET desired_revision = desired_revision + 1
+					WHERE singleton = 1
+					RETURNING desired_revision`),
+		)
+		return catalogInteger(row.desired_revision, 'desired_revision')
+	}
+
+	/** Maintenance creates work only when no failed or coalesced revision is already pending. */
+	async ensurePending(): Promise<number> {
+		const row = await firstRow<{ desired_revision: number | string }>(
+			this.db
+				.prepare(`UPDATE operations_catalog_sync
+					SET desired_revision = CASE
+						WHEN desired_revision = applied_revision THEN desired_revision + 1
+						ELSE desired_revision
+					END
+					WHERE singleton = 1
+					RETURNING desired_revision`),
+		)
+		return catalogInteger(row.desired_revision, 'desired_revision')
+	}
+
+	/** Read one transactionally consistent revision + complete source snapshot. */
+	async snapshot(): Promise<{ revision: number; sources: OperationsCatalogProjectionRow[] }> {
+		const results = await this.db.batch<OperationsCatalogSyncStateRow | OperationsCatalogProjectionRow>([
+			this.db.prepare(`SELECT
+					desired_revision, applied_revision, attempted_revision,
+					last_snapshot_hash, applied_snapshot_hash,
+					last_attempt_at, last_success_at, last_error
+				FROM operations_catalog_sync WHERE singleton = 1`),
+			this.db.prepare(`SELECT e.app_id, e.env, e.domain
+				FROM app_envs e
+				JOIN apps a ON a.id = e.app_id
+				ORDER BY e.app_id, e.env`),
+		])
+		const state = results[0]?.results[0]
+		if (state === undefined || !('desired_revision' in state)) {
+			throw new Error('operations catalog sync state is missing')
+		}
+		const sources: OperationsCatalogProjectionRow[] = []
+		for (const row of results[1]?.results ?? []) {
+			if (!('app_id' in row)) throw new Error('invalid operations catalog projection row')
+			sources.push(row)
+		}
+		return {
+			revision: catalogInteger(state.desired_revision, 'desired_revision'),
+			sources,
+		}
+	}
+
+	async getState(): Promise<OperationsCatalogSyncState> {
+		const row = await this.db
+			.prepare(`SELECT
+					desired_revision, applied_revision, attempted_revision,
+					last_snapshot_hash, applied_snapshot_hash,
+					last_attempt_at, last_success_at, last_error
+				FROM operations_catalog_sync WHERE singleton = 1`)
+			.first<OperationsCatalogSyncStateRow>()
+		if (row === null) throw new Error('operations catalog sync state is missing')
+		return catalogState(row)
+	}
+
+	async markAttempt(revision: number, snapshotHash: string): Promise<void> {
+		await this.db
+			.prepare(`UPDATE operations_catalog_sync SET
+					attempted_revision = ?,
+					last_snapshot_hash = ?,
+					last_attempt_at = ?
+				WHERE singleton = 1`)
+			.bind(revision, snapshotHash, this.now())
+			.run()
+	}
+
+	async markApplied(revision: number, snapshotHash: string): Promise<void> {
+		await this.db
+			.prepare(`UPDATE operations_catalog_sync SET
+					applied_revision = CASE WHEN applied_revision < ? THEN ? ELSE applied_revision END,
+					applied_snapshot_hash = CASE WHEN applied_revision <= ? THEN ? ELSE applied_snapshot_hash END,
+					last_success_at = ?,
+					last_error = NULL
+				WHERE singleton = 1`)
+			.bind(revision, revision, revision, snapshotHash, this.now())
+			.run()
+	}
+
+	/** A restored Operations database may have a later cursor; advance locally and send a fresh full snapshot. */
+	async advancePast(remoteRevision: number): Promise<void> {
+		await this.db
+			.prepare(`UPDATE operations_catalog_sync SET
+				desired_revision = CASE WHEN desired_revision <= ? THEN ? ELSE desired_revision END
+				WHERE singleton = 1`)
+			.bind(remoteRevision, remoteRevision + 1)
+			.run()
+	}
+
+	async markFailed(message: string): Promise<void> {
+		await this.db
+			.prepare('UPDATE operations_catalog_sync SET last_error = ? WHERE singleton = 1')
+			.bind(message.slice(0, 200))
+			.run()
+	}
+}
+
+function catalogState(row: OperationsCatalogSyncStateRow): OperationsCatalogSyncState {
+	return {
+		desiredRevision: catalogInteger(row.desired_revision, 'desired_revision'),
+		appliedRevision: catalogInteger(row.applied_revision, 'applied_revision'),
+		attemptedRevision: row.attempted_revision === null ? null : catalogInteger(row.attempted_revision, 'attempted_revision'),
+		lastSnapshotHash: row.last_snapshot_hash,
+		appliedSnapshotHash: row.applied_snapshot_hash,
+		lastAttemptAt: row.last_attempt_at === null ? null : catalogInteger(row.last_attempt_at, 'last_attempt_at'),
+		lastSuccessAt: row.last_success_at === null ? null : catalogInteger(row.last_success_at, 'last_success_at'),
+		lastError: row.last_error,
+	}
+}
+
+function catalogInteger(value: number | string, field: string): number {
+	const parsed = typeof value === 'number' ? value : Number(value)
+	if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`invalid operations catalog ${field}`)
+	return parsed
+}
+
 /** Control-plane persistence capabilities selected together by a runtime composition root. */
 export interface ControlRepositories {
 	registry: ControlRegistryRepository
 	runs: RunRepository
 	polling: RepoPollingRepository
+	operationsCatalog: OperationsCatalogRepository
 }
 
 /** The portable repository bundle. A composition root may replace one complete capability. */
@@ -981,6 +1144,7 @@ export function createControlRepositories(
 		registry: replacements.registry ?? new ControlRegistryRepository(db, now),
 		runs: replacements.runs ?? new RunRepository(db, now),
 		polling: replacements.polling ?? new RepoPollingRepository(db),
+		operationsCatalog: replacements.operationsCatalog ?? new OperationsCatalogRepository(db, now),
 	}
 }
 

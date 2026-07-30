@@ -26,5 +26,6 @@ describe('control repository composition', () => {
 		expect(await repositories.registry.listApps()).toEqual([])
 		expect(repositories.runs).toBeDefined()
 		expect(repositories.polling).toBeDefined()
+		expect(repositories.operationsCatalog).toBeDefined()
 	})
 })

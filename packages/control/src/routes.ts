@@ -10,6 +10,7 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import { handleApi } from './api/router'
 import type { Env } from './env'
 import { forwardIamAdmin } from './iam-admin'
+import { forwardOperationsApi } from './operations-gateway'
 import { buildApiDeps, repositories, repoSource } from './services'
 import { handleWebhook } from './webhook'
 
@@ -42,6 +43,16 @@ export async function handleFetch(
 		}
 		return forwardIamAdmin(request, {
 			gateway: env.IAM_ADMIN,
+			...(env.PROPUSTKA_URL === undefined ? {} : { publicIamUrl: env.PROPUSTKA_URL }),
+		})
+	}
+
+	if (url.pathname === '/operations/api' || url.pathname.startsWith('/operations/api/')) {
+		if (env.OPERATIONS === undefined) {
+			return Response.json({ error: 'operations unavailable' }, { status: 503 })
+		}
+		return forwardOperationsApi(request, {
+			gateway: env.OPERATIONS,
 			...(env.PROPUSTKA_URL === undefined ? {} : { publicIamUrl: env.PROPUSTKA_URL }),
 		})
 	}

@@ -8,9 +8,10 @@
 // sha, and the sweep is a guarded UPDATE by age.
 
 import type { Env } from './env'
+import type { OperationsCatalogSyncSummary } from './operations-catalog'
 import type { ProviderReconcileSummary } from './provider-reconcile'
 import { type FetchFn, pollPublicRepos, type PollSummary } from './repo-poll'
-import { repositories, STALE_RUN_MAX_AGE_S } from './services'
+import { replayOperationsCatalogProjection, repositories, STALE_RUN_MAX_AGE_S } from './services'
 
 /** What one maintenance pass did. Returned for the tests + the log line; counts only, never a URL. */
 export interface MaintenanceSummary {
@@ -19,6 +20,8 @@ export interface MaintenanceSummary {
 	reconcile: ProviderReconcileSummary
 	/** Orphaned runs marked failed by the sweep. */
 	swept: number
+	/** Full Operations catalog replay, isolated from deploy maintenance success. */
+	operations: OperationsCatalogSyncSummary
 }
 
 /** Seams a test drives. Production passes neither and gets the real clock + the global `fetch`. */
@@ -29,6 +32,8 @@ export interface MaintenanceOptions {
 	fetch?: FetchFn
 	/** Provider-specific composition root injects reconciliation when the capability is available. */
 	reconcile?: () => Promise<ProviderReconcileSummary>
+	/** Test seam for the Operations maintenance replay. */
+	operations?: () => Promise<OperationsCatalogSyncSummary>
 }
 
 /**
@@ -65,5 +70,9 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	if (swept > 0) {
 		console.warn(`run sweep: marked ${swept} stale run(s) failed (> ${STALE_RUN_MAX_AGE_S}s in pending/running)`)
 	}
-	return { poll, reconcile, swept }
+	const operations = await (options.operations ?? (() => replayOperationsCatalogProjection(env)))()
+	if (operations.outcome === 'failed') {
+		console.warn('operations catalog maintenance replay failed')
+	}
+	return { poll, reconcile, swept, operations }
 }

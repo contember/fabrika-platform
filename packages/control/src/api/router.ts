@@ -54,6 +54,8 @@ export interface ApiDeps {
 	/** Cancel a run: destroy its container (off-local) + mark failed + free the deploy lock. */
 	cancelRun: (run: RunRow) => Promise<void>
 	vault?: () => Promise<Vault>
+	/** Schedule a non-blocking full Operations catalog projection after registry mutations. */
+	catalogChanged?: () => void
 }
 
 /**
@@ -90,7 +92,15 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 		if (!authorized.ok) {
 			return authorized.response
 		}
-		return { repositories: deps.repositories, repoSource: deps.repoSource, provider: deps.provider, request, url, authorized }
+		return {
+			repositories: deps.repositories,
+			repoSource: deps.repoSource,
+			provider: deps.provider,
+			request,
+			url,
+			authorized,
+			...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
+		}
 	}
 	const runsCtx = (authorized: Awaited<ReturnType<typeof authorize>>): RunsContext | Response => {
 		if (!authorized.ok) {

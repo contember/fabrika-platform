@@ -91,6 +91,7 @@
         "@fabrika/auth": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/engine": "workspace:*",
+        "@fabrika/operations-contract": "workspace:*",
         "@fabrika/platform": "workspace:*",
         "@fabrika/platform-node": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",

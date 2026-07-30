@@ -19,7 +19,7 @@
  */
 
 import type { IamRpc } from '@fabrika/auth'
-import type { AssetServer, BlobStore, HttpService, JobQueue, SqlDatabase } from '@fabrika/platform'
+import type { AssetServer, BlobStore, HttpService, JobQueue, SqlDatabase, WaitUntil } from '@fabrika/platform'
 import type { ControlRepositories } from './db'
 import type { DeployJobMessage } from './run-lifecycle'
 
@@ -38,6 +38,8 @@ export interface Env {
 	RUN_LOGS: BlobStore
 	/** Deploy job PRODUCER (trigger/webhook/poll). The consumer is per-runtime — see the header. */
 	DEPLOY_QUEUE: JobQueue<DeployJobMessage>
+	/** Runtime-specific supervised background work (`ctx.waitUntil` or the Bun task tracker). */
+	WAIT_UNTIL: WaitUntil
 	/**
 	 * propustka IAM — authorization + audit. A service binding on Workers; an `HttpIamRpc`
 	 * (`@fabrika/auth`) over the project's private network in a process. OPTIONAL because the local dev
@@ -49,6 +51,8 @@ export interface Env {
 	 * IAM still authenticates, authorizes, and audits every operation.
 	 */
 	IAM_ADMIN?: HttpService
+	/** Private Operations transport shared by catalog projection and the console operator gateway. */
+	OPERATIONS?: HttpService
 
 	// ── Vars ──────────────────────────────────────────────────────────────────
 	ENVIRONMENT: string
@@ -85,6 +89,8 @@ export interface Env {
 	 * provider composition roots may also use it for schema reconciliation.
 	 */
 	PROPUSTKA_PROVISIONING_KEY?: string
+	/** Private Control → Operations catalog bearer. Never exposed to the browser or logged. */
+	OPERATIONS_SYNC_KEY?: string
 	/**
 	 * The vault MASTER key (KEK) for the encrypted secret vault — 32 raw bytes, base64. Seals every
 	 * per-value data key (src/vault.ts). Provisioned out-of-band, once per environment:

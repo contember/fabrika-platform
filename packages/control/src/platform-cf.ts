@@ -23,7 +23,9 @@ import { repoSource } from './services'
  * `this.env` with. It differs from `Env` in exactly the five handles and in nothing else: every var and
  * secret is inherited, so there is one place to add one.
  */
-export interface WorkerBindings extends Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'IAM' | 'IAM_ADMIN'> {
+export interface WorkerBindings
+	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'WAIT_UNTIL' | 'IAM' | 'IAM_ADMIN'>
+{
 	/** Registry + run history + vault + deploy locks. Migrations in `./migrations` (SQLite dialect). */
 	DB: D1Database
 	/** Control-plane SPA static assets. */
@@ -47,7 +49,7 @@ export interface WorkerBindings extends Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSET
 }
 
 /** Present the Worker's bindings as the runtime-neutral `Env` the shared layer consumes. */
-export function controlEnv(bindings: WorkerBindings): Env {
+export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL']): Env {
 	return {
 		...bindings,
 		DB: bindings.DB,
@@ -55,6 +57,7 @@ export function controlEnv(bindings: WorkerBindings): Env {
 		ASSETS: bindings.ASSETS,
 		RUN_LOGS: r2BlobStore(bindings.RUN_LOGS),
 		DEPLOY_QUEUE: cfJobQueue(bindings.DEPLOY_QUEUE),
+		WAIT_UNTIL: waitUntil,
 		...(bindings.IAM === undefined ? {} : { IAM: bindings.IAM, IAM_ADMIN: bindings.IAM }),
 	}
 }

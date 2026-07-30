@@ -31,6 +31,7 @@ describe('the Zerops namespace process configuration', () => {
 				delete: () => Promise.resolve(),
 			},
 			DEPLOY_QUEUE: { send: () => Promise.resolve() },
+			WAIT_UNTIL: () => {},
 			ENVIRONMENT: 'prod',
 			DEV: 'true',
 		}, {

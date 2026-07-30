@@ -15,12 +15,13 @@
 //   RunnerGateway→ (none — ADR-0003: there is no deploy runner off Cloudflare)
 
 import { HttpIamRpc } from '@fabrika/auth'
-import { FileSystemAssetServer, PostgresDatabase, PostgresJobQueue, S3BlobStore } from '@fabrika/platform-node'
+import { createBackgroundTasks, FileSystemAssetServer, PostgresDatabase, PostgresJobQueue, S3BlobStore } from '@fabrika/platform-node'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { createControlRepositories } from '../db'
 import type { Env } from '../env'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { HttpIamAdminGateway } from './iam-admin'
+import { HttpOperationsService } from './operations'
 import { zeropsControlProvider } from './provider'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
@@ -81,6 +82,8 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 
 	const db = PostgresDatabase.connect(databaseUrl)
 	const queue = new PostgresJobQueue<DeployJobMessage>(db, { queue: DEPLOY_QUEUE_NAME, maxAttempts: DEPLOY_MAX_ATTEMPTS })
+	const tasks = createBackgroundTasks({ label: 'control background task' })
+	const operations = operationsConfig(source)
 
 	const env: Env = {
 		DB: db,
@@ -89,6 +92,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		ASSETS: new FileSystemAssetServer(config.assetsDir, { spaFallback: true }),
 		RUN_LOGS: blobStore(source),
 		DEPLOY_QUEUE: queue,
+		WAIT_UNTIL: tasks.waitUntil,
 		...(dev === 'true' ? {} : { IAM: iamRpc(source) }),
 		IAM_ADMIN: new HttpIamAdminGateway(
 			required(source, 'PROPUSTKA_RPC_URL'),
@@ -96,6 +100,9 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		),
 		ENVIRONMENT: environment,
 		DEV: dev,
+		...(operations === null
+			? {}
+			: { OPERATIONS: new HttpOperationsService(operations.origin), OPERATIONS_SYNC_KEY: operations.syncKey }),
 		// Spread conditionally rather than defaulted to '': ABSENT and EMPTY mean different things to
 		// several of these. `VOZKA_VAULT_KEY: ''` would make `buildRunDeps` try to import a zero-length
 		// master key instead of running the env/literal path, and `VOZKA_DOMAIN: ''` would be read as
@@ -117,8 +124,29 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		provider: zeropsControlProvider(env, source),
 		config,
 		queue,
-		shutdown: () => db.close(),
+		async shutdown(): Promise<void> {
+			await tasks.drain()
+			await db.close()
+		},
 	}
+}
+
+interface OperationsProcessConfig {
+	origin: string
+	syncKey: string
+}
+
+function operationsConfig(source: Record<string, string | undefined>): OperationsProcessConfig | null {
+	const origin = source['FABRIKA_OPERATIONS_URL']
+	const syncKey = source['OPERATIONS_SYNC_KEY']
+	if ((origin === undefined || origin === '') && (syncKey === undefined || syncKey === '')) {
+		return null
+	}
+	if (origin === undefined || origin.trim() === '' || syncKey === undefined || syncKey.length < MIN_RPC_KEY_LENGTH) {
+		throw new Error(`FABRIKA_OPERATIONS_URL and an OPERATIONS_SYNC_KEY of at least ${MIN_RPC_KEY_LENGTH} characters must be configured together`)
+	}
+	new URL(origin)
+	return { origin, syncKey }
 }
 
 /**

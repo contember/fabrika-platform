@@ -27,6 +27,8 @@ export interface RegistryContext {
 	provider: ControlProvider
 	/** The authenticated caller (already `can`-checked by the router); used to `audit` mutations. */
 	authorized: Authorized
+	/** Non-blocking Operations projection trigger. The handler never awaits it. */
+	catalogChanged?: () => void
 }
 
 // ── DTO mappers (snake_case row → camelCase API; secrets stay refs) ────────────
@@ -226,6 +228,7 @@ export async function createApp(c: RegistryContext): Promise<Response> {
 		...(await installationIdField(c, body, normalized)),
 	})
 	await c.authorized.auth.audit({ action: 'app.create', resourceType: 'app', resourceId: id, metadata: { repoUrl: row.repo_url } })
+	notifyCatalogChanged(c)
 	return json(toAppDto(row), { status: 201 })
 }
 
@@ -244,6 +247,7 @@ export async function updateApp(c: RegistryContext, id: string): Promise<Respons
 		...(await installationIdField(c, body, resolveTarget)),
 	})
 	await c.authorized.auth.audit({ action: 'app.update', resourceType: 'app', resourceId: id })
+	notifyCatalogChanged(c)
 	return row ? json(toAppDto(row)) : error(404, 'app not found')
 }
 
@@ -253,6 +257,7 @@ export async function deleteApp(c: RegistryContext, id: string): Promise<Respons
 		return error(404, 'app not found')
 	}
 	await c.authorized.auth.audit({ action: 'app.delete', resourceType: 'app', resourceId: id })
+	notifyCatalogChanged(c)
 	return json({ ok: true })
 }
 
@@ -356,6 +361,7 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 		resourceId: `${appId}/${env}`,
 		metadata: { triggerRef, namespaceId: row.namespace_id, previousNamespaceId: existing?.namespace_id ?? null },
 	})
+	notifyCatalogChanged(c)
 	return json(toAppEnvDto(row))
 }
 export async function deleteAppEnv(c: RegistryContext, appId: string, env: string): Promise<Response> {
@@ -364,6 +370,7 @@ export async function deleteAppEnv(c: RegistryContext, appId: string, env: strin
 		return error(404, 'app env not found')
 	}
 	await c.authorized.auth.audit({ action: 'app.env.delete', resourceType: 'app_env', resourceId: `${appId}/${env}` })
+	notifyCatalogChanged(c)
 	return json({ ok: true })
 }
 
@@ -599,9 +606,19 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 		resourceId: id,
 		metadata: { repoUrl, env, namespaceId: appEnv.namespace_id, onboarding: true },
 	})
+	notifyCatalogChanged(c)
 	const response: RegisterAppResponse = { app: toAppDto(app), env: toAppEnvDto(appEnv) }
 	return json(response, { status: 201 })
 }
 
 // Re-export the field readers the router uses to validate query params consistently.
 export { arrayField, booleanField }
+
+function notifyCatalogChanged(c: RegistryContext): void {
+	try {
+		c.catalogChanged?.()
+	} catch {
+		// An Operations scheduling failure must not turn a committed registry mutation into an API error.
+		console.warn('operations catalog scheduling failed')
+	}
+}

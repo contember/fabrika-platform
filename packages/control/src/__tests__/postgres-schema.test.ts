@@ -106,6 +106,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			'0006_immutable_namespace_resource_claim_owners.sql',
 			'0007_namespace_resource_claim_owner_coordinates.sql',
 			'0008_zerops_namespace_app_targets.sql',
+			'0009_operations_catalog_sync.sql',
 		])
 	})
 
@@ -128,6 +129,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'vault',
 				'deploy_locks',
 				'jobs',
+				'operations_catalog_sync',
 			]
 		) {
 			expect(names).toContain(table)
@@ -762,6 +764,7 @@ function env(): Env {
 		ASSETS: { fetch: () => Promise.resolve(new Response('<!doctype html>spa', { headers: { 'content-type': 'text/html' } })) },
 		RUN_LOGS: logs,
 		DEPLOY_QUEUE: new PostgresJobQueue<DeployJobMessage>(raw, { queue: 'vozka-deploy' }),
+		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'local',
 		DEV: 'true',
 		// No feed fetch happens in these tests (the poller needs a resolvable feed), so the maintenance

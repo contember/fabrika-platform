@@ -4,6 +4,12 @@ import type { ApiDeps } from './api/router'
 import type { ControlRepositories, RunRow } from './db'
 import type { Env } from './env'
 import { createIam } from './iam'
+import {
+	type OperationsCatalogSyncDeps,
+	type OperationsCatalogSyncSummary,
+	projectOperationsCatalogChange,
+	replayOperationsCatalog,
+} from './operations-catalog'
 import { GitHubAppRepoSource, type RepoSource } from './repo-source'
 import { cancelDeploy, type RunDeps } from './run-lifecycle'
 import { VaultSecretResolver } from './secret-resolver'
@@ -19,6 +25,25 @@ export function repositories(env: Env): ControlRepositories {
 
 export function locks(env: Env): DeployLocks {
 	return new SqlDeployLocks(env.DB)
+}
+
+export function operationsCatalogDeps(env: Env): OperationsCatalogSyncDeps {
+	return {
+		catalog: repositories(env).operationsCatalog,
+		locks: locks(env),
+		...(env.OPERATIONS === undefined ? {} : { service: env.OPERATIONS }),
+		...(env.OPERATIONS_SYNC_KEY === undefined ? {} : { syncKey: env.OPERATIONS_SYNC_KEY }),
+	}
+}
+
+/** Registry writes stay successful even when Operations is unavailable. */
+export function scheduleOperationsCatalogChange(env: Env): void {
+	env.WAIT_UNTIL(projectOperationsCatalogChange(operationsCatalogDeps(env)))
+}
+
+/** Scheduled repair path; the sync function converts transport failures into a durable failed summary. */
+export function replayOperationsCatalogProjection(env: Env): Promise<OperationsCatalogSyncSummary> {
+	return replayOperationsCatalog(operationsCatalogDeps(env))
 }
 
 export function repoSource(env: Env): RepoSource {
@@ -70,5 +95,6 @@ export function buildApiDeps(env: Env, provider: ControlProvider): ApiDeps {
 		provider,
 		cancelRun: (run) => cancelRun(env, provider, run),
 		vault: () => vault(env),
+		catalogChanged: () => scheduleOperationsCatalogChange(env),
 	}
 }
