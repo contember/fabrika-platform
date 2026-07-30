@@ -1,7 +1,12 @@
 {
 	"extends": "../../tsconfig.base.json",
 	"compilerOptions": {
-		"noEmit": true
+		"noEmit": true,
+		"types": ["@cloudflare/workers-types", "@types/bun"],
+		// The provider authoring surface re-exports oblaka-iac's raw TypeScript, which trips these flags.
+		// Keep the relaxation package-local; Operations source stays strict by convention.
+		"noUncheckedIndexedAccess": false,
+		"noPropertyAccessFromIndexSignature": false
 	},
-	"include": ["src/**/*"]
+	"include": ["src/**/*", "oblaka.ts", "fabrika.config.ts"]
 }

@@ -1,3 +1,4 @@
+import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import { type CloudflareAppConfig, D1Database, Queue, R2Bucket, ServiceReference, type Worker } from '@fabrika/provider-cloudflare'
 import { beforeAll, describe, expect, test } from 'bun:test'
 import type { buildVozkaWorker as BuildVozkaWorker } from '../../fabrika.config'
@@ -47,6 +48,7 @@ describe('defineApp(vozka config)', () => {
 		expect(binding(worker, 'DEPLOY_QUEUE')).toBeInstanceOf(Queue)
 		// Off-local stages bind the propustka IAM ServiceReference.
 		expect(binding(worker, 'IAM')).toBeInstanceOf(ServiceReference)
+		expect(binding(worker, 'OPERATIONS')).toBeInstanceOf(ServiceReference)
 	})
 
 	test('DB declares migrations (drives a migrate step) and the assets SPA is the dashboard dist', () => {
@@ -61,9 +63,10 @@ describe('defineApp(vozka config)', () => {
 		expect(worker.options.assets?.directory).toBe('../dashboard/dist')
 	})
 
-	test('local omits the off-local service bindings (IAM + vozka-runner) and runs the FakeIamClient (DEV=true)', () => {
+	test('local omits the off-local service bindings (IAM + Operations + vozka-runner) and runs the FakeIamClient (DEV=true)', () => {
 		const worker = buildVozkaWorker({ env: 'local' })
 		expect(binding(worker, 'IAM')).toBeUndefined()
+		expect(binding(worker, 'OPERATIONS')).toBeUndefined()
 		expect(worker.options.vars?.['DEV']).toBe('true')
 		// vozka-runner is an off-local service binding too — absent locally (no container deploys in dev).
 		expect(binding(worker, 'RUNNER_SVC')).toBeUndefined()
@@ -75,6 +78,14 @@ describe('defineApp(vozka config)', () => {
 		expect(worker.options.vars?.['DEV']).toBe('')
 		expect(worker.options.vars?.['ENVIRONMENT']).toBe('stage')
 	})
+
+	test('the public artifact origin is propagated only when configured', () => {
+		delete process.env['OPERATIONS_ARTIFACT_ORIGIN']
+		expect(buildVozkaWorker({ env: 'stage' }).options.vars?.['OPERATIONS_ARTIFACT_ORIGIN']).toBeUndefined()
+		process.env['OPERATIONS_ARTIFACT_ORIGIN'] = 'https://errors.example.test'
+		expect(buildVozkaWorker({ env: 'stage' }).options.vars?.['OPERATIONS_ARTIFACT_ORIGIN']).toBe('https://errors.example.test')
+		delete process.env['OPERATIONS_ARTIFACT_ORIGIN']
+	})
 })
 
 // propustka is fully native — fabrika has no Cloudflare Access edge to declare. Its `/api/*` is gated
@@ -83,7 +94,7 @@ describe('defineApp(vozka config)', () => {
 describe('Schema actions/scopes match src/actions.ts (no drift)', () => {
 	test('the schema action catalog is exactly the ACTIONS constants', () => {
 		const declared = (config.schema?.actions ?? []).map((a) => a.action).sort()
-		const fromActions = Object.values(ACTIONS).sort()
+		const fromActions = [...Object.values(ACTIONS), ...Object.values(OPERATIONS_ACTIONS)].sort()
 		expect(declared).toEqual(fromActions)
 	})
 
@@ -92,8 +103,8 @@ describe('Schema actions/scopes match src/actions.ts (no drift)', () => {
 		expect(declared).toEqual([SCOPES.APP, SCOPES.ENVIRONMENT].sort())
 	})
 
-	test('roles: operator → deploy.*, admin → *', () => {
-		expect(config.schema?.roles['operator']?.permissions).toEqual(['deploy.*'])
+	test('roles: operator → deploy.* + operations.*, admin → *', () => {
+		expect(config.schema?.roles['operator']?.permissions).toEqual(['deploy.*', 'operations.*'])
 		expect(config.schema?.roles['admin']?.permissions).toEqual(['*'])
 	})
 
@@ -125,6 +136,7 @@ describe('Pipeline', () => {
 			'GITHUB_WEBHOOK_SECRET',
 			'CLOUDFLARE_API_TOKEN',
 			'PROPUSTKA_PROVISIONING_KEY',
+			'OPERATIONS_SYNC_KEY',
 		])
 	})
 })

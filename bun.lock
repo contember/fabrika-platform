@@ -241,10 +241,14 @@
         "@fabrika/operations-contract": "workspace:*",
         "@fabrika/platform": "workspace:*",
         "@fabrika/platform-node": "workspace:*",
+        "@fabrika/provider-cloudflare": "workspace:*",
         "source-map-js": "^1.2.1",
       },
       "devDependencies": {
+        "@cloudflare/workers-types": "^4.20260702.1",
         "@types/bun": "latest",
+        "oblaka-iac": "^0.0.18",
+        "wrangler": "^4.24.0",
       },
     },
     "packages/operations-contract": {

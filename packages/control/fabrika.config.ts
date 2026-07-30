@@ -13,6 +13,7 @@
 // NAME in `pipeline.secrets` and provisioned out-of-band (`wrangler secret put` / `.dev.vars`).
 
 import type { AppSchema } from '@fabrika/auth'
+import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import { D1Database, defineApp, Queue, R2Bucket, type ResourceContext, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
 import { ACTIONS, SCOPES, VOZKA_APP_ID } from './src/actions'
 
@@ -28,6 +29,7 @@ import { ACTIONS, SCOPES, VOZKA_APP_ID } from './src/actions'
 export const buildVozkaWorker = (ctx: ResourceContext): Worker => {
 	const { env, domain } = ctx
 	const isLocal = env === 'local'
+	const operationsArtifactOrigin = process.env['OPERATIONS_ARTIFACT_ORIGIN']
 
 	return new Worker({
 		dir: '.',
@@ -65,6 +67,9 @@ export const buildVozkaWorker = (ctx: ResourceContext): Worker => {
 			// injects them into provider jobs without persisting credentials in the registry.
 			CLOUDFLARE_ACCOUNT_ID: process.env['CLOUDFLARE_ACCOUNT_ID'] ?? '',
 			PROPUSTKA_URL: process.env['PROPUSTKA_URL'] ?? '',
+			...(operationsArtifactOrigin === undefined || operationsArtifactOrigin === ''
+				? {}
+				: { OPERATIONS_ARTIFACT_ORIGIN: operationsArtifactOrigin }),
 			// The GitHub App's numeric id (public, not a secret) — it's the `iss` of the App JWT that mints
 			// installation tokens to clone PRIVATE app repos. The PEM key is a `pipeline.secret`; the id is
 			// just config, so it rides as a var. Without it the JWT iss is empty and GitHub answers 401.
@@ -98,6 +103,7 @@ export const buildVozkaWorker = (ctx: ResourceContext): Worker => {
 			// never resets the container running it — deployed out-of-band (packages/runner-cloudflare bootstrap).
 			...(isLocal ? {} : {
 				IAM: new ServiceReference('propustka-worker'),
+				OPERATIONS: new ServiceReference('operations'),
 				RUNNER_SVC: new ServiceReference('vozka-runner'),
 			}),
 		},
@@ -126,13 +132,16 @@ const schema: AppSchema = {
 		{ action: ACTIONS.APP_MANAGE, description: 'Manage the app registry (apps + app_envs)' },
 		{ action: ACTIONS.NAMESPACE_MANAGE, description: 'Manage deployment namespaces' },
 		{ action: ACTIONS.SECRET_MANAGE, description: 'Manage secret values + their references' },
+		{ action: OPERATIONS_ACTIONS.READ, description: 'Read Operations errors and activity' },
+		{ action: OPERATIONS_ACTIONS.TRIAGE, description: 'Triage Operations errors' },
+		{ action: OPERATIONS_ACTIONS.MANAGE, description: 'Manage Operations sources, alerts, and retention' },
 	],
 	roles: {
 		operator: {
 			name: 'Operator',
 			description: 'Trigger and read any deploy (no registry or secret management).',
 			// `deploy.*` covers deploy.trigger + deploy.read (prefix wildcard).
-			permissions: ['deploy.*'],
+			permissions: ['deploy.*', 'operations.*'],
 		},
 		admin: {
 			name: 'Admin',
@@ -166,6 +175,7 @@ export default defineApp({
 			'GITHUB_WEBHOOK_SECRET',
 			'CLOUDFLARE_API_TOKEN',
 			'PROPUSTKA_PROVISIONING_KEY',
+			'OPERATIONS_SYNC_KEY',
 		],
 	},
 })

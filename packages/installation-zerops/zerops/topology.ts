@@ -4,7 +4,7 @@
 //
 // ── The two projects, and why two ─────────────────────────────────────────────────────────────────
 //
-//   platform    corePackage SERIOUS    proxy · iam · control · db (PostgreSQL HA) · storage (S3)
+//   platform    corePackage SERIOUS    proxy · iam · operations · control · db/storage pairs
 //   apps-prod   corePackage SERIOUS    proxy — the apps themselves arrive as their own imports
 //
 // A Zerops project is the unit of isolation: one VXLAN private network, its own balancers, DNS and
@@ -126,7 +126,7 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 			platform: 'zerops',
 			project: {
 				name: 'platform',
-				description: 'fabrika control plane, IAM and the auth proxy. Separate from the apps project by ADR-0006.',
+				description: 'fabrika control plane, Operations, IAM and the auth proxy. Separate from the apps project by ADR-0006.',
 				corePackage: 'SERIOUS',
 				tags: ['fabrika', 'platform', options.env],
 			},
@@ -155,6 +155,21 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 					enableCdn: false,
 					priority: 100,
 				},
+				{
+					hostname: 'operationsdb',
+					// Operations has an independent database service. This prevents its high-volume error
+					// history and migrations from sharing IAM/control's failure and capacity domain.
+					type: 'postgresql:ha@18',
+					priority: 100,
+				},
+				{
+					hostname: 'operationsstorage',
+					type: 'object-storage',
+					objectStorageSize: 25,
+					objectStoragePolicy: 'private',
+					enableCdn: false,
+					priority: 100,
+				},
 				// ── services ──────────────────────────────────────────────────────────────────────
 				runtime({
 					hostname: 'iam',
@@ -167,9 +182,18 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 					maxContainers: 4,
 				}),
 				runtime({
+					hostname: 'operations',
+					type: 'alpine/bun@1.3',
+					priority: 40,
+					minContainers: 1,
+					maxContainers: 3,
+				}),
+				runtime({
 					hostname: 'control',
 					type: 'alpine/bun@1.3',
-					priority: 50,
+					// IAM → Operations → control is the code deployment order too: control has a private
+					// Operations dependency and must never start against a missing service.
+					priority: 30,
 					// Deliberately allowed to be a single container. The control plane is CRASH-SAFE across a
 					// deploy by design — it may trigger its own redeploy and die, then reconcile in-flight runs
 					// by polling `/app-version` on restart (ADR-0003) — so an outage window here is a delay,

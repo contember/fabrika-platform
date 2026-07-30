@@ -11,7 +11,7 @@
 project:
   name: platform
   envIsolation: service
-  description: "fabrika control plane, IAM and the auth proxy. Separate from the apps project by ADR-0006."
+  description: "fabrika control plane, Operations, IAM and the auth proxy. Separate from the apps project by ADR-0006."
   corePackage: SERIOUS
   tags:
     - fabrika
@@ -33,6 +33,21 @@ services:
     priority: 100
     enableCdn: false
     startWithoutCode: true
+  - hostname: operationsdb
+    type: "postgresql:ha@18"
+    envIsolation: service
+    override: true
+    priority: 100
+    startWithoutCode: true
+  - hostname: operationsstorage
+    type: object-storage
+    envIsolation: service
+    override: true
+    objectStorageSize: 25
+    objectStoragePolicy: private
+    priority: 100
+    enableCdn: false
+    startWithoutCode: true
   - hostname: iam
     type: alpine/bun@1.3
     envIsolation: service
@@ -43,12 +58,22 @@ services:
     maxContainers: 4
     zeropsSetup: iam
     startWithoutCode: true
+  - hostname: operations
+    type: alpine/bun@1.3
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: false
+    priority: 40
+    minContainers: 1
+    maxContainers: 3
+    zeropsSetup: operations
+    startWithoutCode: true
   - hostname: control
     type: alpine/bun@1.3
     envIsolation: service
     override: true
     enableSubdomainAccess: false
-    priority: 50
+    priority: 30
     minContainers: 1
     maxContainers: 2
     zeropsSetup: control

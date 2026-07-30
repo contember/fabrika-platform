@@ -7,6 +7,7 @@ import { COMPOSE_FILE, REPO_ROOT, STATE_DIR } from './prepare'
 const CONTROL_ORIGIN = 'http://control.localhost:18080'
 const IAM_ORIGIN = 'http://iam.localhost:18080'
 const NOTES_ORIGIN = 'http://notes.localhost:18081'
+const OPERATIONS_ORIGIN = 'http://errors.localhost:18080'
 const EXTERNAL_ACTIVATION_WAIT_MS = 11_000
 const POLL_INTERVAL_MS = 200
 const POLL_TIMEOUT_MS = 30_000
@@ -222,6 +223,35 @@ const proveNamespaceIsolation = async (): Promise<void> => {
 	if (exitCode === 0) {
 		throw new Error('notes unexpectedly reached the control plane private network')
 	}
+	const operationsExitCode = await compose(
+		['exec', '-T', 'notes', 'wget', '-qO-', '--timeout=2', 'http://operations:3000/healthz'],
+		false,
+		false,
+	)
+	if (operationsExitCode === 0) {
+		throw new Error('notes unexpectedly reached the Operations private network')
+	}
+}
+
+const proveOperationsIngress = async (): Promise<void> => {
+	for (const path of ['/healthz', '/private/catalog/reconcile', '/api/issues']) {
+		const response = await fetch(`${OPERATIONS_ORIGIN}${path}`)
+		if (response.status !== 404) {
+			throw new Error(`public Operations path ${path} returned ${response.status}, expected 404`)
+		}
+	}
+	const ingest = await fetch(`${OPERATIONS_ORIGIN}/api/1/envelope/`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/x-sentry-envelope' },
+		body: '{}\n',
+	})
+	if (ingest.status !== 401) {
+		throw new Error(`public Operations ingest returned ${ingest.status}, expected credential challenge`)
+	}
+	await compose(['kill', 'operations'])
+	await compose(['up', '--detach', '--wait', 'operations'])
+	const health = await compose(['exec', '-T', 'operations', 'wget', '-qO-', 'http://127.0.0.1:3000/healthz'])
+	if (health !== 0) throw new Error('Operations did not recover after restart')
 }
 
 const main = async (): Promise<void> => {
@@ -229,6 +259,7 @@ const main = async (): Promise<void> => {
 	await requestJson(CONTROL_ORIGIN, '/healthz')
 	await requestJson(IAM_ORIGIN, '/healthz')
 	await requestJson(NOTES_ORIGIN, '/healthz')
+	await proveOperationsIngress()
 	await requestJson(CONTROL_ORIGIN, '/api/namespaces')
 	await ensureNamespace(provisioningKey)
 	await ensureNotesApp(provisioningKey)

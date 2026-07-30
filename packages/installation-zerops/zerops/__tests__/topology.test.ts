@@ -47,8 +47,17 @@ describe('every generated import document validates against the PUBLISHED JSON s
 })
 
 describe('the topology is the one ADR-0006 describes', () => {
-	test('platform: the control plane, IAM, the proxy, Postgres and object storage — in one project of their own', () => {
-		expect(platform?.steady.document.services.map((service) => service.hostname)).toEqual(['db', 'storage', 'iam', 'control', 'proxy'])
+	test('platform: control, Operations, IAM, proxy, and isolated data services — in one project of their own', () => {
+		expect(platform?.steady.document.services.map((service) => service.hostname)).toEqual([
+			'db',
+			'storage',
+			'operationsdb',
+			'operationsstorage',
+			'iam',
+			'operations',
+			'control',
+			'proxy',
+		])
 		expect(platform?.steady.document.project?.name).toBe('platform')
 	})
 
@@ -75,12 +84,26 @@ describe('the topology is the one ADR-0006 describes', () => {
 		const storage = platform?.steady.document.services.find((service) => service.hostname === 'storage')
 		expect(storage?.objectStoragePolicy).toBe('private')
 		expect(storage?.enableCdn).toBe(false)
+		const operationsStorage = platform?.steady.document.services.find((service) => service.hostname === 'operationsstorage')
+		expect(operationsStorage?.objectStoragePolicy).toBe('private')
+		expect(operationsStorage?.enableCdn).toBe(false)
+	})
+
+	test('Operations has an isolated HA database and no public route of its own', () => {
+		const operationsDb = platform?.steady.document.services.find((service) => service.hostname === 'operationsdb')
+		const operations = platform?.steady.document.services.find((service) => service.hostname === 'operations')
+		expect(operationsDb?.type).toBe('postgresql:ha@18')
+		expect(operations?.enableSubdomainAccess).toBe(false)
 	})
 
 	test('the database and the object store are created FIRST (priority is descending)', () => {
 		const byHostname = new Map(platform?.steady.document.services.map((service) => [service.hostname, service.priority ?? 0]))
 		expect(byHostname.get('db')).toBe(100)
 		expect(byHostname.get('storage')).toBe(100)
+		expect(byHostname.get('operationsdb')).toBe(100)
+		expect(byHostname.get('operationsstorage')).toBe(100)
+		expect(byHostname.get('iam')).toBeGreaterThan(byHostname.get('operations') ?? 0)
+		expect(byHostname.get('operations')).toBeGreaterThan(byHostname.get('control') ?? 0)
 		expect(byHostname.get('proxy')).toBeLessThan(byHostname.get('iam') ?? 0)
 	})
 })

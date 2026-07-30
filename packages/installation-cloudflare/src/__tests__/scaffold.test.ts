@@ -42,12 +42,16 @@ describe('platform scaffold', () => {
 			expect(files['README.md']).toContain('# fabrika-platform (mangoweb)')
 			expect(files['.github/workflows/platform.yml']).toContain('repository: contember/fabrika-platform')
 			expect(files['.github/workflows/platform.yml']).toContain('working-directory: fabrika-platform/packages/iam')
+			expect(files['.github/workflows/platform.yml']).toContain('working-directory: fabrika-platform/packages/operations')
 			expect(files['.github/workflows/platform.yml']).toContain(
 				'fabrika app deploy --provider=cloudflare --env=prod --config=fabrika.config.ts',
 			)
 			expect(files['.github/workflows/platform.yml']).toContain('fabrika platform deploy --provider=cloudflare')
 			expect(files['.github/workflows/platform.yml']).toContain('--runner-config=packages/runner-cloudflare/fabrika-runner.config.ts')
 			expect(files['.github/workflows/platform.yml']).toContain('--worker-config=packages/control/fabrika.config.ts')
+			const workflow = files['.github/workflows/platform.yml'] ?? ''
+			expect(workflow.indexOf('name: Deploy IAM')).toBeLessThan(workflow.indexOf('name: Deploy Operations'))
+			expect(workflow.indexOf('name: Deploy Operations')).toBeLessThan(workflow.indexOf('name: Deploy fabrika runner + control plane'))
 
 			const generated = Object.values(files).join('\n')
 			for (const forbidden of FORBIDDEN_GENERATED_REFERENCES) {

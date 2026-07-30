@@ -52,7 +52,8 @@ services:
     command:
       - >-
         until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 1; done;
-        mc mb --ignore-existing local/run-logs
+        mc mb --ignore-existing local/run-logs;
+        mc mb --ignore-existing local/operations-payloads
     networks: [platform]
     depends_on:
       minio:
@@ -113,6 +114,8 @@ services:
       VOZKA_BOOTSTRAP_ADMINS: "[]"
       PROPUSTKA_URL: http://iam.localhost:18080
       PROPUSTKA_RPC_URL: http://iam:18080
+      FABRIKA_OPERATIONS_URL: http://operations:3000
+      OPERATIONS_ARTIFACT_ORIGIN: http://errors.localhost:18080
       VOZKA_RUN_LOGS_BUCKET: run-logs
       VOZKA_RUN_LOGS_ENDPOINT: http://minio:9000
       VOZKA_RUN_LOGS_REGION: us-east-1
@@ -128,7 +131,36 @@ services:
         condition: service_completed_successfully
       iam:
         condition: service_healthy
+      operations:
+        condition: service_healthy
       zerops-emulator:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:3000/healthz]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  operations:
+    <<: *bun
+    command: [sh, -c, "bun packages/operations/src/node/migrate.ts && exec bun packages/operations/src/node/server.ts"]
+    env_file: .state/operations.env
+    environment:
+      PORT: "3000"
+      ENVIRONMENT: local
+      FABRIKA_OPERATIONS_PUBLIC_HOST: errors.localhost
+      FABRIKA_OPERATIONS_BLOB_BUCKET: operations-payloads
+      FABRIKA_OPERATIONS_BLOB_ENDPOINT: http://minio:9000
+      FABRIKA_OPERATIONS_BLOB_REGION: us-east-1
+      FABRIKA_IAM_URL: http://iam:18080
+      FABRIKA_CONTROL_URL: http://control:3000
+    networks: [platform]
+    depends_on:
+      platform-db:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      iam:
         condition: service_healthy
     healthcheck:
       test: [CMD, wget, -qO-, http://127.0.0.1:3000/healthz]
@@ -159,6 +191,8 @@ services:
       iam:
         condition: service_healthy
       control:
+        condition: service_healthy
+      operations:
         condition: service_healthy
     healthcheck:
       test: [CMD, wget, -qO-, http://127.0.0.1:9000/healthz]

@@ -1,2 +1,3 @@
 CREATE DATABASE iam;
 CREATE DATABASE control;
+CREATE DATABASE operations;

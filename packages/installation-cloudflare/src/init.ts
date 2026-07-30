@@ -24,6 +24,7 @@ interface Collected {
 	accountId: string
 	apiToken: string
 	controlPlaneDomain: string
+	operationsHostname: string
 	githubOrg: string
 	platformRepo: string
 	propustkaUrl: string
@@ -55,6 +56,7 @@ export async function runInit(account: string): Promise<void> {
 	const collected = await collect(account)
 	const vaultKey = await ensureVaultKey()
 	const provisioning = await ensureProvisioningKey()
+	const operationsSyncKey = await ensureOperationsSyncKey()
 	const signingKeys = await ensureSigningKeys()
 	const oidcClientSecret = await ensureOidcClientSecret(collected.oidcClientId === PLACEHOLDER_OIDC_CLIENT_ID)
 	const app = await ensureGitHubApp(collected)
@@ -78,12 +80,14 @@ export async function runInit(account: string): Promise<void> {
 			GH_APP_PRIVATE_KEY: app.pem,
 			GH_WEBHOOK_SECRET: app.webhookSecret,
 			PROPUSTKA_PROVISIONING_KEY: provisioning,
+			OPERATIONS_SYNC_KEY: operationsSyncKey,
 			// propustka Stage 1 native-auth secrets (pushed as propustka Worker secrets by the pipeline).
 			PROPUSTKA_SIGNING_KEYS: signingKeys,
 			PROPUSTKA_OIDC_CLIENT_SECRET: oidcClientSecret,
 		},
 		vars: {
 			VOZKA_DOMAIN: collected.controlPlaneDomain,
+			OPERATIONS_HOSTNAME: collected.operationsHostname,
 			GH_APP_ID: String(app.id),
 			PROPUSTKA_URL: collected.propustkaUrl,
 			VOZKA_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
@@ -138,6 +142,16 @@ async function collect(account: string): Promise<Collected> {
 	} else {
 		ok(`Zone found: ${zone.name}`)
 	}
+	const operationsHostname = await text('Operations ingest domain', primaryZone !== undefined ? `errors.${primaryZone}` : undefined)
+	if (operationsHostname === '') {
+		throw new Error('An Operations ingest domain is required.')
+	}
+	const operationsZone = await findZone(apiToken, operationsHostname).catch(() => null)
+	if (operationsZone === null) {
+		warn(`No Cloudflare zone found for ${operationsHostname} — the Operations custom-domain bind would fail.`)
+	} else {
+		ok(`Zone found: ${operationsZone.name}`)
+	}
 	const githubOrg = await text('GitHub org that owns the fabrika App + platform repo', account)
 	const platformRepo = await text('Platform repo (org/fabrika-platform)', `${githubOrg}/fabrika-platform`)
 	const propustkaUrl = await retry('IAM base URL', async () => {
@@ -173,6 +187,7 @@ async function collect(account: string): Promise<Collected> {
 		accountId: cfAccount.id,
 		apiToken,
 		controlPlaneDomain,
+		operationsHostname,
 		githubOrg,
 		platformRepo,
 		propustkaUrl,
@@ -225,6 +240,20 @@ async function ensureProvisioningKey(): Promise<string> {
 	await persistEnv('PROPUSTKA_PROVISIONING_KEY', key)
 	ok('Provisioning key generated + saved to .env.')
 	detail('IAM Stage 1 seeds this as an admin credential; the control plane reconciles with it in Stage 2.')
+	return key
+}
+
+async function ensureOperationsSyncKey(): Promise<string> {
+	step('Operations catalog key (OPERATIONS_SYNC_KEY)')
+	const existing = fromEnv('OPERATIONS_SYNC_KEY')
+	if (existing !== undefined) {
+		if (existing.length < 32) throw new Error('OPERATIONS_SYNC_KEY must be at least 32 characters.')
+		ok('Reusing OPERATIONS_SYNC_KEY from .env (resume).')
+		return existing
+	}
+	const key = randomBytes(32).toString('base64url')
+	await persistEnv('OPERATIONS_SYNC_KEY', key)
+	ok('Operations catalog key generated + saved to .env.')
 	return key
 }
 

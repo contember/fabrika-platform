@@ -39,8 +39,8 @@ describe('the live files are valid against the published contract', () => {
 })
 
 describe('one root file, several named setups — the merged-file decision, checked', () => {
-	test('the root file declares exactly the three fabrika services that carry code', () => {
-		expect(setupNames('zerops.yaml')).toEqual(['iam', 'control', 'proxy'])
+	test('the root file declares exactly the four fabrika services that carry code', () => {
+		expect(setupNames('zerops.yaml')).toEqual(['iam', 'operations', 'control', 'proxy'])
 	})
 
 	test('every setup name is a service hostname in the platform import document', () => {
@@ -127,7 +127,7 @@ describe('nothing committed carries a secret VALUE', () => {
 })
 
 describe('the generated root file is the only fabrika platform build specification', () => {
-	for (const path of ['packages/control/zerops.yaml', 'packages/iam/zerops.yaml', 'packages/proxy/zerops.yaml']) {
+	for (const path of ['packages/control/zerops.yaml', 'packages/iam/zerops.yaml', 'packages/operations/zerops.yaml', 'packages/proxy/zerops.yaml']) {
 		test(`${path} stays deleted`, () => {
 			expect(existsSync(resolve(REPO_ROOT, path))).toBe(false)
 		})

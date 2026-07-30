@@ -36,6 +36,7 @@ const generateSecrets = async (): Promise<void> => {
 		'minio.env',
 		'iam.env',
 		'control.env',
+		'operations.env',
 		'platform-proxy.env',
 		'apps-proxy.env',
 		'notes.env',
@@ -51,6 +52,7 @@ const generateSecrets = async (): Promise<void> => {
 	const rpcKey = `px_${randomSecret()}`
 	const proxyKey = `px_${randomSecret()}`
 	const provisioningKey = `px_${randomSecret()}`
+	const operationsSyncKey = randomSecret()
 	const emulatorToken = randomSecret()
 	const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
 	const signingKeys = JSON.stringify([privateKey.export({ format: 'jwk' })])
@@ -66,12 +68,19 @@ const generateSecrets = async (): Promise<void> => {
 			PROPUSTKA_PROXY_KEY: proxyKey,
 			PROPUSTKA_PROVISIONING_KEY: provisioningKey,
 		}),
+		writeEnv('operations.env', {
+			FABRIKA_OPERATIONS_DATABASE_URL: `postgres://postgres:${platformDatabasePassword}@platform-db:5432/operations`,
+			FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID: 'fabrika-local',
+			FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY: minioPassword,
+			OPERATIONS_SYNC_KEY: operationsSyncKey,
+		}),
 		writeEnv('control.env', {
 			VOZKA_DATABASE_URL: `postgres://postgres:${platformDatabasePassword}@platform-db:5432/control`,
 			VOZKA_RUN_LOGS_ACCESS_KEY_ID: 'fabrika-local',
 			VOZKA_RUN_LOGS_SECRET_ACCESS_KEY: minioPassword,
 			PROPUSTKA_RPC_KEY: rpcKey,
 			PROPUSTKA_PROVISIONING_KEY: provisioningKey,
+			OPERATIONS_SYNC_KEY: operationsSyncKey,
 			VOZKA_VAULT_KEY: randomBase64Key(),
 			ZEROPS_ACCESS_TOKEN: emulatorToken,
 			ZEROPS_PROXY_IAM_KEY: proxyKey,
@@ -85,23 +94,36 @@ const generateSecrets = async (): Promise<void> => {
 	])
 }
 
+export const localPlatformProxyManifest = (): ProxyManifest => ({
+	apps: [
+		{
+			id: 'iam-local',
+			hosts: ['iam.localhost'],
+			upstream: 'iam:18080',
+			gates: { rules: [{ path: '/*', kind: 'public' }] },
+		},
+		{
+			id: 'vozka',
+			hosts: ['control.localhost'],
+			upstream: 'control:3000',
+			gates: { rules: [{ path: '/*', kind: 'public' }] },
+		},
+		{
+			id: 'operations',
+			hosts: ['errors.localhost'],
+			upstream: 'operations:3000',
+			gates: {
+				rules: [
+					{ path: '/api/*/envelope/', kind: 'public' },
+					{ path: '/api/artifacts/source-maps/', kind: 'public' },
+				],
+			},
+		},
+	],
+})
+
 const generateProxyConfigs = async (): Promise<void> => {
-	const platformManifest: ProxyManifest = {
-		apps: [
-			{
-				id: 'iam-local',
-				hosts: ['iam.localhost'],
-				upstream: 'iam:18080',
-				gates: { rules: [{ path: '/*', kind: 'public' }] },
-			},
-			{
-				id: 'vozka',
-				hosts: ['control.localhost'],
-				upstream: 'control:3000',
-				gates: { rules: [{ path: '/*', kind: 'public' }] },
-			},
-		],
-	}
+	const platformManifest = localPlatformProxyManifest()
 	const appsManifest: ProxyManifest = {
 		apps: [{
 			id: 'notes',

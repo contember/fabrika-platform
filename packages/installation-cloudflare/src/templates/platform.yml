@@ -1,7 +1,8 @@
 name: platform
 
-# Deploys the {{ACCOUNT}} account's fabrika BASE: IAM (Stage 1, root authz) → runner + control plane
-# (Stage 2). THIS repo is the per-account root of trust, so the control plane never deploys itself.
+# Deploys the {{ACCOUNT}} account's fabrika BASE: IAM (Stage 1, root authz) → Operations (Stage 2) →
+# runner + control plane (Stage 3). THIS repo is the per-account root of trust, so the control plane
+# never deploys itself.
 # Idempotent: re-run for a first bring-up OR a routine redeploy. Concrete apps deploy through fabrika.
 #
 # Generated + maintained by `fabrika platform init --provider=cloudflare {{ACCOUNT}}`. Secrets + variables live in the `{{ACCOUNT}}` GitHub
@@ -119,7 +120,19 @@ jobs:
           PROPUSTKA_PROVISIONING_KEY: ${{ secrets.PROPUSTKA_PROVISIONING_KEY }}
         run: fabrika app deploy --provider=cloudflare --env=prod --config=fabrika.config.ts
 
-      # ── Stage 2 — fabrika platform (executor + control plane) ────────────────────────────────────────
+      # ── Stage 2 — Operations ────────────────────────────────────────────────────────────────────────
+      # Operations must exist before control: control carries a private service binding to it.
+      - name: Deploy Operations
+        working-directory: fabrika-platform/packages/operations
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # The provider's generic app-deploy adapter reads VOZKA_DOMAIN as the selected app domain.
+          VOZKA_DOMAIN: ${{ vars.OPERATIONS_HOSTNAME }}
+          OPERATIONS_SYNC_KEY: ${{ secrets.OPERATIONS_SYNC_KEY }}
+        run: fabrika app deploy --provider=cloudflare --env=prod --config=fabrika.config.ts
+
+      # ── Stage 3 — fabrika platform (executor + control plane) ────────────────────────────────────────
       - name: Deploy fabrika runner + control plane
         working-directory: fabrika-platform
         env:
@@ -132,10 +145,12 @@ jobs:
           GITHUB_WEBHOOK_SECRET: ${{ secrets.GH_WEBHOOK_SECRET }}
           # The seeded IAM provisioning key — the control plane reconciles its own schema with it (Bearer px_).
           PROPUSTKA_PROVISIONING_KEY: ${{ secrets.PROPUSTKA_PROVISIONING_KEY }}
+          OPERATIONS_SYNC_KEY: ${{ secrets.OPERATIONS_SYNC_KEY }}
           # Non-secret config (Environment Variables).
           VOZKA_DOMAIN: ${{ vars.VOZKA_DOMAIN }}
           GITHUB_APP_ID: ${{ vars.GH_APP_ID }}
           PROPUSTKA_URL: ${{ vars.PROPUSTKA_URL }}
+          OPERATIONS_ARTIFACT_ORIGIN: https://${{ vars.OPERATIONS_HOSTNAME }}
           VOZKA_BOOTSTRAP_ADMINS: ${{ vars.VOZKA_BOOTSTRAP_ADMINS }}
         run: |
           BUILD_FLAG=""

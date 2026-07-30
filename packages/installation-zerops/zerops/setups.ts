@@ -122,7 +122,7 @@ const iam: ZeropsYamlSetup = {
  * The control plane — registry, run lifecycle, vault, webhook, and the dashboard SPA.
  *
  * Per-installation variables (env API): `VOZKA_DOMAIN`, `PROPUSTKA_URL` (the public IAM issuer),
- * `CLOUDFLARE_ACCOUNT_ID`,
+ * `OPERATIONS_ARTIFACT_ORIGIN` (the public proxy origin for source-map upload), `CLOUDFLARE_ACCOUNT_ID`,
  * `VOZKA_BOOTSTRAP_ADMINS`, `ZEROPS_CLIENT_ID`, `ZEROPS_PROXY_BUILD_FROM_GIT`, and
  * `ZEROPS_PROXY_IAM_URL` (the public IAM origin reachable from application projects).
  *
@@ -130,9 +130,10 @@ const iam: ZeropsYamlSetup = {
  * same value IAM holds), `VOZKA_VAULT_KEY` (the vault KEK; its loss is unrecoverable by design),
  * `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `CLOUDFLARE_API_TOKEN`,
  * `PROPUSTKA_PROVISIONING_KEY`, `ZEROPS_PROXY_IAM_KEY` (the same credential IAM receives as
- * `PROPUSTKA_PROXY_KEY`), and — when this control plane deploys to Zerops — `ZEROPS_ACCESS_TOKEN`, the
- * Zerops personal access token. It carries account-wide admin rights and is the single most dangerous
- * thing an installation holds.
+ * `PROPUSTKA_PROXY_KEY`), `OPERATIONS_SYNC_KEY` (the same catalog credential Operations receives),
+ * and — when this control plane deploys to Zerops — `ZEROPS_ACCESS_TOKEN`, the Zerops personal access
+ * token. It carries account-wide admin rights and is the single most dangerous thing an installation
+ * holds.
  *
  * There is NO runner service anywhere in this topology, and that is ADR-0003, not an omission: Zerops
  * has its own CI, so a deploy here is five HTTP calls made by this process.
@@ -160,6 +161,7 @@ const control: ZeropsYamlSetup = {
 			// Intra-project transport for management RPC. `PROPUSTKA_URL` is deliberately absent here:
 			// it is the public token issuer and is supplied per installation through the env API.
 			PROPUSTKA_RPC_URL: 'http://iam:3000',
+			FABRIKA_OPERATIONS_URL: 'http://operations:3000',
 			// Run logs, in the project's own S3-compatible object storage. All four are REFERENCES to the
 			// `storage` service's generated variables; the credentials themselves live in the platform and
 			// are resolved at container start. Nothing secret is committed by writing a pointer to it.
@@ -170,6 +172,45 @@ const control: ZeropsYamlSetup = {
 			// MinIO's conventional region. `S3BlobStore` uses path-style addressing, which MinIO wants and
 			// R2/AWS accept, so the same implementation serves both platforms unchanged.
 			VOZKA_RUN_LOGS_REGION: 'us-east-1',
+		},
+	},
+}
+
+/**
+ * Operations is private inside the platform project. The proxy is its only public ingress and its
+ * manifest must route only `/api/{projectId}/envelope/` for the configured public hostname.
+ *
+ * Per-installation variable (env API): `FABRIKA_OPERATIONS_PUBLIC_HOST`.
+ *
+ * Secret (`envSecrets`): `OPERATIONS_SYNC_KEY`, shared only with control for catalog projection.
+ * IAM transport variables are reserved for the operator handler; the service itself is never public.
+ */
+const operations: ZeropsYamlSetup = {
+	setup: 'operations',
+	build: {
+		base: ['alpine/bun@1.3'],
+		buildCommands: ['bun install --frozen-lockfile'],
+		deployFiles: WORKSPACE_DEPLOY_FILES,
+		cache: ['node_modules'],
+	},
+	run: {
+		base: 'alpine/bun@1.3',
+		initCommands: ['bun packages/operations/src/node/migrate.ts'],
+		start: 'bun packages/operations/src/node/server.ts',
+		ports: [{ port: 3000, httpSupport: true }],
+		healthCheck: { httpGet: { port: 3000, path: '/healthz' } },
+		crontab: [{ timing: '*/5 * * * *', command: 'bun packages/operations/src/node/cron.ts', allContainers: false }],
+		envVariables: {
+			PORT: '3000',
+			ENVIRONMENT: 'prod',
+			FABRIKA_OPERATIONS_DATABASE_URL: '${operationsdb_connectionString}',
+			FABRIKA_OPERATIONS_BLOB_BUCKET: '${operationsstorage_bucketName}',
+			FABRIKA_OPERATIONS_BLOB_ENDPOINT: '${operationsstorage_apiUrl}',
+			FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID: '${operationsstorage_accessKeyId}',
+			FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY: '${operationsstorage_secretAccessKey}',
+			FABRIKA_OPERATIONS_BLOB_REGION: 'us-east-1',
+			FABRIKA_IAM_URL: 'http://iam:3000',
+			FABRIKA_CONTROL_URL: 'http://control:3000',
 		},
 	},
 }
@@ -253,4 +294,4 @@ const proxy: ZeropsYamlSetup = {
 }
 
 /** The repository-root `zerops.yaml`, in the order the setups appear in it. */
-export const fabrikaZeropsYaml: ZeropsYaml = { zerops: [iam, control, proxy] }
+export const fabrikaZeropsYaml: ZeropsYaml = { zerops: [iam, operations, control, proxy] }
