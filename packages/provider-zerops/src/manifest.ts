@@ -262,6 +262,13 @@ export const manifestServiceHostnames = (manifest: FabrikaManifest): string[] =>
 
 export const renderFabrikaImportYaml = (manifest: FabrikaManifest): string => renderYaml(manifest.target.importDocument)
 
+/** Render the codeless import used before registration has a deploy-service id. */
+export const renderFabrikaProvisioningYaml = (manifest: FabrikaManifest): string =>
+	renderYaml({
+		...(manifest.target.importDocument.project === undefined ? {} : { project: manifest.target.importDocument.project }),
+		services: manifest.target.importDocument.services.map((service) => ({ ...service, startWithoutCode: true })),
+	})
+
 export function parseFabrikaManifest(value: unknown, expected: ManifestExpectation = {}): FabrikaManifest {
 	if (prop(value, 'manifestVersion') !== FABRIKA_MANIFEST_VERSION) {
 		throw new Error(`unsupported fabrika manifest version (expected ${FABRIKA_MANIFEST_VERSION})`)

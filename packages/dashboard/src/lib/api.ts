@@ -256,8 +256,8 @@ export interface RegisterAppRequest extends AppOptionalFields {
 	domain?: string | null
 	triggerRef?: string | null
 	namespaceId?: string | null
-	target: CloudflareTargetEnvelope
-	artifact: CloudflareArtifactEnvelope
+	target: ProviderEnvelopeDto
+	artifact: ProviderEnvelopeDto
 }
 
 export interface RegisterAppResponse {

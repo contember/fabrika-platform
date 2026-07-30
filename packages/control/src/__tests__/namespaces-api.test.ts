@@ -496,6 +496,105 @@ describe('app environment namespace assignment', () => {
 		expect(await deps.db.getApp('broken')).toBeNull()
 	})
 
+	test('claims service names before provider preparation and persists discovered coordinates', async () => {
+		const recording = providerRecording()
+		const base = namespacedProvider(recording)
+		if (base.namespaces === undefined) {
+			throw new Error('expected namespace capabilities')
+		}
+		let inspectClaims: (() => Promise<void>) | undefined
+		let claimsPresentDuringPreparation = false
+		const provider: ControlProvider = {
+			...base,
+			namespaces: {
+				...base.namespaces,
+				async prepareRegistration(input) {
+					await inspectClaims?.()
+					return {
+						app: input.registration.app,
+						environment: {
+							...input.registration.environment,
+							target: target('discovered'),
+						},
+					}
+				},
+			},
+		}
+		const { deps } = makeDeps(provider)
+		inspectClaims = async () => {
+			const claims = await deps.db.listNamespaceResourceClaims('apps-prod')
+			claimsPresentDuringPreparation = claims.some((claim) =>
+				claim.resource_key === 'service:billing'
+				&& claim.owner_app_id === 'billing'
+				&& claim.owner_env === 'prod'
+			)
+		}
+		await deps.db.createDeploymentNamespaceWithResourceClaims({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(target('namespace')),
+			state: 'ready',
+		}, ['service:proxy'])
+
+		const response = await handleApi(
+			request('POST', '/register-app', {
+				id: 'billing',
+				repoUrl: 'github.com/acme/billing',
+				env: 'prod',
+				namespaceId: 'apps-prod',
+				...registrationBody(),
+			}),
+			deps,
+		)
+
+		expect(response.status).toBe(201)
+		expect(claimsPresentDuringPreparation).toBe(true)
+		expect((await deps.db.getAppEnv('billing', 'prod'))?.provider_target_json).toBe(JSON.stringify(target('discovered')))
+	})
+
+	test('removes the provisional app and claims when provider preparation fails', async () => {
+		const recording = providerRecording()
+		const base = namespacedProvider(recording)
+		if (base.namespaces === undefined) {
+			throw new Error('expected namespace capabilities')
+		}
+		const provider: ControlProvider = {
+			...base,
+			namespaces: {
+				...base.namespaces,
+				prepareRegistration: () => Promise.reject(new Error('provider detail must not escape')),
+			},
+		}
+		const { deps } = makeDeps(provider)
+		await deps.db.createDeploymentNamespaceWithResourceClaims({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(target('namespace')),
+			state: 'ready',
+		}, ['service:proxy'])
+
+		const response = await handleApi(
+			request('POST', '/register-app', {
+				id: 'broken',
+				repoUrl: 'github.com/acme/broken',
+				env: 'prod',
+				namespaceId: 'apps-prod',
+				...registrationBody(),
+			}),
+			deps,
+		)
+
+		expect(response.status).toBe(502)
+		const failure: { error: string } = await response.json()
+		expect(failure).toEqual({ error: 'provider registration preparation failed' })
+		expect(await deps.db.getApp('broken')).toBeNull()
+		expect((await deps.db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual(['service:proxy'])
+	})
+
 	test('claim collision leaves no orphan onboarding app', async () => {
 		const recording = providerRecording()
 		const provider = namespacedProvider(recording)

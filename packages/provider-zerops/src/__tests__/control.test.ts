@@ -223,6 +223,37 @@ describe('Zerops ControlProvider registration', () => {
 		})
 	})
 
+	test('prepares codeless services and discovers the deploy-service id', async () => {
+		const control = createZeropsControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			namespaces: {
+				clientId: 'client-1',
+				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				iamUrl: 'https://iam.example.test',
+				iamKey: 'proxy-key',
+			},
+		})
+		const prepare = control.namespaces?.prepareRegistration
+		if (prepare === undefined) {
+			throw new Error('expected registration preparation')
+		}
+		const prepared = await prepare({
+			registration: {
+				app,
+				environment: environment({
+					target: { provider: 'zerops', version: zeropsStoredTargetCodec.version, payload: {} },
+				}),
+			},
+			signal: new AbortController().signal,
+		})
+
+		expect(prepared.environment.target.payload).toEqual({ serviceId: 'service-1' })
+		expect(recorded.imports).toHaveLength(1)
+		expect(recorded.imports[0]?.projectId).toBe('project-1')
+		expect(recorded.imports[0]?.yaml).toContain('startWithoutCode: true')
+	})
+
 	test('derives reserved and app-owned claims from the canonical structured import', () => {
 		const control = createZeropsControlProvider({
 			accessToken: 'zt-secret',

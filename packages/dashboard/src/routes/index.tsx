@@ -1,14 +1,15 @@
 import { createPage, useNavigate } from '@buzola/router'
 import { useState } from 'react'
-import { api, ApiError, type RegisterAppRequest, type RegisterAppResponse } from '../lib/api'
+import { api, ApiError, type DeploymentNamespaceListResponse, type JsonValue, type RegisterAppRequest, type RegisterAppResponse } from '../lib/api'
 
 // Onboarding — the headline UX. "Paste a GitHub repo URL + domain, pick an env" creates the app and
-// its first env in one `register-app` call. The deploy target is fabrika's own Cloudflare account
-// (single-account — propustka + fabrika + the apps all live on it).
+// its first env in one `register-app` call. The built manifest is provider-owned input; control
+// reserves its service names, provisions them codeless, and persists the discovered target id.
 
 export default createPage()
+	.loader(async () => ({ namespaces: await api.get<DeploymentNamespaceListResponse>('/namespaces') }))
 	.route('/')
-	.render(() => {
+	.render(({ data }) => {
 		const navigate = useNavigate()
 
 		const [id, setId] = useState('')
@@ -16,7 +17,8 @@ export default createPage()
 		const [env, setEnv] = useState('prod')
 		const [domain, setDomain] = useState('')
 		const [triggerRef, setTriggerRef] = useState('')
-		const [configPath, setConfigPath] = useState('fabrika.config.ts')
+		const [namespaceId, setNamespaceId] = useState('')
+		const [manifest, setManifest] = useState('')
 		const [installationId, setInstallationId] = useState('')
 		const [busy, setBusy] = useState(false)
 		const [error, setError] = useState<string | null>(null)
@@ -24,6 +26,17 @@ export default createPage()
 		async function submit(e: React.FormEvent) {
 			e.preventDefault()
 			setError(null)
+			let manifestPayload: JsonValue
+			try {
+				const parsed: unknown = JSON.parse(manifest)
+				if (!isJsonValue(parsed)) {
+					throw new Error('manifest is not JSON')
+				}
+				manifestPayload = parsed
+			} catch {
+				setError('Paste a valid fabrika.manifest.json.')
+				return
+			}
 			const installTrimmed = installationId.trim()
 			// Blank → auto-detect from the installed GitHub App; a number → set it manually.
 			const installField = installTrimmed === ''
@@ -35,8 +48,9 @@ export default createPage()
 				env: env.trim(),
 				...(domain.trim() === '' ? {} : { domain: domain.trim() }),
 				...(triggerRef.trim() === '' ? {} : { triggerRef: triggerRef.trim() }),
-				target: { provider: 'cloudflare', version: 1, payload: {} },
-				artifact: { provider: 'cloudflare', version: 1, payload: { configPath: configPath.trim() } },
+				namespaceId,
+				target: { provider: 'zerops', version: 2, payload: {} },
+				artifact: { provider: 'zerops', version: 2, payload: manifestPayload },
 				...installField,
 			}
 			setBusy(true)
@@ -55,8 +69,7 @@ export default createPage()
 				<div className="page-head">
 					<h1>Onboard an app</h1>
 					<p className="hint">
-						Register a GitHub repo as a deployable app and create its first environment. Push to the trigger ref (or hit Deploy) and vozka clones, builds,
-						and deploys it to its Cloudflare account.
+						Register a built Zerops manifest in a ready deployment namespace. Fabrika reserves the service names before it creates provider resources.
 					</p>
 				</div>
 
@@ -116,15 +129,31 @@ export default createPage()
 						<span className="hint">Push to this git ref auto-deploys this env. Leave empty for manual-only (Deploy button).</span>
 					</label>
 					<label>
-						Cloudflare config path
-						<input
+						Deployment namespace
+						<select
 							required
-							value={configPath}
-							onChange={(e) => setConfigPath(e.target.value)}
-							placeholder="fabrika.config.ts"
+							value={namespaceId}
+							onChange={(e) => setNamespaceId(e.target.value)}
+						>
+							<option value="">Select a ready namespace</option>
+							{data.namespaces.items
+								.filter((namespace) => namespace.state === 'ready' && namespace.env === env)
+								.map((namespace) => <option key={namespace.id} value={namespace.id}>{namespace.id}</option>)}
+						</select>
+					</label>
+					<label>
+						Built Fabrika manifest
+						<textarea
+							required
+							rows={12}
+							value={manifest}
+							onChange={(e) => setManifest(e.target.value)}
+							placeholder='{ "manifestVersion": 2, "app": { ... }, "target": { ... } }'
 							autoComplete="off"
 						/>
-						<span className="hint">Path to the deploy config, relative to the configured worker directory.</span>
+						<span className="hint">
+							Generate it in the app repository with <code>fabrika-zerops build --env={env || 'prod'}</code>.
+						</span>
 					</label>
 					<label>
 						GitHub installation id (optional)
@@ -150,3 +179,16 @@ export default createPage()
 			</>
 		)
 	})
+
+function isJsonValue(value: unknown): value is JsonValue {
+	if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+		return true
+	}
+	if (Array.isArray(value)) {
+		return value.every(isJsonValue)
+	}
+	if (typeof value !== 'object') {
+		return false
+	}
+	return Object.values(value).every((entry) => entry !== undefined && isJsonValue(entry))
+}

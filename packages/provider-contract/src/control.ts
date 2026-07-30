@@ -114,6 +114,12 @@ export interface ProviderNamespaceMutationInput {
 	readonly events: ProviderNamespaceEvents
 }
 
+/** One registration whose provider coordinates do not exist until namespace services are prepared. */
+export interface ProviderRegistrationPreparationInput {
+	readonly registration: ProviderRegistration
+	readonly signal: AbortSignal
+}
+
 /** One provider-defined operator choice. Core does not interpret its id or description. */
 export interface ProviderNamespacePreset {
 	readonly id: string
@@ -165,6 +171,11 @@ export interface ProviderNamespaceCapabilities {
 	namespaceResourceClaims(namespace: ProviderDeploymentNamespace): readonly string[]
 	/** App-owned resources derived from one canonical normalized registration. */
 	registrationResourceClaims(registration: ProviderRegistration): readonly string[]
+	/**
+	 * Materialize app-owned provider resources and return their canonical coordinates.
+	 * Core acquires every registration resource claim before invoking this mutation.
+	 */
+	prepareRegistration?(input: ProviderRegistrationPreparationInput): Promise<ProviderRegistration>
 	provision(input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace>
 	reconcile(input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace>
 	readonly operator?: ProviderNamespaceOperator

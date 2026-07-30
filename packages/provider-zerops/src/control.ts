@@ -16,7 +16,7 @@ import type {
 } from '@fabrika/provider-contract'
 import { createZeropsApi, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi } from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
-import { type FabrikaManifest, parseFabrikaManifest, zeropsArtifactCodec } from './manifest'
+import { type FabrikaManifest, parseFabrikaManifest, renderFabrikaProvisioningYaml, zeropsArtifactCodec } from './manifest'
 import { createZeropsNamespaceCapabilities, type ZeropsNamespaceTarget, zeropsNamespaceTargetCodec } from './namespace'
 import { createZeropsProvider } from './provider'
 import type { ZeropsRuntimeTarget } from './types'
@@ -123,6 +123,16 @@ interface DecodedZeropsEnvironment {
 
 const decodeEnvironment = (environment: ProviderEnvironment): DecodedZeropsEnvironment => {
 	const target = decodeEnvelope('target', environment.target, zeropsStoredTargetCodec)
+	const placement = decodeNamespace(environment)
+	return {
+		target,
+		...placement,
+	}
+}
+
+const decodeNamespace = (
+	environment: ProviderEnvironment,
+): Pick<DecodedZeropsEnvironment, 'namespace' | 'namespaceTarget'> => {
 	const namespace = environment.namespace
 	if (namespace === undefined) {
 		throw new Error('Zerops environment requires a deployment namespace')
@@ -134,7 +144,6 @@ const decodeEnvironment = (environment: ProviderEnvironment): DecodedZeropsEnvir
 		throw new Error(`Zerops deployment namespace is exclusive to app \`${namespace.exclusiveAppId}\``)
 	}
 	return {
-		target,
 		namespace,
 		namespaceTarget: decodeEnvelope('namespace target', namespace.target, zeropsNamespaceTargetCodec),
 	}
@@ -203,6 +212,13 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		}
 	})
 	const execute = options.execute ?? executeSession
+	const namespaceCapabilities = options.namespaces === undefined
+		? undefined
+		: createZeropsNamespaceCapabilities({
+			...options.namespaces,
+			api,
+			...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
+		})
 
 	return {
 		id: 'zerops',
@@ -285,14 +301,48 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				}
 			},
 		},
-		...(options.namespaces === undefined
+		...(namespaceCapabilities === undefined
 			? {}
 			: {
-				namespaces: createZeropsNamespaceCapabilities({
-					...options.namespaces,
-					api,
-					...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
-				}),
+				namespaces: {
+					...namespaceCapabilities,
+					prepareRegistration: async (input) => {
+						const { namespace, namespaceTarget } = decodeNamespace(input.registration.environment)
+						if (namespaceTarget.ready !== true || namespaceTarget.projectId === undefined) {
+							throw new Error(`Zerops deployment namespace \`${namespace.id}\` is not ready`)
+						}
+						const manifest = parseFabrikaManifest(
+							decodeEnvelope('artifact', input.registration.environment.artifact, zeropsArtifactCodec),
+							{
+								appId: input.registration.app.id,
+								env: input.registration.environment.env,
+							},
+						)
+						const imported = await api.importServices({
+							projectId: namespaceTarget.projectId,
+							yaml: renderFabrikaProvisioningYaml(manifest),
+							signal: input.signal,
+						})
+						const reported = imported.services.find((service) => service.name === manifest.target.deployService)
+						const discovered = reported === undefined
+							? await api.findService({
+								projectId: namespaceTarget.projectId,
+								hostname: manifest.target.deployService,
+								signal: input.signal,
+							})
+							: reported
+						if (discovered === null || discovered === undefined || discovered.id === '') {
+							throw new Error(`Zerops import did not create deploy service \`${manifest.target.deployService}\``)
+						}
+						return normalizeRegistration({
+							app: input.registration.app,
+							environment: {
+								...input.registration.environment,
+								target: envelope(zeropsStoredTargetCodec, { serviceId: discovered.id }),
+							},
+						})
+					},
+				},
 			}),
 	}
 }

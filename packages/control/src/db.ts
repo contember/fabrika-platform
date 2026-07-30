@@ -380,6 +380,15 @@ export class Db {
 		return claims
 	}
 
+	/** Release only one app environment's claims during failed provider registration preparation. */
+	async deleteNamespaceResourceClaimsForOwner(namespaceId: string, ownerAppId: string, ownerEnv: string): Promise<void> {
+		await this.d1
+			.prepare(`DELETE FROM namespace_resource_claims
+				WHERE namespace_id = ? AND owner_app_id = ? AND owner_env = ?`)
+			.bind(namespaceId, ownerAppId, ownerEnv)
+			.run()
+	}
+
 	// ── App environments ──────────────────────────────────────────────────────
 
 	async listAppEnvs(appId: string): Promise<AppEnvRow[]> {

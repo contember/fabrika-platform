@@ -500,8 +500,27 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 	}
 	const namespace = await resolveRegistrationNamespace(c, body, id, env, null)
 	if (namespace instanceof Response) return namespace
-	const registration = registrationEnvironment(body, c.provider, providerApp, env, domain, namespace)
-	if (registration instanceof Response) return registration
+	const target = envelopeField(body, 'target')
+	if (target instanceof Response) return target
+	const artifact = envelopeField(body, 'artifact')
+	if (artifact instanceof Response) return artifact
+	const preparation = c.provider.namespaces?.prepareRegistration
+	let registration: ProviderRegistration = {
+		app: providerApp,
+		environment: {
+			appId: id,
+			env,
+			...(domain === null ? {} : { domain }),
+			...(namespace === undefined ? {} : { namespace }),
+			target,
+			artifact,
+		},
+	}
+	if (preparation === undefined) {
+		const normalizedRegistration = normalizeRegistration(c.provider, providerApp, registration.environment)
+		if (normalizedRegistration instanceof Response) return normalizedRegistration
+		registration = normalizedRegistration
+	}
 	const resourceClaims = registrationResourceClaims(c.provider, registration)
 	if (resourceClaims instanceof Response) return resourceClaims
 	const source = registration.app.source
@@ -540,6 +559,38 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 			return error(409, cause.message)
 		}
 		throw cause
+	}
+	if (preparation !== undefined) {
+		try {
+			const prepared = await preparation({ registration, signal: c.request.signal })
+			if (
+				prepared.app.id !== id
+				|| prepared.environment.appId !== id
+				|| prepared.environment.env !== env
+				|| !sameNamespaceCoordinates(prepared.environment.namespace, registration.environment.namespace, c.provider.id)
+			) {
+				throw new Error('provider returned a prepared registration for different coordinates')
+			}
+			const normalized = normalizeRegistration(c.provider, prepared.app, prepared.environment)
+			if (normalized instanceof Response) {
+				throw new Error('provider returned an invalid prepared registration')
+			}
+			registration = normalized
+			const updated = await c.db.upsertAppEnvWithNamespaceResourceClaims({
+				...environmentInput,
+				domain: registration.environment.domain ?? null,
+				namespaceId: registration.environment.namespace?.id ?? null,
+				providerTargetJson: JSON.stringify(registration.environment.target),
+				providerArtifactJson: JSON.stringify(registration.environment.artifact),
+			}, resourceClaims)
+			appEnv = updated.appEnv
+		} catch {
+			if (namespace !== undefined) {
+				await c.db.deleteNamespaceResourceClaimsForOwner(namespace.id, id, env)
+			}
+			await c.db.deleteApp(id)
+			return error(502, 'provider registration preparation failed')
+		}
 	}
 	await c.authorized.auth.audit({
 		action: 'app.create',
