@@ -1,7 +1,8 @@
 import { createPage, Link } from '@buzola/router'
 import { useState } from 'react'
-import { RunStatusBadge } from '../../components/Badge'
+import { Icon } from '../../components/Icon'
 import { LogView } from '../../components/LogView'
+import { Chip, RunStatus } from '../../components/Status'
 import { api, ApiError, type AppEnvDto, type ListResponse, type RunDto } from '../../lib/api'
 import { fmtDate, fmtDuration, shortRef, shortSha } from '../../lib/format'
 
@@ -26,16 +27,21 @@ export default createPage()
 			<>
 				<div className="page-head">
 					<div className="page-head-row">
-						<h1>
-							Run <code>{run.id.slice(0, 8)}</code>
-						</h1>
+						<div>
+							<h1>
+								Run <code>{run.id.slice(0, 8)}</code>
+							</h1>
+							<div className="subtitle">
+								<Link to="apps/detail" params={{ id: run.appId }}>{run.appId}</Link>
+								<span className="dot-sep" />
+								<Chip>{run.env}</Chip>
+								<span className="dot-sep">{run.trigger}</span>
+							</div>
+						</div>
 						<div className="row-actions">
-							<RunStatusBadge status={run.status} />
+							<RunStatus status={run.status} />
 							{inFlight && <CancelButton runId={run.id} onDone={invalidate} />}
 						</div>
-					</div>
-					<div className="subtitle muted">
-						<Link to="apps/detail" params={{ id: run.appId }}>{run.appId}</Link> · {run.env} · {run.trigger}
 					</div>
 				</div>
 
@@ -63,7 +69,10 @@ export default createPage()
 				</section>
 
 				<section>
-					<h2>Log</h2>
+					<div className="section-head">
+						<Icon name="terminal" size={15} />
+						<h2>Log</h2>
+					</div>
 					<LogView runId={run.id} initialStatus={run.status} />
 				</section>
 			</>

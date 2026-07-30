@@ -1,7 +1,8 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
 import { useState } from 'react'
-import { RunStatusBadge } from '../../components/Badge'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { Icon } from '../../components/Icon'
+import { RunStatus } from '../../components/Status'
 import { Table } from '../../components/Table'
 import {
 	api,
@@ -161,7 +162,10 @@ export default createPage()
 				<section>
 					<div className="page-head-row">
 						<h2>Recent runs</h2>
-						<Link to="runs" className="nav-cta">All runs →</Link>
+						<Link to="runs" className="nav-cta">
+							All runs
+							<Icon name="chevron-right" size={13} />
+						</Link>
 					</div>
 					<Table
 						colSpan={5}
@@ -181,7 +185,7 @@ export default createPage()
 							<tr key={run.id}>
 								<td>
 									<Link to="runs/detail" params={{ id: run.id }}>
-										<RunStatusBadge status={run.status} />
+										<RunStatus status={run.status} />
 									</Link>
 								</td>
 								<td>{run.env}</td>
@@ -554,7 +558,10 @@ function AddEnvForm({ appId, existing, onDone }: { appId: string; existing: AppE
 	if (!open) {
 		return (
 			<div className="add-row">
-				<button type="button" className="small" onClick={() => setOpen(true)}>+ Add environment</button>
+				<button type="button" className="small" onClick={() => setOpen(true)}>
+					<Icon name="plus" size={13} />
+					Add environment
+				</button>
 			</div>
 		)
 	}
@@ -741,7 +748,10 @@ function AddSecretForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto
 	if (!open) {
 		return (
 			<div className="add-row">
-				<button type="button" className="small" onClick={() => setOpen(true)}>+ Add secret</button>
+				<button type="button" className="small" onClick={() => setOpen(true)}>
+					<Icon name="plus" size={13} />
+					Add secret
+				</button>
 			</div>
 		)
 	}
@@ -861,7 +871,10 @@ function AddVarForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto[];
 	if (!open) {
 		return (
 			<div className="add-row">
-				<button type="button" className="small" onClick={() => setOpen(true)}>+ Add var</button>
+				<button type="button" className="small" onClick={() => setOpen(true)}>
+					<Icon name="plus" size={13} />
+					Add var
+				</button>
 			</div>
 		)
 	}

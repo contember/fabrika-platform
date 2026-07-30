@@ -30,6 +30,20 @@ export function fmtDuration(startSeconds: number | null | undefined, endSeconds:
 	return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
 }
 
+/**
+ * Compact "how long ago" for an epoch-**seconds** stamp, for feeds where the exact clock time is
+ * noise (`4m`, `3h`, `6d`). Falls back to a date past a week, and to `—` when absent.
+ */
+export function fmtAgo(seconds: number | null | undefined, nowMs: number = Date.now()): string {
+	if (seconds === null || seconds === undefined) return '—'
+	const elapsed = Math.max(0, Math.floor(nowMs / 1000) - seconds)
+	if (elapsed < 45) return 'just now'
+	if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m ago`
+	if (elapsed < 86_400) return `${Math.floor(elapsed / 3600)}h ago`
+	if (elapsed < 604_800) return `${Math.floor(elapsed / 86_400)}d ago`
+	return new Date(seconds * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
 /** Shorten a commit sha to its first 7 chars; `—` when absent. */
 export function shortSha(sha: string | null | undefined): string {
 	if (sha === null || sha === undefined || sha === '') return '—'

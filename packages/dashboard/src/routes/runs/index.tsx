@@ -1,9 +1,10 @@
 import { createPage, Link } from '@buzola/router'
 import { useState } from 'react'
-import { RunStatusBadge } from '../../components/Badge'
-import { Table } from '../../components/Table'
+import { Icon } from '../../components/Icon'
+import { Chip, RunStatus } from '../../components/Status'
+import { EmptyState, Table } from '../../components/Table'
 import { api, ApiError, type AppDto, type CursorList, type ListResponse, type RunDto } from '../../lib/api'
-import { fmtDate, qs, shortRef, shortSha } from '../../lib/format'
+import { fmtAgo, fmtDate, fmtDuration, qs, shortRef, shortSha } from '../../lib/format'
 
 // Runs — the global deploy history. Filter by app and/or env; keyset-paged with `?before=`. Each row
 // links to the run detail (which tails the live log). A per-app view is the same table prefiltered.
@@ -52,8 +53,8 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<h1>Runs</h1>
-					<p className="hint">Deploy history, newest first. Each run records the env, ref/commit, timestamps, and final exit code.</p>
+					<h1>Deploy runs</h1>
+					<p className="hint">Release history, newest first. Every run records its env, ref and commit, its timings, and its exit code.</p>
 				</div>
 
 				<form className="filters" onSubmit={applyFilters}>
@@ -65,13 +66,17 @@ export default createPage()
 						</select>
 					</label>
 					<label>
-						Env
+						Environment
 						<input value={env} onChange={(e) => setEnv(e.target.value)} placeholder="any" />
 					</label>
 					<div className="filter-actions">
-						<button type="submit" className="primary" disabled={loading}>Filter</button>
+						<button type="submit" className="primary" disabled={loading}>
+							<Icon name="filter" size={14} />
+							Filter
+						</button>
 						<button
 							type="button"
+							className="ghost"
 							onClick={() => {
 								setApp('')
 								setEnv('')
@@ -90,7 +95,13 @@ export default createPage()
 				<Table
 					colSpan={7}
 					isEmpty={runs.length === 0}
-					empty="No runs match."
+					empty={
+						<EmptyState
+							icon="runs"
+							title="No runs match"
+							body="A push to an env's trigger ref starts a run, or deploy one by hand from its app page."
+						/>
+					}
 					head={
 						<tr>
 							<th>Status</th>
@@ -99,7 +110,8 @@ export default createPage()
 							<th>Ref</th>
 							<th>Commit</th>
 							<th>Trigger</th>
-							<th>Created</th>
+							<th>Duration</th>
+							<th>Started</th>
 						</tr>
 					}
 				>
@@ -107,21 +119,24 @@ export default createPage()
 						<tr key={run.id}>
 							<td>
 								<Link to="runs/detail" params={{ id: run.id }}>
-									<RunStatusBadge status={run.status} />
+									<RunStatus status={run.status} />
 								</Link>
 							</td>
 							<td>
 								<Link to="apps/detail" params={{ id: run.appId }}>{run.appId}</Link>
 							</td>
-							<td>{run.env}</td>
+							<td>
+								<Chip>{run.env}</Chip>
+							</td>
 							<td>
 								<code>{shortRef(run.ref)}</code>
 							</td>
 							<td>
 								<code>{shortSha(run.commitSha)}</code>
 							</td>
-							<td>{run.trigger}</td>
-							<td>{fmtDate(run.createdAt)}</td>
+							<td className="muted small">{run.trigger}</td>
+							<td className="small">{fmtDuration(run.startedAt, run.finishedAt)}</td>
+							<td className="muted small" title={fmtDate(run.createdAt)}>{fmtAgo(run.createdAt)}</td>
 						</tr>
 					))}
 				</Table>

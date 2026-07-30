@@ -1,5 +1,5 @@
 import type { DeploymentNamespacePresentationDto, DeploymentNamespaceState } from '../lib/api'
-import { NamespaceStateBadge } from './Badge'
+import { NamespaceState } from './Status'
 
 interface NamespaceSignatureProps {
 	id: string
@@ -21,7 +21,7 @@ export function NamespaceSignature(
 					<div className="namespace-signature-kicker">{presentation?.preset ?? 'provider'} placement</div>
 					<strong>{presentation?.title ?? 'Deployment namespace'}</strong>
 				</div>
-				{state !== undefined && <NamespaceStateBadge state={state} />}
+				{state !== undefined && <NamespaceState state={state} />}
 			</div>
 			<dl className="namespace-ledger">
 				<div>
