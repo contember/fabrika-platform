@@ -1,6 +1,6 @@
 import { createProvider, type ProviderDeploySession, type TypedProviderRun } from '@fabrika/provider-contract'
 import { resolve } from 'node:path'
-import type { Worker } from 'oblaka-iac'
+import { Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
 import { type CloudflareArtifact, cloudflareArtifactCodec, type CloudflareTarget, cloudflareTargetCodec } from './codec'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
@@ -27,6 +27,26 @@ const assertRunning = (signal: AbortSignal): void => {
 }
 
 type CloudflareRun = TypedProviderRun<CloudflareTarget, CloudflareArtifact>
+
+const withManagedEnvironment = (config: CloudflareAppConfig, authored: Worker, run: CloudflareRun): Worker => {
+	const managed = run.managedEnvironment
+	const present: Record<string, string> = {}
+	const declared = new Set(config.pipeline?.vars ?? [])
+	for (const [name, value] of Object.entries(managed)) {
+		if (declared.has(name) || authored.options.vars?.[name] !== undefined || run.vars[name] !== undefined) {
+			throw new Error(`cloudflare: application variable \`${name}\` is managed by Fabrika`)
+		}
+		if (value !== null) present[name] = value
+	}
+	if (Object.keys(present).length === 0) return authored
+	return new Worker({
+		...authored.options,
+		vars: {
+			...(authored.options.vars ?? {}),
+			...present,
+		},
+	})
+}
 
 interface StepEnv {
 	readonly config: CloudflareAppConfig
@@ -146,7 +166,11 @@ export const createCloudflareProvider = (cf: CloudflareCollaborators = defaultCl
 			if (loaded.config.id !== run.appId) {
 				throw new Error(`Cloudflare config declares app "${loaded.config.id}", expected "${run.appId}"`)
 			}
-			const worker = loaded.config.resources({ env: run.env, domain: run.domain })
+			const worker = withManagedEnvironment(
+				loaded.config,
+				loaded.config.resources({ env: run.env, domain: run.domain }),
+				run,
+			)
 			const dir = workerDir(loaded.config, loaded.cwd)
 			const plan = buildPlan(loaded.config, { appId: run.appId, env: run.env, propustkaUrl: run.target.propustkaUrl }, worker)
 			const byId = new Map(plan.steps.map((step): [string, CloudflareJobSpec] => [step.id, step]))

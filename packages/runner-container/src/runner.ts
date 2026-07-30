@@ -85,6 +85,11 @@ const makeRedactor = (job: CloudflareRunnerJob): (text: string) => string => {
 			sensitive.add(value)
 		}
 	}
+	for (const value of Object.values(job.managedEnvironment ?? {})) {
+		if (value.length >= 4) {
+			sensitive.add(value)
+		}
+	}
 	if (job.artifactUpload?.bearer !== undefined) sensitive.add(job.artifactUpload.bearer)
 	// The clone URL may embed a short-lived installation token as userinfo (`x-access-token:<token>@…`
 	// for a private repo); redact it like any other credential so it never lands in a persisted log line.
@@ -229,6 +234,10 @@ export class Runner {
 		for (const [name, value] of Object.entries(this.job.vars ?? {})) {
 			env[name] = value
 		}
+		// Platform-managed values use the same env transport; only their names are added to argv.
+		for (const [name, value] of Object.entries(this.job.managedEnvironment ?? {})) {
+			env[name] = value
+		}
 		return env
 	}
 
@@ -282,6 +291,9 @@ export class Runner {
 		}
 		if (this.job.dryRun === true) {
 			deployArgs.push('--dry-run')
+		}
+		for (const name of Object.keys(this.job.managedEnvironment ?? {}).sort()) {
+			deployArgs.push(`--managed-var=${name}`)
 		}
 		this.emit('meta', `Running: fabrika-cloudflare-executor ${deployArgs.join(' ')}`)
 		const deploy = await this.step({ command: 'fabrika-cloudflare-executor', args: deployArgs, cwd: dir, env: this.deployEnv() })

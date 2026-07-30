@@ -1,4 +1,9 @@
-import { operationsManagedEnvironment, operationsManagedEnvironmentCollisions } from '@fabrika/operations-contract/ingest'
+import {
+	OPERATIONS_MANAGED_ENVIRONMENT_KEYS,
+	operationsManagedEnvironment,
+	operationsManagedEnvironmentCollisions,
+} from '@fabrika/operations-contract/ingest'
+import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -270,7 +275,8 @@ export async function executeDeploy(
 		if (operationsCollisions.length > 0) {
 			throw new Error(`application variable "${operationsCollisions[0]}" is managed by Fabrika`)
 		}
-		const managedEnvironment: Record<string, string> = {}
+		const managedEnvironment: Record<string, string | null> = { [FABRIKA_RELEASE]: null }
+		for (const key of OPERATIONS_MANAGED_ENVIRONMENT_KEYS) managedEnvironment[key] = null
 		const ingest = await deps.repositories.operationsCatalog.getActiveIngestConfig(app.id, appEnv.env)
 		if (ingest?.dsn !== null && ingest?.dsn !== undefined) {
 			Object.assign(

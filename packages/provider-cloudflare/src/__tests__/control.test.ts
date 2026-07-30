@@ -34,6 +34,10 @@ const deployInput = (): ProviderDeployInput => ({
 	},
 	secrets: { API_KEY: 'secret' },
 	vars: { FEATURE: 'on' },
+	managedEnvironment: {
+		FABRIKA_OPERATIONS_DSN: 'https://public@errors.test/1',
+		FABRIKA_RELEASE: null,
+	},
 	dryRun: true,
 	artifactUpload: {
 		url: 'https://operations.example.com/api/artifacts/source-maps/',
@@ -97,6 +101,7 @@ describe('Cloudflare control provider', () => {
 			},
 			secrets: { API_KEY: 'secret' },
 			vars: { FEATURE: 'on' },
+			managedEnvironment: { FABRIKA_OPERATIONS_DSN: 'https://public@errors.test/1' },
 			artifactUpload: input.artifactUpload,
 		}])
 		expect(externalIds).toEqual(['run-1'])
@@ -137,6 +142,7 @@ describe('Cloudflare control provider', () => {
 		}
 		expect(isCloudflareRunnerJob({ ...valid, dryRun: 'yes' })).toBe(false)
 		expect(isCloudflareRunnerJob({ ...valid, secrets: { API_KEY: 42 } })).toBe(false)
+		expect(isCloudflareRunnerJob({ ...valid, managedEnvironment: { FABRIKA_RELEASE: 42 } })).toBe(false)
 		expect(isCloudflareRunnerJob({ ...valid, credentials: { ...valid.credentials, PROPUSTKA_URL: 42 } })).toBe(false)
 	})
 })

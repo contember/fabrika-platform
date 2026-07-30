@@ -231,6 +231,35 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				api,
 				signal: input.signal,
 			})
+			const managedEnvironment = input.managedEnvironment
+			const managedEntries = Object.entries(managedEnvironment).sort(([left], [right]) => left.localeCompare(right))
+			const managedNames = managedEntries.map(([name]) => name)
+			if (input.dryRun) {
+				if (managedNames.length > 0) {
+					input.events.log(
+						`  [dry-run] would reconcile managed environment on service ${placement.target.serviceId}: ${managedNames.join(', ')}`,
+					)
+				}
+			} else {
+				const removedNames = new Set(managedEntries.filter(([, value]) => value === null).map(([name]) => name))
+				const existing = removedNames.size === 0
+					? []
+					: await api.listServiceEnv({ serviceId: placement.target.serviceId, signal: input.signal })
+				for (const [name, value] of managedEntries) {
+					if (value === null) {
+						for (const item of existing) {
+							if (item.key === name) await api.deleteServiceEnv({ envId: item.id, signal: input.signal })
+						}
+					} else {
+						await api.putServiceEnv({
+							serviceId: placement.target.serviceId,
+							key: name,
+							value,
+							signal: input.signal,
+						})
+					}
+				}
+			}
 			const runtimeTarget: ZeropsRuntimeTarget = {
 				projectId: placement.projectId,
 				serviceId: placement.target.serviceId,
@@ -246,6 +275,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				cwd: input.app.source.workerDir ?? '.',
 				secrets: input.secrets,
 				vars: input.vars,
+				managedEnvironment: {},
 				dryRun: input.dryRun,
 				signal: input.signal,
 				events: input.events,

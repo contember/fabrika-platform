@@ -35,6 +35,7 @@ describe('isCloudflareRunnerJob', () => {
 		expect(isCloudflareRunnerJob({ ...validJob, stateNamespace: 42 })).toBe(false)
 		expect(isCloudflareRunnerJob({ ...validJob, dryRun: 'yes' })).toBe(false)
 		expect(isCloudflareRunnerJob({ ...validJob, vars: { PUBLIC_URL: 42 } })).toBe(false)
+		expect(isCloudflareRunnerJob({ ...validJob, managedEnvironment: { FABRIKA_RELEASE: 42 } })).toBe(false)
 		expect(isCloudflareRunnerJob({ ...validJob, secrets: [] })).toBe(false)
 	})
 })

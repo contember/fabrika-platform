@@ -1,4 +1,5 @@
 import { FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_OPERATIONS_DSN, FABRIKA_SERVICE_KEY } from '@fabrika/operations-contract/ingest'
+import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type {
 	ControlProvider,
 	ProviderDeployInput,
@@ -169,7 +170,13 @@ describe('provider-neutral run lifecycle', () => {
 		expect(input.environment.domain).toBe('app.example.com')
 		expect(input.secrets).toEqual({ API_KEY: 'prod' })
 		expect(input.vars).toEqual({ TEAM: 'prod' })
-		expect(input.managedEnvironment).toEqual({})
+		expect(input.managedEnvironment).toEqual({
+			[FABRIKA_OPERATIONS_DSN]: null,
+			[FABRIKA_APP_ID]: null,
+			[FABRIKA_ENVIRONMENT]: null,
+			[FABRIKA_SERVICE_KEY]: null,
+			[FABRIKA_RELEASE]: null,
+		})
 		expect(input.dryRun).toBe(true)
 
 		const run = await requireRun(db, runId)
@@ -187,7 +194,13 @@ describe('provider-neutral run lifecycle', () => {
 		await db.operationsCatalog.snapshot()
 		const pendingInputs: ProviderDeployInput[] = []
 		expect((await executeDeploy(makeDeps(db, makeProvider(pendingInputs, { state: 'succeeded' })), { runId })).status).toBe('succeeded')
-		expect(pendingInputs[0]?.managedEnvironment).toEqual({})
+		expect(pendingInputs[0]?.managedEnvironment).toEqual({
+			[FABRIKA_OPERATIONS_DSN]: null,
+			[FABRIKA_APP_ID]: null,
+			[FABRIKA_ENVIRONMENT]: null,
+			[FABRIKA_SERVICE_KEY]: null,
+			[FABRIKA_RELEASE]: null,
+		})
 
 		const secondRunId = uuidv7()
 		await db.runs.createRun({
@@ -208,6 +221,7 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_APP_ID]: 'app',
 			[FABRIKA_ENVIRONMENT]: 'prod',
 			[FABRIKA_SERVICE_KEY]: 'default',
+			[FABRIKA_RELEASE]: null,
 		})
 	})
 

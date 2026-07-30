@@ -1,4 +1,4 @@
-import type { ProviderRunEvents } from './deploy'
+import type { ProviderManagedEnvironment, ProviderRunEvents } from './deploy'
 import type { JsonValue, ProviderEnvelope } from './json'
 
 /** Provider-neutral coordinates for obtaining one app revision. */
@@ -52,7 +52,7 @@ export interface ProviderDeployInput {
 	readonly secrets: Readonly<Record<string, string>>
 	readonly vars: Readonly<Record<string, string>>
 	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
-	readonly managedEnvironment?: Readonly<Record<string, string>>
+	readonly managedEnvironment: ProviderManagedEnvironment
 	readonly dryRun: boolean
 	/** Optional short-lived, run-scoped Operations artifact destination. */
 	readonly artifactUpload?: {

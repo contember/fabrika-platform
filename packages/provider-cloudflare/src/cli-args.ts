@@ -5,6 +5,7 @@ export interface ParsedCloudflareArgs {
 	readonly config: string
 	readonly runnerConfig: string | undefined
 	readonly workerConfig: string | undefined
+	readonly managedVarNames: readonly string[]
 	readonly buildRunnerImage: boolean
 	readonly dryRun: boolean
 	readonly help: boolean
@@ -17,6 +18,7 @@ export const parseCloudflareArgs = (argv: readonly string[]): ParsedCloudflareAr
 	let config = './fabrika.config.ts'
 	let runnerConfig: string | undefined
 	let workerConfig: string | undefined
+	const managedVarNames: string[] = []
 	let buildRunnerImage = false
 	let dryRun = false
 	let help = false
@@ -36,6 +38,12 @@ export const parseCloudflareArgs = (argv: readonly string[]): ParsedCloudflareAr
 			runnerConfig = arg.slice('--runner-config='.length)
 		} else if (arg.startsWith('--worker-config=')) {
 			workerConfig = arg.slice('--worker-config='.length)
+		} else if (arg.startsWith('--managed-var=')) {
+			const name = arg.slice('--managed-var='.length)
+			if (!/^[A-Z][A-Z0-9_]*$/.test(name)) {
+				throw new Error('Invalid --managed-var name')
+			}
+			managedVarNames.push(name)
 		} else if (!arg.startsWith('-')) {
 			if (command === undefined) {
 				command = arg
@@ -45,7 +53,7 @@ export const parseCloudflareArgs = (argv: readonly string[]): ParsedCloudflareAr
 		}
 	}
 
-	return { command, subcommand, env, config, runnerConfig, workerConfig, buildRunnerImage, dryRun, help }
+	return { command, subcommand, env, config, runnerConfig, workerConfig, managedVarNames, buildRunnerImage, dryRun, help }
 }
 
 export interface PlatformComponent {

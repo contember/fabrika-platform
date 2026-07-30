@@ -63,6 +63,7 @@ export interface CloudflareRunnerJob {
 	}
 	readonly secrets?: Readonly<Record<string, string>>
 	readonly vars?: Readonly<Record<string, string>>
+	readonly managedEnvironment?: Readonly<Record<string, string>>
 	readonly artifactUpload?: {
 		readonly url: string
 		readonly bearer: string
@@ -124,6 +125,7 @@ export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunner
 		|| ('dryRun' in value && value.dryRun !== undefined && typeof value.dryRun !== 'boolean')
 		|| ('secrets' in value && value.secrets !== undefined && !isStringRecord(value.secrets))
 		|| ('vars' in value && value.vars !== undefined && !isStringRecord(value.vars))
+		|| ('managedEnvironment' in value && value.managedEnvironment !== undefined && !isStringRecord(value.managedEnvironment))
 		|| ('artifactUpload' in value && value.artifactUpload !== undefined && !isArtifactUpload(value.artifactUpload))
 	) {
 		return false
@@ -182,6 +184,10 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 	const source = await options.resolveSource(input.app.source)
 	const storedTarget = decodeEnvelope('target', input.environment.target, cloudflareStoredTargetCodec)
 	const artifact = decodeEnvelope('artifact', input.environment.artifact, cloudflareArtifactCodec)
+	const managedEnvironment: Record<string, string> = {}
+	for (const [name, value] of Object.entries(input.managedEnvironment)) {
+		if (value !== null) managedEnvironment[name] = value
+	}
 	return {
 		runId: input.runId,
 		repoUrl: source.repoUrl,
@@ -202,6 +208,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		...(input.dryRun ? { dryRun: true } : {}),
 		...(Object.keys(input.secrets).length === 0 ? {} : { secrets: input.secrets }),
 		...(Object.keys(input.vars).length === 0 ? {} : { vars: input.vars }),
+		...(Object.keys(managedEnvironment).length === 0 ? {} : { managedEnvironment }),
 		...(input.artifactUpload === undefined ? {} : { artifactUpload: input.artifactUpload }),
 	}
 }

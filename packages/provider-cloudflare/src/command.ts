@@ -24,6 +24,14 @@ const declaredValues = (names: readonly string[] | undefined): Record<string, st
 	return values
 }
 
+const requiredValues = (names: readonly string[] | undefined): Record<string, string> => {
+	const values: Record<string, string> = {}
+	for (const name of names ?? []) {
+		values[name] = requiredEnvironmentValue(name)
+	}
+	return values
+}
+
 export interface LoadedCloudflareCommandConfig {
 	readonly config: CloudflareAppConfig
 	readonly absolutePath: string
@@ -45,6 +53,7 @@ export interface CloudflareCommandDeployOptions {
 	readonly cwd?: string
 	readonly dryRun?: boolean
 	readonly stateNamespace?: string
+	readonly managedVarNames?: readonly string[]
 	readonly signal?: AbortSignal
 	readonly log?: (line: string) => void
 }
@@ -64,6 +73,7 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 		cwd: loaded.cwd,
 		secrets: declaredValues(loaded.config.pipeline?.secrets),
 		vars: declaredValues(loaded.config.pipeline?.vars),
+		managedEnvironment: requiredValues(options.managedVarNames),
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
 		events,

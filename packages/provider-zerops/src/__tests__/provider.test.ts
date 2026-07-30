@@ -125,6 +125,7 @@ const runtimeRun = (
 	cwd: '/repo',
 	secrets: {},
 	vars: { IMAGE: 'registry.test/demo:v2' },
+	managedEnvironment: {},
 	dryRun,
 	signal: new AbortController().signal,
 	events: {

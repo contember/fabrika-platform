@@ -132,6 +132,7 @@ const makeRun = (provider: ZeropsProvider, recorded: Recorded, overrides: Partia
 	artifact: provider.encodeArtifact(MANIFEST),
 	secrets: {},
 	vars: {},
+	managedEnvironment: {},
 	cwd: '/repo',
 	dryRun: false,
 	signal: new AbortController().signal,

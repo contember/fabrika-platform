@@ -7,11 +7,12 @@ import { deployCloudflareConfig } from './command'
 const USAGE = `Internal Cloudflare app executor
 
 Usage:
-  fabrika-cloudflare-executor deploy --env=<env> [--config=<path>] [--dry-run]
+  fabrika-cloudflare-executor deploy --env=<env> [--config=<path>] [--managed-var=<name>] [--dry-run]
 
 Options:
   --env=<env>            Target environment.
   --config=<path>        App config path (default: ./fabrika.config.ts).
+  --managed-var=<name>   Platform-owned environment name; repeatable. Values stay in the environment.
   --dry-run              Plan only; do not mutate remote resources.
   -h, --help             Show this help.
 
@@ -70,6 +71,7 @@ export const runCloudflareCli = async (argv: readonly string[]): Promise<void> =
 			env,
 			configPath: args.config,
 			dryRun: args.dryRun,
+			managedVarNames: args.managedVarNames,
 			stateNamespace: process.env['CLOUDFLARE_STATE_NAMESPACE'],
 		}),
 	)

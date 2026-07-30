@@ -48,6 +48,9 @@ export interface ProviderRunEvents {
 	externalId(id: string): Promise<void>
 }
 
+/** Complete platform-owned runtime state. A null value removes the key from persistent targets. */
+export type ProviderManagedEnvironment = Readonly<Record<string, string | null>>
+
 /** Universal inputs shared by every provider deploy. */
 export interface ProviderRunBase {
 	readonly appId: string
@@ -57,7 +60,7 @@ export interface ProviderRunBase {
 	readonly secrets: Readonly<Record<string, string>>
 	readonly vars: Readonly<Record<string, string>>
 	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
-	readonly managedEnvironment?: Readonly<Record<string, string>>
+	readonly managedEnvironment: ProviderManagedEnvironment
 	readonly dryRun: boolean
 	readonly signal: AbortSignal
 	readonly events: ProviderRunEvents

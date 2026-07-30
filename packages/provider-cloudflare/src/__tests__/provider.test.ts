@@ -8,6 +8,7 @@ interface Recorded {
 	readonly provisions: ProvisionInput[]
 	readonly schemas: Array<{ url: string; app: string; adminKey?: string }>
 	readonly logs: string[]
+	readonly provisionedVars: Array<Record<string, unknown> | undefined>
 }
 
 const config = (overrides: Partial<CloudflareAppConfigInput> = {}): CloudflareAppConfig =>
@@ -32,6 +33,7 @@ const makeCollaborators = (
 	},
 	provision: async (input) => {
 		rec.provisions.push(input)
+		rec.provisionedVars.push(input.definition instanceof Worker ? input.definition.options.vars : undefined)
 		return {
 			wranglerConfigs: [{ path: 'wrangler.jsonc', config: { name: `${input.env}-demo` }, content: '{}' }],
 			wranglerConfig: { name: `${input.env}-demo` },
@@ -51,6 +53,7 @@ const open = (
 		readonly signal?: AbortSignal
 		readonly commandResult?: (spec: CommandSpec) => CommandResult
 		readonly appId?: string
+		readonly managedEnvironment?: Readonly<Record<string, string | null>>
 	} = {},
 ) => {
 	const provider = createCloudflareProvider(makeCollaborators(rec, appConfig, options.commandResult))
@@ -61,6 +64,7 @@ const open = (
 		cwd: '/repo',
 		secrets: options.secrets ?? {},
 		vars: {},
+		managedEnvironment: options.managedEnvironment ?? {},
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
 		events: {
@@ -87,7 +91,7 @@ const executePlan = async (session: Awaited<ReturnType<typeof open>>): Promise<v
 
 let rec: Recorded
 beforeEach(() => {
-	rec = { commands: [], provisions: [], schemas: [], logs: [] }
+	rec = { commands: [], provisions: [], schemas: [], logs: [], provisionedVars: [] }
 })
 
 describe('Cloudflare provider', () => {
@@ -103,6 +107,44 @@ describe('Cloudflare provider', () => {
 			version: 1,
 			payload: { configPath: 'deploy/fabrika.config.ts' },
 		})
+	})
+
+	test('merges platform-managed values into the root Worker without exposing them in logs', async () => {
+		const dsn = 'https://operations-public-key@errors.test/1'
+		const session = await open(rec, config(), {
+			dryRun: true,
+			managedEnvironment: {
+				FABRIKA_OPERATIONS_DSN: dsn,
+				FABRIKA_RELEASE: 'fabrika/demo/stage/default/commit',
+				FABRIKA_SERVICE_KEY: null,
+			},
+		})
+		await session.execute('provision-resources')
+		expect(rec.provisionedVars[0]).toMatchObject({
+			FABRIKA_OPERATIONS_DSN: dsn,
+			FABRIKA_RELEASE: 'fabrika/demo/stage/default/commit',
+		})
+		expect(rec.provisionedVars[0]).not.toHaveProperty('FABRIKA_SERVICE_KEY')
+		expect(rec.logs.join('\n')).not.toContain(dsn)
+	})
+
+	test('rejects authored collisions with platform-managed values by name only', async () => {
+		const dsn = 'https://operations-public-key@errors.test/1'
+		const authored = config({
+			resources: () =>
+				new Worker({
+					dir: '.',
+					name: 'demo',
+					compatibility_flags: [],
+					bindings: {},
+					main: 'src/index.ts',
+					vars: { FABRIKA_OPERATIONS_DSN: 'authored' },
+				}),
+		})
+		await expect(open(rec, authored, { managedEnvironment: { FABRIKA_OPERATIONS_DSN: dsn } })).rejects.toThrow(
+			'application variable `FABRIKA_OPERATIONS_DSN` is managed by Fabrika',
+		)
+		expect(rec.logs.join('\n')).not.toContain(dsn)
 	})
 
 	test('loads the checkout config and preserves the canonical Cloudflare plan', async () => {

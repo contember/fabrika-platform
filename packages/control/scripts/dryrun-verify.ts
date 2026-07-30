@@ -59,6 +59,7 @@ const run: RuntimeProviderRun = {
 		PROPUSTKA_PROVISIONING_KEY: 'px_dummy-admin',
 	},
 	vars: {},
+	managedEnvironment: {},
 	cwd,
 	dryRun: true,
 	signal: new AbortController().signal,

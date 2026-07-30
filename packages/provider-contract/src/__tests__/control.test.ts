@@ -53,6 +53,7 @@ const deployInput = (provider: string): ProviderDeployInput => ({
 	environment: environment(provider),
 	secrets: {},
 	vars: {},
+	managedEnvironment: {},
 	dryRun: false,
 	signal: new AbortController().signal,
 	events: {

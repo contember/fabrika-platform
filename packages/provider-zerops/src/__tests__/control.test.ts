@@ -91,6 +91,7 @@ const deployInput = (recorded: Recorded): ProviderDeployInput => ({
 	environment: environment(),
 	secrets: {},
 	vars: {},
+	managedEnvironment: {},
 	dryRun: false,
 	signal: new AbortController().signal,
 	events: {
@@ -466,6 +467,77 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.calls.indexOf('beforeDeploy')).toBeLessThan(recorded.calls.indexOf('importServices'))
 		expect(recorded.logs.join('\n')).not.toContain('zt-secret')
 		expect(JSON.stringify(deployInput(recorded).environment)).not.toContain('zt-secret')
+	})
+
+	test('writes managed environment only to the app service and never to YAML or logs', async () => {
+		const dsn = 'https://operations-public-key@errors.test/1'
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		await control.deploy({
+			...deployInput(recorded),
+			managedEnvironment: {
+				FABRIKA_OPERATIONS_DSN: dsn,
+				FABRIKA_RELEASE: 'fabrika/notes/prod/default/commit',
+			},
+		})
+		expect(recorded.envWrites).toEqual([
+			{ serviceId: 'service-1', key: 'FABRIKA_OPERATIONS_DSN', value: dsn },
+			{ serviceId: 'service-1', key: 'FABRIKA_RELEASE', value: 'fabrika/notes/prod/default/commit' },
+		])
+		expect(recorded.imports[0]?.yaml).not.toContain('FABRIKA_OPERATIONS_DSN')
+		expect(recorded.imports[0]?.yaml).not.toContain(dsn)
+		expect(recorded.logs.join('\n')).not.toContain(dsn)
+	})
+
+	test('removes stale managed values when Operations and release state become unavailable', async () => {
+		const dsn = 'https://operations-public-key@errors.test/1'
+		const release = 'fabrika/notes/prod/default/commit'
+		const managed = {
+			FABRIKA_OPERATIONS_DSN: dsn,
+			FABRIKA_APP_ID: 'notes',
+			FABRIKA_ENVIRONMENT: 'prod',
+			FABRIKA_SERVICE_KEY: 'default',
+			FABRIKA_RELEASE: release,
+		}
+		const api: ZeropsApi = {
+			...makeApi(recorded),
+			listServiceEnv: async () =>
+				Object.entries(managed).map(([key, content], index) => ({
+					id: `managed-${index}`,
+					key,
+					content,
+				})),
+		}
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api })
+		await control.deploy({ ...deployInput(recorded), managedEnvironment: managed })
+		await control.deploy({
+			...deployInput(recorded),
+			runId: 'run-2',
+			managedEnvironment: {
+				FABRIKA_OPERATIONS_DSN: null,
+				FABRIKA_APP_ID: null,
+				FABRIKA_ENVIRONMENT: null,
+				FABRIKA_SERVICE_KEY: null,
+				FABRIKA_RELEASE: null,
+			},
+		})
+
+		expect(recorded.envWrites).toHaveLength(5)
+		expect(recorded.envDeletes.sort()).toEqual(['managed-0', 'managed-1', 'managed-2', 'managed-3', 'managed-4'])
+		expect(recorded.logs.join('\n')).not.toContain(dsn)
+		expect(recorded.logs.join('\n')).not.toContain(release)
+	})
+
+	test('dry-run names managed service values without mutating Zerops or exposing values', async () => {
+		const dsn = 'https://operations-public-key@errors.test/1'
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		await control.deploy({
+			...deployInput(recorded),
+			dryRun: true,
+			managedEnvironment: { FABRIKA_OPERATIONS_DSN: dsn },
+		})
+		expect(recorded.envWrites).toEqual([])
+		expect(recorded.logs.join('\n')).toContain('FABRIKA_OPERATIONS_DSN')
+		expect(recorded.logs.join('\n')).not.toContain(dsn)
 	})
 
 	test('places an app that consumes shared PostgreSQL into its namespace project', async () => {

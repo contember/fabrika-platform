@@ -85,7 +85,7 @@ describe('Runner pipeline', () => {
 		expect(lines.some((l) => l.text === 'Cloning https://github.com/acme/app.git @ main')).toBe(true)
 	})
 
-	test('credentials, secrets, vars and state namespace go into child env only', async () => {
+	test('credentials, secrets, vars, managed environment and state namespace go into child env only', async () => {
 		const rec: RecordedSpawn[] = []
 		const spawn = makeSpawner(rec, () => ({ exitCode: 0 }))
 		const job = baseJob({
@@ -94,6 +94,10 @@ describe('Runner pipeline', () => {
 			credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef', PROPUSTKA_URL: 'https://iam.acme.com' },
 			secrets: { SAMPLE_API_KEY: 'super-secret-value' },
 			vars: { PUBLIC_ORIGIN: 'public-value' },
+			managedEnvironment: {
+				FABRIKA_OPERATIONS_DSN: 'https://operations-public-key@errors.test/1',
+				FABRIKA_RELEASE: 'fabrika/app/stage/default/commit',
+			},
 		})
 		await new Runner(job, makeEnv(spawn)).run()
 
@@ -106,22 +110,34 @@ describe('Runner pipeline', () => {
 			CLOUDFLARE_STATE_NAMESPACE: 'legacy-state',
 			SAMPLE_API_KEY: 'super-secret-value',
 			PUBLIC_ORIGIN: 'public-value',
+			FABRIKA_OPERATIONS_DSN: 'https://operations-public-key@errors.test/1',
+			FABRIKA_RELEASE: 'fabrika/app/stage/default/commit',
 		})
+		expect(deploy?.args).toContain('--managed-var=FABRIKA_OPERATIONS_DSN')
+		expect(deploy?.args).toContain('--managed-var=FABRIKA_RELEASE')
 		// No secret/cred value ever appears on argv.
 		const argvAll = rec.flatMap((r) => r.spec.args).join(' ')
 		expect(argvAll).not.toContain('super-secret-value')
 		expect(argvAll).not.toContain('tok-abcdef')
 		expect(argvAll).not.toContain('public-value')
+		expect(argvAll).not.toContain('operations-public-key')
+		expect(argvAll).not.toContain('fabrika/app/stage/default/commit')
 	})
 
-	test('credential, secret and var values are redacted from log lines', async () => {
+	test('credential, secret, var and managed environment values are redacted from log lines', async () => {
 		const spawn = makeSpawner([], (spec, handlers) => {
 			if (spec.command === 'fabrika-cloudflare-executor') {
-				handlers.onStdout('deploying with token tok-abcdef, key super-secret-value and var public-value\n')
+				handlers.onStdout(
+					'deploying with token tok-abcdef, key super-secret-value, var public-value and dsn https://operations-public-key@errors.test/1\n',
+				)
 			}
 			return { exitCode: 0 }
 		})
-		const job = baseJob({ secrets: { SAMPLE_API_KEY: 'super-secret-value' }, vars: { PUBLIC_ORIGIN: 'public-value' } })
+		const job = baseJob({
+			secrets: { SAMPLE_API_KEY: 'super-secret-value' },
+			vars: { PUBLIC_ORIGIN: 'public-value' },
+			managedEnvironment: { FABRIKA_OPERATIONS_DSN: 'https://operations-public-key@errors.test/1' },
+		})
 		const runner = new Runner(job, makeEnv(spawn))
 		await runner.run()
 
@@ -129,6 +145,7 @@ describe('Runner pipeline', () => {
 		expect(joined).not.toContain('tok-abcdef')
 		expect(joined).not.toContain('super-secret-value')
 		expect(joined).not.toContain('public-value')
+		expect(joined).not.toContain('operations-public-key')
 		expect(joined).toContain('***')
 	})
 

@@ -14,6 +14,7 @@ const makeRun = (options: { signal?: AbortSignal; dryRun?: boolean; logs?: strin
 	cwd: '/workspace',
 	secrets: {},
 	vars: {},
+	managedEnvironment: {},
 	dryRun: options.dryRun ?? false,
 	signal: options.signal ?? new AbortController().signal,
 	events: {

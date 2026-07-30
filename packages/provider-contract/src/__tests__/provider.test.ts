@@ -64,6 +64,7 @@ describe('createProvider', () => {
 				expect(run.target.region).toBe('eu-west')
 				expect(run.artifact.image).toBe('registry.example/api:v4')
 				expect(run.artifact.replicas).toBe(3)
+				expect(run.managedEnvironment).toEqual({ FABRIKA_RELEASE: 'release-4' })
 				await run.events.externalId(`harbor:${run.target.region}`)
 
 				return {
@@ -87,6 +88,7 @@ describe('createProvider', () => {
 			cwd: '/workspace',
 			secrets: {},
 			vars: {},
+			managedEnvironment: { FABRIKA_RELEASE: 'release-4' },
 			dryRun: false,
 			signal: new AbortController().signal,
 			events: {
@@ -140,6 +142,7 @@ describe('createProvider', () => {
 			cwd: '/workspace',
 			secrets: {},
 			vars: {},
+			managedEnvironment: {},
 			dryRun: false,
 			signal: new AbortController().signal,
 			events: {
@@ -168,6 +171,7 @@ describe('createProvider', () => {
 			cwd: '/workspace',
 			secrets: {},
 			vars: {},
+			managedEnvironment: {},
 			dryRun: false,
 			signal: new AbortController().signal,
 			events: {
