@@ -21,10 +21,14 @@ fabrika-platform is and how the pieces fit — then skim
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
+- [Local Zerops stack (2026-07-30)](sprints/sprint-2026-07-30-local-zerops-stack.md)
+  — compose and prove the complete local Zerops-targeted stack.
+
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
 
-- **Next:** run the resulting Zerops composition against a real account in
+- **Active:** build the local Zerops pre-deployment stack.
+- **Next:** run the resulting composition against a real account in
   [`backlog/05-bring-up-on-a-real-zerops-account.md`](backlog/05-bring-up-on-a-real-zerops-account.md).
