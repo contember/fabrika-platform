@@ -1,10 +1,13 @@
 import type { IngestMessage } from '@fabrika/operations-contract'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { consumeDeadDeliveries, consumeDeliveries } from './consumer.js'
+import { SqliteHealthRepository } from './health-repository.js'
+import { OperationsHealthExecution } from './health-service.js'
 import { createOperationsFetchHandler, type OperationsHttpEnv } from './http.js'
 import { OperationsMaintenance, WebhookNotificationSender } from './maintenance.js'
 import { cloudflareBlobStore, cloudflareJobQueue } from './platform-cf.js'
 import { createSqliteOperationsRepositories } from './repositories.js'
+import { cloudflarePipelineTelemetry, StoredOperationsTelemetryAdapter } from './telemetry.js'
 
 interface OperationsWorkerBindings {
 	DB: D1Database
@@ -47,6 +50,10 @@ export class OperationsWorker extends WorkerEntrypoint<OperationsWorkerBindings>
 
 	override async scheduled(): Promise<void> {
 		const env = this.operations
+		await new OperationsHealthExecution(new SqliteHealthRepository(this.env.DB), {
+			telemetry: new StoredOperationsTelemetryAdapter(this.env.DB, cloudflarePipelineTelemetry()),
+			logger: { warn: (message, fields) => console.warn(message, fields) },
+		}).run()
 		await new OperationsMaintenance(env.repositories.alerts, new WebhookNotificationSender()).run()
 	}
 }

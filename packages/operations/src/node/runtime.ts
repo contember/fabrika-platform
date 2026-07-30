@@ -1,13 +1,17 @@
 import { PostgresDatabase, S3BlobStore } from '@fabrika/platform-node'
+import { PostgresHealthRepository } from '../health-repository.js'
+import { OperationsHealthExecution } from '../health-service.js'
 import type { OperationsHttpEnv } from '../http.js'
 import { OperationsMaintenance, WebhookNotificationSender } from '../maintenance.js'
 import { createPostgresOperationsRepositories } from '../repositories.js'
+import { bunPipelineTelemetry, StoredOperationsTelemetryAdapter } from '../telemetry.js'
 import { createOperationsIngestQueue, PostgresOperationsConsumer } from './consumer.js'
 
 export interface OperationsRuntime {
 	env: OperationsHttpEnv
 	port: number
 	consumer: PostgresOperationsConsumer
+	health: OperationsHealthExecution
 	maintenance: OperationsMaintenance
 	shutdown(): Promise<void>
 }
@@ -38,6 +42,10 @@ export function createOperationsRuntime(source: Record<string, string | undefine
 		port: parsePort(source['PORT']),
 		consumer: new PostgresOperationsConsumer(ingestQueue, env, {
 			log: (message) => console.warn(message),
+		}),
+		health: new OperationsHealthExecution(new PostgresHealthRepository(db), {
+			telemetry: new StoredOperationsTelemetryAdapter(db, bunPipelineTelemetry()),
+			logger: { warn: (message, fields) => console.warn(message, fields) },
 		}),
 		maintenance: new OperationsMaintenance(repositories.alerts, new WebhookNotificationSender()),
 		async shutdown(): Promise<void> {

@@ -318,6 +318,13 @@ export abstract class HealthRepository {
 		return row === null ? null : healthState(row.state)
 	}
 
+	async listEnabledSourceIds(): Promise<string[]> {
+		const { results } = await this.db
+			.prepare('SELECT id FROM sources WHERE enabled = 1 ORDER BY id')
+			.all<{ id: string }>()
+		return results.map((row) => row.id)
+	}
+
 	async recordTelemetryObservation(input: {
 		id: string
 		sourceId: string
