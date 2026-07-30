@@ -14,6 +14,11 @@ type Page =
 	| 'access/credentials'
 	| 'access/permissions'
 	| 'access/audit'
+	| 'operations'
+	| 'operations/errors'
+	| 'operations/sources'
+	| 'operations/releases'
+	| 'operations/health'
 
 interface NavItem {
 	to: Page
@@ -31,8 +36,8 @@ interface NavSection {
 	items: NavItem[]
 }
 
-/** The overview spans both planes, so it sits above them rather than inside either section. */
-const LEAD: NavItem = { to: 'index', label: 'Overview', description: 'Both planes at a glance', icon: 'gauge', match: '/', exact: true }
+/** The overview spans all planes, so it sits above them rather than inside any section. */
+const LEAD: NavItem = { to: 'index', label: 'Overview', description: 'All planes at a glance', icon: 'gauge', match: '/', exact: true }
 
 const NAV: NavSection[] = [
 	{
@@ -53,6 +58,16 @@ const NAV: NavSection[] = [
 			{ to: 'access/audit', label: 'Audit', description: 'Changes and sign-in decisions', icon: 'history', match: '/access/audit' },
 		],
 	},
+	{
+		label: 'Operations',
+		items: [
+			{ to: 'operations', label: 'Overview', description: 'The operations plane at a glance', icon: 'gauge', match: '/operations', exact: true },
+			{ to: 'operations/errors', label: 'Errors', description: 'Application failures and triage', icon: 'alert', match: '/operations/errors' },
+			{ to: 'operations/sources', label: 'Sources', description: 'Telemetry source catalog', icon: 'app', match: '/operations/sources' },
+			{ to: 'operations/releases', label: 'Releases', description: 'Release and regression context', icon: 'commit', match: '/operations/releases' },
+			{ to: 'operations/health', label: 'Health', description: 'Runtime and pipeline signals', icon: 'runs', match: '/operations/health' },
+		],
+	},
 ]
 
 function isActive(item: NavItem, pathname: string): boolean {
@@ -62,8 +77,14 @@ function isActive(item: NavItem, pathname: string): boolean {
 
 export default function RootLayout() {
 	const { pathname } = useRoute()
-	// The overview spans both planes, so it isn't filed under either.
-	const plane = pathname === '/' ? 'Console' : pathname.startsWith('/access') ? 'Access' : 'Delivery'
+	// The overview spans all planes, so it isn't filed under any one of them.
+	const plane = pathname === '/'
+		? 'Console'
+		: pathname.startsWith('/access')
+		? 'Access'
+		: pathname.startsWith('/operations')
+		? 'Operations'
+		: 'Delivery'
 	const here = [LEAD, ...NAV.flatMap((section) => section.items)].find((item) => isActive(item, pathname)) ?? null
 
 	return (
@@ -91,9 +112,9 @@ export default function RootLayout() {
 				</nav>
 				{/* An install-level fact, so it sits on the rail's nameplate rather than in the per-page bar. */}
 				<div className="sidebar-foot">
-					<span className="endpoint" title="Control plane and IAM answer on this one origin">
+					<span className="endpoint" title="Delivery, Access and Operations share one console">
 						<span className="lamp" aria-hidden="true" />
-						Control + IAM on one origin
+						Three planes · one console
 					</span>
 				</div>
 			</aside>

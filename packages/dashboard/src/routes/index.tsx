@@ -16,9 +16,9 @@ import {
 import { fmtAgo, fmtDuration, shortRef, shortSha } from '../lib/format'
 import { type IamAuditEventDto, type IamSnapshot, iamSnapshot } from '../lib/iam'
 
-// Overview — the whole installation on one screen, BOTH planes. The delivery half answers "is anything
+// Overview — the whole installation on one screen. Delivery answers "is anything
 // in flight, did the last releases land, is a placement broken"; the access half answers "who and what
-// can reach this, and what did they just change".
+// can reach this"; Operations is the boundary for runtime failures and telemetry.
 //
 // Composed from the list endpoints that already exist (`/apps`, `/namespaces`, `/runs`, and IAM's
 // `/iam/admin/*`); there is no aggregate endpoint and this page does not justify inventing one. The
@@ -62,7 +62,7 @@ export default createPage()
 					<div className="page-head-row">
 						<div>
 							<h1>Overview</h1>
-							<p className="hint">This installation on one screen — what it is building and releasing, and who can reach it.</p>
+							<p className="hint">What this installation is releasing, who can reach it, and where runtime failures are investigated.</p>
 						</div>
 						<Link to="apps/new" className="btn primary">
 							<Icon name="plus" />
@@ -124,6 +124,7 @@ export default createPage()
 				</section>
 
 				<AccessPlane iam={iam} nowSeconds={nowSeconds} />
+				<OperationsPlane />
 
 				<div className="board">
 					<div className="board-col">
@@ -397,6 +398,28 @@ function AccessPlane({ iam, nowSeconds }: { iam: IamSnapshot | null; nowSeconds:
 						<Status lamp={changesToday > 0 ? 'ok' : 'idle'}>audited decisions</Status>
 					</div>
 				</div>
+			</div>
+		</section>
+	)
+}
+
+function OperationsPlane() {
+	return (
+		<section>
+			<div className="section-head">
+				<Icon name="alert" size={15} />
+				<h2>Operations plane</h2>
+				<span className="spacer" />
+				<Link to="operations" className="card-link">
+					Open
+					<Icon name="chevron-right" size={13} />
+				</Link>
+			</div>
+			<div className="notice">
+				<Icon name="runs" size={15} />
+				<span>
+					Application errors, release context and telemetry health live behind an independent Operations boundary.
+				</span>
 			</div>
 		</section>
 	)

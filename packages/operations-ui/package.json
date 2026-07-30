@@ -4,17 +4,33 @@
 	"private": true,
 	"type": "module",
 	"exports": {
-		"./format": "./src/format.ts"
+		"./client": "./src/client.ts",
+		"./format": "./src/format.ts",
+		"./routes/errors": "./src/routes/errors/index.tsx",
+		"./routes/error-detail": "./src/routes/errors/detail.tsx",
+		"./routes/health": "./src/routes/health.tsx",
+		"./routes/layout": "./src/routes/layout.tsx",
+		"./routes/overview": "./src/routes/overview.tsx",
+		"./routes/releases": "./src/routes/releases.tsx",
+		"./routes/source-alerts": "./src/routes/sources/alerts.tsx",
+		"./routes/source-detail": "./src/routes/sources/detail.tsx",
+		"./routes/sources": "./src/routes/sources/index.tsx",
+		"./views/error-detail": "./src/views/ErrorDetail.tsx",
+		"./views/errors": "./src/views/Errors.tsx",
+		"./views/sources": "./src/views/Sources.tsx"
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",
 		"test": "bun test src/__tests__"
 	},
 	"dependencies": {
-		"@fabrika/operations-contract": "workspace:*"
+		"@buzola/router": "^0.0.12",
+		"@fabrika/operations-contract": "workspace:*",
+		"react": "^19.0.0"
 	},
 	"devDependencies": {
 		"@types/bun": "latest",
+		"@types/react": "^19.0.0",
 		"typescript": "^5.9.3"
 	}
 }
