@@ -1,6 +1,6 @@
 /** Versioned private Control → Operations source-catalog protocol. */
 
-export const OPERATIONS_CATALOG_PROTOCOL_VERSION = 1
+export const OPERATIONS_CATALOG_PROTOCOL_VERSION = 2
 export const DEFAULT_OPERATIONS_SERVICE_KEY = 'default'
 
 export interface OperationsSourceCoordinateV1 {
@@ -29,16 +29,36 @@ export interface CanonicalOperationsCatalogSourceV1 {
 	publicOrigin: string | null
 }
 
-export interface OperationsCatalogReconcileRequestV1 {
+/** Caller-owned write credential transported only over the private catalog channel. */
+export interface OperationsCatalogIngestCredentialV2 {
+	id: string
+	publicKey: string
+}
+
+export interface OperationsCatalogSourceV2 extends OperationsCatalogSourceV1 {
+	ingestCredential: OperationsCatalogIngestCredentialV2
+}
+
+export interface CanonicalOperationsCatalogSourceV2 extends CanonicalOperationsCatalogSourceV1 {
+	ingestCredential: OperationsCatalogIngestCredentialV2
+}
+
+export interface OperationsCatalogReconcileRequestV2 {
 	protocolVersion: typeof OPERATIONS_CATALOG_PROTOCOL_VERSION
 	revision: number
 	snapshotHash: string
-	sources: OperationsCatalogSourceV1[]
+	sources: OperationsCatalogSourceV2[]
 }
 
 export type OperationsCatalogReconcileOutcome = 'applied' | 'unchanged' | 'stale'
 
-export interface OperationsCatalogReconcileResponseV1 {
+export interface OperationsCatalogIngestResultV2 {
+	coordinate: CanonicalOperationsSourceCoordinateV1
+	credentialId: string
+	ingestProjectId: string
+}
+
+export interface OperationsCatalogReconcileResponseV2 {
 	protocolVersion: typeof OPERATIONS_CATALOG_PROTOCOL_VERSION
 	revision: number
 	outcome: OperationsCatalogReconcileOutcome
@@ -47,6 +67,7 @@ export interface OperationsCatalogReconcileResponseV1 {
 	disabled: number
 	reenabled: number
 	unchanged: number
+	ingest: OperationsCatalogIngestResultV2[]
 }
 
 export function canonicalOperationsServiceKey(serviceKey: string | undefined): string {
@@ -54,8 +75,8 @@ export function canonicalOperationsServiceKey(serviceKey: string | undefined): s
 }
 
 export function canonicalOperationsCatalogSources(
-	sources: readonly OperationsCatalogSourceV1[],
-): CanonicalOperationsCatalogSourceV1[] {
+	sources: readonly OperationsCatalogSourceV2[],
+): CanonicalOperationsCatalogSourceV2[] {
 	return sources.map((source) => ({
 		coordinate: {
 			appId: source.coordinate.appId,
@@ -64,6 +85,7 @@ export function canonicalOperationsCatalogSources(
 		},
 		displayName: source.displayName,
 		publicOrigin: source.publicOrigin ?? null,
+		ingestCredential: source.ingestCredential,
 	})).sort((left, right) => {
 		const app = left.coordinate.appId.localeCompare(right.coordinate.appId)
 		if (app !== 0) return app
@@ -74,7 +96,7 @@ export function canonicalOperationsCatalogSources(
 }
 
 /** Hash the canonical source array only; revision is transport ordering, not catalog content. */
-export async function operationsCatalogSnapshotHash(sources: readonly OperationsCatalogSourceV1[]): Promise<string> {
+export async function operationsCatalogSnapshotHash(sources: readonly OperationsCatalogSourceV2[]): Promise<string> {
 	const bytes = new TextEncoder().encode(JSON.stringify(canonicalOperationsCatalogSources(sources)))
 	const digest = await crypto.subtle.digest('SHA-256', bytes)
 	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')

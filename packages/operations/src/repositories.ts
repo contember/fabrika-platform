@@ -1,12 +1,12 @@
 import {
 	type ActivityItem,
-	type CanonicalOperationsCatalogSourceV1,
+	type CanonicalOperationsCatalogSourceV2,
 	DEFAULT_OPERATIONS_SERVICE_KEY,
 	type IssueMutation,
 	type IssueStatus,
 	OPERATIONS_CATALOG_PROTOCOL_VERSION,
 	type OperationsArtifactState,
-	type OperationsCatalogReconcileResponseV1,
+	type OperationsCatalogReconcileResponseV2,
 	type PriorIssueState,
 } from '@fabrika/operations-contract'
 import type { SqlDatabase } from '@fabrika/platform'
@@ -272,8 +272,8 @@ export class CatalogRepository {
 	async reconcile(input: {
 		revision: number
 		snapshotHash: string
-		sources: CanonicalOperationsCatalogSourceV1[]
-	}): Promise<OperationsCatalogReconcileResponseV1> {
+		sources: CanonicalOperationsCatalogSourceV2[]
+	}): Promise<OperationsCatalogReconcileResponseV2> {
 		const cursor = await this.getCursor()
 		if (input.revision < cursor.revision) return catalogResponse(cursor.revision, 'stale')
 		if (input.revision === cursor.revision) {
@@ -384,9 +384,9 @@ function sourceCoordinateKey(appId: string, environment: string, serviceKey: str
 
 function catalogResponse(
 	revision: number,
-	outcome: OperationsCatalogReconcileResponseV1['outcome'],
-	counts: Partial<Pick<OperationsCatalogReconcileResponseV1, 'created' | 'updated' | 'disabled' | 'reenabled' | 'unchanged'>> = {},
-): OperationsCatalogReconcileResponseV1 {
+	outcome: OperationsCatalogReconcileResponseV2['outcome'],
+	counts: Partial<Pick<OperationsCatalogReconcileResponseV2, 'created' | 'updated' | 'disabled' | 'reenabled' | 'unchanged'>> = {},
+): OperationsCatalogReconcileResponseV2 {
 	return {
 		protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
 		revision,
@@ -396,6 +396,7 @@ function catalogResponse(
 		disabled: counts.disabled ?? 0,
 		reenabled: counts.reenabled ?? 0,
 		unchanged: counts.unchanged ?? 0,
+		ingest: [],
 	}
 }
 

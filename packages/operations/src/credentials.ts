@@ -26,6 +26,43 @@ export interface IssueIngestCredentialOptions {
 	overlapMs?: number
 }
 
+export interface ReconcileIngestCredentialInput {
+	sourceId: string
+	credentialId: string
+	publicKey: string
+}
+
+export interface ReconciledIngestCredential {
+	credentialId: string
+	ingestProjectId: string
+}
+
+/** Accept a caller-owned credential idempotently without persisting its raw value. */
+export async function reconcileSourceIngestCredential(
+	repositories: OperationsRepositories,
+	input: ReconcileIngestCredentialInput,
+	options: Pick<IssueIngestCredentialOptions, 'now' | 'ingestProjectId'> = {},
+): Promise<ReconciledIngestCredential> {
+	if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(input.credentialId)) {
+		throw new Error('invalid Operations ingest credential id')
+	}
+	if (!/^[0-9a-f]{32}$/.test(input.publicKey)) {
+		throw new Error('invalid Operations ingest public key')
+	}
+	const candidate = (options.ingestProjectId ?? generateIngestProjectId)()
+	if (!/^[1-9][0-9]{0,18}$/.test(candidate)) throw new Error('generated ingest project id is invalid')
+	const ingestProjectId = await repositories.sources.ensureIngestProjectId(input.sourceId, candidate)
+	if (ingestProjectId === null) throw new Error('Operations source is unavailable for ingest')
+	const accepted = await repositories.sources.rotateCredential({
+		id: input.credentialId,
+		sourceId: input.sourceId,
+		verifier: await credentialVerifier(input.publicKey),
+		overlapUntil: (options.now ?? Date.now)(),
+	})
+	if (!accepted) throw new Error('Operations ingest credential conflicts with stored state')
+	return { credentialId: input.credentialId, ingestProjectId }
+}
+
 export async function provisionSourceIngest(
 	repositories: OperationsRepositories,
 	input: { sourceId: string; operationsOrigin: string },

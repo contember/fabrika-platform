@@ -1,11 +1,12 @@
 import {
 	canonicalOperationsCatalogSources,
 	OPERATIONS_CATALOG_PROTOCOL_VERSION,
-	type OperationsCatalogReconcileRequestV1,
-	type OperationsCatalogReconcileResponseV1,
+	type OperationsCatalogReconcileRequestV2,
+	type OperationsCatalogReconcileResponseV2,
 	operationsCatalogSnapshotHash,
-	type OperationsCatalogSourceV1,
+	type OperationsCatalogSourceV2,
 } from '@fabrika/operations-contract/catalog'
+import { reconcileSourceIngestCredential } from './credentials.js'
 import type { OperationsRepositories } from './repositories.js'
 import { CatalogRevisionConflictError } from './repositories.js'
 
@@ -22,17 +23,38 @@ export interface CatalogHandlerOptions {
 
 export async function reconcileOperationsCatalog(
 	repositories: OperationsRepositories,
-	request: OperationsCatalogReconcileRequestV1,
-): Promise<OperationsCatalogReconcileResponseV1> {
+	request: OperationsCatalogReconcileRequestV2,
+): Promise<OperationsCatalogReconcileResponseV2> {
 	const sources = canonicalOperationsCatalogSources(request.sources)
 	assertUniqueCoordinates(sources)
 	const hash = await operationsCatalogSnapshotHash(sources)
 	if (hash !== request.snapshotHash) throw new CatalogRequestError(400, 'catalog snapshot hash does not match content')
-	return repositories.catalog.reconcile({
+	const response = await repositories.catalog.reconcile({
 		revision: request.revision,
 		snapshotHash: request.snapshotHash,
 		sources,
 	})
+	if (response.outcome === 'stale') return response
+	const ingest = []
+	for (const source of sources) {
+		const stored = await repositories.sources.getByCoordinate(
+			source.coordinate.appId,
+			source.coordinate.environment,
+			source.coordinate.serviceKey,
+		)
+		if (stored === null) throw new Error('reconciled Operations source is unavailable')
+		const accepted = await reconcileSourceIngestCredential(repositories, {
+			sourceId: stored.id,
+			credentialId: source.ingestCredential.id,
+			publicKey: source.ingestCredential.publicKey,
+		})
+		ingest.push({
+			coordinate: source.coordinate,
+			credentialId: accepted.credentialId,
+			ingestProjectId: accepted.ingestProjectId,
+		})
+	}
+	return { ...response, ingest }
 }
 
 export async function handleOperationsCatalogRequest(request: Request, options: CatalogHandlerOptions): Promise<Response> {
@@ -67,7 +89,7 @@ export async function handleOperationsCatalogRequest(request: Request, options: 
 	}
 }
 
-export function parseCatalogRequest(value: unknown): OperationsCatalogReconcileRequestV1 {
+export function parseCatalogRequest(value: unknown): OperationsCatalogReconcileRequestV2 {
 	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
 		throw new CatalogRequestError(400, 'invalid catalog request')
 	}
@@ -97,13 +119,14 @@ export function parseCatalogRequest(value: unknown): OperationsCatalogReconcileR
 	}
 }
 
-function parseCatalogSource(value: unknown): OperationsCatalogSourceV1 {
+function parseCatalogSource(value: unknown): OperationsCatalogSourceV2 {
 	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
 		throw new CatalogRequestError(400, 'invalid catalog source')
 	}
 	const coordinate = Reflect.get(value, 'coordinate')
 	const displayName = Reflect.get(value, 'displayName')
 	const publicOrigin = Reflect.get(value, 'publicOrigin')
+	const ingestCredential = Reflect.get(value, 'ingestCredential')
 	if (typeof coordinate !== 'object' || coordinate === null || Array.isArray(coordinate)) {
 		throw new CatalogRequestError(400, 'invalid source coordinate')
 	}
@@ -120,7 +143,17 @@ function parseCatalogSource(value: unknown): OperationsCatalogSourceV1 {
 		|| displayName.trim() === ''
 		|| displayName.length > 256
 		|| (publicOrigin !== undefined && publicOrigin !== null && !validPublicOrigin(publicOrigin))
+		|| typeof ingestCredential !== 'object'
+		|| ingestCredential === null
+		|| Array.isArray(ingestCredential)
+		|| !validCredentialId(Reflect.get(ingestCredential, 'id'))
+		|| !validPublicKey(Reflect.get(ingestCredential, 'publicKey'))
 	) {
+		throw new CatalogRequestError(400, 'invalid catalog source')
+	}
+	const credentialId = Reflect.get(ingestCredential, 'id')
+	const publicKey = Reflect.get(ingestCredential, 'publicKey')
+	if (typeof credentialId !== 'string' || typeof publicKey !== 'string') {
 		throw new CatalogRequestError(400, 'invalid catalog source')
 	}
 	return {
@@ -131,7 +164,16 @@ function parseCatalogSource(value: unknown): OperationsCatalogSourceV1 {
 		},
 		displayName,
 		...(publicOrigin === undefined ? {} : { publicOrigin }),
+		ingestCredential: { id: credentialId, publicKey },
 	}
+}
+
+function validCredentialId(value: unknown): boolean {
+	return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+}
+
+function validPublicKey(value: unknown): boolean {
+	return typeof value === 'string' && /^[0-9a-f]{32}$/.test(value)
 }
 
 function validPublicOrigin(value: unknown): boolean {

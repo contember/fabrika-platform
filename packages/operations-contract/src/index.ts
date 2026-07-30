@@ -9,11 +9,15 @@ export {
 } from './catalog.js'
 export type {
 	CanonicalOperationsCatalogSourceV1,
+	CanonicalOperationsCatalogSourceV2,
 	CanonicalOperationsSourceCoordinateV1,
+	OperationsCatalogIngestCredentialV2,
+	OperationsCatalogIngestResultV2,
 	OperationsCatalogReconcileOutcome,
-	OperationsCatalogReconcileRequestV1,
-	OperationsCatalogReconcileResponseV1,
+	OperationsCatalogReconcileRequestV2,
+	OperationsCatalogReconcileResponseV2,
 	OperationsCatalogSourceV1,
+	OperationsCatalogSourceV2,
 	OperationsSourceCoordinateV1,
 } from './catalog.js'
 export {

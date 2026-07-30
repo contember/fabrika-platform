@@ -23,9 +23,15 @@ export {
 	generateIngestPublicKey,
 	MAX_INGEST_CREDENTIAL_OVERLAP_MS,
 	provisionSourceIngest,
+	reconcileSourceIngestCredential,
 	rotateSourceIngestCredential,
 } from './credentials.js'
-export type { IssuedIngestCredential, IssueIngestCredentialOptions } from './credentials.js'
+export type {
+	IssuedIngestCredential,
+	IssueIngestCredentialOptions,
+	ReconciledIngestCredential,
+	ReconcileIngestCredentialInput,
+} from './credentials.js'
 export {
 	DEFAULT_INGEST_RATE_LIMIT_PER_MINUTE,
 	handleDirectIngestRequest,

@@ -1,7 +1,7 @@
 import {
 	OPERATIONS_CATALOG_PROTOCOL_VERSION,
 	operationsCatalogSnapshotHash,
-	type OperationsCatalogSourceV1,
+	type OperationsCatalogSourceV2,
 } from '@fabrika/operations-contract/catalog'
 import { OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract/releases'
 import { describe, expect, test } from 'bun:test'
@@ -49,9 +49,13 @@ describe('Operations public/private HTTP isolation', () => {
 		const fetch = handler()
 		expect((await fetch(new Request('https://operations.internal/healthz'))).status).toBe(200)
 
-		const sources: OperationsCatalogSourceV1[] = [{
+		const sources: OperationsCatalogSourceV2[] = [{
 			coordinate: { appId: 'app', environment: 'prod' },
 			displayName: 'App production',
+			ingestCredential: {
+				id: '0198a000-0000-7000-8000-000000000001',
+				publicKey: '0123456789abcdef0123456789abcdef',
+			},
 		}]
 		const response = await fetch(
 			new Request('https://operations.internal/private/catalog/reconcile', {
