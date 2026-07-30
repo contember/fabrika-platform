@@ -114,9 +114,19 @@ describe('Operations notification maintenance', () => {
 
 	test('webhook delivery sends the stable Idempotency-Key contract', async () => {
 		const captured: Request[] = []
+		let responseCancelled = false
 		const sender = new WebhookNotificationSender((request) => {
 			captured.push(request)
-			return Promise.resolve(new Response(null, { status: 204 }))
+			return Promise.resolve(
+				new Response(
+					new ReadableStream({
+						cancel() {
+							responseCancelled = true
+						},
+					}),
+					{ status: 200 },
+				),
+			)
 		})
 		await sender.send({
 			type: 'webhook',
@@ -127,7 +137,78 @@ describe('Operations notification maintenance', () => {
 		const request = captured[0]
 		if (!request) throw new Error('request was not sent')
 		expect(request.headers.get('Idempotency-Key')).toBe('new:source-a:fp-a')
+		expect(request.redirect).toBe('manual')
 		const requestBody: unknown = await request.json()
 		expect(requestBody).toEqual({ issue: 'fp-a' })
+		expect(responseCancelled).toBe(true)
+	})
+
+	test('rejects redirects and cancels their response body', async () => {
+		let responseCancelled = false
+		const sender = new WebhookNotificationSender(() =>
+			Promise.resolve(
+				new Response(
+					new ReadableStream({
+						cancel() {
+							responseCancelled = true
+						},
+					}),
+					{ status: 302, headers: { location: 'https://redirected.example.test/hook' } },
+				),
+			)
+		)
+		await expect(
+			sender.send({
+				type: 'webhook',
+				target: 'https://example.test/hook',
+				payload: {},
+				idempotencyKey: 'redirect',
+			}),
+		).rejects.toThrow('rejected delivery')
+		expect(responseCancelled).toBe(true)
+	})
+
+	test('bounds each webhook delivery with a timeout', async () => {
+		const sender = new WebhookNotificationSender(
+			(request) =>
+				new Promise((_resolve, reject) => {
+					const abort = () => reject(request.signal.reason)
+					if (request.signal.aborted) abort()
+					else request.signal.addEventListener('abort', abort, { once: true })
+				}),
+			{ timeoutMs: 5 },
+		)
+		await expect(
+			sender.send({
+				type: 'webhook',
+				target: 'https://example.test/hook',
+				payload: {},
+				idempotencyKey: 'timeout',
+			}),
+		).rejects.toThrow()
+	})
+
+	test('revalidates a persisted legacy target before delivery', async () => {
+		const harness = await configure(() => 1_000)
+		await harness.repositories.alerts.enqueueNotification({
+			dedupKey: 'legacy:source-a:fp-a',
+			sourceId: 'source-a',
+			channelId: 'channel-a',
+			kind: 'new_issue',
+			payload: {},
+		})
+		let fetchCalled = false
+		const sender = new WebhookNotificationSender(() => {
+			fetchCalled = true
+			return Promise.resolve(new Response(null, { status: 204 }))
+		})
+		await new OperationsMaintenance(harness.repositories.alerts, sender, { retryDelayMs: () => 0 }).run()
+
+		expect(fetchCalled).toBe(false)
+		expect(
+			harness.sqlite.query<{ delivered: number; error_code: string | null }, []>(
+				'SELECT delivered, error_code FROM notification_attempts',
+			).get(),
+		).toEqual({ delivered: 0, error_code: 'delivery_failed' })
 	})
 })

@@ -242,6 +242,45 @@ describe('Operations operator API', () => {
 		expect((await call('/api/sources/source-a/alerts', input)).status).toBe(404)
 	})
 
+	test('rejects unsafe webhook targets and preserves a valid HTTPS path and query', async () => {
+		const input = options(auth({ apps: ['app-a'] }))
+		await seedSource(input, 'source-a', 'app-a', 'fingerprint-a', 1_000)
+		const unsafeTargets = [
+			'http://hooks.example.test/hook',
+			'https://user:password@hooks.example.test/hook',
+			'https://hooks.example.test/hook#fragment',
+			'https://127.0.0.1/hook',
+			'https://192.168.1.20/hook',
+			'https://0x7f000001/hook',
+			'https://2130706433/hook',
+			'https://017700000001/hook',
+			'https://127.1/hook',
+			'https://[::1]/hook',
+			'https://localhost/hook',
+			'https://service.localhost/hook',
+			'https://service.local/hook',
+			'https://service.internal/hook',
+			'https://single-label/hook',
+		]
+		for (const target of unsafeTargets) {
+			const response = await call('/api/sources/source-a/alerts/channels', input, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ scope: 'new_issue', type: 'webhook', target, enabled: true }),
+			})
+			expect(response.status).toBe(400)
+		}
+
+		const target = 'https://hooks.example.test/private/path?token=value&kind=issue'
+		const accepted = await call('/api/sources/source-a/alerts/channels', input, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ scope: 'new_issue', type: 'webhook', target, enabled: true }),
+		})
+		expect(accepted.status).toBe(201)
+		expect((await input.repositories.alerts.listChannels('source-a'))[0]?.target).toBe(target)
+	})
+
 	test('creates and reads a source-scoped HTTP health check without accepting an arbitrary origin', async () => {
 		const input = options(auth({ apps: ['app-a'] }))
 		await seedSource(input, 'source-a', 'app-a', 'fingerprint-a', 1_000)

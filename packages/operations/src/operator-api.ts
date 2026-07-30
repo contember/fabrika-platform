@@ -35,6 +35,7 @@ import type { HealthCheckRow, HealthRepository } from './health-repository.js'
 import { visibleHealthState } from './health.js'
 import type { IdentifiedOperatorIssueRow, OperationsRepositories, OperatorOccurrenceRow, OperatorReleaseRow, SourceRow } from './repositories.js'
 import { uuidv7 } from './uuid.js'
+import { isValidWebhookTarget } from './webhook-target.js'
 
 const ISSUE_DETAIL = /^\/api\/issues\/([^/]+)$/
 const ISSUE_LATEST_EVENT = /^\/api\/issues\/([^/]+)\/events\/latest$/
@@ -643,7 +644,9 @@ async function channelInput(request: Request, requireTarget: boolean): Promise<O
 	const target = body['target']
 	if (requireTarget && typeof target !== 'string') throw badRequest('target is required')
 	if (target !== undefined && typeof target !== 'string') throw badRequest('target must be a string')
-	if (typeof target === 'string') validateWebhookTarget(target)
+	if (typeof target === 'string' && !isValidWebhookTarget(target)) {
+		throw badRequest('target must be a public HTTPS URL without credentials or a fragment')
+	}
 	return {
 		scope,
 		type: 'webhook',
@@ -750,18 +753,6 @@ function cursor(value: string | null): number {
 	const parsed = Number(value)
 	if (!Number.isSafeInteger(parsed) || parsed < 0) throw badRequest('invalid cursor')
 	return parsed
-}
-
-function validateWebhookTarget(target: string): void {
-	let url: URL
-	try {
-		url = new URL(target)
-	} catch {
-		throw badRequest('target must be an absolute HTTP URL')
-	}
-	if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username !== '' || url.password !== '') {
-		throw badRequest('target must be an HTTP URL without embedded credentials')
-	}
 }
 
 function redactTarget(target: string): string {

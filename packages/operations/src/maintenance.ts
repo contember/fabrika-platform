@@ -1,4 +1,5 @@
 import type { AlertsRepository, ClaimedNotification } from './repositories.js'
+import { isValidWebhookTarget } from './webhook-target.js'
 
 export interface NotificationSender {
 	send(input: {
@@ -82,8 +83,21 @@ export class OperationsMaintenance {
 
 export type NotificationFetch = (request: Request) => Promise<Response>
 
+export interface WebhookNotificationSenderOptions {
+	timeoutMs?: number
+}
+
+const DEFAULT_WEBHOOK_TIMEOUT_MS = 10_000
+
 export class WebhookNotificationSender implements NotificationSender {
-	constructor(private readonly fetch: NotificationFetch = globalThis.fetch) {}
+	private readonly timeoutMs: number
+
+	constructor(
+		private readonly fetch: NotificationFetch = globalThis.fetch,
+		options: WebhookNotificationSenderOptions = {},
+	) {
+		this.timeoutMs = options.timeoutMs ?? DEFAULT_WEBHOOK_TIMEOUT_MS
+	}
 
 	async send(input: {
 		type: string
@@ -93,17 +107,30 @@ export class WebhookNotificationSender implements NotificationSender {
 		signal?: AbortSignal
 	}): Promise<void> {
 		if (input.type !== 'webhook') throw new Error('unsupported notification channel')
-		const response = await this.fetch(
-			new Request(input.target, {
-				method: 'POST',
-				headers: {
-					'content-type': 'application/json',
-					'Idempotency-Key': input.idempotencyKey,
-				},
-				body: JSON.stringify(input.payload),
-				...(input.signal ? { signal: input.signal } : {}),
-			}),
-		)
-		if (!response.ok) throw new Error('notification endpoint rejected delivery')
+		if (!isValidWebhookTarget(input.target)) throw new Error('invalid notification target')
+		const timeout = AbortSignal.timeout(this.timeoutMs)
+		const signal = input.signal === undefined ? timeout : AbortSignal.any([input.signal, timeout])
+		let response: Response | undefined
+		try {
+			response = await this.fetch(
+				new Request(input.target, {
+					method: 'POST',
+					headers: {
+						'content-type': 'application/json',
+						'Idempotency-Key': input.idempotencyKey,
+					},
+					body: JSON.stringify(input.payload),
+					redirect: 'manual',
+					signal,
+				}),
+			)
+			if (!response.ok) throw new Error('notification endpoint rejected delivery')
+		} finally {
+			if (response?.body !== null && response?.body !== undefined) {
+				try {
+					await response.body.cancel()
+				} catch {}
+			}
+		}
 	}
 }
