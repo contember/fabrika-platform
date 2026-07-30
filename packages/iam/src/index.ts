@@ -24,7 +24,7 @@ import { createIamRpc } from './rpc'
 /**
  * The IAM Worker — the CLOUDFLARE entrypoint, and nothing more. A single `WorkerEntrypoint` whose
  * default export carries BOTH the RPC methods (apps reach them over the `env.IAM` service binding,
- * which does not traverse any public edge) and `fetch()` (the admin SPA + `/admin/*` + `/auth/*`).
+ * which does not traverse any public edge) and `fetch()` (`/admin/*` + `/auth/*`).
  *
  * There is no logic here. Every method delegates: the RPC surface to `createIamRpc` (src/rpc.ts),
  * `fetch` to `handleFetch` (src/routes.ts), `scheduled` to `pruneAuthLog` (src/cron.ts) — the same

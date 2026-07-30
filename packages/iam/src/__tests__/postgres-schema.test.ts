@@ -481,7 +481,6 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		const tasks = createBackgroundTasks({ label: 'test' })
 		const env: Env = {
 			DB: raw,
-			ASSETS: { fetch: () => Promise.resolve(new Response('<!doctype html>spa', { status: 200, headers: { 'content-type': 'text/html' } })) },
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '[]',
 			IAM_BOOTSTRAP_ADMINS: '[]',
@@ -500,13 +499,13 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		const assembled: Runtime = {
 			env,
 			ctx: { waitUntil: tasks.waitUntil },
-			config: { port: 0, assetsDir: '.', rpcKey: RPC_KEY, proxyKey: PROXY_KEY },
+			config: { port: 0, rpcKey: RPC_KEY, proxyKey: PROXY_KEY },
 			shutdown: () => tasks.drain(),
 		}
 		return { handler: createFetchHandler(assembled), drain: () => tasks.drain() }
 	}
 
-	test('serves liveness, the JWKS, the SPA fallback and the RPC surface from one handler', async () => {
+	test('serves liveness, the JWKS, admin routes and the RPC surface from one handler', async () => {
 		const { handler } = runtime()
 
 		expect((await handler(new Request(`${BASE}/healthz`))).status).toBe(200)
@@ -517,10 +516,10 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		const keys: unknown = await jwks.json()
 		expect(Array.isArray(prop(keys, 'keys'))).toBe(true)
 
-		// Anything unrouted is the SPA — the `ASSETS` binding's replacement.
-		expect(await (await handler(new Request(`${BASE}/principals/abc`))).text()).toContain('spa')
+		// IAM is API-only; the unified console is served by control.
+		expect((await handler(new Request(`${BASE}/principals/abc`))).status).toBe(404)
 
-		// The RPC surface is mounted BEFORE the SPA fallback could swallow it, and it is gated.
+		// The RPC surface is mounted before the public IAM router, and it is gated.
 		expect((await handler(new Request(`${BASE}/rpc/getJwks`, { method: 'POST' }))).status).toBe(401)
 	})
 
@@ -582,7 +581,6 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 		const tasks = createBackgroundTasks({ label: 'test' })
 		const env: Env = {
 			DB: raw,
-			ASSETS: { fetch: () => Promise.resolve(new Response('spa')) },
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '[]',
 			IAM_BOOTSTRAP_ADMINS: '[]',
@@ -600,7 +598,7 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 		const assembled: Runtime = {
 			env,
 			ctx: { waitUntil: tasks.waitUntil },
-			config: { port: 0, assetsDir: '.', rpcKey: RPC_KEY, proxyKey: options.proxyKey ?? PROXY_KEY },
+			config: { port: 0, rpcKey: RPC_KEY, proxyKey: options.proxyKey ?? PROXY_KEY },
 			shutdown: () => tasks.drain(),
 		}
 		return createFetchHandler(assembled)
@@ -699,21 +697,16 @@ describe.skipIf(!hasPostgres)('the Bun handler never leaks internals on an unhan
 	test('a throwing route answers an opaque 500, not Bun default error page', async () => {
 		// Bun's default error page embeds the exception message AND the surrounding source lines in the
 		// response body. The Workers runtime does not, so this is the one place the two entrypoints would
-		// have differed in what they show an attacker. Reproduced with an ASSETS port that throws.
+		// have differed in what they show an attacker. A malformed signing-key secret exercises it.
 		const tasks = createBackgroundTasks({ label: 'test' })
 		const env: Env = {
 			DB: raw,
-			ASSETS: {
-				fetch: () => {
-					throw new Error('assets exploded with px_secret-looking-detail')
-				},
-			},
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '[]',
 			IAM_BOOTSTRAP_ADMINS: '[]',
 			ENVIRONMENT: 'local',
 			ISSUER: 'http://localhost:18191',
-			PROPUSTKA_SIGNING_KEYS: '',
+			PROPUSTKA_SIGNING_KEYS: 'px_secret-looking-detail',
 			PROPUSTKA_PROVISIONING_KEY: '',
 			SESSION_COOKIE_DOMAIN: '',
 			OIDC_ISSUER: 'https://idp.test',
@@ -725,10 +718,10 @@ describe.skipIf(!hasPostgres)('the Bun handler never leaks internals on an unhan
 		const assembled: Runtime = {
 			env,
 			ctx: { waitUntil: tasks.waitUntil },
-			config: { port: 0, assetsDir: '.', rpcKey: '', proxyKey: '' },
+			config: { port: 0, rpcKey: '', proxyKey: '' },
 			shutdown: () => tasks.drain(),
 		}
-		const res = await createFetchHandler(assembled)(new Request('http://localhost:18191/anything'))
+		const res = await createFetchHandler(assembled)(new Request('http://localhost:18191/.well-known/jwks.json'))
 		expect(res.status).toBe(500)
 		const text = await res.text()
 		expect(text).toBe('internal error')

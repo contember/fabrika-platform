@@ -112,18 +112,11 @@ export const buildPropustkaWorker = (ctx: ResourceContext, source: EnvironmentSo
 		main: './src/index.ts',
 		compatibility_flags: ['nodejs_compat_v2'],
 		compatibility_date: '2025-10-01',
-		// This is the human-facing admin and auth surface. App Workers use a service binding.
+		// This is the public auth surface. Control reaches admin APIs over a service binding.
 		routes: domain === undefined ? [] : [{ pattern: domain, custom_domain: true }],
 		observability: { enabled: true },
 		// Daily prune of auth_log; see scheduled() in src/index.ts.
 		triggers: { crons: ['0 3 * * *'] },
-		assets: {
-			directory: '../iam-ui/dist',
-			binding: 'ASSETS',
-			not_found_handling: 'single-page-application',
-			// Run fetch() first so the native admin and auth gates protect their routes.
-			run_worker_first: true,
-		},
 		bindings: {
 			DB: new D1Database({ name: 'propustka', migrationsDir: './migrations', locationHint: 'weur' }),
 		},
@@ -143,7 +136,6 @@ export default defineApp({
 	schema,
 	pipeline: {
 		workerDir: '.',
-		build: 'bun run --filter @fabrika/iam-ui build',
 		// Values stay in fabrika's vault and are provisioned out-of-band from Worker plaintext vars.
 		secrets: ['PROPUSTKA_SIGNING_KEYS', 'OIDC_CLIENT_SECRET', 'PROPUSTKA_PROVISIONING_KEY'],
 		// Optional list values use safe empty-array defaults and do not belong in this required set.

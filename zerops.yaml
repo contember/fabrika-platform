@@ -19,7 +19,6 @@ zerops:
         - alpine/bun@1.3
       buildCommands:
         - "bun install --frozen-lockfile"
-        - "bun run --filter @fabrika/iam-ui build"
       deployFiles:
         - package.json
         - bun.lock
@@ -46,7 +45,6 @@ zerops:
       envVariables:
         PORT: "3000"
         PROPUSTKA_DATABASE_URL: "${db_connectionString}"
-        PROPUSTKA_ASSETS_DIR: packages/iam-ui/dist
         ENVIRONMENT: prod
   - setup: control
     build:

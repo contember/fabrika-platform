@@ -57,7 +57,7 @@ import type { ZeropsYaml, ZeropsYamlSetup } from '@fabrika/provider-zerops'
 const WORKSPACE_DEPLOY_FILES = ['package.json', 'bun.lock', 'node_modules', 'packages']
 
 /**
- * The IAM service — identity, tokens, audit, and the admin SPA.
+ * The IAM service — identity, tokens, audit, and the private admin API.
  *
  * Per-installation variables (env API): `ISSUER` (this service's public origin; it is the `iss` of every
  * minted token AND the OIDC redirect base, so it must match the domain routed to the proxy in front of
@@ -77,12 +77,7 @@ const iam: ZeropsYamlSetup = {
 	build: {
 		// Bun on Alpine. `build.os` is deprecated in the published schema — the OS is part of the base id.
 		base: ['alpine/bun@1.3'],
-		buildCommands: [
-			'bun install --frozen-lockfile',
-			// The admin SPA. Its output is what the service serves for every non-API path — the
-			// replacement for Cloudflare's ASSETS binding.
-			'bun run --filter @fabrika/iam-ui build',
-		],
+		buildCommands: ['bun install --frozen-lockfile'],
 		deployFiles: WORKSPACE_DEPLOY_FILES,
 		cache: ['node_modules'],
 	},
@@ -117,7 +112,6 @@ const iam: ZeropsYamlSetup = {
 			// session state across statements. `${db_...}` is a reference to the `db` service's own variable
 			// — the value lives in the platform and never appears here.
 			PROPUSTKA_DATABASE_URL: '${db_connectionString}',
-			PROPUSTKA_ASSETS_DIR: 'packages/iam-ui/dist',
 			ENVIRONMENT: 'prod',
 		},
 	},

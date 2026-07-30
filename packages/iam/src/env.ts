@@ -1,21 +1,18 @@
-import type { AssetServer, SqlDatabase, WaitUntil } from '@fabrika/platform'
+import type { SqlDatabase, WaitUntil } from '@fabrika/platform'
 
 /**
  * The IAM service's runtime surface: its two capability handles plus vars/secrets. Single source of
  * truth — every other file imports from here, never re-declares the shape. JSON-typed vars
  * (`HUMAN_EMAIL_DOMAINS`, `HUMAN_EMAILS`, `IAM_BOOTSTRAP_ADMINS`) are parsed once in `buildServices`.
  *
- * `DB`/`ASSETS` are declared as PORTS, not as Cloudflare bindings, which is what lets one `Env` serve
- * both entrypoints: on Workers a real `D1Database`/`Fetcher` satisfies them structurally (no adapter),
- * and the Bun entrypoint fills them with `PostgresDatabase` / `FileSystemAssetServer` from
- * `@fabrika/platform-node`. Everything else here is a plain string, so it comes equally from
- * `wrangler` vars or from `process.env`.
+ * `DB` is a runtime port, not a Cloudflare binding, which lets one `Env` serve both entrypoints:
+ * on Workers a real `D1Database` satisfies it structurally, and the Bun entrypoint fills it with
+ * `PostgresDatabase`. Everything else here is a plain string, so it comes equally from `wrangler`
+ * vars or from `process.env`.
  */
 export interface Env {
 	/** Both policy tables and append-only audit tables (one database). D1 on Workers, Postgres on Bun. */
 	DB: SqlDatabase
-	/** Admin SPA static assets (served at the root for non-`/admin/*` paths). */
-	ASSETS: AssetServer
 	/**
 	 * JSON array of email domains admitted as a HUMAN at login (e.g. `["mangoweb.cz","contember.com"]`).
 	 * A `*` entry means admit anyone. propustka owns this centrally — the login-admission allowlist for

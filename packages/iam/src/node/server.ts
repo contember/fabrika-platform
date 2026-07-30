@@ -2,8 +2,8 @@
 //
 // The sibling of `src/index.ts`, not a fork of it. Both call the same three functions:
 //
-//   handleFetch   (src/routes.ts)  — `/auth/*`, the JWKS, `/admin/*`, and the SPA. Untouched by this
-//                                    file; the layer was already `Request → Response`, so serving it
+//   handleFetch   (src/routes.ts)  — `/auth/*`, the JWKS, and `/admin/*`. Untouched by this file;
+//                                    the layer was already `Request → Response`, so serving it
 //                                    from `Bun.serve` instead of a Worker is wiring, not a rewrite.
 //   createIamRpc  (src/rpc.ts)     — the `IamRpc` object. A service binding on Workers; here it is
 //                                    reached over HTTP via `handleRpcHttp`, which authenticates the
@@ -14,8 +14,7 @@
 //                                    is the same shape as `triggers.crons` driving `scheduled`.
 //
 // Route order matters and is the one thing this file decides: `/rpc/*` and `/healthz` are claimed
-// FIRST, before `handleFetch` can hand an unmatched path to the SPA fallback. Everything else is
-// identical to the Worker.
+// before `handleFetch`. Everything else is identical to the Worker.
 //
 // Run it: `bun src/node/server.ts` (see `zerops.yaml` → `run.start`).
 

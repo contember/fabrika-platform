@@ -8,7 +8,7 @@ boundaries. It does not validate Zerops infrastructure behavior.
 
 - Bun with the repository dependencies installed
 - Docker with Compose v2
-- `cpu-lease`, used to build the dashboard and IAM UI
+- `cpu-lease`, used to build the unified console
 
 ## Commands
 
@@ -21,7 +21,7 @@ bun run local:smoke
 bun run local:down
 ```
 
-`local:up` generates stable local credentials, builds both UIs, starts the
+`local:up` generates stable local credentials, builds the unified console, starts the
 composition, runs database migrations, and waits for health checks.
 
 `local:smoke` is intentionally disruptive. It:
@@ -48,11 +48,11 @@ This command removes only the `fabrika-local` Compose volumes and
 
 ## Endpoints
 
-| Component             | URL                              |
-| --------------------- | -------------------------------- |
-| Control and dashboard | `http://control.localhost:18080` |
-| IAM and IAM UI        | `http://iam.localhost:18080`     |
-| Notes example app     | `http://notes.localhost:18081`   |
+| Component                | URL                              |
+| ------------------------ | -------------------------------- |
+| Unified Fabrika console  | `http://control.localhost:18080` |
+| IAM auth and public JWKS | `http://iam.localhost:18080`     |
+| Notes example app        | `http://notes.localhost:18081`   |
 
 The generated credentials and proxy manifests live under the ignored
 `packages/local-stack/.state/` directory. They remain stable across
@@ -69,9 +69,11 @@ The composition runs these real components:
 - the proxy authorization service and Caddy in shared network namespaces;
 - separate private `platform` and `apps-prod` networks.
 
-The control dashboard uses its built-in local admin persona, so it opens without
-an external OIDC provider. Machine bootstrap, app API keys, access-token minting,
-JWKS verification, and schema reconciliation still use the real IAM service.
+The unified console uses its built-in local admin persona, so Delivery and Access
+open without an external OIDC provider. Access requests still cross the real
+control-to-IAM gateway and use IAM's real database and authorization handlers.
+Machine bootstrap, app API keys, access-token minting, JWKS verification, and
+schema reconciliation also use the real IAM service.
 
 Notes can reach the public IAM address through the narrow `iam-public` network
 to fetch JWKS. It cannot resolve or reach the private control, platform

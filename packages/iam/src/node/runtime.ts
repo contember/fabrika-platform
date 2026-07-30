@@ -8,18 +8,15 @@
 // being true.
 //
 //   SqlDatabase → PostgresDatabase      (D1's place)
-//   AssetServer → FileSystemAssetServer (the `ASSETS` binding's place — the built SPA on disk)
 //   WaitUntil   → createBackgroundTasks (ctx.waitUntil's place — supervised, never process-fatal)
 
-import { createBackgroundTasks, FileSystemAssetServer, PostgresDatabase } from '@fabrika/platform-node'
+import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
 import type { Env, RequestContext } from '../env'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
 export interface ProcessConfig {
 	/** TCP port to listen on. */
 	port: number
-	/** Directory holding the built admin SPA (`@fabrika/iam-ui`'s `dist`). */
-	assetsDir: string
 	/**
 	 * Shared secret gating the HTTP MANAGEMENT surface (`/rpc/*`). EMPTY DISABLES IT — see
 	 * `rpc-http.ts`. Never logged.
@@ -59,7 +56,6 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 
 	const config: ProcessConfig = {
 		port: parsePort(source['PORT']),
-		assetsDir: source['PROPUSTKA_ASSETS_DIR'] ?? './public',
 		rpcKey: sharedSecret(source, 'PROPUSTKA_RPC_KEY'),
 		proxyKey: sharedSecret(source, 'PROPUSTKA_PROXY_KEY'),
 	}
@@ -69,8 +65,6 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 
 	const env: Env = {
 		DB: db,
-		// SPA fallback on: the admin UI is client-routed, so `/principals/<id>` must serve index.html.
-		ASSETS: new FileSystemAssetServer(config.assetsDir, { spaFallback: true }),
 		HUMAN_EMAIL_DOMAINS: source['HUMAN_EMAIL_DOMAINS'] ?? '[]',
 		HUMAN_EMAILS: source['HUMAN_EMAILS'] ?? '[]',
 		IAM_BOOTSTRAP_ADMINS: source['IAM_BOOTSTRAP_ADMINS'] ?? '[]',

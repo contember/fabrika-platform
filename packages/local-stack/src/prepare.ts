@@ -141,7 +141,6 @@ const run = async (command: string[]): Promise<void> => {
 
 export const prepareLocalStack = async (): Promise<void> => {
 	mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-	await run(['cpu-lease', 'run', '-n', '2', '--', 'bun', 'run', '--filter', '@fabrika/iam-ui', 'build'])
 	await run(['cpu-lease', 'run', '-n', '2', '--', 'bun', 'run', '--filter', '@fabrika/dashboard', 'build'])
 	await generateSecrets()
 	await generateProxyConfigs()

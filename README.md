@@ -26,7 +26,7 @@ Bun monorepo (`packages/*`). Each installation statically selects one provider b
 
 **Auth** — `@fabrika/auth-core` (the pure kernel: policy matching, token shape, the IAM contract) ·
 `@fabrika/auth` (the app-facing SDK) · `@fabrika/iam` (the IAM service) ·
-`@fabrika/iam-ui` (its admin SPA).
+`@fabrika/iam-ui` (Access feature routes embedded in the Fabrika console).
 
 **Application runtime** — `@fabrika/app` (Fetch-based HTTP routing, middleware, typed RPC, structural
 errors, object-level authorization, a typed browser client, and Worker/Bun lifecycle adapters).
@@ -41,8 +41,8 @@ adapter, and `fabrika-cloudflare`) · `@fabrika/provider-zerops` (authoring, sta
 API client, deploy implementation, control adapter, and `fabrika-zerops`). The Cloudflare-only
 `@fabrika/runner` transports and executes provider-owned runner jobs.
 
-**Operations** — `@fabrika/cli` (installation bring-up) · `@fabrika/dashboard` (the control-plane
-SPA) · `@fabrika/proxy` (auth enforcement for private app services).
+**Operations** — `@fabrika/cli` (installation bring-up) · `@fabrika/dashboard` (the unified Delivery
+and Access console) · `@fabrika/proxy` (auth enforcement for private app services).
 
 ## Quick start
 

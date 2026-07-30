@@ -13,8 +13,9 @@ import { buildServices } from './services'
 
 /**
  * `/auth/*` + the JWKS → the public native-auth routes; any `/admin/*` path → the admin JSON router
- * (which resolves the admin from a `px_session` / `px_` bearer and gates on `iam.admin` in-process);
- * everything else → the admin SPA assets.
+ * (which resolves the admin from a `px_session` / `px_` bearer and gates on `iam.admin` in-process).
+ * IAM has no user interface of its own; the control-plane console reaches this API over a private
+ * binding or network.
  */
 export async function handleFetch(request: Request, env: Env, ctx: RequestContext): Promise<Response> {
 	const url = new URL(request.url)
@@ -27,5 +28,5 @@ export async function handleFetch(request: Request, env: Env, ctx: RequestContex
 		const services = buildServices(env)
 		return handleAdmin(request, services, env, ctx)
 	}
-	return env.ASSETS.fetch(request)
+	return new Response('not found', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } })
 }

@@ -82,7 +82,6 @@ services:
     env_file: .state/iam.env
     environment:
       PORT: "18080"
-      PROPUSTKA_ASSETS_DIR: packages/iam-ui/dist
       ENVIRONMENT: local
       ISSUER: http://iam.localhost:18080
       SESSION_COOKIE_DOMAIN: ""

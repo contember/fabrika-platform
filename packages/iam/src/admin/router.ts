@@ -92,12 +92,9 @@ const STATE_CHANGING_METHODS = new Set(['POST', 'PATCH', 'DELETE'])
 
 /**
  * In-app CSRF defense: reject state-changing `/admin/*` requests that don't
- * originate from this Worker's own origin. The admin SPA is served same-origin by
- * this same Worker, so a legitimate browser fetch carries an `Origin` (or at least
- * `Referer`) matching `url.origin` for free; a cross-site forgery cannot forge
- * either to a same-origin value. This complements the Access edge + the cookie's
- * SameSite attribute (which this Worker can't verify and which may be `None` under
- * some Access configs). Returns `null` when allowed.
+ * originate from the IAM origin. The control-plane gateway rewrites `Origin` and
+ * `Referer` to that private destination; a cross-site caller cannot reach the private
+ * route or forge the gateway's own same-origin check. Returns `null` when allowed.
  */
 function rejectCrossOrigin(request: Request, url: URL): Response | null {
 	if (!STATE_CHANGING_METHODS.has(request.method)) {

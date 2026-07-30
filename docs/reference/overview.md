@@ -39,7 +39,7 @@ platform_, never _an app runs on both_.
 | `@fabrika/auth`                | The published SDK apps depend on.                                                              |
 | `@fabrika/app`                 | Fetch routing, middleware, typed RPC, object authorization, client, explicit runtime adapters. |
 | `@fabrika/iam`                 | The IAM service itself: identity, keys, policies, and audit.                                   |
-| `@fabrika/iam-ui`              | IAM admin UI.                                                                                  |
+| `@fabrika/iam-ui`              | Access feature routes embedded in the unified console.                                         |
 | `@fabrika/provider-contract`   | Open runtime and control-provider interfaces plus versioned JSON envelopes.                    |
 | `@fabrika/provider-cloudflare` | Cloudflare app authoring, deploy plan, control adapter, runner job contract, and CLI.          |
 | `@fabrika/provider-zerops`     | Zerops app authoring, manifest compiler, API client, deploy plan, control adapter, and CLI.    |
@@ -48,13 +48,25 @@ platform_, never _an app runs on both_.
 | `@fabrika/platform-node`       | Bun/Postgres/S3 implementations of those runtime ports.                                        |
 | `@fabrika/control`             | Shared control-plane core plus separate Cloudflare Worker and Zerops/Bun composition roots.    |
 | `@fabrika/cli`                 | Operator bring-up CLI.                                                                         |
-| `@fabrika/dashboard`           | Deploy dashboard UI.                                                                           |
+| `@fabrika/dashboard`           | Unified Delivery and Access console served by control.                                         |
 | `@fabrika/runner`              | Cloudflare-only transport and execution for provider-owned runner jobs.                        |
 | `@fabrika/proxy`               | Shared auth enforcement service used by the provider-specific edge proxy.                      |
 
 `@fabrika/auth` is a published SDK with downstream consumers (poplach, revizor,
 opice); the rename is a deliberate, one-time break — see
 [ADR-0001](../decisions/0001-merge-propustka-and-vozka.md).
+
+## Operator console
+
+Control serves one Fabrika console with Delivery and Access navigation. Delivery
+routes call the control API directly. Access routes come from `@fabrika/iam-ui`
+and call `/iam/admin/*` on the same control origin. Control transports those
+requests to the private IAM admin API; IAM remains the owner of authentication,
+authorization, policy data, and audit records.
+
+IAM has no standalone SPA or public admin origin. Its public HTTP surface is
+limited to native authentication and JWKS endpoints. Control-to-IAM RPC and admin
+traffic use the platform's private service binding or network.
 
 ## Application runtime
 

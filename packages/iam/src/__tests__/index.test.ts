@@ -128,16 +128,6 @@ class SqliteD1 implements D1Database {
 
 // ── Test fixtures ──────────────────────────────────────────────────────────────
 
-// An ASSETS Fetcher we never call on the RPC paths under test.
-const assetsStub: Fetcher = {
-	fetch() {
-		throw new Error('ASSETS.fetch must not be called on the RPC paths under test')
-	},
-	connect() {
-		throw new Error('ASSETS.connect must not be called')
-	},
-} as unknown as Fetcher
-
 function freshDb(): Database {
 	const db = new Database(':memory:')
 	db.exec('PRAGMA foreign_keys = ON')
@@ -153,7 +143,6 @@ function freshDb(): Database {
 function makeEnv(db: Database, overrides: Partial<Pick<Env, 'ENVIRONMENT'>> = {}): Env {
 	return {
 		DB: new SqliteD1(db),
-		ASSETS: assetsStub,
 		HUMAN_EMAIL_DOMAINS: '["contember.com"]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',
