@@ -279,6 +279,7 @@ export interface RunDto {
 	trigger: RunTrigger
 	status: RunStatus
 	exitCode: number | null
+	externalRunId: string | null
 	logKey: string | null
 	createdAt: number
 	startedAt: number | null

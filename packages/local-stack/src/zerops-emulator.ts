@@ -31,8 +31,9 @@ interface AppVersionRecord {
 	id: string
 	serviceStackId: string
 	projectId: string
-	status: 'ACTIVE' | 'CANCELLED'
+	status: 'BUILDING' | 'ACTIVE' | 'CANCELLED'
 	sequence: number
+	activateAt?: number
 }
 
 interface EmulatorSnapshot {
@@ -67,6 +68,8 @@ interface ImportDocument {
 export interface ZeropsEmulatorOptions {
 	token: string
 	stateFile?: string
+	activationDelayMs?: number
+	now?: () => number
 }
 
 const emptySnapshot = (): EmulatorSnapshot => ({
@@ -92,6 +95,11 @@ const stringProperty = (value: unknown, key: string): string | undefined => {
 const booleanProperty = (value: unknown, key: string): boolean | undefined => {
 	const found = property(value, key)
 	return typeof found === 'boolean' ? found : undefined
+}
+
+const numberProperty = (value: unknown, key: string): number | undefined => {
+	const found = property(value, key)
+	return typeof found === 'number' ? found : undefined
 }
 
 const stringArrayProperty = (value: unknown, key: string): string[] | undefined => {
@@ -149,11 +157,9 @@ const parseJsonBody = async (request: Request): Promise<unknown> => {
 	}
 }
 
-const json = (value: unknown, status = 200): Response =>
-	Response.json(value, { status, headers: { 'cache-control': 'no-store' } })
+const json = (value: unknown, status = 200): Response => Response.json(value, { status, headers: { 'cache-control': 'no-store' } })
 
-const error = (status: number, code: string, message: string): Response =>
-	json({ error: { code, message } }, status)
+const error = (status: number, code: string, message: string): Response => json({ error: { code, message } }, status)
 
 const id = (prefix: string, sequence: number): string => `${prefix}-${sequence.toString().padStart(6, '0')}`
 
@@ -251,8 +257,12 @@ const readServiceEnvRecord = (value: unknown): ServiceEnvRecord => ({
 
 const readAppVersionRecord = (value: unknown): AppVersionRecord => {
 	const status = stringProperty(value, 'status')
-	if (status !== 'ACTIVE' && status !== 'CANCELLED') {
+	if (status !== 'BUILDING' && status !== 'ACTIVE' && status !== 'CANCELLED') {
 		throw new Error('invalid app-version status in state')
+	}
+	const activateAt = numberProperty(value, 'activateAt')
+	if (activateAt !== undefined && (!Number.isFinite(activateAt) || activateAt < 0)) {
+		throw new Error('invalid app-version activation time in state')
 	}
 	return {
 		id: requiredString(value, 'id'),
@@ -260,6 +270,7 @@ const readAppVersionRecord = (value: unknown): AppVersionRecord => {
 		projectId: requiredString(value, 'projectId'),
 		status,
 		sequence: readCounter(value, 'sequence'),
+		...(activateAt === undefined ? {} : { activateAt }),
 	}
 }
 
@@ -272,6 +283,9 @@ class ZeropsEmulator {
 	static async create(options: ZeropsEmulatorOptions): Promise<ZeropsEmulator> {
 		if (options.token.trim() === '') {
 			throw new Error('Zerops emulator token must not be empty')
+		}
+		if (options.activationDelayMs !== undefined && (!Number.isFinite(options.activationDelayMs) || options.activationDelayMs < 0)) {
+			throw new Error('Zerops emulator activation delay must be a non-negative number')
 		}
 		return new ZeropsEmulator(options, await readSnapshot(options.stateFile))
 	}
@@ -337,15 +351,19 @@ class ZeropsEmulator {
 				return error(404, 'SERVICE_NOT_FOUND', 'service not found')
 			}
 			await parseJsonBody(request)
+			const activationDelayMs = this.options.activationDelayMs ?? 0
 			const version: AppVersionRecord = {
 				id: id('version', this.state.nextVersion++),
 				serviceStackId: service.id,
 				projectId: service.projectId,
-				status: 'ACTIVE',
+				status: activationDelayMs === 0 ? 'ACTIVE' : 'BUILDING',
 				sequence: this.state.appVersions.filter((item) => item.serviceStackId === service.id).length + 1,
+				...(activationDelayMs === 0 ? {} : { activateAt: this.now() + activationDelayMs }),
 			}
 			this.state.appVersions.push(version)
-			service.activeAppVersionId = version.id
+			if (version.status === 'ACTIVE') {
+				service.activeAppVersionId = version.id
+			}
 			const processId = id('process', this.state.nextProcess++)
 			await this.persist()
 			return json({
@@ -361,6 +379,7 @@ class ZeropsEmulator {
 
 		const appVersion = path.match(/^\/app-version\/([^/]+)$/)
 		if (appVersion !== null && request.method === 'GET') {
+			await this.activateDueVersions()
 			const version = this.version(decodeURIComponent(appVersion[1] ?? ''))
 			return version === undefined ? error(404, 'APP_VERSION_NOT_FOUND', 'app version not found') : json(version)
 		}
@@ -372,12 +391,14 @@ class ZeropsEmulator {
 				return error(404, 'APP_VERSION_NOT_FOUND', 'app version not found')
 			}
 			version.status = 'CANCELLED'
+			delete version.activateAt
 			await this.persist()
 			return json({})
 		}
 
 		const appVersions = path.match(/^\/service-stack\/([^/]+)\/app-version$/)
 		if (appVersions !== null && request.method === 'GET') {
+			await this.activateDueVersions()
 			const serviceId = decodeURIComponent(appVersions[1] ?? '')
 			if (this.service(serviceId) === undefined) {
 				return error(404, 'SERVICE_NOT_FOUND', 'service not found')
@@ -564,6 +585,29 @@ class ZeropsEmulator {
 
 	private version(appVersionId: string): AppVersionRecord | undefined {
 		return this.state.appVersions.find((version) => version.id === appVersionId)
+	}
+
+	private now(): number {
+		return this.options.now?.() ?? Date.now()
+	}
+
+	private async activateDueVersions(): Promise<void> {
+		let changed = false
+		for (const version of this.state.appVersions) {
+			if (version.status !== 'BUILDING' || version.activateAt === undefined || version.activateAt > this.now()) {
+				continue
+			}
+			version.status = 'ACTIVE'
+			delete version.activateAt
+			const service = this.service(version.serviceStackId)
+			if (service !== undefined) {
+				service.activeAppVersionId = version.id
+			}
+			changed = true
+		}
+		if (changed) {
+			await this.persist()
+		}
 	}
 
 	private page<Item>(items: Item[], url: URL): Item[] {

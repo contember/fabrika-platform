@@ -64,6 +64,7 @@ services:
     env_file: .state/emulator.env
     environment:
       PORT: "3000"
+      LOCAL_ZEROPS_ACTIVATION_DELAY_MS: "10000"
       LOCAL_ZEROPS_STATE_FILE: /state/zerops.json
     volumes:
       - ../..:/workspace
@@ -151,6 +152,8 @@ services:
       platform: {}
       edge:
         aliases: [iam.localhost]
+      iam-public:
+        aliases: [iam.localhost]
     ports:
       - 127.0.0.1:18080:18080
     depends_on:
@@ -182,7 +185,7 @@ services:
       PORT: "3000"
       FABRIKA_IAM_ISSUER: http://iam.localhost:18080
       NOTES_APP_ID: notes
-    networks: [apps-prod]
+    networks: [apps-prod, iam-public]
     depends_on:
       apps-db:
         condition: service_healthy
@@ -235,6 +238,7 @@ networks:
   apps-prod:
     internal: true
   edge: {}
+  iam-public: {}
 
 volumes:
   platform-db: {}

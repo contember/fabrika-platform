@@ -1,12 +1,12 @@
-import { describe, expect, test } from 'bun:test'
 import { createZeropsApi, type FetchLike } from '@fabrika/provider-zerops'
+import { describe, expect, test } from 'bun:test'
 import { createZeropsEmulator } from '../zerops-emulator'
 
 const token = 'local-test-token'
 const signal = AbortSignal.timeout(5_000)
 
-const client = async () => {
-	const handler = await createZeropsEmulator({ token })
+const client = async (options: { activationDelayMs?: number; now?: () => number } = {}) => {
+	const handler = await createZeropsEmulator({ token, ...options })
 	const fetchImpl: FetchLike = async (input, init) => handler(new Request(input, init))
 	return createZeropsApi({
 		token,
@@ -84,6 +84,34 @@ describe('local Zerops emulator', () => {
 		await api.cancelBuild({ appVersionId: version.id, signal })
 		expect((await api.getAppVersion({ appVersionId: version.id, signal })).status).toBe('CANCELLED')
 		expect((await api.getLogAccess({ projectId, signal })).urlPlain).toBe('')
+	})
+
+	test('keeps a pipeline building until its activation deadline', async () => {
+		let now = 1_000
+		const api = await client({ activationDelayMs: 500, now: () => now })
+		const imported = await api.importProject({
+			clientId: 'local-client',
+			yaml: [
+				'project:',
+				'  name: delayed',
+				'services:',
+				'  - hostname: api',
+				'    type: alpine/bun@1.3',
+			].join('\n'),
+			signal,
+		})
+		const serviceId = imported.services[0]?.id
+		if (serviceId === undefined) {
+			throw new Error('service id is missing')
+		}
+
+		await api.triggerPipeline({ serviceId, buildFromGit: 'https://example.test/repo.git', signal })
+		const building = await api.latestAppVersion({ serviceId, signal })
+		expect(building?.status).toBe('BUILDING')
+
+		now = 1_500
+		expect((await api.getAppVersion({ appVersionId: building?.id ?? '', signal })).status).toBe('ACTIVE')
+		expect((await api.getService({ serviceId, signal })).activeAppVersionId).toBe(building?.id)
 	})
 
 	test('rejects the wrong bearer before exposing state', async () => {

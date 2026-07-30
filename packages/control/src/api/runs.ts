@@ -47,6 +47,7 @@ function toRunDto(row: RunRow): unknown {
 		trigger: row.trigger,
 		status: row.status,
 		exitCode: row.exit_code,
+		externalRunId: row.external_run_id,
 		logKey: row.log_key,
 		createdAt: row.created_at,
 		startedAt: row.started_at,

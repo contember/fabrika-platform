@@ -1,5 +1,5 @@
-import { buildCaddyConfig, type ProxyManifest } from '@fabrika/proxy'
 import { notesGates } from '@fabrika/example-zerops-app/gates'
+import { buildCaddyConfig, type ProxyManifest } from '@fabrika/proxy'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -14,6 +14,7 @@ const IAM_ISSUER = 'http://iam.localhost:18080'
 const statePath = (name: string): string => resolve(STATE_DIR, name)
 
 const randomSecret = (): string => randomBytes(32).toString('base64url')
+const randomBase64Key = (): string => randomBytes(32).toString('base64')
 
 const writeEnv = async (name: string, values: Record<string, string>): Promise<void> => {
 	const lines = Object.entries(values).map(([key, value]) => {
@@ -25,8 +26,7 @@ const writeEnv = async (name: string, values: Record<string, string>): Promise<v
 	await Bun.write(statePath(name), `${lines.join('\n')}\n`)
 }
 
-const writeJson = (name: string, value: unknown): Promise<number> =>
-	Bun.write(statePath(name), `${JSON.stringify(value, null, '\t')}\n`)
+const writeJson = (name: string, value: unknown): Promise<number> => Bun.write(statePath(name), `${JSON.stringify(value, null, '\t')}\n`)
 
 const generateSecrets = async (): Promise<void> => {
 	const requiredFiles = [
@@ -71,7 +71,7 @@ const generateSecrets = async (): Promise<void> => {
 			VOZKA_RUN_LOGS_SECRET_ACCESS_KEY: minioPassword,
 			PROPUSTKA_RPC_KEY: rpcKey,
 			PROPUSTKA_PROVISIONING_KEY: provisioningKey,
-			VOZKA_VAULT_KEY: randomSecret(),
+			VOZKA_VAULT_KEY: randomBase64Key(),
 			ZEROPS_ACCESS_TOKEN: emulatorToken,
 			ZEROPS_PROXY_IAM_KEY: proxyKey,
 		}),
@@ -111,17 +111,23 @@ const generateProxyConfigs = async (): Promise<void> => {
 	}
 	await Promise.all([
 		writeJson('platform-proxy.manifest.json', platformManifest),
-		writeJson('platform-caddy.json', buildCaddyConfig(platformManifest, {
-			authUpstream: '127.0.0.1:9000',
-			listen: [':18080'],
-			healthListen: [':19080'],
-		})),
+		writeJson(
+			'platform-caddy.json',
+			buildCaddyConfig(platformManifest, {
+				authUpstream: '127.0.0.1:9000',
+				listen: [':18080'],
+				healthListen: [':19080'],
+			}),
+		),
 		writeJson('apps-proxy.manifest.json', appsManifest),
-		writeJson('apps-caddy.json', buildCaddyConfig(appsManifest, {
-			authUpstream: '127.0.0.1:9000',
-			listen: [':18081'],
-			healthListen: [':19081'],
-		})),
+		writeJson(
+			'apps-caddy.json',
+			buildCaddyConfig(appsManifest, {
+				authUpstream: '127.0.0.1:9000',
+				listen: [':18081'],
+				healthListen: [':19081'],
+			}),
+		),
 	])
 }
 

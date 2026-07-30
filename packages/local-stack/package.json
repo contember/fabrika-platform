@@ -10,6 +10,7 @@
 		"prepare": "bun src/prepare.ts",
 		"up": "bun src/cli.ts up",
 		"status": "bun src/cli.ts status",
+		"smoke": "bun src/smoke.ts",
 		"reset": "bun src/cli.ts reset",
 		"down": "bun src/cli.ts down",
 		"typecheck": "tsc --noEmit",
