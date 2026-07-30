@@ -9,6 +9,9 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Local Zerops stack (2026-07-30)](sprint-2026-07-30-local-zerops-stack.md)
+  — composed the real local runtime behind a narrow Zerops API emulator and
+  proved deploy recovery, IAM, persistence, proxies, and network isolation.
 - [Zerops deployment namespaces (2026-07-29)](sprint-2026-07-29-zerops-deployment-namespaces.md)
   — added provider-owned placement boundaries with shared and exclusive Zerops
   projects, proxy ownership, and optional shared PostgreSQL.

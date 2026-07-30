@@ -24,3 +24,5 @@ behaviour.
 - [`deployment-namespaces.md`](deployment-namespaces.md) — provider-neutral
   placement lifecycle, assignment and resource claims, Zerops isolation presets,
   and operator interfaces.
+- [`local-development.md`](local-development.md) — operate and verify the real
+  local data plane behind the narrow Zerops REST emulator.

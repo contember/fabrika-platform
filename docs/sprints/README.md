@@ -20,6 +20,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-
-- [Local Zerops stack (2026-07-30)](sprint-2026-07-30-local-zerops-stack.md)
-  — run the real local data plane behind a narrow Zerops API emulator.

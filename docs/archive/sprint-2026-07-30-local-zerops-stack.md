@@ -1,5 +1,36 @@
 # Sprint — Local Zerops stack (2026-07-30)
 
+## OUTCOME
+
+Shipped and exercised the complete local Zerops-targeted Fabrika stack.
+
+- `7895bb8` adds the stateful Zerops REST emulator.
+- `b52a451` separates the public IAM issuer from the private management RPC
+  origin.
+- `5d0084a` composes the real IAM, control, notes, PostgreSQL, MinIO, proxy auth,
+  and Caddy processes.
+- `7e450f1` makes namespaced Zerops onboarding operational with claim-first
+  provider preparation and cleanup.
+- `b8fcd92` adds delayed provider state, public-IAM-only app connectivity, and
+  the disruptive full-lifecycle smoke command.
+
+Verification:
+
+- `bun run local:smoke` passed repeatedly, including a hard control-plane kill
+  during `BUILDING`, startup reconciliation, IAM schema reconciliation,
+  authenticated notes persistence, and private-network isolation.
+- `cpu-lease run -n 4 -- bun test` passed 1,098 tests; 117 integration tests
+  skipped because their external Postgres/S3 services were not configured.
+- `cpu-lease run -n 4 -- bun run typecheck` passed every workspace package.
+- Lint completed with no errors; five warnings and 249 informational diagnostics
+  remain.
+- Format checking and `git diff --check` passed.
+
+The emulator remains deliberately narrower than Zerops. Credentialed platform
+validation, builds, runtime placement, autoscaling, HA, L7 domain binding, and
+provider log behavior remain for
+[backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md).
+
 **Goal.** Run the complete Fabrika control and data plane locally before the
 first credentialed Zerops deployment.
 
@@ -94,3 +125,8 @@ bootable. WU4 closes onboarding before WU5 drives the complete flow.
 
 - 2026-07-30 — Started after the namespace sprint to provide a pre-deployment
   witness stronger than schema validation and in-process provider fakes.
+- 2026-07-30 — The app namespace needs public IAM reachability for JWKS, but no
+  platform-private access. Added the narrow `iam-public` network.
+- 2026-07-30 — Zerops app versions need a visible in-progress state to exercise
+  restart reconciliation. The emulator now delays `BUILDING → ACTIVE` without
+  pretending to run application containers.
