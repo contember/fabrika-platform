@@ -229,6 +229,7 @@ const main = async (): Promise<void> => {
 	await requestJson(CONTROL_ORIGIN, '/healthz')
 	await requestJson(IAM_ORIGIN, '/healthz')
 	await requestJson(NOTES_ORIGIN, '/healthz')
+	await requestJson(CONTROL_ORIGIN, '/api/namespaces')
 	await ensureNamespace(provisioningKey)
 	await ensureNotesApp(provisioningKey)
 	const runId = await proveRestartReconciliation(provisioningKey)

@@ -109,7 +109,7 @@ services:
       PORT: "3000"
       VOZKA_ASSETS_DIR: packages/dashboard/dist
       ENVIRONMENT: local
-      DEV: ""
+      DEV: "true"
       VOZKA_DOMAIN: http://control.localhost:18080
       VOZKA_BOOTSTRAP_ADMINS: "[]"
       PROPUSTKA_URL: http://iam.localhost:18080

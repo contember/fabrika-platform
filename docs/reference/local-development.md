@@ -69,6 +69,10 @@ The composition runs these real components:
 - the proxy authorization service and Caddy in shared network namespaces;
 - separate private `platform` and `apps-prod` networks.
 
+The control dashboard uses its built-in local admin persona, so it opens without
+an external OIDC provider. Machine bootstrap, app API keys, access-token minting,
+JWKS verification, and schema reconciliation still use the real IAM service.
+
 Notes can reach the public IAM address through the narrow `iam-public` network
 to fetch JWKS. It cannot resolve or reach the private control, platform
 PostgreSQL, MinIO, or IAM RPC services.
