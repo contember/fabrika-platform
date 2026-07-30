@@ -1,7 +1,7 @@
 import { createPage, useNavigate } from '@buzola/router'
 import type { AppDto, ListResponse, RoleDto } from '@fabrika/iam/admin'
 import { Badge } from '../components/Badge'
-import { Table } from '../components/Table'
+import { EmptyState, Table } from '../components/Table'
 import { api } from '../lib/api'
 
 /** A label per role origin, for the reference table's badge. */
@@ -38,9 +38,9 @@ export default createPage()
 					</p>
 				</div>
 
-				<div className="toolbar">
+				<div className="filters">
 					<label>
-						App{' '}
+						App
 						<select
 							value={data.app ?? ''}
 							onChange={(e) => navigate('access/roles', { params: { app: e.target.value || undefined }, replace: true })}
@@ -54,13 +54,13 @@ export default createPage()
 				<Table
 					colSpan={4}
 					isEmpty={data.roles.length === 0}
-					empty="No roles."
+					empty={<EmptyState title="No roles" body="Pick an app above to see the roles its code declares alongside the built-ins." />}
 					head={
 						<tr>
 							<th>Role</th>
 							<th>Origin</th>
 							<th>Description</th>
-							<th>Permission patterns</th>
+							<th className="grow">Permission patterns</th>
 						</tr>
 					}
 				>

@@ -4,6 +4,7 @@
 	"private": true,
 	"type": "module",
 	"exports": {
+		"./icon": "./src/components/Icon.tsx",
 		"./route-error": "./src/components/RouteError.tsx",
 		"./routes/api-keys": "./src/routes/api-keys/index.tsx",
 		"./routes/api-keys-new": "./src/routes/api-keys/new.tsx",

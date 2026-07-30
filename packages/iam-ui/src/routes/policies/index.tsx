@@ -3,6 +3,7 @@ import type { AppDto, AppSchemaDto, ListResponse, PolicyDto, UpdatePolicyRequest
 import { useState } from 'react'
 import { ActionPicker } from '../../components/ActionPicker'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { Icon } from '../../components/Icon'
 import { EmptyState, Table } from '../../components/Table'
 import { api, ApiError } from '../../lib/api'
 import { fmtDate } from '../../lib/format'
@@ -40,13 +41,18 @@ export default createPage()
 								Admin-composed named permission sets (origin <code>custom</code>) for one app, built from its action catalog. Grantable like any role.
 							</p>
 						</div>
-						{data.app !== null && <Link to="access/policies/new" params={{ app: data.app }} className="btn primary">Create policy</Link>}
+						{data.app !== null && (
+							<Link to="access/policies/new" params={{ app: data.app }} className="btn primary">
+								<Icon name="plus" />
+								Create policy
+							</Link>
+						)}
 					</div>
 				</div>
 
-				<div className="toolbar">
+				<div className="filters">
 					<label>
-						App{' '}
+						App
 						<select
 							value={data.app ?? ''}
 							onChange={(e) => navigate('access/policies', { params: { app: e.target.value || undefined }, replace: true })}
@@ -58,7 +64,11 @@ export default createPage()
 				</div>
 
 				{data.app === null
-					? <p className="hint">Pick an app to manage its custom policies.</p>
+					? (
+						<div className="empty-panel">
+							<EmptyState title="Pick an app" body="A policy bundles actions from one app's catalog, so it belongs to that app and not to the install." />
+						</div>
+					)
 					: (
 						<>
 							<Table
@@ -75,7 +85,7 @@ export default createPage()
 									<tr>
 										<th>Key</th>
 										<th>Name</th>
-										<th>Permissions</th>
+										<th className="grow">Permissions</th>
 										<th />
 									</tr>
 								}

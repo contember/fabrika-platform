@@ -1,6 +1,6 @@
 import { createPage, useNavigate } from '@buzola/router'
 import type { AppDto, AppSchemaDto, ListResponse } from '@fabrika/iam/admin'
-import { Table } from '../../components/Table'
+import { EmptyState, Table } from '../../components/Table'
 import { api } from '../../lib/api'
 
 /**
@@ -24,15 +24,15 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<h1>App schema</h1>
+					<h1>Schema</h1>
 					<p className="hint">
 						An app's authz vocabulary, declared in its code and reconciled into Propustka (<code>PUT /admin/apps/:app/schema</code>). Read-only here.
 					</p>
 				</div>
 
-				<div className="toolbar">
+				<div className="filters">
 					<label>
-						App{' '}
+						App
 						<select
 							value={data.app ?? ''}
 							onChange={(e) => navigate('access/schema', { params: { app: e.target.value || undefined }, replace: true })}
@@ -44,19 +44,28 @@ export default createPage()
 				</div>
 
 				{data.schema === null
-					? <p className="hint">Pick an app to inspect its scopes, actions and roles.</p>
+					? (
+						<div className="empty-panel">
+							<EmptyState
+								title="Pick an app"
+								body="Its scope dimensions, action catalog and declared roles are read from the vocabulary its code reconciled."
+							/>
+						</div>
+					)
 					: (
 						<>
 							<section>
-								<h2>Scope dimensions</h2>
+								<div className="section-head">
+									<h2>Scope dimensions</h2>
+								</div>
 								<Table
 									colSpan={2}
 									isEmpty={data.schema.scopes.length === 0}
-									empty="No scope dimensions declared."
+									empty={<EmptyState title="No scope dimensions declared" />}
 									head={
 										<tr>
 											<th>Type</th>
-											<th>Label</th>
+											<th className="grow">Label</th>
 										</tr>
 									}
 								>
@@ -72,15 +81,17 @@ export default createPage()
 							</section>
 
 							<section>
-								<h2>Action catalog</h2>
+								<div className="section-head">
+									<h2>Action catalog</h2>
+								</div>
 								<Table
 									colSpan={2}
 									isEmpty={data.schema.actions.length === 0}
-									empty="No actions declared."
+									empty={<EmptyState title="No actions declared" />}
 									head={
 										<tr>
 											<th>Action</th>
-											<th>Description</th>
+											<th className="grow">Description</th>
 										</tr>
 									}
 								>
@@ -96,19 +107,21 @@ export default createPage()
 							</section>
 
 							<section>
-								<h2>App roles</h2>
+								<div className="section-head">
+									<h2>App roles</h2>
+								</div>
 								<p className="hint">
 									Roles declared in app code (origin <code>app</code>). For admin-composed policies, see the Policies page.
 								</p>
 								<Table
 									colSpan={3}
 									isEmpty={roleEntries.length === 0}
-									empty="No app roles declared."
+									empty={<EmptyState title="No app roles declared" />}
 									head={
 										<tr>
 											<th>Key</th>
 											<th>Name</th>
-											<th>Permissions</th>
+											<th className="grow">Permissions</th>
 										</tr>
 									}
 								>

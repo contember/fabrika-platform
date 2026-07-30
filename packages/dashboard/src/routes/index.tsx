@@ -107,14 +107,14 @@ export default createPage()
 							</div>
 						</div>
 						<div className="instrument">
-							<div className="instrument-label">Last 24 hours</div>
+							<div className="instrument-label">Releases · 24 h</div>
 							<div className="instrument-value">
 								{okToday}
-								<small>/ {settledToday.length} ok</small>
+								<small>/ {settledToday.length}</small>
 							</div>
 							<div className="instrument-note">
 								<Status lamp={settledToday.length === 0 ? 'idle' : okToday === settledToday.length ? 'ok' : 'stop'}>
-									{settledToday.length === 0 ? 'no releases' : `${settledToday.length - okToday} failed`}
+									{settledToday.length === 0 ? 'nothing released' : okToday === settledToday.length ? 'all landed' : `${settledToday.length - okToday} failed`}
 								</Status>
 							</div>
 						</div>
@@ -393,12 +393,15 @@ function RunRow({ run }: { run: RunDto }) {
 					<span className="truncate">{run.appId}</span>
 					<Chip>{run.env}</Chip>
 				</span>
+				{/* A feed line states what is there; an em-dash placeholder is a table's job, not a sentence's. */}
 				<span className="feed-meta">
 					<Icon name="branch" size={12} />
 					<code>{shortRef(run.ref)}</code>
-					<span className="dot-sep">
-						<code>{shortSha(run.commitSha)}</code>
-					</span>
+					{run.commitSha !== null && run.commitSha !== '' && (
+						<span className="dot-sep">
+							<code>{shortSha(run.commitSha)}</code>
+						</span>
+					)}
 					<span className="dot-sep">{run.trigger}</span>
 				</span>
 			</span>
@@ -457,7 +460,6 @@ function ColdStart() {
 	return (
 		<>
 			<div className="page-head">
-				<p className="eyebrow">Delivery plane</p>
 				<h1>The line is empty</h1>
 				<p className="hint">
 					fabrika is installed and the control plane is answering. Two steps put the first release through it.

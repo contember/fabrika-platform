@@ -35,7 +35,7 @@ export function ConfirmDialog({ title, body, confirmLabel = 'Confirm', onConfirm
 			{error && <p className="error-text" role="alert">{error}</p>}
 			<div className="modal-actions">
 				<button type="button" onClick={onClose} disabled={busy}>Cancel</button>
-				<button type="button" className="danger" onClick={confirm} disabled={busy}>
+				<button type="button" className="danger strong" onClick={confirm} disabled={busy}>
 					{busy ? 'Working…' : confirmLabel}
 				</button>
 			</div>

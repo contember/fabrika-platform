@@ -24,7 +24,20 @@ bun run build        # gen + tsc + vite build → dist/ (what the worker serves)
   propustka's SSO login (`redirect` rewritten to the current page) — a blind reload would just loop since
   there's no edge to re-challenge. A short `sessionStorage` bounce guard breaks the loop if we return still-unauthorized.
 
+- **`src/styles.css` is the console's ONLY design system.** `@fabrika/iam-ui` ships component styles for
+  its own widgets (pickers, grant grid, JSON view) written in these tokens and declares no base rules —
+  it used to carry a full standalone stylesheet, which only forced this one into defensive
+  re-statements. Do not reintroduce base, shell, table, button or badge rules there.
+- **The icon set lives in `@fabrika/iam-ui/icon`**, re-exported by `src/components/Icon.tsx`, so both
+  halves of the console draw from one set. `BrandMark` stays here — it is this app's identity.
+
 ## Patterns
 
 - A route is `createPage().loader(...).route('/path').render(...)` (default export) under `src/routes/`.
 - All API calls go through the typed `api` helper (`api.get/post/put/patch/del`) in `src/lib/api.ts` — same-origin, `credentials: 'include'`.
+- **Status is a lamp, category is a chip or badge** (`components/Status.tsx`, and iam-ui's mirror of it).
+  Both planes speak this one language; nothing renders a coloured pill for a lifecycle state.
+- **One filled button per page**, and it is that page's single constructive step. Filtering, editing and
+  repairing are outline or ghost; irreversible acts live in a `.danger-zone` at the foot of the page.
+- **A page head is: back link, title, one line of purpose.** Every list filters through one `.filters`
+  bar; every table marks the column(s) that should absorb slack with `className="grow"` on the `<th>`.

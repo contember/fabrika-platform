@@ -1,9 +1,10 @@
 import { createPage, Link } from '@buzola/router'
 import type { ApiKeyDto, GrantDto, ListResponse, RotateApiKeyResponse } from '@fabrika/iam/admin'
 import { useState } from 'react'
-import { StatusBadge } from '../../components/Badge'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { Icon } from '../../components/Icon'
 import { SecretModal } from '../../components/SecretModal'
+import { StatusLamp } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api } from '../../lib/api'
 import { fmtExpiry, fmtScope } from '../../lib/format'
@@ -39,7 +40,10 @@ export default createPage()
 								and never stored.
 							</p>
 						</div>
-						<Link to="access/api-keys/new" className="btn primary">Provision key</Link>
+						<Link to="access/api-keys/new" className="btn primary">
+							<Icon name="plus" />
+							Provision key
+						</Link>
 					</div>
 				</div>
 
@@ -54,9 +58,9 @@ export default createPage()
 					}
 					head={
 						<tr>
-							<th>Label</th>
+							<th className="grow">Label</th>
 							<th>Status</th>
-							<th>Role / scope · expiry</th>
+							<th className="grow">Role / scope · expiry</th>
 							<th />
 						</tr>
 					}
@@ -65,7 +69,7 @@ export default createPage()
 						<tr key={key.principalId}>
 							<td>{key.label}</td>
 							<td>
-								<StatusBadge status={key.status} />
+								<StatusLamp status={key.status} />
 							</td>
 							<td>
 								{grantSummary(key.grants)}

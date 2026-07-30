@@ -2,6 +2,7 @@ import { createPage, Link, useNavigate } from '@buzola/router'
 import type { AppDto, ListResponse, ProvisionApiKeyRequest, ProvisionApiKeyResponse } from '@fabrika/iam/admin'
 import { useState } from 'react'
 import { GrantComposer, useGrantComposerState } from '../../components/GrantComposer'
+import { Icon } from '../../components/Icon'
 import { SecretModal } from '../../components/SecretModal'
 import { api, ApiError } from '../../lib/api'
 import { parseDateTimeLocal } from '../../lib/format'
@@ -58,16 +59,14 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<div className="page-head-row">
-						<div>
-							<p className="eyebrow">Access plane</p>
-							<h1>Provision API key</h1>
-							<p className="hint">
-								Creates a service principal with a propustka-native <code>px_…</code> key. The key is shown once, here, and never stored.
-							</p>
-						</div>
-						<Link to="access/api-keys" className="nav-cta">All API keys</Link>
-					</div>
+					<Link to="access/api-keys" className="back-link">
+						<Icon name="chevron-left" size={14} />
+						All API keys
+					</Link>
+					<h1>Provision API key</h1>
+					<p className="hint">
+						Creates a service principal with a propustka-native <code>px_…</code> key. The key is shown once, here, and never stored.
+					</p>
 				</div>
 
 				<form className="panel form" onSubmit={submit}>

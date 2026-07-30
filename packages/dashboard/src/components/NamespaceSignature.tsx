@@ -10,10 +10,15 @@ interface NamespaceSignatureProps {
 	presentation: DeploymentNamespacePresentationDto | null
 }
 
+/** The four facts fabrika states itself; a provider fact repeating one of them is dropped, not shown twice. */
+const OWN_LABELS = new Set(['namespace', 'environment', 'provider', 'ownership', 'placement'])
+
 /** Compact provider-authored ledger of one placement boundary. */
 export function NamespaceSignature(
 	{ id, env, provider, exclusiveAppId, state, presentation }: NamespaceSignatureProps,
 ) {
+	const facts = (presentation?.facts ?? []).filter((fact) => !OWN_LABELS.has(fact.label.trim().toLowerCase()))
+
 	return (
 		<div className="namespace-signature">
 			<div className="namespace-signature-head">
@@ -52,7 +57,7 @@ export function NamespaceSignature(
 						)}
 					</dd>
 				</div>
-				{(presentation?.facts ?? []).map((fact) => (
+				{facts.map((fact) => (
 					<div key={`${fact.label}/${fact.value}`}>
 						<dt>{fact.label}</dt>
 						<dd>{fact.value}</dd>

@@ -1,5 +1,6 @@
-import { createPage, useNavigate } from '@buzola/router'
+import { createPage, Link, useNavigate } from '@buzola/router'
 import { useState } from 'react'
+import { Icon } from '../../components/Icon'
 import { NamespaceSignature } from '../../components/NamespaceSignature'
 import {
 	api,
@@ -97,7 +98,11 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<h1>Provision deployment namespace</h1>
+					<Link to="namespaces" className="back-link">
+						<Icon name="chevron-left" size={14} />
+						All namespaces
+					</Link>
+					<h1>Provision a namespace</h1>
 					<p className="hint">Prepare the provider-owned plan, review its boundary, then provision it.</p>
 				</div>
 
@@ -131,7 +136,8 @@ export default createPage()
 					)}
 					{error && <p className="error-text" role="alert">{error}</p>}
 					<div className="form-actions">
-						<button type="submit" className="primary" disabled={busy !== null || planDisabled}>
+						{/* The filled button follows the step you are on: prepare first, then provision. */}
+						<button type="submit" className={plan === null ? 'primary' : ''} disabled={busy !== null || planDisabled}>
 							{busy === 'plan' ? 'Preparing…' : plan === null ? 'Prepare plan' : 'Refresh plan'}
 						</button>
 					</div>
@@ -139,7 +145,10 @@ export default createPage()
 
 				{plan !== null && (
 					<section>
-						<h2>Provider plan</h2>
+						<div className="section-head">
+							<Icon name="bay" size={15} />
+							<h2>Provider plan</h2>
+						</div>
 						<NamespaceSignature
 							id={plan.namespace.id}
 							env={plan.namespace.env}

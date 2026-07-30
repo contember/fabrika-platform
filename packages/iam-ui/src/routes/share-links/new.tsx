@@ -1,6 +1,7 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
 import type { IssuedShareLinkResponse, IssueShareLinkRequest } from '@fabrika/iam/admin'
 import { useState } from 'react'
+import { Icon } from '../../components/Icon'
 import { SecretModal } from '../../components/SecretModal'
 import { api, ApiError } from '../../lib/api'
 import { parseDateTimeLocal } from '../../lib/format'
@@ -89,17 +90,15 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<div className="page-head-row">
-						<div>
-							<p className="eyebrow">Access plane</p>
-							<h1>Issue share link</h1>
-							<p className="hint">
-								An anonymous, revocable <code>px_</code> credential granting specific <code>(action, scope)</code>{' '}
-								pairs. You can only delegate what you hold yourself.
-							</p>
-						</div>
-						<Link to="access/share-links" className="nav-cta">All share links</Link>
-					</div>
+					<Link to="access/share-links" className="back-link">
+						<Icon name="chevron-left" size={14} />
+						All share links
+					</Link>
+					<h1>Issue share link</h1>
+					<p className="hint">
+						An anonymous, revocable <code>px_</code> credential granting specific <code>(action, scope)</code>{' '}
+						pairs. You can only delegate what you hold yourself.
+					</p>
 				</div>
 
 				<form className="panel form wide" onSubmit={submit}>

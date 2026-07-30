@@ -30,20 +30,16 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<div className="page-head-row">
-						<div>
-							<h1>{namespace.id}</h1>
-							<div className="subtitle">
-								Created {fmtDate(namespace.createdAt)}
-								<span className="dot-sep">
-									target envelope <code>{namespace.target.provider}@{namespace.target.version}</code>
-								</span>
-							</div>
-						</div>
-						<Link to="namespaces" className="nav-cta">
-							<Icon name="chevron-left" size={14} />
-							All namespaces
-						</Link>
+					<Link to="namespaces" className="back-link">
+						<Icon name="chevron-left" size={14} />
+						All namespaces
+					</Link>
+					<h1>{namespace.id}</h1>
+					<div className="subtitle">
+						Created {fmtDate(namespace.createdAt)}
+						<span className="dot-sep">
+							target envelope <code>{namespace.target.provider}@{namespace.target.version}</code>
+						</span>
 					</div>
 				</div>
 

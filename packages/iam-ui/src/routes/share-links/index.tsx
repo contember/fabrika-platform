@@ -1,8 +1,9 @@
 import { createPage, Link } from '@buzola/router'
 import type { ListResponse, ShareLinkListItem } from '@fabrika/iam/admin'
 import { useState } from 'react'
-import { Badge } from '../../components/Badge'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { Icon } from '../../components/Icon'
+import { Status } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api } from '../../lib/api'
 import { fmtExpiry } from '../../lib/format'
@@ -33,7 +34,10 @@ export default createPage()
 							<code>permits()</code> at use time, like any other token. The plaintext is shown once at issue and never stored.
 						</p>
 					</div>
-					<Link to="access/share-links/new" className="btn primary">Issue link</Link>
+					<Link to="access/share-links/new" className="btn primary">
+						<Icon name="plus" />
+						Issue link
+					</Link>
 				</div>
 			</div>
 
@@ -49,7 +53,7 @@ export default createPage()
 				head={
 					<tr>
 						<th>Label</th>
-						<th>Grants</th>
+						<th className="grow">Grants</th>
 						<th>Expires</th>
 						<th>Status</th>
 						<th />
@@ -64,7 +68,7 @@ export default createPage()
 function ShareLinkRow({ link, onDone }: { link: ShareLinkListItem; onDone: () => void }) {
 	const [confirming, setConfirming] = useState(false)
 	const status = linkStatus(link)
-	const tone = status === 'active' ? 'good' : status === 'revoked' ? 'bad' : 'muted'
+	const lamp = status === 'active' ? 'ok' : status === 'revoked' ? 'stop' : 'idle'
 
 	async function revoke() {
 		await api.del(`/share-links/${link.id}`)
@@ -94,9 +98,9 @@ function ShareLinkRow({ link, onDone }: { link: ShareLinkListItem; onDone: () =>
 					</div>
 				))}
 			</td>
-			<td>{fmtExpiry(link.expiresAt)}</td>
+			<td className="nowrap">{fmtExpiry(link.expiresAt)}</td>
 			<td>
-				<Badge tone={tone}>{status}</Badge>
+				<Status lamp={lamp}>{status}</Status>
 			</td>
 			<td className="row-actions">
 				{status !== 'revoked' && <button type="button" className="danger small" onClick={() => setConfirming(true)}>Revoke</button>}

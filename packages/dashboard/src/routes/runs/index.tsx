@@ -70,7 +70,7 @@ export default createPage()
 						<input value={env} onChange={(e) => setEnv(e.target.value)} placeholder="any" />
 					</label>
 					<div className="filter-actions">
-						<button type="submit" className="primary" disabled={loading}>
+						<button type="submit" disabled={loading}>
 							<Icon name="filter" size={14} />
 							Filter
 						</button>
@@ -85,7 +85,7 @@ export default createPage()
 							}}
 							disabled={loading}
 						>
-							Reset
+							Clear
 						</button>
 					</div>
 				</form>
@@ -107,7 +107,7 @@ export default createPage()
 							<th>Status</th>
 							<th>App</th>
 							<th>Env</th>
-							<th>Ref</th>
+							<th className="grow">Ref</th>
 							<th>Commit</th>
 							<th>Trigger</th>
 							<th>Duration</th>

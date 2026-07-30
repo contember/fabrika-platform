@@ -4,7 +4,7 @@ import { Icon } from '../../components/Icon'
 import { Chip } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api, type AppDto, type ListResponse } from '../../lib/api'
-import { fmtDate, shortRef } from '../../lib/format'
+import { fmtAgo, fmtDate, shortRef } from '../../lib/format'
 
 // Apps — every registered app. The detail page (apps/:id) holds its envs, secrets, and per-env Deploy.
 // New apps are onboarded at /apps/new; this is the registry view.
@@ -35,17 +35,16 @@ export default createPage()
 					</div>
 				</div>
 
-				<div className="toolbar">
-					<span className="field-search">
-						<Icon name="search" size={14} />
+				<div className="filters">
+					<label className="field-wide">
+						Search
 						<input
 							type="search"
-							placeholder="Search id or repository"
+							placeholder="App id or repository"
 							value={query}
 							onChange={(e) => setQuery(e.target.value)}
-							aria-label="Search apps"
 						/>
-					</span>
+					</label>
 					<span className="count">{filtered.length} of {data.apps.length}</span>
 				</div>
 
@@ -65,7 +64,7 @@ export default createPage()
 					head={
 						<tr>
 							<th>App</th>
-							<th>Repository</th>
+							<th className="grow">Repository</th>
 							<th>Default branch</th>
 							<th>Registered</th>
 						</tr>
@@ -87,7 +86,7 @@ export default createPage()
 									{shortRef(`refs/heads/${app.defaultBranch}`)}
 								</Chip>
 							</td>
-							<td className="muted small">{fmtDate(app.createdAt)}</td>
+							<td className="muted small nowrap" title={fmtDate(app.createdAt)}>{fmtAgo(app.createdAt)}</td>
 						</tr>
 					))}
 				</Table>

@@ -2,6 +2,7 @@ import { createPage, Link, useNavigate } from '@buzola/router'
 import type { AppDto, CreateGrantRequest, InviteRequest, ListResponse, PrincipalListItem } from '@fabrika/iam/admin'
 import { useState } from 'react'
 import { GrantComposer, useGrantComposerState } from '../../components/GrantComposer'
+import { Icon } from '../../components/Icon'
 import { api, ApiError } from '../../lib/api'
 import { parseDateTimeLocal } from '../../lib/format'
 
@@ -60,16 +61,14 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<div className="page-head-row">
-						<div>
-							<p className="eyebrow">Access plane</p>
-							<h1>Invite user</h1>
-							<p className="hint">
-								Pre-creates the user so you can grant a role before their first login. For team-wide pre-authorization, use group mappings instead.
-							</p>
-						</div>
-						<Link to="access/principals" className="nav-cta">All principals</Link>
-					</div>
+					<Link to="access/principals" className="back-link">
+						<Icon name="chevron-left" size={14} />
+						All principals
+					</Link>
+					<h1>Invite user</h1>
+					<p className="hint">
+						Pre-creates the user so you can grant a role before their first login. For team-wide pre-authorization, use group mappings instead.
+					</p>
 				</div>
 
 				<form className="panel form" onSubmit={submit}>

@@ -1,10 +1,11 @@
 import { createPage, Link } from '@buzola/router'
 import type { ListResponse, PrincipalListItem } from '@fabrika/iam/admin'
 import { useState } from 'react'
-import { StatusBadge } from '../../components/Badge'
+import { Icon } from '../../components/Icon'
+import { StatusLamp } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api } from '../../lib/api'
-import { fmtDate } from '../../lib/format'
+import { fmtAgo, fmtDate } from '../../lib/format'
 
 /** '' = all types, otherwise a principal type. */
 type TypeFilter = '' | PrincipalListItem['type']
@@ -40,26 +41,32 @@ export default createPage()
 							<h1>Principals</h1>
 							<p className="hint">Everyone and everything that can hold a permission here — people from the IdP and service identities.</p>
 						</div>
-						<Link to="access/principals/new" className="btn primary">Invite user</Link>
+						<Link to="access/principals/new" className="btn primary">
+							<Icon name="plus" />
+							Invite user
+						</Link>
 					</div>
 				</div>
 
-				<div className="toolbar">
+				<div className="filters">
 					<label>
-						Type{' '}
+						Type
 						<select value={type} onChange={(e) => onTypeChange(e.target.value)}>
 							<option value="">All</option>
 							<option value="user">User</option>
 							<option value="service">Service</option>
 						</select>
 					</label>
-					<input
-						type="search"
-						placeholder="Search label / email / external id"
-						value={query}
-						onChange={(e) => setQuery(e.target.value)}
-					/>
-					<span className="count muted">{filtered.length} of {data.principals.length}</span>
+					<label className="field-wide">
+						Search
+						<input
+							type="search"
+							placeholder="Label, email or external id"
+							value={query}
+							onChange={(e) => setQuery(e.target.value)}
+						/>
+					</label>
+					<span className="count">{filtered.length} of {data.principals.length}</span>
 				</div>
 
 				<Table
@@ -69,7 +76,7 @@ export default createPage()
 					head={
 						<tr>
 							<th>Type</th>
-							<th>Label</th>
+							<th className="grow">Label</th>
 							<th>External id</th>
 							<th>Status</th>
 							<th>Created</th>
@@ -85,9 +92,9 @@ export default createPage()
 							</td>
 							<td>{p.externalId ?? <span className="muted">—</span>}</td>
 							<td>
-								<StatusBadge status={p.status} />
+								<StatusLamp status={p.status} />
 							</td>
-							<td>{fmtDate(p.createdAt)}</td>
+							<td className="muted small nowrap" title={fmtDate(p.createdAt)}>{fmtAgo(p.createdAt)}</td>
 						</tr>
 					))}
 				</Table>

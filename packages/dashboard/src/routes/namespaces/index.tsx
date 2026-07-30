@@ -3,7 +3,7 @@ import { Icon } from '../../components/Icon'
 import { Chip, NamespaceState } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api, type DeploymentNamespaceListResponse } from '../../lib/api'
-import { fmtDate } from '../../lib/format'
+import { fmtAgo, fmtDate } from '../../lib/format'
 
 export default createPage()
 	.loader(async () => ({ namespaces: await api.get<DeploymentNamespaceListResponse>('/namespaces') }))
@@ -17,7 +17,7 @@ export default createPage()
 				<div className="page-head">
 					<div className="page-head-row">
 						<div>
-							<h1>Deployment namespaces</h1>
+							<h1>Namespaces</h1>
 							<p className="hint">The bounded areas the selected provider places apps into. One per environment is the usual shape.</p>
 						</div>
 						{operable && (
@@ -54,7 +54,7 @@ export default createPage()
 							<th>Namespace</th>
 							<th>Environment</th>
 							<th>Provider</th>
-							<th>Ownership</th>
+							<th className="grow">Ownership</th>
 							<th>State</th>
 							<th>Created</th>
 						</tr>
@@ -77,7 +77,7 @@ export default createPage()
 							<td>
 								<NamespaceState state={namespace.state} />
 							</td>
-							<td className="muted small">{fmtDate(namespace.createdAt)}</td>
+							<td className="muted small nowrap" title={fmtDate(namespace.createdAt)}>{fmtAgo(namespace.createdAt)}</td>
 						</tr>
 					))}
 				</Table>

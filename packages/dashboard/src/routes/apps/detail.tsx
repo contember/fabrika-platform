@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
 import { RunStatus } from '../../components/Status'
-import { Table } from '../../components/Table'
+import { EmptyState, Table } from '../../components/Table'
 import {
 	api,
 	ApiError,
@@ -22,7 +22,7 @@ import {
 	type SetSecretValueRequest,
 	type TriggerDeployRequest,
 } from '../../lib/api'
-import { fmtDate, qs, shortRef, shortSha } from '../../lib/format'
+import { fmtAgo, fmtDate, qs, shortRef, shortSha } from '../../lib/format'
 import { compatibleNamespaces, namespaceAssignmentRequest } from '../../lib/namespaces'
 
 // App detail — the per-app registry + operations view: its meta, its environments (each with a
@@ -56,30 +56,25 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<div className="page-head-row">
-						<h1>{app.id}</h1>
-						<button type="button" className="danger" onClick={() => setConfirming(true)}>Delete app</button>
+					<Link to="apps" className="back-link">
+						<Icon name="chevron-left" size={14} />
+						All applications
+					</Link>
+					<h1>{app.id}</h1>
+					<div className="subtitle">
+						<code>{app.repoUrl}</code>
+						<span className="dot-sep">
+							default branch <code>{app.defaultBranch}</code>
+						</span>
+						<span className="dot-sep">created {fmtDate(app.createdAt)}</span>
 					</div>
-					<div className="subtitle muted">
-						<code>{app.repoUrl}</code> · default branch <code>{app.defaultBranch}</code> · created {fmtDate(app.createdAt)}
-					</div>
-					{confirming && (
-						<ConfirmDialog
-							title="Delete app"
-							confirmLabel="Delete"
-							body={
-								<p>
-									Delete app <strong>{app.id}</strong> and all its environments and secrets? Run history is kept.
-								</p>
-							}
-							onConfirm={deleteApp}
-							onClose={() => setConfirming(false)}
-						/>
-					)}
 				</div>
 
 				<section>
-					<h2>Build config</h2>
+					<div className="section-head">
+						<Icon name="bolt" size={15} />
+						<h2>Build config</h2>
+					</div>
 					<div className="detail-grid">
 						<Field label="Worker dir" value={app.workerDir} mono />
 						<Field label="Build command" value={app.buildCmd} mono />
@@ -88,17 +83,24 @@ export default createPage()
 				</section>
 
 				<section>
-					<div className="page-head-row">
+					<div className="section-head">
+						<Icon name="bay" size={15} />
 						<h2>Environments</h2>
 					</div>
 					<Table
 						colSpan={6}
 						isEmpty={envs.length === 0}
-						empty="No environments. Add one below."
+						empty={
+							<EmptyState
+								icon="bay"
+								title="No environments yet"
+								body="An environment binds this app to a namespace and a domain. It is what a deploy targets."
+							/>
+						}
 						head={
 							<tr>
 								<th>Env</th>
-								<th>Domain</th>
+								<th className="grow">Domain</th>
 								<th>Trigger ref</th>
 								<th>Placement</th>
 								<th>Provider config</th>
@@ -112,20 +114,23 @@ export default createPage()
 				</section>
 
 				<section>
-					<h2>Secrets</h2>
-					<p className="hint">
+					<div className="section-head">
+						<Icon name="lock" size={15} />
+						<h2>Secrets</h2>
+					</div>
+					<p className="section-note">
 						Secret <strong>references</strong> deployed with this app. The <code>*</code>{' '}
 						layer applies to every env; an env-specific entry overrides it. Values live in the vault — only names and refs are shown.
 					</p>
 					<Table
 						colSpan={4}
 						isEmpty={secrets.length === 0}
-						empty="No secrets. Add one below."
+						empty={<EmptyState icon="lock" title="No secrets referenced" body="Add a reference to pull a vault value into every deploy of this app." />}
 						head={
 							<tr>
 								<th>Name</th>
 								<th>Layer</th>
-								<th>Value ref</th>
+								<th className="grow">Value ref</th>
 								<th />
 							</tr>
 						}
@@ -136,20 +141,23 @@ export default createPage()
 				</section>
 
 				<section>
-					<h2>Vars</h2>
-					<p className="hint">
+					<div className="section-head">
+						<Icon name="schema" size={15} />
+						<h2>Vars</h2>
+					</div>
+					<p className="section-note">
 						Non-secret config <strong>vars</strong> deployed with this app. The <code>*</code>{' '}
 						layer applies to every env; an env-specific entry overrides it. Vars are plaintext — values are shown.
 					</p>
 					<Table
 						colSpan={4}
 						isEmpty={vars.length === 0}
-						empty="No vars. Add one below."
+						empty={<EmptyState icon="schema" title="No vars set" body="Plaintext config the app reads from its environment at run time." />}
 						head={
 							<tr>
 								<th>Name</th>
 								<th>Layer</th>
-								<th>Value</th>
+								<th className="grow">Value</th>
 								<th />
 							</tr>
 						}
@@ -160,9 +168,11 @@ export default createPage()
 				</section>
 
 				<section>
-					<div className="page-head-row">
+					<div className="section-head">
+						<Icon name="runs" size={15} />
 						<h2>Recent runs</h2>
-						<Link to="runs" className="nav-cta">
+						<span className="spacer" />
+						<Link to="runs" className="card-link">
 							All runs
 							<Icon name="chevron-right" size={13} />
 						</Link>
@@ -170,12 +180,12 @@ export default createPage()
 					<Table
 						colSpan={5}
 						isEmpty={runs.length === 0}
-						empty="No runs for this app yet."
+						empty={<EmptyState icon="runs" title="No runs for this app yet" body="Deploy an environment above, or push to its trigger ref." />}
 						head={
 							<tr>
 								<th>Status</th>
 								<th>Env</th>
-								<th>Ref</th>
+								<th className="grow">Ref</th>
 								<th>Commit</th>
 								<th>Started</th>
 							</tr>
@@ -195,11 +205,40 @@ export default createPage()
 								<td>
 									<code>{shortSha(run.commitSha)}</code>
 								</td>
-								<td>{fmtDate(run.createdAt)}</td>
+								<td className="muted small nowrap" title={fmtDate(run.createdAt)}>{fmtAgo(run.createdAt)}</td>
 							</tr>
 						))}
 					</Table>
 				</section>
+
+				{
+					/* Past everything you might have come here to do — not in the page head, where every other
+				    screen puts its constructive CTA. */
+				}
+				<div className="danger-zone">
+					<div className="danger-zone-copy">
+						<strong>Delete this app</strong>
+						Removes its environments and secret references. Run history is kept.
+					</div>
+					<span className="spacer" />
+					<button type="button" className="danger" onClick={() => setConfirming(true)}>
+						<Icon name="trash" size={14} />
+						Delete app
+					</button>
+				</div>
+				{confirming && (
+					<ConfirmDialog
+						title="Delete app"
+						confirmLabel="Delete app"
+						body={
+							<p>
+								Delete app <strong>{app.id}</strong> and all its environments and secrets? Run history is kept.
+							</p>
+						}
+						onConfirm={deleteApp}
+						onClose={() => setConfirming(false)}
+					/>
+				)}
 			</>
 		)
 	})
@@ -296,7 +335,10 @@ function DeployButton({ appId, env }: { appId: string; env: AppEnvDto }) {
 
 	return (
 		<>
-			<button type="button" className="primary small" onClick={deploy} disabled={busy}>{busy ? 'Deploying…' : 'Deploy'}</button>
+			<button type="button" className="accent small" onClick={deploy} disabled={busy}>
+				<Icon name="bolt" size={12} />
+				{busy ? 'Deploying…' : 'Deploy'}
+			</button>
 			{error && <div className="error-text small">{error}</div>}
 		</>
 	)
@@ -790,7 +832,7 @@ function AddSecretForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto
 						<input required value={valueRef} onChange={(e) => setValueRef(e.target.value)} placeholder="env:STRIPE_KEY" autoComplete="off" />
 					</label>
 				)}
-			<div className="filter-actions">
+			<div className="form-actions">
 				<button type="submit" className="primary" disabled={busy}>{busy ? 'Saving…' : 'Add secret'}</button>
 				<button type="button" onClick={() => setOpen(false)} disabled={busy}>Cancel</button>
 			</div>
@@ -896,7 +938,7 @@ function AddVarForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto[];
 				Value
 				<input required value={value} onChange={(e) => setValue(e.target.value)} placeholder="info" autoComplete="off" />
 			</label>
-			<div className="filter-actions">
+			<div className="form-actions">
 				<button type="submit" className="primary" disabled={busy}>{busy ? 'Saving…' : 'Add var'}</button>
 				<button type="button" onClick={() => setOpen(false)} disabled={busy}>Cancel</button>
 			</div>

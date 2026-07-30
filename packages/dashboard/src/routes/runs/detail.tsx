@@ -26,6 +26,10 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
+					<Link to="runs" className="back-link">
+						<Icon name="chevron-left" size={14} />
+						All deploy runs
+					</Link>
 					<div className="page-head-row">
 						<div>
 							<h1>

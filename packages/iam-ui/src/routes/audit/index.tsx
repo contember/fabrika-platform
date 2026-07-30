@@ -1,8 +1,9 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
 import type { AuditEventDto, CursorList } from '@fabrika/iam/admin'
 import { useState } from 'react'
+import { Icon } from '../../components/Icon'
 import { JsonView } from '../../components/JsonView'
-import { Table } from '../../components/Table'
+import { EmptyState, Table } from '../../components/Table'
 import { api } from '../../lib/api'
 import { fmtDate, qs } from '../../lib/format'
 
@@ -63,8 +64,8 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<h1>Audit — domain events</h1>
-					<p className="hint">Write operations recorded by the IAM Worker. Read-only.</p>
+					<h1>Audit</h1>
+					<p className="hint">Every write the IAM service recorded, newest first. Read-only.</p>
 				</div>
 
 				<AuditFilters params={current} onApply={applyFilters} />
@@ -72,14 +73,14 @@ export default createPage()
 				<Table
 					colSpan={6}
 					isEmpty={events.length === 0}
-					empty="No audit events match."
+					empty={<EmptyState title="No audit events match" body="Clear the filters, or widen the resource and action you are looking for." />}
 					head={
 						<tr>
 							<th>When</th>
 							<th>Actor</th>
 							<th>App</th>
 							<th>Action</th>
-							<th>Resource</th>
+							<th className="grow">Resource</th>
 							<th>Request</th>
 						</tr>
 					}
@@ -119,25 +120,33 @@ function AuditFilters({ params, onApply }: { params: FilterParams; onApply: (nex
 	}
 
 	return (
-		<form className="panel filters" onSubmit={submit}>
+		<form className="filters" onSubmit={submit}>
 			<label>
-				Resource type<input value={resourceType} onChange={(e) => setResourceType(e.target.value)} />
+				Resource type
+				<input value={resourceType} onChange={(e) => setResourceType(e.target.value)} />
 			</label>
 			<label>
-				Resource id<input value={resourceId} onChange={(e) => setResourceId(e.target.value)} />
+				Resource id
+				<input value={resourceId} onChange={(e) => setResourceId(e.target.value)} />
 			</label>
 			<label>
-				Principal id<input value={principalId} onChange={(e) => setPrincipalId(e.target.value)} />
+				Principal id
+				<input value={principalId} onChange={(e) => setPrincipalId(e.target.value)} />
 			</label>
 			<label>
-				Action<input value={action} onChange={(e) => setAction(e.target.value)} />
+				Action
+				<input value={action} onChange={(e) => setAction(e.target.value)} />
 			</label>
 			<label>
-				Request id<input value={requestId} onChange={(e) => setRequestId(e.target.value)} />
+				Request id
+				<input value={requestId} onChange={(e) => setRequestId(e.target.value)} />
 			</label>
 			<div className="filter-actions">
-				<button type="submit" className="primary small">Filter</button>
-				<button type="button" className="small" onClick={clear}>Clear</button>
+				<button type="submit">
+					<Icon name="filter" size={14} />
+					Filter
+				</button>
+				<button type="button" className="ghost" onClick={clear}>Clear</button>
 			</div>
 		</form>
 	)
@@ -151,7 +160,7 @@ function AuditRow({ event }: { event: AuditEventDto }) {
 	return (
 		<>
 			<tr>
-				<td>{fmtDate(event.createdAt)}</td>
+				<td className="nowrap">{fmtDate(event.createdAt)}</td>
 				<td>
 					{event.credentialId
 						? (
@@ -169,7 +178,7 @@ function AuditRow({ event }: { event: AuditEventDto }) {
 					<code>{event.resourceType}</code>
 					{event.resourceId && <span className="muted">{' '}#{event.resourceId}</span>}
 				</td>
-				<td>
+				<td className="nowrap">
 					<Link
 						to="access/audit"
 						params={{ requestId: event.requestId }}

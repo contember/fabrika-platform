@@ -27,6 +27,20 @@ export function fmtDate(seconds: number | null | undefined): string {
 	})
 }
 
+/**
+ * Compact "how long ago" for an epoch-**seconds** stamp. A list wants "2h ago"; the exact clock time
+ * belongs in the cell's tooltip. Falls back to a date past a week, and to `—` when absent.
+ */
+export function fmtAgo(seconds: number | null | undefined, nowMs: number = Date.now()): string {
+	if (seconds === null || seconds === undefined) return '—'
+	const elapsed = Math.max(0, Math.floor(nowMs / 1000) - seconds)
+	if (elapsed < 45) return 'just now'
+	if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m ago`
+	if (elapsed < 86_400) return `${Math.floor(elapsed / 3600)}h ago`
+	if (elapsed < 604_800) return `${Math.floor(elapsed / 86_400)}d ago`
+	return new Date(seconds * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
 /** Format an optional epoch-seconds expiry timestamp; `null` means "never". */
 export function fmtExpiry(seconds: number | null | undefined): string {
 	if (seconds === null || seconds === undefined) return 'Never'

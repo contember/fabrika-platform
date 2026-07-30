@@ -73,19 +73,14 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<div className="page-head-row">
-						<div>
-							<p className="eyebrow">Delivery plane</p>
-							<h1>Onboard an app</h1>
-							<p className="hint">
-								Register a built manifest into a ready deployment namespace. fabrika reserves the service names before it creates any provider resource.
-							</p>
-						</div>
-						<Link to="apps" className="nav-cta">
-							<Icon name="chevron-left" size={14} />
-							All apps
-						</Link>
-					</div>
+					<Link to="apps" className="back-link">
+						<Icon name="chevron-left" size={14} />
+						All applications
+					</Link>
+					<h1>Onboard an app</h1>
+					<p className="hint">
+						Register a built manifest into a ready deployment namespace. fabrika reserves the service names before it creates any provider resource.
+					</p>
 				</div>
 
 				<form className="panel form" onSubmit={submit}>
@@ -192,6 +187,7 @@ export default createPage()
 						<button type="submit" className="primary" disabled={busy}>
 							{busy ? 'Onboarding…' : 'Register app'}
 						</button>
+						<Link to="apps" className="btn">Cancel</Link>
 					</div>
 				</form>
 			</>

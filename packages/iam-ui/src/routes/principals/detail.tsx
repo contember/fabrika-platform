@@ -1,11 +1,13 @@
 import { createPage, Link } from '@buzola/router'
 import type { GrantDto, PermissionEntry, PrincipalDetail, UpdatePrincipalRequest } from '@fabrika/iam/admin'
 import { useState } from 'react'
-import { Badge, StatusBadge } from '../../components/Badge'
+import { Badge } from '../../components/Badge'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { Icon } from '../../components/Icon'
+import { StatusLamp } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api } from '../../lib/api'
-import { fmtDate, fmtExpiry, fmtScope } from '../../lib/format'
+import { fmtAgo, fmtDate, fmtExpiry, fmtScope } from '../../lib/format'
 
 export default createPage()
 	.params({ id: 'string' })
@@ -17,9 +19,13 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
+					<Link to="access/principals" className="back-link">
+						<Icon name="chevron-left" size={14} />
+						All principals
+					</Link>
 					<div className="page-head-row">
 						<h1>{principal.label}</h1>
-						<StatusBadge status={principal.status} />
+						<StatusLamp status={principal.status} />
 					</div>
 					<div className="subtitle">
 						<span>{principal.type}</span>
@@ -27,19 +33,21 @@ export default createPage()
 						{principal.externalId && <span className="dot-sep">{principal.externalId}</span>}
 						<span className="dot-sep">created {fmtDate(principal.createdAt)}</span>
 					</div>
-					<DisableToggle principal={principal} onDone={invalidate} />
 				</div>
 
 				<section>
-					<h2>Effective permissions</h2>
-					<p className="hint">Why this principal has each permission — resolved from grants, group mappings and bootstrap.</p>
+					<div className="section-head">
+						<Icon name="shield" size={15} />
+						<h2>Effective permissions</h2>
+					</div>
+					<p className="section-note">Why this principal has each permission — resolved from grants, group mappings and bootstrap.</p>
 					<Table
 						colSpan={3}
 						isEmpty={principal.permissions.length === 0}
 						empty={<EmptyState title="No effective permissions" />}
 						head={
 							<tr>
-								<th>Action</th>
+								<th className="grow">Action</th>
 								<th>Scope</th>
 								<th>Source</th>
 							</tr>
@@ -61,6 +69,7 @@ export default createPage()
 
 				<section>
 					<div className="section-head">
+						<Icon name="key" size={15} />
 						<h2>Grants</h2>
 						<span className="spacer" />
 						<Link to="access/principals/grant" params={{ id: principal.id }} className="btn small primary">Add grant</Link>
@@ -77,7 +86,7 @@ export default createPage()
 						}
 						head={
 							<tr>
-								<th>Role / actions</th>
+								<th className="grow">Role / actions</th>
 								<th>App</th>
 								<th>Scope</th>
 								<th>Expires</th>
@@ -90,6 +99,8 @@ export default createPage()
 						{principal.grants.map((grant) => <GrantRow key={grant.id} grant={grant} onDone={invalidate} />)}
 					</Table>
 				</section>
+
+				<DisableToggle principal={principal} onDone={invalidate} />
 			</>
 		)
 	})
@@ -111,7 +122,14 @@ function DisableToggle({ principal, onDone }: { principal: PrincipalDetail; onDo
 	}
 
 	return (
-		<>
+		<div className="danger-zone">
+			<div className="danger-zone-copy">
+				<strong>{disabled ? 'Enable this principal' : 'Disable this principal'}</strong>
+				{disabled
+					? 'Their grants take effect again immediately.'
+					: 'They keep every grant but resolve to zero permissions until re-enabled.'}
+			</div>
+			<span className="spacer" />
 			<button
 				type="button"
 				className={disabled ? 'primary' : 'danger'}
@@ -136,7 +154,7 @@ function DisableToggle({ principal, onDone }: { principal: PrincipalDetail; onDo
 					onClose={() => setConfirming(false)}
 				/>
 			)}
-		</>
+		</div>
 	)
 }
 
@@ -179,7 +197,7 @@ function GrantRow({ grant, onDone }: { grant: GrantDto; onDone: () => void }) {
 			<td>{scopeLabel}</td>
 			<td>{fmtExpiry(grant.expiresAt)}</td>
 			<td>{grant.grantedBy ?? <span className="muted">—</span>}</td>
-			<td>{fmtDate(grant.createdAt)}</td>
+			<td className="muted small nowrap" title={fmtDate(grant.createdAt)}>{fmtAgo(grant.createdAt)}</td>
 			<td className="row-actions">
 				<button type="button" className="danger small" onClick={() => setConfirming(true)}>Revoke</button>
 				{confirming && (

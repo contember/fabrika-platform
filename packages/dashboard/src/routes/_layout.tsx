@@ -20,7 +20,7 @@ type Page =
 interface NavItem {
 	to: Page
 	label: string
-	/** Shown in the context bar once you're on the page — the rail itself stays label-only. */
+	/** The rail stays label-only; this explains the label on hover. */
 	description: string
 	icon: IconName
 	match: string
@@ -90,22 +90,24 @@ export default function RootLayout() {
 						</div>
 					))}
 				</nav>
+				{/* An install-level fact, so it sits on the rail's nameplate rather than in the per-page bar. */}
+				<div className="sidebar-foot">
+					<span className="endpoint" title="Control plane and IAM answer on this one origin">
+						<span className="lamp" aria-hidden="true" />
+						Control + IAM on one origin
+					</span>
+				</div>
 			</aside>
 			<main className="content">
 				<header className="context-bar">
 					<div className="bar-inner">
+						{/* Where you are, and nothing else — the page states its own purpose directly below. */}
 						<div className="crumbs">
 							<span className="crumb-plane">{plane}</span>
 							<Icon name="chevron-right" size={13} />
 							<span className="crumb-here">{here?.label ?? 'Console'}</span>
-							{here !== null && <span className="crumb-note dot-sep">{here.description}</span>}
 						</div>
 						<div className="bar-actions">
-							{/* Both planes answer on one origin — worth stating, because in most installs they don't. */}
-							<span className="endpoint" title="Control plane and IAM answer on this one origin">
-								<span className="lamp" aria-hidden="true" />
-								Control + IAM
-							</span>
 							<ThemeToggle />
 						</div>
 					</div>
@@ -124,7 +126,12 @@ export default function RootLayout() {
 function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
 	const active = isActive(item, pathname)
 	return (
-		<Link to={item.to} className={`nav-item${active ? ' active' : ''}`} aria-current={active ? 'page' : undefined}>
+		<Link
+			to={item.to}
+			className={`nav-item${active ? ' active' : ''}`}
+			aria-current={active ? 'page' : undefined}
+			title={item.description}
+		>
 			<Icon name={item.icon} />
 			<span>{item.label}</span>
 		</Link>

@@ -1,8 +1,9 @@
 import { createPage, useNavigate } from '@buzola/router'
 import type { AuthLogDto, CursorList } from '@fabrika/iam/admin'
 import { useState } from 'react'
-import { Badge } from '../../components/Badge'
-import { Table } from '../../components/Table'
+import { Icon } from '../../components/Icon'
+import { Status } from '../../components/Status'
+import { EmptyState, Table } from '../../components/Table'
 import { api } from '../../lib/api'
 import { fmtDate, qs } from '../../lib/format'
 
@@ -64,7 +65,7 @@ export default createPage()
 				<Table
 					colSpan={6}
 					isEmpty={rows.length === 0}
-					empty="No auth-log rows match."
+					empty={<EmptyState title="No auth-log rows match" body="Clear the filters, or widen the principal and decision you are looking for." />}
 					head={
 						<tr>
 							<th>When</th>
@@ -72,13 +73,13 @@ export default createPage()
 							<th>Kind</th>
 							<th>Principal / credential</th>
 							<th>Decision</th>
-							<th>Reason</th>
+							<th className="grow">Reason</th>
 						</tr>
 					}
 				>
 					{rows.map((row) => (
 						<tr key={row.id}>
-							<td>{fmtDate(row.createdAt)}</td>
+							<td className="nowrap">{fmtDate(row.createdAt)}</td>
 							<td>{row.app}</td>
 							<td>{row.kind}</td>
 							<td>
@@ -93,7 +94,7 @@ export default createPage()
 									: <span className="muted">—</span>}
 							</td>
 							<td>
-								<Badge tone={row.decision === 'allow' ? 'good' : 'bad'}>{row.decision}</Badge>
+								<Status lamp={row.decision === 'allow' ? 'ok' : 'stop'}>{row.decision}</Status>
 							</td>
 							<td>{row.reason ? <code className="small">{row.reason}</code> : <span className="muted">—</span>}</td>
 						</tr>
@@ -134,12 +135,14 @@ function AuthLogFilters({ params, onApply }: { params: AuthFilterParams; onApply
 	}
 
 	return (
-		<form className="panel filters" onSubmit={submit}>
+		<form className="filters" onSubmit={submit}>
 			<label>
-				Principal id<input value={principalId} onChange={(e) => setPrincipalId(e.target.value)} />
+				Principal id
+				<input value={principalId} onChange={(e) => setPrincipalId(e.target.value)} />
 			</label>
 			<label>
-				Request id<input value={requestId} onChange={(e) => setRequestId(e.target.value)} />
+				Request id
+				<input value={requestId} onChange={(e) => setRequestId(e.target.value)} />
 			</label>
 			<label>
 				Decision
@@ -150,8 +153,11 @@ function AuthLogFilters({ params, onApply }: { params: AuthFilterParams; onApply
 				</select>
 			</label>
 			<div className="filter-actions">
-				<button type="submit" className="primary small">Filter</button>
-				<button type="button" className="small" onClick={clear}>Clear</button>
+				<button type="submit">
+					<Icon name="filter" size={14} />
+					Filter
+				</button>
+				<button type="button" className="ghost" onClick={clear}>Clear</button>
 			</div>
 		</form>
 	)

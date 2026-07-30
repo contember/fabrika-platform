@@ -2,6 +2,7 @@ import { createPage, Link, useNavigate } from '@buzola/router'
 import type { AppDto, CreateGrantRequest, ListResponse, PrincipalDetail } from '@fabrika/iam/admin'
 import { useState } from 'react'
 import { GrantComposer, useGrantComposerState } from '../../components/GrantComposer'
+import { Icon } from '../../components/Icon'
 import { api, ApiError } from '../../lib/api'
 import { parseDateTimeLocal } from '../../lib/format'
 
@@ -55,16 +56,14 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<div className="page-head-row">
-						<div>
-							<p className="eyebrow">Access plane</p>
-							<h1>Add grant</h1>
-							<p className="hint">
-								Granting to <strong>{principal.label}</strong> ({principal.type}). Takes effect immediately and is audited.
-							</p>
-						</div>
-						<Link to="access/principals/detail" params={{ id: principal.id }} className="nav-cta">Back to principal</Link>
-					</div>
+					<Link to="access/principals/detail" params={{ id: principal.id }} className="back-link">
+						<Icon name="chevron-left" size={14} />
+						Back to principal
+					</Link>
+					<h1>Add grant</h1>
+					<p className="hint">
+						Granting to <strong>{principal.label}</strong> ({principal.type}). Takes effect immediately and is audited.
+					</p>
 				</div>
 
 				<form className="panel form" onSubmit={submit}>

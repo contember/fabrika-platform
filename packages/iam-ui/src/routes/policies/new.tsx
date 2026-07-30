@@ -2,6 +2,7 @@ import { createPage, Link, useNavigate } from '@buzola/router'
 import type { AppSchemaDto, CreatePolicyRequest } from '@fabrika/iam/admin'
 import { useState } from 'react'
 import { ActionPicker } from '../../components/ActionPicker'
+import { Icon } from '../../components/Icon'
 import { api, ApiError } from '../../lib/api'
 
 /**
@@ -55,16 +56,14 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<div className="page-head-row">
-						<div>
-							<p className="eyebrow">Access plane</p>
-							<h1>Create policy</h1>
-							<p className="hint">
-								A named permission set for <code>{data.app}</code>, built from its action catalog. Grantable like any role.
-							</p>
-						</div>
-						<Link to="access/policies" params={{ app: data.app }} className="nav-cta">All policies</Link>
-					</div>
+					<Link to="access/policies" params={{ app: data.app }} className="back-link">
+						<Icon name="chevron-left" size={14} />
+						All policies
+					</Link>
+					<h1>Create policy</h1>
+					<p className="hint">
+						A named permission set for <code>{data.app}</code>, built from its action catalog. Grantable like any role.
+					</p>
 				</div>
 
 				<form className="panel form" onSubmit={submit}>
