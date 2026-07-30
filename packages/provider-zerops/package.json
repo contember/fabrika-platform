@@ -10,9 +10,6 @@
 	"publishConfig": {
 		"access": "public"
 	},
-	"bin": {
-		"fabrika-zerops": "./src/cli.ts"
-	},
 	"files": [
 		"src",
 		"!src/**/__tests__/**"
@@ -22,6 +19,11 @@
 			"bun": "./src/index.ts",
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
+		},
+		"./cli": {
+			"bun": "./src/cli.ts",
+			"types": "./src/cli.ts",
+			"default": "./src/cli.ts"
 		}
 	},
 	"scripts": {
@@ -32,7 +34,8 @@
 	"dependencies": {
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
-		"@fabrika/provider-contract": "workspace:*"
+		"@fabrika/provider-contract": "workspace:*",
+		"@fabrika/proxy-contract": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "latest"

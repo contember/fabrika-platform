@@ -1,4 +1,4 @@
-import type { AppScopeDef } from '@fabrika/iam/admin'
+import type { AppScopeDef } from '@fabrika/iam-contract'
 
 /**
  * The chosen scope for a grant / mapping. Two explicit states:

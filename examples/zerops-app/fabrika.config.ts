@@ -11,7 +11,7 @@
 // `project`. The Zerops project already exists and its id is a REGISTRY field — `app_envs.zerops_project_id`
 // (ADR-0006). Nothing in this file or the provider assumes an app→project mapping, and
 // nothing keys off a naming convention. This app's services are imported INTO the project the registry
-// names; `deploy/zerops/generated/apps-prod.zerops-import.yaml` is the import that created it.
+// names; `packages/installation-zerops/zerops/generated/apps-prod.zerops-import.yaml` is the import that created it.
 //
 // `pipeline.vars`. That surface exists to inject values into `process.env` before `resources()` builds a
 // Cloudflare resource graph. There is no resource graph here, and per-environment configuration reaches

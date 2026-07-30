@@ -1,5 +1,5 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
-import type { AppDto, AppSchemaDto, ListResponse, PolicyDto, UpdatePolicyRequest } from '@fabrika/iam/admin'
+import type { AppDto, AppSchemaDto, ListResponse, PolicyDto, UpdatePolicyRequest } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { ActionPicker } from '../../components/ActionPicker'
 import { ConfirmDialog } from '../../components/ConfirmDialog'

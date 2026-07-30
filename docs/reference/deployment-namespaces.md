@@ -182,13 +182,13 @@ Application onboarding and `PUT /api/apps/:app/envs/:env` accept `namespaceId`.
 The response exposes that assignment alongside opaque provider target and
 artifact envelopes.
 
-The Zerops CLI provides:
+The public `fabrika` CLI dispatches these commands to the Zerops provider:
 
 ```text
-fabrika-zerops namespace plan --id=<id> --env=<env> --preset=<cheap|mid|full>
-fabrika-zerops namespace create --id=<id> --env=<env> --preset=<cheap|mid|full>
-fabrika-zerops namespace adopt --id=<id> --env=<env> --preset=<cheap|mid|full> --project-id=<id>
-fabrika-zerops namespace reconcile --id=<id>
+fabrika namespace plan --provider=zerops --id=<id> --env=<env> --preset=<cheap|mid|full>
+fabrika namespace create --provider=zerops --id=<id> --env=<env> --preset=<cheap|mid|full>
+fabrika namespace adopt --provider=zerops --id=<id> --env=<env> --preset=<cheap|mid|full> --project-id=<id>
+fabrika namespace reconcile --provider=zerops --id=<id>
 ```
 
 The CLI plan is local and uses the same provider operator implementation. Create

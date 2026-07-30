@@ -18,6 +18,7 @@
  */
 
 import { uuidv7 } from '@fabrika/auth-core'
+import type { ProxyManifest } from '@fabrika/proxy-contract'
 import { Authorizer, type AuthorizerOptions, type Decision, type DenyReason, type ForwardedRequest, type ResolvedApp } from './authorize'
 import type { TokenCache } from './cache'
 import {
@@ -34,7 +35,6 @@ import {
 import { compileGates } from './gates'
 import type { IamGateway } from './iam'
 import { type LogFields, type ProxyLogger, redactPath, silentLogger } from './log'
-import type { ProxyManifest } from './manifest'
 
 export interface VerifyServiceConfig {
 	manifest: ProxyManifest

@@ -10,10 +10,10 @@
 # `notesdb` PostgreSQL service is provisioned by the import document and has nothing to build.
 #
 # Hand-written, unlike fabrika's own root `zerops.yaml` (which is generated from
-# `deploy/zerops/setups.ts`). The line between them: generate a file that must AGREE with something
+# `packages/installation-zerops/zerops/setups.ts`). The line between them: generate a file that must AGREE with something
 # else — fabrika's has to stay in step with the hostnames in its import documents — and write by hand a
 # file that stands alone, which is every app's. Both are validated against Zerops' published
-# `zerops.yaml` JSON schema by `deploy/zerops/__tests__/zerops-yaml.test.ts`, so "hand-written" does not
+# `zerops.yaml` JSON schema by `packages/installation-zerops/zerops/__tests__/zerops-yaml.test.ts`, so "hand-written" does not
 # mean "unchecked".
 #
 # ── Where the secrets are ──────────────────────────────────────────────────────────────────────────

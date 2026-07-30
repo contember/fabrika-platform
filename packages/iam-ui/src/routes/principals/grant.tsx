@@ -1,5 +1,5 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
-import type { AppDto, CreateGrantRequest, ListResponse, PrincipalDetail } from '@fabrika/iam/admin'
+import type { AppDto, CreateGrantRequest, ListResponse, PrincipalDetail } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { GrantComposer, useGrantComposerState } from '../../components/GrantComposer'
 import { Icon } from '../../components/Icon'

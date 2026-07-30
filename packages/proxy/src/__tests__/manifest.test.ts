@@ -4,9 +4,9 @@
  * nobody wrote.
  */
 
+import { parseProxyManifest } from '@fabrika/proxy-contract'
 import { describe, expect, test } from 'bun:test'
 import { ProxyEnvError, readProxyEnv } from '../env'
-import { parseProxyManifest } from '../manifest'
 import { createVerifyService } from '../service'
 import { FakeIam, ISSUER, verifyRequest } from './helpers'
 

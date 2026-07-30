@@ -1,5 +1,5 @@
 import { createPage, useNavigate } from '@buzola/router'
-import type { AppDto, ListResponse, RoleDto } from '@fabrika/iam/admin'
+import type { AppDto, ListResponse, RoleDto } from '@fabrika/iam-contract'
 import { Badge } from '../components/Badge'
 import { EmptyState, Table } from '../components/Table'
 import { api } from '../lib/api'

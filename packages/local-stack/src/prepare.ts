@@ -1,5 +1,6 @@
 import { notesGates } from '@fabrika/example-zerops-app/gates'
-import { buildCaddyConfig, type ProxyManifest } from '@fabrika/proxy'
+import { buildCaddyConfig } from '@fabrika/proxy'
+import type { ProxyManifest } from '@fabrika/proxy-contract'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'

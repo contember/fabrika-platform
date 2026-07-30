@@ -1,6 +1,6 @@
+import type { AppSchemaDto, GrantDto, PolicyDto, RoleDto } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
 import { handleAdmin } from '../admin/router'
-import type { AppSchemaDto, GrantDto, PolicyDto, RoleDto } from '../admin/types'
 import type { Env, RequestContext } from '../env'
 import type { Services } from '../services'
 import { createHarness, type Harness, seedAppAction, seedGrant, seedUser } from './helpers/harness'

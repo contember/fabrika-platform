@@ -7,6 +7,7 @@
 // a ref, never a raw value. fabrika is single-account, so there is no `accounts` resource: the CF
 // account/token + propustka coords are fabrika's own Worker config (src/env.ts).
 
+import type { AppDto, AppEnvDto, AppSecretDto, AppVarDto, RegisterAppResponse } from '@fabrika/control-contract'
 import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
 import { type AppEnvRow, type AppRow, type AppSecretRow, type AppVarRow, type Db, NamespaceResourceClaimConflictError } from '../db'
 import { error, json, readJson } from '../http'
@@ -30,7 +31,7 @@ export interface RegistryContext {
 
 // ── DTO mappers (snake_case row → camelCase API; secrets stay refs) ────────────
 
-function toAppDto(row: AppRow): unknown {
+function toAppDto(row: AppRow): AppDto {
 	return {
 		id: row.id,
 		repoUrl: row.repo_url,
@@ -42,7 +43,7 @@ function toAppDto(row: AppRow): unknown {
 		createdAt: row.created_at,
 	}
 }
-function toAppEnvDto(row: AppEnvRow): unknown {
+function toAppEnvDto(row: AppEnvRow): AppEnvDto {
 	return {
 		appId: row.app_id,
 		env: row.env,
@@ -50,8 +51,8 @@ function toAppEnvDto(row: AppEnvRow): unknown {
 		triggerRef: row.trigger_ref,
 		namespaceId: row.namespace_id,
 		provider: row.provider,
-		target: JSON.parse(row.provider_target_json),
-		artifact: JSON.parse(row.provider_artifact_json),
+		target: parseStoredEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),
+		artifact: parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
 		createdAt: row.created_at,
 	}
 }
@@ -187,7 +188,7 @@ async function resolveRegistrationNamespace(
 		target: parseStoredEnvelope(row.provider_target_json, `target for namespace ${row.id}`),
 	}
 }
-function toAppSecretDto(row: AppSecretRow): unknown {
+function toAppSecretDto(row: AppSecretRow): AppSecretDto {
 	// value_ref IS exposed (it's a reference, not the value) — the dashboard needs to show which ref a
 	// secret maps to. The actual value never leaves the vault (M4).
 	return { appId: row.app_id, env: row.env, name: row.name, valueRef: row.value_ref, createdAt: row.created_at }
@@ -413,7 +414,7 @@ export async function deleteAppSecret(c: RegistryContext, appId: string, name: s
 
 // ── App vars (non-secret deploy-time config; PLAINTEXT, readable — unlike secrets) ──
 
-function toAppVarDto(row: AppVarRow): unknown {
+function toAppVarDto(row: AppVarRow): AppVarDto {
 	// `value` IS exposed: these are NON-secret per-app-env config (e.g. PROPUSTKA_ACCESS_APPS). Secrets
 	// (app_secrets) expose only a ref; vars are plaintext config the dashboard can show + edit.
 	return { appId: row.app_id, env: row.env, name: row.name, value: row.value, createdAt: row.created_at }
@@ -598,7 +599,8 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 		resourceId: id,
 		metadata: { repoUrl, env, namespaceId: appEnv.namespace_id, onboarding: true },
 	})
-	return json({ app: toAppDto(app), env: toAppEnvDto(appEnv) }, { status: 201 })
+	const response: RegisterAppResponse = { app: toAppDto(app), env: toAppEnvDto(appEnv) }
+	return json(response, { status: 201 })
 }
 
 // Re-export the field readers the router uses to validate query params consistently.

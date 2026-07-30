@@ -1,0 +1,20 @@
+{
+	"name": "fabrika-runner-image",
+	"private": true,
+	"type": "module",
+	"workspaces": [
+		"packages/auth-core",
+		"packages/auth",
+		"packages/provider-contract",
+		"packages/provider-cloudflare",
+		"packages/engine",
+		"packages/platform",
+		"packages/control-contract",
+		"packages/runner-contract",
+		"packages/runner-container"
+	],
+	"//": "Slim workspace baked into the runner image. The provider CLI and runner resolve local workspace packages; wrangler is installed globally.",
+	"dependencies": {
+		"oblaka-iac": "^0.0.18"
+	}
+}

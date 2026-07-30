@@ -8,8 +8,8 @@
  *   bun run src/generate-config.ts [manifest] [out] [--auth-upstream host:port] [--listen :8080]
  */
 
+import { parseProxyManifest } from '@fabrika/proxy-contract'
 import { buildCaddyConfig, type CaddyBuildOptions } from './caddy'
-import { parseProxyManifest } from './manifest'
 
 interface Args {
 	manifest: string

@@ -1,0 +1,44 @@
+{
+	"name": "@fabrika/installation-zerops",
+	"version": "0.0.1",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/contember/fabrika-platform.git",
+		"directory": "packages/installation-zerops"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"src",
+		"zerops",
+		"!zerops/**/__tests__/**"
+	],
+	"exports": {
+		".": {
+			"bun": "./src/index.ts",
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		}
+	},
+	"type": "module",
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test",
+		"gen": "bun zerops/render.ts",
+		"gen:check": "bun zerops/render.ts --check",
+		"gen:schemas": "bun zerops/schemas/refresh.ts"
+	},
+	"dependencies": {
+		"@fabrika/installation-contract": "workspace:*",
+		"@fabrika/provider-zerops": "workspace:*",
+		"@fabrika/proxy-contract": "workspace:*"
+	},
+	"devDependencies": {
+		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/engine": "workspace:*",
+		"@fabrika/example-zerops-app": "workspace:*",
+		"@fabrika/proxy": "workspace:*",
+		"@types/bun": "latest"
+	}
+}

@@ -1,4 +1,4 @@
-import type { AppDto } from '@fabrika/iam/admin'
+import type { AppDto } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { useAppVocab } from '../lib/useAppVocab'
 import { ActionPicker } from './ActionPicker'

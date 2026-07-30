@@ -3,7 +3,7 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import { createZeropsControlProvider } from '@fabrika/provider-zerops'
 import type { Env } from '../env'
 import { db } from '../services'
-import { syncZeropsProxy } from '../zerops-proxy'
+import { syncZeropsProxy } from './zerops-proxy'
 
 const required = (source: Record<string, string | undefined>, name: string): string => {
 	const value = source[name]

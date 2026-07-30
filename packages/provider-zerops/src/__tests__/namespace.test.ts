@@ -1,4 +1,5 @@
 import type { ProviderDeploymentNamespace } from '@fabrika/provider-contract'
+import { FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
 import { describe, expect, test } from 'bun:test'
 import type { ZeropsApi, ZeropsAppVersion, ZeropsImportResult, ZeropsProject, ZeropsService, ZeropsServiceEnv } from '../api'
 import { useSharedPostgres } from '../authoring'
@@ -9,7 +10,6 @@ import {
 	createZeropsNamespaceOperator,
 	ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
 	ZEROPS_NAMESPACE_IAM_URL_VARIABLE,
-	ZEROPS_NAMESPACE_PROXY_MANIFEST_VARIABLE,
 	ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
 	type ZeropsNamespaceOptions,
 	zeropsNamespacePreset,
@@ -383,7 +383,7 @@ describe('Zerops namespace lifecycle', () => {
 		})
 		expect(state.importProjectCount).toBe(1)
 		expect(state.triggerCount).toBe(1)
-		expect(state.env.get(proxyId)?.get(ZEROPS_NAMESPACE_PROXY_MANIFEST_VARIABLE)?.content).toBe('{"apps":[]}')
+		expect(state.env.get(proxyId)?.get(FABRIKA_PROXY_MANIFEST_JSON)?.content).toBe('{"apps":[]}')
 		expect(state.env.get(proxyId)?.get(ZEROPS_NAMESPACE_IAM_URL_VARIABLE)?.content).toBe('https://iam.example.test')
 		expect(JSON.stringify(checkpoints)).not.toContain('proxy-key-that-must-never-be-persisted')
 	})
@@ -547,9 +547,9 @@ describe('Zerops namespace lifecycle', () => {
 		const state = freshState()
 		state.projects.set(projectId, project(projectId, 'apps-prod', 'Managed by Fabrika namespace apps-prod (prod).'))
 		state.services.set(projectId, [proxy()])
-		ensureServiceEnv(state, proxyId).set(ZEROPS_NAMESPACE_PROXY_MANIFEST_VARIABLE, {
+		ensureServiceEnv(state, proxyId).set(FABRIKA_PROXY_MANIFEST_JSON, {
 			id: 'manifest',
-			key: ZEROPS_NAMESPACE_PROXY_MANIFEST_VARIABLE,
+			key: FABRIKA_PROXY_MANIFEST_JSON,
 			content: '{"apps":[{"id":"notes"}]}',
 		})
 		ensureServiceEnv(state, proxyId).set(ZEROPS_NAMESPACE_IAM_URL_VARIABLE, {
@@ -573,7 +573,7 @@ describe('Zerops namespace lifecycle', () => {
 		const result = await run(capabilities, ready, [], 'reconcile')
 
 		expect(zeropsNamespaceTargetCodec.decode(result.target.payload).ready).toBe(true)
-		expect(state.env.get(proxyId)?.get(ZEROPS_NAMESPACE_PROXY_MANIFEST_VARIABLE)?.content).toBe('{"apps":[{"id":"notes"}]}')
+		expect(state.env.get(proxyId)?.get(FABRIKA_PROXY_MANIFEST_JSON)?.content).toBe('{"apps":[{"id":"notes"}]}')
 		expect(state.triggerCount).toBe(0)
 		expect(state.calls).toContain(`importServices:${projectId}`)
 	})

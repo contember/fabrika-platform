@@ -33,28 +33,51 @@ platform_, never _an app runs on both_.
 
 ## The packages
 
-| Package                        | What it is                                                                                     |
-| ------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `@fabrika/auth-core`           | Shared IAM domain: policy model, scope dimensions, evaluation.                                 |
-| `@fabrika/auth`                | The published SDK apps depend on.                                                              |
-| `@fabrika/app`                 | Fetch routing, middleware, typed RPC, object authorization, client, explicit runtime adapters. |
-| `@fabrika/iam`                 | The IAM service itself: identity, keys, policies, and audit.                                   |
-| `@fabrika/iam-ui`              | Access feature routes embedded in the unified console.                                         |
-| `@fabrika/provider-contract`   | Open runtime and control-provider interfaces plus versioned JSON envelopes.                    |
-| `@fabrika/provider-cloudflare` | Cloudflare app authoring, deploy plan, control adapter, runner job contract, and CLI.          |
-| `@fabrika/provider-zerops`     | Zerops app authoring, manifest compiler, API client, deploy plan, control adapter, and CLI.    |
-| `@fabrika/engine`              | Provider-neutral execution of an explicit `RuntimeProvider` session.                           |
-| `@fabrika/platform`            | Runtime ports shared by the control plane and IAM.                                             |
-| `@fabrika/platform-node`       | Bun/Postgres/S3 implementations of those runtime ports.                                        |
-| `@fabrika/control`             | Shared control-plane core plus separate Cloudflare Worker and Zerops/Bun composition roots.    |
-| `@fabrika/cli`                 | Operator bring-up CLI.                                                                         |
-| `@fabrika/dashboard`           | Unified Delivery and Access console served by control.                                         |
-| `@fabrika/runner`              | Cloudflare-only transport and execution for provider-owned runner jobs.                        |
-| `@fabrika/proxy`               | Shared auth enforcement service used by the provider-specific edge proxy.                      |
+| Package                            | What it is                                                                                     |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `@fabrika/auth-core`               | Shared IAM domain: policy model, scope dimensions, evaluation.                                 |
+| `@fabrika/auth`                    | The published SDK apps depend on.                                                              |
+| `@fabrika/app`                     | Fetch routing, middleware, typed RPC, object authorization, client, explicit runtime adapters. |
+| `@fabrika/iam`                     | The IAM service itself: identity, keys, policies, and audit.                                   |
+| `@fabrika/iam-contract`            | Runtime-neutral IAM admin REST request and response DTOs.                                      |
+| `@fabrika/iam-ui`                  | Access feature routes embedded in the unified console.                                         |
+| `@fabrika/provider-contract`       | Open runtime and control-provider interfaces plus versioned JSON envelopes.                    |
+| `@fabrika/provider-cloudflare`     | Cloudflare app authoring, deploy plan, control adapter, runner job contract, and executor.     |
+| `@fabrika/provider-zerops`         | Zerops app authoring, manifest compiler, API client, deploy plan, and control adapter.         |
+| `@fabrika/engine`                  | Provider-neutral execution of an explicit `RuntimeProvider` session.                           |
+| `@fabrika/platform`                | Runtime ports shared by the control plane and IAM.                                             |
+| `@fabrika/platform-node`           | Bun/Postgres/S3 implementations of those runtime ports.                                        |
+| `@fabrika/control`                 | Shared control-plane core plus separate Cloudflare Worker and Zerops/Bun composition roots.    |
+| `@fabrika/control-contract`        | Runtime-neutral control REST DTOs and the deploy log line shape.                               |
+| `@fabrika/installation-contract`   | Open contract for provider-specific platform `init`, `plan`, and `deploy` commands.            |
+| `@fabrika/installation-cloudflare` | Cloudflare account bring-up and platform plan/deploy composition.                              |
+| `@fabrika/installation-zerops`     | Zerops topology, generated installation artifacts, and platform plan validation.               |
+| `@fabrika/cli`                     | The single public `fabrika` command and provider-aware command router.                         |
+| `@fabrika/dashboard`               | Unified Delivery and Access console served by control.                                         |
+| `@fabrika/runner-contract`         | Provider-neutral Worker↔container transport types and endpoints.                               |
+| `@fabrika/runner-container`        | Plain-Bun process and container image that execute Cloudflare runner jobs.                     |
+| `@fabrika/runner-cloudflare`       | Out-of-band Cloudflare Worker that hosts and relays the deploy container.                      |
+| `@fabrika/proxy-contract`          | Proxy manifest wire types, encoder, and fail-closed parser.                                    |
+| `@fabrika/proxy`                   | Shared auth enforcement service used by the provider-specific edge proxy.                      |
 
 `@fabrika/auth` is a published SDK with downstream consumers (poplach, revizor,
 opice); the rename is a deliberate, one-time break — see
 [ADR-0001](../decisions/0001-merge-propustka-and-vozka.md).
+
+The narrow contract packages keep wire types away from runtime entrypoints:
+
+- `@fabrika/control` and `@fabrika/dashboard` share REST DTOs through
+  `@fabrika/control-contract`; its `RunLogLine` also crosses the runner boundary.
+- `@fabrika/iam` and `@fabrika/iam-ui` share admin REST DTOs through
+  `@fabrika/iam-contract`. The `IamRpc` and policy domain stay in
+  `@fabrika/auth-core`.
+- the Zerops provider and control composition produce
+  `@fabrika/proxy-contract` manifests; `@fabrika/proxy` parses and enforces them.
+- `@fabrika/runner-cloudflare` and `@fabrika/runner-container` communicate only
+  through `@fabrika/runner-contract`. Provider job semantics remain in
+  `@fabrika/provider-cloudflare`.
+- `@fabrika/cli` invokes provider-specific installation packages through
+  `@fabrika/installation-contract`.
 
 ## Operator console
 
@@ -98,12 +121,16 @@ provider ([ADR-0011](../decisions/0011-static-provider-bundles.md)).
 App configs use the selected provider package as their authoring surface:
 
 - Cloudflare configs import `defineApp` and Oblaka resources from
-  `@fabrika/provider-cloudflare`. `fabrika-cloudflare deploy` executes an app
-  deployment; `fabrika-cloudflare platform deploy` deploys the platform Worker
-  and runner composition.
+  `@fabrika/provider-cloudflare`. `fabrika app deploy` executes an app deployment.
 - Zerops configs import `defineApp` and Zerops resource types from
-  `@fabrika/provider-zerops`. `fabrika-zerops build` evaluates the config and
+  `@fabrika/provider-zerops`. `fabrika app build` evaluates the config and
   writes the static `fabrika.manifest.json` consumed during registration.
+
+The public CLI infers the app provider from the object returned by the selected
+provider's `defineApp()`. App commands therefore need `--provider` only when the
+config is absent. Platform commands load one `@fabrika/installation-*` module
+through `@fabrika/installation-contract`; official provider names are aliases,
+and a package specifier can supply another installation module.
 
 The control-plane registry persists provider-owned target and artifact data as
 opaque `{ provider, version, payload }` JSON envelopes. The selected provider
@@ -129,19 +156,23 @@ an explicit runtime session. `@fabrika/engine` executes the provider-supplied
 ordered plan without interpreting provider target data, artifact data, or step
 kinds.
 
-On Cloudflare, a separate runner Worker starts a Cloudflare Container. The
-container clones the repository, installs dependencies, and executes the
-Cloudflare plan. Keeping the runner separate lets the control plane deploy itself
-without resetting the container that owns the run.
+On Cloudflare, `@fabrika/runner-cloudflare` starts a Cloudflare Container. The
+`@fabrika/runner-container` process clones the repository, installs dependencies,
+and invokes the internal `fabrika-cloudflare-executor` to execute the Cloudflare
+plan. `@fabrika/runner-contract` is the transport-only boundary between them.
+Keeping the runner Worker separate lets the control plane deploy itself without
+resetting the container that owns the run.
 
-On Zerops, the app build runs `fabrika-zerops build --env=<env>` and produces a
+On Zerops, the app build runs `fabrika app build --env=<env>` and produces a
 versioned `fabrika.manifest.json`. Registration stores manifest version 2 in the
 Zerops artifact envelope version 2. Its structured import document is the source
 for both service claims and the YAML sent to Zerops. The app target envelope
 version 2 stores only the app service id; the assigned deployment namespace
 supplies the Zerops project and proxy coordinates. A queued deploy never imports
 app TypeScript: the Bun control process applies the compiled import, triggers the
-service pipeline, polls its app-version, and reconciles the IAM schema. It stores
+service pipeline, polls its app-version, and reconciles the IAM schema. The Zerops
+control provider requires its composition root to inject `@fabrika/engine`; it has
+no fallback executor. It stores
 the app-version id as soon as Zerops accepts the pipeline. Startup and scheduled
 maintenance call the provider reconciliation capability for unfinished
 platform-owned runs, so a self-deploy or restart does not lose the terminal state

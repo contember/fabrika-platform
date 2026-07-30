@@ -1,0 +1,13 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		// The worker uses Cloudflare bindings; the bootstrap script uses Bun.
+		"types": ["@cloudflare/workers-types", "@types/bun"],
+		// The provider authoring surface re-exports oblaka-iac's raw TypeScript, which trips these flags.
+		// Keep the relaxation package-local; runner source remains strict by convention.
+		"noUncheckedIndexedAccess": false,
+		"noPropertyAccessFromIndexSignature": false
+	},
+	"include": ["src/**/*", "oblaka.ts", "fabrika-runner.config.ts", "scripts/**/*"]
+}

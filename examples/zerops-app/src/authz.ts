@@ -33,7 +33,7 @@ import { createRemoteJWKSet, jwtVerify } from 'jose'
  *
  * Declared here rather than imported: an app must not depend on `@fabrika/proxy`, which is a deployed
  * service and not a library for apps. The constant is duplicated on purpose and the duplication is
- * CHECKED — `deploy/zerops/__tests__/example-app.test.ts` asserts this equals the proxy's own
+ * CHECKED — `packages/installation-zerops/zerops/__tests__/example-app.test.ts` asserts this equals the proxy's own
  * `PROXY_TOKEN_HEADER`, so a rename fails a test instead of silently un-authenticating every request.
  * The real fix is to hoist the name into `@fabrika/auth-core`, which both sides may depend on.
  */

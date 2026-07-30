@@ -7,6 +7,7 @@
  */
 
 import { type AppGates, buildAccessClaims, type Jwks, type MintFromKeyResult, type MintTokenResult, type PermissionEntry } from '@fabrika/auth-core'
+import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-contract'
 import { exportJWK, generateKeyPair, type KeyLike, SignJWT } from 'jose'
 import {
 	APP_QUERY_PARAM,
@@ -18,7 +19,6 @@ import {
 } from '../constants'
 import type { IamGateway } from '../iam'
 import type { LogFields, ProxyLogger } from '../log'
-import type { ProxyApp, ProxyManifest } from '../manifest'
 
 export const ISSUER = 'https://iam.test'
 export const APP = 'example-app'

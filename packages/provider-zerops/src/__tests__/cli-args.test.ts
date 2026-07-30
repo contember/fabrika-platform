@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { parseZeropsCliArgs } from '../cli-args'
 
-describe('fabrika-zerops arguments', () => {
+describe('fabrika Zerops arguments', () => {
 	test('parses the build command and its provider-specific artifact options', () => {
 		expect(parseZeropsCliArgs(['build', '--env=prod', '--config=app.ts', '--output=artifact.json'])).toEqual({
 			command: 'build',

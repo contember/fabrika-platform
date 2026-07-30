@@ -17,7 +17,8 @@ export type {
 	ZeropsServiceEnv,
 	ZeropsServiceStatus,
 } from './api'
-export { defineApp, useSharedPostgres, zeropsSharedServiceHostname, zeropsSharedServicePrefix } from './authoring'
+export { defineApp, isZeropsAppConfig, useSharedPostgres, zeropsSharedServiceHostname, zeropsSharedServicePrefix } from './authoring'
+export type { ZeropsAuthoredAppConfig } from './authoring'
 export { parseZeropsCliArgs } from './cli-args'
 export type { ZeropsCliArgs } from './cli-args'
 export { zeropsTargetCodec } from './codec'
@@ -53,7 +54,6 @@ export {
 	ZEROPS_NAMESPACE_IAM_URL_VARIABLE,
 	ZEROPS_NAMESPACE_POSTGRES_HOSTNAME,
 	ZEROPS_NAMESPACE_PROXY_HOSTNAME,
-	ZEROPS_NAMESPACE_PROXY_MANIFEST_VARIABLE,
 	ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
 	zeropsNamespacePreset,
 	zeropsNamespaceTargetCodec,

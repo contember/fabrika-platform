@@ -836,7 +836,7 @@ export class Db {
 	 * Move a run to a terminal state (`succeeded` | `failed`): stamp `finished_at` + the exit code.
 	 * Returns true iff the row transitioned (it was still `running`/`pending`).
 	 *
-	 * The statement + bind order are DUPLICATED verbatim by `@fabrika/runner`'s `finishRun`, whose
+	 * The statement + bind order are DUPLICATED verbatim by `@fabrika/runner-cloudflare`'s `finishRun`, whose
 	 * co-write the `WHERE status IN ('pending','running')` guard makes idempotent. Change both together.
 	 */
 	async markRunFinished(id: string, status: 'succeeded' | 'failed', exitCode: number | null): Promise<boolean> {

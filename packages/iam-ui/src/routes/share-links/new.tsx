@@ -1,5 +1,5 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
-import type { IssuedShareLinkResponse, IssueShareLinkRequest } from '@fabrika/iam/admin'
+import type { IssuedShareLinkResponse, IssueShareLinkRequest } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { SecretModal } from '../../components/SecretModal'

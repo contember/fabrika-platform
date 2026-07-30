@@ -1,5 +1,22 @@
 import type { AppSchema, IssueKeyInput, KeyGrant, PermissionEntry, PrincipalType, RoleDef } from '@fabrika/auth-core'
 import { API_KEY_PREFIX, isActionAllowed } from '@fabrika/auth-core'
+import type {
+	ApiKeyDto,
+	AppDto,
+	AppSchemaDto,
+	AuditEventDto,
+	AuthLogDto,
+	GrantDto,
+	IssuedShareLinkResponse,
+	MeDto,
+	PolicyDto,
+	PrincipalDetail,
+	PrincipalListItem,
+	ProvisionApiKeyResponse,
+	RoleDto,
+	RotateApiKeyResponse,
+	ShareLinkListItem,
+} from '@fabrika/iam-contract'
 import {
 	type AuditEventRow,
 	type AuthLogRow,
@@ -18,23 +35,6 @@ import { BUILTIN_ROLES, isKnownRole, makeRoleSource } from '../roles'
 import { generateToken, hashToken } from '../secret'
 import type { Services } from '../services'
 import { error, json, readJson } from './http'
-import type {
-	ApiKeyDto,
-	AppDto,
-	AppSchemaDto,
-	AuditEventDto,
-	AuthLogDto,
-	GrantDto,
-	IssuedShareLinkResponse,
-	MeDto,
-	PolicyDto,
-	PrincipalDetail,
-	PrincipalListItem,
-	ProvisionApiKeyResponse,
-	RoleDto,
-	RotateApiKeyResponse,
-	ShareLinkListItem,
-} from './types'
 
 /**
  * Context every admin handler receives: the resolved admin caller (already gated

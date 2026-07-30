@@ -1,5 +1,5 @@
 export * from 'oblaka-iac'
-export { type CloudflareAppConfig, defineApp, isCloudflareAppConfig, type ResourceContext } from './authoring'
+export { type CloudflareAppConfig, type CloudflareAppConfigInput, defineApp, isCloudflareAppConfig, type ResourceContext } from './authoring'
 export { parseCloudflareArgs, platformComponents } from './cli-args'
 export type { ParsedCloudflareArgs, PlatformComponent } from './cli-args'
 export { type CloudflareArtifact, cloudflareArtifact, cloudflareArtifactCodec, type CloudflareTarget, cloudflareTargetCodec } from './codec'

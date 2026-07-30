@@ -1,5 +1,5 @@
 import type { ControlProvider, JsonValue, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
-import { logsKey } from '@fabrika/runner'
+import { logsKey } from '@fabrika/runner-cloudflare'
 import { describe, expect, test } from 'bun:test'
 import type { ApiDeps } from '../api/router'
 import { handleApi } from '../api/router'

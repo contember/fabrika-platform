@@ -6,13 +6,16 @@ root. Shared code receives that provider explicitly.
 
 ## Package boundary
 
-| Package                        | Owns                                                                                                                                   |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `@fabrika/provider-contract`   | JSON value/envelope types, typed codecs, runtime deploy sessions, control capabilities, and provider-neutral authoring contracts.      |
-| `@fabrika/provider-cloudflare` | Oblaka-based app authoring, Cloudflare codecs and plan, collaborators, control adapter, runner job contract, and `fabrika-cloudflare`. |
-| `@fabrika/provider-zerops`     | Zerops app authoring, manifest compiler, schema/API client, codecs and plan, control adapter, and `fabrika-zerops`.                    |
-| `@fabrika/engine`              | Ordered execution of one explicit `RuntimeProvider` session, including step state, logs, failure, and cancellation observation.        |
-| `@fabrika/control`             | Provider-neutral registry, persistence, queue semantics, locking, run status, secret resolution, and HTTP API.                         |
+| Package                            | Owns                                                                                                                                |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `@fabrika/provider-contract`       | JSON value/envelope types, typed codecs, runtime deploy sessions, control capabilities, and provider-neutral authoring contracts.   |
+| `@fabrika/provider-cloudflare`     | Oblaka-based app authoring, Cloudflare codecs and plan, collaborators, control adapter, runner job contract, and internal executor. |
+| `@fabrika/provider-zerops`         | Zerops app authoring, manifest compiler, schema/API client, codecs and plan, and control adapter.                                   |
+| `@fabrika/engine`                  | Ordered execution of one explicit `RuntimeProvider` session, including step state, logs, failure, and cancellation observation.     |
+| `@fabrika/control`                 | Provider-neutral registry, persistence, queue semantics, locking, run status, secret resolution, and HTTP API.                      |
+| `@fabrika/installation-contract`   | Open platform `init`, `plan`, and `deploy` command contract.                                                                        |
+| `@fabrika/installation-cloudflare` | Cloudflare account bootstrap and platform deployment composition.                                                                   |
+| `@fabrika/installation-zerops`     | Zerops platform topology, generated artifacts, and plan validation.                                                                 |
 
 `@fabrika/platform` is a separate boundary. It describes host-runtime
 capabilities such as SQL, queues, blobs, locks, assets, and background work. A
@@ -97,14 +100,18 @@ adding provider-specific columns or fields to shared control code.
 The Cloudflare installation starts at `packages/control/src/index.ts`.
 `platform-cf.ts` composes `@fabrika/provider-cloudflare` with native Worker
 bindings and the separate runner service. The provider owns
-`CloudflareRunnerJob`; `@fabrika/runner` validates, transports, and executes that
-job without owning provider plan semantics.
+`CloudflareRunnerJob`; `@fabrika/runner-contract` owns only the transport
+protocol, `@fabrika/runner-container` executes the job, and
+`@fabrika/runner-cloudflare` hosts and relays the container. None of the runner
+packages owns provider plan semantics.
 
 The Zerops installation starts at `packages/control/src/node/server.ts`.
 `node/provider.ts` composes `@fabrika/provider-zerops` with the neutral engine,
 Zerops credentials, and the proxy-manifest synchronization hook. Deploy
-execution stays in the Bun process; accepted app-version ids are reconciled
-through the provider capability after restarts.
+execution stays in the Bun process. `createZeropsControlProvider` requires an
+executor; the composition root injects `@fabrika/engine` and there is no
+provider-local fallback lifecycle. Accepted app-version ids are reconciled through
+the provider capability after restarts.
 
 `packages/control/src/__tests__/entrypoint-isolation.test.ts` walks both import
 graphs. It verifies that each root reaches only its selected provider and runtime,
@@ -119,12 +126,15 @@ Cloudflare apps import their config surface from
 import { defineApp, Worker } from '@fabrika/provider-cloudflare'
 ```
 
-The provider CLI exposes:
+The public command exposes:
 
 ```text
-fabrika-cloudflare deploy --env=<env> [--config=<path>] [--dry-run]
-fabrika-cloudflare platform deploy [--env=<env>] --runner-config=<path> --worker-config=<path> [--build-runner-image] [--dry-run]
+fabrika app deploy --env=<env> [--config=<path>] [--dry-run]
 ```
+
+The provider is inferred from the provider-authored config. The
+`fabrika-cloudflare-executor` binary is internal to the runner container; it is
+not an operator surface.
 
 Zerops apps import their config surface from `@fabrika/provider-zerops`:
 
@@ -135,25 +145,47 @@ import { defineApp } from '@fabrika/provider-zerops'
 Its build command evaluates app-owned TypeScript before registration:
 
 ```text
-fabrika-zerops build --env=<env> [--config=<path>] [--output=<path>]
+fabrika app build --env=<env> [--config=<path>] [--output=<path>]
 ```
 
 The resulting `fabrika.manifest.json` is the provider-owned artifact. The control
 plane validates and stores it, then performs deployments without importing the
 app's TypeScript.
 
-The Zerops CLI also exposes the provider-owned namespace operator:
+The same public command exposes the provider-owned namespace operator:
 
 ```text
-fabrika-zerops namespace plan --id=<id> --env=<env> --preset=<cheap|mid|full>
-fabrika-zerops namespace create --id=<id> --env=<env> --preset=<cheap|mid|full>
-fabrika-zerops namespace adopt --id=<id> --env=<env> --preset=<cheap|mid|full> --project-id=<id>
-fabrika-zerops namespace reconcile --id=<id>
+fabrika namespace plan --id=<id> --env=<env> --preset=<cheap|mid|full>
+fabrika namespace create --id=<id> --env=<env> --preset=<cheap|mid|full>
+fabrika namespace adopt --id=<id> --env=<env> --preset=<cheap|mid|full> --project-id=<id>
+fabrika namespace reconcile --id=<id>
 ```
 
 `plan` runs without mutation. `create` and `adopt` submit the provider-generated
 namespace envelope to the control API. `reconcile` resumes the stored,
 checkpointed lifecycle.
+
+## Installation commands
+
+`@fabrika/cli` is the only public executable. Platform commands select an
+`InstallationCli` from `@fabrika/installation-contract`:
+
+```text
+fabrika platform init --provider=cloudflare <account>
+fabrika platform plan --provider=cloudflare --runner-config=<path> --worker-config=<path>
+fabrika platform deploy --provider=cloudflare --runner-config=<path> --worker-config=<path>
+fabrika platform plan --provider=zerops
+```
+
+Cloudflare supports all three installation operations. Zerops currently supports
+only mutation-free `plan`, which validates the generated installation artifacts;
+real-account `init` and `deploy` stay unavailable until that path is exercised.
+The CLI maps the official `cloudflare` and `zerops` ids to their installation
+packages and treats any other provider value as an importable package specifier.
+
+For app commands, provider selection comes from the default-exported
+provider-authored config. An explicit `--provider` is required only when no app
+config is available.
 
 The architectural constraints and rejected dynamic-registry alternative are in
 [ADR-0011](../decisions/0011-static-provider-bundles.md).

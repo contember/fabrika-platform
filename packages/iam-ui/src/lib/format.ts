@@ -1,6 +1,6 @@
 // Tiny formatting helpers shared across pages.
 
-import type { PermissionEntry } from '@fabrika/iam/admin'
+import type { PermissionEntry } from '@fabrika/iam-contract'
 
 /** A flat scope coordinate (one dimension + opaque value); null = global. */
 type Scope = NonNullable<PermissionEntry['scope']>

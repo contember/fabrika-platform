@@ -95,7 +95,7 @@ export const buildVozkaWorker = (ctx: ResourceContext): Worker => {
 			// Off-local service bindings (local dev has neither): propustka IAM (src/iam.ts uses
 			// FakeIamClient locally, DEV='true') + vozka-runner, the deploy executor the queue consumer
 			// hands each run to (RUNNER_SVC.startRun). vozka-runner is its OWN worker so a deploy of fabrika
-			// never resets the container running it — deployed out-of-band (packages/runner bootstrap).
+			// never resets the container running it — deployed out-of-band (packages/runner-cloudflare bootstrap).
 			...(isLocal ? {} : {
 				IAM: new ServiceReference('propustka-worker'),
 				RUNNER_SVC: new ServiceReference('vozka-runner'),

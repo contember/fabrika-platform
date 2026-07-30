@@ -28,6 +28,14 @@
 		"typecheck": "tsc --noEmit",
 		"test": "bun test"
 	},
+	"dependencies": {
+		"@fabrika/installation-cloudflare": "workspace:*",
+		"@fabrika/installation-contract": "workspace:*",
+		"@fabrika/installation-zerops": "workspace:*",
+		"@fabrika/provider-cloudflare": "workspace:*",
+		"@fabrika/provider-contract": "workspace:*",
+		"@fabrika/provider-zerops": "workspace:*"
+	},
 	"devDependencies": {
 		"@types/bun": "latest"
 	}

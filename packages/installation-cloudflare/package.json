@@ -1,0 +1,35 @@
+{
+	"name": "@fabrika/installation-cloudflare",
+	"version": "0.0.1",
+	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/contember/fabrika-platform.git",
+		"directory": "packages/installation-cloudflare"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"src",
+		"!src/**/__tests__/**"
+	],
+	"exports": {
+		".": {
+			"bun": "./src/index.ts",
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		}
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@fabrika/installation-contract": "workspace:*",
+		"@fabrika/provider-cloudflare": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	}
+}

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { D1Database, Worker } from 'oblaka-iac'
-import type { CloudflareAppConfig, CloudflareCollaborators, CommandResult, CommandSpec, ProvisionInput } from '..'
-import { cloudflareArtifact, createCloudflareProvider } from '..'
+import type { CloudflareAppConfig, CloudflareAppConfigInput, CloudflareCollaborators, CommandResult, CommandSpec, ProvisionInput } from '..'
+import { cloudflareArtifact, createCloudflareProvider, defineApp } from '..'
 
 interface Recorded {
 	readonly commands: CommandSpec[]
@@ -10,11 +10,12 @@ interface Recorded {
 	readonly logs: string[]
 }
 
-const config = (overrides: Partial<CloudflareAppConfig> = {}): CloudflareAppConfig => ({
-	id: 'demo',
-	resources: () => new Worker({ dir: '.', name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
-	...overrides,
-})
+const config = (overrides: Partial<CloudflareAppConfigInput> = {}): CloudflareAppConfig =>
+	defineApp({
+		id: 'demo',
+		resources: () => new Worker({ dir: '.', name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
+		...overrides,
+	})
 
 const makeCollaborators = (
 	rec: Recorded,

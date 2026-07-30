@@ -7,11 +7,11 @@
  * Caddy is the only thing that may dial it.
  */
 
+import { parseProxyManifest } from '@fabrika/proxy-contract'
 import { MemoryTokenCache } from './cache'
 import { readProxyEnv } from './env'
 import { HttpIamGateway } from './iam'
 import { consoleLogger } from './log'
-import { parseProxyManifest } from './manifest'
 import { createVerifyService } from './service'
 
 const env = readProxyEnv(Bun.env)

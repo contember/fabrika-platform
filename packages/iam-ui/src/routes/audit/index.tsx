@@ -1,5 +1,5 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
-import type { AuditEventDto, CursorList } from '@fabrika/iam/admin'
+import type { AuditEventDto, CursorList } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { JsonView } from '../../components/JsonView'

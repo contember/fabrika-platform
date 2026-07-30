@@ -31,7 +31,7 @@ const recorder = (calls: Call[], status = 200) => (input: string | URL | Request
 	)
 }
 
-describe('fabrika-zerops namespace commands', () => {
+describe('fabrika namespace commands', () => {
 	test('plans cheap topology offline with explicit provider fields', async () => {
 		const calls: Call[] = []
 		const output: string[] = []

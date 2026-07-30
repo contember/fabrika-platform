@@ -38,7 +38,7 @@ Provider packages own the per-cloud implementations behind the open contract in
 | Artifact deploy  | **Per-provider**  | `wrangler deploy` vs an `/app-version` API call — and on Zerops build and deploy are one indivisible platform-side step.           |
 | Migrations       | **Per-provider**  | A discrete plan step on Cloudflare; `run.initCommands` at container start on Zerops.                                               |
 
-Zerops app configuration crosses a static boundary. `fabrika-zerops build`
+Zerops app configuration crosses a static boundary. `fabrika app build`
 evaluates the app-owned TypeScript and emits manifest version 2 in a provider
 artifact envelope version 2. The control plane validates and stores its canonical
 structured import document, then deploys it without executing repository code.
@@ -58,8 +58,9 @@ project and offers `cheap`, `mid`, and `full` isolation presets. See
 
 The Cloudflare provider keeps the executable Oblaka config as its source
 artifact. Its control adapter resolves a checkout and sends the provider-owned
-runner job to the separate Cloudflare runner. The runner invokes
-`fabrika-cloudflare deploy`; the neutral engine and shared control core do not
+runner job through `@fabrika/runner-contract` to the separate Cloudflare runner.
+`@fabrika/runner-container` invokes the internal
+`fabrika-cloudflare-executor`; the neutral engine and shared control core do not
 import Oblaka or interpret Cloudflare steps.
 
 ## IAM (`@fabrika/iam`) — port assessment
@@ -78,7 +79,7 @@ only `env.ts`, `index.ts`, `db.ts` and the test harness are platform-specific.
   [`@fabrika/platform-node`](../../packages/platform-node/). One SQL body, two
   backends, no query duplication.
 - **The query surface was NOT purely mechanical.** Audits found, and the query
-  bodies in `iam`, `control` and `runner` have since been fixed for, three outright
+  bodies in `iam`, `control` and `runner-cloudflare` have since been fixed for, three outright
   failures — `IS NOT <expr>` (SQLite-only; now `IS DISTINCT FROM`), `unixepoch()`
   in fifteen statements (now bound caller-side), and `LIKE` case-sensitivity (now
   `LOWER(x) LIKE LOWER(?)`) — plus two latent ordering bugs that were live on

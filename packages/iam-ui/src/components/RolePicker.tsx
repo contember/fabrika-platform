@@ -1,4 +1,4 @@
-import type { RoleDto } from '@fabrika/iam/admin'
+import type { RoleDto } from '@fabrika/iam-contract'
 
 interface RolePickerProps {
 	/** Roles for the chosen app — built-in (cross-app) + the app's app/custom roles. */

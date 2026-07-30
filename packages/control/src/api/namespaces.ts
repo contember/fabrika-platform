@@ -1,4 +1,10 @@
 import type {
+	DeploymentNamespaceDetailDto,
+	DeploymentNamespaceDto,
+	DeploymentNamespaceListResponse,
+	PlanDeploymentNamespaceResponse,
+} from '@fabrika/control-contract'
+import type {
 	ControlProvider,
 	JsonValue,
 	ProviderDeploymentNamespace,
@@ -18,20 +24,20 @@ export interface NamespaceContext {
 	authorized: Authorized
 }
 
-function toNamespaceDto(row: DeploymentNamespaceRow) {
+function toNamespaceDto(row: DeploymentNamespaceRow): DeploymentNamespaceDto {
 	return {
 		id: row.id,
 		env: row.env,
 		provider: row.provider,
 		exclusiveAppId: row.exclusive_app_id,
-		target: JSON.parse(row.provider_target_json),
+		target: parseStoredEnvelope(row.provider_target_json, `target for namespace ${row.id}`),
 		state: row.state,
 		lastError: row.last_error,
 		createdAt: row.created_at,
 	}
 }
 
-function toNamespaceDetail(c: NamespaceContext, row: DeploymentNamespaceRow): unknown | Response {
+function toNamespaceDetail(c: NamespaceContext, row: DeploymentNamespaceRow): DeploymentNamespaceDetailDto | Response {
 	const operator = c.provider.namespaces?.operator
 	if (operator === undefined) {
 		return { ...toNamespaceDto(row), presentation: null }
@@ -216,10 +222,11 @@ async function auditMutation(
 export async function listNamespaces(c: NamespaceContext): Promise<Response> {
 	const rows = await c.db.listDeploymentNamespaces()
 	const operator = c.provider.namespaces?.operator
-	return json({
+	const response: DeploymentNamespaceListResponse = {
 		items: rows.filter((row) => row.provider === c.provider.id).map(toNamespaceDto),
 		operator: operator === undefined ? null : { presets: operator.presets },
-	})
+	}
+	return json(response)
 }
 
 export async function getNamespace(c: NamespaceContext, id: string): Promise<Response> {
@@ -281,7 +288,11 @@ export async function planNamespace(c: NamespaceContext): Promise<Response> {
 		}
 		const normalized = normalizeNamespace(capabilities, c.provider.id, planned.namespace)
 		if (normalized instanceof Response) return normalized
-		return json({ namespace: normalized, presentation: operator.present(normalized) })
+		const response: PlanDeploymentNamespaceResponse = {
+			namespace: normalized,
+			presentation: operator.present(normalized),
+		}
+		return json(response)
 	} catch (cause) {
 		return error(400, cause instanceof Error ? cause.message : 'invalid namespace plan')
 	}

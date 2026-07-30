@@ -10,9 +10,6 @@
 	"publishConfig": {
 		"access": "public"
 	},
-	"bin": {
-		"fabrika-cloudflare": "./src/cli.ts"
-	},
 	"files": [
 		"src",
 		"!src/**/__tests__/**"
@@ -22,6 +19,16 @@
 			"bun": "./src/index.ts",
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
+		},
+		"./cli": {
+			"bun": "./src/cli.ts",
+			"types": "./src/cli.ts",
+			"default": "./src/cli.ts"
+		},
+		"./runner": {
+			"bun": "./src/control.ts",
+			"types": "./src/control.ts",
+			"default": "./src/control.ts"
 		}
 	},
 	"scripts": {

@@ -16,9 +16,10 @@ bun run build        # gen + tsc + vite build → dist/ (what the worker serves)
 
 - **`src/buzola.gen.ts` is GENERATED — never edit it.** Run `bun run gen` after adding/moving a route
   under `src/routes/`. `typecheck` and `build` run `gen` first.
-- **DTO types in `src/lib/api.ts` are HAND-MIRRORED from `@fabrika/control`, not imported/generated.** The
-  worker entry pulls in `cloudflare:workers` (un-bundleable in a browser) and returns `unknown`. When a
-  worker `toXDto` mapper changes, update `src/lib/api.ts` by hand to match. `LogLine` likewise mirrors `@fabrika/runner`'s protocol.
+- **API DTO types come from runtime-neutral contract packages.** `src/lib/api.ts` re-exports
+  `@fabrika/control-contract`; access routes consume `@fabrika/iam-contract` through `@fabrika/iam-ui`.
+  Keep browser code away from the runtime entrypoints of `@fabrika/control`, `@fabrika/iam`, and
+  `@fabrika/runner-container` or `@fabrika/runner-cloudflare`.
 - **Auth is propustka-native (no Cloudflare Access edge).** On a 401 carrying a `loginUrl` (the worker's
   `error()` puts it there for a human-gated miss), `src/lib/api.ts` `request()` bounces the browser to
   propustka's SSO login (`redirect` rewritten to the current page) — a blind reload would just loop since

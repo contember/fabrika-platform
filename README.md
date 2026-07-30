@@ -26,23 +26,35 @@ Bun monorepo (`packages/*`). Each installation statically selects one provider b
 
 **Auth** — `@fabrika/auth-core` (the pure kernel: policy matching, token shape, the IAM contract) ·
 `@fabrika/auth` (the app-facing SDK) · `@fabrika/iam` (the IAM service) ·
-`@fabrika/iam-ui` (Access feature routes embedded in the Fabrika console).
+`@fabrika/iam-contract` (runtime-neutral admin API DTOs) · `@fabrika/iam-ui` (Access feature routes
+embedded in the Fabrika console).
 
 **Application runtime** — `@fabrika/app` (Fetch-based HTTP routing, middleware, typed RPC, structural
 errors, object-level authorization, a typed browser client, and Worker/Bun lifecycle adapters).
 
 **Deploy contract and core** — `@fabrika/provider-contract` (open provider interfaces and versioned
 JSON envelopes) · `@fabrika/engine` (provider-neutral plan executor) · `@fabrika/control` (registry,
-run lifecycle, and composition roots) · `@fabrika/platform` (runtime ports) ·
-`@fabrika/platform-node` (Bun/Postgres/S3 adapters).
+run lifecycle, and composition roots) · `@fabrika/control-contract` (runtime-neutral control API DTOs
+and run-log shape) · `@fabrika/platform` (runtime ports) · `@fabrika/platform-node`
+(Bun/Postgres/S3 adapters).
 
 **Providers** — `@fabrika/provider-cloudflare` (Oblaka authoring, deploy implementation, control
-adapter, and `fabrika-cloudflare`) · `@fabrika/provider-zerops` (authoring, static manifest compiler,
-API client, deploy implementation, control adapter, and `fabrika-zerops`). The Cloudflare-only
-`@fabrika/runner` transports and executes provider-owned runner jobs.
+adapter, and the internal `fabrika-cloudflare-executor`) · `@fabrika/provider-zerops` (authoring,
+static manifest compiler, API client, deploy implementation, and control adapter).
 
-**Operations** — `@fabrika/cli` (installation bring-up) · `@fabrika/dashboard` (the unified Delivery
-and Access console) · `@fabrika/proxy` (auth enforcement for private app services).
+**Installation and operations** — `@fabrika/installation-contract` (open platform CLI contract) ·
+`@fabrika/installation-cloudflare` and `@fabrika/installation-zerops` (provider-specific installation
+plans) · `@fabrika/cli` (the single public `fabrika` command) · `@fabrika/dashboard` (the unified
+Delivery and Access console) · `@fabrika/proxy-contract` and `@fabrika/proxy` (proxy wire contract and
+auth enforcement).
+
+**Cloudflare runner** — `@fabrika/runner-contract` (Worker↔container transport) ·
+`@fabrika/runner-container` (plain-Bun deploy process and image) · `@fabrika/runner-cloudflare`
+(out-of-band executor Worker).
+
+App commands infer the provider from the provider-authored `fabrika.config.ts`; `--provider` is only
+required without that config. Platform commands use the same `fabrika platform ...` surface and
+dispatch through the selected installation package.
 
 ## Quick start
 

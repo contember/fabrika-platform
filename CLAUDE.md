@@ -56,19 +56,27 @@ packages/auth-core/   # @fabrika/auth-core — pure kernel: action matcher, perm
 packages/auth/        # @fabrika/auth — the app-facing SDK.
 packages/app/         # @fabrika/app — HTTP routing, middleware, typed RPC, object authorization, client.
 packages/iam/         # @fabrika/iam — the IAM service: OIDC login, token minting, /admin API, D1.
+packages/iam-contract/ # @fabrika/iam-contract — browser-safe IAM admin REST DTOs.
 packages/iam-ui/      # @fabrika/iam-ui — the IAM admin SPA.
 packages/platform/    # @fabrika/platform — the runtime PORTS (SqlDatabase, BlobStore, JobQueue, DeployLocks,
                       #   AssetServer, WaitUntil) + the implementations that need nothing but a port.
 packages/platform-node/ # @fabrika/platform-node — those ports for a long-running Bun process
                       #   (Postgres, S3/MinIO, a jobs table, a directory). Second impl set behind the ports.
 packages/provider-contract/ # @fabrika/provider-contract — open runtime/control contracts + JSON envelopes.
-packages/provider-cloudflare/ # @fabrika/provider-cloudflare — Cloudflare authoring, deploy, control + CLI.
-packages/provider-zerops/ # @fabrika/provider-zerops — Zerops authoring, manifest, API, deploy, control + CLI.
+packages/provider-cloudflare/ # @fabrika/provider-cloudflare — Cloudflare authoring, deploy, control + internal executor.
+packages/provider-zerops/ # @fabrika/provider-zerops — Zerops authoring, manifest, API, deploy, control.
 packages/engine/      # @fabrika/engine — provider-neutral deploy executor.          → CLAUDE.md
 packages/control/     # @fabrika/control — the control-plane Worker.                → CLAUDE.md
-packages/cli/         # @fabrika/cli — operator bring-up (`fabrika init <account>`). → CLAUDE.md
+packages/control-contract/ # @fabrika/control-contract — browser-safe control REST DTOs + run-log shape.
+packages/installation-contract/ # @fabrika/installation-contract — open platform init/plan/deploy CLI contract.
+packages/installation-cloudflare/ # @fabrika/installation-cloudflare — Cloudflare installation workflow. → CLAUDE.md
+packages/installation-zerops/ # @fabrika/installation-zerops — Zerops topology, artifacts, and installation plan. → CLAUDE.md
+packages/cli/         # @fabrika/cli — the single public `fabrika` command.           → CLAUDE.md
 packages/dashboard/   # @fabrika/dashboard — the control-plane SPA.                 → CLAUDE.md
-packages/runner/      # @fabrika/runner — the CF deploy runner + the runner executor worker. → CLAUDE.md
+packages/runner-contract/ # @fabrika/runner-contract — provider-neutral Worker↔container protocol. → CLAUDE.md
+packages/runner-container/ # @fabrika/runner-container — the plain-Bun deploy container. → CLAUDE.md
+packages/runner-cloudflare/ # @fabrika/runner-cloudflare — the out-of-band executor Worker. → CLAUDE.md
+packages/proxy-contract/ # @fabrika/proxy-contract — proxy manifest wire contract and strict parser.
 packages/proxy/       # @fabrika/proxy — the auth ENFORCEMENT point: a Caddy `forward_auth` service.
                       #   Nothing reaches an app until its gates pass. → ADR-0007, ADR-0008, ADR-0010
 examples/app/         # a worked Cloudflare app (authz vocabulary, gates, audit).
@@ -78,6 +86,9 @@ examples/zerops-app/  # a worked Zerops app and static manifest build.
 An app imports `defineApp` and provider-owned resource types from its selected provider package.
 Cloudflare configs import `@fabrika/provider-cloudflare`; Zerops configs import
 `@fabrika/provider-zerops`. There is no shared `@fabrika/config` package or closed provider union.
+The public `fabrika` CLI infers an app provider from the object returned by that provider's `defineApp()`;
+`--provider` is needed only when there is no app config. Platform commands load the provider's
+`@fabrika/installation-*` package through the open installation contract.
 
 ## Code Conventions
 
@@ -88,14 +99,14 @@ Cloudflare configs import `@fabrika/provider-cloudflare`; Zerops configs import
 
 ## Critical Invariants
 
-- **`wrangler.jsonc` is generated but COMMITTED for `control` and `runner`** (and ignored everywhere
+- **`wrangler.jsonc` is generated but COMMITTED for `control` and `runner-cloudflare`** (and ignored everywhere
   else — see `.gitignore`). Its `migrations` array is the only durable record of a worker's Durable
   Object migration history; regenerating from scratch shifts tags when a DO class is added or removed
   and `wrangler deploy` fails with code 10074. Regenerate with `bun run oblaka` after a resource-graph
   change and commit the result. Never hand-edit it.
 - **`oblaka-iac` resolves from npm, pinned to `^0.0.18`.** fabrika + oblaka are co-versioned — bump the
-  pin deliberately, in every package plus the runner image's `docker/package.json`.
-- **`provider-cloudflare`, `control`, and `runner` relax exactly two strict flags**
+  pin deliberately, in every package plus `runner-container/docker/package.json`.
+- **`provider-cloudflare`, `installation-cloudflare`, `control`, and `runner-cloudflare` relax exactly two strict flags**
   (`noUncheckedIndexedAccess`, `noPropertyAccessFromIndexSignature`) ONLY to tolerate oblaka's raw-TS
   source. Keep our own code strict; never widen the relaxation and never work around oblaka with a
   cast — ask first.
@@ -112,7 +123,10 @@ Cloudflare configs import `@fabrika/provider-cloudflare`; Zerops configs import
 - `packages/engine/CLAUDE.md` — the provider-neutral executor and runtime provider contract.
 - `packages/app/CLAUDE.md` — the application request pipeline, typed RPC, and auth integration.
 - `packages/control/CLAUDE.md` — the control plane: API/ACL, vault, secret resolution, run lifecycle, webhook, D1.
-- `packages/runner/CLAUDE.md` — the container image, the Worker↔container protocol, the executor worker.
+- `packages/cli/CLAUDE.md` — the provider-neutral command router and provider inference.
+- `packages/installation-cloudflare/CLAUDE.md` and `packages/installation-zerops/CLAUDE.md` — provider-specific platform installation.
+- `packages/runner-contract/CLAUDE.md`, `packages/runner-container/CLAUDE.md`, and
+  `packages/runner-cloudflare/CLAUDE.md` — transport contract, container process, and executor Worker.
 - `packages/dashboard/CLAUDE.md` — the SPA: routes, API client, DTOs, buzola codegen.
 
 <!-- AGENT-DOCS:POINTER (managed by the agent-docs skill — edit the body freely,

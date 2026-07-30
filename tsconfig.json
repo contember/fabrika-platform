@@ -3,18 +3,28 @@
 	"references": [
 		{ "path": "./packages/platform" },
 		{ "path": "./packages/platform-node" },
+		{ "path": "./packages/provider-contract" },
+		{ "path": "./packages/provider-cloudflare" },
+		{ "path": "./packages/provider-zerops" },
 		{ "path": "./packages/auth-core" },
 		{ "path": "./packages/auth" },
 		{ "path": "./packages/app" },
+		{ "path": "./packages/proxy-contract" },
 		{ "path": "./packages/proxy" },
+		{ "path": "./packages/iam-contract" },
 		{ "path": "./packages/iam" },
 		{ "path": "./packages/iam-ui" },
 		{ "path": "./packages/engine" },
+		{ "path": "./packages/control-contract" },
 		{ "path": "./packages/control" },
+		{ "path": "./packages/installation-contract" },
+		{ "path": "./packages/installation-cloudflare" },
+		{ "path": "./packages/installation-zerops" },
 		{ "path": "./packages/cli" },
 		{ "path": "./packages/dashboard" },
-		{ "path": "./packages/runner" },
-		{ "path": "./packages/local-stack" },
-		{ "path": "./deploy" }
+		{ "path": "./packages/runner-contract" },
+		{ "path": "./packages/runner-container" },
+		{ "path": "./packages/runner-cloudflare" },
+		{ "path": "./packages/local-stack" }
 	]
 }

@@ -370,7 +370,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 
 export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): FabrikaManifest {
 	if (config.target.services === undefined) {
-		throw new Error('fabrika-zerops build requires a source Zerops config')
+		throw new Error('fabrika app build requires a source Zerops config')
 	}
 	const declaredVars = config.pipeline?.vars ?? []
 	const prior: Record<string, string | undefined> = {}
@@ -383,10 +383,10 @@ export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): Fa
 		const serviceHostnames = document.services.map((service) => service.hostname)
 		const deployService = config.target.deployService ?? (serviceHostnames.length === 1 ? serviceHostnames[0] : undefined)
 		if (deployService === undefined || !serviceHostnames.includes(deployService)) {
-			throw new Error('fabrika-zerops build: a multi-service Zerops app must name a valid deployService')
+			throw new Error('fabrika app build: a multi-service Zerops app must name a valid deployService')
 		}
 		if (config.target.namespaceResources?.some((resource) => serviceHostnames.includes(resource.hostname)) === true) {
-			throw new Error('fabrika-zerops build: an app cannot declare a namespace-owned service')
+			throw new Error('fabrika app build: an app cannot declare a namespace-owned service')
 		}
 		const manifest: FabrikaManifest = {
 			manifestVersion: FABRIKA_MANIFEST_VERSION,

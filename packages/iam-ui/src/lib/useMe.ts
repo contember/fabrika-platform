@@ -1,4 +1,4 @@
-import type { MeDto } from '@fabrika/iam/admin'
+import type { MeDto } from '@fabrika/iam-contract'
 import { useEffect, useState } from 'react'
 import { api, ApiError } from './api'
 

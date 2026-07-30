@@ -1,5 +1,5 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
-import type { AppSchemaDto, CreatePolicyRequest } from '@fabrika/iam/admin'
+import type { AppSchemaDto, CreatePolicyRequest } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { ActionPicker } from '../../components/ActionPicker'
 import { Icon } from '../../components/Icon'

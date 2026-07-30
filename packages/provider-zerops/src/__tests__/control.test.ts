@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import type { ZeropsApi, ZeropsAppVersionStatus } from '../api'
 import { useSharedPostgres } from '../authoring'
 import { zeropsTargetCodec } from '../codec'
-import { createZeropsControlProvider, zeropsStoredTargetCodec } from '../control'
+import { createZeropsControlProvider, type ZeropsControlProviderOptions, type ZeropsProviderExecutor, zeropsStoredTargetCodec } from '../control'
 import { compileFabrikaManifest, zeropsArtifactCodec } from '../manifest'
 import { zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
 import { zeropsSharedServiceHostname } from '../service-names'
@@ -142,6 +142,25 @@ const makeApi = (recorded: Recorded, status: () => ZeropsAppVersionStatus = () =
 	readBuildLog: async () => [],
 })
 
+const executeProvider: ZeropsProviderExecutor = async (provider, run) => {
+	const session = await provider.open(run)
+	try {
+		for (const step of session.plan.steps) {
+			await session.execute(step.id)
+		}
+		return { state: 'succeeded' }
+	} catch {
+		return { state: 'failed' }
+	}
+}
+
+type TestControlProviderOptions = Omit<ZeropsControlProviderOptions, 'execute'> & {
+	readonly execute?: ZeropsProviderExecutor
+}
+
+const createTestControlProvider = (options: TestControlProviderOptions) =>
+	createZeropsControlProvider({ ...options, execute: options.execute ?? executeProvider })
+
 let recorded: Recorded
 beforeEach(() => {
 	recorded = fresh()
@@ -149,14 +168,14 @@ beforeEach(() => {
 
 describe('Zerops ControlProvider registration', () => {
 	test('normalizes a stored target and static artifact without persisting credentials', () => {
-		const control = createZeropsControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
 		const normalized = control.normalizeRegistration({ app, environment: environment() })
 		expect(normalized.environment.target.payload).toEqual({ serviceId: 'service-1' })
 		expect(JSON.stringify(normalized.environment)).not.toContain('zt-secret')
 	})
 
 	test('rejects foreign, unsupported, and identity-drifted envelopes', () => {
-		const control = createZeropsControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
 		expect(() =>
 			control.normalizeRegistration({
 				app,
@@ -190,8 +209,8 @@ describe('Zerops ControlProvider registration', () => {
 	})
 
 	test('exposes namespace lifecycle only when its installation configuration is composed', () => {
-		const withoutNamespaces = createZeropsControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
-		const withNamespaces = createZeropsControlProvider({
+		const withoutNamespaces = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		const withNamespaces = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
 			namespaces: {
@@ -224,7 +243,7 @@ describe('Zerops ControlProvider registration', () => {
 	})
 
 	test('prepares codeless services and discovers the deploy-service id', async () => {
-		const control = createZeropsControlProvider({
+		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
 			namespaces: {
@@ -255,7 +274,7 @@ describe('Zerops ControlProvider registration', () => {
 	})
 
 	test('derives reserved and app-owned claims from the canonical structured import', () => {
-		const control = createZeropsControlProvider({
+		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
 			namespaces: {
@@ -309,7 +328,7 @@ describe('Zerops ControlProvider registration', () => {
 	})
 
 	test('rejects shared prefix, reserved service, and missing namespace resource requirements', () => {
-		const control = createZeropsControlProvider({
+		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
 			namespaces: {
@@ -385,7 +404,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 				importDocument: { services: [{ ...service, override: false }] },
 			},
 		}
-		const control = createZeropsControlProvider({
+		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
 			beforeDeploy: async () => {
@@ -409,7 +428,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 
 	test('composes ephemeral credentials, runs beforeDeploy, and routes run events', async () => {
 		let observedRun: RuntimeProviderRun | undefined
-		const control = createZeropsControlProvider({
+		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			apiBaseUrl: 'https://api.test',
 			propustkaUrl: 'https://iam.test',
@@ -459,7 +478,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 				namespaceResources: [useSharedPostgres()],
 			},
 		}
-		const control = createZeropsControlProvider({
+		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
 			sleep: () => Promise.resolve(),
@@ -502,7 +521,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 	})
 
 	test('fails before proxy or app mutation when namespace placement is not ready', async () => {
-		const control = createZeropsControlProvider({
+		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
 			beforeDeploy: async () => {
@@ -532,7 +551,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 
 	test('cancels by external id and maps active, terminal, and pending statuses', async () => {
 		let current: ZeropsAppVersionStatus = 'BUILDING'
-		const control = createZeropsControlProvider({
+		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded, () => current),
 		})
@@ -550,7 +569,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 	})
 
 	test('writes and deletes one service-level secret and returns an opaque reference', async () => {
-		const control = createZeropsControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
 		if (control.secrets === undefined) {
 			throw new Error('expected Zerops managed secrets')
 		}

@@ -4,8 +4,7 @@
 	"type": "module",
 	"workspaces": [
 		"packages/*",
-		"examples/*",
-		"deploy"
+		"examples/*"
 	],
 	"scripts": {
 		"typecheck": "bun run --filter '*' typecheck",

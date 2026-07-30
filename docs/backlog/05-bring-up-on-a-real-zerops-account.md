@@ -8,7 +8,8 @@ blocked-by: []
 
 Everything below the account line is built: the Postgres/Bun implementations, the
 Zerops driver and control path, the static app manifest, the proxy, the topology
-in [`deploy/zerops/`](../../deploy/zerops/), and an example app. All of it
+in [`packages/installation-zerops/zerops/`](../../packages/installation-zerops/zerops/),
+and an example app. All of it
 validates against Zerops' **published JSON schemas** and the driver is proven in
 dry-run.
 
@@ -17,7 +18,8 @@ item is the gap, and it can only be closed by someone with credentials.
 
 ## The hand steps
 
-1. **Import the two provisioning documents** (`deploy/zerops/generated/*.provision.*`)
+1. **Import the two provisioning documents**
+   (`packages/installation-zerops/zerops/generated/*.provision.*`)
    via `POST /client/{id}/project/import`. Use the `startWithoutCode` form first —
    that is the ADR-0004 bring-up order: import without code → write secrets through
    the env API → deploy.
@@ -28,7 +30,7 @@ item is the gap, and it can only be closed by someone with credentials.
    expressible in the import format, so it is manual by construction.
    `enableSubdomainAccess` is documented as "not suitable for production".
 3. **Write every service-level variable and secret** through the env API. The lists
-   are in `deploy/zerops/setups.ts` per setup: IAM's `ISSUER`, signing keys, OIDC
+   are in `packages/installation-zerops/zerops/setups.ts` per setup: IAM's `ISSUER`, signing keys, OIDC
    coordinates and its two shared keys; the control plane's vault KEK, GitHub App,
    Cloudflare token and Zerops PAT; the proxy's `FABRIKA_IAM_URL` and
    `FABRIKA_IAM_KEY`. Never at project level.

@@ -1,0 +1,33 @@
+{
+	"name": "@fabrika/runner-cloudflare",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": {
+			"bun": "./src/index.ts",
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		}
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test",
+		"oblaka": "bunx oblaka oblaka.ts",
+		"oblaka:deploy": "bunx oblaka oblaka.ts --remote",
+		"bootstrap": "bun run scripts/bootstrap-runner.ts"
+	},
+	"dependencies": {
+		"@cloudflare/containers": "^0.0.30",
+		"@fabrika/control-contract": "workspace:*",
+		"@fabrika/provider-cloudflare": "workspace:*",
+		"@fabrika/platform": "workspace:*",
+		"@fabrika/runner-contract": "workspace:*"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20260702.1",
+		"@types/bun": "latest",
+		"oblaka-iac": "^0.0.18",
+		"wrangler": "4.72.0"
+	}
+}

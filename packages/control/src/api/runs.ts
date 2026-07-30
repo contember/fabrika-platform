@@ -6,8 +6,9 @@
 // The queue producer is injected (a `JobQueue`) so this stays testable without a real Queue. The
 // run row is created BEFORE the enqueue so a trigger is durable even if delivery is delayed.
 
+import type { CursorList, RunDto, RunLogLine, RunLogResponse, RunTailResponse } from '@fabrika/control-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
-import { type LogLine, logsKey } from '@fabrika/runner'
+import { logsKey } from '@fabrika/runner-cloudflare'
 import type { Db, RunRow } from '../db'
 import { uuidv7 } from '../db'
 import { error, json, readJson } from '../http'
@@ -37,7 +38,7 @@ export interface RunsContext {
 	authorized: Authorized
 }
 
-function toRunDto(row: RunRow): unknown {
+function toRunDto(row: RunRow): RunDto {
 	return {
 		id: row.id,
 		appId: row.app_id,
@@ -86,7 +87,8 @@ export async function listRuns(c: RunsContext): Promise<Response> {
 	const items = rows.map(toRunDto)
 	const last = rows.at(-1)
 	const nextCursor = rows.length === limit && last ? last.id : null
-	return json({ items, nextCursor })
+	const response: CursorList<RunDto> = { items, nextCursor }
+	return json(response)
 }
 
 export async function getRun(c: RunsContext, id: string): Promise<Response> {
@@ -129,11 +131,13 @@ export async function getRunLog(c: RunsContext, id: string): Promise<Response> {
 	}
 	const object = await c.logs.get(run.log_key ?? logsKey(id))
 	if (!object) {
-		return json({ lines: [] })
+		const response: RunLogResponse = { lines: [] }
+		return json(response)
 	}
 	const text = await object.text()
 	const lines = parseNdjsonLogs(text)
-	return json({ lines, status: run.status })
+	const response: RunLogResponse = { lines, status: run.status }
+	return json(response)
 }
 
 /**
@@ -151,19 +155,25 @@ export async function tailRunLog(c: RunsContext, id: string): Promise<Response> 
 	const object = await c.logs.get(run.log_key ?? logsKey(id))
 	const all = object ? parseNdjsonLogs(await object.text()) : []
 	const lines = all.slice(after)
-	return json({ lines, cursor: all.length, done: run.status === 'succeeded' || run.status === 'failed', status: run.status })
+	const response: RunTailResponse = {
+		lines,
+		cursor: all.length,
+		done: run.status === 'succeeded' || run.status === 'failed',
+		status: run.status,
+	}
+	return json(response)
 }
 
 /** Parse the relay's NDJSON log into typed lines (skips blanks; tolerant of a trailing partial line). */
-function parseNdjsonLogs(text: string): LogLine[] {
-	const out: LogLine[] = []
+function parseNdjsonLogs(text: string): RunLogLine[] {
+	const out: RunLogLine[] = []
 	for (const raw of text.split('\n')) {
 		if (raw.trim().length === 0) {
 			continue
 		}
 		try {
 			const parsed: unknown = JSON.parse(raw)
-			if (isLogLine(parsed)) {
+			if (isRunLogLine(parsed)) {
 				out.push(parsed)
 			}
 		} catch {
@@ -173,11 +183,16 @@ function parseNdjsonLogs(text: string): LogLine[] {
 	return out
 }
 
-function isLogLine(value: unknown): value is LogLine {
+function isRunLogLine(value: unknown): value is RunLogLine {
 	if (typeof value !== 'object' || value === null) {
 		return false
 	}
-	return 'ts' in value && 'stream' in value && 'text' in value && typeof Reflect.get(value, 'text') === 'string'
+	const ts = Reflect.get(value, 'ts')
+	const stream = Reflect.get(value, 'stream')
+	const text = Reflect.get(value, 'text')
+	return typeof ts === 'number'
+		&& (stream === 'stdout' || stream === 'stderr' || stream === 'meta')
+		&& typeof text === 'string'
 }
 
 /**

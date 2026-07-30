@@ -11,6 +11,7 @@ import type {
 	ProviderNamespacePreset,
 	ProviderRegistration,
 } from '@fabrika/provider-contract'
+import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
 import {
 	ZEROPS_ACTIVE,
 	ZEROPS_TERMINAL,
@@ -28,13 +29,12 @@ import type { ZeropsServiceSpec, ZeropsSourceTarget } from './types'
 
 export const ZEROPS_NAMESPACE_PROXY_HOSTNAME = 'proxy'
 export const ZEROPS_NAMESPACE_POSTGRES_HOSTNAME = 'postgres'
-export const ZEROPS_NAMESPACE_PROXY_MANIFEST_VARIABLE = 'FABRIKA_PROXY_MANIFEST_JSON'
 export const ZEROPS_NAMESPACE_IAM_URL_VARIABLE = 'FABRIKA_IAM_URL'
 export const ZEROPS_NAMESPACE_IAM_KEY_VARIABLE = 'FABRIKA_IAM_KEY'
 export const ZEROPS_SHARED_POSTGRES_CONNECTION_STRING = '${postgres_connectionString}'
 
 const PROXY_TYPE = 'alpine@3.21'
-const EMPTY_PROXY_MANIFEST = '{"apps":[]}'
+const EMPTY_PROXY_MANIFEST = encodeProxyManifestJson({ apps: [] })
 const POLL_INTERVAL_MS = 3000
 const POLL_TIMEOUT_MS = 70 * 60 * 1000
 
@@ -709,11 +709,11 @@ const ensureProxyConfiguration = async (
 	const variables = await options.api.listServiceEnv({ serviceId: proxyServiceId, signal })
 	const byKey = new Map(variables.map((variable) => [variable.key, variable]))
 	let deployRequired = !target.ready
-	const manifest = byKey.get(ZEROPS_NAMESPACE_PROXY_MANIFEST_VARIABLE)
+	const manifest = byKey.get(FABRIKA_PROXY_MANIFEST_JSON)
 	if (!target.ready || manifest === undefined) {
 		await options.api.putServiceEnv({
 			serviceId: proxyServiceId,
-			key: ZEROPS_NAMESPACE_PROXY_MANIFEST_VARIABLE,
+			key: FABRIKA_PROXY_MANIFEST_JSON,
 			value: EMPTY_PROXY_MANIFEST,
 			signal,
 		})

@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import type { ApiKeyDto, GrantDto, ListResponse, RotateApiKeyResponse } from '@fabrika/iam/admin'
+import type { ApiKeyDto, GrantDto, ListResponse, RotateApiKeyResponse } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'

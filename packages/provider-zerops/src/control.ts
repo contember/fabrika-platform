@@ -93,25 +93,13 @@ export interface ZeropsControlProviderOptions {
 	readonly api?: ZeropsApi
 	readonly reconcileSchema?: SchemaReconciler
 	readonly sleep?: Sleeper
-	readonly execute?: ZeropsProviderExecutor
+	readonly execute: ZeropsProviderExecutor
 	readonly beforeDeploy?: ZeropsBeforeDeploy
 	readonly namespaces?: {
 		readonly clientId: string
 		readonly proxyBuildFromGit: string
 		readonly iamUrl: string
 		readonly iamKey: string
-	}
-}
-
-const executeSession: ZeropsProviderExecutor = async (provider, run) => {
-	const session = await provider.open(run)
-	try {
-		for (const step of session.plan.steps) {
-			await session.execute(step.id)
-		}
-		return { state: 'succeeded' }
-	} catch {
-		return { state: 'failed' }
 	}
 }
 
@@ -211,7 +199,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			sleep: options.sleep ?? defaultSleep,
 		}
 	})
-	const execute = options.execute ?? executeSession
 	const namespaceCapabilities = options.namespaces === undefined
 		? undefined
 		: createZeropsNamespaceCapabilities({
@@ -252,7 +239,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				...(options.propustkaUrl !== undefined ? { propustkaUrl: options.propustkaUrl } : {}),
 				...(options.adminKey !== undefined ? { adminKey: options.adminKey } : {}),
 			}
-			return execute(runtimeProvider.runtime, {
+			return options.execute(runtimeProvider.runtime, {
 				appId: input.app.id,
 				env: input.environment.env,
 				...(input.environment.domain !== undefined ? { domain: input.environment.domain } : {}),

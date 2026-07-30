@@ -165,7 +165,7 @@ export default createPage()
 							spellCheck={false}
 						/>
 						<span className="hint">
-							Generate it in the app repository with <code>fabrika-zerops build --env={env || 'prod'}</code>.
+							Generate it in the app repository with <code>fabrika app build --env={env || 'prod'}</code>.
 						</span>
 					</label>
 					<label>

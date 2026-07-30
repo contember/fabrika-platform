@@ -1,4 +1,4 @@
-import type { AppDto } from '@fabrika/iam/admin'
+import type { AppDto } from '@fabrika/iam-contract'
 
 /**
  * Which app a grant / mapping applies to. Three explicit states (mirrors ScopePicker)

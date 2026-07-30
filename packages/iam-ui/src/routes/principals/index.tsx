@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import type { ListResponse, PrincipalListItem } from '@fabrika/iam/admin'
+import type { ListResponse, PrincipalListItem } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { StatusLamp } from '../../components/Status'

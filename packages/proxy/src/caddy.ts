@@ -34,6 +34,7 @@
 
 import type { GateRule } from '@fabrika/auth-core'
 import { API_KEY_PREFIX } from '@fabrika/auth-core'
+import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-contract'
 import {
 	APP_QUERY_PARAM,
 	DEFAULT_VERIFY_PATH,
@@ -42,7 +43,6 @@ import {
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
 } from './constants'
-import type { ProxyApp, ProxyManifest } from './manifest'
 
 // ── The subset of Caddy's JSON schema we emit (field names verified against v2.10.2) ──────────────
 

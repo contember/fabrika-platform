@@ -8,11 +8,6 @@
 			"bun": "./src/index.ts",
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
-		},
-		"./admin": {
-			"bun": "./src/admin/types.ts",
-			"types": "./src/admin/types.ts",
-			"default": "./src/admin/types.ts"
 		}
 	},
 	"scripts": {
@@ -20,13 +15,14 @@
 		"test": "bun test",
 		"dev": "bunx lopata dev --env local --port 18191 --listen 0.0.0.0",
 		"oblaka": "bunx oblaka oblaka.ts",
-		"deploy:cloudflare": "fabrika-cloudflare deploy",
+		"deploy:cloudflare": "fabrika app deploy --provider=cloudflare",
 		"serve": "bun src/node/server.ts",
 		"migrate:postgres": "bun src/node/migrate.ts",
 		"prune:auth-log": "bun src/node/prune.ts"
 	},
 	"dependencies": {
 		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/iam-contract": "workspace:*",
 		"@fabrika/platform": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",
 		"@fabrika/provider-cloudflare": "workspace:*",
@@ -34,6 +30,7 @@
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260702.1",
+		"@fabrika/cli": "workspace:*",
 		"@types/bun": "latest",
 		"lopata": "latest",
 		"oblaka-iac": "^0.0.18",

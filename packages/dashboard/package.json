@@ -12,6 +12,8 @@
 	},
 	"dependencies": {
 		"@buzola/router": "^0.0.12",
+		"@fabrika/control-contract": "workspace:*",
+		"@fabrika/iam-contract": "workspace:*",
 		"@fabrika/iam-ui": "workspace:*",
 		"@fontsource-variable/ibm-plex-sans": "5.3.0",
 		"@fontsource/ibm-plex-mono": "5.3.0",

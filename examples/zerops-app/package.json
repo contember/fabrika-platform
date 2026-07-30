@@ -25,7 +25,7 @@
 		}
 	},
 	"scripts": {
-		"build:manifest": "fabrika-zerops build --env=prod",
+		"build:manifest": "fabrika app build --env=prod",
 		"dev": "bun src/server.ts",
 		"typecheck": "tsc --noEmit",
 		"test": "bun test"
@@ -37,6 +37,7 @@
 		"jose": "^5.9.0"
 	},
 	"devDependencies": {
+		"@fabrika/cli": "workspace:*",
 		"@types/bun": "latest"
 	}
 }

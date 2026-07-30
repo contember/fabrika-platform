@@ -1,0 +1,157 @@
+name: platform
+
+# Deploys the {{ACCOUNT}} account's fabrika BASE: IAM (Stage 1, root authz) → runner + control plane
+# (Stage 2). THIS repo is the per-account root of trust, so the control plane never deploys itself.
+# Idempotent: re-run for a first bring-up OR a routine redeploy. Concrete apps deploy through fabrika.
+#
+# Generated + maintained by `fabrika platform init --provider=cloudflare {{ACCOUNT}}`. Secrets + variables live in the `{{ACCOUNT}}` GitHub
+# Environment (Settings → Environments → {{ACCOUNT}}) and are written there by the CLI — don't hand-edit them.
+#
+# contember/fabrika-platform is public and checked out tokenless. The version this account runs is pinned
+# in `fabrika.ref` (bump it and push to roll out a new base).
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_runner_image:
+        description: Build + push the runner image (FIRST bring-up on this account, or a deliberate rebuild)
+        type: boolean
+        default: false
+      retire_legacy_propustka_worker:
+        description: >-
+          Name of a LEGACY propustka Worker to delete BEFORE Stage 1 (one-off migration off an old
+          deploy — e.g. a CF-Access-era `mangoweb-propustka-worker`). Deleting it releases its Custom
+          Domain so the new env-prod propustka can claim it. Empty = skip (the normal case).
+        type: string
+        default: ''
+  push:
+    branches: [main]
+    # Only a version bump (or a workflow edit) redeploys — not a README tweak.
+    paths: ['fabrika.ref', '.github/workflows/platform.yml']
+
+concurrency:
+  group: platform-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Secrets + variables resolve from this GitHub Environment (created + populated by `fabrika platform init`).
+    environment: {{ACCOUNT}}
+    # Cloudflare creds at the JOB level so EVERY oblaka/wrangler step (provision, migrate, deploy, secret
+    # put) inherits them — wrangler errors in a non-interactive shell without CLOUDFLARE_API_TOKEN.
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - name: Checkout this repo (base config + pinned refs)
+        uses: actions/checkout@v5
+
+      - name: Resolve pinned refs
+        id: ref
+        run: echo "fabrika=$(tr -d '[:space:]' < fabrika.ref)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout contember/fabrika-platform@${{ steps.ref.outputs.fabrika }}
+        uses: actions/checkout@v5
+        with:
+          repository: contember/fabrika-platform
+          ref: ${{ steps.ref.outputs.fabrika }}
+          path: fabrika-platform
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      # wrangler launches under Node even via Bun and needs Node 22+.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Install fabrika
+        working-directory: fabrika-platform
+        run: bun install
+
+      # The Cloudflare provider spawns a BARE `wrangler` (Bun.spawn), so the workspace bins must be on PATH.
+      - name: Put fabrika workspace bins on PATH
+        working-directory: fabrika-platform
+        run: |
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+          echo "$PWD/packages/control/node_modules/.bin" >> "$GITHUB_PATH"
+          echo "$PWD/packages/runner-cloudflare/node_modules/.bin" >> "$GITHUB_PATH"
+
+      # ── Migration escape hatch — retire a legacy propustka Worker ─────────────────────────────────────
+      # Off by default. When `retire_legacy_propustka_worker` is set, delete that Worker so its Custom Domain
+      # is freed for the new env-prod propustka below. Its D1 database is NOT deleted (a Worker delete leaves
+      # databases) — orphaned, prune it by hand later. One-off: clear the input on subsequent runs.
+      - name: Retire legacy propustka Worker
+        if: ${{ inputs.retire_legacy_propustka_worker != '' }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          LEGACY: ${{ inputs.retire_legacy_propustka_worker }}
+        # `wrangler delete` is non-interactive in CI (no TTY → no confirmation prompt). Removing the Worker
+        # detaches its Custom Domain. If the domain attach below races a just-freed hostname, re-run (idempotent).
+        run: bunx wrangler delete --name "$LEGACY"
+
+      # ── Stage 1 — IAM (root authz) ───────────────────────────────────────────────────────────────────
+      # IAM is a regular Cloudflare provider bundle. Its empty schema needs no self-reconcile.
+      - name: Deploy IAM
+        working-directory: fabrika-platform/packages/iam
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_STATE_NAMESPACE: propustka-state
+          VOZKA_DOMAIN: ${{ vars.PROPUSTKA_HOSTNAME }}
+          # Non-secret config (Environment Variables).
+          PROPUSTKA_HUMAN_EMAIL_DOMAINS: ${{ vars.PROPUSTKA_HUMAN_EMAIL_DOMAINS }}
+          PROPUSTKA_HUMAN_EMAILS: ${{ vars.PROPUSTKA_HUMAN_EMAILS }}
+          PROPUSTKA_BOOTSTRAP_ADMINS: ${{ vars.PROPUSTKA_BOOTSTRAP_ADMINS }}
+          PROPUSTKA_OIDC_ISSUER: ${{ vars.PROPUSTKA_OIDC_ISSUER }}
+          PROPUSTKA_OIDC_CLIENT_ID: ${{ vars.PROPUSTKA_OIDC_CLIENT_ID }}
+          PROPUSTKA_OIDC_SCOPES: ${{ vars.PROPUSTKA_OIDC_SCOPES }}
+          PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL: ${{ vars.PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL }}
+          PROPUSTKA_SESSION_COOKIE_DOMAIN: ${{ vars.PROPUSTKA_SESSION_COOKIE_DOMAIN }}
+          PROPUSTKA_SIGNING_KEYS: ${{ secrets.PROPUSTKA_SIGNING_KEYS }}
+          OIDC_CLIENT_SECRET: ${{ secrets.PROPUSTKA_OIDC_CLIENT_SECRET }}
+          PROPUSTKA_PROVISIONING_KEY: ${{ secrets.PROPUSTKA_PROVISIONING_KEY }}
+        run: fabrika app deploy --provider=cloudflare --env=prod --config=fabrika.config.ts
+
+      # ── Stage 2 — fabrika platform (executor + control plane) ────────────────────────────────────────
+      - name: Deploy fabrika runner + control plane
+        working-directory: fabrika-platform
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VOZKA_VAULT_KEY: ${{ secrets.VOZKA_VAULT_KEY }}
+          # GitHub reserves the GITHUB_ prefix for Environment secret/variable NAMES, so the App key/secret/id
+          # are stored as GH_* and mapped to the GITHUB_* env vars the deploy + Worker bindings expect here.
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          GITHUB_WEBHOOK_SECRET: ${{ secrets.GH_WEBHOOK_SECRET }}
+          # The seeded IAM provisioning key — the control plane reconciles its own schema with it (Bearer px_).
+          PROPUSTKA_PROVISIONING_KEY: ${{ secrets.PROPUSTKA_PROVISIONING_KEY }}
+          # Non-secret config (Environment Variables).
+          VOZKA_DOMAIN: ${{ vars.VOZKA_DOMAIN }}
+          GITHUB_APP_ID: ${{ vars.GH_APP_ID }}
+          PROPUSTKA_URL: ${{ vars.PROPUSTKA_URL }}
+          VOZKA_BOOTSTRAP_ADMINS: ${{ vars.VOZKA_BOOTSTRAP_ADMINS }}
+        run: |
+          BUILD_FLAG=""
+          if [ "${{ inputs.build_runner_image }}" = "true" ]; then BUILD_FLAG="--build-runner-image"; fi
+          fabrika platform deploy --provider=cloudflare \
+            --runner-config=packages/runner-cloudflare/fabrika-runner.config.ts \
+            --worker-config=packages/control/fabrika.config.ts \
+            $BUILD_FLAG
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### platform deploy → {{ACCOUNT}}"
+            echo ""
+            echo "- fabrika ref: \`${{ steps.ref.outputs.fabrika }}\`"
+            echo "- build runner image: \`${{ inputs.build_runner_image || 'false' }}\`"
+            echo "- retired legacy propustka: \`${{ inputs.retire_legacy_propustka_worker || '(none)' }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

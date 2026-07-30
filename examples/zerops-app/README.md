@@ -43,7 +43,7 @@ Four steps, and the differences from Cloudflare's plan are all deliberate
   ([ADR-0004](../../docs/decisions/0004-secrets-live-in-the-platform.md)), so a deploy-time push would
   silently overwrite a client's GUI edit.
 
-`deploy/zerops/__tests__/example-app.test.ts` drives the neutral deploy executor with the Zerops
+`packages/installation-zerops/zerops/__tests__/example-app.test.ts` drives the neutral deploy executor with the Zerops
 provider over a recording fake. It asserts that exact plan and the exact ordered sequence of API calls
 a real run would make.
 
@@ -73,7 +73,7 @@ The example covers all three namespace tiers without changing the application pr
 - **full** — use the same default app files as mid, but assign the environment to a namespace whose
   `exclusiveAppId` is `notes`. The project then contains only the proxy and this app's services.
 
-`deploy/zerops/__tests__/topology.test.ts` compiles these fixtures and proves their exact service
+`packages/installation-zerops/zerops/__tests__/topology.test.ts` compiles these fixtures and proves their exact service
 ownership boundaries.
 
 ## Running it

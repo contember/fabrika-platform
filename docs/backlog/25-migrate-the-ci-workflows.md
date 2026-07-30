@@ -16,9 +16,9 @@ repository builds, tests, publishes or deploys automatically.
   `@propustka/core` + `@propustka/client` on a `v*` tag via **OIDC trusted
   publishing — no npm token**. Keep that property.
 - **vozka**: `runner-image.yml`, which builds and pushes the runner container and
-  bumps the pinned tag in `packages/runner/image.json`. That file still names the
+  bumps the pinned tag in `packages/runner-cloudflare/image.json`. That file still names the
   workflow as the thing that maintains it, and its trigger paths point at
-  `packages/runner|core|config` — two of which have been renamed.
+  the pre-merge runner/core/config package layout.
 
 ## Also decide
 

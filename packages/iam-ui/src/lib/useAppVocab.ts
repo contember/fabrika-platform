@@ -1,4 +1,4 @@
-import type { AppActionDef, AppSchemaDto, AppScopeDef, ListResponse, RoleDto } from '@fabrika/iam/admin'
+import type { AppActionDef, AppSchemaDto, AppScopeDef, ListResponse, RoleDto } from '@fabrika/iam-contract'
 import { useEffect, useState } from 'react'
 import { api, ApiError } from './api'
 

@@ -4,6 +4,10 @@ The control plane: registry + queue + encrypted vault, driving a deploy from a G
 trigger, or a repo poll. It runs on **two** targets — a Cloudflare `WorkerEntrypoint` and a long-running
 Bun process — from one shared body of code. Assumes the root CLAUDE.md.
 
+Public control REST DTOs and `RunLogLine` live in `@fabrika/control-contract`.
+Keep browser and runner consumers on that package instead of importing this
+runtime package.
+
 ## Commands (this package)
 
 ```bash
@@ -96,12 +100,14 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
 - **Run lifecycle is status-guarded + idempotent** (`src/run-lifecycle.ts`): `markRunStarted` only moves
   pending→running, so a redelivered queue message is a no-op. ack handled runs; retry only on an unexpected throw.
 - **The Cloudflare provider owns the runner boundary.** `CloudflareRunnerJob` and its validator live in
-  `@fabrika/provider-cloudflare`; `@fabrika/runner` contains only transport and execution machinery.
+  `@fabrika/provider-cloudflare`; `@fabrika/runner-contract` contains only transport types and endpoint
+  constants, `@fabrika/runner-container` owns the Bun process and image, and
+  `@fabrika/runner-cloudflare` owns the executor Worker.
   The control plane has NO `Container` binding. The split exists because a deploy's final
   step runs `wrangler deploy` INSIDE the container, and when the target is fabrika that resets fabrika's DOs —
   so a container hosted in fabrika would reset ITSELF mid-deploy. Hosting it in vozka-runner means a fabrika
   deploy never touches it. As a consequence fabrika has no `Container` → no docker → it's deployable THROUGH
-  the runner. vozka-runner ALSO writes the terminal run status→D1 (`@fabrika/runner`'s `finishRun`), a
+  the runner. vozka-runner ALSO writes the terminal run status→D1 (`@fabrika/runner-cloudflare`'s `finishRun`), a
   belt-and-suspenders co-write with `markRunFinished` made safe by the `WHERE status IN ('pending','running')`
   guard — whichever survives the deploy records the run. vozka-runner is deployed out-of-band (its own bootstrap).
 - **Per-app-env deploy lock** (`@fabrika/platform`'s `SqlDeployLocks`, wired in `src/services.ts`; one
@@ -115,6 +121,8 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   race, which is why it works identically on SQLite and Postgres. Never split it into a read + a write.
 - **Never log a secret/credential** (see root). The run row is written before the queue is touched (durable trigger).
 - **`fabrika.config.ts` is the source of truth** for fabrika's own resources; keep `oblaka.ts` a thin shim (see root).
+- **The Zerops executor is injected.** `createZeropsControlProvider` requires an `execute` collaborator.
+  `src/node/provider.ts` supplies `@fabrika/engine`; never add a provider-local fallback lifecycle.
 
 ## Patterns
 
@@ -147,5 +155,5 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   AND the surrounding source lines in the response body, so `createFetchHandler` wraps every request and
   `Bun.serve`'s `error()` backstops anything raised outside it. Both answer a bare `internal error`.
 - **The generated root `zerops.yaml` is the only platform build specification.**
-  `deploy/zerops/setups.ts` owns the typed IAM, control, and proxy setups; do not add per-package
+  `packages/installation-zerops/zerops/setups.ts` owns the typed IAM, control, and proxy setups; do not add per-package
   `zerops.yaml` files.

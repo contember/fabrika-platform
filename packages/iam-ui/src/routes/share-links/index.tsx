@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import type { ListResponse, ShareLinkListItem } from '@fabrika/iam/admin'
+import type { ListResponse, ShareLinkListItem } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'

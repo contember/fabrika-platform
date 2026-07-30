@@ -1,5 +1,5 @@
 import { createPage, useNavigate } from '@buzola/router'
-import type { AuthLogDto, CursorList } from '@fabrika/iam/admin'
+import type { AuthLogDto, CursorList } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { Status } from '../../components/Status'

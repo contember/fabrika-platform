@@ -10,6 +10,7 @@
  */
 
 import type { AppGates } from '@fabrika/auth-core'
+import type { ProxyManifest } from '@fabrika/proxy-contract'
 import { describe, expect, test } from 'bun:test'
 import {
 	buildCaddyConfig,
@@ -20,7 +21,6 @@ import {
 	uriRedactionPattern,
 } from '../caddy'
 import { PROXY_TOKEN_HEADER, REQUEST_ID_HEADER } from '../constants'
-import type { ProxyManifest } from '../manifest'
 
 const GATES: AppGates = { rules: [{ path: '/public/*', kind: 'public' }, { path: '/*', kind: 'human' }] }
 

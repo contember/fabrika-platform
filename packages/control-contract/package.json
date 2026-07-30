@@ -1,0 +1,29 @@
+{
+	"name": "@fabrika/control-contract",
+	"version": "0.0.1",
+	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/contember/fabrika-platform.git",
+		"directory": "packages/control-contract"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"src"
+	],
+	"exports": {
+		".": {
+			"bun": "./src/index.ts",
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		}
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@fabrika/provider-contract": "workspace:*"
+	}
+}

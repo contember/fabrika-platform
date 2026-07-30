@@ -1,19 +1,19 @@
 #!/usr/bin/env bun
 import { resolve } from 'node:path'
-import { defineApp } from './authoring'
+import { isZeropsAppConfig } from './authoring'
 import { parseZeropsCliArgs } from './cli-args'
 import { compileFabrikaManifest, manifestServiceHostnames } from './manifest'
 import { runZeropsNamespaceCommand } from './namespace-command'
 import type { ZeropsAppConfig } from './types'
 
-const USAGE = `fabrika-zerops — Zerops provider tools
+const USAGE = `Zerops app tools
 
 Usage:
-  fabrika-zerops build --env=<env> [--config=<path>] [--output=<path>]
-  fabrika-zerops namespace plan --id=<id> --env=<env> --preset=<cheap|mid|full> [namespace options]
-  fabrika-zerops namespace create --id=<id> --env=<env> --preset=<cheap|mid|full> [namespace options] [--control-url=<url>]
-  fabrika-zerops namespace adopt --id=<id> --env=<env> --preset=<cheap|mid|full> --project-id=<id> [namespace options] [--control-url=<url>]
-  fabrika-zerops namespace reconcile --id=<id> [--control-url=<url>]
+  fabrika app build --provider=zerops --env=<env> [--config=<path>] [--output=<path>]
+  fabrika namespace plan --provider=zerops --id=<id> --env=<env> --preset=<cheap|mid|full> [namespace options]
+  fabrika namespace create --provider=zerops --id=<id> --env=<env> --preset=<cheap|mid|full> [namespace options] [--control-url=<url>]
+  fabrika namespace adopt --provider=zerops --id=<id> --env=<env> --preset=<cheap|mid|full> --project-id=<id> [namespace options] [--control-url=<url>]
+  fabrika namespace reconcile --provider=zerops --id=<id> [--control-url=<url>]
 
 Options:
   --env=<env>                    Environment.
@@ -37,14 +37,6 @@ Mutating namespace commands read the Bearer credential from FABRIKA_CONTROL_TOKE
 
 const property = (value: unknown, key: string): unknown => typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined
 
-const isZeropsAppConfig = (value: unknown): value is ZeropsAppConfig => {
-	const id = property(value, 'id')
-	const target = property(value, 'target')
-	return typeof id === 'string'
-		&& property(target, 'platform') === 'zerops'
-		&& typeof property(target, 'services') === 'function'
-}
-
 const loadConfig = async (path: string): Promise<ZeropsAppConfig> => {
 	const absolute = resolve(process.cwd(), path)
 	const loaded: unknown = await import(absolute)
@@ -52,11 +44,11 @@ const loadConfig = async (path: string): Promise<ZeropsAppConfig> => {
 	if (!isZeropsAppConfig(config)) {
 		throw new Error(`Config at ${absolute} must default-export defineApp({ target: { platform: 'zerops', ... } })`)
 	}
-	return defineApp(config)
+	return config
 }
 
-const main = async (): Promise<void> => {
-	const args = parseZeropsCliArgs(process.argv.slice(2))
+export const runZeropsCli = async (argv: readonly string[]): Promise<void> => {
+	const args = parseZeropsCliArgs(argv)
 	if (args.help || args.command === undefined) {
 		console.info(USAGE)
 		return
@@ -82,7 +74,9 @@ const main = async (): Promise<void> => {
 	console.info(`wrote ${output} (${manifestServiceHostnames(manifest).length} service(s))`)
 }
 
-await main().catch((error: unknown) => {
-	console.error(error instanceof Error ? error.message : String(error))
-	process.exit(1)
-})
+if (import.meta.main) {
+	await runZeropsCli(process.argv.slice(2)).catch((error: unknown) => {
+		console.error(error instanceof Error ? error.message : String(error))
+		process.exit(1)
+	})
+}

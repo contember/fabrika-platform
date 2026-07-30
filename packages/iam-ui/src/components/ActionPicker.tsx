@@ -1,4 +1,4 @@
-import type { AppActionDef } from '@fabrika/iam/admin'
+import type { AppActionDef } from '@fabrika/iam-contract'
 
 interface ActionPickerProps {
 	/** The chosen app's action catalog (from GET schema); empty when no app picked. */

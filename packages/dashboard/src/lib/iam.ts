@@ -7,52 +7,16 @@
 // use `iamSnapshot()`, which resolves to null on ANY failure (403, IAM down, network) rather than
 // throwing — a missing access panel is correct there, a dead page is not.
 //
-// The DTO shapes below are hand-mirrored from `@fabrika/iam`'s admin handlers, the same way
-// `lib/api.ts` mirrors the control plane's. Only the fields this console reads are declared.
+// DTOs come from the runtime-neutral IAM contract; this client only aliases the names used by the overview.
+
+import type { ApiKeyDto, AuditEventDto, ListResponse, PrincipalListItem, ShareLinkListItem } from '@fabrika/iam-contract'
 
 const BASE = '/iam/admin'
 
-export type PrincipalType = 'user' | 'service'
-export type PrincipalStatus = 'active' | 'invited' | 'disabled'
-
-export interface IamPrincipalDto {
-	id: string
-	type: PrincipalType
-	label: string
-	email: string | null
-	externalId: string | null
-	status: PrincipalStatus
-	createdAt: number
-}
-
-export interface IamApiKeyDto {
-	principalId: string
-	label: string
-	status: PrincipalStatus
-	grants: unknown[]
-	createdAt: number
-}
-
-export interface IamShareLinkDto {
-	id: string
-	label: string
-	createdAt: number
-}
-
-export interface IamAuditEventDto {
-	id: string
-	principalId: string
-	principalLabel: string | null
-	app: string
-	action: string
-	resourceType: string | null
-	resourceId: string | null
-	createdAt: number
-}
-
-interface Items<T> {
-	items: T[]
-}
+export type IamPrincipalDto = PrincipalListItem
+export type IamApiKeyDto = ApiKeyDto
+export type IamShareLinkDto = ShareLinkListItem
+export type IamAuditEventDto = AuditEventDto
 
 /** Everything the overview reads from IAM, in one shot. */
 export interface IamSnapshot {
@@ -83,10 +47,10 @@ const AUDIT_WINDOW = 100
 export async function iamSnapshot(): Promise<IamSnapshot | null> {
 	try {
 		const [principals, apiKeys, shareLinks, audit] = await Promise.all([
-			get<Items<IamPrincipalDto>>('/principals?limit=200'),
-			get<Items<IamApiKeyDto>>('/api-keys'),
-			get<Items<IamShareLinkDto>>('/share-links'),
-			get<Items<IamAuditEventDto>>(`/audit?limit=${AUDIT_WINDOW}`),
+			get<ListResponse<IamPrincipalDto>>('/principals?limit=200'),
+			get<ListResponse<IamApiKeyDto>>('/api-keys'),
+			get<ListResponse<IamShareLinkDto>>('/share-links'),
+			get<ListResponse<IamAuditEventDto>>(`/audit?limit=${AUDIT_WINDOW}`),
 		])
 		return {
 			principals: principals.items,

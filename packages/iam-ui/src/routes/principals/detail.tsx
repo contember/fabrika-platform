@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import type { GrantDto, PermissionEntry, PrincipalDetail, UpdatePrincipalRequest } from '@fabrika/iam/admin'
+import type { GrantDto, PermissionEntry, PrincipalDetail, UpdatePrincipalRequest } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { Badge } from '../../components/Badge'
 import { ConfirmDialog } from '../../components/ConfirmDialog'

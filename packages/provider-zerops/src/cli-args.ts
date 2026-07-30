@@ -18,7 +18,7 @@ export interface ZeropsCliArgs {
 	help: boolean
 }
 
-export const parseZeropsCliArgs = (argv: string[]): ZeropsCliArgs => {
+export const parseZeropsCliArgs = (argv: readonly string[]): ZeropsCliArgs => {
 	let command: string | undefined
 	let subcommand: string | undefined
 	let env: string | undefined
