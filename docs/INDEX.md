@@ -21,13 +21,14 @@ fabrika-platform is and how the pieces fit — then skim
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
+- [Unified Fabrika console (2026-07-30)](sprints/sprint-2026-07-30-unified-console.md)
+  — replace separate control and IAM dashboards with one operator console.
+
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
 
-- **Ready:** use the
-  [local Zerops-targeted stack](reference/local-development.md) before provider
-  validation.
+- **Active:** unify the control and IAM operator interface.
 - **Next:** run the resulting composition against a real account in
   [`backlog/05-bring-up-on-a-real-zerops-account.md`](backlog/05-bring-up-on-a-real-zerops-account.md).
