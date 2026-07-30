@@ -9,6 +9,9 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Unified Fabrika console (2026-07-30)](sprint-2026-07-30-unified-console.md)
+  — composed Delivery and Access into one professional control-plane console
+  while preserving IAM as an independent authority.
 - [Local Zerops stack (2026-07-30)](sprint-2026-07-30-local-zerops-stack.md)
   — composed the real local runtime behind a narrow Zerops API emulator and
   proved deploy recovery, IAM, persistence, proxies, and network isolation.

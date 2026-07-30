@@ -1,5 +1,35 @@
 # Sprint — Unified Fabrika console (2026-07-30)
 
+## OUTCOME
+
+Shipped one Fabrika operator console while preserving separate control and IAM
+services and authorization boundaries.
+
+- `aa76132` adds the runtime-neutral `/iam/admin/*` gateway and private network
+  adapters.
+- `e09d756` turns `@fabrika/iam-ui` into an Access feature package and mounts
+  its routes below `/access/*`.
+- `f3e173d` adds the Fabrika cloud-console shell with Delivery and Access planes.
+- `0750059` removes the standalone IAM SPA, asset runtime, and duplicate
+  Cloudflare, Zerops, and local build wiring.
+
+Verification:
+
+- `cpu-lease run -n 4 -- bun run typecheck` passed every workspace package.
+- `cpu-lease run -n 4 -- bun test` passed 1,102 tests; 117 integration tests
+  skipped because their external Postgres/S3 services were not configured.
+- `bun run local:smoke` passed, including control-plane kill and restart
+  reconciliation (run `019fb307-f123-7025-b5e6-89de624f082d`).
+- Browser smoke loaded Delivery namespaces, Access principals, and the IAM audit
+  log through `control.localhost`.
+- Direct checks proved IAM root is API-only (404), JWKS is public (200), and the
+  control-to-IAM admin gateway is live (200).
+- Lint completed with no errors; five warnings and 249 informational diagnostics
+  remain. Format, generated Zerops artifacts, and `git diff --check` passed.
+
+No sprint work was deferred. Credentialed deployment to a real Zerops account
+remains the separate [backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md).
+
 **Goal.** Replace the separate control and IAM dashboards with one operator
 console while keeping both backend services and authorization boundaries
 independent.
@@ -83,3 +113,7 @@ top of it. WU4 removes redundant deployment work. WU5 validates the result.
 
 - 2026-07-30 — Started after the local stack exposed the operational cost of
   separate browser origins and separate admin shells.
+- 2026-07-30 — Browser verification initially reached the pre-gateway control
+  process; restarting only that service loaded the committed router.
+- 2026-07-30 — Closed after the unified local stack and disruptive lifecycle
+  smoke passed.

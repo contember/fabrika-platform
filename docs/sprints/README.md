@@ -20,7 +20,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-
-- [Unified Fabrika console (2026-07-30)](sprint-2026-07-30-unified-console.md)
-  — compose control and IAM operations into one console without merging their
-  backend boundaries.
