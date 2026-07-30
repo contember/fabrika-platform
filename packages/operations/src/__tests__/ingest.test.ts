@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test'
-import { buildSentryEnvelope } from '../testing.js'
 import {
 	buildParsedEvent,
 	computeFingerprint,
@@ -10,6 +9,7 @@ import {
 	parseEnvelope,
 	resolveFingerprint,
 } from '../ingest.js'
+import { buildSentryEnvelope } from '../testing.js'
 
 describe('Sentry-compatible ingest kernel', () => {
 	test('extracts DSN keys from both supported transports', () => {
@@ -21,6 +21,13 @@ describe('Sentry-compatible ingest kernel', () => {
 				}),
 			),
 		).toBe('header-key')
+		expect(
+			extractIngestKey(
+				new Request('https://ops.test/api/app/envelope', {
+					headers: { 'x-sentry-auth': 'Sentry sentry_key=%E0%A4%A' },
+				}),
+			),
+		).toBeNull()
 		expect(ingestKeyLookup('header-key')).toBe('ingest-key:header-key')
 	})
 

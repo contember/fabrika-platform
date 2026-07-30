@@ -1,10 +1,4 @@
-import type {
-	IssueMutation,
-	IssueMutationDecision,
-	Occurrence,
-	OccurrenceTransition,
-	PriorIssueState,
-} from '@fabrika/operations-contract'
+import type { IssueMutation, IssueMutationDecision, Occurrence, OccurrenceTransition, PriorIssueState } from '@fabrika/operations-contract'
 
 function noTransition(): OccurrenceTransition {
 	return { reopen: false, regression: false, at: null, release: null, activity: null }

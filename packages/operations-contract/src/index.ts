@@ -1,10 +1,4 @@
-export type {
-	IngestMessage,
-	IngestRejectReason,
-	ParsedEvent,
-	ParsedException,
-	StackFrame,
-} from './ingest.js'
+export type { IngestMessage, IngestRejectReason, ParsedEvent, ParsedException, StackFrame } from './ingest.js'
 export type {
 	ActivityDraft,
 	ActivityItem,

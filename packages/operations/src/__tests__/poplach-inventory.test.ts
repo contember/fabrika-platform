@@ -1,10 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import {
-	POPLACH_SOURCE_COMMIT,
-	POPLACH_SOURCE_INVENTORY,
-} from '../../import/poplach-source-inventory.js'
+import { POPLACH_SOURCE_COMMIT, POPLACH_SOURCE_INVENTORY } from '../../import/poplach-source-inventory.js'
 
 const trackedPrefixes = ['src/', 'migrations/', 'seeds/', 'tests/browser/']
 

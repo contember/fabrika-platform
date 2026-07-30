@@ -134,7 +134,12 @@ export function extractIngestKey(request: Request): string | null {
 	const authHeader = request.headers.get('x-sentry-auth')
 	if (!authHeader) return null
 	const match = authHeader.match(/sentry_key=([^,\s]+)/i)
-	return match?.[1] ? decodeURIComponent(match[1]) : null
+	if (!match?.[1]) return null
+	try {
+		return decodeURIComponent(match[1])
+	} catch {
+		return null
+	}
 }
 
 export function ingestKeyLookup(key: string): string {

@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test'
 import type { PriorIssueState } from '@fabrika/operations-contract'
+import { describe, expect, test } from 'bun:test'
 import { applyIssueMutation, decideOccurrenceTransition } from '../issues.js'
 
 const resolved: PriorIssueState = {

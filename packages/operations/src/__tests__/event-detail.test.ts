@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import type { ObjectReader } from '../source-maps.js'
 import { parseEventDetail } from '../event-detail.js'
+import type { ObjectReader } from '../source-maps.js'
 import { resolveFrames, sourceMapKey } from '../source-maps.js'
 
 const map = JSON.stringify({
@@ -23,9 +23,11 @@ function reader(objects: Record<string, string>): ObjectReader {
 	return {
 		async get(key) {
 			const value = objects[key]
-			return value === undefined ? null : { async text() {
-				return value
-			} }
+			return value === undefined ? null : {
+				async text() {
+					return value
+				},
+			}
 		},
 	}
 }

@@ -1,9 +1,4 @@
-import type {
-	EventBreadcrumb,
-	EventDetail,
-	EventException,
-	StackFrame,
-} from '@fabrika/operations-contract'
+import type { EventBreadcrumb, EventDetail, EventException, StackFrame } from '@fabrika/operations-contract'
 import type { ObjectReader } from './source-maps.js'
 import { resolveFrames } from './source-maps.js'
 

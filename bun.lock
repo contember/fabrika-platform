@@ -235,6 +235,8 @@
       "version": "0.0.1",
       "dependencies": {
         "@fabrika/operations-contract": "workspace:*",
+        "@fabrika/platform": "workspace:*",
+        "@fabrika/platform-node": "workspace:*",
         "source-map-js": "^1.2.1",
       },
       "devDependencies": {

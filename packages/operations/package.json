@@ -12,6 +12,8 @@
 	},
 	"files": [
 		"src",
+		"migrations",
+		"migrations-postgres",
 		"!src/**/__tests__/**"
 	],
 	"exports": {
@@ -34,14 +36,37 @@
 			"bun": "./src/testing.ts",
 			"types": "./src/testing.ts",
 			"default": "./src/testing.ts"
+		},
+		"./consumer": {
+			"bun": "./src/consumer.ts",
+			"types": "./src/consumer.ts",
+			"default": "./src/consumer.ts"
+		},
+		"./platform-cf": {
+			"bun": "./src/platform-cf.ts",
+			"types": "./src/platform-cf.ts",
+			"default": "./src/platform-cf.ts"
+		},
+		"./node/consumer": {
+			"bun": "./src/node/consumer.ts",
+			"types": "./src/node/consumer.ts",
+			"default": "./src/node/consumer.ts"
+		},
+		"./node/migrate": {
+			"bun": "./src/node/migrate.ts",
+			"types": "./src/node/migrate.ts",
+			"default": "./src/node/migrate.ts"
 		}
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",
-		"test": "bun test src/__tests__"
+		"test": "bun test src/__tests__",
+		"migrate:postgres": "bun src/node/migrate.ts"
 	},
 	"dependencies": {
 		"@fabrika/operations-contract": "workspace:*",
+		"@fabrika/platform": "workspace:*",
+		"@fabrika/platform-node": "workspace:*",
 		"source-map-js": "^1.2.1"
 	},
 	"devDependencies": {
