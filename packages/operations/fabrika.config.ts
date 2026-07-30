@@ -16,6 +16,8 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 		vars: {
 			ENVIRONMENT: ctx.env,
 			OPERATIONS_PUBLIC_HOST: publicHost,
+			DEV: isLocal ? 'true' : '',
+			PROPUSTKA_URL: process.env['PROPUSTKA_URL'] ?? '',
 		},
 		bindings: {
 			DB: new D1Database({ name: 'operations', migrationsDir: './migrations', locationHint: 'weur' }),

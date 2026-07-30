@@ -73,6 +73,7 @@ const generateSecrets = async (): Promise<void> => {
 			FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID: 'fabrika-local',
 			FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY: minioPassword,
 			OPERATIONS_SYNC_KEY: operationsSyncKey,
+			PROPUSTKA_RPC_KEY: rpcKey,
 		}),
 		writeEnv('control.env', {
 			VOZKA_DATABASE_URL: `postgres://postgres:${platformDatabasePassword}@platform-db:5432/control`,

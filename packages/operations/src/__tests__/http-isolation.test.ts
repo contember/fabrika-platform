@@ -5,6 +5,8 @@ import {
 } from '@fabrika/operations-contract/catalog'
 import { OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract/releases'
 import { describe, expect, test } from 'bun:test'
+import { createOperationsIam } from '../auth.js'
+import { SqliteHealthRepository } from '../health-repository.js'
 import { createOperationsFetchHandler } from '../http.js'
 import { createHarness } from './helpers/sqlite.js'
 
@@ -23,7 +25,35 @@ const handler = () => {
 			get: async () => null,
 			delete: async () => {},
 		},
+		health: new SqliteHealthRepository(harness.db),
+		iam: createOperationsIam({ DEV: 'true' }),
 	})
+}
+
+async function reconcileSource(fetch: (request: Request) => Promise<Response>, sourceId: string): Promise<Response> {
+	const sources: OperationsCatalogSourceV2[] = [{
+		coordinate: { appId: 'app', environment: 'prod' },
+		displayName: 'App production',
+		ingestCredential: {
+			id: sourceId,
+			publicKey: '0123456789abcdef0123456789abcdef',
+		},
+	}]
+	return fetch(
+		new Request('https://operations.internal/private/catalog/reconcile', {
+			method: 'POST',
+			headers: {
+				authorization: `Bearer ${syncKey}`,
+				'content-type': 'application/json',
+			},
+			body: JSON.stringify({
+				protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
+				revision: 1,
+				snapshotHash: await operationsCatalogSnapshotHash(sources),
+				sources,
+			}),
+		}),
+	)
 }
 
 describe('Operations public/private HTTP isolation', () => {
@@ -49,29 +79,43 @@ describe('Operations public/private HTTP isolation', () => {
 		const fetch = handler()
 		expect((await fetch(new Request('https://operations.internal/healthz'))).status).toBe(200)
 
-		const sources: OperationsCatalogSourceV2[] = [{
-			coordinate: { appId: 'app', environment: 'prod' },
-			displayName: 'App production',
-			ingestCredential: {
-				id: '0198a000-0000-7000-8000-000000000001',
-				publicKey: '0123456789abcdef0123456789abcdef',
-			},
-		}]
-		const response = await fetch(
-			new Request('https://operations.internal/private/catalog/reconcile', {
-				method: 'POST',
-				headers: {
-					authorization: `Bearer ${syncKey}`,
-					'content-type': 'application/json',
-				},
-				body: JSON.stringify({
-					protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
-					revision: 1,
-					snapshotHash: await operationsCatalogSnapshotHash(sources),
-					sources,
-				}),
-			}),
-		)
+		const response = await reconcileSource(fetch, '0198a000-0000-7000-8000-000000000001')
 		expect(response.status).toBe(200)
+	})
+
+	test('the private operator API enforces scoped IAM permissions while the public hostname stays closed', async () => {
+		const fetch = handler()
+		expect((await reconcileSource(fetch, '0198a000-0000-7000-8000-000000000001')).status).toBe(200)
+		const sourcesResponse = await fetch(new Request('https://operations.internal/api/sources?__as=viewer@vozka.test'))
+		expect(sourcesResponse.status).toBe(200)
+		const sourcesBody: unknown = await sourcesResponse.json()
+		if (sourcesBody === null || typeof sourcesBody !== 'object' || !('items' in sourcesBody) || !Array.isArray(sourcesBody.items)) {
+			throw new Error('expected an operator source list')
+		}
+		const source = sourcesBody.items[0]
+		if (source === null || typeof source !== 'object' || !('id' in source) || typeof source.id !== 'string') {
+			throw new Error('expected one operator source')
+		}
+		const sourceId = source.id
+		const createCheck = (persona: string) =>
+			fetch(
+				new Request(`https://operations.internal/api/sources/${sourceId}/health-checks?__as=${persona}`, {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({
+						path: '/healthz',
+						enabled: true,
+						intervalMs: 60_000,
+						timeoutMs: 5_000,
+						expectedStatus: 200,
+						failureThreshold: 3,
+						recoveryThreshold: 2,
+						staleAfterMs: 180_000,
+					}),
+				}),
+			)
+		expect((await createCheck('viewer@vozka.test')).status).toBe(404)
+		expect((await createCheck('operator@vozka.test')).status).toBe(201)
+		expect((await fetch(new Request(`https://${publicHost}/api/sources`))).status).toBe(404)
 	})
 })

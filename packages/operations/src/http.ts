@@ -1,17 +1,31 @@
+import type { AuthCarrier, Iam } from '@fabrika/auth'
+import type { AppGates } from '@fabrika/auth-core'
 import { OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'
 import { handleSourceMapUploadRequest } from './artifact-upload.js'
 import { handleOperationsCatalogRequest } from './catalog.js'
 import { handleDirectIngestRequest } from './direct-ingest.js'
+import type { HealthRepository } from './health-repository.js'
+import { handleOperationsOperatorRequest } from './operator-api.js'
 import type { OperationsDataEnv } from './pipeline.js'
 
 const INGEST_PATH = /^\/api\/[1-9][0-9]{0,18}\/envelope\/$/
 const CATALOG_PATH = '/private/catalog/reconcile'
+const OPERATOR_GATES: AppGates = {
+	rules: [
+		{ path: '/api/*', kind: 'service' },
+		{ path: '/api/*', kind: 'human' },
+	],
+}
 
 export interface OperationsHttpEnv extends OperationsDataEnv {
 	/** Hostname published for SDK envelope ingest and authenticated source-map upload. Empty disables public ingress. */
 	publicHost: string
 	/** Private Control → Operations catalog credential. */
 	syncKey: string
+	/** Operations owns operator authentication and IAM principal lookup. */
+	iam: Iam
+	/** Portable health persistence used by the operator API. */
+	health: HealthRepository
 }
 
 /**
@@ -41,10 +55,22 @@ export function createOperationsFetchHandler(env: OperationsHttpEnv): (request: 
 			if (url.pathname === CATALOG_PATH) {
 				return handleOperationsCatalogRequest(request, { repositories: env.repositories, syncKey: env.syncKey })
 			}
-			// The operator API is wired here once its runtime-neutral HTTP handler lands.
+			if (url.pathname.startsWith('/api/')) {
+				const context: AuthCarrier = {}
+				return env.iam.authMiddleware({ gates: OPERATOR_GATES, unmatched: 'deny' })(request, context, async () => {
+					if (context.auth === undefined || context.auth === null) return Response.json({ error: 'authentication required' }, { status: 401 })
+					return handleOperationsOperatorRequest(request, {
+						repositories: env.repositories,
+						health: env.health,
+						payloads: env.payloads,
+						auth: context.auth,
+						principals: env.iam,
+					})
+				})
+			}
 			return notFound()
-		} catch (error) {
-			console.error('operations request failed:', error instanceof Error ? error.message : 'unknown error')
+		} catch {
+			console.error('operations request failed')
 			return Response.json({ error: 'internal error' }, { status: 500 })
 		}
 	}

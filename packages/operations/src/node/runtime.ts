@@ -1,4 +1,6 @@
+import { HttpIamRpc } from '@fabrika/auth'
 import { PostgresDatabase, S3BlobStore } from '@fabrika/platform-node'
+import { createOperationsIam } from '../auth.js'
 import { PostgresHealthRepository } from '../health-repository.js'
 import { OperationsHealthExecution } from '../health-service.js'
 import type { OperationsHttpEnv } from '../http.js'
@@ -19,6 +21,7 @@ export interface OperationsRuntime {
 export function createOperationsRuntime(source: Record<string, string | undefined> = process.env): OperationsRuntime {
 	const db = PostgresDatabase.connect(required(source, 'FABRIKA_OPERATIONS_DATABASE_URL'))
 	const repositories = createPostgresOperationsRepositories(db)
+	const healthRepository = new PostgresHealthRepository(db)
 	const ingestQueue = createOperationsIngestQueue(db)
 	const payloads = S3BlobStore.connect({
 		bucket: required(source, 'FABRIKA_OPERATIONS_BLOB_BUCKET'),
@@ -36,6 +39,8 @@ export function createOperationsRuntime(source: Record<string, string | undefine
 		payloads,
 		publicHost: source['FABRIKA_OPERATIONS_PUBLIC_HOST'] ?? '',
 		syncKey: requiredSecret(source, 'OPERATIONS_SYNC_KEY'),
+		health: healthRepository,
+		iam: operationsIam(source),
 	}
 	return {
 		env,
@@ -43,7 +48,7 @@ export function createOperationsRuntime(source: Record<string, string | undefine
 		consumer: new PostgresOperationsConsumer(ingestQueue, env, {
 			log: (message) => console.warn(message),
 		}),
-		health: new OperationsHealthExecution(new PostgresHealthRepository(db), {
+		health: new OperationsHealthExecution(healthRepository, {
 			telemetry: new StoredOperationsTelemetryAdapter(db, bunPipelineTelemetry()),
 			logger: { warn: (message, fields) => console.warn(message, fields) },
 		}),
@@ -52,6 +57,18 @@ export function createOperationsRuntime(source: Record<string, string | undefine
 			await db.close()
 		},
 	}
+}
+
+function operationsIam(source: Record<string, string | undefined>) {
+	const dev = source['DEV'] ?? ''
+	if (dev !== '') return createOperationsIam({ DEV: dev })
+	return createOperationsIam({
+		IAM: new HttpIamRpc({
+			origin: required(source, 'FABRIKA_IAM_URL'),
+			key: requiredSecret(source, 'PROPUSTKA_RPC_KEY'),
+		}),
+		PROPUSTKA_URL: required(source, 'PROPUSTKA_URL'),
+	})
 }
 
 function required(source: Record<string, string | undefined>, name: string): string {

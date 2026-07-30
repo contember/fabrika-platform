@@ -180,10 +180,11 @@ const control: ZeropsYamlSetup = {
  * Operations is private inside the platform project. The proxy is its only public ingress and its
  * manifest must route only `/api/{projectId}/envelope/` for the configured public hostname.
  *
- * Per-installation variable (env API): `FABRIKA_OPERATIONS_PUBLIC_HOST`.
+ * Per-installation variables (env API): `FABRIKA_OPERATIONS_PUBLIC_HOST` and `PROPUSTKA_URL`
+ * (the public IAM issuer).
  *
- * Secret (`envSecrets`): `OPERATIONS_SYNC_KEY`, shared only with control for catalog projection.
- * IAM transport variables are reserved for the operator handler; the service itself is never public.
+ * Secrets (`envSecrets`): `OPERATIONS_SYNC_KEY`, shared only with control for catalog projection, and
+ * `PROPUSTKA_RPC_KEY`, used only for Operations → IAM management RPC.
  */
 const operations: ZeropsYamlSetup = {
 	setup: 'operations',

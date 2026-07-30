@@ -16,6 +16,7 @@ describe('Operations Cloudflare composition', () => {
 		expect(binding(worker, 'IAM')).toBeInstanceOf(ServiceReference)
 		expect(binding(worker, 'CONTROL')).toBeUndefined()
 		expect(binding(worker, 'PIPELINE_METRICS')).toBeUndefined()
+		expect(worker.options.vars?.['DEV']).toBe('')
 		expect(worker.options.triggers?.crons).toEqual(['*/5 * * * *'])
 		expect(worker.options.routes).toEqual([{ pattern: 'errors.example.test', custom_domain: true }])
 	})
@@ -33,6 +34,7 @@ describe('Operations Cloudflare composition', () => {
 	test('local composition omits the IAM service binding and public route', () => {
 		const worker = buildOperationsWorker({ env: 'local' })
 		expect(binding(worker, 'IAM')).toBeUndefined()
+		expect(worker.options.vars?.['DEV']).toBe('true')
 		expect(worker.options.routes).toEqual([])
 	})
 })

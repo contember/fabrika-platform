@@ -1,5 +1,7 @@
+import type { IamRpc } from '@fabrika/auth'
 import type { IngestMessage } from '@fabrika/operations-contract'
 import { WorkerEntrypoint } from 'cloudflare:workers'
+import { createOperationsIam } from './auth.js'
 import { consumeDeadDeliveries, consumeDeliveries } from './consumer.js'
 import { SqliteHealthRepository } from './health-repository.js'
 import { OperationsHealthExecution } from './health-service.js'
@@ -17,16 +19,22 @@ interface OperationsWorkerBindings {
 	OPERATIONS_PUBLIC_HOST: string
 	OPERATIONS_SYNC_KEY: string
 	ENVIRONMENT: string
+	DEV: string
+	PROPUSTKA_URL?: string
+	IAM?: IamRpc
 }
 
 export class OperationsWorker extends WorkerEntrypoint<OperationsWorkerBindings> {
 	private get operations(): OperationsHttpEnv {
+		const health = new SqliteHealthRepository(this.env.DB)
 		return {
 			repositories: createSqliteOperationsRepositories(this.env.DB),
 			payloads: cloudflareBlobStore(this.env.PAYLOADS),
 			ingestQueue: cloudflareJobQueue(this.env.INGEST_QUEUE),
 			publicHost: this.env.OPERATIONS_PUBLIC_HOST,
 			syncKey: this.env.OPERATIONS_SYNC_KEY,
+			health,
+			iam: createOperationsIam(this.env),
 		}
 	}
 

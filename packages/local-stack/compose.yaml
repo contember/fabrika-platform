@@ -148,12 +148,14 @@ services:
     environment:
       PORT: "3000"
       ENVIRONMENT: local
+      DEV: "true"
       FABRIKA_OPERATIONS_PUBLIC_HOST: errors.localhost
       FABRIKA_OPERATIONS_BLOB_BUCKET: operations-payloads
       FABRIKA_OPERATIONS_BLOB_ENDPOINT: http://minio:9000
       FABRIKA_OPERATIONS_BLOB_REGION: us-east-1
       FABRIKA_IAM_URL: http://iam:18080
       FABRIKA_CONTROL_URL: http://control:3000
+      PROPUSTKA_URL: http://iam.localhost:18080
     networks: [platform]
     depends_on:
       platform-db:

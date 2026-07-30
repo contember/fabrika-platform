@@ -52,6 +52,11 @@ describe('platform scaffold', () => {
 			const workflow = files['.github/workflows/platform.yml'] ?? ''
 			expect(workflow.indexOf('name: Deploy IAM')).toBeLessThan(workflow.indexOf('name: Deploy Operations'))
 			expect(workflow.indexOf('name: Deploy Operations')).toBeLessThan(workflow.indexOf('name: Deploy fabrika runner + control plane'))
+			const operationsStep = workflow.slice(
+				workflow.indexOf('name: Deploy Operations'),
+				workflow.indexOf('name: Deploy fabrika runner + control plane'),
+			)
+			expect(operationsStep).toContain('PROPUSTKA_URL: ${{ vars.PROPUSTKA_URL }}')
 
 			const generated = Object.values(files).join('\n')
 			for (const forbidden of FORBIDDEN_GENERATED_REFERENCES) {
