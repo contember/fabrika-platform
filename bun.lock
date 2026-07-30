@@ -178,7 +178,9 @@
     "packages/local-stack": {
       "name": "@fabrika/local-stack",
       "dependencies": {
+        "@fabrika/example-zerops-app": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",
+        "@fabrika/proxy": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "latest",

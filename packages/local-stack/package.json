@@ -7,10 +7,17 @@
 	},
 	"scripts": {
 		"emulator": "bun src/emulator-server.ts",
+		"prepare": "bun src/prepare.ts",
+		"up": "bun src/cli.ts up",
+		"status": "bun src/cli.ts status",
+		"reset": "bun src/cli.ts reset",
+		"down": "bun src/cli.ts down",
 		"typecheck": "tsc --noEmit",
 		"test": "bun test"
 	},
 	"dependencies": {
+		"@fabrika/example-zerops-app": "workspace:*",
+		"@fabrika/proxy": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*"
 	},
 	"devDependencies": {

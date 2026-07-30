@@ -10,6 +10,7 @@ dist/
 *.local
 *.log
 .DS_Store
+packages/local-stack/.state/
 
 # wrangler.jsonc is generated (DO NOT hand-edit). It is ignored by default, but the two workers that
 # own Durable Objects COMMIT theirs: the `migrations` array is the only durable record of a worker's

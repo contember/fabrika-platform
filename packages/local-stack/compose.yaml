@@ -1,0 +1,243 @@
+name: fabrika-local
+
+x-bun: &bun
+  image: oven/bun:1.3.14-alpine
+  working_dir: /workspace
+  volumes:
+    - ../..:/workspace
+
+services:
+  platform-db:
+    image: postgres:17-alpine
+    env_file: .state/platform-db.env
+    volumes:
+      - platform-db:/var/lib/postgresql/data
+      - ./postgres/platform-init.sql:/docker-entrypoint-initdb.d/00-platform.sql:ro
+    networks: [platform]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  apps-db:
+    image: postgres:17-alpine
+    env_file: .state/apps-db.env
+    volumes:
+      - apps-db:/var/lib/postgresql/data
+    networks: [apps-prod]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres -d notes]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data
+    env_file: .state/minio.env
+    volumes:
+      - minio:/data
+    networks: [platform]
+    healthcheck:
+      test: [CMD, curl, -f, http://127.0.0.1:9000/minio/health/live]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    env_file: .state/minio.env
+    entrypoint: [sh, -c]
+    command:
+      - >-
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 1; done;
+        mc mb --ignore-existing local/run-logs
+    networks: [platform]
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  zerops-emulator:
+    <<: *bun
+    command: bun packages/local-stack/src/emulator-server.ts
+    env_file: .state/emulator.env
+    environment:
+      PORT: "3000"
+      LOCAL_ZEROPS_STATE_FILE: /state/zerops.json
+    volumes:
+      - ../..:/workspace
+      - zerops-state:/state
+    networks: [platform]
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:3000/healthz]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  iam:
+    <<: *bun
+    command: [sh, -c, "bun packages/iam/src/node/migrate.ts && exec bun packages/iam/src/node/server.ts"]
+    env_file: .state/iam.env
+    environment:
+      PORT: "18080"
+      PROPUSTKA_ASSETS_DIR: packages/iam-ui/dist
+      ENVIRONMENT: local
+      ISSUER: http://iam.localhost:18080
+      SESSION_COOKIE_DOMAIN: ""
+      HUMAN_EMAIL_DOMAINS: "[]"
+      HUMAN_EMAILS: "[]"
+      IAM_BOOTSTRAP_ADMINS: "[]"
+    networks:
+      platform:
+        aliases: [iam.localhost]
+    depends_on:
+      platform-db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:18080/healthz]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  control:
+    <<: *bun
+    command: [sh, -c, "bun packages/control/src/node/migrate.ts && exec bun packages/control/src/node/server.ts"]
+    env_file: .state/control.env
+    environment:
+      PORT: "3000"
+      VOZKA_ASSETS_DIR: packages/dashboard/dist
+      ENVIRONMENT: local
+      DEV: ""
+      VOZKA_DOMAIN: http://control.localhost:18080
+      VOZKA_BOOTSTRAP_ADMINS: "[]"
+      PROPUSTKA_URL: http://iam.localhost:18080
+      PROPUSTKA_RPC_URL: http://iam:18080
+      VOZKA_RUN_LOGS_BUCKET: run-logs
+      VOZKA_RUN_LOGS_ENDPOINT: http://minio:9000
+      VOZKA_RUN_LOGS_REGION: us-east-1
+      ZEROPS_API_BASE_URL: http://zerops-emulator:3000/api/rest/public
+      ZEROPS_CLIENT_ID: local-client
+      ZEROPS_PROXY_BUILD_FROM_GIT: https://github.com/contember/fabrika-platform
+      ZEROPS_PROXY_IAM_URL: http://iam.localhost:18080
+    networks: [platform]
+    depends_on:
+      platform-db:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      iam:
+        condition: service_healthy
+      zerops-emulator:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:3000/healthz]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  platform-proxy-auth:
+    <<: *bun
+    command: bun packages/proxy/src/main.ts
+    env_file: .state/platform-proxy.env
+    environment:
+      FABRIKA_PROXY_MANIFEST: /local-state/platform-proxy.manifest.json
+      FABRIKA_PROXY_PORT: "9000"
+      FABRIKA_IAM_URL: http://iam.localhost:18080
+    volumes:
+      - ../..:/workspace
+      - ./.state:/local-state:ro
+    networks:
+      platform: {}
+      edge:
+        aliases: [iam.localhost]
+    ports:
+      - 127.0.0.1:18080:18080
+    depends_on:
+      iam:
+        condition: service_healthy
+      control:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:9000/healthz]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  platform-proxy:
+    image: caddy:2.10.2-alpine
+    command: caddy run --config /local-state/platform-caddy.json
+    network_mode: service:platform-proxy-auth
+    volumes:
+      - ./.state:/local-state:ro
+    depends_on:
+      platform-proxy-auth:
+        condition: service_healthy
+
+  notes:
+    <<: *bun
+    command: [sh, -c, "bun examples/zerops-app/src/migrate.ts && exec bun examples/zerops-app/src/server.ts"]
+    env_file: .state/notes.env
+    environment:
+      PORT: "3000"
+      FABRIKA_IAM_ISSUER: http://iam.localhost:18080
+      NOTES_APP_ID: notes
+    networks: [apps-prod]
+    depends_on:
+      apps-db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:3000/healthz]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  apps-proxy-auth:
+    <<: *bun
+    command: bun packages/proxy/src/main.ts
+    env_file: .state/apps-proxy.env
+    environment:
+      FABRIKA_PROXY_MANIFEST: /local-state/apps-proxy.manifest.json
+      FABRIKA_PROXY_PORT: "9000"
+      FABRIKA_IAM_URL: http://iam.localhost:18080
+    volumes:
+      - ../..:/workspace
+      - ./.state:/local-state:ro
+    networks:
+      apps-prod: {}
+      edge: {}
+    ports:
+      - 127.0.0.1:18081:18081
+    depends_on:
+      notes:
+        condition: service_healthy
+      platform-proxy-auth:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:9000/healthz]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  apps-proxy:
+    image: caddy:2.10.2-alpine
+    command: caddy run --config /local-state/apps-caddy.json
+    network_mode: service:apps-proxy-auth
+    volumes:
+      - ./.state:/local-state:ro
+    depends_on:
+      apps-proxy-auth:
+        condition: service_healthy
+
+networks:
+  platform:
+    internal: true
+  apps-prod:
+    internal: true
+  edge: {}
+
+volumes:
+  platform-db: {}
+  apps-db: {}
+  minio: {}
+  zerops-state: {}

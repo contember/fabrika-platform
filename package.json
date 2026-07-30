@@ -12,7 +12,11 @@
 		"test": "bun test",
 		"lint": "biome lint .",
 		"format": "dprint fmt",
-		"format:check": "dprint check"
+		"format:check": "dprint check",
+		"local:up": "bun run --filter @fabrika/local-stack up",
+		"local:status": "bun run --filter @fabrika/local-stack status",
+		"local:reset": "bun run --filter @fabrika/local-stack reset",
+		"local:down": "bun run --filter @fabrika/local-stack down"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.6",
