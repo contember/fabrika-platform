@@ -185,4 +185,68 @@ describe.skipIf(!hasPostgres)('Operations repositories on real Postgres', () => 
 		expect(grouped.every((result) => !result.duplicate)).toBe(true)
 		expect((await repositories.ingest.counts({ sourceId: 'source-a', fingerprint: 'fp-a' }))[0]?.count).toBe(28)
 	})
+
+	test('keeps the latest observed release summary and every deploy-run link', async () => {
+		await repositories.sources.upsert({
+			id: 'release-source',
+			appId: 'release-app',
+			environment: 'production',
+			displayName: 'Release App',
+			enabled: true,
+		})
+		const commitSha = 'a'.repeat(40)
+		const releaseName = `fabrika/release-app/production/default/${commitSha}`
+
+		const record = async (input: {
+			runId: string
+			outcome: 'failed' | 'succeeded'
+			revision: number
+			observedAt: number
+		}) => {
+			const release = await repositories.artifacts.upsertRelease({
+				id: `release-${input.runId}`,
+				sourceId: 'release-source',
+				runId: input.runId,
+				commitSha,
+				releaseName,
+				state: input.outcome,
+				artifactState: input.outcome === 'succeeded' ? 'complete' : 'incomplete',
+				finishedAt: input.observedAt,
+				observedAt: input.observedAt,
+			})
+			await repositories.artifacts.reconcileRunLink({
+				runId: input.runId,
+				sourceId: 'release-source',
+				releaseId: release.id,
+				availability: 'available',
+				unavailableReason: null,
+				phase: 'terminal',
+				providerRunId: `provider-${input.runId}`,
+				outcome: input.outcome,
+				artifactState: input.outcome === 'succeeded' ? 'complete' : 'incomplete',
+				revision: input.revision,
+				projectionHash: `projection-${input.runId}-${input.revision}`,
+				observedAt: input.observedAt,
+			})
+			return release
+		}
+
+		expect((await record({ runId: 'failed', outcome: 'failed', revision: 1, observedAt: 4_100 })).state).toBe('failed')
+		expect((await record({ runId: 'retry', outcome: 'succeeded', revision: 1, observedAt: 4_300 })).run_id).toBe('retry')
+		const delayed = await record({ runId: 'failed', outcome: 'failed', revision: 2, observedAt: 4_200 })
+		expect(delayed.run_id).toBe('retry')
+		expect(delayed.state).toBe('succeeded')
+		expect(delayed.artifact_state).toBe('complete')
+		expect(Number(delayed.finished_at)).toBe(4_300)
+		expect(Number(delayed.updated_at)).toBe(4_300)
+
+		const { results: links } = await db
+			.prepare('SELECT run_id, projection_revision FROM deploy_run_links WHERE source_id = ? ORDER BY run_id')
+			.bind('release-source')
+			.all<{ run_id: string; projection_revision: number }>()
+		expect(links).toEqual([
+			{ run_id: 'failed', projection_revision: 2 },
+			{ run_id: 'retry', projection_revision: 1 },
+		])
+	})
 })

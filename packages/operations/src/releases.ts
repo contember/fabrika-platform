@@ -65,6 +65,7 @@ export async function reconcileOperationsRelease(
 			state: request.outcome ?? request.phase,
 			artifactState: request.artifactState,
 			...(request.phase === 'terminal' ? { finishedAt: request.observedAt } : {}),
+			observedAt: request.observedAt,
 		})
 	}
 

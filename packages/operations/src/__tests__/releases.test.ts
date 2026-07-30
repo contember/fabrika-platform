@@ -1,6 +1,7 @@
 import {
 	OPERATIONS_ARTIFACT_HEADERS,
 	OPERATIONS_RELEASE_PROTOCOL_VERSION,
+	type OperationsArtifactState,
 	type OperationsReleaseAvailabilityV1,
 	operationsReleaseName,
 	type OperationsReleaseReconcileRequestV1,
@@ -79,8 +80,11 @@ function projection(input: {
 	commit?: string | null
 	revision?: number
 	phase?: 'started' | 'provider_accepted' | 'terminal'
+	outcome?: 'succeeded' | 'failed' | null
+	artifactState?: OperationsArtifactState
 	dryRun?: boolean
 	verifier?: string
+	observedAt?: number
 }): OperationsReleaseReconcileRequestV1 {
 	const appId = input.appId ?? 'notes'
 	const phase = input.phase ?? 'started'
@@ -104,13 +108,13 @@ function projection(input: {
 		coordinate: { appId, environment: 'prod' },
 		phase,
 		providerRunId: phase === 'started' ? null : `provider-${input.runId}`,
-		outcome: phase === 'terminal' ? 'succeeded' : null,
-		artifactState: release.kind === 'available' ? (phase === 'terminal' ? 'incomplete' : 'pending') : 'not_applicable',
+		outcome: input.outcome === undefined ? (phase === 'terminal' ? 'succeeded' : null) : input.outcome,
+		artifactState: input.artifactState ?? (release.kind === 'available' ? (phase === 'terminal' ? 'incomplete' : 'pending') : 'not_applicable'),
 		release,
 		...(release.kind === 'available' && input.verifier !== undefined
 			? { uploadCredential: { verifier: input.verifier, expiresAt: NOW_MS + 2 * 60 * 60 * 1_000 } }
 			: {}),
-		observedAt: NOW_MS + (input.revision ?? 1),
+		observedAt: input.observedAt ?? NOW_MS + (input.revision ?? 1),
 	}
 }
 
@@ -162,6 +166,61 @@ describe('Operations release projection', () => {
 		expect(rows(harness, 'SELECT * FROM releases')).toHaveLength(2)
 		expect(rows(harness, 'SELECT * FROM deploy_run_links')).toHaveLength(3)
 		expect(rows(harness, 'SELECT DISTINCT commit_sha FROM releases')).toHaveLength(2)
+	})
+
+	test('keeps the latest observed run as the commit summary while retaining retry links', async () => {
+		const harness = createHarness(() => NOW_MS)
+		await seedSource(harness, 'source-notes', 'notes')
+		await reconcileOperationsRelease(
+			harness.repositories,
+			projection({
+				runId: 'run-failed',
+				phase: 'terminal',
+				outcome: 'failed',
+				observedAt: NOW_MS + 100,
+			}),
+		)
+		await reconcileOperationsRelease(
+			harness.repositories,
+			projection({
+				runId: 'run-retry',
+				phase: 'terminal',
+				outcome: 'succeeded',
+				artifactState: 'complete',
+				observedAt: NOW_MS + 200,
+			}),
+		)
+
+		expect(rows(harness, 'SELECT run_id, state, finished_at, artifact_state, updated_at FROM releases')).toEqual([{
+			run_id: 'run-retry',
+			state: 'succeeded',
+			finished_at: NOW_MS + 200,
+			artifact_state: 'complete',
+			updated_at: NOW_MS + 200,
+		}])
+
+		await reconcileOperationsRelease(
+			harness.repositories,
+			projection({
+				runId: 'run-failed',
+				revision: 2,
+				phase: 'terminal',
+				outcome: 'failed',
+				observedAt: NOW_MS + 150,
+			}),
+		)
+
+		expect(rows(harness, 'SELECT run_id, state, finished_at, artifact_state, updated_at FROM releases')).toEqual([{
+			run_id: 'run-retry',
+			state: 'succeeded',
+			finished_at: NOW_MS + 200,
+			artifact_state: 'complete',
+			updated_at: NOW_MS + 200,
+		}])
+		expect(rows(harness, 'SELECT run_id, projection_revision FROM deploy_run_links ORDER BY run_id')).toEqual([
+			{ run_id: 'run-failed', projection_revision: 2 },
+			{ run_id: 'run-retry', projection_revision: 1 },
+		])
 	})
 
 	test('same-revision replay repairs a missing derived upload credential', async () => {

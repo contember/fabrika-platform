@@ -1525,6 +1525,7 @@ export class ArtifactsRepository {
 		state: string
 		artifactState: OperationsArtifactState
 		finishedAt?: number
+		observedAt: number
 	}): Promise<ReleaseRow> {
 		const now = this.now()
 		const row = await this.db
@@ -1532,10 +1533,26 @@ export class ArtifactsRepository {
 				(id, source_id, run_id, commit_sha, state, created_at, finished_at, release_name, artifact_state, updated_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT (source_id, commit_sha) DO UPDATE SET
-					state = excluded.state,
-					finished_at = excluded.finished_at,
-					artifact_state = excluded.artifact_state,
-					updated_at = excluded.updated_at
+					run_id = CASE
+						WHEN releases.updated_at <= excluded.updated_at THEN excluded.run_id
+						ELSE releases.run_id
+					END,
+					state = CASE
+						WHEN releases.updated_at <= excluded.updated_at THEN excluded.state
+						ELSE releases.state
+					END,
+					finished_at = CASE
+						WHEN releases.updated_at <= excluded.updated_at THEN excluded.finished_at
+						ELSE releases.finished_at
+					END,
+					artifact_state = CASE
+						WHEN releases.updated_at <= excluded.updated_at THEN excluded.artifact_state
+						ELSE releases.artifact_state
+					END,
+					updated_at = CASE
+						WHEN releases.updated_at <= excluded.updated_at THEN excluded.updated_at
+						ELSE releases.updated_at
+					END
 				WHERE releases.release_name = excluded.release_name
 				RETURNING *`)
 			.bind(
@@ -1548,7 +1565,7 @@ export class ArtifactsRepository {
 				input.finishedAt ?? null,
 				input.releaseName,
 				input.artifactState,
-				now,
+				input.observedAt,
 			)
 			.first<ReleaseRow>()
 		if (row === null) throw new ArtifactProjectionConflictError('release identity conflicts with an existing commit')
