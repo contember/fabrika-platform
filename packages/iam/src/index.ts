@@ -17,6 +17,7 @@ import type {
 } from '@fabrika/auth-core'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { pruneAuthLog } from './cron'
+import { createIamRepositories } from './db'
 import type { Env } from './env'
 import { handleFetch } from './routes'
 import { createIamRpc } from './rpc'
@@ -36,9 +37,26 @@ import { createIamRpc } from './rpc'
  * `this.ctx` (an `ExecutionContext`) satisfies `RequestContext` structurally, so it is passed
  * straight through with no adapter.
  */
-export class Propustka extends WorkerEntrypoint<Env> implements IamRpc {
+export interface WorkerBindings extends Omit<Env, 'DB' | 'REPOSITORIES'> {
+	DB: D1Database
+}
+
+/** Present native Worker bindings as the runtime-neutral IAM environment. */
+export function iamEnv(bindings: WorkerBindings): Env {
+	return {
+		...bindings,
+		DB: bindings.DB,
+		REPOSITORIES: createIamRepositories(bindings.DB),
+	}
+}
+
+export class Propustka extends WorkerEntrypoint<WorkerBindings> implements IamRpc {
+	private get iam(): Env {
+		return iamEnv(this.env)
+	}
+
 	private get rpc(): IamRpc {
-		return createIamRpc(this.env, this.ctx)
+		return createIamRpc(this.iam, this.ctx)
 	}
 
 	mintToken(input: MintTokenInput): Promise<MintTokenResult> {
@@ -74,7 +92,7 @@ export class Propustka extends WorkerEntrypoint<Env> implements IamRpc {
 	}
 
 	override fetch(request: Request): Promise<Response> {
-		return handleFetch(request, this.env, this.ctx)
+		return handleFetch(request, this.iam, this.ctx)
 	}
 
 	/**
@@ -82,7 +100,7 @@ export class Propustka extends WorkerEntrypoint<Env> implements IamRpc {
 	 * `WorkerEntrypoint.scheduled` receives only the controller; `env`/`ctx` come from `this`.
 	 */
 	override scheduled(_controller: ScheduledController): Promise<void> {
-		pruneAuthLog(this.env, this.ctx)
+		pruneAuthLog(this.iam, this.ctx)
 		return Promise.resolve()
 	}
 }

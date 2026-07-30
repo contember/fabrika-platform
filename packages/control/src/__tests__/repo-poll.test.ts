@@ -176,14 +176,14 @@ const NOW = 1_700_000_000
 describe('pollPublicRepos', () => {
 	test('200 with a new sha creates a poll run, enqueues it, and stores the etag + last_seen_sha', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: REPO }) // public: no installation
-		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
+		await db.registry.createApp({ id: 'app', repoUrl: REPO }) // public: no installation
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
 		const queue = makeQueue()
 		const { fetch, calls } = fakeFetch({
 			'https://github.com/acme/app/commits/main.atom': { status: 200, ok: true, etag: '"etag-1"', body: commitsFeed(SHA_A) },
 		})
 
-		const summary = await pollPublicRepos({ db, fetch, queue, now: () => NOW })
+		const summary = await pollPublicRepos({ repositories: db, fetch, queue, now: () => NOW })
 
 		expect(summary).toEqual({ polled: 1, triggered: 1, unchanged: 0, errored: 0, skipped: 0 })
 		// First poll has no prior etag → no If-None-Match; the user-agent is sent.
@@ -192,7 +192,7 @@ describe('pollPublicRepos', () => {
 		expect(calls[0]?.userAgent).toBe('vozka')
 
 		// A pending poll run for the resolved commit was created + enqueued.
-		const runs = await db.listRuns({ limit: 10 })
+		const runs = await db.runs.listRuns({ limit: 10 })
 		expect(runs).toHaveLength(1)
 		expect(runs[0]?.trigger).toBe('poll')
 		expect(runs[0]?.status).toBe('pending')
@@ -202,7 +202,7 @@ describe('pollPublicRepos', () => {
 		expect(queue.sent).toEqual([{ runId: runs[0]!.id }])
 
 		// Poll state recorded the etag + last-seen sha + timestamp, no error.
-		const state = await db.getRepoPollState('app', 'prod')
+		const state = await db.polling.getRepoPollState('app', 'prod')
 		expect(state?.etag).toBe('"etag-1"')
 		expect(state?.last_seen_sha).toBe(SHA_A)
 		expect(state?.last_polled_at).toBe(NOW)
@@ -211,24 +211,24 @@ describe('pollPublicRepos', () => {
 
 	test('a stored etag is sent as If-None-Match; a 304 creates no run and only bumps last_polled_at', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: REPO })
-		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
+		await db.registry.createApp({ id: 'app', repoUrl: REPO })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
 		// Seed prior state as if a previous poll saw SHA_A with etag-1.
-		await db.upsertRepoPollState({ appId: 'app', env: 'prod', etag: '"etag-1"', lastSeenSha: SHA_A, lastPolledAt: NOW - 300 })
+		await db.polling.upsertRepoPollState({ appId: 'app', env: 'prod', etag: '"etag-1"', lastSeenSha: SHA_A, lastPolledAt: NOW - 300 })
 		const queue = makeQueue()
 		const { fetch, calls } = fakeFetch({
 			'https://github.com/acme/app/commits/main.atom': { status: 304, ok: false },
 		})
 
-		const summary = await pollPublicRepos({ db, fetch, queue, now: () => NOW })
+		const summary = await pollPublicRepos({ repositories: db, fetch, queue, now: () => NOW })
 
 		expect(summary).toEqual({ polled: 1, triggered: 0, unchanged: 1, errored: 0, skipped: 0 })
 		expect(calls[0]?.ifNoneMatch).toBe('"etag-1"')
 		expect(queue.sent).toHaveLength(0)
-		expect(await db.listRuns({ limit: 10 })).toHaveLength(0)
+		expect(await db.runs.listRuns({ limit: 10 })).toHaveLength(0)
 
 		// last_polled_at advanced; etag + last_seen_sha preserved across the 304.
-		const state = await db.getRepoPollState('app', 'prod')
+		const state = await db.polling.getRepoPollState('app', 'prod')
 		expect(state?.last_polled_at).toBe(NOW)
 		expect(state?.etag).toBe('"etag-1"')
 		expect(state?.last_seen_sha).toBe(SHA_A)
@@ -237,47 +237,47 @@ describe('pollPublicRepos', () => {
 
 	test('200 whose newest sha equals last_seen_sha creates no run (counts as unchanged)', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: REPO })
-		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
-		await db.upsertRepoPollState({ appId: 'app', env: 'prod', etag: '"old"', lastSeenSha: SHA_A, lastPolledAt: NOW - 300 })
+		await db.registry.createApp({ id: 'app', repoUrl: REPO })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
+		await db.polling.upsertRepoPollState({ appId: 'app', env: 'prod', etag: '"old"', lastSeenSha: SHA_A, lastPolledAt: NOW - 300 })
 		const queue = makeQueue()
 		const { fetch } = fakeFetch({
 			'https://github.com/acme/app/commits/main.atom': { status: 200, ok: true, etag: '"new"', body: commitsFeed(SHA_A) },
 		})
 
-		const summary = await pollPublicRepos({ db, fetch, queue, now: () => NOW })
+		const summary = await pollPublicRepos({ repositories: db, fetch, queue, now: () => NOW })
 
 		expect(summary).toEqual({ polled: 1, triggered: 0, unchanged: 1, errored: 0, skipped: 0 })
 		expect(queue.sent).toHaveLength(0)
-		expect(await db.listRuns({ limit: 10 })).toHaveLength(0)
+		expect(await db.runs.listRuns({ limit: 10 })).toHaveLength(0)
 		// The etag is refreshed even when the head is unchanged.
-		const state = await db.getRepoPollState('app', 'prod')
+		const state = await db.polling.getRepoPollState('app', 'prod')
 		expect(state?.etag).toBe('"new"')
 		expect(state?.last_seen_sha).toBe(SHA_A)
 	})
 
 	test('a private app (installation set) is NOT polled', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: REPO, githubInstallationId: 42 })
-		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
+		await db.registry.createApp({ id: 'app', repoUrl: REPO, githubInstallationId: 42 })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
 		const queue = makeQueue()
 		const { fetch, calls } = fakeFetch({})
 
-		const summary = await pollPublicRepos({ db, fetch, queue, now: () => NOW })
+		const summary = await pollPublicRepos({ repositories: db, fetch, queue, now: () => NOW })
 
 		expect(summary).toEqual({ polled: 0, triggered: 0, unchanged: 0, errored: 0, skipped: 0 })
 		expect(calls).toHaveLength(0)
-		expect(await db.listRuns({ limit: 10 })).toHaveLength(0)
+		expect(await db.runs.listRuns({ limit: 10 })).toHaveLength(0)
 	})
 
 	test('a manual-only env (null trigger_ref) is NOT polled', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: REPO })
-		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: null }))
+		await db.registry.createApp({ id: 'app', repoUrl: REPO })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: null }))
 		const queue = makeQueue()
 		const { fetch, calls } = fakeFetch({})
 
-		const summary = await pollPublicRepos({ db, fetch, queue, now: () => NOW })
+		const summary = await pollPublicRepos({ repositories: db, fetch, queue, now: () => NOW })
 
 		expect(summary).toEqual({ polled: 0, triggered: 0, unchanged: 0, errored: 0, skipped: 0 })
 		expect(calls).toHaveLength(0)
@@ -286,25 +286,25 @@ describe('pollPublicRepos', () => {
 	test('one repo erroring records a last_error and does NOT stop the others', async () => {
 		const { db } = createHarness()
 		// Two public apps; the first errors (network throw), the second succeeds.
-		await db.createApp({ id: 'bad', repoUrl: 'https://github.com/acme/bad.git' })
-		await db.upsertAppEnv(providerEnvironment('bad', 'prod', { triggerRef: 'refs/heads/main' }))
-		await db.createApp({ id: 'good', repoUrl: 'https://github.com/acme/good.git' })
-		await db.upsertAppEnv(providerEnvironment('good', 'prod', { triggerRef: 'refs/heads/main' }))
+		await db.registry.createApp({ id: 'bad', repoUrl: 'https://github.com/acme/bad.git' })
+		await db.registry.upsertAppEnv(providerEnvironment('bad', 'prod', { triggerRef: 'refs/heads/main' }))
+		await db.registry.createApp({ id: 'good', repoUrl: 'https://github.com/acme/good.git' })
+		await db.registry.upsertAppEnv(providerEnvironment('good', 'prod', { triggerRef: 'refs/heads/main' }))
 		const queue = makeQueue()
 		const { fetch } = fakeFetch({
 			'https://github.com/acme/bad/commits/main.atom': () => Promise.reject(new Error('boom')),
 			'https://github.com/acme/good/commits/main.atom': { status: 200, ok: true, etag: '"e"', body: commitsFeed(SHA_A) },
 		})
 
-		const summary = await pollPublicRepos({ db, fetch, queue, now: () => NOW })
+		const summary = await pollPublicRepos({ repositories: db, fetch, queue, now: () => NOW })
 
 		expect(summary).toEqual({ polled: 2, triggered: 1, unchanged: 0, errored: 1, skipped: 0 })
 		// The bad repo recorded a short error and was not enqueued.
-		const badState = await db.getRepoPollState('bad', 'prod')
+		const badState = await db.polling.getRepoPollState('bad', 'prod')
 		expect(badState?.last_error).toBe('boom')
 		expect(badState?.last_polled_at).toBe(NOW)
 		// The good repo still triggered a run despite the earlier failure.
-		const runs = await db.listRuns({ limit: 10 })
+		const runs = await db.runs.listRuns({ limit: 10 })
 		expect(runs).toHaveLength(1)
 		expect(runs[0]?.app_id).toBe('good')
 		expect(queue.sent).toHaveLength(1)
@@ -312,30 +312,30 @@ describe('pollPublicRepos', () => {
 
 	test('a non-2xx-non-304 response records a short last_error (status only, no body)', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: REPO })
-		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
+		await db.registry.createApp({ id: 'app', repoUrl: REPO })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
 		const queue = makeQueue()
 		const { fetch } = fakeFetch({
 			'https://github.com/acme/app/commits/main.atom': { status: 404, ok: false, body: 'a very long not-found body that must never be stored' },
 		})
 
-		const summary = await pollPublicRepos({ db, fetch, queue, now: () => NOW })
+		const summary = await pollPublicRepos({ repositories: db, fetch, queue, now: () => NOW })
 
 		expect(summary).toEqual({ polled: 1, triggered: 0, unchanged: 0, errored: 1, skipped: 0 })
-		const state = await db.getRepoPollState('app', 'prod')
+		const state = await db.polling.getRepoPollState('app', 'prod')
 		expect(state?.last_error).toBe('feed HTTP 404')
-		expect(await db.listRuns({ limit: 10 })).toHaveLength(0)
+		expect(await db.runs.listRuns({ limit: 10 })).toHaveLength(0)
 	})
 
 	test('an eligible env whose ref is not pollable is skipped (counted skipped, not polled)', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: REPO })
+		await db.registry.createApp({ id: 'app', repoUrl: REPO })
 		// A subscribed but non-pollable ref (e.g. a PR ref): eligible by the query, not pollable by feed.
-		await db.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/pull/9/head' }))
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/pull/9/head' }))
 		const queue = makeQueue()
 		const { fetch, calls } = fakeFetch({})
 
-		const summary = await pollPublicRepos({ db, fetch, queue, now: () => NOW })
+		const summary = await pollPublicRepos({ repositories: db, fetch, queue, now: () => NOW })
 
 		expect(summary).toEqual({ polled: 0, triggered: 0, unchanged: 0, errored: 0, skipped: 1 })
 		expect(calls).toHaveLength(0)
@@ -343,39 +343,39 @@ describe('pollPublicRepos', () => {
 
 	test('a v* tag-pattern env polls the tags feed and deploys the newest matching tag (concrete ref)', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: REPO })
-		await db.upsertAppEnv(providerEnvironment('app', 'release', { triggerRef: 'refs/tags/v*' }))
+		await db.registry.createApp({ id: 'app', repoUrl: REPO })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'release', { triggerRef: 'refs/tags/v*' }))
 		const queue = makeQueue()
 		const { fetch, calls } = fakeFetch({
 			'https://github.com/acme/app/tags.atom': { status: 200, ok: true, etag: '"t1"', body: tagsFeed('v2.0.0', 'v1.0.0') },
 		})
 
-		const summary = await pollPublicRepos({ db, fetch, queue, now: () => NOW })
+		const summary = await pollPublicRepos({ repositories: db, fetch, queue, now: () => NOW })
 
 		expect(summary).toEqual({ polled: 1, triggered: 1, unchanged: 0, errored: 0, skipped: 0 })
 		expect(calls[0]?.url).toBe('https://github.com/acme/app/tags.atom')
-		const runs = await db.listRuns({ limit: 10 })
+		const runs = await db.runs.listRuns({ limit: 10 })
 		expect(runs).toHaveLength(1)
 		expect(runs[0]?.ref).toBe('refs/tags/v2.0.0') // the resolved concrete tag, not the pattern
 		expect(runs[0]?.commit_sha).toBeNull() // the tags feed carries no commit sha
 		expect(runs[0]?.trigger).toBe('poll')
 		// The cursor stored is the tag name.
-		const state = await db.getRepoPollState('app', 'release')
+		const state = await db.polling.getRepoPollState('app', 'release')
 		expect(state?.last_seen_sha).toBe('v2.0.0')
 		expect(state?.etag).toBe('"t1"')
 	})
 
 	test('a tag env whose newest matching tag is unchanged creates no run', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: REPO })
-		await db.upsertAppEnv(providerEnvironment('app', 'release', { triggerRef: 'refs/tags/v*' }))
-		await db.upsertRepoPollState({ appId: 'app', env: 'release', etag: '"old"', lastSeenSha: 'v2.0.0', lastPolledAt: NOW - 300 })
+		await db.registry.createApp({ id: 'app', repoUrl: REPO })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'release', { triggerRef: 'refs/tags/v*' }))
+		await db.polling.upsertRepoPollState({ appId: 'app', env: 'release', etag: '"old"', lastSeenSha: 'v2.0.0', lastPolledAt: NOW - 300 })
 		const queue = makeQueue()
 		const { fetch } = fakeFetch({
 			'https://github.com/acme/app/tags.atom': { status: 200, ok: true, etag: '"t2"', body: tagsFeed('v2.0.0', 'v1.0.0') },
 		})
 
-		const summary = await pollPublicRepos({ db, fetch, queue, now: () => NOW })
+		const summary = await pollPublicRepos({ repositories: db, fetch, queue, now: () => NOW })
 
 		expect(summary).toEqual({ polled: 1, triggered: 0, unchanged: 1, errored: 0, skipped: 0 })
 		expect(queue.sent).toHaveLength(0)
@@ -383,17 +383,17 @@ describe('pollPublicRepos', () => {
 
 	test('a tag env with no matching tag yet is unchanged (no run), not an error', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: REPO })
-		await db.upsertAppEnv(providerEnvironment('app', 'release', { triggerRef: 'refs/tags/v*' }))
+		await db.registry.createApp({ id: 'app', repoUrl: REPO })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'release', { triggerRef: 'refs/tags/v*' }))
 		const queue = makeQueue()
 		const { fetch } = fakeFetch({
 			'https://github.com/acme/app/tags.atom': { status: 200, ok: true, etag: '"t"', body: tagsFeed('release-1', 'alpha') },
 		})
 
-		const summary = await pollPublicRepos({ db, fetch, queue, now: () => NOW })
+		const summary = await pollPublicRepos({ repositories: db, fetch, queue, now: () => NOW })
 
 		expect(summary).toEqual({ polled: 1, triggered: 0, unchanged: 1, errored: 0, skipped: 0 })
-		expect(await db.listRuns({ limit: 10 })).toHaveLength(0)
+		expect(await db.runs.listRuns({ limit: 10 })).toHaveLength(0)
 	})
 })
 
@@ -403,16 +403,16 @@ describe('Db repo-poll methods', () => {
 	test('getPollEligibleEnvs returns only public apps with a trigger_ref, joined', async () => {
 		const { db } = createHarness()
 		// Eligible: public + trigger_ref.
-		await db.createApp({ id: 'pub', repoUrl: REPO })
-		await db.upsertAppEnv(providerEnvironment('pub', 'prod', { triggerRef: 'refs/heads/main' }))
+		await db.registry.createApp({ id: 'pub', repoUrl: REPO })
+		await db.registry.upsertAppEnv(providerEnvironment('pub', 'prod', { triggerRef: 'refs/heads/main' }))
 		// Excluded: has an installation (private).
-		await db.createApp({ id: 'priv', repoUrl: 'https://github.com/acme/priv.git', githubInstallationId: 1 })
-		await db.upsertAppEnv(providerEnvironment('priv', 'prod', { triggerRef: 'refs/heads/main' }))
+		await db.registry.createApp({ id: 'priv', repoUrl: 'https://github.com/acme/priv.git', githubInstallationId: 1 })
+		await db.registry.upsertAppEnv(providerEnvironment('priv', 'prod', { triggerRef: 'refs/heads/main' }))
 		// Excluded: public but manual-only (null trigger_ref).
-		await db.createApp({ id: 'manual', repoUrl: 'https://github.com/acme/manual.git' })
-		await db.upsertAppEnv(providerEnvironment('manual', 'prod', { triggerRef: null }))
+		await db.registry.createApp({ id: 'manual', repoUrl: 'https://github.com/acme/manual.git' })
+		await db.registry.upsertAppEnv(providerEnvironment('manual', 'prod', { triggerRef: null }))
 
-		const eligible = await db.getPollEligibleEnvs()
+		const eligible = await db.polling.getPollEligibleEnvs()
 		expect(eligible).toHaveLength(1)
 		expect(eligible[0]?.app.id).toBe('pub')
 		expect(eligible[0]?.app.repo_url).toBe(REPO)
@@ -422,27 +422,34 @@ describe('Db repo-poll methods', () => {
 
 	test('upsertRepoPollState inserts then overwrites on (app_id, env)', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: REPO })
+		await db.registry.createApp({ id: 'app', repoUrl: REPO })
 
-		const inserted = await db.upsertRepoPollState({ appId: 'app', env: 'prod', etag: '"e1"', lastSeenSha: SHA_A, lastPolledAt: 100 })
+		const inserted = await db.polling.upsertRepoPollState({ appId: 'app', env: 'prod', etag: '"e1"', lastSeenSha: SHA_A, lastPolledAt: 100 })
 		expect(inserted.etag).toBe('"e1"')
 		expect(inserted.last_seen_sha).toBe(SHA_A)
 		expect(inserted.last_polled_at).toBe(100)
 
-		const updated = await db.upsertRepoPollState({ appId: 'app', env: 'prod', etag: '"e2"', lastSeenSha: SHA_B, lastPolledAt: 200, lastError: 'oops' })
+		const updated = await db.polling.upsertRepoPollState({
+			appId: 'app',
+			env: 'prod',
+			etag: '"e2"',
+			lastSeenSha: SHA_B,
+			lastPolledAt: 200,
+			lastError: 'oops',
+		})
 		expect(updated.etag).toBe('"e2"')
 		expect(updated.last_seen_sha).toBe(SHA_B)
 		expect(updated.last_polled_at).toBe(200)
 		expect(updated.last_error).toBe('oops')
 
 		// Still a single row for (app, env).
-		const state = await db.getRepoPollState('app', 'prod')
+		const state = await db.polling.getRepoPollState('app', 'prod')
 		expect(state?.etag).toBe('"e2"')
 	})
 
 	test('getRepoPollState returns null when there is no state', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: REPO })
-		expect(await db.getRepoPollState('app', 'prod')).toBeNull()
+		await db.registry.createApp({ id: 'app', repoUrl: REPO })
+		expect(await db.polling.getRepoPollState('app', 'prod')).toBeNull()
 	})
 })

@@ -11,14 +11,14 @@ import type {
 	ProviderNamespaceCapabilities,
 	ProviderNamespaceMutationInput,
 } from '@fabrika/provider-contract'
-import { type Db, type DeploymentNamespaceRow, NamespaceResourceClaimConflictError } from '../db'
+import { type ControlRepositories, type DeploymentNamespaceRow, NamespaceResourceClaimConflictError } from '../db'
 import { error, json, readJson } from '../http'
 import type { Authorized } from '../iam'
 import { nullableStringField, prop, stringField } from '../json'
 import { envelopeField, isJsonValue, parseStoredEnvelope } from './provider-envelope'
 
 export interface NamespaceContext {
-	db: Db
+	repositories: ControlRepositories
 	request: Request
 	provider: ControlProvider
 	authorized: Authorized
@@ -118,7 +118,7 @@ async function namespaceCandidate(
 	if (rawExclusiveAppId !== undefined && (exclusiveAppId === undefined || exclusiveAppId === '')) {
 		return error(400, 'exclusiveAppId must be a non-empty string or null')
 	}
-	if (exclusiveAppId !== undefined && exclusiveAppId !== null && await c.db.getApp(exclusiveAppId) === null) {
+	if (exclusiveAppId !== undefined && exclusiveAppId !== null && await c.repositories.registry.getApp(exclusiveAppId) === null) {
 		return error(404, 'exclusive app not found')
 	}
 	const target = envelopeField(body, 'target')
@@ -143,7 +143,7 @@ async function mutateNamespace(
 		return error(409, `provider ${c.provider.id} does not support deployment namespaces`)
 	}
 	let current = toProviderNamespace(row)
-	const provisioning = await c.db.updateDeploymentNamespace({
+	const provisioning = await c.repositories.registry.updateDeploymentNamespace({
 		id: row.id,
 		providerTargetJson: JSON.stringify(current.target),
 		state: 'provisioning',
@@ -162,7 +162,7 @@ async function mutateNamespace(
 					throw new Error('provider checkpoint changed namespace coordinates')
 				}
 				current = namespace
-				const checkpoint = await c.db.updateDeploymentNamespace({
+				const checkpoint = await c.repositories.registry.updateDeploymentNamespace({
 					id: row.id,
 					providerTargetJson: JSON.stringify(current.target),
 					state: 'provisioning',
@@ -182,7 +182,7 @@ async function mutateNamespace(
 			throw new Error('provider result changed namespace coordinates')
 		}
 		current = result
-		const ready = await c.db.updateDeploymentNamespace({
+		const ready = await c.repositories.registry.updateDeploymentNamespace({
 			id: row.id,
 			providerTargetJson: JSON.stringify(current.target),
 			state: 'ready',
@@ -191,7 +191,7 @@ async function mutateNamespace(
 		return ready ?? error(404, 'deployment namespace not found')
 	} catch {
 		const message = `namespace ${mutation} failed`
-		await c.db.updateDeploymentNamespace({
+		await c.repositories.registry.updateDeploymentNamespace({
 			id: row.id,
 			providerTargetJson: JSON.stringify(current.target),
 			state: 'failed',
@@ -220,7 +220,7 @@ async function auditMutation(
 }
 
 export async function listNamespaces(c: NamespaceContext): Promise<Response> {
-	const rows = await c.db.listDeploymentNamespaces()
+	const rows = await c.repositories.registry.listDeploymentNamespaces()
 	const operator = c.provider.namespaces?.operator
 	const response: DeploymentNamespaceListResponse = {
 		items: rows.filter((row) => row.provider === c.provider.id).map(toNamespaceDto),
@@ -230,7 +230,7 @@ export async function listNamespaces(c: NamespaceContext): Promise<Response> {
 }
 
 export async function getNamespace(c: NamespaceContext, id: string): Promise<Response> {
-	const row = await c.db.getDeploymentNamespace(id)
+	const row = await c.repositories.registry.getDeploymentNamespace(id)
 	if (row === null) {
 		return error(404, 'deployment namespace not found')
 	}
@@ -259,7 +259,7 @@ export async function planNamespace(c: NamespaceContext): Promise<Response> {
 	if (rawExclusiveAppId !== undefined && (exclusiveAppId === undefined || exclusiveAppId === '')) {
 		return error(400, 'exclusiveAppId must be a non-empty string or null')
 	}
-	if (exclusiveAppId !== undefined && exclusiveAppId !== null && await c.db.getApp(exclusiveAppId) === null) {
+	if (exclusiveAppId !== undefined && exclusiveAppId !== null && await c.repositories.registry.getApp(exclusiveAppId) === null) {
 		return error(404, 'exclusive app not found')
 	}
 	const rawOptions = prop(body, 'options')
@@ -301,7 +301,7 @@ export async function planNamespace(c: NamespaceContext): Promise<Response> {
 export async function createNamespace(c: NamespaceContext): Promise<Response> {
 	const candidate = await namespaceCandidate(c)
 	if (candidate instanceof Response) return candidate
-	if (await c.db.getDeploymentNamespace(candidate.id) !== null) {
+	if (await c.repositories.registry.getDeploymentNamespace(candidate.id) !== null) {
 		return error(409, 'deployment namespace already exists')
 	}
 	const capabilities = c.provider.namespaces
@@ -310,7 +310,7 @@ export async function createNamespace(c: NamespaceContext): Promise<Response> {
 	}
 	const resourceClaims = namespaceResourceClaims(capabilities, candidate)
 	if (resourceClaims instanceof Response) return resourceClaims
-	const created = await c.db.createDeploymentNamespaceWithResourceClaims({
+	const created = await c.repositories.registry.createDeploymentNamespaceWithResourceClaims({
 		id: candidate.id,
 		env: candidate.env,
 		exclusiveAppId: candidate.exclusiveAppId ?? null,
@@ -318,7 +318,7 @@ export async function createNamespace(c: NamespaceContext): Promise<Response> {
 		providerTargetJson: JSON.stringify(candidate.target),
 	}, resourceClaims)
 	const result = await mutateNamespace(c, created, 'provision')
-	const audited = result instanceof Response ? await c.db.getDeploymentNamespace(created.id) : result
+	const audited = result instanceof Response ? await c.repositories.registry.getDeploymentNamespace(created.id) : result
 	if (audited !== null) await auditMutation(c, 'namespace.create', audited)
 	if (result instanceof Response) return result
 	const detail = toNamespaceDetail(c, result)
@@ -328,7 +328,7 @@ export async function createNamespace(c: NamespaceContext): Promise<Response> {
 export async function adoptNamespace(c: NamespaceContext, id: string): Promise<Response> {
 	const candidate = await namespaceCandidate(c, id)
 	if (candidate instanceof Response) return candidate
-	if (await c.db.getDeploymentNamespace(id) !== null) {
+	if (await c.repositories.registry.getDeploymentNamespace(id) !== null) {
 		return error(409, 'deployment namespace already exists')
 	}
 	const capabilities = c.provider.namespaces
@@ -337,7 +337,7 @@ export async function adoptNamespace(c: NamespaceContext, id: string): Promise<R
 	}
 	const resourceClaims = namespaceResourceClaims(capabilities, candidate)
 	if (resourceClaims instanceof Response) return resourceClaims
-	const created = await c.db.createDeploymentNamespaceWithResourceClaims({
+	const created = await c.repositories.registry.createDeploymentNamespaceWithResourceClaims({
 		id,
 		env: candidate.env,
 		exclusiveAppId: candidate.exclusiveAppId ?? null,
@@ -345,7 +345,7 @@ export async function adoptNamespace(c: NamespaceContext, id: string): Promise<R
 		providerTargetJson: JSON.stringify(candidate.target),
 	}, resourceClaims)
 	const result = await mutateNamespace(c, created, 'reconcile')
-	const audited = result instanceof Response ? await c.db.getDeploymentNamespace(created.id) : result
+	const audited = result instanceof Response ? await c.repositories.registry.getDeploymentNamespace(created.id) : result
 	if (audited !== null) await auditMutation(c, 'namespace.adopt', audited)
 	if (result instanceof Response) return result
 	const detail = toNamespaceDetail(c, result)
@@ -353,7 +353,7 @@ export async function adoptNamespace(c: NamespaceContext, id: string): Promise<R
 }
 
 export async function reconcileNamespace(c: NamespaceContext, id: string): Promise<Response> {
-	const row = await c.db.getDeploymentNamespace(id)
+	const row = await c.repositories.registry.getDeploymentNamespace(id)
 	if (row === null) {
 		return error(404, 'deployment namespace not found')
 	}
@@ -367,7 +367,7 @@ export async function reconcileNamespace(c: NamespaceContext, id: string): Promi
 	const resourceClaims = namespaceResourceClaims(capabilities, toProviderNamespace(row))
 	if (resourceClaims instanceof Response) return resourceClaims
 	try {
-		await c.db.acquireNamespaceResourceClaims({
+		await c.repositories.registry.acquireNamespaceResourceClaims({
 			namespaceId: row.id,
 			ownerAppId: null,
 			ownerEnv: null,
@@ -380,7 +380,7 @@ export async function reconcileNamespace(c: NamespaceContext, id: string): Promi
 		throw cause
 	}
 	const result = await mutateNamespace(c, row, 'reconcile')
-	const audited = result instanceof Response ? await c.db.getDeploymentNamespace(row.id) : result
+	const audited = result instanceof Response ? await c.repositories.registry.getDeploymentNamespace(row.id) : result
 	if (audited !== null) await auditMutation(c, 'namespace.reconcile', audited)
 	if (result instanceof Response) return result
 	const detail = toNamespaceDetail(c, result)

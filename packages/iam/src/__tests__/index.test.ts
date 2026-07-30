@@ -1,6 +1,7 @@
 import { Database } from 'bun:sqlite'
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import { LOCAL_DEV_ADMIN_ID } from '../auth'
+import { createIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
 import { allMigrations } from './helpers/migrations'
 
@@ -141,8 +142,10 @@ function freshDb(): Database {
 }
 
 function makeEnv(db: Database, overrides: Partial<Pick<Env, 'ENVIRONMENT'>> = {}): Env {
+	const sql = new SqliteD1(db)
 	return {
-		DB: new SqliteD1(db),
+		DB: sql,
+		REPOSITORIES: createIamRepositories(sql),
 		HUMAN_EMAIL_DOMAINS: '["contember.com"]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',

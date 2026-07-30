@@ -11,6 +11,7 @@
 //   WaitUntil   → createBackgroundTasks (ctx.waitUntil's place — supervised, never process-fatal)
 
 import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
+import { createIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
@@ -65,6 +66,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 
 	const env: Env = {
 		DB: db,
+		REPOSITORIES: createIamRepositories(db),
 		HUMAN_EMAIL_DOMAINS: source['HUMAN_EMAIL_DOMAINS'] ?? '[]',
 		HUMAN_EMAILS: source['HUMAN_EMAILS'] ?? '[]',
 		IAM_BOOTSTRAP_ADMINS: source['IAM_BOOTSTRAP_ADMINS'] ?? '[]',

@@ -6,13 +6,13 @@
 // (If-None-Match against the stored ETag), and when the subscribed ref's head sha changes we create a
 // `poll`-triggered run and enqueue it — the same outcome as a verified webhook push.
 //
-// Decoupled from the Worker (takes a Db + fetch + queue + clock) so it's unit-testable with the
+// Decoupled from the Worker (takes repositories + fetch + queue + clock) so it's unit-testable with the
 // in-memory harness and a fake `fetch` — no GitHub, no Cloudflare, no cron. This is the post-v1 seam
 // the repo-source header describes; it is standalone (no webhook HMAC applies to a public feed) rather
 // than a `RepoSource` implementation.
 
 import type { JobQueue } from '@fabrika/platform'
-import { type Db, uuidv7 } from './db'
+import { type ControlRepositories, uuidv7 } from './db'
 import { refMatches } from './ref-match'
 import { normalizeRepoUrl } from './repo-source'
 import type { DeployJobMessage } from './run-lifecycle'
@@ -25,7 +25,7 @@ export type FetchFn = (input: RequestInfo | URL, init?: RequestInit) => Promise<
 
 /** Everything the poller needs, injected so the core is pure + testable. */
 export interface PollDeps {
-	db: Db
+	repositories: ControlRepositories
 	/** `fetch` for the conditional GET of the Atom feed. The real global, or a fake in tests. */
 	fetch: FetchFn
 	/** The deploy queue producer — same message a webhook trigger enqueues. */
@@ -158,7 +158,7 @@ export function parseLatestTag(atomXml: string, triggerRef: string): string | nu
  */
 export async function pollPublicRepos(deps: PollDeps): Promise<PollSummary> {
 	const summary: PollSummary = { polled: 0, triggered: 0, unchanged: 0, errored: 0, skipped: 0 }
-	const eligible = await deps.db.getPollEligibleEnvs()
+	const eligible = await deps.repositories.polling.getPollEligibleEnvs()
 
 	for (const { app, appEnv } of eligible) {
 		const triggerRef = appEnv.trigger_ref
@@ -173,7 +173,7 @@ export async function pollPublicRepos(deps: PollDeps): Promise<PollSummary> {
 
 		summary.polled++
 		const polledAt = deps.now()
-		const prior = await deps.db.getRepoPollState(app.id, appEnv.env)
+		const prior = await deps.repositories.polling.getRepoPollState(app.id, appEnv.env)
 
 		try {
 			const headers: Record<string, string> = { 'user-agent': 'vozka' }
@@ -184,7 +184,7 @@ export async function pollPublicRepos(deps: PollDeps): Promise<PollSummary> {
 
 			if (response.status === 304) {
 				// Feed unchanged — keep the stored ETag + sha, only bump last_polled_at (clears nothing else).
-				await deps.db.upsertRepoPollState({
+				await deps.repositories.polling.upsertRepoPollState({
 					appId: app.id,
 					env: appEnv.env,
 					etag: prior?.etag ?? null,
@@ -215,7 +215,7 @@ export async function pollPublicRepos(deps: PollDeps): Promise<PollSummary> {
 				const tag = parseLatestTag(body, triggerRef)
 				if (tag === null) {
 					// No tag matching the pattern yet — nothing to deploy. Refresh ETag + timestamp only.
-					await deps.db.upsertRepoPollState({
+					await deps.repositories.polling.upsertRepoPollState({
 						appId: app.id,
 						env: appEnv.env,
 						etag,
@@ -242,7 +242,7 @@ export async function pollPublicRepos(deps: PollDeps): Promise<PollSummary> {
 
 			if (prior?.last_seen_sha === cursor) {
 				// Unchanged since last poll — refresh the ETag (may rotate) + timestamp, create no run.
-				await deps.db.upsertRepoPollState({
+				await deps.repositories.polling.upsertRepoPollState({
 					appId: app.id,
 					env: appEnv.env,
 					etag,
@@ -256,7 +256,7 @@ export async function pollPublicRepos(deps: PollDeps): Promise<PollSummary> {
 
 			// New head (branch) / new matching tag → trigger a deploy of THIS (app, env), like a verified
 			// webhook push. The deployed ref is always concrete (the branch ref, or the resolved tag).
-			const run = await deps.db.createRun({
+			const run = await deps.repositories.runs.createRun({
 				id: uuidv7(),
 				appId: app.id,
 				env: appEnv.env,
@@ -265,7 +265,7 @@ export async function pollPublicRepos(deps: PollDeps): Promise<PollSummary> {
 				trigger: 'poll',
 			})
 			await deps.queue.send({ runId: run.id })
-			await deps.db.upsertRepoPollState({
+			await deps.repositories.polling.upsertRepoPollState({
 				appId: app.id,
 				env: appEnv.env,
 				etag,
@@ -293,7 +293,7 @@ async function recordError(
 	message: string,
 	summary: PollSummary,
 ): Promise<void> {
-	await deps.db.upsertRepoPollState({
+	await deps.repositories.polling.upsertRepoPollState({
 		appId,
 		env,
 		etag: prior?.etag ?? null,

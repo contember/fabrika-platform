@@ -25,5 +25,5 @@ export const AUTH_LOG_RETENTION_SECONDS = 30 * 24 * 60 * 60 // 30 days
 export function pruneAuthLog(env: Env, ctx: RequestContext, now: number = Date.now()): void {
 	const services = buildServices(env)
 	const cutoff = Math.floor(now / 1000) - AUTH_LOG_RETENTION_SECONDS
-	ctx.waitUntil(services.db.pruneAuthLog(cutoff).then(() => undefined))
+	ctx.waitUntil(services.repositories.audit.pruneAuthLog(cutoff).then(() => undefined))
 }

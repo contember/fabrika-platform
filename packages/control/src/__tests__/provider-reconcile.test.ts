@@ -25,8 +25,8 @@ function provider(outcomes: Readonly<Record<string, ProviderReconcileOutcome>>, 
 describe('reconcileProviderRuns', () => {
 	test('finishes terminal operations through a third provider and leaves pending work untouched', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
-		await db.createDeploymentNamespace({
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.registry.createDeploymentNamespace({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: TEST_PROVIDER_ID,
@@ -34,8 +34,8 @@ describe('reconcileProviderRuns', () => {
 			providerTargetJson: JSON.stringify({ provider: TEST_PROVIDER_ID, version: 1, payload: { dock: 'shared' } }),
 			state: 'failed',
 		})
-		await db.upsertAppEnv({ ...providerEnvironment('app', 'prod'), namespaceId: 'apps-prod' })
-		await db.upsertAppEnv({
+		await db.registry.upsertAppEnv({ ...providerEnvironment('app', 'prod'), namespaceId: 'apps-prod' })
+		await db.registry.upsertAppEnv({
 			appId: 'app',
 			env: 'foreign',
 			namespaceId: null,
@@ -45,7 +45,7 @@ describe('reconcileProviderRuns', () => {
 		})
 
 		for (const id of ['active', 'failed', 'building', 'waiting', 'foreign']) {
-			await db.createRun({
+			await db.runs.createRun({
 				id,
 				appId: 'app',
 				env: id === 'foreign' ? 'foreign' : 'prod',
@@ -54,14 +54,14 @@ describe('reconcileProviderRuns', () => {
 			})
 		}
 		for (const id of ['active', 'failed', 'building', 'foreign']) {
-			await db.markRunStarted(id, `runs/${id}/logs.ndjson`)
-			await db.setRunExternalId(id, id)
+			await db.runs.markRunStarted(id, `runs/${id}/logs.ndjson`)
+			await db.runs.setRunExternalId(id, id)
 		}
 
 		const released: string[] = []
 		const environments: string[] = []
 		const summary = await reconcileProviderRuns({
-			database: db,
+			repositories: db,
 			provider: provider(
 				{
 					active: { state: 'succeeded' },
@@ -83,12 +83,12 @@ describe('reconcileProviderRuns', () => {
 			inProgress: 1,
 			waiting: 1,
 		})
-		expect((await db.getRun('active'))?.status).toBe('succeeded')
-		expect((await db.getRun('failed'))?.status).toBe('failed')
-		expect((await db.getRun('failed'))?.exit_code).toBe(23)
-		expect((await db.getRun('building'))?.status).toBe('running')
-		expect((await db.getRun('waiting'))?.status).toBe('pending')
-		expect((await db.getRun('foreign'))?.status).toBe('running')
+		expect((await db.runs.getRun('active'))?.status).toBe('succeeded')
+		expect((await db.runs.getRun('failed'))?.status).toBe('failed')
+		expect((await db.runs.getRun('failed'))?.exit_code).toBe(23)
+		expect((await db.runs.getRun('building'))?.status).toBe('running')
+		expect((await db.runs.getRun('waiting'))?.status).toBe('pending')
+		expect((await db.runs.getRun('foreign'))?.status).toBe('running')
 		expect(released).toEqual(['app:prod/active', 'app:prod/failed'])
 		expect(environments).toEqual([
 			'apps-prod:harbor:{"kind":"target"}',
@@ -99,15 +99,15 @@ describe('reconcileProviderRuns', () => {
 
 	test('keeps provider-owned runs in progress when reconciliation is not a provider capability', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
-		await db.upsertAppEnv(providerEnvironment('app', 'prod'))
-		await db.createRun({ id: 'owned', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		await db.markRunStarted('owned', 'runs/owned/logs.ndjson')
-		await db.setRunExternalId('owned', 'operation')
-		await db.createRun({ id: 'waiting', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
+		await db.runs.createRun({ id: 'owned', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.markRunStarted('owned', 'runs/owned/logs.ndjson')
+		await db.runs.setRunExternalId('owned', 'operation')
+		await db.runs.createRun({ id: 'waiting', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
 
 		const summary = await reconcileProviderRuns({
-			database: db,
+			repositories: db,
 			provider: {
 				id: TEST_PROVIDER_ID,
 				normalizeRegistration: (input) => input,
@@ -123,7 +123,7 @@ describe('reconcileProviderRuns', () => {
 			inProgress: 1,
 			waiting: 1,
 		})
-		expect((await db.getRun('owned'))?.status).toBe('running')
-		expect((await db.getRun('waiting'))?.status).toBe('pending')
+		expect((await db.runs.getRun('owned'))?.status).toBe('running')
+		expect((await db.runs.getRun('waiting'))?.status).toBe('pending')
 	})
 })

@@ -17,7 +17,7 @@ import { PostgresDatabase, PostgresJobQueue } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { runDeployJob } from '../consumer'
 import { runMaintenance } from '../cron'
-import { Db, uuidv7 } from '../db'
+import { type ControlRepositories, createControlRepositories, uuidv7 } from '../db'
 import type { Env } from '../env'
 import { applyMigrations } from '../node/migrate'
 import { createFetchHandler } from '../node/server'
@@ -32,7 +32,7 @@ if (!hasPostgres) {
 
 let fixture: PostgresFixture | null = null
 let raw: PostgresDatabase
-let db: Db
+let db: ControlRepositories
 
 beforeAll(async () => {
 	if (!hasPostgres) {
@@ -40,7 +40,7 @@ beforeAll(async () => {
 	}
 	fixture = await createPostgres('vozka')
 	raw = fixture.db
-	db = new Db(raw)
+	db = createControlRepositories(raw)
 })
 
 afterAll(async () => {
@@ -194,12 +194,12 @@ describe.skipIf(!hasPostgres)('the Postgres schema — column types the row shap
 		// `createApp` / `createRun` / `upsertAppEnv` / `upsertAppSecret` / `upsertAppVar` / `Vault.putSecret`
 		// all OMIT created_at — SQLite fills it from `unixepoch()`, Postgres from this schema's own default.
 		const before = now()
-		const app = await db.createApp({ id: 'stamped', repoUrl: 'https://github.com/acme/app.git' })
+		const app = await db.registry.createApp({ id: 'stamped', repoUrl: 'https://github.com/acme/app.git' })
 		expect(typeof app.created_at).toBe('number')
 		expect(app.created_at).toBeGreaterThanOrEqual(before)
 		expect(app.created_at).toBeLessThanOrEqual(now() + 1)
 
-		const run = await db.createRun({ id: uuidv7(), appId: app.id, env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
+		const run = await db.runs.createRun({ id: uuidv7(), appId: app.id, env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
 		expect(typeof run.created_at).toBe('number')
 		expect(run.started_at).toBeNull()
 	})
@@ -208,7 +208,7 @@ describe.skipIf(!hasPostgres)('the Postgres schema — column types the row shap
 describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified, on Postgres', () => {
 	test('apps: create, read, list, lookup by repo, partial update, delete', async () => {
 		await reset()
-		const created = await db.createApp({
+		const created = await db.registry.createApp({
 			id: 'acme',
 			repoUrl: 'github.com/acme/app',
 			defaultBranch: 'trunk',
@@ -220,80 +220,80 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(created.github_installation_id).toBe(4242)
 		expect(created.build_cmd).toBeNull()
 
-		expect((await db.getApp('acme'))?.worker_dir).toBe('apps/web')
-		expect(await db.getApp('nope')).toBeNull()
-		expect((await db.getAppsByRepoUrl('github.com/acme/app')).map((a) => a.id)).toEqual(['acme'])
-		expect(await db.getAppsByRepoUrl('github.com/other/app')).toHaveLength(0)
+		expect((await db.registry.getApp('acme'))?.worker_dir).toBe('apps/web')
+		expect(await db.registry.getApp('nope')).toBeNull()
+		expect((await db.registry.getAppsByRepoUrl('github.com/acme/app')).map((a) => a.id)).toEqual(['acme'])
+		expect(await db.registry.getAppsByRepoUrl('github.com/other/app')).toHaveLength(0)
 
-		await db.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
-		expect((await db.listApps()).map((a) => a.id)).toEqual(['acme', 'beta'])
+		await db.registry.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
+		expect((await db.registry.listApps()).map((a) => a.id)).toEqual(['acme', 'beta'])
 
 		// The COALESCE partial update: a bound NULL leaves the column alone. Postgres type-checks bind
 		// parameters, so this is the statement most likely to break on the port — it does not.
-		const updated = await db.updateApp('acme', { buildCmd: 'bun run build' })
+		const updated = await db.registry.updateApp('acme', { buildCmd: 'bun run build' })
 		expect(updated?.build_cmd).toBe('bun run build')
 		expect(updated?.default_branch).toBe('trunk')
 		expect(updated?.worker_dir).toBe('apps/web')
-		expect(await db.updateApp('missing', { buildCmd: 'x' })).toBeNull()
+		expect(await db.registry.updateApp('missing', { buildCmd: 'x' })).toBeNull()
 
-		expect(await db.deleteApp('beta')).toBe(true)
-		expect(await db.deleteApp('beta')).toBe(false)
+		expect(await db.registry.deleteApp('beta')).toBe(true)
+		expect(await db.registry.deleteApp('beta')).toBe(false)
 	})
 
 	test('app_envs: upsert, exact + glob trigger lookup, cascade on app delete', async () => {
 		await reset()
-		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 
-		const prod = await db.upsertAppEnv(providerEnvironment('acme', 'prod', { domain: 'acme.example', triggerRef: 'refs/heads/main' }))
+		const prod = await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod', { domain: 'acme.example', triggerRef: 'refs/heads/main' }))
 		expect(prod.domain).toBe('acme.example')
 		expect(prod.provider).toBe('harbor')
 		expect(JSON.parse(prod.provider_target_json)).toEqual({ provider: 'harbor', version: 1, payload: { region: 'eu' } })
 		// ON CONFLICT (app_id, env) DO UPDATE — the upsert path and its RETURNING row.
-		const again = await db.upsertAppEnv(providerEnvironment('acme', 'prod', { domain: 'acme2.example', triggerRef: 'refs/tags/v*' }))
+		const again = await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod', { domain: 'acme2.example', triggerRef: 'refs/tags/v*' }))
 		expect(again.domain).toBe('acme2.example')
 		expect(again.trigger_ref).toBe('refs/tags/v*')
 
-		await db.upsertAppEnv(providerEnvironment('acme', 'stage'))
-		expect((await db.listAppEnvs('acme')).map((e) => e.env)).toEqual(['prod', 'stage'])
-		expect((await db.getAppEnv('acme', 'prod'))?.env).toBe('prod')
-		expect((await db.getAppEnvByTriggerRef('acme', 'refs/tags/v*'))?.env).toBe('prod')
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))
+		expect((await db.registry.listAppEnvs('acme')).map((e) => e.env)).toEqual(['prod', 'stage'])
+		expect((await db.registry.getAppEnv('acme', 'prod'))?.env).toBe('prod')
+		expect((await db.registry.getAppEnvByTriggerRef('acme', 'refs/tags/v*'))?.env).toBe('prod')
 		// Manual-only envs (NULL trigger_ref) are excluded — the partial index's whole point.
-		expect((await db.listTriggerEnvs('acme')).map((e) => e.env)).toEqual(['prod'])
+		expect((await db.registry.listTriggerEnvs('acme')).map((e) => e.env)).toEqual(['prod'])
 
-		expect(await db.deleteAppEnv('acme', 'stage')).toBe(true)
-		expect(await db.deleteAppEnv('acme', 'stage')).toBe(false)
+		expect(await db.registry.deleteAppEnv('acme', 'stage')).toBe(true)
+		expect(await db.registry.deleteAppEnv('acme', 'stage')).toBe(false)
 
-		await db.deleteApp('acme')
-		expect(await db.listAppEnvs('acme')).toHaveLength(0)
+		await db.registry.deleteApp('acme')
+		expect(await db.registry.listAppEnvs('acme')).toHaveLength(0)
 	})
 
 	test('deployment namespaces and resource claims enforce the same ownership constraints', async () => {
 		await reset()
-		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
-		await db.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
+		await db.registry.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.registry.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
 		const target = JSON.stringify({ provider: 'harbor', version: 1, payload: { dock: 'eu' } })
-		await db.createDeploymentNamespace({
+		await db.registry.createDeploymentNamespace({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'harbor',
 			exclusiveAppId: null,
 			providerTargetJson: target,
 		})
-		await db.upsertAppEnv({ ...providerEnvironment('alpha', 'prod'), namespaceId: 'apps-prod' })
-		await db.upsertAppEnv({ ...providerEnvironment('beta', 'prod'), namespaceId: 'apps-prod' })
-		await db.createNamespaceResourceClaim({
+		await db.registry.upsertAppEnv({ ...providerEnvironment('alpha', 'prod'), namespaceId: 'apps-prod' })
+		await db.registry.upsertAppEnv({ ...providerEnvironment('beta', 'prod'), namespaceId: 'apps-prod' })
+		await db.registry.createNamespaceResourceClaim({
 			namespaceId: 'apps-prod',
 			resourceKey: 'proxy',
 			ownerAppId: null,
 			ownerEnv: null,
 		})
-		await db.createNamespaceResourceClaim({
+		await db.registry.createNamespaceResourceClaim({
 			namespaceId: 'apps-prod',
 			resourceKey: 'alpha-api',
 			ownerAppId: 'alpha',
 			ownerEnv: 'prod',
 		})
-		await expect(db.createNamespaceResourceClaim({
+		await expect(db.registry.createNamespaceResourceClaim({
 			namespaceId: 'apps-prod',
 			resourceKey: 'alpha-api',
 			ownerAppId: 'alpha',
@@ -305,30 +305,30 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 			owner_env: 'prod',
 		})
 
-		expect((await db.listDeploymentNamespaces()).map((namespace) => namespace.id)).toEqual(['apps-prod'])
-		expect((await db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual(['alpha-api', 'proxy'])
-		await expect(db.upsertAppEnv({ ...providerEnvironment('alpha', 'stage'), namespaceId: 'apps-prod' })).rejects.toThrow()
-		await expect(db.createNamespaceResourceClaim({
+		expect((await db.registry.listDeploymentNamespaces()).map((namespace) => namespace.id)).toEqual(['apps-prod'])
+		expect((await db.registry.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual(['alpha-api', 'proxy'])
+		await expect(db.registry.upsertAppEnv({ ...providerEnvironment('alpha', 'stage'), namespaceId: 'apps-prod' })).rejects.toThrow()
+		await expect(db.registry.createNamespaceResourceClaim({
 			namespaceId: 'apps-prod',
 			resourceKey: 'alpha-api',
 			ownerAppId: 'beta',
 			ownerEnv: 'prod',
 		})).rejects.toThrow('namespace resource claim owner is immutable')
-		await expect(db.deleteAppEnv('alpha', 'prod')).rejects.toThrow()
+		await expect(db.registry.deleteAppEnv('alpha', 'prod')).rejects.toThrow()
 	})
 
 	test('app environment and claim acquisition roll back together without releasing omitted claims', async () => {
 		await reset()
-		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
-		await db.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
-		await db.createDeploymentNamespace({
+		await db.registry.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.registry.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
+		await db.registry.createDeploymentNamespace({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'harbor',
 			exclusiveAppId: null,
 			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: { dock: 'eu' } }),
 		})
-		await db.createDeploymentNamespace({
+		await db.registry.createDeploymentNamespace({
 			id: 'other-prod',
 			env: 'prod',
 			provider: 'harbor',
@@ -336,30 +336,30 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 1, payload: { dock: 'other' } }),
 		})
 
-		await db.upsertAppEnvWithNamespaceResourceClaims(
+		await db.registry.upsertAppEnvWithNamespaceResourceClaims(
 			{ ...providerEnvironment('alpha', 'prod'), namespaceId: 'apps-prod' },
 			['alpha-worker', 'z-shared'],
 		)
-		await db.upsertAppEnvWithNamespaceResourceClaims(
+		await db.registry.upsertAppEnvWithNamespaceResourceClaims(
 			{ ...providerEnvironment('alpha', 'prod'), namespaceId: 'apps-prod', domain: 'alpha.example' },
 			['z-shared'],
 		)
 
-		await expect(db.upsertAppEnvWithNamespaceResourceClaims(
+		await expect(db.registry.upsertAppEnvWithNamespaceResourceClaims(
 			{ ...providerEnvironment('beta', 'prod'), namespaceId: 'apps-prod' },
 			['beta-worker', 'z-shared'],
 		)).rejects.toThrow('namespace resource claim owner is immutable')
-		expect(await db.getAppEnv('beta', 'prod')).toBeNull()
-		expect((await db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual([
+		expect(await db.registry.getAppEnv('beta', 'prod')).toBeNull()
+		expect((await db.registry.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual([
 			'alpha-worker',
 			'z-shared',
 		])
-		await db.upsertAppEnvWithNamespaceResourceClaims(
+		await db.registry.upsertAppEnvWithNamespaceResourceClaims(
 			{ ...providerEnvironment('alpha', 'prod'), namespaceId: 'other-prod' },
 			['alpha-worker'],
 		)
-		expect((await db.getAppEnv('alpha', 'prod'))?.namespace_id).toBe('other-prod')
-		expect((await db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual([
+		expect((await db.registry.getAppEnv('alpha', 'prod'))?.namespace_id).toBe('other-prod')
+		expect((await db.registry.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual([
 			'alpha-worker',
 			'z-shared',
 		])
@@ -367,9 +367,9 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 
 	test('concurrent claim acquisitions have exactly one winner', async () => {
 		await reset()
-		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
-		await db.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
-		await db.createDeploymentNamespace({
+		await db.registry.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.registry.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
+		await db.registry.createDeploymentNamespace({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'harbor',
@@ -383,14 +383,14 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 			connection: { search_path: fixture.schema },
 			max: 1,
 		})
-		const contender = new Db(contenderRaw)
+		const contender = createControlRepositories(contenderRaw)
 		try {
 			const outcomes = await Promise.allSettled([
-				db.upsertAppEnvWithNamespaceResourceClaims(
+				db.registry.upsertAppEnvWithNamespaceResourceClaims(
 					{ ...providerEnvironment('alpha', 'prod'), namespaceId: 'apps-prod' },
 					['shared-service'],
 				),
-				contender.upsertAppEnvWithNamespaceResourceClaims(
+				contender.registry.upsertAppEnvWithNamespaceResourceClaims(
 					{ ...providerEnvironment('beta', 'prod'), namespaceId: 'apps-prod' },
 					['shared-service'],
 				),
@@ -398,8 +398,8 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 			expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
 			expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
 
-			const claims = await db.listNamespaceResourceClaims('apps-prod')
-			const environments = await db.listAppEnvsByNamespace('apps-prod')
+			const claims = await db.registry.listNamespaceResourceClaims('apps-prod')
+			const environments = await db.registry.listAppEnvsByNamespace('apps-prod')
 			expect(claims).toHaveLength(1)
 			const ownerAppId = claims[0]?.owner_app_id
 			if (ownerAppId === null || ownerAppId === undefined) {
@@ -413,31 +413,31 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 
 	test('a trigger ref is unique within an app, and NULLs do not contend', async () => {
 		await reset()
-		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv(providerEnvironment('acme', 'prod', { triggerRef: 'refs/heads/main' }))
-		await expect(db.upsertAppEnv(providerEnvironment('acme', 'stage', { triggerRef: 'refs/heads/main' }))).rejects.toThrow()
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod', { triggerRef: 'refs/heads/main' }))
+		await expect(db.registry.upsertAppEnv(providerEnvironment('acme', 'stage', { triggerRef: 'refs/heads/main' }))).rejects.toThrow()
 		// Two manual-only envs coexist: the index is partial, so NULLs are skipped entirely.
-		await db.upsertAppEnv(providerEnvironment('acme', 'a'))
-		await db.upsertAppEnv(providerEnvironment('acme', 'b'))
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'a'))
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'b'))
 	})
 
 	test('app_secrets: the two LAYERS, their partial-index upserts, and the precedence ORDER BY', async () => {
 		await reset()
-		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 
-		await db.upsertAppSecret({ appId: 'acme', env: null, name: 'API_KEY', valueRef: 'vault:all' })
-		await db.upsertAppSecret({ appId: 'acme', env: 'prod', name: 'API_KEY', valueRef: 'vault:prod' })
-		await db.upsertAppSecret({ appId: 'acme', env: null, name: 'SHARED', valueRef: 'vault:shared' })
+		await db.registry.upsertAppSecret({ appId: 'acme', env: null, name: 'API_KEY', valueRef: 'vault:all' })
+		await db.registry.upsertAppSecret({ appId: 'acme', env: 'prod', name: 'API_KEY', valueRef: 'vault:prod' })
+		await db.registry.upsertAppSecret({ appId: 'acme', env: null, name: 'SHARED', valueRef: 'vault:shared' })
 
 		// Each layer upserts against its OWN partial index — a re-put replaces rather than duplicating.
-		const replaced = await db.upsertAppSecret({ appId: 'acme', env: null, name: 'API_KEY', valueRef: 'vault:all2' })
+		const replaced = await db.registry.upsertAppSecret({ appId: 'acme', env: null, name: 'API_KEY', valueRef: 'vault:all2' })
 		expect(replaced.value_ref).toBe('vault:all2')
-		expect(await db.listAppSecrets('acme')).toHaveLength(3)
+		expect(await db.registry.listAppSecrets('acme')).toHaveLength(3)
 
 		// THE ORDER IS THE FEATURE: the caller layers by last-write-wins, so the ALL-ENV row of a name must
 		// come out BEFORE the env-specific one. Bare `ORDER BY name` left that to SQLite's rowid fallback,
 		// and `ORDER BY name, env` inverts it on Postgres (NULLS LAST) — deploying the wrong secret value.
-		const forProd = await db.getAppSecretsForEnv('acme', 'prod')
+		const forProd = await db.registry.getAppSecretsForEnv('acme', 'prod')
 		expect(forProd.map((s) => `${s.name}:${s.value_ref}`)).toEqual(['API_KEY:vault:all2', 'API_KEY:vault:prod', 'SHARED:vault:shared'])
 		const resolved: Record<string, string> = {}
 		for (const row of forProd) {
@@ -446,93 +446,93 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(resolved['API_KEY']).toBe('vault:prod')
 
 		// A different env sees only its own layer plus the all-env one.
-		expect((await db.getAppSecretsForEnv('acme', 'stage')).map((s) => s.value_ref)).toEqual(['vault:all2', 'vault:shared'])
+		expect((await db.registry.getAppSecretsForEnv('acme', 'stage')).map((s) => s.value_ref)).toEqual(['vault:all2', 'vault:shared'])
 
 		// Delete needs `IS NULL` for the all-env layer — a bound NULL never `= NULL`, on either engine.
-		expect(await db.deleteAppSecret('acme', 'prod', 'API_KEY')).toBe(true)
-		expect(await db.deleteAppSecret('acme', 'prod', 'API_KEY')).toBe(false)
-		expect(await db.deleteAppSecret('acme', null, 'API_KEY')).toBe(true)
-		expect(await db.deleteAppSecret('acme', null, 'API_KEY')).toBe(false)
-		expect(await db.listAppSecrets('acme')).toHaveLength(1)
+		expect(await db.registry.deleteAppSecret('acme', 'prod', 'API_KEY')).toBe(true)
+		expect(await db.registry.deleteAppSecret('acme', 'prod', 'API_KEY')).toBe(false)
+		expect(await db.registry.deleteAppSecret('acme', null, 'API_KEY')).toBe(true)
+		expect(await db.registry.deleteAppSecret('acme', null, 'API_KEY')).toBe(false)
+		expect(await db.registry.listAppSecrets('acme')).toHaveLength(1)
 	})
 
 	test('app_vars: the same layering, in plaintext', async () => {
 		await reset()
-		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppVar({ appId: 'acme', env: null, name: 'TEAM', value: 'acme' })
-		await db.upsertAppVar({ appId: 'acme', env: 'prod', name: 'TEAM', value: 'acme-prod' })
-		await db.upsertAppVar({ appId: 'acme', env: null, name: 'REGION', value: 'eu' })
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.upsertAppVar({ appId: 'acme', env: null, name: 'TEAM', value: 'acme' })
+		await db.registry.upsertAppVar({ appId: 'acme', env: 'prod', name: 'TEAM', value: 'acme-prod' })
+		await db.registry.upsertAppVar({ appId: 'acme', env: null, name: 'REGION', value: 'eu' })
 
-		expect((await db.getAppVarsForEnv('acme', 'prod')).map((v) => v.value)).toEqual(['eu', 'acme', 'acme-prod'])
-		expect(await db.listAppVars('acme')).toHaveLength(3)
-		expect((await db.upsertAppVar({ appId: 'acme', env: 'prod', name: 'TEAM', value: 'acme-prod-2' })).value).toBe('acme-prod-2')
-		expect(await db.deleteAppVar('acme', 'prod', 'TEAM')).toBe(true)
-		expect(await db.deleteAppVar('acme', null, 'REGION')).toBe(true)
-		expect(await db.listAppVars('acme')).toHaveLength(1)
+		expect((await db.registry.getAppVarsForEnv('acme', 'prod')).map((v) => v.value)).toEqual(['eu', 'acme', 'acme-prod'])
+		expect(await db.registry.listAppVars('acme')).toHaveLength(3)
+		expect((await db.registry.upsertAppVar({ appId: 'acme', env: 'prod', name: 'TEAM', value: 'acme-prod-2' })).value).toBe('acme-prod-2')
+		expect(await db.registry.deleteAppVar('acme', 'prod', 'TEAM')).toBe(true)
+		expect(await db.registry.deleteAppVar('acme', null, 'REGION')).toBe(true)
+		expect(await db.registry.listAppVars('acme')).toHaveLength(1)
 	})
 
 	test('runs: create, the status-guarded transitions, keyset paging, and the stale sweep', async () => {
 		await reset()
-		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv(providerEnvironment('acme', 'prod'))
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
 
-		const first = await db.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'webhook' })
+		const first = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'webhook' })
 		expect(first.status).toBe('pending')
-		const second = await db.createRun({ id: uuidv7(), appId: 'acme', env: 'stage', ref: 'refs/heads/dev', commitSha: 'abc', trigger: 'poll' })
+		const second = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'stage', ref: 'refs/heads/dev', commitSha: 'abc', trigger: 'poll' })
 
-		expect((await db.getRun(first.id))?.trigger).toBe('webhook')
+		expect((await db.runs.getRun(first.id))?.trigger).toBe('webhook')
 		// UUIDv7 ids are monotonic (RFC 9562 §6.2 counter), so `ORDER BY id DESC` is chronological on a
 		// TEXT comparison even for two runs minted inside the same millisecond — as these two are.
-		expect((await db.listRuns({ limit: 10 })).map((r) => r.id)).toEqual([second.id, first.id])
-		expect((await db.listRuns({ limit: 10, appId: 'acme', env: 'prod' })).map((r) => r.id)).toEqual([first.id])
-		expect((await db.listRuns({ limit: 10, before: second.id })).map((r) => r.id)).toEqual([first.id])
-		expect(await db.listRuns({ limit: 1 })).toHaveLength(1)
+		expect((await db.runs.listRuns({ limit: 10 })).map((r) => r.id)).toEqual([second.id, first.id])
+		expect((await db.runs.listRuns({ limit: 10, appId: 'acme', env: 'prod' })).map((r) => r.id)).toEqual([first.id])
+		expect((await db.runs.listRuns({ limit: 10, before: second.id })).map((r) => r.id)).toEqual([first.id])
+		expect(await db.runs.listRuns({ limit: 1 })).toHaveLength(1)
 
 		// pending → running only once: a redelivered queue message must be a no-op.
-		expect(await db.markRunStarted(first.id, `runs/${first.id}/logs.ndjson`)).toBe(true)
-		expect(await db.markRunStarted(first.id, `runs/${first.id}/logs.ndjson`)).toBe(false)
-		const running = await db.getRun(first.id)
+		expect(await db.runs.markRunStarted(first.id, `runs/${first.id}/logs.ndjson`)).toBe(true)
+		expect(await db.runs.markRunStarted(first.id, `runs/${first.id}/logs.ndjson`)).toBe(false)
+		const running = await db.runs.getRun(first.id)
 		expect(running?.status).toBe('running')
 		expect(typeof running?.started_at).toBe('number')
 
-		await db.setRunCommit(first.id, 'deadbeef')
-		expect((await db.getRun(first.id))?.commit_sha).toBe('deadbeef')
-		expect(await db.setRunExternalId(first.id, 'harbor-operation-1')).toBe(true)
-		expect((await db.listInFlightRuns('harbor')).map((run) => run.id)).toEqual([first.id])
-		expect((await db.getRun(first.id))?.external_run_id).toBe('harbor-operation-1')
+		await db.runs.setRunCommit(first.id, 'deadbeef')
+		expect((await db.runs.getRun(first.id))?.commit_sha).toBe('deadbeef')
+		expect(await db.runs.setRunExternalId(first.id, 'harbor-operation-1')).toBe(true)
+		expect((await db.runs.listInFlightRuns('harbor')).map((run) => run.id)).toEqual([first.id])
+		expect((await db.runs.getRun(first.id))?.external_run_id).toBe('harbor-operation-1')
 
 		// The terminal write is guarded too — it is co-written by vozka-runner's `finishRun`.
-		expect(await db.markRunFinished(first.id, 'succeeded', 0)).toBe(true)
-		expect(await db.markRunFinished(first.id, 'failed', 1)).toBe(false)
-		const done = await db.getRun(first.id)
+		expect(await db.runs.markRunFinished(first.id, 'succeeded', 0)).toBe(true)
+		expect(await db.runs.markRunFinished(first.id, 'failed', 1)).toBe(false)
+		const done = await db.runs.getRun(first.id)
 		expect(done?.status).toBe('succeeded')
 		expect(done?.exit_code).toBe(0)
 
 		// The sweep only reaps genuinely aged pending/running rows — `second` is still pending and young.
-		expect(await db.sweepStaleRuns(3600)).toBe(0)
-		expect(await db.sweepStaleRuns(-1)).toBe(1)
-		expect((await db.getRun(second.id))?.status).toBe('failed')
+		expect(await db.runs.sweepStaleRuns(3600)).toBe(0)
+		expect(await db.runs.sweepStaleRuns(-1)).toBe(1)
+		expect((await db.runs.getRun(second.id))?.status).toBe('failed')
 	})
 
 	test('repo poll state: the join that selects pollable envs, and the upsert', async () => {
 		await reset()
 		// PUBLIC (no installation id) + a trigger ref → pollable. The other three combinations are not.
-		await db.createApp({ id: 'public-app', repoUrl: 'github.com/acme/public' })
-		await db.upsertAppEnv(providerEnvironment('public-app', 'prod', { triggerRef: 'refs/heads/main' }))
-		await db.upsertAppEnv(providerEnvironment('public-app', 'manual'))
-		await db.createApp({ id: 'private-app', repoUrl: 'github.com/acme/private', githubInstallationId: 99 })
-		await db.upsertAppEnv(providerEnvironment('private-app', 'prod', { triggerRef: 'refs/heads/main' }))
+		await db.registry.createApp({ id: 'public-app', repoUrl: 'github.com/acme/public' })
+		await db.registry.upsertAppEnv(providerEnvironment('public-app', 'prod', { triggerRef: 'refs/heads/main' }))
+		await db.registry.upsertAppEnv(providerEnvironment('public-app', 'manual'))
+		await db.registry.createApp({ id: 'private-app', repoUrl: 'github.com/acme/private', githubInstallationId: 99 })
+		await db.registry.upsertAppEnv(providerEnvironment('private-app', 'prod', { triggerRef: 'refs/heads/main' }))
 
-		const eligible = await db.getPollEligibleEnvs()
+		const eligible = await db.polling.getPollEligibleEnvs()
 		expect(eligible.map((e) => `${e.app.id}:${e.appEnv.env}`)).toEqual(['public-app:prod'])
 		// The prefixed join columns are unpacked into two real row shapes, types intact.
 		expect(eligible[0]?.app.github_installation_id).toBeNull()
 		expect(typeof eligible[0]?.appEnv.created_at).toBe('number')
 
-		expect(await db.getRepoPollState('public-app', 'prod')).toBeNull()
+		expect(await db.polling.getRepoPollState('public-app', 'prod')).toBeNull()
 		const stamped = now()
-		await db.upsertRepoPollState({ appId: 'public-app', env: 'prod', etag: 'W/"1"', lastSeenSha: 'aaa', lastPolledAt: stamped })
-		const updated = await db.upsertRepoPollState({
+		await db.polling.upsertRepoPollState({ appId: 'public-app', env: 'prod', etag: 'W/"1"', lastSeenSha: 'aaa', lastPolledAt: stamped })
+		const updated = await db.polling.upsertRepoPollState({
 			appId: 'public-app',
 			env: 'prod',
 			etag: 'W/"2"',
@@ -544,7 +544,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(updated.last_seen_sha).toBe('bbb')
 		expect(updated.last_polled_at).toBe(stamped + 5)
 		expect(updated.last_error).toBe('feed HTTP 500')
-		expect((await db.getRepoPollState('public-app', 'prod'))?.last_seen_sha).toBe('bbb')
+		expect((await db.polling.getRepoPollState('public-app', 'prod'))?.last_seen_sha).toBe('bbb')
 	})
 })
 
@@ -602,9 +602,9 @@ describe.skipIf(!hasPostgres)('src/vault.ts — envelope encryption, unmodified,
 describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 	test('a message survives send → claim → handler → ack, and the payload round-trips', async () => {
 		await reset()
-		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv(providerEnvironment('acme', 'prod'))
-		const run = await db.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
+		const run = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
 
 		const queue = new PostgresJobQueue<DeployJobMessage>(raw, { queue: 'vozka-deploy' })
 		await queue.send({ runId: run.id })
@@ -622,9 +622,9 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 
 	test('a provider failure is recorded instead of leaving the run pending', async () => {
 		await reset()
-		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv(providerEnvironment('acme', 'prod'))
-		const run = await db.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
+		const run = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
 
 		const failingProvider = {
 			...fakeControlProvider,
@@ -632,7 +632,7 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 		}
 		const result = await runDeployJob(env(), failingProvider, { runId: run.id })
 		expect(result.status).toBe('failed')
-		const after = await db.getRun(run.id)
+		const after = await db.runs.getRun(run.id)
 		expect(after?.status).toBe('failed')
 		expect(after?.exit_code).toBeNull()
 		// The lock was taken and released, so the next trigger for this target is not wedged.
@@ -641,9 +641,9 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 
 	test('a CONTENDED run is deferred and re-enqueued, never double-run', async () => {
 		await reset()
-		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv(providerEnvironment('acme', 'prod'))
-		const run = await db.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
+		const run = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
 		// Somebody else holds the app-env lease.
 		await new SqlDeployLocks(raw).acquire('acme:prod', 'other-run', 60_000)
 
@@ -651,7 +651,7 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 		expect((await runDeployJob(assembled, fakeControlProvider, { runId: run.id })).status).toBe('deferred')
 
 		// Left pending, and a FRESH message is waiting (delayed) rather than a retry being consumed.
-		expect((await db.getRun(run.id))?.status).toBe('pending')
+		expect((await db.runs.getRun(run.id))?.status).toBe('pending')
 		const { results } = await raw.prepare('SELECT attempts FROM jobs').all<{ attempts: number }>()
 		expect(results).toHaveLength(1)
 		expect(results[0]?.attempts).toBe(0)
@@ -661,7 +661,7 @@ describe.skipIf(!hasPostgres)('the deploy queue, as a table', () => {
 describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () => {
 	test('serves liveness, the API and the SPA fallback from one handler', async () => {
 		await reset()
-		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 		const handler = createFetchHandler(env(), fakeControlProvider)
 
 		// The process-level liveness route, claimed before `handleFetch` could hand it to the SPA.
@@ -702,9 +702,9 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 
 	test('the maintenance pass polls, enqueues and sweeps against the real schema', async () => {
 		await reset()
-		await db.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv(providerEnvironment('acme', 'prod', { triggerRef: 'refs/heads/main' }))
-		const stale = await db.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod', { triggerRef: 'refs/heads/main' }))
+		const stale = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual' })
 		await raw.prepare('UPDATE runs SET created_at = ? WHERE id = ?').bind(now() - 86_400, stale.id).run()
 
 		// A one-entry Atom feed with a new head sha, served locally — no test in this repo reaches github.com.
@@ -717,10 +717,10 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		expect(summary.poll).toEqual({ polled: 1, triggered: 1, unchanged: 0, errored: 0, skipped: 0 })
 		expect(summary.swept).toBe(1)
 		// The sweep reaped the aged run; the poll created a fresh one and enqueued it into `jobs`.
-		expect((await db.getRun(stale.id))?.status).toBe('failed')
-		expect((await db.listRuns({ limit: 10, appId: 'acme' })).filter((r) => r.trigger === 'poll')).toHaveLength(1)
+		expect((await db.runs.getRun(stale.id))?.status).toBe('failed')
+		expect((await db.runs.listRuns({ limit: 10, appId: 'acme' })).filter((r) => r.trigger === 'poll')).toHaveLength(1)
 		expect((await raw.prepare('SELECT count(*)::int AS n FROM jobs').first<{ n: number }>())?.n).toBe(1)
-		expect((await db.getRepoPollState('acme', 'prod'))?.last_seen_sha).toBe('a'.repeat(40))
+		expect((await db.polling.getRepoPollState('acme', 'prod'))?.last_seen_sha).toBe('a'.repeat(40))
 	})
 })
 
@@ -758,6 +758,7 @@ function env(): Env {
 	}
 	return {
 		DB: raw,
+		REPOSITORIES: db,
 		ASSETS: { fetch: () => Promise.resolve(new Response('<!doctype html>spa', { headers: { 'content-type': 'text/html' } })) },
 		RUN_LOGS: logs,
 		DEPLOY_QUEUE: new PostgresJobQueue<DeployJobMessage>(raw, { queue: 'vozka-deploy' }),

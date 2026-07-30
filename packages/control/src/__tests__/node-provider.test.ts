@@ -23,6 +23,7 @@ describe('the Zerops namespace process configuration', () => {
 		const harness = createHarness()
 		const provider = zeropsControlProvider({
 			DB: harness.d1,
+			REPOSITORIES: harness.repositories,
 			ASSETS: { fetch: () => Promise.resolve(new Response()) },
 			RUN_LOGS: {
 				put: () => Promise.resolve(),

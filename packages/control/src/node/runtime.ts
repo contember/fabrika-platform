@@ -17,6 +17,7 @@
 import { HttpIamRpc } from '@fabrika/auth'
 import { FileSystemAssetServer, PostgresDatabase, PostgresJobQueue, S3BlobStore } from '@fabrika/platform-node'
 import type { ControlProvider } from '@fabrika/provider-contract'
+import { createControlRepositories } from '../db'
 import type { Env } from '../env'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { HttpIamAdminGateway } from './iam-admin'
@@ -83,6 +84,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 
 	const env: Env = {
 		DB: db,
+		REPOSITORIES: createControlRepositories(db),
 		// SPA fallback on: the dashboard is client-routed, so `/apps/foo` must serve index.html.
 		ASSETS: new FileSystemAssetServer(config.assetsDir, { spaFallback: true }),
 		RUN_LOGS: blobStore(source),

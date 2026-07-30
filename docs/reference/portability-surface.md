@@ -9,7 +9,7 @@ S3-compatible storage, HTTP, static files, and platform cron.
 
 | Cloudflare primitive        | Portable answer                                                                       | Notes                                                                                                                                                 |
 | --------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| D1                          | Postgres, behind a `Db` port                                                          | See the dialect assessment below.                                                                                                                     |
+| D1                          | Postgres, behind capability repositories over `SqlDatabase`                           | See the dialect assessment below.                                                                                                                     |
 | Cloudflare Queues           | A Postgres job table with `SELECT … FOR UPDATE SKIP LOCKED` plus an in-process poller | On a long-running process the queue is unnecessary _in the Workers sense_ — the reason Workers need a queue (no process to poll with) does not apply. |
 | `DeployLock` Durable Object | A TTL-bounded conditional `UPDATE` on a DB row                                        | Works identically on SQLite and Postgres, so the DO is deleted on **both** platforms — this is the one port that simplifies Cloudflare too.           |
 | R2                          | S3-compatible object storage, behind a `Blob` port                                    | R2 is S3-compatible and Zerops object storage is MinIO, so **one** implementation covers both.                                                        |
@@ -71,13 +71,20 @@ only `env.ts`, `index.ts`, `db.ts` and the test harness are platform-specific.
 - **HTTP layer — already portable.** It is written fetch-style
   (`Request → Response`), which both Bun and Node accept natively. No work beyond
   the entrypoint.
-- **`db.ts` — the real work.** ~883 lines against the D1 prepared-statement API:
-  57 `prepare()`, 55 `bind()`, 15 `run()`, 2 `batch()`.
-- **The approach that shipped:** a D1-shaped `SqlDatabase` port
+- **Repository capabilities — the real work.** Principals, grants, app schema,
+  credentials, sessions, and audit are separate capabilities over the
+  D1-shaped prepared-statement API.
+- **The runtime port:** a D1-shaped `SqlDatabase`
   ([`@fabrika/platform`](../../packages/platform/src/sql.ts)) that `D1Database`
   satisfies structurally, with a Postgres driver underneath it in
-  [`@fabrika/platform-node`](../../packages/platform-node/). One SQL body, two
-  backends, no query duplication.
+  [`@fabrika/platform-node`](../../packages/platform-node/). Portable repository
+  operations keep one SQL body and avoid query duplication.
+- **The dialect seam is a complete repository operation.** A runtime composition
+  root assembles the capability bundle. It may replace one capability with a
+  subclass whose operation uses a different statement count, transaction shape,
+  locking primitive, or result mapping. Shared code never branches on a database
+  id, and no empty per-dialect subclasses exist. See
+  [ADR-0015](../decisions/0015-repository-operations-are-the-sql-portability-seam.md).
 - **The query surface was NOT purely mechanical.** Audits found, and the query
   bodies in `iam`, `control` and `runner-cloudflare` have since been fixed for, three outright
   failures — `IS NOT <expr>` (SQLite-only; now `IS DISTINCT FROM`), `unixepoch()`
@@ -105,13 +112,14 @@ only `env.ts`, `index.ts`, `db.ts` and the test harness are platform-specific.
   `INTEGER` in the Postgres DDL — and unix-millisecond columns therefore cannot be
   `INTEGER` (int4 overflows at 2.1e9). Postgres also type-checks bind parameters
   where SQLite silently returned no rows, and does not order `RETURNING`.
-- **Alternative — Kysely.** Was a real option, and would have handled dialect
-  divergence for us. Rejected because for two backends the adapter is less
-  machinery; the cost of that choice is the divergence list above, which we now own.
+- **Alternative — Kysely.** Was a real option, and would have handled textual
+  dialect divergence for us. Rejected because the existing port is less
+  machinery and repository operations also cover non-textual differences such as
+  statement count and atomicity.
 
 Sequencing note that paid off: the **test harness was ported first**, before any
 production code, so dialect bugs surfaced against real tests rather than against
 production traffic. Both services now have a live-Postgres suite that applies the
-shipped migrations and drives the whole `db.ts` surface unmodified; those suites
+shipped migrations and drives every portable repository capability; those suites
 skip when `FABRIKA_TEST_POSTGRES_URL` is unset, so a green run with skips proves
 nothing about this half.

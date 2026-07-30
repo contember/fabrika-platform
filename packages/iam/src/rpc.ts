@@ -58,7 +58,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc {
 			try {
 				const { result, principalId } = await mintToken(services, env, input)
 				ctx.waitUntil(
-					services.db.writeAuthLog({
+					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,
 						app: input.app,
 						kind: 'authenticate',
@@ -72,7 +72,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc {
 				// Same fail-closed posture as authenticate(): never surface a 500.
 				console.error(`mintToken failed for request '${input.requestId}'`, err)
 				ctx.waitUntil(
-					services.db.writeAuthLog({
+					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,
 						app: input.app,
 						kind: 'authenticate',
@@ -95,7 +95,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc {
 			try {
 				const { result, principalId, credentialId } = await mintFromKey(services, env, input)
 				ctx.waitUntil(
-					services.db.writeAuthLog({
+					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,
 						app: input.app,
 						kind: 'authenticate',
@@ -110,7 +110,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc {
 				// Same fail-closed posture as mintToken(): never surface a 500.
 				console.error(`mintFromKey failed for request '${input.requestId}'`, err)
 				ctx.waitUntil(
-					services.db.writeAuthLog({
+					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,
 						app: input.app,
 						kind: 'authenticate',
@@ -137,7 +137,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc {
 		audit(event: AuditInput): Promise<void> {
 			const services = buildServices(env)
 			ctx.waitUntil(
-				services.db
+				services.repositories.audit
 					.writeAuditEvent({
 						requestId: event.requestId,
 						principalId: event.principalId,
@@ -172,7 +172,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc {
 				if (res.caller.type === undefined || res.caller.permissions.length === 0) {
 					return { ok: false, reason: 'not_allowed' }
 				}
-				const rows = await services.db.getPrincipalsForApp(res.verifiedApp)
+				const rows = await services.repositories.principals.getPrincipalsForApp(res.verifiedApp)
 				const principals: PrincipalListItem[] = rows.map((p) => ({
 					id: p.id,
 					type: p.type,
@@ -208,7 +208,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc {
 				// revoke or a denied/not-found attempt writes no domain event.
 				if (result.ok && result.revoked) {
 					ctx.waitUntil(
-						services.db.writeAuditEvent({
+						services.repositories.audit.writeAuditEvent({
 							requestId: input.requestId,
 							principalId: revoker.id,
 							principalLabel: revoker.label ?? revoker.id,
@@ -224,7 +224,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc {
 			} catch (err) {
 				console.error(`revokeKey failed for request '${input.requestId}'`, err)
 				ctx.waitUntil(
-					services.db.writeAuthLog({
+					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,
 						app: input.app,
 						kind: 'authenticate',
@@ -258,7 +258,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc {
 					// `result.principalId` is the freshly-created service principal (service mode) or the
 					// self-bound principal; falls back to the requested binding for the standalone modes.
 					ctx.waitUntil(
-						services.db.writeAuditEvent({
+						services.repositories.audit.writeAuditEvent({
 							requestId: input.requestId,
 							principalId: issuer.id,
 							principalLabel: issuer.label ?? issuer.id,
@@ -280,7 +280,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc {
 			} catch (err) {
 				console.error(`issueKey failed for request '${input.requestId}'`, err)
 				ctx.waitUntil(
-					services.db.writeAuthLog({
+					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,
 						app: input.app,
 						kind: 'authenticate',
@@ -310,7 +310,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc {
 				if (result.ok) {
 					// iam.passthrough.issue audit — issuer, label, grants, expiry; NEVER the signed token.
 					ctx.waitUntil(
-						services.db.writeAuditEvent({
+						services.repositories.audit.writeAuditEvent({
 							requestId: input.requestId,
 							principalId: issuer.id,
 							principalLabel: issuer.label ?? issuer.id,
@@ -327,7 +327,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc {
 			} catch (err) {
 				console.error(`issueJwt failed for request '${input.requestId}'`, err)
 				ctx.waitUntil(
-					services.db.writeAuthLog({
+					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,
 						app: input.app,
 						kind: 'authenticate',

@@ -1,4 +1,5 @@
 import type { SqlDatabase, WaitUntil } from '@fabrika/platform'
+import type { IamRepositories } from './db'
 
 /**
  * The IAM service's runtime surface: its two capability handles plus vars/secrets. Single source of
@@ -13,6 +14,8 @@ import type { SqlDatabase, WaitUntil } from '@fabrika/platform'
 export interface Env {
 	/** Both policy tables and append-only audit tables (one database). D1 on Workers, Postgres on Bun. */
 	DB: SqlDatabase
+	/** Persistence capabilities selected by this runtime's composition root. */
+	REPOSITORIES: IamRepositories
 	/**
 	 * JSON array of email domains admitted as a HUMAN at login (e.g. `["mangoweb.cz","contember.com"]`).
 	 * A `*` entry means admit anyone. propustka owns this centrally — the login-admission allowlist for

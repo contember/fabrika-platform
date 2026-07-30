@@ -104,7 +104,8 @@ async function handleCallback(request: Request, services: Services, secure: bool
 	// An already-known or invited principal (and a bootstrap admin) is always admitted regardless —
 	// so check existence WITHOUT lazily creating before refusing a non-allowlisted newcomer.
 	if (!admitted(identity.email, services.config)) {
-		const known = (await services.db.getUserByExternalId(identity.sub)) ?? (await services.db.getUserByEmail(identity.email))
+		const known = (await services.repositories.principals.getUserByExternalId(identity.sub))
+			?? (await services.repositories.principals.getUserByEmail(identity.email))
 		if (!known) {
 			return authError('login refused (not allowed)', 403)
 		}
@@ -112,7 +113,7 @@ async function handleCallback(request: Request, services: Services, secure: bool
 
 	// Resolve (or claim/lazy-create) the principal from the verified OIDC identity — the 3-step flow
 	// keyed on the IdP `sub` and verified email.
-	const resolved = await resolveUserPrincipal(services.db, identity.sub, identity.email)
+	const resolved = await resolveUserPrincipal(services.repositories.principals, identity.sub, identity.email)
 	if (!resolved.ok) {
 		return authError(`login refused (${resolved.reason})`, 403)
 	}
@@ -120,7 +121,7 @@ async function handleCallback(request: Request, services: Services, secure: bool
 	// Mint the SSO session: store only the hash, hand the browser the plaintext in a cookie.
 	const sessionToken = randomToken(32)
 	const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS
-	await services.db.createSession({
+	await services.repositories.sessions.createSession({
 		tokenHash: await hashToken(sessionToken),
 		principalId: resolved.principal.id,
 		idpSub: identity.sub,
@@ -128,7 +129,7 @@ async function handleCallback(request: Request, services: Services, secure: bool
 		expiresAt,
 	})
 	ctx.waitUntil(
-		services.db.writeAuthLog({
+		services.repositories.audit.writeAuthLog({
 			requestId: requestId(request),
 			app: 'propustka',
 			kind: 'authenticate',
@@ -149,7 +150,7 @@ async function handleCallback(request: Request, services: Services, secure: bool
 async function handleLogout(request: Request, services: Services, secure: boolean): Promise<Response> {
 	const cookie = readCookie(request.headers.get('Cookie'), SESSION_COOKIE)
 	if (cookie) {
-		await services.db.revokeSessionByHash(await hashToken(cookie))
+		await services.repositories.sessions.revokeSessionByHash(await hashToken(cookie))
 	}
 	const url = new URL(request.url)
 	const headers = new Headers({ location: safeRedirect(url.searchParams.get('redirect'), services.config) })

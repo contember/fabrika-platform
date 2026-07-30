@@ -6,7 +6,7 @@ import type {
 	ProviderRegistrationInput,
 } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import type { Db, RunRow } from '../db'
+import type { ControlRepositories, RunRow } from '../db'
 import { uuidv7 } from '../db'
 import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelope, type RunDeps, type RunOutcome } from '../run-lifecycle'
 import { EnvSecretResolver, type SecretResolver } from '../secret-resolver'
@@ -31,18 +31,18 @@ const normalize = (provider: string, input: ProviderRegistrationInput): Provider
 }
 
 async function seedRun(
-	db: Db,
+	db: ControlRepositories,
 	options: { provider?: string; secretRef?: string; externalId?: string } = {},
 ): Promise<string> {
 	const provider = options.provider ?? 'memory'
-	await db.createApp({
+	await db.registry.createApp({
 		id: 'app',
 		repoUrl: 'https://github.com/acme/app.git',
 		workerDir: 'worker',
 		configPath: 'fabrika.config.ts',
 		githubInstallationId: 42,
 	})
-	await db.upsertAppEnv({
+	await db.registry.upsertAppEnv({
 		appId: 'app',
 		env: 'prod',
 		domain: 'app.example.com',
@@ -51,17 +51,17 @@ async function seedRun(
 		providerTargetJson: JSON.stringify(envelope(provider, 'target')),
 		providerArtifactJson: JSON.stringify(envelope(provider, 'artifact')),
 	})
-	await db.upsertAppSecret({
+	await db.registry.upsertAppSecret({
 		appId: 'app',
 		env: null,
 		name: 'API_KEY',
 		valueRef: options.secretRef ?? 'literal:all-env',
 	})
-	await db.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'literal:prod' })
-	await db.upsertAppVar({ appId: 'app', env: null, name: 'TEAM', value: 'all-env' })
-	await db.upsertAppVar({ appId: 'app', env: 'prod', name: 'TEAM', value: 'prod' })
+	await db.registry.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'literal:prod' })
+	await db.registry.upsertAppVar({ appId: 'app', env: null, name: 'TEAM', value: 'all-env' })
+	await db.registry.upsertAppVar({ appId: 'app', env: 'prod', name: 'TEAM', value: 'prod' })
 	const runId = uuidv7()
-	await db.createRun({
+	await db.runs.createRun({
 		id: runId,
 		appId: 'app',
 		env: 'prod',
@@ -69,8 +69,8 @@ async function seedRun(
 		trigger: 'manual',
 	})
 	if (options.externalId !== undefined) {
-		await db.markRunStarted(runId, `runs/${runId}/logs.ndjson`)
-		await db.setRunExternalId(runId, options.externalId)
+		await db.runs.markRunStarted(runId, `runs/${runId}/logs.ndjson`)
+		await db.runs.setRunExternalId(runId, options.externalId)
 	}
 	return runId
 }
@@ -105,16 +105,16 @@ function makeProvider(
 }
 
 function makeDeps(
-	db: Db,
+	db: ControlRepositories,
 	provider: ControlProvider,
 	secrets: SecretResolver = new EnvSecretResolver({}),
 	lock = makeFakeLock(),
 ): RunDeps {
-	return { db, provider, secrets, lock }
+	return { repositories: db, provider, secrets, lock }
 }
 
-const requireRun = async (db: Db, id: string): Promise<RunRow> => {
-	const run = await db.getRun(id)
+const requireRun = async (db: ControlRepositories, id: string): Promise<RunRow> => {
+	const run = await db.runs.getRun(id)
 	if (run === null) {
 		throw new Error(`missing run ${id}`)
 	}
@@ -188,8 +188,8 @@ describe('provider-neutral run lifecycle', () => {
 
 	test('verifies namespace and app resource claims before calling the provider', async () => {
 		const { db, sqlite } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		await db.createDeploymentNamespaceWithResourceClaims({
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await db.registry.createDeploymentNamespaceWithResourceClaims({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'memory',
@@ -197,7 +197,7 @@ describe('provider-neutral run lifecycle', () => {
 			providerTargetJson: JSON.stringify(envelope('memory', 'namespace')),
 			state: 'ready',
 		}, ['service:proxy'])
-		await db.upsertAppEnvWithNamespaceResourceClaims({
+		await db.registry.upsertAppEnvWithNamespaceResourceClaims({
 			appId: 'app',
 			env: 'prod',
 			namespaceId: 'apps-prod',
@@ -218,7 +218,7 @@ describe('provider-neutral run lifecycle', () => {
 		}
 		const deploy = async (): Promise<string> => {
 			const runId = uuidv7()
-			await db.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+			await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
 			return (await executeDeploy(makeDeps(db, provider), { runId })).status
 		}
 
@@ -232,9 +232,9 @@ describe('provider-neutral run lifecycle', () => {
 
 	test('rejects namespace coordinate drift before calling the provider', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		await db.createApp({ id: 'other', repoUrl: 'github.com/acme/other' })
-		await db.createDeploymentNamespaceWithResourceClaims({
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await db.registry.createApp({ id: 'other', repoUrl: 'github.com/acme/other' })
+		await db.registry.createDeploymentNamespaceWithResourceClaims({
 			id: 'exclusive',
 			env: 'prod',
 			provider: 'memory',
@@ -242,7 +242,7 @@ describe('provider-neutral run lifecycle', () => {
 			providerTargetJson: JSON.stringify(envelope('memory', 'namespace')),
 			state: 'ready',
 		}, ['service:proxy'])
-		await db.upsertAppEnv({
+		await db.registry.upsertAppEnv({
 			appId: 'app',
 			env: 'prod',
 			namespaceId: 'exclusive',
@@ -251,7 +251,7 @@ describe('provider-neutral run lifecycle', () => {
 			providerArtifactJson: JSON.stringify(envelope('memory', 'artifact')),
 		})
 		const runId = uuidv7()
-		await db.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
 		const inputs: ProviderDeployInput[] = []
 		const provider: ControlProvider = {
 			...makeProvider(inputs, { state: 'succeeded' }),
@@ -271,14 +271,14 @@ describe('provider-neutral run lifecycle', () => {
 	test('skips redelivery and defers while another run owns the lock', async () => {
 		const { db } = createHarness()
 		const runningId = await seedRun(db)
-		await db.markRunStarted(runningId, `runs/${runningId}/logs.ndjson`)
+		await db.runs.markRunStarted(runningId, `runs/${runningId}/logs.ndjson`)
 		const inputs: ProviderDeployInput[] = []
 		expect(
 			(await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), { runId: runningId })).status,
 		).toBe('skipped')
 
 		const pendingId = uuidv7()
-		await db.createRun({ id: pendingId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.createRun({ id: pendingId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
 		const lock = makeFakeLock()
 		await lock.acquire('app:prod', 'other-run')
 		expect(
@@ -293,7 +293,7 @@ describe('provider-neutral run lifecycle', () => {
 	test('records resolution and provider failures without leaking the exception', async () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db)
-		await db.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'env:MISSING' })
+		await db.registry.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'env:MISSING' })
 
 		expect(
 			(await executeDeploy(
@@ -309,7 +309,7 @@ describe('provider-neutral run lifecycle', () => {
 		const runId = await seedRun(db, { externalId: 'provider-operation-1' })
 		const cancelled: string[] = []
 		const cancelledNamespaces: string[] = []
-		await db.createDeploymentNamespace({
+		await db.registry.createDeploymentNamespace({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'memory',
@@ -317,9 +317,9 @@ describe('provider-neutral run lifecycle', () => {
 			providerTargetJson: JSON.stringify(envelope('memory', 'namespace-target')),
 			state: 'failed',
 		})
-		const appEnv = await db.getAppEnv('app', 'prod')
+		const appEnv = await db.registry.getAppEnv('app', 'prod')
 		if (appEnv === null) throw new Error('expected app environment')
-		await db.upsertAppEnv({
+		await db.registry.upsertAppEnv({
 			appId: appEnv.app_id,
 			env: appEnv.env,
 			domain: appEnv.domain,

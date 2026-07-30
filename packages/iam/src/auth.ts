@@ -78,7 +78,7 @@ export async function resolveCaller(
 			}
 		}
 
-		const cred = await services.db.getActiveCredentialByHash(presentedHash)
+		const cred = await services.repositories.credentials.getActiveCredentialByHash(presentedHash)
 		if (!cred) {
 			return { ok: false, reason: 'invalid_token' }
 		}

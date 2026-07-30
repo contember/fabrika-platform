@@ -139,7 +139,7 @@ function makeDeps(
 	const audits: AuditRecord[] = []
 	return {
 		deps: {
-			db,
+			repositories: db,
 			iam: authenticator(actions, audits),
 			queue: { send: () => Promise.resolve() },
 			logs: { get: () => Promise.resolve(null) },
@@ -205,7 +205,7 @@ describe('deployment namespace API', () => {
 			preset: 'shared',
 			facts: [{ label: 'Environment', value: 'prod' }],
 		})
-		expect(await deps.db.getDeploymentNamespace('apps-prod')).toBeNull()
+		expect(await deps.repositories.registry.getDeploymentNamespace('apps-prod')).toBeNull()
 		expect(recording.provisions).toEqual([])
 	})
 
@@ -218,7 +218,7 @@ describe('deployment namespace API', () => {
 		const createdBody: { id: string; state: string; target: ProviderEnvelope } = await created.json()
 		expect(createdBody).toEqual(expect.objectContaining({ id: 'apps-prod', state: 'ready', target: target('ready') }))
 		expect(recording.provisions).toEqual(['apps-prod'])
-		expect((await deps.db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual(['service:proxy'])
+		expect((await deps.repositories.registry.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual(['service:proxy'])
 
 		const listed = await handleApi(request('GET', '/namespaces'), deps)
 		const listBody: { items: Array<{ id: string }>; operator: { presets: Array<{ id: string }> } } = await listed.json()
@@ -249,7 +249,7 @@ describe('deployment namespace API', () => {
 	test('reserves missing namespace-owned claims before reconciling a legacy namespace', async () => {
 		const recording = providerRecording()
 		const { deps } = makeDeps(namespacedProvider(recording))
-		await deps.db.createDeploymentNamespace({
+		await deps.repositories.registry.createDeploymentNamespace({
 			id: 'legacy',
 			env: 'prod',
 			provider: 'harbor',
@@ -262,7 +262,7 @@ describe('deployment namespace API', () => {
 
 		expect(reconciled.status).toBe(200)
 		expect(recording.reconciles).toEqual(['legacy'])
-		expect((await deps.db.listNamespaceResourceClaims('legacy')).map((claim) => [
+		expect((await deps.repositories.registry.listNamespaceResourceClaims('legacy')).map((claim) => [
 			claim.resource_key,
 			claim.owner_app_id,
 		])).toEqual([['service:proxy', null]])
@@ -275,7 +275,7 @@ describe('deployment namespace API', () => {
 
 		const response = await handleApi(request('POST', '/namespaces', namespaceBody('apps-prod')), deps)
 		expect(response.status).toBe(502)
-		const row = await deps.db.getDeploymentNamespace('apps-prod')
+		const row = await deps.repositories.registry.getDeploymentNamespace('apps-prod')
 		expect(row?.state).toBe('failed')
 		expect(row?.last_error).toBe('namespace provision failed')
 		expect(JSON.parse(row?.provider_target_json ?? '{}')).toEqual(target('checkpoint'))
@@ -335,9 +335,9 @@ describe('app environment namespace assignment', () => {
 	test('assigns compatible shared and exclusive namespaces and passes them to the provider', async () => {
 		const recording = providerRecording()
 		const { deps, audits } = makeDeps(namespacedProvider(recording))
-		await deps.db.createApp({ id: 'billing', repoUrl: 'github.com/acme/billing' })
-		await deps.db.createApp({ id: 'other', repoUrl: 'github.com/acme/other' })
-		await deps.db.createDeploymentNamespace({
+		await deps.repositories.registry.createApp({ id: 'billing', repoUrl: 'github.com/acme/billing' })
+		await deps.repositories.registry.createApp({ id: 'other', repoUrl: 'github.com/acme/other' })
+		await deps.repositories.registry.createDeploymentNamespace({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'harbor',
@@ -345,7 +345,7 @@ describe('app environment namespace assignment', () => {
 			providerTargetJson: JSON.stringify(target('namespace')),
 			state: 'ready',
 		})
-		await deps.db.createDeploymentNamespace({
+		await deps.repositories.registry.createDeploymentNamespace({
 			id: 'billing-prod',
 			env: 'prod',
 			provider: 'harbor',
@@ -359,7 +359,7 @@ describe('app environment namespace assignment', () => {
 			deps,
 		)
 		expect(shared.status).toBe(200)
-		expect((await deps.db.getAppEnv('billing', 'prod'))?.namespace_id).toBe('apps-prod')
+		expect((await deps.repositories.registry.getAppEnv('billing', 'prod'))?.namespace_id).toBe('apps-prod')
 		expect(recording.registrations.at(-1)?.environment.namespace?.id).toBe('apps-prod')
 		expect(audits.at(-1)).toEqual(expect.objectContaining({
 			action: 'app.env.upsert',
@@ -371,7 +371,7 @@ describe('app environment namespace assignment', () => {
 			deps,
 		)
 		expect(exclusive.status).toBe(200)
-		expect((await deps.db.getAppEnv('billing', 'prod'))?.namespace_id).toBe('billing-prod')
+		expect((await deps.repositories.registry.getAppEnv('billing', 'prod'))?.namespace_id).toBe('billing-prod')
 
 		const wrongApp = await handleApi(
 			request('PUT', '/apps/other/envs/prod', registrationBody('billing-prod')),
@@ -383,8 +383,8 @@ describe('app environment namespace assignment', () => {
 	test('rejects missing, unknown, wrong-environment, foreign-provider, and unready assignments', async () => {
 		const recording = providerRecording()
 		const { deps } = makeDeps(namespacedProvider(recording))
-		await deps.db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		await deps.db.createDeploymentNamespace({
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await deps.repositories.registry.createDeploymentNamespace({
 			id: 'apps-stage',
 			env: 'stage',
 			provider: 'harbor',
@@ -392,7 +392,7 @@ describe('app environment namespace assignment', () => {
 			providerTargetJson: JSON.stringify(target('namespace')),
 			state: 'ready',
 		})
-		await deps.db.createDeploymentNamespace({
+		await deps.repositories.registry.createDeploymentNamespace({
 			id: 'foreign-prod',
 			env: 'prod',
 			provider: 'other',
@@ -400,7 +400,7 @@ describe('app environment namespace assignment', () => {
 			providerTargetJson: JSON.stringify({ provider: 'other', version: 1, payload: {} }),
 			state: 'ready',
 		})
-		await deps.db.createDeploymentNamespace({
+		await deps.repositories.registry.createDeploymentNamespace({
 			id: 'pending-prod',
 			env: 'prod',
 			provider: 'harbor',
@@ -423,7 +423,7 @@ describe('app environment namespace assignment', () => {
 			deploy: () => Promise.resolve({ state: 'succeeded' }),
 		}
 		const { deps } = makeDeps(provider)
-		await deps.db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
 		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody()), deps)).status).toBe(200)
 		expect((await handleApi(request('PUT', '/apps/app/envs/stage', registrationBody('unsupported')), deps)).status).toBe(409)
 	})
@@ -431,9 +431,9 @@ describe('app environment namespace assignment', () => {
 	test('allows placement changes only without in-flight or successful deploys', async () => {
 		const recording = providerRecording()
 		const { deps } = makeDeps(namespacedProvider(recording))
-		await deps.db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
 		for (const id of ['first', 'second']) {
-			await deps.db.createDeploymentNamespace({
+			await deps.repositories.registry.createDeploymentNamespace({
 				id,
 				env: 'prod',
 				provider: 'harbor',
@@ -444,16 +444,16 @@ describe('app environment namespace assignment', () => {
 		}
 		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('first')), deps)).status).toBe(200)
 		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('second')), deps)).status).toBe(200)
-		expect((await deps.db.listNamespaceResourceClaims('first')).map((claim) => claim.resource_key)).toEqual(['service:app'])
-		expect((await deps.db.listNamespaceResourceClaims('second')).map((claim) => claim.resource_key)).toEqual(['service:app'])
+		expect((await deps.repositories.registry.listNamespaceResourceClaims('first')).map((claim) => claim.resource_key)).toEqual(['service:app'])
+		expect((await deps.repositories.registry.listNamespaceResourceClaims('second')).map((claim) => claim.resource_key)).toEqual(['service:app'])
 
-		await deps.db.createRun({ id: 'pending-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await deps.repositories.runs.createRun({ id: 'pending-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
 		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('first')), deps)).status).toBe(409)
-		await deps.db.markRunFinished('pending-run', 'failed', null)
+		await deps.repositories.runs.markRunFinished('pending-run', 'failed', null)
 		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('first')), deps)).status).toBe(200)
 
-		await deps.db.createRun({ id: 'successful-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		await deps.db.markRunFinished('successful-run', 'succeeded', 0)
+		await deps.repositories.runs.createRun({ id: 'successful-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await deps.repositories.runs.markRunFinished('successful-run', 'succeeded', 0)
 		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('second')), deps)).status).toBe(409)
 		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('first')), deps)).status).toBe(200)
 	})
@@ -461,7 +461,7 @@ describe('app environment namespace assignment', () => {
 	test('onboards directly into a shared namespace and leaves no app after invalid assignment', async () => {
 		const recording = providerRecording()
 		const { deps } = makeDeps(namespacedProvider(recording))
-		await deps.db.createDeploymentNamespace({
+		await deps.repositories.registry.createDeploymentNamespace({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'harbor',
@@ -480,7 +480,7 @@ describe('app environment namespace assignment', () => {
 			deps,
 		)
 		expect(onboard.status).toBe(201)
-		expect((await deps.db.getAppEnv('billing', 'prod'))?.namespace_id).toBe('apps-prod')
+		expect((await deps.repositories.registry.getAppEnv('billing', 'prod'))?.namespace_id).toBe('apps-prod')
 
 		const invalid = await handleApi(
 			request('POST', '/register-app', {
@@ -493,7 +493,7 @@ describe('app environment namespace assignment', () => {
 			deps,
 		)
 		expect(invalid.status).toBe(404)
-		expect(await deps.db.getApp('broken')).toBeNull()
+		expect(await deps.repositories.registry.getApp('broken')).toBeNull()
 	})
 
 	test('claims service names before provider preparation and persists discovered coordinates', async () => {
@@ -522,14 +522,14 @@ describe('app environment namespace assignment', () => {
 		}
 		const { deps } = makeDeps(provider)
 		inspectClaims = async () => {
-			const claims = await deps.db.listNamespaceResourceClaims('apps-prod')
+			const claims = await deps.repositories.registry.listNamespaceResourceClaims('apps-prod')
 			claimsPresentDuringPreparation = claims.some((claim) =>
 				claim.resource_key === 'service:billing'
 				&& claim.owner_app_id === 'billing'
 				&& claim.owner_env === 'prod'
 			)
 		}
-		await deps.db.createDeploymentNamespaceWithResourceClaims({
+		await deps.repositories.registry.createDeploymentNamespaceWithResourceClaims({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'harbor',
@@ -551,7 +551,7 @@ describe('app environment namespace assignment', () => {
 
 		expect(response.status).toBe(201)
 		expect(claimsPresentDuringPreparation).toBe(true)
-		expect((await deps.db.getAppEnv('billing', 'prod'))?.provider_target_json).toBe(JSON.stringify(target('discovered')))
+		expect((await deps.repositories.registry.getAppEnv('billing', 'prod'))?.provider_target_json).toBe(JSON.stringify(target('discovered')))
 	})
 
 	test('removes the provisional app and claims when provider preparation fails', async () => {
@@ -568,7 +568,7 @@ describe('app environment namespace assignment', () => {
 			},
 		}
 		const { deps } = makeDeps(provider)
-		await deps.db.createDeploymentNamespaceWithResourceClaims({
+		await deps.repositories.registry.createDeploymentNamespaceWithResourceClaims({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'harbor',
@@ -591,8 +591,8 @@ describe('app environment namespace assignment', () => {
 		expect(response.status).toBe(502)
 		const failure: { error: string } = await response.json()
 		expect(failure).toEqual({ error: 'provider registration preparation failed' })
-		expect(await deps.db.getApp('broken')).toBeNull()
-		expect((await deps.db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual(['service:proxy'])
+		expect(await deps.repositories.registry.getApp('broken')).toBeNull()
+		expect((await deps.repositories.registry.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual(['service:proxy'])
 	})
 
 	test('claim collision leaves no orphan onboarding app', async () => {
@@ -609,7 +609,7 @@ describe('app environment namespace assignment', () => {
 			},
 		}
 		const { deps } = makeDeps(collidingProvider)
-		await deps.db.createDeploymentNamespaceWithResourceClaims({
+		await deps.repositories.registry.createDeploymentNamespaceWithResourceClaims({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'harbor',
@@ -629,9 +629,9 @@ describe('app environment namespace assignment', () => {
 		const beta = await handleApi(request('POST', '/register-app', body('beta')), deps)
 
 		expect([alpha.status, beta.status].sort()).toEqual([201, 409])
-		const winner = (await deps.db.listAppEnvsByNamespace('apps-prod'))[0]?.app_id
+		const winner = (await deps.repositories.registry.listAppEnvsByNamespace('apps-prod'))[0]?.app_id
 		expect(winner === 'alpha' || winner === 'beta').toBe(true)
 		const loser = winner === 'alpha' ? 'beta' : 'alpha'
-		expect(await deps.db.getApp(loser)).toBeNull()
+		expect(await deps.repositories.registry.getApp(loser)).toBeNull()
 	})
 })

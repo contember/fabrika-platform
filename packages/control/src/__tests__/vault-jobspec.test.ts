@@ -1,6 +1,6 @@
 import type { ControlProvider, ProviderDeployInput, ProviderEnvelope } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import type { Db } from '../db'
+import type { ControlRepositories } from '../db'
 import { uuidv7 } from '../db'
 import { executeDeploy, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
@@ -30,9 +30,9 @@ const provider = (inputs: ProviderDeployInput[]): ControlProvider => ({
 	},
 })
 
-async function seed(db: Db, valueRef: string): Promise<string> {
-	await db.createApp({ id: 'app', repoUrl: 'https://github.com/acme/app.git' })
-	await db.upsertAppEnv({
+async function seed(db: ControlRepositories, valueRef: string): Promise<string> {
+	await db.registry.createApp({ id: 'app', repoUrl: 'https://github.com/acme/app.git' })
+	await db.registry.upsertAppEnv({
 		appId: 'app',
 		env: 'prod',
 		namespaceId: null,
@@ -40,14 +40,14 @@ async function seed(db: Db, valueRef: string): Promise<string> {
 		providerTargetJson: JSON.stringify(envelope('target')),
 		providerArtifactJson: JSON.stringify(envelope('artifact')),
 	})
-	await db.upsertAppSecret({ appId: 'app', env: null, name: 'API_KEY', valueRef })
+	await db.registry.upsertAppSecret({ appId: 'app', env: null, name: 'API_KEY', valueRef })
 	const runId = uuidv7()
-	await db.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+	await db.runs.createRun({ id: runId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
 	return runId
 }
 
-const deps = (db: Db, vault: Vault, inputs: ProviderDeployInput[]): RunDeps => ({
-	db,
+const deps = (db: ControlRepositories, vault: Vault, inputs: ProviderDeployInput[]): RunDeps => ({
+	repositories: db,
 	provider: provider(inputs),
 	secrets: new VaultSecretResolver({ vault }),
 	lock: makeFakeLock(),
@@ -75,6 +75,6 @@ describe('provider deploy through the vault', () => {
 
 		expect((await executeDeploy(deps(db, vault, inputs), { runId })).status).toBe('failed')
 		expect(inputs).toEqual([])
-		expect((await db.getRun(runId))?.status).toBe('failed')
+		expect((await db.runs.getRun(runId))?.status).toBe('failed')
 	})
 })

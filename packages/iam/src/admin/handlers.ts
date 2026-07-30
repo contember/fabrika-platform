@@ -92,7 +92,7 @@ class RoleKnownCache {
 		if (cached) {
 			return cached
 		}
-		const rows = await this.services.db.listRoles(app)
+		const rows = await this.services.repositories.appSchema.listRoles(app)
 		const keys = new Set(rows.map((r) => r.role_key))
 		this.perApp.set(app, keys)
 		return keys
@@ -139,7 +139,7 @@ async function toGrantDtos(rows: GrantRow[], services: Services): Promise<GrantD
 
 /** The set of app ids propustka knows about — the live registry derived from the schema tables. */
 function knownApps(c: AdminContext): Promise<string[]> {
-	return c.services.db.listKnownApps()
+	return c.services.repositories.appSchema.listKnownApps()
 }
 
 /** Validate an admin-supplied `app`: null (all apps) or a known (registered) app. */
@@ -208,7 +208,7 @@ function adminAudit(
 	c: AdminContext,
 	event: { action: string; resourceType: string; resourceId?: string | null; diff?: unknown; metadata?: unknown },
 ): Promise<void> {
-	return c.services.db.writeAuditEvent({
+	return c.services.repositories.audit.writeAuditEvent({
 		requestId: c.requestId,
 		principalId: c.admin.id,
 		principalLabel: c.admin.label ?? c.admin.id,
@@ -240,7 +240,7 @@ export async function listPrincipals(c: AdminContext): Promise<Response> {
 	const statusParam = c.url.searchParams.get('status')
 	const q = c.url.searchParams.get('q') ?? undefined
 	const type = typeParam === 'user' || typeParam === 'service' ? typeParam : undefined
-	const rows = await c.services.db.listPrincipals({ type, ...(q ? { q } : {}) })
+	const rows = await c.services.repositories.principals.listPrincipals({ type, ...(q ? { q } : {}) })
 	const items = rows
 		.map(toPrincipalListItem)
 		.filter((item) => !statusParam || item.status === statusParam)
@@ -248,11 +248,11 @@ export async function listPrincipals(c: AdminContext): Promise<Response> {
 }
 
 export async function getPrincipal(c: AdminContext, id: string): Promise<Response> {
-	const row = await c.services.db.getPrincipalById(id)
+	const row = await c.services.repositories.principals.getPrincipalById(id)
 	if (!row) {
 		return error(404, 'principal not found')
 	}
-	const grants = await c.services.db.listGrants(id)
+	const grants = await c.services.repositories.grants.listGrants(id)
 
 	// Effective permissions: resolve them the same way authenticate() does, but
 	// without the live token (groups need a cookie we don't have here) — so this
@@ -279,11 +279,11 @@ export async function getPrincipal(c: AdminContext, id: string): Promise<Respons
  * this view — exact effective resolution is per-app, done at authenticate() time).
  */
 async function effectivePermissionsForAdmin(c: AdminContext, row: PrincipalRow): Promise<PermissionEntry[]> {
-	const grants = await c.services.db.getActiveGrants(row.id)
+	const grants = await c.services.repositories.grants.getActiveGrants(row.id)
 	const isBootstrapAdmin = row.type === 'user' && row.email !== null && c.services.config.bootstrapAdmins.has(row.email)
 	const app: string | null = c.app
 	const appRoles: Record<string, RoleDef> = {}
-	for (const dbRole of await c.services.db.listRoles(app)) {
+	for (const dbRole of await c.services.repositories.appSchema.listRoles(app)) {
 		appRoles[dbRole.role_key] = dbRoleToDef(dbRole)
 	}
 	const roleSource = makeRoleSource(appRoles)
@@ -303,7 +303,7 @@ function dbRoleToDef(row: RoleRow): RoleDef {
 async function loadAppRoleMap(c: AdminContext, app: string | null): Promise<Record<string, RoleDef>> {
 	const map: Record<string, RoleDef> = {}
 	if (app !== null) {
-		for (const row of await c.services.db.listRoles(app)) {
+		for (const row of await c.services.repositories.appSchema.listRoles(app)) {
 			map[row.role_key] = dbRoleToDef(row)
 		}
 	}
@@ -316,11 +316,11 @@ export async function invitePrincipal(c: AdminContext): Promise<Response> {
 	if (!email) {
 		return error(400, 'email required')
 	}
-	const existing = await c.services.db.getUserByEmail(email)
+	const existing = await c.services.repositories.principals.getUserByEmail(email)
 	if (existing) {
 		return error(409, 'a user with this email already exists')
 	}
-	const principal = await c.services.db.inviteUser(email)
+	const principal = await c.services.repositories.principals.inviteUser(email)
 	await adminAudit(c, {
 		action: 'iam.principal.invite',
 		resourceType: 'principal',
@@ -331,19 +331,19 @@ export async function invitePrincipal(c: AdminContext): Promise<Response> {
 }
 
 export async function deletePrincipal(c: AdminContext, id: string): Promise<Response> {
-	const row = await c.services.db.getPrincipalById(id)
+	const row = await c.services.repositories.principals.getPrincipalById(id)
 	if (!row) {
 		return error(404, 'principal not found')
 	}
 	const status = principalStatus(row)
 	if (status === 'invited') {
 		// Unclaimed invite → cancel it (hard-delete; nothing references it yet).
-		await c.services.db.deletePrincipal(id)
+		await c.services.repositories.principals.deletePrincipal(id)
 		await adminAudit(c, { action: 'iam.principal.invite_cancel', resourceType: 'principal', resourceId: id })
 		return json({ ok: true })
 	}
 	// Claimed principal → soft-disable (preserve audit history & grant references).
-	await c.services.db.disablePrincipal(id)
+	await c.services.repositories.principals.disablePrincipal(id)
 	await adminAudit(c, { action: 'iam.principal.disable', resourceType: 'principal', resourceId: id })
 	return json({ ok: true })
 }
@@ -354,18 +354,18 @@ export async function patchPrincipal(c: AdminContext, id: string): Promise<Respo
 	if (disabled === undefined) {
 		return error(400, 'disabled (boolean) required')
 	}
-	const row = await c.services.db.getPrincipalById(id)
+	const row = await c.services.repositories.principals.getPrincipalById(id)
 	if (!row) {
 		return error(404, 'principal not found')
 	}
 	if (disabled) {
-		await c.services.db.disablePrincipal(id)
+		await c.services.repositories.principals.disablePrincipal(id)
 		await adminAudit(c, { action: 'iam.principal.disable', resourceType: 'principal', resourceId: id })
 	} else {
-		await c.services.db.enablePrincipal(id)
+		await c.services.repositories.principals.enablePrincipal(id)
 		await adminAudit(c, { action: 'iam.principal.enable', resourceType: 'principal', resourceId: id })
 	}
-	const updated = await c.services.db.getPrincipalById(id)
+	const updated = await c.services.repositories.principals.getPrincipalById(id)
 	return json(updated ? toPrincipalListItem(updated) : { ok: true })
 }
 
@@ -411,7 +411,7 @@ async function parseRoleOrInline(
 	if (permissions === undefined || permissions.length === 0) {
 		return { ok: false, message: 'permissions must be a non-empty array of action patterns' }
 	}
-	const catalog = app === null ? [] : await c.services.db.listActionCatalog(app)
+	const catalog = app === null ? [] : await c.services.repositories.appSchema.listActionCatalog(app)
 	for (const pattern of permissions) {
 		if (!isActionAllowed(pattern, catalog)) {
 			return { ok: false, message: `unknown action pattern: ${pattern}` }
@@ -440,11 +440,11 @@ export async function createGrant(c: AdminContext): Promise<Response> {
 		return error(400, 'scopeType and scopeValue must be both set or both omitted')
 	}
 	const expiresAt = numberField(body, 'expiresAt') ?? null
-	const principal = await c.services.db.getPrincipalById(principalId)
+	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
 	if (!principal) {
 		return error(404, 'principal not found')
 	}
-	const grant = await c.services.db.createGrant({
+	const grant = await c.services.repositories.grants.createGrant({
 		principalId,
 		app,
 		roleKey: roleOrInline.roleKey,
@@ -472,11 +472,11 @@ export async function createGrant(c: AdminContext): Promise<Response> {
 }
 
 export async function deleteGrant(c: AdminContext, id: string): Promise<Response> {
-	const grant = await c.services.db.getGrantById(id)
+	const grant = await c.services.repositories.grants.getGrantById(id)
 	if (!grant) {
 		return error(404, 'grant not found')
 	}
-	await c.services.db.deleteGrant(id)
+	await c.services.repositories.grants.deleteGrant(id)
 	await adminAudit(c, {
 		action: 'iam.grant.revoke',
 		resourceType: 'grant',
@@ -513,7 +513,7 @@ export async function listRoles(c: AdminContext): Promise<Response> {
 	const app = appParam !== null && (await knownApps(c)).includes(appParam) ? appParam : null
 	const builtinKeys = new Set(Object.keys(BUILTIN_ROLES))
 	if (app !== null) {
-		for (const row of await c.services.db.listRoles(app)) {
+		for (const row of await c.services.repositories.appSchema.listRoles(app)) {
 			if (builtinKeys.has(row.role_key)) {
 				continue // a built-in shadows any same-key DB row in the grantable list
 			}
@@ -613,7 +613,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 		return error(400, parsed.message)
 	}
 	const { schema } = parsed
-	await c.services.db.reconcileAppSchema({
+	await c.services.repositories.appSchema.reconcileAppSchema({
 		app,
 		scopes: schema.scopes.map((s) => ({ scopeType: s.type, label: s.label ?? null })),
 		actions: schema.actions.map((a) => ({ action: a.action, description: a.description ?? null })),
@@ -639,9 +639,9 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 
 /** Read the app's scopes, actions, and origin='app' roles into a DTO (no auth gate). */
 async function readAppSchemaDto(c: AdminContext, app: string): Promise<AppSchemaDto> {
-	const scopeRows = await c.services.db.listAppScopes(app)
-	const actionRows = await c.services.db.listAppActions(app)
-	const roleRows = await c.services.db.listRolesByOrigin(app, 'app')
+	const scopeRows = await c.services.repositories.appSchema.listAppScopes(app)
+	const actionRows = await c.services.repositories.appSchema.listAppActions(app)
+	const roleRows = await c.services.repositories.appSchema.listRolesByOrigin(app, 'app')
 	const roles: Record<string, RoleDef> = {}
 	for (const row of roleRows) {
 		roles[row.role_key] = dbRoleToDef(row)
@@ -680,7 +680,7 @@ export async function listPolicies(c: AdminContext, app: string): Promise<Respon
 	if (!(await knownApps(c)).includes(app)) {
 		return error(404, 'unknown app')
 	}
-	const rows = await c.services.db.listRolesByOrigin(app, 'custom')
+	const rows = await c.services.repositories.appSchema.listRolesByOrigin(app, 'custom')
 	return json({ items: rows.map(toPolicyDto) } satisfies { items: PolicyDto[] })
 }
 
@@ -710,7 +710,7 @@ async function parsePolicyBody(
 	if (key !== undefined && Object.hasOwn(BUILTIN_ROLES, key)) {
 		return { ok: false, message: `'${key}' is a reserved built-in role key` }
 	}
-	const catalog = await c.services.db.listActionCatalog(app)
+	const catalog = await c.services.repositories.appSchema.listActionCatalog(app)
 	for (const pattern of permissions) {
 		if (!isActionAllowed(pattern, catalog)) {
 			return { ok: false, message: `unknown action pattern: ${pattern}` }
@@ -734,11 +734,11 @@ export async function createPolicy(c: AdminContext, app: string): Promise<Respon
 	if (key === undefined) {
 		return error(400, 'key required')
 	}
-	const existing = await c.services.db.getRole(app, key)
+	const existing = await c.services.repositories.appSchema.getRole(app, key)
 	if (existing) {
 		return error(409, `a role with key '${key}' already exists`)
 	}
-	const row = await c.services.db.upsertRole({
+	const row = await c.services.repositories.appSchema.upsertRole({
 		app,
 		roleKey: key,
 		name: parsed.name,
@@ -760,7 +760,7 @@ export async function updatePolicy(c: AdminContext, app: string, key: string): P
 	if (!(await knownApps(c)).includes(app)) {
 		return error(404, 'unknown app')
 	}
-	const existing = await c.services.db.getRole(app, key)
+	const existing = await c.services.repositories.appSchema.getRole(app, key)
 	if (!existing || existing.origin !== 'custom') {
 		return error(404, 'custom policy not found')
 	}
@@ -769,7 +769,7 @@ export async function updatePolicy(c: AdminContext, app: string, key: string): P
 	if (!parsed.ok) {
 		return error(400, parsed.message)
 	}
-	const row = await c.services.db.upsertRole({
+	const row = await c.services.repositories.appSchema.upsertRole({
 		app,
 		roleKey: key,
 		name: parsed.name,
@@ -791,11 +791,11 @@ export async function deletePolicy(c: AdminContext, app: string, key: string): P
 	if (!(await knownApps(c)).includes(app)) {
 		return error(404, 'unknown app')
 	}
-	const existing = await c.services.db.getRole(app, key)
+	const existing = await c.services.repositories.appSchema.getRole(app, key)
 	if (!existing || existing.origin !== 'custom') {
 		return error(404, 'custom policy not found')
 	}
-	await c.services.db.deleteRole(app, key)
+	await c.services.repositories.appSchema.deleteRole(app, key)
 	await adminAudit(c, {
 		action: 'iam.policy.delete',
 		resourceType: 'policy',
@@ -808,11 +808,11 @@ export async function deletePolicy(c: AdminContext, app: string, key: string): P
 // ── API keys (native service credentials) ─────────────────────────────────────
 
 export async function listApiKeys(c: AdminContext): Promise<Response> {
-	const principals = await c.services.db.listPrincipals({ type: 'service' })
+	const principals = await c.services.repositories.principals.listPrincipals({ type: 'service' })
 	const cache = new RoleKnownCache(c.services)
 	const items: ApiKeyDto[] = []
 	for (const principal of principals) {
-		const grants = await c.services.db.listGrants(principal.id)
+		const grants = await c.services.repositories.grants.listGrants(principal.id)
 		const grantDtos: GrantDto[] = []
 		for (const g of grants) {
 			grantDtos.push(await toGrantDto(g, cache))
@@ -865,8 +865,8 @@ export async function provisionApiKey(c: AdminContext): Promise<Response> {
 
 	// Create the native service principal (external_id NULL — resolved by its `px_` key, not by a
 	// CF client_id) + its grant, then mint the bound credential. Shown once.
-	const principal = await c.services.db.createService(label)
-	const grant = await c.services.db.createGrant({
+	const principal = await c.services.repositories.principals.createService(label)
+	const grant = await c.services.repositories.grants.createGrant({
 		principalId: principal.id,
 		app,
 		roleKey: roleOrInline.roleKey,
@@ -877,7 +877,7 @@ export async function provisionApiKey(c: AdminContext): Promise<Response> {
 		expiresAt,
 	})
 	const apiKey = `${API_KEY_PREFIX}${generateToken()}`
-	await c.services.db.createCredential({
+	await c.services.repositories.credentials.createCredential({
 		tokenHash: await hashToken(apiKey),
 		label,
 		principalId: principal.id,
@@ -915,14 +915,14 @@ export async function provisionApiKey(c: AdminContext): Promise<Response> {
  * effective at once — `mintFromKey` re-resolves the credential on every mint.
  */
 export async function revokeApiKey(c: AdminContext, principalId: string): Promise<Response> {
-	const principal = await c.services.db.getPrincipalById(principalId)
+	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
 	if (!principal || principal.type !== 'service') {
 		return error(404, 'service principal not found')
 	}
 
-	await c.services.db.deleteGrantsForPrincipal(principalId)
-	await c.services.db.disablePrincipal(principalId)
-	await c.services.db.revokeCredentialsForPrincipal(principalId)
+	await c.services.repositories.grants.deleteGrantsForPrincipal(principalId)
+	await c.services.repositories.principals.disablePrincipal(principalId)
+	await c.services.repositories.credentials.revokeCredentialsForPrincipal(principalId)
 	await adminAudit(c, {
 		action: 'iam.apikey.revoke',
 		resourceType: 'principal',
@@ -937,13 +937,13 @@ export async function revokeApiKey(c: AdminContext, principalId: string): Promis
  * credentials and mint a fresh one, returned ONCE. Effective immediately.
  */
 export async function rotateApiKey(c: AdminContext, principalId: string): Promise<Response> {
-	const principal = await c.services.db.getPrincipalById(principalId)
+	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
 	if (!principal || principal.type !== 'service') {
 		return error(404, 'service principal not found')
 	}
-	await c.services.db.revokeCredentialsForPrincipal(principalId)
+	await c.services.repositories.credentials.revokeCredentialsForPrincipal(principalId)
 	const apiKey = `${API_KEY_PREFIX}${generateToken()}`
-	await c.services.db.createCredential({
+	await c.services.repositories.credentials.createCredential({
 		tokenHash: await hashToken(apiKey),
 		label: principal.label,
 		principalId,
@@ -963,10 +963,10 @@ export async function rotateApiKey(c: AdminContext, principalId: string): Promis
 // ── Share links (anonymous credentials) ─────────────────────────────────────────
 
 export async function listShareLinks(c: AdminContext): Promise<Response> {
-	const creds = await c.services.db.listAnonymousCredentials()
+	const creds = await c.services.repositories.credentials.listAnonymousCredentials()
 	const items: ShareLinkListItem[] = []
 	for (const cred of creds) {
-		const grants = await c.services.db.getCredentialGrants(cred.id)
+		const grants = await c.services.repositories.credentials.getCredentialGrants(cred.id)
 		items.push(toShareLinkListItem(cred, grants))
 	}
 	return json({ items } satisfies { items: ShareLinkListItem[] })
@@ -1043,11 +1043,11 @@ function parseShareLinkGrants(value: unknown): KeyGrant[] | undefined {
 export async function revokeShareLink(c: AdminContext, id: string): Promise<Response> {
 	// Only anonymous credentials are share links; a principal-bound key is managed on the api-keys
 	// page, so it reads as not-found here.
-	const cred = await c.services.db.getCredentialById(id)
+	const cred = await c.services.repositories.credentials.getCredentialById(id)
 	if (!cred || cred.principal_id !== null) {
 		return error(404, 'share link not found')
 	}
-	await c.services.db.revokeCredential(id)
+	await c.services.repositories.credentials.revokeCredential(id)
 	await adminAudit(c, {
 		action: 'iam.credential.revoke',
 		resourceType: 'credential',
@@ -1077,7 +1077,7 @@ function parseLimit(url: URL): number {
 export async function listAudit(c: AdminContext): Promise<Response> {
 	const p = c.url.searchParams
 	const limit = parseLimit(c.url)
-	const rows = await c.services.db.listAuditEvents({
+	const rows = await c.services.repositories.audit.listAuditEvents({
 		...(p.get('resourceType') ? { resourceType: p.get('resourceType')! } : {}),
 		...(p.get('resourceId') ? { resourceId: p.get('resourceId')! } : {}),
 		...(p.get('principalId') ? { principalId: p.get('principalId')! } : {}),
@@ -1099,7 +1099,7 @@ export async function listAuthLog(c: AdminContext): Promise<Response> {
 	const decision = decisionParam === 'allow' || decisionParam === 'deny' ? decisionParam : undefined
 	const beforeRaw = p.get('before')
 	const before = beforeRaw ? Number.parseInt(beforeRaw, 10) : undefined
-	const rows = await c.services.db.listAuthLog({
+	const rows = await c.services.repositories.audit.listAuthLog({
 		...(p.get('principalId') ? { principalId: p.get('principalId')! } : {}),
 		...(p.get('requestId') ? { requestId: p.get('requestId')! } : {}),
 		...(decision ? { decision } : {}),

@@ -28,7 +28,7 @@ describe('Db.getPrincipalsForApp', () => {
 		const service = seedService(h.sqlite, { commonName: 'ci-bot' })
 		seedInlineGrant(h.sqlite, service, ['report.write'], null, 'poplach')
 
-		return h.db.getPrincipalsForApp('poplach').then((rows) => {
+		return h.repositories.principals.getPrincipalsForApp('poplach').then((rows) => {
 			const ids = rows.map((r) => r.id)
 			expect(new Set(ids)).toEqual(new Set([inPoplach, crossApp, disabled, multiGrant]))
 			expect(ids).not.toContain(inOpice) // other app's user excluded
@@ -45,7 +45,7 @@ describe('Db.getPrincipalsForApp', () => {
 		const opiceOnly = seedUser(h.sqlite, { sub: 'c', email: 'c@opice.test' })
 		seedInlineGrant(h.sqlite, opiceOnly, ['project.read'], null, 'opice')
 
-		expect((await h.db.getPrincipalsForApp('whatever')).map((r) => r.id)).toEqual([crossApp])
+		expect((await h.repositories.principals.getPrincipalsForApp('whatever')).map((r) => r.id)).toEqual([crossApp])
 	})
 
 	test('expired grants do not make a user a member', async () => {
@@ -56,7 +56,7 @@ describe('Db.getPrincipalsForApp', () => {
 			'INSERT INTO grants (id, principal_id, permissions, app, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
 			['g-exp', expired, JSON.stringify(['project.read']), 'poplach', 1, Math.floor(Date.now() / 1000)],
 		)
-		expect(await h.db.getPrincipalsForApp('poplach')).toEqual([])
+		expect(await h.repositories.principals.getPrincipalsForApp('poplach')).toEqual([])
 	})
 
 	test('the roster is app-scoped — a poplach read never includes an opice-only user', async () => {
@@ -68,7 +68,7 @@ describe('Db.getPrincipalsForApp', () => {
 		const opicePerson = seedUser(h.sqlite, { sub: 'o-sub', email: 'someone@opice.test' })
 		seedInlineGrant(h.sqlite, opicePerson, ['project.read'], null, 'opice')
 
-		const emails = (await h.db.getPrincipalsForApp('poplach')).map((r) => r.email)
+		const emails = (await h.repositories.principals.getPrincipalsForApp('poplach')).map((r) => r.email)
 		expect(new Set(emails)).toEqual(new Set(['op@poplach.test', 'teammate@poplach.test']))
 		expect(emails).not.toContain('someone@opice.test')
 	})
@@ -95,13 +95,13 @@ describe('Db.listPrincipals — q search', () => {
 		const bob = seedUser(h.sqlite, { sub: 'b', email: 'bob@firma.cz', label: 'Bob Dvořák' })
 
 		// Lowercase needle vs. capitalised label.
-		expect((await h.db.listPrincipals({ q: 'alice' })).map((r) => r.id)).toEqual([alice])
+		expect((await h.repositories.principals.listPrincipals({ q: 'alice' })).map((r) => r.id)).toEqual([alice])
 		// Uppercase needle vs. lowercase label.
-		expect((await h.db.listPrincipals({ q: 'BOB' })).map((r) => r.id)).toEqual([bob])
+		expect((await h.repositories.principals.listPrincipals({ q: 'BOB' })).map((r) => r.id)).toEqual([bob])
 		// The email column is normalised too, not just the label.
-		expect((await h.db.listPrincipals({ q: 'alice@firma' })).map((r) => r.id)).toEqual([alice])
+		expect((await h.repositories.principals.listPrincipals({ q: 'alice@firma' })).map((r) => r.id)).toEqual([alice])
 		// A needle matching neither still matches nothing.
-		expect(await h.db.listPrincipals({ q: 'carol' })).toEqual([])
+		expect(await h.repositories.principals.listPrincipals({ q: 'carol' })).toEqual([])
 	})
 
 	test('q composes with the type filter, and services (email NULL) are searchable by label', async () => {
@@ -110,8 +110,8 @@ describe('Db.listPrincipals — q search', () => {
 		const user = seedUser(h.sqlite, { sub: 'r', email: 'reporter@firma.cz', label: 'Reports Person' })
 		const service = seedService(h.sqlite, { commonName: 'ci', label: 'Reports Exporter' })
 
-		expect(new Set((await h.db.listPrincipals({ q: 'reports' })).map((r) => r.id))).toEqual(new Set([user, service]))
-		expect((await h.db.listPrincipals({ type: 'service', q: 'REPORTS' })).map((r) => r.id)).toEqual([service])
+		expect(new Set((await h.repositories.principals.listPrincipals({ q: 'reports' })).map((r) => r.id))).toEqual(new Set([user, service]))
+		expect((await h.repositories.principals.listPrincipals({ type: 'service', q: 'REPORTS' })).map((r) => r.id)).toEqual([service])
 	})
 })
 
@@ -129,6 +129,6 @@ describe('Db.listPrincipals — ordering', () => {
 		const seeded = new Set([first, second, third])
 		const expected = [first, second, third].sort((a, b) => (a < b ? 1 : -1))
 		// Filtered because migration 0008 seeds `provisioning-admin`, which is older than these.
-		expect((await h.db.listPrincipals({})).map((r) => r.id).filter((id) => seeded.has(id))).toEqual(expected)
+		expect((await h.repositories.principals.listPrincipals({})).map((r) => r.id).filter((id) => seeded.has(id))).toEqual(expected)
 	})
 })

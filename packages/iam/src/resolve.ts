@@ -1,5 +1,5 @@
 import type { PermissionEntry, PermissionSource, RoleDef, RoleSource, Scope } from '@fabrika/auth-core'
-import type { Db, GrantRow, PrincipalRow, RoleRow } from './db'
+import type { GrantRow, IamRepositories, PrincipalRow, RoleRow } from './db'
 import { parseJsonOrNull } from './json'
 import { makeRoleSource } from './roles'
 
@@ -107,9 +107,8 @@ export type ResolveUserResult =
 	| { ok: false; reason: 'disabled' | 'unknown_principal' }
 
 /**
- * The narrow slice of `Db` that user-principal resolution needs. Declaring it here
- * (rather than taking the whole `Db`) keeps the 3-step flow unit-testable with an
- * in-memory store, no `as` cast required. `Db` structurally satisfies it.
+ * The narrow principal capability that user resolution needs. Keeping the contract local makes the
+ * 3-step flow unit-testable with an in-memory store. `PrincipalRepository` satisfies it structurally.
  */
 export interface UserPrincipalStore {
 	getUserByExternalId(sub: string): Promise<PrincipalRow | null>
@@ -209,10 +208,10 @@ export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, 
  * up front, so `computePermissions` stays pure: its parsed permission arrays are
  * cached in the returned `RoleSource`'s map and never re-read from D1.
  */
-async function loadRoleSource(db: Db, app: string | null): Promise<RoleSource> {
+async function loadRoleSource(repositories: IamRepositories, app: string | null): Promise<RoleSource> {
 	const appRoles: Record<string, RoleDef> = {}
 	if (app !== null) {
-		for (const row of await db.listRoles(app)) {
+		for (const row of await repositories.appSchema.listRoles(app)) {
 			appRoles[row.role_key] = toRoleDef(row)
 		}
 	}
@@ -234,18 +233,18 @@ function toRoleDef(row: RoleRow): RoleDef {
  * propustka's own OIDC session — there are no IdP groups in the permission decision.
  */
 export async function resolveUserPermissions(args: {
-	db: Db
+	repositories: IamRepositories
 	principal: PrincipalRow
 	bootstrapAdmins: ReadonlySet<string>
 	/** Calling app; grants are filtered to it (or NULL = cross-app). */
 	app: string | null
 }): Promise<PermissionEntry[]> {
-	const { db, principal, bootstrapAdmins, app } = args
+	const { repositories, principal, bootstrapAdmins, app } = args
 
-	const grants = await db.getActiveGrantsForApp(principal.id, app)
+	const grants = await repositories.grants.getActiveGrantsForApp(principal.id, app)
 	const isBootstrapAdmin = principal.email !== null && bootstrapAdmins.has(principal.email)
 
-	const roles = await loadRoleSource(db, app)
+	const roles = await loadRoleSource(repositories, app)
 	return computePermissions({ app, grants, isBootstrapAdmin }, roles)
 }
 
@@ -253,8 +252,12 @@ export async function resolveUserPermissions(args: {
  * Service principals: explicit grants only — no bootstrap — scoped to the calling app
  * (NULL = cross-app).
  */
-export async function resolveServicePermissions(db: Db, principal: PrincipalRow, app: string | null): Promise<PermissionEntry[]> {
-	const grants = await db.getActiveGrantsForApp(principal.id, app)
-	const roles = await loadRoleSource(db, app)
+export async function resolveServicePermissions(
+	repositories: IamRepositories,
+	principal: PrincipalRow,
+	app: string | null,
+): Promise<PermissionEntry[]> {
+	const grants = await repositories.grants.getActiveGrantsForApp(principal.id, app)
+	const roles = await loadRoleSource(repositories, app)
 	return computePermissions({ app, grants, isBootstrapAdmin: false }, roles)
 }

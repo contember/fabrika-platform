@@ -1,12 +1,10 @@
-// All database access for the fabrika control plane. Prepared statements via `db.prepare(...).bind(...)`,
-// grouped by the resource they touch: apps, app_envs, app_secrets, runs. Mirrors propustka's `Db`
-// pattern (snake_case row shapes matching migrations/0001_init.sql, `firstRow` for RETURNING
-// statements). Caller-generated UUIDv7 ids AND timestamps are stamped in the Worker, never by SQL —
-// `unixepoch()` is SQLite-only, so every `*_at` this class writes is bound from the injected clock.
+// Control-plane persistence capabilities. Portable operations use prepared statements via
+// `db.prepare(...).bind(...)`; composition roots may replace one complete capability when a database
+// needs a different operation shape. Row shapes mirror migrations/0001_init.sql. Caller-generated
+// UUIDv7 ids and timestamps are bound by the runtime, never generated in SQL.
 //
 // The handle is the `SqlDatabase` PORT, not `D1Database` — a real D1 binding satisfies it structurally
-// (the port's shape is D1's, deliberately), so this is the same code against either backend. The cost
-// lands on the SQL: every statement here must stay inside the SQLite ∩ Postgres common subset.
+// because the port deliberately has D1's shape.
 //
 // fabrika is single-account (see migrations/0003): the CF account/token + propustka coords are fabrika's
 // OWN Worker config (src/env.ts), not a per-account registry table, so there is no `accounts` access here.
@@ -180,14 +178,14 @@ async function firstRow<T>(statement: SqlStatement): Promise<T> {
 	return row
 }
 
-/** All database access for the control plane. */
-export class Db {
+/** Portable registry persistence; a composition root may replace this complete capability. */
+export class ControlRegistryRepository {
 	/**
 	 * `now` is injectable so caller-stamped timestamps are deterministic in tests (same approach as
 	 * `SqlDeployLocks`); production passes the real clock. It returns unix SECONDS — the unit every
 	 * `*_at` column in this schema uses.
 	 */
-	constructor(private readonly d1: SqlDatabase, private readonly now: () => number = () => Math.floor(Date.now() / 1000)) {}
+	constructor(protected readonly d1: SqlDatabase, protected readonly now: () => number = () => Math.floor(Date.now() / 1000)) {}
 
 	// ── Apps ────────────────────────────────────────────────────────────────────
 
@@ -599,27 +597,6 @@ export class Db {
 		}
 	}
 
-	/** Persist a provider-owned operation id as soon as asynchronous work is accepted. */
-	async setRunExternalId(id: string, externalRunId: string): Promise<boolean> {
-		const result = await this.d1
-			.prepare(`UPDATE runs SET external_run_id = ? WHERE id = ? AND status = 'running'`)
-			.bind(externalRunId, id)
-			.run()
-		return (result.meta.changes ?? 0) > 0
-	}
-
-	/** Pending/running runs whose work is owned by a provider and must survive process restarts. */
-	async listInFlightRuns(provider: string): Promise<RunRow[]> {
-		const { results } = await this.d1
-			.prepare(`SELECT r.* FROM runs r
-				JOIN app_envs e ON e.app_id = r.app_id AND e.env = r.env
-				WHERE e.provider = ? AND r.status IN ('pending', 'running')
-				ORDER BY r.id`)
-			.bind(provider)
-			.all<RunRow>()
-		return results
-	}
-
 	async deleteAppEnv(appId: string, env: string): Promise<boolean> {
 		const result = await this.d1.prepare('DELETE FROM app_envs WHERE app_id = ? AND env = ?').bind(appId, env).run()
 		return (result.meta.changes ?? 0) > 0
@@ -762,8 +739,12 @@ export class Db {
 			return value !== null
 		}
 	}
+}
 
-	// ── Runs ────────────────────────────────────────────────────────────────────
+// ── Runs ─────────────────────────────────────────────────────────────────────
+
+export class RunRepository {
+	constructor(protected readonly d1: SqlDatabase, protected readonly now: () => number = () => Math.floor(Date.now() / 1000)) {}
 
 	/** Create a run row in `pending`, ready to be enqueued. Returns the inserted row. */
 	async createRun(input: {
@@ -784,6 +765,27 @@ export class Db {
 
 	async getRun(id: string): Promise<RunRow | null> {
 		return this.d1.prepare('SELECT * FROM runs WHERE id = ?').bind(id).first<RunRow>()
+	}
+
+	/** Persist a provider-owned operation id as soon as asynchronous work is accepted. */
+	async setRunExternalId(id: string, externalRunId: string): Promise<boolean> {
+		const result = await this.d1
+			.prepare(`UPDATE runs SET external_run_id = ? WHERE id = ? AND status = 'running'`)
+			.bind(externalRunId, id)
+			.run()
+		return (result.meta.changes ?? 0) > 0
+	}
+
+	/** Pending/running runs whose work is owned by a provider and must survive process restarts. */
+	async listInFlightRuns(provider: string): Promise<RunRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT r.* FROM runs r
+				JOIN app_envs e ON e.app_id = r.app_id AND e.env = r.env
+				WHERE e.provider = ? AND r.status IN ('pending', 'running')
+				ORDER BY r.id`)
+			.bind(provider)
+			.all<RunRow>()
+		return results
 	}
 
 	/**
@@ -870,8 +872,12 @@ export class Db {
 			.run()
 		return result.meta.changes ?? 0
 	}
+}
 
-	// ── Repo polling (public repos: no GitHub App install → pulled, not pushed) ──
+// ── Repo polling (public repos: no GitHub App install → pulled, not pushed) ───
+
+export class RepoPollingRepository {
+	constructor(protected readonly d1: SqlDatabase) {}
 
 	/**
 	 * The (app, env) pairs eligible for poll-based triggering: a PUBLIC app (no GitHub App install, so
@@ -951,6 +957,30 @@ export class Db {
 					input.lastError ?? null,
 				),
 		)
+	}
+}
+
+/** Control-plane persistence capabilities selected together by a runtime composition root. */
+export interface ControlRepositories {
+	registry: ControlRegistryRepository
+	runs: RunRepository
+	polling: RepoPollingRepository
+}
+
+/** The portable repository bundle. A composition root may replace one complete capability. */
+export function createControlRepositories(
+	db: SqlDatabase,
+	options: {
+		now?: () => number
+		replacements?: Partial<ControlRepositories>
+	} = {},
+): ControlRepositories {
+	const now = options.now ?? (() => Math.floor(Date.now() / 1000))
+	const replacements = options.replacements ?? {}
+	return {
+		registry: replacements.registry ?? new ControlRegistryRepository(db, now),
+		runs: replacements.runs ?? new RunRepository(db, now),
+		polling: replacements.polling ?? new RepoPollingRepository(db),
 	}
 }
 

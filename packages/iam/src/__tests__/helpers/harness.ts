@@ -1,6 +1,6 @@
 import type { SqlDatabase, SqlQueryResult, SqlRunResult, SqlStatement } from '@fabrika/platform'
 import { Database, type SQLQueryBindings } from 'bun:sqlite'
-import { Db } from '../../db'
+import { createIamRepositories, type IamRepositories } from '../../db'
 import { OidcClient, type OidcMetadata } from '../../oidc'
 import { hashToken } from '../../secret'
 import type { Config, Services } from '../../services'
@@ -9,8 +9,8 @@ import { allMigrations } from './migrations'
 /**
  * Shared test harness for the worker's auth/admin flows. Stands up:
  *   - a real in-memory `bun:sqlite` DB with the production migration applied,
- *     wrapped in a small `SqlDatabase` adapter so `new Db(...)` runs against it
- *     through the same port it reaches D1 by (mirrors the schema.test.ts pattern);
+ *     wrapped in a small `SqlDatabase` adapter so the repository capabilities run
+ *     through the same port they use for D1 (mirrors the schema.test.ts pattern);
  *   - `signSession`, minting a real `px_session` SSO session for a seeded principal;
  *   - `makeServices({ environment, human, bootstrapAdmins, oidc })` assembling a
  *     plain native `Services`.
@@ -27,7 +27,7 @@ export const HARNESS_OIDC_METADATA: OidcMetadata = {
 }
 
 // ── `SqlDatabase` adapter over bun:sqlite ─────────────────────────────────────
-// `Db` talks to the async SQL port (`prepare().bind().first()/.all()/.run()` and `batch()`) — the
+// Repositories use the async SQL port (`prepare().bind().first()/.all()/.run()` and `batch()`) — the
 // same surface a real `D1Database` satisfies structurally. bun:sqlite is synchronous, so we wrap
 // it. Implementing the PORT (not D1) is deliberate: the tests then exercise exactly what a future
 // Postgres driver has to provide, and nothing more. Typed end-to-end (the bun `Statement<ReturnType>`
@@ -107,8 +107,8 @@ const migration = allMigrations()
 export interface Harness {
 	/** Raw sqlite connection — seed rows directly with `.run(...)`. */
 	sqlite: Database
-	/** The production `Db` over the in-memory sqlite, via the `SqlDatabase` adapter. */
-	db: Db
+	/** Production persistence capabilities over the in-memory sqlite. */
+	repositories: IamRepositories
 	/**
 	 * Create an active SSO session for a principal and return the plaintext `px_session` cookie value
 	 * (the native admin/auth credential). Mirrors what `/auth/callback` does after a successful login.
@@ -147,7 +147,7 @@ export function createHarness(): Harness {
 	const sqlite = new Database(':memory:')
 	sqlite.exec('PRAGMA foreign_keys = ON')
 	sqlite.exec(migration)
-	const db = new Db(new TestSqlDatabase(sqlite))
+	const repositories = createIamRepositories(new TestSqlDatabase(sqlite))
 
 	function makeServices(options: MakeServicesOptions = {}): Services {
 		const issuer = options.issuer ?? 'http://localhost:18191'
@@ -162,7 +162,7 @@ export function createHarness(): Harness {
 			sessionCookieDomain: options.sessionCookieDomain ?? '',
 		}
 		return {
-			db,
+			repositories,
 			oidc: options.oidc ?? new OidcClient(
 				{
 					issuer: 'https://idp.test',
@@ -180,7 +180,7 @@ export function createHarness(): Harness {
 
 	async function signSession(principalId: string, options: SignSessionOptions = {}): Promise<string> {
 		const token = nextId('sess')
-		await db.createSession({
+		await repositories.sessions.createSession({
 			tokenHash: await hashToken(token),
 			principalId,
 			idpSub: options.idpSub ?? `idp-${principalId}`,
@@ -190,7 +190,7 @@ export function createHarness(): Harness {
 		return token
 	}
 
-	return { sqlite, db, signSession, makeServices }
+	return { sqlite, repositories, signSession, makeServices }
 }
 
 // ── Seeding helpers (direct INSERTs against the real schema) ──────────────────

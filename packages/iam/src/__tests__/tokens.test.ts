@@ -15,7 +15,13 @@ async function setup(action = 'project.read', app = 'example-app') {
 	const principalId = seedUser(h.sqlite, { sub: 'g-1', email: 'a@b.cz' })
 	seedInlineGrant(h.sqlite, principalId, [action], null, app)
 	const sessionToken = 'sess-cookie-value'
-	await h.db.createSession({ tokenHash: await hashToken(sessionToken), principalId, idpSub: 'g-1', email: 'a@b.cz', expiresAt: FUTURE })
+	await h.repositories.sessions.createSession({
+		tokenHash: await hashToken(sessionToken),
+		principalId,
+		idpSub: 'g-1',
+		email: 'a@b.cz',
+		expiresAt: FUTURE,
+	})
 	return { h, principalId, sessionToken }
 }
 
@@ -78,7 +84,7 @@ describe('mintToken', () => {
 		const h = createHarness()
 		const principalId = seedUser(h.sqlite, { sub: 'g-9', email: 'z@b.cz', disabled: true })
 		const sessionToken = 'disabled-sess'
-		await h.db.createSession({ tokenHash: await hashToken(sessionToken), principalId, idpSub: 'g-9', expiresAt: FUTURE })
+		await h.repositories.sessions.createSession({ tokenHash: await hashToken(sessionToken), principalId, idpSub: 'g-9', expiresAt: FUTURE })
 		const { result, principalId: loggedId } = await mintToken(h.makeServices(), ENV, { app: 'a', session: sessionToken, requestId: 'r' })
 		expect(result).toEqual({ ok: false, reason: 'disabled' })
 		expect(loggedId).toBe(principalId)

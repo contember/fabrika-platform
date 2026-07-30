@@ -189,7 +189,7 @@ export function parseVaultRef(ref: string): string | null {
 export class Vault {
 	/**
 	 * `now` is injectable so `rotated_at` is deterministic in tests (same approach as `SqlDeployLocks`
-	 * and `Db`); it returns unix SECONDS, the unit the `vault` table's timestamps use.
+	 * and the repository capabilities); it returns unix SECONDS, the unit the `vault` table's timestamps use.
 	 */
 	constructor(
 		private readonly d1: VaultD1,

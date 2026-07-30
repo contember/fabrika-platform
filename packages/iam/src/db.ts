@@ -192,13 +192,12 @@ function unixNow(): number {
 }
 
 /**
- * All database access, through the `SqlDatabase` port — never a cloud-specific handle. Prepared
- * statements via `db.prepare(...).bind(...)`. Grouped by the modules that need them: principals
- * (resolve/admin), grants, group mappings, credentials (API keys / share links), sessions, and
- * the two write-only audit tables.
+ * IAM persistence capabilities over the `SqlDatabase` port — never a cloud-specific handle.
+ * Portable operations use prepared statements via `db.prepare(...).bind(...)`; a runtime composition
+ * root may replace one complete capability when its operation shape must differ by dialect.
  */
-export class Db {
-	constructor(private readonly db: SqlDatabase) {}
+export class PrincipalRepository {
+	constructor(protected readonly db: SqlDatabase) {}
 
 	// ── Principals ──────────────────────────────────────────────────────────
 
@@ -357,8 +356,12 @@ export class Db {
 		const result = await this.db.prepare('DELETE FROM principals WHERE id = ?').bind(id).run()
 		return (result.meta.changes ?? 0) > 0
 	}
+}
 
-	// ── Grants ──────────────────────────────────────────────────────────────
+// ── Grants ──────────────────────────────────────────────────────────────────
+
+export class GrantRepository {
+	constructor(protected readonly db: SqlDatabase) {}
 
 	/** Active (non-expired) grants for a principal, ALL apps (admin/effective view). */
 	async getActiveGrants(principalId: string): Promise<GrantRow[]> {
@@ -444,8 +447,12 @@ export class Db {
 	async deleteGrantsForPrincipal(principalId: string): Promise<void> {
 		await this.db.prepare('DELETE FROM grants WHERE principal_id = ?').bind(principalId).run()
 	}
+}
 
-	// ── App registry ──────────────────────────────────────────────────────────
+// ── App registry + declared vocabulary ──────────────────────────────────────
+
+export class AppSchemaRepository {
+	constructor(protected readonly db: SqlDatabase) {}
 
 	/**
 	 * The set of app ids propustka knows about — the distinct `app` across the schema tables
@@ -634,8 +641,12 @@ export class Db {
 			.prepare(`DELETE FROM roles WHERE app = ? AND origin = 'app' AND role_key NOT IN (${placeholders})`)
 			.bind(app, ...keep)
 	}
+}
 
-	// ── Credentials (unified opaque API keys / share links) ───────────────────
+// ── Credentials (unified opaque API keys / share links) ─────────────────────
+
+export class CredentialRepository {
+	constructor(protected readonly db: SqlDatabase) {}
 
 	/**
 	 * Insert a credential + its inline grant rows (if any) in one batch. Only the hash is stored.
@@ -726,8 +737,12 @@ export class Db {
 			.run()
 		return result.meta.changes ?? 0
 	}
+}
 
-	// ── SSO sessions ──────────────────────────────────────────────────────────
+// ── SSO sessions ────────────────────────────────────────────────────────────
+
+export class SessionRepository {
+	constructor(protected readonly db: SqlDatabase) {}
 
 	/** Create a session. Only the hash of the opaque cookie value is stored; returns the new id. */
 	async createSession(input: {
@@ -785,8 +800,12 @@ export class Db {
 			.run()
 		return result.meta.changes ?? 0
 	}
+}
 
-	// ── Audit (append-only) ───────────────────────────────────────────────────
+// ── Audit ───────────────────────────────────────────────────────────────────
+
+export class AuditRepository {
+	constructor(protected readonly db: SqlDatabase) {}
 
 	/** Write a domain audit event. Diff/metadata stored verbatim (JSON-encoded). */
 	async writeAuditEvent(input: AuditEventInput): Promise<void> {
@@ -925,5 +944,27 @@ export class Db {
 			.bind(olderThanSeconds)
 			.run()
 		return result.meta.changes ?? 0
+	}
+}
+
+/** IAM persistence capabilities selected together by a runtime composition root. */
+export interface IamRepositories {
+	principals: PrincipalRepository
+	grants: GrantRepository
+	appSchema: AppSchemaRepository
+	credentials: CredentialRepository
+	sessions: SessionRepository
+	audit: AuditRepository
+}
+
+/** The portable repository bundle. A composition root may replace one complete capability. */
+export function createIamRepositories(db: SqlDatabase, replacements: Partial<IamRepositories> = {}): IamRepositories {
+	return {
+		principals: replacements.principals ?? new PrincipalRepository(db),
+		grants: replacements.grants ?? new GrantRepository(db),
+		appSchema: replacements.appSchema ?? new AppSchemaRepository(db),
+		credentials: replacements.credentials ?? new CredentialRepository(db),
+		sessions: replacements.sessions ?? new SessionRepository(db),
+		audit: replacements.audit ?? new AuditRepository(db),
 	}
 }

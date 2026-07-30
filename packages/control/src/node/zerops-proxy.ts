@@ -8,7 +8,7 @@ import {
 	zeropsArtifactCodec,
 } from '@fabrika/provider-zerops'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifest } from '@fabrika/proxy-contract'
-import type { Db } from '../db'
+import type { ControlRegistryRepository } from '../db'
 import { parseProviderEnvelope } from '../run-lifecycle'
 
 const POLL_INTERVAL_MS = 3000
@@ -24,7 +24,7 @@ const decodeEnvelope = <T>(kind: string, envelope: ProviderEnvelope, codec: Prov
 }
 
 /** Compile every public app assigned to one deployment namespace into its strict proxy manifest. */
-export async function compileNamespaceProxyManifest(db: Db, namespaceId: string): Promise<ProxyManifest> {
+export async function compileNamespaceProxyManifest(db: ControlRegistryRepository, namespaceId: string): Promise<ProxyManifest> {
 	const rows = await db.listAppEnvsByNamespace(namespaceId)
 	const apps: ProxyManifest['apps'] = []
 	const ids = new Set<string>()
@@ -61,7 +61,7 @@ export async function compileNamespaceProxyManifest(db: Db, namespaceId: string)
 }
 
 export interface SyncZeropsProxyInput {
-	db: Db
+	db: ControlRegistryRepository
 	api: ProxyApi
 	namespaceId: string
 	proxyServiceId: string

@@ -1,12 +1,12 @@
 // Shared test harness for the control-plane worker. Stands up a real in-memory `bun:sqlite` DB with
-// the production migrations applied, wrapped in a small D1-compatible adapter so `new Db(...)` runs
-// against it EXACTLY as it does over D1 (mirrors propustka's harness). Nothing here mocks the modules
-// under test — the SQL runs against the real schema.
+// the production migrations applied, wrapped in a small D1-compatible adapter so the repository
+// capabilities run exactly as they do over D1. Nothing here mocks the modules under test — the SQL
+// runs against the real schema.
 
 import { Database, type SQLQueryBindings } from 'bun:sqlite'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { Db } from '../../db'
+import { type ControlRepositories, createControlRepositories } from '../../db'
 
 // ── Cumulative migrations (every migrations/*.sql, filename order) ─────────────
 
@@ -137,23 +137,25 @@ const migration = allMigrations()
 export interface Harness {
 	/** Raw sqlite connection — seed rows / assert directly. */
 	sqlite: Database
-	/** The production `Db` over the in-memory sqlite, via the D1 adapter. */
-	db: Db
+	/** Production persistence capabilities over the in-memory sqlite. */
+	repositories: ControlRepositories
+	/** Short test-local alias for `repositories`. */
+	db: ControlRepositories
 	/** The D1-compatible handle over the SAME sqlite — pass to other D1 consumers (e.g. `Vault`). */
 	d1: D1Database
 }
 
 /**
- * Stand up a fresh in-memory DB + Db. Call once per test for isolation. `now` (unix SECONDS) overrides
- * `Db`'s clock so tests that assert on caller-stamped `*_at` columns are deterministic.
+ * Stand up a fresh in-memory database and repository bundle. Call once per test for isolation. `now`
+ * (unix SECONDS) overrides repository clocks so caller-stamped `*_at` assertions are deterministic.
  */
 export function createHarness(now?: () => number): Harness {
 	const sqlite = new Database(':memory:')
 	sqlite.exec('PRAGMA foreign_keys = ON')
 	sqlite.exec(migration)
 	const d1 = new TestD1Database(sqlite)
-	const db = new Db(d1, now)
-	return { sqlite, db, d1 }
+	const repositories = createControlRepositories(d1, { ...(now === undefined ? {} : { now }) })
+	return { sqlite, repositories, db: repositories, d1 }
 }
 
 /**

@@ -15,16 +15,16 @@
 // ref; deleting the row itself is the registry's job).
 
 import type { ControlProvider, ProviderManagedSecrets } from '@fabrika/provider-contract'
-import type { AppEnvRow, Db } from '../db'
+import type { AppEnvRow, ControlRepositories } from '../db'
 import { error, json, readJson } from '../http'
 import type { Authorized } from '../iam'
 import { stringField } from '../json'
 import { providerEnvironment } from '../run-lifecycle'
 import { parseVaultRef, type SecretScope, type Vault } from '../vault'
 
-/** Context the vault handlers receive — the Db, the (constructed) Vault, and the auditing caller. */
+/** Context the vault handlers receive — repositories, the constructed Vault, and the auditing caller. */
 export interface VaultContext {
-	db: Db
+	repositories: ControlRepositories
 	vault?: () => Promise<Vault>
 	provider: ControlProvider
 	request: Request
@@ -38,7 +38,7 @@ export interface VaultContext {
  * = the all-env layer; a string narrows it to that env. Replaces any prior vault entry for the layer.
  */
 export async function setAppSecretValue(c: VaultContext, appId: string, name: string): Promise<Response> {
-	if (!(await c.db.getApp(appId))) {
+	if (!(await c.repositories.registry.getApp(appId))) {
 		return error(404, 'app not found')
 	}
 	const body = await readJson(c.request)
@@ -51,20 +51,20 @@ export async function setAppSecretValue(c: VaultContext, appId: string, name: st
 	if (target instanceof Response) return target
 	if (target.kind === 'provider') {
 		const { valueRef: ref } = await target.secrets.put({
-			environment: await providerEnvironment(c.db, target.appEnv),
+			environment: await providerEnvironment(c.repositories.registry, target.appEnv),
 			name,
 			value,
 		})
-		await c.db.upsertAppSecret({ appId, env: target.appEnv.env, name, valueRef: ref })
+		await c.repositories.registry.upsertAppSecret({ appId, env: target.appEnv.env, name, valueRef: ref })
 		await audit(c, 'app.secret.set', appId, target.appEnv.env, name, ref)
 		return json({ ok: true, valueRef: ref })
 	}
 	const vault = await requireVault(c)
 	if (vault instanceof Response) return vault
 	const scope: SecretScope = env === null ? 'app' : 'app-env'
-	const prior = await findAppSecretRef(c.db, appId, env, name)
+	const prior = await findAppSecretRef(c.repositories, appId, env, name)
 	const ref = await vault.putSecret(scope, `${scope}:${appId}/${env ?? '*'}/${name}`, value)
-	await c.db.upsertAppSecret({ appId, env, name, valueRef: ref })
+	await c.repositories.registry.upsertAppSecret({ appId, env, name, valueRef: ref })
 	if (prior !== null) {
 		await deletePriorVaultEntry(vault, prior)
 	}
@@ -74,7 +74,7 @@ export async function setAppSecretValue(c: VaultContext, appId: string, name: st
 
 /** `PATCH /api/apps/:id/secrets/:name/value` — re-encrypt the secret VALUE in place (body `{ value, env? }`). */
 export async function rotateAppSecretValue(c: VaultContext, appId: string, name: string): Promise<Response> {
-	if (!(await c.db.getApp(appId))) {
+	if (!(await c.repositories.registry.getApp(appId))) {
 		return error(404, 'app not found')
 	}
 	const body = await readJson(c.request)
@@ -83,7 +83,7 @@ export async function rotateAppSecretValue(c: VaultContext, appId: string, name:
 		return error(400, 'value required')
 	}
 	const env = readEnv(c.url, body)
-	const ref = await findAppSecretRef(c.db, appId, env, name)
+	const ref = await findAppSecretRef(c.repositories, appId, env, name)
 	if (ref === null) {
 		return error(404, 'secret not found')
 	}
@@ -91,7 +91,7 @@ export async function rotateAppSecretValue(c: VaultContext, appId: string, name:
 	if (target instanceof Response) return target
 	if (target.kind === 'provider') {
 		await target.secrets.put({
-			environment: await providerEnvironment(c.db, target.appEnv),
+			environment: await providerEnvironment(c.repositories.registry, target.appEnv),
 			name,
 			value,
 		})
@@ -120,11 +120,11 @@ export async function rotateAppSecretValue(c: VaultContext, appId: string, name:
 
 /** `DELETE /api/apps/:id/secrets/:name/value?env=` — remove the vault entry (ref left dangling on the row). */
 export async function deleteAppSecretValue(c: VaultContext, appId: string, name: string): Promise<Response> {
-	if (!(await c.db.getApp(appId))) {
+	if (!(await c.repositories.registry.getApp(appId))) {
 		return error(404, 'app not found')
 	}
 	const env = readEnv(c.url, undefined)
-	const ref = await findAppSecretRef(c.db, appId, env, name)
+	const ref = await findAppSecretRef(c.repositories, appId, env, name)
 	if (ref === null) {
 		return error(404, 'secret not found')
 	}
@@ -132,7 +132,7 @@ export async function deleteAppSecretValue(c: VaultContext, appId: string, name:
 	if (target instanceof Response) return target
 	if (target.kind === 'provider') {
 		await target.secrets.delete({
-			environment: await providerEnvironment(c.db, target.appEnv),
+			environment: await providerEnvironment(c.repositories.registry, target.appEnv),
 			name,
 		})
 		await c.authorized.auth.audit({
@@ -168,8 +168,8 @@ function readEnv(url: URL, body: unknown): string | null {
 }
 
 /** The current `value_ref` for an (app, env, name) secret layer, or null when no such row exists. */
-async function findAppSecretRef(db: Db, appId: string, env: string | null, name: string): Promise<string | null> {
-	const rows = await db.listAppSecrets(appId)
+async function findAppSecretRef(repositories: ControlRepositories, appId: string, env: string | null, name: string): Promise<string | null> {
+	const rows = await repositories.registry.listAppSecrets(appId)
 	const match = rows.find((r) => r.name === name && r.env === env)
 	return match ? match.value_ref : null
 }
@@ -193,7 +193,7 @@ async function secretTarget(c: VaultContext, appId: string, env: string | null):
 	if (env === null) {
 		return error(400, 'provider-managed secret values require an explicit env')
 	}
-	const appEnv = await c.db.getAppEnv(appId, env)
+	const appEnv = await c.repositories.registry.getAppEnv(appId, env)
 	if (appEnv === null) {
 		return error(404, 'app env not found')
 	}

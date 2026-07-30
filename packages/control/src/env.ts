@@ -20,6 +20,7 @@
 
 import type { IamRpc } from '@fabrika/auth'
 import type { AssetServer, BlobStore, HttpService, JobQueue, SqlDatabase } from '@fabrika/platform'
+import type { ControlRepositories } from './db'
 import type { DeployJobMessage } from './run-lifecycle'
 
 export interface Env {
@@ -29,6 +30,8 @@ export interface Env {
 	 * `migrations-postgres/` (Postgres).
 	 */
 	DB: SqlDatabase
+	/** Persistence capabilities selected by this runtime's composition root. */
+	REPOSITORIES: ControlRepositories
 	/** Control-plane SPA static assets, served for non-`/api/*`, non-webhook paths. */
 	ASSETS: AssetServer
 	/** Run logs + terminal status, keyed by run id. */

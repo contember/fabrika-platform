@@ -3,11 +3,11 @@
 // verified push it maps repo+ref → (app, env) via the registry, creates a `pending` run, and enqueues
 // the deploy. A push that no env subscribes to is a 204 no-op (acknowledged, nothing deployed).
 //
-// Decoupled from the Worker (takes a Db + RepoSource + queue) so it's unit-testable with FakeRepoSource
+// Decoupled from the Worker (takes repositories + RepoSource + queue) so it's unit-testable with FakeRepoSource
 // and an in-memory queue — no GitHub, no Cloudflare.
 
 import type { JobQueue } from '@fabrika/platform'
-import { type Db } from './db'
+import type { ControlRepositories } from './db'
 import { uuidv7 } from './db'
 import { error, json } from './http'
 import { refMatches } from './ref-match'
@@ -15,7 +15,7 @@ import { normalizeRepoUrl, type RepoSource } from './repo-source'
 import type { DeployJobMessage } from './run-lifecycle'
 
 export interface WebhookDeps {
-	db: Db
+	repositories: ControlRepositories
 	repoSource: RepoSource
 	queue: JobQueue<DeployJobMessage>
 }
@@ -36,7 +36,7 @@ export async function handleWebhook(request: Request, deps: WebhookDeps): Promis
 	}
 
 	const normalized = normalizeRepoUrl(push.repoUrl)
-	const apps = await deps.db.getAppsByRepoUrl(normalized)
+	const apps = await deps.repositories.registry.getAppsByRepoUrl(normalized)
 	if (apps.length === 0) {
 		// No app registered for this repo — acknowledge so GitHub doesn't retry.
 		return new Response(null, { status: 204 })
@@ -47,12 +47,12 @@ export async function handleWebhook(request: Request, deps: WebhookDeps): Promis
 		// Match the pushed ref against every env's trigger_ref (exact or glob, e.g. `refs/tags/v*`). More
 		// than one env can subscribe (different patterns) — trigger each. The DEPLOYED ref is always the
 		// concrete pushed ref, never the pattern.
-		const envs = await deps.db.listTriggerEnvs(app.id)
+		const envs = await deps.repositories.registry.listTriggerEnvs(app.id)
 		for (const appEnv of envs) {
 			if (appEnv.trigger_ref === null || !refMatches(appEnv.trigger_ref, push.ref)) {
 				continue
 			}
-			const run = await deps.db.createRun({
+			const run = await deps.repositories.runs.createRun({
 				id: uuidv7(),
 				appId: app.id,
 				env: appEnv.env,

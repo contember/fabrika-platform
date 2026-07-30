@@ -8,7 +8,7 @@
 
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { ACTIONS } from '../actions'
-import type { Db, RunRow } from '../db'
+import type { ControlRepositories, RunRow } from '../db'
 import { error } from '../http'
 import { appScope, type Authenticator, authorize, envScope } from '../iam'
 import type { RepoSource } from '../repo-source'
@@ -42,7 +42,7 @@ import { deleteAppSecretValue, rotateAppSecretValue, setAppSecretValue, type Vau
  * route works without a vault configured.
  */
 export interface ApiDeps {
-	db: Db
+	repositories: ControlRepositories
 	/** The auth guard (the router only ever calls `authenticate`); `createIam` wraps the bootstrap-admin fallback in. */
 	iam: Authenticator
 	queue: DeployQueue
@@ -90,19 +90,19 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 		if (!authorized.ok) {
 			return authorized.response
 		}
-		return { db: deps.db, repoSource: deps.repoSource, provider: deps.provider, request, url, authorized }
+		return { repositories: deps.repositories, repoSource: deps.repoSource, provider: deps.provider, request, url, authorized }
 	}
 	const runsCtx = (authorized: Awaited<ReturnType<typeof authorize>>): RunsContext | Response => {
 		if (!authorized.ok) {
 			return authorized.response
 		}
-		return { db: deps.db, queue: deps.queue, logs: deps.logs, cancel: deps.cancelRun, request, url, authorized }
+		return { repositories: deps.repositories, queue: deps.queue, logs: deps.logs, cancel: deps.cancelRun, request, url, authorized }
 	}
 	const namespaceCtx = (authorized: Awaited<ReturnType<typeof authorize>>): NamespaceContext | Response => {
 		if (!authorized.ok) {
 			return authorized.response
 		}
-		return { db: deps.db, provider: deps.provider, request, authorized }
+		return { repositories: deps.repositories, provider: deps.provider, request, authorized }
 	}
 	// Build a vault context (constructs the Vault via the factory; a missing/invalid master key is a
 	// clean 500 here, isolated to vault routes). Returns the error/Response otherwise.
@@ -111,7 +111,7 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 			return authorized.response
 		}
 		return {
-			db: deps.db,
+			repositories: deps.repositories,
 			request,
 			url,
 			authorized,

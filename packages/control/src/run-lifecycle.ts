@@ -7,7 +7,7 @@ import type {
 	ProviderEnvironment,
 	ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
-import { type AppEnvRow, type AppRow, type Db, type DeploymentNamespaceRow, type RunRow } from './db'
+import { type AppEnvRow, type AppRow, type ControlRegistryRepository, type ControlRepositories, type DeploymentNamespaceRow, type RunRow } from './db'
 import type { SecretResolver } from './secret-resolver'
 
 export type RunOutcome = ProviderTerminalOutcome
@@ -20,7 +20,7 @@ export interface DeployLockGate {
 
 /** Everything the provider-neutral lifecycle needs. */
 export interface RunDeps {
-	db: Db
+	repositories: ControlRepositories
 	secrets: SecretResolver
 	provider: ControlProvider
 	lock: DeployLockGate
@@ -105,7 +105,7 @@ const storedProviderEnvironment = (
  * need the original coordinates while a namespace is degraded, so those callers omit that guard.
  */
 export const providerEnvironment = async (
-	db: Pick<Db, 'getDeploymentNamespace'>,
+	db: Pick<ControlRegistryRepository, 'getDeploymentNamespace'>,
 	row: AppEnvRow,
 	options: { requireReadyNamespace?: boolean } = {},
 ): Promise<ProviderEnvironment> => {
@@ -138,7 +138,7 @@ export const providerEnvironment = async (
 }
 
 const assertNamespaceResourceClaims = async (
-	db: Db,
+	db: ControlRegistryRepository,
 	provider: ControlProvider,
 	registration: { app: ProviderApp; environment: ProviderEnvironment },
 ): Promise<void> => {
@@ -170,7 +170,7 @@ const assertNamespaceResourceClaims = async (
 	}
 }
 
-const resolveVars = async (db: Db, appId: string, env: string): Promise<Record<string, string>> => {
+const resolveVars = async (db: ControlRegistryRepository, appId: string, env: string): Promise<Record<string, string>> => {
 	const vars: Record<string, string> = {}
 	for (const row of await db.getAppVarsForEnv(appId, env)) {
 		vars[row.name] = row.value
@@ -187,7 +187,7 @@ const resolveSecrets = async (
 		return {}
 	}
 	const secrets: Record<string, string> = {}
-	for (const row of await deps.db.getAppSecretsForEnv(appId, env)) {
+	for (const row of await deps.repositories.registry.getAppSecretsForEnv(appId, env)) {
 		secrets[row.name] = await deps.secrets.resolveSecret(row.value_ref)
 	}
 	return secrets
@@ -203,7 +203,7 @@ export async function executeDeploy(
 	deps: RunDeps,
 	message: DeployJobMessage,
 ): Promise<{ runId: string; status: 'running' | 'succeeded' | 'failed' | 'skipped' | 'deferred' }> {
-	const run = await deps.db.getRun(message.runId)
+	const run = await deps.repositories.runs.getRun(message.runId)
 	if (run === null) {
 		return { runId: message.runId, status: 'skipped' }
 	}
@@ -217,13 +217,13 @@ export async function executeDeploy(
 	}
 
 	try {
-		if (!(await deps.db.markRunStarted(run.id, logsKey(run.id)))) {
+		if (!(await deps.repositories.runs.markRunStarted(run.id, logsKey(run.id)))) {
 			return { runId: run.id, status: 'skipped' }
 		}
-		const app = await deps.db.getApp(run.app_id)
-		const appEnv = await deps.db.getAppEnv(run.app_id, run.env)
+		const app = await deps.repositories.registry.getApp(run.app_id)
+		const appEnv = await deps.repositories.registry.getAppEnv(run.app_id, run.env)
 		if (app === null || appEnv === null) {
-			await deps.db.markRunFinished(run.id, 'failed', null)
+			await deps.repositories.runs.markRunFinished(run.id, 'failed', null)
 			return { runId: run.id, status: 'failed' }
 		}
 		if (appEnv.provider !== deps.provider.id) {
@@ -232,7 +232,7 @@ export async function executeDeploy(
 			)
 		}
 		const appInput = providerApp(app, run)
-		const environmentInput = await providerEnvironment(deps.db, appEnv, { requireReadyNamespace: true })
+		const environmentInput = await providerEnvironment(deps.repositories.registry, appEnv, { requireReadyNamespace: true })
 		const registration = deps.provider.normalizeRegistration({
 			app: appInput,
 			environment: environmentInput,
@@ -250,28 +250,28 @@ export async function executeDeploy(
 		) {
 			throw new Error('provider returned a deploy registration for different coordinates')
 		}
-		await assertNamespaceResourceClaims(deps.db, deps.provider, registration)
+		await assertNamespaceResourceClaims(deps.repositories.registry, deps.provider, registration)
 
 		const outcome = await deps.provider.deploy({
 			runId: run.id,
 			app: registration.app,
 			environment: registration.environment,
 			secrets: await resolveSecrets(deps, app.id, appEnv.env),
-			vars: await resolveVars(deps.db, app.id, appEnv.env),
+			vars: await resolveVars(deps.repositories.registry, app.id, appEnv.env),
 			dryRun: message.dryRun === true,
 			signal: new AbortController().signal,
 			events: {
 				log: (line) => console.info(`deploy run ${run.id}: ${line}`),
 				externalId: async (externalId) => {
-					await deps.db.setRunExternalId(run.id, externalId)
+					await deps.repositories.runs.setRunExternalId(run.id, externalId)
 				},
 			},
 		})
-		await deps.db.markRunFinished(run.id, outcome.state, outcome.exitCode ?? null)
+		await deps.repositories.runs.markRunFinished(run.id, outcome.state, outcome.exitCode ?? null)
 		return { runId: run.id, status: outcome.state }
 	} catch (error) {
 		console.error(`deploy run ${run.id} failed:`, error instanceof Error ? error.message : 'unknown error')
-		await deps.db.markRunFinished(run.id, 'failed', null)
+		await deps.repositories.runs.markRunFinished(run.id, 'failed', null)
 		return { runId: run.id, status: 'failed' }
 	} finally {
 		await deps.lock.release(lockKey, run.id)
@@ -280,10 +280,10 @@ export async function executeDeploy(
 
 /** Cancel provider-owned work, mark the run failed, and release its deploy lock. */
 export async function cancelDeploy(
-	deps: Pick<RunDeps, 'db' | 'provider'> & { lock: Pick<DeployLockGate, 'release'> },
+	deps: Pick<RunDeps, 'repositories' | 'provider'> & { lock: Pick<DeployLockGate, 'release'> },
 	run: RunRow,
 ): Promise<void> {
-	const appEnv = await deps.db.getAppEnv(run.app_id, run.env)
+	const appEnv = await deps.repositories.registry.getAppEnv(run.app_id, run.env)
 	if (
 		appEnv !== null
 		&& appEnv.provider === deps.provider.id
@@ -293,14 +293,14 @@ export async function cancelDeploy(
 		await deps.provider.cancel({
 			runId: run.id,
 			externalId: run.external_run_id,
-			environment: await providerEnvironment(deps.db, appEnv),
+			environment: await providerEnvironment(deps.repositories.registry, appEnv),
 		})
 	}
-	await deps.db.markRunFinished(run.id, 'failed', null)
+	await deps.repositories.runs.markRunFinished(run.id, 'failed', null)
 	await deps.lock.release(`${run.app_id}:${run.env}`, run.id)
 }
 
 /** Map a pushed git ref to the app environment it triggers. */
-export async function refToEnv(db: Db, appId: string, ref: string): Promise<AppEnvRow | null> {
+export async function refToEnv(db: ControlRegistryRepository, appId: string, ref: string): Promise<AppEnvRow | null> {
 	return db.getAppEnvByTriggerRef(appId, ref)
 }

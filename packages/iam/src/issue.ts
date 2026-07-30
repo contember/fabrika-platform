@@ -74,8 +74,8 @@ export async function issueKey(
 		if (grants.length === 0 || findUncoveredGrant(issuer.permissions, grants) !== null) {
 			return { result: { ok: false, reason: 'not_allowed' } }
 		}
-		const principal = await services.db.createService(svc.label)
-		await services.db.createGrant({
+		const principal = await services.repositories.principals.createService(svc.label)
+		await services.repositories.grants.createGrant({
 			principalId: principal.id,
 			app,
 			permissions: svc.permissions,
@@ -85,7 +85,7 @@ export async function issueKey(
 			expiresAt: input.expiresAt ?? null,
 		})
 		const token = `${API_KEY_PREFIX}${generateToken()}`
-		const id = await services.db.createCredential({
+		const id = await services.repositories.credentials.createCredential({
 			tokenHash: await hashToken(token),
 			label: svc.label,
 			principalId: principal.id,
@@ -111,7 +111,7 @@ export async function issueKey(
 	}
 
 	const token = `${API_KEY_PREFIX}${generateToken()}`
-	const id = await services.db.createCredential({
+	const id = await services.repositories.credentials.createCredential({
 		tokenHash: await hashToken(token),
 		label: input.label ?? null,
 		principalId: input.principalId ?? null,
@@ -170,7 +170,7 @@ function credentialGrantToKeyGrant(row: CredentialGrantRow): KeyGrant {
  * second revoke returns `{ ok: true, revoked: false }`; an unknown id → `not_found`.
  */
 export async function revokeKey(services: Services, input: RevokeKeyInput, revoker: Issuer): Promise<RevokeKeyResult> {
-	const cred = await services.db.getCredentialById(input.id)
+	const cred = await services.repositories.credentials.getCredentialById(input.id)
 	if (!cred) {
 		return { ok: false, reason: 'not_found' }
 	}
@@ -178,11 +178,11 @@ export async function revokeKey(services: Services, input: RevokeKeyInput, revok
 		if (cred.principal_id !== null) {
 			return { ok: false, reason: 'not_allowed' }
 		}
-		const grants = (await services.db.getCredentialGrants(cred.id)).map(credentialGrantToKeyGrant)
+		const grants = (await services.repositories.credentials.getCredentialGrants(cred.id)).map(credentialGrantToKeyGrant)
 		if (findUncoveredGrant(revoker.permissions, grants) !== null) {
 			return { ok: false, reason: 'not_allowed' }
 		}
 	}
-	const revoked = await services.db.revokeCredential(cred.id)
+	const revoked = await services.repositories.credentials.revokeCredential(cred.id)
 	return { ok: true, revoked }
 }

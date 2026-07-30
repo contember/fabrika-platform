@@ -24,7 +24,7 @@ import { decodeDeployJobMessage, runDeployJob } from '../consumer'
 import type { Env } from '../env'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { handleFetch } from '../routes'
-import { db, DEPLOY_LOCK_TTL_MS, locks } from '../services'
+import { DEPLOY_LOCK_TTL_MS, locks, repositories } from '../services'
 import { createRuntime, type Runtime } from './runtime'
 
 /** Build the server's fetch handler for an assembled env. Exported so a test can drive it directly. */
@@ -99,7 +99,7 @@ async function main(): Promise<void> {
 	const runtime = createRuntime()
 	const consumer = createConsumer(runtime)
 	const reconciliation = await reconcileProviderRuns({
-		database: db(runtime.env),
+		repositories: repositories(runtime.env),
 		provider: runtime.provider,
 		releaseLock: (key, holder) => locks(runtime.env).release(key, holder),
 	})

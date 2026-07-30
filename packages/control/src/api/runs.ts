@@ -9,7 +9,7 @@
 import type { CursorList, RunDto, RunLogLine, RunLogResponse, RunTailResponse } from '@fabrika/control-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
 import { logsKey } from '@fabrika/runner-cloudflare'
-import type { Db, RunRow } from '../db'
+import type { ControlRepositories, RunRow } from '../db'
 import { uuidv7 } from '../db'
 import { error, json, readJson } from '../http'
 import type { Authorized } from '../iam'
@@ -28,7 +28,7 @@ export type DeployQueue = JobQueue<DeployJobMessage>
 export type LogReader = Pick<BlobStore, 'get'>
 
 export interface RunsContext {
-	db: Db
+	repositories: ControlRepositories
 	queue: DeployQueue
 	logs: LogReader
 	/** Cancel seam: destroy the run's container (off-local) + mark it failed + free the deploy lock. */
@@ -78,7 +78,7 @@ export async function listRuns(c: RunsContext): Promise<Response> {
 	const appId = p.get('app') ?? undefined
 	const env = p.get('env') ?? undefined
 	const before = p.get('before') ?? undefined
-	const rows = await c.db.listRuns({
+	const rows = await c.repositories.runs.listRuns({
 		...(appId !== undefined ? { appId } : {}),
 		...(env !== undefined ? { env } : {}),
 		...(before !== undefined ? { before } : {}),
@@ -92,7 +92,7 @@ export async function listRuns(c: RunsContext): Promise<Response> {
 }
 
 export async function getRun(c: RunsContext, id: string): Promise<Response> {
-	const row = await c.db.getRun(id)
+	const row = await c.repositories.runs.getRun(id)
 	return row ? json(toRunDto(row)) : error(404, 'run not found')
 }
 
@@ -102,7 +102,7 @@ export async function getRun(c: RunsContext, id: string): Promise<Response> {
  * ACL (`deploy.trigger`) is enforced by the router before this runs. Returns the updated (failed) run.
  */
 export async function cancelRun(c: RunsContext, id: string): Promise<Response> {
-	const run = await c.db.getRun(id)
+	const run = await c.repositories.runs.getRun(id)
 	if (!run) {
 		return error(404, 'run not found')
 	}
@@ -116,7 +116,7 @@ export async function cancelRun(c: RunsContext, id: string): Promise<Response> {
 		resourceId: id,
 		metadata: { appId: run.app_id, env: run.env, cancelled: true },
 	})
-	const updated = await c.db.getRun(id)
+	const updated = await c.repositories.runs.getRun(id)
 	return updated ? json(toRunDto(updated)) : error(404, 'run not found')
 }
 
@@ -125,7 +125,7 @@ export async function cancelRun(c: RunsContext, id: string): Promise<Response> {
  * the dashboard renders them without re-parsing NDJSON. 404 when the run / its log doesn't exist yet.
  */
 export async function getRunLog(c: RunsContext, id: string): Promise<Response> {
-	const run = await c.db.getRun(id)
+	const run = await c.repositories.runs.getRun(id)
 	if (!run) {
 		return error(404, 'run not found')
 	}
@@ -146,7 +146,7 @@ export async function getRunLog(c: RunsContext, id: string): Promise<Response> {
  * slice of lines past the cursor the dashboard already has. Returns the new lines + the next cursor.
  */
 export async function tailRunLog(c: RunsContext, id: string): Promise<Response> {
-	const run = await c.db.getRun(id)
+	const run = await c.repositories.runs.getRun(id)
 	if (!run) {
 		return error(404, 'run not found')
 	}
@@ -208,11 +208,11 @@ export async function triggerDeploy(c: RunsContext): Promise<Response> {
 	if (!appId || !env) {
 		return error(400, 'appId and env required')
 	}
-	const app = await c.db.getApp(appId)
+	const app = await c.repositories.registry.getApp(appId)
 	if (!app) {
 		return error(404, 'app not found')
 	}
-	const appEnv = await c.db.getAppEnv(appId, env)
+	const appEnv = await c.repositories.registry.getAppEnv(appId, env)
 	if (!appEnv) {
 		return error(404, 'app env not found')
 	}
@@ -221,7 +221,7 @@ export async function triggerDeploy(c: RunsContext): Promise<Response> {
 	// the default branch — pass an explicit `ref` to manually deploy a specific tag of a pattern env.
 	const concreteTriggerRef = appEnv.trigger_ref !== null && !isRefPattern(appEnv.trigger_ref) ? appEnv.trigger_ref : null
 	const ref = stringField(body, 'ref') ?? concreteTriggerRef ?? `refs/heads/${app.default_branch}`
-	const run = await c.db.createRun({ id: uuidv7(), appId, env, ref, trigger: 'manual' })
+	const run = await c.repositories.runs.createRun({ id: uuidv7(), appId, env, ref, trigger: 'manual' })
 	await c.queue.send({ runId: run.id })
 	await c.authorized.auth.audit({
 		action: 'deploy.trigger',

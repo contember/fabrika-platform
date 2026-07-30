@@ -36,71 +36,71 @@ const applySqliteMigrationStrictly = (sqlite: Database, filename: string): void 
 describe('generic provider persistence', () => {
 	test('round-trips a third provider without changing the schema or query surface', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		const stored = await db.upsertAppEnv(appEnvironment('app', 'prod'))
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		const stored = await db.registry.upsertAppEnv(appEnvironment('app', 'prod'))
 
 		expect(stored.provider).toBe('harbor')
 		expect(stored.provider_target_json).toBe(targetJson)
 		expect(stored.provider_artifact_json).toBe(artifactJson)
-		expect((await db.listAppEnvsByProvider('harbor')).map((row) => row.env)).toEqual(['prod'])
-		expect(await db.listAppEnvsByProvider('other')).toHaveLength(0)
+		expect((await db.registry.listAppEnvsByProvider('harbor')).map((row) => row.env)).toEqual(['prod'])
+		expect(await db.registry.listAppEnvsByProvider('other')).toHaveLength(0)
 	})
 
 	test('persists and lists provider-owned external runs generically', async () => {
 		const now = 2_000_000
 		const { db, sqlite } = createHarness(() => now)
-		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		await db.upsertAppEnv(appEnvironment('app', 'prod'))
-		const run = await db.createRun({ id: 'run-1', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		await db.markRunStarted(run.id, 'runs/run-1/logs.ndjson')
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await db.registry.upsertAppEnv(appEnvironment('app', 'prod'))
+		const run = await db.runs.createRun({ id: 'run-1', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.markRunStarted(run.id, 'runs/run-1/logs.ndjson')
 
-		expect(await db.setRunExternalId(run.id, 'harbor-operation-7')).toBe(true)
-		expect((await db.getRun(run.id))?.external_run_id).toBe('harbor-operation-7')
-		expect((await db.listInFlightRuns('harbor')).map((row) => row.id)).toEqual(['run-1'])
-		expect(await db.listInFlightRuns('other')).toHaveLength(0)
+		expect(await db.runs.setRunExternalId(run.id, 'harbor-operation-7')).toBe(true)
+		expect((await db.runs.getRun(run.id))?.external_run_id).toBe('harbor-operation-7')
+		expect((await db.runs.listInFlightRuns('harbor')).map((row) => row.id)).toEqual(['run-1'])
+		expect(await db.runs.listInFlightRuns('other')).toHaveLength(0)
 
 		sqlite.query('UPDATE runs SET created_at = ?, started_at = ? WHERE id = ?').run(now - 7200, now - 7200, run.id)
-		expect(await db.sweepStaleRuns(3600)).toBe(0)
-		expect((await db.getRun(run.id))?.status).toBe('running')
+		expect(await db.runs.sweepStaleRuns(3600)).toBe(0)
+		expect((await db.runs.getRun(run.id))?.status).toBe('running')
 	})
 
 	test('round-trips namespaces and namespace-owned or app-owned resource claims', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
-		await db.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
-		const namespace = await db.createDeploymentNamespace({
+		await db.registry.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.registry.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
+		const namespace = await db.registry.createDeploymentNamespace({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'harbor',
 			exclusiveAppId: null,
 			providerTargetJson: targetJson,
 		})
-		await db.upsertAppEnv({ ...appEnvironment('alpha', 'prod'), namespaceId: namespace.id })
-		await db.upsertAppEnv({ ...appEnvironment('beta', 'prod'), namespaceId: namespace.id })
-		await db.createNamespaceResourceClaim({
+		await db.registry.upsertAppEnv({ ...appEnvironment('alpha', 'prod'), namespaceId: namespace.id })
+		await db.registry.upsertAppEnv({ ...appEnvironment('beta', 'prod'), namespaceId: namespace.id })
+		await db.registry.createNamespaceResourceClaim({
 			namespaceId: namespace.id,
 			resourceKey: 'proxy',
 			ownerAppId: null,
 			ownerEnv: null,
 		})
-		await db.createNamespaceResourceClaim({
+		await db.registry.createNamespaceResourceClaim({
 			namespaceId: namespace.id,
 			resourceKey: 'alpha-api',
 			ownerAppId: 'alpha',
 			ownerEnv: 'prod',
 		})
-		const ready = await db.updateDeploymentNamespace({
+		const ready = await db.registry.updateDeploymentNamespace({
 			id: namespace.id,
 			providerTargetJson: JSON.stringify({ provider: 'harbor', version: 3, payload: { dock: '7' } }),
 			state: 'ready',
 			lastError: null,
 		})
 
-		expect((await db.listDeploymentNamespaces()).map((row) => row.id)).toEqual(['apps-prod'])
+		expect((await db.registry.listDeploymentNamespaces()).map((row) => row.id)).toEqual(['apps-prod'])
 		expect(ready?.state).toBe('ready')
-		expect((await db.getAppEnv('alpha', 'prod'))?.namespace_id).toBe('apps-prod')
-		expect((await db.listAppEnvsByNamespace('apps-prod')).map((row) => row.app_id)).toEqual(['alpha', 'beta'])
-		expect((await db.listNamespaceResourceClaims(namespace.id)).map((claim) => [
+		expect((await db.registry.getAppEnv('alpha', 'prod'))?.namespace_id).toBe('apps-prod')
+		expect((await db.registry.listAppEnvsByNamespace('apps-prod')).map((row) => row.app_id)).toEqual(['alpha', 'beta'])
+		expect((await db.registry.listNamespaceResourceClaims(namespace.id)).map((claim) => [
 			claim.resource_key,
 			claim.owner_app_id,
 		])).toEqual([
@@ -111,9 +111,9 @@ describe('generic provider persistence', () => {
 
 	test('acquires claims idempotently and atomically with an environment upsert', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
-		await db.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
-		await db.createDeploymentNamespace({
+		await db.registry.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.registry.createApp({ id: 'beta', repoUrl: 'github.com/acme/beta' })
+		await db.registry.createDeploymentNamespace({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'harbor',
@@ -121,29 +121,29 @@ describe('generic provider persistence', () => {
 			providerTargetJson: targetJson,
 		})
 
-		const first = await db.upsertAppEnvWithNamespaceResourceClaims(
+		const first = await db.registry.upsertAppEnvWithNamespaceResourceClaims(
 			{ ...appEnvironment('alpha', 'prod'), namespaceId: 'apps-prod', domain: 'alpha.example' },
 			['z-shared', 'alpha-worker', 'alpha-worker'],
 		)
 		expect(first.resourceClaims.map((claim) => claim.resource_key)).toEqual(['alpha-worker', 'z-shared'])
 
-		const retried = await db.upsertAppEnvWithNamespaceResourceClaims(
+		const retried = await db.registry.upsertAppEnvWithNamespaceResourceClaims(
 			{ ...appEnvironment('alpha', 'prod'), namespaceId: 'apps-prod', domain: 'new-alpha.example' },
 			['z-shared'],
 		)
 		expect(retried.appEnv.domain).toBe('new-alpha.example')
 		expect(retried.resourceClaims[0]?.created_at).toBe(first.resourceClaims[1]?.created_at)
-		expect((await db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual([
+		expect((await db.registry.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual([
 			'alpha-worker',
 			'z-shared',
 		])
 
-		await expect(db.upsertAppEnvWithNamespaceResourceClaims(
+		await expect(db.registry.upsertAppEnvWithNamespaceResourceClaims(
 			{ ...appEnvironment('beta', 'prod'), namespaceId: 'apps-prod' },
 			['beta-worker', 'z-shared'],
 		)).rejects.toThrow('namespace resource claim owner is immutable')
-		expect(await db.getAppEnv('beta', 'prod')).toBeNull()
-		expect((await db.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual([
+		expect(await db.registry.getAppEnv('beta', 'prod')).toBeNull()
+		expect((await db.registry.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual([
 			'alpha-worker',
 			'z-shared',
 		])
@@ -151,9 +151,9 @@ describe('generic provider persistence', () => {
 
 	test('keeps historical claims when an undeployed environment moves namespaces', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.registry.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
 		for (const id of ['first', 'second']) {
-			await db.createDeploymentNamespace({
+			await db.registry.createDeploymentNamespace({
 				id,
 				env: 'prod',
 				provider: 'harbor',
@@ -161,31 +161,31 @@ describe('generic provider persistence', () => {
 				providerTargetJson: targetJson,
 			})
 		}
-		await db.upsertAppEnvWithNamespaceResourceClaims(
+		await db.registry.upsertAppEnvWithNamespaceResourceClaims(
 			{ ...appEnvironment('alpha', 'prod'), namespaceId: 'first' },
 			['alpha-api'],
 		)
-		await db.upsertAppEnvWithNamespaceResourceClaims(
+		await db.registry.upsertAppEnvWithNamespaceResourceClaims(
 			{ ...appEnvironment('alpha', 'prod'), namespaceId: 'second' },
 			['alpha-api'],
 		)
 
-		expect((await db.getAppEnv('alpha', 'prod'))?.namespace_id).toBe('second')
-		expect((await db.listNamespaceResourceClaims('first')).map((claim) => claim.resource_key)).toEqual(['alpha-api'])
-		expect((await db.listNamespaceResourceClaims('second')).map((claim) => claim.resource_key)).toEqual(['alpha-api'])
+		expect((await db.registry.getAppEnv('alpha', 'prod'))?.namespace_id).toBe('second')
+		expect((await db.registry.listNamespaceResourceClaims('first')).map((claim) => claim.resource_key)).toEqual(['alpha-api'])
+		expect((await db.registry.listNamespaceResourceClaims('second')).map((claim) => claim.resource_key)).toEqual(['alpha-api'])
 	})
 
 	test('enforces namespace coordinates and resource ownership constraints', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
-		await db.createDeploymentNamespace({
+		await db.registry.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.registry.createDeploymentNamespace({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'harbor',
 			exclusiveAppId: null,
 			providerTargetJson: targetJson,
 		})
-		await db.createDeploymentNamespace({
+		await db.registry.createDeploymentNamespace({
 			id: 'other-prod',
 			env: 'prod',
 			provider: 'other',
@@ -193,16 +193,16 @@ describe('generic provider persistence', () => {
 			providerTargetJson: JSON.stringify({ provider: 'other', version: 1, payload: {} }),
 		})
 
-		await expect(db.upsertAppEnv({ ...appEnvironment('alpha', 'stage'), namespaceId: 'apps-prod' })).rejects.toThrow()
-		await expect(db.upsertAppEnv({ ...appEnvironment('alpha', 'prod'), namespaceId: 'other-prod' })).rejects.toThrow()
-		await db.upsertAppEnv({ ...appEnvironment('alpha', 'prod'), namespaceId: 'apps-prod' })
-		await db.createNamespaceResourceClaim({
+		await expect(db.registry.upsertAppEnv({ ...appEnvironment('alpha', 'stage'), namespaceId: 'apps-prod' })).rejects.toThrow()
+		await expect(db.registry.upsertAppEnv({ ...appEnvironment('alpha', 'prod'), namespaceId: 'other-prod' })).rejects.toThrow()
+		await db.registry.upsertAppEnv({ ...appEnvironment('alpha', 'prod'), namespaceId: 'apps-prod' })
+		await db.registry.createNamespaceResourceClaim({
 			namespaceId: 'apps-prod',
 			resourceKey: 'alpha-api',
 			ownerAppId: 'alpha',
 			ownerEnv: 'prod',
 		})
-		await expect(db.createNamespaceResourceClaim({
+		await expect(db.registry.createNamespaceResourceClaim({
 			namespaceId: 'apps-prod',
 			resourceKey: 'alpha-api',
 			ownerAppId: 'alpha',
@@ -213,19 +213,19 @@ describe('generic provider persistence', () => {
 			owner_app_id: 'alpha',
 			owner_env: 'prod',
 		})
-		await expect(db.createNamespaceResourceClaim({
+		await expect(db.registry.createNamespaceResourceClaim({
 			namespaceId: 'apps-prod',
 			resourceKey: 'alpha-api',
 			ownerAppId: null,
 			ownerEnv: null,
 		})).rejects.toThrow()
-		await expect(db.createNamespaceResourceClaim({
+		await expect(db.registry.createNamespaceResourceClaim({
 			namespaceId: 'apps-prod',
 			resourceKey: 'broken-owner',
 			ownerAppId: 'alpha',
 			ownerEnv: null,
 		})).rejects.toThrow()
-		await expect(db.deleteAppEnv('alpha', 'prod')).rejects.toThrow()
+		await expect(db.registry.deleteAppEnv('alpha', 'prod')).rejects.toThrow()
 	})
 
 	test('migrates existing Cloudflare and Zerops rows into envelopes before dropping named columns', () => {

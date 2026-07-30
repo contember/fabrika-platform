@@ -9,7 +9,7 @@
 
 import type { AppDto, AppEnvDto, AppSecretDto, AppVarDto, RegisterAppResponse } from '@fabrika/control-contract'
 import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
-import { type AppEnvRow, type AppRow, type AppSecretRow, type AppVarRow, type Db, NamespaceResourceClaimConflictError } from '../db'
+import { type AppEnvRow, type AppRow, type AppSecretRow, type AppVarRow, type ControlRepositories, NamespaceResourceClaimConflictError } from '../db'
 import { error, json, readJson } from '../http'
 import type { Authorized } from '../iam'
 import { arrayField, booleanField, nullableStringField, numberField, prop, stringField } from '../json'
@@ -18,7 +18,7 @@ import { envelopeField, parseStoredEnvelope } from './provider-envelope'
 
 /** Context every registry handler receives. */
 export interface RegistryContext {
-	db: Db
+	repositories: ControlRepositories
 	request: Request
 	url: URL
 	/** The RepoSource — used to auto-detect an app's GitHub installation id at onboarding time. */
@@ -165,7 +165,7 @@ async function resolveRegistrationNamespace(
 	if (namespaceId === null) {
 		return error(400, 'namespaceId is required by this provider')
 	}
-	const row = await c.db.getDeploymentNamespace(namespaceId)
+	const row = await c.repositories.registry.getDeploymentNamespace(namespaceId)
 	if (row === null) {
 		return error(404, 'deployment namespace not found')
 	}
@@ -197,12 +197,12 @@ function toAppSecretDto(row: AppSecretRow): AppSecretDto {
 // ── Apps ──────────────────────────────────────────────────────────────────────
 
 export async function listApps(c: RegistryContext): Promise<Response> {
-	const rows = await c.db.listApps()
+	const rows = await c.repositories.registry.listApps()
 	return json({ items: rows.map(toAppDto) })
 }
 
 export async function getApp(c: RegistryContext, id: string): Promise<Response> {
-	const row = await c.db.getApp(id)
+	const row = await c.repositories.registry.getApp(id)
 	return row ? json(toAppDto(row)) : error(404, 'app not found')
 }
 
@@ -213,13 +213,13 @@ export async function createApp(c: RegistryContext): Promise<Response> {
 	if (!id || !repoUrl) {
 		return error(400, 'id and repoUrl required')
 	}
-	if (await c.db.getApp(id)) {
+	if (await c.repositories.registry.getApp(id)) {
 		return error(409, 'an app with this id already exists')
 	}
 	// Store the NORMALIZED repo URL so the webhook's normalized push URL matches it (see
 	// normalizeRepoUrl). The original form is not needed — the canonical host/owner/repo is the key.
 	const normalized = normalizeRepoUrl(repoUrl)
-	const row = await c.db.createApp({
+	const row = await c.repositories.registry.createApp({
 		id,
 		repoUrl: normalized,
 		...optionalAppFields(body),
@@ -230,7 +230,7 @@ export async function createApp(c: RegistryContext): Promise<Response> {
 }
 
 export async function updateApp(c: RegistryContext, id: string): Promise<Response> {
-	const existing = await c.db.getApp(id)
+	const existing = await c.repositories.registry.getApp(id)
 	if (!existing) {
 		return error(404, 'app not found')
 	}
@@ -238,7 +238,7 @@ export async function updateApp(c: RegistryContext, id: string): Promise<Respons
 	const repoUrl = stringField(body, 'repoUrl')
 	// Auto-detect resolves against the new repoUrl when one is supplied, else the app's existing one.
 	const resolveTarget = repoUrl !== undefined ? normalizeRepoUrl(repoUrl) : existing.repo_url
-	const row = await c.db.updateApp(id, {
+	const row = await c.repositories.registry.updateApp(id, {
 		...(repoUrl !== undefined ? { repoUrl: normalizeRepoUrl(repoUrl) } : {}),
 		...optionalAppFields(body),
 		...(await installationIdField(c, body, resolveTarget)),
@@ -248,7 +248,7 @@ export async function updateApp(c: RegistryContext, id: string): Promise<Respons
 }
 
 export async function deleteApp(c: RegistryContext, id: string): Promise<Response> {
-	const ok = await c.db.deleteApp(id)
+	const ok = await c.repositories.registry.deleteApp(id)
 	if (!ok) {
 		return error(404, 'app not found')
 	}
@@ -298,30 +298,30 @@ async function installationIdField(c: RegistryContext, body: unknown, repoUrl: s
 // ── App environments ──────────────────────────────────────────────────────────
 
 export async function listAppEnvs(c: RegistryContext, appId: string): Promise<Response> {
-	if (!(await c.db.getApp(appId))) {
+	if (!(await c.repositories.registry.getApp(appId))) {
 		return error(404, 'app not found')
 	}
-	const rows = await c.db.listAppEnvs(appId)
+	const rows = await c.repositories.registry.listAppEnvs(appId)
 	return json({ items: rows.map(toAppEnvDto) })
 }
 
 export async function putAppEnv(c: RegistryContext, appId: string, env: string): Promise<Response> {
-	const app = await c.db.getApp(appId)
+	const app = await c.repositories.registry.getApp(appId)
 	if (app === null) {
 		return error(404, 'app not found')
 	}
 	const body = await readJson(c.request)
 	const domain = nullableStringField(body, 'domain') ?? null
 	const triggerRef = nullableStringField(body, 'triggerRef') ?? null
-	const existing = await c.db.getAppEnv(appId, env)
+	const existing = await c.repositories.registry.getAppEnv(appId, env)
 	const namespace = await resolveRegistrationNamespace(c, body, appId, env, existing)
 	if (namespace instanceof Response) return namespace
 	const nextNamespaceId = namespace?.id ?? null
 	if (existing?.namespace_id !== nextNamespaceId) {
-		if (await c.db.hasInFlightRun(appId, env)) {
+		if (await c.repositories.registry.hasInFlightRun(appId, env)) {
 			return error(409, 'deployment namespace cannot change while a deploy is in progress')
 		}
-		if (await c.db.hasSuccessfulRun(appId, env)) {
+		if (await c.repositories.registry.hasSuccessfulRun(appId, env)) {
 			return error(409, 'deployment namespace cannot change after a successful deploy')
 		}
 	}
@@ -342,8 +342,8 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 	let row: AppEnvRow
 	try {
 		row = registration.environment.namespace === undefined
-			? await c.db.upsertAppEnv(input)
-			: (await c.db.upsertAppEnvWithNamespaceResourceClaims(input, resourceClaims)).appEnv
+			? await c.repositories.registry.upsertAppEnv(input)
+			: (await c.repositories.registry.upsertAppEnvWithNamespaceResourceClaims(input, resourceClaims)).appEnv
 	} catch (cause) {
 		if (cause instanceof NamespaceResourceClaimConflictError) {
 			return error(409, cause.message)
@@ -359,7 +359,7 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 	return json(toAppEnvDto(row))
 }
 export async function deleteAppEnv(c: RegistryContext, appId: string, env: string): Promise<Response> {
-	const ok = await c.db.deleteAppEnv(appId, env)
+	const ok = await c.repositories.registry.deleteAppEnv(appId, env)
 	if (!ok) {
 		return error(404, 'app env not found')
 	}
@@ -370,15 +370,15 @@ export async function deleteAppEnv(c: RegistryContext, appId: string, env: strin
 // ── App secrets (refs only; the M4 vault fills values) ─────────────────────────
 
 export async function listAppSecrets(c: RegistryContext, appId: string): Promise<Response> {
-	if (!(await c.db.getApp(appId))) {
+	if (!(await c.repositories.registry.getApp(appId))) {
 		return error(404, 'app not found')
 	}
-	const rows = await c.db.listAppSecrets(appId)
+	const rows = await c.repositories.registry.listAppSecrets(appId)
 	return json({ items: rows.map(toAppSecretDto) })
 }
 
 export async function putAppSecret(c: RegistryContext, appId: string): Promise<Response> {
-	if (!(await c.db.getApp(appId))) {
+	if (!(await c.repositories.registry.getApp(appId))) {
 		return error(404, 'app not found')
 	}
 	const body = await readJson(c.request)
@@ -389,7 +389,7 @@ export async function putAppSecret(c: RegistryContext, appId: string): Promise<R
 	}
 	// env null = all-env layer; a string narrows it to that env.
 	const env = nullableStringField(body, 'env') ?? null
-	const row = await c.db.upsertAppSecret({ appId, env, name, valueRef })
+	const row = await c.repositories.registry.upsertAppSecret({ appId, env, name, valueRef })
 	await c.authorized.auth.audit({
 		action: 'app.secret.upsert',
 		resourceType: 'app_secret',
@@ -404,7 +404,7 @@ export async function deleteAppSecret(c: RegistryContext, appId: string, name: s
 	// env is a query param (?env=); absent → the all-env layer.
 	const envParam = c.url.searchParams.get('env')
 	const env = envParam === null || envParam === '' ? null : envParam
-	const ok = await c.db.deleteAppSecret(appId, env, name)
+	const ok = await c.repositories.registry.deleteAppSecret(appId, env, name)
 	if (!ok) {
 		return error(404, 'secret not found')
 	}
@@ -421,15 +421,15 @@ function toAppVarDto(row: AppVarRow): AppVarDto {
 }
 
 export async function listAppVars(c: RegistryContext, appId: string): Promise<Response> {
-	if (!(await c.db.getApp(appId))) {
+	if (!(await c.repositories.registry.getApp(appId))) {
 		return error(404, 'app not found')
 	}
-	const rows = await c.db.listAppVars(appId)
+	const rows = await c.repositories.registry.listAppVars(appId)
 	return json({ items: rows.map(toAppVarDto) })
 }
 
 export async function putAppVar(c: RegistryContext, appId: string): Promise<Response> {
-	if (!(await c.db.getApp(appId))) {
+	if (!(await c.repositories.registry.getApp(appId))) {
 		return error(404, 'app not found')
 	}
 	const body = await readJson(c.request)
@@ -440,7 +440,7 @@ export async function putAppVar(c: RegistryContext, appId: string): Promise<Resp
 	}
 	// env null = all-env layer; a string narrows it to that env.
 	const env = nullableStringField(body, 'env') ?? null
-	const row = await c.db.upsertAppVar({ appId, env, name, value })
+	const row = await c.repositories.registry.upsertAppVar({ appId, env, name, value })
 	await c.authorized.auth.audit({
 		action: 'app.var.upsert',
 		resourceType: 'app_var',
@@ -455,7 +455,7 @@ export async function deleteAppVar(c: RegistryContext, appId: string, name: stri
 	// env is a query param (?env=); absent → the all-env layer.
 	const envParam = c.url.searchParams.get('env')
 	const env = envParam === null || envParam === '' ? null : envParam
-	const ok = await c.db.deleteAppVar(appId, env, name)
+	const ok = await c.repositories.registry.deleteAppVar(appId, env, name)
 	if (!ok) {
 		return error(404, 'var not found')
 	}
@@ -478,7 +478,7 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 	if (!id || !repoUrl || !env) {
 		return error(400, 'id, repoUrl and env required')
 	}
-	if (await c.db.getApp(id)) {
+	if (await c.repositories.registry.getApp(id)) {
 		return error(409, 'an app with this id already exists')
 	}
 	const normalized = normalizeRepoUrl(repoUrl)
@@ -548,10 +548,10 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 	let appEnv: AppEnvRow
 	try {
 		if (registration.environment.namespace === undefined) {
-			app = await c.db.createApp(appInput)
-			appEnv = await c.db.upsertAppEnv(environmentInput)
+			app = await c.repositories.registry.createApp(appInput)
+			appEnv = await c.repositories.registry.upsertAppEnv(environmentInput)
 		} else {
-			const created = await c.db.createAppWithEnvironmentAndNamespaceResourceClaims(appInput, environmentInput, resourceClaims)
+			const created = await c.repositories.registry.createAppWithEnvironmentAndNamespaceResourceClaims(appInput, environmentInput, resourceClaims)
 			app = created.app
 			appEnv = created.appEnv
 		}
@@ -577,7 +577,7 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 				throw new Error('provider returned an invalid prepared registration')
 			}
 			registration = normalized
-			const updated = await c.db.upsertAppEnvWithNamespaceResourceClaims({
+			const updated = await c.repositories.registry.upsertAppEnvWithNamespaceResourceClaims({
 				...environmentInput,
 				domain: registration.environment.domain ?? null,
 				namespaceId: registration.environment.namespace?.id ?? null,
@@ -587,9 +587,9 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 			appEnv = updated.appEnv
 		} catch {
 			if (namespace !== undefined) {
-				await c.db.deleteNamespaceResourceClaimsForOwner(namespace.id, id, env)
+				await c.repositories.registry.deleteNamespaceResourceClaimsForOwner(namespace.id, id, env)
 			}
-			await c.db.deleteApp(id)
+			await c.repositories.registry.deleteApp(id)
 			return error(502, 'provider registration preparation failed')
 		}
 	}

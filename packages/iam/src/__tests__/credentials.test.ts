@@ -232,7 +232,7 @@ describe('mintFromKey failures', () => {
 		const services = h.makeServices({ issuer: ISSUER })
 		const svcId = seedService(h.sqlite, { commonName: 'svc-d', disabled: true })
 		const key = 'px_live-key'
-		await services.db.createCredential({ tokenHash: await hashToken(key), principalId: svcId, issuedBy: svcId, grants: [] })
+		await services.repositories.credentials.createCredential({ tokenHash: await hashToken(key), principalId: svcId, issuedBy: svcId, grants: [] })
 		const { result } = await mintFromKey(services, ENV, { app: 'a', key, requestId: 'r' })
 		expect(result).toEqual({ ok: false, reason: 'disabled' })
 	})
@@ -242,12 +242,12 @@ describe('mintFromKey failures', () => {
 		const services = h.makeServices({ issuer: ISSUER })
 		const key = 'px_to-revoke'
 		const issuerId = seedUser(h.sqlite, { sub: 'iss-rev', email: 'rev@contember.com' })
-		const id = await services.db.createCredential({
+		const id = await services.repositories.credentials.createCredential({
 			tokenHash: await hashToken(key),
 			issuedBy: issuerId,
 			grants: [{ action: 'x' }],
 		})
-		expect(await services.db.revokeCredential(id)).toBe(true)
+		expect(await services.repositories.credentials.revokeCredential(id)).toBe(true)
 		const { result } = await mintFromKey(services, ENV, { app: 'a', key, requestId: 'r' })
 		expect(result).toEqual({ ok: false, reason: 'invalid_key' })
 	})
@@ -273,7 +273,7 @@ describe('issueJwt (passthrough)', () => {
 		expect(claims?.ptype).toBeUndefined()
 		expect(permits(claims?.perms ?? [], 'event.ingest')).toBe(true)
 		// No DB row was written — it is audit-only.
-		expect(await services.db.getCredentialById(issued.result.id)).toBeNull()
+		expect(await services.repositories.credentials.getCredentialById(issued.result.id)).toBeNull()
 	})
 
 	test('caps the requested ttl at the passthrough maximum', async () => {

@@ -20,3 +20,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+
+- [Repository capabilities](sprint-2026-07-30-repository-capabilities.md)

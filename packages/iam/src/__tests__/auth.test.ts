@@ -57,7 +57,7 @@ describe('resolveCaller — px_ key resolution', () => {
 		const services = h.makeServices({ environment: 'stage' })
 		const issuerId = seedUser(h.sqlite, { sub: 'iss', email: 'iss@contember.com' })
 		const key = 'px_share-link'
-		const credId = await h.db.createCredential({
+		const credId = await h.repositories.credentials.createCredential({
 			tokenHash: await hashToken(key),
 			issuedBy: issuerId,
 			grants: [{ action: 'report.read' }],

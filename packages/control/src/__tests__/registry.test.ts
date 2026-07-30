@@ -20,7 +20,7 @@ function makeDeps(
 	const queue: DeployJobMessage[] = []
 	const logStore = new Map<string, string>()
 	const deps: ApiDeps = {
-		db,
+		repositories: db,
 		iam: allowAllIam(),
 		queue: {
 			send(m) {
@@ -39,7 +39,7 @@ function makeDeps(
 		repoSource: new FakeRepoSource({ fakeInstallationId: opts.installationId ?? null }),
 		provider: opts.provider ?? fakeProvider,
 		// Stand in for the runner: mark the run failed (the real seam destroys the container + frees the lock).
-		cancelRun: (run) => db.markRunFinished(run.id, 'failed', null).then(() => {}),
+		cancelRun: (run) => db.runs.markRunFinished(run.id, 'failed', null).then(() => {}),
 	}
 	return { deps, queue, logStore }
 }
@@ -143,7 +143,7 @@ describe('onboarding + registry CRUD', () => {
 			deps,
 		)
 		expect(response.status).toBe(200)
-		const row = await deps.db.getAppEnv('harbor-app', 'prod')
+		const row = await deps.repositories.registry.getAppEnv('harbor-app', 'prod')
 		expect(row?.provider).toBe('harbor')
 		expect(row?.provider_target_json).toBe(
 			JSON.stringify({ provider: 'harbor', version: 1, payload: { region: 'eu-west' } }),
@@ -164,7 +164,7 @@ describe('onboarding + registry CRUD', () => {
 			deps,
 		)
 		expect(foreign.status).toBe(400)
-		expect(await deps.db.getAppEnv('harbor-app', 'stage')).toBeNull()
+		expect(await deps.repositories.registry.getAppEnv('harbor-app', 'stage')).toBeNull()
 	})
 
 	test('registerApp creates the app + its first app_env in one call', async () => {
@@ -183,10 +183,10 @@ describe('onboarding + registry CRUD', () => {
 		expect(response.status).toBe(201)
 
 		// App row exists with the NORMALIZED repo URL.
-		const app = await deps.db.getApp('acme')
+		const app = await deps.repositories.registry.getApp('acme')
 		expect(app?.repo_url).toBe('github.com/acme/App')
 		// And its prod env row, with the domain + trigger ref.
-		const env = await deps.db.getAppEnv('acme', 'prod')
+		const env = await deps.repositories.registry.getAppEnv('acme', 'prod')
 		expect(env?.domain).toBe('acme.example.com')
 		expect(env?.trigger_ref).toBe('refs/heads/deploy/prod')
 	})
@@ -198,7 +198,7 @@ describe('onboarding + registry CRUD', () => {
 			deps,
 		)
 		expect(response.status).toBe(201)
-		expect((await deps.db.getApp('auto'))?.github_installation_id).toBe(424242)
+		expect((await deps.repositories.registry.getApp('auto'))?.github_installation_id).toBe(424242)
 	})
 
 	test('an explicit githubInstallationId overrides auto-detect', async () => {
@@ -213,17 +213,17 @@ describe('onboarding + registry CRUD', () => {
 			}),
 			deps,
 		)
-		expect((await deps.db.getApp('manual'))?.github_installation_id).toBe(999)
+		expect((await deps.repositories.registry.getApp('manual'))?.github_installation_id).toBe(999)
 	})
 
 	test('updateApp can back-fill the installation id via Detect on an existing app', async () => {
 		const { deps } = makeDeps({ installationId: 555 })
 		await handleApi(req('POST', '/api/apps', { id: 'existing', repoUrl: 'https://github.com/acme/private' }), deps)
-		expect((await deps.db.getApp('existing'))?.github_installation_id).toBe(null)
+		expect((await deps.repositories.registry.getApp('existing'))?.github_installation_id).toBe(null)
 
 		const patched = await handleApi(req('PATCH', '/api/apps/existing', { resolveInstallationId: true }), deps)
 		expect(patched.status).toBe(200)
-		expect((await deps.db.getApp('existing'))?.github_installation_id).toBe(555)
+		expect((await deps.repositories.registry.getApp('existing'))?.github_installation_id).toBe(555)
 	})
 
 	test('registerApp rejects a missing field (400) and a duplicate id (409)', async () => {
@@ -258,12 +258,12 @@ describe('onboarding + registry CRUD', () => {
 		// delete secret (all-env layer)
 		const delSecret = await handleApi(req('DELETE', '/api/apps/app/secrets/API_KEY'), deps)
 		expect(delSecret.status).toBe(200)
-		expect(await deps.db.listAppSecrets('app')).toHaveLength(0)
+		expect(await deps.repositories.registry.listAppSecrets('app')).toHaveLength(0)
 
 		// delete app cascades its env
 		const delApp = await handleApi(req('DELETE', '/api/apps/app'), deps)
 		expect(delApp.status).toBe(200)
-		expect(await deps.db.getAppEnv('app', 'prod')).toBeNull()
+		expect(await deps.repositories.registry.getAppEnv('app', 'prod')).toBeNull()
 	})
 
 	test('app_vars CRUD round-trips (plaintext value, readable — unlike secrets)', async () => {
@@ -289,21 +289,21 @@ describe('onboarding + registry CRUD', () => {
 		// delete var (all-env layer)
 		const delVar = await handleApi(req('DELETE', '/api/apps/app/vars/PROPUSTKA_TEAM'), deps)
 		expect(delVar.status).toBe(200)
-		expect(await deps.db.listAppVars('app')).toHaveLength(0)
+		expect(await deps.repositories.registry.listAppVars('app')).toHaveLength(0)
 	})
 })
 
 describe('run history API', () => {
 	test('lists runs newest-first and filters by app/env', async () => {
 		const { deps } = makeDeps()
-		await deps.db.createApp({ id: 'a', repoUrl: 'r1' })
-		await deps.db.createApp({ id: 'b', repoUrl: 'r2' })
-		await deps.db.upsertAppEnv(storedEnvironment('a', 'prod'))
-		await deps.db.upsertAppEnv(storedEnvironment('b', 'prod'))
+		await deps.repositories.registry.createApp({ id: 'a', repoUrl: 'r1' })
+		await deps.repositories.registry.createApp({ id: 'b', repoUrl: 'r2' })
+		await deps.repositories.registry.upsertAppEnv(storedEnvironment('a', 'prod'))
+		await deps.repositories.registry.upsertAppEnv(storedEnvironment('b', 'prod'))
 		const r1 = uuidv7()
-		await deps.db.createRun({ id: r1, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
+		await deps.repositories.runs.createRun({ id: r1, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
 		const r2 = uuidv7()
-		await deps.db.createRun({ id: r2, appId: 'b', env: 'prod', ref: 'main', trigger: 'webhook' })
+		await deps.repositories.runs.createRun({ id: r2, appId: 'b', env: 'prod', ref: 'main', trigger: 'webhook' })
 
 		const all = await handleApi(req('GET', '/api/runs'), deps)
 		const allBody = (await all.json()) as { items: { id: string }[] }
@@ -320,11 +320,11 @@ describe('run history API', () => {
 
 	test('getRunLog reads + parses the NDJSON log from R2', async () => {
 		const { deps, logStore } = makeDeps()
-		await deps.db.createApp({ id: 'a', repoUrl: 'r' })
-		await deps.db.upsertAppEnv(storedEnvironment('a', 'prod'))
+		await deps.repositories.registry.createApp({ id: 'a', repoUrl: 'r' })
+		await deps.repositories.registry.upsertAppEnv(storedEnvironment('a', 'prod'))
 		const runId = uuidv7()
-		await deps.db.createRun({ id: runId, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
-		await deps.db.markRunStarted(runId, logsKey(runId))
+		await deps.repositories.runs.createRun({ id: runId, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
+		await deps.repositories.runs.markRunStarted(runId, logsKey(runId))
 		// Stage two log lines in the fake R2 under the run's log key.
 		logStore.set(
 			logsKey(runId),
@@ -352,16 +352,16 @@ describe('run history API', () => {
 
 	test('cancel marks a running run failed; 409 once terminal, 404 unknown', async () => {
 		const { deps } = makeDeps()
-		await deps.db.createApp({ id: 'a', repoUrl: 'r' })
-		await deps.db.upsertAppEnv(storedEnvironment('a', 'prod'))
+		await deps.repositories.registry.createApp({ id: 'a', repoUrl: 'r' })
+		await deps.repositories.registry.upsertAppEnv(storedEnvironment('a', 'prod'))
 		const runId = uuidv7()
-		await deps.db.createRun({ id: runId, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
-		await deps.db.markRunStarted(runId, logsKey(runId))
+		await deps.repositories.runs.createRun({ id: runId, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
+		await deps.repositories.runs.markRunStarted(runId, logsKey(runId))
 
 		const cancelled = await handleApi(req('POST', `/api/runs/${runId}/cancel`), deps)
 		expect(cancelled.status).toBe(200)
 		expect((await cancelled.json() as { status: string }).status).toBe('failed')
-		expect((await deps.db.getRun(runId))?.status).toBe('failed')
+		expect((await deps.repositories.runs.getRun(runId))?.status).toBe('failed')
 
 		// A second cancel on the now-terminal run is a 409.
 		const again = await handleApi(req('POST', `/api/runs/${runId}/cancel`), deps)

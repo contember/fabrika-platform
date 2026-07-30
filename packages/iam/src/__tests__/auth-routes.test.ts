@@ -119,9 +119,9 @@ describe('login → callback (end to end with a fake IdP)', () => {
 		// A session cookie was issued and a session row created for the lazily-created principal.
 		const sessionToken = setCookieValue(callback, SESSION_COOKIE)
 		expect(sessionToken).toBeTruthy()
-		const principal = await h.db.getUserByExternalId('g-42')
+		const principal = await h.repositories.principals.getUserByExternalId('g-42')
 		expect(principal?.email).toBe('user@contember.com')
-		const session = await h.db.getActiveSessionByHash(await hashToken(sessionToken ?? ''))
+		const session = await h.repositories.sessions.getActiveSessionByHash(await hashToken(sessionToken ?? ''))
 		expect(session?.principal_id).toBe(principal?.id)
 	})
 
@@ -176,7 +176,7 @@ describe('login admission (/auth/callback allowlist)', () => {
 		const services = h.makeServices({ issuer: ISSUER })
 		const res = await login(services, { sub: 'out-1', email: 'stranger@evil.example' })
 		expect(res.status).toBe(403)
-		expect(await h.db.getUserByExternalId('out-1')).toBeNull()
+		expect(await h.repositories.principals.getUserByExternalId('out-1')).toBeNull()
 	})
 
 	test('a matching email domain admits a new identity (302 + session)', async () => {
@@ -216,7 +216,7 @@ describe('login admission (/auth/callback allowlist)', () => {
 		const res = await login(services, { sub: 'inv-1', email: 'invited@evil.example' })
 		expect(res.status).toBe(302)
 		// The invite was claimed by the IdP sub.
-		expect((await h.db.getUserByExternalId('inv-1'))?.email).toBe('invited@evil.example')
+		expect((await h.repositories.principals.getUserByExternalId('inv-1'))?.email).toBe('invited@evil.example')
 	})
 })
 
@@ -225,7 +225,12 @@ describe('GET /auth/logout', () => {
 		const h = createHarness()
 		const principalId = seedUser(h.sqlite, { sub: 'g-7', email: 'l@o.cz' })
 		const sessionToken = 'live-session'
-		await h.db.createSession({ tokenHash: await hashToken(sessionToken), principalId, idpSub: 'g-7', expiresAt: Math.floor(Date.now() / 1000) + 3600 })
+		await h.repositories.sessions.createSession({
+			tokenHash: await hashToken(sessionToken),
+			principalId,
+			idpSub: 'g-7',
+			expiresAt: Math.floor(Date.now() / 1000) + 3600,
+		})
 
 		const res = await handleAuth(
 			new Request(`${ISSUER}/auth/logout`, { headers: { Cookie: `${SESSION_COOKIE}=${sessionToken}` } }),
@@ -236,7 +241,7 @@ describe('GET /auth/logout', () => {
 		expect(res.status).toBe(302)
 		// Cookie cleared (Max-Age=0) and the session no longer resolves.
 		expect(res.headers.getSetCookie().some((c) => c.startsWith(`${SESSION_COOKIE}=`) && c.includes('Max-Age=0'))).toBe(true)
-		expect(await h.db.getActiveSessionByHash(await hashToken(sessionToken))).toBeNull()
+		expect(await h.repositories.sessions.getActiveSessionByHash(await hashToken(sessionToken))).toBeNull()
 	})
 })
 

@@ -46,12 +46,12 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 		return { result: { ok: false, reason: 'no_session' }, principalId: null }
 	}
 
-	const session = await services.db.getActiveSessionByHash(await hashToken(input.session))
+	const session = await services.repositories.sessions.getActiveSessionByHash(await hashToken(input.session))
 	if (!session) {
 		return { result: { ok: false, reason: 'invalid_session' }, principalId: null }
 	}
 
-	const principal = await services.db.getPrincipalById(session.principal_id)
+	const principal = await services.repositories.principals.getPrincipalById(session.principal_id)
 	if (!principal) {
 		// The session outlived its principal (deleted) — treat as unknown.
 		return { result: { ok: false, reason: 'unknown_principal' }, principalId: null }
@@ -62,7 +62,7 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 
 	// Resolve permissions for the requesting app. Sessions are a USER credential (OIDC login).
 	const permissions = await resolveUserPermissions({
-		db: services.db,
+		repositories: services.repositories,
 		principal,
 		bootstrapAdmins: services.config.bootstrapAdmins,
 		app: input.app,
@@ -100,7 +100,7 @@ export async function mintFromKey(
 	env: MintEnv,
 	input: { app: string; key: string; requestId: string },
 ): Promise<MintFromKeyOutcome> {
-	const cred = await services.db.getActiveCredentialByHash(await hashToken(input.key))
+	const cred = await services.repositories.credentials.getActiveCredentialByHash(await hashToken(input.key))
 	if (!cred) {
 		return { result: { ok: false, reason: 'invalid_key' }, principalId: null, credentialId: null }
 	}
@@ -130,14 +130,14 @@ export type ResolvedCredential =
 	| { ok: false; reason: 'unknown_principal' | 'disabled' }
 
 export async function resolveCredential(services: Services, cred: CredentialRow, app: string): Promise<ResolvedCredential> {
-	const inline = (await services.db.getCredentialGrants(cred.id)).map(credentialGrantToEntry)
+	const inline = (await services.repositories.credentials.getCredentialGrants(cred.id)).map(credentialGrantToEntry)
 
 	if (cred.principal_id === null) {
 		// Anonymous: the frozen inline grants ARE the permission set (delegation-checked at issue).
 		return { ok: true, subject: cred.id, label: cred.label, permissions: inline }
 	}
 
-	const principal = await services.db.getPrincipalById(cred.principal_id)
+	const principal = await services.repositories.principals.getPrincipalById(cred.principal_id)
 	if (!principal) {
 		return { ok: false, reason: 'unknown_principal' }
 	}
@@ -146,9 +146,9 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
 	}
 
 	const resolved = principal.type === 'service'
-		? await resolveServicePermissions(services.db, principal, app)
+		? await resolveServicePermissions(services.repositories, principal, app)
 		: await resolveUserPermissions({
-			db: services.db,
+			repositories: services.repositories,
 			principal,
 			bootstrapAdmins: services.config.bootstrapAdmins,
 			app,

@@ -1,7 +1,7 @@
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import type { ApiDeps } from './api/router'
-import { Db, type RunRow } from './db'
+import type { ControlRepositories, RunRow } from './db'
 import type { Env } from './env'
 import { createIam } from './iam'
 import { GitHubAppRepoSource, type RepoSource } from './repo-source'
@@ -13,8 +13,8 @@ export const DEPLOY_LOCK_TTL_MS = 30 * 60 * 1000
 export const DEPLOY_LOCK_REQUEUE_DELAY_S = 30
 export const STALE_RUN_MAX_AGE_S = 30 * 60
 
-export function db(env: Env): Db {
-	return new Db(env.DB)
+export function repositories(env: Env): ControlRepositories {
+	return env.REPOSITORIES
 }
 
 export function locks(env: Env): DeployLocks {
@@ -39,7 +39,7 @@ export function vault(env: Env): Promise<Vault> {
 /** Assemble provider-neutral run dependencies around one statically selected provider. */
 export async function buildRunDeps(env: Env, provider: ControlProvider): Promise<RunDeps> {
 	return {
-		db: db(env),
+		repositories: repositories(env),
 		provider,
 		secrets: new VaultSecretResolver({
 			...(env.VOZKA_VAULT_KEY !== undefined ? { vault: await vault(env) } : {}),
@@ -56,13 +56,13 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 }
 
 export async function cancelRun(env: Env, provider: ControlProvider, run: RunRow): Promise<void> {
-	await cancelDeploy({ db: db(env), provider, lock: locks(env) }, run)
+	await cancelDeploy({ repositories: repositories(env), provider, lock: locks(env) }, run)
 }
 
 /** Assemble the shared API dependencies around one statically selected provider. */
 export function buildApiDeps(env: Env, provider: ControlProvider): ApiDeps {
 	return {
-		db: db(env),
+		repositories: repositories(env),
 		iam: createIam(env),
 		queue: env.DEPLOY_QUEUE,
 		logs: env.RUN_LOGS,

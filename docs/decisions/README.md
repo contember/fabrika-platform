@@ -29,6 +29,10 @@ provider boundary from ADR-0011. It makes shared placement, resource ownership,
 and its failure boundaries explicit without adding Zerops presets to the neutral
 contract.
 
+ADR-0015 moves the SQLite/Postgres portability seam from individual SQL text to
+capability repository operations. Shared SQL remains the default; composition
+roots may select a backend-specific implementation for a complete operation.
+
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
@@ -47,3 +51,4 @@ contract.
 - [0012](0012-fabrika-app-runtime.md) — Absorb the Trasa server framework as `@fabrika/app` — accepted (2026-07-29)
 - [0013](0013-explicit-runtime-adapter-entrypoints.md) — Expose runtime adapters through explicit package entrypoints — accepted (2026-07-29)
 - [0014](0014-provider-owned-deployment-namespaces.md) — Model deployment namespaces as provider-owned placement boundaries — accepted (2026-07-29)
+- [0015](0015-repository-operations-are-the-sql-portability-seam.md) — Make repository operations the SQL portability seam — accepted (2026-07-30)

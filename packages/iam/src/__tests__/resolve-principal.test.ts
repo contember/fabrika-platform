@@ -143,9 +143,9 @@ describe('Db.refreshUserLabel — null-safe change detection', () => {
 			1_782_896_400,
 		])
 
-		await h.db.refreshUserLabel('p-null', 'new@x.com')
+		await h.repositories.principals.refreshUserLabel('p-null', 'new@x.com')
 
-		const row = await h.db.getPrincipalById('p-null')
+		const row = await h.repositories.principals.getPrincipalById('p-null')
 		expect(row?.email).toBe('new@x.com')
 		expect(row?.label).toBe('new@x.com')
 	})
@@ -154,12 +154,12 @@ describe('Db.refreshUserLabel — null-safe change detection', () => {
 		const h = createHarness()
 		const id = seedUser(h.sqlite, { sub: 'sub-eq', email: 'old@x.com', label: 'old@x.com' })
 
-		await h.db.refreshUserLabel(id, 'new@x.com')
-		expect((await h.db.getPrincipalById(id))?.email).toBe('new@x.com')
+		await h.repositories.principals.refreshUserLabel(id, 'new@x.com')
+		expect((await h.repositories.principals.getPrincipalById(id))?.email).toBe('new@x.com')
 
 		// Second call matches no rows (the guard is false on both sides) — same visible state.
-		await h.db.refreshUserLabel(id, 'new@x.com')
-		const row = await h.db.getPrincipalById(id)
+		await h.repositories.principals.refreshUserLabel(id, 'new@x.com')
+		const row = await h.repositories.principals.getPrincipalById(id)
 		expect(row?.email).toBe('new@x.com')
 		expect(row?.label).toBe('new@x.com')
 	})

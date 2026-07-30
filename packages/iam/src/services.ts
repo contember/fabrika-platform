@@ -1,4 +1,4 @@
-import { Db } from './db'
+import type { IamRepositories } from './db'
 import type { Env } from './env'
 import { OidcClient } from './oidc'
 
@@ -8,7 +8,7 @@ import { OidcClient } from './oidc'
  * keeps them decoupled from the CF binding shape and easier to test.
  */
 export interface Services {
-	readonly db: Db
+	readonly repositories: IamRepositories
 	/** OIDC relying-party client (the propustka-native login upstream). Tests inject a fake. */
 	readonly oidc: OidcClient
 	readonly config: Config
@@ -58,7 +58,7 @@ function parseBootstrapAdmins(raw: string): Set<string> {
 
 export function buildServices(env: Env): Services {
 	return {
-		db: new Db(env.DB),
+		repositories: env.REPOSITORIES,
 		oidc: new OidcClient({
 			issuer: env.OIDC_ISSUER,
 			clientId: env.OIDC_CLIENT_ID,

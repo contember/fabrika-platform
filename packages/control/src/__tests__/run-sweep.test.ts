@@ -12,8 +12,8 @@ const NOW = 1_700_000_000
 describe('Db.sweepStaleRuns', () => {
 	test('reaps stale pending/running runs, spares recent + already-terminal ones', async () => {
 		const { db, sqlite } = createHarness(() => NOW)
-		await db.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
-		await db.upsertAppEnv(providerEnvironment('app', 'prod'))
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
 
 		const OLD = NOW - 40 * 60 // beyond the 30-min threshold
 		const RECENT = NOW - 5 * 60 // within it
@@ -25,7 +25,7 @@ describe('Db.sweepStaleRuns', () => {
 				('old-succeeded', 'app','prod','refs/heads/main','manual','succeeded', ${OLD},    ${OLD})
 		`)
 
-		const swept = await db.sweepStaleRuns(30 * 60)
+		const swept = await db.runs.sweepStaleRuns(30 * 60)
 		expect(swept).toBe(2) // old-running + old-pending
 
 		const statusOf = (id: string): unknown => queryRows(sqlite, 'SELECT status FROM runs WHERE id = ?', id)[0]?.status
@@ -39,20 +39,20 @@ describe('Db.sweepStaleRuns', () => {
 
 	test('a fresh run loop is never reaped (the age guard protects in-flight deploys)', async () => {
 		const { db, sqlite } = createHarness(() => NOW)
-		await db.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
-		await db.upsertAppEnv(providerEnvironment('app', 'prod'))
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
 		sqlite.exec(
 			`INSERT INTO runs (id, app_id, env, ref, trigger, status, created_at)
 				VALUES ('fresh','app','prod','refs/heads/main','manual','running',${NOW})`,
 		)
-		expect(await db.sweepStaleRuns(30 * 60)).toBe(0)
+		expect(await db.runs.sweepStaleRuns(30 * 60)).toBe(0)
 		expect(queryRows(sqlite, 'SELECT status FROM runs WHERE id = ?', 'fresh')[0]?.status).toBe('running')
 	})
 
 	test('does not reap a run once its provider owns an external operation', async () => {
 		const { db, sqlite } = createHarness(() => NOW)
-		await db.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
-		await db.upsertAppEnv(providerEnvironment('app', 'prod'))
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
 		const old = NOW - 40 * 60
 		sqlite.exec(
 			`INSERT INTO runs (
@@ -63,7 +63,7 @@ describe('Db.sweepStaleRuns', () => {
 			)`,
 		)
 
-		expect(await db.sweepStaleRuns(30 * 60)).toBe(0)
+		expect(await db.runs.sweepStaleRuns(30 * 60)).toBe(0)
 		expect(queryRows(sqlite, 'SELECT status FROM runs WHERE id = ?', 'platform-owned')[0]?.status).toBe('running')
 	})
 })

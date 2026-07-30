@@ -47,7 +47,7 @@ function makeDeps(iam: Authenticator): { deps: ApiDeps; vault: Promise<Vault>; q
 	const queue: DeployJobMessage[] = []
 	const vault = Vault.create(d1, testKey())
 	const deps: ApiDeps = {
-		db,
+		repositories: db,
 		iam,
 		queue: {
 			send(m) {
@@ -101,8 +101,8 @@ function noSecretManager(): Authenticator {
 
 describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 	async function seedApp(deps: ApiDeps): Promise<void> {
-		await deps.db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		await deps.db.upsertAppEnv(storedEnvironment())
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await deps.repositories.registry.upsertAppEnv(storedEnvironment())
 	}
 
 	test('PUT .../secrets/:name/value stores in the vault + upserts the ref; value not returned', async () => {
@@ -113,7 +113,7 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		expect(response.status).toBe(200)
 		expect(await response.text()).not.toContain('the-real-key')
 
-		const secrets = await deps.db.listAppSecrets('app')
+		const secrets = await deps.repositories.registry.listAppSecrets('app')
 		const prod = secrets.find((s) => s.name === 'API_KEY' && s.env === 'prod')
 		expect(prod).toBeDefined()
 		expect(parseVaultRef(prod!.value_ref)).not.toBeNull()
@@ -124,7 +124,7 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		const { deps, vault } = makeDeps(secretManager())
 		await seedApp(deps)
 		await handleApi(req('PUT', '/api/apps/app/secrets/SHARED/value', { value: 'shared-v1' }), deps)
-		const allEnv = (await deps.db.listAppSecrets('app')).find((s) => s.name === 'SHARED' && s.env === null)
+		const allEnv = (await deps.repositories.registry.listAppSecrets('app')).find((s) => s.name === 'SHARED' && s.env === null)
 		expect(allEnv).toBeDefined()
 
 		const rotate = await handleApi(req('PATCH', '/api/apps/app/secrets/SHARED/value', { value: 'shared-v2' }), deps)
@@ -136,7 +136,7 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		const { deps, vault } = makeDeps(secretManager())
 		await seedApp(deps)
 		await handleApi(req('PUT', '/api/apps/app/secrets/GONE/value', { value: 'bye' }), deps)
-		const ref = (await deps.db.listAppSecrets('app')).find((s) => s.name === 'GONE')!.value_ref
+		const ref = (await deps.repositories.registry.listAppSecrets('app')).find((s) => s.name === 'GONE')!.value_ref
 		const del = await handleApi(req('DELETE', '/api/apps/app/secrets/GONE/value'), deps)
 		expect(del.status).toBe(200)
 		await expect((await vault).getSecret(ref)).rejects.toThrow()
@@ -174,7 +174,7 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 			},
 		}
 		const deps: ApiDeps = {
-			db,
+			repositories: db,
 			iam: secretManager(),
 			queue: { send: () => Promise.resolve() },
 			logs: { get: () => Promise.resolve(null) },
@@ -182,8 +182,8 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 			provider,
 			cancelRun: () => Promise.resolve(),
 		}
-		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		await db.createDeploymentNamespace({
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await db.registry.createDeploymentNamespace({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'harbor',
@@ -191,13 +191,13 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 			providerTargetJson: JSON.stringify(envelope('harbor', 'namespace')),
 			state: 'failed',
 		})
-		await db.upsertAppEnv({
+		await db.registry.upsertAppEnv({
 			...storedEnvironment('harbor'),
 			namespaceId: 'apps-prod',
 		})
 
 		expect((await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { value: 'v1', env: 'prod' }), deps)).status).toBe(200)
-		const stored = (await db.listAppSecrets('app')).find((secret) => secret.name === 'API_KEY')
+		const stored = (await db.registry.listAppSecrets('app')).find((secret) => secret.name === 'API_KEY')
 		expect(stored?.value_ref).toBe('harbor:prod/API_KEY')
 		expect(parseVaultRef(stored?.value_ref ?? '')).toBeNull()
 		expect((await handleApi(req('PATCH', '/api/apps/app/secrets/API_KEY/value', { value: 'v2', env: 'prod' }), deps)).status).toBe(200)
@@ -220,8 +220,8 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 				delete: async () => {},
 			},
 		}
-		await deps.db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		await deps.db.upsertAppEnv({
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await deps.repositories.registry.upsertAppEnv({
 			...storedEnvironment('harbor'),
 		})
 		const response = await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { value: 'v1' }), deps)
@@ -233,7 +233,7 @@ describe('vault not configured', () => {
 	test('vault routes 500 cleanly when no vault factory is wired', async () => {
 		const { db } = createHarness()
 		const deps: ApiDeps = {
-			db,
+			repositories: db,
 			iam: secretManager(),
 			queue: { send: () => Promise.resolve() },
 			logs: { get: () => Promise.resolve(null) },
@@ -242,7 +242,7 @@ describe('vault not configured', () => {
 			cancelRun: () => Promise.resolve(),
 			// no `vault` factory
 		}
-		await db.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
 		const response = await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { value: 'x' }), deps)
 		expect(response.status).toBe(500)
 	})

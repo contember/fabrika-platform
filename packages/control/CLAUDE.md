@@ -55,8 +55,10 @@ capabilities. Cloudflare hands the provider-owned job to vozka-runner. Zerops ex
 session in process. Core owns registry/run writes, locking, secret resolution, and generic envelopes.
 
 Runtime surface: `src/env.ts` (ports + vars) · `src/platform-cf.ts` (the raw CF bindings + their
-adapters) · `src/services.ts` (how every dependency bag is built). Schema: `migrations/*.sql` (SQLite/D1)
-and `migrations-postgres/*.sql` (the same FINAL schema, expressed once, for Postgres).
+adapters) · `src/services.ts` (how every dependency bag is built). Persistence capabilities live in
+`src/db.ts`; the runtime composition root assembles them over D1 or Postgres. Schema:
+`migrations/*.sql` (SQLite/D1) and `migrations-postgres/*.sql` (the same FINAL schema, expressed once,
+for Postgres).
 
 Three deploy TRIGGERS, all converging on the same `createRun` + enqueue: (1) the GitHub-App push
 webhook (`src/webhook.ts`, private repos); (2) the manual Deploy button (`triggerDeploy`); (3) the cron
@@ -126,14 +128,17 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
 
 ## Patterns
 
-- All database access goes through `src/db.ts` (prepared statements, snake_case rows, caller-stamped UUIDv7).
-  It takes the `SqlDatabase` PORT (`@fabrika/platform`), which `D1Database` satisfies structurally — so every
-  statement must stay in the SQLite ∩ Postgres common subset. `src/env.ts` declares EVERY core handle as
-  a port; D1/Fetcher satisfy theirs structurally, while R2/Queues are adapted in `src/platform-cf.ts`.
+- All database access goes through the capability repositories in `src/db.ts` (prepared statements,
+  snake_case rows, caller-stamped UUIDv7). Portable operations take the `SqlDatabase` port
+  (`@fabrika/platform`), which `D1Database` satisfies structurally. A composition root may replace a
+  complete capability when an operation needs dialect-specific statement count, atomicity, or
+  locking; shared code never switches on a database id. See ADR-0015. `src/env.ts` declares every core
+  handle as a port; D1/Fetcher satisfy theirs structurally, while R2/Queues are adapted in
+  `src/platform-cf.ts`.
   `RUNNER_SVC` is not a core port; the Cloudflare composition passes it directly to its provider.
-- **TIMESTAMPS ARE CALLER-STAMPED, never `unixepoch()`** (Postgres has no such function). `Db` and `Vault`
-  each carry an injectable `now()` in unix SECONDS (default `Math.floor(Date.now() / 1000)`), like
-  `SqlDeployLocks` does in milliseconds — so the stamp is deterministic in tests. The CREATION stamps are
+- **TIMESTAMPS ARE CALLER-STAMPED, never `unixepoch()`** (Postgres has no such function). The relevant
+  repository capabilities and `Vault` carry an injectable `now()` in unix SECONDS (default
+  `Math.floor(Date.now() / 1000)`), like `SqlDeployLocks` does in milliseconds — so the stamp is deterministic in tests. The CREATION stamps are
   the exception: `createApp`/`createRun`/the three upserts/`Vault.putSecret` omit `created_at` and rely on
   the DDL default, which is `unixepoch()` on SQLite and `FLOOR(EXTRACT(EPOCH FROM now()))` in
   `migrations-postgres/`. Never write `unixepoch()` in a STATEMENT.

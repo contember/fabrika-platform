@@ -13,6 +13,7 @@ import type { BlobStore, HttpService, JobQueue } from '@fabrika/platform'
 import { type CloudflareRunnerJob, createCloudflareControlProvider } from '@fabrika/provider-cloudflare'
 import type { ControlProvider, ProviderSource, ProviderTerminalOutcome } from '@fabrika/provider-contract'
 import type { VozkaRunner } from '@fabrika/runner-cloudflare'
+import { createControlRepositories } from './db'
 import type { Env } from './env'
 import type { DeployJobMessage } from './run-lifecycle'
 import { repoSource } from './services'
@@ -22,7 +23,7 @@ import { repoSource } from './services'
  * `this.env` with. It differs from `Env` in exactly the five handles and in nothing else: every var and
  * secret is inherited, so there is one place to add one.
  */
-export interface WorkerBindings extends Omit<Env, 'DB' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'IAM' | 'IAM_ADMIN'> {
+export interface WorkerBindings extends Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'IAM' | 'IAM_ADMIN'> {
 	/** Registry + run history + vault + deploy locks. Migrations in `./migrations` (SQLite dialect). */
 	DB: D1Database
 	/** Control-plane SPA static assets. */
@@ -50,6 +51,7 @@ export function controlEnv(bindings: WorkerBindings): Env {
 	return {
 		...bindings,
 		DB: bindings.DB,
+		REPOSITORIES: createControlRepositories(bindings.DB),
 		ASSETS: bindings.ASSETS,
 		RUN_LOGS: r2BlobStore(bindings.RUN_LOGS),
 		DEPLOY_QUEUE: cfJobQueue(bindings.DEPLOY_QUEUE),

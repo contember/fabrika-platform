@@ -2,7 +2,7 @@ import { deploy } from '@fabrika/engine'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { createZeropsControlProvider } from '@fabrika/provider-zerops'
 import type { Env } from '../env'
-import { db } from '../services'
+import { repositories } from '../services'
 import { syncZeropsProxy } from './zerops-proxy'
 
 const required = (source: Record<string, string | undefined>, name: string): string => {
@@ -51,7 +51,7 @@ export function zeropsControlProvider(
 		},
 		beforeDeploy: async (input) => {
 			await syncZeropsProxy({
-				db: db(env),
+				db: repositories(env).registry,
 				api: input.api,
 				namespaceId: input.namespaceId,
 				proxyServiceId: input.target.proxyServiceId,

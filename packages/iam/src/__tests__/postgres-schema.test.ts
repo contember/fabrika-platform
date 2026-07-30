@@ -13,7 +13,7 @@
 
 import { createBackgroundTasks, type PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { Db } from '../db'
+import { createIamRepositories, type IamRepositories } from '../db'
 import type { Env } from '../env'
 import { prop } from '../json'
 import { applyMigrations } from '../node/migrate'
@@ -29,7 +29,7 @@ if (!hasPostgres) {
 
 let fixture: PostgresFixture | null = null
 let raw: PostgresDatabase
-let db: Db
+let db: IamRepositories
 
 beforeAll(async () => {
 	if (!hasPostgres) {
@@ -37,7 +37,7 @@ beforeAll(async () => {
 	}
 	fixture = await createPostgres('iam')
 	raw = fixture.db
-	db = new Db(raw)
+	db = createIamRepositories(raw)
 })
 
 afterAll(async () => {
@@ -78,7 +78,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 	})
 
 	test('seeds the provisioning principal (0002), idempotently', async () => {
-		const row = await db.getPrincipalById('provisioning-admin')
+		const row = await db.principals.getPrincipalById('provisioning-admin')
 		expect(row?.type).toBe('service')
 		expect(row?.label).toBe('provisioning')
 	})
@@ -131,8 +131,8 @@ describe.skipIf(!hasPostgres)('the Postgres schema — column types the row shap
 
 	test('auth_log.id is the ONE bigint — and therefore decodes as a string', async () => {
 		await reset()
-		const principal = await db.createUser('sub-bigint', 'bigint@x.cz')
-		await db.writeAuthLog({ requestId: 'r-bigint', app: 'opice', kind: 'authenticate', principalId: principal.id, decision: 'allow' })
+		const principal = await db.principals.createUser('sub-bigint', 'bigint@x.cz')
+		await db.audit.writeAuthLog({ requestId: 'r-bigint', app: 'opice', kind: 'authenticate', principalId: principal.id, decision: 'allow' })
 
 		const { results } = await raw
 			.prepare(`SELECT data_type FROM information_schema.columns WHERE table_schema = ? AND table_name = 'auth_log' AND column_name = 'id'`)
@@ -141,7 +141,7 @@ describe.skipIf(!hasPostgres)('the Postgres schema — column types the row shap
 		expect(results[0]?.data_type).toBe('bigint')
 
 		// The consequence, pinned: `AuthLogRow.id` is `number | string` because of exactly this.
-		const [row] = await db.listAuthLog({ limit: 1 })
+		const [row] = await db.audit.listAuthLog({ limit: 1 })
 		expect(typeof row?.id).toBe('string')
 		// …and it must still be a usable cursor after `toAuthLogDto` normalises it.
 		expect(Number(row?.id)).toBeGreaterThan(0)
@@ -149,9 +149,9 @@ describe.skipIf(!hasPostgres)('the Postgres schema — column types the row shap
 
 	test('the identity default assigns ids when writeAuthLog omits the column', async () => {
 		await reset()
-		await db.writeAuthLog({ requestId: 'r1', app: 'opice', kind: 'authenticate', principalId: null, decision: 'deny', reason: 'invalid_key' })
-		await db.writeAuthLog({ requestId: 'r2', app: 'opice', kind: 'authenticate', principalId: null, decision: 'allow' })
-		const rows = await db.listAuthLog({ limit: 10 })
+		await db.audit.writeAuthLog({ requestId: 'r1', app: 'opice', kind: 'authenticate', principalId: null, decision: 'deny', reason: 'invalid_key' })
+		await db.audit.writeAuthLog({ requestId: 'r2', app: 'opice', kind: 'authenticate', principalId: null, decision: 'allow' })
+		const rows = await db.audit.listAuthLog({ limit: 10 })
 		expect(rows).toHaveLength(2)
 		// Descending by id — the keyset order the admin log pages by.
 		expect(rows.map((r) => r.request_id)).toEqual(['r2', 'r1'])
@@ -162,45 +162,45 @@ describe.skipIf(!hasPostgres)('the Postgres schema — column types the row shap
 describe.skipIf(!hasPostgres)('the Postgres schema — constraints', () => {
 	test('the partial unique indexes behave exactly as on SQLite', async () => {
 		await reset()
-		const p = await db.createUser('sub-uq', 'uq@x.cz')
+		const p = await db.principals.createUser('sub-uq', 'uq@x.cz')
 
-		await db.createGrant({ principalId: p.id, roleKey: 'editor' })
+		await db.grants.createGrant({ principalId: p.id, roleKey: 'editor' })
 		// A second GLOBAL role grant for the same (principal, role, app) — rejected despite NULL scope
 		// and NULL app, because COALESCE(app,'*') folds the NULLs that would otherwise compare distinct.
-		await expect(db.createGrant({ principalId: p.id, roleKey: 'editor' })).rejects.toThrow()
+		await expect(db.grants.createGrant({ principalId: p.id, roleKey: 'editor' })).rejects.toThrow()
 
 		// The same role for a DIFFERENT app is fine; the same app twice is not.
-		await db.createGrant({ principalId: p.id, roleKey: 'editor', app: 'opice' })
-		await expect(db.createGrant({ principalId: p.id, roleKey: 'editor', app: 'opice' })).rejects.toThrow()
+		await db.grants.createGrant({ principalId: p.id, roleKey: 'editor', app: 'opice' })
+		await expect(db.grants.createGrant({ principalId: p.id, roleKey: 'editor', app: 'opice' })).rejects.toThrow()
 
 		// Scoped grants differ by scope value.
-		await db.createGrant({ principalId: p.id, roleKey: 'viewer', scopeType: 'team', scopeValue: 'acme' })
-		await db.createGrant({ principalId: p.id, roleKey: 'viewer', scopeType: 'team', scopeValue: 'globex' })
-		await expect(db.createGrant({ principalId: p.id, roleKey: 'viewer', scopeType: 'team', scopeValue: 'acme' })).rejects.toThrow()
+		await db.grants.createGrant({ principalId: p.id, roleKey: 'viewer', scopeType: 'team', scopeValue: 'acme' })
+		await db.grants.createGrant({ principalId: p.id, roleKey: 'viewer', scopeType: 'team', scopeValue: 'globex' })
+		await expect(db.grants.createGrant({ principalId: p.id, roleKey: 'viewer', scopeType: 'team', scopeValue: 'acme' })).rejects.toThrow()
 
 		// Inline grants are deliberately unconstrained — each is its own attachment.
-		await db.createGrant({ principalId: p.id, permissions: ['report.export'], scopeType: 'team', scopeValue: 'acme', app: 'opice' })
-		await db.createGrant({ principalId: p.id, permissions: ['report.export'], scopeType: 'team', scopeValue: 'acme', app: 'opice' })
+		await db.grants.createGrant({ principalId: p.id, permissions: ['report.export'], scopeType: 'team', scopeValue: 'acme', app: 'opice' })
+		await db.grants.createGrant({ principalId: p.id, permissions: ['report.export'], scopeType: 'team', scopeValue: 'acme', app: 'opice' })
 	})
 
 	test('a grant carries EITHER a role_key OR inline permissions, and scope is both-or-neither', async () => {
 		await reset()
-		const p = await db.createUser('sub-xor', 'xor@x.cz')
-		await expect(db.createGrant({ principalId: p.id, roleKey: 'editor', permissions: ['project.read'] })).rejects.toThrow()
-		await expect(db.createGrant({ principalId: p.id })).rejects.toThrow()
-		await expect(db.createGrant({ principalId: p.id, roleKey: 'editor', scopeType: 'team' })).rejects.toThrow()
-		await expect(db.createGrant({ principalId: p.id, roleKey: 'editor', scopeValue: 'acme' })).rejects.toThrow()
+		const p = await db.principals.createUser('sub-xor', 'xor@x.cz')
+		await expect(db.grants.createGrant({ principalId: p.id, roleKey: 'editor', permissions: ['project.read'] })).rejects.toThrow()
+		await expect(db.grants.createGrant({ principalId: p.id })).rejects.toThrow()
+		await expect(db.grants.createGrant({ principalId: p.id, roleKey: 'editor', scopeType: 'team' })).rejects.toThrow()
+		await expect(db.grants.createGrant({ principalId: p.id, roleKey: 'editor', scopeValue: 'acme' })).rejects.toThrow()
 	})
 
 	test('at most one user principal per email, and unique (type, external_id)', async () => {
 		await reset()
-		await db.inviteUser('dup@x.cz')
-		await expect(db.inviteUser('dup@x.cz')).rejects.toThrow()
+		await db.principals.inviteUser('dup@x.cz')
+		await expect(db.principals.inviteUser('dup@x.cz')).rejects.toThrow()
 		// …but two INVITED users (external_id NULL) with different emails coexist: the partial index on
 		// (type, external_id) skips NULLs, which is the whole reason it is partial.
-		await db.inviteUser('other@x.cz')
-		await db.createUser('sub-shared', 'first@x.cz')
-		await expect(db.createUser('sub-shared', 'second@x.cz')).rejects.toThrow()
+		await db.principals.inviteUser('other@x.cz')
+		await db.principals.createUser('sub-shared', 'first@x.cz')
+		await expect(db.principals.createUser('sub-shared', 'second@x.cz')).rejects.toThrow()
 	})
 
 	test('roles.permissions accepts junk — JSON validity is NOT a DB constraint on either dialect', async () => {
@@ -218,137 +218,142 @@ describe.skipIf(!hasPostgres)('the Postgres schema — constraints', () => {
 
 	test('credential_grants cascade-delete with their credential', async () => {
 		await reset()
-		const p = await db.createUser('sub-casc', 'casc@x.cz')
-		const id = await db.createCredential({ tokenHash: 'h-casc', issuedBy: p.id, grants: [{ action: 'report.read' }] })
-		expect(await db.getCredentialGrants(id)).toHaveLength(1)
+		const p = await db.principals.createUser('sub-casc', 'casc@x.cz')
+		const id = await db.credentials.createCredential({ tokenHash: 'h-casc', issuedBy: p.id, grants: [{ action: 'report.read' }] })
+		expect(await db.credentials.getCredentialGrants(id)).toHaveLength(1)
 		await raw.prepare('DELETE FROM credentials WHERE id = ?').bind(id).run()
-		expect(await db.getCredentialGrants(id)).toHaveLength(0)
+		expect(await db.credentials.getCredentialGrants(id)).toHaveLength(0)
 	})
 })
 
 describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified, on Postgres', () => {
 	test('principals: create, claim, lookup, search, refresh, disable/enable, delete', async () => {
 		await reset()
-		const created = await db.createUser('sub-1', 'alice@x.cz')
+		const created = await db.principals.createUser('sub-1', 'alice@x.cz')
 		// The seconds-valued columns decode as numbers — the reason they are int4 and not bigint.
 		expect(typeof created.created_at).toBe('number')
 		expect(created.disabled_at).toBeNull()
 
-		expect((await db.getUserByExternalId('sub-1'))?.id).toBe(created.id)
-		expect((await db.getUserByEmail('alice@x.cz'))?.id).toBe(created.id)
-		expect((await db.getPrincipalById(created.id))?.label).toBe('alice@x.cz')
-		expect(await db.getServiceByExternalId('sub-1')).toBeNull()
+		expect((await db.principals.getUserByExternalId('sub-1'))?.id).toBe(created.id)
+		expect((await db.principals.getUserByEmail('alice@x.cz'))?.id).toBe(created.id)
+		expect((await db.principals.getPrincipalById(created.id))?.label).toBe('alice@x.cz')
+		expect(await db.principals.getServiceByExternalId('sub-1')).toBeNull()
 
 		// LOWER() on both sides: Postgres LIKE is case-SENSITIVE where SQLite's folds ASCII.
-		expect((await db.listPrincipals({ q: 'ALICE' })).map((p) => p.id)).toEqual([created.id])
-		expect(await db.listPrincipals({ type: 'service' })).toHaveLength(0)
+		expect((await db.principals.listPrincipals({ q: 'ALICE' })).map((p) => p.id)).toEqual([created.id])
+		expect(await db.principals.listPrincipals({ type: 'service' })).toHaveLength(0)
 
 		// `IS DISTINCT FROM` (not SQLite's `IS NOT <expr>`) — a no-op when nothing changed.
-		await db.refreshUserLabel(created.id, 'alice2@x.cz')
-		expect((await db.getPrincipalById(created.id))?.email).toBe('alice2@x.cz')
+		await db.principals.refreshUserLabel(created.id, 'alice2@x.cz')
+		expect((await db.principals.getPrincipalById(created.id))?.email).toBe('alice2@x.cz')
 
-		const invited = await db.inviteUser('bob@x.cz')
+		const invited = await db.principals.inviteUser('bob@x.cz')
 		expect(invited.external_id).toBeNull()
-		const claimed = await db.claimInvitedUser(invited.id, 'sub-bob', 'bob@x.cz')
+		const claimed = await db.principals.claimInvitedUser(invited.id, 'sub-bob', 'bob@x.cz')
 		expect(claimed?.external_id).toBe('sub-bob')
 		// The guard is single-shot: a second claim of the same row matches nothing.
-		expect(await db.claimInvitedUser(invited.id, 'sub-bob2', 'bob@x.cz')).toBeNull()
+		expect(await db.principals.claimInvitedUser(invited.id, 'sub-bob2', 'bob@x.cz')).toBeNull()
 
-		const service = await db.createService('ci-runner')
+		const service = await db.principals.createService('ci-runner')
 		expect(service.type).toBe('service')
 
-		expect(await db.disablePrincipal(created.id)).toBe(true)
-		expect(await db.disablePrincipal(created.id)).toBe(false) // guarded UPDATE → changes 0
-		expect(await db.enablePrincipal(created.id)).toBe(true)
-		expect(await db.enablePrincipal(created.id)).toBe(false)
-		expect(await db.deletePrincipal(created.id)).toBe(true)
-		expect(await db.deletePrincipal(created.id)).toBe(false)
+		expect(await db.principals.disablePrincipal(created.id)).toBe(true)
+		expect(await db.principals.disablePrincipal(created.id)).toBe(false) // guarded UPDATE → changes 0
+		expect(await db.principals.enablePrincipal(created.id)).toBe(true)
+		expect(await db.principals.enablePrincipal(created.id)).toBe(false)
+		expect(await db.principals.deletePrincipal(created.id)).toBe(true)
+		expect(await db.principals.deletePrincipal(created.id)).toBe(false)
 	})
 
 	test('grants: create, list, expiry filtering, app filtering, delete, cascade', async () => {
 		await reset()
-		const p = await db.createUser('sub-g', 'g@x.cz')
+		const p = await db.principals.createUser('sub-g', 'g@x.cz')
 		const past = now() - 60
 		const future = now() + 3600
 
-		const global = await db.createGrant({ principalId: p.id, roleKey: 'admin' })
-		await db.createGrant({ principalId: p.id, roleKey: 'editor', app: 'opice' })
-		await db.createGrant({ principalId: p.id, roleKey: 'viewer', app: 'poplach', expiresAt: past })
-		await db.createGrant({ principalId: p.id, roleKey: 'auditor', app: 'opice', expiresAt: future })
+		const global = await db.grants.createGrant({ principalId: p.id, roleKey: 'admin' })
+		await db.grants.createGrant({ principalId: p.id, roleKey: 'editor', app: 'opice' })
+		await db.grants.createGrant({ principalId: p.id, roleKey: 'viewer', app: 'poplach', expiresAt: past })
+		await db.grants.createGrant({ principalId: p.id, roleKey: 'auditor', app: 'opice', expiresAt: future })
 
-		expect(await db.listGrants(p.id)).toHaveLength(4)
-		expect(await db.getActiveGrants(p.id)).toHaveLength(3) // the expired one drops out
-		expect((await db.getActiveGrantsForApp(p.id, 'opice')).map((g) => g.role_key).sort()).toEqual(['admin', 'auditor', 'editor'])
+		expect(await db.grants.listGrants(p.id)).toHaveLength(4)
+		expect(await db.grants.getActiveGrants(p.id)).toHaveLength(3) // the expired one drops out
+		expect((await db.grants.getActiveGrantsForApp(p.id, 'opice')).map((g) => g.role_key).sort()).toEqual(['admin', 'auditor', 'editor'])
 		// A null app is fail-safe: only cross-app (NULL) grants match.
-		expect((await db.getActiveGrantsForApp(p.id, null)).map((g) => g.role_key)).toEqual(['admin'])
-		expect((await db.getGrantById(global.id))?.role_key).toBe('admin')
+		expect((await db.grants.getActiveGrantsForApp(p.id, null)).map((g) => g.role_key)).toEqual(['admin'])
+		expect((await db.grants.getGrantById(global.id))?.role_key).toBe('admin')
 
-		expect(await db.deleteGrant(global.id)).toBe(true)
-		expect(await db.deleteGrant(global.id)).toBe(false)
-		await db.deleteGrantsForPrincipal(p.id)
-		expect(await db.listGrants(p.id)).toHaveLength(0)
+		expect(await db.grants.deleteGrant(global.id)).toBe(true)
+		expect(await db.grants.deleteGrant(global.id)).toBe(false)
+		await db.grants.deleteGrantsForPrincipal(p.id)
+		expect(await db.grants.listGrants(p.id)).toHaveLength(0)
 
 		// The FK cascade: deleting the principal takes its grants with it.
-		await db.createGrant({ principalId: p.id, roleKey: 'admin' })
-		await db.deletePrincipal(p.id)
-		expect(await db.listGrants(p.id)).toHaveLength(0)
+		await db.grants.createGrant({ principalId: p.id, roleKey: 'admin' })
+		await db.principals.deletePrincipal(p.id)
+		expect(await db.grants.listGrants(p.id)).toHaveLength(0)
 	})
 
 	test('getPrincipalsForApp returns the app roster (users only, DISTINCT, ordered)', async () => {
 		await reset()
-		const alice = await db.createUser('sub-a', 'alice@x.cz')
-		const bob = await db.createUser('sub-b', 'bob@x.cz')
-		const svc = await db.createService('machine')
-		await db.createGrant({ principalId: alice.id, roleKey: 'editor', app: 'opice' })
+		const alice = await db.principals.createUser('sub-a', 'alice@x.cz')
+		const bob = await db.principals.createUser('sub-b', 'bob@x.cz')
+		const svc = await db.principals.createService('machine')
+		await db.grants.createGrant({ principalId: alice.id, roleKey: 'editor', app: 'opice' })
 		// Two grants for one principal must still yield ONE row — that is what DISTINCT is for, and
 		// `SELECT DISTINCT p.*` is also what keeps `ORDER BY p.label` legal on Postgres.
-		await db.createGrant({ principalId: alice.id, roleKey: 'viewer', app: 'opice', scopeType: 'team', scopeValue: 'acme' })
-		await db.createGrant({ principalId: bob.id, roleKey: 'admin' })
-		await db.createGrant({ principalId: svc.id, roleKey: 'editor', app: 'opice' })
-		await db.createGrant({ principalId: (await db.createUser('sub-x', 'expired@x.cz')).id, roleKey: 'editor', app: 'opice', expiresAt: now() - 1 })
+		await db.grants.createGrant({ principalId: alice.id, roleKey: 'viewer', app: 'opice', scopeType: 'team', scopeValue: 'acme' })
+		await db.grants.createGrant({ principalId: bob.id, roleKey: 'admin' })
+		await db.grants.createGrant({ principalId: svc.id, roleKey: 'editor', app: 'opice' })
+		await db.grants.createGrant({
+			principalId: (await db.principals.createUser('sub-x', 'expired@x.cz')).id,
+			roleKey: 'editor',
+			app: 'opice',
+			expiresAt: now() - 1,
+		})
 
-		const roster = await db.getPrincipalsForApp('opice')
+		const roster = await db.principals.getPrincipalsForApp('opice')
 		expect(roster.map((p) => p.email)).toEqual(['alice@x.cz', 'bob@x.cz'])
 	})
 
 	test('app vocabulary: reconcile is atomic, prunes app-origin rows and preserves custom ones', async () => {
 		await reset()
-		await db.upsertRole({ app: 'opice', roleKey: 'bespoke', name: 'Bespoke', permissions: ['report.export'], origin: 'custom' })
+		await db.appSchema.upsertRole({ app: 'opice', roleKey: 'bespoke', name: 'Bespoke', permissions: ['report.export'], origin: 'custom' })
 
-		await db.reconcileAppSchema({
+		await db.appSchema.reconcileAppSchema({
 			app: 'opice',
 			scopes: [{ scopeType: 'team', label: 'Team' }, { scopeType: 'organization' }],
 			actions: [{ action: 'project.read', description: 'read' }, { action: 'project.write' }],
 			roles: [{ roleKey: 'editor', name: 'Editor', permissions: ['project.*'] }],
 		})
-		expect((await db.listAppScopes('opice')).map((s) => s.scope_type)).toEqual(['organization', 'team'])
-		expect(await db.listActionCatalog('opice')).toEqual(['project.read', 'project.write'])
-		expect((await db.listRoles('opice')).map((r) => r.role_key)).toEqual(['bespoke', 'editor'])
+		expect((await db.appSchema.listAppScopes('opice')).map((s) => s.scope_type)).toEqual(['organization', 'team'])
+		expect(await db.appSchema.listActionCatalog('opice')).toEqual(['project.read', 'project.write'])
+		expect((await db.appSchema.listRoles('opice')).map((r) => r.role_key)).toEqual(['bespoke', 'editor'])
 
 		// A second reconcile with a smaller set prunes the app-origin rows it dropped…
-		await db.reconcileAppSchema({ app: 'opice', scopes: [], actions: [{ action: 'project.read' }], roles: [] })
-		expect(await db.listAppScopes('opice')).toHaveLength(0)
-		expect(await db.listActionCatalog('opice')).toEqual(['project.read'])
+		await db.appSchema.reconcileAppSchema({ app: 'opice', scopes: [], actions: [{ action: 'project.read' }], roles: [] })
+		expect(await db.appSchema.listAppScopes('opice')).toHaveLength(0)
+		expect(await db.appSchema.listActionCatalog('opice')).toEqual(['project.read'])
 		// …and leaves the admin-composed policy alone.
-		expect((await db.listRolesByOrigin('opice', 'custom')).map((r) => r.role_key)).toEqual(['bespoke'])
-		expect(await db.listRolesByOrigin('opice', 'app')).toHaveLength(0)
+		expect((await db.appSchema.listRolesByOrigin('opice', 'custom')).map((r) => r.role_key)).toEqual(['bespoke'])
+		expect(await db.appSchema.listRolesByOrigin('opice', 'app')).toHaveLength(0)
 
 		// ON CONFLICT (app, role_key) DO UPDATE — the upsert path, and its RETURNING row.
-		const updated = await db.upsertRole({ app: 'opice', roleKey: 'bespoke', name: 'Renamed', permissions: [], origin: 'custom' })
+		const updated = await db.appSchema.upsertRole({ app: 'opice', roleKey: 'bespoke', name: 'Renamed', permissions: [], origin: 'custom' })
 		expect(updated.name).toBe('Renamed')
-		expect((await db.getRole('opice', 'bespoke'))?.permissions).toBe('[]')
-		expect(await db.deleteRole('opice', 'bespoke')).toBe(true)
-		expect(await db.deleteRole('opice', 'bespoke')).toBe(false)
+		expect((await db.appSchema.getRole('opice', 'bespoke'))?.permissions).toBe('[]')
+		expect(await db.appSchema.deleteRole('opice', 'bespoke')).toBe(true)
+		expect(await db.appSchema.deleteRole('opice', 'bespoke')).toBe(false)
 
-		expect(await db.listKnownApps()).toEqual(['opice'])
-		expect(await db.listAppActions('opice')).toHaveLength(1)
+		expect(await db.appSchema.listKnownApps()).toEqual(['opice'])
+		expect(await db.appSchema.listAppActions('opice')).toHaveLength(1)
 	})
 
 	test('credentials: batch insert with grants, validity window, revoke (single and bulk)', async () => {
 		await reset()
-		const p = await db.createUser('sub-c', 'c@x.cz')
+		const p = await db.principals.createUser('sub-c', 'c@x.cz')
 
-		const bound = await db.createCredential({
+		const bound = await db.credentials.createCredential({
 			tokenHash: 'hash-bound',
 			label: 'ci',
 			principalId: p.id,
@@ -356,49 +361,49 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 			grants: [{ action: 'report.read', scopeType: 'team', scopeValue: 'acme' }, { action: 'report.export' }],
 		})
 		// The credential row and its grant rows land in ONE transaction — the FK could not hold otherwise.
-		expect(await db.getCredentialGrants(bound)).toHaveLength(2)
-		expect((await db.getActiveCredentialByHash('hash-bound'))?.id).toBe(bound)
-		expect((await db.getCredentialById(bound))?.label).toBe('ci')
+		expect(await db.credentials.getCredentialGrants(bound)).toHaveLength(2)
+		expect((await db.credentials.getActiveCredentialByHash('hash-bound'))?.id).toBe(bound)
+		expect((await db.credentials.getCredentialById(bound))?.label).toBe('ci')
 
-		const anonymous = await db.createCredential({ tokenHash: 'hash-anon', issuedBy: p.id, grants: [{ action: 'report.read' }] })
-		expect((await db.listAnonymousCredentials()).map((c) => c.id)).toEqual([anonymous])
-		expect((await db.listCredentialsForPrincipal(p.id)).map((c) => c.id)).toEqual([bound])
+		const anonymous = await db.credentials.createCredential({ tokenHash: 'hash-anon', issuedBy: p.id, grants: [{ action: 'report.read' }] })
+		expect((await db.credentials.listAnonymousCredentials()).map((c) => c.id)).toEqual([anonymous])
+		expect((await db.credentials.listCredentialsForPrincipal(p.id)).map((c) => c.id)).toEqual([bound])
 
 		// Expired and revoked credentials are invisible to the resolve path.
-		await db.createCredential({ tokenHash: 'hash-expired', issuedBy: p.id, expiresAt: now() - 1, grants: [] })
-		expect(await db.getActiveCredentialByHash('hash-expired')).toBeNull()
-		expect(await db.revokeCredential(anonymous)).toBe(true)
-		expect(await db.revokeCredential(anonymous)).toBe(false)
-		expect(await db.getActiveCredentialByHash('hash-anon')).toBeNull()
+		await db.credentials.createCredential({ tokenHash: 'hash-expired', issuedBy: p.id, expiresAt: now() - 1, grants: [] })
+		expect(await db.credentials.getActiveCredentialByHash('hash-expired')).toBeNull()
+		expect(await db.credentials.revokeCredential(anonymous)).toBe(true)
+		expect(await db.credentials.revokeCredential(anonymous)).toBe(false)
+		expect(await db.credentials.getActiveCredentialByHash('hash-anon')).toBeNull()
 
-		expect(await db.revokeCredentialsForPrincipal(p.id)).toBe(1)
-		expect(await db.revokeCredentialsForPrincipal(p.id)).toBe(0)
+		expect(await db.credentials.revokeCredentialsForPrincipal(p.id)).toBe(1)
+		expect(await db.credentials.revokeCredentialsForPrincipal(p.id)).toBe(0)
 	})
 
 	test('sessions: create, validity window, revoke by hash, list, prune', async () => {
 		await reset()
-		const p = await db.createUser('sub-s', 's@x.cz')
-		const id = await db.createSession({ tokenHash: 'sess-1', principalId: p.id, idpSub: 'sub-s', email: 's@x.cz', expiresAt: now() + 3600 })
-		const session = await db.getActiveSessionByHash('sess-1')
+		const p = await db.principals.createUser('sub-s', 's@x.cz')
+		const id = await db.sessions.createSession({ tokenHash: 'sess-1', principalId: p.id, idpSub: 'sub-s', email: 's@x.cz', expiresAt: now() + 3600 })
+		const session = await db.sessions.getActiveSessionByHash('sess-1')
 		expect(session?.id).toBe(id)
 		expect(typeof session?.expires_at).toBe('number')
 
-		await db.createSession({ tokenHash: 'sess-expired', principalId: p.id, idpSub: 'sub-s', expiresAt: now() - 1 })
-		expect(await db.getActiveSessionByHash('sess-expired')).toBeNull()
+		await db.sessions.createSession({ tokenHash: 'sess-expired', principalId: p.id, idpSub: 'sub-s', expiresAt: now() - 1 })
+		expect(await db.sessions.getActiveSessionByHash('sess-expired')).toBeNull()
 
-		expect(await db.revokeSessionByHash('sess-1')).toBe(true)
-		expect(await db.revokeSessionByHash('sess-1')).toBe(false)
-		expect(await db.getActiveSessionByHash('sess-1')).toBeNull()
-		expect(await db.listSessionsForPrincipal(p.id)).toHaveLength(2)
+		expect(await db.sessions.revokeSessionByHash('sess-1')).toBe(true)
+		expect(await db.sessions.revokeSessionByHash('sess-1')).toBe(false)
+		expect(await db.sessions.getActiveSessionByHash('sess-1')).toBeNull()
+		expect(await db.sessions.listSessionsForPrincipal(p.id)).toHaveLength(2)
 
-		expect(await db.pruneSessions(now())).toBe(2)
-		expect(await db.listSessionsForPrincipal(p.id)).toHaveLength(0)
+		expect(await db.sessions.pruneSessions(now())).toBe(2)
+		expect(await db.sessions.listSessionsForPrincipal(p.id)).toHaveLength(0)
 	})
 
 	test('audit: write, filter, keyset-paginate, and prune the auth log', async () => {
 		await reset()
-		const p = await db.createUser('sub-au', 'au@x.cz')
-		await db.writeAuditEvent({
+		const p = await db.principals.createUser('sub-au', 'au@x.cz')
+		await db.audit.writeAuditEvent({
 			requestId: 'req-1',
 			principalId: p.id,
 			principalLabel: 'au@x.cz',
@@ -409,7 +414,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 			diff: { name: ['old', 'new'] },
 			metadata: { via: 'test' },
 		})
-		await db.writeAuditEvent({
+		await db.audit.writeAuditEvent({
 			requestId: 'req-2',
 			principalId: null,
 			principalLabel: 'anon',
@@ -418,22 +423,22 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 			resourceType: 'report',
 		})
 
-		expect(await db.listAuditEvents({ limit: 10 })).toHaveLength(2)
-		expect(await db.listAuditEvents({ limit: 10, resourceType: 'project', resourceId: 'proj-1' })).toHaveLength(1)
-		expect(await db.listAuditEvents({ limit: 10, principalId: p.id })).toHaveLength(1)
-		expect(await db.listAuditEvents({ limit: 10, action: 'report.read' })).toHaveLength(1)
-		expect(await db.listAuditEvents({ limit: 10, requestId: 'req-1' })).toHaveLength(1)
-		const [newest] = await db.listAuditEvents({ limit: 1 })
+		expect(await db.audit.listAuditEvents({ limit: 10 })).toHaveLength(2)
+		expect(await db.audit.listAuditEvents({ limit: 10, resourceType: 'project', resourceId: 'proj-1' })).toHaveLength(1)
+		expect(await db.audit.listAuditEvents({ limit: 10, principalId: p.id })).toHaveLength(1)
+		expect(await db.audit.listAuditEvents({ limit: 10, action: 'report.read' })).toHaveLength(1)
+		expect(await db.audit.listAuditEvents({ limit: 10, requestId: 'req-1' })).toHaveLength(1)
+		const [newest] = await db.audit.listAuditEvents({ limit: 1 })
 		// The cursor is the UUIDv7 id — a TEXT comparison, so it works identically on both engines.
-		expect(await db.listAuditEvents({ limit: 10, before: newest?.id ?? '' })).toHaveLength(1)
+		expect(await db.audit.listAuditEvents({ limit: 10, before: newest?.id ?? '' })).toHaveLength(1)
 		// The JSON-bearing TEXT columns round-trip verbatim; nothing in the DB parses or validates them.
-		const [oldest] = await db.listAuditEvents({ limit: 10, requestId: 'req-1' })
+		const [oldest] = await db.audit.listAuditEvents({ limit: 10, requestId: 'req-1' })
 		expect(oldest?.diff).toBe('{"name":["old","new"]}')
 		expect(oldest?.metadata).toBe('{"via":"test"}')
 		expect(newest?.diff).toBeNull()
 
-		await db.writeAuthLog({ requestId: 'req-1', app: 'opice', kind: 'authenticate', principalId: p.id, decision: 'allow', reason: 'mint' })
-		await db.writeAuthLog({
+		await db.audit.writeAuthLog({ requestId: 'req-1', app: 'opice', kind: 'authenticate', principalId: p.id, decision: 'allow', reason: 'mint' })
+		await db.audit.writeAuthLog({
 			requestId: 'req-2',
 			app: 'opice',
 			kind: 'authenticate',
@@ -442,28 +447,28 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 			decision: 'deny',
 			reason: 'invalid_key',
 		})
-		expect(await db.listAuthLog({ limit: 10, decision: 'deny' })).toHaveLength(1)
-		expect(await db.listAuthLog({ limit: 10, principalId: p.id })).toHaveLength(1)
-		expect(await db.listAuthLog({ limit: 10, requestId: 'req-2' })).toHaveLength(1)
+		expect(await db.audit.listAuthLog({ limit: 10, decision: 'deny' })).toHaveLength(1)
+		expect(await db.audit.listAuthLog({ limit: 10, principalId: p.id })).toHaveLength(1)
+		expect(await db.audit.listAuthLog({ limit: 10, requestId: 'req-2' })).toHaveLength(1)
 		// The `before` cursor is a JS number bound against a BIGINT column — the bind that had to work.
-		const [latest] = await db.listAuthLog({ limit: 1 })
-		expect(await db.listAuthLog({ limit: 10, before: Number(latest?.id) })).toHaveLength(1)
+		const [latest] = await db.audit.listAuthLog({ limit: 1 })
+		expect(await db.audit.listAuthLog({ limit: 10, before: Number(latest?.id) })).toHaveLength(1)
 
-		expect(await db.pruneAuthLog(now() + 60)).toBe(2)
-		expect(await db.listAuthLog({ limit: 10 })).toHaveLength(0)
+		expect(await db.audit.pruneAuthLog(now() + 60)).toBe(2)
+		expect(await db.audit.listAuthLog({ limit: 10 })).toHaveLength(0)
 	})
 
 	test('deleting a principal SETs NULL on its audit rows rather than removing them', async () => {
 		await reset()
-		const p = await db.createUser('sub-del', 'del@x.cz')
-		await db.writeAuditEvent({ requestId: 'r', principalId: p.id, principalLabel: 'del@x.cz', app: 'opice', action: 'x.y', resourceType: 'x' })
-		await db.writeAuthLog({ requestId: 'r', app: 'opice', kind: 'authenticate', principalId: p.id, decision: 'allow' })
-		await db.deletePrincipal(p.id)
+		const p = await db.principals.createUser('sub-del', 'del@x.cz')
+		await db.audit.writeAuditEvent({ requestId: 'r', principalId: p.id, principalLabel: 'del@x.cz', app: 'opice', action: 'x.y', resourceType: 'x' })
+		await db.audit.writeAuthLog({ requestId: 'r', app: 'opice', kind: 'authenticate', principalId: p.id, decision: 'allow' })
+		await db.principals.deletePrincipal(p.id)
 		// The label snapshot is why the audit trail survives the identity.
-		const [event] = await db.listAuditEvents({ limit: 10 })
+		const [event] = await db.audit.listAuditEvents({ limit: 10 })
 		expect(event?.principal_id).toBeNull()
 		expect(event?.principal_label).toBe('del@x.cz')
-		expect((await db.listAuthLog({ limit: 10 }))[0]?.principal_id).toBeNull()
+		expect((await db.audit.listAuthLog({ limit: 10 }))[0]?.principal_id).toBeNull()
 	})
 })
 
@@ -481,6 +486,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		const tasks = createBackgroundTasks({ label: 'test' })
 		const env: Env = {
 			DB: raw,
+			REPOSITORIES: db,
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '[]',
 			IAM_BOOTSTRAP_ADMINS: '[]',
@@ -526,7 +532,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 	test('an authenticated RPC call reaches the real methods and writes to Postgres', async () => {
 		await reset()
 		const { handler, drain } = runtime()
-		const principal = await db.createUser('sub-rpc', 'rpc@x.cz')
+		const principal = await db.principals.createUser('sub-rpc', 'rpc@x.cz')
 
 		const res = await handler(
 			new Request(`${BASE}/rpc/audit`, {
@@ -547,7 +553,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 
 		// `audit` is fire-and-forget through `waitUntil`; draining is what a graceful shutdown does.
 		await drain()
-		const [event] = await db.listAuditEvents({ limit: 10, requestId: 'req-rpc' })
+		const [event] = await db.audit.listAuditEvents({ limit: 10, requestId: 'req-rpc' })
 		expect(event?.action).toBe('report.read')
 		expect(event?.principal_id).toBe(principal.id)
 	})
@@ -564,7 +570,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		)
 		expect(res.status).toBe(401)
 		// A mint that reached the method would have written a deny row to auth_log; nothing did.
-		expect(await db.listAuthLog({ limit: 10 })).toHaveLength(0)
+		expect(await db.audit.listAuthLog({ limit: 10 })).toHaveLength(0)
 	})
 })
 
@@ -581,6 +587,7 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 		const tasks = createBackgroundTasks({ label: 'test' })
 		const env: Env = {
 			DB: raw,
+			REPOSITORIES: db,
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '[]',
 			IAM_BOOTSTRAP_ADMINS: '[]',
@@ -614,10 +621,10 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 
 	test('POST /auth/mint/session exchanges a live SSO session for a signed token', async () => {
 		await reset()
-		const principal = await db.createUser('sub-mint', 'mint@x.cz')
-		await db.createGrant({ principalId: principal.id, roleKey: 'admin' })
+		const principal = await db.principals.createUser('sub-mint', 'mint@x.cz')
+		await db.grants.createGrant({ principalId: principal.id, roleKey: 'admin' })
 		const session = 'session-plaintext-value'
-		await db.createSession({
+		await db.sessions.createSession({
 			tokenHash: await hashToken(session),
 			principalId: principal.id,
 			idpSub: 'sub-mint',
@@ -635,9 +642,9 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 
 	test('POST /auth/mint/key exchanges an opaque credential for a signed token', async () => {
 		await reset()
-		const principal = await db.createUser('sub-key', 'key@x.cz')
+		const principal = await db.principals.createUser('sub-key', 'key@x.cz')
 		const key = 'px_opaque-credential-value'
-		await db.createCredential({ tokenHash: await hashToken(key), principalId: principal.id, issuedBy: principal.id, grants: [] })
+		await db.credentials.createCredential({ tokenHash: await hashToken(key), principalId: principal.id, issuedBy: principal.id, grants: [] })
 
 		const res = await handler()(mint(MINT_KEY_PATH, { app: 'opice', key, requestId: 'req-mint-2' }))
 		expect(res.status).toBe(200)
@@ -672,7 +679,7 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 		// The management key is a DIFFERENT secret — least privilege, so it must not work here either.
 		expect((await h(mint(MINT_KEY_PATH, { app: 'opice', key: 'px_x', requestId: 'r' }, RPC_KEY))).status).toBe(401)
 		// Nothing reached the methods: a mint that ran would have written an auth_log deny row.
-		expect(await db.listAuthLog({ limit: 10 })).toHaveLength(0)
+		expect(await db.audit.listAuthLog({ limit: 10 })).toHaveLength(0)
 	})
 
 	test('an unset proxy key disables the surface entirely (404), it does not open it', async () => {
@@ -686,7 +693,7 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 		await h(mint(MINT_KEY_PATH, { app: 'opice', key: 'px_guess-1', requestId: 'req-burst' }))
 		// The write is fire-and-forget through `waitUntil`; give it a turn to settle.
 		await Bun.sleep(50)
-		const [row] = await db.listAuthLog({ limit: 10, requestId: 'req-burst' })
+		const [row] = await db.audit.listAuthLog({ limit: 10, requestId: 'req-burst' })
 		expect(row?.decision).toBe('deny')
 		expect(row?.reason).toBe('invalid_key')
 		expect(row?.app).toBe('opice')
@@ -701,6 +708,7 @@ describe.skipIf(!hasPostgres)('the Bun handler never leaks internals on an unhan
 		const tasks = createBackgroundTasks({ label: 'test' })
 		const env: Env = {
 			DB: raw,
+			REPOSITORIES: db,
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '[]',
 			IAM_BOOTSTRAP_ADMINS: '[]',

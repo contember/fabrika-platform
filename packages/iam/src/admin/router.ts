@@ -163,11 +163,11 @@ async function resolveAdmin(
 
 	// Browser SSO session: validate the opaque `px_session`, resolve the principal's permissions for
 	// propustka's own app (groups don't apply — there is no CF identity cookie here).
-	const session = await services.db.getActiveSessionByHash(await hashToken(creds.session))
+	const session = await services.repositories.sessions.getActiveSessionByHash(await hashToken(creds.session))
 	if (!session) {
 		return { ok: false, status: 401, reason: 'invalid_session' }
 	}
-	const principal = await services.db.getPrincipalById(session.principal_id)
+	const principal = await services.repositories.principals.getPrincipalById(session.principal_id)
 	if (!principal) {
 		return { ok: false, status: 401, reason: 'invalid_session' }
 	}
@@ -175,7 +175,7 @@ async function resolveAdmin(
 		return { ok: false, status: 403, reason: 'disabled' }
 	}
 	const permissions = await resolveUserPermissions({
-		db: services.db,
+		repositories: services.repositories,
 		principal,
 		bootstrapAdmins: services.config.bootstrapAdmins,
 		app: IAM_APP,

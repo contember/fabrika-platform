@@ -34,7 +34,7 @@ describe('Zerops proxy manifest delivery', () => {
 	test('groups manifests by namespace and rolls the selected namespace proxy directly', async () => {
 		const { db } = createHarness()
 		for (const id of ['alpha', 'beta', 'gamma']) {
-			await db.createApp({ id, repoUrl: `github.com/acme/${id}` })
+			await db.registry.createApp({ id, repoUrl: `github.com/acme/${id}` })
 		}
 		for (
 			const namespace of [
@@ -42,7 +42,7 @@ describe('Zerops proxy manifest delivery', () => {
 				{ id: 'gamma-prod', projectId: 'project-gamma', proxyServiceId: 'proxy-gamma', exclusiveAppId: 'gamma' },
 			]
 		) {
-			await db.createDeploymentNamespace({
+			await db.registry.createDeploymentNamespace({
 				id: namespace.id,
 				env: 'prod',
 				provider: 'zerops',
@@ -62,7 +62,7 @@ describe('Zerops proxy manifest delivery', () => {
 				{ id: 'gamma', namespaceId: 'gamma-prod', domain: 'gamma.example.com', upstream: 'gamma:3000' },
 			]
 		) {
-			await db.upsertAppEnv({
+			await db.registry.upsertAppEnv({
 				appId: entry.id,
 				env: 'prod',
 				domain: entry.domain,
@@ -97,9 +97,9 @@ describe('Zerops proxy manifest delivery', () => {
 			},
 		}
 
-		expect((await compileNamespaceProxyManifest(db, 'gamma-prod')).apps.map((app) => app.id)).toEqual(['gamma'])
+		expect((await compileNamespaceProxyManifest(db.registry, 'gamma-prod')).apps.map((app) => app.id)).toEqual(['gamma'])
 		await syncZeropsProxy({
-			db,
+			db: db.registry,
 			api,
 			namespaceId: 'apps-prod',
 			proxyServiceId: 'proxy-shared',
@@ -126,8 +126,8 @@ describe('Zerops proxy manifest delivery', () => {
 
 	test('fails before writing when a public app in the namespace has no domain', async () => {
 		const { db } = createHarness()
-		await db.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
-		await db.createDeploymentNamespace({
+		await db.registry.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+		await db.registry.createDeploymentNamespace({
 			id: 'apps-prod',
 			env: 'prod',
 			provider: 'zerops',
@@ -139,7 +139,7 @@ describe('Zerops proxy manifest delivery', () => {
 			})),
 			state: 'ready',
 		})
-		await db.upsertAppEnv({
+		await db.registry.upsertAppEnv({
 			appId: 'alpha',
 			env: 'prod',
 			namespaceId: 'apps-prod',
@@ -151,6 +151,6 @@ describe('Zerops proxy manifest delivery', () => {
 				envelope(zeropsArtifactCodec, appManifest('alpha', 'prod', 'alpha:3000')),
 			),
 		})
-		await expect(compileNamespaceProxyManifest(db, 'apps-prod')).rejects.toThrow('requires a public domain')
+		await expect(compileNamespaceProxyManifest(db.registry, 'apps-prod')).rejects.toThrow('requires a public domain')
 	})
 })
