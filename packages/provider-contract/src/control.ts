@@ -51,6 +51,8 @@ export interface ProviderDeployInput {
 	readonly environment: ProviderEnvironment
 	readonly secrets: Readonly<Record<string, string>>
 	readonly vars: Readonly<Record<string, string>>
+	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
+	readonly managedEnvironment?: Readonly<Record<string, string>>
 	readonly dryRun: boolean
 	/** Optional short-lived, run-scoped Operations artifact destination. */
 	readonly artifactUpload?: {

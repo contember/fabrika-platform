@@ -8,6 +8,8 @@
 // account/token + propustka coords are fabrika's own Worker config (src/env.ts).
 
 import type { AppDto, AppEnvDto, AppSecretDto, AppVarDto, RegisterAppResponse } from '@fabrika/control-contract'
+import { operationsManagedEnvironmentCollisions } from '@fabrika/operations-contract/ingest'
+import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
 import { type AppEnvRow, type AppRow, type AppSecretRow, type AppVarRow, type ControlRepositories, NamespaceResourceClaimConflictError } from '../db'
 import { error, json, readJson } from '../http'
@@ -444,6 +446,9 @@ export async function putAppVar(c: RegistryContext, appId: string): Promise<Resp
 	const value = stringField(body, 'value')
 	if (!name || !value) {
 		return error(400, 'name and value required (value is plaintext config — use a secret for sensitive values)')
+	}
+	if (name === FABRIKA_RELEASE || operationsManagedEnvironmentCollisions([name]).length > 0) {
+		return error(400, `application variable "${name}" is managed by Fabrika`)
 	}
 	// env null = all-env layer; a string narrows it to that env.
 	const env = nullableStringField(body, 'env') ?? null

@@ -96,7 +96,7 @@ describe('Control release projection', () => {
 
 		expect(await executeDeploy(deps, { runId })).toEqual({ runId, status: 'succeeded' })
 		expect((await harness.repositories.runs.getRun(runId))?.status).toBe('succeeded')
-		const release = inputs[0]?.vars[FABRIKA_RELEASE]
+		const release = inputs[0]?.managedEnvironment?.[FABRIKA_RELEASE]
 		expect(release).toContain(`/notes/prod/default/${COMMIT}`)
 		const pending = await harness.repositories.operationsReleases.get(runId)
 		expect(Number(pending?.desired_revision)).toBe(3)
@@ -162,7 +162,7 @@ describe('Control release projection', () => {
 				},
 			}
 			expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
-			expect(inputs[0]?.vars[FABRIKA_RELEASE]).toContain(COMMIT)
+			expect(inputs[0]?.managedEnvironment?.[FABRIKA_RELEASE]).toContain(COMMIT)
 			expect(inputs[0]?.artifactUpload).toBeUndefined()
 		}
 	})

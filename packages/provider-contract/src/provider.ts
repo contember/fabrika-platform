@@ -65,6 +65,7 @@ export const createProvider = <TId extends string, TTarget, TArtifact>(
 					cwd: run.cwd,
 					secrets: run.secrets,
 					vars: run.vars,
+					...(run.managedEnvironment === undefined ? {} : { managedEnvironment: run.managedEnvironment }),
 					dryRun: run.dryRun,
 					signal: run.signal,
 					events: run.events,

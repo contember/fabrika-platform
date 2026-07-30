@@ -1,3 +1,5 @@
+import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS } from '@fabrika/operations-contract/ingest'
+import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type { ControlProvider, JsonValue, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
 import { logsKey } from '@fabrika/runner-cloudflare'
 import { describe, expect, test } from 'bun:test'
@@ -308,6 +310,10 @@ describe('onboarding + registry CRUD', () => {
 		// missing value → 400
 		const bad = await handleApi(req('PUT', '/api/apps/app/vars', { name: 'X' }), deps)
 		expect(bad.status).toBe(400)
+		for (const name of [...OPERATIONS_MANAGED_ENVIRONMENT_KEYS, FABRIKA_RELEASE]) {
+			const reserved = await handleApi(req('PUT', '/api/apps/app/vars', { name, value: 'user-owned' }), deps)
+			expect(reserved.status).toBe(400)
+		}
 
 		// list vars
 		const listVars = await handleApi(req('GET', '/api/apps/app/vars'), deps)

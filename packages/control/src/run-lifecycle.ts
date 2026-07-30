@@ -1,3 +1,4 @@
+import { operationsManagedEnvironment, operationsManagedEnvironmentCollisions } from '@fabrika/operations-contract/ingest'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -265,11 +266,28 @@ export async function executeDeploy(
 		await assertNamespaceResourceClaims(deps.repositories.registry, deps.provider, registration)
 
 		const vars = await resolveVars(deps.repositories.registry, app.id, appEnv.env)
+		const operationsCollisions = operationsManagedEnvironmentCollisions(Object.keys(vars))
+		if (operationsCollisions.length > 0) {
+			throw new Error(`application variable "${operationsCollisions[0]}" is managed by Fabrika`)
+		}
+		const managedEnvironment: Record<string, string> = {}
+		const ingest = await deps.repositories.operationsCatalog.getActiveIngestConfig(app.id, appEnv.env)
+		if (ingest?.dsn !== null && ingest?.dsn !== undefined) {
+			Object.assign(
+				managedEnvironment,
+				operationsManagedEnvironment({
+					dsn: ingest.dsn,
+					appId: app.id,
+					environment: appEnv.env,
+					serviceKey: ingest.service_key,
+				}),
+			)
+		}
 		if (releaseContext !== null) {
 			for (const key of Object.keys(releaseContext.managedEnvironment)) {
 				if (vars[key] !== undefined) throw new Error(`application variable "${key}" is managed by Fabrika`)
 			}
-			Object.assign(vars, releaseContext.managedEnvironment)
+			Object.assign(managedEnvironment, releaseContext.managedEnvironment)
 		}
 		const outcome = await deps.provider.deploy({
 			runId: run.id,
@@ -277,6 +295,7 @@ export async function executeDeploy(
 			environment: registration.environment,
 			secrets: await resolveSecrets(deps, app.id, appEnv.env),
 			vars,
+			managedEnvironment,
 			dryRun: message.dryRun === true,
 			...(releaseContext?.artifactUpload === undefined ? {} : { artifactUpload: releaseContext.artifactUpload }),
 			signal: new AbortController().signal,

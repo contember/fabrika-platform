@@ -1,3 +1,4 @@
+import { FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_OPERATIONS_DSN, FABRIKA_SERVICE_KEY } from '@fabrika/operations-contract/ingest'
 import type {
 	ControlProvider,
 	ProviderDeployInput,
@@ -73,6 +74,23 @@ async function seedRun(
 		await db.runs.setRunExternalId(runId, options.externalId)
 	}
 	return runId
+}
+
+async function activateOperationsIngest(db: ControlRepositories): Promise<string> {
+	await db.operationsCatalog.markDirty()
+	const snapshot = await db.operationsCatalog.snapshot()
+	const source = snapshot.sources[0]
+	if (source === undefined) throw new Error('missing Operations catalog source')
+	const dsn = `https://${source.public_key}@errors.example.test/100000000000000001`
+	await db.operationsCatalog.markApplied(snapshot.revision, 'snapshot-hash', [{
+		appId: source.app_id,
+		environment: source.env,
+		serviceKey: source.service_key,
+		credentialId: source.credential_id,
+		ingestProjectId: '100000000000000001',
+		dsn,
+	}])
+	return dsn
 }
 
 function makeProvider(
@@ -151,6 +169,7 @@ describe('provider-neutral run lifecycle', () => {
 		expect(input.environment.domain).toBe('app.example.com')
 		expect(input.secrets).toEqual({ API_KEY: 'prod' })
 		expect(input.vars).toEqual({ TEAM: 'prod' })
+		expect(input.managedEnvironment).toEqual({})
 		expect(input.dryRun).toBe(true)
 
 		const run = await requireRun(db, runId)
@@ -159,6 +178,61 @@ describe('provider-neutral run lifecycle', () => {
 		expect(run.external_run_id).toBe('memory-run-1')
 		expect(run.log_key).toBe(`runs/${runId}/logs.ndjson`)
 		expect(lock.held.size).toBe(0)
+	})
+
+	test('injects only an active Operations configuration and leaves application vars separate', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		await db.operationsCatalog.markDirty()
+		await db.operationsCatalog.snapshot()
+		const pendingInputs: ProviderDeployInput[] = []
+		expect((await executeDeploy(makeDeps(db, makeProvider(pendingInputs, { state: 'succeeded' })), { runId })).status).toBe('succeeded')
+		expect(pendingInputs[0]?.managedEnvironment).toEqual({})
+
+		const secondRunId = uuidv7()
+		await db.runs.createRun({
+			id: secondRunId,
+			appId: 'app',
+			env: 'prod',
+			ref: 'refs/heads/deploy/prod',
+			trigger: 'manual',
+		})
+		const dsn = await activateOperationsIngest(db)
+		const activeInputs: ProviderDeployInput[] = []
+		expect((await executeDeploy(makeDeps(db, makeProvider(activeInputs, { state: 'succeeded' })), { runId: secondRunId })).status).toBe(
+			'succeeded',
+		)
+		expect(activeInputs[0]?.vars).toEqual({ TEAM: 'prod' })
+		expect(activeInputs[0]?.managedEnvironment).toEqual({
+			[FABRIKA_OPERATIONS_DSN]: dsn,
+			[FABRIKA_APP_ID]: 'app',
+			[FABRIKA_ENVIRONMENT]: 'prod',
+			[FABRIKA_SERVICE_KEY]: 'default',
+		})
+	})
+
+	test('rejects legacy user values under reserved Operations names without logging their value', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		await db.registry.upsertAppVar({
+			appId: 'app',
+			env: 'prod',
+			name: FABRIKA_OPERATIONS_DSN,
+			value: 'must-not-reach-provider',
+		})
+		const inputs: ProviderDeployInput[] = []
+		const logged: string[] = []
+		const originalError = console.error
+		console.error = (...values) => {
+			logged.push(values.map(String).join(' '))
+		}
+		try {
+			expect((await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), { runId })).status).toBe('failed')
+		} finally {
+			console.error = originalError
+		}
+		expect(inputs).toEqual([])
+		expect(logged.join('\n')).not.toContain('must-not-reach-provider')
 	})
 
 	test('provider-managed secrets remain at the provider and are not resolved into a run', async () => {

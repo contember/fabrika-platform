@@ -1168,6 +1168,19 @@ export class OperationsCatalogRepository {
 			.first<OperationsIngestConfigRow>()
 	}
 
+	getActiveIngestConfig(
+		appId: string,
+		environment: string,
+		serviceKey = DEFAULT_OPERATIONS_SERVICE_KEY,
+	): Promise<OperationsIngestConfigRow | null> {
+		return this.db
+			.prepare(`SELECT * FROM operations_ingest_configs
+				WHERE app_id = ? AND env = ? AND service_key = ?
+					AND dsn IS NOT NULL AND ingest_project_id IS NOT NULL AND activated_revision IS NOT NULL`)
+			.bind(appId, environment, serviceKey)
+			.first<OperationsIngestConfigRow>()
+	}
+
 	/** A restored Operations database may have a later cursor; advance locally and send a fresh full snapshot. */
 	async advancePast(remoteRevision: number): Promise<void> {
 		await this.db
