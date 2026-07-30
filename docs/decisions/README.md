@@ -37,6 +37,11 @@ ADR-0016 adds Operations as a third product plane while keeping its telemetry
 data path and persistence outside control. The accepted first slice absorbs
 Poplach as Errors; broader observability remains an idea.
 
+ADR-0017 makes Postgres migration ownership explicit at the service and bundle
+levels. It preserves legacy installations without moving IAM or Control data
+into new schemas, and lets Operations compose the generic Postgres job-queue
+migration before its own schema.
+
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
@@ -57,3 +62,4 @@ Poplach as Errors; broader observability remains an idea.
 - [0014](0014-provider-owned-deployment-namespaces.md) — Model deployment namespaces as provider-owned placement boundaries — accepted (2026-07-29)
 - [0015](0015-repository-operations-are-the-sql-portability-seam.md) — Make repository operations the SQL portability seam — accepted (2026-07-30)
 - [0016](0016-independent-operations-plane.md) — Add an independent Operations plane — accepted (2026-07-30)
+- [0017](0017-service-owned-postgres-migrations.md) — Make Postgres migrations service-owned and bundle-qualified — accepted (2026-07-30)
