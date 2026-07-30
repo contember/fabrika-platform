@@ -1,9 +1,9 @@
-import { createPage, useNavigate } from '@buzola/router'
-import type { AppDto, AppSchemaDto, CreatePolicyRequest, ListResponse, PolicyDto, UpdatePolicyRequest } from '@fabrika/iam/admin'
+import { createPage, Link, useNavigate } from '@buzola/router'
+import type { AppDto, AppSchemaDto, ListResponse, PolicyDto, UpdatePolicyRequest } from '@fabrika/iam/admin'
 import { useState } from 'react'
 import { ActionPicker } from '../../components/ActionPicker'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
-import { Table } from '../../components/Table'
+import { EmptyState, Table } from '../../components/Table'
 import { api, ApiError } from '../../lib/api'
 import { fmtDate } from '../../lib/format'
 
@@ -33,10 +33,15 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<h1>Policies</h1>
-					<p className="hint">
-						Admin-composed named permission sets (origin <code>custom</code>) for one app, built from its action catalog. Grantable like any role.
-					</p>
+					<div className="page-head-row">
+						<div>
+							<h1>Policies</h1>
+							<p className="hint">
+								Admin-composed named permission sets (origin <code>custom</code>) for one app, built from its action catalog. Grantable like any role.
+							</p>
+						</div>
+						{data.app !== null && <Link to="access/policies/new" params={{ app: data.app }} className="btn primary">Create policy</Link>}
+					</div>
 				</div>
 
 				<div className="toolbar">
@@ -56,12 +61,16 @@ export default createPage()
 					? <p className="hint">Pick an app to manage its custom policies.</p>
 					: (
 						<>
-							<CreatePolicyForm app={data.app} actions={data.schema?.actions ?? []} onDone={invalidate} />
-
 							<Table
 								colSpan={4}
 								isEmpty={data.policies.length === 0}
-								empty="No custom policies for this app yet."
+								empty={
+									<EmptyState
+										title="No custom policies for this app yet"
+										body="A policy bundles actions from this app's catalog under one grantable key."
+										action={<Link to="access/policies/new" params={{ app: data.app }} className="btn small primary">Create the first one</Link>}
+									/>
+								}
 								head={
 									<tr>
 										<th>Key</th>
@@ -86,68 +95,6 @@ export default createPage()
 			</>
 		)
 	})
-
-function CreatePolicyForm(
-	{ app, actions, onDone }: { app: string; actions: AppSchemaDto['actions']; onDone: () => void },
-) {
-	const [key, setKey] = useState('')
-	const [name, setName] = useState('')
-	const [description, setDescription] = useState('')
-	const [permissions, setPermissions] = useState<string[]>([])
-	const [busy, setBusy] = useState(false)
-	const [error, setError] = useState<string | null>(null)
-
-	async function submit(e: React.FormEvent) {
-		e.preventDefault()
-		setError(null)
-		if (permissions.length === 0) {
-			setError('Pick at least one action.')
-			return
-		}
-		setBusy(true)
-		try {
-			const body: CreatePolicyRequest = {
-				key: key.trim(),
-				name: name.trim(),
-				...(description.trim() === '' ? {} : { description: description.trim() }),
-				permissions,
-			}
-			await api.post(`/apps/${encodeURIComponent(app)}/policies`, body)
-			setKey('')
-			setName('')
-			setDescription('')
-			setPermissions([])
-			onDone()
-		} catch (cause) {
-			setError(cause instanceof ApiError ? cause.message : 'Create failed.')
-		} finally {
-			setBusy(false)
-		}
-	}
-
-	return (
-		<form className="panel form" onSubmit={submit}>
-			<h2>Create policy</h2>
-			<label>
-				Key
-				<input value={key} onChange={(e) => setKey(e.target.value)} required placeholder="report-publisher" />
-			</label>
-			<label>
-				Name
-				<input value={name} onChange={(e) => setName(e.target.value)} required placeholder="Report publisher" />
-			</label>
-			<label>
-				Description (optional)
-				<input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Can read and publish reports" />
-			</label>
-			<ActionPicker actions={actions} value={permissions} onChange={setPermissions} idPrefix="new-policy-action" />
-			{error && <p className="error-text" role="alert">{error}</p>}
-			<div className="form-actions">
-				<button type="submit" className="primary" disabled={busy}>{busy ? 'Creating…' : 'Create policy'}</button>
-			</div>
-		</form>
-	)
-}
 
 function PolicyRow(
 	{ app, policy, actions, onDone }: { app: string; policy: PolicyDto; actions: AppSchemaDto['actions']; onDone: () => void },

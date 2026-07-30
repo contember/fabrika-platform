@@ -1,28 +1,21 @@
-import { createPage, Link, useNavigate } from '@buzola/router'
-import type { AppDto, CreateGrantRequest, InviteRequest, ListResponse, PrincipalListItem } from '@fabrika/iam/admin'
+import { createPage, Link } from '@buzola/router'
+import type { ListResponse, PrincipalListItem } from '@fabrika/iam/admin'
 import { useState } from 'react'
 import { StatusBadge } from '../../components/Badge'
-import { GrantComposer, useGrantComposerState } from '../../components/GrantComposer'
-import { Table } from '../../components/Table'
-import { api, ApiError } from '../../lib/api'
-import { fmtDate, parseDateTimeLocal } from '../../lib/format'
+import { EmptyState, Table } from '../../components/Table'
+import { api } from '../../lib/api'
+import { fmtDate } from '../../lib/format'
 
 /** '' = all types, otherwise a principal type. */
 type TypeFilter = '' | PrincipalListItem['type']
 
 export default createPage()
 	.loader(async () => {
-		const [principals, apps] = await Promise.all([
-			api.get<ListResponse<PrincipalListItem>>('/principals'),
-			api.get<ListResponse<AppDto>>('/apps'),
-		])
-		return {
-			principals: principals.items,
-			apps: apps.items,
-		}
+		const principals = await api.get<ListResponse<PrincipalListItem>>('/principals')
+		return { principals: principals.items }
 	})
 	.route('/access/principals')
-	.render(({ data, invalidate }) => {
+	.render(({ data }) => {
 		const [type, setType] = useState<TypeFilter>('')
 		const [query, setQuery] = useState('')
 
@@ -42,10 +35,14 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<h1>Principals</h1>
+					<div className="page-head-row">
+						<div>
+							<h1>Principals</h1>
+							<p className="hint">Everyone and everything that can hold a permission here — people from the IdP and service identities.</p>
+						</div>
+						<Link to="access/principals/new" className="btn primary">Invite user</Link>
+					</div>
 				</div>
-
-				<InviteForm apps={data.apps} onDone={invalidate} />
 
 				<div className="toolbar">
 					<label>
@@ -68,7 +65,7 @@ export default createPage()
 				<Table
 					colSpan={5}
 					isEmpty={filtered.length === 0}
-					empty="No principals match."
+					empty={<EmptyState title="No principals match" body="Try a different type filter or search term." />}
 					head={
 						<tr>
 							<th>Type</th>
@@ -97,100 +94,3 @@ export default createPage()
 			</>
 		)
 	})
-
-function InviteForm({ apps, onDone }: { apps: AppDto[]; onDone: () => void }) {
-	const navigate = useNavigate()
-	const [open, setOpen] = useState(false)
-	const [email, setEmail] = useState('')
-	const [withGrant, setWithGrant] = useState(false)
-	const composer = useGrantComposerState()
-	const [expiry, setExpiry] = useState('')
-	const [busy, setBusy] = useState(false)
-	const [error, setError] = useState<string | null>(null)
-
-	async function submit(e: React.FormEvent) {
-		e.preventDefault()
-		setError(null)
-
-		let authorization: ReturnType<typeof composer.build> | null = null
-		if (withGrant) {
-			try {
-				authorization = composer.build()
-			} catch (cause) {
-				setError(cause instanceof Error ? cause.message : 'Complete the grant, or uncheck "also grant a role".')
-				return
-			}
-		}
-
-		setBusy(true)
-		try {
-			const invited = await api.post<PrincipalListItem>('/principals', { email } satisfies InviteRequest)
-			if (authorization !== null) {
-				const body: CreateGrantRequest = {
-					principalId: invited.id,
-					...authorization,
-					expiresAt: parseDateTimeLocal(expiry),
-				}
-				await api.post('/grants', body)
-			}
-			setOpen(false)
-			setEmail('')
-			setWithGrant(false)
-			composer.reset()
-			setExpiry('')
-			onDone()
-			navigate('access/principals/detail', { params: { id: invited.id } })
-		} catch (cause) {
-			setError(cause instanceof ApiError ? cause.message : 'Invite failed.')
-		} finally {
-			setBusy(false)
-		}
-	}
-
-	if (!open) {
-		return (
-			<div className="panel">
-				<button type="button" className="primary" onClick={() => setOpen(true)}>Invite user</button>
-				<p className="hint">
-					Pre-create an invited user so you can grant a role before their first login. For team-wide pre-authorization, use group mappings instead.
-				</p>
-			</div>
-		)
-	}
-
-	return (
-		<form className="panel form" onSubmit={submit}>
-			<h2>Invite user</h2>
-			<label>
-				Email
-				<input
-					type="email"
-					required
-					value={email}
-					onChange={(e) => setEmail(e.target.value)}
-					placeholder="person@example.com"
-				/>
-			</label>
-			<label className="checkbox">
-				<input type="checkbox" checked={withGrant} onChange={(e) => setWithGrant(e.target.checked)} />
-				Also grant a role now
-			</label>
-			{withGrant && (
-				<div className="nested">
-					<GrantComposer apps={apps} state={composer} idPrefix="invite" />
-					<label>
-						Expires (optional)
-						<input type="datetime-local" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
-					</label>
-				</div>
-			)}
-			{error && <p className="error-text" role="alert">{error}</p>}
-			<div className="form-actions">
-				<button type="button" onClick={() => setOpen(false)} disabled={busy}>Cancel</button>
-				<button type="submit" className="primary" disabled={busy}>
-					{busy ? 'Inviting…' : 'Invite'}
-				</button>
-			</div>
-		</form>
-	)
-}

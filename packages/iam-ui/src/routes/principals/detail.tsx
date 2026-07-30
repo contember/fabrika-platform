@@ -1,25 +1,18 @@
-import { createPage } from '@buzola/router'
-import type { AppDto, CreateGrantRequest, GrantDto, ListResponse, PermissionEntry, PrincipalDetail, UpdatePrincipalRequest } from '@fabrika/iam/admin'
+import { createPage, Link } from '@buzola/router'
+import type { GrantDto, PermissionEntry, PrincipalDetail, UpdatePrincipalRequest } from '@fabrika/iam/admin'
 import { useState } from 'react'
 import { Badge, StatusBadge } from '../../components/Badge'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
-import { GrantComposer, useGrantComposerState } from '../../components/GrantComposer'
-import { Table } from '../../components/Table'
-import { api, ApiError } from '../../lib/api'
-import { fmtDate, fmtExpiry, fmtScope, parseDateTimeLocal } from '../../lib/format'
+import { EmptyState, Table } from '../../components/Table'
+import { api } from '../../lib/api'
+import { fmtDate, fmtExpiry, fmtScope } from '../../lib/format'
 
 export default createPage()
 	.params({ id: 'string' })
-	.loader(async ({ params }) => {
-		const [principal, apps] = await Promise.all([
-			api.get<PrincipalDetail>(`/principals/${params.id}`),
-			api.get<ListResponse<AppDto>>('/apps'),
-		])
-		return { principal, apps: apps.items }
-	})
+	.loader(async ({ params }) => ({ principal: await api.get<PrincipalDetail>(`/principals/${params.id}`) }))
 	.route('/access/principals/:id')
 	.render(({ data, invalidate }) => {
-		const { principal, apps } = data
+		const { principal } = data
 
 		return (
 			<>
@@ -28,11 +21,11 @@ export default createPage()
 						<h1>{principal.label}</h1>
 						<StatusBadge status={principal.status} />
 					</div>
-					<div className="subtitle muted">
-						{principal.type}
-						{principal.email && <>· {principal.email}</>}
-						{principal.externalId && <>· {principal.externalId}</>}
-						<>· created {fmtDate(principal.createdAt)}</>
+					<div className="subtitle">
+						<span>{principal.type}</span>
+						{principal.email && <span className="dot-sep">{principal.email}</span>}
+						{principal.externalId && <span className="dot-sep">{principal.externalId}</span>}
+						<span className="dot-sep">created {fmtDate(principal.createdAt)}</span>
 					</div>
 					<DisableToggle principal={principal} onDone={invalidate} />
 				</div>
@@ -43,7 +36,7 @@ export default createPage()
 					<Table
 						colSpan={3}
 						isEmpty={principal.permissions.length === 0}
-						empty="No effective permissions."
+						empty={<EmptyState title="No effective permissions" />}
 						head={
 							<tr>
 								<th>Action</th>
@@ -67,11 +60,21 @@ export default createPage()
 				</section>
 
 				<section>
-					<h2>Grants</h2>
+					<div className="section-head">
+						<h2>Grants</h2>
+						<span className="spacer" />
+						<Link to="access/principals/grant" params={{ id: principal.id }} className="btn small primary">Add grant</Link>
+					</div>
 					<Table
 						colSpan={7}
 						isEmpty={principal.grants.length === 0}
-						empty="No explicit grants. Add one below."
+						empty={
+							<EmptyState
+								title="No explicit grants"
+								body="This principal only has whatever its group mappings or bootstrap give it."
+								action={<Link to="access/principals/grant" params={{ id: principal.id }} className="btn small primary">Add the first grant</Link>}
+							/>
+						}
 						head={
 							<tr>
 								<th>Role / actions</th>
@@ -87,8 +90,6 @@ export default createPage()
 						{principal.grants.map((grant) => <GrantRow key={grant.id} grant={grant} onDone={invalidate} />)}
 					</Table>
 				</section>
-
-				<AddGrantForm principalId={principal.id} apps={apps} onDone={invalidate} />
 			</>
 		)
 	})
@@ -196,51 +197,5 @@ function GrantRow({ grant, onDone }: { grant: GrantDto; onDone: () => void }) {
 				)}
 			</td>
 		</tr>
-	)
-}
-
-function AddGrantForm({ principalId, apps, onDone }: { principalId: string; apps: AppDto[]; onDone: () => void }) {
-	const composer = useGrantComposerState()
-	const [expiry, setExpiry] = useState('')
-	const [busy, setBusy] = useState(false)
-	const [error, setError] = useState<string | null>(null)
-
-	async function submit(e: React.FormEvent) {
-		e.preventDefault()
-		setError(null)
-		let authorization: ReturnType<typeof composer.build>
-		try {
-			authorization = composer.build()
-		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : 'Complete the grant first.')
-			return
-		}
-		setBusy(true)
-		try {
-			const body: CreateGrantRequest = { principalId, ...authorization, expiresAt: parseDateTimeLocal(expiry) }
-			await api.post('/grants', body)
-			composer.reset()
-			setExpiry('')
-			onDone()
-		} catch (cause) {
-			setError(cause instanceof ApiError ? cause.message : 'Grant failed.')
-		} finally {
-			setBusy(false)
-		}
-	}
-
-	return (
-		<form className="panel form" onSubmit={submit}>
-			<h2>Add grant</h2>
-			<GrantComposer apps={apps} state={composer} idPrefix="grant" />
-			<label>
-				Expires (optional)
-				<input type="datetime-local" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
-			</label>
-			{error && <p className="error-text" role="alert">{error}</p>}
-			<div className="form-actions">
-				<button type="submit" className="primary" disabled={busy}>{busy ? 'Granting…' : 'Add grant'}</button>
-			</div>
-		</form>
 	)
 }
