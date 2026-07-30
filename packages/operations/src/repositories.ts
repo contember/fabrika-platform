@@ -1,4 +1,13 @@
-import type { ActivityItem, IssueMutation, IssueStatus, PriorIssueState } from '@fabrika/operations-contract'
+import {
+	type ActivityItem,
+	type CanonicalOperationsCatalogSourceV1,
+	DEFAULT_OPERATIONS_SERVICE_KEY,
+	type IssueMutation,
+	type IssueStatus,
+	OPERATIONS_CATALOG_PROTOCOL_VERSION,
+	type OperationsCatalogReconcileResponseV1,
+	type PriorIssueState,
+} from '@fabrika/operations-contract'
 import type { SqlDatabase } from '@fabrika/platform'
 import { applyIssueMutation } from './issues.js'
 import { uuidv7 } from './uuid.js'
@@ -10,8 +19,17 @@ export interface SourceRow {
 	service_key: string
 	display_name: string
 	enabled: number
+	disabled_at: number | string | null
+	origin: string
+	public_origin: string | null
 	created_at: number | string
 	updated_at: number | string
+}
+
+export interface CatalogCursorRow {
+	revision: number
+	snapshot_hash: string
+	applied_at: number | string
 }
 
 export interface IssueRow {
@@ -91,17 +109,35 @@ export class SourcesRepository {
 		serviceKey?: string
 		displayName: string
 		enabled: boolean
+		publicOrigin?: string | null
 	}): Promise<SourceRow> {
 		const now = this.now()
 		const row = await this.db
-			.prepare(`INSERT INTO sources (id, app_id, environment, service_key, display_name, enabled, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			.prepare(`INSERT INTO sources
+				(id, app_id, environment, service_key, display_name, enabled, disabled_at, origin, public_origin, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, 'control', ?, ?, ?)
 				ON CONFLICT (app_id, environment, service_key) DO UPDATE SET
 					display_name = excluded.display_name,
 					enabled = excluded.enabled,
+					disabled_at = CASE
+						WHEN excluded.enabled = 1 THEN NULL
+						ELSE COALESCE(sources.disabled_at, excluded.disabled_at)
+					END,
+					public_origin = excluded.public_origin,
 					updated_at = excluded.updated_at
 				RETURNING *`)
-			.bind(input.id, input.appId, input.environment, input.serviceKey ?? '', input.displayName, input.enabled ? 1 : 0, now, now)
+			.bind(
+				input.id,
+				input.appId,
+				input.environment,
+				input.serviceKey ?? DEFAULT_OPERATIONS_SERVICE_KEY,
+				input.displayName,
+				input.enabled ? 1 : 0,
+				input.enabled ? null : now,
+				input.publicOrigin ?? null,
+				now,
+				now,
+			)
 			.first<SourceRow>()
 		if (!row) throw new Error('source upsert returned no row')
 		return row
@@ -139,6 +175,161 @@ export class SourcesRepository {
 			.bind(this.now(), id)
 			.run()
 		return result.meta.changes === 1
+	}
+}
+
+export class CatalogRepository {
+	constructor(protected readonly db: SqlDatabase, protected readonly now: () => number = Date.now) {}
+
+	getCursor(): Promise<CatalogCursorRow> {
+		return this.db
+			.prepare('SELECT revision, snapshot_hash, applied_at FROM operations_catalog_cursor WHERE singleton = 1')
+			.first<CatalogCursorRow>()
+			.then((row) => {
+				if (!row) throw new Error('operations catalog cursor is missing')
+				return {
+					revision: number(row.revision, 'operations_catalog_cursor.revision'),
+					snapshot_hash: row.snapshot_hash,
+					applied_at: number(row.applied_at, 'operations_catalog_cursor.applied_at'),
+				}
+			})
+	}
+
+	async listControlSources(): Promise<SourceRow[]> {
+		const { results } = await this.db
+			.prepare(`SELECT * FROM sources WHERE origin = 'control'
+				ORDER BY app_id, environment, service_key`)
+			.all<SourceRow>()
+		return results
+	}
+
+	async reconcile(input: {
+		revision: number
+		snapshotHash: string
+		sources: CanonicalOperationsCatalogSourceV1[]
+	}): Promise<OperationsCatalogReconcileResponseV1> {
+		const cursor = await this.getCursor()
+		if (input.revision < cursor.revision) return catalogResponse(cursor.revision, 'stale')
+		if (input.revision === cursor.revision) {
+			if (input.snapshotHash !== cursor.snapshot_hash) {
+				throw new CatalogRevisionConflictError()
+			}
+			return catalogResponse(input.revision, 'unchanged', { unchanged: input.sources.length })
+		}
+
+		const before = await this.listControlSources()
+		const beforeByCoordinate = new Map(before.map((source) => [sourceCoordinateKey(source.app_id, source.environment, source.service_key), source]))
+		const statements = [
+			this.db
+				.prepare(`UPDATE sources SET
+					enabled = 0,
+					disabled_at = COALESCE(disabled_at, ?),
+					updated_at = ?
+				WHERE origin = 'control' AND enabled = 1
+					AND (SELECT revision FROM operations_catalog_cursor WHERE singleton = 1) < ?
+				RETURNING id`)
+				.bind(this.now(), this.now(), input.revision),
+			...input.sources.map((source) => {
+				const id = uuidv7(this.now())
+				return this.db
+					.prepare(`INSERT INTO sources
+					(id, app_id, environment, service_key, display_name, enabled, disabled_at, origin, public_origin, created_at, updated_at)
+					SELECT ?, ?, ?, ?, ?, 1, NULL, 'control', ?, ?, ?
+					WHERE (SELECT revision FROM operations_catalog_cursor WHERE singleton = 1) < ?
+					ON CONFLICT (app_id, environment, service_key) DO UPDATE SET
+						display_name = excluded.display_name,
+						enabled = 1,
+						disabled_at = NULL,
+						public_origin = excluded.public_origin,
+						updated_at = excluded.updated_at
+					WHERE (SELECT revision FROM operations_catalog_cursor WHERE singleton = 1) < ?
+					RETURNING id`)
+					.bind(
+						id,
+						source.coordinate.appId,
+						source.coordinate.environment,
+						source.coordinate.serviceKey,
+						source.displayName,
+						source.publicOrigin,
+						this.now(),
+						this.now(),
+						input.revision,
+						input.revision,
+					)
+			}),
+		]
+		statements.push(
+			this.db
+				.prepare(`UPDATE operations_catalog_cursor SET revision = ?, snapshot_hash = ?, applied_at = ?
+					WHERE singleton = 1 AND revision < ?
+					RETURNING revision`)
+				.bind(input.revision, input.snapshotHash, this.now(), input.revision),
+		)
+		const results = await this.db.batch<{ id?: string; revision?: number }>(statements)
+		const cursorResult = results.at(-1)?.results[0]
+		if (cursorResult?.revision !== input.revision) {
+			const current = await this.getCursor()
+			if (current.revision === input.revision && current.snapshot_hash !== input.snapshotHash) {
+				throw new CatalogRevisionConflictError()
+			}
+			return catalogResponse(current.revision, current.revision === input.revision ? 'unchanged' : 'stale', {
+				unchanged: current.revision === input.revision ? input.sources.length : 0,
+			})
+		}
+
+		let created = 0
+		let updated = 0
+		let reenabled = 0
+		let unchanged = 0
+		for (const source of input.sources) {
+			const key = sourceCoordinateKey(source.coordinate.appId, source.coordinate.environment, source.coordinate.serviceKey)
+			const prior = beforeByCoordinate.get(key)
+			if (!prior) {
+				created++
+			} else if (prior.enabled !== 1) {
+				reenabled++
+			} else if (prior.display_name !== source.displayName || prior.public_origin !== source.publicOrigin) {
+				updated++
+			} else {
+				unchanged++
+			}
+		}
+		const desiredSet = new Set(
+			input.sources.map((source) => sourceCoordinateKey(source.coordinate.appId, source.coordinate.environment, source.coordinate.serviceKey)),
+		)
+		const disabled = before.filter((source) =>
+			source.enabled === 1 && !desiredSet.has(
+				sourceCoordinateKey(source.app_id, source.environment, source.service_key),
+			)
+		).length
+		return catalogResponse(input.revision, 'applied', { created, updated, disabled, reenabled, unchanged })
+	}
+}
+
+export class CatalogRevisionConflictError extends Error {
+	constructor() {
+		super('catalog revision was reused with different content')
+	}
+}
+
+function sourceCoordinateKey(appId: string, environment: string, serviceKey: string): string {
+	return JSON.stringify([appId, environment, serviceKey])
+}
+
+function catalogResponse(
+	revision: number,
+	outcome: OperationsCatalogReconcileResponseV1['outcome'],
+	counts: Partial<Pick<OperationsCatalogReconcileResponseV1, 'created' | 'updated' | 'disabled' | 'reenabled' | 'unchanged'>> = {},
+): OperationsCatalogReconcileResponseV1 {
+	return {
+		protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
+		revision,
+		outcome,
+		created: counts.created ?? 0,
+		updated: counts.updated ?? 0,
+		disabled: counts.disabled ?? 0,
+		reenabled: counts.reenabled ?? 0,
+		unchanged: counts.unchanged ?? 0,
 	}
 }
 
@@ -956,6 +1147,7 @@ export class ArtifactsRepository {
 
 export interface OperationsRepositories {
 	sources: SourcesRepository
+	catalog: CatalogRepository
 	ingest: ErrorIngestRepository
 	issues: IssuesRepository
 	alerts: AlertsRepository
@@ -971,6 +1163,7 @@ export function createSqliteOperationsRepositories(
 	const replacements = options.replacements ?? {}
 	return {
 		sources: replacements.sources ?? new SourcesRepository(db, now),
+		catalog: replacements.catalog ?? new CatalogRepository(db, now),
 		ingest: replacements.ingest ?? new SqliteErrorIngestRepository(db, now),
 		issues: replacements.issues ?? new IssuesRepository(db, now),
 		alerts: replacements.alerts ?? new SqliteAlertsRepository(db, now),
@@ -987,6 +1180,7 @@ export function createPostgresOperationsRepositories(
 	const replacements = options.replacements ?? {}
 	return {
 		sources: replacements.sources ?? new SourcesRepository(db, now),
+		catalog: replacements.catalog ?? new CatalogRepository(db, now),
 		ingest: replacements.ingest ?? new PostgresErrorIngestRepository(db, now),
 		issues: replacements.issues ?? new IssuesRepository(db, now),
 		alerts: replacements.alerts ?? new PostgresAlertsRepository(db, now),

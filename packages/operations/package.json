@@ -32,6 +32,16 @@
 			"types": "./src/operator.ts",
 			"default": "./src/operator.ts"
 		},
+		"./access": {
+			"bun": "./src/access.ts",
+			"types": "./src/access.ts",
+			"default": "./src/access.ts"
+		},
+		"./catalog": {
+			"bun": "./src/catalog.ts",
+			"types": "./src/catalog.ts",
+			"default": "./src/catalog.ts"
+		},
 		"./testing": {
 			"bun": "./src/testing.ts",
 			"types": "./src/testing.ts",
@@ -64,6 +74,8 @@
 		"migrate:postgres": "bun src/node/migrate.ts"
 	},
 	"dependencies": {
+		"@fabrika/auth": "workspace:*",
+		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",
 		"@fabrika/platform": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",

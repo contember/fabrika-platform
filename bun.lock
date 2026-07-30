@@ -234,6 +234,8 @@
       "name": "@fabrika/operations",
       "version": "0.0.1",
       "dependencies": {
+        "@fabrika/auth": "workspace:*",
+        "@fabrika/auth-core": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
         "@fabrika/platform": "workspace:*",
         "@fabrika/platform-node": "workspace:*",

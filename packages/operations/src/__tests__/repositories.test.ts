@@ -92,6 +92,42 @@ describe('Operations portable repositories', () => {
 		expect(await harness.repositories.sources.revokeCredential(id)).toBe(false)
 	})
 
+	test('records the first source disable time and clears it on re-enable', async () => {
+		let now = 1_000
+		const harness = createHarness(() => now)
+		await source(harness, 'source-a')
+		now = 2_000
+		expect(
+			await harness.repositories.sources.upsert({
+				id: 'ignored-on-conflict',
+				appId: 'source-a',
+				environment: 'production',
+				displayName: 'source-a',
+				enabled: false,
+			}),
+		).toMatchObject({ enabled: 0, disabled_at: 2_000 })
+		now = 3_000
+		expect(
+			await harness.repositories.sources.upsert({
+				id: 'ignored-on-conflict',
+				appId: 'source-a',
+				environment: 'production',
+				displayName: 'source-a',
+				enabled: false,
+			}),
+		).toMatchObject({ enabled: 0, disabled_at: 2_000 })
+		now = 4_000
+		expect(
+			await harness.repositories.sources.upsert({
+				id: 'ignored-on-conflict',
+				appId: 'source-a',
+				environment: 'production',
+				displayName: 'source-a',
+				enabled: true,
+			}),
+		).toMatchObject({ enabled: 1, disabled_at: null })
+	})
+
 	test('makes duplicate queue delivery an exact no-op and isolates equal fingerprints by source', async () => {
 		const harness = createHarness(() => 3_000)
 		const blobs = new MemoryBlobs()

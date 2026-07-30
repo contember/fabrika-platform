@@ -1,6 +1,6 @@
 import type { SqlDatabase, SqlQueryResult, SqlRunResult, SqlStatement } from '@fabrika/platform'
 import { Database, type SQLQueryBindings } from 'bun:sqlite'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createSqliteOperationsRepositories, type OperationsRepositories } from '../../repositories.js'
 
@@ -78,7 +78,10 @@ export interface OperationsHarness {
 export function createHarness(now: () => number = Date.now): OperationsHarness {
 	const sqlite = new Database(':memory:')
 	sqlite.exec('PRAGMA foreign_keys = ON')
-	sqlite.exec(readFileSync(join(import.meta.dir, '..', '..', '..', 'migrations', '0001_init.sql'), 'utf8'))
+	const migrations = join(import.meta.dir, '..', '..', '..', 'migrations')
+	for (const file of readdirSync(migrations).filter((entry) => entry.endsWith('.sql')).sort()) {
+		sqlite.exec(readFileSync(join(migrations, file), 'utf8'))
+	}
 	const db = new TestDatabase(sqlite)
 	return { sqlite, db, repositories: createSqliteOperationsRepositories(db, { now }) }
 }

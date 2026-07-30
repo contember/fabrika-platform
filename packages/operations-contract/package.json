@@ -28,6 +28,16 @@
 			"bun": "./src/operator.ts",
 			"types": "./src/operator.ts",
 			"default": "./src/operator.ts"
+		},
+		"./access": {
+			"bun": "./src/access.ts",
+			"types": "./src/access.ts",
+			"default": "./src/access.ts"
+		},
+		"./catalog": {
+			"bun": "./src/catalog.ts",
+			"types": "./src/catalog.ts",
+			"default": "./src/catalog.ts"
 		}
 	},
 	"scripts": {

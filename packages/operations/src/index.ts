@@ -1,4 +1,15 @@
 export {
+	auditIssueMutation,
+	canAccessOperationsSource,
+	filterOperationsSources,
+	issueMutationAuditAction,
+	normalizeIssueAssignment,
+	OPERATIONS_ACTIONS,
+} from './access.js'
+export type { OperationsSourceAccess } from './access.js'
+export { handleOperationsCatalogRequest, parseCatalogRequest, reconcileOperationsCatalog } from './catalog.js'
+export type { CatalogHandlerOptions } from './catalog.js'
+export {
 	buildParsedEvent,
 	computeFingerprint,
 	extractIngestKey,
@@ -28,6 +39,8 @@ export type { OperationsDataEnv } from './pipeline.js'
 export {
 	AlertsRepository,
 	ArtifactsRepository,
+	CatalogRepository,
+	CatalogRevisionConflictError,
 	createPostgresOperationsRepositories,
 	createSqliteOperationsRepositories,
 	DeadEventsRepository,
@@ -42,6 +55,7 @@ export {
 export type {
 	AlertConfigRow,
 	AlertRuleRow,
+	CatalogCursorRow,
 	ClaimedNotification,
 	CountBucket,
 	CountResult,
