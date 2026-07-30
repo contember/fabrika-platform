@@ -288,9 +288,30 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			await api.cancelBuild({ appVersionId: input.externalId, signal: abortSignal() })
 		},
 		reconcile: async (input): Promise<ProviderReconcileOutcome> => {
-			resolvedEnvironment(input.environment, { requireReady: false })
+			const placement = resolvedEnvironment(input.environment, { requireReady: false })
 			const version = await api.getAppVersion({ appVersionId: input.externalId, signal: abortSignal() })
 			if (version.status === ZEROPS_ACTIVE) {
+				const artifact = parseFabrikaManifest(
+					decodeEnvelope('artifact', input.environment.artifact, zeropsArtifactCodec),
+					{ appId: input.environment.appId, env: input.environment.env },
+				)
+				if (artifact.app.schema !== undefined && options.propustkaUrl !== undefined) {
+					const runtimeTarget: ZeropsRuntimeTarget = {
+						projectId: placement.projectId,
+						serviceId: placement.target.serviceId,
+						accessToken: options.accessToken,
+						...(options.apiBaseUrl !== undefined ? { apiBaseUrl: options.apiBaseUrl } : {}),
+						propustkaUrl: options.propustkaUrl,
+						...(options.adminKey !== undefined ? { adminKey: options.adminKey } : {}),
+					}
+					const reconcileSchema = options.reconcileSchema ?? defaultZeropsCollaborators(runtimeTarget).reconcileSchema
+					await reconcileSchema({
+						url: options.propustkaUrl,
+						app: artifact.app.id,
+						schema: artifact.app.schema,
+						adminKey: options.adminKey,
+					})
+				}
 				return { state: 'succeeded' }
 			}
 			if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) {

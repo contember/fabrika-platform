@@ -1,6 +1,7 @@
 import type { ControlProvider } from '@fabrika/provider-contract'
 import type { ControlRepositories } from './db'
-import { providerEnvironment } from './run-lifecycle'
+import type { OperationsReleaseProjectionDeps } from './operations-releases'
+import { projectTerminalRun, providerEnvironment } from './run-lifecycle'
 
 export interface ProviderReconcileSummary {
 	checked: number
@@ -14,6 +15,7 @@ export interface ProviderReconcileDeps {
 	repositories: ControlRepositories
 	provider: ControlProvider
 	releaseLock: (key: string, holder: string) => Promise<void>
+	operations?: OperationsReleaseProjectionDeps
 }
 
 /** Reconcile provider-owned deploys after the process that started them has gone away. */
@@ -56,6 +58,7 @@ export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promis
 		}
 
 		await deps.repositories.runs.markRunFinished(run.id, outcome.state, outcome.exitCode ?? null)
+		await projectTerminalRun(deps, run.id, false, outcome.state)
 		await deps.releaseLock(`${run.app_id}:${run.env}`, run.id)
 		summary[outcome.state]++
 	}

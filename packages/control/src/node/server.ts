@@ -24,7 +24,7 @@ import { decodeDeployJobMessage, runDeployJob } from '../consumer'
 import type { Env } from '../env'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { handleFetch } from '../routes'
-import { DEPLOY_LOCK_TTL_MS, locks, repositories } from '../services'
+import { DEPLOY_LOCK_TTL_MS, locks, operationsReleaseDeps, repositories } from '../services'
 import { createRuntime, type Runtime } from './runtime'
 
 /** Build the server's fetch handler for an assembled env. Exported so a test can drive it directly. */
@@ -102,6 +102,7 @@ async function main(): Promise<void> {
 		repositories: repositories(runtime.env),
 		provider: runtime.provider,
 		releaseLock: (key, holder) => locks(runtime.env).release(key, holder),
+		operations: operationsReleaseDeps(runtime.env),
 	})
 	console.info(
 		`Provider startup reconcile: checked=${reconciliation.checked} succeeded=${reconciliation.succeeded} `

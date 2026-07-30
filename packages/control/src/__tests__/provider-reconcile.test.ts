@@ -97,6 +97,78 @@ describe('reconcileProviderRuns', () => {
 		])
 	})
 
+	test('retries provider post-work after a crash and projects terminal state only after success', async () => {
+		const { db } = createHarness()
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
+		await db.runs.createRun({
+			id: 'recovering',
+			appId: 'app',
+			env: 'prod',
+			ref: 'refs/heads/main',
+			trigger: 'manual',
+			commitSha: '0123456789abcdef0123456789abcdef01234567',
+		})
+		await db.runs.markRunStarted('recovering', 'runs/recovering/logs.ndjson')
+		await db.runs.setRunExternalId('recovering', 'version-1')
+
+		let postWorkAttempts = 0
+		let deploys = 0
+		const controlProvider: ControlProvider = {
+			id: TEST_PROVIDER_ID,
+			normalizeRegistration: (input) => input,
+			deploy: () => {
+				deploys++
+				return Promise.resolve({ state: 'succeeded' })
+			},
+			reconcile: () => {
+				postWorkAttempts++
+				if (postWorkAttempts === 1) {
+					return Promise.reject(new Error('process stopped during post-provider work'))
+				}
+				return Promise.resolve({ state: 'succeeded' })
+			},
+		}
+		const released: string[] = []
+		const deps = {
+			repositories: db,
+			provider: controlProvider,
+			releaseLock: (key: string, holder: string) => {
+				released.push(`${key}/${holder}`)
+				return Promise.resolve()
+			},
+			operations: { repository: db.operationsReleases },
+		}
+
+		await expect(reconcileProviderRuns(deps)).rejects.toThrow('process stopped during post-provider work')
+		expect((await db.runs.getRun('recovering'))?.status).toBe('running')
+		expect(await db.operationsReleases.get('recovering')).toBeNull()
+		expect(released).toEqual([])
+
+		expect(await reconcileProviderRuns(deps)).toEqual({
+			checked: 1,
+			succeeded: 1,
+			failed: 0,
+			inProgress: 0,
+			waiting: 0,
+		})
+		expect((await db.runs.getRun('recovering'))?.status).toBe('succeeded')
+		const projection = await db.operationsReleases.get('recovering')
+		expect(projection?.payload_json).toContain('"phase":"terminal"')
+		expect(projection?.payload_json).toContain('"outcome":"succeeded"')
+		expect(released).toEqual(['app:prod/recovering'])
+
+		expect(await reconcileProviderRuns(deps)).toEqual({
+			checked: 0,
+			succeeded: 0,
+			failed: 0,
+			inProgress: 0,
+			waiting: 0,
+		})
+		expect(postWorkAttempts).toBe(2)
+		expect(deploys).toBe(0)
+	})
+
 	test('keeps provider-owned runs in progress when reconciliation is not a provider capability', async () => {
 		const { db } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })

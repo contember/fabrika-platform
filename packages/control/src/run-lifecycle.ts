@@ -242,7 +242,7 @@ export async function executeDeploy(
 		const appEnv = await deps.repositories.registry.getAppEnv(run.app_id, run.env)
 		if (app === null || appEnv === null) {
 			await deps.repositories.runs.markRunFinished(run.id, 'failed', null)
-			await projectTerminal(deps, run.id, message.dryRun === true, 'failed')
+			await projectTerminalRun(deps, run.id, message.dryRun === true, 'failed')
 			return { runId: run.id, status: 'failed' }
 		}
 		if (appEnv.provider !== deps.provider.id) {
@@ -323,20 +323,20 @@ export async function executeDeploy(
 			},
 		})
 		await deps.repositories.runs.markRunFinished(run.id, outcome.state, outcome.exitCode ?? null)
-		await projectTerminal(deps, run.id, message.dryRun === true, outcome.state, outcome.artifactState)
+		await projectTerminalRun(deps, run.id, message.dryRun === true, outcome.state, outcome.artifactState)
 		return { runId: run.id, status: outcome.state }
 	} catch (error) {
 		console.error(`deploy run ${run.id} failed:`, error instanceof Error ? error.message : 'unknown error')
 		await deps.repositories.runs.markRunFinished(run.id, 'failed', null)
-		await projectTerminal(deps, run.id, message.dryRun === true, 'failed')
+		await projectTerminalRun(deps, run.id, message.dryRun === true, 'failed')
 		return { runId: run.id, status: 'failed' }
 	} finally {
 		await deps.lock.release(lockKey, run.id)
 	}
 }
 
-async function projectTerminal(
-	deps: RunDeps,
+export async function projectTerminalRun(
+	deps: Pick<RunDeps, 'repositories' | 'operations'>,
 	runId: string,
 	dryRun: boolean,
 	outcome: 'succeeded' | 'failed',
