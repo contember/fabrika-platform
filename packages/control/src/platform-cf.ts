@@ -8,7 +8,8 @@
 // D1 and Fetcher satisfy the neutral ports structurally. R2 and Queues need small return-type adapters.
 // The runner is not a core port: it is consumed only while composing the Cloudflare provider below.
 
-import type { BlobStore, JobQueue } from '@fabrika/platform'
+import type { IamRpc } from '@fabrika/auth'
+import type { BlobStore, HttpService, JobQueue } from '@fabrika/platform'
 import { type CloudflareRunnerJob, createCloudflareControlProvider } from '@fabrika/provider-cloudflare'
 import type { ControlProvider, ProviderSource, ProviderTerminalOutcome } from '@fabrika/provider-contract'
 import type { VozkaRunner } from '@fabrika/runner'
@@ -21,7 +22,7 @@ import { repoSource } from './services'
  * `this.env` with. It differs from `Env` in exactly the five handles and in nothing else: every var and
  * secret is inherited, so there is one place to add one.
  */
-export interface WorkerBindings extends Omit<Env, 'DB' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE'> {
+export interface WorkerBindings extends Omit<Env, 'DB' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'IAM' | 'IAM_ADMIN'> {
 	/** Registry + run history + vault + deploy locks. Migrations in `./migrations` (SQLite dialect). */
 	DB: D1Database
 	/** Control-plane SPA static assets. */
@@ -40,6 +41,8 @@ export interface WorkerBindings extends Omit<Env, 'DB' | 'ASSETS' | 'RUN_LOGS' |
 	 * off-local only (local dev has no runner worker, mirroring the IAM binding).
 	 */
 	RUNNER_SVC?: Service<VozkaRunner>
+	/** IAM RPC and HTTP admin transport share one service binding. */
+	IAM?: IamRpc & HttpService
 }
 
 /** Present the Worker's bindings as the runtime-neutral `Env` the shared layer consumes. */
@@ -50,6 +53,7 @@ export function controlEnv(bindings: WorkerBindings): Env {
 		ASSETS: bindings.ASSETS,
 		RUN_LOGS: r2BlobStore(bindings.RUN_LOGS),
 		DEPLOY_QUEUE: cfJobQueue(bindings.DEPLOY_QUEUE),
+		...(bindings.IAM === undefined ? {} : { IAM: bindings.IAM, IAM_ADMIN: bindings.IAM }),
 	}
 }
 

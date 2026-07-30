@@ -9,6 +9,7 @@
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { handleApi } from './api/router'
 import type { Env } from './env'
+import { forwardIamAdmin } from './iam-admin'
 import { buildApiDeps, db, repoSource } from './services'
 import { handleWebhook } from './webhook'
 
@@ -33,6 +34,16 @@ export async function handleFetch(
 	// The ONE unauthenticated route: the GitHub webhook (HMAC-gated, not ACL-gated).
 	if (request.method === 'POST' && url.pathname === '/webhooks/github') {
 		return handleWebhook(request, { db: db(env), repoSource: repoSource(env), queue: env.DEPLOY_QUEUE })
+	}
+
+	if (url.pathname === '/iam/admin' || url.pathname.startsWith('/iam/admin/')) {
+		if (env.IAM_ADMIN === undefined) {
+			return Response.json({ error: 'IAM admin gateway unavailable' }, { status: 503 })
+		}
+		return forwardIamAdmin(request, {
+			gateway: env.IAM_ADMIN,
+			...(env.PROPUSTKA_URL === undefined ? {} : { publicIamUrl: env.PROPUSTKA_URL }),
+		})
 	}
 
 	// The ACL-gated control surface (registry / runs / triggers / vault).

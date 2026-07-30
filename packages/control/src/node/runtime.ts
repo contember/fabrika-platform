@@ -19,6 +19,7 @@ import { FileSystemAssetServer, PostgresDatabase, PostgresJobQueue, S3BlobStore 
 import type { ControlProvider } from '@fabrika/provider-contract'
 import type { Env } from '../env'
 import type { DeployJobMessage } from '../run-lifecycle'
+import { HttpIamAdminGateway } from './iam-admin'
 import { zeropsControlProvider } from './provider'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
@@ -87,6 +88,10 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		RUN_LOGS: blobStore(source),
 		DEPLOY_QUEUE: queue,
 		...(dev === 'true' ? {} : { IAM: iamRpc(source) }),
+		IAM_ADMIN: new HttpIamAdminGateway(
+			required(source, 'PROPUSTKA_RPC_URL'),
+			dev === 'true' ? source['PROPUSTKA_PROVISIONING_KEY'] : undefined,
+		),
 		ENVIRONMENT: environment,
 		DEV: dev,
 		// Spread conditionally rather than defaulted to '': ABSENT and EMPTY mean different things to

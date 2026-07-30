@@ -19,7 +19,7 @@
  */
 
 import type { IamRpc } from '@fabrika/auth'
-import type { AssetServer, BlobStore, JobQueue, SqlDatabase } from '@fabrika/platform'
+import type { AssetServer, BlobStore, HttpService, JobQueue, SqlDatabase } from '@fabrika/platform'
 import type { DeployJobMessage } from './run-lifecycle'
 
 export interface Env {
@@ -41,6 +41,11 @@ export interface Env {
 	 * path (`DEV='true'`) uses a persona fake and never touches it.
 	 */
 	IAM?: IamRpc
+	/**
+	 * IAM's HTTP admin surface. Control only transports `/iam/admin/*` requests through this port;
+	 * IAM still authenticates, authorizes, and audits every operation.
+	 */
+	IAM_ADMIN?: HttpService
 
 	// ── Vars ──────────────────────────────────────────────────────────────────
 	ENVIRONMENT: string

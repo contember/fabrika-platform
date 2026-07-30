@@ -43,10 +43,13 @@ export interface DeployLocks {
 	release(key: string, holder: string): Promise<void>
 }
 
-/** Serves the built SPA for non-API paths. */
-export interface AssetServer {
+/** One HTTP-speaking service behind a platform-native or network transport. */
+export interface HttpService {
 	fetch(request: Request): Promise<Response>
 }
+
+/** Serves the built SPA for non-API paths. */
+export interface AssetServer extends HttpService {}
 
 /**
  * Keep work alive past the response. On Workers this is `ctx.waitUntil`; in a long-running process
