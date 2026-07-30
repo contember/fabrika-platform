@@ -3,7 +3,13 @@ import {
 	operationsCatalogSnapshotHash,
 	type OperationsCatalogSourceV2,
 } from '@fabrika/operations-contract/catalog'
-import { OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract/releases'
+import {
+	OPERATIONS_RELEASE_PROTOCOL_VERSION,
+	OPERATIONS_RELEASE_RECONCILE_PATH,
+	OPERATIONS_SOURCE_MAP_UPLOAD_PATH,
+	operationsReleaseName,
+	type OperationsReleaseReconcileRequestV1,
+} from '@fabrika/operations-contract/releases'
 import { describe, expect, test } from 'bun:test'
 import { createOperationsIam } from '../auth.js'
 import { SqliteHealthRepository } from '../health-repository.js'
@@ -13,8 +19,7 @@ import { createHarness } from './helpers/sqlite.js'
 const publicHost = 'errors.example.test'
 const syncKey = 'catalog-sync-key-with-at-least-32-characters'
 
-const handler = () => {
-	const harness = createHarness()
+const handler = (harness = createHarness()) => {
 	return createOperationsFetchHandler({
 		repositories: harness.repositories,
 		publicHost,
@@ -59,7 +64,7 @@ async function reconcileSource(fetch: (request: Request) => Promise<Response>, s
 describe('Operations public/private HTTP isolation', () => {
 	test('the public ingest hostname does not expose health, catalog, or operator paths', async () => {
 		const fetch = handler()
-		for (const path of ['/healthz', '/private/catalog/reconcile', '/api/issues']) {
+		for (const path of ['/healthz', '/private/catalog/reconcile', OPERATIONS_RELEASE_RECONCILE_PATH, '/api/issues']) {
 			const response = await fetch(new Request(`https://${publicHost}${path}`, { method: path.includes('catalog') ? 'POST' : 'GET' }))
 			expect(response.status).toBe(404)
 		}
@@ -81,6 +86,65 @@ describe('Operations public/private HTTP isolation', () => {
 
 		const response = await reconcileSource(fetch, '0198a000-0000-7000-8000-000000000001')
 		expect(response.status).toBe(200)
+	})
+
+	test('the private release route accepts the exact Control projection shape and persists it', async () => {
+		const harness = createHarness(() => 1_700_000_000_000)
+		const fetch = handler(harness)
+		expect((await reconcileSource(fetch, '0198a000-0000-7000-8000-000000000001')).status).toBe(200)
+		const commitSha = 'a'.repeat(40)
+		const releaseName = operationsReleaseName({ appId: 'app', environment: 'prod', commitSha })
+		const request: OperationsReleaseReconcileRequestV1 = {
+			protocolVersion: OPERATIONS_RELEASE_PROTOCOL_VERSION,
+			revision: 1,
+			runId: '0198a000-0000-7000-8000-000000000002',
+			coordinate: { appId: 'app', environment: 'prod' },
+			phase: 'started',
+			providerRunId: null,
+			outcome: null,
+			artifactState: 'pending',
+			release: { kind: 'available', name: releaseName, commitSha },
+			uploadCredential: {
+				verifier: 'b'.repeat(64),
+				expiresAt: 1_700_007_200_000,
+			},
+			observedAt: 1_700_000_000_001,
+		}
+		const response = await fetch(
+			new Request(`https://operations.internal${OPERATIONS_RELEASE_RECONCILE_PATH}`, {
+				method: 'POST',
+				headers: {
+					authorization: `Bearer ${syncKey}`,
+					'content-type': 'application/json',
+				},
+				body: JSON.stringify(request),
+			}),
+		)
+		expect(response.status).toBe(200)
+		expect(await response.json()).toMatchObject({
+			protocolVersion: OPERATIONS_RELEASE_PROTOCOL_VERSION,
+			revision: 1,
+			outcome: 'applied',
+		})
+		expect(
+			await harness.db.prepare(`SELECT
+					release.release_name, release.commit_sha, run.phase, run.projection_revision
+				FROM releases release
+				JOIN deploy_run_links run ON run.release_id = release.id
+				WHERE run.run_id = ?`)
+				.bind(request.runId)
+				.first<{
+					release_name: string
+					commit_sha: string
+					phase: string
+					projection_revision: number
+				}>(),
+		).toEqual({
+			release_name: releaseName,
+			commit_sha: commitSha,
+			phase: 'started',
+			projection_revision: 1,
+		})
 	})
 
 	test('the private operator API enforces scoped IAM permissions while the public hostname stays closed', async () => {

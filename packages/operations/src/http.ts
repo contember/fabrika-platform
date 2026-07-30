@@ -1,12 +1,13 @@
 import type { AuthCarrier, Iam } from '@fabrika/auth'
 import type { AppGates } from '@fabrika/auth-core'
-import { OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'
+import { OPERATIONS_RELEASE_RECONCILE_PATH, OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'
 import { handleSourceMapUploadRequest } from './artifact-upload.js'
 import { handleOperationsCatalogRequest } from './catalog.js'
 import { handleDirectIngestRequest } from './direct-ingest.js'
 import type { HealthRepository } from './health-repository.js'
 import { handleOperationsOperatorRequest } from './operator-api.js'
 import type { OperationsDataEnv } from './pipeline.js'
+import { handleOperationsReleaseRequest } from './releases.js'
 
 const INGEST_PATH = /^\/api\/[1-9][0-9]{0,18}\/envelope\/$/
 const CATALOG_PATH = '/private/catalog/reconcile'
@@ -54,6 +55,9 @@ export function createOperationsFetchHandler(env: OperationsHttpEnv): (request: 
 			}
 			if (url.pathname === CATALOG_PATH) {
 				return handleOperationsCatalogRequest(request, { repositories: env.repositories, syncKey: env.syncKey })
+			}
+			if (url.pathname === OPERATIONS_RELEASE_RECONCILE_PATH) {
+				return handleOperationsReleaseRequest(request, { repositories: env.repositories, syncKey: env.syncKey })
 			}
 			if (url.pathname.startsWith('/api/')) {
 				const context: AuthCarrier = {}
