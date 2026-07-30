@@ -119,7 +119,7 @@ export async function handleOperationsReleaseRequest(request: Request, options: 
 	} catch (error) {
 		if (error instanceof ReleaseRequestError) return jsonError(error.status, error.message)
 		if (error instanceof ArtifactProjectionConflictError) return jsonError(409, error.message)
-		console.error('operations release reconcile failed', error instanceof Error ? error.message : 'unknown error')
+		console.error('operations release reconcile failed')
 		return jsonError(500, 'internal error')
 	}
 }

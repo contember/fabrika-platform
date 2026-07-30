@@ -65,6 +65,8 @@ export interface PersonaSpec {
 export interface CreateIamOptions {
 	/** The propustka app id (baked in so it can never be mistyped). Falls back to `env.PROPUSTKA_APP_ID`. */
 	appId?: string
+	/** Force freshly minted `px_token` cookies to be secure. Omit to derive it from the request URL. */
+	forceSecureCookies?: true
 	/** Dev persona roster keyed by email — the local people directory + the synthetic-context source. */
 	devPersonas?: Record<string, PersonaSpec>
 	/** Persona used in dev when no `?__as=` / cookie selector is present (e.g. the admin). */
@@ -308,7 +310,7 @@ function extractCapabilityToken(request: Request, queryName: string, cookieName:
 // ── Iam ──────────────────────────────────────────────────────────────────────────
 
 /** Mode-specific deps: dev needs nothing; off-local needs the binding + issuer (so no `!` later). */
-type IamMode = { dev: true } | { dev: false; binding: IamRpc; issuer: string }
+type IamMode = { dev: true } | { dev: false; binding: IamRpc; issuer: string; forceSecureCookies: true | undefined }
 
 /** Internal construction config — `createIam` assembles this; apps never build it directly. */
 interface IamConfig {
@@ -377,7 +379,11 @@ export class Iam {
 		return async (request, ctx, next) => {
 			const result = this.mode.dev
 				? this.resolveDevPersona(request)
-				: await new PropustkaAuth(this.mode.binding, this.appId, { issuer: this.mode.issuer, gates: cfg.gates }).authenticate(request)
+				: await new PropustkaAuth(this.mode.binding, this.appId, {
+					issuer: this.mode.issuer,
+					gates: cfg.gates,
+					...(this.mode.forceSecureCookies === undefined ? {} : { secure: this.mode.forceSecureCookies }),
+				}).authenticate(request)
 
 			if (result.ok) {
 				ctx.auth = result.context
@@ -458,7 +464,11 @@ export class Iam {
 				ctx.auth = openCapabilityContext()
 				return next()
 			}
-			const result = await new PropustkaAuth(this.mode.binding, this.appId, { issuer: this.mode.issuer, gates: { rules: [] } }).redeemKey(token)
+			const result = await new PropustkaAuth(this.mode.binding, this.appId, {
+				issuer: this.mode.issuer,
+				gates: { rules: [] },
+				...(this.mode.forceSecureCookies === undefined ? {} : { secure: this.mode.forceSecureCookies }),
+			}).redeemKey(token)
 			if (!result.ok) {
 				return notFound()
 			}
@@ -540,7 +550,7 @@ export function createIam(env: IamEnv, opts: CreateIamOptions = {}): Iam {
 	const management = new IamClient(binding, appId)
 	return new Iam({
 		management,
-		mode: { dev: false, binding, issuer },
+		mode: { dev: false, binding, issuer, forceSecureCookies: opts.forceSecureCookies },
 		appId,
 		devPersonas: opts.devPersonas,
 		devDefaultPersona: opts.devDefaultPersona,

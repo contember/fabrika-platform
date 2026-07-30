@@ -1,3 +1,4 @@
+import { buildAccessClaims, type IamRpc, type Jwks, type PermissionEntry } from '@fabrika/auth-core'
 import {
 	OPERATIONS_CATALOG_PROTOCOL_VERSION,
 	operationsCatalogSnapshotHash,
@@ -11,6 +12,7 @@ import {
 	type OperationsReleaseReconcileRequestV1,
 } from '@fabrika/operations-contract/releases'
 import { describe, expect, test } from 'bun:test'
+import { exportJWK, generateKeyPair, type KeyLike, SignJWT } from 'jose'
 import { createOperationsIam } from '../auth.js'
 import { SqliteHealthRepository } from '../health-repository.js'
 import { createOperationsFetchHandler } from '../http.js'
@@ -18,8 +20,22 @@ import { createHarness } from './helpers/sqlite.js'
 
 const publicHost = 'errors.example.test'
 const syncKey = 'catalog-sync-key-with-at-least-32-characters'
+const issuer = 'https://iam.example.test'
+const { publicKey, privateKey } = await generateKeyPair('ES256')
+const exportedPublicKey = await exportJWK(publicKey)
+const jwks: Jwks = {
+	keys: [{
+		kty: 'EC',
+		crv: exportedPublicKey.crv,
+		x: exportedPublicKey.x,
+		y: exportedPublicKey.y,
+		kid: 'operations-test',
+		alg: 'ES256',
+		use: 'sig',
+	}],
+}
 
-const handler = (harness = createHarness()) => {
+const handler = (harness = createHarness(), iam = createOperationsIam({ DEV: 'true' })) => {
 	return createOperationsFetchHandler({
 		repositories: harness.repositories,
 		publicHost,
@@ -31,8 +47,37 @@ const handler = (harness = createHarness()) => {
 			delete: async () => {},
 		},
 		health: new SqliteHealthRepository(harness.db),
-		iam: createOperationsIam({ DEV: 'true' }),
+		iam,
 	})
+}
+
+async function signedOperationsUser(key: KeyLike): Promise<string> {
+	const now = Math.floor(Date.now() / 1000)
+	const permissions: PermissionEntry[] = [{ action: 'operations.read', scope: null, source: 'grant' }]
+	const claims = buildAccessClaims({
+		iss: issuer,
+		app: 'vozka',
+		subject: 'operator-1',
+		type: 'user',
+		label: 'operator@example.test',
+		permissions,
+		issuedAt: now,
+		expiresAt: now + 300,
+	})
+	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'operations-test' }).sign(key)
+}
+
+function sessionRpc(token: string): IamRpc {
+	return {
+		mintToken: () => Promise.resolve({ ok: true, token, expiresAt: Math.floor(Date.now() / 1000) + 300 }),
+		mintFromKey: () => Promise.resolve({ ok: false, reason: 'invalid_key' }),
+		issueKey: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
+		issueJwt: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
+		getJwks: () => Promise.resolve(jwks),
+		listPrincipals: () => Promise.resolve({ ok: true, principals: [] }),
+		audit: () => Promise.resolve(),
+		revokeKey: () => Promise.resolve({ ok: false, reason: 'not_found' }),
+	}
 }
 
 async function reconcileSource(fetch: (request: Request) => Promise<Response>, sourceId: string): Promise<Response> {
@@ -181,5 +226,22 @@ describe('Operations public/private HTTP isolation', () => {
 		expect((await createCheck('viewer@vozka.test')).status).toBe(404)
 		expect((await createCheck('operator@vozka.test')).status).toBe(201)
 		expect((await fetch(new Request(`https://${publicHost}/api/sources`))).status).toBe(404)
+	})
+
+	test('configured public host secures a session cookie minted for an internal HTTP gateway request', async () => {
+		const token = await signedOperationsUser(privateKey)
+		const iam = createOperationsIam(
+			{ IAM: sessionRpc(token), PROPUSTKA_URL: issuer },
+			{ publicHost },
+		)
+		const fetch = handler(createHarness(), iam)
+		const response = await fetch(
+			new Request('http://operations:3000/api/sources', {
+				headers: { cookie: 'px_session=session-1' },
+			}),
+		)
+
+		expect(response.status).toBe(200)
+		expect(response.headers.get('set-cookie')).toContain('; Secure')
 	})
 })

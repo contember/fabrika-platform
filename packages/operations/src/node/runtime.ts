@@ -61,14 +61,18 @@ export function createOperationsRuntime(source: Record<string, string | undefine
 
 function operationsIam(source: Record<string, string | undefined>) {
 	const dev = source['DEV'] ?? ''
-	if (dev !== '') return createOperationsIam({ DEV: dev })
-	return createOperationsIam({
-		IAM: new HttpIamRpc({
-			origin: required(source, 'FABRIKA_IAM_URL'),
-			key: requiredSecret(source, 'PROPUSTKA_RPC_KEY'),
-		}),
-		PROPUSTKA_URL: required(source, 'PROPUSTKA_URL'),
-	})
+	const options = { publicHost: source['FABRIKA_OPERATIONS_PUBLIC_HOST'] }
+	if (dev !== '') return createOperationsIam({ DEV: dev }, options)
+	return createOperationsIam(
+		{
+			IAM: new HttpIamRpc({
+				origin: required(source, 'FABRIKA_IAM_URL'),
+				key: requiredSecret(source, 'PROPUSTKA_RPC_KEY'),
+			}),
+			PROPUSTKA_URL: required(source, 'PROPUSTKA_URL'),
+		},
+		options,
+	)
 }
 
 function required(source: Record<string, string | undefined>, name: string): string {

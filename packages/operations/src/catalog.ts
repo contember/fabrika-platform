@@ -84,7 +84,7 @@ export async function handleOperationsCatalogRequest(request: Request, options: 
 	} catch (error) {
 		if (error instanceof CatalogRequestError) return jsonError(error.status, error.message)
 		if (error instanceof CatalogRevisionConflictError) return jsonError(409, error.message)
-		console.error('operations catalog reconcile failed', error instanceof Error ? error.message : 'unknown error')
+		console.error('operations catalog reconcile failed')
 		return jsonError(500, 'internal error')
 	}
 }

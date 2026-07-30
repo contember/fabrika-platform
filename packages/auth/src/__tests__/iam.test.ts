@@ -1,4 +1,4 @@
-import { buildAccessClaims, type Jwks, type PermissionEntry, type Scope } from '@fabrika/auth-core'
+import { buildAccessClaims, type Jwks, type MintTokenResult, type PermissionEntry, type Scope } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { exportJWK, generateKeyPair, type KeyLike, SignJWT } from 'jose'
 import { createIam, type IamEnv, makeDevContext, type PersonaSpec } from '../iam'
@@ -174,6 +174,20 @@ describe('authMiddleware — success', () => {
 		expect(nextCalled).toBe(true)
 		expect(response.status).toBe(200)
 		expect(response.headers.get('set-cookie')).toContain('px_token=')
+	})
+
+	test('forceSecureCookies secures an internal HTTP request while the default remains protocol-derived', async () => {
+		const token = await signUser(privateKey, PERMS, 300)
+		const minted: MintTokenResult = { ok: true, token, expiresAt: now() + 300 }
+		const secureIam = createIam(offLocalEnv(new IamRpcStub({ jwks: JWKS, mintToken: minted })), { forceSecureCookies: true })
+		const derivedIam = createIam(offLocalEnv(new IamRpcStub({ jwks: JWKS, mintToken: minted })))
+		const request = () => new Request('http://app.internal/page', { headers: { Cookie: 'px_session=sess-1' } })
+
+		const secure = await run(secureIam.authMiddleware({ gates: HUMAN_GATES }), request())
+		const derived = await run(derivedIam.authMiddleware({ gates: HUMAN_GATES }), request())
+
+		expect(secure.response.headers.get('set-cookie')).toContain('; Secure')
+		expect(derived.response.headers.get('set-cookie')).not.toContain('; Secure')
 	})
 })
 

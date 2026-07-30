@@ -6,8 +6,8 @@ async function main(): Promise<void> {
 	const server = Bun.serve({
 		port: runtime.port,
 		fetch: createOperationsFetchHandler(runtime.env),
-		error(error: unknown): Response {
-			console.error('operations server error:', error instanceof Error ? error.message : 'unknown error')
+		error(): Response {
+			console.error('operations server error')
 			return Response.json({ error: 'internal error' }, { status: 500 })
 		},
 	})
@@ -23,8 +23,8 @@ async function main(): Promise<void> {
 			.then(() => runtime.consumer.stop())
 			.then(() => runtime.shutdown())
 			.then(() => process.exit(0))
-			.catch((error: unknown) => {
-				console.error('operations shutdown failed:', error instanceof Error ? error.message : 'unknown error')
+			.catch(() => {
+				console.error('operations shutdown failed')
 				process.exit(1)
 			})
 	}
@@ -33,8 +33,8 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-	main().catch((error: unknown) => {
-		console.error('operations failed to start:', error instanceof Error ? error.message : 'unknown error')
+	main().catch(() => {
+		console.error('operations failed to start')
 		process.exit(1)
 	})
 }

@@ -18,8 +18,8 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-	main().catch((error: unknown) => {
-		console.error('operations maintenance failed:', error instanceof Error ? error.message : 'unknown error')
+	main().catch(() => {
+		console.error('operations maintenance failed')
 		process.exit(1)
 	})
 }

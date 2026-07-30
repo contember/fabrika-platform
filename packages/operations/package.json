@@ -110,6 +110,7 @@
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260702.1",
 		"@types/bun": "latest",
+		"jose": "^5.9.0",
 		"oblaka-iac": "^0.0.18",
 		"wrangler": "^4.24.0"
 	}
