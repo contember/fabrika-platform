@@ -1977,7 +1977,8 @@ td.numeric {
 	gap: var(--s-2);
 }
 
-.ops-inline-action input {
+.ops-inline-action input,
+.ops-inline-action select {
 	flex: 1;
 }
 

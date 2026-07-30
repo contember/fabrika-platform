@@ -17,6 +17,7 @@ import type {
 	OperationsReleaseDetailResponseDto,
 	OperationsReleaseListResponseDto,
 	OperationsReleaseSummaryDto,
+	OperationsSourceDetailResponseDto,
 	OperationsSourceHealthDto,
 	OperationsSourceListResponseDto,
 	OperationsSourceSummaryDto,
@@ -130,7 +131,8 @@ async function listSources(options: OperationsOperatorOptions): Promise<Response
 
 async function sourceDetail(sourceId: string, options: OperationsOperatorOptions): Promise<Response> {
 	const source = await visibleSource(sourceId, 'operations.read', options)
-	return Response.json({ source: sourceDto(source) })
+	const body: OperationsSourceDetailResponseDto = { source: sourceDto(source) }
+	return Response.json(body)
 }
 
 async function listIssues(url: URL, options: OperationsOperatorOptions): Promise<Response> {

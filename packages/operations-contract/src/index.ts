@@ -65,6 +65,7 @@ export type {
 	OperationsReleaseDetailResponseDto,
 	OperationsReleaseListResponseDto,
 	OperationsReleaseSummaryDto,
+	OperationsSourceDetailResponseDto,
 	OperationsSourceHealthDto,
 	OperationsSourceListResponseDto,
 	OperationsSourceSummaryDto,

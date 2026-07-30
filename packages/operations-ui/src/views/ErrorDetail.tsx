@@ -1,12 +1,19 @@
-import type { ActivityItem, DisplayFrame, EventDetail, IssueListItem, IssueMutation } from '@fabrika/operations-contract'
+import type { DisplayFrame, EventDetail } from '@fabrika/operations-contract'
+import type {
+	OperationsAssigneeListResponseDto,
+	OperationsIssueDetailDto,
+	OperationsIssueMutationRequestDto,
+	OperationsReleaseSummaryDto,
+} from '@fabrika/operations-contract/operator-api'
 import { useState } from 'react'
 import { formatTimestamp, relativeSeen } from '../format'
 
 export interface ErrorDetailViewProps {
-	issue: IssueListItem
+	issue: OperationsIssueDetailDto
 	event: EventDetail | null
-	activity: readonly ActivityItem[]
-	onMutate?: (mutation: IssueMutation) => Promise<void>
+	assignees: OperationsAssigneeListResponseDto['items']
+	releases: readonly OperationsReleaseSummaryDto[]
+	onMutate?: (mutation: OperationsIssueMutationRequestDto) => Promise<void>
 }
 
 export function frameLocation(frame: DisplayFrame): string {
@@ -14,18 +21,24 @@ export function frameLocation(frame: DisplayFrame): string {
 	return position === '' ? frame.file : `${frame.file}:${position}`
 }
 
-export function ErrorDetailView({ issue, event, activity, onMutate }: ErrorDetailViewProps) {
+export function ErrorDetailView({ issue, event, assignees, releases, onMutate }: ErrorDetailViewProps) {
 	const [comment, setComment] = useState('')
-	const [assignee, setAssignee] = useState(issue.assignedTo ?? '')
+	const [assignee, setAssignee] = useState(issue.assignedTo?.id ?? '')
 	const [mergeTarget, setMergeTarget] = useState('')
-	const [release, setRelease] = useState(event?.release ?? '')
+	const [releaseId, setReleaseId] = useState(issue.resolvedInRelease?.id ?? '')
 	const [busy, setBusy] = useState(false)
+	const [error, setError] = useState<string | null>(null)
 
-	async function mutate(mutation: IssueMutation) {
-		if (onMutate === undefined) return
+	async function mutate(mutation: OperationsIssueMutationRequestDto): Promise<boolean> {
+		if (onMutate === undefined) return false
 		setBusy(true)
+		setError(null)
 		try {
 			await onMutate(mutation)
+			return true
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : 'The issue could not be changed.')
+			return false
 		} finally {
 			setBusy(false)
 		}
@@ -38,7 +51,9 @@ export function ErrorDetailView({ issue, event, activity, onMutate }: ErrorDetai
 			<div className="page-head">
 				<div className="page-head-row">
 					<div>
-						<p className="eyebrow">{issue.projectId}</p>
+						<p className="eyebrow">
+							{issue.source.appId} · {issue.source.environment} · {issue.source.serviceKey}
+						</p>
 						<h1>{issue.title}</h1>
 						<p className="hint">{issue.culprit ?? 'No culprit was reported.'}</p>
 					</div>
@@ -53,8 +68,8 @@ export function ErrorDetailView({ issue, event, activity, onMutate }: ErrorDetai
 				<Fact label="Events" value={issue.count.toLocaleString()} />
 				<Fact label="First seen" value={formatTimestamp(issue.firstSeen)} />
 				<Fact label="Last seen" value={relativeSeen(issue.lastSeen)} />
-				<Fact label="Assigned to" value={issue.assignedTo ?? 'Unassigned'} />
-				<Fact label="Release" value={event?.release ?? '—'} />
+				<Fact label="Assigned to" value={issue.assignedTo?.label ?? issue.assignedTo?.id ?? 'Unassigned'} />
+				<Fact label="Release" value={issue.latestOccurrence?.release ?? '—'} />
 				<Fact label="Environment" value={event?.environment ?? '—'} />
 			</div>
 
@@ -103,6 +118,7 @@ export function ErrorDetailView({ issue, event, activity, onMutate }: ErrorDetai
 							? <p className="hint">Triage actions are read-only in this context.</p>
 							: (
 								<div className="ops-triage">
+									{error && <p className="error-text" role="alert">{error}</p>}
 									<div className="form-row">
 										<button type="button" disabled={busy} onClick={() => mutate({ kind: 'status', status: 'resolved' })}>Resolve</button>
 										<button type="button" disabled={busy} onClick={() => mutate({ kind: 'status', status: 'ignored' })}>Ignore</button>
@@ -113,8 +129,11 @@ export function ErrorDetailView({ issue, event, activity, onMutate }: ErrorDetai
 									<label>
 										Assignee
 										<div className="ops-inline-action">
-											<input value={assignee} onChange={(event) => setAssignee(event.target.value)} placeholder="Principal ID" />
-											<button type="button" disabled={busy} onClick={() => mutate({ kind: 'assign', principalId: assignee || null, principalLabel: null })}>
+											<select value={assignee} onChange={(event) => setAssignee(event.target.value)}>
+												<option value="">Unassigned</option>
+												{assignees.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.label}</option>)}
+											</select>
+											<button type="button" disabled={busy} onClick={() => mutate({ kind: 'assign', principalId: assignee || null })}>
 												Assign
 											</button>
 										</div>
@@ -127,8 +146,7 @@ export function ErrorDetailView({ issue, event, activity, onMutate }: ErrorDetai
 										type="button"
 										disabled={busy || comment.trim() === ''}
 										onClick={async () => {
-											await mutate({ kind: 'comment', text: comment.trim() })
-											setComment('')
+											if (await mutate({ kind: 'comment', text: comment.trim() })) setComment('')
 										}}
 									>
 										Add comment
@@ -136,13 +154,16 @@ export function ErrorDetailView({ issue, event, activity, onMutate }: ErrorDetai
 									<label>
 										Resolve in release
 										<div className="ops-inline-action">
-											<input value={release} onChange={(event) => setRelease(event.target.value)} placeholder="Release name" />
+											<select value={releaseId} onChange={(event) => setReleaseId(event.target.value)}>
+												<option value="">Clear release</option>
+												{releases.map((release) => <option key={release.id} value={release.id}>{release.releaseName}</option>)}
+											</select>
 											<button
 												type="button"
-												disabled={busy || release.trim() === ''}
-												onClick={() => mutate({ kind: 'resolve_in_release', release: release.trim() })}
+												disabled={busy}
+												onClick={() => mutate({ kind: 'resolve_in_release', releaseId: releaseId || null })}
 											>
-												Resolve
+												Apply
 											</button>
 										</div>
 									</label>
@@ -153,7 +174,7 @@ export function ErrorDetailView({ issue, event, activity, onMutate }: ErrorDetai
 											<button
 												type="button"
 												disabled={busy || mergeTarget.trim() === ''}
-												onClick={() => mutate({ kind: 'merge', target: mergeTarget.trim() })}
+												onClick={() => mutate({ kind: 'merge', targetIssueId: mergeTarget.trim() })}
 											>
 												Merge
 											</button>
@@ -169,7 +190,7 @@ export function ErrorDetailView({ issue, event, activity, onMutate }: ErrorDetai
 						<h2>Activity</h2>
 					</div>
 					<div className="card-body flush">
-						{activity.length === 0
+						{issue.activity.length === 0
 							? (
 								<div className="empty-state">
 									<strong className="empty-title">No triage activity</strong>
@@ -177,7 +198,7 @@ export function ErrorDetailView({ issue, event, activity, onMutate }: ErrorDetai
 							)
 							: (
 								<div className="feed">
-									{activity.map((item) => (
+									{issue.activity.map((item) => (
 										<div className="feed-row" key={item.id}>
 											<span className="feed-main">
 												<strong className="feed-title">{item.kind}</strong>

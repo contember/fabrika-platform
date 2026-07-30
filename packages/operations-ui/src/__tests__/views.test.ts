@@ -1,11 +1,21 @@
-import type { DisplayFrame, IssueListItem } from '@fabrika/operations-contract'
+import type { DisplayFrame } from '@fabrika/operations-contract'
+import type { OperationsIssueSummaryDto } from '@fabrika/operations-contract/operator-api'
 import { describe, expect, test } from 'bun:test'
+import { aggregateHealth } from '../routes/health'
 import { frameLocation } from '../views/ErrorDetail'
-import { filterIssues, type OperationsIssueListEntry } from '../views/Errors'
+import { filterIssues } from '../views/Errors'
 
-const issue: IssueListItem = {
-	fingerprint: 'TypeError:/src/job.ts:17',
-	projectId: 'worker-api',
+const issue: OperationsIssueSummaryDto = {
+	id: 'opaque-issue-id',
+	source: {
+		id: 'opaque-source-id',
+		appId: 'worker-api',
+		environment: 'production',
+		serviceKey: 'default',
+		displayName: 'Worker API',
+		publicOrigin: 'https://worker.example.test',
+		enabled: true,
+	},
 	title: 'Cannot read properties of undefined',
 	culprit: 'handleJob',
 	level: 'error',
@@ -20,9 +30,8 @@ const issue: IssueListItem = {
 
 describe('issue views', () => {
 	test('filters by status and operator-visible fields', () => {
-		const entry: OperationsIssueListEntry = { id: 'opaque-issue-id', issue }
-		expect(filterIssues([entry], 'handle', 'open')).toEqual([entry])
-		expect(filterIssues([entry], 'worker', 'resolved')).toEqual([])
+		expect(filterIssues([issue], 'handle', 'open')).toEqual([issue])
+		expect(filterIssues([issue], 'worker', 'resolved')).toEqual([])
 	})
 
 	test('renders complete and partial frame positions', () => {
@@ -36,5 +45,12 @@ describe('issue views', () => {
 		}
 		expect(frameLocation(frame)).toBe('/src/job.ts:17:9')
 		expect(frameLocation({ ...frame, line: null, column: null })).toBe('/src/job.ts')
+	})
+
+	test('aggregates the worst visible health state without inventing availability', () => {
+		expect(aggregateHealth('healthy', ['healthy'])).toBe('healthy')
+		expect(aggregateHealth('healthy', ['stale'])).toBe('stale')
+		expect(aggregateHealth('degraded', ['failed'])).toBe('failed')
+		expect(aggregateHealth('unavailable', [])).toBe('unavailable')
 	})
 })

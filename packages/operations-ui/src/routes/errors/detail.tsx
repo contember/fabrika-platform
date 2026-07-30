@@ -1,15 +1,37 @@
 import { createPage, Link } from '@buzola/router'
-import { PageHead, Unavailable } from '../../components/Unavailable'
+import { OperationsApiError, operationsClient } from '../../client'
+import { ErrorDetailView } from '../../views/ErrorDetail'
 
 export default createPage()
 	.params({ issueId: 'string' })
+	.loader(async ({ params }) => {
+		const detail = await operationsClient.issue(params.issueId)
+		const [event, assignees, releases] = await Promise.all([
+			operationsClient.latestEvent(params.issueId).catch((error) => {
+				if (error instanceof OperationsApiError && error.status === 404) return null
+				throw error
+			}),
+			operationsClient.assignees(detail.issue.source.id),
+			operationsClient.releases({ sourceId: detail.issue.source.id, limit: 100 }),
+		])
+		return { detail, event, assignees, releases }
+	})
 	.route('/operations/errors/:issueId')
-	.render(() => (
-		<>
-			<Link to="operations/errors" className="back-link">← All errors</Link>
-			<PageHead title="Error detail" description="Occurrence context, stack trace and triage history." />
-			<Unavailable>
-				This route keeps the issue identifier opaque. It will load detail after the public issue-detail response is versioned.
-			</Unavailable>
-		</>
-	))
+	.render(({ data, invalidate }) => {
+		const issue = data.detail.issue
+		return (
+			<>
+				<Link to="operations/errors" className="back-link">← All errors</Link>
+				<ErrorDetailView
+					issue={issue}
+					event={data.event?.detail ?? null}
+					assignees={data.assignees.items}
+					releases={data.releases.items}
+					onMutate={async (mutation) => {
+						await operationsClient.mutateIssue(issue.id, mutation)
+						invalidate()
+					}}
+				/>
+			</>
+		)
+	})

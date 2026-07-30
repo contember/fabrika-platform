@@ -24,15 +24,32 @@ describe('operations client', () => {
 		expect(seenCredentials).toBe('include')
 	})
 
-	test('returns a bounded API error', async () => {
+	test('builds typed operator queries and encodes opaque route identifiers', async () => {
+		const requests: { input: string; init: RequestInit }[] = []
+		const fetcher: OperationsFetch = async (input, init) => {
+			requests.push({ input, init })
+			return Response.json({ items: [], nextCursor: null, summary: { total: 0, open: 0, resolved: 0, ignored: 0 } })
+		}
+		const client = createOperationsClient(fetcher)
+
+		await client.issues({ sourceId: 'source / one', status: 'open', limit: 25 })
+		await client.mutateIssue('issue / one', { kind: 'status', status: 'resolved' })
+
+		expect(requests[0]?.input).toBe('/operations/api/issues?sourceId=source+%2F+one&status=open&limit=25')
+		expect(requests[1]?.input).toBe('/operations/api/issues/issue%20%2F%20one')
+		expect(requests[1]?.init.method).toBe('PUT')
+		expect(requests[1]?.init.body).toBe(JSON.stringify({ kind: 'status', status: 'resolved' }))
+	})
+
+	test('preserves a bounded login bounce outside the browser', async () => {
 		const fetcher: OperationsFetch = async () =>
-			new Response(JSON.stringify({ message: 'Operations unavailable' }), {
-				status: 503,
+			new Response(JSON.stringify({ error: 'Operations unavailable', loginUrl: 'https://iam.test/auth/login' }), {
+				status: 401,
 				headers: { 'content-type': 'application/json' },
 			})
 
 		await expect(createOperationsClient(fetcher).request('GET', '/issues')).rejects.toEqual(
-			new OperationsApiError(503, 'Operations unavailable'),
+			new OperationsApiError(401, 'Operations unavailable', 'https://iam.test/auth/login'),
 		)
 	})
 })

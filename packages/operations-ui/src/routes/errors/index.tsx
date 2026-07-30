@@ -1,13 +1,24 @@
 import { createPage } from '@buzola/router'
-import { PageHead, Unavailable } from '../../components/Unavailable'
+import { operationsClient } from '../../client'
+import { PageHead } from '../../components/Unavailable'
+import { ErrorsView } from '../../views/Errors'
 
 export default createPage()
+	.loader(async () => ({ issues: await operationsClient.issues({ limit: 100 }) }))
 	.route('/operations/errors')
-	.render(() => (
+	.render(({ data, invalidate }) => (
 		<>
 			<PageHead title="Errors" description="Grouped failures ordered by recency and operator attention." />
-			<Unavailable>
-				The issue and event model is ready, but the public issue-query response is not part of the Operations contract yet.
-			</Unavailable>
+			<ErrorsView
+				issues={data.issues.items}
+				onMutate={async (issueId, mutation) => {
+					await operationsClient.mutateIssue(issueId, mutation)
+					invalidate()
+				}}
+				onBulkStatus={async (issueIds, status) => {
+					await operationsClient.bulkIssueStatus({ issueIds, status })
+					invalidate()
+				}}
+			/>
 		</>
 	))

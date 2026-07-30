@@ -7,6 +7,7 @@ declare module '@buzola/router' {
 		'operations/errors/detail': { issueId: string }
 		'operations/health': {}
 		'operations/releases': {}
+		'operations/releases/detail': { releaseId: string }
 		'operations/sources': {}
 		'operations/sources/alerts': { sourceId: string }
 		'operations/sources/detail': { sourceId: string }

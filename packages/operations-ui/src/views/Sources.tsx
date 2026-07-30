@@ -1,6 +1,7 @@
-import type { CanonicalOperationsCatalogSourceV1 } from '@fabrika/operations-contract'
+import { Link } from '@buzola/router'
+import type { OperationsSourceSummaryDto } from '@fabrika/operations-contract/operator-api'
 
-export function SourcesView({ sources }: { sources: readonly CanonicalOperationsCatalogSourceV1[] }) {
+export function SourcesView({ sources }: { sources: readonly OperationsSourceSummaryDto[] }) {
 	return (
 		<div className="table-wrap">
 			<table>
@@ -26,15 +27,17 @@ export function SourcesView({ sources }: { sources: readonly CanonicalOperations
 							</tr>
 						)
 						: sources.map((source) => (
-							<tr key={`${source.coordinate.appId}:${source.coordinate.environment}:${source.coordinate.serviceKey}`}>
+							<tr key={source.id}>
 								<td>
-									<strong>{source.displayName}</strong>
+									<Link to="operations/sources/detail" params={{ sourceId: source.id }}>
+										<strong>{source.displayName}</strong>
+									</Link>
 								</td>
 								<td>
-									<code>{source.coordinate.appId}</code>
+									<code>{source.appId}</code>
 								</td>
-								<td>{source.coordinate.environment}</td>
-								<td>{source.coordinate.serviceKey}</td>
+								<td>{source.environment}</td>
+								<td>{source.serviceKey}</td>
 								<td>{source.publicOrigin ?? '—'}</td>
 							</tr>
 						))}

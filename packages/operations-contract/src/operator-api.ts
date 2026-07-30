@@ -25,6 +25,10 @@ export interface OperationsSourceListResponseDto {
 	items: OperationsSourceSummaryDto[]
 }
 
+export interface OperationsSourceDetailResponseDto {
+	source: OperationsSourceSummaryDto
+}
+
 export interface OperationsIssueSummaryDto {
 	id: string
 	source: OperationsSourceSummaryDto

@@ -12,6 +12,7 @@
 		"./routes/layout": "./src/routes/layout.tsx",
 		"./routes/overview": "./src/routes/overview.tsx",
 		"./routes/releases": "./src/routes/releases.tsx",
+		"./routes/release-detail": "./src/routes/releases/detail.tsx",
 		"./routes/source-alerts": "./src/routes/sources/alerts.tsx",
 		"./routes/source-detail": "./src/routes/sources/detail.tsx",
 		"./routes/sources": "./src/routes/sources/index.tsx",
