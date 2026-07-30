@@ -19,7 +19,7 @@ export default createPage()
 		])
 		return { principal, apps: apps.items }
 	})
-	.route('/access/principals/:id/grants/new')
+	.route('/access/users/:id/grants/new')
 	.render(({ data }) => {
 		const { principal, apps } = data
 		const navigate = useNavigate()
@@ -29,7 +29,7 @@ export default createPage()
 		const [error, setError] = useState<string | null>(null)
 
 		function back() {
-			navigate('access/principals/detail', { params: { id: principal.id } })
+			navigate('access/users/detail', { params: { id: principal.id } })
 		}
 
 		async function submit(e: React.FormEvent) {
@@ -56,13 +56,13 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<Link to="access/principals/detail" params={{ id: principal.id }} className="back-link">
+					<Link to="access/users/detail" params={{ id: principal.id }} className="back-link">
 						<Icon name="chevron-left" size={14} />
-						Back to principal
+						Back to user
 					</Link>
 					<h1>Add grant</h1>
 					<p className="hint">
-						Granting to <strong>{principal.label}</strong> ({principal.type}). Takes effect immediately and is audited.
+						Granting to <strong>{principal.label}</strong>. Takes effect immediately and is audited.
 					</p>
 				</div>
 

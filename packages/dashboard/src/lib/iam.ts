@@ -47,7 +47,7 @@ const AUDIT_WINDOW = 100
 export async function iamSnapshot(): Promise<IamSnapshot | null> {
 	try {
 		const [principals, apiKeys, shareLinks, audit] = await Promise.all([
-			get<ListResponse<IamPrincipalDto>>('/principals?limit=200'),
+			get<ListResponse<IamPrincipalDto>>('/principals'),
 			get<ListResponse<IamApiKeyDto>>('/api-keys'),
 			get<ListResponse<IamShareLinkDto>>('/share-links'),
 			get<ListResponse<IamAuditEventDto>>(`/audit?limit=${AUDIT_WINDOW}`),

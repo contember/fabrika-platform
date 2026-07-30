@@ -23,7 +23,7 @@ const EMPTY_ROW: GrantRow = { action: '', scopeType: '', scopeValue: '' }
  * what navigates away.
  */
 export default createPage()
-	.route('/access/share-links/new')
+	.route('/access/credentials/links/new')
 	.render(() => {
 		const navigate = useNavigate()
 		const [rows, setRows] = useState<GrantRow[]>([{ ...EMPTY_ROW }])
@@ -90,9 +90,9 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<Link to="access/share-links" className="back-link">
+					<Link to="access/credentials" className="back-link">
 						<Icon name="chevron-left" size={14} />
-						All share links
+						All credentials
 					</Link>
 					<h1>Issue share link</h1>
 					<p className="hint">
@@ -150,7 +150,7 @@ export default createPage()
 					{error && <p className="error-text" role="alert">{error}</p>}
 					<div className="form-actions">
 						<button type="submit" className="primary" disabled={busy}>{busy ? 'Issuing…' : 'Issue share link'}</button>
-						<button type="button" onClick={() => navigate('access/share-links')} disabled={busy}>Cancel</button>
+						<button type="button" onClick={() => navigate('access/credentials')} disabled={busy}>Cancel</button>
 					</div>
 				</form>
 
@@ -163,7 +163,7 @@ export default createPage()
 								Hand this token to the holder over a trusted channel. It is the only secret — anyone with it can perform the granted actions.
 							</p>
 						}
-						onClose={() => navigate('access/share-links')}
+						onClose={() => navigate('access/credentials')}
 					/>
 				)}
 			</>

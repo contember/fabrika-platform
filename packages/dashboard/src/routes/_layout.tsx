@@ -9,12 +9,10 @@ type Page =
 	| 'apps'
 	| 'namespaces'
 	| 'runs'
-	| 'access/principals'
-	| 'access/api-keys'
-	| 'access/share-links'
-	| 'access/policies'
-	| 'access/roles'
-	| 'access/schema'
+	| 'access'
+	| 'access/users'
+	| 'access/credentials'
+	| 'access/permissions'
 	| 'access/audit'
 
 interface NavItem {
@@ -24,6 +22,8 @@ interface NavItem {
 	description: string
 	icon: IconName
 	match: string
+	/** For a section's own landing page, whose path is a prefix of every page under it. */
+	exact?: boolean
 }
 
 interface NavSection {
@@ -32,7 +32,7 @@ interface NavSection {
 }
 
 /** The overview spans both planes, so it sits above them rather than inside either section. */
-const LEAD: NavItem = { to: 'index', label: 'Overview', description: 'Both planes at a glance', icon: 'gauge', match: '/' }
+const LEAD: NavItem = { to: 'index', label: 'Overview', description: 'Both planes at a glance', icon: 'gauge', match: '/', exact: true }
 
 const NAV: NavSection[] = [
 	{
@@ -46,19 +46,18 @@ const NAV: NavSection[] = [
 	{
 		label: 'Access',
 		items: [
-			{ to: 'access/principals', label: 'Principals', description: 'People and services', icon: 'users', match: '/access/principals' },
-			{ to: 'access/api-keys', label: 'API keys', description: 'Machine credentials', icon: 'key', match: '/access/api-keys' },
-			{ to: 'access/share-links', label: 'Share links', description: 'Scoped guest access', icon: 'link', match: '/access/share-links' },
-			{ to: 'access/policies', label: 'Policies', description: 'Authorization rules', icon: 'shield', match: '/access/policies' },
-			{ to: 'access/roles', label: 'Roles', description: 'Reusable grants', icon: 'medal', match: '/access/roles' },
-			{ to: 'access/schema', label: 'Schema', description: 'Resource vocabulary', icon: 'schema', match: '/access/schema' },
-			{ to: 'access/audit', label: 'Audit', description: 'Decisions and events', icon: 'history', match: '/access/audit' },
+			{ to: 'access', label: 'Overview', description: 'The access plane at a glance', icon: 'shield', match: '/access', exact: true },
+			{ to: 'access/users', label: 'Users', description: 'People who can sign in', icon: 'users', match: '/access/users' },
+			{ to: 'access/credentials', label: 'Credentials', description: 'API keys and share links', icon: 'key', match: '/access/credentials' },
+			{ to: 'access/permissions', label: 'Permissions', description: 'Roles, actions and scopes', icon: 'schema', match: '/access/permissions' },
+			{ to: 'access/audit', label: 'Audit', description: 'Changes and sign-in decisions', icon: 'history', match: '/access/audit' },
 		],
 	},
 ]
 
 function isActive(item: NavItem, pathname: string): boolean {
-	return item.match === '/' ? pathname === '/' : pathname === item.match || pathname.startsWith(`${item.match}/`)
+	if (item.exact === true) return pathname === item.match
+	return pathname === item.match || pathname.startsWith(`${item.match}/`)
 }
 
 export default function RootLayout() {

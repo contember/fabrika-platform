@@ -31,6 +31,17 @@ bun run build        # gen + tsc + vite build → dist/ (what the worker serves)
   re-statements. Do not reintroduce base, shell, table, button or badge rules there.
 - **The icon set lives in `@fabrika/iam-ui/icon`**, re-exported by `src/components/Icon.tsx`, so both
   halves of the console draw from one set. `BrandMark` stays here — it is this app's identity.
+- **The Access rail is five items and stays five: Overview · Users · Credentials · Permissions · Audit.**
+  Each answers a different question — what is the state of access, who are the people, what gets in
+  without a person, what does a grant mean, what happened. It was seven pages that cut the same
+  material three ways; don't add a sixth without retiring one.
+  - **Users are people.** A service principal has no page of its own: `GET /api-keys` returns every one
+    of them, so Credentials is the complete machine list and the Users list filters to `?type=user`.
+  - **Credentials holds both API keys and share links** — both are `px_…` tokens shown once at issue.
+    Neither section's button is filled: a page with two constructive steps has no single primary.
+  - **Permissions is one page for roles, actions and scope dimensions**, with a policy edited inline in
+    the roles table it belongs to. `/roles?app=` already returns custom roles; the page drops them and
+    renders the policy rows instead, which carry what it takes to edit them.
 
 ## Patterns
 
@@ -42,3 +53,6 @@ bun run build        # gen + tsc + vite build → dist/ (what the worker serves)
   repairing are outline or ghost; irreversible acts live in a `.danger-zone` at the foot of the page.
 - **A page head is: back link, title, one line of purpose.** Every list filters through one `.filters`
   bar; every table marks the column(s) that should absorb slack with `className="grow"` on the `<th>`.
+- **Two `grow` columns fight.** With `table-layout: auto` the surplus does not split evenly — whichever
+  column has the larger max-content wins and the other collapses. If a row has a name AND a sentence
+  about it, put them in one cell (name, then a `.muted.small` line) rather than two columns.

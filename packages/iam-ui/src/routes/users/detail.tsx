@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Badge } from '../../components/Badge'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
-import { StatusLamp } from '../../components/Status'
+import { Chip, PrincipalStatus } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api } from '../../lib/api'
 import { fmtAgo, fmtDate, fmtExpiry, fmtScope } from '../../lib/format'
@@ -12,26 +12,29 @@ import { fmtAgo, fmtDate, fmtExpiry, fmtScope } from '../../lib/format'
 export default createPage()
 	.params({ id: 'string' })
 	.loader(async ({ params }) => ({ principal: await api.get<PrincipalDetail>(`/principals/${params.id}`) }))
-	.route('/access/principals/:id')
+	.route('/access/users/:id')
 	.render(({ data, invalidate }) => {
 		const { principal } = data
+		// An invited user's label IS their email, so printing both under the title says one thing twice.
+		const identity = [principal.email, principal.externalId].filter((value): value is string => value !== null && value !== principal.label)
 
 		return (
 			<>
 				<div className="page-head">
-					<Link to="access/principals" className="back-link">
+					<Link to="access/users" className="back-link">
 						<Icon name="chevron-left" size={14} />
-						All principals
+						All users
 					</Link>
 					<div className="page-head-row">
 						<h1>{principal.label}</h1>
-						<StatusLamp status={principal.status} />
+						<PrincipalStatus status={principal.status} />
+						{/* Every row on this page is a user; a `service` here was reached by id, so say so. */}
+						{principal.type !== 'user' && <Chip>{principal.type}</Chip>}
 					</div>
 					<div className="subtitle">
-						<span>{principal.type}</span>
-						{principal.email && <span className="dot-sep">{principal.email}</span>}
-						{principal.externalId && <span className="dot-sep">{principal.externalId}</span>}
-						<span className="dot-sep">created {fmtDate(principal.createdAt)}</span>
+						<span>{identity[0] ?? principal.id}</span>
+						{identity.slice(1).map((value) => <span key={value} className="dot-sep">{value}</span>)}
+						<span className="dot-sep">joined {fmtDate(principal.createdAt)}</span>
 					</div>
 				</div>
 
@@ -40,7 +43,7 @@ export default createPage()
 						<Icon name="shield" size={15} />
 						<h2>Effective permissions</h2>
 					</div>
-					<p className="section-note">Why this principal has each permission — resolved from grants, group mappings and bootstrap.</p>
+					<p className="section-note">Why this user has each permission — resolved from grants, group mappings and bootstrap.</p>
 					<Table
 						colSpan={3}
 						isEmpty={principal.permissions.length === 0}
@@ -72,7 +75,7 @@ export default createPage()
 						<Icon name="key" size={15} />
 						<h2>Grants</h2>
 						<span className="spacer" />
-						<Link to="access/principals/grant" params={{ id: principal.id }} className="btn small primary">Add grant</Link>
+						<Link to="access/users/grant" params={{ id: principal.id }} className="btn small primary">Add grant</Link>
 					</div>
 					<Table
 						colSpan={7}
@@ -80,8 +83,8 @@ export default createPage()
 						empty={
 							<EmptyState
 								title="No explicit grants"
-								body="This principal only has whatever its group mappings or bootstrap give it."
-								action={<Link to="access/principals/grant" params={{ id: principal.id }} className="btn small primary">Add the first grant</Link>}
+								body="They only have whatever their group mappings or bootstrap give them."
+								action={<Link to="access/users/grant" params={{ id: principal.id }} className="btn small">Add the first grant</Link>}
 							/>
 						}
 						head={
@@ -124,7 +127,7 @@ function DisableToggle({ principal, onDone }: { principal: PrincipalDetail; onDo
 	return (
 		<div className="danger-zone">
 			<div className="danger-zone-copy">
-				<strong>{disabled ? 'Enable this principal' : 'Disable this principal'}</strong>
+				<strong>{disabled ? 'Enable this user' : 'Disable this user'}</strong>
 				{disabled
 					? 'Their grants take effect again immediately.'
 					: 'They keep every grant but resolve to zero permissions until re-enabled.'}
@@ -139,7 +142,7 @@ function DisableToggle({ principal, onDone }: { principal: PrincipalDetail; onDo
 			</button>
 			{confirming && (
 				<ConfirmDialog
-					title={disabled ? 'Enable principal' : 'Disable principal'}
+					title={disabled ? 'Enable user' : 'Disable user'}
 					confirmLabel={disabled ? 'Enable' : 'Disable'}
 					body={
 						<p>

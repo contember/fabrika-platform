@@ -64,8 +64,17 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<h1>Audit</h1>
-					<p className="hint">Every write the IAM service recorded, newest first. Read-only.</p>
+					<div className="page-head-row">
+						<div>
+							<h1>Audit</h1>
+							<p className="hint">Every write the IAM service recorded, newest first. Read-only.</p>
+						</div>
+						{/* The other half of the trail: what a credential was ALLOWED to do, not what an admin changed. */}
+						<Link to="access/audit/auth-log" className="btn">
+							<Icon name="lock" size={14} />
+							Sign-in decisions
+						</Link>
+					</div>
 				</div>
 
 				<AuditFilters params={current} onApply={applyFilters} />

@@ -16,7 +16,7 @@ export default createPage()
 		const schema = await api.get<AppSchemaDto>(`/apps/${encodeURIComponent(params.app)}/schema`)
 		return { app: params.app, actions: schema.actions }
 	})
-	.route('/access/policies/new')
+	.route('/access/permissions/policies/new')
 	.render(({ data }) => {
 		const navigate = useNavigate()
 		const [key, setKey] = useState('')
@@ -27,7 +27,7 @@ export default createPage()
 		const [error, setError] = useState<string | null>(null)
 
 		function back() {
-			navigate('access/policies', { params: { app: data.app } })
+			navigate('access/permissions', { params: { app: data.app } })
 		}
 
 		async function submit(e: React.FormEvent) {
@@ -56,9 +56,9 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<Link to="access/policies" params={{ app: data.app }} className="back-link">
+					<Link to="access/permissions" params={{ app: data.app }} className="back-link">
 						<Icon name="chevron-left" size={14} />
-						All policies
+						All permissions
 					</Link>
 					<h1>Create policy</h1>
 					<p className="hint">

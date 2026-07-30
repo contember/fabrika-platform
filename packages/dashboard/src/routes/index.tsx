@@ -1,4 +1,6 @@
 import { createPage, Link } from '@buzola/router'
+// "Live" for a share link (revoked beats expired) is one rule; it lives with the access plane that owns it.
+import { shareLinkState } from '@fabrika/iam-ui/format'
 import { Icon } from '../components/Icon'
 import { Chip, namespaceLamp, RunStatus, Status, StatusLamp } from '../components/Status'
 import { EmptyState } from '../components/Table'
@@ -332,10 +334,13 @@ function AccessPlane({ iam, nowSeconds }: { iam: IamSnapshot | null; nowSeconds:
 		)
 	}
 
+	// Reported in the vocabulary the rail uses: users are people, machines are credentials. A service
+	// principal has no separate page — it is the thing an API key belongs to.
 	const users = iam.principals.filter((principal) => principal.type === 'user')
-	const services = iam.principals.filter((principal) => principal.type === 'service')
+	const invited = users.filter((user) => user.status === 'invited')
 	const activeKeys = iam.apiKeys.filter((key) => key.status === 'active')
 	const revokedKeys = iam.apiKeys.length - activeKeys.length
+	const liveLinks = iam.shareLinks.filter((link) => shareLinkState(link, nowSeconds * 1000) === 'active')
 	const changesToday = iam.audit.filter((event) => event.createdAt >= nowSeconds - DAY_SECONDS).length
 
 	return (
@@ -344,16 +349,22 @@ function AccessPlane({ iam, nowSeconds }: { iam: IamSnapshot | null; nowSeconds:
 				<Icon name="shield" size={15} />
 				<h2>Access plane</h2>
 				<span className="spacer" />
-				<Link to="access/principals" className="card-link">
-					Principals
+				<Link to="access" className="card-link">
+					Open
 					<Icon name="chevron-right" size={13} />
 				</Link>
 			</div>
 			<div className="instrument-cluster">
 				<div className="instrument">
-					<div className="instrument-label">Principals</div>
-					<div className="instrument-value">{iam.principals.length}</div>
-					<div className="instrument-note">{users.length} people · {services.length} services</div>
+					<div className="instrument-label">Users</div>
+					<div className="instrument-value">{users.length}</div>
+					<div className="instrument-note">
+						{users.length === 0
+							? <Status lamp="idle">nobody invited</Status>
+							: invited.length > 0
+							? <Status lamp="run">{invited.length} awaiting first sign-in</Status>
+							: <Status lamp="ok">all signed in</Status>}
+					</div>
 				</div>
 				<div className="instrument">
 					<div className="instrument-label">API keys</div>
@@ -369,8 +380,15 @@ function AccessPlane({ iam, nowSeconds }: { iam: IamSnapshot | null; nowSeconds:
 				</div>
 				<div className="instrument">
 					<div className="instrument-label">Share links</div>
-					<div className="instrument-value">{iam.shareLinks.length}</div>
-					<div className="instrument-note">scoped guest access</div>
+					<div className="instrument-value">
+						{liveLinks.length}
+						<small>/ {iam.shareLinks.length}</small>
+					</div>
+					<div className="instrument-note">
+						<Status lamp={liveLinks.length === 0 ? 'idle' : 'ok'}>
+							{liveLinks.length === 0 ? 'none in circulation' : 'anonymous, revocable'}
+						</Status>
+					</div>
 				</div>
 				<div className="instrument">
 					<div className="instrument-label">Changes · 24 h</div>

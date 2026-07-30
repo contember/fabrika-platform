@@ -20,7 +20,7 @@ export default createPage()
 		const apps = await api.get<ListResponse<AppDto>>('/apps')
 		return { apps: apps.items }
 	})
-	.route('/access/api-keys/new')
+	.route('/access/credentials/keys/new')
 	.render(({ data }) => {
 		const navigate = useNavigate()
 		const [label, setLabel] = useState('')
@@ -59,9 +59,9 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<Link to="access/api-keys" className="back-link">
+					<Link to="access/credentials" className="back-link">
 						<Icon name="chevron-left" size={14} />
-						All API keys
+						All credentials
 					</Link>
 					<h1>Provision API key</h1>
 					<p className="hint">
@@ -84,7 +84,7 @@ export default createPage()
 					{error && <p className="error-text" role="alert">{error}</p>}
 					<div className="form-actions">
 						<button type="submit" className="primary" disabled={busy}>{busy ? 'Provisioning…' : 'Provision key'}</button>
-						<button type="button" onClick={() => navigate('access/api-keys')} disabled={busy}>Cancel</button>
+						<button type="button" onClick={() => navigate('access/credentials')} disabled={busy}>Cancel</button>
 					</div>
 				</form>
 
@@ -92,7 +92,7 @@ export default createPage()
 					<SecretModal
 						title="API key provisioned"
 						fields={[{ label: 'API key (propustka-native)', value: secret.apiKey, multiline: true }]}
-						onClose={() => navigate('access/api-keys')}
+						onClose={() => navigate('access/credentials')}
 					/>
 				)}
 			</>

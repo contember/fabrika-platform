@@ -1,6 +1,6 @@
 // Tiny formatting helpers shared across pages.
 
-import type { PermissionEntry } from '@fabrika/iam-contract'
+import type { PermissionEntry, ShareLinkListItem } from '@fabrika/iam-contract'
 
 /** A flat scope coordinate (one dimension + opaque value); null = global. */
 type Scope = NonNullable<PermissionEntry['scope']>
@@ -45,6 +45,16 @@ export function fmtAgo(seconds: number | null | undefined, nowMs: number = Date.
 export function fmtExpiry(seconds: number | null | undefined): string {
 	if (seconds === null || seconds === undefined) return 'Never'
 	return fmtDate(seconds)
+}
+
+/** A share link's derived lifecycle. Revoked wins over expired; the row itself stores neither. */
+export type ShareLinkState = 'active' | 'expired' | 'revoked'
+
+export function shareLinkState(link: ShareLinkListItem, nowMs: number = Date.now()): ShareLinkState {
+	if (link.revokedAt !== null) return 'revoked'
+	// expiresAt is epoch-seconds (backend `unixepoch()`), so compare in seconds.
+	if (link.expiresAt !== null && link.expiresAt <= nowMs / 1000) return 'expired'
+	return 'active'
 }
 
 /** Build a query string from an object, skipping empty / undefined / null values. */

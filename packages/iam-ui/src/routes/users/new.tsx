@@ -16,7 +16,7 @@ export default createPage()
 		const apps = await api.get<ListResponse<AppDto>>('/apps')
 		return { apps: apps.items }
 	})
-	.route('/access/principals/new')
+	.route('/access/users/new')
 	.render(({ data }) => {
 		const navigate = useNavigate()
 		const [email, setEmail] = useState('')
@@ -51,7 +51,7 @@ export default createPage()
 					}
 					await api.post('/grants', body)
 				}
-				navigate('access/principals/detail', { params: { id: invited.id } })
+				navigate('access/users/detail', { params: { id: invited.id } })
 			} catch (cause) {
 				setError(cause instanceof ApiError ? cause.message : 'Invite failed.')
 				setBusy(false)
@@ -61,9 +61,9 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<Link to="access/principals" className="back-link">
+					<Link to="access/users" className="back-link">
 						<Icon name="chevron-left" size={14} />
-						All principals
+						All users
 					</Link>
 					<h1>Invite user</h1>
 					<p className="hint">
@@ -100,7 +100,7 @@ export default createPage()
 					{error && <p className="error-text" role="alert">{error}</p>}
 					<div className="form-actions">
 						<button type="submit" className="primary" disabled={busy}>{busy ? 'Inviting…' : 'Invite user'}</button>
-						<button type="button" onClick={() => navigate('access/principals')} disabled={busy}>Cancel</button>
+						<button type="button" onClick={() => navigate('access/users')} disabled={busy}>Cancel</button>
 					</div>
 				</form>
 			</>

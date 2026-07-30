@@ -1,4 +1,4 @@
-import { createPage, useNavigate } from '@buzola/router'
+import { createPage, Link, useNavigate } from '@buzola/router'
 import type { AuthLogDto, CursorList } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
@@ -53,7 +53,11 @@ export default createPage()
 		return (
 			<>
 				<div className="page-head">
-					<h1>Audit — auth log</h1>
+					<Link to="access/audit" className="back-link">
+						<Icon name="chevron-left" size={14} />
+						Audit
+					</Link>
+					<h1>Sign-in decisions</h1>
 					<p className="hint">
 						Outcomes of <code>mintToken()</code> / <code>mintFromKey()</code> and the OIDC login. This is where you debug "login looks broken" — e.g.{' '}
 						<code>invalid_token</code>, <code>unknown_principal</code>, or <code>disabled</code>.
