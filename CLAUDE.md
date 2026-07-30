@@ -58,6 +58,9 @@ packages/app/         # @fabrika/app — HTTP routing, middleware, typed RPC, ob
 packages/iam/         # @fabrika/iam — the IAM service: OIDC login, token minting, /admin API, D1.
 packages/iam-contract/ # @fabrika/iam-contract — browser-safe IAM admin REST DTOs.
 packages/iam-ui/      # @fabrika/iam-ui — the IAM admin SPA.
+packages/operations-contract/ # @fabrika/operations-contract — browser/runtime-safe Operations DTOs.
+packages/operations/  # @fabrika/operations — portable error ingest, grouping, triage, and event-detail kernel.
+packages/operations-ui/ # @fabrika/operations-ui — reusable Operations console views and display helpers.
 packages/platform/    # @fabrika/platform — the runtime PORTS (SqlDatabase, BlobStore, JobQueue, DeployLocks,
                       #   AssetServer, WaitUntil) + the implementations that need nothing but a port.
 packages/platform-node/ # @fabrika/platform-node — those ports for a long-running Bun process

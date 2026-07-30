@@ -1,0 +1,50 @@
+{
+	"name": "@fabrika/operations",
+	"version": "0.0.1",
+	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/contember/fabrika-platform.git",
+		"directory": "packages/operations"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"src",
+		"!src/**/__tests__/**"
+	],
+	"exports": {
+		".": {
+			"bun": "./src/index.ts",
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		},
+		"./ingest": {
+			"bun": "./src/ingest.ts",
+			"types": "./src/ingest.ts",
+			"default": "./src/ingest.ts"
+		},
+		"./operator": {
+			"bun": "./src/operator.ts",
+			"types": "./src/operator.ts",
+			"default": "./src/operator.ts"
+		},
+		"./testing": {
+			"bun": "./src/testing.ts",
+			"types": "./src/testing.ts",
+			"default": "./src/testing.ts"
+		}
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test src/__tests__"
+	},
+	"dependencies": {
+		"@fabrika/operations-contract": "workspace:*",
+		"source-map-js": "^1.2.1"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	}
+}

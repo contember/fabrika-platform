@@ -230,6 +230,32 @@
         "@types/bun": "latest",
       },
     },
+    "packages/operations": {
+      "name": "@fabrika/operations",
+      "version": "0.0.1",
+      "dependencies": {
+        "@fabrika/operations-contract": "workspace:*",
+        "source-map-js": "^1.2.1",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
+    "packages/operations-contract": {
+      "name": "@fabrika/operations-contract",
+      "version": "0.0.1",
+    },
+    "packages/operations-ui": {
+      "name": "@fabrika/operations-ui",
+      "version": "0.0.1",
+      "dependencies": {
+        "@fabrika/operations-contract": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.9.3",
+      },
+    },
     "packages/platform": {
       "name": "@fabrika/platform",
       "version": "0.0.1",
@@ -542,6 +568,12 @@
     "@fabrika/installation-zerops": ["@fabrika/installation-zerops@workspace:packages/installation-zerops"],
 
     "@fabrika/local-stack": ["@fabrika/local-stack@workspace:packages/local-stack"],
+
+    "@fabrika/operations": ["@fabrika/operations@workspace:packages/operations"],
+
+    "@fabrika/operations-contract": ["@fabrika/operations-contract@workspace:packages/operations-contract"],
+
+    "@fabrika/operations-ui": ["@fabrika/operations-ui@workspace:packages/operations-ui"],
 
     "@fabrika/platform": ["@fabrika/platform@workspace:packages/platform"],
 
