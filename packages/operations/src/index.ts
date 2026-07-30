@@ -7,6 +7,14 @@ export {
 	OPERATIONS_ACTIONS,
 } from './access.js'
 export type { OperationsSourceAccess } from './access.js'
+export {
+	handleSourceMapUploadRequest,
+	MAX_SOURCE_MAP_BYTES,
+	MAX_SOURCE_MAP_BYTES_PER_RUN,
+	MAX_SOURCE_MAPS_PER_RUN,
+	operationsSourceMapReader,
+} from './artifact-upload.js'
+export type { ArtifactUploadOptions } from './artifact-upload.js'
 export { handleOperationsCatalogRequest, parseCatalogRequest, reconcileOperationsCatalog } from './catalog.js'
 export type { CatalogHandlerOptions } from './catalog.js'
 export {
@@ -42,7 +50,15 @@ export {
 export type { IngestAuthResult, ParsedEnvelope, ParsedEventEnvelope } from './ingest.js'
 export { OperationsMaintenance, WebhookNotificationSender } from './maintenance.js'
 export type { NotificationFetch, NotificationSender, OperationsLogger, OperationsMaintenanceOptions } from './maintenance.js'
-export { applyIssueMutation, decideOccurrenceTransition, evaluateSpike, parseEventDetail, resolveFrames, sourceMapKey } from './operator.js'
+export {
+	applyIssueMutation,
+	decideOccurrenceTransition,
+	evaluateSpike,
+	logicalAssetPath,
+	parseEventDetail,
+	resolveFrames,
+	sourceMapKey,
+} from './operator.js'
 export type { ObjectReader, SpikeDecision, SpikeInput } from './operator.js'
 export {
 	archiveDeadEvent,
@@ -53,11 +69,13 @@ export {
 	persistIngest,
 	persistIngestGroup,
 	prepareIngestMessage,
-	storeSourceMap,
 } from './pipeline.js'
 export type { OperationsDataEnv } from './pipeline.js'
+export { handleOperationsReleaseRequest, parseReleaseRequest, reconcileOperationsRelease } from './releases.js'
+export type { ReleaseHandlerOptions } from './releases.js'
 export {
 	AlertsRepository,
+	ArtifactProjectionConflictError,
 	ArtifactsRepository,
 	CatalogRepository,
 	CatalogRevisionConflictError,
@@ -76,6 +94,7 @@ export {
 export type {
 	AlertConfigRow,
 	AlertRuleRow,
+	ArtifactUploadCredentialResolution,
 	CatalogCursorRow,
 	ClaimedNotification,
 	CountBucket,
@@ -86,5 +105,6 @@ export type {
 	OperationsRepositories,
 	RecordOccurrenceInput,
 	RecordOccurrenceResult,
+	ReleaseRow,
 	SourceRow,
 } from './repositories.js'

@@ -63,6 +63,15 @@ export interface CloudflareRunnerJob {
 	}
 	readonly secrets?: Readonly<Record<string, string>>
 	readonly vars?: Readonly<Record<string, string>>
+	readonly artifactUpload?: {
+		readonly url: string
+		readonly bearer: string
+		readonly appId: string
+		readonly environment: string
+		readonly serviceKey: string
+		readonly release: string
+		readonly runId: string
+	}
 }
 
 const isStringRecord = (value: unknown): boolean =>
@@ -70,6 +79,15 @@ const isStringRecord = (value: unknown): boolean =>
 	&& value !== null
 	&& !Array.isArray(value)
 	&& Object.values(value).every((entry) => typeof entry === 'string')
+
+const isArtifactUpload = (value: unknown): boolean =>
+	typeof value === 'object'
+	&& value !== null
+	&& !Array.isArray(value)
+	&& ['url', 'bearer', 'appId', 'environment', 'serviceKey', 'release', 'runId'].every((key) => {
+		const field = Reflect.get(value, key)
+		return typeof field === 'string' && field !== ''
+	})
 
 /** Minimal structural validation for the Worker-to-runner JSON boundary. */
 export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunnerJob => {
@@ -106,6 +124,7 @@ export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunner
 		|| ('dryRun' in value && value.dryRun !== undefined && typeof value.dryRun !== 'boolean')
 		|| ('secrets' in value && value.secrets !== undefined && !isStringRecord(value.secrets))
 		|| ('vars' in value && value.vars !== undefined && !isStringRecord(value.vars))
+		|| ('artifactUpload' in value && value.artifactUpload !== undefined && !isArtifactUpload(value.artifactUpload))
 	) {
 		return false
 	}
@@ -183,6 +202,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		...(input.dryRun ? { dryRun: true } : {}),
 		...(Object.keys(input.secrets).length === 0 ? {} : { secrets: input.secrets }),
 		...(Object.keys(input.vars).length === 0 ? {} : { vars: input.vars }),
+		...(input.artifactUpload === undefined ? {} : { artifactUpload: input.artifactUpload }),
 	}
 }
 

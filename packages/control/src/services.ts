@@ -10,6 +10,7 @@ import {
 	projectOperationsCatalogChange,
 	replayOperationsCatalog,
 } from './operations-catalog'
+import type { OperationsReleaseProjectionDeps } from './operations-releases'
 import { GitHubAppRepoSource, type RepoSource } from './repo-source'
 import { cancelDeploy, type RunDeps } from './run-lifecycle'
 import { VaultSecretResolver } from './secret-resolver'
@@ -33,6 +34,16 @@ export function operationsCatalogDeps(env: Env): OperationsCatalogSyncDeps {
 		locks: locks(env),
 		...(env.OPERATIONS === undefined ? {} : { service: env.OPERATIONS }),
 		...(env.OPERATIONS_SYNC_KEY === undefined ? {} : { syncKey: env.OPERATIONS_SYNC_KEY }),
+	}
+}
+
+export function operationsReleaseDeps(env: Env): OperationsReleaseProjectionDeps {
+	const artifactOrigin = env.OPERATIONS_ARTIFACT_ORIGIN?.trim()
+	return {
+		repository: repositories(env).operationsReleases,
+		...(env.OPERATIONS === undefined ? {} : { service: env.OPERATIONS }),
+		...(env.OPERATIONS_SYNC_KEY === undefined ? {} : { syncKey: env.OPERATIONS_SYNC_KEY }),
+		...(artifactOrigin === undefined || artifactOrigin === '' ? {} : { artifactOrigin }),
 	}
 }
 
@@ -77,6 +88,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 			acquire: (key, holder) => locks(env).acquire(key, holder, DEPLOY_LOCK_TTL_MS),
 			release: (key, holder) => locks(env).release(key, holder),
 		},
+		operations: operationsReleaseDeps(env),
 	}
 }
 

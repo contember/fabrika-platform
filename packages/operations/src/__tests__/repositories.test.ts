@@ -1,7 +1,7 @@
 import type { IngestMessage } from '@fabrika/operations-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
-import { archiveDeadEvent, persistIngest, storeSourceMap } from '../pipeline.js'
+import { archiveDeadEvent, persistIngest } from '../pipeline.js'
 import { createSqliteOperationsRepositories } from '../repositories.js'
 import { createHarness } from './helpers/sqlite.js'
 
@@ -348,7 +348,7 @@ describe('Operations portable repositories', () => {
 		expect(await harness.repositories.alerts.deleteConfig('source-a')).toBe(true)
 	})
 
-	test('indexes dead payloads and source maps durably', async () => {
+	test('indexes dead payloads durably', async () => {
 		const harness = createHarness(() => 5_000)
 		const blobs = new MemoryBlobs()
 		const env = { repositories: harness.repositories, payloads: blobs, ingestQueue: new MemoryQueue<IngestMessage>() }
@@ -359,30 +359,5 @@ describe('Operations portable repositories', () => {
 		await archiveDeadEvent(env, dead, { attempts: 7, reason: 'retry_exhausted', deadAt: 5_000 })
 		expect(harness.sqlite.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM dead_events').get()?.n).toBe(1)
 		expect(harness.sqlite.query<{ attempts: number }, []>('SELECT attempts FROM dead_events').get()?.attempts).toBe(7)
-
-		await harness.repositories.artifacts.upsertRelease({
-			id: 'release-a',
-			sourceId: 'source-a',
-			runId: 'run-a',
-			commitSha: 'abc123',
-			state: 'succeeded',
-		})
-		const key = await storeSourceMap(env, {
-			sourceId: 'source-a',
-			releaseId: 'release-a',
-			fileName: 'https://cdn.test/assets/app.js?x=1',
-			body: '{"version":3}',
-		})
-		expect(key).toBe('source-maps/source-a/release-a/app.js.map')
-		expect(await harness.repositories.artifacts.sourceMapKey('release-a', 'app.js')).toBe(key)
-		await expect(
-			storeSourceMap(env, {
-				sourceId: 'source-b',
-				releaseId: 'release-a',
-				fileName: 'app.js',
-				body: '{"version":3}',
-			}),
-		).rejects.toThrow('release does not belong to source')
-		expect(blobs.values.has('source-maps/source-b/release-a/app.js.map')).toBe(false)
 	})
 })

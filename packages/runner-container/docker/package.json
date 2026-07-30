@@ -10,6 +10,7 @@
 		"packages/engine",
 		"packages/platform",
 		"packages/control-contract",
+		"packages/operations-contract",
 		"packages/runner-contract",
 		"packages/runner-container"
 	],

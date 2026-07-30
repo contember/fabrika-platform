@@ -52,6 +52,16 @@
 			"types": "./src/catalog.ts",
 			"default": "./src/catalog.ts"
 		},
+		"./releases": {
+			"bun": "./src/releases.ts",
+			"types": "./src/releases.ts",
+			"default": "./src/releases.ts"
+		},
+		"./artifact-upload": {
+			"bun": "./src/artifact-upload.ts",
+			"types": "./src/artifact-upload.ts",
+			"default": "./src/artifact-upload.ts"
+		},
 		"./testing": {
 			"bun": "./src/testing.ts",
 			"types": "./src/testing.ts",

@@ -1,6 +1,9 @@
 import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
 import { describe, expect, test } from 'bun:test'
-import { Runner, type RunnerEnv, type SpawnHandlers, type SpawnResult, type SpawnSpec } from '../runner'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { collectSourceMaps, Runner, type RunnerEnv, type SpawnHandlers, type SpawnResult, type SpawnSpec } from '../runner'
 
 // The Runner routes every child process through an injected `Spawner`, so these tests drive a full
 // clone → install → fabrika-deploy pipeline with a fake — no git, no network, no real deploy.
@@ -164,5 +167,82 @@ describe('Runner pipeline', () => {
 		await runner.run()
 		expect(seen).toContain('line-a')
 		expect(seen).toContain('line-b')
+	})
+
+	test('uploads discovered Cloudflare source maps without changing deploy success', async () => {
+		const requests: Request[] = []
+		const bytes = new TextEncoder().encode('{"version":3}')
+		const body = new ArrayBuffer(bytes.byteLength)
+		new Uint8Array(body).set(bytes)
+		const job = baseJob({
+			artifactUpload: {
+				url: 'https://operations.test/api/artifacts/source-maps/',
+				bearer: 'a'.repeat(64),
+				appId: 'app',
+				environment: 'stage',
+				serviceKey: 'default',
+				release: `fabrika/app/stage/default/${'b'.repeat(40)}`,
+				runId: 'run-1',
+			},
+		})
+		const runner = new Runner(job, {
+			...makeEnv(makeSpawner([], () => ({ exitCode: 0 }))),
+			collectSourceMaps: () =>
+				Promise.resolve({
+					artifacts: [{ logicalPath: 'assets/app.js', digest: 'c'.repeat(64), body }],
+					incomplete: false,
+				}),
+			fetch: (input, init) => {
+				requests.push(new Request(input, init))
+				return Promise.resolve(new Response(null, { status: 201 }))
+			},
+		})
+
+		const status = await runner.run()
+		expect(status.state).toBe('succeeded')
+		expect(status.artifactState).toBe('complete')
+		expect(requests).toHaveLength(1)
+		expect(requests[0]?.headers.get('X-Fabrika-Artifact-Path')).toBe('assets/app.js')
+		expect(requests[0]?.headers.get('X-Fabrika-Artifact-Sha256')).toBe('c'.repeat(64))
+	})
+
+	test('records an unavailable artifact upload as incomplete without failing deploy', async () => {
+		const job = baseJob({
+			artifactUpload: {
+				url: 'https://operations.test/api/artifacts/source-maps/',
+				bearer: 'a'.repeat(64),
+				appId: 'app',
+				environment: 'stage',
+				serviceKey: 'default',
+				release: `fabrika/app/stage/default/${'b'.repeat(40)}`,
+				runId: 'run-1',
+			},
+		})
+		const status = await new Runner(job, {
+			...makeEnv(makeSpawner([], () => ({ exitCode: 0 }))),
+			collectSourceMaps: () => Promise.reject(new Error('scan unavailable')),
+		}).run()
+		expect(status.state).toBe('succeeded')
+		expect(status.artifactState).toBe('incomplete')
+	})
+
+	test('real discovery requires a public logical path and never guesses from a nested basename', async () => {
+		const root = await mkdtemp(join(tmpdir(), 'fabrika-source-maps-'))
+		try {
+			await mkdir(join(root, 'dist', 'assets'), { recursive: true })
+			await writeFile(
+				join(root, 'dist', 'assets', 'ambiguous.js.map'),
+				JSON.stringify({ version: 3, file: 'ambiguous.js', sources: [], names: [], mappings: '' }),
+			)
+			await writeFile(
+				join(root, 'dist', 'assets', 'rooted.js.map'),
+				JSON.stringify({ version: 3, file: '/assets/rooted.js', sources: [], names: [], mappings: '' }),
+			)
+			const collection = await collectSourceMaps(root)
+			expect(collection.incomplete).toBe(true)
+			expect(collection.artifacts.map((artifact) => artifact.logicalPath)).toEqual(['assets/rooted.js'])
+		} finally {
+			await rm(root, { recursive: true, force: true })
+		}
 	})
 })

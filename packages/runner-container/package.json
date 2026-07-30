@@ -19,6 +19,7 @@
 	},
 	"dependencies": {
 		"@fabrika/control-contract": "workspace:*",
+		"@fabrika/operations-contract": "workspace:*",
 		"@fabrika/provider-cloudflare": "workspace:*",
 		"@fabrika/runner-contract": "workspace:*"
 	},

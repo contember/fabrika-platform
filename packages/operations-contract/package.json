@@ -38,6 +38,11 @@
 			"bun": "./src/catalog.ts",
 			"types": "./src/catalog.ts",
 			"default": "./src/catalog.ts"
+		},
+		"./releases": {
+			"bun": "./src/releases.ts",
+			"types": "./src/releases.ts",
+			"default": "./src/releases.ts"
 		}
 	},
 	"scripts": {

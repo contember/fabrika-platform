@@ -9,9 +9,11 @@
 
 import type { Env } from './env'
 import type { OperationsCatalogSyncSummary } from './operations-catalog'
+import type { OperationsReleaseProjectionSummary } from './operations-releases'
+import { replayOperationsReleases } from './operations-releases'
 import type { ProviderReconcileSummary } from './provider-reconcile'
 import { type FetchFn, pollPublicRepos, type PollSummary } from './repo-poll'
-import { replayOperationsCatalogProjection, repositories, STALE_RUN_MAX_AGE_S } from './services'
+import { operationsReleaseDeps, replayOperationsCatalogProjection, repositories, STALE_RUN_MAX_AGE_S } from './services'
 
 /** What one maintenance pass did. Returned for the tests + the log line; counts only, never a URL. */
 export interface MaintenanceSummary {
@@ -22,6 +24,8 @@ export interface MaintenanceSummary {
 	swept: number
 	/** Full Operations catalog replay, isolated from deploy maintenance success. */
 	operations: OperationsCatalogSyncSummary
+	/** Pending deploy-release projections repaired independently from catalog sync. */
+	releases: OperationsReleaseProjectionSummary
 }
 
 /** Seams a test drives. Production passes neither and gets the real clock + the global `fetch`. */
@@ -34,6 +38,8 @@ export interface MaintenanceOptions {
 	reconcile?: () => Promise<ProviderReconcileSummary>
 	/** Test seam for the Operations maintenance replay. */
 	operations?: () => Promise<OperationsCatalogSyncSummary>
+	/** Test seam for the deploy-release maintenance replay. */
+	releases?: () => Promise<OperationsReleaseProjectionSummary>
 }
 
 /**
@@ -74,5 +80,7 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	if (operations.outcome === 'failed') {
 		console.warn('operations catalog maintenance replay failed')
 	}
-	return { poll, reconcile, swept, operations }
+	const releases = await (options.releases ?? (() => replayOperationsReleases(operationsReleaseDeps(env))))()
+	if (releases.failed > 0) console.warn(`operations release maintenance replay failed for ${releases.failed} run(s)`)
+	return { poll, reconcile, swept, operations, releases }
 }

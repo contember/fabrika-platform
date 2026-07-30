@@ -6,6 +6,7 @@
 // the `fabrika` child through its environment, never argv, never a log.
 
 import type { RunLogLine } from '@fabrika/control-contract'
+import { OPERATIONS_ARTIFACT_HEADERS } from '@fabrika/operations-contract/releases'
 import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
 import type { RunnerState, RunnerStatus } from '@fabrika/runner-contract'
 
@@ -47,6 +48,23 @@ export interface RunnerEnv {
 	workspace: string
 	/** Wall clock, injectable for deterministic tests. Defaults to `Date.now`. */
 	now?: () => number
+	/** Source-map discovery seam; production scans the completed checkout. */
+	collectSourceMaps?: (cwd: string) => Promise<SourceMapCollection>
+	/** Artifact upload transport. */
+	fetch?: ArtifactFetch
+}
+
+export type ArtifactFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
+
+export interface SourceMapArtifact {
+	logicalPath: string
+	digest: string
+	body: ArrayBuffer
+}
+
+export interface SourceMapCollection {
+	artifacts: SourceMapArtifact[]
+	incomplete: boolean
 }
 
 /** Build the redactor: a function that masks every sensitive value found in a line. */
@@ -67,6 +85,7 @@ const makeRedactor = (job: CloudflareRunnerJob): (text: string) => string => {
 			sensitive.add(value)
 		}
 	}
+	if (job.artifactUpload?.bearer !== undefined) sensitive.add(job.artifactUpload.bearer)
 	// The clone URL may embed a short-lived installation token as userinfo (`x-access-token:<token>@…`
 	// for a private repo); redact it like any other credential so it never lands in a persisted log line.
 	try {
@@ -97,20 +116,26 @@ const stripUserinfo = (url: string): string => url.replace(/(\/\/)[^@/]*@/, '$1'
  */
 export class Runner {
 	private readonly job: CloudflareRunnerJob
-	private readonly env: Required<RunnerEnv>
+	private readonly env: RunnerEnv & { now: () => number; collectSourceMaps: (cwd: string) => Promise<SourceMapCollection>; fetch: ArtifactFetch }
 	private readonly redact: (text: string) => string
 	private readonly buffer: RunLogLine[] = []
 	private readonly subscribers = new Set<(line: RunLogLine) => void>()
 	private state: RunnerState = 'pending'
 	private exitCode: number | undefined
 	private error: string | undefined
+	private artifactState: RunnerStatus['artifactState']
 	private readonly startedAt: number
 	private finishedAt: number | undefined
 	private done = false
 
 	constructor(job: CloudflareRunnerJob, env: RunnerEnv) {
 		this.job = job
-		this.env = { now: () => Date.now(), ...env }
+		this.env = {
+			now: () => Date.now(),
+			collectSourceMaps: collectSourceMaps,
+			fetch,
+			...env,
+		}
 		this.redact = makeRedactor(job)
 		this.startedAt = this.env.now()
 	}
@@ -168,6 +193,7 @@ export class Runner {
 			state: this.state,
 			...(this.exitCode !== undefined ? { exitCode: this.exitCode } : {}),
 			...(this.error !== undefined ? { error: this.error } : {}),
+			...(this.artifactState === undefined ? {} : { artifactState: this.artifactState }),
 			startedAt: this.startedAt,
 			...(this.finishedAt !== undefined ? { finishedAt: this.finishedAt } : {}),
 		}
@@ -260,7 +286,115 @@ export class Runner {
 		this.emit('meta', `Running: fabrika-cloudflare-executor ${deployArgs.join(' ')}`)
 		const deploy = await this.step({ command: 'fabrika-cloudflare-executor', args: deployArgs, cwd: dir, env: this.deployEnv() })
 		this.emit('meta', `fabrika-cloudflare-executor deploy exited with code ${deploy.exitCode}`)
+		if (deploy.exitCode === 0) {
+			await this.uploadArtifacts(dir)
+		}
 		this.finish(deploy.exitCode === 0 ? 'succeeded' : 'failed', { exitCode: deploy.exitCode })
 		return this.status()
 	}
+
+	private async uploadArtifacts(cwd: string): Promise<void> {
+		const destination = this.job.artifactUpload
+		if (destination === undefined) return
+		if (this.job.dryRun === true) {
+			this.artifactState = 'not_applicable'
+			return
+		}
+		try {
+			const collection = await this.env.collectSourceMaps(cwd)
+			let incomplete = collection.incomplete
+			for (const artifact of collection.artifacts) {
+				const response = await this.env.fetch(destination.url, {
+					method: 'POST',
+					headers: {
+						authorization: `Bearer ${destination.bearer}`,
+						'content-type': 'application/json',
+						[OPERATIONS_ARTIFACT_HEADERS.appId]: destination.appId,
+						[OPERATIONS_ARTIFACT_HEADERS.environment]: destination.environment,
+						[OPERATIONS_ARTIFACT_HEADERS.serviceKey]: destination.serviceKey,
+						[OPERATIONS_ARTIFACT_HEADERS.release]: destination.release,
+						[OPERATIONS_ARTIFACT_HEADERS.runId]: destination.runId,
+						[OPERATIONS_ARTIFACT_HEADERS.logicalPath]: artifact.logicalPath,
+						[OPERATIONS_ARTIFACT_HEADERS.digest]: artifact.digest,
+					},
+					body: artifact.body,
+				})
+				if (!response.ok) incomplete = true
+				await response.body?.cancel().catch(() => {})
+			}
+			this.artifactState = incomplete ? 'incomplete' : 'complete'
+			this.emit('meta', `Operations source maps: ${collection.artifacts.length} uploaded, state=${this.artifactState}`)
+		} catch {
+			this.artifactState = 'incomplete'
+			this.emit('meta', 'Operations source maps: upload incomplete')
+		}
+	}
+}
+
+const MAX_SOURCE_MAP_BYTES = 8 * 1024 * 1024
+const MAX_SOURCE_MAPS = 256
+const MAX_SOURCE_MAP_TOTAL_BYTES = 64 * 1024 * 1024
+
+export async function collectSourceMaps(cwd: string): Promise<SourceMapCollection> {
+	const artifacts: SourceMapArtifact[] = []
+	let totalBytes = 0
+	let incomplete = false
+	const glob = new Bun.Glob('**/*.map')
+	for await (const relativePath of glob.scan({ cwd, dot: false, onlyFiles: true })) {
+		if (relativePath.split('/').some((part) => part === 'node_modules' || part === '.git')) continue
+		if (artifacts.length >= MAX_SOURCE_MAPS) {
+			incomplete = true
+			break
+		}
+		const file = Bun.file(`${cwd}/${relativePath}`)
+		if (file.size > MAX_SOURCE_MAP_BYTES || totalBytes + file.size > MAX_SOURCE_MAP_TOTAL_BYTES) {
+			incomplete = true
+			continue
+		}
+		const body = await file.arrayBuffer()
+		const logicalPath = sourceMapLogicalPath(await file.text(), relativePath)
+		if (logicalPath === null) {
+			incomplete = true
+			continue
+		}
+		totalBytes += file.size
+		artifacts.push({ logicalPath, digest: await digest(body), body })
+	}
+	return { artifacts, incomplete }
+}
+
+function sourceMapLogicalPath(raw: string, mapPath: string): string | null {
+	let value: unknown
+	try {
+		value = JSON.parse(raw)
+	} catch {
+		return null
+	}
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+	const file = Reflect.get(value, 'file')
+	if (typeof file !== 'string' || file === '') return null
+	const explicitlyRooted = file.startsWith('/') || file.startsWith('~/') || URL.canParse(file)
+	if (!explicitlyRooted && !file.includes('/') && mapPath.includes('/')) {
+		// A nested map with only `file: "app.js"` does not reveal its public build root.
+		// Guessing from the filesystem path would reintroduce basename collisions.
+		return null
+	}
+	let path = file
+	try {
+		path = new URL(file).pathname
+	} catch {
+		const query = path.indexOf('?')
+		if (query !== -1) path = path.slice(0, query)
+		const hash = path.indexOf('#')
+		if (hash !== -1) path = path.slice(0, hash)
+	}
+	path = path.replaceAll('\\', '/').replace(/^~?\//, '')
+	const parts = path.split('/').filter((part) => part !== '' && part !== '.')
+	if (parts.length === 0 || parts.some((part) => part === '..')) return null
+	return parts.join('/')
+}
+
+async function digest(body: ArrayBuffer): Promise<string> {
+	const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', body))
+	return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }

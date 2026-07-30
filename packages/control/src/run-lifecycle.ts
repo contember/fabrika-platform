@@ -8,6 +8,7 @@ import type {
 	ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
 import { type AppEnvRow, type AppRow, type ControlRegistryRepository, type ControlRepositories, type DeploymentNamespaceRow, type RunRow } from './db'
+import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
 import type { SecretResolver } from './secret-resolver'
 
 export type RunOutcome = ProviderTerminalOutcome
@@ -24,6 +25,7 @@ export interface RunDeps {
 	secrets: SecretResolver
 	provider: ControlProvider
 	lock: DeployLockGate
+	operations?: OperationsReleaseProjectionDeps
 }
 
 export interface DeployJobMessage {
@@ -220,10 +222,20 @@ export async function executeDeploy(
 		if (!(await deps.repositories.runs.markRunStarted(run.id, logsKey(run.id)))) {
 			return { runId: run.id, status: 'skipped' }
 		}
+		const startedRun = await deps.repositories.runs.getRun(run.id)
+		if (startedRun === null) return { runId: run.id, status: 'skipped' }
+		const releaseContext = deps.operations === undefined
+			? null
+			: await projectOperationsRun(deps.operations, startedRun, {
+				dryRun: message.dryRun === true,
+				phase: 'started',
+				artifactState: 'pending',
+			})
 		const app = await deps.repositories.registry.getApp(run.app_id)
 		const appEnv = await deps.repositories.registry.getAppEnv(run.app_id, run.env)
 		if (app === null || appEnv === null) {
 			await deps.repositories.runs.markRunFinished(run.id, 'failed', null)
+			await projectTerminal(deps, run.id, message.dryRun === true, 'failed')
 			return { runId: run.id, status: 'failed' }
 		}
 		if (appEnv.provider !== deps.provider.id) {
@@ -252,30 +264,66 @@ export async function executeDeploy(
 		}
 		await assertNamespaceResourceClaims(deps.repositories.registry, deps.provider, registration)
 
+		const vars = await resolveVars(deps.repositories.registry, app.id, appEnv.env)
+		if (releaseContext !== null) {
+			for (const key of Object.keys(releaseContext.managedEnvironment)) {
+				if (vars[key] !== undefined) throw new Error(`application variable "${key}" is managed by Fabrika`)
+			}
+			Object.assign(vars, releaseContext.managedEnvironment)
+		}
 		const outcome = await deps.provider.deploy({
 			runId: run.id,
 			app: registration.app,
 			environment: registration.environment,
 			secrets: await resolveSecrets(deps, app.id, appEnv.env),
-			vars: await resolveVars(deps.repositories.registry, app.id, appEnv.env),
+			vars,
 			dryRun: message.dryRun === true,
+			...(releaseContext?.artifactUpload === undefined ? {} : { artifactUpload: releaseContext.artifactUpload }),
 			signal: new AbortController().signal,
 			events: {
 				log: (line) => console.info(`deploy run ${run.id}: ${line}`),
 				externalId: async (externalId) => {
 					await deps.repositories.runs.setRunExternalId(run.id, externalId)
+					const acceptedRun = await deps.repositories.runs.getRun(run.id)
+					if (deps.operations !== undefined && acceptedRun !== null) {
+						await projectOperationsRun(deps.operations, acceptedRun, {
+							dryRun: message.dryRun === true,
+							phase: 'provider_accepted',
+							artifactState: 'pending',
+						})
+					}
 				},
 			},
 		})
 		await deps.repositories.runs.markRunFinished(run.id, outcome.state, outcome.exitCode ?? null)
+		await projectTerminal(deps, run.id, message.dryRun === true, outcome.state, outcome.artifactState)
 		return { runId: run.id, status: outcome.state }
 	} catch (error) {
 		console.error(`deploy run ${run.id} failed:`, error instanceof Error ? error.message : 'unknown error')
 		await deps.repositories.runs.markRunFinished(run.id, 'failed', null)
+		await projectTerminal(deps, run.id, message.dryRun === true, 'failed')
 		return { runId: run.id, status: 'failed' }
 	} finally {
 		await deps.lock.release(lockKey, run.id)
 	}
+}
+
+async function projectTerminal(
+	deps: RunDeps,
+	runId: string,
+	dryRun: boolean,
+	outcome: 'succeeded' | 'failed',
+	artifactState?: 'complete' | 'incomplete' | 'not_applicable',
+): Promise<void> {
+	if (deps.operations === undefined) return
+	const terminalRun = await deps.repositories.runs.getRun(runId)
+	if (terminalRun === null) return
+	await projectOperationsRun(deps.operations, terminalRun, {
+		dryRun,
+		phase: 'terminal',
+		artifactState: dryRun ? 'not_applicable' : artifactState ?? 'incomplete',
+		outcome,
+	})
 }
 
 /** Cancel provider-owned work, mark the run failed, and release its deploy lock. */

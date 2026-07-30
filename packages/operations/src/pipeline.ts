@@ -2,7 +2,6 @@ import type { IngestMessage, ParsedEvent } from '@fabrika/operations-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
 import { issueCulprit, issueTitle, resolveFingerprint, sha256Hex } from './ingest.js'
 import type { OperationsRepositories, RecordOccurrenceResult } from './repositories.js'
-import { frameBasename } from './source-maps.js'
 import { uuidv7 } from './uuid.js'
 
 export interface OperationsDataEnv {
@@ -110,19 +109,4 @@ export async function archiveDeadEvent(
 		attempts: input.attempts,
 		deadAt,
 	})
-}
-
-export async function storeSourceMap(
-	env: Pick<OperationsDataEnv, 'payloads' | 'repositories'>,
-	input: { sourceId: string; releaseId: string; fileName: string; body: string },
-): Promise<string> {
-	const fileName = frameBasename(input.fileName)
-	if (!fileName) throw new Error('source map file name is empty')
-	if (!(await env.repositories.artifacts.releaseBelongsToSource(input.sourceId, input.releaseId))) {
-		throw new Error('release does not belong to source')
-	}
-	const blobKey = `source-maps/${input.sourceId}/${input.releaseId}/${fileName}.map`
-	await env.payloads.put(blobKey, input.body)
-	await env.repositories.artifacts.indexSourceMap({ releaseId: input.releaseId, fileName, blobKey })
-	return blobKey
 }

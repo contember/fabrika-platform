@@ -109,6 +109,9 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		// "no public domain" — which is exactly what it means, but only when it really is unset.
 		...(source['VOZKA_DOMAIN'] !== undefined ? { VOZKA_DOMAIN: source['VOZKA_DOMAIN'] } : {}),
 		...(source['PROPUSTKA_URL'] !== undefined ? { PROPUSTKA_URL: source['PROPUSTKA_URL'] } : {}),
+		...(source['OPERATIONS_ARTIFACT_ORIGIN'] !== undefined
+			? { OPERATIONS_ARTIFACT_ORIGIN: source['OPERATIONS_ARTIFACT_ORIGIN'] }
+			: {}),
 		...(source['VOZKA_BOOTSTRAP_ADMINS'] !== undefined ? { VOZKA_BOOTSTRAP_ADMINS: source['VOZKA_BOOTSTRAP_ADMINS'] } : {}),
 		...(source['GITHUB_WEBHOOK_SECRET'] !== undefined ? { GITHUB_WEBHOOK_SECRET: source['GITHUB_WEBHOOK_SECRET'] } : {}),
 		...(source['GITHUB_APP_ID'] !== undefined ? { GITHUB_APP_ID: source['GITHUB_APP_ID'] } : {}),

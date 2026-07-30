@@ -4,6 +4,7 @@ import type { RawSourceMap } from 'source-map-js'
 
 export interface ObjectReader {
 	get(key: string): Promise<{ text(): Promise<string> } | null>
+	getSourceMap?(releaseName: string, logicalPath: string): Promise<{ text(): Promise<string> } | null>
 }
 
 const CONTEXT_RADIUS = 5
@@ -51,8 +52,29 @@ export function frameBasename(fileReference: string): string {
 	return slash === -1 ? file : file.slice(slash + 1)
 }
 
+export function logicalAssetPath(fileReference: string): string {
+	let path = fileReference
+	try {
+		const url = new URL(fileReference)
+		path = url.pathname
+	} catch {
+		const query = path.indexOf('?')
+		if (query !== -1) path = path.slice(0, query)
+		const hash = path.indexOf('#')
+		if (hash !== -1) path = path.slice(0, hash)
+	}
+	path = path.replaceAll('\\', '/').replace(/^~?\//, '')
+	const parts = path.split('/').filter((part) => part !== '' && part !== '.')
+	if (parts.length === 0 || parts.some((part) => part === '..')) {
+		throw new Error('invalid logical asset path')
+	}
+	const normalized = parts.join('/')
+	if (normalized.length > 2_048) throw new Error('logical asset path is too long')
+	return normalized
+}
+
 export function sourceMapKey(release: string, file: string): string {
-	return `sourcemaps/${release}/${frameBasename(file)}.map`
+	return `source-maps/index/${encodeURIComponent(release)}/${encodeURIComponent(logicalAssetPath(file))}.json`
 }
 
 function frameFile(frame: StackFrame): string {
@@ -134,11 +156,19 @@ export async function resolveFrames(frames: StackFrame[], release: string | unde
 	const sourceMapRelease = release
 	const consumers = new Map<string, SourceMapConsumer | null>()
 	async function consumerFor(fileReference: string): Promise<SourceMapConsumer | null> {
-		const key = sourceMapKey(sourceMapRelease, fileReference)
+		let logicalPath: string
+		try {
+			logicalPath = logicalAssetPath(fileReference)
+		} catch {
+			return null
+		}
+		const key = sourceMapKey(sourceMapRelease, logicalPath)
 		if (consumers.has(key)) return consumers.get(key) ?? null
 		let consumer: SourceMapConsumer | null = null
 		try {
-			const object = await reader.get(key)
+			const object = reader.getSourceMap === undefined
+				? await reader.get(key)
+				: await reader.getSourceMap(sourceMapRelease, logicalPath)
 			if (object) {
 				const parsed: unknown = JSON.parse(await object.text())
 				const map = parseRawSourceMap(parsed)

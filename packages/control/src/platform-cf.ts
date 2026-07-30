@@ -118,6 +118,7 @@ const startRun = async (
 	return {
 		state,
 		...(result.status.exitCode === undefined ? {} : { exitCode: result.status.exitCode }),
+		...(result.status.artifactState === undefined ? {} : { artifactState: result.status.artifactState }),
 	}
 }
 

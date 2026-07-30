@@ -127,6 +127,7 @@ describe('Operations notification maintenance', () => {
 		const request = captured[0]
 		if (!request) throw new Error('request was not sent')
 		expect(request.headers.get('Idempotency-Key')).toBe('new:source-a:fp-a')
-		expect(await request.json()).toEqual({ issue: 'fp-a' })
+		const requestBody: unknown = await request.json()
+		expect(requestBody).toEqual({ issue: 'fp-a' })
 	})
 })

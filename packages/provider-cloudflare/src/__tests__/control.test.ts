@@ -35,6 +35,15 @@ const deployInput = (): ProviderDeployInput => ({
 	secrets: { API_KEY: 'secret' },
 	vars: { FEATURE: 'on' },
 	dryRun: true,
+	artifactUpload: {
+		url: 'https://operations.example.com/api/artifacts/source-maps/',
+		bearer: 'a'.repeat(64),
+		appId: 'api',
+		environment: 'production',
+		serviceKey: 'default',
+		release: `fabrika/api/production/default/${'b'.repeat(40)}`,
+		runId: 'run-1',
+	},
 	signal: new AbortController().signal,
 	events: {
 		log: () => {},
@@ -88,6 +97,7 @@ describe('Cloudflare control provider', () => {
 			},
 			secrets: { API_KEY: 'secret' },
 			vars: { FEATURE: 'on' },
+			artifactUpload: input.artifactUpload,
 		}])
 		expect(externalIds).toEqual(['run-1'])
 		expect(outcome).toEqual({ state: 'succeeded', exitCode: 0 })

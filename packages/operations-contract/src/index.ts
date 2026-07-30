@@ -55,3 +55,26 @@ export type {
 	RawEventFrame,
 	SourceContext,
 } from './operator.js'
+export {
+	FABRIKA_RELEASE,
+	normalizeOperationsCommit,
+	OPERATIONS_ARTIFACT_HEADERS,
+	OPERATIONS_RELEASE_PROTOCOL_VERSION,
+	OPERATIONS_RELEASE_RECONCILE_PATH,
+	OPERATIONS_SOURCE_MAP_UPLOAD_PATH,
+	operationsReleaseName,
+	operationsSourceMapUploadUrl,
+} from './releases.js'
+export type {
+	OperationsArtifactState,
+	OperationsArtifactUploadConfiguration,
+	OperationsArtifactUploadCredentialV1,
+	OperationsReleaseAvailabilityV1,
+	OperationsReleaseCoordinateV1,
+	OperationsReleaseOutcome,
+	OperationsReleasePhase,
+	OperationsReleaseReconcileOutcome,
+	OperationsReleaseReconcileRequestV1,
+	OperationsReleaseReconcileResponseV1,
+	OperationsReleaseUnavailableReason,
+} from './releases.js'

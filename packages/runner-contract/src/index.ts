@@ -9,6 +9,7 @@ export interface RunnerStatus {
 	readonly state: RunnerState
 	readonly exitCode?: number
 	readonly error?: string
+	readonly artifactState?: 'complete' | 'incomplete' | 'not_applicable'
 	readonly startedAt: number
 	readonly finishedAt?: number
 }

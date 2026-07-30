@@ -52,6 +52,16 @@ export interface ProviderDeployInput {
 	readonly secrets: Readonly<Record<string, string>>
 	readonly vars: Readonly<Record<string, string>>
 	readonly dryRun: boolean
+	/** Optional short-lived, run-scoped Operations artifact destination. */
+	readonly artifactUpload?: {
+		readonly url: string
+		readonly bearer: string
+		readonly appId: string
+		readonly environment: string
+		readonly serviceKey: string
+		readonly release: string
+		readonly runId: string
+	}
 	readonly signal: AbortSignal
 	readonly events: ProviderRunEvents
 }
@@ -60,6 +70,8 @@ export interface ProviderDeployInput {
 export interface ProviderTerminalOutcome {
 	readonly state: 'succeeded' | 'failed'
 	readonly exitCode?: number
+	/** Whether provider-local release artifacts reached Operations. */
+	readonly artifactState?: 'complete' | 'incomplete' | 'not_applicable'
 }
 
 /** A platform-owned run that can be cancelled or reconciled. */
