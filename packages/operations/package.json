@@ -42,6 +42,11 @@
 			"types": "./src/operator.ts",
 			"default": "./src/operator.ts"
 		},
+		"./operator-api": {
+			"bun": "./src/operator-api.ts",
+			"types": "./src/operator-api.ts",
+			"default": "./src/operator-api.ts"
+		},
 		"./access": {
 			"bun": "./src/access.ts",
 			"types": "./src/access.ts",

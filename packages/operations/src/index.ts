@@ -50,6 +50,8 @@ export {
 export type { IngestAuthResult, ParsedEnvelope, ParsedEventEnvelope } from './ingest.js'
 export { OperationsMaintenance, WebhookNotificationSender } from './maintenance.js'
 export type { NotificationFetch, NotificationSender, OperationsLogger, OperationsMaintenanceOptions } from './maintenance.js'
+export { handleOperationsOperatorRequest } from './operator-api.js'
+export type { OperationsOperatorOptions, OperationsPrincipalDirectory } from './operator-api.js'
 export {
 	applyIssueMutation,
 	decideOccurrenceTransition,
@@ -85,6 +87,7 @@ export {
 	ErrorIngestRepository,
 	IngestRateLimitsRepository,
 	IssuesRepository,
+	OperatorRepository,
 	PostgresAlertsRepository,
 	PostgresErrorIngestRepository,
 	SourcesRepository,
@@ -99,10 +102,14 @@ export type {
 	ClaimedNotification,
 	CountBucket,
 	CountResult,
+	IdentifiedOperatorIssueRow,
 	IngestCredentialResolution,
 	IssueRow,
 	NotificationChannelRow,
 	OperationsRepositories,
+	OperatorIssueRow,
+	OperatorOccurrenceRow,
+	OperatorReleaseRow,
 	RecordOccurrenceInput,
 	RecordOccurrenceResult,
 	ReleaseRow,

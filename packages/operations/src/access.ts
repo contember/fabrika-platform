@@ -52,14 +52,13 @@ export function normalizeIssueAssignment(
 
 export async function auditIssueMutation(
 	auth: Pick<AuthContext, 'audit'>,
-	sourceId: string,
-	fingerprint: string,
+	issueId: string,
 	mutation: IssueMutation,
 ): Promise<void> {
 	await auth.audit({
 		action: issueMutationAuditAction(mutation),
 		resourceType: 'operations_issue',
-		resourceId: `${sourceId}:${fingerprint}`,
+		resourceId: issueId,
 	})
 }
 

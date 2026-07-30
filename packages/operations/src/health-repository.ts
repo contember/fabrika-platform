@@ -116,6 +116,19 @@ export abstract class HealthRepository {
 
 	protected abstract claimSql(): string
 
+	async listChecks(sourceId: string): Promise<HealthCheckRow[]> {
+		const { results } = await this.db
+			.prepare('SELECT * FROM health_checks WHERE source_id = ? ORDER BY path, id')
+			.bind(sourceId)
+			.all<HealthCheckRow>()
+		return results.map(healthCheckRow)
+	}
+
+	async getCheck(checkId: string): Promise<HealthCheckRow | null> {
+		const row = await this.db.prepare('SELECT * FROM health_checks WHERE id = ?').bind(checkId).first<HealthCheckRow>()
+		return row === null ? null : healthCheckRow(row)
+	}
+
 	async upsertCheck(input: {
 		id: string
 		sourceId: string
@@ -173,6 +186,16 @@ export abstract class HealthRepository {
 				now,
 			)
 			.run()
+	}
+
+	async deleteCheck(sourceId: string, checkId: string): Promise<boolean> {
+		const results = await this.db.batch<{ id: string }>([
+			this.db.prepare('DELETE FROM health_observations WHERE check_id = ?').bind(checkId),
+			this.db.prepare('DELETE FROM current_health WHERE check_id = ?').bind(checkId),
+			this.db.prepare('DELETE FROM health_transitions WHERE check_id = ? AND source_id = ?').bind(checkId, sourceId),
+			this.db.prepare('DELETE FROM health_checks WHERE id = ? AND source_id = ? RETURNING id').bind(checkId, sourceId),
+		])
+		return results[3]?.results.length === 1
 	}
 
 	async claimDueChecks(input: { limit: number; leaseMs: number }): Promise<ClaimedHealthCheck[]> {
@@ -466,6 +489,19 @@ export class PostgresHealthRepository extends HealthRepository {
 				FOR UPDATE SKIP LOCKED
 			)
 			RETURNING *`
+	}
+}
+
+function healthCheckRow(row: HealthCheckRow): HealthCheckRow {
+	return {
+		...row,
+		interval_ms: number(row.interval_ms, 'health_checks.interval_ms'),
+		timeout_ms: number(row.timeout_ms, 'health_checks.timeout_ms'),
+		stale_after_ms: number(row.stale_after_ms, 'health_checks.stale_after_ms'),
+		due_at: number(row.due_at, 'health_checks.due_at'),
+		claimed_until: row.claimed_until === null ? null : number(row.claimed_until, 'health_checks.claimed_until'),
+		created_at: number(row.created_at, 'health_checks.created_at'),
+		updated_at: number(row.updated_at, 'health_checks.updated_at'),
 	}
 }
 

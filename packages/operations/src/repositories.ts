@@ -40,6 +40,7 @@ export interface CatalogCursorRow {
 }
 
 export interface IssueRow {
+	id: string | null
 	source_id: string
 	fingerprint: string
 	title: string
@@ -407,6 +408,7 @@ export abstract class ErrorIngestRepository {
 
 	async record(input: RecordOccurrenceInput): Promise<RecordOccurrenceResult> {
 		const occurrenceId = uuidv7(input.receivedAt)
+		const issueId = uuidv7(input.receivedAt)
 		const activityId = uuidv7(input.receivedAt)
 		const appliedAt = this.now()
 		const results = await this.db.batch<IssueRow>([
@@ -455,6 +457,7 @@ export abstract class ErrorIngestRepository {
 			this.db
 				.prepare(this.issueUpsertSql())
 				.bind(
+					issueId,
 					input.sourceId,
 					input.fingerprint,
 					input.title,
@@ -532,6 +535,7 @@ export abstract class ErrorIngestRepository {
 		}
 		const eventPlaceholders = inputs.map(() => '?').join(', ')
 		const eventIds = inputs.map((input) => input.eventId)
+		const issueId = uuidv7(first.receivedAt)
 		const statements = inputs.map((input) =>
 			this.db
 				.prepare(`INSERT INTO occurrences
@@ -553,6 +557,7 @@ export abstract class ErrorIngestRepository {
 			this.db
 				.prepare(this.groupIssueUpsertSql(eventPlaceholders))
 				.bind(
+					issueId,
 					first.sourceId,
 					first.fingerprint,
 					first.title,
@@ -651,8 +656,8 @@ export abstract class ErrorIngestRepository {
 export class SqliteErrorIngestRepository extends ErrorIngestRepository {
 	protected issueUpsertSql(): string {
 		return `INSERT INTO issues
-			(source_id, fingerprint, title, culprit, level, status, first_seen, last_seen)
-			SELECT ?, ?, ?, ?, ?, 'open', ?, ?
+			(id, source_id, fingerprint, title, culprit, level, status, first_seen, last_seen)
+			SELECT ?, ?, ?, ?, ?, ?, 'open', ?, ?
 			WHERE EXISTS (
 				SELECT 1 FROM occurrences WHERE source_id = ? AND event_id = ? AND applied_at IS NULL
 			)
@@ -663,8 +668,8 @@ export class SqliteErrorIngestRepository extends ErrorIngestRepository {
 
 	protected groupIssueUpsertSql(eventPlaceholders: string): string {
 		return `INSERT INTO issues
-			(source_id, fingerprint, title, culprit, level, status, first_seen, last_seen)
-			SELECT ?, ?, ?, ?, ?, 'open', MIN(received_at), MAX(received_at)
+			(id, source_id, fingerprint, title, culprit, level, status, first_seen, last_seen)
+			SELECT ?, ?, ?, ?, ?, ?, 'open', MIN(received_at), MAX(received_at)
 			FROM occurrences
 			WHERE source_id = ? AND fingerprint = ? AND event_id IN (${eventPlaceholders}) AND applied_at IS NULL
 			HAVING COUNT(*) > 0
@@ -682,8 +687,8 @@ export class SqliteErrorIngestRepository extends ErrorIngestRepository {
 export class PostgresErrorIngestRepository extends ErrorIngestRepository {
 	protected issueUpsertSql(): string {
 		return `INSERT INTO issues
-			(source_id, fingerprint, title, culprit, level, status, first_seen, last_seen)
-			SELECT ?, ?, ?, ?, ?, 'open', ?, ?
+			(id, source_id, fingerprint, title, culprit, level, status, first_seen, last_seen)
+			SELECT ?, ?, ?, ?, ?, ?, 'open', ?, ?
 			WHERE EXISTS (
 				SELECT 1 FROM occurrences WHERE source_id = ? AND event_id = ? AND applied_at IS NULL
 			)
@@ -694,8 +699,8 @@ export class PostgresErrorIngestRepository extends ErrorIngestRepository {
 
 	protected groupIssueUpsertSql(eventPlaceholders: string): string {
 		return `INSERT INTO issues
-			(source_id, fingerprint, title, culprit, level, status, first_seen, last_seen)
-			SELECT ?, ?, ?, ?, ?, 'open', MIN(received_at), MAX(received_at)
+			(id, source_id, fingerprint, title, culprit, level, status, first_seen, last_seen)
+			SELECT ?, ?, ?, ?, ?, ?, 'open', MIN(received_at), MAX(received_at)
 			FROM occurrences
 			WHERE source_id = ? AND fingerprint = ? AND event_id IN (${eventPlaceholders}) AND applied_at IS NULL
 			HAVING COUNT(*) > 0
@@ -832,6 +837,307 @@ export class IssuesRepository {
 			data: row.data === null ? null : parseObject(row.data),
 			at: number(row.at, 'issue_activity.at'),
 		}))
+	}
+}
+
+export interface OperatorIssueRow extends IssueRow {
+	source_app_id: string
+	source_environment: string
+	source_service_key: string
+	source_display_name: string
+	source_public_origin: string | null
+	source_enabled: number
+	occurrence_count: number | string
+}
+
+export interface IdentifiedOperatorIssueRow extends OperatorIssueRow {
+	id: string
+}
+
+export interface OperatorOccurrenceRow {
+	id: string
+	source_id: string
+	fingerprint: string
+	event_id: string
+	received_at: number | string
+	release: string | null
+	blob_key: string
+}
+
+export interface OperatorReleaseRow extends ReleaseRow {
+	source_app_id: string
+	source_environment: string
+	source_service_key: string
+	source_display_name: string
+	source_public_origin: string | null
+	source_enabled: number
+	new_issue_count: number | string
+	regression_count: number | string
+}
+
+export class OperatorRepository {
+	constructor(protected readonly db: SqlDatabase, protected readonly now: () => number = Date.now) {}
+
+	async ensureIssueIds(sourceIds: readonly string[]): Promise<void> {
+		if (sourceIds.length === 0) return
+		const placeholders = sourceIds.map(() => '?').join(', ')
+		const { results } = await this.db
+			.prepare(`SELECT source_id, fingerprint FROM issues
+				WHERE id IS NULL AND source_id IN (${placeholders})`)
+			.bind(...sourceIds)
+			.all<{ source_id: string; fingerprint: string }>()
+		if (results.length === 0) return
+		await this.db.batch(
+			results.map((row) =>
+				this.db.prepare('UPDATE issues SET id = ? WHERE source_id = ? AND fingerprint = ? AND id IS NULL')
+					.bind(uuidv7(this.now()), row.source_id, row.fingerprint)
+			),
+		)
+	}
+
+	async listIssues(input: {
+		sourceIds: readonly string[]
+		status?: IssueStatus
+		query?: string
+		offset: number
+		limit: number
+	}): Promise<IdentifiedOperatorIssueRow[]> {
+		if (input.sourceIds.length === 0) return []
+		await this.ensureIssueIds(input.sourceIds)
+		const placeholders = input.sourceIds.map(() => '?').join(', ')
+		const conditions = [`issue.source_id IN (${placeholders})`, 'issue.id IS NOT NULL']
+		const values: SqlBindValue[] = [...input.sourceIds]
+		if (input.status !== undefined) {
+			conditions.push('issue.status = ?')
+			values.push(input.status)
+		}
+		if (input.query !== undefined && input.query !== '') {
+			conditions.push("(LOWER(issue.title) LIKE ? OR LOWER(COALESCE(issue.culprit, '')) LIKE ?)")
+			const query = `%${input.query.toLowerCase()}%`
+			values.push(query, query)
+		}
+		const { results } = await this.db
+			.prepare(`SELECT
+					issue.*,
+					source.app_id AS source_app_id,
+					source.environment AS source_environment,
+					source.service_key AS source_service_key,
+					source.display_name AS source_display_name,
+					source.public_origin AS source_public_origin,
+					source.enabled AS source_enabled,
+					(SELECT COUNT(*) FROM occurrences occurrence
+						WHERE occurrence.source_id = issue.source_id
+							AND occurrence.fingerprint = issue.fingerprint
+							AND occurrence.applied_at IS NOT NULL) AS occurrence_count
+				FROM issues issue
+				JOIN sources source ON source.id = issue.source_id
+				WHERE ${conditions.join(' AND ')}
+				ORDER BY issue.last_seen DESC, issue.id DESC
+				LIMIT ? OFFSET ?`)
+			.bind(...values, input.limit, input.offset)
+			.all<OperatorIssueRow>()
+		return results.map(operatorIssueRow)
+	}
+
+	async issueStatusCounts(sourceIds: readonly string[]): Promise<{ status: IssueStatus; count: number }[]> {
+		if (sourceIds.length === 0) return []
+		const placeholders = sourceIds.map(() => '?').join(', ')
+		const { results } = await this.db
+			.prepare(`SELECT status, COUNT(*) AS count FROM issues
+				WHERE source_id IN (${placeholders}) AND id IS NOT NULL
+				GROUP BY status`)
+			.bind(...sourceIds)
+			.all<{ status: IssueStatus; count: number | string }>()
+		return results.map((row) => ({ status: row.status, count: number(row.count, 'issues.count') }))
+	}
+
+	getIssueById(id: string): Promise<IdentifiedOperatorIssueRow | null> {
+		return this.issueQuery('issue.id = ?', [id])
+	}
+
+	async getIssuesByIds(ids: readonly string[]): Promise<IdentifiedOperatorIssueRow[]> {
+		if (ids.length === 0) return []
+		const placeholders = ids.map(() => '?').join(', ')
+		const { results } = await this.db
+			.prepare(this.issueSelect(`issue.id IN (${placeholders})`))
+			.bind(...ids)
+			.all<OperatorIssueRow>()
+		return results.map(operatorIssueRow)
+	}
+
+	async getIssueByCoordinate(sourceId: string, fingerprint: string): Promise<IdentifiedOperatorIssueRow | null> {
+		await this.ensureIssueIds([sourceId])
+		return this.issueQuery('issue.source_id = ? AND issue.fingerprint = ?', [sourceId, fingerprint])
+	}
+
+	async latestOccurrence(sourceId: string, fingerprint: string): Promise<OperatorOccurrenceRow | null> {
+		const row = await this.db
+			.prepare(`SELECT id, source_id, fingerprint, event_id, received_at, release, blob_key
+				FROM occurrences
+				WHERE source_id = ? AND fingerprint = ? AND applied_at IS NOT NULL
+				ORDER BY received_at DESC, id DESC LIMIT 1`)
+			.bind(sourceId, fingerprint)
+			.first<OperatorOccurrenceRow>()
+		return row === null ? null : operatorOccurrenceRow(row)
+	}
+
+	async listReleases(input: { sourceIds: readonly string[]; offset: number; limit: number }): Promise<OperatorReleaseRow[]> {
+		if (input.sourceIds.length === 0) return []
+		const placeholders = input.sourceIds.map(() => '?').join(', ')
+		const { results } = await this.db
+			.prepare(
+				this.releaseSelect(`release.source_id IN (${placeholders})`)
+					+ ' ORDER BY release.created_at DESC, release.id DESC LIMIT ? OFFSET ?',
+			)
+			.bind(...input.sourceIds, input.limit, input.offset)
+			.all<OperatorReleaseRow>()
+		return results.map(operatorReleaseRow)
+	}
+
+	async getReleaseById(id: string): Promise<OperatorReleaseRow | null> {
+		const row = await this.db.prepare(this.releaseSelect('release.id = ?')).bind(id).first<OperatorReleaseRow>()
+		return row === null ? null : operatorReleaseRow(row)
+	}
+
+	async getReleaseByName(sourceId: string, releaseName: string): Promise<OperatorReleaseRow | null> {
+		const row = await this.db.prepare(this.releaseSelect('release.source_id = ? AND release.release_name = ?'))
+			.bind(sourceId, releaseName)
+			.first<OperatorReleaseRow>()
+		return row === null ? null : operatorReleaseRow(row)
+	}
+
+	async listReleaseIssues(release: OperatorReleaseRow): Promise<IdentifiedOperatorIssueRow[]> {
+		await this.ensureIssueIds([release.source_id])
+		const { results } = await this.db
+			.prepare(
+				this.issueSelect(`issue.source_id = ? AND issue.id IS NOT NULL AND EXISTS (
+				SELECT 1 FROM occurrences occurrence
+				WHERE occurrence.source_id = issue.source_id
+					AND occurrence.fingerprint = issue.fingerprint
+					AND occurrence.release = ?
+					AND occurrence.applied_at IS NOT NULL
+			)`) + ' ORDER BY issue.last_seen DESC, issue.id DESC',
+			)
+			.bind(release.source_id, release.release_name)
+			.all<OperatorIssueRow>()
+		return results.map(operatorIssueRow)
+	}
+
+	async bulkStatus(input: {
+		issues: readonly IdentifiedOperatorIssueRow[]
+		status: IssueStatus
+		actorId: string | null
+		actorLabel: string | null
+	}): Promise<IdentifiedOperatorIssueRow[]> {
+		const changed = input.issues.filter((issue) => issue.status !== input.status)
+		if (changed.length === 0) return [...input.issues]
+		const operationId = uuidv7(this.now())
+		const placeholders = changed.map(() => '?').join(', ')
+		const statements = [
+			this.db
+				.prepare(`UPDATE issues SET status = ?, revision = revision + 1, last_mutation_id = ?
+					WHERE id IN (${placeholders})`)
+				.bind(input.status, operationId, ...changed.map((issue) => issue.id)),
+			...changed.map((issue) =>
+				this.db
+					.prepare(`INSERT INTO issue_activity
+						(id, source_id, fingerprint, actor_id, actor_label, kind, data, at)
+						SELECT ?, source_id, fingerprint, ?, ?, 'status', ?, ?
+						FROM issues WHERE id = ? AND last_mutation_id = ?`)
+					.bind(
+						uuidv7(this.now()),
+						input.actorId,
+						input.actorLabel,
+						JSON.stringify({ from: issue.status, to: input.status }),
+						this.now(),
+						issue.id,
+						operationId,
+					)
+			),
+		]
+		await this.db.batch(statements)
+		return this.getIssuesByIds(input.issues.map((issue) => issue.id))
+	}
+
+	private async issueQuery(condition: string, values: readonly SqlBindValue[]): Promise<IdentifiedOperatorIssueRow | null> {
+		const row = await this.db.prepare(this.issueSelect(condition)).bind(...values).first<OperatorIssueRow>()
+		return row === null ? null : operatorIssueRow(row)
+	}
+
+	private issueSelect(condition: string): string {
+		return `SELECT
+				issue.*,
+				source.app_id AS source_app_id,
+				source.environment AS source_environment,
+				source.service_key AS source_service_key,
+				source.display_name AS source_display_name,
+				source.public_origin AS source_public_origin,
+				source.enabled AS source_enabled,
+				(SELECT COUNT(*) FROM occurrences occurrence
+					WHERE occurrence.source_id = issue.source_id
+						AND occurrence.fingerprint = issue.fingerprint
+						AND occurrence.applied_at IS NOT NULL) AS occurrence_count
+			FROM issues issue
+			JOIN sources source ON source.id = issue.source_id
+			WHERE ${condition}`
+	}
+
+	private releaseSelect(condition: string): string {
+		return `SELECT
+				release.*,
+				source.app_id AS source_app_id,
+				source.environment AS source_environment,
+				source.service_key AS source_service_key,
+				source.display_name AS source_display_name,
+				source.public_origin AS source_public_origin,
+				source.enabled AS source_enabled,
+				(SELECT COUNT(DISTINCT occurrence.fingerprint) FROM occurrences occurrence
+					JOIN issues issue
+						ON issue.source_id = occurrence.source_id AND issue.fingerprint = occurrence.fingerprint
+					WHERE occurrence.source_id = release.source_id
+						AND occurrence.release = release.release_name
+						AND occurrence.applied_at IS NOT NULL
+						AND issue.first_seen = occurrence.received_at) AS new_issue_count,
+				(SELECT COUNT(DISTINCT occurrence.fingerprint) FROM occurrences occurrence
+					WHERE occurrence.source_id = release.source_id
+						AND occurrence.release = release.release_name
+						AND occurrence.transition_kind = 'regressed'
+						AND occurrence.applied_at IS NOT NULL) AS regression_count
+			FROM releases release
+			JOIN sources source ON source.id = release.source_id
+			WHERE ${condition}`
+	}
+}
+
+function operatorIssueRow(row: OperatorIssueRow): IdentifiedOperatorIssueRow {
+	if (row.id === null) throw new Error('operator issue id was not assigned')
+	return {
+		...issueRow(row),
+		id: row.id,
+		source_app_id: row.source_app_id,
+		source_environment: row.source_environment,
+		source_service_key: row.source_service_key,
+		source_display_name: row.source_display_name,
+		source_public_origin: row.source_public_origin,
+		source_enabled: row.source_enabled,
+		occurrence_count: number(row.occurrence_count, 'occurrences.count'),
+	}
+}
+
+type SqlBindValue = string | number | boolean | null
+
+function operatorOccurrenceRow(row: OperatorOccurrenceRow): OperatorOccurrenceRow {
+	return { ...row, received_at: number(row.received_at, 'occurrences.received_at') }
+}
+
+function operatorReleaseRow(row: OperatorReleaseRow): OperatorReleaseRow {
+	return {
+		...row,
+		created_at: number(row.created_at, 'releases.created_at'),
+		finished_at: row.finished_at === null ? null : number(row.finished_at, 'releases.finished_at'),
+		updated_at: number(row.updated_at, 'releases.updated_at'),
+		new_issue_count: number(row.new_issue_count, 'releases.new_issue_count'),
+		regression_count: number(row.regression_count, 'releases.regression_count'),
 	}
 }
 
@@ -1461,6 +1767,7 @@ export interface OperationsRepositories {
 	catalog: CatalogRepository
 	ingest: ErrorIngestRepository
 	issues: IssuesRepository
+	operator: OperatorRepository
 	alerts: AlertsRepository
 	ingestRateLimits: IngestRateLimitsRepository
 	deadEvents: DeadEventsRepository
@@ -1478,6 +1785,7 @@ export function createSqliteOperationsRepositories(
 		catalog: replacements.catalog ?? new CatalogRepository(db, now),
 		ingest: replacements.ingest ?? new SqliteErrorIngestRepository(db, now),
 		issues: replacements.issues ?? new IssuesRepository(db, now),
+		operator: replacements.operator ?? new OperatorRepository(db, now),
 		alerts: replacements.alerts ?? new SqliteAlertsRepository(db, now),
 		ingestRateLimits: replacements.ingestRateLimits ?? new IngestRateLimitsRepository(db, now),
 		deadEvents: replacements.deadEvents ?? new DeadEventsRepository(db),
@@ -1496,6 +1804,7 @@ export function createPostgresOperationsRepositories(
 		catalog: replacements.catalog ?? new CatalogRepository(db, now),
 		ingest: replacements.ingest ?? new PostgresErrorIngestRepository(db, now),
 		issues: replacements.issues ?? new IssuesRepository(db, now),
+		operator: replacements.operator ?? new OperatorRepository(db, now),
 		alerts: replacements.alerts ?? new PostgresAlertsRepository(db, now),
 		ingestRateLimits: replacements.ingestRateLimits ?? new IngestRateLimitsRepository(db, now),
 		deadEvents: replacements.deadEvents ?? new DeadEventsRepository(db),
