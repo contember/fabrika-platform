@@ -1,0 +1,19 @@
+{
+	"name": "@fabrika/local-stack",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/zerops-emulator.ts"
+	},
+	"scripts": {
+		"emulator": "bun src/emulator-server.ts",
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@fabrika/provider-zerops": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	}
+}

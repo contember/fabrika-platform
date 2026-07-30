@@ -175,6 +175,15 @@
         "vite": "^7.0.0",
       },
     },
+    "packages/local-stack": {
+      "name": "@fabrika/local-stack",
+      "dependencies": {
+        "@fabrika/provider-zerops": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
     "packages/platform": {
       "name": "@fabrika/platform",
       "version": "0.0.1",
@@ -444,6 +453,8 @@
     "@fabrika/iam": ["@fabrika/iam@workspace:packages/iam"],
 
     "@fabrika/iam-ui": ["@fabrika/iam-ui@workspace:packages/iam-ui"],
+
+    "@fabrika/local-stack": ["@fabrika/local-stack@workspace:packages/local-stack"],
 
     "@fabrika/platform": ["@fabrika/platform@workspace:packages/platform"],
 
