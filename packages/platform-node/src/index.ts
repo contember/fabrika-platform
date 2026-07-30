@@ -22,6 +22,20 @@ export { FileSystemAssetServer, type FileSystemAssetServerOptions } from './asse
 export { S3BlobStore, type S3BlobStoreOptions } from './blob-s3'
 export { type Job, PostgresJobConsumer, type PostgresJobConsumerOptions, PostgresJobQueue, type PostgresJobQueueOptions } from './job-queue-postgres'
 export { rewritePlaceholders, type RewrittenSql } from './placeholders'
+export {
+	applyPostgresMigrations,
+	definePostgresMigrationPlan,
+	platformNodePostgresMigrationBundle,
+	type PostgresLegacyMigrationEffect,
+	type PostgresLegacyMigrationLedger,
+	type PostgresMigration,
+	type PostgresMigrationBundle,
+	postgresMigrationFilenames,
+	postgresMigrationIdentity,
+	type PostgresMigrationPlan,
+	readPostgresMigrationBundle,
+	type ReadPostgresMigrationBundleOptions,
+} from './postgres-migrations'
 export { PostgresDatabase, PostgresStatement, type SqlBindValue } from './sql-postgres'
 export { uuidv7 } from './uuid'
 export { type BackgroundTasks, type BackgroundTasksOptions, createBackgroundTasks } from './wait-until'

@@ -73,8 +73,13 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 		// The fixture already applied them once. `run.initCommands` re-runs this on EVERY container
 		// start, so "already current" must be the normal, silent outcome and not an error.
 		expect(await applyMigrations(raw)).toEqual([])
-		const { results } = await raw.prepare('SELECT name FROM schema_migrations ORDER BY name').all<{ name: string }>()
-		expect(results.map((r) => r.name)).toEqual(['0001_init.sql', '0002_provisioning_principal.sql'])
+		const { results } = await raw
+			.prepare('SELECT bundle, name FROM iam_schema_migrations ORDER BY name')
+			.all<{ bundle: string; name: string }>()
+		expect(results).toEqual([
+			{ bundle: 'iam', name: '0001_init.sql' },
+			{ bundle: 'iam', name: '0002_provisioning_principal.sql' },
+		])
 	})
 
 	test('seeds the provisioning principal (0002), idempotently', async () => {

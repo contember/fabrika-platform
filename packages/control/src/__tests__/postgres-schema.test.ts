@@ -96,19 +96,21 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 		// The fixture already applied them once. `run.initCommands` re-runs this on EVERY container start,
 		// so "already current" must be the normal, silent outcome and not an error.
 		expect(await applyMigrations(raw)).toEqual([])
-		const { results } = await raw.prepare('SELECT name FROM schema_migrations ORDER BY name').all<{ name: string }>()
-		expect(results.map((r) => r.name)).toEqual([
-			'0001_init.sql',
-			'0002_jobs.sql',
-			'0003_zerops_targets.sql',
-			'0004_provider_envelopes.sql',
-			'0005_deployment_namespaces.sql',
-			'0006_immutable_namespace_resource_claim_owners.sql',
-			'0007_namespace_resource_claim_owner_coordinates.sql',
-			'0008_zerops_namespace_app_targets.sql',
-			'0009_operations_catalog_sync.sql',
-			'0010_operations_release_sync.sql',
-			'0011_operations_ingest_configs.sql',
+		const { results } = await raw
+			.prepare('SELECT bundle, name FROM control_schema_migrations ORDER BY name')
+			.all<{ bundle: string; name: string }>()
+		expect(results).toEqual([
+			{ bundle: 'control', name: '0001_init.sql' },
+			{ bundle: 'control', name: '0002_jobs.sql' },
+			{ bundle: 'control', name: '0003_zerops_targets.sql' },
+			{ bundle: 'control', name: '0004_provider_envelopes.sql' },
+			{ bundle: 'control', name: '0005_deployment_namespaces.sql' },
+			{ bundle: 'control', name: '0006_immutable_namespace_resource_claim_owners.sql' },
+			{ bundle: 'control', name: '0007_namespace_resource_claim_owner_coordinates.sql' },
+			{ bundle: 'control', name: '0008_zerops_namespace_app_targets.sql' },
+			{ bundle: 'control', name: '0009_operations_catalog_sync.sql' },
+			{ bundle: 'control', name: '0010_operations_release_sync.sql' },
+			{ bundle: 'control', name: '0011_operations_ingest_configs.sql' },
 		])
 	})
 

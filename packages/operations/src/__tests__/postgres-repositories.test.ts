@@ -1,5 +1,7 @@
+import type { IngestMessage } from '@fabrika/operations-contract'
 import { PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { createOperationsIngestQueue } from '../node/consumer.js'
 import { applyMigrations } from '../node/migrate.js'
 import { credentialVerifier } from '../pipeline.js'
 import { createPostgresOperationsRepositories, type OperationsRepositories, type RecordOccurrenceInput } from '../repositories.js'
@@ -50,6 +52,49 @@ function occurrence(eventId: string, receivedAt: number): RecordOccurrenceInput 
 }
 
 describe.skipIf(!hasPostgres)('Operations repositories on real Postgres', () => {
+	test('installs the shared jobs bundle and runs the Operations queue contract', async () => {
+		expect(await applyMigrations(db)).toEqual([])
+		const { results: ledger } = await db
+			.prepare('SELECT bundle, name FROM operations_schema_migrations ORDER BY bundle, name')
+			.all<{ bundle: string; name: string }>()
+		expect(ledger).toEqual([
+			{ bundle: 'operations', name: '0001_init.sql' },
+			{ bundle: 'operations', name: '0002_catalog.sql' },
+			{ bundle: 'operations', name: '0003_ingest.sql' },
+			{ bundle: 'operations', name: '0004_releases.sql' },
+			{ bundle: 'operations', name: '0005_health.sql' },
+			{ bundle: 'operations', name: '0006_operator_api.sql' },
+			{ bundle: 'platform-node', name: '0001_jobs.sql' },
+		])
+
+		const message: IngestMessage = {
+			projectId: 'queue-source',
+			fingerprint: 'queue-fingerprint',
+			eventId: 'queue-event',
+			title: 'Error: queued',
+			culprit: null,
+			level: 'error',
+			receivedAt: 1_000,
+			payload: { event_id: 'queue-event', message: 'queued' },
+		}
+		const queue = createOperationsIngestQueue(db, { now: () => 1_000 })
+		await queue.send(message)
+		const jobs = await queue.claim({
+			limit: 1,
+			visibilityTimeoutMs: 10_000,
+			decode: (value) => {
+				if (JSON.stringify(value) !== JSON.stringify(message)) throw new Error('unexpected Operations queue payload')
+				return message
+			},
+		})
+		expect(jobs).toHaveLength(1)
+		expect(jobs[0]?.payload.eventId).toBe(message.eventId)
+		const jobId = jobs[0]?.id
+		if (jobId === undefined) throw new Error('Operations queue did not return a job id')
+		await queue.ack(jobId)
+		expect((await db.prepare(`SELECT id FROM jobs WHERE queue = 'operations-ingest'`).all()).results).toEqual([])
+	})
+
 	test('applies the final schema and preserves exact occurrence semantics', async () => {
 		expect(await applyMigrations(db)).toEqual([])
 		await repositories.sources.upsert({

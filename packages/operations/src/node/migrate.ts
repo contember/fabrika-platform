@@ -1,53 +1,58 @@
-import { PostgresDatabase } from '@fabrika/platform-node'
-import { readdirSync, readFileSync } from 'node:fs'
+import {
+	applyPostgresMigrations,
+	definePostgresMigrationPlan,
+	platformNodePostgresMigrationBundle,
+	PostgresDatabase,
+	type PostgresMigration,
+	postgresMigrationFilenames,
+	type PostgresMigrationPlan,
+	readPostgresMigrationBundle,
+} from '@fabrika/platform-node'
 import { join } from 'node:path'
 
 const MIGRATION_LOCK_KEY = 6384217905
 const MIGRATIONS_DIR = join(import.meta.dir, '..', '..', 'migrations-postgres')
 
-export interface Migration {
-	name: string
-	sql: string
+export type Migration = PostgresMigration
+
+export function postgresMigrations(dir: string = MIGRATIONS_DIR): PostgresMigration[] {
+	return [...serviceBundle(dir).migrations]
 }
 
-export function postgresMigrations(dir: string = MIGRATIONS_DIR): Migration[] {
-	return readdirSync(dir)
-		.filter((file) => file.endsWith('.sql'))
-		.sort()
-		.map((file) => ({ name: file, sql: readFileSync(join(dir, file), 'utf8') }))
+export function postgresMigrationPlan(migrations: readonly PostgresMigration[] = postgresMigrations()): PostgresMigrationPlan {
+	return definePostgresMigrationPlan({
+		ledgerTable: 'operations_schema_migrations',
+		lockKey: MIGRATION_LOCK_KEY,
+		bundles: [
+			platformNodePostgresMigrationBundle(['0001_jobs.sql']),
+			{ name: 'operations', migrations, adoptLegacy: true },
+		],
+		legacy: {
+			table: 'schema_migrations',
+			// Both tables are created in Operations' atomic 0001 migration.
+			sentinelTables: ['sources', 'issues'],
+		},
+	})
 }
 
 export async function applyMigrations(
 	db: PostgresDatabase,
-	migrations: Migration[] = postgresMigrations(),
+	migrations: readonly PostgresMigration[] = postgresMigrations(),
 ): Promise<string[]> {
-	await db.prepare(`CREATE TABLE IF NOT EXISTS schema_migrations (
-		name TEXT PRIMARY KEY,
-		applied_at INTEGER NOT NULL
-	)`).run()
-	await db.prepare(`SELECT pg_advisory_lock(${MIGRATION_LOCK_KEY})`).run()
-	try {
-		const { results } = await db.prepare('SELECT name FROM schema_migrations').all<{ name: string }>()
-		const applied = new Set(results.map((row) => row.name))
-		const fresh: string[] = []
-		for (const migration of migrations) {
-			if (applied.has(migration.name)) continue
-			await db.batch([
-				db.prepare(migration.sql),
-				db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)')
-					.bind(migration.name, Math.floor(Date.now() / 1000)),
-			])
-			fresh.push(migration.name)
-		}
-		return fresh
-	} finally {
-		await db.prepare(`SELECT pg_advisory_unlock(${MIGRATION_LOCK_KEY})`).run()
-	}
+	return postgresMigrationFilenames(await applyPostgresMigrations(db, postgresMigrationPlan(migrations)), 'operations')
+}
+
+function serviceBundle(directory: string) {
+	return readPostgresMigrationBundle({
+		name: 'operations',
+		directory,
+		adoptLegacy: true,
+	})
 }
 
 async function main(): Promise<void> {
 	const url = process.env['FABRIKA_OPERATIONS_DATABASE_URL']
-	if (!url) throw new Error('FABRIKA_OPERATIONS_DATABASE_URL is required')
+	if (url === undefined || url.trim() === '') throw new Error('FABRIKA_OPERATIONS_DATABASE_URL is required')
 	const db = PostgresDatabase.connect(url, { max: 1 })
 	try {
 		const applied = await applyMigrations(db)
@@ -58,8 +63,9 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-	main().catch((error: unknown) => {
-		console.error('migration failed:', error instanceof Error ? error.message : 'unknown error')
+	main().catch(() => {
+		// Driver errors may contain the credential-bearing connection URL.
+		console.error('migration failed')
 		process.exit(1)
 	})
 }
