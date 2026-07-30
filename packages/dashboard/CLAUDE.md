@@ -18,6 +18,8 @@ bun run build        # gen + tsc + vite build → dist/ (what the worker serves)
   under `src/routes/`. `typecheck` and `build` run `gen` first.
 - **API DTO types come from runtime-neutral contract packages.** `src/lib/api.ts` re-exports
   `@fabrika/control-contract`; access routes consume `@fabrika/iam-contract` through `@fabrika/iam-ui`.
+  Operations routes consume `@fabrika/operations-contract` through
+  `@fabrika/operations-ui`.
   Keep browser code away from the runtime entrypoints of `@fabrika/control`, `@fabrika/iam`, and
   `@fabrika/runner-container` or `@fabrika/runner-cloudflare`.
 - **Auth is propustka-native (no Cloudflare Access edge).** On a 401 carrying a `loginUrl` (the worker's
@@ -29,8 +31,8 @@ bun run build        # gen + tsc + vite build → dist/ (what the worker serves)
   its own widgets (pickers, grant grid, JSON view) written in these tokens and declares no base rules —
   it used to carry a full standalone stylesheet, which only forced this one into defensive
   re-statements. Do not reintroduce base, shell, table, button or badge rules there.
-- **The icon set lives in `@fabrika/iam-ui/icon`**, re-exported by `src/components/Icon.tsx`, so both
-  halves of the console draw from one set. `BrandMark` stays here — it is this app's identity.
+- **The icon set lives in `@fabrika/iam-ui/icon`**, re-exported by `src/components/Icon.tsx`, so all
+  three planes draw from one set. `BrandMark` stays here — it is this app's identity.
 - **The Access rail is five items and stays five: Overview · Users · Credentials · Permissions · Audit.**
   Each answers a different question — what is the state of access, who are the people, what gets in
   without a person, what does a grant mean, what happened. It was seven pages that cut the same
@@ -48,7 +50,7 @@ bun run build        # gen + tsc + vite build → dist/ (what the worker serves)
 - A route is `createPage().loader(...).route('/path').render(...)` (default export) under `src/routes/`.
 - All API calls go through the typed `api` helper (`api.get/post/put/patch/del`) in `src/lib/api.ts` — same-origin, `credentials: 'include'`.
 - **Status is a lamp, category is a chip or badge** (`components/Status.tsx`, and iam-ui's mirror of it).
-  Both planes speak this one language; nothing renders a coloured pill for a lifecycle state.
+  All three planes speak this one language; nothing renders a coloured pill for a lifecycle state.
 - **One filled button per page**, and it is that page's single constructive step. Filtering, editing and
   repairing are outline or ghost; irreversible acts live in a `.danger-zone` at the foot of the page.
 - **A page head is: back link, title, one line of purpose.** Every list filters through one `.filters`

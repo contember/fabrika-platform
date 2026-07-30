@@ -31,10 +31,20 @@ composition, runs database migrations, and waits for health checks.
 3. triggers a deploy and waits for an external app-version id;
 4. hard-kills control while the emulated pipeline is `BUILDING`;
 5. starts control after the pipeline becomes `ACTIVE` and verifies startup
-   reconciliation;
-6. checks the reconciled IAM schema, public and authenticated proxy routes, and
+   reconciliation plus terminal release projection;
+6. verifies the explicit notes `publicOrigin`, stable managed ingest
+   configuration, and deploy-scoped release values on the app service;
+7. checks the reconciled IAM schema, public and authenticated proxy routes, and
    a real notes write to PostgreSQL;
-7. proves the notes container cannot reach the private control network.
+8. verifies that the public Operations hostname hides health, catalog, and
+   operator routes and rejects an ingest envelope without a source credential;
+9. sends a credentialed Sentry envelope and observes one source-scoped issue
+   after asynchronous Postgres queue consumption;
+10. stops Operations, persists duplicate queued deliveries, restarts the real
+    consumer, and proves stable issue identity, exactly-once counting, and queue
+    drain;
+11. proves the notes container cannot reach the private control or Operations
+    networks.
 
 To discard all local databases, object data, emulator state, and generated
 credentials, use:
@@ -52,6 +62,7 @@ This command removes only the `fabrika-local` Compose volumes and
 | ------------------------ | -------------------------------- |
 | Unified Fabrika console  | `http://control.localhost:18080` |
 | IAM auth and public JWKS | `http://iam.localhost:18080`     |
+| Operations public ingest | `http://errors.localhost:18080`  |
 | Notes example app        | `http://notes.localhost:18081`   |
 
 The generated credentials and proxy manifests live under the ignored
@@ -63,21 +74,26 @@ tracked files.
 
 The composition runs these real components:
 
-- IAM, control, and notes Bun servers;
+- IAM, Operations, control, and notes Bun servers;
 - their real PostgreSQL migrations and data stores;
-- MinIO through the production S3-compatible log-store adapter;
+- MinIO through the production S3-compatible run-log and Operations blob-store
+  adapters;
+- the Operations Postgres job consumer and scheduled health/notification
+  maintenance;
 - the proxy authorization service and Caddy in shared network namespaces;
 - separate private `platform` and `apps-prod` networks.
 
-The unified console uses its built-in local admin persona, so Delivery and Access
-open without an external OIDC provider. Access requests still cross the real
-control-to-IAM gateway and use IAM's real database and authorization handlers.
-Machine bootstrap, app API keys, access-token minting, JWKS verification, and
-schema reconciliation also use the real IAM service.
+The unified console uses its built-in local admin persona, so Delivery, Access,
+and Operations open without an external OIDC provider. Access requests still
+cross the real control-to-IAM gateway. Operations requests cross the
+transport-only control gateway to the private Operations operator API. Machine
+bootstrap, app API keys, access-token minting, JWKS verification, schema
+reconciliation, Operations catalog/release projection, and managed app
+environment assembly use the real services.
 
 Notes can reach the public IAM address through the narrow `iam-public` network
 to fetch JWKS. It cannot resolve or reach the private control, platform
-PostgreSQL, MinIO, or IAM RPC services.
+PostgreSQL, MinIO, IAM RPC, or Operations services.
 
 The stateful Zerops emulator implements only the REST calls used by
 `@fabrika/provider-zerops`: projects, services, service variables, imports, and

@@ -2,12 +2,7 @@
 id: 34
 title: Adopt existing Poplach state and retire the standalone app
 blocked-by:
-  - ./28-model-observed-app-environments.md
-  - ./29-integrate-operations-console.md
-  - ./30-provision-error-ingest.md
-  - ./31-correlate-releases-and-source-maps.md
-  - ./32-add-operations-health.md
-  - ./33-port-operations-runtime.md
+  - ./35-prove-operations-browser-and-sdk-workflows.md
 ---
 
 # 34 — Adopt existing Poplach state and retire the standalone app

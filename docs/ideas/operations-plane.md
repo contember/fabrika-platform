@@ -1,14 +1,14 @@
 # Operations plane
 
-Fabrika currently owns two parts of an application's lifecycle:
+Fabrika owns three parts of an application's lifecycle:
 
 - **Delivery** changes what is running.
 - **Access** decides who and what may reach it.
+- **Operations** reports what happens after a release reaches production.
 
-It has no first-party answer for what happens after a release reaches production.
-Poplach is a standalone Sentry replacement that already covers the first useful
-slice of that problem: error ingestion, grouping, source maps, issue triage,
-regressions, alerts, and ingest-pipeline health.
+The shipped Operations foundation absorbs the useful first slice from Poplach:
+error ingestion, grouping, source maps, issue triage, regressions, alerts,
+release correlation, and active health checks.
 
 This document explores a broader **Operations** plane. It is a target-state idea,
 not a commitment to build every capability below. The initial committed slice is
@@ -16,7 +16,7 @@ defined by [ADR-0016](../decisions/0016-independent-operations-plane.md).
 
 ## Product shape
 
-The console would expose three equal planes:
+The console exposes three equal planes:
 
 | Plane      | Question                                                           |
 | ---------- | ------------------------------------------------------------------ |
@@ -25,9 +25,9 @@ The console would expose three equal planes:
 | Operations | What is happening in the running system, and what needs attention? |
 
 Operations is deliberately broader than observability. It includes observing a
-system, deciding that it needs attention, and recording the response. The initial
-Poplach capability would appear as **Errors**, not as the whole definition of the
-plane.
+system, deciding that it needs attention, and recording the response. The
+initial Poplach capability appears as **Errors**, not as the whole definition of
+the plane.
 
 Possible modules:
 
@@ -151,17 +151,19 @@ schema or storage engine.
 
 ## Open questions
 
-- Should the implementation and packages use the name `operations`, while
-  Poplach remains only the historical product name for Errors?
-- Which Sentry ingestion and SDK compatibility guarantees are worth preserving?
+- Beyond the shipped envelope subset, which Sentry ingestion and SDK
+  compatibility guarantees are worth preserving?
 - Which standard telemetry protocols should be accepted for logs, metrics, and
   traces?
 - What are the default retention, sampling, aggregation, and per-application
   quota policies?
-- Is active uptime monitoring part of every installation or an optional module?
 - Which notification transports are first-party, and where do their secret
   references live?
 - Does incident management belong in Fabrika, or should Operations only supply
   evidence and outbound alerts to another system?
 - When does a signal need provider-specific storage rather than a shared
   implementation over the existing platform ports?
+
+Concrete completion work for the current Errors slice lives in
+[browser and SDK proof](../backlog/35-prove-operations-browser-and-sdk-workflows.md)
+and [Zerops release artifact correlation](../backlog/36-complete-zerops-release-artifact-correlation.md).

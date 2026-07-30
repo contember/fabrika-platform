@@ -58,6 +58,21 @@ artifact through `normalizeRegistration`. The resulting provider coordinates are
 stored together. Namespace assignment through the dashboard or API sends the
 existing app target and artifact envelopes unchanged.
 
+An application environment stores provider routing `domain` separately from its
+optional `public_origin`. The latter is an explicit, canonical HTTP(S) origin
+for user-facing runtime observation; control never derives it from the provider
+domain. Registration omission stores `null`. Environment PUT omission preserves
+the existing value, while explicit `null` clears it. Control projects the value
+to Operations, where active HTTP checks use it as their origin. A missing origin
+leaves active health unavailable rather than inventing an endpoint.
+
+Deployment then adds control-owned managed environment values independently of
+the namespace and provider artifact. Providers reject an app-authored
+`FABRIKA_OPERATIONS_DSN` or `FABRIKA_RELEASE`, inject current values at their
+native service boundary, and remove stale values when control sends `null`.
+These reserved values do not become resource claims or fields in an opaque
+provider envelope.
+
 ## Resource claims
 
 `namespace_resource_claims` prevents two owners from declaring the same

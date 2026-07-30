@@ -47,9 +47,13 @@ entrypoint reaches the other provider or runtime.
 
 ## Architecture
 
-`fetch` routes: `/api/health` → ok · `POST /webhooks/github` → webhook · `/api/*` → ACL-gated control
-surface · everything else → dashboard `ASSETS`. (`/healthz` is
-added by the Bun server only, for the platform health check.) A trigger writes a `pending` run to the
+`fetch` routes: `/api/health` → ok · `POST /webhooks/github` → webhook ·
+`/iam/admin/*` → transport-only IAM gateway · `/operations/api/*` →
+transport-only Operations gateway · `/api/*` → ACL-gated control surface ·
+everything else → dashboard `ASSETS`. (`/healthz` is added by the Bun server
+only, for the platform health check.) Neither gateway changes service ownership;
+IAM and Operations authenticate, authorize, and audit their own requests. A
+trigger writes a `pending` run to the
 database then enqueues. The consumer resolves the statically selected `ControlProvider` and calls its
 capabilities. Cloudflare hands the provider-owned job to vozka-runner. Zerops executes its provider
 session in process. Core owns registry/run writes, locking, secret resolution, and generic envelopes.
@@ -99,6 +103,16 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   `ControlProvider`; it has no provider registry and no provider-id branch. Cloudflare credentials live
   only in `WorkerBindings`; Zerops credentials live only in the process composition. Provider packages
   validate envelopes and own deploy, cancel, reconcile, and provider-managed secret behavior.
+- **Operations projection is asynchronous with respect to registry and deploy
+  success.** Control owns application/environment and deploy-run coordinates,
+  persists desired catalog/release revisions, and replays them after Operations
+  downtime. It assembles reserved `FABRIKA_OPERATIONS_DSN` and
+  `FABRIKA_RELEASE` values for every provider deploy; app-authored collisions
+  fail before provider effects.
+- **`app_envs.public_origin` is explicit observation configuration, not provider
+  routing.** It is a canonical HTTP(S) origin, remains independent of `domain`,
+  and is projected unchanged to Operations. PUT omission preserves the stored
+  value; explicit `null` clears it. Never derive it from a provider hostname.
 - **Run lifecycle is status-guarded + idempotent** (`src/run-lifecycle.ts`): `markRunStarted` only moves
   pending→running, so a redelivered queue message is a no-op. ack handled runs; retry only on an unexpected throw.
 - **The Cloudflare provider owns the runner boundary.** `CloudflareRunnerJob` and its validator live in
@@ -151,6 +165,10 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   carries create-copy-drop-rename rebuilds it needed because SQLite cannot ALTER a constraint; the Postgres
   set never reproduces them — it states the outcome once. What must match is the OUTCOME: `src/db.ts` runs
   against both unmodified. Add a change to BOTH sets, knowingly.
+- **The Bun migration wrapper owns `control_schema_migrations`, bundle
+  `control`, and advisory lock `4471902583`.** Bundle and filename form durable
+  identity. Legacy `schema_migrations` rows may be adopted only when the control
+  sentinels and migration effects prove ownership; see ADR-0017.
 - **Layering by `(app, env)` is the ORDER BY, not the rowids.** `getAppSecretsForEnv` / `getAppVarsForEnv`
   rank the all-env row before the env-specific one with an explicit `CASE WHEN env IS NULL THEN 0 ELSE 1 END`
   so the caller's last-write-wins loop lands on the narrower layer. Bare `ORDER BY name` left that tie to
@@ -160,5 +178,6 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   AND the surrounding source lines in the response body, so `createFetchHandler` wraps every request and
   `Bun.serve`'s `error()` backstops anything raised outside it. Both answer a bare `internal error`.
 - **The generated root `zerops.yaml` is the only platform build specification.**
-  `packages/installation-zerops/zerops/setups.ts` owns the typed IAM, control, and proxy setups; do not add per-package
+  `packages/installation-zerops/zerops/setups.ts` owns the typed IAM, Operations,
+  control, and proxy setups; do not add per-package
   `zerops.yaml` files.

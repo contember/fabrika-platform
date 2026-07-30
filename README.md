@@ -1,7 +1,8 @@
 # fabrika-platform
 
-An application platform for a small fleet of apps: **who may do what** (identity, policy, audit) and
-**how it ships** (declare a deploy surface, provision it, deploy it) — behind one control plane, on
+An application platform for a small fleet of apps: **who may do what**
+(identity, policy, audit), **how it ships** (declare, provision, deploy), and
+**what happens afterward** (errors, releases, triage, alerts, and health) — on
 more than one cloud.
 
 fabrika is the merger of two Cloudflare-only projects: **propustka** (IAM & audit) and **vozka**
@@ -9,8 +10,9 @@ fabrika is the merger of two Cloudflare-only projects: **propustka** (IAM & audi
 platform — Cloudflare or [zerops.io](https://zerops.io) — and the whole stack runs there.
 
 > **Status.** The Cloudflare path works. The portable runtime, static provider boundary, Zerops
-> provider, and auth proxy are implemented and locally verified. Zerops support has not yet been run
-> against a real account, so treat it as well-formed but unexercised.
+> provider, auth proxy, and Operations foundation are implemented and locally
+> verified. Zerops support has not yet been run against a real account, so treat
+> it as well-formed but unexercised.
 
 ## What it does
 
@@ -19,6 +21,7 @@ platform — Cloudflare or [zerops.io](https://zerops.io) — and the whole stac
 | **Identity & policy** | OIDC SSO for humans, opaque `px_` keys for machines, AWS-IAM-style policies over scope dimensions each app owns, plus an audit log.                                       |
 | **Enforcement**       | Nothing reaches an app until auth rules pass. Only the proxy is publicly routed; app services stay internal.                                                              |
 | **Deploy**            | An app declares its resources, its authz vocabulary and its build pipeline in one config. fabrika provisions and deploys it, triggered by a git push, a tag, or a button. |
+| **Operations**        | Sentry-compatible error ingest, grouping, scoped triage, release/source-map correlation, alerts, and active health checks.                                                |
 
 ## Packages
 
@@ -32,6 +35,11 @@ embedded in the Fabrika console).
 **Application runtime** — `@fabrika/app` (Fetch-based HTTP routing, middleware, typed RPC, structural
 errors, object-level authorization, a typed browser client, and Worker/Bun lifecycle adapters).
 
+**Operations** — `@fabrika/operations-contract` (browser/runtime-safe
+protocols) · `@fabrika/operations` (portable ingest, persistence, triage,
+release, source-map, alert, and health service) · `@fabrika/operations-ui`
+(Operations feature routes embedded in the Fabrika console).
+
 **Deploy contract and core** — `@fabrika/provider-contract` (open provider interfaces and versioned
 JSON envelopes) · `@fabrika/engine` (provider-neutral plan executor) · `@fabrika/control` (registry,
 run lifecycle, and composition roots) · `@fabrika/control-contract` (runtime-neutral control API DTOs
@@ -42,11 +50,11 @@ and run-log shape) · `@fabrika/platform` (runtime ports) · `@fabrika/platform-
 adapter, and the internal `fabrika-cloudflare-executor`) · `@fabrika/provider-zerops` (authoring,
 static manifest compiler, API client, deploy implementation, and control adapter).
 
-**Installation and operations** — `@fabrika/installation-contract` (open platform CLI contract) ·
+**Installation and console** — `@fabrika/installation-contract` (open platform CLI contract) ·
 `@fabrika/installation-cloudflare` and `@fabrika/installation-zerops` (provider-specific installation
 plans) · `@fabrika/cli` (the single public `fabrika` command) · `@fabrika/dashboard` (the unified
-Delivery and Access console) · `@fabrika/proxy-contract` and `@fabrika/proxy` (proxy wire contract and
-auth enforcement).
+Delivery, Access, and Operations console) · `@fabrika/proxy-contract` and
+`@fabrika/proxy` (proxy wire contract and auth enforcement).
 
 **Cloudflare runner** — `@fabrika/runner-contract` (Worker↔container transport) ·
 `@fabrika/runner-container` (plain-Bun deploy process and image) · `@fabrika/runner-cloudflare`

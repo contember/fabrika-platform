@@ -62,6 +62,11 @@ service, so the service has to exist before its secrets can be set. Bring-up is
 `zerops.yaml` carries `${notesdb_connectionString}`, which is a _reference_ to another service's
 platform-held variable, not a value.
 
+Fabrika also writes `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE` as managed
+service-level variables before triggering a deploy. They are intentionally
+absent from the static app manifest and from this repository's `zerops.yaml`.
+Applications must not declare those reserved names.
+
 ## Namespace isolation fixtures
 
 The example covers all three namespace tiers without changing the application protocol:
@@ -101,3 +106,9 @@ and nothing else can reach the port.
 Nobody has run this against a real Zerops account. The import document is valid against Zerops'
 published JSON schema, `zerops.yaml` is valid against its own published schema, and the deploy's call
 sequence is asserted against the real driver — but "well-formed" is not "it deploys".
+
+The real Operations custom domain and proxy path isolation are therefore also
+unproven. In addition, Zerops owns the build filesystem and the current provider
+does not publish its source maps to Operations; that remaining release-artifact
+work is tracked in
+[backlog 36](../../docs/backlog/36-complete-zerops-release-artifact-correlation.md).

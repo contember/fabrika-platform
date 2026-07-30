@@ -20,7 +20,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-
-- [Operations plane foundation](sprint-2026-07-30-operations-plane.md) — absorb
-  Poplach as portable Errors and connect it to Delivery, Access, and the unified
-  console.

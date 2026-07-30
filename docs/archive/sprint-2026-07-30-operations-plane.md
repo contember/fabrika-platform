@@ -1,3 +1,86 @@
+> **OUTCOME — shipped 2026-07-30.** Fabrika now has an independent Operations
+> plane for Sentry-compatible error ingest, portable processing and persistence,
+> scoped triage, deploy-owned releases, source maps, active health checks, and a
+> third workspace in the unified console. Cloudflare and Bun/Zerops composition
+> roots install the service. Explicit application public origins feed active
+> health without conflating them with provider routing domains. Release
+> reconciliation survives control restarts and keeps the latest observed retry
+> as the commit summary. The local stack proves managed ingest, release
+> projection, issue persistence, queued-work recovery, and private-network
+> isolation. The Zerops composition remains validated locally and against
+> published schemas, not a real account.
+>
+> **Commit map.** WU1 → `02e9b8a`; WU2 → `846d222`, `b3580aa`, `2333dcf`; WU3 →
+> `b552c31`, `dbf2fa3`, `b27754f`, `e4879a2`, `028b4fb`; WU4 → `5082ddb`,
+> `0a8cc20`, `dcbf81e`, `fff19b2`, `81e23bf`, `3ab0065`; WU5 → `9fc3624`,
+> `81e23bf`, `1a997ed`, `ab0f6ce`; WU6 → `6af4f8f`, `23905fd`, `cddfa89`;
+> WU7 → `77eb5d3`, `b27754f`, `dbf2fa3`, `e4879a2`, `cf1dedf`, `d52d24f`;
+> WU8 → `1df9cc6`, `e4879a2`, `4827afd`, `1ef9541`; WU9 migration decision,
+> implementation, and final verification fixes → `cf17797`, `eacc01d`,
+> `9c858f0`, `10deffd`.
+>
+> **Closure hardening.** Control models `publicOrigin` explicitly and projects it
+> without deriving it from a provider domain. Bun migration runners compose
+> reusable `platform-node` bundles into service-owned, bundle-qualified ledgers.
+> Operations mounts the private release-reconcile route, forces secure browser
+> session cookies from configured public-host state behind TLS-terminating
+> proxies, and bounds and revalidates HTTPS-only webhook delivery. Provider
+> restart reconciliation completes terminal run and release state. A commit
+> summary follows its latest observed retry without collapsing distinct run
+> links. Commit `1ef9541` extends the local smoke through managed configuration,
+> ingest, persistence, duplicate delivery, restart, and network-isolation
+> witnesses. DNS resolution/rebinding remains deferred rather than claimed
+> secure.
+>
+> **Verification.**
+>
+> - **Final post-fix gate:** all 30 workspace typechecks passed. The full
+>   `bun test` run reported 1,287 pass, 134 skip, 0 fail, and 4,700 expectations
+>   across 1,421 tests in 154 files. The skips are the opt-in PostgreSQL and S3
+>   suites, not passing backend evidence.
+> - **Static checks:** lint exited 0 after checking 553 files, with 0 errors, 6
+>   warnings, and 353 informational findings. `format:check` and
+>   `git diff --check` passed.
+> - **Real PostgreSQL 17:** the explicit backend suites reported 123 pass, 0
+>   fail, and 505 expectations. A later focused post-fix migration proof
+>   reported 14 pass, 0 fail, and 66 expectations. These runs overlap and are
+>   not summed as a unique total. The Operations legacy case recognized seven
+>   qualified migration identities; its later regression proves that only
+>   `platform-node/0001_jobs.sql` is fresh and asserts the exact CLI message.
+> - **Real MinIO:** 9 pass, 0 fail, and 18 expectations. Verification cleanup
+>   left zero test containers.
+> - **Generated Zerops artifacts:** `gen:check` validated all five schemas, and
+>   the platform plan validated all five generated artifacts. This is schema
+>   evidence, not a real-account deploy.
+> - **Cloudflare:** Wrangler dry-runs passed for control
+>   (333.36 KiB / 73.55 KiB gzip), Operations
+>   (385.87 KiB / 80.28 KiB gzip), and runner
+>   (63.77 KiB / 16.64 KiB gzip). Runner emitted only the expected warning that
+>   the development instance type was renamed to `lite`.
+> - **Offline and local compositions:** the control offline verifier passed all
+>   six plan steps without cloud mutation. `local:reset`, `local:smoke`, and
+>   `local:down` passed; the smoke completed run
+>   `019fb472-e18f-7027-b471-b54290cb4fad`.
+> - **Docs:** dprint and diff checks passed. The agent-docs lint reported only
+>   the known ignored compatibility symlink `docs/AGENTS.md -> CLAUDE.md`.
+> - **Not executed:** browser/official-Sentry-SDK proof remains
+>   [backlog 35](../backlog/35-prove-operations-browser-and-sdk-workflows.md);
+>   Zerops source-map publication and a credentialed real-account deployment
+>   remain [backlog 36](../backlog/36-complete-zerops-release-artifact-correlation.md)
+>   and [backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md).
+>
+> **Backlog closed.** Items 27–33 were consumed. Remaining proof is tracked in
+> [35](../backlog/35-prove-operations-browser-and-sdk-workflows.md) and
+> [36](../backlog/36-complete-zerops-release-artifact-correlation.md); remaining
+> activation and egress hardening is tracked in
+> [37](../backlog/37-activate-zerops-managed-environment-transactionally.md) and
+> [38](../backlog/38-add-dns-safe-operations-egress.md). A real
+> Zerops account remains [05](../backlog/05-bring-up-on-a-real-zerops-account.md);
+> live state adoption and standalone Poplach retirement remain
+> [34](../backlog/34-retire-standalone-poplach.md). Logs, general-purpose
+> metrics, traces, incidents, provider telemetry unavailable at the foundation
+> boundary, and a portable email transport remain outside this shipped slice.
+
 # Sprint — Operations plane foundation (2026-07-30)
 
 **Goal.** Ship the first portable Operations plane by absorbing Poplach as
@@ -7,7 +90,7 @@ compositions.
 
 **Theme.** Runtime feedback becomes a first-party platform capability without
 turning control into a telemetry service. The batch consumes
-[backlog 27–33](../backlog/27-absorb-poplach-service.md): preserve Poplach's
+backlog 27–33: preserve Poplach's
 useful Sentry-replacement behaviour, replace its duplicate project model, add
 release and health context, mount one Operations console surface, and supply
 both runtime implementations. Credentialed adoption of any live standalone
@@ -512,6 +595,10 @@ installation remains [backlog 34](../backlog/34-retire-standalone-poplach.md).
 - Repository-operation contracts follow ADR-0015. New generic platform ports
   require more than one domain consumer; Operations-only seams stay with
   Operations.
+- [ADR-0017](../decisions/0017-service-owned-postgres-migrations.md) makes each
+  Bun service's Postgres migration ledger bundle-qualified and service-owned.
+  Operations composes the reusable `platform-node` job-queue bundle before its
+  domain bundle.
 - Any discovery that changes these durable cross-service or credential
   boundaries graduates to a new ADR before implementation continues.
 
@@ -532,7 +619,12 @@ Do not start the credentialed cutover in backlog 34 from this sprint.
 
 ## Run log
 
-<!-- Append as you work: discoveries, deviations, blockers. Graduate each entry:
-     changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
-     transient → leave it (dies with the sprint on archive). After graduating,
-     trim to a one-line pointer ("→ ADR-0007"). -->
+- Postgres migration ownership and reusable dependency bundles →
+  [ADR-0017](../decisions/0017-service-owned-postgres-migrations.md).
+- Zerops does not yet publish source maps from its platform-owned build
+  filesystem → [backlog 36](../backlog/36-complete-zerops-release-artifact-correlation.md).
+- Zerops service variables are written before an asynchronous app version is
+  known to be active → [backlog 37](../backlog/37-activate-zerops-managed-environment-transactionally.md).
+- Syntax validation alone cannot stop DNS rebinding or private-address egress
+  from webhooks and active health checks →
+  [backlog 38](../backlog/38-add-dns-safe-operations-egress.md).

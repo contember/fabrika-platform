@@ -1,11 +1,11 @@
 # Portability surface
 
 Where fabrika touches Cloudflare, and what each touch point becomes when the
-control plane runs on Zerops. Both runtime adapter sets are implemented. The
+platform runs on Zerops. Both runtime adapter sets are implemented. The
 Cloudflare entrypoints use native bindings; the Bun entrypoints use Postgres,
 S3-compatible storage, HTTP, static files, and platform cron.
 
-## Control plane — port inventory
+## Control and Operations — port inventory
 
 | Cloudflare primitive        | Portable answer                                                                       | Notes                                                                                                                                                 |
 | --------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -23,6 +23,21 @@ and `WaitUntil`, and they live in
 [`@fabrika/platform`](../../packages/platform/src/). Cloudflare implementations sit
 with the workers that use them; the Bun/Postgres/S3 set is
 [`@fabrika/platform-node`](../../packages/platform-node/).
+
+Operations uses the same ports for a different workload:
+
+| Capability                        | Cloudflare                                 | Bun/Zerops                                                                    |
+| --------------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------- |
+| Domain and operator state         | D1 with Operations capability repositories | PostgreSQL with the same repository contracts and explicit dialect operations |
+| Raw events and source maps        | R2 through `BlobStore`                     | S3-compatible object storage through `S3BlobStore`                            |
+| Accepted ingest                   | Cloudflare Queue plus DLQ                  | `PostgresJobQueue` plus `PostgresJobConsumer`                                 |
+| Periodic checks and notifications | Worker `scheduled` handler                 | Zerops cron invoking the Bun one-shot                                         |
+| Exact occurrence counts           | SQL occurrence index                       | SQL occurrence index                                                          |
+
+Processed and dead-event facts come from durable Operations stores. Per-source
+provider queue depth and reject counters are currently explicit `unavailable`
+telemetry values in both compositions; the health contract does not fabricate
+zeros when those facts cannot be obtained.
 
 ## Deploy layers — how portable each one actually is
 
@@ -119,7 +134,25 @@ only `env.ts`, `index.ts`, `db.ts` and the test harness are platform-specific.
 
 Sequencing note that paid off: the **test harness was ported first**, before any
 production code, so dialect bugs surfaced against real tests rather than against
-production traffic. Both services now have a live-Postgres suite that applies the
-shipped migrations and drives every portable repository capability; those suites
+production traffic. IAM, control, and Operations have live-Postgres suites that
+apply the shipped migrations and drive their portable repository capabilities; those suites
 skip when `FABRIKA_TEST_POSTGRES_URL` is unset, so a green run with skips proves
 nothing about this half.
+
+## Operations (`@fabrika/operations`) — port assessment
+
+The shared ingest, grouping, triage, release, source-map, health, alert, and
+operator code imports neither Cloudflare nor Bun runtime modules. Runtime
+composition lives in `src/platform-cf.ts` and `src/node/`.
+
+Operations persistence is split by complete repository capabilities under
+ADR-0015. Its SQLite and Postgres migrations describe the same final domain
+schema, while raw payload and source-map behavior is tested against both an
+in-memory blob store and a real S3-compatible endpoint. Real Postgres and S3
+suites skip unless `FABRIKA_TEST_POSTGRES_URL` and `FABRIKA_TEST_S3_*` are set.
+
+On Bun, Operations composes the reusable `platform-node` Postgres job-queue
+migration bundle before its service-owned bundle. IAM, control, and Operations
+use separate bundle-qualified ledgers and stable advisory locks as required by
+[ADR-0017](../decisions/0017-service-owned-postgres-migrations.md). Cloudflare D1
+migration history is unchanged.

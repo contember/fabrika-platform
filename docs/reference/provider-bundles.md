@@ -57,6 +57,23 @@ A provider may also implement:
 - `namespaces` for provider-owned placement validation, resource claims,
   provisioning, reconciliation, and operator planning.
 
+Every deploy receives a provider-neutral `managedEnvironment` map assembled by
+control. The current reserved values are the source-scoped
+`FABRIKA_OPERATIONS_DSN` and deploy-scoped `FABRIKA_RELEASE`. Providers merge
+these values at their native deployment seam and reject app-authored collisions.
+The Cloudflare provider passes them through the runner job; the Zerops provider
+writes them as service-level variables before triggering the platform build.
+`null` removes a previously managed value. The remaining question of making
+those Zerops writes activation-consistent with an asynchronously successful app
+version is tracked in
+[backlog 37](../backlog/37-activate-zerops-managed-environment-transactionally.md).
+
+An optional `artifactUpload` contains the bounded, release-scoped Operations
+source-map endpoint and bearer. The Cloudflare runner consumes it where the build
+files exist. The Zerops provider does not yet have a corresponding build-side
+artifact hook; see
+[backlog 36](../backlog/36-complete-zerops-release-artifact-correlation.md).
+
 Shared lifecycle code calls these capabilities directly. It does not select from
 a runtime registry and does not branch on `cloudflare` or `zerops`.
 
@@ -85,6 +102,9 @@ the provider operation id in `runs.external_run_id`. Provider credentials do not
 belong in these envelopes; each composition root supplies them only for live
 operations.
 
+Managed environment values and artifact-upload credentials are per-run inputs.
+They are never persisted inside provider target or artifact envelopes.
+
 Deployment namespaces have their own provider envelope in
 `deployment_namespaces.provider_target_json`. `app_envs.namespace_id` assigns an
 environment to a placement. Core stores provider resource keys in
@@ -110,8 +130,10 @@ The Zerops installation starts at `packages/control/src/node/server.ts`.
 Zerops credentials, and the proxy-manifest synchronization hook. Deploy
 execution stays in the Bun process. `createZeropsControlProvider` requires an
 executor; the composition root injects `@fabrika/engine` and there is no
-provider-local fallback lifecycle. Accepted app-version ids are reconciled through
-the provider capability after restarts.
+provider-local fallback lifecycle. Accepted app-version ids are reconciled
+through the provider capability after restarts. Control then records the
+terminal run and projects its terminal release state to Operations before
+releasing the run lock.
 
 `packages/control/src/__tests__/entrypoint-isolation.test.ts` walks both import
 graphs. It verifies that each root reaches only its selected provider and runtime,

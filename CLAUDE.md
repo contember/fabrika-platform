@@ -1,12 +1,17 @@
 # fabrika-platform
 
-An application platform: identity/policy/audit (the IAM half) plus declare-provision-deploy (the
-control-plane half), for a small fleet of apps, on more than one cloud. Merged from **propustka**
-(IAM) and **vozka** (deploy control plane), both of which were Cloudflare-only.
+An application platform with three planes: Delivery for
+declare/provision/deploy, Access for identity/policy/audit, and Operations for
+runtime errors, releases, source maps, triage, alerts, and health. It targets a
+small fleet of apps on more than one cloud. Delivery and Access were merged from
+**vozka** and **propustka**; Operations absorbed the first useful slice of
+**Poplach**.
 
 **Status.** The merge has landed, the Cloudflare path works, and the multi-cloud seams are built: the
 platform ports, static provider bundles, a Postgres/S3/Bun implementation set, a Zerops provider, and
-the auth proxy. **None of it has been run against a real Zerops account** — the generated artifacts
+the auth proxy. The Operations foundation is integrated on both compositions,
+including managed app configuration and the unified console. **None of it has
+been run against a real Zerops account** — the generated artifacts
 validate against Zerops' published JSON schema and the provider is proven in
 dry-run, which is not the same as a deploy that worked. Treat "Zerops support" as well-formed but
 unexercised until someone with an account says otherwise.
@@ -39,8 +44,9 @@ bun run format                       # dprint fmt  (format:check to verify only)
 CPU-heavy runs (full typecheck, full test suite) go through `cpu-lease run -n 4 -- …`.
 
 Suites that need a real backend **skip cleanly** when it is absent and print the variables and the
-docker command to get one: `FABRIKA_TEST_POSTGRES_URL` (the Postgres driver, and the Postgres schemas
-for `iam`/`control`) and `FABRIKA_TEST_S3_*` (the S3 blob store). A green `bun test` with everything
+docker command to get one: `FABRIKA_TEST_POSTGRES_URL` (the Postgres driver and
+the IAM/control/Operations schemas) and `FABRIKA_TEST_S3_*` (the S3 blob store).
+A green `bun test` with everything
 skipped does NOT mean the Postgres path works — run them before trusting that half.
 
 Per-package dev/build commands live in each package's own CLAUDE.md.
@@ -117,6 +123,10 @@ The public `fabrika` CLI infers an app provider from the object returned by that
   on error log a short message, never an error object that may carry a clone URL with an embedded token.
 - **`fabrika.config.ts` is the single source of truth** for a worker's own resources; `oblaka.ts` is a
   thin shim over it. Never re-declare resources in `oblaka.ts`.
+- **Postgres migration identity is `(bundle, filename)` in a service-owned
+  ledger** (ADR-0017). IAM, control, and Operations keep separate ledger tables
+  and stable advisory locks. Do not rename a bundle or migration file; the old
+  `schema_migrations` table is read-only legacy evidence.
 - **The deploy EXECUTOR is a separate worker** reached via a service binding, because a deploy's final
   step runs `wrangler deploy` inside a container — a container hosted in the control plane would reset
   itself mid-deploy. It is deployed out-of-band.

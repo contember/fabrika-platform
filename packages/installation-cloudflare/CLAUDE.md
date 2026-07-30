@@ -2,8 +2,10 @@
 
 The Cloudflare implementation of `@fabrika/installation-contract`.
 `fabrika platform init --provider=cloudflare <account>` stands up a Cloudflare
-account's Fabrika control-plane base. `plan` and `deploy` compose the runner and
-control platform configs. Assumes the root CLAUDE.md.
+account's Fabrika platform base. Init scaffolds a workflow that deploys IAM,
+Operations, then the runner/control pair. The `plan` and `deploy` commands
+themselves compose only that final runner/control pair. Assumes the root
+CLAUDE.md.
 
 The public executable and command routing live in `@fabrika/cli`. The deploy
 engine lives in `@fabrika/engine`.
@@ -34,6 +36,11 @@ engine lives in `@fabrika/engine`.
   (`PROPUSTKA_PROVISIONING_KEY`); IAM admits a bearer matching it as a synthetic admin (`resolveCaller`),
   and fabrika reconciles its schema with it. No local IAM mint. Stage 1 deploys IAM from the shared
   `contember/fabrika-platform` checkout and needs its OIDC and signing config in the Environment.
+- **Operations deploys between IAM and control.** Init records
+  `OPERATIONS_HOSTNAME`, creates `OPERATIONS_SYNC_KEY`, and supplies the public
+  IAM issuer. The Operations hostname exposes only ingest and source-map upload;
+  control reaches catalog and operator surfaces through a private service
+  binding.
 - **`@fabrika/engine` owns plan execution.** `platform init` triggers the scaffolded GitHub Actions
   pipeline; it does not deploy from the laptop. `platform plan` and `platform deploy` execute the
   provider-owned runner and control configs and remain distinct from app deployment.

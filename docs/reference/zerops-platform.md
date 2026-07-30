@@ -178,6 +178,27 @@ The public contract does not establish a secret-value read-back operation.
 
 ## Fabrika placement mapping
 
+The Fabrika platform project contains:
+
+- `iam`, `operations`, `control`, and the only public `proxy` runtime;
+- one shared `db` PostgreSQL service for IAM and control;
+- a separate `operationsdb` PostgreSQL service for Operations;
+- private `storage` for run logs and `operationsstorage` for raw events and
+  source maps.
+
+IAM, Operations, and control deploy in that dependency order. Operations uses
+`run.initCommands` for service-owned plus `platform-node` queue migrations,
+`run.start` for its HTTP server and Postgres job consumer, and `run.crontab` for
+health and notification maintenance. Its database and object store are separate
+failure/capacity domains from IAM and control.
+
+The platform proxy routes the configured Operations public hostname only to
+Sentry envelope ingest and authenticated source-map upload. The operator API,
+catalog/release sync, health endpoint, and Operations-to-IAM RPC stay on the
+private project network. Custom-domain binding remains a manual real-account
+step covered by
+[backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md).
+
 One Fabrika deployment namespace maps to one Zerops project and its
 namespace-owned proxy. The optional namespace-owned `postgres` service is present
 for the `cheap` preset. The app target envelope version 2 stores only its service
@@ -189,6 +210,10 @@ YAML.
 The full lifecycle, isolation presets, shared PostgreSQL trust domain, and
 operator interfaces are described in
 [`deployment-namespaces.md`](deployment-namespaces.md).
+
+Before each application deploy, control writes managed
+`FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE` values at service scope. Those
+values are not part of the app's static import document or provider envelope.
 
 ## Alpine custom runtime
 

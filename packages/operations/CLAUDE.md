@@ -14,6 +14,16 @@ dashboard. Cloudflare adapters live in `platform-cf.ts`; Bun-only lifecycle code
 lives under `src/node/`. The direct ingest surface and authenticated operator
 surface remain separate exports.
 
+The public hostname accepts only Sentry-compatible
+`/api/:projectId/envelope/` ingest and the authenticated source-map upload path.
+`/api/*` operator routes, `/private/catalog/reconcile`, and
+`/private/releases/reconcile` stay private. Control's same-origin gateway
+transports operator requests; Operations owns authentication, scoped
+authorization, IAM audit, and principal lookup. A configured public Operations
+host forces secure session cookies even when a TLS-terminating proxy forwards
+plain HTTP to the process; never derive the cookie flag from the internal
+request protocol.
+
 Exact occurrence counts come from the append-only SQL occurrence index. Do not
 replace that correctness source with sampled Analytics Engine data. Blob storage
 holds raw bodies, while SQL indexes every event, source map, and dead event; the
@@ -33,6 +43,21 @@ External senders receive the stable outbox dedup key as their idempotency key.
 Logs may contain the notification id and attempt number, never the target,
 payload, or caught error detail. Cloudflare owns scheduled invocation; the Bun
 consumer owns its abortable loop and can restart after `stop()`.
+Webhook targets are syntax-validated on write and delivery, HTTPS-only, and
+redirects are rejected; delivery is time-bounded and response bodies are
+cancelled. DNS resolution and rebinding remain a production egress concern
+shared with active HTTP health checks; see
+[`backlog 38`](../../docs/backlog/38-add-dns-safe-operations-egress.md).
+
+Releases are unique by source and immutable commit. Every deploy attempt has a
+separate run link. The commit-level release row is a latest-observed summary:
+`observedAt` updates `run_id`, state, finish time, and artifact state as one
+tuple, and delayed older projections cannot roll it back.
 
 `import/poplach-source-inventory.ts` pins and accounts for the Poplach source
 import at commit `8e0c79d662c187fe41eacd0fee9fe77fde668f1f`.
+
+The Bun migration wrapper composes the `platform-node` job-queue bundle before
+the Operations service bundle. Bundle names and filenames are durable migration
+identity under ADR-0017; do not rename them. Real Postgres and S3 tests require
+`FABRIKA_TEST_POSTGRES_URL` and `FABRIKA_TEST_S3_*` and otherwise skip.

@@ -67,6 +67,24 @@ The schema is attached to [`fabrika.config.ts`](./fabrika.config.ts), so a Cloud
 deploy reconciles it automatically. This example keeps the explicit command too, so the IAM
 flow can be exercised without a full deploy.
 
+## Managed Operations configuration
+
+A Fabrika-managed deploy reserves and injects two application variables:
+
+- `FABRIKA_OPERATIONS_DSN` identifies the application environment's
+  source-bound, write-only Sentry-compatible ingest endpoint.
+- `FABRIKA_RELEASE` identifies the deploy-owned immutable release.
+
+Do not declare either name in `fabrika.config.ts`; the provider rejects an
+app-authored collision. The Cloudflare runner receives both values with the
+deploy job and uploads bounded source maps through a separate release-scoped
+credential when artifacts exist.
+
+This example does not yet initialize a Sentry browser SDK. That application-level
+witness is tracked in
+[backlog 35](../../docs/backlog/35-prove-operations-browser-and-sdk-workflows.md);
+do not treat the managed variables alone as proof of SDK compatibility.
+
 ## Note: the harmless `auth_log` error
 
 In this standalone setup the auxiliary IAM Worker's local D1 is a fresh, unmigrated database

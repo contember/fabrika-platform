@@ -11,18 +11,19 @@ behaviour.
 <!-- index the reference docs here, one line each -->
 
 - [`overview.md`](overview.md) — what fabrika-platform is, why it exists, the
-  packages, and how a deploy and an auth check flow. **Start here.**
+  three product planes, packages, and primary request flows. **Start here.**
 - [`application-runtime.md`](application-runtime.md) — the `@fabrika/app` request
   pipeline, typed RPC, and authorization boundary.
 - [`zerops-platform.md`](zerops-platform.md) — the Zerops facts the decisions rest
   on, each with a source (and each unverified claim marked as such).
 - [`portability-surface.md`](portability-surface.md) — every Cloudflare primitive in
-  use and its portable counterpart; how portable each deploy layer is; the IAM port
-  assessment.
+  use and its portable counterpart; how portable each deploy layer is; the IAM
+  and Operations port assessment.
 - [`provider-bundles.md`](provider-bundles.md) — the static provider contract,
   versioned persistence boundary, composition roots, and unified CLI dispatch.
 - [`deployment-namespaces.md`](deployment-namespaces.md) — provider-neutral
   placement lifecycle, assignment and resource claims, Zerops isolation presets,
   and operator interfaces.
 - [`local-development.md`](local-development.md) — operate and verify the real
-  local data plane behind the narrow Zerops REST emulator.
+  local Delivery, Access, and Operations data plane behind the narrow Zerops REST
+  emulator.
