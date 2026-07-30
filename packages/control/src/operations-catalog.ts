@@ -1,9 +1,12 @@
 import {
+	DEFAULT_OPERATIONS_SERVICE_KEY,
 	OPERATIONS_CATALOG_PROTOCOL_VERSION,
-	type OperationsCatalogReconcileRequestV1,
+	type OperationsCatalogReconcileRequestV2,
+	type OperationsCatalogReconcileResponseV2,
 	operationsCatalogSnapshotHash,
-	type OperationsCatalogSourceV1,
+	type OperationsCatalogSourceV2,
 } from '@fabrika/operations-contract/catalog'
+import { buildOperationsDsn } from '@fabrika/operations-contract/ingest'
 import type { DeployLocks, HttpService } from '@fabrika/platform'
 import type { OperationsCatalogRepository, OperationsCatalogSyncState } from './db'
 import { uuidv7 } from './uuid'
@@ -27,6 +30,7 @@ export interface OperationsCatalogSyncDeps {
 	locks: DeployLocks
 	service?: HttpService
 	syncKey?: string
+	operationsOrigin?: string
 }
 
 /** A registry mutation always advances the desired revision before attempting delivery. */
@@ -54,13 +58,17 @@ async function runCatalogSync(
 			await deps.catalog.markFailed('operations catalog transport is not configured')
 			return { outcome: 'failed', revision: requestedRevision }
 		}
+		if (deps.operationsOrigin === undefined || deps.operationsOrigin.trim() === '') {
+			await deps.catalog.markFailed('operations public origin is not configured')
+			return { outcome: 'failed', revision: requestedRevision }
+		}
 
 		const holder = uuidv7()
 		if (!(await deps.locks.acquire(CATALOG_LOCK_KEY, holder, CATALOG_LOCK_TTL_MS))) {
 			return { outcome: 'coalesced', revision: requestedRevision }
 		}
 		try {
-			return await flushCatalog(deps.catalog, deps.service, deps.syncKey)
+			return await flushCatalog(deps.catalog, deps.service, deps.syncKey, deps.operationsOrigin)
 		} finally {
 			try {
 				await deps.locks.release(CATALOG_LOCK_KEY, holder)
@@ -80,6 +88,7 @@ async function flushCatalog(
 	catalog: OperationsCatalogRepository,
 	service: HttpService,
 	syncKey: string,
+	operationsOrigin: string,
 ): Promise<OperationsCatalogSyncSummary> {
 	let lastOutcome: OperationsCatalogSyncOutcome = 'unchanged'
 	let lastRevision: number | null = null
@@ -92,7 +101,7 @@ async function flushCatalog(
 		const snapshot = await catalog.snapshot()
 		const sources = snapshot.sources.map(projectSource)
 		const snapshotHash = await operationsCatalogSnapshotHash(sources)
-		const request: OperationsCatalogReconcileRequestV1 = {
+		const request: OperationsCatalogReconcileRequestV2 = {
 			protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
 			revision: snapshot.revision,
 			snapshotHash,
@@ -112,29 +121,57 @@ async function flushCatalog(
 		if (response.revision !== snapshot.revision) {
 			throw new CatalogSyncError('operations catalog returned a mismatched revision')
 		}
-		await catalog.markApplied(snapshot.revision, snapshotHash)
+		const configs = response.ingest.map((item) => {
+			const source = sources.find((candidate) =>
+				candidate.coordinate.appId === item.coordinate.appId
+				&& candidate.coordinate.environment === item.coordinate.environment
+				&& (candidate.coordinate.serviceKey ?? DEFAULT_OPERATIONS_SERVICE_KEY) === item.coordinate.serviceKey
+			)
+			if (source === undefined) throw new CatalogSyncError('operations catalog returned an unknown ingest source')
+			return {
+				appId: item.coordinate.appId,
+				environment: item.coordinate.environment,
+				serviceKey: item.coordinate.serviceKey,
+				credentialId: item.credentialId,
+				ingestProjectId: item.ingestProjectId,
+				dsn: buildOperationsDsn(operationsOrigin, source.ingestCredential.publicKey, item.ingestProjectId),
+			}
+		})
+		await catalog.markApplied(snapshot.revision, snapshotHash, configs)
 		lastOutcome = response.outcome
 	}
 	return { outcome: 'coalesced', revision: lastRevision }
 }
 
-function projectSource(row: { app_id: string; env: string; domain: string | null }): OperationsCatalogSourceV1 {
+function projectSource(row: {
+	app_id: string
+	env: string
+	domain: string | null
+	service_key: string
+	credential_id: string
+	public_key: string
+}): OperationsCatalogSourceV2 {
 	return {
 		coordinate: {
 			appId: row.app_id,
 			environment: row.env,
+			...(row.service_key === DEFAULT_OPERATIONS_SERVICE_KEY ? {} : { serviceKey: row.service_key }),
 		},
 		displayName: row.domain ?? `${row.app_id} / ${row.env}`,
 		// Control has no canonical public-origin field. A deploy domain is not necessarily an origin.
 		publicOrigin: null,
+		ingestCredential: {
+			id: row.credential_id,
+			publicKey: row.public_key,
+		},
 	}
 }
 
 async function sendCatalog(
 	service: HttpService,
 	syncKey: string,
-	payload: OperationsCatalogReconcileRequestV1,
-): Promise<{ revision: number; outcome: 'applied' | 'unchanged' | 'stale' }> {
+	payload: OperationsCatalogReconcileRequestV2,
+): Promise<OperationsCatalogReconcileResponseV2> {
 	let response: Response
 	try {
 		response = await service.fetch(
@@ -166,16 +203,97 @@ async function sendCatalog(
 	const protocolVersion = Reflect.get(value, 'protocolVersion')
 	const revision = Reflect.get(value, 'revision')
 	const outcome = Reflect.get(value, 'outcome')
+	const ingest = Reflect.get(value, 'ingest')
 	if (
 		protocolVersion !== OPERATIONS_CATALOG_PROTOCOL_VERSION
 		|| typeof revision !== 'number'
 		|| !Number.isSafeInteger(revision)
 		|| revision < 1
 		|| (outcome !== 'applied' && outcome !== 'unchanged' && outcome !== 'stale')
+		|| !Array.isArray(ingest)
 	) {
 		throw new CatalogSyncError('operations catalog returned an invalid response')
 	}
-	return { revision, outcome }
+	const parsedIngest = ingest.map(parseIngestResult)
+	if (outcome !== 'stale') assertCompleteIngestResponse(payload, parsedIngest)
+	return {
+		protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
+		revision,
+		outcome,
+		created: responseCount(value, 'created'),
+		updated: responseCount(value, 'updated'),
+		disabled: responseCount(value, 'disabled'),
+		reenabled: responseCount(value, 'reenabled'),
+		unchanged: responseCount(value, 'unchanged'),
+		ingest: parsedIngest,
+	}
+}
+
+function parseIngestResult(value: unknown): OperationsCatalogReconcileResponseV2['ingest'][number] {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+		throw new CatalogSyncError('operations catalog returned an invalid ingest configuration')
+	}
+	const coordinate = Reflect.get(value, 'coordinate')
+	const credentialId = Reflect.get(value, 'credentialId')
+	const ingestProjectId = Reflect.get(value, 'ingestProjectId')
+	if (typeof coordinate !== 'object' || coordinate === null || Array.isArray(coordinate)) {
+		throw new CatalogSyncError('operations catalog returned an invalid ingest configuration')
+	}
+	const appId = Reflect.get(coordinate, 'appId')
+	const environment = Reflect.get(coordinate, 'environment')
+	const serviceKey = Reflect.get(coordinate, 'serviceKey')
+	if (
+		typeof appId !== 'string'
+		|| typeof environment !== 'string'
+		|| typeof serviceKey !== 'string'
+		|| typeof credentialId !== 'string'
+		|| typeof ingestProjectId !== 'string'
+		|| !/^[1-9][0-9]{0,18}$/.test(ingestProjectId)
+	) {
+		throw new CatalogSyncError('operations catalog returned an invalid ingest configuration')
+	}
+	return {
+		coordinate: { appId, environment, serviceKey },
+		credentialId,
+		ingestProjectId,
+	}
+}
+
+function assertCompleteIngestResponse(
+	request: OperationsCatalogReconcileRequestV2,
+	ingest: OperationsCatalogReconcileResponseV2['ingest'],
+): void {
+	if (ingest.length !== request.sources.length) {
+		throw new CatalogSyncError('operations catalog returned an incomplete ingest configuration')
+	}
+	const expected = new Map(request.sources.map((source) => [
+		coordinateKey(
+			source.coordinate.appId,
+			source.coordinate.environment,
+			source.coordinate.serviceKey ?? DEFAULT_OPERATIONS_SERVICE_KEY,
+		),
+		source.ingestCredential.id,
+	]))
+	for (const item of ingest) {
+		const key = coordinateKey(item.coordinate.appId, item.coordinate.environment, item.coordinate.serviceKey)
+		if (expected.get(key) !== item.credentialId) {
+			throw new CatalogSyncError('operations catalog returned a mismatched ingest configuration')
+		}
+		expected.delete(key)
+	}
+	if (expected.size !== 0) throw new CatalogSyncError('operations catalog returned an incomplete ingest configuration')
+}
+
+function coordinateKey(appId: string, environment: string, serviceKey: string): string {
+	return JSON.stringify([appId, environment, serviceKey])
+}
+
+function responseCount(value: object, key: string): number {
+	const count = Reflect.get(value, key)
+	if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+		throw new CatalogSyncError('operations catalog returned an invalid response')
+	}
+	return count
 }
 
 async function recordCatalogFailure(catalog: OperationsCatalogRepository, message: string): Promise<void> {

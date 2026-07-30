@@ -107,6 +107,8 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			'0007_namespace_resource_claim_owner_coordinates.sql',
 			'0008_zerops_namespace_app_targets.sql',
 			'0009_operations_catalog_sync.sql',
+			'0010_operations_release_sync.sql',
+			'0011_operations_ingest_configs.sql',
 		])
 	})
 
@@ -130,6 +132,8 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'deploy_locks',
 				'jobs',
 				'operations_catalog_sync',
+				'operations_release_sync',
+				'operations_ingest_configs',
 			]
 		) {
 			expect(names).toContain(table)

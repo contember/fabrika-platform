@@ -9,6 +9,7 @@
 // fabrika is single-account (see migrations/0003): the CF account/token + propustka coords are fabrika's
 // OWN Worker config (src/env.ts), not a per-account registry table, so there is no `accounts` access here.
 
+import { DEFAULT_OPERATIONS_SERVICE_KEY } from '@fabrika/operations-contract/catalog'
 import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import { uuidv7 } from './uuid'
 
@@ -169,6 +170,31 @@ export interface OperationsCatalogProjectionRow {
 	app_id: string
 	env: string
 	domain: string | null
+	service_key: string
+	credential_id: string
+	public_key: string
+}
+
+export interface OperationsIngestConfigRow {
+	app_id: string
+	env: string
+	service_key: string
+	credential_id: string
+	public_key: string
+	ingest_project_id: string | null
+	dsn: string | null
+	activated_revision: number | string | null
+	created_at: number | string
+	updated_at: number | string
+}
+
+export interface AppliedOperationsIngestConfig {
+	appId: string
+	environment: string
+	serviceKey: string
+	credentialId: string
+	ingestProjectId: string
+	dsn: string
 }
 
 export interface OperationsReleaseSyncRow {
@@ -1034,15 +1060,35 @@ export class OperationsCatalogRepository {
 
 	/** Read one transactionally consistent revision + complete source snapshot. */
 	async snapshot(): Promise<{ revision: number; sources: OperationsCatalogProjectionRow[] }> {
+		const registered = await this.db.prepare('SELECT app_id, env FROM app_envs ORDER BY app_id, env').all<{ app_id: string; env: string }>()
+		for (const row of registered.results) {
+			await this.db
+				.prepare(`INSERT INTO operations_ingest_configs
+					(app_id, env, service_key, credential_id, public_key, ingest_project_id, dsn, activated_revision, created_at, updated_at)
+					VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
+					ON CONFLICT (app_id, env, service_key) DO NOTHING`)
+				.bind(
+					row.app_id,
+					row.env,
+					DEFAULT_OPERATIONS_SERVICE_KEY,
+					uuidv7(),
+					generateIngestPublicKey(),
+					this.now(),
+					this.now(),
+				)
+				.run()
+		}
 		const results = await this.db.batch<OperationsCatalogSyncStateRow | OperationsCatalogProjectionRow>([
 			this.db.prepare(`SELECT
 					desired_revision, applied_revision, attempted_revision,
 					last_snapshot_hash, applied_snapshot_hash,
 					last_attempt_at, last_success_at, last_error
 				FROM operations_catalog_sync WHERE singleton = 1`),
-			this.db.prepare(`SELECT e.app_id, e.env, e.domain
+			this.db.prepare(`SELECT e.app_id, e.env, e.domain,
+					c.service_key, c.credential_id, c.public_key
 				FROM app_envs e
 				JOIN apps a ON a.id = e.app_id
+				JOIN operations_ingest_configs c ON c.app_id = e.app_id AND c.env = e.env
 				ORDER BY e.app_id, e.env`),
 		])
 		const state = results[0]?.results[0]
@@ -1083,16 +1129,43 @@ export class OperationsCatalogRepository {
 			.run()
 	}
 
-	async markApplied(revision: number, snapshotHash: string): Promise<void> {
-		await this.db
-			.prepare(`UPDATE operations_catalog_sync SET
+	async markApplied(revision: number, snapshotHash: string, configs: readonly AppliedOperationsIngestConfig[]): Promise<void> {
+		await this.db.batch([
+			...configs.map((config) =>
+				this.db
+					.prepare(`UPDATE operations_ingest_configs SET
+							ingest_project_id = ?,
+							dsn = ?,
+							activated_revision = ?,
+							updated_at = ?
+						WHERE app_id = ? AND env = ? AND service_key = ? AND credential_id = ?`)
+					.bind(
+						config.ingestProjectId,
+						config.dsn,
+						revision,
+						this.now(),
+						config.appId,
+						config.environment,
+						config.serviceKey,
+						config.credentialId,
+					)
+			),
+			this.db
+				.prepare(`UPDATE operations_catalog_sync SET
 					applied_revision = CASE WHEN applied_revision < ? THEN ? ELSE applied_revision END,
 					applied_snapshot_hash = CASE WHEN applied_revision <= ? THEN ? ELSE applied_snapshot_hash END,
 					last_success_at = ?,
 					last_error = NULL
 				WHERE singleton = 1`)
-			.bind(revision, revision, revision, snapshotHash, this.now())
-			.run()
+				.bind(revision, revision, revision, snapshotHash, this.now()),
+		])
+	}
+
+	getIngestConfig(appId: string, environment: string, serviceKey = DEFAULT_OPERATIONS_SERVICE_KEY): Promise<OperationsIngestConfigRow | null> {
+		return this.db
+			.prepare('SELECT * FROM operations_ingest_configs WHERE app_id = ? AND env = ? AND service_key = ?')
+			.bind(appId, environment, serviceKey)
+			.first<OperationsIngestConfigRow>()
 	}
 
 	/** A restored Operations database may have a later cursor; advance locally and send a fresh full snapshot. */
@@ -1196,6 +1269,13 @@ function catalogInteger(value: number | string, field: string): number {
 	const parsed = typeof value === 'number' ? value : Number(value)
 	if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`invalid operations catalog ${field}`)
 	return parsed
+}
+
+function generateIngestPublicKey(): string {
+	const bytes = crypto.getRandomValues(new Uint8Array(16))
+	let value = ''
+	for (const byte of bytes) value += byte.toString(16).padStart(2, '0')
+	return value
 }
 
 /** Control-plane persistence capabilities selected together by a runtime composition root. */

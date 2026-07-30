@@ -29,11 +29,13 @@ export function locks(env: Env): DeployLocks {
 }
 
 export function operationsCatalogDeps(env: Env): OperationsCatalogSyncDeps {
+	const operationsOrigin = env.OPERATIONS_ARTIFACT_ORIGIN?.trim()
 	return {
 		catalog: repositories(env).operationsCatalog,
 		locks: locks(env),
 		...(env.OPERATIONS === undefined ? {} : { service: env.OPERATIONS }),
 		...(env.OPERATIONS_SYNC_KEY === undefined ? {} : { syncKey: env.OPERATIONS_SYNC_KEY }),
+		...(operationsOrigin === undefined || operationsOrigin === '' ? {} : { operationsOrigin }),
 	}
 }
 

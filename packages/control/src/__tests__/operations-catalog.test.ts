@@ -27,6 +27,7 @@ interface CapturedCatalogRequest {
 class CatalogService implements HttpService {
 	readonly requests: CapturedCatalogRequest[] = []
 	acceptThenDrop = false
+	mismatchCredential = false
 	private revision = 0
 	private snapshotHash = ''
 
@@ -61,6 +62,7 @@ class CatalogService implements HttpService {
 			this.acceptThenDrop = false
 			throw new Error('response lost')
 		}
+		const ingest = catalogIngest(payload, this.mismatchCredential)
 		return Response.json({
 			protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
 			revision: this.revision,
@@ -70,8 +72,35 @@ class CatalogService implements HttpService {
 			disabled: 0,
 			reenabled: 0,
 			unchanged: 0,
+			ingest,
 		})
 	}
+}
+
+function catalogIngest(payload: object, mismatchCredential: boolean): unknown[] {
+	const sources = Reflect.get(payload, 'sources')
+	if (!Array.isArray(sources)) throw new Error('bad test catalog sources')
+	return sources.map((source) => {
+		const coordinate = Reflect.get(source, 'coordinate')
+		const credential = Reflect.get(source, 'ingestCredential')
+		if (
+			typeof coordinate !== 'object'
+			|| coordinate === null
+			|| typeof credential !== 'object'
+			|| credential === null
+		) {
+			throw new Error('bad test catalog source')
+		}
+		return {
+			coordinate: {
+				appId: Reflect.get(coordinate, 'appId'),
+				environment: Reflect.get(coordinate, 'environment'),
+				serviceKey: Reflect.get(coordinate, 'serviceKey') ?? 'default',
+			},
+			credentialId: mismatchCredential ? '0198a000-0000-7000-8000-000000000099' : Reflect.get(credential, 'id'),
+			ingestProjectId: '100000000000000001',
+		}
+	})
 }
 
 describe('Control Operations catalog projection', () => {
@@ -89,6 +118,7 @@ describe('Control Operations catalog projection', () => {
 			locks: new AvailableLock(),
 			service,
 			syncKey: SYNC_KEY,
+			operationsOrigin: 'https://errors.example.test',
 		}
 
 		expect(await projectOperationsCatalogChange(deps)).toEqual({ outcome: 'failed', revision: 1 })
@@ -100,28 +130,57 @@ describe('Control Operations catalog projection', () => {
 			lastAttemptAt: 1_000,
 			lastError: 'operations catalog request failed',
 		})
+		const pending = await harness.repositories.operationsCatalog.getIngestConfig('app-a', 'prod')
+		expect(pending).toMatchObject({ dsn: null, ingest_project_id: null, activated_revision: null })
 
 		now = 2_000
 		expect(await replayOperationsCatalog(deps)).toEqual({ outcome: 'unchanged', revision: 1 })
 		expect(service.requests.map((request) => request.revision)).toEqual([1, 1])
 		expect(service.requests[1]?.snapshotHash).toBe(service.requests[0]?.snapshotHash)
 		expect(service.requests[0]?.authorization).toBe(`Bearer ${SYNC_KEY}`)
-		expect(service.requests[0]?.payload).toEqual({
-			protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
-			revision: 1,
-			snapshotHash: service.requests[0]?.snapshotHash,
-			sources: [{
-				coordinate: { appId: 'app-a', environment: 'prod' },
-				displayName: 'app-a.example.test',
-				publicOrigin: null,
-			}],
-		})
+		const firstCredential = requestCredential(service.requests[0]?.payload)
+		expect(requestCredential(service.requests[1]?.payload)).toEqual(firstCredential)
+		expect(firstCredential.publicKey).toMatch(/^[0-9a-f]{32}$/)
+		expect(firstCredential.id).toMatch(/^[0-9a-f-]{36}$/)
 		expect(await harness.repositories.operationsCatalog.getState()).toMatchObject({
 			desiredRevision: 1,
 			appliedRevision: 1,
 			attemptedRevision: 1,
 			lastSuccessAt: 2_000,
 			lastError: null,
+		})
+		expect(await harness.repositories.operationsCatalog.getIngestConfig('app-a', 'prod')).toMatchObject({
+			credential_id: firstCredential.id,
+			public_key: firstCredential.publicKey,
+			ingest_project_id: '100000000000000001',
+			dsn: `https://${firstCredential.publicKey}@errors.example.test/100000000000000001`,
+			activated_revision: 1,
+		})
+		expect(await harness.repositories.registry.listAppVars('app-a')).toEqual([])
+	})
+
+	test('rejects a mismatched ingest response and leaves the durable credential pending', async () => {
+		const harness = createHarness()
+		await harness.repositories.registry.createApp({ id: 'app-a', repoUrl: 'github.com/acme/app-a' })
+		await harness.repositories.registry.upsertAppEnv(providerEnvironment('app-a', 'prod'))
+		const service = new CatalogService()
+		service.mismatchCredential = true
+		const result = await projectOperationsCatalogChange({
+			catalog: harness.repositories.operationsCatalog,
+			locks: new AvailableLock(),
+			service,
+			syncKey: SYNC_KEY,
+			operationsOrigin: 'https://errors.example.test',
+		})
+		expect(result).toEqual({ outcome: 'failed', revision: 1 })
+		expect(await harness.repositories.operationsCatalog.getState()).toMatchObject({
+			appliedRevision: 0,
+			lastError: 'operations catalog returned a mismatched ingest configuration',
+		})
+		expect(await harness.repositories.operationsCatalog.getIngestConfig('app-a', 'prod')).toMatchObject({
+			dsn: null,
+			ingest_project_id: null,
+			activated_revision: null,
 		})
 	})
 
@@ -135,6 +194,7 @@ describe('Control Operations catalog projection', () => {
 			locks: new AvailableLock(),
 			service,
 			syncKey: SYNC_KEY,
+			operationsOrigin: 'https://errors.example.test',
 		}
 
 		expect((await projectOperationsCatalogChange(deps)).outcome).toBe('applied')
@@ -152,5 +212,18 @@ describe('Control Operations catalog projection', () => {
 			desiredRevision: 2,
 			appliedRevision: 2,
 		})
+		expect(await harness.repositories.operationsCatalog.getIngestConfig('app-a', 'prod')).toBeNull()
 	})
 })
+
+function requestCredential(payload: unknown): { id: string; publicKey: string } {
+	if (typeof payload !== 'object' || payload === null) throw new Error('missing catalog payload')
+	const sources = Reflect.get(payload, 'sources')
+	if (!Array.isArray(sources) || sources.length !== 1) throw new Error('missing catalog source')
+	const credential = Reflect.get(sources[0], 'ingestCredential')
+	if (typeof credential !== 'object' || credential === null) throw new Error('missing ingest credential')
+	const id = Reflect.get(credential, 'id')
+	const publicKey = Reflect.get(credential, 'publicKey')
+	if (typeof id !== 'string' || typeof publicKey !== 'string') throw new Error('invalid ingest credential')
+	return { id, publicKey }
+}
