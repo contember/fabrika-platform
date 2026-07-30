@@ -1,8 +1,8 @@
 import type { IngestMessage, IngestRejectReason } from '@fabrika/operations-contract/ingest'
 import type { JobQueue } from '@fabrika/platform'
-import { buildParsedEvent, EnvelopeParseError, parseEventEnvelope, parseIngestAuth } from './ingest.js'
+import { buildParsedEvent, EnvelopeParseError, type ParsedEventEnvelope, parseEventEnvelope, parseIngestAuth } from './ingest.js'
 import { credentialVerifier, prepareIngestMessage } from './pipeline.js'
-import type { OperationsRepositories } from './repositories.js'
+import type { IngestCredentialResolution, OperationsRepositories } from './repositories.js'
 
 export const MAX_INGEST_BODY_BYTES = 200 * 1024
 export const MAX_INGEST_MESSAGE_BYTES = 120 * 1024
@@ -38,7 +38,7 @@ export async function handleDirectIngestRequest(request: Request, options: Direc
 	const auth = parseIngestAuth(request)
 	if (!auth.ok) return reject(options, 'unauthorized', 401, 'invalid ingest authentication', null)
 
-	let credential
+	let credential: IngestCredentialResolution | null
 	try {
 		credential = await options.repositories.sources.resolveIngestCredential(await credentialVerifier(auth.publicKey))
 	} catch {
@@ -96,7 +96,7 @@ export async function handleDirectIngestRequest(request: Request, options: Direc
 	if (body.kind === 'unreadable') return reject(options, 'malformed', 400, 'unreadable body', credential.sourceId)
 	if (body.kind === 'too_large') return reject(options, 'too_large', 413, 'payload too large', credential.sourceId)
 
-	let envelope
+	let envelope: ParsedEventEnvelope
 	try {
 		envelope = parseEventEnvelope(body.bytes, MAX_ENVELOPE_EVENT_ITEMS)
 	} catch (error) {

@@ -1,7 +1,7 @@
 import { OPERATIONS_ARTIFACT_HEADERS, OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'
 import type { BlobStore } from '@fabrika/platform'
 import { sha256Hex } from './ingest.js'
-import type { OperationsRepositories } from './repositories.js'
+import type { ArtifactUploadCredentialResolution, OperationsRepositories } from './repositories.js'
 import { logicalAssetPath, type ObjectReader } from './source-maps.js'
 import { uuidv7 } from './uuid.js'
 
@@ -24,7 +24,7 @@ export async function handleSourceMapUploadRequest(request: Request, options: Ar
 	if (request.method !== 'POST') return jsonError(405, 'method not allowed', { Allow: 'POST' })
 	const bearer = parseBearer(request.headers.get('authorization'))
 	if (bearer === null) return jsonError(401, 'unauthorized')
-	let credential
+	let credential: ArtifactUploadCredentialResolution | null
 	try {
 		credential = await options.repositories.artifacts.resolveUploadCredential(await sha256Hex(bearer), (options.now ?? Date.now)())
 	} catch {
