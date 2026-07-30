@@ -21,6 +21,8 @@ fabrika-platform is and how the pieces fit — then skim
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
+- [Operations plane foundation](sprints/sprint-2026-07-30-operations-plane.md)
+
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
@@ -28,3 +30,7 @@ fabrika-platform is and how the pieces fit — then skim
 
 - **Next:** run the resulting composition against a real account in
   [`backlog/05-bring-up-on-a-real-zerops-account.md`](backlog/05-bring-up-on-a-real-zerops-account.md).
+- **Active:** [Operations plane foundation](sprints/sprint-2026-07-30-operations-plane.md)
+  implements [ADR-0016](decisions/0016-independent-operations-plane.md) through
+  backlog 27–33. The [broad target](ideas/operations-plane.md) and credentialed
+  [Poplach cutover](backlog/34-retire-standalone-poplach.md) remain separate.

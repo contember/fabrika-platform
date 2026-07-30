@@ -33,6 +33,14 @@ release restoration remains explicit item 25.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
 - [25](25-migrate-the-ci-workflows.md) — No CI at all. Restore deploy, release (OIDC trusted publishing) and the runner image build.
 - [26](26-retire-trasa-release-surface.md) — Publish `@fabrika/app`, deprecate `@trasa/core`, and archive the standalone repository.
+- [27](27-absorb-poplach-service.md) — Absorb Poplach behind an independent Operations service boundary.
+- [28](28-model-observed-app-environments.md) — Replace Poplach projects with Fabrika application, environment, and service coordinates.
+- [29](29-integrate-operations-console.md) — Add Operations as the third plane in the unified console.
+- [30](30-provision-error-ingest.md) — Provision write-only error ingest credentials and runtime configuration.
+- [31](31-correlate-releases-and-source-maps.md) — Link errors and source maps to deploy-owned releases.
+- [32](32-add-operations-health.md) — Add portable service and telemetry-pipeline health.
+- [33](33-port-operations-runtime.md) — Compose the Operations service on Cloudflare and Zerops.
+- [34](34-retire-standalone-poplach.md) — Adopt existing state and retire the standalone Poplach app.
 - [06](06-can-zerops-secrets-be-read-back.md) — Open: can secret _values_ be read back from the Zerops API?
 - [07](07-rename-env-var-prefixes.md) — Sweep `VOZKA_*` → `FABRIKA_*`; decide whether `PROPUSTKA_*` follows.
 - [09](09-confirm-multi-domain-per-service.md) — Open: does Zerops allow multiple custom domains on one service?

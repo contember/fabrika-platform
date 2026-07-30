@@ -33,6 +33,10 @@ ADR-0015 moves the SQLite/Postgres portability seam from individual SQL text to
 capability repository operations. Shared SQL remains the default; composition
 roots may select a backend-specific implementation for a complete operation.
 
+ADR-0016 adds Operations as a third product plane while keeping its telemetry
+data path and persistence outside control. The accepted first slice absorbs
+Poplach as Errors; broader observability remains an idea.
+
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
@@ -52,3 +56,4 @@ roots may select a backend-specific implementation for a complete operation.
 - [0013](0013-explicit-runtime-adapter-entrypoints.md) — Expose runtime adapters through explicit package entrypoints — accepted (2026-07-29)
 - [0014](0014-provider-owned-deployment-namespaces.md) — Model deployment namespaces as provider-owned placement boundaries — accepted (2026-07-29)
 - [0015](0015-repository-operations-are-the-sql-portability-seam.md) — Make repository operations the SQL portability seam — accepted (2026-07-30)
+- [0016](0016-independent-operations-plane.md) — Add an independent Operations plane — accepted (2026-07-30)

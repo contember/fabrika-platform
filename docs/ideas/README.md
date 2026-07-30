@@ -8,3 +8,6 @@ gets pulled into a `../sprints/` plan) or it's **deleted**. It is never a place 
 decided work or status.
 
 <!-- index the ideas here, one line each -->
+
+- [Operations plane](operations-plane.md) — broad target for runtime feedback,
+  observability, alerting, and response beyond the initial Errors capability.
