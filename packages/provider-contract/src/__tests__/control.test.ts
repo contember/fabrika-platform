@@ -18,6 +18,7 @@ const providerEnvelope = (provider: string, payload: string): ProviderEnvelope =
 const environment = (provider: string): ProviderEnvironment => ({
 	appId: 'api',
 	env: 'production',
+	publicOrigin: 'https://api.example.test',
 	target: providerEnvelope(provider, 'eu-west'),
 	artifact: providerEnvelope(provider, 'registry.example/api:v4'),
 })
@@ -91,6 +92,7 @@ describe('ControlProvider', () => {
 		}
 		const input = deployInput('harbor')
 		const registration = harbor.normalizeRegistration({ app: input.app, environment: input.environment })
+		expect(registration.environment.publicOrigin).toBe('https://api.example.test')
 
 		const outcome = await harbor.deploy({ ...input, app: registration.app, environment: registration.environment })
 		if (harbor.reconcile === undefined || harbor.cancel === undefined || harbor.secrets === undefined) {

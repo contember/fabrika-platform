@@ -48,6 +48,7 @@ async function seedRun(
 		appId: 'app',
 		env: 'prod',
 		domain: 'app.example.com',
+		publicOrigin: 'https://public.example.com',
 		namespaceId: null,
 		provider,
 		providerTargetJson: JSON.stringify(envelope(provider, 'target')),
@@ -168,6 +169,7 @@ describe('provider-neutral run lifecycle', () => {
 			},
 		})
 		expect(input.environment.domain).toBe('app.example.com')
+		expect(input.environment.publicOrigin).toBe('https://public.example.com')
 		expect(input.secrets).toEqual({ API_KEY: 'prod' })
 		expect(input.vars).toEqual({ TEAM: 'prod' })
 		expect(input.managedEnvironment).toEqual({
@@ -411,6 +413,7 @@ describe('provider-neutral run lifecycle', () => {
 			appId: appEnv.app_id,
 			env: appEnv.env,
 			domain: appEnv.domain,
+			publicOrigin: appEnv.public_origin,
 			triggerRef: appEnv.trigger_ref,
 			namespaceId: 'apps-prod',
 			provider: appEnv.provider,

@@ -41,6 +41,7 @@ describe('namespace API DTOs', () => {
 			appId: 'billing',
 			env: 'prod',
 			domain: null,
+			publicOrigin: null,
 			triggerRef: null,
 			namespaceId: namespace.id,
 			provider: 'harbor',

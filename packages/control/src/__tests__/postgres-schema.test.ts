@@ -75,7 +75,7 @@ function now(): number {
 const providerEnvironment = (
 	appId: string,
 	env: string,
-	options: { domain?: string | null; triggerRef?: string | null } = {},
+	options: { domain?: string | null; publicOrigin?: string | null; triggerRef?: string | null } = {},
 ) => ({
 	appId,
 	env,
@@ -111,6 +111,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0009_operations_catalog_sync.sql' },
 			{ bundle: 'control', name: '0010_operations_release_sync.sql' },
 			{ bundle: 'control', name: '0011_operations_ingest_configs.sql' },
+			{ bundle: 'control', name: '0012_app_env_public_origin.sql' },
 		])
 	})
 
@@ -252,13 +253,21 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		await reset()
 		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 
-		const prod = await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod', { domain: 'acme.example', triggerRef: 'refs/heads/main' }))
+		const prod = await db.registry.upsertAppEnv(
+			providerEnvironment('acme', 'prod', {
+				domain: 'acme.example',
+				publicOrigin: 'https://public.acme.example',
+				triggerRef: 'refs/heads/main',
+			}),
+		)
 		expect(prod.domain).toBe('acme.example')
+		expect(prod.public_origin).toBe('https://public.acme.example')
 		expect(prod.provider).toBe('harbor')
 		expect(JSON.parse(prod.provider_target_json)).toEqual({ provider: 'harbor', version: 1, payload: { region: 'eu' } })
 		// ON CONFLICT (app_id, env) DO UPDATE — the upsert path and its RETURNING row.
 		const again = await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod', { domain: 'acme2.example', triggerRef: 'refs/tags/v*' }))
 		expect(again.domain).toBe('acme2.example')
+		expect(again.public_origin).toBeNull()
 		expect(again.trigger_ref).toBe('refs/tags/v*')
 
 		await db.registry.upsertAppEnv(providerEnvironment('acme', 'stage'))

@@ -18,6 +18,7 @@ export function compatibleNamespaces(
 export function namespaceAssignmentRequest(environment: AppEnvDto, namespaceId: string | null): PutAppEnvRequest {
 	return {
 		domain: environment.domain,
+		publicOrigin: environment.publicOrigin,
 		triggerRef: environment.triggerRef,
 		namespaceId,
 		target: environment.target,

@@ -110,6 +110,7 @@ describe('Control Operations catalog projection', () => {
 		await harness.repositories.registry.createApp({ id: 'app-a', repoUrl: 'github.com/acme/app-a' })
 		await harness.repositories.registry.upsertAppEnv(providerEnvironment('app-a', 'prod', {
 			domain: 'app-a.example.test',
+			publicOrigin: 'https://public.example.test',
 		}))
 		const service = new CatalogService()
 		service.acceptThenDrop = true
@@ -138,6 +139,7 @@ describe('Control Operations catalog projection', () => {
 		expect(service.requests.map((request) => request.revision)).toEqual([1, 1])
 		expect(service.requests[1]?.snapshotHash).toBe(service.requests[0]?.snapshotHash)
 		expect(service.requests[0]?.authorization).toBe(`Bearer ${SYNC_KEY}`)
+		expect(requestPublicOrigin(service.requests[0]?.payload)).toBe('https://public.example.test')
 		const firstCredential = requestCredential(service.requests[0]?.payload)
 		expect(requestCredential(service.requests[1]?.payload)).toEqual(firstCredential)
 		expect(firstCredential.publicKey).toMatch(/^[0-9a-f]{32}$/)
@@ -198,6 +200,7 @@ describe('Control Operations catalog projection', () => {
 		}
 
 		expect((await projectOperationsCatalogChange(deps)).outcome).toBe('applied')
+		expect(requestPublicOrigin(service.requests[0]?.payload)).toBeNull()
 		await harness.repositories.registry.deleteAppEnv('app-a', 'prod')
 		expect((await projectOperationsCatalogChange(deps)).outcome).toBe('applied')
 
@@ -214,6 +217,30 @@ describe('Control Operations catalog projection', () => {
 		})
 		expect(await harness.repositories.operationsCatalog.getIngestConfig('app-a', 'prod')).toBeNull()
 	})
+
+	test('fails closed before delivery when a persisted public origin is invalid', async () => {
+		const harness = createHarness()
+		await harness.repositories.registry.createApp({ id: 'app-a', repoUrl: 'github.com/acme/app-a' })
+		await harness.repositories.registry.upsertAppEnv(providerEnvironment('app-a', 'prod', {
+			publicOrigin: 'https://example.test/path',
+		}))
+		const service = new CatalogService()
+
+		expect(
+			await projectOperationsCatalogChange({
+				catalog: harness.repositories.operationsCatalog,
+				locks: new AvailableLock(),
+				service,
+				syncKey: SYNC_KEY,
+				operationsOrigin: 'https://errors.example.test',
+			}),
+		).toEqual({ outcome: 'failed', revision: 1 })
+		expect(service.requests).toHaveLength(0)
+		expect(await harness.repositories.operationsCatalog.getState()).toMatchObject({
+			appliedRevision: 0,
+			lastError: 'operations catalog source public origin is invalid',
+		})
+	})
 })
 
 function requestCredential(payload: unknown): { id: string; publicKey: string } {
@@ -226,4 +253,13 @@ function requestCredential(payload: unknown): { id: string; publicKey: string } 
 	const publicKey = Reflect.get(credential, 'publicKey')
 	if (typeof id !== 'string' || typeof publicKey !== 'string') throw new Error('invalid ingest credential')
 	return { id, publicKey }
+}
+
+function requestPublicOrigin(payload: unknown): string | null {
+	if (typeof payload !== 'object' || payload === null) throw new Error('missing catalog payload')
+	const sources = Reflect.get(payload, 'sources')
+	if (!Array.isArray(sources) || sources.length !== 1) throw new Error('missing catalog source')
+	const publicOrigin = Reflect.get(sources[0], 'publicOrigin')
+	if (publicOrigin !== null && typeof publicOrigin !== 'string') throw new Error('invalid public origin')
+	return publicOrigin
 }

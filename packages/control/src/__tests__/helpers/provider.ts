@@ -11,7 +11,7 @@ const envelope = (kind: string): ProviderEnvelope => ({
 export function providerEnvironment(
 	appId: string,
 	env: string,
-	options: { domain?: string | null; triggerRef?: string | null } = {},
+	options: { domain?: string | null; publicOrigin?: string | null; triggerRef?: string | null } = {},
 ) {
 	return {
 		appId,

@@ -1,3 +1,4 @@
+import type { AppSchema } from '@fabrika/auth-core'
 import type {
 	ProviderApp,
 	ProviderDeployInput,
@@ -44,6 +45,8 @@ const config: ZeropsAppConfig = {
 	},
 }
 
+const SCHEMA: AppSchema = { scopes: [], actions: [], roles: {} }
+
 const app: ProviderApp = {
 	id: 'notes',
 	source: {
@@ -71,6 +74,7 @@ const environment = (overrides: Partial<ProviderEnvironment> = {}): ProviderEnvi
 	appId: 'notes',
 	env: 'prod',
 	domain: 'notes.example.test',
+	publicOrigin: 'https://public.notes.example.test',
 	namespace: readyNamespace(),
 	target: {
 		provider: 'zerops',
@@ -172,6 +176,7 @@ describe('Zerops ControlProvider registration', () => {
 		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
 		const normalized = control.normalizeRegistration({ app, environment: environment() })
 		expect(normalized.environment.target.payload).toEqual({ serviceId: 'service-1' })
+		expect(normalized.environment.publicOrigin).toBe('https://public.notes.example.test')
 		expect(JSON.stringify(normalized.environment)).not.toContain('zt-secret')
 	})
 
@@ -621,23 +626,45 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.calls).toEqual([])
 	})
 
-	test('cancels by external id and maps active, terminal, and pending statuses', async () => {
+	test('finishes schema reconciliation after an active external run without starting another deploy', async () => {
 		let current: ZeropsAppVersionStatus = 'BUILDING'
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
+			propustkaUrl: 'https://iam.test',
 			api: makeApi(recorded, () => current),
+			reconcileSchema: async ({ app }) => {
+				recorded.calls.push(`reconcileSchema:${app}`)
+			},
 		})
 		if (control.cancel === undefined || control.reconcile === undefined) {
 			throw new Error('expected Zerops lifecycle capabilities')
 		}
-		const reference = { runId: 'run-1', externalId: 'version-1', environment: environment() }
+		const reference = {
+			runId: 'run-1',
+			externalId: 'version-1',
+			environment: environment({
+				artifact: {
+					provider: 'zerops',
+					version: zeropsArtifactCodec.version,
+					payload: zeropsArtifactCodec.encode(compileFabrikaManifest({ ...config, schema: SCHEMA }, 'prod')),
+				},
+			}),
+		}
 		expect(await control.reconcile(reference)).toEqual<ProviderReconcileOutcome>({ state: 'running' })
+		expect(recorded.calls).toEqual(['getAppVersion:version-1'])
 		current = 'ACTIVE'
 		expect(await control.reconcile(reference)).toEqual<ProviderReconcileOutcome>({ state: 'succeeded' })
+		expect(recorded.calls).toEqual([
+			'getAppVersion:version-1',
+			'getAppVersion:version-1',
+			'reconcileSchema:notes',
+		])
 		current = 'BUILD_FAILED'
 		expect(await control.reconcile(reference)).toEqual<ProviderReconcileOutcome>({ state: 'failed' })
 		await control.cancel(reference)
 		expect(recorded.calls).toContain('cancelBuild:version-1')
+		expect(recorded.calls).not.toContain('importServices')
+		expect(recorded.calls).not.toContain('triggerPipeline')
 	})
 
 	test('writes and deletes one service-level secret and returns an opaque reference', async () => {

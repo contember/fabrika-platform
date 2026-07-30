@@ -20,6 +20,7 @@ export default createPage()
 		const [repoUrl, setRepoUrl] = useState('')
 		const [env, setEnv] = useState('prod')
 		const [domain, setDomain] = useState('')
+		const [publicOrigin, setPublicOrigin] = useState('')
 		const [triggerRef, setTriggerRef] = useState('')
 		const [namespaceId, setNamespaceId] = useState('')
 		const [manifest, setManifest] = useState('')
@@ -53,6 +54,7 @@ export default createPage()
 				repoUrl: repoUrl.trim(),
 				env: env.trim(),
 				...(domain.trim() === '' ? {} : { domain: domain.trim() }),
+				...(publicOrigin.trim() === '' ? {} : { publicOrigin: publicOrigin.trim() }),
 				...(triggerRef.trim() === '' ? {} : { triggerRef: triggerRef.trim() }),
 				namespaceId,
 				target: { provider: 'zerops', version: 2, payload: {} },
@@ -127,6 +129,17 @@ export default createPage()
 							/>
 						</label>
 					</div>
+					<label>
+						Public origin (optional)
+						<input
+							type="url"
+							value={publicOrigin}
+							onChange={(e) => setPublicOrigin(e.target.value)}
+							placeholder="https://store.acme.com"
+							autoComplete="off"
+						/>
+						<span className="hint">Exact externally reachable HTTP(S) origin used by operations monitoring. It can differ from the provider domain.</span>
+					</label>
 					<label>
 						Trigger ref (optional)
 						<input

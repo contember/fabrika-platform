@@ -97,7 +97,7 @@ const registrationEnvelopes = (): { target: ProviderEnvelope; artifact: Provider
 const storedEnvironment = (
 	appId: string,
 	env: string,
-	options: { domain?: string | null; triggerRef?: string | null } = {},
+	options: { domain?: string | null; publicOrigin?: string | null; triggerRef?: string | null } = {},
 ) => {
 	const envelopes = registrationEnvelopes()
 	return {
@@ -206,6 +206,7 @@ describe('onboarding + registry CRUD', () => {
 				repoUrl: 'https://github.com/acme/App.git',
 				env: 'prod',
 				domain: 'acme.example.com',
+				publicOrigin: 'HTTPS://Public.Example.com:443',
 				triggerRef: 'refs/heads/deploy/prod',
 			}),
 			deps,
@@ -218,7 +219,78 @@ describe('onboarding + registry CRUD', () => {
 		// And its prod env row, with the domain + trigger ref.
 		const env = await deps.repositories.registry.getAppEnv('acme', 'prod')
 		expect(env?.domain).toBe('acme.example.com')
+		expect(env?.public_origin).toBe('https://public.example.com')
 		expect(env?.trigger_ref).toBe('refs/heads/deploy/prod')
+	})
+
+	test('validates publicOrigin independently from domain and supports PUT preserve and clear semantics', async () => {
+		const { deps } = makeDeps()
+		await handleApi(req('POST', '/api/apps', { id: 'origin-app', repoUrl: 'https://github.com/acme/origin-app' }), deps)
+
+		const created = await handleApi(
+			req('PUT', '/api/apps/origin-app/envs/prod', {
+				domain: 'provider.example.test',
+				publicOrigin: 'http://localhost:18081',
+			}),
+			deps,
+		)
+		expect(created.status).toBe(200)
+		expect(await created.json()).toMatchObject({
+			domain: 'provider.example.test',
+			publicOrigin: 'http://localhost:18081',
+		})
+
+		const preserved = await handleApi(req('PUT', '/api/apps/origin-app/envs/prod', { domain: 'next.example.test' }), deps)
+		expect(preserved.status).toBe(200)
+		expect((await deps.repositories.registry.getAppEnv('origin-app', 'prod'))?.public_origin).toBe('http://localhost:18081')
+
+		const cleared = await handleApi(req('PUT', '/api/apps/origin-app/envs/prod', { publicOrigin: null }), deps)
+		expect(cleared.status).toBe(200)
+		expect((await deps.repositories.registry.getAppEnv('origin-app', 'prod'))?.public_origin).toBeNull()
+	})
+
+	test('rejects malformed public origins without storing an environment', async () => {
+		const { deps } = makeDeps()
+		await handleApi(req('POST', '/api/apps', { id: 'invalid-origin', repoUrl: 'https://github.com/acme/invalid-origin' }), deps)
+		const invalid = [
+			'https://user@example.com',
+			'https://example.com/path',
+			'https://example.com?query=1',
+			'https://example.com#fragment',
+			'ftp://example.com',
+			'not-an-origin',
+			' https://example.com',
+		]
+
+		for (const publicOrigin of invalid) {
+			const response = await handleApi(req('PUT', '/api/apps/invalid-origin/envs/prod', { publicOrigin }), deps)
+			expect(response.status).toBe(400)
+			expect(await response.text()).not.toContain(publicOrigin)
+			expect(await deps.repositories.registry.getAppEnv('invalid-origin', 'prod')).toBeNull()
+		}
+	})
+
+	test('rejects a provider that changes the public origin during normalization', async () => {
+		const provider: ControlProvider = {
+			...fakeProvider,
+			normalizeRegistration: (input) => ({
+				app: input.app,
+				environment: {
+					...input.environment,
+					publicOrigin: 'https://provider-overrode.example.test',
+				},
+			}),
+		}
+		const { deps } = makeDeps({ provider })
+		await handleApi(req('POST', '/api/apps', { id: 'origin-drift', repoUrl: 'https://github.com/acme/origin-drift' }), deps)
+
+		const response = await handleApi(
+			req('PUT', '/api/apps/origin-drift/envs/prod', { publicOrigin: 'https://public.example.test' }),
+			deps,
+		)
+
+		expect(response.status).toBe(400)
+		expect(await deps.repositories.registry.getAppEnv('origin-drift', 'prod')).toBeNull()
 	})
 
 	test('registerApp auto-detects the installation id when resolveInstallationId is set', async () => {

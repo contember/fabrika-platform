@@ -15,6 +15,7 @@ import { type AppEnvRow, type AppRow, type AppSecretRow, type AppVarRow, type Co
 import { error, json, readJson } from '../http'
 import type { Authorized } from '../iam'
 import { arrayField, booleanField, nullableStringField, numberField, prop, stringField } from '../json'
+import { canonicalPublicOrigin, PublicOriginValidationError } from '../public-origin'
 import { normalizeRepoUrl, type RepoSource } from '../repo-source'
 import { envelopeField, parseStoredEnvelope } from './provider-envelope'
 
@@ -52,6 +53,7 @@ function toAppEnvDto(row: AppEnvRow): AppEnvDto {
 		appId: row.app_id,
 		env: row.env,
 		domain: row.domain,
+		publicOrigin: row.public_origin,
 		triggerRef: row.trigger_ref,
 		namespaceId: row.namespace_id,
 		provider: row.provider,
@@ -84,6 +86,7 @@ function normalizeRegistration(
 			registration.app.id !== app.id
 			|| registration.environment.appId !== app.id
 			|| registration.environment.env !== environment.env
+			|| registration.environment.publicOrigin !== environment.publicOrigin
 			|| registration.environment.target.provider !== provider.id
 			|| registration.environment.artifact.provider !== provider.id
 			|| !sameNamespaceCoordinates(registration.environment.namespace, environment.namespace, provider.id)
@@ -116,6 +119,7 @@ function registrationEnvironment(
 	app: ProviderApp,
 	env: string,
 	domain: string | null,
+	publicOrigin: string | null,
 	namespace?: ProviderDeploymentNamespace,
 ): ProviderRegistration | Response {
 	const target = envelopeField(body, 'target')
@@ -126,10 +130,24 @@ function registrationEnvironment(
 		appId: app.id,
 		env,
 		...(domain === null ? {} : { domain }),
+		...(publicOrigin === null ? {} : { publicOrigin }),
 		...(namespace === undefined ? {} : { namespace }),
 		target,
 		artifact,
 	})
+}
+
+function publicOriginField(body: unknown, fallback: string | null): string | null | Response {
+	const value = prop(body, 'publicOrigin')
+	if (value === undefined) return fallback
+	if (value === null) return null
+	if (typeof value !== 'string') return error(400, 'publicOrigin must be an exact HTTP(S) origin')
+	try {
+		return canonicalPublicOrigin(value)
+	} catch (cause) {
+		if (cause instanceof PublicOriginValidationError) return error(400, cause.message)
+		throw cause
+	}
 }
 
 function registrationResourceClaims(
@@ -321,6 +339,8 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 	const domain = nullableStringField(body, 'domain') ?? null
 	const triggerRef = nullableStringField(body, 'triggerRef') ?? null
 	const existing = await c.repositories.registry.getAppEnv(appId, env)
+	const publicOrigin = publicOriginField(body, existing?.public_origin ?? null)
+	if (publicOrigin instanceof Response) return publicOrigin
 	const namespace = await resolveRegistrationNamespace(c, body, appId, env, existing)
 	if (namespace instanceof Response) return namespace
 	const nextNamespaceId = namespace?.id ?? null
@@ -332,7 +352,7 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 			return error(409, 'deployment namespace cannot change after a successful deploy')
 		}
 	}
-	const registration = registrationEnvironment(body, c.provider, toProviderApp(app), env, domain, namespace)
+	const registration = registrationEnvironment(body, c.provider, toProviderApp(app), env, domain, publicOrigin, namespace)
 	if (registration instanceof Response) return registration
 	const resourceClaims = registrationResourceClaims(c.provider, registration)
 	if (resourceClaims instanceof Response) return resourceClaims
@@ -340,6 +360,7 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 		appId,
 		env,
 		domain: registration.environment.domain ?? null,
+		publicOrigin: registration.environment.publicOrigin ?? null,
 		triggerRef,
 		namespaceId: registration.environment.namespace?.id ?? null,
 		provider: c.provider.id,
@@ -497,6 +518,8 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 	const optional = optionalAppFields(body)
 	const installation = await installationIdField(c, body, normalized)
 	const domain = nullableStringField(body, 'domain') ?? null
+	const publicOrigin = publicOriginField(body, null)
+	if (publicOrigin instanceof Response) return publicOrigin
 	const triggerRef = nullableStringField(body, 'triggerRef') ?? null
 	const providerApp: ProviderApp = {
 		id,
@@ -524,6 +547,7 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 			appId: id,
 			env,
 			...(domain === null ? {} : { domain }),
+			...(publicOrigin === null ? {} : { publicOrigin }),
 			...(namespace === undefined ? {} : { namespace }),
 			target,
 			artifact,
@@ -550,6 +574,7 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 		appId: registration.app.id,
 		env: registration.environment.env,
 		domain: registration.environment.domain ?? null,
+		publicOrigin: registration.environment.publicOrigin ?? null,
 		triggerRef,
 		namespaceId: registration.environment.namespace?.id ?? null,
 		provider: c.provider.id,
@@ -580,6 +605,7 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 				prepared.app.id !== id
 				|| prepared.environment.appId !== id
 				|| prepared.environment.env !== env
+				|| prepared.environment.publicOrigin !== registration.environment.publicOrigin
 				|| !sameNamespaceCoordinates(prepared.environment.namespace, registration.environment.namespace, c.provider.id)
 			) {
 				throw new Error('provider returned a prepared registration for different coordinates')
@@ -592,6 +618,7 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 			const updated = await c.repositories.registry.upsertAppEnvWithNamespaceResourceClaims({
 				...environmentInput,
 				domain: registration.environment.domain ?? null,
+				publicOrigin: registration.environment.publicOrigin ?? null,
 				namespaceId: registration.environment.namespace?.id ?? null,
 				providerTargetJson: JSON.stringify(registration.environment.target),
 				providerArtifactJson: JSON.stringify(registration.environment.artifact),

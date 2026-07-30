@@ -29,6 +29,7 @@ const deployInput = (): ProviderDeployInput => ({
 		appId: 'api',
 		env: 'production',
 		domain: 'api.example.com',
+		publicOrigin: 'https://public.example.com',
 		target: envelope(cloudflareStoredTargetCodec, { stateNamespace: 'api-state' }),
 		artifact: envelope(cloudflareArtifactCodec, cloudflareArtifact('deploy.config.ts')),
 	},
@@ -84,6 +85,7 @@ describe('Cloudflare control provider', () => {
 		})
 
 		expect(normalized.environment.target.payload).toEqual({ stateNamespace: 'api-state' })
+		expect(normalized.environment.publicOrigin).toBe('https://public.example.com')
 		expect(jobs).toEqual([{
 			runId: 'run-1',
 			repoUrl: 'https://github.com/example/api.git?token=short-lived',

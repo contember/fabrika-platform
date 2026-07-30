@@ -30,6 +30,8 @@ export interface ProviderEnvironment {
 	readonly appId: string
 	readonly env: string
 	readonly domain?: string
+	/** Canonical externally reachable HTTP(S) origin; independent of provider domain routing. */
+	readonly publicOrigin?: string
 	readonly namespace?: ProviderDeploymentNamespace
 	readonly target: ProviderEnvelope
 	readonly artifact: ProviderEnvelope

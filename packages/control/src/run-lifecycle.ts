@@ -101,6 +101,7 @@ const storedProviderEnvironment = (
 	appId: row.app_id,
 	env: row.env,
 	...(row.domain === null ? {} : { domain: row.domain }),
+	...(row.public_origin === null ? {} : { publicOrigin: row.public_origin }),
 	...(namespace === undefined ? {} : { namespace }),
 	target: parseProviderEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),
 	artifact: parseProviderEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
@@ -259,6 +260,7 @@ export async function executeDeploy(
 			registration.app.id !== app.id
 			|| registration.environment.appId !== app.id
 			|| registration.environment.env !== appEnv.env
+			|| registration.environment.publicOrigin !== environmentInput.publicOrigin
 			|| registration.environment.target.provider !== deps.provider.id
 			|| registration.environment.artifact.provider !== deps.provider.id
 			|| registration.environment.namespace?.id !== environmentInput.namespace?.id

@@ -88,7 +88,7 @@ export default createPage()
 						<h2>Environments</h2>
 					</div>
 					<Table
-						colSpan={6}
+						colSpan={7}
 						isEmpty={envs.length === 0}
 						empty={
 							<EmptyState
@@ -101,6 +101,7 @@ export default createPage()
 							<tr>
 								<th>Env</th>
 								<th className="grow">Domain</th>
+								<th className="grow">Public origin</th>
 								<th>Trigger ref</th>
 								<th>Placement</th>
 								<th>Provider config</th>
@@ -381,6 +382,7 @@ function EnvRow(
 				<strong>{env.env}</strong>
 			</td>
 			<td>{env.domain === null ? <span className="muted">—</span> : env.domain}</td>
+			<td>{env.publicOrigin === null ? <span className="muted">—</span> : <code>{env.publicOrigin}</code>}</td>
 			<td>{env.triggerRef === null ? <span className="muted">manual-only</span> : <code>{shortRef(env.triggerRef)}</code>}</td>
 			<td>
 				<NamespaceAssignment appId={appId} environment={env} namespaces={namespaces} onDone={onDone} />
@@ -520,6 +522,7 @@ function EnvForm(
 ) {
 	const [envName, setEnvName] = useState(env)
 	const [domain, setDomain] = useState(initial?.domain ?? '')
+	const [publicOrigin, setPublicOrigin] = useState(initial?.publicOrigin ?? '')
 	const [triggerRef, setTriggerRef] = useState(initial?.triggerRef ?? '')
 	const initialConfigPath = initial === null ? 'fabrika.config.ts' : cloudflareConfigPath(initial.artifact)
 	const [configPath, setConfigPath] = useState(initialConfigPath ?? '')
@@ -532,6 +535,7 @@ function EnvForm(
 		try {
 			const body: PutAppEnvRequest = {
 				domain: domain.trim() === '' ? null : domain.trim(),
+				publicOrigin: publicOrigin.trim() === '' ? null : publicOrigin.trim(),
 				triggerRef: triggerRef.trim() === '' ? null : triggerRef.trim(),
 				namespaceId: initial?.namespaceId ?? null,
 				target: initial?.target ?? { provider: 'cloudflare', version: 1, payload: {} },
@@ -558,6 +562,15 @@ function EnvForm(
 			</td>
 			<td>
 				<input aria-label="Domain" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="store.acme.com" />
+			</td>
+			<td>
+				<input
+					type="url"
+					aria-label="Public origin"
+					value={publicOrigin}
+					onChange={(e) => setPublicOrigin(e.target.value)}
+					placeholder="https://store.acme.com"
+				/>
 			</td>
 			<td>
 				<input aria-label="Trigger ref" value={triggerRef} onChange={(e) => setTriggerRef(e.target.value)} placeholder="refs/heads/main" />

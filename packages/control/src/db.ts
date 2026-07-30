@@ -30,6 +30,7 @@ export interface AppEnvRow {
 	app_id: string
 	env: string
 	domain: string | null
+	public_origin: string | null
 	/** Optional provider-owned placement boundary. */
 	namespace_id: string | null
 	/** The statically composed provider that owns both envelopes. */
@@ -69,6 +70,7 @@ export interface AppEnvInput {
 	appId: string
 	env: string
 	domain?: string | null
+	publicOrigin?: string | null
 	triggerRef?: string | null
 	namespaceId: string | null
 	provider: string
@@ -170,6 +172,7 @@ export interface OperationsCatalogProjectionRow {
 	app_id: string
 	env: string
 	domain: string | null
+	public_origin: string | null
 	service_key: string
 	credential_id: string
 	public_key: string
@@ -599,12 +602,13 @@ export class ControlRegistryRepository {
 	private appEnvUpsertStatement(input: AppEnvInput): SqlStatement {
 		return this.d1
 			.prepare(`INSERT INTO app_envs (
-					app_id, env, domain, trigger_ref, namespace_id, provider,
+					app_id, env, domain, public_origin, trigger_ref, namespace_id, provider,
 					provider_target_json, provider_artifact_json
 				)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT (app_id, env) DO UPDATE SET
 					domain = excluded.domain,
+					public_origin = excluded.public_origin,
 					trigger_ref = excluded.trigger_ref,
 					namespace_id = excluded.namespace_id,
 					provider = excluded.provider,
@@ -615,6 +619,7 @@ export class ControlRegistryRepository {
 				input.appId,
 				input.env,
 				input.domain ?? null,
+				input.publicOrigin ?? null,
 				input.triggerRef ?? null,
 				input.namespaceId,
 				input.provider,
@@ -954,7 +959,8 @@ export class RepoPollingRepository {
 					a.id AS a_id, a.repo_url AS a_repo_url, a.default_branch AS a_default_branch, a.worker_dir AS a_worker_dir,
 					a.build_cmd AS a_build_cmd, a.config_path AS a_config_path, a.github_installation_id AS a_github_installation_id,
 					a.created_at AS a_created_at,
-						e.app_id AS e_app_id, e.env AS e_env, e.domain AS e_domain, e.trigger_ref AS e_trigger_ref,
+						e.app_id AS e_app_id, e.env AS e_env, e.domain AS e_domain, e.public_origin AS e_public_origin,
+						e.trigger_ref AS e_trigger_ref,
 						e.namespace_id AS e_namespace_id,
 						e.provider AS e_provider, e.provider_target_json AS e_provider_target_json,
 						e.provider_artifact_json AS e_provider_artifact_json,
@@ -979,6 +985,7 @@ export class RepoPollingRepository {
 				app_id: r.e_app_id,
 				env: r.e_env,
 				domain: r.e_domain,
+				public_origin: r.e_public_origin,
 				trigger_ref: r.e_trigger_ref,
 				namespace_id: r.e_namespace_id,
 				provider: r.e_provider,
@@ -1084,7 +1091,7 @@ export class OperationsCatalogRepository {
 					last_snapshot_hash, applied_snapshot_hash,
 					last_attempt_at, last_success_at, last_error
 				FROM operations_catalog_sync WHERE singleton = 1`),
-			this.db.prepare(`SELECT e.app_id, e.env, e.domain,
+			this.db.prepare(`SELECT e.app_id, e.env, e.domain, e.public_origin,
 					c.service_key, c.credential_id, c.public_key
 				FROM app_envs e
 				JOIN apps a ON a.id = e.app_id
@@ -1332,6 +1339,7 @@ interface PollEligibleJoinRow {
 	e_app_id: string
 	e_env: string
 	e_domain: string | null
+	e_public_origin: string | null
 	e_trigger_ref: string | null
 	e_namespace_id: string | null
 	e_provider: string

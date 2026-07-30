@@ -8,6 +8,7 @@ const environment: AppEnvDto = {
 	appId: 'notes',
 	env: 'prod',
 	domain: null,
+	publicOrigin: 'http://notes.localhost:18081',
 	triggerRef: null,
 	namespaceId: null,
 	provider: 'zerops',
@@ -53,6 +54,7 @@ describe('compatibleNamespaces', () => {
 		const request = namespaceAssignmentRequest(environment, 'apps-prod')
 
 		expect(request.namespaceId).toBe('apps-prod')
+		expect(request.publicOrigin).toBe(environment.publicOrigin)
 		expect(request.target).toBe(environment.target)
 		expect(request.artifact).toBe(environment.artifact)
 	})

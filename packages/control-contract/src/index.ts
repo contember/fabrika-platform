@@ -58,6 +58,7 @@ export interface AppEnvDto {
 	appId: string
 	env: string
 	domain: string | null
+	publicOrigin: string | null
 	triggerRef: string | null
 	namespaceId: string | null
 	provider: string
@@ -68,6 +69,7 @@ export interface AppEnvDto {
 
 export interface PutAppEnvRequest {
 	domain?: string | null
+	publicOrigin?: string | null
 	triggerRef?: string | null
 	namespaceId?: string | null
 	target: ProviderEnvelopeDto
@@ -201,6 +203,7 @@ export interface RegisterAppRequest extends AppOptionalFields {
 	repoUrl: string
 	env: string
 	domain?: string | null
+	publicOrigin?: string | null
 	triggerRef?: string | null
 	namespaceId?: string | null
 	target: ProviderEnvelopeDto

@@ -9,6 +9,7 @@ import {
 import { buildOperationsDsn } from '@fabrika/operations-contract/ingest'
 import type { DeployLocks, HttpService } from '@fabrika/platform'
 import type { OperationsCatalogRepository, OperationsCatalogSyncState } from './db'
+import { canonicalPublicOrigin, PublicOriginValidationError } from './public-origin'
 import { uuidv7 } from './uuid'
 
 const CATALOG_ENDPOINT = 'https://operations.internal/private/catalog/reconcile'
@@ -147,6 +148,7 @@ function projectSource(row: {
 	app_id: string
 	env: string
 	domain: string | null
+	public_origin: string | null
 	service_key: string
 	credential_id: string
 	public_key: string
@@ -158,12 +160,23 @@ function projectSource(row: {
 			...(row.service_key === DEFAULT_OPERATIONS_SERVICE_KEY ? {} : { serviceKey: row.service_key }),
 		},
 		displayName: row.domain ?? `${row.app_id} / ${row.env}`,
-		// Control has no canonical public-origin field. A deploy domain is not necessarily an origin.
-		publicOrigin: null,
+		publicOrigin: catalogPublicOrigin(row.public_origin),
 		ingestCredential: {
 			id: row.credential_id,
 			publicKey: row.public_key,
 		},
+	}
+}
+
+function catalogPublicOrigin(value: string | null): string | null {
+	if (value === null) return null
+	try {
+		return canonicalPublicOrigin(value)
+	} catch (cause) {
+		if (cause instanceof PublicOriginValidationError) {
+			throw new CatalogSyncError('operations catalog source public origin is invalid')
+		}
+		throw cause
 	}
 }
 
