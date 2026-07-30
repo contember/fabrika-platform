@@ -323,4 +323,46 @@ describe.skipIf(!hasPostgres)('Postgres migration runner on real Postgres', () =
 		})
 		expect(await applyPostgresMigrations(fixture.db, repairedPlan)).toEqual(['service/0001_init.sql'])
 	})
+
+	test('reports an unlock failure only when the migration body succeeded', async () => {
+		const fixture = await realFixture('migration_unlock')
+		const lockKey = 8_301_007
+		const migrationPlan = plan({
+			ledger: 'service_schema_migrations',
+			lockKey,
+			bundles: [{
+				name: 'service',
+				migrations: [migration('0001_init.sql', `SELECT pg_advisory_unlock(${lockKey})`)],
+			}],
+		})
+		await expect(applyPostgresMigrations(fixture.db, migrationPlan)).rejects.toThrow(
+			'Postgres migration advisory unlock failed',
+		)
+	})
+
+	test('preserves the migration error when unlocking also fails', async () => {
+		const fixture = await realFixture('migration_unlock_after_failure')
+		const lockKey = 8_301_008
+		const migrationPlan = plan({
+			ledger: 'service_schema_migrations',
+			lockKey,
+			bundles: [{
+				name: 'service',
+				migrations: [
+					migration(
+						'0001_init.sql',
+						`SELECT pg_advisory_unlock(${lockKey}); INSERT INTO missing_unlock_table (id) VALUES (1)`,
+					),
+				],
+			}],
+		})
+		let failure = ''
+		try {
+			await applyPostgresMigrations(fixture.db, migrationPlan)
+		} catch (error) {
+			failure = error instanceof Error ? error.message : 'unknown migration error'
+		}
+		expect(failure).not.toBe('')
+		expect(failure).not.toContain('Postgres migration advisory unlock failed')
+	})
 })

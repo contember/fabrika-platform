@@ -189,13 +189,14 @@ export async function applyPostgresMigrations(
 ): Promise<string[]> {
 	const plan = definePostgresMigrationPlan(input)
 	await db.prepare(`SELECT pg_advisory_lock(${plan.lockKey})`).run()
-	let failed = false
+	let migrationFailed = false
+	let migrationError: unknown
+	const fresh: string[] = []
 	try {
 		await ensureLedger(db, plan.ledgerTable)
 		const beforeAdoption = await appliedIdentities(db, plan.ledgerTable)
 		if (beforeAdoption.size === 0) await adoptLegacyMigrations(db, plan)
 		const applied = await appliedIdentities(db, plan.ledgerTable)
-		const fresh: string[] = []
 		for (const bundle of plan.bundles) {
 			for (const migration of bundle.migrations) {
 				const identity = postgresMigrationIdentity(bundle.name, migration.name)
@@ -210,20 +211,22 @@ export async function applyPostgresMigrations(
 				fresh.push(identity)
 			}
 		}
-		return fresh
 	} catch (error) {
-		failed = true
-		throw error
-	} finally {
-		try {
-			const unlocked = await db
-				.prepare(`SELECT pg_advisory_unlock(${plan.lockKey}) AS unlocked`)
-				.first<{ unlocked: boolean }>()
-			if (unlocked?.unlocked !== true) throw new Error('Postgres migration advisory unlock failed')
-		} catch {
-			if (!failed) throw new Error('Postgres migration advisory unlock failed')
-		}
+		migrationFailed = true
+		migrationError = error
 	}
+	let unlockFailed = false
+	try {
+		const unlocked = await db
+			.prepare(`SELECT pg_advisory_unlock(${plan.lockKey}) AS unlocked`)
+			.first<{ unlocked: boolean }>()
+		unlockFailed = unlocked?.unlocked !== true
+	} catch {
+		unlockFailed = true
+	}
+	if (migrationFailed) throw migrationError
+	if (unlockFailed) throw new Error('Postgres migration advisory unlock failed')
+	return fresh
 }
 
 function validateBundle(bundle: PostgresMigrationBundle): void {

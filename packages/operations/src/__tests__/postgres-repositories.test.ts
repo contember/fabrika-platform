@@ -2,7 +2,7 @@ import type { IngestMessage } from '@fabrika/operations-contract'
 import { PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createOperationsIngestQueue } from '../node/consumer.js'
-import { applyMigrations } from '../node/migrate.js'
+import { applyMigrations, applyQualifiedMigrations, migrationResultMessage, postgresMigrations } from '../node/migrate.js'
 import { credentialVerifier } from '../pipeline.js'
 import { createPostgresOperationsRepositories, type OperationsRepositories, type RecordOccurrenceInput } from '../repositories.js'
 
@@ -52,6 +52,34 @@ function occurrence(eventId: string, receivedAt: number): RecordOccurrenceInput 
 }
 
 describe.skipIf(!hasPostgres)('Operations repositories on real Postgres', () => {
+	test('reports the platform jobs migration during an adopted legacy upgrade', async () => {
+		if (postgresUrl === null) throw new Error('FABRIKA_TEST_POSTGRES_URL is not set')
+		const legacySchema = `operations_legacy_${crypto.randomUUID().replaceAll('-', '')}`
+		const admin = PostgresDatabase.connect(postgresUrl)
+		await admin.prepare(`CREATE SCHEMA ${legacySchema}`).run()
+		await admin.close()
+		const legacy = PostgresDatabase.connect(postgresUrl, { connection: { search_path: legacySchema }, max: 1 })
+		try {
+			await legacy.prepare('CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)').run()
+			for (const [index, migration] of postgresMigrations().entries()) {
+				await legacy.batch([
+					legacy.prepare(migration.sql),
+					legacy.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').bind(migration.name, index + 1),
+				])
+			}
+
+			const applied = await applyQualifiedMigrations(legacy)
+			expect(applied).toEqual(['platform-node/0001_jobs.sql'])
+			expect(migrationResultMessage(applied)).toBe('migrations applied: platform-node/0001_jobs.sql')
+			expect(await applyMigrations(legacy)).toEqual([])
+		} finally {
+			await legacy.close()
+			const cleanup = PostgresDatabase.connect(postgresUrl)
+			await cleanup.prepare(`DROP SCHEMA ${legacySchema} CASCADE`).run()
+			await cleanup.close()
+		}
+	})
+
 	test('installs the shared jobs bundle and runs the Operations queue contract', async () => {
 		expect(await applyMigrations(db)).toEqual([])
 		const { results: ledger } = await db

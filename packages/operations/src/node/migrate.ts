@@ -39,7 +39,19 @@ export async function applyMigrations(
 	db: PostgresDatabase,
 	migrations: readonly PostgresMigration[] = postgresMigrations(),
 ): Promise<string[]> {
-	return postgresMigrationFilenames(await applyPostgresMigrations(db, postgresMigrationPlan(migrations)), 'operations')
+	return postgresMigrationFilenames(await applyQualifiedMigrations(db, migrations), 'operations')
+}
+
+/** Apply the complete composed plan for process-side reporting, including platform-owned bundles. */
+export function applyQualifiedMigrations(
+	db: PostgresDatabase,
+	migrations: readonly PostgresMigration[] = postgresMigrations(),
+): Promise<string[]> {
+	return applyPostgresMigrations(db, postgresMigrationPlan(migrations))
+}
+
+export function migrationResultMessage(applied: readonly string[]): string {
+	return applied.length === 0 ? 'migrations: already up to date' : `migrations applied: ${applied.join(', ')}`
 }
 
 function serviceBundle(directory: string) {
@@ -55,8 +67,7 @@ async function main(): Promise<void> {
 	if (url === undefined || url.trim() === '') throw new Error('FABRIKA_OPERATIONS_DATABASE_URL is required')
 	const db = PostgresDatabase.connect(url, { max: 1 })
 	try {
-		const applied = await applyMigrations(db)
-		console.info(applied.length === 0 ? 'migrations: already up to date' : `migrations applied: ${applied.join(', ')}`)
+		console.info(migrationResultMessage(await applyQualifiedMigrations(db)))
 	} finally {
 		await db.close()
 	}
