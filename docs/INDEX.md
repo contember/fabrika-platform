@@ -19,13 +19,15 @@ fabrika-platform is and how the pieces fit — then skim
 
 ## Active sprints
 
-No active sprint.
+- [Auth boundary cleanup (2026-07-31)](sprints/sprint-2026-07-31-auth-boundary-cleanup.md) — retire the duplicate in-process auth front door and close schema-reconcile cancellation.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
 
+- **In motion:** retire duplicate in-process gate enforcement and close schema-reconcile cancellation in the
+  [auth boundary cleanup sprint](sprints/sprint-2026-07-31-auth-boundary-cleanup.md).
 - **Release activation:** run hosted CI, bootstrap the nineteen npm packages, and prove the tokenless release path in
   [`backlog/25-bootstrap-npm-trusted-publishing.md`](backlog/25-bootstrap-npm-trusted-publishing.md).
 - **External next:** run the resulting composition against a real account in
