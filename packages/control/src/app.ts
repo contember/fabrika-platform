@@ -1,6 +1,7 @@
 import { type AuthContext, defineApp, type RequestExecutionContext, route } from '@fabrika/app'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { handleApi } from './api/router'
+import { controlRpcRouter } from './control-rpc'
 import type { Env } from './env'
 import { error } from './http'
 import { controlAuthMiddleware } from './iam'
@@ -45,6 +46,7 @@ export const controlApp = defineApp<ControlAppEnv, ControlAppContext>({
 		route.all('/iam/admin/*path', (ctx) => iamAdmin(ctx)),
 		route.all('/operations/api', (ctx) => operationsApi(ctx)),
 		route.all('/operations/api/*path', (ctx) => operationsApi(ctx)),
+		route.rpc('/api/rpc', controlRpcRouter),
 		route.all('/api/*path', (ctx) => controlApi(ctx)),
 		route.all('/*path', (ctx) => ctx.env.ASSETS.fetch(ctx.request)),
 	],

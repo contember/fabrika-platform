@@ -1,17 +1,17 @@
-// The `/api/*` router: maps method + path to a handler, enforcing the fabrika ACL on EVERY route before
-// the handler runs (the GitHub webhook is the only unauthenticated route — it lives in index.ts, not
-// here). Mirrors propustka's admin router/dispatch pattern: resolve + authorize, then dispatch.
+// The `/api/*` REST adapter maps method + path to typed use cases. Resource-independent ACL checks run
+// here. Run/deploy use cases resolve their app/environment coordinates first so denied callers receive
+// the same hidden 404 as an unknown resource.
 //
 // ACL: each route names its action (src/actions.ts) and, where it operates on a specific app/env, the
-// scope (app / environment). Authentication has already resolved `deps.auth`; `authorize` performs
-// the `can` check and returns a 403 on failure. Mutations audit through the same AuthContext.
+// scope (app / environment). Authentication has already resolved `deps.auth`; mutations audit through
+// that same context.
 
 import type { AuthContext } from '@fabrika/auth'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { ACTIONS } from '../actions'
 import type { ControlRepositories, RunRow } from '../db'
 import { error } from '../http'
-import { appScope, authorize, envScope } from '../iam'
+import { appScope, authorize } from '../iam'
 import type { RepoSource } from '../repo-source'
 import type { Vault } from '../vault'
 import { adoptNamespace, createNamespace, getNamespace, listNamespaces, type NamespaceContext, planNamespace, reconcileNamespace } from './namespaces'
@@ -94,12 +94,15 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 			...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
 		}
 	}
-	const runsCtx = (authorized: Awaited<ReturnType<typeof authorize>>): RunsContext | Response => {
-		if (!authorized.ok) {
-			return authorized.response
-		}
-		return { repositories: deps.repositories, queue: deps.queue, logs: deps.logs, cancel: deps.cancelRun, request, url, authorized }
-	}
+	const runsCtx = (): RunsContext => ({
+		repositories: deps.repositories,
+		queue: deps.queue,
+		logs: deps.logs,
+		cancel: deps.cancelRun,
+		request,
+		url,
+		auth: deps.auth,
+	})
 	const namespaceCtx = (authorized: Awaited<ReturnType<typeof authorize>>): NamespaceContext | Response => {
 		if (!authorized.ok) {
 			return authorized.response
@@ -239,25 +242,16 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 		case 'runs': {
 			if (id === undefined) {
 				if (method === 'GET') {
-					// List/filter runs — read access. App/env scope from query params when present.
-					const scope = scopeForRunQuery(url)
-					const a = authorize(deps.auth, ACTIONS.DEPLOY_READ, scope)
-					const c = runsCtx(a)
-					return c instanceof Response ? c : listRuns(c)
+					return listRuns(runsCtx())
 				}
 				return methodNotAllowed()
 			}
 			// /api/runs/:id/cancel — MUTATION (deploy.trigger), not a read. Cancel a pending/running run.
 			if (sub === 'cancel') {
 				if (method !== 'POST') return methodNotAllowed()
-				const a = authorize(deps.auth, ACTIONS.DEPLOY_TRIGGER)
-				const c = runsCtx(a)
-				return c instanceof Response ? c : cancelRun(c, id)
+				return cancelRun(runsCtx(), id)
 			}
-			// /api/runs/:id, /api/runs/:id/log, /api/runs/:id/tail — read access.
-			const a = authorize(deps.auth, ACTIONS.DEPLOY_READ)
-			const c = runsCtx(a)
-			if (c instanceof Response) return c
+			const c = runsCtx()
 			if (sub === undefined) {
 				return method === 'GET' ? getRun(c, id) : methodNotAllowed()
 			}
@@ -273,29 +267,12 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 		// ── Manual trigger (deploy.trigger, app+env scoped) ─────────────────────
 		case 'deploy': {
 			if (method !== 'POST') return methodNotAllowed()
-			// Scope to the app being deployed (read from the body would require parsing twice; the
-			// handler re-validates app/env, and the env scope is applied via the app scope here).
-			const a = authorize(deps.auth, ACTIONS.DEPLOY_TRIGGER)
-			const c = runsCtx(a)
-			return c instanceof Response ? c : triggerDeploy(c)
+			return triggerDeploy(runsCtx())
 		}
 
 		default:
 			return error(404, 'not found')
 	}
-}
-
-/** Build the scope for a run-history query from `?app=`/`?env=` (app scope wins; else env; else none). */
-function scopeForRunQuery(url: URL): ReturnType<typeof appScope> | undefined {
-	const app = url.searchParams.get('app')
-	if (app !== null && app !== '') {
-		return appScope(app)
-	}
-	const env = url.searchParams.get('env')
-	if (env !== null && env !== '') {
-		return envScope(env)
-	}
-	return undefined
 }
 
 function methodNotAllowed(): Response {

@@ -6,16 +6,19 @@
 // The queue producer is injected (a `JobQueue`) so this stays testable without a real Queue. The
 // run row is created BEFORE the enqueue so a trigger is durable even if delivery is delayed.
 
-import type { CursorList, RunDto, RunLogLine, RunLogResponse, RunTailResponse } from '@fabrika/control-contract'
+import type { AuthContext } from '@fabrika/auth'
+import type { CursorList, RunDto, RunListInput, RunLogLine, RunLogResponse, RunTailResponse, TriggerDeployRequest } from '@fabrika/control-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
 import { logsKey } from '@fabrika/runner-cloudflare'
+import { ACTIONS } from '../actions'
 import type { ControlRepositories, RunRow } from '../db'
 import { uuidv7 } from '../db'
-import { error, json, readJson } from '../http'
-import type { Authorized } from '../iam'
+import { error, readJson } from '../http'
+import { appScope, envScope } from '../iam'
 import { stringField } from '../json'
 import { isRefPattern } from '../ref-match'
 import type { DeployJobMessage } from '../run-lifecycle'
+import { fail, jsonAdapter } from './domain'
 
 /** The deploy queue producer — the platform `JobQueue` port, carrying the run pointer. */
 export type DeployQueue = JobQueue<DeployJobMessage>
@@ -35,8 +38,10 @@ export interface RunsContext {
 	cancel(run: RunRow): Promise<void>
 	request: Request
 	url: URL
-	authorized: Authorized
+	auth: AuthContext
 }
+
+export type RunsUseCaseContext = Omit<RunsContext, 'request' | 'url'>
 
 function toRunDto(row: RunRow): RunDto {
 	return {
@@ -74,10 +79,21 @@ function parseLimit(url: URL): number {
 /** List runs, newest first, optionally filtered by `?app=` and/or `?env=`, keyset-paged by `?before=`. */
 export async function listRuns(c: RunsContext): Promise<Response> {
 	const p = c.url.searchParams
-	const limit = parseLimit(c.url)
-	const appId = p.get('app') ?? undefined
-	const env = p.get('env') ?? undefined
-	const before = p.get('before') ?? undefined
+	const input: RunListInput = {
+		...(p.get('app') === null ? {} : { appId: p.get('app') ?? undefined }),
+		...(p.get('env') === null ? {} : { env: p.get('env') ?? undefined }),
+		...(p.get('before') === null ? {} : { before: p.get('before') ?? undefined }),
+		limit: parseLimit(c.url),
+	}
+	return jsonAdapter(() => listRunsUseCase(c, input))
+}
+
+export async function listRunsUseCase(c: RunsUseCaseContext, input: RunListInput): Promise<CursorList<RunDto>> {
+	authorizeList(c.auth, input)
+	const limit = input.limit ?? DEFAULT_LIMIT
+	const appId = input.appId
+	const env = input.env
+	const before = input.before
 	const rows = await c.repositories.runs.listRuns({
 		...(appId !== undefined ? { appId } : {}),
 		...(env !== undefined ? { env } : {}),
@@ -87,37 +103,42 @@ export async function listRuns(c: RunsContext): Promise<Response> {
 	const items = rows.map(toRunDto)
 	const last = rows.at(-1)
 	const nextCursor = rows.length === limit && last ? last.id : null
-	const response: CursorList<RunDto> = { items, nextCursor }
-	return json(response)
+	return { items, nextCursor }
 }
 
 export async function getRun(c: RunsContext, id: string): Promise<Response> {
-	const row = await c.repositories.runs.getRun(id)
-	return row ? json(toRunDto(row)) : error(404, 'run not found')
+	return jsonAdapter(() => getRunUseCase(c, id))
+}
+
+export async function getRunUseCase(c: RunsUseCaseContext, id: string): Promise<RunDto> {
+	const row = await requireVisibleRun(c, id, ACTIONS.DEPLOY_READ)
+	return toRunDto(row)
 }
 
 /**
  * Cancel a pending/running deploy (the "Cancel" button): destroy its container + record it failed + free
  * the per-app-env lock (via the `cancel` seam). A run that already finished is a 409 (nothing to cancel).
- * ACL (`deploy.trigger`) is enforced by the router before this runs. Returns the updated (failed) run.
+ * The use case resolves the run before its scoped ACL check and hides denied rows as not found.
  */
 export async function cancelRun(c: RunsContext, id: string): Promise<Response> {
-	const run = await c.repositories.runs.getRun(id)
-	if (!run) {
-		return error(404, 'run not found')
-	}
+	return jsonAdapter(() => cancelRunUseCase(c, id))
+}
+
+export async function cancelRunUseCase(c: RunsUseCaseContext, id: string): Promise<RunDto> {
+	const run = await requireVisibleRun(c, id, ACTIONS.DEPLOY_TRIGGER)
 	if (run.status !== 'pending' && run.status !== 'running') {
-		return error(409, 'run already finished')
+		fail(409, 'run already finished')
 	}
 	await c.cancel(run)
-	await c.authorized.auth.audit({
+	await c.auth.audit({
 		action: 'deploy.trigger',
 		resourceType: 'run',
 		resourceId: id,
 		metadata: { appId: run.app_id, env: run.env, cancelled: true },
 	})
 	const updated = await c.repositories.runs.getRun(id)
-	return updated ? json(toRunDto(updated)) : error(404, 'run not found')
+	if (updated === null) fail(404, 'run not found')
+	return toRunDto(updated)
 }
 
 /**
@@ -125,19 +146,18 @@ export async function cancelRun(c: RunsContext, id: string): Promise<Response> {
  * the dashboard renders them without re-parsing NDJSON. 404 when the run / its log doesn't exist yet.
  */
 export async function getRunLog(c: RunsContext, id: string): Promise<Response> {
-	const run = await c.repositories.runs.getRun(id)
-	if (!run) {
-		return error(404, 'run not found')
-	}
+	return jsonAdapter(() => getRunLogUseCase(c, id))
+}
+
+export async function getRunLogUseCase(c: RunsUseCaseContext, id: string): Promise<RunLogResponse> {
+	const run = await requireVisibleRun(c, id, ACTIONS.DEPLOY_READ)
 	const object = await c.logs.get(run.log_key ?? logsKey(id))
 	if (!object) {
-		const response: RunLogResponse = { lines: [] }
-		return json(response)
+		return { lines: [] }
 	}
 	const text = await object.text()
 	const lines = parseNdjsonLogs(text)
-	const response: RunLogResponse = { lines, status: run.status }
-	return json(response)
+	return { lines, status: run.status }
 }
 
 /**
@@ -146,22 +166,22 @@ export async function getRunLog(c: RunsContext, id: string): Promise<Response> {
  * slice of lines past the cursor the dashboard already has. Returns the new lines + the next cursor.
  */
 export async function tailRunLog(c: RunsContext, id: string): Promise<Response> {
-	const run = await c.repositories.runs.getRun(id)
-	if (!run) {
-		return error(404, 'run not found')
-	}
 	const afterRaw = c.url.searchParams.get('after')
 	const after = afterRaw !== null && /^\d+$/.test(afterRaw) ? Number.parseInt(afterRaw, 10) : 0
+	return jsonAdapter(() => tailRunLogUseCase(c, id, after))
+}
+
+export async function tailRunLogUseCase(c: RunsUseCaseContext, id: string, after: number): Promise<RunTailResponse> {
+	const run = await requireVisibleRun(c, id, ACTIONS.DEPLOY_READ)
 	const object = await c.logs.get(run.log_key ?? logsKey(id))
 	const all = object ? parseNdjsonLogs(await object.text()) : []
 	const lines = all.slice(after)
-	const response: RunTailResponse = {
+	return {
 		lines,
 		cursor: all.length,
 		done: run.status === 'succeeded' || run.status === 'failed',
 		status: run.status,
 	}
-	return json(response)
 }
 
 /** Parse the relay's NDJSON log into typed lines (skips blanks; tolerant of a trailing partial line). */
@@ -198,8 +218,7 @@ function isRunLogLine(value: unknown): value is RunLogLine {
 /**
  * Manual deploy trigger (the "Deploy" button / `triggerDeploy` RPC): resolve the app + env, create a
  * `pending` run, then enqueue it. `ref` defaults to the env's trigger_ref (when set) else the app's
- * default branch. Returns the created run. ACL (`deploy.trigger`) is enforced by the router with the
- * app+env scope before this runs.
+ * default branch. The use case checks deploy.trigger against the resolved app/environment coordinates.
  */
 export async function triggerDeploy(c: RunsContext): Promise<Response> {
 	const body = await readJson(c.request)
@@ -208,26 +227,56 @@ export async function triggerDeploy(c: RunsContext): Promise<Response> {
 	if (!appId || !env) {
 		return error(400, 'appId and env required')
 	}
+	const ref = stringField(body, 'ref')
+	return jsonAdapter(() => triggerDeployUseCase(c, { appId, env, ...(ref === undefined ? {} : { ref }) }), { status: 201 })
+}
+
+export async function triggerDeployUseCase(c: RunsUseCaseContext, input: TriggerDeployRequest): Promise<RunDto> {
+	const { appId, env } = input
 	const app = await c.repositories.registry.getApp(appId)
 	if (!app) {
-		return error(404, 'app not found')
+		fail(404, 'app env not found')
 	}
 	const appEnv = await c.repositories.registry.getAppEnv(appId, env)
 	if (!appEnv) {
-		return error(404, 'app env not found')
+		fail(404, 'app env not found')
 	}
+	if (!canAtCoordinates(c.auth, ACTIONS.DEPLOY_TRIGGER, appId, env)) fail(404, 'app env not found')
 	// Explicit ref wins; else the env's trigger_ref when it's a concrete ref; else the app's default
 	// branch. A GLOB trigger_ref (e.g. `refs/tags/v*`) is never a deployable ref, so it falls through to
 	// the default branch — pass an explicit `ref` to manually deploy a specific tag of a pattern env.
 	const concreteTriggerRef = appEnv.trigger_ref !== null && !isRefPattern(appEnv.trigger_ref) ? appEnv.trigger_ref : null
-	const ref = stringField(body, 'ref') ?? concreteTriggerRef ?? `refs/heads/${app.default_branch}`
+	const ref = input.ref ?? concreteTriggerRef ?? `refs/heads/${app.default_branch}`
 	const run = await c.repositories.runs.createRun({ id: uuidv7(), appId, env, ref, trigger: 'manual' })
 	await c.queue.send({ runId: run.id })
-	await c.authorized.auth.audit({
+	await c.auth.audit({
 		action: 'deploy.trigger',
 		resourceType: 'run',
 		resourceId: run.id,
 		metadata: { appId, env, ref, trigger: 'manual' },
 	})
-	return json(toRunDto(run), { status: 201 })
+	return toRunDto(run)
+}
+
+async function requireVisibleRun(c: RunsUseCaseContext, id: string, action: string): Promise<RunRow> {
+	const run = await c.repositories.runs.getRun(id)
+	if (run === null || !canAtCoordinates(c.auth, action, run.app_id, run.env)) fail(404, 'run not found')
+	return run
+}
+
+function authorizeList(auth: AuthContext, input: RunListInput): void {
+	const appId = input.appId
+	const env = input.env
+	const allowed = appId !== undefined && appId !== ''
+		? env !== undefined && env !== ''
+			? auth.can(ACTIONS.DEPLOY_READ, appScope(appId)) || auth.can(ACTIONS.DEPLOY_READ, envScope(env))
+			: auth.can(ACTIONS.DEPLOY_READ, appScope(appId))
+		: env !== undefined && env !== ''
+		? auth.can(ACTIONS.DEPLOY_READ, envScope(env))
+		: auth.can(ACTIONS.DEPLOY_READ)
+	if (!allowed) fail(403, `not authorized: ${ACTIONS.DEPLOY_READ}`)
+}
+
+function canAtCoordinates(auth: AuthContext, action: string, appId: string, env: string): boolean {
+	return auth.can(action, appScope(appId)) || auth.can(action, envScope(env))
 }

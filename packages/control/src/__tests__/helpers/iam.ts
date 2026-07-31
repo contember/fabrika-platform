@@ -1,4 +1,4 @@
-import { type AuthContext, makeDevContext } from '@fabrika/auth'
+import { type AuthContext, makeDevContext, type PersonaSpec } from '@fabrika/auth'
 
 /** A resolved dev context that authorizes every action. */
 export function allowAllAuth(): AuthContext {
@@ -18,4 +18,9 @@ export function authWithActions(actions: readonly string[], label = 'operator@te
 		type: 'user',
 		permissions: actions.map((action) => ({ action, scope: null })),
 	})
+}
+
+/** A resolved context with exact scoped permission entries. */
+export function authWithPermissions(permissions: PersonaSpec['permissions'], label = 'scoped@test'): AuthContext {
+	return makeDevContext({ id: `p-${label}`, label, type: 'user', permissions })
 }

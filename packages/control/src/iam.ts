@@ -145,7 +145,17 @@ export function controlAuthMiddleware<Ctx extends AuthCarrier>(env: IamEnv): Mid
 	const provisioningKey = (env.PROPUSTKA_PROVISIONING_KEY ?? '').trim()
 	const authenticate = iam.authMiddleware<Ctx>({
 		gates: VOZKA_GATES,
-		onError(_request, failure) {
+		onError(request, failure) {
+			if (new URL(request.url).pathname === '/api/rpc') {
+				const type = failure.status === 401 ? 'auth' : failure.status === 403 ? 'forbidden' : 'error'
+				return Response.json({
+					error: {
+						type,
+						message: failure.reason,
+						...(failure.loginUrl === undefined ? {} : { loginUrl: failure.loginUrl }),
+					},
+				}, { status: failure.status })
+			}
 			return error(
 				failure.status,
 				failure.reason,
