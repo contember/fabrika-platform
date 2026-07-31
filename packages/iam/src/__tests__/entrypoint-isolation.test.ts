@@ -3,7 +3,7 @@
 //
 // Why it needs proving: nothing in the type system stops someone adding `import { X } from
 // 'cloudflare:workers'` to a file that `src/node/server.ts` reaches, or reaching for `node:fs` inside
-// `src/routes.ts`. Both compile. Both typecheck. The first one fails at Bun startup with an
+// `src/app.ts`. Both compile. Both typecheck. The first one fails at Bun startup with an
 // unresolvable module; the second fails on Workers — and neither failure shows up in any other test
 // here, because the suite runs under Bun with `cloudflare:workers` mocked out.
 //
@@ -94,7 +94,7 @@ describe('entrypoint isolation', () => {
 		// Not vacuous: it really did walk the graph, and it really is the Cloudflare side.
 		expect(graph.files).toContain('index.ts')
 		expect(graph.files).toContain('rpc.ts')
-		expect(graph.files).toContain('routes.ts')
+		expect(graph.files).toContain('app.ts')
 		expect(graph.files).toContain('db.ts')
 		expect([...graph.externals]).toContain('cloudflare:workers')
 	})
@@ -107,7 +107,7 @@ describe('entrypoint isolation', () => {
 		// Not vacuous: it walked the graph, it is the process side, and it shares the route/RPC layer.
 		expect(graph.files).toContain('node/server.ts')
 		expect(graph.files).toContain('rpc.ts')
-		expect(graph.files).toContain('routes.ts')
+		expect(graph.files).toContain('app.ts')
 		expect(graph.files).toContain('db.ts')
 		expect([...graph.externals]).toContain('@fabrika/platform-node')
 	})
@@ -126,7 +126,7 @@ describe('entrypoint isolation', () => {
 	test('the SHARED layer names neither runtime', () => {
 		// The layer both entrypoints sit on. If any of these ever needs a runtime-specific import, the
 		// dependency belongs behind a port in `env.ts`, not inlined here.
-		for (const entry of ['rpc.ts', 'routes.ts', 'cron.ts', 'rpc-http.ts', 'db.ts', 'services.ts']) {
+		for (const entry of ['app.ts', 'rpc.ts', 'cron.ts', 'rpc-http.ts', 'db.ts', 'services.ts']) {
 			const graph = walk(entry)
 			expect([...graph.externals].filter(CLOUDFLARE_ONLY)).toEqual([])
 			expect([...graph.externals].filter(PROCESS_ONLY)).toEqual([])

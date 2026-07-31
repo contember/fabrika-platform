@@ -1,10 +1,8 @@
 // The BUN entrypoint — the IAM service as a long-running process.
 //
-// The sibling of `src/index.ts`, not a fork of it. Both call the same three functions:
+// The sibling of `src/index.ts`, not a fork of it. Both use the same application and jobs:
 //
-//   handleFetch   (src/routes.ts)  — `/auth/*`, the JWKS, and `/admin/*`. Untouched by this file;
-//                                    the layer was already `Request → Response`, so serving it
-//                                    from `Bun.serve` instead of a Worker is wiring, not a rewrite.
+//   createIamApp  (src/app.ts)     — `/auth/*`, the JWKS, `/admin/*`, and optional Bun transports.
 //   createIamRpc  (src/rpc.ts)     — the `IamRpc` object. A service binding on Workers; here it is
 //                                    reached over HTTP via `handleRpcHttp`, which authenticates the
 //                                    transport with a shared secret because HTTP has no equivalent of
@@ -13,54 +11,18 @@
 //                                    platform cron drives it (`run.crontab` → `node/prune.ts`), which
 //                                    is the same shape as `triggers.crons` driving `scheduled`.
 //
-// Route order matters and is the one thing this file decides: `/rpc/*` and `/healthz` are claimed
-// before `handleFetch`. Everything else is identical to the Worker.
+// The shared application owns route order, including optional `/rpc/*` and `/healthz` routes.
 //
 // Run it: `bun src/node/server.ts` (see `zerops.yaml` → `run.start`).
 
-import { handleFetch } from '../routes'
-import { createIamRpc } from '../rpc'
-import { handleMintHttp, handleRpcHttp, isMintPath, isRpcPath } from '../rpc-http'
+import { createBunHandler } from '@fabrika/app/bun'
+import { createIamApp } from '../app'
 import { createRuntime, type Runtime } from './runtime'
 
 /** Build the server's fetch handler for an assembled runtime. Exported so a test can drive it directly. */
 export function createFetchHandler(runtime: Runtime): (request: Request) => Promise<Response> {
-	const route = createRouter(runtime)
-	return async (request: Request): Promise<Response> => {
-		try {
-			return await route(request)
-		} catch (err) {
-			// NOT optional on this runtime. Bun's default error page embeds the exception AND the
-			// surrounding SOURCE LINES in the response body — verified against `/auth/login` with a
-			// broken OIDC issuer. The Workers runtime returns an opaque 500 instead, so this is the one
-			// place the two entrypoints would have genuinely differed in what they show an attacker.
-			// Log a short message only; an error object here can quote a token that came off the wire.
-			console.error('unhandled request error:', err instanceof Error ? err.message : 'unknown error')
-			return new Response('internal error', { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8' } })
-		}
-	}
-}
-
-function createRouter(runtime: Runtime): (request: Request) => Promise<Response> {
-	const rpc = createIamRpc(runtime.env, runtime.ctx)
-	return async (request: Request): Promise<Response> => {
-		const url = new URL(request.url)
-		// Liveness only, deliberately: it answers "is this process serving?", not "is Postgres healthy?".
-		// Wiring the database into the health check would let one slow query make the platform restart
-		// every container at once, turning a degraded dependency into an outage.
-		if (url.pathname === '/healthz') {
-			return Response.json({ status: 'ok' })
-		}
-		if (isRpcPath(url.pathname)) {
-			return handleRpcHttp(request, rpc, runtime.config.rpcKey)
-		}
-		// BEFORE `handleFetch`, which owns the rest of `/auth/*` and would 404 these. The two mint paths
-		// are the auth proxy's cold path and carry their own key — see `rpc-http.ts`.
-		if (isMintPath(url.pathname)) {
-			return handleMintHttp(request, rpc, runtime.config.proxyKey)
-		}
-		return handleFetch(request, runtime.env, runtime.ctx)
-	}
+	const app = createIamApp({ rpcKey: runtime.config.rpcKey, proxyKey: runtime.config.proxyKey, health: true })
+	return createBunHandler(app, runtime.env, { executionContext: runtime.ctx }).fetch
 }
 
 async function main(): Promise<void> {
@@ -69,7 +31,7 @@ async function main(): Promise<void> {
 		port: runtime.config.port,
 		// The project's L7 balancer terminates TLS and forwards plain HTTP on the private network, so
 		// this listener speaks HTTP and holds no certificates. The session cookie is still marked
-		// `Secure`: `auth/routes.ts` decides that from the configured public origin (`ISSUER`), not from
+		// `Secure`: the auth handler decides that from the configured public origin (`ISSUER`), not from
 		// the socket, precisely because behind a terminating balancer the socket is the wrong signal.
 		fetch: createFetchHandler(runtime),
 		// Backstop for anything raised outside the handler. The handler already catches its own throws

@@ -16,10 +16,10 @@ import type {
 	RevokeKeyResult,
 } from '@fabrika/auth-core'
 import { WorkerEntrypoint } from 'cloudflare:workers'
+import { iamApp } from './app'
 import { pruneAuthLog } from './cron'
 import { createIamRepositories } from './db'
 import type { Env } from './env'
-import { handleFetch } from './routes'
 import { createIamRpc } from './rpc'
 
 /**
@@ -28,7 +28,7 @@ import { createIamRpc } from './rpc'
  * which does not traverse any public edge) and `fetch()` (`/admin/*` + `/auth/*`).
  *
  * There is no logic here. Every method delegates: the RPC surface to `createIamRpc` (src/rpc.ts),
- * `fetch` to `handleFetch` (src/routes.ts), `scheduled` to `pruneAuthLog` (src/cron.ts) — the same
+ * `fetch` to `iamApp`, `scheduled` to `pruneAuthLog` (src/cron.ts) — the same
  * three functions the Bun entrypoint (src/node/server.ts) calls. This file's whole job is to bind
  * `cloudflare:workers` to them, and it is the ONLY file in the package that imports it: the Bun
  * process must never load this module, and it must never load `bun:*`/`node:*`.
@@ -92,7 +92,7 @@ export class Propustka extends WorkerEntrypoint<WorkerBindings> implements IamRp
 	}
 
 	override fetch(request: Request): Promise<Response> {
-		return handleFetch(request, this.iam, this.ctx)
+		return iamApp.fetch(request, this.iam, this.ctx)
 	}
 
 	/**

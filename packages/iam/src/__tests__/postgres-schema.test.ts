@@ -485,7 +485,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 	/**
 	 * The runtime `node/server.ts` would build from `process.env`, assembled by hand so it binds the
 	 * SCHEMA-SCOPED pool this fixture owns instead of opening a second one. Everything else — the
-	 * routing, the RPC mount, the shared `handleFetch` — is exactly what runs in production.
+	 * routing, the RPC mount, and the shared application are exactly what runs in production.
 	 */
 	function runtime(): { handler: (request: Request) => Promise<Response>; drain: () => Promise<void> } {
 		const tasks = createBackgroundTasks({ label: 'test' })

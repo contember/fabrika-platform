@@ -3,7 +3,7 @@
 //
 // Everything under `src/node/` is Bun/Node-only and is the ONLY part of this package allowed to be.
 // It imports `@fabrika/platform-node`; `src/index.ts` (the Worker) imports `cloudflare:workers`; the
-// shared layer between them (`rpc.ts`, `routes.ts`, `cron.ts`, everything they reach) imports
+// shared layer between them (`app.ts`, `rpc.ts`, `cron.ts`, everything they reach) imports
 // neither. `src/__tests__/entrypoint-isolation.test.ts` walks both graphs and fails if that stops
 // being true.
 //
