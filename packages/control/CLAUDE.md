@@ -18,7 +18,7 @@ bun run bootstrap                                  # deploy fabrika itself (need
 bun run seed                                       # register apps (single-account: no account registry)
 
 # The Bun/Postgres target (see zerops.yaml)
-bun run migrate:postgres                           # apply migrations-postgres/ (VOZKA_DATABASE_URL)
+bun run migrate:postgres                           # apply migrations-postgres/ (FABRIKA_CONTROL_DATABASE_URL)
 bun run serve                                      # the long-running server (src/node/server.ts)
 bun run maintenance                                # the cron one-shot: repo poll + stale-run sweep
 
@@ -81,23 +81,23 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   `@fabrika/auth` middleware; each handler then calls `authorize` with that
   resolved context and its action/scope. Actions/scopes live in `src/actions.ts`.
   The GitHub webhook (`src/webhook.ts`) is the
-  ONLY unauthenticated route — HMAC-gated instead. propustka is the WHOLE front door now (native auth, no
+  ONLY unauthenticated route — HMAC-gated instead. IAM is the WHOLE front door now (native auth, no
   Cloudflare Access): `src/iam.ts` configures the public IAM SDK over `env.IAM` —
   a human via SSO (`px_session` → minted `px_token`) or a machine via an `Authorization: Bearer px_` key
-  (gates: `VOZKA_GATES` = service + human) — then `can(action, scope?)` + audit. `env.IAM` is the
+  (gates: `CONTROL_GATES` = service + human) — then `can(action, scope?)` + audit. `env.IAM` is the
   `IamRpc` CONTRACT, so it is a service binding on Cloudflare and `HttpIamRpc` (`@fabrika/auth`, bearer
-  `PROPUSTKA_RPC_KEY` against IAM's `/rpc/*` at the private `PROPUSTKA_RPC_URL`) in a process.
-  `PROPUSTKA_URL` remains the public issuer. ONE instance per process, never per request:
+  `FABRIKA_IAM_RPC_KEY` against IAM's `/rpc/*` at the private `FABRIKA_IAM_RPC_URL`) in a process.
+  `FABRIKA_IAM_URL` remains the public issuer. ONE instance per process, never per request:
   `PropustkaAuth` caches the JWKS in a WeakMap keyed by that object.
 - **Local vs off-local auth by the `DEV` var:** `DEV='true'` → a fabrika-synthesized AuthContext from a
-  fixed dev persona (no propustka, selected by the `X-Dev-Principal` header / cookie); `DEV=''` →
-  `PropustkaAuth` over `env.IAM` (needs `PROPUSTKA_URL` as the issuer). `VOZKA_BOOTSTRAP_ADMINS`
+  fixed dev persona (no IAM service, selected by the `X-Dev-Principal` header / cookie); `DEV=''` →
+  IAM-backed auth over `env.IAM` (needs `FABRIKA_IAM_URL` as the issuer). `FABRIKA_CONTROL_BOOTSTRAP_ADMINS`
   is the first-operator escape hatch — fails CLOSED on a malformed value.
-- **The `px_token` cookie's `Secure` flag comes from `VOZKA_DOMAIN`, never from the request protocol.**
+- **The `px_token` cookie's `Secure` flag comes from `FABRIKA_CONTROL_DOMAIN`, never from the request protocol.**
   Behind a TLS-terminating L7 balancer the browser spoke HTTPS and the process sees plain HTTP, so
   `PropustkaAuth`'s default derivation would silently drop `Secure`. `secureCookies` (`src/iam.ts`)
   forces it whenever a public domain is configured. Widening only — the Cloudflare path is unchanged.
-- **Vault (`src/vault.ts`): envelope AES-256-GCM**, KEK from `VOZKA_VAULT_KEY` (never in D1, never logged).
+- **Vault (`src/vault.ts`): envelope AES-256-GCM**, KEK from `FABRIKA_CONTROL_VAULT_KEY` (never in D1, never logged).
   Secret VALUES are write-only over the API; D1 stores only ciphertext + wrapped DEK. Losing the KEK is unrecoverable by design.
 - **Secrets resolve by ref scheme** (`src/secret-resolver.ts`): `vault:` / `secretstore:` / `env:` / `literal:`.
   An unknown / unresolvable ref THROWS — never deploy with an empty credential. The resolver handles ONLY
@@ -133,7 +133,7 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   `deploy_locks` ROW per `<app>:<env>`, NOT a DO — the implementation needs nothing but the `SqlDatabase`
   port, so it is portable and lives with the ports, not in this Worker):
   `executeDeploy` takes it before starting and releases it in `finally`, so two triggers can't deploy the
-  same target concurrently (race on cf-state / wrangler / propustka). A contended run returns `deferred` —
+  same target concurrently (race on cf-state / wrangler / IAM). A contended run returns `deferred` —
   left `pending` and re-enqueued by the consumer with a delay (a fresh delivery, so the retry budget is
   preserved). The lease is non-reentrant + TTL-bounded (self-heals if a consumer dies) + holder-checked on
   release; `acquire` is ONE conditional upsert (`meta.changes` is the answer) so there is no read-then-write

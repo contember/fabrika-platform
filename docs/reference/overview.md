@@ -47,9 +47,9 @@ platform_, never _an app runs on both_.
 | `@fabrika/auth`                    | The published SDK apps depend on.                                                              |
 | `@fabrika/app`                     | Fetch routing, middleware, typed RPC, object authorization, client, explicit runtime adapters. |
 | `@fabrika/iam`                     | The IAM service itself: identity, keys, policies, and audit.                                   |
-| `@fabrika/iam-contract`            | Runtime-neutral IAM admin REST request and response DTOs.                                      |
+| `@fabrika/iam-contract`            | Runtime-neutral IAM admin REST DTOs and typed RPC contract.                                    |
 | `@fabrika/iam-ui`                  | Access feature routes embedded in the unified console.                                         |
-| `@fabrika/operations-contract`     | Runtime-neutral ingest, catalog, release, access, and operator DTOs.                           |
+| `@fabrika/operations-contract`     | Runtime-neutral ingest, catalog, release, access, operator DTOs, and typed RPC contract.       |
 | `@fabrika/operations`              | Error ingest, grouping, triage, releases, source maps, health, and runtime compositions.       |
 | `@fabrika/operations-ui`           | Operations feature routes and views embedded in the unified console.                           |
 | `@fabrika/provider-contract`       | Open runtime and control-provider interfaces plus versioned JSON envelopes.                    |
@@ -59,7 +59,7 @@ platform_, never _an app runs on both_.
 | `@fabrika/platform`                | Runtime ports shared by control, IAM, and Operations.                                          |
 | `@fabrika/platform-node`           | Bun/Postgres/S3 implementations of those runtime ports.                                        |
 | `@fabrika/control`                 | Shared control-plane core plus separate Cloudflare Worker and Zerops/Bun composition roots.    |
-| `@fabrika/control-contract`        | Runtime-neutral control REST DTOs and the deploy log line shape.                               |
+| `@fabrika/control-contract`        | Runtime-neutral control REST DTOs, typed RPC contract, and deploy log line shape.              |
 | `@fabrika/installation-contract`   | Open contract for provider-specific platform `init`, `plan`, and `deploy` commands.            |
 | `@fabrika/installation-cloudflare` | Cloudflare account bring-up and platform plan/deploy composition.                              |
 | `@fabrika/installation-zerops`     | Zerops topology, generated installation artifacts, and platform plan validation.               |
@@ -95,13 +95,13 @@ The narrow contract packages keep wire types away from runtime entrypoints:
 ## Operator console
 
 Control serves one Fabrika console with Delivery, Access, and Operations
-navigation. Delivery routes call the control API directly. Access routes come
-from `@fabrika/iam-ui` and call `/iam/admin/*` on the same control origin.
-Operations routes come from `@fabrika/operations-ui` and call
-`/operations/api/*`. Control transports those requests to the corresponding
-private service. IAM and Operations retain authentication, authorization,
-domain-data, and audit ownership. Cross-origin mutations are rejected at both
-gateways.
+navigation. Delivery uses `ControlRpcContract` at `/api/rpc`. Access routes come
+from `@fabrika/iam-ui` and use `IamAdminRpcContract` at `/iam/admin/rpc` on the
+same control origin. Operations routes come from `@fabrika/operations-ui` and
+use `OperationsRpcContract` at `/operations/api/rpc`. Control transports the
+latter two requests to the corresponding private service. IAM and Operations
+retain authentication, authorization, domain-data, and audit ownership.
+Cross-origin mutations are rejected at both gateways.
 
 IAM has no standalone SPA or public admin origin. Its public HTTP surface is
 limited to native authentication and JWKS endpoints. Control-to-IAM RPC and admin
@@ -134,6 +134,9 @@ Each defines a runtime-neutral `app.ts` and keeps Cloudflare/Bun lifecycle code
 in its composition root. Delivery and Operations use the IAM SDK middleware;
 IAM owns the identity boundary behind it. Their established REST and
 service-binding transports coexist with typed RPC in the same framework.
+The three concrete compositions, compatibility surfaces, and shared Postgres
+migration wiring are documented in
+[`core-application-composition.md`](core-application-composition.md).
 
 The proxy and the application perform different checks. The proxy evaluates
 static path gates before a request reaches the private app service. App middleware

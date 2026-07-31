@@ -2,12 +2,12 @@
 //
 // Each app OWNS its authz vocabulary (scope dimensions, action catalog, roles) and declares it
 // in its own code as an `AppSchema`. At deploy time the app reconciles that declaration into
-// Propustka by PUTting it to the idempotent admin endpoint `PUT /admin/apps/:app/schema`, so the
+// IAM by PUTting it to the idempotent admin endpoint `PUT /admin/apps/:app/schema`, so the
 // IAM Worker's DB always mirrors what the app actually checks at runtime. An app's FIRST schema
-// reconcile is also how it REGISTERS itself in propustka's app registry.
+// reconcile is also how it REGISTERS itself in IAM's app registry.
 //
 // This is a DEPLOY/OPERATOR helper, NOT a runtime one: it talks HTTP to the admin origin (not the
-// `IAM` service binding) and authenticates with a propustka-issued `px_` ADMIN key as a bearer —
+// `IAM` service binding) and authenticates with an IAM-issued `px_` ADMIN key as a bearer —
 // reconcile is a privileged admin operation. Call it from a deploy step / provisioning script,
 // never from request handling.
 //
@@ -17,15 +17,15 @@
 import type { AppSchema } from '@fabrika/auth-core'
 
 export interface ReconcileSchemaOptions {
-	/** The IAM Worker's admin origin, e.g. `https://propustka.example.com` (trailing slash ok). */
+	/** The IAM Worker's admin origin, e.g. `https://iam.example.com` (trailing slash ok). */
 	url: string
-	/** The app id; its FIRST reconcile registers it in propustka's app registry. */
+	/** The app id; its FIRST reconcile registers it in IAM's app registry. */
 	app: string
 	/** The app's declared vocabulary. */
 	schema: AppSchema
 	/**
-	 * A propustka-issued `px_` ADMIN key, sent as `Authorization: Bearer`. Omit for a LOCAL run —
-	 * the Worker's `ENVIRONMENT=local` + empty `PROPUSTKA_SIGNING_KEYS` resolves a fixed global-admin
+	 * An IAM-issued `px_` ADMIN key, sent as `Authorization: Bearer`. Omit for a LOCAL run —
+	 * the Worker's `ENVIRONMENT=local` + empty `FABRIKA_IAM_SIGNING_KEYS` resolves a fixed global-admin
 	 * for credential-less calls.
 	 */
 	adminKey?: string
@@ -49,7 +49,7 @@ function errorMessage(value: unknown): string | null {
 }
 
 /**
- * Reconcile one app's declared `AppSchema` into Propustka (idempotent). Resolves on success;
+ * Reconcile one app's declared `AppSchema` into IAM (idempotent). Resolves on success;
  * throws `ReconcileSchemaError` on a non-2xx response, or `Error` on a half-set service token.
  */
 export async function reconcileSchema(options: ReconcileSchemaOptions): Promise<void> {

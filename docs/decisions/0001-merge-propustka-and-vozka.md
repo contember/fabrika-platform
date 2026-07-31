@@ -71,7 +71,7 @@ Phase 0 is the merge and rename only: green build, **no behaviour change**.
   archived repositories remain available for anything that isn't.
 - Environment-variable prefixes (`VOZKA_*`, `PROPUSTKA_*`) are deliberately **not**
   renamed in phase 0, to keep it behaviour-neutral —
-  [`../backlog/07-rename-env-var-prefixes.md`](../backlog/07-rename-env-var-prefixes.md).
+  [`../archive/07-rename-env-var-prefixes.md`](../archive/07-rename-env-var-prefixes.md).
 
 ## Alternatives considered
 

@@ -36,6 +36,8 @@ src/
 - Error handling is structural. Never rely on cross-package `instanceof`.
 - The RPC wire protocol is stable: `{ method, input }` or `{ batch }` requests and
   `{ result }`, `{ error }`, or `{ batch }` responses.
+- Browser-safe procedure contracts may be implemented with `RpcRouterFor` and
+  consumed with `createRpcClient`; they must not import a server runtime.
 - `defineApp()` owns request behavior. Runtime adapters only supply lifecycle
   capabilities and must not fork routing or RPC semantics.
 - The package root is runtime-neutral. Provider lifecycle APIs are exported only

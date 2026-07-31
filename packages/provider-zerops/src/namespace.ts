@@ -84,7 +84,7 @@ export interface ZeropsNamespaceOptions {
 	readonly proxyBuildFromGit: string
 	/** Public IAM origin reachable from an app project. */
 	readonly iamUrl: string
-	/** Same credential IAM receives as `PROPUSTKA_PROXY_KEY`. */
+	/** Same credential IAM receives as `FABRIKA_IAM_PROXY_KEY`. */
 	readonly iamKey: string
 	readonly api: ZeropsApi
 	readonly sleep?: Sleeper

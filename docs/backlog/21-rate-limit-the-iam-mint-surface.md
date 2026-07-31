@@ -12,7 +12,9 @@ preserving rather than re-deriving.
 ## Context
 
 `POST /auth/mint/session` and `/auth/mint/key` require a bearer
-(`PROPUSTKA_PROXY_KEY`), and an unset key makes the surface 404 rather than public.
+(`FABRIKA_IAM_PROXY_KEY`), and an unset key makes the surface 404 rather than
+public. Existing installations may still supply the deprecated
+`PROPUSTKA_PROXY_KEY` compatibility input under ADR-0018.
 That removes the anonymous attacker — which was the case that made an open mint
 endpoint an oracle answering "is this session still valid?" for unlimited guesses.
 

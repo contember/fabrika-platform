@@ -33,7 +33,7 @@ engine lives in `@fabrika/engine`.
 - **App visibility is DERIVED:** public iff any install repo is in a different org than the App's owner org
   (GitHub forbids a private App installing cross-org). Same-org stays private.
 - **The provisioning key is a SEEDED `px_` key:** the CLI generates one opaque `px_` bearer
-  (`PROPUSTKA_PROVISIONING_KEY`); IAM admits a bearer matching it as a synthetic admin (`resolveCaller`),
+  (`FABRIKA_IAM_PROVISIONING_KEY`); IAM admits a bearer matching it as a synthetic admin (`resolveCaller`),
   and fabrika reconciles its schema with it. No local IAM mint. Stage 1 deploys IAM from the shared
   `contember/fabrika-platform` checkout and needs its OIDC and signing config in the Environment.
 - **Operations deploys between IAM and control.** Init records

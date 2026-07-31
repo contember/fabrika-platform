@@ -14,6 +14,9 @@ behaviour.
   three product planes, packages, and primary request flows. **Start here.**
 - [`application-runtime.md`](application-runtime.md) — the `@fabrika/app` request
   pipeline, typed RPC, and authorization boundary.
+- [`core-application-composition.md`](core-application-composition.md) — how IAM,
+  Delivery, and Operations share that runtime, RPC, auth, migrations, and
+  compatibility boundaries.
 - [`zerops-platform.md`](zerops-platform.md) — the Zerops facts the decisions rest
   on, each with a source (and each unverified claim marked as such).
 - [`portability-surface.md`](portability-surface.md) — every Cloudflare primitive in

@@ -80,7 +80,7 @@ import Oblaka or interpret Cloudflare steps.
 
 ## IAM (`@fabrika/iam`) — port assessment
 
-propustka's Cloudflare coupling is unusually narrow: of roughly **7,900 lines**,
+IAM's inherited Cloudflare coupling is unusually narrow: of roughly **7,900 lines**,
 only `env.ts`, `index.ts`, `db.ts` and the test harness are platform-specific.
 
 - **HTTP layer — already portable.** It is written fetch-style

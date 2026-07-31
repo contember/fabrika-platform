@@ -35,14 +35,20 @@ item is the gap, and it can only be closed by someone with credentials.
    - IAM receives its public issuer, signing keys, OIDC coordinates, provisioning
      key, RPC key, and proxy key.
    - Operations receives `FABRIKA_OPERATIONS_PUBLIC_HOST`, the public
-     `PROPUSTKA_URL`, `OPERATIONS_SYNC_KEY`, and `PROPUSTKA_RPC_KEY`.
+     `FABRIKA_IAM_URL`, `OPERATIONS_SYNC_KEY`, and `FABRIKA_IAM_RPC_KEY`.
    - Control receives its public origins, including
      `OPERATIONS_ARTIFACT_ORIGIN`, plus the vault KEK, GitHub App credentials,
-     provider credentials, `OPERATIONS_SYNC_KEY`, and `PROPUSTKA_RPC_KEY`.
+     provider credentials, `OPERATIONS_SYNC_KEY`, and `FABRIKA_IAM_RPC_KEY`.
    - The proxy receives `FABRIKA_IAM_URL`, `FABRIKA_IAM_KEY`, and a manifest that
      exposes only the configured Operations ingest and source-map routes for the
      Operations hostname.
      Never write these at project level.
+     Use only the canonical `FABRIKA_*` names when provisioning a new account.
+     Runtime readers retain canonical-first compatibility for the deprecated
+     `PROPUSTKA_*` and `VOZKA_*` names under
+     [ADR-0018](../decisions/0018-canonical-fabrika-environment-names.md), but that
+     fallback is for adopting existing configuration and is not an authoring
+     surface.
 4. **Connect the GitHub/GitLab integration per service.** `buildFromGit` is
    public-repo only, so the topology deliberately leaves it unset.
 5. **Trigger the first build per service**, then re-apply the steady-state documents.

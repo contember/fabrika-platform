@@ -75,7 +75,7 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
 export interface HttpIamRpcOptions {
 	/** The IAM service origin, e.g. `http://iam:3000` on a private network (trailing slash tolerated). */
 	origin: string
-	/** The shared secret gating `/rpc/*` (`PROPUSTKA_RPC_KEY` on the IAM side). NEVER logged. */
+	/** The shared secret gating `/rpc/*` (`FABRIKA_IAM_RPC_KEY` on the IAM side). NEVER logged. */
 	key: string
 	/** Per-call timeout in milliseconds. */
 	timeoutMs?: number

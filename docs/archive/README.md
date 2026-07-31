@@ -39,3 +39,6 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 - [Proxy gate-config delivery](08-distribute-gate-config-to-proxy.md) — the
   shipped redeploy decision retained as context for ADR-0007, ADR-0008, and
   ADR-0010.
+- [Canonical Fabrika environment names](07-rename-env-var-prefixes.md) — the
+  shipped ADR-0018 compatibility sweep retained as the inventory of renamed
+  configuration boundaries and exclusions.

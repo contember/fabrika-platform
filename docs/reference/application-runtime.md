@@ -26,12 +26,11 @@ path. `route.all()` mounts a Fetch-style handler for every method. It is the
 compatibility seam for an established REST surface that joins the shared
 application pipeline without changing its wire contract.
 
-IAM, Delivery, and Operations are first-party reference applications. Each has a
-runtime-neutral `app.ts` built with `defineApp()` and dispatches through the same
-application on Cloudflare and Bun. Delivery and Operations use `@fabrika/auth`
-middleware; IAM owns the identity boundary that backs that SDK.
-Their established REST and service-binding contracts remain compatible; new
-typed RPC routers can be mounted in the same pipeline.
+IAM, Delivery, and Operations are first-party reference applications. They
+dispatch through the same application on Cloudflare and Bun while retaining the
+protocol surfaces required by their platform roles. See
+[`core-application-composition.md`](core-application-composition.md) for their
+RPC, authorization, persistence, compatibility, and environment boundaries.
 
 `@fabrika/auth` reads application identity from `FABRIKA_APP_ID` and the IAM
 origin from `FABRIKA_IAM_URL`. The deprecated `PROPUSTKA_APP_ID` and
@@ -69,8 +68,10 @@ The wire protocol uses one POST endpoint:
 - request: `{ method, input }` or `{ batch: [...] }`;
 - response: `{ result }`, `{ error }`, or `{ batch: [...] }`.
 
-`createRpcClient<Router>()` derives the browser call surface directly from the
-server router type. No code generation is required.
+Browser-safe contract packages describe the named procedure surface without
+importing a server runtime. `RpcRouterFor<Context, Contract>` checks the server
+implementation against that contract, and `createRpcClient<Contract>()` derives
+the browser call surface from it. No code generation is required.
 
 ## Runtime boundary
 

@@ -261,7 +261,7 @@ before new Zerops control-plane work builds on it.
   [16](sprint-2026-07-29-zerops-control-path.md#wu2--compile-app-config-to-a-static-manifest-backlog-16-effort-l)). This sprint makes the
   base honest; it does not add a Zerops caller.
 - Environment-prefix renames from
-  [07](../backlog/07-rename-env-var-prefixes.md). Existing `VOZKA_*` and
+  [07](07-rename-env-var-prefixes.md). Existing `VOZKA_*` and
   `PROPUSTKA_*` names remain unchanged here to avoid mixing an operational break
   into merge cleanup.
 - Publishing, deployment, pushing branches/tags, or mutating generated

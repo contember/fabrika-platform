@@ -19,6 +19,11 @@ declarative routes, and `@fabrika/auth` operator middleware. Both runtime
 entrypoints dispatch through this application; the Bun server uses
 `@fabrika/app/bun`.
 
+`src/operator-rpc.ts` implements `OperationsRpcContract` at `/api/rpc` for the
+console. It and the compatibility `/api/*` REST handlers share typed operator
+use cases. Keep public ingest, source-map upload, and private reconciliation as
+their protocol-specific HTTP surfaces.
+
 The public hostname accepts only Sentry-compatible
 `/api/:projectId/envelope/` ingest and the authenticated source-map upload path.
 `/api/*` operator routes, `/private/catalog/reconcile`, and
