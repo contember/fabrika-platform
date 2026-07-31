@@ -1,11 +1,17 @@
-import { createOperationsFetchHandler } from '../http.js'
+import { createBunHandler } from '@fabrika/app/bun'
+import { operationsApp } from '../app.js'
 import { createOperationsRuntime } from './runtime.js'
 
 async function main(): Promise<void> {
 	const runtime = createOperationsRuntime()
+	const appHandler = createBunHandler(operationsApp, runtime.env, {
+		onBackgroundError() {
+			console.error('operations background task failed')
+		},
+	})
 	const server = Bun.serve({
 		port: runtime.port,
-		fetch: createOperationsFetchHandler(runtime.env),
+		fetch: appHandler.fetch,
 		error(): Response {
 			console.error('operations server error')
 			return Response.json({ error: 'internal error' }, { status: 500 })
@@ -20,6 +26,7 @@ async function main(): Promise<void> {
 		stopping = true
 		console.info(`operations shutting down (${signal})`)
 		void server.stop(false)
+			.then(() => appHandler.drain())
 			.then(() => runtime.consumer.stop())
 			.then(() => runtime.shutdown())
 			.then(() => process.exit(0))

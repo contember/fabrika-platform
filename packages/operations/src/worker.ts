@@ -1,11 +1,12 @@
 import type { IamRpc } from '@fabrika/auth'
 import type { IngestMessage } from '@fabrika/operations-contract'
 import { WorkerEntrypoint } from 'cloudflare:workers'
+import { operationsApp } from './app.js'
 import { createOperationsIam } from './auth.js'
 import { consumeDeadDeliveries, consumeDeliveries } from './consumer.js'
 import { SqliteHealthRepository } from './health-repository.js'
 import { OperationsHealthExecution } from './health-service.js'
-import { createOperationsFetchHandler, type OperationsHttpEnv } from './http.js'
+import type { OperationsHttpEnv } from './http.js'
 import { OperationsMaintenance, WebhookNotificationSender } from './maintenance.js'
 import { cloudflareBlobStore, cloudflareJobQueue } from './platform-cf.js'
 import { createSqliteOperationsRepositories } from './repositories.js'
@@ -39,7 +40,7 @@ export class OperationsWorker extends WorkerEntrypoint<OperationsWorkerBindings>
 	}
 
 	override fetch(request: Request): Promise<Response> {
-		return createOperationsFetchHandler(this.operations)(request)
+		return operationsApp.fetch(request, this.operations, this.ctx)
 	}
 
 	override async queue(batch: MessageBatch<IngestMessage>): Promise<void> {

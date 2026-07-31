@@ -115,6 +115,12 @@ describe('Operations public/private HTTP isolation', () => {
 		}
 	})
 
+	test('malformed percent-encoding stays on the not-found boundary', async () => {
+		const fetch = handler()
+		expect((await fetch(new Request(`https://${publicHost}/%`))).status).toBe(404)
+		expect((await fetch(new Request('https://operations.internal/api/%'))).status).toBe(404)
+	})
+
 	test('the public hostname mounts only the exact source-map upload path', async () => {
 		const fetch = handler()
 		const upload = await fetch(new Request(`https://${publicHost}${OPERATIONS_SOURCE_MAP_UPLOAD_PATH}`, { method: 'POST' }))
@@ -128,6 +134,7 @@ describe('Operations public/private HTTP isolation', () => {
 	test('the private service hostname reaches health and authenticated catalog reconciliation', async () => {
 		const fetch = handler()
 		expect((await fetch(new Request('https://operations.internal/healthz'))).status).toBe(200)
+		expect((await fetch(new Request('https://operations.internal/healthz', { method: 'HEAD' }))).status).toBe(200)
 
 		const response = await reconcileSource(fetch, '0198a000-0000-7000-8000-000000000001')
 		expect(response.status).toBe(200)
