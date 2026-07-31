@@ -8,7 +8,7 @@
 // assembly) depends ONLY on the `SecretResolver` interface, so swapping backends never touches a
 // caller. Resolved values are NEVER logged and live only in the provider invocation.
 //
-// Platform credentials (the CF API token, propustka provisioning creds) are NOT resolved here — fabrika
+// Platform credentials (the CF API token, IAM provisioning creds) are NOT resolved here — fabrika
 // is single-account, so they are fabrika's own Worker secrets (src/env.ts), injected into every job as
 // build-time config. This seam only turns per-app secret refs into values.
 //

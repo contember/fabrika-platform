@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 /**
- * Seed the control-plane REGISTRY: the `apps` (fabrika, propustka) rows that let a GitHub push
+ * Seed the control-plane registry with the durable `vozka` and `propustka` app IDs that let a GitHub push
  * self-deploy them. Runs AFTER fabrika is live (scripts/bootstrap.ts) — it talks to fabrika's own `/api/*`
  * HTTP surface, so it goes through the real ACL + audit path (it does NOT write D1 directly). The
- * bootstrap admin (or a propustka-granted admin) is the caller.
+ * bootstrap admin (or an IAM-granted admin) is the caller.
  *
- * fabrika is SINGLE-ACCOUNT: there is no account registry to seed. The CF account/token + propustka
+ * fabrika is SINGLE-ACCOUNT: there is no account registry to seed. The CF account/token + IAM
  * coords are fabrika's OWN Worker config, set at bootstrap (scripts/bootstrap.ts), and injected into
  * every deploy. So this script only registers the apps.
  *
@@ -18,33 +18,39 @@
  * ─────────────────────────────────────────────────────────────────────────────────────────────────
  *
  * Required env:
- *   VOZKA_API_URL                         — base URL of the live control plane, e.g. https://vozka.example.com
- *   VOZKA_REPO_URL, PROPUSTKA_REPO_URL    — the GitHub repo URLs (normalized server-side).
- *   VOZKA_APP_DOMAIN, PROPUSTKA_APP_DOMAIN — per-app domains for their first env.
+ *   FABRIKA_CONTROL_API_URL                         — base URL of the live control plane.
+ *   FABRIKA_CONTROL_REPO_URL, FABRIKA_IAM_REPO_URL — the GitHub repo URLs.
+ *   FABRIKA_CONTROL_APP_DOMAIN, FABRIKA_IAM_APP_DOMAIN — per-app domains for their first env.
  * Optional:
  *   SEED_ENV                              — the env to register each app under (default `prod`).
  *   SEED_CONFIG_PATH                      — optional shared config path fallback.
- *   VOZKA_CONFIG_PATH, PROPUSTKA_CONFIG_PATH — per-app config path overrides.
+ *   FABRIKA_CONTROL_CONFIG_PATH, FABRIKA_IAM_CONFIG_PATH — per-app config path overrides.
  *   CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET — Access service-token creds for the API calls.
  *
  * Usage:
- *   bun run scripts/seed.ts             # POST the app rows to VOZKA_API_URL (requires the env above)
+ *   bun run scripts/seed.ts             # POST the app rows to FABRIKA_CONTROL_API_URL
  *   bun run scripts/seed.ts --dry-run   # print the intended POSTs (app/env), call nothing
  */
 
-const DRY_RUN = process.argv.includes('--dry-run')
+import { environmentAliases } from '@fabrika/platform'
 
-function required(name: string): string {
-	const value = process.env[name]
-	if (value === undefined || value === '') {
-		throw new Error(`Missing required env var ${name} (see this script's header for the full list).`)
-	}
-	return value
-}
+const DRY_RUN = process.argv.includes('--dry-run')
 
 function optional(name: string, fallback: string): string {
 	const value = process.env[name]
 	return value === undefined || value === '' ? fallback : value
+}
+
+function requiredAlias(canonical: string, legacy: string): string {
+	const value = environmentAliases.read(process.env, { canonical, legacy })
+	if (value === undefined || value === '') {
+		throw new Error(`Missing required env var ${canonical} (see this script's header for the full list).`)
+	}
+	return value
+}
+
+function optionalAlias(canonical: string, legacy: string, fallback: string): string {
+	return environmentAliases.read(process.env, { canonical, legacy }) ?? fallback
 }
 
 /** The Access service-token headers (when configured) so the API calls pass the front door as a machine. */
@@ -87,7 +93,7 @@ async function post(base: string, path: string, body: unknown): Promise<void> {
 }
 
 async function main(): Promise<void> {
-	const base = required('VOZKA_API_URL').replace(/\/$/, '')
+	const base = requiredAlias('FABRIKA_CONTROL_API_URL', 'VOZKA_API_URL').replace(/\/$/, '')
 	const seedEnv = optional('SEED_ENV', 'prod')
 	const sharedConfigPath = process.env['SEED_CONFIG_PATH']
 
@@ -96,17 +102,17 @@ async function main(): Promise<void> {
 	const apps: SeedApp[] = [
 		{
 			id: 'vozka',
-			repoUrl: required('VOZKA_REPO_URL'),
+			repoUrl: requiredAlias('FABRIKA_CONTROL_REPO_URL', 'VOZKA_REPO_URL'),
 			env: seedEnv,
-			domain: required('VOZKA_APP_DOMAIN'),
-			configPath: optional('VOZKA_CONFIG_PATH', sharedConfigPath ?? 'packages/control/fabrika.config.ts'),
+			domain: requiredAlias('FABRIKA_CONTROL_APP_DOMAIN', 'VOZKA_APP_DOMAIN'),
+			configPath: optionalAlias('FABRIKA_CONTROL_CONFIG_PATH', 'VOZKA_CONFIG_PATH', sharedConfigPath ?? 'packages/control/fabrika.config.ts'),
 		},
 		{
 			id: 'propustka',
-			repoUrl: required('PROPUSTKA_REPO_URL'),
+			repoUrl: requiredAlias('FABRIKA_IAM_REPO_URL', 'PROPUSTKA_REPO_URL'),
 			env: seedEnv,
-			domain: required('PROPUSTKA_APP_DOMAIN'),
-			configPath: optional('PROPUSTKA_CONFIG_PATH', sharedConfigPath ?? 'packages/iam/fabrika.config.ts'),
+			domain: requiredAlias('FABRIKA_IAM_APP_DOMAIN', 'PROPUSTKA_APP_DOMAIN'),
+			configPath: optionalAlias('FABRIKA_IAM_CONFIG_PATH', 'PROPUSTKA_CONFIG_PATH', sharedConfigPath ?? 'packages/iam/fabrika.config.ts'),
 		},
 	]
 

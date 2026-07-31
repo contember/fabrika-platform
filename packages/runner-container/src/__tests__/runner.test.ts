@@ -91,7 +91,7 @@ describe('Runner pipeline', () => {
 		const job = baseJob({
 			domain: 'stage.acme.com',
 			stateNamespace: 'legacy-state',
-			credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef', PROPUSTKA_URL: 'https://iam.acme.com' },
+			credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef', FABRIKA_IAM_URL: 'https://iam.acme.com' },
 			secrets: { SAMPLE_API_KEY: 'super-secret-value' },
 			vars: { PUBLIC_ORIGIN: 'public-value' },
 			managedEnvironment: {
@@ -105,8 +105,8 @@ describe('Runner pipeline', () => {
 		expect(deploy?.env).toMatchObject({
 			CLOUDFLARE_ACCOUNT_ID: 'acc-123456',
 			CLOUDFLARE_API_TOKEN: 'tok-abcdef',
-			PROPUSTKA_URL: 'https://iam.acme.com',
-			VOZKA_DOMAIN: 'stage.acme.com',
+			FABRIKA_IAM_URL: 'https://iam.acme.com',
+			FABRIKA_CONTROL_DOMAIN: 'stage.acme.com',
 			CLOUDFLARE_STATE_NAMESPACE: 'legacy-state',
 			SAMPLE_API_KEY: 'super-secret-value',
 			PUBLIC_ORIGIN: 'public-value',

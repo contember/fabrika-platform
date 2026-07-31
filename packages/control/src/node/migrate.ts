@@ -1,3 +1,4 @@
+import { environmentAliases } from '@fabrika/platform'
 import {
 	definePostgresServiceMigrations,
 	PostgresDatabase,
@@ -55,8 +56,11 @@ export async function applyMigrations(
 }
 
 async function main(): Promise<void> {
-	const url = process.env['VOZKA_DATABASE_URL']
-	if (url === undefined || url.trim() === '') throw new Error('VOZKA_DATABASE_URL is required')
+	const url = environmentAliases.read({
+		FABRIKA_CONTROL_DATABASE_URL: process.env['FABRIKA_CONTROL_DATABASE_URL'],
+		VOZKA_DATABASE_URL: process.env['VOZKA_DATABASE_URL'],
+	}, { canonical: 'FABRIKA_CONTROL_DATABASE_URL', legacy: 'VOZKA_DATABASE_URL' })
+	if (url === undefined || url.trim() === '') throw new Error('FABRIKA_CONTROL_DATABASE_URL is required')
 	const db = PostgresDatabase.connect(url, { max: 1 })
 	try {
 		const applied = await applyMigrations(db)

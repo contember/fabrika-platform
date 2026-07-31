@@ -221,7 +221,7 @@ export class Runner {
 			}
 		}
 		if (this.job.domain !== undefined) {
-			env['VOZKA_DOMAIN'] = this.job.domain
+			env['FABRIKA_CONTROL_DOMAIN'] = this.job.domain
 		}
 		if (this.job.stateNamespace !== undefined) {
 			env['CLOUDFLARE_STATE_NAMESPACE'] = this.job.stateNamespace

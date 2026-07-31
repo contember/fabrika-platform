@@ -21,13 +21,13 @@ import { type ACTIONS, SCOPES, VOZKA_APP_ID } from './actions'
 import { error } from './http'
 
 /**
- * The per-path gates fabrika's control surface enforces in-process (the propustka-native successor to
+ * The per-path gates fabrika's control surface enforces in-process (the IAM-native successor to
  * the deleted Cloudflare Access edge). Every `/api/*` route admits EITHER a machine `px_` key
  * (automation / CI) OR a logged-in human (the dashboard via SSO) — two precedence-ordered rules
  * sharing the glob, exactly like the example app's two-rule gated host. Health, the webhook and the
  * M2 `POST /api/runs` relay are handled BEFORE this guard (index.ts), so they never reach the gates.
  */
-const VOZKA_GATES: AppGates = {
+const CONTROL_GATES: AppGates = {
 	rules: [
 		{ path: '/api/*', kind: 'service' },
 		{ path: '/api/*', kind: 'human' },
@@ -38,25 +38,25 @@ const VOZKA_GATES: AppGates = {
 export interface IamEnv {
 	IAM?: IamRpc
 	DEV: string
-	/** propustka's origin — the `PropustkaAuth` issuer (token `iss` + the `/auth/login` redirect base). */
-	PROPUSTKA_URL?: string
+	/** IAM's origin — the token issuer and `/auth/login` redirect base. */
+	FABRIKA_IAM_URL?: string
 	/**
 	 * JSON array of bootstrap-admin emails (normally `'[]'`). A caller whose verified email is listed
-	 * here is authorized as admin (`can` → true for every action) even when propustka denies — the
-	 * escape hatch for the first operator before propustka knows about fabrika.
+	 * here is authorized as admin (`can` → true for every action) even when IAM denies — the
+	 * escape hatch for the first operator before IAM knows about fabrika.
 	 */
-	VOZKA_BOOTSTRAP_ADMINS?: string
+	FABRIKA_CONTROL_BOOTSTRAP_ADMINS?: string
 	/**
-	 * The seeded propustka provisioning key (a `px_` bearer, also fabrika's reconcile credential). A request
-	 * bearing it is authorized as a synthetic global-admin — the MACHINE analog of `VOZKA_BOOTSTRAP_ADMINS`
+	 * The seeded IAM provisioning key (a `px_` bearer, also fabrika's reconcile credential). A request
+	 * bearing it is authorized as a synthetic global-admin — the machine bootstrap escape hatch.
 	 * Empty/unset disables it.
 	 */
-	PROPUSTKA_PROVISIONING_KEY?: string
+	FABRIKA_IAM_PROVISIONING_KEY?: string
 	/**
 	 * The control plane's own public domain. Read here for ONE reason: it is the authority on whether the
 	 * BROWSER spoke HTTPS, which decides the `px_token` cookie's `Secure` flag — see `secureCookies`.
 	 */
-	VOZKA_DOMAIN?: string
+	FABRIKA_CONTROL_DOMAIN?: string
 }
 
 /**
@@ -73,12 +73,12 @@ export interface IamEnv {
  * (there the request protocol is https either way).
  */
 function secureCookies(env: IamEnv): true | undefined {
-	const domain = env.VOZKA_DOMAIN
+	const domain = env.FABRIKA_CONTROL_DOMAIN
 	return domain !== undefined && domain.trim() !== '' ? true : undefined
 }
 
 /**
- * Parse the `VOZKA_BOOTSTRAP_ADMINS` JSON array into a set of emails. Mirrors propustka's
+ * Parse the `FABRIKA_CONTROL_BOOTSTRAP_ADMINS` JSON array into a set of emails. Mirrors IAM's
  * `parseBootstrapAdmins` semantics: a malformed / non-array value fails CLOSED (empty set), so a bad
  * env var grants nobody admin. An empty / unset value (the steady state) yields an empty set.
  */
@@ -141,10 +141,10 @@ export function controlAuthMiddleware<Ctx extends AuthCarrier>(env: IamEnv): Mid
 		devPersonaHeader: DEV_PRINCIPAL_HEADER,
 		...(secure === undefined ? {} : { forceSecureCookies: secure }),
 	})
-	const bootstrapAdmins = parseBootstrapAdmins(env.VOZKA_BOOTSTRAP_ADMINS)
-	const provisioningKey = (env.PROPUSTKA_PROVISIONING_KEY ?? '').trim()
+	const bootstrapAdmins = parseBootstrapAdmins(env.FABRIKA_CONTROL_BOOTSTRAP_ADMINS)
+	const provisioningKey = (env.FABRIKA_IAM_PROVISIONING_KEY ?? '').trim()
 	const authenticate = iam.authMiddleware<Ctx>({
-		gates: VOZKA_GATES,
+		gates: CONTROL_GATES,
 		onError(request, failure) {
 			if (new URL(request.url).pathname === '/api/rpc') {
 				const type = failure.status === 401 ? 'auth' : failure.status === 403 ? 'forbidden' : 'error'
@@ -194,7 +194,7 @@ export function controlAuthMiddleware<Ctx extends AuthCarrier>(env: IamEnv): Mid
 	}
 }
 
-/** The synthetic principal a provisioning-key request resolves to (mirrors propustka's `provisioning-admin`). */
+/** The synthetic principal a provisioning-key request resolves to. */
 const PROVISIONING_PRINCIPAL: PrincipalIdentity = { id: 'provisioning-admin', type: 'service', label: 'provisioning' }
 
 /** A global-admin AuthContext for the provisioning key: every action allowed, no real grants, no audit sink. */
@@ -226,7 +226,7 @@ function constantTimeEqual(a: string, b: string): boolean {
 /**
  * An `AuthContext` whose `can()` always allows (the built-in admin = `*`), wrapping a real context so
  * `principal` / `scopedTo` / `audit` keep delegating to the genuine authenticated identity. Used only
- * for a caller whose verified email is a bootstrap admin — they get full access without any propustka
+ * for a caller whose verified email is a bootstrap admin — they get full access without any IAM
  * grant. The principal is the REAL one (not synthesized), so audit + row-stamping stay accurate.
  */
 class BootstrapAdminAuthContext implements AuthContext {

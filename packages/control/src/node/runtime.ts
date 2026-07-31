@@ -15,6 +15,7 @@
 //   RunnerGateway→ (none — ADR-0003: there is no deploy runner off Cloudflare)
 
 import { HttpIamRpc } from '@fabrika/auth'
+import { environmentAliases } from '@fabrika/platform'
 import { createBackgroundTasks, FileSystemAssetServer, PostgresDatabase, PostgresJobQueue, S3BlobStore } from '@fabrika/platform-node'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { createControlRepositories } from '../db'
@@ -71,19 +72,24 @@ export const DEPLOY_MAX_ATTEMPTS = 4
  * credentials, and only their ABSENCE is reportable.
  */
 export function createRuntime(source: Record<string, string | undefined> = process.env): Runtime {
-	const databaseUrl = required(source, 'VOZKA_DATABASE_URL')
+	const databaseUrl = requiredAlias(source, 'FABRIKA_CONTROL_DATABASE_URL', 'VOZKA_DATABASE_URL')
 	const environment = required(source, 'ENVIRONMENT')
 	const dev = source['DEV'] ?? ''
 
 	const config: ProcessConfig = {
 		port: parsePort(source['PORT']),
-		assetsDir: source['VOZKA_ASSETS_DIR'] ?? './public',
+		assetsDir: optionalAlias(source, 'FABRIKA_CONTROL_ASSETS_DIR', 'VOZKA_ASSETS_DIR') ?? './public',
 	}
 
 	const db = PostgresDatabase.connect(databaseUrl)
 	const queue = new PostgresJobQueue<DeployJobMessage>(db, { queue: DEPLOY_QUEUE_NAME, maxAttempts: DEPLOY_MAX_ATTEMPTS })
 	const tasks = createBackgroundTasks({ label: 'control background task' })
 	const operations = operationsConfig(source)
+	const controlDomain = optionalAlias(source, 'FABRIKA_CONTROL_DOMAIN', 'VOZKA_DOMAIN')
+	const iamUrl = optionalAlias(source, 'FABRIKA_IAM_URL', 'PROPUSTKA_URL')
+	const bootstrapAdmins = optionalAlias(source, 'FABRIKA_CONTROL_BOOTSTRAP_ADMINS', 'VOZKA_BOOTSTRAP_ADMINS')
+	const iamProvisioningKey = optionalAlias(source, 'FABRIKA_IAM_PROVISIONING_KEY', 'PROPUSTKA_PROVISIONING_KEY')
+	const vaultKey = optionalAlias(source, 'FABRIKA_CONTROL_VAULT_KEY', 'VOZKA_VAULT_KEY')
 
 	const env: Env = {
 		DB: db,
@@ -95,8 +101,8 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		WAIT_UNTIL: tasks.waitUntil,
 		...(dev === 'true' ? {} : { IAM: iamRpc(source) }),
 		IAM_ADMIN: new HttpIamAdminGateway(
-			required(source, 'PROPUSTKA_RPC_URL'),
-			dev === 'true' ? source['PROPUSTKA_PROVISIONING_KEY'] : undefined,
+			requiredAlias(source, 'FABRIKA_IAM_RPC_URL', 'PROPUSTKA_RPC_URL'),
+			dev === 'true' ? optionalAlias(source, 'FABRIKA_IAM_PROVISIONING_KEY', 'PROPUSTKA_PROVISIONING_KEY') : undefined,
 		),
 		ENVIRONMENT: environment,
 		DEV: dev,
@@ -104,22 +110,20 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 			? {}
 			: { OPERATIONS: new HttpOperationsService(operations.origin), OPERATIONS_SYNC_KEY: operations.syncKey }),
 		// Spread conditionally rather than defaulted to '': ABSENT and EMPTY mean different things to
-		// several of these. `VOZKA_VAULT_KEY: ''` would make `buildRunDeps` try to import a zero-length
-		// master key instead of running the env/literal path, and `VOZKA_DOMAIN: ''` would be read as
+		// several of these. `FABRIKA_CONTROL_VAULT_KEY: ''` would make `buildRunDeps` try to import a zero-length
+		// master key instead of running the env/literal path, and `FABRIKA_CONTROL_DOMAIN: ''` would be read as
 		// "no public domain" — which is exactly what it means, but only when it really is unset.
-		...(source['VOZKA_DOMAIN'] !== undefined ? { VOZKA_DOMAIN: source['VOZKA_DOMAIN'] } : {}),
-		...(source['PROPUSTKA_URL'] !== undefined ? { PROPUSTKA_URL: source['PROPUSTKA_URL'] } : {}),
+		...(controlDomain === undefined ? {} : { FABRIKA_CONTROL_DOMAIN: controlDomain }),
+		...(iamUrl === undefined ? {} : { FABRIKA_IAM_URL: iamUrl }),
 		...(source['OPERATIONS_ARTIFACT_ORIGIN'] !== undefined
 			? { OPERATIONS_ARTIFACT_ORIGIN: source['OPERATIONS_ARTIFACT_ORIGIN'] }
 			: {}),
-		...(source['VOZKA_BOOTSTRAP_ADMINS'] !== undefined ? { VOZKA_BOOTSTRAP_ADMINS: source['VOZKA_BOOTSTRAP_ADMINS'] } : {}),
+		...(bootstrapAdmins === undefined ? {} : { FABRIKA_CONTROL_BOOTSTRAP_ADMINS: bootstrapAdmins }),
 		...(source['GITHUB_WEBHOOK_SECRET'] !== undefined ? { GITHUB_WEBHOOK_SECRET: source['GITHUB_WEBHOOK_SECRET'] } : {}),
 		...(source['GITHUB_APP_ID'] !== undefined ? { GITHUB_APP_ID: source['GITHUB_APP_ID'] } : {}),
 		...(source['GITHUB_APP_PRIVATE_KEY'] !== undefined ? { GITHUB_APP_PRIVATE_KEY: source['GITHUB_APP_PRIVATE_KEY'] } : {}),
-		...(source['PROPUSTKA_PROVISIONING_KEY'] !== undefined
-			? { PROPUSTKA_PROVISIONING_KEY: source['PROPUSTKA_PROVISIONING_KEY'] }
-			: {}),
-		...(source['VOZKA_VAULT_KEY'] !== undefined && source['VOZKA_VAULT_KEY'] !== '' ? { VOZKA_VAULT_KEY: source['VOZKA_VAULT_KEY'] } : {}),
+		...(iamProvisioningKey === undefined ? {} : { FABRIKA_IAM_PROVISIONING_KEY: iamProvisioningKey }),
+		...(vaultKey === undefined || vaultKey === '' ? {} : { FABRIKA_CONTROL_VAULT_KEY: vaultKey }),
 	}
 
 	return {
@@ -162,12 +166,12 @@ function operationsConfig(source: Record<string, string | undefined>): Operation
  * normally wants it, and R2/AWS accept it.
  */
 function blobStore(source: Record<string, string | undefined>): S3BlobStore {
-	const endpoint = source['VOZKA_RUN_LOGS_ENDPOINT']
+	const endpoint = optionalAlias(source, 'FABRIKA_CONTROL_RUN_LOGS_ENDPOINT', 'VOZKA_RUN_LOGS_ENDPOINT')
 	return S3BlobStore.connect({
-		bucket: required(source, 'VOZKA_RUN_LOGS_BUCKET'),
-		accessKeyId: required(source, 'VOZKA_RUN_LOGS_ACCESS_KEY_ID'),
-		secretAccessKey: required(source, 'VOZKA_RUN_LOGS_SECRET_ACCESS_KEY'),
-		region: source['VOZKA_RUN_LOGS_REGION'] ?? 'auto',
+		bucket: requiredAlias(source, 'FABRIKA_CONTROL_RUN_LOGS_BUCKET', 'VOZKA_RUN_LOGS_BUCKET'),
+		accessKeyId: requiredAlias(source, 'FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID', 'VOZKA_RUN_LOGS_ACCESS_KEY_ID'),
+		secretAccessKey: requiredAlias(source, 'FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY', 'VOZKA_RUN_LOGS_SECRET_ACCESS_KEY'),
+		region: optionalAlias(source, 'FABRIKA_CONTROL_RUN_LOGS_REGION', 'VOZKA_RUN_LOGS_REGION') ?? 'auto',
 		virtualHostedStyle: false,
 		...(endpoint !== undefined && endpoint !== '' ? { endpoint } : {}),
 	})
@@ -192,16 +196,32 @@ export interface IamRpcProcessConfig {
 }
 
 /**
- * Keep transport addressing separate from `PROPUSTKA_URL`, which is the public token issuer.
+ * Keep transport addressing separate from `FABRIKA_IAM_URL`, which is the public token issuer.
  * The two happen to match in a single-process dev setup, but never across Zerops projects.
  */
 export function readIamRpcProcessConfig(source: Record<string, string | undefined>): IamRpcProcessConfig {
-	const origin = required(source, 'PROPUSTKA_RPC_URL')
-	const key = required(source, 'PROPUSTKA_RPC_KEY')
+	const origin = requiredAlias(source, 'FABRIKA_IAM_RPC_URL', 'PROPUSTKA_RPC_URL')
+	const key = requiredAlias(source, 'FABRIKA_IAM_RPC_KEY', 'PROPUSTKA_RPC_KEY')
 	if (key.length < MIN_RPC_KEY_LENGTH) {
-		throw new Error(`PROPUSTKA_RPC_KEY must be at least ${MIN_RPC_KEY_LENGTH} characters (it is the only thing guarding IAM's RPC surface)`)
+		throw new Error(`FABRIKA_IAM_RPC_KEY must be at least ${MIN_RPC_KEY_LENGTH} characters (it is the only thing guarding IAM's RPC surface)`)
 	}
 	return { origin, key }
+}
+
+function optionalAlias(
+	source: Record<string, string | undefined>,
+	canonical: string,
+	legacy: string,
+): string | undefined {
+	return environmentAliases.read(source, { canonical, legacy })
+}
+
+function requiredAlias(source: Record<string, string | undefined>, canonical: string, legacy: string): string {
+	const value = optionalAlias(source, canonical, legacy)
+	if (value === undefined || value.trim() === '') {
+		throw new Error(`${canonical} is required`)
+	}
+	return value
 }
 
 function required(source: Record<string, string | undefined>, name: string): string {

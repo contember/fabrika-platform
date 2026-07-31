@@ -9,7 +9,7 @@
 // The runner is not a core port: it is consumed only while composing the Cloudflare provider below.
 
 import type { IamRpc } from '@fabrika/auth'
-import type { BlobStore, HttpService, JobQueue } from '@fabrika/platform'
+import { type BlobStore, environmentAliases, type HttpService, type JobQueue } from '@fabrika/platform'
 import { type CloudflareRunnerJob, createCloudflareControlProvider } from '@fabrika/provider-cloudflare'
 import type { ControlProvider, ProviderSource, ProviderTerminalOutcome } from '@fabrika/provider-contract'
 import type { VozkaRunner } from '@fabrika/runner-cloudflare'
@@ -46,6 +46,69 @@ export interface WorkerBindings
 	RUNNER_SVC?: Service<VozkaRunner>
 	/** IAM RPC and HTTP admin transport share one service binding. */
 	IAM?: IamRpc & HttpService
+	/** @deprecated Raw aliases accepted while existing Worker environments migrate to ADR-0018. */
+	VOZKA_DOMAIN?: string
+	VOZKA_BOOTSTRAP_ADMINS?: string
+	VOZKA_VAULT_KEY?: string
+	PROPUSTKA_URL?: string
+	PROPUSTKA_PROVISIONING_KEY?: string
+}
+
+type ControlEnvironmentAliasSource = Pick<
+	WorkerBindings,
+	| 'FABRIKA_CONTROL_DOMAIN'
+	| 'FABRIKA_CONTROL_BOOTSTRAP_ADMINS'
+	| 'FABRIKA_CONTROL_VAULT_KEY'
+	| 'FABRIKA_IAM_URL'
+	| 'FABRIKA_IAM_PROVISIONING_KEY'
+	| 'VOZKA_DOMAIN'
+	| 'VOZKA_BOOTSTRAP_ADMINS'
+	| 'VOZKA_VAULT_KEY'
+	| 'PROPUSTKA_URL'
+	| 'PROPUSTKA_PROVISIONING_KEY'
+>
+
+type ResolvedControlEnvironmentAliases = Pick<
+	Env,
+	| 'FABRIKA_CONTROL_DOMAIN'
+	| 'FABRIKA_CONTROL_BOOTSTRAP_ADMINS'
+	| 'FABRIKA_CONTROL_VAULT_KEY'
+	| 'FABRIKA_IAM_URL'
+	| 'FABRIKA_IAM_PROVISIONING_KEY'
+>
+
+/** Normalize raw Worker configuration before shared code or providers consume it. */
+export function resolveControlEnvironmentAliases(source: ControlEnvironmentAliasSource): ResolvedControlEnvironmentAliases {
+	const controlDomain = environmentAliases.read(source, { canonical: 'FABRIKA_CONTROL_DOMAIN', legacy: 'VOZKA_DOMAIN' })
+	const bootstrapAdmins = environmentAliases.read(source, {
+		canonical: 'FABRIKA_CONTROL_BOOTSTRAP_ADMINS',
+		legacy: 'VOZKA_BOOTSTRAP_ADMINS',
+	})
+	const vaultKey = environmentAliases.read(source, { canonical: 'FABRIKA_CONTROL_VAULT_KEY', legacy: 'VOZKA_VAULT_KEY' })
+	const iamUrl = environmentAliases.read(source, { canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' })
+	const iamProvisioningKey = environmentAliases.read(source, {
+		canonical: 'FABRIKA_IAM_PROVISIONING_KEY',
+		legacy: 'PROPUSTKA_PROVISIONING_KEY',
+	})
+	return {
+		...(controlDomain === undefined ? {} : { FABRIKA_CONTROL_DOMAIN: controlDomain }),
+		...(bootstrapAdmins === undefined ? {} : { FABRIKA_CONTROL_BOOTSTRAP_ADMINS: bootstrapAdmins }),
+		...(vaultKey === undefined ? {} : { FABRIKA_CONTROL_VAULT_KEY: vaultKey }),
+		...(iamUrl === undefined ? {} : { FABRIKA_IAM_URL: iamUrl }),
+		...(iamProvisioningKey === undefined ? {} : { FABRIKA_IAM_PROVISIONING_KEY: iamProvisioningKey }),
+	}
+}
+
+/** Provider options must come from the normalized environment, never the raw Worker bindings. */
+export function cloudflareIamControlOptions(
+	env: Pick<Env, 'FABRIKA_IAM_URL' | 'FABRIKA_IAM_PROVISIONING_KEY'>,
+): { propustkaUrl?: string; propustkaProvisioningKey?: string } {
+	return {
+		...(env.FABRIKA_IAM_URL === undefined ? {} : { propustkaUrl: env.FABRIKA_IAM_URL }),
+		...(env.FABRIKA_IAM_PROVISIONING_KEY === undefined
+			? {}
+			: { propustkaProvisioningKey: env.FABRIKA_IAM_PROVISIONING_KEY }),
+	}
 }
 
 /** Present the Worker's bindings as the runtime-neutral `Env` the shared layer consumes. */
@@ -59,6 +122,7 @@ export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL'
 		DEPLOY_QUEUE: cfJobQueue(bindings.DEPLOY_QUEUE),
 		WAIT_UNTIL: waitUntil,
 		...(bindings.IAM === undefined ? {} : { IAM: bindings.IAM, IAM_ADMIN: bindings.IAM }),
+		...resolveControlEnvironmentAliases(bindings),
 	}
 }
 
@@ -127,10 +191,7 @@ export function cloudflareControlProvider(bindings: WorkerBindings, env: Env): C
 	return createCloudflareControlProvider({
 		accountId: bindings.CLOUDFLARE_ACCOUNT_ID ?? '',
 		apiToken: bindings.CLOUDFLARE_API_TOKEN ?? '',
-		...(bindings.PROPUSTKA_URL === undefined ? {} : { propustkaUrl: bindings.PROPUSTKA_URL }),
-		...(bindings.PROPUSTKA_PROVISIONING_KEY === undefined
-			? {}
-			: { propustkaProvisioningKey: bindings.PROPUSTKA_PROVISIONING_KEY }),
+		...cloudflareIamControlOptions(env),
 		resolveSource: (source) => resolveSource(env, source),
 		startRun: (job) => {
 			required(bindings.CLOUDFLARE_ACCOUNT_ID, 'CLOUDFLARE_ACCOUNT_ID')

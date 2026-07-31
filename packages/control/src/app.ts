@@ -81,7 +81,7 @@ function iamAdmin(ctx: ControlAppContext): Promise<Response> {
 	}
 	return forwardIamAdmin(ctx.request, {
 		gateway,
-		...(ctx.env.PROPUSTKA_URL === undefined ? {} : { publicIamUrl: ctx.env.PROPUSTKA_URL }),
+		...(ctx.env.FABRIKA_IAM_URL === undefined ? {} : { publicIamUrl: ctx.env.FABRIKA_IAM_URL }),
 	})
 }
 
@@ -92,6 +92,6 @@ function operationsApi(ctx: ControlAppContext): Promise<Response> {
 	}
 	return forwardOperationsApi(ctx.request, {
 		gateway,
-		...(ctx.env.PROPUSTKA_URL === undefined ? {} : { publicIamUrl: ctx.env.PROPUSTKA_URL }),
+		...(ctx.env.FABRIKA_IAM_URL === undefined ? {} : { publicIamUrl: ctx.env.FABRIKA_IAM_URL }),
 	})
 }

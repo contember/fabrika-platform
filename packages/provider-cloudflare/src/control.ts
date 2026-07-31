@@ -58,7 +58,11 @@ export interface CloudflareRunnerJob {
 	readonly credentials: {
 		readonly CLOUDFLARE_ACCOUNT_ID: string
 		readonly CLOUDFLARE_API_TOKEN: string
+		readonly FABRIKA_IAM_URL?: string
+		readonly FABRIKA_IAM_PROVISIONING_KEY?: string
+		/** @deprecated Accepted only for queued jobs created before ADR-0018. */
 		readonly PROPUSTKA_URL?: string
+		/** @deprecated Accepted only for queued jobs created before ADR-0018. */
 		readonly PROPUSTKA_PROVISIONING_KEY?: string
 	}
 	readonly secrets?: Readonly<Record<string, string>>
@@ -114,7 +118,11 @@ export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunner
 		return false
 	}
 	if (
-		('PROPUSTKA_URL' in credentials && credentials.PROPUSTKA_URL !== undefined && typeof credentials.PROPUSTKA_URL !== 'string')
+		('FABRIKA_IAM_URL' in credentials && credentials.FABRIKA_IAM_URL !== undefined && typeof credentials.FABRIKA_IAM_URL !== 'string')
+		|| ('FABRIKA_IAM_PROVISIONING_KEY' in credentials
+			&& credentials.FABRIKA_IAM_PROVISIONING_KEY !== undefined
+			&& typeof credentials.FABRIKA_IAM_PROVISIONING_KEY !== 'string')
+		|| ('PROPUSTKA_URL' in credentials && credentials.PROPUSTKA_URL !== undefined && typeof credentials.PROPUSTKA_URL !== 'string')
 		|| ('PROPUSTKA_PROVISIONING_KEY' in credentials
 			&& credentials.PROPUSTKA_PROVISIONING_KEY !== undefined
 			&& typeof credentials.PROPUSTKA_PROVISIONING_KEY !== 'string')
@@ -196,10 +204,10 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		credentials: {
 			CLOUDFLARE_ACCOUNT_ID: options.accountId,
 			CLOUDFLARE_API_TOKEN: options.apiToken,
-			...(options.propustkaUrl === undefined ? {} : { PROPUSTKA_URL: options.propustkaUrl }),
+			...(options.propustkaUrl === undefined ? {} : { FABRIKA_IAM_URL: options.propustkaUrl }),
 			...(options.propustkaProvisioningKey === undefined
 				? {}
-				: { PROPUSTKA_PROVISIONING_KEY: options.propustkaProvisioningKey }),
+				: { FABRIKA_IAM_PROVISIONING_KEY: options.propustkaProvisioningKey }),
 		},
 		...(input.app.source.workerDir === undefined ? {} : { workerDir: input.app.source.workerDir }),
 		configPath: artifact.configPath,

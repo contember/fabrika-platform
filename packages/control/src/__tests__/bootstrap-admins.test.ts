@@ -98,7 +98,7 @@ describe('controlAuthMiddleware bootstrap semantics', () => {
 	test('the provisioning context is a global service principal labelled provisioning', async () => {
 		const key = 'px_provision_secret_key_value'
 		const result = await runMiddleware(
-			{ DEV: 'true', PROPUSTKA_PROVISIONING_KEY: key },
+			{ DEV: 'true', FABRIKA_IAM_PROVISIONING_KEY: key },
 			new Request('https://control.test/api/apps', {
 				headers: { Authorization: `Bearer ${key}`, 'X-Dev-Principal': 'missing@vozka.test' },
 			}),
@@ -114,11 +114,11 @@ describe('controlAuthMiddleware bootstrap semantics', () => {
 
 	test('a listed user is elevated while a non-listed user keeps their original permissions', async () => {
 		const listed = await runMiddleware(
-			{ DEV: 'true', VOZKA_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' },
+			{ DEV: 'true', FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' },
 			new Request('https://control.test/api/apps', { headers: { 'X-Dev-Principal': 'viewer@vozka.test' } }),
 		)
 		const notListed = await runMiddleware(
-			{ DEV: 'true', VOZKA_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' },
+			{ DEV: 'true', FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' },
 			new Request('https://control.test/api/apps', { headers: { 'X-Dev-Principal': 'operator@vozka.test' } }),
 		)
 
@@ -135,11 +135,11 @@ describe('controlAuthMiddleware bootstrap semantics', () => {
 	test('bootstrap elevation does not apply to service or unknown callers', async () => {
 		const label = 'service@vozka.test'
 		const service = await runMiddleware(
-			{ DEV: '', IAM: serviceIam, PROPUSTKA_URL: ISSUER, VOZKA_BOOTSTRAP_ADMINS: `["${label}"]` },
+			{ DEV: '', IAM: serviceIam, FABRIKA_IAM_URL: ISSUER, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: `["${label}"]` },
 			new Request('https://control.test/api/apps', { headers: { Authorization: `Bearer ${await serviceToken(label)}` } }),
 		)
 		const unknown = await runMiddleware(
-			{ DEV: 'true', VOZKA_BOOTSTRAP_ADMINS: '["missing@vozka.test"]' },
+			{ DEV: 'true', FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["missing@vozka.test"]' },
 			new Request('https://control.test/api/apps', { headers: { 'X-Dev-Principal': 'missing@vozka.test' } }),
 		)
 

@@ -2,16 +2,21 @@
  * Deploy the Cloudflare runner executor out of band.
  *
  * Required environment: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN.
- * Optional: VOZKA_ENV (defaults to prod), RUNNER_BUILD=1.
+ * Optional: FABRIKA_CONTROL_ENV (defaults to prod; VOZKA_ENV is deprecated), RUNNER_BUILD=1.
  */
 
+import { environmentAliases } from '@fabrika/platform'
 import { deployCloudflareConfig } from '@fabrika/provider-cloudflare'
 import { resolve } from 'node:path'
 
 const dryRun = process.argv.includes('--dry-run')
-const env = process.env['VOZKA_ENV'] ?? 'prod'
+
+export function readRunnerEnvironment(source: Readonly<Record<string, string | undefined>>): string {
+	return environmentAliases.read(source, { canonical: 'FABRIKA_CONTROL_ENV', legacy: 'VOZKA_ENV' }) ?? 'prod'
+}
 
 const main = async (): Promise<void> => {
+	const env = readRunnerEnvironment(process.env)
 	const cwd = resolve(import.meta.dir, '..')
 	console.log(`Deploying vozka-runner → ${env}${dryRun ? ' (dry-run)' : ''} (idempotent — safe to re-run).`)
 	if (process.env['RUNNER_BUILD'] === '1') {
@@ -34,7 +39,9 @@ const main = async (): Promise<void> => {
 	}
 }
 
-main().catch((error: unknown) => {
-	console.error(`\n✗ ${error instanceof Error ? error.message : 'unknown error'}`)
-	process.exit(1)
-})
+if (import.meta.main) {
+	main().catch((error: unknown) => {
+		console.error(`\n✗ ${error instanceof Error ? error.message : 'unknown error'}`)
+		process.exit(1)
+	})
+}

@@ -62,7 +62,7 @@ RUN printf '#!/usr/bin/env bash\nexec bun /opt/fabrika/packages/provider-cloudfl
 	&& chmod +x /usr/local/bin/fabrika-cloudflare-executor
 
 # Where target repos are cloned. The runner server creates one sub-dir per run.
-ENV VOZKA_WORKSPACE=/workspace
+ENV FABRIKA_RUNNER_WORKSPACE=/workspace
 RUN mkdir -p /workspace
 
 EXPOSE 8080

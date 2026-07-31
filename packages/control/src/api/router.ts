@@ -39,7 +39,7 @@ import { deleteAppSecretValue, rotateAppSecretValue, setAppSecretValue, type Vau
 /**
  * Everything the router needs (the Worker assembles this from its bindings). `vault` is a FACTORY
  * (async, may need to import the master key) so it's only built when a vault route is hit, and a
- * missing/invalid `VOZKA_VAULT_KEY` surfaces as a clean 500 on those routes alone — every non-vault
+ * missing/invalid `FABRIKA_CONTROL_VAULT_KEY` surfaces as a clean 500 on those routes alone — every non-vault
  * route works without a vault configured.
  */
 export interface ApiDeps {

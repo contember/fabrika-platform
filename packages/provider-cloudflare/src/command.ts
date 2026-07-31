@@ -1,4 +1,5 @@
 import { deploy } from '@fabrika/engine'
+import { environmentAliases } from '@fabrika/platform'
 import type { ProviderDeployResult, ProviderRunEvents, RuntimeProviderRun } from '@fabrika/provider-contract'
 import { resolve } from 'node:path'
 import { type CloudflareAppConfig, isCloudflareAppConfig } from './authoring'
@@ -6,7 +7,7 @@ import { cloudflareArtifact } from './codec'
 import { cloudflareProvider } from './provider'
 
 const requiredEnvironmentValue = (name: string): string => {
-	const value = process.env[name]
+	const value = environmentValue(name)
 	if (value === undefined || value === '') {
 		throw new Error(`Missing ${name} environment variable`)
 	}
@@ -16,12 +17,25 @@ const requiredEnvironmentValue = (name: string): string => {
 const declaredValues = (names: readonly string[] | undefined): Record<string, string> => {
 	const values: Record<string, string> = {}
 	for (const name of names ?? []) {
-		const value = process.env[name]
+		const value = environmentValue(name)
 		if (value !== undefined && value !== '') {
 			values[name] = value
 		}
 	}
 	return values
+}
+
+const environmentValue = (canonical: string): string | undefined => {
+	const legacy = legacyEnvironmentName(canonical)
+	return legacy === undefined ? process.env[canonical] : environmentAliases.read(process.env, { canonical, legacy })
+}
+
+const legacyEnvironmentName = (canonical: string): string | undefined => {
+	if (canonical === 'FABRIKA_APP_ID') return 'PROPUSTKA_APP_ID'
+	if (canonical === 'FABRIKA_RUNNER_WORKSPACE') return 'VOZKA_WORKSPACE'
+	if (canonical.startsWith('FABRIKA_CONTROL_')) return `VOZKA_${canonical.slice('FABRIKA_CONTROL_'.length)}`
+	if (canonical.startsWith('FABRIKA_IAM_')) return `PROPUSTKA_${canonical.slice('FABRIKA_IAM_'.length)}`
+	return undefined
 }
 
 const requiredValues = (names: readonly string[] | undefined): Record<string, string> => {
@@ -66,10 +80,13 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 		log: options.log ?? ((line) => console.log(line)),
 		externalId: async () => {},
 	}
+	const domain = environmentValue('FABRIKA_CONTROL_DOMAIN')
+	const iamUrl = environmentValue('FABRIKA_IAM_URL')
+	const iamProvisioningKey = environmentValue('FABRIKA_IAM_PROVISIONING_KEY')
 	const run: RuntimeProviderRun = {
 		appId: loaded.config.id,
 		env: options.env,
-		...(process.env['VOZKA_DOMAIN'] === undefined ? {} : { domain: process.env['VOZKA_DOMAIN'] }),
+		...(domain === undefined ? {} : { domain }),
 		cwd: loaded.cwd,
 		secrets: declaredValues(loaded.config.pipeline?.secrets),
 		vars: declaredValues(loaded.config.pipeline?.vars),
@@ -81,10 +98,8 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 			accountId: requiredEnvironmentValue('CLOUDFLARE_ACCOUNT_ID'),
 			apiToken: requiredEnvironmentValue('CLOUDFLARE_API_TOKEN'),
 			...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
-			...(process.env['PROPUSTKA_URL'] === undefined ? {} : { propustkaUrl: process.env['PROPUSTKA_URL'] }),
-			...(process.env['PROPUSTKA_PROVISIONING_KEY'] === undefined
-				? {}
-				: { adminKey: process.env['PROPUSTKA_PROVISIONING_KEY'] }),
+			...(iamUrl === undefined ? {} : { propustkaUrl: iamUrl }),
+			...(iamProvisioningKey === undefined ? {} : { adminKey: iamProvisioningKey }),
 		}),
 		artifact: cloudflareProvider.encodeArtifact(cloudflareArtifact(loaded.absolutePath)),
 	}

@@ -74,7 +74,7 @@ export const buildPlan = (
 	add({ id: 'deploy-worker', kind: 'deploy-worker', description: 'Deploy the Worker (`wrangler deploy`)' })
 
 	if (config.schema !== undefined && input.propustkaUrl !== undefined) {
-		add({ id: 'reconcile-schema', kind: 'reconcile-schema', description: 'Reconcile authz schema into propustka' })
+		add({ id: 'reconcile-schema', kind: 'reconcile-schema', description: 'Reconcile authz schema into IAM' })
 	}
 
 	if (config.pipeline?.secrets !== undefined && config.pipeline.secrets.length > 0) {

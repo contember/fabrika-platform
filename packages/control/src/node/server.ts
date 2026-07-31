@@ -101,7 +101,7 @@ async function main(): Promise<void> {
 		port: runtime.config.port,
 		// The project's L7 balancer terminates TLS and forwards plain HTTP on the private network, so this
 		// listener speaks HTTP and holds no certificates. The `px_token` cookie is still marked `Secure`:
-		// `src/iam.ts` decides that from the configured public domain (`VOZKA_DOMAIN`), not from the
+		// `src/iam.ts` decides that from the configured public domain (`FABRIKA_CONTROL_DOMAIN`), not from the
 		// socket, precisely because behind a terminating balancer the socket is the wrong signal.
 		fetch: appHandler.fetch,
 		// Backstop for anything raised outside the handler. The handler already catches its own throws
@@ -117,7 +117,7 @@ async function main(): Promise<void> {
 	const state = (on: boolean): string => (on ? 'enabled' : 'disabled')
 	console.info(
 		`vozka listening on :${server.port} (env=${runtime.env.ENVIRONMENT}, iam=${state(runtime.env.IAM !== undefined)}, `
-			+ `vault=${state(runtime.env.VOZKA_VAULT_KEY !== undefined)}, provider=${runtime.provider.id})`,
+			+ `vault=${state(runtime.env.FABRIKA_CONTROL_VAULT_KEY !== undefined)}, provider=${runtime.provider.id})`,
 	)
 
 	// SIGTERM is what the platform sends on redeploy/scale-down. Stop accepting, let in-flight requests

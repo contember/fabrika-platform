@@ -24,11 +24,11 @@
 	},
 	"vars": {
 		"ENVIRONMENT": "local",
-		"VOZKA_DOMAIN": "",
+		"FABRIKA_CONTROL_DOMAIN": "",
 		"DEV": "true",
-		"VOZKA_BOOTSTRAP_ADMINS": "[]",
+		"FABRIKA_CONTROL_BOOTSTRAP_ADMINS": "[]",
 		"CLOUDFLARE_ACCOUNT_ID": "",
-		"PROPUSTKA_URL": "",
+		"FABRIKA_IAM_URL": "",
 		"GITHUB_APP_ID": ""
 	},
 	"migrations": [

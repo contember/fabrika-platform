@@ -7,8 +7,8 @@
 // master key) — that is out of scope, the same trust boundary as Workers Secrets themselves.
 //
 // CRYPTO (WebCrypto, AES-256-GCM, envelope):
-//   * MASTER KEY (KEK): 32 raw bytes, loaded from the Worker secret `VOZKA_VAULT_KEY` (base64). It
-//     NEVER leaves the Worker and is NEVER written to D1. Provisioned out-of-band (see VOZKA_VAULT_KEY
+//   * MASTER KEY (KEK): 32 raw bytes, loaded from the Worker secret `FABRIKA_CONTROL_VAULT_KEY` (base64). It
+//     NEVER leaves the Worker and is NEVER written to D1. Provisioned out-of-band (see FABRIKA_CONTROL_VAULT_KEY
 //     note below). One KEK protects the whole vault.
 //   * DATA KEY (DEK): a fresh random 256-bit key per stored value. The DEK encrypts the value
 //     (AES-256-GCM, random 96-bit IV). The DEK is then WRAPPED by the KEK (AES-256-GCM, its own random
@@ -20,9 +20,9 @@
 //     rotates the MASTER key by unwrapping each DEK with the old KEK and re-wrapping with the new one —
 //     the value ciphertext is untouched, so no plaintext value is ever exposed during a master rotation.
 //
-// VOZKA_VAULT_KEY provisioning (real CF): generate 32 random bytes, base64 them, and set the Worker
+// FABRIKA_CONTROL_VAULT_KEY provisioning (real CF): generate 32 random bytes, base64 them, and set the Worker
 // secret once per environment:
-//   `head -c 32 /dev/urandom | base64 | wrangler secret put VOZKA_VAULT_KEY`
+//   `head -c 32 /dev/urandom | base64 | wrangler secret put FABRIKA_CONTROL_VAULT_KEY`
 // Locally it goes in `.dev.vars` (DEV mode). Rotating it means: set the NEW key, call reencryptAll with
 // it, then swap the binding (or run reencryptAll as a one-shot maintenance task) — see the management
 // API. Losing it makes every vault value unrecoverable (by design).
@@ -95,14 +95,14 @@ function fromBase64(b64: string): Uint8Array<ArrayBuffer> {
 }
 
 /**
- * Import the base64 master key (`VOZKA_VAULT_KEY`) as a non-extractable AES-GCM CryptoKey used ONLY to
+ * Import the base64 master key (`FABRIKA_CONTROL_VAULT_KEY`) as a non-extractable AES-GCM CryptoKey used ONLY to
  * wrap/unwrap data keys. Validates the length so a misconfigured key fails loudly (not as a silent
  * weak key). The raw bytes are never logged.
  */
 export async function importMasterKey(base64Key: string): Promise<CryptoKey> {
 	const raw = fromBase64(base64Key)
 	if (raw.length !== KEY_BYTES) {
-		throw new Error(`VOZKA_VAULT_KEY must be ${KEY_BYTES} bytes (got ${raw.length}) — generate with: head -c 32 /dev/urandom | base64`)
+		throw new Error(`FABRIKA_CONTROL_VAULT_KEY must be ${KEY_BYTES} bytes (got ${raw.length}) — generate with: head -c 32 /dev/urandom | base64`)
 	}
 	return crypto.subtle.importKey('raw', raw, { name: ALG }, false, ['encrypt', 'decrypt'])
 }
@@ -197,7 +197,7 @@ export class Vault {
 		private readonly now: () => number = () => Math.floor(Date.now() / 1000),
 	) {}
 
-	/** Construct a Vault from the base64 master key (the `VOZKA_VAULT_KEY` Worker secret). */
+	/** Construct a Vault from the base64 master key (the `FABRIKA_CONTROL_VAULT_KEY` Worker secret). */
 	static async create(d1: VaultD1, base64MasterKey: string, now?: () => number): Promise<Vault> {
 		return new Vault(d1, await importMasterKey(base64MasterKey), now)
 	}

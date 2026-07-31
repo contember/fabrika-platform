@@ -40,10 +40,10 @@ export function zeropsControlProvider(
 		...(source['ZEROPS_API_BASE_URL'] === undefined
 			? {}
 			: { apiBaseUrl: source['ZEROPS_API_BASE_URL'] }),
-		...(env.PROPUSTKA_URL === undefined ? {} : { propustkaUrl: env.PROPUSTKA_URL }),
-		...(env.PROPUSTKA_PROVISIONING_KEY === undefined
+		...(env.FABRIKA_IAM_URL === undefined ? {} : { propustkaUrl: env.FABRIKA_IAM_URL }),
+		...(env.FABRIKA_IAM_PROVISIONING_KEY === undefined
 			? {}
-			: { adminKey: env.PROPUSTKA_PROVISIONING_KEY }),
+			: { adminKey: env.FABRIKA_IAM_PROVISIONING_KEY }),
 		namespaces: zeropsNamespaceProcessConfig(source),
 		execute: async (provider, run) => {
 			const result = await deploy(provider, run)

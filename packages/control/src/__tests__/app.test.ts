@@ -86,7 +86,7 @@ describe('controlApp', () => {
 	})
 
 	test('shares registry, secret, provider, and run behavior across RPC and REST', async () => {
-		const fetch = application({ VOZKA_VAULT_KEY: testVaultKey() })
+		const fetch = application({ FABRIKA_CONTROL_VAULT_KEY: testVaultKey() })
 		const invalid = await fetch(rpcRequest('apps.create', { repoUrl: 'github.com/acme/missing-id' }))
 		expect(invalid.status).toBe(400)
 
@@ -138,7 +138,7 @@ describe('controlApp', () => {
 	})
 
 	test('elevates only listed authenticated users through the bootstrap-admin middleware', async () => {
-		const fetch = application({ VOZKA_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' })
+		const fetch = application({ FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' })
 		const listed = await fetch(
 			new Request('https://control.test/api/apps', {
 				headers: { 'X-Dev-Principal': 'viewer@vozka.test' },
@@ -162,7 +162,7 @@ describe('controlApp', () => {
 
 	test('admits only the configured provisioning bearer as a machine bootstrap admin', async () => {
 		const key = 'px_provision_secret_key_value'
-		const fetch = application({ PROPUSTKA_PROVISIONING_KEY: key })
+		const fetch = application({ FABRIKA_IAM_PROVISIONING_KEY: key })
 		const admitted = await fetch(
 			new Request('https://control.test/api/apps', {
 				headers: { Authorization: `Bearer ${key}`, 'X-Dev-Principal': 'missing@vozka.test' },

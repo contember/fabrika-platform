@@ -68,10 +68,10 @@ export function repoSource(env: Env): RepoSource {
 }
 
 export function vault(env: Env): Promise<Vault> {
-	if (env.VOZKA_VAULT_KEY === undefined) {
-		return Promise.reject(new Error('VOZKA_VAULT_KEY is not set'))
+	if (env.FABRIKA_CONTROL_VAULT_KEY === undefined) {
+		return Promise.reject(new Error('FABRIKA_CONTROL_VAULT_KEY is not set'))
 	}
-	return Vault.create(env.DB, env.VOZKA_VAULT_KEY)
+	return Vault.create(env.DB, env.FABRIKA_CONTROL_VAULT_KEY)
 }
 
 /** Assemble provider-neutral run dependencies around one statically selected provider. */
@@ -80,7 +80,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		repositories: repositories(env),
 		provider,
 		secrets: new VaultSecretResolver({
-			...(env.VOZKA_VAULT_KEY !== undefined ? { vault: await vault(env) } : {}),
+			...(env.FABRIKA_CONTROL_VAULT_KEY !== undefined ? { vault: await vault(env) } : {}),
 			env: {
 				GITHUB_WEBHOOK_SECRET: env.GITHUB_WEBHOOK_SECRET,
 				GITHUB_APP_ID: env.GITHUB_APP_ID,

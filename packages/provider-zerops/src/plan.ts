@@ -44,7 +44,7 @@ export const buildZeropsPlan = (
 	add({ id: 'trigger-deploy', kind: 'trigger-deploy', description: 'Trigger the Zerops build+deploy pipeline' })
 	add({ id: 'await-deploy', kind: 'await-deploy', description: 'Await the Zerops pipeline and relay its build log' })
 	if (manifest.app.schema !== undefined && target.propustkaUrl !== undefined) {
-		add({ id: 'reconcile-schema', kind: 'reconcile-schema', description: 'Reconcile authz schema into propustka' })
+		add({ id: 'reconcile-schema', kind: 'reconcile-schema', description: 'Reconcile authz schema into IAM' })
 	}
 
 	return { appId: manifest.app.id, env, steps }

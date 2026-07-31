@@ -1,10 +1,10 @@
 // fabrika's OWN Cloudflare deploy surface. fabrika is just another app the control
 // plane deploys: this single file is the source of truth for fabrika's Cloudflare resource graph, its
-// authz vocabulary, and its deploy pipeline. fabrika gates its own `/api/*` in-process via PropustkaAuth
-// (src/iam.ts) — propustka is fully native now, there is no Cloudflare Access front door to reconcile.
+// authz vocabulary, and its deploy pipeline. fabrika gates its own `/api/*` in-process through IAM
+// (src/iam.ts) — there is no Cloudflare Access front door to reconcile.
 // The Cloudflare provider CLI and scripts/bootstrap.ts load THIS to self-deploy.
 //
-// Local dev still uses oblaka directly: `oblaka.ts` is a thin shim that imports `buildVozkaWorker`
+// Local dev still uses oblaka directly: `oblaka.ts` is a thin shim that imports `buildControlWorker`
 // from here and feeds it to oblaka's `define`, so `bunx oblaka oblaka.ts` (wrangler.jsonc generation)
 // and `wrangler d1 migrations apply DB --local` keep working unchanged. The resource graph lives in
 // ONE place; the two entry points differ only in what surrounds it.
@@ -14,6 +14,7 @@
 
 import type { AppSchema } from '@fabrika/auth'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
+import { environmentAliases } from '@fabrika/platform'
 import { D1Database, defineApp, Queue, R2Bucket, type ResourceContext, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
 import { ACTIONS, SCOPES, VOZKA_APP_ID } from './src/actions'
 
@@ -22,14 +23,25 @@ import { ACTIONS, SCOPES, VOZKA_APP_ID } from './src/actions'
  * graph — consolidated out of the old `oblaka.ts`. Both the provider deploy path (via `defineApp`
  * below) and the local-dev `oblaka.ts` shim call this, so the two never drift.
  *
- * `ctx.domain` (from `VOZKA_DOMAIN` on the provider deploy path) is surfaced as a runtime var so the
+ * `ctx.domain` (from `FABRIKA_CONTROL_DOMAIN` on the provider deploy path) is surfaced as a runtime var so the
  * Worker can build absolute URLs (e.g. webhook callbacks); it's empty locally, where oblaka's
  * `define` has no domain to pass.
  */
-export const buildVozkaWorker = (ctx: ResourceContext): Worker => {
+export const buildControlWorker = (ctx: ResourceContext): Worker => {
 	const { env, domain } = ctx
 	const isLocal = env === 'local'
 	const operationsArtifactOrigin = process.env['OPERATIONS_ARTIFACT_ORIGIN']
+	const bootstrapAdmins = environmentAliases.read({
+		FABRIKA_CONTROL_BOOTSTRAP_ADMINS: process.env['FABRIKA_CONTROL_BOOTSTRAP_ADMINS'],
+		VOZKA_BOOTSTRAP_ADMINS: process.env['VOZKA_BOOTSTRAP_ADMINS'],
+	}, {
+		canonical: 'FABRIKA_CONTROL_BOOTSTRAP_ADMINS',
+		legacy: 'VOZKA_BOOTSTRAP_ADMINS',
+	}) ?? '[]'
+	const iamUrl = environmentAliases.read({
+		FABRIKA_IAM_URL: process.env['FABRIKA_IAM_URL'],
+		PROPUSTKA_URL: process.env['PROPUSTKA_URL'],
+	}, { canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' }) ?? ''
 
 	return new Worker({
 		dir: '.',
@@ -37,9 +49,9 @@ export const buildVozkaWorker = (ctx: ResourceContext): Worker => {
 		main: './src/index.ts',
 		compatibility_flags: ['nodejs_compat'],
 		compatibility_date: '2025-05-25',
-		// Bind the public hostname (`ctx.domain` ← VOZKA_DOMAIN) as a Custom Domain — auto-creates the DNS
+		// Bind the public hostname (`ctx.domain` ← FABRIKA_CONTROL_DOMAIN) as a Custom Domain — auto-creates the DNS
 		// record + cert + route. Declared HERE as IaC so `wrangler deploy` keeps it (a domain attached only
-		// in the dashboard gets wiped by the next deploy); PropustkaAuth gates `/api/*` in-process. No
+		// in the dashboard gets wiped by the next deploy); IAM gates `/api/*` in-process. No
 		// domain (local-dev oblaka shim) → no route → *.workers.dev.
 		routes: domain !== undefined && domain !== '' ? [{ pattern: domain, custom_domain: true }] : [],
 		observability: { enabled: true },
@@ -55,18 +67,18 @@ export const buildVozkaWorker = (ctx: ResourceContext): Worker => {
 		vars: {
 			ENVIRONMENT: env,
 			// The public domain this stage serves on (drives absolute URLs); empty when unknown.
-			VOZKA_DOMAIN: domain ?? '',
+			FABRIKA_CONTROL_DOMAIN: domain ?? '',
 			// Selects the auth path in src/iam.ts: 'true' (local) → a synthesized dev-persona AuthContext
-			// (no propustka, no IAM Worker); '' (off-local) → PropustkaAuth over the IAM binding.
+			// (no IAM Worker); '' (off-local) → IAM-backed auth over the service binding.
 			DEV: isLocal ? 'true' : '',
 			// Bootstrap-admin fallback (src/iam.ts): a JSON array of emails authorized as admin even
-			// when propustka denies / the IAM binding isn't wired yet. Empty by default; the bootstrap
+			// when IAM denies / the binding isn't wired yet. Empty by default; the bootstrap
 			// script (scripts/bootstrap.ts) sets the first operator's email here for initial bring-up.
-			VOZKA_BOOTSTRAP_ADMINS: process.env['VOZKA_BOOTSTRAP_ADMINS'] ?? '[]',
-			// The selected Cloudflare provider's account id and propustka origin. The composition root
+			FABRIKA_CONTROL_BOOTSTRAP_ADMINS: bootstrapAdmins,
+			// The selected Cloudflare provider's account id and IAM origin. The composition root
 			// injects them into provider jobs without persisting credentials in the registry.
 			CLOUDFLARE_ACCOUNT_ID: process.env['CLOUDFLARE_ACCOUNT_ID'] ?? '',
-			PROPUSTKA_URL: process.env['PROPUSTKA_URL'] ?? '',
+			FABRIKA_IAM_URL: iamUrl,
 			...(operationsArtifactOrigin === undefined || operationsArtifactOrigin === ''
 				? {}
 				: { OPERATIONS_ARTIFACT_ORIGIN: operationsArtifactOrigin }),
@@ -80,7 +92,7 @@ export const buildVozkaWorker = (ctx: ResourceContext): Worker => {
 			RUN_LOGS: new R2Bucket({ name: 'vozka-run-logs' }),
 			// Registry + run history + the per-app-env deploy LOCKS: a `deploy_locks` row per `<app>:<env>`
 			// serializes deploys of the same target (it replaced a Durable Object — see src/deploy-locks.ts),
-			// so two triggers can't race on cf-state / wrangler / propustka. D1 is region-specific → pinned
+			// so two triggers can't race on cf-state / wrangler / IAM. D1 is region-specific → pinned
 			// to EU West. Migrations in ./migrations.
 			DB: new D1Database({ name: 'vozka', migrationsDir: './migrations', locationHint: 'weur' }),
 			// Deploy job queue: producer (POST /webhooks/github + triggerDeploy) + consumer (queue()).
@@ -97,7 +109,7 @@ export const buildVozkaWorker = (ctx: ResourceContext): Worker => {
 					retryDelay: 30,
 				},
 			}),
-			// Off-local service bindings (local dev has neither): propustka IAM (src/iam.ts uses
+			// Off-local service bindings (local dev has neither): IAM (src/iam.ts uses
 			// FakeIamClient locally, DEV='true') + vozka-runner, the deploy executor the queue consumer
 			// hands each run to (RUNNER_SVC.startRun). vozka-runner is its OWN worker so a deploy of fabrika
 			// never resets the container running it — deployed out-of-band (packages/runner-cloudflare bootstrap).
@@ -111,7 +123,7 @@ export const buildVozkaWorker = (ctx: ResourceContext): Worker => {
 }
 
 /**
- * fabrika's authz vocabulary, reconciled into propustka so the admin UI can render real choices. Kept
+ * fabrika's authz vocabulary, reconciled into IAM so the admin UI can render real choices. Kept
  * in sync with the runtime by importing the SAME constants the Worker enforces against (src/actions.ts)
  * — the action strings and scope dimensions here are exactly what `auth.can(action, scope)` checks.
  *
@@ -153,7 +165,7 @@ const schema: AppSchema = {
 
 export default defineApp({
 	id: VOZKA_APP_ID,
-	resources: buildVozkaWorker,
+	resources: buildControlWorker,
 	schema,
 	pipeline: {
 		// fabrika's Worker source lives alongside this config (packages/control).
@@ -161,20 +173,20 @@ export default defineApp({
 		// Build the dashboard SPA into ../dashboard/dist (the ASSETS directory) before deploy.
 		build: 'bun run --filter @fabrika/dashboard build',
 		// Runtime Worker secrets fabrika needs, provisioned via `wrangler secret put` at deploy:
-		//   - VOZKA_VAULT_KEY         — the M4 vault master key (KEK) for the encrypted D1 secret vault.
+		//   - FABRIKA_CONTROL_VAULT_KEY — the M4 vault master key (KEK) for the encrypted D1 secret vault.
 		//   - GITHUB_APP_PRIVATE_KEY  — the GitHub App PEM key (signs the App JWT for install tokens).
 		//   - GITHUB_WEBHOOK_SECRET   — HMAC-verifies inbound POST /webhooks/github.
 		//   - CLOUDFLARE_API_TOKEN    — the account-wide CF token fabrika deploys every app with (single
 		//                               account → one token; same token that authenticated THIS deploy).
-		//   - PROPUSTKA_PROVISIONING_KEY — fabrika's seeded propustka provisioning `px_` key, injected into
+		//   - FABRIKA_IAM_PROVISIONING_KEY — fabrika's seeded IAM provisioning `px_` key, injected into
 		//                               deploys that reconcile schema. Omit at deploy to run without reconcile.
 		// Their VALUES are read from the environment by name at deploy time (never inlined here).
 		secrets: [
-			'VOZKA_VAULT_KEY',
+			'FABRIKA_CONTROL_VAULT_KEY',
 			'GITHUB_APP_PRIVATE_KEY',
 			'GITHUB_WEBHOOK_SECRET',
 			'CLOUDFLARE_API_TOKEN',
-			'PROPUSTKA_PROVISIONING_KEY',
+			'FABRIKA_IAM_PROVISIONING_KEY',
 			'OPERATIONS_SYNC_KEY',
 		],
 	},

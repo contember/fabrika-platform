@@ -185,11 +185,11 @@ async function secretTarget(c: VaultUseCaseContext, appId: string, env: string |
 }
 
 async function requireVault(c: VaultUseCaseContext): Promise<Vault> {
-	if (c.vault === undefined) fail(500, 'vault not configured (VOZKA_VAULT_KEY missing)')
+	if (c.vault === undefined) fail(500, 'vault not configured (FABRIKA_CONTROL_VAULT_KEY missing)')
 	try {
 		return await c.vault()
 	} catch {
-		fail(500, 'vault unavailable (check VOZKA_VAULT_KEY)')
+		fail(500, 'vault unavailable (check FABRIKA_CONTROL_VAULT_KEY)')
 	}
 }
 
