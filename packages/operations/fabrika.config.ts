@@ -1,9 +1,17 @@
+import { environmentAliases } from '@fabrika/platform'
 import { D1Database, defineApp, Queue, R2Bucket, type ResourceContext, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
 
 export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 	const isLocal = ctx.env === 'local'
 	const publicHost = ctx.domain ?? ''
 	const deadLetterQueue = `${ctx.env}-operations-ingest-dlq`
+	const iamUrl = environmentAliases.read(
+		{
+			FABRIKA_IAM_URL: process.env['FABRIKA_IAM_URL'],
+			PROPUSTKA_URL: process.env['PROPUSTKA_URL'],
+		},
+		{ canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' },
+	) ?? ''
 	return new Worker({
 		dir: '.',
 		name: 'operations',
@@ -17,7 +25,7 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 			ENVIRONMENT: ctx.env,
 			OPERATIONS_PUBLIC_HOST: publicHost,
 			DEV: isLocal ? 'true' : '',
-			PROPUSTKA_URL: process.env['PROPUSTKA_URL'] ?? '',
+			FABRIKA_IAM_URL: iamUrl,
 		},
 		bindings: {
 			DB: new D1Database({ name: 'operations', migrationsDir: './migrations', locationHint: 'weur' }),

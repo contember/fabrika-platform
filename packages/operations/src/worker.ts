@@ -21,6 +21,8 @@ interface OperationsWorkerBindings {
 	OPERATIONS_SYNC_KEY: string
 	ENVIRONMENT: string
 	DEV: string
+	FABRIKA_IAM_URL?: string
+	/** Deprecated issuer fallback. */
 	PROPUSTKA_URL?: string
 	IAM?: IamRpc
 }

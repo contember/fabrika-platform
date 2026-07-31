@@ -17,6 +17,8 @@ describe('Operations Cloudflare composition', () => {
 		expect(binding(worker, 'CONTROL')).toBeUndefined()
 		expect(binding(worker, 'PIPELINE_METRICS')).toBeUndefined()
 		expect(worker.options.vars?.['DEV']).toBe('')
+		expect(worker.options.vars?.['FABRIKA_IAM_URL']).toBeDefined()
+		expect(worker.options.vars?.['PROPUSTKA_URL']).toBeUndefined()
 		expect(worker.options.triggers?.crons).toEqual(['*/5 * * * *'])
 		expect(worker.options.routes).toEqual([{ pattern: 'errors.example.test', custom_domain: true }])
 	})

@@ -310,7 +310,7 @@ describe('Operations public/private HTTP isolation', () => {
 	test('configured public host secures a session cookie minted for an internal HTTP gateway request', async () => {
 		const token = await signedOperationsUser(privateKey)
 		const iam = createOperationsIam(
-			{ IAM: sessionRpc(token), PROPUSTKA_URL: issuer },
+			{ IAM: sessionRpc(token), FABRIKA_IAM_URL: issuer },
 			{ publicHost },
 		)
 		const fetch = handler(createHarness(), iam)
