@@ -11,6 +11,7 @@
 //
 // NOT PROVEN: that Zerops accepts any of it. No request in this file leaves the process.
 
+import { applicableGates, compileGates, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { deploy, type RuntimeProviderRun } from '@fabrika/engine'
 import notesConfig, { NOTES_DATABASE_SERVICE, NOTES_SERVICE, NOTES_UPSTREAM } from '@fabrika/example-zerops-app'
 import { notesGates } from '@fabrika/example-zerops-app/gates'
@@ -26,10 +27,9 @@ import {
 	type ZeropsProvider,
 	type ZeropsRuntimeTarget,
 } from '@fabrika/provider-zerops'
-import { applicableGates, buildCaddyConfig, compileGates, PROXY_TOKEN_HEADER } from '@fabrika/proxy'
+import { buildCaddyConfig } from '@fabrika/proxy'
 import { encodeProxyManifestJson, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
-import { PROXY_TOKEN_HEADER as APP_TOKEN_HEADER } from '../../../../examples/zerops-app/src/authz'
 import { assertOnlyPublicService, assertZeropsHostnames } from '../invariants'
 import { validateYaml } from '../validate'
 
@@ -340,11 +340,5 @@ describe("the app's gates are enforced by the proxy, and survive the trip verbat
 		expect(serialized).toContain(`"delete":["${PROXY_TOKEN_HEADER}"]`)
 		// Caddy's admin API is off: the manifest is baked in at build time, not pushed at runtime.
 		expect(config.admin.disabled).toBe(true)
-	})
-
-	test('the app and the proxy agree on the injected header name, despite the constant being duplicated', () => {
-		// The app may not depend on `@fabrika/proxy`, so the name is written twice. This is the check that
-		// keeps the duplication honest until it is hoisted into `@fabrika/auth-core`.
-		expect(APP_TOKEN_HEADER).toBe(PROXY_TOKEN_HEADER)
 	})
 })

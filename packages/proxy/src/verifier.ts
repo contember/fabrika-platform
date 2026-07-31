@@ -1,6 +1,6 @@
 /**
- * Local token verification — the warm path. Identical in substance to what `PropustkaAuth` does
- * in-process: fetch the JWKS once, then verify every token locally with no network call.
+ * Local token verification — the warm path. Fetch the JWKS once, then verify every token with no
+ * network call on the warm path.
  *
  * `verify` returns a three-state result, because "this token is bad" and "we could not check" are
  * different denials: the first is the caller's fault (401/403), the second is ours (503). Both deny.

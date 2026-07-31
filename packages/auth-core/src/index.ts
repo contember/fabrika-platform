@@ -1,7 +1,8 @@
-// @fabrika/auth-core — the one shared library: pure logic & types that must not drift
-// between @fabrika/iam (implements it) and @fabrika/auth (consumes it).
+// @fabrika/auth-core — pure logic, types, and wire names shared across auth components and apps.
+export * from './gates'
 export * from './ids'
 export * from './permissions'
 export * from './rpc'
 export * from './token'
 export * from './types'
+export * from './wire'

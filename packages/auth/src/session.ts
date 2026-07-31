@@ -25,6 +25,9 @@ import {
 	type AccessTokenClaims,
 	API_KEY_PREFIX,
 	type AppGates,
+	applicableGates,
+	type CompiledGate,
+	compileGates,
 	type CredentialLocation,
 	type IamRpc,
 	type Jwks,
@@ -73,11 +76,15 @@ type SessionAttempt =
 const JWKS_TTL_SECONDS = 600
 
 export class PropustkaAuth {
+	private readonly gates: CompiledGate[]
+
 	constructor(
 		private readonly binding: IamRpc,
 		private readonly appId: string,
 		private readonly config: SessionAuthConfig,
-	) {}
+	) {
+		this.gates = compileGates(config.gates)
+	}
 
 	/**
 	 * Authenticate a request against the per-path gates. Verifies the cached permission token locally
@@ -88,7 +95,7 @@ export class PropustkaAuth {
 		const requestId = request.headers.get('cf-ray') ?? crypto.randomUUID()
 		const url = new URL(request.url)
 
-		const applicable = this.config.gates.rules.filter((rule) => pathMatches(rule.path, url.pathname))
+		const applicable = applicableGates(this.gates, url.pathname)
 		if (applicable.length === 0) {
 			// Fail closed — there is no edge in front, so an unmatched path is denied.
 			return { ok: false, reason: 'no_rule', status: 403 }
@@ -98,7 +105,7 @@ export class PropustkaAuth {
 		// after exhausting all matching rules without satisfying one.
 		let humanMiss: { reason: SessionFailureReason; loginUrl: string } | null = null
 
-		for (const rule of applicable) {
+		for (const { rule } of applicable) {
 			if (rule.kind === 'public') {
 				return { ok: true, context: this.anonymousContext(requestId, now) }
 			}
@@ -314,16 +321,6 @@ function extractCredential(request: Request, url: URL, source: CredentialLocatio
 		return url.searchParams.get(source.name)
 	}
 	return readCookie(request.headers.get('Cookie'), source.name)
-}
-
-/** Glob match where `*` matches any run of characters; the rest is literal. Anchored. */
-function pathMatches(pattern: string, pathname: string): boolean {
-	const regex = new RegExp(`^${pattern.split('*').map(escapeRegExp).join('.*')}$`)
-	return regex.test(pathname)
-}
-
-function escapeRegExp(literal: string): string {
-	return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 /** Build the host-only `px_token` cookie carrying a freshly minted permission token. */

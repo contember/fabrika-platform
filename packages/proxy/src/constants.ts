@@ -3,15 +3,7 @@
  * (`caddy.ts` reads the same constants the service does), so a rename cannot desynchronise them.
  */
 
-/**
- * Header carrying the verified access token to the upstream app — the portable successor to
- * `Cf-Access-Jwt-Assertion`. Caddy copies it from the `/verify` response onto the upstream request
- * (`copy_headers`), and the app's SDK verifies its signature as defence in depth.
- *
- * NOTE: the app-side SDK must read the SAME name. Until it does, this constant is the single
- * definition — see the follow-up to hoist it into `@fabrika/auth-core`.
- */
-export const PROXY_TOKEN_HEADER = 'X-Fabrika-Token'
+export { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 
 // ── What Caddy's `forward_auth` sends us ───────────────────────────────────────
 //

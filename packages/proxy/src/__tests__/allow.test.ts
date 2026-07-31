@@ -8,7 +8,18 @@ import { describe, expect, test } from 'bun:test'
 import { MemoryTokenCache } from '../cache'
 import { PROXY_TOKEN_HEADER, REQUEST_ID_HEADER } from '../constants'
 import { createVerifyService } from '../service'
-import { APP, FakeIam, type FakeIamOptions, HOST, ISSUER, manifestWith, signToken, signUserToken, verifyRequest } from './helpers'
+import {
+	APP,
+	FakeIam,
+	type FakeIamOptions,
+	HOST,
+	ISSUER,
+	manifestWith,
+	signToken,
+	signUserToken,
+	verifyRequest,
+	type VerifyRequestOptions,
+} from './helpers'
 
 const future = (seconds = 300) => Math.floor(Date.now() / 1000) + seconds
 
@@ -131,6 +142,31 @@ describe('gate ordering — array order is the precedence', () => {
 		expect(iam.mintTokenCalls).toBe(1)
 	})
 
+	test('EMPTY service credential values are absent and fall through', async () => {
+		const token = await signUserToken()
+		const options: FakeIamOptions = { mintToken: { ok: true, token, expiresAt: future() } }
+		const cases: { gates: AppGates; request: VerifyRequestOptions }[] = [
+			{
+				gates: { rules: [{ path: '/*', kind: 'service', credential: { in: 'header', name: 'X-Service-Key' } }, { path: '/*', kind: 'human' }] },
+				request: { headers: { 'X-Service-Key': '   ' }, cookie: 'px_session=s' },
+			},
+			{
+				gates: { rules: [{ path: '/*', kind: 'service', credential: { in: 'query', name: 'key' } }, { path: '/*', kind: 'human' }] },
+				request: { path: '/x?key=', cookie: 'px_session=s' },
+			},
+			{
+				gates: { rules: [{ path: '/*', kind: 'service', credential: { in: 'cookie', name: 'key' } }, { path: '/*', kind: 'human' }] },
+				request: { cookie: 'key=; px_session=s' },
+			},
+		]
+		for (const { gates, request } of cases) {
+			const { iam, verify } = service(gates, options)
+			expect((await verify(verifyRequest(request))).status).toBe(204)
+			expect(iam.mintFromKeyCalls).toBe(0)
+			expect(iam.mintTokenCalls).toBe(1)
+		}
+	})
+
 	test('an earlier public rule shadows a later human rule on the same path', async () => {
 		const { iam, verify } = service({ rules: [{ path: '/*', kind: 'public' }, { path: '/*', kind: 'human' }] })
 		expect((await verify(verifyRequest({ path: '/secret' }))).status).toBe(204)
@@ -161,7 +197,7 @@ describe('gate ordering — array order is the precedence', () => {
 		expect((await verify(verifyRequest({ path: '/c/x' }))).status).toBe(403)
 	})
 
-	test('the glob is anchored and case-sensitive, matching the SDK exactly', async () => {
+	test('the glob is anchored and case-sensitive, matching the shared contract', async () => {
 		const { verify } = service({ rules: [{ path: '/Admin/*', kind: 'public' }] })
 		expect((await verify(verifyRequest({ path: '/Admin/users' }))).status).toBe(204)
 		// Caddy's own path matcher would treat these as the same. Ours does not — which is precisely
@@ -170,7 +206,7 @@ describe('gate ordering — array order is the precedence', () => {
 		expect((await verify(verifyRequest({ path: '/x/Admin/users' }))).status).toBe(403)
 	})
 
-	test('`*` crosses path separators, matching the SDK exactly', async () => {
+	test('`*` crosses path separators, matching the shared contract', async () => {
 		const { verify } = service({ rules: [{ path: '/api/*/items', kind: 'public' }] })
 		// Go's `path.Match`, which Caddy falls back to, would NOT match this. Ours does.
 		expect((await verify(verifyRequest({ path: '/api/a/b/items' }))).status).toBe(204)

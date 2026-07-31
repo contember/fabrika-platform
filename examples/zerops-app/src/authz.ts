@@ -24,20 +24,10 @@
 //   - `aud` is THIS app — a token minted for another app is rejected, which is what stops a token
 //     leaked from app A being replayed against app B.
 
-import { type AccessTokenClaims, parseAccessClaims, permits, type Scope, scopedValues } from '@fabrika/auth-core'
+import { type AccessTokenClaims, parseAccessClaims, permits, PROXY_TOKEN_HEADER, type Scope, scopedValues } from '@fabrika/auth-core'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 
-/**
- * The header the proxy copies the verified token into — the portable successor to
- * `Cf-Access-Jwt-Assertion`.
- *
- * Declared here rather than imported: an app must not depend on `@fabrika/proxy`, which is a deployed
- * service and not a library for apps. The constant is duplicated on purpose and the duplication is
- * CHECKED — `packages/installation-zerops/zerops/__tests__/example-app.test.ts` asserts this equals the proxy's own
- * `PROXY_TOKEN_HEADER`, so a rename fails a test instead of silently un-authenticating every request.
- * The real fix is to hoist the name into `@fabrika/auth-core`, which both sides may depend on.
- */
-export const PROXY_TOKEN_HEADER = 'X-Fabrika-Token'
+export { PROXY_TOKEN_HEADER }
 
 /** The authenticated caller, as this app sees them. */
 export interface Caller {

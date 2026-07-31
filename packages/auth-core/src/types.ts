@@ -67,12 +67,11 @@ export interface AppSchema {
 	roles: Record<string, RoleDef>
 }
 
-// ── Per-path access gates (the propustka-native front door, enforced IN-PROCESS by the SDK) ──
+// ── Per-path access gates (the propustka-native front door, enforced by the proxy) ──
 //
 // Replaces the deleted Cloudflare-Access edge model (AppAccess/AccessAppDecl/AccessRule). There is
-// no reconcile and no worker endpoint for these: gate rules are pure SDK config, consumed only by
-// `PropustkaAuth` to decide WHICH credential KIND a path requires — the in-process successor to the
-// CF Access edge decision (CF Access is gone). Three kinds mirror the three old edge decisions:
+// no IAM reconcile for these: gate rules are deployed verbatim in the proxy manifest, and the proxy
+// decides WHICH credential KIND a path requires. Three kinds mirror the three old edge decisions:
 //   - public  → no credential (the old `bypass`/everyone carve-out)
 //   - service → a machine `px_` key or passthrough JWT (the old `non_identity`/service-token gate)
 //   - human   → a logged-in human via `px_session`/`px_token` (the old `allow`-by-audience gate)
@@ -110,7 +109,7 @@ export type GateKind =
  */
 export type GateRule = { path: string } & GateKind
 
-/** An app's full per-path gate declaration, enforced by its `PropustkaAuth` middleware. */
+/** An app's full per-path gate declaration, enforced by the Fabrika proxy. */
 export interface AppGates {
 	rules: GateRule[]
 }

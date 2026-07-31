@@ -1,6 +1,5 @@
 /**
- * The authorization core — `PropustkaAuth.authenticate()` relocated into its own process
- * ([ADR-0007](../../../docs/decisions/0007-proxy-based-auth-enforcement.md)).
+ * The proxy authorization core ([ADR-0007](../../../docs/decisions/0007-proxy-based-auth-enforcement.md)).
  *
  * Same four steps, same order, same fail-closed posture:
  *   1. match the request path against the app's ordered gate rules;
@@ -8,10 +7,8 @@
  *   3. exchange it with IAM once, cache the result, and thereafter verify LOCALLY against the JWKS;
  *   4. deny unless a rule was satisfied.
  *
- * Two deliberate divergences from the in-process SDK, both documented at their call sites:
- *   - a human miss becomes a 302 to IAM's `/auth/login` rather than a 401 carrying a `loginUrl`,
- *     because Caddy returns a non-2xx auth response to the client verbatim;
- *   - a request with NO session cookie short-circuits instead of calling `mintToken(session: null)`.
+ * A human miss becomes a 302 to IAM's `/auth/login`, because Caddy returns a non-2xx auth response
+ * to the client verbatim. A request with no session cookie needs no IAM call.
  *
  * NOTHING here returns an allow on an unexpected condition. Every `catch` maps to a deny.
  */
