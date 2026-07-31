@@ -113,3 +113,4 @@ export type {
 	OperationsReleaseReconcileResponseV1,
 	OperationsReleaseUnavailableReason,
 } from './releases.js'
+export type { OperationsIssueQuery, OperationsReleaseQuery, OperationsRpcContract } from './rpc.js'

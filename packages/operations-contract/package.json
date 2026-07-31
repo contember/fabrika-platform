@@ -48,9 +48,17 @@
 			"bun": "./src/releases.ts",
 			"types": "./src/releases.ts",
 			"default": "./src/releases.ts"
+		},
+		"./rpc": {
+			"bun": "./src/rpc.ts",
+			"types": "./src/rpc.ts",
+			"default": "./src/rpc.ts"
 		}
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@fabrika/app": "workspace:*"
 	}
 }

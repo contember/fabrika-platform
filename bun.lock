@@ -162,6 +162,7 @@
         "@fabrika/platform-node": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
         "jose": "^5.9.0",
+        "zod": "^3.24.0",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "^4.20260702.1",
@@ -176,6 +177,7 @@
       "name": "@fabrika/iam-contract",
       "version": "0.0.1",
       "dependencies": {
+        "@fabrika/app": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
       },
     },
@@ -258,6 +260,9 @@
     "packages/operations-contract": {
       "name": "@fabrika/operations-contract",
       "version": "0.0.1",
+      "dependencies": {
+        "@fabrika/app": "workspace:*",
+      },
     },
     "packages/operations-ui": {
       "name": "@fabrika/operations-ui",

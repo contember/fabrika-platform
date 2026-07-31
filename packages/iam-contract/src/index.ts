@@ -1,8 +1,9 @@
-// @fabrika/iam-contract — runtime-neutral admin REST request/response DTOs.
+// @fabrika/iam-contract — runtime-neutral admin REST and typed RPC contracts.
 //
 // Shared by @fabrika/iam and its browser clients. Reuses @fabrika/auth-core types
 // where they fit. Keep these clean and complete: they are the admin API contract.
 
+import type { RpcProcedureContract } from '@fabrika/app'
 import type { AppActionDef, AppSchema, AppScopeDef, PermissionEntry, PermissionSource, PrincipalType, RoleDef } from '@fabrika/auth-core'
 
 // ── Common wrappers ───────────────────────────────────────────────────────────
@@ -252,6 +253,123 @@ export interface MeDto {
 	type: PrincipalType
 	label: string
 	permissions: PermissionEntry[]
+}
+
+// ── Typed admin RPC ──────────────────────────────────────────────────────────
+
+export interface OkResponse {
+	ok: true
+}
+
+export interface ListPrincipalsInput {
+	type?: PrincipalType
+	status?: PrincipalStatus
+	q?: string
+}
+
+export interface PrincipalIdInput {
+	id: string
+}
+
+export interface UpdatePrincipalInput extends UpdatePrincipalRequest, PrincipalIdInput {}
+
+export interface GrantIdInput {
+	id: string
+}
+
+export interface AppInput {
+	app: string
+}
+
+export interface ListRolesInput {
+	app?: string | null
+}
+
+export interface CreatePolicyInput {
+	app: string
+	policy: CreatePolicyRequest
+}
+
+export interface UpdatePolicyInput {
+	app: string
+	key: string
+	policy: UpdatePolicyRequest
+}
+
+export interface PolicyIdInput {
+	app: string
+	key: string
+}
+
+export interface ApiKeyIdInput {
+	principalId: string
+}
+
+export interface ShareLinkIdInput {
+	id: string
+}
+
+export interface ListAuditInput {
+	resourceType?: string
+	resourceId?: string
+	principalId?: string
+	action?: string
+	requestId?: string
+	before?: string
+	limit?: number
+}
+
+export interface ListAuthLogInput {
+	principalId?: string
+	requestId?: string
+	decision?: 'allow' | 'deny'
+	before?: string
+	limit?: number
+}
+
+type RpcProcedure<TInput, TOutput> = RpcProcedureContract<TInput, TOutput>
+
+/** Browser-safe typed contract for the IAM administration API. */
+export interface IamAdminRpcContract {
+	me: RpcProcedure<void, MeDto>
+	principals: {
+		list: RpcProcedure<ListPrincipalsInput, ListResponse<PrincipalListItem>>
+		get: RpcProcedure<PrincipalIdInput, PrincipalDetail>
+		invite: RpcProcedure<InviteRequest, PrincipalListItem>
+		update: RpcProcedure<UpdatePrincipalInput, PrincipalListItem>
+	}
+	grants: {
+		create: RpcProcedure<CreateGrantRequest, GrantDto>
+		delete: RpcProcedure<GrantIdInput, OkResponse>
+	}
+	apps: {
+		list: RpcProcedure<void, ListResponse<AppDto>>
+		getSchema: RpcProcedure<AppInput, AppSchemaDto>
+	}
+	roles: {
+		list: RpcProcedure<ListRolesInput, ListResponse<RoleDto>>
+	}
+	policies: {
+		list: RpcProcedure<AppInput, ListResponse<PolicyDto>>
+		create: RpcProcedure<CreatePolicyInput, PolicyDto>
+		update: RpcProcedure<UpdatePolicyInput, PolicyDto>
+		delete: RpcProcedure<PolicyIdInput, OkResponse>
+	}
+	apiKeys: {
+		list: RpcProcedure<void, ListResponse<ApiKeyDto>>
+		provision: RpcProcedure<ProvisionApiKeyRequest, ProvisionApiKeyResponse>
+		rotate: RpcProcedure<ApiKeyIdInput, RotateApiKeyResponse>
+		revoke: RpcProcedure<ApiKeyIdInput, OkResponse>
+	}
+	shareLinks: {
+		list: RpcProcedure<void, ListResponse<ShareLinkListItem>>
+		issue: RpcProcedure<IssueShareLinkRequest, IssuedShareLinkResponse>
+		revoke: RpcProcedure<ShareLinkIdInput, OkResponse>
+	}
+	audit: {
+		list: RpcProcedure<ListAuditInput, CursorList<AuditEventDto>>
+		listAuthLog: RpcProcedure<ListAuthLogInput, CursorList<AuthLogDto>>
+	}
 }
 
 export type { AppActionDef, AppSchema, AppScopeDef, PermissionEntry, PermissionSource, PrincipalType, RoleDef }

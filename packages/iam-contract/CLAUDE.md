@@ -1,6 +1,6 @@
 # @fabrika/iam-contract
 
-Runtime-neutral request and response DTOs for the IAM admin REST API. Both
+Runtime-neutral request and response DTOs for the IAM admin REST and typed RPC APIs. Both
 `@fabrika/iam` and browser-side `@fabrika/iam-ui` consume this package.
 
 Keep `IamRpc`, policy evaluation, token shapes, and gate domain types in
