@@ -12,6 +12,7 @@ import type {
 	OperationsIssueDetailResponseDto,
 	OperationsIssueListResponseDto,
 	OperationsIssueMutationRequestDto,
+	OperationsIssueOccurrenceListResponseDto,
 	OperationsNotificationChannelRequestDto,
 	OperationsReleaseDetailResponseDto,
 	OperationsReleaseListResponseDto,
@@ -34,7 +35,9 @@ export interface OperationsClient {
 	source(sourceId: string): Promise<OperationsSourceDetailResponseDto>
 	issues(query?: OperationsIssueQuery): Promise<OperationsIssueListResponseDto>
 	issue(issueId: string): Promise<OperationsIssueDetailResponseDto>
+	issueOccurrences(issueId: string, cursor?: string): Promise<OperationsIssueOccurrenceListResponseDto>
 	latestEvent(issueId: string): Promise<OperationsEventDetailResponseDto>
+	event(issueId: string, occurrenceId: string): Promise<OperationsEventDetailResponseDto>
 	mutateIssue(issueId: string, mutation: OperationsIssueMutationRequestDto): Promise<OperationsIssueDetailResponseDto>
 	bulkIssueStatus(input: OperationsBulkIssueStatusRequestDto): Promise<OperationsBulkIssueStatusResponseDto>
 	assignees(sourceId: string): Promise<OperationsAssigneeListResponseDto>
@@ -72,7 +75,9 @@ export function createOperationsClient(fetcher: OperationsFetch = fetch): Operat
 		source: (sourceId) => rpc.source({ sourceId }),
 		issues: (query = {}) => rpc.issues(query),
 		issue: (issueId) => rpc.issue({ issueId }),
+		issueOccurrences: (issueId, cursor) => rpc.issueOccurrences({ issueId, ...(cursor === undefined ? {} : { cursor }), limit: 50 }),
 		latestEvent: (issueId) => rpc.latestEvent({ issueId }),
+		event: (issueId, occurrenceId) => rpc.event({ issueId, occurrenceId }),
 		mutateIssue: (issueId, mutation) => rpc.mutateIssue({ issueId, mutation }),
 		bulkIssueStatus: (input) => rpc.bulkIssueStatus(input),
 		assignees: (sourceId) => rpc.assignees({ sourceId }),

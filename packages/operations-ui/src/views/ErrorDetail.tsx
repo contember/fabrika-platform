@@ -2,18 +2,25 @@ import { Link } from '@buzola/router'
 import type { ActivityItem, DisplayFrame, EventDetail } from '@fabrika/operations-contract'
 import type {
 	OperationsAssigneeListResponseDto,
+	OperationsEventDetailResponseDto,
 	OperationsIssueDetailDto,
 	OperationsIssueMutationRequestDto,
+	OperationsIssueOccurrenceDto,
+	OperationsIssueOccurrenceListResponseDto,
+	OperationsIssueSummaryDto,
 	OperationsReleaseSummaryDto,
 } from '@fabrika/operations-contract/operator-api'
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { formatTimestamp, relativeSeen } from '../format'
 
 export interface ErrorDetailViewProps {
 	issue: OperationsIssueDetailDto
-	event: EventDetail | null
+	initialEvent: OperationsEventDetailResponseDto | null
 	assignees: OperationsAssigneeListResponseDto['items']
 	releases: readonly OperationsReleaseSummaryDto[]
+	onSelectOccurrence?: (occurrenceId: string) => Promise<OperationsEventDetailResponseDto>
+	onLoadOccurrences?: (cursor: string) => Promise<OperationsIssueOccurrenceListResponseDto>
+	onFindMergeTargets?: (query: string) => Promise<OperationsIssueSummaryDto[]>
 	onMutate?: (mutation: OperationsIssueMutationRequestDto) => Promise<void>
 }
 
@@ -52,13 +59,33 @@ export function activityPayloadLabel(item: ActivityItem): string | null {
 	return null
 }
 
-export function ErrorDetailView({ issue, event, assignees, releases, onMutate }: ErrorDetailViewProps) {
+export function ErrorDetailView({
+	issue,
+	initialEvent,
+	assignees,
+	releases,
+	onSelectOccurrence,
+	onLoadOccurrences,
+	onFindMergeTargets,
+	onMutate,
+}: ErrorDetailViewProps) {
 	const [comment, setComment] = useState('')
 	const [assignee, setAssignee] = useState(issue.assignedTo?.id ?? '')
 	const [mergeTarget, setMergeTarget] = useState('')
+	const [mergeQuery, setMergeQuery] = useState('')
+	const [mergeTargets, setMergeTargets] = useState<OperationsIssueSummaryDto[]>([])
 	const [releaseId, setReleaseId] = useState(issue.resolvedInRelease?.id ?? '')
+	const [event, setEvent] = useState(initialEvent)
+	const [occurrences, setOccurrences] = useState<OperationsIssueOccurrenceDto[]>(issue.occurrences)
+	const [occurrencesCursor, setOccurrencesCursor] = useState(issue.occurrencesNextCursor)
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
+
+	useEffect(() => {
+		setEvent(initialEvent)
+		setOccurrences(issue.occurrences)
+		setOccurrencesCursor(issue.occurrencesNextCursor)
+	}, [initialEvent, issue.occurrences, issue.occurrencesNextCursor])
 
 	async function mutate(mutation: OperationsIssueMutationRequestDto): Promise<boolean> {
 		if (onMutate === undefined) return false
@@ -75,7 +102,50 @@ export function ErrorDetailView({ issue, event, assignees, releases, onMutate }:
 		}
 	}
 
-	const primaryException = event?.exceptions[0] ?? null
+	async function selectOccurrence(occurrenceId: string) {
+		if (onSelectOccurrence === undefined || occurrenceId === event?.occurrenceId) return
+		setBusy(true)
+		setError(null)
+		try {
+			setEvent(await onSelectOccurrence(occurrenceId))
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : 'The occurrence could not be loaded.')
+		} finally {
+			setBusy(false)
+		}
+	}
+
+	async function loadOlderOccurrences() {
+		if (onLoadOccurrences === undefined || occurrencesCursor === null) return
+		setBusy(true)
+		setError(null)
+		try {
+			const next = await onLoadOccurrences(occurrencesCursor)
+			setOccurrences((current) => [...current, ...next.items])
+			setOccurrencesCursor(next.nextCursor)
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : 'Older occurrences could not be loaded.')
+		} finally {
+			setBusy(false)
+		}
+	}
+
+	async function findMergeTargets() {
+		if (onFindMergeTargets === undefined) return
+		setBusy(true)
+		setError(null)
+		try {
+			const candidates = await onFindMergeTargets(mergeQuery.trim())
+			setMergeTargets(candidates)
+			setMergeTarget(candidates[0]?.id ?? '')
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : 'Merge targets could not be loaded.')
+		} finally {
+			setBusy(false)
+		}
+	}
+
+	const eventDetail = event?.detail ?? null
 
 	return (
 		<>
@@ -115,33 +185,51 @@ export function ErrorDetailView({ issue, event, assignees, releases, onMutate }:
 							</Link>
 						)}
 				/>
-				<Fact label="Environment" value={event?.environment ?? '—'} />
+				<Fact label="Environment" value={eventDetail?.environment ?? '—'} />
 			</div>
 
 			<section>
 				<div className="section-head">
-					<h2>Latest occurrence</h2>
+					<h2>Occurrences</h2>
 				</div>
-				{event === null
+				{occurrences.length > 0 && (
+					<div className="form-row">
+						<label>
+							Occurrence
+							<select value={event?.occurrenceId ?? ''} disabled={busy} onChange={(change) => void selectOccurrence(change.target.value)}>
+								{occurrences.map((occurrence) => (
+									<option key={occurrence.id} value={occurrence.id}>{formatTimestamp(occurrence.receivedAt)} · {occurrence.release ?? 'no release'}</option>
+								))}
+							</select>
+						</label>
+						{occurrencesCursor !== null && (
+							<button type="button" disabled={busy} onClick={() => void loadOlderOccurrences()}>Load older occurrences</button>
+						)}
+					</div>
+				)}
+				{eventDetail === null
 					? <p className="section-note">No event context was retained for this issue.</p>
 					: (
 						<div className="ops-occurrence">
 							<div className="ops-trace-line">
 								<span>
-									<strong>{event.request?.method ?? 'event'}</strong> {event.request?.url ?? event.platform ?? 'unknown origin'}
+									<strong>{eventDetail.request?.method ?? 'event'}</strong> {eventDetail.request?.url ?? eventDetail.platform ?? 'unknown origin'}
 								</span>
-								<span>{event.runtime ?? 'unknown runtime'}{event.os === null ? '' : ` · ${event.os}`}</span>
+								<span>{eventDetail.runtime ?? 'unknown runtime'}{eventDetail.os === null ? '' : ` · ${eventDetail.os}`}</span>
 							</div>
-							{primaryException !== null && (
-								<div className="ops-exception">
-									<h3>{[primaryException.type, primaryException.value].filter(Boolean).join(': ') || issue.title}</h3>
-									<div className="ops-stack" data-testid="stack-frames">
-										{primaryException.frames.map((frame, index) => (
+							{eventDetail.exceptions.map((exception, exceptionIndex) => (
+								<div className="ops-exception" key={`${exception.type ?? 'exception'}:${exceptionIndex}`}>
+									<h3>
+										{exceptionIndex === 0 ? 'Exception' : `Caused by ${exception.type ?? 'exception'}`}:{' '}
+										{[exception.type, exception.value].filter(Boolean).join(': ') || issue.title}
+									</h3>
+									<div className="ops-stack" data-testid="stack-frames" data-exception-index={exceptionIndex}>
+										{exception.frames.map((frame, frameIndex) => (
 											<div
 												className={`ops-frame${frame.inApp ? ' in-app' : ''}`}
-												key={`${frameLocation(frame)}:${index}`}
+												key={`${frameLocation(frame)}:${frameIndex}`}
 												data-testid="stack-frame"
-												data-frame-index={index}
+												data-frame-index={frameIndex}
 												data-frame-file={frame.file}
 												data-frame-in-app={frame.inApp}
 												data-frame-resolved={frame.resolved}
@@ -155,8 +243,8 @@ export function ErrorDetailView({ issue, event, assignees, releases, onMutate }:
 										))}
 									</div>
 								</div>
-							)}
-							<EventContext event={event} />
+							))}
+							<EventContext event={eventDetail} />
 						</div>
 					)}
 			</section>
@@ -178,6 +266,10 @@ export function ErrorDetailView({ issue, event, assignees, releases, onMutate }:
 										<button type="button" disabled={busy} onClick={() => mutate({ kind: 'snooze_until', until: Date.now() + 24 * 60 * 60 * 1000 })}>
 											Snooze 24 h
 										</button>
+										<button type="button" disabled={busy} onClick={() => mutate({ kind: 'snooze_until', until: Date.now() + 7 * 24 * 60 * 60 * 1000 })}>
+											Snooze 7 d
+										</button>
+										<button type="button" disabled={busy} onClick={() => mutate({ kind: 'snooze_count', additional: 10 })}>Snooze 10 events</button>
 									</div>
 									<label>
 										Assignee
@@ -223,15 +315,23 @@ export function ErrorDetailView({ issue, event, assignees, releases, onMutate }:
 									<label>
 										Merge into issue
 										<div className="ops-inline-action">
-											<input value={mergeTarget} onChange={(event) => setMergeTarget(event.target.value)} placeholder="Opaque issue token" />
-											<button
-												type="button"
-												disabled={busy || mergeTarget.trim() === ''}
-												onClick={() => mutate({ kind: 'merge', targetIssueId: mergeTarget.trim() })}
-											>
-												Merge
-											</button>
+											<input value={mergeQuery} onChange={(event) => setMergeQuery(event.target.value)} placeholder="Search issue title or culprit" />
+											<button type="button" disabled={busy || onFindMergeTargets === undefined} onClick={() => void findMergeTargets()}>Find</button>
 										</div>
+										{mergeTargets.length > 0 && (
+											<div className="ops-inline-action">
+												<select value={mergeTarget} onChange={(event) => setMergeTarget(event.target.value)} aria-label="Merge target">
+													{mergeTargets.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.title} · {candidate.count} events</option>)}
+												</select>
+												<button
+													type="button"
+													disabled={busy || mergeTarget === ''}
+													onClick={() => mutate({ kind: 'merge', targetIssueId: mergeTarget })}
+												>
+													Merge
+												</button>
+											</div>
+										)}
 									</label>
 								</div>
 							)}
@@ -319,6 +419,29 @@ function EventContext({ event }: { event: EventDetail }) {
 						<summary>Raw event</summary>
 						<pre>{event.rawEvent}</pre>
 					</details>
+				</div>
+			</section>
+			<section className="card">
+				<div className="card-head">
+					<h3>Tags</h3>
+				</div>
+				<div className="card-body flush">
+					{event.tags.length === 0
+						? (
+							<div className="empty-state">
+								<span className="empty-body">None reported</span>
+							</div>
+						)
+						: (
+							<div className="feed">
+								{event.tags.map((tag) => (
+									<div className="feed-row" key={tag.key}>
+										<strong className="feed-title">{tag.key}</strong>
+										<code>{tag.value}</code>
+									</div>
+								))}
+							</div>
+						)}
 				</div>
 			</section>
 		</div>

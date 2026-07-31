@@ -20,6 +20,7 @@ describe('operations client', () => {
 		const client = createOperationsClient(fetcher)
 
 		await client.issues({ sourceId: 'source / one', status: 'open', limit: 25 })
+		await client.event('issue / one', 'occurrence / one')
 		await client.mutateIssue('issue / one', { kind: 'status', status: 'resolved' })
 
 		expect(requests[0]?.url).toBe('/operations/api/rpc')
@@ -30,6 +31,10 @@ describe('operations client', () => {
 			input: { sourceId: 'source / one', status: 'open', limit: 25 },
 		}))
 		expect(requests[1]?.init?.body).toBe(JSON.stringify({
+			method: 'event',
+			input: { issueId: 'issue / one', occurrenceId: 'occurrence / one' },
+		}))
+		expect(requests[2]?.init?.body).toBe(JSON.stringify({
 			method: 'mutateIssue',
 			input: { issueId: 'issue / one', mutation: { kind: 'status', status: 'resolved' } },
 		}))

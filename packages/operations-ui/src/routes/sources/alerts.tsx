@@ -2,6 +2,7 @@ import { createPage, Link } from '@buzola/router'
 import type { OperationsAlertKind } from '@fabrika/operations-contract/operator-api'
 import { useState } from 'react'
 import { operationsClient } from '../../client'
+import { formatTimestamp, relativeSeen } from '../../format'
 
 const ALERT_KINDS: OperationsAlertKind[] = [
 	'new_issue',
@@ -240,6 +241,60 @@ export default createPage()
 							</button>
 						</div>
 						<p className="hint">The complete URL is write-only. The API returns only a redacted destination.</p>
+					</div>
+				</section>
+
+				<section>
+					<div className="section-head">
+						<h2>Notification deliveries</h2>
+					</div>
+					<div className="table-wrap">
+						<table aria-label={`Notification deliveries for ${data.source.displayName}`}>
+							<thead>
+								<tr>
+									<th>Created</th>
+									<th>Alert</th>
+									<th className="grow">Destination</th>
+									<th>Attempts</th>
+									<th>Status</th>
+								</tr>
+							</thead>
+							<tbody>
+								{data.alerts.deliveries.length === 0
+									? (
+										<tr>
+											<td colSpan={5} className="empty">No notifications have been queued.</td>
+										</tr>
+									)
+									: data.alerts.deliveries.map((delivery) => {
+										const destination = data.alerts.channels.find((channel) => channel.id === delivery.channelId)?.targetDisplay ?? 'Removed channel'
+										return (
+											<tr key={delivery.id}>
+												<td title={formatTimestamp(delivery.createdAt)}>{relativeSeen(delivery.createdAt)}</td>
+												<td>{label(delivery.kind)}</td>
+												<td>
+													<code>{destination}</code>
+												</td>
+												<td>
+													<details>
+														<summary>{delivery.attemptCount} / {delivery.maxAttempts}</summary>
+														{delivery.attempts.length === 0
+															? <p className="hint">Waiting for the first attempt.</p>
+															: (
+																<ol>
+																	{delivery.attempts.map((attempt) => (
+																		<li key={attempt.id}>{formatTimestamp(attempt.attemptedAt)} · {attempt.delivered ? 'delivered' : attempt.errorCode ?? 'failed'}</li>
+																	))}
+																</ol>
+															)}
+													</details>
+												</td>
+												<td>{delivery.status}</td>
+											</tr>
+										)
+									})}
+							</tbody>
+						</table>
 					</div>
 				</section>
 			</>

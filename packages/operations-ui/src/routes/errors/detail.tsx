@@ -24,9 +24,15 @@ export default createPage()
 				<Link to="operations/errors" className="back-link">← All errors</Link>
 				<ErrorDetailView
 					issue={issue}
-					event={data.event?.detail ?? null}
+					initialEvent={data.event ?? null}
 					assignees={data.assignees.items}
 					releases={data.releases.items}
+					onSelectOccurrence={(occurrenceId) => operationsClient.event(issue.id, occurrenceId)}
+					onLoadOccurrences={(cursor) => operationsClient.issueOccurrences(issue.id, cursor)}
+					onFindMergeTargets={async (query) => {
+						const response = await operationsClient.issues({ sourceId: issue.source.id, query, sort: 'recent', limit: 25 })
+						return response.items.filter((candidate) => candidate.id !== issue.id)
+					}}
 					onMutate={async (mutation) => {
 						await operationsClient.mutateIssue(issue.id, mutation)
 						invalidate()

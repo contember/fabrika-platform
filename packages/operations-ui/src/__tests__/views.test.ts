@@ -3,7 +3,7 @@ import type { OperationsIssueSummaryDto } from '@fabrika/operations-contract/ope
 import { describe, expect, test } from 'bun:test'
 import { aggregateHealth } from '../routes/health'
 import { activityPayloadLabel, frameLocation } from '../views/ErrorDetail'
-import { filterIssues } from '../views/Errors'
+import { DEFAULT_ISSUE_FILTERS, issueQuery, trendPoints } from '../views/Errors'
 
 const issue: OperationsIssueSummaryDto = {
 	id: 'opaque-issue-id',
@@ -29,9 +29,23 @@ const issue: OperationsIssueSummaryDto = {
 }
 
 describe('issue views', () => {
-	test('filters by status and operator-visible fields', () => {
-		expect(filterIssues([issue], 'handle', 'open')).toEqual([issue])
-		expect(filterIssues([issue], 'worker', 'resolved')).toEqual([])
+	test('builds a bounded server-side query from visible filters', () => {
+		expect(issueQuery({ ...DEFAULT_ISSUE_FILTERS, query: ' handle ', sourceId: 'source-1', level: 'error' }, 'cursor-1')).toEqual({
+			query: 'handle',
+			sourceId: 'source-1',
+			status: 'open',
+			level: 'error',
+			window: '24h',
+			assignee: 'all',
+			sort: 'recent',
+			cursor: 'cursor-1',
+			limit: 50,
+		})
+	})
+
+	test('plots trends relative to the visible peak', () => {
+		expect(trendPoints([])).toBe('')
+		expect(trendPoints([0, 2, 4], 10, 10)).toBe('0,10 5,5 10,0')
 	})
 
 	test('renders complete and partial frame positions', () => {
