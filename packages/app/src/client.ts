@@ -9,7 +9,7 @@
 // login URL (returning the current page) instead of throwing, with a short
 // re-entry guard so an unprovisioned identity can't loop forever.
 
-import type { InferRouterClient } from './rpc/types.js'
+import type { InferRpcClient } from './rpc/contract.js'
 
 export class RpcError extends Error {
 	readonly type: string
@@ -124,12 +124,12 @@ function makeProxy(opts: RpcClientOptions, bounce: BounceConfig | null, path: st
 	})
 }
 
-function isClient<TRouter>(value: unknown): value is InferRouterClient<TRouter> {
+function isClient<TApi>(value: unknown): value is InferRpcClient<TApi> {
 	return typeof value === 'function'
 }
 
-export function createRpcClient<TRouter>(opts: RpcClientOptions): InferRouterClient<TRouter> {
+export function createRpcClient<TApi>(opts: RpcClientOptions): InferRpcClient<TApi> {
 	const proxy = makeProxy(opts, resolveBounce(opts.baseUrl, opts.bounceOnAuth), '')
-	if (!isClient<TRouter>(proxy)) throw new Error('unreachable')
+	if (!isClient<TApi>(proxy)) throw new Error('unreachable')
 	return proxy
 }

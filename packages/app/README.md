@@ -74,6 +74,43 @@ export const api = createRpcClient<AppRouter>({ baseUrl: '/api/rpc' })
 
 Input and output validators may use any Standard Schema implementation.
 
+## Portable RPC contracts
+
+Put only DTOs and type-only procedure declarations in a browser-safe contract
+package. The browser does not need to import the server router, its validators,
+or its context:
+
+```ts
+import type { RpcProcedureContract } from '@fabrika/app'
+
+export interface AppRpcContract {
+	projects: {
+		list: RpcProcedureContract<
+			{ ownerId: string },
+			{ id: string; name: string }[]
+		>
+	}
+}
+```
+
+The server verifies that its router implements the contract, while the browser
+uses the same contract directly:
+
+```ts
+import type { AppRpcContract } from '@example/app-contract'
+import { createRpcClient, initRpc, type RpcRouterFor } from '@fabrika/app'
+
+const rpc = initRpc<Ctx>()
+
+export const appRouter = rpc.router({
+	projects: rpc.router({
+		list: rpc.procedure.input(listInput).output(projectList).query(listProjects),
+	}),
+}) satisfies RpcRouterFor<Ctx, AppRpcContract>
+
+export const api = createRpcClient<AppRpcContract>({ baseUrl: '/api/rpc' })
+```
+
 ## Runtime adapters
 
 `defineApp()` builds the runtime-neutral Fetch request pipeline. Runtime

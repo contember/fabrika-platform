@@ -3,6 +3,7 @@
 
 // ─── RPC ─────────────────────────────────────────────────────────────
 export { initRpc } from './rpc/builder.js'
+export type { InferRpcClient, InferRpcContractClient, RpcProcedureContract, RpcRouterFor } from './rpc/contract.js'
 export type { InferRouter, InferRouterClient } from './rpc/types.js'
 
 // ─── Schema contract (validator-agnostic) ────────────────────────────
