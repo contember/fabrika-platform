@@ -98,3 +98,7 @@ On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
      trim to a one-line pointer ("→ ADR-0007"). -->
+
+- 2026-07-31 — WU4 shipped as `695d47b`: both providers now cancel in-flight IAM schema reconciliation with the deploy signal.
+- 2026-07-31 — WU1 shipped as `a82567a`: auth-core now owns the sole gate matcher and injected-token header contract.
+- 2026-07-31 — WU2 verify-first found that the accepted Cloudflare thin-proxy path is not implemented. Cloudflare apps, Control, and Operations still have direct routes and depend on in-process enforcement. Deleting it now would lock out or weaken the Cloudflare composition; WU2 is paused pending an explicit scope decision.
