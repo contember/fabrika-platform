@@ -53,6 +53,21 @@ describe('one root file, several named setups — the merged-file decision, chec
 		expect(yaml).not.toContain('VOZKA_')
 	})
 
+	test('Operations maintenance runs every minute to preserve its one-minute spike threshold', () => {
+		const document = parseYaml(read('zerops.yaml'))
+		if (typeof document !== 'object' || document === null || !('zerops' in document) || !Array.isArray(document.zerops)) {
+			throw new Error('zerops.yaml has no setups')
+		}
+		const operations = document.zerops.find(
+			(entry) => typeof entry === 'object' && entry !== null && 'setup' in entry && entry.setup === 'operations',
+		)
+		expect(operations).toMatchObject({
+			run: {
+				crontab: [{ timing: '* * * * *', command: 'bun packages/operations/src/node/cron.ts', allContainers: false }],
+			},
+		})
+	})
+
 	test('every setup name is a service hostname in the platform import document', () => {
 		const platform = compileTopology(
 			fabrikaTopologies()[0] ?? (() => {

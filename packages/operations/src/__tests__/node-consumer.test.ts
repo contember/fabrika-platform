@@ -135,4 +135,43 @@ describe('Postgres Operations consumer lifecycle', () => {
 			max_attempts: 6,
 		})
 	})
+
+	test('the Bun consumer enqueues a new-issue alert before acknowledging the job', async () => {
+		const body = { ...ingest(), projectId: 'source-a' }
+		const job: Job<IngestMessage> = { id: 'job-alert', payload: body, attempts: 1, maxAttempts: 6 }
+		const acked: string[] = []
+		const queue: OperationsIngestJobQueue = {
+			claim: () => Promise.resolve([job]),
+			ack: (id) => {
+				acked.push(id)
+				return Promise.resolve()
+			},
+			defer: () => Promise.resolve(),
+		}
+		const harness = createHarness(() => 2_000)
+		await harness.repositories.sources.upsert({
+			id: 'source-a',
+			appId: 'app-a',
+			environment: 'production',
+			displayName: 'App A',
+			enabled: true,
+		})
+		await harness.repositories.alerts.setRule('source-a', 'new_issue', true)
+		await harness.repositories.alerts.upsertChannel({
+			id: 'new-channel',
+			sourceId: 'source-a',
+			scope: 'new_issue',
+			type: 'webhook',
+			target: 'https://example.test/new',
+			enabled: true,
+		})
+		const consumer = new PostgresOperationsConsumer(
+			queue,
+			{ repositories: harness.repositories, payloads: new MemoryBlobs(), ingestQueue: new EmptyProducer() },
+		)
+
+		expect(await consumer.poll()).toBe(1)
+		expect(acked).toEqual(['job-alert'])
+		expect(harness.sqlite.query<{ kind: string }, []>('SELECT kind FROM notification_outbox').get()?.kind).toBe('new_issue')
+	})
 })

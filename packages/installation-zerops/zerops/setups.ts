@@ -200,7 +200,7 @@ const operations: ZeropsYamlSetup = {
 		start: 'bun packages/operations/src/node/server.ts',
 		ports: [{ port: 3000, httpSupport: true }],
 		healthCheck: { httpGet: { port: 3000, path: '/healthz' } },
-		crontab: [{ timing: '*/5 * * * *', command: 'bun packages/operations/src/node/cron.ts', allContainers: false }],
+		crontab: [{ timing: '* * * * *', command: 'bun packages/operations/src/node/cron.ts', allContainers: false }],
 		envVariables: {
 			PORT: '3000',
 			ENVIRONMENT: 'prod',

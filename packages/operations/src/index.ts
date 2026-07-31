@@ -7,6 +7,8 @@ export {
 	OPERATIONS_ACTIONS,
 } from './access.js'
 export type { OperationsSourceAccess } from './access.js'
+export { OperationsAlertProducer, SPIKE_DEDUP_WINDOW_SECONDS, SPIKE_WINDOW_MS } from './alerts.js'
+export type { AlertProductionResult, SpikeProductionResult } from './alerts.js'
 export {
 	handleSourceMapUploadRequest,
 	MAX_SOURCE_MAP_BYTES,

@@ -1,4 +1,5 @@
 import type { IngestMessage } from '@fabrika/operations-contract'
+import { OperationsAlertProducer } from './alerts.js'
 import type { OperationsDataEnv } from './pipeline.js'
 import { archiveDeadEvent, effectiveIngestMessage, persistIngestGroup } from './pipeline.js'
 
@@ -40,7 +41,9 @@ export async function consumeDeliveries(env: OperationsDataEnv, deliveries: Inge
 		for (let offset = 0; offset < group.length; offset += 50) {
 			const chunk = group.slice(offset, offset + 50)
 			try {
-				await persistIngestGroup(env, chunk.map((item) => item.message))
+				const messages = chunk.map((item) => item.message)
+				const results = await persistIngestGroup(env, messages)
+				await new OperationsAlertProducer(env.repositories.alerts, env.repositories.ingest).produceIngest(messages, results)
 				for (const item of chunk) item.delivery.ack()
 			} catch {
 				for (const item of chunk) item.delivery.retry()

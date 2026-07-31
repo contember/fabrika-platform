@@ -1207,6 +1207,11 @@ export abstract class AlertsRepository {
 		return this.db.prepare('SELECT * FROM alert_config WHERE source_id = ?').bind(sourceId).first<AlertConfigRow>()
 	}
 
+	async listEnabledConfigs(): Promise<AlertConfigRow[]> {
+		const { results } = await this.db.prepare('SELECT * FROM alert_config WHERE enabled = 1 ORDER BY source_id').all<AlertConfigRow>()
+		return results
+	}
+
 	async deleteConfig(sourceId: string): Promise<boolean> {
 		const result = await this.db.prepare('DELETE FROM alert_config WHERE source_id = ?').bind(sourceId).run()
 		return result.meta.changes === 1

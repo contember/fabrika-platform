@@ -10,6 +10,7 @@ async function main(): Promise<void> {
 				+ `unavailable=${health.unavailableChecks} cancelled=${health.cancelledChecks} `
 				+ `telemetry=${health.recordedTelemetry} transitions=${health.transitions} `
 				+ `alerts=${health.enqueuedAlerts} errors=${health.errors} `
+				+ `spikes=${notifications.spikes.enqueued}/${notifications.spikes.evaluated} `
 				+ `pruned=${notifications.prunedClaims} notifications=${notifications.notifications}`,
 		)
 	} finally {

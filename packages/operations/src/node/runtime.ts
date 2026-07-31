@@ -1,6 +1,7 @@
 import { HttpIamRpc } from '@fabrika/auth'
 import { environmentAliases } from '@fabrika/platform'
 import { PostgresDatabase, S3BlobStore } from '@fabrika/platform-node'
+import { OperationsAlertProducer } from '../alerts.js'
 import { createOperationsIam } from '../auth.js'
 import { PostgresHealthRepository } from '../health-repository.js'
 import { OperationsHealthExecution } from '../health-service.js'
@@ -53,7 +54,9 @@ export function createOperationsRuntime(source: Record<string, string | undefine
 			telemetry: new StoredOperationsTelemetryAdapter(db, bunPipelineTelemetry()),
 			logger: { warn: (message, fields) => console.warn(message, fields) },
 		}),
-		maintenance: new OperationsMaintenance(repositories.alerts, new WebhookNotificationSender()),
+		maintenance: new OperationsMaintenance(repositories.alerts, new WebhookNotificationSender(), {
+			alertProducer: new OperationsAlertProducer(repositories.alerts, repositories.ingest),
+		}),
 		async shutdown(): Promise<void> {
 			await db.close()
 		},

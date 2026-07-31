@@ -72,7 +72,7 @@ zerops:
           port: 3000
           path: "/healthz"
       crontab:
-        - timing: "*/5 * * * *"
+        - timing: "* * * * *"
           command: "bun packages/operations/src/node/cron.ts"
           allContainers: false
       envVariables:

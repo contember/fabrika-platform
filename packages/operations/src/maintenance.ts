@@ -1,3 +1,4 @@
+import type { OperationsAlertProducer, SpikeProductionResult } from './alerts.js'
 import type { AlertsRepository, ClaimedNotification } from './repositories.js'
 import { isValidWebhookTarget } from './webhook-target.js'
 
@@ -20,6 +21,7 @@ export interface OperationsMaintenanceOptions {
 	leaseMs?: number
 	retryDelayMs?: (attempt: number) => number
 	logger?: OperationsLogger
+	alertProducer?: OperationsAlertProducer
 }
 
 const silentLogger: OperationsLogger = { warn() {} }
@@ -29,6 +31,7 @@ export class OperationsMaintenance {
 	private readonly leaseMs: number
 	private readonly retryDelayMs: (attempt: number) => number
 	private readonly logger: OperationsLogger
+	private readonly alertProducer: OperationsAlertProducer | undefined
 
 	constructor(
 		private readonly alerts: AlertsRepository,
@@ -39,16 +42,18 @@ export class OperationsMaintenance {
 		this.leaseMs = options.leaseMs ?? 60_000
 		this.retryDelayMs = options.retryDelayMs ?? ((attempt) => Math.min(15 * 60_000, 1_000 * 2 ** attempt))
 		this.logger = options.logger ?? silentLogger
+		this.alertProducer = options.alertProducer
 	}
 
-	async run(signal?: AbortSignal): Promise<{ prunedClaims: number; notifications: number }> {
+	async run(signal?: AbortSignal): Promise<{ prunedClaims: number; notifications: number; spikes: SpikeProductionResult }> {
+		const spikes = await this.alertProducer?.detectSpikes() ?? { evaluated: 0, enqueued: 0, deduplicated: 0 }
 		const prunedClaims = await this.alerts.pruneClaims()
 		const claimed = await this.alerts.claimNotifications({ limit: this.batchSize, leaseMs: this.leaseMs })
 		for (const notification of claimed) {
 			if (signal?.aborted) break
 			await this.deliver(notification, signal)
 		}
-		return { prunedClaims, notifications: claimed.length }
+		return { prunedClaims, notifications: claimed.length, spikes }
 	}
 
 	private async deliver(notification: ClaimedNotification, signal?: AbortSignal): Promise<void> {

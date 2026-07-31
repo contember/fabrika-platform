@@ -1,6 +1,7 @@
 import type { IamRpc } from '@fabrika/auth'
 import type { IngestMessage } from '@fabrika/operations-contract'
 import { WorkerEntrypoint } from 'cloudflare:workers'
+import { OperationsAlertProducer } from './alerts.js'
 import { operationsApp } from './app.js'
 import { createOperationsIam } from './auth.js'
 import { consumeDeadDeliveries, consumeDeliveries } from './consumer.js'
@@ -65,7 +66,9 @@ export class OperationsWorker extends WorkerEntrypoint<OperationsWorkerBindings>
 			telemetry: new StoredOperationsTelemetryAdapter(this.env.DB, cloudflarePipelineTelemetry()),
 			logger: { warn: (message, fields) => console.warn(message, fields) },
 		}).run()
-		await new OperationsMaintenance(env.repositories.alerts, new WebhookNotificationSender()).run()
+		await new OperationsMaintenance(env.repositories.alerts, new WebhookNotificationSender(), {
+			alertProducer: new OperationsAlertProducer(env.repositories.alerts, env.repositories.ingest),
+		}).run()
 	}
 }
 

@@ -2,6 +2,7 @@ import type { IngestMessage } from '@fabrika/operations-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import { consumeDeliveries, type IngestDelivery } from '../consumer.js'
+import { OperationsMaintenance, WebhookNotificationSender } from '../maintenance.js'
 import { createHarness } from './helpers/sqlite.js'
 
 class MemoryBlobs implements BlobStore {
@@ -75,5 +76,65 @@ describe('shared ingest consumer', () => {
 		expect((await harness.repositories.ingest.counts({ sourceId: 'source-a', fingerprint: 'storm' }))[0]?.count).toBe(25)
 		expect(harness.sqlite.query<{ count: number }, []>('SELECT COUNT(*) AS count FROM occurrences').get()?.count).toBe(25)
 		expect(harness.sqlite.query<{ count: number }, []>('SELECT COUNT(*) AS count FROM issue_writes').get()?.count).toBe(1)
+	})
+
+	test('enqueues each issue transition once and delivers it through the webhook outbox', async () => {
+		const harness = createHarness(() => 5_000)
+		await harness.repositories.sources.upsert({
+			id: 'source-a',
+			appId: 'app-a',
+			environment: 'production',
+			displayName: 'App A',
+			enabled: true,
+		})
+		await harness.repositories.alerts.setRule('source-a', 'new_issue', true)
+		await harness.repositories.alerts.setRule('source-a', 'regression', true)
+		for (const kind of ['new_issue', 'regression']) {
+			await harness.repositories.alerts.upsertChannel({
+				id: `${kind}-channel`,
+				sourceId: 'source-a',
+				scope: kind,
+				type: 'webhook',
+				target: `https://example.test/${kind}`,
+				enabled: true,
+			})
+		}
+		const env = { repositories: harness.repositories, payloads: new MemoryBlobs(), ingestQueue: new EmptyQueue() }
+		const outcomes = { acked: 0, retried: 0 }
+		const delivery = (body: IngestMessage): IngestDelivery => ({
+			body,
+			attempts: 1,
+			ack: () => outcomes.acked++,
+			retry: () => outcomes.retried++,
+		})
+		const first = message(0)
+		await consumeDeliveries(env, [delivery(first)])
+		await consumeDeliveries(env, [delivery(first)])
+		expect(harness.sqlite.query<{ count: number }, []>('SELECT COUNT(*) AS count FROM notification_outbox').get()?.count).toBe(1)
+
+		await harness.repositories.issues.mutate({
+			sourceId: 'source-a',
+			fingerprint: 'storm',
+			mutation: { kind: 'status', status: 'resolved' },
+			actorId: null,
+			actorLabel: null,
+		})
+		const regression = { ...message(1), receivedAt: 2_000 }
+		await consumeDeliveries(env, [delivery(regression)])
+		await consumeDeliveries(env, [delivery(regression)])
+		expect(harness.sqlite.query<{ count: number }, []>('SELECT COUNT(*) AS count FROM notification_outbox').get()?.count).toBe(2)
+		expect(outcomes).toEqual({ acked: 4, retried: 0 })
+
+		const requests: Request[] = []
+		const sender = new WebhookNotificationSender((request) => {
+			requests.push(request)
+			return Promise.resolve(new Response(null, { status: 204 }))
+		})
+		expect((await new OperationsMaintenance(harness.repositories.alerts, sender).run()).notifications).toBe(2)
+		expect(requests.map((request) => new URL(request.url).pathname)).toEqual(['/new_issue', '/regression'])
+		expect(requests.map((request) => request.headers.get('Idempotency-Key'))).toEqual([
+			'new_issue:source-a:storm:1000:new_issue-channel',
+			'regression:source-a:storm:2000:regression-channel',
+		])
 	})
 })

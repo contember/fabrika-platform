@@ -20,7 +20,7 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 		compatibility_date: '2025-10-01',
 		routes: publicHost === '' ? [] : [{ pattern: publicHost, custom_domain: true }],
 		observability: { enabled: true },
-		triggers: { crons: ['*/5 * * * *'] },
+		triggers: { crons: ['* * * * *'] },
 		vars: {
 			ENVIRONMENT: ctx.env,
 			OPERATIONS_PUBLIC_HOST: publicHost,
