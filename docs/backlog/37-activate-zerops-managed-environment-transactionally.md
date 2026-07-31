@@ -23,6 +23,22 @@ these writes are snapshotted per app version, applied immediately to the active
 service, or can be staged atomically. Fabrika must not claim transactional
 activation until this is proven against Zerops.
 
+Three documented facts constrain the protocol before any of that is settled:
+
+- A service-variable write does **not** reach a running process. Upstream is
+  explicit that a secret or project-variable change needs a **restart**, not a
+  reload, and that a running process keeps its boot-time environment — so a
+  post-activation write only takes effect on the next container start.
+- `run.envVariables` are baked into the app version and need a full **redeploy**,
+  and a key declared there **owns** its name: setting a service variable with the
+  same name is rejected with `userDataDuplicateKey`. `FABRIKA_RELEASE` is already
+  guarded against user collision (`packages/control/src/api/registry.ts:300`); the
+  same rule has to hold against an app's own `zerops.yaml`, which fabrika does not
+  author.
+- Restoring an archived app version also restores the variables to their state when
+  that version was last active — which is a compensating-rollback primitive worth
+  measuring before building one by hand.
+
 ## Approach / acceptance
 
 - Establish the real Zerops activation semantics for service variables during a

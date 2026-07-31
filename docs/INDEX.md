@@ -32,6 +32,9 @@ fabrika-platform is and how the pieces fit — then skim
   [`backlog/25-bootstrap-npm-trusted-publishing.md`](backlog/25-bootstrap-npm-trusted-publishing.md).
 - **External next:** run the resulting composition against a real account in
   [`backlog/05-bring-up-on-a-real-zerops-account.md`](backlog/05-bring-up-on-a-real-zerops-account.md).
+  Fix [`39`](backlog/39-settle-zerops-override-semantics.md) and
+  [`41`](backlog/41-write-service-variables-without-a-pre-read.md) first — one decides
+  whether re-apply reconciles or redeploys, the other blocks bring-up's secret-writing step.
 - **Operations follow-up:** complete
   [Zerops release artifact correlation](backlog/36-complete-zerops-release-artifact-correlation.md),
   settle [managed-environment activation](backlog/37-activate-zerops-managed-environment-transactionally.md),

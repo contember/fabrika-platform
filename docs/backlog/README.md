@@ -20,6 +20,11 @@ the live-account bring-up in item 05.
 Phase 0 merged and renamed the repositories. The portable runtime, static
 manifest, proxy, and Zerops control path are built and locally verified. Repository CI and release automation are built; activating npm trusted publishing remains external item 25.
 
+Items 39–45 came out of a conformance review of the Zerops implementation against
+upstream documentation. They are corrections and open semantics that item 05's
+bring-up will otherwise discover the hard way — 41 blocks its step 3 outright, and 39
+decides whether the steady-state re-apply is a reconcile or a redeploy.
+
 ## Items
 
 <!-- one line each: NN — short summary (link). Keep it short. -->
@@ -36,7 +41,14 @@ manifest, proxy, and Zerops control path are built and locally verified. Reposit
 - [36](36-complete-zerops-release-artifact-correlation.md) — Publish Zerops build source maps and link Delivery runs to Operations evidence.
 - [37](37-activate-zerops-managed-environment-transactionally.md) — Keep Zerops managed environment activation consistent with the app version that actually ships.
 - [38](38-add-dns-safe-operations-egress.md) — Prevent private-address and DNS-rebinding egress through Operations webhooks and active health checks.
-- [06](06-can-zerops-secrets-be-read-back.md) — Open: can secret _values_ be read back from the Zerops API?
-- [09](09-confirm-multi-domain-per-service.md) — Open: does Zerops allow multiple custom domains on one service?
+- [39](39-settle-zerops-override-semantics.md) — `override: true` is written on every service; upstream says runtime-only, and that it replaces rather than updates.
+- [40](40-subdomain-access-is-not-import-settable.md) — `enableSubdomainAccess` does not take effect on a service that has never been deployed.
+- [41](41-write-service-variables-without-a-pre-read.md) — The env write reads first, and that read 400s until the first deploy — which is when bring-up writes every secret.
+- [42](42-size-the-platform-managed-postgres.md) — Two HA Postgres services declare no `profile`, so both default to the production tier.
+- [43](43-gate-zerops-deploys-on-readiness.md) — No `deploy.readinessCheck` anywhere, and no explicit timeouts on any check.
+- [44](44-make-proxy-manifest-delivery-quoting-safe.md) — The proxy manifest is spliced into a shell command as JSON; the `${…}` form is ambiguous.
+- [45](45-pin-the-zerops-postgres-connection-target.md) — `connectionString` carries no database and no SSL mode; both are driver defaults today.
+- [06](06-can-zerops-secrets-be-read-back.md) — Near-settled: upstream says a write-capable token returns secret values. Confirm, then decide the UX.
+- [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.

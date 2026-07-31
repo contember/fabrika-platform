@@ -28,9 +28,16 @@ item is the gap, and it can only be closed by someone with credentials.
    service's variables. Get this right on the first import or delete the project.
 2. **Bind custom domains** to each project's L7 balancer, proxy service only. Not
    expressible in the import format, so it is manual by construction.
-   `enableSubdomainAccess` is documented as "not suitable for production".
-3. **Write every service-level variable and secret** through the env API. The
-   authoritative lists are in
+   `enableSubdomainAccess` is documented as "not suitable for production" — and per
+   [`40`](./40-subdomain-access-is-not-import-settable.md) it does not take effect on
+   a service that has never been deployed, so the throwaway path needs a deploy
+   before the toggle works at all. A shared IPv4 needs **both** A and AAAA records or
+   routing fails silently; see [`09`](./09-confirm-multi-domain-per-service.md).
+3. **Write every service-level variable and secret** through the env API. Expect
+   [`41`](./41-write-service-variables-without-a-pre-read.md) to bite first: the
+   `user-data` list call our client makes before each write is documented to answer
+   `400 serviceStackNotFound` until the service's first deploy — which is exactly
+   this step. The authoritative lists are in
    `packages/installation-zerops/zerops/setups.ts` per setup. In particular:
    - IAM receives its public issuer, signing keys, OIDC coordinates, provisioning
      key, RPC key, and proxy key.
@@ -62,27 +69,33 @@ item is the gap, and it can only be closed by someone with credentials.
    the proxy. Control must reach the private operator API and catalog/release
    sync endpoint over `http://operations:3000`.
 
-## The four behaviours to verify while you are in there
+## The behaviours to verify while you are in there
 
-Shapes are read off Zerops' live OpenAPI document, so they are not guesses. These
-four are **semantics** the documentation does not state, and the first is the one
-that matters:
+Shapes are read off Zerops' live OpenAPI document, so they are not guesses. What
+follows are **semantics** the documentation does not state.
 
 1. **Is re-applying an unchanged import with `override: true` a no-op, or does it
-   redeploy?** ADR-0003's entire idempotency claim rests on the former, and the
-   documentation describes it in three words: "Override existing service."
+   redeploy?** Promoted out of this list into
+   [`39`](./39-settle-zerops-override-semantics.md), because upstream says it
+   _replaces_ the service — which would make ADR-0003's idempotency claim a
+   destructive redeploy rather than a round-trip question. Answer it here; the design
+   consequence lives there.
 2. `POST /service-stack/{id}/user-data` with an existing key — replace, or 409? The
-   client lists-then-POST-or-PUT, so it is correct either way, but knowing costs a
-   round trip today.
+   client lists-then-POST-or-PUT, so it is correct either way. [`41`](./41-write-service-variables-without-a-pre-read.md)
+   proposes writing first precisely so this gets answered by exercise.
 3. `GET /service-stack/{id}/app-version` list order. The client picks max `sequence`
    rather than trusting order; confirm `sequence` really is monotonic.
 4. Does `OutDtoUserData.content` return a real value for a `SECRET` record, or a
    blurred placeholder? This is [`06`](./06-can-zerops-secrets-be-read-back.md)
-   verbatim, and it decides whether the dashboard can show a secret at all.
+   verbatim; upstream says a write-capable token gets the value, so expect "yes" and
+   confirm the exact field.
 
 Also unverified and worth a glance: that `${storage_*}` and `${db_connectionString}`
 resolve under `envIsolation: service`, that a **build** container can see
-service-level variables (the proxy manifest depends on it), and that
+service-level variables ([`44`](./44-make-proxy-manifest-delivery-quoting-safe.md) —
+the proxy manifest depends on it), that `${host_connectionString}` reaches the
+intended database on a service not named `db`
+([`45`](./45-pin-the-zerops-postgres-connection-target.md)), and that
 `alpine/go@latest` still builds Caddy 2.10.2.
 
 ## Acceptance
