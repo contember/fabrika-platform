@@ -9,7 +9,7 @@ import { uuidv7 } from '../db'
 import { FakeRepoSource } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { createHarness } from './helpers/harness'
-import { allowAllIam } from './helpers/iam'
+import { allowAllAuth } from './helpers/iam'
 
 // Registry + onboarding row creation, and run-history reads, driven through the real `handleApi`
 // router against the real schema (in-memory sqlite). An allow-all dev authenticator lets us focus on
@@ -23,7 +23,7 @@ function makeDeps(
 	const logStore = new Map<string, string>()
 	const deps: ApiDeps = {
 		repositories: db,
-		iam: allowAllIam(),
+		auth: allowAllAuth(),
 		queue: {
 			send(m) {
 				queue.push(m)

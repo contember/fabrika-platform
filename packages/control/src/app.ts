@@ -3,7 +3,7 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import { handleApi } from './api/router'
 import type { Env } from './env'
 import { error } from './http'
-import { type Authenticator, controlAuthMiddleware } from './iam'
+import { controlAuthMiddleware } from './iam'
 import { forwardIamAdmin } from './iam-admin'
 import { forwardOperationsApi } from './operations-gateway'
 import { buildApiDeps, repositories, repoSource } from './services'
@@ -69,13 +69,7 @@ function controlApi(ctx: ControlAppContext): Promise<Response> {
 	if (auth === undefined || auth === null) {
 		return Promise.resolve(error(401, 'authentication required'))
 	}
-	return handleApi(ctx.request, buildApiDeps(ctx.env, ctx.provider, resolvedAuthenticator(auth)))
-}
-
-function resolvedAuthenticator(auth: AuthContext): Authenticator {
-	return {
-		authenticate: () => Promise.resolve({ ok: true, context: auth }),
-	}
+	return handleApi(ctx.request, buildApiDeps(ctx.env, ctx.provider, auth))
 }
 
 function iamAdmin(ctx: ControlAppContext): Promise<Response> {

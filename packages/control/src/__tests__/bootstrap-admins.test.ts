@@ -1,27 +1,82 @@
-import type { FakePersona } from '@fabrika/auth'
+import type { AuthContext, IamRpc } from '@fabrika/auth'
 import { describe, expect, test } from 'bun:test'
 import { ACTIONS } from '../actions'
-import { type Authenticator, authorize, createIam, fakeAuthenticator, parseBootstrapAdmins, withBootstrapAdmins, withProvisioningKey } from '../iam'
+import { controlAuthMiddleware, parseBootstrapAdmins } from '../iam'
 
-// The VOZKA_BOOTSTRAP_ADMINS fallback (src/iam.ts): a caller whose VERIFIED email is in the list is
-// authorized as admin even when the underlying IAM client would DENY — the escape hatch for the first
-// operator before propustka grants them anything. Mirrors propustka's IAM_BOOTSTRAP_ADMINS: matched
-// on the edge-verified email, granting the built-in `admin` role; a non-listed caller is unaffected.
-
-// A request carrying the persona selector (the email) in the dev header the FakeIamClient reads.
-function reqAs(email: string): Request {
-	return new Request('https://vozka.example/api/accounts', { method: 'POST', headers: { 'X-Dev-Principal': email } })
+interface MiddlewareContext {
+	auth?: AuthContext | null
 }
 
-// A dev-fake authenticator where every listed persona holds ONLY deploy.read globally — so the
-// underlying decision DENIES app.manage. Any authorization that succeeds for app.manage can only come
-// from the bootstrap-admin override.
-function lowPrivClient(emails: string[]): Authenticator {
-	const personas: Record<string, FakePersona> = {}
-	for (const email of emails) {
-		personas[email] = { id: `p-${email}`, label: email, type: 'user', permissions: [{ action: 'deploy.read', scope: null, source: 'grant' }] }
-	}
-	return fakeAuthenticator({ personas, defaultEmail: emails[0] ?? '' })
+async function runMiddleware(env: Parameters<typeof controlAuthMiddleware<MiddlewareContext>>[0], request: Request) {
+	const ctx: MiddlewareContext = {}
+	let nextCalled = false
+	const response = await controlAuthMiddleware<MiddlewareContext>(env)(request, ctx, () => {
+		nextCalled = true
+		return Promise.resolve(new Response('ok'))
+	})
+	return { auth: ctx.auth, nextCalled, response }
+}
+
+const ISSUER = 'https://propustka.test'
+const serviceKeys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
+const servicePublicJwk = await crypto.subtle.exportKey('jwk', serviceKeys.publicKey)
+
+function requiredKeyPart(value: string | undefined, name: string): string {
+	if (value === undefined) throw new Error(`generated service test key is missing ${name}`)
+	return value
+}
+
+const servicePublicKey = {
+	kty: requiredKeyPart(servicePublicJwk.kty, 'kty'),
+	crv: requiredKeyPart(servicePublicJwk.crv, 'crv'),
+	x: requiredKeyPart(servicePublicJwk.x, 'x'),
+	y: requiredKeyPart(servicePublicJwk.y, 'y'),
+	kid: 'service-test',
+	alg: 'ES256',
+	use: 'sig',
+}
+
+function base64Url(value: string | Uint8Array): string {
+	const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value
+	let binary = ''
+	for (const byte of bytes) binary += String.fromCharCode(byte)
+	return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+}
+
+async function serviceToken(label: string): Promise<string> {
+	const now = Math.floor(Date.now() / 1000)
+	const header = base64Url(JSON.stringify({ alg: 'ES256', kid: 'service-test', typ: 'JWT' }))
+	const payload = base64Url(JSON.stringify({
+		iss: ISSUER,
+		aud: 'vozka',
+		sub: 'service-one',
+		iat: now,
+		exp: now + 300,
+		perms: [{ action: 'deploy.read', scope: null, source: 'grant' }],
+		ptype: 'service',
+		label,
+	}))
+	const signingInput = `${header}.${payload}`
+	const signature = await crypto.subtle.sign(
+		{ name: 'ECDSA', hash: 'SHA-256' },
+		serviceKeys.privateKey,
+		new TextEncoder().encode(signingInput),
+	)
+	return `${signingInput}.${base64Url(new Uint8Array(signature))}`
+}
+
+const serviceIam: IamRpc = {
+	mintToken: () => Promise.resolve({ ok: false, reason: 'no_session' }),
+	mintFromKey: () => Promise.resolve({ ok: false, reason: 'invalid_key' }),
+	issueKey: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
+	issueJwt: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
+	getJwks: () =>
+		Promise.resolve({
+			keys: [servicePublicKey],
+		}),
+	audit: () => Promise.resolve(),
+	listPrincipals: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
+	revokeKey: () => Promise.resolve({ ok: false, reason: 'not_found' }),
 }
 
 describe('parseBootstrapAdmins', () => {
@@ -29,157 +84,71 @@ describe('parseBootstrapAdmins', () => {
 		expect([...parseBootstrapAdmins('["a@x.test","b@x.test"]')]).toEqual(['a@x.test', 'b@x.test'])
 	})
 
-	test('empty / unset / malformed all fail closed to an empty set', () => {
+	test('empty, unset, malformed, and non-array values fail closed', () => {
 		expect(parseBootstrapAdmins(undefined).size).toBe(0)
 		expect(parseBootstrapAdmins('').size).toBe(0)
 		expect(parseBootstrapAdmins('[]').size).toBe(0)
 		expect(parseBootstrapAdmins('not json').size).toBe(0)
-		expect(parseBootstrapAdmins('{"a":1}').size).toBe(0) // non-array → empty
-		expect([...parseBootstrapAdmins('["ok@x.test", 42, null]')]).toEqual(['ok@x.test']) // non-strings dropped
+		expect(parseBootstrapAdmins('{"a":1}').size).toBe(0)
+		expect([...parseBootstrapAdmins('["ok@x.test", 42, null]')]).toEqual(['ok@x.test'])
 	})
 })
 
-describe('withBootstrapAdmins fallback', () => {
-	test('a listed admin email is authorized for an action the underlying client denies', async () => {
-		const iam = withBootstrapAdmins(lowPrivClient(['boss@vozka.test', 'nobody@vozka.test']), new Set(['boss@vozka.test']))
-		const result = await authorize(iam, reqAs('boss@vozka.test'), ACTIONS.APP_MANAGE)
-		expect(result.ok).toBe(true)
-	})
-
-	test('a bootstrap admin can do EVERY action (built-in admin = *)', async () => {
-		const iam = withBootstrapAdmins(lowPrivClient(['boss@vozka.test']), new Set(['boss@vozka.test']))
-		for (const action of Object.values(ACTIONS)) {
-			const result = await authorize(iam, reqAs('boss@vozka.test'), action)
-			expect(result.ok).toBe(true)
-		}
-	})
-
-	test('a NON-listed email still gets the underlying decision (denied app.manage → 403)', async () => {
-		const iam = withBootstrapAdmins(lowPrivClient(['boss@vozka.test', 'nobody@vozka.test']), new Set(['boss@vozka.test']))
-		const result = await authorize(iam, reqAs('nobody@vozka.test'), ACTIONS.APP_MANAGE)
-		expect(result.ok).toBe(false)
-		if (!result.ok) {
-			expect(result.response.status).toBe(403)
-		}
-	})
-
-	test('a non-listed email keeps the actions it DOES hold (deploy.read still allowed)', async () => {
-		const iam = withBootstrapAdmins(lowPrivClient(['nobody@vozka.test']), new Set(['boss@vozka.test']))
-		const result = await authorize(iam, reqAs('nobody@vozka.test'), ACTIONS.DEPLOY_READ)
-		expect(result.ok).toBe(true)
-	})
-
-	test('an unauthenticated caller is NOT rescued — the underlying failure passes through (403)', async () => {
-		// Unknown persona (no default) → the fake returns unknown_principal (403); the bootstrap list
-		// can't rescue it because there is no verified email to match.
-		const base = fakeAuthenticator({ personas: {}, defaultEmail: 'ghost@vozka.test' })
-		const iam = withBootstrapAdmins(base, new Set(['ghost@vozka.test']))
-		const result = await authorize(iam, reqAs('ghost@vozka.test'), ACTIONS.APP_MANAGE)
-		expect(result.ok).toBe(false)
-		if (!result.ok) {
-			expect(result.response.status).toBe(403)
-		}
-	})
-
-	test('a SERVICE principal is never a bootstrap admin (no email to match)', async () => {
-		// A persona of type 'service' whose label happens to collide with a listed email must NOT be
-		// rescued — only USER principals carry a verified email.
-		const iam = withBootstrapAdmins(
-			fakeAuthenticator({
-				personas: {
-					'svc@vozka.test': {
-						id: 'p-svc',
-						label: 'svc@vozka.test',
-						type: 'service',
-						permissions: [{ action: 'deploy.read', scope: null, source: 'grant' }],
-					},
-				},
-				defaultEmail: 'svc@vozka.test',
+describe('controlAuthMiddleware bootstrap semantics', () => {
+	test('the provisioning context is a global service principal labelled provisioning', async () => {
+		const key = 'px_provision_secret_key_value'
+		const result = await runMiddleware(
+			{ DEV: 'true', PROPUSTKA_PROVISIONING_KEY: key },
+			new Request('https://control.test/api/apps', {
+				headers: { Authorization: `Bearer ${key}`, 'X-Dev-Principal': 'missing@vozka.test' },
 			}),
-			new Set(['svc@vozka.test']),
 		)
-		const result = await authorize(iam, reqAs('svc@vozka.test'), ACTIONS.APP_MANAGE)
-		expect(result.ok).toBe(false)
-		if (!result.ok) {
-			expect(result.response.status).toBe(403)
-		}
-	})
 
-	test('an EMPTY bootstrap list is a transparent pass-through (returns the client unchanged)', () => {
-		const base = lowPrivClient(['x@vozka.test'])
-		expect(withBootstrapAdmins(base, new Set())).toBe(base)
-	})
-})
-
-describe('createIam wires the fallback from VOZKA_BOOTSTRAP_ADMINS', () => {
-	test('local (DEV) with a bootstrap admin: the default persona (admin@vozka.test) is the dev admin anyway', async () => {
-		// In DEV the default persona is admin@vozka.test (already `*`). Use a viewer persona to prove the
-		// bootstrap override kicks in: viewer@vozka.test holds only deploy.read, but listing it as a
-		// bootstrap admin lets it manage apps.
-		const iam = createIam({ DEV: 'true', VOZKA_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' })
-		const result = await authorize(iam, reqAs('viewer@vozka.test'), ACTIONS.APP_MANAGE)
-		expect(result.ok).toBe(true)
-	})
-
-	test('local (DEV) with no bootstrap admins: a viewer persona is still denied app.manage', async () => {
-		const iam = createIam({ DEV: 'true', VOZKA_BOOTSTRAP_ADMINS: '[]' })
-		const result = await authorize(iam, reqAs('viewer@vozka.test'), ACTIONS.APP_MANAGE)
-		expect(result.ok).toBe(false)
-		if (!result.ok) {
-			expect(result.response.status).toBe(403)
-		}
-	})
-})
-
-describe('withProvisioningKey hatch (the machine analog of VOZKA_BOOTSTRAP_ADMINS)', () => {
-	const KEY = 'px_provision_secret_key_value'
-	// An inner authenticator that ALWAYS denies — so any success comes ONLY from the provisioning hatch.
-	const denyAll: Authenticator = { authenticate: () => Promise.resolve({ ok: false, status: 401, reason: 'no_credential' }) }
-	function reqWithBearer(token: string): Request {
-		return new Request('https://vozka.example/api/apps', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
-	}
-
-	test('a request bearing the provisioning key is a global admin for EVERY action', async () => {
-		const iam = withProvisioningKey(denyAll, KEY)
+		expect(result.nextCalled).toBe(true)
+		expect(result.auth?.principal?.type).toBe('service')
+		expect(result.auth?.principal?.label).toBe('provisioning')
 		for (const action of Object.values(ACTIONS)) {
-			const result = await authorize(iam, reqWithBearer(KEY), action)
-			expect(result.ok).toBe(true)
+			expect(result.auth?.can(action)).toBe(true)
 		}
 	})
 
-	test('the provisioning caller is a SERVICE principal labelled `provisioning`', async () => {
-		const result = await authorize(withProvisioningKey(denyAll, KEY), reqWithBearer(KEY), ACTIONS.APP_MANAGE)
-		expect(result.ok).toBe(true)
-		if (result.ok) {
-			expect(result.auth.principal?.type).toBe('service')
-			expect(result.auth.principal?.label).toBe('provisioning')
+	test('a listed user is elevated while a non-listed user keeps their original permissions', async () => {
+		const listed = await runMiddleware(
+			{ DEV: 'true', VOZKA_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' },
+			new Request('https://control.test/api/apps', { headers: { 'X-Dev-Principal': 'viewer@vozka.test' } }),
+		)
+		const notListed = await runMiddleware(
+			{ DEV: 'true', VOZKA_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' },
+			new Request('https://control.test/api/apps', { headers: { 'X-Dev-Principal': 'operator@vozka.test' } }),
+		)
+
+		expect(listed.nextCalled).toBe(true)
+		expect(listed.auth?.principal?.type).toBe('user')
+		for (const action of Object.values(ACTIONS)) {
+			expect(listed.auth?.can(action)).toBe(true)
 		}
+		expect(notListed.nextCalled).toBe(true)
+		expect(notListed.auth?.can(ACTIONS.DEPLOY_READ)).toBe(true)
+		expect(notListed.auth?.can(ACTIONS.APP_MANAGE)).toBe(false)
 	})
 
-	test('a WRONG bearer falls through to the inner authenticator (denied)', async () => {
-		const result = await authorize(withProvisioningKey(denyAll, KEY), reqWithBearer('px_wrong_key'), ACTIONS.APP_MANAGE)
-		expect(result.ok).toBe(false)
-	})
+	test('bootstrap elevation does not apply to service or unknown callers', async () => {
+		const label = 'service@vozka.test'
+		const service = await runMiddleware(
+			{ DEV: '', IAM: serviceIam, PROPUSTKA_URL: ISSUER, VOZKA_BOOTSTRAP_ADMINS: `["${label}"]` },
+			new Request('https://control.test/api/apps', { headers: { Authorization: `Bearer ${await serviceToken(label)}` } }),
+		)
+		const unknown = await runMiddleware(
+			{ DEV: 'true', VOZKA_BOOTSTRAP_ADMINS: '["missing@vozka.test"]' },
+			new Request('https://control.test/api/apps', { headers: { 'X-Dev-Principal': 'missing@vozka.test' } }),
+		)
 
-	test('no Authorization header falls through to the inner authenticator', async () => {
-		const req = new Request('https://vozka.example/api/apps', { method: 'POST' })
-		const result = await authorize(withProvisioningKey(denyAll, KEY), req, ACTIONS.APP_MANAGE)
-		expect(result.ok).toBe(false)
-	})
-
-	test('an EMPTY provisioning key is a transparent pass-through (returns the inner unchanged)', () => {
-		expect(withProvisioningKey(denyAll, '')).toBe(denyAll)
-	})
-
-	test('createIam wires it from PROPUSTKA_PROVISIONING_KEY — the key wins even over a denied dev persona', async () => {
-		// DEV with an UNKNOWN persona selector would be denied by the fake; the provisioning bearer is
-		// checked FIRST, so it short-circuits to global-admin regardless.
-		const iam = createIam({ DEV: 'true', VOZKA_BOOTSTRAP_ADMINS: '[]', PROPUSTKA_PROVISIONING_KEY: KEY })
-		const req = new Request('https://vozka.example/api/apps', {
-			method: 'POST',
-			headers: { Authorization: `Bearer ${KEY}`, 'X-Dev-Principal': 'ghost@unknown.test' },
-		})
-		const result = await authorize(iam, req, ACTIONS.APP_MANAGE)
-		expect(result.ok).toBe(true)
+		expect(service.nextCalled).toBe(true)
+		expect(service.auth?.principal?.type).toBe('service')
+		expect(service.auth?.can(ACTIONS.DEPLOY_READ)).toBe(true)
+		expect(service.auth?.can(ACTIONS.APP_MANAGE)).toBe(false)
+		expect(unknown.nextCalled).toBe(false)
+		expect(unknown.response.status).toBe(403)
+		expect(unknown.auth).toBeUndefined()
 	})
 })

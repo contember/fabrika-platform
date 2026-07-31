@@ -1,8 +1,8 @@
+import type { AuthContext } from '@fabrika/auth'
 import type { ControlProvider, ProviderDeploymentNamespace, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import type { ApiDeps } from '../api/router'
 import { handleApi } from '../api/router'
-import type { Authenticator } from '../iam'
 import { FakeRepoSource } from '../repo-source'
 import { createHarness } from './helpers/harness'
 
@@ -112,22 +112,16 @@ interface AuditRecord {
 	metadata?: unknown
 }
 
-function authenticator(actions: string[], audits: AuditRecord[]): Authenticator {
+function authContext(actions: string[], audits: AuditRecord[]): AuthContext {
 	return {
-		authenticate: () =>
-			Promise.resolve({
-				ok: true,
-				context: {
-					ok: true,
-					principal: { id: 'operator', type: 'user', label: 'operator@test' },
-					can: (action) => actions.includes('*') || actions.includes(action),
-					scopedTo: () => null,
-					audit: (event) => {
-						audits.push(event)
-						return Promise.resolve()
-					},
-				},
-			}),
+		ok: true,
+		principal: { id: 'operator', type: 'user', label: 'operator@test' },
+		can: (action) => actions.includes('*') || actions.includes(action),
+		scopedTo: () => null,
+		audit: (event) => {
+			audits.push(event)
+			return Promise.resolve()
+		},
 	}
 }
 
@@ -140,7 +134,7 @@ function makeDeps(
 	return {
 		deps: {
 			repositories: db,
-			iam: authenticator(actions, audits),
+			auth: authContext(actions, audits),
 			queue: { send: () => Promise.resolve() },
 			logs: { get: () => Promise.resolve(null) },
 			repoSource: new FakeRepoSource(),

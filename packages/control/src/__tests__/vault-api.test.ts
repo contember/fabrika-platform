@@ -1,12 +1,13 @@
+import type { AuthContext } from '@fabrika/auth'
 import type { ControlProvider, ProviderEnvelope } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import type { ApiDeps } from '../api/router'
 import { handleApi } from '../api/router'
-import { type Authenticator, fakeAuthenticator } from '../iam'
 import { FakeRepoSource } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { parseVaultRef, Vault } from '../vault'
 import { createHarness } from './helpers/harness'
+import { authWithActions } from './helpers/iam'
 
 // The vault MANAGEMENT API (M4): write-only set/rotate/delete of secret VALUES, gated by `secret.manage`
 // and audited. These assert: the value is stored in the vault + the ref written back to the row; the
@@ -42,13 +43,13 @@ const storedEnvironment = (provider = 'memory') => ({
 })
 
 /** Router deps over a real sqlite D1, a recording queue, and a vault factory bound to the SAME db. */
-function makeDeps(iam: Authenticator): { deps: ApiDeps; vault: Promise<Vault>; queue: DeployJobMessage[] } {
+function makeDeps(auth: AuthContext): { deps: ApiDeps; vault: Promise<Vault>; queue: DeployJobMessage[] } {
 	const { db, d1 } = createHarness()
 	const queue: DeployJobMessage[] = []
 	const vault = Vault.create(d1, testKey())
 	const deps: ApiDeps = {
 		repositories: db,
-		iam,
+		auth,
 		queue: {
 			send(m) {
 				queue.push(m)
@@ -72,31 +73,13 @@ function req(method: string, path: string, body?: unknown): Request {
 }
 
 /** A persona granting exactly `secret.manage` + `app.manage` globally (covers the app-secret values). */
-function secretManager(): Authenticator {
-	return fakeAuthenticator({
-		personas: {
-			'sm@vozka.test': {
-				id: 'p-sm',
-				label: 'sm@vozka.test',
-				type: 'user',
-				permissions: [
-					{ action: 'secret.manage', scope: null, source: 'grant' },
-					{ action: 'app.manage', scope: null, source: 'grant' },
-				],
-			},
-		},
-		defaultEmail: 'sm@vozka.test',
-	})
+function secretManager(): AuthContext {
+	return authWithActions(['secret.manage', 'app.manage'], 'sm@vozka.test')
 }
 
 /** A persona that holds neither `secret.manage` nor `app.manage` (only `deploy.read`) → denied. */
-function noSecretManager(): Authenticator {
-	return fakeAuthenticator({
-		personas: {
-			'ro@vozka.test': { id: 'p-ro', label: 'ro@vozka.test', type: 'user', permissions: [{ action: 'deploy.read', scope: null, source: 'grant' }] },
-		},
-		defaultEmail: 'ro@vozka.test',
-	})
+function noSecretManager(): AuthContext {
+	return authWithActions(['deploy.read'], 'ro@vozka.test')
 }
 
 describe('app secret value endpoints (secret.manage, app-scoped)', () => {
@@ -175,7 +158,7 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		}
 		const deps: ApiDeps = {
 			repositories: db,
-			iam: secretManager(),
+			auth: secretManager(),
 			queue: { send: () => Promise.resolve() },
 			logs: { get: () => Promise.resolve(null) },
 			repoSource: new FakeRepoSource(),
@@ -234,7 +217,7 @@ describe('vault not configured', () => {
 		const { db } = createHarness()
 		const deps: ApiDeps = {
 			repositories: db,
-			iam: secretManager(),
+			auth: secretManager(),
 			queue: { send: () => Promise.resolve() },
 			logs: { get: () => Promise.resolve(null) },
 			repoSource: new FakeRepoSource(),

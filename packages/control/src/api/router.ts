@@ -3,14 +3,15 @@
 // here). Mirrors propustka's admin router/dispatch pattern: resolve + authorize, then dispatch.
 //
 // ACL: each route names its action (src/actions.ts) and, where it operates on a specific app/env, the
-// scope (app / environment). `authorize` authenticates via propustka and `can`-checks; on failure it
-// returns the 401/403 Response the router returns verbatim. Mutations audit via the AuthContext.
+// scope (app / environment). Authentication has already resolved `deps.auth`; `authorize` performs
+// the `can` check and returns a 403 on failure. Mutations audit through the same AuthContext.
 
+import type { AuthContext } from '@fabrika/auth'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { ACTIONS } from '../actions'
 import type { ControlRepositories, RunRow } from '../db'
 import { error } from '../http'
-import { appScope, type Authenticator, authorize, envScope } from '../iam'
+import { appScope, authorize, envScope } from '../iam'
 import type { RepoSource } from '../repo-source'
 import type { Vault } from '../vault'
 import { adoptNamespace, createNamespace, getNamespace, listNamespaces, type NamespaceContext, planNamespace, reconcileNamespace } from './namespaces'
@@ -43,8 +44,8 @@ import { deleteAppSecretValue, rotateAppSecretValue, setAppSecretValue, type Vau
  */
 export interface ApiDeps {
 	repositories: ControlRepositories
-	/** The auth guard (the router only ever calls `authenticate`); `createIam` wraps the bootstrap-admin fallback in. */
-	iam: Authenticator
+	/** The context resolved once by the application auth middleware. */
+	auth: AuthContext
 	queue: DeployQueue
 	logs: LogReader
 	/** Used by the registry handlers to auto-detect an app's GitHub installation id at onboarding. */
@@ -66,15 +67,6 @@ export async function handleApi(request: Request, deps: ApiDeps): Promise<Respon
 	const url = new URL(request.url)
 	try {
 		const response = await dispatch(request, url, deps)
-		// Off-local, a successful authenticate may have minted a fresh `px_token`: attach its Set-Cookie
-		// to the response so the next request hits the SDK's local fast path (no re-mint). Attached once,
-		// centrally, so individual handlers stay cookie-unaware.
-		const setCookie = deps.iam.takeSetCookie?.()
-		if (setCookie !== undefined && setCookie !== '') {
-			const withCookie = new Response(response.body, response)
-			withCookie.headers.append('Set-Cookie', setCookie)
-			return withCookie
-		}
 		return response
 	} catch (err) {
 		console.error('api request failed', err instanceof Error ? err.message : 'unknown error')
@@ -134,7 +126,7 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 		// ── Onboarding (app.manage, global) ────────────────────────────────────
 		case 'register-app': {
 			if (method !== 'POST') return methodNotAllowed()
-			const a = await authorize(deps.iam, request, ACTIONS.APP_MANAGE)
+			const a = authorize(deps.auth, ACTIONS.APP_MANAGE)
 			const c = registryCtx(a)
 			return c instanceof Response ? c : registerApp(c)
 		}
@@ -144,12 +136,12 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 			if (id === undefined) {
 				if (method === 'GET') {
 					// Listing apps needs app.manage globally (no specific app to scope to).
-					const a = await authorize(deps.iam, request, ACTIONS.APP_MANAGE)
+					const a = authorize(deps.auth, ACTIONS.APP_MANAGE)
 					const c = registryCtx(a)
 					return c instanceof Response ? c : listApps(c)
 				}
 				if (method === 'POST') {
-					const a = await authorize(deps.iam, request, ACTIONS.APP_MANAGE)
+					const a = authorize(deps.auth, ACTIONS.APP_MANAGE)
 					const c = registryCtx(a)
 					return c instanceof Response ? c : createApp(c)
 				}
@@ -158,7 +150,7 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 
 			// Nested: /api/apps/:id/envs[/:env] and /api/apps/:id/secrets[/:name]
 			if (sub === 'envs') {
-				const a = await authorize(deps.iam, request, ACTIONS.APP_MANAGE, appScope(id))
+				const a = authorize(deps.auth, ACTIONS.APP_MANAGE, appScope(id))
 				const c = registryCtx(a)
 				if (c instanceof Response) return c
 				if (subId === undefined) {
@@ -173,7 +165,7 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 				// /api/apps/:id/secrets/:name/value — the encrypted secret VALUE (vault, write-only).
 				// PUT = set (re-encrypts under a fresh entry), PATCH = rotate in place, DELETE = drop entry.
 				if (subId !== undefined && subSub === 'value') {
-					const a = await authorize(deps.iam, request, ACTIONS.SECRET_MANAGE, appScope(id))
+					const a = authorize(deps.auth, ACTIONS.SECRET_MANAGE, appScope(id))
 					const c = vaultCtx(a)
 					if (c instanceof Response) return c
 					if (method === 'PUT') return setAppSecretValue(c, id, subId)
@@ -182,7 +174,7 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 					return methodNotAllowed()
 				}
 				// /api/apps/:id/secrets and /api/apps/:id/secrets/:name — the reference rows (registry).
-				const a = await authorize(deps.iam, request, ACTIONS.SECRET_MANAGE, appScope(id))
+				const a = authorize(deps.auth, ACTIONS.SECRET_MANAGE, appScope(id))
 				const c = registryCtx(a)
 				if (c instanceof Response) return c
 				if (subId === undefined) {
@@ -196,7 +188,7 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 			// /api/apps/:id/vars[/:name] — NON-secret per-app-env deploy config (plaintext, readable).
 			// app.manage (not secret.manage): vars are app config like app_envs, not vault secrets.
 			if (sub === 'vars') {
-				const a = await authorize(deps.iam, request, ACTIONS.APP_MANAGE, appScope(id))
+				const a = authorize(deps.auth, ACTIONS.APP_MANAGE, appScope(id))
 				const c = registryCtx(a)
 				if (c instanceof Response) return c
 				if (subId === undefined) {
@@ -209,7 +201,7 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 			}
 
 			// /api/apps/:id itself (app.manage, app-scoped)
-			const a = await authorize(deps.iam, request, ACTIONS.APP_MANAGE, appScope(id))
+			const a = authorize(deps.auth, ACTIONS.APP_MANAGE, appScope(id))
 			const c = registryCtx(a)
 			if (c instanceof Response) return c
 			if (method === 'GET') return getApp(c, id)
@@ -220,7 +212,7 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 
 		// ── Deployment namespaces (namespace.manage, global) ───────────────────
 		case 'namespaces': {
-			const a = await authorize(deps.iam, request, ACTIONS.NAMESPACE_MANAGE)
+			const a = authorize(deps.auth, ACTIONS.NAMESPACE_MANAGE)
 			const c = namespaceCtx(a)
 			if (c instanceof Response) return c
 			if (id === undefined) {
@@ -249,7 +241,7 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 				if (method === 'GET') {
 					// List/filter runs — read access. App/env scope from query params when present.
 					const scope = scopeForRunQuery(url)
-					const a = await authorize(deps.iam, request, ACTIONS.DEPLOY_READ, scope)
+					const a = authorize(deps.auth, ACTIONS.DEPLOY_READ, scope)
 					const c = runsCtx(a)
 					return c instanceof Response ? c : listRuns(c)
 				}
@@ -258,12 +250,12 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 			// /api/runs/:id/cancel — MUTATION (deploy.trigger), not a read. Cancel a pending/running run.
 			if (sub === 'cancel') {
 				if (method !== 'POST') return methodNotAllowed()
-				const a = await authorize(deps.iam, request, ACTIONS.DEPLOY_TRIGGER)
+				const a = authorize(deps.auth, ACTIONS.DEPLOY_TRIGGER)
 				const c = runsCtx(a)
 				return c instanceof Response ? c : cancelRun(c, id)
 			}
 			// /api/runs/:id, /api/runs/:id/log, /api/runs/:id/tail — read access.
-			const a = await authorize(deps.iam, request, ACTIONS.DEPLOY_READ)
+			const a = authorize(deps.auth, ACTIONS.DEPLOY_READ)
 			const c = runsCtx(a)
 			if (c instanceof Response) return c
 			if (sub === undefined) {
@@ -283,7 +275,7 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 			if (method !== 'POST') return methodNotAllowed()
 			// Scope to the app being deployed (read from the body would require parsing twice; the
 			// handler re-validates app/env, and the env scope is applied via the app scope here).
-			const a = await authorize(deps.iam, request, ACTIONS.DEPLOY_TRIGGER)
+			const a = authorize(deps.auth, ACTIONS.DEPLOY_TRIGGER)
 			const c = runsCtx(a)
 			return c instanceof Response ? c : triggerDeploy(c)
 		}

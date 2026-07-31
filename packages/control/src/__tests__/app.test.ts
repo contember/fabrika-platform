@@ -4,7 +4,7 @@ import type { Env } from '../env'
 import { createHarness } from './helpers/harness'
 import { fakeControlProvider } from './helpers/provider'
 
-function application() {
+function application(overrides: Partial<Env> = {}) {
 	const harness = createHarness()
 	const env: Env = {
 		DB: harness.d1,
@@ -19,6 +19,7 @@ function application() {
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'local',
 		DEV: 'true',
+		...overrides,
 	}
 	return (request: Request) =>
 		controlApp.fetch(request, { env, provider: fakeControlProvider }, {
@@ -57,5 +58,52 @@ describe('controlApp', () => {
 		expect(viewer.status).toBe(403)
 		expect(admin.status).toBe(200)
 		expect(unknown.status).toBe(403)
+	})
+
+	test('elevates only listed authenticated users through the bootstrap-admin middleware', async () => {
+		const fetch = application({ VOZKA_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' })
+		const listed = await fetch(
+			new Request('https://control.test/api/apps', {
+				headers: { 'X-Dev-Principal': 'viewer@vozka.test' },
+			}),
+		)
+		const notListed = await fetch(
+			new Request('https://control.test/api/apps', {
+				headers: { 'X-Dev-Principal': 'operator@vozka.test' },
+			}),
+		)
+		const unknown = await fetch(
+			new Request('https://control.test/api/apps', {
+				headers: { 'X-Dev-Principal': 'missing@vozka.test' },
+			}),
+		)
+
+		expect(listed.status).toBe(200)
+		expect(notListed.status).toBe(403)
+		expect(unknown.status).toBe(403)
+	})
+
+	test('admits only the configured provisioning bearer as a machine bootstrap admin', async () => {
+		const key = 'px_provision_secret_key_value'
+		const fetch = application({ PROPUSTKA_PROVISIONING_KEY: key })
+		const admitted = await fetch(
+			new Request('https://control.test/api/apps', {
+				headers: { Authorization: `Bearer ${key}`, 'X-Dev-Principal': 'missing@vozka.test' },
+			}),
+		)
+		const wrong = await fetch(
+			new Request('https://control.test/api/apps', {
+				headers: { Authorization: 'Bearer px_wrong_key', 'X-Dev-Principal': 'missing@vozka.test' },
+			}),
+		)
+		const absent = await fetch(
+			new Request('https://control.test/api/apps', {
+				headers: { 'X-Dev-Principal': 'missing@vozka.test' },
+			}),
+		)
+
+		expect(admitted.status).toBe(200)
+		expect(wrong.status).toBe(403)
+		expect(absent.status).toBe(403)
 	})
 })

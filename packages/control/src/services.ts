@@ -1,9 +1,9 @@
+import type { AuthContext } from '@fabrika/auth'
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import type { ApiDeps } from './api/router'
 import type { ControlRepositories, RunRow } from './db'
 import type { Env } from './env'
-import type { Authenticator } from './iam'
 import {
 	type OperationsCatalogSyncDeps,
 	type OperationsCatalogSyncSummary,
@@ -99,10 +99,10 @@ export async function cancelRun(env: Env, provider: ControlProvider, run: RunRow
 }
 
 /** Assemble the shared API dependencies around one statically selected provider. */
-export function buildApiDeps(env: Env, provider: ControlProvider, iam: Authenticator): ApiDeps {
+export function buildApiDeps(env: Env, provider: ControlProvider, auth: AuthContext): ApiDeps {
 	return {
 		repositories: repositories(env),
-		iam,
+		auth,
 		queue: env.DEPLOY_QUEUE,
 		logs: env.RUN_LOGS,
 		repoSource: repoSource(env),
