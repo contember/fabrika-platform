@@ -164,6 +164,7 @@ schema or storage engine.
 - When does a signal need provider-specific storage rather than a shared
   implementation over the existing platform ports?
 
-Concrete completion work for the current Errors slice lives in
-[browser and SDK proof](../backlog/35-prove-operations-browser-and-sdk-workflows.md)
-and [Zerops release artifact correlation](../backlog/36-complete-zerops-release-artifact-correlation.md).
+The browser and SDK proof for the current Errors slice is recorded in the
+[shipped adoption sprint](../archive/sprint-2026-07-31-operations-adoption-proof.md).
+Remaining completion work lives in
+[Zerops release artifact correlation](../backlog/36-complete-zerops-release-artifact-correlation.md).

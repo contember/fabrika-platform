@@ -1,8 +1,7 @@
 ---
 id: 34
 title: Adopt existing Poplach state and retire the standalone app
-blocked-by:
-  - ./35-prove-operations-browser-and-sdk-workflows.md
+blocked-by: []
 ---
 
 # 34 — Adopt existing Poplach state and retire the standalone app

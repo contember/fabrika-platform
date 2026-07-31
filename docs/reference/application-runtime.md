@@ -104,3 +104,26 @@ Each execution receives fresh environment state and a fresh `Request`. Use these
 tests for routes that are intentionally portable. Keep composition-specific
 surfaces separate; for example, IAM's process health and shared-secret HTTP RPC
 transports exist only in the Bun composition.
+
+## Browser error reporting
+
+Fabrika supplies an application's Operations ingest settings as two managed
+runtime values:
+
+- `FABRIKA_OPERATIONS_DSN` is a browser-safe public DSN scoped to one application
+  environment.
+- `FABRIKA_RELEASE` is the current deploy-scoped release name.
+
+Applications may pass these two values to a browser, but must not expose other
+runtime configuration. The Zerops notes example demonstrates this boundary at
+`/operations-sdk` and initializes `@sentry/browser` **10.69.0** from a JSON
+config response containing only `dsn` and `release`.
+
+The tested compatibility profile is deliberately narrow. Fabrika accepts the
+SDK's envelope authentication query and an `event` item for a captured browser
+exception. It parses the exception, JavaScript stack frames, release,
+environment, level, tags, and optional SDK fingerprint used for grouping.
+Non-event items are not processed; bounded item types such as `client_report`
+are ignored when an envelope also contains an event. Tracing, sessions, replay,
+logs, metrics, and general Sentry protocol compatibility are not supported by
+this witness.

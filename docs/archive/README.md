@@ -9,6 +9,10 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Operations adoption proof (2026-07-31)](sprint-2026-07-31-operations-adoption-proof.md)
+  — proves managed `@sentry/browser` ingest and ten unified-console workflows
+  against the real local composition, including scoped access and bounded
+  Operations failure.
 - [Operations plane foundation (2026-07-30)](sprint-2026-07-30-operations-plane.md)
   — absorbed Poplach as portable Errors and connected it to Delivery, Access,
   health, and the unified console, with restart-safe release projection and an

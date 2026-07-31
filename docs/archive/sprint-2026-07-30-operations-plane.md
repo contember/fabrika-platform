@@ -64,13 +64,13 @@
 > - **Docs:** dprint and diff checks passed. The agent-docs lint reported only
 >   the known ignored compatibility symlink `docs/AGENTS.md -> CLAUDE.md`.
 > - **Not executed:** browser/official-Sentry-SDK proof remains
->   [backlog 35](../backlog/35-prove-operations-browser-and-sdk-workflows.md);
+>   [the Operations adoption proof](sprint-2026-07-31-operations-adoption-proof.md);
 >   Zerops source-map publication and a credentialed real-account deployment
 >   remain [backlog 36](../backlog/36-complete-zerops-release-artifact-correlation.md)
 >   and [backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md).
 >
 > **Backlog closed.** Items 27–33 were consumed. Remaining proof is tracked in
-> [35](../backlog/35-prove-operations-browser-and-sdk-workflows.md) and
+> [the later adoption proof](sprint-2026-07-31-operations-adoption-proof.md) and
 > [36](../backlog/36-complete-zerops-release-artifact-correlation.md); remaining
 > activation and egress hardening is tracked in
 > [37](../backlog/37-activate-zerops-managed-environment-transactionally.md) and

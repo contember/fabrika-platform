@@ -26,11 +26,10 @@ fabrika-platform is and how the pieces fit — then skim
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
 
-- **Next:** run the resulting composition against a real account in
+- **External next:** run the resulting composition against a real account in
   [`backlog/05-bring-up-on-a-real-zerops-account.md`](backlog/05-bring-up-on-a-real-zerops-account.md).
-- **Operations follow-up:** prove the
-  [browser and SDK workflows](backlog/35-prove-operations-browser-and-sdk-workflows.md),
-  complete [Zerops release artifact correlation](backlog/36-complete-zerops-release-artifact-correlation.md),
+- **Operations follow-up:** complete
+  [Zerops release artifact correlation](backlog/36-complete-zerops-release-artifact-correlation.md),
   settle [managed-environment activation](backlog/37-activate-zerops-managed-environment-transactionally.md),
   and add [DNS-safe Operations egress](backlog/38-add-dns-safe-operations-egress.md).
   The [broad target](ideas/operations-plane.md) and credentialed

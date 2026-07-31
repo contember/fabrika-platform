@@ -34,7 +34,6 @@ release restoration remains explicit item 25.
 - [25](25-migrate-the-ci-workflows.md) — No CI at all. Restore deploy, release (OIDC trusted publishing) and the runner image build.
 - [26](26-retire-trasa-release-surface.md) — Publish `@fabrika/app`, deprecate `@trasa/core`, and archive the standalone repository.
 - [34](34-retire-standalone-poplach.md) — Adopt existing state and retire the standalone Poplach app.
-- [35](35-prove-operations-browser-and-sdk-workflows.md) — Prove the unified Operations UI and managed ingest with a real browser SDK.
 - [36](36-complete-zerops-release-artifact-correlation.md) — Publish Zerops build source maps and link Delivery runs to Operations evidence.
 - [37](37-activate-zerops-managed-environment-transactionally.md) — Keep Zerops managed environment activation consistent with the app version that actually ships.
 - [38](38-add-dns-safe-operations-egress.md) — Prevent private-address and DNS-rebinding egress through Operations webhooks and active health checks.
