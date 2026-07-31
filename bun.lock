@@ -125,6 +125,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@buzola/router": "^0.0.12",
+        "@fabrika/app": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/iam-contract": "workspace:*",
         "@fabrika/iam-ui": "workspace:*",
@@ -203,6 +204,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@fabrika/installation-contract": "workspace:*",
+        "@fabrika/platform": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
       },
       "devDependencies": {
@@ -233,6 +235,7 @@
       "name": "@fabrika/local-stack",
       "dependencies": {
         "@fabrika/example-zerops-app": "workspace:*",
+        "@fabrika/platform": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",
         "@fabrika/proxy": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
@@ -309,6 +312,7 @@
       "dependencies": {
         "@fabrika/auth": "workspace:*",
         "@fabrika/engine": "workspace:*",
+        "@fabrika/platform": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "oblaka-iac": "^0.0.18",
       },
@@ -386,6 +390,7 @@
       "dependencies": {
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
+        "@fabrika/platform": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
         "@fabrika/runner-contract": "workspace:*",
       },

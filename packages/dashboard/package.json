@@ -12,6 +12,7 @@
 	},
 	"dependencies": {
 		"@buzola/router": "^0.0.12",
+		"@fabrika/app": "workspace:*",
 		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/iam-contract": "workspace:*",
 		"@fabrika/iam-ui": "workspace:*",
