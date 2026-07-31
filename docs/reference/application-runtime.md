@@ -33,6 +33,12 @@ middleware; IAM owns the identity boundary that backs that SDK.
 Their established REST and service-binding contracts remain compatible; new
 typed RPC routers can be mounted in the same pipeline.
 
+`@fabrika/auth` reads application identity from `FABRIKA_APP_ID` and the IAM
+origin from `FABRIKA_IAM_URL`. The deprecated `PROPUSTKA_APP_ID` and
+`PROPUSTKA_URL` names remain canonical-first fallbacks under ADR-0018. A shared
+runtime-neutral reader in `@fabrika/platform` applies the precedence rule and
+emits at most one value-free warning per legacy name in a process.
+
 ## Authorization boundary
 
 Proxy gates and procedure requirements are complementary:

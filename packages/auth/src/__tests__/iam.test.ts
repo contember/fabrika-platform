@@ -72,8 +72,8 @@ const PERSONAS: Record<string, PersonaSpec> = {
 	},
 }
 
-const offLocalEnv = (stub: IamRpcStub): IamEnv => ({ IAM: stub, PROPUSTKA_URL: ISSUER, PROPUSTKA_APP_ID: APP })
-const devEnv: IamEnv = { DEV: 'true', PROPUSTKA_APP_ID: APP }
+const offLocalEnv = (stub: IamRpcStub): IamEnv => ({ IAM: stub, FABRIKA_IAM_URL: ISSUER, FABRIKA_APP_ID: APP })
+const devEnv: IamEnv = { DEV: 'true', FABRIKA_APP_ID: APP }
 
 // ── createIam ────────────────────────────────────────────────────────────────────
 
@@ -95,8 +95,45 @@ describe('createIam', () => {
 
 	test('appId resolves from opts.appId over env', () => {
 		const stub = new IamRpcStub()
-		const iam = createIam({ IAM: stub, PROPUSTKA_URL: ISSUER, PROPUSTKA_APP_ID: 'env-app' }, { appId: 'opt-app' })
+		const iam = createIam({ IAM: stub, FABRIKA_IAM_URL: ISSUER, FABRIKA_APP_ID: 'env-app' }, { appId: 'opt-app' })
 		expect(iam).toBeDefined() // appId is private; exercised via the binding inputs in other tests
+	})
+
+	test('legacy-only IAM names remain supported', async () => {
+		const stub = new IamRpcStub({ listPrincipals: { ok: true, principals: [] } })
+		const iam = createIam({ IAM: stub, PROPUSTKA_URL: ISSUER, PROPUSTKA_APP_ID: APP })
+
+		await iam.listPrincipals(new Request('https://app/x'))
+		expect(stub.listPrincipalsInputs[0]?.app).toBe(APP)
+	})
+
+	test('canonical app id wins when both names are set', async () => {
+		const stub = new IamRpcStub({ listPrincipals: { ok: true, principals: [] } })
+		const iam = createIam({
+			IAM: stub,
+			FABRIKA_IAM_URL: ISSUER,
+			PROPUSTKA_URL: 'https://legacy-iam.test',
+			FABRIKA_APP_ID: 'canonical-app',
+			PROPUSTKA_APP_ID: 'legacy-app',
+		})
+
+		await iam.listPrincipals(new Request('https://app/x'))
+		expect(stub.listPrincipalsInputs[0]?.app).toBe('canonical-app')
+	})
+
+	test('canonical IAM URL wins when both names are set', async () => {
+		const iam = createIam({
+			IAM: new IamRpcStub({ jwks: JWKS }),
+			FABRIKA_IAM_URL: 'https://canonical-iam.test',
+			PROPUSTKA_URL: 'https://legacy-iam.test',
+			FABRIKA_APP_ID: APP,
+		})
+		const { response } = await run(
+			iam.authMiddleware({ gates: HUMAN_GATES }),
+			new Request('https://app/page', { headers: { Accept: 'text/html' } }),
+		)
+
+		expect(response.headers.get('location')).toStartWith('https://canonical-iam.test/auth/login?')
 	})
 
 	test('throws when no app id is resolvable', () => {
@@ -104,11 +141,11 @@ describe('createIam', () => {
 	})
 
 	test('off-local throws when the IAM binding is missing', () => {
-		expect(() => createIam({ PROPUSTKA_URL: ISSUER, PROPUSTKA_APP_ID: APP })).toThrow(/IAM service binding is missing/)
+		expect(() => createIam({ FABRIKA_IAM_URL: ISSUER, FABRIKA_APP_ID: APP })).toThrow(/IAM service binding is missing/)
 	})
 
-	test('off-local throws when PROPUSTKA_URL is missing', () => {
-		expect(() => createIam({ IAM: new IamRpcStub(), PROPUSTKA_APP_ID: APP })).toThrow(/PROPUSTKA_URL is missing/)
+	test('off-local throws when no IAM URL is resolvable', () => {
+		expect(() => createIam({ IAM: new IamRpcStub(), FABRIKA_APP_ID: APP })).toThrow(/FABRIKA_IAM_URL is missing/)
 	})
 })
 

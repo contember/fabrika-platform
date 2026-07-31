@@ -1,8 +1,8 @@
 /**
  * `createIam` — the single request-time entry point apps use instead of hand-rolling auth.
  *
- * `createIam(env, opts)` reads the standard propustka env (`IAM` binding, `PROPUSTKA_URL` issuer,
- * `DEV`, app id from `opts.appId` ?? `PROPUSTKA_APP_ID`) and returns an `Iam` that bundles:
+ * `createIam(env, opts)` reads the standard IAM env (`IAM` binding, canonical issuer and app id names
+ * with legacy fallbacks, and `DEV`) and returns an `Iam` that bundles:
  *   - the existing MANAGEMENT surface (`listPrincipals` / `issueKey` / `issueJwt` / `revokeKey`),
  *     delegated to `IamClient` off-local or `FakeIamClient` in dev;
  *   - middleware FACTORIES (`authMiddleware` / `apiKeyMiddleware` / `capabilityMiddleware`) that produce
@@ -16,6 +16,7 @@
 
 import { type AppGates, type PermissionEntry, permits, type PrincipalType, type Scope, scopedValues } from '@fabrika/auth-core'
 import type { IamRpc } from '@fabrika/auth-core'
+import { environmentAliases } from '@fabrika/platform'
 import { IamClient } from './client'
 import { FakeIamClient, type FakePersona } from './fake'
 import type { AuthCarrier, Middleware } from './middleware'
@@ -40,9 +41,13 @@ import type {
 export interface IamEnv {
 	/** The IAM Worker service binding (off-local). Typed as the `IamRpc` contract — never the Worker. */
 	IAM?: IamRpc
-	/** propustka's origin — the `PropustkaAuth` issuer (token `iss` + the `/auth/login` base). Off-local. */
+	/** IAM origin — the `PropustkaAuth` issuer (token `iss` + the `/auth/login` base). Off-local. */
+	FABRIKA_IAM_URL?: string
+	/** Deprecated issuer fallback. */
 	PROPUSTKA_URL?: string
-	/** Fallback app id when `opts.appId` is omitted. */
+	/** Canonical fallback app id when `opts.appId` is omitted. */
+	FABRIKA_APP_ID?: string
+	/** Deprecated app id fallback. */
 	PROPUSTKA_APP_ID?: string
 	/** Dev flag — truthy selects the `FakeIamClient` + persona path (no IAM Worker, no SSO). */
 	DEV?: string | boolean
@@ -61,9 +66,9 @@ export interface PersonaSpec {
 	permissions: Array<{ action: string; scope: Scope | null }>
 }
 
-/** Options for `createIam`. `appId` falls back to `env.PROPUSTKA_APP_ID`. */
+/** Options for `createIam`. `appId` falls back to `env.FABRIKA_APP_ID`, then the legacy name. */
 export interface CreateIamOptions {
-	/** The propustka app id (baked in so it can never be mistyped). Falls back to `env.PROPUSTKA_APP_ID`. */
+	/** The IAM app id (baked in so it can never be mistyped). Falls back to the canonical env alias. */
 	appId?: string
 	/** Force freshly minted `px_token` cookies to be secure. Omit to derive it from the request URL. */
 	forceSecureCookies?: true
@@ -521,14 +526,15 @@ export class Iam {
 // ── createIam ──────────────────────────────────────────────────────────────────
 
 /**
- * The single request-time entry point. Reads `env.IAM` / `env.PROPUSTKA_URL` / `env.DEV` and the app id
- * (`opts.appId` ?? `env.PROPUSTKA_APP_ID`), and returns an `Iam` backed by the fake (dev) or the real
- * binding (off-local). Throws if the app id is missing, or — off-local — if the binding or issuer is.
+ * The single request-time entry point. Reads `env.IAM`, canonical-first IAM environment aliases, and
+ * `env.DEV`, and returns an `Iam` backed by the fake (dev) or real binding. Throws if the app id is
+ * missing, or — off-local — if the binding or issuer is.
  */
 export function createIam(env: IamEnv, opts: CreateIamOptions = {}): Iam {
-	const appId = opts.appId ?? env.PROPUSTKA_APP_ID
+	const appId = opts.appId
+		?? environmentAliases.read(env, { canonical: 'FABRIKA_APP_ID', legacy: 'PROPUSTKA_APP_ID' })
 	if (appId === undefined || appId === '') {
-		throw new Error('createIam: app id is required — pass opts.appId or set env.PROPUSTKA_APP_ID')
+		throw new Error('createIam: app id is required — pass opts.appId or set env.FABRIKA_APP_ID')
 	}
 	const devPersonaCookie = opts.devPersonaCookie ?? 'propustka_dev_principal'
 	const devPersonaHeader = opts.devPersonaHeader
@@ -549,11 +555,11 @@ export function createIam(env: IamEnv, opts: CreateIamOptions = {}): Iam {
 
 	const binding = env.IAM
 	if (binding === undefined) {
-		throw new Error('createIam: the IAM service binding is missing off-local (env.IAM) — check the propustka ServiceReference.')
+		throw new Error('createIam: the IAM service binding is missing off-local (env.IAM) — check the IAM ServiceReference.')
 	}
-	const issuer = env.PROPUSTKA_URL
+	const issuer = environmentAliases.read(env, { canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' })
 	if (issuer === undefined || issuer === '') {
-		throw new Error('createIam: PROPUSTKA_URL is missing off-local — required as the PropustkaAuth issuer (propustka origin).')
+		throw new Error('createIam: FABRIKA_IAM_URL is missing off-local — required as the PropustkaAuth issuer (IAM origin).')
 	}
 	const management = new IamClient(binding, appId)
 	return new Iam({
