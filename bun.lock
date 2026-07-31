@@ -101,6 +101,7 @@
         "@fabrika/provider-zerops": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
         "@fabrika/runner-cloudflare": "workspace:*",
+        "zod": "^3.24.0",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "^4.20260702.1",
@@ -114,6 +115,7 @@
       "name": "@fabrika/control-contract",
       "version": "0.0.1",
       "dependencies": {
+        "@fabrika/app": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
       },
     },
@@ -186,6 +188,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@buzola/router": "^0.0.12",
+        "@fabrika/app": "workspace:*",
         "@fabrika/iam-contract": "workspace:*",
         "react": "^19.0.0",
       },
@@ -269,6 +272,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@buzola/router": "^0.0.12",
+        "@fabrika/app": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
         "react": "^19.0.0",
       },

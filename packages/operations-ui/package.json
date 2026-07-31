@@ -26,6 +26,7 @@
 	},
 	"dependencies": {
 		"@buzola/router": "^0.0.12",
+		"@fabrika/app": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",
 		"react": "^19.0.0"
 	},

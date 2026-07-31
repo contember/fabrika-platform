@@ -24,6 +24,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@fabrika/app": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*"
 	}
 }

@@ -33,7 +33,8 @@
 		"@fabrika/provider-contract": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*",
 		"@fabrika/proxy-contract": "workspace:*",
-		"@fabrika/runner-cloudflare": "workspace:*"
+		"@fabrika/runner-cloudflare": "workspace:*",
+		"zod": "^3.24.0"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260702.1",
