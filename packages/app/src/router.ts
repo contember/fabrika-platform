@@ -25,7 +25,8 @@ export type HttpHandler<Ctx, Pattern extends string> = (ctx: Ctx, params: RouteP
 
 export interface HttpRoute<Ctx, Pattern extends string = string> {
 	readonly kind: 'http'
-	readonly method: HttpMethod
+	/** `null` matches every method and is intended for mounting an existing Fetch handler. */
+	readonly method: HttpMethod | null
 	readonly pattern: Pattern
 	readonly segments: ReadonlyArray<string>
 	readonly use: ReadonlyArray<Middleware<Ctx>>
@@ -46,8 +47,16 @@ function splitPath(path: string): string[] {
 	return path.split('/').filter((segment) => segment.length > 0)
 }
 
+function decodePathSegment(segment: string): string | null {
+	try {
+		return decodeURIComponent(segment)
+	} catch {
+		return null
+	}
+}
+
 function makeHttpRoute<Ctx, Pattern extends string>(
-	method: HttpMethod,
+	method: HttpMethod | null,
 	pattern: Pattern,
 	handler: HttpHandler<Ctx, Pattern>,
 	opts: RouteOptions<Ctx> | undefined,
@@ -67,6 +76,9 @@ function makeHttpRoute<Ctx, Pattern extends string>(
  * (run after the global chain) — e.g. a capability/api-key gate on one path group.
  */
 export const route = {
+	all<Ctx, Pattern extends string>(pattern: Pattern, handler: HttpHandler<Ctx, Pattern>, opts?: RouteOptions<Ctx>): HttpRoute<Ctx, Pattern> {
+		return makeHttpRoute(null, pattern, handler, opts)
+	},
 	get<Ctx, Pattern extends string>(pattern: Pattern, handler: HttpHandler<Ctx, Pattern>, opts?: RouteOptions<Ctx>): HttpRoute<Ctx, Pattern> {
 		return makeHttpRoute('GET', pattern, handler, opts)
 	},
@@ -95,14 +107,22 @@ function matchSegments(routeSegments: ReadonlyArray<string>, pathSegments: Reado
 		if (routeSegment.startsWith('*')) {
 			const name = routeSegment.slice(1)
 			if (name !== '') {
-				params[name] = pathSegments.slice(i).map(decodeURIComponent).join('/')
+				const decoded: string[] = []
+				for (const segment of pathSegments.slice(i)) {
+					const value = decodePathSegment(segment)
+					if (value === null) return null
+					decoded.push(value)
+				}
+				params[name] = decoded.join('/')
 			}
 			return params
 		}
 		const pathSegment = pathSegments[i]
 		if (pathSegment === undefined) return null
 		if (routeSegment.startsWith(':')) {
-			params[routeSegment.slice(1)] = decodeURIComponent(pathSegment)
+			const value = decodePathSegment(pathSegment)
+			if (value === null) return null
+			params[routeSegment.slice(1)] = value
 		} else if (routeSegment !== pathSegment) {
 			return null
 		}
@@ -119,7 +139,7 @@ export function matchRoutes<Ctx>(
 	for (const candidate of routes) {
 		if (candidate.kind === 'rpc') {
 			if (request.method !== 'POST') continue
-		} else if (request.method !== candidate.method) {
+		} else if (candidate.method !== null && request.method !== candidate.method) {
 			continue
 		}
 		const params = matchSegments(candidate.segments, pathSegments)

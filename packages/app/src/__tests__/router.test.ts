@@ -20,6 +20,14 @@ const routes: Route<Ctx>[] = [
 ]
 
 describe('matchRoutes', () => {
+	test('an all-method route matches every HTTP method', () => {
+		const all = route.all('/api/*path', () => new Response('ok'))
+
+		expect(matchRoutes([all], new Request('https://x/api/items', { method: 'GET' }))?.route).toBe(all)
+		expect(matchRoutes([all], new Request('https://x/api/items', { method: 'POST' }))?.route).toBe(all)
+		expect(matchRoutes([all], new Request('https://x/api/items', { method: 'OPTIONS' }))?.route).toBe(all)
+	})
+
 	test('matches a static route', () => {
 		const matched = matchRoutes(routes, getRequest('https://x/health'))
 		expect(matched).not.toBeNull()
@@ -34,6 +42,11 @@ describe('matchRoutes', () => {
 	test('url-decodes param values', () => {
 		const matched = matchRoutes(routes, getRequest('https://x/api/a%2Fb/envelope'))
 		expect(matched?.params).toEqual({ project: 'a/b' })
+	})
+
+	test('malformed percent-encoding does not throw or match a parameterized route', () => {
+		expect(matchRoutes(routes, getRequest('https://x/api/%/envelope'))).toBeNull()
+		expect(matchRoutes(routes, getRequest('https://x/public/%'))).toBeNull()
 	})
 
 	test('method mismatch → no match', () => {

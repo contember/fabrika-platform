@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { defineApp } from '../app.js'
+import { defineApp, type RequestExecutionContext } from '../app.js'
 import { createBunHandler } from '../bun.js'
 import { route } from '../router.js'
 import { initRpc } from '../rpc/builder.js'
@@ -26,6 +26,30 @@ describe('createBunHandler', () => {
 
 		const response = await handler.fetch(new Request('https://app.test/value'))
 		expect(await response.text()).toBe('from-env')
+	})
+
+	test('can use a process-owned execution context', async () => {
+		let registered = false
+		const app = defineApp<Record<string, never>, { exec: RequestExecutionContext }>({
+			context: (_env, _request, exec) => ({ exec }),
+			routes: [
+				route.get('/work', (ctx) => {
+					ctx.exec.waitUntil(Promise.resolve())
+					return new Response('accepted')
+				}),
+			],
+		})
+		const handler = createBunHandler(app, {}, {
+			executionContext: {
+				waitUntil() {
+					registered = true
+				},
+			},
+		})
+
+		await handler.fetch(new Request('https://app.test/work'))
+		expect(registered).toBe(true)
+		await expect(handler.drain()).resolves.toBeUndefined()
 	})
 
 	test('uses the same RPC wire protocol as the Worker adapter', async () => {
