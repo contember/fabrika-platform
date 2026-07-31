@@ -155,4 +155,6 @@ On Bun, Operations composes the reusable `platform-node` Postgres job-queue
 migration bundle before its service-owned bundle. IAM, control, and Operations
 use separate bundle-qualified ledgers and stable advisory locks as required by
 [ADR-0017](../decisions/0017-service-owned-postgres-migrations.md). Cloudflare D1
-migration history is unchanged.
+migration history is unchanged. Their thin wrappers use
+`definePostgresServiceMigrations`; each wrapper still declares its own stable
+bundle, ledger, advisory lock, dependency order, and legacy evidence.

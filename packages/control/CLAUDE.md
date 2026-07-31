@@ -34,13 +34,13 @@ FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres 
 |                 | Cloudflare                                     | Bun process (Zerops)                                                |
 | --------------- | ---------------------------------------------- | ------------------------------------------------------------------- |
 | entrypoint      | `src/index.ts` (`cloudflare:workers`)          | `src/node/server.ts` (`Bun.serve`)                                  |
-| HTTP            | `fetch()` → `handleFetch`                      | `Bun.serve` → `handleFetch`                                         |
+| HTTP            | `fetch()` → `controlApp`                       | `@fabrika/app/bun` → `controlApp`                                   |
 | deploy consumer | `queue()` → `runDeployJob`                     | `PostgresJobConsumer` → `runDeployJob`                              |
 | cron            | `scheduled()` → `runMaintenance`               | `run.crontab` → `src/node/cron.ts` → `runMaintenance`               |
 | migrations      | `wrangler d1 migrations apply` (`migrations/`) | `run.initCommands` → `src/node/migrate.ts` (`migrations-postgres/`) |
 | provider        | `@fabrika/provider-cloudflare` + `RUNNER_SVC`  | `@fabrika/provider-zerops` + neutral engine                         |
 
-The shared layer is `routes.ts` · `consumer.ts` · `cron.ts` · `services.ts` and everything they reach.
+The shared layer is `app.ts` · `consumer.ts` · `cron.ts` · `services.ts` and everything they reach.
 It imports only `@fabrika/provider-contract`. `src/index.ts` statically selects Cloudflare;
 `src/node/provider.ts` statically selects Zerops. `entrypoint-isolation.test.ts` proves that neither
 entrypoint reaches the other provider or runtime.
@@ -50,8 +50,9 @@ entrypoint reaches the other provider or runtime.
 `fetch` routes: `/api/health` → ok · `POST /webhooks/github` → webhook ·
 `/iam/admin/*` → transport-only IAM gateway · `/operations/api/*` →
 transport-only Operations gateway · `/api/*` → ACL-gated control surface ·
-everything else → dashboard `ASSETS`. (`/healthz` is added by the Bun server
-only, for the platform health check.) Neither gateway changes service ownership;
+everything else → dashboard `ASSETS`. `/healthz` is a liveness-only route on
+the shared app and is exposed by both the Cloudflare and Bun compositions.
+Neither gateway changes service ownership;
 IAM and Operations authenticate, authorize, and audit their own requests. A
 trigger writes a `pending` run to the
 database then enqueues. The consumer resolves the statically selected `ControlProvider` and calls its
@@ -76,10 +77,12 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
 
 ## Invariants
 
-- **ACL on every `/api/*` route.** Each handler calls `authorize(iam, request, ACTION, scope?)` before
-  doing anything; actions/scopes live in `src/actions.ts`. The GitHub webhook (`src/webhook.ts`) is the
+- **ACL on every `/api/*` route.** `controlApp` authenticates once through
+  `@fabrika/auth` middleware; each handler then calls `authorize` with that
+  resolved context and its action/scope. Actions/scopes live in `src/actions.ts`.
+  The GitHub webhook (`src/webhook.ts`) is the
   ONLY unauthenticated route — HMAC-gated instead. propustka is the WHOLE front door now (native auth, no
-  Cloudflare Access): `src/iam.ts` authenticates `/api/*` via `PropustkaAuth` over `env.IAM` —
+  Cloudflare Access): `src/iam.ts` configures the public IAM SDK over `env.IAM` —
   a human via SSO (`px_session` → minted `px_token`) or a machine via an `Authorization: Bearer px_` key
   (gates: `VOZKA_GATES` = service + human) — then `can(action, scope?)` + audit. `env.IAM` is the
   `IamRpc` CONTRACT, so it is a service binding on Cloudflare and `HttpIamRpc` (`@fabrika/auth`, bearer

@@ -14,6 +14,11 @@ dashboard. Cloudflare adapters live in `platform-cf.ts`; Bun-only lifecycle code
 lives under `src/node/`. The direct ingest surface and authenticated operator
 surface remain separate exports.
 
+`src/app.ts` is the shared `@fabrika/app` definition. It owns host isolation,
+declarative routes, and `@fabrika/auth` operator middleware. Both runtime
+entrypoints dispatch through this application; the Bun server uses
+`@fabrika/app/bun`.
+
 The public hostname accepts only Sentry-compatible
 `/api/:projectId/envelope/` ingest and the authenticated source-map upload path.
 `/api/*` operator routes, `/private/catalog/reconcile`, and
@@ -57,7 +62,7 @@ tuple, and delayed older projections cannot roll it back.
 `import/poplach-source-inventory.ts` pins and accounts for the Poplach source
 import at commit `8e0c79d662c187fe41eacd0fee9fe77fde668f1f`.
 
-The Bun migration wrapper composes the `platform-node` job-queue bundle before
-the Operations service bundle. Bundle names and filenames are durable migration
+The Bun migration wrapper uses `definePostgresServiceMigrations` and composes the
+`platform-node` job-queue bundle before the Operations service bundle. Bundle names and filenames are durable migration
 identity under ADR-0017; do not rename them. Real Postgres and S3 tests require
 `FABRIKA_TEST_POSTGRES_URL` and `FABRIKA_TEST_S3_*` and otherwise skip.

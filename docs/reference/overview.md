@@ -129,6 +129,12 @@ client.
 The package root is runtime-neutral. Cloudflare and Bun lifecycle APIs live under
 `@fabrika/app/cloudflare` and `@fabrika/app/bun`.
 
+The platform's own IAM, Delivery, and Operations services use the same model.
+Each defines a runtime-neutral `app.ts` and keeps Cloudflare/Bun lifecycle code
+in its composition root. Delivery and Operations use the IAM SDK middleware;
+IAM owns the identity boundary behind it. Their established REST and
+service-binding transports coexist with typed RPC in the same framework.
+
 The proxy and the application perform different checks. The proxy evaluates
 static path gates before a request reaches the private app service. App middleware
 verifies the injected Fabrika token and provides the canonical

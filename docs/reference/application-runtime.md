@@ -22,7 +22,16 @@ downstream response. `@fabrika/auth` owns the canonical `Middleware` type;
 
 HTTP route patterns support typed `:segment` parameters and one optional terminal
 wildcard such as `/public/*path`. The wildcard captures the decoded remaining
-path.
+path. `route.all()` mounts a Fetch-style handler for every method. It is the
+compatibility seam for an established REST surface that joins the shared
+application pipeline without changing its wire contract.
+
+IAM, Delivery, and Operations are first-party reference applications. Each has a
+runtime-neutral `app.ts` built with `defineApp()` and dispatches through the same
+application on Cloudflare and Bun. Delivery and Operations use `@fabrika/auth`
+middleware; IAM owns the identity boundary that backs that SDK.
+Their established REST and service-binding contracts remain compatible; new
+typed RPC routers can be mounted in the same pipeline.
 
 ## Authorization boundary
 
@@ -69,7 +78,9 @@ Runtime adapters add process lifecycle without changing request behavior:
 - `@fabrika/app/bun` exports `createBunHandler()`. It binds one `FabrikaApp` to
   its process dependencies and returns `fetch()` plus `drain()`. It tracks every
   `waitUntil()` promise, reports rejected background tasks through a required
-  callback, and drains all pending work during shutdown.
+  callback, and drains all pending work during shutdown. A service that already
+  owns a supervised execution context may inject it; that service remains
+  responsible for draining the context.
 
 Provider authoring remains separate: an app's `fabrika.config.ts` imports its
 selected provider package. Portable request code imports `@fabrika/app`; only the
