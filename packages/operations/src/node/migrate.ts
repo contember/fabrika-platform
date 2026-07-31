@@ -1,45 +1,42 @@
 import {
-	applyPostgresMigrations,
-	definePostgresMigrationPlan,
+	definePostgresServiceMigrations,
 	platformNodePostgresMigrationBundle,
 	PostgresDatabase,
 	type PostgresMigration,
-	postgresMigrationFilenames,
 	type PostgresMigrationPlan,
-	readPostgresMigrationBundle,
+	postgresMigrationResultMessage,
 } from '@fabrika/platform-node'
 import { join } from 'node:path'
 
 const MIGRATION_LOCK_KEY = 6384217905
 const MIGRATIONS_DIR = join(import.meta.dir, '..', '..', 'migrations-postgres')
+const serviceMigrations = definePostgresServiceMigrations({
+	name: 'operations',
+	directory: MIGRATIONS_DIR,
+	ledgerTable: 'operations_schema_migrations',
+	lockKey: MIGRATION_LOCK_KEY,
+	dependencies: [platformNodePostgresMigrationBundle(['0001_jobs.sql'])],
+	legacy: {
+		table: 'schema_migrations',
+		sentinelTables: ['sources', 'issues'],
+	},
+})
 
 export type Migration = PostgresMigration
 
 export function postgresMigrations(dir: string = MIGRATIONS_DIR): PostgresMigration[] {
-	return [...serviceBundle(dir).migrations]
+	return serviceMigrations.read(dir)
 }
 
 export function postgresMigrationPlan(migrations: readonly PostgresMigration[] = postgresMigrations()): PostgresMigrationPlan {
-	return definePostgresMigrationPlan({
-		ledgerTable: 'operations_schema_migrations',
-		lockKey: MIGRATION_LOCK_KEY,
-		bundles: [
-			platformNodePostgresMigrationBundle(['0001_jobs.sql']),
-			{ name: 'operations', migrations, adoptLegacy: true },
-		],
-		legacy: {
-			table: 'schema_migrations',
-			// Both tables are created in Operations' atomic 0001 migration.
-			sentinelTables: ['sources', 'issues'],
-		},
-	})
+	return serviceMigrations.plan(migrations)
 }
 
 export async function applyMigrations(
 	db: PostgresDatabase,
 	migrations: readonly PostgresMigration[] = postgresMigrations(),
 ): Promise<string[]> {
-	return postgresMigrationFilenames(await applyQualifiedMigrations(db, migrations), 'operations')
+	return serviceMigrations.apply(db, migrations)
 }
 
 /** Apply the complete composed plan for process-side reporting, including platform-owned bundles. */
@@ -47,19 +44,11 @@ export function applyQualifiedMigrations(
 	db: PostgresDatabase,
 	migrations: readonly PostgresMigration[] = postgresMigrations(),
 ): Promise<string[]> {
-	return applyPostgresMigrations(db, postgresMigrationPlan(migrations))
+	return serviceMigrations.applyQualified(db, migrations)
 }
 
 export function migrationResultMessage(applied: readonly string[]): string {
-	return applied.length === 0 ? 'migrations: already up to date' : `migrations applied: ${applied.join(', ')}`
-}
-
-function serviceBundle(directory: string) {
-	return readPostgresMigrationBundle({
-		name: 'operations',
-		directory,
-		adoptLegacy: true,
-	})
+	return postgresMigrationResultMessage(applied)
 }
 
 async function main(): Promise<void> {

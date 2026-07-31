@@ -11,12 +11,31 @@ import {
 	type PostgresMigrationPlan,
 	readPostgresMigrationBundle,
 } from '../postgres-migrations.js'
+import { definePostgresServiceMigrations } from '../service-postgres-migrations.js'
 import { PostgresDatabase } from '../sql-postgres.js'
 import { hasPostgres, postgresUrl, skipReason } from './helpers/postgres.js'
 
 const migration = (name: string, sql = 'SELECT 1'): PostgresMigration => ({ name, sql })
 
 describe('Postgres migration plans', () => {
+	test('the service wrapper preserves dependency order and ownership inputs', () => {
+		const service = definePostgresServiceMigrations({
+			name: 'operations',
+			directory: '/unused',
+			ledgerTable: 'operations_schema_migrations',
+			lockKey: 6384217905,
+			dependencies: [{ name: 'platform-node', migrations: [migration('0001_jobs.sql')] }],
+			legacy: { table: 'schema_migrations', sentinelTables: ['sources', 'issues'] },
+		})
+
+		const plan = service.plan([migration('0001_init.sql')])
+
+		expect(plan.ledgerTable).toBe('operations_schema_migrations')
+		expect(plan.lockKey).toBe(6384217905)
+		expect(plan.bundles.map((bundle) => bundle.name)).toEqual(['platform-node', 'operations'])
+		expect(plan.bundles[1]?.adoptLegacy).toBe(true)
+	})
+
 	test('qualifies identities and reads an explicit bundle in filename order', () => {
 		const directory = mkdtempSync(join(tmpdir(), 'fabrika-migrations-'))
 		try {

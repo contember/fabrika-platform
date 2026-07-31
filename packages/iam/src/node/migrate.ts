@@ -1,53 +1,44 @@
 import {
-	applyPostgresMigrations,
-	definePostgresMigrationPlan,
+	definePostgresServiceMigrations,
 	PostgresDatabase,
 	type PostgresMigration,
-	postgresMigrationFilenames,
 	type PostgresMigrationPlan,
-	readPostgresMigrationBundle,
+	postgresMigrationResultMessage,
 } from '@fabrika/platform-node'
 import { join } from 'node:path'
 
 const MIGRATION_LOCK_KEY = 7214839201
 const MIGRATIONS_DIR = join(import.meta.dir, '..', '..', 'migrations-postgres')
+const serviceMigrations = definePostgresServiceMigrations({
+	name: 'iam',
+	directory: MIGRATIONS_DIR,
+	ledgerTable: 'iam_schema_migrations',
+	lockKey: MIGRATION_LOCK_KEY,
+	legacy: {
+		table: 'schema_migrations',
+		sentinelTables: ['principals', 'auth_log'],
+		effects: [{
+			migration: '0002_provisioning_principal.sql',
+			probeSql: `SELECT EXISTS (
+				SELECT 1 FROM principals WHERE id = 'provisioning-admin'
+			) AS proven`,
+		}],
+	},
+})
 
 export function postgresMigrations(dir: string = MIGRATIONS_DIR): PostgresMigration[] {
-	return [...serviceBundle(dir).migrations]
+	return serviceMigrations.read(dir)
 }
 
 export function postgresMigrationPlan(migrations: readonly PostgresMigration[] = postgresMigrations()): PostgresMigrationPlan {
-	return definePostgresMigrationPlan({
-		ledgerTable: 'iam_schema_migrations',
-		lockKey: MIGRATION_LOCK_KEY,
-		bundles: [{ name: 'iam', migrations, adoptLegacy: true }],
-		legacy: {
-			table: 'schema_migrations',
-			// Both tables are created in IAM's atomic 0001 migration.
-			sentinelTables: ['principals', 'auth_log'],
-			effects: [{
-				migration: '0002_provisioning_principal.sql',
-				probeSql: `SELECT EXISTS (
-					SELECT 1 FROM principals WHERE id = 'provisioning-admin'
-				) AS proven`,
-			}],
-		},
-	})
+	return serviceMigrations.plan(migrations)
 }
 
 export async function applyMigrations(
 	db: PostgresDatabase,
 	migrations: readonly PostgresMigration[] = postgresMigrations(),
 ): Promise<string[]> {
-	return postgresMigrationFilenames(await applyPostgresMigrations(db, postgresMigrationPlan(migrations)), 'iam')
-}
-
-function serviceBundle(directory: string) {
-	return readPostgresMigrationBundle({
-		name: 'iam',
-		directory,
-		adoptLegacy: true,
-	})
+	return serviceMigrations.apply(db, migrations)
 }
 
 async function main(): Promise<void> {
@@ -56,7 +47,7 @@ async function main(): Promise<void> {
 	const db = PostgresDatabase.connect(url, { max: 1 })
 	try {
 		const applied = await applyMigrations(db)
-		console.info(applied.length === 0 ? 'migrations: already up to date' : `migrations applied: ${applied.join(', ')}`)
+		console.info(postgresMigrationResultMessage(applied))
 	} finally {
 		await db.close()
 	}
