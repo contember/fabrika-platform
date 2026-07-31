@@ -22,5 +22,4 @@ Acceptance requires typed configuration and operator UI, migration coverage for 
 
 `packages/operations-contract`, `packages/operations`, `packages/operations-ui`, Cloudflare and Bun composition configuration, Operations migrations.
 
-<!-- Origin: ../sprints/sprint-2026-07-31-operations-functional-parity.md -->
-
+<!-- Origin: ../archive/sprint-2026-07-31-operations-functional-parity.md -->

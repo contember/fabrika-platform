@@ -20,4 +20,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 - [Auth boundary cleanup (2026-07-31)](sprint-2026-07-31-auth-boundary-cleanup.md) — make the proxy the only gate enforcement point, shrink the app SDK, and carry deploy cancellation through schema reconciliation.
-- [Operations functional parity (2026-07-31)](sprint-2026-07-31-operations-functional-parity.md) — close Poplach parity gaps in error alerts, issue exploration, triage, and delivery evidence.

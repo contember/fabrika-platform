@@ -50,6 +50,9 @@ issue write for an open/new group.
 
 Notification delivery is an outbox with leased claims and six attempts.
 External senders receive the stable outbox dedup key as their idempotency key.
+New-issue and regression producers run after durable ingest persistence. The
+scheduled maintenance pass evaluates the preceding one-minute occurrence window
+for spikes and claims each source/fingerprint for fifteen minutes before enqueue.
 Logs may contain the notification id and attempt number, never the target,
 payload, or caught error detail. Cloudflare owns scheduled invocation; the Bun
 consumer owns its abortable loop and can restart after `stop()`.

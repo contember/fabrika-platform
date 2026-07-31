@@ -1,3 +1,5 @@
+> **OUTCOME — shipped 2026-07-31.** Operations now produces every supported error alert, detects spikes at the promised one-minute cadence, exposes complete issue read models and delivery history, and restores Poplach's Errors exploration and triage workflows in the unified console. Commit map: WU1 → `9eefc51`, `6fbef23`; WU2 → `927340e`; WU3 → `83581a9`; WU4 → sprint-closing commit. Verification: focused Operations/UI/Zerops suites 151 pass, 5 external-backend skips; full repository suite 1402 pass, 134 external-backend skips; full typecheck and lint pass; format check passes after closure formatting. Backlog filed: 46 for portable email delivery. Deferred: credentialed Poplach cutover (34), Zerops artifact correlation (36), DNS-safe egress (38), and live Postgres/S3 witnesses.
+
 # Sprint — Operations functional parity (2026-07-31)
 
 **Goal.** Close the functional gaps between the absorbed Poplach Errors slice and the Operations plane for error ingest, grouping, alerting, issue exploration, and triage.
@@ -73,4 +75,7 @@
 ## Run log
 
 - 2026-07-31 — Sprint opened from a source-level parity audit against pinned Poplach commit `8e0c79d662c187fe41eacd0fee9fe77fde668f1f`.
-
+- 2026-07-31 — The five-minute Cloudflare and Zerops maintenance cadence could not observe every one-minute spike window; both composition roots now schedule one pass per minute.
+- 2026-07-31 — Occurrence history changed from a proposed fixed cap to bounded keyset pagination so every stored event remains reachable.
+- 2026-07-31 — Portable email delivery remains separate → [`backlog 46`](../backlog/46-add-portable-email-alert-delivery.md).
+- 2026-07-31 — No ADR graduated: the implementation preserves ADR-0016, the existing outbox, and the repository portability seam.
