@@ -1,3 +1,4 @@
+import { createRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
 import type {
 	OperationsAlertKind,
 	OperationsAlertRuleRequestDto,
@@ -19,83 +20,16 @@ import type {
 	OperationsSourceListResponseDto,
 	OperationsSpikeAlertRequestDto,
 } from '@fabrika/operations-contract/operator-api'
+import type { OperationsIssueQuery, OperationsReleaseQuery, OperationsRpcContract } from '@fabrika/operations-contract/rpc'
 
-export class OperationsApiError extends Error {
-	readonly status: number
-	readonly loginUrl?: string
+export { RpcError }
+export type { OperationsIssueQuery, OperationsReleaseQuery }
 
-	constructor(status: number, message: string, loginUrl?: string) {
-		super(message)
-		this.name = 'OperationsApiError'
-		this.status = status
-		if (loginUrl !== undefined) this.loginUrl = loginUrl
-	}
-}
-
-const BASE = '/operations/api'
+const RPC_BASE = '/operations/api/rpc'
 const LOGIN_BOUNCE_KEY = 'fabrika.operations.auth.login-bounce'
 const LOGIN_BOUNCE_WINDOW_MS = 10_000
 
-export function operationsApiUrl(path: string): string {
-	if (!path.startsWith('/') || path.startsWith('//')) {
-		throw new Error('Operations API paths must be same-origin absolute paths')
-	}
-	return `${BASE}${path}`
-}
-
-function redirectToLogin(loginUrl: string): boolean {
-	if (typeof window === 'undefined' || typeof sessionStorage === 'undefined') return false
-	const now = Date.now()
-	const last = Number(sessionStorage.getItem(LOGIN_BOUNCE_KEY) ?? '0')
-	if (Number.isFinite(last) && now - last < LOGIN_BOUNCE_WINDOW_MS) return false
-	sessionStorage.setItem(LOGIN_BOUNCE_KEY, String(now))
-	const target = new URL(loginUrl)
-	target.searchParams.set('redirect', window.location.href)
-	window.location.assign(target.toString())
-	return true
-}
-
-async function readError(response: Response): Promise<OperationsApiError> {
-	let message = `Request failed (${response.status})`
-	let loginUrl: string | undefined
-	try {
-		const contentType = response.headers.get('content-type') ?? ''
-		if (contentType.includes('application/json')) {
-			const body: unknown = await response.json()
-			if (body !== null && typeof body === 'object' && 'message' in body && typeof body.message === 'string') {
-				message = body.message
-			} else if (body !== null && typeof body === 'object' && 'error' in body && typeof body.error === 'string') {
-				message = body.error
-			}
-			if (body !== null && typeof body === 'object' && 'loginUrl' in body && typeof body.loginUrl === 'string') {
-				loginUrl = body.loginUrl
-			}
-		} else {
-			const text = await response.text()
-			if (text.trim().length > 0 && text.length < 500) message = text
-		}
-	} catch {
-		// Keep the status-based message when an error body is unreadable.
-	}
-	return new OperationsApiError(response.status, message, loginUrl)
-}
-
-export interface OperationsIssueQuery {
-	sourceId?: string
-	status?: 'open' | 'resolved' | 'ignored'
-	query?: string
-	cursor?: string
-	limit?: number
-}
-
-export interface OperationsReleaseQuery {
-	sourceId?: string
-	cursor?: string
-	limit?: number
-}
-
 export interface OperationsClient {
-	request<T>(method: string, path: string, body?: unknown): Promise<T>
 	sources(): Promise<OperationsSourceListResponseDto>
 	source(sourceId: string): Promise<OperationsSourceDetailResponseDto>
 	issues(query?: OperationsIssueQuery): Promise<OperationsIssueListResponseDto>
@@ -112,103 +46,49 @@ export interface OperationsClient {
 	updateHealthCheck(sourceId: string, checkId: string, input: OperationsHealthCheckUpsertRequestDto): Promise<{ id: string }>
 	deleteHealthCheck(sourceId: string, checkId: string): Promise<null>
 	alerts(sourceId: string): Promise<OperationsAlertSettingsResponseDto>
-	updateSpikeAlert(sourceId: string, input: OperationsSpikeAlertRequestDto): Promise<unknown>
-	updateAlertRule(sourceId: string, kind: OperationsAlertKind, input: OperationsAlertRuleRequestDto): Promise<unknown>
+	updateSpikeAlert(sourceId: string, input: OperationsSpikeAlertRequestDto): Promise<{ threshold: number; enabled: boolean }>
+	updateAlertRule(
+		sourceId: string,
+		kind: OperationsAlertKind,
+		input: OperationsAlertRuleRequestDto,
+	): Promise<{ kind: OperationsAlertKind; enabled: boolean }>
 	createAlertChannel(sourceId: string, input: OperationsNotificationChannelRequestDto): Promise<{ id: string }>
 	updateAlertChannel(sourceId: string, channelId: string, input: OperationsNotificationChannelRequestDto): Promise<{ id: string }>
 	deleteAlertChannel(sourceId: string, channelId: string): Promise<null>
 }
 
-export type OperationsFetch = (input: string, init: RequestInit) => Promise<Response>
+export type OperationsFetch = RpcFetch
 
-function resourcePath(kind: string, id: string): string {
-	return `/${kind}/${encodeURIComponent(id)}`
-}
-
-function queryPath(path: string, query: Record<string, string | number | undefined>): string {
-	const search = new URLSearchParams()
-	for (const [key, value] of Object.entries(query)) {
-		if (value !== undefined && value !== '') search.set(key, String(value))
-	}
-	const suffix = search.toString()
-	return suffix === '' ? path : `${path}?${suffix}`
-}
-
-export function createOperationsClient(fetcher: OperationsFetch = (input, init) => fetch(input, init)): OperationsClient {
-	async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-		const headers: Record<string, string> = { accept: 'application/json' }
-		if (body !== undefined) headers['content-type'] = 'application/json'
-
-		let response: Response
-		try {
-			response = await fetcher(operationsApiUrl(path), {
-				method,
-				headers,
-				credentials: 'include',
-				redirect: 'manual',
-				body: body === undefined ? undefined : JSON.stringify(body),
-			})
-		} catch (cause) {
-			const message = cause instanceof Error ? cause.message : 'Network request failed'
-			throw new OperationsApiError(0, message)
-		}
-
-		if (!response.ok) {
-			const error = await readError(response)
-			if (response.status === 401 && error.loginUrl !== undefined && redirectToLogin(error.loginUrl)) {
-				return await new Promise<never>(() => {})
-			}
-			throw error
-		}
-		if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(LOGIN_BOUNCE_KEY)
-		const text = await response.text()
-		return JSON.parse(text.trim() === '' ? 'null' : text)
-	}
+/** Typed Operations console client. All domain calls use the portable RPC contract. */
+export function createOperationsClient(fetcher: OperationsFetch = fetch): OperationsClient {
+	const rpc = createRpcClient<OperationsRpcContract>({
+		baseUrl: RPC_BASE,
+		fetch: fetcher,
+		bounceOnAuth: { sessionKey: LOGIN_BOUNCE_KEY, windowMs: LOGIN_BOUNCE_WINDOW_MS },
+	})
 
 	return {
-		request,
-		sources: () => request('GET', '/sources'),
-		source: (sourceId) => request('GET', resourcePath('sources', sourceId)),
-		issues: (query = {}) =>
-			request(
-				'GET',
-				queryPath('/issues', {
-					sourceId: query.sourceId,
-					status: query.status,
-					query: query.query,
-					cursor: query.cursor,
-					limit: query.limit,
-				}),
-			),
-		issue: (issueId) => request('GET', resourcePath('issues', issueId)),
-		latestEvent: (issueId) => request('GET', `${resourcePath('issues', issueId)}/events/latest`),
-		mutateIssue: (issueId, mutation) => request('PUT', resourcePath('issues', issueId), mutation),
-		bulkIssueStatus: (input) => request('PUT', '/issues/bulk', input),
-		assignees: (sourceId) => request('GET', `${resourcePath('sources', sourceId)}/assignees`),
-		releases: (query = {}) =>
-			request(
-				'GET',
-				queryPath('/releases', {
-					sourceId: query.sourceId,
-					cursor: query.cursor,
-					limit: query.limit,
-				}),
-			),
-		release: (releaseId) => request('GET', resourcePath('releases', releaseId)),
-		health: () => request('GET', '/health'),
-		sourceHealth: (sourceId) => request('GET', `${resourcePath('sources', sourceId)}/health`),
-		createHealthCheck: (sourceId, input) => request('POST', `${resourcePath('sources', sourceId)}/health-checks`, input),
-		updateHealthCheck: (sourceId, checkId, input) =>
-			request('PUT', `${resourcePath('sources', sourceId)}/health-checks/${encodeURIComponent(checkId)}`, input),
-		deleteHealthCheck: (sourceId, checkId) => request('DELETE', `${resourcePath('sources', sourceId)}/health-checks/${encodeURIComponent(checkId)}`),
-		alerts: (sourceId) => request('GET', `${resourcePath('sources', sourceId)}/alerts`),
-		updateSpikeAlert: (sourceId, input) => request('PUT', `${resourcePath('sources', sourceId)}/alerts/spike`, input),
-		updateAlertRule: (sourceId, kind, input) => request('PUT', `${resourcePath('sources', sourceId)}/alerts/rules/${encodeURIComponent(kind)}`, input),
-		createAlertChannel: (sourceId, input) => request('POST', `${resourcePath('sources', sourceId)}/alerts/channels`, input),
-		updateAlertChannel: (sourceId, channelId, input) =>
-			request('PUT', `${resourcePath('sources', sourceId)}/alerts/channels/${encodeURIComponent(channelId)}`, input),
-		deleteAlertChannel: (sourceId, channelId) =>
-			request('DELETE', `${resourcePath('sources', sourceId)}/alerts/channels/${encodeURIComponent(channelId)}`),
+		sources: () => rpc.sources(),
+		source: (sourceId) => rpc.source({ sourceId }),
+		issues: (query = {}) => rpc.issues(query),
+		issue: (issueId) => rpc.issue({ issueId }),
+		latestEvent: (issueId) => rpc.latestEvent({ issueId }),
+		mutateIssue: (issueId, mutation) => rpc.mutateIssue({ issueId, mutation }),
+		bulkIssueStatus: (input) => rpc.bulkIssueStatus(input),
+		assignees: (sourceId) => rpc.assignees({ sourceId }),
+		releases: (query = {}) => rpc.releases(query),
+		release: (releaseId) => rpc.release({ releaseId }),
+		health: () => rpc.health(),
+		sourceHealth: (sourceId) => rpc.sourceHealth({ sourceId }),
+		createHealthCheck: (sourceId, input) => rpc.createHealthCheck({ sourceId, input }),
+		updateHealthCheck: (sourceId, checkId, input) => rpc.updateHealthCheck({ sourceId, checkId, input }),
+		deleteHealthCheck: (sourceId, checkId) => rpc.deleteHealthCheck({ sourceId, checkId }),
+		alerts: (sourceId) => rpc.alerts({ sourceId }),
+		updateSpikeAlert: (sourceId, input) => rpc.updateSpikeAlert({ sourceId, input }),
+		updateAlertRule: (sourceId, kind, input) => rpc.updateAlertRule({ sourceId, kind, input }),
+		createAlertChannel: (sourceId, input) => rpc.createAlertChannel({ sourceId, input }),
+		updateAlertChannel: (sourceId, channelId, input) => rpc.updateAlertChannel({ sourceId, channelId, input }),
+		deleteAlertChannel: (sourceId, channelId) => rpc.deleteAlertChannel({ sourceId, channelId }),
 	}
 }
 

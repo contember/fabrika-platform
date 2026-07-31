@@ -92,4 +92,27 @@ describe('Operations console gateway', () => {
 		const unavailableBody: unknown = await unavailable.json()
 		expect(unavailableBody).toEqual({ error: 'operations unavailable' })
 	})
+
+	test('returns the structured authentication envelope expected by the RPC client', async () => {
+		const unauthorized = new RecordingGateway(Response.json({ error: 'unauthorized' }, { status: 401 }))
+		const response = await forwardOperationsApi(
+			new Request('https://console.test/operations/api/rpc', {
+				method: 'POST',
+				headers: { origin: 'https://console.test' },
+				body: JSON.stringify({ method: 'issues', input: {} }),
+			}),
+			{ gateway: unauthorized, publicIamUrl: 'https://iam.test' },
+		)
+
+		expect(response.status).toBe(401)
+		const responseBody: unknown = await response.json()
+		expect(responseBody).toEqual({
+			error: {
+				type: 'auth',
+				message: 'authentication required',
+				loginUrl: 'https://iam.test/auth/login?redirect=https%3A%2F%2Fconsole.test',
+			},
+		})
+		expect(unauthorized.requests[0]?.url).toBe('https://console.test/api/rpc')
+	})
 })

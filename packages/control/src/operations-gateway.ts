@@ -41,6 +41,12 @@ export async function forwardOperationsApi(request: Request, options: Operations
 
 	const login = new URL('/auth/login', options.publicIamUrl)
 	login.searchParams.set('redirect', url.origin)
+	if (suffix === '/rpc') {
+		return Response.json(
+			{ error: { type: 'auth', message: 'authentication required', loginUrl: login.toString() } },
+			{ status: 401, headers: { 'cache-control': 'no-store' } },
+		)
+	}
 	return Response.json(
 		{ error: 'authentication required', loginUrl: login.toString() },
 		{ status: 401, headers: { 'cache-control': 'no-store' } },

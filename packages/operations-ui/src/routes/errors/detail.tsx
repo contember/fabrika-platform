@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import { OperationsApiError, operationsClient } from '../../client'
+import { operationsClient, RpcError } from '../../client'
 import { ErrorDetailView } from '../../views/ErrorDetail'
 
 export default createPage()
@@ -8,7 +8,7 @@ export default createPage()
 		const detail = await operationsClient.issue(params.issueId)
 		const [event, assignees, releases] = await Promise.all([
 			operationsClient.latestEvent(params.issueId).catch((error) => {
-				if (error instanceof OperationsApiError && error.status === 404) return null
+				if (error instanceof RpcError && error.httpStatus === 404) return null
 				throw error
 			}),
 			operationsClient.assignees(detail.issue.source.id),
