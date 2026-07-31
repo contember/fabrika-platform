@@ -111,8 +111,8 @@ export class OperationsAlertProducer {
 }
 
 function issueTransition(message: IngestMessage, issue: IssueRow): { kind: IssueAlertKind; at: number } | null {
-	if (issue.first_seen === message.receivedAt) return { kind: 'new_issue', at: message.receivedAt }
 	if (issue.regressed_at === message.receivedAt) return { kind: 'regression', at: message.receivedAt }
+	if (issue.first_seen === message.receivedAt) return { kind: 'new_issue', at: message.receivedAt }
 	return null
 }
 

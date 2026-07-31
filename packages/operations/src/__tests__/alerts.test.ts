@@ -2,6 +2,7 @@ import type { IngestMessage } from '@fabrika/operations-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import { evaluateSpike, OperationsAlertProducer, SPIKE_DEDUP_WINDOW_SECONDS } from '../alerts.js'
+import { OperationsMaintenance } from '../maintenance.js'
 import { persistIngest } from '../pipeline.js'
 import { createHarness } from './helpers/sqlite.js'
 
@@ -68,9 +69,20 @@ describe('alert semantics', () => {
 			})
 		}
 		const producer = new OperationsAlertProducer(harness.repositories.alerts, harness.repositories.ingest, () => now)
+		const delivered: string[] = []
+		const maintenance = new OperationsMaintenance(
+			harness.repositories.alerts,
+			{
+				send: (input) => {
+					delivered.push(input.idempotencyKey)
+					return Promise.resolve()
+				},
+			},
+			{ alertProducer: producer },
+		)
 
-		expect(await producer.detectSpikes()).toEqual({ evaluated: 1, enqueued: 1, deduplicated: 0 })
-		expect(await producer.detectSpikes()).toEqual({ evaluated: 1, enqueued: 0, deduplicated: 1 })
+		expect((await maintenance.run()).spikes).toEqual({ evaluated: 1, enqueued: 1, deduplicated: 0 })
+		expect((await maintenance.run()).spikes).toEqual({ evaluated: 1, enqueued: 0, deduplicated: 1 })
 		expect(harness.sqlite.query<{ count: number }, []>('SELECT COUNT(*) AS count FROM notification_outbox').get()?.count).toBe(1)
 
 		now += SPIKE_DEDUP_WINDOW_SECONDS * 1_000
@@ -104,7 +116,8 @@ describe('alert semantics', () => {
 			receivedAt: now,
 			payload: {},
 		})
-		expect(await producer.detectSpikes()).toEqual({ evaluated: 1, enqueued: 1, deduplicated: 0 })
+		expect((await maintenance.run()).spikes).toEqual({ evaluated: 1, enqueued: 1, deduplicated: 0 })
 		expect(harness.sqlite.query<{ count: number }, []>('SELECT COUNT(*) AS count FROM notification_outbox').get()?.count).toBe(2)
+		expect(delivered).toHaveLength(2)
 	})
 })
