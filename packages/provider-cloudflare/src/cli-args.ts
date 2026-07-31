@@ -6,7 +6,6 @@ export interface ParsedCloudflareArgs {
 	readonly runnerConfig: string | undefined
 	readonly workerConfig: string | undefined
 	readonly managedVarNames: readonly string[]
-	readonly buildRunnerImage: boolean
 	readonly dryRun: boolean
 	readonly help: boolean
 }
@@ -19,7 +18,6 @@ export const parseCloudflareArgs = (argv: readonly string[]): ParsedCloudflareAr
 	let runnerConfig: string | undefined
 	let workerConfig: string | undefined
 	const managedVarNames: string[] = []
-	let buildRunnerImage = false
 	let dryRun = false
 	let help = false
 
@@ -28,8 +26,6 @@ export const parseCloudflareArgs = (argv: readonly string[]): ParsedCloudflareAr
 			help = true
 		} else if (arg === '--dry-run') {
 			dryRun = true
-		} else if (arg === '--build-runner-image') {
-			buildRunnerImage = true
 		} else if (arg.startsWith('--env=')) {
 			env = arg.slice('--env='.length)
 		} else if (arg.startsWith('--config=')) {
@@ -53,7 +49,7 @@ export const parseCloudflareArgs = (argv: readonly string[]): ParsedCloudflareAr
 		}
 	}
 
-	return { command, subcommand, env, config, runnerConfig, workerConfig, managedVarNames, buildRunnerImage, dryRun, help }
+	return { command, subcommand, env, config, runnerConfig, workerConfig, managedVarNames, dryRun, help }
 }
 
 export interface PlatformComponent {

@@ -8,14 +8,11 @@ const USAGE = `Cloudflare installation
 Commands:
   fabrika platform init --provider=cloudflare <account>
   fabrika platform plan --provider=cloudflare --runner-config=<path> --worker-config=<path> [--env=<env>]
-  fabrika platform deploy --provider=cloudflare --runner-config=<path> --worker-config=<path> [--env=<env>] [--build-runner-image]
+  fabrika platform deploy --provider=cloudflare --runner-config=<path> --worker-config=<path> [--env=<env>]
 `
 
 const deployPlatform = async (argv: readonly string[], forceDryRun: boolean): Promise<void> => {
 	const args = parseCloudflareArgs(['platform', 'deploy', ...argv, ...(forceDryRun ? ['--dry-run'] : [])])
-	if (args.buildRunnerImage) {
-		process.env['RUNNER_BUILD'] = '1'
-	}
 	const env = args.env ?? 'prod'
 	const rootCwd = process.cwd()
 	for (const component of platformComponents(args.runnerConfig, args.workerConfig)) {

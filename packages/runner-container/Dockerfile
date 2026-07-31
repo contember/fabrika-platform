@@ -1,4 +1,4 @@
-# fabrika CI runner image.
+# Account-owned fabrika deploy runner image.
 #
 # Bakes in the Cloudflare provider CLI and the runner server alongside git, node, bun and wrangler,
 # so a spawned container can clone a target app, install it and run `fabrika-cloudflare-executor deploy`.
@@ -42,6 +42,7 @@ WORKDIR /opt/fabrika
 # A self-contained workspace containing every local package the runner and deploy CLI resolve.
 # oblaka-iac comes from npm; wrangler is installed globally above.
 COPY packages/runner-container/docker/package.json ./package.json
+COPY packages/app ./packages/app
 COPY packages/auth-core ./packages/auth-core
 COPY packages/auth ./packages/auth
 COPY packages/provider-contract ./packages/provider-contract

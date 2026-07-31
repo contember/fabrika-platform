@@ -4,6 +4,7 @@
  * checked into this package, and push. Idempotent:
  *   - repo absent  → create a fresh local checkout, commit the scaffold, `gh repo create … --source --push`,
  *   - repo present → clone it (if not already local), refresh the CLI-owned files, commit + push on drift.
+ * Scaffold commits skip push CI; init explicitly dispatches only after the GitHub Environment is ready.
  *
  * `fabrika.ref` is written ONLY when absent (operator-owned after creation — bumping it is how you roll a new
  * base); `platform.yml` / `README.md` / `.gitignore` are CLI-owned and refreshed every run.
@@ -24,6 +25,9 @@ const OWNED_FILES = ['.gitignore', 'README.md', '.github/workflows/platform.yml'
  */
 const ALL_FILES = ['.gitignore', 'README.md', 'fabrika.ref', '.github/workflows/platform.yml']
 const LEGACY_REF_FILES = ['vozka.ref', 'propustka.ref']
+
+export const INITIAL_SCAFFOLD_COMMIT_MESSAGE = 'chore: initial fabrika platform scaffold [skip ci]'
+export const REFRESH_SCAFFOLD_COMMIT_MESSAGE = 'chore: refresh fabrika platform scaffold [skip ci]'
 
 export interface ScaffoldInput {
 	/** The base repo, e.g. `manGoweb/fabrika-platform`. */
@@ -112,7 +116,7 @@ async function updateExisting(input: ScaffoldInput): Promise<ScaffoldResult> {
 		ok('Platform repo already up to date (no scaffold drift).')
 		return { dir, created: false }
 	}
-	await run({ command: 'git', args: ['commit', '-m', 'chore: refresh fabrika platform scaffold'], cwd: dir })
+	await run({ command: 'git', args: ['commit', '-m', REFRESH_SCAFFOLD_COMMIT_MESSAGE], cwd: dir })
 	await run({ command: 'git', args: ['push'], cwd: dir })
 	ok('Platform repo scaffold updated + pushed.')
 	return { dir, created: false }
@@ -128,7 +132,7 @@ async function createFresh(input: ScaffoldInput): Promise<ScaffoldResult> {
 	await run({ command: 'git', args: ['init', '-b', 'main', dir], cwd: process.cwd() })
 	await materializePlatformScaffold(dir, account)
 	await run({ command: 'git', args: ['add', ...ALL_FILES], cwd: dir })
-	await run({ command: 'git', args: ['commit', '-m', 'chore: initial fabrika platform scaffold'], cwd: dir })
+	await run({ command: 'git', args: ['commit', '-m', INITIAL_SCAFFOLD_COMMIT_MESSAGE], cwd: dir })
 	detail(`Creating ${repo} (private) and pushing`)
 	await run({
 		command: 'gh',

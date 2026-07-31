@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { materializePlatformScaffold } from '../scaffold'
+import { INITIAL_SCAFFOLD_COMMIT_MESSAGE, materializePlatformScaffold, REFRESH_SCAFFOLD_COMMIT_MESSAGE } from '../scaffold'
 
 const GENERATED_FILES = ['.gitignore', 'README.md', 'fabrika.ref', '.github/workflows/platform.yml']
 const FORBIDDEN_GENERATED_REFERENCES = [
@@ -33,6 +33,11 @@ async function snapshot(dir: string): Promise<Record<string, string>> {
 }
 
 describe('platform scaffold', () => {
+	test('scaffold pushes cannot deploy before init configures the Environment', () => {
+		expect(INITIAL_SCAFFOLD_COMMIT_MESSAGE).toEndWith('[skip ci]')
+		expect(REFRESH_SCAFFOLD_COMMIT_MESSAGE).toEndWith('[skip ci]')
+	})
+
 	test('fresh creation renders one repository checkout and one source pin offline', async () => {
 		await withTempDir(async (dir) => {
 			await materializePlatformScaffold(dir, 'mangoweb')
@@ -50,6 +55,11 @@ describe('platform scaffold', () => {
 			expect(files['.github/workflows/platform.yml']).toContain('--runner-config=packages/runner-cloudflare/fabrika-runner.config.ts')
 			expect(files['.github/workflows/platform.yml']).toContain('--worker-config=packages/control/fabrika.config.ts')
 			const workflow = files['.github/workflows/platform.yml'] ?? ''
+			expect(workflow).not.toContain('build_runner_image')
+			expect(workflow).not.toContain('--build-runner-image')
+			expect(workflow).toContain('id: platform')
+			expect(workflow).toContain("steps.platform.outcome || 'not run'")
+			expect(files['README.md']).toContain('Both paths rebuild the account-owned runner image')
 			expect(workflow.indexOf('name: Deploy IAM')).toBeLessThan(workflow.indexOf('name: Deploy Operations'))
 			expect(workflow.indexOf('name: Deploy Operations')).toBeLessThan(workflow.indexOf('name: Deploy fabrika runner + control plane'))
 			const iamStep = workflow.slice(workflow.indexOf('name: Deploy IAM'), workflow.indexOf('name: Deploy Operations'))

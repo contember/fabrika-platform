@@ -45,20 +45,20 @@ describe('defineApp(vozka-runner config)', () => {
 		}
 	})
 
-	test('local builds the container image from the Dockerfile; off-local references the pinned registry image', () => {
+	test('all environments build the account-owned image from this checkout', () => {
 		const local = buildRunnerWorker({ env: 'local' })
 		const localContainer = binding(local, 'RUNNER')
 		if (localContainer instanceof Container) {
 			expect(localContainer.options.image).toBe('../runner-container/Dockerfile')
 			expect(localContainer.options.imageBuildContext).toBe('../..')
+			expect(localContainer.options.rolloutActiveGracePeriod).toBe(1_200)
 		}
 		const stage = buildRunnerWorker({ env: 'stage' })
 		const stageContainer = binding(stage, 'RUNNER')
 		if (stageContainer instanceof Container) {
-			// Pinned registry ref (image.json has a non-empty tag) — no Dockerfile build, no build context.
-			expect(stageContainer.options.image).toContain('registry.cloudflare.com/')
-			expect(stageContainer.options.image).toContain('prod-vozka-runner:')
-			expect(stageContainer.options.imageBuildContext).toBeUndefined()
+			expect(stageContainer.options.image).toBe('../runner-container/Dockerfile')
+			expect(stageContainer.options.imageBuildContext).toBe('../..')
+			expect(stageContainer.options.rolloutActiveGracePeriod).toBe(1_200)
 		}
 	})
 

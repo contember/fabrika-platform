@@ -1,5 +1,0 @@
-{
-	"image": "prod-vozka-runner",
-	"tag": "c58d47ee",
-	"note": "Pinned runner image tag — the deploy toolchain image fabrika's RunnerContainer runs. Bumped by .github/workflows/runner-image.yml whenever one of the runner-container image inputs changes. CI builds and pushes registry.cloudflare.com/<CLOUDFLARE_ACCOUNT_ID>/<image>:<git-sha>, then commits the new tag here. fabrika-runner.config.ts builds the full ref from CLOUDFLARE_ACCOUNT_ID and this tag; RUNNER_BUILD=1 (or env=local) builds from the Dockerfile instead."
-}

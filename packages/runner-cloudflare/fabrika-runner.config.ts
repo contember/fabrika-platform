@@ -15,7 +15,6 @@
 // Local dev still uses oblaka directly via the `oblaka.ts` shim, which calls `buildRunnerWorker` below.
 
 import { Container, D1Database, defineApp, R2Bucket, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
-import runnerImageManifest from './image.json'
 
 /** Container instance type per stage — dev locally, larger off-local; any other env → basic. */
 const instanceTypeFor = (env: string): 'dev' | 'basic' | 'standard' => {
@@ -35,18 +34,7 @@ const instanceTypeFor = (env: string): 'dev' | 'basic' | 'standard' => {
  */
 export const buildRunnerWorker = (ctx: ResourceContext): Worker => {
 	const { env } = ctx
-	const isLocal = env === 'local'
 	const instanceType = instanceTypeFor(env)
-
-	// The runner image: off-local, reference a pre-built image PINNED in the repo (./image.json, bumped by
-	// runner-image CI when any copied workspace changes) — so a deploy needs NO docker AND
-	// the image ref travels WITH the code (like a lockfile; no drift vs a mutable registry var). Local dev
-	// builds from the Dockerfile; RUNNER_BUILD=1 forces a Dockerfile build (first bring-up, or a deliberate
-	// rebuild on a docker host). The CF registry namespace is the account id.
-	const runnerFromDockerfile = isLocal || process.env['RUNNER_BUILD'] === '1' || runnerImageManifest.tag === ''
-	const runnerImage = runnerFromDockerfile
-		? '../runner-container/Dockerfile'
-		: `registry.cloudflare.com/${process.env['CLOUDFLARE_ACCOUNT_ID'] ?? ''}/${runnerImageManifest.image}:${runnerImageManifest.tag}`
 
 	return new Worker({
 		dir: '.',
@@ -69,13 +57,13 @@ export const buildRunnerWorker = (ctx: ResourceContext): Worker => {
 			RUNNER: new Container({
 				name: 'vozka-deploy-runner',
 				className: 'RunnerContainer',
-				image: runnerImage,
-				// `image_build_context` only applies to a Dockerfile build — it lets the Dockerfile COPY all
-				// required local @fabrika packages from the repo ROOT. A pre-built
-				// registry image needs no build context, so it's omitted there. (Build context requires oblaka-iac >=0.0.18.)
-				...(runnerFromDockerfile ? { imageBuildContext: '../..' } : {}),
+				// Every account builds from its pinned fabrika checkout; no cross-account image tag exists.
+				image: '../runner-container/Dockerfile',
+				imageBuildContext: '../..',
 				maxInstances: env === 'prod' ? 10 : 3,
 				instanceType,
+				// Deploy containers need enough time to finish or persist terminal state before replacement.
+				rolloutActiveGracePeriod: 1_200,
 			}),
 			// Run logs + terminal status, keyed by run id — the control plane's bucket, ADOPTED by name.
 			RUN_LOGS: new R2Bucket({ name: 'vozka-run-logs' }),

@@ -11,7 +11,6 @@ describe('parseCloudflareArgs', () => {
 			runnerConfig: undefined,
 			workerConfig: undefined,
 			managedVarNames: ['FABRIKA_RELEASE'],
-			buildRunnerImage: false,
 			dryRun: true,
 			help: false,
 		})

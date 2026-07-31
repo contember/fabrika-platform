@@ -14,10 +14,6 @@ name: platform
 on:
   workflow_dispatch:
     inputs:
-      build_runner_image:
-        description: Build + push the runner image (FIRST bring-up on this account, or a deliberate rebuild)
-        type: boolean
-        default: false
       retire_legacy_propustka_worker:
         description: >-
           Name of a LEGACY propustka Worker to delete BEFORE Stage 1 (one-off migration off an old
@@ -135,6 +131,7 @@ jobs:
 
       # ── Stage 3 — fabrika platform (executor + control plane) ────────────────────────────────────────
       - name: Deploy fabrika runner + control plane
+        id: platform
         working-directory: fabrika-platform
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -154,12 +151,9 @@ jobs:
           OPERATIONS_ARTIFACT_ORIGIN: https://${{ vars.OPERATIONS_HOSTNAME }}
           FABRIKA_CONTROL_BOOTSTRAP_ADMINS: ${{ vars.FABRIKA_CONTROL_BOOTSTRAP_ADMINS }}
         run: |
-          BUILD_FLAG=""
-          if [ "${{ inputs.build_runner_image }}" = "true" ]; then BUILD_FLAG="--build-runner-image"; fi
           fabrika platform deploy --provider=cloudflare \
             --runner-config=packages/runner-cloudflare/fabrika-runner.config.ts \
-            --worker-config=packages/control/fabrika.config.ts \
-            $BUILD_FLAG
+            --worker-config=packages/control/fabrika.config.ts
 
       - name: Summary
         if: always()
@@ -167,7 +161,8 @@ jobs:
           {
             echo "### platform deploy → {{ACCOUNT}}"
             echo ""
-            echo "- fabrika ref: \`${{ steps.ref.outputs.fabrika }}\`"
-            echo "- build runner image: \`${{ inputs.build_runner_image || 'false' }}\`"
+            echo "- fabrika ref: \`${{ steps.ref.outputs.fabrika || '(unresolved)' }}\`"
+            echo "- platform deploy: \`${{ steps.platform.outcome || 'not run' }}\`"
+            echo "- runner image source: account-local build from the pinned fabrika checkout"
             echo "- retired legacy propustka: \`${{ inputs.retire_legacy_propustka_worker || '(none)' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

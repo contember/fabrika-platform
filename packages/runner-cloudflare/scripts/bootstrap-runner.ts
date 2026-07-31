@@ -2,7 +2,7 @@
  * Deploy the Cloudflare runner executor out of band.
  *
  * Required environment: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN.
- * Optional: FABRIKA_CONTROL_ENV (defaults to prod; VOZKA_ENV is deprecated), RUNNER_BUILD=1.
+ * Optional: FABRIKA_CONTROL_ENV (defaults to prod; VOZKA_ENV is deprecated).
  */
 
 import { environmentAliases } from '@fabrika/platform'
@@ -19,9 +19,7 @@ const main = async (): Promise<void> => {
 	const env = readRunnerEnvironment(process.env)
 	const cwd = resolve(import.meta.dir, '..')
 	console.log(`Deploying vozka-runner → ${env}${dryRun ? ' (dry-run)' : ''} (idempotent — safe to re-run).`)
-	if (process.env['RUNNER_BUILD'] === '1') {
-		console.log('  RUNNER_BUILD=1 — building the container image from the Dockerfile.')
-	}
+	console.log('  Building the account-owned container image from this checkout.')
 
 	process.chdir(cwd)
 	const result = await deployCloudflareConfig({

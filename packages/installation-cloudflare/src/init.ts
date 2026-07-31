@@ -384,20 +384,20 @@ async function ensureGitHubApp(collected: Collected): Promise<CreatedGitHubApp> 
 	return app
 }
 
-/** Trigger the platform workflow (first bring-up builds the runner image into this account's registry). */
+/** Trigger the platform workflow (each deploy builds the runner image into this account's registry). */
 async function triggerDeploy(repo: string): Promise<void> {
 	step('Trigger the platform deploy (GitHub Actions)')
-	info('GitHub Actions runs the real deploy — fabrika runner then control plane. The first run builds the runner')
+	info('GitHub Actions runs the real deploy — fabrika runner then control plane. Each run builds the runner')
 	info('container image into this account (CI has docker); this laptop deploys nothing.')
-	const go = await confirm(`Run the platform workflow on ${repo} now (build_runner_image=true)?`, true)
+	const go = await confirm(`Run the platform workflow on ${repo} now?`, true)
 	if (!go) {
 		action('OPERATOR ACTION — run it when ready', [
-			`gh workflow run platform.yml --repo ${repo} -f build_runner_image=true`,
+			`gh workflow run platform.yml --repo ${repo}`,
 			`or: ${url(`https://github.com/${repo}/actions`)} → platform → Run workflow`,
 		])
 		return
 	}
-	await triggerPlatformWorkflow(repo, true)
+	await triggerPlatformWorkflow(repo)
 	ok('Platform workflow triggered.')
 	detail(`Watch: ${url(`https://github.com/${repo}/actions`)}   (or: gh run watch --repo ${repo})`)
 }

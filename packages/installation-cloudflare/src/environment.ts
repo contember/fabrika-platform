@@ -44,10 +44,6 @@ export async function configureEnvironment(config: EnvironmentConfig): Promise<v
 }
 
 /** Trigger the platform workflow (the real deploy runs in GitHub Actions). */
-export async function triggerPlatformWorkflow(repo: string, buildRunnerImage: boolean): Promise<void> {
-	const args = ['workflow', 'run', 'platform.yml', '--repo', repo]
-	if (buildRunnerImage) {
-		args.push('-f', 'build_runner_image=true')
-	}
-	await run({ command: 'gh', args, cwd: ANCHOR })
+export async function triggerPlatformWorkflow(repo: string): Promise<void> {
+	await run({ command: 'gh', args: ['workflow', 'run', 'platform.yml', '--repo', repo], cwd: ANCHOR })
 }

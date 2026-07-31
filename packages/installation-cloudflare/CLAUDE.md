@@ -44,6 +44,10 @@ engine lives in `@fabrika/engine`.
 - **`@fabrika/engine` owns plan execution.** `platform init` triggers the scaffolded GitHub Actions
   pipeline; it does not deploy from the laptop. `platform plan` and `platform deploy` execute the
   provider-owned runner and control configs and remain distinct from app deployment.
+- **Runner images are account-owned.** Every scaffolded workflow run builds the image from the exact
+  `fabrika.ref` checkout into the target account. Upstream CI never publishes a shared runner image.
+- **Scaffold pushes never deploy.** Both initial and refresh commits use `[skip ci]`; init dispatches the
+  workflow explicitly only after it writes the target GitHub Environment.
 - **This package relaxes exactly `noUncheckedIndexedAccess` and
   `noPropertyAccessFromIndexSignature`** because it imports `oblaka-iac` through
   the Cloudflare provider. Never widen that relaxation or use casts to work

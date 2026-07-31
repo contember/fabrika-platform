@@ -21,6 +21,9 @@ bun run bootstrap
 - Never log credentials or secret values.
 - Keep the guarded `finishRun` update identical to the control plane's terminal-status write.
 - The Worker must stay separate from the control plane so self-deploys cannot reset active runs.
+- Each account deployment builds the container from its pinned fabrika checkout. Never restore a
+  repository-wide registry tag or an upstream image publisher.
+- Keep a 20-minute active rollout grace so runner replacement does not interrupt normal deploys.
 - `RUN_LOGS` and `DB` adopt the control plane's existing R2 and D1 resources.
 - `src/index.ts` exports the `VozkaRunner` class as a type only.
 - Deploy this Worker out of band. It cannot safely deploy itself through itself.
