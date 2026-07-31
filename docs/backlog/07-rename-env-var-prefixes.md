@@ -1,14 +1,14 @@
 ---
 id: 07
-title: Sweep VOZKA_* env vars to FABRIKA_*; decide whether PROPUSTKA_* follows
+title: Implement canonical fabrika environment names with legacy fallback
 blocked-by: []
 ---
 
-# 07 — Sweep `VOZKA_*` env vars to `FABRIKA_*`; decide whether `PROPUSTKA_*` follows
+# 07 — Implement canonical fabrika environment names with legacy fallback
 
-**Summary.** The package rename in
-[ADR-0001](../decisions/0001-merge-propustka-and-vozka.md) left the environment
-variable prefixes untouched. Finish the rename — and settle the open half.
+**Summary.** Implement the canonical names and compatibility policy from
+[ADR-0018](../decisions/0018-canonical-fabrika-environment-names.md) across
+runtime, authoring, installation, generated configuration, examples, and tests.
 
 ## Problem
 
@@ -17,24 +17,33 @@ from it: an env-var rename is an operational break for every existing deployment
 which is exactly what phase 0 promised not to be. The result is a repo where the
 packages say `@fabrika/*` and the runtime says `VOZKA_*`.
 
-**Open:** whether `PROPUSTKA_*` follows. Unlike `VOZKA_*`, these prefixes may appear
-in downstream app configuration, not just in fabrika's own deployments — so the
-blast radius is different and the answer is not automatically "yes". Not decided;
-do not assume.
+ADR-0018 settles both families and the two ownership exceptions:
+
+- `VOZKA_*` → `FABRIKA_CONTROL_*`;
+- `PROPUSTKA_*` → `FABRIKA_IAM_*`;
+- `PROPUSTKA_APP_ID` → `FABRIKA_APP_ID`;
+- `VOZKA_WORKSPACE` → `FABRIKA_RUNNER_WORKSPACE`.
+
+The legacy inputs remain supported through canonical-first dual reads. Durable
+app IDs, deployed resource names, storage identities, and migration identities
+listed in ADR-0018 are explicitly outside this sweep.
 
 ## Approach / acceptance
 
-Sweep `VOZKA_*` → `FABRIKA_*` with a deprecation window (read the old name, warn,
-prefer the new) rather than a hard cutover, unless someone decides otherwise.
+Add a shared compatibility reader where the runtime boundary permits it; keep
+package-specific environment types explicit. For every migrated name, test
+canonical-only, legacy-only, both, and neither. Canonical values win. Legacy
+reads warn once without logging a value. Writers and generated configuration
+emit canonical names only.
 
-Decide `PROPUSTKA_*` explicitly, with the downstream consumers (poplach, revizor,
-opice) accounted for — and record the outcome, since "we chose to leave it" is
-itself a decision a future reader will question.
-
-Acceptance: no `VOZKA_` string remains in the repo outside the compatibility shim;
-the `PROPUSTKA_*` question has a written answer.
+Acceptance: every in-scope environment input follows ADR-0018; all generated and
+documented configuration uses canonical names; legacy strings remain only in
+compatibility code, compatibility tests, immutable history, and explicit
+deprecation documentation. Tests prove that the persistent identities listed in
+ADR-0018 do not change.
 
 ## Touch points
 
-`@fabrika/control`, `@fabrika/engine`, `@fabrika/cli`, `@fabrika/iam`, deployment
-configs, docs.
+`@fabrika/control`, `@fabrika/engine`, `@fabrika/cli`, `@fabrika/iam`,
+`@fabrika/auth`, runner packages, provider installation packages, deployment
+configs, examples, and reference docs.

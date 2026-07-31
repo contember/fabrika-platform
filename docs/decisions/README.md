@@ -42,6 +42,11 @@ levels. It preserves legacy installations without moving IAM or Control data
 into new schemas, and lets Operations compose the generic Postgres job-queue
 migration before its own schema.
 
+ADR-0018 defines plane-qualified canonical environment names and a
+canonical-first compatibility window for the `VOZKA_*` and `PROPUSTKA_*`
+families. It explicitly excludes deployed resource names and migration
+identities from the naming sweep.
+
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
@@ -63,3 +68,4 @@ migration before its own schema.
 - [0015](0015-repository-operations-are-the-sql-portability-seam.md) — Make repository operations the SQL portability seam — accepted (2026-07-30)
 - [0016](0016-independent-operations-plane.md) — Add an independent Operations plane — accepted (2026-07-30)
 - [0017](0017-service-owned-postgres-migrations.md) — Make Postgres migrations service-owned and bundle-qualified — accepted (2026-07-30)
+- [0018](0018-canonical-fabrika-environment-names.md) — Use plane-qualified fabrika environment names with legacy fallback — accepted (2026-07-31)

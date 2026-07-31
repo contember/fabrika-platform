@@ -39,7 +39,7 @@ release restoration remains explicit item 25.
 - [37](37-activate-zerops-managed-environment-transactionally.md) — Keep Zerops managed environment activation consistent with the app version that actually ships.
 - [38](38-add-dns-safe-operations-egress.md) — Prevent private-address and DNS-rebinding egress through Operations webhooks and active health checks.
 - [06](06-can-zerops-secrets-be-read-back.md) — Open: can secret _values_ be read back from the Zerops API?
-- [07](07-rename-env-var-prefixes.md) — Sweep `VOZKA_*` → `FABRIKA_*`; decide whether `PROPUSTKA_*` follows.
+- [07](07-rename-env-var-prefixes.md) — Implement ADR-0018 canonical environment names with canonical-first legacy fallback.
 - [09](09-confirm-multi-domain-per-service.md) — Open: does Zerops allow multiple custom domains on one service?
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.
