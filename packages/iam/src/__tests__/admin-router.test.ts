@@ -208,3 +208,18 @@ describe('handleAdmin — audit read path tolerates malformed JSON columns', () 
 		expect(prop(first, 'metadata')).toBeNull()
 	})
 })
+
+describe('handleAdmin — principal filters', () => {
+	test('an invalid status preserves the legacy empty-list response', async () => {
+		const h = createHarness()
+		const id = seedUser(h.sqlite, { sub: 'sub-filter-admin', email: 'filter-admin@example.com' })
+		seedGrant(h.sqlite, id, 'admin', null)
+		seedUser(h.sqlite, { sub: 'sub-filter-user', email: 'filter-user@example.com' })
+
+		const response = await run(h, adminRequest('/admin/principals?status=unknown', { session: await h.signSession(id) }))
+		const body: unknown = await response.json()
+
+		expect(response.status).toBe(200)
+		expect(prop(body, 'items')).toEqual([])
+	})
+})

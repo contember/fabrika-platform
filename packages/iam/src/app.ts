@@ -1,16 +1,22 @@
-import { defineApp, type RequestExecutionContext, route } from '@fabrika/app'
+import { type AuthContext, defineApp, type RequestExecutionContext, route } from '@fabrika/app'
+import type { ResolvedAdmin } from './admin/router'
 import { handleAdmin } from './admin/router'
+import { adminRpcAuth, adminRpcRouter } from './admin/rpc'
 import { handleAuth } from './auth/routes'
 import type { Env } from './env'
+import { requestId } from './request-id'
 import { createIamRpc } from './rpc'
 import { handleMintHttp, handleRpcHttp, isMintPath, isRpcPath } from './rpc-http'
 import { buildServices, type Services } from './services'
 
-interface IamAppContext {
+export interface IamAppContext {
 	readonly env: Env
 	readonly request: Request
 	readonly exec: RequestExecutionContext
 	readonly services: Services
+	readonly requestId: string
+	auth: AuthContext
+	admin: ResolvedAdmin | null
 }
 
 export interface IamAppOptions {
@@ -35,6 +41,9 @@ export function createIamApp(options: IamAppOptions = {}) {
 			request,
 			exec,
 			services: buildServices(env),
+			requestId: requestId(request),
+			auth: anonymousAuth(),
+			admin: null,
 		}),
 		routes: [
 			...(options.health === true
@@ -43,6 +52,7 @@ export function createIamApp(options: IamAppOptions = {}) {
 			route.all('/.well-known/jwks.json', (ctx) => handleAuth(ctx.request, ctx.services, ctx.env, ctx.exec)),
 			route.all('/auth', (ctx) => handleIamAuth(ctx, options)),
 			route.all('/auth/*path', (ctx) => handleIamAuth(ctx, options)),
+			route.rpc('/admin/rpc', adminRpcRouter, { use: [adminRpcAuth] }),
 			route.all('/admin', (ctx) => handleAdmin(ctx.request, ctx.services, ctx.env, ctx.exec)),
 			route.all('/admin/*path', (ctx) => handleAdmin(ctx.request, ctx.services, ctx.env, ctx.exec)),
 			route.all('/rpc', (ctx) => handleIamRpc(ctx, options)),
@@ -61,6 +71,16 @@ export function createIamApp(options: IamAppOptions = {}) {
 			})
 		},
 	})
+}
+
+function anonymousAuth(): AuthContext {
+	return {
+		ok: true,
+		principal: null,
+		can: () => false,
+		scopedTo: () => [],
+		audit: () => Promise.resolve(),
+	}
 }
 
 async function handleIamAuth(ctx: IamAppContext, options: IamAppOptions): Promise<Response> {

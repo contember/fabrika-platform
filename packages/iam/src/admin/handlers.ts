@@ -3,19 +3,32 @@ import { API_KEY_PREFIX, isActionAllowed } from '@fabrika/auth-core'
 import type {
 	ApiKeyDto,
 	AppDto,
+	AppInput,
 	AppSchemaDto,
 	AuditEventDto,
 	AuthLogDto,
+	CreateGrantRequest,
+	CreatePolicyInput,
 	GrantDto,
+	InviteRequest,
 	IssuedShareLinkResponse,
+	IssueShareLinkRequest,
+	ListAuditInput,
+	ListAuthLogInput,
+	ListPrincipalsInput,
+	ListRolesInput,
 	MeDto,
+	OkResponse,
 	PolicyDto,
 	PrincipalDetail,
 	PrincipalListItem,
+	ProvisionApiKeyRequest,
 	ProvisionApiKeyResponse,
 	RoleDto,
 	RotateApiKeyResponse,
 	ShareLinkListItem,
+	UpdatePolicyInput,
+	UpdatePrincipalInput,
 } from '@fabrika/iam-contract'
 import {
 	type AuditEventRow,
@@ -52,6 +65,31 @@ export interface AdminContext {
 	/** Correlation id supplied by the proxy/edge or generated at IAM. */
 	requestId: string
 	ctx: RequestContext
+}
+
+/** Structural domain failure shared by REST adapters and the RPC dispatcher. */
+export class AdminUseCaseError extends Error {
+	readonly httpStatus: number
+	readonly type: string
+
+	constructor(httpStatus: number, message: string) {
+		super(message)
+		this.name = 'AdminUseCaseError'
+		this.httpStatus = httpStatus
+		this.type = httpStatus === 400
+			? 'bad_request'
+			: httpStatus === 404
+			? 'not_found'
+			: httpStatus === 409
+			? 'conflict'
+			: httpStatus === 403
+			? 'forbidden'
+			: 'error'
+	}
+}
+
+function fail(status: number, message: string): never {
+	throw new AdminUseCaseError(status, message)
 }
 
 // ── DTO mappers ───────────────────────────────────────────────────────────────
@@ -224,13 +262,17 @@ function adminAudit(
 // ── Me ────────────────────────────────────────────────────────────────────────
 
 export function handleMe(c: AdminContext): Response {
+	return json(adminUseCases.me(c))
+}
+
+function me(c: AdminContext): MeDto {
 	const me: MeDto = {
 		id: c.admin.id,
 		type: c.admin.type,
 		label: c.admin.label ?? c.admin.id,
 		permissions: c.admin.permissions,
 	}
-	return json(me)
+	return me
 }
 
 // ── Principals ────────────────────────────────────────────────────────────────
@@ -238,19 +280,32 @@ export function handleMe(c: AdminContext): Response {
 export async function listPrincipals(c: AdminContext): Promise<Response> {
 	const typeParam = c.url.searchParams.get('type')
 	const statusParam = c.url.searchParams.get('status')
+	if (statusParam !== null && statusParam !== 'invited' && statusParam !== 'active' && statusParam !== 'disabled') {
+		return json({ items: [] })
+	}
 	const q = c.url.searchParams.get('q') ?? undefined
 	const type = typeParam === 'user' || typeParam === 'service' ? typeParam : undefined
-	const rows = await c.services.repositories.principals.listPrincipals({ type, ...(q ? { q } : {}) })
+	const status = statusParam === 'invited' || statusParam === 'active' || statusParam === 'disabled' ? statusParam : undefined
+	return json(await adminUseCases.listPrincipals(c, { type, status, ...(q ? { q } : {}) }))
+}
+
+async function listPrincipalsUseCase(c: AdminContext, input: ListPrincipalsInput): Promise<{ items: PrincipalListItem[] }> {
+	const rows = await c.services.repositories.principals.listPrincipals({ type: input.type, ...(input.q ? { q: input.q } : {}) })
 	const items = rows
 		.map(toPrincipalListItem)
-		.filter((item) => !statusParam || item.status === statusParam)
-	return json({ items } satisfies { items: PrincipalListItem[] })
+		.filter((item) => input.status === undefined || item.status === input.status)
+	return { items }
 }
 
 export async function getPrincipal(c: AdminContext, id: string): Promise<Response> {
+	return json(await adminUseCases.getPrincipal(c, { id }))
+}
+
+async function getPrincipalUseCase(c: AdminContext, input: { id: string }): Promise<PrincipalDetail> {
+	const id = input.id
 	const row = await c.services.repositories.principals.getPrincipalById(id)
 	if (!row) {
-		return error(404, 'principal not found')
+		return fail(404, 'principal not found')
 	}
 	const grants = await c.services.repositories.grants.listGrants(id)
 
@@ -264,7 +319,7 @@ export async function getPrincipal(c: AdminContext, id: string): Promise<Respons
 		grants: await toGrantDtos(grants, c.services),
 		permissions,
 	}
-	return json(detail)
+	return detail
 }
 
 /**
@@ -316,9 +371,15 @@ export async function invitePrincipal(c: AdminContext): Promise<Response> {
 	if (!email) {
 		return error(400, 'email required')
 	}
+	return json(await adminUseCases.invitePrincipal(c, { email }), { status: 201 })
+}
+
+async function invitePrincipalUseCase(c: AdminContext, input: InviteRequest): Promise<PrincipalListItem> {
+	const email = input.email
+	if (email.trim() === '') return fail(400, 'email required')
 	const existing = await c.services.repositories.principals.getUserByEmail(email)
 	if (existing) {
-		return error(409, 'a user with this email already exists')
+		return fail(409, 'a user with this email already exists')
 	}
 	const principal = await c.services.repositories.principals.inviteUser(email)
 	await adminAudit(c, {
@@ -327,7 +388,7 @@ export async function invitePrincipal(c: AdminContext): Promise<Response> {
 		resourceId: principal.id,
 		metadata: { email },
 	})
-	return json(toPrincipalListItem(principal), { status: 201 })
+	return toPrincipalListItem(principal)
 }
 
 export async function deletePrincipal(c: AdminContext, id: string): Promise<Response> {
@@ -354,9 +415,14 @@ export async function patchPrincipal(c: AdminContext, id: string): Promise<Respo
 	if (disabled === undefined) {
 		return error(400, 'disabled (boolean) required')
 	}
+	return json(await adminUseCases.updatePrincipal(c, { id, disabled }))
+}
+
+async function updatePrincipalUseCase(c: AdminContext, input: UpdatePrincipalInput): Promise<PrincipalListItem> {
+	const { id, disabled } = input
 	const row = await c.services.repositories.principals.getPrincipalById(id)
 	if (!row) {
-		return error(404, 'principal not found')
+		return fail(404, 'principal not found')
 	}
 	if (disabled) {
 		await c.services.repositories.principals.disablePrincipal(id)
@@ -366,7 +432,8 @@ export async function patchPrincipal(c: AdminContext, id: string): Promise<Respo
 		await adminAudit(c, { action: 'iam.principal.enable', resourceType: 'principal', resourceId: id })
 	}
 	const updated = await c.services.repositories.principals.getPrincipalById(id)
-	return json(updated ? toPrincipalListItem(updated) : { ok: true })
+	if (!updated) return fail(404, 'principal not found')
+	return toPrincipalListItem(updated)
 }
 
 // ── Grants ────────────────────────────────────────────────────────────────────
@@ -426,23 +493,30 @@ export async function createGrant(c: AdminContext): Promise<Response> {
 	if (!principalId) {
 		return error(400, 'principalId required')
 	}
+	return json(await adminUseCases.createGrant(c, parseCreateGrantRequest(body)), { status: 201 })
+}
+
+async function createGrantUseCase(c: AdminContext, input: CreateGrantRequest): Promise<GrantDto> {
+	const principalId = input.principalId
+	if (principalId.trim() === '') return fail(400, 'principalId required')
+	const body: unknown = input
 	const appResult = await appField(c, body)
 	if (!appResult.ok) {
-		return error(400, 'unknown app')
+		return fail(400, 'unknown app')
 	}
 	const app = appResult.app
 	const roleOrInline = await parseRoleOrInline(c, body, app)
 	if (!roleOrInline.ok) {
-		return error(400, roleOrInline.message)
+		return fail(400, roleOrInline.message)
 	}
 	const scope = parseScope(body)
 	if (!scope.ok) {
-		return error(400, 'scopeType and scopeValue must be both set or both omitted')
+		return fail(400, 'scopeType and scopeValue must be both set or both omitted')
 	}
 	const expiresAt = numberField(body, 'expiresAt') ?? null
 	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
 	if (!principal) {
-		return error(404, 'principal not found')
+		return fail(404, 'principal not found')
 	}
 	const grant = await c.services.repositories.grants.createGrant({
 		principalId,
@@ -468,13 +542,18 @@ export async function createGrant(c: AdminContext): Promise<Response> {
 		},
 	})
 	const cache = new RoleKnownCache(c.services)
-	return json(await toGrantDto(grant, cache), { status: 201 })
+	return toGrantDto(grant, cache)
 }
 
 export async function deleteGrant(c: AdminContext, id: string): Promise<Response> {
+	return json(await adminUseCases.deleteGrant(c, { id }))
+}
+
+async function deleteGrantUseCase(c: AdminContext, input: { id: string }): Promise<OkResponse> {
+	const id = input.id
 	const grant = await c.services.repositories.grants.getGrantById(id)
 	if (!grant) {
-		return error(404, 'grant not found')
+		return fail(404, 'grant not found')
 	}
 	await c.services.repositories.grants.deleteGrant(id)
 	await adminAudit(c, {
@@ -488,15 +567,19 @@ export async function deleteGrant(c: AdminContext, id: string): Promise<Response
 			scopeValue: grant.scope_value,
 		},
 	})
-	return json({ ok: true })
+	return { ok: true }
 }
 
 // ── Apps (read-only; the live registry derived from the schema tables) ────────
 
 /** The app ids a grant can be scoped to — the apps that have registered a vocabulary. */
 export async function listApps(c: AdminContext): Promise<Response> {
+	return json(await adminUseCases.listApps(c))
+}
+
+async function listAppsUseCase(c: AdminContext): Promise<{ items: AppDto[] }> {
 	const items: AppDto[] = (await knownApps(c)).map((id) => ({ id }))
-	return json({ items } satisfies { items: AppDto[] })
+	return { items }
 }
 
 // ── Roles (grantable role list for an app) ────────────────────────────────────
@@ -508,8 +591,13 @@ export async function listApps(c: AdminContext): Promise<Response> {
  * win on a key collision so an app cannot shadow the cross-app `admin`.
  */
 export async function listRoles(c: AdminContext): Promise<Response> {
-	const items: RoleDto[] = []
 	const appParam = c.url.searchParams.get('app')
+	return json(await adminUseCases.listRoles(c, { app: appParam }))
+}
+
+async function listRolesUseCase(c: AdminContext, input: ListRolesInput): Promise<{ items: RoleDto[] }> {
+	const items: RoleDto[] = []
+	const appParam = input.app ?? null
 	const app = appParam !== null && (await knownApps(c)).includes(appParam) ? appParam : null
 	const builtinKeys = new Set(Object.keys(BUILTIN_ROLES))
 	if (app !== null) {
@@ -535,7 +623,7 @@ export async function listRoles(c: AdminContext): Promise<Response> {
 			origin: 'builtin',
 		})
 	}
-	return json({ items } satisfies { items: RoleDto[] })
+	return { items }
 }
 
 // ── App schema (reconciled vocabulary) ────────────────────────────────────────
@@ -656,10 +744,15 @@ async function readAppSchemaDto(c: AdminContext, app: string): Promise<AppSchema
 
 /** Return the app's scopes, actions, and origin='app' roles (the reconciled vocabulary). */
 export async function getAppSchema(c: AdminContext, app: string): Promise<Response> {
+	return json(await adminUseCases.getAppSchema(c, { app }))
+}
+
+async function getAppSchemaUseCase(c: AdminContext, input: AppInput): Promise<AppSchemaDto> {
+	const app = input.app
 	if (!(await knownApps(c)).includes(app)) {
-		return error(404, 'unknown app')
+		return fail(404, 'unknown app')
 	}
-	return json(await readAppSchemaDto(c, app))
+	return readAppSchemaDto(c, app)
 }
 
 // ── Policies (origin='custom' roles) ──────────────────────────────────────────
@@ -677,11 +770,16 @@ function toPolicyDto(row: RoleRow): PolicyDto {
 
 /** List an app's custom policies (origin='custom' role rows). */
 export async function listPolicies(c: AdminContext, app: string): Promise<Response> {
+	return json(await adminUseCases.listPolicies(c, { app }))
+}
+
+async function listPoliciesUseCase(c: AdminContext, input: AppInput): Promise<{ items: PolicyDto[] }> {
+	const app = input.app
 	if (!(await knownApps(c)).includes(app)) {
-		return error(404, 'unknown app')
+		return fail(404, 'unknown app')
 	}
 	const rows = await c.services.repositories.appSchema.listRolesByOrigin(app, 'custom')
-	return json({ items: rows.map(toPolicyDto) } satisfies { items: PolicyDto[] })
+	return { items: rows.map(toPolicyDto) }
 }
 
 /**
@@ -726,17 +824,23 @@ export async function createPolicy(c: AdminContext, app: string): Promise<Respon
 		return error(404, 'unknown app')
 	}
 	const body = await readJson(c.request)
+	return json(await adminUseCases.createPolicy(c, { app, policy: parseCreatePolicyRequest(body) }), { status: 201 })
+}
+
+async function createPolicyUseCase(c: AdminContext, input: CreatePolicyInput): Promise<PolicyDto> {
+	const { app, policy: body } = input
+	if (!(await knownApps(c)).includes(app)) return fail(404, 'unknown app')
 	const parsed = await parsePolicyBody(c, app, body, true)
 	if (!parsed.ok) {
-		return error(400, parsed.message)
+		return fail(400, parsed.message)
 	}
 	const key = parsed.key
 	if (key === undefined) {
-		return error(400, 'key required')
+		return fail(400, 'key required')
 	}
 	const existing = await c.services.repositories.appSchema.getRole(app, key)
 	if (existing) {
-		return error(409, `a role with key '${key}' already exists`)
+		return fail(409, `a role with key '${key}' already exists`)
 	}
 	const row = await c.services.repositories.appSchema.upsertRole({
 		app,
@@ -752,7 +856,7 @@ export async function createPolicy(c: AdminContext, app: string): Promise<Respon
 		resourceId: `${app}/${key}`,
 		metadata: { app, key, permissions: parsed.permissions },
 	})
-	return json(toPolicyDto(row), { status: 201 })
+	return toPolicyDto(row)
 }
 
 /** Update a custom policy. Rejects if the key is missing or is an origin='app' role. */
@@ -765,9 +869,21 @@ export async function updatePolicy(c: AdminContext, app: string, key: string): P
 		return error(404, 'custom policy not found')
 	}
 	const body = await readJson(c.request)
+	return json(await adminUseCases.updatePolicy(c, { app, key, policy: parseUpdatePolicyRequest(body) }))
+}
+
+async function updatePolicyUseCase(c: AdminContext, input: UpdatePolicyInput): Promise<PolicyDto> {
+	const { app, key, policy: body } = input
+	if (!(await knownApps(c)).includes(app)) {
+		return fail(404, 'unknown app')
+	}
+	const existing = await c.services.repositories.appSchema.getRole(app, key)
+	if (!existing || existing.origin !== 'custom') {
+		return fail(404, 'custom policy not found')
+	}
 	const parsed = await parsePolicyBody(c, app, body, false)
 	if (!parsed.ok) {
-		return error(400, parsed.message)
+		return fail(400, parsed.message)
 	}
 	const row = await c.services.repositories.appSchema.upsertRole({
 		app,
@@ -783,17 +899,22 @@ export async function updatePolicy(c: AdminContext, app: string, key: string): P
 		resourceId: `${app}/${key}`,
 		metadata: { app, key, permissions: parsed.permissions },
 	})
-	return json(toPolicyDto(row))
+	return toPolicyDto(row)
 }
 
 /** Delete a custom policy. Refuses to delete an origin='app' (reconciled) role. */
 export async function deletePolicy(c: AdminContext, app: string, key: string): Promise<Response> {
+	return json(await adminUseCases.deletePolicy(c, { app, key }))
+}
+
+async function deletePolicyUseCase(c: AdminContext, input: { app: string; key: string }): Promise<OkResponse> {
+	const { app, key } = input
 	if (!(await knownApps(c)).includes(app)) {
-		return error(404, 'unknown app')
+		return fail(404, 'unknown app')
 	}
 	const existing = await c.services.repositories.appSchema.getRole(app, key)
 	if (!existing || existing.origin !== 'custom') {
-		return error(404, 'custom policy not found')
+		return fail(404, 'custom policy not found')
 	}
 	await c.services.repositories.appSchema.deleteRole(app, key)
 	await adminAudit(c, {
@@ -802,12 +923,16 @@ export async function deletePolicy(c: AdminContext, app: string, key: string): P
 		resourceId: `${app}/${key}`,
 		metadata: { app, key },
 	})
-	return json({ ok: true })
+	return { ok: true }
 }
 
 // ── API keys (native service credentials) ─────────────────────────────────────
 
 export async function listApiKeys(c: AdminContext): Promise<Response> {
+	return json(await adminUseCases.listApiKeys(c))
+}
+
+async function listApiKeysUseCase(c: AdminContext): Promise<{ items: ApiKeyDto[] }> {
 	const principals = await c.services.repositories.principals.listPrincipals({ type: 'service' })
 	const cache = new RoleKnownCache(c.services)
 	const items: ApiKeyDto[] = []
@@ -825,7 +950,7 @@ export async function listApiKeys(c: AdminContext): Promise<Response> {
 			createdAt: principal.created_at,
 		})
 	}
-	return json({ items } satisfies { items: ApiKeyDto[] })
+	return { items }
 }
 
 /**
@@ -844,23 +969,30 @@ export async function provisionApiKey(c: AdminContext): Promise<Response> {
 	if (!label || type !== 'service') {
 		return error(400, 'label and type=service required')
 	}
+	return json(await adminUseCases.provisionApiKey(c, parseProvisionApiKeyRequest(body)), { status: 201 })
+}
+
+async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionApiKeyRequest): Promise<ProvisionApiKeyResponse> {
+	const body: unknown = input
+	const { label, type } = input
+	if (label.trim() === '' || type !== 'service') return fail(400, 'label and type=service required')
 	const appResult = await appField(c, body)
 	if (!appResult.ok) {
-		return error(400, 'unknown app')
+		return fail(400, 'unknown app')
 	}
 	const app = appResult.app
 	const roleOrInline = await parseRoleOrInline(c, body, app)
 	if (!roleOrInline.ok) {
-		return error(400, roleOrInline.message)
+		return fail(400, roleOrInline.message)
 	}
 	const scope = parseScope(body)
 	if (!scope.ok) {
-		return error(400, 'scopeType and scopeValue must be both set or both omitted')
+		return fail(400, 'scopeType and scopeValue must be both set or both omitted')
 	}
 	const expiresAt = numberField(body, 'expiresAt') ?? null
 	const nowSeconds = Math.floor(Date.now() / 1000)
 	if (expiresAt !== null && expiresAt <= nowSeconds) {
-		return error(400, 'expiresAt must be in the future')
+		return fail(400, 'expiresAt must be in the future')
 	}
 
 	// Create the native service principal (external_id NULL — resolved by its `px_` key, not by a
@@ -906,7 +1038,7 @@ export async function provisionApiKey(c: AdminContext): Promise<Response> {
 	})
 
 	const response: ProvisionApiKeyResponse = { principalId: principal.id, apiKey }
-	return json(response, { status: 201 })
+	return response
 }
 
 /**
@@ -915,9 +1047,14 @@ export async function provisionApiKey(c: AdminContext): Promise<Response> {
  * effective at once — `mintFromKey` re-resolves the credential on every mint.
  */
 export async function revokeApiKey(c: AdminContext, principalId: string): Promise<Response> {
+	return json(await adminUseCases.revokeApiKey(c, { principalId }))
+}
+
+async function revokeApiKeyUseCase(c: AdminContext, input: { principalId: string }): Promise<OkResponse> {
+	const { principalId } = input
 	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
 	if (!principal || principal.type !== 'service') {
-		return error(404, 'service principal not found')
+		return fail(404, 'service principal not found')
 	}
 
 	await c.services.repositories.grants.deleteGrantsForPrincipal(principalId)
@@ -929,7 +1066,7 @@ export async function revokeApiKey(c: AdminContext, principalId: string): Promis
 		resourceId: principalId,
 		metadata: { label: principal.label },
 	})
-	return json({ ok: true })
+	return { ok: true }
 }
 
 /**
@@ -937,9 +1074,14 @@ export async function revokeApiKey(c: AdminContext, principalId: string): Promis
  * credentials and mint a fresh one, returned ONCE. Effective immediately.
  */
 export async function rotateApiKey(c: AdminContext, principalId: string): Promise<Response> {
+	return json(await adminUseCases.rotateApiKey(c, { principalId }))
+}
+
+async function rotateApiKeyUseCase(c: AdminContext, input: { principalId: string }): Promise<RotateApiKeyResponse> {
+	const { principalId } = input
 	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
 	if (!principal || principal.type !== 'service') {
-		return error(404, 'service principal not found')
+		return fail(404, 'service principal not found')
 	}
 	await c.services.repositories.credentials.revokeCredentialsForPrincipal(principalId)
 	const apiKey = `${API_KEY_PREFIX}${generateToken()}`
@@ -957,19 +1099,23 @@ export async function rotateApiKey(c: AdminContext, principalId: string): Promis
 		metadata: { label: principal.label },
 	})
 	const response: RotateApiKeyResponse = { principalId, apiKey }
-	return json(response)
+	return response
 }
 
 // ── Share links (anonymous credentials) ─────────────────────────────────────────
 
 export async function listShareLinks(c: AdminContext): Promise<Response> {
+	return json(await adminUseCases.listShareLinks(c))
+}
+
+async function listShareLinksUseCase(c: AdminContext): Promise<{ items: ShareLinkListItem[] }> {
 	const creds = await c.services.repositories.credentials.listAnonymousCredentials()
 	const items: ShareLinkListItem[] = []
 	for (const cred of creds) {
 		const grants = await c.services.repositories.credentials.getCredentialGrants(cred.id)
 		items.push(toShareLinkListItem(cred, grants))
 	}
-	return json({ items } satisfies { items: ShareLinkListItem[] })
+	return { items }
 }
 
 export async function createShareLink(c: AdminContext): Promise<Response> {
@@ -978,8 +1124,13 @@ export async function createShareLink(c: AdminContext): Promise<Response> {
 	if (grants === undefined || grants.length === 0) {
 		return error(400, 'grants required (each: { action, scope? })')
 	}
-	const label = stringField(body, 'label')
-	const expiresAt = numberField(body, 'expiresAt')
+	return json(await adminUseCases.createShareLink(c, parseIssueShareLinkRequest(body)), { status: 201 })
+}
+
+async function createShareLinkUseCase(c: AdminContext, input: IssueShareLinkRequest): Promise<IssuedShareLinkResponse> {
+	const grants = parseShareLinkGrants(input.grants)
+	if (grants === undefined || grants.length === 0) return fail(400, 'grants required (each: { action, scope? })')
+	const { label, expiresAt } = input
 
 	// Issue an anonymous credential with the ADMIN'S OWN forwarded credentials as issuer — the
 	// delegation rule applies to admins like everyone else (admins typically hold `*`, so it passes).
@@ -997,7 +1148,7 @@ export async function createShareLink(c: AdminContext): Promise<Response> {
 	const { result, auditLabel } = await issueKey(c.services, issueInput, c.admin, c.app)
 	if (!result.ok) {
 		// Admin already gated; the only failure here is the delegation rule.
-		return error(403, `not allowed: ${result.reason}`)
+		return fail(403, `not allowed: ${result.reason}`)
 	}
 	await adminAudit(c, {
 		action: 'iam.credential.create',
@@ -1006,7 +1157,7 @@ export async function createShareLink(c: AdminContext): Promise<Response> {
 		metadata: { label: auditLabel ?? null, grants },
 	})
 	const issued: IssuedShareLinkResponse = { id: result.id, token: result.token }
-	return json(issued, { status: 201 })
+	return issued
 }
 
 /**
@@ -1041,11 +1192,16 @@ function parseShareLinkGrants(value: unknown): KeyGrant[] | undefined {
 }
 
 export async function revokeShareLink(c: AdminContext, id: string): Promise<Response> {
+	return json(await adminUseCases.revokeShareLink(c, { id }))
+}
+
+async function revokeShareLinkUseCase(c: AdminContext, input: { id: string }): Promise<OkResponse> {
+	const id = input.id
 	// Only anonymous credentials are share links; a principal-bound key is managed on the api-keys
 	// page, so it reads as not-found here.
 	const cred = await c.services.repositories.credentials.getCredentialById(id)
 	if (!cred || cred.principal_id !== null) {
-		return error(404, 'share link not found')
+		return fail(404, 'share link not found')
 	}
 	await c.services.repositories.credentials.revokeCredential(id)
 	await adminAudit(c, {
@@ -1054,7 +1210,7 @@ export async function revokeShareLink(c: AdminContext, id: string): Promise<Resp
 		resourceId: id,
 		metadata: { label: cred.label },
 	})
-	return json({ ok: true })
+	return { ok: true }
 }
 
 // ── Audit & auth log reads ────────────────────────────────────────────────────
@@ -1076,38 +1232,164 @@ function parseLimit(url: URL): number {
 
 export async function listAudit(c: AdminContext): Promise<Response> {
 	const p = c.url.searchParams
-	const limit = parseLimit(c.url)
+	return json(
+		await adminUseCases.listAudit(c, {
+			...(p.get('resourceType') ? { resourceType: p.get('resourceType') ?? undefined } : {}),
+			...(p.get('resourceId') ? { resourceId: p.get('resourceId') ?? undefined } : {}),
+			...(p.get('principalId') ? { principalId: p.get('principalId') ?? undefined } : {}),
+			...(p.get('action') ? { action: p.get('action') ?? undefined } : {}),
+			...(p.get('requestId') ? { requestId: p.get('requestId') ?? undefined } : {}),
+			...(p.get('before') ? { before: p.get('before') ?? undefined } : {}),
+			limit: parseLimit(c.url),
+		}),
+	)
+}
+
+async function listAuditUseCase(c: AdminContext, input: ListAuditInput): Promise<{ items: AuditEventDto[]; nextCursor: string | null }> {
+	const limit = normalizeLimit(input.limit)
 	const rows = await c.services.repositories.audit.listAuditEvents({
-		...(p.get('resourceType') ? { resourceType: p.get('resourceType')! } : {}),
-		...(p.get('resourceId') ? { resourceId: p.get('resourceId')! } : {}),
-		...(p.get('principalId') ? { principalId: p.get('principalId')! } : {}),
-		...(p.get('action') ? { action: p.get('action')! } : {}),
-		...(p.get('requestId') ? { requestId: p.get('requestId')! } : {}),
-		...(p.get('before') ? { before: p.get('before')! } : {}),
+		...(input.resourceType ? { resourceType: input.resourceType } : {}),
+		...(input.resourceId ? { resourceId: input.resourceId } : {}),
+		...(input.principalId ? { principalId: input.principalId } : {}),
+		...(input.action ? { action: input.action } : {}),
+		...(input.requestId ? { requestId: input.requestId } : {}),
+		...(input.before ? { before: input.before } : {}),
 		limit,
 	})
 	const items = rows.map(toAuditEventDto)
 	const last = items.at(-1)
 	const nextCursor = items.length === limit && last ? last.id : null
-	return json({ items, nextCursor } satisfies { items: AuditEventDto[]; nextCursor: string | null })
+	return { items, nextCursor }
 }
 
 export async function listAuthLog(c: AdminContext): Promise<Response> {
 	const p = c.url.searchParams
-	const limit = parseLimit(c.url)
 	const decisionParam = p.get('decision')
 	const decision = decisionParam === 'allow' || decisionParam === 'deny' ? decisionParam : undefined
-	const beforeRaw = p.get('before')
-	const before = beforeRaw ? Number.parseInt(beforeRaw, 10) : undefined
+	return json(
+		await adminUseCases.listAuthLog(c, {
+			...(p.get('principalId') ? { principalId: p.get('principalId') ?? undefined } : {}),
+			...(p.get('requestId') ? { requestId: p.get('requestId') ?? undefined } : {}),
+			...(decision ? { decision } : {}),
+			...(p.get('before') ? { before: p.get('before') ?? undefined } : {}),
+			limit: parseLimit(c.url),
+		}),
+	)
+}
+
+async function listAuthLogUseCase(c: AdminContext, input: ListAuthLogInput): Promise<{ items: AuthLogDto[]; nextCursor: string | null }> {
+	const limit = normalizeLimit(input.limit)
+	const before = input.before ? Number.parseInt(input.before, 10) : undefined
 	const rows = await c.services.repositories.audit.listAuthLog({
-		...(p.get('principalId') ? { principalId: p.get('principalId')! } : {}),
-		...(p.get('requestId') ? { requestId: p.get('requestId')! } : {}),
-		...(decision ? { decision } : {}),
+		...(input.principalId ? { principalId: input.principalId } : {}),
+		...(input.requestId ? { requestId: input.requestId } : {}),
+		...(input.decision ? { decision: input.decision } : {}),
 		...(before !== undefined && Number.isFinite(before) ? { before } : {}),
 		limit,
 	})
 	const items = rows.map(toAuthLogDto)
 	const last = items.at(-1)
 	const nextCursor = items.length === limit && last ? String(last.id) : null
-	return json({ items, nextCursor } satisfies { items: AuthLogDto[]; nextCursor: string | null })
+	return { items, nextCursor }
+}
+
+function normalizeLimit(limit: number | undefined): number {
+	if (limit === undefined || !Number.isFinite(limit) || limit <= 0) return DEFAULT_LIMIT
+	return Math.min(Math.floor(limit), MAX_LIMIT)
+}
+
+function parseCreateGrantRequest(body: unknown): CreateGrantRequest {
+	const principalId = stringField(body, 'principalId')
+	if (!principalId) return fail(400, 'principalId required')
+	const roleKey = stringField(body, 'roleKey')
+	const permissions = arrayField(body, 'permissions')
+	const scopeType = nullableStringField(body, 'scopeType')
+	const scopeValue = nullableStringField(body, 'scopeValue')
+	const app = nullableStringField(body, 'app')
+	const expiresAt = numberField(body, 'expiresAt')
+	return {
+		principalId,
+		...(roleKey !== undefined ? { roleKey } : {}),
+		...(permissions !== undefined ? { permissions } : {}),
+		...(scopeType !== undefined ? { scopeType } : {}),
+		...(scopeValue !== undefined ? { scopeValue } : {}),
+		...(app !== undefined ? { app } : {}),
+		...(expiresAt !== undefined ? { expiresAt } : {}),
+	}
+}
+
+function parseCreatePolicyRequest(body: unknown): CreatePolicyInput['policy'] {
+	const key = stringField(body, 'key')
+	const name = stringField(body, 'name')
+	const permissions = arrayField(body, 'permissions')
+	if (key === undefined || name === undefined || permissions === undefined) {
+		return fail(400, 'key, name and permissions (array) required')
+	}
+	const description = stringField(body, 'description')
+	return { key, name, permissions, ...(description !== undefined ? { description } : {}) }
+}
+
+function parseUpdatePolicyRequest(body: unknown): UpdatePolicyInput['policy'] {
+	const name = stringField(body, 'name')
+	const permissions = arrayField(body, 'permissions')
+	if (name === undefined || permissions === undefined) return fail(400, 'name and permissions (array) required')
+	const description = stringField(body, 'description')
+	return { name, permissions, ...(description !== undefined ? { description } : {}) }
+}
+
+function parseProvisionApiKeyRequest(body: unknown): ProvisionApiKeyRequest {
+	const label = stringField(body, 'label')
+	const type = stringField(body, 'type')
+	if (label === undefined || type !== 'service') return fail(400, 'label and type=service required')
+	const grant = parseCreateGrantRequest({ ...recordWithoutPrincipal(body), principalId: 'unused' })
+	const { principalId: _principalId, ...authorization } = grant
+	return { label, type, ...authorization }
+}
+
+function recordWithoutPrincipal(body: unknown): Record<string, unknown> {
+	const out: Record<string, unknown> = {}
+	for (const key of ['roleKey', 'permissions', 'scopeType', 'scopeValue', 'app', 'expiresAt']) {
+		const value = prop(body, key)
+		if (value !== undefined) out[key] = value
+	}
+	return out
+}
+
+function parseIssueShareLinkRequest(body: unknown): IssueShareLinkRequest {
+	const grants = parseShareLinkGrants(prop(body, 'grants'))
+	if (grants === undefined) return fail(400, 'grants required (each: { action, scope? })')
+	const label = stringField(body, 'label')
+	const expiresAt = numberField(body, 'expiresAt')
+	return {
+		grants,
+		...(label !== undefined ? { label } : {}),
+		...(expiresAt !== undefined ? { expiresAt } : {}),
+	}
+}
+
+/** Shared typed application operations used by both REST and `/admin/rpc`. */
+export const adminUseCases = {
+	me,
+	listPrincipals: listPrincipalsUseCase,
+	getPrincipal: getPrincipalUseCase,
+	invitePrincipal: invitePrincipalUseCase,
+	updatePrincipal: updatePrincipalUseCase,
+	createGrant: createGrantUseCase,
+	deleteGrant: deleteGrantUseCase,
+	listApps: listAppsUseCase,
+	listRoles: listRolesUseCase,
+	getAppSchema: getAppSchemaUseCase,
+	listPolicies: listPoliciesUseCase,
+	createPolicy: createPolicyUseCase,
+	updatePolicy: updatePolicyUseCase,
+	deletePolicy: deletePolicyUseCase,
+	listApiKeys: listApiKeysUseCase,
+	provisionApiKey: provisionApiKeyUseCase,
+	rotateApiKey: rotateApiKeyUseCase,
+	revokeApiKey: revokeApiKeyUseCase,
+	listShareLinks: listShareLinksUseCase,
+	createShareLink: createShareLinkUseCase,
+	revokeShareLink: revokeShareLinkUseCase,
+	listAudit: listAuditUseCase,
+	listAuthLog: listAuthLogUseCase,
 }

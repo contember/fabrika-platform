@@ -6,7 +6,7 @@ import { requestId } from '../request-id'
 import { resolveUserPermissions } from '../resolve'
 import { hashToken } from '../secret'
 import type { Services } from '../services'
-import type { AdminContext } from './handlers'
+import { type AdminContext, AdminUseCaseError } from './handlers'
 import {
 	createGrant,
 	createPolicy,
@@ -39,26 +39,26 @@ import { error } from './http'
 // The pinned sentinel action: only the `admin` role's `*` and bootstrap admins
 // hold it. Scope-less → satisfied by a GLOBAL permission only (never a
 // project-scoped grant).
-const ADMIN_ACTION = 'iam.admin'
+export const ADMIN_ACTION = 'iam.admin'
 
 // propustka's own app id — the audience the admin caller is resolved against (the SSO session is
 // minted for it in auth/routes.ts). The built-in `admin` role is cross-app, so a global admin grant
 // still resolves here regardless.
-const IAM_APP = 'propustka'
+export const IAM_APP = 'propustka'
 
 /**
  * The propustka-native admin credentials read off the request: a browser SSO session
  * (`px_session` cookie) and/or an `Authorization: Bearer` machine credential (a `px_`
  * admin/provisioning key). There is no Cloudflare Access JWT anymore.
  */
-function extractCredentials(request: Request): {
+export function extractCredentials(request: Request, correlationId?: string): {
 	bearer: string | null
 	session: string | null
 	requestId: string
 } {
 	const bearer = readBearer(request.headers.get('Authorization'))
 	const session = parseCookie(request.headers.get('Cookie'), SESSION_COOKIE)
-	return { bearer, session, requestId: requestId(request) }
+	return { bearer, session, requestId: correlationId ?? requestId(request) }
 }
 
 /** Read the token out of an `Authorization: Bearer <token>` header. Null when absent/non-bearer. */
@@ -96,7 +96,7 @@ const STATE_CHANGING_METHODS = new Set(['POST', 'PATCH', 'DELETE'])
  * `Referer` to that private destination; a cross-site caller cannot reach the private
  * route or forge the gateway's own same-origin check. Returns `null` when allowed.
  */
-function rejectCrossOrigin(request: Request, url: URL): Response | null {
+export function rejectCrossOrigin(request: Request, url: URL): Response | null {
 	if (!STATE_CHANGING_METHODS.has(request.method)) {
 		return null
 	}
@@ -124,14 +124,14 @@ function originOf(value: string): string | null {
 }
 
 /** The resolved admin (already authenticated; the `iam.admin` gate is applied by `handleAdmin`). */
-interface ResolvedAdmin {
+export interface ResolvedAdmin {
 	id: string
 	type: PrincipalType
 	label: string | null
 	permissions: PermissionEntry[]
 }
 
-type AdminResolution =
+export type AdminResolution =
 	| { ok: true; admin: ResolvedAdmin }
 	| { ok: false; status: 401 | 403; reason: string }
 
@@ -143,7 +143,7 @@ type AdminResolution =
  * Returns the caller + permissions; `handleAdmin` then enforces `iam.admin`. An ANONYMOUS credential
  * (a passthrough JWT / share link, no principal) is rejected — admin needs an accountable principal.
  */
-async function resolveAdmin(
+export async function resolveAdmin(
 	services: Services,
 	env: Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'PROPUSTKA_PROVISIONING_KEY' | 'ENVIRONMENT'>,
 	creds: { bearer: string | null; session: string | null; requestId: string },
@@ -228,6 +228,9 @@ export async function handleAdmin(
 
 		return await dispatch(c)
 	} catch (err) {
+		if (err instanceof AdminUseCaseError) {
+			return error(err.httpStatus, err.message)
+		}
 		console.error('admin request failed', err)
 		return error(500, 'internal error')
 	}
