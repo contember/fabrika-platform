@@ -11,6 +11,7 @@ import {
 	operationsEnvelopeUrl,
 	operationsReleaseName,
 } from '@fabrika/operations-contract'
+import { environmentAliases } from '@fabrika/platform'
 import { compileFabrikaManifest, zeropsArtifactCodec } from '@fabrika/provider-zerops'
 import { createHmac, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -63,6 +64,20 @@ const envValue = (path: string, name: string): string => {
 	const value = line?.slice(name.length + 1)
 	if (value === undefined || value === '') {
 		throw new Error(`${name} is missing from ${path}`)
+	}
+	return value
+}
+
+const envAliasValue = (path: string, canonical: string, legacy: string): string => {
+	const source = Object.fromEntries(
+		readFileSync(path, 'utf8').split(/\r?\n/).filter((line) => line.includes('=')).map((line) => {
+			const separator = line.indexOf('=')
+			return [line.slice(0, separator), line.slice(separator + 1)]
+		}),
+	)
+	const value = environmentAliases.read(source, { canonical, legacy })
+	if (value === undefined || value === '') {
+		throw new Error(`${canonical} is missing from ${path}`)
 	}
 	return value
 }
@@ -608,7 +623,11 @@ const proveOperationsIngestPersistence = async (
 }
 
 const main = async (): Promise<void> => {
-	const provisioningKey = envValue(resolve(STATE_DIR, 'iam.env'), 'PROPUSTKA_PROVISIONING_KEY')
+	const provisioningKey = envAliasValue(
+		resolve(STATE_DIR, 'iam.env'),
+		'FABRIKA_IAM_PROVISIONING_KEY',
+		'PROPUSTKA_PROVISIONING_KEY',
+	)
 	const webhookSecret = envValue(resolve(STATE_DIR, 'control.env'), 'GITHUB_WEBHOOK_SECRET')
 	await requestJson(CONTROL_ORIGIN, '/healthz')
 	await requestJson(IAM_ORIGIN, '/healthz')

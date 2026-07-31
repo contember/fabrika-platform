@@ -43,6 +43,16 @@ describe('one root file, several named setups — the merged-file decision, chec
 		expect(setupNames('zerops.yaml')).toEqual(['iam', 'operations', 'control', 'proxy'])
 	})
 
+	test('the root file emits only canonical IAM and Control environment names', () => {
+		const yaml = read('zerops.yaml')
+		expect(yaml).toContain('FABRIKA_IAM_DATABASE_URL:')
+		expect(yaml).toContain('FABRIKA_IAM_RPC_URL:')
+		expect(yaml).toContain('FABRIKA_CONTROL_DATABASE_URL:')
+		expect(yaml).toContain('FABRIKA_CONTROL_RUN_LOGS_BUCKET:')
+		expect(yaml).not.toContain('PROPUSTKA_')
+		expect(yaml).not.toContain('VOZKA_')
+	})
+
 	test('every setup name is a service hostname in the platform import document', () => {
 		const platform = compileTopology(
 			fabrikaTopologies()[0] ?? (() => {

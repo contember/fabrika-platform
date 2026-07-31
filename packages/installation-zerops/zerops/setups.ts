@@ -65,12 +65,12 @@ const WORKSPACE_DEPLOY_FILES = ['package.json', 'bun.lock', 'node_modules', 'pac
  * it), `SESSION_COOKIE_DOMAIN`, `HUMAN_EMAIL_DOMAINS`, `HUMAN_EMAILS`, `IAM_BOOTSTRAP_ADMINS`,
  * `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_SCOPES`, `OIDC_REQUIRE_VERIFIED_EMAIL`.
  *
- * Secrets (`envSecrets`): `PROPUSTKA_SIGNING_KEYS` (ES256 private JWKs — an empty value is refused at
- * boot rather than silently issuing ephemeral tokens), `OIDC_CLIENT_SECRET`, `PROPUSTKA_RPC_KEY` (gates
- * the management `/rpc/*` surface; unset 404s it, which is the fail-closed default), `PROPUSTKA_PROXY_KEY`
+ * Secrets (`envSecrets`): `FABRIKA_IAM_SIGNING_KEYS` (ES256 private JWKs — an empty value is refused at
+ * boot rather than silently issuing ephemeral tokens), `OIDC_CLIENT_SECRET`, `FABRIKA_IAM_RPC_KEY` (gates
+ * the management `/rpc/*` surface; unset 404s it, which is the fail-closed default), `FABRIKA_IAM_PROXY_KEY`
  * (gates `/auth/mint/*`, which the proxy calls on the cold path — a SEPARATE secret by least privilege,
  * since the proxy is the only publicly routed component and must not also be able to write audit rows),
- * `PROPUSTKA_PROVISIONING_KEY`. Both shared secrets must be at least 32 characters; a shorter one fails
+ * `FABRIKA_IAM_PROVISIONING_KEY`. Both shared secrets must be at least 32 characters; a shorter one fails
  * the boot rather than standing in front of an internet-reachable surface while looking configured.
  */
 const iam: ZeropsYamlSetup = {
@@ -112,7 +112,7 @@ const iam: ZeropsYamlSetup = {
 			// takes a session-level advisory lock, and pgBouncer's transaction pooling does not preserve
 			// session state across statements. `${db_...}` is a reference to the `db` service's own variable
 			// — the value lives in the platform and never appears here.
-			PROPUSTKA_DATABASE_URL: '${db_connectionString}',
+			FABRIKA_IAM_DATABASE_URL: '${db_connectionString}',
 			ENVIRONMENT: 'prod',
 		},
 	},
@@ -121,16 +121,16 @@ const iam: ZeropsYamlSetup = {
 /**
  * The control plane — registry, run lifecycle, vault, webhook, and the dashboard SPA.
  *
- * Per-installation variables (env API): `VOZKA_DOMAIN`, `PROPUSTKA_URL` (the public IAM issuer),
+ * Per-installation variables (env API): `FABRIKA_CONTROL_DOMAIN`, `FABRIKA_IAM_URL` (the public IAM issuer),
  * `OPERATIONS_ARTIFACT_ORIGIN` (the public proxy origin for source-map upload), `CLOUDFLARE_ACCOUNT_ID`,
- * `VOZKA_BOOTSTRAP_ADMINS`, `ZEROPS_CLIENT_ID`, `ZEROPS_PROXY_BUILD_FROM_GIT`, and
+ * `FABRIKA_CONTROL_BOOTSTRAP_ADMINS`, `ZEROPS_CLIENT_ID`, `ZEROPS_PROXY_BUILD_FROM_GIT`, and
  * `ZEROPS_PROXY_IAM_URL` (the public IAM origin reachable from application projects).
  *
- * Secrets (`envSecrets`): `PROPUSTKA_RPC_KEY` (authenticates this process to IAM's RPC surface — the
- * same value IAM holds), `VOZKA_VAULT_KEY` (the vault KEK; its loss is unrecoverable by design),
+ * Secrets (`envSecrets`): `FABRIKA_IAM_RPC_KEY` (authenticates this process to IAM's RPC surface — the
+ * same value IAM holds), `FABRIKA_CONTROL_VAULT_KEY` (the vault KEK; its loss is unrecoverable by design),
  * `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `CLOUDFLARE_API_TOKEN`,
- * `PROPUSTKA_PROVISIONING_KEY`, `ZEROPS_PROXY_IAM_KEY` (the same credential IAM receives as
- * `PROPUSTKA_PROXY_KEY`), `OPERATIONS_SYNC_KEY` (the same catalog credential Operations receives),
+ * `FABRIKA_IAM_PROVISIONING_KEY`, `ZEROPS_PROXY_IAM_KEY` (the same credential IAM receives as
+ * `FABRIKA_IAM_PROXY_KEY`), `OPERATIONS_SYNC_KEY` (the same catalog credential Operations receives),
  * and — when this control plane deploys to Zerops — `ZEROPS_ACCESS_TOKEN`, the Zerops personal access
  * token. It carries account-wide admin rights and is the single most dangerous thing an installation
  * holds.
@@ -155,23 +155,23 @@ const control: ZeropsYamlSetup = {
 		crontab: [{ timing: '*/5 * * * *', command: 'bun packages/control/src/node/cron.ts', allContainers: false }],
 		envVariables: {
 			PORT: '3000',
-			VOZKA_DATABASE_URL: '${db_connectionString}',
-			VOZKA_ASSETS_DIR: 'packages/dashboard/dist',
+			FABRIKA_CONTROL_DATABASE_URL: '${db_connectionString}',
+			FABRIKA_CONTROL_ASSETS_DIR: 'packages/dashboard/dist',
 			ENVIRONMENT: 'prod',
-			// Intra-project transport for management RPC. `PROPUSTKA_URL` is deliberately absent here:
+			// Intra-project transport for management RPC. `FABRIKA_IAM_URL` is deliberately absent here:
 			// it is the public token issuer and is supplied per installation through the env API.
-			PROPUSTKA_RPC_URL: 'http://iam:3000',
+			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
 			FABRIKA_OPERATIONS_URL: 'http://operations:3000',
 			// Run logs, in the project's own S3-compatible object storage. All four are REFERENCES to the
 			// `storage` service's generated variables; the credentials themselves live in the platform and
 			// are resolved at container start. Nothing secret is committed by writing a pointer to it.
-			VOZKA_RUN_LOGS_BUCKET: '${storage_bucketName}',
-			VOZKA_RUN_LOGS_ENDPOINT: '${storage_apiUrl}',
-			VOZKA_RUN_LOGS_ACCESS_KEY_ID: '${storage_accessKeyId}',
-			VOZKA_RUN_LOGS_SECRET_ACCESS_KEY: '${storage_secretAccessKey}',
+			FABRIKA_CONTROL_RUN_LOGS_BUCKET: '${storage_bucketName}',
+			FABRIKA_CONTROL_RUN_LOGS_ENDPOINT: '${storage_apiUrl}',
+			FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID: '${storage_accessKeyId}',
+			FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY: '${storage_secretAccessKey}',
 			// MinIO's conventional region. `S3BlobStore` uses path-style addressing, which MinIO wants and
 			// R2/AWS accept, so the same implementation serves both platforms unchanged.
-			VOZKA_RUN_LOGS_REGION: 'us-east-1',
+			FABRIKA_CONTROL_RUN_LOGS_REGION: 'us-east-1',
 		},
 	},
 }
@@ -180,11 +180,11 @@ const control: ZeropsYamlSetup = {
  * Operations is private inside the platform project. The proxy is its only public ingress and its
  * manifest must route only `/api/{projectId}/envelope/` for the configured public hostname.
  *
- * Per-installation variables (env API): `FABRIKA_OPERATIONS_PUBLIC_HOST` and `PROPUSTKA_URL`
+ * Per-installation variables (env API): `FABRIKA_OPERATIONS_PUBLIC_HOST` and `FABRIKA_IAM_URL`
  * (the public IAM issuer).
  *
  * Secrets (`envSecrets`): `OPERATIONS_SYNC_KEY`, shared only with control for catalog projection, and
- * `PROPUSTKA_RPC_KEY`, used only for Operations → IAM management RPC.
+ * `FABRIKA_IAM_RPC_KEY`, used only for Operations → IAM management RPC.
  */
 const operations: ZeropsYamlSetup = {
 	setup: 'operations',
@@ -210,7 +210,7 @@ const operations: ZeropsYamlSetup = {
 			FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID: '${operationsstorage_accessKeyId}',
 			FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY: '${operationsstorage_secretAccessKey}',
 			FABRIKA_OPERATIONS_BLOB_REGION: 'us-east-1',
-			FABRIKA_IAM_URL: 'http://iam:3000',
+			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
 			FABRIKA_CONTROL_URL: 'http://control:3000',
 		},
 	},
@@ -226,7 +226,7 @@ const operations: ZeropsYamlSetup = {
  * IAM service's PUBLIC origin in an apps project, because there is no private network between projects
  * (ADR-0006). And `FABRIKA_PROXY_MANIFEST_JSON`; see below.
  *
- * Secret (`envSecrets`): `FABRIKA_IAM_KEY` — the value IAM knows as `PROPUSTKA_PROXY_KEY`.
+ * Secret (`envSecrets`): `FABRIKA_IAM_KEY` — the value IAM knows as `FABRIKA_IAM_PROXY_KEY`.
  *
  * ── How the manifest reaches the build, and what is unverified about it ───────────────────────────
  *

@@ -144,7 +144,7 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 				},
 				{
 					hostname: 'storage',
-					// S3-compatible object storage: run logs (`VOZKA_RUN_LOGS_*`) and deploy artifacts.
+					// S3-compatible object storage: run logs (`FABRIKA_CONTROL_RUN_LOGS_*`) and deploy artifacts.
 					// `@fabrika/platform-node`'s `S3BlobStore` speaks to this unchanged — it is the same
 					// implementation that speaks to R2.
 					type: 'object-storage',

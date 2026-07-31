@@ -9,6 +9,7 @@
  * into `.env`, `gh` over stdin, and child env — never through `log.ts`.
  */
 
+import { environmentAliases } from '@fabrika/platform'
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto'
 import { findZone, listZones, resolveAccountId, verifyToken } from './cloudflare'
 import { fromEnv, persistEnv } from './envfile'
@@ -27,14 +28,14 @@ interface Collected {
 	operationsHostname: string
 	githubOrg: string
 	platformRepo: string
-	propustkaUrl: string
-	/** propustka's admin hostname (the host of `propustkaUrl`) — its Custom Domain + token `iss`. */
-	propustkaHostname: string
-	/** OIDC provider issuer propustka federates human login to (discovery URL base). */
+	iamUrl: string
+	/** IAM's admin hostname (the host of `iamUrl`) — its Custom Domain + token `iss`. */
+	iamHostname: string
+	/** OIDC provider issuer IAM federates human login to (discovery URL base). */
 	oidcIssuer: string
 	/** OIDC client id (public). The placeholder constant when the operator deferred real SSO. */
 	oidcClientId: string
-	/** Email domains admitted as a human at propustka login (self-provisioning allowlist). */
+	/** Email domains admitted as a human at IAM login (self-provisioning allowlist). */
 	humanEmailDomains: string[]
 	bootstrapAdmins: string[]
 	installRepos: string[]
@@ -42,12 +43,31 @@ interface Collected {
 
 /**
  * Placeholder OIDC — written when the operator brings the base up BEFORE wiring a real SSO provider.
- * propustka boots + machine auth (provisioning key) + the bootstrap-admin hatch all work; only human
- * SSO login is inert until real `PROPUSTKA_OIDC_CLIENT_ID`/`_SECRET` replace these. Issuer stays a real
- * discoverable host so propustka's OIDC discovery doesn't fail at boot.
+ * IAM boots + machine auth (provisioning key) + the bootstrap-admin hatch all work; only human SSO
+ * login is inert until real `FABRIKA_IAM_OIDC_CLIENT_ID`/`_SECRET` replace these. Issuer stays a real
+ * discoverable host so IAM's OIDC discovery doesn't fail at boot.
  */
 const PLACEHOLDER_OIDC_CLIENT_ID = 'placeholder.apps.googleusercontent.com'
 const PLACEHOLDER_OIDC_CLIENT_SECRET = 'placeholder-oidc-client-secret-rotate-when-sso-wired'
+const ENVIRONMENT_SOURCE: Readonly<Record<string, string | undefined>> = process.env
+
+/** Resume reads apply canonical precedence first, then keep fromEnv's empty-string semantics. */
+export function readResumeEnvironmentAlias(
+	source: Readonly<Record<string, string | undefined>>,
+	canonical: string,
+	legacy: string,
+): string | undefined {
+	const canonicalValue = source[canonical]
+	const legacyValue = source[legacy]
+	const value = environmentAliases.read(
+		{
+			[canonical]: canonicalValue,
+			[legacy]: legacyValue === undefined || legacyValue === '' ? undefined : legacyValue,
+		},
+		{ canonical, legacy },
+	)
+	return value === '' ? undefined : value
+}
 
 /** Run the full bring-up for `<account>`. */
 export async function runInit(account: string): Promise<void> {
@@ -76,28 +96,28 @@ export async function runInit(account: string): Promise<void> {
 		secrets: {
 			CLOUDFLARE_ACCOUNT_ID: collected.accountId,
 			CLOUDFLARE_API_TOKEN: collected.apiToken,
-			VOZKA_VAULT_KEY: vaultKey,
+			FABRIKA_CONTROL_VAULT_KEY: vaultKey,
 			GH_APP_PRIVATE_KEY: app.pem,
 			GH_WEBHOOK_SECRET: app.webhookSecret,
-			PROPUSTKA_PROVISIONING_KEY: provisioning,
+			FABRIKA_IAM_PROVISIONING_KEY: provisioning,
 			OPERATIONS_SYNC_KEY: operationsSyncKey,
-			// propustka Stage 1 native-auth secrets (pushed as propustka Worker secrets by the pipeline).
-			PROPUSTKA_SIGNING_KEYS: signingKeys,
-			PROPUSTKA_OIDC_CLIENT_SECRET: oidcClientSecret,
+			// IAM Stage 1 native-auth secrets (pushed as IAM Worker secrets by the pipeline).
+			FABRIKA_IAM_SIGNING_KEYS: signingKeys,
+			FABRIKA_IAM_OIDC_CLIENT_SECRET: oidcClientSecret,
 		},
 		vars: {
-			VOZKA_DOMAIN: collected.controlPlaneDomain,
+			FABRIKA_CONTROL_DOMAIN: collected.controlPlaneDomain,
 			OPERATIONS_HOSTNAME: collected.operationsHostname,
 			GH_APP_ID: String(app.id),
-			PROPUSTKA_URL: collected.propustkaUrl,
-			VOZKA_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
-			// propustka Stage 1 non-secret config (read by propustka's oblaka.ts).
-			PROPUSTKA_HOSTNAME: collected.propustkaHostname,
-			PROPUSTKA_OIDC_ISSUER: collected.oidcIssuer,
-			PROPUSTKA_OIDC_CLIENT_ID: collected.oidcClientId,
-			PROPUSTKA_HUMAN_EMAIL_DOMAINS: JSON.stringify(collected.humanEmailDomains),
-			// The same first-admin emails admit the operator to propustka itself (its own bootstrap hatch).
-			PROPUSTKA_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
+			FABRIKA_IAM_URL: collected.iamUrl,
+			FABRIKA_CONTROL_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
+			// IAM Stage 1 non-secret config (read by IAM's fabrika config).
+			FABRIKA_IAM_HOSTNAME: collected.iamHostname,
+			FABRIKA_IAM_OIDC_ISSUER: collected.oidcIssuer,
+			FABRIKA_IAM_OIDC_CLIENT_ID: collected.oidcClientId,
+			FABRIKA_IAM_HUMAN_EMAIL_DOMAINS: JSON.stringify(collected.humanEmailDomains),
+			// The same first-admin emails admit the operator to IAM itself (its own bootstrap hatch).
+			FABRIKA_IAM_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
 		},
 	})
 
@@ -154,8 +174,8 @@ async function collect(account: string): Promise<Collected> {
 	}
 	const githubOrg = await text('GitHub org that owns the fabrika App + platform repo', account)
 	const platformRepo = await text('Platform repo (org/fabrika-platform)', `${githubOrg}/fabrika-platform`)
-	const propustkaUrl = await retry('IAM base URL', async () => {
-		const raw = (await text('IAM base URL', primaryZone !== undefined ? `https://propustka.${primaryZone}` : undefined)).replace(/\/+$/, '')
+	const iamUrl = await retry('IAM base URL', async () => {
+		const raw = (await text('IAM base URL', primaryZone !== undefined ? `https://iam.${primaryZone}` : undefined)).replace(/\/+$/, '')
 		if (!URL.canParse(raw)) {
 			throw new Error(`Not a valid URL: ${raw === '' ? '(empty)' : raw}`)
 		}
@@ -166,17 +186,17 @@ async function collect(account: string): Promise<Collected> {
 	const reposRaw = await text('App repos to install the GitHub App on (comma-separated, e.g. contember/poplach)', '')
 	const installRepos = reposRaw.split(',').map((s) => s.trim()).filter(Boolean)
 
-	// propustka Stage 1 config: its admin hostname (= the propustka URL's host, its Custom Domain + token
+	// IAM Stage 1 config: its admin hostname (= the IAM URL's host, its Custom Domain + token
 	// `iss`), the OIDC upstream it federates human login to, and the email-domain allowlist. The OIDC client
-	// id may be left blank to bring the base up with PLACEHOLDER OIDC — propustka boots and machine auth +
+	// id may be left blank to bring the base up with PLACEHOLDER OIDC — IAM boots and machine auth +
 	// the bootstrap-admin hatch work immediately; only human SSO login waits for a real provider.
 	step('IAM auth config (Stage 1)')
-	const propustkaHostname = new URL(propustkaUrl).host
-	ok(`IAM hostname (from URL): ${propustkaHostname}`)
+	const iamHostname = new URL(iamUrl).host
+	ok(`IAM hostname (from URL): ${iamHostname}`)
 	const oidcIssuer = await text('IAM OIDC issuer URL', 'https://accounts.google.com')
 	const oidcClientIdRaw = await text('IAM OIDC client id (blank = placeholder OIDC for now)', '')
 	if (oidcClientIdRaw === '') {
-		warn('Placeholder OIDC — human SSO login is inert until you set real PROPUSTKA_OIDC_CLIENT_ID + _SECRET.')
+		warn('Placeholder OIDC — human SSO login is inert until you set real FABRIKA_IAM_OIDC_CLIENT_ID + _SECRET.')
 	}
 	const oidcClientId = oidcClientIdRaw === '' ? PLACEHOLDER_OIDC_CLIENT_ID : oidcClientIdRaw
 	const humanRaw = await text('IAM human email domains, comma-separated (who may self-provision at login)', '')
@@ -190,8 +210,8 @@ async function collect(account: string): Promise<Collected> {
 		operationsHostname,
 		githubOrg,
 		platformRepo,
-		propustkaUrl,
-		propustkaHostname,
+		iamUrl,
+		iamHostname,
 		oidcIssuer,
 		oidcClientId,
 		humanEmailDomains,
@@ -201,43 +221,57 @@ async function collect(account: string): Promise<Collected> {
 }
 
 /**
- * Generate the M4 vault KEK: 32 random bytes, base64. Printed ONCE — it lives nowhere else (never in D1,
- * never logged again), so losing it is unrecoverable. This is the one intentional secret-value print in the
- * whole CLI; it is unavoidable (the operator must capture it) and explicitly loud.
+ * Generate the M4 vault KEK: 32 random bytes, base64. It lives nowhere else (never in D1 or logs), so
+ * losing it is unrecoverable. Persist it locally and tell the operator where to secure it.
  */
-async function ensureVaultKey(): Promise<string> {
-	step('Generate the vault master key (VOZKA_VAULT_KEY)')
-	const existing = fromEnv('VOZKA_VAULT_KEY')
+interface VaultKeyDependencies {
+	readonly source: Readonly<Record<string, string | undefined>>
+	persist(name: string, value: string): Promise<void>
+	generate(): string
+	created(message: string, details: string[]): void
+}
+
+const vaultKeyDependencies: VaultKeyDependencies = {
+	source: ENVIRONMENT_SOURCE,
+	persist: persistEnv,
+	generate: () => randomBytes(32).toString('base64'),
+	created: action,
+}
+
+export async function ensureVaultKey(dependencies: VaultKeyDependencies = vaultKeyDependencies): Promise<string> {
+	step('Generate the vault master key (FABRIKA_CONTROL_VAULT_KEY)')
+	const existing = readResumeEnvironmentAlias(dependencies.source, 'FABRIKA_CONTROL_VAULT_KEY', 'VOZKA_VAULT_KEY')
 	if (existing !== undefined) {
-		ok('Reusing VOZKA_VAULT_KEY from .env (resume).')
+		await dependencies.persist('FABRIKA_CONTROL_VAULT_KEY', existing)
+		ok('Reusing FABRIKA_CONTROL_VAULT_KEY from .env (resume).')
 		return existing
 	}
-	const key = randomBytes(32).toString('base64')
-	await persistEnv('VOZKA_VAULT_KEY', key)
-	action('SAVED to .env (gitignored) — ALSO copy it to your password manager: vault KEK, UNRECOVERABLE if lost', [
+	const key = dependencies.generate()
+	await dependencies.persist('FABRIKA_CONTROL_VAULT_KEY', key)
+	dependencies.created('SAVED to .env (gitignored) — copy that file to your password manager; the vault KEK is unrecoverable if lost', [
 		"It is the master key for fabrika's encrypted secret vault.",
-		'',
-		`  VOZKA_VAULT_KEY=${key}`,
+		'The value is intentionally not printed.',
 	])
 	return key
 }
 
 /**
  * Generate the operator-side provisioning key (the "seeded key"): a single opaque `px_` bearer, stored
- * once. propustka Stage 1 SEEDS it (the `PROPUSTKA_PROVISIONING_KEY` secret — `resolveCaller` admits a
+ * once. IAM Stage 1 SEEDS it (the `FABRIKA_IAM_PROVISIONING_KEY` secret — `resolveCaller` admits a
  * bearer matching it as a synthetic admin) and fabrika Stage 2 USES it to authenticate schema reconciles.
- * Shaped like a propustka-native key (`px_` + 160 bits base64url). An operator who already has one can
- * pre-set `PROPUSTKA_PROVISIONING_KEY` in env and it is reused verbatim.
+ * Shaped like an IAM-native key (`px_` + 160 bits base64url). An operator who already has one can
+ * pre-set `FABRIKA_IAM_PROVISIONING_KEY` in env; the deprecated name remains a resume fallback.
  */
 async function ensureProvisioningKey(): Promise<string> {
-	step('Provisioning key (PROPUSTKA_PROVISIONING_KEY)')
-	const existing = fromEnv('PROPUSTKA_PROVISIONING_KEY')
+	step('Provisioning key (FABRIKA_IAM_PROVISIONING_KEY)')
+	const existing = readResumeEnvironmentAlias(ENVIRONMENT_SOURCE, 'FABRIKA_IAM_PROVISIONING_KEY', 'PROPUSTKA_PROVISIONING_KEY')
 	if (existing !== undefined) {
+		await persistEnv('FABRIKA_IAM_PROVISIONING_KEY', existing)
 		ok('Reusing the provisioning key from .env (resume).')
 		return existing
 	}
 	const key = `px_${randomBytes(20).toString('base64url')}`
-	await persistEnv('PROPUSTKA_PROVISIONING_KEY', key)
+	await persistEnv('FABRIKA_IAM_PROVISIONING_KEY', key)
 	ok('Provisioning key generated + saved to .env.')
 	detail('IAM Stage 1 seeds this as an admin credential; the control plane reconciles with it in Stage 2.')
 	return key
@@ -257,7 +291,7 @@ async function ensureOperationsSyncKey(): Promise<string> {
 	return key
 }
 
-/** One ES256 (EC P-256) private JWK with an RFC 7638 thumbprint `kid`, shaped exactly as propustka's
+/** One ES256 (EC P-256) private JWK with an RFC 7638 thumbprint `kid`, shaped exactly as IAM's
  * `Signer.fromPrivateJwks` loads it (index 0 = the active signer). */
 function generateEs256Jwk(): JsonWebKey & { kid: string } {
 	const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
@@ -268,38 +302,40 @@ function generateEs256Jwk(): JsonWebKey & { kid: string } {
 }
 
 /**
- * Generate propustka's token-signing key (Stage 1): a JSON array with one ES256 private JWK. propustka
+ * Generate IAM's token-signing key (Stage 1): a JSON array with one ES256 private JWK. IAM
  * signs every token it issues with index 0 and publishes the public half in its JWKS. Stored once
- * (`PROPUSTKA_SIGNING_KEYS`) and pushed as a propustka Worker secret by Stage 1. Resume-safe; it must be
+ * (`FABRIKA_IAM_SIGNING_KEYS`) and pushed as an IAM Worker secret by Stage 1. Resume-safe; it must be
  * DURABLE — rotating it invalidates every live token (so we never regenerate when one already exists).
  */
 async function ensureSigningKeys(): Promise<string> {
-	step('Generate the IAM signing key (PROPUSTKA_SIGNING_KEYS)')
-	const existing = fromEnv('PROPUSTKA_SIGNING_KEYS')
+	step('Generate the IAM signing key (FABRIKA_IAM_SIGNING_KEYS)')
+	const existing = readResumeEnvironmentAlias(ENVIRONMENT_SOURCE, 'FABRIKA_IAM_SIGNING_KEYS', 'PROPUSTKA_SIGNING_KEYS')
 	if (existing !== undefined) {
-		ok('Reusing PROPUSTKA_SIGNING_KEYS from .env (resume).')
+		await persistEnv('FABRIKA_IAM_SIGNING_KEYS', existing)
+		ok('Reusing FABRIKA_IAM_SIGNING_KEYS from .env (resume).')
 		return existing
 	}
 	const keys = JSON.stringify([generateEs256Jwk()])
-	await persistEnv('PROPUSTKA_SIGNING_KEYS', keys)
+	await persistEnv('FABRIKA_IAM_SIGNING_KEYS', keys)
 	ok('IAM signing key generated (1 × ES256) + saved to .env.')
 	return keys
 }
 
 /**
- * Resolve propustka's OIDC client secret (Stage 1). Reused from `.env` on resume; otherwise a hidden
+ * Resolve IAM's OIDC client secret (Stage 1). Reused from `.env` on resume; otherwise a hidden
  * prompt for a real provider, or the placeholder when SSO was deferred (blank client id). Always persisted
  * so a re-run reuses it. NEVER logged.
  */
 async function ensureOidcClientSecret(placeholder: boolean): Promise<string> {
-	step('IAM OIDC client secret (PROPUSTKA_OIDC_CLIENT_SECRET)')
-	const existing = fromEnv('PROPUSTKA_OIDC_CLIENT_SECRET')
+	step('IAM OIDC client secret (FABRIKA_IAM_OIDC_CLIENT_SECRET)')
+	const existing = readResumeEnvironmentAlias(ENVIRONMENT_SOURCE, 'FABRIKA_IAM_OIDC_CLIENT_SECRET', 'PROPUSTKA_OIDC_CLIENT_SECRET')
 	if (existing !== undefined) {
-		ok('Reusing PROPUSTKA_OIDC_CLIENT_SECRET from .env (resume).')
+		await persistEnv('FABRIKA_IAM_OIDC_CLIENT_SECRET', existing)
+		ok('Reusing FABRIKA_IAM_OIDC_CLIENT_SECRET from .env (resume).')
 		return existing
 	}
 	const value = placeholder ? PLACEHOLDER_OIDC_CLIENT_SECRET : await secret('IAM OIDC client secret')
-	await persistEnv('PROPUSTKA_OIDC_CLIENT_SECRET', value)
+	await persistEnv('FABRIKA_IAM_OIDC_CLIENT_SECRET', value)
 	ok(placeholder ? 'Placeholder OIDC client secret saved to .env.' : 'OIDC client secret saved to .env.')
 	return value
 }
@@ -371,9 +407,9 @@ function finalNotes(repo: string, account: string, dir: string, ref: string): vo
 	step('Done')
 	ok(`Base repo: ${repo} (pinned fabrika ref: ${ref})`)
 	ok(`Local checkout + .env: ${dir}`)
-	info('The fabrika control plane came up with the bootstrap-admin escape hatch OPEN (VOZKA_BOOTSTRAP_ADMINS set).')
+	info('The fabrika control plane came up with the bootstrap-admin escape hatch OPEN (FABRIKA_CONTROL_BOOTSTRAP_ADMINS set).')
 	action('OPERATOR ACTION — close the hatch after IAM grants you the fabrika admin role', [
-		`1. gh variable set VOZKA_BOOTSTRAP_ADMINS --repo ${repo} --env ${account} --body '[]'`,
+		`1. gh variable set FABRIKA_CONTROL_BOOTSTRAP_ADMINS --repo ${repo} --env ${account} --body '[]'`,
 		`2. gh workflow run platform.yml --repo ${repo}`,
 		'3. Authorization is then fully IAM-owned.',
 	])

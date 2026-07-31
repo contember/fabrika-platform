@@ -25,7 +25,7 @@ the GitHub App, the Environment with its secrets and variables, and triggers the
 `build_runner_image=true`. The first run builds and pushes the runner container image into the account.
 
 To close the escape hatch once IAM grants you admin, set the `{{ACCOUNT}}` Environment variable
-`VOZKA_BOOTSTRAP_ADMINS` to `[]` and re-run the workflow.
+`FABRIKA_CONTROL_BOOTSTRAP_ADMINS` to `[]` and re-run the workflow.
 
 ## Routine redeploy or version bump
 

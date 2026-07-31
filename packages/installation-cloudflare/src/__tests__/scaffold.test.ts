@@ -52,11 +52,19 @@ describe('platform scaffold', () => {
 			const workflow = files['.github/workflows/platform.yml'] ?? ''
 			expect(workflow.indexOf('name: Deploy IAM')).toBeLessThan(workflow.indexOf('name: Deploy Operations'))
 			expect(workflow.indexOf('name: Deploy Operations')).toBeLessThan(workflow.indexOf('name: Deploy fabrika runner + control plane'))
+			const iamStep = workflow.slice(workflow.indexOf('name: Deploy IAM'), workflow.indexOf('name: Deploy Operations'))
+			expect(iamStep).toContain('FABRIKA_IAM_SIGNING_KEYS: ${{ secrets.FABRIKA_IAM_SIGNING_KEYS }}')
+			expect(iamStep).toContain('FABRIKA_IAM_PROVISIONING_KEY: ${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}')
 			const operationsStep = workflow.slice(
 				workflow.indexOf('name: Deploy Operations'),
 				workflow.indexOf('name: Deploy fabrika runner + control plane'),
 			)
-			expect(operationsStep).toContain('PROPUSTKA_URL: ${{ vars.PROPUSTKA_URL }}')
+			expect(operationsStep).toContain('FABRIKA_IAM_URL: ${{ vars.FABRIKA_IAM_URL }}')
+			expect(workflow).toContain('FABRIKA_CONTROL_VAULT_KEY: ${{ secrets.FABRIKA_CONTROL_VAULT_KEY }}')
+			expect(workflow).toContain('FABRIKA_CONTROL_DOMAIN: ${{ vars.FABRIKA_CONTROL_DOMAIN }}')
+			expect(workflow).toContain('FABRIKA_CONTROL_BOOTSTRAP_ADMINS: ${{ vars.FABRIKA_CONTROL_BOOTSTRAP_ADMINS }}')
+			expect(workflow).not.toContain('PROPUSTKA_')
+			expect(workflow).not.toContain('VOZKA_')
 
 			const generated = Object.values(files).join('\n')
 			for (const forbidden of FORBIDDEN_GENERATED_REFERENCES) {
