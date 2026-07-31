@@ -73,6 +73,8 @@ export interface CreateIamOptions {
 	devDefaultPersona?: string
 	/** The cookie the dev persona-switch reads/writes. Default `propustka_dev_principal`. */
 	devPersonaCookie?: string
+	/** Optional request header that overrides the query/cookie dev persona selector. */
+	devPersonaHeader?: string
 }
 
 /** Failure half of `SessionAuthResult` — handed to `authMiddleware`'s `onError` hook. */
@@ -320,6 +322,7 @@ interface IamConfig {
 	devPersonas: Record<string, PersonaSpec> | undefined
 	devDefaultPersona: string | undefined
 	devPersonaCookie: string
+	devPersonaHeader: string | undefined
 }
 
 /**
@@ -334,6 +337,7 @@ export class Iam {
 	private readonly devPersonas: Record<string, PersonaSpec> | undefined
 	private readonly devDefaultPersona: string | undefined
 	private readonly devPersonaCookie: string
+	private readonly devPersonaHeader: string | undefined
 
 	/** @internal — use `createIam`. */
 	constructor(config: IamConfig) {
@@ -343,6 +347,7 @@ export class Iam {
 		this.devPersonas = config.devPersonas
 		this.devDefaultPersona = config.devDefaultPersona
 		this.devPersonaCookie = config.devPersonaCookie
+		this.devPersonaHeader = config.devPersonaHeader
 	}
 
 	// ── Management surface (delegated to the real / fake client) ──────────────────
@@ -498,7 +503,8 @@ export class Iam {
 	private resolveDevPersona(request: Request): SessionAuthResult {
 		// `__as` is decoded by URLSearchParams; the cookie was URL-encoded by `devLoginHandler`, so decode it.
 		const cookieSelector = readCookie(request.headers.get('Cookie'), this.devPersonaCookie)
-		const selector = new URL(request.url).searchParams.get('__as') ?? (cookieSelector === null ? null : safeDecode(cookieSelector))
+		const headerSelector = this.devPersonaHeader === undefined ? null : request.headers.get(this.devPersonaHeader)
+		const selector = headerSelector ?? new URL(request.url).searchParams.get('__as') ?? (cookieSelector === null ? null : safeDecode(cookieSelector))
 			?? this.devDefaultPersona
 			?? null
 		if (selector === null) {
@@ -525,6 +531,7 @@ export function createIam(env: IamEnv, opts: CreateIamOptions = {}): Iam {
 		throw new Error('createIam: app id is required — pass opts.appId or set env.PROPUSTKA_APP_ID')
 	}
 	const devPersonaCookie = opts.devPersonaCookie ?? 'propustka_dev_principal'
+	const devPersonaHeader = opts.devPersonaHeader
 
 	if (env.DEV) {
 		const fakePersonas = toFakePersonas(opts.devPersonas)
@@ -536,6 +543,7 @@ export function createIam(env: IamEnv, opts: CreateIamOptions = {}): Iam {
 			devPersonas: opts.devPersonas,
 			devDefaultPersona: opts.devDefaultPersona,
 			devPersonaCookie,
+			devPersonaHeader,
 		})
 	}
 
@@ -555,5 +563,6 @@ export function createIam(env: IamEnv, opts: CreateIamOptions = {}): Iam {
 		devPersonas: opts.devPersonas,
 		devDefaultPersona: opts.devDefaultPersona,
 		devPersonaCookie,
+		devPersonaHeader,
 	})
 }

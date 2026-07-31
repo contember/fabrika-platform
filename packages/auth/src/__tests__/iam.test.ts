@@ -309,6 +309,24 @@ describe('authMiddleware — dev persona', () => {
 		expect(ctx.auth?.principal?.id).toBe('p-admin')
 	})
 
+	test('an explicit persona header overrides the cookie and default', async () => {
+		const configured = createIam(devEnv, {
+			devPersonas: PERSONAS,
+			devDefaultPersona: 'admin@x.test',
+			devPersonaHeader: 'X-Dev-Principal',
+		})
+		const { ctx } = await run(
+			configured.authMiddleware({ gates: HUMAN_GATES }),
+			new Request('https://app/page', {
+				headers: {
+					Cookie: 'propustka_dev_principal=admin%40x.test',
+					'X-Dev-Principal': 'scoped@x.test',
+				},
+			}),
+		)
+		expect(ctx.auth?.principal?.id).toBe('p-scoped')
+	})
+
 	test('an unknown persona → 403, next NOT called', async () => {
 		const { response, nextCalled } = await run(iam().authMiddleware({ gates: HUMAN_GATES }), new Request('https://app/page?__as=ghost@x.test'))
 		expect(nextCalled).toBe(false)
