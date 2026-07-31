@@ -48,6 +48,7 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 - [43](43-gate-zerops-deploys-on-readiness.md) — No `deploy.readinessCheck` anywhere, and no explicit timeouts on any check.
 - [44](44-make-proxy-manifest-delivery-quoting-safe.md) — The proxy manifest is spliced into a shell command as JSON; the `${…}` form is ambiguous.
 - [45](45-pin-the-zerops-postgres-connection-target.md) — `connectionString` carries no database and no SSL mode; both are driver defaults today.
+- [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
 - [06](06-can-zerops-secrets-be-read-back.md) — Near-settled: upstream says a write-capable token returns secret values. Confirm, then decide the UX.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.

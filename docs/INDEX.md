@@ -20,6 +20,7 @@ fabrika-platform is and how the pieces fit — then skim
 ## Active sprints
 
 - [Auth boundary cleanup (2026-07-31)](sprints/sprint-2026-07-31-auth-boundary-cleanup.md) — retire the duplicate in-process auth front door and close schema-reconcile cancellation.
+- [Operations functional parity (2026-07-31)](sprints/sprint-2026-07-31-operations-functional-parity.md) — close Poplach parity gaps in error alerts, issue exploration, triage, and delivery evidence.
 
 ## What's hot
 
@@ -27,7 +28,8 @@ fabrika-platform is and how the pieces fit — then skim
      If everything is "hot", nothing is. -->
 
 - **In motion:** retire duplicate in-process gate enforcement and close schema-reconcile cancellation in the
-  [auth boundary cleanup sprint](sprints/sprint-2026-07-31-auth-boundary-cleanup.md).
+  [auth boundary cleanup sprint](sprints/sprint-2026-07-31-auth-boundary-cleanup.md), and execute the
+  [Operations functional-parity sprint](sprints/sprint-2026-07-31-operations-functional-parity.md).
 - **Release activation:** run hosted CI, bootstrap the nineteen npm packages, and prove the tokenless release path in
   [`backlog/25-bootstrap-npm-trusted-publishing.md`](backlog/25-bootstrap-npm-trusted-publishing.md).
 - **External next:** run the resulting composition against a real account in
