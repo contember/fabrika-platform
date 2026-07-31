@@ -22,6 +22,7 @@
 		"maintenance": "bun src/node/cron.ts"
 	},
 	"dependencies": {
+		"@fabrika/app": "workspace:*",
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/engine": "workspace:*",

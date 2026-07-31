@@ -88,6 +88,7 @@
       "name": "@fabrika/control",
       "version": "0.0.1",
       "dependencies": {
+        "@fabrika/app": "workspace:*",
         "@fabrika/auth": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/engine": "workspace:*",
@@ -153,6 +154,7 @@
       "name": "@fabrika/iam",
       "version": "0.0.1",
       "dependencies": {
+        "@fabrika/app": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/iam-contract": "workspace:*",
         "@fabrika/platform": "workspace:*",
@@ -236,6 +238,7 @@
       "name": "@fabrika/operations",
       "version": "0.0.1",
       "dependencies": {
+        "@fabrika/app": "workspace:*",
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",

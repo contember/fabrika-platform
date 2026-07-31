@@ -99,6 +99,7 @@
 		"migrate:postgres": "bun src/node/migrate.ts"
 	},
 	"dependencies": {
+		"@fabrika/app": "workspace:*",
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",

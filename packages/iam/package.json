@@ -21,6 +21,7 @@
 		"prune:auth-log": "bun src/node/prune.ts"
 	},
 	"dependencies": {
+		"@fabrika/app": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/iam-contract": "workspace:*",
 		"@fabrika/platform": "workspace:*",
