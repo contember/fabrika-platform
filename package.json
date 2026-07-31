@@ -7,11 +7,16 @@
 		"examples/*"
 	],
 	"scripts": {
-		"typecheck": "bun run --filter '*' typecheck",
+		"typecheck": "bun run --filter '*' typecheck && tsc --project scripts/tsconfig.json",
 		"test": "bun test",
 		"lint": "biome lint .",
 		"format": "dprint fmt",
 		"format:check": "dprint check",
+		"release:validate": "bun scripts/release.ts validate",
+		"release:pack": "bun scripts/release.ts pack",
+		"release:smoke": "bun scripts/release.ts smoke",
+		"release:publish": "bun scripts/release.ts publish",
+		"release:registry-smoke": "bun scripts/release.ts registry-smoke",
 		"local:up": "bun run --filter @fabrika/local-stack up",
 		"local:status": "bun run --filter @fabrika/local-stack status",
 		"local:smoke": "bun run --filter @fabrika/local-stack smoke",

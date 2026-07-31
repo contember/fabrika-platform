@@ -19,7 +19,8 @@
 		"typecheck": "tsc --noEmit",
 		"test": "bun test",
 		"dev": "bun run src/main.ts",
-		"build": "bun run src/generate-config.ts && bun build --compile --target=bun-linux-x64-musl ./src/main.ts --outfile ./dist/fabrika-proxy"
+		"build": "bun run src/generate-config.ts && bun build --compile --target=bun-linux-x64-musl ./src/main.ts --outfile ./dist/fabrika-proxy",
+		"build:check": "bun run src/generate-config.ts ./fixtures/empty.manifest.json ./dist/caddy.json && bun build --compile --target=bun-linux-x64-musl ./src/main.ts --outfile ./dist/fabrika-proxy"
 	},
 	"dependencies": {
 		"@fabrika/auth-core": "workspace:*",
