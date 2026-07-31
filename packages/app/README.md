@@ -152,3 +152,23 @@ const shutdown = async (): Promise<void> => {
 `drain()` waits for every task registered through the request execution context's
 `waitUntil()`. Stop accepting requests before draining, then close databases and
 other process resources.
+
+## Runtime conformance
+
+Use the test-runner-neutral `@fabrika/app/testing` entrypoint to prove that a
+portable route behaves the same through direct Fetch dispatch and both runtime
+adapters:
+
+```ts
+import { assertAppRuntimeConformance } from '@fabrika/app/testing'
+
+const response = await assertAppRuntimeConformance({
+	app,
+	createEnv: () => createIsolatedTestEnv(),
+	createRequest: () => new Request('https://app.test/healthz'),
+})
+```
+
+The helper drains registered background work and compares normalized status,
+headers, and text body. Do not use it for routes that exist in only one runtime
+composition.

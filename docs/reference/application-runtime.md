@@ -85,3 +85,15 @@ Runtime adapters add process lifecycle without changing request behavior:
 Provider authoring remains separate: an app's `fabrika.config.ts` imports its
 selected provider package. Portable request code imports `@fabrika/app`; only the
 deployment entrypoint imports its runtime adapter.
+
+## Runtime conformance tests
+
+`@fabrika/app/testing` runs an equivalent fresh request through direct
+`FabrikaApp.fetch()`, the Bun adapter, and the Cloudflare adapter. It normalizes
+the response status, headers, and text body and can assert that all three values
+match. The helper has no test-runner dependency.
+
+Each execution receives fresh environment state and a fresh `Request`. Use these
+tests for routes that are intentionally portable. Keep composition-specific
+surfaces separate; for example, IAM's process health and shared-secret HTTP RPC
+transports exist only in the Bun composition.

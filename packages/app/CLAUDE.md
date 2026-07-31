@@ -19,6 +19,7 @@ src/
   app.ts              runtime-neutral request pipeline
   cloudflare.ts       Worker module adapter and lifecycle types
   bun.ts              Bun handler, background-task tracking, graceful drain
+  testing.ts          test-runner-neutral cross-runtime conformance helper
   router.ts           typed HTTP and RPC route matching
   middleware.ts       middleware runner over @fabrika/auth's canonical contract
   errors.ts           structural HTTP error mapping
@@ -41,6 +42,7 @@ src/
   from `@fabrika/app/cloudflare` and `@fabrika/app/bun`.
 - The Bun adapter tracks every `waitUntil()` task. Shutdown drains them before
   application resources close.
+- Conformance tests create fresh requests and environment state for every runtime.
 - Validators implement Standard Schema. Do not add a required validation library.
 - Never log credentials, secret values, or request headers.
 - No casts, `any`, `@ts-ignore`, or `@ts-expect-error`.

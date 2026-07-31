@@ -30,6 +30,11 @@
 			"bun": "./src/cloudflare.ts",
 			"types": "./src/cloudflare.ts",
 			"default": "./src/cloudflare.ts"
+		},
+		"./testing": {
+			"bun": "./src/testing.ts",
+			"types": "./src/testing.ts",
+			"default": "./src/testing.ts"
 		}
 	},
 	"scripts": {
