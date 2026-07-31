@@ -1,7 +1,7 @@
 import type { AuthContext } from '@fabrika/auth'
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
-import { BadRequestError } from '../errors.js'
+import { BadRequestError, UnauthorizedError } from '../errors.js'
 import { initRpc } from '../rpc/builder.js'
 import { dispatchRpcRequest } from '../rpc/dispatcher.js'
 import type { InferRouterClient } from '../rpc/types.js'
@@ -135,6 +135,7 @@ describe('rpc dispatch — error status from the thrown error httpStatus', () =>
 		bad: r.procedure.input(z.object({})).handler(() => raise(new BadRequestError('nope'))),
 		teapot: r.procedure.input(z.object({})).handler(() => raise({ httpStatus: 418, type: 'teapot', message: 'short and stout' })),
 		boom: r.procedure.input(z.object({})).handler(() => raise(new Error('kaboom'))),
+		login: r.procedure.input(z.object({})).handler(() => raise(new UnauthorizedError('login required', { loginUrl: 'https://iam.test/auth/login' }))),
 	})
 	async function d(method: string) {
 		const res = await dispatchRpcRequest({ router, ctx: { auth: fakeAuth(['*']) }, request: jsonRequest('https://x/rpc', { method, input: {} }) })
@@ -157,6 +158,12 @@ describe('rpc dispatch — error status from the thrown error httpStatus', () =>
 		const { status, body } = await d('boom')
 		expect(status).toBe(500)
 		expect(record(record(body)['error'])['type']).toBe('internal')
+	})
+
+	test('a structural auth error preserves loginUrl', async () => {
+		const { status, body } = await d('login')
+		expect(status).toBe(401)
+		expect(record(record(body)['error'])['loginUrl']).toBe('https://iam.test/auth/login')
 	})
 })
 
