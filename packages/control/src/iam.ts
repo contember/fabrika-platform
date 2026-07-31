@@ -14,8 +14,21 @@
  *
  * The GitHub webhook is the ONLY route that skips this guard (HMAC-gated instead — see index.ts).
  */
-import type { AppGates, AuthContext, DomainEvent, FakePersona, IamRpc, PrincipalIdentity, Scope } from '@fabrika/auth'
-import { PropustkaAuth } from '@fabrika/auth'
+import {
+	type AppGates,
+	type AuthCarrier,
+	type AuthContext,
+	createIam as createAppIam,
+	type DomainEvent,
+	type FakePersona,
+	type IamRpc,
+	makeDevContext as makeAppDevContext,
+	type Middleware,
+	type PersonaSpec,
+	type PrincipalIdentity,
+	PropustkaAuth,
+	type Scope,
+} from '@fabrika/auth'
 import { type ACTIONS, SCOPES, VOZKA_APP_ID } from './actions'
 import { error } from './http'
 
@@ -86,7 +99,7 @@ export interface IamEnv {
  * WIDENING ONLY — everything that was `Secure` before still is, so the Cloudflare path is unchanged
  * (there the request protocol is https either way).
  */
-function secureCookies(env: IamEnv): boolean | undefined {
+function secureCookies(env: IamEnv): true | undefined {
 	const domain = env.VOZKA_DOMAIN
 	return domain !== undefined && domain.trim() !== '' ? true : undefined
 }
@@ -141,32 +154,36 @@ const DEV_PERSONAS: Record<string, FakePersona> = {
 	},
 }
 
-/** Match a fabrika permission action pattern against a requested action (`*` / `prefix.*` / exact). */
-function actionMatches(pattern: string, action: string): boolean {
-	if (pattern === '*') {
-		return true
-	}
-	if (pattern.endsWith('*')) {
-		return action.startsWith(pattern.slice(0, -1))
-	}
-	return pattern === action
+const SDK_DEV_PERSONAS: Record<string, PersonaSpec> = {
+	'admin@vozka.test': { id: 'mem-admin', label: 'admin@vozka.test', type: 'user', permissions: [{ action: '*', scope: null }] },
+	'operator@vozka.test': {
+		id: 'mem-operator',
+		label: 'operator@vozka.test',
+		type: 'user',
+		permissions: [{ action: 'deploy.*', scope: null }],
+	},
+	'viewer@vozka.test': {
+		id: 'mem-viewer',
+		label: 'viewer@vozka.test',
+		type: 'user',
+		permissions: [{ action: 'deploy.read', scope: null }],
+	},
 }
 
 /**
- * A synthesized AuthContext for a dev persona. The dev fixtures hold GLOBAL grants only (scope null),
- * so `can` is a pure action-pattern match and `scopedTo` is unrestricted (`null`) for any held action;
- * `audit` is a no-op (there is no IAM Worker locally).
+ * Adapt the legacy router-test persona shape to the SDK persona kernel. Runtime requests use
+ * `controlAuthMiddleware`; compatibility tests still get the same matcher and context semantics.
  */
 function makeDevContext(persona: FakePersona): AuthContext {
-	const principal: PrincipalIdentity = { id: persona.id, type: persona.type ?? 'user', label: persona.label }
-	const holds = (action: string): boolean => persona.permissions.some((p) => p.scope === null && actionMatches(p.action, action))
-	return {
-		ok: true,
-		principal,
-		can: (action, _scope) => holds(action),
-		scopedTo: (action, _dimension) => (holds(action) ? null : []),
-		audit: () => Promise.resolve(),
-	}
+	return makeAppDevContext({
+		id: persona.id,
+		label: persona.label,
+		type: persona.type ?? 'user',
+		permissions: persona.permissions.map((permission) => ({
+			action: permission.action,
+			scope: permission.scope,
+		})),
+	})
 }
 
 /** Read the selected dev persona email from the `X-Dev-Principal` header (preferred) or the cookie. */
@@ -248,6 +265,64 @@ export function createIam(env: IamEnv): Authenticator {
 	// admin BEFORE propustka is consulted (its mintFromKey only knows DB-backed credentials, not this
 	// env-only bootstrap key), so CI can onboard apps before any admin credential exists.
 	return withProvisioningKey(withBootstrapAdmins(base, bootstrapAdmins), (env.PROPUSTKA_PROVISIONING_KEY ?? '').trim())
+}
+
+/**
+ * The application-framework auth front door. It uses the public IAM SDK for normal dev and
+ * production authentication, then applies the two control-only bootstrap hatches to the resolved
+ * context. Legacy `Authenticator` exports remain for direct router tests and compatibility callers.
+ */
+export function controlAuthMiddleware<Ctx extends AuthCarrier>(env: IamEnv): Middleware<Ctx> {
+	const secure = secureCookies(env)
+	const iam = createAppIam(env, {
+		appId: VOZKA_APP_ID,
+		devPersonas: SDK_DEV_PERSONAS,
+		devDefaultPersona: DEV_DEFAULT_EMAIL,
+		devPersonaCookie: DEV_PERSONA_COOKIE,
+		devPersonaHeader: DEV_PRINCIPAL_HEADER,
+		...(secure === undefined ? {} : { forceSecureCookies: secure }),
+	})
+	const bootstrapAdmins = parseBootstrapAdmins(env.VOZKA_BOOTSTRAP_ADMINS)
+	const provisioningKey = (env.PROPUSTKA_PROVISIONING_KEY ?? '').trim()
+	const authenticate = iam.authMiddleware<Ctx>({
+		gates: VOZKA_GATES,
+		onError(_request, failure) {
+			return error(
+				failure.status,
+				failure.reason,
+				failure.loginUrl === undefined ? undefined : { loginUrl: failure.loginUrl },
+			)
+		},
+	})
+
+	return async (request, ctx, next) => {
+		const path = new URL(request.url).pathname
+		if (!path.startsWith('/api/') || path === '/api/health') return next()
+
+		if (provisioningKey !== '') {
+			const bearer = readBearerToken(request.headers.get('Authorization'))
+			if (bearer !== null && constantTimeEqual(bearer, provisioningKey)) {
+				ctx.auth = makeProvisioningContext()
+				return next()
+			}
+		}
+
+		return authenticate(request, ctx, async () => {
+			const auth = ctx.auth
+			const principal = auth?.principal
+			if (
+				auth !== undefined
+				&& auth !== null
+				&& principal !== undefined
+				&& principal !== null
+				&& principal.type === 'user'
+				&& bootstrapAdmins.has(principal.label)
+			) {
+				ctx.auth = new BootstrapAdminAuthContext(auth)
+			}
+			return next()
+		})
+	}
 }
 
 /** The synthetic principal a provisioning-key request resolves to (mirrors propustka's `provisioning-admin`). */

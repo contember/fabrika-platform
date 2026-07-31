@@ -681,7 +681,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 		const handler = createFetchHandler(env(), fakeControlProvider)
 
-		// The process-level liveness route, claimed before `handleFetch` could hand it to the SPA.
+		// The process-level liveness route is claimed before the SPA fallback.
 		expect((await handler(new Request('http://localhost:18291/healthz'))).status).toBe(200)
 		// …and the Worker's own health route, unchanged, so one monitor works on both platforms.
 		expect((await handler(new Request('http://localhost:18291/api/health'))).status).toBe(200)

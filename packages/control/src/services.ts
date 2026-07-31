@@ -3,7 +3,7 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import type { ApiDeps } from './api/router'
 import type { ControlRepositories, RunRow } from './db'
 import type { Env } from './env'
-import { createIam } from './iam'
+import type { Authenticator } from './iam'
 import {
 	type OperationsCatalogSyncDeps,
 	type OperationsCatalogSyncSummary,
@@ -99,10 +99,10 @@ export async function cancelRun(env: Env, provider: ControlProvider, run: RunRow
 }
 
 /** Assemble the shared API dependencies around one statically selected provider. */
-export function buildApiDeps(env: Env, provider: ControlProvider): ApiDeps {
+export function buildApiDeps(env: Env, provider: ControlProvider, iam: Authenticator): ApiDeps {
 	return {
 		repositories: repositories(env),
-		iam: createIam(env),
+		iam,
 		queue: env.DEPLOY_QUEUE,
 		logs: env.RUN_LOGS,
 		repoSource: repoSource(env),

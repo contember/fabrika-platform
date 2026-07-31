@@ -1,10 +1,8 @@
 // The BUN entrypoint — the control plane as a long-running process.
 //
-// The sibling of `src/index.ts`, not a fork of it. Both call the same three functions:
+// The sibling of `src/index.ts`, not a fork of it. Both use the same application and jobs:
 //
-//   handleFetch   (src/routes.ts)   — health, the webhook, `/api/*`, the SPA. Untouched by this file;
-//                                     the layer was already `Request → Response`, so serving it from
-//                                     `Bun.serve` instead of a Worker is wiring, not a rewrite.
+//   controlApp    (src/app.ts)      — health, the webhook, `/api/*`, the SPA, and IAM middleware.
 //   runDeployJob  (src/consumer.ts) — one queued deploy, end to end. On Workers the platform calls
 //                                     `queue()` with a batch; here `PostgresJobConsumer` polls a table
 //                                     and calls the same function. See below for the ack/retry mapping.
@@ -12,18 +10,17 @@
 //                                     platform cron drives it (`run.crontab` → `node/cron.ts`), which
 //                                     is the same shape as `triggers.crons` driving `scheduled`.
 //
-// Route order matters and is the one thing this file decides: `/healthz` is claimed FIRST, before
-// `handleFetch` can hand an unmatched path to the SPA fallback. Everything else is identical to the
-// Worker, including `/api/health` — which `handleFetch` still serves, so an existing monitor keeps
-// working on both platforms.
+// The shared application owns route order, including process liveness before the SPA fallback.
+// `/api/health` remains available on both platforms for existing monitors.
 //
 // Run it: `bun src/node/server.ts` (see `zerops.yaml` → `run.start`).
 
+import { type BunHandler, createBunHandler } from '@fabrika/app/bun'
 import { PostgresJobConsumer } from '@fabrika/platform-node'
+import { controlApp } from '../app'
 import { decodeDeployJobMessage, runDeployJob } from '../consumer'
 import type { Env } from '../env'
 import { reconcileProviderRuns } from '../provider-reconcile'
-import { handleFetch } from '../routes'
 import { DEPLOY_LOCK_TTL_MS, locks, operationsReleaseDeps, repositories } from '../services'
 import { createRuntime, type Runtime } from './runtime'
 
@@ -32,26 +29,15 @@ export function createFetchHandler(
 	env: Env,
 	provider: Runtime['provider'],
 ): (request: Request) => Promise<Response> {
-	return async (request: Request): Promise<Response> => {
-		try {
-			const url = new URL(request.url)
-			// Liveness only, deliberately: it answers "is this process serving?", not "is Postgres
-			// healthy?". Wiring the database into the health check would let one slow query make the
-			// platform restart every container at once, turning a degraded dependency into an outage.
-			if (url.pathname === '/healthz') {
-				return Response.json({ status: 'ok' })
-			}
-			return await handleFetch(request, env, provider)
-		} catch (err) {
-			// NOT optional on this runtime. Bun's default error page embeds the exception AND the
-			// surrounding SOURCE LINES in the response body; the Workers runtime returns an opaque 500
-			// instead, so this is the one place the two entrypoints would have genuinely differed in what
-			// they show an attacker. Log a short message only — an error object here can quote a clone URL
-			// with an embedded token, or a connection string.
-			console.error('unhandled request error:', err instanceof Error ? err.message : 'unknown error')
-			return new Response('internal error', { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8' } })
-		}
-	}
+	return createControlBunHandler(env, provider).fetch
+}
+
+function createControlBunHandler(env: Env, provider: Runtime['provider']): BunHandler {
+	return createBunHandler(controlApp, { env, provider }, {
+		onBackgroundError() {
+			console.error('control background task failed')
+		},
+	})
 }
 
 /**
@@ -109,6 +95,7 @@ async function main(): Promise<void> {
 			+ `failed=${reconciliation.failed} in-progress=${reconciliation.inProgress} waiting=${reconciliation.waiting}`,
 	)
 	consumer.start()
+	const appHandler = createControlBunHandler(runtime.env, runtime.provider)
 
 	const server = Bun.serve({
 		port: runtime.config.port,
@@ -116,7 +103,7 @@ async function main(): Promise<void> {
 		// listener speaks HTTP and holds no certificates. The `px_token` cookie is still marked `Secure`:
 		// `src/iam.ts` decides that from the configured public domain (`VOZKA_DOMAIN`), not from the
 		// socket, precisely because behind a terminating balancer the socket is the wrong signal.
-		fetch: createFetchHandler(runtime.env, runtime.provider),
+		fetch: appHandler.fetch,
 		// Backstop for anything raised outside the handler. The handler already catches its own throws
 		// (see `createFetchHandler`); without this, Bun's default page would answer with source lines.
 		error(err: unknown): Response {
@@ -144,6 +131,7 @@ async function main(): Promise<void> {
 		stopping = true
 		console.info(`vozka shutting down (${signal})`)
 		void server.stop(false)
+			.then(() => appHandler.drain())
 			.then(() => consumer.stop())
 			.then(() => runtime.shutdown())
 			.then(() => process.exit(0))

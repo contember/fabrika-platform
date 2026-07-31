@@ -1,17 +1,17 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
+import { controlApp } from './app'
 import { runDeployJob } from './consumer'
 import { runMaintenance } from './cron'
 import type { Env } from './env'
 import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './platform-cf'
-import { handleFetch } from './routes'
 import type { DeployJobMessage } from './run-lifecycle'
 
 /**
  * The fabrika control plane — the CLOUDFLARE entrypoint, and nothing more. A single `WorkerEntrypoint`
  * carrying `fetch`, `queue` (the deploy consumer) and `scheduled` (repo poll + stale-run sweep).
  *
- * There is no logic here. Every method delegates to a runtime-neutral function — `handleFetch`
- * (src/routes.ts), `runDeployJob` (src/consumer.ts), and `runMaintenance` (src/cron.ts) — the same
+ * There is no logic here. Every method delegates to the runtime-neutral `controlApp`,
+ * `runDeployJob` (src/consumer.ts), and `runMaintenance` (src/cron.ts) — the same
  * functions the Bun entrypoint calls. This composition root selects Cloudflare once.
  * This file's whole job is to bind `cloudflare:workers` to them, and it is the ONLY file in the
  * package that imports it: the Bun process must never load this module, and it must never load
@@ -28,7 +28,7 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 
 	override fetch(request: Request): Promise<Response> {
 		const env = this.control
-		return handleFetch(request, env, cloudflareControlProvider(this.env, env))
+		return controlApp.fetch(request, { env, provider: cloudflareControlProvider(this.env, env) }, this.ctx)
 	}
 
 	/**

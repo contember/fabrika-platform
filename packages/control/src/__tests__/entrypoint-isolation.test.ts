@@ -3,7 +3,7 @@
 //
 // Why it needs proving: nothing in the type system stops someone adding `import { X } from
 // 'cloudflare:workers'` to a file that `src/node/server.ts` reaches, or reaching for `node:fs` inside
-// `src/routes.ts`. Both compile. Both typecheck. The first one fails at Bun startup with an
+// `src/app.ts`. Both compile. Both typecheck. The first one fails at Bun startup with an
 // unresolvable module; the second fails on Workers — and neither failure shows up in any other test
 // here, because the suite runs under Bun and never loads the Worker entrypoint at all.
 //
@@ -95,7 +95,7 @@ const PROCESS_ONLY = (specifier: string): boolean =>
 const PROVIDERS = new Set(['@fabrika/provider-cloudflare', '@fabrika/provider-zerops'])
 
 /** The layer both entrypoints sit on — every shared module either one enters through. */
-const SHARED = ['routes.ts', 'consumer.ts', 'cron.ts', 'services.ts', 'db.ts', 'env.ts', 'iam.ts', 'api/router.ts', 'webhook.ts', 'repo-poll.ts']
+const SHARED = ['app.ts', 'consumer.ts', 'cron.ts', 'services.ts', 'db.ts', 'env.ts', 'iam.ts', 'api/router.ts', 'webhook.ts', 'repo-poll.ts']
 
 describe('entrypoint isolation', () => {
 	test('the Worker entrypoint reaches no Bun/Node-only module', () => {
@@ -103,7 +103,7 @@ describe('entrypoint isolation', () => {
 		expect([...graph.externals].filter(PROCESS_ONLY)).toEqual([])
 		// Not vacuous: it really did walk the graph, and it really is the Cloudflare side.
 		expect(graph.files).toContain('index.ts')
-		expect(graph.files).toContain('routes.ts')
+		expect(graph.files).toContain('app.ts')
 		expect(graph.files).toContain('consumer.ts')
 		expect(graph.files).toContain('cron.ts')
 		expect(graph.files).toContain('services.ts')
@@ -124,7 +124,7 @@ describe('entrypoint isolation', () => {
 		// Not vacuous: it walked the graph, it is the process side, and it shares the whole handler layer.
 		expect(graph.files).toContain('node/server.ts')
 		expect(graph.files).toContain('node/runtime.ts')
-		expect(graph.files).toContain('routes.ts')
+		expect(graph.files).toContain('app.ts')
 		expect(graph.files).toContain('consumer.ts')
 		expect(graph.files).toContain('services.ts')
 		expect(graph.files).toContain('db.ts')
