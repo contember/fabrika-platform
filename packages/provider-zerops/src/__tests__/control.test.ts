@@ -628,12 +628,14 @@ describe('Zerops ControlProvider lifecycle', () => {
 
 	test('finishes schema reconciliation after an active external run without starting another deploy', async () => {
 		let current: ZeropsAppVersionStatus = 'BUILDING'
+		const reconcileSignals: AbortSignal[] = []
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			propustkaUrl: 'https://iam.test',
 			api: makeApi(recorded, () => current),
-			reconcileSchema: async ({ app }) => {
+			reconcileSchema: async ({ app, signal }) => {
 				recorded.calls.push(`reconcileSchema:${app}`)
+				reconcileSignals.push(signal)
 			},
 		})
 		if (control.cancel === undefined || control.reconcile === undefined) {
@@ -659,6 +661,8 @@ describe('Zerops ControlProvider lifecycle', () => {
 			'getAppVersion:version-1',
 			'reconcileSchema:notes',
 		])
+		expect(reconcileSignals).toHaveLength(1)
+		expect(reconcileSignals[0]?.aborted).toBe(false)
 		current = 'BUILD_FAILED'
 		expect(await control.reconcile(reference)).toEqual<ProviderReconcileOutcome>({ state: 'failed' })
 		await control.cancel(reference)

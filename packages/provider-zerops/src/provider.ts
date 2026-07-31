@@ -233,7 +233,7 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 				return
 			}
 			assertRunning(signal)
-			await zerops.reconcileSchema({ url: propustkaUrl, app: artifact.app.id, schema, adminKey: target.adminKey })
+			await zerops.reconcileSchema({ url: propustkaUrl, app: artifact.app.id, schema, adminKey: target.adminKey, signal })
 			return
 		}
 	}

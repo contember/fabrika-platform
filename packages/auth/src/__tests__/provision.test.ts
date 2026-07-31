@@ -75,4 +75,36 @@ describe('reconcileSchema', () => {
 			expect(err.message).toContain('admin said no')
 		}
 	})
+
+	test('aborts an in-flight request with the signal native cancellation reason', async () => {
+		const controller = new AbortController()
+		const started = Promise.withResolvers<void>()
+		const release = Promise.withResolvers<void>()
+		const server = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch: async () => {
+				started.resolve()
+				await release.promise
+				return new Response(null, { status: 200 })
+			},
+		})
+		try {
+			const reconciliation = reconcileSchema({
+				url: server.url.origin,
+				app: 'opice',
+				schema: SCHEMA,
+				signal: controller.signal,
+			})
+			await started.promise
+			controller.abort()
+
+			const error = await reconciliation.catch((reason: unknown) => reason)
+			expect(error).toBe(controller.signal.reason)
+			expect(error).not.toBeInstanceOf(ReconcileSchemaError)
+		} finally {
+			release.resolve()
+			await server.stop(true)
+		}
+	})
 })

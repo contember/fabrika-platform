@@ -15,10 +15,11 @@ interface Recorded {
 	externalIds: string[]
 	logs: string[]
 	schemas: string[]
+	schemaSignals: AbortSignal[]
 	sleeps: number[]
 }
 
-const fresh = (): Recorded => ({ calls: [], imports: [], triggers: [], externalIds: [], logs: [], schemas: [], sleeps: [] })
+const fresh = (): Recorded => ({ calls: [], imports: [], triggers: [], externalIds: [], logs: [], schemas: [], schemaSignals: [], sleeps: [] })
 
 interface Overrides {
 	statuses?: Array<ZeropsAppVersion['status']>
@@ -79,9 +80,10 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 
 const makeCollaborators = (recorded: Recorded, overrides: Overrides = {}): ZeropsCollaborators => ({
 	api: makeApi(recorded, overrides),
-	reconcileSchema: async ({ app }) => {
+	reconcileSchema: async ({ app, signal }) => {
 		recorded.calls.push('reconcileSchema')
 		recorded.schemas.push(app)
+		recorded.schemaSignals.push(signal)
 	},
 	sleep: async (ms) => {
 		recorded.sleeps.push(ms)
@@ -119,6 +121,7 @@ const runtimeRun = (
 	provider: ReturnType<typeof createZeropsProvider>,
 	targetValue: ZeropsRuntimeTarget = target(),
 	dryRun = false,
+	signal: AbortSignal = new AbortController().signal,
 ): RuntimeProviderRun => ({
 	appId: 'demo',
 	env: 'prod',
@@ -127,7 +130,7 @@ const runtimeRun = (
 	vars: { IMAGE: 'registry.test/demo:v2' },
 	managedEnvironment: {},
 	dryRun,
-	signal: new AbortController().signal,
+	signal,
 	events: {
 		log: (line) => {
 			recorded.logs.push(line)
@@ -154,10 +157,11 @@ beforeEach(() => {
 
 describe('Zerops provider', () => {
 	test('owns a distinct plan and executes it through the typed provider contract', async () => {
+		const controller = new AbortController()
 		const provider = createZeropsProvider(() => makeCollaborators(recorded, { statuses: ['BUILDING', 'ACTIVE'] }))
-		const session = await provider.runtime.open(runtimeRun(recorded, provider))
+		const session = await provider.runtime.open(runtimeRun(recorded, provider, target(), false, controller.signal))
 		expect(session.plan.steps.map((step) => step.kind)).toEqual(['apply-import', 'trigger-deploy', 'await-deploy', 'reconcile-schema'])
-		await execute(runtimeRun(recorded, provider), provider)
+		await execute(runtimeRun(recorded, provider, target(), false, controller.signal), provider)
 		expect(recorded.calls).toEqual(['importServices', 'triggerPipeline', 'getAppVersion', 'getAppVersion', 'reconcileSchema'])
 		expect(recorded.externalIds).toEqual(['version-1'])
 		expect(recorded.sleeps).toEqual([3000])
@@ -168,8 +172,40 @@ describe('Zerops provider', () => {
 			zeropsSetup: 'api',
 		}])
 		expect(recorded.schemas).toEqual(['demo'])
+		expect(recorded.schemaSignals).toEqual([controller.signal])
 		expect(recorded.logs.join('\n')).not.toContain('zt-secret')
 		expect(recorded.logs.join('\n')).not.toContain('px-secret')
+	})
+
+	test('propagates cancellation into an active schema reconciliation', async () => {
+		const controller = new AbortController()
+		const started = Promise.withResolvers<void>()
+		const provider = createZeropsProvider(() => ({
+			...makeCollaborators(recorded),
+			reconcileSchema: (input) => {
+				recorded.schemaSignals.push(input.signal)
+				return new Promise<void>((_resolve, reject) => {
+					const abort = (): void => {
+						reject(input.signal.reason)
+					}
+					if (input.signal.aborted) {
+						abort()
+						return
+					}
+					input.signal.addEventListener('abort', abort, { once: true })
+					started.resolve()
+				})
+			},
+		}))
+		const session = await provider.runtime.open(runtimeRun(recorded, provider, target(), false, controller.signal))
+
+		const reconciliation = session.execute('reconcile-schema')
+		await started.promise
+		controller.abort()
+
+		const error = await reconciliation.catch((reason: unknown) => reason)
+		expect(error).toBe(controller.signal.reason)
+		expect(recorded.schemaSignals).toEqual([controller.signal])
 	})
 
 	test('dry-run skips every platform and IAM mutation', async () => {

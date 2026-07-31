@@ -29,6 +29,8 @@ export interface ReconcileSchemaOptions {
 	 * for credential-less calls.
 	 */
 	adminKey?: string
+	/** Cancels the in-flight request when schema reconciliation belongs to a deploy lifecycle. */
+	signal?: AbortSignal
 }
 
 /** Thrown when the admin endpoint rejects the reconcile; `status` is the HTTP status. */
@@ -53,7 +55,7 @@ function errorMessage(value: unknown): string | null {
  * throws `ReconcileSchemaError` on a non-2xx response, or `Error` on a half-set service token.
  */
 export async function reconcileSchema(options: ReconcileSchemaOptions): Promise<void> {
-	const { url, app, schema, adminKey } = options
+	const { url, app, schema, adminKey, signal } = options
 
 	const headers: Record<string, string> = { 'content-type': 'application/json' }
 	if (adminKey !== undefined) {
@@ -66,6 +68,7 @@ export async function reconcileSchema(options: ReconcileSchemaOptions): Promise<
 		method: 'PUT',
 		headers,
 		body: JSON.stringify(schema),
+		signal,
 	})
 	if (!response.ok) {
 		const payload: unknown = await response.json().catch(() => null)

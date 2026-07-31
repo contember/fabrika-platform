@@ -6,6 +6,7 @@ export interface SchemaReconcileInput {
 	app: string
 	schema: AppSchema
 	adminKey?: string
+	signal: AbortSignal
 }
 
 /** Provider-neutral port for authorization schema reconciliation. */

@@ -129,6 +129,7 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 				app: config.id,
 				schema: config.schema,
 				adminKey: target.adminKey,
+				signal,
 			})
 			return
 		}

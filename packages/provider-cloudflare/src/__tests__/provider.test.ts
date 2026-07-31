@@ -7,6 +7,7 @@ interface Recorded {
 	readonly commands: CommandSpec[]
 	readonly provisions: ProvisionInput[]
 	readonly schemas: Array<{ url: string; app: string; adminKey?: string }>
+	readonly schemaSignals: AbortSignal[]
 	readonly logs: string[]
 	readonly provisionedVars: Array<Record<string, unknown> | undefined>
 }
@@ -22,6 +23,7 @@ const makeCollaborators = (
 	rec: Recorded,
 	appConfig: CloudflareAppConfig,
 	commandResult: (spec: CommandSpec) => CommandResult = () => ({ exitCode: 0, stdout: '', stderr: '' }),
+	reconcile: CloudflareCollaborators['reconcileSchema'] | undefined = undefined,
 ): CloudflareCollaborators => ({
 	loadConfig: async (_cwd, configPath) => {
 		expect(configPath).toBe('fabrika.config.ts')
@@ -41,6 +43,8 @@ const makeCollaborators = (
 	},
 	reconcileSchema: async (input) => {
 		rec.schemas.push({ url: input.url, app: input.app, adminKey: input.adminKey })
+		rec.schemaSignals.push(input.signal)
+		await reconcile?.(input)
 	},
 })
 
@@ -52,11 +56,12 @@ const open = (
 		readonly secrets?: Readonly<Record<string, string>>
 		readonly signal?: AbortSignal
 		readonly commandResult?: (spec: CommandSpec) => CommandResult
+		readonly reconcileSchema?: CloudflareCollaborators['reconcileSchema']
 		readonly appId?: string
 		readonly managedEnvironment?: Readonly<Record<string, string | null>>
 	} = {},
 ) => {
-	const provider = createCloudflareProvider(makeCollaborators(rec, appConfig, options.commandResult))
+	const provider = createCloudflareProvider(makeCollaborators(rec, appConfig, options.commandResult, options.reconcileSchema))
 	return provider.runtime.open({
 		appId: options.appId ?? 'demo',
 		env: 'stage',
@@ -91,7 +96,7 @@ const executePlan = async (session: Awaited<ReturnType<typeof open>>): Promise<v
 
 let rec: Recorded
 beforeEach(() => {
-	rec = { commands: [], provisions: [], schemas: [], logs: [], provisionedVars: [] }
+	rec = { commands: [], provisions: [], schemas: [], schemaSignals: [], logs: [], provisionedVars: [] }
 })
 
 describe('Cloudflare provider', () => {
@@ -175,11 +180,12 @@ describe('Cloudflare provider', () => {
 	})
 
 	test('executes the plan through the provider collaborator bundle', async () => {
+		const controller = new AbortController()
 		const app = config({
 			schema: { scopes: [], actions: [], roles: {} },
 			pipeline: { workerDir: 'worker', build: 'bun run build', secrets: ['API_KEY'] },
 		})
-		const session = await open(rec, app, { secrets: { API_KEY: 'secret-value' } })
+		const session = await open(rec, app, { secrets: { API_KEY: 'secret-value' }, signal: controller.signal })
 		await executePlan(session)
 
 		expect(rec.provisions).toHaveLength(1)
@@ -192,6 +198,7 @@ describe('Cloudflare provider', () => {
 		])
 		expect(rec.commands[2]?.stdin).toBe('secret-value')
 		expect(rec.schemas).toEqual([{ url: 'https://iam.example.com', app: 'demo', adminKey: 'px_admin' }])
+		expect(rec.schemaSignals).toEqual([controller.signal])
 	})
 
 	test('dry-run keeps Oblaka in plan mode and skips every other mutation', async () => {
@@ -218,6 +225,34 @@ describe('Cloudflare provider', () => {
 		const session = await open(rec, config(), { signal: AbortSignal.abort() })
 		expect(session.execute('provision-resources')).rejects.toThrow('deploy cancelled')
 		expect(rec.provisions).toHaveLength(0)
+	})
+
+	test('propagates cancellation into an active schema reconciliation', async () => {
+		const controller = new AbortController()
+		const started = Promise.withResolvers<void>()
+		const session = await open(rec, config({ schema: { scopes: [], actions: [], roles: {} } }), {
+			signal: controller.signal,
+			reconcileSchema: (input) =>
+				new Promise<void>((_resolve, reject) => {
+					const abort = (): void => {
+						reject(input.signal.reason)
+					}
+					if (input.signal.aborted) {
+						abort()
+						return
+					}
+					input.signal.addEventListener('abort', abort, { once: true })
+					started.resolve()
+				}),
+		})
+
+		const reconciliation = session.execute('reconcile-schema')
+		await started.promise
+		controller.abort()
+
+		const error = await reconciliation.catch((reason: unknown) => reason)
+		expect(error).toBe(controller.signal.reason)
+		expect(rec.schemaSignals).toEqual([controller.signal])
 	})
 
 	test('reports shell failures without leaking beyond the bounded command detail', async () => {

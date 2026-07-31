@@ -288,8 +288,9 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			await api.cancelBuild({ appVersionId: input.externalId, signal: abortSignal() })
 		},
 		reconcile: async (input): Promise<ProviderReconcileOutcome> => {
+			const signal = abortSignal()
 			const placement = resolvedEnvironment(input.environment, { requireReady: false })
-			const version = await api.getAppVersion({ appVersionId: input.externalId, signal: abortSignal() })
+			const version = await api.getAppVersion({ appVersionId: input.externalId, signal })
 			if (version.status === ZEROPS_ACTIVE) {
 				const artifact = parseFabrikaManifest(
 					decodeEnvelope('artifact', input.environment.artifact, zeropsArtifactCodec),
@@ -310,6 +311,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 						app: artifact.app.id,
 						schema: artifact.app.schema,
 						adminKey: options.adminKey,
+						signal,
 					})
 				}
 				return { state: 'succeeded' }
