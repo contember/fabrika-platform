@@ -34,5 +34,5 @@ export type { AuthContext, Scope } from '@fabrika/auth'
 export type { Middleware } from './middleware.js'
 
 // ─── Client ──────────────────────────────────────────────────────────
-export { createRpcClient, RpcError } from './client.js'
+export { createRpcClient, RpcError, type RpcFetch } from './client.js'
 export type { RpcClientOptions } from './client.js'

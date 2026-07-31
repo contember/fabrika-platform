@@ -26,6 +26,9 @@ export class RpcError extends Error {
 	}
 }
 
+/** Minimal Fetch API surface required by the RPC client. */
+export type RpcFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+
 interface BounceConfig {
 	readonly sessionKey: string
 	readonly windowMs: number
@@ -40,7 +43,7 @@ export interface RpcClientOptions {
 	 */
 	readonly bounceOnAuth?: boolean | { sessionKey?: string; windowMs?: number }
 	/** Override `fetch` (tests / non-browser). Defaults to the global `fetch`. */
-	readonly fetch?: typeof fetch
+	readonly fetch?: RpcFetch
 }
 
 function resolveBounce(baseUrl: string, opt: RpcClientOptions['bounceOnAuth']): BounceConfig | null {
@@ -89,12 +92,17 @@ function normalizeError(
 
 async function callRpc(opts: RpcClientOptions, bounce: BounceConfig | null, method: string, input: unknown): Promise<unknown> {
 	const doFetch = opts.fetch ?? fetch
-	const response = await doFetch(opts.baseUrl, {
-		method: 'POST',
-		credentials: 'include',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify({ method, input: input ?? null }),
-	})
+	let response: Response
+	try {
+		response = await doFetch(opts.baseUrl, {
+			method: 'POST',
+			credentials: 'include',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ method, input: input ?? null }),
+		})
+	} catch {
+		throw new RpcError({ type: 'transport', message: 'Network request failed', httpStatus: 0 })
+	}
 	let data: { result?: unknown; error?: unknown }
 	try {
 		data = await response.json()

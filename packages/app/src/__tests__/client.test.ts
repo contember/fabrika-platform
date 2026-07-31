@@ -108,4 +108,17 @@ describe('createRpcClient', () => {
 		if (!(error instanceof RpcError)) throw new Error('expected RpcError')
 		expect(error.type).toBe('transport')
 	})
+
+	test('does not expose details from a rejected fetch', async () => {
+		const client = createRpcClient<AppRouter>({
+			baseUrl: 'https://x/api/rpc',
+			fetch: () => Promise.reject(new Error('credential-bearing upstream URL')),
+		})
+		const error = await client.echo({ msg: 'hi' }).then(() => null, (cause: unknown) => cause)
+		expect(error).toBeInstanceOf(RpcError)
+		if (!(error instanceof RpcError)) throw new Error('expected RpcError')
+		expect(error.type).toBe('transport')
+		expect(error.message).toBe('Network request failed')
+		expect(error.httpStatus).toBe(0)
+	})
 })

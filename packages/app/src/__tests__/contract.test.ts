@@ -53,13 +53,10 @@ describe('portable RPC contract', () => {
 		const requests: unknown[] = []
 		const client = createRpcClient<CalculatorContract>({
 			baseUrl: 'https://example.test/rpc',
-			fetch: Object.assign(
-				async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-					requests.push(await new Request(input, init).json())
-					return Response.json({ result: 7 })
-				},
-				{ preconnect: fetch.preconnect },
-			),
+			fetch: async (input, init) => {
+				requests.push(await new Request(input, init).json())
+				return Response.json({ result: 7 })
+			},
 		})
 
 		const result = await client.math.add({ left: 3, right: 4 })
