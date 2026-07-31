@@ -251,3 +251,22 @@ export interface RunLogResponse {
 	lines: RunLogLine[]
 	status?: RunStatus
 }
+
+export type {
+	AdoptNamespaceInput,
+	AppEnvironmentInput,
+	AppIdInput,
+	AppNamedValueInput,
+	ControlRpcContract,
+	CreateAppRequest,
+	NamespaceIdInput,
+	OkResponse,
+	PutAppEnvironmentInput,
+	PutAppSecretInput,
+	PutAppVarInput,
+	RunIdInput,
+	RunListInput,
+	SecretValueInput,
+	SecretValueResponse,
+	TailRunInput,
+} from './rpc.js'
