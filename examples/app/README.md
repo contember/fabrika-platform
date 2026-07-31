@@ -1,4 +1,4 @@
-# Example app — consuming Propustka over a service binding
+# Example app — consuming Fabrika IAM over a service binding
 
 A minimal `@fabrika/app` Worker that uses **`@fabrika/auth`** middleware to authenticate a request
 through the IAM Worker via a service binding (`oblaka` `ServiceReference('propustka-worker')`), then
@@ -31,31 +31,31 @@ HTTP 401
 
 That response **is** the end-to-end proof: `env.IAM.authenticate()` reached the IAM Worker
 over the in-process service binding (`Wired service binding: IAM -> propustka-worker` in the
-lopata log) and the structured failure came back through it. Behind real Access, the same call
+lopata log) and the structured failure came back through it. With real IAM credentials, the same call
 returns a resolved principal and `can()` / `scopedTo()` reflect their grants.
 
-## Declare + push the app's authz schema (Access-as-code)
+## Declare + push the app's authz schema (authorization-as-code)
 
 This app OWNS its authz vocabulary — scope dimensions, an action catalog, and roles — and
-DECLARES it in code in [`propustka.schema.ts`](./propustka.schema.ts) as a typed `AppSchema`
+DECLARES it in code in [`fabrika.schema.ts`](./fabrika.schema.ts) as a typed `AppSchema`
 (imported from `@fabrika/auth-core`). The same actions/dimensions appear in the `can()` /
 `scopedTo()` calls in [`src/index.ts`](./src/index.ts), so the declaration is the single
 source of truth for what the app checks.
 
-A provisioning step reconciles that declaration into Propustka via the idempotent admin
+A provisioning step reconciles that declaration into IAM via the idempotent admin
 endpoint `PUT /admin/apps/:app/schema`. The first reconcile is what REGISTERS the app with
-Propustka. Run [`scripts/provision-schema.ts`](./scripts/provision-schema.ts):
+IAM. Run [`scripts/provision-schema.ts`](./scripts/provision-schema.ts):
 
 ```bash
 # from this dir — dry-run prints the intended reconcile, pushes nothing
 bun run provision-schema -- --dry-run
 
 # push against a running Worker (local: ENVIRONMENT=local dev bypass → no auth needed)
-PROPUSTKA_URL=http://127.0.0.1:18191 bun run provision-schema
+FABRIKA_IAM_URL=http://127.0.0.1:18191 bun run provision-schema
 
-# remote: the admin API is gated by Propustka itself — supply a propustka-issued `px_` admin key
-PROPUSTKA_URL=https://propustka.example.com \
-PROPUSTKA_ADMIN_KEY=px_… \
+# remote: the admin API is gated by IAM itself — supply an IAM-issued `px_` admin key
+FABRIKA_IAM_URL=https://iam.example.com \
+FABRIKA_IAM_ADMIN_KEY=px_… \
 bun run provision-schema
 ```
 

@@ -1,5 +1,5 @@
 import { defineApp, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
-import { exampleAppId, exampleAppSchema } from './propustka.schema'
+import { exampleAppId, exampleAppSchema } from './fabrika.schema'
 
 export const buildExampleWorker = (): Worker =>
 	new Worker({
@@ -16,7 +16,7 @@ export const buildExampleWorker = (): Worker =>
 		},
 		vars: {
 			DEV: 'true',
-			PROPUSTKA_ISSUER: 'http://localhost:18191',
+			FABRIKA_IAM_ISSUER: 'http://localhost:18191',
 		},
 	})
 

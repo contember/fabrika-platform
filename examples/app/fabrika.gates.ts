@@ -1,11 +1,11 @@
 import type { AppGates } from '@fabrika/auth'
-import { exampleAppId } from './propustka.schema'
+import { exampleAppId } from './fabrika.schema'
 
 /**
- * The example app's per-path gates, declared in code and enforced IN-PROCESS by `PropustkaAuth`
- * (the propustka-native successor to the deleted Cloudflare Access edge rules).
+ * The example app's per-path gates, declared in code and enforced IN-PROCESS by the IAM SDK
+ * (the successor to the deleted Cloudflare Access edge rules).
  *
- * Where `propustka.schema.ts` declares the app's authz vocabulary, this declares WHICH credential
+ * Where `fabrika.schema.ts` declares the app's authz vocabulary, this declares WHICH credential
  * KIND each path requires. There is no reconcile — these rules are pure SDK config. Array order is
  * the precedence (first matching+satisfiable rule wins); a path matching no rule is denied.
  */

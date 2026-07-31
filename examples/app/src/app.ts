@@ -1,21 +1,21 @@
 import { type AuthContext, defineApp, type Middleware, type RequestExecutionContext, route } from '@fabrika/app'
-import { PropustkaAuth } from '@fabrika/auth'
-import { exampleGates } from '../propustka.gates'
-import type { Env } from './env'
+import { PropustkaAuth as IamAuth } from '@fabrika/auth'
+import { exampleGates } from '../fabrika.gates'
+import { type Env, readIamIssuer } from './env'
 
 interface Ctx {
 	auth?: AuthContext
 	exec: RequestExecutionContext
 }
 
-// Minimal example app on the propustka-NATIVE auth path. `PropustkaAuth` is the whole front door:
-// it enforces the per-path gates (`propustka.gates.ts`) in-process — there is no Cloudflare Access
+// Minimal example app on the native IAM path. The IAM SDK is the whole front door:
+// it enforces the per-path gates (`fabrika.gates.ts`) in-process — there is no Cloudflare Access
 // edge — then resolves the matched credential, verifying the per-app permission token LOCALLY
-// against propustka's JWKS (no per-request round-trip). A human with no session is handed a login
-// URL to bounce to propustka's OIDC login; a `public` path needs no credential at all.
+// against IAM's JWKS (no per-request round-trip). A human with no session is handed a login
+// URL to bounce to IAM's OIDC login; a `public` path needs no credential at all.
 const authMiddleware = (env: Env): Middleware<Ctx> => {
 	return async (request, ctx, next) => {
-		const auth = new PropustkaAuth(env.IAM, 'example-app', { issuer: env.PROPUSTKA_ISSUER, gates: exampleGates })
+		const auth = new IamAuth(env.IAM, 'example-app', { issuer: readIamIssuer(env), gates: exampleGates })
 		const result = await auth.authenticate(request)
 		if (!result.ok) {
 			// A human-gated miss carries a login URL (bounce the browser); anything else is a flat status.

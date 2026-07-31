@@ -17,6 +17,7 @@
         "@fabrika/app": "workspace:*",
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/platform": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
       },
       "devDependencies": {
