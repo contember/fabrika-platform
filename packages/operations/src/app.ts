@@ -7,6 +7,7 @@ import { handleOperationsCatalogRequest } from './catalog.js'
 import { handleDirectIngestRequest } from './direct-ingest.js'
 import type { HealthRepository } from './health-repository.js'
 import { handleOperationsOperatorRequest } from './operator-api.js'
+import { operationsRpcRouter } from './operator-rpc.js'
 import type { OperationsDataEnv } from './pipeline.js'
 import { handleOperationsReleaseRequest } from './releases.js'
 
@@ -48,6 +49,7 @@ export const operationsApp = defineApp<OperationsAppEnv, OperationsAppContext>({
 		route.all(OPERATIONS_SOURCE_MAP_UPLOAD_PATH, (ctx) => sourceMapUpload(ctx)),
 		route.all('/private/catalog/reconcile', (ctx) => catalogReconcile(ctx)),
 		route.all(OPERATIONS_RELEASE_RECONCILE_PATH, (ctx) => releaseReconcile(ctx)),
+		route.rpc('/api/rpc', operationsRpcRouter, { use: [privateOperatorRoute] }),
 		route.all('/api/*path', (ctx) => operatorApi(ctx)),
 		route.all('/*path', () => notFound()),
 	],
@@ -56,6 +58,10 @@ export const operationsApp = defineApp<OperationsAppEnv, OperationsAppContext>({
 		return Response.json({ error: 'internal error' }, { status: 500 })
 	},
 })
+
+async function privateOperatorRoute(_request: Request, ctx: OperationsAppContext, next: () => Promise<Response>): Promise<Response> {
+	return isPublicIngress(new URL(ctx.request.url), ctx.env.publicHost) ? notFound() : await next()
+}
 
 function operatorAuthMiddleware(env: OperationsAppEnv): Middleware<OperationsAppContext> {
 	const authenticate = env.iam.authMiddleware<OperationsAppContext>({ gates: OPERATOR_GATES, unmatched: 'deny' })

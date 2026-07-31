@@ -281,6 +281,56 @@ describe('Operations operator API', () => {
 		expect((await input.repositories.alerts.listChannels('source-a'))[0]?.target).toBe(target)
 	})
 
+	test('object-scoped REST mutations hide forbidden resources before parsing malformed bodies', async () => {
+		const audits: DomainEvent[] = []
+		const input = options(auth({ apps: ['app-a'], audits }))
+		const issueId = await seedSource(input, 'source-b', 'app-b', 'fingerprint-b', 1_000)
+		await input.health.upsertCheck({
+			id: 'check-b',
+			sourceId: 'source-b',
+			path: '/original',
+			enabled: true,
+			intervalMs: 60_000,
+			staleAfterMs: 180_000,
+		})
+		await input.repositories.alerts.upsertChannel({
+			id: 'channel-b',
+			sourceId: 'source-b',
+			scope: 'new_issue',
+			type: 'webhook',
+			target: 'https://hooks.example.test/original',
+			enabled: true,
+		})
+		const malformed: RequestInit = {
+			method: 'PUT',
+			headers: { 'content-type': 'application/json' },
+			body: '{',
+		}
+		const requests: Array<[string, RequestInit]> = [
+			[`/api/issues/${issueId}`, malformed],
+			['/api/sources/source-b/health-checks', { ...malformed, method: 'POST' }],
+			['/api/sources/source-b/health-checks/check-b', malformed],
+			['/api/sources/source-b/alerts/spike', malformed],
+			['/api/sources/source-b/alerts/rules/new_issue', malformed],
+			['/api/sources/source-b/alerts/channels', { ...malformed, method: 'POST' }],
+			['/api/sources/source-b/alerts/channels/channel-b', malformed],
+		]
+		for (const [path, init] of requests) {
+			const response = await call(path, input, init)
+			expect(response.status).toBe(404)
+			const body: unknown = await response.json()
+			expect(body).toEqual({ error: 'not found' })
+		}
+
+		expect((await input.repositories.operator.getIssueById(issueId))?.status).toBe('open')
+		expect((await input.health.getCheck('check-b'))?.path).toBe('/original')
+		expect(await input.repositories.alerts.getConfig('source-b')).toBeNull()
+		expect(await input.repositories.alerts.listRules('source-b')).toEqual([])
+		expect(await input.repositories.alerts.listChannels('source-b')).toHaveLength(1)
+		expect((await input.repositories.alerts.listChannels('source-b'))[0]?.target).toBe('https://hooks.example.test/original')
+		expect(audits).toEqual([])
+	})
+
 	test('creates and reads a source-scoped HTTP health check without accepting an arbitrary origin', async () => {
 		const input = options(auth({ apps: ['app-a'] }))
 		await seedSource(input, 'source-a', 'app-a', 'fingerprint-a', 1_000)

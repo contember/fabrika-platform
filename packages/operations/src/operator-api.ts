@@ -3,6 +3,7 @@ import type { IssueMutation, IssueStatus } from '@fabrika/operations-contract/op
 import type {
 	OperationsAlertKind,
 	OperationsAlertSettingsResponseDto,
+	OperationsAssigneeListResponseDto,
 	OperationsBulkIssueStatusResponseDto,
 	OperationsEventDetailResponseDto,
 	OperationsHealthCheckDto,
@@ -21,7 +22,9 @@ import type {
 	OperationsSourceHealthDto,
 	OperationsSourceListResponseDto,
 	OperationsSourceSummaryDto,
+	OperationsSpikeAlertRequestDto,
 } from '@fabrika/operations-contract/operator-api'
+import type { OperationsIssueQuery, OperationsReleaseQuery } from '@fabrika/operations-contract/rpc'
 import type { BlobStore } from '@fabrika/platform'
 import {
 	auditIssueMutation,
@@ -64,86 +67,273 @@ export interface OperationsOperatorOptions {
 	now?: () => number
 }
 
+/** Typed operator use-cases shared by the REST compatibility adapter and RPC. */
+export class OperationsOperatorUseCases {
+	constructor(
+		private readonly request: Request,
+		private readonly options: OperationsOperatorOptions,
+	) {}
+
+	sources(): Promise<OperationsSourceListResponseDto> {
+		return listSources(this.options)
+	}
+
+	source(sourceId: string): Promise<OperationsSourceDetailResponseDto> {
+		return sourceDetail(sourceId, this.options)
+	}
+
+	issues(query: OperationsIssueQuery): Promise<OperationsIssueListResponseDto> {
+		return listIssues(query, this.options)
+	}
+
+	issue(issueId: string): Promise<OperationsIssueDetailResponseDto> {
+		return issueDetail(issueId, this.options)
+	}
+
+	latestEvent(issueId: string): Promise<OperationsEventDetailResponseDto> {
+		return issueLatestEvent(issueId, this.options)
+	}
+
+	mutateIssue(issueId: string, mutation: OperationsIssueMutationRequestDto): Promise<OperationsIssueDetailResponseDto> {
+		return mutateIssue(this.request, issueId, () => Promise.resolve(mutation), this.options)
+	}
+
+	mutateIssueAfterAuthorization(
+		issueId: string,
+		loadMutation: () => Promise<OperationsIssueMutationRequestDto>,
+	): Promise<OperationsIssueDetailResponseDto> {
+		return mutateIssue(this.request, issueId, loadMutation, this.options)
+	}
+
+	bulkIssueStatus(input: { issueIds: string[]; status: IssueStatus }): Promise<OperationsBulkIssueStatusResponseDto> {
+		return bulkIssueStatus(input, this.options)
+	}
+
+	assignees(sourceId: string): Promise<OperationsAssigneeListResponseDto> {
+		return listAssignees(this.request, sourceId, this.options)
+	}
+
+	releases(query: OperationsReleaseQuery): Promise<OperationsReleaseListResponseDto> {
+		return listReleases(query, this.options)
+	}
+
+	release(releaseId: string): Promise<OperationsReleaseDetailResponseDto> {
+		return releaseDetail(releaseId, this.options)
+	}
+
+	health(): Promise<OperationsHealthResponseDto> {
+		return healthOverview(this.options)
+	}
+
+	sourceHealth(sourceId: string): Promise<OperationsSourceHealthDto> {
+		return sourceHealth(sourceId, this.options)
+	}
+
+	createHealthCheck(sourceId: string, input: OperationsHealthCheckUpsertRequestDto): Promise<{ id: string }> {
+		return createHealthCheck(sourceId, () => Promise.resolve(input), this.options)
+	}
+
+	createHealthCheckAfterAuthorization(
+		sourceId: string,
+		loadInput: () => Promise<OperationsHealthCheckUpsertRequestDto>,
+	): Promise<{ id: string }> {
+		return createHealthCheck(sourceId, loadInput, this.options)
+	}
+
+	updateHealthCheck(sourceId: string, checkId: string, input: OperationsHealthCheckUpsertRequestDto): Promise<{ id: string }> {
+		return updateHealthCheck(sourceId, checkId, () => Promise.resolve(input), this.options)
+	}
+
+	updateHealthCheckAfterAuthorization(
+		sourceId: string,
+		checkId: string,
+		loadInput: () => Promise<OperationsHealthCheckUpsertRequestDto>,
+	): Promise<{ id: string }> {
+		return updateHealthCheck(sourceId, checkId, loadInput, this.options)
+	}
+
+	deleteHealthCheck(sourceId: string, checkId: string): Promise<null> {
+		return deleteHealthCheck(sourceId, checkId, this.options)
+	}
+
+	alerts(sourceId: string): Promise<OperationsAlertSettingsResponseDto> {
+		return alertSettings(sourceId, this.options)
+	}
+
+	updateSpikeAlert(sourceId: string, input: OperationsSpikeAlertRequestDto): Promise<{ threshold: number; enabled: boolean }> {
+		return updateSpikeAlert(sourceId, () => Promise.resolve(input), this.options)
+	}
+
+	updateSpikeAlertAfterAuthorization(
+		sourceId: string,
+		loadInput: () => Promise<OperationsSpikeAlertRequestDto>,
+	): Promise<{ threshold: number; enabled: boolean }> {
+		return updateSpikeAlert(sourceId, loadInput, this.options)
+	}
+
+	updateAlertRule(sourceId: string, kind: OperationsAlertKind, input: { enabled: boolean }): Promise<{ kind: OperationsAlertKind; enabled: boolean }> {
+		return updateAlertRule(sourceId, () => Promise.resolve(kind), () => Promise.resolve(input), this.options)
+	}
+
+	updateAlertRuleAfterAuthorization(
+		sourceId: string,
+		loadKind: () => Promise<OperationsAlertKind>,
+		loadInput: () => Promise<{ enabled: boolean }>,
+	): Promise<{ kind: OperationsAlertKind; enabled: boolean }> {
+		return updateAlertRule(sourceId, loadKind, loadInput, this.options)
+	}
+
+	createAlertChannel(sourceId: string, input: OperationsNotificationChannelRequestDto): Promise<{ id: string }> {
+		return createAlertChannel(sourceId, () => Promise.resolve(input), this.options)
+	}
+
+	createAlertChannelAfterAuthorization(
+		sourceId: string,
+		loadInput: () => Promise<OperationsNotificationChannelRequestDto>,
+	): Promise<{ id: string }> {
+		return createAlertChannel(sourceId, loadInput, this.options)
+	}
+
+	updateAlertChannel(sourceId: string, channelId: string, input: OperationsNotificationChannelRequestDto): Promise<{ id: string }> {
+		return updateAlertChannel(sourceId, channelId, () => Promise.resolve(input), this.options)
+	}
+
+	updateAlertChannelAfterAuthorization(
+		sourceId: string,
+		channelId: string,
+		loadInput: () => Promise<OperationsNotificationChannelRequestDto>,
+	): Promise<{ id: string }> {
+		return updateAlertChannel(sourceId, channelId, loadInput, this.options)
+	}
+
+	deleteAlertChannel(sourceId: string, channelId: string): Promise<null> {
+		return deleteAlertChannel(sourceId, channelId, this.options)
+	}
+}
+
 export async function handleOperationsOperatorRequest(request: Request, options: OperationsOperatorOptions): Promise<Response> {
 	try {
 		const url = new URL(request.url)
 		if (!url.pathname.startsWith('/api/')) return notFound()
+		const useCases = new OperationsOperatorUseCases(request, options)
 
-		if (url.pathname === '/api/sources' && request.method === 'GET') return await listSources(options)
-		if (url.pathname === '/api/issues' && request.method === 'GET') return await listIssues(url, options)
-		if (url.pathname === '/api/issues/bulk' && request.method === 'PUT') return await bulkIssueStatus(request, options)
-		if (url.pathname === '/api/releases' && request.method === 'GET') return await listReleases(url, options)
-		if (url.pathname === '/api/health' && request.method === 'GET') return await healthOverview(options)
+		if (url.pathname === '/api/sources' && request.method === 'GET') return Response.json(await useCases.sources())
+		if (url.pathname === '/api/issues' && request.method === 'GET') return Response.json(await useCases.issues(issueQuery(url)))
+		if (url.pathname === '/api/issues/bulk' && request.method === 'PUT') {
+			return Response.json(await useCases.bulkIssueStatus(await bulkIssueStatusInput(request)))
+		}
+		if (url.pathname === '/api/releases' && request.method === 'GET') return Response.json(await useCases.releases(releaseQuery(url)))
+		if (url.pathname === '/api/health' && request.method === 'GET') return Response.json(await useCases.health())
 
 		const latestEvent = ISSUE_LATEST_EVENT.exec(url.pathname)
-		if (latestEvent && request.method === 'GET') return await issueLatestEvent(decode(latestEvent[1]), options)
+		if (latestEvent && request.method === 'GET') return Response.json(await useCases.latestEvent(decode(latestEvent[1])))
 		const issue = ISSUE_DETAIL.exec(url.pathname)
-		if (issue && request.method === 'GET') return await issueDetail(decode(issue[1]), options)
-		if (issue && request.method === 'PUT') return await mutateIssue(request, decode(issue[1]), options)
+		if (issue && request.method === 'GET') return Response.json(await useCases.issue(decode(issue[1])))
+		if (issue && request.method === 'PUT') {
+			return Response.json(
+				await useCases.mutateIssueAfterAuthorization(decode(issue[1]), async () => issueMutation(await jsonObject(request))),
+			)
+		}
 
 		const assignees = SOURCE_ASSIGNEES.exec(url.pathname)
-		if (assignees && request.method === 'GET') return await listAssignees(request, decode(assignees[1]), options)
+		if (assignees && request.method === 'GET') return Response.json(await useCases.assignees(decode(assignees[1])))
 		const health = SOURCE_HEALTH.exec(url.pathname)
-		if (health && request.method === 'GET') return await sourceHealth(decode(health[1]), options)
+		if (health && request.method === 'GET') return Response.json(await useCases.sourceHealth(decode(health[1])))
 		const healthChecks = SOURCE_HEALTH_CHECKS.exec(url.pathname)
-		if (healthChecks && request.method === 'POST') return await createHealthCheck(request, decode(healthChecks[1]), options)
+		if (healthChecks && request.method === 'POST') {
+			return Response.json(
+				await useCases.createHealthCheckAfterAuthorization(decode(healthChecks[1]), () => healthCheckInput(request)),
+				{ status: 201 },
+			)
+		}
 		const healthCheck = SOURCE_HEALTH_CHECK.exec(url.pathname)
 		if (healthCheck && request.method === 'PUT') {
-			return await updateHealthCheck(request, decode(healthCheck[1]), decode(healthCheck[2]), options)
+			return Response.json(
+				await useCases.updateHealthCheckAfterAuthorization(
+					decode(healthCheck[1]),
+					decode(healthCheck[2]),
+					() => healthCheckInput(request),
+				),
+			)
 		}
 		if (healthCheck && request.method === 'DELETE') {
-			return await deleteHealthCheck(decode(healthCheck[1]), decode(healthCheck[2]), options)
+			await useCases.deleteHealthCheck(decode(healthCheck[1]), decode(healthCheck[2]))
+			return new Response(null, { status: 204 })
 		}
 
 		const alerts = SOURCE_ALERTS.exec(url.pathname)
-		if (alerts && request.method === 'GET') return await alertSettings(decode(alerts[1]), options)
+		if (alerts && request.method === 'GET') return Response.json(await useCases.alerts(decode(alerts[1])))
 		const spike = SOURCE_ALERT_SPIKE.exec(url.pathname)
-		if (spike && request.method === 'PUT') return await updateSpikeAlert(request, decode(spike[1]), options)
+		if (spike && request.method === 'PUT') {
+			return Response.json(
+				await useCases.updateSpikeAlertAfterAuthorization(decode(spike[1]), async () => spikeAlertInput(await jsonObject(request))),
+			)
+		}
 		const rule = SOURCE_ALERT_RULE.exec(url.pathname)
-		if (rule && request.method === 'PUT') return await updateAlertRule(request, decode(rule[1]), decode(rule[2]), options)
+		if (rule && request.method === 'PUT') {
+			return Response.json(
+				await useCases.updateAlertRuleAfterAuthorization(
+					decode(rule[1]),
+					() => Promise.resolve(requiredAlertKind(decode(rule[2]))),
+					async () => alertRuleInput(await jsonObject(request)),
+				),
+			)
+		}
 		const channels = SOURCE_ALERT_CHANNELS.exec(url.pathname)
-		if (channels && request.method === 'POST') return await createAlertChannel(request, decode(channels[1]), options)
+		if (channels && request.method === 'POST') {
+			return Response.json(
+				await useCases.createAlertChannelAfterAuthorization(
+					decode(channels[1]),
+					async () => channelInput(await jsonObject(request), true),
+				),
+				{ status: 201 },
+			)
+		}
 		const channel = SOURCE_ALERT_CHANNEL.exec(url.pathname)
 		if (channel && request.method === 'PUT') {
-			return await updateAlertChannel(request, decode(channel[1]), decode(channel[2]), options)
+			return Response.json(
+				await useCases.updateAlertChannelAfterAuthorization(
+					decode(channel[1]),
+					decode(channel[2]),
+					async () => channelInput(await jsonObject(request), false),
+				),
+			)
 		}
 		if (channel && request.method === 'DELETE') {
-			return await deleteAlertChannel(decode(channel[1]), decode(channel[2]), options)
+			await useCases.deleteAlertChannel(decode(channel[1]), decode(channel[2]))
+			return new Response(null, { status: 204 })
 		}
 
 		const source = SOURCE_DETAIL.exec(url.pathname)
-		if (source && request.method === 'GET') return await sourceDetail(decode(source[1]), options)
+		if (source && request.method === 'GET') return Response.json(await useCases.source(decode(source[1])))
 		const release = RELEASE_DETAIL.exec(url.pathname)
-		if (release && request.method === 'GET') return await releaseDetail(decode(release[1]), options)
+		if (release && request.method === 'GET') return Response.json(await useCases.release(decode(release[1])))
 		return notFound()
 	} catch (error) {
-		if (error instanceof OperatorRequestError) return Response.json({ error: error.message }, { status: error.status })
+		if (error instanceof OperatorRequestError) return Response.json({ error: error.message }, { status: error.httpStatus })
 		if (error instanceof RangeError) return Response.json({ error: error.message }, { status: 400 })
 		console.error('operations operator request failed')
 		return Response.json({ error: 'internal error' }, { status: 500 })
 	}
 }
 
-async function listSources(options: OperationsOperatorOptions): Promise<Response> {
+async function listSources(options: OperationsOperatorOptions): Promise<OperationsSourceListResponseDto> {
 	const sources = await authorizedSources(options, 'operations.read')
-	const body: OperationsSourceListResponseDto = { items: sources.map(sourceDto) }
-	return Response.json(body)
+	return { items: sources.map(sourceDto) }
 }
 
-async function sourceDetail(sourceId: string, options: OperationsOperatorOptions): Promise<Response> {
+async function sourceDetail(sourceId: string, options: OperationsOperatorOptions): Promise<OperationsSourceDetailResponseDto> {
 	const source = await visibleSource(sourceId, 'operations.read', options)
-	const body: OperationsSourceDetailResponseDto = { source: sourceDto(source) }
-	return Response.json(body)
+	return { source: sourceDto(source) }
 }
 
-async function listIssues(url: URL, options: OperationsOperatorOptions): Promise<Response> {
+async function listIssues(queryInput: OperationsIssueQuery, options: OperationsOperatorOptions): Promise<OperationsIssueListResponseDto> {
 	let sources = await authorizedSources(options, 'operations.read')
-	const requestedSource = url.searchParams.get('sourceId')
-	if (requestedSource !== null) sources = sources.filter((source) => source.id === requestedSource)
-	const status = optionalIssueStatus(url.searchParams.get('status'))
-	const query = url.searchParams.get('query')?.trim()
-	const offset = cursor(url.searchParams.get('cursor'))
-	const limit = boundedLimit(url.searchParams.get('limit'))
+	if (queryInput.sourceId !== undefined) sources = sources.filter((source) => source.id === queryInput.sourceId)
+	const status = queryInput.status
+	const query = queryInput.query?.trim()
+	const offset = cursor(queryInput.cursor ?? null)
+	const limit = boundedLimit(queryInput.limit === undefined ? null : String(queryInput.limit))
 	const sourceIds = sources.map((source) => source.id)
 	await options.repositories.operator.ensureIssueIds(sourceIds)
 	const [rows, counts] = await Promise.all([
@@ -155,26 +345,24 @@ async function listIssues(url: URL, options: OperationsOperatorOptions): Promise
 		summary[count.status] = count.count
 		summary.total += count.count
 	}
-	const body: OperationsIssueListResponseDto = {
+	return {
 		items: rows.map(issueSummary),
 		nextCursor: rows.length === limit ? String(offset + rows.length) : null,
 		summary,
 	}
-	return Response.json(body)
 }
 
-async function issueDetail(issueId: string, options: OperationsOperatorOptions): Promise<Response> {
+async function issueDetail(issueId: string, options: OperationsOperatorOptions): Promise<OperationsIssueDetailResponseDto> {
 	const issue = await visibleIssue(issueId, 'operations.read', options)
-	const body: OperationsIssueDetailResponseDto = { issue: await completeIssue(issue, options) }
-	return Response.json(body)
+	return { issue: await completeIssue(issue, options) }
 }
 
-async function issueLatestEvent(issueId: string, options: OperationsOperatorOptions): Promise<Response> {
+async function issueLatestEvent(issueId: string, options: OperationsOperatorOptions): Promise<OperationsEventDetailResponseDto> {
 	const issue = await visibleIssue(issueId, 'operations.read', options)
 	const occurrence = await options.repositories.operator.latestOccurrence(issue.source_id, issue.fingerprint)
-	if (occurrence === null) return notFound()
+	if (occurrence === null) return notFoundError()
 	const object = await options.payloads.get(occurrence.blob_key)
-	if (object === null) return notFound()
+	if (object === null) return notFoundError()
 	const detail = await parseEventDetail(await object.text(), {
 		get: (key) => options.payloads.get(key),
 		getSourceMap: async (releaseName, logicalPath) => {
@@ -182,17 +370,22 @@ async function issueLatestEvent(issueId: string, options: OperationsOperatorOpti
 			return key === null ? null : options.payloads.get(key)
 		},
 	})
-	const body: OperationsEventDetailResponseDto = {
+	return {
 		occurrenceId: occurrence.id,
 		receivedAt: numeric(occurrence.received_at),
 		detail,
 	}
-	return Response.json(body)
 }
 
-async function mutateIssue(request: Request, issueId: string, options: OperationsOperatorOptions): Promise<Response> {
+async function mutateIssue(
+	request: Request,
+	issueId: string,
+	loadMutation: () => Promise<OperationsIssueMutationRequestDto>,
+	options: OperationsOperatorOptions,
+): Promise<OperationsIssueDetailResponseDto> {
 	const issue = await visibleIssue(issueId, 'operations.triage', options)
-	const mutation = await internalMutation(request, issue, options)
+	const mutationInput = await loadMutation()
+	const mutation = await internalMutation(request, mutationInput, issue, options)
 	const principal = options.auth.principal
 	const updated = await options.repositories.issues.mutate({
 		sourceId: issue.source_id,
@@ -201,25 +394,26 @@ async function mutateIssue(request: Request, issueId: string, options: Operation
 		actorId: principal?.id ?? null,
 		actorLabel: principal?.label ?? null,
 	})
-	if (updated === null) return notFound()
+	if (updated === null) return notFoundError()
 	await auditIssueMutation(options.auth, issueId, mutation)
 	const identified = await options.repositories.operator.getIssueById(issueId)
-	if (identified === null) return notFound()
-	const body: OperationsIssueDetailResponseDto = { issue: await completeIssue(identified, options) }
-	return Response.json(body)
+	if (identified === null) return notFoundError()
+	return { issue: await completeIssue(identified, options) }
 }
 
-async function bulkIssueStatus(request: Request, options: OperationsOperatorOptions): Promise<Response> {
-	const body = await jsonObject(request)
-	const rawIds = stringArray(body['issueIds'])
+async function bulkIssueStatus(
+	input: { issueIds: string[]; status: IssueStatus },
+	options: OperationsOperatorOptions,
+): Promise<OperationsBulkIssueStatusResponseDto> {
+	const rawIds = input.issueIds
 	if (rawIds.length === 0 || rawIds.length > 100) throw badRequest('issueIds must contain between 1 and 100 ids')
 	const ids = [...new Set(rawIds)]
 	if (ids.length !== rawIds.length) throw badRequest('issueIds must not contain duplicates')
-	const status = issueStatus(body['status'])
+	const status = input.status
 	const issues = await options.repositories.operator.getIssuesByIds(ids)
-	if (issues.length !== ids.length) return notFound()
+	if (issues.length !== ids.length) return notFoundError()
 	for (const issue of issues) {
-		if (!canAccessOperationsSource(options.auth, 'operations.triage', sourceAccess(issue))) return notFound()
+		if (!canAccessOperationsSource(options.auth, 'operations.triage', sourceAccess(issue))) return notFoundError()
 	}
 	const principal = options.auth.principal
 	const updated = await options.repositories.operator.bulkStatus({
@@ -229,95 +423,103 @@ async function bulkIssueStatus(request: Request, options: OperationsOperatorOpti
 		actorLabel: principal?.label ?? null,
 	})
 	await Promise.all(ids.map((id) => auditIssueMutation(options.auth, id, { kind: 'status', status })))
-	const bodyOut: OperationsBulkIssueStatusResponseDto = { items: updated.map(issueSummary) }
-	return Response.json(bodyOut)
+	return { items: updated.map(issueSummary) }
 }
 
-async function listAssignees(request: Request, sourceId: string, options: OperationsOperatorOptions): Promise<Response> {
+async function listAssignees(
+	request: Request,
+	sourceId: string,
+	options: OperationsOperatorOptions,
+): Promise<OperationsAssigneeListResponseDto> {
 	await visibleSource(sourceId, 'operations.triage', options)
 	const result = await options.principals.listPrincipals(request)
 	if (!result.ok) throw new OperatorRequestError(result.status, result.reason)
-	return Response.json({
+	return {
 		items: result.principals
 			.filter((principal) => principal.type === 'user' && !principal.disabled)
 			.map((principal) => ({ id: principal.id, label: principal.label })),
-	})
+	}
 }
 
-async function listReleases(url: URL, options: OperationsOperatorOptions): Promise<Response> {
+async function listReleases(queryInput: OperationsReleaseQuery, options: OperationsOperatorOptions): Promise<OperationsReleaseListResponseDto> {
 	let sources = await authorizedSources(options, 'operations.read')
-	const requestedSource = url.searchParams.get('sourceId')
-	if (requestedSource !== null) sources = sources.filter((source) => source.id === requestedSource)
-	const offset = cursor(url.searchParams.get('cursor'))
-	const limit = boundedLimit(url.searchParams.get('limit'))
+	if (queryInput.sourceId !== undefined) sources = sources.filter((source) => source.id === queryInput.sourceId)
+	const offset = cursor(queryInput.cursor ?? null)
+	const limit = boundedLimit(queryInput.limit === undefined ? null : String(queryInput.limit))
 	const rows = await options.repositories.operator.listReleases({ sourceIds: sources.map((source) => source.id), offset, limit })
-	const body: OperationsReleaseListResponseDto = {
+	return {
 		items: rows.map(releaseSummary),
 		nextCursor: rows.length === limit ? String(offset + rows.length) : null,
 	}
-	return Response.json(body)
 }
 
-async function releaseDetail(releaseId: string, options: OperationsOperatorOptions): Promise<Response> {
+async function releaseDetail(releaseId: string, options: OperationsOperatorOptions): Promise<OperationsReleaseDetailResponseDto> {
 	const release = await options.repositories.operator.getReleaseById(releaseId)
-	if (release === null || !canAccessOperationsSource(options.auth, 'operations.read', sourceAccess(release))) return notFound()
+	if (release === null || !canAccessOperationsSource(options.auth, 'operations.read', sourceAccess(release))) return notFoundError()
 	const issues = await options.repositories.operator.listReleaseIssues(release)
-	const body: OperationsReleaseDetailResponseDto = {
+	return {
 		release: releaseSummary(release),
 		issues: issues.map(issueSummary),
 	}
-	return Response.json(body)
 }
 
-async function healthOverview(options: OperationsOperatorOptions): Promise<Response> {
+async function healthOverview(options: OperationsOperatorOptions): Promise<OperationsHealthResponseDto> {
 	const sources = await authorizedSources(options, 'operations.read')
-	const body: OperationsHealthResponseDto = {
+	return {
 		sources: await Promise.all(sources.map((source) => healthForSource(source, options))),
 	}
-	return Response.json(body)
 }
 
-async function sourceHealth(sourceId: string, options: OperationsOperatorOptions): Promise<Response> {
+async function sourceHealth(sourceId: string, options: OperationsOperatorOptions): Promise<OperationsSourceHealthDto> {
 	const source = await visibleSource(sourceId, 'operations.read', options)
-	return Response.json(await healthForSource(source, options))
+	return healthForSource(source, options)
 }
 
-async function createHealthCheck(request: Request, sourceId: string, options: OperationsOperatorOptions): Promise<Response> {
+async function createHealthCheck(
+	sourceId: string,
+	loadInput: () => Promise<OperationsHealthCheckUpsertRequestDto>,
+	options: OperationsOperatorOptions,
+): Promise<{ id: string }> {
 	await visibleSource(sourceId, 'operations.manage', options)
-	const input = await healthCheckInput(request)
+	const input = await loadInput()
 	const checkId = uuidv7(now(options))
 	await options.health.upsertCheck({ id: checkId, sourceId, ...input })
 	await options.auth.audit({ action: 'operations.health_check.create', resourceType: 'operations_health_check', resourceId: checkId })
-	return Response.json({ id: checkId }, { status: 201 })
+	return { id: checkId }
 }
 
-async function updateHealthCheck(request: Request, sourceId: string, checkId: string, options: OperationsOperatorOptions): Promise<Response> {
+async function updateHealthCheck(
+	sourceId: string,
+	checkId: string,
+	loadInput: () => Promise<OperationsHealthCheckUpsertRequestDto>,
+	options: OperationsOperatorOptions,
+): Promise<{ id: string }> {
 	await visibleSource(sourceId, 'operations.manage', options)
 	const existing = await options.health.getCheck(checkId)
-	if (existing === null || existing.source_id !== sourceId) return notFound()
-	const input = await healthCheckInput(request)
+	if (existing === null || existing.source_id !== sourceId) return notFoundError()
+	const input = await loadInput()
 	await options.health.upsertCheck({ id: checkId, sourceId, ...input })
 	await options.auth.audit({ action: 'operations.health_check.update', resourceType: 'operations_health_check', resourceId: checkId })
-	return Response.json({ id: checkId })
+	return { id: checkId }
 }
 
-async function deleteHealthCheck(sourceId: string, checkId: string, options: OperationsOperatorOptions): Promise<Response> {
+async function deleteHealthCheck(sourceId: string, checkId: string, options: OperationsOperatorOptions): Promise<null> {
 	await visibleSource(sourceId, 'operations.manage', options)
 	const existing = await options.health.getCheck(checkId)
-	if (existing === null || existing.source_id !== sourceId) return notFound()
-	if (!await options.health.deleteCheck(sourceId, checkId)) return notFound()
+	if (existing === null || existing.source_id !== sourceId) return notFoundError()
+	if (!await options.health.deleteCheck(sourceId, checkId)) return notFoundError()
 	await options.auth.audit({ action: 'operations.health_check.delete', resourceType: 'operations_health_check', resourceId: checkId })
-	return new Response(null, { status: 204 })
+	return null
 }
 
-async function alertSettings(sourceId: string, options: OperationsOperatorOptions): Promise<Response> {
+async function alertSettings(sourceId: string, options: OperationsOperatorOptions): Promise<OperationsAlertSettingsResponseDto> {
 	await visibleSource(sourceId, 'operations.manage', options)
 	const [config, rules, channels] = await Promise.all([
 		options.repositories.alerts.getConfig(sourceId),
 		options.repositories.alerts.listRules(sourceId),
 		options.repositories.alerts.listChannels(sourceId),
 	])
-	const body: OperationsAlertSettingsResponseDto = {
+	return {
 		spike: config === null ? null : { threshold: config.threshold, enabled: config.enabled === 1 },
 		rules: rules.flatMap((rule) => {
 			const kind = alertKind(rule.type)
@@ -337,50 +539,64 @@ async function alertSettings(sourceId: string, options: OperationsOperatorOption
 				}]
 		}),
 	}
-	return Response.json(body)
 }
 
-async function updateSpikeAlert(request: Request, sourceId: string, options: OperationsOperatorOptions): Promise<Response> {
+async function updateSpikeAlert(
+	sourceId: string,
+	loadInput: () => Promise<OperationsSpikeAlertRequestDto>,
+	options: OperationsOperatorOptions,
+): Promise<{ threshold: number; enabled: boolean }> {
 	await visibleSource(sourceId, 'operations.manage', options)
-	const body = await jsonObject(request)
-	const threshold = positiveInteger(body['threshold'], 'threshold')
-	const enabled = boolean(body['enabled'], 'enabled')
+	const input = await loadInput()
+	const { threshold, enabled } = input
 	await options.repositories.alerts.setConfig(sourceId, { threshold, enabled })
 	await options.auth.audit({ action: 'operations.alert.spike', resourceType: 'operations_source', resourceId: sourceId })
-	return Response.json({ threshold, enabled })
+	return { threshold, enabled }
 }
 
-async function updateAlertRule(request: Request, sourceId: string, rawKind: string, options: OperationsOperatorOptions): Promise<Response> {
+async function updateAlertRule(
+	sourceId: string,
+	loadKind: () => Promise<OperationsAlertKind>,
+	loadInput: () => Promise<{ enabled: boolean }>,
+	options: OperationsOperatorOptions,
+): Promise<{ kind: OperationsAlertKind; enabled: boolean }> {
 	await visibleSource(sourceId, 'operations.manage', options)
-	const kind = alertKind(rawKind)
-	if (kind === null) return notFound()
-	const body = await jsonObject(request)
-	const enabled = boolean(body['enabled'], 'enabled')
+	const kind = await loadKind()
+	const input = await loadInput()
+	const { enabled } = input
 	await options.repositories.alerts.setRule(sourceId, kind, enabled)
 	await options.auth.audit({ action: 'operations.alert.rule', resourceType: 'operations_source', resourceId: sourceId })
-	return Response.json({ kind, enabled })
+	return { kind, enabled }
 }
 
-async function createAlertChannel(request: Request, sourceId: string, options: OperationsOperatorOptions): Promise<Response> {
+async function createAlertChannel(
+	sourceId: string,
+	loadInput: () => Promise<OperationsNotificationChannelRequestDto>,
+	options: OperationsOperatorOptions,
+): Promise<{ id: string }> {
 	await visibleSource(sourceId, 'operations.manage', options)
-	const input = await channelInput(request, true)
+	const input = await loadInput()
 	if (input.target === undefined) throw badRequest('target is required')
+	if (!isValidWebhookTarget(input.target)) throw badRequest('target must be a public HTTPS URL without credentials or a fragment')
 	const id = uuidv7(now(options))
 	await options.repositories.alerts.upsertChannel({ id, sourceId, ...input, target: input.target })
 	await options.auth.audit({ action: 'operations.alert_channel.create', resourceType: 'operations_alert_channel', resourceId: id })
-	return Response.json({ id }, { status: 201 })
+	return { id }
 }
 
 async function updateAlertChannel(
-	request: Request,
 	sourceId: string,
 	channelId: string,
+	loadInput: () => Promise<OperationsNotificationChannelRequestDto>,
 	options: OperationsOperatorOptions,
-): Promise<Response> {
+): Promise<{ id: string }> {
 	await visibleSource(sourceId, 'operations.manage', options)
 	const existing = (await options.repositories.alerts.listChannels(sourceId)).find((channel) => channel.id === channelId)
-	if (existing === undefined) return notFound()
-	const input = await channelInput(request, false)
+	if (existing === undefined) return notFoundError()
+	const input = await loadInput()
+	if (input.target !== undefined && !isValidWebhookTarget(input.target)) {
+		throw badRequest('target must be a public HTTPS URL without credentials or a fragment')
+	}
 	await options.repositories.alerts.upsertChannel({
 		id: channelId,
 		sourceId,
@@ -390,14 +606,14 @@ async function updateAlertChannel(
 		enabled: input.enabled,
 	})
 	await options.auth.audit({ action: 'operations.alert_channel.update', resourceType: 'operations_alert_channel', resourceId: channelId })
-	return Response.json({ id: channelId })
+	return { id: channelId }
 }
 
-async function deleteAlertChannel(sourceId: string, channelId: string, options: OperationsOperatorOptions): Promise<Response> {
+async function deleteAlertChannel(sourceId: string, channelId: string, options: OperationsOperatorOptions): Promise<null> {
 	await visibleSource(sourceId, 'operations.manage', options)
-	if (!await options.repositories.alerts.deleteChannel(sourceId, channelId)) return notFound()
+	if (!await options.repositories.alerts.deleteChannel(sourceId, channelId)) return notFoundError()
 	await options.auth.audit({ action: 'operations.alert_channel.delete', resourceType: 'operations_alert_channel', resourceId: channelId })
-	return new Response(null, { status: 204 })
+	return null
 }
 
 async function completeIssue(issue: IdentifiedOperatorIssueRow, options: OperationsOperatorOptions): Promise<OperationsIssueDetailDto> {
@@ -478,10 +694,11 @@ async function healthCheckDto(check: HealthCheckRow, options: OperationsOperator
 
 async function internalMutation(
 	request: Request,
+	mutationInput: OperationsIssueMutationRequestDto,
 	issue: IdentifiedOperatorIssueRow,
 	options: OperationsOperatorOptions,
 ): Promise<IssueMutation> {
-	const mutation = issueMutation(await jsonObject(request))
+	const mutation = mutationInput
 	if (mutation.kind === 'assign') {
 		if (mutation.principalId === null) return { kind: 'assign', principalId: null, principalLabel: null }
 		const principals = await options.principals.listPrincipals(request)
@@ -623,6 +840,10 @@ function occurrenceSummary(occurrence: OperatorOccurrenceRow): OperationsIssueDe
 
 async function healthCheckInput(request: Request): Promise<OperationsHealthCheckUpsertRequestDto> {
 	const body = await jsonObject(request)
+	return healthCheckInputFromObject(body)
+}
+
+function healthCheckInputFromObject(body: Record<string, unknown>): OperationsHealthCheckUpsertRequestDto {
 	const path = string(body['path'], 'path')
 	return {
 		path,
@@ -636,8 +857,7 @@ async function healthCheckInput(request: Request): Promise<OperationsHealthCheck
 	}
 }
 
-async function channelInput(request: Request, requireTarget: boolean): Promise<OperationsNotificationChannelRequestDto> {
-	const body = await jsonObject(request)
+function channelInput(body: Record<string, unknown>, requireTarget: boolean): OperationsNotificationChannelRequestDto {
 	const scope = alertKind(string(body['scope'], 'scope'))
 	if (scope === null) throw badRequest('invalid alert scope')
 	if (body['type'] !== 'webhook') throw badRequest('type must be webhook')
@@ -652,6 +872,48 @@ async function channelInput(request: Request, requireTarget: boolean): Promise<O
 		type: 'webhook',
 		...(typeof target === 'string' ? { target } : {}),
 		enabled: boolean(body['enabled'], 'enabled'),
+	}
+}
+
+function spikeAlertInput(body: Record<string, unknown>): OperationsSpikeAlertRequestDto {
+	return {
+		threshold: positiveInteger(body['threshold'], 'threshold'),
+		enabled: boolean(body['enabled'], 'enabled'),
+	}
+}
+
+function alertRuleInput(body: Record<string, unknown>): { enabled: boolean } {
+	return { enabled: boolean(body['enabled'], 'enabled') }
+}
+
+async function bulkIssueStatusInput(request: Request): Promise<{ issueIds: string[]; status: IssueStatus }> {
+	const body = await jsonObject(request)
+	return { issueIds: stringArray(body['issueIds']), status: issueStatus(body['status']) }
+}
+
+function issueQuery(url: URL): OperationsIssueQuery {
+	const sourceId = url.searchParams.get('sourceId')
+	const status = optionalIssueStatus(url.searchParams.get('status'))
+	const query = url.searchParams.get('query')
+	const cursorValue = url.searchParams.get('cursor')
+	const limitValue = url.searchParams.get('limit')
+	return {
+		...(sourceId === null ? {} : { sourceId }),
+		...(status === undefined ? {} : { status }),
+		...(query === null ? {} : { query }),
+		...(cursorValue === null || cursorValue === '' ? {} : { cursor: String(cursor(cursorValue)) }),
+		...(limitValue === null || limitValue === '' ? {} : { limit: boundedLimit(limitValue) }),
+	}
+}
+
+function releaseQuery(url: URL): OperationsReleaseQuery {
+	const sourceId = url.searchParams.get('sourceId')
+	const cursorValue = url.searchParams.get('cursor')
+	const limitValue = url.searchParams.get('limit')
+	return {
+		...(sourceId === null ? {} : { sourceId }),
+		...(cursorValue === null || cursorValue === '' ? {} : { cursor: String(cursor(cursorValue)) }),
+		...(limitValue === null || limitValue === '' ? {} : { limit: boundedLimit(limitValue) }),
 	}
 }
 
@@ -712,6 +974,12 @@ function alertKind(value: string): OperationsAlertKind | null {
 		default:
 			return null
 	}
+}
+
+function requiredAlertKind(value: string): OperationsAlertKind {
+	const kind = alertKind(value)
+	if (kind === null) return notFoundError()
+	return kind
 }
 
 function string(value: unknown, field: string): string {
@@ -788,8 +1056,11 @@ function now(options: OperationsOperatorOptions): number {
 }
 
 class OperatorRequestError extends Error {
-	constructor(readonly status: number, message: string) {
+	readonly type: string
+
+	constructor(readonly httpStatus: number, message: string) {
 		super(message)
+		this.type = httpStatus === 404 ? 'not_found' : httpStatus === 400 ? 'bad_request' : 'request_error'
 	}
 }
 

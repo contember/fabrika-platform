@@ -51,6 +51,15 @@ const handler = (harness = createHarness(), iam = createOperationsIam({ DEV: 'tr
 	})
 }
 
+function rpcRequest(host: string, method: string, input: unknown, persona?: string): Request {
+	const query = persona === undefined ? '' : `?__as=${encodeURIComponent(persona)}`
+	return new Request(`https://${host}/api/rpc${query}`, {
+		method: 'POST',
+		headers: { accept: 'application/json', 'content-type': 'application/json' },
+		body: JSON.stringify({ method, input }),
+	})
+}
+
 async function signedOperationsUser(key: KeyLike): Promise<string> {
 	const now = Math.floor(Date.now() / 1000)
 	const permissions: PermissionEntry[] = [{ action: 'operations.read', scope: null, source: 'grant' }]
@@ -109,7 +118,7 @@ async function reconcileSource(fetch: (request: Request) => Promise<Response>, s
 describe('Operations public/private HTTP isolation', () => {
 	test('the public ingest hostname does not expose health, catalog, or operator paths', async () => {
 		const fetch = handler()
-		for (const path of ['/healthz', '/private/catalog/reconcile', OPERATIONS_RELEASE_RECONCILE_PATH, '/api/issues']) {
+		for (const path of ['/healthz', '/private/catalog/reconcile', OPERATIONS_RELEASE_RECONCILE_PATH, '/api/issues', '/api/rpc']) {
 			const response = await fetch(new Request(`https://${publicHost}${path}`, { method: path.includes('catalog') ? 'POST' : 'GET' }))
 			expect(response.status).toBe(404)
 		}
@@ -233,6 +242,69 @@ describe('Operations public/private HTTP isolation', () => {
 		expect((await createCheck('viewer@vozka.test')).status).toBe(404)
 		expect((await createCheck('operator@vozka.test')).status).toBe(201)
 		expect((await fetch(new Request(`https://${publicHost}/api/sources`))).status).toBe(404)
+	})
+
+	test('the private RPC route exposes the typed operator use-cases and preserves hidden not-found authorization', async () => {
+		const fetch = handler()
+		expect((await fetch(rpcRequest(publicHost, 'sources', null, 'viewer@vozka.test'))).status).toBe(404)
+		expect((await reconcileSource(fetch, '0198a000-0000-7000-8000-000000000001')).status).toBe(200)
+
+		const sources = await fetch(rpcRequest('operations.internal', 'sources', null, 'viewer@vozka.test'))
+		expect(sources.status).toBe(200)
+		const sourcesBody: unknown = await sources.json()
+		if (sourcesBody === null || typeof sourcesBody !== 'object' || !('result' in sourcesBody)) {
+			throw new Error('expected an RPC result')
+		}
+		expect(sourcesBody.result).toMatchObject({ items: [{ appId: 'app', environment: 'prod' }] })
+
+		const forbidden = await fetch(
+			rpcRequest('operations.internal', 'createHealthCheck', {
+				sourceId: '0198a000-0000-7000-8000-000000000001',
+				input: {
+					path: '/healthz',
+					enabled: true,
+					intervalMs: 60_000,
+					timeoutMs: 5_000,
+					expectedStatus: 200,
+					failureThreshold: 3,
+					recoveryThreshold: 2,
+					staleAfterMs: 180_000,
+				},
+			}, 'viewer@vozka.test'),
+		)
+		expect(forbidden.status).toBe(404)
+		const forbiddenBody: unknown = await forbidden.json()
+		expect(forbiddenBody).toEqual({ error: { type: 'not_found', message: 'not found' } })
+	})
+
+	test('RPC validation uses the common error envelope and does not reach a use-case', async () => {
+		const invalidCalls: Array<[string, unknown, string]> = [
+			['source', { sourceId: '' }, 'sourceId must be a non-empty string'],
+			['mutateIssue', { issueId: 'issue-a', mutation: { kind: 'assign', principalId: '' } }, 'principalId must be a non-empty string'],
+			[
+				'mutateIssue',
+				{ issueId: 'issue-a', mutation: { kind: 'resolve_in_release', releaseId: '' } },
+				'releaseId must be a non-empty string',
+			],
+		]
+		for (const [method, input, message] of invalidCalls) {
+			const response = await handler()(rpcRequest('operations.internal', method, input, 'viewer@vozka.test'))
+			expect(response.status).toBe(400)
+			const body: unknown = await response.json()
+			expect(body).toMatchObject({ error: { type: 'validation', message } })
+		}
+	})
+
+	test('an unauthenticated RPC request preserves the IAM login URL envelope', async () => {
+		const iam = createOperationsIam({ IAM: sessionRpc('unused'), FABRIKA_IAM_URL: issuer }, { publicHost })
+		const response = await handler(createHarness(), iam)(rpcRequest('operations.internal', 'sources', null))
+		expect(response.status).toBe(401)
+		const body: unknown = await response.json()
+		if (body === null || typeof body !== 'object' || !('error' in body) || body.error === null || typeof body.error !== 'object') {
+			throw new Error('expected an authentication error')
+		}
+		expect(body.error).toMatchObject({ type: 'auth', message: 'authentication required' })
+		expect('loginUrl' in body.error && typeof body.error.loginUrl === 'string' ? body.error.loginUrl : '').toContain('/auth/login')
 	})
 
 	test('configured public host secures a session cookie minted for an internal HTTP gateway request', async () => {
