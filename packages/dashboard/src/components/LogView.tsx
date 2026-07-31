@@ -1,11 +1,11 @@
-// Live-ish run log viewer. Tails `GET /api/runs/:id/tail?after=<cursor>` on an interval, appending
+// Live-ish run log viewer. Calls `runs.tail({ runId, after })` on an interval, appending
 // the new lines past the cursor it already holds, until the run is terminal (`done: true`). Mirrors
 // how the worker re-flushes the whole accumulated NDJSON to one R2 object and serves the slice past
 // the cursor (see worker src/api/runs.ts tailRunLog). Each fetch is sequential — a poll never starts
 // before the previous one settles — so a slow flush can't pile up overlapping requests.
 
 import { useEffect, useRef, useState } from 'react'
-import { api, ApiError, type LogLine, type RunStatus, type RunTailResponse } from '../lib/api'
+import { api, ApiError, type LogLine, type RunStatus } from '../lib/api'
 import { fmtTimeMs } from '../lib/format'
 
 /** Poll interval while a run is live. The relay flushes R2 ~every 2s, so 1.5s keeps it close to live. */
@@ -35,7 +35,7 @@ export function LogView({ runId, initialStatus }: LogViewProps) {
 
 		async function poll() {
 			try {
-				const res = await api.get<RunTailResponse>(`/runs/${runId}/tail?after=${cursorRef.current}`)
+				const res = await api.runs.tail({ runId, after: cursorRef.current })
 				if (cancelled) return
 				if (res.lines.length > 0) {
 					setLines((prev) => [...prev, ...res.lines])
@@ -49,7 +49,7 @@ export function LogView({ runId, initialStatus }: LogViewProps) {
 			} catch (cause) {
 				if (cancelled) return
 				// Transient errors don't abort the tail (we keep retrying); a 403/404 is terminal for this view.
-				if (cause instanceof ApiError && (cause.status === 403 || cause.status === 404)) {
+				if (cause instanceof ApiError && (cause.httpStatus === 403 || cause.httpStatus === 404)) {
 					setError(cause.message)
 					return
 				}

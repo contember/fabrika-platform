@@ -3,18 +3,18 @@ import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { LogView } from '../../components/LogView'
 import { Chip, RunStatus } from '../../components/Status'
-import { api, ApiError, type AppEnvDto, type ListResponse, type RunDto } from '../../lib/api'
+import { api, ApiError } from '../../lib/api'
 import { fmtDate, fmtDuration, shortRef, shortSha } from '../../lib/format'
 
-// Run detail — the run's metadata + the live log view. The LogView tails `runs/:id/tail` while the run
+// Run detail — the run's metadata + the live log view. The LogView calls `runs.tail` while the run
 // is non-terminal, then shows the complete log; the final status + exit code come from the run row.
 
 export default createPage()
 	.params({ id: 'string' })
 	.loader(async ({ params }) => {
-		const run = await api.get<RunDto>(`/runs/${params.id}`)
+		const run = await api.runs.get({ runId: params.id })
 		// The env's deploy target (domain) is useful context; tolerate it being gone (deleted env).
-		const envs = await api.get<ListResponse<AppEnvDto>>(`/apps/${run.appId}/envs`).catch(() => null)
+		const envs = await api.apps.environments.list({ appId: run.appId }).catch(() => null)
 		const appEnv = envs?.items.find((e) => e.env === run.env) ?? null
 		return { run, appEnv }
 	})
@@ -96,7 +96,7 @@ function CancelButton({ runId, onDone }: { runId: string; onDone: () => void }) 
 		setBusy(true)
 		setError(null)
 		try {
-			await api.post<RunDto>(`/runs/${runId}/cancel`)
+			await api.runs.cancel({ runId })
 			onDone()
 		} catch (cause) {
 			setError(cause instanceof ApiError ? cause.message : 'Cancel failed.')

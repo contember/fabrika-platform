@@ -4,15 +4,7 @@ import { shareLinkState } from '@fabrika/iam-ui/format'
 import { Icon } from '../components/Icon'
 import { Chip, namespaceLamp, RunStatus, Status, StatusLamp } from '../components/Status'
 import { EmptyState } from '../components/Table'
-import {
-	api,
-	type AppDto,
-	type CursorList,
-	type DeploymentNamespaceDto,
-	type DeploymentNamespaceListResponse,
-	type ListResponse,
-	type RunDto,
-} from '../lib/api'
+import { api, type AppDto, type DeploymentNamespaceDto, type RunDto } from '../lib/api'
 import { fmtAgo, fmtDuration, shortRef, shortSha } from '../lib/format'
 import { type IamAuditEventDto, type IamSnapshot, iamSnapshot } from '../lib/iam'
 
@@ -20,8 +12,8 @@ import { type IamAuditEventDto, type IamSnapshot, iamSnapshot } from '../lib/iam
 // in flight, did the last releases land, is a placement broken"; the access half answers "who and what
 // can reach this"; Operations is the boundary for runtime failures and telemetry.
 //
-// Composed from the list endpoints that already exist (`/apps`, `/namespaces`, `/runs`, and IAM's
-// `/iam/admin/*`); there is no aggregate endpoint and this page does not justify inventing one. The
+// Composed from the typed list procedures that already exist; there is no aggregate endpoint and this
+// page does not justify inventing one. The
 // IAM read is best-effort — an operator without `iam.admin` still gets a working delivery overview.
 // Onboarding lives at `/apps/new`.
 
@@ -32,9 +24,9 @@ const DAY_SECONDS = 86_400
 export default createPage()
 	.loader(async () => {
 		const [apps, namespaces, runs, iam] = await Promise.all([
-			api.get<ListResponse<AppDto>>('/apps'),
-			api.get<DeploymentNamespaceListResponse>('/namespaces'),
-			api.get<CursorList<RunDto>>(`/runs?limit=${RUN_WINDOW}`),
+			api.apps.list(),
+			api.namespaces.list(),
+			api.runs.list({ limit: RUN_WINDOW }),
 			iamSnapshot(),
 		])
 		return { apps: apps.items, namespaces: namespaces.items, runs: runs.items, iam }

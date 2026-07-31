@@ -2,11 +2,11 @@ import { createPage, Link } from '@buzola/router'
 import { Icon } from '../../components/Icon'
 import { Chip, NamespaceState } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
-import { api, type DeploymentNamespaceListResponse } from '../../lib/api'
+import { api } from '../../lib/api'
 import { fmtAgo, fmtDate } from '../../lib/format'
 
 export default createPage()
-	.loader(async () => ({ namespaces: await api.get<DeploymentNamespaceListResponse>('/namespaces') }))
+	.loader(async () => ({ namespaces: await api.namespaces.list() }))
 	.route('/namespaces')
 	.render(({ data }) => {
 		const { namespaces } = data

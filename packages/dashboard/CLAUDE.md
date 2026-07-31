@@ -22,10 +22,12 @@ bun run build        # gen + tsc + vite build → dist/ (what the worker serves)
   `@fabrika/operations-ui`.
   Keep browser code away from the runtime entrypoints of `@fabrika/control`, `@fabrika/iam`, and
   `@fabrika/runner-container` or `@fabrika/runner-cloudflare`.
-- **Auth is propustka-native (no Cloudflare Access edge).** On a 401 carrying a `loginUrl` (the worker's
-  `error()` puts it there for a human-gated miss), `src/lib/api.ts` `request()` bounces the browser to
-  propustka's SSO login (`redirect` rewritten to the current page) — a blind reload would just loop since
-  there's no edge to re-challenge. A short `sessionStorage` bounce guard breaks the loop if we return still-unauthorized.
+- **Auth uses Fabrika IAM (no Cloudflare Access edge).** Delivery calls use the typed
+  `ControlRpcContract` client in `src/lib/api.ts`. On a human-gated 401 carrying a `loginUrl`, the shared
+  RPC client opens IAM login with `redirect` rewritten to the current page. A short `sessionStorage`
+  guard breaks the loop if IAM returns an identity that is still unauthorized. The overview's IAM
+  snapshot uses `IamAdminRpcContract` directly with auth bounce disabled because that panel is
+  best-effort; the Access routes use the same contract through `@fabrika/iam-ui` with normal auth bounce.
 
 - **`src/styles.css` is the console's ONLY design system.** `@fabrika/iam-ui` ships component styles for
   its own widgets (pickers, grant grid, JSON view) written in these tokens and declares no base rules —
@@ -37,18 +39,21 @@ bun run build        # gen + tsc + vite build → dist/ (what the worker serves)
   Each answers a different question — what is the state of access, who are the people, what gets in
   without a person, what does a grant mean, what happened. It was seven pages that cut the same
   material three ways; don't add a sixth without retiring one.
-  - **Users are people.** A service principal has no page of its own: `GET /api-keys` returns every one
+  - **Users are people.** A service principal has no page of its own: `apiKeys.list` returns every one
     of them, so Credentials is the complete machine list and the Users list filters to `?type=user`.
   - **Credentials holds both API keys and share links** — both are `px_…` tokens shown once at issue.
     Neither section's button is filled: a page with two constructive steps has no single primary.
   - **Permissions is one page for roles, actions and scope dimensions**, with a policy edited inline in
-    the roles table it belongs to. `/roles?app=` already returns custom roles; the page drops them and
+    the roles table it belongs to. `roles.list({ app })` already returns custom roles; the page drops them and
     renders the policy rows instead, which carry what it takes to edit them.
 
 ## Patterns
 
 - A route is `createPage().loader(...).route('/path').render(...)` (default export) under `src/routes/`.
-- All API calls go through the typed `api` helper (`api.get/post/put/patch/del`) in `src/lib/api.ts` — same-origin, `credentials: 'include'`.
+- Delivery calls use named `ControlRpcContract` procedures through `src/lib/api.ts` at `/api/rpc`.
+  IAM calls use named `IamAdminRpcContract` procedures at `/iam/admin/rpc`; Operations views own their
+  `OperationsRpcContract` client. The shared RPC client sends same-origin credentials. Keep public
+  health checks and static asset delivery outside RPC; do not add path-string REST helpers for domain calls.
 - **Status is a lamp, category is a chip or badge** (`components/Status.tsx`, and iam-ui's mirror of it).
   All three planes speak this one language; nothing renders a coloured pill for a lifecycle state.
 - **One filled button per page**, and it is that page's single constructive step. Filtering, editing and

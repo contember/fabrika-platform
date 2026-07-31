@@ -1,7 +1,7 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
-import { api, ApiError, type DeploymentNamespaceListResponse, type JsonValue, type RegisterAppRequest, type RegisterAppResponse } from '../../lib/api'
+import { api, ApiError, type JsonValue, type RegisterAppRequest } from '../../lib/api'
 
 // Onboarding. "Paste a GitHub repo URL + domain, pick an env" creates the app and its first env in one
 // `register-app` call. The built manifest is provider-owned input; control reserves its service names,
@@ -11,7 +11,7 @@ import { api, ApiError, type DeploymentNamespaceListResponse, type JsonValue, ty
 // now, and this is the step you take from it.
 
 export default createPage()
-	.loader(async () => ({ namespaces: await api.get<DeploymentNamespaceListResponse>('/namespaces') }))
+	.loader(async () => ({ namespaces: await api.namespaces.list() }))
 	.route('/apps/new')
 	.render(({ data }) => {
 		const navigate = useNavigate()
@@ -63,7 +63,7 @@ export default createPage()
 			}
 			setBusy(true)
 			try {
-				const result = await api.post<RegisterAppResponse>('/register-app', body)
+				const result = await api.register(body)
 				navigate('apps/detail', { params: { id: result.app.id } })
 			} catch (cause) {
 				setError(cause instanceof ApiError ? cause.message : 'Onboarding failed.')

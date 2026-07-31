@@ -11,34 +11,30 @@ import {
 	type AppEnvDto,
 	type AppSecretDto,
 	type AppVarDto,
-	type CursorList,
 	type DeploymentNamespaceDto,
-	type DeploymentNamespaceListResponse,
-	type ListResponse,
 	type PutAppEnvRequest,
 	type PutAppSecretRequest,
 	type PutAppVarRequest,
-	type RunDto,
 	type SetSecretValueRequest,
 	type TriggerDeployRequest,
 } from '../../lib/api'
-import { fmtAgo, fmtDate, qs, shortRef, shortSha } from '../../lib/format'
+import { fmtAgo, fmtDate, shortRef, shortSha } from '../../lib/format'
 import { compatibleNamespaces, namespaceAssignmentRequest } from '../../lib/namespaces'
 
 // App detail — the per-app registry + operations view: its meta, its environments (each with a
 // Deploy button + edit/delete), its secret references (names + layer + vault ref, values never shown),
-// and the most recent runs for this app. Add/edit/delete go through the manage actions on `/api/apps/:id/*`.
+// and the most recent runs for this app. Add/edit/delete go through the typed registry procedures.
 
 export default createPage()
 	.params({ id: 'string' })
 	.loader(async ({ params }) => {
 		const [app, envs, secrets, vars, runs, namespaces] = await Promise.all([
-			api.get<AppDto>(`/apps/${params.id}`),
-			api.get<ListResponse<AppEnvDto>>(`/apps/${params.id}/envs`),
-			api.get<ListResponse<AppSecretDto>>(`/apps/${params.id}/secrets`),
-			api.get<ListResponse<AppVarDto>>(`/apps/${params.id}/vars`),
-			api.get<CursorList<RunDto>>(`/runs${qs({ app: params.id, limit: 10 })}`),
-			api.get<DeploymentNamespaceListResponse>('/namespaces'),
+			api.apps.get({ appId: params.id }),
+			api.apps.environments.list({ appId: params.id }),
+			api.apps.secrets.list({ appId: params.id }),
+			api.apps.variables.list({ appId: params.id }),
+			api.runs.list({ appId: params.id, limit: 10 }),
+			api.namespaces.list(),
 		])
 		return { app, envs: envs.items, secrets: secrets.items, vars: vars.items, runs: runs.items, namespaces: namespaces.items }
 	})
@@ -49,7 +45,7 @@ export default createPage()
 		const navigate = useNavigate()
 
 		async function deleteApp() {
-			await api.del(`/apps/${app.id}`)
+			await api.apps.delete({ appId: app.id })
 			navigate('apps')
 		}
 
@@ -268,7 +264,7 @@ function InstallationIdField({ app, onDone }: { app: AppDto; onDone: () => void 
 		setBusy(true)
 		setError(null)
 		try {
-			await api.patch(`/apps/${app.id}`, body)
+			await api.apps.update({ appId: app.id, app: body })
 			setEditing(false)
 			onDone()
 		} catch (cause) {
@@ -326,7 +322,7 @@ function DeployButton({ appId, env }: { appId: string; env: AppEnvDto }) {
 		setError(null)
 		try {
 			const body: TriggerDeployRequest = { appId, env: env.env }
-			const run = await api.post<RunDto>('/deploy', body)
+			const run = await api.deploy(body)
 			navigate('runs/detail', { params: { id: run.id } })
 		} catch (cause) {
 			setError(cause instanceof ApiError ? cause.message : 'Deploy failed.')
@@ -357,7 +353,7 @@ function EnvRow(
 	const [confirming, setConfirming] = useState(false)
 
 	async function remove() {
-		await api.del(`/apps/${appId}/envs/${env.env}`)
+		await api.apps.environments.delete({ appId, env: env.env })
 		onDone()
 	}
 
@@ -438,7 +434,7 @@ function NamespaceAssignment(
 		setError(null)
 		try {
 			const body = namespaceAssignmentRequest(environment, selected === '' ? null : selected)
-			await api.put(`/apps/${appId}/envs/${environment.env}`, body)
+			await api.apps.environments.put({ appId, env: environment.env, environment: body })
 			setBusy(false)
 			onDone()
 		} catch (cause) {
@@ -545,7 +541,7 @@ function EnvForm(
 					? initial.artifact
 					: cloudflareArtifactWithConfigPath(initial.artifact, configPath.trim()),
 			}
-			await api.put(`/apps/${appId}/envs/${envName.trim()}`, body)
+			await api.apps.environments.put({ appId, env: envName.trim(), environment: body })
 			onDone()
 		} catch (cause) {
 			setError(cause instanceof ApiError ? cause.message : 'Save failed.')
@@ -649,7 +645,7 @@ function SecretRow({ appId, secret, onDone }: { appId: string; secret: AppSecret
 	const inVault = secret.valueRef.startsWith('vault:')
 
 	async function remove() {
-		await api.del(`/apps/${appId}/secrets/${secret.name}${qs({ env: secret.env })}`)
+		await api.apps.secrets.delete({ appId, name: secret.name, env: secret.env })
 		onDone()
 	}
 
@@ -715,9 +711,9 @@ function SetSecretValueRow(
 		setError(null)
 		try {
 			const body: SetSecretValueRequest = { value, env: secret.env }
-			const path = `/apps/${appId}/secrets/${secret.name}/value`
 			// PUT sets a new vault entry; PATCH rotates the value behind the existing vault ref.
-			await (rotate ? api.patch(path, body) : api.put(path, body))
+			const input = { appId, name: secret.name, value: body.value, env: body.env }
+			await (rotate ? api.vault.rotate(input) : api.vault.set(input))
 			setValue('')
 			onDone()
 		} catch (cause) {
@@ -785,10 +781,10 @@ function AddSecretForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto
 			if (mode === 'vault') {
 				// Stores the value encrypted in the vault and creates/upserts the `vault:<id>` row.
 				const body: SetSecretValueRequest = { value, env: layer }
-				await api.put(`/apps/${appId}/secrets/${name.trim()}/value`, body)
+				await api.vault.set({ appId, name: name.trim(), value: body.value, env: body.env })
 			} else {
 				const body: PutAppSecretRequest = { name: name.trim(), valueRef: valueRef.trim(), env: layer }
-				await api.put(`/apps/${appId}/secrets`, body)
+				await api.apps.secrets.put({ appId, secret: body })
 			}
 			reset()
 			setOpen(false)
@@ -858,7 +854,7 @@ function VarRow({ appId, appVar, onDone }: { appId: string; appVar: AppVarDto; o
 	const [confirming, setConfirming] = useState(false)
 
 	async function remove() {
-		await api.del(`/apps/${appId}/vars/${appVar.name}${qs({ env: appVar.env })}`)
+		await api.apps.variables.delete({ appId, name: appVar.name, env: appVar.env })
 		onDone()
 	}
 
@@ -910,7 +906,7 @@ function AddVarForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto[];
 				value,
 				env: env === '' ? null : env,
 			}
-			await api.put(`/apps/${appId}/vars`, body)
+			await api.apps.variables.put({ appId, variable: body })
 			setName('')
 			setValue('')
 			setEnv('')

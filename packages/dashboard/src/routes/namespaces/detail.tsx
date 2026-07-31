@@ -2,12 +2,12 @@ import { createPage, Link } from '@buzola/router'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { NamespaceSignature } from '../../components/NamespaceSignature'
-import { api, ApiError, type DeploymentNamespaceDetailDto } from '../../lib/api'
+import { api, ApiError } from '../../lib/api'
 import { fmtDate } from '../../lib/format'
 
 export default createPage()
 	.params({ id: 'string' })
-	.loader(async ({ params }) => ({ namespace: await api.get<DeploymentNamespaceDetailDto>(`/namespaces/${params.id}`) }))
+	.loader(async ({ params }) => ({ namespace: await api.namespaces.get({ namespaceId: params.id }) }))
 	.route('/namespaces/:id')
 	.render(({ data, invalidate }) => {
 		const { namespace } = data
@@ -18,7 +18,7 @@ export default createPage()
 			setBusy(true)
 			setError(null)
 			try {
-				await api.post<DeploymentNamespaceDetailDto>(`/namespaces/${namespace.id}/reconcile`)
+				await api.namespaces.reconcile({ namespaceId: namespace.id })
 				setBusy(false)
 				invalidate()
 			} catch (cause) {

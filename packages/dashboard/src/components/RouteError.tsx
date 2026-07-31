@@ -8,21 +8,21 @@ interface RouteErrorProps {
 /** Title + body for a route error, mapped by type — never echoing a raw server message. */
 function describe(error: Error): { title: string; body: string; icon: IconName } {
 	if (error instanceof ApiError) {
-		if (error.status === 403) {
+		if (error.httpStatus === 403) {
 			return {
 				title: "You don't have permission to view this",
 				body: 'Your account is missing the permission this page requires. Ask a fabrika admin if you think this is wrong.',
 				icon: 'lock',
 			}
 		}
-		if (error.status === 404) {
+		if (error.httpStatus === 404) {
 			return {
 				title: 'Not found',
 				body: "The thing you're looking for doesn't exist, or was removed.",
 				icon: 'search',
 			}
 		}
-		if (error.status === 0) {
+		if (error.httpStatus === 0) {
 			return {
 				title: 'Network error',
 				body: "Couldn't reach the control plane. Check your connection and try again.",
@@ -41,11 +41,11 @@ function describe(error: Error): { title: string; body: string; icon: IconName }
  * Styled fallback for loader/render failures, wired as the layout `<Outlet errorFallback>`. Maps the
  * error by type/status — it never renders the raw `error.message`, which can carry an internal server
  * string. A short status hint is shown for `ApiError`s for support. (401 / Access bounces are handled
- * inside `api()` via a hard reload, so they never reach here.)
+ * inside the RPC client via a guarded SSO navigation, so they normally never reach here.)
  */
 export function RouteError({ error }: RouteErrorProps) {
 	const { title, body, icon } = describe(error)
-	const status = error instanceof ApiError && error.status !== 0 ? error.status : null
+	const status = error instanceof ApiError && error.httpStatus !== 0 ? error.httpStatus ?? null : null
 
 	return (
 		<div className="gate-screen">

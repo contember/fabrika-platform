@@ -5,11 +5,7 @@ import { NamespaceSignature } from '../../components/NamespaceSignature'
 import {
 	api,
 	ApiError,
-	type AppDto,
 	type CreateDeploymentNamespaceRequest,
-	type DeploymentNamespaceDetailDto,
-	type DeploymentNamespaceListResponse,
-	type ListResponse,
 	type PlanDeploymentNamespaceRequest,
 	type PlanDeploymentNamespaceResponse,
 } from '../../lib/api'
@@ -17,8 +13,8 @@ import {
 export default createPage()
 	.loader(async () => {
 		const [namespaces, apps] = await Promise.all([
-			api.get<DeploymentNamespaceListResponse>('/namespaces'),
-			api.get<ListResponse<AppDto>>('/apps'),
+			api.namespaces.list(),
+			api.apps.list(),
 		])
 		return { operator: namespaces.operator, apps: apps.items }
 	})
@@ -68,7 +64,7 @@ export default createPage()
 				...(selectedPreset.requiresExclusiveApp ? { exclusiveAppId } : {}),
 			}
 			try {
-				setPlan(await api.post<PlanDeploymentNamespaceResponse>('/namespaces/plan', body))
+				setPlan(await api.namespaces.plan(body))
 			} catch (cause) {
 				setError(cause instanceof ApiError ? cause.message : 'Placement plan failed.')
 			} finally {
@@ -87,7 +83,7 @@ export default createPage()
 				target: plan.namespace.target,
 			}
 			try {
-				const created = await api.post<DeploymentNamespaceDetailDto>('/namespaces', body)
+				const created = await api.namespaces.create(body)
 				navigate('namespaces/detail', { params: { id: created.id } })
 			} catch (cause) {
 				setError(cause instanceof ApiError ? cause.message : 'Namespace provisioning failed.')

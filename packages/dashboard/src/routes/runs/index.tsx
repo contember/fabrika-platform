@@ -3,8 +3,8 @@ import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { Chip, RunStatus } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
-import { api, ApiError, type AppDto, type CursorList, type ListResponse, type RunDto } from '../../lib/api'
-import { fmtAgo, fmtDate, fmtDuration, qs, shortRef, shortSha } from '../../lib/format'
+import { api, ApiError, type RunDto } from '../../lib/api'
+import { fmtAgo, fmtDate, fmtDuration, shortRef, shortSha } from '../../lib/format'
 
 // Runs — the global deploy history. Filter by app and/or env; keyset-paged with `?before=`. Each row
 // links to the run detail (which tails the live log). A per-app view is the same table prefiltered.
@@ -14,8 +14,8 @@ const PAGE_SIZE = 50
 export default createPage()
 	.loader(async () => {
 		const [runs, apps] = await Promise.all([
-			api.get<CursorList<RunDto>>(`/runs${qs({ limit: PAGE_SIZE })}`),
-			api.get<ListResponse<AppDto>>('/apps'),
+			api.runs.list({ limit: PAGE_SIZE }),
+			api.apps.list(),
 		])
 		return { initialRuns: runs, apps: apps.items }
 	})
@@ -33,9 +33,12 @@ export default createPage()
 			setError(null)
 			try {
 				const before = reset ? undefined : (cursor ?? undefined)
-				const page = await api.get<CursorList<RunDto>>(
-					`/runs${qs({ app, env, before, limit: PAGE_SIZE })}`,
-				)
+				const page = await api.runs.list({
+					...(app === '' ? {} : { appId: app }),
+					...(env === '' ? {} : { env }),
+					...(before === undefined ? {} : { before }),
+					limit: PAGE_SIZE,
+				})
 				setRuns((prev) => (reset ? page.items : [...prev, ...page.items]))
 				setCursor(page.nextCursor)
 			} catch (cause) {

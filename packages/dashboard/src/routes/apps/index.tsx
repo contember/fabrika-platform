@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { Chip } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
-import { api, type AppDto, type ListResponse } from '../../lib/api'
+import { api } from '../../lib/api'
 import { fmtAgo, fmtDate, shortRef } from '../../lib/format'
 
 // Apps — every registered app. The detail page (apps/:id) holds its envs, secrets, and per-env Deploy.
@@ -11,7 +11,7 @@ import { fmtAgo, fmtDate, shortRef } from '../../lib/format'
 
 export default createPage()
 	.loader(async () => {
-		const apps = await api.get<ListResponse<AppDto>>('/apps')
+		const apps = await api.apps.list()
 		return { apps: apps.items }
 	})
 	.route('/apps')
