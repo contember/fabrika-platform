@@ -4,7 +4,7 @@ import type { OperationsSourceSummaryDto } from '@fabrika/operations-contract/op
 export function SourcesView({ sources }: { sources: readonly OperationsSourceSummaryDto[] }) {
 	return (
 		<div className="table-wrap">
-			<table>
+			<table aria-label="Operations sources">
 				<thead>
 					<tr>
 						<th className="grow">Source</th>

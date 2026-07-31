@@ -17,6 +17,10 @@ export interface NotesEnv {
 	iamIssuer: string
 	/** This app's id — the `aud` a token must carry to be accepted here. */
 	appId: string
+	/** Browser-safe public DSN managed by Fabrika for this application environment. */
+	operationsDsn: string
+	/** Deploy-scoped release managed by Fabrika. */
+	release: string
 }
 
 export const readNotesEnv = (source: Record<string, string | undefined> = process.env): NotesEnv => ({
@@ -24,6 +28,8 @@ export const readNotesEnv = (source: Record<string, string | undefined> = proces
 	databaseUrl: required(source, 'NOTES_DATABASE_URL'),
 	iamIssuer: required(source, 'FABRIKA_IAM_ISSUER'),
 	appId: required(source, 'NOTES_APP_ID'),
+	operationsDsn: required(source, 'FABRIKA_OPERATIONS_DSN'),
+	release: required(source, 'FABRIKA_RELEASE'),
 })
 
 /**

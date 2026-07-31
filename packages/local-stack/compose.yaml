@@ -220,6 +220,8 @@ services:
       PORT: "3000"
       FABRIKA_IAM_ISSUER: http://iam.localhost:18080
       NOTES_APP_ID: notes
+      FABRIKA_OPERATIONS_DSN: http://00000000000000000000000000000000@errors.localhost:18080/1
+      FABRIKA_RELEASE: fabrika/local-notes/local/default/0000000000000000000000000000000000000000
     networks: [apps-prod, iam-public]
     depends_on:
       apps-db:

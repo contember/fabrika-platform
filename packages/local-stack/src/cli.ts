@@ -1,16 +1,6 @@
 import { rmSync } from 'node:fs'
-import { COMPOSE_FILE, prepareLocalStack, REPO_ROOT, STATE_DIR } from './prepare'
-
-const compose = async (args: string[]): Promise<void> => {
-	const process = Bun.spawn(
-		['docker', 'compose', '--project-name', 'fabrika-local', '--file', COMPOSE_FILE, ...args],
-		{ cwd: REPO_ROOT, stdout: 'inherit', stderr: 'inherit', stdin: 'inherit' },
-	)
-	const exitCode = await process.exited
-	if (exitCode !== 0) {
-		throw new Error(`docker compose failed with exit code ${exitCode}`)
-	}
-}
+import { compose } from './compose'
+import { prepareLocalStack, STATE_DIR } from './prepare'
 
 const command = Bun.argv[2] ?? ''
 

@@ -3,7 +3,8 @@
 	"private": true,
 	"type": "module",
 	"exports": {
-		".": "./src/zerops-emulator.ts"
+		".": "./src/zerops-emulator.ts",
+		"./browser-support": "./src/browser-support.ts"
 	},
 	"scripts": {
 		"emulator": "bun src/emulator-server.ts",
@@ -13,6 +14,10 @@
 		"smoke": "bun src/smoke.ts",
 		"reset": "bun src/cli.ts reset",
 		"down": "bun src/cli.ts down",
+		"browser:up": "bun src/browser-cli.ts up",
+		"browser:reset": "bun src/browser-cli.ts reset",
+		"browser:down": "bun src/browser-cli.ts down",
+		"browser:test": "bun src/browser-test.ts",
 		"typecheck": "tsc --noEmit",
 		"test": "bun test"
 	},

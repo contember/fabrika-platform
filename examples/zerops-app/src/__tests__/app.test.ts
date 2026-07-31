@@ -8,7 +8,7 @@ import { createBunHandler } from '@fabrika/app/bun'
 import { type AccessTokenClaims, type PermissionEntry, TOKEN_ALG } from '@fabrika/auth-core'
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, type JWK, type KeyLike, SignJWT } from 'jose'
-import { notesApp } from '../app'
+import { notesApp, type OperationsBrowserFixture } from '../app'
 import { createTokenReader, PROXY_TOKEN_HEADER } from '../authz'
 import type { Note, NotesStore } from '../notes'
 
@@ -72,13 +72,17 @@ const grant = (action: string, workspace?: string): PermissionEntry => ({
 	source: 'grant',
 })
 
-const handlerFor = (notes: NotesStore = new MemoryNotes()): (request: Request) => Promise<Response> =>
+const handlerFor = (
+	notes: NotesStore = new MemoryNotes(),
+	operationsBrowser?: OperationsBrowserFixture,
+): (request: Request) => Promise<Response> =>
 	createBunHandler(
 		notesApp,
 		{
 			readCaller: createTokenReader({ issuer: ISSUER, appId: APP_ID, keys: createLocalJWKSet({ keys: [publicJwk] }) }),
 			notes,
 			newId: () => 'note-1',
+			operationsBrowser,
 		},
 		{ onBackgroundError: () => undefined },
 	).fetch
@@ -192,5 +196,41 @@ describe('unhandled request errors stay opaque', () => {
 		expect(response.status).toBe(500)
 		expect(await response.json()).toEqual({ error: 'internal error' })
 		expect(reported).toEqual([failure])
+	})
+})
+
+describe('Operations browser SDK fixture', () => {
+	test('requires a human and exposes only the managed DSN and release', async () => {
+		const fixture = {
+			dsn: 'https://0123456789abcdef0123456789abcdef@operations.test/123',
+			release: 'release-123',
+			script: 'console.info("SDK fixture")',
+		}
+		const handler = handlerFor(new MemoryNotes(), fixture)
+		expect((await handler(new Request('https://notes.test/operations-sdk'))).status).toBe(401)
+
+		const token = await sign({ iss: ISSUER, aud: APP_ID, perms: [] })
+		const page = await handler(withToken('https://notes.test/operations-sdk', token))
+		expect(page.status).toBe(200)
+		expect(page.headers.get('content-type')).toBe('text/html; charset=utf-8')
+		const html = await page.text()
+		expect(html).toContain('Capture managed error')
+		expect(html).not.toContain(fixture.dsn)
+		expect(html).not.toContain(fixture.release)
+
+		const config = await handler(withToken('https://notes.test/operations-sdk/config', token))
+		const body: unknown = await config.json()
+		expect(body).toEqual({ dsn: fixture.dsn, release: fixture.release })
+		expect(Object.keys(body ?? {})).toEqual(['dsn', 'release'])
+
+		const script = await handler(withToken('https://notes.test/operations-sdk.js', token))
+		expect(await script.text()).toBe(fixture.script)
+	})
+
+	test('does not expose an incomplete fixture', async () => {
+		const token = await sign({ iss: ISSUER, aud: APP_ID, perms: [] })
+		expect((await handlerFor()(withToken('https://notes.test/operations-sdk', token))).status).toBe(404)
+		expect((await handlerFor()(withToken('https://notes.test/operations-sdk/config', token))).status).toBe(404)
+		expect((await handlerFor()(withToken('https://notes.test/operations-sdk.js', token))).status).toBe(404)
 	})
 })

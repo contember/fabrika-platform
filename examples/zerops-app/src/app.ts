@@ -22,6 +22,14 @@ export interface HandlerDeps {
 	newId?: () => string
 	/** Receives an unhandled request error before the opaque response is returned. */
 	onError?: (error: unknown) => void
+	/** Optional only so request-kernel tests do not need to build the browser SDK. */
+	operationsBrowser?: OperationsBrowserFixture
+}
+
+export interface OperationsBrowserFixture {
+	dsn: string
+	release: string
+	script: string
 }
 
 interface AppContext {
@@ -54,6 +62,9 @@ export const notesApp = defineApp<HandlerDeps, AppContext>({
 	routes: [
 		route.get('/healthz', () => json({ status: 'ok' })),
 		route.get('/public/*path', () => json({ app: 'notes', caller: ANONYMOUS.subject })),
+		route.get('/operations-sdk', (ctx) => operationsSdkPage(ctx.deps), { use: [authenticate] }),
+		route.get('/operations-sdk/config', (ctx) => operationsSdkConfig(ctx.deps), { use: [authenticate] }),
+		route.get('/operations-sdk.js', (ctx) => operationsSdkScript(ctx.deps), { use: [authenticate] }),
 		route.get('/api/notes', (ctx) => list(ctx.deps, authenticatedCaller(ctx), ctx.url), { use: [authenticate] }),
 		route.post('/api/notes', (ctx) => create(ctx.deps, authenticatedCaller(ctx), ctx.request), { use: [authenticate] }),
 		route.delete('/api/notes/:id', (ctx, params) => remove(ctx.deps, authenticatedCaller(ctx), ctx.url, params.id), { use: [authenticate] }),
@@ -72,6 +83,31 @@ export const notesApp = defineApp<HandlerDeps, AppContext>({
 		return json({ error: 'internal error' }, 500)
 	},
 })
+
+const operationsFixture = (deps: HandlerDeps): OperationsBrowserFixture | null => deps.operationsBrowser ?? null
+
+const operationsSdkPage = (deps: HandlerDeps): Response => {
+	if (operationsFixture(deps) === null) return json({ error: 'not found' }, 404)
+	return new Response(
+		'<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Operations SDK witness</title></head>'
+			+ '<body><main><h1>Operations SDK witness</h1><label>Error marker <input id="error-marker" readonly></label>'
+			+ '<button type="button" id="capture-error">Capture managed error</button>'
+			+ '<p id="capture-status" role="status">Ready</p></main><script type="module" src="/operations-sdk.js"></script></body></html>',
+		{ headers: { 'content-type': 'text/html; charset=utf-8' } },
+	)
+}
+
+const operationsSdkConfig = (deps: HandlerDeps): Response => {
+	const fixture = operationsFixture(deps)
+	return fixture === null ? json({ error: 'not found' }, 404) : json({ dsn: fixture.dsn, release: fixture.release })
+}
+
+const operationsSdkScript = (deps: HandlerDeps): Response => {
+	const fixture = operationsFixture(deps)
+	return fixture === null
+		? json({ error: 'not found' }, 404)
+		: new Response(fixture.script, { headers: { 'content-type': 'text/javascript; charset=utf-8' } })
+}
 
 /** The scope every `/api/*` route is evaluated against. Absent is a 400, never a silent "all workspaces". */
 const workspaceOf = (url: URL): string | null => {

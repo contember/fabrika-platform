@@ -74,7 +74,7 @@ export default createPage()
 					</div>
 					{error && <p className="error-text" role="alert">{error}</p>}
 					<div className="table-wrap">
-						<table>
+						<table aria-label={`HTTP health checks for ${data.source.displayName}`}>
 							<thead>
 								<tr>
 									<th className="grow">Path</th>
@@ -116,6 +116,7 @@ export default createPage()
 														type="button"
 														className="small"
 														disabled={busy}
+														aria-label={`${check.enabled ? 'Disable' : 'Enable'} health check ${check.path}`}
 														onClick={() =>
 															perform(() =>
 																operationsClient.updateHealthCheck(data.source.id, check.id, {
@@ -136,6 +137,7 @@ export default createPage()
 														type="button"
 														className="danger small"
 														disabled={busy}
+														aria-label={`Delete health check ${check.path}`}
 														onClick={() => perform(() => operationsClient.deleteHealthCheck(data.source.id, check.id))}
 													>
 														Delete

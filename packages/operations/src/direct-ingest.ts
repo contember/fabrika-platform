@@ -30,6 +30,13 @@ export interface DirectIngestOptions {
 }
 
 export async function handleDirectIngestRequest(request: Request, options: DirectIngestOptions): Promise<Response> {
+	const response = await handleDirectIngest(request, options)
+	// The public-key DSN is browser-safe; this lets the SDK observe delivery across app origins.
+	response.headers.set('Access-Control-Allow-Origin', '*')
+	return response
+}
+
+async function handleDirectIngest(request: Request, options: DirectIngestOptions): Promise<Response> {
 	if (request.method !== 'POST') return jsonError(405, 'method not allowed', { Allow: 'POST' })
 	const match = new URL(request.url).pathname.match(ENVELOPE_PATH)
 	const pathProjectId = match?.[1]
@@ -76,7 +83,8 @@ export async function handleDirectIngestRequest(request: Request, options: Direc
 	}
 	const contentTypeHeader = request.headers.get('content-type')
 	const contentType = contentTypeHeader?.split(';', 1)[0]?.trim().toLowerCase()
-	if (contentType === undefined || !ACCEPTED_CONTENT_TYPES.has(contentType)) {
+	// Sentry's browser fetch transport omits this header to keep cross-origin ingest preflight-free.
+	if (contentType !== undefined && !ACCEPTED_CONTENT_TYPES.has(contentType)) {
 		return reject(options, 'unsupported', 415, 'content type is not supported', credential.sourceId)
 	}
 

@@ -23,6 +23,8 @@ type Page =
 interface NavItem {
 	to: Page
 	label: string
+	/** Distinguishes repeated visible labels for assistive technology and browser automation. */
+	accessibleLabel?: string
 	/** The rail stays label-only; this explains the label on hover. */
 	description: string
 	icon: IconName
@@ -37,7 +39,15 @@ interface NavSection {
 }
 
 /** The overview spans all planes, so it sits above them rather than inside any section. */
-const LEAD: NavItem = { to: 'index', label: 'Overview', description: 'All planes at a glance', icon: 'gauge', match: '/', exact: true }
+const LEAD: NavItem = {
+	to: 'index',
+	label: 'Overview',
+	accessibleLabel: 'Console overview',
+	description: 'All planes at a glance',
+	icon: 'gauge',
+	match: '/',
+	exact: true,
+}
 
 const NAV: NavSection[] = [
 	{
@@ -51,7 +61,15 @@ const NAV: NavSection[] = [
 	{
 		label: 'Access',
 		items: [
-			{ to: 'access', label: 'Overview', description: 'The access plane at a glance', icon: 'shield', match: '/access', exact: true },
+			{
+				to: 'access',
+				label: 'Overview',
+				accessibleLabel: 'Access overview',
+				description: 'The access plane at a glance',
+				icon: 'shield',
+				match: '/access',
+				exact: true,
+			},
 			{ to: 'access/users', label: 'Users', description: 'People who can sign in', icon: 'users', match: '/access/users' },
 			{ to: 'access/credentials', label: 'Credentials', description: 'API keys and share links', icon: 'key', match: '/access/credentials' },
 			{ to: 'access/permissions', label: 'Permissions', description: 'Roles, actions and scopes', icon: 'schema', match: '/access/permissions' },
@@ -61,7 +79,15 @@ const NAV: NavSection[] = [
 	{
 		label: 'Operations',
 		items: [
-			{ to: 'operations', label: 'Overview', description: 'The operations plane at a glance', icon: 'gauge', match: '/operations', exact: true },
+			{
+				to: 'operations',
+				label: 'Overview',
+				accessibleLabel: 'Operations overview',
+				description: 'The operations plane at a glance',
+				icon: 'gauge',
+				match: '/operations',
+				exact: true,
+			},
 			{ to: 'operations/errors', label: 'Errors', description: 'Application failures and triage', icon: 'alert', match: '/operations/errors' },
 			{ to: 'operations/sources', label: 'Sources', description: 'Telemetry source catalog', icon: 'app', match: '/operations/sources' },
 			{ to: 'operations/releases', label: 'Releases', description: 'Release and regression context', icon: 'commit', match: '/operations/releases' },
@@ -149,6 +175,7 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
 		<Link
 			to={item.to}
 			className={`nav-item${active ? ' active' : ''}`}
+			aria-label={item.accessibleLabel}
 			aria-current={active ? 'page' : undefined}
 			title={item.description}
 		>

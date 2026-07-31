@@ -252,6 +252,12 @@ describe('Operations portable repositories', () => {
 			'assigned',
 			'merged',
 		])
+		expect((await harness.repositories.operator.listIssues({ sourceIds: ['source-a'], offset: 0, limit: 10 })).map((issue) => issue.fingerprint))
+			.toEqual([
+				'target',
+			])
+		expect(await harness.repositories.operator.issueStatusCounts(['source-a'])).toEqual([{ status: 'open', count: 1 }])
+		expect(await harness.repositories.operator.getIssueByCoordinate('source-a', 'issue')).not.toBeNull()
 		await persistIngest(env, message({ sourceId: 'source-a', eventId: 'post-merge', fingerprint: 'issue', receivedAt: 2_000 }))
 		await persistIngest(env, message({ sourceId: 'source-b', eventId: 'same-fingerprint', fingerprint: 'issue', receivedAt: 3_000 }))
 		expect(await harness.repositories.ingest.counts({ sourceId: 'source-a', fingerprint: 'issue' })).toEqual([

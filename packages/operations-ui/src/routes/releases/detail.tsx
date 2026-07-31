@@ -36,7 +36,7 @@ export default createPage()
 					<h2>Correlated issues</h2>
 				</div>
 				<div className="table-wrap">
-					<table>
+					<table aria-label="Release correlated issues">
 						<thead>
 							<tr>
 								<th>Level</th>

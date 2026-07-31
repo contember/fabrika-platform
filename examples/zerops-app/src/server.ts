@@ -12,12 +12,25 @@ import { PostgresNotes } from './notes'
 
 const env = readNotesEnv()
 const sql = new SQL(env.databaseUrl)
+const operationsBrowserBuild = await Bun.build({
+	entrypoints: [new URL('./operations-browser.ts', import.meta.url).pathname],
+	target: 'browser',
+	minify: true,
+})
+if (!operationsBrowserBuild.success) throw new Error('failed to build the Operations SDK browser fixture')
+const operationsBrowserOutput = operationsBrowserBuild.outputs[0]
+if (operationsBrowserOutput === undefined) throw new Error('Operations SDK browser fixture produced no output')
 
 const handler = createBunHandler(
 	notesApp,
 	{
 		readCaller: createTokenReader({ issuer: env.iamIssuer, appId: env.appId }),
 		notes: new PostgresNotes(sql),
+		operationsBrowser: {
+			dsn: env.operationsDsn,
+			release: env.release,
+			script: await operationsBrowserOutput.text(),
+		},
 		onError: () => console.error('unhandled request error'),
 	},
 	{ onBackgroundError: () => console.error('background task failed') },

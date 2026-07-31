@@ -1,0 +1,7 @@
+{
+	"project": "fabrika-platform",
+	"endpoint": "http://127.0.0.1:5173",
+	"retries": 0,
+	"tier": "critical",
+	"footprint": "off"
+}

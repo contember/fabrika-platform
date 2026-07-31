@@ -95,7 +95,7 @@ export function ErrorsView({ issues, onMutate, onBulkStatus }: ErrorsViewProps) 
 			{error && <p className="error-text" role="alert">{error}</p>}
 
 			<div className="table-wrap">
-				<table>
+				<table aria-label="Operations issues">
 					<thead>
 						<tr>
 							{onMutate !== undefined && (
@@ -159,7 +159,7 @@ export function ErrorsView({ issues, onMutate, onBulkStatus }: ErrorsViewProps) 
 										<td className="numeric">{issue.count.toLocaleString()}</td>
 										<td>{relativeSeen(issue.lastSeen)}</td>
 										<td>
-											<IssueStatusLabel status={issue.status} regressed={issue.regressedAt !== null} />
+											<IssueStatusLabel issueId={issue.id} status={issue.status} regressed={issue.regressedAt !== null} />
 										</td>
 										{onMutate !== undefined && (
 											<td>
@@ -193,10 +193,10 @@ function readStatus(value: string): IssueStatus | 'all' {
 	return 'all'
 }
 
-function IssueStatusLabel({ status, regressed }: { status: IssueStatus; regressed: boolean }) {
+function IssueStatusLabel({ issueId, status, regressed }: { issueId: string; status: IssueStatus; regressed: boolean }) {
 	const lamp = status === 'open' ? 'stop' : status === 'resolved' ? 'ok' : 'idle'
 	return (
-		<span className={`status status-${lamp}`}>
+		<span className={`status status-${lamp}`} data-testid="issue-status" data-issue-id={issueId} data-status={status}>
 			<span className="lamp" aria-hidden="true" />
 			{regressed && status === 'open' ? 'regressed' : status}
 		</span>

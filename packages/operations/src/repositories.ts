@@ -906,7 +906,7 @@ export class OperatorRepository {
 		if (input.sourceIds.length === 0) return []
 		await this.ensureIssueIds(input.sourceIds)
 		const placeholders = input.sourceIds.map(() => '?').join(', ')
-		const conditions = [`issue.source_id IN (${placeholders})`, 'issue.id IS NOT NULL']
+		const conditions = [`issue.source_id IN (${placeholders})`, 'issue.id IS NOT NULL', 'issue.merged_into IS NULL']
 		const values: SqlBindValue[] = [...input.sourceIds]
 		if (input.status !== undefined) {
 			conditions.push('issue.status = ?')
@@ -945,7 +945,7 @@ export class OperatorRepository {
 		const placeholders = sourceIds.map(() => '?').join(', ')
 		const { results } = await this.db
 			.prepare(`SELECT status, COUNT(*) AS count FROM issues
-				WHERE source_id IN (${placeholders}) AND id IS NOT NULL
+				WHERE source_id IN (${placeholders}) AND id IS NOT NULL AND merged_into IS NULL
 				GROUP BY status`)
 			.bind(...sourceIds)
 			.all<{ status: IssueStatus; count: number | string }>()

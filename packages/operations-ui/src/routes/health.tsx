@@ -10,7 +10,7 @@ export default createPage()
 		<>
 			<PageHead title="Health and telemetry" description="Runtime signals and delivery state for every visible source." />
 			<div className="table-wrap">
-				<table>
+				<table aria-label="Operations health">
 					<thead>
 						<tr>
 							<th className="grow">Source</th>

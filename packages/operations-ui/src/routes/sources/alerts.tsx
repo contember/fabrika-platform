@@ -119,6 +119,7 @@ export default createPage()
 												type="button"
 												className="small"
 												disabled={busy}
+												aria-label={`${enabled ? 'Disable' : 'Enable'} ${label(kind)} alerts`}
 												onClick={() => perform(() => operationsClient.updateAlertRule(data.source.id, kind, { enabled: !enabled }))}
 											>
 												{enabled ? 'Disable' : 'Enable'}
@@ -136,7 +137,7 @@ export default createPage()
 						<h2>Webhook channels</h2>
 					</div>
 					<div className="table-wrap">
-						<table>
+						<table aria-label={`Webhook channels for ${data.source.displayName}`}>
 							<thead>
 								<tr>
 									<th>Scope</th>
@@ -167,6 +168,7 @@ export default createPage()
 														type="button"
 														className="small"
 														disabled={busy}
+														aria-label={`${channel.enabled ? 'Disable' : 'Enable'} ${label(channel.scope)} webhook ${channel.targetDisplay}`}
 														onClick={() =>
 															perform(() =>
 																operationsClient.updateAlertChannel(data.source.id, channel.id, {
@@ -182,6 +184,7 @@ export default createPage()
 														type="button"
 														className="danger small"
 														disabled={busy}
+														aria-label={`Delete ${label(channel.scope)} webhook ${channel.targetDisplay}`}
 														onClick={() => perform(() => operationsClient.deleteAlertChannel(data.source.id, channel.id))}
 													>
 														Delete

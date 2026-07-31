@@ -34,6 +34,7 @@
 		"@fabrika/app": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*",
+		"@sentry/browser": "10.69.0",
 		"jose": "^5.9.0"
 	},
 	"devDependencies": {

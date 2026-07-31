@@ -33,7 +33,7 @@ export default createPage()
 					<span className="count">{visible.length} releases</span>
 				</div>
 				<div className="table-wrap">
-					<table>
+					<table aria-label="Operations releases">
 						<thead>
 							<tr>
 								<th>State</th>

@@ -23,6 +23,7 @@ SDK and enforces its own gates in-process; here it does not enforce them at all,
 | `src/migrate.ts`              | `run.initCommands` — migrations at container start, which is why the deploy plan has no `migrate` step. |
 | `src/authz.ts`                | Verifies the proxy-injected token and answers `can()` / `scopedTo()`.                                   |
 | `src/app.ts`                  | The Fetch app: one route per gate, auth middleware, and the per-object checks gates cannot express.     |
+| `src/operations-browser.ts`   | A browser witness that sends one marked exception through the managed Operations DSN.                   |
 
 ## The shape of a Zerops deploy
 
@@ -66,6 +67,12 @@ Fabrika also writes `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE` as managed
 service-level variables before triggering a deploy. They are intentionally
 absent from the static app manifest and from this repository's `zerops.yaml`.
 Applications must not declare those reserved names.
+
+The authenticated `/operations-sdk` fixture is the minimal browser adoption
+example. The server exposes only those two browser-safe managed values through
+`/operations-sdk/config`; no application secret enters its HTML or JavaScript.
+It uses the exact `@sentry/browser` version pinned in `package.json` and disables
+the SDK's default integrations to keep this witness limited to error events.
 
 ## Namespace isolation fixtures
 

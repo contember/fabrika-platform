@@ -1,11 +1,12 @@
-import type { DisplayFrame, EventDetail } from '@fabrika/operations-contract'
+import { Link } from '@buzola/router'
+import type { ActivityItem, DisplayFrame, EventDetail } from '@fabrika/operations-contract'
 import type {
 	OperationsAssigneeListResponseDto,
 	OperationsIssueDetailDto,
 	OperationsIssueMutationRequestDto,
 	OperationsReleaseSummaryDto,
 } from '@fabrika/operations-contract/operator-api'
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { formatTimestamp, relativeSeen } from '../format'
 
 export interface ErrorDetailViewProps {
@@ -19,6 +20,36 @@ export interface ErrorDetailViewProps {
 export function frameLocation(frame: DisplayFrame): string {
 	const position = [frame.line, frame.column].filter((part): part is number => part !== null).join(':')
 	return position === '' ? frame.file : `${frame.file}:${position}`
+}
+
+export function activityPayloadLabel(item: ActivityItem): string | null {
+	const data = item.data
+	if (data === null) return null
+	const { text, to, toId, until: untilValue, release: releaseValue, count: countValue, into, from } = data
+	if (item.kind === 'comment') return stringValue(text)
+	if (item.kind === 'assigned') {
+		const assignee = stringValue(to) ?? stringValue(toId)
+		return assignee === null ? 'Unassigned' : `Assigned to ${assignee}`
+	}
+	if (item.kind === 'snoozed') {
+		const until = numberValue(untilValue)
+		if (until !== null) return `Snoozed until ${formatTimestamp(until)}`
+		const release = stringValue(releaseValue)
+		if (release !== null) return `Resolved in release ${release}`
+		const count = numberValue(countValue)
+		if (count !== null) return `Snoozed for ${count} additional events`
+		return null
+	}
+	if (item.kind === 'merged') {
+		const target = stringValue(into)
+		return target === null ? null : `Merged into ${target}`
+	}
+	if (item.kind === 'status') {
+		const previous = stringValue(from)
+		const next = stringValue(to)
+		return previous === null || next === null ? null : `${previous} to ${next}`
+	}
+	return null
 }
 
 export function ErrorDetailView({ issue, event, assignees, releases, onMutate }: ErrorDetailViewProps) {
@@ -57,7 +88,11 @@ export function ErrorDetailView({ issue, event, assignees, releases, onMutate }:
 						<h1>{issue.title}</h1>
 						<p className="hint">{issue.culprit ?? 'No culprit was reported.'}</p>
 					</div>
-					<span className={`status status-${issue.status === 'open' ? 'stop' : issue.status === 'resolved' ? 'ok' : 'idle'}`}>
+					<span
+						className={`status status-${issue.status === 'open' ? 'stop' : issue.status === 'resolved' ? 'ok' : 'idle'}`}
+						data-testid="issue-status"
+						data-status={issue.status}
+					>
 						<span className="lamp" aria-hidden="true" />
 						{issue.regressedAt !== null && issue.status === 'open' ? 'regressed' : issue.status}
 					</span>
@@ -70,6 +105,16 @@ export function ErrorDetailView({ issue, event, assignees, releases, onMutate }:
 				<Fact label="Last seen" value={relativeSeen(issue.lastSeen)} />
 				<Fact label="Assigned to" value={issue.assignedTo?.label ?? issue.assignedTo?.id ?? 'Unassigned'} />
 				<Fact label="Release" value={issue.latestOccurrence?.release ?? '—'} />
+				<Fact
+					label="Resolved in release"
+					value={issue.resolvedInRelease === null
+						? '—'
+						: (
+							<Link to="operations/releases/detail" params={{ releaseId: issue.resolvedInRelease.id }}>
+								{issue.resolvedInRelease.name}
+							</Link>
+						)}
+				/>
 				<Fact label="Environment" value={event?.environment ?? '—'} />
 			</div>
 
@@ -90,12 +135,20 @@ export function ErrorDetailView({ issue, event, assignees, releases, onMutate }:
 							{primaryException !== null && (
 								<div className="ops-exception">
 									<h3>{[primaryException.type, primaryException.value].filter(Boolean).join(': ') || issue.title}</h3>
-									<div className="ops-stack">
+									<div className="ops-stack" data-testid="stack-frames">
 										{primaryException.frames.map((frame, index) => (
-											<div className={`ops-frame${frame.inApp ? ' in-app' : ''}`} key={`${frameLocation(frame)}:${index}`}>
+											<div
+												className={`ops-frame${frame.inApp ? ' in-app' : ''}`}
+												key={`${frameLocation(frame)}:${index}`}
+												data-testid="stack-frame"
+												data-frame-index={index}
+												data-frame-file={frame.file}
+												data-frame-in-app={frame.inApp}
+												data-frame-resolved={frame.resolved}
+											>
 												<div>
 													<strong>{frame.function ?? '(anonymous)'}</strong>
-													<code>{frameLocation(frame)}</code>
+													<code data-testid="frame-location">{frameLocation(frame)}</code>
 												</div>
 												<FrameSource frame={frame} />
 											</div>
@@ -198,15 +251,7 @@ export function ErrorDetailView({ issue, event, assignees, releases, onMutate }:
 							)
 							: (
 								<div className="feed">
-									{issue.activity.map((item) => (
-										<div className="feed-row" key={item.id}>
-											<span className="feed-main">
-												<strong className="feed-title">{item.kind}</strong>
-												<span className="feed-meta">{item.actorLabel ?? 'System'}</span>
-											</span>
-											<span className="feed-side">{relativeSeen(item.at)}</span>
-										</div>
-									))}
+									{issue.activity.map((item) => <ActivityEntry item={item} key={item.id} />)}
 								</div>
 							)}
 					</div>
@@ -220,7 +265,7 @@ function FrameSource({ frame }: { frame: DisplayFrame }) {
 	const source = frame.source
 	if (source === undefined) return null
 	return (
-		<pre className="ops-source">
+		<pre className="ops-source" data-testid="frame-source">
 			{source.lines.map((line, lineIndex) => (
 				<span className={lineIndex === source.errorIndex ? 'error-line' : ''} key={source.startLine + lineIndex}>
 					<b>{source.startLine + lineIndex}</b> {line}
@@ -280,7 +325,29 @@ function EventContext({ event }: { event: EventDetail }) {
 	)
 }
 
-function Fact({ label, value }: { label: string; value: string }) {
+function stringValue(value: unknown): string | null {
+	return typeof value === 'string' && value !== '' ? value : null
+}
+
+function numberValue(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function ActivityEntry({ item }: { item: ActivityItem }) {
+	const payload = activityPayloadLabel(item)
+	return (
+		<div className="feed-row" data-testid="activity-entry" data-activity-kind={item.kind}>
+			<span className="feed-main">
+				<strong className="feed-title">{item.kind}</strong>
+				{payload !== null && <span className="feed-meta" data-testid="activity-payload">{payload}</span>}
+				<span className="feed-meta">{item.actorLabel ?? 'System'}</span>
+			</span>
+			<span className="feed-side">{relativeSeen(item.at)}</span>
+		</div>
+	)
+}
+
+function Fact({ label, value }: { label: string; value: ReactNode }) {
 	return (
 		<div>
 			<dt>{label}</dt>
