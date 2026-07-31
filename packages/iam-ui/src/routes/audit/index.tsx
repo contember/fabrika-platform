@@ -1,11 +1,11 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
-import type { AuditEventDto, CursorList } from '@fabrika/iam-contract'
+import type { AuditEventDto } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { JsonView } from '../../components/JsonView'
 import { EmptyState, Table } from '../../components/Table'
 import { api } from '../../lib/api'
-import { fmtDate, qs } from '../../lib/format'
+import { fmtDate, trimmedQueryValue } from '../../lib/format'
 
 const LIMIT = 50
 
@@ -27,16 +27,15 @@ export default createPage()
 		before: '?string',
 	})
 	.loader(async ({ params }) => {
-		const query = qs({
-			resourceType: params.resourceType,
-			resourceId: params.resourceId,
-			principalId: params.principalId,
-			action: params.action,
-			requestId: params.requestId,
-			before: params.before,
+		const page = await api.audit.list({
+			resourceType: trimmedQueryValue(params.resourceType),
+			resourceId: trimmedQueryValue(params.resourceId),
+			principalId: trimmedQueryValue(params.principalId),
+			action: trimmedQueryValue(params.action),
+			requestId: trimmedQueryValue(params.requestId),
+			before: trimmedQueryValue(params.before),
 			limit: LIMIT,
 		})
-		const page = await api.get<CursorList<AuditEventDto>>(`/audit${query}`)
 		return { page }
 	})
 	.route('/access/audit')

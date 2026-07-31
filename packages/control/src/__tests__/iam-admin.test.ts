@@ -60,6 +60,24 @@ describe('IAM admin gateway', () => {
 		})
 	})
 
+	test('returns the structural auth envelope expected by the RPC client', async () => {
+		const gateway = new RecordingGateway(Response.json({ error: { type: 'auth', message: 'unauthorized' } }, { status: 401 }))
+		const response = await forwardIamAdmin(
+			new Request('https://console.test/iam/admin/rpc', { method: 'POST', headers: { origin: 'https://console.test' }, body: '{}' }),
+			{ gateway, publicIamUrl: 'https://iam.test' },
+		)
+		const body: unknown = await response.json()
+
+		expect(response.status).toBe(401)
+		expect(body).toEqual({
+			error: {
+				type: 'auth',
+				message: 'unauthorized',
+				loginUrl: 'https://iam.test/auth/login?redirect=https%3A%2F%2Fconsole.test',
+			},
+		})
+	})
+
 	test('rewrites the private hop and injects only the explicit local bearer', async () => {
 		let received: { url: string; origin: string | null; authorization: string | null; cookie: string | null; body: string } | undefined
 		const server = Bun.serve({

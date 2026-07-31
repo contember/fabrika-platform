@@ -1,5 +1,5 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
-import type { AppDto, CreateGrantRequest, InviteRequest, ListResponse, PrincipalListItem } from '@fabrika/iam-contract'
+import type { CreateGrantRequest, InviteRequest } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { GrantComposer, useGrantComposerState } from '../../components/GrantComposer'
 import { Icon } from '../../components/Icon'
@@ -13,7 +13,7 @@ import { parseDateTimeLocal } from '../../lib/format'
  */
 export default createPage()
 	.loader(async () => {
-		const apps = await api.get<ListResponse<AppDto>>('/apps')
+		const apps = await api.apps.list()
 		return { apps: apps.items }
 	})
 	.route('/access/users/new')
@@ -42,14 +42,14 @@ export default createPage()
 
 			setBusy(true)
 			try {
-				const invited = await api.post<PrincipalListItem>('/principals', { email } satisfies InviteRequest)
+				const invited = await api.principals.invite({ email } satisfies InviteRequest)
 				if (authorization !== null) {
 					const body: CreateGrantRequest = {
 						principalId: invited.id,
 						...authorization,
 						expiresAt: parseDateTimeLocal(expiry),
 					}
-					await api.post('/grants', body)
+					await api.grants.create(body)
 				}
 				navigate('access/users/detail', { params: { id: invited.id } })
 			} catch (cause) {

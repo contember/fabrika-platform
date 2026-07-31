@@ -11,12 +11,6 @@
 		"src/route-map.d.ts",
 		"src/components/**/*",
 		"src/lib/**/*",
-		"src/routes/api-keys/**/*",
-		"src/routes/audit/**/*",
-		"src/routes/policies/**/*",
-		"src/routes/principals/**/*",
-		"src/routes/schema/**/*",
-		"src/routes/share-links/**/*",
-		"src/routes/roles.tsx"
+		"src/routes/**/*"
 	]
 }

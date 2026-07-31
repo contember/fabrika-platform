@@ -11,7 +11,7 @@ import { fmtAgo, fmtDate, fmtExpiry, fmtScope } from '../../lib/format'
 
 export default createPage()
 	.params({ id: 'string' })
-	.loader(async ({ params }) => ({ principal: await api.get<PrincipalDetail>(`/principals/${params.id}`) }))
+	.loader(async ({ params }) => ({ principal: await api.principals.get({ id: params.id }) }))
 	.route('/access/users/:id')
 	.render(({ data, invalidate }) => {
 		const { principal } = data
@@ -120,7 +120,7 @@ function DisableToggle({ principal, onDone }: { principal: PrincipalDetail; onDo
 
 	async function toggle() {
 		const body: UpdatePrincipalRequest = { disabled: !disabled }
-		await api.patch(`/principals/${principal.id}`, body)
+		await api.principals.update({ id: principal.id, ...body })
 		onDone()
 	}
 
@@ -187,7 +187,7 @@ function GrantRow({ grant, onDone }: { grant: GrantDto; onDone: () => void }) {
 	const scopeLabel = fmtScope(grant.scopeType === null ? null : { type: grant.scopeType, value: grant.scopeValue ?? '' })
 
 	async function revoke() {
-		await api.del(`/grants/${grant.id}`)
+		await api.grants.delete({ id: grant.id })
 		onDone()
 	}
 

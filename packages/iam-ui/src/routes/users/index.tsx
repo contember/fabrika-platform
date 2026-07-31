@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import type { ListResponse, PrincipalListItem, PrincipalStatus as Lifecycle } from '@fabrika/iam-contract'
+import type { PrincipalStatus as Lifecycle } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { PrincipalStatus } from '../../components/Status'
@@ -16,7 +16,7 @@ type StatusFilter = '' | Lifecycle
 
 export default createPage()
 	.loader(async () => {
-		const principals = await api.get<ListResponse<PrincipalListItem>>('/principals?type=user')
+		const principals = await api.principals.list({ type: 'user' })
 		return { users: principals.items }
 	})
 	.route('/access/users')

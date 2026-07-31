@@ -1,11 +1,10 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
-import type { AuthLogDto, CursorList } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { Status } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api } from '../../lib/api'
-import { fmtDate, qs } from '../../lib/format'
+import { fmtDate, trimmedQueryValue } from '../../lib/format'
 
 const LIMIT = 50
 
@@ -17,14 +16,15 @@ export default createPage()
 		before: '?string',
 	})
 	.loader(async ({ params }) => {
-		const query = qs({
-			principalId: params.principalId,
-			requestId: params.requestId,
-			decision: params.decision,
-			before: params.before,
+		const decisionParam = trimmedQueryValue(params.decision)
+		const decision = decisionParam === 'allow' || decisionParam === 'deny' ? decisionParam : undefined
+		const page = await api.audit.listAuthLog({
+			principalId: trimmedQueryValue(params.principalId),
+			requestId: trimmedQueryValue(params.requestId),
+			decision,
+			before: trimmedQueryValue(params.before),
 			limit: LIMIT,
 		})
-		const page = await api.get<CursorList<AuthLogDto>>(`/auth-log${query}`)
 		return { page }
 	})
 	.route('/access/audit/auth-log')

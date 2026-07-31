@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import type { ApiKeyDto, GrantDto, ListResponse, RotateApiKeyResponse, ShareLinkListItem } from '@fabrika/iam-contract'
+import type { ApiKeyDto, GrantDto, RotateApiKeyResponse, ShareLinkListItem } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
@@ -20,8 +20,8 @@ import { fmtExpiry, fmtScope, shareLinkState } from '../../lib/format'
 export default createPage()
 	.loader(async () => {
 		const [apiKeys, shareLinks] = await Promise.all([
-			api.get<ListResponse<ApiKeyDto>>('/api-keys'),
-			api.get<ListResponse<ShareLinkListItem>>('/share-links'),
+			api.apiKeys.list(),
+			api.shareLinks.list(),
 		])
 		return { apiKeys: apiKeys.items, shareLinks: shareLinks.items }
 	})
@@ -151,7 +151,7 @@ function RotateButton({ apiKey }: { apiKey: ApiKeyDto }) {
 	const [secret, setSecret] = useState<RotateApiKeyResponse | null>(null)
 
 	async function rotate() {
-		setSecret(await api.post<RotateApiKeyResponse>(`/api-keys/${apiKey.principalId}/rotate`))
+		setSecret(await api.apiKeys.rotate({ principalId: apiKey.principalId }))
 	}
 
 	return (
@@ -185,7 +185,7 @@ function RevokeKeyButton({ apiKey, onDone }: { apiKey: ApiKeyDto; onDone: () => 
 	const [confirming, setConfirming] = useState(false)
 
 	async function revoke() {
-		await api.del(`/api-keys/${apiKey.principalId}`)
+		await api.apiKeys.revoke({ principalId: apiKey.principalId })
 		onDone()
 	}
 
@@ -214,7 +214,7 @@ function ShareLinkRow({ link, onDone }: { link: ShareLinkListItem; onDone: () =>
 	const state = shareLinkState(link)
 
 	async function revoke() {
-		await api.del(`/share-links/${link.id}`)
+		await api.shareLinks.revoke({ id: link.id })
 		onDone()
 	}
 

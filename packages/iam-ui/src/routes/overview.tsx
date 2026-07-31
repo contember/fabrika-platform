@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import type { ApiKeyDto, AuditEventDto, CursorList, ListResponse, PrincipalListItem, ShareLinkListItem } from '@fabrika/iam-contract'
+import type { ApiKeyDto, AuditEventDto, PrincipalListItem, ShareLinkListItem } from '@fabrika/iam-contract'
 import { Icon } from '../components/Icon'
 import { Chip, principalLamp, Status, StatusLamp } from '../components/Status'
 import { EmptyState } from '../components/Table'
@@ -22,10 +22,10 @@ const AUDIT_WINDOW = 100
 export default createPage()
 	.loader(async () => {
 		const [users, apiKeys, shareLinks, audit] = await Promise.all([
-			api.get<ListResponse<PrincipalListItem>>('/principals?type=user'),
-			api.get<ListResponse<ApiKeyDto>>('/api-keys'),
-			api.get<ListResponse<ShareLinkListItem>>('/share-links'),
-			api.get<CursorList<AuditEventDto>>(`/audit?limit=${AUDIT_WINDOW}`),
+			api.principals.list({ type: 'user' }),
+			api.apiKeys.list(),
+			api.shareLinks.list(),
+			api.audit.list({ limit: AUDIT_WINDOW }),
 		])
 		return { users: users.items, apiKeys: apiKeys.items, shareLinks: shareLinks.items, audit: audit.items }
 	})

@@ -1,5 +1,5 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
-import type { AppDto, AppSchemaDto, ListResponse, PolicyDto, RoleDto, UpdatePolicyRequest } from '@fabrika/iam-contract'
+import type { AppSchemaDto, PolicyDto, RoleDto, UpdatePolicyRequest } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { ActionPicker } from '../../components/ActionPicker'
 import { Badge } from '../../components/Badge'
@@ -27,16 +27,16 @@ const ORIGIN_LABEL: Record<RoleDto['origin'], string> = {
 export default createPage()
 	.params({ app: '?string' })
 	.loader(async ({ params }) => {
-		const apps = await api.get<ListResponse<AppDto>>('/apps')
+		const apps = await api.apps.list()
 		const app = params.app && apps.items.some((candidate) => candidate.id === params.app) ? params.app : null
 		if (app === null) {
-			const roles = await api.get<ListResponse<RoleDto>>('/roles')
+			const roles = await api.roles.list({})
 			return { apps: apps.items, app: null, roles: roles.items, policies: [], schema: null }
 		}
 		const [roles, policies, schema] = await Promise.all([
-			api.get<ListResponse<RoleDto>>(`/roles?app=${encodeURIComponent(app)}`),
-			api.get<ListResponse<PolicyDto>>(`/apps/${encodeURIComponent(app)}/policies`),
-			api.get<AppSchemaDto>(`/apps/${encodeURIComponent(app)}/schema`),
+			api.roles.list({ app }),
+			api.policies.list({ app }),
+			api.apps.getSchema({ app }),
 		])
 		return { apps: apps.items, app, roles: roles.items, policies: policies.items, schema }
 	})
@@ -222,7 +222,7 @@ function PolicyRow({ app, policy, actions, onDone }: { app: string; policy: Poli
 				...(description.trim() === '' ? {} : { description: description.trim() }),
 				permissions,
 			}
-			await api.put(`/apps/${encodeURIComponent(app)}/policies/${encodeURIComponent(policy.key)}`, body)
+			await api.policies.update({ app, key: policy.key, policy: body })
 			setEditing(false)
 			onDone()
 		} catch (cause) {
@@ -233,7 +233,7 @@ function PolicyRow({ app, policy, actions, onDone }: { app: string; policy: Poli
 	}
 
 	async function remove() {
-		await api.del(`/apps/${encodeURIComponent(app)}/policies/${encodeURIComponent(policy.key)}`)
+		await api.policies.delete({ app, key: policy.key })
 		onDone()
 	}
 

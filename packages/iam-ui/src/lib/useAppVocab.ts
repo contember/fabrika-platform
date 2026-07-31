@@ -1,4 +1,4 @@
-import type { AppActionDef, AppSchemaDto, AppScopeDef, ListResponse, RoleDto } from '@fabrika/iam-contract'
+import type { AppActionDef, AppSchemaDto, AppScopeDef, RoleDto } from '@fabrika/iam-contract'
 import { useEffect, useState } from 'react'
 import { api, ApiError } from './api'
 
@@ -42,11 +42,10 @@ export function useAppVocab(app: string | null | undefined): AppVocabState {
 		}
 		setState({ status: 'loading' })
 
-		const rolesPath = app === null ? '/roles' : `/roles?app=${encodeURIComponent(app)}`
-		const rolesP = api.get<ListResponse<RoleDto>>(rolesPath)
+		const rolesP = api.roles.list({ app })
 		const schemaP = app === null
 			? Promise.resolve<AppSchemaDto | null>(null)
-			: api.get<AppSchemaDto>(`/apps/${encodeURIComponent(app)}/schema`)
+			: api.apps.getSchema({ app })
 
 		Promise.all([rolesP, schemaP])
 			.then(([roles, schema]) => {

@@ -7,19 +7,19 @@ interface RouteErrorProps {
 /** Title + body for a route error, mapped by type — never echoing a raw server message. */
 function describe(error: Error): { title: string; body: string } {
 	if (error instanceof ApiError) {
-		if (error.status === 403) {
+		if (error.httpStatus === 403) {
 			return {
 				title: "You don't have permission to view this",
 				body: 'Your account is missing the permission this page requires. Ask an IAM admin if you think this is wrong.',
 			}
 		}
-		if (error.status === 404) {
+		if (error.httpStatus === 404) {
 			return {
 				title: 'Not found',
 				body: "The thing you're looking for doesn't exist, or was removed.",
 			}
 		}
-		if (error.status === 0) {
+		if (error.httpStatus === 0) {
 			return {
 				title: 'Network error',
 				body: "Couldn't reach the server. Check your connection and try again.",
@@ -39,7 +39,7 @@ function describe(error: Error): { title: string; body: string } {
  */
 export function RouteError({ error }: RouteErrorProps) {
 	const { title, body } = describe(error)
-	const status = error instanceof ApiError && error.status !== 0 ? error.status : null
+	const status = error instanceof ApiError && error.httpStatus !== 0 ? error.httpStatus ?? null : null
 
 	return (
 		<div className="gate-screen">

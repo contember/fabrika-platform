@@ -1,5 +1,5 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
-import type { AppDto, CreateGrantRequest, ListResponse, PrincipalDetail } from '@fabrika/iam-contract'
+import type { CreateGrantRequest } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { GrantComposer, useGrantComposerState } from '../../components/GrantComposer'
 import { Icon } from '../../components/Icon'
@@ -14,8 +14,8 @@ export default createPage()
 	.params({ id: 'string' })
 	.loader(async ({ params }) => {
 		const [principal, apps] = await Promise.all([
-			api.get<PrincipalDetail>(`/principals/${params.id}`),
-			api.get<ListResponse<AppDto>>('/apps'),
+			api.principals.get({ id: params.id }),
+			api.apps.list(),
 		])
 		return { principal, apps: apps.items }
 	})
@@ -45,7 +45,7 @@ export default createPage()
 			setBusy(true)
 			try {
 				const body: CreateGrantRequest = { principalId: principal.id, ...authorization, expiresAt: parseDateTimeLocal(expiry) }
-				await api.post('/grants', body)
+				await api.grants.create(body)
 				back()
 			} catch (cause) {
 				setError(cause instanceof ApiError ? cause.message : 'Grant failed.')

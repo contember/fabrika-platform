@@ -1,5 +1,5 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
-import type { AppDto, ListResponse, ProvisionApiKeyRequest, ProvisionApiKeyResponse } from '@fabrika/iam-contract'
+import type { ProvisionApiKeyRequest, ProvisionApiKeyResponse } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { GrantComposer, useGrantComposerState } from '../../components/GrantComposer'
 import { Icon } from '../../components/Icon'
@@ -17,7 +17,7 @@ import { parseDateTimeLocal } from '../../lib/format'
  */
 export default createPage()
 	.loader(async () => {
-		const apps = await api.get<ListResponse<AppDto>>('/apps')
+		const apps = await api.apps.list()
 		return { apps: apps.items }
 	})
 	.route('/access/credentials/keys/new')
@@ -48,7 +48,7 @@ export default createPage()
 					...authorization,
 					expiresAt: parseDateTimeLocal(expiry),
 				}
-				setSecret(await api.post<ProvisionApiKeyResponse>('/api-keys', body))
+				setSecret(await api.apiKeys.provision(body))
 			} catch (cause) {
 				setError(cause instanceof ApiError ? cause.message : 'Provisioning failed.')
 			} finally {

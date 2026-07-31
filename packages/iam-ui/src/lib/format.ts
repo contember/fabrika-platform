@@ -70,6 +70,12 @@ export function qs(params: Record<string, string | number | null | undefined>): 
 	return out ? `?${out}` : ''
 }
 
+/** Trim a URL filter value and omit it when it contains only whitespace. */
+export function trimmedQueryValue(value: string | null | undefined): string | undefined {
+	const trimmed = value?.trim()
+	return trimmed === '' ? undefined : trimmed
+}
+
 /**
  * Parse a `<datetime-local>` input value into epoch **seconds** (the unit the backend
  * stores and compares against `unixepoch()`), or null when empty (= no expiry).

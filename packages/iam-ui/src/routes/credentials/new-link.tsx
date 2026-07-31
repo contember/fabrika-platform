@@ -79,7 +79,7 @@ export default createPage()
 
 			setBusy(true)
 			try {
-				setToken(await api.post<IssuedShareLinkResponse>('/share-links', body))
+				setToken(await api.shareLinks.issue(body))
 			} catch (cause) {
 				setError(cause instanceof ApiError ? cause.message : 'Issue failed.')
 			} finally {

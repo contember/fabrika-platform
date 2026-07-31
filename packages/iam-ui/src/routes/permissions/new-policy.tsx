@@ -1,5 +1,5 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
-import type { AppSchemaDto, CreatePolicyRequest } from '@fabrika/iam-contract'
+import type { CreatePolicyRequest } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { ActionPicker } from '../../components/ActionPicker'
 import { Icon } from '../../components/Icon'
@@ -13,7 +13,7 @@ import { api, ApiError } from '../../lib/api'
 export default createPage()
 	.params({ app: 'string' })
 	.loader(async ({ params }) => {
-		const schema = await api.get<AppSchemaDto>(`/apps/${encodeURIComponent(params.app)}/schema`)
+		const schema = await api.apps.getSchema({ app: params.app })
 		return { app: params.app, actions: schema.actions }
 	})
 	.route('/access/permissions/policies/new')
@@ -45,7 +45,7 @@ export default createPage()
 					...(description.trim() === '' ? {} : { description: description.trim() }),
 					permissions,
 				}
-				await api.post(`/apps/${encodeURIComponent(data.app)}/policies`, body)
+				await api.policies.create({ app: data.app, policy: body })
 				back()
 			} catch (cause) {
 				setError(cause instanceof ApiError ? cause.message : 'Create failed.')

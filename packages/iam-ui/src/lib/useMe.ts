@@ -9,9 +9,9 @@ export type MeState =
 	| { status: 'error'; message: string }
 
 /**
- * Fetch the current admin (`GET /iam/admin/me`) once for the Access section. A 403 means the caller
+ * Fetch the current admin (`me`) once for the Access section. A 403 means the caller
  * is authenticated (a valid `px_session`) but is not an IAM admin — the nav-level gate. This
- * is UX only; IAM re-checks every admin call. A 401 is handled inside `api()` by
+ * is UX only; IAM re-checks every admin call. A 401 is handled by the RPC client by
  * bouncing to the public IAM login URL supplied by the control-plane gateway.
  */
 export function useMe(): MeState {
@@ -19,13 +19,13 @@ export function useMe(): MeState {
 
 	useEffect(() => {
 		let cancelled = false
-		api.get<MeDto>('/me')
+		api.me()
 			.then((me) => {
 				if (!cancelled) setState({ status: 'ok', me })
 			})
 			.catch((cause: unknown) => {
 				if (cancelled) return
-				if (cause instanceof ApiError && cause.status === 403) {
+				if (cause instanceof ApiError && cause.httpStatus === 403) {
 					setState({ status: 'forbidden' })
 				} else {
 					setState({

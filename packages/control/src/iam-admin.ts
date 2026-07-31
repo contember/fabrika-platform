@@ -28,10 +28,34 @@ export async function forwardIamAdmin(request: Request, options: IamAdminGateway
 
 	const login = new URL('/auth/login', options.publicIamUrl)
 	login.searchParams.set('redirect', url.origin)
+	if (url.pathname === `${PREFIX}/rpc`) {
+		const upstreamError = await readRpcError(response)
+		return Response.json(
+			{ error: { ...upstreamError, type: 'auth', loginUrl: login.toString() } },
+			{ status: 401, headers: { 'cache-control': 'no-store' } },
+		)
+	}
 	return Response.json(
 		{ error: 'authentication required', loginUrl: login.toString() },
 		{ status: 401, headers: { 'cache-control': 'no-store' } },
 	)
+}
+
+async function readRpcError(response: Response): Promise<Record<string, unknown>> {
+	try {
+		const body: unknown = await response.json()
+		if (isRecord(body) && isRecord(body['error'])) {
+			const message = typeof body['error']['message'] === 'string' ? body['error']['message'] : 'authentication required'
+			return { ...body['error'], message }
+		}
+	} catch {
+		// The gateway supplies the structural fallback below.
+	}
+	return { message: 'authentication required' }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object'
 }
 
 function sameOriginMutation(request: Request, url: URL): boolean {
