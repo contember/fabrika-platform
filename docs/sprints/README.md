@@ -19,4 +19,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-<!-- one line per active sprint; empty between sprints -->
+No active sprint.

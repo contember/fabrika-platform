@@ -239,7 +239,7 @@ consumes backlog 35 without expanding the Operations feature set.
   [backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md). Local browser
   proof must not be described as real-account evidence.
 - Restoring general CI/release workflows remains
-  [backlog 25](../backlog/25-migrate-the-ci-workflows.md). This sprint adds a
+  [backlog 25](../backlog/25-bootstrap-npm-trusted-publishing.md). This sprint adds a
   stable command that CI can call; it does not create the pipeline.
 - Full Sentry SDK/protocol compatibility, session replay, tracing, logs, and
   metrics. The witness is one documented browser error-ingest profile.

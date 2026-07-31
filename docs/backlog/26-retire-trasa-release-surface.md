@@ -1,7 +1,7 @@
 ---
 id: 26
 title: Retire the standalone Trasa release surface
-blocked-by: [./25-migrate-the-ci-workflows.md]
+blocked-by: [./25-bootstrap-npm-trusted-publishing.md]
 ---
 
 # 26 — Retire the standalone Trasa release surface

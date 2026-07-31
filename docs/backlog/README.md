@@ -18,8 +18,7 @@ Items 01–05 formed the portability ladder. Phases 0–4 are complete. Phase 5 
 the live-account bring-up in item 05.
 
 Phase 0 merged and renamed the repositories. The portable runtime, static
-manifest, proxy, and Zerops control path are built and locally verified. CI and
-release restoration remains explicit item 25.
+manifest, proxy, and Zerops control path are built and locally verified. Repository CI and release automation are built; activating npm trusted publishing remains external item 25.
 
 ## Items
 
@@ -31,7 +30,7 @@ release restoration remains explicit item 25.
 - [19](19-cancellation-gaps.md) — `reconcileSchema` takes no `AbortSignal`, so the one shared step is the one that cannot be cancelled.
 - [21](21-rate-limit-the-iam-mint-surface.md) — Deferred with reasons; the limit belongs at the proxy, which can identify a client.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
-- [25](25-migrate-the-ci-workflows.md) — No CI at all. Restore deploy, release (OIDC trusted publishing) and the runner image build.
+- [25](25-bootstrap-npm-trusted-publishing.md) — Bootstrap the nineteen package names once through protected CI, then activate tokenless OIDC publishing.
 - [26](26-retire-trasa-release-surface.md) — Publish `@fabrika/app`, deprecate `@trasa/core`, and archive the standalone repository.
 - [34](34-retire-standalone-poplach.md) — Adopt existing state and retire the standalone Poplach app.
 - [36](36-complete-zerops-release-artifact-correlation.md) — Publish Zerops build source maps and link Delivery runs to Operations evidence.

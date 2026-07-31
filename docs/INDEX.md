@@ -19,13 +19,15 @@ fabrika-platform is and how the pieces fit — then skim
 
 ## Active sprints
 
-<!-- list the sprint files currently in sprints/ ; empty between sprints -->
+No active sprint.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
 
+- **Release activation:** run hosted CI, bootstrap the nineteen npm packages, and prove the tokenless release path in
+  [`backlog/25-bootstrap-npm-trusted-publishing.md`](backlog/25-bootstrap-npm-trusted-publishing.md).
 - **External next:** run the resulting composition against a real account in
   [`backlog/05-bring-up-on-a-real-zerops-account.md`](backlog/05-bring-up-on-a-real-zerops-account.md).
 - **Operations follow-up:** complete

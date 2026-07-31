@@ -30,3 +30,4 @@ behaviour.
 - [`local-development.md`](local-development.md) — operate and verify the real
   local Delivery, Access, and Operations data plane behind the narrow Zerops REST
   emulator.
+- [`release-process.md`](release-process.md) — required CI gates, the public package contract, trusted tag publication, and the per-account deployment boundary.

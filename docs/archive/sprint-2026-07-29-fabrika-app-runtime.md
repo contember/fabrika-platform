@@ -22,7 +22,7 @@ Verification:
 Publishing `@fabrika/app` and retiring the external Trasa release surface remain
 in [backlog 26](../backlog/26-retire-trasa-release-surface.md), blocked by CI and
 release restoration in
-[backlog 25](../backlog/25-migrate-the-ci-workflows.md).
+[backlog 25](../backlog/25-bootstrap-npm-trusted-publishing.md).
 
 **Goal.** Replace the standalone Trasa package with a tested `@fabrika/app`
 workspace package for Worker and Bun applications.

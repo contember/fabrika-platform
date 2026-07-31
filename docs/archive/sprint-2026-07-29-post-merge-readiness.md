@@ -246,7 +246,7 @@ before new Zerops control-plane work builds on it.
 
 ## Out of scope (explicit)
 
-- [25 — migrate CI workflows](../backlog/25-migrate-the-ci-workflows.md). As of
+- [25 — bootstrap npm trusted publishing](../backlog/25-bootstrap-npm-trusted-publishing.md). As of
   planning, none of the seven non-private `@fabrika/*` package names with public
   metadata exists on npm. Trusted publishing cannot perform the first publication,
   and publishing from a laptop is forbidden. File the external namespace/bootstrap
