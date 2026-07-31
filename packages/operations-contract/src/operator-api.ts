@@ -44,6 +44,13 @@ export interface OperationsIssueSummaryDto {
 	trend: number[]
 }
 
+export interface OperationsIssueOccurrenceDto {
+	id: string
+	eventId: string
+	receivedAt: number
+	release: string | null
+}
+
 export interface OperationsIssueListResponseDto {
 	items: OperationsIssueSummaryDto[]
 	nextCursor: string | null
@@ -61,12 +68,9 @@ export interface OperationsIssueDetailDto extends OperationsIssueSummaryDto {
 	resolvedInRelease: { id: string; name: string } | null
 	mergedIntoIssueId: string | null
 	activity: ActivityItem[]
-	latestOccurrence: {
-		id: string
-		eventId: string
-		receivedAt: number
-		release: string | null
-	} | null
+	latestOccurrence: OperationsIssueOccurrenceDto | null
+	occurrences: OperationsIssueOccurrenceDto[]
+	occurrencesNextCursor: string | null
 }
 
 export interface OperationsIssueDetailResponseDto {
@@ -77,6 +81,11 @@ export interface OperationsEventDetailResponseDto {
 	occurrenceId: string
 	receivedAt: number
 	detail: EventDetail
+}
+
+export interface OperationsIssueOccurrenceListResponseDto {
+	items: OperationsIssueOccurrenceDto[]
+	nextCursor: string | null
 }
 
 export type OperationsIssueMutationRequestDto =
@@ -197,10 +206,31 @@ export interface OperationsNotificationChannelDto {
 	enabled: boolean
 }
 
+export interface OperationsNotificationAttemptDto {
+	id: string
+	attemptedAt: number
+	delivered: boolean
+	errorCode: string | null
+}
+
+export interface OperationsNotificationDeliveryDto {
+	id: string
+	channelId: string
+	kind: OperationsAlertKind
+	createdAt: number
+	attemptCount: number
+	maxAttempts: number
+	status: 'pending' | 'delivered' | 'abandoned'
+	deliveredAt: number | null
+	abandonedAt: number | null
+	attempts: OperationsNotificationAttemptDto[]
+}
+
 export interface OperationsAlertSettingsResponseDto {
 	spike: { threshold: number; enabled: boolean } | null
 	rules: OperationsAlertRuleDto[]
 	channels: OperationsNotificationChannelDto[]
+	deliveries: OperationsNotificationDeliveryDto[]
 }
 
 export interface OperationsSpikeAlertRequestDto {

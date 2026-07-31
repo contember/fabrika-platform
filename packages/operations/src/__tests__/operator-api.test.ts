@@ -88,7 +88,7 @@ async function seedSource(
 			payload: { event_id: `event-${id}`, message: `private ${appId}` },
 		},
 	)
-	const issues = await options.repositories.operator.listIssues({ sourceIds: [id], offset: 0, limit: 10 })
+	const issues = await options.repositories.operator.listIssues({ sourceIds: [id], sort: 'recent', limit: 10 })
 	const issue = issues[0]
 	if (issue === undefined) throw new Error('seeded issue is missing')
 	return issue.id
@@ -125,7 +125,204 @@ async function call(path: string, input: OperationsOperatorOptions, init?: Reque
 	return handleOperationsOperatorRequest(request(path, init), input)
 }
 
+async function responseObject(response: Response): Promise<Record<string, unknown>> {
+	const value: unknown = await response.json()
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('expected response object')
+	return Object.fromEntries(Object.entries(value))
+}
+
+function objectItems(value: unknown): Record<string, unknown>[] {
+	if (!Array.isArray(value)) throw new Error('expected response items')
+	const items: Record<string, unknown>[] = []
+	for (const item of value) {
+		if (typeof item !== 'object' || item === null || Array.isArray(item)) throw new Error('expected response item object')
+		items.push(Object.fromEntries(Object.entries(item)))
+	}
+	return items
+}
+
 describe('Operations operator API', () => {
+	test('filters issue rows on the server and keyset-paginates every sort without skipping older rows', async () => {
+		const harness = createHarness(() => 10_000)
+		const input = options(auth({ apps: ['app-a'] }), harness)
+		input.now = () => 40 * 24 * 60 * 60 * 1_000
+		const recentId = await seedSource(input, 'source-a', 'app-a', 'recent', 39 * 24 * 60 * 60 * 1_000)
+		const ingest = async (eventId: string, fingerprint: string, receivedAt: number, level: string = 'error'): Promise<void> => {
+			await persistIngest(
+				{ repositories: input.repositories, payloads: input.payloads, ingestQueue: new EmptyQueue() },
+				{
+					projectId: 'source-a',
+					eventId,
+					fingerprint,
+					title: `Failure ${fingerprint}`,
+					culprit: 'handler',
+					level,
+					receivedAt,
+					payload: { event_id: eventId, message: fingerprint },
+				},
+			)
+		}
+		await ingest('event-middle', 'middle', 30 * 24 * 60 * 60 * 1_000, 'warning')
+		await ingest('event-older', 'older%_literal', 20 * 24 * 60 * 60 * 1_000)
+		await seedSource(input, 'source-foreign', 'app-b', 'foreign', 39 * 24 * 60 * 60 * 1_000)
+		const older = await input.repositories.operator.getIssueByCoordinate('source-a', 'older%_literal')
+		if (older === null) throw new Error('older issue is missing')
+		const middle = await input.repositories.operator.getIssueByCoordinate('source-a', 'middle')
+		if (middle === null) throw new Error('middle issue is missing')
+		await input.repositories.issues.mutate({
+			sourceId: 'source-a',
+			fingerprint: 'recent',
+			mutation: { kind: 'assign', principalId: 'operator-id', principalLabel: 'operator@example.test' },
+			actorId: null,
+			actorLabel: null,
+		})
+		await input.repositories.issues.mutate({
+			sourceId: 'source-a',
+			fingerprint: 'older%_literal',
+			mutation: { kind: 'status', status: 'resolved' },
+			actorId: null,
+			actorLabel: null,
+		})
+		const harnessIssueIds = [recentId, middle.id, older.id]
+		expect(
+			harness.sqlite.query<{ assigned_to: string | null; last_seen: number }, []>(
+				"SELECT assigned_to, last_seen FROM issues WHERE fingerprint = 'recent'",
+			).get(),
+		).toEqual({ assigned_to: 'operator-id', last_seen: 39 * 24 * 60 * 60 * 1_000 })
+
+		const filtered = await responseObject(
+			await call('/api/issues?sourceId=source-a&window=7d&level=error&assignee=me&query=Failure&sort=new', input),
+		)
+		expect(objectItems(filtered['items']).map((item) => item['id'])).toEqual([recentId])
+		expect(filtered['summary']).toEqual({ total: 1, open: 1, resolved: 0, ignored: 0 })
+		const none = await responseObject(await call('/api/issues?sourceId=source-a&assignee=none&status=resolved', input))
+		expect(objectItems(none['items']).map((item) => item['id'])).toEqual([older.id])
+		const warning = await responseObject(await call('/api/issues?sourceId=source-a&level=warning&window=30d', input))
+		expect(objectItems(warning['items']).map((item) => item['id'])).toEqual([middle.id])
+		const literalQuery = await responseObject(await call('/api/issues?sourceId=source-a&query=%25_', input))
+		expect(objectItems(literalQuery['items']).map((item) => item['id'])).toEqual([older.id])
+
+		for (const sort of ['recent', 'new', 'frequency']) {
+			const first = await responseObject(await call(`/api/issues?sourceId=source-a&sort=${sort}&limit=1`, input))
+			const firstItems = objectItems(first['items'])
+			const cursor = first['nextCursor']
+			if (typeof cursor !== 'string') throw new Error('expected next cursor')
+			const second = await responseObject(
+				await call(`/api/issues?sourceId=source-a&sort=${sort}&limit=1&cursor=${encodeURIComponent(cursor)}`, input),
+			)
+			const secondItems = objectItems(second['items'])
+			expect(secondItems).toHaveLength(1)
+			const secondId = secondItems[0]?.['id']
+			if (typeof secondId !== 'string') throw new Error('expected second issue id')
+			expect(secondId).not.toBe(firstItems[0]?.['id'])
+			expect(harnessIssueIds).toContain(secondId)
+		}
+	})
+
+	test('aggregates merged history into counts and trends and paginates selectable occurrences', async () => {
+		const input = options(auth({ apps: ['app-a'] }))
+		await input.repositories.sources.upsert({
+			id: 'source-a',
+			appId: 'app-a',
+			environment: 'production',
+			displayName: 'app-a',
+			enabled: true,
+		})
+		const ingest = (eventId: string, fingerprint: string, receivedAt: number): Promise<unknown> =>
+			persistIngest(
+				{ repositories: input.repositories, payloads: input.payloads, ingestQueue: new EmptyQueue() },
+				{
+					projectId: 'source-a',
+					eventId,
+					fingerprint,
+					title: `Failure ${fingerprint}`,
+					culprit: 'handler',
+					level: 'error',
+					receivedAt,
+					payload: { event_id: eventId, message: eventId },
+				},
+			)
+		await ingest('target-event', 'target', 7_000)
+		await ingest('child-event-a', 'child', 8_000)
+		await ingest('child-event-b', 'child', 9_000)
+		await ingest('other-event', 'other', 6_000)
+		await input.repositories.issues.mutate({
+			sourceId: 'source-a',
+			fingerprint: 'child',
+			mutation: { kind: 'merge', target: 'target' },
+			actorId: null,
+			actorLabel: null,
+		})
+		const target = await input.repositories.operator.getIssueByCoordinate('source-a', 'target')
+		if (target === null) throw new Error('target issue is missing')
+
+		const list = await responseObject(await call('/api/issues?sourceId=source-a', input))
+		const listed = objectItems(list['items'])
+		expect(listed).toHaveLength(2)
+		const targetSummary = listed.find((item) => item['id'] === target.id)
+		expect(targetSummary?.['count']).toBe(3)
+		expect(targetSummary?.['trend']).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3])
+
+		const first = await responseObject(await call(`/api/issues/${target.id}/occurrences?limit=1`, input))
+		const firstOccurrence = objectItems(first['items'])[0]
+		const occurrenceId = firstOccurrence?.['id']
+		const cursor = first['nextCursor']
+		if (typeof occurrenceId !== 'string' || typeof cursor !== 'string') throw new Error('expected occurrence and cursor')
+		const selected = await responseObject(await call(`/api/issues/${target.id}/events/${occurrenceId}`, input))
+		expect(selected['occurrenceId']).toBe(occurrenceId)
+		const second = await responseObject(
+			await call(`/api/issues/${target.id}/occurrences?limit=1&cursor=${encodeURIComponent(cursor)}`, input),
+		)
+		expect(objectItems(second['items'])[0]?.['id']).not.toBe(occurrenceId)
+		const other = await input.repositories.operator.getIssueByCoordinate('source-a', 'other')
+		if (other === null) throw new Error('other issue is missing')
+		const otherOccurrence = await input.repositories.operator.latestOccurrence(other)
+		if (otherOccurrence === null) throw new Error('other occurrence is missing')
+		expect((await call(`/api/issues/${target.id}/events/${otherOccurrence.id}`, input)).status).toBe(404)
+	})
+
+	test('exposes notification delivery attempts only through their source alert settings', async () => {
+		const harness = createHarness(() => 10_000)
+		const input = options(auth(), harness)
+		await seedSource(input, 'source-a', 'app-a', 'fingerprint-a', 1_000)
+		await seedSource(input, 'source-b', 'app-b', 'fingerprint-b', 1_000)
+		for (const sourceId of ['source-a', 'source-b']) {
+			await input.repositories.alerts.upsertChannel({
+				id: `channel-${sourceId}`,
+				sourceId,
+				scope: 'new_issue',
+				type: 'webhook',
+				target: 'https://hooks.example.test/private?token=target-secret',
+				enabled: true,
+			})
+			await input.repositories.alerts.enqueueNotification({
+				dedupKey: `delivery-${sourceId}`,
+				sourceId,
+				channelId: `channel-${sourceId}`,
+				kind: 'new_issue',
+				payload: { sourceId, secret: 'payload-secret' },
+			})
+		}
+		const claimed = await input.repositories.alerts.claimNotifications({ limit: 10, leaseMs: 1_000 })
+		for (const notification of claimed) {
+			await input.repositories.alerts.completeNotification({
+				id: notification.id,
+				claimToken: notification.claimToken,
+				delivered: notification.dedupKey === 'delivery-source-a',
+				...(notification.dedupKey === 'delivery-source-a' ? {} : { errorCode: 'rejected' }),
+			})
+		}
+		const response = await responseObject(await call('/api/sources/source-a/alerts', input))
+		const deliveries = objectItems(response['deliveries'])
+		expect(deliveries).toHaveLength(1)
+		expect(deliveries[0]).toMatchObject({ kind: 'new_issue', status: 'delivered', attemptCount: 1 })
+		expect(deliveries[0]?.['attempts']).toEqual([expect.objectContaining({ delivered: true, errorCode: null })])
+		const serialized = JSON.stringify(response)
+		expect(serialized).not.toContain('source-b')
+		expect(serialized).not.toContain('target-secret')
+		expect(serialized).not.toContain('payload-secret')
+	})
+
 	test('lists only scoped issues and exposes a persistent opaque id instead of fingerprints', async () => {
 		const input = options(auth({ apps: ['app-a'] }))
 		const issueA = await seedSource(input, 'source-a', 'app-a', 'secret-fingerprint-a', 1_000)
@@ -150,11 +347,11 @@ describe('Operations operator API', () => {
 		const originalId = await seedSource(input, 'source-a', 'app-a', 'legacy-fingerprint', 1_000)
 		harness.sqlite.run('UPDATE issues SET id = NULL WHERE source_id = ?', ['source-a'])
 
-		const first = await input.repositories.operator.listIssues({ sourceIds: ['source-a'], offset: 0, limit: 10 })
+		const first = await input.repositories.operator.listIssues({ sourceIds: ['source-a'], sort: 'recent', limit: 10 })
 		const replacementId = first[0]?.id
 		expect(replacementId).toBeString()
 		expect(replacementId).not.toBe(originalId)
-		const second = await input.repositories.operator.listIssues({ sourceIds: ['source-a'], offset: 0, limit: 10 })
+		const second = await input.repositories.operator.listIssues({ sourceIds: ['source-a'], sort: 'recent', limit: 10 })
 		expect(second[0]?.id).toBe(replacementId)
 	})
 

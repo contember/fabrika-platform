@@ -23,8 +23,14 @@ export const operationsRpcRouter: RpcRouterFor<OperationsRpcContext, OperationsR
 	source: rpc.procedure.input(schema(sourceInput)).query(({ ctx, input }) => operatorCall(ctx, (operations) => operations.source(input.sourceId))),
 	issues: rpc.procedure.input(schema(issueQuery)).query(({ ctx, input }) => operatorCall(ctx, (operations) => operations.issues(input))),
 	issue: rpc.procedure.input(schema(issueInput)).query(({ ctx, input }) => operatorCall(ctx, (operations) => operations.issue(input.issueId))),
+	issueOccurrences: rpc.procedure.input(schema(issueOccurrencesInput)).query(({ ctx, input }) =>
+		operatorCall(ctx, (operations) => operations.issueOccurrences(input.issueId, input.cursor, input.limit))
+	),
 	latestEvent: rpc.procedure.input(schema(issueInput)).query(({ ctx, input }) =>
 		operatorCall(ctx, (operations) => operations.latestEvent(input.issueId))
+	),
+	event: rpc.procedure.input(schema(eventInput)).query(({ ctx, input }) =>
+		operatorCall(ctx, (operations) => operations.event(input.issueId, input.occurrenceId))
 	),
 	mutateIssue: rpc.procedure.input(schema(mutateIssueInput)).mutation(({ ctx, input }) =>
 		operatorCall(ctx, (operations) => operations.mutateIssue(input.issueId, input.mutation))
@@ -158,6 +164,22 @@ function issueInput(value: unknown): { issueId: string } {
 	return { issueId: stringField(input, 'issueId') }
 }
 
+function eventInput(value: unknown): { issueId: string; occurrenceId: string } {
+	const input = record(value)
+	return { issueId: stringField(input, 'issueId'), occurrenceId: stringField(input, 'occurrenceId') }
+}
+
+function issueOccurrencesInput(value: unknown): { issueId: string; cursor?: string; limit?: number } {
+	const input = record(value)
+	const cursor = optionalStringField(input, 'cursor')
+	const limit = optionalBoundedLimit(input['limit'])
+	return {
+		issueId: stringField(input, 'issueId'),
+		...(cursor === undefined ? {} : { cursor }),
+		...(limit === undefined ? {} : { limit }),
+	}
+}
+
 function releaseInput(value: unknown): { releaseId: string } {
 	const input = record(value)
 	return { releaseId: stringField(input, 'releaseId') }
@@ -180,16 +202,21 @@ function issueQuery(value: unknown): OperationsIssueQuery {
 	const cursor = optionalStringField(input, 'cursor')
 	const statusValue = input['status']
 	const status = statusValue === undefined ? undefined : issueStatus(statusValue)
-	const limitValue = input['limit']
-	if (limitValue !== undefined && (typeof limitValue !== 'number' || !Number.isSafeInteger(limitValue) || limitValue < 1 || limitValue > 100)) {
-		throw new Error('limit must be between 1 and 100')
-	}
+	const level = issueLevel(input['level'])
+	const window = issueWindow(input['window'])
+	const assignee = issueAssignee(input['assignee'])
+	const sort = issueSort(input['sort'])
+	const limit = optionalBoundedLimit(input['limit'])
 	return {
 		...(sourceId === undefined ? {} : { sourceId }),
 		...(status === undefined ? {} : { status }),
+		...(level === undefined ? {} : { level }),
+		...(window === undefined ? {} : { window }),
 		...(query === undefined ? {} : { query }),
+		...(assignee === undefined ? {} : { assignee }),
+		...(sort === undefined ? {} : { sort }),
 		...(cursor === undefined ? {} : { cursor }),
-		...(typeof limitValue === 'number' ? { limit: limitValue } : {}),
+		...(limit === undefined ? {} : { limit }),
 	}
 }
 
@@ -339,6 +366,38 @@ function alertChannel(value: unknown, requireTarget: boolean): OperationsNotific
 function issueStatus(value: unknown): 'open' | 'resolved' | 'ignored' {
 	if (value === 'open' || value === 'resolved' || value === 'ignored') return value
 	throw new Error('invalid issue status')
+}
+
+function issueLevel(value: unknown): OperationsIssueQuery['level'] {
+	if (value === undefined) return undefined
+	if (value === 'fatal' || value === 'error' || value === 'warning' || value === 'info') return value
+	throw new Error('invalid issue level')
+}
+
+function issueWindow(value: unknown): OperationsIssueQuery['window'] {
+	if (value === undefined) return undefined
+	if (value === 'all' || value === '24h' || value === '7d' || value === '30d') return value
+	throw new Error('invalid issue window')
+}
+
+function issueAssignee(value: unknown): OperationsIssueQuery['assignee'] {
+	if (value === undefined) return undefined
+	if (value === 'all' || value === 'me' || value === 'none') return value
+	throw new Error('invalid issue assignee')
+}
+
+function issueSort(value: unknown): OperationsIssueQuery['sort'] {
+	if (value === undefined) return undefined
+	if (value === 'recent' || value === 'new' || value === 'frequency') return value
+	throw new Error('invalid issue sort')
+}
+
+function optionalBoundedLimit(value: unknown): number | undefined {
+	if (value === undefined) return undefined
+	if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > 100) {
+		throw new Error('limit must be between 1 and 100')
+	}
+	return value
 }
 
 function alertKind(value: unknown): OperationsAlertKind {

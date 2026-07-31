@@ -12,6 +12,7 @@ import type {
 	OperationsIssueDetailResponseDto,
 	OperationsIssueListResponseDto,
 	OperationsIssueMutationRequestDto,
+	OperationsIssueOccurrenceListResponseDto,
 	OperationsNotificationChannelRequestDto,
 	OperationsReleaseDetailResponseDto,
 	OperationsReleaseListResponseDto,
@@ -24,7 +25,11 @@ import type {
 export interface OperationsIssueQuery {
 	sourceId?: string
 	status?: 'open' | 'resolved' | 'ignored'
+	level?: 'fatal' | 'error' | 'warning' | 'info'
+	window?: 'all' | '24h' | '7d' | '30d'
 	query?: string
+	assignee?: 'all' | 'me' | 'none'
+	sort?: 'recent' | 'new' | 'frequency'
 	cursor?: string
 	limit?: number
 }
@@ -41,7 +46,9 @@ export interface OperationsRpcContract {
 	source: RpcProcedureContract<{ sourceId: string }, OperationsSourceDetailResponseDto>
 	issues: RpcProcedureContract<OperationsIssueQuery, OperationsIssueListResponseDto>
 	issue: RpcProcedureContract<{ issueId: string }, OperationsIssueDetailResponseDto>
+	issueOccurrences: RpcProcedureContract<{ issueId: string; cursor?: string; limit?: number }, OperationsIssueOccurrenceListResponseDto>
 	latestEvent: RpcProcedureContract<{ issueId: string }, OperationsEventDetailResponseDto>
+	event: RpcProcedureContract<{ issueId: string; occurrenceId: string }, OperationsEventDetailResponseDto>
 	mutateIssue: RpcProcedureContract<{ issueId: string; mutation: OperationsIssueMutationRequestDto }, OperationsIssueDetailResponseDto>
 	bulkIssueStatus: RpcProcedureContract<OperationsBulkIssueStatusRequestDto, OperationsBulkIssueStatusResponseDto>
 	assignees: RpcProcedureContract<{ sourceId: string }, OperationsAssigneeListResponseDto>

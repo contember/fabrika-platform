@@ -13,6 +13,8 @@ import type {
 	OperationsIssueDetailResponseDto,
 	OperationsIssueListResponseDto,
 	OperationsIssueMutationRequestDto,
+	OperationsIssueOccurrenceDto,
+	OperationsIssueOccurrenceListResponseDto,
 	OperationsIssueSummaryDto,
 	OperationsNotificationChannelRequestDto,
 	OperationsReleaseDetailResponseDto,
@@ -36,12 +38,23 @@ import {
 import { parseEventDetail } from './event-detail.js'
 import type { HealthCheckRow, HealthRepository } from './health-repository.js'
 import { visibleHealthState } from './health.js'
-import type { IdentifiedOperatorIssueRow, OperationsRepositories, OperatorOccurrenceRow, OperatorReleaseRow, SourceRow } from './repositories.js'
+import type {
+	IdentifiedOperatorIssueRow,
+	OperationsRepositories,
+	OperatorIssueCursor,
+	OperatorIssueSort,
+	OperatorOccurrenceCursor,
+	OperatorOccurrenceRow,
+	OperatorReleaseRow,
+	SourceRow,
+} from './repositories.js'
 import { uuidv7 } from './uuid.js'
 import { isValidWebhookTarget } from './webhook-target.js'
 
 const ISSUE_DETAIL = /^\/api\/issues\/([^/]+)$/
 const ISSUE_LATEST_EVENT = /^\/api\/issues\/([^/]+)\/events\/latest$/
+const ISSUE_EVENT = /^\/api\/issues\/([^/]+)\/events\/([^/]+)$/
+const ISSUE_OCCURRENCES = /^\/api\/issues\/([^/]+)\/occurrences$/
 const SOURCE_DETAIL = /^\/api\/sources\/([^/]+)$/
 const SOURCE_ASSIGNEES = /^\/api\/sources\/([^/]+)\/assignees$/
 const SOURCE_HEALTH = /^\/api\/sources\/([^/]+)\/health$/
@@ -90,8 +103,16 @@ export class OperationsOperatorUseCases {
 		return issueDetail(issueId, this.options)
 	}
 
+	issueOccurrences(issueId: string, cursorValue?: string, limit?: number): Promise<OperationsIssueOccurrenceListResponseDto> {
+		return issueOccurrences(issueId, cursorValue, limit, this.options)
+	}
+
 	latestEvent(issueId: string): Promise<OperationsEventDetailResponseDto> {
 		return issueLatestEvent(issueId, this.options)
+	}
+
+	event(issueId: string, occurrenceId: string): Promise<OperationsEventDetailResponseDto> {
+		return issueEvent(issueId, occurrenceId, this.options)
 	}
 
 	mutateIssue(issueId: string, mutation: OperationsIssueMutationRequestDto): Promise<OperationsIssueDetailResponseDto> {
@@ -227,6 +248,18 @@ export async function handleOperationsOperatorRequest(request: Request, options:
 
 		const latestEvent = ISSUE_LATEST_EVENT.exec(url.pathname)
 		if (latestEvent && request.method === 'GET') return Response.json(await useCases.latestEvent(decode(latestEvent[1])))
+		const event = ISSUE_EVENT.exec(url.pathname)
+		if (event && request.method === 'GET') return Response.json(await useCases.event(decode(event[1]), decode(event[2])))
+		const occurrences = ISSUE_OCCURRENCES.exec(url.pathname)
+		if (occurrences && request.method === 'GET') {
+			return Response.json(
+				await useCases.issueOccurrences(
+					decode(occurrences[1]),
+					url.searchParams.get('cursor') ?? undefined,
+					boundedLimit(url.searchParams.get('limit')),
+				),
+			)
+		}
 		const issue = ISSUE_DETAIL.exec(url.pathname)
 		if (issue && request.method === 'GET') return Response.json(await useCases.issue(decode(issue[1])))
 		if (issue && request.method === 'PUT') {
@@ -331,23 +364,59 @@ async function listIssues(queryInput: OperationsIssueQuery, options: OperationsO
 	let sources = await authorizedSources(options, 'operations.read')
 	if (queryInput.sourceId !== undefined) sources = sources.filter((source) => source.id === queryInput.sourceId)
 	const status = queryInput.status
+	const level = queryInput.level
 	const query = queryInput.query?.trim()
-	const offset = cursor(queryInput.cursor ?? null)
+	const sort = queryInput.sort ?? 'recent'
+	const after = issueCursor(queryInput.cursor, sort)
+	const since = issueWindowStart(queryInput.window, now(options))
+	let assignee: { kind: 'principal'; id: string } | { kind: 'none' } | undefined
+	if (queryInput.assignee === 'none') assignee = { kind: 'none' }
+	if (queryInput.assignee === 'me') assignee = { kind: 'principal', id: options.auth.principal?.id ?? '' }
 	const limit = boundedLimit(queryInput.limit === undefined ? null : String(queryInput.limit))
 	const sourceIds = sources.map((source) => source.id)
 	await options.repositories.operator.ensureIssueIds(sourceIds)
 	const [rows, counts] = await Promise.all([
-		options.repositories.operator.listIssues({ sourceIds, ...(status === undefined ? {} : { status }), ...(query ? { query } : {}), offset, limit }),
-		options.repositories.operator.issueStatusCounts(sourceIds),
+		options.repositories.operator.listIssues({
+			sourceIds,
+			...(status === undefined ? {} : { status }),
+			...(level === undefined ? {} : { level }),
+			...(since === undefined ? {} : { since }),
+			...(query ? { query } : {}),
+			...(assignee === undefined ? {} : { assignee }),
+			sort,
+			...(after === undefined ? {} : { after }),
+			limit: limit + 1,
+		}),
+		options.repositories.operator.issueStatusCounts({
+			sourceIds,
+			...(level === undefined ? {} : { level }),
+			...(since === undefined ? {} : { since }),
+			...(query ? { query } : {}),
+			...(assignee === undefined ? {} : { assignee }),
+		}),
 	])
+	const hasMore = rows.length > limit
+	const page = hasMore ? rows.slice(0, limit) : rows
+	const trendRows = await options.repositories.operator.issueTrends({
+		issues: page,
+		since: now(options) - 24 * 60 * 60 * 1_000,
+		until: now(options),
+		buckets: 12,
+	})
+	const trends = new Map<string, number[]>()
+	for (const row of page) trends.set(row.id, Array.from({ length: 12 }, () => 0))
+	for (const trend of trendRows) {
+		const buckets = trends.get(trend.issue_id)
+		if (buckets !== undefined) buckets[trend.bucket] = trend.count
+	}
 	const summary = { total: 0, open: 0, resolved: 0, ignored: 0 }
 	for (const count of counts) {
 		summary[count.status] = count.count
 		summary.total += count.count
 	}
 	return {
-		items: rows.map(issueSummary),
-		nextCursor: rows.length === limit ? String(offset + rows.length) : null,
+		items: page.map((row) => issueSummary(row, trends.get(row.id))),
+		nextCursor: hasMore && page.length > 0 ? encodeIssueCursor(page[page.length - 1], sort) : null,
 		summary,
 	}
 }
@@ -357,10 +426,43 @@ async function issueDetail(issueId: string, options: OperationsOperatorOptions):
 	return { issue: await completeIssue(issue, options) }
 }
 
+async function issueOccurrences(
+	issueId: string,
+	cursorValue: string | undefined,
+	requestedLimit: number | undefined,
+	options: OperationsOperatorOptions,
+): Promise<OperationsIssueOccurrenceListResponseDto> {
+	const issue = await visibleIssue(issueId, 'operations.read', options)
+	const limit = requestedLimit ?? 50
+	const after = occurrenceCursor(cursorValue)
+	const rows = await options.repositories.operator.listOccurrences({
+		issue,
+		...(after === undefined ? {} : { after }),
+		limit: limit + 1,
+	})
+	const hasMore = rows.length > limit
+	const page = hasMore ? rows.slice(0, limit) : rows
+	return {
+		items: page.map(occurrenceSummary),
+		nextCursor: hasMore && page.length > 0 ? encodeOccurrenceCursor(page[page.length - 1]) : null,
+	}
+}
+
 async function issueLatestEvent(issueId: string, options: OperationsOperatorOptions): Promise<OperationsEventDetailResponseDto> {
 	const issue = await visibleIssue(issueId, 'operations.read', options)
-	const occurrence = await options.repositories.operator.latestOccurrence(issue.source_id, issue.fingerprint)
+	const occurrence = await options.repositories.operator.latestOccurrence(issue)
 	if (occurrence === null) return notFoundError()
+	return eventDetail(occurrence, options)
+}
+
+async function issueEvent(issueId: string, occurrenceId: string, options: OperationsOperatorOptions): Promise<OperationsEventDetailResponseDto> {
+	const issue = await visibleIssue(issueId, 'operations.read', options)
+	const occurrence = await options.repositories.operator.getOccurrence(issue, occurrenceId)
+	if (occurrence === null) return notFoundError()
+	return eventDetail(occurrence, options)
+}
+
+async function eventDetail(occurrence: OperatorOccurrenceRow, options: OperationsOperatorOptions): Promise<OperationsEventDetailResponseDto> {
 	const object = await options.payloads.get(occurrence.blob_key)
 	if (object === null) return notFoundError()
 	const detail = await parseEventDetail(await object.text(), {
@@ -423,7 +525,7 @@ async function bulkIssueStatus(
 		actorLabel: principal?.label ?? null,
 	})
 	await Promise.all(ids.map((id) => auditIssueMutation(options.auth, id, { kind: 'status', status })))
-	return { items: updated.map(issueSummary) }
+	return { items: updated.map((row) => issueSummary(row)) }
 }
 
 async function listAssignees(
@@ -444,7 +546,7 @@ async function listAssignees(
 async function listReleases(queryInput: OperationsReleaseQuery, options: OperationsOperatorOptions): Promise<OperationsReleaseListResponseDto> {
 	let sources = await authorizedSources(options, 'operations.read')
 	if (queryInput.sourceId !== undefined) sources = sources.filter((source) => source.id === queryInput.sourceId)
-	const offset = cursor(queryInput.cursor ?? null)
+	const offset = offsetCursor(queryInput.cursor ?? null)
 	const limit = boundedLimit(queryInput.limit === undefined ? null : String(queryInput.limit))
 	const rows = await options.repositories.operator.listReleases({ sourceIds: sources.map((source) => source.id), offset, limit })
 	return {
@@ -459,7 +561,7 @@ async function releaseDetail(releaseId: string, options: OperationsOperatorOptio
 	const issues = await options.repositories.operator.listReleaseIssues(release)
 	return {
 		release: releaseSummary(release),
-		issues: issues.map(issueSummary),
+		issues: issues.map((row) => issueSummary(row)),
 	}
 }
 
@@ -514,10 +616,11 @@ async function deleteHealthCheck(sourceId: string, checkId: string, options: Ope
 
 async function alertSettings(sourceId: string, options: OperationsOperatorOptions): Promise<OperationsAlertSettingsResponseDto> {
 	await visibleSource(sourceId, 'operations.manage', options)
-	const [config, rules, channels] = await Promise.all([
+	const [config, rules, channels, deliveries] = await Promise.all([
 		options.repositories.alerts.getConfig(sourceId),
 		options.repositories.alerts.listRules(sourceId),
 		options.repositories.alerts.listChannels(sourceId),
+		options.repositories.operator.listNotificationDeliveries(sourceId),
 	])
 	return {
 		spike: config === null ? null : { threshold: config.threshold, enabled: config.enabled === 1 },
@@ -536,6 +639,28 @@ async function alertSettings(sourceId: string, options: OperationsOperatorOption
 					targetDisplay: redactTarget(channel.target),
 					hasTarget: channel.target !== '',
 					enabled: channel.enabled === 1,
+				}]
+		}),
+		deliveries: deliveries.flatMap((delivery) => {
+			const kind = alertKind(delivery.kind)
+			return kind === null
+				? []
+				: [{
+					id: delivery.id,
+					channelId: delivery.channel_id,
+					kind,
+					createdAt: delivery.created_at,
+					attemptCount: delivery.attempts,
+					maxAttempts: delivery.max_attempts,
+					status: notificationStatus(delivery.delivered_at, delivery.abandoned_at),
+					deliveredAt: delivery.delivered_at,
+					abandonedAt: delivery.abandoned_at,
+					attempts: delivery.attempt_history.map((attempt) => ({
+						id: attempt.id,
+						attemptedAt: attempt.attempted_at,
+						delivered: attempt.delivered === 1,
+						errorCode: attempt.error_code,
+					})),
 				}]
 		}),
 	}
@@ -618,24 +743,38 @@ async function deleteAlertChannel(sourceId: string, channelId: string, options: 
 
 async function completeIssue(issue: IdentifiedOperatorIssueRow, options: OperationsOperatorOptions): Promise<OperationsIssueDetailDto> {
 	await options.repositories.operator.ensureIssueIds([issue.source_id])
-	const [activity, occurrence, release, mergedInto] = await Promise.all([
+	const [activity, occurrencePage, release, mergedInto, trendRows] = await Promise.all([
 		options.repositories.issues.activity(issue.source_id, issue.fingerprint),
-		options.repositories.operator.latestOccurrence(issue.source_id, issue.fingerprint),
+		options.repositories.operator.listOccurrences({ issue, limit: 51 }),
 		issue.resolved_in_release === null
 			? Promise.resolve(null)
 			: options.repositories.operator.getReleaseByName(issue.source_id, issue.resolved_in_release),
 		issue.merged_into === null
 			? Promise.resolve(null)
 			: options.repositories.operator.getIssueByCoordinate(issue.source_id, issue.merged_into),
+		options.repositories.operator.issueTrends({
+			issues: [issue],
+			since: now(options) - 24 * 60 * 60 * 1_000,
+			until: now(options),
+			buckets: 12,
+		}),
 	])
+	const hasMoreOccurrences = occurrencePage.length > 50
+	const occurrences = hasMoreOccurrences ? occurrencePage.slice(0, 50) : occurrencePage
+	const trend = Array.from({ length: 12 }, () => 0)
+	for (const row of trendRows) trend[row.bucket] = row.count
 	return {
-		...issueSummary(issue),
+		...issueSummary(issue, trend),
 		snoozeUntil: nullableNumeric(issue.snooze_until),
 		snoozeUntilCount: nullableNumeric(issue.snooze_until_count),
 		resolvedInRelease: release === null ? null : { id: release.id, name: release.release_name },
 		mergedIntoIssueId: mergedInto?.id ?? null,
 		activity,
-		latestOccurrence: occurrence === null ? null : occurrenceSummary(occurrence),
+		latestOccurrence: occurrences[0] === undefined ? null : occurrenceSummary(occurrences[0]),
+		occurrences: occurrences.map(occurrenceSummary),
+		occurrencesNextCursor: hasMoreOccurrences && occurrences.length > 0
+			? encodeOccurrenceCursor(occurrences[occurrences.length - 1])
+			: null,
 	}
 }
 
@@ -727,7 +866,7 @@ async function internalMutation(
 	return mutation
 }
 
-function issueSummary(row: IdentifiedOperatorIssueRow): OperationsIssueSummaryDto {
+function issueSummary(row: IdentifiedOperatorIssueRow, trend: number[] = Array.from({ length: 12 }, () => 0)): OperationsIssueSummaryDto {
 	return {
 		id: row.id,
 		source: sourceDto(row),
@@ -740,7 +879,7 @@ function issueSummary(row: IdentifiedOperatorIssueRow): OperationsIssueSummaryDt
 		firstSeen: numeric(row.first_seen),
 		lastSeen: numeric(row.last_seen),
 		count: numeric(row.occurrence_count),
-		trend: [],
+		trend,
 	}
 }
 
@@ -829,7 +968,7 @@ async function visibleIssue(
 	return issue
 }
 
-function occurrenceSummary(occurrence: OperatorOccurrenceRow): OperationsIssueDetailDto['latestOccurrence'] {
+function occurrenceSummary(occurrence: OperatorOccurrenceRow): OperationsIssueOccurrenceDto {
 	return {
 		id: occurrence.id,
 		eventId: occurrence.event_id,
@@ -894,14 +1033,22 @@ async function bulkIssueStatusInput(request: Request): Promise<{ issueIds: strin
 function issueQuery(url: URL): OperationsIssueQuery {
 	const sourceId = url.searchParams.get('sourceId')
 	const status = optionalIssueStatus(url.searchParams.get('status'))
+	const level = optionalIssueLevel(url.searchParams.get('level'))
+	const window = optionalIssueWindow(url.searchParams.get('window'))
 	const query = url.searchParams.get('query')
+	const assignee = optionalIssueAssignee(url.searchParams.get('assignee'))
+	const sort = optionalIssueSort(url.searchParams.get('sort'))
 	const cursorValue = url.searchParams.get('cursor')
 	const limitValue = url.searchParams.get('limit')
 	return {
 		...(sourceId === null ? {} : { sourceId }),
 		...(status === undefined ? {} : { status }),
+		...(level === undefined ? {} : { level }),
+		...(window === undefined ? {} : { window }),
 		...(query === null ? {} : { query }),
-		...(cursorValue === null || cursorValue === '' ? {} : { cursor: String(cursor(cursorValue)) }),
+		...(assignee === undefined ? {} : { assignee }),
+		...(sort === undefined ? {} : { sort }),
+		...(cursorValue === null || cursorValue === '' ? {} : { cursor: cursorValue }),
 		...(limitValue === null || limitValue === '' ? {} : { limit: boundedLimit(limitValue) }),
 	}
 }
@@ -912,7 +1059,7 @@ function releaseQuery(url: URL): OperationsReleaseQuery {
 	const limitValue = url.searchParams.get('limit')
 	return {
 		...(sourceId === null ? {} : { sourceId }),
-		...(cursorValue === null || cursorValue === '' ? {} : { cursor: String(cursor(cursorValue)) }),
+		...(cursorValue === null || cursorValue === '' ? {} : { cursor: String(offsetCursor(cursorValue)) }),
 		...(limitValue === null || limitValue === '' ? {} : { limit: boundedLimit(limitValue) }),
 	}
 }
@@ -960,6 +1107,30 @@ function issueStatus(value: unknown): IssueStatus {
 
 function optionalIssueStatus(value: string | null): IssueStatus | undefined {
 	return value === null || value === '' ? undefined : issueStatus(value)
+}
+
+function optionalIssueLevel(value: string | null): OperationsIssueQuery['level'] {
+	if (value === null || value === '') return undefined
+	if (value === 'fatal' || value === 'error' || value === 'warning' || value === 'info') return value
+	throw badRequest('invalid issue level')
+}
+
+function optionalIssueWindow(value: string | null): OperationsIssueQuery['window'] {
+	if (value === null || value === '') return undefined
+	if (value === 'all' || value === '24h' || value === '7d' || value === '30d') return value
+	throw badRequest('invalid issue window')
+}
+
+function optionalIssueAssignee(value: string | null): OperationsIssueQuery['assignee'] {
+	if (value === null || value === '') return undefined
+	if (value === 'all' || value === 'me' || value === 'none') return value
+	throw badRequest('invalid issue assignee')
+}
+
+function optionalIssueSort(value: string | null): OperationsIssueQuery['sort'] {
+	if (value === null || value === '') return undefined
+	if (value === 'recent' || value === 'new' || value === 'frequency') return value
+	throw badRequest('invalid issue sort')
 }
 
 function alertKind(value: string): OperationsAlertKind | null {
@@ -1016,11 +1187,69 @@ function boundedLimit(value: string | null): number {
 	return parsed
 }
 
-function cursor(value: string | null): number {
+function offsetCursor(value: string | null): number {
 	if (value === null || value === '') return 0
 	const parsed = Number(value)
 	if (!Number.isSafeInteger(parsed) || parsed < 0) throw badRequest('invalid cursor')
 	return parsed
+}
+
+function issueCursor(value: string | undefined, sort: OperatorIssueSort): OperatorIssueCursor | undefined {
+	if (value === undefined || value === '') return undefined
+	const parsed = decodedCursor(value)
+	if (parsed['sort'] !== sort || typeof parsed['value'] !== 'number' || !Number.isSafeInteger(parsed['value'])) {
+		throw badRequest('invalid cursor')
+	}
+	if (typeof parsed['id'] !== 'string' || parsed['id'] === '') throw badRequest('invalid cursor')
+	return { value: parsed['value'], id: parsed['id'] }
+}
+
+function encodeIssueCursor(row: IdentifiedOperatorIssueRow, sort: OperatorIssueSort): string {
+	const value = sort === 'new'
+		? numeric(row.first_seen)
+		: sort === 'frequency'
+		? numeric(row.occurrence_count)
+		: numeric(row.last_seen)
+	return encodeURIComponent(JSON.stringify({ sort, value, id: row.id }))
+}
+
+function occurrenceCursor(value: string | undefined): OperatorOccurrenceCursor | undefined {
+	if (value === undefined || value === '') return undefined
+	const parsed = decodedCursor(value)
+	if (typeof parsed['receivedAt'] !== 'number' || !Number.isSafeInteger(parsed['receivedAt'])) throw badRequest('invalid cursor')
+	if (typeof parsed['id'] !== 'string' || parsed['id'] === '') throw badRequest('invalid cursor')
+	return { receivedAt: parsed['receivedAt'], id: parsed['id'] }
+}
+
+function encodeOccurrenceCursor(row: OperatorOccurrenceRow): string {
+	return encodeURIComponent(JSON.stringify({ receivedAt: numeric(row.received_at), id: row.id }))
+}
+
+function decodedCursor(value: string): Record<string, unknown> {
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(decodeURIComponent(value))
+	} catch {
+		throw badRequest('invalid cursor')
+	}
+	if (!isRecord(parsed)) throw badRequest('invalid cursor')
+	return parsed
+}
+
+function issueWindowStart(window: OperationsIssueQuery['window'], at: number): number | undefined {
+	if (window === undefined || window === 'all') return undefined
+	if (window === '24h') return at - 24 * 60 * 60 * 1_000
+	if (window === '7d') return at - 7 * 24 * 60 * 60 * 1_000
+	return at - 30 * 24 * 60 * 60 * 1_000
+}
+
+function notificationStatus(
+	deliveredAt: number | null,
+	abandonedAt: number | null,
+): 'pending' | 'delivered' | 'abandoned' {
+	if (deliveredAt !== null) return 'delivered'
+	if (abandonedAt !== null) return 'abandoned'
+	return 'pending'
 }
 
 function redactTarget(target: string): string {
