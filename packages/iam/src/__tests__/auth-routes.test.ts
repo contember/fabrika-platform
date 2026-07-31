@@ -6,7 +6,7 @@ import { OidcClient, type OidcIdentity, type OidcMetadata } from '../oidc'
 import { hashToken } from '../secret'
 import { createHarness, type Harness, seedUser } from './helpers/harness'
 
-const AUTH_ENV = { PROPUSTKA_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
+const AUTH_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
 const ISSUER = 'http://localhost:18191'
 
 function ctx(): RequestContext {

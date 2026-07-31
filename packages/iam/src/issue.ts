@@ -37,7 +37,7 @@ interface Issuer {
 	permissions: PermissionEntry[]
 }
 
-type MintEnv = Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'ENVIRONMENT'>
+type MintEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
 /**
  * Delegation check (pure): every requested grant must be covered by the issuer's permissions on its

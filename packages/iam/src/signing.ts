@@ -3,7 +3,7 @@
  * per-app permission tokens (and capability tokens) with its own ES256 (EC P-256) key, and
  * publishes the public half so the SDK verifies locally — no per-request round-trip.
  *
- * Keys come from the `PROPUSTKA_SIGNING_KEYS` secret (a JSON array of private JWKs). Index 0 is the
+ * Keys come from the `FABRIKA_IAM_SIGNING_KEYS` secret (a JSON array of private JWKs). Index 0 is the
  * ACTIVE signer; every key is published in the JWKS, so a freshly-added rotation key can be verified
  * (it's in the public set) before it's promoted to index 0 to sign. Locally, with no keys
  * configured, an EPHEMERAL key is generated per isolate — fine for dev (sessions reset on restart),
@@ -106,7 +106,7 @@ function toPublicJwk(jwk: JWK, kid: string): PublicJwk {
 	}
 }
 
-/** Parse `PROPUSTKA_SIGNING_KEYS` into private JWKs. Throws loudly on malformed config (fail the deploy). */
+/** Parse `FABRIKA_IAM_SIGNING_KEYS` into private JWKs. Throws loudly on malformed config (fail the deploy). */
 export function parseSigningKeys(raw: string): JWK[] {
 	if (raw.trim() === '') {
 		return []
@@ -115,10 +115,10 @@ export function parseSigningKeys(raw: string): JWK[] {
 	try {
 		parsed = JSON.parse(raw)
 	} catch {
-		throw new Error('PROPUSTKA_SIGNING_KEYS is not valid JSON')
+		throw new Error('FABRIKA_IAM_SIGNING_KEYS is not valid JSON')
 	}
 	if (!Array.isArray(parsed)) {
-		throw new Error('PROPUSTKA_SIGNING_KEYS must be a JSON array of private JWKs')
+		throw new Error('FABRIKA_IAM_SIGNING_KEYS must be a JSON array of private JWKs')
 	}
 	return parsed.map((item, index) => parseEcPrivateJwk(item, index))
 }
@@ -132,7 +132,7 @@ function parseEcPrivateJwk(value: unknown, index: number): JWK {
 	const d = stringField(value, 'd')
 	const kid = stringField(value, 'kid')
 	if (kty !== 'EC' || crv !== 'P-256' || x === undefined || y === undefined || d === undefined) {
-		throw new Error(`PROPUSTKA_SIGNING_KEYS[${index}] must be an EC P-256 private JWK (kty=EC, crv=P-256, x, y, d)`)
+		throw new Error(`FABRIKA_IAM_SIGNING_KEYS[${index}] must be an EC P-256 private JWK (kty=EC, crv=P-256, x, y, d)`)
 	}
 	return { kty, crv, x, y, d, alg: TOKEN_ALG, use: 'sig', ...(kid === undefined ? {} : { kid }) }
 }
@@ -142,8 +142,8 @@ function parseEcPrivateJwk(value: unknown, index: number): JWK {
 let cached: { key: string; signer: Promise<Signer> } | undefined
 
 /** The isolate-cached Signer for this env. Returns a promise (key import is async). */
-export function getSigner(env: Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'ENVIRONMENT'>): Promise<Signer> {
-	const raw = env.PROPUSTKA_SIGNING_KEYS ?? ''
+export function getSigner(env: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>): Promise<Signer> {
+	const raw = env.FABRIKA_IAM_SIGNING_KEYS ?? ''
 	const cacheKey = `${env.ENVIRONMENT}::${raw}`
 	if (cached && cached.key === cacheKey) {
 		return cached.signer
@@ -167,5 +167,5 @@ async function buildSigner(environment: string, raw: string): Promise<Signer> {
 	if (environment === 'local') {
 		return Signer.ephemeral()
 	}
-	throw new Error('PROPUSTKA_SIGNING_KEYS is empty — provide an ES256 private JWK array for stage/prod.')
+	throw new Error('FABRIKA_IAM_SIGNING_KEYS is empty — provide an ES256 private JWK array for stage/prod.')
 }

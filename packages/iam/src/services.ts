@@ -18,7 +18,7 @@ export interface Config {
 	/**
 	 * The central human-admission allowlist — who may self-provision as a HUMAN at login. A `*` entry
 	 * in either list means admit-all; otherwise an exact email or matching domain. Owned by propustka
-	 * (deploy vars `PROPUSTKA_HUMAN_EMAIL_DOMAINS` / `PROPUSTKA_HUMAN_EMAILS`).
+	 * (deploy vars `FABRIKA_IAM_HUMAN_EMAIL_DOMAINS` / `FABRIKA_IAM_HUMAN_EMAILS`).
 	 */
 	readonly human: {
 		readonly emailDomains: readonly string[]

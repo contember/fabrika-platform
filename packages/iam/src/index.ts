@@ -15,6 +15,7 @@ import type {
 	RevokeKeyInput,
 	RevokeKeyResult,
 } from '@fabrika/auth-core'
+import { environmentAliases } from '@fabrika/platform'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { iamApp } from './app'
 import { pruneAuthLog } from './cron'
@@ -37,8 +38,12 @@ import { createIamRpc } from './rpc'
  * `this.ctx` (an `ExecutionContext`) satisfies `RequestContext` structurally, so it is passed
  * straight through with no adapter.
  */
-export interface WorkerBindings extends Omit<Env, 'DB' | 'REPOSITORIES'> {
+export interface WorkerBindings extends Omit<Env, 'DB' | 'REPOSITORIES' | 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY'> {
 	DB: D1Database
+	FABRIKA_IAM_SIGNING_KEYS?: string
+	FABRIKA_IAM_PROVISIONING_KEY?: string
+	PROPUSTKA_SIGNING_KEYS?: string
+	PROPUSTKA_PROVISIONING_KEY?: string
 }
 
 /** Present native Worker bindings as the runtime-neutral IAM environment. */
@@ -47,6 +52,9 @@ export function iamEnv(bindings: WorkerBindings): Env {
 		...bindings,
 		DB: bindings.DB,
 		REPOSITORIES: createIamRepositories(bindings.DB),
+		FABRIKA_IAM_SIGNING_KEYS: environmentAliases.read(bindings, { canonical: 'FABRIKA_IAM_SIGNING_KEYS', legacy: 'PROPUSTKA_SIGNING_KEYS' }) ?? '',
+		FABRIKA_IAM_PROVISIONING_KEY: environmentAliases.read(bindings, { canonical: 'FABRIKA_IAM_PROVISIONING_KEY', legacy: 'PROPUSTKA_PROVISIONING_KEY' })
+			?? '',
 	}
 }
 

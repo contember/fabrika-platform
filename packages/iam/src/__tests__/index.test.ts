@@ -15,7 +15,7 @@ import { allMigrations } from './helpers/migrations'
 // We drive the real class against a real `Db(env.DB)` backed by an in-memory bun:sqlite
 // (the schema.test.ts pattern), seeding the `local-dev-admin` principal so auth-log /
 // audit FK lookups resolve. We only ever pass `credential: null`, and ENVIRONMENT='local'
-// + PROPUSTKA_SIGNING_KEYS='' lets the native local-dev bypass resolve the global-admin
+// + FABRIKA_IAM_SIGNING_KEYS='' lets the native local-dev bypass resolve the global-admin
 // caller (which now carries the SDK-passed app as its verified app).
 
 // `Propustka` extends `WorkerEntrypoint` from 'cloudflare:workers', which bun's test
@@ -28,7 +28,7 @@ mock.module('cloudflare:workers', () => ({
 	},
 }))
 
-const { Propustka } = await import('../index')
+const { Propustka, iamEnv } = await import('../index')
 
 const migration = allMigrations()
 
@@ -151,12 +151,29 @@ function makeEnv(db: Database, overrides: Partial<Pick<Env, 'ENVIRONMENT'>> = {}
 		IAM_BOOTSTRAP_ADMINS: '[]',
 		ENVIRONMENT: overrides.ENVIRONMENT ?? 'local',
 		ISSUER: 'http://localhost:18191',
-		PROPUSTKA_SIGNING_KEYS: '',
-		PROPUSTKA_PROVISIONING_KEY: '',
+		FABRIKA_IAM_SIGNING_KEYS: '',
+		FABRIKA_IAM_PROVISIONING_KEY: '',
 		SESSION_COOKIE_DOMAIN: '',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: '',
 		OIDC_CLIENT_SECRET: 'dummy-oidc-secret',
+		OIDC_SCOPES: '',
+		OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
+	}
+}
+
+function workerBindings(db: Database) {
+	return {
+		DB: new SqliteD1(db),
+		HUMAN_EMAIL_DOMAINS: '[]',
+		HUMAN_EMAILS: '[]',
+		IAM_BOOTSTRAP_ADMINS: '[]',
+		ENVIRONMENT: 'local',
+		ISSUER: 'http://localhost:18191',
+		SESSION_COOKIE_DOMAIN: '',
+		OIDC_ISSUER: 'https://idp.test',
+		OIDC_CLIENT_ID: '',
+		OIDC_CLIENT_SECRET: '',
 		OIDC_SCOPES: '',
 		OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
 	}
@@ -359,5 +376,31 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 		// and is scoped to that app — here an empty roster (no users are seeded for 'poplach').
 		const result = await worker.listPrincipals({ app: 'poplach', credential: null, requestId: 'req-list-local' })
 		expect(result).toEqual({ ok: true, principals: [] })
+	})
+})
+
+describe('IAM Worker environment aliases', () => {
+	test('accepts legacy secret bindings', () => {
+		const env = iamEnv({
+			...workerBindings(freshDb()),
+			PROPUSTKA_SIGNING_KEYS: 'legacy-signing',
+			PROPUSTKA_PROVISIONING_KEY: 'legacy-provisioning',
+		})
+
+		expect(env.FABRIKA_IAM_SIGNING_KEYS).toBe('legacy-signing')
+		expect(env.FABRIKA_IAM_PROVISIONING_KEY).toBe('legacy-provisioning')
+	})
+
+	test('prefers canonical secret bindings', () => {
+		const env = iamEnv({
+			...workerBindings(freshDb()),
+			FABRIKA_IAM_SIGNING_KEYS: 'canonical-signing',
+			FABRIKA_IAM_PROVISIONING_KEY: 'canonical-provisioning',
+			PROPUSTKA_SIGNING_KEYS: 'legacy-signing',
+			PROPUSTKA_PROVISIONING_KEY: 'legacy-provisioning',
+		})
+
+		expect(env.FABRIKA_IAM_SIGNING_KEYS).toBe('canonical-signing')
+		expect(env.FABRIKA_IAM_PROVISIONING_KEY).toBe('canonical-provisioning')
 	})
 })

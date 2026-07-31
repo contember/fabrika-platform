@@ -7,7 +7,7 @@ import { getSigner } from '../signing'
 import { mintFromKey } from '../tokens'
 import { createHarness, seedInlineGrant, seedService, seedUser } from './helpers/harness'
 
-const ENV = { PROPUSTKA_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
+const ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
 const ISSUER = 'https://propustka.test'
 
 function perm(action: string, scope: Scope | null = null): PermissionEntry {

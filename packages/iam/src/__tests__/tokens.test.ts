@@ -6,7 +6,7 @@ import { getSigner } from '../signing'
 import { mintToken } from '../tokens'
 import { createHarness, seedInlineGrant, seedUser } from './helpers/harness'
 
-const ENV = { PROPUSTKA_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
+const ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
 const FUTURE = Math.floor(Date.now() / 1000) + 3600
 
 /** Stand up a user + session + grant, returning what mint needs. */

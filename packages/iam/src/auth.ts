@@ -40,14 +40,14 @@ export type CallerResolution =
 
 export async function resolveCaller(
 	services: Services,
-	env: Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'PROPUSTKA_PROVISIONING_KEY' | 'ENVIRONMENT'>,
+	env: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'ENVIRONMENT'>,
 	input: { app: string; credential: string | null; requestId: string },
 ): Promise<CallerResolution> {
 	// LOCAL DEV BYPASS. With NO durable signing keys configured (an ephemeral key ⇒ dev-only) AND no
 	// credential presented, resolve a fixed global-admin so the example app / admin scripts work
-	// against `lopata`/`wrangler dev`. A real deploy provisions PROPUSTKA_SIGNING_KEYS, so this branch
+	// against `lopata`/`wrangler dev`. A real deploy provisions FABRIKA_IAM_SIGNING_KEYS, so this branch
 	// is impossible there.
-	if (services.config.environment === 'local' && input.credential === null && (env.PROPUSTKA_SIGNING_KEYS ?? '').trim() === '') {
+	if (services.config.environment === 'local' && input.credential === null && (env.FABRIKA_IAM_SIGNING_KEYS ?? '').trim() === '') {
 		console.warn('local dev bypass active: resolving fixed global-admin caller (ENVIRONMENT=local, no signing keys configured)')
 		return {
 			ok: true,
@@ -69,7 +69,7 @@ export async function resolveCaller(
 		// a fresh control plane can reconcile/issue before any DB-backed admin credential exists. Empty env
 		// (the default) disables it. Compared by hash in constant time; resolves the seeded `provisioning-admin`
 		// principal (migration 0008) so its audit FK holds.
-		const provisioningKey = (env.PROPUSTKA_PROVISIONING_KEY ?? '').trim()
+		const provisioningKey = (env.FABRIKA_IAM_PROVISIONING_KEY ?? '').trim()
 		if (provisioningKey !== '' && timingSafeEqualHex(presentedHash, await hashToken(provisioningKey))) {
 			return {
 				ok: true,

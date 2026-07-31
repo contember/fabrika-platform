@@ -33,7 +33,7 @@ import type { Services } from './services'
 import { getSigner } from './signing'
 
 /** The env slice minting needs (the signing keys + environment for `getSigner`). */
-type MintEnv = Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'ENVIRONMENT'>
+type MintEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
 /** `principalId` (resolved session subject, or null on failure) is surfaced for the auth_log row. */
 export interface MintOutcome {

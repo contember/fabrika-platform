@@ -22,7 +22,7 @@
 //   * It is TRANSPORT auth, not caller identity. It says "this request came from inside the
 //     deployment", exactly as a service binding does, and nothing more — the per-caller authorization
 //     the management RPCs already do is untouched and still runs. Reusing
-//     `PROPUSTKA_PROVISIONING_KEY` here was rejected for precisely this reason: that key resolves to
+//     `FABRIKA_IAM_PROVISIONING_KEY` here was rejected for precisely this reason: that key resolves to
 //     a synthetic global admin, so sharing it with every RPC client would hand every client admin.
 //   * NO KEY MEANS NO SURFACE. An unset key does not mean "open"; it means these routes 404 as if
 //     they were never mounted. A misconfigured deploy therefore loses RPC rather than publishing it,

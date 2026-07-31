@@ -27,7 +27,7 @@ const OIDC_COOKIE = 'px_oidc'
 const OIDC_TTL_SECONDS = 600
 
 /** The only env the auth surface touches directly is the signing config (for the JWKS endpoint). */
-type AuthEnv = Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'ENVIRONMENT'>
+type AuthEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
 export async function handleAuth(request: Request, services: Services, env: AuthEnv, ctx: RequestContext): Promise<Response> {
 	const url = new URL(request.url)
@@ -165,7 +165,7 @@ async function handleLogout(request: Request, services: Services, secure: boolea
 
 /**
  * The human-admission allowlist for self-provisioning a brand-new identity. propustka owns this
- * centrally (the deploy vars `PROPUSTKA_HUMAN_EMAIL_DOMAINS` / `PROPUSTKA_HUMAN_EMAILS`):
+ * centrally (the deploy vars `FABRIKA_IAM_HUMAN_EMAIL_DOMAINS` / `FABRIKA_IAM_HUMAN_EMAILS`):
  *   - a `*` entry in EITHER list = admit anyone (allow-all);
  *   - an exact email match in `emails`;
  *   - the email's domain in `emailDomains` (case-insensitive);

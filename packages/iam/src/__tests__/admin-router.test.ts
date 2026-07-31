@@ -19,9 +19,9 @@ const IAM_APP = 'propustka'
 
 // env slice handleAdmin needs. ENVIRONMENT='stage' keeps the local-dev bypass off, so the
 // session/credential paths are exercised for real.
-const ADMIN_ENV: Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'PROPUSTKA_PROVISIONING_KEY' | 'ENVIRONMENT'> = {
-	PROPUSTKA_SIGNING_KEYS: '',
-	PROPUSTKA_PROVISIONING_KEY: '',
+const ADMIN_ENV: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'ENVIRONMENT'> = {
+	FABRIKA_IAM_SIGNING_KEYS: '',
+	FABRIKA_IAM_PROVISIONING_KEY: '',
 	ENVIRONMENT: 'stage',
 }
 

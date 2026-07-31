@@ -12,8 +12,8 @@ import { createHarness, seedUser } from './helpers/harness'
 const REQUEST = 'r1'
 
 /** env slice resolveCaller needs. Default: no durable signing keys (the dev signal), no provisioning key. */
-function env(signingKeys = '', provisioningKey = ''): Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'PROPUSTKA_PROVISIONING_KEY' | 'ENVIRONMENT'> {
-	return { PROPUSTKA_SIGNING_KEYS: signingKeys, PROPUSTKA_PROVISIONING_KEY: provisioningKey, ENVIRONMENT: 'local' }
+function env(signingKeys = '', provisioningKey = ''): Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'ENVIRONMENT'> {
+	return { FABRIKA_IAM_SIGNING_KEYS: signingKeys, FABRIKA_IAM_PROVISIONING_KEY: provisioningKey, ENVIRONMENT: 'local' }
 }
 
 describe('resolveCaller — local dev bypass (SEC-1 guard)', () => {
@@ -73,13 +73,13 @@ describe('resolveCaller — px_ key resolution', () => {
 	})
 })
 
-// The SEEDED PROVISIONING KEY: a single operator-generated `px_` held only in env (PROPUSTKA_PROVISIONING_KEY),
+// The SEEDED PROVISIONING KEY: a single operator-generated `px_` held only in env (FABRIKA_IAM_PROVISIONING_KEY),
 // never in the DB. Recognized at resolution time BEFORE the DB lookup — the machine analog of
 // IAM_BOOTSTRAP_ADMINS, so a fresh control plane can reconcile/issue before any admin credential exists.
 describe('resolveCaller — seeded provisioning key', () => {
 	const PROVISIONING_KEY = 'px_provisioning-secret'
 
-	test('a bearer matching PROPUSTKA_PROVISIONING_KEY → synthetic global-admin, no DB row', async () => {
+	test('a bearer matching FABRIKA_IAM_PROVISIONING_KEY → synthetic global-admin, no DB row', async () => {
 		const h = createHarness()
 		const services = h.makeServices({ environment: 'stage' })
 		const res = await resolveCaller(services, env('', PROVISIONING_KEY), { app: 'vozka', credential: PROVISIONING_KEY, requestId: REQUEST })
@@ -103,7 +103,7 @@ describe('resolveCaller — seeded provisioning key', () => {
 		expect(res).toEqual({ ok: false, reason: 'invalid_token' })
 	})
 
-	test('empty PROPUSTKA_PROVISIONING_KEY disables the seed (the same token resolves via the DB → invalid)', async () => {
+	test('empty FABRIKA_IAM_PROVISIONING_KEY disables the seed (the same token resolves via the DB → invalid)', async () => {
 		const h = createHarness()
 		const services = h.makeServices({ environment: 'stage' })
 		const res = await resolveCaller(services, env('', ''), { app: 'vozka', credential: PROVISIONING_KEY, requestId: REQUEST })

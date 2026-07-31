@@ -1,23 +1,19 @@
-// propustka's deploy surface. This file owns its environment contract and Cloudflare resource graph.
+// IAM's deploy surface. This file owns its environment contract and Cloudflare resource graph.
 // fabrika loads the default `defineApp` config; the local Oblaka entry imports the same builder.
 //
 // Non-secret deploy vars come from fabrika's per-app environment registry. Native-auth secrets are
 // validated before remote materialization but never enter Worker `vars`, where Oblaka would serialize
-// them as plaintext. The Custom Domain route comes from `ctx.domain` (`PROPUSTKA_HOSTNAME` in the
+// them as plaintext. The Custom Domain route comes from `ctx.domain` (`FABRIKA_IAM_HOSTNAME` in the
 // standalone Oblaka adapter).
 
 import type { AppSchema } from '@fabrika/auth-core'
+import { environmentAliases } from '@fabrika/platform'
 import { D1Database, defineApp, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 
 // Keep the legacy Oblaka namespace so the first fabrika deploy continues the existing cf-state.
-const PROPUSTKA_APP_ID = 'propustka'
+const IAM_APP_ID = 'propustka'
 
-const REQUIRED_VARS = ['PROPUSTKA_HUMAN_EMAIL_DOMAINS', 'PROPUSTKA_OIDC_ISSUER', 'PROPUSTKA_OIDC_CLIENT_ID']
-const REQUIRED_REMOTE_INPUTS = [
-	...REQUIRED_VARS,
-	'PROPUSTKA_SIGNING_KEYS',
-	'OIDC_CLIENT_SECRET',
-]
+const REQUIRED_VARS = ['FABRIKA_IAM_HUMAN_EMAIL_DOMAINS', 'FABRIKA_IAM_OIDC_ISSUER', 'FABRIKA_IAM_OIDC_CLIENT_ID']
 const KNOWN_ENVS = new Set(['local', 'stage', 'prod', 'mangoweb'])
 
 type EnvironmentSource = Readonly<Record<string, string | undefined>>
@@ -29,25 +25,37 @@ interface RemoteConfig {
 	oidcClientId: string
 }
 
-const requiredValue = (source: EnvironmentSource, name: string): string => {
-	const value = source[name]
+const aliasValue = (source: EnvironmentSource, canonical: string, legacy: string): string | undefined =>
+	environmentAliases.read(source, { canonical, legacy })
+
+const requiredAlias = (source: EnvironmentSource, canonical: string, legacy: string): string => {
+	const value = aliasValue(source, canonical, legacy)
 	if (value === undefined || value === '') {
-		throw new Error(`Missing ${name}`)
+		throw new Error(`Missing ${canonical}`)
 	}
 	return value
 }
 
 const requiredDomain = (domain: string | undefined): string => {
 	if (domain === undefined || domain === '') {
-		throw new Error('Missing PROPUSTKA_HOSTNAME')
+		throw new Error('Missing FABRIKA_IAM_HOSTNAME')
 	}
 	return domain
 }
 
 const remoteConfig = (env: string, domain: string | undefined, source: EnvironmentSource): RemoteConfig => {
-	const missing = REQUIRED_REMOTE_INPUTS.filter((name) => !source[name])
+	const humanEmailDomains = aliasValue(source, 'FABRIKA_IAM_HUMAN_EMAIL_DOMAINS', 'PROPUSTKA_HUMAN_EMAIL_DOMAINS')
+	const oidcIssuer = aliasValue(source, 'FABRIKA_IAM_OIDC_ISSUER', 'PROPUSTKA_OIDC_ISSUER')
+	const oidcClientId = aliasValue(source, 'FABRIKA_IAM_OIDC_CLIENT_ID', 'PROPUSTKA_OIDC_CLIENT_ID')
+	const signingKeys = aliasValue(source, 'FABRIKA_IAM_SIGNING_KEYS', 'PROPUSTKA_SIGNING_KEYS')
+	const missing: string[] = []
+	if (!humanEmailDomains) missing.push('FABRIKA_IAM_HUMAN_EMAIL_DOMAINS')
+	if (!oidcIssuer) missing.push('FABRIKA_IAM_OIDC_ISSUER')
+	if (!oidcClientId) missing.push('FABRIKA_IAM_OIDC_CLIENT_ID')
+	if (!signingKeys) missing.push('FABRIKA_IAM_SIGNING_KEYS')
+	if (!source['OIDC_CLIENT_SECRET']) missing.push('OIDC_CLIENT_SECRET')
 	if (domain === undefined || domain === '') {
-		missing.push('PROPUSTKA_HOSTNAME')
+		missing.push('FABRIKA_IAM_HOSTNAME')
 	}
 	if (missing.length > 0) {
 		throw new Error(`Missing ${missing.join(', ')} for env=${env}. Configure them before materializing IAM resources.`)
@@ -55,14 +63,14 @@ const remoteConfig = (env: string, domain: string | undefined, source: Environme
 
 	return {
 		domain: requiredDomain(domain),
-		humanEmailDomains: requiredValue(source, 'PROPUSTKA_HUMAN_EMAIL_DOMAINS'),
-		oidcIssuer: requiredValue(source, 'PROPUSTKA_OIDC_ISSUER'),
-		oidcClientId: requiredValue(source, 'PROPUSTKA_OIDC_CLIENT_ID'),
+		humanEmailDomains: requiredAlias(source, 'FABRIKA_IAM_HUMAN_EMAIL_DOMAINS', 'PROPUSTKA_HUMAN_EMAIL_DOMAINS'),
+		oidcIssuer: requiredAlias(source, 'FABRIKA_IAM_OIDC_ISSUER', 'PROPUSTKA_OIDC_ISSUER'),
+		oidcClientId: requiredAlias(source, 'FABRIKA_IAM_OIDC_CLIENT_ID', 'PROPUSTKA_OIDC_CLIENT_ID'),
 	}
 }
 
 /**
- * Build propustka's Worker vars. Remote secrets are validated above but excluded here because
+ * Build IAM's Worker vars. Remote secrets are validated above but excluded here because
  * Oblaka serializes this object into the plaintext `vars` section of `wrangler.jsonc`.
  */
 const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): Record<string, string> => {
@@ -82,19 +90,19 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 
 	return {
 		HUMAN_EMAIL_DOMAINS: config.humanEmailDomains,
-		HUMAN_EMAILS: source['PROPUSTKA_HUMAN_EMAILS'] ?? '[]',
-		IAM_BOOTSTRAP_ADMINS: source['PROPUSTKA_BOOTSTRAP_ADMINS'] ?? '[]',
+		HUMAN_EMAILS: aliasValue(source, 'FABRIKA_IAM_HUMAN_EMAILS', 'PROPUSTKA_HUMAN_EMAILS') ?? '[]',
+		IAM_BOOTSTRAP_ADMINS: aliasValue(source, 'FABRIKA_IAM_BOOTSTRAP_ADMINS', 'PROPUSTKA_BOOTSTRAP_ADMINS') ?? '[]',
 		ISSUER: `https://${config.domain}`,
-		SESSION_COOKIE_DOMAIN: source['PROPUSTKA_SESSION_COOKIE_DOMAIN'] ?? '',
+		SESSION_COOKIE_DOMAIN: aliasValue(source, 'FABRIKA_IAM_SESSION_COOKIE_DOMAIN', 'PROPUSTKA_SESSION_COOKIE_DOMAIN') ?? '',
 		OIDC_ISSUER: config.oidcIssuer,
 		OIDC_CLIENT_ID: config.oidcClientId,
-		OIDC_SCOPES: source['PROPUSTKA_OIDC_SCOPES'] ?? '',
-		OIDC_REQUIRE_VERIFIED_EMAIL: source['PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL'] ?? 'true',
+		OIDC_SCOPES: aliasValue(source, 'FABRIKA_IAM_OIDC_SCOPES', 'PROPUSTKA_OIDC_SCOPES') ?? '',
+		OIDC_REQUIRE_VERIFIED_EMAIL: aliasValue(source, 'FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL', 'PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL') ?? 'true',
 	}
 }
 
 /**
- * Build propustka's only Cloudflare resource graph. Both fabrika and the standalone Oblaka adapter
+ * Build IAM's only Cloudflare resource graph. Both fabrika and the standalone Oblaka adapter
  * call this function.
  */
 export const buildPropustkaWorker = (ctx: ResourceContext, source: EnvironmentSource = process.env): Worker => {
@@ -127,17 +135,17 @@ export const buildPropustkaWorker = (ctx: ResourceContext, source: EnvironmentSo
 	})
 }
 
-// propustka is the IAM system, so its own app schema is intentionally empty.
+// IAM's own app schema is intentionally empty.
 const schema: AppSchema = { scopes: [], actions: [], roles: {} }
 
 export default defineApp({
-	id: PROPUSTKA_APP_ID,
+	id: IAM_APP_ID,
 	resources: buildPropustkaWorker,
 	schema,
 	pipeline: {
 		workerDir: '.',
 		// Values stay in fabrika's vault and are provisioned out-of-band from Worker plaintext vars.
-		secrets: ['PROPUSTKA_SIGNING_KEYS', 'OIDC_CLIENT_SECRET', 'PROPUSTKA_PROVISIONING_KEY'],
+		secrets: ['FABRIKA_IAM_SIGNING_KEYS', 'OIDC_CLIENT_SECRET', 'FABRIKA_IAM_PROVISIONING_KEY'],
 		// Optional list values use safe empty-array defaults and do not belong in this required set.
 		vars: REQUIRED_VARS,
 	},

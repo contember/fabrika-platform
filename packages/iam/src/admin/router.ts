@@ -145,7 +145,7 @@ export type AdminResolution =
  */
 export async function resolveAdmin(
 	services: Services,
-	env: Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'PROPUSTKA_PROVISIONING_KEY' | 'ENVIRONMENT'>,
+	env: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'ENVIRONMENT'>,
 	creds: { bearer: string | null; session: string | null; requestId: string },
 ): Promise<AdminResolution> {
 	// Bearer credential (or no credential at all → local-dev bypass) goes through `resolveCaller`.
@@ -192,7 +192,7 @@ export async function resolveAdmin(
 export async function handleAdmin(
 	request: Request,
 	services: Services,
-	env: Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'PROPUSTKA_PROVISIONING_KEY' | 'ENVIRONMENT'>,
+	env: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'ENVIRONMENT'>,
 	ctx: RequestContext,
 ): Promise<Response> {
 	const url = new URL(request.url)

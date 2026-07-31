@@ -15,9 +15,9 @@ import { createHarness, type Harness, seedAppAction, seedGrant, seedUser } from 
 
 const ORIGIN = 'https://iam.example.com'
 const ISSUER = 'https://propustka.test'
-const SIGN_ENV = { PROPUSTKA_SIGNING_KEYS: '', PROPUSTKA_PROVISIONING_KEY: '', ENVIRONMENT: 'local' }
+const SIGN_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', FABRIKA_IAM_PROVISIONING_KEY: '', ENVIRONMENT: 'local' }
 // env slice handleAdmin needs; 'stage' keeps the local-dev bypass off so the session path runs.
-const ADMIN_ENV = { PROPUSTKA_SIGNING_KEYS: '', PROPUSTKA_PROVISIONING_KEY: '', ENVIRONMENT: 'stage' }
+const ADMIN_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', FABRIKA_IAM_PROVISIONING_KEY: '', ENVIRONMENT: 'stage' }
 
 class FakeRequestContext implements RequestContext {
 	waitUntil(_promise: Promise<unknown>): void {}

@@ -5,9 +5,9 @@ import type { Env, RequestContext } from '../env'
 import type { Services } from '../services'
 import { createHarness, type Harness, seedAppAction, seedGrant, seedUser } from './helpers/harness'
 
-const ADMIN_ENV: Pick<Env, 'PROPUSTKA_SIGNING_KEYS' | 'PROPUSTKA_PROVISIONING_KEY' | 'ENVIRONMENT'> = {
-	PROPUSTKA_SIGNING_KEYS: '',
-	PROPUSTKA_PROVISIONING_KEY: '',
+const ADMIN_ENV: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'ENVIRONMENT'> = {
+	FABRIKA_IAM_SIGNING_KEYS: '',
+	FABRIKA_IAM_PROVISIONING_KEY: '',
 	ENVIRONMENT: 'stage',
 }
 

@@ -33,7 +33,7 @@ export interface Env {
 
 	/**
 	 * propustka's OWN origin, e.g. `https://propustka.example.com` — the `iss` of every minted
-	 * token AND the base for the Google OIDC redirect URI. Derived from `PROPUSTKA_HOSTNAME` at
+	 * token AND the base for the OIDC redirect URI. Derived from `FABRIKA_IAM_HOSTNAME` at
 	 * deploy time; a localhost value locally.
 	 */
 	ISSUER: string
@@ -43,7 +43,7 @@ export interface Env {
 	 * key is generated per isolate (dev only). Never placed in `vars` — provisioned as a Worker secret
 	 * (`wrangler secret put` remote / `.dev.vars` local).
 	 */
-	PROPUSTKA_SIGNING_KEYS: string
+	FABRIKA_IAM_SIGNING_KEYS: string
 	/**
 	 * **Secret.** A single operator-generated provisioning `px_` key, or empty to disable (the default).
 	 * Held ONLY here — never in the DB. A bearer whose hash matches it resolves a synthetic global-admin
@@ -52,7 +52,7 @@ export interface Env {
 	 * exists. Provisioned as a Worker secret (`wrangler secret put` remote / `.dev.vars` local), never in
 	 * `vars`. Rotate by changing the env value.
 	 */
-	PROPUSTKA_PROVISIONING_KEY: string
+	FABRIKA_IAM_PROVISIONING_KEY: string
 	/**
 	 * Cookie `Domain` for the SSO session cookie, e.g. `.example.com`, so one login is shared across
 	 * `*.example.com` apps. Empty → host-only (single-host / local dev).

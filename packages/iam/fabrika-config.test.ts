@@ -4,14 +4,23 @@ import config, { buildPropustkaWorker } from './fabrika.config'
 import oblakaDefinition from './oblaka'
 
 const REMOTE_SOURCE: Record<string, string> = {
-	PROPUSTKA_HUMAN_EMAIL_DOMAINS: '["example.com"]',
-	PROPUSTKA_OIDC_ISSUER: 'https://oidc.example.com',
-	PROPUSTKA_OIDC_CLIENT_ID: 'client-id',
-	PROPUSTKA_SIGNING_KEYS: 'private-signing-key-material',
+	FABRIKA_IAM_HUMAN_EMAIL_DOMAINS: '["example.com"]',
+	FABRIKA_IAM_OIDC_ISSUER: 'https://oidc.example.com',
+	FABRIKA_IAM_OIDC_CLIENT_ID: 'client-id',
+	FABRIKA_IAM_SIGNING_KEYS: 'private-signing-key-material',
 	OIDC_CLIENT_SECRET: 'private-oidc-secret',
 }
 const REMOTE_DOMAIN = 'iam.example.com'
-const ENV_NAMES = [...Object.keys(REMOTE_SOURCE), 'PROPUSTKA_HOSTNAME']
+const ENV_NAMES = [
+	...Object.keys(REMOTE_SOURCE),
+	'FABRIKA_IAM_HOSTNAME',
+	'PROPUSTKA_HOSTNAME',
+	'PROPUSTKA_HUMAN_EMAIL_DOMAINS',
+	'PROPUSTKA_OIDC_ISSUER',
+	'PROPUSTKA_OIDC_CLIENT_ID',
+	'PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL',
+	'PROPUSTKA_SIGNING_KEYS',
+]
 const originalEnvironment = new Map(ENV_NAMES.map((name) => [name, process.env[name]]))
 
 beforeEach(() => {
@@ -21,7 +30,7 @@ beforeEach(() => {
 	for (const [name, value] of Object.entries(REMOTE_SOURCE)) {
 		process.env[name] = value
 	}
-	process.env['PROPUSTKA_HOSTNAME'] = REMOTE_DOMAIN
+	process.env['FABRIKA_IAM_HOSTNAME'] = REMOTE_DOMAIN
 })
 
 afterAll(() => {
@@ -42,6 +51,19 @@ const requireWorker = (worker: Worker | undefined): Worker => {
 }
 
 describe('IAM resource graph', () => {
+	test('declares only canonical IAM pipeline inputs', () => {
+		expect(config.pipeline?.vars).toEqual([
+			'FABRIKA_IAM_HUMAN_EMAIL_DOMAINS',
+			'FABRIKA_IAM_OIDC_ISSUER',
+			'FABRIKA_IAM_OIDC_CLIENT_ID',
+		])
+		expect(config.pipeline?.secrets).toEqual([
+			'FABRIKA_IAM_SIGNING_KEYS',
+			'OIDC_CLIENT_SECRET',
+			'FABRIKA_IAM_PROVISIONING_KEY',
+		])
+	})
+
 	test('local fabrika and Oblaka entries materialize the same Worker', () => {
 		const fromFabrika = config.resources({ env: 'local' })
 		const fromOblaka = requireWorker(oblakaDefinition({ env: 'local' }))
@@ -68,16 +90,50 @@ describe('IAM resource graph', () => {
 			expect(() => buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, source)).toThrow(name)
 		}
 
-		expect(() => buildPropustkaWorker({ env: 'stage' }, REMOTE_SOURCE)).toThrow('PROPUSTKA_HOSTNAME')
+		expect(() => buildPropustkaWorker({ env: 'stage' }, REMOTE_SOURCE)).toThrow('FABRIKA_IAM_HOSTNAME')
+	})
+
+	test('legacy deploy inputs remain canonical-first fallbacks', () => {
+		const legacySource = {
+			PROPUSTKA_HUMAN_EMAIL_DOMAINS: '["legacy.example"]',
+			PROPUSTKA_OIDC_ISSUER: 'https://legacy-oidc.example.com',
+			PROPUSTKA_OIDC_CLIENT_ID: 'legacy-client-id',
+			PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL: 'false',
+			PROPUSTKA_SIGNING_KEYS: 'legacy-private-key-material',
+			OIDC_CLIENT_SECRET: 'private-oidc-secret',
+		}
+		const worker = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, legacySource)
+
+		expect(worker.options.vars?.['HUMAN_EMAIL_DOMAINS']).toBe('["legacy.example"]')
+		expect(worker.options.vars?.['OIDC_ISSUER']).toBe('https://legacy-oidc.example.com')
+		expect(worker.options.vars?.['OIDC_CLIENT_ID']).toBe('legacy-client-id')
+		expect(worker.options.vars?.['OIDC_REQUIRE_VERIFIED_EMAIL']).toBe('false')
+	})
+
+	test('canonical deploy inputs win when both names are present', () => {
+		const worker = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, {
+			...REMOTE_SOURCE,
+			PROPUSTKA_HUMAN_EMAIL_DOMAINS: '["legacy.example"]',
+			PROPUSTKA_OIDC_ISSUER: 'https://legacy-oidc.example.com',
+			PROPUSTKA_OIDC_CLIENT_ID: 'legacy-client-id',
+			FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
+			PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL: 'false',
+			PROPUSTKA_SIGNING_KEYS: 'legacy-private-key-material',
+		})
+
+		expect(worker.options.vars?.['HUMAN_EMAIL_DOMAINS']).toBe('["example.com"]')
+		expect(worker.options.vars?.['OIDC_ISSUER']).toBe('https://oidc.example.com')
+		expect(worker.options.vars?.['OIDC_CLIENT_ID']).toBe('client-id')
+		expect(worker.options.vars?.['OIDC_REQUIRE_VERIFIED_EMAIL']).toBe('true')
 	})
 
 	test('remote secrets are required but never enter plaintext Worker vars', () => {
 		const worker = buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, REMOTE_SOURCE)
 		const serializedOptions = JSON.stringify(worker.options)
 
-		expect(worker.options.vars?.['PROPUSTKA_SIGNING_KEYS']).toBeUndefined()
+		expect(worker.options.vars?.['FABRIKA_IAM_SIGNING_KEYS']).toBeUndefined()
 		expect(worker.options.vars?.['OIDC_CLIENT_SECRET']).toBeUndefined()
-		expect(serializedOptions).not.toContain(REMOTE_SOURCE['PROPUSTKA_SIGNING_KEYS'])
+		expect(serializedOptions).not.toContain(REMOTE_SOURCE['FABRIKA_IAM_SIGNING_KEYS'])
 		expect(serializedOptions).not.toContain(REMOTE_SOURCE['OIDC_CLIENT_SECRET'])
 	})
 
