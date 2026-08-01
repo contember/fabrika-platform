@@ -239,8 +239,9 @@ scope.
 
 ## How auth works
 
-Cloudflare apps can still enforce authorization through `PropustkaAuth` inside the
-app. The Zerops topology enforces access in a **proxy**
+Cloudflare apps still enforce authorization through `PropustkaAuth` inside the
+app. The accepted thin Worker proxy is not implemented yet; that gap is
+[backlog 47](../backlog/47-implement-cloudflare-proxy-enforcement.md). The Zerops topology enforces access in a **proxy**
 ([ADR-0007](../decisions/0007-proxy-based-auth-enforcement.md)). Only the proxy is
 publicly routed; app services stay internal, so bypassing auth stops being possible
 rather than merely discouraged. The proxy is not new code — it is the same

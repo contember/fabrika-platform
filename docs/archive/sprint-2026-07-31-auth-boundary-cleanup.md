@@ -1,12 +1,16 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU1 → <sha>,
-> WU2 → <sha>, … Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
-
 # Sprint — Auth boundary cleanup (2026-07-31)
+
+## OUTCOME
+
+Closed on 2026-08-01 with two independent cleanup units shipped and the unsafe SDK removal deferred.
+
+- `a82567a` moves the canonical gate matcher and injected-token header into `@fabrika/auth-core`; the proxy and retained Cloudflare SDK path consume the same matcher.
+- `695d47b` carries deploy cancellation through both provider schema-reconcile paths and the underlying IAM `fetch`.
+- `2b618a0` and `4d58399` create the sprint and record the verify-first topology finding.
+
+Verification at closure: 87 focused tests passed across auth-core, auth, proxy, engine, and both providers. Leased typecheck passed for `@fabrika/auth-core`, `@fabrika/auth`, `@fabrika/proxy`, `@fabrika/provider-contract`, `@fabrika/provider-cloudflare`, and `@fabrika/provider-zerops`. The full workspace, local stack, browser suite, and package smoke were not rerun because WU2 did not ship and unrelated IAM/Operations work was active in the shared worktree.
+
+Backlog 17 and 19 are complete and removed. WU2 and WU3 remain in backlog 18, now blocked by [Cloudflare proxy enforcement](../backlog/47-implement-cloudflare-proxy-enforcement.md). Verify-first proved that Cloudflare app, Control, and Operations routes still depend on in-process enforcement; deleting it before the accepted thin Worker exists would break or weaken that composition. This sprint therefore does not claim that the proxy is the only enforcement point on Cloudflare.
 
 **Goal.** Make the proxy the only path-gate enforcement point and make the remaining IAM schema reconcile step honour deploy cancellation.
 

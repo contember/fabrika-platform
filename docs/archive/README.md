@@ -9,6 +9,8 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Auth boundary cleanup (2026-07-31)](sprint-2026-07-31-auth-boundary-cleanup.md)
+  — centralizes gate contracts and makes schema reconciliation cancellable; SDK removal remains blocked by the missing Cloudflare proxy path.
 - [Operations functional parity (2026-07-31)](sprint-2026-07-31-operations-functional-parity.md)
   — wires error and spike alert producers, restores complete issue read models
   and console workflows, and exposes redacted delivery evidence.

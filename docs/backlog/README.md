@@ -30,9 +30,7 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 <!-- one line each: NN — short summary (link). Keep it short. -->
 
 - [05](05-bring-up-on-a-real-zerops-account.md) — **Next.** Everything below the account line is built and schema-valid; nothing has run against a real Zerops account.
-- [17](17-one-gate-matcher-not-two.md) — The gate matcher is duplicated between the SDK and the proxy — the second implementation ADR-0008 rejected.
-- [18](18-shrink-the-app-sdk.md) — Delete in-process enforcement from `@fabrika/auth` now the proxy does it. Keep `redeemKey`.
-- [19](19-cancellation-gaps.md) — `reconcileSchema` takes no `AbortSignal`, so the one shared step is the one that cannot be cancelled.
+- [18](18-shrink-the-app-sdk.md) — Delete in-process enforcement from `@fabrika/auth` after the Cloudflare proxy path exists. Keep `redeemKey`.
 - [21](21-rate-limit-the-iam-mint-surface.md) — Deferred with reasons; the limit belongs at the proxy, which can identify a client.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
 - [25](25-bootstrap-npm-trusted-publishing.md) — Bootstrap the nineteen package names once through protected CI, then activate tokenless OIDC publishing.
@@ -49,6 +47,7 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 - [44](44-make-proxy-manifest-delivery-quoting-safe.md) — The proxy manifest is spliced into a shell command as JSON; the `${…}` form is ambiguous.
 - [45](45-pin-the-zerops-postgres-connection-target.md) — `connectionString` carries no database and no SSL mode; both are driver defaults today.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
+- [47](47-implement-cloudflare-proxy-enforcement.md) — Implement the accepted thin Worker so Cloudflare apps are private behind the shared proxy authorizer.
 - [06](06-can-zerops-secrets-be-read-back.md) — Near-settled: upstream says a write-capable token returns secret values. Confirm, then decide the UX.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
