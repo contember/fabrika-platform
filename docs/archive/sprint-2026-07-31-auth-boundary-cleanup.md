@@ -10,7 +10,7 @@ Closed on 2026-08-01 with two independent cleanup units shipped and the unsafe S
 
 Verification at closure: 87 focused tests passed across auth-core, auth, proxy, engine, and both providers. Leased typecheck passed for `@fabrika/auth-core`, `@fabrika/auth`, `@fabrika/proxy`, `@fabrika/provider-contract`, `@fabrika/provider-cloudflare`, and `@fabrika/provider-zerops`. The full workspace, local stack, browser suite, and package smoke were not rerun because WU2 did not ship and unrelated IAM/Operations work was active in the shared worktree.
 
-Backlog 17 and 19 are complete and removed. WU2 and WU3 remain in backlog 18, now blocked by [Cloudflare proxy enforcement](../backlog/47-implement-cloudflare-proxy-enforcement.md). Verify-first proved that Cloudflare app, Control, and Operations routes still depend on in-process enforcement; deleting it before the accepted thin Worker exists would break or weaken that composition. This sprint therefore does not claim that the proxy is the only enforcement point on Cloudflare.
+Backlog 17 and 19 are complete and removed. WU2 and WU3 remain in backlog 18, which was then blocked by [Cloudflare proxy enforcement](sprint-2026-08-01-cloudflare-proxy-enforcement.md). Verify-first proved that Cloudflare app, Control, and Operations routes still depended on in-process enforcement; deleting it before the accepted thin Worker existed would break or weaken that composition. The follow-up is now unblocked by the shipped proxy composition.
 
 **Goal.** Make the proxy the only path-gate enforcement point and make the remaining IAM schema reconcile step honour deploy cancellation.
 

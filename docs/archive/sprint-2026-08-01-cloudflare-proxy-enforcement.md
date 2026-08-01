@@ -3,9 +3,13 @@
 **Started:** 2026-08-01
 **Theme:** implement backlog item 47
 
-## Outcome
+## OUTCOME
 
-Pending.
+Shipped on 2026-08-01. Commit map: implementation → `18d9575`; sprint closure → sprint-closing commit. The Cloudflare provider now composes a public proxy Worker with a private application Worker, reuses the shared TypeScript authorizer, deploys every generated Worker config, and targets migrations, managed variables, and secrets at the application child. Control, Operations, and the worked example use the topology; private children disable `workers.dev`; the runner image contains the proxy dependency closure.
+
+Verification: `cpu-lease run -n 4 -- bun run typecheck` passed for the whole workspace; `bun run lint` passed with the repository's existing seven warnings and 616 informational diagnostics; `cpu-lease run -n 4 -- bun test` passed 1,410 tests with 134 Postgres/S3-backed tests skipped because external services were not configured; the example Lopata witness returned `200 public` and a `302` IAM login bounce for `/private`; `git diff --check` passed. No real Cloudflare account deployment was run.
+
+Deferred: the duplicate in-process SDK enforcement remains for [backlog 18](../backlog/18-shrink-the-app-sdk.md); a shared Cloudflare proxy namespace and real-account deployment remain outside this sprint.
 
 ## Goal
 
@@ -100,7 +104,3 @@ Out of scope:
 | 2026-08-01 | Added proxy package dependencies to the runner image workspace            | Docker workspace test       | The complete first-party dependency closure is copied into the image                                          |
 | 2026-08-01 | Ran the Cloudflare example through Lopata                                 | local curl witness          | `/public/hello` returned `200 public`; `/private` returned the IAM `302` login bounce                         |
 | 2026-08-01 | Ran workspace quality checks                                              | typecheck, lint, and tests  | Typecheck passed; lint passed with existing repo diagnostics; 1410 tests passed and 134 backend tests skipped |
-
-## OUTCOME
-
-Pending.

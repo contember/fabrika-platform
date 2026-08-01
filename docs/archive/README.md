@@ -9,8 +9,10 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Cloudflare proxy enforcement (2026-08-01)](sprint-2026-08-01-cloudflare-proxy-enforcement.md)
+  — puts Cloudflare applications behind the shared TypeScript proxy authorizer and deploys the nested Worker graph.
 - [Auth boundary cleanup (2026-07-31)](sprint-2026-07-31-auth-boundary-cleanup.md)
-  — centralizes gate contracts and makes schema reconciliation cancellable; SDK removal remains blocked by the missing Cloudflare proxy path.
+  — centralizes gate contracts and makes schema reconciliation cancellable; SDK removal remains backlog 18.
 - [Operations functional parity (2026-07-31)](sprint-2026-07-31-operations-functional-parity.md)
   — wires error and spike alert producers, restores complete issue read models
   and console workflows, and exposes redacted delivery evidence.

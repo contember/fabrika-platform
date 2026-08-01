@@ -21,7 +21,7 @@ ingest, grouping, triage, and alert workflows, read
 
 ## Active sprints
 
-- [Cloudflare proxy enforcement](sprints/sprint-2026-08-01-cloudflare-proxy-enforcement.md)
+No active sprint.
 
 ## What's hot
 

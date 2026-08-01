@@ -1,20 +1,21 @@
 ---
 id: 18
 title: Shrink @fabrika/auth now that the proxy enforces
-blocked-by: [./47-implement-cloudflare-proxy-enforcement.md]
+blocked-by: []
 ---
 
 # 18 — Shrink `@fabrika/auth` now that the proxy enforces
 
 [ADR-0007](../decisions/0007-proxy-based-auth-enforcement.md) predicts the app-side
 SDK shrinks a lot once enforcement moves into the proxy. The Zerops proxy path is
-built, but the accepted Cloudflare thin Worker is not. Cloudflare app, Control,
-and Operations routes still depend on the in-process SDK path, so deleting it
-before [item 47](./47-implement-cloudflare-proxy-enforcement.md) would lock out or
-weaken that composition.
+built, and the accepted Cloudflare thin Worker shipped in the
+[Cloudflare proxy enforcement sprint](../archive/sprint-2026-08-01-cloudflare-proxy-enforcement.md).
+Cloudflare app, Control, and Operations routes still retain the in-process SDK
+path as defence in depth, so this follow-up can now remove the duplicate safely.
 
-Once both providers enforce at the proxy, the remaining duplicate SDK path must
-go. Until then, it is required compatibility rather than dead code.
+Both providers now enforce path gates at the proxy. The remaining duplicate SDK
+path must go, but it stays temporarily as defence in depth until this backlog
+item ships.
 
 ## What goes
 
