@@ -136,7 +136,7 @@ async function uploadSourceMap(
 	})
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body))
 	const digestHex = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
-	const response = await fetch('http://errors.localhost:3000/api/artifacts/source-maps/', {
+	const response = await fetch('http://errors.fabrika.localhost:3000/api/artifacts/source-maps/', {
 		method: 'POST',
 		headers: {
 			authorization: `Bearer ${release.uploadBearer}`,

@@ -2,7 +2,7 @@ import { browserTest, byLabel, byRole, expect, getPage, invariant, reload, step 
 import { randomUUID } from 'node:crypto'
 import { scenarioMarker, sendErrorFixture } from './support/fixtures'
 
-const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.localhost:18080'
+const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
 const SCENARIO = 'operations-bulk-status-and-merge'
 const RUN_MARKER = `bulk-${randomUUID().slice(0, 8)}`
 const FIXTURE_MARKER = scenarioMarker(SCENARIO)

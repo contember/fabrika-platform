@@ -28,6 +28,8 @@ export interface Env {
 	IAM_BOOTSTRAP_ADMINS: string
 	/** `local` / `stage` / `prod`. */
 	ENVIRONMENT: string
+	/** Explicit local-only human login bypass. Ignored unless `ENVIRONMENT=local`. */
+	LOCAL_DEV_LOGIN?: string
 
 	// ── propustka-native auth (propustka issues its own tokens; see token.ts / signing.ts) ──
 

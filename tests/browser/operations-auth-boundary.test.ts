@@ -1,7 +1,7 @@
 import { browserTest, expect, getContext, getPage, invariant, step } from '@opice/harness'
 
-const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.localhost:18080'
-const IAM_URL = process.env['FABRIKA_BROWSER_IAM_ORIGIN'] ?? 'http://iam.localhost:18080'
+const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
+const IAM_URL = process.env['FABRIKA_BROWSER_IAM_ORIGIN'] ?? 'http://iam.fabrika.localhost:18080'
 const PROTECTED_FIXTURE_TEXT = ['Browser Notes / test', 'Hidden sibling / secret', 'Browser fixture primary failure']
 
 browserTest(

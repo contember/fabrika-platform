@@ -72,6 +72,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		HUMAN_EMAILS: source['HUMAN_EMAILS'] ?? '[]',
 		IAM_BOOTSTRAP_ADMINS: source['IAM_BOOTSTRAP_ADMINS'] ?? '[]',
 		ENVIRONMENT: environment,
+		LOCAL_DEV_LOGIN: source['LOCAL_DEV_LOGIN'] ?? '',
 		ISSUER: issuer,
 		// Empty off-local is refused by `getSigner`, not here — one owner for that rule.
 		FABRIKA_IAM_SIGNING_KEYS: environmentAliases.read(source, { canonical: 'FABRIKA_IAM_SIGNING_KEYS', legacy: 'PROPUSTKA_SIGNING_KEYS' }) ?? '',

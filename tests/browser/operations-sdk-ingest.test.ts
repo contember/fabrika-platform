@@ -1,7 +1,7 @@
 import { browserTest, byLabel, byRole, expect, getContext, getPage, invariant, step } from '@opice/harness'
 
-const CONTROL_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.localhost:18080'
-const APP_URL = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://notes.localhost:18081'
+const CONTROL_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
+const APP_URL = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://notes.fabrika.localhost:18081'
 const WITNESS_URL = `${APP_URL}/operations-sdk`
 
 interface ManagedConfig {

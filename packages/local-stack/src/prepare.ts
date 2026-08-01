@@ -10,7 +10,7 @@ export const LOCAL_STACK_DIR = resolve(REPO_ROOT, 'packages', 'local-stack')
 export const STATE_DIR = resolve(LOCAL_STACK_DIR, '.state')
 export const COMPOSE_FILE = resolve(LOCAL_STACK_DIR, 'compose.yaml')
 
-const IAM_ISSUER = 'http://iam.localhost:18080'
+const IAM_ISSUER = 'http://iam.fabrika.localhost:18080'
 
 const statePath = (name: string): string => resolve(STATE_DIR, name)
 
@@ -101,19 +101,19 @@ export const localPlatformProxyManifest = (): ProxyManifest => ({
 	apps: [
 		{
 			id: 'iam-local',
-			hosts: ['iam.localhost'],
+			hosts: ['iam.fabrika.localhost'],
 			upstream: 'iam:18080',
 			gates: { rules: [{ path: '/*', kind: 'public' }] },
 		},
 		{
 			id: 'vozka',
-			hosts: ['control.localhost'],
+			hosts: ['control.fabrika.localhost'],
 			upstream: 'control:3000',
 			gates: { rules: [{ path: '/*', kind: 'public' }] },
 		},
 		{
 			id: 'operations',
-			hosts: ['errors.localhost'],
+			hosts: ['errors.fabrika.localhost'],
 			upstream: 'operations:3000',
 			gates: {
 				rules: [
@@ -130,7 +130,7 @@ const generateProxyConfigs = async (): Promise<void> => {
 	const appsManifest: ProxyManifest = {
 		apps: [{
 			id: 'notes',
-			hosts: ['notes.localhost'],
+			hosts: ['notes.fabrika.localhost'],
 			upstream: 'notes:3000',
 			gates: notesGates,
 		}],

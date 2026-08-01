@@ -59,6 +59,35 @@ describe('GET /.well-known/jwks.json', () => {
 })
 
 describe('GET /auth/login', () => {
+	test('creates a real shared-domain admin session when explicit local login is enabled', async () => {
+		const h = createHarness()
+		const issuer = 'http://iam.fabrika.localhost:18080'
+		const redirect = 'http://notes.fabrika.localhost:18081/'
+		const services = h.makeServices({
+			issuer,
+			sessionCookieDomain: 'fabrika.localhost',
+			bootstrapAdmins: new Set(['admin@local.test']),
+			localDevLogin: true,
+		})
+		const res = await handleAuth(
+			new Request(`${issuer}/auth/login?redirect=${encodeURIComponent(redirect)}`),
+			services,
+			AUTH_ENV,
+			ctx(),
+		)
+
+		expect(res.status).toBe(302)
+		expect(res.headers.get('location')).toBe(redirect)
+		const sessionToken = setCookieValue(res, SESSION_COOKIE)
+		expect(sessionToken).toBeTruthy()
+		expect(res.headers.getSetCookie().some((cookie) => cookie.includes('Domain=fabrika.localhost'))).toBe(true)
+
+		const principal = await h.repositories.principals.getUserByExternalId('local-dev-admin')
+		expect(principal?.email).toBe('admin@local.test')
+		const session = await h.repositories.sessions.getActiveSessionByHash(await hashToken(sessionToken ?? ''))
+		expect(session?.principal_id).toBe(principal?.id)
+	})
+
 	test('302s to the IdP with PKCE and sets the in-flight cookie', async () => {
 		const h = createHarness()
 		const res = await handleAuth(

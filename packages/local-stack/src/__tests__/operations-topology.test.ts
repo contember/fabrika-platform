@@ -8,7 +8,7 @@ describe('local Operations topology', () => {
 		expect(operations).toBeDefined()
 		if (operations === undefined) return
 		expect(operations.upstream).toBe('operations:3000')
-		expect(operations.hosts).toEqual(['errors.localhost'])
+		expect(operations.hosts).toEqual(['errors.fabrika.localhost'])
 		const gates = compileGates(operations.gates)
 		expect(applicableGates(gates, '/api/123/envelope/').map((gate) => gate.rule.kind)).toEqual(['public'])
 		expect(applicableGates(gates, '/api/artifacts/source-maps/').map((gate) => gate.rule.kind)).toEqual(['public'])

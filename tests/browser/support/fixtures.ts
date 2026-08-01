@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 
 const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..')
 const FIXTURES_FILE = resolve(REPO_ROOT, 'packages', 'local-stack', '.state', 'browser-fixtures.json')
-const OPERATIONS_ORIGIN = process.env['FABRIKA_BROWSER_OPERATIONS_ORIGIN'] ?? 'http://errors.localhost:18080'
+const OPERATIONS_ORIGIN = process.env['FABRIKA_BROWSER_OPERATIONS_ORIGIN'] ?? 'http://errors.fabrika.localhost:18080'
 
 export type BrowserFixtureSourceName = 'visible' | 'hidden'
 

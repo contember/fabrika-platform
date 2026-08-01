@@ -8,8 +8,8 @@ interface AuthResolveContext {
 	browser: Browser
 }
 
-const CONTROL_ORIGIN = process.env['FABRIKA_BROWSER_ORIGIN'] ?? 'http://control.localhost:18080'
-const APP_ORIGIN = process.env['FABRIKA_BROWSER_APP_ORIGIN'] ?? 'http://notes.localhost:18081'
+const CONTROL_ORIGIN = process.env['FABRIKA_BROWSER_ORIGIN'] ?? 'http://control.fabrika.localhost:18080'
+const APP_ORIGIN = process.env['FABRIKA_BROWSER_APP_ORIGIN'] ?? 'http://notes.fabrika.localhost:18081'
 const EMPTY: StorageState = { cookies: [], origins: [] }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

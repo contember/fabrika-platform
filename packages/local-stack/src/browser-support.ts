@@ -5,8 +5,8 @@ import { resolve } from 'node:path'
 import { compose } from './compose'
 import { prepareLocalStack, STATE_DIR } from './prepare'
 
-const CONTROL_ORIGIN = 'http://control.localhost:18080'
-const OPERATIONS_ORIGIN = 'http://errors.localhost:18080'
+const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
+const OPERATIONS_ORIGIN = 'http://errors.fabrika.localhost:18080'
 const FIXTURES_FILE = resolve(STATE_DIR, 'browser-fixtures.json')
 const IDENTITIES_DIR = resolve(STATE_DIR, 'browser-identities')
 const HOST_USER = hostUser()

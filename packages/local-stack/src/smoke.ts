@@ -18,10 +18,10 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { COMPOSE_FILE, REPO_ROOT, STATE_DIR } from './prepare'
 
-const CONTROL_ORIGIN = 'http://control.localhost:18080'
-const IAM_ORIGIN = 'http://iam.localhost:18080'
-const NOTES_ORIGIN = 'http://notes.localhost:18081'
-const OPERATIONS_ORIGIN = 'http://errors.localhost:18080'
+const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
+const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
+const NOTES_ORIGIN = 'http://notes.fabrika.localhost:18081'
+const OPERATIONS_ORIGIN = 'http://errors.fabrika.localhost:18080'
 const NOTES_APP_ID = 'notes'
 const NOTES_ENVIRONMENT = 'prod'
 const NOTES_DEPLOY_SERVICE = 'notesapi'
@@ -197,10 +197,34 @@ const ensureNamespace = async (provisioningKey: string): Promise<void> => {
 
 const ensureNotesApp = async (provisioningKey: string): Promise<void> => {
 	const apps = await controlRequest('/apps', provisioningKey)
+	const manifest = compileFabrikaManifest(cheapNotesConfig, 'prod')
+	const target = { provider: 'zerops', version: 2, payload: {} }
+	const artifact = {
+		provider: 'zerops',
+		version: zeropsArtifactCodec.version,
+		payload: zeropsArtifactCodec.encode(manifest),
+	}
 	if (requiredArray(apps, 'items').some((item) => property(item, 'id') === 'notes')) {
+		const environments = await controlRequest('/apps/notes/envs', provisioningKey)
+		const existing = requiredArray(environments, 'items').find((item) => property(item, 'env') === 'prod')
+		if (
+			property(existing, 'domain') !== 'notes.fabrika.localhost'
+			|| property(existing, 'publicOrigin') !== 'http://notes.fabrika.localhost:18081'
+		) {
+			await controlRequest('/apps/notes/envs/prod', provisioningKey, {
+				method: 'PUT',
+				body: {
+					domain: 'notes.fabrika.localhost',
+					publicOrigin: 'http://notes.fabrika.localhost:18081',
+					triggerRef: property(existing, 'triggerRef') ?? 'refs/heads/main',
+					namespaceId: property(existing, 'namespaceId') ?? 'apps-prod',
+					target: property(existing, 'target') ?? target,
+					artifact: property(existing, 'artifact') ?? artifact,
+				},
+			})
+		}
 		return
 	}
-	const manifest = compileFabrikaManifest(cheapNotesConfig, 'prod')
 	await controlRequest('/register-app', provisioningKey, {
 		body: {
 			id: 'notes',
@@ -209,15 +233,11 @@ const ensureNotesApp = async (provisioningKey: string): Promise<void> => {
 			workerDir: 'examples/zerops-app',
 			env: 'prod',
 			triggerRef: 'refs/heads/main',
-			domain: 'notes.localhost',
-			publicOrigin: 'http://notes.localhost:18081',
+			domain: 'notes.fabrika.localhost',
+			publicOrigin: 'http://notes.fabrika.localhost:18081',
 			namespaceId: 'apps-prod',
-			target: { provider: 'zerops', version: 2, payload: {} },
-			artifact: {
-				provider: 'zerops',
-				version: zeropsArtifactCodec.version,
-				payload: zeropsArtifactCodec.encode(manifest),
-			},
+			target,
+			artifact,
 		},
 	})
 }

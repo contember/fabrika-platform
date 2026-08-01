@@ -130,6 +130,8 @@ export interface SignSessionOptions {
 export interface MakeServicesOptions {
 	/** ENVIRONMENT value (e.g. 'local', 'stage'). Defaults to 'local'. */
 	environment?: string
+	/** Enable the explicit local-only human login bypass. */
+	localDevLogin?: boolean
 	/** IAM_BOOTSTRAP_ADMINS emails. Defaults to empty. */
 	bootstrapAdmins?: ReadonlySet<string>
 	/** Central human-admission allowlist. Defaults to `{ emailDomains: ['contember.com'], emails: [] }`. */
@@ -151,13 +153,15 @@ export function createHarness(): Harness {
 
 	function makeServices(options: MakeServicesOptions = {}): Services {
 		const issuer = options.issuer ?? 'http://localhost:18191'
+		const environment = options.environment ?? 'local'
 		const config: Config = {
 			human: {
 				emailDomains: options.human?.emailDomains ?? ['contember.com'],
 				emails: options.human?.emails ?? [],
 			},
 			bootstrapAdmins: options.bootstrapAdmins ?? new Set(),
-			environment: options.environment ?? 'local',
+			environment,
+			localDevLogin: environment === 'local' && options.localDevLogin === true,
 			issuer,
 			sessionCookieDomain: options.sessionCookieDomain ?? '',
 		}

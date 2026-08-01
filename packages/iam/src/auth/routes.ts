@@ -11,6 +11,7 @@
  */
 
 import { SESSION_COOKIE } from '@fabrika/auth-core'
+import { LOCAL_DEV_ADMIN_EMAIL, LOCAL_DEV_ADMIN_ID } from '../auth'
 import type { Env, RequestContext } from '../env'
 import { generatePkce, randomToken } from '../oidc'
 import { requestId } from '../request-id'
@@ -37,7 +38,7 @@ export async function handleAuth(request: Request, services: Services, env: Auth
 		return handleJwks(env)
 	}
 	if (url.pathname === '/auth/login') {
-		return handleLogin(request, services, secure)
+		return handleLogin(request, services, secure, ctx)
 	}
 	if (url.pathname === '/auth/callback') {
 		return handleCallback(request, services, secure, ctx)
@@ -59,9 +60,12 @@ async function handleJwks(env: AuthEnv): Promise<Response> {
 
 // ── /auth/login ────────────────────────────────────────────────────────────────
 
-async function handleLogin(request: Request, services: Services, secure: boolean): Promise<Response> {
+async function handleLogin(request: Request, services: Services, secure: boolean, ctx: RequestContext): Promise<Response> {
 	const url = new URL(request.url)
 	const redirect = safeRedirect(url.searchParams.get('redirect'), services.config)
+	if (services.config.localDevLogin) {
+		return handleLocalLogin(request, services, secure, ctx, redirect)
+	}
 
 	const { verifier, challenge } = await generatePkce()
 	const state = randomToken(16)
@@ -75,6 +79,26 @@ async function handleLogin(request: Request, services: Services, secure: boolean
 		serializeCookie(OIDC_COOKIE, flight, { httpOnly: true, secure, sameSite: 'Lax', maxAge: OIDC_TTL_SECONDS, path: '/auth' }),
 	)
 	return new Response(null, { status: 302, headers })
+}
+
+async function handleLocalLogin(
+	request: Request,
+	services: Services,
+	secure: boolean,
+	ctx: RequestContext,
+	redirect: string,
+): Promise<Response> {
+	const resolved = await resolveUserPrincipal(services.repositories.principals, LOCAL_DEV_ADMIN_ID, LOCAL_DEV_ADMIN_EMAIL)
+	if (!resolved.ok) {
+		return authError(`local login refused (${resolved.reason})`, 403)
+	}
+	return issueSession(request, services, secure, ctx, {
+		principalId: resolved.principal.id,
+		idpSub: LOCAL_DEV_ADMIN_ID,
+		email: LOCAL_DEV_ADMIN_EMAIL,
+		redirect,
+		reason: 'local_login',
+	})
 }
 
 // ── /auth/callback ───────────────────────────────────────────────────────────────
@@ -118,14 +142,37 @@ async function handleCallback(request: Request, services: Services, secure: bool
 		return authError(`login refused (${resolved.reason})`, 403)
 	}
 
-	// Mint the SSO session: store only the hash, hand the browser the plaintext in a cookie.
+	return issueSession(request, services, secure, ctx, {
+		principalId: resolved.principal.id,
+		idpSub: identity.sub,
+		email: identity.email,
+		redirect: safeRedirect(flight.redirect, services.config),
+		reason: 'login',
+		clearOidc: true,
+	})
+}
+
+async function issueSession(
+	request: Request,
+	services: Services,
+	secure: boolean,
+	ctx: RequestContext,
+	input: {
+		principalId: string
+		idpSub: string
+		email: string
+		redirect: string
+		reason: string
+		clearOidc?: boolean
+	},
+): Promise<Response> {
 	const sessionToken = randomToken(32)
 	const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS
 	await services.repositories.sessions.createSession({
 		tokenHash: await hashToken(sessionToken),
-		principalId: resolved.principal.id,
-		idpSub: identity.sub,
-		email: identity.email,
+		principalId: input.principalId,
+		idpSub: input.idpSub,
+		email: input.email,
 		expiresAt,
 	})
 	ctx.waitUntil(
@@ -133,15 +180,17 @@ async function handleCallback(request: Request, services: Services, secure: bool
 			requestId: requestId(request),
 			app: 'propustka',
 			kind: 'authenticate',
-			principalId: resolved.principal.id,
+			principalId: input.principalId,
 			decision: 'allow',
-			reason: 'login',
+			reason: input.reason,
 		}),
 	)
 
-	const headers = new Headers({ location: safeRedirect(flight.redirect, services.config) })
+	const headers = new Headers({ location: input.redirect })
 	headers.append('Set-Cookie', sessionCookie(sessionToken, services.config, secure))
-	headers.append('Set-Cookie', clearCookie(OIDC_COOKIE, { path: '/auth', secure }))
+	if (input.clearOidc === true) {
+		headers.append('Set-Cookie', clearCookie(OIDC_COOKIE, { path: '/auth', secure }))
+	}
 	return new Response(null, { status: 302, headers })
 }
 
@@ -270,7 +319,7 @@ export function safeRedirect(raw: string | null, config: Config): string {
 	}
 	const issuerHost = safeHost(config.issuer)
 	const host = target.hostname
-	const isLocal = host === 'localhost' || host === '127.0.0.1'
+	const isLocal = host === 'localhost' || host === '127.0.0.1' || host.endsWith('.localhost')
 	const httpsOk = target.protocol === 'https:' || (target.protocol === 'http:' && isLocal)
 	const domain = config.sessionCookieDomain.replace(/^\./, '')
 	const hostOk = host === issuerHost || isLocal || (domain !== '' && (host === domain || host.endsWith(`.${domain}`)))

@@ -26,7 +26,7 @@ Operations active HTTP health checks against an administrator-configured
 `publicOrigin`.
 
 Local composition deliberately uses
-`http://notes.localhost:18081`; production hardening must not remove that local
+`http://notes.fabrika.localhost:18081`; production hardening must not remove that local
 workflow.
 
 ## Approach / acceptance

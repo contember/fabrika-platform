@@ -2,7 +2,7 @@
 
 Every authored scenario must preserve these properties:
 
-1. Browser mutations use `http://control.localhost:18080/operations/api/rpc`.
+1. Browser mutations use `http://control.fabrika.localhost:18080/operations/api/rpc`.
    Tests do not call the private Operations operator API.
 2. Authenticated contexts contain a real IAM `px_session`. Anonymous contexts
    contain none. External OIDC is not part of this local witness.

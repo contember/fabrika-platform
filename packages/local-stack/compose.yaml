@@ -84,14 +84,15 @@ services:
     environment:
       PORT: "18080"
       ENVIRONMENT: local
-      ISSUER: http://iam.localhost:18080
-      SESSION_COOKIE_DOMAIN: ""
+      ISSUER: http://iam.fabrika.localhost:18080
+      SESSION_COOKIE_DOMAIN: fabrika.localhost
+      LOCAL_DEV_LOGIN: "true"
       HUMAN_EMAIL_DOMAINS: "[]"
       HUMAN_EMAILS: "[]"
-      IAM_BOOTSTRAP_ADMINS: "[]"
+      IAM_BOOTSTRAP_ADMINS: '["admin@local.test"]'
     networks:
       platform:
-        aliases: [iam.localhost]
+        aliases: [iam.fabrika.localhost]
     depends_on:
       platform-db:
         condition: service_healthy
@@ -110,19 +111,19 @@ services:
       FABRIKA_CONTROL_ASSETS_DIR: packages/dashboard/dist
       ENVIRONMENT: local
       DEV: "true"
-      FABRIKA_CONTROL_DOMAIN: http://control.localhost:18080
+      FABRIKA_CONTROL_DOMAIN: http://control.fabrika.localhost:18080
       FABRIKA_CONTROL_BOOTSTRAP_ADMINS: "[]"
-      FABRIKA_IAM_URL: http://iam.localhost:18080
+      FABRIKA_IAM_URL: http://iam.fabrika.localhost:18080
       FABRIKA_IAM_RPC_URL: http://iam:18080
       FABRIKA_OPERATIONS_URL: http://operations:3000
-      OPERATIONS_ARTIFACT_ORIGIN: http://errors.localhost:18080
+      OPERATIONS_ARTIFACT_ORIGIN: http://errors.fabrika.localhost:18080
       FABRIKA_CONTROL_RUN_LOGS_BUCKET: run-logs
       FABRIKA_CONTROL_RUN_LOGS_ENDPOINT: http://minio:9000
       FABRIKA_CONTROL_RUN_LOGS_REGION: us-east-1
       ZEROPS_API_BASE_URL: http://zerops-emulator:3000/api/rest/public
       ZEROPS_CLIENT_ID: local-client
       ZEROPS_PROXY_BUILD_FROM_GIT: https://github.com/contember/fabrika-platform
-      ZEROPS_PROXY_IAM_URL: http://iam.localhost:18080
+      ZEROPS_PROXY_IAM_URL: http://iam.fabrika.localhost:18080
     networks: [platform]
     depends_on:
       platform-db:
@@ -149,13 +150,13 @@ services:
       PORT: "3000"
       ENVIRONMENT: local
       DEV: "true"
-      FABRIKA_OPERATIONS_PUBLIC_HOST: errors.localhost
+      FABRIKA_OPERATIONS_PUBLIC_HOST: errors.fabrika.localhost
       FABRIKA_OPERATIONS_BLOB_BUCKET: operations-payloads
       FABRIKA_OPERATIONS_BLOB_ENDPOINT: http://minio:9000
       FABRIKA_OPERATIONS_BLOB_REGION: us-east-1
       FABRIKA_IAM_RPC_URL: http://iam:18080
       FABRIKA_CONTROL_URL: http://control:3000
-      FABRIKA_IAM_URL: http://iam.localhost:18080
+      FABRIKA_IAM_URL: http://iam.fabrika.localhost:18080
     networks: [platform]
     depends_on:
       platform-db:
@@ -177,16 +178,16 @@ services:
     environment:
       FABRIKA_PROXY_MANIFEST: /local-state/platform-proxy.manifest.json
       FABRIKA_PROXY_PORT: "9000"
-      FABRIKA_IAM_URL: http://iam.localhost:18080
+      FABRIKA_IAM_URL: http://iam.fabrika.localhost:18080
     volumes:
       - ../..:/workspace
       - ./.state:/local-state:ro
     networks:
       platform: {}
       edge:
-        aliases: [iam.localhost]
+        aliases: [iam.fabrika.localhost]
       iam-public:
-        aliases: [iam.localhost]
+        aliases: [iam.fabrika.localhost]
     ports:
       - 127.0.0.1:18080:18080
     depends_on:
@@ -218,9 +219,9 @@ services:
     env_file: .state/notes.env
     environment:
       PORT: "3000"
-      FABRIKA_IAM_ISSUER: http://iam.localhost:18080
+      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
       NOTES_APP_ID: notes
-      FABRIKA_OPERATIONS_DSN: http://00000000000000000000000000000000@errors.localhost:18080/1
+      FABRIKA_OPERATIONS_DSN: http://00000000000000000000000000000000@errors.fabrika.localhost:18080/1
       FABRIKA_RELEASE: fabrika/local-notes/local/default/0000000000000000000000000000000000000000
     networks: [apps-prod, iam-public]
     depends_on:
@@ -239,7 +240,7 @@ services:
     environment:
       FABRIKA_PROXY_MANIFEST: /local-state/apps-proxy.manifest.json
       FABRIKA_PROXY_PORT: "9000"
-      FABRIKA_IAM_URL: http://iam.localhost:18080
+      FABRIKA_IAM_URL: http://iam.fabrika.localhost:18080
     volumes:
       - ../..:/workspace
       - ./.state:/local-state:ro

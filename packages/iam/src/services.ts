@@ -27,6 +27,8 @@ export interface Config {
 	/** Bootstrap-admin emails (normally empty). Always admitted; resolve to the global `admin` role. */
 	readonly bootstrapAdmins: ReadonlySet<string>
 	readonly environment: string
+	/** Create a real local admin session without contacting an external OIDC provider. */
+	readonly localDevLogin: boolean
 	// ── propustka-native auth ──
 	/** propustka's own origin — the `iss` of minted tokens and the OIDC redirect base. */
 	readonly issuer: string
@@ -75,6 +77,7 @@ export function buildServices(env: Env): Services {
 			},
 			bootstrapAdmins: parseBootstrapAdmins(env.IAM_BOOTSTRAP_ADMINS),
 			environment: env.ENVIRONMENT,
+			localDevLogin: env.ENVIRONMENT === 'local' && env.LOCAL_DEV_LOGIN === 'true',
 			issuer: env.ISSUER,
 			sessionCookieDomain: env.SESSION_COOKIE_DOMAIN,
 		},

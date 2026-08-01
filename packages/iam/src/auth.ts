@@ -10,6 +10,7 @@ import { resolveCredential } from './tokens'
  * `principals` (see `seed.dev.sql`) so audit/auth-log foreign keys resolve.
  */
 export const LOCAL_DEV_ADMIN_ID = 'local-dev-admin'
+export const LOCAL_DEV_ADMIN_EMAIL = 'admin@local.test'
 
 /**
  * Fixed identity for the SEEDED PROVISIONING KEY below. A stable `service` principal with this id is

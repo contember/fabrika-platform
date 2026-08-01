@@ -58,12 +58,17 @@ This command removes only the `fabrika-local` Compose volumes and
 
 ## Endpoints
 
-| Component                | URL                              |
-| ------------------------ | -------------------------------- |
-| Unified Fabrika console  | `http://control.localhost:18080` |
-| IAM auth and public JWKS | `http://iam.localhost:18080`     |
-| Operations public ingest | `http://errors.localhost:18080`  |
-| Notes example app        | `http://notes.localhost:18081`   |
+| Component                | URL                                      |
+| ------------------------ | ---------------------------------------- |
+| Unified Fabrika console  | `http://control.fabrika.localhost:18080` |
+| IAM auth and public JWKS | `http://iam.fabrika.localhost:18080`     |
+| Operations public ingest | `http://errors.fabrika.localhost:18080`  |
+| Notes example app        | `http://notes.fabrika.localhost:18081`   |
+
+The local IAM login creates a real `admin@local.test` session without contacting
+an external OIDC provider. It is enabled only by the local composition. All local
+browser origins share the `fabrika.localhost` parent so the SSO cookie reaches the
+console and example applications.
 
 The generated credentials and proxy manifests live under the ignored
 `packages/local-stack/.state/` directory. They remain stable across
