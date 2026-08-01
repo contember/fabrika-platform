@@ -39,6 +39,8 @@
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/engine": "workspace:*",
 		"@fabrika/platform": "workspace:*",
+		"@fabrika/proxy": "workspace:*",
+		"@fabrika/proxy-contract": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
 		"oblaka-iac": "^0.0.18"
 	},

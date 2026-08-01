@@ -1,7 +1,7 @@
 // fabrika's OWN Cloudflare deploy surface. fabrika is just another app the control
 // plane deploys: this single file is the source of truth for fabrika's Cloudflare resource graph, its
-// authz vocabulary, and its deploy pipeline. fabrika gates its own `/api/*` in-process through IAM
-// (src/iam.ts) — there is no Cloudflare Access front door to reconcile.
+// authz vocabulary, and its deploy pipeline. The public proxy enforces the ordered path gates before
+// the application Worker; the application keeps object authorization and a defence-in-depth check.
 // The Cloudflare provider CLI and scripts/bootstrap.ts load THIS to self-deploy.
 //
 // Local dev still uses oblaka directly: `oblaka.ts` is a thin shim that imports `buildControlWorker`
@@ -12,11 +12,39 @@
 // Secrets are never inlined: the GitHub App key/webhook secret + the M4 vault key are declared by
 // NAME in `pipeline.secrets` and provisioned out-of-band (`wrangler secret put` / `.dev.vars`).
 
-import type { AppSchema } from '@fabrika/auth'
+import type { AppGates, AppSchema } from '@fabrika/auth'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import { environmentAliases } from '@fabrika/platform'
-import { D1Database, defineApp, Queue, R2Bucket, type ResourceContext, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
+import {
+	createCloudflareProxyWorker,
+	D1Database,
+	defineApp,
+	Queue,
+	R2Bucket,
+	type ResourceContext,
+	ServiceReference,
+	Worker,
+} from '@fabrika/provider-cloudflare'
 import { ACTIONS, SCOPES, VOZKA_APP_ID } from './src/actions'
+import { CONTROL_GATES } from './src/iam'
+
+const CONTROL_PROXY_GATES: AppGates = {
+	rules: [
+		{ path: '/healthz', kind: 'public' },
+		{ path: '/api/health', kind: 'public' },
+		{ path: '/webhooks/github', kind: 'public' },
+		{ path: '/iam/admin', kind: 'service' },
+		{ path: '/iam/admin', kind: 'human' },
+		{ path: '/iam/admin/*', kind: 'service' },
+		{ path: '/iam/admin/*', kind: 'human' },
+		{ path: '/operations/api', kind: 'service' },
+		{ path: '/operations/api', kind: 'human' },
+		{ path: '/operations/api/*', kind: 'service' },
+		{ path: '/operations/api/*', kind: 'human' },
+		...CONTROL_GATES.rules,
+		{ path: '/*', kind: 'human' },
+	],
+}
 
 /**
  * Build fabrika's full Cloudflare resource graph for one environment. This is the SINGLE source of the
@@ -27,7 +55,7 @@ import { ACTIONS, SCOPES, VOZKA_APP_ID } from './src/actions'
  * Worker can build absolute URLs (e.g. webhook callbacks); it's empty locally, where oblaka's
  * `define` has no domain to pass.
  */
-export const buildControlWorker = (ctx: ResourceContext): Worker => {
+export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 	const { env, domain } = ctx
 	const isLocal = env === 'local'
 	const operationsArtifactOrigin = process.env['OPERATIONS_ARTIFACT_ORIGIN']
@@ -49,11 +77,9 @@ export const buildControlWorker = (ctx: ResourceContext): Worker => {
 		main: './src/index.ts',
 		compatibility_flags: ['nodejs_compat'],
 		compatibility_date: '2025-05-25',
-		// Bind the public hostname (`ctx.domain` ← FABRIKA_CONTROL_DOMAIN) as a Custom Domain — auto-creates the DNS
-		// record + cert + route. Declared HERE as IaC so `wrangler deploy` keeps it (a domain attached only
-		// in the dashboard gets wiped by the next deploy); IAM gates `/api/*` in-process. No
-		// domain (local-dev oblaka shim) → no route → *.workers.dev.
-		routes: domain !== undefined && domain !== '' ? [{ pattern: domain, custom_domain: true }] : [],
+		workers_dev: false,
+		// Public routing belongs to the proxy Worker. The application is reached through its APP service binding.
+		routes: [],
 		observability: { enabled: true },
 		// Cron trigger driving `scheduled` (src/index.ts): poll PUBLIC repos (no GitHub App install)
 		// for new commits every 5 minutes — the pull-based deploy trigger alongside the push webhook.
@@ -119,6 +145,22 @@ export const buildControlWorker = (ctx: ResourceContext): Worker => {
 				RUNNER_SVC: new ServiceReference('vozka-runner'),
 			}),
 		},
+	})
+}
+
+export const buildControlWorker = (ctx: ResourceContext): Worker => {
+	const iamUrl = environmentAliases.read({
+		FABRIKA_IAM_URL: process.env['FABRIKA_IAM_URL'],
+		PROPUSTKA_URL: process.env['PROPUSTKA_URL'],
+	}, { canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' }) ?? ''
+	return createCloudflareProxyWorker({
+		name: 'vozka-proxy',
+		app: buildControlApplicationWorker(ctx),
+		appId: VOZKA_APP_ID,
+		appHost: ctx.domain ?? 'localhost',
+		gates: CONTROL_PROXY_GATES,
+		domain: ctx.domain,
+		iamUrl,
 	})
 }
 

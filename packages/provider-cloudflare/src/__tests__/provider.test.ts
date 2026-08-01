@@ -10,6 +10,7 @@ interface Recorded {
 	readonly schemaSignals: AbortSignal[]
 	readonly logs: string[]
 	readonly provisionedVars: Array<Record<string, unknown> | undefined>
+	readonly applicationVars: Array<Record<string, unknown> | undefined>
 }
 
 const config = (overrides: Partial<CloudflareAppConfigInput> = {}): CloudflareAppConfig =>
@@ -36,8 +37,16 @@ const makeCollaborators = (
 	provision: async (input) => {
 		rec.provisions.push(input)
 		rec.provisionedVars.push(input.definition instanceof Worker ? input.definition.options.vars : undefined)
+		const app = input.definition instanceof Worker ? input.definition.options.bindings?.['APP'] : undefined
+		rec.applicationVars.push(app instanceof Worker ? app.options.vars : undefined)
+		const nested = input.definition instanceof Worker && app instanceof Worker
 		return {
-			wranglerConfigs: [{ path: 'wrangler.jsonc', config: { name: `${input.env}-demo` }, content: '{}' }],
+			wranglerConfigs: nested
+				? [
+					{ path: '/repo/proxy/wrangler.jsonc', config: { name: `${input.env}-demo-proxy` }, content: '{}' },
+					{ path: 'wrangler.jsonc', config: { name: `${input.env}-demo` }, content: '{}' },
+				]
+				: [{ path: 'wrangler.jsonc', config: { name: `${input.env}-demo` }, content: '{}' }],
 			wranglerConfig: { name: `${input.env}-demo` },
 		}
 	},
@@ -96,7 +105,7 @@ const executePlan = async (session: Awaited<ReturnType<typeof open>>): Promise<v
 
 let rec: Recorded
 beforeEach(() => {
-	rec = { commands: [], provisions: [], schemas: [], schemaSignals: [], logs: [], provisionedVars: [] }
+	rec = { commands: [], provisions: [], schemas: [], schemaSignals: [], logs: [], provisionedVars: [], applicationVars: [] }
 })
 
 describe('Cloudflare provider', () => {
@@ -150,6 +159,43 @@ describe('Cloudflare provider', () => {
 			'application variable `FABRIKA_OPERATIONS_DSN` is managed by Fabrika',
 		)
 		expect(rec.logs.join('\n')).not.toContain(dsn)
+	})
+
+	test('targets platform-managed values at the private application Worker', async () => {
+		const app = new Worker({ dir: '.', name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' })
+		const proxy = new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: app }, main: 'proxy-worker.ts' })
+		const authored = config({ resources: () => proxy })
+		const dsn = 'https://operations-public-key@errors.test/1'
+		const session = await open(rec, authored, { dryRun: true, managedEnvironment: { FABRIKA_OPERATIONS_DSN: dsn } })
+		await session.execute('provision-resources')
+		expect(rec.provisionedVars[0]).not.toHaveProperty('FABRIKA_OPERATIONS_DSN')
+		expect(rec.applicationVars[0]).toMatchObject({ FABRIKA_OPERATIONS_DSN: dsn })
+	})
+
+	test('plans nested D1 migration and deploys every generated Worker config', async () => {
+		const app = new Worker({
+			dir: '.',
+			name: 'demo',
+			compatibility_flags: [],
+			bindings: { DB: new D1Database({ name: 'main', migrationsDir: './migrations' }) },
+			main: 'src/index.ts',
+		})
+		const proxy = new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: app }, main: 'proxy-worker.ts' })
+		const authored = config({ resources: () => proxy, pipeline: { workerDir: 'worker', build: 'bun run build', secrets: ['API_KEY'] } })
+		const session = await open(rec, authored, { secrets: { API_KEY: 'secret-value' } })
+		expect(session.plan.steps.map((step) => step.id)).toEqual(['build', 'provision-resources', 'migrate:APP.DB', 'deploy-worker', 'sync-secrets'])
+		await executePlan(session)
+		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
+			['sh', '-c', 'bun run build'],
+			['wrangler', 'd1', 'migrations', 'apply', 'DB', '--remote'],
+			['wrangler', 'deploy'],
+			['wrangler', 'deploy'],
+			['wrangler', 'secret', 'put', 'API_KEY'],
+		])
+		expect(rec.commands[1]?.cwd).toBe('/repo/app/worker')
+		expect(rec.commands[2]?.cwd).toBe('/repo/proxy')
+		expect(rec.commands[3]?.cwd).toBe('/repo/app/worker')
+		expect(rec.commands[4]?.cwd).toBe('/repo/app/worker')
 	})
 
 	test('loads the checkout config and preserves the canonical Cloudflare plan', async () => {

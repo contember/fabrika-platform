@@ -8,11 +8,8 @@ interface Ctx {
 	exec: RequestExecutionContext
 }
 
-// Minimal example app on the native IAM path. The IAM SDK is the whole front door:
-// it enforces the per-path gates (`fabrika.gates.ts`) in-process — there is no Cloudflare Access
-// edge — then resolves the matched credential, verifying the per-app permission token LOCALLY
-// against IAM's JWKS (no per-request round-trip). A human with no session is handed a login
-// URL to bounce to IAM's OIDC login; a `public` path needs no credential at all.
+// Minimal example app behind the shared proxy. The retained IAM SDK verifies the proxy-injected
+// token locally and still rechecks gates for compatibility; the proxy is the structural front door.
 const authMiddleware = (env: Env): Middleware<Ctx> => {
 	return async (request, ctx, next) => {
 		const auth = new IamAuth(env.IAM, 'example-app', { issuer: readIamIssuer(env), gates: exampleGates })
@@ -39,6 +36,7 @@ export const app = defineApp<Env, Ctx>({
 	context: (_env, _request, exec) => ({ exec }),
 	middleware: (env) => [authMiddleware(env)],
 	routes: [
+		route.get('/public/hello', () => new Response('public')),
 		route.get('/', (ctx) => {
 			if (ctx.auth === undefined) {
 				throw new Error('auth middleware did not provide a context')

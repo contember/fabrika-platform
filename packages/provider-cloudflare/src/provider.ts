@@ -1,6 +1,6 @@
 import { createProvider, type ProviderDeploySession, type TypedProviderRun } from '@fabrika/provider-contract'
-import { resolve } from 'node:path'
-import { Worker } from 'oblaka-iac'
+import { dirname, resolve } from 'node:path'
+import { type GeneratedConfig, Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
 import { type CloudflareArtifact, cloudflareArtifactCodec, type CloudflareTarget, cloudflareTargetCodec } from './codec'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
@@ -32,20 +32,57 @@ const withManagedEnvironment = (config: CloudflareAppConfig, authored: Worker, r
 	const managed = run.managedEnvironment
 	const present: Record<string, string> = {}
 	const declared = new Set(config.pipeline?.vars ?? [])
+	const application = applicationWorker(authored)
 	for (const [name, value] of Object.entries(managed)) {
-		if (declared.has(name) || authored.options.vars?.[name] !== undefined || run.vars[name] !== undefined) {
+		if (declared.has(name) || application.options.vars?.[name] !== undefined || run.vars[name] !== undefined) {
 			throw new Error(`cloudflare: application variable \`${name}\` is managed by Fabrika`)
 		}
 		if (value !== null) present[name] = value
 	}
 	if (Object.keys(present).length === 0) return authored
-	return new Worker({
-		...authored.options,
+	const configured = new Worker({
+		...application.options,
 		vars: {
-			...(authored.options.vars ?? {}),
+			...(application.options.vars ?? {}),
 			...present,
 		},
 	})
+	return replaceApplicationWorker(authored, configured)
+}
+
+const applicationWorker = (worker: Worker): Worker => {
+	const child = worker.options.bindings?.['APP']
+	return child instanceof Worker ? applicationWorker(child) : worker
+}
+
+const replaceApplicationWorker = (worker: Worker, replacement: Worker): Worker => {
+	const child = worker.options.bindings?.['APP']
+	if (!(child instanceof Worker)) return replacement
+	return new Worker({
+		...worker.options,
+		bindings: {
+			...(worker.options.bindings ?? {}),
+			APP: replaceApplicationWorker(child, replacement),
+		},
+	})
+}
+
+const databaseOwnerDir = (worker: Worker, binding: string, rootDir: string): string => {
+	const parts = binding.split('.')
+	let current = worker
+	for (let index = 0; index < parts.length - 1; index++) {
+		const part = parts[index]
+		if (part === undefined) return rootDir
+		const child = current.options.bindings?.[part]
+		if (!(child instanceof Worker)) return rootDir
+		current = child
+	}
+	return resolve(rootDir, current.options.dir)
+}
+
+const migrationBinding = (binding: string): string => {
+	const parts = binding.split('.')
+	return parts[parts.length - 1] ?? binding
 }
 
 interface StepEnv {
@@ -54,6 +91,7 @@ interface StepEnv {
 	readonly worker: Worker
 	readonly dir: string
 	readonly cf: CloudflareCollaborators
+	generatedConfigs: readonly GeneratedConfig[]
 }
 
 const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => {
@@ -84,6 +122,7 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 				stateNamespace: target.stateNamespace ?? `${config.id}-state`,
 				dryRun,
 			})
+			env.generatedConfigs = result.wranglerConfigs
 			const names = result.wranglerConfigs.map((item) => item.config.name ?? '(unnamed)').join(', ')
 			run.events.log(dryRun ? `  [dry-run] provisioned (plan-only): ${names}` : `  provisioned: ${names}`)
 			return
@@ -92,29 +131,45 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 			const binding = spec.id.slice('migrate:'.length)
 			const database = findMigratableDatabases(worker).find((item) => item.binding === binding)
 			if (database === undefined) throw new Error(`migrate: no migratable D1 database for binding \`${binding}\``)
+			const commandBinding = migrationBinding(database.binding)
+			const migrationDir = databaseOwnerDir(worker, database.binding, dir)
 			if (dryRun) {
-				run.events.log(`  [dry-run] would run: wrangler d1 migrations apply ${database.binding} --remote`)
+				run.events.log(`  [dry-run] would run: wrangler d1 migrations apply ${commandBinding} --remote in ${migrationDir}`)
 				return
 			}
 			assertRunning(signal)
 			const result = await cf.runCommand({
 				command: 'wrangler',
-				args: ['d1', 'migrations', 'apply', database.binding, '--remote'],
-				cwd: dir,
+				args: ['d1', 'migrations', 'apply', commandBinding, '--remote'],
+				cwd: migrationDir,
 				env: wranglerEnv(target),
 				signal,
 			})
-			if (result.exitCode !== 0) throw commandError(`wrangler d1 migrations apply ${database.binding}`, result)
+			if (result.exitCode !== 0) throw commandError(`wrangler d1 migrations apply ${commandBinding}`, result)
 			return
 		}
 		case 'deploy-worker': {
-			if (dryRun) {
-				run.events.log(`  [dry-run] would run: wrangler deploy in ${dir}`)
+			const configs = env.generatedConfigs
+			if (configs.length === 0) {
+				if (dryRun) {
+					run.events.log(`  [dry-run] would run: wrangler deploy in ${dir}`)
+					return
+				}
+				assertRunning(signal)
+				const result = await cf.runCommand({ command: 'wrangler', args: ['deploy'], cwd: dir, env: wranglerEnv(target), signal })
+				if (result.exitCode !== 0) throw commandError('wrangler deploy', result)
 				return
 			}
-			assertRunning(signal)
-			const result = await cf.runCommand({ command: 'wrangler', args: ['deploy'], cwd: dir, env: wranglerEnv(target), signal })
-			if (result.exitCode !== 0) throw commandError('wrangler deploy', result)
+			for (const generated of configs) {
+				const generatedDir = dirname(resolve(dir, generated.path))
+				if (dryRun) {
+					run.events.log(`  [dry-run] would run: wrangler deploy in ${generatedDir}`)
+					continue
+				}
+				assertRunning(signal)
+				const result = await cf.runCommand({ command: 'wrangler', args: ['deploy'], cwd: generatedDir, env: wranglerEnv(target), signal })
+				if (result.exitCode !== 0) throw commandError('wrangler deploy', result)
+			}
 			return
 		}
 		case 'reconcile-schema': {
@@ -134,6 +189,7 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 			return
 		}
 		case 'sync-secrets': {
+			const secretsDir = resolve(dir, applicationWorker(worker).options.dir)
 			for (const name of config.pipeline?.secrets ?? []) {
 				const value = run.secrets[name]
 				if (value === undefined) throw new Error(`sync-secrets: missing value for secret \`${name}\` (not in run.secrets)`)
@@ -145,7 +201,7 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 				const result = await cf.runCommand({
 					command: 'wrangler',
 					args: ['secret', 'put', name],
-					cwd: dir,
+					cwd: secretsDir,
 					env: wranglerEnv(target),
 					stdin: value,
 					signal,
@@ -175,7 +231,7 @@ export const createCloudflareProvider = (cf: CloudflareCollaborators = defaultCl
 			const dir = workerDir(loaded.config, loaded.cwd)
 			const plan = buildPlan(loaded.config, { appId: run.appId, env: run.env, propustkaUrl: run.target.propustkaUrl }, worker)
 			const byId = new Map(plan.steps.map((step): [string, CloudflareJobSpec] => [step.id, step]))
-			const env: StepEnv = { config: loaded.config, run, worker, dir, cf }
+			const env: StepEnv = { config: loaded.config, run, worker, dir, cf, generatedConfigs: [] }
 			return {
 				plan,
 				execute: async (stepId): Promise<void> => {

@@ -239,29 +239,30 @@ scope.
 
 ## How auth works
 
-Cloudflare apps still enforce authorization through `PropustkaAuth` inside the
-app. The accepted thin Worker proxy is not implemented yet; that gap is
-[backlog 47](../backlog/47-implement-cloudflare-proxy-enforcement.md). The Zerops topology enforces access in a **proxy**
+Both provider compositions enforce authorization in a **proxy**
 ([ADR-0007](../decisions/0007-proxy-based-auth-enforcement.md)). Only the proxy is
 publicly routed; app services stay internal, so bypassing auth stops being possible
 rather than merely discouraged. The proxy is not new code — it is the same
-session→token exchange, cache, and local JWKS verification, relocated into its own
-process. It is Caddy + `forward_auth` on Zerops and a thin Worker on Cloudflare,
-over one shared TypeScript auth service
+session→token exchange, cache, gate matcher, and local JWKS verification, relocated
+into its own process. It is Caddy + `forward_auth` on Zerops and a thin Worker on
+Cloudflare, over one shared TypeScript auth service
 ([ADR-0008](../decisions/0008-caddy-forward-auth-proxy.md)).
 
 The IAM service stays **global** — one identity database, one audit log, one admin
-UI. The proxy is **per deployment namespace**, stateless and horizontally
-scalable. For correlation, the proxy preserves or creates `X-Request-Id` and
-Caddy copies it onto the allowed upstream request. IAM prefers that value, then
+UI. The proxy is stateless and horizontally scalable. Zerops owns one proxy per
+deployment namespace; the current Cloudflare app graph owns one proxy root per
+app environment. Cloudflare application children have no routes and disable
+`workers.dev`. For correlation, the proxy preserves or creates `X-Request-Id`
+and copies it onto the allowed upstream request. IAM prefers that value, then
 `cf-ray`, then a locally generated UUID for audit records.
 
 On Zerops the proxy manifest is a baked deploy artefact. Before an app deploy, the
 control plane compiles every registered app manifest assigned to that namespace,
 writes the JSON to the namespace proxy's service-level
-`FABRIKA_PROXY_MANIFEST_JSON` variable, and rolls the proxy. Missing or malformed
-JSON fails the proxy build. A valid empty app list routes no app and the auth
-service denies every request. The control plane never uses a project-level
+`FABRIKA_PROXY_MANIFEST_JSON` variable, and rolls the proxy. Cloudflare app
+authoring embeds one app manifest in the proxy Worker's vars and binds the app
+Worker under `APP`; the provider deploys the proxy and child configs together.
+Missing or malformed JSON fails closed. The control plane never uses a project-level
 variable for this path.
 
 ## Related reference

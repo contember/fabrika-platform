@@ -1,4 +1,5 @@
-import { defineApp, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
+import { createCloudflareProxyWorker, defineApp, type ResourceContext, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
+import { exampleGates } from './fabrika.gates'
 import { exampleAppId, exampleAppSchema } from './fabrika.schema'
 
 export const buildExampleWorker = (): Worker =>
@@ -9,20 +10,32 @@ export const buildExampleWorker = (): Worker =>
 		compatibility_flags: ['nodejs_compat_v2'],
 		compatibility_date: '2025-10-01',
 		observability: { enabled: true },
-		// Path routes let the local multi-worker demo mount this app below the IAM surface.
-		routes: ['*/demo', '*/demo/*'],
+		workers_dev: false,
+		// Public routing belongs to the proxy Worker. The application is reached through its APP service binding.
+		routes: [],
 		bindings: {
 			IAM: new ServiceReference('propustka-worker'),
 		},
 		vars: {
 			DEV: 'true',
-			FABRIKA_IAM_ISSUER: 'http://localhost:18191',
+			FABRIKA_IAM_ISSUER: process.env.FABRIKA_IAM_URL ?? 'http://localhost:18191',
 		},
+	})
+
+export const buildExampleProxy = (ctx: ResourceContext): Worker =>
+	createCloudflareProxyWorker({
+		name: 'propustka-example-proxy',
+		app: buildExampleWorker(),
+		appId: exampleAppId,
+		appHost: ctx.domain ?? 'localhost',
+		domain: ctx.domain,
+		gates: exampleGates,
+		iamUrl: process.env.FABRIKA_IAM_URL ?? 'http://localhost:18191',
 	})
 
 export default defineApp({
 	id: exampleAppId,
-	resources: buildExampleWorker,
+	resources: buildExampleProxy,
 	schema: exampleAppSchema,
 	pipeline: {
 		workerDir: '.',

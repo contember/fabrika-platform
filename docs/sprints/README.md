@@ -19,4 +19,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-No active sprint.
+- [Cloudflare proxy enforcement](./sprint-2026-08-01-cloudflare-proxy-enforcement.md)

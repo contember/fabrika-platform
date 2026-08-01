@@ -105,3 +105,20 @@ The stateful Zerops emulator implements only the REST calls used by
 app-version lifecycle. A delayed `BUILDING` to `ACTIVE` transition provides a
 restart-reconciliation witness. The emulator does not build code, run
 containers, bind domains, autoscale, provide HA, or reproduce Zerops logs.
+
+## Cloudflare Worker proxy witness
+
+The local stack above exercises the Zerops-shaped Caddy boundary. The Cloudflare
+thin Worker is exercised separately with Lopata:
+
+```bash
+cd packages/iam && bun run oblaka
+cd ../../examples/app && bun run oblaka && bun run dev
+curl -i http://127.0.0.1:18190/public/hello
+curl -i http://127.0.0.1:18190/private
+```
+
+The first request reaches the private example app through the proxy and returns
+`200 public`. The second stops at the proxy and returns a login redirect. Lopata
+must show `APP -> propustka-example-app` and `IAM -> propustka-worker`; the app
+Worker config has no public route and sets `workers_dev: false`.

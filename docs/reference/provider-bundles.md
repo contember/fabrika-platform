@@ -148,6 +148,13 @@ Cloudflare apps import their config surface from
 import { defineApp, Worker } from '@fabrika/provider-cloudflare'
 ```
 
+Cloudflare app resources are composed as a public proxy Worker with a private
+application Worker child. The child has no routes and explicitly disables
+`workers.dev`. The provider preserves the generated Wrangler config for every
+Worker in that graph, deploys each config, and targets application migrations,
+managed variables, and secrets at the child Worker. The proxy embeds only its
+manifest and service bindings; application secrets stay on the child.
+
 The public command exposes:
 
 ```text

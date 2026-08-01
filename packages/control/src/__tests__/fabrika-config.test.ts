@@ -1,5 +1,5 @@
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
-import { type CloudflareAppConfig, D1Database, Queue, R2Bucket, ServiceReference, type Worker } from '@fabrika/provider-cloudflare'
+import { type CloudflareAppConfig, D1Database, Queue, R2Bucket, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
 import { beforeAll, describe, expect, test } from 'bun:test'
 import type { buildControlWorker as BuildControlWorker } from '../../fabrika.config'
 import { ACTIONS, SCOPES, VOZKA_APP_ID } from '../actions'
@@ -27,6 +27,12 @@ function binding(worker: Worker, name: string): unknown {
 	return worker.options.bindings?.[name]
 }
 
+function application(worker: Worker): Worker {
+	const value = binding(worker, 'APP')
+	if (!(value instanceof Worker)) throw new Error('expected proxy APP Worker binding')
+	return value
+}
+
 describe('defineApp(vozka config)', () => {
 	test('exports a valid AppConfig with id `vozka` and a resources builder', () => {
 		expect(config.id).toBe(VOZKA_APP_ID)
@@ -34,25 +40,32 @@ describe('defineApp(vozka config)', () => {
 		expect(typeof config.resources).toBe('function')
 	})
 
-	test('the resource graph builds vozka full binding set (RUNNER_SVC/R2/D1/Queue + IAM off-local)', () => {
+	test('the resource graph puts a public proxy in front of the full vozka app Worker', () => {
 		const worker: Worker = config.resources({ env: 'stage', domain: 'vozka.test.example.com' })
-		expect(worker.options.name).toBe('vozka')
-		expect(worker.options.main).toBe('./src/index.ts')
+		expect(worker.options.name).toBe('vozka-proxy')
+		expect(worker.options.main).toBe('./proxy-worker.ts')
+		expect(worker.options.routes).toEqual([{ pattern: 'vozka.test.example.com', custom_domain: true }])
+		expect(binding(worker, 'IAM')).toBeInstanceOf(ServiceReference)
+		const app = application(worker)
+		expect(app.options.name).toBe('vozka')
+		expect(app.options.main).toBe('./src/index.ts')
+		expect(app.options.routes).toEqual([])
+		expect(app.options.workers_dev).toBe(false)
 
 		// The deploy executor is a SEPARATE worker (vozka-runner): fabrika binds it as a SERVICE, not a
 		// Container — so a deploy of fabrika never resets the container running it. No Container here anymore.
-		expect(binding(worker, 'RUNNER_SVC')).toBeInstanceOf(ServiceReference)
-		expect(binding(worker, 'RUNNER')).toBeUndefined()
-		expect(binding(worker, 'RUN_LOGS')).toBeInstanceOf(R2Bucket)
-		expect(binding(worker, 'DB')).toBeInstanceOf(D1Database)
-		expect(binding(worker, 'DEPLOY_QUEUE')).toBeInstanceOf(Queue)
+		expect(binding(app, 'RUNNER_SVC')).toBeInstanceOf(ServiceReference)
+		expect(binding(app, 'RUNNER')).toBeUndefined()
+		expect(binding(app, 'RUN_LOGS')).toBeInstanceOf(R2Bucket)
+		expect(binding(app, 'DB')).toBeInstanceOf(D1Database)
+		expect(binding(app, 'DEPLOY_QUEUE')).toBeInstanceOf(Queue)
 		// Off-local stages bind the propustka IAM ServiceReference.
-		expect(binding(worker, 'IAM')).toBeInstanceOf(ServiceReference)
-		expect(binding(worker, 'OPERATIONS')).toBeInstanceOf(ServiceReference)
+		expect(binding(app, 'IAM')).toBeInstanceOf(ServiceReference)
+		expect(binding(app, 'OPERATIONS')).toBeInstanceOf(ServiceReference)
 	})
 
 	test('DB declares migrations (drives a migrate step) and the assets SPA is the dashboard dist', () => {
-		const worker = config.resources({ env: 'stage' })
+		const worker = application(config.resources({ env: 'stage' }))
 		const db = binding(worker, 'DB')
 		expect(db).toBeInstanceOf(D1Database)
 		if (db instanceof D1Database) {
@@ -64,7 +77,9 @@ describe('defineApp(vozka config)', () => {
 	})
 
 	test('local omits the off-local service bindings (IAM + Operations + vozka-runner) and runs the FakeIamClient (DEV=true)', () => {
-		const worker = buildControlWorker({ env: 'local' })
+		const proxy = buildControlWorker({ env: 'local' })
+		expect(binding(proxy, 'IAM')).toBeInstanceOf(ServiceReference)
+		const worker = application(proxy)
 		expect(binding(worker, 'IAM')).toBeUndefined()
 		expect(binding(worker, 'OPERATIONS')).toBeUndefined()
 		expect(worker.options.vars?.['DEV']).toBe('true')
@@ -73,7 +88,7 @@ describe('defineApp(vozka config)', () => {
 	})
 
 	test('domain from ctx flows into the FABRIKA_CONTROL_DOMAIN var; off-local DEV is empty', () => {
-		const worker = config.resources({ env: 'stage', domain: 'vozka.test.example.com' })
+		const worker = application(config.resources({ env: 'stage', domain: 'vozka.test.example.com' }))
 		expect(worker.options.vars?.['FABRIKA_CONTROL_DOMAIN']).toBe('vozka.test.example.com')
 		expect(worker.options.vars?.['VOZKA_DOMAIN']).toBeUndefined()
 		expect(worker.options.vars?.['DEV']).toBe('')
@@ -86,7 +101,7 @@ describe('defineApp(vozka config)', () => {
 		process.env['FABRIKA_CONTROL_BOOTSTRAP_ADMINS'] = '["canonical@example.test"]'
 		process.env['VOZKA_BOOTSTRAP_ADMINS'] = '["legacy@example.test"]'
 		try {
-			const worker = buildControlWorker({ env: 'stage' })
+			const worker = application(buildControlWorker({ env: 'stage' }))
 			expect(worker.options.vars?.['FABRIKA_IAM_URL']).toBe('https://iam.example.test')
 			expect(worker.options.vars?.['FABRIKA_CONTROL_BOOTSTRAP_ADMINS']).toBe('["canonical@example.test"]')
 			expect(worker.options.vars?.['PROPUSTKA_URL']).toBeUndefined()
@@ -101,15 +116,15 @@ describe('defineApp(vozka config)', () => {
 
 	test('the public artifact origin is propagated only when configured', () => {
 		delete process.env['OPERATIONS_ARTIFACT_ORIGIN']
-		expect(buildControlWorker({ env: 'stage' }).options.vars?.['OPERATIONS_ARTIFACT_ORIGIN']).toBeUndefined()
+		expect(application(buildControlWorker({ env: 'stage' })).options.vars?.['OPERATIONS_ARTIFACT_ORIGIN']).toBeUndefined()
 		process.env['OPERATIONS_ARTIFACT_ORIGIN'] = 'https://errors.example.test'
-		expect(buildControlWorker({ env: 'stage' }).options.vars?.['OPERATIONS_ARTIFACT_ORIGIN']).toBe('https://errors.example.test')
+		expect(application(buildControlWorker({ env: 'stage' })).options.vars?.['OPERATIONS_ARTIFACT_ORIGIN']).toBe('https://errors.example.test')
 		delete process.env['OPERATIONS_ARTIFACT_ORIGIN']
 	})
 })
 
-// IAM is native — fabrika has no Cloudflare Access edge to declare. Its `/api/*` is gated
-// in-process by IAM middleware (src/iam.ts), not via `config.access`.
+// The proxy owns the public route and evaluates path gates. The app keeps the IAM middleware as
+// defence in depth for the shared Worker runtime.
 
 describe('Schema actions/scopes match src/actions.ts (no drift)', () => {
 	test('the schema action catalog is exactly the ACTIONS constants', () => {

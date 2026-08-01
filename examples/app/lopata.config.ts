@@ -1,12 +1,15 @@
-// Standalone run of just this example app, with the IAM Worker as an auxiliary worker, to
-// exercise the app→IAM RPC path in isolation (the IAM SDK minting/verifying tokens over
-// the `env.IAM` binding).
+// Standalone run of the Cloudflare proxy, private example app, and IAM Worker. This exercises the
+// public proxy→IAM and proxy→app service-binding paths in isolation.
 //
 // For the FULL demo — the admin UI plus this app sharing one local D1 — run `bun run dev` from
-// `packages/iam` instead (its lopata.config.ts runs this app as an auxiliary at `/demo`).
+// `packages/iam` instead (its lopata.config.ts wires the proxy and app as auxiliaries).
 export default {
-	main: 'wrangler.jsonc',
+	main: '../../packages/provider-cloudflare/src/wrangler.jsonc',
 	workers: [
+		{
+			name: 'propustka-example-app',
+			config: 'wrangler.jsonc',
+		},
 		{
 			name: 'propustka-worker',
 			config: '../../packages/iam/wrangler.jsonc',

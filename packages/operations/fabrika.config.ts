@@ -1,5 +1,28 @@
+import type { AppGates } from '@fabrika/auth-core'
+import { OPERATIONS_RELEASE_RECONCILE_PATH, OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'
 import { environmentAliases } from '@fabrika/platform'
-import { D1Database, defineApp, Queue, R2Bucket, type ResourceContext, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
+import {
+	createCloudflareProxyWorker,
+	D1Database,
+	defineApp,
+	Queue,
+	R2Bucket,
+	type ResourceContext,
+	ServiceReference,
+	Worker,
+} from '@fabrika/provider-cloudflare'
+import { OPERATOR_GATES } from './src/app'
+
+const OPERATIONS_PROXY_GATES: AppGates = {
+	rules: [
+		{ path: '/healthz', kind: 'public' },
+		{ path: '/api/*/envelope/', kind: 'public' },
+		{ path: OPERATIONS_SOURCE_MAP_UPLOAD_PATH, kind: 'public' },
+		{ path: '/private/catalog/reconcile', kind: 'service' },
+		{ path: OPERATIONS_RELEASE_RECONCILE_PATH, kind: 'service' },
+		...OPERATOR_GATES.rules,
+	],
+}
 
 export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 	const isLocal = ctx.env === 'local'
@@ -18,7 +41,9 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 		main: './src/worker.ts',
 		compatibility_flags: ['nodejs_compat_v2'],
 		compatibility_date: '2025-10-01',
-		routes: publicHost === '' ? [] : [{ pattern: publicHost, custom_domain: true }],
+		workers_dev: false,
+		// Public routing belongs to the proxy Worker. Operations is reached through its APP service binding.
+		routes: [],
 		observability: { enabled: true },
 		triggers: { crons: ['* * * * *'] },
 		vars: {
@@ -53,9 +78,29 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 	})
 }
 
+export const buildOperationsProxy = (ctx: ResourceContext): Worker => {
+	const publicHost = ctx.domain ?? ''
+	const iamUrl = environmentAliases.read(
+		{
+			FABRIKA_IAM_URL: process.env['FABRIKA_IAM_URL'],
+			PROPUSTKA_URL: process.env['PROPUSTKA_URL'],
+		},
+		{ canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' },
+	) ?? ''
+	return createCloudflareProxyWorker({
+		name: 'operations-proxy',
+		app: buildOperationsWorker(ctx),
+		appId: 'vozka',
+		appHost: publicHost === '' ? 'localhost' : publicHost,
+		domain: ctx.domain,
+		gates: OPERATIONS_PROXY_GATES,
+		iamUrl,
+	})
+}
+
 export default defineApp({
 	id: 'operations',
-	resources: buildOperationsWorker,
+	resources: buildOperationsProxy,
 	pipeline: {
 		workerDir: '.',
 		secrets: ['OPERATIONS_SYNC_KEY'],

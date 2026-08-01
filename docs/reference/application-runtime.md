@@ -40,15 +40,17 @@ emits at most one value-free warning per legacy name in a process.
 
 ## Authorization boundary
 
-The target proxy boundary is complete on Zerops. Cloudflare applications still
-use in-process `PropustkaAuth` until the accepted thin Worker lands in
-[backlog 47](../backlog/47-implement-cloudflare-proxy-enforcement.md); removing
-that path earlier would break the current Cloudflare composition.
+The proxy boundary is complete in both provider compositions. Zerops uses Caddy
+plus the shared TypeScript auth service. Cloudflare authoring creates a public
+proxy Worker with a private application Worker child and the same authorizer.
+The first-party applications still retain their in-process auth path as
+defence in depth until [backlog 18](../backlog/18-shrink-the-app-sdk.md) removes
+the duplicate SDK enforcement.
 
 Where the proxy path exists, proxy gates and procedure requirements are complementary:
 
 - The proxy evaluates the ordered static gate list and prevents unauthorized
-  requests from reaching the private app service.
+  requests from reaching the private app service on both providers.
 - App auth middleware verifies the proxy-injected token and builds the canonical
   `AuthContext` from `@fabrika/auth`.
 - `.require(action, scopeResolver?)` calls `ctx.auth.can()` before the procedure

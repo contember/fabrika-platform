@@ -46,6 +46,8 @@ COPY packages/app ./packages/app
 COPY packages/auth-core ./packages/auth-core
 COPY packages/auth ./packages/auth
 COPY packages/provider-contract ./packages/provider-contract
+COPY packages/proxy-contract ./packages/proxy-contract
+COPY packages/proxy ./packages/proxy
 COPY packages/provider-cloudflare ./packages/provider-cloudflare
 COPY packages/engine ./packages/engine
 COPY packages/platform ./packages/platform

@@ -1,5 +1,5 @@
 import type { ProviderDeployPlan, ProviderJobSpec } from '@fabrika/provider-contract'
-import type { Worker } from 'oblaka-iac'
+import { Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
 
 export type CloudflareStepKind = 'build' | 'provision-resources' | 'migrate' | 'deploy-worker' | 'reconcile-schema' | 'sync-secrets'
@@ -33,12 +33,19 @@ const migratableDatabaseName = (value: unknown): string | null => {
 
 export const findMigratableDatabases = (worker: Worker): MigratableDatabase[] => {
 	const databases: MigratableDatabase[] = []
-	for (const [binding, value] of Object.entries(worker.options.bindings ?? {})) {
-		const name = migratableDatabaseName(value)
-		if (name !== null) {
-			databases.push({ binding, name })
+	const visit = (current: Worker, prefix: string): void => {
+		for (const [binding, value] of Object.entries(current.options.bindings ?? {})) {
+			const qualifiedBinding = prefix === '' ? binding : `${prefix}.${binding}`
+			const name = migratableDatabaseName(value)
+			if (name !== null) {
+				databases.push({ binding: qualifiedBinding, name })
+			}
+			if (value instanceof Worker) {
+				visit(value, qualifiedBinding)
+			}
 		}
 	}
+	visit(worker, '')
 	return databases
 }
 

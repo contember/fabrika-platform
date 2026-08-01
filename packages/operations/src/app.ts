@@ -12,7 +12,7 @@ import type { OperationsDataEnv } from './pipeline.js'
 import { handleOperationsReleaseRequest } from './releases.js'
 
 const INGEST_PATH = /^\/api\/[1-9][0-9]{0,18}\/envelope\/$/
-const OPERATOR_GATES: AppGates = {
+export const OPERATOR_GATES: AppGates = {
 	rules: [
 		{ path: '/api/*', kind: 'service' },
 		{ path: '/api/*', kind: 'human' },

@@ -51,12 +51,12 @@ callers before invoking the same typed RPC dispatcher. Its admin REST and RPC
 surfaces share typed use cases, so policy, audit, hidden-object behavior, and
 request correlation do not diverge by transport.
 
-On Zerops, proxy gates run before application code and decide whether a request
-may reach a private service. Cloudflare still retains in-process gate enforcement
-until [backlog 47](../backlog/47-implement-cloudflare-proxy-enforcement.md)
-implements ADR-0008's thin Worker. Application authorization decides whether the
-resolved principal may perform the requested action on the specific object.
-Neither check replaces the other once both provider paths are complete.
+On both providers, proxy gates run before application code and decide whether a
+request may reach a private service. Cloudflare authoring materializes a public
+proxy Worker and a private application Worker child; its provider lifecycle
+deploys every generated Worker config. Application authorization then decides
+whether the resolved principal may perform the requested action on the specific
+object. Neither check replaces the other.
 
 ## Compatibility HTTP surfaces
 

@@ -12,27 +12,36 @@ tiny Worker so the example runs standalone.
 ## Run it locally (multi-worker lopata)
 
 ```bash
-# from the repo root: build the admin assets the IAM worker serves, then generate both configs
+# from the repo root: generate the IAM config, then generate the proxy + app configs
 cd packages/iam && bun run oblaka
 cd ../../examples/app && bun run oblaka
 
-# run the example as the main worker with the IAM Worker wired in as an auxiliary worker
+# run the proxy as the main worker with the private app and IAM Workers wired in as auxiliaries
 bun run dev          # lopata on http://127.0.0.1:18190
 
-curl http://127.0.0.1:18190/
+curl -i http://127.0.0.1:18190/public/hello
+curl -i http://127.0.0.1:18190/private
 ```
 
-Expected output (no Cloudflare Access in front locally → no Access JWT on the request):
+Expected boundary witness:
 
 ```
-HTTP 401
-{"authenticated":false,"reason":"missing_token"}
+HTTP 200
+public
+
+HTTP 302
+Location: http://localhost:18191/auth/login?redirect=...
 ```
 
-That response **is** the end-to-end proof: `env.IAM.authenticate()` reached the IAM Worker
-over the in-process service binding (`Wired service binding: IAM -> propustka-worker` in the
-lopata log) and the structured failure came back through it. With real IAM credentials, the same call
-returns a resolved principal and `can()` / `scopedTo()` reflect their grants.
+The first response proves that the public gate passed through the proxy and reached the private app
+Worker. The second proves that an unauthenticated protected request stopped in the proxy and bounced
+to IAM. The Lopata log must show `APP -> propustka-example-app` and `IAM -> propustka-worker` service
+bindings. The app Worker has no public route and disables `workers_dev`, so calling its Worker
+directly is not a bypass path.
+
+The Cloudflare proxy uses the same TypeScript authorizer as the Zerops Caddy stack. Unit conformance
+tests cover verified token injection, invalid credentials, login redirects, body streaming, and
+client-token stripping.
 
 ## Declare + push the app's authz schema (authorization-as-code)
 

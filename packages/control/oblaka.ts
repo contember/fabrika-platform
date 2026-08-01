@@ -5,8 +5,8 @@
 //   - `bun run oblaka:deploy` → remote provision (off-local, manual)
 //   - `wrangler d1 migrations apply DB --local` → apply migrations against the local D1
 //
-// oblaka's `define` callback only gets `{ env }` (no domain) — fabrika's domain is a deploy-time var on
-// the provider deploy path; locally there is no public domain, so `buildControlWorker` receives just env.
+// oblaka's `define` callback only gets `{ env }` (no domain) — fabrika's domain is a deploy-time value on
+// the provider deploy path; locally the proxy uses the localhost manifest host.
 //
 // The off-local provider self-deploy path does NOT go through this file — it loads
 // `fabrika.config.ts` directly (CLI / scripts/bootstrap.ts). Keep this shim and fabrika.config.ts in

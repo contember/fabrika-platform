@@ -2,19 +2,19 @@ import type { AppGates } from '@fabrika/auth'
 import { exampleAppId } from './fabrika.schema'
 
 /**
- * The example app's per-path gates, declared in code and enforced IN-PROCESS by the IAM SDK
- * (the successor to the deleted Cloudflare Access edge rules).
+ * The example app's per-path gates, declared in code and enforced by the shared proxy authorizer
+ * before the private application Worker runs.
  *
  * Where `fabrika.schema.ts` declares the app's authz vocabulary, this declares WHICH credential
- * KIND each path requires. There is no reconcile — these rules are pure SDK config. Array order is
- * the precedence (first matching+satisfiable rule wins); a path matching no rule is denied.
+ * KIND each path requires. The Cloudflare composition embeds them in the proxy manifest; there is
+ * no separate gate endpoint. Array order is the precedence (first matching+satisfiable rule wins);
+ * a path matching no rule is denied.
  */
 export const exampleGates: AppGates = {
 	rules: [
-		// Public carve-out (was the `example-app-public` bypass CF app).
+		// Public carve-out.
 		{ path: '/public/*', kind: 'public' },
-		// Gated host: a machine `px_` key (Authorization: Bearer) OR a logged-in human — the two-rule
-		// CF app, now two precedence-ordered gate rules sharing the `/*` glob.
+		// A machine `px_` key (Authorization: Bearer) OR a logged-in human.
 		{ path: '/*', kind: 'service' },
 		{ path: '/*', kind: 'human' },
 	],

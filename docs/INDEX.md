@@ -21,16 +21,16 @@ ingest, grouping, triage, and alert workflows, read
 
 ## Active sprints
 
-No active sprint.
+- [Cloudflare proxy enforcement](sprints/sprint-2026-08-01-cloudflare-proxy-enforcement.md)
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
 
-- **Auth follow-up:** implement the accepted
-  [Cloudflare proxy enforcement path](backlog/47-implement-cloudflare-proxy-enforcement.md), then
-  [shrink the app SDK](backlog/18-shrink-the-app-sdk.md).
+- **Auth follow-up:** remove the duplicate in-process gate path in
+  [backlog 18](backlog/18-shrink-the-app-sdk.md) now that the Cloudflare proxy
+  enforcement path is shipped.
 - **Release activation:** run hosted CI, bootstrap the nineteen npm packages, and prove the tokenless release path in
   [`backlog/25-bootstrap-npm-trusted-publishing.md`](backlog/25-bootstrap-npm-trusted-publishing.md).
 - **External next:** run the resulting composition against a real account in

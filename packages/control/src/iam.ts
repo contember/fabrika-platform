@@ -21,13 +21,13 @@ import { type ACTIONS, SCOPES, VOZKA_APP_ID } from './actions'
 import { error } from './http'
 
 /**
- * The per-path gates fabrika's control surface enforces in-process (the IAM-native successor to
- * the deleted Cloudflare Access edge). Every `/api/*` route admits EITHER a machine `px_` key
+ * The per-path gates fabrika's control surface enforces in-process as defence in depth. The public
+ * Cloudflare proxy uses the same ordered rules before this Worker. Every `/api/*` route admits EITHER a machine `px_` key
  * (automation / CI) OR a logged-in human (the dashboard via SSO) — two precedence-ordered rules
  * sharing the glob, exactly like the example app's two-rule gated host. Health, the webhook and the
  * M2 `POST /api/runs` relay are handled BEFORE this guard (index.ts), so they never reach the gates.
  */
-const CONTROL_GATES: AppGates = {
+export const CONTROL_GATES: AppGates = {
 	rules: [
 		{ path: '/api/*', kind: 'service' },
 		{ path: '/api/*', kind: 'human' },

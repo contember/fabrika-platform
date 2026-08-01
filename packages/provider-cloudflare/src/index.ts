@@ -22,3 +22,5 @@ export type { CloudflareControlOptions, CloudflareRunnerJob, CloudflareStoredTar
 export { buildPlan, findMigratableDatabases } from './plan'
 export type { CloudflareJobSpec, CloudflarePlan, CloudflarePlanInput, CloudflareStepKind, MigratableDatabase } from './plan'
 export { cloudflareProvider, createCloudflareProvider } from './provider'
+export { createCloudflareProxyWorker } from './proxy'
+export type { CloudflareProxyWorkerOptions } from './proxy'
