@@ -75,8 +75,10 @@ Costs, stated plainly:
 - **Moving Cloudflare apps to Secrets Store changes app code** — `env.X` becomes
   `await env.X.get()`. That is a per-app migration, not a platform-side switch.
 - Whether values can be **read back** from the Zerops API is unknown and changes
-  the dashboard UX —
-  [`../backlog/06-can-zerops-secrets-be-read-back.md`](../backlog/06-can-zerops-secrets-be-read-back.md).
+  the dashboard UX. _(Answered 2026-08-03: yes — a write-capable token reads the
+  plaintext back in `content`. See
+  [`../reference/zerops-platform.md`](../reference/zerops-platform.md#verified-live-2026-08-03-account-prg1);
+  the consequence for the dashboard UX is still open.)_
 
 ## Alternatives considered
 

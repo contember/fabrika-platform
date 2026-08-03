@@ -33,11 +33,15 @@ No active sprint.
   enforcement path is shipped.
 - **Release activation:** run hosted CI, bootstrap the nineteen npm packages, and prove the tokenless release path in
   [`backlog/25-bootstrap-npm-trusted-publishing.md`](backlog/25-bootstrap-npm-trusted-publishing.md).
-- **External next:** run the resulting composition against a real account in
-  [`backlog/05-bring-up-on-a-real-zerops-account.md`](backlog/05-bring-up-on-a-real-zerops-account.md).
-  Fix [`39`](backlog/39-settle-zerops-override-semantics.md) and
-  [`41`](backlog/41-write-service-variables-without-a-pre-read.md) first — one decides
-  whether re-apply reconciles or redeploys, the other blocks bring-up's secret-writing step.
+- **Zerops, post-bring-up:** the light tier is **live on a real account** (sprint
+  [`zerops-live-bringup`](archive/sprint-2026-08-03-zerops-live-bringup.md)); the
+  platform facts it settled are in [`reference/zerops-platform.md`](reference/zerops-platform.md).
+  Next: [`41`](backlog/41-write-service-variables-without-a-pre-read.md) — the env write
+  reads first and that read never succeeds, so nothing in `packages/` can write a
+  service variable — then [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md),
+  which blocks every control-plane-triggered deploy. The production two-project shape and
+  custom domains remain in [`05`](backlog/05-bring-up-on-a-real-zerops-account.md);
+  [`39`](backlog/39-settle-zerops-override-semantics.md) is still unexercised.
 - **Operations follow-up:** complete
   [Zerops release artifact correlation](backlog/36-complete-zerops-release-artifact-correlation.md),
   settle [managed-environment activation](backlog/37-activate-zerops-managed-environment-transactionally.md),

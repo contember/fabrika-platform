@@ -174,7 +174,36 @@ Project-level injection into every service is exactly why
 [ADR-0004](../decisions/0004-secrets-live-in-the-platform.md) forbids fabrika from
 ever putting an app secret at project level.
 
-The public contract does not establish a secret-value read-back operation.
+### Verified live (2026-08-03, account `prg1`)
+
+The following were confirmed against a real account and are no longer inferences.
+
+| Behaviour                                                                           | Result                                                                                                                         |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| A variable written through the env API resolves `${service_var}` at container start | **Yes** — identical to one written in `run.envVariables`                                                                       |
+| A BUILD container can read its service's env-API variables directly                 | **No** — every one reads as the empty string, silently                                                                         |
+| `build.envVariables: { X: '${RUNTIME_X}' }` lifts them into the build               | **Yes**, and it resolves nested references too                                                                                 |
+| `GET /service-stack/{id}/user-data`                                                 | **Always 400 `serviceStackNotFound`**, before AND after a successful deploy                                                    |
+| `POST /service-stack/{id}/user-data`                                                | Works from the moment the service exists                                                                                       |
+| `POST /user-data/search` (with `clientId` **and** `serviceStackId`)                 | Works — this is the read path                                                                                                  |
+| Secret value read-back                                                              | **Yes.** Env-API writes are stored `type: SECRET` and `content` returns the plaintext to a write-capable token                 |
+| `run.envVariables` visible through the search endpoint                              | Yes, as `type: ENV`                                                                                                            |
+| Custom variables prefixed `ZEROPS_`                                                 | **Refused** — 400 `userDataZeropsPrefixForbidden`. The prefix is reserved                                                      |
+| `zeropsSetup` in an import without `buildFromGit`                                   | **Refused** — 400 `projectImportInvalidParameter`, `{"iam.buildFromGit": ["parameter is required for use of pipelineConfig"]}` |
+| `enableSubdomainAccess: true` on a never-deployed service                           | **Refused** — "Service stack is not http or https". Needs a deployed HTTP port first                                           |
+| One generated subdomain per HTTP port                                               | **Yes** — `proxy-<host>-<port>.<region>.zerops.app`                                                                            |
+| A version alias such as `alpine/bun@1.3`                                            | Resolves to the newest concrete version (`1.3.9`). `zz catalog` lists only concrete ones                                       |
+| `alpine/go@latest` building Caddy 2.10.2                                            | **Works** — the base is Go 1.22 and Go's automatic toolchain download supplies the rest                                        |
+
+Two consequences worth stating separately, because they are ordering constraints
+rather than facts about a field:
+
+- **Never read before writing a service variable.** The list endpoint's 400 is not
+  "no such service" and not "not deployed yet" — it never succeeds. A reconciler
+  that lists first fails on every environment, always.
+- **A second deploy cannot start while a `userData` synchronisation is running**
+  ("Process of synchronizing userData is already running"). Writing variables and
+  then immediately pushing needs a retry loop.
 
 ## Fabrika placement mapping
 

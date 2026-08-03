@@ -10,11 +10,17 @@ small fleet of apps on more than one cloud. Delivery and Access were merged from
 **Status.** The merge has landed, the Cloudflare path works, and the multi-cloud seams are built: the
 platform ports, static provider bundles, a Postgres/S3/Bun implementation set, a Zerops provider, and
 the auth proxy. The Operations foundation is integrated on both compositions,
-including managed app configuration and the unified console. **None of it has
-been run against a real Zerops account** — the generated artifacts
-validate against Zerops' published JSON schema and the provider is proven in
-dry-run, which is not the same as a deploy that worked. Treat "Zerops support" as well-formed but
-unexercised until someone with an account says otherwise.
+including managed app configuration and the unified console.
+
+**Zerops has now run against a real account** (2026-08-03, `prg1`): the single-project
+`light` tier boots, the proxy enforcement boundary behaves as ADR-0007/ADR-0010 describe,
+and an example app runs behind it. The platform facts that run settled — several of which
+contradict the published documentation — are in
+[`docs/reference/zerops-platform.md`](./docs/reference/zerops-platform.md); read them before
+touching the Zerops path rather than re-deriving them. What is still unexercised: the
+production two-project topology, custom domains, browser SSO, and every deploy the control
+plane triggers itself (there is no git source it can use — `docs/backlog/47`). And nothing in
+`packages/` can write a Zerops service variable today — `docs/backlog/41`.
 
 Read `docs/decisions/` before changing anything structural: much of what looks odd here is odd on
 purpose, and some invariants have already been retired by a later ADR (ADR-0010 amends ADR-0008;

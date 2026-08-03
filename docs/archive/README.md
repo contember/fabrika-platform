@@ -9,6 +9,7 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Zerops live bring-up (2026-08-03)](sprint-2026-08-03-zerops-live-bringup.md) — the light tier on a real account; six defects only an account could surface
 - [Cloudflare proxy enforcement (2026-08-01)](sprint-2026-08-01-cloudflare-proxy-enforcement.md)
   — puts Cloudflare applications behind the shared TypeScript proxy authorizer and deploys the nested Worker graph.
 - [Auth boundary cleanup (2026-07-31)](sprint-2026-07-31-auth-boundary-cleanup.md)

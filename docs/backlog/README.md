@@ -29,7 +29,7 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 
 <!-- one line each: NN — short summary (link). Keep it short. -->
 
-- [05](05-bring-up-on-a-real-zerops-account.md) — **Next.** Everything below the account line is built and schema-valid; nothing has run against a real Zerops account.
+- [05](05-bring-up-on-a-real-zerops-account.md) — The light tier is live on a real account; what remains is the production two-project shape, custom domains, and the git-sourced deploy.
 - [18](18-shrink-the-app-sdk.md) — Delete in-process enforcement from `@fabrika/auth` after the Cloudflare proxy path exists. Keep `redeemKey`.
 - [21](21-rate-limit-the-iam-mint-surface.md) — Deferred with reasons; the limit belongs at the proxy, which can identify a client.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
@@ -41,13 +41,13 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 - [38](38-add-dns-safe-operations-egress.md) — Prevent private-address and DNS-rebinding egress through Operations webhooks and active health checks.
 - [39](39-settle-zerops-override-semantics.md) — `override: true` is written on every service; upstream says runtime-only, and that it replaces rather than updates.
 - [40](40-subdomain-access-is-not-import-settable.md) — `enableSubdomainAccess` does not take effect on a service that has never been deployed.
-- [41](41-write-service-variables-without-a-pre-read.md) — The env write reads first, and that read 400s until the first deploy — which is when bring-up writes every secret.
+- [41](41-write-service-variables-without-a-pre-read.md) — The env write reads first, and that read NEVER succeeds; verified live. Nothing in `packages/` can write a service variable.
 - [42](42-size-the-platform-managed-postgres.md) — Two HA Postgres services declare no `profile`, so both default to the production tier.
 - [43](43-gate-zerops-deploys-on-readiness.md) — No `deploy.readinessCheck` anywhere, and no explicit timeouts on any check.
-- [44](44-make-proxy-manifest-delivery-quoting-safe.md) — The proxy manifest is spliced into a shell command as JSON; the `${…}` form is ambiguous.
 - [45](45-pin-the-zerops-postgres-connection-target.md) — `connectionString` carries no database and no SSL mode; both are driver defaults today.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
-- [06](06-can-zerops-secrets-be-read-back.md) — Near-settled: upstream says a write-capable token returns secret values. Confirm, then decide the UX.
+- [47](47-give-the-zerops-path-a-private-git-source.md) — fabrika's GitHub App never reaches the Zerops path, so a private repository cannot deploy there.
+- [48](48-decide-how-the-proxy-learns-its-public-scheme.md) — The proxy's login redirect returns the browser to `http://`; the fix needs a decision, not a patch.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.
