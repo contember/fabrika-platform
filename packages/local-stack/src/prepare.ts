@@ -167,7 +167,11 @@ const run = async (command: string[]): Promise<void> => {
 
 export const prepareLocalStack = async (): Promise<void> => {
 	mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-	await run(['cpu-lease', 'run', '-n', '2', '--', 'bun', 'run', '--filter', '@fabrika/dashboard', 'build'])
+	// Plain `bun run`. This is a `prepare` script, so it executes on every `bun install` of the
+	// workspace — including inside CI and inside a Zerops build container, neither of which has a
+	// developer's local core-leasing wrapper on PATH. Wrapping it made `bun install --frozen-lockfile`
+	// exit 1 with `Executable not found in $PATH: "cpu-lease"` and took every platform build down with it.
+	await run(['bun', 'run', '--filter', '@fabrika/dashboard', 'build'])
 	await generateSecrets()
 	await generateProxyConfigs()
 	console.info(`Local stack prepared for ${IAM_ISSUER}`)
