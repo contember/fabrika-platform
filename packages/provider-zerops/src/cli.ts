@@ -28,7 +28,7 @@ Options:
   --public-access=<mode>         custom-domain or zerops-subdomain.
   --postgres-type=<type>         Cheap-tier PostgreSQL type.
   --postgres-profile=<profile>   Cheap-tier PostgreSQL profile.
-  --proxy-build-from-git=<url>   Public proxy source; or ZEROPS_PROXY_BUILD_FROM_GIT.
+  --proxy-build-from-git=<url>   Public proxy source; or FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT.
   --control-url=<url>            Control origin; or FABRIKA_CONTROL_URL.
   -h, --help                     Show this help.
 

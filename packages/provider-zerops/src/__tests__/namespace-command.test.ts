@@ -10,7 +10,7 @@ interface Call {
 }
 
 const source = (): Record<string, string | undefined> => ({
-	ZEROPS_PROXY_BUILD_FROM_GIT: 'https://github.com/contember/fabrika-platform',
+	FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT: 'https://github.com/contember/fabrika-platform',
 	FABRIKA_CONTROL_URL: 'https://control.example.test',
 	FABRIKA_CONTROL_TOKEN: 'px_operator_secret',
 })
@@ -113,7 +113,7 @@ describe('fabrika namespace commands', () => {
 			source: {},
 			fetch: recorder(calls),
 			write: () => {},
-		})).rejects.toThrow('--proxy-build-from-git or ZEROPS_PROXY_BUILD_FROM_GIT is required')
+		})).rejects.toThrow('--proxy-build-from-git or FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT is required')
 		expect(calls).toEqual([])
 	})
 

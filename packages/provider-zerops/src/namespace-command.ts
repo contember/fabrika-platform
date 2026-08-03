@@ -67,9 +67,12 @@ const namespacePlan = (
 	args: ZeropsCliArgs,
 	source: Readonly<Record<string, string | undefined>>,
 ): ProviderNamespacePlan => {
+	// `FABRIKA_ZEROPS_*` is canonical because Zerops reserves the bare `ZEROPS_` prefix and refuses to
+	// store a custom variable using it (`userDataZeropsPrefixForbidden`). The old name still answers here
+	// — this reads a CLI process environment, not the platform's variable store — but it is deprecated.
 	const proxyBuildFromGit = required(
-		args.proxyBuildFromGit ?? source['ZEROPS_PROXY_BUILD_FROM_GIT'],
-		'--proxy-build-from-git or ZEROPS_PROXY_BUILD_FROM_GIT',
+		args.proxyBuildFromGit ?? source['FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT'] ?? source['ZEROPS_PROXY_BUILD_FROM_GIT'],
+		'--proxy-build-from-git or FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT',
 	)
 	const operator = createZeropsNamespaceOperator({ proxyBuildFromGit })
 	const options = planOptions(args)

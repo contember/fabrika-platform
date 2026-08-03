@@ -120,10 +120,10 @@ services:
       FABRIKA_CONTROL_RUN_LOGS_BUCKET: run-logs
       FABRIKA_CONTROL_RUN_LOGS_ENDPOINT: http://minio:9000
       FABRIKA_CONTROL_RUN_LOGS_REGION: us-east-1
-      ZEROPS_API_BASE_URL: http://zerops-emulator:3000/api/rest/public
-      ZEROPS_CLIENT_ID: local-client
-      ZEROPS_PROXY_BUILD_FROM_GIT: https://github.com/contember/fabrika-platform
-      ZEROPS_PROXY_IAM_URL: http://iam.fabrika.localhost:18080
+      FABRIKA_ZEROPS_API_BASE_URL: http://zerops-emulator:3000/api/rest/public
+      FABRIKA_ZEROPS_CLIENT_ID: local-client
+      FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT: https://github.com/contember/fabrika-platform
+      FABRIKA_ZEROPS_PROXY_IAM_URL: http://iam.fabrika.localhost:18080
     networks: [platform]
     depends_on:
       platform-db:

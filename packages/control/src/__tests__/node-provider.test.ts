@@ -3,20 +3,49 @@ import { zeropsControlProvider, zeropsNamespaceProcessConfig } from '../node/pro
 import { createHarness } from './helpers/harness'
 
 const namespaceEnvironment = (): Record<string, string | undefined> => ({
+	FABRIKA_ZEROPS_CLIENT_ID: 'client-1',
+	FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT: 'https://github.com/contember/fabrika-platform',
+	FABRIKA_ZEROPS_PROXY_IAM_URL: 'https://iam.example.test',
+	FABRIKA_ZEROPS_PROXY_IAM_KEY: 'px_proxy_placeholder',
+})
+
+const legacyNamespaceEnvironment = (): Record<string, string | undefined> => ({
 	ZEROPS_CLIENT_ID: 'client-1',
 	ZEROPS_PROXY_BUILD_FROM_GIT: 'https://github.com/contember/fabrika-platform',
 	ZEROPS_PROXY_IAM_URL: 'https://iam.example.test',
 	ZEROPS_PROXY_IAM_KEY: 'px_proxy_placeholder',
 })
 
+const EXPECTED = {
+	clientId: 'client-1',
+	proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+	iamUrl: 'https://iam.example.test',
+	iamKey: 'px_proxy_placeholder',
+}
+
 describe('the Zerops namespace process configuration', () => {
 	test('maps every explicit environment variable to the provider contract', () => {
-		expect(zeropsNamespaceProcessConfig(namespaceEnvironment())).toEqual({
-			clientId: 'client-1',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
-			iamUrl: 'https://iam.example.test',
-			iamKey: 'px_proxy_placeholder',
-		})
+		expect(zeropsNamespaceProcessConfig(namespaceEnvironment())).toEqual(EXPECTED)
+	})
+
+	test('no canonical name uses the prefix Zerops reserves for itself', () => {
+		// Verified live: `POST /service-stack/{id}/user-data` answers 400 userDataZeropsPrefixForbidden —
+		// "Custom env variables with 'ZEROPS_' prefix are forbidden." A canonical name that starts with
+		// `ZEROPS_` therefore cannot be written through the env API, which is the only channel a
+		// per-installation secret has on Zerops (ADR-0004). This is what made the control plane
+		// unconfigurable on the platform it was named after.
+		for (const name of Object.keys(namespaceEnvironment())) {
+			expect(name.startsWith('ZEROPS_'), `${name} uses the reserved prefix`).toBe(false)
+		}
+	})
+
+	test('the deprecated names still answer, so an existing installation keeps booting while it renames', () => {
+		expect(zeropsNamespaceProcessConfig(legacyNamespaceEnvironment())).toEqual(EXPECTED)
+	})
+
+	test('and the canonical name wins when both are present', () => {
+		expect(zeropsNamespaceProcessConfig({ ...legacyNamespaceEnvironment(), FABRIKA_ZEROPS_CLIENT_ID: 'canonical' }))
+			.toMatchObject({ clientId: 'canonical' })
 	})
 
 	test('enables namespace lifecycle on the composed provider', () => {
@@ -36,7 +65,7 @@ describe('the Zerops namespace process configuration', () => {
 			DEV: 'true',
 		}, {
 			...namespaceEnvironment(),
-			ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
+			FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
 		})
 
 		if (provider.namespaces === undefined) {
@@ -60,10 +89,10 @@ describe('the Zerops namespace process configuration', () => {
 
 	for (
 		const name of [
-			'ZEROPS_CLIENT_ID',
-			'ZEROPS_PROXY_BUILD_FROM_GIT',
-			'ZEROPS_PROXY_IAM_URL',
-			'ZEROPS_PROXY_IAM_KEY',
+			'FABRIKA_ZEROPS_CLIENT_ID',
+			'FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT',
+			'FABRIKA_ZEROPS_PROXY_IAM_URL',
+			'FABRIKA_ZEROPS_PROXY_IAM_KEY',
 		]
 	) {
 		test(`${name} is explicit and required`, () => {

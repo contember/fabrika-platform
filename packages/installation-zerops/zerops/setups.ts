@@ -142,17 +142,23 @@ const iam: ZeropsYamlSetup = {
  * platforms), `FABRIKA_CONTROL_RUN_LOGS_REGION`, `ENVIRONMENT`, `FABRIKA_CONTROL_DOMAIN`,
  * `FABRIKA_IAM_URL` (the public IAM issuer),
  * `OPERATIONS_ARTIFACT_ORIGIN` (the public proxy origin for source-map upload), `CLOUDFLARE_ACCOUNT_ID`,
- * `FABRIKA_CONTROL_BOOTSTRAP_ADMINS`, `ZEROPS_CLIENT_ID`, `ZEROPS_PROXY_BUILD_FROM_GIT`, and
- * `ZEROPS_PROXY_IAM_URL` (the public IAM origin reachable from application projects).
+ * `FABRIKA_CONTROL_BOOTSTRAP_ADMINS`, `FABRIKA_ZEROPS_CLIENT_ID`, `FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT`, and
+ * `FABRIKA_ZEROPS_PROXY_IAM_URL` (the public IAM origin reachable from application projects).
+ *
+ * The `FABRIKA_` prefix on that last group is not cosmetic: Zerops RESERVES the bare `ZEROPS_` prefix
+ * and rejects any custom variable using it (`userDataZeropsPrefixForbidden`), so the earlier names could
+ * not be written through the env API at all — on the one platform they were named for.
  *
  * Secrets (`envSecrets`): `FABRIKA_IAM_RPC_KEY` (authenticates this process to IAM's RPC surface — the
  * same value IAM holds), `FABRIKA_CONTROL_VAULT_KEY` (the vault KEK; its loss is unrecoverable by design),
  * `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `CLOUDFLARE_API_TOKEN`,
- * `FABRIKA_IAM_PROVISIONING_KEY`, `ZEROPS_PROXY_IAM_KEY` (the same credential IAM receives as
+ * `FABRIKA_IAM_PROVISIONING_KEY`, `FABRIKA_ZEROPS_PROXY_IAM_KEY` (the same credential IAM receives as
  * `FABRIKA_IAM_PROXY_KEY`), `OPERATIONS_SYNC_KEY` (the same catalog credential Operations receives),
- * and — when this control plane deploys to Zerops — `ZEROPS_ACCESS_TOKEN`, the Zerops personal access
- * token. It carries account-wide admin rights and is the single most dangerous thing an installation
- * holds.
+ * and — when this control plane deploys to Zerops — `FABRIKA_ZEROPS_ACCESS_TOKEN`. Give it a Zerops
+ * INTEGRATION token scoped to the projects this installation manages (`POST
+ * /client/{id}/integration-token`, client role `NO_ACCESS`, per-project role `ADMIN`), never a personal
+ * access token: a personal token carries account-wide admin rights and is the single most dangerous
+ * thing an installation could hold.
  *
  * There is NO runner service anywhere in this topology, and that is ADR-0003, not an omission: Zerops
  * has its own CI, so a deploy here is five HTTP calls made by this process.
