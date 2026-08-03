@@ -18,13 +18,14 @@ import { validateYaml } from '../validate'
 
 const compiled = fabrikaTopologies().map((topology) => compileTopology(topology, 'prod'))
 
-const documents = (): Array<{ label: string; document: ZeropsImportDocument }> =>
+const documents = (): Array<{ label: string; document: ZeropsImportDocument; publicService: string }> =>
 	compiled.flatMap((entry) => [
-		{ label: `${entry.topology.id} (provision)`, document: entry.provision.document },
-		{ label: `${entry.topology.id} (steady)`, document: entry.steady.document },
+		{ label: `${entry.topology.id} (provision)`, document: entry.provision.document, publicService: entry.topology.publicService },
+		{ label: `${entry.topology.id} (steady)`, document: entry.steady.document, publicService: entry.topology.publicService },
 	])
 
 const platform = compiled.find((entry) => entry.topology.id === 'platform')
+const light = compiled.find((entry) => entry.topology.id === 'platform-light')
 const apps = compiled.find((entry) => entry.topology.id === 'apps-prod')
 
 const importArtifacts = (): Artifact[] => generatedArtifacts().filter((artifact) => artifact.path.endsWith('.zerops-import.yaml'))
@@ -36,10 +37,12 @@ describe('every generated import document validates against the PUBLISHED JSON s
 		})
 	}
 
-	test('all four documents exist — provisioning and steady state, for both projects', () => {
+	test('all six documents exist — provisioning and steady state, for both tiers and the apps project', () => {
 		expect(importArtifacts().map((artifact) => artifact.path)).toEqual([
 			'packages/installation-zerops/zerops/generated/platform.provision.zerops-import.yaml',
 			'packages/installation-zerops/zerops/generated/platform.zerops-import.yaml',
+			'packages/installation-zerops/zerops/generated/platform-light.provision.zerops-import.yaml',
+			'packages/installation-zerops/zerops/generated/platform-light.zerops-import.yaml',
 			'packages/installation-zerops/zerops/generated/apps-prod.provision.zerops-import.yaml',
 			'packages/installation-zerops/zerops/generated/apps-prod.zerops-import.yaml',
 		])
@@ -66,8 +69,9 @@ describe('the topology is the one ADR-0006 describes', () => {
 		expect(apps?.steady.document.project?.name).toBe('apps-prod')
 	})
 
-	test('corePackage is stated explicitly on both — it cannot be downgraded, so a default is a decision nobody made', () => {
+	test('corePackage is stated explicitly on all three — it cannot be downgraded, so a default is a decision nobody made', () => {
 		expect(platform?.steady.document.project?.corePackage).toBe('SERIOUS')
+		expect(light?.steady.document.project?.corePackage).toBe('LIGHT')
 		expect(apps?.steady.document.project?.corePackage).toBe('SERIOUS')
 		const noCorePackage: ZeropsImportDocument = { project: { name: 'p', envIsolation: 'service' }, services: [] }
 		expect(() => assertCorePackageIsExplicit(noCorePackage)).toThrow('must state its corePackage')
@@ -87,6 +91,36 @@ describe('the topology is the one ADR-0006 describes', () => {
 		const operationsStorage = platform?.steady.document.services.find((service) => service.hostname === 'operationsstorage')
 		expect(operationsStorage?.objectStoragePolicy).toBe('private')
 		expect(operationsStorage?.enableCdn).toBe(false)
+	})
+
+	test('the light tier is the same six roles on ONE database and ONE bucket', () => {
+		expect(light?.steady.document.services.map((service) => service.hostname)).toEqual([
+			'db',
+			'storage',
+			'iam',
+			'operations',
+			'control',
+			'proxy',
+		])
+		// The point of the tier: no `operationsdb`, no `operationsstorage`. Which schema and which key
+		// prefix each service uses is per-installation configuration, not a second data service.
+		expect(light?.steady.document.services.some((service) => service.hostname.startsWith('operations') && service.hostname !== 'operations'))
+			.toBe(false)
+	})
+
+	test('the light tier trades availability, not isolation: single Postgres, one container, still private', () => {
+		const services = new Map(light?.steady.document.services.map((service) => [service.hostname, service]))
+		expect(services.get('db')?.type).toBe('postgresql:single@18')
+		expect(services.get('db')?.mode).toBeUndefined()
+		expect(services.get('storage')?.objectStoragePolicy).toBe('private')
+		expect(services.get('storage')?.enableCdn).toBe(false)
+		for (const hostname of ['iam', 'operations', 'control', 'proxy']) {
+			expect(services.get(hostname)?.minContainers).toBe(1)
+		}
+		// Everything but the proxy stays off the internet, exactly as on the standard tier.
+		for (const hostname of ['iam', 'operations', 'control']) {
+			expect(services.get(hostname)?.enableSubdomainAccess).toBe(false)
+		}
 	})
 
 	test('Operations has an isolated HA database and no public route of its own', () => {
@@ -137,19 +171,35 @@ describe('ADR-0004 — isolation and the absence of secrets, on the FINISHED doc
 })
 
 describe('ADR-0007 — the proxy is the only publicly routed service', () => {
-	for (const { label, document } of documents()) {
-		test(`${label}: nothing enables subdomain access, and every runtime service says so explicitly`, () => {
-			expect(document.services.filter((service) => service.enableSubdomainAccess === true)).toEqual([])
-			// The runtime services state `false` rather than relying on the platform default, so enabling it
-			// is a visible diff and the re-applied import corrects a GUI change.
+	for (const { label, document, publicService } of documents()) {
+		test(`${label}: only the declared public service may be routed, and every runtime service states its answer`, () => {
+			// The generalization the light tier forces: `platform` and `apps-prod` publish through a custom
+			// domain and so route NOTHING from the import, while `platform-light` is a single-project
+			// installation with no second project to put a domain in front of and takes the subdomain. The
+			// invariant was never "nothing is public" — it is ADR-0007's "only the proxy", which is what
+			// `publicService` names and what `assertOnlyPublicService` enforces.
+			const routed = document.services.filter((service) => service.enableSubdomainAccess === true).map((service) => service.hostname)
+			expect(routed.every((hostname) => hostname === publicService)).toBe(true)
+			expect(() => assertOnlyPublicService(document, publicService)).not.toThrow()
+			// The runtime services state their answer rather than relying on the platform default, so
+			// enabling it is a visible diff and the re-applied import corrects a GUI change.
 			for (const hostname of ['iam', 'control', 'proxy']) {
 				const service = document.services.find((entry) => entry.hostname === hostname)
 				if (service !== undefined) {
-					expect(service.enableSubdomainAccess).toBe(false)
+					expect(service.enableSubdomainAccess).toBe(hostname === publicService ? routed.includes(hostname) : false)
 				}
 			}
 		})
 	}
+
+	test('the standard platform routes nothing from the import — its domain is bound out of band', () => {
+		expect(platform?.steady.document.services.filter((service) => service.enableSubdomainAccess === true)).toEqual([])
+	})
+
+	test('the light platform routes the proxy and nothing else', () => {
+		expect(light?.steady.document.services.filter((service) => service.enableSubdomainAccess === true).map((service) => service.hostname))
+			.toEqual([PROXY_HOSTNAME])
+	})
 
 	test('the `zerops-subdomain` variant enables it on the PROXY and on nothing else', () => {
 		const document = compileImport({ target: platformTopology({ env: 'dev', publicAccess: 'zerops-subdomain' }).target, ctx: { env: 'dev' } })

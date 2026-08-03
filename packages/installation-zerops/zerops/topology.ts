@@ -63,11 +63,38 @@ import { assertTopologyInvariants } from './invariants'
  */
 export type PublicAccess = 'custom-domain' | 'zerops-subdomain'
 
+/**
+ * How much platform an installation pays for.
+ *
+ * `standard` is the production shape: HA Postgres, a separate database and bucket for Operations, and
+ * enough containers that no single one is a point of failure.
+ *
+ * `light` is one project, one `postgresql:single@18` and one bucket shared by IAM, Operations, control
+ * AND the apps deployed alongside them, at one container per service. It exists because the standard
+ * shape costs ~13 containers before a single application is deployed, which is more platform than a
+ * small fleet — or an evaluation — can justify.
+ *
+ * Sharing is safe rather than merely cheap, and that is a property of the code, not of this comment:
+ *
+ *   • The three services' table names do not intersect (IAM 10, Operations 24, control 16), and
+ *     ADR-0017 already gives each its own migration ledger and advisory lock, so one database holds
+ *     all three without coordination.
+ *   • Their blob keys are prefix-disjoint — control writes `runs/`, Operations writes `events/`,
+ *     `dead/` and `source-maps/` — so one bucket cannot collide.
+ *
+ * What `light` genuinely gives up is FAILURE-DOMAIN isolation: Operations' high-volume error history
+ * now shares capacity with the identity path, and losing the one database loses all three services.
+ * That is the trade, and it is why `standard` remains the default rather than the special case.
+ */
+export type PlatformTier = 'standard' | 'light'
+
 export interface TopologyOptions {
 	/** Environment label handed to `services(ctx)`. Part of the project name, so it lands in the GUI too. */
 	env: string
 	/** How the proxy is published. Production is `custom-domain`. */
 	publicAccess?: PublicAccess
+	/** How much platform to provision. Defaults to `standard`. */
+	tier?: PlatformTier
 }
 
 /** One project's topology plus the facts the invariant checks need. */
@@ -119,6 +146,10 @@ const runtime = (
  */
 export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 	const publicAccess = options.publicAccess ?? 'custom-domain'
+	const tier = options.tier ?? 'standard'
+	if (tier === 'light') {
+		return lightPlatformTopology(options, publicAccess)
+	}
 	return {
 		id: 'platform',
 		publicService: PROXY_HOSTNAME,
@@ -222,6 +253,66 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 }
 
 /**
+ * The **light** platform: the same six roles in one project, on shared data services.
+ *
+ * Deliberately NOT a parameterized variation of the standard declaration above. The two differ in
+ * which services exist, not merely in their sizes, and a single declaration threaded with conditionals
+ * would make both harder to read than either is alone — the standard topology's per-field commentary is
+ * the reason that file is worth reading at all.
+ *
+ * `corePackage: LIGHT` is stated rather than defaulted for exactly the reason `assertCorePackageIsExplicit`
+ * exists: it is upgrade-only, and an installation that starts here should have chosen to.
+ */
+const lightPlatformTopology = (options: TopologyOptions, publicAccess: PublicAccess): ProjectTopology => ({
+	id: 'platform-light',
+	publicService: PROXY_HOSTNAME,
+	target: {
+		platform: 'zerops',
+		project: {
+			name: 'platform',
+			description: 'fabrika light tier: control plane, Operations, IAM, the auth proxy and the apps they serve, on shared data services.',
+			corePackage: 'LIGHT',
+			tags: ['fabrika', 'platform', 'light', options.env],
+		},
+		services: () => [
+			{
+				// ONE database for IAM, control, Operations and every app in this project. Which schema each
+				// one gets is not expressed here — it is `FABRIKA_*_DATABASE_URL`, written per installation
+				// through the env API, because this same repository-root `zerops.yaml` serves both tiers and
+				// a `${operationsdb_connectionString}` baked into it would name a service `light` does not have.
+				hostname: 'db',
+				type: 'postgresql:single@18',
+				priority: 100,
+			},
+			{
+				// ONE bucket. Prefix-disjoint by construction: `runs/` (control) vs `events/`, `dead/` and
+				// `source-maps/` (Operations).
+				hostname: 'storage',
+				type: 'object-storage',
+				objectStorageSize: 25,
+				objectStoragePolicy: 'private',
+				enableCdn: false,
+				priority: 100,
+			},
+			runtime({ hostname: 'iam', type: 'alpine/bun@1.3', priority: 50, minContainers: 1, maxContainers: 2 }),
+			runtime({ hostname: 'operations', type: 'alpine/bun@1.3', priority: 40, minContainers: 1, maxContainers: 2 }),
+			runtime({ hostname: 'control', type: 'alpine/bun@1.3', priority: 30, minContainers: 1, maxContainers: 2 }),
+			runtime({
+				hostname: PROXY_HOSTNAME,
+				type: 'alpine@3.21',
+				priority: 10,
+				public: publicAccess === 'zerops-subdomain',
+				// Still the only publicly routed service (ADR-0007). One container is a real availability
+				// trade and the reason this tier is not for production; it is not a relaxation of the rule
+				// about WHICH service faces the internet.
+				minContainers: 1,
+				maxContainers: 2,
+			}),
+		],
+	},
+})
+
+/**
  * An application namespace: one proxy plus the namespace-owned resources selected by its preset.
  *
  * This is only an adapter over the provider-owned namespace compiler. The control plane uses that same
@@ -276,6 +367,10 @@ export const appsTopology = (options: AppsTopologyOptions): ProjectTopology => {
 /** The topologies this repo commits generated documents for. */
 export const fabrikaTopologies = (): ProjectTopology[] => [
 	platformTopology({ env: 'prod' }),
+	// The light tier is committed for the same reason the other two are: an operator applies the file, so
+	// it should be reviewable in a diff. `zerops-subdomain` because a single-project installation has no
+	// second project to bind a custom domain in front of, and this tier is where a throwaway starts.
+	platformTopology({ env: 'prod', tier: 'light', publicAccess: 'zerops-subdomain' }),
 	appsTopology({ env: 'prod', corePackage: 'SERIOUS' }),
 ]
 

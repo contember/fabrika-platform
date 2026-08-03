@@ -77,8 +77,9 @@ const zeropsYamlArtifact = (): Artifact => ({
 		'service hostname, which is why `iam`, `operations`, `control` and `proxy` below are also hostnames in',
 		'packages/installation-zerops/zerops/generated/*.zerops-import.yaml.',
 		'',
-		'NO SECRETS AND NO PER-INSTALLATION VALUES ARE IN HERE. `${x_y}` is a REFERENCE to another',
-		"service's platform-held variable, never a value. Public origins, OIDC coordinates and every",
+		'NO SECRETS AND NO PER-INSTALLATION VALUES ARE IN HERE — including no `${x_y}` reference to a',
+		'DATA service, because which data services exist differs between the standard and light tiers.',
+		'Database and object-storage coordinates, public origins, OIDC coordinates, ENVIRONMENT and every',
 		'secret are service-level variables written through the env API (ADR-0004).',
 	]) + renderYaml(fabrikaZeropsYaml),
 })

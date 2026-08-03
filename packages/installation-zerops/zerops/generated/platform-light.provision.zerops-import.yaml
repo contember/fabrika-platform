@@ -1,0 +1,76 @@
+# GENERATED FILE — DO NOT EDIT BY HAND.
+#
+# Source: packages/installation-zerops/zerops/topology.ts
+# Regenerate: bun run --filter @fabrika/installation-zerops gen
+#
+# Apply with: POST /client/{clientId}/project/import  { yaml }
+#
+# `envIsolation: service` at BOTH levels and the absence of any project-level `envVariables` are
+# written by the compiler, not by the declaration, and re-checked before serialization (ADR-0004).
+#
+project:
+  name: platform
+  envIsolation: service
+  description: "fabrika light tier: control plane, Operations, IAM, the auth proxy and the apps they serve, on shared data services."
+  corePackage: LIGHT
+  tags:
+    - fabrika
+    - platform
+    - light
+    - prod
+services:
+  - hostname: db
+    type: "postgresql:single@18"
+    envIsolation: service
+    override: true
+    priority: 100
+    startWithoutCode: true
+  - hostname: storage
+    type: object-storage
+    envIsolation: service
+    override: true
+    objectStorageSize: 25
+    objectStoragePolicy: private
+    priority: 100
+    enableCdn: false
+    startWithoutCode: true
+  - hostname: iam
+    type: alpine/bun@1.3
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: false
+    priority: 50
+    minContainers: 1
+    maxContainers: 2
+    zeropsSetup: iam
+    startWithoutCode: true
+  - hostname: operations
+    type: alpine/bun@1.3
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: false
+    priority: 40
+    minContainers: 1
+    maxContainers: 2
+    zeropsSetup: operations
+    startWithoutCode: true
+  - hostname: control
+    type: alpine/bun@1.3
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: false
+    priority: 30
+    minContainers: 1
+    maxContainers: 2
+    zeropsSetup: control
+    startWithoutCode: true
+  - hostname: proxy
+    type: alpine@3.21
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: true
+    priority: 10
+    minContainers: 1
+    maxContainers: 2
+    zeropsSetup: proxy
+    startWithoutCode: true

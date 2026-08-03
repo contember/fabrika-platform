@@ -8,8 +8,9 @@
 # service hostname, which is why `iam`, `operations`, `control` and `proxy` below are also hostnames in
 # packages/installation-zerops/zerops/generated/*.zerops-import.yaml.
 #
-# NO SECRETS AND NO PER-INSTALLATION VALUES ARE IN HERE. `${x_y}` is a REFERENCE to another
-# service's platform-held variable, never a value. Public origins, OIDC coordinates and every
+# NO SECRETS AND NO PER-INSTALLATION VALUES ARE IN HERE — including no `${x_y}` reference to a
+# DATA service, because which data services exist differs between the standard and light tiers.
+# Database and object-storage coordinates, public origins, OIDC coordinates, ENVIRONMENT and every
 # secret are service-level variables written through the env API (ADR-0004).
 #
 zerops:
@@ -44,8 +45,6 @@ zerops:
           allContainers: false
       envVariables:
         PORT: "3000"
-        FABRIKA_IAM_DATABASE_URL: "${db_connectionString}"
-        ENVIRONMENT: prod
   - setup: operations
     build:
       base:
@@ -77,13 +76,6 @@ zerops:
           allContainers: false
       envVariables:
         PORT: "3000"
-        ENVIRONMENT: prod
-        FABRIKA_OPERATIONS_DATABASE_URL: "${operationsdb_connectionString}"
-        FABRIKA_OPERATIONS_BLOB_BUCKET: "${operationsstorage_bucketName}"
-        FABRIKA_OPERATIONS_BLOB_ENDPOINT: "${operationsstorage_apiUrl}"
-        FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID: "${operationsstorage_accessKeyId}"
-        FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY: "${operationsstorage_secretAccessKey}"
-        FABRIKA_OPERATIONS_BLOB_REGION: us-east-1
         FABRIKA_IAM_RPC_URL: "http://iam:3000"
         FABRIKA_CONTROL_URL: "http://control:3000"
   - setup: control
@@ -118,21 +110,16 @@ zerops:
           allContainers: false
       envVariables:
         PORT: "3000"
-        FABRIKA_CONTROL_DATABASE_URL: "${db_connectionString}"
         FABRIKA_CONTROL_ASSETS_DIR: packages/dashboard/dist
-        ENVIRONMENT: prod
         FABRIKA_IAM_RPC_URL: "http://iam:3000"
         FABRIKA_OPERATIONS_URL: "http://operations:3000"
-        FABRIKA_CONTROL_RUN_LOGS_BUCKET: "${storage_bucketName}"
-        FABRIKA_CONTROL_RUN_LOGS_ENDPOINT: "${storage_apiUrl}"
-        FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID: "${storage_accessKeyId}"
-        FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY: "${storage_secretAccessKey}"
-        FABRIKA_CONTROL_RUN_LOGS_REGION: us-east-1
   - setup: proxy
     build:
       base:
         - alpine/go@latest
         - alpine/bun@1.3
+      envVariables:
+        FABRIKA_PROXY_MANIFEST_JSON: "${RUNTIME_FABRIKA_PROXY_MANIFEST_JSON}"
       prepareCommands:
         - "CGO_ENABLED=0 GOBIN=/tmp/gobin go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.10.2"
       buildCommands:

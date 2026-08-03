@@ -43,14 +43,46 @@ describe('one root file, several named setups — the merged-file decision, chec
 		expect(setupNames('zerops.yaml')).toEqual(['iam', 'operations', 'control', 'proxy'])
 	})
 
-	test('the root file emits only canonical IAM and Control environment names', () => {
+	test('the root file emits only canonical fabrika environment names', () => {
 		const yaml = read('zerops.yaml')
-		expect(yaml).toContain('FABRIKA_IAM_DATABASE_URL:')
 		expect(yaml).toContain('FABRIKA_IAM_RPC_URL:')
-		expect(yaml).toContain('FABRIKA_CONTROL_DATABASE_URL:')
-		expect(yaml).toContain('FABRIKA_CONTROL_RUN_LOGS_BUCKET:')
+		expect(yaml).toContain('FABRIKA_OPERATIONS_URL:')
+		expect(yaml).toContain('FABRIKA_CONTROL_ASSETS_DIR:')
 		expect(yaml).not.toContain('PROPUSTKA_')
 		expect(yaml).not.toContain('VOZKA_')
+	})
+
+	test('no DATA-service reference survives in the committed file — they name services a tier may not have', () => {
+		// The rule this file states about itself: it carries only what is true for EVERY installation.
+		// `${operationsdb_connectionString}` is not, because the light tier has no `operationsdb`, so every
+		// data reference now travels through the env API instead. Verified live: an env-API variable
+		// resolves `${x_y}` at container start exactly as one written here would have.
+		const yaml = read('zerops.yaml')
+		for (const reference of ['${db_', '${operationsdb_', '${storage_', '${operationsstorage_']) {
+			expect(yaml).not.toContain(reference)
+		}
+		for (const name of ['FABRIKA_IAM_DATABASE_URL', 'FABRIKA_CONTROL_DATABASE_URL', 'FABRIKA_OPERATIONS_DATABASE_URL']) {
+			expect(yaml).not.toContain(`${name}:`)
+		}
+	})
+
+	test('ENVIRONMENT is per-installation too, not baked to `prod`', () => {
+		expect(read('zerops.yaml')).not.toContain('ENVIRONMENT:')
+	})
+
+	test('the proxy build lifts its manifest out of the runtime store — a build sees nothing else', () => {
+		// Verified live: a build container reads its service env-API variables as the EMPTY STRING, with no
+		// error. Without this bridge the manifest file would be empty, `generate-config.ts` would exit
+		// non-zero, and the proxy would be undeployable on Zerops. `${RUNTIME_x}` is the only channel that
+		// works, and it resolves nested references too.
+		const document = parseYaml(read('zerops.yaml'))
+		if (typeof document !== 'object' || document === null || !('zerops' in document) || !Array.isArray(document.zerops)) {
+			throw new Error('zerops.yaml has no setups')
+		}
+		const proxy = document.zerops.find((entry) => typeof entry === 'object' && entry !== null && 'setup' in entry && entry.setup === 'proxy')
+		expect(proxy).toMatchObject({
+			build: { envVariables: { FABRIKA_PROXY_MANIFEST_JSON: '${RUNTIME_FABRIKA_PROXY_MANIFEST_JSON}' } },
+		})
 	})
 
 	test('Operations maintenance runs every minute to preserve its one-minute spike threshold', () => {

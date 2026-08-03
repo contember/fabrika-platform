@@ -30,20 +30,39 @@
 // ── The rule for `envVariables` in here ────────────────────────────────────────────────────────────
 //
 // This file is COMMITTED and PLAINTEXT, and it is the same file for every installation. So it carries
-// only values that are true for EVERY installation: ports, asset directories, intra-project hostnames,
-// and `${service_variable}` references the platform resolves at runtime. A reference is not a value —
-// `${db_connectionString}` is a pointer into the platform's own variable store, which is precisely where
-// ADR-0004 says the value belongs.
+// only values that are true for EVERY installation: ports, asset directories, and intra-project
+// hostnames. Everything else is a service-level variable written through the env API (ADR-0004).
 //
-// Two categories are therefore deliberately ABSENT, and each setup lists its own below:
+// Three categories are therefore deliberately ABSENT, and each setup lists its own below:
 //
 //   • per-installation configuration (public origins, cookie domains, OIDC coordinates, admission
-//     lists) — set as service-level variables through the env API;
-//   • every secret — set as service-level `envSecrets`, addressed by service, never through a document.
+//     lists, `ENVIRONMENT`) — set as service-level variables through the env API;
+//   • every secret — set as service-level `envSecrets`, addressed by service, never through a document;
+//   • **every `${service_variable}` reference to a DATA service** — `${db_connectionString}`,
+//     `${storage_*}` and friends.
+//
+// That third category used to live here, on the reasoning that a reference is not a value: it points
+// into the platform's variable store rather than carrying a credential. That reasoning is still sound
+// and it is no longer sufficient, because a reference names a SERVICE — and which data services exist
+// is exactly what differs between the `standard` and `light` tiers (`./topology.ts`). One committed
+// file cannot say `${operationsdb_connectionString}` on behalf of a tier that has no `operationsdb`.
+// So the file's own rule decides it: a data-service reference is not true for every installation, and
+// it moves to the env API alongside the origins and the secrets.
+//
+// Verified live: a variable written through the env API resolves `${x_y}` at container start exactly as
+// one written here does, so nothing is lost in the move.
 //
 // (The superseded `packages/iam/zerops.yaml` baked `ISSUER: https://iam.example.com` and
 // `SESSION_COOKIE_DOMAIN: .example.com`. Those are per-installation, and a placeholder domain in a
 // committed file is a value that boots wrong rather than not booting.)
+//
+// ── What a build container can and cannot see ──────────────────────────────────────────────────────
+//
+// Verified live, and it is not what the platform documentation implies: a build container sees NONE of
+// its own service's env-API variables. Reading `${FOO}` in a `buildCommand` yields an empty string, with
+// no error. The bridge is `build.envVariables: { FOO: '${RUNTIME_FOO}' }`, which does work, and which
+// resolves nested references (a `RUNTIME_` lift of a variable that is itself `${db_connectionString}`
+// arrives fully resolved). Only the proxy needs this, and it declares it explicitly below.
 
 import type { ZeropsYaml, ZeropsYamlSetup } from '@fabrika/provider-zerops'
 import { FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
@@ -60,9 +79,12 @@ const WORKSPACE_DEPLOY_FILES = ['package.json', 'bun.lock', 'node_modules', 'pac
 /**
  * The IAM service — identity, tokens, audit, and the private admin API.
  *
- * Per-installation variables (env API): `ISSUER` (this service's public origin; it is the `iss` of every
- * minted token AND the OIDC redirect base, so it must match the domain routed to the proxy in front of
- * it), `SESSION_COOKIE_DOMAIN`, `HUMAN_EMAIL_DOMAINS`, `HUMAN_EMAILS`, `IAM_BOOTSTRAP_ADMINS`,
+ * Per-installation variables (env API): `FABRIKA_IAM_DATABASE_URL` (`${db_connectionString}` — the
+ * DIRECT Postgres port 5432, never pgBouncer on 6432: the migration runner takes a session-level
+ * advisory lock and transaction pooling does not preserve session state across statements),
+ * `ENVIRONMENT`, `ISSUER` (this service's public origin; it is the `iss` of every minted token AND the
+ * OIDC redirect base, so it must match the domain routed to the proxy in front of it),
+ * `SESSION_COOKIE_DOMAIN`, `HUMAN_EMAIL_DOMAINS`, `HUMAN_EMAILS`, `IAM_BOOTSTRAP_ADMINS`,
  * `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_SCOPES`, `OIDC_REQUIRE_VERIFIED_EMAIL`.
  *
  * Secrets (`envSecrets`): `FABRIKA_IAM_SIGNING_KEYS` (ES256 private JWKs — an empty value is refused at
@@ -106,22 +128,19 @@ const iam: ZeropsYamlSetup = {
 		// The Cloudflare `scheduled` handler's replacement, running the same code path. `allContainers:
 		// false` so a horizontally scaled service still prunes once.
 		crontab: [{ timing: '0 3 * * *', command: 'bun packages/iam/src/node/prune.ts', allContainers: false }],
-		envVariables: {
-			PORT: '3000',
-			// The DIRECT Postgres port (5432), not pgBouncer on 6432. Load-bearing: the migration runner
-			// takes a session-level advisory lock, and pgBouncer's transaction pooling does not preserve
-			// session state across statements. `${db_...}` is a reference to the `db` service's own variable
-			// — the value lives in the platform and never appears here.
-			FABRIKA_IAM_DATABASE_URL: '${db_connectionString}',
-			ENVIRONMENT: 'prod',
-		},
+		envVariables: { PORT: '3000' },
 	},
 }
 
 /**
  * The control plane — registry, run lifecycle, vault, webhook, and the dashboard SPA.
  *
- * Per-installation variables (env API): `FABRIKA_CONTROL_DOMAIN`, `FABRIKA_IAM_URL` (the public IAM issuer),
+ * Per-installation variables (env API): `FABRIKA_CONTROL_DATABASE_URL` (`${db_connectionString}`), the
+ * four `FABRIKA_CONTROL_RUN_LOGS_*` coordinates of its object storage (`${storage_bucketName}`,
+ * `${storage_apiUrl}`, `${storage_accessKeyId}`, `${storage_secretAccessKey}` — `S3BlobStore` uses
+ * path-style addressing, which MinIO wants and R2/AWS accept, so one implementation serves both
+ * platforms), `FABRIKA_CONTROL_RUN_LOGS_REGION`, `ENVIRONMENT`, `FABRIKA_CONTROL_DOMAIN`,
+ * `FABRIKA_IAM_URL` (the public IAM issuer),
  * `OPERATIONS_ARTIFACT_ORIGIN` (the public proxy origin for source-map upload), `CLOUDFLARE_ACCOUNT_ID`,
  * `FABRIKA_CONTROL_BOOTSTRAP_ADMINS`, `ZEROPS_CLIENT_ID`, `ZEROPS_PROXY_BUILD_FROM_GIT`, and
  * `ZEROPS_PROXY_IAM_URL` (the public IAM origin reachable from application projects).
@@ -155,23 +174,11 @@ const control: ZeropsYamlSetup = {
 		crontab: [{ timing: '*/5 * * * *', command: 'bun packages/control/src/node/cron.ts', allContainers: false }],
 		envVariables: {
 			PORT: '3000',
-			FABRIKA_CONTROL_DATABASE_URL: '${db_connectionString}',
 			FABRIKA_CONTROL_ASSETS_DIR: 'packages/dashboard/dist',
-			ENVIRONMENT: 'prod',
 			// Intra-project transport for management RPC. `FABRIKA_IAM_URL` is deliberately absent here:
 			// it is the public token issuer and is supplied per installation through the env API.
 			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
 			FABRIKA_OPERATIONS_URL: 'http://operations:3000',
-			// Run logs, in the project's own S3-compatible object storage. All four are REFERENCES to the
-			// `storage` service's generated variables; the credentials themselves live in the platform and
-			// are resolved at container start. Nothing secret is committed by writing a pointer to it.
-			FABRIKA_CONTROL_RUN_LOGS_BUCKET: '${storage_bucketName}',
-			FABRIKA_CONTROL_RUN_LOGS_ENDPOINT: '${storage_apiUrl}',
-			FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID: '${storage_accessKeyId}',
-			FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY: '${storage_secretAccessKey}',
-			// MinIO's conventional region. `S3BlobStore` uses path-style addressing, which MinIO wants and
-			// R2/AWS accept, so the same implementation serves both platforms unchanged.
-			FABRIKA_CONTROL_RUN_LOGS_REGION: 'us-east-1',
 		},
 	},
 }
@@ -180,8 +187,11 @@ const control: ZeropsYamlSetup = {
  * Operations is private inside the platform project. The proxy is its only public ingress and its
  * manifest must route only `/api/{projectId}/envelope/` for the configured public hostname.
  *
- * Per-installation variables (env API): `FABRIKA_OPERATIONS_PUBLIC_HOST` and `FABRIKA_IAM_URL`
- * (the public IAM issuer).
+ * Per-installation variables (env API): `FABRIKA_OPERATIONS_DATABASE_URL`, the five
+ * `FABRIKA_OPERATIONS_BLOB_*` coordinates, `ENVIRONMENT`, `FABRIKA_OPERATIONS_PUBLIC_HOST` and
+ * `FABRIKA_IAM_URL` (the public IAM issuer). On the `standard` tier the data references are
+ * `${operationsdb_*}` and `${operationsstorage_*}`; on `light` they are `${db_*}` and `${storage_*}`,
+ * which is precisely why they cannot be written here.
  *
  * Secrets (`envSecrets`): `OPERATIONS_SYNC_KEY`, shared only with control for catalog projection, and
  * `FABRIKA_IAM_RPC_KEY`, used only for Operations → IAM management RPC.
@@ -203,13 +213,6 @@ const operations: ZeropsYamlSetup = {
 		crontab: [{ timing: '* * * * *', command: 'bun packages/operations/src/node/cron.ts', allContainers: false }],
 		envVariables: {
 			PORT: '3000',
-			ENVIRONMENT: 'prod',
-			FABRIKA_OPERATIONS_DATABASE_URL: '${operationsdb_connectionString}',
-			FABRIKA_OPERATIONS_BLOB_BUCKET: '${operationsstorage_bucketName}',
-			FABRIKA_OPERATIONS_BLOB_ENDPOINT: '${operationsstorage_apiUrl}',
-			FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID: '${operationsstorage_accessKeyId}',
-			FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY: '${operationsstorage_secretAccessKey}',
-			FABRIKA_OPERATIONS_BLOB_REGION: 'us-east-1',
 			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
 			FABRIKA_CONTROL_URL: 'http://control:3000',
 		},
@@ -238,10 +241,17 @@ const operations: ZeropsYamlSetup = {
  * for secrets, so the manifest travels as a service variable and the build materializes it to a file.
  *
  * The control plane writes `FABRIKA_PROXY_MANIFEST_JSON` through the service-level env API and rolls
- * this service before each app deploy (`packages/control/src/node/zerops-proxy.ts`). One live-account fact
- * remains to verify: Zerops documents build variables but does not clearly state whether a build sees
- * its service's runtime variables. If it does not, materialization moves into `run.initCommands`; the
- * delivery channel and fail-closed parser stay unchanged.
+ * this service before each app deploy (`packages/control/src/node/zerops-proxy.ts`).
+ *
+ * That live-account fact is now settled, and the answer was the bad one: **a build container sees none
+ * of its service's env-API variables.** Read directly, `${FABRIKA_PROXY_MANIFEST_JSON}` in a build
+ * command is the empty string — no error, no warning. Left uncorrected, every proxy build would have
+ * written an empty manifest, failed `generate-config.ts`, and made this service undeployable on Zerops.
+ *
+ * The fix is the `build.envVariables` declaration below rather than the move into `run.initCommands`
+ * this header used to anticipate: `${RUNTIME_x}` lifts a service's own runtime variable into its build
+ * context, and it resolves nested references too. The delivery channel and the fail-closed parser are
+ * unchanged, which is what that contingency promised.
  *
  * What IS structural: missing or malformed JSON makes `generate-config.ts` exit non-zero, so the
  * pipeline fails and the previous version keeps serving. A valid empty app list generates only the
@@ -261,6 +271,11 @@ const proxy: ZeropsYamlSetup = {
 		// database, a stronger supply-chain guarantee than a release tarball with a hand-copied hash — and
 		// the toolchain floats. If a future Go release breaks the build, this is the line that moved.
 		base: ['alpine/go@latest', 'alpine/bun@1.3'],
+		// The ONE variable this build reads that is not a constant, lifted out of the runtime store because
+		// a build container cannot see the runtime store any other way (see the header). Same name on both
+		// sides is safe here and is not the `FOO: ${FOO}` self-shadow trap: the `RUNTIME_` prefix makes the
+		// right-hand side a different key from the left.
+		envVariables: { [FABRIKA_PROXY_MANIFEST_JSON]: `\${RUNTIME_${FABRIKA_PROXY_MANIFEST_JSON}}` },
 		// CGO off makes the binary static, which is what lets it run on Alpine/musl.
 		prepareCommands: ['CGO_ENABLED=0 GOBIN=/tmp/gobin go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.10.2'],
 		buildCommands: [
