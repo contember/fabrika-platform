@@ -125,7 +125,7 @@ zerops:
       buildCommands:
         - "bun install --frozen-lockfile"
         - "printf %s \"${FABRIKA_PROXY_MANIFEST_JSON}\" > ./proxy.manifest.json"
-        - "bun run packages/proxy/src/generate-config.ts ./proxy.manifest.json ./caddy.json --auth-upstream 127.0.0.1:9000"
+        - "bun run packages/proxy/src/generate-config.ts ./proxy.manifest.json ./caddy.json --auth-upstream 127.0.0.1:9000 --listen :8080,:8082,:8083"
         - "bun build --compile --target=bun-linux-x64-musl ./packages/proxy/src/main.ts --outfile ./fabrika-proxy"
         - "cp /tmp/gobin/caddy ./caddy"
       deployFiles:
@@ -141,6 +141,10 @@ zerops:
       base: alpine@3.21
       ports:
         - port: 8080
+          httpSupport: true
+        - port: 8082
+          httpSupport: true
+        - port: 8083
           httpSupport: true
       healthCheck:
         httpGet:

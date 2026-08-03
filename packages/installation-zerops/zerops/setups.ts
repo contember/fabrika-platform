@@ -259,6 +259,28 @@ const operations: ZeropsYamlSetup = {
  */
 const proxyManifestReference = `\${${FABRIKA_PROXY_MANIFEST_JSON}}`
 
+/**
+ * The proxy's public listeners. THREE, and the reason is a platform fact rather than a preference.
+ *
+ * Routing is by HOST — one app owns one hostname, and `assertUniqueHosts` refuses to let two apps share
+ * one so that Caddy's route order can never decide which app answers. A production installation gets
+ * those hostnames from custom domains bound to the project's balancer. A `zerops-subdomain`
+ * installation cannot: it has exactly one generated hostname per HTTP PORT, so a single-port proxy can
+ * front exactly one service, and the light tier needs three (IAM's JWKS and OIDC redirect, the control
+ * dashboard, Operations ingest).
+ *
+ * Several ports cost nothing on the custom-domain path — the extra listeners answer the same
+ * host-matched routes, an unknown Host still falls through to the terminal 404, and with
+ * `enableSubdomainAccess: false` none of them is published at all. So this is one setup for both tiers
+ * rather than a second proxy setup that would have to be kept in step with this one.
+ *
+ * 8081 is deliberately absent: it is the health listener, which is never published.
+ */
+const PROXY_PUBLIC_PORTS = [8080, 8082, 8083]
+
+/** Liveness only, on its own unpublished listener. */
+const PROXY_HEALTH_PORT = 8081
+
 const proxy: ZeropsYamlSetup = {
 	setup: 'proxy',
 	build: {
@@ -284,7 +306,9 @@ const proxy: ZeropsYamlSetup = {
 			// filesystem. `printf` rather than `echo` so a leading `-` or a backslash survives intact.
 			`printf %s "${proxyManifestReference}" > ./proxy.manifest.json`,
 			// Missing/malformed JSON fails the build; an empty app list emits only deny/404 routes.
-			'bun run packages/proxy/src/generate-config.ts ./proxy.manifest.json ./caddy.json --auth-upstream 127.0.0.1:9000',
+			`bun run packages/proxy/src/generate-config.ts ./proxy.manifest.json ./caddy.json --auth-upstream 127.0.0.1:9000 --listen ${
+				PROXY_PUBLIC_PORTS.map((port) => `:${port}`).join(',')
+			}`,
 			'bun build --compile --target=bun-linux-x64-musl ./packages/proxy/src/main.ts --outfile ./fabrika-proxy',
 			'cp /tmp/gobin/caddy ./caddy',
 		],
@@ -296,10 +320,10 @@ const proxy: ZeropsYamlSetup = {
 		// anywhere on purpose — the project's L7 balancer terminates TLS, so Caddy serves plain HTTP behind
 		// it and needs no ACME, no certificate storage and therefore no disk.
 		base: 'alpine@3.21',
-		ports: [{ port: 8080, httpSupport: true }],
-		// Deliberately NOT on 8080: a health path on the public listener would be one path per proxy that
-		// answers 200 without consulting the gates, and would shadow an app path of the same name.
-		healthCheck: { httpGet: { port: 8081, path: '/healthz' } },
+		ports: PROXY_PUBLIC_PORTS.map((port) => ({ port, httpSupport: true })),
+		// Deliberately NOT one of the public ports: a health path on a public listener would be one path per
+		// proxy that answers 200 without consulting the gates, and would shadow an app path of the same name.
+		healthCheck: { httpGet: { port: PROXY_HEALTH_PORT, path: '/healthz' } },
 		envVariables: {
 			FABRIKA_PROXY_MANIFEST: '/var/www/proxy.manifest.json',
 			// Loopback only; Caddy dials it. It must never be routable.
