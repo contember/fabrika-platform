@@ -136,6 +136,26 @@ describe('PropustkaAuth — human gate, unauthenticated', () => {
 		)
 	})
 
+	test('behind a TLS-terminating balancer the return URL keeps the https scheme', async () => {
+		// The process receives plain HTTP from the balancer, so `request.url` says `http://`. Sending IAM
+		// that as the post-login redirect breaks sign-in on a deployment whose health checks are green —
+		// verified live on Zerops. `secure` is the same signal that forces the `px_token` cookie's flag.
+		const binding = new IamRpcStub({ jwks: JWKS })
+		const secured = new PropustkaAuth(binding, APP, { issuer: ISSUER, gates: HUMAN_GATES, secure: true })
+		const result = await secured.authenticate(new Request('http://app.example.com/page'))
+		expect(result.ok === false && result.loginUrl).toBe(
+			`${ISSUER}/auth/login?redirect=${encodeURIComponent('https://app.example.com/page')}`,
+		)
+	})
+
+	test('and without that signal the request decides, unchanged', async () => {
+		const binding = new IamRpcStub({ jwks: JWKS })
+		const result = await auth(binding).authenticate(new Request('http://app.example.com/page'))
+		expect(result.ok === false && result.loginUrl).toBe(
+			`${ISSUER}/auth/login?redirect=${encodeURIComponent('http://app.example.com/page')}`,
+		)
+	})
+
 	test('an invalid session propagates the reason', async () => {
 		const binding = new IamRpcStub({ jwks: JWKS, mintToken: { ok: false, reason: 'disabled' } })
 		const result = await auth(binding).authenticate(request('px_session=zombie'))

@@ -229,9 +229,24 @@ export class PropustkaAuth {
 		return buildAuthContext(this.binding, this.appId, claims, requestId)
 	}
 
-	/** Where to send the browser to log in, returning to the current URL afterwards. */
+	/**
+	 * Where to send the browser to log in, returning to the current URL afterwards.
+	 *
+	 * The return URL's SCHEME cannot come from `request.url`. Behind a TLS-terminating L7 balancer the
+	 * browser spoke HTTPS and this process sees plain HTTP, so the naive form hands IAM an `http://`
+	 * redirect for an origin that is only served over HTTPS — and the sign-in bounce dies there, on a
+	 * deployment whose health checks and admin page are all green. Verified live on Zerops.
+	 *
+	 * `config.secure` is already the authority on exactly that question (it is what forces the `px_token`
+	 * cookie's `Secure` flag for the same reason), so reuse it rather than inventing a second signal.
+	 * Unset, the behaviour is unchanged: derive everything from the request.
+	 */
 	loginUrl(request: Request): string {
-		return `${trimSlash(this.config.issuer)}/auth/login?redirect=${encodeURIComponent(request.url)}`
+		const url = new URL(request.url)
+		if (this.config.secure === true) {
+			url.protocol = 'https:'
+		}
+		return `${trimSlash(this.config.issuer)}/auth/login?redirect=${encodeURIComponent(url.toString())}`
 	}
 
 	/** Build an AuthContext from verified claims (principal-bound or anonymous). */
