@@ -266,23 +266,28 @@ const operations: ZeropsYamlSetup = {
 const proxyManifestReference = `\${${FABRIKA_PROXY_MANIFEST_JSON}}`
 
 /**
- * The proxy's public listeners. THREE, and the reason is a platform fact rather than a preference.
+ * The proxy's public listeners.
  *
  * Routing is by HOST — one app owns one hostname, and `assertUniqueHosts` refuses to let two apps share
  * one so that Caddy's route order can never decide which app answers. A production installation gets
- * those hostnames from custom domains bound to the project's balancer. A `zerops-subdomain`
- * installation cannot: it has exactly one generated hostname per HTTP PORT, so a single-port proxy can
- * front exactly one service, and the light tier needs three (IAM's JWKS and OIDC redirect, the control
- * dashboard, Operations ingest).
+ * those hostnames from custom domains bound to the project's balancer, and needs exactly ONE listener:
+ * every domain arrives on the same port and the Host header decides.
  *
- * Several ports cost nothing on the custom-domain path — the extra listeners answer the same
- * host-matched routes, an unknown Host still falls through to the terminal 404, and with
- * `enableSubdomainAccess: false` none of them is published at all. So this is one setup for both tiers
- * rather than a second proxy setup that would have to be kept in step with this one.
+ * A `zerops-subdomain` installation has no such source of names. Zerops mints one generated hostname per
+ * HTTP PORT, so on that path a port IS a hostname — and the number of listeners is the number of
+ * distinct public hosts the installation can ever serve. Three are the platform's own (IAM's JWKS and
+ * OIDC redirect, the control dashboard, Operations ingest); the rest are a fixed pool of APPLICATION
+ * slots, and running out of them is what caps a light-tier installation rather than any resource limit.
+ *
+ * That ceiling is the honest cost of the subdomain path and the reason it is not the production one.
+ * A custom-domain installation ignores all of this: with `enableSubdomainAccess: false` nothing here is
+ * published, the extra listeners answer the same host-matched routes, and an unknown Host still falls
+ * through to the terminal 404. One setup serves both tiers rather than a second that must be kept in
+ * step with this one.
  *
  * 8081 is deliberately absent: it is the health listener, which is never published.
  */
-const PROXY_PUBLIC_PORTS = [8080, 8082, 8083]
+const PROXY_PUBLIC_PORTS = [8080, 8082, 8083, 8084, 8085, 8086]
 
 /** Liveness only, on its own unpublished listener. */
 const PROXY_HEALTH_PORT = 8081

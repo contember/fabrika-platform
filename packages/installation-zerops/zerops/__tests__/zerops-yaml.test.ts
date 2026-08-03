@@ -70,11 +70,12 @@ describe('one root file, several named setups — the merged-file decision, chec
 		expect(read('zerops.yaml')).not.toContain('ENVIRONMENT:')
 	})
 
-	test('the proxy publishes three listeners, and the health port is not one of them', () => {
+	test('the proxy publishes its listener pool, and the health port is not one of them', () => {
 		// Routing is by host and two apps may not share one. On the `zerops-subdomain` path a hostname is
-		// only obtainable per HTTP PORT, so a single-port proxy could front exactly one service and the
-		// light tier needs three. The health listener must stay off that list: published, it would answer
-		// 200 on a path that never consults the gates.
+		// only obtainable per HTTP PORT, so the listener count IS the number of public hosts an
+		// installation can serve: three for the platform's own, the rest a pool of application slots. The
+		// health listener must stay off that list: published, it would answer 200 on a path that never
+		// consults the gates.
 		const document = parseYaml(read('zerops.yaml'))
 		if (typeof document !== 'object' || document === null || !('zerops' in document) || !Array.isArray(document.zerops)) {
 			throw new Error('zerops.yaml has no setups')
@@ -82,12 +83,12 @@ describe('one root file, several named setups — the merged-file decision, chec
 		const proxy = document.zerops.find((entry) => typeof entry === 'object' && entry !== null && 'setup' in entry && entry.setup === 'proxy')
 		expect(proxy).toMatchObject({
 			run: {
-				ports: [{ port: 8080, httpSupport: true }, { port: 8082, httpSupport: true }, { port: 8083, httpSupport: true }],
+				ports: [8080, 8082, 8083, 8084, 8085, 8086].map((port) => ({ port, httpSupport: true })),
 				healthCheck: { httpGet: { port: 8081, path: '/healthz' } },
 			},
 		})
 		// Caddy must actually bind what the service publishes, or a published port answers nothing.
-		expect(read('zerops.yaml')).toContain('--listen :8080,:8082,:8083')
+		expect(read('zerops.yaml')).toContain('--listen :8080,:8082,:8083,:8084,:8085,:8086')
 	})
 
 	test('the proxy build lifts its manifest out of the runtime store — a build sees nothing else', () => {
