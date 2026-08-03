@@ -27,5 +27,4 @@ services:
     priority: 10
     minContainers: 2
     maxContainers: 6
-    zeropsSetup: proxy
     startWithoutCode: true

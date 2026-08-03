@@ -187,6 +187,22 @@ export const assertZeropsInvariants = (document: ZeropsImportDocument): void => 
 				`zerops: service \`${service.hostname}\` carries secrets in the import document; secrets are written through the env API (ADR-0004)`,
 			)
 		}
+		// `zeropsSetup` is part of the import's pipeline configuration, and the platform rejects the WHOLE
+		// document when a service names a setup without also naming the repository to build it from:
+		//
+		//   400 projectImportInvalidParameter
+		//   {"iam.buildFromGit": ["parameter is required for use of pipelineConfig"]}
+		//
+		// Verified against a real account, and it is not a corner case — it failed the very first step of
+		// the documented bring-up (import → write secrets → deploy) for every runtime service at once.
+		// Nothing is lost by dropping the setup name here: it is only redundant restatement of Zerops' own
+		// "setup name defaults to the hostname" rule, and a deploy that needs to say otherwise passes
+		// `zeropsSetup` at TRIGGER time, where no repository is required.
+		if (service.zeropsSetup !== undefined && service.buildFromGit === undefined) {
+			throw new Error(
+				`zerops: service \`${service.hostname}\` names \`zeropsSetup\` without \`buildFromGit\`; the platform rejects the import (pass the setup when triggering the pipeline instead)`,
+			)
+		}
 		if (seen.has(service.hostname)) {
 			throw new Error(`zerops: duplicate service hostname \`${service.hostname}\` in the import document`)
 		}

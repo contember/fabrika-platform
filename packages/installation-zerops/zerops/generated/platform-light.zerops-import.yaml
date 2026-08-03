@@ -40,7 +40,6 @@ services:
     priority: 50
     minContainers: 1
     maxContainers: 2
-    zeropsSetup: iam
   - hostname: operations
     type: alpine/bun@1.3
     envIsolation: service
@@ -49,7 +48,6 @@ services:
     priority: 40
     minContainers: 1
     maxContainers: 2
-    zeropsSetup: operations
   - hostname: control
     type: alpine/bun@1.3
     envIsolation: service
@@ -58,7 +56,6 @@ services:
     priority: 30
     minContainers: 1
     maxContainers: 2
-    zeropsSetup: control
   - hostname: proxy
     type: alpine@3.21
     envIsolation: service
@@ -67,4 +64,3 @@ services:
     priority: 10
     minContainers: 1
     maxContainers: 2
-    zeropsSetup: proxy

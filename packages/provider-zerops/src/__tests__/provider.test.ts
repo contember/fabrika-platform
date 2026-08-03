@@ -249,6 +249,32 @@ describe('Zerops compiler invariants', () => {
 		).toThrow('envIsolation')
 	})
 
+	test('rejects a setup name the platform cannot accept without a repository', () => {
+		// Verified against a real account: the platform reads `zeropsSetup` as pipeline configuration and
+		// rejects the ENTIRE import with `{"iam.buildFromGit": ["parameter is required for use of
+		// pipelineConfig"]}` when no repository accompanies it. That failed the first step of the
+		// documented bring-up for every runtime service at once, so it fails at compile time now.
+		expect(() =>
+			assertZeropsInvariants({
+				services: [{ hostname: 'api', type: 'alpine/bun@1.3', envIsolation: 'service', zeropsSetup: 'api' }],
+			})
+		).toThrow('names `zeropsSetup` without `buildFromGit`')
+	})
+
+	test('and accepts the same setup name once a repository is named', () => {
+		expect(() =>
+			assertZeropsInvariants({
+				services: [{
+					hostname: 'api',
+					type: 'alpine/bun@1.3',
+					envIsolation: 'service',
+					zeropsSetup: 'api',
+					buildFromGit: 'https://github.com/contember/fabrika-platform',
+				}],
+			})
+		).not.toThrow()
+	})
+
 	test('the API surface has no project-level environment writer', () => {
 		const api = makeApi(recorded)
 		expect(Reflect.has(api, 'putProjectEnv')).toBe(false)

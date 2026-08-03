@@ -117,24 +117,27 @@ export const PROXY_HOSTNAME = 'proxy'
 export const FABRIKA_PROXY_SOURCE = 'https://github.com/contember/fabrika-platform'
 
 /**
- * A runtime service, with the two fields that must never be left to a default written explicitly.
+ * A runtime service, with the field that must never be left to a default written explicitly.
  *
  * `enableSubdomainAccess` is written even when it is `false` — which is also Zerops' default — on
  * purpose. The default protects a service nobody thought about; an explicit `false` makes turning it on
  * a visible one-line diff in review, and makes `override: true` CORRECT a subdomain someone enabled in
  * the GUI to debug something and forgot about. A default cannot do either.
+ *
+ * `zeropsSetup` is deliberately NOT written. It used to be, as a redundant restatement of Zerops' own
+ * "setup name defaults to the hostname" rule that would keep working the day a service was renamed. On a
+ * real account it does not keep working at all: the platform treats it as pipeline configuration and
+ * rejects the entire import with `{"iam.buildFromGit": ["parameter is required for use of
+ * pipelineConfig"]}` unless the service also names a repository to build from — which none of these do
+ * (ADR-0003: fabrika triggers Zerops' pipeline, it does not configure a git integration). The setup name
+ * travels at TRIGGER time instead, where the driver already passes it and no repository is required.
+ * `assertZeropsInvariants` now refuses the combination so this fails at generation rather than at import.
  */
 const runtime = (
 	spec: Omit<ZeropsServiceSpec, 'enableSubdomainAccess' | 'zeropsSetup'> & { public?: boolean },
 ): ZeropsServiceSpec => {
 	const { public: isPublic, ...rest } = spec
-	return {
-		...rest,
-		// Setup name == hostname is also Zerops' own matching rule, so this is redundant today and
-		// load-bearing the day a service is renamed: the build keeps selecting the setup it was written for.
-		zeropsSetup: rest.hostname,
-		enableSubdomainAccess: isPublic === true,
-	}
+	return { ...rest, enableSubdomainAccess: isPublic === true }
 }
 
 /**

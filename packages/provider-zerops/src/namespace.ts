@@ -334,6 +334,10 @@ export const zeropsNamespacePreset = (input: ZeropsNamespacePresetInput): Zerops
 
 const projectMarker = (namespace: ProviderDeploymentNamespace): string => `Managed by Fabrika namespace ${namespace.id} (${namespace.env}).`
 
+// No `zeropsSetup`: the platform reads it as pipeline configuration and rejects the whole import unless
+// the service also names a `buildFromGit`, which an import that only PROVISIONS does not. The setup name
+// is supplied where it is actually needed — the `triggerPipeline` call in the namespace lifecycle below,
+// which passes both. `assertZeropsInvariants` refuses the invalid combination.
 const proxyService = (publicAccess: ZeropsNamespacePublicAccess): ZeropsServiceSpec => ({
 	hostname: ZEROPS_NAMESPACE_PROXY_HOSTNAME,
 	type: PROXY_TYPE,
@@ -341,7 +345,6 @@ const proxyService = (publicAccess: ZeropsNamespacePublicAccess): ZeropsServiceS
 	enableSubdomainAccess: publicAccess === 'zerops-subdomain',
 	minContainers: 2,
 	maxContainers: 6,
-	zeropsSetup: ZEROPS_NAMESPACE_PROXY_HOSTNAME,
 })
 
 const postgresService = (postgres: ZeropsNamespacePostgres): ZeropsServiceSpec => ({
