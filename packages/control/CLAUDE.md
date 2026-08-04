@@ -21,11 +21,9 @@ bun run seed                                       # register apps (single-accou
 bun run migrate:postgres                           # apply migrations-postgres/ (FABRIKA_CONTROL_DATABASE_URL)
 bun run serve                                      # the long-running server (src/node/server.ts)
 bun run maintenance                                # the cron one-shot: repo poll + stale-run sweep
-
-# The Postgres-backed tests SKIP unless a database is configured:
-docker run --rm -d -p 55433:5432 -e POSTGRES_PASSWORD=postgres postgres:17
-FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres bun test packages/control
 ```
+
+Migration commands and the Postgres-backed test setup are in [`DATABASE.md`](./DATABASE.md).
 
 `wrangler.jsonc` is auto-generated from `oblaka.ts` — DO NOT edit it by hand.
 
@@ -145,37 +143,9 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
 
 ## Patterns
 
-- All database access goes through the capability repositories in `src/db.ts` (prepared statements,
-  snake_case rows, caller-stamped UUIDv7). Portable operations take the `SqlDatabase` port
-  (`@fabrika/platform`), which `D1Database` satisfies structurally. A composition root may replace a
-  complete capability when an operation needs dialect-specific statement count, atomicity, or
-  locking; shared code never switches on a database id. See ADR-0015. `src/env.ts` declares every core
-  handle as a port; D1/Fetcher satisfy theirs structurally, while R2/Queues are adapted in
-  `src/platform-cf.ts`.
-  `RUNNER_SVC` is not a core port; the Cloudflare composition passes it directly to its provider.
-- **TIMESTAMPS ARE CALLER-STAMPED, never `unixepoch()`** (Postgres has no such function). The relevant
-  repository capabilities and `Vault` carry an injectable `now()` in unix SECONDS (default
-  `Math.floor(Date.now() / 1000)`), like `SqlDeployLocks` does in milliseconds — so the stamp is deterministic in tests. The CREATION stamps are
-  the exception: `createApp`/`createRun`/the three upserts/`Vault.putSecret` omit `created_at` and rely on
-  the DDL default, which is `unixepoch()` on SQLite and `FLOOR(EXTRACT(EPOCH FROM now()))` in
-  `migrations-postgres/`. Never write `unixepoch()` in a STATEMENT.
-- **A column a row shape types `number` must be `INTEGER` (int4) in Postgres.** Bun decodes `int8`/`numeric`
-  as a STRING by column-type OID, so a BIGINT silently changes the row shape. The one exception is
-  `deploy_locks.expires_at` (and the `jobs` table's two stamps): unix MILLISECONDS, which int4 cannot hold
-  at all — those are BIGINT and are NEVER read into JS, only compared inside SQL.
-  `src/__tests__/postgres-schema.test.ts` pins both halves of that rule against a real database.
-- **`migrations/` is IMMUTABLE history; `migrations-postgres/` expresses the FINAL schema.** The SQLite set
-  carries create-copy-drop-rename rebuilds it needed because SQLite cannot ALTER a constraint; the Postgres
-  set never reproduces them — it states the outcome once. What must match is the OUTCOME: `src/db.ts` runs
-  against both unmodified. Add a change to BOTH sets, knowingly.
-- **The Bun migration wrapper owns `control_schema_migrations`, bundle
-  `control`, and advisory lock `4471902583`.** Bundle and filename form durable
-  identity. Legacy `schema_migrations` rows may be adopted only when the control
-  sentinels and migration effects prove ownership; see ADR-0017.
-- **Layering by `(app, env)` is the ORDER BY, not the rowids.** `getAppSecretsForEnv` / `getAppVarsForEnv`
-  rank the all-env row before the env-specific one with an explicit `CASE WHEN env IS NULL THEN 0 ELSE 1 END`
-  so the caller's last-write-wins loop lands on the narrower layer. Bare `ORDER BY name` left that tie to
-  SQLite's rowid fallback, and `ORDER BY name, env` would invert it on Postgres (NULLS LAST by default).
+- **Database access, dialect rules, and migrations: read [`DATABASE.md`](./DATABASE.md)** before
+  editing `src/db.ts`, `migrations/`, or `migrations-postgres/`. It covers the ADR-0015 repository
+  seam, caller-stamped timestamps, the int4-vs-BIGINT row-shape rule, and the ADR-0017 ledger.
 - Errors via `src/http.ts` `error(status, msg)`; handlers return its Response. Unexpected throws → 500, never leak internals.
   On the Bun target that catch-all is NOT optional: `Bun.serve`'s default error page puts the exception
   AND the surrounding source lines in the response body, so `createFetchHandler` wraps every request and

@@ -1,108 +1,82 @@
 # fabrika-platform
 
-An application platform with three planes: Delivery for
-declare/provision/deploy, Access for identity/policy/audit, and Operations for
-runtime errors, releases, source maps, triage, alerts, and health. It targets a
-small fleet of apps on more than one cloud. Delivery and Access were merged from
-**vozka** and **propustka**; Operations absorbed the first useful slice of
-**Poplach**.
-
-**Status.** The merge has landed, the Cloudflare path works, and the multi-cloud seams are built: the
-platform ports, static provider bundles, a Postgres/S3/Bun implementation set, a Zerops provider, and
-the auth proxy. The Operations foundation is integrated on both compositions,
-including managed app configuration and the unified console.
-
-**Zerops has now run against a real account** (2026-08-03, `prg1`): the single-project
-`light` tier boots, the proxy enforcement boundary behaves as ADR-0007/ADR-0010 describe,
-and an example app runs behind it. The platform facts that run settled — several of which
-contradict the published documentation — are in
-[`docs/reference/zerops-platform.md`](./docs/reference/zerops-platform.md); read them before
-touching the Zerops path rather than re-deriving them. What is still unexercised: the
-production two-project topology, custom domains, browser SSO, and every deploy the control
-plane triggers itself (there is no git source it can use — `docs/backlog/47`). And nothing in
-`packages/` can write a Zerops service variable today — `docs/backlog/41`.
+An application platform with three planes: **Delivery** (declare/provision/deploy), **Access**
+(identity/policy/audit), and **Operations** (runtime errors, releases, source maps, triage, alerts,
+health). It targets a small fleet of apps on more than one cloud — Cloudflare and Zerops today.
 
 Read `docs/decisions/` before changing anything structural: much of what looks odd here is odd on
 purpose, and some invariants have already been retired by a later ADR (ADR-0010 amends ADR-0008;
-ADR-0009 extends ADR-0002).
+ADR-0009 extends ADR-0002). Before touching the Zerops path read
+[`docs/reference/zerops-platform.md`](./docs/reference/zerops-platform.md) — it records platform
+facts settled against a real account, several of which contradict Zerops' published documentation.
 
 ## Tech Stack
 
 - **Bun** — runtime + workspaces. Libraries run TypeScript directly (`exports.bun` → `src`); no build step.
 - **TypeScript** strict, ESM (`"type": "module"`) everywhere.
-- **Cloudflare Workers** — Worker + Durable Objects + Containers + D1 + Queues + R2. **Zerops** is the second
-  target. Each installation statically composes one provider bundle; the shared engine and control core
-  depend only on `@fabrika/provider-contract` (ADR-0011). Zerops uses its platform API directly and has no
-  runner (ADR-0003). Not yet exercised against a real account.
+- **Cloudflare Workers** — Worker + Durable Objects + Containers + D1 + Queues + R2. **Zerops** is the
+  second target: it uses its platform API directly and has no runner (ADR-0003). Each installation
+  statically composes ONE provider bundle; the shared engine and control core depend only on
+  `@fabrika/provider-contract` (ADR-0011).
 - `oblaka-iac` (CF provisioning DSL), `@buzola/*` (SPA router), `jose` (token signing).
 
 ## Commands
 
 ```bash
 bun install
-bun run typecheck                    # all packages (bun run --filter '*' typecheck)
-bun test                             # all tests; some suites skip without Postgres/S3 (see below)
+bun run typecheck          # every package + scripts/
+bun test                   # all tests; some suites skip without Postgres/S3 (see below)
 bun test packages/engine/src/__tests__/deploy.test.ts   # a single file
-bun run lint                         # biome
-bun run format                       # dprint fmt  (format:check to verify only)
+bun run lint               # biome
+bun run format             # dprint fmt  (format:check to verify only)
+
+bun run local:up           # the Docker stack: both Postgres, MinIO, a Zerops emulator, all planes
+bun run local:status       # …:smoke (disruptive end-to-end), :reset (wipes volumes), :down
+bun run test:browser       # opice suites in tests/browser/ (browser:up/reset/down manage the stack)
+
+bun run release:validate   # publishability + dependency direction; also :pack :smoke :publish
 ```
 
-CPU-heavy runs (full typecheck, full test suite) go through `cpu-lease run -n 4 -- …`.
+CPU-heavy runs (full typecheck, full test suite, docker builds) go through `cpu-lease run -n 4 -- …`.
 
 Suites that need a real backend **skip cleanly** when it is absent and print the variables and the
-docker command to get one: `FABRIKA_TEST_POSTGRES_URL` (the Postgres driver and
-the IAM/control/Operations schemas) and `FABRIKA_TEST_S3_*` (the S3 blob store).
-A green `bun test` with everything
-skipped does NOT mean the Postgres path works — run them before trusting that half.
+docker command to get one: `FABRIKA_TEST_POSTGRES_URL` (the Postgres driver and the
+IAM/control/Operations schemas) and `FABRIKA_TEST_S3_*` (the S3 blob store). A green `bun test` with
+everything skipped does NOT mean the Postgres path works — run them before trusting that half.
+
+`release:validate` enforces that every package is either `private: true` or declares
+`publishConfig.access: "public"`, and that no public package depends on a private one.
 
 Per-package dev/build commands live in each package's own CLAUDE.md.
 
 ## Project Structure
 
-The runtime ports and provider contract are independent axes. A composition root binds one runtime
+Runtime ports and the provider contract are independent axes. A composition root binds one runtime
 implementation set to one provider bundle.
 
 ```
-packages/auth-core/   # @fabrika/auth-core — pure kernel: action matcher, permits(), token build/parse,
-                      #   gate types, the IamRpc contract. No I/O, no deps.
-packages/auth/        # @fabrika/auth — the app-facing SDK.
-packages/app/         # @fabrika/app — HTTP routing, middleware, typed RPC, object authorization, client.
-packages/iam/         # @fabrika/iam — the IAM service: OIDC login, token minting, /admin API, D1.
-packages/iam-contract/ # @fabrika/iam-contract — browser-safe IAM admin REST DTOs.
-packages/iam-ui/      # @fabrika/iam-ui — the IAM admin SPA.
-packages/operations-contract/ # @fabrika/operations-contract — browser/runtime-safe Operations DTOs.
-packages/operations/  # @fabrika/operations — portable error ingest, grouping, triage, and event-detail kernel.
-packages/operations-ui/ # @fabrika/operations-ui — reusable Operations console views and display helpers.
-packages/platform/    # @fabrika/platform — the runtime PORTS (SqlDatabase, BlobStore, JobQueue, DeployLocks,
-                      #   AssetServer, WaitUntil) + the implementations that need nothing but a port.
-packages/platform-node/ # @fabrika/platform-node — those ports for a long-running Bun process
-                      #   (Postgres, S3/MinIO, a jobs table, a directory). Second impl set behind the ports.
-packages/provider-contract/ # @fabrika/provider-contract — open runtime/control contracts + JSON envelopes.
-packages/provider-cloudflare/ # @fabrika/provider-cloudflare — Cloudflare authoring, deploy, control + internal executor.
-packages/provider-zerops/ # @fabrika/provider-zerops — Zerops authoring, manifest, API, deploy, control.
-packages/engine/      # @fabrika/engine — provider-neutral deploy executor.          → CLAUDE.md
-packages/control/     # @fabrika/control — the control-plane Worker.                → CLAUDE.md
-packages/control-contract/ # @fabrika/control-contract — browser-safe control REST DTOs + run-log shape.
-packages/installation-contract/ # @fabrika/installation-contract — open platform init/plan/deploy CLI contract.
-packages/installation-cloudflare/ # @fabrika/installation-cloudflare — Cloudflare installation workflow. → CLAUDE.md
-packages/installation-zerops/ # @fabrika/installation-zerops — Zerops topology, artifacts, and installation plan. → CLAUDE.md
-packages/cli/         # @fabrika/cli — the single public `fabrika` command.           → CLAUDE.md
-packages/dashboard/   # @fabrika/dashboard — the control-plane SPA.                 → CLAUDE.md
-packages/runner-contract/ # @fabrika/runner-contract — provider-neutral Worker↔container protocol. → CLAUDE.md
-packages/runner-container/ # @fabrika/runner-container — the plain-Bun deploy container. → CLAUDE.md
-packages/runner-cloudflare/ # @fabrika/runner-cloudflare — the out-of-band executor Worker. → CLAUDE.md
-packages/proxy-contract/ # @fabrika/proxy-contract — proxy manifest wire contract and strict parser.
-packages/proxy/       # @fabrika/proxy — the auth ENFORCEMENT point: a Caddy `forward_auth` service.
-                      #   Nothing reaches an app until its gates pass. → ADR-0007, ADR-0008, ADR-0010
-examples/app/         # a worked Cloudflare app (authz vocabulary, gates, audit).
-examples/zerops-app/  # a worked Zerops app and static manifest build.
+packages/
+  auth-core auth app              # authz kernel · app-facing IAM SDK · HTTP/RPC application runtime
+  iam iam-contract iam-ui         # Access plane: login, token minting, /admin API, admin SPA
+  operations operations-{contract,ui}  # Operations plane: ingest, grouping, triage, console views
+  control control-contract        # Delivery control plane — Worker AND long-running Bun process
+  dashboard                       # the unified console SPA (all three planes)
+  engine                          # provider-neutral deploy executor
+  platform platform-node          # runtime PORTS · the Postgres/S3/Bun implementation set
+  provider-{contract,cloudflare,zerops}       # authoring, deploy, and control per cloud
+  installation-{contract,cloudflare,zerops}   # `fabrika platform init/plan/deploy` per cloud
+  runner-{contract,container,cloudflare}      # the Cloudflare out-of-band deploy executor
+  proxy proxy-contract            # the auth ENFORCEMENT point (ADR-0007, ADR-0008, ADR-0010)
+  cli email local-stack           # the `fabrika` command · outbound email · the Docker dev stack
+examples/app examples/zerops-app  # a worked app per provider
+tests/browser                     # opice end-to-end suites against the local stack
 ```
 
-An app imports `defineApp` and provider-owned resource types from its selected provider package.
-Cloudflare configs import `@fabrika/provider-cloudflare`; Zerops configs import
-`@fabrika/provider-zerops`. There is no shared `@fabrika/config` package or closed provider union.
-The public `fabrika` CLI infers an app provider from the object returned by that provider's `defineApp()`;
-`--provider` is needed only when there is no app config. Platform commands load the provider's
+An app imports `defineApp` and provider-owned resource types from its selected provider package —
+Cloudflare configs import `@fabrika/provider-cloudflare`, Zerops configs `@fabrika/provider-zerops`.
+There is no shared `@fabrika/config` package and no closed provider union. The public `fabrika` CLI
+infers an app's provider from the object returned by that provider's `defineApp()`; `--provider` is
+needed only when there is no app config. Platform commands load the provider's
 `@fabrika/installation-*` package through the open installation contract.
 
 ## Code Conventions
@@ -139,14 +113,21 @@ The public `fabrika` CLI infers an app provider from the object returned by that
 
 ## Module-Specific Context
 
-- `packages/engine/CLAUDE.md` — the provider-neutral executor and runtime provider contract.
-- `packages/app/CLAUDE.md` — the application request pipeline, typed RPC, and auth integration.
-- `packages/control/CLAUDE.md` — the control plane: API/ACL, vault, secret resolution, run lifecycle, webhook, D1.
-- `packages/cli/CLAUDE.md` — the provider-neutral command router and provider inference.
-- `packages/installation-cloudflare/CLAUDE.md` and `packages/installation-zerops/CLAUDE.md` — provider-specific platform installation.
-- `packages/runner-contract/CLAUDE.md`, `packages/runner-container/CLAUDE.md`, and
-  `packages/runner-cloudflare/CLAUDE.md` — transport contract, container process, and executor Worker.
-- `packages/dashboard/CLAUDE.md` — the SPA: routes, API client, DTOs, buzola codegen.
+Read the package's own CLAUDE.md before editing it. Beyond the packages that only carry a short
+contract note (`*-contract`), the substantial ones are:
+
+- `packages/app/` — the request pipeline, typed RPC, runtime adapters · `packages/auth/` — the
+  app-facing IAM SDK · `packages/iam/` — the Access service, on both runtimes.
+- `packages/control/` — API/ACL, vault, secret resolution, run lifecycle, webhook (+ `DATABASE.md`
+  for its SQL and migration rules) · `packages/engine/` — the provider-neutral executor.
+- `packages/platform/` + `packages/platform-node/` — the runtime ports and their Postgres/S3/Bun
+  implementations · `packages/provider-cloudflare/` + `packages/provider-zerops/` — the provider bundles.
+- `packages/installation-cloudflare/` + `packages/installation-zerops/` — platform installation ·
+  `packages/cli/` — command routing and provider inference.
+- `packages/proxy/` — the enforcement point · `packages/operations/` + `packages/operations-ui/` —
+  the Operations kernel and console views · `packages/dashboard/` — the SPA.
+- `packages/runner-container/` + `packages/runner-cloudflare/` — the deploy container and its Worker ·
+  `packages/local-stack/` — the Docker dev stack behind every `local:*` command.
 
 <!-- AGENT-DOCS:POINTER (managed by the agent-docs skill — edit the body freely,
      keep the markers) -->
