@@ -6,7 +6,15 @@
  * verifies" is the property under test everywhere; only the *transport* to IAM is faked.
  */
 
-import { type AppGates, buildAccessClaims, type Jwks, type MintFromKeyResult, type MintTokenResult, type PermissionEntry } from '@fabrika/auth-core'
+import {
+	type AppGates,
+	buildAccessClaims,
+	type ExchangeAuthCodeResult,
+	type Jwks,
+	type MintFromKeyResult,
+	type MintTokenResult,
+	type PermissionEntry,
+} from '@fabrika/auth-core'
 import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-contract'
 import { exportJWK, generateKeyPair, type KeyLike, SignJWT } from 'jose'
 import {
@@ -79,6 +87,7 @@ export function signUserToken(ttlSeconds = 300): Promise<string> {
 export interface FakeIamOptions {
 	mintToken?: MintTokenResult | (() => MintTokenResult)
 	mintFromKey?: MintFromKeyResult | (() => MintFromKeyResult)
+	exchangeAuthCode?: ExchangeAuthCodeResult | (() => ExchangeAuthCodeResult)
 	jwks?: Jwks
 	/** Make every call reject, as an unreachable service would. */
 	unreachable?: boolean
@@ -88,8 +97,10 @@ export class FakeIam implements IamGateway {
 	mintTokenCalls = 0
 	mintFromKeyCalls = 0
 	jwksCalls = 0
+	exchangeCalls = 0
 	readonly seenSessions: string[] = []
 	readonly seenKeys: string[] = []
+	readonly seenCodes: string[] = []
 
 	constructor(private readonly options: FakeIamOptions = {}) {}
 
@@ -115,6 +126,16 @@ export class FakeIam implements IamGateway {
 		return Promise.resolve(typeof canned === 'function' ? canned() : (canned ?? { ok: false, reason: 'invalid_key' }))
 	}
 
+	exchangeAuthCode(input: { code: string }): Promise<ExchangeAuthCodeResult> {
+		this.exchangeCalls++
+		this.seenCodes.push(input.code)
+		if (this.options.unreachable === true) {
+			return Promise.reject(new Error('connect ECONNREFUSED'))
+		}
+		const canned = this.options.exchangeAuthCode
+		return Promise.resolve(typeof canned === 'function' ? canned() : (canned ?? { ok: false, reason: 'invalid_code' }))
+	}
+
 	getJwks(): Promise<Jwks> {
 		this.jwksCalls++
 		if (this.options.unreachable === true) {
@@ -127,7 +148,7 @@ export class FakeIam implements IamGateway {
 // ── Manifest + request construction ────────────────────────────────────────────
 
 export function appWith(gates: AppGates, overrides: Partial<ProxyApp> = {}): ProxyApp {
-	return { id: APP, hosts: [HOST], upstream: 'app:3000', gates, ...overrides }
+	return { id: APP, hosts: [HOST], upstream: 'app:3000', scheme: 'https', gates, ...overrides }
 }
 
 export function manifestWith(gates: AppGates, overrides: Partial<ProxyApp> = {}): ProxyManifest {

@@ -119,6 +119,7 @@ function isIamGateway(value: unknown): value is IamGateway {
 	return isObject(value)
 		&& typeof value['mintToken'] === 'function'
 		&& typeof value['mintFromKey'] === 'function'
+		&& typeof value['exchangeAuthCode'] === 'function'
 		&& typeof value['getJwks'] === 'function'
 }
 

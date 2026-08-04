@@ -308,7 +308,7 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 
 describe("the app's gates are enforced by the proxy, and survive the trip verbatim", () => {
 	const manifest: ProxyManifest = {
-		apps: [{ id: NOTES_APP_ID, hosts: ['notes.example.test'], upstream: NOTES_UPSTREAM, gates: notesGates }],
+		apps: [{ id: NOTES_APP_ID, hosts: ['notes.example.test'], upstream: NOTES_UPSTREAM, gates: notesGates, scheme: 'https' }],
 	}
 
 	test("the proxy's own strict parser accepts it, with rule ORDER preserved (order IS the precedence)", () => {

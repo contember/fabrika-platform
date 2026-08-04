@@ -14,6 +14,15 @@ export interface ProxyApp {
 	upstream: string
 	/** Ordered gate rules; order defines precedence. */
 	gates: AppGates
+	/**
+	 * The scheme the BROWSER speaks to this app. Configuration, because no header can be trusted for
+	 * it: a TLS-terminating balancer forwards plain HTTP, and `X-Forwarded-Proto` is then rewritten by
+	 * the next hop to the scheme *it* received. Used to build the login bounce and the handoff callback
+	 * (ADR-0021), so a wrong value is a broken sign-in, not a cosmetic issue.
+	 *
+	 * Defaults to `https`. Set `http` only for local development.
+	 */
+	scheme: 'http' | 'https'
 }
 
 export interface ProxyManifest {
@@ -66,7 +75,14 @@ function parseProxyApp(value: unknown): ProxyApp | null {
 	if (hosts.length === 0 || hosts.some((host) => host === '')) {
 		return null
 	}
-	return { id, hosts: hosts.map((host) => host.toLowerCase()), upstream, gates }
+	// Absent means `https`, so an older manifest keeps working and the safe value is the one you get by
+	// saying nothing. A present-but-unrecognised scheme is rejected rather than coerced.
+	const rawScheme = stringField(value, 'scheme')
+	if (rawScheme !== undefined && rawScheme !== 'http' && rawScheme !== 'https') {
+		return null
+	}
+	const scheme = rawScheme ?? 'https'
+	return { id, hosts: hosts.map((host) => host.toLowerCase()), upstream, gates, scheme }
 }
 
 function parseAppGates(value: unknown): AppGates | null {

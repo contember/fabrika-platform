@@ -13,7 +13,7 @@ const environment = (
 	IAM: new FakeIam(),
 	FABRIKA_IAM_URL: ISSUER,
 	FABRIKA_PROXY_MANIFEST_JSON: encodeProxyManifestJson({
-		apps: [{ id: APP, hosts: [HOST], upstream: 'APP', gates }],
+		apps: [{ id: APP, hosts: [HOST], upstream: 'APP', scheme: 'https', gates }],
 	}),
 	APP: upstream,
 })

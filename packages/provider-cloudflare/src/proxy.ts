@@ -36,12 +36,16 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 		throw new Error('cloudflare proxy appHost must be non-empty')
 	}
 
+	const local = options.appHost === 'localhost'
 	const manifest: ProxyManifest = {
 		apps: [{
 			id: options.appId,
-			hosts: options.appHost === 'localhost' ? ['localhost', '127.0.0.1'] : [options.appHost],
+			hosts: local ? ['localhost', '127.0.0.1'] : [options.appHost],
 			upstream: 'APP',
 			gates: options.gates,
+			// Cloudflare terminates TLS at the edge and a route is always https; only a localhost
+			// binding is reached over plain HTTP.
+			scheme: local ? 'http' : 'https',
 		}],
 	}
 	const domain = options.domain?.trim()

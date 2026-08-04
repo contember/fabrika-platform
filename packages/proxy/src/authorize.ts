@@ -13,7 +13,7 @@
  * NOTHING here returns an allow on an unexpected condition. Every `catch` maps to a deny.
  */
 
-import { API_KEY_PREFIX, SESSION_COOKIE, TOKEN_COOKIE, TOKEN_REFRESH_SKEW_SECONDS } from '@fabrika/auth-core'
+import { API_KEY_PREFIX, AUTH_CODE_PARAM, SESSION_COOKIE, TOKEN_COOKIE, TOKEN_REFRESH_SKEW_SECONDS } from '@fabrika/auth-core'
 import type { ProxyApp } from '@fabrika/proxy-contract'
 import { cacheKey, type TokenCache } from './cache'
 import { applicableGates, type CompiledGate, readCookie, readServiceCredential } from './gates'
@@ -53,6 +53,12 @@ export type Decision =
 	| { outcome: 'deny'; status: 401 | 403 | 503; reason: DenyReason }
 	/** A human hit a `human` gate without a usable session — bounce the browser to IAM. */
 	| { outcome: 'login'; status: 302; location: string; reason: DenyReason }
+	/**
+	 * A handoff code was redeemed (ADR-0021). The ONLY outcome that sets a cookie: `session` is the
+	 * app-bound session to write host-only on this app's host, and `location` is where IAM said the
+	 * browser was going — read from the code server-side, never from the request.
+	 */
+	| { outcome: 'handoff'; status: 302; location: string; session: string; expiresAt: number }
 
 /** The original request, reconstructed from what `forward_auth` forwarded. */
 export interface ForwardedRequest {
@@ -142,7 +148,7 @@ export class Authorizer {
 		}
 
 		if (humanMiss !== null) {
-			return { outcome: 'login', status: 302, location: this.loginUrl(request.url), reason: humanMiss }
+			return { outcome: 'login', status: 302, location: this.loginUrl(resolved.app, request.url), reason: humanMiss }
 		}
 		// Every matching rule was a `service` rule with no credential present.
 		return { outcome: 'deny', status: 401, reason: 'no_credential' }
@@ -254,8 +260,53 @@ export class Authorizer {
 		}
 	}
 
-	/** Where to send the browser to log in, returning to the originally requested URL afterwards. */
-	private loginUrl(url: URL): string {
-		return `${this.options.issuer.replace(/\/+$/, '')}/auth/login?redirect=${encodeURIComponent(url.toString())}`
+	/**
+	 * Redeem a handoff code (ADR-0021). Called for the reserved callback path only, BEFORE gate
+	 * matching — the callback is how a browser becomes able to satisfy a gate, so it cannot be behind
+	 * one.
+	 *
+	 * A failed redemption is an ordinary deny with no cookie. It is deliberately not a fresh bounce to
+	 * IAM: a code that will not redeem twice would turn a retry into a loop.
+	 */
+	async authorizeCallback(resolved: ResolvedApp, request: ForwardedRequest): Promise<Decision> {
+		try {
+			return await this.redeem(resolved, request)
+		} catch (err) {
+			if (err instanceof IamUnavailableError) {
+				return { outcome: 'deny', status: 503, reason: 'iam_unavailable' }
+			}
+			return { outcome: 'deny', status: 403, reason: 'internal_error' }
+		}
+	}
+
+	private async redeem(resolved: ResolvedApp, request: ForwardedRequest): Promise<Decision> {
+		const code = request.url.searchParams.get(AUTH_CODE_PARAM)
+		if (code === null || code === '') {
+			return { outcome: 'deny', status: 403, reason: 'no_credential' }
+		}
+		// Through `callIam` like every other IAM call, so an unreachable service is a 503 whatever kind
+		// of error the injected gateway happened to throw. `authorize`'s outer catch maps the rest.
+		const result = await this.callIam(
+			'exchangeAuthCode',
+			() => this.options.iam.exchangeAuthCode({ app: resolved.app.id, code, requestId: request.requestId }),
+		)
+		if (!result.ok) {
+			return { outcome: 'deny', status: 403, reason: 'invalid_session' }
+		}
+		return { outcome: 'handoff', status: 302, location: result.returnUrl, session: result.session, expiresAt: result.expiresAt }
+	}
+
+	/**
+	 * Where to send the browser to log in, returning to the originally requested URL afterwards.
+	 *
+	 * The scheme comes from the MANIFEST, not from the forwarded request: behind a TLS-terminating
+	 * balancer the proxy is reached over plain HTTP and `X-Forwarded-Proto` says so, which would send
+	 * the browser back to an `http://` URL for an origin only served over `https://`.
+	 */
+	private loginUrl(app: ProxyApp, url: URL): string {
+		const target = new URL(url)
+		target.protocol = `${app.scheme}:`
+		const issuer = this.options.issuer.replace(/\/+$/, '')
+		return `${issuer}/auth/login?app=${encodeURIComponent(app.id)}&redirect=${encodeURIComponent(target.toString())}`
 	}
 }

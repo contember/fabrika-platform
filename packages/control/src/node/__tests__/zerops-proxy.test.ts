@@ -113,12 +113,14 @@ describe('Zerops proxy manifest delivery', () => {
 					hosts: ['alpha.example.com'],
 					upstream: 'alpha:3000',
 					gates: { rules: [{ path: '/healthz', kind: 'public' }, { path: '/*', kind: 'human' }] },
+					scheme: 'https',
 				},
 				{
 					id: 'beta',
 					hosts: ['beta.example.com'],
 					upstream: 'beta:8080',
 					gates: { rules: [{ path: '/healthz', kind: 'public' }, { path: '/*', kind: 'human' }] },
+					scheme: 'https',
 				},
 			],
 		})

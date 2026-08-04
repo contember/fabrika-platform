@@ -17,7 +17,7 @@
  *      client could present its own token header on a `public` path and have it reach the app.
  */
 
-import { uuidv7 } from '@fabrika/auth-core'
+import { AUTH_CALLBACK_PATH, SESSION_COOKIE, uuidv7 } from '@fabrika/auth-core'
 import type { ProxyManifest } from '@fabrika/proxy-contract'
 import { Authorizer, type AuthorizerOptions, type Decision, type DenyReason, type ForwardedRequest, type ResolvedApp } from './authorize'
 import type { TokenCache } from './cache'
@@ -118,7 +118,12 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 				})
 			}
 
-			const decision = await authorizer.authorize(resolved, forwarded)
+			// The handoff callback is checked BEFORE the gates: it is how a browser becomes able to
+			// satisfy one, so it cannot itself be behind one. Because Caddy returns a non-2xx auth
+			// response verbatim, answering 302 + Set-Cookie here reaches the client and never the app.
+			const decision = forwarded.url.pathname === AUTH_CALLBACK_PATH
+				? await authorizer.authorizeCallback(resolved, forwarded)
+				: await authorizer.authorize(resolved, forwarded)
 			const fields: LogFields = {
 				requestId,
 				app: resolved.app.id,
@@ -134,6 +139,10 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 				}
 				return new Response(null, { status: 204, headers })
 			}
+			if (decision.outcome === 'handoff') {
+				logger.info('handoff', fields)
+				return handoffResponse(decision, resolved.app.scheme === 'https')
+			}
 			return denied(logger, fields, decision)
 		} catch {
 			// The last line of the fail-closed guarantee. No `err` is inspected or logged: a caught
@@ -142,6 +151,30 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 			return textResponse(403, 'forbidden')
 		}
 	}
+}
+
+/**
+ * Render a redeemed handoff: set the app session on THIS host and send the browser where IAM said.
+ *
+ * The cookie is host-only — no `Domain` — which is the whole point of ADR-0021: it belongs to this
+ * app's host and no sibling can read it. `Secure` follows the manifest's scheme rather than the
+ * socket, because behind a terminating balancer the socket is plain HTTP and the flag would silently
+ * drop off exactly where it matters most.
+ */
+function handoffResponse(decision: Extract<Decision, { outcome: 'handoff' }>, secure: boolean): Response {
+	const maxAge = Math.max(0, decision.expiresAt - Math.floor(Date.now() / 1000))
+	const attributes = [
+		`${SESSION_COOKIE}=${decision.session}`,
+		'Path=/',
+		`Max-Age=${maxAge}`,
+		'HttpOnly',
+		'SameSite=Lax',
+		...(secure ? ['Secure'] : []),
+	]
+	return new Response(null, {
+		status: 302,
+		headers: { location: decision.location, 'cache-control': 'no-store', 'set-cookie': attributes.join('; ') },
+	})
 }
 
 /** Emit the log line for a refusal and render its response. The reason is logged, never returned. */

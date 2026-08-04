@@ -113,7 +113,7 @@ describe('deny — human gate', () => {
 		const response = await service(HUMAN, iam)(verifyRequest({ path: '/dashboard' }))
 		expect(response.status).toBe(302)
 		expect(response.headers.get('location')).toBe(
-			`${ISSUER}/auth/login?redirect=${encodeURIComponent('https://app.example.com/dashboard')}`,
+			`${ISSUER}/auth/login?app=example-app&redirect=${encodeURIComponent('https://app.example.com/dashboard')}`,
 		)
 		expect(response.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
 		// No session cookie → the answer is knowable locally; IAM is not consulted.
@@ -283,6 +283,9 @@ describe('deny — an internal fault is still a deny', () => {
 				throw new TypeError('boom')
 			},
 			mintFromKey: () => {
+				throw new TypeError('boom')
+			},
+			exchangeAuthCode: (): never => {
 				throw new TypeError('boom')
 			},
 			getJwks: () => Promise.reject(new TypeError('boom')),

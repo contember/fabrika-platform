@@ -26,8 +26,14 @@ const GATES: AppGates = { rules: [{ path: '/public/*', kind: 'public' }, { path:
 
 const MANIFEST: ProxyManifest = {
 	apps: [
-		{ id: 'app-one', hosts: ['one.example.com'], upstream: 'one:3000', gates: GATES },
-		{ id: 'app-two', hosts: ['two.example.com', 'alias.example.com'], upstream: 'two:8080', gates: { rules: [{ path: '/*', kind: 'service' }] } },
+		{ id: 'app-one', hosts: ['one.example.com'], upstream: 'one:3000', scheme: 'https', gates: GATES },
+		{
+			id: 'app-two',
+			hosts: ['two.example.com', 'alias.example.com'],
+			upstream: 'two:8080',
+			scheme: 'https',
+			gates: { rules: [{ path: '/*', kind: 'service' }] },
+		},
 	],
 }
 
@@ -83,8 +89,8 @@ describe('server shape', () => {
 	test('a host claimed by two apps is rejected at generation time', () => {
 		const clashing: ProxyManifest = {
 			apps: [
-				{ id: 'a', hosts: ['same.example.com'], upstream: 'a:1', gates: { rules: [] } },
-				{ id: 'b', hosts: ['SAME.example.com'], upstream: 'b:1', gates: { rules: [] } },
+				{ id: 'a', hosts: ['same.example.com'], upstream: 'a:1', scheme: 'https', gates: { rules: [] } },
+				{ id: 'b', hosts: ['SAME.example.com'], upstream: 'b:1', scheme: 'https', gates: { rules: [] } },
 			],
 		}
 		expect(() => buildCaddyConfig(clashing, OPTIONS)).toThrow(CaddyConfigError)
@@ -198,6 +204,7 @@ describe('access-log redaction', () => {
 				id: 'a',
 				hosts: ['a.example.com'],
 				upstream: 'a:1',
+				scheme: 'https',
 				gates: { rules: [{ path: '/s/*', kind: 'service', credential: { in: 'query', name: 'pxt' } }] },
 			}],
 		}

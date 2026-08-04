@@ -75,6 +75,7 @@ describe('no secret material reaches the log', () => {
 		const exploding = {
 			mintToken: () => Promise.reject(new Error(`connect to https://iam/mint?session=${SESSION}`)),
 			mintFromKey: () => Promise.reject(new Error('nope')),
+			exchangeAuthCode: () => Promise.reject(new Error('nope')),
 			getJwks: () => Promise.reject(new Error('nope')),
 		}
 		const verify = createVerifyService({ manifest: manifestWith(GATES), iam: exploding, issuer: ISSUER, logger })

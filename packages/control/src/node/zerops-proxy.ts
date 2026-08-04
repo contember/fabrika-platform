@@ -55,7 +55,9 @@ export async function compileNamespaceProxyManifest(db: ControlRegistryRepositor
 		}
 		ids.add(row.app_id)
 		hosts.add(host)
-		apps.push({ id: row.app_id, hosts: [host], upstream: proxy.upstream, gates: proxy.gates })
+		// A Zerops public domain is always served over the project's TLS-terminating L7 balancer, so the
+		// browser speaks https even though the proxy itself is reached over plain HTTP (ADR-0021).
+		apps.push({ id: row.app_id, hosts: [host], upstream: proxy.upstream, gates: proxy.gates, scheme: 'https' })
 	}
 	return { apps }
 }

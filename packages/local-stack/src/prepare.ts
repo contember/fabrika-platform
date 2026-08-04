@@ -104,17 +104,20 @@ export const localPlatformProxyManifest = (): ProxyManifest => ({
 			hosts: ['iam.fabrika.localhost'],
 			upstream: 'iam:18080',
 			gates: { rules: [{ path: '/*', kind: 'public' }] },
+			scheme: 'http',
 		},
 		{
 			id: 'vozka',
 			hosts: ['control.fabrika.localhost'],
 			upstream: 'control:3000',
 			gates: { rules: [{ path: '/*', kind: 'public' }] },
+			scheme: 'http',
 		},
 		{
 			id: 'operations',
 			hosts: ['errors.fabrika.localhost'],
 			upstream: 'operations:3000',
+			scheme: 'http',
 			gates: {
 				rules: [
 					{ path: '/api/*/envelope/', kind: 'public' },
@@ -133,6 +136,7 @@ const generateProxyConfigs = async (): Promise<void> => {
 			hosts: ['notes.fabrika.localhost'],
 			upstream: 'notes:3000',
 			gates: notesGates,
+			scheme: 'http',
 		}],
 	}
 	await Promise.all([

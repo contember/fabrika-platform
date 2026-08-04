@@ -11,14 +11,29 @@
  * to a deny too — the distinction only chooses the status, never the outcome.
  */
 
-import type { Jwks, MintFromKeyInput, MintFromKeyResult, MintTokenInput, MintTokenResult, PublicJwk } from '@fabrika/auth-core'
+import type {
+	ExchangeAuthCodeInput,
+	ExchangeAuthCodeResult,
+	Jwks,
+	MintFromKeyInput,
+	MintFromKeyResult,
+	MintTokenInput,
+	MintTokenResult,
+	PublicJwk,
+} from '@fabrika/auth-core'
 import { DEFAULT_IAM_TIMEOUT_MS } from './constants'
 import { numberField, prop, stringField } from './json'
 
-/** What the proxy needs of IAM. `IamRpc` satisfies it structurally — the CF binding drops straight in. */
+/**
+ * What the proxy needs of IAM. IAM's entrypoints satisfy it structurally — the CF binding drops
+ * straight in with no adapter. Three of the four calls are `IamRpc`; `exchangeAuthCode` is
+ * deliberately NOT (`IamHandoffRpc`, ADR-0021), because only the proxy may turn a handoff code into
+ * a session and `IamRpc` is held by every SDK consumer.
+ */
 export interface IamGateway {
 	mintToken(input: MintTokenInput): Promise<MintTokenResult>
 	mintFromKey(input: MintFromKeyInput): Promise<MintFromKeyResult>
+	exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult>
 	getJwks(): Promise<Jwks>
 }
 
@@ -101,6 +116,31 @@ export class HttpIamGateway implements IamGateway {
 			return parsed
 		}
 		return { ok: false, reason: reasonOf(parsed.reason, ['invalid_key', 'unknown_principal', 'disabled'], 'invalid_key') }
+	}
+
+	async exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {
+		const body = await this.post('/auth/mint/exchange', input, 'exchangeAuthCode')
+		const ok = prop(body, 'ok')
+		if (ok === true) {
+			const session = stringField(body, 'session')
+			const returnUrl = stringField(body, 'returnUrl')
+			const expiresAt = numberField(body, 'expiresAt')
+			if (session === undefined || session === '' || returnUrl === undefined || returnUrl === '' || expiresAt === undefined) {
+				throw new IamUnavailableError('exchangeAuthCode')
+			}
+			return { ok: true, session, returnUrl, expiresAt }
+		}
+		if (ok !== false) {
+			throw new IamUnavailableError('exchangeAuthCode')
+		}
+		const reason = stringField(body, 'reason')
+		if (reason === undefined) {
+			throw new IamUnavailableError('exchangeAuthCode')
+		}
+		return {
+			ok: false,
+			reason: reasonOf(reason, ['invalid_code', 'expired_code', 'wrong_app', 'unknown_principal', 'disabled'], 'invalid_code'),
+		}
 	}
 
 	async getJwks(): Promise<Jwks> {

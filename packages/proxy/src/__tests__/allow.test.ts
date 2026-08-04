@@ -220,8 +220,8 @@ describe('app selection', () => {
 		const verify = createVerifyService({
 			manifest: {
 				apps: [
-					{ id: APP, hosts: [HOST], upstream: 'a:3000', gates: { rules: [{ path: '/*', kind: 'human' }] } },
-					{ id: 'open-app', hosts: ['open.example.com'], upstream: 'b:3000', gates: { rules: [{ path: '/*', kind: 'public' }] } },
+					{ id: APP, hosts: [HOST], upstream: 'a:3000', scheme: 'https', gates: { rules: [{ path: '/*', kind: 'human' }] } },
+					{ id: 'open-app', hosts: ['open.example.com'], upstream: 'b:3000', scheme: 'https', gates: { rules: [{ path: '/*', kind: 'public' }] } },
 				],
 			},
 			iam,
