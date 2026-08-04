@@ -1,7 +1,7 @@
 import type { AccessTokenClaims, PermissionEntry } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { buildAuthContext } from '../client'
-import { ForbiddenError, type HttpError, LoginRequiredError, requirePermission, UnauthenticatedError } from '../errors'
+import { ForbiddenError, type HttpError, requirePermission, UnauthenticatedError } from '../errors'
 import type { AuthContext } from '../types'
 import { IamRpcStub } from './stub'
 
@@ -20,23 +20,13 @@ function ctxWith(perms: PermissionEntry[]): AuthContext {
 }
 
 describe('typed errors expose the structural HttpError contract', () => {
-	test('LoginRequiredError → 401 / auth / loginUrl', () => {
-		const err = new LoginRequiredError('login', 'https://idp/auth/login?redirect=x')
-		const structural: HttpError = err
-		expect(structural.httpStatus).toBe(401)
-		expect(structural.type).toBe('auth')
-		expect(structural.message).toBe('login')
-		expect(structural.loginUrl).toBe('https://idp/auth/login?redirect=x')
-		expect(err instanceof Error).toBe(true)
-	})
-
-	test('UnauthenticatedError → 401 / auth, default message, no loginUrl', () => {
+	test('UnauthenticatedError → 401 / auth, default message', () => {
 		const err = new UnauthenticatedError()
 		const structural: HttpError = err
 		expect(structural.httpStatus).toBe(401)
 		expect(structural.type).toBe('auth')
 		expect(structural.message).toBe('authentication required')
-		expect(structural.loginUrl).toBeUndefined()
+		expect(err instanceof Error).toBe(true)
 	})
 
 	test('ForbiddenError → 403 / forbidden', () => {

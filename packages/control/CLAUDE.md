@@ -75,26 +75,27 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
 
 ## Invariants
 
-- **ACL on every `/api/*` route.** `controlApp` authenticates once through
-  `@fabrika/auth` middleware; each handler then calls `authorize` with that
-  resolved context and its action/scope. Actions/scopes live in `src/actions.ts`.
-  The GitHub webhook (`src/webhook.ts`) is the
-  ONLY unauthenticated route — HMAC-gated instead. IAM is the WHOLE front door now (native auth, no
-  Cloudflare Access): `src/iam.ts` configures the public IAM SDK over `env.IAM` —
-  a human via SSO (`px_session` → minted `px_token`) or a machine via an `Authorization: Bearer px_` key
-  (gates: `CONTROL_GATES` = service + human) — then `can(action, scope?)` + audit. `env.IAM` is the
-  `IamRpc` CONTRACT, so it is a service binding on Cloudflare and `HttpIamRpc` (`@fabrika/auth`, bearer
-  `FABRIKA_IAM_RPC_KEY` against IAM's `/rpc/*` at the private `FABRIKA_IAM_RPC_URL`) in a process.
-  `FABRIKA_IAM_URL` remains the public issuer. ONE instance per process, never per request:
-  `PropustkaAuth` caches the JWKS in a WeakMap keyed by that object.
-- **Local vs off-local auth by the `DEV` var:** `DEV='true'` → a fabrika-synthesized AuthContext from a
-  fixed dev persona (no IAM service, selected by the `X-Dev-Principal` header / cookie); `DEV=''` →
-  IAM-backed auth over `env.IAM` (needs `FABRIKA_IAM_URL` as the issuer). `FABRIKA_CONTROL_BOOTSTRAP_ADMINS`
-  is the first-operator escape hatch — fails CLOSED on a malformed value.
-- **The `px_token` cookie's `Secure` flag comes from `FABRIKA_CONTROL_DOMAIN`, never from the request protocol.**
-  Behind a TLS-terminating L7 balancer the browser spoke HTTPS and the process sees plain HTTP, so
-  `PropustkaAuth`'s default derivation would silently drop `Secure`. `secureCookies` (`src/iam.ts`)
-  forces it whenever a public domain is configured. Widening only — the Cloudflare path is unchanged.
+- **ACL on every `/api/*` route.** `controlApp` authenticates once in `controlAuthMiddleware`
+  (`src/iam.ts`); each handler then calls `authorize` with that resolved context and its action/scope.
+  Actions/scopes live in `src/actions.ts`. The GitHub webhook (`src/webhook.ts`) is the ONLY
+  unauthenticated route — HMAC-gated instead.
+- **The PROXY is the front door; `src/iam.ts` only verifies (ADR-0007).** The proxy matches
+  `CONTROL_GATES` (service + human on `/api/*`, the source of `CONTROL_PROXY_GATES` in
+  `fabrika.config.ts`), resolves the credential, and injects the access token as `X-Fabrika-Token`.
+  `iam.authenticate(request)` re-verifies that token LOCALLY against IAM's JWKS — signature, `iss`,
+  `aud`, `exp` — and builds the `AuthContext` for `can(action, scope?)` + audit. Nothing here evaluates
+  a gate, exchanges a session, or writes a cookie, and a miss is a flat 401/403/503, never a login
+  bounce (only `src/iam-admin.ts` / `src/operations-gateway.ts` attach a `loginUrl`, and theirs comes
+  from an UPSTREAM 401). `env.IAM` is the `IamRpc` CONTRACT, so it is a service binding on Cloudflare
+  and `HttpIamRpc` (`@fabrika/auth`, bearer `FABRIKA_IAM_RPC_KEY` against IAM's `/rpc/*` at the private
+  `FABRIKA_IAM_RPC_URL`) in a process. `FABRIKA_IAM_URL` remains the public issuer. ONE `HttpIamRpc` per
+  process, never per request: the SDK caches the JWKS in a WeakMap keyed by that object.
+- **Local vs off-local auth by the `DEV` var:** `DEV='true'` (only with `ENVIRONMENT='local'`) → a
+  fabrika-synthesized AuthContext from a fixed dev persona (no IAM service, selected by the
+  `X-Dev-Principal` header / cookie); `DEV=''` → IAM-backed verification over `env.IAM` (needs
+  `FABRIKA_IAM_URL` as the issuer). Any other `DEV` value fails the boot rather than being guessed.
+  `FABRIKA_CONTROL_BOOTSTRAP_ADMINS` is the first-operator escape hatch — fails CLOSED on a malformed
+  value; `FABRIKA_IAM_PROVISIONING_KEY` is its machine twin, checked before the token path.
 - **Vault (`src/vault.ts`): envelope AES-256-GCM**, KEK from `FABRIKA_CONTROL_VAULT_KEY` (never in D1, never logged).
   Secret VALUES are write-only over the API; D1 stores only ciphertext + wrapped DEK. Losing the KEK is unrecoverable by design.
 - **Secrets resolve by ref scheme** (`src/secret-resolver.ts`): `vault:` / `secretstore:` / `env:` / `literal:`.

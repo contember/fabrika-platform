@@ -1,12 +1,13 @@
 /**
- * The shared middleware contract consumed by `@fabrika/app`. The auth package owns
- * the shape so middleware produced by `createIam(...)` drops directly into the
- * application request pipeline without a duplicate compatibility interface.
+ * The shared middleware contract consumed by `@fabrika/app`. The auth package owns the shape so an
+ * app's own auth middleware — the one that calls `iam.authenticate(request)` and stores the resolved
+ * context — drops into the request pipeline without a duplicate compatibility interface. The SDK
+ * itself ships no middleware: enforcement is the proxy's job (ADR-0007).
  *
  * A middleware runs in order; it may:
  *   - mutate `ctx` (e.g. set `ctx.auth`),
  *   - short-circuit by returning a Response WITHOUT calling `next()`,
- *   - or wrap `next()` — await it, then append headers (e.g. a `Set-Cookie`) to the returned Response.
+ *   - or wrap `next()` — await it, then append headers to the returned Response.
  */
 
 import type { AuthContext } from './types'

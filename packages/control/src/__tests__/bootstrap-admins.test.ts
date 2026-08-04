@@ -1,4 +1,4 @@
-import type { AuthContext, IamRpc } from '@fabrika/auth'
+import { type AuthContext, type IamRpc, PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import { describe, expect, test } from 'bun:test'
 import { ACTIONS } from '../actions'
 import { controlAuthMiddleware, parseBootstrapAdmins } from '../iam'
@@ -94,11 +94,13 @@ describe('parseBootstrapAdmins', () => {
 	})
 })
 
+const DEV_ENV = { DEV: 'true', ENVIRONMENT: 'local' } as const
+
 describe('controlAuthMiddleware bootstrap semantics', () => {
 	test('the provisioning context is a global service principal labelled provisioning', async () => {
 		const key = 'px_provision_secret_key_value'
 		const result = await runMiddleware(
-			{ DEV: 'true', FABRIKA_IAM_PROVISIONING_KEY: key },
+			{ ...DEV_ENV, FABRIKA_IAM_PROVISIONING_KEY: key },
 			new Request('https://control.test/api/apps', {
 				headers: { Authorization: `Bearer ${key}`, 'X-Dev-Principal': 'missing@vozka.test' },
 			}),
@@ -114,11 +116,11 @@ describe('controlAuthMiddleware bootstrap semantics', () => {
 
 	test('a listed user is elevated while a non-listed user keeps their original permissions', async () => {
 		const listed = await runMiddleware(
-			{ DEV: 'true', FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' },
+			{ ...DEV_ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' },
 			new Request('https://control.test/api/apps', { headers: { 'X-Dev-Principal': 'viewer@vozka.test' } }),
 		)
 		const notListed = await runMiddleware(
-			{ DEV: 'true', FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' },
+			{ ...DEV_ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' },
 			new Request('https://control.test/api/apps', { headers: { 'X-Dev-Principal': 'operator@vozka.test' } }),
 		)
 
@@ -135,11 +137,11 @@ describe('controlAuthMiddleware bootstrap semantics', () => {
 	test('bootstrap elevation does not apply to service or unknown callers', async () => {
 		const label = 'service@vozka.test'
 		const service = await runMiddleware(
-			{ DEV: '', IAM: serviceIam, FABRIKA_IAM_URL: ISSUER, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: `["${label}"]` },
-			new Request('https://control.test/api/apps', { headers: { Authorization: `Bearer ${await serviceToken(label)}` } }),
+			{ DEV: '', ENVIRONMENT: 'stage', IAM: serviceIam, FABRIKA_IAM_URL: ISSUER, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: `["${label}"]` },
+			new Request('https://control.test/api/apps', { headers: { [PROXY_TOKEN_HEADER]: await serviceToken(label) } }),
 		)
 		const unknown = await runMiddleware(
-			{ DEV: 'true', FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["missing@vozka.test"]' },
+			{ ...DEV_ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["missing@vozka.test"]' },
 			new Request('https://control.test/api/apps', { headers: { 'X-Dev-Principal': 'missing@vozka.test' } }),
 		)
 
@@ -150,5 +152,26 @@ describe('controlAuthMiddleware bootstrap semantics', () => {
 		expect(unknown.nextCalled).toBe(false)
 		expect(unknown.response.status).toBe(403)
 		expect(unknown.auth).toBeUndefined()
+	})
+
+	test('off-local, an /api/* request with no proxy-injected token is refused', async () => {
+		const result = await runMiddleware(
+			{ DEV: '', ENVIRONMENT: 'stage', IAM: serviceIam, FABRIKA_IAM_URL: ISSUER },
+			new Request('https://control.test/api/apps'),
+		)
+
+		expect(result.nextCalled).toBe(false)
+		expect(result.response.status).toBe(401)
+		expect(result.auth).toBeUndefined()
+	})
+
+	test('off-local, a token the proxy did not sign is refused — the header is not trusted blindly', async () => {
+		const result = await runMiddleware(
+			{ DEV: '', ENVIRONMENT: 'stage', IAM: serviceIam, FABRIKA_IAM_URL: ISSUER },
+			new Request('https://control.test/api/apps', { headers: { [PROXY_TOKEN_HEADER]: 'not.a.jwt' } }),
+		)
+
+		expect(result.nextCalled).toBe(false)
+		expect(result.response.status).toBe(401)
 	})
 })

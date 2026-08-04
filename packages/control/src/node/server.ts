@@ -100,9 +100,9 @@ async function main(): Promise<void> {
 	const server = Bun.serve({
 		port: runtime.config.port,
 		// The project's L7 balancer terminates TLS and forwards plain HTTP on the private network, so this
-		// listener speaks HTTP and holds no certificates. The `px_token` cookie is still marked `Secure`:
-		// `src/iam.ts` decides that from the configured public domain (`FABRIKA_CONTROL_DOMAIN`), not from the
-		// socket, precisely because behind a terminating balancer the socket is the wrong signal.
+		// listener speaks HTTP and holds no certificates. Nothing here reads the socket's scheme: the
+		// proxy owns every cookie now, and `src/iam.ts` takes the console's own origin from the configured
+		// public domain (`FABRIKA_CONTROL_DOMAIN`), because behind a terminating balancer the socket lies.
 		fetch: appHandler.fetch,
 		// Backstop for anything raised outside the handler. The handler already catches its own throws
 		// (see `createFetchHandler`); without this, Bun's default page would answer with source lines.

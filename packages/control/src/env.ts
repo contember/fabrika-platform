@@ -59,9 +59,9 @@ export interface Env {
 	/** 'true' locally → the dev-persona AuthContext (no IAM service); '' off-local → IAM-backed auth. */
 	DEV: string
 	/**
-	 * Public domain this stage serves on (drives absolute URLs); empty when unknown. Also the authority
-	 * on whether the BROWSER spoke HTTPS — see `secureCookies` in src/iam.ts, which cannot use the
-	 * request's own protocol behind a TLS-terminating balancer.
+	 * Public domain this stage serves on (drives absolute URLs); empty when unknown. Also the CSRF
+	 * guard's authority on the console's own origin — see `controlPublicOrigin` in src/iam.ts, which
+	 * cannot use the request's own protocol behind a TLS-terminating balancer.
 	 */
 	FABRIKA_CONTROL_DOMAIN?: string
 	/**

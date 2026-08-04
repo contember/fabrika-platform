@@ -178,10 +178,10 @@ function blobStore(source: Record<string, string | undefined>): S3BlobStore {
 }
 
 /**
- * The IAM handle, off-local. ONE instance for the whole process, deliberately: `PropustkaAuth` caches
- * the fetched JWKS and the tokens minted from `px_` keys in WeakMaps keyed by the binding OBJECT, so a
- * fresh client per request would re-fetch the JWKS on every request. A service binding lives for the
- * isolate's lifetime; this lives for the process's.
+ * The IAM handle, off-local. ONE instance for the whole process, deliberately: `@fabrika/auth` caches
+ * the fetched JWKS and the tokens minted from `px_` share credentials in WeakMaps keyed by the binding
+ * OBJECT, so a fresh client per request would re-fetch the JWKS on every request. A service binding
+ * lives for the isolate's lifetime; this lives for the process's.
  */
 function iamRpc(source: Record<string, string | undefined>): HttpIamRpc {
 	const { origin, key } = readIamRpcProcessConfig(source)

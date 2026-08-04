@@ -38,7 +38,7 @@ export class OperationsWorker extends WorkerEntrypoint<OperationsWorkerBindings>
 			publicHost: this.env.OPERATIONS_PUBLIC_HOST,
 			syncKey: this.env.OPERATIONS_SYNC_KEY,
 			health,
-			iam: createOperationsIam(this.env, { publicHost: this.env.OPERATIONS_PUBLIC_HOST }),
+			iam: createOperationsIam(this.env),
 		}
 	}
 

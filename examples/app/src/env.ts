@@ -6,10 +6,11 @@ export interface Env {
 	// Typed as the `IamRpc` contract re-exported by the SDK — the app needs no dependency on the
 	// worker package itself.
 	IAM: IamRpc
-	// Dev flag: in real apps, select `FakeIamClient` when this is set so `wrangler dev` needs no
-	// Access and no IAM Worker. This example always uses the real binding to exercise the RPC path.
+	// Dev flag: pass it (WITH `ENVIRONMENT: 'local'`) to `createIam` to get `FakeIamClient` plus
+	// synthetic personas, so local dev needs no IAM service. This example deliberately does not — it
+	// always uses the real binding, to exercise the verification path.
 	DEV: string
-	// IAM's origin — the base for login redirects and the `iss`/JWKS the SDK verifies.
+	// IAM's origin — the `iss` the SDK verifies every token against, and the JWKS source.
 	FABRIKA_IAM_ISSUER?: string
 	/** @deprecated Use FABRIKA_IAM_ISSUER. */
 	PROPUSTKA_ISSUER?: string

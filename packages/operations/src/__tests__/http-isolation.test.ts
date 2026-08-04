@@ -1,4 +1,4 @@
-import { buildAccessClaims, type IamRpc, type Jwks, type PermissionEntry } from '@fabrika/auth-core'
+import { buildAccessClaims, type IamRpc, type Jwks, type PermissionEntry, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import {
 	OPERATIONS_CATALOG_PROTOCOL_VERSION,
 	operationsCatalogSnapshotHash,
@@ -35,7 +35,7 @@ const jwks: Jwks = {
 	}],
 }
 
-const handler = (harness = createHarness(), iam = createOperationsIam({ DEV: 'true' })) => {
+const handler = (harness = createHarness(), iam = createOperationsIam({ DEV: 'true', ENVIRONMENT: 'local' })) => {
 	return createOperationsFetchHandler({
 		repositories: harness.repositories,
 		publicHost,
@@ -295,8 +295,8 @@ describe('Operations public/private HTTP isolation', () => {
 		}
 	})
 
-	test('an unauthenticated RPC request preserves the IAM login URL envelope', async () => {
-		const iam = createOperationsIam({ IAM: sessionRpc('unused'), FABRIKA_IAM_URL: issuer }, { publicHost })
+	test('an RPC request with no proxy-injected token is a flat 401 auth envelope (the proxy owns the bounce)', async () => {
+		const iam = createOperationsIam({ IAM: sessionRpc('unused'), FABRIKA_IAM_URL: issuer })
 		const response = await handler(createHarness(), iam)(rpcRequest('operations.internal', 'sources', null))
 		expect(response.status).toBe(401)
 		const body: unknown = await response.json()
@@ -304,23 +304,27 @@ describe('Operations public/private HTTP isolation', () => {
 			throw new Error('expected an authentication error')
 		}
 		expect(body.error).toMatchObject({ type: 'auth', message: 'authentication required' })
-		expect('loginUrl' in body.error && typeof body.error.loginUrl === 'string' ? body.error.loginUrl : '').toContain('/auth/login')
+		expect('loginUrl' in body.error).toBe(false)
 	})
 
-	test('configured public host secures a session cookie minted for an internal HTTP gateway request', async () => {
+	test('the operator is resolved from the proxy-injected token, verified locally', async () => {
 		const token = await signedOperationsUser(privateKey)
-		const iam = createOperationsIam(
-			{ IAM: sessionRpc(token), FABRIKA_IAM_URL: issuer },
-			{ publicHost },
-		)
+		const iam = createOperationsIam({ IAM: sessionRpc('unused'), FABRIKA_IAM_URL: issuer })
 		const fetch = handler(createHarness(), iam)
 		const response = await fetch(
-			new Request('http://operations:3000/api/sources', {
-				headers: { cookie: 'px_session=session-1' },
-			}),
+			new Request('http://operations:3000/api/sources', { headers: { [PROXY_TOKEN_HEADER]: token } }),
 		)
 
 		expect(response.status).toBe(200)
-		expect(response.headers.get('set-cookie')).toContain('; Secure')
+	})
+
+	test('a forged token in that header is refused — the app does not trust the proxy blindly', async () => {
+		const iam = createOperationsIam({ IAM: sessionRpc('unused'), FABRIKA_IAM_URL: issuer })
+		const fetch = handler(createHarness(), iam)
+		const response = await fetch(
+			new Request('http://operations:3000/api/sources', { headers: { [PROXY_TOKEN_HEADER]: 'not.a.jwt' } }),
+		)
+
+		expect(response.status).toBe(401)
 	})
 })

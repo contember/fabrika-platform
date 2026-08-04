@@ -67,10 +67,11 @@ class RealAuthContext implements AuthContext {
 }
 
 /**
- * Build an `AuthContext` from a verified access token's claims — the seam every propustka-native auth
- * path uses (cookie session, API-key bearer, passthrough JWT). The SDK has verified the token LOCALLY;
- * this wraps its claims in the same `permits`-backed context the RPC path returns, so `can()` /
- * `scopedTo()` / `audit()` behave identically. A token with no `ptype` is anonymous (`principal: null`).
+ * Build an `AuthContext` from a verified access token's claims — the seam every authentication path
+ * uses (the proxy-injected token, a redeemed share credential, a passthrough JWT). The SDK has verified
+ * the token LOCALLY; this wraps its claims in the same `permits`-backed context the RPC path returns,
+ * so `can()` / `scopedTo()` / `audit()` behave identically. A token with no `ptype` is anonymous
+ * (`principal: null`).
  */
 export function buildAuthContext(binding: IamRpc, appId: string, claims: AccessTokenClaims, requestId: string): AuthContext {
 	const principal: PrincipalIdentity | null = claims.ptype === undefined

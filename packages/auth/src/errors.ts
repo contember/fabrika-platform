@@ -3,10 +3,12 @@
  *
  * These are the shared structural HTTP-error contract `@fabrika/app` maps without any
  * cross-package `instanceof`: each error exposes `{ httpStatus, type, message }` plus an optional
- * `issues` (validation detail) and an optional `loginUrl` (a human SSO bounce). A mapper reads those
- * fields structurally — it never imports these classes — so these shapes and the framework reader are the
- * single contract. They live in `@fabrika/auth` because `requirePermission` consumes an
- * `AuthContext` (a client type) and `loginUrl` is a request concept, not core logic.
+ * `issues` (validation detail). A mapper reads those fields structurally — it never imports these
+ * classes — so these shapes and the framework reader are the single contract. They live in
+ * `@fabrika/auth` because `requirePermission` consumes an `AuthContext` (a client type).
+ *
+ * There is deliberately no login-bounce error here: since ADR-0007 the proxy 302s an unauthenticated
+ * browser, so an app never has to produce a login URL of its own.
  */
 
 import type { Scope } from '@fabrika/auth-core'
@@ -15,34 +17,16 @@ import type { AuthContext } from './types'
 /**
  * The structural HTTP-error shape. Anything thrown through a request pipeline that satisfies this can be
  * mapped to a Response without an `instanceof` check: `httpStatus` → the status, `type` → the error
- * envelope's `type`, `message` → its `message`, `issues` → optional detail, `loginUrl` → a human SSO
- * bounce target (present only on `LoginRequiredError`).
+ * envelope's `type`, `message` → its `message`, `issues` → optional detail.
  */
 export interface HttpError {
 	readonly httpStatus: number
 	readonly type: string
 	readonly message: string
 	readonly issues?: unknown
-	readonly loginUrl?: string
 }
 
-/**
- * A human caller is not logged in and a redirect to SSO applies. `type: 'auth'`, status 401; `loginUrl`
- * is where the caller may 302 a browser to log in (it already carries the return `redirect` param).
- */
-export class LoginRequiredError extends Error implements HttpError {
-	readonly httpStatus = 401
-	readonly type = 'auth'
-	readonly loginUrl: string
-
-	constructor(message: string, loginUrl: string) {
-		super(message)
-		this.name = 'LoginRequiredError'
-		this.loginUrl = loginUrl
-	}
-}
-
-/** A caller is unauthenticated with no SSO bounce (a machine / XHR). `type: 'auth'`, status 401. */
+/** A caller is unauthenticated. `type: 'auth'`, status 401. */
 export class UnauthenticatedError extends Error implements HttpError {
 	readonly httpStatus = 401
 	readonly type = 'auth'

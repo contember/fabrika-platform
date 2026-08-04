@@ -15,7 +15,7 @@ import type {
  * A fixed dev persona — an identity plus a permissions array. Used purely as a `listPrincipals`
  * roster entry for `wrangler dev` (the people picker / actor list) without a running IAM Worker.
  * `permissions` is data the app may carry on the persona; the fake itself does not enforce it
- * (authorization in the native world is the worker-issued token the SDK's `PropustkaAuth` verifies).
+ * (authorization in the native world is the IAM-issued token `Iam.authenticate` verifies).
  */
 export interface FakePersona {
 	id: string
@@ -57,10 +57,10 @@ function resolveIdentity(config: FakeIamConfig | undefined): FakeIdentity {
 
 /**
  * Drop-in for `IamClient`'s MANAGEMENT surface (`listPrincipals` / `issueKey` / `issueJwt` /
- * `revokeKey`), selectable by the app via an env flag for `wrangler dev`. No Access, no IAM Worker:
- * `listPrincipals` returns the configured roster, and issue/revoke share an in-memory credential
- * registry so a key's `issueKey → revokeKey` lifecycle stays consistent. The authentication/gate path
- * is `PropustkaAuth` (verified against the worker), not this client.
+ * `revokeKey`), selected by `DEV` for local development. No IAM service: `listPrincipals` returns the
+ * configured roster, and issue/revoke share an in-memory credential registry so a key's
+ * `issueKey → revokeKey` lifecycle stays consistent. Authentication is `Iam.authenticate` (which
+ * verifies an IAM-issued token), not this client.
  */
 export class FakeIamClient {
 	private readonly identity: FakeIdentity

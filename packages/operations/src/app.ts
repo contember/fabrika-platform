@@ -12,6 +12,11 @@ import type { OperationsDataEnv } from './pipeline.js'
 import { handleOperationsReleaseRequest } from './releases.js'
 
 const INGEST_PATH = /^\/api\/[1-9][0-9]{0,18}\/envelope\/$/
+/**
+ * The per-path gates the operator surface is fronted by — the source of Operations' proxy manifest
+ * (`fabrika.config.ts`), NOT an in-process evaluator. Since ADR-0007 the proxy is the only enforcement
+ * point; this app only verifies the token the proxy injected.
+ */
 export const OPERATOR_GATES: AppGates = {
 	rules: [
 		{ path: '/api/*', kind: 'service' },
@@ -63,14 +68,24 @@ async function privateOperatorRoute(_request: Request, ctx: OperationsAppContext
 	return isPublicIngress(new URL(ctx.request.url), ctx.env.publicHost) ? notFound() : await next()
 }
 
+/**
+ * Resolve the operator from the proxy-injected token, verified locally. Public ingest and non-`/api/`
+ * paths carry no operator identity and are left alone; everything else fails closed — an unresolved
+ * caller never reaches a handler.
+ */
 function operatorAuthMiddleware(env: OperationsAppEnv): Middleware<OperationsAppContext> {
-	const authenticate = env.iam.authMiddleware<OperationsAppContext>({ gates: OPERATOR_GATES, unmatched: 'deny' })
-	return (request, ctx, next) => {
+	return async (request, ctx, next) => {
 		const url = new URL(request.url)
 		if (isPublicIngress(url, env.publicHost) || !url.pathname.startsWith('/api/')) {
 			return next()
 		}
-		return authenticate(request, ctx, next)
+		const result = await env.iam.authenticate(request)
+		if (!result.ok) {
+			const type = result.status === 401 ? 'auth' : result.status === 403 ? 'forbidden' : 'error'
+			return Response.json({ error: { type, message: 'authentication required' } }, { status: result.status })
+		}
+		ctx.auth = result.context
+		return next()
 	}
 }
 

@@ -29,10 +29,11 @@ The public hostname accepts only Sentry-compatible
 `/api/*` operator routes, `/private/catalog/reconcile`, and
 `/private/releases/reconcile` stay private. Control's same-origin gateway
 transports operator requests; Operations owns authentication, scoped
-authorization, IAM audit, and principal lookup. A configured public Operations
-host forces secure session cookies even when a TLS-terminating proxy forwards
-plain HTTP to the process; never derive the cookie flag from the internal
-request protocol.
+authorization, IAM audit, and principal lookup. Authentication is verification
+only (ADR-0007): the proxy matches `OPERATOR_GATES` and injects the access token,
+`iam.authenticate(request)` re-verifies it locally against IAM's JWKS, and an
+unresolved caller never reaches a handler. Operations evaluates no gate, writes
+no cookie, and never produces a login URL.
 
 Exact occurrence counts come from the append-only SQL occurrence index. Do not
 replace that correctness source with sampled Analytics Engine data. Blob storage

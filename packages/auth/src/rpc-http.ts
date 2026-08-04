@@ -3,9 +3,9 @@
  *
  * WHAT THIS IS NOT: it is not a second IAM. `IamRpc` (@fabrika/auth-core) is unchanged and this class
  * holds no policy — it POSTs the method's input as JSON, reads the result back, and hands it to the
- * same callers (`PropustkaAuth`, `IamClient`) the binding serves. Everything downstream of the
- * contract — gate matching, local token verification, `can()`/`scopedTo()`, delegation checks inside
- * the IAM service — is byte-for-byte the same code on both transports. The ONLY difference is how the
+ * same callers (`Iam`, `IamClient`) the binding serves. Everything downstream of the
+ * contract — local token verification, `can()`/`scopedTo()`, delegation checks inside the IAM
+ * service — is byte-for-byte the same code on both transports. The ONLY difference is how the
  * call travels.
  *
  * THE WIRE IS `@fabrika/iam`'s `src/rpc-http.ts`, and that file is the contract:
@@ -31,10 +31,10 @@
  *
  * ── One instance per process, deliberately ────────────────────────────────────────────────────────
  *
- * `PropustkaAuth` caches the fetched JWKS and the tokens minted from `px_` keys in `WeakMap`s keyed by
- * THE BINDING OBJECT. A fresh `HttpIamRpc` per request would therefore miss both caches every time and
- * re-fetch the JWKS on every request. Build one for the process's lifetime and put it in the env, the
- * way a binding lives for the isolate's lifetime.
+ * The SDK caches the fetched JWKS and the tokens minted from `px_` share credentials in `WeakMap`s
+ * keyed by THE BINDING OBJECT. A fresh `HttpIamRpc` per request would therefore miss both caches every
+ * time and re-fetch the JWKS on every request. Build one for the process's lifetime and put it in the
+ * env, the way a binding lives for the isolate's lifetime.
  *
  * The key is a TRANSPORT credential, never a caller identity: it says "this request came from inside
  * the deployment", exactly as a binding's unreachability does. Per-caller authorization still happens

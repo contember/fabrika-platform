@@ -1,3 +1,4 @@
+import { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import type {
 	AuditInput,
 	IamRpc,
@@ -28,6 +29,12 @@ export class IamRpcStub implements IamRpc {
 	readonly mintFromKeyInputs: MintFromKeyInput[] = []
 	readonly issueKeyInputs: IssueKeyInput[] = []
 	readonly issueJwtInputs: IssueJwtInput[] = []
+	/** How many times the key set was actually fetched — the JWKS cache's only observable. */
+	jwksCalls = 0
+	/** The served key set. Settable so a test can rotate a key in between two verifications. */
+	jwks: Jwks
+	/** When set, `getJwks` rejects — the "IAM could not be consulted" half of the three-state model. */
+	jwksError: Error | undefined
 
 	constructor(
 		private readonly canned: {
@@ -39,7 +46,9 @@ export class IamRpcStub implements IamRpc {
 			issueJwt?: IssueJwtResult
 			jwks?: Jwks
 		} = {},
-	) {}
+	) {
+		this.jwks = canned.jwks ?? { keys: [] }
+	}
 
 	mintToken(input: MintTokenInput): Promise<MintTokenResult> {
 		this.mintTokenInputs.push(input)
@@ -62,7 +71,8 @@ export class IamRpcStub implements IamRpc {
 	}
 
 	getJwks(): Promise<Jwks> {
-		return Promise.resolve(this.canned.jwks ?? { keys: [] })
+		this.jwksCalls += 1
+		return this.jwksError === undefined ? Promise.resolve(this.jwks) : Promise.reject(this.jwksError)
 	}
 
 	listPrincipals(input: ListPrincipalsInput): Promise<ListPrincipalsResult> {
@@ -86,17 +96,21 @@ export class IamRpcStub implements IamRpc {
 }
 
 /**
- * Build a Request carrying a forwarded native credential + a cf-ray. `bearer` sets an
- * `Authorization: Bearer` header (a machine `px_` key / passthrough JWT); `cookie` sets the
- * `px_token` access cookie. `readCredentials` prefers the bearer when both are present.
+ * Build a Request carrying a forwarded native credential + a cf-ray. `proxyToken` sets the header the
+ * proxy injects; `bearer` sets an `Authorization: Bearer` header (a machine `px_` key / passthrough
+ * JWT); `cookie` sets the `px_token` access cookie. `readCredentials` prefers them in that order.
  */
 export function makeRequest(opts: {
 	url?: string
+	proxyToken?: string
 	bearer?: string
 	cookie?: string
 	ray?: string
 } = {}): Request {
 	const headers = new Headers()
+	if (opts.proxyToken !== undefined) {
+		headers.set(PROXY_TOKEN_HEADER, opts.proxyToken)
+	}
 	if (opts.bearer !== undefined) {
 		headers.set('Authorization', `Bearer ${opts.bearer}`)
 	}

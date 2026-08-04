@@ -1,14 +1,19 @@
 /**
  * IAM middleware + runtime ACL helpers for the control plane.
  *
- * The application middleware authenticates each `/api/*` request once and stores the resolved
- * `AuthContext` on the request context. The API router only performs action and scope checks against
- * that context. The GitHub webhook remains outside this guard and is HMAC-gated instead.
+ * The application middleware resolves each `/api/*` request's caller ONCE — from the token the proxy
+ * injected, verified locally against IAM's JWKS — and stores the resulting `AuthContext` on the request
+ * context. The API router only performs action and scope checks against that context. The GitHub
+ * webhook remains outside this guard and is HMAC-gated instead.
+ *
+ * Nothing here evaluates a gate: since ADR-0007 the proxy is the only enforcement point, and it has
+ * already refused (or bounced to login) anything that does not satisfy `CONTROL_GATES`.
  */
 import {
 	type AppGates,
 	type AuthCarrier,
 	type AuthContext,
+	type AuthFailure,
 	createIam as createAppIam,
 	type DomainEvent,
 	type IamRpc,
@@ -21,11 +26,11 @@ import { type ACTIONS, SCOPES, VOZKA_APP_ID } from './actions'
 import { error } from './http'
 
 /**
- * The per-path gates fabrika's control surface enforces in-process as defence in depth. The public
- * Cloudflare proxy uses the same ordered rules before this Worker. Every `/api/*` route admits EITHER a machine `px_` key
- * (automation / CI) OR a logged-in human (the dashboard via SSO) — two precedence-ordered rules
- * sharing the glob, exactly like the example app's two-rule gated host. Health, the webhook and the
- * M2 `POST /api/runs` relay are handled BEFORE this guard (index.ts), so they never reach the gates.
+ * The per-path gates fabrika's control surface is fronted by. They are the source of
+ * `CONTROL_PROXY_GATES` in `fabrika.config.ts` — the proxy manifest — and are NOT evaluated here.
+ * Every `/api/*` route admits EITHER a machine `px_` key (automation / CI) OR a logged-in human (the
+ * dashboard via SSO): two precedence-ordered rules sharing the glob. Health, the webhook and the
+ * `POST /api/runs` relay are handled BEFORE this guard (index.ts), so they never reach the gates.
  */
 export const CONTROL_GATES: AppGates = {
 	rules: [
@@ -38,7 +43,9 @@ export const CONTROL_GATES: AppGates = {
 export interface IamEnv {
 	IAM?: IamRpc
 	DEV: string
-	/** IAM's origin — the token issuer and `/auth/login` redirect base. */
+	/** Deployment stage. `DEV` selects the persona path only when this is exactly `local`. */
+	ENVIRONMENT?: string
+	/** IAM's origin — the issuer every token is verified against. */
 	FABRIKA_IAM_URL?: string
 	/**
 	 * JSON array of bootstrap-admin emails (normally `'[]'`). A caller whose verified email is listed
@@ -52,29 +59,8 @@ export interface IamEnv {
 	 * Empty/unset disables it.
 	 */
 	FABRIKA_IAM_PROVISIONING_KEY?: string
-	/**
-	 * The control plane's own public domain. Read here for ONE reason: it is the authority on whether the
-	 * BROWSER spoke HTTPS, which decides the `px_token` cookie's `Secure` flag — see `secureCookies`.
-	 */
+	/** The control plane's own public domain — the CSRF guard's authority (see `controlPublicOrigin`). */
 	FABRIKA_CONTROL_DOMAIN?: string
-}
-
-/**
- * Whether the freshly minted `px_token` cookie must carry `Secure`.
- *
- * `PropustkaAuth` otherwise derives it from the REQUEST's protocol, and that is wrong behind a
- * TLS-TERMINATING BALANCER — Zerops' project L7 balancer, or any reverse proxy: the browser spoke
- * HTTPS, the process sees plain HTTP on the private network, and a permission-token cookie set without
- * `Secure` there is one downgrade away from being sent in the clear. The configured public domain is
- * the authority on what the browser actually spoke, so a configured domain forces `Secure`.
- *
- * Returning `undefined` (no domain: local dev, or a *.workers.dev stage) keeps the derived behaviour.
- * WIDENING ONLY — everything that was `Secure` before still is, so the Cloudflare path is unchanged
- * (there the request protocol is https either way).
- */
-function secureCookies(env: IamEnv): true | undefined {
-	const domain = env.FABRIKA_CONTROL_DOMAIN
-	return domain !== undefined && domain.trim() !== '' ? true : undefined
 }
 
 /**
@@ -151,41 +137,19 @@ const SDK_DEV_PERSONAS: Record<string, PersonaSpec> = {
 }
 
 /**
- * The application-framework auth front door. It uses the public IAM SDK for normal dev and
- * production authentication, then applies the two control-only bootstrap hatches to the resolved context.
+ * The application-framework auth front door. It resolves the caller through the public IAM SDK — the
+ * proxy-injected token, verified locally — then applies the two control-only bootstrap hatches.
  */
 export function controlAuthMiddleware<Ctx extends AuthCarrier>(env: IamEnv): Middleware<Ctx> {
-	const secure = secureCookies(env)
 	const iam = createAppIam(env, {
 		appId: VOZKA_APP_ID,
 		devPersonas: SDK_DEV_PERSONAS,
 		devDefaultPersona: DEV_DEFAULT_EMAIL,
 		devPersonaCookie: DEV_PERSONA_COOKIE,
 		devPersonaHeader: DEV_PRINCIPAL_HEADER,
-		...(secure === undefined ? {} : { forceSecureCookies: secure }),
 	})
 	const bootstrapAdmins = parseBootstrapAdmins(env.FABRIKA_CONTROL_BOOTSTRAP_ADMINS)
 	const provisioningKey = (env.FABRIKA_IAM_PROVISIONING_KEY ?? '').trim()
-	const authenticate = iam.authMiddleware<Ctx>({
-		gates: CONTROL_GATES,
-		onError(request, failure) {
-			if (new URL(request.url).pathname === '/api/rpc') {
-				const type = failure.status === 401 ? 'auth' : failure.status === 403 ? 'forbidden' : 'error'
-				return Response.json({
-					error: {
-						type,
-						message: failure.reason,
-						...(failure.loginUrl === undefined ? {} : { loginUrl: failure.loginUrl }),
-					},
-				}, { status: failure.status })
-			}
-			return error(
-				failure.status,
-				failure.reason,
-				failure.loginUrl === undefined ? undefined : { loginUrl: failure.loginUrl },
-			)
-		},
-	})
 
 	return async (request, ctx, next) => {
 		const path = new URL(request.url).pathname
@@ -199,22 +163,30 @@ export function controlAuthMiddleware<Ctx extends AuthCarrier>(env: IamEnv): Mid
 			}
 		}
 
-		return authenticate(request, ctx, async () => {
-			const auth = ctx.auth
-			const principal = auth?.principal
-			if (
-				auth !== undefined
-				&& auth !== null
-				&& principal !== undefined
-				&& principal !== null
-				&& principal.type === 'user'
-				&& bootstrapAdmins.has(principal.label)
-			) {
-				ctx.auth = new BootstrapAdminAuthContext(auth)
-			}
-			return next()
-		})
+		const result = await iam.authenticate(request)
+		if (!result.ok) {
+			return authFailureResponse(path, result)
+		}
+		const principal = result.context.principal
+		ctx.auth = principal !== null && principal.type === 'user' && bootstrapAdmins.has(principal.label)
+			? new BootstrapAdminAuthContext(result.context)
+			: result.context
+		return next()
 	}
+}
+
+/**
+ * Map an unresolved caller to a response. There is no login bounce here by design: behind the proxy an
+ * unauthenticated browser is 302'd before it reaches this Worker, so a miss on `/api/*` is a flat
+ * status. (`iam-admin.ts` / `operations-gateway.ts` still attach a `loginUrl` — that one comes from an
+ * UPSTREAM 401 and is a different thing.)
+ */
+function authFailureResponse(path: string, failure: AuthFailure): Response {
+	if (path === '/api/rpc') {
+		const type = failure.status === 401 ? 'auth' : failure.status === 403 ? 'forbidden' : 'error'
+		return Response.json({ error: { type, message: failure.reason } }, { status: failure.status })
+	}
+	return error(failure.status, failure.reason)
 }
 
 /** The synthetic principal a provisioning-key request resolves to. */

@@ -20,7 +20,7 @@ function env(): OperationsAppEnv {
 			delete: () => Promise.resolve(),
 		},
 		health: new SqliteHealthRepository(harness.db),
-		iam: createOperationsIam({ DEV: 'true' }),
+		iam: createOperationsIam({ DEV: 'true', ENVIRONMENT: 'local' }),
 	}
 }
 
