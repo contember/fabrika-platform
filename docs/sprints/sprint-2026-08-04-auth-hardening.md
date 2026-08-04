@@ -258,6 +258,29 @@ not anticipate:
   because `vozka` is `public`. The local console is now closed rather than open, which is the safer
   failure, but it is still WU-D that unblocks it.
 
+**Wave 1 — WU-C1 landed** (`8216811`), +1065/−149, with the Postgres suites actually executed against a
+real instance (1739 pass repo-wide, 0 fail). CORR-1 was fixed at the choke point rather than its four
+call sites: `PrincipalRepository` is now the only place that normalizes, `email` holds the mailbox and
+`label` the display spelling, and every write path puts the `principal_email_claims` reservation in the
+same batch so it moves with an address instead of going stale. That also removed `LOWER()` from the
+queries, which is what made the two engines disagree about non-ASCII mailboxes in the first place.
+
+⚠ **Repo-wide fact, learned the hard way**: Bun's `Database.exec()` throws on a compile error but
+**swallows a constraint violation and keeps running the rest of the script**. A migration guard verified
+through `exec` looks like it passed. `wrangler d1 migrations apply` splits statements and stops, so
+production is unaffected — but any test that applies a SQLite migration file must do it one statement at
+a time. Documented in `packages/iam/CLAUDE.md` and in `migration-guards.test.ts`.
+
+**Consequence to hand to WU-L**: with an empty `origins` array rejected by the admin API (SEC-12) and an
+empty registry now a 400 for an unreachable redirect (SEC-6), **an operator can no longer un-register an
+app through the API** — only by deleting rows. The opt-out still works for a genuine shared-cookie
+installation, so this is an operational gap rather than a break, but clearing a registry should be an
+explicit operation rather than an overloaded empty array. Fold it into WU-L's admin surface work.
+
+`lookupActionUser`'s `ambiguous` status is now unreachable through the application — the schema forbids
+two rows per mailbox. It was kept as a fail-closed belt, and the recovery buckets are unchanged, so the
+indistinguishability constraint still holds.
+
 **Considered and rejected — one shared `TokenVerifier`.** `packages/auth/src/verify.ts` is a near-twin of
 `packages/proxy/src/verifier.ts`. They cannot share code cheaply: `@fabrika/auth-core` is deliberately
 dependency-free and jose-free ("Signing/verifying stays in the packages that own it"), and the proxy must
