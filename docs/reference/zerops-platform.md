@@ -192,7 +192,7 @@ The following were confirmed against a real account and are no longer inferences
 | `zeropsSetup` in an import without `buildFromGit`                                   | **Refused** — 400 `projectImportInvalidParameter`, `{"iam.buildFromGit": ["parameter is required for use of pipelineConfig"]}` |
 | `enableSubdomainAccess: true` on a never-deployed service                           | **Refused** — "Service stack is not http or https". Needs a deployed HTTP port first                                           |
 | One generated subdomain per HTTP port                                               | **Yes** — `proxy-<host>-<port>.<region>.zerops.app`                                                                            |
-| A version alias such as `alpine/bun@1.3`                                            | Resolves to the newest concrete version (`1.3.9`). `zz catalog` lists only concrete ones                                       |
+| A version alias such as `alpine/bun@1.3`                                            | Resolves to the newest concrete version (`1.3.9`). `zops catalog` lists only concrete ones                                     |
 | `alpine/go@latest` building Caddy 2.10.2                                            | **Works** — the base is Go 1.22 and Go's automatic toolchain download supplies the rest                                        |
 
 Two consequences worth stating separately, because they are ordering constraints
