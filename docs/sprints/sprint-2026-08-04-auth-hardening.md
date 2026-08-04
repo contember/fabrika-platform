@@ -10,6 +10,30 @@ correctness debt the review surfaced along the way.
 No backward compatibility is required. Every consumer of this code is in this repo or is a
 first-party app the same team ships.
 
+## What IAM and the proxy are FOR
+
+The whole subsystem exists to do two things:
+
+1. **Shield an application from authentication entirely.** An app should never see a login, a
+   session, a cookie, an SSO round trip, or a token exchange. It receives a request that has already
+   been decided on, plus a verified statement of who is calling.
+2. **Make authorization simple.** One vocabulary the app declares (`AppSchema`), one question the app
+   asks (`can(action, scope)`), one place the answer comes from.
+
+Everything in these packages is judged against that. **Every mechanism must be safe — and there must
+be no more mechanism than the job needs.** The project is WIP: where an ADR records a decision that
+later work invalidated, consolidate it rather than preserving a chain of corrections a reader has to
+replay. Where two mechanisms do one job, delete one.
+
+Three things fail that test today, and this sprint removes them:
+
+- **Two enforcement paths** — the proxy and the SDK both evaluate gates. WU-A.
+- **Two dev bypasses** — IAM's `LOCAL_DEV_LOGIN` and the SDK's `DEV` persona path, which is a second
+  authentication model that exists only locally and is where a total silent bypass was hiding
+  (SEC-4). WU-K.
+- **Two admin transports** — `/admin/rpc` and ~24 REST operations, of which only four have a caller.
+  WU-L.
+
 ## Load-bearing facts, re-verified at HEAD (`30da7b8`)
 
 | #  | Fact                                                         | Evidence                                                                                                                                                                                                                                                  |
@@ -74,17 +98,62 @@ _Acceptance:_ `bun run local:up` fronts the console with real gates; an unauthen
 `/api/*` is refused by the proxy, not by the app.
 _Touch points:_ `packages/local-stack/src/prepare.ts`, `packages/local-stack/CLAUDE.md`, `tests/browser/`.
 
+**WU-K — One dev bypass, not two** · medium · after A and D
+The SDK's `DEV` path (`FakeIamClient`, `PersonaSpec`, `devDefaultPersona`, `devLoginHandler`, the
+`?__as=` / cookie / header selector) is a **second authentication model** that exists only locally.
+It is where SEC-4 hid — a total silent bypass reachable from one mistyped env var — and it exists
+only because local development did not run the real stack. After WU-D it does: the local stack runs
+real IAM behind the real proxy, and IAM already has its own bypass (`LOCAL_DEV_LOGIN`, refused at use
+once the flag is off).
+_Verify first:_ with WU-D applied, sign in to the local console through the real proxy and IAM.
+_Acceptance:_ one dev bypass in the system, in IAM, gated by `ENVIRONMENT=local`. `createIam` takes no
+`DEV` at all. Local development still works with no manual token wrangling.
+_Touch points:_ `packages/auth/src/{iam,fake}.ts`, `packages/control/src/iam.ts` (the persona roster
+and `X-Dev-Principal`), `packages/operations/src/*`, `packages/local-stack/**`, `tests/browser/`.
+_Folds in:_ what remains of SEC-4 after WU-A.
+
 ### Wave 3
 
 **WU-E — `__Host-` cookie prefix** · medium · coordinated across auth-core, proxy, iam (SEC-20)
 **WU-F — Cover the ADR-0021 path** · medium · TEST-1, TEST-2, TEST-3
 **WU-G — Project return origins from the control plane** · medium · closes [backlog 51](../backlog/51-project-return-origins-from-the-control-plane.md)
 
+**WU-L — Collapse the admin surface to one transport plus a provisioning API** · medium
+`packages/iam/src/admin/router.ts` serves ~24 REST operations mirroring `/admin/rpc`. Verified
+callers of the REST half, repo-wide: `PUT|GET /admin/apps/:app/schema` (`reconcileSchema`, a
+deploy-time HTTP call that genuinely cannot use a binding) and `POST|DELETE /admin/api-keys`
+(`local-stack/src/smoke.ts`). The console — `iam-ui` and `dashboard` — uses `/admin/rpc` exclusively.
+Everything else (principals CRUD, grants, roles, policies, share-links, audit, auth-log, me, list
+apps, rotate) is an uncalled mirror, and every one of them is a second place a gate can be forgotten
+(SEC-11) or an error can leak (CORR-4).
+_Acceptance:_ REST retains only the machine/provisioning endpoints a deploy step and bootstrap
+actually call, documented as such; everything else is reachable over `/admin/rpc` only; the
+"policy, audit and hidden-object behaviour must not diverge by transport" problem stops existing
+because there is one transport for those operations.
+_Touch points:_ `packages/iam/src/admin/**`, `packages/iam-contract/src/index.ts`,
+`packages/control/src/iam-admin.ts` (the path-rewriting gateway), `docs/reference/core-application-composition.md`.
+
 ### Wave 4
 
-**WU-H — Documentation sweep** · small · DOC-1, DOC-4…DOC-12, package CLAUDE.mds, a new ADR for the
-Cloudflare least-privilege gap (ARCH-2)
+**WU-H — Documentation sweep** · small · DOC-1, DOC-4…DOC-12, package CLAUDE.mds
 **WU-I — Operator session revocation** · medium · closes [backlog 52](../backlog/52-revoke-sessions-an-operator-no-longer-trusts.md)
+
+**WU-J — Consolidate the enforcement ADRs** · medium
+Where enforcement lives has been decided four times: ADR-0007 moved it to a proxy and retired an
+invariant inside itself; 0008 chose Caddy; 0010 amends 0008 after implementation disproved its
+central assumption; 0021 replaces the shared-cookie handoff 0007/0008 silently assumed. backlog 18
+finishes the job by deleting the SDK's copy. A reader today has to replay four documents plus a
+retired invariant to learn one answer.
+_Acceptance:_ one ADR states the settled model end to end — the proxy is the only enforcement point,
+Caddy is HTTP correctness only, gates are evaluated once in TypeScript, the session is handed over as
+a one-time code, and the app only ever verifies an injected token. 0007/0008/0010/0021 are marked
+`Superseded by NNNN` and kept as history (they hold the _why_, including the three verified Caddy
+semantics mismatches, which must not be lost). `docs/reference/` is re-derived from the new ADR —
+`overview.md`, `core-application-composition.md` and `cross-host-sso.md` all currently describe the
+pre-consolidation world. Record the Cloudflare least-privilege asymmetry (ARCH-2) here rather than in
+a separate ADR.
+_Note:_ `docs/CLAUDE.md` says ADRs are immutable and superseded, never rewritten. This follows that
+rule — it adds one and re-statuses four; it does not edit their bodies.
 
 ## Out of scope
 
