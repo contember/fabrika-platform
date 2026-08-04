@@ -19,9 +19,9 @@ export const AUTH_LOG_RETENTION_SECONDS = 30 * 24 * 60 * 60 // 30 days
 export const PASSWORD_TRANSIENT_RETENTION_SECONDS = 7 * 24 * 60 * 60 // 7 days
 
 /**
- * Prune old auth-log rows, password action tokens, and login throttles. Registered through
- * `waitUntil` because a Worker scheduled handler that returns before its writes settle is cut off;
- * in a process the supervised promise means a failure is logged rather than fatal.
+ * Prune old auth-log rows, password action tokens, login throttles, and spent handoff codes.
+ * Registered through `waitUntil` because a Worker scheduled handler that returns before its writes
+ * settle is cut off; in a process the supervised promise means a failure is logged rather than fatal.
  */
 export function runIamMaintenance(env: Env, ctx: RequestContext, now: number = Date.now()): void {
 	const services = buildServices(env)
@@ -31,6 +31,8 @@ export function runIamMaintenance(env: Env, ctx: RequestContext, now: number = D
 			services.repositories.audit.pruneAuthLog(nowSeconds - AUTH_LOG_RETENTION_SECONDS),
 			services.repositories.passwords.pruneActionTokens(nowSeconds - PASSWORD_TRANSIENT_RETENTION_SECONDS),
 			services.repositories.passwords.pruneLoginThrottles(nowSeconds - PASSWORD_TRANSIENT_RETENTION_SECONDS),
+			// Codes live two minutes and are single-use, so this only sweeps ones nobody redeemed.
+			services.repositories.handoff.pruneCodes(nowSeconds),
 		]).then(() => undefined),
 	)
 }

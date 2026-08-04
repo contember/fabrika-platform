@@ -53,6 +53,8 @@ async function reset(): Promise<void> {
 			'password_credentials',
 			'password_accounts',
 			'password_login_throttles',
+			'auth_codes',
+			'app_return_origins',
 			'auth_log',
 			'audit_events',
 			'credential_grants',
@@ -85,6 +87,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0001_init.sql' },
 			{ bundle: 'iam', name: '0002_provisioning_principal.sql' },
 			{ bundle: 'iam', name: '0003_password_auth.sql' },
+			{ bundle: 'iam', name: '0004_cross_host_sso.sql' },
 		])
 	})
 
@@ -117,6 +120,8 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'password_credentials',
 				'password_action_tokens',
 				'password_login_throttles',
+				'auth_codes',
+				'app_return_origins',
 			]
 		) {
 			expect(names).toContain(table)

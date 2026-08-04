@@ -131,6 +131,22 @@ export interface SessionRow {
 	created_at: number
 	expires_at: number
 	revoked_at: number | null
+	/** NULL = an IAM session. Non-NULL = an app-bound child session (ADR-0021) that mints only for it. */
+	app: string | null
+	/** The IAM session this was derived from; revoking that one revokes this. NULL on an IAM session. */
+	parent_session_id: string | null
+}
+
+/** A single-use cross-host handoff code (`auth_codes`). Only its hash is stored. */
+export interface AuthCodeRow {
+	id: string
+	code_hash: string
+	app: string
+	parent_session_id: string
+	return_url: string
+	expires_at: number
+	consumed_at: number | null
+	created_at: number
 }
 
 /** Derived principal status — invited (not activated) → active → disabled. */
@@ -771,6 +787,10 @@ export class SessionRepository {
 		email?: string | null
 		authenticationMethod?: 'oidc' | 'password'
 		expiresAt: number
+		/** Bind this session to ONE app (ADR-0021). Omitted = an IAM session, usable for any app. */
+		app?: string | null
+		/** The IAM session this is derived from. Revoking that one revokes this. */
+		parentSessionId?: string | null
 	}): Promise<string> {
 		const id = uuidv7()
 		const authenticationMethod = input.authenticationMethod ?? 'oidc'
@@ -778,8 +798,10 @@ export class SessionRepository {
 			throw new Error('OIDC sessions require an IdP subject')
 		}
 		await this.db
-			.prepare(`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, email, authentication_method, expires_at, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+			.prepare(
+				`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, email, authentication_method, expires_at, created_at, app, parent_session_id)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			)
 			.bind(
 				id,
 				input.tokenHash,
@@ -789,6 +811,8 @@ export class SessionRepository {
 				authenticationMethod,
 				input.expiresAt,
 				unixNow(),
+				input.app ?? null,
+				input.parentSessionId ?? null,
 			)
 			.run()
 		return id
@@ -798,12 +822,34 @@ export class SessionRepository {
 	 * Look up a session by the cookie's hash, but ONLY while still valid (not revoked, not expired).
 	 * An invalid/absent session returns null — the caller re-authenticates. Single-statement so the
 	 * validity check and the read can't race a concurrent revoke.
+	 *
+	 * A CHILD session is valid only while its parent is: the join is what makes "log out of IAM" reach
+	 * app sessions on hosts IAM cannot set a cookie for. `ON DELETE CASCADE` does not cover this —
+	 * revocation writes `revoked_at`, it does not delete the row.
 	 */
 	async getActiveSessionByHash(tokenHash: string): Promise<SessionRow | null> {
+		const now = unixNow()
 		return this.db
-			.prepare(`SELECT * FROM sessions
-				WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?`)
-			.bind(tokenHash, unixNow())
+			.prepare(`SELECT s.* FROM sessions s
+				LEFT JOIN sessions p ON p.id = s.parent_session_id
+				WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
+					AND (s.parent_session_id IS NULL OR (p.revoked_at IS NULL AND p.expires_at > ?))`)
+			.bind(tokenHash, now, now)
+			.first<SessionRow>()
+	}
+
+	/**
+	 * The same validity rule as `getActiveSessionByHash`, addressed by id — how a handoff code reaches
+	 * the login it was issued against, which it holds by id rather than by a hash it must not store.
+	 */
+	async getActiveSessionById(id: string): Promise<SessionRow | null> {
+		const now = unixNow()
+		return this.db
+			.prepare(`SELECT s.* FROM sessions s
+				LEFT JOIN sessions p ON p.id = s.parent_session_id
+				WHERE s.id = ? AND s.revoked_at IS NULL AND s.expires_at > ?
+					AND (s.parent_session_id IS NULL OR (p.revoked_at IS NULL AND p.expires_at > ?))`)
+			.bind(id, now, now)
 			.first<SessionRow>()
 	}
 
@@ -830,6 +876,90 @@ export class SessionRepository {
 		const result = await this.db
 			.prepare('DELETE FROM sessions WHERE expires_at < ? OR revoked_at IS NOT NULL')
 			.bind(now)
+			.run()
+		return result.meta.changes ?? 0
+	}
+}
+
+// ── Cross-host handoff (ADR-0021) ───────────────────────────────────────────
+
+export class HandoffRepository {
+	constructor(protected readonly db: SqlDatabase) {}
+
+	/** Origins IAM will send a browser back to for this app. Empty = the app can receive no handoff. */
+	async listReturnOrigins(app: string): Promise<string[]> {
+		const { results } = await this.db
+			.prepare('SELECT origin FROM app_return_origins WHERE app = ? ORDER BY origin')
+			.bind(app)
+			.all<{ origin: string }>()
+		return results.map((row) => row.origin)
+	}
+
+	/**
+	 * Replace an app's registered return origins. Declarative on purpose: the caller states the whole
+	 * set, so removing an origin is the same operation as adding one and a stale entry cannot survive
+	 * a reconcile. Values are stored exactly as given — `normalizeOrigin` is the one place that decides
+	 * what canonical means, and it runs before this.
+	 */
+	async setReturnOrigins(app: string, origins: readonly string[]): Promise<void> {
+		await this.db.prepare('DELETE FROM app_return_origins WHERE app = ?').bind(app).run()
+		const now = unixNow()
+		for (const origin of origins) {
+			await this.db
+				.prepare('INSERT INTO app_return_origins (app, origin, created_at) VALUES (?, ?, ?)')
+				.bind(app, origin, now)
+				.run()
+		}
+	}
+
+	/** Issue a single-use code. Only the hash is stored; the plaintext lives in one redirect. */
+	async issueCode(input: {
+		codeHash: string
+		app: string
+		parentSessionId: string
+		returnUrl: string
+		expiresAt: number
+	}): Promise<string> {
+		const id = uuidv7()
+		await this.db
+			.prepare(`INSERT INTO auth_codes (id, code_hash, app, parent_session_id, return_url, expires_at, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`)
+			.bind(id, input.codeHash, input.app, input.parentSessionId, input.returnUrl, input.expiresAt, unixNow())
+			.run()
+		return id
+	}
+
+	/**
+	 * Consume a code, atomically and at most once.
+	 *
+	 * The UPDATE is the guard, not the SELECT: a second redemption of the same code changes no rows
+	 * and gets null, with no window in which two callers both believe they won. The row is read only
+	 * after it has been marked, so what comes back is what this caller consumed.
+	 *
+	 * Returns null for unknown, expired and already-consumed alike — the caller maps those to distinct
+	 * reasons by looking the code up separately, because none of them is worth a second write here.
+	 */
+	async consumeCode(codeHash: string, now: number): Promise<AuthCodeRow | null> {
+		const marked = await this.db
+			.prepare('UPDATE auth_codes SET consumed_at = ? WHERE code_hash = ? AND consumed_at IS NULL AND expires_at > ?')
+			.bind(now, codeHash, now)
+			.run()
+		if ((marked.meta.changes ?? 0) === 0) {
+			return null
+		}
+		return this.db.prepare('SELECT * FROM auth_codes WHERE code_hash = ?').bind(codeHash).first<AuthCodeRow>()
+	}
+
+	/** Whether a code exists at all — only to tell `expired_code` from `invalid_code` after a miss. */
+	async findCode(codeHash: string): Promise<AuthCodeRow | null> {
+		return this.db.prepare('SELECT * FROM auth_codes WHERE code_hash = ?').bind(codeHash).first<AuthCodeRow>()
+	}
+
+	/** Prune spent and expired codes (cron). Returns the number removed. */
+	async pruneCodes(olderThanSeconds: number): Promise<number> {
+		const result = await this.db
+			.prepare('DELETE FROM auth_codes WHERE expires_at < ? OR consumed_at IS NOT NULL')
+			.bind(olderThanSeconds)
 			.run()
 		return result.meta.changes ?? 0
 	}
@@ -988,6 +1118,7 @@ export interface IamRepositories {
 	credentials: CredentialRepository
 	sessions: SessionRepository
 	passwords: PasswordRepository
+	handoff: HandoffRepository
 	audit: AuditRepository
 }
 
@@ -1000,6 +1131,7 @@ export function createIamRepositories(db: SqlDatabase, replacements: Partial<Iam
 		credentials: replacements.credentials ?? new CredentialRepository(db),
 		sessions: replacements.sessions ?? new SessionRepository(db),
 		passwords: replacements.passwords ?? new PasswordRepository(db),
+		handoff: replacements.handoff ?? new HandoffRepository(db),
 		audit: replacements.audit ?? new AuditRepository(db),
 	}
 }

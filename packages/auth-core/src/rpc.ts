@@ -43,6 +43,55 @@ export type MintFromKeyResult =
 	| { ok: true; token: string; expiresAt: number }
 	| { ok: false; reason: 'invalid_key' | 'unknown_principal' | 'disabled' }
 
+// ── Cross-host session handoff (ADR-0021) ─────────────────────────────────────
+//
+// How a browser that authenticated at IAM ends up authenticated at an app on a DIFFERENT domain,
+// where no cookie of IAM's can be read. IAM issues a single-use code bound to (session, app, return
+// URL); the proxy in front of the app redeems it and sets the returned APP SESSION as a host-only
+// cookie on the app's own host. Everything after that is the ordinary `mintToken` path.
+//
+// The redemption yields a SESSION, not just an access token, and that is the point: an access token
+// lives `DEFAULT_TOKEN_TTL_SECONDS`, so a browser holding only one would be redirected on every
+// expiry — and a redirect turns an in-flight POST into a bodyless GET. The proxy must be able to
+// re-mint server-side, exactly as it does from `px_session` when the domains do happen to match.
+//
+// This lives on the PROXY surface (`/auth/mint/*`, gated by its own key), not on `IamRpc`. That is
+// ADR-0007's least-privilege split: the proxy is the only publicly-routed component and holds a key
+// scoped to the handful of calls it needs.
+
+export interface ExchangeAuthCodeInput {
+	/** The app redeeming the code. A code issued for another app is refused. */
+	app: string
+	/** The single-use code, as it arrived in the callback query. */
+	code: string
+	requestId: string
+}
+
+export type ExchangeAuthCodeResult =
+	/**
+	 * `session` is the opaque APP session the proxy sets as a host-only cookie; `returnUrl` is where
+	 * the browser goes next and is carried server-side so a caller cannot redirect it elsewhere.
+	 * `expiresAt` is the session's absolute expiry, for the cookie's `Max-Age`.
+	 */
+	| { ok: true; session: string; returnUrl: string; expiresAt: number }
+	/** Every failure is terminal — a code is single-use, so there is nothing to retry. */
+	| { ok: false; reason: 'invalid_code' | 'expired_code' | 'wrong_app' | 'unknown_principal' | 'disabled' }
+
+/**
+ * Where the proxy answers the handoff, on every app host it fronts. Reserved: an app route at this
+ * path is shadowed by the proxy and never reaches the upstream, so it is deliberately namespaced.
+ */
+export const AUTH_CALLBACK_PATH = '/__fabrika/auth/callback'
+
+/** Query parameter carrying the single-use code on the callback. */
+export const AUTH_CODE_PARAM = 'code'
+
+/**
+ * How long a code may be held before redemption. Seconds, not minutes: it travels in one redirect
+ * and is redeemed by the next request, so anything longer is only a larger replay window.
+ */
+export const AUTH_CODE_TTL_SECONDS = 120
+
 // ── Issuing credentials (issueKey) and passthrough tokens (issueJwt) ──────────────
 //
 // `issueKey` mints an opaque, stored, revocable `px_` credential; `issueJwt` signs a stateless

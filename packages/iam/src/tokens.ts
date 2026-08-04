@@ -50,6 +50,11 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 	if (!session) {
 		return { result: { ok: false, reason: 'invalid_session' }, principalId: null }
 	}
+	// An app-bound child session (ADR-0021) mints for its own app and nothing else. The cookie is
+	// host-only so a sibling app cannot read it; this is the second lock, for a value that leaks anyway.
+	if (session.app !== null && session.app !== input.app) {
+		return { result: { ok: false, reason: 'invalid_session' }, principalId: session.principal_id }
+	}
 
 	const principal = await services.repositories.principals.getPrincipalById(session.principal_id)
 	if (!principal) {
