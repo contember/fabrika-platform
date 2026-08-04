@@ -47,6 +47,7 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 - [45](45-pin-the-zerops-postgres-connection-target.md) — `connectionString` carries no database and no SSL mode; both are driver defaults today.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
 - [47](47-give-the-zerops-path-a-private-git-source.md) — fabrika's GitHub App never reaches the Zerops path, so a private repository cannot deploy there.
+- [52](52-revoke-sessions-an-operator-no-longer-trusts.md) — Dev-bypass sessions outlive the flag by 30 days, and no admin surface can revoke another principal's session.
 - [51](51-project-return-origins-from-the-control-plane.md) — Cross-host SSO needs an app's public origin registered in IAM; the control plane knows it and never forwards it.
 - [49](49-add-trusted-client-rate-limits-to-public-iam.md) — Add ingress-owned per-client password limits without trusting forwarded headers.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
