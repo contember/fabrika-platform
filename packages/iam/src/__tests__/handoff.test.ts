@@ -219,7 +219,7 @@ describe('GET /auth/login as a handoff', () => {
 		expect(response.status).toBe(400)
 	})
 
-	test('without a session the password form carries the app forward', async () => {
+	test('without a session the password form carries BOTH the app and its return address forward', async () => {
 		const { services } = await scenario()
 		const response = await handleAuth(
 			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private`)}`),
@@ -228,6 +228,37 @@ describe('GET /auth/login as a handoff', () => {
 			new TestContext(),
 		)
 		expect(response.status).toBe(200)
-		expect(await response.text()).toContain('name="app" value="notes"')
+		const html = await response.text()
+		expect(html).toContain('name="app" value="notes"')
+		// `safeRedirect`'s allowlist is the session-cookie domain, which by construction excludes the
+		// cross-host case. Letting it rewrite this to the issuer strands the login on IAM — it did,
+		// live, and the form looked perfectly fine.
+		expect(html).toContain(`name="redirect" value="${APP_ORIGIN}/private"`)
+	})
+
+	test('signing in at the form completes the handoff', async () => {
+		const { services, harness, principalId } = await scenario()
+		const password = 'a-sufficiently-long-passphrase'
+		await services.repositories.passwords.enableEnrollment(principalId)
+		await services.repositories.passwords.upsertCredential(principalId, await services.passwordHasher.hash(password))
+		void harness
+
+		const response = await handleAuth(
+			new Request(`${ISSUER}/auth/login`, {
+				method: 'POST',
+				headers: { Origin: ISSUER, 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: new URLSearchParams({ email: 'human@contember.com', password, app: 'notes', redirect: `${APP_ORIGIN}/private` }),
+			}),
+			services,
+			AUTH_ENV,
+			new TestContext(),
+		)
+		expect(response.status).toBe(302)
+		const location = new URL(response.headers.get('location') ?? '')
+		expect(location.origin).toBe(APP_ORIGIN)
+		expect(location.pathname).toBe(AUTH_CALLBACK_PATH)
+		expect(location.searchParams.get('code')).toBeTruthy()
+		// The IAM session is set too — that is what makes the NEXT app silent.
+		expect(response.headers.get('set-cookie')).toContain(`${SESSION_COOKIE}=`)
 	})
 })

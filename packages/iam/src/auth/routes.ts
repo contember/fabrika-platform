@@ -114,7 +114,10 @@ async function handleLogin(request: Request, services: Services, secure: boolean
 	if (handoff === 'invalid') {
 		return authError('unregistered return address for this app', 400)
 	}
-	const redirect = safeRedirect(url.searchParams.get('redirect'), services.config)
+	// A handoff's destination is already validated against the app's registry, so `safeRedirect` must
+	// not get a say: its allowlist is the session-cookie domain, which by definition does not cover the
+	// cross-host case this exists for. Passing its fallback to the form would strand the login on IAM.
+	const redirect = handoffRedirectOr(handoff, url.searchParams.get('redirect'), services)
 
 	// Already signed in HERE? Then a handoff needs no prompt — mint the code off the existing login and
 	// bounce. This is what makes a second app, and every token expiry, silent.
@@ -151,6 +154,14 @@ async function currentSession(request: Request, services: Services) {
 	return session === null || session.app !== null ? null : session
 }
 
+/**
+ * What a login page or an OIDC flight should carry as its return address: the handoff's validated
+ * destination when there is one, otherwise the ordinary same-site allowlist.
+ */
+function handoffRedirectOr(handoff: Handoff | null, raw: string | null, services: Services): string {
+	return handoff === null ? safeRedirect(raw, services.config) : handoff.returnUrl
+}
+
 /** Issue the code and build the URL of the app's own callback. */
 async function handoffLocation(services: Services, handoff: Handoff, parentSessionId: string): Promise<string> {
 	const issued = await issueAuthCode(services, { app: handoff.app, parentSessionId, returnUrl: handoff.returnUrl })
@@ -166,7 +177,7 @@ async function handleOidcStart(request: Request, services: Services, secure: boo
 	if (handoff === 'invalid') {
 		return authError('unregistered return address for this app', 400)
 	}
-	return startOidc(services, secure, safeRedirect(url.searchParams.get('redirect'), services.config), handoff)
+	return startOidc(services, secure, handoffRedirectOr(handoff, url.searchParams.get('redirect'), services), handoff)
 }
 
 async function startOidc(services: Services, secure: boolean, redirect: string, handoff: Handoff | null = null): Promise<Response> {
@@ -332,13 +343,13 @@ async function handlePasswordLogin(request: Request, services: Services, secure:
 	if (form === null) return authError('invalid form', 400)
 	const email = normalizeEmail(form.get('email'))
 	const rawPassword = stringValue(form.get('password'))
-	const redirect = safeRedirect(stringValue(form.get('redirect')), services.config)
 	// The form is a hint, not a permission: `readHandoff` re-checks the return URL against what the app
 	// has registered, so a hand-edited field buys nothing.
 	const handoff = await readHandoff(services, stringValue(form.get('app')), stringValue(form.get('redirect')))
 	if (handoff === 'invalid') {
 		return authError('unregistered return address for this app', 400)
 	}
+	const redirect = handoffRedirectOr(handoff, stringValue(form.get('redirect')), services)
 	const retry = {
 		redirect,
 		oidcEnabled: services.config.authentication.oidc.enabled,
