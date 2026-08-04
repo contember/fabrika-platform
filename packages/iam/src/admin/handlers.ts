@@ -25,8 +25,10 @@ import type {
 	PrincipalListItem,
 	ProvisionApiKeyRequest,
 	ProvisionApiKeyResponse,
+	ReturnOriginsDto,
 	RoleDto,
 	RotateApiKeyResponse,
+	SetReturnOriginsRequest,
 	ShareLinkListItem,
 	UpdatePolicyInput,
 	UpdatePrincipalInput,
@@ -43,6 +45,7 @@ import {
 } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 import type { RequestContext } from '../env'
+import { normalizeOrigin } from '../handoff'
 import { issueKey } from '../issue'
 import { arrayField, booleanField, nullableStringField, numberField, parseJsonOrNull, prop, stringField } from '../json'
 import { deliverPasswordAction, issuePasswordAction } from '../password-service'
@@ -858,6 +861,32 @@ export async function getAppSchema(c: AdminContext, app: string): Promise<Respon
 	return json(await adminUseCases.getAppSchema(c, { app }))
 }
 
+/**
+ * Replace an app's registered return origins (ADR-0021). Every value is canonicalized before it is
+ * stored, so the comparison at issue time is against one spelling and an operator cannot register
+ * `https://App.Example.com/` and then wonder why `https://app.example.com` is refused.
+ */
+async function setReturnOriginsUseCase(c: AdminContext, input: SetReturnOriginsRequest): Promise<ReturnOriginsDto> {
+	const origins: string[] = []
+	for (const raw of input.origins) {
+		const normalized = normalizeOrigin(raw)
+		if (normalized === null) {
+			return fail(400, `not an absolute http(s) origin: ${raw}`)
+		}
+		if (!origins.includes(normalized)) {
+			origins.push(normalized)
+		}
+	}
+	await c.services.repositories.handoff.setReturnOrigins(input.app, origins)
+	await adminAudit(c, {
+		action: 'iam.app.return-origins.set',
+		resourceType: 'app',
+		resourceId: input.app,
+		metadata: { origins },
+	})
+	return { app: input.app, origins }
+}
+
 async function getAppSchemaUseCase(c: AdminContext, input: AppInput): Promise<AppSchemaDto> {
 	const app = input.app
 	if (!(await knownApps(c)).includes(app)) {
@@ -1493,6 +1522,7 @@ export const adminUseCases = {
 	listApps: listAppsUseCase,
 	listRoles: listRolesUseCase,
 	getAppSchema: getAppSchemaUseCase,
+	setReturnOrigins: setReturnOriginsUseCase,
 	listPolicies: listPoliciesUseCase,
 	createPolicy: createPolicyUseCase,
 	updatePolicy: updatePolicyUseCase,

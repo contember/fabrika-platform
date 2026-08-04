@@ -78,6 +78,10 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 	apps: t.router({
 		list: t.procedure.require(ADMIN_ACTION).query(({ ctx }) => adminUseCases.listApps(context(ctx))),
 		getSchema: t.procedure.input(appInput).require(ADMIN_ACTION).query(({ ctx, input }) => adminUseCases.getAppSchema(context(ctx), input)),
+		setReturnOrigins: t.procedure
+			.input(z.object({ app: nonEmpty, origins: z.array(nonEmpty) }))
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.setReturnOrigins(context(ctx), input)),
 	}),
 	roles: t.router({
 		list: t.procedure

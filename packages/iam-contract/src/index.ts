@@ -292,6 +292,21 @@ export interface AppInput {
 	app: string
 }
 
+/**
+ * The public origins IAM will hand this app a session at (ADR-0021). Declarative: the whole set is
+ * stated, so removing one is the same call as adding one and a stale entry cannot survive a deploy.
+ */
+export interface SetReturnOriginsRequest {
+	app: string
+	origins: string[]
+}
+
+export interface ReturnOriginsDto {
+	app: string
+	/** Canonicalized: lower-cased scheme and host, default port dropped, no path. */
+	origins: string[]
+}
+
 export interface ListRolesInput {
 	app?: string | null
 }
@@ -361,6 +376,7 @@ export interface IamAdminRpcContract {
 	apps: {
 		list: RpcProcedure<void, ListResponse<AppDto>>
 		getSchema: RpcProcedure<AppInput, AppSchemaDto>
+		setReturnOrigins: RpcProcedure<SetReturnOriginsRequest, ReturnOriginsDto>
 	}
 	roles: {
 		list: RpcProcedure<ListRolesInput, ListResponse<RoleDto>>
