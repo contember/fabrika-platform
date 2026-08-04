@@ -13,6 +13,20 @@ export const LOCAL_DEV_ADMIN_ID = 'local-dev-admin'
 export const LOCAL_DEV_ADMIN_EMAIL = 'admin@local.test'
 
 /**
+ * Was this session minted by the local-dev bypass? It records the fixed subject above, which no real
+ * IdP emits, so the session carries its own provenance and needs no extra column.
+ *
+ * **Checked at USE, not at creation, and that is the point.** Turning `LOCAL_DEV_LOGIN` off — or
+ * moving `ENVIRONMENT` away from `local` — changes what the next request may do and nothing about
+ * what was already issued. Sessions live 30 days, so without this an installation that switched to
+ * real authentication would keep honouring bypass sessions for a month, and every one of them is a
+ * global admin. Closing the window when the configuration changes is the only bound worth having.
+ */
+export function isDevBypassSession(session: { idp_sub: string | null }): boolean {
+	return session.idp_sub === LOCAL_DEV_ADMIN_ID
+}
+
+/**
  * Fixed identity for the SEEDED PROVISIONING KEY below. A stable `service` principal with this id is
  * seeded into `principals` (migration `0008_provisioning_principal.sql`) so the audit the provisioning
  * key drives (e.g. `iam.app.schema.reconcile`) resolves its `principal_id` FK — the prod-applied analog

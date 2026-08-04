@@ -6,6 +6,8 @@
 
 import { AUTH_CALLBACK_PATH, SESSION_COOKIE } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
+import { resolveAdmin } from '../admin/router'
+import { LOCAL_DEV_ADMIN_ID } from '../auth'
 import { handleAuth } from '../auth/routes'
 import type { RequestContext } from '../env'
 import { exchangeAuthCode, issueAuthCode, normalizeOrigin, resolveReturnUrl } from '../handoff'
@@ -17,6 +19,7 @@ import { createHarness, seedUser } from './helpers/harness'
 const ISSUER = 'https://iam.test'
 const APP_ORIGIN = 'https://app.test'
 const AUTH_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
+const ADMIN_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', FABRIKA_IAM_PROVISIONING_KEY: '', ENVIRONMENT: 'stage' }
 
 class TestContext implements RequestContext {
 	readonly waiting: Promise<unknown>[] = []
@@ -281,5 +284,61 @@ describe('GET /auth/login as a handoff', () => {
 		expect(location.searchParams.get('code')).toBeTruthy()
 		// The IAM session is set too — that is what makes the NEXT app silent.
 		expect(response.headers.get('set-cookie')).toContain(`${SESSION_COOKIE}=`)
+	})
+})
+
+// ── Sessions the bypass minted (backlog 52) ───────────────────────────────────
+//
+// `LOCAL_DEV_LOGIN` mints a REAL 30-day session for a fixed global admin. Turning the flag off used
+// to change nothing about what was already issued, so an installation that moved to real
+// authentication kept honouring them for a month. Found live: a browser sailed through the handoff
+// with no password because it still held one from the day before.
+
+describe('a session minted by the local-dev bypass', () => {
+	async function bypassSession(localDevLogin: boolean) {
+		const harness = createHarness()
+		const services = harness.makeServices({
+			issuer: ISSUER,
+			environment: 'local',
+			localDevLogin,
+			authentication: { oidc: false, password: true },
+		})
+		await services.repositories.handoff.setReturnOrigins('notes', [APP_ORIGIN])
+		const principalId = seedUser(harness.sqlite, { email: 'dev@local.test', sub: LOCAL_DEV_ADMIN_ID })
+		const token = await harness.signSession(principalId, { idpSub: LOCAL_DEV_ADMIN_ID, email: 'dev@local.test' })
+		return { services, token, principalId }
+	}
+
+	test('still works while the bypass is on', async () => {
+		const { services, token } = await bypassSession(true)
+		expect((await mintToken(services, AUTH_ENV, { app: 'notes', session: token, requestId: 'r1' })).result.ok).toBe(true)
+	})
+
+	test('stops minting the moment the bypass is off', async () => {
+		const { services, token } = await bypassSession(false)
+		expect((await mintToken(services, AUTH_ENV, { app: 'notes', session: token, requestId: 'r1' })).result).toEqual({
+			ok: false,
+			reason: 'invalid_session',
+		})
+	})
+
+	test('cannot silently hand an app a global admin through the handoff', async () => {
+		const { services, token } = await bypassSession(false)
+		const response = await handleAuth(
+			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private`)}`, {
+				headers: { Cookie: `${SESSION_COOKIE}=${token}` },
+			}),
+			services,
+			AUTH_ENV,
+			new TestContext(),
+		)
+		// The password form, not a 302 carrying a code.
+		expect(response.status).toBe(200)
+	})
+
+	test('stops opening the admin surface too', async () => {
+		const { services, token } = await bypassSession(false)
+		const resolution = await resolveAdmin(services, ADMIN_ENV, { bearer: null, session: token, requestId: 'r1' })
+		expect(resolution).toEqual({ ok: false, status: 401, reason: 'invalid_session' })
 	})
 })

@@ -1,5 +1,5 @@
 import { type PermissionEntry, permits, type PrincipalType, SESSION_COOKIE } from '@fabrika/auth-core'
-import { resolveCaller } from '../auth'
+import { isDevBypassSession, resolveCaller } from '../auth'
 import { principalStatus } from '../db'
 import type { Env, RequestContext } from '../env'
 import { requestId } from '../request-id'
@@ -185,6 +185,10 @@ export async function resolveAdmin(
 	// propustka's own app (groups don't apply — there is no CF identity cookie here).
 	const session = await services.repositories.sessions.getActiveSessionByHash(await hashToken(creds.session))
 	if (!session) {
+		return { ok: false, status: 401, reason: 'invalid_session' }
+	}
+	// A bypass session is a global admin; it must stop working the moment the bypass is turned off.
+	if (isDevBypassSession(session) && !services.config.localDevLogin) {
 		return { ok: false, status: 401, reason: 'invalid_session' }
 	}
 	const principal = await services.repositories.principals.getPrincipalById(session.principal_id)

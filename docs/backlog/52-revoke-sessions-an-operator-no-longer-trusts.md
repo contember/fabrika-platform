@@ -6,10 +6,14 @@ blocked-by: []
 
 # 52 — Let an operator revoke sessions they no longer trust
 
-**Summary.** Turning off `LOCAL_DEV_LOGIN` does not revoke the sessions it minted,
-and nothing in the admin surface can revoke another principal's session at all. An
-installation that moves from the dev-login bypass to real authentication keeps
-handing out full access for up to thirty days, silently.
+**Summary.** Nothing in the admin surface can revoke another principal's session.
+Only the session's own holder can, through `/auth/logout`, so an operator's answer
+to "this session should not exist" is to disable the whole principal.
+
+> The dev-bypass half of this is **fixed** (`packages/iam/src/auth.ts`,
+> `isDevBypassSession`): a session minted by `LOCAL_DEV_LOGIN` is refused at use once
+> the flag is off, so that window closes when the configuration changes rather than
+> thirty days later. What remains is the general case below.
 
 ## Problem
 
@@ -34,24 +38,18 @@ by design. So the operator answer to "this session should not exist" is currentl
 
 ## Approach
 
-Two pieces, and the first is worth doing even alone:
+**An admin surface for sessions.** List a principal's sessions (`authentication_method`,
+`created_at` and the app binding are already on the row) and revoke one or all of them.
+Revoking a parent already cascades to every app session derived from it, so this is one
+call and not a sweep.
 
-1. **An admin surface for sessions.** List a principal's sessions (method, created,
-   last-seen coordinates already on the row) and revoke one or all of them. Revoking
-   a parent already cascades to the app sessions derived from it, so this is one call
-   and not a sweep.
-2. **Refuse to keep dev-bypass sessions once the bypass is off.** A session records
-   how it was created; `local_login` sessions could be rejected at use when
-   `localDevLogin` is false, which needs no new operator action and closes the window
-   at the moment the configuration changes rather than 30 days later.
-
-Consider whether (2) generalises: an OIDC session after OIDC is disabled has the same
-shape of problem.
+The shipped dev-bypass check suggests a generalisation worth considering with it: an
+OIDC session after OIDC is disabled has the same shape of problem, and the same answer
+— refuse at use, not at creation.
 
 ## Acceptance
 
-An operator can see and revoke a named principal's sessions; a session minted by the
-dev bypass stops working the moment the bypass is turned off; and neither path can
-revoke a session belonging to a principal the caller may not administer.
+An operator can see and revoke a named principal's sessions, and cannot revoke one
+belonging to a principal they may not administer.
 
 <!-- Origin: sprint exchange-token-sso, 2026-08-04; found when the live demo signed a browser in with no password. -->

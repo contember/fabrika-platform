@@ -11,7 +11,7 @@
  */
 
 import { AUTH_CALLBACK_PATH, AUTH_CODE_PARAM, SESSION_COOKIE } from '@fabrika/auth-core'
-import { LOCAL_DEV_ADMIN_EMAIL, LOCAL_DEV_ADMIN_ID } from '../auth'
+import { isDevBypassSession, LOCAL_DEV_ADMIN_EMAIL, LOCAL_DEV_ADMIN_ID } from '../auth'
 import { normalizeEmailIdentity } from '../email-identity'
 import type { Env, RequestContext } from '../env'
 import { issueAuthCode, resolveReturnUrl } from '../handoff'
@@ -161,8 +161,15 @@ async function currentSession(request: Request, services: Services) {
 		return null
 	}
 	const session = await services.repositories.sessions.getActiveSessionByHash(await hashToken(raw))
+	if (session === null) {
+		return null
+	}
 	// A child session cannot father another: only the IAM login itself may authorize a handoff.
-	return session === null || session.app !== null ? null : session
+	if (session.app !== null) {
+		return null
+	}
+	// And a bypass session must not silently hand an app a global admin once the bypass is off.
+	return isDevBypassSession(session) && !services.config.localDevLogin ? null : session
 }
 
 /**

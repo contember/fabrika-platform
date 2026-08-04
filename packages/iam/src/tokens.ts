@@ -24,6 +24,7 @@ import {
 	type PrincipalType,
 	type Scope,
 } from '@fabrika/auth-core'
+import { isDevBypassSession } from './auth'
 import type { CredentialGrantRow, CredentialRow } from './db'
 import { principalStatus } from './db'
 import type { Env } from './env'
@@ -53,6 +54,10 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 	// An app-bound child session (ADR-0021) mints for its own app and nothing else. The cookie is
 	// host-only so a sibling app cannot read it; this is the second lock, for a value that leaks anyway.
 	if (session.app !== null && session.app !== input.app) {
+		return { result: { ok: false, reason: 'invalid_session' }, principalId: session.principal_id }
+	}
+	// A bypass session outlives the flag that made it; refuse it the moment the flag is off.
+	if (isDevBypassSession(session) && !services.config.localDevLogin) {
 		return { result: { ok: false, reason: 'invalid_session' }, principalId: session.principal_id }
 	}
 
