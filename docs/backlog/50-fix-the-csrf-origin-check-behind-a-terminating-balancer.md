@@ -47,6 +47,34 @@ It does not reproduce on Cloudflare, where `request.url` carries the browser's
 scheme. It is specific to a process behind a terminating balancer, which is every
 Zerops deployment.
 
+## The second consequence: no machine caller can write
+
+The same guard rejects a state-changing request that carries **neither** `Origin`
+nor `Referer` — which is every plain HTTP client. A CLI holding
+`FABRIKA_IAM_PROVISIONING_KEY` can read the admin surface and cannot write to it:
+
+```
+GET  /admin/principals   bearer, no Origin → 200
+POST /admin/principals   bearer, no Origin → 403 cross-origin request rejected
+POST /admin/rpc          bearer, no Origin → 403 cross-origin request rejected
+```
+
+This one is not scheme-dependent and reproduces on Cloudflare too. It contradicts
+two places that describe the bearer as a machine path: the credential comments at
+`packages/iam/src/admin/router.ts:51` and `:140` ("machine credential",
+"CI / provisioning"), and the documented first-administrator procedure for an
+email-less installation — "the existing `FABRIKA_IAM_PROVISIONING_KEY` bearer calls
+the IAM admin RPC to invite the first user and issue a manual enrollment link"
+([`../reference/human-authentication.md`](../reference/human-authentication.md)).
+That procedure cannot be executed as written; the live run on 2026-08-04 completed
+it only by sending a fabricated `Origin` header.
+
+CSRF is an ambient-authority attack: it exists because a browser attaches the
+cookie by itself. A bearer token is never attached automatically, so the guard buys
+nothing against a bearer-only request while blocking the only documented bootstrap.
+Exempt requests authenticated **solely** by `Authorization`, and keep the check for
+anything carrying `px_session`.
+
 Two things found alongside it, both load-bearing for the fix:
 
 - The comment at `packages/iam/src/admin/router.ts:93-97` states that the
