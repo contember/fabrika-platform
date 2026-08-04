@@ -33,6 +33,11 @@ them.
    and the console through `SESSION_COOKIE_DOMAIN`, and sibling `*.zerops.app`
    hostnames have no safe common parent (setting one would hand the platform session
    to every other Zerops customer). Machine surfaces are unaffected and are verified.
+   The cookie is not the only layer. With `SESSION_COOKIE_DOMAIN` empty, `safeRedirect`
+   (`packages/iam/src/auth/routes.ts`) admits only the issuer's own host, so IAM
+   discards a return URL pointing at a sibling and lands the browser on itself —
+   the login→app round trip cannot complete even before the cookie matters. Verified
+   2026-08-04, on both the `http://` and `https://` forms of the same target.
 3. **A git source, and the deploys that need one.** fabrika's GitHub App does not
    reach the Zerops path at all — see
    [`47`](./47-give-the-zerops-path-a-private-git-source.md). Until one exists,
@@ -46,6 +51,12 @@ them.
 5. **`putServiceEnv` must stop pre-reading** — [`41`](./41-write-service-variables-without-a-pre-read.md).
    The live bring-up had to work around it with a standalone script; nothing in
    `packages/` writes a service variable successfully today.
+6. **The console cannot write** — [`50`](./50-fix-the-csrf-origin-check-behind-a-terminating-balancer.md).
+   Human password authentication itself was exercised end to end on this tier on
+   2026-08-04 (enrollment, sign-in, throttling, admin disable, audit), but every
+   state-changing admin request from a browser is rejected by an origin guard that
+   compares against a reconstructed URL. Until that is fixed, operating the Access
+   plane on Zerops needs the provisioning-key path, not the UI.
 
 ## Still-open semantics
 
