@@ -1,0 +1,36 @@
+{
+	"name": "@fabrika/email",
+	"version": "0.0.1",
+	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/contember/fabrika-platform.git",
+		"directory": "packages/email"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"src",
+		"!src/**/__tests__/**"
+	],
+	"exports": {
+		".": {
+			"bun": "./src/index.ts",
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		},
+		"./resend": {
+			"bun": "./src/resend.ts",
+			"types": "./src/resend.ts",
+			"default": "./src/resend.ts"
+		}
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test src/__tests__"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	}
+}

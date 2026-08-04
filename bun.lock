@@ -151,6 +151,13 @@
         "vite": "^7.0.0",
       },
     },
+    "packages/email": {
+      "name": "@fabrika/email",
+      "version": "0.0.1",
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
     "packages/engine": {
       "name": "@fabrika/engine",
       "version": "0.0.1",
@@ -588,6 +595,8 @@
     "@fabrika/control-contract": ["@fabrika/control-contract@workspace:packages/control-contract"],
 
     "@fabrika/dashboard": ["@fabrika/dashboard@workspace:packages/dashboard"],
+
+    "@fabrika/email": ["@fabrika/email@workspace:packages/email"],
 
     "@fabrika/engine": ["@fabrika/engine@workspace:packages/engine"],
 

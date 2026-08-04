@@ -14,6 +14,7 @@ const EXPECTED_PUBLIC_PACKAGES = [
 	'@fabrika/auth-core',
 	'@fabrika/cli',
 	'@fabrika/control-contract',
+	'@fabrika/email',
 	'@fabrika/engine',
 	'@fabrika/iam-contract',
 	'@fabrika/installation-cloudflare',
