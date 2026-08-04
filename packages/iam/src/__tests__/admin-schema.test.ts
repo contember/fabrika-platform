@@ -32,7 +32,7 @@ class FakeRequestContext implements RequestContext {
 // The target app ('opice') registers itself by reconciling its schema (`PUT …/opice/schema`), which
 // is how it lands in the DB-derived `knownApps` registry — no static config list anymore.
 function adminServices(h: Harness): Services {
-	return h.makeServices({ environment: 'stage' })
+	return h.makeServices({ environment: 'stage', issuer: ORIGIN })
 }
 
 // Seed a global admin user and open an SSO session so every request clears the gate.

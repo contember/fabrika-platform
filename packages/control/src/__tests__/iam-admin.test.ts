@@ -21,7 +21,7 @@ describe('IAM admin gateway', () => {
 			new Request('https://console.test/iam/admin/apps/notes/schema?view=full', {
 				headers: { cookie: 'px_session=session-one' },
 			}),
-			{ gateway, publicIamUrl: 'https://iam.test' },
+			{ gateway, publicIamUrl: 'https://iam.test', publicOrigin: 'https://console.test' },
 		)
 
 		expect(response.status).toBe(200)
@@ -49,7 +49,7 @@ describe('IAM admin gateway', () => {
 		const gateway = new RecordingGateway(Response.json({ error: 'unauthorized' }, { status: 401 }))
 		const response = await forwardIamAdmin(
 			new Request('https://console.test/iam/admin/me'),
-			{ gateway, publicIamUrl: 'https://iam.test' },
+			{ gateway, publicIamUrl: 'https://iam.test', publicOrigin: 'https://console.test' },
 		)
 		const body: unknown = await response.json()
 
@@ -64,7 +64,7 @@ describe('IAM admin gateway', () => {
 		const gateway = new RecordingGateway(Response.json({ error: { type: 'auth', message: 'unauthorized' } }, { status: 401 }))
 		const response = await forwardIamAdmin(
 			new Request('https://console.test/iam/admin/rpc', { method: 'POST', headers: { origin: 'https://console.test' }, body: '{}' }),
-			{ gateway, publicIamUrl: 'https://iam.test' },
+			{ gateway, publicIamUrl: 'https://iam.test', publicOrigin: 'https://console.test' },
 		)
 		const body: unknown = await response.json()
 
@@ -116,5 +116,40 @@ describe('IAM admin gateway', () => {
 		} finally {
 			await server.stop(true)
 		}
+	})
+})
+
+// ── The CSRF origin guard (backlog 50) ────────────────────────────────────────
+//
+// Both cases below were live 403s on Zerops: the console could not write anything, and neither could
+// any machine caller. The gateway is reached over plain HTTP behind the balancer, which is why the
+// request URL cannot be the thing the browser's `Origin` is compared against.
+
+describe('the gateway CSRF guard', () => {
+	// `null` means "not configured" — an explicit `undefined` would just re-select the default.
+	const forward = (headers: Record<string, string>, publicOrigin: string | null = 'https://console.test') =>
+		forwardIamAdmin(
+			new Request('http://console.test/iam/admin/rpc', { method: 'POST', headers, body: '{}' }),
+			{ gateway: new RecordingGateway(Response.json({ ok: true })), ...(publicOrigin === null ? {} : { publicOrigin }) },
+		)
+
+	test("accepts the browser's https origin although the process was reached over http", async () => {
+		expect((await forward({ origin: 'https://console.test' })).status).toBe(200)
+	})
+
+	test('still rejects a cross-site origin', async () => {
+		expect((await forward({ origin: 'https://evil.test' })).status).toBe(403)
+	})
+
+	test('lets a bearer-only caller through — no cookie, no ambient authority, nothing to forge', async () => {
+		expect((await forward({ authorization: 'Bearer px_machine' })).status).toBe(200)
+	})
+
+	test('checks a bearer that arrives alongside any cookie', async () => {
+		expect((await forward({ authorization: 'Bearer px_machine', cookie: 'px_token=abc' })).status).toBe(403)
+	})
+
+	test('fails closed when no public origin is configured', async () => {
+		expect((await forward({ origin: 'https://console.test' }, null)).status).toBe(403)
 	})
 })

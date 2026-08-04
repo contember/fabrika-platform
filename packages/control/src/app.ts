@@ -4,7 +4,7 @@ import { handleApi } from './api/router'
 import { controlRpcRouter } from './control-rpc'
 import type { Env } from './env'
 import { error } from './http'
-import { controlAuthMiddleware } from './iam'
+import { controlAuthMiddleware, controlPublicOrigin } from './iam'
 import { forwardIamAdmin } from './iam-admin'
 import { forwardOperationsApi } from './operations-gateway'
 import { buildApiDeps, repositories, repoSource } from './services'
@@ -79,9 +79,11 @@ function iamAdmin(ctx: ControlAppContext): Promise<Response> {
 	if (gateway === undefined) {
 		return Promise.resolve(Response.json({ error: 'IAM admin gateway unavailable' }, { status: 503 }))
 	}
+	const publicOrigin = controlPublicOrigin(ctx.env)
 	return forwardIamAdmin(ctx.request, {
 		gateway,
 		...(ctx.env.FABRIKA_IAM_URL === undefined ? {} : { publicIamUrl: ctx.env.FABRIKA_IAM_URL }),
+		...(publicOrigin === undefined ? {} : { publicOrigin }),
 	})
 }
 

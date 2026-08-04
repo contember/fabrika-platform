@@ -78,6 +78,29 @@ function secureCookies(env: IamEnv): true | undefined {
 }
 
 /**
+ * The console's own public origin, from `FABRIKA_CONTROL_DOMAIN`.
+ *
+ * That variable has no settled shape and never needed one, because its only consumer read it for
+ * truthiness: the local stack sets a full origin (`http://control.fabrika.localhost:18080`) and a
+ * live installation a bare host (`proxy-…zerops.app`). Now that the CSRF guard compares against it
+ * (backlog 50), both spellings have to mean the same thing — a bare host is assumed `https`, which is
+ * the only scheme a public host is served on.
+ *
+ * Returns `undefined` when nothing usable is configured; the guard then fails closed.
+ */
+export function controlPublicOrigin(env: Pick<IamEnv, 'FABRIKA_CONTROL_DOMAIN'>): string | undefined {
+	const raw = env.FABRIKA_CONTROL_DOMAIN?.trim() ?? ''
+	if (raw === '') {
+		return undefined
+	}
+	try {
+		return new URL(raw.includes('://') ? raw : `https://${raw}`).origin
+	} catch {
+		return undefined
+	}
+}
+
+/**
  * Parse the `FABRIKA_CONTROL_BOOTSTRAP_ADMINS` JSON array into a set of emails. Mirrors IAM's
  * `parseBootstrapAdmins` semantics: a malformed / non-array value fails CLOSED (empty set), so a bad
  * env var grants nobody admin. An empty / unset value (the steady state) yields an empty set.

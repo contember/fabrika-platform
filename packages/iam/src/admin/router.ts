@@ -5,7 +5,7 @@ import type { Env, RequestContext } from '../env'
 import { requestId } from '../request-id'
 import { resolveUserPermissions } from '../resolve'
 import { hashToken } from '../secret'
-import type { Services } from '../services'
+import type { Config, Services } from '../services'
 import { type AdminContext, AdminUseCaseError } from './handlers'
 import {
 	createGrant,
@@ -91,26 +91,46 @@ function parseCookie(header: string | null, name: string): string | null {
 const STATE_CHANGING_METHODS = new Set(['POST', 'PATCH', 'DELETE'])
 
 /**
- * In-app CSRF defense: reject state-changing `/admin/*` requests that don't
- * originate from the IAM origin. The control-plane gateway rewrites `Origin` and
- * `Referer` to that private destination; a cross-site caller cannot reach the private
- * route or forge the gateway's own same-origin check. Returns `null` when allowed.
+ * In-app CSRF defense: reject state-changing `/admin/*` requests that did not originate from the
+ * IAM origin. Returns `null` when allowed.
+ *
+ * TWO THINGS HERE ARE NOT OBVIOUS, and both were live defects (backlog 50).
+ *
+ * **The origin compared against is the CONFIGURED one, never `new URL(request.url).origin`.** Behind
+ * a TLS-terminating balancer the process is reached over plain HTTP, so the reconstructed origin is
+ * `http://host` while the browser truthfully sent `https://host`. Comparing those rejects every
+ * genuine console write. Same rule as the session cookie's `Secure` flag: the socket is the wrong
+ * signal for what the browser did.
+ *
+ * **A request authenticated SOLELY by `Authorization` is exempt.** CSRF exists because a browser
+ * attaches cookies by itself; a bearer token is never attached automatically, so the check buys
+ * nothing against a bearer-only request while blocking every CI and provisioning caller — including
+ * the documented first-administrator bootstrap. A request carrying a session cookie is checked even
+ * if it also carries a bearer: ambient authority is present, so the defense applies.
  */
-export function rejectCrossOrigin(request: Request, url: URL): Response | null {
+export function rejectCrossOrigin(request: Request, config: Pick<Config, 'issuer'>): Response | null {
 	if (!STATE_CHANGING_METHODS.has(request.method)) {
 		return null
 	}
+	const { bearer, session } = extractCredentials(request)
+	if (bearer !== null && session === null) {
+		return null
+	}
+	const expected = originOf(config.issuer)
+	if (expected === null) {
+		// No usable public origin configured: fail closed rather than accept anything.
+		return error(403, 'cross-origin request rejected')
+	}
 	const origin = request.headers.get('Origin')
 	if (origin !== null) {
-		return origin === url.origin ? null : error(403, 'cross-origin request rejected')
+		return origin === expected ? null : error(403, 'cross-origin request rejected')
 	}
 	// No `Origin` (some same-origin requests omit it) → fall back to `Referer`.
 	const referer = request.headers.get('Referer')
 	if (referer !== null) {
-		const refererOrigin = originOf(referer)
-		return refererOrigin === url.origin ? null : error(403, 'cross-origin request rejected')
+		return originOf(referer) === expected ? null : error(403, 'cross-origin request rejected')
 	}
-	// Neither header present on a state-changing request → reject.
+	// Neither header present on a cookie-authenticated state change → reject.
 	return error(403, 'cross-origin request rejected')
 }
 
@@ -199,7 +219,7 @@ export async function handleAdmin(
 	const creds = extractCredentials(request)
 
 	// CSRF defense: reject cross-origin state-changing writes before touching the DB.
-	const crossOrigin = rejectCrossOrigin(request, url)
+	const crossOrigin = rejectCrossOrigin(request, services.config)
 	if (crossOrigin) {
 		return crossOrigin
 	}

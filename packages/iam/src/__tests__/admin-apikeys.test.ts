@@ -13,8 +13,10 @@ import { createHarness, type Harness, seedAppAction, seedGrant, seedUser } from 
 // native service principal + grant and returns a `px_` key that `mintFromKey` resolves to the service
 // principal's permissions; rotate invalidates the old one; revoke kills it. No Cloudflare Access.
 
-const ORIGIN = 'https://iam.example.com'
 const ISSUER = 'https://propustka.test'
+// The service's configured issuer IS the origin the console is served on; the CSRF guard compares
+// against it, so a test that posts from a different origin than it configures is testing nothing real.
+const ORIGIN = ISSUER
 const SIGN_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', FABRIKA_IAM_PROVISIONING_KEY: '', ENVIRONMENT: 'local' }
 // env slice handleAdmin needs; 'stage' keeps the local-dev bypass off so the session path runs.
 const ADMIN_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', FABRIKA_IAM_PROVISIONING_KEY: '', ENVIRONMENT: 'stage' }

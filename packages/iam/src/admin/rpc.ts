@@ -145,7 +145,7 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 
 export const adminRpcAuth: Middleware<IamAppContext> = async (request, ctx, next) => {
 	try {
-		if (rejectCrossOrigin(request, new URL(request.url)) !== null) {
+		if (rejectCrossOrigin(request, ctx.services.config) !== null) {
 			return toErrorResponse(new ForbiddenError('cross-origin request rejected'))
 		}
 
