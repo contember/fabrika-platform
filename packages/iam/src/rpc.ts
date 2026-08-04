@@ -21,6 +21,9 @@
 
 import type {
 	AuditInput,
+	ExchangeAuthCodeInput,
+	ExchangeAuthCodeResult,
+	IamHandoffRpc,
 	IamRpc,
 	IssueJwtInput,
 	IssueJwtResult,
@@ -39,14 +42,50 @@ import type {
 } from '@fabrika/auth-core'
 import { resolveCaller } from './auth'
 import type { Env, RequestContext } from './env'
+import { exchangeAuthCode } from './handoff'
 import { issueJwt, issueKey, revokeKey } from './issue'
 import { buildServices } from './services'
 import { getSigner } from './signing'
 import { mintFromKey, mintToken } from './tokens'
 
 /** Build the RPC surface bound to one env + request context. */
-export function createIamRpc(env: Env, ctx: RequestContext): IamRpc {
+export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoffRpc {
 	return {
+		/**
+		 * Redeem a cross-host handoff code for an app-bound session (ADR-0021). Reached only over the
+		 * proxy's own surface — see `IamHandoffRpc` for why it is not part of `IamRpc`. Fails closed
+		 * like every mint front: an unusable code is a decided `{ ok: false }`, never a throw.
+		 */
+		async exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {
+			const services = buildServices(env)
+			try {
+				const { result, principalId } = await exchangeAuthCode(services, input)
+				ctx.waitUntil(
+					services.repositories.audit.writeAuthLog({
+						requestId: input.requestId,
+						app: input.app,
+						kind: 'authenticate',
+						principalId,
+						decision: result.ok ? 'allow' : 'deny',
+						reason: result.ok ? 'handoff' : result.reason,
+					}),
+				)
+				return result
+			} catch (err) {
+				console.error(`exchangeAuthCode failed for request '${input.requestId}'`, err)
+				ctx.waitUntil(
+					services.repositories.audit.writeAuthLog({
+						requestId: input.requestId,
+						app: input.app,
+						kind: 'authenticate',
+						principalId: null,
+						decision: 'deny',
+						reason: 'internal_error',
+					}),
+				)
+				return { ok: false, reason: 'invalid_code' }
+			}
+		},
 		/**
 		 * Mint a per-app permission token from the browser's SSO session (propustka-native auth). The
 		 * session is validated, the principal's permissions for the calling app resolved, and a

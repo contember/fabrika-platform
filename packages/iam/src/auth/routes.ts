@@ -10,10 +10,11 @@
  * the admin gate (`/admin/*`) applies only to the admin surface, never here.
  */
 
-import { SESSION_COOKIE } from '@fabrika/auth-core'
+import { AUTH_CALLBACK_PATH, AUTH_CODE_PARAM, SESSION_COOKIE } from '@fabrika/auth-core'
 import { LOCAL_DEV_ADMIN_EMAIL, LOCAL_DEV_ADMIN_ID } from '../auth'
 import { normalizeEmailIdentity } from '../email-identity'
 import type { Env, RequestContext } from '../env'
+import { issueAuthCode, resolveReturnUrl } from '../handoff'
 import { generatePkce, randomToken } from '../oidc'
 import type { PasswordActionPurpose } from '../password-db'
 import { forgotPasswordPage, invalidActionPage, loginPage, setPasswordPage } from '../password-pages'
@@ -79,31 +80,102 @@ async function handleJwks(env: AuthEnv): Promise<Response> {
 
 // ── /auth/login ────────────────────────────────────────────────────────────────
 
+/**
+ * A cross-host handoff in flight (ADR-0021): which app the browser came from and where it goes back
+ * to. `null` means an ordinary IAM login, which still uses `safeRedirect` and the shared cookie.
+ */
+interface Handoff {
+	app: string
+	returnUrl: string
+}
+
+/**
+ * Read `?app=` + `?redirect=` as a handoff, validating the return URL against what that app has
+ * registered.
+ *
+ * Three outcomes, and the middle one is the point: no `app` is not a handoff (`null`); an `app` with
+ * an unregistered return URL is a hard `400` (`'invalid'`), never a quiet fallback to the issuer.
+ * Falling back would leave an operator staring at a login that succeeds and lands nowhere.
+ */
+async function readHandoff(services: Services, app: string | null, redirect: string | null): Promise<Handoff | null | 'invalid'> {
+	if (app === null || app === '') {
+		return null
+	}
+	if (redirect === null || redirect === '') {
+		return 'invalid'
+	}
+	const returnUrl = await resolveReturnUrl(services, app, redirect)
+	return returnUrl === null ? 'invalid' : { app, returnUrl }
+}
+
 async function handleLogin(request: Request, services: Services, secure: boolean, ctx: RequestContext): Promise<Response> {
 	const url = new URL(request.url)
+	const handoff = await readHandoff(services, url.searchParams.get('app'), url.searchParams.get('redirect'))
+	if (handoff === 'invalid') {
+		return authError('unregistered return address for this app', 400)
+	}
 	const redirect = safeRedirect(url.searchParams.get('redirect'), services.config)
+
+	// Already signed in HERE? Then a handoff needs no prompt — mint the code off the existing login and
+	// bounce. This is what makes a second app, and every token expiry, silent.
+	if (handoff !== null) {
+		const existing = await currentSession(request, services)
+		if (existing !== null) {
+			const location = await handoffLocation(services, handoff, existing.id)
+			return new Response(null, { status: 302, headers: { location, 'cache-control': 'no-store' } })
+		}
+	}
+
 	if (services.config.localDevLogin) {
-		return handleLocalLogin(request, services, secure, ctx, redirect)
+		return handleLocalLogin(request, services, secure, ctx, redirect, handoff)
 	}
 	if (services.config.authentication.password.enabled) {
-		return loginPage({ redirect, oidcEnabled: services.config.authentication.oidc.enabled, forgotEnabled: services.email !== null })
+		return loginPage({
+			redirect,
+			oidcEnabled: services.config.authentication.oidc.enabled,
+			forgotEnabled: services.email !== null,
+			...(handoff === null ? {} : { app: handoff.app }),
+		})
 	}
-	return startOidc(services, secure, redirect)
+	return startOidc(services, secure, redirect, handoff)
+}
+
+/** The caller's IAM session, if the browser already holds a valid one on this host. */
+async function currentSession(request: Request, services: Services) {
+	const raw = readCookie(request.headers.get('Cookie'), SESSION_COOKIE)
+	if (raw === null) {
+		return null
+	}
+	const session = await services.repositories.sessions.getActiveSessionByHash(await hashToken(raw))
+	// A child session cannot father another: only the IAM login itself may authorize a handoff.
+	return session === null || session.app !== null ? null : session
+}
+
+/** Issue the code and build the URL of the app's own callback. */
+async function handoffLocation(services: Services, handoff: Handoff, parentSessionId: string): Promise<string> {
+	const issued = await issueAuthCode(services, { app: handoff.app, parentSessionId, returnUrl: handoff.returnUrl })
+	const callback = new URL(AUTH_CALLBACK_PATH, handoff.returnUrl)
+	callback.searchParams.set(AUTH_CODE_PARAM, issued.code)
+	return callback.toString()
 }
 
 async function handleOidcStart(request: Request, services: Services, secure: boolean): Promise<Response> {
 	if (!services.config.authentication.oidc.enabled) return authError('OIDC login is disabled', 404)
 	const url = new URL(request.url)
-	return startOidc(services, secure, safeRedirect(url.searchParams.get('redirect'), services.config))
+	const handoff = await readHandoff(services, url.searchParams.get('app'), url.searchParams.get('redirect'))
+	if (handoff === 'invalid') {
+		return authError('unregistered return address for this app', 400)
+	}
+	return startOidc(services, secure, safeRedirect(url.searchParams.get('redirect'), services.config), handoff)
 }
 
-async function startOidc(services: Services, secure: boolean, redirect: string): Promise<Response> {
+async function startOidc(services: Services, secure: boolean, redirect: string, handoff: Handoff | null = null): Promise<Response> {
 	if (!services.config.authentication.oidc.enabled || services.oidc === null) return authError('OIDC login is disabled', 404)
 	const { verifier, challenge } = await generatePkce()
 	const state = randomToken(16)
 	const location = await services.oidc.authorizationUrl({ state, codeChallenge: challenge })
 
-	const flight = encodeFlight({ state, verifier, redirect })
+	const flight = encodeFlight({ state, verifier, redirect, ...(handoff === null ? {} : { app: handoff.app }) })
 	const headers = new Headers({ location })
 	// The in-flight cookie is scoped to /auth (only the callback reads it) and is single-use.
 	headers.append(
@@ -119,6 +191,7 @@ async function handleLocalLogin(
 	secure: boolean,
 	ctx: RequestContext,
 	redirect: string,
+	handoff: Handoff | null = null,
 ): Promise<Response> {
 	const resolved = await resolveUserPrincipal(services.repositories.principals, LOCAL_DEV_ADMIN_ID, LOCAL_DEV_ADMIN_EMAIL)
 	if (!resolved.ok) {
@@ -130,6 +203,7 @@ async function handleLocalLogin(
 		email: LOCAL_DEV_ADMIN_EMAIL,
 		redirect,
 		reason: 'local_login',
+		handoff,
 	})
 }
 
@@ -175,6 +249,13 @@ async function handleCallback(request: Request, services: Services, secure: bool
 		return authError(`login refused (${resolved.reason})`, 403)
 	}
 
+	// Re-validate the handoff on the way back: the flight cookie is ours and integrity-checked by the
+	// `state` match, but the registry may have changed while the human was away at the IdP.
+	const handoff = flight.app === undefined ? null : await readHandoff(services, flight.app, flight.redirect)
+	if (handoff === 'invalid') {
+		return authError('unregistered return address for this app', 400)
+	}
+
 	return issueSession(request, services, secure, ctx, {
 		principalId: resolved.principal.id,
 		idpSub: identity.sub,
@@ -182,6 +263,7 @@ async function handleCallback(request: Request, services: Services, secure: bool
 		redirect: safeRedirect(flight.redirect, services.config),
 		reason: 'login',
 		clearOidc: true,
+		handoff,
 	})
 }
 
@@ -198,11 +280,13 @@ async function issueSession(
 		redirect: string
 		reason: string
 		clearOidc?: boolean
+		/** When set, land on the app's callback with a code instead of on `redirect` (ADR-0021). */
+		handoff?: Handoff | null
 	},
 ): Promise<Response> {
 	const sessionToken = randomToken(32)
 	const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS
-	await services.repositories.sessions.createSession({
+	const sessionId = await services.repositories.sessions.createSession({
 		tokenHash: await hashToken(sessionToken),
 		principalId: input.principalId,
 		idpSub: input.idpSub,
@@ -221,7 +305,10 @@ async function issueSession(
 		}),
 	)
 
-	const headers = new Headers({ location: input.redirect })
+	// The IAM cookie is set either way: it is what makes the NEXT handoff, to this or any other app,
+	// silent. What changes is where the browser goes — its own destination, or the app's callback.
+	const location = input.handoff == null ? input.redirect : await handoffLocation(services, input.handoff, sessionId)
+	const headers = new Headers({ location })
 	headers.append('Set-Cookie', sessionCookie(sessionToken, services.config, secure))
 	if (input.clearOidc === true) {
 		headers.append('Set-Cookie', clearCookie(OIDC_COOKIE, { path: '/auth', secure }))
@@ -246,13 +333,20 @@ async function handlePasswordLogin(request: Request, services: Services, secure:
 	const email = normalizeEmail(form.get('email'))
 	const rawPassword = stringValue(form.get('password'))
 	const redirect = safeRedirect(stringValue(form.get('redirect')), services.config)
+	// The form is a hint, not a permission: `readHandoff` re-checks the return URL against what the app
+	// has registered, so a hand-edited field buys nothing.
+	const handoff = await readHandoff(services, stringValue(form.get('app')), stringValue(form.get('redirect')))
+	if (handoff === 'invalid') {
+		return authError('unregistered return address for this app', 400)
+	}
+	const retry = {
+		redirect,
+		oidcEnabled: services.config.authentication.oidc.enabled,
+		forgotEnabled: services.email !== null,
+		...(handoff === null ? {} : { app: handoff.app }),
+	}
 	if (email === null || rawPassword === null) {
-		return loginPage({
-			redirect,
-			oidcEnabled: services.config.authentication.oidc.enabled,
-			forgotEnabled: services.email !== null,
-			error: 'Invalid email or password.',
-		})
+		return loginPage({ ...retry, error: 'Invalid email or password.' })
 	}
 	const password = rawPassword.normalize('NFC')
 	const passwordWithinLimit = Array.from(password).length <= PASSWORD_MAX_CODE_POINTS
@@ -294,6 +388,7 @@ async function handlePasswordLogin(request: Request, services: Services, secure:
 			authenticationMethod: 'password',
 			redirect,
 			reason: 'password_login',
+			handoff,
 		})
 	}
 
@@ -313,12 +408,7 @@ async function handlePasswordLogin(request: Request, services: Services, secure:
 			reason: blocked ? 'password_throttled' : 'password_invalid',
 		}),
 	)
-	return loginPage({
-		redirect,
-		oidcEnabled: services.config.authentication.oidc.enabled,
-		forgotEnabled: services.email !== null,
-		error: 'Invalid email or password.',
-	})
+	return loginPage({ ...retry, error: 'Invalid email or password.' })
 }
 
 async function recordLoginFailure(services: Services, loginKeyHash: string, maxAttempts: number): Promise<void> {
@@ -524,6 +614,8 @@ interface Flight {
 	state: string
 	verifier: string
 	redirect: string
+	/** The handoff app, when this SSO detour started from one (ADR-0021). */
+	app?: string
 }
 
 function encodeFlight(flight: Flight): string {
@@ -539,10 +631,11 @@ function decodeFlight(raw: string | null): Flight | null {
 		const state = typeof json === 'object' && json !== null && 'state' in json ? json.state : undefined
 		const verifier = typeof json === 'object' && json !== null && 'verifier' in json ? json.verifier : undefined
 		const redirect = typeof json === 'object' && json !== null && 'redirect' in json ? json.redirect : undefined
+		const app = typeof json === 'object' && json !== null && 'app' in json ? json.app : undefined
 		if (typeof state !== 'string' || typeof verifier !== 'string' || typeof redirect !== 'string') {
 			return null
 		}
-		return { state, verifier, redirect }
+		return typeof app === 'string' && app !== '' ? { state, verifier, redirect, app } : { state, verifier, redirect }
 	} catch {
 		return null
 	}

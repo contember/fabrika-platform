@@ -78,6 +78,15 @@ export type ExchangeAuthCodeResult =
 	| { ok: false; reason: 'invalid_code' | 'expired_code' | 'wrong_app' | 'unknown_principal' | 'disabled' }
 
 /**
+ * Redemption, as a contract of its own rather than a method on `IamRpc`. Only the proxy calls it, and
+ * `IamRpc` is held by every SDK consumer — folding it in would hand the ability to convert a code
+ * into a session to everything that holds the management key.
+ */
+export interface IamHandoffRpc {
+	exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult>
+}
+
+/**
  * Where the proxy answers the handoff, on every app host it fronts. Reserved: an app route at this
  * path is shadowed by the proxy and never reaches the upstream, so it is deliberately namespaced.
  */

@@ -8,6 +8,9 @@
 
 import type {
 	AuditInput,
+	ExchangeAuthCodeInput,
+	ExchangeAuthCodeResult,
+	IamHandoffRpc,
 	IamRpc,
 	IssueJwtInput,
 	IssueJwtResult,
@@ -31,7 +34,7 @@ const KEY = 'rpc-test-key-0123456789abcdefghij'
 const BASE = 'https://iam.test'
 
 /** Records the last input each method received, and answers with a canned result. */
-interface Recorder extends IamRpc {
+interface Recorder extends IamRpc, IamHandoffRpc {
 	calls: { method: string; input: unknown }[]
 }
 
@@ -49,6 +52,10 @@ function recorder(): Recorder {
 		mintFromKey(input: MintFromKeyInput): Promise<MintFromKeyResult> {
 			note('mintFromKey', input)
 			return Promise.resolve({ ok: false, reason: 'invalid_key' })
+		},
+		exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {
+			note('exchangeAuthCode', input)
+			return Promise.resolve({ ok: true, session: 'px_app_session', returnUrl: 'https://app.test/private', expiresAt: 99 })
 		},
 		issueKey(input: IssueKeyInput): Promise<IssueKeyResult> {
 			note('issueKey', input)

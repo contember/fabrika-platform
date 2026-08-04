@@ -1,5 +1,8 @@
 import type {
 	AuditInput,
+	ExchangeAuthCodeInput,
+	ExchangeAuthCodeResult,
+	IamHandoffRpc,
 	IamRpc,
 	IssueJwtInput,
 	IssueJwtResult,
@@ -62,12 +65,12 @@ export function iamEnv(bindings: WorkerBindings): Env {
 	}
 }
 
-export class Propustka extends WorkerEntrypoint<WorkerBindings> implements IamRpc {
+export class Propustka extends WorkerEntrypoint<WorkerBindings> implements IamRpc, IamHandoffRpc {
 	private get iam(): Env {
 		return iamEnv(this.env)
 	}
 
-	private get rpc(): IamRpc {
+	private get rpc(): IamRpc & IamHandoffRpc {
 		return createIamRpc(this.iam, this.ctx)
 	}
 
@@ -77,6 +80,15 @@ export class Propustka extends WorkerEntrypoint<WorkerBindings> implements IamRp
 
 	mintFromKey(input: MintFromKeyInput): Promise<MintFromKeyResult> {
 		return this.rpc.mintFromKey(input)
+	}
+
+	/**
+	 * Cross-host handoff redemption (ADR-0021). Present on the binding, absent from `IamRpc`: the
+	 * proxy Worker narrows this entrypoint structurally, so it reaches this method while an SDK
+	 * consumer typed against `IamRpc` never sees it.
+	 */
+	exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {
+		return this.rpc.exchangeAuthCode(input)
 	}
 
 	getJwks(): Promise<Jwks> {

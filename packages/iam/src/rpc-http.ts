@@ -52,6 +52,8 @@
 
 import type {
 	AuditInput,
+	ExchangeAuthCodeInput,
+	IamHandoffRpc,
 	IamRpc,
 	IssueJwtInput,
 	IssueKeyInput,
@@ -157,10 +159,12 @@ const MINT_PREFIX = '/auth/mint/'
 export const MINT_SESSION_PATH = `${MINT_PREFIX}session`
 /** Mint from an opaque `px_` credential (API key / share link). Body: `MintFromKeyInput`. */
 export const MINT_KEY_PATH = `${MINT_PREFIX}key`
+/** Redeem a cross-host handoff code for an app session (ADR-0021). Body: `ExchangeAuthCodeInput`. */
+export const MINT_EXCHANGE_PATH = `${MINT_PREFIX}exchange`
 
 /** True when `pathname` addresses the proxy mint surface. Checked BEFORE the public `/auth/*` routes. */
 export function isMintPath(pathname: string): boolean {
-	return pathname === MINT_SESSION_PATH || pathname === MINT_KEY_PATH
+	return pathname === MINT_SESSION_PATH || pathname === MINT_KEY_PATH || pathname === MINT_EXCHANGE_PATH
 }
 
 /**
@@ -184,7 +188,7 @@ export function isMintPath(pathname: string): boolean {
  * per-client limit belongs. Detection is covered meanwhile: every failed mint writes an `auth_log`
  * deny row with the app and the reason, so a burst is visible in the admin auth log.
  */
-export async function handleMintHttp(request: Request, rpc: IamRpc, proxyKey: string): Promise<Response> {
+export async function handleMintHttp(request: Request, rpc: IamRpc & IamHandoffRpc, proxyKey: string): Promise<Response> {
 	if (proxyKey.trim() === '') {
 		return problem(404, 'not found')
 	}
@@ -210,6 +214,9 @@ export async function handleMintHttp(request: Request, rpc: IamRpc, proxyKey: st
 		}
 		if (path === MINT_KEY_PATH) {
 			return json(await rpc.mintFromKey(decodeMintFromKey(body)))
+		}
+		if (path === MINT_EXCHANGE_PATH) {
+			return json(await rpc.exchangeAuthCode(decodeExchangeAuthCode(body)))
 		}
 		return problem(404, 'not found')
 	} catch (err) {
@@ -386,6 +393,14 @@ function decodeMintFromKey(body: unknown): MintFromKeyInput {
 	return {
 		app: requiredString(body, 'app'),
 		key: requiredString(body, 'key'),
+		requestId: requiredString(body, 'requestId'),
+	}
+}
+
+function decodeExchangeAuthCode(body: unknown): ExchangeAuthCodeInput {
+	return {
+		app: requiredString(body, 'app'),
+		code: requiredString(body, 'code'),
 		requestId: requiredString(body, 'requestId'),
 	}
 }

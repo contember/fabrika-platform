@@ -4,14 +4,20 @@ export function loginPage(input: {
 	readonly redirect: string
 	readonly oidcEnabled: boolean
 	readonly forgotEnabled: boolean
+	/** The app this login is a handoff for (ADR-0021); absent for a plain IAM login. */
+	readonly app?: string
 	readonly error?: string
 }): Response {
-	const oidcUrl = `/auth/oidc/start?redirect=${encodeURIComponent(input.redirect)}`
+	// `app` rides both continuations so a form post and an SSO detour end in the same handoff. It is
+	// re-validated against the registered origins on the way back in — the form is never trusted.
+	const appQuery = input.app === undefined ? '' : `&app=${encodeURIComponent(input.app)}`
+	const oidcUrl = `/auth/oidc/start?redirect=${encodeURIComponent(input.redirect)}${appQuery}`
 	return htmlPage(
 		'Sign in',
 		`<h1>Sign in</h1>${message(input.error)}
 		<form method="post" action="/auth/login">
 			<input type="hidden" name="redirect" value="${escapeHtml(input.redirect)}">
+			${input.app === undefined ? '' : `<input type="hidden" name="app" value="${escapeHtml(input.app)}">`}
 			<label>Email<input name="email" type="email" autocomplete="username" inputmode="email" required></label>
 			${passwordInput('password', 'Password', 'current-password')}
 			<button type="submit">Sign in</button>
