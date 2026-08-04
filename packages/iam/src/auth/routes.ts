@@ -93,12 +93,23 @@ interface Handoff {
  * Read `?app=` + `?redirect=` as a handoff, validating the return URL against what that app has
  * registered.
  *
- * Three outcomes, and the middle one is the point: no `app` is not a handoff (`null`); an `app` with
- * an unregistered return URL is a hard `400` (`'invalid'`), never a quiet fallback to the issuer.
- * Falling back would leave an operator staring at a login that succeeds and lands nowhere.
+ * Four outcomes, and the distinction between the middle two carries the whole design:
+ *
+ *   - no `app` at all → not a handoff;
+ *   - an app with an EMPTY registry → **not a handoff either**. It has not opted in, so the browser
+ *     takes the ordinary shared-cookie path, which is what it did before ADR-0021 and what still
+ *     works whenever IAM and the app share a domain — the local stack, for one. The proxy sends
+ *     `app=` on every bounce, so without this an installation would break the moment it upgraded;
+ *   - an app WITH a registry whose return URL is not in it → a hard `400`, never a quiet fallback.
+ *     Here the operator asked for a handoff and got the address wrong, and a fallback would leave
+ *     them staring at a login that succeeds and lands somewhere else;
+ *   - otherwise, the validated handoff.
  */
 async function readHandoff(services: Services, app: string | null, redirect: string | null): Promise<Handoff | null | 'invalid'> {
 	if (app === null || app === '') {
+		return null
+	}
+	if ((await services.repositories.handoff.listReturnOrigins(app)).length === 0) {
 		return null
 	}
 	if (redirect === null || redirect === '') {

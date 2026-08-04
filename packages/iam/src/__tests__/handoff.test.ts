@@ -206,6 +206,27 @@ describe('GET /auth/login as a handoff', () => {
 		expect(location.searchParams.get('redirect')).toBeNull()
 	})
 
+	test('an app with an EMPTY registry has not opted in — the ordinary login still works', async () => {
+		// The proxy sends `app=` on every bounce, so treating "no registry" as a misconfiguration would
+		// break every installation that shares a cookie domain with IAM the moment it upgraded. The
+		// local stack is exactly that.
+		const { services, sessionToken } = await scenario({ origins: [] })
+		const response = await handleAuth(
+			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(ISSUER)}`, {
+				headers: { Cookie: `${SESSION_COOKIE}=${sessionToken}` },
+			}),
+			services,
+			AUTH_ENV,
+			new TestContext(),
+		)
+		// The ordinary login, unchanged: the form renders and carries no app, so nothing downstream
+		// issues a code. Not a 400, which is what an empty registry used to produce.
+		expect(response.status).toBe(200)
+		const html = await response.text()
+		expect(html).toContain('<form method="post" action="/auth/login">')
+		expect(html).not.toContain('name="app"')
+	})
+
 	test('an unregistered return address is a 400, never a quiet fallback to the issuer', async () => {
 		const { services, sessionToken } = await scenario()
 		const response = await handleAuth(
