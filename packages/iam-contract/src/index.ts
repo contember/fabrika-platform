@@ -61,6 +61,12 @@ export interface PrincipalDetail extends PrincipalListItem {
 	grants: GrantDto[]
 	/** Effective permissions with `source` (grant / bootstrap / group:<ref>). */
 	permissions: PermissionEntry[]
+	authentication: {
+		/** OIDC is linked when this user has claimed an identity-provider subject. */
+		oidc: { state: 'unavailable' | 'unlinked' | 'linked' }
+		/** Password access is globally opt-in and then enabled per user. */
+		password: { state: 'unavailable' | 'disabled' | 'pending' | 'enabled' }
+	}
 }
 
 export interface InviteRequest {
@@ -273,6 +279,11 @@ export interface PrincipalIdInput {
 
 export interface UpdatePrincipalInput extends UpdatePrincipalRequest, PrincipalIdInput {}
 
+/** Password action sent by email, or a one-time URL shown only in this response. */
+export type PasswordActionDelivery =
+	| { delivery: 'email'; email: string; expiresAt: number }
+	| { delivery: 'manual'; url: string; expiresAt: number }
+
 export interface GrantIdInput {
 	id: string
 }
@@ -337,6 +348,11 @@ export interface IamAdminRpcContract {
 		get: RpcProcedure<PrincipalIdInput, PrincipalDetail>
 		invite: RpcProcedure<InviteRequest, PrincipalListItem>
 		update: RpcProcedure<UpdatePrincipalInput, PrincipalListItem>
+	}
+	passwords: {
+		issueEnrollment: RpcProcedure<PrincipalIdInput, PasswordActionDelivery>
+		issueReset: RpcProcedure<PrincipalIdInput, PasswordActionDelivery>
+		disable: RpcProcedure<PrincipalIdInput, OkResponse>
 	}
 	grants: {
 		create: RpcProcedure<CreateGrantRequest, GrantDto>

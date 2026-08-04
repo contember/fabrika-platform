@@ -55,6 +55,20 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.updatePrincipal(context(ctx), input)),
 	}),
+	passwords: t.router({
+		issueEnrollment: t.procedure
+			.input(principalIdInput)
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.issuePasswordEnrollment(context(ctx), input)),
+		issueReset: t.procedure
+			.input(principalIdInput)
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.issuePasswordReset(context(ctx), input)),
+		disable: t.procedure
+			.input(principalIdInput)
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.disablePassword(context(ctx), input)),
+	}),
 	grants: t.router({
 		create: t.procedure.input(grantSchema).require(ADMIN_ACTION).mutation(({ ctx, input }) => adminUseCases.createGrant(context(ctx), input)),
 		delete: t.procedure.input(z.object({ id: nonEmpty })).require(ADMIN_ACTION).mutation(({ ctx, input }) =>

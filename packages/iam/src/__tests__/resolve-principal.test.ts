@@ -37,6 +37,7 @@ class FakeStore implements UserPrincipalStore {
 		}
 		row.external_id = sub
 		row.label = email
+		row.activated_at = 0
 		return Promise.resolve(row)
 	}
 
@@ -48,6 +49,7 @@ class FakeStore implements UserPrincipalStore {
 			email,
 			label: email,
 			disabled_at: null,
+			activated_at: 0,
 			created_at: 0,
 		}
 		this.rows.push(row)
@@ -62,13 +64,23 @@ const invited = (email: string): PrincipalRow => ({
 	email,
 	label: email,
 	disabled_at: null,
+	activated_at: null,
 	created_at: 0,
 })
 
 describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 	test('1. resolves a returning user by sub', async () => {
 		const db = new FakeStore()
-		db.rows.push({ id: 'p1', type: 'user', external_id: 'sub-1', email: 'a@x.com', label: 'a@x.com', disabled_at: null, created_at: 0 })
+		db.rows.push({
+			id: 'p1',
+			type: 'user',
+			external_id: 'sub-1',
+			email: 'a@x.com',
+			label: 'a@x.com',
+			disabled_at: null,
+			activated_at: 0,
+			created_at: 0,
+		})
 		const res = await resolveUserPrincipal(db, 'sub-1', 'a@x.com')
 		expect(res.ok).toBe(true)
 		if (res.ok) {
@@ -78,7 +90,16 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 
 	test('1. updates label when the token email changed (identity stays keyed by sub)', async () => {
 		const db = new FakeStore()
-		db.rows.push({ id: 'p1', type: 'user', external_id: 'sub-1', email: 'old@x.com', label: 'old@x.com', disabled_at: null, created_at: 0 })
+		db.rows.push({
+			id: 'p1',
+			type: 'user',
+			external_id: 'sub-1',
+			email: 'old@x.com',
+			label: 'old@x.com',
+			disabled_at: null,
+			activated_at: 0,
+			created_at: 0,
+		})
 		const res = await resolveUserPrincipal(db, 'sub-1', 'new@x.com')
 		expect(res.ok).toBe(true)
 		if (res.ok) {
@@ -91,7 +112,7 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 
 	test('disabled returning user → disabled', async () => {
 		const db = new FakeStore()
-		db.rows.push({ id: 'p1', type: 'user', external_id: 'sub-1', email: 'a@x.com', label: 'a@x.com', disabled_at: 123, created_at: 0 })
+		db.rows.push({ id: 'p1', type: 'user', external_id: 'sub-1', email: 'a@x.com', label: 'a@x.com', disabled_at: 123, activated_at: 0, created_at: 0 })
 		const res = await resolveUserPrincipal(db, 'sub-1', 'a@x.com')
 		expect(res).toEqual({ ok: false, reason: 'disabled' })
 	})
@@ -120,7 +141,16 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 
 	test('email already claimed by a different sub → unknown_principal (fail closed, no insert)', async () => {
 		const db = new FakeStore()
-		db.rows.push({ id: 'p1', type: 'user', external_id: 'sub-owner', email: 'shared@x.com', label: 'shared@x.com', disabled_at: null, created_at: 0 })
+		db.rows.push({
+			id: 'p1',
+			type: 'user',
+			external_id: 'sub-owner',
+			email: 'shared@x.com',
+			label: 'shared@x.com',
+			disabled_at: null,
+			activated_at: 0,
+			created_at: 0,
+		})
 		const res = await resolveUserPrincipal(db, 'sub-other', 'shared@x.com')
 		expect(res).toEqual({ ok: false, reason: 'unknown_principal' })
 		// No second user was created.
@@ -134,12 +164,13 @@ describe('resolveUserPrincipal (3-step claim-then-lazy)', () => {
 describe('Db.refreshUserLabel — null-safe change detection', () => {
 	test('fills in a NULL email/label (the invited-row case IS DISTINCT FROM exists for)', async () => {
 		const h = createHarness()
-		h.sqlite.run('INSERT INTO principals (id, type, external_id, email, label, created_at) VALUES (?, ?, ?, ?, ?, ?)', [
+		h.sqlite.run('INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [
 			'p-null',
 			'user',
 			'sub-null',
 			null,
 			'placeholder',
+			1_782_896_400,
 			1_782_896_400,
 		])
 

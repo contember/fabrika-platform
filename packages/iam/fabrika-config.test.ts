@@ -1,13 +1,16 @@
 import { D1Database, Worker } from '@fabrika/provider-cloudflare'
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
-import config, { buildPropustkaWorker } from './fabrika.config'
+import config, { buildPropustkaWorker, iamPipelineSecrets, iamPipelineVars } from './fabrika.config'
 import oblakaDefinition from './oblaka'
 
 const REMOTE_SOURCE: Record<string, string> = {
+	FABRIKA_IAM_OIDC_ENABLED: 'true',
+	FABRIKA_IAM_PASSWORD_ENABLED: 'false',
 	FABRIKA_IAM_HUMAN_EMAIL_DOMAINS: '["example.com"]',
 	FABRIKA_IAM_OIDC_ISSUER: 'https://oidc.example.com',
 	FABRIKA_IAM_OIDC_CLIENT_ID: 'client-id',
 	FABRIKA_IAM_SIGNING_KEYS: 'private-signing-key-material',
+	FABRIKA_EMAIL_PROVIDER: 'none',
 	OIDC_CLIENT_SECRET: 'private-oidc-secret',
 }
 const REMOTE_DOMAIN = 'iam.example.com'
@@ -18,8 +21,12 @@ const ENV_NAMES = [
 	'PROPUSTKA_HUMAN_EMAIL_DOMAINS',
 	'PROPUSTKA_OIDC_ISSUER',
 	'PROPUSTKA_OIDC_CLIENT_ID',
+	'PROPUSTKA_OIDC_ENABLED',
+	'PROPUSTKA_PASSWORD_ENABLED',
 	'PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL',
 	'PROPUSTKA_SIGNING_KEYS',
+	'FABRIKA_EMAIL_FROM',
+	'FABRIKA_EMAIL_RESEND_API_KEY',
 ]
 const originalEnvironment = new Map(ENV_NAMES.map((name) => [name, process.env[name]]))
 
@@ -52,15 +59,18 @@ const requireWorker = (worker: Worker | undefined): Worker => {
 
 describe('IAM resource graph', () => {
 	test('declares only canonical IAM pipeline inputs', () => {
-		expect(config.pipeline?.vars).toEqual([
+		expect(iamPipelineVars(REMOTE_SOURCE)).toEqual([
+			'FABRIKA_IAM_OIDC_ENABLED',
+			'FABRIKA_IAM_PASSWORD_ENABLED',
+			'FABRIKA_EMAIL_PROVIDER',
 			'FABRIKA_IAM_HUMAN_EMAIL_DOMAINS',
 			'FABRIKA_IAM_OIDC_ISSUER',
 			'FABRIKA_IAM_OIDC_CLIENT_ID',
 		])
-		expect(config.pipeline?.secrets).toEqual([
+		expect(iamPipelineSecrets(REMOTE_SOURCE)).toEqual([
 			'FABRIKA_IAM_SIGNING_KEYS',
-			'OIDC_CLIENT_SECRET',
 			'FABRIKA_IAM_PROVISIONING_KEY',
+			'OIDC_CLIENT_SECRET',
 		])
 	})
 
@@ -71,6 +81,9 @@ describe('IAM resource graph', () => {
 		expect(fromOblaka.options).toEqual(fromFabrika.options)
 		expect(fromFabrika.options.routes).toEqual([])
 		expect(fromFabrika.options.vars?.['ISSUER']).toBe('http://localhost:18191')
+		expect(fromFabrika.options.vars?.['OIDC_ENABLED']).toBe('true')
+		expect(fromFabrika.options.vars?.['PASSWORD_ENABLED']).toBe('false')
+		expect(fromFabrika.options.vars?.['EMAIL_PROVIDER']).toBe('none')
 	})
 
 	test('remote fabrika and Oblaka entries materialize the same routed Worker', () => {
@@ -83,8 +96,16 @@ describe('IAM resource graph', () => {
 		expect(fromFabrika.options.bindings?.['DB']).toBeInstanceOf(D1Database)
 	})
 
-	test('remote materialization rejects every required non-secret, secret, and hostname input', () => {
-		for (const name of Object.keys(REMOTE_SOURCE)) {
+	test('remote OIDC materialization rejects every required input', () => {
+		for (
+			const name of [
+				'FABRIKA_IAM_HUMAN_EMAIL_DOMAINS',
+				'FABRIKA_IAM_OIDC_ISSUER',
+				'FABRIKA_IAM_OIDC_CLIENT_ID',
+				'FABRIKA_IAM_SIGNING_KEYS',
+				'OIDC_CLIENT_SECRET',
+			]
+		) {
 			const source = { ...REMOTE_SOURCE }
 			delete source[name]
 			expect(() => buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, source)).toThrow(name)
@@ -93,8 +114,79 @@ describe('IAM resource graph', () => {
 		expect(() => buildPropustkaWorker({ env: 'stage' }, REMOTE_SOURCE)).toThrow('FABRIKA_IAM_HOSTNAME')
 	})
 
+	test('defaults missing authentication flags to OIDC-only', () => {
+		const source = { ...REMOTE_SOURCE }
+		delete source['FABRIKA_IAM_OIDC_ENABLED']
+		delete source['FABRIKA_IAM_PASSWORD_ENABLED']
+		const worker = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, source)
+
+		expect(worker.options.vars?.['OIDC_ENABLED']).toBe('true')
+		expect(worker.options.vars?.['PASSWORD_ENABLED']).toBe('false')
+	})
+
+	test('supports password-only authentication without OIDC configuration', () => {
+		const source = {
+			FABRIKA_IAM_OIDC_ENABLED: 'false',
+			FABRIKA_IAM_PASSWORD_ENABLED: 'true',
+			FABRIKA_IAM_SIGNING_KEYS: 'private-signing-key-material',
+			FABRIKA_EMAIL_PROVIDER: 'none',
+		}
+		const worker = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, source)
+
+		expect(worker.options.vars?.['OIDC_ENABLED']).toBe('false')
+		expect(worker.options.vars?.['PASSWORD_ENABLED']).toBe('true')
+		expect(worker.options.vars?.['OIDC_ISSUER']).toBe('')
+		expect(iamPipelineVars(source)).toEqual([
+			'FABRIKA_IAM_OIDC_ENABLED',
+			'FABRIKA_IAM_PASSWORD_ENABLED',
+			'FABRIKA_EMAIL_PROVIDER',
+		])
+		expect(iamPipelineSecrets(source)).toEqual(['FABRIKA_IAM_SIGNING_KEYS', 'FABRIKA_IAM_PROVISIONING_KEY'])
+	})
+
+	test('rejects disabled or invalid authentication methods', () => {
+		expect(() =>
+			buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, {
+				...REMOTE_SOURCE,
+				FABRIKA_IAM_OIDC_ENABLED: 'false',
+				FABRIKA_IAM_PASSWORD_ENABLED: 'false',
+			})
+		).toThrow('At least one IAM authentication method must be enabled')
+		expect(() => iamPipelineVars({ ...REMOTE_SOURCE, FABRIKA_IAM_PASSWORD_ENABLED: 'yes' })).toThrow(
+			'FABRIKA_IAM_PASSWORD_ENABLED must be true or false',
+		)
+	})
+
+	test('requires Resend configuration only when the provider is enabled', () => {
+		const resend = {
+			...REMOTE_SOURCE,
+			FABRIKA_EMAIL_PROVIDER: 'resend',
+			FABRIKA_EMAIL_FROM: 'Fabrika <auth@example.com>',
+			FABRIKA_EMAIL_RESEND_API_KEY: 'private-resend-key',
+		}
+		const worker = buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, resend)
+
+		expect(worker.options.vars?.['EMAIL_PROVIDER']).toBe('resend')
+		expect(worker.options.vars?.['EMAIL_FROM']).toBe('Fabrika <auth@example.com>')
+		expect(iamPipelineVars(resend)).toContain('FABRIKA_EMAIL_FROM')
+		expect(iamPipelineSecrets(resend)).toContain('FABRIKA_EMAIL_RESEND_API_KEY')
+		expect(JSON.stringify(worker.options)).not.toContain('private-resend-key')
+
+		const noFrom = { ...resend }
+		delete noFrom['FABRIKA_EMAIL_FROM']
+		expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noFrom)).toThrow('FABRIKA_EMAIL_FROM')
+		const noKey = { ...resend }
+		delete noKey['FABRIKA_EMAIL_RESEND_API_KEY']
+		expect(() => buildPropustkaWorker({ env: 'prod', domain: REMOTE_DOMAIN }, noKey)).toThrow('FABRIKA_EMAIL_RESEND_API_KEY')
+		expect(() => iamPipelineVars({ ...REMOTE_SOURCE, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow(
+			'FABRIKA_EMAIL_PROVIDER must be none or resend',
+		)
+	})
+
 	test('legacy deploy inputs remain canonical-first fallbacks', () => {
 		const legacySource = {
+			PROPUSTKA_OIDC_ENABLED: 'true',
+			PROPUSTKA_PASSWORD_ENABLED: 'false',
 			PROPUSTKA_HUMAN_EMAIL_DOMAINS: '["legacy.example"]',
 			PROPUSTKA_OIDC_ISSUER: 'https://legacy-oidc.example.com',
 			PROPUSTKA_OIDC_CLIENT_ID: 'legacy-client-id',
@@ -108,6 +200,8 @@ describe('IAM resource graph', () => {
 		expect(worker.options.vars?.['OIDC_ISSUER']).toBe('https://legacy-oidc.example.com')
 		expect(worker.options.vars?.['OIDC_CLIENT_ID']).toBe('legacy-client-id')
 		expect(worker.options.vars?.['OIDC_REQUIRE_VERIFIED_EMAIL']).toBe('false')
+		expect(worker.options.vars?.['OIDC_ENABLED']).toBe('true')
+		expect(worker.options.vars?.['PASSWORD_ENABLED']).toBe('false')
 	})
 
 	test('canonical deploy inputs win when both names are present', () => {
@@ -133,6 +227,7 @@ describe('IAM resource graph', () => {
 
 		expect(worker.options.vars?.['FABRIKA_IAM_SIGNING_KEYS']).toBeUndefined()
 		expect(worker.options.vars?.['OIDC_CLIENT_SECRET']).toBeUndefined()
+		expect(worker.options.vars?.['FABRIKA_EMAIL_RESEND_API_KEY']).toBeUndefined()
 		expect(serializedOptions).not.toContain(REMOTE_SOURCE['FABRIKA_IAM_SIGNING_KEYS'])
 		expect(serializedOptions).not.toContain(REMOTE_SOURCE['OIDC_CLIENT_SECRET'])
 	})

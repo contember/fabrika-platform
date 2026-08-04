@@ -2,7 +2,7 @@
 //
 // On Cloudflare `triggers.crons` wakes the Worker and calls `scheduled()`. There is no such trigger
 // for a plain container, so the platform cron (`zerops.yaml` → `run.crontab`) runs THIS file, which
-// calls the same `pruneAuthLog` the Worker's handler calls. Nothing about retention or the query
+// calls the same `runIamMaintenance` the Worker's handler calls. Nothing about retention or queries
 // lives here.
 //
 // It is a one-shot process, not a timer inside the server: a timer fires once per container (so it
@@ -11,24 +11,24 @@
 //
 // Run it: `bun src/node/prune.ts`.
 
-import { pruneAuthLog } from '../cron'
+import { runIamMaintenance } from '../cron'
 import { createRuntime } from './runtime'
 
 async function main(): Promise<void> {
 	const runtime = createRuntime()
 	try {
-		// `pruneAuthLog` registers the delete through `waitUntil`; `shutdown()` drains it before the pool
+		// Maintenance registers the deletes through `waitUntil`; `shutdown()` drains them before the pool
 		// closes, so the process exits only once the prune has actually finished.
-		pruneAuthLog(runtime.env, runtime.ctx)
+		runIamMaintenance(runtime.env, runtime.ctx)
 	} finally {
 		await runtime.shutdown()
 	}
-	console.info('auth_log prune complete')
+	console.info('IAM maintenance complete')
 }
 
 if (import.meta.main) {
 	main().catch((err: unknown) => {
-		console.error('auth_log prune failed:', err instanceof Error ? err.message : 'unknown error')
+		console.error('IAM maintenance failed:', err instanceof Error ? err.message : 'unknown error')
 		process.exit(1)
 	})
 }

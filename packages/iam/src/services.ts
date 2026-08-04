@@ -1,6 +1,10 @@
+import type { EmailSender } from '@fabrika/email'
+import { ResendEmailSender } from '@fabrika/email/resend'
 import type { IamRepositories } from './db'
+import { normalizeEmailIdentity } from './email-identity'
 import type { Env } from './env'
 import { OidcClient } from './oidc'
+import { type PasswordHasher, WebCryptoPasswordHasher } from './password-crypto'
 
 /**
  * Pre-wired services + parsed config for every request. Handlers take `Services`
@@ -9,8 +13,10 @@ import { OidcClient } from './oidc'
  */
 export interface Services {
 	readonly repositories: IamRepositories
-	/** OIDC relying-party client (the propustka-native login upstream). Tests inject a fake. */
-	readonly oidc: OidcClient
+	/** OIDC relying-party client. Null when the method is disabled. */
+	readonly oidc: OidcClient | null
+	readonly passwordHasher: PasswordHasher
+	readonly email: EmailSender | null
 	readonly config: Config
 }
 
@@ -29,6 +35,10 @@ export interface Config {
 	readonly environment: string
 	/** Create a real local admin session without contacting an external OIDC provider. */
 	readonly localDevLogin: boolean
+	readonly authentication: {
+		readonly oidc: { readonly enabled: boolean }
+		readonly password: { readonly enabled: boolean }
+	}
 	// ── propustka-native auth ──
 	/** propustka's own origin — the `iss` of minted tokens and the OIDC redirect base. */
 	readonly issuer: string
@@ -52,24 +62,29 @@ function parseBootstrapAdmins(raw: string): Set<string> {
 		if (!Array.isArray(parsed)) {
 			return new Set()
 		}
-		return new Set(parsed.filter((v): v is string => typeof v === 'string'))
+		return new Set(
+			parsed
+				.filter((v): v is string => typeof v === 'string')
+				.map(normalizeEmailIdentity)
+				.filter((value) => value !== ''),
+		)
 	} catch {
 		return new Set()
 	}
 }
 
 export function buildServices(env: Env): Services {
+	const oidcEnabled = parseBooleanSwitch('OIDC_ENABLED', env.OIDC_ENABLED, true)
+	const passwordEnabled = parseBooleanSwitch('PASSWORD_ENABLED', env.PASSWORD_ENABLED, false)
+	if (!oidcEnabled && !passwordEnabled) {
+		throw new Error('At least one authentication method must be enabled')
+	}
+	const oidc = oidcEnabled ? buildOidc(env) : null
 	return {
 		repositories: env.REPOSITORIES,
-		oidc: new OidcClient({
-			issuer: env.OIDC_ISSUER,
-			clientId: env.OIDC_CLIENT_ID,
-			clientSecret: env.OIDC_CLIENT_SECRET,
-			redirectUri: `${env.ISSUER}/auth/callback`,
-			scopes: env.OIDC_SCOPES,
-			// Require a verified email by default; opt out only with the explicit string 'false'.
-			requireVerifiedEmail: env.OIDC_REQUIRE_VERIFIED_EMAIL !== 'false',
-		}),
+		oidc,
+		passwordHasher: new WebCryptoPasswordHasher(),
+		email: buildEmailSender(env),
 		config: {
 			human: {
 				emailDomains: parseStringArray(env.HUMAN_EMAIL_DOMAINS),
@@ -78,8 +93,47 @@ export function buildServices(env: Env): Services {
 			bootstrapAdmins: parseBootstrapAdmins(env.IAM_BOOTSTRAP_ADMINS),
 			environment: env.ENVIRONMENT,
 			localDevLogin: env.ENVIRONMENT === 'local' && env.LOCAL_DEV_LOGIN === 'true',
+			authentication: {
+				oidc: { enabled: oidcEnabled },
+				password: { enabled: passwordEnabled },
+			},
 			issuer: env.ISSUER,
 			sessionCookieDomain: env.SESSION_COOKIE_DOMAIN,
 		},
 	}
+}
+
+function parseBooleanSwitch(name: string, raw: string | undefined, fallback: boolean): boolean {
+	if (raw === undefined || raw === '') return fallback
+	if (raw === 'true') return true
+	if (raw === 'false') return false
+	throw new Error(`${name} must be 'true' or 'false'`)
+}
+
+function required(name: string, value: string | undefined): string {
+	if (value === undefined || value.trim() === '') throw new Error(`${name} is required`)
+	return value
+}
+
+function buildOidc(env: Env): OidcClient {
+	return new OidcClient({
+		issuer: env.OIDC_ISSUER ?? '',
+		clientId: env.OIDC_CLIENT_ID ?? '',
+		clientSecret: env.OIDC_CLIENT_SECRET ?? '',
+		redirectUri: `${env.ISSUER}/auth/callback`,
+		scopes: env.OIDC_SCOPES ?? '',
+		requireVerifiedEmail: env.OIDC_REQUIRE_VERIFIED_EMAIL !== 'false',
+	})
+}
+
+function buildEmailSender(env: Env): EmailSender | null {
+	const provider = env.EMAIL_PROVIDER ?? 'none'
+	if (provider === 'none') return null
+	if (provider === 'resend') {
+		return new ResendEmailSender({
+			from: required('EMAIL_FROM', env.EMAIL_FROM),
+			apiKey: required('EMAIL_API_KEY', env.EMAIL_API_KEY),
+		})
+	}
+	throw new Error(`Unsupported EMAIL_PROVIDER '${provider}'`)
 }

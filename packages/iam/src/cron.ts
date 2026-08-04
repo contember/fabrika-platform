@@ -16,14 +16,21 @@ import { buildServices } from './services'
  * pruned — it is the one table that grows without bound and is never referenced by a foreign key.
  */
 export const AUTH_LOG_RETENTION_SECONDS = 30 * 24 * 60 * 60 // 30 days
+export const PASSWORD_TRANSIENT_RETENTION_SECONDS = 7 * 24 * 60 * 60 // 7 days
 
 /**
- * Prune `auth_log` rows older than the retention window. Registered through `waitUntil` because on
- * Workers a `scheduled` handler that returns before its writes settle is cut off mid-flight; in a
- * process the supervised promise means a failure is logged rather than fatal.
+ * Prune old auth-log rows, password action tokens, and login throttles. Registered through
+ * `waitUntil` because a Worker scheduled handler that returns before its writes settle is cut off;
+ * in a process the supervised promise means a failure is logged rather than fatal.
  */
-export function pruneAuthLog(env: Env, ctx: RequestContext, now: number = Date.now()): void {
+export function runIamMaintenance(env: Env, ctx: RequestContext, now: number = Date.now()): void {
 	const services = buildServices(env)
-	const cutoff = Math.floor(now / 1000) - AUTH_LOG_RETENTION_SECONDS
-	ctx.waitUntil(services.repositories.audit.pruneAuthLog(cutoff).then(() => undefined))
+	const nowSeconds = Math.floor(now / 1000)
+	ctx.waitUntil(
+		Promise.all([
+			services.repositories.audit.pruneAuthLog(nowSeconds - AUTH_LOG_RETENTION_SECONDS),
+			services.repositories.passwords.pruneActionTokens(nowSeconds - PASSWORD_TRANSIENT_RETENTION_SECONDS),
+			services.repositories.passwords.pruneLoginThrottles(nowSeconds - PASSWORD_TRANSIENT_RETENTION_SECONDS),
+		]).then(() => undefined),
+	)
 }

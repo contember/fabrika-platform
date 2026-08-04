@@ -133,10 +133,11 @@ function freshDb(): Database {
 	const db = new Database(':memory:')
 	db.exec('PRAGMA foreign_keys = ON')
 	db.exec(migration)
+	const now = Math.floor(Date.now() / 1000)
 	// Seed the local-dev-admin principal so auth_log / audit_events FK lookups resolve.
 	db.run(
-		"INSERT INTO principals (id, type, external_id, email, label, created_at) VALUES (?, 'user', ?, 'admin@local.test', 'local-dev-admin', ?)",
-		[LOCAL_DEV_ADMIN_ID, LOCAL_DEV_ADMIN_ID, Math.floor(Date.now() / 1000)],
+		"INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at) VALUES (?, 'user', ?, 'admin@local.test', 'local-dev-admin', ?, ?)",
+		[LOCAL_DEV_ADMIN_ID, LOCAL_DEV_ADMIN_ID, now, now],
 	)
 	return db
 }
@@ -154,11 +155,16 @@ function makeEnv(db: Database, overrides: Partial<Pick<Env, 'ENVIRONMENT'>> = {}
 		FABRIKA_IAM_SIGNING_KEYS: '',
 		FABRIKA_IAM_PROVISIONING_KEY: '',
 		SESSION_COOKIE_DOMAIN: '',
+		OIDC_ENABLED: 'true',
+		PASSWORD_ENABLED: 'false',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: '',
 		OIDC_CLIENT_SECRET: 'dummy-oidc-secret',
 		OIDC_SCOPES: '',
 		OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
+		EMAIL_PROVIDER: 'none',
+		EMAIL_FROM: '',
+		EMAIL_API_KEY: '',
 	}
 }
 
@@ -171,11 +177,15 @@ function workerBindings(db: Database) {
 		ENVIRONMENT: 'local',
 		ISSUER: 'http://localhost:18191',
 		SESSION_COOKIE_DOMAIN: '',
+		OIDC_ENABLED: 'true',
+		PASSWORD_ENABLED: 'false',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: '',
 		OIDC_CLIENT_SECRET: '',
 		OIDC_SCOPES: '',
 		OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
+		EMAIL_PROVIDER: 'none',
+		EMAIL_FROM: '',
 	}
 }
 
@@ -402,5 +412,14 @@ describe('IAM Worker environment aliases', () => {
 
 		expect(env.FABRIKA_IAM_SIGNING_KEYS).toBe('canonical-signing')
 		expect(env.FABRIKA_IAM_PROVISIONING_KEY).toBe('canonical-provisioning')
+	})
+
+	test('maps the provider-specific email secret to the runtime-neutral binding', () => {
+		const env = iamEnv({
+			...workerBindings(freshDb()),
+			FABRIKA_EMAIL_RESEND_API_KEY: 'private-resend-key',
+		})
+
+		expect(env.EMAIL_API_KEY).toBe('private-resend-key')
 	})
 })

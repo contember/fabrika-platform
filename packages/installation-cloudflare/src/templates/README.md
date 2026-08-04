@@ -30,6 +30,12 @@ builds and pushes the runner container image into the account.
 To close the escape hatch once IAM grants you admin, set the `{{ACCOUNT}}` Environment variable
 `FABRIKA_CONTROL_BOOTSTRAP_ADMINS` to `[]` and re-run the workflow.
 
+IAM authentication methods are independent Environment switches: `FABRIKA_IAM_OIDC_ENABLED` and
+`FABRIKA_IAM_PASSWORD_ENABLED`. At least one must be `true`. Password enrollment is managed through
+IAM provisioning and its admin surface. Email delivery is optional; `FABRIKA_EMAIL_PROVIDER=none`
+keeps password enrollment and reset admin-driven, while `resend` also requires the sender variable
+and the Resend API key secret.
+
 ## Routine redeploy or version bump
 
 - Bump [`fabrika.ref`](./fabrika.ref) to a new `contember/fabrika-platform` commit or tag and push.

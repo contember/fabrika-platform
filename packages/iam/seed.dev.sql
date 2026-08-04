@@ -49,12 +49,12 @@ INSERT INTO roles (app, role_key, name, description, permissions, origin, create
 -- ── Principals ───────────────────────────────────────────────────────────────
 -- `local-dev-admin` is the identity the worker's ENVIRONMENT=local bypass resolves
 -- to (see src/auth.ts) — seeding it makes audit/auth-log foreign keys resolve.
-INSERT INTO principals (id, type, external_id, email, label, disabled_at, created_at) VALUES
-  ('local-dev-admin', 'user',    'local-dev-admin', 'admin@local.test', 'local-dev-admin',  NULL,       1782810000),
-  ('p-alice',         'user',    'sub-alice',       'alice@firma.cz',   'alice@firma.cz',   NULL,       1782824400),
-  ('p-bob-invited',   'user',    NULL,              'bob@firma.cz',     'bob@firma.cz',     NULL,       1782892800),
-  ('p-carol',         'user',    'sub-carol',       'carol@firma.cz',   'carol@firma.cz',   1782896300, 1782846400),
-  ('p-svc-reports',   'service', NULL,              NULL,               'reports-exporter', NULL,       1782836400)
+INSERT INTO principals (id, type, external_id, email, label, disabled_at, activated_at, created_at) VALUES
+  ('local-dev-admin', 'user',    'local-dev-admin', 'admin@local.test', 'local-dev-admin',  NULL,       1782810000, 1782810000),
+  ('p-alice',         'user',    'sub-alice',       'alice@firma.cz',   'alice@firma.cz',   NULL,       1782824400, 1782824400),
+  ('p-bob-invited',   'user',    NULL,              'bob@firma.cz',     'bob@firma.cz',     NULL,       NULL,       1782892800),
+  ('p-carol',         'user',    'sub-carol',       'carol@firma.cz',   'carol@firma.cz',   1782896300, 1782846400, 1782846400),
+  ('p-svc-reports',   'service', NULL,              NULL,               'reports-exporter', NULL,       1782836400, 1782836400)
   ON CONFLICT DO NOTHING;
 
 -- ── Grants ───────────────────────────────────────────────────────────────────

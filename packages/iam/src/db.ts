@@ -1,5 +1,6 @@
 import { uuidv7 } from '@fabrika/auth-core'
 import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
+import { PasswordRepository } from './password-db'
 
 // ── Row shapes (snake_case, as the migration defines) ─────────────────────────
 
@@ -10,6 +11,7 @@ export interface PrincipalRow {
 	email: string | null
 	label: string
 	disabled_at: number | null
+	activated_at: number | null
 	created_at: number
 }
 
@@ -118,28 +120,27 @@ export interface CredentialGrantRow {
 	scope_value: string | null
 }
 
-/** An SSO session row (the `sessions` table). Only the cookie's hash is stored, never plaintext. */
+/** A browser session row (the `sessions` table). Only the cookie's hash is stored, never plaintext. */
 export interface SessionRow {
 	id: string
 	token_hash: string
 	principal_id: string
-	idp_sub: string
+	idp_sub: string | null
 	email: string | null
+	authentication_method: 'oidc' | 'password'
 	created_at: number
 	expires_at: number
 	revoked_at: number | null
 }
 
-/** Derived principal status — invited (unclaimed) → active → disabled. */
+/** Derived principal status — invited (not activated) → active → disabled. */
 export type PrincipalStatus = 'invited' | 'active' | 'disabled'
 
 export function principalStatus(row: PrincipalRow): PrincipalStatus {
 	if (row.disabled_at !== null) {
 		return 'disabled'
 	}
-	// Only a USER has the invite lifecycle (external_id NULL = invited, not yet claimed). A service
-	// principal is native (external_id NULL by construction) and is 'active' from creation.
-	if (row.type === 'user' && row.external_id === null) {
+	if (row.type === 'user' && row.activated_at === null) {
 		return 'invited'
 	}
 	return 'active'
@@ -242,28 +243,30 @@ export class PrincipalRepository {
 	}
 
 	/**
-	 * Claim an invited row in one statement: bind `external_id = sub`, set
+	 * Claim an invited row in one statement: bind `external_id = sub`, activate it, and set
 	 * `label = email`, but only while still unclaimed (`external_id IS NULL`) to
 	 * avoid a race claiming a row twice. Returns the claimed row, or null if the
 	 * row was concurrently claimed / not found.
 	 */
 	async claimInvitedUser(id: string, sub: string, email: string): Promise<PrincipalRow | null> {
+		const now = unixNow()
 		return this.db
-			.prepare(`UPDATE principals SET external_id = ?, label = ?
+			.prepare(`UPDATE principals SET external_id = ?, label = ?, activated_at = COALESCE(activated_at, ?)
 				WHERE id = ? AND type = 'user' AND external_id IS NULL
 				RETURNING *`)
-			.bind(sub, email, id)
+			.bind(sub, email, now, id)
 			.first<PrincipalRow>()
 	}
 
 	/** Lazy-create a user keyed by the verified `sub`. */
 	async createUser(sub: string, email: string): Promise<PrincipalRow> {
 		const id = uuidv7()
+		const now = unixNow()
 		return firstRow<PrincipalRow>(
 			this.db
-				.prepare(`INSERT INTO principals (id, type, external_id, email, label, created_at)
-					VALUES (?, 'user', ?, ?, ?, ?) RETURNING *`)
-				.bind(id, sub, email, email, unixNow()),
+				.prepare(`INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at)
+					VALUES (?, 'user', ?, ?, ?, ?, ?) RETURNING *`)
+				.bind(id, sub, email, email, now, now),
 		)
 	}
 
@@ -278,6 +281,21 @@ export class PrincipalRepository {
 		)
 	}
 
+	/** Create an invite while atomically reserving its case-insensitive password identity. */
+	async inviteUserWithEmailClaim(email: string, normalizedEmail: string): Promise<PrincipalRow> {
+		const id = uuidv7()
+		const now = unixNow()
+		const results = await this.db.batch<PrincipalRow>([
+			this.db.prepare(`INSERT INTO principals (id, type, external_id, email, label, created_at)
+				VALUES (?, 'user', NULL, ?, ?, ?) RETURNING *`).bind(id, email, email, now),
+			this.db.prepare(`INSERT INTO principal_email_claims (normalized_email, principal_id)
+				VALUES (?, ?)`).bind(normalizedEmail, id),
+		])
+		const principal = results[0]?.results[0]
+		if (principal === undefined) throw new Error('expected an invited principal')
+		return principal
+	}
+
 	/**
 	 * Create a native service (machine) principal. `external_id` is NULL — a native service is resolved
 	 * through its `px_` credential (credential.principal_id → principal), never an external id. (The
@@ -285,11 +303,12 @@ export class PrincipalRepository {
 	 */
 	async createService(label: string): Promise<PrincipalRow> {
 		const id = uuidv7()
+		const now = unixNow()
 		return firstRow<PrincipalRow>(
 			this.db
-				.prepare(`INSERT INTO principals (id, type, external_id, email, label, created_at)
-					VALUES (?, 'service', NULL, NULL, ?, ?) RETURNING *`)
-				.bind(id, label, unixNow()),
+				.prepare(`INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at)
+					VALUES (?, 'service', NULL, NULL, ?, ?, ?) RETURNING *`)
+				.bind(id, label, now, now),
 		)
 	}
 
@@ -739,7 +758,7 @@ export class CredentialRepository {
 	}
 }
 
-// ── SSO sessions ────────────────────────────────────────────────────────────
+// ── Browser sessions ────────────────────────────────────────────────────────
 
 export class SessionRepository {
 	constructor(protected readonly db: SqlDatabase) {}
@@ -748,15 +767,29 @@ export class SessionRepository {
 	async createSession(input: {
 		tokenHash: string
 		principalId: string
-		idpSub: string
+		idpSub?: string | null
 		email?: string | null
+		authenticationMethod?: 'oidc' | 'password'
 		expiresAt: number
 	}): Promise<string> {
 		const id = uuidv7()
+		const authenticationMethod = input.authenticationMethod ?? 'oidc'
+		if (authenticationMethod === 'oidc' && input.idpSub == null) {
+			throw new Error('OIDC sessions require an IdP subject')
+		}
 		await this.db
-			.prepare(`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, email, expires_at, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`)
-			.bind(id, input.tokenHash, input.principalId, input.idpSub, input.email ?? null, input.expiresAt, unixNow())
+			.prepare(`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, email, authentication_method, expires_at, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+			.bind(
+				id,
+				input.tokenHash,
+				input.principalId,
+				input.idpSub ?? null,
+				input.email ?? null,
+				authenticationMethod,
+				input.expiresAt,
+				unixNow(),
+			)
 			.run()
 		return id
 	}
@@ -954,6 +987,7 @@ export interface IamRepositories {
 	appSchema: AppSchemaRepository
 	credentials: CredentialRepository
 	sessions: SessionRepository
+	passwords: PasswordRepository
 	audit: AuditRepository
 }
 
@@ -965,6 +999,7 @@ export function createIamRepositories(db: SqlDatabase, replacements: Partial<Iam
 		appSchema: replacements.appSchema ?? new AppSchemaRepository(db),
 		credentials: replacements.credentials ?? new CredentialRepository(db),
 		sessions: replacements.sessions ?? new SessionRepository(db),
+		passwords: replacements.passwords ?? new PasswordRepository(db),
 		audit: replacements.audit ?? new AuditRepository(db),
 	}
 }

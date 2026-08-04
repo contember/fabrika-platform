@@ -1,7 +1,10 @@
+import type { EmailSender } from '@fabrika/email'
 import type { SqlDatabase, SqlQueryResult, SqlRunResult, SqlStatement } from '@fabrika/platform'
 import { Database, type SQLQueryBindings } from 'bun:sqlite'
 import { createIamRepositories, type IamRepositories } from '../../db'
+import { normalizeEmailIdentity } from '../../email-identity'
 import { OidcClient, type OidcMetadata } from '../../oidc'
+import { type PasswordHasher, WebCryptoPasswordHasher } from '../../password-crypto'
 import { hashToken } from '../../secret'
 import type { Config, Services } from '../../services'
 import { allMigrations } from './migrations'
@@ -125,6 +128,7 @@ export interface SignSessionOptions {
 	email?: string
 	/** Absolute expiry (unix seconds); defaults to 1h out. */
 	expiresAt?: number
+	authenticationMethod?: 'oidc' | 'password'
 }
 
 export interface MakeServicesOptions {
@@ -138,6 +142,10 @@ export interface MakeServicesOptions {
 	human?: { emailDomains?: readonly string[]; emails?: readonly string[] }
 	/** OIDC client. Defaults to one with injected (offline) discovery metadata; tests override for the callback flow. */
 	oidc?: OidcClient
+	/** Independent auth method switches. Defaults to the legacy OIDC-only mode. */
+	authentication?: { oidc: boolean; password: boolean }
+	passwordHasher?: PasswordHasher
+	email?: EmailSender | null
 	/** propustka's own origin (token `iss` + OIDC redirect base). */
 	issuer?: string
 	/** SSO session cookie `Domain`; empty = host-only. */
@@ -159,15 +167,19 @@ export function createHarness(): Harness {
 				emailDomains: options.human?.emailDomains ?? ['contember.com'],
 				emails: options.human?.emails ?? [],
 			},
-			bootstrapAdmins: options.bootstrapAdmins ?? new Set(),
+			bootstrapAdmins: new Set([...(options.bootstrapAdmins ?? [])].map(normalizeEmailIdentity)),
 			environment,
 			localDevLogin: environment === 'local' && options.localDevLogin === true,
+			authentication: {
+				oidc: { enabled: options.authentication?.oidc ?? true },
+				password: { enabled: options.authentication?.password ?? false },
+			},
 			issuer,
 			sessionCookieDomain: options.sessionCookieDomain ?? '',
 		}
 		return {
 			repositories,
-			oidc: options.oidc ?? new OidcClient(
+			oidc: options.authentication?.oidc === false ? null : options.oidc ?? new OidcClient(
 				{
 					issuer: 'https://idp.test',
 					clientId: 'dummy',
@@ -178,6 +190,8 @@ export function createHarness(): Harness {
 				},
 				{ metadata: HARNESS_OIDC_METADATA },
 			),
+			passwordHasher: options.passwordHasher ?? new WebCryptoPasswordHasher(),
+			email: options.email ?? null,
 			config,
 		}
 	}
@@ -189,6 +203,7 @@ export function createHarness(): Harness {
 			principalId,
 			idpSub: options.idpSub ?? `idp-${principalId}`,
 			email: options.email ?? 'admin@example.com',
+			authenticationMethod: options.authenticationMethod,
 			expiresAt: options.expiresAt ?? Math.floor(Date.now() / 1000) + 3600,
 		})
 		return token
@@ -227,16 +242,19 @@ export interface SeedUserOptions {
 /** Insert a user principal; returns its id. */
 export function seedUser(sqlite: Database, options: SeedUserOptions): string {
 	const id = nextId('user')
+	const createdAt = options.createdAt ?? nowSeconds()
+	const externalId = options.sub ?? null
 	sqlite.run(
-		'INSERT INTO principals (id, type, external_id, email, label, disabled_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+		'INSERT INTO principals (id, type, external_id, email, label, disabled_at, activated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
 		[
 			id,
 			'user',
-			options.sub ?? null,
+			externalId,
 			options.email,
 			options.label ?? options.email,
 			options.disabled ? 1 : null,
-			options.createdAt ?? nowSeconds(),
+			externalId === null ? null : createdAt,
+			createdAt,
 		],
 	)
 	return id
@@ -254,8 +272,9 @@ export interface SeedServiceOptions {
 /** Insert a service principal; returns its id. */
 export function seedService(sqlite: Database, options: SeedServiceOptions): string {
 	const id = nextId('svc')
+	const createdAt = options.createdAt ?? nowSeconds()
 	sqlite.run(
-		'INSERT INTO principals (id, type, external_id, email, label, disabled_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+		'INSERT INTO principals (id, type, external_id, email, label, disabled_at, activated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
 		[
 			id,
 			'service',
@@ -263,7 +282,8 @@ export function seedService(sqlite: Database, options: SeedServiceOptions): stri
 			null,
 			options.label ?? options.commonName,
 			options.disabled ? 1 : null,
-			options.createdAt ?? nowSeconds(),
+			createdAt,
+			createdAt,
 		],
 	)
 	return id

@@ -18,7 +18,7 @@ import type {
 import { environmentAliases } from '@fabrika/platform'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { iamApp } from './app'
-import { pruneAuthLog } from './cron'
+import { runIamMaintenance } from './cron'
 import { createIamRepositories } from './db'
 import type { Env } from './env'
 import { createIamRpc } from './rpc'
@@ -29,7 +29,7 @@ import { createIamRpc } from './rpc'
  * which does not traverse any public edge) and `fetch()` (`/admin/*` + `/auth/*`).
  *
  * There is no logic here. Every method delegates: the RPC surface to `createIamRpc` (src/rpc.ts),
- * `fetch` to `iamApp`, `scheduled` to `pruneAuthLog` (src/cron.ts) — the same
+ * `fetch` to `iamApp`, `scheduled` to `runIamMaintenance` (src/cron.ts) — the same
  * three functions the Bun entrypoint (src/node/server.ts) calls. This file's whole job is to bind
  * `cloudflare:workers` to them, and it is the ONLY file in the package that imports it: the Bun
  * process must never load this module, and it must never load `bun:*`/`node:*`.
@@ -38,10 +38,13 @@ import { createIamRpc } from './rpc'
  * `this.ctx` (an `ExecutionContext`) satisfies `RequestContext` structurally, so it is passed
  * straight through with no adapter.
  */
-export interface WorkerBindings extends Omit<Env, 'DB' | 'REPOSITORIES' | 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY'> {
+export interface WorkerBindings
+	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'EMAIL_API_KEY'>
+{
 	DB: D1Database
 	FABRIKA_IAM_SIGNING_KEYS?: string
 	FABRIKA_IAM_PROVISIONING_KEY?: string
+	FABRIKA_EMAIL_RESEND_API_KEY?: string
 	PROPUSTKA_SIGNING_KEYS?: string
 	PROPUSTKA_PROVISIONING_KEY?: string
 }
@@ -55,6 +58,7 @@ export function iamEnv(bindings: WorkerBindings): Env {
 		FABRIKA_IAM_SIGNING_KEYS: environmentAliases.read(bindings, { canonical: 'FABRIKA_IAM_SIGNING_KEYS', legacy: 'PROPUSTKA_SIGNING_KEYS' }) ?? '',
 		FABRIKA_IAM_PROVISIONING_KEY: environmentAliases.read(bindings, { canonical: 'FABRIKA_IAM_PROVISIONING_KEY', legacy: 'PROPUSTKA_PROVISIONING_KEY' })
 			?? '',
+		EMAIL_API_KEY: bindings.FABRIKA_EMAIL_RESEND_API_KEY ?? '',
 	}
 }
 
@@ -104,11 +108,11 @@ export class Propustka extends WorkerEntrypoint<WorkerBindings> implements IamRp
 	}
 
 	/**
-	 * Daily cron (see `triggers.crons`): prune old `auth_log` rows (retention: weeks).
+	 * Daily cron (see `triggers.crons`): prune old auth-log and password-transient rows.
 	 * `WorkerEntrypoint.scheduled` receives only the controller; `env`/`ctx` come from `this`.
 	 */
 	override scheduled(_controller: ScheduledController): Promise<void> {
-		pruneAuthLog(this.iam, this.ctx)
+		runIamMaintenance(this.iam, this.ctx)
 		return Promise.resolve()
 	}
 }

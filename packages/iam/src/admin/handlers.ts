@@ -19,6 +19,7 @@ import type {
 	ListRolesInput,
 	MeDto,
 	OkResponse,
+	PasswordActionDelivery,
 	PolicyDto,
 	PrincipalDetail,
 	PrincipalListItem,
@@ -40,9 +41,11 @@ import {
 	principalStatus,
 	type RoleRow,
 } from '../db'
+import { normalizeEmailIdentity } from '../email-identity'
 import type { RequestContext } from '../env'
 import { issueKey } from '../issue'
 import { arrayField, booleanField, nullableStringField, numberField, parseJsonOrNull, prop, stringField } from '../json'
+import { deliverPasswordAction, issuePasswordAction } from '../password-service'
 import { computePermissions } from '../resolve'
 import { BUILTIN_ROLES, isKnownRole, makeRoleSource } from '../roles'
 import { generateToken, hashToken } from '../secret'
@@ -313,11 +316,30 @@ async function getPrincipalUseCase(c: AdminContext, input: { id: string }): Prom
 	// without the live token (groups need a cookie we don't have here) — so this
 	// reflects explicit grants + bootstrap; group-derived perms are login-time.
 	const permissions = await effectivePermissionsForAdmin(c, row)
+	const passwordAccount = row.type === 'user' && c.services.config.authentication.password.enabled
+		? await c.services.repositories.passwords.getAccount(row.id)
+		: null
 
 	const detail: PrincipalDetail = {
 		...toPrincipalListItem(row),
 		grants: await toGrantDtos(grants, c.services),
 		permissions,
+		authentication: {
+			oidc: {
+				state: !c.services.config.authentication.oidc.enabled
+					? 'unavailable'
+					: row.type === 'user' && row.external_id !== null
+					? 'linked'
+					: 'unlinked',
+			},
+			password: {
+				state: !c.services.config.authentication.password.enabled
+					? 'unavailable'
+					: row.type !== 'user'
+					? 'disabled'
+					: passwordAccount?.state ?? 'disabled',
+			},
+		},
 	}
 	return detail
 }
@@ -335,7 +357,8 @@ async function getPrincipalUseCase(c: AdminContext, input: { id: string }): Prom
  */
 async function effectivePermissionsForAdmin(c: AdminContext, row: PrincipalRow): Promise<PermissionEntry[]> {
 	const grants = await c.services.repositories.grants.getActiveGrants(row.id)
-	const isBootstrapAdmin = row.type === 'user' && row.email !== null && c.services.config.bootstrapAdmins.has(row.email)
+	const isBootstrapAdmin = row.type === 'user' && row.email !== null
+		&& c.services.config.bootstrapAdmins.has(normalizeEmailIdentity(row.email))
 	const app: string | null = c.app
 	const appRoles: Record<string, RoleDef> = {}
 	for (const dbRole of await c.services.repositories.appSchema.listRoles(app)) {
@@ -375,13 +398,22 @@ export async function invitePrincipal(c: AdminContext): Promise<Response> {
 }
 
 async function invitePrincipalUseCase(c: AdminContext, input: InviteRequest): Promise<PrincipalListItem> {
-	const email = input.email
-	if (email.trim() === '') return fail(400, 'email required')
-	const existing = await c.services.repositories.principals.getUserByEmail(email)
-	if (existing) {
+	const email = input.email.trim()
+	if (email === '') return fail(400, 'email required')
+	const normalizedEmail = normalizeEmailIdentity(email)
+	const existing = await c.services.repositories.passwords.lookupActionUser(normalizedEmail)
+	if (existing.status !== 'missing') {
 		return fail(409, 'a user with this email already exists')
 	}
-	const principal = await c.services.repositories.principals.inviteUser(email)
+	let principal: PrincipalRow
+	try {
+		principal = await c.services.repositories.principals.inviteUserWithEmailClaim(email, normalizedEmail)
+	} catch (cause) {
+		if ((await c.services.repositories.passwords.lookupActionUser(normalizedEmail)).status !== 'missing') {
+			return fail(409, 'a user with this email already exists')
+		}
+		throw cause
+	}
 	await adminAudit(c, {
 		action: 'iam.principal.invite',
 		resourceType: 'principal',
@@ -434,6 +466,85 @@ async function updatePrincipalUseCase(c: AdminContext, input: UpdatePrincipalInp
 	const updated = await c.services.repositories.principals.getPrincipalById(id)
 	if (!updated) return fail(404, 'principal not found')
 	return toPrincipalListItem(updated)
+}
+
+// ── Password authentication ──────────────────────────────────────────────────
+
+async function passwordUser(c: AdminContext, id: string, requireActive: boolean = true): Promise<PrincipalRow> {
+	if (!c.services.config.authentication.password.enabled) {
+		return fail(409, 'password authentication is not available')
+	}
+	const principal = await c.services.repositories.principals.getPrincipalById(id)
+	if (!principal) return fail(404, 'principal not found')
+	if (principal.type !== 'user') return fail(400, 'password authentication is available only for users')
+	if (principal.email === null) return fail(409, 'user has no email address')
+	if (requireActive && principal.disabled_at !== null) return fail(409, 'principal is disabled')
+	return principal
+}
+
+async function passwordDelivery(
+	c: AdminContext,
+	principal: PrincipalRow,
+	purpose: 'enrollment' | 'reset',
+): Promise<PasswordActionDelivery> {
+	const action = await issuePasswordAction(c.services, { principal, purpose, issuedBy: c.admin.id })
+	if (c.services.email === null) {
+		await adminAudit(c, {
+			action: `iam.password.${purpose}.issue`,
+			resourceType: 'principal',
+			resourceId: principal.id,
+			metadata: { delivery: 'manual', outcome: 'issued' },
+		})
+		return { delivery: 'manual', url: action.url, expiresAt: action.expiresAt }
+	}
+	if (action.message === null || principal.email === null) {
+		return fail(409, 'user has no email address')
+	}
+	try {
+		await deliverPasswordAction(c.services, action)
+	} catch {
+		console.error('Password action email delivery failed')
+		await adminAudit(c, {
+			action: `iam.password.${purpose}.issue`,
+			resourceType: 'principal',
+			resourceId: principal.id,
+			metadata: { delivery: 'email', outcome: 'failed' },
+		})
+		return fail(502, 'password action email delivery failed')
+	}
+	await adminAudit(c, {
+		action: `iam.password.${purpose}.issue`,
+		resourceType: 'principal',
+		resourceId: principal.id,
+		metadata: { delivery: 'email', outcome: 'sent' },
+	})
+	return { delivery: 'email', email: principal.email, expiresAt: action.expiresAt }
+}
+
+async function issuePasswordEnrollmentUseCase(c: AdminContext, input: { id: string }): Promise<PasswordActionDelivery> {
+	const principal = await passwordUser(c, input.id)
+	const account = await c.services.repositories.passwords.getAccount(principal.id)
+	if (account?.state === 'enabled') return fail(409, 'password authentication is already enabled')
+	await c.services.repositories.passwords.enableEnrollment(principal.id)
+	return passwordDelivery(c, principal, 'enrollment')
+}
+
+async function issuePasswordResetUseCase(c: AdminContext, input: { id: string }): Promise<PasswordActionDelivery> {
+	const principal = await passwordUser(c, input.id)
+	const account = await c.services.repositories.passwords.getAccount(principal.id)
+	if (account?.state !== 'enabled') return fail(409, 'password authentication is not enabled')
+	return passwordDelivery(c, principal, 'reset')
+}
+
+async function disablePasswordUseCase(c: AdminContext, input: { id: string }): Promise<OkResponse> {
+	const principal = await passwordUser(c, input.id, false)
+	await c.services.repositories.passwords.disableCredential(principal.id)
+	await adminAudit(c, {
+		action: 'iam.password.disable',
+		resourceType: 'principal',
+		resourceId: principal.id,
+	})
+	return { ok: true }
 }
 
 // ── Grants ────────────────────────────────────────────────────────────────────
@@ -1374,6 +1485,9 @@ export const adminUseCases = {
 	getPrincipal: getPrincipalUseCase,
 	invitePrincipal: invitePrincipalUseCase,
 	updatePrincipal: updatePrincipalUseCase,
+	issuePasswordEnrollment: issuePasswordEnrollmentUseCase,
+	issuePasswordReset: issuePasswordResetUseCase,
+	disablePassword: disablePasswordUseCase,
 	createGrant: createGrantUseCase,
 	deleteGrant: deleteGrantUseCase,
 	listApps: listAppsUseCase,

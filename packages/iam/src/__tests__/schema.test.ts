@@ -25,8 +25,8 @@ function freshDb(): Database {
 /** Seed the principal the grant/credential tests hang off. */
 function seedP1(db: Database, externalId: string | null = 'sub1', email = 'a@x.cz'): void {
 	db.run(
-		`INSERT INTO principals (id, type, external_id, email, label, created_at)
-		 VALUES ('p1', 'user', ${externalId === null ? 'NULL' : `'${externalId}'`}, '${email}', '${email}', ${T})`,
+		`INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at)
+		 VALUES ('p1', 'user', ${externalId === null ? 'NULL' : `'${externalId}'`}, '${email}', '${email}', ${externalId === null ? 'NULL' : T}, ${T})`,
 	)
 }
 
@@ -45,6 +45,12 @@ test('creates every table the worker reads/writes (and retires projects)', () =>
 			'auth_log',
 			'credentials',
 			'credential_grants',
+			'sessions',
+			'principal_email_claims',
+			'password_accounts',
+			'password_credentials',
+			'password_action_tokens',
+			'password_login_throttles',
 		]
 	) {
 		expect(names).toContain(t)
@@ -65,6 +71,35 @@ test('created_at carries no DDL default — an INSERT that omits it is rejected'
 	const db = freshDb()
 	expect(() => db.run("INSERT INTO principals (id, type, external_id, email, label) VALUES ('p0', 'user', 's0', 'a@x.cz', 'a@x.cz')"))
 		.toThrow()
+})
+
+test('password migration backfills activation and enforces session authentication shape', () => {
+	const db = freshDb()
+	const provisioning = db.query<{ activated_at: number | null }, []>("SELECT activated_at FROM principals WHERE id = 'provisioning-admin'").get()
+	expect(provisioning?.activated_at).not.toBeNull()
+
+	seedP1(db)
+	expect(() =>
+		db.run(`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, authentication_method, created_at, expires_at)
+			VALUES ('s-invalid', 'h-invalid', 'p1', NULL, 'oidc', ${T}, ${T + 100})`)
+	).toThrow()
+	expect(() =>
+		db.run(`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, authentication_method, created_at, expires_at)
+			VALUES ('s-password', 'h-password', 'p1', NULL, 'password', ${T}, ${T + 100})`)
+	).not.toThrow()
+	expect(() =>
+		db.run(`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, authentication_method, created_at, expires_at)
+			VALUES ('s-password-invalid', 'h-password-invalid', 'p1', 'idp-sub', 'password', ${T}, ${T + 100})`)
+	).toThrow()
+})
+
+test('password capability state is explicit and constrained', () => {
+	const db = freshDb()
+	seedP1(db)
+	expect(() => db.run(`INSERT INTO password_accounts (principal_id, state, created_at, updated_at) VALUES ('p1', 'pending', ${T}, ${T})`)).not
+		.toThrow()
+	db.run("DELETE FROM password_accounts WHERE principal_id = 'p1'")
+	expect(() => db.run(`INSERT INTO password_accounts (principal_id, state, created_at, updated_at) VALUES ('p1', 'unknown', ${T}, ${T})`)).toThrow()
 })
 
 test('roles.permissions is plain TEXT — JSON validity is not a DB constraint', () => {

@@ -79,7 +79,7 @@ const zeropsYamlArtifact = (): Artifact => ({
 		'',
 		'NO SECRETS AND NO PER-INSTALLATION VALUES ARE IN HERE — including no `${x_y}` reference to a',
 		'DATA service, because which data services exist differs between the standard and light tiers.',
-		'Database and object-storage coordinates, public origins, OIDC coordinates, ENVIRONMENT and every',
+		'Database and object-storage coordinates, public origins, auth/email coordinates, ENVIRONMENT and every',
 		'secret are service-level variables written through the env API (ADR-0004).',
 	]) + renderYaml(fabrikaZeropsYaml),
 })

@@ -7,13 +7,15 @@
 # put real secrets here.
 #
 # Remote (stage/prod) provisioning is out-of-band: `wrangler secret put
-# FABRIKA_IAM_SIGNING_KEYS` and `wrangler secret put OIDC_CLIENT_SECRET`. See
+# FABRIKA_IAM_SIGNING_KEYS`, plus the secrets for enabled providers. See
 # packages/iam/fabrika.config.ts.
 
 # IAM auth secrets. Empty FABRIKA_IAM_SIGNING_KEYS → an ephemeral ES256 key is
 # generated per isolate (dev only; sessions reset on restart). Real keys (stage/prod) are a JSON
 # array of EC P-256 private JWKs, provisioned via `wrangler secret put FABRIKA_IAM_SIGNING_KEYS`.
 FABRIKA_IAM_SIGNING_KEYS=
-# OIDC client secret — dummy locally (no real OIDC upstream in dev). The provider is generic:
+# OIDC client secret — required only when OIDC is enabled. The provider is generic:
 # OIDC_ISSUER (a var) selects ANY OIDC provider via discovery; only the secret lives here.
 OIDC_CLIENT_SECRET=local-oidc-client-secret
+# Resend API key — required only when EMAIL_PROVIDER=resend.
+FABRIKA_EMAIL_RESEND_API_KEY=

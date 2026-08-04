@@ -53,6 +53,45 @@
 	gap: var(--s-1);
 }
 
+/* ── Per-user authentication methods ──────────────────────────────────────── */
+
+.authentication-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+	gap: var(--s-3);
+}
+
+.authentication-method {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: var(--s-4);
+	padding: var(--s-4);
+	background: var(--plate);
+	border: 1px solid var(--rule);
+	border-radius: var(--r-2);
+}
+
+.authentication-method p {
+	margin: var(--s-1) 0 0;
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+	line-height: 1.5;
+}
+
+.authentication-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	gap: var(--s-2);
+}
+
+.authentication-grid + .notice,
+.authentication-grid + .error-text {
+	margin-top: var(--s-3);
+}
+
 /* ── Capability grant rows ─────────────────────────────────────────────────── */
 
 .grant-rows {

@@ -67,7 +67,8 @@ export default createPage()
 					</Link>
 					<h1>Invite user</h1>
 					<p className="hint">
-						Pre-creates the user so you can grant a role before their first login. For team-wide pre-authorization, use group mappings instead.
+						Pre-creates the user so you can grant a role before their first login. After creation, the Authentication section lets you send a password
+						enrollment link when password login is available.
 					</p>
 				</div>
 
@@ -82,7 +83,7 @@ export default createPage()
 							placeholder="person@example.com"
 							autoFocus
 						/>
-						<span className="hint">Matched against the identity the IdP returns at first login.</span>
+						<span className="hint">Used for OIDC identity matching and password enrollment. Inviting does not enable password login.</span>
 					</label>
 					<label className="checkbox">
 						<input type="checkbox" checked={withGrant} onChange={(e) => setWithGrant(e.target.checked)} />

@@ -7,7 +7,7 @@
 //                                    reached over HTTP via `handleRpcHttp`, which authenticates the
 //                                    transport with a shared secret because HTTP has no equivalent of
 //                                    a binding's unreachability. See the header of `rpc-http.ts`.
-//   pruneAuthLog  (src/cron.ts)    — the `scheduled` handler's work. NOT scheduled from in here: the
+//   runIamMaintenance (src/cron.ts) — the `scheduled` handler's work. NOT scheduled from in here: the
 //                                    platform cron drives it (`run.crontab` → `node/prune.ts`), which
 //                                    is the same shape as `triggers.crons` driving `scheduled`.
 //

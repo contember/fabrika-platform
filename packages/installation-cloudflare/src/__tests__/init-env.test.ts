@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from 'bun:test'
-import { ensureVaultKey, readResumeEnvironmentAlias } from '../init'
+import { ensureVaultKey, readInstallerAuthMethods, readInstallerEmailProvider, readResumeEnvironmentAlias } from '../init'
 import { action } from '../log'
 
 const aliases: ReadonlyArray<readonly [string, string]> = [
@@ -50,5 +50,40 @@ describe('Cloudflare installer resume aliases', () => {
 		}
 		expect(persisted).toEqual([{ name: 'FABRIKA_CONTROL_VAULT_KEY', value: key }])
 		expect(output.join('\n')).not.toContain(key)
+	})
+})
+
+describe('Cloudflare installer IAM method resume', () => {
+	test('requires both authentication switches and at least one method', () => {
+		expect(readInstallerAuthMethods({})).toBeUndefined()
+		expect(() => readInstallerAuthMethods({ FABRIKA_IAM_OIDC_ENABLED: 'true' })).toThrow('must be configured together')
+		expect(() =>
+			readInstallerAuthMethods({
+				FABRIKA_IAM_OIDC_ENABLED: 'false',
+				FABRIKA_IAM_PASSWORD_ENABLED: 'false',
+			})
+		).toThrow('At least one IAM authentication method must be enabled')
+	})
+
+	test('restores OIDC-only, password-only, and hybrid selections', () => {
+		expect(readInstallerAuthMethods({ FABRIKA_IAM_OIDC_ENABLED: 'true', FABRIKA_IAM_PASSWORD_ENABLED: 'false' })).toEqual({
+			oidcEnabled: true,
+			passwordEnabled: false,
+		})
+		expect(readInstallerAuthMethods({ FABRIKA_IAM_OIDC_ENABLED: 'false', FABRIKA_IAM_PASSWORD_ENABLED: 'true' })).toEqual({
+			oidcEnabled: false,
+			passwordEnabled: true,
+		})
+		expect(readInstallerAuthMethods({ FABRIKA_IAM_OIDC_ENABLED: 'true', FABRIKA_IAM_PASSWORD_ENABLED: 'true' })).toEqual({
+			oidcEnabled: true,
+			passwordEnabled: true,
+		})
+	})
+
+	test('validates the optional email provider', () => {
+		expect(readInstallerEmailProvider({})).toBeUndefined()
+		expect(readInstallerEmailProvider({ FABRIKA_EMAIL_PROVIDER: 'none' })).toBe('none')
+		expect(readInstallerEmailProvider({ FABRIKA_EMAIL_PROVIDER: 'resend' })).toBe('resend')
+		expect(() => readInstallerEmailProvider({ FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow('must be none or resend')
 	})
 })

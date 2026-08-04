@@ -1,5 +1,6 @@
 import type { PermissionEntry, PermissionSource, RoleDef, RoleSource, Scope } from '@fabrika/auth-core'
 import type { GrantRow, IamRepositories, PrincipalRow, RoleRow } from './db'
+import { normalizeEmailIdentity } from './email-identity'
 import { parseJsonOrNull } from './json'
 import { makeRoleSource } from './roles'
 
@@ -242,7 +243,7 @@ export async function resolveUserPermissions(args: {
 	const { repositories, principal, bootstrapAdmins, app } = args
 
 	const grants = await repositories.grants.getActiveGrantsForApp(principal.id, app)
-	const isBootstrapAdmin = principal.email !== null && bootstrapAdmins.has(principal.email)
+	const isBootstrapAdmin = principal.email !== null && bootstrapAdmins.has(normalizeEmailIdentity(principal.email))
 
 	const roles = await loadRoleSource(repositories, app)
 	return computePermissions({ app, grants, isBootstrapAdmin }, roles)

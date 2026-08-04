@@ -30,6 +30,13 @@ export interface Env {
 	ENVIRONMENT: string
 	/** Explicit local-only human login bypass. Ignored unless `ENVIRONMENT=local`. */
 	LOCAL_DEV_LOGIN?: string
+	/** Independent authentication-method switches. Absent preserves the legacy OIDC-only mode. */
+	OIDC_ENABLED?: string
+	PASSWORD_ENABLED?: string
+	/** Shared email transport. `none` or absent disables delivery; `resend` requires sender and API key. */
+	EMAIL_PROVIDER?: string
+	EMAIL_FROM?: string
+	EMAIL_API_KEY?: string
 
 	// ── propustka-native auth (propustka issues its own tokens; see token.ts / signing.ts) ──
 
@@ -65,15 +72,15 @@ export interface Env {
 	 * tenant). propustka discovers the endpoints from `${OIDC_ISSUER}/.well-known/openid-configuration`
 	 * — so ANY OIDC provider works via config, no per-provider code.
 	 */
-	OIDC_ISSUER: string
+	OIDC_ISSUER?: string
 	/** OIDC client id (public). The SSO upstream — propustka federates here for human login. */
-	OIDC_CLIENT_ID: string
+	OIDC_CLIENT_ID?: string
 	/** **Secret.** OIDC client secret (the code-exchange credential). */
-	OIDC_CLIENT_SECRET: string
+	OIDC_CLIENT_SECRET?: string
 	/** Space-separated OIDC scopes; empty → `openid email profile`. */
-	OIDC_SCOPES: string
+	OIDC_SCOPES?: string
 	/** `'false'` to accept logins whose `email_verified` claim is absent (an IdP that omits it); else verified is required. */
-	OIDC_REQUIRE_VERIFIED_EMAIL: string
+	OIDC_REQUIRE_VERIFIED_EMAIL?: string
 }
 
 /**

@@ -65,6 +65,10 @@ describe('platform scaffold', () => {
 			const iamStep = workflow.slice(workflow.indexOf('name: Deploy IAM'), workflow.indexOf('name: Deploy Operations'))
 			expect(iamStep).toContain('FABRIKA_IAM_SIGNING_KEYS: ${{ secrets.FABRIKA_IAM_SIGNING_KEYS }}')
 			expect(iamStep).toContain('FABRIKA_IAM_PROVISIONING_KEY: ${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}')
+			expect(iamStep).toContain('FABRIKA_IAM_OIDC_ENABLED: ${{ vars.FABRIKA_IAM_OIDC_ENABLED }}')
+			expect(iamStep).toContain('FABRIKA_IAM_PASSWORD_ENABLED: ${{ vars.FABRIKA_IAM_PASSWORD_ENABLED }}')
+			expect(iamStep).toContain('FABRIKA_EMAIL_PROVIDER: ${{ vars.FABRIKA_EMAIL_PROVIDER }}')
+			expect(iamStep).toContain('FABRIKA_EMAIL_RESEND_API_KEY: ${{ secrets.FABRIKA_EMAIL_RESEND_API_KEY }}')
 			const operationsStep = workflow.slice(
 				workflow.indexOf('name: Deploy Operations'),
 				workflow.indexOf('name: Deploy fabrika runner + control plane'),

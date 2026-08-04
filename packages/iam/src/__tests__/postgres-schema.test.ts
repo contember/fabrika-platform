@@ -48,6 +48,11 @@ afterAll(async () => {
 async function reset(): Promise<void> {
 	for (
 		const table of [
+			'principal_email_claims',
+			'password_action_tokens',
+			'password_credentials',
+			'password_accounts',
+			'password_login_throttles',
 			'auth_log',
 			'audit_events',
 			'credential_grants',
@@ -79,6 +84,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 		expect(results).toEqual([
 			{ bundle: 'iam', name: '0001_init.sql' },
 			{ bundle: 'iam', name: '0002_provisioning_principal.sql' },
+			{ bundle: 'iam', name: '0003_password_auth.sql' },
 		])
 	})
 
@@ -106,6 +112,11 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'credentials',
 				'credential_grants',
 				'sessions',
+				'principal_email_claims',
+				'password_accounts',
+				'password_credentials',
+				'password_action_tokens',
+				'password_login_throttles',
 			]
 		) {
 			expect(names).toContain(table)
@@ -474,6 +485,81 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(event?.principal_id).toBeNull()
 		expect(event?.principal_label).toBe('del@x.cz')
 		expect((await db.audit.listAuthLog({ limit: 10 }))[0]?.principal_id).toBeNull()
+	})
+})
+
+describe.skipIf(!hasPostgres)('password repository on Postgres', () => {
+	test('completes an action atomically and preserves OIDC sessions', async () => {
+		await reset()
+		const principal = await db.principals.inviteUserWithEmailClaim('person@example.com', 'person@example.com')
+		await db.passwords.enableEnrollment(principal.id)
+		await db.passwords.issueActionToken({
+			principalId: principal.id,
+			purpose: 'enrollment',
+			tokenHash: 'postgres-action-token',
+			expiresAt: now() + 3_600,
+		})
+		await db.sessions.createSession({
+			tokenHash: 'postgres-oidc-session',
+			principalId: principal.id,
+			idpSub: 'postgres-idp-sub',
+			authenticationMethod: 'oidc',
+			expiresAt: now() + 3_600,
+		})
+		await db.sessions.createSession({
+			tokenHash: 'postgres-password-session',
+			principalId: principal.id,
+			authenticationMethod: 'password',
+			expiresAt: now() + 3_600,
+		})
+
+		expect(
+			await db.passwords.completeAction({
+				tokenHash: 'postgres-action-token',
+				purpose: 'enrollment',
+				password: { algorithm: 'test', parameters: '{}', salt: 'salt', passwordHash: 'derived' },
+			}),
+		).toEqual({ principalId: principal.id })
+		expect(
+			await db.passwords.completeAction({
+				tokenHash: 'postgres-action-token',
+				purpose: 'enrollment',
+				password: { algorithm: 'test', parameters: '{}', salt: 'salt', passwordHash: 'other' },
+			}),
+		).toBeNull()
+		expect(await db.sessions.getActiveSessionByHash('postgres-oidc-session')).not.toBeNull()
+		expect(await db.sessions.getActiveSessionByHash('postgres-password-session')).toBeNull()
+	})
+
+	test('serializes concurrent action issuance and applies the throttle UPSERT', async () => {
+		await reset()
+		const principal = await db.principals.inviteUserWithEmailClaim('race@example.com', 'race@example.com')
+		await db.passwords.enableEnrollment(principal.id)
+		await Promise.all([
+			db.passwords.issueActionToken({
+				principalId: principal.id,
+				purpose: 'enrollment',
+				tokenHash: 'postgres-race-a',
+				expiresAt: now() + 3_600,
+			}),
+			db.passwords.issueActionToken({
+				principalId: principal.id,
+				purpose: 'enrollment',
+				tokenHash: 'postgres-race-b',
+				expiresAt: now() + 3_600,
+			}),
+		])
+		const { results } = await raw.prepare(`SELECT token_hash FROM password_action_tokens
+			WHERE principal_id = ? AND purpose = 'enrollment' AND consumed_at IS NULL`)
+			.bind(principal.id)
+			.all<{ token_hash: string }>()
+		expect(results).toHaveLength(1)
+
+		const throttle = { loginKeyHash: 'postgres-throttle', windowSeconds: 60, maxAttempts: 2, blockSeconds: 120 }
+		expect((await db.passwords.recordLoginFailure(throttle)).attempt_count).toBe(1)
+		const blocked = await db.passwords.recordLoginFailure(throttle)
+		expect(blocked.attempt_count).toBe(2)
+		expect(blocked.blocked_until).not.toBeNull()
 	})
 })
 

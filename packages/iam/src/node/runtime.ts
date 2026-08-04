@@ -55,6 +55,22 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	const databaseUrl = requiredAlias(source, 'FABRIKA_IAM_DATABASE_URL', 'PROPUSTKA_DATABASE_URL')
 	const environment = required(source, 'ENVIRONMENT')
 	const issuer = required(source, 'ISSUER')
+	const oidcEnabled = booleanAlias(source, 'FABRIKA_IAM_OIDC_ENABLED', 'PROPUSTKA_OIDC_ENABLED', true)
+	const passwordEnabled = booleanAlias(source, 'FABRIKA_IAM_PASSWORD_ENABLED', 'PROPUSTKA_PASSWORD_ENABLED', false)
+	if (!oidcEnabled && !passwordEnabled) {
+		throw new Error('At least one IAM authentication method must be enabled')
+	}
+	const oidcIssuer = oidcEnabled ? required(source, 'OIDC_ISSUER') : source['OIDC_ISSUER'] ?? ''
+	const oidcClientId = oidcEnabled ? required(source, 'OIDC_CLIENT_ID') : source['OIDC_CLIENT_ID'] ?? ''
+	const oidcClientSecret = oidcEnabled ? required(source, 'OIDC_CLIENT_SECRET') : source['OIDC_CLIENT_SECRET'] ?? ''
+	const emailProvider = source['FABRIKA_EMAIL_PROVIDER'] ?? 'none'
+	if (emailProvider !== 'none' && emailProvider !== 'resend') {
+		throw new Error('FABRIKA_EMAIL_PROVIDER must be none or resend')
+	}
+	const emailFrom = emailProvider === 'resend' ? required(source, 'FABRIKA_EMAIL_FROM') : source['FABRIKA_EMAIL_FROM'] ?? ''
+	const emailApiKey = emailProvider === 'resend'
+		? required(source, 'FABRIKA_EMAIL_RESEND_API_KEY')
+		: source['FABRIKA_EMAIL_RESEND_API_KEY'] ?? ''
 
 	const config: ProcessConfig = {
 		port: parsePort(source['PORT']),
@@ -79,11 +95,16 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		FABRIKA_IAM_PROVISIONING_KEY: environmentAliases.read(source, { canonical: 'FABRIKA_IAM_PROVISIONING_KEY', legacy: 'PROPUSTKA_PROVISIONING_KEY' })
 			?? '',
 		SESSION_COOKIE_DOMAIN: source['SESSION_COOKIE_DOMAIN'] ?? '',
-		OIDC_ISSUER: source['OIDC_ISSUER'] ?? '',
-		OIDC_CLIENT_ID: source['OIDC_CLIENT_ID'] ?? '',
-		OIDC_CLIENT_SECRET: source['OIDC_CLIENT_SECRET'] ?? '',
+		OIDC_ENABLED: String(oidcEnabled),
+		PASSWORD_ENABLED: String(passwordEnabled),
+		OIDC_ISSUER: oidcIssuer,
+		OIDC_CLIENT_ID: oidcClientId,
+		OIDC_CLIENT_SECRET: oidcClientSecret,
 		OIDC_SCOPES: source['OIDC_SCOPES'] ?? '',
 		OIDC_REQUIRE_VERIFIED_EMAIL: source['OIDC_REQUIRE_VERIFIED_EMAIL'] ?? 'true',
+		EMAIL_PROVIDER: emailProvider,
+		EMAIL_FROM: emailFrom,
+		EMAIL_API_KEY: emailApiKey,
 	}
 
 	return {
@@ -98,6 +119,14 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 			await db.close()
 		},
 	}
+}
+
+function booleanAlias(source: Record<string, string | undefined>, canonical: string, legacy: string, fallback: boolean): boolean {
+	const raw = environmentAliases.read(source, { canonical, legacy })
+	if (raw === undefined || raw === '') return fallback
+	if (raw === 'true') return true
+	if (raw === 'false') return false
+	throw new Error(`${canonical} must be true or false`)
 }
 
 /**

@@ -87,6 +87,9 @@ services:
       ISSUER: http://iam.fabrika.localhost:18080
       SESSION_COOKIE_DOMAIN: fabrika.localhost
       LOCAL_DEV_LOGIN: "true"
+      FABRIKA_IAM_OIDC_ENABLED: "false"
+      FABRIKA_IAM_PASSWORD_ENABLED: "true"
+      FABRIKA_EMAIL_PROVIDER: none
       HUMAN_EMAIL_DOMAINS: "[]"
       HUMAN_EMAILS: "[]"
       IAM_BOOTSTRAP_ADMINS: '["admin@local.test"]'

@@ -13,7 +13,6 @@ import { D1Database, defineApp, type ResourceContext, Worker } from '@fabrika/pr
 // Keep the legacy Oblaka namespace so the first fabrika deploy continues the existing cf-state.
 const IAM_APP_ID = 'propustka'
 
-const REQUIRED_VARS = ['FABRIKA_IAM_HUMAN_EMAIL_DOMAINS', 'FABRIKA_IAM_OIDC_ISSUER', 'FABRIKA_IAM_OIDC_CLIENT_ID']
 const KNOWN_ENVS = new Set(['local', 'stage', 'prod', 'mangoweb'])
 
 type EnvironmentSource = Readonly<Record<string, string | undefined>>
@@ -21,20 +20,26 @@ type EnvironmentSource = Readonly<Record<string, string | undefined>>
 interface RemoteConfig {
 	domain: string
 	humanEmailDomains: string
+	oidcEnabled: boolean
+	passwordEnabled: boolean
 	oidcIssuer: string
 	oidcClientId: string
+	emailProvider: 'none' | 'resend'
+	emailFrom: string
+}
+
+interface AuthenticationConfig {
+	oidcEnabled: boolean
+	passwordEnabled: boolean
+}
+
+interface EmailConfig {
+	provider: 'none' | 'resend'
+	from: string
 }
 
 const aliasValue = (source: EnvironmentSource, canonical: string, legacy: string): string | undefined =>
 	environmentAliases.read(source, { canonical, legacy })
-
-const requiredAlias = (source: EnvironmentSource, canonical: string, legacy: string): string => {
-	const value = aliasValue(source, canonical, legacy)
-	if (value === undefined || value === '') {
-		throw new Error(`Missing ${canonical}`)
-	}
-	return value
-}
 
 const requiredDomain = (domain: string | undefined): string => {
 	if (domain === undefined || domain === '') {
@@ -43,17 +48,52 @@ const requiredDomain = (domain: string | undefined): string => {
 	return domain
 }
 
+const booleanValue = (source: EnvironmentSource, canonical: string, legacy: string, fallback: boolean): boolean => {
+	const raw = aliasValue(source, canonical, legacy)
+	if (raw === undefined || raw === '') return fallback
+	if (raw === 'true') return true
+	if (raw === 'false') return false
+	throw new Error(`${canonical} must be true or false`)
+}
+
+const authenticationConfig = (source: EnvironmentSource): AuthenticationConfig => {
+	const config = {
+		oidcEnabled: booleanValue(source, 'FABRIKA_IAM_OIDC_ENABLED', 'PROPUSTKA_OIDC_ENABLED', true),
+		passwordEnabled: booleanValue(source, 'FABRIKA_IAM_PASSWORD_ENABLED', 'PROPUSTKA_PASSWORD_ENABLED', false),
+	}
+	if (!config.oidcEnabled && !config.passwordEnabled) {
+		throw new Error('At least one IAM authentication method must be enabled')
+	}
+	return config
+}
+
+const emailConfig = (source: EnvironmentSource): EmailConfig => {
+	const provider = source['FABRIKA_EMAIL_PROVIDER'] ?? 'none'
+	if (provider !== 'none' && provider !== 'resend') {
+		throw new Error('FABRIKA_EMAIL_PROVIDER must be none or resend')
+	}
+	return { provider, from: source['FABRIKA_EMAIL_FROM'] ?? '' }
+}
+
 const remoteConfig = (env: string, domain: string | undefined, source: EnvironmentSource): RemoteConfig => {
+	const authentication = authenticationConfig(source)
+	const email = emailConfig(source)
 	const humanEmailDomains = aliasValue(source, 'FABRIKA_IAM_HUMAN_EMAIL_DOMAINS', 'PROPUSTKA_HUMAN_EMAIL_DOMAINS')
 	const oidcIssuer = aliasValue(source, 'FABRIKA_IAM_OIDC_ISSUER', 'PROPUSTKA_OIDC_ISSUER')
 	const oidcClientId = aliasValue(source, 'FABRIKA_IAM_OIDC_CLIENT_ID', 'PROPUSTKA_OIDC_CLIENT_ID')
 	const signingKeys = aliasValue(source, 'FABRIKA_IAM_SIGNING_KEYS', 'PROPUSTKA_SIGNING_KEYS')
 	const missing: string[] = []
-	if (!humanEmailDomains) missing.push('FABRIKA_IAM_HUMAN_EMAIL_DOMAINS')
-	if (!oidcIssuer) missing.push('FABRIKA_IAM_OIDC_ISSUER')
-	if (!oidcClientId) missing.push('FABRIKA_IAM_OIDC_CLIENT_ID')
+	if (authentication.oidcEnabled) {
+		if (!humanEmailDomains) missing.push('FABRIKA_IAM_HUMAN_EMAIL_DOMAINS')
+		if (!oidcIssuer) missing.push('FABRIKA_IAM_OIDC_ISSUER')
+		if (!oidcClientId) missing.push('FABRIKA_IAM_OIDC_CLIENT_ID')
+		if (!source['OIDC_CLIENT_SECRET']) missing.push('OIDC_CLIENT_SECRET')
+	}
 	if (!signingKeys) missing.push('FABRIKA_IAM_SIGNING_KEYS')
-	if (!source['OIDC_CLIENT_SECRET']) missing.push('OIDC_CLIENT_SECRET')
+	if (email.provider === 'resend') {
+		if (email.from === '') missing.push('FABRIKA_EMAIL_FROM')
+		if (!source['FABRIKA_EMAIL_RESEND_API_KEY']) missing.push('FABRIKA_EMAIL_RESEND_API_KEY')
+	}
 	if (domain === undefined || domain === '') {
 		missing.push('FABRIKA_IAM_HOSTNAME')
 	}
@@ -63,9 +103,13 @@ const remoteConfig = (env: string, domain: string | undefined, source: Environme
 
 	return {
 		domain: requiredDomain(domain),
-		humanEmailDomains: requiredAlias(source, 'FABRIKA_IAM_HUMAN_EMAIL_DOMAINS', 'PROPUSTKA_HUMAN_EMAIL_DOMAINS'),
-		oidcIssuer: requiredAlias(source, 'FABRIKA_IAM_OIDC_ISSUER', 'PROPUSTKA_OIDC_ISSUER'),
-		oidcClientId: requiredAlias(source, 'FABRIKA_IAM_OIDC_CLIENT_ID', 'PROPUSTKA_OIDC_CLIENT_ID'),
+		humanEmailDomains: humanEmailDomains ?? '[]',
+		oidcEnabled: authentication.oidcEnabled,
+		passwordEnabled: authentication.passwordEnabled,
+		oidcIssuer: oidcIssuer ?? '',
+		oidcClientId: oidcClientId ?? '',
+		emailProvider: email.provider,
+		emailFrom: email.from,
 	}
 }
 
@@ -81,10 +125,14 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 			IAM_BOOTSTRAP_ADMINS: '[]',
 			ISSUER: 'http://localhost:18191',
 			SESSION_COOKIE_DOMAIN: '',
+			OIDC_ENABLED: 'true',
+			PASSWORD_ENABLED: 'false',
 			OIDC_ISSUER: 'https://accounts.google.com',
 			OIDC_CLIENT_ID: '',
 			OIDC_SCOPES: '',
 			OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
+			EMAIL_PROVIDER: 'none',
+			EMAIL_FROM: '',
 		}
 	}
 
@@ -94,11 +142,40 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 		IAM_BOOTSTRAP_ADMINS: aliasValue(source, 'FABRIKA_IAM_BOOTSTRAP_ADMINS', 'PROPUSTKA_BOOTSTRAP_ADMINS') ?? '[]',
 		ISSUER: `https://${config.domain}`,
 		SESSION_COOKIE_DOMAIN: aliasValue(source, 'FABRIKA_IAM_SESSION_COOKIE_DOMAIN', 'PROPUSTKA_SESSION_COOKIE_DOMAIN') ?? '',
+		OIDC_ENABLED: String(config.oidcEnabled),
+		PASSWORD_ENABLED: String(config.passwordEnabled),
 		OIDC_ISSUER: config.oidcIssuer,
 		OIDC_CLIENT_ID: config.oidcClientId,
 		OIDC_SCOPES: aliasValue(source, 'FABRIKA_IAM_OIDC_SCOPES', 'PROPUSTKA_OIDC_SCOPES') ?? '',
 		OIDC_REQUIRE_VERIFIED_EMAIL: aliasValue(source, 'FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL', 'PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL') ?? 'true',
+		EMAIL_PROVIDER: config.emailProvider,
+		EMAIL_FROM: config.emailFrom,
 	}
+}
+
+export const iamPipelineVars = (source: EnvironmentSource): string[] => {
+	const authentication = authenticationConfig(source)
+	const email = emailConfig(source)
+	return [
+		'FABRIKA_IAM_OIDC_ENABLED',
+		'FABRIKA_IAM_PASSWORD_ENABLED',
+		'FABRIKA_EMAIL_PROVIDER',
+		...(authentication.oidcEnabled
+			? ['FABRIKA_IAM_HUMAN_EMAIL_DOMAINS', 'FABRIKA_IAM_OIDC_ISSUER', 'FABRIKA_IAM_OIDC_CLIENT_ID']
+			: []),
+		...(email.provider === 'resend' ? ['FABRIKA_EMAIL_FROM'] : []),
+	]
+}
+
+export const iamPipelineSecrets = (source: EnvironmentSource): string[] => {
+	const authentication = authenticationConfig(source)
+	const email = emailConfig(source)
+	return [
+		'FABRIKA_IAM_SIGNING_KEYS',
+		'FABRIKA_IAM_PROVISIONING_KEY',
+		...(authentication.oidcEnabled ? ['OIDC_CLIENT_SECRET'] : []),
+		...(email.provider === 'resend' ? ['FABRIKA_EMAIL_RESEND_API_KEY'] : []),
+	]
 }
 
 /**
@@ -145,8 +222,7 @@ export default defineApp({
 	pipeline: {
 		workerDir: '.',
 		// Values stay in fabrika's vault and are provisioned out-of-band from Worker plaintext vars.
-		secrets: ['FABRIKA_IAM_SIGNING_KEYS', 'OIDC_CLIENT_SECRET', 'FABRIKA_IAM_PROVISIONING_KEY'],
-		// Optional list values use safe empty-array defaults and do not belong in this required set.
-		vars: REQUIRED_VARS,
+		secrets: iamPipelineSecrets(process.env),
+		vars: iamPipelineVars(process.env),
 	},
 })

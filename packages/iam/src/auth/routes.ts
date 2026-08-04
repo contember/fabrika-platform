@@ -12,8 +12,13 @@
 
 import { SESSION_COOKIE } from '@fabrika/auth-core'
 import { LOCAL_DEV_ADMIN_EMAIL, LOCAL_DEV_ADMIN_ID } from '../auth'
+import { normalizeEmailIdentity } from '../email-identity'
 import type { Env, RequestContext } from '../env'
 import { generatePkce, randomToken } from '../oidc'
+import type { PasswordActionPurpose } from '../password-db'
+import { forgotPasswordPage, invalidActionPage, loginPage, setPasswordPage } from '../password-pages'
+import { PASSWORD_MAX_CODE_POINTS, validatePassword } from '../password-policy'
+import { deliverPasswordAction, issuePasswordAction } from '../password-service'
 import { requestId } from '../request-id'
 import { resolveUserPrincipal } from '../resolve'
 import { hashToken } from '../secret'
@@ -38,10 +43,24 @@ export async function handleAuth(request: Request, services: Services, env: Auth
 		return handleJwks(env)
 	}
 	if (url.pathname === '/auth/login') {
-		return handleLogin(request, services, secure, ctx)
+		if (request.method === 'POST') return handlePasswordLogin(request, services, secure, ctx)
+		if (request.method === 'GET') return handleLogin(request, services, secure, ctx)
+		return methodNotAllowed()
+	}
+	if (url.pathname === '/auth/oidc/start') {
+		return request.method === 'GET' ? handleOidcStart(request, services, secure) : methodNotAllowed()
 	}
 	if (url.pathname === '/auth/callback') {
-		return handleCallback(request, services, secure, ctx)
+		return request.method === 'GET' ? handleCallback(request, services, secure, ctx) : methodNotAllowed()
+	}
+	if (url.pathname === '/auth/forgot-password') {
+		return handleForgotPassword(request, services, ctx)
+	}
+	if (url.pathname === '/auth/password/enroll') {
+		return handlePasswordAction(request, services, secure, ctx, 'enrollment')
+	}
+	if (url.pathname === '/auth/password/reset') {
+		return handlePasswordAction(request, services, secure, ctx, 'reset')
 	}
 	if (url.pathname === '/auth/logout') {
 		return handleLogout(request, services, secure)
@@ -66,7 +85,20 @@ async function handleLogin(request: Request, services: Services, secure: boolean
 	if (services.config.localDevLogin) {
 		return handleLocalLogin(request, services, secure, ctx, redirect)
 	}
+	if (services.config.authentication.password.enabled) {
+		return loginPage({ redirect, oidcEnabled: services.config.authentication.oidc.enabled, forgotEnabled: services.email !== null })
+	}
+	return startOidc(services, secure, redirect)
+}
 
+async function handleOidcStart(request: Request, services: Services, secure: boolean): Promise<Response> {
+	if (!services.config.authentication.oidc.enabled) return authError('OIDC login is disabled', 404)
+	const url = new URL(request.url)
+	return startOidc(services, secure, safeRedirect(url.searchParams.get('redirect'), services.config))
+}
+
+async function startOidc(services: Services, secure: boolean, redirect: string): Promise<Response> {
+	if (!services.config.authentication.oidc.enabled || services.oidc === null) return authError('OIDC login is disabled', 404)
 	const { verifier, challenge } = await generatePkce()
 	const state = randomToken(16)
 	const location = await services.oidc.authorizationUrl({ state, codeChallenge: challenge })
@@ -104,6 +136,7 @@ async function handleLocalLogin(
 // ── /auth/callback ───────────────────────────────────────────────────────────────
 
 async function handleCallback(request: Request, services: Services, secure: boolean, ctx: RequestContext): Promise<Response> {
+	if (!services.config.authentication.oidc.enabled || services.oidc === null) return authError('OIDC login is disabled', 404)
 	const url = new URL(request.url)
 	const code = url.searchParams.get('code')
 	const state = url.searchParams.get('state')
@@ -159,8 +192,9 @@ async function issueSession(
 	ctx: RequestContext,
 	input: {
 		principalId: string
-		idpSub: string
-		email: string
+		idpSub?: string | null
+		email?: string | null
+		authenticationMethod?: 'oidc' | 'password'
 		redirect: string
 		reason: string
 		clearOidc?: boolean
@@ -173,6 +207,7 @@ async function issueSession(
 		principalId: input.principalId,
 		idpSub: input.idpSub,
 		email: input.email,
+		authenticationMethod: input.authenticationMethod,
 		expiresAt,
 	})
 	ctx.waitUntil(
@@ -192,6 +227,217 @@ async function issueSession(
 		headers.append('Set-Cookie', clearCookie(OIDC_COOKIE, { path: '/auth', secure }))
 	}
 	return new Response(null, { status: 302, headers })
+}
+
+// ── Password login and recovery ──────────────────────────────────────────────
+
+const LOGIN_WINDOW_SECONDS = 15 * 60
+const LOGIN_BLOCK_SECONDS = 15 * 60
+const ACCOUNT_MAX_ATTEMPTS = 5
+const GLOBAL_MAX_ATTEMPTS = 1_000
+const RECOVERY_ACCOUNT_MAX_ATTEMPTS = 3
+const RECOVERY_GLOBAL_MAX_ATTEMPTS = 100
+
+async function handlePasswordLogin(request: Request, services: Services, secure: boolean, ctx: RequestContext): Promise<Response> {
+	if (!services.config.authentication.password.enabled) return authError('password login is disabled', 404)
+	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
+	const form = await readForm(request)
+	if (form === null) return authError('invalid form', 400)
+	const email = normalizeEmail(form.get('email'))
+	const rawPassword = stringValue(form.get('password'))
+	const redirect = safeRedirect(stringValue(form.get('redirect')), services.config)
+	if (email === null || rawPassword === null) {
+		return loginPage({
+			redirect,
+			oidcEnabled: services.config.authentication.oidc.enabled,
+			forgotEnabled: services.email !== null,
+			error: 'Invalid email or password.',
+		})
+	}
+	const password = rawPassword.normalize('NFC')
+	const passwordWithinLimit = Array.from(password).length <= PASSWORD_MAX_CODE_POINTS
+
+	const accountKey = await hashToken(`password-login:account:${email}`)
+	const globalKey = await hashToken('password-login:global')
+	const [accountThrottle, globalThrottle, lookup] = await Promise.all([
+		services.repositories.passwords.getLoginThrottle(accountKey),
+		services.repositories.passwords.getLoginThrottle(globalKey),
+		services.repositories.passwords.lookupLogin(email),
+	])
+	const now = Math.floor(Date.now() / 1000)
+	const blocked = (accountThrottle?.blocked_until ?? 0) > now || (globalThrottle?.blocked_until ?? 0) > now
+	let valid = false
+	let needsRehash = false
+	if (!blocked && passwordWithinLimit && lookup.status === 'found') {
+		const verification = await services.passwordHasher.verify(password, {
+			algorithm: lookup.credential.algorithm,
+			parameters: lookup.credential.parameters,
+			salt: lookup.credential.salt,
+			passwordHash: lookup.credential.password_hash,
+		})
+		valid = verification.valid
+		needsRehash = verification.needsRehash
+	} else if (!blocked) {
+		// Spend derivation work when the request is allowed but no verifier can run.
+		await services.passwordHasher.hash(passwordWithinLimit ? password : 'oversized-password-dummy')
+	}
+
+	if (!blocked && valid && lookup.status === 'found') {
+		if (needsRehash) {
+			// Replacing derived material deliberately revokes older password sessions.
+			await services.repositories.passwords.upsertCredential(lookup.principal.id, await services.passwordHasher.hash(password))
+		}
+		await services.repositories.passwords.clearLoginFailures(accountKey)
+		return issueSession(request, services, secure, ctx, {
+			principalId: lookup.principal.id,
+			email: lookup.principal.email,
+			authenticationMethod: 'password',
+			redirect,
+			reason: 'password_login',
+		})
+	}
+
+	if (!blocked) {
+		await Promise.all([
+			recordLoginFailure(services, accountKey, ACCOUNT_MAX_ATTEMPTS),
+			recordLoginFailure(services, globalKey, GLOBAL_MAX_ATTEMPTS),
+		])
+	}
+	ctx.waitUntil(
+		services.repositories.audit.writeAuthLog({
+			requestId: requestId(request),
+			app: 'propustka',
+			kind: 'authenticate',
+			principalId: lookup.status === 'found' ? lookup.principal.id : null,
+			decision: 'deny',
+			reason: blocked ? 'password_throttled' : 'password_invalid',
+		}),
+	)
+	return loginPage({
+		redirect,
+		oidcEnabled: services.config.authentication.oidc.enabled,
+		forgotEnabled: services.email !== null,
+		error: 'Invalid email or password.',
+	})
+}
+
+async function recordLoginFailure(services: Services, loginKeyHash: string, maxAttempts: number): Promise<void> {
+	await services.repositories.passwords.recordLoginFailure({
+		loginKeyHash,
+		windowSeconds: LOGIN_WINDOW_SECONDS,
+		maxAttempts,
+		blockSeconds: LOGIN_BLOCK_SECONDS,
+	})
+}
+
+async function handleForgotPassword(request: Request, services: Services, ctx: RequestContext): Promise<Response> {
+	if (!services.config.authentication.password.enabled) return authError('password login is disabled', 404)
+	if (request.method === 'GET') return forgotPasswordPage({})
+	if (request.method !== 'POST') return methodNotAllowed()
+	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
+	const form = await readForm(request)
+	if (form === null) return authError('invalid form', 400)
+	const email = normalizeEmail(form.get('email'))
+	if (services.email === null || email === null) return forgotPasswordPage({ sent: true })
+	const accountKey = await hashToken(`password-recovery:account:${email}`)
+	const globalKey = await hashToken('password-recovery:global')
+	const [accountThrottle, globalThrottle] = await Promise.all([
+		services.repositories.passwords.getLoginThrottle(accountKey),
+		services.repositories.passwords.getLoginThrottle(globalKey),
+	])
+	const now = Math.floor(Date.now() / 1000)
+	if ((accountThrottle?.blocked_until ?? 0) > now || (globalThrottle?.blocked_until ?? 0) > now) {
+		return forgotPasswordPage({ sent: true })
+	}
+	await Promise.all([
+		recordLoginFailure(services, accountKey, RECOVERY_ACCOUNT_MAX_ATTEMPTS),
+		recordLoginFailure(services, globalKey, RECOVERY_GLOBAL_MAX_ATTEMPTS),
+	])
+	ctx.waitUntil(runForgotPassword(services, email).catch(() => console.error('Password recovery request failed')))
+	return forgotPasswordPage({ sent: true })
+}
+
+async function runForgotPassword(services: Services, email: string): Promise<void> {
+	let lookup = await services.repositories.passwords.lookupActionUser(email)
+	if (
+		lookup.status === 'missing'
+		&& !services.config.authentication.oidc.enabled
+		&& matchingBootstrapEmail(email, services.config) !== null
+	) {
+		const principal = await safelyCreateBootstrapPrincipal(services, email)
+		if (principal !== null) lookup = { status: 'found', principal, account: await services.repositories.passwords.getAccount(principal.id) }
+	}
+
+	if (lookup.status === 'found' && lookup.principal.disabled_at === null) {
+		let purpose: PasswordActionPurpose | null = null
+		if (lookup.account?.state === 'enabled') purpose = 'reset'
+		if (lookup.account?.state === 'pending') purpose = 'enrollment'
+		if (lookup.account === null && !services.config.authentication.oidc.enabled && matchingBootstrapEmail(email, services.config) !== null) {
+			await services.repositories.passwords.enableEnrollment(lookup.principal.id)
+			purpose = 'enrollment'
+		}
+		if (purpose !== null) {
+			const action = await issuePasswordAction(services, { principal: lookup.principal, purpose })
+			await deliverPasswordAction(services, action)
+		}
+	}
+}
+
+async function safelyCreateBootstrapPrincipal(services: Services, email: string) {
+	// Re-check through the case-insensitive, ambiguity-detecting lookup before the unique insert.
+	const existing = await services.repositories.passwords.lookupActionUser(email)
+	if (existing.status === 'found') return existing.principal
+	if (existing.status === 'ambiguous') return null
+	const canonical = matchingBootstrapEmail(email, services.config)
+	if (canonical === null) return null
+	try {
+		const principal = await services.repositories.principals.inviteUserWithEmailClaim(canonical, canonical)
+		await services.repositories.passwords.enableEnrollment(principal.id)
+		return principal
+	} catch {
+		const raced = await services.repositories.passwords.lookupActionUser(canonical)
+		return raced.status === 'found' ? raced.principal : null
+	}
+}
+
+async function handlePasswordAction(
+	request: Request,
+	services: Services,
+	secure: boolean,
+	ctx: RequestContext,
+	purpose: PasswordActionPurpose,
+): Promise<Response> {
+	if (!services.config.authentication.password.enabled) return authError('password login is disabled', 404)
+	if (request.method === 'GET') return setPasswordPage({ purpose })
+	if (request.method !== 'POST') return methodNotAllowed()
+	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
+	const form = await readForm(request)
+	if (form === null) return authError('invalid form', 400)
+	const submittedToken = stringValue(form.get('token'))
+	const password = stringValue(form.get('password'))
+	if (!validActionToken(submittedToken) || password === null) return invalidActionPage()
+	const tokenHash = await hashToken(submittedToken)
+	const action = await services.repositories.passwords.inspectActionToken(tokenHash, purpose)
+	if (action === null) return invalidActionPage()
+	const principal = await services.repositories.principals.getPrincipalById(action.principal_id)
+	if (principal === null || principal.disabled_at !== null) return invalidActionPage()
+	const policy = validatePassword(password, { email: principal.email, label: principal.label })
+	if (!policy.ok) return setPasswordPage({ token: submittedToken, purpose, error: policy.message })
+	const completed = await services.repositories.passwords.completeAction({
+		tokenHash,
+		purpose,
+		password: await services.passwordHasher.hash(policy.password),
+	})
+	if (completed === null) return invalidActionPage()
+	const completedPrincipal = await services.repositories.principals.getPrincipalById(completed.principalId)
+	if (completedPrincipal === null || completedPrincipal.disabled_at !== null) return invalidActionPage()
+	return issueSession(request, services, secure, ctx, {
+		principalId: completedPrincipal.id,
+		email: completedPrincipal.email,
+		authenticationMethod: 'password',
+		redirect: services.config.issuer,
+		reason: purpose === 'enrollment' ? 'password_enrollment' : 'password_reset',
+	})
 }
 
 // ── /auth/logout ─────────────────────────────────────────────────────────────────
@@ -235,7 +481,7 @@ function admitted(email: string, config: Config): boolean {
 	if (domain !== '' && emailDomains.some((d) => d.toLowerCase() === domain)) {
 		return true
 	}
-	return config.bootstrapAdmins.has(email)
+	return config.bootstrapAdmins.has(normalizeEmailIdentity(email))
 }
 
 /**
@@ -319,7 +565,8 @@ export function safeRedirect(raw: string | null, config: Config): string {
 	}
 	const issuerHost = safeHost(config.issuer)
 	const host = target.hostname
-	const isLocal = host === 'localhost' || host === '127.0.0.1' || host.endsWith('.localhost')
+	const isLocal = config.environment === 'local'
+		&& (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.localhost'))
 	const httpsOk = target.protocol === 'https:' || (target.protocol === 'http:' && isLocal)
 	const domain = config.sessionCookieDomain.replace(/^\./, '')
 	const hostOk = host === issuerHost || isLocal || (domain !== '' && (host === domain || host.endsWith(`.${domain}`)))
@@ -332,6 +579,79 @@ function safeHost(origin: string): string {
 	} catch {
 		return ''
 	}
+}
+
+function sameOrigin(request: Request, config: Config): boolean {
+	const fetchSite = request.headers.get('Sec-Fetch-Site')
+	if (fetchSite !== null && fetchSite !== 'same-origin') return false
+	const origin = request.headers.get('Origin') ?? originOf(request.headers.get('Referer'))
+	if (origin === null) return false
+	try {
+		return new URL(origin).origin === new URL(config.issuer).origin
+	} catch {
+		return false
+	}
+}
+
+function originOf(value: string | null): string | null {
+	if (value === null) return null
+	try {
+		return new URL(value).origin
+	} catch {
+		return null
+	}
+}
+
+async function readForm(request: Request): Promise<URLSearchParams | null> {
+	const contentLength = Number(request.headers.get('Content-Length') ?? '0')
+	if (Number.isFinite(contentLength) && contentLength > 16_384) return null
+	const contentType = request.headers.get('Content-Type') ?? ''
+	if (!contentType.toLowerCase().startsWith('application/x-www-form-urlencoded')) return null
+	if (request.body === null) return new URLSearchParams()
+	const reader = request.body.getReader()
+	const decoder = new TextDecoder()
+	let body = ''
+	let bytes = 0
+	try {
+		while (true) {
+			const chunk = await reader.read()
+			if (chunk.done) break
+			bytes += chunk.value.byteLength
+			if (bytes > 16_384) {
+				await reader.cancel()
+				return null
+			}
+			body += decoder.decode(chunk.value, { stream: true })
+		}
+		body += decoder.decode()
+		return new URLSearchParams(body)
+	} catch {
+		return null
+	}
+}
+
+function stringValue(value: string | null): string | null {
+	return typeof value === 'string' ? value : null
+}
+
+function normalizeEmail(value: string | null): string | null {
+	if (typeof value !== 'string') return null
+	const normalized = normalizeEmailIdentity(value)
+	if (normalized.length === 0 || normalized.length > 254 || !normalized.includes('@')) return null
+	return normalized
+}
+
+function matchingBootstrapEmail(email: string, config: Config): string | null {
+	const normalized = normalizeEmailIdentity(email)
+	return config.bootstrapAdmins.has(normalized) ? normalized : null
+}
+
+function validActionToken(token: string | null): token is string {
+	return token !== null && token.length <= 512 && /^[A-Za-z0-9_-]{32,}$/.test(token)
+}
+
+function methodNotAllowed(): Response {
+	return new Response('Method not allowed', { status: 405, headers: { Allow: 'GET, POST' } })
 }
 
 /** A minimal error page for the browser-facing auth flow (the happy path always redirects). */

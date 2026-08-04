@@ -1,12 +1,13 @@
 import { createPage, Link } from '@buzola/router'
-import type { GrantDto, PermissionEntry, PrincipalDetail, UpdatePrincipalRequest } from '@fabrika/iam-contract'
+import type { GrantDto, PasswordActionDelivery, PermissionEntry, PrincipalDetail, UpdatePrincipalRequest } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { Badge } from '../../components/Badge'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
-import { Chip, PrincipalStatus } from '../../components/Status'
+import { SecretModal } from '../../components/SecretModal'
+import { Chip, PrincipalStatus, Status } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
-import { api } from '../../lib/api'
+import { api, ApiError } from '../../lib/api'
 import { fmtAgo, fmtDate, fmtExpiry, fmtScope } from '../../lib/format'
 
 export default createPage()
@@ -37,6 +38,8 @@ export default createPage()
 						<span className="dot-sep">joined {fmtDate(principal.createdAt)}</span>
 					</div>
 				</div>
+
+				<Authentication principal={principal} onDone={invalidate} />
 
 				<section>
 					<div className="section-head">
@@ -107,6 +110,156 @@ export default createPage()
 			</>
 		)
 	})
+
+function Authentication({ principal, onDone }: { principal: PrincipalDetail; onDone: () => void }) {
+	const [busy, setBusy] = useState<'enrollment' | 'reset' | 'disable' | null>(null)
+	const [error, setError] = useState<string | null>(null)
+	const [notice, setNotice] = useState<string | null>(null)
+	const [manual, setManual] = useState<{ purpose: 'Enrollment' | 'Reset'; result: PasswordActionDelivery } | null>(null)
+	const [confirmDisable, setConfirmDisable] = useState(false)
+	const oidc = principal.authentication.oidc.state
+	const password = principal.authentication.password.state
+
+	async function issue(purpose: 'enrollment' | 'reset') {
+		setBusy(purpose)
+		setError(null)
+		setNotice(null)
+		try {
+			const result = purpose === 'enrollment'
+				? await api.passwords.issueEnrollment({ id: principal.id })
+				: await api.passwords.issueReset({ id: principal.id })
+			if (result.delivery === 'manual') {
+				setManual({ purpose: purpose === 'enrollment' ? 'Enrollment' : 'Reset', result })
+			} else {
+				setNotice(`${purpose === 'enrollment' ? 'Enrollment' : 'Reset'} email sent to ${result.email}.`)
+			}
+			onDone()
+		} catch (cause) {
+			setError(cause instanceof ApiError ? cause.message : `Could not issue the ${purpose} link.`)
+		} finally {
+			setBusy(null)
+		}
+	}
+
+	async function disable() {
+		setBusy('disable')
+		setError(null)
+		setNotice(null)
+		try {
+			await api.passwords.disable({ id: principal.id })
+			setNotice('Password authentication disabled. Existing OIDC sessions remain active.')
+			setConfirmDisable(false)
+			onDone()
+		} finally {
+			setBusy(null)
+		}
+	}
+
+	return (
+		<section>
+			<div className="section-head">
+				<Icon name="lock" size={15} />
+				<h2>Authentication</h2>
+			</div>
+			<p className="section-note">Methods available to this user. Password access is opt-in per user.</p>
+			<div className="authentication-grid">
+				<div className="authentication-method">
+					<div>
+						<strong>OpenID Connect</strong>
+						<p>{oidcDescription(oidc)}</p>
+					</div>
+					<Status lamp={oidc === 'linked' ? 'ok' : 'idle'}>{oidc}</Status>
+				</div>
+				<div className="authentication-method">
+					<div>
+						<strong>Password</strong>
+						<p>{passwordDescription(password)}</p>
+					</div>
+					<div className="authentication-actions">
+						<Status lamp={password === 'enabled' ? 'ok' : password === 'pending' ? 'run' : 'idle'}>{password}</Status>
+						{password === 'disabled' && (
+							<button
+								type="button"
+								className="small primary"
+								disabled={busy !== null || principal.status === 'disabled'}
+								onClick={() => issue('enrollment')}
+							>
+								{busy === 'enrollment' ? 'Issuing…' : 'Enable password'}
+							</button>
+						)}
+						{password === 'pending' && (
+							<>
+								<button
+									type="button"
+									className="small primary"
+									disabled={busy !== null || principal.status === 'disabled'}
+									onClick={() => issue('enrollment')}
+								>
+									{busy === 'enrollment' ? 'Issuing…' : 'Resend enrollment'}
+								</button>
+								<button type="button" className="small danger" disabled={busy !== null} onClick={() => setConfirmDisable(true)}>
+									Disable
+								</button>
+							</>
+						)}
+						{password === 'enabled' && (
+							<>
+								<button
+									type="button"
+									className="small"
+									disabled={busy !== null || principal.status === 'disabled'}
+									onClick={() => issue('reset')}
+								>
+									{busy === 'reset' ? 'Issuing…' : 'Send reset'}
+								</button>
+								<button type="button" className="small danger" disabled={busy !== null} onClick={() => setConfirmDisable(true)}>
+									Disable
+								</button>
+							</>
+						)}
+					</div>
+				</div>
+			</div>
+			{notice && (
+				<p className="notice" role="status">
+					<Icon name="check" size={15} />
+					{notice}
+				</p>
+			)}
+			{error && <p className="error-text" role="alert">{error}</p>}
+			{manual?.result.delivery === 'manual' && (
+				<SecretModal
+					title={`${manual.purpose} link issued`}
+					fields={[{ label: `${manual.purpose} URL`, value: manual.result.url, multiline: true }]}
+					note={<p className="hint">Send this URL over a trusted channel. It expires {fmtExpiry(manual.result.expiresAt)}.</p>}
+					onClose={() => setManual(null)}
+				/>
+			)}
+			{confirmDisable && (
+				<ConfirmDialog
+					title="Disable password authentication"
+					confirmLabel={busy === 'disable' ? 'Disabling…' : 'Disable password'}
+					body={<p>Remove this user's password credential and revoke their password sessions? OIDC sessions remain active.</p>}
+					onConfirm={disable}
+					onClose={() => setConfirmDisable(false)}
+				/>
+			)}
+		</section>
+	)
+}
+
+function oidcDescription(state: PrincipalDetail['authentication']['oidc']['state']): string {
+	if (state === 'unavailable') return 'OIDC login is disabled for this IAM installation.'
+	if (state === 'linked') return 'The user has signed in through the configured identity provider.'
+	return 'Available globally, but this user has not linked an identity-provider subject.'
+}
+
+function passwordDescription(state: PrincipalDetail['authentication']['password']['state']): string {
+	if (state === 'unavailable') return 'Password login is disabled for this IAM installation.'
+	if (state === 'enabled') return 'The user can sign in with their email and password.'
+	if (state === 'pending') return 'Enrollment was enabled, but the user has not set a password yet.'
+	return 'The user cannot sign in with a password.'
+}
 
 function SourceBadge({ source }: { source: PermissionEntry['source'] }) {
 	if (source === 'bootstrap') return <Badge tone="warn" title="From IAM_BOOTSTRAP_ADMINS">bootstrap</Badge>

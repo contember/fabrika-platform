@@ -35,8 +35,8 @@
 //
 // Three categories are therefore deliberately ABSENT, and each setup lists its own below:
 //
-//   • per-installation configuration (public origins, cookie domains, OIDC coordinates, admission
-//     lists, `ENVIRONMENT`) — set as service-level variables through the env API;
+//   • per-installation configuration (public origins, cookie domains, authentication switches,
+//     OIDC/email coordinates, admission lists, `ENVIRONMENT`) — set as service-level variables through the env API;
 //   • every secret — set as service-level `envSecrets`, addressed by service, never through a document;
 //   • **every `${service_variable}` reference to a DATA service** — `${db_connectionString}`,
 //     `${storage_*}` and friends.
@@ -85,10 +85,13 @@ const WORKSPACE_DEPLOY_FILES = ['package.json', 'bun.lock', 'node_modules', 'pac
  * `ENVIRONMENT`, `ISSUER` (this service's public origin; it is the `iss` of every minted token AND the
  * OIDC redirect base, so it must match the domain routed to the proxy in front of it),
  * `SESSION_COOKIE_DOMAIN`, `HUMAN_EMAIL_DOMAINS`, `HUMAN_EMAILS`, `IAM_BOOTSTRAP_ADMINS`,
+ * `FABRIKA_IAM_OIDC_ENABLED`, `FABRIKA_IAM_PASSWORD_ENABLED`, `FABRIKA_EMAIL_PROVIDER`, and
+ * `FABRIKA_EMAIL_FROM` when email delivery is enabled. OIDC-enabled installations also set
  * `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_SCOPES`, `OIDC_REQUIRE_VERIFIED_EMAIL`.
  *
  * Secrets (`envSecrets`): `FABRIKA_IAM_SIGNING_KEYS` (ES256 private JWKs — an empty value is refused at
- * boot rather than silently issuing ephemeral tokens), `OIDC_CLIENT_SECRET`, `FABRIKA_IAM_RPC_KEY` (gates
+ * boot rather than silently issuing ephemeral tokens), `OIDC_CLIENT_SECRET` when OIDC is enabled,
+ * `FABRIKA_EMAIL_RESEND_API_KEY` when Resend is enabled, `FABRIKA_IAM_RPC_KEY` (gates
  * the management `/rpc/*` surface; unset 404s it, which is the fail-closed default), `FABRIKA_IAM_PROXY_KEY`
  * (gates `/auth/mint/*`, which the proxy calls on the cold path — a SEPARATE secret by least privilege,
  * since the proxy is the only publicly routed component and must not also be able to write audit rows),

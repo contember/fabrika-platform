@@ -16,7 +16,7 @@ import { fromEnv, persistEnv } from './envfile'
 import { configureEnvironment, triggerPlatformWorkflow } from './environment'
 import { createAppViaManifest, type CreatedGitHubApp, promptInstall } from './github-app'
 import { action, detail, info, ok, step, url, warn } from './log'
-import { confirm, retry, secret, secretOrEnv, text } from './prompt'
+import { confirm, retry, secret, secretOrEnv, select, text } from './prompt'
 import { defaultCheckoutDir, readFabrikaRef, scaffoldPlatformRepo } from './scaffold'
 
 /** Everything collected before the scaffold + environment write. */
@@ -31,12 +31,16 @@ interface Collected {
 	iamUrl: string
 	/** IAM's admin hostname (the host of `iamUrl`) — its Custom Domain + token `iss`. */
 	iamHostname: string
+	oidcEnabled: boolean
+	passwordEnabled: boolean
 	/** OIDC provider issuer IAM federates human login to (discovery URL base). */
 	oidcIssuer: string
 	/** OIDC client id (public). The placeholder constant when the operator deferred real SSO. */
 	oidcClientId: string
 	/** Email domains admitted as a human at IAM login (self-provisioning allowlist). */
 	humanEmailDomains: string[]
+	emailProvider: 'none' | 'resend'
+	emailFrom: string
 	bootstrapAdmins: string[]
 	installRepos: string[]
 }
@@ -69,6 +73,45 @@ export function readResumeEnvironmentAlias(
 	return value === '' ? undefined : value
 }
 
+export interface InstallerAuthMethods {
+	oidcEnabled: boolean
+	passwordEnabled: boolean
+}
+
+/** Read a complete, explicit auth-method selection from a resumed init environment. */
+export function readInstallerAuthMethods(source: Readonly<Record<string, string | undefined>>): InstallerAuthMethods | undefined {
+	const oidc = source['FABRIKA_IAM_OIDC_ENABLED']
+	const password = source['FABRIKA_IAM_PASSWORD_ENABLED']
+	if ((oidc === undefined || oidc === '') && (password === undefined || password === '')) return undefined
+	if (oidc === undefined || oidc === '' || password === undefined || password === '') {
+		throw new Error('FABRIKA_IAM_OIDC_ENABLED and FABRIKA_IAM_PASSWORD_ENABLED must be configured together')
+	}
+	const methods = {
+		oidcEnabled: parseBoolean(oidc, 'FABRIKA_IAM_OIDC_ENABLED'),
+		passwordEnabled: parseBoolean(password, 'FABRIKA_IAM_PASSWORD_ENABLED'),
+	}
+	if (!methods.oidcEnabled && !methods.passwordEnabled) {
+		throw new Error('At least one IAM authentication method must be enabled')
+	}
+	return methods
+}
+
+/** Read and validate the resumed email provider, if init has already selected one. */
+export function readInstallerEmailProvider(source: Readonly<Record<string, string | undefined>>): 'none' | 'resend' | undefined {
+	const provider = source['FABRIKA_EMAIL_PROVIDER']
+	if (provider === undefined || provider === '') return undefined
+	if (provider !== 'none' && provider !== 'resend') {
+		throw new Error('FABRIKA_EMAIL_PROVIDER must be none or resend')
+	}
+	return provider
+}
+
+function parseBoolean(value: string, name: string): boolean {
+	if (value === 'true') return true
+	if (value === 'false') return false
+	throw new Error(`${name} must be true or false`)
+}
+
 /** Run the full bring-up for `<account>`. */
 export async function runInit(account: string): Promise<void> {
 	console.log(`\nfabrika platform init — bring up the ${account} Cloudflare control-plane base\n`)
@@ -78,7 +121,10 @@ export async function runInit(account: string): Promise<void> {
 	const provisioning = await ensureProvisioningKey()
 	const operationsSyncKey = await ensureOperationsSyncKey()
 	const signingKeys = await ensureSigningKeys()
-	const oidcClientSecret = await ensureOidcClientSecret(collected.oidcClientId === PLACEHOLDER_OIDC_CLIENT_ID)
+	const oidcClientSecret = collected.oidcEnabled
+		? await ensureOidcClientSecret(collected.oidcClientId === PLACEHOLDER_OIDC_CLIENT_ID)
+		: undefined
+	const emailApiKey = collected.emailProvider === 'resend' ? await ensureResendApiKey() : undefined
 	const app = await ensureGitHubApp(collected)
 
 	const { dir } = await scaffoldPlatformRepo({
@@ -103,7 +149,8 @@ export async function runInit(account: string): Promise<void> {
 			OPERATIONS_SYNC_KEY: operationsSyncKey,
 			// IAM Stage 1 native-auth secrets (pushed as IAM Worker secrets by the pipeline).
 			FABRIKA_IAM_SIGNING_KEYS: signingKeys,
-			FABRIKA_IAM_OIDC_CLIENT_SECRET: oidcClientSecret,
+			...(oidcClientSecret === undefined ? {} : { FABRIKA_IAM_OIDC_CLIENT_SECRET: oidcClientSecret }),
+			...(emailApiKey === undefined ? {} : { FABRIKA_EMAIL_RESEND_API_KEY: emailApiKey }),
 		},
 		vars: {
 			FABRIKA_CONTROL_DOMAIN: collected.controlPlaneDomain,
@@ -113,16 +160,24 @@ export async function runInit(account: string): Promise<void> {
 			FABRIKA_CONTROL_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
 			// IAM Stage 1 non-secret config (read by IAM's fabrika config).
 			FABRIKA_IAM_HOSTNAME: collected.iamHostname,
-			FABRIKA_IAM_OIDC_ISSUER: collected.oidcIssuer,
-			FABRIKA_IAM_OIDC_CLIENT_ID: collected.oidcClientId,
-			FABRIKA_IAM_HUMAN_EMAIL_DOMAINS: JSON.stringify(collected.humanEmailDomains),
+			FABRIKA_IAM_OIDC_ENABLED: String(collected.oidcEnabled),
+			FABRIKA_IAM_PASSWORD_ENABLED: String(collected.passwordEnabled),
+			FABRIKA_EMAIL_PROVIDER: collected.emailProvider,
+			...(collected.oidcEnabled
+				? {
+					FABRIKA_IAM_OIDC_ISSUER: collected.oidcIssuer,
+					FABRIKA_IAM_OIDC_CLIENT_ID: collected.oidcClientId,
+					FABRIKA_IAM_HUMAN_EMAIL_DOMAINS: JSON.stringify(collected.humanEmailDomains),
+				}
+				: {}),
+			...(collected.emailProvider === 'resend' ? { FABRIKA_EMAIL_FROM: collected.emailFrom } : {}),
 			// The same first-admin emails admit the operator to IAM itself (its own bootstrap hatch).
 			FABRIKA_IAM_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
 		},
 	})
 
 	await triggerDeploy(collected.platformRepo)
-	finalNotes(collected.platformRepo, collected.account, dir, await readFabrikaRef(dir))
+	finalNotes(collected.platformRepo, collected.account, dir, await readFabrikaRef(dir), collected.passwordEnabled)
 }
 
 /** Collect the CF token + account, then the smart-default prompts. */
@@ -186,21 +241,55 @@ async function collect(account: string): Promise<Collected> {
 	const reposRaw = await text('App repos to install the GitHub App on (comma-separated, e.g. contember/poplach)', '')
 	const installRepos = reposRaw.split(',').map((s) => s.trim()).filter(Boolean)
 
-	// IAM Stage 1 config: its admin hostname (= the IAM URL's host, its Custom Domain + token
-	// `iss`), the OIDC upstream it federates human login to, and the email-domain allowlist. The OIDC client
-	// id may be left blank to bring the base up with PLACEHOLDER OIDC — IAM boots and machine auth +
-	// the bootstrap-admin hatch work immediately; only human SSO login waits for a real provider.
+	// IAM Stage 1 config: select independent authentication methods, then ask only for the
+	// provider-specific values that the selection needs.
 	step('IAM auth config (Stage 1)')
 	const iamHostname = new URL(iamUrl).host
 	ok(`IAM hostname (from URL): ${iamHostname}`)
-	const oidcIssuer = await text('IAM OIDC issuer URL', 'https://accounts.google.com')
-	const oidcClientIdRaw = await text('IAM OIDC client id (blank = placeholder OIDC for now)', '')
-	if (oidcClientIdRaw === '') {
-		warn('Placeholder OIDC — human SSO login is inert until you set real FABRIKA_IAM_OIDC_CLIENT_ID + _SECRET.')
+	const resumedMethods = readInstallerAuthMethods(ENVIRONMENT_SOURCE)
+	const methods = resumedMethods
+		?? await select<InstallerAuthMethods>('IAM authentication methods', [
+			{ label: 'OIDC only', value: { oidcEnabled: true, passwordEnabled: false } },
+			{ label: 'Password only', value: { oidcEnabled: false, passwordEnabled: true } },
+			{ label: 'OIDC and password', value: { oidcEnabled: true, passwordEnabled: true } },
+		])
+	await persistEnv('FABRIKA_IAM_OIDC_ENABLED', String(methods.oidcEnabled))
+	await persistEnv('FABRIKA_IAM_PASSWORD_ENABLED', String(methods.passwordEnabled))
+	if (resumedMethods !== undefined) ok('Reusing IAM authentication methods from .env (resume).')
+
+	let oidcIssuer = ''
+	let oidcClientId = ''
+	let humanEmailDomains: string[] = []
+	if (methods.oidcEnabled) {
+		oidcIssuer = fromEnv('FABRIKA_IAM_OIDC_ISSUER') ?? await text('IAM OIDC issuer URL', 'https://accounts.google.com')
+		await persistEnv('FABRIKA_IAM_OIDC_ISSUER', oidcIssuer)
+		const oidcClientIdRaw = fromEnv('FABRIKA_IAM_OIDC_CLIENT_ID') ?? await text('IAM OIDC client id (blank = placeholder OIDC for now)', '')
+		if (oidcClientIdRaw === '') {
+			warn('Placeholder OIDC — human SSO login is inert until you set real FABRIKA_IAM_OIDC_CLIENT_ID + _SECRET.')
+		}
+		oidcClientId = oidcClientIdRaw === '' ? PLACEHOLDER_OIDC_CLIENT_ID : oidcClientIdRaw
+		await persistEnv('FABRIKA_IAM_OIDC_CLIENT_ID', oidcClientId)
+		const humanRaw = await text('IAM human email domains, comma-separated (who may self-provision at login)', '')
+		humanEmailDomains = humanRaw.split(',').map((s) => s.trim()).filter(Boolean)
 	}
-	const oidcClientId = oidcClientIdRaw === '' ? PLACEHOLDER_OIDC_CLIENT_ID : oidcClientIdRaw
-	const humanRaw = await text('IAM human email domains, comma-separated (who may self-provision at login)', '')
-	const humanEmailDomains = humanRaw.split(',').map((s) => s.trim()).filter(Boolean)
+
+	const resumedEmailProvider = readInstallerEmailProvider(ENVIRONMENT_SOURCE)
+	const emailProvider = resumedEmailProvider
+		?? await select<'none' | 'resend'>('Email transport', [
+			{ label: 'None (password enrollment and reset stay admin-driven)', value: 'none' },
+			{ label: 'Resend', value: 'resend' },
+		])
+	await persistEnv('FABRIKA_EMAIL_PROVIDER', emailProvider)
+	if (resumedEmailProvider !== undefined) ok('Reusing email transport from .env (resume).')
+	const emailFrom = emailProvider === 'resend'
+		? fromEnv('FABRIKA_EMAIL_FROM')
+			?? await retry('Email sender', async () => {
+				const value = await text('Email sender (for example Fabrika <auth@example.com>)')
+				if (value === '') throw new Error('An email sender is required when Resend is enabled.')
+				return value
+			})
+		: ''
+	if (emailProvider === 'resend') await persistEnv('FABRIKA_EMAIL_FROM', emailFrom)
 
 	return {
 		account,
@@ -212,9 +301,13 @@ async function collect(account: string): Promise<Collected> {
 		platformRepo,
 		iamUrl,
 		iamHostname,
+		oidcEnabled: methods.oidcEnabled,
+		passwordEnabled: methods.passwordEnabled,
 		oidcIssuer,
 		oidcClientId,
 		humanEmailDomains,
+		emailProvider,
+		emailFrom,
 		bootstrapAdmins,
 		installRepos,
 	}
@@ -340,6 +433,24 @@ async function ensureOidcClientSecret(placeholder: boolean): Promise<string> {
 	return value
 }
 
+/** Resolve the Resend API key without ever writing it to user-facing output. */
+async function ensureResendApiKey(): Promise<string> {
+	step('Resend API key (FABRIKA_EMAIL_RESEND_API_KEY)')
+	const existing = fromEnv('FABRIKA_EMAIL_RESEND_API_KEY')
+	if (existing !== undefined) {
+		ok('Reusing FABRIKA_EMAIL_RESEND_API_KEY from .env (resume).')
+		return existing
+	}
+	const value = await retry('Resend API key', async () => {
+		const entered = (await secret('Resend API key')).trim()
+		if (entered === '') throw new Error('A Resend API key is required when the provider is enabled.')
+		return entered
+	})
+	await persistEnv('FABRIKA_EMAIL_RESEND_API_KEY', value)
+	ok('Resend API key saved to .env.')
+	return value
+}
+
 /** Create the GitHub App via the manifest flow (or reuse from .env), then prompt to install it. */
 async function ensureGitHubApp(collected: Collected): Promise<CreatedGitHubApp> {
 	step('Create the fabrika GitHub App (manifest flow)')
@@ -403,7 +514,7 @@ async function triggerDeploy(repo: string): Promise<void> {
 }
 
 /** Closing notes: the local checkout, the escape hatch, and what runs in CI. */
-function finalNotes(repo: string, account: string, dir: string, ref: string): void {
+function finalNotes(repo: string, account: string, dir: string, ref: string, passwordEnabled: boolean): void {
 	step('Done')
 	ok(`Base repo: ${repo} (pinned fabrika ref: ${ref})`)
 	ok(`Local checkout + .env: ${dir}`)
@@ -413,4 +524,10 @@ function finalNotes(repo: string, account: string, dir: string, ref: string): vo
 		`2. gh workflow run platform.yml --repo ${repo}`,
 		'3. Authorization is then fully IAM-owned.',
 	])
+	if (passwordEnabled) {
+		action('OPERATOR ACTION — enroll the first password user through IAM provisioning', [
+			'Password enrollment is provisioning-backed; the installer does not print or invent an administrative credential.',
+			'Use the IAM admin surface after the first provisioning-backed administrator is available.',
+		])
+	}
 }
