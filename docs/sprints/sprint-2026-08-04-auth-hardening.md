@@ -118,6 +118,19 @@ _Folds in:_ what remains of SEC-4 after WU-A.
 **WU-F — Cover the ADR-0021 path** · medium · TEST-1, TEST-2, TEST-3
 **WU-G — Project return origins from the control plane** · medium · closes [backlog 51](../backlog/51-project-return-origins-from-the-control-plane.md)
 
+**WU-M — A gate miss must be answerable by a fetch, not only by a browser** · small
+`authorize.ts` returns a 302 for every `human` gate miss. For a document navigation that is
+right. For the console's own XHR it is not: an expired session turns an RPC POST into a
+cross-origin redirect to IAM that the SPA's `fetch` cannot follow, so the user sees an opaque
+failure instead of a sign-in. The dashboard already knows how to handle this — `bounceOnAuth`
+in `packages/app/src/client.ts` acts on a 401 carrying `loginUrl` — but nothing emits that
+shape any more now that the SDK no longer does (WU-A).
+_Acceptance:_ a non-navigation request that misses a `human` gate gets a 401 whose body carries
+the login URL, and a document navigation still gets the 302. Decide the signal from what the
+proxy can actually observe (`Sec-Fetch-Mode`, `Accept`) and pin it in the deny matrix. An
+expired console session must produce a sign-in, not a broken page.
+_Touch points:_ `packages/proxy/src/{authorize,service}.ts`, its tests, `packages/dashboard`.
+
 **WU-L — Collapse the admin surface to one transport plus a provisioning API** · medium
 `packages/iam/src/admin/router.ts` serves ~24 REST operations mirroring `/admin/rpc`. Verified
 callers of the REST half, repo-wide: `PUT|GET /admin/apps/:app/schema` (`reconcileSchema`, a
@@ -280,6 +293,51 @@ explicit operation rather than an overloaded empty array. Fold it into WU-L's ad
 `lookupActionUser`'s `ambiguous` status is now unreachable through the application — the schema forbids
 two rows per mailbox. It was kept as a fail-closed belt, and the recovery buckets are unchanged, so the
 indistinguishability constraint still holds.
+
+**Wave 2 — WU-D landed** (`399cd3b`). The local stack now runs the production topology in
+miniature: proxy matches a `human` gate → 302 to IAM → `LOCAL_DEV_LOGIN` → back to the original
+URL. `DEV` is `""` for control and operations in both compose files, so no synthetic persona
+exists anywhere — which is the precondition WU-K needed.
+
+Sign-in locally uses the **shared cookie**, not the ADR-0021 handoff, and the reason is worth
+keeping: `apps.setReturnOrigins` 404s for an unknown app and `vozka` is not registered in IAM,
+because only a deploy reconciles fabrika's own schema. Forcing the handoff locally would have
+meant inventing a local-only app registration — adding a local-only mechanism in order to remove
+one. Local handoff coverage waits for that registration (WU-G).
+
+The gates are copies, because `fabrika.config.ts` imports the Cloudflare provider and will not
+compile inside local-stack's strict program. A test builds the real Workers, decodes the manifest
+they bake in and asserts equality, so they cannot drift silently. The cheaper fix is to export
+both gate sets from a module free of `@fabrika/provider-cloudflare` — worth doing when something
+else touches those files.
+
+Two stack flakes fixed on the way, both found by running it rather than reading it: a base64url
+secret beginning with `-` made `mc alias set` read it as a flag, so `minio-init` looped and the
+whole stack came up without object storage (about one reset in sixteen); and `pg_isready -U postgres`
+answers over the unix socket **during initdb**, so IAM migrated against a server that was about to
+shut down.
+
+Found by running it, not by reviewing it — handed to WU-C2:
+
+- ⚠ **The console's Access plane 403s, in production too.** `control/src/node/iam-admin.ts:19-23`
+  rewrites the browser's `Origin` to the **private** RPC URL's origin; `iam/src/admin/router.ts:119`
+  compares against the **public** issuer. They never agree in the normal deployment shape, and the
+  bearer exemption needs `session === null`, which a console POST never satisfies. Introduced by
+  `e1152bb`, before this sprint. The rewrite was papering over a deeper mismatch — even unrewritten,
+  the browser's origin is the _console's_, never IAM's.
+- **Control's machine escape hatch is dead behind the proxy.** `FABRIKA_IAM_PROVISIONING_KEY` has no
+  `credentials` row, so `mintFromKey` answers `invalid_key` and the proxy refuses the request before
+  control sees the bearer. The local stack now provisions a real IAM service key instead — which is
+  the shape the answer should take.
+
+Filed rather than fixed here: [backlog 53](../backlog/53-reauthor-the-operations-console-scenarios.md)
+(three browser scenarios encode a console that changed in `83581a9`; they have been red since and
+the failure reads as an auth regression) and
+[backlog 54](../backlog/54-give-operations-its-own-proxy-app-identity.md) (the two compositions
+disagree about Operations' app id, so its gate rules would not work if they mattered).
+
+Promoted to **WU-M**: a `human` gate miss is a 302 even for an XHR, so an expired console session
+turns an RPC POST into a redirect `fetch` cannot follow.
 
 **Considered and rejected — one shared `TokenVerifier`.** `packages/auth/src/verify.ts` is a near-twin of
 `packages/proxy/src/verifier.ts`. They cannot share code cheaply: `@fabrika/auth-core` is deliberately
