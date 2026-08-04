@@ -226,3 +226,41 @@ Nothing blocking. The Zerops bring-up track (backlog 41 / 47 / 05) is deferred t
 see Out of scope.
 
 ## Run log
+
+**Wave 1 — WU-B landed** (`df858e0`). 16 findings. Two things the review missed, both verified against
+a running caddy 2.10.2 rather than assumed:
+
+- The pre-existing `response>headers>Set-Cookie` log filter was a **dead key** — Caddy puts response
+  headers in a top-level `resp_headers` object. It was harmless only because `should_log_credentials`
+  already masks `Set-Cookie`; it does not mask `Location`, which is where both the handoff code and the
+  login bounce ride.
+- Redacting `Location` with the same pattern does not cover the hazard SEC-5 itself describes: the login
+  bounce percent-encodes the whole original URL into `?redirect=`, so a declared query credential
+  reappears as `%3Fpxt%3D…`, which `[?&]pxt=` cannot match. Hence an unconditional `?redirect=`
+  alternative. Side effect: an app's own `?redirect=` is redacted from access logs.
+
+⚠ **Availability change to watch**: SEC-15 makes `unavailable` on the human path a terminal 503 rather
+than a fall-through. Gates ordered `[human /*, public /*]` with a stale `px_token` and JWKS down now
+yield 503 where they used to fall through to the public rule and serve. Fail-closed and correct per the
+finding, but it is a behaviour change.
+
+**Wave 1 — WU-A landed** (`38bcc6c`), closing backlog 18. Net −590 lines. Two consequences the plan did
+not anticipate:
+
+- `readCredentials` had to start reading the proxy token header first. Behind the proxy the browser holds
+  only `px_session`, so `iam.listPrincipals(request)` (Operations' assignee picker) would have forwarded
+  no credential at all.
+- **Nothing writes the `px_token` cookie any more.** The proxy only ever writes `px_session` and treats
+  `px_token` as client-supplied. `tests/browser/operations-issue-triage.test.ts:44-56` polls for that
+  cookie to learn the browser's principal and will hang. WU-D owns the fix.
+- **Browser runs are red until WU-D lands** — the mirror image of fact 3. `compose.browser.yaml` sets
+  `DEV: ""`, so control and operations take the real path, and the local manifest injects no token
+  because `vozka` is `public`. The local console is now closed rather than open, which is the safer
+  failure, but it is still WU-D that unblocks it.
+
+**Considered and rejected — one shared `TokenVerifier`.** `packages/auth/src/verify.ts` is a near-twin of
+`packages/proxy/src/verifier.ts`. They cannot share code cheaply: `@fabrika/auth-core` is deliberately
+dependency-free and jose-free ("Signing/verifying stays in the packages that own it"), and the proxy must
+not depend on the app SDK. A package existing to share ~90 lines between two consumers with genuinely
+different cache lifetimes would be the over-engineering this sprint is removing. What must not drift is
+their **three-state semantics**, so pin that with a shared conformance test instead — folded into WU-F.

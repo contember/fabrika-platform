@@ -30,7 +30,6 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 <!-- one line each: NN — short summary (link). Keep it short. -->
 
 - [05](05-bring-up-on-a-real-zerops-account.md) — The light tier is live on a real account; what remains is the production two-project shape, custom domains, and the git-sourced deploy.
-- [18](18-shrink-the-app-sdk.md) — Delete in-process enforcement from `@fabrika/auth` after the Cloudflare proxy path exists. Keep `redeemKey`.
 - [21](21-rate-limit-the-iam-mint-surface.md) — Deferred with reasons; the limit belongs at the proxy, which can identify a client.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
 - [25](25-bootstrap-npm-trusted-publishing.md) — Bootstrap the twenty package names once through protected CI, then activate tokenless OIDC publishing.
