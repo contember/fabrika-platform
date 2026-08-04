@@ -75,3 +75,4 @@ ADR-0020 composes OIDC and password as independent capabilities, keeps email del
 - [0018](0018-canonical-fabrika-environment-names.md) — Use plane-qualified fabrika environment names with legacy fallback — accepted (2026-07-31)
 - [0019](0019-portable-outbound-email.md) — Keep outbound email behind one portable service contract — accepted (2026-08-04)
 - [0020](0020-compose-human-authentication-methods.md) — Compose OIDC and password as independent human authentication methods — accepted (2026-08-04)
+- [0021](0021-exchange-token-session-handoff.md) — Hand a session to an app through a one-time code, not a shared cookie — accepted (2026-08-04)

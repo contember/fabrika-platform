@@ -9,6 +9,9 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Exchange-token SSO (2026-08-04)](sprint-2026-08-04-exchange-token-sso.md) — a
+  one-time code replaces the shared session cookie, so a browser authenticated at IAM
+  reaches an app on any domain; proven live across two `.zerops.app` hostnames.
 - [Password authentication and portable email (2026-08-04)](sprint-2026-08-04-password-auth-and-email.md)
   — adds reusable outbound email and independently configurable OIDC/password authentication with enrollment and reset.
 - [Zerops live bring-up (2026-08-03)](sprint-2026-08-03-zerops-live-bringup.md) — the light tier on a real account; six defects only an account could surface

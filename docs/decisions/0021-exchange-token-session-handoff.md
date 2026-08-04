@@ -104,9 +104,9 @@ does share a domain with IAM.
 - **Browser SSO works on `.zerops.app` subdomains**, with no custom domain — the
   acceptance test for this ADR is precisely that.
 - **The proxy needs its public scheme**, to build the callback and the return URL.
-  That closes [`backlog/48`](../backlog/48-decide-how-the-proxy-learns-its-public-scheme.md)
-  with the manifest option, because the value is now needed for correctness rather
-  than only for a redirect.
+  That settles the open question of how the proxy learns its public scheme (backlog
+  48, closed by this sprint) in favour of the manifest, because the value is now
+  needed for correctness rather than only for a redirect.
 - **A new registry has to be kept current.** An app whose public origin changes and
   whose registration does not will stop being able to log anyone in. It is
   fail-closed, which is the right direction, but it is new operational surface.

@@ -47,9 +47,8 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 - [45](45-pin-the-zerops-postgres-connection-target.md) — `connectionString` carries no database and no SSL mode; both are driver defaults today.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
 - [47](47-give-the-zerops-path-a-private-git-source.md) — fabrika's GitHub App never reaches the Zerops path, so a private repository cannot deploy there.
-- [48](48-decide-how-the-proxy-learns-its-public-scheme.md) — The proxy's login redirect returns the browser to `http://`; the fix needs a decision, not a patch.
+- [51](51-project-return-origins-from-the-control-plane.md) — Cross-host SSO needs an app's public origin registered in IAM; the control plane knows it and never forwards it.
 - [49](49-add-trusted-client-rate-limits-to-public-iam.md) — Add ingress-owned per-client password limits without trusting forwarded headers.
-- [50](50-fix-the-csrf-origin-check-behind-a-terminating-balancer.md) — Every console write answers 403 behind a TLS-terminating balancer; the guard compares against a reconstructed origin.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.

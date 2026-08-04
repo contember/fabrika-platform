@@ -42,6 +42,13 @@ No sprint is active.
   which blocks every control-plane-triggered deploy. The production two-project shape and
   custom domains remain in [`05`](backlog/05-bring-up-on-a-real-zerops-account.md);
   [`39`](backlog/39-settle-zerops-override-semantics.md) is still unexercised.
+- **Cross-host SSO is live.** A browser authenticated at IAM now reaches an app on a
+  different domain through a one-time code
+  ([ADR-0021](decisions/0021-exchange-token-session-handoff.md), sprint
+  [`exchange-token-sso`](archive/sprint-2026-08-04-exchange-token-sso.md)); how it
+  works is [`reference/cross-host-sso.md`](reference/cross-host-sso.md). Registering
+  an app's return origin is still a manual call —
+  [`51`](backlog/51-project-return-origins-from-the-control-plane.md).
 - **Operations follow-up:** complete
   [Zerops release artifact correlation](backlog/36-complete-zerops-release-artifact-correlation.md),
   settle [managed-environment activation](backlog/37-activate-zerops-managed-environment-transactionally.md),

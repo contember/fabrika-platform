@@ -1,3 +1,30 @@
+> ## OUTCOME — shipped 2026-08-04
+>
+> **A human signs in at IAM and lands authenticated on an app that shares no cookie
+> domain with it.** Proven live between two `.zerops.app` hostnames in `fabrika-test`,
+> with no custom domain and no `SESSION_COOKIE_DOMAIN` set anywhere: `302` from the
+> app → password form → `302` to the app's own callback with a code → `302` back →
+> `{"notes":[]}` and a `200`. Two independent host-only session cookies, one per host.
+>
+> **Commits.** `111540d` schema + exchange (WU1, WU2) · `a260770` issue + redeem
+> (WU3, WU4) · `6d4c38f` proxy callback and cookie (WU5) · `e1152bb` CSRF origin
+> guard (WU7) · `f652a27` origin registration (WU6) · `b3e2299` the live defect.
+>
+> **Verification.** 1692 tests, 0 failures, run against a real Postgres. Typecheck,
+> biome and dprint clean. Live: every claim above was produced by a request to the
+> running installation, including a second round trip with no prompt and a revoked
+> IAM login refusing to mint for the app session it had issued.
+>
+> **Backlog closed.** 48 (the proxy's public scheme — settled as a manifest field)
+> and 50 (console writes 403 behind a terminating balancer, both halves fixed and
+> confirmed live). Item 05 no longer waits on custom domains for browser SSO.
+>
+> **Deferred, honestly.** WU6 landed half: IAM owns the registry and its admin
+> surface, but the control plane does not yet project an app's public origin into it,
+> so registration is one manual call → [`51`](../backlog/51-project-return-origins-from-the-control-plane.md).
+> Back-channel logout stays out of scope; revocation is instant at IAM and bounded by
+> one 300s token lifetime at the edge, measured.
+
 # Sprint — exchange-token SSO (2026-08-04)
 
 **Goal.** A human signs in at IAM and lands authenticated on an app that shares no
@@ -7,10 +34,9 @@ domain.
 **Theme.** [ADR-0021](../decisions/0021-exchange-token-session-handoff.md) replaces
 the shared-cookie handoff with a one-time code redeemed by the proxy. Two already
 decided fixes ride along because they are in the same code and the same request
-path: [`50`](../backlog/50-fix-the-csrf-origin-check-behind-a-terminating-balancer.md)
-(console writes 403 behind a terminating balancer) and
-[`48`](../backlog/48-decide-how-the-proxy-learns-its-public-scheme.md) (the proxy's
-public scheme), which ADR-0021 settles as a manifest field.
+path: backlog **50** (console writes 403 behind a terminating balancer) and backlog
+**48** (the proxy's public scheme), which ADR-0021 settles as a manifest field. Both
+files are deleted by this sprint.
 
 ## Refs re-verified at HEAD (2026-08-04)
 
@@ -106,4 +132,28 @@ public scheme), which ADR-0021 settles as a manifest field.
 
 ## Run log
 
-<!-- discoveries, deviations, blockers; graduate each entry before close -->
+- **The redemption had to yield a session, not an access token.** Caught while
+  writing WU4, before any code: a per-app token lives 300s, so a browser holding only
+  one would be redirected on every expiry — and a redirect turns an in-flight `POST`
+  into a bodyless `GET`. ADR-0021 was revised before implementation; what lands on the
+  app's host is a credential the proxy can re-mint from.
+- **`redeem` bypassed `callIam`.** Its own try/catch made an unreachable IAM a 403
+  instead of a 503 whenever the injected gateway threw anything but
+  `IamUnavailableError` — the exact manners-independence the class header promises.
+  Caught by the test written for it.
+- **The login form carried `safeRedirect`'s fallback.** Found on the live
+  installation at step 3 of the round trip: steps 1 and 2 looked perfect and the
+  rendered form did too, but the destination it carried was IAM's own origin, so the
+  POST failed re-validation with a 400. `safeRedirect`'s allowlist is the
+  session-cookie domain, which by construction excludes the case the handoff exists
+  for. The test asserted the `app` field travelled and never looked at the field next
+  to it. → `b3e2299`, plus the assertion.
+- **WU6 landed half.** IAM's registry and its admin surface are done; the control
+  plane still does not project an app's public origin into it, so registration is a
+  manual call. → [`51`](../backlog/51-project-return-origins-from-the-control-plane.md).
+- Live revocation looked broken and was not. After logging out of IAM the app still
+  answered 200, because the proxy caches a minted token for its 300s TTL. Asking IAM
+  directly with the child session returned `invalid_session` immediately; polling the
+  app then flipped it to a 302 inside the next window. Instant at IAM, bounded by one
+  token lifetime at the edge — exactly what ADR-0021 records, and worth measuring
+  rather than assuming, because the first look said "broken".
