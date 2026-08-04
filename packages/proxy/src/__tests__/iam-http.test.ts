@@ -127,4 +127,11 @@ describe('a hostile or broken IAM always denies', () => {
 		await expect(gatewayReturning(200, { keys: [{ crv: 'P-256' }] }).gateway.getJwks()).rejects.toThrow(IamUnavailableError)
 		await expect(gatewayReturning(200, { keys: 'nope' }).gateway.getJwks()).rejects.toThrow(IamUnavailableError)
 	})
+
+	test('a key we cannot represent raises rather than silently shrinking the key set', async () => {
+		// `PublicJwk` carries the EC members only, so copying an RSA key would drop `n`/`e` and yield a
+		// verifier missing it — reported as "this token is invalid" instead of "we could not check".
+		const withRsa = { keys: [...PUBLIC_JWKS.keys, { kty: 'RSA', n: 'modulus', e: 'AQAB', kid: 'r1', alg: 'RS256', use: 'sig' }] }
+		await expect(gatewayReturning(200, withRsa).gateway.getJwks()).rejects.toThrow(IamUnavailableError)
+	})
 })

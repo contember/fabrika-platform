@@ -3,7 +3,7 @@
  * `@fabrika/iam` is so the same code runs on Bun, Node and Workers.
  *
  * Caddy's contract (verified against `modules/caddyhttp/reverseproxy/forwardauth/caddyfile.go`):
- *   - the subrequest is rewritten to `GET <verifyPath>` with the ORIGINAL headers, plus
+ *   - the subrequest is rewritten to `GET /verify` with the ORIGINAL headers, plus
  *     `X-Forwarded-Method` / `X-Forwarded-Uri`, plus reverse_proxy's `X-Forwarded-{For,Proto,Host}`;
  *   - a **2xx** response lets the request continue, and each `copy_headers` field is copied onto the
  *     UPSTREAM request — but ONLY when non-empty (Caddy guards each copy with a `not vars ""` matcher);
@@ -13,8 +13,10 @@
  *   1. the request being authorized is described ENTIRELY by the forwarded headers. Never look at
  *      this request's own method or path — a missing `X-Forwarded-Uri` must deny, not fall back;
  *   2. because an empty copy header is a no-op rather than a delete, the generated Caddy config
- *      strips the token header from the inbound request BEFORE `forward_auth` runs. Otherwise a
- *      client could present its own token header on a `public` path and have it reach the app.
+ *      strips the token header AND the request id from the inbound request BEFORE `forward_auth`
+ *      runs. Otherwise a client could present its own token header on a `public` path and have it
+ *      reach the app, or choose the correlation id that lands in IAM's audit trail. Both are handed
+ *      back on a 2xx, so the edge is the only thing that mints either.
  */
 
 import { AUTH_CALLBACK_PATH, SESSION_COOKIE, uuidv7 } from '@fabrika/auth-core'
@@ -44,12 +46,8 @@ export interface VerifyServiceConfig {
 	/** `null`/omitted disables the token cache. Same decisions, more IAM calls. */
 	cache?: TokenCache | null
 	logger?: ProxyLogger
-	/** Must equal the `uri` in the generated Caddy config. Default `/verify`. */
-	verifyPath?: string
 	/** Liveness probe path on the auth service's own port. Default `/healthz`. */
 	healthPath?: string
-	/** Header the verified token is returned in for Caddy to copy upstream. */
-	tokenHeader?: string
 	/** Unix seconds. Injectable for tests. */
 	now?: () => number
 }
@@ -65,9 +63,7 @@ const HOST_PATTERN = /^[a-z0-9.\-[\]]+(:\d{1,5})?$/i
  */
 export function createVerifyService(config: VerifyServiceConfig): VerifyService {
 	const logger = config.logger ?? silentLogger
-	const verifyPath = config.verifyPath ?? DEFAULT_VERIFY_PATH
 	const healthPath = config.healthPath ?? DEFAULT_HEALTH_PATH
-	const tokenHeader = config.tokenHeader ?? PROXY_TOKEN_HEADER
 
 	const byId = new Map<string, ResolvedApp>()
 	const byHost = new Map<string, ResolvedApp>()
@@ -75,7 +71,8 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 		const resolved: ResolvedApp = { app, gates: compileGates(app.gates) }
 		byId.set(app.id, resolved)
 		for (const host of app.hosts) {
-			byHost.set(host.toLowerCase(), resolved)
+			// Normalized exactly as a forwarded host is, so the two sides cannot disagree about a port.
+			byHost.set(normalizeHost(host), resolved)
 		}
 	}
 
@@ -89,6 +86,8 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 	const authorizer = new Authorizer(authorizerOptions)
 
 	return async (request: Request): Promise<Response> => {
+		// Only the edge may supply this: it is written to IAM's `auth_log` and `audit_events`, and the
+		// generated Caddy route (and the Cloudflare Worker) delete a client-supplied one before we run.
 		const suppliedRequestId = request.headers.get(REQUEST_ID_HEADER)
 		const requestId = suppliedRequestId === null || suppliedRequestId === '' ? uuidv7() : suppliedRequestId
 		try {
@@ -96,7 +95,7 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 			if (url.pathname === healthPath) {
 				return new Response('ok', { status: 200, headers: { 'cache-control': 'no-store' } })
 			}
-			if (url.pathname !== verifyPath) {
+			if (url.pathname !== DEFAULT_VERIFY_PATH) {
 				return textResponse(404, 'not found')
 			}
 			if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -135,7 +134,7 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 				logger.info('allow', { ...fields, gate: decision.gate, subject: decision.subject })
 				const headers = new Headers({ 'cache-control': 'no-store', [REQUEST_ID_HEADER]: requestId })
 				if (decision.token !== null) {
-					headers.set(tokenHeader, decision.token)
+					headers.set(PROXY_TOKEN_HEADER, decision.token)
 				}
 				return new Response(null, { status: 204, headers })
 			}
@@ -237,12 +236,27 @@ function readForwardedRequest(request: Request, requestId: string): ForwardedReq
  * Which app is this? The generated Caddy route pins `?app=<id>`, because the route already knows.
  * Host lookup is the fallback for hand-written configs. Neither resolving is a deny — there is no
  * "default app".
+ *
+ * A PINNED app is still cross-checked against the forwarded host. `X-Forwarded-Host` is
+ * client-controllable once `trusted_proxies` is set (ADR-0010), and the pin is what stops it choosing
+ * the app — but the same header then builds the login bounce and the handoff callback, so a request
+ * pinned to app A claiming app B's host would send the browser somewhere the manifest never declared.
+ * The authoritative host list is right here; use it.
  */
 function selectApp(verifyUrl: URL, host: string, byId: Map<string, ResolvedApp>, byHost: Map<string, ResolvedApp>): ResolvedApp | null {
+	const hostname = normalizeHost(host)
 	const pinned = verifyUrl.searchParams.get(APP_QUERY_PARAM)
 	if (pinned !== null) {
-		return byId.get(pinned) ?? null
+		const resolved = byId.get(pinned)
+		if (resolved === undefined || !resolved.app.hosts.some((declared) => normalizeHost(declared) === hostname)) {
+			return null
+		}
+		return resolved
 	}
-	const hostname = host.toLowerCase().replace(/:\d+$/, '')
 	return byHost.get(hostname) ?? null
+}
+
+/** Lower-case, port stripped — the one normalization every host comparison in this file uses. */
+function normalizeHost(host: string): string {
+	return host.toLowerCase().replace(/:\d+$/, '')
 }

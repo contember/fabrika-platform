@@ -27,7 +27,7 @@ if (manifest === null) {
 
 const service = createVerifyService({
 	manifest,
-	iam: new HttpIamGateway({ origin: env.iamUrl, timeoutMs: env.iamTimeoutMs, ...(env.iamKey === undefined ? {} : { key: env.iamKey }) }),
+	iam: new HttpIamGateway({ origin: env.iamUrl, timeoutMs: env.iamTimeoutMs, key: env.iamKey }),
 	issuer: env.iamUrl,
 	cache: env.cacheEnabled ? new MemoryTokenCache() : null,
 	logger: consoleLogger,

@@ -91,6 +91,8 @@ export interface FakeIamOptions {
 	jwks?: Jwks
 	/** Make every call reject, as an unreachable service would. */
 	unreachable?: boolean
+	/** Fail ONLY the key set: a healthy mint surface whose JWKS cannot be fetched. */
+	jwksUnreachable?: boolean
 }
 
 export class FakeIam implements IamGateway {
@@ -138,7 +140,7 @@ export class FakeIam implements IamGateway {
 
 	getJwks(): Promise<Jwks> {
 		this.jwksCalls++
-		if (this.options.unreachable === true) {
+		if (this.options.unreachable === true || this.options.jwksUnreachable === true) {
 			return Promise.reject(new Error('connect ECONNREFUSED'))
 		}
 		return Promise.resolve(this.options.jwks ?? PUBLIC_JWKS)

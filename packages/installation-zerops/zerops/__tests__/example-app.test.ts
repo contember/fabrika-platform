@@ -336,8 +336,9 @@ describe("the app's gates are enforced by the proxy, and survive the trip verbat
 		const serialized = JSON.stringify(config)
 		expect(serialized).toContain(`"dial":"${NOTES_UPSTREAM}"`)
 		// ADR-0010: the delete is load-bearing — `copy_headers` cannot delete, so without it a
-		// client-supplied token would survive to the app on any `public` path.
-		expect(serialized).toContain(`"delete":["${PROXY_TOKEN_HEADER}"]`)
+		// client-supplied token would survive to the app on any `public` path. The request id rides
+		// along for the same reason: it is written to IAM's audit trail, so only the proxy mints one.
+		expect(serialized).toContain(`"delete":["${PROXY_TOKEN_HEADER}","X-Request-Id"]`)
 		// Caddy's admin API is off: the manifest is baked in at build time, not pushed at runtime.
 		expect(config.admin.disabled).toBe(true)
 	})

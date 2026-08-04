@@ -29,6 +29,9 @@ export interface ProxyManifest {
 	apps: ProxyApp[]
 }
 
+/** A trailing `:<port>` on a declared host. Matches an IPv6 literal's port too (`[::1]:8080`). */
+const HOST_PORT_SUFFIX = /:\d+$/
+
 /** Parse a complete proxy manifest, rejecting the whole value when any field is malformed. */
 export function parseProxyManifest(value: unknown): ProxyManifest | null {
 	const rawApps = prop(value, 'apps')
@@ -36,13 +39,23 @@ export function parseProxyManifest(value: unknown): ProxyManifest | null {
 		return null
 	}
 	const apps: ProxyApp[] = []
-	const seen = new Set<string>()
+	const seenIds = new Set<string>()
+	const seenHosts = new Set<string>()
 	for (const raw of rawApps) {
 		const app = parseProxyApp(raw)
-		if (app === null || seen.has(app.id)) {
+		if (app === null || seenIds.has(app.id)) {
 			return null
 		}
-		seen.add(app.id)
+		// Two apps on one host would let route order — not the manifest — decide which app answers, and
+		// the proxy's host lookup would silently pick one of them. The generator already refuses it; a
+		// manifest loaded at runtime must be refused by the same rule, not by whoever generated it.
+		for (const host of app.hosts) {
+			if (seenHosts.has(host)) {
+				return null
+			}
+			seenHosts.add(host)
+		}
+		seenIds.add(app.id)
 		apps.push(app)
 	}
 	return { apps }
@@ -72,7 +85,9 @@ function parseProxyApp(value: unknown): ProxyApp | null {
 	if (id === undefined || id === '' || upstream === undefined || upstream === '' || hosts === undefined || gates === null) {
 		return null
 	}
-	if (hosts.length === 0 || hosts.some((host) => host === '')) {
+	// A `:port` can never match: Caddy strips the port before its host matcher runs and the proxy looks
+	// a host up without one. Refuse it rather than accept a host that silently gates nothing.
+	if (hosts.length === 0 || hosts.some((host) => host === '' || HOST_PORT_SUFFIX.test(host))) {
 		return null
 	}
 	// Absent means `https`, so an older manifest keeps working and the safe value is the one you get by

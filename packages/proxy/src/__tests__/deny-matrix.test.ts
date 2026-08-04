@@ -8,7 +8,7 @@
 
 import { type AppGates, TOKEN_REFRESH_SKEW_SECONDS } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
-import { MemoryTokenCache } from '../cache'
+import { cacheKey, MemoryTokenCache } from '../cache'
 import { PROXY_TOKEN_HEADER } from '../constants'
 import { createVerifyService, type VerifyService } from '../service'
 import { APP, FakeIam, type FakeIamOptions, foreignPrivateKey, ISSUER, manifestWith, signToken, signUserToken, verifyRequest } from './helpers'
@@ -192,6 +192,37 @@ describe('deny — human gate', () => {
 	})
 })
 
+describe('deny — a human gate admits a USER principal, not merely a valid token', () => {
+	// `px_token` is client-supplied — the proxy only ever sets `px_session` — and a valid token is not
+	// the same thing as a resolved user. `issueJwt` hands out an anonymous token for the app, up to 24h
+	// and not revocable; `mintFromKey` signs `ptype: 'service'`. Neither is a human.
+	test('an ANONYMOUS token (no ptype) in px_token does not satisfy a human gate', async () => {
+		const anonymous = await signToken({}) // exactly what `issueJwt` signs for a share link
+		const iam = iamWith({})
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `px_token=${anonymous}` }))
+		expect(response.status).toBe(302)
+		expectDenied(response)
+	})
+
+	test('a SERVICE token in px_token does not satisfy a human gate', async () => {
+		const machine = await signToken({ type: 'service' })
+		const response = await service(HUMAN, iamWith({}))(verifyRequest({ cookie: `px_token=${machine}` }))
+		expect(response.status).toBe(302)
+	})
+
+	test('a non-user token cannot ride in on the session tier either', async () => {
+		// Even if IAM somehow answered a session exchange with a non-user token, it is not a human.
+		const iam = iamWith({ mintToken: { ok: true, token: await signToken({ type: 'service' }), expiresAt: future() } })
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: 'px_session=s' }))
+		expect(response.status).toBe(302)
+	})
+
+	test('a non-user token is still a valid SERVICE credential — only the human gate refuses it', async () => {
+		const anonymous = await signToken({})
+		expect((await service(SERVICE, iamWith({}))(verifyRequest({ bearer: anonymous }))).status).toBe(204)
+	})
+})
+
 describe('deny — service gate', () => {
 	test('no credential at all on a service-only gate set → 401 (no login bounce for a machine)', async () => {
 		const response = await service(SERVICE, iamWith({}))(verifyRequest({ path: '/api/x' }))
@@ -273,6 +304,63 @@ describe('deny — IAM is unreachable', () => {
 		const response = await service(PUBLIC_THEN_HUMAN, iam)(verifyRequest({ path: '/public/health' }))
 		expect(response.status).toBe(204)
 		expect(iam.mintTokenCalls + iam.mintFromKeyCalls + iam.jwksCalls).toBe(0)
+	})
+})
+
+describe('deny — "we could not check" is 503 on the human path, never a login bounce', () => {
+	// A bounce would put the user in a login loop against an IAM that cannot answer, and would hide an
+	// incident behind something that looks exactly like an expired session.
+	test('a px_token that WOULD verify, with an unfetchable key set → 503', async () => {
+		const token = await signUserToken(3600)
+		const iam = iamWith({ jwksUnreachable: true })
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `px_token=${token}` }))
+		expect(response.status).toBe(503)
+		expect(response.headers.get('location')).toBeNull()
+	})
+
+	test('a mint that SUCCEEDS but cannot be verified because the key set is down → 503', async () => {
+		const iam = iamWith({ jwksUnreachable: true, mintToken: { ok: true, token: await signUserToken(), expiresAt: future() } })
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: 'px_session=s' }))
+		expect(response.status).toBe(503)
+		expect(response.headers.get('location')).toBeNull()
+	})
+
+	test('a cached token is KEPT when the key set is unreachable — only a proven-bad one is dropped', async () => {
+		const cache = new MemoryTokenCache()
+		cache.set(cacheKey(APP, 'session', 'sess-1'), { token: await signUserToken(3600), expiresAt: future(3600) })
+		const iam = iamWith({ jwksUnreachable: true })
+		const response = await service(HUMAN, iam, cache)(verifyRequest({ cookie: 'px_session=sess-1' }))
+		expect(response.status).toBe(503)
+		expect(iam.mintTokenCalls).toBe(0) // a fresh mint could not have been verified either
+		expect(cache.size).toBe(1)
+	})
+
+	test('the service path already did this, and still does', async () => {
+		const iam = iamWith({ jwksUnreachable: true, mintFromKey: { ok: true, token: await signUserToken(), expiresAt: future() } })
+		expect((await service(SERVICE, iam)(verifyRequest({ bearer: 'px_ci' }))).status).toBe(503)
+	})
+})
+
+describe('deny — the forwarded host must belong to the pinned app', () => {
+	test('a pinned app claiming another host is refused, and no URL is built from that host', async () => {
+		// ADR-0010 pins `?app=` because `X-Forwarded-Host` is client-controllable; the same header then
+		// builds the login bounce, so it must also be checked against the app's declared hosts.
+		const iam = iamWith({})
+		const response = await service(HUMAN, iam)(verifyRequest({ host: 'evil.example.com' }))
+		expect(response.status).toBe(403)
+		expect(response.headers.get('location') ?? '').not.toContain('evil.example.com')
+		expect(iam.mintTokenCalls).toBe(0)
+	})
+})
+
+describe('one request, one session resolution', () => {
+	test('two overlapping human rules mint at most once', async () => {
+		const gates: AppGates = { rules: [{ path: '/admin/*', kind: 'human' }, { path: '/*', kind: 'human' }] }
+		const iam = iamWith({ mintToken: { ok: false, reason: 'invalid_session' } })
+		const response = await service(gates, iam)(verifyRequest({ path: '/admin/users', cookie: 'px_session=s' }))
+		expect(response.status).toBe(302)
+		// Both rules match and both miss; the verdict cannot differ, so the exchange happens once.
+		expect(iam.mintTokenCalls).toBe(1)
 	})
 })
 

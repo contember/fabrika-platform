@@ -51,6 +51,50 @@ describe('TokenVerifier', () => {
 		expect(calls).toBe(2)
 	})
 
+	test('unknown kids cannot be turned into one IAM fetch per request', async () => {
+		// Without a cooldown, an attacker (or a stale client) invents a `kid` and every request becomes
+		// a JWKS round trip — defeating the local-verify hot path the whole design rests on.
+		let calls = 0
+		const verifier = new TokenVerifier(
+			() => {
+				calls++
+				return Promise.resolve(PUBLIC_JWKS)
+			},
+			ISSUER,
+			now,
+		)
+		for (let i = 0; i < 20; i++) {
+			expect((await verifier.verify(await signToken({ kid: `unknown-${i}` }), APP)).ok).toBe(false)
+		}
+		// One warm fetch plus at most one forced refetch inside the cooldown window.
+		expect(calls).toBeLessThanOrEqual(2)
+	})
+
+	test('the cooldown lapses, so a real rotation is still picked up', async () => {
+		let clock = 1_000_000
+		let served: Jwks = PUBLIC_JWKS
+		let calls = 0
+		const verifier = new TokenVerifier(
+			() => {
+				calls++
+				return Promise.resolve(served)
+			},
+			ISSUER,
+			() => clock,
+			600,
+			30,
+		)
+		expect((await verifier.verify(await signToken({ kid: 'unknown' }), APP)).ok).toBe(false)
+		expect(calls).toBe(2)
+
+		const rotated = await generateKeyPair('ES256')
+		const jwk = await exportJWK(rotated.publicKey)
+		served = { keys: [{ kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y, kid: 'k2', alg: 'ES256', use: 'sig' }] }
+		clock += 31
+		const token = await signToken({ kid: 'k2', key: rotated.privateKey, ttlSeconds: 100_000 })
+		expect((await verifier.verify(token, APP)).ok).toBe(true)
+	})
+
 	test('an unfetchable key set reports `unavailable`, not `invalid`', async () => {
 		const verifier = new TokenVerifier(() => Promise.reject(new IamUnavailableError('getJwks')), ISSUER, now)
 		expect(await verifier.verify(await signToken({}), APP)).toEqual({ ok: false, reason: 'unavailable' })

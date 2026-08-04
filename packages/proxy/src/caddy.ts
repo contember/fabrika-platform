@@ -28,18 +28,20 @@
  * exactly as ADR-0008 divides the work (Caddy owns HTTP correctness, the auth service owns auth).
  * Gate ORDER is preserved verbatim in the manifest the auth service reads.
  *
- * Gates still shape the generated config in one place: the access-log redaction pattern is built from
- * the declared `query` credential locations, so a credential in a URL never reaches a log file.
+ * Gates still shape the generated config in one place: the access-log redaction pattern extends its
+ * fixed alternatives with the declared `query` credential locations, so a credential in a URL never
+ * reaches a log file.
  */
 
 import type { GateRule } from '@fabrika/auth-core'
-import { API_KEY_PREFIX } from '@fabrika/auth-core'
+import { API_KEY_PREFIX, AUTH_CODE_PARAM } from '@fabrika/auth-core'
 import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-contract'
 import {
 	APP_QUERY_PARAM,
 	DEFAULT_VERIFY_PATH,
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_URI_HEADER,
+	LOGIN_REDIRECT_PARAM,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
 } from './constants'
@@ -138,10 +140,6 @@ export interface CaddyBuildOptions {
 	listen?: string[]
 	/** Internal listener carrying only the health route, so no health path shadows an app path. */
 	healthListen?: string[]
-	/** Must equal the auth service's `verifyPath`. Default `/verify`. */
-	verifyPath?: string
-	/** Header the token is copied upstream in. Must equal the auth service's `tokenHeader`. */
-	tokenHeader?: string
 	/** Health route path on `healthListen`. Default `/healthz`. */
 	healthPath?: string
 }
@@ -157,13 +155,11 @@ export class CaddyConfigError extends Error {
 export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOptions): CaddyConfig {
 	const listen = options.listen ?? [':8080']
 	const healthListen = options.healthListen ?? [':8081']
-	const verifyPath = options.verifyPath ?? DEFAULT_VERIFY_PATH
-	const tokenHeader = options.tokenHeader ?? PROXY_TOKEN_HEADER
 	const healthPath = options.healthPath ?? '/healthz'
 
 	assertUniqueHosts(manifest)
 
-	const routes = manifest.apps.map((app) => appRoute(app, options.authUpstream, verifyPath, tokenHeader))
+	const routes = manifest.apps.map((app) => appRoute(app, options.authUpstream))
 	// Nothing falls off the end: an unmatched Host is a 404, never a pass-through to anything.
 	routes.push({ handle: [{ handler: 'static_response', status_code: 404, body: 'not found' }] })
 
@@ -177,7 +173,7 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 					encoder: {
 						format: 'filter',
 						wrap: { format: 'json' },
-						fields: logFieldFilters(manifest, tokenHeader),
+						fields: logFieldFilters(manifest),
 					},
 				},
 			},
@@ -213,24 +209,27 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 /**
  * One app = one host-matched, terminal route whose subroute is a fixed three-step chain:
  *
- *   1. `headers` — DELETE the token header from the inbound request. Load-bearing: Caddy's
+ *   1. `headers` — DELETE the headers a client must not be able to assert from the inbound request:
+ *      the injected TOKEN header and the REQUEST ID. Load-bearing for the token: Caddy's
  *      `copy_headers` only sets the header when the auth response's value is non-empty, so on a
  *      `public` path (which mints no token) a client-supplied header would otherwise survive all the
  *      way to the app. The app's SDK verifies the signature, so a forged one would be rejected — but
- *      the proxy must not be the thing relying on that.
+ *      the proxy must not be the thing relying on that. The request id is the same rule one level
+ *      down: it is written to IAM's `auth_log` and `audit_events`, so only the proxy may mint one.
+ *      Both are put back from the auth response on a 2xx, so nothing downstream loses a header.
  *   2. `reverse_proxy` to the auth service — the `forward_auth` expansion.
  *   3. `reverse_proxy` to the app. Reached only when step 2 answered 2xx; any other status was
  *      already written to the client.
  */
-function appRoute(app: ProxyApp, authUpstream: string, verifyPath: string, tokenHeader: string): CaddyRoute {
+function appRoute(app: ProxyApp, authUpstream: string): CaddyRoute {
 	return {
 		match: [{ host: app.hosts }],
 		terminal: true,
 		handle: [{
 			handler: 'subroute',
 			routes: [
-				{ handle: [{ handler: 'headers', request: { delete: [tokenHeader] } }] },
-				{ handle: [forwardAuth(app, authUpstream, verifyPath, tokenHeader)] },
+				{ handle: [{ handler: 'headers', request: { delete: [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER] } }] },
+				{ handle: [forwardAuth(app, authUpstream)] },
 				{ handle: [{ handler: 'reverse_proxy', upstreams: [{ dial: app.upstream }] }] },
 			],
 		}],
@@ -241,18 +240,18 @@ function appRoute(app: ProxyApp, authUpstream: string, verifyPath: string, token
  * The `forward_auth` directive, expanded by hand. Matches what
  * `forwardauth/caddyfile.go` produces for:
  *
- *   forward_auth <authUpstream> { uri <verifyPath>?app=<id>; copy_headers <tokenHeader> <requestIdHeader> }
+ *   forward_auth <authUpstream> { uri /verify?app=<id>; copy_headers <tokenHeader> <requestIdHeader> }
  *
  * including the no-op `vars` route (reverse_proxy skips a `handle_response` entry with no routes) and
  * the `not vars ""` guard on the copy (the headers handler would otherwise write an empty value).
  */
-function forwardAuth(app: ProxyApp, authUpstream: string, verifyPath: string, tokenHeader: string): CaddyReverseProxyHandler {
+function forwardAuth(app: ProxyApp, authUpstream: string): CaddyReverseProxyHandler {
 	return {
 		handler: 'reverse_proxy',
 		upstreams: [{ dial: authUpstream }],
 		// The route already knows which app it fronts — pin it rather than have the auth service
 		// re-derive it from a header the client can influence.
-		rewrite: { method: 'GET', uri: `${verifyPath}?${APP_QUERY_PARAM}=${encodeURIComponent(app.id)}` },
+		rewrite: { method: 'GET', uri: `${DEFAULT_VERIFY_PATH}?${APP_QUERY_PARAM}=${encodeURIComponent(app.id)}` },
 		headers: {
 			request: {
 				set: {
@@ -265,7 +264,7 @@ function forwardAuth(app: ProxyApp, authUpstream: string, verifyPath: string, to
 			match: { status_code: [2] },
 			routes: [
 				{ handle: [{ handler: 'vars' }] },
-				copyResponseHeader(tokenHeader),
+				copyResponseHeader(PROXY_TOKEN_HEADER),
 				copyResponseHeader(REQUEST_ID_HEADER),
 			],
 		}],
@@ -282,24 +281,44 @@ function copyResponseHeader(header: string): CaddyRoute {
 
 /**
  * Access-log redaction. `should_log_credentials: false` already keeps `Cookie` / `Set-Cookie` /
- * `Authorization` out, but the injected token header is not in Caddy's credentials list and the
- * request URI is logged verbatim — and a URI can carry a share-link `px_` token in the path or a
- * declared `query` credential.
+ * `Authorization` out, but the injected token header is not in Caddy's credentials list, and the
+ * request URI and the response `Location` are both logged verbatim — and either can carry a
+ * credential: a share-link `px_` token in the path, a declared `query` credential, or the ADR-0021
+ * handoff code. The URI and `Location` share one pattern, because a credential is the same string
+ * wherever it appears.
+ *
+ * The field paths are the LOG RECORD's, not the config's: request fields nest under `request>…` but
+ * response headers are a top-level `resp_headers` object. Verified against a running caddy 2.10.2 —
+ * a misspelled path is silently ignored, which is exactly how a redaction quietly stops happening.
  */
-function logFieldFilters(manifest: ProxyManifest, tokenHeader: string): Record<string, CaddyLogFilter> {
+function logFieldFilters(manifest: ProxyManifest): Record<string, CaddyLogFilter> {
+	const pattern = uriRedactionPattern(manifest)
 	return {
-		[`request>headers>${tokenHeader}`]: { filter: 'delete' },
+		[`request>headers>${PROXY_TOKEN_HEADER}`]: { filter: 'delete' },
 		'request>headers>Cookie': { filter: 'delete' },
 		'request>headers>Authorization': { filter: 'delete' },
-		'response>headers>Set-Cookie': { filter: 'delete' },
-		'request>uri': { filter: 'regexp', regexp: uriRedactionPattern(manifest), value: 'REDACTED' },
+		'resp_headers>Set-Cookie': { filter: 'delete' },
+		'request>uri': { filter: 'regexp', regexp: pattern, value: 'REDACTED' },
+		// `Location` carries two credentials of its own — IAM's 302 to the reserved callback with the
+		// handoff code (the platform proxy fronts IAM), and the proxy's own login bounce — and unlike
+		// `Set-Cookie` it is NOT in Caddy's credentials list, so nothing else covers it.
+		'resp_headers>Location': { filter: 'regexp', regexp: pattern, value: 'REDACTED' },
 	}
 }
 
 /**
- * An RE2 alternation covering every way a credential can appear in a URI: an opaque `px_` token
- * anywhere (share links ride in the path), plus `?<name>=…` for each `query` credential location any
- * app declares. Deterministic: names are de-duplicated and sorted, so the config is stable across runs.
+ * An RE2 alternation covering every way a credential can appear in a URI or a `Location`:
+ *
+ *   - an opaque `px_` token anywhere — share links ride in the path;
+ *   - the ADR-0021 handoff `?code=…`. UNCONDITIONAL: the reserved callback exists on every app host,
+ *     the code is a bare `randomToken(32)` with no `px_` prefix, and it is not a declared credential,
+ *     so nothing else in this file would ever contribute it;
+ *   - `?redirect=…`, the login bounce's return URL. It is not itself a credential, it is a carrier:
+ *     the whole original URL is percent-encoded into it, so a declared `query` credential re-appears
+ *     as `%3Fpxt%3D…` after being stripped from the logged URI;
+ *   - `?<name>=…` for each `query` credential location any app declares.
+ *
+ * Deterministic: names are de-duplicated and sorted, so the config is stable across runs.
  */
 export function uriRedactionPattern(manifest: ProxyManifest): string {
 	const names = new Set<string>()
@@ -311,7 +330,11 @@ export function uriRedactionPattern(manifest: ProxyManifest): string {
 			}
 		}
 	}
-	const alternatives = [`${API_KEY_PREFIX}[A-Za-z0-9_.\\-]+`]
+	const alternatives = [
+		`${API_KEY_PREFIX}[A-Za-z0-9_.\\-]+`,
+		`[?&]${escapeRe2(AUTH_CODE_PARAM)}=[^&]*`,
+		`[?&]${escapeRe2(LOGIN_REDIRECT_PARAM)}=[^&]*`,
+	]
 	for (const name of [...names].sort()) {
 		alternatives.push(`[?&]${escapeRe2(name)}=[^&]*`)
 	}
@@ -326,7 +349,11 @@ function escapeRe2(literal: string): string {
 	return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** Two apps on one host would make Caddy's route order — not the manifest — decide which app answers. */
+/**
+ * Two apps on one host would make Caddy's route order — not the manifest — decide which app answers.
+ * `parseProxyManifest` refuses such a manifest outright; this stays for the error MESSAGE, which names
+ * both claimants, and for a producer that hands us a typed manifest without parsing one.
+ */
 function assertUniqueHosts(manifest: ProxyManifest): void {
 	const seen = new Map<string, string>()
 	for (const app of manifest.apps) {

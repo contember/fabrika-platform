@@ -8,7 +8,7 @@
 
 import { type AccessTokenClaims, type Jwks, parseAccessClaims } from '@fabrika/auth-core'
 import { createLocalJWKSet, errors as joseErrors, jwtVerify } from 'jose'
-import { JWKS_TTL_SECONDS } from './constants'
+import { JWKS_REFETCH_COOLDOWN_SECONDS, JWKS_TTL_SECONDS } from './constants'
 import { IamUnavailableError } from './iam'
 
 export type VerifyResult =
@@ -23,23 +23,27 @@ const NO_KEY = Symbol('no-matching-key')
 
 export class TokenVerifier {
 	private cached: { verifier: ReturnType<typeof createLocalJWKSet>; expiresAt: number } | null = null
+	/** When the last unknown-`kid` refetch was attempted. Null until one has been. */
+	private lastForcedAt: number | null = null
 
 	constructor(
 		private readonly getJwks: () => Promise<Jwks>,
 		private readonly issuer: string,
 		private readonly now: () => number,
 		private readonly ttlSeconds: number = JWKS_TTL_SECONDS,
+		private readonly refetchCooldownSeconds: number = JWKS_REFETCH_COOLDOWN_SECONDS,
 	) {}
 
 	/**
-	 * Verify `token` for `audience` and narrow it to access claims. An unknown `kid` triggers exactly
-	 * one JWKS refetch (a key rotated in), then a retry.
+	 * Verify `token` for `audience` and narrow it to access claims. An unknown `kid` triggers one JWKS
+	 * refetch (a key rotated in), then a retry — but at most once per cooldown, because otherwise any
+	 * caller can turn every request into an IAM round trip just by inventing a `kid`.
 	 */
 	async verify(token: string, audience: string): Promise<VerifyResult> {
 		let payload: unknown
 		try {
 			payload = await this.verifyWith(token, audience, false)
-			if (payload === NO_KEY) {
+			if (payload === NO_KEY && this.mayForceRefetch()) {
 				payload = await this.verifyWith(token, audience, true)
 			}
 		} catch (err) {
@@ -53,6 +57,20 @@ export class TokenVerifier {
 		}
 		const claims = parseAccessClaims(payload)
 		return claims === null ? { ok: false, reason: 'invalid' } : { ok: true, claims }
+	}
+
+	/**
+	 * May an unknown `kid` force a refetch right now? A rotation is rare and the token is denied either
+	 * way, so rate-limiting this costs a few seconds of rotation lag and removes an amplification
+	 * primitive: without it, N requests with N invented kids are N IAM fetches.
+	 */
+	private mayForceRefetch(): boolean {
+		const now = this.now()
+		if (this.lastForcedAt !== null && now - this.lastForcedAt < this.refetchCooldownSeconds) {
+			return false
+		}
+		this.lastForcedAt = now
+		return true
 	}
 
 	/** Returns the payload, `null` on a genuine verification failure, or `NO_KEY` on a kid miss. */

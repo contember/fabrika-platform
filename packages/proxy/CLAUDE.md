@@ -18,13 +18,20 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
 
 - **Every `catch` maps to a deny.** Nothing in `src/authorize.ts` returns an allow on an unexpected
   condition. A request matching no gate rule is denied.
+- **A `human` gate admits only `ptype: 'user'`.** A valid token is not a human: `issueJwt` signs an
+  anonymous token for the app (up to 24 h, not revocable) and `mintFromKey` signs `ptype: 'service'`.
+  `px_token` is client-supplied — the proxy only ever writes `px_session` — so every tier of
+  `authorizeSession` checks the claim. Share links are redeemed OFF the gate path.
 - **The service binds to LOOPBACK.** It answers "is this request allowed" and hands back a signed
   token, so a publicly routable instance is a token oracle. Caddy is the only thing that may dial it.
 - **The request being authorized is described ENTIRELY by the forwarded headers.** Never read this
   request's own method or path; a missing `X-Forwarded-Uri` must deny, not fall back.
-- **The generated Caddy config strips the token header from the inbound request before
-  `forward_auth` runs.** Caddy's `copy_headers` skips empty values rather than deleting, so without
-  the strip a client could present its own token header on a `public` path and have it reach the app.
+- **The generated Caddy config strips the token header AND the request id from the inbound request
+  before `forward_auth` runs** (the Cloudflare Worker does the same). Caddy's `copy_headers` skips
+  empty values rather than deleting, so without the strip a client could present its own token header
+  on a `public` path and have it reach the app — and the request id it chose would land in IAM's
+  `auth_log` and `audit_events`. Both are written back from the auth response on a 2xx. A header a
+  client can set never reaches a decision.
 - **Gate rules are NOT compiled into Caddy routes** — every request goes to `/verify` and gates are
   evaluated once, in TypeScript. Caddy's `path` matcher is case-insensitive, its `*` stops at `/`,
   and it normalizes the path; the SDK's glob does none of those, and fall-through is not expressible
@@ -37,11 +44,34 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   times IAM is called — never which requests are allowed. ADR-0008 requires the proxy to stay
   stateless, so never make it shared or persistent.
 - **`verify` is three-state.** "This token is bad" (401/403) and "we could not check" (503) are
-  different denials. Both deny; only the second is an incident.
-- **Refusing to boot beats booting misconfigured** (`src/env.ts`). `FABRIKA_IAM_KEY` is the only
-  secret here — read once, never logged, never echoed, never put in a URL.
+  different denials. Both deny; only the second is an incident — including on the human path, where a
+  503 must NOT degrade into a bounce to login (that is a login loop hiding an outage). A cache entry
+  is dropped only when it PROVED bad, never when it merely could not be checked.
+- **Refusing to boot beats booting misconfigured** (`src/env.ts`). `FABRIKA_IAM_URL` and
+  `FABRIKA_IAM_KEY` are both REQUIRED — IAM's mint surface 404s without the key, so a proxy that boots
+  without one 503s everything. The key is the only secret here: read once, never logged, never echoed,
+  never put in a URL. `FABRIKA_IAM_URL` is canonicalized to an ORIGIN once, in `readProxyEnv`, because
+  the same string is compared byte-for-byte against a token's `iss` and used to build URLs.
+- **The manifest is the authority on hosts.** `parseProxyManifest` rejects two apps claiming one host
+  and a host carrying a `:port` — not just `buildCaddyConfig`, which only sees the manifests it
+  generates from. A pinned `?app=` is additionally cross-checked against that app's declared hosts,
+  because `X-Forwarded-Host` is client-controllable and then builds URLs.
 - **If the auth service dies, Caddy answers 502 and every request is denied.** `start.sh` restarts it
   in a loop; that failure mode is by design, not a gap to paper over.
+
+## The cross-host handoff (ADR-0021)
+
+- **The proxy sets a cookie on EXACTLY ONE path**: a successful redemption at the reserved callback,
+  and nowhere else. It is otherwise a pure enforcement point; every extra write site is another place
+  a mistake establishes a session.
+- **`/__fabrika/auth/callback` is reserved on every app host** and is answered BEFORE gate matching —
+  it is how a browser becomes able to satisfy a gate, so it cannot be behind one. It must not shadow
+  an application route, the same hazard `src/caddy.ts` documents for the health route. Its `?code=` is
+  a bare random token, so the access-log redaction pattern carries it unconditionally: it is not a
+  declared credential and nothing else would ever contribute it.
+- **`ProxyApp.scheme` is configuration no header may supply.** A TLS-terminating balancer forwards
+  plain HTTP and the next hop rewrites `X-Forwarded-Proto` to what _it_ received, so the login bounce
+  and the callback are built from the manifest. Absent parses as `https`.
 
 ## Patterns
 

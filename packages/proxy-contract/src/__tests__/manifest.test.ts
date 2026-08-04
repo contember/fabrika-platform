@@ -43,6 +43,26 @@ describe('parseProxyManifest — accepts', () => {
 	})
 })
 
+describe('scheme — the scheme the BROWSER speaks, which no header can supply', () => {
+	const withScheme = (scheme?: unknown) => ({
+		apps: [{ id: 'a', hosts: ['a.test'], upstream: 'a:1', gates: { rules: [] }, ...(scheme === undefined ? {} : { scheme }) }],
+	})
+
+	test('an absent scheme is https — saying nothing gives you the safe value', () => {
+		expect(parseProxyManifest(withScheme())?.apps[0]?.scheme).toBe('https')
+	})
+
+	test('an explicit http survives, for local development', () => {
+		expect(parseProxyManifest(withScheme('http'))?.apps[0]?.scheme).toBe('http')
+	})
+
+	test('an unrecognised scheme is rejected rather than coerced', () => {
+		// Load-bearing for ADR-0021: this scheme builds the login bounce and the handoff callback.
+		expect(parseProxyManifest(withScheme('ftp'))).toBeNull()
+		expect(parseProxyManifest(withScheme('HTTPS'))).toBeNull()
+	})
+})
+
 describe('parseProxyManifest — rejects', () => {
 	const bad: [string, unknown][] = [
 		['a non-object', 'nope'],
@@ -68,6 +88,17 @@ describe('parseProxyManifest — rejects', () => {
 		}],
 		['one bad rule among good ones', {
 			apps: [{ id: 'a', hosts: ['x'], upstream: 'a:1', gates: { rules: [{ path: '/*', kind: 'public' }, { path: '/*', kind: 'nonsense' }] } }],
+		}],
+		// Uniqueness is a manifest rule, not a generator rule: a runtime load must refuse the same thing.
+		['two apps claiming one host', {
+			apps: [
+				{ id: 'a', hosts: ['same.example.com'], upstream: 'a:1', gates: { rules: [] } },
+				{ id: 'b', hosts: ['SAME.example.com'], upstream: 'b:1', gates: { rules: [] } },
+			],
+		}],
+		['one app claiming a host twice', { apps: [{ id: 'a', hosts: ['x.test', 'X.test'], upstream: 'a:1', gates: { rules: [] } }] }],
+		['a host carrying a port, which could never match', {
+			apps: [{ id: 'a', hosts: ['x.test:8080'], upstream: 'a:1', gates: { rules: [] } }],
 		}],
 	]
 

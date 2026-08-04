@@ -227,11 +227,17 @@ describe('app selection', () => {
 			iam,
 			issuer: ISSUER,
 		})
-		// Claiming the open app's host while the route pins the gated app changes nothing.
-		const response = await verify(verifyRequest({ app: APP, host: 'open.example.com', cookie: `px_token=${token}` }))
-		expect(response.status).toBe(204)
-		const spoofed = await verify(verifyRequest({ app: APP, host: 'open.example.com' }))
-		expect(spoofed.status).toBe(302)
+		// The pin decides, so the open app's public rule is never reached...
+		expect((await verify(verifyRequest({ app: APP, host: HOST, cookie: `px_token=${token}` }))).status).toBe(204)
+		expect((await verify(verifyRequest({ app: APP, host: HOST }))).status).toBe(302)
+		// ...and claiming a host the pinned app does not declare is refused outright, so the forwarded
+		// host can never end up building a URL for an origin the manifest never mentioned.
+		expect((await verify(verifyRequest({ app: APP, host: 'open.example.com', cookie: `px_token=${token}` }))).status).toBe(403)
+	})
+
+	test('a pinned app still matches its own host case- and port-insensitively', async () => {
+		const { verify } = service({ rules: [{ path: '/*', kind: 'public' }] })
+		expect((await verify(verifyRequest({ app: APP, host: 'APP.example.com:8443' }))).status).toBe(204)
 	})
 
 	test('host lookup is the fallback and is case- and port-insensitive', async () => {

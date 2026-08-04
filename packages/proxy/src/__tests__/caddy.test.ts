@@ -101,10 +101,12 @@ describe('the per-app chain is fail-closed by construction', () => {
 	const config = buildCaddyConfig(MANIFEST, OPTIONS)
 	const routes = config.apps.http.servers['proxy']?.routes ?? []
 
-	test('every app route strips the injected token header BEFORE anything else', () => {
+	test('every app route strips the client-assertable headers BEFORE anything else', () => {
 		for (const route of routes.slice(0, 2)) {
 			const first = subrouteOf(route).routes[0]?.handle[0]
-			expect(first).toEqual({ handler: 'headers', request: { delete: [PROXY_TOKEN_HEADER] } })
+			// The token, or a `public` path would carry a client's own to the app; and the request id,
+			// which is written to IAM's auth log and audit trail. Both are restored from the decision.
+			expect(first).toEqual({ handler: 'headers', request: { delete: [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER] } })
 		}
 	})
 
@@ -212,6 +214,31 @@ describe('access-log redaction', () => {
 		expect('/s/px_abc123?pxt=deadbeef'.replace(pattern, 'REDACTED')).toBe('/s/REDACTEDREDACTED')
 		// A path that carries no credential is untouched.
 		expect('/api/v1/items?page=2'.replace(pattern, 'REDACTED')).toBe('/api/v1/items?page=2')
+	})
+
+	test('the ADR-0021 handoff code is redacted on every app, declared or not', () => {
+		// The code is a bare random token on a reserved path — no `px_` prefix, no gate rule to declare
+		// it — so it is only ever caught by an unconditional alternative.
+		const pattern = new RegExp(uriRedactionPattern(MANIFEST), 'g')
+		expect('/__fabrika/auth/callback?code=deadbeef'.replace(pattern, 'REDACTED')).toBe('/__fabrika/auth/callbackREDACTED')
+		expect('/__fabrika/auth/callback?code=deadbeef&x=1'.replace(pattern, 'REDACTED')).toBe('/__fabrika/auth/callbackREDACTED&x=1')
+	})
+
+	test('a Location is filtered with the same pattern, and covers the login bounce', () => {
+		const fields = buildCaddyConfig(MANIFEST, OPTIONS).logging.logs['default']?.encoder.fields ?? {}
+		// `resp_headers`, NOT `response>headers`: that is the log record's own field path (verified
+		// against caddy 2.10.2), and a misspelled one is ignored rather than rejected.
+		const filter = fields['resp_headers>Location']
+		expect(filter?.filter).toBe('regexp')
+		expect(filter?.regexp).toBe(uriRedactionPattern(MANIFEST))
+
+		const pattern = new RegExp(filter?.regexp ?? '', 'g')
+		// IAM's 302 to the reserved callback — the proxy fronts IAM too.
+		expect('https://app.example.com/__fabrika/auth/callback?code=SECRET'.replace(pattern, 'REDACTED'))
+			.not.toContain('SECRET')
+		// The login bounce percent-encodes the whole original URL, credential and all, into `redirect`.
+		const bounce = `https://iam.test/auth/login?app=a&redirect=${encodeURIComponent('https://app.example.com/s/x?pxt=SECRET')}`
+		expect(bounce.replace(pattern, 'REDACTED')).not.toContain('SECRET')
 	})
 
 	test('the pattern is deterministic across manifests with the same gates', () => {

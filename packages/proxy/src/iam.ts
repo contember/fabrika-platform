@@ -70,15 +70,21 @@ export interface HttpIamGatewayOptions {
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
 
 /**
- * HTTP transport for `IamGateway`.
+ * HTTP transport for `IamGateway` — the Zerops path, where there is no service binding.
  *
- * The mint endpoints do NOT exist in `@fabrika/iam` yet — it exposes `mintToken`/`mintFromKey` over
- * the Worker RPC binding only. Standing them up is a required follow-up; this client is written
- * against the contract they must implement:
+ * This file and `packages/iam/src/rpc-http.ts` are two halves of one contract; neither may move
+ * without the other in the SAME commit. A mismatch fails closed (any non-200 becomes
+ * `IamUnavailableError` → a 503 deny) but is very hard to read from the outside.
  *
- *   POST {origin}/auth/mint/session  {app, session, requestId} -> MintTokenResult    (always 200)
- *   POST {origin}/auth/mint/key      {app, key, requestId}     -> MintFromKeyResult  (always 200)
- *   GET  {origin}/.well-known/jwks.json                        -> Jwks               (already exists)
+ *   POST {origin}/auth/mint/session   {app, session, requestId} -> MintTokenResult
+ *   POST {origin}/auth/mint/key       {app, key, requestId}     -> MintFromKeyResult
+ *   POST {origin}/auth/mint/exchange  {app, code, requestId}    -> ExchangeAuthCodeResult   (ADR-0021)
+ *   GET  {origin}/.well-known/jwks.json                         -> Jwks                     (public)
+ *
+ * The three POST endpoints are the `/auth/mint/*` PROXY surface, gated by IAM's `proxyKey` — the
+ * least-privilege split ADR-0007 requires, kept apart from the management `/rpc/*` surface. They
+ * answer **200 on any decided outcome, including a denial**: `{ ok: false, reason }` is "IAM answered:
+ * no", a non-200 is "IAM could not be consulted". Both deny; only the second is an incident.
  *
  * Credentials always ride in the POST body, never in a URL — a URL ends up in access logs and error
  * strings; a body does not.
@@ -220,6 +226,13 @@ function reasonOf<T extends string>(value: string, allowed: readonly T[], fallba
 	return fallback
 }
 
+/**
+ * Read a key set, rejecting one we cannot fully represent. `PublicJwk` carries only the EC members,
+ * so a key of any other type would be copied into a shape missing the material that verifies it — a
+ * silently short key set, which reads as "this token is invalid" (a client problem) instead of "we
+ * could not check" (an incident). IAM signs ES256 only, so anything else means we are not reading the
+ * key set we think we are: refuse the whole fetch and let the caller raise `IamUnavailableError`.
+ */
 function parseJwks(body: unknown): Jwks | null {
 	const rawKeys = prop(body, 'keys')
 	if (!Array.isArray(rawKeys)) {
@@ -228,7 +241,7 @@ function parseJwks(body: unknown): Jwks | null {
 	const keys: PublicJwk[] = []
 	for (const raw of rawKeys) {
 		const kty = stringField(raw, 'kty')
-		if (kty === undefined) {
+		if (kty !== 'EC') {
 			return null
 		}
 		const key: PublicJwk = { kty }

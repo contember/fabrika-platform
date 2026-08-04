@@ -49,7 +49,10 @@ describe('Cloudflare proxy Worker', () => {
 		expect(seen?.method).toBe('POST')
 		expect(seen?.url).toBe(`https://${HOST}/public/stream?x=1`)
 		expect(seen?.headers.get('X-Fabrika-Token')).toBeNull()
-		expect(seen?.headers.get('X-Request-Id')).toBe('request-1')
+		// The proxy mints the correlation id: a client-chosen one would land in IAM's audit trail.
+		const requestId = seen?.headers.get('X-Request-Id')
+		expect(requestId).not.toBe('request-1')
+		expect(requestId).toMatch(/^[0-9a-f-]{36}$/)
 		expect(await seen?.text()).toBe('payload')
 		expect(await response.text()).toBe('streamed')
 	})

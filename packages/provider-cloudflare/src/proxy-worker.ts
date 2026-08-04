@@ -67,7 +67,10 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 	return async (request) => {
 		const url = new URL(request.url)
 		const headers = new Headers(request.headers)
+		// The same two strips the generated Caddy route does: a client may assert neither the injected
+		// token nor the request id that lands in IAM's audit trail. Both come back from the decision.
 		headers.delete(PROXY_TOKEN_HEADER)
+		headers.delete(REQUEST_ID_HEADER)
 		headers.set(FORWARDED_METHOD_HEADER, request.method)
 		headers.set(FORWARDED_URI_HEADER, `${url.pathname}${url.search}`)
 		headers.set(FORWARDED_HOST_HEADER, url.host)
