@@ -13,7 +13,18 @@
  */
 
 import { type AccessTokenClaims, type Jwks, parseAccessClaims, type PublicJwk, TOKEN_ALG } from '@fabrika/auth-core'
-import { calculateJwkThumbprint, createLocalJWKSet, exportJWK, generateKeyPair, importJWK, type JWK, jwtVerify, type KeyLike, SignJWT } from 'jose'
+import {
+	calculateJwkThumbprint,
+	createLocalJWKSet,
+	exportJWK,
+	generateKeyPair,
+	importJWK,
+	type JWK,
+	type JWTPayload,
+	jwtVerify,
+	type KeyLike,
+	SignJWT,
+} from 'jose'
 import type { Env } from './env'
 import { stringField } from './json'
 
@@ -42,6 +53,24 @@ export class Signer {
 		}
 		return new SignJWT({ ...claims })
 			.setProtectedHeader({ alg: TOKEN_ALG, kid: active.kid })
+			.sign(active.key)
+	}
+
+	/**
+	 * Sign a short-lived INTERNAL payload — state IAM hands to a browser and expects back unaltered,
+	 * such as the OIDC flight cookie. Not an access token: no `iss`, no `perms`, and an `aud` that is
+	 * never an app id, so the two can never be mistaken for each other in either direction.
+	 */
+	signInternal(payload: JWTPayload, audience: string, ttlSeconds: number): Promise<string> {
+		const active = this.keys[0]
+		if (!active) {
+			throw new Error('Signer has no keys')
+		}
+		return new SignJWT(payload)
+			.setProtectedHeader({ alg: TOKEN_ALG, kid: active.kid })
+			.setAudience(audience)
+			.setIssuedAt()
+			.setExpirationTime(`${ttlSeconds}s`)
 			.sign(active.key)
 	}
 
@@ -88,6 +117,20 @@ export async function verifyAccessToken(
 	try {
 		const { payload } = await jwtVerify(token, jwks, { issuer: opts.issuer, audience: opts.audience })
 		return parseAccessClaims(payload)
+	} catch {
+		return null
+	}
+}
+
+/**
+ * Verify a payload `signInternal` produced, against this signer's own keys; null on any failure
+ * (bad signature, wrong audience, expired). The counterpart of `verifyAccessToken`, and deliberately
+ * separate: it demands the internal audience, so an access token never verifies here.
+ */
+export async function verifyInternal(signer: Signer, token: string, audience: string): Promise<JWTPayload | null> {
+	try {
+		const { payload } = await jwtVerify(token, createLocalJWKSet(signer.jwks()), { audience })
+		return payload
 	} catch {
 		return null
 	}

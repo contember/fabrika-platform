@@ -1,5 +1,6 @@
 import { uuidv7 } from '@fabrika/auth-core'
 import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
+import { normalizeEmailIdentity } from './email-identity'
 import { PasswordRepository } from './password-db'
 
 // ── Row shapes (snake_case, as the migration defines) ─────────────────────────
@@ -8,7 +9,9 @@ export interface PrincipalRow {
 	id: string
 	type: 'user' | 'service'
 	external_id: string | null
+	/** THE NORMALIZED MAILBOX (`normalizeEmailIdentity`), never the display spelling — see `PrincipalRepository`. */
 	email: string | null
+	/** Display text: the mailbox as the IdP or the inviting admin spelled it. */
 	label: string
 	disabled_at: number | null
 	activated_at: number | null
@@ -212,6 +215,12 @@ function unixNow(): number {
  * IAM persistence capabilities over the `SqlDatabase` port — never a cloud-specific handle.
  * Portable operations use prepared statements via `db.prepare(...).bind(...)`; a runtime composition
  * root may replace one complete capability when its operation shape must differ by dialect.
+ *
+ * **ONE MAILBOX RULE.** `principals.email` holds the NORMALIZED mailbox and nothing else, so every
+ * comparison is plain equality and no query asks the engine to case-fold (SQLite's `LOWER()` is
+ * ASCII-only where Postgres's is full Unicode — the same input used to resolve differently per
+ * backend). This class is the single place that applies `normalizeEmailIdentity`: callers hand over
+ * whatever spelling they hold, the mailbox lands in `email` and the spelling in `label`.
  */
 export class PrincipalRepository {
 	constructor(protected readonly db: SqlDatabase) {}
@@ -236,79 +245,95 @@ export class PrincipalRepository {
 		return this.db.prepare('SELECT * FROM principals WHERE id = ?').bind(id).first<PrincipalRow>()
 	}
 
+	/** Resolve a user by mailbox. `email` is normalized here, so any spelling of it finds the same row. */
 	async getUserByEmail(email: string): Promise<PrincipalRow | null> {
 		return this.db
 			.prepare(`SELECT * FROM principals WHERE type = 'user' AND email = ?`)
-			.bind(email)
+			.bind(normalizeEmailIdentity(email))
 			.first<PrincipalRow>()
 	}
 
 	/**
-	 * Refresh a returning user's email/label if the token's email changed. No-op when unchanged.
+	 * Refresh a returning user's mailbox/label if the token's email changed. No-op when unchanged.
 	 *
 	 * `IS DISTINCT FROM` is the null-safe `<>` — it must treat a NULL email as "different" so the
 	 * first login of an invited row still fills it in. SQLite's `IS NOT <expr>` means the same
 	 * thing but does not exist in Postgres (there `IS NOT` only takes NULL/TRUE/FALSE/UNKNOWN/
 	 * DISTINCT FROM/DOCUMENT/JSON); `IS DISTINCT FROM` is standard and valid in both (SQLite ≥ 3.39).
+	 *
+	 * The reservation moves WITH the mailbox: leaving a stale claim behind would let the next invite
+	 * of the new address create a second principal for the same human.
 	 */
 	async refreshUserLabel(id: string, email: string): Promise<void> {
-		await this.db
-			.prepare('UPDATE principals SET email = ?, label = ? WHERE id = ? AND (email IS DISTINCT FROM ? OR label IS DISTINCT FROM ?)')
-			.bind(email, email, id, email, email)
-			.run()
+		const mailbox = normalizeEmailIdentity(email)
+		await this.db.batch([
+			this.db
+				.prepare('UPDATE principals SET email = ?, label = ? WHERE id = ? AND (email IS DISTINCT FROM ? OR label IS DISTINCT FROM ?)')
+				.bind(mailbox, email, id, mailbox, email),
+			this.claimMailboxStatement(mailbox, id),
+		])
 	}
 
 	/**
-	 * Claim an invited row in one statement: bind `external_id = sub`, activate it, and set
-	 * `label = email`, but only while still unclaimed (`external_id IS NULL`) to
-	 * avoid a race claiming a row twice. Returns the claimed row, or null if the
-	 * row was concurrently claimed / not found.
+	 * Claim an invited row in one statement: bind `external_id = sub`, activate it, and set the
+	 * display label, but only while still unclaimed (`external_id IS NULL`) to avoid a race claiming
+	 * a row twice. The mailbox is untouched — it is what matched this row in the first place.
+	 * Returns the claimed row, or null if the row was concurrently claimed / not found.
 	 */
-	async claimInvitedUser(id: string, sub: string, email: string): Promise<PrincipalRow | null> {
+	async claimInvitedUser(id: string, sub: string, label: string): Promise<PrincipalRow | null> {
 		const now = unixNow()
 		return this.db
 			.prepare(`UPDATE principals SET external_id = ?, label = ?, activated_at = COALESCE(activated_at, ?)
 				WHERE id = ? AND type = 'user' AND external_id IS NULL
 				RETURNING *`)
-			.bind(sub, email, now, id)
+			.bind(sub, label, now, id)
 			.first<PrincipalRow>()
 	}
 
-	/** Lazy-create a user keyed by the verified `sub`. */
+	/** Lazy-create a user keyed by the verified `sub`, reserving its mailbox in the same transaction. */
 	async createUser(sub: string, email: string): Promise<PrincipalRow> {
 		const id = uuidv7()
 		const now = unixNow()
-		return firstRow<PrincipalRow>(
+		const mailbox = normalizeEmailIdentity(email)
+		return this.insertUser([
 			this.db
 				.prepare(`INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at)
 					VALUES (?, 'user', ?, ?, ?, ?, ?) RETURNING *`)
-				.bind(id, sub, email, email, now, now),
-		)
+				.bind(id, sub, mailbox, email, now, now),
+			this.claimMailboxStatement(mailbox, id),
+		])
 	}
 
-	/** Invite a user by email (external_id NULL = unclaimed). */
-	async inviteUser(email: string): Promise<PrincipalRow> {
+	/** Invite a user by mailbox (external_id NULL = unclaimed), reserving it in the same transaction. */
+	async inviteUser(email: string, label: string = email): Promise<PrincipalRow> {
 		const id = uuidv7()
-		return firstRow<PrincipalRow>(
+		const mailbox = normalizeEmailIdentity(email)
+		return this.insertUser([
 			this.db
 				.prepare(`INSERT INTO principals (id, type, external_id, email, label, created_at)
 					VALUES (?, 'user', NULL, ?, ?, ?) RETURNING *`)
-				.bind(id, email, email, unixNow()),
-		)
+				.bind(id, mailbox, label, unixNow()),
+			this.claimMailboxStatement(mailbox, id),
+		])
 	}
 
-	/** Create an invite while atomically reserving its case-insensitive password identity. */
-	async inviteUserWithEmailClaim(email: string, normalizedEmail: string): Promise<PrincipalRow> {
-		const id = uuidv7()
-		const now = unixNow()
-		const results = await this.db.batch<PrincipalRow>([
-			this.db.prepare(`INSERT INTO principals (id, type, external_id, email, label, created_at)
-				VALUES (?, 'user', NULL, ?, ?, ?) RETURNING *`).bind(id, email, email, now),
-			this.db.prepare(`INSERT INTO principal_email_claims (normalized_email, principal_id)
-				VALUES (?, ?)`).bind(normalizedEmail, id),
-		])
+	/**
+	 * Reserve one mailbox for one principal. `principal_email_claims` is a second lock over the same
+	 * rule `idx_principals_uq_email` enforces, and it moves with a principal whose address changes —
+	 * every user row that carries a mailbox carries a claim for it.
+	 */
+	private claimMailboxStatement(mailbox: string, principalId: string): SqlStatement {
+		return this.db
+			.prepare(`INSERT INTO principal_email_claims (normalized_email, principal_id) VALUES (?, ?)
+				ON CONFLICT (principal_id) DO UPDATE SET normalized_email = excluded.normalized_email`)
+			.bind(mailbox, principalId)
+	}
+
+	/** Run a principal INSERT + its mailbox reservation as one transaction and return the new row. */
+	private async insertUser(statements: SqlStatement[]): Promise<PrincipalRow> {
+		const results = await this.db.batch<PrincipalRow>(statements)
 		const principal = results[0]?.results[0]
-		if (principal === undefined) throw new Error('expected an invited principal')
+		if (principal === undefined) throw new Error('expected a row from a RETURNING statement, got none')
 		return principal
 	}
 
@@ -900,16 +925,19 @@ export class HandoffRepository {
 	 * set, so removing an origin is the same operation as adding one and a stale entry cannot survive
 	 * a reconcile. Values are stored exactly as given — `normalizeOrigin` is the one place that decides
 	 * what canonical means, and it runs before this.
+	 *
+	 * ONE batch, like `reconcileAppSchema`: a failure between the DELETE and the INSERTs would leave
+	 * the app with no registered origin, which is a hard refusal on every cross-host sign-in.
 	 */
 	async setReturnOrigins(app: string, origins: readonly string[]): Promise<void> {
-		await this.db.prepare('DELETE FROM app_return_origins WHERE app = ?').bind(app).run()
 		const now = unixNow()
+		const statements: SqlStatement[] = [this.db.prepare('DELETE FROM app_return_origins WHERE app = ?').bind(app)]
 		for (const origin of origins) {
-			await this.db
-				.prepare('INSERT INTO app_return_origins (app, origin, created_at) VALUES (?, ?, ?)')
-				.bind(app, origin, now)
-				.run()
+			statements.push(
+				this.db.prepare('INSERT INTO app_return_origins (app, origin, created_at) VALUES (?, ?, ?)').bind(app, origin, now),
+			)
 		}
+		await this.db.batch(statements)
 	}
 
 	/** Issue a single-use code. Only the hash is stored; the plaintext lives in one redirect. */

@@ -6,7 +6,8 @@ import type { RequestContext } from '../env'
 import type { PasswordHasher, StoredPasswordHash } from '../password-crypto'
 import { issuePasswordAction } from '../password-service'
 import { hashToken } from '../secret'
-import { createHarness, seedUser } from './helpers/harness'
+import type { Services } from '../services'
+import { createHarness, type Harness, seedUser } from './helpers/harness'
 
 const ISSUER = 'http://localhost:18191'
 const AUTH_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
@@ -197,15 +198,11 @@ describe('password credential login', () => {
 		const disabledId = seedUser(h.sqlite, { sub: 'disabled', email: 'disabled@example.test', disabled: true })
 		await h.repositories.passwords.enableEnrollment(disabledId)
 		await h.repositories.passwords.upsertCredential(disabledId, await hasher.hash('a valid long password'))
-		const ambiguousUsers: readonly (readonly [string, string])[] = [
-			['ambiguous-a', 'Case@example.test'],
-			['ambiguous-b', 'case@example.test'],
-		]
-		for (const [sub, email] of ambiguousUsers) {
-			const id = seedUser(h.sqlite, { sub, email })
-			await h.repositories.passwords.enableEnrollment(id)
-			await h.repositories.passwords.upsertCredential(id, await hasher.hash('a valid long password'))
-		}
+		// A row whose stored address is not the normalized mailbox — only a raw INSERT can produce one
+		// now, and it must stay unreachable rather than authenticate off a case-folding accident.
+		const strayId = seedUser(h.sqlite, { sub: 'stray', email: 'Case@example.test' })
+		await h.repositories.passwords.enableEnrollment(strayId)
+		await h.repositories.passwords.upsertCredential(strayId, await hasher.hash('a valid long password'))
 		const blockedEmail = 'blocked@example.test'
 		await h.repositories.passwords.recordLoginFailure({
 			loginKeyHash: await hashToken(`password-login:account:${blockedEmail}`),
@@ -350,4 +347,37 @@ describe('forgot password and one-time actions', () => {
 		)
 		expect(replay.status).toBe(400)
 	})
+})
+
+// `handlePasswordAction` is mounted twice, and the ONLY thing separating enrollment from reset is the
+// `purpose` argument threaded into `inspectActionToken`/`completeAction`, where it is a SQL predicate.
+// Nothing tested that predicate, so a dropped `AND purpose = ?` would have been invisible.
+describe('an action token is bound to its purpose', () => {
+	async function tokenFor(purpose: 'enrollment' | 'reset'): Promise<{ h: Harness; services: Services; token: string }> {
+		const { h, services } = passwordServices()
+		const principalId = seedUser(h.sqlite, { sub: null, email: `${purpose}@example.test` })
+		await h.repositories.passwords.enableEnrollment(principalId)
+		const principal = await h.repositories.principals.getPrincipalById(principalId)
+		if (principal === null) throw new Error('missing seeded principal')
+		const action = await issuePasswordAction(services, { principal, purpose })
+		const token = new URLSearchParams(new URL(action.url).hash.slice(1)).get('token')
+		if (token === null) throw new Error('missing action token')
+		return { h, services, token }
+	}
+
+	for (
+		const [issued, posted] of [
+			['enrollment', '/auth/password/reset'],
+			['reset', '/auth/password/enroll'],
+		] as const
+	) {
+		test(`an ${issued} token posted to ${posted} is refused and stays unspent`, async () => {
+			const { h, services, token } = await tokenFor(issued)
+			const response = await handleAuth(post(posted, { token, password: 'a sufficiently long password' }), services, AUTH_ENV, new TestContext())
+			expect(response.status).toBe(400)
+			expect(await response.text()).toContain('Link unavailable')
+			// Unspent: the token still validates for the purpose it WAS issued for.
+			expect(await h.repositories.passwords.inspectActionToken(await hashToken(token), issued)).not.toBeNull()
+		})
+	}
 })

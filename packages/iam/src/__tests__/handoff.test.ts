@@ -5,21 +5,32 @@
 // could stop being true.
 
 import { AUTH_CALLBACK_PATH, SESSION_COOKIE } from '@fabrika/auth-core'
+import type { SqlDatabase } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import { resolveAdmin } from '../admin/router'
+import { createIamApp } from '../app'
 import { LOCAL_DEV_ADMIN_ID } from '../auth'
 import { handleAuth } from '../auth/routes'
-import type { RequestContext } from '../env'
+import type { Env, RequestContext } from '../env'
 import { exchangeAuthCode, issueAuthCode, normalizeOrigin, resolveReturnUrl } from '../handoff'
 import { hashToken } from '../secret'
 import type { Services } from '../services'
 import { mintToken } from '../tokens'
-import { createHarness, seedUser } from './helpers/harness'
+import { createHarness, seedAppAction, seedGrant, seedUser } from './helpers/harness'
 
 const ISSUER = 'https://iam.test'
 const APP_ORIGIN = 'https://app.test'
 const AUTH_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
 const ADMIN_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', FABRIKA_IAM_PROVISIONING_KEY: '', ENVIRONMENT: 'stage' }
+/** The admin surface reaches the database only through `REPOSITORIES`; this proves it. */
+const unusedDatabase: SqlDatabase = {
+	prepare() {
+		throw new Error('database access was not expected')
+	},
+	batch() {
+		return Promise.reject(new Error('database access was not expected'))
+	},
+}
 
 class TestContext implements RequestContext {
 	readonly waiting: Promise<unknown>[] = []
@@ -230,6 +241,25 @@ describe('GET /auth/login as a handoff', () => {
 		expect(html).not.toContain('name="app"')
 	})
 
+	test('an empty registry that CANNOT be served by the shared cookie is a 400, not a login loop', async () => {
+		// The narrow half of the opt-out above. With no cookie domain, `safeRedirect` refuses the app's
+		// host, so the ordinary path provably cannot carry the browser back: the fast path is skipped
+		// (there is no handoff), the form lands the human on IAM's root, they go back, and it repeats.
+		// Unbounded, and with OIDC completely silent — the IdP auto-approves every lap.
+		const { services, sessionToken } = await scenario({ origins: [] })
+		const response = await handleAuth(
+			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private`)}`, {
+				headers: { Cookie: `${SESSION_COOKIE}=${sessionToken}` },
+			}),
+			services,
+			AUTH_ENV,
+			new TestContext(),
+		)
+		expect(response.status).toBe(400)
+		// The message names the origin nobody registered — the one thing an operator has to act on.
+		expect(await response.text()).toContain(APP_ORIGIN)
+	})
+
 	test('an unregistered return address is a 400, never a quiet fallback to the issuer', async () => {
 		const { services, sessionToken } = await scenario()
 		const response = await handleAuth(
@@ -284,6 +314,68 @@ describe('GET /auth/login as a handoff', () => {
 		expect(location.searchParams.get('code')).toBeTruthy()
 		// The IAM session is set too — that is what makes the NEXT app silent.
 		expect(response.headers.get('set-cookie')).toContain(`${SESSION_COOKIE}=`)
+		// A single-use code sits in that Location, and a session cookie in that header set.
+		expect(response.headers.get('cache-control')).toBe('no-store')
+	})
+})
+
+describe('registering return origins', () => {
+	/** Drive the real admin RPC: an admin session, a registered app, and the shipped router. */
+	async function adminCall(input: unknown): Promise<Response> {
+		const harness = createHarness()
+		const adminId = seedUser(harness.sqlite, { sub: 'sub-admin', email: 'admin@contember.com' })
+		seedGrant(harness.sqlite, adminId, 'admin')
+		seedAppAction(harness.sqlite, 'notes', 'note.read')
+		const session = await harness.signSession(adminId)
+		const env: Env = {
+			DB: unusedDatabase,
+			REPOSITORIES: harness.repositories,
+			HUMAN_EMAIL_DOMAINS: '[]',
+			HUMAN_EMAILS: '[]',
+			IAM_BOOTSTRAP_ADMINS: '[]',
+			ENVIRONMENT: 'stage',
+			ISSUER: ISSUER,
+			FABRIKA_IAM_SIGNING_KEYS: '',
+			FABRIKA_IAM_PROVISIONING_KEY: '',
+			SESSION_COOKIE_DOMAIN: '',
+			OIDC_ISSUER: 'https://idp.test',
+			OIDC_CLIENT_ID: '',
+			OIDC_CLIENT_SECRET: '',
+			OIDC_SCOPES: '',
+			OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
+		}
+		return createIamApp().fetch(
+			new Request(`${ISSUER}/admin/rpc`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json', origin: ISSUER, cookie: `${SESSION_COOKIE}=${session}` },
+				body: JSON.stringify({ method: 'apps.setReturnOrigins', input }),
+			}),
+			env,
+			{ waitUntil() {} },
+		)
+	}
+
+	test('an unknown app is a 404, reported before anything is said about the origins', async () => {
+		// Every other app-scoped use case validates this; without it a typo in the app id registered
+		// origins nobody would ever look up.
+		const response = await adminCall({ app: 'nope', origins: ['not-a-url'] })
+		expect(response.status).toBe(404)
+	})
+
+	test('an empty set is refused — it is indistinguishable from never having registered', async () => {
+		const response = await adminCall({ app: 'notes', origins: [] })
+		expect(response.status).toBe(400)
+	})
+
+	test('replacement is atomic, so no failure can leave an app with no origin at all', async () => {
+		// The repository writes the DELETE and the INSERTs as one batch. A rejected INSERT (here: a
+		// duplicate primary key, forced through the raw connection) must take the DELETE with it.
+		const harness = createHarness()
+		await harness.repositories.handoff.setReturnOrigins('notes', [APP_ORIGIN])
+		harness.sqlite.run('CREATE TRIGGER refuse_origin BEFORE INSERT ON app_return_origins BEGIN SELECT RAISE(ABORT, 0); END')
+		await expect(harness.repositories.handoff.setReturnOrigins('notes', ['https://other.test'])).rejects.toThrow()
+		harness.sqlite.run('DROP TRIGGER refuse_origin')
+		expect(await harness.repositories.handoff.listReturnOrigins('notes')).toEqual([APP_ORIGIN])
 	})
 })
 

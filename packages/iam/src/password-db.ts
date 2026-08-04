@@ -1,6 +1,7 @@
 import { uuidv7 } from '@fabrika/auth-core'
 import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import type { PrincipalRow } from './db'
+import { normalizeEmailIdentity } from './email-identity'
 import type { StoredPasswordHash } from './password-crypto'
 
 export type PasswordActionPurpose = 'enrollment' | 'reset'
@@ -102,13 +103,20 @@ export class PasswordRepository {
 		return credential === null ? { status: 'missing' } : { status: 'found', principal, credential }
 	}
 
-	/** Resolve enrollment/reset/bootstrap candidates without choosing between case variants. */
+	/**
+	 * Resolve enrollment/reset/bootstrap candidates by mailbox.
+	 *
+	 * Plain equality against the stored NORMALIZED mailbox, never `LOWER(email) = LOWER(?)`: SQLite's
+	 * `LOWER()` folds ASCII only where Postgres's folds all of Unicode, so the engine used to decide
+	 * whether `JOSÉ@x.cz` and `josé@x.cz` were one human. `LIMIT 2` stays as the fail-closed belt —
+	 * the schema forbids two rows per mailbox, and if one ever appears this refuses rather than picks.
+	 */
 	async lookupActionUser(email: string): Promise<PasswordActionUserLookup> {
 		const { results } = await this.db.prepare(`SELECT * FROM principals
-			WHERE type = 'user' AND LOWER(email) = LOWER(?)
+			WHERE type = 'user' AND email = ?
 			ORDER BY id
 			LIMIT 2`)
-			.bind(email.trim())
+			.bind(normalizeEmailIdentity(email))
 			.all<PrincipalRow>()
 		if (results.length === 0) {
 			return { status: 'missing' }

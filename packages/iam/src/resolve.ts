@@ -115,7 +115,7 @@ export interface UserPrincipalStore {
 	getUserByExternalId(sub: string): Promise<PrincipalRow | null>
 	getUserByEmail(email: string): Promise<PrincipalRow | null>
 	refreshUserLabel(id: string, email: string): Promise<void>
-	claimInvitedUser(id: string, sub: string, email: string): Promise<PrincipalRow | null>
+	claimInvitedUser(id: string, sub: string, label: string): Promise<PrincipalRow | null>
 	createUser(sub: string, email: string): Promise<PrincipalRow>
 }
 
@@ -126,15 +126,20 @@ export interface UserPrincipalStore {
  * self-asserted value. A disabled match returns `disabled` (403). An email that
  * already belongs to a *different* claimed sub is a conflict → `unknown_principal`
  * (fail-closed; the unique-email index forbids a second user, so we never insert).
+ *
+ * The mailbox, not the spelling, is what matches: the store normalizes on both sides, so an invite
+ * for `Bob@Example.com` is claimed by an IdP that says `bob@example.com` instead of lazy-creating a
+ * second principal and stranding every grant on the first.
  */
 export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, email: string): Promise<ResolveUserResult> {
-	// 1. By sub — a returning user. Refresh email/label if the token's email changed.
+	const mailbox = normalizeEmailIdentity(email)
+	// 1. By sub — a returning user. Refresh mailbox/label if the token's email changed.
 	const bySub = await db.getUserByExternalId(sub)
 	if (bySub) {
 		if (bySub.disabled_at !== null) {
 			return { ok: false, reason: 'disabled' }
 		}
-		if (bySub.email !== email || bySub.label !== email) {
+		if (bySub.email !== mailbox || bySub.label !== email) {
 			try {
 				await db.refreshUserLabel(bySub.id, email)
 			} catch (err) {
@@ -146,7 +151,7 @@ export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, 
 				return { ok: true, principal: bySub }
 			}
 		}
-		return { ok: true, principal: { ...bySub, email, label: email } }
+		return { ok: true, principal: { ...bySub, email: mailbox, label: email } }
 	}
 
 	// 2. Match the verified email.

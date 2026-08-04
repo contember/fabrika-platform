@@ -88,15 +88,30 @@ describe('password persistence', () => {
 		expect(await h.repositories.sessions.getActiveSessionByHash('oidc-session')).not.toBeNull()
 	})
 
-	test('login lookup is case-insensitive and fails closed on case-variant duplicates', async () => {
+	test('login lookup matches any spelling of one mailbox, and a second principal for it is refused', async () => {
 		const h = createHarness()
 		const first = await h.repositories.principals.createUser('sub-first', 'Alice@example.com')
+		// The mailbox is what is stored; the spelling the IdP sent survives as the label.
+		expect(first.email).toBe('alice@example.com')
+		expect(first.label).toBe('Alice@example.com')
 		await h.repositories.passwords.upsertCredential(first.id, STORED)
 		expect((await h.repositories.passwords.lookupLogin(' alice@EXAMPLE.com ')).status).toBe('found')
 
-		const second = await h.repositories.principals.createUser('sub-second', 'alice@example.com')
-		await h.repositories.passwords.upsertCredential(second.id, STORED)
-		expect(await h.repositories.passwords.lookupLogin('ALICE@example.com')).toEqual({ status: 'ambiguous' })
+		// A case variant is the SAME human, so the database refuses it rather than producing the
+		// permanently-ambiguous pair that used to break password sign-in for both.
+		await expect(h.repositories.principals.createUser('sub-second', 'alice@example.com')).rejects.toThrow()
+		expect((await h.repositories.passwords.lookupLogin('ALICE@example.com')).status).toBe('found')
+	})
+
+	test('a non-ASCII mailbox resolves through the stored value, not the engine LOWER()', async () => {
+		// SQLite folds ASCII only where Postgres folds all of Unicode. Pinned on both backends (the
+		// Postgres twin is in postgres-schema.test.ts) so the two can never answer differently again.
+		const h = createHarness()
+		const principal = await h.repositories.principals.createUser('sub-jose', 'JOSÉ@example.com')
+		expect(principal.email).toBe('josé@example.com')
+		await h.repositories.passwords.upsertCredential(principal.id, STORED)
+		expect((await h.repositories.passwords.lookupLogin('José@example.com')).status).toBe('found')
+		await expect(h.repositories.principals.inviteUser('josé@example.com')).rejects.toThrow()
 	})
 
 	test('records failures atomically at the threshold and clears them after success', async () => {

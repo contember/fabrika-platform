@@ -37,6 +37,22 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **Only the SHA-256 hash of a credential is stored** (`src/secret.ts`), for API keys, share links,
   and SSO sessions alike. Plaintext is shown once at issue. Compare digests with
   `timingSafeEqualHex`, never raw secrets.
+- **ONE MAILBOX RULE. `principals.email` is the NORMALIZED mailbox and nothing else; the spelling a
+  human or an IdP used lives in `label`.** `PrincipalRepository` is the only place that applies
+  `normalizeEmailIdentity`, so every caller may hand it any spelling, and every comparison is plain
+  equality. Never ask the engine to case-fold an identity — SQLite's `LOWER()` is ASCII-only where
+  Postgres's is full Unicode, so `LOWER(email) = LOWER(?)` used to make the BACKEND decide whether two
+  addresses were one person. `principal_email_claims` is the second lock over the same rule and moves
+  with a principal whose address changes; migration `0011`/`0005` normalized every legacy row and
+  REFUSES to run on data it cannot fold identically on both engines.
+- **The OIDC flight cookie is signed** (`Signer.signInternal`, audience `fabrika:iam:oidc-flight`).
+  Its `state` cannot authenticate itself — whoever writes the cookie writes `state` too — and
+  `Path=/auth` does not stop a sibling host under a shared domain from tossing in a second one. Every
+  terminal outcome of `/auth/callback`, success or failure, clears it.
+- **A mutating auth route requires `sameOrigin`, `/auth/logout` included.** `px_session` is
+  `SameSite=Lax`, so a cross-site top-level GET carried it; GET renders a confirm form, POST acts.
+  Every 302 out of `src/auth/**` carries `cache-control: no-store` — those are the responses holding
+  the session cookie and the single-use handoff code.
 - **Signing keys come from `FABRIKA_IAM_SIGNING_KEYS`** (a JSON array of private JWKs). Index 0 is
   the active signer; every key is published in the JWKS so a rotation key verifies before it is
   promoted. With no keys configured an EPHEMERAL key is generated per isolate — fine for dev,
@@ -58,6 +74,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   `migrations-postgres/` states the final schema once. `src/db.ts` runs unmodified against both, and
   `src/__tests__/postgres-schema.test.ts` pins it against a real database. Add a change to both,
   knowingly. Bundle `iam`, its ledger, and advisory lock `7214839201` are durable identity (ADR-0017).
+  A migration that cannot state a correct outcome for existing rows REFUSES rather than guesses —
+  `src/__tests__/migration-guards.test.ts` proves both engines refuse the same data. Note that Bun's
+  `Database.exec()` swallows a step error and runs on, so that test applies the file one statement at
+  a time, the way `wrangler d1 migrations apply` does.
 - **Never log a secret, a key, or an error object that may quote a connection string.** Log which
   surfaces are enabled, not what enabled them.
 

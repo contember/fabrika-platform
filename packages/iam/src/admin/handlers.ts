@@ -410,7 +410,8 @@ async function invitePrincipalUseCase(c: AdminContext, input: InviteRequest): Pr
 	}
 	let principal: PrincipalRow
 	try {
-		principal = await c.services.repositories.principals.inviteUserWithEmailClaim(email, normalizedEmail)
+		// The mailbox is what identifies the human; the spelling the admin typed survives as the label.
+		principal = await c.services.repositories.principals.inviteUser(normalizedEmail, email)
 	} catch (cause) {
 		if ((await c.services.repositories.passwords.lookupActionUser(normalizedEmail)).status !== 'missing') {
 			return fail(409, 'a user with this email already exists')
@@ -865,8 +866,18 @@ export async function getAppSchema(c: AdminContext, app: string): Promise<Respon
  * Replace an app's registered return origins (ADR-0021). Every value is canonicalized before it is
  * stored, so the comparison at issue time is against one spelling and an operator cannot register
  * `https://App.Example.com/` and then wonder why `https://app.example.com` is refused.
+ *
+ * The app is validated FIRST, so a typo in the app id is reported as a typo in the app id rather than
+ * as an origin problem. An EMPTY set is refused as a caller error: it is indistinguishable from an
+ * app that never registered, and reaching that state through this endpoint is always a mistake.
  */
 async function setReturnOriginsUseCase(c: AdminContext, input: SetReturnOriginsRequest): Promise<ReturnOriginsDto> {
+	if (!(await knownApps(c)).includes(input.app)) {
+		return fail(404, 'unknown app')
+	}
+	if (input.origins.length === 0) {
+		return fail(400, 'at least one origin is required')
+	}
 	const origins: string[] = []
 	for (const raw of input.origins) {
 		const normalized = normalizeOrigin(raw)

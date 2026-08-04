@@ -1,10 +1,24 @@
 /**
- * The propustka-native auth HTTP surface (public — no admin gate; these live on propustka's OWN host):
+ * The propustka-native auth HTTP surface (public — no admin gate; these live on propustka's OWN
+ * host). All nine routes `handleAuth` dispatches:
  *
- *   GET  /.well-known/jwks.json  — the public signing keys (so anything can verify a token)
- *   GET  /auth/login?redirect=…  — start OIDC (PKCE), 302 to the provider
- *   GET  /auth/callback          — finish OIDC, admit the email, create the SSO session, set the cookie, 302 back
- *   GET|POST /auth/logout        — revoke the session + clear the cookie
+ *   GET      /.well-known/jwks.json  — the public signing keys (so anything can verify a token)
+ *   GET      /auth/login             — the password form when PASSWORD_ENABLED, otherwise straight on
+ *                                      to OIDC; both methods compose per ADR-0020's matrix
+ *   POST     /auth/login             — verify a password, create the SSO session, set the cookie
+ *   GET      /auth/oidc/start        — start OIDC (PKCE), 302 to the provider
+ *   GET      /auth/callback          — finish OIDC, admit the email, create the SSO session, 302 back
+ *   GET|POST /auth/forgot-password   — request a recovery link; the answer never varies
+ *   GET|POST /auth/password/enroll   — set a first password from an enrollment token
+ *   GET|POST /auth/password/reset    — replace a password from a reset token
+ *   GET|POST /auth/logout            — GET renders a same-origin confirm form, POST revokes and clears
+ *
+ * `?app=` + `?redirect=` turns ANY login entry above into a cross-host HANDOFF (ADR-0021): the return
+ * address is checked against what that app registered, and the browser lands on the app's own
+ * callback carrying a single-use code instead of on `redirect`. The parameter rides the password form
+ * and the OIDC detour alike, and is re-validated on the way back in — the form is never trusted.
+ *
+ * `/auth/mint/*` is NOT part of this surface: `src/app.ts` intercepts it upstream for the proxy.
  *
  * There is no Cloudflare Access in front of propustka anymore, so these are plain public routes —
  * the admin gate (`/admin/*`) applies only to the admin surface, never here.
@@ -14,26 +28,27 @@ import { AUTH_CALLBACK_PATH, AUTH_CODE_PARAM, SESSION_COOKIE } from '@fabrika/au
 import { isDevBypassSession, LOCAL_DEV_ADMIN_EMAIL, LOCAL_DEV_ADMIN_ID } from '../auth'
 import { normalizeEmailIdentity } from '../email-identity'
 import type { Env, RequestContext } from '../env'
-import { issueAuthCode, resolveReturnUrl } from '../handoff'
+import { issueAuthCode, normalizeOrigin, resolveReturnUrl } from '../handoff'
+import { stringField } from '../json'
 import { generatePkce, randomToken } from '../oidc'
 import type { PasswordActionPurpose } from '../password-db'
-import { forgotPasswordPage, invalidActionPage, loginPage, setPasswordPage } from '../password-pages'
+import { forgotPasswordPage, invalidActionPage, loginPage, logoutPage, setPasswordPage } from '../password-pages'
 import { PASSWORD_MAX_CODE_POINTS, validatePassword } from '../password-policy'
 import { deliverPasswordAction, issuePasswordAction } from '../password-service'
 import { requestId } from '../request-id'
 import { resolveUserPrincipal } from '../resolve'
 import { hashToken } from '../secret'
 import type { Config, Services } from '../services'
-import { getSigner } from '../signing'
+import { getSigner, verifyInternal } from '../signing'
 import { clearCookie, readCookie, serializeCookie } from './cookies'
 
 /** SSO session lifetime — the long-lived credential a browser carries (30 days). */
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
-/** In-flight OIDC cookie (state + PKCE verifier + redirect target); short-lived, host-only on /auth. */
+/** In-flight OIDC cookie: a SIGNED token carrying state + PKCE verifier + redirect; /auth, 10 min. */
 const OIDC_COOKIE = 'px_oidc'
 const OIDC_TTL_SECONDS = 600
 
-/** The only env the auth surface touches directly is the signing config (for the JWKS endpoint). */
+/** The only env the auth surface touches directly is the signing config — the JWKS, and the flight. */
 type AuthEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
 export async function handleAuth(request: Request, services: Services, env: AuthEnv, ctx: RequestContext): Promise<Response> {
@@ -45,14 +60,14 @@ export async function handleAuth(request: Request, services: Services, env: Auth
 	}
 	if (url.pathname === '/auth/login') {
 		if (request.method === 'POST') return handlePasswordLogin(request, services, secure, ctx)
-		if (request.method === 'GET') return handleLogin(request, services, secure, ctx)
+		if (request.method === 'GET') return handleLogin(request, services, env, secure, ctx)
 		return methodNotAllowed()
 	}
 	if (url.pathname === '/auth/oidc/start') {
-		return request.method === 'GET' ? handleOidcStart(request, services, secure) : methodNotAllowed()
+		return request.method === 'GET' ? handleOidcStart(request, services, env, secure) : methodNotAllowed()
 	}
 	if (url.pathname === '/auth/callback') {
-		return request.method === 'GET' ? handleCallback(request, services, secure, ctx) : methodNotAllowed()
+		return request.method === 'GET' ? handleCallback(request, services, env, secure, ctx) : methodNotAllowed()
 	}
 	if (url.pathname === '/auth/forgot-password') {
 		return handleForgotPassword(request, services, ctx)
@@ -64,7 +79,12 @@ export async function handleAuth(request: Request, services: Services, env: Auth
 		return handlePasswordAction(request, services, secure, ctx, 'reset')
 	}
 	if (url.pathname === '/auth/logout') {
-		return handleLogout(request, services, secure)
+		// Logging out is a state change, so it needs a method that can carry an origin check. A GET
+		// stays usable — it renders the same-origin form that posts — because a cross-site
+		// `location = '…/auth/logout'` used to revoke the login and every app session under it.
+		if (request.method === 'POST') return handleLogout(request, services, secure)
+		if (request.method === 'GET') return logoutPage(safeRedirect(url.searchParams.get('redirect'), services.config))
+		return methodNotAllowed()
 	}
 	return new Response('Not found', { status: 404 })
 }
@@ -90,6 +110,15 @@ interface Handoff {
 }
 
 /**
+ * What `?app=` + `?redirect=` turned out to be. `none` keeps the ordinary shared-cookie login;
+ * `refused` carries the message of a hard 400.
+ */
+type HandoffReading =
+	| { kind: 'none' }
+	| { kind: 'handoff'; handoff: Handoff }
+	| { kind: 'refused'; message: string }
+
+/**
  * Read `?app=` + `?redirect=` as a handoff, validating the return URL against what that app has
  * registered.
  *
@@ -99,32 +128,51 @@ interface Handoff {
  *   - an app with an EMPTY registry → **not a handoff either**. It has not opted in, so the browser
  *     takes the ordinary shared-cookie path, which is what it did before ADR-0021 and what still
  *     works whenever IAM and the app share a domain — the local stack, for one. The proxy sends
- *     `app=` on every bounce, so without this an installation would break the moment it upgraded;
+ *     `app=` on every bounce, so without this an installation would break the moment it upgraded.
+ *     BUT the opt-out only holds while the shared cookie can actually reach the destination: if
+ *     `safeRedirect` refuses the address the proxy sent, that path provably cannot work for this
+ *     host, and falling back to it strands the browser in a login loop with nothing logged
+ *     anywhere. So that combination is a `400` naming the origin nobody registered;
  *   - an app WITH a registry whose return URL is not in it → a hard `400`, never a quiet fallback.
  *     Here the operator asked for a handoff and got the address wrong, and a fallback would leave
  *     them staring at a login that succeeds and lands somewhere else;
  *   - otherwise, the validated handoff.
  */
-async function readHandoff(services: Services, app: string | null, redirect: string | null): Promise<Handoff | null | 'invalid'> {
+async function readHandoff(services: Services, app: string | null, redirect: string | null): Promise<HandoffReading> {
 	if (app === null || app === '') {
-		return null
+		return { kind: 'none' }
 	}
 	if ((await services.repositories.handoff.listReturnOrigins(app)).length === 0) {
-		return null
+		if (redirect !== null && redirect !== '' && acceptableRedirect(redirect, services.config) === null) {
+			const origin = normalizeOrigin(redirect) ?? 'that address'
+			return {
+				kind: 'refused',
+				message: `no return origin is registered for this app and ${printable(origin)} is outside the session cookie domain`,
+			}
+		}
+		return { kind: 'none' }
 	}
 	if (redirect === null || redirect === '') {
-		return 'invalid'
+		return { kind: 'refused', message: 'unregistered return address for this app' }
 	}
 	const returnUrl = await resolveReturnUrl(services, app, redirect)
-	return returnUrl === null ? 'invalid' : { app, returnUrl }
+	return returnUrl === null
+		? { kind: 'refused', message: 'unregistered return address for this app' }
+		: { kind: 'handoff', handoff: { app, returnUrl } }
 }
 
-async function handleLogin(request: Request, services: Services, secure: boolean, ctx: RequestContext): Promise<Response> {
+/** The handoff a reading carries, or null — after the caller has already answered a `refused`. */
+function handoffOf(reading: HandoffReading): Handoff | null {
+	return reading.kind === 'handoff' ? reading.handoff : null
+}
+
+async function handleLogin(request: Request, services: Services, env: AuthEnv, secure: boolean, ctx: RequestContext): Promise<Response> {
 	const url = new URL(request.url)
-	const handoff = await readHandoff(services, url.searchParams.get('app'), url.searchParams.get('redirect'))
-	if (handoff === 'invalid') {
-		return authError('unregistered return address for this app', 400)
+	const reading = await readHandoff(services, url.searchParams.get('app'), url.searchParams.get('redirect'))
+	if (reading.kind === 'refused') {
+		return authError(reading.message, 400)
 	}
+	const handoff = handoffOf(reading)
 	// A handoff's destination is already validated against the app's registry, so `safeRedirect` must
 	// not get a say: its allowlist is the session-cookie domain, which by definition does not cover the
 	// cross-host case this exists for. Passing its fallback to the form would strand the login on IAM.
@@ -135,8 +183,7 @@ async function handleLogin(request: Request, services: Services, secure: boolean
 	if (handoff !== null) {
 		const existing = await currentSession(request, services)
 		if (existing !== null) {
-			const location = await handoffLocation(services, handoff, existing.id)
-			return new Response(null, { status: 302, headers: { location, 'cache-control': 'no-store' } })
+			return new Response(null, { status: 302, headers: redirectHeaders(await handoffLocation(services, handoff, existing.id)) })
 		}
 	}
 
@@ -151,7 +198,7 @@ async function handleLogin(request: Request, services: Services, secure: boolean
 			...(handoff === null ? {} : { app: handoff.app }),
 		})
 	}
-	return startOidc(services, secure, redirect, handoff)
+	return startOidc(services, env, secure, redirect, handoff)
 }
 
 /** The caller's IAM session, if the browser already holds a valid one on this host. */
@@ -188,25 +235,33 @@ async function handoffLocation(services: Services, handoff: Handoff, parentSessi
 	return callback.toString()
 }
 
-async function handleOidcStart(request: Request, services: Services, secure: boolean): Promise<Response> {
+async function handleOidcStart(request: Request, services: Services, env: AuthEnv, secure: boolean): Promise<Response> {
 	if (!services.config.authentication.oidc.enabled) return authError('OIDC login is disabled', 404)
 	const url = new URL(request.url)
-	const handoff = await readHandoff(services, url.searchParams.get('app'), url.searchParams.get('redirect'))
-	if (handoff === 'invalid') {
-		return authError('unregistered return address for this app', 400)
+	const reading = await readHandoff(services, url.searchParams.get('app'), url.searchParams.get('redirect'))
+	if (reading.kind === 'refused') {
+		return authError(reading.message, 400)
 	}
-	return startOidc(services, secure, handoffRedirectOr(handoff, url.searchParams.get('redirect'), services), handoff)
+	const handoff = handoffOf(reading)
+	return startOidc(services, env, secure, handoffRedirectOr(handoff, url.searchParams.get('redirect'), services), handoff)
 }
 
-async function startOidc(services: Services, secure: boolean, redirect: string, handoff: Handoff | null = null): Promise<Response> {
+async function startOidc(
+	services: Services,
+	env: AuthEnv,
+	secure: boolean,
+	redirect: string,
+	handoff: Handoff | null = null,
+): Promise<Response> {
 	if (!services.config.authentication.oidc.enabled || services.oidc === null) return authError('OIDC login is disabled', 404)
 	const { verifier, challenge } = await generatePkce()
 	const state = randomToken(16)
 	const location = await services.oidc.authorizationUrl({ state, codeChallenge: challenge })
 
-	const flight = encodeFlight({ state, verifier, redirect, ...(handoff === null ? {} : { app: handoff.app }) })
-	const headers = new Headers({ location })
-	// The in-flight cookie is scoped to /auth (only the callback reads it) and is single-use.
+	const flight = await encodeFlight(env, { state, verifier, redirect, ...(handoff === null ? {} : { app: handoff.app }) })
+	const headers = redirectHeaders(location)
+	// The in-flight cookie is scoped to /auth (only the callback reads it), single-use, and SIGNED —
+	// see `encodeFlight`.
 	headers.append(
 		'Set-Cookie',
 		serializeCookie(OIDC_COOKIE, flight, { httpOnly: true, secure, sameSite: 'Lax', maxAge: OIDC_TTL_SECONDS, path: '/auth' }),
@@ -238,25 +293,34 @@ async function handleLocalLogin(
 
 // ── /auth/callback ───────────────────────────────────────────────────────────────
 
-async function handleCallback(request: Request, services: Services, secure: boolean, ctx: RequestContext): Promise<Response> {
+async function handleCallback(
+	request: Request,
+	services: Services,
+	env: AuthEnv,
+	secure: boolean,
+	ctx: RequestContext,
+): Promise<Response> {
 	if (!services.config.authentication.oidc.enabled || services.oidc === null) return authError('OIDC login is disabled', 404)
 	const url = new URL(request.url)
 	const code = url.searchParams.get('code')
 	const state = url.searchParams.get('state')
-	const flight = decodeFlight(readCookie(request.headers.get('Cookie'), OIDC_COOKIE))
+	const flight = await decodeFlight(env, readCookie(request.headers.get('Cookie'), OIDC_COOKIE))
+	// EVERY terminal outcome below consumes the flight. The cookie holds a live PKCE verifier and the
+	// state nonce; leaving it behind on a failure kept both replayable for the rest of their 600s.
+	const refuse = (message: string, status: number): Response => authErrorEndingFlight(message, status, secure)
 
-	// CSRF: the state echoed by Google must match the one we stored in the in-flight cookie.
+	// CSRF: the state echoed by the IdP must match the one in the flight WE signed.
 	if (!code || !state || !flight || flight.state !== state) {
-		return authError('invalid OIDC state', 400)
+		return refuse('invalid OIDC state', 400)
 	}
 
 	const idToken = await services.oidc.exchangeCode(code, flight.verifier)
 	if (!idToken) {
-		return authError('code exchange failed', 502)
+		return refuse('code exchange failed', 502)
 	}
 	const identity = await services.oidc.verifyIdToken(idToken)
 	if (!identity) {
-		return authError('invalid id_token', 401)
+		return refuse('invalid id_token', 401)
 	}
 
 	// Admission: who may log in as a human. The central allowlist (`HUMAN_EMAIL_DOMAINS`/
@@ -267,7 +331,7 @@ async function handleCallback(request: Request, services: Services, secure: bool
 		const known = (await services.repositories.principals.getUserByExternalId(identity.sub))
 			?? (await services.repositories.principals.getUserByEmail(identity.email))
 		if (!known) {
-			return authError('login refused (not allowed)', 403)
+			return refuse('login refused (not allowed)', 403)
 		}
 	}
 
@@ -275,14 +339,14 @@ async function handleCallback(request: Request, services: Services, secure: bool
 	// keyed on the IdP `sub` and verified email.
 	const resolved = await resolveUserPrincipal(services.repositories.principals, identity.sub, identity.email)
 	if (!resolved.ok) {
-		return authError(`login refused (${resolved.reason})`, 403)
+		return refuse(`login refused (${resolved.reason})`, 403)
 	}
 
-	// Re-validate the handoff on the way back: the flight cookie is ours and integrity-checked by the
-	// `state` match, but the registry may have changed while the human was away at the IdP.
-	const handoff = flight.app === undefined ? null : await readHandoff(services, flight.app, flight.redirect)
-	if (handoff === 'invalid') {
-		return authError('unregistered return address for this app', 400)
+	// Re-validate the handoff on the way back: the flight is ours (signature-checked), but the registry
+	// may have changed while the human was away at the IdP.
+	const reading = flight.app === undefined ? { kind: 'none' as const } : await readHandoff(services, flight.app, flight.redirect)
+	if (reading.kind === 'refused') {
+		return refuse(reading.message, 400)
 	}
 
 	return issueSession(request, services, secure, ctx, {
@@ -292,7 +356,7 @@ async function handleCallback(request: Request, services: Services, secure: bool
 		redirect: safeRedirect(flight.redirect, services.config),
 		reason: 'login',
 		clearOidc: true,
-		handoff,
+		handoff: handoffOf(reading),
 	})
 }
 
@@ -337,7 +401,7 @@ async function issueSession(
 	// The IAM cookie is set either way: it is what makes the NEXT handoff, to this or any other app,
 	// silent. What changes is where the browser goes — its own destination, or the app's callback.
 	const location = input.handoff == null ? input.redirect : await handoffLocation(services, input.handoff, sessionId)
-	const headers = new Headers({ location })
+	const headers = redirectHeaders(location)
 	headers.append('Set-Cookie', sessionCookie(sessionToken, services.config, secure))
 	if (input.clearOidc === true) {
 		headers.append('Set-Cookie', clearCookie(OIDC_COOKIE, { path: '/auth', secure }))
@@ -363,10 +427,11 @@ async function handlePasswordLogin(request: Request, services: Services, secure:
 	const rawPassword = stringValue(form.get('password'))
 	// The form is a hint, not a permission: `readHandoff` re-checks the return URL against what the app
 	// has registered, so a hand-edited field buys nothing.
-	const handoff = await readHandoff(services, stringValue(form.get('app')), stringValue(form.get('redirect')))
-	if (handoff === 'invalid') {
-		return authError('unregistered return address for this app', 400)
+	const reading = await readHandoff(services, stringValue(form.get('app')), stringValue(form.get('redirect')))
+	if (reading.kind === 'refused') {
+		return authError(reading.message, 400)
 	}
+	const handoff = handoffOf(reading)
 	const redirect = handoffRedirectOr(handoff, stringValue(form.get('redirect')), services)
 	const retry = {
 		redirect,
@@ -510,7 +575,7 @@ async function safelyCreateBootstrapPrincipal(services: Services, email: string)
 	const canonical = matchingBootstrapEmail(email, services.config)
 	if (canonical === null) return null
 	try {
-		const principal = await services.repositories.principals.inviteUserWithEmailClaim(canonical, canonical)
+		const principal = await services.repositories.principals.inviteUser(canonical)
 		await services.repositories.passwords.enableEnrollment(principal.id)
 		return principal
 	} catch {
@@ -561,13 +626,19 @@ async function handlePasswordAction(
 
 // ── /auth/logout ─────────────────────────────────────────────────────────────────
 
+/**
+ * Revoke the login and clear the cookie. Same-origin only, like every other mutating form here:
+ * `px_session` is `SameSite=Lax`, so a cross-site top-level GET carried it, and because every app
+ * session hangs off this one, that single request logged the human out of every host at once.
+ */
 async function handleLogout(request: Request, services: Services, secure: boolean): Promise<Response> {
+	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
 	const cookie = readCookie(request.headers.get('Cookie'), SESSION_COOKIE)
 	if (cookie) {
 		await services.repositories.sessions.revokeSessionByHash(await hashToken(cookie))
 	}
 	const url = new URL(request.url)
-	const headers = new Headers({ location: safeRedirect(url.searchParams.get('redirect'), services.config) })
+	const headers = redirectHeaders(safeRedirect(url.searchParams.get('redirect'), services.config))
 	headers.append(
 		'Set-Cookie',
 		clearCookie(SESSION_COOKIE, { path: '/', secure, ...(services.config.sessionCookieDomain ? { domain: services.config.sessionCookieDomain } : {}) }),
@@ -586,21 +657,26 @@ async function handleLogout(request: Request, services: Services, secure: boolea
  *   - a bootstrap admin.
  * Returns false otherwise — an empty allowlist with no `*` means only known/invited principals and
  * bootstrap admins may log in (fail-closed). Matching uses ONLY the IdP-verified email.
+ *
+ * Both sides of every comparison are normalized. Entra and Okta both preserve directory casing, so a
+ * `FABRIKA_IAM_HUMAN_EMAILS` entry spelled `Vip@Example.com` used to be a control that simply never
+ * matched, with nothing said about it either way.
  */
 function admitted(email: string, config: Config): boolean {
 	const { emailDomains, emails } = config.human
 	if (emailDomains.includes('*') || emails.includes('*')) {
 		return true
 	}
-	if (emails.includes(email)) {
+	const mailbox = normalizeEmailIdentity(email)
+	if (emails.some((allowed) => normalizeEmailIdentity(allowed) === mailbox)) {
 		return true
 	}
-	const at = email.lastIndexOf('@')
-	const domain = at === -1 ? '' : email.slice(at + 1).toLowerCase()
+	const at = mailbox.lastIndexOf('@')
+	const domain = at === -1 ? '' : mailbox.slice(at + 1)
 	if (domain !== '' && emailDomains.some((d) => d.toLowerCase() === domain)) {
 		return true
 	}
-	return config.bootstrapAdmins.has(normalizeEmailIdentity(email))
+	return config.bootstrapAdmins.has(mailbox)
 }
 
 /**
@@ -647,27 +723,37 @@ interface Flight {
 	app?: string
 }
 
-function encodeFlight(flight: Flight): string {
-	return btoa(JSON.stringify(flight)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+/** Audience of the flight token — never an app id, so a flight can never pass as an access token. */
+const OIDC_FLIGHT_AUDIENCE = 'fabrika:iam:oidc-flight'
+
+/**
+ * SIGN the flight, with IAM's own key.
+ *
+ * The `state` match alone is not a CSRF check when whoever writes the cookie also writes `state`.
+ * `Path=/auth` does not isolate it either: cookie-tossing from any host under a shared registrable
+ * domain sets a SECOND `px_oidc` the browser also sends, and per RFC 6265 §5.4 the longer-path one
+ * comes first — so an attacker could plant their own flight, hand the victim their authorization
+ * code, and have IAM issue the victim a session for the ATTACKER'S identity. A signature is what
+ * makes "this flight is ours" true rather than assumed.
+ */
+async function encodeFlight(env: AuthEnv, flight: Flight): Promise<string> {
+	const signer = await getSigner(env)
+	return signer.signInternal({ ...flight }, OIDC_FLIGHT_AUDIENCE, OIDC_TTL_SECONDS)
 }
 
-function decodeFlight(raw: string | null): Flight | null {
+async function decodeFlight(env: AuthEnv, raw: string | null): Promise<Flight | null> {
 	if (!raw) {
 		return null
 	}
-	try {
-		const json: unknown = JSON.parse(atob(raw.replaceAll('-', '+').replaceAll('_', '/')))
-		const state = typeof json === 'object' && json !== null && 'state' in json ? json.state : undefined
-		const verifier = typeof json === 'object' && json !== null && 'verifier' in json ? json.verifier : undefined
-		const redirect = typeof json === 'object' && json !== null && 'redirect' in json ? json.redirect : undefined
-		const app = typeof json === 'object' && json !== null && 'app' in json ? json.app : undefined
-		if (typeof state !== 'string' || typeof verifier !== 'string' || typeof redirect !== 'string') {
-			return null
-		}
-		return typeof app === 'string' && app !== '' ? { state, verifier, redirect, app } : { state, verifier, redirect }
-	} catch {
+	const payload = await verifyInternal(await getSigner(env), raw, OIDC_FLIGHT_AUDIENCE)
+	const state = stringField(payload, 'state')
+	const verifier = stringField(payload, 'verifier')
+	const redirect = stringField(payload, 'redirect')
+	const app = stringField(payload, 'app')
+	if (state === undefined || verifier === undefined || redirect === undefined) {
 		return null
 	}
+	return app === undefined || app === '' ? { state, verifier, redirect } : { state, verifier, redirect, app }
 }
 
 /**
@@ -676,14 +762,26 @@ function decodeFlight(raw: string | null): Flight | null {
  * origin. Prevents `/auth/login?redirect=https://evil.example` from bouncing a logged-in user out.
  */
 export function safeRedirect(raw: string | null, config: Config): string {
+	return acceptableRedirect(raw, config)?.toString() ?? config.issuer
+}
+
+/**
+ * The parsed target when the SHARED-COOKIE path may send a browser there, else null.
+ *
+ * Separated from `safeRedirect` because two callers need the verdict rather than the fallback: a
+ * refusal here is what tells `readHandoff` that an unregistered app cannot be served by the ordinary
+ * login at all (comparing `safeRedirect`'s output to its input cannot say that — `https://x` and the
+ * `https://x/` a URL round-trip produces differ as strings while naming the same place).
+ */
+function acceptableRedirect(raw: string | null, config: Config): URL | null {
 	if (!raw) {
-		return config.issuer
+		return null
 	}
 	let target: URL
 	try {
 		target = new URL(raw)
 	} catch {
-		return config.issuer
+		return null
 	}
 	const issuerHost = safeHost(config.issuer)
 	const host = target.hostname
@@ -692,7 +790,7 @@ export function safeRedirect(raw: string | null, config: Config): string {
 	const httpsOk = target.protocol === 'https:' || (target.protocol === 'http:' && isLocal)
 	const domain = config.sessionCookieDomain.replace(/^\./, '')
 	const hostOk = host === issuerHost || isLocal || (domain !== '' && (host === domain || host.endsWith(`.${domain}`)))
-	return httpsOk && hostOk ? target.toString() : config.issuer
+	return httpsOk && hostOk ? target : null
 }
 
 function safeHost(origin: string): string {
@@ -776,10 +874,36 @@ function methodNotAllowed(): Response {
 	return new Response('Method not allowed', { status: 405, headers: { Allow: 'GET, POST' } })
 }
 
+/**
+ * Headers for a 302 out of this surface. `no-store` belongs on every one of them, not just the
+ * password pages: these are the responses that carry the 30-day session cookie and, on the handoff
+ * path, the single-use code in the `Location` itself.
+ */
+function redirectHeaders(location: string): Headers {
+	return new Headers({ location, 'cache-control': 'no-store' })
+}
+
 /** A minimal error page for the browser-facing auth flow (the happy path always redirects). */
 function authError(message: string, status: number): Response {
 	return new Response(`Authentication error: ${message}`, {
 		status,
-		headers: { 'content-type': 'text/plain; charset=utf-8' },
+		headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
 	})
+}
+
+/** `authError` that also spends the OIDC flight — every terminal callback outcome goes through here. */
+function authErrorEndingFlight(message: string, status: number, secure: boolean): Response {
+	return new Response(`Authentication error: ${message}`, {
+		status,
+		headers: {
+			'content-type': 'text/plain; charset=utf-8',
+			'cache-control': 'no-store',
+			'set-cookie': clearCookie(OIDC_COOKIE, { path: '/auth', secure }),
+		},
+	})
+}
+
+/** Keep an untrusted value fit for a plain-text error body: printable ASCII, bounded. */
+function printable(value: string): string {
+	return value.replace(/[^\x20-\x7e]/g, '').slice(0, 120)
 }

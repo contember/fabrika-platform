@@ -1,5 +1,6 @@
 import { SESSION_COOKIE } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
+import { exportJWK, generateKeyPair } from 'jose'
 import { handleAuth } from '../auth/routes'
 import type { RequestContext } from '../env'
 import { OidcClient, type OidcIdentity, type OidcMetadata } from '../oidc'
@@ -144,6 +145,10 @@ describe('login → callback (end to end with a fake IdP)', () => {
 		)
 		expect(callback.status).toBe(302)
 		expect(callback.headers.get('location')).toBe(`${ISSUER}/back`)
+		// The response carrying a 30-day session cookie must never be cached; so must the 302 that
+		// started the detour. The password pages always said so and these did not.
+		expect(callback.headers.get('cache-control')).toBe('no-store')
+		expect(login.headers.get('cache-control')).toBe('no-store')
 
 		// A session cookie was issued and a session row created for the lazily-created principal.
 		const sessionToken = setCookieValue(callback, SESSION_COOKIE)
@@ -154,7 +159,12 @@ describe('login → callback (end to end with a fake IdP)', () => {
 		expect(session?.principal_id).toBe(principal?.id)
 	})
 
-	test('a mismatched state is rejected (CSRF guard)', async () => {
+	/** Whether a response spends the in-flight cookie (Max-Age=0), which every terminal outcome must. */
+	function clearsFlight(res: Response): boolean {
+		return res.headers.getSetCookie().some((c) => c.startsWith('px_oidc=') && c.includes('Max-Age=0'))
+	}
+
+	test('a mismatched state is rejected (CSRF guard) and the flight is spent', async () => {
 		const h = createHarness()
 		const services = h.makeServices({ issuer: ISSUER, oidc: new FakeOidc({ sub: 'g', email: 'a@b.cz' }) })
 		const login = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, ctx())
@@ -166,9 +176,11 @@ describe('login → callback (end to end with a fake IdP)', () => {
 			ctx(),
 		)
 		expect(res.status).toBe(400)
+		// The cookie carries a live PKCE verifier: leaving it behind kept it replayable for 600s.
+		expect(clearsFlight(res)).toBe(true)
 	})
 
-	test('a refused identity (unverified email → null) yields 401', async () => {
+	test('a refused identity (unverified email → null) yields 401 and spends the flight', async () => {
 		const h = createHarness()
 		const services = h.makeServices({ issuer: ISSUER, oidc: new FakeOidc(null) })
 		const login = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, ctx())
@@ -181,6 +193,48 @@ describe('login → callback (end to end with a fake IdP)', () => {
 			ctx(),
 		)
 		expect(res.status).toBe(401)
+		expect(clearsFlight(res)).toBe(true)
+	})
+
+	test('a flight nobody signed is refused, however well its state matches', async () => {
+		// The cookie used to be plain base64 JSON, and the only CSRF check was `flight.state === state`
+		// — an attacker-written cookie against an attacker-written query parameter. `Path=/auth` is no
+		// isolation either: a sibling host under a shared registrable domain can toss in a SECOND
+		// px_oidc that the browser sends first, so a planted flight bought the victim a session for
+		// the ATTACKER'S identity.
+		const h = createHarness()
+		const services = h.makeServices({ issuer: ISSUER, oidc: new FakeOidc({ sub: 'attacker', email: 'attacker@contember.com' }) })
+		const forged = btoa(JSON.stringify({ state: 'S', verifier: 'V', redirect: ISSUER })).replaceAll('=', '')
+
+		const res = await handleAuth(
+			new Request(`${ISSUER}/auth/callback?code=attacker-code&state=S`, { headers: { Cookie: `px_oidc=${forged}` } }),
+			services,
+			AUTH_ENV,
+			ctx(),
+		)
+		expect(res.status).toBe(400)
+		expect(setCookieValue(res, SESSION_COOKIE)).toBeNull()
+		expect(await h.repositories.principals.getUserByExternalId('attacker')).toBeNull()
+	})
+
+	test('a flight signed by a DIFFERENT installation is refused', async () => {
+		const h = createHarness()
+		const services = h.makeServices({ issuer: ISSUER, oidc: new FakeOidc({ sub: 'g-9', email: 'user@contember.com' }) })
+		// The flight is minted under another deployment's key and replayed against ours.
+		const { privateKey } = await generateKeyPair('ES256', { extractable: true })
+		const otherEnv = { FABRIKA_IAM_SIGNING_KEYS: JSON.stringify([await exportJWK(privateKey)]), ENVIRONMENT: 'local' }
+		const login = await handleAuth(new Request(`${ISSUER}/auth/login`), services, otherEnv, ctx())
+		const state = new URL(login.headers.get('location') ?? '').searchParams.get('state')
+
+		const res = await handleAuth(
+			new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, {
+				headers: { Cookie: `px_oidc=${setCookieValue(login, 'px_oidc')}` },
+			}),
+			services,
+			AUTH_ENV,
+			ctx(),
+		)
+		expect(res.status).toBe(400)
 	})
 })
 
@@ -247,10 +301,73 @@ describe('login admission (/auth/callback allowlist)', () => {
 		// The invite was claimed by the IdP sub.
 		expect((await h.repositories.principals.getUserByExternalId('inv-1'))?.email).toBe('invited@evil.example')
 	})
+
+	test('a mixed-case allowlist entry matches — it is a control, not decoration', async () => {
+		// Entra and Okta both preserve directory casing, so `emails.includes(email)` silently never
+		// matched an entry an operator typed the way their directory spells it.
+		const h = createHarness()
+		const services = h.makeServices({ issuer: ISSUER, human: { emailDomains: [], emails: ['VIP@Evil.Example'] } })
+		expect((await login(services, { sub: 'vip-2', email: 'vip@evil.example' })).status).toBe(302)
+	})
 })
 
-describe('GET /auth/logout', () => {
-	test('revokes the session and clears the cookie', async () => {
+// ── One mailbox rule (CORR-1) ────────────────────────────────────────────────
+//
+// The password path normalized and the OIDC path did not, so an ordinary invite — `Bob@Example.com`
+// typed by an admin, `bob@example.com` returned by the IdP — produced a SECOND principal. The invite
+// and every grant on it went dead, and password sign-in stayed ambiguous forever after.
+
+describe('email identity is the mailbox, not its spelling', () => {
+	async function oidcLogin(services: ReturnType<Harness['makeServices']>, identity: OidcIdentity): Promise<Response> {
+		const withOidc = { ...services, oidc: new FakeOidc(identity) }
+		const loginRes = await handleAuth(new Request(`${ISSUER}/auth/login`), withOidc, AUTH_ENV, ctx())
+		const state = new URL(loginRes.headers.get('location') ?? '').searchParams.get('state')
+		return handleAuth(
+			new Request(`${ISSUER}/auth/callback?code=abc&state=${state}`, {
+				headers: { Cookie: `px_oidc=${setCookieValue(loginRes, 'px_oidc')}` },
+			}),
+			withOidc,
+			AUTH_ENV,
+			ctx(),
+		)
+	}
+
+	test('an OIDC login differing only in case claims the invite instead of creating a second principal', async () => {
+		const h = createHarness()
+		const invited = await h.repositories.principals.inviteUser('Bob@Example.com')
+		expect(invited.email).toBe('bob@example.com')
+		expect(invited.label).toBe('Bob@Example.com')
+
+		const services = h.makeServices({ issuer: ISSUER })
+		expect((await oidcLogin(services, { sub: 'bob-1', email: 'bob@example.com' })).status).toBe(302)
+
+		const claimed = await h.repositories.principals.getUserByExternalId('bob-1')
+		expect(claimed?.id).toBe(invited.id)
+		expect((await h.repositories.principals.listPrincipals({ type: 'user' })).length).toBe(1)
+	})
+
+	test('an invited-but-disabled principal with different casing is refused, not re-created', async () => {
+		const h = createHarness()
+		const invited = await h.repositories.principals.inviteUser('bob@example.com')
+		await h.repositories.principals.disablePrincipal(invited.id)
+
+		const services = h.makeServices({ issuer: ISSUER, human: { emailDomains: ['*'], emails: [] } })
+		expect((await oidcLogin(services, { sub: 'bob-2', email: 'BOB@Example.com' })).status).toBe(403)
+		expect(await h.repositories.principals.getUserByExternalId('bob-2')).toBeNull()
+		expect((await h.repositories.principals.listPrincipals({ type: 'user' })).length).toBe(1)
+	})
+
+	test('the always-admit-a-known-principal fallback finds the invite whatever the IdP spells', async () => {
+		const h = createHarness()
+		// Not on the allowlist: admission depends entirely on the invited row being FOUND.
+		await h.repositories.principals.inviteUser('Invited@Evil.Example')
+		const services = h.makeServices({ issuer: ISSUER })
+		expect((await oidcLogin(services, { sub: 'inv-2', email: 'invited@evil.example' })).status).toBe(302)
+	})
+})
+
+describe('/auth/logout', () => {
+	async function liveLogin(): Promise<{ h: Harness; sessionToken: string }> {
 		const h = createHarness()
 		const principalId = seedUser(h.sqlite, { sub: 'g-7', email: 'l@o.cz' })
 		const sessionToken = 'live-session'
@@ -260,9 +377,20 @@ describe('GET /auth/logout', () => {
 			idpSub: 'g-7',
 			expiresAt: Math.floor(Date.now() / 1000) + 3600,
 		})
+		return { h, sessionToken }
+	}
 
+	function logout(sessionToken: string, init: RequestInit = {}): Request {
+		return new Request(`${ISSUER}/auth/logout`, {
+			...init,
+			headers: { Cookie: `${SESSION_COOKIE}=${sessionToken}`, ...(init.headers ?? {}) },
+		})
+	}
+
+	test('a same-origin POST revokes the session and clears the cookie', async () => {
+		const { h, sessionToken } = await liveLogin()
 		const res = await handleAuth(
-			new Request(`${ISSUER}/auth/logout`, { headers: { Cookie: `${SESSION_COOKIE}=${sessionToken}` } }),
+			logout(sessionToken, { method: 'POST', headers: { Origin: ISSUER, 'Sec-Fetch-Site': 'same-origin' } }),
 			h.makeServices({ issuer: ISSUER }),
 			AUTH_ENV,
 			ctx(),
@@ -270,7 +398,42 @@ describe('GET /auth/logout', () => {
 		expect(res.status).toBe(302)
 		// Cookie cleared (Max-Age=0) and the session no longer resolves.
 		expect(res.headers.getSetCookie().some((c) => c.startsWith(`${SESSION_COOKIE}=`) && c.includes('Max-Age=0'))).toBe(true)
+		expect(res.headers.get('cache-control')).toBe('no-store')
 		expect(await h.repositories.sessions.getActiveSessionByHash(await hashToken(sessionToken))).toBeNull()
+	})
+
+	test('a cross-site navigation cannot log anyone out', async () => {
+		// `px_session` is SameSite=Lax, so a top-level GET from any page carried it — and because every
+		// app session hangs off this one, that single request signed the human out everywhere.
+		const { h, sessionToken } = await liveLogin()
+		const services = h.makeServices({ issuer: ISSUER })
+
+		const navigation = await handleAuth(logout(sessionToken, { headers: { 'Sec-Fetch-Site': 'cross-site' } }), services, AUTH_ENV, ctx())
+		expect(navigation.status).toBe(200)
+		expect(navigation.headers.getSetCookie()).toEqual([])
+
+		const forgedPost = await handleAuth(
+			logout(sessionToken, { method: 'POST', headers: { Origin: 'https://evil.example', 'Sec-Fetch-Site': 'cross-site' } }),
+			services,
+			AUTH_ENV,
+			ctx(),
+		)
+		expect(forgedPost.status).toBe(403)
+		expect(await h.repositories.sessions.getActiveSessionByHash(await hashToken(sessionToken))).not.toBeNull()
+	})
+
+	test('GET renders the same-origin form that posts', async () => {
+		const { h, sessionToken } = await liveLogin()
+		const res = await handleAuth(logout(sessionToken), h.makeServices({ issuer: ISSUER }), AUTH_ENV, ctx())
+		expect(res.status).toBe(200)
+		expect(await res.text()).toContain('<form method="post" action="/auth/logout')
+		expect(await h.repositories.sessions.getActiveSessionByHash(await hashToken(sessionToken))).not.toBeNull()
+	})
+
+	test('any other method is a 405', async () => {
+		const { h, sessionToken } = await liveLogin()
+		const res = await handleAuth(logout(sessionToken, { method: 'DELETE' }), h.makeServices({ issuer: ISSUER }), AUTH_ENV, ctx())
+		expect(res.status).toBe(405)
 	})
 })
 
@@ -297,8 +460,16 @@ describe('cookie Secure flag behind a TLS-terminating balancer', () => {
 
 	test('an https request is Secure regardless of the issuer', async () => {
 		const h = createHarness()
-		const services = h.makeServices({ issuer: ISSUER })
-		const res = await handleAuth(new Request('https://iam.example.com/auth/logout'), services, AUTH_ENV, ctx())
+		const services = h.makeServices({ issuer: 'https://iam.example.com' })
+		const res = await handleAuth(
+			new Request('https://iam.example.com/auth/logout', {
+				method: 'POST',
+				headers: { Origin: 'https://iam.example.com', 'Sec-Fetch-Site': 'same-origin' },
+			}),
+			services,
+			AUTH_ENV,
+			ctx(),
+		)
 		expect(secureFlags(res)).toEqual([true])
 	})
 })

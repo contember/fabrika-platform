@@ -88,6 +88,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0002_provisioning_principal.sql' },
 			{ bundle: 'iam', name: '0003_password_auth.sql' },
 			{ bundle: 'iam', name: '0004_cross_host_sso.sql' },
+			{ bundle: 'iam', name: '0005_one_mailbox_rule.sql' },
 		])
 	})
 
@@ -222,6 +223,46 @@ describe.skipIf(!hasPostgres)('the Postgres schema — constraints', () => {
 		await db.principals.inviteUser('other@x.cz')
 		await db.principals.createUser('sub-shared', 'first@x.cz')
 		await expect(db.principals.createUser('sub-shared', 'second@x.cz')).rejects.toThrow()
+	})
+
+	// ── One mailbox rule (0005), pinned against the SQLite twin in password-db.test.ts ──────────
+	//
+	// This is the half that could not be discovered on D1: `LOWER()` folds ASCII only there and all of
+	// Unicode here, so the SAME input used to resolve to different principals per backend.
+
+	test('the mailbox is stored normalized on every write path, the spelling stays in the label', async () => {
+		await reset()
+		const created = await db.principals.createUser('sub-case', 'Alice@X.cz')
+		expect(created.email).toBe('alice@x.cz')
+		expect(created.label).toBe('Alice@X.cz')
+		expect((await db.principals.getUserByEmail('ALICE@x.CZ'))?.id).toBe(created.id)
+
+		const invited = await db.principals.inviteUser('Bob@X.cz', 'Bob@X.cz')
+		expect(invited.email).toBe('bob@x.cz')
+		// Any spelling of a taken mailbox is the same human, so a second principal is refused.
+		await expect(db.principals.createUser('sub-other', 'BOB@x.cz')).rejects.toThrow()
+	})
+
+	test('a non-ASCII mailbox resolves through the stored value, not the engine LOWER()', async () => {
+		await reset()
+		const principal = await db.principals.createUser('sub-jose', 'JOSÉ@x.cz')
+		expect(principal.email).toBe('josé@x.cz')
+		expect((await db.passwords.lookupActionUser('José@x.cz')).status).toBe('found')
+		await expect(db.principals.inviteUser('josé@x.cz')).rejects.toThrow()
+	})
+
+	test('every user principal carries its mailbox reservation, and it moves when the address does', async () => {
+		await reset()
+		const created = await db.principals.createUser('sub-claim', 'Claim@x.cz')
+		const claims = async (): Promise<{ normalized_email: string; principal_id: string }[]> =>
+			(await raw.prepare('SELECT normalized_email, principal_id FROM principal_email_claims ORDER BY normalized_email')
+				.all<{ normalized_email: string; principal_id: string }>()).results
+		expect(await claims()).toEqual([{ normalized_email: 'claim@x.cz', principal_id: created.id }])
+
+		// A stale claim would let the next invite of the new address create a second identity.
+		await db.principals.refreshUserLabel(created.id, 'Moved@x.cz')
+		expect(await claims()).toEqual([{ normalized_email: 'moved@x.cz', principal_id: created.id }])
+		await expect(db.principals.inviteUser('moved@x.cz')).rejects.toThrow()
 	})
 
 	test('roles.permissions accepts junk — JSON validity is NOT a DB constraint on either dialect', async () => {
@@ -496,7 +537,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 describe.skipIf(!hasPostgres)('password repository on Postgres', () => {
 	test('completes an action atomically and preserves OIDC sessions', async () => {
 		await reset()
-		const principal = await db.principals.inviteUserWithEmailClaim('person@example.com', 'person@example.com')
+		const principal = await db.principals.inviteUser('person@example.com')
 		await db.passwords.enableEnrollment(principal.id)
 		await db.passwords.issueActionToken({
 			principalId: principal.id,
@@ -538,7 +579,7 @@ describe.skipIf(!hasPostgres)('password repository on Postgres', () => {
 
 	test('serializes concurrent action issuance and applies the throttle UPSERT', async () => {
 		await reset()
-		const principal = await db.principals.inviteUserWithEmailClaim('race@example.com', 'race@example.com')
+		const principal = await db.principals.inviteUser('race@example.com')
 		await db.passwords.enableEnrollment(principal.id)
 		await Promise.all([
 			db.passwords.issueActionToken({

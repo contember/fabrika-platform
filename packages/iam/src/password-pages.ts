@@ -59,6 +59,21 @@ export function setPasswordPage(input: {
 	)
 }
 
+/**
+ * The same-origin confirmation that `GET /auth/logout` renders. Signing out is a state change, so it
+ * only happens on a POST that passes the origin check; this keeps the link usable and lives here
+ * because `htmlPage` (and its CSP) is what every browser-facing IAM page is built from.
+ */
+export function logoutPage(redirect: string): Response {
+	return htmlPage(
+		'Sign out',
+		`<h1>Sign out</h1><p>This ends your session on every application you are signed in to.</p>
+		<form method="post" action="/auth/logout?redirect=${encodeURIComponent(redirect)}">
+			<button type="submit">Sign out</button>
+		</form>`,
+	)
+}
+
 export function invalidActionPage(): Response {
 	return htmlPage(
 		'Link unavailable',
