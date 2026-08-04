@@ -1,7 +1,9 @@
 import { operationsEnvelopeUrl } from '@fabrika/operations-contract'
+import { getPage } from '@opice/harness'
 import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { BROWSER_PRINCIPAL_KEY } from '../browser-auth'
 
 const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..')
 const FIXTURES_FILE = resolve(REPO_ROOT, 'packages', 'local-stack', '.state', 'browser-fixtures.json')
@@ -55,6 +57,30 @@ export function readBrowserFixtures(): BrowserFixtures {
 	const value: unknown = JSON.parse(readFileSync(FIXTURES_FILE, 'utf8'))
 	if (!isRecord(value) || value['version'] !== 1) throw new Error('browser fixtures have an unsupported version')
 	return { visible: source(value['visible']), hidden: source(value['hidden']) }
+}
+
+export interface BrowserPrincipal {
+	id: string
+	label: string
+}
+
+/**
+ * Who the browser is signed in as.
+ *
+ * There is nothing on the wire to read this from: the browser holds an opaque `px_session`, the proxy
+ * mints the access token server-side and injects it as a request header, and the console publishes no
+ * `me` surface a non-admin role is allowed to call. So the auth provider that created the principal
+ * records it alongside the session it hands the context (`../browser-auth.ts`), and a scenario reads it
+ * back here. It is fixture data about the fixture, not a credential.
+ */
+export async function readBrowserPrincipal(): Promise<BrowserPrincipal> {
+	const raw = await getPage().evaluate((key: string) => window.localStorage.getItem(key), BROWSER_PRINCIPAL_KEY)
+	if (raw === null) throw new Error('the browser session carries no principal — is the scenario running with a role?')
+	const value: unknown = JSON.parse(raw)
+	if (!isRecord(value) || typeof value['id'] !== 'string' || typeof value['label'] !== 'string') {
+		throw new Error('the recorded browser principal is invalid')
+	}
+	return { id: value['id'], label: value['label'] }
 }
 
 /** Stable, selector-safe state key for one independently runnable scenario. */

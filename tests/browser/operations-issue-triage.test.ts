@@ -1,7 +1,7 @@
-import { browserTest, byLabel, byRole, el, expect, getContext, getPage, invariant, step } from '@opice/harness'
+import { browserTest, byLabel, byRole, el, expect, getPage, invariant, step } from '@opice/harness'
 import { randomUUID } from 'node:crypto'
 import type { Request } from 'playwright'
-import { sendErrorFixture } from './support/fixtures'
+import { type BrowserPrincipal, readBrowserPrincipal, sendErrorFixture } from './support/fixtures'
 
 const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
 const SCENARIO_NAME = 'A scoped operator records and persists issue triage'
@@ -10,7 +10,7 @@ const ISSUE_TITLE = `Browser triage ${RUN_ID}`
 const COMMENT_MARKER = `Browser triage comment ${RUN_ID}`
 
 let fixture: Awaited<ReturnType<typeof sendErrorFixture>> | null = null
-let browserPrincipal: { id: string; label: string } | null = null
+let browserPrincipal: BrowserPrincipal | null = null
 const operationsPostUrls: string[] = []
 const mutationKinds = new Set<string>()
 
@@ -40,19 +40,8 @@ function observeOperationsRequests(request: Request): void {
 	if (typeof kind === 'string') mutationKinds.add(kind)
 }
 
-async function currentBrowserPrincipal(): Promise<{ id: string; label: string }> {
-	if (browserPrincipal !== null) return browserPrincipal
-
-	await expect.poll(async () => (await getContext().cookies(BASE_URL)).some((cookie) => cookie.name === 'px_token')).toBe(true)
-	const token = (await getContext().cookies(BASE_URL)).find((cookie) => cookie.name === 'px_token')?.value
-	if (token === undefined) throw new Error('application token is missing')
-	const payloadPart = token.split('.')[1]
-	if (payloadPart === undefined) throw new Error('application token payload is missing')
-	const payload: unknown = JSON.parse(Buffer.from(payloadPart, 'base64url').toString('utf8'))
-	if (!isRecord(payload) || typeof payload['sub'] !== 'string' || typeof payload['label'] !== 'string') {
-		throw new Error('application token principal is invalid')
-	}
-	browserPrincipal = { id: payload['sub'], label: payload['label'] }
+async function currentBrowserPrincipal(): Promise<BrowserPrincipal> {
+	browserPrincipal ??= await readBrowserPrincipal()
 	return browserPrincipal
 }
 

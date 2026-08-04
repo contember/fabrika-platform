@@ -16,6 +16,7 @@ import { compileFabrikaManifest, zeropsArtifactCodec } from '@fabrika/provider-z
 import { createHmac, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { requireMachineKey } from './machine-key'
 import { COMPOSE_FILE, REPO_ROOT, STATE_DIR } from './prepare'
 
 const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
@@ -119,8 +120,13 @@ const requestJson = async (
 	return body
 }
 
-const controlRequest = (path: string, provisioningKey: string, options: { body?: unknown; method?: string } = {}): Promise<unknown> =>
-	requestJson(CONTROL_ORIGIN, `/api${path}`, { bearer: provisioningKey, ...options })
+/**
+ * A machine call to the control API, through the proxy. The bearer is an IAM-issued `px_` service key
+ * because that is the only machine credential the `service` gate can exchange — the provisioning key
+ * has no `credentials` row and the proxy refuses it before control sees it.
+ */
+const controlRequest = (path: string, machineKey: string, options: { body?: unknown; method?: string } = {}): Promise<unknown> =>
+	requestJson(CONTROL_ORIGIN, `/api${path}`, { bearer: machineKey, ...options })
 
 const compose = async (args: string[], expectSuccess = true, showOutput = true): Promise<number> => {
 	const process = Bun.spawn(
@@ -137,11 +143,17 @@ const compose = async (args: string[], expectSuccess = true, showOutput = true):
 const composeOutput = async (args: string[]): Promise<string> => {
 	const process = Bun.spawn(
 		['docker', 'compose', '--project-name', 'fabrika-local', '--file', COMPOSE_FILE, ...args],
-		{ cwd: REPO_ROOT, stdout: 'pipe', stderr: 'ignore', stdin: 'ignore' },
+		{ cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' },
 	)
-	const [output, exitCode] = await Promise.all([new Response(process.stdout).text(), process.exited])
+	const [output, failure, exitCode] = await Promise.all([
+		new Response(process.stdout).text(),
+		new Response(process.stderr).text(),
+		process.exited,
+	])
 	if (exitCode !== 0) {
-		throw new Error('docker compose inspection command failed')
+		// Name the service and what docker said. `args` itself is not echoed: it carries the SQL, and a
+		// bare "inspection command failed" costs a whole re-run to diagnose.
+		throw new Error(`docker compose ${args[0] ?? 'command'} ${args[2] ?? ''} failed (${exitCode}): ${failure.trim().split('\n')[0] ?? ''}`)
 	}
 	return output
 }
@@ -175,28 +187,28 @@ const poll = async <T>(description: string, read: () => Promise<T>, done: (value
 	throw new Error(`timed out waiting for ${description}`)
 }
 
-const ensureNamespace = async (provisioningKey: string): Promise<void> => {
-	const namespaces = await controlRequest('/namespaces', provisioningKey)
+const ensureNamespace = async (machineKey: string): Promise<void> => {
+	const namespaces = await controlRequest('/namespaces', machineKey)
 	const existing = requiredArray(namespaces, 'items').find((item) => property(item, 'id') === 'apps-prod')
 	if (property(existing, 'state') === 'ready') {
 		return
 	}
 	if (existing !== undefined) {
-		await controlRequest('/namespaces/apps-prod/reconcile', provisioningKey, { body: {} })
+		await controlRequest('/namespaces/apps-prod/reconcile', machineKey, { body: {} })
 		return
 	}
-	const plan = await controlRequest('/namespaces/plan', provisioningKey, {
+	const plan = await controlRequest('/namespaces/plan', machineKey, {
 		body: { id: 'apps-prod', env: 'prod', preset: 'cheap' },
 	})
 	const namespace = property(plan, 'namespace')
 	if (namespace === undefined) {
 		throw new Error('namespace plan is missing namespace')
 	}
-	await controlRequest('/namespaces', provisioningKey, { body: namespace })
+	await controlRequest('/namespaces', machineKey, { body: namespace })
 }
 
-const ensureNotesApp = async (provisioningKey: string): Promise<void> => {
-	const apps = await controlRequest('/apps', provisioningKey)
+const ensureNotesApp = async (machineKey: string): Promise<void> => {
+	const apps = await controlRequest('/apps', machineKey)
 	const manifest = compileFabrikaManifest(cheapNotesConfig, 'prod')
 	const target = { provider: 'zerops', version: 2, payload: {} }
 	const artifact = {
@@ -205,13 +217,13 @@ const ensureNotesApp = async (provisioningKey: string): Promise<void> => {
 		payload: zeropsArtifactCodec.encode(manifest),
 	}
 	if (requiredArray(apps, 'items').some((item) => property(item, 'id') === 'notes')) {
-		const environments = await controlRequest('/apps/notes/envs', provisioningKey)
+		const environments = await controlRequest('/apps/notes/envs', machineKey)
 		const existing = requiredArray(environments, 'items').find((item) => property(item, 'env') === 'prod')
 		if (
 			property(existing, 'domain') !== 'notes.fabrika.localhost'
 			|| property(existing, 'publicOrigin') !== 'http://notes.fabrika.localhost:18081'
 		) {
-			await controlRequest('/apps/notes/envs/prod', provisioningKey, {
+			await controlRequest('/apps/notes/envs/prod', machineKey, {
 				method: 'PUT',
 				body: {
 					domain: 'notes.fabrika.localhost',
@@ -225,7 +237,7 @@ const ensureNotesApp = async (provisioningKey: string): Promise<void> => {
 		}
 		return
 	}
-	await controlRequest('/register-app', provisioningKey, {
+	await controlRequest('/register-app', machineKey, {
 		body: {
 			id: 'notes',
 			repoUrl: 'https://github.com/contember/fabrika-platform.git',
@@ -269,13 +281,13 @@ const triggerNotesWebhook = async (webhookSecret: string): Promise<string> => {
 }
 
 const proveRestartReconciliation = async (
-	provisioningKey: string,
+	machineKey: string,
 	webhookSecret: string,
 ): Promise<{ runId: string; commitSha: string }> => {
 	const runId = await triggerNotesWebhook(webhookSecret)
 	await poll(
 		'a provider-owned running deploy',
-		() => controlRequest(`/runs/${runId}`, provisioningKey),
+		() => controlRequest(`/runs/${runId}`, machineKey),
 		(value) => property(value, 'status') === 'running' && typeof property(value, 'externalRunId') === 'string',
 	)
 	console.info(`Deploy ${runId} reached the external Zerops pipeline; killing control`)
@@ -284,10 +296,10 @@ const proveRestartReconciliation = async (
 	await compose(['up', '--detach', '--wait', 'control'])
 	await poll(
 		'startup reconciliation',
-		() => controlRequest(`/runs/${runId}`, provisioningKey),
+		() => controlRequest(`/runs/${runId}`, machineKey),
 		(value) => property(value, 'status') === 'succeeded',
 	)
-	const completed = await controlRequest(`/runs/${runId}`, provisioningKey)
+	const completed = await controlRequest(`/runs/${runId}`, machineKey)
 	const commitSha = requiredString(completed, 'commitSha')
 	if (commitSha !== SMOKE_COMMIT_SHA) {
 		throw new Error('completed deploy did not preserve the webhook commit')
@@ -433,11 +445,30 @@ const proveNamespaceIsolation = async (): Promise<void> => {
 	}
 }
 
+/**
+ * The public Operations hostname serves ingest and nothing else, and each refusal comes from the layer
+ * that owns it — which is what makes it a boundary rather than a coincidence:
+ *
+ *   - `/healthz` passes a `public` gate and is hidden by Operations itself on the public host;
+ *   - `/private/*` reconciliation is a `service` gate with no credential presented;
+ *   - `/api/*` operator routes are a `human` gate, so the proxy sends the browser to IAM and the
+ *     request never reaches Operations at all;
+ *   - ingest passes its `public` gate and is challenged by Operations' own envelope credential check.
+ */
 const proveOperationsPublicBoundary = async (): Promise<void> => {
-	for (const path of ['/healthz', '/private/catalog/reconcile', '/private/releases/reconcile', '/api/issues']) {
-		const response = await fetch(`${OPERATIONS_ORIGIN}${path}`)
-		if (response.status !== 403) {
-			throw new Error(`public Operations path ${path} returned ${response.status}, expected gateway denial`)
+	const expected = new Map<string, number>([
+		['/healthz', 404],
+		['/private/catalog/reconcile', 401],
+		['/private/releases/reconcile', 401],
+		['/api/issues', 302],
+	])
+	for (const [path, status] of expected) {
+		const response = await fetch(`${OPERATIONS_ORIGIN}${path}`, { redirect: 'manual' })
+		if (response.status !== status) {
+			throw new Error(`public Operations path ${path} returned ${response.status}, expected ${status}`)
+		}
+		if (status === 302 && !(response.headers.get('location') ?? '').startsWith(`${IAM_ORIGIN}/auth/login`)) {
+			throw new Error(`public Operations path ${path} was not sent to IAM`)
 		}
 	}
 	const ingest = await fetch(`${OPERATIONS_ORIGIN}/api/1/envelope/`, {
@@ -450,11 +481,36 @@ const proveOperationsPublicBoundary = async (): Promise<void> => {
 	}
 }
 
-const operationsOperatorRequest = async (path: string): Promise<unknown> =>
-	parseJson(
-		await composeOutput(['exec', '-T', 'operations', 'wget', '-qO-', `http://127.0.0.1:3000${path}`]),
-		'Operations operator API',
-	)
+/** The console is fronted by the proxy: an anonymous `/api/*` call never reaches control. */
+const proveControlIsGated = async (): Promise<void> => {
+	const response = await fetch(`${CONTROL_ORIGIN}/api/namespaces`, { headers: { accept: 'application/json' }, redirect: 'manual' })
+	if (response.status !== 302) {
+		throw new Error(`anonymous control /api/namespaces returned ${response.status}, expected a proxy login redirect`)
+	}
+	const location = new URL(response.headers.get('location') ?? '')
+	if (`${location.origin}${location.pathname}` !== `${IAM_ORIGIN}/auth/login`) {
+		throw new Error('anonymous control /api/namespaces was not sent to IAM')
+	}
+	if (location.searchParams.get('app') !== 'vozka' || location.searchParams.get('redirect') !== `${CONTROL_ORIGIN}/api/namespaces`) {
+		throw new Error('control login redirect does not name the app and the original URL')
+	}
+}
+
+/**
+ * Read the operator API the way the console does: through the proxy, through control's transport-only
+ * gateway, with a real credential. It used to reach into the container and call `127.0.0.1:3000`
+ * unauthenticated, which only worked while Operations synthesised a dev persona — a bypass that no
+ * longer exists and never existed off-local.
+ */
+const operationsRpc = async (machineKey: string, method: string, input: unknown): Promise<unknown> => {
+	const body = await requestJson(CONTROL_ORIGIN, '/operations/api/rpc', { bearer: machineKey, body: { method, input } })
+	const failure = property(body, 'error')
+	const result = property(body, 'result')
+	if (failure !== undefined || result === undefined) {
+		throw new Error(`Operations RPC ${method} was refused`)
+	}
+	return result
+}
 
 const matchingIssues = (value: unknown, marker: string): unknown[] =>
 	requiredArray(value, 'items').filter((issue) => {
@@ -462,10 +518,10 @@ const matchingIssues = (value: unknown, marker: string): unknown[] =>
 		return typeof title === 'string' && title.includes(marker)
 	})
 
-const pollMarkerIssue = async (marker: string, expectedCount: number): Promise<unknown> => {
+const pollMarkerIssue = async (machineKey: string, marker: string, expectedCount: number): Promise<unknown> => {
 	const response = await poll(
 		`Operations issue ${marker} count ${expectedCount}`,
-		() => operationsOperatorRequest(`/api/issues?query=${encodeURIComponent(marker)}`),
+		() => operationsRpc(machineKey, 'issues', { query: marker, limit: 100 }),
 		(value) => {
 			const issues = matchingIssues(value, marker)
 			return issues.length === 1 && property(issues[0], 'count') === expectedCount
@@ -586,6 +642,7 @@ const operationsQueueDepth = async (): Promise<number> => {
 }
 
 const proveOperationsIngestPersistence = async (
+	machineKey: string,
 	config: ActiveOperationsConfig,
 	release: string,
 ): Promise<void> => {
@@ -605,7 +662,7 @@ const proveOperationsIngestPersistence = async (
 		throw new Error(`Operations envelope route returned ${response.status}, expected 202`)
 	}
 
-	const firstIssue = await pollMarkerIssue(marker, 1)
+	const firstIssue = await pollMarkerIssue(machineKey, marker, 1)
 	const issueId = requiredString(firstIssue, 'id')
 	const source = property(firstIssue, 'source')
 	if (
@@ -635,7 +692,7 @@ const proveOperationsIngestPersistence = async (
 	await insertDuplicatePendingDeliveries(duplicateMessage)
 	await compose(['up', '--detach', '--wait', 'operations'])
 
-	const repeatedIssue = await pollMarkerIssue(marker, 2)
+	const repeatedIssue = await pollMarkerIssue(machineKey, marker, 2)
 	if (requiredString(repeatedIssue, 'id') !== issueId) {
 		throw new Error('duplicate delivery changed the Operations issue identity')
 	}
@@ -648,16 +705,17 @@ const main = async (): Promise<void> => {
 		'FABRIKA_IAM_PROVISIONING_KEY',
 		'PROPUSTKA_PROVISIONING_KEY',
 	)
+	const machineKey = requireMachineKey()
 	const webhookSecret = envValue(resolve(STATE_DIR, 'control.env'), 'GITHUB_WEBHOOK_SECRET')
 	await requestJson(CONTROL_ORIGIN, '/healthz')
 	await requestJson(IAM_ORIGIN, '/healthz')
 	await requestJson(NOTES_ORIGIN, '/healthz')
 	await proveOperationsPublicBoundary()
-	await requestJson(CONTROL_ORIGIN, '/api/namespaces')
-	await ensureNamespace(provisioningKey)
-	await ensureNotesApp(provisioningKey)
+	await proveControlIsGated()
+	await ensureNamespace(machineKey)
+	await ensureNotesApp(machineKey)
 	const activeConfig = await activeOperationsConfig()
-	const deployment = await proveRestartReconciliation(provisioningKey, webhookSecret)
+	const deployment = await proveRestartReconciliation(machineKey, webhookSecret)
 	const deployedConfig = await activeOperationsConfig()
 	if (
 		deployedConfig.dsn !== activeConfig.dsn
@@ -673,7 +731,7 @@ const main = async (): Promise<void> => {
 		commitSha: deployment.commitSha,
 	})
 	await proveManagedOperationsEnvironment(deployedConfig, release)
-	await proveOperationsIngestPersistence(deployedConfig, release)
+	await proveOperationsIngestPersistence(machineKey, deployedConfig, release)
 	await proveIamAndNotes(provisioningKey)
 	await proveNamespaceIsolation()
 	console.info(`Local stack smoke passed (run ${deployment.runId})`)

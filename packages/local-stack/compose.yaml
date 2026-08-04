@@ -15,7 +15,10 @@ services:
       - ./postgres/platform-init.sql:/docker-entrypoint-initdb.d/00-platform.sql:ro
     networks: [platform]
     healthcheck:
-      test: [CMD-SHELL, pg_isready -U postgres]
+      # Over TCP, and naming a database `platform-init.sql` creates. The entrypoint runs a temporary
+      # server on the unix socket while it applies that script, so a socket probe reports healthy
+      # before the databases exist and IAM starts against a server that is about to shut down.
+      test: [CMD-SHELL, pg_isready -U postgres -h 127.0.0.1 -d operations]
       interval: 2s
       timeout: 2s
       retries: 30
@@ -27,7 +30,8 @@ services:
       - apps-db:/var/lib/postgresql/data
     networks: [apps-prod]
     healthcheck:
-      test: [CMD-SHELL, pg_isready -U postgres -d notes]
+      # See platform-db: TCP only, so the initdb-time socket server cannot answer for it.
+      test: [CMD-SHELL, pg_isready -U postgres -h 127.0.0.1 -d notes]
       interval: 2s
       timeout: 2s
       retries: 30
@@ -85,7 +89,13 @@ services:
       PORT: "18080"
       ENVIRONMENT: local
       ISSUER: http://iam.fabrika.localhost:18080
+      # Every local host is a `*.fabrika.localhost` name on this one proxy, so the platform genuinely
+      # shares a parent domain with IAM — the case ADR-0021 keeps the shared session cookie for. The
+      # ADR-0021 handoff is what a Zerops installation uses instead, because `*.zerops.app` is a public
+      # suffix; it needs an app registered in IAM with return origins, which only a deploy does.
       SESSION_COOKIE_DOMAIN: fabrika.localhost
+      # IAM's own local bypass: `/auth/login` mints a real session row for the bootstrap admin instead
+      # of calling an external IdP. It is refused at USE the moment this is off.
       LOCAL_DEV_LOGIN: "true"
       FABRIKA_IAM_OIDC_ENABLED: "false"
       FABRIKA_IAM_PASSWORD_ENABLED: "true"
@@ -113,7 +123,10 @@ services:
       PORT: "3000"
       FABRIKA_CONTROL_ASSETS_DIR: packages/dashboard/dist
       ENVIRONMENT: local
-      DEV: "true"
+      # The proxy in front of this service enforces the real gates and injects a real IAM token, so
+      # control takes the same verification path it takes off-local. Never `true` here: the synthetic
+      # dev persona is a second authentication model and it would hide whatever the proxy got wrong.
+      DEV: ""
       FABRIKA_CONTROL_DOMAIN: http://control.fabrika.localhost:18080
       FABRIKA_CONTROL_BOOTSTRAP_ADMINS: "[]"
       FABRIKA_IAM_URL: http://iam.fabrika.localhost:18080
@@ -152,7 +165,8 @@ services:
     environment:
       PORT: "3000"
       ENVIRONMENT: local
-      DEV: "true"
+      # See control: verification only, off the token the proxy injected.
+      DEV: ""
       FABRIKA_OPERATIONS_PUBLIC_HOST: errors.fabrika.localhost
       FABRIKA_OPERATIONS_BLOB_BUCKET: operations-payloads
       FABRIKA_OPERATIONS_BLOB_ENDPOINT: http://minio:9000

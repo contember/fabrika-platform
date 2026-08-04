@@ -26,6 +26,21 @@ bun run test:browser  # the opice suites in tests/browser/
 
 ## Invariants
 
+- **The composition is secure by default and runs the REAL enforcement path.** The platform manifest
+  fronts control and Operations with the same gates their `fabrika.config.ts` declares, `DEV` is empty
+  for both, and no synthetic persona exists anywhere. The gate sets in `src/prepare.ts` are copies —
+  the production ones cannot be imported without dragging oblaka's raw TypeScript into this package's
+  strict program — and `__tests__/proxy-gates.test.ts` (deliberately outside `src/`, so `typecheck`
+  never follows that import) fails if a copy drifts. Never widen a local gate to make something pass:
+  a refusal here is a refusal in production.
+- **The session reaches the console as a cookie on the shared `fabrika.localhost` parent.** Every host
+  is a `*.fabrika.localhost` name on one proxy, which is the case ADR-0021 keeps the shared cookie for.
+  The one-time-code handoff a Zerops installation uses additionally needs the console registered in IAM
+  as an app with return origins, which only a deploy performs; local coverage of that path is still
+  missing.
+- **A script needs a `px_` service key, not the provisioning key.** `local:up` provisions one through
+  IAM and writes `.state/machine.env`; `mintFromKey` cannot resolve `FABRIKA_IAM_PROVISIONING_KEY`
+  (it has no `credentials` row), so the proxy refuses it before control sees the bearer.
 - **`.state/` holds generated local credentials and is disposable**, but only `local:reset` may
   remove it — it wipes the `fabrika-local` volumes in the same step. Deleting one without the other
   leaves services holding credentials the databases no longer accept.

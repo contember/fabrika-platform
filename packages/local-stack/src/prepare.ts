@@ -1,6 +1,7 @@
 import { notesGates } from '@fabrika/example-zerops-app/gates'
+import { OPERATIONS_RELEASE_RECONCILE_PATH, OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'
 import { buildCaddyConfig } from '@fabrika/proxy'
-import type { ProxyManifest } from '@fabrika/proxy-contract'
+import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-contract'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -14,7 +15,24 @@ const IAM_ISSUER = 'http://iam.fabrika.localhost:18080'
 
 const statePath = (name: string): string => resolve(STATE_DIR, name)
 
-const randomSecret = (): string => randomBytes(32).toString('base64url')
+/**
+ * A 256-bit secret in base64url, never starting with `-` or `_`.
+ *
+ * base64url may begin with either, and a credential that begins with `-` reads as a FLAG to anything
+ * that takes it on a command line no matter how it is quoted: a rolled MinIO password beginning with
+ * `-` made `mc alias set` print its usage and loop forever, and the whole composition came up without
+ * an object store. Rerolling costs nothing and removes a bug that only appears about one reset in
+ * sixteen.
+ */
+const randomSecret = (): string => {
+	for (;;) {
+		const value = randomBytes(32).toString('base64url')
+		if (!value.startsWith('-') && !value.startsWith('_')) {
+			return value
+		}
+	}
+}
+
 const randomBase64Key = (): string => randomBytes(32).toString('base64')
 
 const writeEnv = async (name: string, values: Record<string, string>): Promise<void> => {
@@ -97,12 +115,71 @@ const generateSecrets = async (): Promise<void> => {
 	])
 }
 
+type Gates = ProxyApp['gates']
+
+/**
+ * The gates the LOCAL platform proxy enforces.
+ *
+ * They are copies of the production sets — `CONTROL_PROXY_GATES` in `packages/control/fabrika.config.ts`
+ * and `OPERATIONS_PROXY_GATES` in `packages/operations/fabrika.config.ts` — because neither is
+ * importable from here: both live in a `fabrika.config.ts` that imports `@fabrika/provider-cloudflare`,
+ * and pulling oblaka's raw TypeScript into this package's strict program does not compile. Copies drift,
+ * so `__tests__/proxy-gates.test.ts` builds the real Cloudflare proxy Workers and fails if these stop
+ * being equal to the manifests those Workers bake in.
+ *
+ * The local stack is one proxy in front of three services, which is the Zerops platform shape; on
+ * Cloudflare each service has its own proxy Worker. That is the only structural difference, and it is
+ * why the Operations entry keeps its own app id here (a manifest may not name one app twice) where the
+ * Cloudflare Operations proxy reuses `vozka`.
+ */
+const CONTROL_GATES: Gates = {
+	rules: [
+		{ path: '/api/*', kind: 'service' },
+		{ path: '/api/*', kind: 'human' },
+	],
+}
+
+const CONTROL_PROXY_GATES: Gates = {
+	rules: [
+		{ path: '/healthz', kind: 'public' },
+		{ path: '/api/health', kind: 'public' },
+		{ path: '/webhooks/github', kind: 'public' },
+		{ path: '/iam/admin', kind: 'service' },
+		{ path: '/iam/admin', kind: 'human' },
+		{ path: '/iam/admin/*', kind: 'service' },
+		{ path: '/iam/admin/*', kind: 'human' },
+		{ path: '/operations/api', kind: 'service' },
+		{ path: '/operations/api', kind: 'human' },
+		{ path: '/operations/api/*', kind: 'service' },
+		{ path: '/operations/api/*', kind: 'human' },
+		...CONTROL_GATES.rules,
+		{ path: '/*', kind: 'human' },
+	],
+}
+
+const OPERATIONS_PROXY_GATES: Gates = {
+	rules: [
+		{ path: '/healthz', kind: 'public' },
+		{ path: '/api/*/envelope/', kind: 'public' },
+		{ path: OPERATIONS_SOURCE_MAP_UPLOAD_PATH, kind: 'public' },
+		{ path: '/private/catalog/reconcile', kind: 'service' },
+		{ path: OPERATIONS_RELEASE_RECONCILE_PATH, kind: 'service' },
+		{ path: '/api/*', kind: 'service' },
+		{ path: '/api/*', kind: 'human' },
+	],
+}
+
+/** The production gate sets this manifest reproduces, exported for the drift test. */
+export const localProductionGates = { vozka: CONTROL_PROXY_GATES, operations: OPERATIONS_PROXY_GATES }
+
 export const localPlatformProxyManifest = (): ProxyManifest => ({
 	apps: [
 		{
 			id: 'iam-local',
 			hosts: ['iam.fabrika.localhost'],
 			upstream: 'iam:18080',
+			// IAM authenticates itself: its login, JWKS and admin surfaces own their own authorization,
+			// and a gate in front of the login page is a login loop. This is the production shape too.
 			gates: { rules: [{ path: '/*', kind: 'public' }] },
 			scheme: 'http',
 		},
@@ -110,7 +187,7 @@ export const localPlatformProxyManifest = (): ProxyManifest => ({
 			id: 'vozka',
 			hosts: ['control.fabrika.localhost'],
 			upstream: 'control:3000',
-			gates: { rules: [{ path: '/*', kind: 'public' }] },
+			gates: CONTROL_PROXY_GATES,
 			scheme: 'http',
 		},
 		{
@@ -118,12 +195,7 @@ export const localPlatformProxyManifest = (): ProxyManifest => ({
 			hosts: ['errors.fabrika.localhost'],
 			upstream: 'operations:3000',
 			scheme: 'http',
-			gates: {
-				rules: [
-					{ path: '/api/*/envelope/', kind: 'public' },
-					{ path: '/api/artifacts/source-maps/', kind: 'public' },
-				],
-			},
+			gates: OPERATIONS_PROXY_GATES,
 		},
 	],
 })

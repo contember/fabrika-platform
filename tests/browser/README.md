@@ -4,6 +4,10 @@ These Opice scenarios drive the built unified console and the Zerops notes
 example through the real local composition. They use PostgreSQL, MinIO, IAM,
 Control, Operations, both auth proxies, and the same-origin Operations gateway.
 
+Every request is authorized by the proxy against the same gates a deployed
+installation uses, and each application verifies only the token the proxy
+injected. Nothing in the composition synthesises a principal.
+
 ## Run
 
 Install dependencies and Chromium once:
@@ -43,7 +47,12 @@ invalidates every IAM session. Always use `OPICE_AUTH_REFRESH=1` after a reset.
 - `admin` can use the unified console and both Operations sources.
 - `operations-notes` is scoped to the `browser-notes` application and can see
   only `Browser Notes / test`.
-- `anonymous` has no `px_session` cookie.
+- `anonymous` has no `px_session` cookie. The browser composition runs IAM with
+  `LOCAL_DEV_LOGIN` off, so an anonymous browser stays anonymous and the proxy's
+  refusal is observable; the developer stack (`local:up`) keeps the bypass on.
+- A scenario learns which principal it is signed in as with
+  `readBrowserPrincipal()` from `support/fixtures.ts`. There is no token in the
+  browser to read it from — the proxy injects that server-side.
 - Mutating scenarios create uniquely marked issues. They must not assert global
   table counts or rely on scenario order.
 - `Hidden sibling / secret` is the negative access-control witness. Never expose

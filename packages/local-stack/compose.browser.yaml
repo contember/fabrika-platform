@@ -1,11 +1,13 @@
+# The browser stack runs the same services as `compose.yaml` with the same authentication path. It
+# differs in exactly one thing: IAM's local login bypass is off, because a suite that cannot present
+# an unauthenticated browser cannot prove the proxy refuses one. Sessions come from real `sessions`
+# rows seeded by `packages/iam/src/node/browser-identity.ts`, so nothing else needs the bypass.
 services:
-  control:
+  iam:
     environment:
-      DEV: ""
+      LOCAL_DEV_LOGIN: ""
 
   operations:
-    environment:
-      DEV: ""
     extra_hosts:
       - "errors.fabrika.localhost:127.0.0.1"
 

@@ -22,7 +22,8 @@ bun run local:down
 ```
 
 `local:up` generates stable local credentials, builds the unified console, starts the
-composition, runs database migrations, and waits for health checks.
+composition, runs database migrations, waits for health checks, and provisions the
+machine API key described below.
 
 `local:smoke` is intentionally disruptive. It:
 
@@ -36,8 +37,10 @@ composition, runs database migrations, and waits for health checks.
    configuration, and deploy-scoped release values on the app service;
 7. checks the reconciled IAM schema, public and authenticated proxy routes, and
    a real notes write to PostgreSQL;
-8. verifies that the public Operations hostname hides health, catalog, and
-   operator routes and rejects an ingest envelope without a source credential;
+8. verifies that an anonymous console `/api/*` call is refused by the PROXY, and
+   that the public Operations hostname hides health, refuses catalog and release
+   reconciliation without a credential, sends an operator route to IAM, and
+   rejects an ingest envelope without a source credential;
 9. sends a credentialed Sentry envelope and observes one source-scoped issue
    after asynchronous Postgres queue consumption;
 10. stops Operations, persists duplicate queued deliveries, restarts the real
@@ -65,13 +68,56 @@ This command removes only the `fabrika-local` Compose volumes and
 | Operations public ingest | `http://errors.fabrika.localhost:18080`  |
 | Notes example app        | `http://notes.fabrika.localhost:18081`   |
 
-The local IAM login creates a real `admin@local.test` session without contacting
-an external OIDC provider. It is enabled only by the local composition. All local
-browser origins share the `fabrika.localhost` parent so the SSO cookie reaches the
-console and example applications.
+## Signing in
 
-The generated credentials and proxy manifests live under the ignored
-`packages/local-stack/.state/` directory. They remain stable across
+The proxy is the only front door locally, exactly as it is in a deployed
+installation. It fronts each host with the gates that host's `fabrika.config.ts`
+declares — `CONTROL_PROXY_GATES` for the console, `OPERATIONS_PROXY_GATES` for the
+public Operations host — and IAM is `public` because it authenticates itself.
+Nothing reaches an application until a gate passes, and the application only ever
+verifies the token the proxy injected (`DEV` is empty for control and Operations,
+so no synthetic persona exists).
+
+Opening the console therefore runs the real round trip:
+
+1. the proxy matches a `human` gate and answers `302` to
+   `iam.fabrika.localhost:18080/auth/login?app=vozka&redirect=<original URL>`;
+2. IAM authenticates. `LOCAL_DEV_LOGIN=true` makes that step non-interactive: IAM
+   creates a **real** session row for the `admin@local.test` bootstrap admin
+   instead of calling an external IdP. It is IAM's own mechanism and is refused at
+   use the moment the flag is off;
+3. the browser returns to the original URL carrying `px_session`, and the proxy
+   exchanges it for a per-app token on every request.
+
+The session travels as a cookie on the shared `fabrika.localhost` parent
+(`SESSION_COOKIE_DOMAIN`). Every local host is a `*.fabrika.localhost` name served
+by one proxy, so this is the case [ADR-0021](../decisions/0021-exchange-token-session-handoff.md)
+keeps the shared cookie for. A Zerops installation cannot use it — `*.zerops.app`
+is a public suffix — and takes the one-time-code handoff instead; exercising that
+path locally additionally needs the console registered in IAM as an app with
+return origins, which today only a deploy does.
+
+The **browser** composition (`browser:up`, `test:browser`) runs the same services
+with `LOCAL_DEV_LOGIN` off. Its scenarios present sessions seeded straight into
+IAM, and a suite that cannot show an unauthenticated browser cannot prove the
+proxy refuses one.
+
+## Calling the API from a script
+
+`/api/*` admits either a logged-in human or a `px_` **service key**, so a script
+needs one. `local:up` provisions one through IAM's admin surface and writes it to
+`packages/local-stack/.state/machine.env` as `FABRIKA_LOCAL_MACHINE_KEY`; the smoke
+test uses it. `FABRIKA_IAM_PROVISIONING_KEY` does not work here: IAM resolves it
+for its own `/admin/*` surface and it has no credential row, so the proxy refuses
+it before control sees the bearer.
+
+```bash
+KEY=$(grep FABRIKA_LOCAL_MACHINE_KEY packages/local-stack/.state/machine.env | cut -d= -f2-)
+curl -H "Authorization: Bearer $KEY" http://control.fabrika.localhost:18080/api/namespaces
+```
+
+The generated credentials, the machine key and the proxy manifests live under the
+ignored `packages/local-stack/.state/` directory. They remain stable across
 `local:down`/`local:up` and rotate on `local:reset`. Do not copy them into
 tracked files.
 
@@ -88,13 +134,13 @@ The composition runs these real components:
 - the proxy authorization service and Caddy in shared network namespaces;
 - separate private `platform` and `apps-prod` networks.
 
-The unified console uses its built-in local admin persona, so Delivery, Access,
-and Operations open without an external OIDC provider. Access requests still
-cross the real control-to-IAM gateway. Operations requests cross the
-transport-only control gateway to the private Operations operator API. Machine
-bootstrap, app API keys, access-token minting, JWKS verification, schema
-reconciliation, Operations catalog/release projection, and managed app
-environment assembly use the real services.
+The unified console is reached through the proxy and authenticated by IAM; there
+is no synthetic persona anywhere in the composition. Access requests cross the
+real control-to-IAM gateway. Operations requests cross the transport-only control
+gateway to the private Operations operator API. Machine bootstrap, app API keys,
+access-token minting, JWKS verification, schema reconciliation, Operations
+catalog/release projection, and managed app environment assembly use the real
+services.
 
 Notes can reach the public IAM address through the narrow `iam-public` network
 to fetch JWKS. It cannot resolve or reach the private control, platform
