@@ -66,7 +66,7 @@ cannot overwrite an admin's `origin='custom'` policy; `sessions` is pruned; no a
 can lose its gate silently.
 _Touch points:_ `packages/iam/src/admin/**`, `db.ts`, `tokens.ts`, `issue.ts`, `cron.ts`, `secret.ts`,
 `rpc.ts`, both migration sets, `packages/iam-contract/src/index.ts`.
-_Folds in:_ SEC-2, SEC-3, SEC-7, SEC-8, SEC-11, SEC-13, SEC-22, SEC-27, SEC-28, SEC-29, SEC-30, CORR-4, CORR-5, CORR-8, CORR-9, CORR-10, COMP-4, COMP-6, ARCH-1, TEST-7, TEST-8, TEST-10, TEST-12.
+_Folds in:_ SEC-2, SEC-3, SEC-7, SEC-8, SEC-11, SEC-13, SEC-22, SEC-27, SEC-28, SEC-29, CORR-4, CORR-5, CORR-8, CORR-9, CORR-10, COMP-4, COMP-6, ARCH-1, TEST-7, TEST-8, TEST-10, TEST-12 — plus the **OIDC boot asymmetry** carried in from the Zerops handoff: missing OIDC configuration is fatal at boot on the Bun path and silently tolerated on Workers. Unify on fatal.
 
 **WU-D — Secure by default in the local stack** · small · after A
 The local platform manifest must carry the same gates the production graph does. Fact 3 above.
@@ -88,36 +88,72 @@ Cloudflare least-privilege gap (ARCH-2)
 
 ## Out of scope
 
-- **The Zerops bring-up track** — backlog 41 (`putServiceEnv` signature change), 47 (private git
-  source), 05 (production topology), and the custom-domain decision. It needs the live account and
-  answers the user has not given; it is a separate sprint.
+- **The Zerops bring-up track** — backlog 41 (`putServiceEnv` signature change; it needs a `clientId`
+  that `ZeropsApiOptions` does not carry, so it is a signature change and not a reordering), 47
+  (private git source), 05 (production topology and Operations ingest end to end). It needs the live
+  account; it is a separate sprint. The custom-domain question is answered — stay on `.zerops.app` —
+  so it no longer blocks that sprint's start.
 - **backlog 49** (per-client rate limits on public IAM) — needs a composition-specific trusted client
   coordinate, which is a design question this sprint does not settle.
 - `packages/iam-ui`, `packages/dashboard` — excluded from the review by the user.
 
 ## Decisions taken (from the review canvas, 2026-08-04)
 
-| Question                      | Answer                                                                                     |
-| ----------------------------- | ------------------------------------------------------------------------------------------ |
-| backlog 18                    | Ship it now; do not repair `session.ts`, delete it                                         |
-| SEC-6 empty registry          | Narrow the opt-out: 400 when the registry is empty AND `safeRedirect` refuses the redirect |
-| SEC-12 empty origins array    | Reject — it is a caller error                                                              |
-| SEC-2 existing credentials    | Hard cutover; `app IS NULL` stops working, keys are reissued                               |
-| SEC-7 self-bound key lifetime | `expiresAt` becomes required                                                               |
-| SEC-13 `pruneSessions`        | Wire into the cron, prune at expiry                                                        |
-| SEC-21 `FABRIKA_IAM_KEY`      | Required; the proxy refuses to boot without it                                             |
-| SEC-14 flight cookie          | Sign it; refuse an unverified flight                                                       |
-| SEC-20 `__Host-`              | Prefix only; duplicate-aware cookie reading not needed                                     |
-| CORR-4 batch surface          | Keep batching, scrub errors in the middleware independently of status                      |
-| CORR-1 email backfill         | Fail loud — the migration stops and an operator resolves the collision                     |
-| DOC-6 dead spec pointer       | Drop the pointers, fold the surviving sentence inline                                      |
+| Question                      | Answer                                                                                       |
+| ----------------------------- | -------------------------------------------------------------------------------------------- |
+| backlog 18                    | Ship it now; do not repair `session.ts`, delete it                                           |
+| SEC-6 empty registry          | Narrow the opt-out: 400 when the registry is empty AND `safeRedirect` refuses the redirect   |
+| SEC-12 empty origins array    | Reject — it is a caller error                                                                |
+| SEC-2 existing credentials    | Hard cutover; `app IS NULL` stops working, keys are reissued                                 |
+| SEC-7 self-bound key lifetime | `expiresAt` becomes required                                                                 |
+| SEC-13 `pruneSessions`        | Wire into the cron, prune at expiry                                                          |
+| SEC-21 `FABRIKA_IAM_KEY`      | Required; the proxy refuses to boot without it                                               |
+| SEC-14 flight cookie          | Sign it; refuse an unverified flight                                                         |
+| SEC-20 `__Host-`              | Prefix only; duplicate-aware cookie reading not needed                                       |
+| CORR-4 batch surface          | Keep batching, scrub errors in the middleware independently of status                        |
+| CORR-1 email backfill         | Fail loud — the migration stops and an operator resolves the collision                       |
+| DOC-6 dead spec pointer       | Drop the pointers, fold the surviving sentence inline                                        |
+| ARCH-2 Cloudflare split       | Write an amending ADR admitting it is a typing convention there; do not split the entrypoint |
+| CORR-10 cross-app grants      | Validate against the UNION of every registered app's catalog; fix the seed                   |
+| OIDC boot asymmetry           | Unify on fatal — refusing to boot beats booting misconfigured                                |
+| Custom domain (Zerops)        | Stay on `.zerops.app`; ADR-0021 removed SSO's dependency on a shared cookie                  |
 
-## Still open — file, do not decide
+### ARCH-2 — the reasoning, so it is not re-derived
 
-- **ARCH-2** — on Cloudflare `exchangeAuthCode` is reachable by every holder of the `IAM` binding, so
-  ADR-0021's least-privilege split does not hold there. Separate entrypoint, or an amending ADR?
-- **CORR-10** — is "no cross-app grant narrower than `*`" intended?
-- The two open decisions carried in from the Zerops bring-up handoff: the custom domain, and the
-  OIDC boot-fatal asymmetry between the Bun and Workers paths.
+On Zerops the split is real: `IamRpc` is reached over `/rpc/*` with `FABRIKA_IAM_RPC_KEY`, the mint
+surface over `/auth/mint/*` with `FABRIKA_IAM_PROXY_KEY`. A holder of the RPC key genuinely cannot
+redeem. On Cloudflare `exchangeAuthCode` is a method on the `WorkerEntrypoint`, so every holder of
+the `IAM` service binding can call it and no key is involved at all.
+
+To profit from that an attacker needs a Worker holding the `IAM` binding — already a first-party,
+already-trusted component — **and** a live, unconsumed code inside its two-minute window. What
+actually stops replay is the code's own properties: single-use via a conditional `UPDATE`, hash-only
+storage, and the `(session, app, return URL)` binding. So this is a defence-in-depth degradation,
+not an exploitable hole, and splitting the entrypoint buys little for real churn.
+
+The genuine defect is documentary: `docs/reference/cross-host-sso.md` reads as though the split holds
+on both providers. Fix the doc, and record the asymmetry in an ADR that amends 0021.
+
+### CORR-10 — the reasoning
+
+Two sub-issues. `seed.dev.sql:74` is simply a bug: the seeded "super-admin" grant resolves to zero
+permissions. Fix it.
+
+The design half: `admin/handlers.ts:585-601` validates an inline grant's action patterns against the
+app's action catalog, and a cross-app grant (`app = null`) has no single catalog, so every pattern
+except `*` is refused as "unknown action pattern". That is an accident of implementation — nothing
+documents it — and it inverts least privilege: an operator who wants to grant `deploy.read`
+everywhere has to grant everything instead. Validate cross-app patterns against the **union** of
+every registered app's catalog.
+
+Note in the code what this check is and is not: `permits()` matches patterns at request time and
+never pre-expands them, so an app registered later is covered by an existing grant. The union check
+therefore catches typos; it is not a security boundary. Say so in the rejection message too, which
+today is a bare "unknown action pattern: X".
+
+## Still open
+
+Nothing blocking. The Zerops bring-up track (backlog 41 / 47 / 05) is deferred to its own sprint —
+see Out of scope.
 
 ## Run log
