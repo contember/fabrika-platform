@@ -84,7 +84,10 @@ const WORKSPACE_DEPLOY_FILES = ['package.json', 'bun.lock', 'node_modules', 'pac
  * advisory lock and transaction pooling does not preserve session state across statements),
  * `ENVIRONMENT`, `ISSUER` (this service's public origin; it is the `iss` of every minted token AND the
  * OIDC redirect base, so it must match the domain routed to the proxy in front of it),
- * `SESSION_COOKIE_DOMAIN`, `HUMAN_EMAIL_DOMAINS`, `HUMAN_EMAILS`, `IAM_BOOTSTRAP_ADMINS`,
+ * `SESSION_COOKIE_DOMAIN`, `FABRIKA_IAM_ADMIN_ORIGINS` (a JSON array holding the CONSOLE's public
+ * origin — the control plane's domain, which IAM cannot infer; an unset or empty value means no
+ * browser may write to `/admin/*`, which closes the console's Access plane),
+ * `HUMAN_EMAIL_DOMAINS`, `HUMAN_EMAILS`, `IAM_BOOTSTRAP_ADMINS`,
  * `FABRIKA_IAM_OIDC_ENABLED`, `FABRIKA_IAM_PASSWORD_ENABLED`, `FABRIKA_EMAIL_PROVIDER`, and
  * `FABRIKA_EMAIL_FROM` when email delivery is enabled. OIDC-enabled installations also set
  * `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_SCOPES`, `OIDC_REQUIRE_VERIFIED_EMAIL`.

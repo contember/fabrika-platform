@@ -160,17 +160,16 @@ describe('controlApp', () => {
 		expect(unknown.status).toBe(403)
 	})
 
-	test('admits only the configured provisioning bearer as a machine bootstrap admin', async () => {
+	test('the IAM provisioning key is not a control-plane credential', async () => {
+		// The hatch is DELETED, not disabled. It could never work behind the proxy: `/api/*` is gated
+		// `service`, the proxy resolves a `px_` bearer by asking IAM to mint from it, and the provisioning
+		// key has no `credentials` row — so the proxy answered `invalid_key` before control saw anything.
+		// Machine access is an IAM-issued service key, which is a real credential the proxy can exchange.
 		const key = 'px_provision_secret_key_value'
-		const fetch = application({ FABRIKA_IAM_PROVISIONING_KEY: key })
-		const admitted = await fetch(
+		const fetch = application({})
+		const bearer = await fetch(
 			new Request('https://control.test/api/apps', {
 				headers: { Authorization: `Bearer ${key}`, 'X-Dev-Principal': 'missing@vozka.test' },
-			}),
-		)
-		const wrong = await fetch(
-			new Request('https://control.test/api/apps', {
-				headers: { Authorization: 'Bearer px_wrong_key', 'X-Dev-Principal': 'missing@vozka.test' },
 			}),
 		)
 		const absent = await fetch(
@@ -179,8 +178,7 @@ describe('controlApp', () => {
 			}),
 		)
 
-		expect(admitted.status).toBe(200)
-		expect(wrong.status).toBe(403)
+		expect(bearer.status).toBe(403)
 		expect(absent.status).toBe(403)
 	})
 })

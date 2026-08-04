@@ -13,6 +13,8 @@ class RecordingGateway implements HttpService {
 	}
 }
 
+const CONSOLE = 'https://console.test'
+
 describe('Operations console gateway', () => {
 	test('strips the console prefix and preserves Operations-owned credentials', async () => {
 		const gateway = new RecordingGateway()
@@ -32,7 +34,7 @@ describe('Operations console gateway', () => {
 		const gateway = new RecordingGateway()
 		const missingOrigin = await forwardOperationsApi(
 			new Request('https://console.test/operations/api/issues/one', { method: 'PUT', body: '{}' }),
-			{ gateway },
+			{ gateway, publicOrigin: CONSOLE },
 		)
 		const crossOrigin = await forwardOperationsApi(
 			new Request('https://console.test/operations/api/issues/one', {
@@ -40,7 +42,7 @@ describe('Operations console gateway', () => {
 				headers: { origin: 'https://attacker.test' },
 				body: '{}',
 			}),
-			{ gateway },
+			{ gateway, publicOrigin: CONSOLE },
 		)
 		const sameOrigin = await forwardOperationsApi(
 			new Request('https://console.test/operations/api/issues/one', {
@@ -48,13 +50,40 @@ describe('Operations console gateway', () => {
 				headers: { origin: 'https://console.test' },
 				body: '{}',
 			}),
-			{ gateway },
+			{ gateway, publicOrigin: CONSOLE },
 		)
 
 		expect(missingOrigin.status).toBe(403)
 		expect(crossOrigin.status).toBe(403)
 		expect(sameOrigin.status).toBe(200)
 		expect(gateway.requests).toHaveLength(1)
+	})
+
+	test('the origin compared against is CONFIGURED, never the reconstructed request URL', async () => {
+		// Behind a TLS-terminating balancer the process is reached over plain HTTP, so `request.url`
+		// reads `http://console.test` while the browser truthfully sent `https://console.test`. The old
+		// comparison refused every genuine operator write in exactly that shape.
+		const gateway = new RecordingGateway()
+		const behindBalancer = await forwardOperationsApi(
+			new Request('http://console.test/operations/api/issues/one', {
+				method: 'PUT',
+				headers: { origin: CONSOLE },
+				body: '{}',
+			}),
+			{ gateway, publicOrigin: CONSOLE },
+		)
+		expect(behindBalancer.status).toBe(200)
+
+		// With nothing configured the guard fails closed rather than trusting the socket.
+		const unconfigured = await forwardOperationsApi(
+			new Request('https://console.test/operations/api/issues/one', {
+				method: 'PUT',
+				headers: { origin: CONSOLE },
+				body: '{}',
+			}),
+			{ gateway },
+		)
+		expect(unconfigured.status).toBe(403)
 	})
 
 	test('never transports direct ingest or artifact paths', async () => {
@@ -101,7 +130,7 @@ describe('Operations console gateway', () => {
 				headers: { origin: 'https://console.test' },
 				body: JSON.stringify({ method: 'issues', input: {} }),
 			}),
-			{ gateway: unauthorized, publicIamUrl: 'https://iam.test' },
+			{ gateway: unauthorized, publicIamUrl: 'https://iam.test', publicOrigin: CONSOLE },
 		)
 
 		expect(response.status).toBe(401)

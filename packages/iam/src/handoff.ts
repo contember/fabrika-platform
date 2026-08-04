@@ -19,6 +19,7 @@
 import { AUTH_CODE_TTL_SECONDS, type ExchangeAuthCodeInput, type ExchangeAuthCodeResult } from '@fabrika/auth-core'
 import { principalStatus } from './db'
 import { randomToken } from './oidc'
+import { normalizeOrigin } from './origin'
 import { hashToken } from './secret'
 import type { Services } from './services'
 
@@ -28,24 +29,7 @@ export interface IssuedAuthCode {
 	expiresAt: number
 }
 
-/**
- * Canonical origin: lower-cased scheme and host, explicit port only when non-default, no path. Both
- * sides of the comparison go through here, so `https://App.example.com:443/` and
- * `https://app.example.com` are the same origin and neither side has to remember which spelling was
- * registered. Returns null for anything that is not an absolute http(s) URL.
- */
-export function normalizeOrigin(value: string): string | null {
-	let url: URL
-	try {
-		url = new URL(value)
-	} catch {
-		return null
-	}
-	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-		return null
-	}
-	return url.origin.toLowerCase()
-}
+export { normalizeOrigin }
 
 /**
  * Check a proposed return URL against the app's registered origins and return it normalized, or null.

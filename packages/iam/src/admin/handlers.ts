@@ -9,14 +9,17 @@ import type {
 	AuthLogDto,
 	CreateGrantRequest,
 	CreatePolicyInput,
+	CursorList,
 	GrantDto,
 	InviteRequest,
 	IssuedShareLinkResponse,
 	IssueShareLinkRequest,
+	ListApiKeysInput,
 	ListAuditInput,
 	ListAuthLogInput,
 	ListPrincipalsInput,
 	ListRolesInput,
+	ListShareLinksInput,
 	MeDto,
 	OkResponse,
 	PasswordActionDelivery,
@@ -27,6 +30,7 @@ import type {
 	ProvisionApiKeyResponse,
 	ReturnOriginsDto,
 	RoleDto,
+	RotateApiKeyInput,
 	RotateApiKeyResponse,
 	SetReturnOriginsRequest,
 	ShareLinkListItem,
@@ -172,11 +176,24 @@ async function toGrantDto(row: GrantRow, roleCache: RoleKnownCache): Promise<Gra
 }
 
 /** Map a list of grant rows to DTOs sharing one role-known cache (one query per app). */
-async function toGrantDtos(rows: GrantRow[], services: Services): Promise<GrantDto[]> {
-	const cache = new RoleKnownCache(services)
+async function toGrantDtos(rows: GrantRow[], services: Services, cache: RoleKnownCache = new RoleKnownCache(services)): Promise<GrantDto[]> {
 	const out: GrantDto[] = []
 	for (const row of rows) {
 		out.push(await toGrantDto(row, cache))
+	}
+	return out
+}
+
+/** Group rows by a key, preserving order — how a single page-wide query becomes per-row lists. */
+function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[]> {
+	const out = new Map<string, T[]>()
+	for (const row of rows) {
+		const bucket = out.get(key(row))
+		if (bucket === undefined) {
+			out.set(key(row), [row])
+		} else {
+			bucket.push(row)
+		}
 	}
 	return out
 }
@@ -235,6 +252,7 @@ function toShareLinkListItem(row: CredentialRow, grants: CredentialGrantRow[]): 
 	return {
 		id: row.id,
 		label: row.label,
+		app: row.app,
 		issuedBy: row.issued_by,
 		expiresAt: row.expires_at,
 		revokedAt: row.revoked_at,
@@ -287,20 +305,40 @@ export async function listPrincipals(c: AdminContext): Promise<Response> {
 	const typeParam = c.url.searchParams.get('type')
 	const statusParam = c.url.searchParams.get('status')
 	if (statusParam !== null && statusParam !== 'invited' && statusParam !== 'active' && statusParam !== 'disabled') {
-		return json({ items: [] })
+		return json({ items: [], nextCursor: null })
 	}
 	const q = c.url.searchParams.get('q') ?? undefined
+	const before = c.url.searchParams.get('before') ?? undefined
 	const type = typeParam === 'user' || typeParam === 'service' ? typeParam : undefined
 	const status = statusParam === 'invited' || statusParam === 'active' || statusParam === 'disabled' ? statusParam : undefined
-	return json(await adminUseCases.listPrincipals(c, { type, status, ...(q ? { q } : {}) }))
+	return json(
+		await adminUseCases.listPrincipals(c, {
+			type,
+			status,
+			...(q ? { q } : {}),
+			...(before ? { before } : {}),
+			limit: parseLimit(c.url),
+		}),
+	)
 }
 
-async function listPrincipalsUseCase(c: AdminContext, input: ListPrincipalsInput): Promise<{ items: PrincipalListItem[] }> {
-	const rows = await c.services.repositories.principals.listPrincipals({ type: input.type, ...(input.q ? { q: input.q } : {}) })
-	const items = rows
-		.map(toPrincipalListItem)
-		.filter((item) => input.status === undefined || item.status === input.status)
-	return { items }
+async function listPrincipalsUseCase(c: AdminContext, input: ListPrincipalsInput): Promise<CursorList<PrincipalListItem>> {
+	const limit = normalizeLimit(input.limit)
+	const rows = await c.services.repositories.principals.listPrincipals({
+		...(input.type !== undefined ? { type: input.type } : {}),
+		...(input.status !== undefined ? { status: input.status } : {}),
+		...(input.q ? { q: input.q } : {}),
+		...(input.before ? { before: input.before } : {}),
+		limit,
+	})
+	const items = rows.map(toPrincipalListItem)
+	return { items, nextCursor: cursorOf(items, limit, (item) => item.id) }
+}
+
+/** The `before` value for the next page, or null when this page is the last one. */
+function cursorOf<T>(items: readonly T[], limit: number, id: (item: T) => string): string | null {
+	const last = items.at(-1)
+	return items.length === limit && last !== undefined ? id(last) : null
 }
 
 export async function getPrincipal(c: AdminContext, id: string): Promise<Response> {
@@ -348,21 +386,21 @@ async function getPrincipalUseCase(c: AdminContext, input: { id: string }): Prom
 }
 
 /**
- * Effective permissions for the admin detail view. For services and for the
- * explicit-grant/bootstrap portion of users this is exact; group-derived
- * permissions are only resolvable with the user's own live cookie, so they are
- * shown via the grants list and the auth log, not synthesised here.
+ * Effective permissions for the admin detail view, resolved FOR IAM'S OWN APP — the same question
+ * `authenticate()` answers, asked about `propustka`.
  *
- * The principal's active grants span all apps; we resolve over the ADMIN's own
- * verified app for role lookup (the cross-app `admin` built-in still resolves at any
- * app, and an app-scoped role grant for a different app simply resolves to nothing in
- * this view — exact effective resolution is per-app, done at authenticate() time).
+ * It used to expand every app's grants against IAM's role table: a `vozka` grant naming role
+ * `deploy-operator` was looked up among propustka's roles, so it either resolved to nothing or, on a
+ * key collision, to the wrong permissions (CORR-8). The grant fetch is now app-filtered exactly as
+ * `getActiveGrantsForApp` filters on the real authz path, so what this shows is a true answer to a
+ * narrow question rather than an approximate answer to a broad one. Other apps' grants remain visible
+ * in the grants list below, which is where a per-app view belongs.
  */
 async function effectivePermissionsForAdmin(c: AdminContext, row: PrincipalRow): Promise<PermissionEntry[]> {
-	const grants = await c.services.repositories.grants.getActiveGrants(row.id)
+	const app: string | null = c.app
+	const grants = await c.services.repositories.grants.getActiveGrantsForApp(row.id, app)
 	const isBootstrapAdmin = row.type === 'user' && row.email !== null
 		&& c.services.config.bootstrapAdmins.has(normalizeEmailIdentity(row.email))
-	const app: string | null = c.app
 	const appRoles: Record<string, RoleDef> = {}
 	for (const dbRole of await c.services.repositories.appSchema.listRoles(app)) {
 		appRoles[dbRole.role_key] = dbRoleToDef(dbRole)
@@ -569,9 +607,8 @@ function parseScope(body: unknown): { ok: true; scopeType: string | null; scopeV
 /**
  * Validate the role-or-inline choice for a grant/key against the app: EXACTLY one of
  * `roleKey` / `permissions`. A `roleKey` must be a known role for the app (built-in
- * `admin` OR a `roles` row). Inline `permissions` must each be a pattern allowed by
- * the app's action catalog (`app_actions`). Returns a normalized result or an error
- * message for a 400.
+ * `admin` OR a `roles` row). Inline `permissions` must each be a pattern the relevant
+ * action catalog knows. Returns a normalized result or an error message for a 400.
  */
 async function parseRoleOrInline(
 	c: AdminContext,
@@ -593,13 +630,43 @@ async function parseRoleOrInline(
 	if (permissions === undefined || permissions.length === 0) {
 		return { ok: false, message: 'permissions must be a non-empty array of action patterns' }
 	}
-	const catalog = app === null ? [] : await c.services.repositories.appSchema.listActionCatalog(app)
+	const catalog = await actionCatalog(c, app)
 	for (const pattern of permissions) {
 		if (!isActionAllowed(pattern, catalog)) {
-			return { ok: false, message: `unknown action pattern: ${pattern}` }
+			return {
+				ok: false,
+				message: app === null
+					? `no registered app declares the action pattern '${pattern}'. This check catches typos, it is not a security boundary — `
+						+ 'a cross-app grant is matched by pattern at request time, so it also covers an app registered later.'
+					: `unknown action pattern: ${pattern}`,
+			}
 		}
 	}
 	return { ok: true, roleKey: null, permissions }
+}
+
+/**
+ * The catalog an inline pattern is validated against: one app's actions, or — for a CROSS-APP grant —
+ * the union of every registered app's catalog.
+ *
+ * A cross-app grant has no single catalog, and the previous code substituted an empty one, which made
+ * `isActionAllowed` refuse everything except `*`. That inverted least privilege: an operator who
+ * wanted `deploy.read` everywhere had to grant everything instead (CORR-10). The union is the right
+ * comparison and it is honest about what it is — a TYPO CHECK, not a boundary. `permits()` matches
+ * patterns at request time and never pre-expands them, so an app registered tomorrow is covered by a
+ * cross-app grant written today whatever this function said.
+ */
+async function actionCatalog(c: AdminContext, app: string | null): Promise<string[]> {
+	if (app !== null) {
+		return c.services.repositories.appSchema.listActionCatalog(app)
+	}
+	const catalog = new Set<string>()
+	for (const known of await knownApps(c)) {
+		for (const action of await c.services.repositories.appSchema.listActionCatalog(known)) {
+			catalog.add(action)
+		}
+	}
+	return [...catalog]
 }
 
 export async function createGrant(c: AdminContext): Promise<Response> {
@@ -816,6 +883,24 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 		return error(400, parsed.message)
 	}
 	const { schema } = parsed
+	// A role key an admin already owns as a custom policy is a CONFLICT, not something to overwrite.
+	// The rule was one-directional: `createPolicyUseCase` 409s on an existing key so an admin can never
+	// clobber an app role, but a deploy silently flipped a custom policy to origin='app' — after which
+	// update and delete both 404 and the policy is unmanageable (SEC-3). Refused here, loudly, so the
+	// deploy fails with the collision named rather than quietly rewriting somebody's policy.
+	const collisions: string[] = []
+	for (const row of await c.services.repositories.appSchema.listRoles(app)) {
+		if (row.origin === 'custom' && Object.hasOwn(schema.roles, row.role_key)) {
+			collisions.push(row.role_key)
+		}
+	}
+	if (collisions.length > 0) {
+		return error(
+			409,
+			`the app declares role ${collisions.map((key) => `'${key}'`).join(', ')}, which already exists as an admin-composed custom policy. `
+				+ 'Rename the declared role or delete the policy; a deploy never overwrites one.',
+		)
+	}
 	await c.services.repositories.appSchema.reconcileAppSchema({
 		app,
 		scopes: schema.scopes.map((s) => ({ scopeType: s.type, label: s.label ?? null })),
@@ -896,6 +981,39 @@ async function setReturnOriginsUseCase(c: AdminContext, input: SetReturnOriginsR
 		metadata: { origins },
 	})
 	return { app: input.app, origins }
+}
+
+/**
+ * Read an app's registered return origins. The registry was writable but never readable, so an
+ * operator could only find out what a cross-host sign-in would accept by attempting one (COMP-4).
+ */
+async function getReturnOriginsUseCase(c: AdminContext, input: AppInput): Promise<ReturnOriginsDto> {
+	if (!(await knownApps(c)).includes(input.app)) {
+		return fail(404, 'unknown app')
+	}
+	return { app: input.app, origins: await c.services.repositories.handoff.listReturnOrigins(input.app) }
+}
+
+/**
+ * Un-register every return origin for an app — an OPERATION, not an empty array.
+ *
+ * `setReturnOrigins` refuses an empty set (SEC-12) because an empty set is what an app that never
+ * registered looks like, and reaching that state by accident strands every cross-host sign-in. But
+ * refusing it also left an operator with no way back out through the API at all: clearing was
+ * possible only by deleting rows. So clearing is its own named call, which cannot be arrived at by a
+ * caller that meant to send one origin and sent none.
+ */
+async function clearReturnOriginsUseCase(c: AdminContext, input: AppInput): Promise<ReturnOriginsDto> {
+	if (!(await knownApps(c)).includes(input.app)) {
+		return fail(404, 'unknown app')
+	}
+	await c.services.repositories.handoff.setReturnOrigins(input.app, [])
+	await adminAudit(c, {
+		action: 'iam.app.return-origins.clear',
+		resourceType: 'app',
+		resourceId: input.app,
+	})
+	return { app: input.app, origins: [] }
 }
 
 async function getAppSchemaUseCase(c: AdminContext, input: AppInput): Promise<AppSchemaDto> {
@@ -1080,28 +1198,35 @@ async function deletePolicyUseCase(c: AdminContext, input: { app: string; key: s
 // ── API keys (native service credentials) ─────────────────────────────────────
 
 export async function listApiKeys(c: AdminContext): Promise<Response> {
-	return json(await adminUseCases.listApiKeys(c))
+	const before = c.url.searchParams.get('before') ?? undefined
+	return json(await adminUseCases.listApiKeys(c, { ...(before ? { before } : {}), limit: parseLimit(c.url) }))
 }
 
-async function listApiKeysUseCase(c: AdminContext): Promise<{ items: ApiKeyDto[] }> {
-	const principals = await c.services.repositories.principals.listPrincipals({ type: 'service' })
+/**
+ * One page of service principals with their grants. TWO queries per page, whatever the page holds:
+ * the roster read, and one grants read for the page's ids. It used to be 1+N over an unbounded
+ * roster, with no pagination at all (SEC-22).
+ */
+async function listApiKeysUseCase(c: AdminContext, input: ListApiKeysInput): Promise<CursorList<ApiKeyDto>> {
+	const limit = normalizeLimit(input.limit)
+	const principals = await c.services.repositories.principals.listPrincipals({
+		type: 'service',
+		...(input.before ? { before: input.before } : {}),
+		limit,
+	})
+	const grants = groupBy(await c.services.repositories.grants.listGrantsFor(principals.map((p) => p.id)), (row) => row.principal_id)
 	const cache = new RoleKnownCache(c.services)
 	const items: ApiKeyDto[] = []
 	for (const principal of principals) {
-		const grants = await c.services.repositories.grants.listGrants(principal.id)
-		const grantDtos: GrantDto[] = []
-		for (const g of grants) {
-			grantDtos.push(await toGrantDto(g, cache))
-		}
 		items.push({
 			principalId: principal.id,
 			label: principal.label,
 			status: principalStatus(principal),
-			grants: grantDtos,
+			grants: await toGrantDtos(grants.get(principal.id) ?? [], c.services, cache),
 			createdAt: principal.created_at,
 		})
 	}
-	return { items }
+	return { items, nextCursor: cursorOf(items, limit, (item) => item.principalId) }
 }
 
 /**
@@ -1164,6 +1289,10 @@ async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionApiKeyReq
 		tokenHash: await hashToken(apiKey),
 		label,
 		principalId: principal.id,
+		// The credential is bound to the SAME app as the grant it was provisioned for. `null` here is
+		// the operator's explicit "every app" choice, which is legal for a principal-bound credential
+		// because its permissions still resolve per app through that cross-app grant (SEC-2).
+		app,
 		issuedBy: c.admin.id,
 		expiresAt,
 		grants: [],
@@ -1225,29 +1354,54 @@ async function revokeApiKeyUseCase(c: AdminContext, input: { principalId: string
  * credentials and mint a fresh one, returned ONCE. Effective immediately.
  */
 export async function rotateApiKey(c: AdminContext, principalId: string): Promise<Response> {
-	return json(await adminUseCases.rotateApiKey(c, { principalId }))
+	const body = c.request.headers.get('content-type') === null ? null : await readJson(c.request)
+	const expiresAt = body === null ? undefined : numberField(body, 'expiresAt')
+	return json(await adminUseCases.rotateApiKey(c, { principalId, ...(expiresAt !== undefined ? { expiresAt } : {}) }))
 }
 
-async function rotateApiKeyUseCase(c: AdminContext, input: { principalId: string }): Promise<RotateApiKeyResponse> {
+/**
+ * Rotate: same principal, same grants, new secret.
+ *
+ * Two things the old implementation got wrong. It DROPPED the credential's expiry — a key provisioned
+ * to die in 30 days came back immortal, and an operator rotating a key on schedule was quietly
+ * removing its bound (CORR-5); the replacement carries the old expiry forward unless the caller states
+ * a new one, and a stated one must be in the future exactly as provisioning requires. And it rotated a
+ * DISABLED principal's key, handing out a working secret for an account somebody had just revoked —
+ * the same guard `passwordUser` already applies.
+ */
+async function rotateApiKeyUseCase(c: AdminContext, input: RotateApiKeyInput): Promise<RotateApiKeyResponse> {
 	const { principalId } = input
 	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
 	if (!principal || principal.type !== 'service') {
 		return fail(404, 'service principal not found')
 	}
+	if (principal.disabled_at !== null) {
+		return fail(409, 'principal is disabled')
+	}
+	const nowSeconds = Math.floor(Date.now() / 1000)
+	if (input.expiresAt !== undefined && input.expiresAt !== null && input.expiresAt <= nowSeconds) {
+		return fail(400, 'expiresAt must be in the future')
+	}
+	// The credential being replaced decides what the replacement inherits: its expiry and its app
+	// binding. `listCredentialsForPrincipal` is newest-first, so this is the live one.
+	const existing = (await c.services.repositories.credentials.listCredentialsForPrincipal(principalId)).find((row) => row.revoked_at === null)
+	const expiresAt = input.expiresAt !== undefined ? input.expiresAt : existing?.expires_at ?? null
 	await c.services.repositories.credentials.revokeCredentialsForPrincipal(principalId)
 	const apiKey = `${API_KEY_PREFIX}${generateToken()}`
 	await c.services.repositories.credentials.createCredential({
 		tokenHash: await hashToken(apiKey),
 		label: principal.label,
 		principalId,
+		app: existing?.app ?? null,
 		issuedBy: c.admin.id,
+		expiresAt,
 		grants: [],
 	})
 	await adminAudit(c, {
 		action: 'iam.apikey.rotate',
 		resourceType: 'principal',
 		resourceId: principalId,
-		metadata: { label: principal.label },
+		metadata: { label: principal.label, expiresAt },
 	})
 	const response: RotateApiKeyResponse = { principalId, apiKey }
 	return response
@@ -1256,17 +1410,36 @@ async function rotateApiKeyUseCase(c: AdminContext, input: { principalId: string
 // ── Share links (anonymous credentials) ─────────────────────────────────────────
 
 export async function listShareLinks(c: AdminContext): Promise<Response> {
-	return json(await adminUseCases.listShareLinks(c))
+	const p = c.url.searchParams
+	return json(
+		await adminUseCases.listShareLinks(c, {
+			...(p.get('app') ? { app: p.get('app') ?? undefined } : {}),
+			...(p.get('includeRevoked') === 'true' ? { includeRevoked: true } : {}),
+			...(p.get('before') ? { before: p.get('before') ?? undefined } : {}),
+			limit: parseLimit(c.url),
+		}),
+	)
 }
 
-async function listShareLinksUseCase(c: AdminContext): Promise<{ items: ShareLinkListItem[] }> {
-	const creds = await c.services.repositories.credentials.listAnonymousCredentials()
-	const items: ShareLinkListItem[] = []
-	for (const cred of creds) {
-		const grants = await c.services.repositories.credentials.getCredentialGrants(cred.id)
-		items.push(toShareLinkListItem(cred, grants))
-	}
-	return { items }
+/**
+ * One page of share links. Two queries per page (the credentials read plus one grants read for the
+ * page's ids), revoked links hidden unless asked for, and `app` finally filterable now that an
+ * anonymous credential carries one (SEC-2, SEC-22).
+ */
+async function listShareLinksUseCase(c: AdminContext, input: ListShareLinksInput): Promise<CursorList<ShareLinkListItem>> {
+	const limit = normalizeLimit(input.limit)
+	const creds = await c.services.repositories.credentials.listAnonymousCredentials({
+		...(input.app !== undefined ? { app: input.app } : {}),
+		...(input.includeRevoked === true ? { includeRevoked: true } : {}),
+		...(input.before ? { before: input.before } : {}),
+		limit,
+	})
+	const grants = groupBy(
+		await c.services.repositories.credentials.getCredentialGrantsFor(creds.map((cred) => cred.id)),
+		(row) => row.credential_id,
+	)
+	const items = creds.map((cred) => toShareLinkListItem(cred, grants.get(cred.id) ?? []))
+	return { items, nextCursor: cursorOf(items, limit, (item) => item.id) }
 }
 
 export async function createShareLink(c: AdminContext): Promise<Response> {
@@ -1278,17 +1451,25 @@ export async function createShareLink(c: AdminContext): Promise<Response> {
 	return json(await adminUseCases.createShareLink(c, parseIssueShareLinkRequest(body)), { status: 201 })
 }
 
+/**
+ * Issue an anonymous share link FOR ONE APP.
+ *
+ * `app` is required and is not IAM's own. A share link's grants are frozen at issue and spent
+ * wherever the holder presents them, so the app has to be stated: it is what `resolveCredential`
+ * checks at every mint, and without it an admin of one app could mint authority good at every other
+ * app behind the proxy (SEC-2). Delegation still runs against the admin's permissions — resolved for
+ * that app, which is the same question the credential will later ask.
+ */
 async function createShareLinkUseCase(c: AdminContext, input: IssueShareLinkRequest): Promise<IssuedShareLinkResponse> {
 	const grants = parseShareLinkGrants(input.grants)
 	if (grants === undefined || grants.length === 0) return fail(400, 'grants required (each: { action, scope? })')
-	const { label, expiresAt } = input
+	const { app, label, expiresAt } = input
+	if (!(await knownApps(c)).includes(app)) return fail(404, 'unknown app')
 
-	// Issue an anonymous credential with the ADMIN'S OWN forwarded credentials as issuer — the
-	// delegation rule applies to admins like everyone else (admins typically hold `*`, so it passes).
 	// The issuer is the resolved admin (`c.admin`) passed directly to `issueKey`, so `credential` is
 	// unused here (the RPC entrypoint resolves it; this admin path already has the caller).
 	const issueInput: IssueKeyInput = {
-		app: c.app,
+		app,
 		credential: null,
 		requestId: c.requestId,
 		permissions: grants,
@@ -1296,7 +1477,10 @@ async function createShareLinkUseCase(c: AdminContext, input: IssueShareLinkRequ
 		...(expiresAt !== undefined ? { expiresAt } : {}),
 	}
 
-	const { result, auditLabel } = await issueKey(c.services, issueInput, c.admin, c.app)
+	// An admin holding the cross-app `admin` role keeps `*` at every app; an app-scoped admin only
+	// delegates what they hold THERE, which is the whole point of naming the app.
+	const issuer = { id: c.admin.id, permissions: await effectiveIssuerPermissions(c, app) }
+	const { result, auditLabel } = await issueKey(c.services, issueInput, issuer, app)
 	if (!result.ok) {
 		// Admin already gated; the only failure here is the delegation rule.
 		return fail(403, `not allowed: ${result.reason}`)
@@ -1305,10 +1489,31 @@ async function createShareLinkUseCase(c: AdminContext, input: IssueShareLinkRequ
 		action: 'iam.credential.create',
 		resourceType: 'credential',
 		resourceId: result.id,
-		metadata: { label: auditLabel ?? null, grants },
+		metadata: { app, label: auditLabel ?? null, grants },
 	})
 	const issued: IssuedShareLinkResponse = { id: result.id, token: result.token }
 	return issued
+}
+
+/**
+ * The admin's permissions AT THE TARGET APP, for the delegation check. `c.admin.permissions` were
+ * resolved against IAM's own app; delegating into another app has to be measured there.
+ */
+async function effectiveIssuerPermissions(c: AdminContext, app: string): Promise<PermissionEntry[]> {
+	const principal = await c.services.repositories.principals.getPrincipalById(c.admin.id)
+	if (!principal) {
+		// A synthetic caller (the provisioning key / the local-dev bypass) has no row; it already
+		// carries its own resolved permission set, which is global by construction.
+		return c.admin.permissions
+	}
+	const grants = await c.services.repositories.grants.getActiveGrantsForApp(principal.id, app)
+	const isBootstrapAdmin = principal.type === 'user' && principal.email !== null
+		&& c.services.config.bootstrapAdmins.has(normalizeEmailIdentity(principal.email))
+	const appRoles: Record<string, RoleDef> = {}
+	for (const dbRole of await c.services.repositories.appSchema.listRoles(app)) {
+		appRoles[dbRole.role_key] = dbRoleToDef(dbRole)
+	}
+	return computePermissions({ app, grants, isBootstrapAdmin }, makeRoleSource(appRoles))
 }
 
 /**
@@ -1509,9 +1714,12 @@ function recordWithoutPrincipal(body: unknown): Record<string, unknown> {
 function parseIssueShareLinkRequest(body: unknown): IssueShareLinkRequest {
 	const grants = parseShareLinkGrants(prop(body, 'grants'))
 	if (grants === undefined) return fail(400, 'grants required (each: { action, scope? })')
+	const app = stringField(body, 'app')
+	if (app === undefined || app.trim() === '') return fail(400, 'app required')
 	const label = stringField(body, 'label')
 	const expiresAt = numberField(body, 'expiresAt')
 	return {
+		app,
 		grants,
 		...(label !== undefined ? { label } : {}),
 		...(expiresAt !== undefined ? { expiresAt } : {}),
@@ -1533,7 +1741,9 @@ export const adminUseCases = {
 	listApps: listAppsUseCase,
 	listRoles: listRolesUseCase,
 	getAppSchema: getAppSchemaUseCase,
+	getReturnOrigins: getReturnOriginsUseCase,
 	setReturnOrigins: setReturnOriginsUseCase,
+	clearReturnOrigins: clearReturnOriginsUseCase,
 	listPolicies: listPoliciesUseCase,
 	createPolicy: createPolicyUseCase,
 	updatePolicy: updatePolicyUseCase,

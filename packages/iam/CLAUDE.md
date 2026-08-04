@@ -49,6 +49,25 @@ fails if that stops being true — it is the guard, not documentation of one.
   Its `state` cannot authenticate itself — whoever writes the cookie writes `state` too — and
   `Path=/auth` does not stop a sibling host under a shared domain from tossing in a second one. Every
   terminal outcome of `/auth/callback`, success or failure, clears it.
+- **WHICH BROWSER ORIGINS MAY DRIVE `/admin/*` IS A REGISTRY, NOT AN INFERENCE.** `ADMIN_ORIGINS`
+  (deploy var `FABRIKA_IAM_ADMIN_ORIGINS`) holds the CONSOLE's public origin — the control plane's
+  domain, which IAM has no way to derive. It used to compare `Origin` against its own issuer, which a
+  console request never carries, and the gateway rewrote the header to compensate; every deployment
+  whose private RPC address differed from its public issuer answered 403 to the whole Access plane.
+  Empty means no browser may write, which is fail-closed. A caller presenting ONLY a bearer is exempt
+  (a browser never attaches one by itself), which is what keeps CI and the first-operator bootstrap
+  working. The method list in `rejectCrossOrigin` is an ALLOWLIST of safe methods, so a method
+  invented later is checked by default.
+- **A `px_` CREDENTIAL IS BOUND TO AN APP.** `credentials.app` is what `resolveCredential` checks at
+  every mint. It is REQUIRED on an anonymous credential (a share link): its inline grants are frozen
+  at issue and were delegation-checked against one app, so without the binding authority granted at
+  one app was spendable installation-wide. A principal-bound credential may be cross-app (`NULL`) —
+  it carries no frozen authority and its permissions resolve per app through `grants`. An app
+  mismatch is reported as `invalid_key`, never as a distinct reason. Migration `0012`/`0006` is a
+  hard cutover: pre-existing share links have no app and must be reissued.
+- **A self-bound key (`issueKey` in `principalId` mode) MUST state an expiry.** It carries the
+  issuer's live permissions with no inline downscope, so without one a 300-second passthrough token
+  could mint a permanent installation-wide credential from itself.
 - **A mutating auth route requires `sameOrigin`, `/auth/logout` included.** `px_session` is
   `SameSite=Lax`, so a cross-site top-level GET carried it; GET renders a confirm form, POST acts.
   Every 302 out of `src/auth/**` carries `cache-control: no-store` — those are the responses holding
@@ -64,6 +83,15 @@ fails if that stops being true — it is the guard, not documentation of one.
   binding's unreachability gives on Workers, and does not substitute for the per-caller
   authorization the management RPCs already do. Never reuse `FABRIKA_IAM_PROVISIONING_KEY` for it —
   that key resolves to a synthetic global admin.
+- **A DEPLOY NEVER OVERWRITES AN ADMIN'S POLICY.** `putAppSchema` 409s when a declared role key
+  already exists as an `origin='custom'` row — symmetric with `createPolicyUseCase`, which 409s on an
+  existing app role. `reconcileAppSchema`'s upsert carries `WHERE roles.origin = 'app'` as the second
+  lock. Without both, a deploy flipped a custom policy to `origin='app'`, after which update and
+  delete require `origin='custom'` and 404, and the policy became unmanageable.
+- **A reconcile CLEARS THEN WRITES, so no statement's width depends on the catalog.** D1 allows 100
+  bound parameters per query and the old `NOT IN (…)` prune spent one per kept value; an app with a
+  hundred actions could not reconcile at all. The batch is one transaction, so there is no window in
+  which the app has no vocabulary.
 - **Permission resolution is fail-closed and pure.** `computePermissions` (`src/resolve.ts`) takes
   already-fetched rows, so it is unit-testable without a database. Unparseable inline grant JSON and
   an unresolvable role key both contribute ZERO permissions. Wildcards stay as patterns — `permits()`
@@ -79,7 +107,14 @@ fails if that stops being true — it is the guard, not documentation of one.
   `Database.exec()` swallows a step error and runs on, so that test applies the file one statement at
   a time, the way `wrangler d1 migrations apply` does.
 - **Never log a secret, a key, or an error object that may quote a connection string.** Log which
-  surfaces are enabled, not what enabled them.
+  surfaces are enabled, not what enabled them. `src/log.ts` (`logError`/`logWarn`) is the ONE place a
+  caught value becomes a log line, and it emits only an `Error`'s own message — a driver error
+  carries the DSN it failed on and a fetch error carries the URL. Never pass a caught value to
+  `console.*` directly.
+- **OIDC configuration is FATAL when incomplete, on both engines.** `buildOidc` requires
+  `OIDC_ISSUER`/`OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET` whenever the method is enabled. The Bun path
+  always did; the Worker substituted empty strings and served a method that could only fail at the
+  redirect. Refusing to boot beats booting misconfigured — so a local `wrangler dev` is password-only.
 
 ## Patterns
 
@@ -88,5 +123,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   so this runs about once per TTL per app — not per request.
 - Human authentication methods compose (ADR-0020); password support is `src/password-*.ts` and its
   transient rows are pruned by the same cron as `auth_log`.
+- Every admin list is a PAGE: `before` (a keyset cursor over the UUIDv7 id) + `limit`, one query for
+  the page and one for its fan-out. `principalStatus` is expressed in SQL rather than filtered after
+  the read, because filtering afterwards made `limit` mean nothing. `cron.test.ts` asserts a row count
+  per table, so adding or dropping a table the sweep owns is a visible test change.
 - Background work goes through the `WaitUntil` port, so a Worker's `scheduled` writes settle and a
   process logs a failure instead of dying on an unhandled rejection.

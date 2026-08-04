@@ -109,6 +109,13 @@ export interface CredentialRow {
 	label: string | null
 	/** Bound principal (live perms), or NULL for an anonymous (frozen inline-grant) credential. */
 	principal_id: string | null
+	/**
+	 * The app this credential may mint for. NULL = cross-app, which is legal ONLY for a
+	 * principal-bound credential (its permissions are still resolved per app through `grants`) and is
+	 * REFUSED for an anonymous one, whose frozen grants were delegation-checked against exactly one
+	 * app at issue time. See `resolveCredential` and migration `0012`/`0006`.
+	 */
+	app: string | null
 	issued_by: string | null
 	expires_at: number | null
 	revoked_at: number | null
@@ -353,12 +360,37 @@ export class PrincipalRepository {
 		)
 	}
 
-	async listPrincipals(filter: { type?: 'user' | 'service'; q?: string }): Promise<PrincipalRow[]> {
+	/**
+	 * One page of principals, newest first.
+	 *
+	 * `status` is evaluated in SQL rather than by filtering a full table in memory. It is derived from
+	 * exactly two columns (`disabled_at`, `activated_at` — see `principalStatus`), so expressing it
+	 * here costs nothing and is what makes the page a real page: filtering after the read returned a
+	 * short page from a long table and made `limit` mean nothing (SEC-22).
+	 *
+	 * Ordering is by `id DESC` alone. `created_at` is whole seconds, so rows written in the same second
+	 * have no order of their own; the id is a monotonic UUIDv7, so it both orders and paginates
+	 * (`before` is a keyset cursor that can neither skip nor repeat a row).
+	 */
+	async listPrincipals(filter: {
+		type?: 'user' | 'service'
+		status?: PrincipalStatus
+		q?: string
+		before?: string
+		limit: number
+	}): Promise<PrincipalRow[]> {
 		const where: string[] = []
 		const binds: (string | number)[] = []
 		if (filter.type) {
 			where.push('type = ?')
 			binds.push(filter.type)
+		}
+		if (filter.status === 'disabled') {
+			where.push('disabled_at IS NOT NULL')
+		} else if (filter.status === 'invited') {
+			where.push(`disabled_at IS NULL AND type = 'user' AND activated_at IS NULL`)
+		} else if (filter.status === 'active') {
+			where.push(`disabled_at IS NULL AND (type <> 'user' OR activated_at IS NOT NULL)`)
 		}
 		if (filter.q) {
 			// LOWER() on BOTH sides, deliberately: SQLite's LIKE case-folds ASCII, Postgres's does
@@ -367,9 +399,12 @@ export class PrincipalRepository {
 			where.push('(LOWER(label) LIKE LOWER(?) OR LOWER(email) LIKE LOWER(?))')
 			binds.push(`%${filter.q}%`, `%${filter.q}%`)
 		}
-		// `id DESC` breaks created_at ties: the column is whole seconds, so rows written in the same
-		// second have no order of their own and each engine picks its own. id is UUIDv7 (time-sortable).
-		const sql = `SELECT * FROM principals${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC, id DESC`
+		if (filter.before !== undefined) {
+			where.push('id < ?')
+			binds.push(filter.before)
+		}
+		binds.push(filter.limit)
+		const sql = `SELECT * FROM principals${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`
 		const { results } = await this.db.prepare(sql).bind(...binds).all<PrincipalRow>()
 		return results
 	}
@@ -454,6 +489,22 @@ export class GrantRepository {
 		const { results } = await this.db
 			.prepare('SELECT * FROM grants WHERE principal_id = ? ORDER BY created_at DESC, id DESC')
 			.bind(principalId)
+			.all<GrantRow>()
+		return results
+	}
+
+	/**
+	 * All grants for a PAGE of principals, in one statement — the api-keys list used to run one query
+	 * per row over an unbounded roster (SEC-22). The page is bounded, so the `IN` list is too.
+	 */
+	async listGrantsFor(principalIds: readonly string[]): Promise<GrantRow[]> {
+		if (principalIds.length === 0) {
+			return []
+		}
+		const placeholders = principalIds.map(() => '?').join(', ')
+		const { results } = await this.db
+			.prepare(`SELECT * FROM grants WHERE principal_id IN (${placeholders}) ORDER BY created_at DESC, id DESC`)
+			.bind(...principalIds)
 			.all<GrantRow>()
 		return results
 	}
@@ -620,11 +671,21 @@ export class AppSchemaRepository {
 	}
 
 	/**
-	 * Idempotent reconcile of an app's declared vocabulary in one atomic batch: upsert
-	 * the given scopes/actions/roles (roles forced to origin='app'), then delete any
-	 * origin='app' rows NOT in the incoming set. origin='custom' roles are NEVER touched
-	 * (admin-composed policies survive a redeploy). Validation (patterns vs. the new
-	 * action catalog) is the caller's job — this layer just writes the reconciled state.
+	 * Idempotent reconcile of an app's declared vocabulary in one atomic batch. Validation (patterns
+	 * vs. the new action catalog, and a collision with an admin's custom policy) is the caller's job —
+	 * this layer just writes the reconciled state.
+	 *
+	 * **Clear, then write.** The previous shape upserted the incoming rows and then deleted whatever
+	 * was `NOT IN` the incoming set, which put ONE BOUND PARAMETER PER KEPT VALUE in a single
+	 * statement — D1 allows 100 bound parameters per query, so an app with a hundred actions could not
+	 * reconcile at all (CORR-9). Deleting the app's rows first makes every statement's width constant
+	 * and the reconcile independent of catalog size. The batch is one transaction, so there is no
+	 * window in which the app has no vocabulary.
+	 *
+	 * `origin='custom'` roles are NEVER touched: the DELETE names `origin = 'app'`, and the upsert's
+	 * `WHERE roles.origin = 'app'` makes a collision with a surviving custom row a no-op instead of
+	 * silently flipping an admin's policy to `origin='app'` and making it unmanageable (SEC-3). The
+	 * caller refuses that collision outright; this is the second lock on the same rule.
 	 */
 	async reconcileAppSchema(input: {
 		app: string
@@ -633,9 +694,12 @@ export class AppSchemaRepository {
 		roles: { roleKey: string; name: string; description?: string | null; permissions: string[] }[]
 	}): Promise<void> {
 		const { app } = input
-		const statements: SqlStatement[] = []
+		const statements: SqlStatement[] = [
+			this.db.prepare('DELETE FROM app_scopes WHERE app = ?').bind(app),
+			this.db.prepare('DELETE FROM app_actions WHERE app = ?').bind(app),
+			this.db.prepare(`DELETE FROM roles WHERE app = ? AND origin = 'app'`).bind(app),
+		]
 
-		// Upsert scopes, then prune app scopes not in the incoming set.
 		for (const scope of input.scopes) {
 			statements.push(
 				this.db
@@ -644,9 +708,7 @@ export class AppSchemaRepository {
 					.bind(app, scope.scopeType, scope.label ?? null),
 			)
 		}
-		statements.push(this.pruneNotIn('app_scopes', 'scope_type', app, input.scopes.map((s) => s.scopeType)))
 
-		// Upsert actions, then prune actions not in the incoming set.
 		for (const action of input.actions) {
 			statements.push(
 				this.db
@@ -655,10 +717,7 @@ export class AppSchemaRepository {
 					.bind(app, action.action, action.description ?? null),
 			)
 		}
-		statements.push(this.pruneNotIn('app_actions', 'action', app, input.actions.map((a) => a.action)))
 
-		// Upsert roles as origin='app', then prune origin='app' roles not in the set.
-		// origin='custom' rows are excluded from the prune, so they're preserved.
 		for (const role of input.roles) {
 			statements.push(
 				this.db
@@ -668,38 +727,13 @@ export class AppSchemaRepository {
 							name = excluded.name,
 							description = excluded.description,
 							permissions = excluded.permissions,
-							origin = 'app'`)
+							origin = 'app'
+						WHERE roles.origin = 'app'`)
 					.bind(app, role.roleKey, role.name, role.description ?? null, JSON.stringify(role.permissions), unixNow()),
 			)
 		}
-		statements.push(this.pruneAppRolesNotIn(app, input.roles.map((r) => r.roleKey)))
 
 		await this.db.batch(statements)
-	}
-
-	/**
-	 * Build a DELETE that removes rows for `app` whose `column` is not in `keep`. An
-	 * empty `keep` deletes all the app's rows in that table (a schema with no scopes,
-	 * say, prunes every prior scope). NULL→placeholder handling is unnecessary here:
-	 * every kept value is a concrete string.
-	 */
-	private pruneNotIn(table: 'app_scopes' | 'app_actions', column: string, app: string, keep: string[]): SqlStatement {
-		if (keep.length === 0) {
-			return this.db.prepare(`DELETE FROM ${table} WHERE app = ?`).bind(app)
-		}
-		const placeholders = keep.map(() => '?').join(', ')
-		return this.db.prepare(`DELETE FROM ${table} WHERE app = ? AND ${column} NOT IN (${placeholders})`).bind(app, ...keep)
-	}
-
-	/** Like pruneNotIn but ONLY over origin='app' roles — custom policies are never pruned. */
-	private pruneAppRolesNotIn(app: string, keep: string[]): SqlStatement {
-		if (keep.length === 0) {
-			return this.db.prepare(`DELETE FROM roles WHERE app = ? AND origin = 'app'`).bind(app)
-		}
-		const placeholders = keep.map(() => '?').join(', ')
-		return this.db
-			.prepare(`DELETE FROM roles WHERE app = ? AND origin = 'app' AND role_key NOT IN (${placeholders})`)
-			.bind(app, ...keep)
 	}
 }
 
@@ -716,6 +750,8 @@ export class CredentialRepository {
 		tokenHash: string
 		label?: string | null
 		principalId?: string | null
+		/** The app the credential mints for. NULL = cross-app; illegal for an anonymous credential. */
+		app?: string | null
 		issuedBy: string
 		expiresAt?: number | null
 		grants: { action: string; scopeType?: string | null; scopeValue?: string | null }[]
@@ -723,9 +759,18 @@ export class CredentialRepository {
 		const id = uuidv7()
 		const statements: SqlStatement[] = [
 			this.db
-				.prepare(`INSERT INTO credentials (id, token_hash, label, principal_id, issued_by, expires_at, created_at)
-					VALUES (?, ?, ?, ?, ?, ?, ?)`)
-				.bind(id, input.tokenHash, input.label ?? null, input.principalId ?? null, input.issuedBy, input.expiresAt ?? null, unixNow()),
+				.prepare(`INSERT INTO credentials (id, token_hash, label, principal_id, app, issued_by, expires_at, created_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+				.bind(
+					id,
+					input.tokenHash,
+					input.label ?? null,
+					input.principalId ?? null,
+					input.app ?? null,
+					input.issuedBy,
+					input.expiresAt ?? null,
+					unixNow(),
+				),
 		]
 		for (const grant of input.grants) {
 			statements.push(
@@ -772,11 +817,51 @@ export class CredentialRepository {
 		return results
 	}
 
-	/** Anonymous credentials — the share links (no bound principal). The admin share-links list. */
-	async listAnonymousCredentials(): Promise<CredentialRow[]> {
+	/**
+	 * Anonymous credentials — the share links (no bound principal). The admin share-links list.
+	 *
+	 * One page at a time, keyset-ordered by the UUIDv7 id like every other admin list, and REVOKED
+	 * rows are excluded unless asked for: the console's default view is "links that still work", and
+	 * an installation that has been revoking links for a year should not have to scroll through them.
+	 * `app` filters to one app's links — with the credential now bound to an app there is finally
+	 * something to filter on (SEC-2).
+	 */
+	async listAnonymousCredentials(filter: { app?: string; includeRevoked?: boolean; before?: string; limit: number }): Promise<CredentialRow[]> {
+		const where: string[] = ['principal_id IS NULL']
+		const binds: (string | number)[] = []
+		if (filter.app !== undefined) {
+			where.push('app = ?')
+			binds.push(filter.app)
+		}
+		if (filter.includeRevoked !== true) {
+			where.push('revoked_at IS NULL')
+		}
+		if (filter.before !== undefined) {
+			where.push('id < ?')
+			binds.push(filter.before)
+		}
+		binds.push(filter.limit)
 		const { results } = await this.db
-			.prepare('SELECT * FROM credentials WHERE principal_id IS NULL ORDER BY created_at DESC, id DESC')
+			.prepare(`SELECT * FROM credentials WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT ?`)
+			.bind(...binds)
 			.all<CredentialRow>()
+		return results
+	}
+
+	/**
+	 * Inline grants for a PAGE of credentials, in one statement. The admin lists used to issue one
+	 * query per row, so a page cost 1+N round trips against an unbounded N (SEC-22); the page is
+	 * bounded, so the `IN` list is too.
+	 */
+	async getCredentialGrantsFor(credentialIds: readonly string[]): Promise<CredentialGrantRow[]> {
+		if (credentialIds.length === 0) {
+			return []
+		}
+		const placeholders = credentialIds.map(() => '?').join(', ')
+		const { results } = await this.db
+			.prepare(`SELECT * FROM credential_grants WHERE credential_id IN (${placeholders})`)
+			.bind(...credentialIds)
+			.all<CredentialGrantRow>()
 		return results
 	}
 

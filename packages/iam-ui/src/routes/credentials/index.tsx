@@ -20,8 +20,8 @@ import { fmtExpiry, fmtScope, shareLinkState } from '../../lib/format'
 export default createPage()
 	.loader(async () => {
 		const [apiKeys, shareLinks] = await Promise.all([
-			api.apiKeys.list(),
-			api.shareLinks.list(),
+			api.apiKeys.list({}),
+			api.shareLinks.list({}),
 		])
 		return { apiKeys: apiKeys.items, shareLinks: shareLinks.items }
 	})

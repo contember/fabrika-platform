@@ -35,17 +35,24 @@
 // ── TWO SURFACES, TWO KEYS ────────────────────────────────────────────────────────────────────────
 //
 // `/rpc/*`        — the MANAGEMENT surface (all eight methods), gated by `rpcKey`.
-// `/auth/mint/*`  — the PROXY surface (mint only), gated by `proxyKey`. Paths and wire shapes are
-//                   fixed by `packages/proxy/src/iam.ts` (`HttpIamGateway`); that file is the contract.
+// `/auth/mint/*`  — the PROXY surface, gated by `proxyKey`: `mintToken`, `mintFromKey`, and — since
+//                   ADR-0021 — `exchangeAuthCode`, which redeems a cross-host handoff code for an
+//                   app-bound session. Paths and wire shapes are fixed by `packages/proxy/src/iam.ts`
+//                   (`HttpIamGateway`); that file is the contract.
 //
 // They are separate secrets on purpose, and the reason is least privilege rather than tidiness. The
 // auth proxy is the ONLY publicly-routed component in the deployment, so it is the one most likely to
-// be compromised — and it needs exactly two IAM calls. Handing it the management key would also hand
-// it `audit`, whose whole surface is unauthenticated by design (it is fire-and-forget with a
-// self-asserted app), so a compromised proxy could forge audit rows for any app. It could not
-// escalate through `issueKey`/`issueJwt`/`revokeKey`/`listPrincipals` — those resolve a caller from a
-// forwarded credential and enforce delegation regardless of the transport key — but the audit trail
-// is exactly the thing that must survive a compromise of the edge. One extra env var buys that.
+// be compromised — and it needs exactly those three IAM calls. Say the third one out loud, because it
+// is the one that makes the split worth arguing about: a holder of `proxyKey` can turn a live,
+// unconsumed handoff code into a SESSION. That is a real capability, and it is still the smaller
+// grant — the code is single-use through a conditional UPDATE, stored only as a hash, bound to
+// `(session, app, return URL)`, and dead after two minutes, so holding the key without also holding a
+// fresh code buys nothing. Handing the proxy the MANAGEMENT key instead would hand it `audit`, whose
+// surface is unauthenticated by design (fire-and-forget with a self-asserted app), so a compromised
+// proxy could forge audit rows for any app. It could not escalate through
+// `issueKey`/`issueJwt`/`revokeKey`/`listPrincipals` — those resolve a caller from a forwarded
+// credential and enforce delegation regardless of the transport key — but the audit trail is exactly
+// the thing that must survive a compromise of the edge. One extra env var buys that.
 //
 // Each key is independent, and each unset key 404s only its own surface: a deployment with a proxy
 // and no control plane sets `proxyKey` alone, and vice versa.
@@ -143,9 +150,10 @@ export async function handleRpcHttp(request: Request, rpc: IamRpc, rpcKey: strin
 
 // ── The proxy surface: `/auth/mint/*` ─────────────────────────────────────────
 //
-// Two endpoints, fixed by `packages/proxy/src/iam.ts`. They are the COLD PATH of every request the
-// proxy handles — the first exchange of a browser session or a `px_` key for a short-lived signed
-// token — and everything after that is a local JWKS verification inside the project. Do not change a
+// Three endpoints, fixed by `packages/proxy/src/iam.ts`: `mintToken`, `mintFromKey` and
+// `exchangeAuthCode`. They are the COLD PATH of every request the proxy handles — the first exchange
+// of a browser session, a `px_` key, or an ADR-0021 handoff code for a short-lived signed token — and
+// everything after that is a local JWKS verification inside the project. Do not change a
 // path or a body shape here without changing `HttpIamGateway` in the same commit: a mismatch fails
 // closed at runtime (the gateway maps any non-200 to `IamUnavailableError` → a 503 deny), which is
 // safe but very hard to read from the outside.

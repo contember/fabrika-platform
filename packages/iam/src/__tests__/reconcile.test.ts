@@ -81,6 +81,60 @@ describe('Db.reconcileAppSchema', () => {
 		expect(auditor?.name).toBe('Auditor')
 	})
 
+	test('a COLLIDING custom policy keeps its permissions, name and origin', async () => {
+		// The case `reconcile.test.ts` never covered and the one that was broken: an app declaring a role
+		// key an admin already owns as a custom policy. The upsert flipped it to origin='app' and
+		// overwrote its permissions — after which update and delete both require origin='custom' and
+		// 404, so the policy became unmanageable (SEC-3). The admin surface now refuses that reconcile
+		// outright; this is the layer below it, where a collision must be a no-op rather than a rewrite.
+		const h = createHarness()
+		const app = 'opice'
+
+		await h.repositories.appSchema.reconcileAppSchema({
+			app,
+			scopes: [],
+			actions: [{ action: 'report.read', description: null }, { action: 'report.export', description: null }],
+			roles: [],
+		})
+		await h.repositories.appSchema.upsertRole({
+			app,
+			roleKey: 'auditor',
+			name: 'Auditor',
+			description: 'Read + export',
+			permissions: ['report.read', 'report.export'],
+			origin: 'custom',
+		})
+
+		await h.repositories.appSchema.reconcileAppSchema({
+			app,
+			scopes: [],
+			actions: [{ action: 'report.read', description: null }, { action: 'report.export', description: null }],
+			roles: [{ roleKey: 'auditor', name: 'App auditor', description: 'from code', permissions: ['report.read'] }],
+		})
+
+		const auditor = await h.repositories.appSchema.getRole(app, 'auditor')
+		expect(auditor?.origin).toBe('custom')
+		expect(auditor?.name).toBe('Auditor')
+		expect(auditor?.description).toBe('Read + export')
+		expect(auditor?.permissions).toBe(JSON.stringify(['report.read', 'report.export']))
+		// And the app did NOT gain a role it thinks it declared.
+		expect(await h.repositories.appSchema.listRolesByOrigin(app, 'app')).toEqual([])
+	})
+
+	test('the prune statement width does not grow with the catalog', async () => {
+		// D1 allows 100 bound parameters per query. The old prune put one per KEPT value into a single
+		// `NOT IN (...)`, so an app with a hundred actions could not reconcile at all (CORR-9).
+		const h = createHarness()
+		const app = 'wide'
+		const actions = Array.from({ length: 250 }, (_, i) => ({ action: `action.n${i}`, description: null }))
+
+		await h.repositories.appSchema.reconcileAppSchema({ app, scopes: [], actions, roles: [] })
+		expect(await h.repositories.appSchema.listActionCatalog(app)).toHaveLength(250)
+
+		await h.repositories.appSchema.reconcileAppSchema({ app, scopes: [], actions: actions.slice(0, 3), roles: [] })
+		expect((await h.repositories.appSchema.listActionCatalog(app)).sort()).toEqual(['action.n0', 'action.n1', 'action.n2'])
+	})
+
 	test('reconciling with empty sets prunes all the app rows (but not custom policies)', async () => {
 		const h = createHarness()
 		const app = 'poplach'

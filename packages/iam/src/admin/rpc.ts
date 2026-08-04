@@ -3,6 +3,7 @@ import { permits, scopedValues } from '@fabrika/auth-core'
 import type { IamAdminRpcContract } from '@fabrika/iam-contract'
 import { z } from 'zod'
 import type { IamAppContext } from '../app'
+import { logError } from '../log'
 import type { AdminContext } from './handlers'
 import { adminUseCases } from './handlers'
 import { ADMIN_ACTION, extractCredentials, IAM_APP, rejectCrossOrigin, resolveAdmin } from './router'
@@ -12,6 +13,7 @@ const nonEmpty = z.string().min(1)
 const optionalNullableString = z.string().nullable().optional()
 
 const appInput = z.object({ app: nonEmpty })
+const pageInput = { before: z.string().optional(), limit: z.number().finite().optional() }
 const principalIdInput = z.object({ id: nonEmpty })
 const apiKeyIdInput = z.object({ principalId: nonEmpty })
 const shareLinkIdInput = z.object({ id: nonEmpty })
@@ -38,11 +40,14 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 	me: t.procedure.require(ADMIN_ACTION).query(({ ctx }) => adminUseCases.me(context(ctx))),
 	principals: t.router({
 		list: t.procedure
-			.input(z.object({
-				type: z.enum(['user', 'service']).optional(),
-				status: z.enum(['invited', 'active', 'disabled']).optional(),
-				q: z.string().optional(),
-			}))
+			.input(
+				z.object({
+					type: z.enum(['user', 'service']).optional(),
+					status: z.enum(['invited', 'active', 'disabled']).optional(),
+					q: z.string().optional(),
+					...pageInput,
+				}).default({}),
+			)
 			.require(ADMIN_ACTION)
 			.query(({ ctx, input }) => adminUseCases.listPrincipals(context(ctx), input)),
 		get: t.procedure.input(principalIdInput).require(ADMIN_ACTION).query(({ ctx, input }) => adminUseCases.getPrincipal(context(ctx), input)),
@@ -78,10 +83,19 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 	apps: t.router({
 		list: t.procedure.require(ADMIN_ACTION).query(({ ctx }) => adminUseCases.listApps(context(ctx))),
 		getSchema: t.procedure.input(appInput).require(ADMIN_ACTION).query(({ ctx, input }) => adminUseCases.getAppSchema(context(ctx), input)),
+		getReturnOrigins: t.procedure
+			.input(appInput)
+			.require(ADMIN_ACTION)
+			.query(({ ctx, input }) => adminUseCases.getReturnOrigins(context(ctx), input)),
 		setReturnOrigins: t.procedure
 			.input(z.object({ app: nonEmpty, origins: z.array(nonEmpty) }))
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.setReturnOrigins(context(ctx), input)),
+		// Clearing is its own call, never an empty `origins` array — see `clearReturnOriginsUseCase`.
+		clearReturnOrigins: t.procedure
+			.input(appInput)
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.clearReturnOrigins(context(ctx), input)),
 	}),
 	roles: t.router({
 		list: t.procedure
@@ -105,18 +119,31 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.mutation(({ ctx, input }) => adminUseCases.deletePolicy(context(ctx), input)),
 	}),
 	apiKeys: t.router({
-		list: t.procedure.require(ADMIN_ACTION).query(({ ctx }) => adminUseCases.listApiKeys(context(ctx))),
+		list: t.procedure.input(z.object(pageInput).default({})).require(ADMIN_ACTION).query(({ ctx, input }) =>
+			adminUseCases.listApiKeys(context(ctx), input)
+		),
 		provision: t.procedure
 			.input(z.object({ label: nonEmpty, type: z.literal('service'), ...authorization }))
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.provisionApiKey(context(ctx), input)),
-		rotate: t.procedure.input(apiKeyIdInput).require(ADMIN_ACTION).mutation(({ ctx, input }) => adminUseCases.rotateApiKey(context(ctx), input)),
+		rotate: t.procedure
+			.input(z.object({ principalId: nonEmpty, expiresAt: z.number().finite().nullable().optional() }))
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.rotateApiKey(context(ctx), input)),
 		revoke: t.procedure.input(apiKeyIdInput).require(ADMIN_ACTION).mutation(({ ctx, input }) => adminUseCases.revokeApiKey(context(ctx), input)),
 	}),
 	shareLinks: t.router({
-		list: t.procedure.require(ADMIN_ACTION).query(({ ctx }) => adminUseCases.listShareLinks(context(ctx))),
+		list: t.procedure
+			.input(z.object({ app: nonEmpty.optional(), includeRevoked: z.boolean().optional(), ...pageInput }).default({}))
+			.require(ADMIN_ACTION)
+			.query(({ ctx, input }) => adminUseCases.listShareLinks(context(ctx), input)),
 		issue: t.procedure
-			.input(z.object({ grants: z.array(shareGrantSchema), label: z.string().optional(), expiresAt: z.number().finite().optional() }))
+			.input(z.object({
+				app: nonEmpty,
+				grants: z.array(shareGrantSchema),
+				label: z.string().optional(),
+				expiresAt: z.number().finite().optional(),
+			}))
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.createShareLink(context(ctx), input)),
 		revoke: t.procedure.input(shareLinkIdInput).require(ADMIN_ACTION).mutation(({ ctx, input }) => adminUseCases.revokeShareLink(context(ctx), input)),
@@ -165,12 +192,73 @@ export const adminRpcAuth: Middleware<IamAppContext> = async (request, ctx, next
 
 		ctx.admin = resolution.admin
 		ctx.auth = authContext(resolution.admin)
-		const response = await next()
-		return response.status >= 500 ? internalError() : response
-	} catch {
-		console.error('admin RPC request failed')
+		return await scrubInternalErrors(await next())
+	} catch (err) {
+		logError('admin RPC request failed', err)
 		return internalError()
 	}
+}
+
+/**
+ * Mask an internal failure before it leaves the admin surface.
+ *
+ * TWO rules, because there are two ways an internal message can arrive. A 5xx response is replaced
+ * outright, as it always was. AND, INDEPENDENTLY OF STATUS, every `type: 'internal'` envelope in the
+ * body gets a fixed message — which is the half that was missing: a BATCHED call always answers 200
+ * with the per-call errors inside the body, so it returned verbatim what the single-call path
+ * carefully hid (CORR-4). `type: 'internal'` is precisely the branch the framework did NOT choose to
+ * expose, so a message that reaches it is by definition not one meant for a caller. Structured
+ * failures (`forbidden`, `not_found`, `conflict`, `validation`, …) are untouched.
+ */
+async function scrubInternalErrors(response: Response): Promise<Response> {
+	if (response.status >= 500) {
+		return internalError()
+	}
+	if (response.headers.get('content-type')?.includes('application/json') !== true) {
+		return response
+	}
+	let body: unknown
+	try {
+		body = await response.clone().json()
+	} catch {
+		return response
+	}
+	const scrubbed = scrubEnvelope(body)
+	return scrubbed === null ? response : Response.json(scrubbed, { status: response.status, headers: response.headers })
+}
+
+/** Rewrite every `internal` error in a single or batched envelope; null when nothing changed. */
+function scrubEnvelope(body: unknown): unknown {
+	if (!isRecord(body)) {
+		return null
+	}
+	const batch = body['batch']
+	if (Array.isArray(batch)) {
+		let changed = false
+		const results = batch.map((entry: unknown) => {
+			const masked = maskInternal(entry)
+			changed = changed || masked !== null
+			return masked ?? entry
+		})
+		return changed ? { ...body, batch: results } : null
+	}
+	return maskInternal(body)
+}
+
+/** `{ error: { type: 'internal', … } }` → the fixed message; null when the entry needs no change. */
+function maskInternal(entry: unknown): unknown {
+	if (!isRecord(entry)) {
+		return null
+	}
+	const error = entry['error']
+	if (!isRecord(error) || error['type'] !== 'internal' || error['message'] === 'internal error') {
+		return null
+	}
+	return { ...entry, error: { type: 'internal', message: 'internal error' } }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object'
 }
 
 function authContext(admin: NonNullable<IamAppContext['admin']>): AuthContext {

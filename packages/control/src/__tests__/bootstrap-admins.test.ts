@@ -97,21 +97,20 @@ describe('parseBootstrapAdmins', () => {
 const DEV_ENV = { DEV: 'true', ENVIRONMENT: 'local' } as const
 
 describe('controlAuthMiddleware bootstrap semantics', () => {
-	test('the provisioning context is a global service principal labelled provisioning', async () => {
+	test('the provisioning key buys nothing here — machine access is an IAM-issued service key', async () => {
+		// The hatch is deleted, not disabled. Behind the proxy it was already dead: `/api/*` is gated
+		// `service`, the proxy resolves a `px_` bearer by asking IAM to mint from it, and the provisioning
+		// key has no `credentials` row — so `mintFromKey` answered `invalid_key` and control never saw the
+		// bearer. What remains is the ordinary token path, which this bearer does not satisfy.
 		const key = 'px_provision_secret_key_value'
 		const result = await runMiddleware(
-			{ ...DEV_ENV, FABRIKA_IAM_PROVISIONING_KEY: key },
+			{ ...DEV_ENV },
 			new Request('https://control.test/api/apps', {
 				headers: { Authorization: `Bearer ${key}`, 'X-Dev-Principal': 'missing@vozka.test' },
 			}),
 		)
 
-		expect(result.nextCalled).toBe(true)
-		expect(result.auth?.principal?.type).toBe('service')
-		expect(result.auth?.principal?.label).toBe('provisioning')
-		for (const action of Object.values(ACTIONS)) {
-			expect(result.auth?.can(action)).toBe(true)
-		}
+		expect(result.auth?.principal?.label).not.toBe('provisioning')
 	})
 
 	test('a listed user is elevated while a non-listed user keeps their original permissions', async () => {

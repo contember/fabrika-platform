@@ -27,7 +27,12 @@ export interface ProcessConfig {
 	/**
 	 * Shared secret gating the PROXY mint surface (`/auth/mint/*`), which the auth proxy calls on the
 	 * cold path. Separate from `rpcKey` by least privilege — the proxy is the only publicly-routed
-	 * component and needs only these two calls. EMPTY DISABLES IT. Never logged.
+	 * component and needs only three IAM calls: `mintToken`, `mintFromKey`, and `exchangeAuthCode`
+	 * (ADR-0021), which redeems a live handoff code for an app-bound session. That third one is a real
+	 * capability rather than a read, and the split is still worth it: the code is single-use,
+	 * hash-only, bound to `(session, app, return URL)` and dead in two minutes, whereas the management
+	 * key would additionally let a compromised edge forge audit rows for any app. EMPTY DISABLES IT.
+	 * Never logged.
 	 */
 	proxyKey: string
 }
@@ -87,6 +92,9 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		HUMAN_EMAIL_DOMAINS: source['HUMAN_EMAIL_DOMAINS'] ?? '[]',
 		HUMAN_EMAILS: source['HUMAN_EMAILS'] ?? '[]',
 		IAM_BOOTSTRAP_ADMINS: source['IAM_BOOTSTRAP_ADMINS'] ?? '[]',
+		// Which browser origins may drive `/admin/*`. Empty means none, which is the fail-closed
+		// default — a console that is not registered cannot write, and says so.
+		ADMIN_ORIGINS: source['FABRIKA_IAM_ADMIN_ORIGINS'] ?? '[]',
 		ENVIRONMENT: environment,
 		LOCAL_DEV_LOGIN: source['LOCAL_DEV_LOGIN'] ?? '',
 		ISSUER: issuer,

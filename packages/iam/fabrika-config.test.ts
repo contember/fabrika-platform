@@ -60,6 +60,7 @@ const requireWorker = (worker: Worker | undefined): Worker => {
 describe('IAM resource graph', () => {
 	test('declares only canonical IAM pipeline inputs', () => {
 		expect(iamPipelineVars(REMOTE_SOURCE)).toEqual([
+			'FABRIKA_IAM_ADMIN_ORIGINS',
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',
 			'FABRIKA_EMAIL_PROVIDER',
@@ -81,8 +82,10 @@ describe('IAM resource graph', () => {
 		expect(fromOblaka.options).toEqual(fromFabrika.options)
 		expect(fromFabrika.options.routes).toEqual([])
 		expect(fromFabrika.options.vars?.['ISSUER']).toBe('http://localhost:18191')
-		expect(fromFabrika.options.vars?.['OIDC_ENABLED']).toBe('true')
-		expect(fromFabrika.options.vars?.['PASSWORD_ENABLED']).toBe('false')
+		// Local is PASSWORD-ONLY: OIDC is fatal when half-configured on both engines now, and a
+		// `wrangler dev` has no client id or secret to hand it.
+		expect(fromFabrika.options.vars?.['OIDC_ENABLED']).toBe('false')
+		expect(fromFabrika.options.vars?.['PASSWORD_ENABLED']).toBe('true')
 		expect(fromFabrika.options.vars?.['EMAIL_PROVIDER']).toBe('none')
 	})
 
@@ -137,6 +140,7 @@ describe('IAM resource graph', () => {
 		expect(worker.options.vars?.['PASSWORD_ENABLED']).toBe('true')
 		expect(worker.options.vars?.['OIDC_ISSUER']).toBe('')
 		expect(iamPipelineVars(source)).toEqual([
+			'FABRIKA_IAM_ADMIN_ORIGINS',
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',
 			'FABRIKA_EMAIL_PROVIDER',

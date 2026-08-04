@@ -28,8 +28,8 @@ export async function iamSnapshot(fetcher: RpcFetch = fetch): Promise<IamSnapsho
 	try {
 		const [principals, apiKeys, shareLinks, audit] = await Promise.all([
 			api.principals.list({}),
-			api.apiKeys.list(),
-			api.shareLinks.list(),
+			api.apiKeys.list({}),
+			api.shareLinks.list({}),
 			api.audit.list({ limit: AUDIT_WINDOW }),
 		])
 		return {

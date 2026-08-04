@@ -32,7 +32,7 @@ class FakeRequestContext implements RequestContext {
 // The target app ('opice') registers itself by reconciling its schema (`PUT …/opice/schema`), which
 // is how it lands in the DB-derived `knownApps` registry — no static config list anymore.
 function adminServices(h: Harness): Services {
-	return h.makeServices({ environment: 'stage', issuer: ORIGIN })
+	return h.makeServices({ environment: 'stage', issuer: ORIGIN, adminOrigins: [ORIGIN] })
 }
 
 // Seed a global admin user and open an SSO session so every request clears the gate.
@@ -124,6 +124,37 @@ describe('PUT/GET /admin/apps/:app/schema', () => {
 			}),
 		)
 		expect(bad.status).toBe(400)
+	})
+
+	test('a reconcile that COLLIDES with a custom policy is refused, loudly', async () => {
+		// One-directional before this: `createPolicy` 409s on an existing key so an admin can never clobber
+		// an app role, but a deploy silently flipped a custom policy to origin='app' — after which update
+		// and delete both 404 and the policy is unmanageable (SEC-3).
+		const h = createHarness()
+		const token = await asAdmin(h)
+		await run(h, req('/admin/apps/opice/schema', 'PUT', token, SCHEMA))
+		expect(
+			(await run(
+				h,
+				req('/admin/apps/opice/policies', 'POST', token, { key: 'auditor', name: 'Auditor', permissions: ['project.read', 'report.export'] }),
+			)).status,
+		).toBe(201)
+
+		const collision = await run(
+			h,
+			req('/admin/apps/opice/schema', 'PUT', token, {
+				...SCHEMA,
+				roles: { ...SCHEMA.roles, auditor: { name: 'App auditor', permissions: ['project.read'] } },
+			}),
+		)
+		expect(collision.status).toBe(409)
+		expect(await collision.text()).toContain('auditor')
+
+		// And nothing was written: the policy keeps its permissions, its name and its origin.
+		const policies: { items: PolicyDto[] } = await (await run(h, req('/admin/apps/opice/policies', 'GET', token))).json()
+		expect(policies.items).toHaveLength(1)
+		expect(policies.items[0]?.name).toBe('Auditor')
+		expect(policies.items[0]?.permissions).toEqual(['project.read', 'report.export'])
 	})
 
 	test('reconcile preserves custom policies and prunes absent app roles', async () => {
@@ -272,6 +303,37 @@ describe('grant create — role XOR inline, catalog validation, scope both-or-ne
 		const principalId = await targetPrincipal(h)
 		const res = await run(h, req('/admin/grants', 'POST', token, { principalId, app: 'opice', roleKey: 'ghost' }))
 		expect(res.status).toBe(400)
+	})
+
+	test('a CROSS-APP inline grant validates against the union of every registered catalog', async () => {
+		// A cross-app grant has no single catalog, and substituting an empty one refused everything except
+		// `*` — so an operator who wanted `deploy.read` everywhere had to grant everything instead
+		// (CORR-10). The union is the right comparison, and it is a TYPO CHECK: `permits()` matches
+		// patterns at request time and never pre-expands them, so an app registered later is covered by a
+		// grant written today whatever this check said.
+		const h = createHarness()
+		const token = await asAdmin(h)
+		await run(h, req('/admin/apps/opice/schema', 'PUT', token, SCHEMA))
+		await run(
+			h,
+			req('/admin/apps/poplach/schema', 'PUT', token, {
+				scopes: [],
+				actions: [{ action: 'deploy.read' }],
+				roles: {},
+			}),
+		)
+		const principalId = await targetPrincipal(h)
+
+		// Declared by ANOTHER app than the one it happens to be listed under — cross-app means both.
+		for (const pattern of ['report.export', 'deploy.read', '*']) {
+			const response = await run(h, req('/admin/grants', 'POST', token, { principalId, app: null, permissions: [pattern] }))
+			expect(response.status).toBe(201)
+		}
+
+		// A typo is still a typo, and the message says what the check is.
+		const typo = await run(h, req('/admin/grants', 'POST', token, { principalId, app: null, permissions: ['deploy.raed'] }))
+		expect(typo.status).toBe(400)
+		expect(await typo.text()).toContain('not a security boundary')
 	})
 
 	test('an inline grant validates each pattern against the app catalog', async () => {

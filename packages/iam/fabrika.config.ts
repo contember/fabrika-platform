@@ -20,6 +20,7 @@ type EnvironmentSource = Readonly<Record<string, string | undefined>>
 interface RemoteConfig {
 	domain: string
 	humanEmailDomains: string
+	adminOrigins: string
 	oidcEnabled: boolean
 	passwordEnabled: boolean
 	oidcIssuer: string
@@ -104,6 +105,7 @@ const remoteConfig = (env: string, domain: string | undefined, source: Environme
 	return {
 		domain: requiredDomain(domain),
 		humanEmailDomains: humanEmailDomains ?? '[]',
+		adminOrigins: source['FABRIKA_IAM_ADMIN_ORIGINS'] ?? '[]',
 		oidcEnabled: authentication.oidcEnabled,
 		passwordEnabled: authentication.passwordEnabled,
 		oidcIssuer: oidcIssuer ?? '',
@@ -123,11 +125,16 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '[]',
 			IAM_BOOTSTRAP_ADMINS: '[]',
+			// The console's origin, which a local `wrangler dev` does not have. Empty = no browser may
+			// write to `/admin/*`; a machine bearer is unaffected.
+			ADMIN_ORIGINS: '[]',
 			ISSUER: 'http://localhost:18191',
 			SESSION_COOKIE_DOMAIN: '',
-			OIDC_ENABLED: 'true',
-			PASSWORD_ENABLED: 'false',
-			OIDC_ISSUER: 'https://accounts.google.com',
+			// Password-only locally. OIDC is now FATAL when half-configured (one rule on both engines),
+			// and a `wrangler dev` has no client id or secret to give it.
+			OIDC_ENABLED: 'false',
+			PASSWORD_ENABLED: 'true',
+			OIDC_ISSUER: '',
 			OIDC_CLIENT_ID: '',
 			OIDC_SCOPES: '',
 			OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
@@ -138,6 +145,7 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 
 	return {
 		HUMAN_EMAIL_DOMAINS: config.humanEmailDomains,
+		ADMIN_ORIGINS: config.adminOrigins,
 		HUMAN_EMAILS: aliasValue(source, 'FABRIKA_IAM_HUMAN_EMAILS', 'PROPUSTKA_HUMAN_EMAILS') ?? '[]',
 		IAM_BOOTSTRAP_ADMINS: aliasValue(source, 'FABRIKA_IAM_BOOTSTRAP_ADMINS', 'PROPUSTKA_BOOTSTRAP_ADMINS') ?? '[]',
 		ISSUER: `https://${config.domain}`,
@@ -157,6 +165,7 @@ export const iamPipelineVars = (source: EnvironmentSource): string[] => {
 	const authentication = authenticationConfig(source)
 	const email = emailConfig(source)
 	return [
+		'FABRIKA_IAM_ADMIN_ORIGINS',
 		'FABRIKA_IAM_OIDC_ENABLED',
 		'FABRIKA_IAM_PASSWORD_ENABLED',
 		'FABRIKA_EMAIL_PROVIDER',

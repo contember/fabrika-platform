@@ -99,12 +99,16 @@ export async function resolveCaller(
 		}
 		const eff = await resolveCredential(services, cred, input.app)
 		if (!eff.ok) {
-			return { ok: false, reason: eff.reason }
+			// A credential presented to the wrong app is indistinguishable from one that does not exist.
+			return { ok: false, reason: eff.reason === 'wrong_app' ? 'invalid_token' : eff.reason }
 		}
 		return {
 			ok: true,
 			caller: { id: eff.subject, ...(eff.type === undefined ? {} : { type: eff.type }), label: eff.label, permissions: eff.permissions },
-			verifiedApp: input.app,
+			// The credential's OWN app when it names one — `input.app` is caller-asserted, and after
+			// SEC-2 there is a verified value to prefer. A cross-app credential has nothing to assert
+			// with, so the caller's claim stands; `resolveCredential` has already bounded what that buys.
+			verifiedApp: cred.app ?? input.app,
 		}
 	}
 

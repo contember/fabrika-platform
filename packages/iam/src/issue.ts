@@ -59,6 +59,14 @@ function grantToEntry(grant: KeyGrant): PermissionEntry {
 
 // ── issueKey ──────────────────────────────────────────────────────────────────
 
+/**
+ * Issue an opaque `px_` credential.
+ *
+ * `app` is the issuer's VERIFIED app, and every credential this function writes is bound to it. That
+ * binding is what makes delegation mean anything: the grants below are checked against the issuer's
+ * permissions *for this app*, so a credential that could be spent at another one would convert
+ * app-scoped authority into installation-wide authority (SEC-2).
+ */
 export async function issueKey(
 	services: Services,
 	input: IssueKeyInput,
@@ -89,6 +97,7 @@ export async function issueKey(
 			tokenHash: await hashToken(token),
 			label: svc.label,
 			principalId: principal.id,
+			app,
 			issuedBy: issuer.id,
 			expiresAt: input.expiresAt ?? null,
 			grants: [],
@@ -105,6 +114,13 @@ export async function issueKey(
 	if (input.principalId === undefined && grants.length === 0) {
 		return { result: { ok: false, reason: 'not_allowed' } }
 	}
+	// A self-bound key carries the issuer's LIVE permissions with no inline downscope, so it is a
+	// standing copy of whoever asked for it. When the issuer is itself a 300-second passthrough token
+	// that is a permanent credential minted from a temporary one — so this mode must state an expiry
+	// (SEC-7). The standalone mode is exempt: its grants are frozen and delegation-checked.
+	if (input.principalId !== undefined && input.expiresAt === undefined) {
+		return { result: { ok: false, reason: 'not_allowed' } }
+	}
 	// Delegation: the issuer must hold every inline grant (trivially true for a self-bound downscope).
 	if (findUncoveredGrant(issuer.permissions, grants) !== null) {
 		return { result: { ok: false, reason: 'not_allowed' } }
@@ -115,6 +131,7 @@ export async function issueKey(
 		tokenHash: await hashToken(token),
 		label: input.label ?? null,
 		principalId: input.principalId ?? null,
+		app,
 		issuedBy: issuer.id,
 		expiresAt: input.expiresAt ?? null,
 		grants: grants.map((g) => ({ action: g.action, scopeType: g.scope?.type ?? null, scopeValue: g.scope?.value ?? null })),

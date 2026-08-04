@@ -26,6 +26,8 @@ interface EnvOptions {
 	provisioningKey?: string
 	email?: boolean
 	bootstrapAdmins?: string[]
+	/** Registered admin origins. Defaults to the console origin these tests drive from. */
+	adminOrigins?: string[]
 }
 
 function env(h: Harness, options: EnvOptions = {}): Env {
@@ -35,6 +37,7 @@ function env(h: Harness, options: EnvOptions = {}): Env {
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: JSON.stringify(options.bootstrapAdmins ?? []),
+		ADMIN_ORIGINS: JSON.stringify(options.adminOrigins ?? [ORIGIN]),
 		ENVIRONMENT: 'stage',
 		OIDC_ENABLED: String(options.oidc ?? true),
 		PASSWORD_ENABLED: String(options.password ?? true),

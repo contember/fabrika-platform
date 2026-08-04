@@ -78,7 +78,7 @@ describe('IAM admin gateway', () => {
 		})
 	})
 
-	test('rewrites the private hop and injects only the explicit local bearer', async () => {
+	test('rewrites the private hop, injects only the explicit local bearer, and leaves Origin alone', async () => {
 		let received: { url: string; origin: string | null; authorization: string | null; cookie: string | null; body: string } | undefined
 		const server = Bun.serve({
 			port: 0,
@@ -109,7 +109,11 @@ describe('IAM admin gateway', () => {
 
 			expect(response.status).toBe(200)
 			expect(received?.url).toBe(`http://127.0.0.1:${server.port}/admin/api-keys?limit=2`)
-			expect(received?.origin).toBe(`http://127.0.0.1:${server.port}`)
+			// The BROWSER's origin, unmodified. It used to be rewritten to IAM's private RPC origin so
+			// that IAM's issuer-based CSRF check would pass — which it never did in any deployment whose
+			// private address differed from its public issuer, and which could not have been right anyway:
+			// the browser's origin is the console's, never IAM's. IAM is told which origins may drive it.
+			expect(received?.origin).toBe('http://control.localhost')
 			expect(received?.authorization).toBe('Bearer px_local')
 			expect(received?.cookie).toBe('px_session=session-one')
 			expect(received?.body).toBe('{"label":"test"}')

@@ -44,12 +44,18 @@ import { resolveCaller } from './auth'
 import type { Env, RequestContext } from './env'
 import { exchangeAuthCode } from './handoff'
 import { issueJwt, issueKey, revokeKey } from './issue'
+import { logError } from './log'
 import { buildServices } from './services'
 import { getSigner } from './signing'
 import { mintFromKey, mintToken } from './tokens'
 
 /** Build the RPC surface bound to one env + request context. */
 export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoffRpc {
+	// Built ONCE per RPC surface, not once per call (ARCH-1). It was constructed inside every method
+	// and, in `audit`, OUTSIDE the fail-closed try — so a configuration error there threw to the
+	// caller instead of failing closed. It also allocated an `OidcClient` and an email sender on the
+	// mint path, which the proxy hits on every cold request and which needs neither.
+	const services = buildServices(env)
 	return {
 		/**
 		 * Redeem a cross-host handoff code for an app-bound session (ADR-0021). Reached only over the
@@ -57,7 +63,6 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		 * like every mint front: an unusable code is a decided `{ ok: false }`, never a throw.
 		 */
 		async exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {
-			const services = buildServices(env)
 			try {
 				const { result, principalId } = await exchangeAuthCode(services, input)
 				ctx.waitUntil(
@@ -72,7 +77,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 				)
 				return result
 			} catch (err) {
-				console.error(`exchangeAuthCode failed for request '${input.requestId}'`, err)
+				logError(`exchangeAuthCode failed for request '${input.requestId}'`, err)
 				ctx.waitUntil(
 					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,
@@ -93,7 +98,6 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		 * throws — fails closed to `invalid_session` (the SDK then bounces the user to /auth/login).
 		 */
 		async mintToken(input: MintTokenInput): Promise<MintTokenResult> {
-			const services = buildServices(env)
 			try {
 				const { result, principalId } = await mintToken(services, env, input)
 				ctx.waitUntil(
@@ -109,7 +113,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 				return result
 			} catch (err) {
 				// Same fail-closed posture as authenticate(): never surface a 500.
-				console.error(`mintToken failed for request '${input.requestId}'`, err)
+				logError(`mintToken failed for request '${input.requestId}'`, err)
 				ctx.waitUntil(
 					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,
@@ -130,7 +134,6 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		 * effective permissions, signs a short-lived token. Never throws — fails closed to `invalid_key`.
 		 */
 		async mintFromKey(input: MintFromKeyInput): Promise<MintFromKeyResult> {
-			const services = buildServices(env)
 			try {
 				const { result, principalId, credentialId } = await mintFromKey(services, env, input)
 				ctx.waitUntil(
@@ -147,7 +150,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 				return result
 			} catch (err) {
 				// Same fail-closed posture as mintToken(): never surface a 500.
-				console.error(`mintFromKey failed for request '${input.requestId}'`, err)
+				logError(`mintFromKey failed for request '${input.requestId}'`, err)
 				ctx.waitUntil(
 					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,
@@ -174,7 +177,6 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		 * `app` here is self-asserted (no token on this call); audit labeling only.
 		 */
 		audit(event: AuditInput): Promise<void> {
-			const services = buildServices(env)
 			ctx.waitUntil(
 				services.repositories.audit
 					.writeAuditEvent({
@@ -190,14 +192,13 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 						metadata: event.metadata,
 					})
 					.catch((err: unknown) => {
-						console.error('audit write failed', err)
+						logError('audit write failed', err)
 					}),
 			)
 			return Promise.resolve()
 		},
 
 		async listPrincipals(input: ListPrincipalsInput): Promise<ListPrincipalsResult> {
-			const services = buildServices(env)
 			try {
 				// Resolve the CALLER from the forwarded native credential — never a self-asserted principal.
 				// The app we list is the credential's verified app, so an operator only ever enumerates the
@@ -222,13 +223,12 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 				return { ok: true, principals }
 			} catch (err) {
 				// Fail closed — never surface a 500. A read needs no auth_log row.
-				console.error(`listPrincipals failed for request '${input.requestId}'`, err)
+				logError(`listPrincipals failed for request '${input.requestId}'`, err)
 				return { ok: false, reason: 'unknown_principal' }
 			}
 		},
 
 		async revokeKey(input: RevokeKeyInput): Promise<RevokeKeyResult> {
-			const services = buildServices(env)
 			try {
 				// Resolve + authorize the REVOKER from the forwarded native credential — like the issue path.
 				const res = await resolveCaller(services, env, { app: input.app, credential: input.credential, requestId: input.requestId })
@@ -261,7 +261,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 
 				return result
 			} catch (err) {
-				console.error(`revokeKey failed for request '${input.requestId}'`, err)
+				logError(`revokeKey failed for request '${input.requestId}'`, err)
 				ctx.waitUntil(
 					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,
@@ -277,7 +277,6 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		},
 
 		async issueKey(input: IssueKeyInput): Promise<IssueKeyResult> {
-			const services = buildServices(env)
 			try {
 				// Resolve the ISSUER from the forwarded native credential.
 				const res = await resolveCaller(services, env, { app: input.app, credential: input.credential, requestId: input.requestId })
@@ -317,7 +316,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 
 				return result
 			} catch (err) {
-				console.error(`issueKey failed for request '${input.requestId}'`, err)
+				logError(`issueKey failed for request '${input.requestId}'`, err)
 				ctx.waitUntil(
 					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,
@@ -333,7 +332,6 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 		},
 
 		async issueJwt(input: IssueJwtInput): Promise<IssueJwtResult> {
-			const services = buildServices(env)
 			try {
 				const res = await resolveCaller(services, env, { app: input.app, credential: input.credential, requestId: input.requestId })
 				if (!res.ok) {
@@ -364,7 +362,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 
 				return result
 			} catch (err) {
-				console.error(`issueJwt failed for request '${input.requestId}'`, err)
+				logError(`issueJwt failed for request '${input.requestId}'`, err)
 				ctx.waitUntil(
 					services.repositories.audit.writeAuthLog({
 						requestId: input.requestId,

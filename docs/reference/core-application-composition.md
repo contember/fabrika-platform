@@ -37,7 +37,24 @@ The unified console reaches the three applications as follows:
 
 The two gateways preserve the nested RPC error envelope. They may add the public
 IAM login URL to an authentication error, but they do not reinterpret domain
-results.
+results. They forward the browser's request headers unchanged — the session
+cookie and the `Origin` above all — because the downstream service authenticates
+and authorizes the **browser's** principal, not the control plane's.
+
+Each gateway performs its own same-origin check before forwarding, against
+`FABRIKA_CONTROL_DOMAIN` (the console's public origin) rather than the
+reconstructed request URL, which is plain HTTP behind a TLS-terminating balancer.
+That check is what stops a confused-deputy attack: a hostile page POSTing to the
+console's own origin with the victim's cookies is refused by the gateway before
+the downstream service is asked.
+
+IAM applies the same check independently. Which browser origins may drive
+`/admin/*` with an ambient session cookie is a **registry**,
+`FABRIKA_IAM_ADMIN_ORIGINS`, holding the console's public origin. IAM cannot
+derive it: the console is served from the control plane's domain, never from
+IAM's issuer. An unset or empty registry refuses every cookie-authenticated
+write, which is the fail-closed default; a machine caller presenting only a
+bearer is exempt, because a bearer is never attached by a browser on its own.
 
 ## Authorization boundary
 

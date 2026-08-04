@@ -19,6 +19,8 @@ const exec = { waitUntil() {} }
 interface EnvOptions {
 	bootstrapAdmins?: string[]
 	provisioningKey?: string
+	/** Registered admin origins. Defaults to the console origin these tests drive from. */
+	adminOrigins?: string[]
 }
 
 function env(h: Harness, options: EnvOptions = {}): Env {
@@ -28,14 +30,15 @@ function env(h: Harness, options: EnvOptions = {}): Env {
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: JSON.stringify(options.bootstrapAdmins ?? []),
+		ADMIN_ORIGINS: JSON.stringify(options.adminOrigins ?? [ORIGIN]),
 		ENVIRONMENT: 'stage',
 		ISSUER: ORIGIN,
 		FABRIKA_IAM_SIGNING_KEYS: '',
 		FABRIKA_IAM_PROVISIONING_KEY: options.provisioningKey ?? '',
 		SESSION_COOKIE_DOMAIN: '',
 		OIDC_ISSUER: 'https://idp.test',
-		OIDC_CLIENT_ID: '',
-		OIDC_CLIENT_SECRET: '',
+		OIDC_CLIENT_ID: 'client',
+		OIDC_CLIENT_SECRET: 'secret',
 		OIDC_SCOPES: '',
 		OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
 	}

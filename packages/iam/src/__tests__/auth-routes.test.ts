@@ -343,7 +343,7 @@ describe('email identity is the mailbox, not its spelling', () => {
 
 		const claimed = await h.repositories.principals.getUserByExternalId('bob-1')
 		expect(claimed?.id).toBe(invited.id)
-		expect((await h.repositories.principals.listPrincipals({ type: 'user' })).length).toBe(1)
+		expect((await h.repositories.principals.listPrincipals({ type: 'user', limit: 50 })).length).toBe(1)
 	})
 
 	test('an invited-but-disabled principal with different casing is refused, not re-created', async () => {
@@ -354,7 +354,7 @@ describe('email identity is the mailbox, not its spelling', () => {
 		const services = h.makeServices({ issuer: ISSUER, human: { emailDomains: ['*'], emails: [] } })
 		expect((await oidcLogin(services, { sub: 'bob-2', email: 'BOB@Example.com' })).status).toBe(403)
 		expect(await h.repositories.principals.getUserByExternalId('bob-2')).toBeNull()
-		expect((await h.repositories.principals.listPrincipals({ type: 'user' })).length).toBe(1)
+		expect((await h.repositories.principals.listPrincipals({ type: 'user', limit: 50 })).length).toBe(1)
 	})
 
 	test('the always-admit-a-known-principal fallback finds the invite whatever the IdP spells', async () => {

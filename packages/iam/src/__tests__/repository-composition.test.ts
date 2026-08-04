@@ -23,7 +23,7 @@ describe('IAM repository composition', () => {
 		const repositories = createIamRepositories(unusedDatabase, { principals })
 
 		expect(repositories.principals).toBe(principals)
-		expect(await repositories.principals.listPrincipals({})).toEqual([])
+		expect(await repositories.principals.listPrincipals({ limit: 50 })).toEqual([])
 		expect(repositories.grants).toBeDefined()
 		expect(repositories.appSchema).toBeDefined()
 	})

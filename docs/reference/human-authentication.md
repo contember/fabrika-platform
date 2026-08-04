@@ -90,5 +90,24 @@ admin RPC to invite the first user and issue a manual enrollment link. The same
 path is used for later manual enrollment. Fabrika does not store or print a
 bootstrap password.
 
+## First machine caller
+
+`FABRIKA_IAM_PROVISIONING_KEY` authenticates against IAM's own `/admin/*`
+surface, which is not behind the proxy. It is **not** a credential for any other
+service. It has no `credentials` row, so `mintFromKey` cannot resolve it, and the
+proxy refuses it with `invalid_key` before the request reaches the application
+behind the gate.
+
+A machine that calls the control plane, Operations, or any deployed app uses an
+**IAM-issued service key**: an operator (or CI, once bootstrapped) provisions one
+through IAM's admin surface with the provisioning key, and the resulting `px_…`
+credential is what the proxy exchanges for an access token. The local stack does
+exactly this and stores the result in `.state/machine.env`.
+
+A service key is bound to the app it was provisioned for. Provisioning it with no
+`app` makes it cross-app, which is the right choice for an operator credential
+that drives several planes and the wrong one for an integration that needs only
+one.
+
 See [ADR-0020](../decisions/0020-compose-human-authentication-methods.md) for the
 decision and rejected mode/temporary-password alternatives.

@@ -95,13 +95,13 @@ describe('Db.listPrincipals — q search', () => {
 		const bob = seedUser(h.sqlite, { sub: 'b', email: 'bob@firma.cz', label: 'Bob Dvořák' })
 
 		// Lowercase needle vs. capitalised label.
-		expect((await h.repositories.principals.listPrincipals({ q: 'alice' })).map((r) => r.id)).toEqual([alice])
+		expect((await h.repositories.principals.listPrincipals({ limit: 50, q: 'alice' })).map((r) => r.id)).toEqual([alice])
 		// Uppercase needle vs. lowercase label.
-		expect((await h.repositories.principals.listPrincipals({ q: 'BOB' })).map((r) => r.id)).toEqual([bob])
+		expect((await h.repositories.principals.listPrincipals({ limit: 50, q: 'BOB' })).map((r) => r.id)).toEqual([bob])
 		// The email column is normalised too, not just the label.
-		expect((await h.repositories.principals.listPrincipals({ q: 'alice@firma' })).map((r) => r.id)).toEqual([alice])
+		expect((await h.repositories.principals.listPrincipals({ limit: 50, q: 'alice@firma' })).map((r) => r.id)).toEqual([alice])
 		// A needle matching neither still matches nothing.
-		expect(await h.repositories.principals.listPrincipals({ q: 'carol' })).toEqual([])
+		expect(await h.repositories.principals.listPrincipals({ limit: 50, q: 'carol' })).toEqual([])
 	})
 
 	test('q composes with the type filter, and services (email NULL) are searchable by label', async () => {
@@ -110,8 +110,8 @@ describe('Db.listPrincipals — q search', () => {
 		const user = seedUser(h.sqlite, { sub: 'r', email: 'reporter@firma.cz', label: 'Reports Person' })
 		const service = seedService(h.sqlite, { commonName: 'ci', label: 'Reports Exporter' })
 
-		expect(new Set((await h.repositories.principals.listPrincipals({ q: 'reports' })).map((r) => r.id))).toEqual(new Set([user, service]))
-		expect((await h.repositories.principals.listPrincipals({ type: 'service', q: 'REPORTS' })).map((r) => r.id)).toEqual([service])
+		expect(new Set((await h.repositories.principals.listPrincipals({ limit: 50, q: 'reports' })).map((r) => r.id))).toEqual(new Set([user, service]))
+		expect((await h.repositories.principals.listPrincipals({ limit: 50, type: 'service', q: 'REPORTS' })).map((r) => r.id)).toEqual([service])
 	})
 })
 
@@ -129,6 +129,6 @@ describe('Db.listPrincipals — ordering', () => {
 		const seeded = new Set([first, second, third])
 		const expected = [first, second, third].sort((a, b) => (a < b ? 1 : -1))
 		// Filtered because migration 0008 seeds `provisioning-admin`, which is older than these.
-		expect((await h.repositories.principals.listPrincipals({})).map((r) => r.id).filter((id) => seeded.has(id))).toEqual(expected)
+		expect((await h.repositories.principals.listPrincipals({ limit: 50 })).map((r) => r.id).filter((id) => seeded.has(id))).toEqual(expected)
 	})
 })

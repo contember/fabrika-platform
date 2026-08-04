@@ -2,6 +2,8 @@ import { type PermissionEntry, permits, type PrincipalType, SESSION_COOKIE } fro
 import { isDevBypassSession, resolveCaller } from '../auth'
 import { principalStatus } from '../db'
 import type { Env, RequestContext } from '../env'
+import { logError } from '../log'
+import { normalizeOrigin } from '../origin'
 import { requestId } from '../request-id'
 import { resolveUserPermissions } from '../resolve'
 import { hashToken } from '../secret'
@@ -86,21 +88,33 @@ function parseCookie(header: string | null, name: string): string | null {
 	return null
 }
 
-// State-changing HTTP methods. GET/HEAD are safe (no side effects) and are
-// exempt from the same-origin check below.
-const STATE_CHANGING_METHODS = new Set(['POST', 'PATCH', 'DELETE'])
+/**
+ * Methods with no side effects. An ALLOWLIST, not a list of the state-changing ones: the previous
+ * denylist omitted `PUT`, which is how `PUT /admin/apps/:app/schema` skipped the check, and any
+ * method invented later would have skipped it too (SEC-29). Anything not named here is checked.
+ */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 /**
- * In-app CSRF defense: reject state-changing `/admin/*` requests that did not originate from the
- * IAM origin. Returns `null` when allowed.
+ * In-app CSRF defense: reject a cookie-authenticated state change on `/admin/*` that did not come
+ * from a REGISTERED admin origin. Returns `null` when allowed.
  *
- * TWO THINGS HERE ARE NOT OBVIOUS, and both were live defects (backlog 50).
+ * **The origins compared against are configured (`ADMIN_ORIGINS`), never derived.** The admin surface
+ * is driven by the unified console, which lives on the CONTROL PLANE's public domain — a coordinate
+ * IAM cannot infer. It used to compare against its own issuer, which the browser never sends for a
+ * console request; the gateway then rewrote the `Origin` header to make the comparison pass, and a
+ * deployment whose private RPC address differed from its public issuer (the normal production shape)
+ * answered every console write with 403. Both halves of that are gone: the header arrives as the
+ * browser sent it, and IAM is TOLD which origins may drive it.
  *
- * **The origin compared against is the CONFIGURED one, never `new URL(request.url).origin`.** Behind
- * a TLS-terminating balancer the process is reached over plain HTTP, so the reconstructed origin is
- * `http://host` while the browser truthfully sent `https://host`. Comparing those rejects every
- * genuine console write. Same rule as the session cookie's `Secure` flag: the socket is the wrong
+ * It is also not `new URL(request.url).origin`. Behind a TLS-terminating balancer the process is
+ * reached over plain HTTP, so the reconstructed origin is `http://host` while the browser truthfully
+ * sent `https://host` — the same rule as the session cookie's `Secure` flag: the socket is the wrong
  * signal for what the browser did.
+ *
+ * An EMPTY registry rejects every cookie-authenticated write. That is the fail-closed default and it
+ * is deliberately not "allow the issuer": an installation that has not named its console has not
+ * decided anything, and guessing on its behalf is what produced the defect above.
  *
  * **A request authenticated SOLELY by `Authorization` is exempt.** CSRF exists because a browser
  * attaches cookies by itself; a bearer token is never attached automatically, so the check buys
@@ -108,39 +122,35 @@ const STATE_CHANGING_METHODS = new Set(['POST', 'PATCH', 'DELETE'])
  * the documented first-administrator bootstrap. A request carrying a session cookie is checked even
  * if it also carries a bearer: ambient authority is present, so the defense applies.
  */
-export function rejectCrossOrigin(request: Request, config: Pick<Config, 'issuer'>): Response | null {
-	if (!STATE_CHANGING_METHODS.has(request.method)) {
+export function rejectCrossOrigin(request: Request, config: Pick<Config, 'adminOrigins'>): Response | null {
+	if (SAFE_METHODS.has(request.method)) {
 		return null
 	}
 	const { bearer, session } = extractCredentials(request)
 	if (bearer !== null && session === null) {
 		return null
 	}
-	const expected = originOf(config.issuer)
-	if (expected === null) {
-		// No usable public origin configured: fail closed rather than accept anything.
+	if (config.adminOrigins.length === 0) {
+		// No console origin registered: fail closed rather than accept anything.
 		return error(403, 'cross-origin request rejected')
 	}
 	const origin = request.headers.get('Origin')
 	if (origin !== null) {
-		return origin === expected ? null : error(403, 'cross-origin request rejected')
+		return admitted(config, origin) ? null : error(403, 'cross-origin request rejected')
 	}
 	// No `Origin` (some same-origin requests omit it) → fall back to `Referer`.
 	const referer = request.headers.get('Referer')
 	if (referer !== null) {
-		return originOf(referer) === expected ? null : error(403, 'cross-origin request rejected')
+		return admitted(config, referer) ? null : error(403, 'cross-origin request rejected')
 	}
 	// Neither header present on a cookie-authenticated state change → reject.
 	return error(403, 'cross-origin request rejected')
 }
 
-// Parse the origin from a URL string; null if it isn't a valid absolute URL.
-function originOf(value: string): string | null {
-	try {
-		return new URL(value).origin
-	} catch {
-		return null
-	}
+/** Is this `Origin`/`Referer` value one of the registered admin origins, canonically compared? */
+function admitted(config: Pick<Config, 'adminOrigins'>, value: string): boolean {
+	const normalized = normalizeOrigin(value)
+	return normalized !== null && config.adminOrigins.includes(normalized)
 }
 
 /** The resolved admin (already authenticated; the `iam.admin` gate is applied by `handleAdmin`). */
@@ -174,6 +184,12 @@ export async function resolveAdmin(
 		if (!res.ok) {
 			const status = res.reason === 'missing_token' || res.reason === 'invalid_token' ? 401 : 403
 			return { ok: false, status, reason: res.reason }
+		}
+		// A credential bound to ANOTHER app never administers IAM. `resolveCredential` already refuses
+		// the mismatch, so this is the second lock on the same rule — and the one that reads as a rule
+		// rather than as a consequence of how a credential happens to resolve (SEC-7).
+		if (res.verifiedApp !== IAM_APP) {
+			return { ok: false, status: 403, reason: 'not_allowed' }
 		}
 		if (res.caller.type === undefined) {
 			return { ok: false, status: 403, reason: 'not_allowed' }
@@ -255,7 +271,7 @@ export async function handleAdmin(
 		if (err instanceof AdminUseCaseError) {
 			return error(err.httpStatus, err.message)
 		}
-		console.error('admin request failed', err)
+		logError('admin request failed', err)
 		return error(500, 'internal error')
 	}
 }

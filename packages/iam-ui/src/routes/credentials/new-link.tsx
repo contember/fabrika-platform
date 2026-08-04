@@ -23,10 +23,12 @@ const EMPTY_ROW: GrantRow = { action: '', scopeType: '', scopeValue: '' }
  * what navigates away.
  */
 export default createPage()
+	.loader(async () => ({ apps: (await api.apps.list()).items }))
 	.route('/access/credentials/links/new')
-	.render(() => {
+	.render(({ data }) => {
 		const navigate = useNavigate()
 		const [rows, setRows] = useState<GrantRow[]>([{ ...EMPTY_ROW }])
+		const [app, setApp] = useState('')
 		const [label, setLabel] = useState('')
 		const [expiry, setExpiry] = useState('')
 		const [busy, setBusy] = useState(false)
@@ -67,8 +69,14 @@ export default createPage()
 				return
 			}
 
+			if (app === '') {
+				setError('Choose the app this link is for.')
+				return
+			}
+
 			const expiresAt = parseDateTimeLocal(expiry)
 			const body: IssueShareLinkRequest = {
+				app,
 				grants: grants.map((g) => ({
 					action: g.action,
 					scope: g.scopeType === '' ? null : { type: g.scopeType, value: g.scopeValue },
@@ -97,11 +105,21 @@ export default createPage()
 					<h1>Issue share link</h1>
 					<p className="hint">
 						An anonymous, revocable <code>px_</code> credential granting specific <code>(action, scope)</code>{' '}
-						pairs. You can only delegate what you hold yourself.
+						pairs at ONE app. You can only delegate what you hold there yourself.
 					</p>
 				</div>
 
 				<form className="panel form wide" onSubmit={submit}>
+					<label>
+						App
+						<select value={app} onChange={(e) => setApp(e.target.value)}>
+							<option value="">Choose an app…</option>
+							{data.apps.map((item) => <option key={item.id} value={item.id}>{item.id}</option>)}
+						</select>
+						<small className="hint">
+							The link mints only for this app. Its grants are frozen at issue, so the app is what keeps them from being spent anywhere else.
+						</small>
+					</label>
 					<div className="grant-rows">
 						<div className="grant-rows-head">
 							<span>Action</span>

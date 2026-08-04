@@ -53,12 +53,6 @@ export interface IamEnv {
 	 * escape hatch for the first operator before IAM knows about fabrika.
 	 */
 	FABRIKA_CONTROL_BOOTSTRAP_ADMINS?: string
-	/**
-	 * The seeded IAM provisioning key (a `px_` bearer, also fabrika's reconcile credential). A request
-	 * bearing it is authorized as a synthetic global-admin — the machine bootstrap escape hatch.
-	 * Empty/unset disables it.
-	 */
-	FABRIKA_IAM_PROVISIONING_KEY?: string
 	/** The control plane's own public domain — the CSRF guard's authority (see `controlPublicOrigin`). */
 	FABRIKA_CONTROL_DOMAIN?: string
 }
@@ -137,8 +131,18 @@ const SDK_DEV_PERSONAS: Record<string, PersonaSpec> = {
 }
 
 /**
- * The application-framework auth front door. It resolves the caller through the public IAM SDK — the
- * proxy-injected token, verified locally — then applies the two control-only bootstrap hatches.
+ * The application-framework auth front door: resolve the caller through the public IAM SDK (the
+ * proxy-injected token, verified locally), then apply the one control-only bootstrap hatch.
+ *
+ * There used to be a second hatch here — a request bearing `FABRIKA_IAM_PROVISIONING_KEY` was
+ * authorized as a synthetic global admin. It was DEAD CODE behind the proxy and could not be
+ * revived: `/api/*` is gated `service`, the proxy resolves a `px_` bearer by asking IAM to mint from
+ * it, and the provisioning key has no `credentials` row — IAM resolves it specially, in
+ * `resolveCaller`, for its OWN `/admin/*` surface. So `mintFromKey` answered `invalid_key` and the
+ * request was refused before control ever saw the bearer. One mechanism per job: machine access to
+ * the control plane is an IAM-ISSUED SERVICE KEY, which is a real credential the proxy can exchange,
+ * and which an operator obtains with the provisioning key over IAM's admin surface. See
+ * `docs/reference/human-authentication.md`.
  */
 export function controlAuthMiddleware<Ctx extends AuthCarrier>(env: IamEnv): Middleware<Ctx> {
 	const iam = createAppIam(env, {
@@ -149,19 +153,10 @@ export function controlAuthMiddleware<Ctx extends AuthCarrier>(env: IamEnv): Mid
 		devPersonaHeader: DEV_PRINCIPAL_HEADER,
 	})
 	const bootstrapAdmins = parseBootstrapAdmins(env.FABRIKA_CONTROL_BOOTSTRAP_ADMINS)
-	const provisioningKey = (env.FABRIKA_IAM_PROVISIONING_KEY ?? '').trim()
 
 	return async (request, ctx, next) => {
 		const path = new URL(request.url).pathname
 		if (!path.startsWith('/api/') || path === '/api/health') return next()
-
-		if (provisioningKey !== '') {
-			const bearer = readBearerToken(request.headers.get('Authorization'))
-			if (bearer !== null && constantTimeEqual(bearer, provisioningKey)) {
-				ctx.auth = makeProvisioningContext()
-				return next()
-			}
-		}
 
 		const result = await iam.authenticate(request)
 		if (!result.ok) {
@@ -187,35 +182,6 @@ function authFailureResponse(path: string, failure: AuthFailure): Response {
 		return Response.json({ error: { type, message: failure.reason } }, { status: failure.status })
 	}
 	return error(failure.status, failure.reason)
-}
-
-/** The synthetic principal a provisioning-key request resolves to. */
-const PROVISIONING_PRINCIPAL: PrincipalIdentity = { id: 'provisioning-admin', type: 'service', label: 'provisioning' }
-
-/** A global-admin AuthContext for the provisioning key: every action allowed, no real grants, no audit sink. */
-function makeProvisioningContext(): AuthContext {
-	return { ok: true, principal: PROVISIONING_PRINCIPAL, can: () => true, scopedTo: () => null, audit: () => Promise.resolve() }
-}
-
-/** Extract the token from an `Authorization: Bearer <token>` header, or null. */
-function readBearerToken(header: string | null): string | null {
-	if (header === null) {
-		return null
-	}
-	const match = /^Bearer\s+(.+)$/i.exec(header.trim())
-	return match === null ? null : match[1]
-}
-
-/** Constant-time string compare (length-checked) — avoids leaking the provisioning key by timing. */
-function constantTimeEqual(a: string, b: string): boolean {
-	if (a.length !== b.length) {
-		return false
-	}
-	let diff = 0
-	for (let i = 0; i < a.length; i++) {
-		diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
-	}
-	return diff === 0
 }
 
 /**

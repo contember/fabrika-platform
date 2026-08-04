@@ -60,6 +60,7 @@ describe('resolveCaller — px_ key resolution', () => {
 		const credId = await h.repositories.credentials.createCredential({
 			tokenHash: await hashToken(key),
 			issuedBy: issuerId,
+			app: 'reports',
 			grants: [{ action: 'report.read' }],
 		})
 
@@ -70,6 +71,35 @@ describe('resolveCaller — px_ key resolution', () => {
 		expect(res.caller.type).toBeUndefined()
 		expect(res.caller.id).toBe(credId)
 		expect(res.caller.permissions).toEqual([{ action: 'report.read', scope: null, source: 'grant' }])
+		// The VERIFIED app comes off the credential, not from the caller's assertion.
+		expect(res.verifiedApp).toBe('reports')
+	})
+
+	test('an anonymous key is refused at any app but its own, and one with no app at all is dead', async () => {
+		const h = createHarness()
+		const services = h.makeServices({ environment: 'stage' })
+		const issuerId = seedUser(h.sqlite, { sub: 'iss2', email: 'iss2@contember.com' })
+
+		const bound = 'px_bound-to-reports'
+		await h.repositories.credentials.createCredential({
+			tokenHash: await hashToken(bound),
+			issuedBy: issuerId,
+			app: 'reports',
+			grants: [{ action: '*' }],
+		})
+		// The attack SEC-2 describes: authority delegated at one app, presented at another.
+		expect(await resolveCaller(services, env(), { app: 'billing', credential: bound, requestId: REQUEST }))
+			.toEqual({ ok: false, reason: 'invalid_token' })
+
+		// A pre-cutover link (no app) resolves nowhere at all — it has to be reissued.
+		const legacy = 'px_legacy-no-app'
+		await h.repositories.credentials.createCredential({
+			tokenHash: await hashToken(legacy),
+			issuedBy: issuerId,
+			grants: [{ action: 'report.read' }],
+		})
+		expect(await resolveCaller(services, env(), { app: 'reports', credential: legacy, requestId: REQUEST }))
+			.toEqual({ ok: false, reason: 'invalid_token' })
 	})
 })
 

@@ -70,14 +70,18 @@ INSERT INTO grants (id, principal_id, app, role_key, permissions, scope_type, sc
   ('grant-bob-project',  'p-bob-invited', 'poplach', 'editor', NULL,                                  'project',      'p-42', 'local-dev-admin', NULL, 1782892800),
   -- Inline grant: a one-off permission set with no named role (XOR — role_key NULL).
   ('grant-svc-inline',   'p-svc-reports', 'poplach', NULL,     '["report.read","report.export"]',     'project',      'p-42', 'local-dev-admin', NULL, 1782836400),
-  -- Cross-app super-admin style global grant (app NULL = all apps).
-  ('grant-admin-all',    'local-dev-admin', NULL,    'editor', NULL,                                  NULL,           NULL,   'local-dev-admin', NULL, 1782810400)
+  -- Cross-app super-admin: role_key MUST be a BUILT-IN here. A cross-app grant resolves with app=null,
+  -- and role lookup at app=null sees the built-ins only (`loadRoleSource`) — so the 'editor' this row
+  -- used to name resolved to zero permissions and the seeded "super-admin" could do nothing at all.
+  ('grant-admin-all',    'local-dev-admin', NULL,    'admin',  NULL,                                  NULL,           NULL,   'local-dev-admin', NULL, 1782810400)
   ON CONFLICT DO NOTHING;
 
 -- ── Share link = anonymous credential (principal_id NULL; hash only, plaintext never stored). ─
--- expires_at is year-2100 so the seeded link stays usable however old this file gets.
-INSERT INTO credentials (id, token_hash, label, principal_id, issued_by, expires_at, revoked_at, created_at) VALUES
-  ('cred-q2', 'seed-sha256-q2-acme-not-a-real-hash', 'Share: report Q2 (ACME)', NULL, 'local-dev-admin', 4102444800, NULL, 1782856400)
+-- expires_at is year-2100 so the seeded link stays usable however old this file gets. `app` is NOT
+-- optional on an anonymous credential: its grants are frozen at issue and the app is what stops them
+-- being spent anywhere else (migration 0012/0006).
+INSERT INTO credentials (id, token_hash, label, principal_id, app, issued_by, expires_at, revoked_at, created_at) VALUES
+  ('cred-q2', 'seed-sha256-q2-acme-not-a-real-hash', 'Share: report Q2 (ACME)', NULL, 'opice', 'local-dev-admin', 4102444800, NULL, 1782856400)
   ON CONFLICT DO NOTHING;
 -- Frozen inline grants, matched by permits() (action + scope), not an exact resource.
 INSERT INTO credential_grants (credential_id, action, scope_type, scope_value) VALUES

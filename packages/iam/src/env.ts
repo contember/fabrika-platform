@@ -26,6 +26,18 @@ export interface Env {
 	HUMAN_EMAILS: string
 	/** JSON array of bootstrap-admin emails (normally empty). Always admitted; resolution-time only. */
 	IAM_BOOTSTRAP_ADMINS: string
+	/**
+	 * JSON array of browser origins allowed to drive `/admin/*` with an ambient session cookie — the
+	 * unified console's public origin, and nothing else by default. Deploy var
+	 * `FABRIKA_IAM_ADMIN_ORIGINS`.
+	 *
+	 * It is a REGISTRY, not an inference. The console is fronted by the control plane's own domain and
+	 * IAM has no way to derive it; the previous code compared against IAM's issuer, which the browser
+	 * never sends, and the gateway rewrote the header to match — which both broke every console write
+	 * and hid the real requirement. Empty/unset means no browser may write, which is the fail-closed
+	 * default a machine caller (bearer, no cookie) is deliberately exempt from.
+	 */
+	ADMIN_ORIGINS: string
 	/** `local` / `stage` / `prod`. */
 	ENVIRONMENT: string
 	/** Explicit local-only human login bypass. Ignored unless `ENVIRONMENT=local`. */

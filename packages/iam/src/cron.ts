@@ -12,16 +12,17 @@ import type { Env, RequestContext } from './env'
 import { buildServices } from './services'
 
 /**
- * Retention for `auth_log`. `audit_events` are kept long; only the dense, high-churn auth log is
- * pruned — it is the one table that grows without bound and is never referenced by a foreign key.
+ * Retention for the tables that grow without bound and are referenced by no foreign key. Everything
+ * else — `audit_events` above all — is kept: an audit trail that expires is not one.
  */
 export const AUTH_LOG_RETENTION_SECONDS = 30 * 24 * 60 * 60 // 30 days
 export const PASSWORD_TRANSIENT_RETENTION_SECONDS = 7 * 24 * 60 * 60 // 7 days
 
 /**
- * Prune old auth-log rows, password action tokens, login throttles, and spent handoff codes.
- * Registered through `waitUntil` because a Worker scheduled handler that returns before its writes
- * settle is cut off; in a process the supervised promise means a failure is logged rather than fatal.
+ * Prune old auth-log rows, password action tokens, login throttles, spent handoff codes, and dead
+ * sessions. Registered through `waitUntil` because a Worker scheduled handler that returns before its
+ * writes settle is cut off; in a process the supervised promise means a failure is logged rather than
+ * fatal.
  */
 export function runIamMaintenance(env: Env, ctx: RequestContext, now: number = Date.now()): void {
 	const services = buildServices(env)
@@ -33,6 +34,10 @@ export function runIamMaintenance(env: Env, ctx: RequestContext, now: number = D
 			services.repositories.passwords.pruneLoginThrottles(nowSeconds - PASSWORD_TRANSIENT_RETENTION_SECONDS),
 			// Codes live two minutes and are single-use, so this only sweeps ones nobody redeemed.
 			services.repositories.handoff.pruneCodes(nowSeconds),
+			// Sessions, at expiry — no grace period, because an expired or revoked session is already
+			// refused at use and the row exists only to be deleted. `pruneSessions` was written, tested
+			// and then never called, so `sessions` grew for the life of every installation (SEC-13).
+			services.repositories.sessions.pruneSessions(nowSeconds),
 		]).then(() => undefined),
 	)
 }

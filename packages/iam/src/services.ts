@@ -4,6 +4,7 @@ import type { IamRepositories } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import type { Env } from './env'
 import { OidcClient } from './oidc'
+import { normalizeOrigin } from './origin'
 import { type PasswordHasher, WebCryptoPasswordHasher } from './password-crypto'
 
 /**
@@ -32,6 +33,11 @@ export interface Config {
 	}
 	/** Bootstrap-admin emails (normally empty). Always admitted; resolve to the global `admin` role. */
 	readonly bootstrapAdmins: ReadonlySet<string>
+	/**
+	 * Canonical browser origins allowed to drive `/admin/*` with an ambient cookie (`ADMIN_ORIGINS`).
+	 * Empty = no browser may write; a machine caller presenting only a bearer is unaffected.
+	 */
+	readonly adminOrigins: readonly string[]
 	readonly environment: string
 	/** Create a real local admin session without contacting an external OIDC provider. */
 	readonly localDevLogin: boolean
@@ -54,6 +60,25 @@ function parseStringArray(raw: string): string[] {
 	} catch {
 		return []
 	}
+}
+
+/**
+ * Parse `ADMIN_ORIGINS` into canonical origins. A malformed entry is REFUSED rather than skipped:
+ * this list is the only thing standing between the console and a hostile page, and an operator who
+ * typo'd one entry must learn that at boot, not by having it silently do nothing.
+ */
+function parseAdminOrigins(raw: string): string[] {
+	const origins: string[] = []
+	for (const value of parseStringArray(raw)) {
+		const normalized = normalizeOrigin(value)
+		if (normalized === null) {
+			throw new Error(`ADMIN_ORIGINS holds a value that is not an absolute http(s) origin: ${value}`)
+		}
+		if (!origins.includes(normalized)) {
+			origins.push(normalized)
+		}
+	}
+	return origins
 }
 
 function parseBootstrapAdmins(raw: string): Set<string> {
@@ -91,6 +116,7 @@ export function buildServices(env: Env): Services {
 				emails: parseStringArray(env.HUMAN_EMAILS),
 			},
 			bootstrapAdmins: parseBootstrapAdmins(env.IAM_BOOTSTRAP_ADMINS),
+			adminOrigins: parseAdminOrigins(env.ADMIN_ORIGINS),
 			environment: env.ENVIRONMENT,
 			localDevLogin: env.ENVIRONMENT === 'local' && env.LOCAL_DEV_LOGIN === 'true',
 			authentication: {
@@ -115,11 +141,19 @@ function required(name: string, value: string | undefined): string {
 	return value
 }
 
+/**
+ * Build the relying-party client, REFUSING an incomplete configuration.
+ *
+ * The Bun composition has always failed the boot on a missing `OIDC_*`; the Worker used to substitute
+ * empty strings and serve an OIDC method that could only fail at the redirect. Two engines, two
+ * answers to one misconfiguration — the surviving one is the loud one, on the same reasoning as the
+ * proxy's key check and the signing-key refusal: refusing to boot beats booting misconfigured.
+ */
 function buildOidc(env: Env): OidcClient {
 	return new OidcClient({
-		issuer: env.OIDC_ISSUER ?? '',
-		clientId: env.OIDC_CLIENT_ID ?? '',
-		clientSecret: env.OIDC_CLIENT_SECRET ?? '',
+		issuer: required('OIDC_ISSUER', env.OIDC_ISSUER),
+		clientId: required('OIDC_CLIENT_ID', env.OIDC_CLIENT_ID),
+		clientSecret: required('OIDC_CLIENT_SECRET', env.OIDC_CLIENT_SECRET),
 		redirectUri: `${env.ISSUER}/auth/callback`,
 		scopes: env.OIDC_SCOPES ?? '',
 		requireVerifiedEmail: env.OIDC_REQUIRE_VERIFIED_EMAIL !== 'false',

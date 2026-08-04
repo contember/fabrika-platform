@@ -138,6 +138,8 @@ export interface MakeServicesOptions {
 	localDevLogin?: boolean
 	/** IAM_BOOTSTRAP_ADMINS emails. Defaults to empty. */
 	bootstrapAdmins?: ReadonlySet<string>
+	/** Browser origins allowed to drive `/admin/*` (`ADMIN_ORIGINS`). Defaults to none. */
+	adminOrigins?: readonly string[]
 	/** Central human-admission allowlist. Defaults to `{ emailDomains: ['contember.com'], emails: [] }`. */
 	human?: { emailDomains?: readonly string[]; emails?: readonly string[] }
 	/** OIDC client. Defaults to one with injected (offline) discovery metadata; tests override for the callback flow. */
@@ -168,6 +170,7 @@ export function createHarness(): Harness {
 				emails: options.human?.emails ?? [],
 			},
 			bootstrapAdmins: new Set([...(options.bootstrapAdmins ?? [])].map(normalizeEmailIdentity)),
+			adminOrigins: options.adminOrigins ?? [],
 			environment,
 			localDevLogin: environment === 'local' && options.localDevLogin === true,
 			authentication: {

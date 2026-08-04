@@ -2,6 +2,7 @@ import type { PermissionEntry, PermissionSource, RoleDef, RoleSource, Scope } fr
 import type { GrantRow, IamRepositories, PrincipalRow, RoleRow } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import { parseJsonOrNull } from './json'
+import { logWarn } from './log'
 import { makeRoleSource } from './roles'
 
 // ── Pure resolution (no I/O) — testable with in-memory rows ───────────────────
@@ -147,7 +148,7 @@ export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, 
 				// unique-email row. This user is already a known principal by sub, so a
 				// cosmetic label refresh must never lock them out — keep serving the
 				// existing identity (its current email/label) and skip the refresh.
-				console.warn(`refreshUserLabel skipped for principal ${bySub.id} (email collision on '${email}')`, err)
+				logWarn(`refreshUserLabel skipped for principal ${bySub.id} (email collision on '${email}')`, err)
 				return { ok: true, principal: bySub }
 			}
 		}
@@ -200,7 +201,7 @@ export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, 
 			}
 			return { ok: true, principal: reread }
 		}
-		console.warn(`createUser failed and no row found on re-read for sub '${sub}'`, err)
+		logWarn(`createUser failed and no row found on re-read for sub '${sub}'`, err)
 		return { ok: false, reason: 'unknown_principal' }
 	}
 }
@@ -213,6 +214,12 @@ export async function resolveUserPrincipal(db: UserPrincipalStore, sub: string, 
  * per-app rows to load — only the built-in `admin` applies. Roles are fetched HERE,
  * up front, so `computePermissions` stays pure: its parsed permission arrays are
  * cached in the returned `RoleSource`'s map and never re-read from D1.
+ *
+ * A cross-app grant's INLINE patterns are unaffected by this: they are carried through
+ * `computePermissions` verbatim and matched by `permits()` at request time, never pre-expanded
+ * against a catalog. That is why a cross-app grant covers an app registered after the grant was
+ * written, and why the admin surface validates such a grant against the UNION of every registered
+ * catalog as a typo check rather than as a boundary (see `parseRoleOrInline`).
  */
 async function loadRoleSource(repositories: IamRepositories, app: string | null): Promise<RoleSource> {
 	const appRoles: Record<string, RoleDef> = {}

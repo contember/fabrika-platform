@@ -26,7 +26,7 @@ class FakeRequestContext implements RequestContext {
 }
 
 function services(h: Harness): Services {
-	return h.makeServices({ environment: 'stage', issuer: ISSUER })
+	return h.makeServices({ environment: 'stage', issuer: ISSUER, adminOrigins: [ISSUER] })
 }
 
 async function asAdmin(h: Harness): Promise<string> {
@@ -99,6 +99,46 @@ describe('rotate / revoke invalidate the native key', () => {
 		// Old key is dead; new key works.
 		expect((await resolveKey(h, first.apiKey)).failed).toBe('invalid_key')
 		expect((await resolveKey(h, rotated.apiKey)).claims?.ptype).toBe('service')
+	})
+
+	test('rotate CARRIES THE EXPIRY forward, and takes a new one when asked', async () => {
+		// Rotation replaces a secret; it does not extend a lifetime. Dropping the expiry silently turned a
+		// key that was meant to die in 30 days into a permanent one (CORR-5).
+		const h = createHarness()
+		const token = await asAdmin(h)
+		seedAppAction(h.sqlite, 'opice', 'report.write')
+		const expiresAt = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60
+		const provisioned: ProvisionApiKeyResponse = await (await run(
+			h,
+			req('/admin/api-keys', 'POST', token, { label: 'expiring', type: 'service', permissions: ['report.write'], app: 'opice', expiresAt }),
+		)).json()
+
+		await run(h, req(`/admin/api-keys/${provisioned.principalId}/rotate`, 'POST', token))
+		const carried = (await h.repositories.credentials.listCredentialsForPrincipal(provisioned.principalId)).find((row) => row.revoked_at === null)
+		expect(carried?.expires_at).toBe(expiresAt)
+		// The app binding rides along too — a rotated key is the same credential with a new secret.
+		expect(carried?.app).toBe('opice')
+
+		const later = expiresAt + 3600
+		await run(h, req(`/admin/api-keys/${provisioned.principalId}/rotate`, 'POST', token, { expiresAt: later }))
+		const restated = (await h.repositories.credentials.listCredentialsForPrincipal(provisioned.principalId)).find((row) => row.revoked_at === null)
+		expect(restated?.expires_at).toBe(later)
+
+		// A past expiry is refused exactly as provisioning refuses one.
+		const past = await run(h, req(`/admin/api-keys/${provisioned.principalId}/rotate`, 'POST', token, { expiresAt: 1 }))
+		expect(past.status).toBe(400)
+	})
+
+	test('rotate refuses a DISABLED principal', async () => {
+		// Handing out a working secret for an account somebody just revoked. The same guard
+		// `passwordUser` already applies to the password paths.
+		const h = createHarness()
+		const token = await asAdmin(h)
+		const provisioned = await provision(h, token)
+		await h.repositories.principals.disablePrincipal(provisioned.principalId)
+
+		const response = await run(h, req(`/admin/api-keys/${provisioned.principalId}/rotate`, 'POST', token))
+		expect(response.status).toBe(409)
 	})
 
 	test('revoke kills the native key', async () => {

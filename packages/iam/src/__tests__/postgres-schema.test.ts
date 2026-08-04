@@ -89,6 +89,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0003_password_auth.sql' },
 			{ bundle: 'iam', name: '0004_cross_host_sso.sql' },
 			{ bundle: 'iam', name: '0005_one_mailbox_rule.sql' },
+			{ bundle: 'iam', name: '0006_credential_app.sql' },
 		])
 	})
 
@@ -302,8 +303,8 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(await db.principals.getServiceByExternalId('sub-1')).toBeNull()
 
 		// LOWER() on both sides: Postgres LIKE is case-SENSITIVE where SQLite's folds ASCII.
-		expect((await db.principals.listPrincipals({ q: 'ALICE' })).map((p) => p.id)).toEqual([created.id])
-		expect(await db.principals.listPrincipals({ type: 'service' })).toHaveLength(0)
+		expect((await db.principals.listPrincipals({ limit: 50, q: 'ALICE' })).map((p) => p.id)).toEqual([created.id])
+		expect(await db.principals.listPrincipals({ limit: 50, type: 'service' })).toHaveLength(0)
 
 		// `IS DISTINCT FROM` (not SQLite's `IS NOT <expr>`) — a no-op when nothing changed.
 		await db.principals.refreshUserLabel(created.id, 'alice2@x.cz')
@@ -427,8 +428,14 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect((await db.credentials.getActiveCredentialByHash('hash-bound'))?.id).toBe(bound)
 		expect((await db.credentials.getCredentialById(bound))?.label).toBe('ci')
 
-		const anonymous = await db.credentials.createCredential({ tokenHash: 'hash-anon', issuedBy: p.id, grants: [{ action: 'report.read' }] })
-		expect((await db.credentials.listAnonymousCredentials()).map((c) => c.id)).toEqual([anonymous])
+		const anonymous = await db.credentials.createCredential({
+			tokenHash: 'hash-anon',
+			issuedBy: p.id,
+			app: 'poplach',
+			grants: [{ action: 'report.read' }],
+		})
+		expect((await db.credentials.listAnonymousCredentials({ limit: 50 })).map((c) => c.id)).toEqual([anonymous])
+		expect((await db.credentials.listAnonymousCredentials({ limit: 50, app: 'other' })).map((c) => c.id)).toEqual([])
 		expect((await db.credentials.listCredentialsForPrincipal(p.id)).map((c) => c.id)).toEqual([bound])
 
 		// Expired and revoked credentials are invisible to the resolve path.
@@ -437,6 +444,9 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(await db.credentials.revokeCredential(anonymous)).toBe(true)
 		expect(await db.credentials.revokeCredential(anonymous)).toBe(false)
 		expect(await db.credentials.getActiveCredentialByHash('hash-anon')).toBeNull()
+		// A revoked link is hidden from the console's default view but still readable on request.
+		expect((await db.credentials.listAnonymousCredentials({ limit: 50 })).map((c) => c.id)).not.toContain(anonymous)
+		expect((await db.credentials.listAnonymousCredentials({ limit: 50, includeRevoked: true })).map((c) => c.id)).toContain(anonymous)
 
 		expect(await db.credentials.revokeCredentialsForPrincipal(p.id)).toBe(1)
 		expect(await db.credentials.revokeCredentialsForPrincipal(p.id)).toBe(0)
@@ -627,6 +637,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '[]',
 			IAM_BOOTSTRAP_ADMINS: '[]',
+			ADMIN_ORIGINS: '[]',
 			// 'local' + empty signing keys → an ephemeral signer, so the JWKS route works with no secrets.
 			ENVIRONMENT: 'local',
 			ISSUER: BASE,
@@ -634,7 +645,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 			FABRIKA_IAM_PROVISIONING_KEY: '',
 			SESSION_COOKIE_DOMAIN: '',
 			OIDC_ISSUER: 'https://idp.test',
-			OIDC_CLIENT_ID: '',
+			OIDC_CLIENT_ID: 'client',
 			OIDC_CLIENT_SECRET: 'dummy',
 			OIDC_SCOPES: '',
 			OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
@@ -728,13 +739,14 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '[]',
 			IAM_BOOTSTRAP_ADMINS: '[]',
+			ADMIN_ORIGINS: '[]',
 			ENVIRONMENT: 'local',
 			ISSUER: BASE,
 			FABRIKA_IAM_SIGNING_KEYS: '',
 			FABRIKA_IAM_PROVISIONING_KEY: '',
 			SESSION_COOKIE_DOMAIN: '',
 			OIDC_ISSUER: 'https://idp.test',
-			OIDC_CLIENT_ID: '',
+			OIDC_CLIENT_ID: 'client',
 			OIDC_CLIENT_SECRET: 'dummy',
 			OIDC_SCOPES: '',
 			OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
@@ -849,13 +861,14 @@ describe.skipIf(!hasPostgres)('the Bun handler never leaks internals on an unhan
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '[]',
 			IAM_BOOTSTRAP_ADMINS: '[]',
+			ADMIN_ORIGINS: '[]',
 			ENVIRONMENT: 'local',
 			ISSUER: 'http://localhost:18191',
 			FABRIKA_IAM_SIGNING_KEYS: 'px_secret-looking-detail',
 			FABRIKA_IAM_PROVISIONING_KEY: '',
 			SESSION_COOKIE_DOMAIN: '',
 			OIDC_ISSUER: 'https://idp.test',
-			OIDC_CLIENT_ID: '',
+			OIDC_CLIENT_ID: 'client',
 			OIDC_CLIENT_SECRET: 'dummy',
 			OIDC_SCOPES: '',
 			OIDC_REQUIRE_VERIFIED_EMAIL: 'true',

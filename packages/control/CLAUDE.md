@@ -51,7 +51,15 @@ transport-only Operations gateway · `/api/*` → ACL-gated control surface ·
 everything else → dashboard `ASSETS`. `/healthz` is a liveness-only route on
 the shared app and is exposed by both the Cloudflare and Bun compositions.
 Neither gateway changes service ownership;
-IAM and Operations authenticate, authorize, and audit their own requests. A
+IAM and Operations authenticate, authorize, and audit their own requests — so both gateways forward
+the browser's headers UNCHANGED, the session cookie and `Origin` above all. Rewriting `Origin` to the
+private upstream's address is exactly the bug that answered 403 to the console's whole Access plane:
+the browser's origin is the console's, never the upstream's, so no rewriting scheme could make an
+issuer comparison correct. Each gateway performs its OWN same-origin check first, against
+`FABRIKA_CONTROL_DOMAIN` (`controlPublicOrigin`) rather than the reconstructed request URL, which is
+plain HTTP behind a TLS-terminating balancer. That check is the confused-deputy defense: a hostile
+page POSTing to the console's own origin with the victim's cookies is refused here, before the
+upstream is asked. Absent configuration fails CLOSED. A
 trigger writes a `pending` run to the
 database then enqueues. The consumer resolves the statically selected `ControlProvider` and calls its
 capabilities. Cloudflare hands the provider-owned job to vozka-runner. Zerops executes its provider
@@ -94,8 +102,12 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   fabrika-synthesized AuthContext from a fixed dev persona (no IAM service, selected by the
   `X-Dev-Principal` header / cookie); `DEV=''` → IAM-backed verification over `env.IAM` (needs
   `FABRIKA_IAM_URL` as the issuer). Any other `DEV` value fails the boot rather than being guessed.
-  `FABRIKA_CONTROL_BOOTSTRAP_ADMINS` is the first-operator escape hatch — fails CLOSED on a malformed
-  value; `FABRIKA_IAM_PROVISIONING_KEY` is its machine twin, checked before the token path.
+  `FABRIKA_CONTROL_BOOTSTRAP_ADMINS` is the ONLY escape hatch here and fails CLOSED on a malformed
+  value. There is no machine twin: `FABRIKA_IAM_PROVISIONING_KEY` authenticates against IAM's own
+  `/admin/*` surface and has no `credentials` row, so behind the proxy `mintFromKey` answers
+  `invalid_key` and the request never reaches this Worker. Machine access to `/api/*` is an
+  IAM-ISSUED SERVICE KEY, which is a real credential the proxy can exchange
+  (`docs/reference/human-authentication.md`).
 - **Vault (`src/vault.ts`): envelope AES-256-GCM**, KEK from `FABRIKA_CONTROL_VAULT_KEY` (never in D1, never logged).
   Secret VALUES are write-only over the API; D1 stores only ciphertext + wrapped DEK. Losing the KEK is unrecoverable by design.
 - **Secrets resolve by ref scheme** (`src/secret-resolver.ts`): `vault:` / `secretstore:` / `env:` / `literal:`.

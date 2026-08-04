@@ -92,8 +92,10 @@ function operationsApi(ctx: ControlAppContext): Promise<Response> {
 	if (gateway === undefined) {
 		return Promise.resolve(Response.json({ error: 'operations unavailable' }, { status: 503 }))
 	}
+	const publicOrigin = controlPublicOrigin(ctx.env)
 	return forwardOperationsApi(ctx.request, {
 		gateway,
 		...(ctx.env.FABRIKA_IAM_URL === undefined ? {} : { publicIamUrl: ctx.env.FABRIKA_IAM_URL }),
+		...(publicOrigin === undefined ? {} : { publicOrigin }),
 	})
 }

@@ -62,7 +62,7 @@ function adminRequest(path: string, opts: RequestOptions = {}): Request {
 
 // Services in 'stage' so the local-dev bypass precondition is off (the session path runs for real).
 function adminServices(h: Harness): Services {
-	return h.makeServices({ environment: 'stage', issuer: ORIGIN })
+	return h.makeServices({ environment: 'stage', issuer: ORIGIN, adminOrigins: [ORIGIN] })
 }
 
 async function run(h: Harness, request: Request): Promise<Response> {

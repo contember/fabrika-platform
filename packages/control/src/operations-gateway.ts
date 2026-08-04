@@ -8,6 +8,14 @@ const EXCLUDED_SEGMENTS = new Set(['ingest', 'envelope', 'artifacts', 'artifact'
 export interface OperationsGatewayOptions {
 	gateway: HttpService
 	publicIamUrl?: string
+	/**
+	 * The console's own public origin — what the browser typed. Compared against `Origin`, because the
+	 * request URL cannot be: behind a TLS-terminating balancer the process is reached over plain HTTP,
+	 * so `new URL(request.url).origin` is `http://host` while the browser truthfully sent
+	 * `https://host`, and every genuine operator write was refused. Same defect and same fix as the IAM
+	 * gateway's (backlog 50). Absent → no state-changing request passes.
+	 */
+	publicOrigin?: string
 }
 
 /**
@@ -23,7 +31,7 @@ export async function forwardOperationsApi(request: Request, options: Operations
 	if (excludedOperatorPath(suffix)) {
 		return error(404, 'not found')
 	}
-	if (!sameOriginRequest(request, url)) {
+	if (!sameOriginRequest(request, options.publicOrigin)) {
 		return error(403, 'cross-origin request rejected')
 	}
 
@@ -57,21 +65,31 @@ function excludedOperatorPath(path: string): boolean {
 	return path.split('/').filter(Boolean).some((segment) => EXCLUDED_SEGMENTS.has(segment))
 }
 
-function sameOriginRequest(request: Request, url: URL): boolean {
+/**
+ * The gateway's own CSRF check — the deputy's half of the confused-deputy defense. It is what stops a
+ * hostile page POSTing to the console's own origin with the victim's cookies, before any of it
+ * reaches Operations.
+ */
+function sameOriginRequest(request: Request, publicOrigin: string | undefined): boolean {
 	if (SAFE_METHODS.has(request.method)) {
 		return true
 	}
+	const expected = originOf(publicOrigin ?? '')
+	if (expected === null) {
+		return false
+	}
 	const origin = request.headers.get('origin')
 	if (origin !== null) {
-		return origin === url.origin
+		return origin === expected
 	}
 	const referer = request.headers.get('referer')
-	if (referer === null) {
-		return false
-	}
+	return referer === null ? false : originOf(referer) === expected
+}
+
+function originOf(value: string): string | null {
 	try {
-		return new URL(referer).origin === url.origin
+		return new URL(value).origin
 	} catch {
-		return false
+		return null
 	}
 }

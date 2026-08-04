@@ -23,8 +23,8 @@ export default createPage()
 	.loader(async () => {
 		const [users, apiKeys, shareLinks, audit] = await Promise.all([
 			api.principals.list({ type: 'user' }),
-			api.apiKeys.list(),
-			api.shareLinks.list(),
+			api.apiKeys.list({}),
+			api.shareLinks.list({}),
 			api.audit.list({ limit: AUDIT_WINDOW }),
 		])
 		return { users: users.items, apiKeys: apiKeys.items, shareLinks: shareLinks.items, audit: audit.items }

@@ -202,6 +202,8 @@ export interface RotateApiKeyResponse {
 export interface ShareLinkListItem {
 	id: string
 	label: string | null
+	/** The app this link mints for. Never null on a link issued after the app binding (SEC-2). */
+	app: string | null
 	issuedBy: string | null
 	expiresAt: number | null
 	revokedAt: number | null
@@ -211,6 +213,12 @@ export interface ShareLinkListItem {
 }
 
 export interface IssueShareLinkRequest {
+	/**
+	 * The app the link mints for. REQUIRED: an anonymous credential's grants are frozen at issue, so
+	 * the app they were delegated against is the only thing that keeps them from being spent at every
+	 * other app behind the proxy.
+	 */
+	app: string
 	/** Each grant is delegation-checked against the issuer on its `scope` (omitted → global). */
 	grants: { action: string; scope?: { type: string; value: string } | null }[]
 	label?: string
@@ -267,10 +275,33 @@ export interface OkResponse {
 	ok: true
 }
 
-export interface ListPrincipalsInput {
+/** Every admin list takes the same page coordinates: an opaque `before` cursor and a row `limit`. */
+export interface PageInput {
+	before?: string
+	limit?: number
+}
+
+export interface ListPrincipalsInput extends PageInput {
 	type?: PrincipalType
 	status?: PrincipalStatus
 	q?: string
+}
+
+export type ListApiKeysInput = PageInput
+
+export interface ListShareLinksInput extends PageInput {
+	/** Only links minting for this app. */
+	app?: string
+	/** Revoked links are hidden by default; the console asks for them explicitly. */
+	includeRevoked?: boolean
+}
+
+export interface RotateApiKeyInput extends ApiKeyIdInput {
+	/**
+	 * New absolute expiry (unix seconds), or `null` for none. OMITTED carries the replaced
+	 * credential's expiry forward — rotation replaces a secret, it does not extend a lifetime.
+	 */
+	expiresAt?: number | null
 }
 
 export interface PrincipalIdInput {
@@ -359,7 +390,7 @@ type RpcProcedure<TInput, TOutput> = RpcProcedureContract<TInput, TOutput>
 export interface IamAdminRpcContract {
 	me: RpcProcedure<void, MeDto>
 	principals: {
-		list: RpcProcedure<ListPrincipalsInput, ListResponse<PrincipalListItem>>
+		list: RpcProcedure<ListPrincipalsInput, CursorList<PrincipalListItem>>
 		get: RpcProcedure<PrincipalIdInput, PrincipalDetail>
 		invite: RpcProcedure<InviteRequest, PrincipalListItem>
 		update: RpcProcedure<UpdatePrincipalInput, PrincipalListItem>
@@ -376,7 +407,9 @@ export interface IamAdminRpcContract {
 	apps: {
 		list: RpcProcedure<void, ListResponse<AppDto>>
 		getSchema: RpcProcedure<AppInput, AppSchemaDto>
+		getReturnOrigins: RpcProcedure<AppInput, ReturnOriginsDto>
 		setReturnOrigins: RpcProcedure<SetReturnOriginsRequest, ReturnOriginsDto>
+		clearReturnOrigins: RpcProcedure<AppInput, ReturnOriginsDto>
 	}
 	roles: {
 		list: RpcProcedure<ListRolesInput, ListResponse<RoleDto>>
@@ -388,13 +421,13 @@ export interface IamAdminRpcContract {
 		delete: RpcProcedure<PolicyIdInput, OkResponse>
 	}
 	apiKeys: {
-		list: RpcProcedure<void, ListResponse<ApiKeyDto>>
+		list: RpcProcedure<ListApiKeysInput, CursorList<ApiKeyDto>>
 		provision: RpcProcedure<ProvisionApiKeyRequest, ProvisionApiKeyResponse>
-		rotate: RpcProcedure<ApiKeyIdInput, RotateApiKeyResponse>
+		rotate: RpcProcedure<RotateApiKeyInput, RotateApiKeyResponse>
 		revoke: RpcProcedure<ApiKeyIdInput, OkResponse>
 	}
 	shareLinks: {
-		list: RpcProcedure<void, ListResponse<ShareLinkListItem>>
+		list: RpcProcedure<ListShareLinksInput, CursorList<ShareLinkListItem>>
 		issue: RpcProcedure<IssueShareLinkRequest, IssuedShareLinkResponse>
 		revoke: RpcProcedure<ShareLinkIdInput, OkResponse>
 	}

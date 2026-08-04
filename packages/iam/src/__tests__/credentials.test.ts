@@ -99,6 +99,7 @@ describe('issueKey → mintFromKey (principal-bound)', () => {
 				credential: null,
 				requestId: 'r',
 				principalId: svcId,
+				expiresAt: Math.floor(Date.now() / 1000) + 3600,
 			},
 			{ id: svcId, permissions: [perm('project.read')] },
 			'app-x',
@@ -128,6 +129,7 @@ describe('issueKey → mintFromKey (principal-bound)', () => {
 				credential: null,
 				requestId: 'r',
 				principalId: svcId,
+				expiresAt: Math.floor(Date.now() / 1000) + 3600,
 				permissions: [{ action: 'project.read' }], // downscope to read-only
 			},
 			{ id: svcId, permissions: [perm('project.read'), perm('project.write')] },

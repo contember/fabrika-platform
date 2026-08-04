@@ -79,7 +79,10 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 	})
 
 	const now = Math.floor(Date.now() / 1000)
-	const expiresAt = now + DEFAULT_TOKEN_TTL_SECONDS
+	// Clamped to the session, exactly as `mintFromKey` clamps to the credential's expiry: a token
+	// minted a minute before the session ends must not outlive it, or logging out (or an expiry) would
+	// leave a valid token in the app's hands for the rest of its TTL (SEC-27).
+	const expiresAt = Math.min(now + DEFAULT_TOKEN_TTL_SECONDS, session.expires_at)
 	const token = await signAccessToken(services, env, {
 		app: input.app,
 		subject: principal.id,
@@ -117,7 +120,10 @@ export async function mintFromKey(
 
 	const effective = await resolveCredential(services, cred, input.app)
 	if (!effective.ok) {
-		return { result: { ok: false, reason: effective.reason }, principalId: cred.principal_id, credentialId: cred.id }
+		// `wrong_app` is reported as `invalid_key`: a caller holding a credential for another app must
+		// not learn that it exists, and there is nothing it can do differently here.
+		const reason = effective.reason === 'wrong_app' ? 'invalid_key' : effective.reason
+		return { result: { ok: false, reason }, principalId: cred.principal_id, credentialId: cred.id }
 	}
 
 	const now = Math.floor(Date.now() / 1000)
@@ -134,12 +140,38 @@ export async function mintFromKey(
 	return { result: { ok: true, token, expiresAt }, principalId: cred.principal_id, credentialId: cred.id }
 }
 
-/** The credential's effective permissions + the token subject/type/label, or a typed failure. */
+/**
+ * The credential's effective permissions + the token subject/type/label, or a typed failure.
+ * `wrong_app` is IAM-internal: every mint front reports it as `invalid_key`, because "this key is
+ * not for you" and "there is no such key" must look the same to a caller who holds neither.
+ */
 export type ResolvedCredential =
 	| { ok: true; subject: string; type?: PrincipalType; label: string | null; permissions: PermissionEntry[] }
-	| { ok: false; reason: 'unknown_principal' | 'disabled' }
+	| { ok: false; reason: 'unknown_principal' | 'disabled' | 'wrong_app' }
 
+/**
+ * Resolve a credential's effective permissions FOR ONE APP.
+ *
+ * **The app binding is checked first, and it is not optional for an anonymous credential.** Inline
+ * grants are frozen at issue and were delegation-checked against the issuer's permissions *for the
+ * issuing app*; without a binding that authority was granted per app and spent installation-wide, so
+ * an app-scoped admin of the least important app could issue `{ action: '*' }` and present the key to
+ * every other app behind the proxy (SEC-2). A `NULL` app on an anonymous credential is therefore
+ * refused rather than treated as cross-app — a credential issued before the binding existed must be
+ * reissued, which is the hard cutover migration `0012`/`0006` announces.
+ *
+ * A principal-bound credential may be cross-app (`NULL`) because it carries no frozen authority: its
+ * permissions are resolved per app from `grants`, which are themselves app-filtered. When it names an
+ * app, that is a downscope and is enforced the same way.
+ */
 export async function resolveCredential(services: Services, cred: CredentialRow, app: string): Promise<ResolvedCredential> {
+	if (cred.app !== null && cred.app !== app) {
+		return { ok: false, reason: 'wrong_app' }
+	}
+	if (cred.principal_id === null && cred.app === null) {
+		return { ok: false, reason: 'wrong_app' }
+	}
+
 	const inline = (await services.repositories.credentials.getCredentialGrants(cred.id)).map(credentialGrantToEntry)
 
 	if (cred.principal_id === null) {

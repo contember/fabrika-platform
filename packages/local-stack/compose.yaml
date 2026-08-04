@@ -103,6 +103,11 @@ services:
       HUMAN_EMAIL_DOMAINS: "[]"
       HUMAN_EMAILS: "[]"
       IAM_BOOTSTRAP_ADMINS: '["admin@local.test"]'
+      # Which browser origins may drive IAM's `/admin/*` with a session cookie. The console lives on
+      # the CONTROL plane's domain, which IAM has no way to infer — so it is registered here, exactly
+      # as a real installation registers it. Empty would close the Access plane, which is the
+      # fail-closed default.
+      FABRIKA_IAM_ADMIN_ORIGINS: '["http://control.fabrika.localhost:18080"]'
     networks:
       platform:
         aliases: [iam.fabrika.localhost]
