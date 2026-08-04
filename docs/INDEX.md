@@ -21,7 +21,7 @@ ingest, grouping, triage, and alert workflows, read
 
 ## Active sprints
 
-No active sprint.
+No sprint is active.
 
 ## What's hot
 
@@ -31,7 +31,7 @@ No active sprint.
 - **Auth follow-up:** remove the duplicate in-process gate path in
   [backlog 18](backlog/18-shrink-the-app-sdk.md) now that the Cloudflare proxy
   enforcement path is shipped.
-- **Release activation:** run hosted CI, bootstrap the nineteen npm packages, and prove the tokenless release path in
+- **Release activation:** run hosted CI, bootstrap the twenty npm packages, and prove the tokenless release path in
   [`backlog/25-bootstrap-npm-trusted-publishing.md`](backlog/25-bootstrap-npm-trusted-publishing.md).
 - **Zerops, post-bring-up:** the light tier is **live on a real account** (sprint
   [`zerops-live-bringup`](archive/sprint-2026-08-03-zerops-live-bringup.md)); the
@@ -46,6 +46,6 @@ No active sprint.
   [Zerops release artifact correlation](backlog/36-complete-zerops-release-artifact-correlation.md),
   settle [managed-environment activation](backlog/37-activate-zerops-managed-environment-transactionally.md),
   add [DNS-safe Operations egress](backlog/38-add-dns-safe-operations-egress.md),
-  and choose a [portable email transport](backlog/46-add-portable-email-alert-delivery.md).
+  and add [email as an Operations notification target](backlog/46-add-portable-email-alert-delivery.md).
   The [broad target](ideas/operations-plane.md) and credentialed
   [Poplach cutover](backlog/34-retire-standalone-poplach.md) remain separate.

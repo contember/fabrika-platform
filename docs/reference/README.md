@@ -17,6 +17,10 @@ behaviour.
 - [`core-application-composition.md`](core-application-composition.md) — how IAM,
   Delivery, and Operations share that runtime, RPC, auth, migrations, and
   compatibility boundaries.
+- [`human-authentication.md`](human-authentication.md) — independently configured
+  OIDC/password login, enrollment, reset, sessions, and bootstrap behavior.
+- [`outbound-email.md`](outbound-email.md) — the portable sender contract,
+  Resend adapter, configuration, and domain ownership boundary.
 - [`operations-errors.md`](operations-errors.md) — current Sentry ingest,
   grouping, issue lifecycle, query, alert production, delivery, and console
   behavior.

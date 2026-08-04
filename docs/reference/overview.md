@@ -46,9 +46,10 @@ platform_, never _an app runs on both_.
 | `@fabrika/auth-core`               | Shared IAM domain: policy model, scope dimensions, evaluation.                                 |
 | `@fabrika/auth`                    | The published SDK apps depend on.                                                              |
 | `@fabrika/app`                     | Fetch routing, middleware, typed RPC, object authorization, client, explicit runtime adapters. |
-| `@fabrika/iam`                     | The IAM service itself: identity, keys, policies, and audit.                                   |
+| `@fabrika/iam`                     | The IAM service itself: human authentication, identity, keys, policies, and audit.             |
 | `@fabrika/iam-contract`            | Runtime-neutral IAM admin REST DTOs and typed RPC contract.                                    |
 | `@fabrika/iam-ui`                  | Access feature routes embedded in the unified console.                                         |
+| `@fabrika/email`                   | Portable outbound email contract and fetch-based provider adapters.                            |
 | `@fabrika/operations-contract`     | Runtime-neutral ingest, catalog, release, access, operator DTOs, and typed RPC contract.       |
 | `@fabrika/operations`              | Error ingest, grouping, triage, releases, source maps, health, and runtime compositions.       |
 | `@fabrika/operations-ui`           | Operations feature routes and views embedded in the unified console.                           |

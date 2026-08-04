@@ -47,6 +47,10 @@ canonical-first compatibility window for the `VOZKA_*` and `PROPUSTKA_*`
 families. It explicitly excludes deployed resource names and migration
 identities from the naming sweep.
 
+ADR-0019 puts provider-neutral outbound email behind `@fabrika/email` rather than a runtime-specific binding or the no-I/O platform package. Domains retain templates, action state, outboxes, and retry scheduling.
+
+ADR-0020 composes OIDC and password as independent capabilities, keeps email delivery orthogonal, and replaces OIDC-derived principal/session lifecycle state with auth-neutral state.
+
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
@@ -69,3 +73,5 @@ identities from the naming sweep.
 - [0016](0016-independent-operations-plane.md) — Add an independent Operations plane — accepted (2026-07-30)
 - [0017](0017-service-owned-postgres-migrations.md) — Make Postgres migrations service-owned and bundle-qualified — accepted (2026-07-30)
 - [0018](0018-canonical-fabrika-environment-names.md) — Use plane-qualified fabrika environment names with legacy fallback — accepted (2026-07-31)
+- [0019](0019-portable-outbound-email.md) — Keep outbound email behind one portable service contract — accepted (2026-08-04)
+- [0020](0020-compose-human-authentication-methods.md) — Compose OIDC and password as independent human authentication methods — accepted (2026-08-04)

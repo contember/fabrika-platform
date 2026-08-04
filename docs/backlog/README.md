@@ -33,7 +33,7 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 - [18](18-shrink-the-app-sdk.md) — Delete in-process enforcement from `@fabrika/auth` after the Cloudflare proxy path exists. Keep `redeemKey`.
 - [21](21-rate-limit-the-iam-mint-surface.md) — Deferred with reasons; the limit belongs at the proxy, which can identify a client.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
-- [25](25-bootstrap-npm-trusted-publishing.md) — Bootstrap the nineteen package names once through protected CI, then activate tokenless OIDC publishing.
+- [25](25-bootstrap-npm-trusted-publishing.md) — Bootstrap the twenty package names once through protected CI, then activate tokenless OIDC publishing.
 - [26](26-retire-trasa-release-surface.md) — Publish `@fabrika/app`, deprecate `@trasa/core`, and archive the standalone repository.
 - [34](34-retire-standalone-poplach.md) — Adopt existing state and retire the standalone Poplach app.
 - [36](36-complete-zerops-release-artifact-correlation.md) — Publish Zerops build source maps and link Delivery runs to Operations evidence.
@@ -48,6 +48,7 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
 - [47](47-give-the-zerops-path-a-private-git-source.md) — fabrika's GitHub App never reaches the Zerops path, so a private repository cannot deploy there.
 - [48](48-decide-how-the-proxy-learns-its-public-scheme.md) — The proxy's login redirect returns the browser to `http://`; the fix needs a decision, not a patch.
+- [49](49-add-trusted-client-rate-limits-to-public-iam.md) — Add ingress-owned per-client password limits without trusting forwarded headers.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.
