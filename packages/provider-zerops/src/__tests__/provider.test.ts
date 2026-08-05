@@ -62,6 +62,9 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		cancelBuild: async () => {
 			recorded.calls.push('cancelBuild')
 		},
+		enableSubdomainAccess: async () => {
+			recorded.calls.push('enableSubdomainAccess')
+		},
 		getService: async ({ serviceId }) => ({ id: serviceId, name: 'api' }),
 		findService: async ({ hostname }) => ({ id: 'service-1', name: hostname }),
 		getProject: async ({ projectId }) => ({ id: projectId, name: 'project' }),

@@ -58,8 +58,17 @@ import { assertTopologyInvariants } from './invariants'
  * `enableSubdomainAccess` is documented as "not suitable for production", so production takes
  * `custom-domain`: nothing in the import is publicly routed, and the domain is bound to the project's L7
  * balancer out of band — the import format has NO field for a custom domain, so that step is manual by
- * construction and not an oversight here. `zerops-subdomain` exists for a throwaway environment and is
- * the ONLY thing that ever writes `enableSubdomainAccess: true` — on the proxy, and on nothing else.
+ * construction and not an oversight here. `zerops-subdomain` is the ONLY thing that ever writes
+ * `enableSubdomainAccess: true` — on the proxy, and on nothing else.
+ *
+ * **NEITHER VALUE IS DELIVERED BY THE IMPORT.** Live-verified: the platform accepts
+ * `enableSubdomainAccess` on a service the document CREATES and then silently drops it, so the service
+ * reads back `subdomainAccess: false` and stays there. The subdomain is established afterwards, by
+ * `PUT /service-stack/{id}/enable-subdomain-access` on a service that already publishes an HTTP port —
+ * which the namespace lifecycle does for itself (`ensureSubdomainAccess` in `@fabrika/provider-zerops`)
+ * and which an operator applying the generated platform artifacts must do by hand; the artifact's header
+ * names the call. So `true` here records the INTENT and feeds ADR-0007's `assertOnlyPublicService`; it
+ * does not turn anything on.
  */
 export type PublicAccess = 'custom-domain' | 'zerops-subdomain'
 
@@ -121,9 +130,10 @@ export const FABRIKA_PROXY_SOURCE = 'https://github.com/contember/fabrika-platfo
  *
  * `enableSubdomainAccess` is written even when it is `false` — which is also Zerops' default — on
  * purpose. The default protects a service nobody thought about; an explicit `false` makes turning it on
- * a visible one-line diff in review. It does NOT correct a subdomain someone enabled in the GUI, and
- * this comment used to claim it did: `override: true` leaves an existing service untouched, so no
- * re-apply of this document changes a live subdomain. Turning one off is `DisableSubdomainAccess`.
+ * a visible one-line diff in review. What it does NOT do is turn anything on or off: the platform drops
+ * the field on create and `override: true` leaves an existing service untouched, so this document can
+ * neither establish a subdomain nor correct one someone enabled in the GUI. Both directions are separate
+ * calls — `EnableSubdomainAccess` and `DisableSubdomainAccess`. See `PublicAccess` above.
  *
  * `verticalAutoscaling` is deliberately NOT written, and that is a decision rather than an omission.
  * A live Bun runtime reads back a floor of 1 shared core / 0.125 GB and a ceiling of 8 cores / 48 GB /

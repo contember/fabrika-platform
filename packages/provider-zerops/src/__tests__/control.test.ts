@@ -127,6 +127,9 @@ const makeApi = (recorded: Recorded, status: () => ZeropsAppVersionStatus = () =
 	cancelBuild: async ({ appVersionId }) => {
 		recorded.calls.push(`cancelBuild:${appVersionId}`)
 	},
+	enableSubdomainAccess: async ({ serviceId }) => {
+		recorded.calls.push(`enableSubdomainAccess:${serviceId}`)
+	},
 	getService: async ({ serviceId }) => ({ id: serviceId, name: 'notes' }),
 	findService: async ({ hostname }) => ({ id: 'service-1', name: hostname }),
 	getProject: async ({ projectId }) => ({ id: projectId, name: 'project' }),

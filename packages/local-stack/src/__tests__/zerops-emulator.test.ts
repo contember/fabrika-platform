@@ -135,6 +135,34 @@ describe('local Zerops emulator', () => {
 		expect((await api.getService({ serviceId, signal })).activeAppVersionId).toBe(building?.id)
 	})
 
+	test('leaves an imported subdomain flag on the floor and publishes only after a deploy', async () => {
+		const api = await client()
+		const imported = await api.importProject({
+			clientId: 'local-client',
+			yaml: [
+				'project:',
+				'  name: subdomain',
+				'services:',
+				'  - hostname: proxy',
+				'    type: alpine@3.21',
+				'    enableSubdomainAccess: true',
+			].join('\n'),
+			signal,
+		})
+		const serviceId = imported.services[0]?.id
+		if (serviceId === undefined) {
+			throw new Error('proxy service id is missing')
+		}
+
+		// The platform accepts `enableSubdomainAccess` in an import and drops it, on a service it creates too.
+		expect((await api.getService({ serviceId, signal })).subdomainAccess).toBe(false)
+		await expect(api.enableSubdomainAccess({ serviceId, signal })).rejects.toThrow('serviceStackIsNotHttp')
+
+		await api.triggerPipeline({ serviceId, buildFromGit: 'https://example.test/repo.git', signal })
+		await api.enableSubdomainAccess({ serviceId, signal })
+		expect((await api.getService({ serviceId, signal })).subdomainAccess).toBe(true)
+	})
+
 	test('rejects the wrong bearer before exposing state', async () => {
 		const handler = await createZeropsEmulator({ token })
 		const response = await handler(new Request('http://zerops.local/api/rest/public/__local/state'))

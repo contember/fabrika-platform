@@ -35,6 +35,13 @@ bun test
   steady-state import as "reconciling"; change a live field through the API that owns it.
 - **`compileProvisioningYaml`'s output is first-bring-up only.** Re-applying it at a service that carries
   code activates an EMPTY app version and demotes the running one to `BACKUP`.
+- **An import document CANNOT establish a `.zerops.app` subdomain** — `enableSubdomainAccess` is accepted
+  and dropped, on a service the document creates as much as on one `override` leaves alone. Only
+  `PUT /service-stack/{id}/enable-subdomain-access` does, and only once the service publishes a DEPLOYED
+  HTTP port (`400 serviceStackIsNotHttp` before that). Its 2xx proves nothing — on an already-published
+  service it returns a process that then fails — so decide by reading `subdomainAccess` back.
+  `ensureSubdomainAccess` in `src/namespace.ts` is the one place that does this; it runs after the proxy
+  deploy, on reconcile too, and throws rather than leaving a namespace with no public entry point.
 - **The published `zerops.yaml` schema is wrong about the six probe durations** (`integer`; the platform
   wants a Go duration string in `[10s, 1h]`). `src/types.ts` carries the corrected `ZeropsDuration` and
   the `*Spec` authoring types — do NOT try to fix `schema.generated.ts`.

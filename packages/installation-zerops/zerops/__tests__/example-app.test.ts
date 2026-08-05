@@ -72,6 +72,7 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		},
 		latestAppVersion: () => Promise.resolve(record('latestAppVersion', { id: 'ver-1', sequence: 1 })),
 		cancelBuild: () => Promise.resolve(record('cancelBuild', undefined)),
+		enableSubdomainAccess: () => Promise.resolve(record('enableSubdomainAccess', undefined)),
 		getService: ({ serviceId }) => Promise.resolve(record('getService', { id: serviceId, name: NOTES_SERVICE })),
 		findService: ({ hostname }) => Promise.resolve(record('findService', { id: 'svc-api', name: hostname })),
 		getProject: ({ projectId }) => Promise.resolve(record('getProject', { id: projectId, name: 'apps-prod' })),

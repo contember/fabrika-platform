@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createZeropsApi, type FetchLike, ZeropsApiError } from '../api'
+import { createZeropsApi, type FetchLike, ZEROPS_SERVICE_NOT_HTTP, ZeropsApiError } from '../api'
 
 const jsonResponse = (body: unknown, status = 200): Response =>
 	new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -288,5 +288,36 @@ describe('Zerops service-level environment writes', () => {
 			'zerops: create service env failed (400) — userDataZeropsPrefixForbidden',
 		)
 		expect(log).toHaveLength(1)
+	})
+})
+
+describe('Zerops subdomain access', () => {
+	test('publishes a service with a bodiless PUT', async () => {
+		const log: { method: string; url: string; body: string | undefined; contentType: string | undefined }[] = []
+		const fetchImpl: FetchLike = async (url, init) => {
+			log.push({ method: init?.method ?? 'GET', url, body: init?.body, contentType: init?.headers?.['content-type'] })
+			return jsonResponse({ id: 'process-1', status: 'PENDING', actionName: 'stack.enableSubdomainAccess' })
+		}
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await api.enableSubdomainAccess({ serviceId: 'service-1', signal: signal() })
+
+		expect(log).toEqual([{
+			method: 'PUT',
+			url: 'https://zerops.test/service-stack/service-1/enable-subdomain-access',
+			body: undefined,
+			contentType: undefined,
+		}])
+	})
+
+	test('keeps the platform code for a service that publishes no HTTP port', async () => {
+		const fetchImpl: FetchLike = async () =>
+			jsonResponse({ error: { code: ZEROPS_SERVICE_NOT_HTTP, message: 'Service stack is not http or https' } }, 400)
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		const error = await api.enableSubdomainAccess({ serviceId: 'service-1', signal: signal() }).catch((cause: unknown) => cause)
+
+		expect(error).toBeInstanceOf(ZeropsApiError)
+		expect(error instanceof ZeropsApiError ? error.code : '').toBe(ZEROPS_SERVICE_NOT_HTTP)
 	})
 })

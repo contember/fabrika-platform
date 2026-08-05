@@ -241,3 +241,43 @@ Out of scope, found while probing: `zops env set` fails with `serviceStackNotFou
 before writing, i.e. item 41's bug, in the tool rather than in `packages/`. And a `zops deploy` racing
 an env write dies on `userDataSyncRunning` with the app version left `UPLOADING`; a retry of
 `deployAppVersion` on that version does not recover it. Neither is fixed here.
+
+### 2026-08-05 — WU-3 done (item 40)
+
+**Item 40's harsher claim survives, and this is NOT a special case of WU-2's `override` finding.** On a
+brand-new service the import CREATES, `enableSubdomainAccess: true` is accepted and silently dropped:
+`subdomainAccess` reads back `false` immediately after create, and still `false` after the service's first
+successful deploy. The field is not stored and applied later — it is gone. `override` never enters it.
+Settled on throwaway services `wu3app` and `wu3b` inside `fabrika-test`, both deleted; the project is as
+it was found.
+
+The fix is an explicit call, and the ordering is forced: `PUT /service-stack/{id}/enable-subdomain-access`
+answers `400 serviceStackIsNotHttp` until the service publishes a DEPLOYED HTTP port, which ADR-0004's
+`startWithoutCode` bring-up guarantees it does not have at import time. So `ensureSubdomainAccess` runs
+after `deployProxy`, on reconcile as well as provision (a subdomain someone turned off comes back), and
+throws rather than returning quietly.
+
+**Two facts that shaped the client and would have made a naive version wrong.** The enable's 2xx is not a
+success signal — on an already-published service it returns a process that then FAILS — and the read-back
+is not always immediate: one live run read `false` right after a successful enable and `true` three
+seconds later. So the decision is read → act only if false → read back until true, and the read-back loop
+is load-bearing rather than decoration.
+
+Live witness through `packages/`, not through `zz`: fabrika's own `compileProvisioningYaml` document
+applied with `createZeropsApi.importServices` created `wu3b` with `subdomainAccess=false`;
+`api.enableSubdomainAccess` before deploy threw `ZeropsApiError` with `code === ZEROPS_SERVICE_NOT_HTTP`;
+after a deploy the same call plus the read-back loop reached `subdomainAccess=true` on attempt 1 and the
+generated host answered `200 "wu3 ok\n"`. Facts + commands → `docs/reference/zerops-platform.md`.
+
+The `installation-zerops` artifacts have no live driver, so the honest fix there is the header: a
+generated document that declares a public subdomain now states that applying it publishes nothing and
+names the call that does. The declaration itself stays — it is what ADR-0007's `assertOnlyPublicService`
+reads.
+
+Also corrected: the local Zerops emulator honoured `enableSubdomainAccess` from an import, so a broken
+provisioning path passed against the double. It now ignores the field and serves
+`enable-subdomain-access` with the real precondition.
+
+Out of scope, found while reading: `api.ts`'s `importServices` doc comment still marks the `override`
+no-op UNVERIFIED, and `artifacts.ts` still describes the steady import as "reconciles drift" — both
+contradict what WU-2 settled and what the two CLAUDE.md files now say. Not touched here.

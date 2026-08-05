@@ -14,8 +14,10 @@ import type {
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
 import {
 	ZEROPS_ACTIVE,
+	ZEROPS_SERVICE_NOT_HTTP,
 	ZEROPS_TERMINAL,
 	type ZeropsApi,
+	ZeropsApiError,
 	type ZeropsAppVersion,
 	type ZeropsProject,
 	type ZeropsProjectMode,
@@ -52,6 +54,8 @@ const PROXY_TYPE = 'alpine@3.21'
 const EMPTY_PROXY_MANIFEST = encodeProxyManifestJson({ apps: [] })
 const POLL_INTERVAL_MS = 3000
 const POLL_TIMEOUT_MS = 70 * 60 * 1000
+/** The live enable finishes in under a second, but one run still read `false` once before flipping; ten reads is slack. */
+const SUBDOMAIN_READBACK_ATTEMPTS = 10
 
 export type ZeropsNamespacePublicAccess = 'custom-domain' | 'zerops-subdomain'
 
@@ -363,6 +367,11 @@ const projectMarker = (namespace: ProviderDeploymentNamespace): string => `Manag
 // the service also names a `buildFromGit`, which an import that only PROVISIONS does not. The setup name
 // is supplied where it is actually needed — the `triggerPipeline` call in the namespace lifecycle below,
 // which passes both. `assertZeropsInvariants` refuses the invalid combination.
+//
+// `enableSubdomainAccess` is a DECLARATION here and not a mechanism: the platform accepts it and drops it,
+// including on the service this document creates. `ensureSubdomainAccess` below is what establishes the
+// subdomain, after the proxy's first deploy. Written anyway because it is what ADR-0007's
+// `assertOnlyPublicService` reads to prove no other service is claimed public.
 const proxyService = (publicAccess: ZeropsNamespacePublicAccess): ZeropsServiceSpec => ({
 	hostname: ZEROPS_NAMESPACE_PROXY_HOSTNAME,
 	type: PROXY_TYPE,
@@ -868,6 +877,61 @@ const deployProxy = async (
 	return { namespace: currentNamespace, target: currentTarget }
 }
 
+/**
+ * Publish the proxy on its `*.zerops.app` subdomain — the ONE thing the import document cannot do.
+ *
+ * `enableSubdomainAccess: true` is accepted by the import and then silently dropped, on a service the
+ * document CREATES as much as on one `override` leaves alone; a service imported with it reads back
+ * `subdomainAccess: false` for ever. The subdomain is established by
+ * `PUT /service-stack/{id}/enable-subdomain-access` and by nothing else, and that call needs a DEPLOYED
+ * HTTP port — which is why this runs after `deployProxy` rather than beside the import.
+ *
+ * It runs on RECONCILE too, so a subdomain someone turned off in the GUI comes back. What it must never
+ * do is finish quietly: `zerops-subdomain` is the only public entry a namespace has, so this either
+ * observes `subdomainAccess === true` or throws naming what is missing.
+ *
+ * The decision is the READ-BACK, never the call returning. On an already-published service the platform
+ * answers 2xx and then fails the process it handed back — live-verified — so a 2xx proves nothing.
+ */
+const ensureSubdomainAccess = async (
+	target: NormalizedZeropsNamespaceTarget,
+	options: ZeropsNamespaceOptions,
+	signal: AbortSignal,
+): Promise<void> => {
+	const proxyServiceId = target.proxyServiceId
+	if (proxyServiceId === undefined) {
+		throw new Error('Zerops namespace has no proxy service id')
+	}
+	const published = async (): Promise<boolean> => (await options.api.getService({ serviceId: proxyServiceId, signal })).subdomainAccess === true
+	if (await published()) {
+		return
+	}
+	try {
+		await options.api.enableSubdomainAccess({ serviceId: proxyServiceId, signal })
+	} catch (error) {
+		if (error instanceof ZeropsApiError && error.code === ZEROPS_SERVICE_NOT_HTTP) {
+			throw new Error(
+				`Zerops namespace proxy ${proxyServiceId} cannot be published on a zerops.app subdomain: it exposes no deployed HTTP port (${ZEROPS_SERVICE_NOT_HTTP})`,
+			)
+		}
+		throw error
+	}
+	for (let attempt = 0;; attempt += 1) {
+		if (signal.aborted) {
+			throw new Error('Zerops namespace provisioning was cancelled')
+		}
+		if (await published()) {
+			return
+		}
+		if (attempt >= SUBDOMAIN_READBACK_ATTEMPTS) {
+			throw new Error(
+				`Zerops namespace proxy ${proxyServiceId} accepted enable-subdomain-access but still reads subdomainAccess: false — the namespace has no public entry point`,
+			)
+		}
+		await (options.sleep ?? defaultSleep)(POLL_INTERVAL_MS, signal)
+	}
+}
+
 const mutateNamespace = async (
 	input: ProviderNamespaceMutationInput,
 	options: ZeropsNamespaceOptions,
@@ -927,6 +991,11 @@ const mutateNamespace = async (
 		const deployed = await deployProxy(input, namespace, target, options)
 		namespace = deployed.namespace
 		target = deployed.target
+	}
+	// After the deploy, because the platform refuses a service with no HTTP port — and never before `ready`
+	// is checkpointed, because a namespace with no public entry point is not ready.
+	if (target.publicAccess === 'zerops-subdomain') {
+		await ensureSubdomainAccess(target, options, input.signal)
 	}
 	target = {
 		...target,

@@ -1,7 +1,16 @@
 import type { ProviderDeploymentNamespace } from '@fabrika/provider-contract'
 import { FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
 import { describe, expect, test } from 'bun:test'
-import type { ZeropsApi, ZeropsAppVersion, ZeropsImportResult, ZeropsProject, ZeropsService, ZeropsServiceEnv } from '../api'
+import {
+	ZEROPS_SERVICE_NOT_HTTP,
+	type ZeropsApi,
+	ZeropsApiError,
+	type ZeropsAppVersion,
+	type ZeropsImportResult,
+	type ZeropsProject,
+	type ZeropsService,
+	type ZeropsServiceEnv,
+} from '../api'
 import { useSharedPostgres } from '../authoring'
 import { compileFabrikaManifest, manifestServiceHostnames } from '../manifest'
 import {
@@ -28,6 +37,10 @@ interface FakeState {
 	triggerCount: number
 	failImportAfterMutation: boolean
 	failTriggerAfterMutation: boolean
+	/** The platform's answer before a service has deployed an HTTP port. */
+	subdomainNotHttp: boolean
+	/** The 2xx-then-nothing case: the call is accepted and the flag never moves. */
+	subdomainStaysDisabled: boolean
 }
 
 const freshState = (): FakeState => ({
@@ -40,6 +53,8 @@ const freshState = (): FakeState => ({
 	triggerCount: 0,
 	failImportAfterMutation: false,
 	failTriggerAfterMutation: false,
+	subdomainNotHttp: false,
+	subdomainStaysDisabled: false,
 })
 
 const projectId = 'project-1'
@@ -160,6 +175,17 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 		return versions[versions.length - 1] ?? null
 	},
 	cancelBuild: async () => {},
+	enableSubdomainAccess: async ({ serviceId }) => {
+		state.calls.push(`enableSubdomain:${serviceId}`)
+		if (state.subdomainNotHttp) {
+			throw new ZeropsApiError('zerops: enable subdomain access failed (400)', 400, ZEROPS_SERVICE_NOT_HTTP)
+		}
+		if (state.subdomainStaysDisabled) return
+		for (const services of state.services.values()) {
+			const service = services.find((candidate) => candidate.id === serviceId)
+			if (service !== undefined) service.subdomainAccess = true
+		}
+	},
 	getService: async ({ serviceId }) => {
 		for (const services of state.services.values()) {
 			const service = services.find((candidate) => candidate.id === serviceId)
@@ -583,5 +609,74 @@ describe('Zerops namespace lifecycle', () => {
 		expect(state.env.get(proxyId)?.get(FABRIKA_PROXY_MANIFEST_JSON)?.content).toBe('{"apps":[{"id":"notes"}]}')
 		expect(state.triggerCount).toBe(0)
 		expect(state.calls).toContain(`importServices:${projectId}`)
+	})
+
+	// The import cannot establish a `.zerops.app` subdomain — the platform accepts `enableSubdomainAccess`
+	// and drops it — so the lifecycle makes the call itself, and it is the only public entry these
+	// namespaces have. Every branch below is about that: it happens, it happens AFTER the deploy, and it
+	// is never reported as done on the strength of a 2xx.
+	const subdomainNamespace = (): ProviderDeploymentNamespace =>
+		namespace(
+			zeropsNamespacePreset({
+				preset: 'mid',
+				env: 'prod',
+				projectName: 'apps-prod',
+				publicAccess: 'zerops-subdomain',
+				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+			}),
+		)
+
+	test('publishes the proxy subdomain after the deploy, because the import never could', async () => {
+		const state = freshState()
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+
+		const result = await run(capabilities, subdomainNamespace(), [])
+
+		expect(zeropsNamespaceTargetCodec.decode(result.target.payload).ready).toBe(true)
+		expect(state.calls.indexOf(`trigger:${proxyId}`)).toBeLessThan(state.calls.indexOf(`enableSubdomain:${proxyId}`))
+		expect((state.services.get(projectId) ?? []).find((service) => service.name === 'proxy')?.subdomainAccess).toBe(true)
+	})
+
+	test('refuses when the enable is accepted but the proxy still reads subdomainAccess: false', async () => {
+		const state = freshState()
+		state.subdomainStaysDisabled = true
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+
+		await expect(run(capabilities, subdomainNamespace(), [])).rejects.toThrow('no public entry point')
+	})
+
+	test('names the missing HTTP port when the platform refuses to publish an undeployed proxy', async () => {
+		const state = freshState()
+		state.subdomainNotHttp = true
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+
+		await expect(run(capabilities, subdomainNamespace(), [])).rejects.toThrow('no deployed HTTP port')
+	})
+
+	test('re-publishes a subdomain that was turned off, and leaves a custom-domain namespace alone', async () => {
+		const disabled = freshState()
+		disabled.projects.set(projectId, project(projectId, 'apps-prod', 'Managed by Fabrika namespace apps-prod (prod).'))
+		disabled.services.set(projectId, [proxy()])
+		const ready = (publicAccess: 'zerops-subdomain' | 'custom-domain'): ProviderDeploymentNamespace =>
+			namespace({
+				projectId,
+				projectName: 'apps-prod',
+				corePackage: 'SERIOUS',
+				publicAccess,
+				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				managed: true,
+				proxyServiceId: proxyId,
+				proxyConfigured: true,
+				ready: true,
+			})
+
+		await run(createZeropsNamespaceCapabilities(options(disabled)), ready('zerops-subdomain'), [], 'reconcile')
+		expect(disabled.calls).toContain(`enableSubdomain:${proxyId}`)
+
+		const custom = freshState()
+		custom.projects.set(projectId, project(projectId, 'apps-prod', 'Managed by Fabrika namespace apps-prod (prod).'))
+		custom.services.set(projectId, [proxy()])
+		await run(createZeropsNamespaceCapabilities(options(custom)), ready('custom-domain'), [], 'reconcile')
+		expect(custom.calls).not.toContain(`enableSubdomain:${proxyId}`)
 	})
 })

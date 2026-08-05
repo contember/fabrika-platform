@@ -8,6 +8,11 @@
 # `envIsolation: service` at BOTH levels and the absence of any project-level `envVariables` are
 # written by the compiler, not by the declaration, and re-checked before serialization (ADR-0004).
 #
+# APPLYING THIS FILE PUBLISHES NOTHING. `enableSubdomainAccess: true` on `proxy` is a
+# declaration of intent that the platform accepts and drops; the service reads back
+# `subdomainAccess: false`. Once `proxy` has deployed an HTTP port, publish it with
+# `PUT /service-stack/{id}/enable-subdomain-access` and confirm `subdomainAccess: true` on the service.
+#
 project:
   name: platform
   envIsolation: service

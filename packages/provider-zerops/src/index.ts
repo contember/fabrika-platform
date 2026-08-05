@@ -1,4 +1,4 @@
-export { asAppVersionStatus, createZeropsApi, ZEROPS_ACTIVE, ZEROPS_API_BASE, ZEROPS_TERMINAL, ZeropsApiError } from './api'
+export { asAppVersionStatus, createZeropsApi, ZEROPS_ACTIVE, ZEROPS_API_BASE, ZEROPS_SERVICE_NOT_HTTP, ZEROPS_TERMINAL, ZeropsApiError } from './api'
 export type {
 	FetchLike,
 	ZeropsApi,

@@ -201,8 +201,8 @@ The following were confirmed against a real account and are no longer inferences
 | `run.envVariables` visible through the search endpoint                              | Yes, as `type: ENV`                                                                                                            |
 | Custom variables prefixed `ZEROPS_`                                                 | **Refused** — 400 `userDataZeropsPrefixForbidden`. The prefix is reserved                                                      |
 | `zeropsSetup` in an import without `buildFromGit`                                   | **Refused** — 400 `projectImportInvalidParameter`, `{"iam.buildFromGit": ["parameter is required for use of pipelineConfig"]}` |
-| `enableSubdomainAccess: true` on a never-deployed service                           | **Refused** — "Service stack is not http or https". Needs a deployed HTTP port first                                           |
-| One generated subdomain per HTTP port                                               | **Yes** — `proxy-<host>-<port>.<region>.zerops.app`                                                                            |
+| Enabling subdomain access on a never-deployed service                               | **Refused** — "Service stack is not http or https". Needs a deployed HTTP port first. See the 08-05 section below              |
+| One generated subdomain per HTTP port                                               | **Yes** — `<hostname>-<hash>-<port>.<region>.zerops.app`                                                                       |
 | A version alias such as `alpine/bun@1.3`                                            | Resolves to the newest concrete version (`1.3.9`). `zops catalog` lists only concrete ones                                     |
 | `alpine/go@latest` building Caddy 2.10.2                                            | **Works** — the base is Go 1.22 and Go's automatic toolchain download supplies the rest                                        |
 
@@ -376,6 +376,60 @@ lands on the right database only because the platform always names both `db`, a 
 states. And `require` is the strongest TLS mode available: it encrypts, and `verify-full` cannot work
 without Zerops' CA. This is still the DIRECT port; 6432 is pgBouncer, whose transaction pooling would
 break the session-level advisory lock the migration runner takes.
+
+### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — public subdomain access
+
+Produced on **throwaway services created and deleted for the purpose** (`wu3app`, `wu3b`); no platform
+service was touched. The apply is `zops api ImportServiceStack --param id=@project --project fabrika-test
+--body-file <doc>`, the enable/disable are `zops api {Enable,Disable}SubdomainAccess --param id=<service>`,
+and the state is read with `zops api GetServiceStack --param id=<service>`.
+
+#### An import document cannot establish a subdomain — not even on a service it creates
+
+| Behaviour                                                                             | Result                                                                                              |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `enableSubdomainAccess: true` in an import that CREATES the service                   | **Accepted and silently dropped.** The new service reads back `subdomainAccess: false`              |
+| The same document re-applied with `override: true` after the service has an HTTP port | **No-op.** No process, flag unchanged — the `override` semantics of the section above               |
+| The flag after that service's FIRST successful deploy                                 | **Still `false`.** It is not stored and applied later; it is gone                                   |
+| `PUT /service-stack/{id}/enable-subdomain-access` before any deploy                   | **400 `serviceStackIsNotHttp`**, "Service stack is not http or https"                               |
+| The same call once the service publishes a deployed HTTP port                         | Works. Process `stack.enableSubdomainAccess`, `FINISHED` in **0.7 s**                               |
+| Reading `subdomainAccess` back straight after that call                               | **Sometimes still `false`.** One run needed a second read 3 s later; another was `true` immediately |
+| The same call on a service that ALREADY has a subdomain                               | **2xx, and the process it returns then FAILS** (70 ms, no reason in `publicMeta`)                   |
+| Time from a successful enable to a 200 on the subdomain                               | **~3 s**, through the project L7 balancer (`nginx`, HTTP/2, valid TLS)                              |
+| `subdomainAccess: true` across a later deploy of the same service                     | **Survives**, and the generated host does not change                                                |
+| `DisableSubdomainAccess`, then a request to the host                                  | **502** from the balancer within seconds; re-enabling brings the SAME host back                     |
+
+So **the only thing that establishes a `.zerops.app` entry point is
+`PUT /service-stack/{id}/enable-subdomain-access` on a service that already publishes an HTTP port.** This
+collides with ADR-0004's bring-up order by construction — provisioning imports every service
+`startWithoutCode: true`, so at import time nothing has a port — which is why the call belongs after the
+first deploy and not beside the import.
+
+Two consequences the client shape depends on:
+
+- **A 2xx from the enable is not a success signal.** The already-published case answers 2xx and fails the
+  process it hands back, and the freshly-enabled case can still read `false` on the next read. The only
+  sound decision procedure is: read `subdomainAccess`, act only if it is `false`, then read it back until
+  it is `true` — which is what `ensureSubdomainAccess` in `@fabrika/provider-zerops` does.
+- **A declaration that cannot be delivered must say so.** fabrika still writes `enableSubdomainAccess` in
+  its import documents, because it is what ADR-0007's `assertOnlyPublicService` reads to prove no service
+  other than the proxy is claimed public — but the generated artifacts' header now states that applying
+  the file publishes nothing, and names the call that does.
+
+#### `zeropsSubdomain` is a NAME, not a state
+
+`GET /service-stack/{id}/env` returns a `READ_ONLY` `zeropsSubdomain` variable. It is not evidence that a
+subdomain is live:
+
+| Behaviour                                                        | Result                                                                                |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `zeropsSubdomain` on a service whose subdomain was NEVER enabled | **Present and non-empty** — a full URL, on live `notesapi` (`subdomainAccess: false`) |
+| `zeropsSubdomain` after `DisableSubdomainAccess`                 | **Unchanged.** Same value, while the host answers 502                                 |
+| `zeropsSubdomain` on a service with several HTTP ports           | **Newline-separated, one URL per HTTP port** — six lines on the live `proxy`          |
+| The host form                                                    | `<hostname>-<4 chars>-<port>.<region>.zerops.app`                                     |
+
+Read the service's `subdomainAccess` to know whether a subdomain is live, and `zeropsSubdomain` only to
+learn what it is called.
 
 ## Fabrika placement mapping
 

@@ -219,9 +219,10 @@ export interface ZeropsApi {
 	 * Apply a `zerops-import.yaml` (its `services:` section) to an EXISTING project — fabrika's
 	 * provisioning step. VERIFIED: `POST /project/{id}/service-stack/import`, body `{ yaml }`.
 	 *
-	 * UNVERIFIED BEHAVIOUR: that re-applying an unchanged document with `override: true` is a no-op rather
-	 * than a redeploy. `override` is documented only as "Override existing service"; the whole
-	 * idempotency claim in ADR-0003 rests on it and should be confirmed against a real account.
+	 * VERIFIED (2026-08-05): re-applying an unchanged document is a complete no-op — same ids, no
+	 * processes, `lastUpdate` unmoved. That is ADR-0003's idempotency claim, and it is ALL of it: a
+	 * changed `profile`/`maxContainers`/`objectStorageSize` is silently ignored too, so this reconciles
+	 * nothing. Change a live field through the API that owns it.
 	 */
 	importServices(input: { projectId: string; yaml: string; signal: AbortSignal }): Promise<ZeropsImportResult>
 
@@ -274,6 +275,23 @@ export interface ZeropsApi {
 
 	/** Cancel an in-flight build — what a cancelled run does with the work it started. VERIFIED: `PUT /app-version/{id}/cancel-build`. */
 	cancelBuild(input: { appVersionId: string; signal: AbortSignal }): Promise<void>
+
+	// ── service-stack: public access ──────────────────────────────────────────────
+
+	/**
+	 * Publish a service on Zerops' generated `*.zerops.app` subdomain. VERIFIED:
+	 * `PUT /service-stack/{id}/enable-subdomain-access`, no body, `ResponseProcess`.
+	 *
+	 * THE ONLY THING THAT ESTABLISHES ONE. `enableSubdomainAccess: true` in an import document is accepted
+	 * and then silently dropped — on CREATE as well as on `override` — so a service imported with it reads
+	 * back `subdomainAccess: false` and stays that way (`docs/reference/zerops-platform.md`).
+	 *
+	 * TWO ORDERING FACTS the caller must respect. It needs a DEPLOYED HTTP port: before the first deploy
+	 * the platform answers `400 serviceStackIsNotHttp`. And a 2xx here is NOT a success signal — calling it
+	 * on a service that already has a subdomain returns a process that then FAILS — so decide by reading
+	 * `getService().subdomainAccess` back, never by this call returning.
+	 */
+	enableSubdomainAccess(input: { serviceId: string; signal: AbortSignal }): Promise<void>
 
 	// ── service-stack / project: reading state ────────────────────────────────────
 
@@ -561,6 +579,12 @@ export class ZeropsApiError extends Error {
 const USER_DATA_DUPLICATE_KEY = 'userDataDuplicateKey'
 
 /**
+ * The platform's code for "this service publishes no HTTP port", the answer `enableSubdomainAccess` gives
+ * before a service's first deploy. Exported so a caller can say what is missing instead of relaying prose.
+ */
+export const ZEROPS_SERVICE_NOT_HTTP = 'serviceStackIsNotHttp'
+
+/**
  * Turn a non-2xx response into a `ZeropsApiError`. Zerops answers with `{ error: { code, message, meta } }`
  * (the envelope observed live; the OpenAPI `Error` schema shows the inner `{ code, message }`).
  *
@@ -693,6 +717,11 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 
 		cancelBuild: async ({ appVersionId, signal }) => {
 			await request('cancel-build', 'PUT', `/app-version/${appVersionId}/cancel-build`, { signal })
+		},
+
+		enableSubdomainAccess: async ({ serviceId, signal }) => {
+			// No body: the operation takes none, and sending one would add a content-type the platform did not ask for.
+			await request('enable subdomain access', 'PUT', `/service-stack/${serviceId}/enable-subdomain-access`, { signal })
 		},
 
 		getService: async ({ serviceId, signal }) => readService(await request('get service', 'GET', `/service-stack/${serviceId}`, { signal })),

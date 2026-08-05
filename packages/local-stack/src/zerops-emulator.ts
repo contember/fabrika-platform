@@ -48,10 +48,15 @@ interface EmulatorSnapshot {
 	appVersions: AppVersionRecord[]
 }
 
+/**
+ * `enableSubdomainAccess` is deliberately ABSENT. The real platform accepts the field in an import and
+ * silently drops it — on a service the document creates as much as on one it overrides — so a double that
+ * honoured it would let a broken provisioning path pass here and fail on an account
+ * (`docs/reference/zerops-platform.md`). The subdomain is established by `enable-subdomain-access` only.
+ */
 interface ImportService {
 	hostname: string
 	type?: string
-	enableSubdomainAccess?: boolean
 	profile?: string
 }
 
@@ -124,9 +129,6 @@ const parseImportDocument = (yaml: string): ImportDocument => {
 		return {
 			hostname,
 			...(stringProperty(entry, 'type') === undefined ? {} : { type: stringProperty(entry, 'type') }),
-			...(booleanProperty(entry, 'enableSubdomainAccess') === undefined
-				? {}
-				: { enableSubdomainAccess: booleanProperty(entry, 'enableSubdomainAccess') }),
 			...(stringProperty(entry, 'profile') === undefined ? {} : { profile: stringProperty(entry, 'profile') }),
 		}
 	})
@@ -407,6 +409,25 @@ class ZeropsEmulator {
 			return json({ list: this.page(list, url), totalCount: list.length })
 		}
 
+		// The precondition is real: the platform answers 400 `serviceStackIsNotHttp` until the service has
+		// deployed an HTTP port, which is why an import alone can never establish a subdomain. An active
+		// app version stands in for "has a deployed port" here. The double is idempotent where the platform
+		// hands back a process that then fails; the client decides on the read-back either way.
+		const enableSubdomain = path.match(/^\/service-stack\/([^/]+)\/enable-subdomain-access$/)
+		if (enableSubdomain !== null && request.method === 'PUT') {
+			const found = this.service(decodeURIComponent(enableSubdomain[1] ?? ''))
+			if (found === undefined) {
+				return error(404, 'SERVICE_NOT_FOUND', 'service not found')
+			}
+			if (found.activeAppVersionId === undefined) {
+				return error(400, 'serviceStackIsNotHttp', 'Service stack is not http or https')
+			}
+			found.subdomainAccess = true
+			const processId = id('process', this.state.nextProcess++)
+			await this.persist()
+			return json({ id: processId, status: 'FINISHED', actionName: 'stack.enableSubdomainAccess', serviceStackId: found.id })
+		}
+
 		const serviceByName = path.match(/^\/service-stack-by-name\/([^/]+)\/([^/]+)$/)
 		if (serviceByName !== null && request.method === 'GET') {
 			const projectId = decodeURIComponent(serviceByName[1] ?? '')
@@ -555,17 +576,17 @@ class ZeropsEmulator {
 			const existing = this.state.services.find((service) => service.projectId === projectId && service.name === spec.hostname)
 			if (existing !== undefined) {
 				existing.base = spec.type
-				existing.subdomainAccess = spec.enableSubdomainAccess
 				existing.autoscalingProfileId = spec.profile
 				return existing
 			}
+			// `subdomainAccess` starts false and no import ever moves it — see `ImportService`.
 			const service: ServiceRecord = {
 				id: id('service', this.state.nextService++),
 				projectId,
 				name: spec.hostname,
 				status: 'ACTIVE',
+				subdomainAccess: false,
 				...(spec.type === undefined ? {} : { base: spec.type }),
-				...(spec.enableSubdomainAccess === undefined ? {} : { subdomainAccess: spec.enableSubdomainAccess }),
 				...(spec.profile === undefined ? {} : { autoscalingProfileId: spec.profile }),
 			}
 			this.state.services.push(service)

@@ -37,3 +37,7 @@ real credentials.
   without a live observation.
 - A PostgreSQL URL is always
   `${<host>_connectionString}/${<host>_dbName}?sslmode=require`.
+- `enableSubdomainAccess` in a generated artifact is a DECLARATION, never a mechanism: the platform
+  accepts it and drops it. Applying a `zerops-subdomain` artifact publishes nothing until an operator
+  calls `PUT /service-stack/{id}/enable-subdomain-access` on the deployed proxy, and the artifact's
+  generated header says so. Do not remove that header note without removing the field too.
