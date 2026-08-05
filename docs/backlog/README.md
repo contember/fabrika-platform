@@ -46,7 +46,6 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 - [45](45-pin-the-zerops-postgres-connection-target.md) — `connectionString` carries no database and no SSL mode; both are driver defaults today.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
 - [47](47-give-the-zerops-path-a-private-git-source.md) — fabrika's GitHub App never reaches the Zerops path, so a private repository cannot deploy there.
-- [53](53-reauthor-the-operations-console-scenarios.md) — Three browser scenarios encode an Operations console that changed in `83581a9`; red since, and the failure reads as an auth regression.
 - [54](54-give-operations-its-own-proxy-app-identity.md) — Operations cannot be its own IAM application while its only authenticated surface is fronted by the console's proxy.
 - [55](55-refuse-a-session-whose-method-was-turned-off.md) — Turning OIDC off leaves its sessions live for 30 days. Same shape as the dev bypass; the local bypass records itself as `oidc`, which is the trap.
 - [49](49-add-trusted-client-rate-limits-to-public-iam.md) — Add ingress-owned per-client password limits without trusting forwarded headers.
