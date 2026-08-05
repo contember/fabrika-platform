@@ -86,6 +86,27 @@ describe('local Zerops emulator', () => {
 		expect((await api.getLogAccess({ projectId, signal })).urlPlain).toBe('')
 	})
 
+	test('writes a secret to a service that was never deployed, the way ADR-0004 orders it', async () => {
+		const api = await client()
+		const imported = await api.importProject({
+			clientId: 'local-client',
+			yaml: ['project:', '  name: bringup', 'services:', '  - hostname: iam', '    type: alpine/bun@1.3'].join('\n'),
+			signal,
+		})
+		const serviceId = imported.services[0]?.id ?? ''
+
+		// The list endpoint answers 400 on every service, so nothing may read before it writes.
+		await expect(api.listServiceEnv({ serviceId, signal })).resolves.toEqual([])
+		await api.putServiceEnv({ serviceId, key: 'FABRIKA_IAM_KEY', value: 'first', signal })
+		await api.putServiceEnv({ serviceId, key: 'FABRIKA_IAM_KEY', value: 'second', signal })
+
+		const written = await api.listServiceEnv({ serviceId, signal })
+		expect(written.map((entry) => entry.key)).toEqual(['FABRIKA_IAM_KEY'])
+		expect(written[0]?.content).toBe('second')
+		await api.deleteServiceEnv({ envId: written[0]?.id ?? '', signal })
+		await expect(api.listServiceEnv({ serviceId, signal })).resolves.toEqual([])
+	})
+
 	test('keeps a pipeline building until its activation deadline', async () => {
 		let now = 1_000
 		const api = await client({ activationDelayMs: 500, now: () => now })

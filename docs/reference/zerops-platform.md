@@ -137,17 +137,18 @@ every request/response shape:
 the Swagger UI at `/swagger`; `/openapi.json` and `/swagger.json` both 404). Prefer it
 over prose. The endpoints fabrika's Zerops provider uses, all confirmed there:
 
-| Purpose                                | Endpoint                                                                   | Body / response                                                                                  |
-| -------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| Apply an import to an existing project | `POST /project/{id}/service-stack/import`                                  | `{ yaml }` → `{ projectId, projectName, serviceStacks[] }`                                       |
-| Create a project from an import        | `POST /client/{id}/project/import`                                         | same shapes                                                                                      |
-| Trigger build+deploy                   | `PUT /service-stack/{id}/trigger-pipeline`                                 | `{ buildFromGit?, zeropsYaml?, zeropsSetup?, startWithoutCode?, userData?, … }` → `{ process? }` |
-| Poll a version                         | `GET /app-version/{id}`                                                    | `{ id, status, sequence, serviceStackId, build{…} }`                                             |
-| List versions                          | `GET /service-stack/{id}/app-version`                                      | `{ list[], totalCount }`, `limit`/`offset`/`statuses`                                            |
-| Cancel a build                         | `PUT /app-version/{id}/cancel-build`                                       | → `{ success }`                                                                                  |
-| Service-level env vars                 | `GET`/`POST /service-stack/{id}/user-data`, `PUT`/`DELETE /user-data/{id}` | `{ key, content }`                                                                               |
-| Project-level env vars                 | `POST /project/{id}/env`, `PUT /project-env/{id}`                          | `{ key, content, sensitive }` — **fabrika never calls these** (ADR-0004)                         |
-| Log access                             | `GET /project/{id}/log`                                                    | `{ accessToken, expiration, url, urlPlain, urlInfo, urlUi }`                                     |
+| Purpose                                | Endpoint                                                             | Body / response                                                                                  |
+| -------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Apply an import to an existing project | `POST /project/{id}/service-stack/import`                            | `{ yaml }` → `{ projectId, projectName, serviceStacks[] }`                                       |
+| Create a project from an import        | `POST /client/{id}/project/import`                                   | same shapes                                                                                      |
+| Trigger build+deploy                   | `PUT /service-stack/{id}/trigger-pipeline`                           | `{ buildFromGit?, zeropsYaml?, zeropsSetup?, startWithoutCode?, userData?, … }` → `{ process? }` |
+| Poll a version                         | `GET /app-version/{id}`                                              | `{ id, status, sequence, serviceStackId, build{…} }`                                             |
+| List versions                          | `GET /service-stack/{id}/app-version`                                | `{ list[], totalCount }`, `limit`/`offset`/`statuses`                                            |
+| Cancel a build                         | `PUT /app-version/{id}/cancel-build`                                 | → `{ success }`                                                                                  |
+| Read a service's env vars              | `GET /service-stack/{id}/env`                                        | → `{ items[] }`, each `{ id, key, content, type, sensitive }`                                    |
+| Write a service-level env var          | `POST /service-stack/{id}/user-data`, `PUT`/`DELETE /user-data/{id}` | `{ key, content }` — `PUT` needs BOTH fields                                                     |
+| Project-level env vars                 | `POST /project/{id}/env`, `PUT /project-env/{id}`                    | `{ key, content, sensitive }` — **fabrika never calls these** (ADR-0004)                         |
+| Log access                             | `GET /project/{id}/log`                                              | `{ accessToken, expiration, url, urlPlain, urlInfo, urlUi }`                                     |
 
 `app-version.status` is a closed enum: `UPLOADING`, `WAITING_TO_BUILD`, `BUILDING`,
 `BUILD_FAILED`, `BUILD_VALIDATION_FAILED`, `WAITING_TO_DEPLOY`, `DEPLOYING`,
@@ -195,7 +196,7 @@ The following were confirmed against a real account and are no longer inferences
 | `build.envVariables: { X: '${RUNTIME_X}' }` lifts them into the build               | **Yes**, and it resolves nested references too                                                                                 |
 | `GET /service-stack/{id}/user-data`                                                 | **Always 400 `serviceStackNotFound`**, before AND after a successful deploy                                                    |
 | `POST /service-stack/{id}/user-data`                                                | Works from the moment the service exists                                                                                       |
-| `POST /user-data/search` (with `clientId` **and** `serviceStackId`)                 | Works — this is the read path                                                                                                  |
+| `POST /user-data/search` (with `clientId` **and** `serviceStackId`)                 | Works, but is not in the published OpenAPI document and needs a `clientId` — see `/env` below                                  |
 | Secret value read-back                                                              | **Yes.** Env-API writes are stored `type: SECRET` and `content` returns the plaintext to a write-capable token                 |
 | `run.envVariables` visible through the search endpoint                              | Yes, as `type: ENV`                                                                                                            |
 | Custom variables prefixed `ZEROPS_`                                                 | **Refused** — 400 `userDataZeropsPrefixForbidden`. The prefix is reserved                                                      |
@@ -213,7 +214,49 @@ rather than facts about a field:
   that lists first fails on every environment, always.
 - **A second deploy cannot start while a `userData` synchronisation is running**
   ("Process of synchronizing userData is already running"). Writing variables and
-  then immediately pushing needs a retry loop.
+  then immediately pushing needs a retry loop. This does NOT apply to the writes
+  themselves — see below.
+
+### Verified live (2026-08-05, account `prg1`, project `fabrika-test`)
+
+Written while fixing the write path. Every row was produced with `zops` against the
+live account; the operation ids are `zops api --list --tag UserData`.
+
+| Behaviour                                                                   | Result                                                                                                                                |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /service-stack/{id}/user-data` (`ListServiceStackUserData`)            | **Still always 400 `serviceStackNotFound`** — on `notesapi`, `iam`, `proxy` and `db`, with and without `limit`/`offset`/`keyContains` |
+| `POST /service-stack/{id}/user-data` (`CreateUserData`)                     | Works. Returns a **process**, not the created record — the new record's id is not in the response                                     |
+| `POST` on a key the service already has                                     | **400 `userDataDuplicateKey`**, "not unique in service stack frame of reference". Nothing is written; it does not replace             |
+| **`GET /service-stack/{id}/env` (`GetServiceStackEnvList`)**                | **Works on every service** — ACTIVE, managed (`db`, `storage`) and a stopped build runtime alike. This is the read path               |
+| The `id` in that response                                                   | **Is the user-data record id** — the same value `POST /user-data/search` returns, and accepted by `PUT`/`DELETE /user-data/{id}`      |
+| `PUT /user-data/{id}` (`UpdateUserDataById`)                                | **Replaces in place**: same record id, new `content`, `lastUpdate` moves. Non-destructive — no delete window exists                   |
+| `PUT /user-data/{id}` with `content` but no `key`                           | **Refused** — 400 `invalidUserInput`. Both fields are required even when the key is unchanged                                         |
+| `GET /user-data/{id}` (`GetUserDataById`)                                   | Works — a single record by id, unlike the list                                                                                        |
+| Three `POST`s to one service back to back                                   | **All three succeed.** The "synchronizing userData is already running" conflict gates a DEPLOY, not another write                     |
+| `type: ENV` variables (from the service's `zerops.yaml` `run.envVariables`) | **Absent from `/env`, present in `POST /user-data/search`** — and they still make a `POST` answer `userDataDuplicateKey`              |
+| The error envelope                                                          | `{ error: { code, message, meta[] } }`. `code` is a stable identifier; `message` can quote the value it rejected                      |
+
+Consequences:
+
+- **`GET /service-stack/{id}/env` is the read path, not `POST /user-data/search`.**
+  The search endpoint works, but it is absent from the published OpenAPI document
+  (`zops` declares it from the zerops-go SDK) and it requires a `clientId` term —
+  `{"search":[{"name":"serviceStackId",…}]}` alone answers
+  `400 invalidUserInput: clientId not defined`. `/env` is published, is keyed by the
+  service alone, and hands back the same record ids. No `clientId` needs to reach
+  the API client.
+- **Create-or-update is write-first**: `POST`, and only on `userDataDuplicateKey`
+  read `/env` for the record id and `PUT /user-data/{id}` with `key` AND `content`.
+  Delete-then-create is **not** needed — `PUT` replaces in place, so there is no
+  window where the variable is missing.
+- **A key the service declares in its own `zerops.yaml` cannot be written through
+  this API.** It conflicts on `POST` yet never appears in `/env`, so the conflict
+  cannot be resolved to a record id. Fabrika refuses rather than guessing; replacing
+  it would be undone by the next deploy anyway.
+- **An error's `code` is safe to keep, its `message` is not.** A validation failure
+  can quote the rejected value, so a client that writes secrets must drop the message
+  and keep the code — otherwise it cannot tell a duplicate key from a missing service
+  without leaking.
 
 ## Fabrika placement mapping
 

@@ -159,3 +159,32 @@ One unit at a time may hold the account. Two units may not deploy concurrently t
 ## Run log
 
 <!-- Append as you work: discoveries, deviations, blockers. -->
+
+### 2026-08-05 — WU-1 done
+
+All three recorded results still hold on `fabrika-test`: the `user-data` list is 400
+`serviceStackNotFound` on every service tried (`notesapi`, `iam`, `proxy`, `db`, with and without
+query params); `POST` works; `POST` on an existing key is 400 `userDataDuplicateKey` and writes
+nothing. The update path is **`PUT /user-data/{id}` with `key` AND `content`** — it replaces in
+place, same record id, so **nothing destructive is needed**.
+
+**Deviation from item 41's proposed approach.** The item said to thread a `clientId` into the API
+client and resolve the conflict through `POST /user-data/search`. Not needed:
+**`GET /service-stack/{id}/env`** returns the same user-data record ids, is in the published
+OpenAPI document (the search endpoint is not), works on every service including a stopped build
+runtime, and is keyed by the service alone. `ZeropsApiOptions` is unchanged. Item 41's "Approach"
+section is superseded on that point — delete it with the sprint rather than implementing it.
+
+New: `ZeropsApiError` carries `status` + the platform `code`, so `redactDetail` can keep dropping
+the server's prose (it can quote a rejected secret) while the branch on `userDataDuplicateKey`
+still works. `listServiceEnv` now reads `/env`, which also un-breaks `secrets.delete` and
+`ensureProxyConfiguration`. The Zerops emulator now answers 400 on the list endpoint and rejects a
+duplicate create, so the double no longer contradicts the platform.
+
+Live witness through `packages/`: `FABRIKA_WU1_PROBE` on `notesapi` created (`wu1-created`),
+updated to `wu1-updated` under the same record id `jy8BF5lRSo619b4OEfgvzQ`, read back, deleted.
+Confirmed absent afterwards. Facts + commands → `docs/reference/zerops-platform.md`.
+
+Out of scope, found while probing: a key declared in a service's own `zerops.yaml`
+(`run.envVariables`, `type: ENV`) conflicts on create yet never appears in `/env`, so it cannot be
+written through the env API at all — `putServiceEnv` now refuses it explicitly.

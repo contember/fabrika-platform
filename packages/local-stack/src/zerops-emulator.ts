@@ -451,29 +451,42 @@ class ZeropsEmulator {
 			return json({ list: this.page(list, url), totalCount: list.length })
 		}
 
+		// The real platform answers 400 `serviceStackNotFound` here on EVERY service, deployed or not, so a
+		// client that lists before writing must fail against the double too (docs/reference/zerops-platform.md).
+		if (/^\/service-stack\/[^/]+\/user-data$/.test(path) && request.method === 'GET') {
+			return error(400, 'serviceStackNotFound', 'Service stack not found.')
+		}
+
+		const serviceEnvList = path.match(/^\/service-stack\/([^/]+)\/env$/)
+		if (serviceEnvList !== null && request.method === 'GET') {
+			const serviceId = decodeURIComponent(serviceEnvList[1] ?? '')
+			if (this.service(serviceId) === undefined) {
+				return error(404, 'SERVICE_NOT_FOUND', 'service not found')
+			}
+			return json({ items: this.state.serviceEnv.filter((item) => item.serviceStackId === serviceId) })
+		}
+
 		const serviceEnv = path.match(/^\/service-stack\/([^/]+)\/user-data$/)
-		if (serviceEnv !== null) {
+		if (serviceEnv !== null && request.method === 'POST') {
 			const serviceId = decodeURIComponent(serviceEnv[1] ?? '')
 			if (this.service(serviceId) === undefined) {
 				return error(404, 'SERVICE_NOT_FOUND', 'service not found')
 			}
-			if (request.method === 'GET') {
-				const list = this.state.serviceEnv.filter((item) => item.serviceStackId === serviceId)
-				return json({ list, totalCount: list.length })
+			const body = await parseJsonBody(request)
+			const key = requiredString(body, 'key')
+			if (this.state.serviceEnv.some((item) => item.serviceStackId === serviceId && item.key === key)) {
+				return error(400, 'userDataDuplicateKey', `UserData key '${key}' is not unique in service stack frame of reference.`)
 			}
-			if (request.method === 'POST') {
-				const body = await parseJsonBody(request)
-				const record: ServiceEnvRecord = {
-					id: id('env', this.state.nextEnv++),
-					serviceStackId: serviceId,
-					key: requiredString(body, 'key'),
-					content: requiredString(body, 'content'),
-					type: 'SECRET',
-				}
-				this.state.serviceEnv.push(record)
-				await this.persist()
-				return json(record, 201)
+			const record: ServiceEnvRecord = {
+				id: id('env', this.state.nextEnv++),
+				serviceStackId: serviceId,
+				key,
+				content: requiredString(body, 'content'),
+				type: 'SECRET',
 			}
+			this.state.serviceEnv.push(record)
+			await this.persist()
+			return json(record, 201)
 		}
 
 		const env = path.match(/^\/user-data\/([^/]+)$/)

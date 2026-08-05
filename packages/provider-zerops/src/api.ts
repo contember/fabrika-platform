@@ -306,16 +306,24 @@ export interface ZeropsApi {
 
 	// ── user-data: SERVICE-level environment variables (ADR-0004) ─────────────────
 
-	/** Every environment variable of ONE service. VERIFIED: `GET /service-stack/{id}/user-data`. */
+	/**
+	 * Every environment variable of ONE service, each with the record id `deleteServiceEnv` takes.
+	 * VERIFIED: `GET /service-stack/{id}/env` (`{ items }`).
+	 *
+	 * NOT `GET /service-stack/{id}/user-data`, which answers `400 serviceStackNotFound` on every
+	 * service, deployed or not — see `docs/reference/zerops-platform.md`. The `/env` reading omits
+	 * variables the service's own `zerops.yaml` declares (`type: ENV`); fabrika never writes those.
+	 */
 	listServiceEnv(input: { serviceId: string; signal: AbortSignal }): Promise<ZeropsServiceEnv[]>
 
 	/**
 	 * Create-or-update ONE service-level variable — the only way fabrika ever writes a secret, and it is
 	 * addressed BY SERVICE so ADR-0004's invariant cannot be violated by calling it.
-	 * VERIFIED: `POST /service-stack/{id}/user-data` and `PUT /user-data/{id}`, both `{ key, content }`.
+	 * VERIFIED: `POST /service-stack/{id}/user-data` creates and `PUT /user-data/{id}` replaces, both
+	 * `{ key, content }`; POSTing an existing key answers `400 userDataDuplicateKey` and changes nothing.
 	 *
-	 * UNVERIFIED BEHAVIOUR: whether POSTing an existing key replaces it or conflicts. The default
-	 * implementation therefore lists first and chooses POST or PUT, which is correct under either answer.
+	 * WRITE FIRST, READ ONLY ON CONFLICT. A read before the write cannot be part of this: the create
+	 * must work on a service that has never been deployed, which is exactly ADR-0004's bring-up order.
 	 */
 	putServiceEnv(input: { serviceId: string; key: string; value: string; signal: AbortSignal }): Promise<void>
 
@@ -539,15 +547,32 @@ const readServiceEnv = (value: unknown): ZeropsServiceEnv => ({
 })
 
 /**
- * Turn a non-2xx response into an Error. Zerops answers with `{ error: { code, message, meta } }` (the
- * envelope observed live; the OpenAPI `Error` schema shows the inner `{ code, message }`). The message is
- * short and never echoes the request body, which could hold a secret value.
+ * A non-2xx answer from the Zerops API. `code` is the platform's own error identifier, so a caller can
+ * branch on `userDataDuplicateKey` rather than matching a prose message.
  */
-const apiError = (label: string, status: number, body: unknown): Error => {
-	const message = str(prop(body, 'error'), 'message') ?? str(body, 'message') ?? ''
+export class ZeropsApiError extends Error {
+	constructor(message: string, readonly status: number, readonly code: string) {
+		super(message)
+		this.name = 'ZeropsApiError'
+	}
+}
+
+/** The platform's code for "this service stack already has a variable under that key". */
+const USER_DATA_DUPLICATE_KEY = 'userDataDuplicateKey'
+
+/**
+ * Turn a non-2xx response into a `ZeropsApiError`. Zerops answers with `{ error: { code, message, meta } }`
+ * (the envelope observed live; the OpenAPI `Error` schema shows the inner `{ code, message }`).
+ *
+ * `redactDetail` drops the server's MESSAGE, which a validation error can fill with the value it
+ * rejected. The CODE is a fixed identifier and is kept either way — without it nothing downstream can
+ * tell a duplicate key from a missing service.
+ */
+const apiError = (label: string, status: number, body: unknown, redactDetail: boolean): ZeropsApiError => {
 	const code = str(prop(body, 'error'), 'code') ?? str(body, 'code') ?? ''
+	const message = redactDetail ? '' : (str(prop(body, 'error'), 'message') ?? str(body, 'message') ?? '')
 	const detail = [code, message].filter((part) => part !== '').join(': ')
-	return new Error(`zerops: ${label} failed (${status})${detail === '' ? '' : ` — ${detail.slice(0, 300)}`}`)
+	return new ZeropsApiError(`zerops: ${label} failed (${status})${detail === '' ? '' : ` — ${detail.slice(0, 300)}`}`, status, code)
 }
 
 /** Build the real client. Every request carries the bearer and the run's signal. */
@@ -560,9 +585,9 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		method: string,
 		path: string,
 		/**
-		 * `redactDetail` drops the server's message from the thrown error. Set it on any call whose BODY
-		 * carries a secret value: a validation error can quote what it rejected, and an error that echoes a
-		 * secret into a deploy log is a leak whichever end wrote it.
+		 * `redactDetail` drops the server's message from the thrown error, keeping only its code. Set it on
+		 * any call whose BODY carries a secret value: a validation error can quote what it rejected, and an
+		 * error that echoes a secret into a deploy log is a leak whichever end wrote it.
 		 */
 		init: { body?: unknown; signal: AbortSignal; redactDetail?: boolean },
 	): Promise<unknown> => {
@@ -578,7 +603,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		})
 		const payload: unknown = await response.json().catch(() => null)
 		if (!response.ok) {
-			throw apiError(label, response.status, init.redactDetail === true ? null : payload)
+			throw apiError(label, response.status, payload, init.redactDetail === true)
 		}
 		return payload
 	}
@@ -619,6 +644,15 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			}
 			offset += page.length
 		}
+	}
+
+	/**
+	 * Named so `putServiceEnv` can reach it: the conflict path needs the record id, and the ONE endpoint
+	 * that hands it over on every service is `/env` (`/user-data` answers 400 unconditionally).
+	 */
+	const listServiceEnv: ZeropsApi['listServiceEnv'] = async ({ serviceId, signal }) => {
+		const payload = await request('list service env', 'GET', `/service-stack/${serviceId}/env`, { signal })
+		return arr(payload, 'items').map(readServiceEnv)
 	}
 
 	return {
@@ -695,22 +729,31 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		listProjectServices: async ({ projectId, signal }) =>
 			readAllPages('list project services', `/project/${projectId}/service-stack`, signal, readService),
 
-		listServiceEnv: async ({ serviceId, signal }) => {
-			const payload = await request('list service env', 'GET', `/service-stack/${serviceId}/user-data`, { signal })
-			return arr(payload, 'list').map(readServiceEnv)
-		},
+		listServiceEnv,
 
 		putServiceEnv: async ({ serviceId, key, value, signal }) => {
-			const listed = await request('list service env', 'GET', `/service-stack/${serviceId}/user-data`, { signal })
-			const existing = arr(listed, 'list').map(readServiceEnv).find((entry) => entry.key === key)
 			// `redactDetail` on both writes: this is the one place a secret VALUE is in the request body.
-			if (existing === undefined) {
+			try {
 				await request('create service env', 'POST', `/service-stack/${serviceId}/user-data`, {
 					body: { key, content: value },
 					signal,
 					redactDetail: true,
 				})
 				return
+			} catch (error) {
+				if (!(error instanceof ZeropsApiError) || error.code !== USER_DATA_DUPLICATE_KEY) {
+					throw error
+				}
+			}
+			// Only the conflict reads, and only then: the create must work on a service that has never been
+			// deployed, which is the whole of ADR-0004's bring-up order.
+			const existing = (await listServiceEnv({ serviceId, signal })).find((entry) => entry.key === key)
+			if (existing === undefined || existing.id === '') {
+				// The service declares the key in its own `zerops.yaml` (`type: ENV`), which conflicts on create
+				// yet never appears in the env list. Replacing it here would be undone by the next deploy.
+				throw new Error(
+					`zerops: service ${serviceId} already defines \`${key}\` outside the environment API — it cannot be written`,
+				)
 			}
 			await request('update service env', 'PUT', `/user-data/${existing.id}`, { body: { key, content: value }, signal, redactDetail: true })
 		},
