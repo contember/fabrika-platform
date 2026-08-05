@@ -17,7 +17,6 @@ export const buildExampleWorker = (): Worker =>
 			IAM: new ServiceReference('propustka-worker'),
 		},
 		vars: {
-			DEV: 'true',
 			FABRIKA_IAM_ISSUER: process.env.FABRIKA_IAM_URL ?? 'http://localhost:18191',
 		},
 	})

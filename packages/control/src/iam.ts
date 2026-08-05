@@ -18,7 +18,6 @@ import {
 	type DomainEvent,
 	type IamRpc,
 	type Middleware,
-	type PersonaSpec,
 	type PrincipalIdentity,
 	type Scope,
 } from '@fabrika/auth'
@@ -42,9 +41,6 @@ export const CONTROL_GATES: AppGates = {
 /** The bindings + vars the IAM factory needs (a subset of the Worker `Env`). */
 export interface IamEnv {
 	IAM?: IamRpc
-	DEV: string
-	/** Deployment stage. `DEV` selects the persona path only when this is exactly `local`. */
-	ENVIRONMENT?: string
 	/** IAM's origin — the issuer every token is verified against. */
 	FABRIKA_IAM_URL?: string
 	/**
@@ -100,39 +96,14 @@ export function parseBootstrapAdmins(raw: string | undefined): ReadonlySet<strin
 	}
 }
 
-/** Header (preferred) + cookie used by the SDK dev persona switch. */
-export const DEV_PRINCIPAL_HEADER = 'X-Dev-Principal'
-export const DEV_PERSONA_COOKIE = 'vozka_dev_principal'
-/** Default dev persona (no selector) — the admin, so plain `bun run dev` can click everything. */
-export const DEV_DEFAULT_EMAIL = 'admin@vozka.test'
-
-/**
- * DEV-only people directory — the local stand-in for the IAM Worker's principals/grants. Keyed by
- * email (the persona selector the header / cookie carries). Permissions mirror the fabrika taxonomy
- * (src/actions.ts):
- *   - admin    → `*`                   (every action, every scope)
- *   - operator → `deploy.*` global     (trigger + read any deploy, no registry mgmt)
- *   - viewer   → `deploy.read` global  (read-only)
- */
-const SDK_DEV_PERSONAS: Record<string, PersonaSpec> = {
-	'admin@vozka.test': { id: 'mem-admin', label: 'admin@vozka.test', type: 'user', permissions: [{ action: '*', scope: null }] },
-	'operator@vozka.test': {
-		id: 'mem-operator',
-		label: 'operator@vozka.test',
-		type: 'user',
-		permissions: [{ action: 'deploy.*', scope: null }],
-	},
-	'viewer@vozka.test': {
-		id: 'mem-viewer',
-		label: 'viewer@vozka.test',
-		type: 'user',
-		permissions: [{ action: 'deploy.read', scope: null }],
-	},
-}
-
 /**
  * The application-framework auth front door: resolve the caller through the public IAM SDK (the
  * proxy-injected token, verified locally), then apply the one control-only bootstrap hatch.
+ *
+ * There is ONE code path, locally included. The SDK used to carry a `DEV` persona roster that stood
+ * in for IAM without verifying anything; it is gone. Locally the console is fronted by the real proxy
+ * and IAM signs the operator in through its own `LOCAL_DEV_LOGIN`, so this Worker sees the same
+ * injected token it sees in production.
  *
  * There used to be a second hatch here — a request bearing `FABRIKA_IAM_PROVISIONING_KEY` was
  * authorized as a synthetic global admin. It was DEAD CODE behind the proxy and could not be
@@ -145,13 +116,7 @@ const SDK_DEV_PERSONAS: Record<string, PersonaSpec> = {
  * `docs/reference/human-authentication.md`.
  */
 export function controlAuthMiddleware<Ctx extends AuthCarrier>(env: IamEnv): Middleware<Ctx> {
-	const iam = createAppIam(env, {
-		appId: VOZKA_APP_ID,
-		devPersonas: SDK_DEV_PERSONAS,
-		devDefaultPersona: DEV_DEFAULT_EMAIL,
-		devPersonaCookie: DEV_PERSONA_COOKIE,
-		devPersonaHeader: DEV_PRINCIPAL_HEADER,
-	})
+	const iam = createAppIam(env, { appId: VOZKA_APP_ID })
 	const bootstrapAdmins = parseBootstrapAdmins(env.FABRIKA_CONTROL_BOOTSTRAP_ADMINS)
 
 	return async (request, ctx, next) => {

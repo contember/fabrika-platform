@@ -12,6 +12,7 @@
 //
 // Skips cleanly (with a reason) when FABRIKA_TEST_POSTGRES_URL is unset — see helpers/postgres.ts.
 
+import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import { type BlobStore, SqlDeployLocks } from '@fabrika/platform'
 import { PostgresDatabase, PostgresJobQueue } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -25,6 +26,7 @@ import type { DeployJobMessage } from '../run-lifecycle'
 import { Vault } from '../vault'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 import { fakeControlProvider } from './helpers/provider'
+import { adminToken, testIamEnv } from './helpers/tokens'
 
 if (!hasPostgres) {
 	console.warn(`postgres-schema.test.ts ${skipReason}`)
@@ -686,9 +688,11 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		// …and the Worker's own health route, unchanged, so one monitor works on both platforms.
 		expect((await handler(new Request('http://localhost:18291/api/health'))).status).toBe(200)
 
-		// The real ACL-gated control surface, against the real database. DEV='true' resolves the dev
-		// admin persona, which is what makes this exercise the routing rather than the auth.
-		const apps: unknown = await (await handler(new Request('http://localhost:18291/api/apps'))).json()
+		// The real ACL-gated control surface, against the real database. The admin token stands in for
+		// what the proxy injects, so this exercises the routing rather than the auth.
+		const apps: unknown = await (await handler(
+			new Request('http://localhost:18291/api/apps', { headers: { [PROXY_TOKEN_HEADER]: adminToken } }),
+		)).json()
 		expect(JSON.stringify(apps)).toContain('acme')
 
 		// Anything unrouted is the SPA — the `ASSETS` binding's replacement.
@@ -755,7 +759,7 @@ function decode(payload: unknown): DeployJobMessage {
  * SCHEMA-SCOPED pool this fixture owns instead of opening a second one. Everything else — the routing,
  * the consumer, the maintenance pass — is exactly what runs in production.
  *
- * DEV='true' selects the dev-persona authenticator. Provider selection is injected separately.
+ * The IAM binding is the suite's JWKS stub. Provider selection is injected separately.
  */
 function env(): Env {
 	const blobs = new Map<string, string>()
@@ -781,7 +785,7 @@ function env(): Env {
 		DEPLOY_QUEUE: new PostgresJobQueue<DeployJobMessage>(raw, { queue: 'vozka-deploy' }),
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'local',
-		DEV: 'true',
+		...testIamEnv,
 		// No feed fetch happens in these tests (the poller needs a resolvable feed), so the maintenance
 		// pass exercises the QUERIES; the poll logic itself is covered by repo-poll.test.ts.
 	}

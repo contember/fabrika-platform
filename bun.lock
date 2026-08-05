@@ -112,6 +112,7 @@
       },
       "devDependencies": {
         "@cloudflare/workers-types": "^4.20260702.1",
+        "@fabrika/auth-core": "workspace:*",
         "@types/bun": "latest",
         "lopata": "latest",
         "oblaka-iac": "^0.0.18",

@@ -76,22 +76,21 @@ describe('defineApp(vozka config)', () => {
 		expect(worker.options.assets?.directory).toBe('../dashboard/dist')
 	})
 
-	test('local omits the off-local service bindings (IAM + Operations + vozka-runner) and runs the FakeIamClient (DEV=true)', () => {
+	test('IAM is bound locally too, with a resolvable issuer — the app has no local mode to fall back on', () => {
 		const proxy = buildControlWorker({ env: 'local' })
 		expect(binding(proxy, 'IAM')).toBeInstanceOf(ServiceReference)
 		const worker = application(proxy)
-		expect(binding(worker, 'IAM')).toBeUndefined()
+		expect(binding(worker, 'IAM')).toBeInstanceOf(ServiceReference)
+		expect(worker.options.vars?.['FABRIKA_IAM_URL']).toBe('http://localhost:18191')
+		// Operations and vozka-runner stay off-local (no container deploys in dev).
 		expect(binding(worker, 'OPERATIONS')).toBeUndefined()
-		expect(worker.options.vars?.['DEV']).toBe('true')
-		// vozka-runner is an off-local service binding too — absent locally (no container deploys in dev).
 		expect(binding(worker, 'RUNNER_SVC')).toBeUndefined()
 	})
 
-	test('domain from ctx flows into the FABRIKA_CONTROL_DOMAIN var; off-local DEV is empty', () => {
+	test('domain from ctx flows into the FABRIKA_CONTROL_DOMAIN var', () => {
 		const worker = application(config.resources({ env: 'stage', domain: 'vozka.test.example.com' }))
 		expect(worker.options.vars?.['FABRIKA_CONTROL_DOMAIN']).toBe('vozka.test.example.com')
 		expect(worker.options.vars?.['VOZKA_DOMAIN']).toBeUndefined()
-		expect(worker.options.vars?.['DEV']).toBe('')
 		expect(worker.options.vars?.['ENVIRONMENT']).toBe('stage')
 	})
 

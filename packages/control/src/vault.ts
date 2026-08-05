@@ -23,7 +23,7 @@
 // FABRIKA_CONTROL_VAULT_KEY provisioning (real CF): generate 32 random bytes, base64 them, and set the Worker
 // secret once per environment:
 //   `head -c 32 /dev/urandom | base64 | wrangler secret put FABRIKA_CONTROL_VAULT_KEY`
-// Locally it goes in `.dev.vars` (DEV mode). Rotating it means: set the NEW key, call reencryptAll with
+// Locally it goes in `.dev.vars`. Rotating it means: set the NEW key, call reencryptAll with
 // it, then swap the binding (or run reencryptAll as a one-shot maintenance task) — see the management
 // API. Losing it makes every vault value unrecoverable (by design).
 

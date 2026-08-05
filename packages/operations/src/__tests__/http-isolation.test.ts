@@ -12,7 +12,7 @@ import {
 	type OperationsReleaseReconcileRequestV1,
 } from '@fabrika/operations-contract/releases'
 import { describe, expect, test } from 'bun:test'
-import { exportJWK, generateKeyPair, type KeyLike, SignJWT } from 'jose'
+import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { createOperationsIam } from '../auth.js'
 import { SqliteHealthRepository } from '../health-repository.js'
 import { createOperationsFetchHandler } from '../http.js'
@@ -35,7 +35,9 @@ const jwks: Jwks = {
 	}],
 }
 
-const handler = (harness = createHarness(), iam = createOperationsIam({ DEV: 'true', ENVIRONMENT: 'local' })) => {
+const operationsIam = () => createOperationsIam({ IAM: sessionRpc('unused'), FABRIKA_IAM_URL: issuer })
+
+const handler = (harness = createHarness(), iam = operationsIam()) => {
 	return createOperationsFetchHandler({
 		repositories: harness.repositories,
 		publicHost,
@@ -51,30 +53,41 @@ const handler = (harness = createHarness(), iam = createOperationsIam({ DEV: 'tr
 	})
 }
 
-function rpcRequest(host: string, method: string, input: unknown, persona?: string): Request {
-	const query = persona === undefined ? '' : `?__as=${encodeURIComponent(persona)}`
-	return new Request(`https://${host}/api/rpc${query}`, {
+function rpcRequest(host: string, method: string, input: unknown, token?: string): Request {
+	return new Request(`https://${host}/api/rpc`, {
 		method: 'POST',
-		headers: { accept: 'application/json', 'content-type': 'application/json' },
+		headers: {
+			accept: 'application/json',
+			'content-type': 'application/json',
+			...(token === undefined ? {} : { [PROXY_TOKEN_HEADER]: token }),
+		},
 		body: JSON.stringify({ method, input }),
 	})
 }
 
-async function signedOperationsUser(key: KeyLike): Promise<string> {
+/**
+ * An IAM-shaped access token for an operator holding `actions` globally — the shape the proxy injects.
+ * Operator roles are exercised by GRANTS, the way they resolve in production; there is no dev persona.
+ */
+async function operatorToken(actions: readonly string[], label = 'operator@example.test'): Promise<string> {
 	const now = Math.floor(Date.now() / 1000)
-	const permissions: PermissionEntry[] = [{ action: 'operations.read', scope: null, source: 'grant' }]
+	const permissions: PermissionEntry[] = actions.map((action) => ({ action, scope: null, source: 'grant' }))
 	const claims = buildAccessClaims({
 		iss: issuer,
 		app: 'vozka',
 		subject: 'operator-1',
 		type: 'user',
-		label: 'operator@example.test',
+		label,
 		permissions,
 		issuedAt: now,
 		expiresAt: now + 300,
 	})
-	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'operations-test' }).sign(key)
+	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'operations-test' }).sign(privateKey)
 }
+
+/** Read-only and full-operator callers, the two the authorization assertions below distinguish. */
+const VIEWER_TOKEN = await operatorToken(['operations.read'], 'viewer@example.test')
+const OPERATOR_TOKEN = await operatorToken(['operations.read', 'operations.triage', 'operations.manage'])
 
 function sessionRpc(token: string): IamRpc {
 	return {
@@ -127,7 +140,9 @@ describe('Operations public/private HTTP isolation', () => {
 	test('malformed percent-encoding stays on the not-found boundary', async () => {
 		const fetch = handler()
 		expect((await fetch(new Request(`https://${publicHost}/%`))).status).toBe(404)
-		expect((await fetch(new Request('https://operations.internal/api/%'))).status).toBe(404)
+		expect(
+			(await fetch(new Request('https://operations.internal/api/%', { headers: { [PROXY_TOKEN_HEADER]: OPERATOR_TOKEN } }))).status,
+		).toBe(404)
 	})
 
 	test('the public hostname mounts only the exact source-map upload path', async () => {
@@ -211,7 +226,9 @@ describe('Operations public/private HTTP isolation', () => {
 	test('the private operator API enforces scoped IAM permissions while the public hostname stays closed', async () => {
 		const fetch = handler()
 		expect((await reconcileSource(fetch, '0198a000-0000-7000-8000-000000000001')).status).toBe(200)
-		const sourcesResponse = await fetch(new Request('https://operations.internal/api/sources?__as=viewer@vozka.test'))
+		const sourcesResponse = await fetch(
+			new Request('https://operations.internal/api/sources', { headers: { [PROXY_TOKEN_HEADER]: VIEWER_TOKEN } }),
+		)
 		expect(sourcesResponse.status).toBe(200)
 		const sourcesBody: unknown = await sourcesResponse.json()
 		if (sourcesBody === null || typeof sourcesBody !== 'object' || !('items' in sourcesBody) || !Array.isArray(sourcesBody.items)) {
@@ -222,11 +239,11 @@ describe('Operations public/private HTTP isolation', () => {
 			throw new Error('expected one operator source')
 		}
 		const sourceId = source.id
-		const createCheck = (persona: string) =>
+		const createCheck = (token: string) =>
 			fetch(
-				new Request(`https://operations.internal/api/sources/${sourceId}/health-checks?__as=${persona}`, {
+				new Request(`https://operations.internal/api/sources/${sourceId}/health-checks`, {
 					method: 'POST',
-					headers: { 'content-type': 'application/json' },
+					headers: { 'content-type': 'application/json', [PROXY_TOKEN_HEADER]: token },
 					body: JSON.stringify({
 						path: '/healthz',
 						enabled: true,
@@ -239,17 +256,17 @@ describe('Operations public/private HTTP isolation', () => {
 					}),
 				}),
 			)
-		expect((await createCheck('viewer@vozka.test')).status).toBe(404)
-		expect((await createCheck('operator@vozka.test')).status).toBe(201)
+		expect((await createCheck(VIEWER_TOKEN)).status).toBe(404)
+		expect((await createCheck(OPERATOR_TOKEN)).status).toBe(201)
 		expect((await fetch(new Request(`https://${publicHost}/api/sources`))).status).toBe(404)
 	})
 
 	test('the private RPC route exposes the typed operator use-cases and preserves hidden not-found authorization', async () => {
 		const fetch = handler()
-		expect((await fetch(rpcRequest(publicHost, 'sources', null, 'viewer@vozka.test'))).status).toBe(404)
+		expect((await fetch(rpcRequest(publicHost, 'sources', null, VIEWER_TOKEN))).status).toBe(404)
 		expect((await reconcileSource(fetch, '0198a000-0000-7000-8000-000000000001')).status).toBe(200)
 
-		const sources = await fetch(rpcRequest('operations.internal', 'sources', null, 'viewer@vozka.test'))
+		const sources = await fetch(rpcRequest('operations.internal', 'sources', null, VIEWER_TOKEN))
 		expect(sources.status).toBe(200)
 		const sourcesBody: unknown = await sources.json()
 		if (sourcesBody === null || typeof sourcesBody !== 'object' || !('result' in sourcesBody)) {
@@ -270,7 +287,7 @@ describe('Operations public/private HTTP isolation', () => {
 					recoveryThreshold: 2,
 					staleAfterMs: 180_000,
 				},
-			}, 'viewer@vozka.test'),
+			}, VIEWER_TOKEN),
 		)
 		expect(forbidden.status).toBe(404)
 		const forbiddenBody: unknown = await forbidden.json()
@@ -288,7 +305,7 @@ describe('Operations public/private HTTP isolation', () => {
 			],
 		]
 		for (const [method, input, message] of invalidCalls) {
-			const response = await handler()(rpcRequest('operations.internal', method, input, 'viewer@vozka.test'))
+			const response = await handler()(rpcRequest('operations.internal', method, input, VIEWER_TOKEN))
 			expect(response.status).toBe(400)
 			const body: unknown = await response.json()
 			expect(body).toMatchObject({ error: { type: 'validation', message } })
@@ -296,8 +313,7 @@ describe('Operations public/private HTTP isolation', () => {
 	})
 
 	test('an RPC request with no proxy-injected token is a flat 401 auth envelope (the proxy owns the bounce)', async () => {
-		const iam = createOperationsIam({ IAM: sessionRpc('unused'), FABRIKA_IAM_URL: issuer })
-		const response = await handler(createHarness(), iam)(rpcRequest('operations.internal', 'sources', null))
+		const response = await handler()(rpcRequest('operations.internal', 'sources', null))
 		expect(response.status).toBe(401)
 		const body: unknown = await response.json()
 		if (body === null || typeof body !== 'object' || !('error' in body) || body.error === null || typeof body.error !== 'object') {
@@ -308,19 +324,16 @@ describe('Operations public/private HTTP isolation', () => {
 	})
 
 	test('the operator is resolved from the proxy-injected token, verified locally', async () => {
-		const token = await signedOperationsUser(privateKey)
-		const iam = createOperationsIam({ IAM: sessionRpc('unused'), FABRIKA_IAM_URL: issuer })
-		const fetch = handler(createHarness(), iam)
+		const fetch = handler()
 		const response = await fetch(
-			new Request('http://operations:3000/api/sources', { headers: { [PROXY_TOKEN_HEADER]: token } }),
+			new Request('http://operations:3000/api/sources', { headers: { [PROXY_TOKEN_HEADER]: VIEWER_TOKEN } }),
 		)
 
 		expect(response.status).toBe(200)
 	})
 
 	test('a forged token in that header is refused — the app does not trust the proxy blindly', async () => {
-		const iam = createOperationsIam({ IAM: sessionRpc('unused'), FABRIKA_IAM_URL: issuer })
-		const fetch = handler(createHarness(), iam)
+		const fetch = handler()
 		const response = await fetch(
 			new Request('http://operations:3000/api/sources', { headers: { [PROXY_TOKEN_HEADER]: 'not.a.jwt' } }),
 		)

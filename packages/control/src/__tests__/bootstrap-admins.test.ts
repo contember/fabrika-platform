@@ -43,18 +43,19 @@ function base64Url(value: string | Uint8Array): string {
 	return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
 }
 
-async function serviceToken(label: string): Promise<string> {
+/** An IAM-shaped access token, the way the proxy would inject it. */
+async function token(input: { label: string; ptype: 'user' | 'service'; actions?: readonly string[] }): Promise<string> {
 	const now = Math.floor(Date.now() / 1000)
 	const header = base64Url(JSON.stringify({ alg: 'ES256', kid: 'service-test', typ: 'JWT' }))
 	const payload = base64Url(JSON.stringify({
 		iss: ISSUER,
 		aud: 'vozka',
-		sub: 'service-one',
+		sub: `${input.ptype}-one`,
 		iat: now,
 		exp: now + 300,
-		perms: [{ action: 'deploy.read', scope: null, source: 'grant' }],
-		ptype: 'service',
-		label,
+		perms: (input.actions ?? ['deploy.read']).map((action) => ({ action, scope: null, source: 'grant' })),
+		ptype: input.ptype,
+		label: input.label,
 	}))
 	const signingInput = `${header}.${payload}`
 	const signature = await crypto.subtle.sign(
@@ -94,33 +95,39 @@ describe('parseBootstrapAdmins', () => {
 	})
 })
 
-const DEV_ENV = { DEV: 'true', ENVIRONMENT: 'local' } as const
+/** The one env shape there is: the IAM binding plus the issuer its tokens are verified against. */
+const ENV = { ENVIRONMENT: 'stage', IAM: serviceIam, FABRIKA_IAM_URL: ISSUER } as const
 
 describe('controlAuthMiddleware bootstrap semantics', () => {
 	test('the provisioning key buys nothing here — machine access is an IAM-issued service key', async () => {
 		// The hatch is deleted, not disabled. Behind the proxy it was already dead: `/api/*` is gated
 		// `service`, the proxy resolves a `px_` bearer by asking IAM to mint from it, and the provisioning
 		// key has no `credentials` row — so `mintFromKey` answered `invalid_key` and control never saw the
-		// bearer. What remains is the ordinary token path, which this bearer does not satisfy.
+		// bearer. What remains is the ordinary token path, which a raw bearer does not satisfy.
 		const key = 'px_provision_secret_key_value'
 		const result = await runMiddleware(
-			{ ...DEV_ENV },
-			new Request('https://control.test/api/apps', {
-				headers: { Authorization: `Bearer ${key}`, 'X-Dev-Principal': 'missing@vozka.test' },
-			}),
+			ENV,
+			new Request('https://control.test/api/apps', { headers: { Authorization: `Bearer ${key}` } }),
 		)
 
-		expect(result.auth?.principal?.label).not.toBe('provisioning')
+		expect(result.nextCalled).toBe(false)
+		expect(result.response.status).toBe(401)
+		expect(result.auth).toBeUndefined()
 	})
 
 	test('a listed user is elevated while a non-listed user keeps their original permissions', async () => {
+		const admins = '["viewer@vozka.test"]'
 		const listed = await runMiddleware(
-			{ ...DEV_ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' },
-			new Request('https://control.test/api/apps', { headers: { 'X-Dev-Principal': 'viewer@vozka.test' } }),
+			{ ...ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: admins },
+			new Request('https://control.test/api/apps', {
+				headers: { [PROXY_TOKEN_HEADER]: await token({ label: 'viewer@vozka.test', ptype: 'user' }) },
+			}),
 		)
 		const notListed = await runMiddleware(
-			{ ...DEV_ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' },
-			new Request('https://control.test/api/apps', { headers: { 'X-Dev-Principal': 'operator@vozka.test' } }),
+			{ ...ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: admins },
+			new Request('https://control.test/api/apps', {
+				headers: { [PROXY_TOKEN_HEADER]: await token({ label: 'operator@vozka.test', ptype: 'user' }) },
+			}),
 		)
 
 		expect(listed.nextCalled).toBe(true)
@@ -133,40 +140,43 @@ describe('controlAuthMiddleware bootstrap semantics', () => {
 		expect(notListed.auth?.can(ACTIONS.APP_MANAGE)).toBe(false)
 	})
 
-	test('bootstrap elevation does not apply to service or unknown callers', async () => {
+	test('bootstrap elevation does not apply to a service caller, however it is listed', async () => {
 		const label = 'service@vozka.test'
 		const service = await runMiddleware(
-			{ DEV: '', ENVIRONMENT: 'stage', IAM: serviceIam, FABRIKA_IAM_URL: ISSUER, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: `["${label}"]` },
-			new Request('https://control.test/api/apps', { headers: { [PROXY_TOKEN_HEADER]: await serviceToken(label) } }),
-		)
-		const unknown = await runMiddleware(
-			{ ...DEV_ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["missing@vozka.test"]' },
-			new Request('https://control.test/api/apps', { headers: { 'X-Dev-Principal': 'missing@vozka.test' } }),
+			{ ...ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: `["${label}"]` },
+			new Request('https://control.test/api/apps', { headers: { [PROXY_TOKEN_HEADER]: await token({ label, ptype: 'service' }) } }),
 		)
 
 		expect(service.nextCalled).toBe(true)
 		expect(service.auth?.principal?.type).toBe('service')
 		expect(service.auth?.can(ACTIONS.DEPLOY_READ)).toBe(true)
 		expect(service.auth?.can(ACTIONS.APP_MANAGE)).toBe(false)
-		expect(unknown.nextCalled).toBe(false)
-		expect(unknown.response.status).toBe(403)
-		expect(unknown.auth).toBeUndefined()
 	})
 
-	test('off-local, an /api/* request with no proxy-injected token is refused', async () => {
+	test('elevation keys on the VERIFIED label, so a listed email nobody presented elevates nobody', async () => {
 		const result = await runMiddleware(
-			{ DEV: '', ENVIRONMENT: 'stage', IAM: serviceIam, FABRIKA_IAM_URL: ISSUER },
-			new Request('https://control.test/api/apps'),
+			{ ...ENV, FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["missing@vozka.test"]' },
+			new Request('https://control.test/api/apps', {
+				headers: { [PROXY_TOKEN_HEADER]: await token({ label: 'viewer@vozka.test', ptype: 'user' }) },
+			}),
 		)
+
+		expect(result.nextCalled).toBe(true)
+		expect(result.auth?.can(ACTIONS.DEPLOY_READ)).toBe(true)
+		expect(result.auth?.can(ACTIONS.APP_MANAGE)).toBe(false)
+	})
+
+	test('an /api/* request with no proxy-injected token is refused', async () => {
+		const result = await runMiddleware(ENV, new Request('https://control.test/api/apps'))
 
 		expect(result.nextCalled).toBe(false)
 		expect(result.response.status).toBe(401)
 		expect(result.auth).toBeUndefined()
 	})
 
-	test('off-local, a token the proxy did not sign is refused — the header is not trusted blindly', async () => {
+	test('a token the proxy did not sign is refused — the header is not trusted blindly', async () => {
 		const result = await runMiddleware(
-			{ DEV: '', ENVIRONMENT: 'stage', IAM: serviceIam, FABRIKA_IAM_URL: ISSUER },
+			ENV,
 			new Request('https://control.test/api/apps', { headers: { [PROXY_TOKEN_HEADER]: 'not.a.jwt' } }),
 		)
 

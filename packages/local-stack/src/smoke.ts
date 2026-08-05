@@ -499,8 +499,8 @@ const proveControlIsGated = async (): Promise<void> => {
 /**
  * Read the operator API the way the console does: through the proxy, through control's transport-only
  * gateway, with a real credential. It used to reach into the container and call `127.0.0.1:3000`
- * unauthenticated, which only worked while Operations synthesised a dev persona — a bypass that no
- * longer exists and never existed off-local.
+ * unauthenticated, which only worked while Operations synthesised a dev persona — a bypass that has
+ * since been deleted from the SDK and never existed off-local.
  */
 const operationsRpc = async (machineKey: string, method: string, input: unknown): Promise<unknown> => {
 	const body = await requestJson(CONTROL_ORIGIN, '/operations/api/rpc', { bearer: machineKey, body: { method, input } })

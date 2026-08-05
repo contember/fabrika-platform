@@ -74,7 +74,6 @@ export const DEPLOY_MAX_ATTEMPTS = 4
 export function createRuntime(source: Record<string, string | undefined> = process.env): Runtime {
 	const databaseUrl = requiredAlias(source, 'FABRIKA_CONTROL_DATABASE_URL', 'VOZKA_DATABASE_URL')
 	const environment = required(source, 'ENVIRONMENT')
-	const dev = source['DEV'] ?? ''
 
 	const config: ProcessConfig = {
 		port: parsePort(source['PORT']),
@@ -99,13 +98,9 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		RUN_LOGS: blobStore(source),
 		DEPLOY_QUEUE: queue,
 		WAIT_UNTIL: tasks.waitUntil,
-		...(dev === 'true' ? {} : { IAM: iamRpc(source) }),
-		IAM_ADMIN: new HttpIamAdminGateway(
-			requiredAlias(source, 'FABRIKA_IAM_RPC_URL', 'PROPUSTKA_RPC_URL'),
-			dev === 'true' ? optionalAlias(source, 'FABRIKA_IAM_PROVISIONING_KEY', 'PROPUSTKA_PROVISIONING_KEY') : undefined,
-		),
+		IAM: iamRpc(source),
+		IAM_ADMIN: new HttpIamAdminGateway(requiredAlias(source, 'FABRIKA_IAM_RPC_URL', 'PROPUSTKA_RPC_URL')),
 		ENVIRONMENT: environment,
-		DEV: dev,
 		...(operations === null
 			? {}
 			: { OPERATIONS: new HttpOperationsService(operations.origin), OPERATIONS_SYNC_KEY: operations.syncKey }),

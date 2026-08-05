@@ -8,6 +8,7 @@
 		"nodejs_compat"
 	],
 	"compatibility_date": "2025-05-25",
+	"workers_dev": false,
 	"routes": [],
 	"observability": {
 		"enabled": true
@@ -25,10 +26,9 @@
 	"vars": {
 		"ENVIRONMENT": "local",
 		"FABRIKA_CONTROL_DOMAIN": "",
-		"DEV": "true",
 		"FABRIKA_CONTROL_BOOTSTRAP_ADMINS": "[]",
 		"CLOUDFLARE_ACCOUNT_ID": "",
-		"FABRIKA_IAM_URL": "",
+		"FABRIKA_IAM_URL": "http://localhost:18191",
 		"GITHUB_APP_ID": ""
 	},
 	"migrations": [
@@ -80,5 +80,11 @@
 				"retry_delay": 30
 			}
 		]
-	}
+	},
+	"services": [
+		{
+			"binding": "IAM",
+			"service": "propustka-worker"
+		}
+	]
 }

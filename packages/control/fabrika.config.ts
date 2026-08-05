@@ -47,6 +47,19 @@ const CONTROL_PROXY_GATES: AppGates = {
 }
 
 /**
+ * IAM's origin — the issuer both this Worker and the proxy in front of it verify tokens against.
+ * Locally it falls back to `packages/iam`'s own `bun run dev` port, because there is no environment in
+ * which the issuer is optional: `createIam` refuses to build without it.
+ */
+const LOCAL_IAM_URL = 'http://localhost:18191'
+
+const resolveIamUrl = (isLocal: boolean): string =>
+	environmentAliases.read({
+		FABRIKA_IAM_URL: process.env['FABRIKA_IAM_URL'],
+		PROPUSTKA_URL: process.env['PROPUSTKA_URL'],
+	}, { canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' }) ?? (isLocal ? LOCAL_IAM_URL : '')
+
+/**
  * Build fabrika's full Cloudflare resource graph for one environment. This is the SINGLE source of the
  * graph — consolidated out of the old `oblaka.ts`. Both the provider deploy path (via `defineApp`
  * below) and the local-dev `oblaka.ts` shim call this, so the two never drift.
@@ -66,10 +79,7 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 		canonical: 'FABRIKA_CONTROL_BOOTSTRAP_ADMINS',
 		legacy: 'VOZKA_BOOTSTRAP_ADMINS',
 	}) ?? '[]'
-	const iamUrl = environmentAliases.read({
-		FABRIKA_IAM_URL: process.env['FABRIKA_IAM_URL'],
-		PROPUSTKA_URL: process.env['PROPUSTKA_URL'],
-	}, { canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' }) ?? ''
+	const iamUrl = resolveIamUrl(isLocal)
 
 	return new Worker({
 		dir: '.',
@@ -94,9 +104,6 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			ENVIRONMENT: env,
 			// The public domain this stage serves on (drives absolute URLs); empty when unknown.
 			FABRIKA_CONTROL_DOMAIN: domain ?? '',
-			// Selects the auth path in src/iam.ts: 'true' (local) → a synthesized dev-persona AuthContext
-			// (no IAM Worker); '' (off-local) → IAM-backed auth over the service binding.
-			DEV: isLocal ? 'true' : '',
 			// Bootstrap-admin fallback (src/iam.ts): a JSON array of emails authorized as admin even
 			// when IAM denies / the binding isn't wired yet. Empty by default; the bootstrap
 			// script (scripts/bootstrap.ts) sets the first operator's email here for initial bring-up.
@@ -135,12 +142,15 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 					retryDelay: 30,
 				},
 			}),
-			// Off-local service bindings (local dev has neither): IAM (src/iam.ts uses
-			// FakeIamClient locally, DEV='true') + vozka-runner, the deploy executor the queue consumer
-			// hands each run to (RUNNER_SVC.startRun). vozka-runner is its OWN worker so a deploy of fabrika
+			// IAM is bound in EVERY environment, local included: src/iam.ts verifies an IAM-issued token
+			// and has no local mode to fall back on, and the proxy Worker in front of this one already
+			// binds the same service unconditionally. Local dev therefore wants `packages/iam`'s
+			// `bun run dev` running alongside, exactly as `examples/app` does.
+			IAM: new ServiceReference('propustka-worker'),
+			// Off-local only: Operations, and vozka-runner — the deploy executor the queue consumer hands
+			// each run to (RUNNER_SVC.startRun). vozka-runner is its OWN worker so a deploy of fabrika
 			// never resets the container running it — deployed out-of-band (packages/runner-cloudflare bootstrap).
 			...(isLocal ? {} : {
-				IAM: new ServiceReference('propustka-worker'),
 				OPERATIONS: new ServiceReference('operations'),
 				RUNNER_SVC: new ServiceReference('vozka-runner'),
 			}),
@@ -149,10 +159,7 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 }
 
 export const buildControlWorker = (ctx: ResourceContext): Worker => {
-	const iamUrl = environmentAliases.read({
-		FABRIKA_IAM_URL: process.env['FABRIKA_IAM_URL'],
-		PROPUSTKA_URL: process.env['PROPUSTKA_URL'],
-	}, { canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' }) ?? ''
+	const iamUrl = resolveIamUrl(ctx.env === 'local')
 	return createCloudflareProxyWorker({
 		name: 'vozka-proxy',
 		app: buildControlApplicationWorker(ctx),

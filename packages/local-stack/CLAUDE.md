@@ -27,8 +27,10 @@ bun run test:browser  # the opice suites in tests/browser/
 ## Invariants
 
 - **The composition is secure by default and runs the REAL enforcement path.** The platform manifest
-  fronts control and Operations with the same gates their `fabrika.config.ts` declares, `DEV` is empty
-  for both, and no synthetic persona exists anywhere. The gate sets in `src/prepare.ts` are copies —
+  fronts control and Operations with the same gates their `fabrika.config.ts` declares, and no
+  synthetic persona exists anywhere — the app SDK no longer has one to select. The single dev bypass
+  is IAM's `LOCAL_DEV_LOGIN`, which mints a real session row and is refused at use once the flag is
+  off; the browser composition runs with it off. The gate sets in `src/prepare.ts` are copies —
   the production ones cannot be imported without dragging oblaka's raw TypeScript into this package's
   strict program — and `__tests__/proxy-gates.test.ts` (deliberately outside `src/`, so `typecheck`
   never follows that import) fails if a copy drifts. Never widen a local gate to make something pass:

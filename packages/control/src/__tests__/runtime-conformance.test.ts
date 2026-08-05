@@ -4,6 +4,7 @@ import { controlApp } from '../app'
 import type { Env } from '../env'
 import { createHarness } from './helpers/harness'
 import { fakeControlProvider } from './helpers/provider'
+import { testIamEnv } from './helpers/tokens'
 
 function env(): Env {
 	const harness = createHarness()
@@ -19,7 +20,7 @@ function env(): Env {
 		DEPLOY_QUEUE: { send: () => Promise.resolve() },
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'local',
-		DEV: 'true',
+		...testIamEnv,
 	}
 }
 

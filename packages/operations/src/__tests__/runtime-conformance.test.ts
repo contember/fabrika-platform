@@ -1,8 +1,8 @@
 import { assertAppRuntimeConformance } from '@fabrika/app/testing'
 import { describe, expect, test } from 'bun:test'
 import { operationsApp, type OperationsAppEnv } from '../app'
-import { createOperationsIam } from '../auth.js'
 import { SqliteHealthRepository } from '../health-repository.js'
+import { testOperationsIam } from './helpers/iam.js'
 import { createHarness } from './helpers/sqlite.js'
 
 const publicHost = 'errors.example.test'
@@ -20,7 +20,7 @@ function env(): OperationsAppEnv {
 			delete: () => Promise.resolve(),
 		},
 		health: new SqliteHealthRepository(harness.db),
-		iam: createOperationsIam({ DEV: 'true', ENVIRONMENT: 'local' }),
+		iam: testOperationsIam(),
 	}
 }
 

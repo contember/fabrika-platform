@@ -42,8 +42,9 @@ export interface Env {
 	WAIT_UNTIL: WaitUntil
 	/**
 	 * IAM — authorization + audit. A service binding on Workers; an `HttpIamRpc`
-	 * (`@fabrika/auth`) over the project's private network in a process. OPTIONAL because the local dev
-	 * path (`DEV='true'`) uses a persona fake and never touches it.
+	 * (`@fabrika/auth`) over the project's private network in a process. Required in practice —
+	 * `createIam` refuses to build without it — and optional on the type only because `Env` is also
+	 * the bag every non-auth test composes.
 	 */
 	IAM?: IamRpc
 	/**
@@ -56,8 +57,6 @@ export interface Env {
 
 	// ── Vars ──────────────────────────────────────────────────────────────────
 	ENVIRONMENT: string
-	/** 'true' locally → the dev-persona AuthContext (no IAM service); '' off-local → IAM-backed auth. */
-	DEV: string
 	/**
 	 * Public domain this stage serves on (drives absolute URLs); empty when unknown. Also the CSRF
 	 * guard's authority on the console's own origin — see `controlPublicOrigin` in src/iam.ts, which

@@ -1,8 +1,10 @@
+import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import { describe, expect, test } from 'bun:test'
 import { controlApp } from '../app'
 import type { Env } from '../env'
 import { createHarness } from './helpers/harness'
 import { fakeControlProvider } from './helpers/provider'
+import { adminToken, operatorToken, testIamEnv, viewerToken } from './helpers/tokens'
 
 function application(overrides: Partial<Env> = {}) {
 	const harness = createHarness()
@@ -18,7 +20,7 @@ function application(overrides: Partial<Env> = {}) {
 		DEPLOY_QUEUE: { send: () => Promise.resolve() },
 		WAIT_UNTIL: () => {},
 		ENVIRONMENT: 'local',
-		DEV: 'true',
+		...testIamEnv,
 		...overrides,
 	}
 	return (request: Request) =>
@@ -37,32 +39,20 @@ describe('controlApp', () => {
 		expect(await (await fetch(new Request('https://control.test/apps/example'))).text()).toBe('dashboard')
 	})
 
-	test('uses the IAM SDK middleware and its dev persona header', async () => {
+	test('authorizes /api/* from the proxy-injected token, and refuses a request that carries none', async () => {
 		const fetch = application()
-		const viewer = await fetch(
-			new Request('https://control.test/api/apps', {
-				headers: { 'X-Dev-Principal': 'viewer@vozka.test' },
-			}),
-		)
-		const admin = await fetch(
-			new Request('https://control.test/api/apps', {
-				headers: { 'X-Dev-Principal': 'admin@vozka.test' },
-			}),
-		)
-		const unknown = await fetch(
-			new Request('https://control.test/api/apps', {
-				headers: { 'X-Dev-Principal': 'missing@vozka.test' },
-			}),
-		)
+		const viewer = await fetch(apiRequest('https://control.test/api/apps', viewerToken))
+		const admin = await fetch(apiRequest('https://control.test/api/apps', adminToken))
+		const anonymous = await fetch(new Request('https://control.test/api/apps'))
 
 		expect(viewer.status).toBe(403)
 		expect(admin.status).toBe(200)
-		expect(unknown.status).toBe(403)
+		expect(anonymous.status).toBe(401)
 	})
 
 	test('mounts the typed control RPC before REST and preserves authorization and errors', async () => {
 		const fetch = application()
-		const viewer = await fetch(rpcRequest('apps.list', null, 'viewer@vozka.test'))
+		const viewer = await fetch(rpcRequest('apps.list', null, viewerToken))
 		expect(viewer.status).toBe(403)
 		const viewerBody: unknown = await viewer.json()
 		expect(viewerBody).toEqual({ error: { type: 'forbidden', message: 'Forbidden: app.manage' } })
@@ -71,7 +61,7 @@ describe('controlApp', () => {
 		expect(created.status).toBe(200)
 		expect(await created.json()).toMatchObject({ result: { id: 'rpc-app', repoUrl: 'github.com/acme/rpc-app' } })
 
-		const rest = await fetch(new Request('https://control.test/api/apps', { headers: { 'X-Dev-Principal': 'admin@vozka.test' } }))
+		const rest = await fetch(apiRequest('https://control.test/api/apps', adminToken))
 		expect(await rest.json()).toMatchObject({ items: [{ id: 'rpc-app' }] })
 
 		const missing = await fetch(rpcRequest('apps.get', { appId: 'missing' }))
@@ -114,11 +104,7 @@ describe('controlApp', () => {
 		const listedSecrets = await fetch(rpcRequest('apps.secrets.list', { appId: 'flow' }))
 		expect(await listedSecrets.text()).not.toContain(secretValue)
 
-		const restVars = await fetch(
-			new Request('https://control.test/api/apps/flow/vars', {
-				headers: { 'X-Dev-Principal': 'admin@vozka.test' },
-			}),
-		)
+		const restVars = await fetch(apiRequest('https://control.test/api/apps/flow/vars', adminToken))
 		expect(await restVars.text()).toContain('PUBLIC_MODE')
 
 		const deployed = await fetch(rpcRequest('deploy', { appId: 'flow', env: 'prod' }))
@@ -139,25 +125,11 @@ describe('controlApp', () => {
 
 	test('elevates only listed authenticated users through the bootstrap-admin middleware', async () => {
 		const fetch = application({ FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' })
-		const listed = await fetch(
-			new Request('https://control.test/api/apps', {
-				headers: { 'X-Dev-Principal': 'viewer@vozka.test' },
-			}),
-		)
-		const notListed = await fetch(
-			new Request('https://control.test/api/apps', {
-				headers: { 'X-Dev-Principal': 'operator@vozka.test' },
-			}),
-		)
-		const unknown = await fetch(
-			new Request('https://control.test/api/apps', {
-				headers: { 'X-Dev-Principal': 'missing@vozka.test' },
-			}),
-		)
+		const listed = await fetch(apiRequest('https://control.test/api/apps', viewerToken))
+		const notListed = await fetch(apiRequest('https://control.test/api/apps', operatorToken))
 
 		expect(listed.status).toBe(200)
 		expect(notListed.status).toBe(403)
-		expect(unknown.status).toBe(403)
 	})
 
 	test('the IAM provisioning key is not a control-plane credential', async () => {
@@ -168,25 +140,24 @@ describe('controlApp', () => {
 		const key = 'px_provision_secret_key_value'
 		const fetch = application({})
 		const bearer = await fetch(
-			new Request('https://control.test/api/apps', {
-				headers: { Authorization: `Bearer ${key}`, 'X-Dev-Principal': 'missing@vozka.test' },
-			}),
+			new Request('https://control.test/api/apps', { headers: { Authorization: `Bearer ${key}` } }),
 		)
-		const absent = await fetch(
-			new Request('https://control.test/api/apps', {
-				headers: { 'X-Dev-Principal': 'missing@vozka.test' },
-			}),
-		)
+		const absent = await fetch(new Request('https://control.test/api/apps'))
 
-		expect(bearer.status).toBe(403)
-		expect(absent.status).toBe(403)
+		expect(bearer.status).toBe(401)
+		expect(absent.status).toBe(401)
 	})
 })
 
-function rpcRequest(method: string, input: unknown, persona = 'admin@vozka.test'): Request {
+/** A control REST request carrying the token the proxy would have injected. */
+function apiRequest(url: string, token: string): Request {
+	return new Request(url, { headers: { [PROXY_TOKEN_HEADER]: token } })
+}
+
+function rpcRequest(method: string, input: unknown, token = adminToken): Request {
 	return new Request('https://control.test/api/rpc', {
 		method: 'POST',
-		headers: { 'content-type': 'application/json', 'X-Dev-Principal': persona },
+		headers: { 'content-type': 'application/json', [PROXY_TOKEN_HEADER]: token },
 		body: JSON.stringify({ method, input }),
 	})
 }

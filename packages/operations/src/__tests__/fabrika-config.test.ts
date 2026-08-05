@@ -29,7 +29,6 @@ describe('Operations Cloudflare composition', () => {
 		expect(binding(worker, 'IAM')).toBeInstanceOf(ServiceReference)
 		expect(binding(worker, 'CONTROL')).toBeUndefined()
 		expect(binding(worker, 'PIPELINE_METRICS')).toBeUndefined()
-		expect(worker.options.vars?.['DEV']).toBe('')
 		expect(worker.options.vars?.['FABRIKA_IAM_URL']).toBeDefined()
 		expect(worker.options.vars?.['PROPUSTKA_URL']).toBeUndefined()
 		expect(worker.options.triggers?.crons).toEqual(['* * * * *'])
@@ -45,10 +44,10 @@ describe('Operations Cloudflare composition', () => {
 		}
 	})
 
-	test('local composition omits the IAM service binding and public route', () => {
+	test('the local composition binds IAM too and keeps no public route — there is no local auth mode', () => {
 		const worker = buildOperationsWorker({ env: 'local' })
-		expect(binding(worker, 'IAM')).toBeUndefined()
-		expect(worker.options.vars?.['DEV']).toBe('true')
+		expect(binding(worker, 'IAM')).toBeInstanceOf(ServiceReference)
+		expect(worker.options.vars?.['FABRIKA_IAM_URL']).toBe('http://localhost:18191')
 		expect(worker.options.routes).toEqual([])
 	})
 })

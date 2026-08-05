@@ -72,12 +72,12 @@ function req(method: string, path: string, body?: unknown): Request {
 	})
 }
 
-/** A persona granting exactly `secret.manage` + `app.manage` globally (covers the app-secret values). */
+/** A caller granted exactly `secret.manage` + `app.manage` globally (covers the app-secret values). */
 function secretManager(): AuthContext {
 	return authWithActions(['secret.manage', 'app.manage'], 'sm@vozka.test')
 }
 
-/** A persona that holds neither `secret.manage` nor `app.manage` (only `deploy.read`) → denied. */
+/** A caller that holds neither `secret.manage` nor `app.manage` (only `deploy.read`) → denied. */
 function noSecretManager(): AuthContext {
 	return authWithActions(['deploy.read'], 'ro@vozka.test')
 }

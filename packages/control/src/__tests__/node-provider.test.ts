@@ -62,7 +62,6 @@ describe('the Zerops namespace process configuration', () => {
 			DEPLOY_QUEUE: { send: () => Promise.resolve() },
 			WAIT_UNTIL: () => {},
 			ENVIRONMENT: 'prod',
-			DEV: 'true',
 		}, {
 			...namespaceEnvironment(),
 			FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',

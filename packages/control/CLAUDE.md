@@ -11,7 +11,7 @@ runtime package.
 ## Commands (this package)
 
 ```bash
-bun run dev                                       # lopata dev on :18291 (DEV=true → dev-persona AuthContext)
+bun run dev                                       # lopata dev on :18291 (needs packages/iam's `bun run dev` for the IAM binding)
 bunx wrangler d1 migrations apply DB --local      # apply migrations to the local D1
 bun run oblaka                                     # regenerate wrangler.jsonc (plan/dry)
 bun run bootstrap                                  # deploy fabrika itself (needs real CF creds + env)
@@ -98,10 +98,14 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   and `HttpIamRpc` (`@fabrika/auth`, bearer `FABRIKA_IAM_RPC_KEY` against IAM's `/rpc/*` at the private
   `FABRIKA_IAM_RPC_URL`) in a process. `FABRIKA_IAM_URL` remains the public issuer. ONE `HttpIamRpc` per
   process, never per request: the SDK caches the JWKS in a WeakMap keyed by that object.
-- **Local vs off-local auth by the `DEV` var:** `DEV='true'` (only with `ENVIRONMENT='local'`) → a
-  fabrika-synthesized AuthContext from a fixed dev persona (no IAM service, selected by the
-  `X-Dev-Principal` header / cookie); `DEV=''` → IAM-backed verification over `env.IAM` (needs
-  `FABRIKA_IAM_URL` as the issuer). Any other `DEV` value fails the boot rather than being guessed.
+- **ONE auth path, locally included — there is no `DEV` var any more.** `env.IAM` and
+  `FABRIKA_IAM_URL` are required in every environment; `createIam` refuses to build without them, and
+  `fabrika.config.ts` binds IAM locally for the same reason (the proxy Worker in front already did).
+  The synthetic `DEV` persona roster this Worker used to pass to the SDK — selected by an
+  `X-Dev-Principal` header or a cookie, defaulting to a global admin — was a SECOND authentication
+  model that verified nothing, and it is deleted. Local development runs the real stack, where IAM
+  signs the operator in through its own `LOCAL_DEV_LOGIN`; to exercise a non-admin role locally,
+  grant a real principal in IAM rather than reintroducing a persona.
   `FABRIKA_CONTROL_BOOTSTRAP_ADMINS` is the ONLY escape hatch here and fails CLOSED on a malformed
   value. There is no machine twin: `FABRIKA_IAM_PROVISIONING_KEY` authenticates against IAM's own
   `/admin/*` surface and has no `credentials` row, so behind the proxy `mintFromKey` answers

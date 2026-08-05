@@ -15,7 +15,7 @@ browserTest(
 	},
 	async () => {
 		await step('an anonymous Operations request reaches the real proxy', {
-			intent: 'the proof starts with no Fabrika session at all — no cookie, and no dev persona behind the proxy',
+			intent: 'the proof starts with no Fabrika session at all — no cookie, and no way for the app to invent a caller',
 			manual: 'Open Operations in a private browser with no Fabrika session.',
 		}, async () => {
 			const cookies = await getContext().cookies()

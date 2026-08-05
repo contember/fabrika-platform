@@ -6,17 +6,15 @@
 // Enforcement lives in @fabrika/proxy (ADR-0007). Nothing exported here can evaluate a gate.
 
 export { IamClient } from './client'
-export { FakeIamClient } from './fake'
-export type { FakeIamConfig, FakePersona } from './fake'
 export { applyScope } from './scope'
 // The typed HTTP errors + the per-resource authorization helper a per-path gate cannot express.
 export { ForbiddenError, requirePermission, UnauthenticatedError } from './errors'
 export type { HttpError } from './errors'
 // Request-time surface: the single `createIam` entry point (verification + share-link redemption +
-// the management methods), the dev persona model (`makeDevContext`), and the anonymous context an app
-// sets on a request the proxy admitted through a `public` gate.
-export { anonymousContext, createIam, Iam, makeDevContext } from './iam'
-export type { AuthFailure, AuthFailureReason, AuthResult, CreateIamOptions, IamEnv, PersonaSpec } from './iam'
+// the management methods) and the anonymous context an app sets on a request the proxy admitted
+// through a `public` gate.
+export { anonymousContext, createIam, Iam } from './iam'
+export type { AuthFailure, AuthFailureReason, AuthResult, CreateIamOptions, IamEnv } from './iam'
 // The shared middleware contract consumed by `@fabrika/app`. Owned here so an app pipeline needs no
 // duplicate compatibility interface; the SDK itself no longer ships any middleware.
 export type { AuthCarrier, Middleware } from './middleware'

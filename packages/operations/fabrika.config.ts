@@ -13,6 +13,22 @@ import {
 } from '@fabrika/provider-cloudflare'
 import { OPERATOR_GATES } from './src/app'
 
+/**
+ * IAM's origin — the issuer both this Worker and the proxy in front of it verify tokens against.
+ * Locally it falls back to `packages/iam`'s own `bun run dev` port, because there is no environment in
+ * which the issuer is optional: `createIam` refuses to build without it.
+ */
+const LOCAL_IAM_URL = 'http://localhost:18191'
+
+const resolveIamUrl = (isLocal: boolean): string =>
+	environmentAliases.read(
+		{
+			FABRIKA_IAM_URL: process.env['FABRIKA_IAM_URL'],
+			PROPUSTKA_URL: process.env['PROPUSTKA_URL'],
+		},
+		{ canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' },
+	) ?? (isLocal ? LOCAL_IAM_URL : '')
+
 const OPERATIONS_PROXY_GATES: AppGates = {
 	rules: [
 		{ path: '/healthz', kind: 'public' },
@@ -28,13 +44,7 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 	const isLocal = ctx.env === 'local'
 	const publicHost = ctx.domain ?? ''
 	const deadLetterQueue = `${ctx.env}-operations-ingest-dlq`
-	const iamUrl = environmentAliases.read(
-		{
-			FABRIKA_IAM_URL: process.env['FABRIKA_IAM_URL'],
-			PROPUSTKA_URL: process.env['PROPUSTKA_URL'],
-		},
-		{ canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' },
-	) ?? ''
+	const iamUrl = resolveIamUrl(isLocal)
 	return new Worker({
 		dir: '.',
 		name: 'operations',
@@ -49,7 +59,6 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 		vars: {
 			ENVIRONMENT: ctx.env,
 			OPERATIONS_PUBLIC_HOST: publicHost,
-			DEV: isLocal ? 'true' : '',
 			FABRIKA_IAM_URL: iamUrl,
 		},
 		bindings: {
@@ -71,22 +80,16 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 				binding: 'consumer',
 				consumer: { maxBatchSize: 50, maxBatchTimeout: 5, maxRetries: 10 },
 			}),
-			...(isLocal ? {} : {
-				IAM: new ServiceReference('propustka-worker'),
-			}),
+			// Bound in EVERY environment, local included: `src/auth.ts` verifies an IAM-issued token and
+			// has no local mode, and the proxy Worker in front of this one binds the same service anyway.
+			IAM: new ServiceReference('propustka-worker'),
 		},
 	})
 }
 
 export const buildOperationsProxy = (ctx: ResourceContext): Worker => {
 	const publicHost = ctx.domain ?? ''
-	const iamUrl = environmentAliases.read(
-		{
-			FABRIKA_IAM_URL: process.env['FABRIKA_IAM_URL'],
-			PROPUSTKA_URL: process.env['PROPUSTKA_URL'],
-		},
-		{ canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' },
-	) ?? ''
+	const iamUrl = resolveIamUrl(ctx.env === 'local')
 	return createCloudflareProxyWorker({
 		name: 'operations-proxy',
 		app: buildOperationsWorker(ctx),

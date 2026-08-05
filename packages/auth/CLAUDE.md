@@ -14,12 +14,17 @@ no gate evaluation here, no session→token exchange, no login bounce, and no co
 | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `authenticate(request)`                                  | Read the proxy-injected `PROXY_TOKEN_HEADER`, verify it LOCALLY against the JWKS, return an `AuthContext`.  |
 | `redeemKey(token)`                                       | Redeem a share-link capability OFF the gate path (`px_` → one `mintFromKey`, cached; a JWT → local verify). |
-| `listPrincipals` / `issueKey` / `issueJwt` / `revokeKey` | The management surface, delegated to `IamClient` (off-local) or `FakeIamClient` (dev).                      |
-| `devLoginHandler()`                                      | The local persona-switch handler: `?as=<email>` → persona cookie → 302 `/`.                                 |
+| `listPrincipals` / `issueKey` / `issueJwt` / `revokeKey` | The management surface, delegated to `IamClient`.                                                           |
 
-Around it: `anonymousContext()` (what an app sets on a `public`-gated request), `makeDevContext`,
-`applyScope`, `requirePermission`, `UnauthenticatedError` / `ForbiddenError`, `TokenVerifier`,
-`HttpIamRpc`, and the deploy-time `reconcileSchema`.
+Around it: `anonymousContext()` (what an app sets on a `public`-gated request), `applyScope`,
+`requirePermission`, `UnauthenticatedError` / `ForbiddenError`, `TokenVerifier`, `HttpIamRpc`, and the
+deploy-time `reconcileSchema`.
+
+**There is ONE code path and no local mode.** `createIam` requires the binding and the issuer
+everywhere, including locally; there is no `DEV` flag, no `FakeIamClient` and no synthetic persona.
+Local development runs the real stack (`bun run local:up`), where the proxy fronts each service and
+IAM authenticates through its own `LOCAL_DEV_LOGIN` bypass — the system's only dev bypass, owned by
+the service that owns identity.
 
 ## Invariants
 
@@ -38,10 +43,12 @@ Around it: `anonymousContext()` (what an app sets on a `public`-gated request), 
   those requests hit a `public`/`service` gate and the app redeems the capability itself. There is no
   proxy equivalent by design. Its per-binding token cache is keyed by a SHA-256 digest (never the
   plaintext credential) and hard-bounded.
-- **`DEV` is parsed strictly and gated on `ENVIRONMENT`.** Only `true` / `'true'` / `'1'` select
-  `FakeIamClient` + synthetic personas, and only when `ENVIRONMENT === 'local'`; `'false'` / `'0'` /
-  `''` / absent are the real path; anything else throws. Consumers give their default dev persona a
-  global-admin grant, so a misread flag used to hand every unauthenticated request full access.
+- **THERE IS NO SECOND AUTHENTICATION MODEL HERE, and adding one back is the bug.** The SDK used to
+  select a `FakeIamClient` plus synthetic personas from a `DEV` env var, resolved by `?__as=` / a
+  cookie / a header, with a default persona holding a global-admin grant — so one misread flag handed
+  every unauthenticated request full access (SEC-4). It existed only because local development did not
+  run the real stack. It does now. A local bypass belongs in IAM, where it is a real session row for a
+  real principal and is refused at use the moment the flag is off.
 - **The issuer is canonicalized ONCE, in `createIam`** — `new URL(...).origin`, http(s) only, throwing
   on anything else. It is the token's `iss` and jose compares it byte-for-byte, so
   `https://iam.test/` and `https://iam.test` must not become two different issuers.
@@ -66,8 +73,6 @@ Around it: `anonymousContext()` (what an app sets on a `public`-gated request), 
   (`fabrika.config.ts`). Nothing in this package reads them.
 - The authz vocabulary each app declares (`AppSchema`: scope dimensions, action catalog, roles) is the
   app's own; the first reconcile is also how it registers itself in IAM.
-- `FakeIamClient` backs dev only. It does not enforce a persona's `permissions` — real authorization is
-  the IAM-issued token this SDK verifies.
 - `src/verify.ts` is a deliberate near-twin of `@fabrika/proxy`'s `src/verifier.ts`. They cache
   differently (per binding vs per process) and the proxy must not depend on the app SDK, so the two
   stay separate; keep their three-state semantics identical.

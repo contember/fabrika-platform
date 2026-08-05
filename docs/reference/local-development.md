@@ -75,8 +75,8 @@ installation. It fronts each host with the gates that host's `fabrika.config.ts`
 declares — `CONTROL_PROXY_GATES` for the console, `OPERATIONS_PROXY_GATES` for the
 public Operations host — and IAM is `public` because it authenticates itself.
 Nothing reaches an application until a gate passes, and the application only ever
-verifies the token the proxy injected (`DEV` is empty for control and Operations,
-so no synthetic persona exists).
+verifies the token the proxy injected. There is no second way in: `@fabrika/auth`
+has one code path and no local mode, so no synthetic persona exists anywhere.
 
 Opening the console therefore runs the real round trip:
 
@@ -88,6 +88,23 @@ Opening the console therefore runs the real round trip:
    use the moment the flag is off;
 3. the browser returns to the original URL carrying `px_session`, and the proxy
    exchanges it for a per-app token on every request.
+
+That session is a **global admin** — `LOCAL_DEV_LOGIN` resolves the fixed
+`admin@local.test` bootstrap admin and nothing else. Everything else about an
+identity is done in IAM, through the console's Access plane: `principals.invite`
+creates one, and `passwords.issueEnrollment` answers with the enrolment URL
+directly (`FABRIKA_EMAIL_PROVIDER` is `none`, so delivery is `manual`) — that
+principal can then sign in with a password.
+
+**A non-admin role for the console is not grantable locally yet.** A grant naming
+`vozka` is refused with `unknown app`, and a cross-app inline grant of
+`deploy.read` is refused because no registered app declares that pattern: fabrika's
+own `AppSchema` is reconciled into IAM only by a deploy, so locally IAM knows about
+`notes` (registered by `local:smoke`) and nothing else. Only the built-in cross-app
+`admin` role can be granted, which is another global admin. Registering the console
+as an app locally is the same missing piece the ADR-0021 handoff waits on. There is
+no persona switch to fall back on, and adding one back would be a second
+authentication model.
 
 The session travels as a cookie on the shared `fabrika.localhost` parent
 (`SESSION_COOKIE_DOMAIN`). Every local host is a `*.fabrika.localhost` name served
@@ -135,7 +152,8 @@ The composition runs these real components:
 - separate private `platform` and `apps-prod` networks.
 
 The unified console is reached through the proxy and authenticated by IAM; there
-is no synthetic persona anywhere in the composition. Access requests cross the
+is no synthetic persona anywhere in the composition, and no code that could
+produce one. Access requests cross the
 real control-to-IAM gateway. Operations requests cross the transport-only control
 gateway to the private Operations operator API. Machine bootstrap, app API keys,
 access-token minting, JWKS verification, schema reconciliation, Operations

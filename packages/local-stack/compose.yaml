@@ -128,10 +128,6 @@ services:
       PORT: "3000"
       FABRIKA_CONTROL_ASSETS_DIR: packages/dashboard/dist
       ENVIRONMENT: local
-      # The proxy in front of this service enforces the real gates and injects a real IAM token, so
-      # control takes the same verification path it takes off-local. Never `true` here: the synthetic
-      # dev persona is a second authentication model and it would hide whatever the proxy got wrong.
-      DEV: ""
       FABRIKA_CONTROL_DOMAIN: http://control.fabrika.localhost:18080
       FABRIKA_CONTROL_BOOTSTRAP_ADMINS: "[]"
       FABRIKA_IAM_URL: http://iam.fabrika.localhost:18080
@@ -170,8 +166,6 @@ services:
     environment:
       PORT: "3000"
       ENVIRONMENT: local
-      # See control: verification only, off the token the proxy injected.
-      DEV: ""
       FABRIKA_OPERATIONS_PUBLIC_HOST: errors.fabrika.localhost
       FABRIKA_OPERATIONS_BLOB_BUCKET: operations-payloads
       FABRIKA_OPERATIONS_BLOB_ENDPOINT: http://minio:9000

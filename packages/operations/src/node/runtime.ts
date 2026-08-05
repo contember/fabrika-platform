@@ -64,14 +64,9 @@ export function createOperationsRuntime(source: Record<string, string | undefine
 }
 
 function operationsIam(source: Record<string, string | undefined>) {
-	// `DEV` and `ENVIRONMENT` both go to the SDK: it parses DEV strictly and refuses the persona path
-	// outside `local`, so a mistyped flag can no longer silently select the fake client.
-	const dev = source['DEV'] ?? ''
-	const environment = source['ENVIRONMENT'] ?? ''
-	if (dev !== '') return createOperationsIam({ DEV: dev, ENVIRONMENT: environment })
+	// One path everywhere: the process verifies IAM-issued tokens and has no local mode to fall back on.
 	const config = resolveOperationsIamProcessConfig(source)
 	return createOperationsIam({
-		ENVIRONMENT: environment,
 		IAM: new HttpIamRpc({
 			origin: config.rpcOrigin,
 			key: config.rpcKey,

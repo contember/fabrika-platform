@@ -193,7 +193,7 @@ export class HttpIamRpc implements IamRpc {
 			principals.push({
 				id,
 				label,
-				// Anything but the literal 'service' is a user, matching how the SDK narrows a persona type.
+				// Anything but the literal 'service' is a user — the same narrowing the binding transport does.
 				type: principalType(type),
 				email: typeof email === 'string' ? email : null,
 				disabled: booleanField(item, 'disabled') ?? false,
