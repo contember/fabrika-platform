@@ -1,5 +1,6 @@
 import { browserTest, byLabel, byRole, el, expect, getPage, invariant, step } from '@opice/harness'
 import { randomUUID } from 'node:crypto'
+import { applyIssueFilters } from './support/console'
 import { type BrowserFixtures, readBrowserFixtures, sendErrorFixture } from './support/fixtures'
 
 const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
@@ -81,13 +82,16 @@ browserTest(
 
 		await step('the seeded primary failure detail retains its latest occurrence', {
 			intent: 'a grouped issue leads to the concrete event context retained by Operations',
-			manual: 'Open "Browser fixture primary failure". Verify that "Latest occurrence" shows the exception and event context.',
+			manual: 'Open "Browser fixture primary failure". Verify that "Occurrences" shows the exception and event context.',
 		}, async () => {
 			await byLabel('Search').fill('Browser fixture primary failure')
+			await applyIssueFilters()
 			await byRole('link', PRIMARY_FAILURE, { exact: true }).click()
 			await expect(byRole('heading', PRIMARY_FAILURE, { exact: true, level: 1 })).toBeVisible()
-			await expect(byRole('heading', 'Latest occurrence', { exact: true, level: 2 })).toBeVisible()
-			await expect(byRole('heading', PRIMARY_FAILURE, { exact: true, level: 3 })).toBeVisible()
+			// The occurrence section is now `Occurrences`, and the exception it renders is titled
+			// `Exception: <type>: <value>` rather than the bare issue title.
+			await expect(byRole('heading', 'Occurrences', { exact: true, level: 2 })).toBeVisible()
+			await expect(byRole('heading', `Exception: ${PRIMARY_FAILURE}`, { exact: true, level: 3 })).toBeVisible()
 			const eventId = getPage().locator('dt').filter({ hasText: /^Event ID$/ })
 			await expect(eventId).toBeVisible()
 			await expect(eventId.locator('xpath=following-sibling::dd[1]')).toHaveText(/^[0-9a-f]{32}$/)
@@ -136,6 +140,7 @@ browserTest(
 			const state = currentFixtures()
 			await byRole('link', 'Errors', { exact: true }).click()
 			await byLabel('Search').fill(REGRESSION_TITLE)
+			await applyIssueFilters()
 			await byRole('link', REGRESSION_TITLE).click()
 			regressionIssueUrl = getPage().url()
 			await expect(byRole('heading', REGRESSION_TITLE, { level: 1 })).toContainText(`[${state.marker}]`)
@@ -143,6 +148,7 @@ browserTest(
 
 			const releaseSelect = byLabel('Resolve in release')
 			await releaseSelect.selectOption({ label: state.fixtures.visible.release.name })
+			// The issue detail's own `Apply`, next to `Resolve in release` — not the error list's filter submit.
 			await byRole('button', 'Apply', { exact: true }).click()
 			await expectResolveInReleaseUsesGateway()
 			await expect(el('issue-status')).toHaveAttribute('data-status', 'resolved')

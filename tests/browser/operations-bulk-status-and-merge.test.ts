@@ -1,5 +1,6 @@
 import { browserTest, byLabel, byRole, expect, getPage, invariant, reload, step } from '@opice/harness'
 import { randomUUID } from 'node:crypto'
+import { applyIssueFilters } from './support/console'
 import { scenarioMarker, sendErrorFixture } from './support/fixtures'
 
 const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
@@ -163,7 +164,8 @@ browserTest(
 
 		await step('three scenario-specific issues are available in the open list', {
 			intent: 'bulk and merge mutations operate on unique issues owned by this independent scenario',
-			manual: 'Open "Errors" under Operations. Verify that the three errors created for this test appear.',
+			manual:
+				'Open "Errors" under Operations, search for this run\'s marker and select "Apply". Verify that the three errors created for this test appear.',
 		}, async () => {
 			await expect.poll(async () => {
 				const items = issueItems(await browserRpc('issues', { query: RUN_MARKER, limit: 100 }))
@@ -171,6 +173,7 @@ browserTest(
 			}, { timeout: 15_000 }).toBe(true)
 			await reload()
 			await byLabel('Search').fill(RUN_MARKER)
+			await applyIssueFilters()
 			const table = byRole('table', 'Operations issues')
 			await expect(table).toContainText(CANONICAL_TITLE)
 			await expect(table).toContainText(COMPANION_TITLE)
@@ -187,13 +190,17 @@ browserTest(
 
 		await step('the operator resolves two selected issues together', {
 			intent: 'bulk status changes apply to exactly the selected permitted issues',
-			manual: 'Select two of the test errors and select "Resolve" in the bulk toolbar. Verify that both errors become resolved.',
+			manual:
+				'Select two of the test errors and select "Resolve" in the bulk toolbar. Show "All" status, select "Apply", and verify that both errors became resolved while the third did not.',
 		}, async () => {
 			await byRole('checkbox', `Select ${CANONICAL_TITLE}`, { exact: true }).check()
 			await byRole('checkbox', `Select ${COMPANION_TITLE}`, { exact: true }).check()
 			await getPage().locator('.ops-bulk').getByRole('button', { name: 'Resolve', exact: true }).click()
 			await expectMutation(observedMutations, 'bulkIssueStatus', null)
+			// The list reloads under the APPLIED filters, so the two now-resolved issues leave the open
+			// view; widening to every status is what brings them back to be compared with the untouched one.
 			await byRole('combobox', 'Status', { exact: true }).selectOption('all')
+			await applyIssueFilters()
 
 			for (const title of [CANONICAL_TITLE, COMPANION_TITLE]) {
 				const row = byRole('row').filter({ hasText: title })
@@ -205,7 +212,8 @@ browserTest(
 
 		await step('the remaining duplicate is merged into a resolved target', {
 			intent: 'operators can consolidate a duplicate into another issue using its opaque issue token',
-			manual: 'Open the remaining test error. Enter the target issue token under "Merge into issue" and select "Merge".',
+			manual:
+				'Open the remaining test error. Search the target error under "Merge into issue", select "Find", check that the offered target is the intended issue and select "Merge".',
 		}, async () => {
 			const canonical = requireSnapshot(canonicalBefore, 'canonical issue')
 			const canonicalHref = await byRole('link', CANONICAL_TITLE, { exact: true }).getAttribute('href')
@@ -213,8 +221,13 @@ browserTest(
 			if (canonicalHref === null) throw new Error('canonical issue link has no href')
 			expect(new URL(canonicalHref, BASE_URL).pathname.endsWith(`/${canonical.id}`)).toBe(true)
 
+			// The merge target is no longer typed in: it is searched for by title and picked from the
+			// candidates. Asserting the picked option's VALUE keeps the token half of the intent — the
+			// console still addresses the target by its opaque issue id, the operator just never types one.
 			await byRole('link', DUPLICATE_TITLE, { exact: true }).click()
-			await byLabel('Merge into issue').fill(canonical.id)
+			await byLabel('Merge into issue').fill(CANONICAL_LABEL)
+			await byRole('button', 'Find', { exact: true }).click()
+			await expect(byRole('combobox', 'Merge target', { exact: true })).toHaveValue(canonical.id)
 			await byRole('button', 'Merge', { exact: true }).click()
 			await expectMutation(observedMutations, 'mutateIssue', 'merge')
 			await expect.poll(async () =>
@@ -229,14 +242,19 @@ browserTest(
 
 		await step('the merged result and bulk statuses persist after navigation', {
 			intent: 'bulk and merge outcomes are repository state rather than transient component state',
-			manual: 'Return to "Errors", select "All" status, and verify the resolved target remains while the merged duplicate is no longer separate.',
+			manual:
+				'Return to "Errors", select "All" status and "Apply", then reload and apply the same filters again. Verify the resolved target remains while the merged duplicate is no longer separate.',
 		}, async () => {
 			await byRole('link', '← All errors', { exact: true }).click()
 			await byRole('combobox', 'Status', { exact: true }).selectOption('all')
 			await byLabel('Search').fill(RUN_MARKER)
+			await applyIssueFilters()
+			// Applied filters are component state, not a query string, so the reload drops back to the
+			// defaults and the same view has to be asked for again — which is the persistence claim.
 			await reload()
 			await byRole('combobox', 'Status', { exact: true }).selectOption('all')
 			await byLabel('Search').fill(RUN_MARKER)
+			await applyIssueFilters()
 
 			const table = byRole('table', 'Operations issues')
 			await expect(table).toContainText(CANONICAL_TITLE)
@@ -250,7 +268,10 @@ browserTest(
 			const persistedCompanion = detailSnapshot(await browserRpc('issue', { issueId: companion.id }))
 			const persistedDuplicate = detailSnapshot(await browserRpc('issue', { issueId: duplicate.id }))
 			expect(persistedCanonical.status).toBe('resolved')
-			expect(persistedCanonical.count).toBe(canonical.count)
+			// The canonical is ALSO the merge target, and a merge rolls the duplicate's occurrence history
+			// up into it rather than discarding it, so its events are the sum of both. The companion, which
+			// only changed status, is what proves a bulk status change moves no counts on its own.
+			expect(persistedCanonical.count).toBe(canonical.count + duplicate.count)
 			expect(persistedCompanion.status).toBe('resolved')
 			expect(persistedCompanion.count).toBe(companion.count)
 			expect(persistedDuplicate.mergedIntoIssueId).toBe(canonical.id)
