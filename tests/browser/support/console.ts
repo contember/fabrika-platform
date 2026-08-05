@@ -8,7 +8,8 @@
  *
  * Three scenarios were written against the older list, which queried on every keystroke and every
  * `select`. They set values and asserted the narrowed result, so they went red the moment the submit
- * button appeared ([backlog 53](../../../docs/backlog/53-reauthor-the-operations-console-scenarios.md)).
+ * button appeared, and were re-authored around it
+ * ([sprint](../../docs/archive/sprint-2026-08-05-auth-track-closeout.md)).
  * Set the controls, call this, then assert.
  */
 

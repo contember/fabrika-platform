@@ -3,9 +3,9 @@
  * where it may come from.
  *
  * IAM cannot derive it. Behind a balancer its socket peer IS the balancer, and a forwarding header the
- * caller can write is worse than no limiter because it looks like protection
- * ([backlog 21](../../../docs/backlog/21-rate-limit-the-iam-mint-surface.md),
- * [49](../../../docs/backlog/49-add-trusted-client-rate-limits-to-public-iam.md)). So IAM does not
+ * caller can write is worse than no limiter because it looks like protection — backlog 21 and 49
+ * refused to build on one twice before this shipped
+ * ([sprint](../../../docs/archive/sprint-2026-08-05-auth-track-closeout.md)). So IAM does not
  * choose a header: the COMPOSITION ROOT names the one header its own ingress guarantees, and shared
  * code reads that one and nothing else. Naming none is a supported configuration — it means this
  * installation cannot see its clients, and the account and deployment-wide buckets carry the load

@@ -59,6 +59,13 @@ that ships — only what genuinely helps a future reader. The git log holds the 
   the proxy the only enforcement point, deleted the SDK's duplicate path and
   the dev-persona bypass, gave every host its own session, and consolidated
   four enforcement ADRs into ADR-0022.
+- [Auth track closeout (2026-08-05)](sprint-2026-08-05-auth-track-closeout.md) —
+  emptied the Access-plane backlog: a session is refused once its method is
+  disabled, Operations' public host declares only the routes it serves, an abuse
+  limit is keyed on a coordinate the caller cannot set, the drifted Operations
+  browser scenarios are re-authored, and ADR-0018's legacy environment-name
+  fallback is retired. Records why item 54's other half is a console architecture
+  change rather than a rename.
 - [Proxy gate-config delivery](08-distribute-gate-config-to-proxy.md) — the
   shipped redeploy decision retained as context for ADR-0007, ADR-0008, and
   ADR-0010.

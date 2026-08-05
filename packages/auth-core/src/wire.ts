@@ -8,8 +8,8 @@ export const PROXY_TOKEN_HEADER = 'X-Fabrika-Token'
  * Owned exactly like `PROXY_TOKEN_HEADER`: the edge deletes a caller-supplied one and writes its own,
  * so an upstream reading it is reading the edge and never the caller. It is deliberately NOT
  * `X-Forwarded-For` — that name means "whatever the chain appended", and a value whose
- * trustworthiness depends on where you are standing is exactly the key
- * [backlog 21](../../../docs/backlog/21-rate-limit-the-iam-mint-surface.md) twice refused to build on.
+ * trustworthiness depends on where you are standing is exactly the key backlog 21 and 49 twice
+ * refused to build on ([sprint](../../../docs/archive/sprint-2026-08-05-auth-track-closeout.md)).
  *
  * Where a composition cannot observe the client the header is simply ABSENT, and the upstream then
  * has no per-client bucket — today's behaviour — rather than a spoofable one.

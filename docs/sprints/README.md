@@ -19,7 +19,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- [sprint-2026-08-05-auth-track-closeout](sprint-2026-08-05-auth-track-closeout.md) — close every
-  remaining Access-plane item: Operations' own app identity, one session-usable predicate, a
-  per-client limit where the client is visible, the drifted browser scenarios, and the ADR-0018
-  legacy env fallback.
+None.

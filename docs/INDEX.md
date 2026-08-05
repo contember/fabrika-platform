@@ -24,11 +24,10 @@ that supersedes the four which decided it in stages.
 
 ## Active sprints
 
-- [`auth-track-closeout`](sprints/sprint-2026-08-05-auth-track-closeout.md) — the last five
-  Access-plane items, so the only auth work left is work nobody has decided yet.
-
-The auth-hardening sprint that preceded it shipped on 2026-08-05 —
-[archive](archive/sprint-2026-08-04-auth-hardening.md).
+None. Two auth sprints shipped on 2026-08-05 —
+[hardening](archive/sprint-2026-08-04-auth-hardening.md), then
+[track closeout](archive/sprint-2026-08-05-auth-track-closeout.md). The Access-plane
+backlog is empty; what is left of item 54 is a console architecture decision, not auth work.
 
 ## What's hot
 
@@ -40,7 +39,13 @@ The auth-hardening sprint that preceded it shipped on 2026-08-05 —
   0007/0008/0010/0021. The SDK's duplicate in-process gate path is deleted, and the
   one question 0022 left open is answered by
   [0023](decisions/0023-one-session-per-host.md): one session-delivery mechanism, one
-  session per host, `__Host-` on both cookies.
+  session per host, `__Host-` on both cookies. A session is now refused as soon as its
+  authentication method is disabled, and an abuse limit is keyed on a client coordinate
+  the caller cannot set — the proxy observes and injects it, IAM enforces, because
+  0022 forbids the proxy holding state a decision depends on.
+- **Release is blocked:** `release:validate` has been red since `18d9575` — a published
+  package depends on a private one ([56](backlog/56-unbreak-the-release-dependency-gate.md)).
+  Decide what `@fabrika/proxy` is before anything ships.
 - **Configuration names:** one spelling per setting. `FABRIKA_*` is the only family anything
   reads — [ADR-0024](decisions/0024-retire-the-legacy-environment-name-fallback.md) retired
   0018's `VOZKA_*`/`PROPUSTKA_*` fallback and deleted the shared alias reader with it. Durable

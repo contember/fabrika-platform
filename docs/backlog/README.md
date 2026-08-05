@@ -30,7 +30,6 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 <!-- one line each: NN — short summary (link). Keep it short. -->
 
 - [05](05-bring-up-on-a-real-zerops-account.md) — The light tier is live on a real account; what remains is the production two-project shape, custom domains, and the git-sourced deploy.
-- [21](21-rate-limit-the-iam-mint-surface.md) — Deferred with reasons; the limit belongs at the proxy, which can identify a client.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
 - [25](25-bootstrap-npm-trusted-publishing.md) — Bootstrap the twenty package names once through protected CI, then activate tokenless OIDC publishing.
 - [26](26-retire-trasa-release-surface.md) — Publish `@fabrika/app`, deprecate `@trasa/core`, and archive the standalone repository.
@@ -46,9 +45,9 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 - [45](45-pin-the-zerops-postgres-connection-target.md) — `connectionString` carries no database and no SSL mode; both are driver defaults today.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
 - [47](47-give-the-zerops-path-a-private-git-source.md) — fabrika's GitHub App never reaches the Zerops path, so a private repository cannot deploy there.
-- [54](54-give-operations-its-own-proxy-app-identity.md) — Operations cannot be its own IAM application while its only authenticated surface is fronted by the console's proxy.
-- [55](55-refuse-a-session-whose-method-was-turned-off.md) — Turning OIDC off leaves its sessions live for 30 days. Same shape as the dev bypass; the local bypass records itself as `oidc`, which is the trap.
-- [49](49-add-trusted-client-rate-limits-to-public-iam.md) — Add ingress-owned per-client password limits without trusting forwarded headers.
+- [54](54-give-operations-its-own-proxy-app-identity.md) — Half shipped; what is left is moving the operator surface onto the Operations host, which is a console architecture change, not a rename.
+- [56](56-unbreak-the-release-dependency-gate.md) — `release:validate` red since `18d9575`: a published package depends on a private one. Blocks every release until it is decided.
+- [57](57-stop-the-caller-choosing-its-own-audit-correlation-id.md) — IAM takes `X-Request-Id` from the caller, unbounded, into `auth_log`; its Worker is edge-routed so the proxy strip never runs.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.

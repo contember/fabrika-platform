@@ -1,3 +1,28 @@
+> **OUTCOME — shipped 2026-08-05.** Four of the five units landed whole; the fifth (54) landed the
+> half that was a bug and proved the other half is a different piece of work. Three backlog items
+> are closed and deleted (21, 49, 53, 55 — four), one is re-scoped with measurements (54), and two
+> new ones came out of verifying the work rather than doing it (56, 57).
+>
+> Commit map: plan → `4ad6058`, WU-B → `4238537`, WU-A → `7e36ef1`, WU-D → `f0b19a5` + `b6f7266`,
+> WU-C → `3a46626`, WU-E → `bfd4189`, close → this commit.
+>
+> Verification, re-run by the orchestrator rather than taken from the units: `bun test` **1874 pass
+> / 9 skip / 0 fail** with the Postgres suites executed against a real `postgres:17` (the 9 skips
+> are the S3 suites, no `FABRIKA_TEST_S3_*`); `typecheck` across 31 packages + `scripts/`, `lint`
+> and `format:check` clean; `local:up` + `local:smoke` green after WU-C and again after WU-E;
+> `test:browser --tier extended` **10 pass / 0 fail**, from a 0/3 baseline on the same stack.
+>
+> **`release:validate` is red and was red before this sprint** — reproduced against a pristine
+> checkout of `c8c8c35`. Filed as 56. This sprint did not cause it and did not fix it.
+>
+> Deferred, honestly: the audience half of 54 (needs a console architecture decision, ADR-shaped);
+> the `trusted_proxies` range for Zerops (needs the live account — the experiment that settles it is
+> written into 05); the residual mint-burst cost item 21 named, which cannot be bounded at the proxy
+> without breaking ADR-0022 and needs the client coordinate threaded through the `IamRpc` wire
+> contract. Two things recorded in the run log and deliberately not filed: two more browser scenarios
+> fill `Search` without submitting and pass only by accident, and `runner-container` still bakes
+> `packages/platform` into its image with nothing depending on it.
+
 # Sprint — auth track closeout (2026-08-05)
 
 **Goal.** Close every remaining item on the Access-plane track, so the only auth work left is
