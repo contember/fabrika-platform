@@ -18,7 +18,7 @@ import type { HttpService } from '@fabrika/platform'
 export class HttpIamAdminGateway implements HttpService {
 	private readonly origin: URL
 
-	constructor(origin: string, private readonly localBearer?: string) {
+	constructor(origin: string) {
 		this.origin = new URL(origin)
 	}
 
@@ -30,9 +30,6 @@ export class HttpIamAdminGateway implements HttpService {
 
 		const headers = new Headers(request.headers)
 		headers.delete('host')
-		if (this.localBearer !== undefined && this.localBearer !== '') {
-			headers.set('authorization', `Bearer ${this.localBearer}`)
-		}
 
 		return fetch(
 			new Request(target, {

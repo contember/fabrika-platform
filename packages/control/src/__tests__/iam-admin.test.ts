@@ -94,12 +94,13 @@ describe('IAM admin gateway', () => {
 			},
 		})
 		try {
-			const gateway = new HttpIamAdminGateway(`http://127.0.0.1:${server.port}`, 'px_local')
+			const gateway = new HttpIamAdminGateway(`http://127.0.0.1:${server.port}`)
 			const response = await gateway.fetch(
 				new Request('http://control.localhost/admin/api-keys?limit=2', {
 					method: 'POST',
 					headers: {
 						origin: 'http://control.localhost',
+						authorization: 'Bearer px_caller',
 						cookie: 'px_session=session-one',
 						'content-type': 'application/json',
 					},
@@ -114,7 +115,9 @@ describe('IAM admin gateway', () => {
 			// private address differed from its public issuer, and which could not have been right anyway:
 			// the browser's origin is the console's, never IAM's. IAM is told which origins may drive it.
 			expect(received?.origin).toBe('http://control.localhost')
-			expect(received?.authorization).toBe('Bearer px_local')
+			// The CALLER's credential, forwarded verbatim. The gateway never supplies one of its own —
+			// IAM authorizes and audits whoever actually made the request.
+			expect(received?.authorization).toBe('Bearer px_caller')
 			expect(received?.cookie).toBe('px_session=session-one')
 			expect(received?.body).toBe('{"label":"test"}')
 		} finally {
