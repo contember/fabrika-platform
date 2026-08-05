@@ -339,6 +339,56 @@ disagree about Operations' app id, so its gate rules would not work if they matt
 Promoted to **WU-M**: a `human` gate miss is a 302 even for an XHR, so an expired console session
 turns an RPC POST into a redirect `fetch` cannot follow.
 
+**Wave 3 landed.** WU-M (`0c9c3f7`) and WU-K (`2c040fe`, net −1013), plus `8bfa6b5` removing the IAM
+gateway's dead local bearer that WU-K found and could not touch.
+
+WU-M chose `Sec-Fetch-Mode` over `Accept` for the navigation signal, and the argument is the reusable
+part: `Sec-` is a forbidden header **prefix**, so `fetch` and XHR cannot set it — the browser writes it,
+so it _describes_ the caller. `Accept: text/html` is an ordinary header any XHR may send and any
+navigation may omit, so reading it would let the caller choose which answer shape it gets. Two Caddy
+facts were measured against `caddy:2.10.2` rather than assumed and are now written down: the
+`forward_auth` subrequest really does carry `Sec-Fetch-Mode`, and **a non-2xx auth response reaches the
+client with its body and `Content-Type` intact** — the whole 401-JSON path depends on the second and it
+was documented nowhere.
+
+WU-K confirmed `FakeIamClient` had zero consumers outside the deleted branch and its own test; tests
+moved onto real ES256 tokens. `control/wrangler.jsonc` was regenerated and its `migrations` array is
+byte-identical — the part that must never shift. Browser suite: **9 pass / 1 fail**, against the five
+red the plan expected; the console-403 fix took four of them with it.
+
+⚠ **An honest gap WU-K recorded rather than papered over**: a non-admin role cannot be exercised
+locally, because fabrika's own `AppSchema` reaches IAM only through a deploy, so IAM knows `notes` and
+nothing else. WU-G has since made registering the console locally one ordinary call.
+
+**Wave 4 — WU-G landed** (`9d7396d`), closing backlog 51. It projects the **app-wide** origin set rather
+than the deploying environment's alone: `setReturnOrigins` replaces, and IAM's registry is keyed by app
+id while `public_origin` is per environment, so sending one environment's origin would un-register the
+others and a `stage` deploy would silently break `prod`'s sign-in.
+
+Bookkeeping wrinkle: that commit also carries the deletion of `backlog/52`, which belongs to WU-L and is
+still in flight. The item's content is in git history at `9d7396d^` if WU-L does not land.
+
+## ⚠ WU-E is blocked on a decision — `__Host-` and shared-cookie mode are incompatible
+
+`__Host-` **forbids the `Domain` attribute**. `SESSION_COOKIE_DOMAIN` exists to set one. So SEC-20 as
+decided ("prefix only") cannot be applied to `px_session` in any installation that uses the shared-cookie
+path — including the local stack, which WU-D deliberately put on it.
+
+That surfaces a question this sprint's own goal implies. There are **two session-delivery mechanisms**:
+the ADR-0021 handoff, and the shared cookie ADR-0021 kept as an optimisation ("it costs nothing, keeps
+the local stack working unchanged"). "Costs nothing" is no longer quite true — it costs the `__Host-`
+prefix, it is a second path through `readHandoff`, and it is why SEC-6 needed a narrowed opt-out at all.
+
+And the reason to keep it just weakened: WU-G made registering an app's return origins one ordinary
+call, so the local stack could run the handoff too. One session-delivery mechanism, `__Host-` on both
+cookies, `SESSION_COOKIE_DOMAIN` deleted.
+
+Against: it contradicts an explicitly-reasoned choice in an accepted ADR, and the shared cookie is
+genuinely the cheaper path when an app really does share a domain with IAM — it saves a redirect.
+
+**Decision needed.** Retire the shared cookie and take `__Host-` on both, or keep it and apply `__Host-`
+only to the per-app `px_token` (which is already host-only).
+
 **Considered and rejected — one shared `TokenVerifier`.** `packages/auth/src/verify.ts` is a near-twin of
 `packages/proxy/src/verifier.ts`. They cannot share code cheaply: `@fabrika/auth-core` is deliberately
 dependency-free and jose-free ("Signing/verifying stays in the packages that own it"), and the proxy must
