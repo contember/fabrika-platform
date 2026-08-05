@@ -147,4 +147,27 @@ describe('Cloudflare proxy Worker', () => {
 		expect((await malformed(new Request(`https://${HOST}/private`))).status).toBe(503)
 		expect(calls).toBe(0)
 	})
+
+	// The Bun composition refuses to boot without a usable issuer (`readProxyEnv`); this Worker does not
+	// run that, so the same refusal has to exist here or the invariant holds on one provider only. An
+	// absent issuer does not degrade — jose compares `iss` byte-for-byte, so it fails EVERY verification.
+	test('refuses to serve without a usable issuer rather than failing every verification', async () => {
+		let calls = 0
+		const upstream = {
+			fetch: () => {
+				calls++
+				return Promise.resolve(new Response('should not run'))
+			},
+		}
+		const base = environment({ rules: [{ path: '/*', kind: 'public' }] }, upstream)
+		for (const issuer of [undefined, '', '   ', 'not a url', 'ftp://iam.test']) {
+			const handler = createCloudflareProxyHandler({ ...base, FABRIKA_IAM_URL: issuer })
+			expect((await handler(new Request(`https://${HOST}/anything`))).status).toBe(503)
+		}
+		expect(calls).toBe(0)
+
+		// A trailing slash is the same issuer, not a second one — jose would disagree.
+		const canonical = createCloudflareProxyHandler({ ...base, FABRIKA_IAM_URL: `${ISSUER}/` })
+		expect((await canonical(new Request(`https://${HOST}/anything`))).status).toBe(200)
+	})
 })

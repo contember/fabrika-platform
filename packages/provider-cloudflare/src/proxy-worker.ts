@@ -38,11 +38,29 @@ let cached: {
 	readonly handler: ProxyFetch
 } | undefined
 
+/**
+ * The issuer in the form the token's `iss` is compared against — `new URL(...).origin`, http(s) only.
+ * Null when it is unusable, which must refuse to serve rather than boot: jose compares `iss`
+ * byte-for-byte, so an absent or unparseable issuer does not degrade, it fails EVERY verification as
+ * if the token were forged. The Bun composition gets this from `readProxyEnv`, which this Worker does
+ * not run — the check has to exist on both or the invariant only holds on one provider.
+ */
+function canonicalIssuer(raw: string | undefined): string | null {
+	if (raw === undefined || raw.trim() === '') return null
+	try {
+		const url = new URL(raw.trim())
+		return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : null
+	} catch {
+		return null
+	}
+}
+
 /** Factory exported for Lopata and unit tests; production uses the default Worker fetch below. */
 export function createCloudflareProxyHandler(env: CloudflareProxyEnv, logger: ProxyLogger = consoleLogger): ProxyFetch {
 	const manifestJson = env.FABRIKA_PROXY_MANIFEST_JSON ?? ''
-	const issuer = env.FABRIKA_IAM_URL ?? ''
-	if (!isIamGateway(env.IAM) || manifestJson === '') return () => Promise.resolve(UNAVAILABLE.clone())
+	const canonical = canonicalIssuer(env.FABRIKA_IAM_URL)
+	if (!isIamGateway(env.IAM) || manifestJson === '' || canonical === null) return () => Promise.resolve(UNAVAILABLE.clone())
+	const issuer = canonical
 
 	const manifest = parseProxyManifestJson(manifestJson)
 	if (manifest === null || !validManifest(manifest)) return () => Promise.resolve(UNAVAILABLE.clone())
