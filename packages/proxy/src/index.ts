@@ -10,9 +10,19 @@ export type { AuthorizerOptions, Decision, DenyReason, ForwardedRequest, Resolve
 export { cacheKey, MemoryTokenCache } from './cache'
 export type { CachedToken, TokenCache } from './cache'
 export { buildCaddyConfig, CaddyConfigError, uriRedactionPattern } from './caddy'
-export type { CaddyBuildOptions, CaddyConfig, CaddyHandler, CaddyMatcherSet, CaddyReverseProxyHandler, CaddyRoute, CaddyServer } from './caddy'
+export type {
+	CaddyBuildOptions,
+	CaddyConfig,
+	CaddyHandler,
+	CaddyMatcherSet,
+	CaddyReverseProxyHandler,
+	CaddyRoute,
+	CaddyServer,
+	CaddyStaticIpSource,
+} from './caddy'
 export {
 	APP_QUERY_PARAM,
+	CLIENT_ADDRESS_HEADER,
 	DEFAULT_HEALTH_PATH,
 	DEFAULT_IAM_TIMEOUT_MS,
 	DEFAULT_VERIFY_PATH,
@@ -23,6 +33,7 @@ export {
 	JWKS_TTL_SECONDS,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
+	UNTRUSTED_FORWARD_HEADERS,
 } from './constants'
 export { applicableGates, compileGates, readBearer, readCookie, readServiceCredential } from './gates'
 export type { CompiledGate } from './gates'

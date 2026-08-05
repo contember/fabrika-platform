@@ -16,12 +16,22 @@
 // Run it: `bun src/node/server.ts` (see `zerops.yaml` → `run.start`).
 
 import { createBunHandler } from '@fabrika/app/bun'
+import { CLIENT_ADDRESS_HEADER } from '@fabrika/auth-core'
 import { createIamApp } from '../app'
 import { createRuntime, type Runtime } from './runtime'
 
 /** Build the server's fetch handler for an assembled runtime. Exported so a test can drive it directly. */
 export function createFetchHandler(runtime: Runtime): (request: Request) => Promise<Response> {
-	const app = createIamApp({ rpcKey: runtime.config.rpcKey, proxyKey: runtime.config.proxyKey, health: true })
+	const app = createIamApp({
+		rpcKey: runtime.config.rpcKey,
+		proxyKey: runtime.config.proxyKey,
+		health: true,
+		// This process is not publicly routed (ADR-0022 rule 1): the Caddy proxy is the only thing that
+		// can reach the port, and it deletes a caller's copy before writing its own. Same trust the
+		// request-id header already runs on, and the same one that fails safe — an installation whose
+		// balancer hides the client makes every client share one bucket, not a forgeable one.
+		clientAddressHeader: CLIENT_ADDRESS_HEADER,
+	})
 	return createBunHandler(app, runtime.env, { executionContext: runtime.ctx }).fetch
 }
 

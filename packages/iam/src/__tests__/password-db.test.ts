@@ -129,6 +129,17 @@ describe('password persistence', () => {
 		expect(await h.repositories.passwords.getLoginThrottle(input.loginKeyHash)).toBeNull()
 	})
 
+	test('a concurrent burst loses no increment — every caller sees a count of its own', async () => {
+		// What lets the per-client bucket decide admission from its own RETURNING row (auth/routes.ts):
+		// the check IS the increment. If two callers could observe the same count, a burst would cross the
+		// limit before any of them recorded an attempt. The Postgres twin, on real concurrent connections,
+		// is in postgres-schema.test.ts.
+		const h = createHarness()
+		const input = { loginKeyHash: 'burst', windowSeconds: 300, maxAttempts: 1_000, blockSeconds: 600 }
+		const rows = await Promise.all(Array.from({ length: 50 }, () => h.repositories.passwords.recordLoginFailure(input)))
+		expect(rows.map((row) => row.attempt_count).sort((a, b) => a - b)).toEqual(Array.from({ length: 50 }, (_u, i) => i + 1))
+	})
+
 	test('prunes expired action tokens and stale throttle rows', async () => {
 		const h = createHarness()
 		const principal = await h.repositories.principals.inviteUser('cleanup@example.com')

@@ -88,7 +88,22 @@ Login failures are throttled by separate hashed account and deployment-wide
 abuse keys. Recovery has separate account and deployment-wide buckets. Unknown,
 ambiguous, disabled, and non-password users receive the same response and incur
 password-derivation work until a bucket blocks; blocked requests skip the
-expensive derivation. Public forms use same-origin checks, an enforced 16 KiB
+expensive derivation.
+
+Login and recovery each have a third bucket, keyed on a hash of the client
+address, so one client cannot exhaust the deployment-wide bucket and deny the
+installation. IAM does not derive that address: the composition root names the
+one header its own ingress overwrites — `CF-Connecting-IP` on Cloudflare, where
+IAM sits behind the edge, and `X-Fabrika-Client-Ip` on the Bun target, where the
+proxy writes it after deleting the caller's. An installation whose ingress
+cannot see the client names no header and keeps only the account and
+deployment-wide buckets. On Zerops that is the current state: whether the
+project balancer forwards a trustworthy client address is unconfirmed, so
+`trusted_proxies` is unset and every client shares the balancer's bucket.
+
+Unlike the other two, the client bucket counts every attempt rather than every
+failure, decides admission from the returned row of the statement that records
+it, and is not cleared by a successful login. Public forms use same-origin checks, an enforced 16 KiB
 stream limit, safe redirect
 validation, no-referrer and no-store headers, a restrictive CSP, and
 frame-ancestor protection.

@@ -61,6 +61,19 @@ them.
 
 - **Is re-applying an unchanged import with `override: true` a no-op, or a redeploy?**
   Not exercised. → [`39`](./39-settle-zerops-override-semantics.md).
+- **Does the project L7 balancer forward a client address a downstream may trust, and
+  from what source range?** Settles whether the per-client abuse limit can key on the
+  real client on Zerops (WU-C of
+  [`../sprints/sprint-2026-08-05-auth-track-closeout.md`](../sprints/sprint-2026-08-05-auth-track-closeout.md));
+  today it cannot, so `trusted_proxies` is unset and every client shares the
+  balancer's bucket. One sitting: put a service behind the balancer that echoes
+  `X-Forwarded-For`, `X-Real-Ip` and the socket peer; call it from a known public
+  address, then again with `X-Forwarded-For: 203.0.113.99` prepended. Three answers
+  are needed — (a) does the balancer append the real address, (b) does it drop or
+  keep a caller-supplied prefix, (c) what address does the socket peer show, i.e.
+  what CIDR to hand to `--trusted-proxies`. **Only (a) AND (b)-drops together make the
+  range safe to configure**; (a) alone with a preserved prefix means a caller can
+  still choose its own bucket, which is the case the limit must not be built on.
 - `GET /service-stack/{id}/app-version` list order. The client picks max `sequence`
   rather than trusting order; confirm `sequence` really is monotonic.
 - That `${host_connectionString}` reaches the intended database on a service not named

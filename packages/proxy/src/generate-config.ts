@@ -6,6 +6,11 @@
  * `docs/archive/08-distribute-gate-config-to-proxy.md` chose over pushing to Caddy's admin API.
  *
  *   bun run src/generate-config.ts [manifest] [out] [--auth-upstream host:port] [--listen :8080]
+ *                                 [--trusted-proxies 10.0.0.0/8,…]
+ *
+ * `--trusted-proxies` (or `FABRIKA_PROXY_TRUSTED_PROXIES`, so an operator can set it as a build
+ * variable without a code change) is what turns `{http.request.client_ip}` from the socket peer into
+ * the real client. It is EMPTY by default on purpose — see `CaddyBuildOptions.trustedProxies`.
  */
 
 import { parseProxyManifest } from '@fabrika/proxy-contract'
@@ -40,6 +45,10 @@ function parseArgs(argv: string[]): Args {
 	const listen = flags.get('listen')
 	if (listen !== undefined) {
 		options.listen = listen.split(',')
+	}
+	const trustedProxies = flags.get('trusted-proxies') ?? Bun.env['FABRIKA_PROXY_TRUSTED_PROXIES']
+	if (trustedProxies !== undefined && trustedProxies.trim() !== '') {
+		options.trustedProxies = trustedProxies.split(',').map((range) => range.trim())
 	}
 	return {
 		manifest: positional[0] ?? './proxy.manifest.json',

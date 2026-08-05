@@ -820,6 +820,13 @@ describe.skipIf(!hasPostgres)('password repository on Postgres', () => {
 		const blocked = await db.passwords.recordLoginFailure(throttle)
 		expect(blocked.attempt_count).toBe(2)
 		expect(blocked.blocked_until).not.toBeNull()
+
+		// The real concurrency proof for the per-client bucket (auth/routes.ts), which decides admission
+		// from the RETURNING of the same statement that increments: on genuinely parallel connections no
+		// two callers may observe the same count, or a burst crosses the limit before anyone records it.
+		const burst = { loginKeyHash: 'postgres-burst', windowSeconds: 60, maxAttempts: 1_000, blockSeconds: 120 }
+		const rows = await Promise.all(Array.from({ length: 50 }, () => db.passwords.recordLoginFailure(burst)))
+		expect(rows.map((row) => row.attempt_count).sort((a, b) => a - b)).toEqual(Array.from({ length: 50 }, (_u, i) => i + 1))
 	})
 })
 

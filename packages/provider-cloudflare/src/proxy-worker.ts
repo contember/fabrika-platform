@@ -1,5 +1,6 @@
 import type { IamGateway, ProxyLogger, VerifyService } from '@fabrika/proxy'
 import {
+	CLIENT_ADDRESS_HEADER,
 	consoleLogger,
 	createVerifyService,
 	DEFAULT_VERIFY_PATH,
@@ -10,8 +11,23 @@ import {
 	MemoryTokenCache,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
+	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy'
 import { parseProxyManifestJson, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-contract'
+
+/**
+ * Cloudflare's managed client address — this composition's answer to "who is the client".
+ *
+ * The edge writes it on every request it forwards and replaces a caller-supplied one, which is what
+ * makes it usable as a limiter key and is why a Worker has no need of `X-Forwarded-For`. It stays a
+ * LOCAL constant rather than moving into `@fabrika/auth-core`: it is a fact about one provider's edge,
+ * and the shared kernel must not name a provider (ADR-0011).
+ *
+ * Absent — a `wrangler dev`-style local run, or a request arriving over a service binding rather than
+ * the edge — means this hop cannot see the client, so nothing is injected and the upstream falls back
+ * to its deployment-wide bucket.
+ */
+const CLOUDFLARE_CLIENT_ADDRESS_HEADER = 'CF-Connecting-IP'
 
 export interface CloudflareProxyEnv {
 	readonly IAM?: unknown
@@ -84,15 +100,17 @@ export function createCloudflareProxyHandler(env: CloudflareProxyEnv, logger: Pr
 function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: VerifyService): ProxyFetch {
 	return async (request) => {
 		const url = new URL(request.url)
+		const clientAddress = request.headers.get(CLOUDFLARE_CLIENT_ADDRESS_HEADER)
 		const headers = new Headers(request.headers)
-		// The same two strips the generated Caddy route does: a client may assert neither the injected
-		// token nor the request id that lands in IAM's audit trail. Both come back from the decision.
-		headers.delete(PROXY_TOKEN_HEADER)
-		headers.delete(REQUEST_ID_HEADER)
+		// The same strips the generated Caddy route does: a client may assert neither the injected token,
+		// nor the request id that lands in IAM's audit trail, nor the client address an upstream limits
+		// on. The first two come back from the decision; the third is re-derived below from the edge.
+		stripClientAsserted(headers)
 		headers.set(FORWARDED_METHOD_HEADER, request.method)
 		headers.set(FORWARDED_URI_HEADER, `${url.pathname}${url.search}`)
 		headers.set(FORWARDED_HOST_HEADER, url.host)
 		headers.set(FORWARDED_PROTO_HEADER, url.protocol === 'http:' ? 'http' : 'https')
+		if (clientAddress !== null && clientAddress !== '') headers.set(CLIENT_ADDRESS_HEADER, clientAddress)
 
 		const verification = await verify(
 			new Request(`https://fabrika-proxy.internal${DEFAULT_VERIFY_PATH}`, {
@@ -107,8 +125,11 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 		const upstream = env[app.upstream]
 		if (!isWorkerService(upstream)) return UNAVAILABLE.clone()
 
+		// Built from the ORIGINAL headers, so it is stripped again here — the set above was applied to the
+		// verify subrequest, not to this one.
 		const upstreamHeaders = new Headers(request.headers)
-		upstreamHeaders.delete(PROXY_TOKEN_HEADER)
+		stripClientAsserted(upstreamHeaders)
+		if (clientAddress !== null && clientAddress !== '') upstreamHeaders.set(CLIENT_ADDRESS_HEADER, clientAddress)
 		const token = verification.headers.get(PROXY_TOKEN_HEADER)
 		if (token !== null && token !== '') upstreamHeaders.set(PROXY_TOKEN_HEADER, token)
 		const requestId = verification.headers.get(REQUEST_ID_HEADER)
@@ -116,6 +137,14 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 
 		return upstream.fetch(new Request(request, { headers: upstreamHeaders }))
 	}
+}
+
+/** Delete every header only this hop may assert, so nothing downstream can read a caller's version. */
+function stripClientAsserted(headers: Headers): void {
+	headers.delete(PROXY_TOKEN_HEADER)
+	headers.delete(REQUEST_ID_HEADER)
+	headers.delete(CLIENT_ADDRESS_HEADER)
+	for (const header of UNTRUSTED_FORWARD_HEADERS) headers.delete(header)
 }
 
 function findApp(manifest: ProxyManifest, url: URL): ProxyApp | null {

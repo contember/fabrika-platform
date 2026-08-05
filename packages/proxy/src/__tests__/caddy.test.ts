@@ -20,7 +20,7 @@ import {
 	type CaddySubrouteHandler,
 	uriRedactionPattern,
 } from '../caddy'
-import { PROXY_TOKEN_HEADER, REQUEST_ID_HEADER } from '../constants'
+import { CLIENT_ADDRESS_HEADER, PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, UNTRUSTED_FORWARD_HEADERS } from '../constants'
 
 const GATES: AppGates = { rules: [{ path: '/public/*', kind: 'public' }, { path: '/*', kind: 'human' }] }
 
@@ -86,6 +86,27 @@ describe('server shape', () => {
 		expect(JSON.stringify(proxy?.routes)).not.toContain('healthz')
 	})
 
+	test('no trusted proxy range by default, so client_ip stays the socket peer', () => {
+		// The fallback WU-C is designed around: nobody has confirmed on a live account whether the Zerops
+		// project balancer appends an address a downstream may trust, so the default configures none.
+		// `client_ip` is then the balancer, every client shares one bucket, and that is today's behaviour
+		// — never a caller-chosen key.
+		expect(config.apps.http.servers['proxy']?.trusted_proxies).toBeUndefined()
+		expect(config.apps.http.servers['proxy']?.trusted_proxies_strict).toBeUndefined()
+		for (const blank of [[], ['', '  ']]) {
+			expect(buildCaddyConfig(MANIFEST, { ...OPTIONS, trustedProxies: blank }).apps.http.servers['proxy']?.trusted_proxies)
+				.toBeUndefined()
+		}
+	})
+
+	test('a configured range emits the static IP source, in strict mode', () => {
+		const trusted = buildCaddyConfig(MANIFEST, { ...OPTIONS, trustedProxies: ['10.0.0.0/8', ' fd00::/8 '] })
+		expect(trusted.apps.http.servers['proxy']?.trusted_proxies).toEqual({ source: 'static', ranges: ['10.0.0.0/8', 'fd00::/8'] })
+		// Strict parses the client-IP header right to left and stops at the first untrusted hop, so a
+		// caller cannot prepend addresses and have one of them picked.
+		expect(trusted.apps.http.servers['proxy']?.trusted_proxies_strict).toBe(1)
+	})
+
 	test('a host claimed by two apps is rejected at generation time', () => {
 		const clashing: ProxyManifest = {
 			apps: [
@@ -104,10 +125,36 @@ describe('the per-app chain is fail-closed by construction', () => {
 	test('every app route strips the client-assertable headers BEFORE anything else', () => {
 		for (const route of routes.slice(0, 2)) {
 			const first = subrouteOf(route).routes[0]?.handle[0]
-			// The token, or a `public` path would carry a client's own to the app; and the request id,
-			// which is written to IAM's auth log and audit trail. Both are restored from the decision.
-			expect(first).toEqual({ handler: 'headers', request: { delete: [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER] } })
+			// The token, or a `public` path would carry a client's own to the app; the request id, which is
+			// written to IAM's auth log and audit trail; and every name a client address travels under, so
+			// the only one an upstream can read is the one this hop writes below. Deletes run BEFORE sets
+			// within one HeaderOps (caddyhttp/headers.go ApplyTo, v2.10.2), which is why both fit in one
+			// handler. The token and the request id are restored from the decision.
+			expect(first).toEqual({
+				handler: 'headers',
+				request: {
+					delete: [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, CLIENT_ADDRESS_HEADER, ...UNTRUSTED_FORWARD_HEADERS],
+					set: { [CLIENT_ADDRESS_HEADER]: ['{http.request.client_ip}'] },
+				},
+			})
 		}
+	})
+
+	test('a caller cannot choose the client coordinate on any of the names it travels under', () => {
+		// The spoofing test for THIS composition. Caddy's own `client_ip` is the only source: it is
+		// resolved in PrepareRequest, before any handler runs, from the socket peer and — only for a peer
+		// inside `trusted_proxies` — the client-IP header chain. So the injected value cannot be a
+		// caller's, and every name a caller could have used to smuggle one is deleted first.
+		const ops = subrouteOf(routes[0] as CaddyRoute).routes[0]?.handle[0]
+		if (ops === undefined || ops.handler !== 'headers') throw new Error('expected a headers handler')
+		for (const spoofable of [CLIENT_ADDRESS_HEADER, ...UNTRUSTED_FORWARD_HEADERS]) {
+			expect(ops.request?.delete).toContain(spoofable)
+		}
+		expect(ops.request?.set?.[CLIENT_ADDRESS_HEADER]).toEqual(['{http.request.client_ip}'])
+		// Never copied back from the auth response either: the decision service is downstream of the edge
+		// and gets no vote on who the client was.
+		expect(JSON.stringify(proxyHandler(subrouteOf(routes[0] as CaddyRoute).routes[1]).handle_response))
+			.not.toContain(CLIENT_ADDRESS_HEADER)
 	})
 
 	test('the app upstream is only ever reached AFTER the auth subrequest', () => {
@@ -196,6 +243,8 @@ describe('access-log redaction', () => {
 	test('the token header, Cookie and Authorization are deleted from log records', () => {
 		const fields = buildCaddyConfig(MANIFEST, OPTIONS).logging.logs['default']?.encoder.fields ?? {}
 		expect(fields[`request>headers>${PROXY_TOKEN_HEADER}`]).toEqual({ filter: 'delete' })
+		// Not a credential — dropped because the record already carries Caddy's own `client_ip` field.
+		expect(fields[`request>headers>${CLIENT_ADDRESS_HEADER}`]).toEqual({ filter: 'delete' })
 		expect(fields['request>headers>Cookie']).toEqual({ filter: 'delete' })
 		expect(fields['request>headers>Authorization']).toEqual({ filter: 'delete' })
 	})

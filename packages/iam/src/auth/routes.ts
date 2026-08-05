@@ -53,14 +53,27 @@ const OIDC_TTL_SECONDS = 600
 /** The only env the auth surface touches directly is the signing config — the JWKS, and the flight. */
 type AuthEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
-export async function handleAuth(request: Request, services: Services, env: AuthEnv, ctx: RequestContext): Promise<Response> {
+/**
+ * `clientAddress` is what the composition's ingress observed, or `null` when it cannot see a client
+ * (`src/client-address.ts`). It keys the per-client abuse bucket and NOTHING else — it is never an
+ * identity, never a credential, and never stored in the clear. Defaulting to `null` is deliberate: a
+ * caller that has not been given a trustworthy coordinate gets the account and deployment-wide buckets
+ * alone, which is what existed before, rather than one keyed on a guess.
+ */
+export async function handleAuth(
+	request: Request,
+	services: Services,
+	env: AuthEnv,
+	ctx: RequestContext,
+	clientAddress: string | null = null,
+): Promise<Response> {
 	const url = new URL(request.url)
 
 	if (url.pathname === '/.well-known/jwks.json') {
 		return handleJwks(env)
 	}
 	if (url.pathname === '/auth/login') {
-		if (request.method === 'POST') return handlePasswordLogin(request, services, ctx)
+		if (request.method === 'POST') return handlePasswordLogin(request, services, ctx, clientAddress)
 		if (request.method === 'GET') return handleLogin(request, services, env, ctx)
 		return methodNotAllowed()
 	}
@@ -71,7 +84,7 @@ export async function handleAuth(request: Request, services: Services, env: Auth
 		return request.method === 'GET' ? handleCallback(request, services, env, ctx) : methodNotAllowed()
 	}
 	if (url.pathname === '/auth/forgot-password') {
-		return handleForgotPassword(request, services, ctx)
+		return handleForgotPassword(request, services, ctx, clientAddress)
 	}
 	if (url.pathname === '/auth/password/enroll') {
 		return handlePasswordAction(request, services, ctx, 'enrollment')
@@ -402,8 +415,55 @@ const ACCOUNT_MAX_ATTEMPTS = 5
 const GLOBAL_MAX_ATTEMPTS = 1_000
 const RECOVERY_ACCOUNT_MAX_ATTEMPTS = 3
 const RECOVERY_GLOBAL_MAX_ATTEMPTS = 100
+/**
+ * The per-client buckets (WU-C, backlog 21 + 49). They sit between the account bucket and the
+ * deployment-wide one on purpose: the point is to stop ONE client exhausting the deployment-wide
+ * bucket and denying everyone, not to be a second account lockout. Generous enough that a shared
+ * office address logging in normally never reaches them; a client that does is not logging in.
+ */
+const LOGIN_CLIENT_MAX_ATTEMPTS = 100
+const RECOVERY_CLIENT_MAX_ATTEMPTS = 30
 
-async function handlePasswordLogin(request: Request, services: Services, ctx: RequestContext): Promise<Response> {
+/**
+ * The per-client bucket, and the reason it is shaped differently from the other two.
+ *
+ * The account and deployment-wide buckets READ first and record a failure afterwards, which is a
+ * check-then-act: a concurrent burst all reads "not blocked" and all proceeds. That is tolerable for a
+ * bucket whose key an attacker cannot pick freely; it is not tolerable for the one bucket whose whole
+ * job is to bound a burst. So this one is a single statement — `recordLoginFailure` is one
+ * `INSERT … ON CONFLICT DO UPDATE … RETURNING`, and the admission decision is read from ITS OWN
+ * returned row. Every concurrent request therefore observes its own increment and no request can be
+ * admitted on a count another has not yet written.
+ *
+ * It counts every ATTEMPT, not every failure, for the same reason: a decision made before the work
+ * cannot know the outcome. A successful login never clears it either — clearing on success would let
+ * an attacker who holds one valid credential reset the bucket between bursts.
+ *
+ * `null` (this composition cannot see the client) records nothing and blocks nothing.
+ */
+async function clientBlocked(
+	services: Services,
+	purpose: 'password-login' | 'password-recovery',
+	clientAddress: string | null,
+	maxAttempts: number,
+): Promise<boolean> {
+	if (clientAddress === null) return false
+	// Hashed like every other key here: the throttle table must never hold a client address in the clear.
+	const row = await services.repositories.passwords.recordLoginFailure({
+		loginKeyHash: await hashToken(`${purpose}:client:${clientAddress}`),
+		windowSeconds: LOGIN_WINDOW_SECONDS,
+		maxAttempts,
+		blockSeconds: LOGIN_BLOCK_SECONDS,
+	})
+	return (row.blocked_until ?? 0) > Math.floor(Date.now() / 1000)
+}
+
+async function handlePasswordLogin(
+	request: Request,
+	services: Services,
+	ctx: RequestContext,
+	clientAddress: string | null,
+): Promise<Response> {
 	if (!services.config.authentication.password.enabled) return authError('password login is disabled', 404)
 	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
 	const form = await readForm(request)
@@ -432,13 +492,14 @@ async function handlePasswordLogin(request: Request, services: Services, ctx: Re
 
 	const accountKey = await hashToken(`password-login:account:${email}`)
 	const globalKey = await hashToken('password-login:global')
-	const [accountThrottle, globalThrottle, lookup] = await Promise.all([
+	const [accountThrottle, globalThrottle, lookup, clientOverLimit] = await Promise.all([
 		services.repositories.passwords.getLoginThrottle(accountKey),
 		services.repositories.passwords.getLoginThrottle(globalKey),
 		services.repositories.passwords.lookupLogin(email),
+		clientBlocked(services, 'password-login', clientAddress, LOGIN_CLIENT_MAX_ATTEMPTS),
 	])
 	const now = Math.floor(Date.now() / 1000)
-	const blocked = (accountThrottle?.blocked_until ?? 0) > now || (globalThrottle?.blocked_until ?? 0) > now
+	const blocked = clientOverLimit || (accountThrottle?.blocked_until ?? 0) > now || (globalThrottle?.blocked_until ?? 0) > now
 	let valid = false
 	let needsRehash = false
 	if (!blocked && passwordWithinLimit && lookup.status === 'found') {
@@ -499,7 +560,12 @@ async function recordLoginFailure(services: Services, loginKeyHash: string, maxA
 	})
 }
 
-async function handleForgotPassword(request: Request, services: Services, ctx: RequestContext): Promise<Response> {
+async function handleForgotPassword(
+	request: Request,
+	services: Services,
+	ctx: RequestContext,
+	clientAddress: string | null,
+): Promise<Response> {
 	if (!services.config.authentication.password.enabled) return authError('password login is disabled', 404)
 	if (request.method === 'GET') return forgotPasswordPage({})
 	if (request.method !== 'POST') return methodNotAllowed()
@@ -510,12 +576,13 @@ async function handleForgotPassword(request: Request, services: Services, ctx: R
 	if (services.email === null || email === null) return forgotPasswordPage({ sent: true })
 	const accountKey = await hashToken(`password-recovery:account:${email}`)
 	const globalKey = await hashToken('password-recovery:global')
-	const [accountThrottle, globalThrottle] = await Promise.all([
+	const [accountThrottle, globalThrottle, clientOverLimit] = await Promise.all([
 		services.repositories.passwords.getLoginThrottle(accountKey),
 		services.repositories.passwords.getLoginThrottle(globalKey),
+		clientBlocked(services, 'password-recovery', clientAddress, RECOVERY_CLIENT_MAX_ATTEMPTS),
 	])
 	const now = Math.floor(Date.now() / 1000)
-	if ((accountThrottle?.blocked_until ?? 0) > now || (globalThrottle?.blocked_until ?? 0) > now) {
+	if (clientOverLimit || (accountThrottle?.blocked_until ?? 0) > now || (globalThrottle?.blocked_until ?? 0) > now) {
 		return forgotPasswordPage({ sent: true })
 	}
 	await Promise.all([

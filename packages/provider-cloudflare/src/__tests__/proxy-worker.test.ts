@@ -57,6 +57,40 @@ describe('Cloudflare proxy Worker', () => {
 		expect(await response.text()).toBe('streamed')
 	})
 
+	// The spoofing test for THIS composition. `CF-Connecting-IP` is written by Cloudflare's edge and
+	// replaces a caller's, so it is the only address here a limiter may key on; every other name a client
+	// address travels under is deleted, so an upstream reading `X-Fabrika-Client-Ip` reads the edge.
+	test('a caller cannot choose the client coordinate on any of the names it travels under', async () => {
+		const forged = { 'X-Fabrika-Client-Ip': '203.0.113.99', 'X-Forwarded-For': '203.0.113.99' }
+		const upstreamHeaders = async (headers: Record<string, string>): Promise<Headers> => {
+			const seen: Request[] = []
+			const env = environment({ rules: [{ path: '/*', kind: 'public' }] }, {
+				fetch: (request: Request) => {
+					seen.push(request)
+					return Promise.resolve(new Response('ok'))
+				},
+			})
+			await createCloudflareProxyHandler(env)(new Request(`https://${HOST}/anything`, { headers }))
+			const first = seen[0]
+			if (first === undefined) throw new Error('the upstream was never reached')
+			return first.headers
+		}
+
+		const withEdge = await upstreamHeaders({ ...forged, 'CF-Connecting-IP': '198.51.100.7' })
+		expect(withEdge.get('X-Fabrika-Client-Ip')).toBe('198.51.100.7')
+		// Deleted rather than passed through: an app that read one of these would key on a forgery here
+		// and on a real address on the other cloud, or the other way round.
+		expect(withEdge.get('X-Forwarded-For')).toBeNull()
+		expect(withEdge.get('CF-Connecting-IP')).toBeNull()
+
+		// Edge header absent (a local run, or a service-binding call): this hop cannot see the client, so
+		// it injects nothing and the upstream falls back to its deployment-wide bucket. It does NOT
+		// promote the caller's value.
+		const withoutEdge = await upstreamHeaders(forged)
+		expect(withoutEdge.get('X-Fabrika-Client-Ip')).toBeNull()
+		expect(withoutEdge.get('X-Forwarded-For')).toBeNull()
+	})
+
 	test('injects only a verified token on a protected request', async () => {
 		const token = await signUserToken()
 		let seen: Request | undefined

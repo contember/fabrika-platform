@@ -51,6 +51,16 @@ Whether **multiple custom domains** may point at a single service is not stated 
 the access page. Fabrika does not automate custom-domain binding: the operator
 binds each application domain to its namespace's `proxy` service in Zerops.
 
+Because the balancer terminates TLS and routes domains, a service behind it sees
+the **balancer** as its socket peer, not the client. Whether the balancer
+forwards a client address, whether it drops a caller-supplied `X-Forwarded-For`
+prefix, and what source range it dials from are **all unconfirmed** — the public
+docs say nothing, and no live run has measured it. Fabrika therefore configures
+no Caddy `trusted_proxies` range, so `{http.request.client_ip}` is the balancer
+and every client shares one abuse bucket. Settling it is a live-account question
+([backlog 05](../backlog/05-bring-up-on-a-real-zerops-account.md)); until then do
+not promote a forwarded address to a limiter key.
+
 ## corePackage
 
 `corePackage` is a **per-project** tier: `LIGHT` (default, limited redundancy) or

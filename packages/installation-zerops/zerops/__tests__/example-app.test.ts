@@ -338,7 +338,12 @@ describe("the app's gates are enforced by the proxy, and survive the trip verbat
 		// ADR-0010: the delete is load-bearing — `copy_headers` cannot delete, so without it a
 		// client-supplied token would survive to the app on any `public` path. The request id rides
 		// along for the same reason: it is written to IAM's audit trail, so only the proxy mints one.
-		expect(serialized).toContain(`"delete":["${PROXY_TOKEN_HEADER}","X-Request-Id"]`)
+		// The client address and its aliases join them so an upstream's abuse limit keys on what this
+		// hop observed and never on what the caller claimed.
+		expect(serialized).toContain(
+			`"delete":["${PROXY_TOKEN_HEADER}","X-Request-Id","X-Fabrika-Client-Ip","X-Forwarded-For","CF-Connecting-IP"]`,
+		)
+		expect(serialized).toContain('"set":{"X-Fabrika-Client-Ip":["{http.request.client_ip}"]}')
 		// Caddy's admin API is off: the manifest is baked in at build time, not pushed at runtime.
 		expect(config.admin.disabled).toBe(true)
 	})

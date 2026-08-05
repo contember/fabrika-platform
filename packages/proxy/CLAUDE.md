@@ -37,12 +37,13 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   token, so a publicly routable instance is a token oracle. Caddy is the only thing that may dial it.
 - **The request being authorized is described ENTIRELY by the forwarded headers.** Never read this
   request's own method or path; a missing `X-Forwarded-Uri` must deny, not fall back.
-- **The generated Caddy config strips the token header AND the request id from the inbound request
-  before `forward_auth` runs** (the Cloudflare Worker does the same). Caddy's `copy_headers` skips
-  empty values rather than deleting, so without the strip a client could present its own token header
-  on a `public` path and have it reach the app — and the request id it chose would land in IAM's
-  `auth_log` and `audit_events`. Both are written back from the auth response on a 2xx. A header a
-  client can set never reaches a decision.
+- **The generated Caddy config strips the token header, the request id AND every name a client address
+  travels under from the inbound request before `forward_auth` runs** (the Cloudflare Worker does the
+  same). Caddy's `copy_headers` skips empty values rather than deleting, so without the strip a client
+  could present its own token header on a `public` path and have it reach the app — and the request id
+  it chose would land in IAM's `auth_log` and `audit_events`. The token and the request id are written
+  back from the auth response on a 2xx; the client address is not, because it describes the request as
+  the EDGE saw it and no inner hop gets a vote. A header a client can set never reaches a decision.
 - **Gate rules are NOT compiled into Caddy routes** — every request goes to `/verify` and gates are
   evaluated once, in TypeScript. Caddy's `path` matcher is case-insensitive, its `*` stops at `/`,
   and it normalizes the path; the SDK's glob does none of those, and fall-through is not expressible
@@ -72,6 +73,42 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   because `X-Forwarded-Host` is client-controllable and then builds URLs.
 - **If the auth service dies, Caddy answers 502 and every request is denied.** `start.sh` restarts it
   in a loop; that failure mode is by design, not a gap to paper over.
+
+## The client coordinate — who owns which header, at every hop
+
+The proxy is the only hop that can see the real client, so it is the only one that may say who it was.
+It observes and injects; it holds no counter (ADR-0022 forbids proxy state a decision depends on, and
+a per-isolate counter on Cloudflare would be defeated by the next colo anyway). The upstream that owns
+the state — IAM — keys its per-client abuse bucket on what arrives. Backlog 21 + 49.
+
+| Hop                        | `X-Fabrika-Client-Ip`                         | `X-Forwarded-For`              | `CF-Connecting-IP`         |
+| -------------------------- | --------------------------------------------- | ------------------------------ | -------------------------- |
+| client → edge              | may send it; means nothing                    | may send it; means nothing     | may send it; means nothing |
+| Cloudflare edge            | passed through untouched                      | client value + the real client | **written by the edge**    |
+| Cloudflare proxy Worker    | **deleted, then set** from `CF-Connecting-IP` | deleted                        | deleted                    |
+| Zerops balancer            | passed through untouched                      | unconfirmed — see below        | passed through untouched   |
+| Caddy (`appRoute`, step 1) | **deleted, then set** from `{client_ip}`      | deleted                        | deleted                    |
+| app / IAM upstream         | trust it — nothing else could have written it | the previous hop's socket peer | absent                     |
+
+- **`{http.request.client_ip}` is the socket peer unless `trusted_proxies` names the balancer.** Caddy
+  resolves it once in `PrepareRequest`, before any handler, so the strip above cannot affect it. With
+  no range configured every client behind the balancer shares one bucket — which is exactly what
+  happened before this existed, and the only safe fallback. `CaddyBuildOptions.trustedProxies` /
+  `--trusted-proxies` / `FABRIKA_PROXY_TRUSTED_PROXIES` set it; it is **empty by default and staying
+  that way until a live Zerops account settles whether the project balancer appends an address a
+  downstream may trust.** Configuring the wrong range makes the limiter caller-chosen, which is worse
+  than none.
+- **Setting `trusted_proxies` also makes `X-Forwarded-Host`/`-Proto` client-supplied**, because Caddy
+  retains a prior value when the immediate peer is trusted (`addForwardedHeaders`, v2.10.2). The proxy
+  already defends both — `selectApp` cross-checks a pinned `?app=` against the app's declared hosts,
+  and the login bounce takes its scheme from the manifest — but nothing new may start trusting them.
+- **`CF-Connecting-IP` is deleted on the way to an app even on Cloudflare, where it is genuine.** One
+  header with one meaning on both clouds beats a provider-specific one that silently means "a caller
+  wrote this" on the other. IAM's own Worker is the exception and reads it directly — it holds its own
+  Custom Domain and is not behind a proxy Worker, so the edge is the hop in front of it.
+- **A rate limiter is admission control, not authorization.** It lives nowhere near the gate matcher
+  and must never grow gate semantics; there is still exactly one gate evaluator, in
+  `@fabrika/auth-core`.
 
 ## The session handoff (ADR-0022, ADR-0023)
 

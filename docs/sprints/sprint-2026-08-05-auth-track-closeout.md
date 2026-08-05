@@ -236,3 +236,84 @@ sprint).
 - **Not touched, and out of WU-A's scope:** `packages/control/fabrika.schema.ts` still declares
   `operations.*` inside the console's vocabulary — correct today (that is the vocabulary the token
   actually carries), wrong the moment the surface moves. It moves with backlog 54, not before.
+
+### WU-C — a per-client limit where the client is visible (2026-08-05)
+
+- **The plan's "put the limit at the proxy" cannot be taken literally, and the reason is an
+  invariant it did not cite.** ADR-0022: _"the proxy holds no state that a decision depends on…
+  never make it shared or persistent"_. A counter in the proxy is exactly that, and on Cloudflare a
+  per-isolate counter is defeated by the next colo anyway. So the unit split the job the way backlog
+  49's own second clause allows: **the proxy observes and injects a coordinate the caller cannot set;
+  IAM — which is behind the proxy, and already owns throttle state — does the counting.** The proxy
+  stays stateless and there is still exactly one gate evaluator.
+- **The atomicity requirement forced a different bucket shape from the two that already exist.** The
+  account and deployment-wide buckets READ first and record afterwards; a concurrent burst walks
+  straight through that. The client bucket instead decides admission from the `RETURNING` row of the
+  single `INSERT … ON CONFLICT DO UPDATE` that increments it, so it counts every attempt rather than
+  every failure and a successful login does not clear it. Proved, not asserted: a 120-deep burst buys
+  exactly 99 password derivations, and 50 concurrent `recordLoginFailure` calls return the counts
+  1…50 with none repeated — on SQLite and on real parallel Postgres connections.
+- **`CF-Connecting-IP` is deleted on the way to an app even on Cloudflare, where it is genuine.** An
+  app that read it would key on the edge here and on a caller's forgery on Zerops. One header with
+  one meaning on both clouds is worth more than the header being locally correct. IAM's own Worker is
+  the one exception and reads it directly — it holds its own Custom Domain and is NOT behind a proxy
+  Worker, which the plan's "IAM is itself behind the proxy" is only true of the Bun composition.
+- **Enabling `trusted_proxies` has a second effect the plan did not mention**: Caddy retains a
+  client-supplied `X-Forwarded-Host`/`-Proto` once the immediate peer is trusted
+  (`addForwardedHeaders`, v2.10.2). Already defended — `selectApp` cross-checks a pinned `?app=`
+  against the app's declared hosts and the login bounce takes its scheme from the manifest — but it
+  is a real coupling, so the option is off by default and the consequence is written next to it.
+- **Two Caddy semantics were verified against v2.10.2 source rather than assumed**, because both are
+  load-bearing: `HeaderOps.ApplyTo` runs deletes BEFORE sets (so the strip and the inject fit in one
+  handler), and `client_ip` is resolved once in `PrepareRequest` before any handler runs (so deleting
+  `X-Forwarded-For` at ingress cannot change it).
+- **The Zerops half is designed for the answer being "no" and is unwired on purpose.**
+  `trusted_proxies` is empty, `client_ip` is the balancer, every client shares one bucket — today's
+  behaviour. The question is now written where someone with the account can answer it in one sitting
+  → [backlog 05, "Still-open semantics"](../backlog/05-bring-up-on-a-real-zerops-account.md) and
+  [`reference/zerops-platform.md`](../reference/zerops-platform.md). **Both halves of the answer are
+  needed**: the balancer must append the real address AND drop a caller-supplied prefix. Appending
+  alone still lets a caller pick its own bucket.
+- **Out of scope, found on the way.** (a) `mintToken` still costs one IAM round trip per request
+  carrying a garbage session cookie, and bounding THAT at the proxy is what ADR-0022 forbids —
+  bounding it in IAM would mean threading the coordinate through the `IamRpc` wire contract on both
+  transports, which is its own change. (b) IAM's Worker is directly edge-routed on Cloudflare, so a
+  caller there can still choose the `X-Request-Id` that lands in its `auth_log` — the proxy's strip
+  never runs in front of it. Neither was fixed.
+- Backlog 21 and 49 are both satisfied and left in place for the sprint close to delete, matching
+  what WU-A and WU-B did with 54 and 55.
+
+### WU-D — the three drifted browser scenarios (2026-08-05)
+
+- **Both filed drifts confirmed live, exactly as item 53 recorded them.** Typing `merge candidate`
+  into `Search` left both rows and changed no URL; `Apply` narrowed to one. The detail's headings are
+  `Occurrences` (h2) and `Exception: <type>: <value>` (h3). Nothing had moved again since 2026-08-04.
+- **There is a THIRD drift, and it is a data drift, not a console one.** `927340e`
+  ("restore issue data parity", 19:35 — four minutes AFTER `83581a9`) made a merge roll the merged
+  issue's occurrences into the target's count. `operations-bulk-status-and-merge` asserts the
+  canonical's count is unchanged, which was true when it was authored at `41fd84a` (16:53). It was
+  invisible because the scenario dies at the merge step and never reaches that assertion — one drift
+  was hiding behind another. The application is right and says so in its own test
+  (`packages/operations/src/__tests__/operator-api.test.ts:222` pins `count === 3` for a target with
+  two merged children). The scenario now asserts `canonical.count + duplicate.count`, which pins the
+  roll-up rather than merely tolerating it.
+- **The item also under-recorded the second drift: the merge INTERACTION changed, not just the
+  headings.** `Merge into issue` is now a search box plus `Find`; a `Merge target` select and the
+  `Merge` button only exist once candidates come back. The old step typed the target's opaque id into
+  that field, which can never match — the search is `LOWER(title) LIKE … OR LOWER(culprit) LIKE …`
+  (`packages/operations/src/repositories.ts:975`), ids are not searchable. Re-planned around
+  search-then-pick; the token half of the intent is kept by asserting the picked option's VALUE is the
+  canonical's id, so the console is still shown to address the target by an opaque token.
+- **Applied filters are component state, not a query string.** A reload returns the list to
+  `DEFAULT_ISSUE_FILTERS`, so "persists after navigation" has to re-ask for the same view rather than
+  re-visit a URL. Written down once in `tests/browser/support/console.ts`, which every re-authored
+  scenario imports.
+- **Two scenarios carry the same latent drift without failing, and were left alone**
+  (out of WU-D's scope): `operations-issue-triage.test.ts:82` and `operations-sdk-ingest.test.ts:215`
+  fill `Search` and never submit. Both then click a uniquely-titled link, so the fill is decorative and
+  they pass anyway. Worth a sweep with the next Operations console change.
+- **Hazard for concurrent units: the docker stack bind-mounts the repo at `/workspace` and both
+  `local:up` and `browser:up` use the compose project name `fabrika-local`.** So another unit's
+  in-flight `packages/` edits are live inside my containers, and either command would have torn my
+  stack down. WU-C's proxy/IAM edits were in the tree throughout this run; the suite was green with
+  them, which is evidence but not a guarantee for whatever they land.

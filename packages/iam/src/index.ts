@@ -20,7 +20,7 @@ import type {
 } from '@fabrika/auth-core'
 import { environmentAliases } from '@fabrika/platform'
 import { WorkerEntrypoint } from 'cloudflare:workers'
-import { iamApp } from './app'
+import { createIamApp } from './app'
 import { runIamMaintenance } from './cron'
 import { createIamRepositories } from './db'
 import type { Env } from './env'
@@ -32,7 +32,7 @@ import { createIamRpc } from './rpc'
  * which does not traverse any public edge) and `fetch()` (`/admin/*` + `/auth/*`).
  *
  * There is no logic here. Every method delegates: the RPC surface to `createIamRpc` (src/rpc.ts),
- * `fetch` to `iamApp`, `scheduled` to `runIamMaintenance` (src/cron.ts) — the same
+ * `fetch` to `workerApp`, `scheduled` to `runIamMaintenance` (src/cron.ts) — the same
  * three functions the Bun entrypoint (src/node/server.ts) calls. This file's whole job is to bind
  * `cloudflare:workers` to them, and it is the ONLY file in the package that imports it: the Bun
  * process must never load this module, and it must never load `bun:*`/`node:*`.
@@ -41,6 +41,16 @@ import { createIamRpc } from './rpc'
  * `this.ctx` (an `ExecutionContext`) satisfies `RequestContext` structurally, so it is passed
  * straight through with no adapter.
  */
+
+/**
+ * The one composition fact this root supplies: which header carries the client address.
+ *
+ * IAM's Worker holds its OWN Custom Domain — it is not behind a proxy Worker — so the hop in front of
+ * it is Cloudflare's edge, which writes `CF-Connecting-IP` on every request and replaces a caller's.
+ * That makes it the only address here a limiter may key on; see `src/client-address.ts` for why IAM
+ * refuses to pick one itself.
+ */
+const workerApp = createIamApp({ clientAddressHeader: 'CF-Connecting-IP' })
 export interface WorkerBindings
 	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'EMAIL_API_KEY'>
 {
@@ -116,7 +126,7 @@ export class Propustka extends WorkerEntrypoint<WorkerBindings> implements IamRp
 	}
 
 	override fetch(request: Request): Promise<Response> {
-		return iamApp.fetch(request, this.iam, this.ctx)
+		return workerApp.fetch(request, this.iam, this.ctx)
 	}
 
 	/**

@@ -37,6 +37,21 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **Only the SHA-256 hash of a credential is stored** (`src/secret.ts`), for API keys, share links,
   and SSO sessions alike. Plaintext is shown once at issue. Compare digests with
   `timingSafeEqualHex`, never raw secrets.
+- **IAM NEVER PICKS THE HEADER ITS CLIENT COORDINATE COMES FROM** (`src/client-address.ts`). Behind a
+  balancer its socket peer is the balancer, and a forwarding header a caller can write is worse than
+  no limiter because it looks like protection (backlog 21, 49). So each composition root names the one
+  header its own ingress overwrites — `CF-Connecting-IP` in `src/index.ts` (the Worker holds its own
+  Custom Domain, so the hop in front of it is Cloudflare's edge), `X-Fabrika-Client-Ip` in
+  `src/node/server.ts` (the Caddy proxy writes it after deleting the caller's, and this process is not
+  publicly routed) — and shared code reads that one and nothing else. **Naming none is supported and
+  means no per-client bucket at all**, never a guess. Never name a header the ingress does not
+  overwrite.
+- **The per-client bucket decides admission from the RETURNING of the statement that increments it.**
+  The account and deployment-wide buckets read first and record afterwards, which a concurrent burst
+  walks straight through; that is tolerable for a key an attacker cannot pick, not for the one bucket
+  whose job is to bound a burst. It counts every attempt (a decision taken before the work cannot know
+  the outcome) and a successful login does not clear it — `clearLoginFailures` is the account key
+  only, or one valid credential would zero the bucket between bursts.
 - **ONE MAILBOX RULE. `principals.email` is the NORMALIZED mailbox and nothing else; the spelling a
   human or an IdP used lives in `label`.** `PrincipalRepository` is the only place that applies
   `normalizeEmailIdentity`, so every caller may hand it any spelling, and every comparison is plain

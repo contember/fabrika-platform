@@ -12,16 +12,16 @@ bun run typecheck
 bun test               # gates.test.ts · permissions.test.ts · token.test.ts · ids.test.ts
 ```
 
-| Module           | What it owns                                                                         |
-| ---------------- | ------------------------------------------------------------------------------------ |
-| `gates.ts`       | The canonical gate path matcher — `compileGates` / `applicableGates`.                |
-| `permissions.ts` | `matchAction` and `permits` — the authorization decision itself.                     |
-| `token.ts`       | The access-token claim shape, cookie/prefix/TTL names, `buildAccessClaims`/`parse…`. |
-| `rpc.ts`         | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                   |
-| `types.ts`       | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.       |
-| `wire.ts`        | `PROXY_TOKEN_HEADER` — the header the proxy injects its verified token on.           |
-| `ids.ts`         | UUIDv7 generation (RFC 9562 §6.2 monotonic variant).                                 |
-| `json.ts`        | Structural readers for untrusted JSON, so claims narrow without an `as` cast.        |
+| Module           | What it owns                                                                           |
+| ---------------- | -------------------------------------------------------------------------------------- |
+| `gates.ts`       | The canonical gate path matcher — `compileGates` / `applicableGates`.                  |
+| `permissions.ts` | `matchAction` and `permits` — the authorization decision itself.                       |
+| `token.ts`       | The access-token claim shape, cookie/prefix/TTL names, `buildAccessClaims`/`parse…`.   |
+| `rpc.ts`         | `IamRpc`, `IamHandoffRpc`, and every input/result type they carry.                     |
+| `types.ts`       | `AppSchema`, `Scope`, `PermissionEntry`, `AppGates` / `GateRule` / `GateKind`.         |
+| `wire.ts`        | The proxy→app header names: the verified token, the client address, and what to strip. |
+| `ids.ts`         | UUIDv7 generation (RFC 9562 §6.2 monotonic variant).                                   |
+| `json.ts`        | Structural readers for untrusted JSON, so claims narrow without an `as` cast.          |
 
 ## Invariants
 

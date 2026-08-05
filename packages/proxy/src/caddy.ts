@@ -38,13 +38,26 @@ import { API_KEY_PREFIX, AUTH_CODE_PARAM } from '@fabrika/auth-core'
 import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-contract'
 import {
 	APP_QUERY_PARAM,
+	CLIENT_ADDRESS_HEADER,
 	DEFAULT_VERIFY_PATH,
 	FORWARDED_METHOD_HEADER,
 	FORWARDED_URI_HEADER,
 	LOGIN_REDIRECT_PARAM,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
+	UNTRUSTED_FORWARD_HEADERS,
 } from './constants'
+
+/**
+ * Caddy's own answer to "who is the client", resolved ONCE per request in `PrepareRequest` — before
+ * any handler runs — from the socket peer and, only for a peer inside `trusted_proxies`, the
+ * `client_ip_headers` chain (verified against caddy v2.10.2 `caddyhttp/server.go`). Because it is
+ * resolved before handlers, the ingress strip below cannot affect it.
+ *
+ * With no `trusted_proxies` it IS the socket peer, which behind a balancer is the balancer — every
+ * client collapses into one bucket, which is exactly today's behaviour and the safe fallback.
+ */
+const CLIENT_IP_PLACEHOLDER = '{http.request.client_ip}'
 
 // ── The subset of Caddy's JSON schema we emit (field names verified against v2.10.2) ──────────────
 
@@ -107,11 +120,20 @@ export interface CaddyRoute {
 	terminal?: boolean
 }
 
+/** `http.ip_sources.static` — the only `IPRangeSource` Caddy ships (`caddyhttp/ip_range.go`). */
+export interface CaddyStaticIpSource {
+	source: 'static'
+	ranges: string[]
+}
+
 export interface CaddyServer {
 	listen: string[]
 	routes: CaddyRoute[]
 	automatic_https?: { disable: boolean }
 	logs?: { should_log_credentials: boolean }
+	trusted_proxies?: CaddyStaticIpSource
+	/** `1` parses the client-IP header right-to-left, stopping at the first untrusted hop. */
+	trusted_proxies_strict?: number
 }
 
 export interface CaddyLogFilter {
@@ -142,6 +164,21 @@ export interface CaddyBuildOptions {
 	healthListen?: string[]
 	/** Health route path on `healthListen`. Default `/healthz`. */
 	healthPath?: string
+	/**
+	 * CIDR ranges of the balancer(s) in front of this proxy, so `{http.request.client_ip}` resolves to
+	 * the real client instead of the socket peer. **Empty by default, and that default is a decision:**
+	 * whether the Zerops project balancer appends a forwarded address a downstream may trust is a
+	 * live-account question nobody has settled, and trusting the wrong range turns the per-client limit
+	 * into a caller-chosen one. Unset → every client shares the balancer's bucket, which is what
+	 * happens today.
+	 *
+	 * Setting this has a second, documented effect: Caddy's `reverse_proxy` RETAINS a client-supplied
+	 * `X-Forwarded-Host`/`-Proto` when the immediate peer is trusted (`addForwardedHeaders`, v2.10.2).
+	 * The proxy already defends both — a pinned `?app=` is cross-checked against the app's declared
+	 * hosts, and the login bounce takes its scheme from the manifest — but nothing else may start
+	 * trusting those two.
+	 */
+	trustedProxies?: readonly string[]
 }
 
 /** Thrown when a manifest cannot be turned into a config that routes deterministically. */
@@ -159,6 +196,7 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 
 	assertUniqueHosts(manifest)
 
+	const trustedProxies = (options.trustedProxies ?? []).map((range) => range.trim()).filter((range) => range !== '')
 	const routes = manifest.apps.map((app) => appRoute(app, options.authUpstream))
 	// Nothing falls off the end: an unmatched Host is a 404, never a pass-through to anything.
 	routes.push({ handle: [{ handler: 'static_response', status_code: 404, body: 'not found' }] })
@@ -187,6 +225,11 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 						// storage and no disk (docs/reference/zerops-platform.md).
 						automatic_https: { disable: true },
 						logs: { should_log_credentials: false },
+						// Omitted entirely when no range is configured: an empty `ranges` list would still
+						// register the module, and the absent key is what makes `client_ip` the socket peer.
+						...(trustedProxies.length === 0
+							? {}
+							: { trusted_proxies: { source: 'static', ranges: trustedProxies }, trusted_proxies_strict: 1 }),
 						routes,
 					},
 					// The liveness probe lives on its OWN listener, which is never published. Putting it on
@@ -209,14 +252,24 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 /**
  * One app = one host-matched, terminal route whose subroute is a fixed three-step chain:
  *
- *   1. `headers` — DELETE the headers a client must not be able to assert from the inbound request:
- *      the injected TOKEN header and the REQUEST ID. Load-bearing for the token: Caddy's
- *      `copy_headers` only sets the header when the auth response's value is non-empty, so on a
- *      `public` path (which mints no token) a client-supplied header would otherwise survive all the
- *      way to the app. The app's SDK verifies the signature, so a forged one would be rejected — but
- *      the proxy must not be the thing relying on that. The request id is the same rule one level
- *      down: it is written to IAM's `auth_log` and `audit_events`, so only the proxy may mint one.
- *      Both are put back from the auth response on a 2xx, so nothing downstream loses a header.
+ *   1. `headers` — DELETE the headers a client must not be able to assert from the inbound request,
+ *      then SET the one coordinate only this hop can know. Deletes run before sets within one
+ *      `HeaderOps` (`caddyhttp/headers.go` `ApplyTo`, v2.10.2), so the two live in one handler.
+ *
+ *      Deleted: the injected TOKEN header, the REQUEST ID, the CLIENT ADDRESS, and the caller's
+ *      forwarding headers. Load-bearing for the token: Caddy's `copy_headers` only sets the header
+ *      when the auth response's value is non-empty, so on a `public` path (which mints no token) a
+ *      client-supplied header would otherwise survive all the way to the app. The app's SDK verifies
+ *      the signature, so a forged one would be rejected — but the proxy must not be the thing relying
+ *      on that. The request id is the same rule one level down: it is written to IAM's `auth_log` and
+ *      `audit_events`, so only the proxy may mint one. Both are put back from the auth response on a
+ *      2xx, so nothing downstream loses a header.
+ *
+ *      Set: the client address, from Caddy's own `client_ip`. This is the whole of WU-C on this
+ *      composition — the coordinate an upstream (IAM, whose public surface the platform proxy fronts)
+ *      keys a per-client abuse limit on. It is written unconditionally, so a caller's value is
+ *      replaced whether or not it was deleted, and it is never read back from the auth response: it
+ *      describes the request as the EDGE saw it, and no inner hop gets a vote.
  *   2. `reverse_proxy` to the auth service — the `forward_auth` expansion.
  *   3. `reverse_proxy` to the app. Reached only when step 2 answered 2xx; any other status was
  *      already written to the client.
@@ -228,7 +281,15 @@ function appRoute(app: ProxyApp, authUpstream: string): CaddyRoute {
 		handle: [{
 			handler: 'subroute',
 			routes: [
-				{ handle: [{ handler: 'headers', request: { delete: [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER] } }] },
+				{
+					handle: [{
+						handler: 'headers',
+						request: {
+							delete: [PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, CLIENT_ADDRESS_HEADER, ...UNTRUSTED_FORWARD_HEADERS],
+							set: { [CLIENT_ADDRESS_HEADER]: [CLIENT_IP_PLACEHOLDER] },
+						},
+					}],
+				},
 				{ handle: [forwardAuth(app, authUpstream)] },
 				{ handle: [{ handler: 'reverse_proxy', upstreams: [{ dial: app.upstream }] }] },
 			],
@@ -295,6 +356,9 @@ function logFieldFilters(manifest: ProxyManifest): Record<string, CaddyLogFilter
 	const pattern = uriRedactionPattern(manifest)
 	return {
 		[`request>headers>${PROXY_TOKEN_HEADER}`]: { filter: 'delete' },
+		// Not a credential — dropped because Caddy's record already carries `client_ip` natively, and one
+		// copy of a client address per line is enough.
+		[`request>headers>${CLIENT_ADDRESS_HEADER}`]: { filter: 'delete' },
 		'request>headers>Cookie': { filter: 'delete' },
 		'request>headers>Authorization': { filter: 'delete' },
 		'resp_headers>Set-Cookie': { filter: 'delete' },
