@@ -130,6 +130,12 @@ export interface CredentialGrantRow {
 	scope_value: string | null
 }
 
+/**
+ * How a session's holder proved who they were. `local_dev` is the `LOCAL_DEV_LOGIN` bypass — it has a
+ * value of its own so `sessionUsable` can ask whether the method is still enabled with no special case.
+ */
+export type AuthenticationMethod = 'oidc' | 'password' | 'local_dev'
+
 /** A browser session row (the `sessions` table). Only the cookie's hash is stored, never plaintext. */
 export interface SessionRow {
 	id: string
@@ -137,7 +143,7 @@ export interface SessionRow {
 	principal_id: string
 	idp_sub: string | null
 	email: string | null
-	authentication_method: 'oidc' | 'password'
+	authentication_method: AuthenticationMethod
 	created_at: number
 	expires_at: number
 	revoked_at: number | null
@@ -895,7 +901,7 @@ export class SessionRepository {
 		principalId: string
 		idpSub?: string | null
 		email?: string | null
-		authenticationMethod?: 'oidc' | 'password'
+		authenticationMethod?: AuthenticationMethod
 		expiresAt: number
 		/** Bind this session to ONE app (ADR-0021). Omitted = an IAM session, usable for any app. */
 		app?: string | null
@@ -904,8 +910,9 @@ export class SessionRepository {
 	}): Promise<string> {
 		const id = uuidv7()
 		const authenticationMethod = input.authenticationMethod ?? 'oidc'
-		if (authenticationMethod === 'oidc' && input.idpSub == null) {
-			throw new Error('OIDC sessions require an IdP subject')
+		// `password` is the only method with no upstream subject — the same pairing the row CHECK states.
+		if (authenticationMethod !== 'password' && input.idpSub == null) {
+			throw new Error(`A ${authenticationMethod} session requires an IdP subject`)
 		}
 		await this.db
 			.prepare(

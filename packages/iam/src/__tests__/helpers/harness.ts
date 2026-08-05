@@ -1,7 +1,7 @@
 import type { EmailSender } from '@fabrika/email'
 import type { SqlDatabase, SqlQueryResult, SqlRunResult, SqlStatement } from '@fabrika/platform'
 import { Database, type SQLQueryBindings } from 'bun:sqlite'
-import { createIamRepositories, type IamRepositories } from '../../db'
+import { type AuthenticationMethod, createIamRepositories, type IamRepositories } from '../../db'
 import { normalizeEmailIdentity } from '../../email-identity'
 import { OidcClient, type OidcMetadata } from '../../oidc'
 import { type PasswordHasher, WebCryptoPasswordHasher } from '../../password-crypto'
@@ -122,13 +122,13 @@ export interface Harness {
 }
 
 export interface SignSessionOptions {
-	/** IdP `sub` recorded on the session row. */
-	idpSub?: string
+	/** IdP `sub` recorded on the session row. Explicit `null` for a password session, which has none. */
+	idpSub?: string | null
 	/** Verified email recorded on the session row. */
 	email?: string
 	/** Absolute expiry (unix seconds); defaults to 1h out. */
 	expiresAt?: number
-	authenticationMethod?: 'oidc' | 'password'
+	authenticationMethod?: AuthenticationMethod
 }
 
 export interface MakeServicesOptions {
@@ -152,6 +152,47 @@ export interface MakeServicesOptions {
 	issuer?: string
 }
 
+/**
+ * Assemble a native `Services` over ANY repository set — the same body `createHarness` uses, exposed
+ * so a Postgres-backed suite can drive the same code paths against a real database.
+ */
+export function makeServicesFor(repositories: IamRepositories, options: MakeServicesOptions = {}): Services {
+	const issuer = options.issuer ?? 'http://localhost:18191'
+	const environment = options.environment ?? 'local'
+	const config: Config = {
+		human: {
+			emailDomains: options.human?.emailDomains ?? ['contember.com'],
+			emails: options.human?.emails ?? [],
+		},
+		bootstrapAdmins: new Set([...(options.bootstrapAdmins ?? [])].map(normalizeEmailIdentity)),
+		adminOrigins: options.adminOrigins ?? [],
+		environment,
+		localDevLogin: environment === 'local' && options.localDevLogin === true,
+		authentication: {
+			oidc: { enabled: options.authentication?.oidc ?? true },
+			password: { enabled: options.authentication?.password ?? false },
+		},
+		issuer,
+	}
+	return {
+		repositories,
+		oidc: options.authentication?.oidc === false ? null : options.oidc ?? new OidcClient(
+			{
+				issuer: 'https://idp.test',
+				clientId: 'dummy',
+				clientSecret: 'dummy',
+				redirectUri: `${issuer}/auth/callback`,
+				scopes: '',
+				requireVerifiedEmail: true,
+			},
+			{ metadata: HARNESS_OIDC_METADATA },
+		),
+		passwordHasher: options.passwordHasher ?? new WebCryptoPasswordHasher(),
+		email: options.email ?? null,
+		config,
+	}
+}
+
 /** Stand up a fresh in-memory DB + helpers. Call once per test for isolation. */
 export function createHarness(): Harness {
 	const sqlite = new Database(':memory:')
@@ -160,40 +201,7 @@ export function createHarness(): Harness {
 	const repositories = createIamRepositories(new TestSqlDatabase(sqlite))
 
 	function makeServices(options: MakeServicesOptions = {}): Services {
-		const issuer = options.issuer ?? 'http://localhost:18191'
-		const environment = options.environment ?? 'local'
-		const config: Config = {
-			human: {
-				emailDomains: options.human?.emailDomains ?? ['contember.com'],
-				emails: options.human?.emails ?? [],
-			},
-			bootstrapAdmins: new Set([...(options.bootstrapAdmins ?? [])].map(normalizeEmailIdentity)),
-			adminOrigins: options.adminOrigins ?? [],
-			environment,
-			localDevLogin: environment === 'local' && options.localDevLogin === true,
-			authentication: {
-				oidc: { enabled: options.authentication?.oidc ?? true },
-				password: { enabled: options.authentication?.password ?? false },
-			},
-			issuer,
-		}
-		return {
-			repositories,
-			oidc: options.authentication?.oidc === false ? null : options.oidc ?? new OidcClient(
-				{
-					issuer: 'https://idp.test',
-					clientId: 'dummy',
-					clientSecret: 'dummy',
-					redirectUri: `${issuer}/auth/callback`,
-					scopes: '',
-					requireVerifiedEmail: true,
-				},
-				{ metadata: HARNESS_OIDC_METADATA },
-			),
-			passwordHasher: options.passwordHasher ?? new WebCryptoPasswordHasher(),
-			email: options.email ?? null,
-			config,
-		}
+		return makeServicesFor(repositories, options)
 	}
 
 	async function signSession(principalId: string, options: SignSessionOptions = {}): Promise<string> {
@@ -201,7 +209,7 @@ export function createHarness(): Harness {
 		await repositories.sessions.createSession({
 			tokenHash: await hashToken(token),
 			principalId,
-			idpSub: options.idpSub ?? `idp-${principalId}`,
+			idpSub: options.idpSub === undefined ? `idp-${principalId}` : options.idpSub,
 			email: options.email ?? 'admin@example.com',
 			authenticationMethod: options.authenticationMethod,
 			expiresAt: options.expiresAt ?? Math.floor(Date.now() / 1000) + 3600,

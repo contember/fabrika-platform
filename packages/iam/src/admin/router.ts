@@ -21,7 +21,7 @@
  */
 
 import { type PermissionEntry, permits, type PrincipalType, SESSION_COOKIE } from '@fabrika/auth-core'
-import { isDevBypassSession, resolveCaller } from '../auth'
+import { resolveCaller, sessionUsable } from '../auth'
 import { principalStatus } from '../db'
 import type { Env, RequestContext } from '../env'
 import { logError } from '../log'
@@ -206,8 +206,8 @@ export async function resolveAdmin(
 	if (!session) {
 		return { ok: false, status: 401, reason: 'invalid_session' }
 	}
-	// A bypass session is a global admin; it must stop working the moment the bypass is turned off.
-	if (isDevBypassSession(session) && !services.config.localDevLogin) {
+	// A session whose method the installation no longer enables must not open the admin surface either.
+	if (!sessionUsable(session, services.config)) {
 		return { ok: false, status: 401, reason: 'invalid_session' }
 	}
 	const principal = await services.repositories.principals.getPrincipalById(session.principal_id)

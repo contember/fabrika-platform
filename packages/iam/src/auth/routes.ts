@@ -26,7 +26,8 @@
  */
 
 import { AUTH_CALLBACK_PATH, AUTH_CODE_PARAM, SESSION_COOKIE } from '@fabrika/auth-core'
-import { isDevBypassSession, LOCAL_DEV_ADMIN_EMAIL, LOCAL_DEV_ADMIN_ID } from '../auth'
+import { LOCAL_DEV_ADMIN_EMAIL, LOCAL_DEV_ADMIN_ID, sessionUsable } from '../auth'
+import type { AuthenticationMethod } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 import type { Env, RequestContext } from '../env'
 import { issueAuthCode, normalizeOrigin, resolveReturnUrl } from '../handoff'
@@ -201,8 +202,8 @@ async function currentSession(request: Request, services: Services) {
 	if (session.app !== null) {
 		return null
 	}
-	// And a bypass session must not silently hand an app a global admin once the bypass is off.
-	return isDevBypassSession(session) && !services.config.localDevLogin ? null : session
+	// And a session whose method is no longer enabled must not silently father a handoff.
+	return sessionUsable(session, services.config) ? session : null
 }
 
 /**
@@ -269,6 +270,8 @@ async function handleLocalLogin(
 		principalId: resolved.principal.id,
 		idpSub: LOCAL_DEV_ADMIN_ID,
 		email: LOCAL_DEV_ADMIN_EMAIL,
+		// The bypass's own method, so the session dies with the flag rather than passing as an OIDC login.
+		authenticationMethod: 'local_dev',
 		redirect,
 		reason: 'local_login',
 		handoff,
@@ -351,7 +354,7 @@ async function issueSession(
 		principalId: string
 		idpSub?: string | null
 		email?: string | null
-		authenticationMethod?: 'oidc' | 'password'
+		authenticationMethod?: AuthenticationMethod
 		redirect: string
 		reason: string
 		clearOidc?: boolean

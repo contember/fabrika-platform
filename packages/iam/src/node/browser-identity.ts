@@ -33,11 +33,13 @@ async function createBrowserIdentity(role: BrowserIdentityRole, outputId: string
 
 		const session = generateToken()
 		const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS
+		// A session is refused once its method is disabled, and this stack runs password-only (OIDC off),
+		// so the seeded login has to be a password one — which also means no IdP subject.
 		await runtime.env.REPOSITORIES.sessions.createSession({
 			tokenHash: await hashToken(session),
 			principalId: principal.id,
-			idpSub: `browser-${outputId}`,
 			email,
+			authenticationMethod: 'password',
 			expiresAt,
 		})
 

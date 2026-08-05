@@ -213,7 +213,9 @@ describe('password administration RPC', () => {
 
 	test('reports globally unavailable OIDC without linking or changing the stored identity', async () => {
 		const h = createHarness()
-		const { session } = await admin(h)
+		const { id } = await admin(h)
+		// OIDC is off below, so the admin's OWN session has to be one this installation still enables.
+		const session = await h.signSession(id, { idpSub: null, authenticationMethod: 'password' })
 		const user = seedUser(h.sqlite, { sub: 'idp-subject', email: 'linked@example.com' })
 
 		const response = await call(h, 'principals.get', { id: user }, { session, env: { oidc: false } })

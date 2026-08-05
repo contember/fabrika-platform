@@ -66,6 +66,14 @@ fails if that stops being true — it is the guard, not documentation of one.
   is why `sessions.revoke` is one statement and why a child can read `active` in `sessions.list`
   while its parent is dead. Never "fix" that by walking children: IAM cannot set a cookie on the
   hosts they belong to, and the walk would be the thing that races.
+- **A SESSION IS USABLE ONLY WHILE THE INSTALLATION STILL ENABLES ITS METHOD.** `sessionUsable`
+  (`src/auth.ts`) is checked at USE — at mint, at `currentSession`, and at `resolveAdmin` — because
+  turning OIDC or password off changes what the NEXT login may do and nothing about the thirty days
+  already issued. The local-dev bypass carries its own `authentication_method` (`local_dev`, migration
+  `0013`/`0007`) instead of an exemption inside the predicate: a local composition runs OIDC off, so
+  "refuse an `oidc` session when OIDC is off" would have disabled the bypass itself. Anything that
+  seeds a session must therefore name a method that composition enables — `src/node/browser-identity.ts`
+  seeds `password` for exactly that reason.
 - **WHICH BROWSER ORIGINS MAY DRIVE `/admin/*` IS A REGISTRY, NOT AN INFERENCE.** `ADMIN_ORIGINS`
   (deploy var `FABRIKA_IAM_ADMIN_ORIGINS`) holds the CONSOLE's public origin — the control plane's
   domain, which IAM has no way to derive. It used to compare `Origin` against its own issuer, which a

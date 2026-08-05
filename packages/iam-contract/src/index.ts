@@ -91,8 +91,8 @@ export interface UpdatePrincipalRequest {
 export interface SessionDto {
 	id: string
 	principalId: string
-	/** How the human proved who they were when this session was created. */
-	authenticationMethod: 'oidc' | 'password'
+	/** How the human proved who they were; `local_dev` is IAM's `LOCAL_DEV_LOGIN` bypass. */
+	authenticationMethod: 'oidc' | 'password' | 'local_dev'
 	/** The app this session is bound to (an ADR-0021 child); null = the IAM session itself. */
 	app: string | null
 	/** The IAM session this was derived from; null on an IAM session. Revoking that one revokes this. */

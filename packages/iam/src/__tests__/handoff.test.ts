@@ -43,10 +43,12 @@ class TestContext implements RequestContext {
 /** A harness with one registered app, one user, and a live IAM session for that user. */
 async function scenario(options: { origins?: string[] } = {}) {
 	const harness = createHarness()
+	// Both methods on: the session below is an OIDC one, and a session whose method the installation
+	// has since disabled is refused everywhere it is used (`sessionUsable`).
 	const services = harness.makeServices({
 		issuer: ISSUER,
 		environment: 'stage',
-		authentication: { oidc: false, password: true },
+		authentication: { oidc: true, password: true },
 	})
 	await services.repositories.handoff.setReturnOrigins('notes', options.origins ?? [APP_ORIGIN])
 	const principalId = seedUser(harness.sqlite, { email: 'human@contember.com', sub: 'sub-1' })
@@ -444,7 +446,7 @@ describe('registering return origins', () => {
 		const services = stack.harness.makeServices({
 			issuer: ISSUER,
 			environment: 'stage',
-			authentication: { oidc: false, password: true },
+			authentication: { oidc: true, password: true },
 		})
 		const response = await handleAuth(
 			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private?page=2`)}`, {
@@ -490,6 +492,8 @@ describe('registering return origins', () => {
 describe('a session minted by the local-dev bypass', () => {
 	async function bypassSession(localDevLogin: boolean) {
 		const harness = createHarness()
+		// OIDC off is the LOCAL configuration, and the bypass has to survive it — which is the whole
+		// reason the bypass carries `local_dev` rather than passing as an OIDC login.
 		const services = harness.makeServices({
 			issuer: ISSUER,
 			environment: 'local',
@@ -498,7 +502,11 @@ describe('a session minted by the local-dev bypass', () => {
 		})
 		await services.repositories.handoff.setReturnOrigins('notes', [APP_ORIGIN])
 		const principalId = seedUser(harness.sqlite, { email: 'dev@local.test', sub: LOCAL_DEV_ADMIN_ID })
-		const token = await harness.signSession(principalId, { idpSub: LOCAL_DEV_ADMIN_ID, email: 'dev@local.test' })
+		const token = await harness.signSession(principalId, {
+			idpSub: LOCAL_DEV_ADMIN_ID,
+			email: 'dev@local.test',
+			authenticationMethod: 'local_dev',
+		})
 		return { services, token, principalId }
 	}
 

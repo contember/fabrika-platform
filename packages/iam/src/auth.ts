@@ -1,7 +1,8 @@
 import { API_KEY_PREFIX, type PermissionEntry, type PrincipalType } from '@fabrika/auth-core'
+import type { SessionRow } from './db'
 import type { Env } from './env'
 import { hashToken, timingSafeEqualHex } from './secret'
-import type { Services } from './services'
+import type { Config, Services } from './services'
 import { getSigner, verifyAccessToken } from './signing'
 import { resolveCredential } from './tokens'
 
@@ -13,17 +14,28 @@ export const LOCAL_DEV_ADMIN_ID = 'local-dev-admin'
 export const LOCAL_DEV_ADMIN_EMAIL = 'admin@local.test'
 
 /**
- * Was this session minted by the local-dev bypass? It records the fixed subject above, which no real
- * IdP emits, so the session carries its own provenance and needs no extra column.
+ * May this session still be used, given what the installation enables NOW?
  *
- * **Checked at USE, not at creation, and that is the point.** Turning `LOCAL_DEV_LOGIN` off — or
- * moving `ENVIRONMENT` away from `local` — changes what the next request may do and nothing about
- * what was already issued. Sessions live 30 days, so without this an installation that switched to
- * real authentication would keep honouring bypass sessions for a month, and every one of them is a
- * global admin. Closing the window when the configuration changes is the only bound worth having.
+ * **Checked at USE, not at creation, and that is the point.** Turning a method off changes what the
+ * next login may do and nothing about what was already issued. Sessions live 30 days, so an
+ * installation that moved to password-only kept honouring every OIDC login for a month — and, for the
+ * bypass, every one of those is a global admin.
+ *
+ * The bypass carries `local_dev` as its own method (migration `0013`/`0007`) rather than an exemption
+ * here, so this stays a total function over the enum: a method added later has to answer the question.
  */
-export function isDevBypassSession(session: { idp_sub: string | null }): boolean {
-	return session.idp_sub === LOCAL_DEV_ADMIN_ID
+export function sessionUsable(
+	session: Pick<SessionRow, 'authentication_method'>,
+	config: Pick<Config, 'authentication' | 'localDevLogin'>,
+): boolean {
+	switch (session.authentication_method) {
+		case 'oidc':
+			return config.authentication.oidc.enabled
+		case 'password':
+			return config.authentication.password.enabled
+		case 'local_dev':
+			return config.localDevLogin
+	}
 }
 
 /**

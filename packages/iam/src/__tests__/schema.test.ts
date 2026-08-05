@@ -96,6 +96,25 @@ test('password migration backfills activation and enforces session authenticatio
 	).toThrow()
 })
 
+test('the local-dev bypass is a method of its own, and it belongs to the subject-bearing arm', () => {
+	// 0013 widened BOTH checks: the enum, and the row check pairing a method with `idp_sub`. The bypass
+	// records its fixed subject, so it sits with `oidc` — a `local_dev` row without one is refused.
+	const db = freshDb()
+	seedP1(db)
+	expect(() =>
+		db.run(`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, authentication_method, created_at, expires_at)
+			VALUES ('s-local-dev', 'h-local-dev', 'p1', 'local-dev-admin', 'local_dev', ${T}, ${T + 100})`)
+	).not.toThrow()
+	expect(() =>
+		db.run(`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, authentication_method, created_at, expires_at)
+			VALUES ('s-local-dev-invalid', 'h-local-dev-invalid', 'p1', NULL, 'local_dev', ${T}, ${T + 100})`)
+	).toThrow()
+	expect(() =>
+		db.run(`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, authentication_method, created_at, expires_at)
+			VALUES ('s-bogus', 'h-bogus', 'p1', 'idp-sub', 'bypass', ${T}, ${T + 100})`)
+	).toThrow()
+})
+
 test('password capability state is explicit and constrained', () => {
 	const db = freshDb()
 	seedP1(db)

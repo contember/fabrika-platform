@@ -90,6 +90,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0004_cross_host_sso.sql' },
 			{ bundle: 'iam', name: '0005_one_mailbox_rule.sql' },
 			{ bundle: 'iam', name: '0006_credential_app.sql' },
+			{ bundle: 'iam', name: '0007_session_method_local_dev.sql' },
 		])
 	})
 
@@ -277,6 +278,29 @@ describe.skipIf(!hasPostgres)('the Postgres schema — constraints', () => {
 				.bind('opice', 'viewer', 'Viewer', '[]', 'bogus', now())
 				.run(),
 		).rejects.toThrow()
+	})
+
+	test('the session method enum and its subject pairing widened for the bypass, exactly as on SQLite', async () => {
+		// 0007 replaces both CHECKs 0003 left. `local_dev` joins the arm that requires a subject, because
+		// the bypass records its fixed one; a row without it, or an unknown method, is still refused.
+		await reset()
+		const p = await db.principals.createUser('local-dev-admin', 'dev@local.test')
+		await db.sessions.createSession({
+			tokenHash: 'h-local-dev',
+			principalId: p.id,
+			idpSub: 'local-dev-admin',
+			authenticationMethod: 'local_dev',
+			expiresAt: now() + 3_600,
+		})
+		expect((await db.sessions.getActiveSessionByHash('h-local-dev'))?.authentication_method).toBe('local_dev')
+
+		const insert = (tokenHash: string, idpSub: string | null, method: string) =>
+			raw.prepare(
+				`INSERT INTO sessions (id, token_hash, principal_id, idp_sub, authentication_method, created_at, expires_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).bind(tokenHash, tokenHash, p.id, idpSub, method, now(), now() + 3_600).run()
+		await expect(insert('h-no-subject', null, 'local_dev')).rejects.toThrow()
+		await expect(insert('h-bogus', 'local-dev-admin', 'bypass')).rejects.toThrow()
 	})
 
 	test('credential_grants cascade-delete with their credential', async () => {
