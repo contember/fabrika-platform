@@ -1,5 +1,41 @@
 # Sprint — Auth hardening: make the proxy the only front door
 
+> **OUTCOME — shipped 2026-08-05.** All thirteen work units landed. The proxy is the only enforcement
+> point, there is one dev bypass, one admin transport for browser operations, and one way a session
+> reaches an app.
+>
+> | Commit    | Unit   | What                                                             |
+> | --------- | ------ | ---------------------------------------------------------------- |
+> | `df858e0` | WU-B   | Proxy admission and disclosure gaps — 16 findings                |
+> | `38bcc6c` | WU-A   | Deleted the SDK's second enforcement path (backlog 18), net −590 |
+> | `8216811` | WU-C1  | One mailbox rule, on both engines                                |
+> | `399cd3b` | WU-D   | The local console fronted by the production gates                |
+> | `65f6bd3` | WU-C2  | Console Access plane + credential-to-app binding — 27 findings   |
+> | `0c9c3f7` | WU-M   | A gate miss answers in a shape the caller can act on             |
+> | `2c040fe` | WU-K   | Deleted the dev persona path, net −1013                          |
+> | `8bfa6b5` | —      | The IAM gateway's dead local bearer                              |
+> | `9d7396d` | WU-G   | Return origins registered on every deploy (backlog 51)           |
+> | `950fd19` | WU-L+I | One admin transport; operator session revocation (backlog 52)    |
+> | `a94078e` | WU-F   | Cover the handoff on both sides of every seam                    |
+> | `9b7538a` | WU-H+J | ADR-0022 consolidates four ADRs; reference re-derived            |
+> | `a358192` | —      | Cloudflare proxy refuses to serve without a usable issuer        |
+> | `2c89ab9` | WU-E   | One session per host; the shared cookie retired (ADR-0023)       |
+>
+> **Verification.** `bun test` 1867 pass / 0 fail, with the Postgres suites executed against a real
+> `postgres:17` rather than skipped. `bun run typecheck`, `lint` and `format:check` clean. `local:up`,
+> `local:smoke` and a real-browser sign-in all pass. `test:browser` 9 pass / 1 fail — the failure is
+> [backlog 53](../backlog/53-reauthor-the-operations-console-scenarios.md), Operations console filter
+> drift from `83581a9`, unrelated to auth and red before this sprint began.
+>
+> **Found by running it, not by reviewing it** — the review's 63 findings did not include any of these:
+> two production 403s that made the console's Access plane and every operator write unreachable; a
+> Caddy log filter key that had silently never worked; D1's 100-parameter limit making an app with 100
+> actions impossible to reconcile; and the Cloudflare proxy booting green without an issuer.
+>
+> **Deferred, with reasons in the run log**: backlog 53 (console scenario drift), 54 (Operations' proxy
+> app identity), 55 (refuse a session whose method was turned off), 49 (per-client rate limits), and
+> the Zerops bring-up track (41 / 47 / 05), which needs the live account.
+
 **Theme.** A comprehensive review of `iam` / `proxy` / `auth` / `auth-core` produced 63 findings. The
 single decision that shapes the rest is **backlog 18** (shipped and deleted by WU-A; its text is at
 `52c916c^`): the app SDK still carries a complete second enforcement path, and 15 findings live in

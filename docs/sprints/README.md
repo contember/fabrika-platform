@@ -19,6 +19,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- [`sprint-2026-08-04-auth-hardening.md`](sprint-2026-08-04-auth-hardening.md) — make
-  the proxy the only front door, and clear the security debt a review of
-  `iam` / `proxy` / `auth` / `auth-core` surfaced.
+None.

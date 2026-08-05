@@ -55,6 +55,10 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 - [Zerops control path (2026-07-29)](sprint-2026-07-29-zerops-control-path.md)
   — shipped static manifests, in-process Zerops deploys, proxy delivery,
   service-level secret writes, and restart reconciliation.
+- [Auth hardening (2026-08-04)](sprint-2026-08-04-auth-hardening.md) — made
+  the proxy the only enforcement point, deleted the SDK's duplicate path and
+  the dev-persona bypass, gave every host its own session, and consolidated
+  four enforcement ADRs into ADR-0022.
 - [Proxy gate-config delivery](08-distribute-gate-config-to-proxy.md) — the
   shipped redeploy decision retained as context for ADR-0007, ADR-0008, and
   ADR-0010.

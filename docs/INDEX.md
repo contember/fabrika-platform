@@ -24,11 +24,8 @@ that supersedes the four which decided it in stages.
 
 ## Active sprints
 
-- [Auth hardening (2026-08-04)](sprints/sprint-2026-08-04-auth-hardening.md) — makes
-  the proxy the only front door. Twelve work units have landed, WU-E included: the
-  shared session cookie is retired and both session cookies carry the `__Host-` prefix
-  ([ADR-0023](decisions/0023-one-session-per-host.md)). The browser suite has one known
-  failure ([53](backlog/53-reauthor-the-operations-console-scenarios.md)).
+None. The auth-hardening sprint shipped on 2026-08-05 —
+[archive](archive/sprint-2026-08-04-auth-hardening.md).
 
 ## What's hot
 
