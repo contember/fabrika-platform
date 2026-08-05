@@ -15,6 +15,13 @@ zerops:
         - src
       cache:
         - node_modules
+    deploy:
+      readinessCheck:
+        httpGet:
+          port: 3000
+          path: /healthz
+        retryPeriod: 10s
+        failureTimeout: 180s
     run:
       base: alpine/bun@1.3
       initCommands:
@@ -27,7 +34,13 @@ zerops:
         httpGet:
           port: 3000
           path: /healthz
+        execPeriod: 10s
+        disconnectTimeout: 30s
+        recoveryTimeout: 10s
+        failureTimeout: 120s
       envVariables:
         PORT: "3000"
-        NOTES_DATABASE_URL: ${postgres_connectionString}
+        # Must match `useSharedPostgres()` exactly — a test asserts it. See the sibling zerops.yaml for
+        # why the database and the TLS mode are named rather than left to the driver.
+        NOTES_DATABASE_URL: ${postgres_connectionString}/${postgres_dbName}?sslmode=require
         NOTES_APP_ID: notes

@@ -28,6 +28,16 @@ bun test
   construction site; and `assertZeropsInvariants` checks every document before serialization. The
   failure prevented is concrete — with `envIsolation: none` (legal, and not reliably the default)
   every service sees every other service's variables, so one app's credentials leak to another.
+- **`override: true` goes on EVERY service, managed ones included, and it is not an update.** Live-verified:
+  without it a re-apply is `400 serviceStackNameUnavailable` and the whole document fails; with it an
+  existing service is left exactly as it is, so a changed `profile`/`maxContainers`/`objectStorageSize`
+  is silently ignored. `assertZeropsInvariants` refuses a document missing it. Never describe the
+  steady-state import as "reconciling"; change a live field through the API that owns it.
+- **`compileProvisioningYaml`'s output is first-bring-up only.** Re-applying it at a service that carries
+  code activates an EMPTY app version and demotes the running one to `BACKUP`.
+- **The published `zerops.yaml` schema is wrong about the six probe durations** (`integer`; the platform
+  wants a Go duration string in `[10s, 1h]`). `src/types.ts` carries the corrected `ZeropsDuration` and
+  the `*Spec` authoring types — do NOT try to fix `schema.generated.ts`.
 - **The compiler is PURE** — no network, no filesystem, no clock.
 - **Unverified API behavior stays marked `UNVERIFIED:`.** Every shape in `src/api.ts` was read off
   Zerops' published OpenAPI document; the log service and a handful of behaviors were not. Do not

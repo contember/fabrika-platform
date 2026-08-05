@@ -6,6 +6,7 @@ import type { ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
 import { compileFabrikaManifest } from '../manifest'
 import { createZeropsProvider } from '../provider'
+import type { ZeropsServiceType } from '../schema.generated'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget, ZeropsServiceSpec } from '../types'
 
 interface Recorded {
@@ -256,7 +257,7 @@ describe('Zerops compiler invariants', () => {
 		// documented bring-up for every runtime service at once, so it fails at compile time now.
 		expect(() =>
 			assertZeropsInvariants({
-				services: [{ hostname: 'api', type: 'alpine/bun@1.3', envIsolation: 'service', zeropsSetup: 'api' }],
+				services: [{ hostname: 'api', type: 'alpine/bun@1.3', envIsolation: 'service', override: true, zeropsSetup: 'api' }],
 			})
 		).toThrow('names `zeropsSetup` without `buildFromGit`')
 	})
@@ -268,11 +269,29 @@ describe('Zerops compiler invariants', () => {
 					hostname: 'api',
 					type: 'alpine/bun@1.3',
 					envIsolation: 'service',
+					override: true,
 					zeropsSetup: 'api',
 					buildFromGit: 'https://github.com/contember/fabrika-platform',
 				}],
 			})
 		).not.toThrow()
+	})
+
+	test('refuses a document whose service omits `override`, whatever class of service it is', () => {
+		// Verified against a real account, and it contradicts the published documentation twice over.
+		// `override: true` does NOT update or replace an existing service — a changed `profile`,
+		// `maxContainers` or `objectStorageSize` is accepted by the API and silently ignored. What it does
+		// is stop the hostname collision from failing the import: WITHOUT it the platform answers
+		// `400 serviceStackNameUnavailable` and rejects the whole document. And it is not
+		// runtime-services-only: the rejection happened on a managed `postgresql:single@18`, before any
+		// runtime service in the same document was reached.
+		const types: ZeropsServiceType[] = ['alpine/bun@1.3', 'postgresql:ha@18', 'object-storage']
+		for (const type of types) {
+			expect(() => assertZeropsInvariants({ services: [{ hostname: 'data', type, envIsolation: 'service' }] })).toThrow(
+				'must carry `override: true`',
+			)
+			expect(() => assertZeropsInvariants({ services: [{ hostname: 'data', type, envIsolation: 'service', override: true }] })).not.toThrow()
+		}
 	})
 
 	test('the API surface has no project-level environment writer', () => {

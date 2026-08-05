@@ -7,7 +7,13 @@
 
 import notesConfig, { NOTES_DATABASE_SERVICE, NOTES_SERVICE } from '@fabrika/example-zerops-app'
 import cheapNotesConfig from '@fabrika/example-zerops-app/cheap'
-import { compileFabrikaManifest, compileImport, renderYaml, type ZeropsImportDocument } from '@fabrika/provider-zerops'
+import {
+	compileFabrikaManifest,
+	compileImport,
+	renderYaml,
+	ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
+	type ZeropsImportDocument,
+} from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -157,7 +163,13 @@ describe('ADR-0004 — isolation and the absence of secrets, on the FINISHED doc
 			expect(document.services.every((service) => service.envSecrets === undefined && service.dotEnvSecrets === undefined)).toBe(true)
 		})
 
-		test(`${label}: every service carries \`override: true\`, which is what makes re-applying idempotent`, () => {
+		test(`${label}: EVERY service carries \`override: true\`, managed ones included`, () => {
+			// Not an ADR-0004 invariant but the same shape of one, and it belongs on the finished document
+			// for the same reason. Live-verified: without it the platform answers
+			// `400 serviceStackNameUnavailable` on the first hostname that already exists — and it answers
+			// it for a managed `postgresql` service too, which is exactly the case upstream says the field
+			// does not apply to. One omission makes the whole document un-re-appliable, not just that
+			// service. What it does NOT do is update anything; see `compileService`.
 			expect(document.services.every((service) => service.override === true)).toBe(true)
 		})
 	}
@@ -245,7 +257,54 @@ describe("hostnames — the rule that lives only in the schema's prose", () => {
 	})
 })
 
+describe('no managed service is sized by a default', () => {
+	// Omitting `profile` is not neutral. Read back off live services: a `postgresql:ha@18` created with
+	// no profile gets `oltp-production` — two DEDICATED cores and 4 GB per container, three containers —
+	// and a `postgresql:single@18` gets `oltp-staging`. `override: true` will not correct either
+	// afterwards, so the only chance to choose is the document that creates the service.
+	const MANAGED = /^postgresql:/
+
+	for (const { label, document } of documents()) {
+		test(`${label}: every PostgreSQL service names its autoscaling profile`, () => {
+			for (const service of document.services.filter((service) => MANAGED.test(service.type))) {
+				expect(`${service.hostname}: ${String(service.profile)}`).not.toContain('undefined')
+			}
+		})
+	}
+
+	test('and there are managed services to have checked — `apps-prod` genuinely owns none', () => {
+		const managed = documents().flatMap(({ document }) => document.services.filter((service) => MANAGED.test(service.type)))
+		expect(managed.length).toBeGreaterThan(0)
+	})
+
+	test('the two platform databases are sized differently, on purpose', () => {
+		const profiles = new Map(platform?.steady.document.services.map((service) => [service.hostname, service.profile]))
+		// Identity and control-plane state: dedicated CPU, because auth latency is felt by every request.
+		expect(profiles.get('db')).toBe('oltp-production')
+		// Error history: same HA redundancy and the same ceiling, one shared core and 1 GB at the floor.
+		expect(profiles.get('operationsdb')).toBe('oltp-staging')
+	})
+
+	test('the example app gives a non-production database the cheapest preset its type has', () => {
+		const stage = notesConfig.target.services({ env: 'stage' }).find((service) => service.hostname === NOTES_DATABASE_SERVICE)
+		const prod = notesConfig.target.services({ env: 'prod' }).find((service) => service.hostname === NOTES_DATABASE_SERVICE)
+		expect(stage?.profile).toBe('oltp-hobby')
+		expect(prod?.profile).toBe('oltp-production')
+	})
+})
+
 describe('provisioning vs steady state', () => {
+	test('re-applying the STEADY form is the safe one; re-applying the provisioning form is not', () => {
+		// Live-verified, and the distinction is the whole reason two forms exist. Re-applying the steady
+		// document at services that already exist is a complete no-op — no process, no `lastUpdate` move.
+		// Re-applying the provisioning document at a service that already carries code starts a
+		// `stack.deploy` and activates a new EMPTY app version; the running code becomes a `BACKUP`.
+		for (const entry of compiled) {
+			expect(entry.steady.yaml).not.toContain('startWithoutCode')
+			expect(entry.provision.yaml).toContain('startWithoutCode: true')
+		}
+	})
+
 	test('the provisioning form starts EVERY service without code, so secrets can be written before any build', () => {
 		for (const entry of compiled) {
 			expect(entry.provision.document.services.map((service) => service.startWithoutCode)).toEqual(entry.provision.document.services.map(() => true))
@@ -291,7 +350,7 @@ describe('cheap, mid, and full namespace fixtures', () => {
 		expect(app.target.namespaceResources).toEqual([{
 			resourceKey: 'service:postgres',
 			hostname: 'postgres',
-			connectionString: '${postgres_connectionString}',
+			connectionString: ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
 		}])
 		expect(validateYaml('import', renderYaml(app.target.importDocument))).toEqual([])
 	})

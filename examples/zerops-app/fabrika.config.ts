@@ -52,6 +52,11 @@ const services = (ctx: ZeropsResourceContext): ZeropsServiceSpec[] => [
 		// environment gets a single node, because a staging outage costs a retry and HA costs money in
 		// every environment that has it.
 		type: ctx.env === 'prod' ? 'postgresql:ha@18' : 'postgresql:single@18',
+		// Sized, not defaulted. Omitting `profile` is not a neutral act: an HA service silently gets
+		// `oltp-production` (two DEDICATED cores and 4 GB per container, three containers) and a single
+		// one gets `oltp-staging`. A non-production database wants `oltp-hobby`, which is the cheapest
+		// preset its type offers — and an example is where people copy their defaults from.
+		profile: ctx.env === 'prod' ? 'oltp-production' : 'oltp-hobby',
 		// Higher priority is created FIRST, so the database exists before the runtime that migrates into
 		// it at container start (`run.initCommands` in zerops.yaml).
 		priority: 100,
@@ -62,8 +67,8 @@ const services = (ctx: ZeropsResourceContext): ZeropsServiceSpec[] => [
 		priority: 10,
 		// NOT PUBLIC, and written explicitly rather than left to the platform default. The default already
 		// protects a service nobody thought about; writing `false` makes turning it on a one-line diff in
-		// review, and makes the re-applied import CORRECT a subdomain somebody enabled to debug something.
-		// The proxy is the only publicly routed service in the project (ADR-0007).
+		// review. It does not undo one enabled by hand — a re-applied import leaves an existing service
+		// untouched. The proxy is the only publicly routed service in the project (ADR-0007).
 		enableSubdomainAccess: false,
 		minContainers: ctx.env === 'prod' ? 2 : 1,
 		maxContainers: 4,

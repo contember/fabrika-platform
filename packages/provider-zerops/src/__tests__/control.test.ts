@@ -13,7 +13,7 @@ import { useSharedPostgres } from '../authoring'
 import { zeropsTargetCodec } from '../codec'
 import { createZeropsControlProvider, type ZeropsControlProviderOptions, type ZeropsProviderExecutor, zeropsStoredTargetCodec } from '../control'
 import { compileFabrikaManifest, zeropsArtifactCodec } from '../manifest'
-import { zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
+import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
 import { zeropsSharedServiceHostname } from '../service-names'
 import type { ZeropsAppConfig } from '../types'
 
@@ -389,7 +389,7 @@ describe('Zerops ControlProvider registration', () => {
 					namespaceResources: [{
 						resourceKey: 'service:postgres',
 						hostname: 'postgres',
-						connectionString: '${postgres_connectionString}',
+						connectionString: ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
 					}],
 				},
 			})
@@ -593,7 +593,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(manifest.target.namespaceResources).toEqual([{
 			resourceKey: 'service:postgres',
 			hostname: 'postgres',
-			connectionString: '${postgres_connectionString}',
+			connectionString: ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
 		}])
 	})
 

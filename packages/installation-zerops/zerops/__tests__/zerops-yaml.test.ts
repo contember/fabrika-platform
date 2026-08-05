@@ -2,12 +2,13 @@
 // The generated repository-root file owns fabrika's three setups; the example app owns its fixture.
 
 import notesConfig from '@fabrika/example-zerops-app'
+import { useSharedPostgres } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { generatedArtifacts, REPO_ROOT } from '../artifacts'
 import { compileTopology, fabrikaTopologies } from '../topology'
-import { parseYaml, validateYaml } from '../validate'
+import { correctedSchemaPointers, parseYaml, validateYaml } from '../validate'
 
 const read = (path: string): string => readFileSync(resolve(REPO_ROOT, path), 'utf8')
 
@@ -202,6 +203,91 @@ describe('nothing committed carries a secret VALUE', () => {
 			}
 		})
 	}
+})
+
+describe('every deploy is gated, and every duration says what it means', () => {
+	// `run.healthCheck` and `deploy.readinessCheck` answer different questions: one pulls a degraded
+	// container out of the balancer while it is live, the other decides whether a new version may take
+	// traffic at all. Live-verified: a build whose readiness path answered 503 ended `DEPLOY_FAILED` and
+	// never activated, while the previously active version kept serving.
+	const files = ['zerops.yaml', 'examples/zerops-app/zerops.yaml', 'examples/zerops-app/zerops.shared-postgres.yaml']
+
+	/** Every duration field the platform parses as a Go `time.Duration`. */
+	const DURATION_KEYS = new Set(['failureTimeout', 'retryPeriod', 'execPeriod', 'disconnectTimeout', 'recoveryTimeout'])
+	/** A Go duration with a unit, inside the platform's `[10s, 1h]` window. */
+	const DURATION = /^([1-9][0-9]*)(s|m|h)$/
+
+	const setupsIn = (path: string): Array<Record<string, unknown>> => {
+		const document = parseYaml(read(path))
+		if (typeof document !== 'object' || document === null || !('zerops' in document) || !Array.isArray(document.zerops)) {
+			throw new Error(`${path}: no \`zerops\` list`)
+		}
+		return document.zerops.flatMap((entry) => (typeof entry === 'object' && entry !== null && !Array.isArray(entry) ? [{ ...entry }] : []))
+	}
+
+	const durationsIn = (value: unknown): Array<[string, unknown]> => {
+		if (Array.isArray(value)) return value.flatMap(durationsIn)
+		if (typeof value !== 'object' || value === null) return []
+		return Object.entries(value).flatMap(([key, entry]) => (DURATION_KEYS.has(key) ? [[key, entry]] : durationsIn(entry)))
+	}
+
+	for (const file of files) {
+		test(`${file}: every setup declares a readiness gate as well as a liveness check`, () => {
+			for (const setup of setupsIn(file)) {
+				expect(setup['deploy']).toMatchObject({ readinessCheck: { httpGet: {} } })
+				expect(setup['run']).toMatchObject({ healthCheck: { httpGet: {} } })
+			}
+		})
+
+		test(`${file}: every duration is a quoted Go duration with a unit, never a bare integer`, () => {
+			// The published JSON schema types these as `integer` and the platform refuses an integer
+			// (`cannot unmarshal !!int into time.Duration`). It also rejects anything outside [10s, 1h].
+			const durations = durationsIn(setupsIn(file))
+			expect(durations.length).toBeGreaterThan(0)
+			for (const [, value] of durations) {
+				expect(typeof value).toBe('string')
+				expect(String(value)).toMatch(DURATION)
+				const seconds = Number(String(value).slice(0, -1)) * ({ s: 1, m: 60, h: 3600 }[String(value).slice(-1)] ?? 0)
+				expect(seconds).toBeGreaterThanOrEqual(10)
+				expect(seconds).toBeLessThanOrEqual(3600)
+			}
+		})
+	}
+
+	test('the corrected schema is the reason the durations validate — and the correction is still needed', () => {
+		// The vendored schema still publishes `integer` for all six. When Zerops fixes that, `loadSchema`
+		// throws rather than silently accepting whatever it now says; this test names the pointers so the
+		// correction cannot quietly grow.
+		expect(correctedSchemaPointers('zerops-yaml')).toHaveLength(6)
+		expect(correctedSchemaPointers('import')).toEqual([])
+		// And the correction really is what lets a string through: an integer must still fail.
+		const withInteger = read('zerops.yaml').replace('execPeriod: "10s"', 'execPeriod: 10')
+		expect(validateYaml('zerops-yaml', withInteger).length).toBeGreaterThan(0)
+	})
+})
+
+describe('a PostgreSQL URL names its database and its TLS mode', () => {
+	// `${x_connectionString}` is `postgresql://${user}:${password}@${hostname}:${port}` — no database
+	// path — so without `/${x_dbName}` the driver falls back to the user name. And 5432 does speak TLS,
+	// contrary to the published documentation: `sslmode=require` connects encrypted, `verify-full` fails
+	// on the self-signed certificate. Both verified live; neither may be left to a driver default.
+	for (const file of ['examples/zerops-app/zerops.yaml', 'examples/zerops-app/zerops.shared-postgres.yaml']) {
+		test(`${file}: every connectionString reference carries a database and an sslmode`, () => {
+			const matches = [...read(file).matchAll(/\$\{[a-z0-9]+_connectionString\}\S*/g)].map((match) => match[0])
+			expect(matches.length).toBeGreaterThan(0)
+			for (const reference of matches) {
+				expect(reference).toMatch(/^\$\{([a-z0-9]+)_connectionString\}\/\$\{\1_dbName\}\?sslmode=require$/)
+			}
+		})
+	}
+
+	test('the shared-Postgres example writes exactly what `useSharedPostgres()` declares', () => {
+		expect(read('examples/zerops-app/zerops.shared-postgres.yaml')).toContain(`NOTES_DATABASE_URL: ${useSharedPostgres().connectionString}`)
+	})
+
+	test('the committed root file still names no data service at all', () => {
+		expect(read('zerops.yaml')).not.toContain('connectionString')
+	})
 })
 
 describe('the generated root file is the only fabrika platform build specification', () => {

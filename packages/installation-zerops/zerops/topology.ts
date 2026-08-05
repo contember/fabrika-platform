@@ -121,8 +121,16 @@ export const FABRIKA_PROXY_SOURCE = 'https://github.com/contember/fabrika-platfo
  *
  * `enableSubdomainAccess` is written even when it is `false` — which is also Zerops' default — on
  * purpose. The default protects a service nobody thought about; an explicit `false` makes turning it on
- * a visible one-line diff in review, and makes `override: true` CORRECT a subdomain someone enabled in
- * the GUI to debug something and forgot about. A default cannot do either.
+ * a visible one-line diff in review. It does NOT correct a subdomain someone enabled in the GUI, and
+ * this comment used to claim it did: `override: true` leaves an existing service untouched, so no
+ * re-apply of this document changes a live subdomain. Turning one off is `DisableSubdomainAccess`.
+ *
+ * `verticalAutoscaling` is deliberately NOT written, and that is a decision rather than an omission.
+ * A live Bun runtime reads back a floor of 1 shared core / 0.125 GB and a ceiling of 8 cores / 48 GB /
+ * 250 GB. The floor is already the minimum the platform offers, so there is nothing to save by
+ * restating it; and capping the ceiling would convert a traffic spike into an outage on services whose
+ * only other lever is `maxContainers`, which IS written on every one of them. Where a floor genuinely
+ * costs money — the managed databases — it is chosen explicitly through `profile` instead.
  *
  * `zeropsSetup` is deliberately NOT written. It used to be, as a redundant restatement of Zerops' own
  * "setup name defaults to the hostname" rule that would keep working the day a service was renamed. On a
@@ -174,6 +182,12 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 					// because a second HA Postgres triples the cost of the isolation the private network
 					// already gives us.
 					type: 'postgresql:ha@18',
+					// The identity and control-plane database: every login, every token mint, every run's
+					// state. `oltp-production` is also what an HA service gets by DEFAULT — stated here so
+					// the bill is a decision rather than a discovery, and because this is the one place the
+					// standard tier should pay for it: dedicated CPU is what keeps auth latency off the
+					// noisy-neighbour curve.
+					profile: 'oltp-production',
 					priority: 100,
 				},
 				{
@@ -194,6 +208,13 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 					// Operations has an independent database service. This prevents its high-volume error
 					// history and migrations from sharing IAM/control's failure and capacity domain.
 					type: 'postgresql:ha@18',
+					// NOT `db`'s profile, and that is the point of stating both. `oltp-staging` keeps the
+					// same three-container redundancy and the same 8-core/48 GB ceiling, but starts at one
+					// SHARED core and 1 GB instead of two DEDICATED cores and 4 GB — measured off a live
+					// HA service, see `docs/reference/zerops-platform.md`. Error history is bursty and
+					// tolerant of jitter: slow ingest is a queue, not an outage. Holding two dedicated
+					// cores idle for it is the half of the default nobody chose.
+					profile: 'oltp-staging',
 					priority: 100,
 				},
 				{
@@ -285,6 +306,12 @@ const lightPlatformTopology = (options: TopologyOptions, publicAccess: PublicAcc
 				// a `${operationsdb_connectionString}` baked into it would name a service `light` does not have.
 				hostname: 'db',
 				type: 'postgresql:single@18',
+				// `oltp-staging` is also this type's default, written out because a default is not a
+				// choice. It is the one profile below `oltp-production` that still sets a 1 GB memory
+				// floor, and this single service holds IAM, control, Operations AND the apps beside them
+				// — `oltp-hobby` sets no floor at all, which is right for one dev database and not for
+				// four tenants sharing one.
+				profile: 'oltp-staging',
 				priority: 100,
 			},
 			{
@@ -380,9 +407,20 @@ export const fabrikaTopologies = (): ProjectTopology[] => [
 /** A compiled topology in both of the forms an operator needs. */
 export interface CompiledTopology {
 	topology: ProjectTopology
-	/** First bring-up: every service `startWithoutCode: true`, so secrets can be written before any deploy. */
+	/**
+	 * First bring-up ONLY: every service `startWithoutCode: true`, so secrets can be written before any
+	 * deploy. Applying this a second time at a project whose services already carry code activates a new
+	 * EMPTY app version on each of them — verified live. It is not a reconcile document.
+	 */
 	provision: { document: ZeropsImportDocument; yaml: string }
-	/** Steady state: the same document re-applied (`override: true`) to reconcile drift. */
+	/**
+	 * Steady state: the same document, re-appliable because every service carries `override: true`.
+	 *
+	 * "Re-appliable" is the whole claim, and deliberately not "reconciling". Live-verified: applying
+	 * this at an existing project creates whatever is missing and leaves everything that exists exactly
+	 * as it is — a changed `profile`, `minContainers` or `objectStorageSize` in here is accepted by the
+	 * API and silently ignored. Changing a live service is a separate, field-specific API call.
+	 */
 	steady: { document: ZeropsImportDocument; yaml: string }
 }
 

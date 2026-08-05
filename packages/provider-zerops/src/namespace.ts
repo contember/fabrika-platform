@@ -31,7 +31,22 @@ export const ZEROPS_NAMESPACE_PROXY_HOSTNAME = 'proxy'
 export const ZEROPS_NAMESPACE_POSTGRES_HOSTNAME = 'postgres'
 export const ZEROPS_NAMESPACE_IAM_URL_VARIABLE = 'FABRIKA_IAM_URL'
 export const ZEROPS_NAMESPACE_IAM_KEY_VARIABLE = 'FABRIKA_IAM_KEY'
-export const ZEROPS_SHARED_POSTGRES_CONNECTION_STRING = '${postgres_connectionString}'
+/**
+ * How an app reaches the namespace-owned PostgreSQL service — database and TLS mode NAMED, not defaulted.
+ *
+ * Three facts settled against a live account, none of them safe to infer:
+ *
+ *   • `${x_connectionString}` is `postgresql://${user}:${password}@${hostname}:${port}` — no database
+ *     path. With none, the libpq/postgres.js convention falls back to the USER name.
+ *   • `dbName` and `user` are both literally `db` on EVERY PostgreSQL service, whatever its hostname
+ *     (checked on a service named `wu2db`). So the fallback lands right today — by construction rather
+ *     than by luck, but still by a rule nobody wrote down. `/${x_dbName}` says it out loud.
+ *   • Port 5432 speaks TLS. `sslmode=require` connects with `pg_stat_ssl.ssl = true`; `sslmode=disable`
+ *     connects in the clear. `verify-full` fails (`self signed certificate`), so `require` is the
+ *     strongest mode available and the one worth pinning — the alternative is whatever the driver
+ *     happens to default to.
+ */
+export const ZEROPS_SHARED_POSTGRES_CONNECTION_STRING = '${postgres_connectionString}/${postgres_dbName}?sslmode=require'
 
 const PROXY_TYPE = 'alpine@3.21'
 const EMPTY_PROXY_MANIFEST = encodeProxyManifestJson({ apps: [] })
@@ -320,7 +335,17 @@ const registrationResourceClaims = (registration: ProviderRegistration): string[
 	return hostnames.map((hostname) => `service:${hostname}`).sort()
 }
 
-const defaultPostgres = (env: string): ZeropsNamespacePostgres => env === 'prod' ? { type: 'postgresql:ha@18' } : { type: 'postgresql:single@18' }
+/**
+ * The namespace-owned PostgreSQL service, sized rather than defaulted.
+ *
+ * Omitting `profile` is not neutral: an HA service silently gets `oltp-production` (two DEDICATED cores
+ * and 4 GB per container, three containers) and a single one gets `oltp-staging`. Both verified by
+ * reading the profile back off a live service. Production takes the production preset deliberately;
+ * everything else takes the cheapest one its type offers, because a namespace database for a staging
+ * app should cost what staging is worth.
+ */
+const defaultPostgres = (env: string): ZeropsNamespacePostgres =>
+	env === 'prod' ? { type: 'postgresql:ha@18', profile: 'oltp-production' } : { type: 'postgresql:single@18', profile: 'oltp-hobby' }
 
 export const zeropsNamespacePreset = (input: ZeropsNamespacePresetInput): ZeropsNamespaceTarget => ({
 	projectName: input.projectName,

@@ -1,10 +1,21 @@
 import type { AppActionDef, AppGates, AppSchema, AppScopeDef, GateRule, RoleDef } from '@fabrika/auth-core'
 import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
-import { compileImport, ENV_ISOLATION, renderYaml } from './compile'
-import type { ZeropsAppConfig, ZeropsNamespaceResourceRequirement, ZeropsProxySpec } from './types'
+import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
+import type { ZeropsAppConfig, ZeropsNamespaceResourceRequirement, ZeropsProxySpec, ZeropsSharedPostgresBinding } from './types'
 
 export const FABRIKA_MANIFEST_VERSION = 2
 export const ZEROPS_SERVICE_HOSTNAME_PATTERN = /^[a-z0-9]{1,25}$/
+
+/**
+ * The one reference an app may declare for the namespace-owned PostgreSQL service.
+ *
+ * Restated here rather than imported from `./namespace` — that module imports THIS one, and the
+ * literal is part of the manifest's parse contract, so it belongs on the parsing side. The reasoning
+ * for the database path and the TLS mode lives with `ZEROPS_SHARED_POSTGRES_CONNECTION_STRING`; a test
+ * asserts the two never diverge.
+ */
+const SHARED_POSTGRES_CONNECTION_STRING: ZeropsSharedPostgresBinding['connectionString'] =
+	'${postgres_connectionString}/${postgres_dbName}?sslmode=require'
 
 export interface FabrikaImportDocument {
 	readonly project?: { readonly [key: string]: JsonValue }
@@ -183,7 +194,7 @@ const parseNamespaceResources = (value: unknown): ZeropsNamespaceResourceRequire
 		if (
 			string(resource, 'resourceKey') !== 'service:postgres'
 			|| string(resource, 'hostname') !== 'postgres'
-			|| string(resource, 'connectionString') !== '${postgres_connectionString}'
+			|| string(resource, 'connectionString') !== SHARED_POSTGRES_CONNECTION_STRING
 		) {
 			return null
 		}
@@ -192,7 +203,7 @@ const parseNamespaceResources = (value: unknown): ZeropsNamespaceResourceRequire
 		resources.push({
 			resourceKey: 'service:postgres',
 			hostname: 'postgres',
-			connectionString: '${postgres_connectionString}',
+			connectionString: SHARED_POSTGRES_CONNECTION_STRING,
 		})
 	}
 	return resources
@@ -231,7 +242,9 @@ const parseImportDocument = (value: unknown): FabrikaImportDocument => {
 		if (typeof service['type'] !== 'string' || service['type'] === '') {
 			throw new Error(`invalid fabrika manifest Zerops service type for \`${hostname}\``)
 		}
-		if (service['envIsolation'] !== ENV_ISOLATION || service['override'] !== true) {
+		// `override: true` is required on EVERY service class, managed included — without it the platform
+		// rejects a re-apply of the whole document as a name collision (see `compile.ts`).
+		if (service['envIsolation'] !== ENV_ISOLATION || service['override'] !== OVERRIDE) {
 			throw new Error(`invalid fabrika manifest Zerops service invariants for \`${hostname}\``)
 		}
 		if (service['envSecrets'] !== undefined || service['dotEnvSecrets'] !== undefined) {

@@ -188,3 +188,56 @@ Confirmed absent afterwards. Facts + commands → `docs/reference/zerops-platfor
 Out of scope, found while probing: a key declared in a service's own `zerops.yaml`
 (`run.envVariables`, `type: ENV`) conflicts on create yet never appears in `/env`, so it cannot be
 written through the env API at all — `putServiceEnv` now refuses it explicitly.
+
+### 2026-08-05 — WU-2 done (items 39, 42, 43, 45)
+
+All four settled live on throwaway services created and deleted inside `fabrika-test` (`wu2db`,
+`wu2st`, `wu2app`, `wu2ha`). No platform service was touched; the project is as it was found. Facts +
+commands → `docs/reference/zerops-platform.md`.
+
+**39 — the answer inverts the item.** `override: true` is neither an update nor a replace: an existing
+service is left exactly as it is, and a changed `profile`/`maxContainers`/`objectStorageSize` in the
+document is silently ignored. Without it the platform answers `400 serviceStackNameUnavailable` and
+rejects the WHOLE import — and it does so on a managed `postgresql` service, which upstream says the
+field does not apply to. So the item's "stop writing it on managed services" would have broken every
+re-apply: it now goes on every service and `assertZeropsInvariants` refuses a document missing it.
+What was actually destructive is `startWithoutCode: true` — re-applying the PROVISIONING document at a
+service that carries code activates an empty app version. Corrected the three comments that asserted
+reconciliation (`compile.ts`, `topology.ts` ×2, `setups.ts` reason #2). ADR-0003's own text needs no
+change: it claims idempotency of `apply-import`, which holds.
+
+**42 — upstream confirmed, and it was costing double.** A live `postgresql:ha@18` with no `profile`
+reads back `oltp-production`: 2 DEDICATED cores + 4 GB per container, three containers, twice over.
+`db` keeps it (auth latency), `operationsdb` takes `oltp-staging` (same redundancy and ceiling, 1
+shared core / 1 GB floor). Light `db`, the example app and the namespace preset are now explicit too.
+`verticalAutoscaling` stays unwritten, with the reason stated at the `runtime` helper.
+
+**43 — two new live facts.** All six probe durations are published as `integer` and the platform
+REFUSES an integer (`cannot unmarshal !!int into time.Duration`), and every one is bounded to
+`[10s, 1h]` (`invalid execPeriod <10s, 1h0m0s>`) — undocumented anywhere. So a schema-valid document is
+undeployable. Handled at the two layers the architecture already names: `provider-zerops/src/types.ts`
+gains corrected `*Spec` authoring types (`schema.generated.ts` untouched), and
+`installation-zerops/zerops/validate.ts` retypes exactly six JSON pointers, throwing if upstream ever
+stops publishing `integer`. **This is the one judgement call in the unit — flag it in review.**
+Readiness gate proven: identical builds, `/ready` 200 → `ACTIVE`, `/ready` 503 → `DEPLOY_FAILED` with
+the previous version still serving.
+
+**45 — the TLS half was backwards.** Port 5432 does speak TLS: `sslmode=require` connects with
+`pg_stat_ssl.ssl = true`, `verify-full` fails on a self-signed certificate. So the pinned mode is
+`require`, not `disable`. And `dbName`/`user` are literally `db` on every PostgreSQL service whatever
+its hostname — checked on `wu2db` — so the database-name fallback is structural, not coincidental, but
+still undocumented. Canonical form everywhere:
+`${<host>_connectionString}/${<host>_dbName}?sslmode=require`.
+
+Compatibility note for review: `ZeropsSharedPostgresBinding.connectionString` is a literal type that
+`parseNamespaceResources` pins, so an artifact persisted with the old literal will no longer parse.
+Nothing in the live installation declares `useSharedPostgres()`.
+
+Verified: `typecheck`, `lint`, `format:check` clean; `bun test` 1902 pass / 9 skip / 0 fail with
+Postgres on `:55441` (only the S3 suites skip). All four generated setups and both example descriptors
+accepted by the live `POST /service-stack/zerops-yaml-validation`.
+
+Out of scope, found while probing: `zops env set` fails with `serviceStackNotFound` — the CLI lists
+before writing, i.e. item 41's bug, in the tool rather than in `packages/`. And a `zops deploy` racing
+an env write dies on `userDataSyncRunning` with the app version left `UPLOADING`; a retry of
+`deployAppVersion` on that version does not recover it. Neither is fixed here.

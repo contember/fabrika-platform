@@ -69,12 +69,18 @@ const proxy = (id: string = proxyId, base = 'alpine@3.21'): ZeropsService => ({
 	subdomainAccess: false,
 })
 
-const postgres = (type: 'postgresql:ha@18' | 'postgresql:single@18' = 'postgresql:ha@18'): ZeropsService => ({
+// `autoscalingProfileId` is reported for real: a live `postgresql:ha@18` created with no `profile` at
+// all reads back `oltp-production`, so the double reports what the platform does.
+const postgres = (
+	type: 'postgresql:ha@18' | 'postgresql:single@18' = 'postgresql:ha@18',
+	profile = type === 'postgresql:ha@18' ? 'oltp-production' : 'oltp-hobby',
+): ZeropsService => ({
 	id: postgresId,
 	name: 'postgres',
 	projectId,
 	base: type,
 	status: 'ACTIVE',
+	autoscalingProfileId: profile,
 })
 
 const ensureServiceEnv = (state: FakeState, serviceId: string): Map<string, ZeropsServiceEnv> => {
@@ -274,7 +280,8 @@ describe('Zerops namespace policy and topology', () => {
 			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 		})
 
-		expect(cheap.postgres).toEqual({ type: 'postgresql:ha@18' })
+		// Sized, never defaulted: an HA service with no `profile` silently gets `oltp-production` anyway.
+		expect(cheap.postgres).toEqual({ type: 'postgresql:ha@18', profile: 'oltp-production' })
 		expect(mid.postgres).toBeUndefined()
 		expect(mid.corePackage).toBe('LIGHT')
 		expect(full.postgres).toBeUndefined()
@@ -303,7 +310,7 @@ describe('Zerops namespace policy and topology', () => {
 			projectName: 'cheap-stage',
 			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 		})
-		expect(stageTarget.postgres).toEqual({ type: 'postgresql:single@18' })
+		expect(stageTarget.postgres).toEqual({ type: 'postgresql:single@18', profile: 'oltp-hobby' })
 	})
 
 	test('rejects unsupported PostgreSQL type/profile combinations at the codec boundary', () => {

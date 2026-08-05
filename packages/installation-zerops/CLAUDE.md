@@ -28,3 +28,12 @@ real credentials.
 - Preserve the IAM → Operations → control deployment order. Operations owns
   separate `operationsdb` and `operationsstorage` services; only the proxy may
   expose its ingest and source-map paths.
+- Every managed service names its `profile` explicitly. An import cannot change
+  one afterwards, and omitting it silently buys `oltp-production` on HA.
+- Every setup declares both `run.healthCheck` (liveness) and
+  `deploy.readinessCheck` (the deploy gate), with every duration written as a
+  quoted Go duration inside `[10s, 1h]`. `zerops/validate.ts` retypes the six
+  duration properties the published schema gets wrong; do not widen that list
+  without a live observation.
+- A PostgreSQL URL is always
+  `${<host>_connectionString}/${<host>_dbName}?sslmode=require`.

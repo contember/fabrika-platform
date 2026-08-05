@@ -258,6 +258,125 @@ Consequences:
   and keep the code — otherwise it cannot tell a duplicate key from a missing service
   without leaking.
 
+### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — import semantics, sizing, probes, DSN
+
+Produced with `zops` against the live account, on **throwaway services created and deleted for the
+purpose** (`wu2db`, `wu2st`, `wu2app`, `wu2ha`) so no platform service was touched. The apply command
+is `zops api ImportServiceStack --param id=@project --project fabrika-test --body-file <doc>` in every
+row below.
+
+#### `override` is a name-collision escape, not an update and not a replace
+
+| Behaviour                                                                           | Result                                                                                                                    |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Re-applying an UNCHANGED document with `override: true`                             | **Complete no-op.** Same service ids, no processes, `lastUpdate` does not move — on managed AND runtime services alike    |
+| Re-applying with a CHANGED field (`profile`, `maxContainers`, `objectStorageSize`)  | **Silently ignored.** `zops service export` reads back the original values; no process runs, no error is returned         |
+| Re-applying the same document with `override` REMOVED                               | **400 `serviceStackNameUnavailable`**, "Project has already serviceStack with the same name" — and the WHOLE import fails |
+| That rejection on a MANAGED service                                                 | **Yes.** It fired on `postgresql:single@18` before any runtime service in the document was reached                        |
+| `override: true` on a managed service                                               | **Accepted.** Carried on `postgresql` and `object-storage` through six applies with no error                              |
+| Re-applying a document carrying `startWithoutCode: true` at a service that HAS code | **Destructive.** Starts `stack.deploy`, activates a new EMPTY app version; the running one becomes `BACKUP`               |
+
+Consequences:
+
+- **Upstream is wrong twice.** `override` is documented as runtime-services-only and as a _replace_
+  that forces a redeploy. On this account it applies to every service class, it is REQUIRED on managed
+  ones for a document to be re-appliable at all, and it replaces nothing.
+- **Fabrika writes it on every service** (`compile.ts`), and `assertZeropsInvariants` now refuses a
+  document without it. The claim it supports is "re-appliable", never "reconciling": an import cannot
+  converge an existing service, so a field that must change is changed through the API that owns it
+  (`PUT /service-stack/{id}/autoscaling`, `UpdateObjectStorageSize`, `DisableSubdomainAccess`).
+- **The provisioning document is the dangerous one.** `compileProvisioningYaml` forces
+  `startWithoutCode: true`; applying it a second time wipes every runtime service's code. It belongs to
+  first bring-up only.
+
+#### Autoscaling profiles — what a managed service gets when you say nothing
+
+`zops api GetClientSettingsStackType --param id=@client --param stackTypeId=postgresql` returns each
+version's profile list with an `isDefault` flag and the resource envelope each one applies.
+`zops api GetServiceStack --param id=<id>` reads back `autoscalingProfileId` and `currentAutoscaling`.
+
+| Service                                       | Applied profile                     | Floor per container | CPU mode      |
+| --------------------------------------------- | ----------------------------------- | ------------------- | ------------- |
+| `postgresql:ha@18`, no `profile` written      | **`oltp-production`** (`isDefault`) | 2 cores / 4 GB      | **DEDICATED** |
+| `postgresql:ha@18`, `profile: oltp-staging`   | `oltp-staging`                      | 1 core / 1 GB       | SHARED        |
+| `postgresql:single@18`, no `profile`          | **`oltp-staging`** (`isDefault`)    | 1 core / 1 GB       | SHARED        |
+| `postgresql:single@18`, `profile: oltp-hobby` | `oltp-hobby`                        | 1 core / 0.25 GB    | SHARED        |
+| `alpine/bun@1.3` runtime                      | none (runtimes carry no profile)    | 1 core / 0.125 GB   | SHARED        |
+
+Every profile shares the same ceiling — 8 cores / 48 GB / 250 GB — so a profile chooses the FLOOR and
+the PostgreSQL tuning preset, not the cap. An explicit `profile` in an import document is honoured and
+reads straight back (`wu2db` → `oltp-hobby`); the live `db` service, created with none, reads back
+`oltp-staging`. `oltp-enterprise` is HA-only and `oltp-hobby` is single-only, matching the allowlists
+in `provider-zerops/src/namespace.ts`.
+
+**What a stock installation costs before an application is deployed.** The `standard` tier declares two
+HA PostgreSQL services, i.e. **six database containers**. Left to the default that is 12 dedicated
+cores and 24 GB at idle. Fabrika now states both profiles: `db` keeps `oltp-production` (identity and
+control-plane latency is felt by every request), `operationsdb` takes `oltp-staging` (same redundancy,
+same ceiling, a 1-core/1-GB shared floor — error history is bursty and tolerant of jitter), which
+halves the idle floor of the data plane. The `light` tier is one `postgresql:single@18` at
+`oltp-staging`.
+
+#### Probe durations: the published schema is wrong, and the platform bounds them
+
+Reproduced with `zops validate <file> --project fabrika-test --service <svc> --operation DEPLOY`,
+which calls `POST /service-stack/zerops-yaml-validation` — the same check the deploy runs.
+
+| Behaviour                                                            | Result                                                                                         |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| The published `zerops.yaml` JSON schema's type for all six durations | **`integer`** — in the vendored copy AND in `GetZeropsYamlJsonSchema` fetched today            |
+| Sending an integer                                                   | **Refused.** `yamlValidationInvalidYaml`, `cannot unmarshal !!int into time.Duration`          |
+| Sending a Go duration string (`30s`)                                 | Accepted                                                                                       |
+| Any of the six outside **[10s, 1h]**                                 | **Refused.** `invalid execPeriod <10s, 1h0m0s>` — `5s` and `2h` both fail, `10s` and `1h` pass |
+
+The six are `deploy.readinessCheck.{failureTimeout,retryPeriod}` and
+`run.healthCheck.{failureTimeout,disconnectTimeout,recoveryTimeout,execPeriod}`. **A document that
+satisfies the published schema is undeployable**, so `installation-zerops/zerops/validate.ts` retypes
+exactly those six pointers to `string` before validating, and throws if the published schema ever stops
+saying `integer`. `provider-zerops/src/types.ts` carries the matching `ZeropsDuration` type.
+
+#### A deploy is genuinely gated by `deploy.readinessCheck`
+
+A throwaway `alpine/bun@1.3` service was deployed twice with `zops deploy wu2app ./server.ts
+--zerops-yaml ./zerops.yaml --project fabrika-test`, identical but for whether `/ready` answered 200.
+
+| Deploy                     | App-version status  | Previously active version |
+| -------------------------- | ------------------- | ------------------------- |
+| readiness path answers 200 | `ACTIVE`            | → `BACKUP`                |
+| readiness path answers 503 | **`DEPLOY_FAILED`** | **stays `ACTIVE`**        |
+
+The failing container started cleanly, connected to Postgres and served `/healthz` with 200 throughout;
+only `/ready` was 503, and that alone failed the deploy about 70s after container start with
+`failureTimeout: 60s`. `run.healthCheck` is a different mechanism and gates nothing at deploy time.
+
+#### The PostgreSQL connection target
+
+Read with `zops env show --service <svc> --json`, on a service deliberately NOT named `db`.
+
+| Fact                                                        | Result                                                                                                         |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| The stored `connectionString`                               | The literal template `postgresql://${user}:${password}@${hostname}:${port}` — **no database path**             |
+| `connectionTlsString`                                       | The same with `${portTls}`                                                                                     |
+| `dbName` and `user` on a service named `wu2db`              | **Both `db`.** They do not follow the hostname — every PostgreSQL service names its database and its user `db` |
+| `port` / `portTls`                                          | `5432` / `6432`                                                                                                |
+| `sslmode=disable` on 5432                                   | Connects. `pg_stat_ssl.ssl = false`                                                                            |
+| **`sslmode=require` on 5432**                               | **Connects, `pg_stat_ssl.ssl = true`** — 5432 speaks TLS, contrary to the published documentation              |
+| `sslmode=verify-full` on 5432                               | **Fails**: `self signed certificate`                                                                           |
+| `pg_settings.ssl` server-side on 5432                       | `on`                                                                                                           |
+| `${a_connectionString}` referenced from a DIFFERENT service | Resolves, under `envIsolation: service` — explicit cross-service references are unaffected                     |
+
+So the canonical fabrika DSN on Zerops is
+
+```
+${<host>_connectionString}/${<host>_dbName}?sslmode=require
+```
+
+Both suffixes are load-bearing. Without the database path the driver falls back to the USER name — which
+lands on the right database only because the platform always names both `db`, a convention no document
+states. And `require` is the strongest TLS mode available: it encrypts, and `verify-full` cannot work
+without Zerops' CA. This is still the DIRECT port; 6432 is pgBouncer, whose transaction pooling would
+break the session-level advisory lock the migration runner takes.
+
 ## Fabrika placement mapping
 
 The Fabrika platform project contains:

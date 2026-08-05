@@ -27,6 +27,13 @@ zerops:
         - packages
       cache:
         - node_modules
+    deploy:
+      readinessCheck:
+        httpGet:
+          port: 3000
+          path: "/healthz"
+        retryPeriod: "10s"
+        failureTimeout: "180s"
     run:
       base: alpine/bun@1.3
       initCommands:
@@ -39,6 +46,10 @@ zerops:
         httpGet:
           port: 3000
           path: "/healthz"
+        execPeriod: "10s"
+        disconnectTimeout: "30s"
+        recoveryTimeout: "10s"
+        failureTimeout: "120s"
       crontab:
         - timing: "0 3 * * *"
           command: "bun packages/iam/src/node/prune.ts"
@@ -58,6 +69,13 @@ zerops:
         - packages
       cache:
         - node_modules
+    deploy:
+      readinessCheck:
+        httpGet:
+          port: 3000
+          path: "/healthz"
+        retryPeriod: "10s"
+        failureTimeout: "180s"
     run:
       base: alpine/bun@1.3
       initCommands:
@@ -70,6 +88,10 @@ zerops:
         httpGet:
           port: 3000
           path: "/healthz"
+        execPeriod: "10s"
+        disconnectTimeout: "30s"
+        recoveryTimeout: "10s"
+        failureTimeout: "120s"
       crontab:
         - timing: "* * * * *"
           command: "bun packages/operations/src/node/cron.ts"
@@ -92,6 +114,13 @@ zerops:
         - packages
       cache:
         - node_modules
+    deploy:
+      readinessCheck:
+        httpGet:
+          port: 3000
+          path: "/healthz"
+        retryPeriod: "10s"
+        failureTimeout: "180s"
     run:
       base: alpine/bun@1.3
       initCommands:
@@ -104,6 +133,10 @@ zerops:
         httpGet:
           port: 3000
           path: "/healthz"
+        execPeriod: "10s"
+        disconnectTimeout: "30s"
+        recoveryTimeout: "10s"
+        failureTimeout: "120s"
       crontab:
         - timing: "*/5 * * * *"
           command: "bun packages/control/src/node/cron.ts"
@@ -137,6 +170,13 @@ zerops:
       cache:
         - node_modules
         - "/root/go/pkg/mod"
+    deploy:
+      readinessCheck:
+        httpGet:
+          port: 8081
+          path: "/healthz"
+        retryPeriod: "10s"
+        failureTimeout: "60s"
     run:
       base: alpine@3.21
       ports:
@@ -156,6 +196,10 @@ zerops:
         httpGet:
           port: 8081
           path: "/healthz"
+        execPeriod: "10s"
+        disconnectTimeout: "30s"
+        recoveryTimeout: "10s"
+        failureTimeout: "120s"
       envVariables:
         FABRIKA_PROXY_MANIFEST: "/var/www/proxy.manifest.json"
         FABRIKA_PROXY_PORT: "9000"

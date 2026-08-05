@@ -6,6 +6,9 @@
 // present, and every conditional constraint (`postgresql:ha` profiles, per-type container and resource
 // bounds) holds. It proves NOTHING about whether the platform will accept it, whether the referenced
 // service variables resolve, or whether the thing boots.
+//
+// And the two are not the same thing: the published `zerops.yaml` schema is provably WRONG about the six
+// probe durations, so this file corrects them before validating. See `DURATION_POINTERS`.
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -22,16 +25,66 @@ const FILES: Record<SchemaKind, string> = {
 
 const cache = new Map<SchemaKind, unknown>()
 
-/** The vendored schema document. See `./schemas/refresh.ts` for where each comes from. */
+/**
+ * The one place the published schema is knowingly wrong, and the platform proves it.
+ *
+ * All six probe durations are published as `integer`. Send an integer and the platform's own validator
+ * (`POST /service-stack/zerops-yaml-validation`) answers `yamlValidationInvalidYaml` with
+ * `cannot unmarshal !!int into time.Duration`; send `"30s"` and it accepts. So a document that satisfies
+ * the published contract is undeployable, and the contract loses — this repository's rule is that the
+ * account is the authority and the documentation is a hypothesis.
+ *
+ * Kept as an explicit pointer list, and applied by `correct()` below, which THROWS if a pointer no
+ * longer holds the value it is correcting. That is the same bargain `unsupportedKeywords()` makes: the
+ * day Zerops publishes `string` here, the generator fails loudly instead of quietly masking the change.
+ */
+const DURATION_POINTERS: Record<SchemaKind, string[]> = {
+	import: [],
+	'zerops-yaml': [
+		'/properties/zerops/items/properties/deploy/properties/readinessCheck/properties/failureTimeout',
+		'/properties/zerops/items/properties/deploy/properties/readinessCheck/properties/retryPeriod',
+		'/properties/zerops/items/properties/run/properties/healthCheck/properties/failureTimeout',
+		'/properties/zerops/items/properties/run/properties/healthCheck/properties/disconnectTimeout',
+		'/properties/zerops/items/properties/run/properties/healthCheck/properties/recoveryTimeout',
+		'/properties/zerops/items/properties/run/properties/healthCheck/properties/execPeriod',
+	],
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+
+/** Retype one published `integer` property as `string`, refusing if it is no longer an `integer`. */
+const correct = (schema: unknown, pointer: string): void => {
+	let node: unknown = schema
+	for (const segment of pointer.slice(1).split('/')) {
+		if (!isRecord(node)) {
+			throw new Error(`zerops schema correction: \`${pointer}\` does not resolve — the published schema has moved`)
+		}
+		node = node[segment]
+	}
+	if (!isRecord(node) || node['type'] !== 'integer') {
+		throw new Error(
+			`zerops schema correction: \`${pointer}\` is no longer \`type: integer\` — re-check whether the platform still wants a duration string`,
+		)
+	}
+	node['type'] = 'string'
+}
+
+/** The vendored schema document, with the corrections above applied. See `./schemas/refresh.ts` for its source. */
 export const loadSchema = (kind: SchemaKind): unknown => {
 	const cached = cache.get(kind)
 	if (cached !== undefined) {
 		return cached
 	}
 	const parsed: unknown = JSON.parse(readFileSync(resolve(import.meta.dir, 'schemas', FILES[kind]), 'utf8'))
+	for (const pointer of DURATION_POINTERS[kind]) {
+		correct(parsed, pointer)
+	}
 	cache.set(kind, parsed)
 	return parsed
 }
+
+/** The pointers `loadSchema` retypes, so a test can assert the correction is still needed and still narrow. */
+export const correctedSchemaPointers = (kind: SchemaKind): string[] => [...DURATION_POINTERS[kind]]
 
 /**
  * Parse YAML text the way the platform would. Comments and the generated banner are stripped by the

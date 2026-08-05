@@ -23,6 +23,7 @@ services:
     envIsolation: service
     override: true
     priority: 100
+    profile: oltp-production
   - hostname: storage
     type: object-storage
     envIsolation: service
@@ -36,6 +37,7 @@ services:
     envIsolation: service
     override: true
     priority: 100
+    profile: oltp-staging
   - hostname: operationsstorage
     type: object-storage
     envIsolation: service

@@ -24,6 +24,12 @@ import type { ZeropsProjectSpec, ZeropsResourceContext, ZeropsServiceSpec, Zerop
 /** The ONLY value fabrika ever writes for `envIsolation`, at either level. Not a default — an assertion. */
 export const ENV_ISOLATION: 'service' = 'service'
 
+/**
+ * The ONLY value fabrika ever writes for `override`, on EVERY service class including managed ones.
+ * Live-verified: without it a re-apply is `400 serviceStackNameUnavailable` — see `compileService`.
+ */
+export const OVERRIDE: true = true
+
 /** A compiled import document: exactly the two top-level keys the platform's schema defines. */
 export interface ZeropsImportDocument {
 	/** Present only when fabrika is creating/reconciling the project itself. */
@@ -47,6 +53,24 @@ export interface CompileInput {
  * Build one service entry. `envIsolation` and `override` are written HERE, by the compiler, from
  * constants — never copied from the app and never conditional. Widening the spread to `...spec` would be
  * the bug: it would let an untyped config smuggle an `envIsolation` in, which is why the fields are listed.
+ *
+ * ── What `override: true` actually does ───────────────────────────────────────────────────────────
+ *
+ * Settled against a live account, and it is neither what the published documentation says nor what this
+ * file used to claim. It means **"tolerate a hostname that already exists"** — nothing more:
+ *
+ *   • WITHOUT it, re-applying a document that names an existing service is rejected outright,
+ *     `400 serviceStackNameUnavailable`, and the whole document fails with it.
+ *   • WITH it, an existing service is left EXACTLY as it is. A changed `profile`, `maxContainers` or
+ *     `objectStorageSize` in the document is silently ignored; no process runs; `lastUpdate` does not
+ *     move. It is not an update, and it is not the destructive replace upstream describes.
+ *   • Upstream says the field is runtime-services-only. It is not: a managed `postgresql` or
+ *     `object-storage` service accepts it, and NEEDS it — without it a re-apply fails on the database
+ *     before it ever reaches a runtime service.
+ *
+ * So it is written on every service, and the reason is re-appliability, not reconciliation. Nothing in
+ * this compiler can converge an existing service; a field that must change is changed through the API
+ * that owns it (`PUT /service-stack/{id}/autoscaling`, `UpdateObjectStorageSize`, …).
  */
 const compileService = (spec: ZeropsServiceSpec, startWithoutCode: boolean | undefined): ZeropsImportService => {
 	const service: ZeropsImportService = {
@@ -57,9 +81,9 @@ const compileService = (spec: ZeropsServiceSpec, startWithoutCode: boolean | und
 		// because the schema says a service-level value overrides the project's — so this holds even for a
 		// project fabrika did not create and cannot correct (`RequestPutProject` has no `envIsolation`).
 		envIsolation: ENV_ISOLATION,
-		// Re-applying the document updates the existing service instead of colliding with it: the whole
-		// idempotency claim of the `apply-import` step (ADR-0003).
-		override: true,
+		// Re-applying the document does not COLLIDE with the existing services (see above — it also does
+		// not update them). That is the whole idempotency claim of the `apply-import` step (ADR-0003).
+		override: OVERRIDE,
 	}
 	if (spec.nginxConfig !== undefined) {
 		service.nginxConfig = spec.nginxConfig
@@ -179,6 +203,14 @@ export const assertZeropsInvariants = (document: ZeropsImportDocument): void => 
 		if (service.envIsolation !== ENV_ISOLATION) {
 			throw new Error(
 				`zerops: service \`${service.hostname}\` envIsolation must be \`${ENV_ISOLATION}\`, got \`${String(service.envIsolation)}\` (ADR-0004)`,
+			)
+		}
+		// Every service class, managed included. A document missing it anywhere cannot be re-applied at
+		// all: the platform answers `400 serviceStackNameUnavailable` on the first hostname that exists
+		// and rejects the whole import, so one omission breaks every later apply, not just that service.
+		if (service.override !== OVERRIDE) {
+			throw new Error(
+				`zerops: service \`${service.hostname}\` must carry \`override: true\`; without it a re-apply is rejected as a name collision`,
 			)
 		}
 		if (service.envSecrets !== undefined || service.dotEnvSecrets !== undefined) {
@@ -339,6 +371,12 @@ export const compileImportYaml = (input: CompileInput): { document: ZeropsImport
  *
  * Called by the control plane at EDIT time, not by the driver: on Zerops, pushing secrets is not a deploy
  * step at all.
+ *
+ * **This document is the one that is NOT safe to re-apply, and `override` does not make it safe.**
+ * Verified live: re-applying it at a service that already carries code starts a `stack.deploy` and
+ * activates a new, EMPTY app version — the running code becomes a `BACKUP`. The steady-state document
+ * (no `startWithoutCode`) is a complete no-op on the same services. So this form belongs to first
+ * bring-up only; anything that reconciles an existing project applies `compileImportYaml`.
  */
 export const compileProvisioningYaml = (input: Omit<CompileInput, 'startWithoutCode'>): { document: ZeropsImportDocument; yaml: string } =>
 	compileImportYaml({ ...input, startWithoutCode: true })
