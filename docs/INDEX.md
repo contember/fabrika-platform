@@ -24,7 +24,10 @@ that supersedes the four which decided it in stages.
 
 ## Active sprints
 
-None. The auth-hardening sprint shipped on 2026-08-05 —
+- [`auth-track-closeout`](sprints/sprint-2026-08-05-auth-track-closeout.md) — the last five
+  Access-plane items, so the only auth work left is work nobody has decided yet.
+
+The auth-hardening sprint that preceded it shipped on 2026-08-05 —
 [archive](archive/sprint-2026-08-04-auth-hardening.md).
 
 ## What's hot
