@@ -28,7 +28,7 @@ import type {
 } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { prop } from '../json'
-import { handleMintHttp, handleRpcHttp, isMintPath, isRpcPath, MINT_KEY_PATH, MINT_SESSION_PATH } from '../rpc-http'
+import { handleMintHttp, handleRpcHttp, isMintPath, isRpcPath, MINT_EXCHANGE_PATH, MINT_KEY_PATH, MINT_SESSION_PATH } from '../rpc-http'
 
 const KEY = 'rpc-test-key-0123456789abcdefghij'
 const BASE = 'https://iam.test'
@@ -38,7 +38,12 @@ interface Recorder extends IamRpc, IamHandoffRpc {
 	calls: { method: string; input: unknown }[]
 }
 
-function recorder(): Recorder {
+/** Results a test wants to override; everything else keeps the canned success below. */
+interface Canned {
+	exchangeAuthCode?: ExchangeAuthCodeResult
+}
+
+function recorder(canned: Canned = {}): Recorder {
 	const calls: { method: string; input: unknown }[] = []
 	const note = (method: string, input: unknown): void => {
 		calls.push({ method, input })
@@ -55,7 +60,9 @@ function recorder(): Recorder {
 		},
 		exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {
 			note('exchangeAuthCode', input)
-			return Promise.resolve({ ok: true, session: 'px_app_session', returnUrl: 'https://app.test/private', expiresAt: 99 })
+			return Promise.resolve(
+				canned.exchangeAuthCode ?? { ok: true, session: 'px_app_session', returnUrl: 'https://app.test/private', expiresAt: 99 },
+			)
 		},
 		issueKey(input: IssueKeyInput): Promise<IssueKeyResult> {
 			note('issueKey', input)
@@ -293,12 +300,12 @@ describe('an empty body', () => {
 describe('the proxy mint surface', () => {
 	// The contract is `packages/proxy/src/iam.ts` (`HttpIamGateway`). Deliberately NOT imported here:
 	// coupling this suite to a package another agent is actively building would make its churn look
-	// like a failure in mine. What is asserted instead is every shape that file reads — the two paths,
-	// the POST verb, the request bodies, and "a decided outcome is always 200".
+	// like a failure in mine. What is asserted instead is every shape that file reads — the three
+	// paths, the POST verb, the request bodies, and "a decided outcome is always 200".
 	const PROXY_KEY = 'proxy-test-key-0123456789abcdefghij'
 
-	function mint(path: string, body: unknown, key: string | null = PROXY_KEY): { rpc: Recorder; response: Promise<Response> } {
-		const rpc = recorder()
+	function mint(path: string, body: unknown, key: string | null = PROXY_KEY, canned: Canned = {}): { rpc: Recorder; response: Promise<Response> } {
+		const rpc = recorder(canned)
 		const headers = new Headers({ 'content-type': 'application/json', accept: 'application/json' })
 		if (key !== null) {
 			headers.set('authorization', `Bearer ${key}`)
@@ -307,16 +314,19 @@ describe('the proxy mint surface', () => {
 		return { rpc, response: handleMintHttp(request, rpc, PROXY_KEY) }
 	}
 
-	test('claims exactly the two contract paths and nothing else under /auth', () => {
+	test('claims exactly the three contract paths and nothing else under /auth', () => {
 		expect(MINT_SESSION_PATH).toBe('/auth/mint/session')
 		expect(MINT_KEY_PATH).toBe('/auth/mint/key')
+		expect(MINT_EXCHANGE_PATH).toBe('/auth/mint/exchange')
 		expect(isMintPath(MINT_SESSION_PATH)).toBe(true)
 		expect(isMintPath(MINT_KEY_PATH)).toBe(true)
+		expect(isMintPath(MINT_EXCHANGE_PATH)).toBe(true)
 		// The public auth routes must keep reaching `handleAuth`, so nothing else here is claimed.
 		expect(isMintPath('/auth/login')).toBe(false)
 		expect(isMintPath('/auth/callback')).toBe(false)
 		expect(isMintPath('/auth/mint')).toBe(false)
 		expect(isMintPath('/auth/mint/session/extra')).toBe(false)
+		expect(isMintPath('/auth/mint/exchange/extra')).toBe(false)
 	})
 
 	test('/auth/mint/session forwards {app, session, requestId} to mintToken', async () => {
@@ -336,6 +346,55 @@ describe('the proxy mint surface', () => {
 		const res = await response
 		expect(res.status).toBe(200)
 		expect(rpc.calls).toEqual([{ method: 'mintFromKey', input: { app: 'opice', key: 'px_value', requestId: 'r1' } }])
+	})
+
+	test('/auth/mint/exchange forwards {app, code, requestId} to exchangeAuthCode', async () => {
+		// ADR-0021's third endpoint. It was added to `isMintPath` and to the dispatch without ever being
+		// named here, so a drift in either half would have shown up only as a 503 on the Zerops path.
+		const { rpc, response } = mint(MINT_EXCHANGE_PATH, { app: 'opice', code: 'handoff-code-value', requestId: 'r1' })
+		const res = await response
+		expect(res.status).toBe(200)
+		expect(rpc.calls).toEqual([{ method: 'exchangeAuthCode', input: { app: 'opice', code: 'handoff-code-value', requestId: 'r1' } }])
+		const body: unknown = await res.json()
+		// The four fields `HttpIamGateway.exchangeAuthCode` reads off a success. It raises on any of them
+		// missing or empty, which the proxy then answers as a 503.
+		expect(prop(body, 'ok')).toBe(true)
+		expect(prop(body, 'session')).toBe('px_app_session')
+		expect(prop(body, 'returnUrl')).toBe('https://app.test/private')
+		expect(prop(body, 'expiresAt')).toBe(99)
+	})
+
+	test('a REFUSED redemption is 200 with a reason, exactly like a refused mint', async () => {
+		// A spent or expired code is the ordinary case — every successful sign-in leaves one behind. A
+		// status code here would turn each of them into an `IamUnavailableError` and a 503.
+		const { response } = mint(MINT_EXCHANGE_PATH, { app: 'opice', code: 'spent', requestId: 'r1' }, PROXY_KEY, {
+			exchangeAuthCode: { ok: false, reason: 'expired_code' },
+		})
+		const res = await response
+		expect(res.status).toBe(200)
+		const body: unknown = await res.json()
+		expect(prop(body, 'ok')).toBe(false)
+		expect(prop(body, 'reason')).toBe('expired_code')
+	})
+
+	test('an exchange missing its code is a 400 that never reaches the method', async () => {
+		const { rpc, response } = mint(MINT_EXCHANGE_PATH, { app: 'opice', requestId: 'r1' })
+		const res = await response
+		expect(res.status).toBe(400)
+		expect(rpc.calls).toEqual([])
+		const body: unknown = await res.json()
+		// Names the field, never the value — a code is a credential for as long as it lives.
+		expect(typeof body === 'object' && body !== null && 'error' in body ? String(body.error) : '').toContain("'code'")
+	})
+
+	test('the exchange is closed without the proxy key, and disabled entirely without one configured', async () => {
+		for (const key of [null, 'wrong-key-but-long-enough-0123456789']) {
+			const { rpc, response } = mint(MINT_EXCHANGE_PATH, { app: 'opice', code: 'c', requestId: 'r1' }, key)
+			expect((await response).status).toBe(401)
+			expect(rpc.calls).toEqual([])
+		}
+		const request = new Request(`${BASE}${MINT_EXCHANGE_PATH}`, { method: 'POST', body: '{}' })
+		expect((await handleMintHttp(request, recorder(), '')).status).toBe(404)
 	})
 
 	test('a DENIAL is 200 with a reason — the gateway must read "no", not "unavailable"', async () => {

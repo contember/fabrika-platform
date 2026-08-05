@@ -38,9 +38,12 @@ export const PERMS: PermissionEntry[] = [{ action: 'demo.read', scope: null, sou
 const primary = await generateKeyPair('ES256')
 /** A key that is NEVER published — tokens signed with it must fail verification. */
 const foreign = await generateKeyPair('ES256')
+/** A key ROTATED IN: unpublished until a test serves `ROTATED_JWKS`, after which it must verify. */
+const rotated = await generateKeyPair('ES256')
 
 export const privateKey = primary.privateKey
 export const foreignPrivateKey = foreign.privateKey
+export const rotatedPrivateKey = rotated.privateKey
 
 async function jwksOf(key: KeyLike, kid: string): Promise<Jwks> {
 	const jwk = await exportJWK(key)
@@ -48,6 +51,8 @@ async function jwksOf(key: KeyLike, kid: string): Promise<Jwks> {
 }
 
 export const PUBLIC_JWKS: Jwks = await jwksOf(primary.publicKey, 'k1')
+/** What IAM serves AFTER a rotation: `k1` is gone and `rotatedPrivateKey` signs as `k2`. */
+export const ROTATED_JWKS: Jwks = await jwksOf(rotated.publicKey, 'k2')
 
 export interface SignOptions {
 	ttlSeconds?: number

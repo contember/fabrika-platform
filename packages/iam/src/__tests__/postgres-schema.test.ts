@@ -19,7 +19,7 @@ import { prop } from '../json'
 import { applyMigrations } from '../node/migrate'
 import type { Runtime } from '../node/runtime'
 import { createFetchHandler } from '../node/server'
-import { MINT_KEY_PATH, MINT_SESSION_PATH } from '../rpc-http'
+import { MINT_EXCHANGE_PATH, MINT_KEY_PATH, MINT_SESSION_PATH } from '../rpc-http'
 import { hashToken } from '../secret'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
 
@@ -580,6 +580,150 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 	})
 })
 
+describe.skipIf(!hasPostgres)('HandoffRepository on Postgres — the ADR-0021 persistence layer', () => {
+	// The half of `handoff.test.ts` that had never run on anything but SQLite. `consumeCode` is the
+	// reason this block exists: its at-most-once guarantee is `changes === 0` on a guarded UPDATE, and
+	// on Postgres that number comes from string-matching a command tag in `sql-postgres.ts`. Wrong in
+	// either direction and it is silent — every redemption answers `invalid_code` and cross-host SSO is
+	// dead, or single-use is lost and a code can be replayed.
+
+	/** A user with a live IAM login, which every code has to hang off (`parent_session_id` is a FK). */
+	async function login(suffix: string): Promise<{ principalId: string; sessionId: string }> {
+		const principal = await db.principals.createUser(`sub-${suffix}`, `${suffix}@x.cz`)
+		const sessionId = await db.sessions.createSession({
+			tokenHash: `handoff-${suffix}`,
+			principalId: principal.id,
+			idpSub: `sub-${suffix}`,
+			email: `${suffix}@x.cz`,
+			expiresAt: now() + 3600,
+		})
+		return { principalId: principal.id, sessionId }
+	}
+
+	test('return origins: set, list, and replace — which is how an origin is REMOVED', async () => {
+		await reset()
+		expect(await db.handoff.listReturnOrigins('notes')).toEqual([])
+
+		await db.handoff.setReturnOrigins('notes', ['https://b.test', 'https://a.test'])
+		// Ordered by origin, so the registry reads the same on both engines.
+		expect(await db.handoff.listReturnOrigins('notes')).toEqual(['https://a.test', 'https://b.test'])
+
+		// Declarative replacement: stating a smaller set is how an operator un-registers one. The DELETE
+		// and the INSERTs are one batch, so there is no window in which the app has no origin at all.
+		await db.handoff.setReturnOrigins('notes', ['https://a.test'])
+		expect(await db.handoff.listReturnOrigins('notes')).toEqual(['https://a.test'])
+
+		// The registry is per app — one app's set never answers for another's.
+		await db.handoff.setReturnOrigins('other', ['https://other.test'])
+		expect(await db.handoff.listReturnOrigins('notes')).toEqual(['https://a.test'])
+		expect(await db.handoff.listReturnOrigins('other')).toEqual(['https://other.test'])
+
+		await db.handoff.setReturnOrigins('notes', [])
+		expect(await db.handoff.listReturnOrigins('notes')).toEqual([])
+	})
+
+	test('a code is consumed AT MOST ONCE — the guarded UPDATE, read through a command tag', async () => {
+		await reset()
+		const { sessionId } = await login('consume')
+		await db.handoff.issueCode({
+			codeHash: 'hash-consume',
+			app: 'notes',
+			parentSessionId: sessionId,
+			returnUrl: 'https://a.test/private',
+			expiresAt: now() + 120,
+		})
+
+		const consumed = await db.handoff.consumeCode('hash-consume', now())
+		expect(consumed?.app).toBe('notes')
+		expect(consumed?.parent_session_id).toBe(sessionId)
+		expect(consumed?.return_url).toBe('https://a.test/private')
+		// The row is read only AFTER it has been marked, so `consumed_at` is already set on what comes back.
+		expect(typeof consumed?.consumed_at).toBe('number')
+
+		// The replay. `changes` must be 0 here; if the driver reported the SELECT-shaped count instead,
+		// this would hand a second caller the same session.
+		expect(await db.handoff.consumeCode('hash-consume', now())).toBeNull()
+		// …and an unknown code is null too, which is what makes `findCode` necessary to tell them apart.
+		expect(await db.handoff.consumeCode('hash-never-issued', now())).toBeNull()
+	})
+
+	test('an EXPIRED code cannot be consumed, and findCode is what tells it from an unknown one', async () => {
+		await reset()
+		const { sessionId } = await login('expiry')
+		await db.handoff.issueCode({
+			codeHash: 'hash-expired',
+			app: 'notes',
+			parentSessionId: sessionId,
+			returnUrl: 'https://a.test/private',
+			expiresAt: now() - 1,
+		})
+
+		expect(await db.handoff.consumeCode('hash-expired', now())).toBeNull()
+		// The row still exists, which is the whole distinction: `expired_code` vs `invalid_code`.
+		expect((await db.handoff.findCode('hash-expired'))?.app).toBe('notes')
+		expect(await db.handoff.findCode('hash-never-issued')).toBeNull()
+	})
+
+	test('pruneCodes removes spent and expired codes and leaves a live one alone', async () => {
+		await reset()
+		const { sessionId } = await login('prune')
+		const issue = (codeHash: string, expiresAt: number): Promise<string> =>
+			db.handoff.issueCode({ codeHash, app: 'notes', parentSessionId: sessionId, returnUrl: 'https://a.test/', expiresAt })
+
+		await issue('prune-live', now() + 120)
+		await issue('prune-expired', now() - 1)
+		await issue('prune-spent', now() + 120)
+		await db.handoff.consumeCode('prune-spent', now())
+
+		expect(await db.handoff.pruneCodes(now())).toBe(2)
+		expect(await db.handoff.findCode('prune-live')).not.toBeNull()
+		expect(await db.handoff.findCode('prune-expired')).toBeNull()
+		expect(await db.handoff.findCode('prune-spent')).toBeNull()
+		// Idempotent: the cron runs on every tick and must find nothing the second time.
+		expect(await db.handoff.pruneCodes(now())).toBe(0)
+	})
+
+	test('getActiveSessionById is how a code reaches its login — and it dies with the parent', async () => {
+		// The handoff holds the login by ID, not by a hash it must not store, so this is the read that
+		// decides whether a code outlives a logout. Its LEFT JOIN and three-valued-logic guard are the
+		// same ones behind "IAM logout revokes every app session".
+		await reset()
+		const { principalId, sessionId } = await login('by-id')
+		expect((await db.sessions.getActiveSessionById(sessionId))?.principal_id).toBe(principalId)
+		expect(await db.sessions.getActiveSessionById('no-such-session')).toBeNull()
+
+		const child = await db.sessions.createSession({
+			tokenHash: 'handoff-child',
+			principalId,
+			idpSub: 'sub-by-id',
+			expiresAt: now() + 3600,
+			app: 'notes',
+			parentSessionId: sessionId,
+		})
+		expect((await db.sessions.getActiveSessionById(child))?.app).toBe('notes')
+
+		await db.sessions.revokeSessionById(sessionId)
+		expect(await db.sessions.getActiveSessionById(sessionId)).toBeNull()
+		// The child's own row is untouched; it stops resolving because the JOIN re-checks the parent.
+		expect((await db.sessions.getSessionById(child))?.revoked_at).toBeNull()
+		expect(await db.sessions.getActiveSessionById(child)).toBeNull()
+	})
+
+	test('a code dies with the login it was issued against — ON DELETE CASCADE, on this engine too', async () => {
+		await reset()
+		const { principalId, sessionId } = await login('cascade')
+		await db.handoff.issueCode({
+			codeHash: 'hash-cascade',
+			app: 'notes',
+			parentSessionId: sessionId,
+			returnUrl: 'https://a.test/',
+			expiresAt: now() + 120,
+		})
+		await db.principals.deletePrincipal(principalId)
+		expect(await db.handoff.findCode('hash-cascade')).toBeNull()
+	})
+})
+
 describe.skipIf(!hasPostgres)('password repository on Postgres', () => {
 	test('completes an action atomically and preserves OIDC sessions', async () => {
 		await reset()
@@ -838,6 +982,51 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 		expect(typeof prop(body, 'token')).toBe('string')
 	})
 
+	test('POST /auth/mint/exchange redeems a handoff code for an app-bound session, once', async () => {
+		// ADR-0021's cold path on the engine it exists FOR: the shared cookie is what a Cloudflare
+		// installation falls back on, so on Zerops this is the only way a browser ever gets a session.
+		await reset()
+		const principal = await db.principals.createUser('sub-exchange', 'exchange@x.cz')
+		const parent = await db.sessions.createSession({
+			tokenHash: await hashToken('parent-session-plaintext'),
+			principalId: principal.id,
+			idpSub: 'sub-exchange',
+			email: 'exchange@x.cz',
+			expiresAt: now() + 3600,
+		})
+		const code = 'handoff-code-plaintext'
+		await db.handoff.issueCode({
+			codeHash: await hashToken(code),
+			app: 'opice',
+			parentSessionId: parent,
+			returnUrl: 'https://opice.test/private?page=2',
+			expiresAt: now() + 120,
+		})
+
+		const h = handler()
+		const res = await h(mint(MINT_EXCHANGE_PATH, { app: 'opice', code, requestId: 'req-exchange-1' }))
+		expect(res.status).toBe(200)
+		const body: unknown = await res.json()
+		// The four fields `HttpIamGateway.exchangeAuthCode` reads; an empty or absent one is a 503 there.
+		expect(prop(body, 'ok')).toBe(true)
+		expect(prop(body, 'returnUrl')).toBe('https://opice.test/private?page=2')
+		expect(prop(body, 'expiresAt')).toBe(now() + 3600)
+		const session = prop(body, 'session')
+		expect(typeof session).toBe('string')
+
+		// The session it handed back is real, app-bound, and derived from the login.
+		const child = await db.sessions.getActiveSessionByHash(await hashToken(typeof session === 'string' ? session : ''))
+		expect(child?.app).toBe('opice')
+		expect(child?.parent_session_id).toBe(parent)
+
+		// Single use, through the guarded UPDATE — this is the assertion the command-tag decoding backs.
+		const replay = await h(mint(MINT_EXCHANGE_PATH, { app: 'opice', code, requestId: 'req-exchange-2' }))
+		expect(replay.status).toBe(200)
+		const replayed: unknown = await replay.json()
+		expect(prop(replayed, 'ok')).toBe(false)
+		expect(prop(replayed, 'reason')).toBe('expired_code')
+	})
+
 	test('a DENIAL is a 200 result, never a status code — the gateway reads "no", not "unavailable"', async () => {
 		await reset()
 		const h = handler()
@@ -846,6 +1035,7 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 				[MINT_SESSION_PATH, { app: 'opice', session: null, requestId: 'r' }, 'no_session'],
 				[MINT_SESSION_PATH, { app: 'opice', session: 'nope', requestId: 'r' }, 'invalid_session'],
 				[MINT_KEY_PATH, { app: 'opice', key: 'px_nope', requestId: 'r' }, 'invalid_key'],
+				[MINT_EXCHANGE_PATH, { app: 'opice', code: 'never-issued', requestId: 'r' }, 'invalid_code'],
 			] as const
 		) {
 			const res = await h(mint(path, body))

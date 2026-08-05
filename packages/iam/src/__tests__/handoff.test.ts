@@ -13,10 +13,11 @@ import { LOCAL_DEV_ADMIN_ID } from '../auth'
 import { handleAuth } from '../auth/routes'
 import type { Env, RequestContext } from '../env'
 import { exchangeAuthCode, issueAuthCode, normalizeOrigin, resolveReturnUrl } from '../handoff'
+import { prop } from '../json'
 import { hashToken } from '../secret'
 import type { Services } from '../services'
 import { mintToken } from '../tokens'
-import { createHarness, seedAppAction, seedGrant, seedUser } from './helpers/harness'
+import { createHarness, type Harness, seedAppAction, seedGrant, seedUser } from './helpers/harness'
 
 const ISSUER = 'https://iam.test'
 const APP_ORIGIN = 'https://app.test'
@@ -320,13 +321,21 @@ describe('GET /auth/login as a handoff', () => {
 })
 
 describe('registering return origins', () => {
+	interface AdminStack {
+		harness: Harness
+		/** The admin's own `px_session` — reused as an ordinary login in the end-to-end case below. */
+		session: string
+		adminId: string
+		call(method: string, input: unknown): Promise<Response>
+	}
+
 	/** Drive the real admin RPC: an admin session, a registered app, and the shipped router. */
-	async function adminCall(input: unknown): Promise<Response> {
+	async function adminStack(): Promise<AdminStack> {
 		const harness = createHarness()
 		const adminId = seedUser(harness.sqlite, { sub: 'sub-admin', email: 'admin@contember.com' })
 		seedGrant(harness.sqlite, adminId, 'admin')
 		seedAppAction(harness.sqlite, 'notes', 'note.read')
-		const session = await harness.signSession(adminId)
+		const session = await harness.signSession(adminId, { email: 'admin@contember.com', idpSub: 'sub-admin' })
 		const env: Env = {
 			DB: unusedDatabase,
 			REPOSITORIES: harness.repositories,
@@ -345,15 +354,31 @@ describe('registering return origins', () => {
 			OIDC_SCOPES: '',
 			OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
 		}
-		return createIamApp().fetch(
-			new Request(`${ISSUER}/admin/rpc`, {
-				method: 'POST',
-				headers: { 'content-type': 'application/json', origin: ISSUER, cookie: `${SESSION_COOKIE}=${session}` },
-				body: JSON.stringify({ method: 'apps.setReturnOrigins', input }),
-			}),
-			env,
-			{ waitUntil() {} },
-		)
+		return {
+			harness,
+			session,
+			adminId,
+			call(method: string, input: unknown): Promise<Response> {
+				return createIamApp().fetch(
+					new Request(`${ISSUER}/admin/rpc`, {
+						method: 'POST',
+						headers: { 'content-type': 'application/json', origin: ISSUER, cookie: `${SESSION_COOKIE}=${session}` },
+						body: JSON.stringify({ method, input }),
+					}),
+					env,
+					{ waitUntil() {} },
+				)
+			},
+		}
+	}
+
+	async function adminCall(input: unknown): Promise<Response> {
+		return (await adminStack()).call('apps.setReturnOrigins', input)
+	}
+
+	/** The `origins` array off a `{ result: ReturnOriginsDto }` envelope, read structurally. */
+	async function returnedOrigins(response: Response): Promise<unknown> {
+		return prop(prop(await response.json(), 'result'), 'origins')
 	}
 
 	test('an unknown app is a 404, reported before anything is said about the origins', async () => {
@@ -366,6 +391,90 @@ describe('registering return origins', () => {
 	test('an empty set is refused — it is indistinguishable from never having registered', async () => {
 		const response = await adminCall({ app: 'notes', origins: [] })
 		expect(response.status).toBe(400)
+	})
+
+	test('every origin is CANONICALIZED before it is stored, and the answer states what was stored', async () => {
+		// The function's stated purpose: an operator cannot register `https://App.Example.com/` and then
+		// wonder why `https://app.example.com` is refused. `normalizeOrigin` is the one place that
+		// decides what canonical means, and it must run on this side of the write.
+		const stack = await adminStack()
+		const response = await stack.call('apps.setReturnOrigins', {
+			app: 'notes',
+			origins: ['https://App.Test/some/path?q=1', 'HTTPS://Other.Test:443', 'http://dev.test:8080/'],
+		})
+		expect(response.status).toBe(200)
+		const stored = ['https://app.test', 'https://other.test', 'http://dev.test:8080']
+		expect(await returnedOrigins(response)).toEqual(stored)
+		// `listReturnOrigins` orders by origin, so compare as sets rather than pinning an order twice.
+		expect((await stack.harness.repositories.handoff.listReturnOrigins('notes')).slice().sort()).toEqual(stored.slice().sort())
+	})
+
+	test('duplicate SPELLINGS of one origin collapse to a single row', async () => {
+		// Without the de-duplication these are three values that canonicalize to one, and the second
+		// INSERT violates the (app, origin) primary key — a 500 for what is an obvious operator input.
+		const stack = await adminStack()
+		const response = await stack.call('apps.setReturnOrigins', {
+			app: 'notes',
+			origins: ['https://app.test', 'https://APP.test/', 'https://app.test:443/deep/path'],
+		})
+		expect(response.status).toBe(200)
+		expect(await returnedOrigins(response)).toEqual(['https://app.test'])
+		expect(await stack.harness.repositories.handoff.listReturnOrigins('notes')).toEqual(['https://app.test'])
+	})
+
+	test('a value that is not an absolute http(s) origin is a 400, and NOTHING is written', async () => {
+		for (const bad of ['javascript:alert(1)', 'ftp://app.test', '/private', 'app.test', '']) {
+			const stack = await adminStack()
+			// A valid origin first, so a partial write would be visible: the whole call must be refused.
+			const response = await stack.call('apps.setReturnOrigins', { app: 'notes', origins: ['https://app.test', bad] })
+			expect(`${bad}: ${response.status}`).toBe(`${bad}: 400`)
+			expect(await stack.harness.repositories.handoff.listReturnOrigins('notes')).toEqual([])
+		}
+	})
+
+	test('the change is audited, with the CANONICAL set an operator can compare against', async () => {
+		const stack = await adminStack()
+		expect((await stack.call('apps.setReturnOrigins', { app: 'notes', origins: ['https://App.Test/'] })).status).toBe(200)
+		const [event] = await stack.harness.repositories.audit.listAuditEvents({ limit: 10, action: 'iam.app.return-origins.set' })
+		expect(event?.resource_type).toBe('app')
+		expect(event?.resource_id).toBe('notes')
+		expect(event?.principal_id).toBe(stack.adminId)
+		expect(event?.metadata).toBe(JSON.stringify({ origins: ['https://app.test'] }))
+	})
+
+	test('what the admin API stores and what a login validates against are canonicalized THE SAME WAY', async () => {
+		// The two ends of one rule, pinned to each other: `setReturnOriginsUseCase` normalizes on the way
+		// in and `resolveReturnUrl` normalizes on the way out. If either stopped, an operator would
+		// register an origin through the console and every cross-host sign-in would still 400 — with the
+		// registry looking perfectly correct in the admin UI.
+		const stack = await adminStack()
+		expect((await stack.call('apps.setReturnOrigins', { app: 'notes', origins: [`${APP_ORIGIN.toUpperCase()}/`] })).status).toBe(200)
+
+		const services = stack.harness.makeServices({
+			issuer: ISSUER,
+			environment: 'stage',
+			authentication: { oidc: false, password: true },
+		})
+		const response = await handleAuth(
+			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private?page=2`)}`, {
+				headers: { Cookie: `${SESSION_COOKIE}=${stack.session}` },
+			}),
+			services,
+			AUTH_ENV,
+			new TestContext(),
+		)
+		expect(response.status).toBe(302)
+		const location = new URL(response.headers.get('location') ?? '')
+		expect(location.origin).toBe(APP_ORIGIN)
+		expect(location.pathname).toBe(AUTH_CALLBACK_PATH)
+		const code = location.searchParams.get('code')
+		expect(code).toBeTruthy()
+
+		// …and the destination stored with the code is the app's URL, not the registered origin alone.
+		const { result } = await exchangeAuthCode(services, { app: 'notes', code: code ?? '', requestId: 'r1' })
+		expect(result.ok).toBe(true)
+		if (!result.ok) return
+		expect(result.returnUrl).toBe(`${APP_ORIGIN}/private?page=2`)
 	})
 
 	test('replacement is atomic, so no failure can leave an app with no origin at all', async () => {
