@@ -272,6 +272,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				appId: input.app.id,
 				env: input.environment.env,
 				...(input.environment.domain !== undefined ? { domain: input.environment.domain } : {}),
+				...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
 				cwd: input.app.source.workerDir ?? '.',
 				secrets: input.secrets,
 				vars: input.vars,
@@ -310,6 +311,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 						url: options.propustkaUrl,
 						app: artifact.app.id,
 						schema: artifact.app.schema,
+						...(input.returnOrigins === undefined || input.returnOrigins.length === 0 ? {} : { returnOrigins: input.returnOrigins }),
 						adminKey: options.adminKey,
 						signal,
 					})

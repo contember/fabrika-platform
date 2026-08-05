@@ -55,6 +55,12 @@ export interface ProviderDeployInput {
 	readonly vars: Readonly<Record<string, string>>
 	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
 	readonly managedEnvironment: ProviderManagedEnvironment
+	/**
+	 * Every origin IAM may hand this app a session at (ADR-0021). App-wide, not per-environment:
+	 * IAM's registry is keyed by app id, so the set is assembled from every environment of the app.
+	 * Absent when the app has no public origin at all, which leaves IAM's registry untouched.
+	 */
+	readonly returnOrigins?: readonly string[]
 	readonly dryRun: boolean
 	/** Optional short-lived, run-scoped Operations artifact destination. */
 	readonly artifactUpload?: {
@@ -86,7 +92,11 @@ export interface ProviderRunReference {
 }
 
 export type ProviderCancelInput = ProviderRunReference
-export type ProviderReconcileInput = ProviderRunReference
+
+export interface ProviderReconcileInput extends ProviderRunReference {
+	/** See `ProviderDeployInput.returnOrigins`; a provider that finishes a resumed deploy projects the same set. */
+	readonly returnOrigins?: readonly string[]
+}
 
 /** The latest state reported while reconciling a platform-owned run. */
 export interface ProviderReconcileOutcome {

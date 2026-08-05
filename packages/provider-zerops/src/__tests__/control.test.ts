@@ -597,6 +597,41 @@ describe('Zerops ControlProvider lifecycle', () => {
 		}])
 	})
 
+	test('carries the control plane return origins through the deploy into the schema reconciler', async () => {
+		const reconciled: Array<{ app: string; returnOrigins?: readonly string[] }> = []
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			propustkaUrl: 'https://iam.test',
+			api: makeApi(recorded),
+			reconcileSchema: async ({ app, returnOrigins }) => {
+				reconciled.push({ app, ...(returnOrigins === undefined ? {} : { returnOrigins }) })
+			},
+		})
+		const withSchema = environment({
+			artifact: {
+				provider: 'zerops',
+				version: zeropsArtifactCodec.version,
+				payload: zeropsArtifactCodec.encode(compileFabrikaManifest({ ...config, schema: SCHEMA }, 'prod')),
+			},
+		})
+
+		// Every step really runs, so this proves the whole in-process hop chain: deploy input → run →
+		// `reconcile-schema` step → the IAM port. The set is app-wide, not this environment's origin.
+		await control.deploy({
+			...deployInput(recorded),
+			environment: withSchema,
+			returnOrigins: ['https://notes.example.test', 'https://stage.notes.example.test'],
+		})
+		expect(reconciled).toEqual([{
+			app: 'notes',
+			returnOrigins: ['https://notes.example.test', 'https://stage.notes.example.test'],
+		}])
+
+		// Nothing projected → the registry is left alone rather than cleared.
+		await control.deploy({ ...deployInput(recorded), runId: 'run-2', environment: withSchema })
+		expect(reconciled[1]).toEqual({ app: 'notes' })
+	})
+
 	test('fails before proxy or app mutation when namespace placement is not ready', async () => {
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
@@ -629,13 +664,15 @@ describe('Zerops ControlProvider lifecycle', () => {
 	test('finishes schema reconciliation after an active external run without starting another deploy', async () => {
 		let current: ZeropsAppVersionStatus = 'BUILDING'
 		const reconcileSignals: AbortSignal[] = []
+		const reconciledOrigins: Array<readonly string[] | undefined> = []
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			propustkaUrl: 'https://iam.test',
 			api: makeApi(recorded, () => current),
-			reconcileSchema: async ({ app, signal }) => {
+			reconcileSchema: async ({ app, signal, returnOrigins }) => {
 				recorded.calls.push(`reconcileSchema:${app}`)
 				reconcileSignals.push(signal)
+				reconciledOrigins.push(returnOrigins)
 			},
 		})
 		if (control.cancel === undefined || control.reconcile === undefined) {
@@ -644,6 +681,8 @@ describe('Zerops ControlProvider lifecycle', () => {
 		const reference = {
 			runId: 'run-1',
 			externalId: 'version-1',
+			// A resumed deploy finishes the same IAM touchpoint, so it projects the same set.
+			returnOrigins: ['https://notes.example.test'],
 			environment: environment({
 				artifact: {
 					provider: 'zerops',
@@ -663,6 +702,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		])
 		expect(reconcileSignals).toHaveLength(1)
 		expect(reconcileSignals[0]?.aborted).toBe(false)
+		expect(reconciledOrigins).toEqual([['https://notes.example.test']])
 		current = 'BUILD_FAILED'
 		expect(await control.reconcile(reference)).toEqual<ProviderReconcileOutcome>({ state: 'failed' })
 		await control.cancel(reference)

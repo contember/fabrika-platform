@@ -223,6 +223,11 @@ export class Runner {
 		if (this.job.domain !== undefined) {
 			env['FABRIKA_CONTROL_DOMAIN'] = this.job.domain
 		}
+		// The control plane's projection of where IAM may hand this app a session (ADR-0021). Not a
+		// secret — it is public addressing — but it travels the same env transport as everything else.
+		if (this.job.returnOrigins !== undefined && this.job.returnOrigins.length > 0) {
+			env['FABRIKA_IAM_RETURN_ORIGINS'] = this.job.returnOrigins.join(',')
+		}
 		if (this.job.stateNamespace !== undefined) {
 			env['CLOUDFLARE_STATE_NAMESPACE'] = this.job.stateNamespace
 		}

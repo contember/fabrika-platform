@@ -54,6 +54,8 @@ export interface CloudflareRunnerJob {
 	readonly configPath?: string
 	readonly stateNamespace?: string
 	readonly domain?: string
+	/** Every origin IAM may hand this app a session at, projected by the control plane (ADR-0021). */
+	readonly returnOrigins?: readonly string[]
 	readonly dryRun?: boolean
 	readonly credentials: {
 		readonly CLOUDFLARE_ACCOUNT_ID: string
@@ -78,6 +80,8 @@ export interface CloudflareRunnerJob {
 		readonly runId: string
 	}
 }
+
+const isStringArray = (value: unknown): boolean => Array.isArray(value) && value.every((entry) => typeof entry === 'string' && entry !== '')
 
 const isStringRecord = (value: unknown): boolean =>
 	typeof value === 'object'
@@ -130,6 +134,7 @@ export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunner
 		|| ('configPath' in value && value.configPath !== undefined && typeof value.configPath !== 'string')
 		|| ('stateNamespace' in value && value.stateNamespace !== undefined && typeof value.stateNamespace !== 'string')
 		|| ('domain' in value && value.domain !== undefined && typeof value.domain !== 'string')
+		|| ('returnOrigins' in value && value.returnOrigins !== undefined && !isStringArray(value.returnOrigins))
 		|| ('dryRun' in value && value.dryRun !== undefined && typeof value.dryRun !== 'boolean')
 		|| ('secrets' in value && value.secrets !== undefined && !isStringRecord(value.secrets))
 		|| ('vars' in value && value.vars !== undefined && !isStringRecord(value.vars))
@@ -213,6 +218,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		configPath: artifact.configPath,
 		...(storedTarget.stateNamespace === undefined ? {} : { stateNamespace: storedTarget.stateNamespace }),
 		...(input.environment.domain === undefined ? {} : { domain: input.environment.domain }),
+		...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
 		...(input.dryRun ? { dryRun: true } : {}),
 		...(Object.keys(input.secrets).length === 0 ? {} : { secrets: input.secrets }),
 		...(Object.keys(input.vars).length === 0 ? {} : { vars: input.vars }),

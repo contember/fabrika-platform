@@ -62,6 +62,7 @@ export const createProvider = <TId extends string, TTarget, TArtifact>(
 					appId: run.appId,
 					env: run.env,
 					domain: run.domain,
+					returnOrigins: run.returnOrigins,
 					cwd: run.cwd,
 					secrets: run.secrets,
 					vars: run.vars,

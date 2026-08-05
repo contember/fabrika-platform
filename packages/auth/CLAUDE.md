@@ -62,6 +62,14 @@ the service that owns identity.
   HTTP to the admin origin with an IAM-issued `px_` ADMIN key. It is idempotent: the endpoint upserts
   `origin='app'` rows and deletes app-origin rows absent from the body, and never touches
   `origin='custom'` policies.
+- **`returnOrigins` is a SECOND call, and the two concepts never merge.** An `AppSchema` is
+  vocabulary the APPLICATION declares; a return origin is a fact the CONTROL PLANE knows. Folding
+  origins into the schema body would let an app assert where it can be handed a session (ADR-0021),
+  which is exactly what the registry exists to prevent — so they travel as two requests to two
+  endpoints, and `returnOrigins` is never read off the schema. Order is load-bearing: the schema PUT
+  runs first because it is what REGISTERS the app, and `apps.setReturnOrigins` 404s for an app IAM
+  has never heard of. Omitting `returnOrigins` leaves IAM's registry untouched; an EMPTY array is a
+  caller error, refused before any request, because clearing the registry is its own admin operation.
 - **`Middleware<Ctx>` / `AuthCarrier` are owned here and consumed by `@fabrika/app`** — do not add a
   duplicate compatibility interface there. The SDK itself ships no middleware; each app writes the ~10
   lines that call `authenticate` and shape its own error envelope.

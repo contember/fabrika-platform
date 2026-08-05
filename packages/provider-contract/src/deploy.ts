@@ -56,6 +56,12 @@ export interface ProviderRunBase {
 	readonly appId: string
 	readonly env: string
 	readonly domain?: string
+	/**
+	 * Every origin IAM may hand this app a session at, as known by the control plane. App-wide rather
+	 * than per-environment, because IAM's registry is keyed by app id and a deploy of one environment
+	 * must not un-register the others.
+	 */
+	readonly returnOrigins?: readonly string[]
 	readonly cwd: string
 	readonly secrets: Readonly<Record<string, string>>
 	readonly vars: Readonly<Record<string, string>>

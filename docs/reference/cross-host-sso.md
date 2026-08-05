@@ -32,7 +32,8 @@ itself — Caddy returns a non-2xx auth response verbatim, so the 302 and its
 
 - **A return URL is validated, never trusted.** Origins are registered per app
   through `apps.setReturnOrigins` and canonicalized on the way in. There is no
-  fallback: an unregistered origin is refused rather than quietly rewritten.
+  fallback: an unregistered origin is refused rather than quietly rewritten. The app
+  never names its own origin — see [Configuration](#configuration) for who does.
 - **The destination is carried server-side.** Redemption returns the URL stored with
   the code, so a caller cannot point the browser elsewhere by editing the callback.
 - **An app session mints only for its own app.** The cookie is host-only, so a
@@ -48,7 +49,30 @@ itself — Caddy returns a non-2xx auth response verbatim, so the 302 and its
 - `ProxyApp.scheme` in the proxy manifest — the scheme the **browser** speaks. No
   header can supply it: a TLS-terminating balancer forwards plain HTTP, and the next
   hop rewrites `X-Forwarded-Proto` to what it received. Absent parses as `https`.
-- An app's return origins, registered in IAM.
+- An app's return origins, registered in IAM — **written by the control plane, on every
+  deploy.** The operator configures `publicOrigin` on the app's environment
+  (`PUT /api/apps/:app/envs/:env`); nobody calls `apps.setReturnOrigins` by hand.
+
+### Who writes the registry
+
+The set IAM stores for an app is the set of `app_envs.public_origin` values the control
+plane holds for that app id, projected on every deploy:
+
+1. `executeDeploy` collects every environment's public origin for the app (app-wide,
+   because IAM's registry is keyed by app id — a `stage` deploy must not un-register
+   `prod`) and puts it on the provider deploy input.
+2. It reaches the deploy step that already talks to IAM (`reconcileSchema`), which makes
+   a **second** call — `apps.setReturnOrigins` over `/admin/rpc`, after the schema PUT,
+   because that PUT is what registers the app and `setReturnOrigins` 404s for an unknown
+   one.
+
+Two consequences worth knowing:
+
+- An app with no `publicOrigin` on any environment is **left alone**, not registered with
+  a guess. Its cross-host sign-in is refused until an origin is configured and the app is
+  deployed.
+- The projection is authoritative: an origin added by hand through the admin surface is
+  replaced by the next deploy. Configure `publicOrigin` instead.
 
 `SESSION_COOKIE_DOMAIN` is no longer load-bearing for cross-host access. Set it only
 when hosts genuinely share a parent domain, where it saves a redirect by letting the

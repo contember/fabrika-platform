@@ -151,5 +151,32 @@ describe('Cloudflare control provider', () => {
 			credentials: { ...valid.credentials, PROPUSTKA_URL: 'https://legacy-iam.example.com' },
 		})).toBe(true)
 		expect(isCloudflareRunnerJob({ ...valid, credentials: { ...valid.credentials, PROPUSTKA_URL: 42 } })).toBe(false)
+		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: ['https://api.example.com'] })).toBe(true)
+		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: 'https://api.example.com' })).toBe(false)
+		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: [42] })).toBe(false)
+		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: [''] })).toBe(false)
+	})
+
+	test('carries the control plane return origins to the runner', async () => {
+		const jobs: CloudflareRunnerJob[] = []
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			resolveSource: async (source) => ({ repoUrl: source.repoUrl, ref: source.ref }),
+			startRun: async (job) => {
+				jobs.push(job)
+				return { state: 'succeeded' }
+			},
+			cancelRun: async () => {},
+		})
+		const input = deployInput()
+
+		await provider.deploy({ ...input, returnOrigins: ['https://api.example.com', 'https://stage.api.example.com'] })
+		expect(jobs[0]?.returnOrigins).toEqual(['https://api.example.com', 'https://stage.api.example.com'])
+		expect(isCloudflareRunnerJob(jobs[0])).toBe(true)
+
+		// No projected set → the field is absent, so the runner never asks IAM to change anything.
+		await provider.deploy(input)
+		expect(jobs[1]).not.toHaveProperty('returnOrigins')
 	})
 })

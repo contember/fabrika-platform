@@ -6,7 +6,7 @@ import { cloudflareArtifact, createCloudflareProvider, defineApp } from '..'
 interface Recorded {
 	readonly commands: CommandSpec[]
 	readonly provisions: ProvisionInput[]
-	readonly schemas: Array<{ url: string; app: string; adminKey?: string }>
+	readonly schemas: Array<{ url: string; app: string; adminKey?: string; returnOrigins?: readonly string[] }>
 	readonly schemaSignals: AbortSignal[]
 	readonly logs: string[]
 	readonly provisionedVars: Array<Record<string, unknown> | undefined>
@@ -51,7 +51,12 @@ const makeCollaborators = (
 		}
 	},
 	reconcileSchema: async (input) => {
-		rec.schemas.push({ url: input.url, app: input.app, adminKey: input.adminKey })
+		rec.schemas.push({
+			url: input.url,
+			app: input.app,
+			adminKey: input.adminKey,
+			...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
+		})
 		rec.schemaSignals.push(input.signal)
 		await reconcile?.(input)
 	},
@@ -68,6 +73,7 @@ const open = (
 		readonly reconcileSchema?: CloudflareCollaborators['reconcileSchema']
 		readonly appId?: string
 		readonly managedEnvironment?: Readonly<Record<string, string | null>>
+		readonly returnOrigins?: readonly string[]
 	} = {},
 ) => {
 	const provider = createCloudflareProvider(makeCollaborators(rec, appConfig, options.commandResult, options.reconcileSchema))
@@ -75,6 +81,7 @@ const open = (
 		appId: options.appId ?? 'demo',
 		env: 'stage',
 		domain: 'stage.example.com',
+		...(options.returnOrigins === undefined ? {} : { returnOrigins: options.returnOrigins }),
 		cwd: '/repo',
 		secrets: options.secrets ?? {},
 		vars: {},
@@ -245,6 +252,27 @@ describe('Cloudflare provider', () => {
 		expect(rec.commands[2]?.stdin).toBe('secret-value')
 		expect(rec.schemas).toEqual([{ url: 'https://iam.example.com', app: 'demo', adminKey: 'px_admin' }])
 		expect(rec.schemaSignals).toEqual([controller.signal])
+	})
+
+	test('carries the control plane return origins alongside the schema, never inside it', async () => {
+		const schema = { scopes: [], actions: [], roles: {} }
+		const session = await open(rec, config({ schema }), { returnOrigins: ['https://demo.example.com', 'https://stage.demo.example.com'] })
+		await session.execute('reconcile-schema')
+
+		expect(rec.schemas).toEqual([{
+			url: 'https://iam.example.com',
+			app: 'demo',
+			adminKey: 'px_admin',
+			returnOrigins: ['https://demo.example.com', 'https://stage.demo.example.com'],
+		}])
+	})
+
+	test('a run with no return origins leaves the registry alone', async () => {
+		const session = await open(rec, config({ schema: { scopes: [], actions: [], roles: {} } }))
+		await session.execute('reconcile-schema')
+
+		expect(rec.schemas).toHaveLength(1)
+		expect(rec.schemas[0]?.returnOrigins).toBeUndefined()
 	})
 
 	test('dry-run keeps Oblaka in plan mode and skips every other mutation', async () => {

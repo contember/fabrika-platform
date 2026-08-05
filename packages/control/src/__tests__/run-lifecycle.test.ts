@@ -251,6 +251,84 @@ describe('provider-neutral run lifecycle', () => {
 		expect(logged.join('\n')).not.toContain('must-not-reach-provider')
 	})
 
+	// ── ADR-0021 return origins (backlog 51) ────────────────────────────────────
+	//
+	// The registration is a fact the CONTROL PLANE knows, so this is the layer that decides it: what
+	// reaches the provider here is what the deploy step hands to IAM's registry. All three acceptance
+	// clauses of backlog 51 are decided by these two tests.
+
+	test('projects every environment public origin of the app, not just the one being deployed', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		// A second environment of the SAME app, plus a third with no public origin at all. IAM's registry
+		// is keyed by app id, so deploying `prod` must not un-register `stage`.
+		await db.registry.upsertAppEnv({
+			appId: 'app',
+			env: 'stage',
+			domain: 'stage.example.com',
+			publicOrigin: 'https://stage.example.com',
+			namespaceId: null,
+			provider: 'memory',
+			providerTargetJson: JSON.stringify(envelope('memory', 'target')),
+			providerArtifactJson: JSON.stringify(envelope('memory', 'artifact')),
+		})
+		await db.registry.upsertAppEnv({
+			appId: 'app',
+			env: 'preview',
+			domain: 'preview.example.com',
+			publicOrigin: null,
+			namespaceId: null,
+			provider: 'memory',
+			providerTargetJson: JSON.stringify(envelope('memory', 'target')),
+			providerArtifactJson: JSON.stringify(envelope('memory', 'artifact')),
+		})
+		const inputs: ProviderDeployInput[] = []
+
+		expect((await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), { runId })).status).toBe('succeeded')
+		expect(inputs[0]?.returnOrigins).toEqual(['https://public.example.com', 'https://stage.example.com'])
+
+		// Re-pointing an environment REPLACES its origin rather than adding one: the old address stops
+		// being handed a session on the next deploy.
+		await db.registry.upsertAppEnv({
+			appId: 'app',
+			env: 'prod',
+			domain: 'app.example.com',
+			publicOrigin: 'https://moved.example.com',
+			namespaceId: null,
+			provider: 'memory',
+			providerTargetJson: JSON.stringify(envelope('memory', 'target')),
+			providerArtifactJson: JSON.stringify(envelope('memory', 'artifact')),
+		})
+		const secondRunId = uuidv7()
+		await db.runs.createRun({ id: secondRunId, appId: 'app', env: 'prod', ref: 'refs/heads/deploy/prod', trigger: 'manual' })
+		const moved: ProviderDeployInput[] = []
+		expect((await executeDeploy(makeDeps(db, makeProvider(moved, { state: 'succeeded' })), { runId: secondRunId })).status).toBe(
+			'succeeded',
+		)
+		expect(moved[0]?.returnOrigins).toEqual(['https://moved.example.com', 'https://stage.example.com'])
+	})
+
+	test('leaves an app with no public origin unregistered rather than guessing one', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		await db.registry.upsertAppEnv({
+			appId: 'app',
+			env: 'prod',
+			domain: 'app.example.com',
+			publicOrigin: null,
+			namespaceId: null,
+			provider: 'memory',
+			providerTargetJson: JSON.stringify(envelope('memory', 'target')),
+			providerArtifactJson: JSON.stringify(envelope('memory', 'artifact')),
+		})
+		const inputs: ProviderDeployInput[] = []
+
+		expect((await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), { runId })).status).toBe('succeeded')
+		// Absent, not empty: an empty set is a caller error at the admin API and would read as "clear it".
+		expect(inputs[0]?.returnOrigins).toBeUndefined()
+		expect(inputs[0]?.environment.domain).toBe('app.example.com')
+	})
+
 	test('provider-managed secrets remain at the provider and are not resolved into a run', async () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db)

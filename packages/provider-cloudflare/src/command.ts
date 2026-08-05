@@ -46,6 +46,17 @@ const requiredValues = (names: readonly string[] | undefined): Record<string, st
 	return values
 }
 
+/**
+ * Decode `FABRIKA_IAM_RETURN_ORIGINS`, the comma-separated set the control plane projects into the
+ * deploy environment (ADR-0021). Undefined for an absent or empty value, so a deploy with nothing to
+ * project leaves IAM's registry alone rather than clearing it. Part of the executor's environment
+ * contract, exported for the test that pins it; not part of the package's public surface.
+ */
+export const parseReturnOrigins = (raw: string | undefined): readonly string[] | undefined => {
+	const origins = (raw ?? '').split(',').map((entry) => entry.trim()).filter((entry) => entry !== '')
+	return origins.length === 0 ? undefined : origins
+}
+
 export interface LoadedCloudflareCommandConfig {
 	readonly config: CloudflareAppConfig
 	readonly absolutePath: string
@@ -83,10 +94,12 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 	const domain = environmentValue('FABRIKA_CONTROL_DOMAIN')
 	const iamUrl = environmentValue('FABRIKA_IAM_URL')
 	const iamProvisioningKey = environmentValue('FABRIKA_IAM_PROVISIONING_KEY')
+	const returnOrigins = parseReturnOrigins(environmentValue('FABRIKA_IAM_RETURN_ORIGINS'))
 	const run: RuntimeProviderRun = {
 		appId: loaded.config.id,
 		env: options.env,
 		...(domain === undefined ? {} : { domain }),
+		...(returnOrigins === undefined ? {} : { returnOrigins }),
 		cwd: loaded.cwd,
 		secrets: declaredValues(loaded.config.pipeline?.secrets),
 		vars: declaredValues(loaded.config.pipeline?.vars),

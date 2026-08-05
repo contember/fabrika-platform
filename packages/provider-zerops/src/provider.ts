@@ -228,12 +228,25 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 			if (schema === undefined || propustkaUrl === undefined) {
 				return
 			}
+			// Return origins ride this step because `apps.setReturnOrigins` 404s for an app IAM has never
+			// heard of, and the schema reconcile is what registers it. Separate call, same moment.
+			const returnOrigins = run.returnOrigins !== undefined && run.returnOrigins.length > 0 ? run.returnOrigins : undefined
 			if (dryRun) {
 				log(`  [dry-run] would reconcile schema for \`${artifact.app.id}\` against ${propustkaUrl}`)
+				if (returnOrigins !== undefined) {
+					log(`  [dry-run] would register return origins for \`${artifact.app.id}\`: ${returnOrigins.join(', ')}`)
+				}
 				return
 			}
 			assertRunning(signal)
-			await zerops.reconcileSchema({ url: propustkaUrl, app: artifact.app.id, schema, adminKey: target.adminKey, signal })
+			await zerops.reconcileSchema({
+				url: propustkaUrl,
+				app: artifact.app.id,
+				schema,
+				...(returnOrigins === undefined ? {} : { returnOrigins }),
+				adminKey: target.adminKey,
+				signal,
+			})
 			return
 		}
 	}

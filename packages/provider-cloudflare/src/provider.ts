@@ -174,8 +174,14 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 		}
 		case 'reconcile-schema': {
 			if (config.schema === undefined || target.propustkaUrl === undefined) return
+			// Return origins ride this step because `apps.setReturnOrigins` 404s for an app IAM has never
+			// heard of, and the schema reconcile is what registers it. Separate call, same moment.
+			const returnOrigins = run.returnOrigins !== undefined && run.returnOrigins.length > 0 ? run.returnOrigins : undefined
 			if (dryRun) {
 				run.events.log(`  [dry-run] would reconcile schema for \`${config.id}\` against ${target.propustkaUrl}`)
+				if (returnOrigins !== undefined) {
+					run.events.log(`  [dry-run] would register return origins for \`${config.id}\`: ${returnOrigins.join(', ')}`)
+				}
 				return
 			}
 			assertRunning(signal)
@@ -183,6 +189,7 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 				url: target.propustkaUrl,
 				app: config.id,
 				schema: config.schema,
+				...(returnOrigins === undefined ? {} : { returnOrigins }),
 				adminKey: target.adminKey,
 				signal,
 			})

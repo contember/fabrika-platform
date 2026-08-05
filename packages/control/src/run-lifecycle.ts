@@ -15,6 +15,7 @@ import type {
 } from '@fabrika/provider-contract'
 import { type AppEnvRow, type AppRow, type ControlRegistryRepository, type ControlRepositories, type DeploymentNamespaceRow, type RunRow } from './db'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
+import { projectedReturnOrigins } from './return-origins'
 import type { SecretResolver } from './secret-resolver'
 
 export type RunOutcome = ProviderTerminalOutcome
@@ -297,6 +298,7 @@ export async function executeDeploy(
 			}
 			Object.assign(managedEnvironment, releaseContext.managedEnvironment)
 		}
+		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, app.id)
 		const outcome = await deps.provider.deploy({
 			runId: run.id,
 			app: registration.app,
@@ -304,6 +306,7 @@ export async function executeDeploy(
 			secrets: await resolveSecrets(deps, app.id, appEnv.env),
 			vars,
 			managedEnvironment,
+			...(returnOrigins === undefined ? {} : { returnOrigins }),
 			dryRun: message.dryRun === true,
 			...(releaseContext?.artifactUpload === undefined ? {} : { artifactUpload: releaseContext.artifactUpload }),
 			signal: new AbortController().signal,

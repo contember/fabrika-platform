@@ -31,7 +31,14 @@ export interface ZeropsCollaborators {
 export type ZeropsCollaboratorFactory = (target: ZeropsRuntimeTarget) => ZeropsCollaborators
 
 const defaultReconcileSchema: SchemaReconciler = (input) =>
-	reconcileSchema({ url: input.url, app: input.app, schema: input.schema, adminKey: input.adminKey, signal: input.signal })
+	reconcileSchema({
+		url: input.url,
+		app: input.app,
+		schema: input.schema,
+		...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
+		adminKey: input.adminKey,
+		signal: input.signal,
+	})
 
 export const defaultZeropsCollaborators: ZeropsCollaboratorFactory = (target) => ({
 	api: createZeropsApi({ token: target.accessToken, baseUrl: target.apiBaseUrl }),

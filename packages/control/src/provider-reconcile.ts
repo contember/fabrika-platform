@@ -1,6 +1,7 @@
 import type { ControlProvider } from '@fabrika/provider-contract'
 import type { ControlRepositories } from './db'
 import type { OperationsReleaseProjectionDeps } from './operations-releases'
+import { projectedReturnOrigins } from './return-origins'
 import { projectTerminalRun, providerEnvironment } from './run-lifecycle'
 
 export interface ProviderReconcileSummary {
@@ -45,10 +46,14 @@ export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promis
 		if (appEnv === null) {
 			throw new Error(`provider environment ${run.app_id}/${run.env} disappeared during reconciliation`)
 		}
+		// A provider that finishes a resumed deploy runs the same IAM touchpoint the deploy would have,
+		// so it needs the same projected set — assembled here, where the registry is reachable.
+		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, run.app_id)
 		const outcome = await reconcile({
 			runId: run.id,
 			externalId: run.external_run_id,
 			environment: await providerEnvironment(deps.repositories.registry, appEnv),
+			...(returnOrigins === undefined ? {} : { returnOrigins }),
 		})
 		summary.checked++
 

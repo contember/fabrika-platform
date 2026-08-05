@@ -169,6 +169,33 @@ describe('reconcileProviderRuns', () => {
 		expect(deploys).toBe(0)
 	})
 
+	test('projects the app return origins into a resumed deploy the same way a fresh one does', async () => {
+		const { db } = createHarness()
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod', { publicOrigin: 'https://app.example.test' }))
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'stage', { publicOrigin: 'https://stage.app.example.test' }))
+		await db.runs.createRun({ id: 'resumed', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.markRunStarted('resumed', 'runs/resumed/logs.ndjson')
+		await db.runs.setRunExternalId('resumed', 'operation')
+
+		const projected: Array<readonly string[] | undefined> = []
+		await reconcileProviderRuns({
+			repositories: db,
+			provider: {
+				id: TEST_PROVIDER_ID,
+				normalizeRegistration: (input) => input,
+				deploy: () => Promise.resolve({ state: 'succeeded' }),
+				reconcile: (input) => {
+					projected.push(input.returnOrigins)
+					return Promise.resolve({ state: 'succeeded' })
+				},
+			},
+			releaseLock: () => Promise.resolve(),
+		})
+
+		expect(projected).toEqual([['https://app.example.test', 'https://stage.app.example.test']])
+	})
+
 	test('keeps provider-owned runs in progress when reconciliation is not a provider capability', async () => {
 		const { db } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })

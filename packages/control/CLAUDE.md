@@ -131,6 +131,16 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   routing.** It is a canonical HTTP(S) origin, remains independent of `domain`,
   and is projected unchanged to Operations. PUT omission preserves the stored
   value; explicit `null` clears it. Never derive it from a provider hostname.
+- **The same column is also what IAM trusts as a return origin (ADR-0021).**
+  `projectedReturnOrigins` (`src/return-origins.ts`) collects it from EVERY
+  environment of the app and hands the set to the provider on `deploy` and on
+  `reconcile`; the deploy's existing IAM touchpoint (`reconcileSchema`) writes it.
+  App-wide, not per-environment, because IAM's registry is keyed by app id — sending
+  only the deploying environment's origin would un-register the others and a `stage`
+  deploy would break `prod`'s sign-in. No origin anywhere → the field is ABSENT, not
+  empty: fabrika leaves an app it has no address for unregistered rather than guessing,
+  and an empty set would read as "clear the registry". Nothing else here calls IAM's
+  admin surface per deploy; do not add a second lifecycle for this.
 - **Run lifecycle is status-guarded + idempotent** (`src/run-lifecycle.ts`): `markRunStarted` only moves
   pending→running, so a redelivered queue message is a no-op. ack handled runs; retry only on an unexpected throw.
 - **The Cloudflare provider owns the runner boundary.** `CloudflareRunnerJob` and its validator live in
