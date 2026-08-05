@@ -447,6 +447,36 @@ describe('/auth/logout', () => {
 		const res = await handleAuth(logout(sessionToken, { method: 'DELETE' }), h.makeServices({ issuer: ISSUER }), AUTH_ENV, ctx())
 		expect(res.status).toBe(405)
 	})
+
+	// The shape a REAL browser sends, which no other test in this file did: every page these forms live
+	// on carries `Referrer-Policy: no-referrer`, and under that policy Fetch serializes the request's
+	// origin as `null` and sends no `Referer` — so a same-origin form POST arrives with `Origin: null`.
+	// Measured in Chromium 149 against a page carrying IAM's own headers. Refusing it made every form
+	// on this service — login, enrollment, reset, forgot-password and this one — a 403 in a browser.
+	test('a same-origin POST whose Origin the referrer policy suppressed is still same-origin', async () => {
+		const { h, sessionToken } = await liveLogin()
+		const res = await handleAuth(
+			logout(sessionToken, { method: 'POST', headers: { Origin: 'null', 'Sec-Fetch-Site': 'same-origin' } }),
+			h.makeServices({ issuer: ISSUER }),
+			AUTH_ENV,
+			ctx(),
+		)
+		expect(res.status).toBe(302)
+		expect(await h.repositories.sessions.getActiveSessionByHash(await hashToken(sessionToken))).toBeNull()
+	})
+
+	test('a suppressed Origin without a same-origin Sec-Fetch-Site is refused', async () => {
+		// `Sec-` is a forbidden header prefix, so `Sec-Fetch-Site` is the browser's word and not the
+		// page's. With nothing saying same-origin, `Origin: null` carries no proof at all.
+		const { h, sessionToken } = await liveLogin()
+		const services = h.makeServices({ issuer: ISSUER })
+		const cases: Record<string, string>[] = [{ Origin: 'null' }, { Origin: 'null', 'Sec-Fetch-Site': 'cross-site' }]
+		for (const headers of cases) {
+			const res = await handleAuth(logout(sessionToken, { method: 'POST', headers }), services, AUTH_ENV, ctx())
+			expect(res.status).toBe(403)
+		}
+		expect(await h.repositories.sessions.getActiveSessionByHash(await hashToken(sessionToken))).not.toBeNull()
+	})
 })
 
 describe('every auth cookie is Secure, on every transport', () => {

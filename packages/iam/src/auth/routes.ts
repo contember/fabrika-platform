@@ -195,7 +195,7 @@ async function handleLogin(request: Request, services: Services, env: AuthEnv, c
 			redirect,
 			oidcEnabled: services.config.authentication.oidc.enabled,
 			forgotEnabled: services.email !== null,
-			...(handoff === null ? {} : { app: handoff.app }),
+			...loginHandoffFields(handoff),
 		})
 	}
 	return startOidc(services, env, redirect, handoff)
@@ -225,6 +225,17 @@ async function currentSession(request: Request, services: Services) {
  */
 function handoffRedirectOr(handoff: Handoff | null, raw: string | null, services: Services): string {
 	return handoff === null ? safeRedirect(raw, services.config) : handoff.returnUrl
+}
+
+/**
+ * What the login page needs to know about a handoff: the app id it carries in a hidden field, and the
+ * destination origin its `form-action` must admit. The origin is taken from the REGISTERED return URL
+ * `readHandoff` resolved, so it is the same value the 302 will use and never a caller's spelling.
+ */
+function loginHandoffFields(handoff: Handoff | null): { app?: string; handoffOrigin?: string } {
+	if (handoff === null) return {}
+	const origin = normalizeOrigin(handoff.returnUrl)
+	return { app: handoff.app, ...(origin === null ? {} : { handoffOrigin: origin }) }
 }
 
 /** Issue the code and build the URL of the app's own callback. */
@@ -482,7 +493,7 @@ async function handlePasswordLogin(
 		redirect,
 		oidcEnabled: services.config.authentication.oidc.enabled,
 		forgotEnabled: services.email !== null,
-		...(handoff === null ? {} : { app: handoff.app }),
+		...loginHandoffFields(handoff),
 	}
 	if (email === null || rawPassword === null) {
 		return loginPage({ ...retry, error: 'Invalid email or password.' })
@@ -823,7 +834,16 @@ export function safeRedirect(raw: string | null, config: Config): string {
 function sameOrigin(request: Request, config: Config): boolean {
 	const fetchSite = request.headers.get('Sec-Fetch-Site')
 	if (fetchSite !== null && fetchSite !== 'same-origin') return false
-	const origin = request.headers.get('Origin') ?? originOf(request.headers.get('Referer'))
+	const originHeader = request.headers.get('Origin')
+	// `Origin: null` is what a real browser sends here, and it is not an attack. Every page these
+	// forms live on carries `Referrer-Policy: no-referrer`, and Fetch's "append a request Origin
+	// header" serializes the origin as `null` under that policy — so a same-origin form POST arrives
+	// with `Origin: null` and no `Referer` at all. `Sec-Fetch-Site` is then the only same-origin proof
+	// left, and it is the one a page cannot forge: `Sec-` is a forbidden header prefix, so the browser
+	// is its only writer, and a cross-site post is already refused above. Measured in Chromium 149,
+	// not assumed.
+	if (originHeader === 'null') return fetchSite === 'same-origin'
+	const origin = originHeader ?? originOf(request.headers.get('Referer'))
 	if (origin === null) return false
 	try {
 		return new URL(origin).origin === new URL(config.issuer).origin

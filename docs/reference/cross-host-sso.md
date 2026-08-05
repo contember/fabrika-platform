@@ -138,6 +138,27 @@ The local composition has no deploy of its own for the console, so
 services up — same endpoints, same admin credential, no local-only path in IAM or the
 proxy.
 
+## Two browser rules the login FORM depends on
+
+Both were found live, on a real browser against a real installation, and neither is reachable from a
+unit test that constructs its own `Request`: the header a browser sends is not the header a test
+writes, and a CSP is not enforced at all unless a browser is doing the enforcing.
+
+**A browser sends `Origin: null` here, and that is not an attack.** Every page IAM renders carries
+`Referrer-Policy: no-referrer`, and Fetch's _append a request `Origin` header_ step serializes the
+origin as `null` under that policy — so a **same-origin** form POST arrives with `Origin: null` and no
+`Referer` at all. Comparing that against the issuer refuses every form on the service: login, password
+enrollment, password reset, forgot-password and the logout confirmation. `Sec-Fetch-Site` is the only
+same-origin proof left, and it is the one a page cannot write — `Sec-` is a forbidden header prefix, so
+the browser is its sole author and a cross-site post is already refused before this is reached.
+
+**`form-action` applies to the REDIRECT a submission answers with, not only to its action.**
+`form-action 'self'` therefore blocks the 302 to `<app>/__fabrika/auth/callback`: the POST is accepted,
+a session is created, a code is issued and immediately wasted, and the browser silently stays on the
+login page with no error anywhere. The login page widens the directive by exactly one origin — the
+app's REGISTERED return origin, taken from the same value the 302 will use — so a page rendered for no
+handoff stays at `'self'` and the registry remains the only authority on where a browser may be sent.
+
 ## Where redemption lives, and how much that protects
 
 Redemption is `exchangeAuthCode`, and it is deliberately **not** part of `IamRpc` — the
@@ -172,3 +193,17 @@ On 2026-08-05, in Chromium 151.0.7922.34 over plain HTTP on
 and returned, a `__Host-` cookie carrying `Domain` and one without `Secure` are both
 dropped, and a sibling host setting `Domain=fabrika.localhost` can plant a duplicate
 of an unprefixed name but not of a `__Host-` one.
+
+On 2026-08-05, in HeadlessChrome 149 against the live Zerops installation
+(`fabrika-test`, two `.zerops.app` hosts behind the project's TLS-terminating L7
+balancer): an anonymous browser at the console was bounced by the **proxy** to
+`…/auth/login?app=vozka&redirect=…`, typed a password, and landed back on the console
+holding a `__Host-px_session` that is `Secure`, `HttpOnly`, `Path=/`, host-only and
+distinct from the one on IAM's host — then read the Delivery, Access and Operations
+plane views, the Access one through control's `/iam/admin/*` gateway. The same run
+produced the two rules above: with `Referrer-Policy: no-referrer` a same-origin form
+POST carries `Origin: null` and no `Referer`, and under `form-action 'self'` the
+cross-origin 302 that completes the handoff is blocked with a `securitypolicyviolation`
+naming `form-action` and the ORIGINAL action URL (Chromium reports the action, not the
+redirect target). Both were reproduced against a local two-origin probe before being
+fixed.

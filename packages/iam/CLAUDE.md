@@ -112,6 +112,19 @@ fails if that stops being true — it is the guard, not documentation of one.
   `SameSite=Lax`, so a cross-site top-level GET carried it; GET renders a confirm form, POST acts.
   Every 302 out of `src/auth/**` carries `cache-control: no-store` — those are the responses holding
   the session cookie and the single-use handoff code.
+- **`Origin: null` IS the same-origin case here, and `Sec-Fetch-Site` is what proves it.** Every page
+  this service renders sets `Referrer-Policy: no-referrer`, under which Fetch serializes a form POST's
+  origin as `null` and sends no `Referer` — so comparing `Origin` against the issuer refused EVERY
+  form on the service (login, enrollment, reset, forgot-password, logout) in a real browser, while
+  every unit test passed because it wrote `Origin: <issuer>` by hand. `Sec-` is a forbidden header
+  prefix, so `Sec-Fetch-Site` is the browser's word and not the page's, and `cross-site` is already
+  refused before the origin is read. Never "simplify" this back to an unconditional URL comparison.
+- **THE LOGIN PAGE'S `form-action` MUST NAME THE HANDOFF DESTINATION.** Chromium applies `form-action`
+  to the REDIRECT a submission answers with, not only to its action, so `'self'` alone silently blocks
+  the 302 to `<app>/__fabrika/auth/callback` — the login succeeds, a code is issued and spent, and the
+  browser never leaves the form. `loginHandoffFields` widens the directive by exactly one origin, and
+  that origin comes from the REGISTERED return URL, so widening the CSP can never widen where a
+  browser may be sent. A page rendered for no handoff stays at `'self'`.
 - **THE LOGIN COOKIE BELONGS TO IAM'S HOST AND NOWHERE ELSE (ADR-0023).** There is no
   `SESSION_COOKIE_DOMAIN` and `CookieOptions` has no `domain` field, so a parent-domain cookie is not
   expressible. `SESSION_COOKIE` is `__Host-px_session`, and the prefix makes the BROWSER enforce the

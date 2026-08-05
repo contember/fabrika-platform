@@ -48,6 +48,9 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 - [54](54-give-operations-its-own-proxy-app-identity.md) — Half shipped; what is left is moving the operator surface onto the Operations host, which is a console architecture change, not a rename.
 - [56](56-unbreak-the-release-dependency-gate.md) — `release:validate` red since `18d9575`: a published package depends on a private one. Blocks every release until it is decided.
 - [57](57-stop-the-caller-choosing-its-own-audit-correlation-id.md) — IAM takes `X-Request-Id` from the caller, unbounded, into `auth_log`; its Worker is edge-routed so the proxy strip never runs.
+- [58](58-generate-the-platform-installations-proxy-manifest.md) — Nothing generates a deployed installation's proxy manifest, so the live one is hand-written and drifted from the gate modules unnoticed.
+- [59](59-the-live-installation-calls-itself-local.md) — `control` and `operations` on `fabrika-test` carry `ENVIRONMENT=local`, the value every bypass is gated on.
+- [60](60-the-example-app-has-no-light-tier-descriptor.md) — Neither committed `zerops.yaml` names the shared `db` the example actually runs against, so the live app cannot be redeployed from HEAD.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.

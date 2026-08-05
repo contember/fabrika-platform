@@ -281,3 +281,62 @@ provisioning path passed against the double. It now ignores the field and serves
 Out of scope, found while reading: `api.ts`'s `importServices` doc comment still marks the `override`
 no-op UNVERIFIED, and `artifacts.ts` still describes the steady import as "reconciles drift" — both
 contradict what WU-2 settled and what the two CLAUDE.md files now say. Not touched here.
+
+### 2026-08-05 — WU-4 done (item 05, live half)
+
+**The gate drift was one app wide, and the code drift was everything.** Measured before deploying:
+`iam-local`, `operations` and `notes` already matched their gate modules at HEAD byte for byte, and
+the manifest carried no field the generator has since added — the entire manifest diff was `vozka`,
+`{ path: '/*', kind: 'public' }` against fourteen rules (**not fifteen; this file's "Account facts"
+miscounted**). What HAD drifted was the deployed code: nothing from the auth-hardening sprint onwards
+was live on any service. Deployed builds were `iam` 08-04 14:50Z, `proxy` 08-04 13:54Z, `control`
+08-03 13:50Z, `operations` 08-03 13:26Z — i.e. no `__Host-` cookies, no handoff, no deleted SDK
+enforcement path, no `FABRIKA_IAM_ADMIN_ORIGINS`, and IAM held **no `apps` row at all**, so `vozka`
+had no return-origin registry either.
+
+Deployed with `zops push` (no git remote → no `buildFromGit`), in the order **iam → operations → proxy
+→ control**. That is a deviation from the documented IAM → Operations → control, and deliberate: the
+application enforces nothing since ADR-0022, so control at HEAD behind the old permissive manifest
+would have been an open `/api/*`. Then `reconcileSchema` for `vozka` — the deploy's own call, via
+`@fabrika/auth`, exactly as `registerLocalApps` makes it. **Not touched:** `notesapi` (→ backlog 60),
+`db`, `storage`, `core`, the five stopped build runtimes, and every other project in the organization.
+
+**Two live defects in the sign-in path, both invisible to the whole test suite, both fixed here.**
+Neither is reachable from a test that builds its own `Request`: one is about a header a browser writes
+differently from every test, the other about a CSP only a browser enforces.
+
+1. **`Referrer-Policy: no-referrer` makes a same-origin form POST carry `Origin: null`.** Every IAM
+   page sets that header, so `sameOrigin` refused **every form on the service** — login, enrollment,
+   reset, forgot-password, logout — with 403 `invalid request origin`. Every unit test passed because
+   each writes `Origin: <issuer>` by hand. Measured against a local probe serving IAM's exact headers:
+   `no-referrer` → `Origin: null`, `Referer` absent; `strict-origin-when-cross-origin` → the real
+   origin. Fix: `Origin: null` is decided by `Sec-Fetch-Site`, a header `Sec-`'s forbidden prefix
+   means a page cannot write.
+2. **Chromium applies `form-action` to the REDIRECT a submission answers with.** So `form-action
+   'self'` blocked the 302 to `<app>/__fabrika/auth/callback`: the POST was accepted, a session and a
+   code were created, the code was wasted, and the browser sat on the login page with nothing logged.
+   Measured on a two-origin probe — same-origin 302 followed, cross-origin 302 blocked, violation
+   reporting the ORIGINAL action URL. Fix: the login page widens `form-action` by exactly one origin,
+   the app's REGISTERED return origin, so the CSP can never be wider than the registry.
+   **Both are judgement calls in security-critical code — flag them in review.**
+
+**The proof.** Anonymous browser at `https://proxy-292c-8082…` → **302 from Caddy** (`via: 1.1 Caddy`)
+to `…/auth/login?app=vozka&redirect=…`, never reaching the app; `Sec-Fetch-Mode: cors` gets the 401
+envelope with the same `loginUrl`. Typed a password (identity obtained with `passwords.issueReset`,
+which answers `{ delivery: 'manual', url }` when email is off — no credential printed anywhere), landed
+back on the console, and read Overview, Applications and **Users** — the last through control's
+`/iam/admin/*` gateway, which needed `FABRIKA_IAM_ADMIN_ORIGINS` written on IAM first. Two independent
+`__Host-px_session` cookies, `Secure` + `HttpOnly` + `Path=/` + host-only, one per host, over the real
+TLS-terminating balancer. Revoking the parent then bounced the browser back to login **after the
+proxy's 300 s token cache expired** — ADR-0022's stated bound, observed rather than assumed.
+
+Facts → `docs/reference/zerops-platform.md` (the push path, its timings, the two ordering rules) and
+`docs/reference/cross-host-sso.md` (the two browser rules + the live run). Filed: backlog
+[58](../backlog/58-generate-the-platform-installations-proxy-manifest.md) (nothing generates a
+deployed installation's manifest — the real cause of this drift),
+[59](../backlog/59-the-live-installation-calls-itself-local.md) (`control` and `operations` carry
+`ENVIRONMENT=local`), [60](../backlog/60-the-example-app-has-no-light-tier-descriptor.md) (no committed
+descriptor names the shared `db` the example runs on).
+
+Verified: `typecheck`, `lint`, `format:check` clean; `bun test` **1912 pass / 9 skip / 0 fail** against
+a real Postgres on `:55445` (only the S3 suites skip).

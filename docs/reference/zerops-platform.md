@@ -431,6 +431,42 @@ subdomain is live:
 Read the service's `subdomainAccess` to know whether a subdomain is live, and `zeropsSubdomain` only to
 learn what it is called.
 
+### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — updating a running installation
+
+How the four platform services on `fabrika-test` were taken from a two-day-old build to `HEAD`. There
+is no git remote on this repository and `buildFromGit` needs a public URL
+([backlog 47](../backlog/47-give-the-zerops-path-a-private-git-source.md)), so the source reaches the
+platform as an upload: `zops push <service> --project fabrika-test`, which archives the working tree
+(git-tracked plus untracked-not-ignored), uploads it, and runs the repository-root `zerops.yaml` setup
+whose name matches the service hostname.
+
+| Behaviour                                               | Result                                                                                          |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| One upload of this monorepo                             | 631.6 MiB expanded, **194.2 MiB** on the wire, ~48 s to upload                                  |
+| A full `iam` / `operations` build+deploy                | **~3 min** each, warm `node_modules` cache                                                      |
+| The `control` build (it also builds the dashboard)      | ~5 min                                                                                          |
+| An env write's process (`stack.updateUserData`)         | `FINISHED` in **~2.6 s** — poll `zops process list --service <svc>` before pushing              |
+| `putServiceEnv` on an EXISTING key, through `packages/` | Replaces in place: same record id, `lastUpdate` moves, value reads back byte-identical          |
+| A rebuilt proxy picking up a changed manifest           | The build logs `wrote ./caddy.json (4 app(s))` — the count is the cheapest check that it landed |
+
+Two ordering rules, both of which cost something if ignored:
+
+- **Write the variable, wait for its process, then push.** A deploy racing a `userData`
+  synchronisation dies on `userDataSyncRunning` and leaves the app version stuck `UPLOADING`, which
+  `deployAppVersion` does not recover from.
+- **Deploy the PROXY before the service it fronts, whenever the gate list is widening enforcement.**
+  The order that matters is not the dependency order (IAM → Operations → control) but the exposure
+  order: the application no longer enforces anything (ADR-0022), so a control plane at `HEAD` behind a
+  proxy still carrying an older, more permissive manifest is an open API. IAM → Operations → **proxy**
+  → control keeps the dependency order and never opens that window.
+
+**The platform installation's proxy manifest has no generator.** `compileNamespaceProxyManifest`
+(`packages/control/src/node/zerops-proxy.ts`) builds an APP namespace's manifest from the control
+registry, and `localPlatformProxyManifest` (`@fabrika/local-stack`) builds the local composition's —
+neither covers a deployed platform installation, so this one was hand-written at bring-up and then
+silently drifted from the gate modules for two days. See
+[backlog 58](../backlog/58-generate-the-platform-installations-proxy-manifest.md).
+
 ## Fabrika placement mapping
 
 The Fabrika platform project contains:

@@ -6,6 +6,15 @@ export function loginPage(input: {
 	readonly forgotEnabled: boolean
 	/** The app this login is a handoff for (ADR-0021); absent for a plain IAM login. */
 	readonly app?: string
+	/**
+	 * The handoff destination's ORIGIN, and the one page on this service whose form may answer with a
+	 * redirect off it. Chromium applies `form-action` to the REDIRECT a submission answers with, not
+	 * only to the action, so `'self'` alone silently blocks the 302 to `<app>/__fabrika/auth/callback`
+	 * — the login succeeds, a code is issued and spent, and the browser never leaves this page.
+	 * Measured in Chromium 149. The value comes from the app's REGISTERED return origin, never from
+	 * the request, so widening the directive cannot widen where a browser may be sent.
+	 */
+	readonly handoffOrigin?: string
 	readonly error?: string
 }): Response {
 	// `app` rides both continuations so a form post and an SSO detour end in the same handoff. It is
@@ -25,6 +34,7 @@ export function loginPage(input: {
 		${input.forgotEnabled ? '<p><a href="/auth/forgot-password">Forgot password?</a></p>' : ''}
 		${input.oidcEnabled ? `<hr><p><a class="button" href="${escapeHtml(oidcUrl)}">Continue with single sign-on</a></p>` : ''}`,
 		input.error === undefined ? 200 : 401,
+		input.handoffOrigin,
 	)
 }
 
@@ -90,7 +100,13 @@ function message(value: string | undefined): string {
 	return value === undefined ? '' : `<p role="alert" class="error">${escapeHtml(value)}</p>`
 }
 
-function htmlPage(title: string, content: string, status = 200): Response {
+/**
+ * `formActionOrigin` widens `form-action` by exactly one origin, and only the login page passes one.
+ * It must already be an origin (scheme + host + optional port, no spaces, no `;`) — `normalizeOrigin`
+ * produces exactly that and is the only supplier — so it cannot inject a second directive.
+ */
+function htmlPage(title: string, content: string, status = 200, formActionOrigin?: string): Response {
+	const formAction = formActionOrigin === undefined ? `'self'` : `'self' ${formActionOrigin}`
 	const nonce = randomNonce()
 	const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${
 		escapeHtml(title)
@@ -103,7 +119,7 @@ function htmlPage(title: string, content: string, status = 200): Response {
 			'content-type': 'text/html; charset=utf-8',
 			'cache-control': 'no-store',
 			'content-security-policy':
-				`default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
+				`default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; form-action ${formAction}; base-uri 'none'; frame-ancestors 'none'`,
 			'referrer-policy': 'no-referrer',
 			'x-content-type-options': 'nosniff',
 			'x-frame-options': 'DENY',

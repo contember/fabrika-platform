@@ -285,6 +285,25 @@ describe('GET /auth/login as a handoff', () => {
 		expect(html).toContain(`name="redirect" value="${APP_ORIGIN}/private"`)
 	})
 
+	test('the login page admits the handoff destination in form-action, and only it', async () => {
+		// Chromium applies `form-action` to the REDIRECT a submission answers with, not only to the
+		// action, so `'self'` alone blocks the 302 to `<app>/__fabrika/auth/callback` — the POST is
+		// accepted, a code is issued and spent, and the browser silently stays on the login page.
+		// Measured in Chromium 149. The widened origin is the REGISTERED one, never the caller's.
+		const { services } = await scenario()
+		const handoff = await handleAuth(
+			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private`)}`),
+			services,
+			AUTH_ENV,
+			new TestContext(),
+		)
+		expect(handoff.headers.get('content-security-policy')).toContain(`form-action 'self' ${APP_ORIGIN};`)
+
+		// A login that is not a handoff goes nowhere but IAM, and stays narrow.
+		const plain = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, new TestContext())
+		expect(plain.headers.get('content-security-policy')).toContain(`form-action 'self';`)
+	})
+
 	test('signing in at the form completes the handoff', async () => {
 		const { services, harness, principalId } = await scenario()
 		const password = 'a-sufficiently-long-passphrase'
