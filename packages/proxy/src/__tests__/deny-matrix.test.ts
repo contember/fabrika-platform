@@ -33,6 +33,23 @@ function expectDenied(response: Response): void {
 	expect(response.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null
+}
+
+/** Read `{ error: { … } }` off a refusal, narrowing rather than casting. */
+async function errorEnvelope(response: Response): Promise<Record<string, unknown>> {
+	const body: unknown = await response.json()
+	if (!isRecord(body)) {
+		throw new Error('response body is not an object')
+	}
+	const error = body['error']
+	if (!isRecord(error)) {
+		throw new Error('response body carries no error object')
+	}
+	return error
+}
+
 describe('deny — nothing matched', () => {
 	test('a path matching NO gate rule is denied 403', async () => {
 		const verify = service({ rules: [{ path: '/api/*', kind: 'service' }] }, iamWith({}))
@@ -220,6 +237,83 @@ describe('deny — a human gate admits a USER principal, not merely a valid toke
 	test('a non-user token is still a valid SERVICE credential — only the human gate refuses it', async () => {
 		const anonymous = await signToken({})
 		expect((await service(SERVICE, iamWith({}))(verifyRequest({ bearer: anonymous }))).status).toBe(204)
+	})
+})
+
+describe('deny — a human miss answers in the shape the caller can act on', () => {
+	// A 302 only helps a document navigation: a page's `fetch` cannot follow a cross-origin bounce to
+	// IAM, and a redirect turns an in-flight POST into a bodyless GET. The signal is `Sec-Fetch-Mode`,
+	// which the browser writes and page JS cannot — `Sec-` is a forbidden header prefix.
+	const RPC_LOGIN_URL = `${ISSUER}/auth/login?app=example-app&redirect=${encodeURIComponent('https://app.example.com/api/rpc')}`
+
+	function rpcPost(mode: string | null): Request {
+		return verifyRequest({ path: '/api/rpc', method: 'POST', ...(mode === null ? {} : { headers: { 'Sec-Fetch-Mode': mode } }) })
+	}
+
+	test('a document navigation still gets the 302', async () => {
+		const request = verifyRequest({ path: '/dashboard', headers: { 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' } })
+		const response = await service(HUMAN, iamWith({}))(request)
+		expect(response.status).toBe(302)
+		expect(response.headers.get('location')).toBe(
+			`${ISSUER}/auth/login?app=example-app&redirect=${encodeURIComponent('https://app.example.com/dashboard')}`,
+		)
+	})
+
+	test("the console's RPC POST gets 401 with the SAME login URL, in a JSON body", async () => {
+		const response = await service(HUMAN, iamWith({}))(rpcPost('cors'))
+		expect(response.status).toBe(401)
+		expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8')
+		// No Location: nothing may follow this one by accident.
+		expect(response.headers.get('location')).toBeNull()
+		expectDenied(response)
+		const error = await errorEnvelope(response)
+		expect(error['type']).toBe('auth')
+		expect(error['loginUrl']).toBe(RPC_LOGIN_URL)
+	})
+
+	test('every non-navigate mode a browser can state gets the 401', async () => {
+		for (const mode of ['cors', 'same-origin', 'no-cors', 'websocket']) {
+			expect((await service(HUMAN, iamWith({}))(rpcPost(mode))).status).toBe(401)
+		}
+	})
+
+	test('an ABSENT Sec-Fetch-Mode falls back to the 302 — the answer the proxy has always given', async () => {
+		expect((await service(HUMAN, iamWith({}))(rpcPost(null))).status).toBe(302)
+		expect((await service(HUMAN, iamWith({}))(rpcPost(''))).status).toBe(302)
+	})
+
+	test('Accept: text/html cannot turn an XHR back into a navigation', async () => {
+		// The signal is what the BROWSER states about the request, not what the caller asks for.
+		// `Accept` is settable by page JS, so reading it would let the caller pick the answer's shape.
+		const request = verifyRequest({ path: '/api/rpc', method: 'POST', headers: { 'Sec-Fetch-Mode': 'cors', Accept: 'text/html' } })
+		expect((await service(HUMAN, iamWith({}))(request)).status).toBe(401)
+	})
+
+	test('the JSON body carries no deny reason — reasons are logged, never returned', async () => {
+		const iam = iamWith({ mintToken: { ok: false, reason: 'disabled' } })
+		const request = verifyRequest({ path: '/api/rpc', method: 'POST', cookie: 'px_session=s', headers: { 'Sec-Fetch-Mode': 'cors' } })
+		const response = await service(HUMAN, iam)(request)
+		expect(response.status).toBe(401)
+		const error = await errorEnvelope(response)
+		expect(error['message']).toBe('Authentication required')
+		expect(JSON.stringify(error)).not.toContain('disabled')
+	})
+
+	test('only the HUMAN miss changes shape — a service gate still answers a flat 401', async () => {
+		const iam = iamWith({ mintFromKey: { ok: false, reason: 'invalid_key' } })
+		const request = verifyRequest({ path: '/api/x', method: 'POST', bearer: 'px_bad', headers: { 'Sec-Fetch-Mode': 'cors' } })
+		const response = await service(SERVICE, iam)(request)
+		expect(response.status).toBe(401)
+		expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+		expect(await response.text()).toBe('unauthorized')
+	})
+
+	test('an outage is still a 503 for an XHR — never dressed up as a sign-in', async () => {
+		const iam = iamWith({ unreachable: true })
+		const request = verifyRequest({ path: '/api/rpc', method: 'POST', cookie: 'px_session=s', headers: { 'Sec-Fetch-Mode': 'cors' } })
+		const response = await service(HUMAN, iam)(request)
+		expect(response.status).toBe(503)
+		expect(await response.text()).toBe('unavailable')
 	})
 })
 

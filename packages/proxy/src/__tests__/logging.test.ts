@@ -63,11 +63,15 @@ describe('no secret material reaches the log', () => {
 		expect(dumped).not.toContain('px_token=')
 	})
 
-	test('the login bounce is logged without the redirect URL', async () => {
+	test('the login bounce is logged without the redirect URL, in either shape', async () => {
 		const logger = new CapturingLogger()
 		const verify = createVerifyService({ manifest: manifestWith(GATES), iam: new FakeIam({}), issuer: ISSUER, logger })
+		// The 302's Location and the 401's JSON body carry the same `?redirect=<original URL>`, so the
+		// original query re-appears percent-encoded in both. Neither may reach a log line.
 		await verify(verifyRequest({ path: `/secret?resume=${QUERY_TOKEN}` }))
+		await verify(verifyRequest({ path: `/secret?resume=${QUERY_TOKEN}`, headers: { 'Sec-Fetch-Mode': 'cors' } }))
 		expect(logger.dump()).not.toContain(QUERY_TOKEN)
+		expect(logger.dump()).not.toContain(encodeURIComponent(QUERY_TOKEN))
 	})
 
 	test('an internal fault logs no error object', async () => {

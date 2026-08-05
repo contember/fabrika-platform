@@ -145,42 +145,7 @@ describe('Delivery RPC client', () => {
 	})
 
 	test('redirects once in a browser and surfaces a repeated unauthorized response', async () => {
-		const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window')
-		const locationDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'location')
-		const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage')
-		const stored = new Map<string, string>()
-		const assignments: string[] = []
-		let resolveAssignment: (url: string) => void = () => undefined
-		const assigned = new Promise<string>((resolve) => {
-			resolveAssignment = resolve
-		})
-
-		Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
-		Object.defineProperty(globalThis, 'location', {
-			configurable: true,
-			value: {
-				href: 'https://console.example/runs/run-1',
-				assign(url: string) {
-					assignments.push(url)
-					resolveAssignment(url)
-				},
-			},
-		})
-		Object.defineProperty(globalThis, 'sessionStorage', {
-			configurable: true,
-			value: {
-				getItem(key: string) {
-					return stored.get(key) ?? null
-				},
-				setItem(key: string, value: string) {
-					stored.set(key, value)
-				},
-				removeItem(key: string) {
-					stored.delete(key)
-				},
-			},
-		})
-
+		const browser = stubBrowser('https://console.example/runs/run-1')
 		try {
 			const client = createControlClient(async () =>
 				Response.json(
@@ -189,18 +154,45 @@ describe('Delivery RPC client', () => {
 				)
 			)
 			void client.apps.list()
-			const redirected = new URL(await assigned)
+			const redirected = new URL(await browser.assigned)
 			expect(redirected.origin + redirected.pathname).toBe('https://iam.example/login')
 			expect(redirected.searchParams.get('flow')).toBe('console')
 			expect(redirected.searchParams.get('redirect')).toBe('https://console.example/runs/run-1')
 
 			const error = await client.apps.list().catch((cause: unknown) => cause)
 			expect(error).toBeInstanceOf(ApiError)
-			expect(assignments).toHaveLength(1)
+			expect(browser.assignments).toHaveLength(1)
 		} finally {
-			restoreProperty('window', windowDescriptor)
-			restoreProperty('location', locationDescriptor)
-			restoreProperty('sessionStorage', storageDescriptor)
+			browser.restore()
+		}
+	})
+
+	test("the proxy's own 401 envelope, byte for byte, bounces the console to IAM", async () => {
+		// An expired session on an RPC POST is refused by the PROXY, not by control — the console never
+		// reaches its upstream. `packages/proxy/src/service.ts` (`loginRequired`) writes exactly this,
+		// and `packages/proxy/src/authorize.ts` (`loginUrl`) builds exactly that URL. Both are copied
+		// here verbatim: if either changes shape, this fails and the console stops signing users in.
+		const loginUrl = `https://iam.fabrika.localhost/auth/login?app=vozka&redirect=${encodeURIComponent('https://console.fabrika.localhost/api/rpc')}`
+		const proxyBody = JSON.stringify({ error: { type: 'auth', message: 'Authentication required', loginUrl } })
+
+		const browser = stubBrowser('https://console.fabrika.localhost/apps/billing')
+		try {
+			const client = createControlClient(async () =>
+				new Response(proxyBody, {
+					status: 401,
+					headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+				})
+			)
+			void client.apps.list()
+			const redirected = new URL(await browser.assigned)
+
+			expect(redirected.origin + redirected.pathname).toBe('https://iam.fabrika.localhost/auth/login')
+			// ADR-0021 needs `app=`; the client only rewrites `redirect=`, to the page the operator is on
+			// rather than the RPC endpoint the miss happened at.
+			expect(redirected.searchParams.get('app')).toBe('vozka')
+			expect(redirected.searchParams.get('redirect')).toBe('https://console.fabrika.localhost/apps/billing')
+		} finally {
+			browser.restore()
 		}
 	})
 
@@ -234,6 +226,64 @@ describe('Delivery RPC client', () => {
 		expect(error.message).toBe('Network request failed')
 	})
 })
+
+interface StubbedBrowser {
+	/** Every URL `window.location.assign` was called with, in order. */
+	readonly assignments: string[]
+	/** Resolves with the FIRST assignment — the bounce is fire-and-forget, so the test must await it. */
+	readonly assigned: Promise<string>
+	restore(): void
+}
+
+/** The three globals `bounceOnAuth` needs: `window`, `location.assign`, and `sessionStorage`. */
+function stubBrowser(href: string): StubbedBrowser {
+	const descriptors = new Map<string, PropertyDescriptor | undefined>()
+	for (const key of ['window', 'location', 'sessionStorage']) {
+		descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key))
+	}
+	const stored = new Map<string, string>()
+	const assignments: string[] = []
+	let resolveAssignment: (url: string) => void = () => undefined
+	const assigned = new Promise<string>((resolve) => {
+		resolveAssignment = resolve
+	})
+
+	Object.defineProperty(globalThis, 'window', { configurable: true, value: globalThis })
+	Object.defineProperty(globalThis, 'location', {
+		configurable: true,
+		value: {
+			href,
+			assign(url: string) {
+				assignments.push(url)
+				resolveAssignment(url)
+			},
+		},
+	})
+	Object.defineProperty(globalThis, 'sessionStorage', {
+		configurable: true,
+		value: {
+			getItem(key: string) {
+				return stored.get(key) ?? null
+			},
+			setItem(key: string, value: string) {
+				stored.set(key, value)
+			},
+			removeItem(key: string) {
+				stored.delete(key)
+			},
+		},
+	})
+
+	return {
+		assignments,
+		assigned,
+		restore() {
+			for (const [key, descriptor] of descriptors) {
+				restoreProperty(key, descriptor)
+			}
+		},
+	}
+}
 
 function restoreProperty(key: string, descriptor: PropertyDescriptor | undefined): void {
 	if (descriptor === undefined) {

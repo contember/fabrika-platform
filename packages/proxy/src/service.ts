@@ -7,7 +7,9 @@
  *     `X-Forwarded-Method` / `X-Forwarded-Uri`, plus reverse_proxy's `X-Forwarded-{For,Proto,Host}`;
  *   - a **2xx** response lets the request continue, and each `copy_headers` field is copied onto the
  *     UPSTREAM request — but ONLY when non-empty (Caddy guards each copy with a `not vars ""` matcher);
- *   - **any other status** is returned to the client verbatim, so a 302 to `/auth/login` just works.
+ *   - **any other status** is returned to the client verbatim — status, headers AND body, verified
+ *     against caddy 2.10.2 — so both a 302 to `/auth/login` and a 401 carrying a JSON login envelope
+ *     reach the caller and neither reaches the app.
  *
  * The two consequences that shape this file:
  *   1. the request being authorized is described ENTIRELY by the forwarded headers. Never look at
@@ -180,14 +182,34 @@ function handoffResponse(decision: Extract<Decision, { outcome: 'handoff' }>, se
 function denied(logger: ProxyLogger, fields: LogFields, decision: Extract<Decision, { outcome: 'deny' | 'login' }>): Response {
 	const reason: DenyReason = decision.reason
 	if (decision.outcome === 'login') {
-		logger.info('login', { ...fields, reason })
-		return new Response(null, {
-			status: 302,
-			headers: { location: decision.location, 'cache-control': 'no-store' },
-		})
+		logger.info('login', { ...fields, reason, status: decision.status })
+		return decision.status === 302 ? loginRedirect(decision.location) : loginRequired(decision.location)
 	}
 	logger.warn('deny', { ...fields, reason, status: decision.status })
 	return textResponse(decision.status, decision.status === 401 ? 'unauthorized' : decision.status === 503 ? 'unavailable' : 'forbidden')
+}
+
+/** The bounce a document navigation gets: the browser follows it and comes back signed in. */
+function loginRedirect(location: string): Response {
+	return new Response(null, { status: 302, headers: { location, 'cache-control': 'no-store' } })
+}
+
+/**
+ * The answer everything else gets — an XHR, a `fetch`, the console's own RPC POST. The envelope is
+ * the one `@fabrika/app`'s browser client already parses (`bounceOnAuth` acts on a 401 whose
+ * `error.type` is `auth` and which carries a `loginUrl`), so an expired console session becomes a
+ * sign-in rather than a redirect `fetch` cannot follow.
+ *
+ * The message is a fixed string: the deny REASON stays coarse and stays in the log. The login URL
+ * now rides in a body as well as in `Location`, which adds no way for a credential to reach a log —
+ * Caddy logs request URIs and response headers, never bodies, and the access log already redacts
+ * `?redirect=` out of both.
+ */
+function loginRequired(loginUrl: string): Response {
+	return new Response(JSON.stringify({ error: { type: 'auth', message: 'Authentication required', loginUrl } }), {
+		status: 401,
+		headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+	})
 }
 
 function textResponse(status: number, body: string): Response {

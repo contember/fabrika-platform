@@ -7,8 +7,11 @@
  *   3. exchange it with IAM once, cache the result, and thereafter verify LOCALLY against the JWKS;
  *   4. deny unless a rule was satisfied.
  *
- * A human miss becomes a 302 to IAM's `/auth/login`, because Caddy returns a non-2xx auth response
- * to the client verbatim. A request with no session cookie needs no IAM call.
+ * A human miss becomes a bounce to IAM's `/auth/login`, in whichever shape the caller can act on: a
+ * 302 for a document navigation, a 401 carrying the same URL in a JSON body for everything else (see
+ * `isDocumentNavigation`). Caddy returns a non-2xx auth response — status, headers and body — to the
+ * client verbatim, so both reach the caller and neither reaches the app. A request with no session
+ * cookie needs no IAM call.
  *
  * NOTHING here returns an allow on an unexpected condition. Every `catch` maps to a deny.
  */
@@ -52,8 +55,12 @@ export type Decision =
 		subject: string | null
 	}
 	| { outcome: 'deny'; status: 401 | 403 | 503; reason: DenyReason }
-	/** A human hit a `human` gate without a usable session — bounce the browser to IAM. */
-	| { outcome: 'login'; status: 302; location: string; reason: DenyReason }
+	/**
+	 * A human hit a `human` gate without a usable session. `location` is where they must go to sign
+	 * in; `status` is only how they are TOLD — 302 for a document navigation, 401 for anything else,
+	 * whose body carries the same URL. See `isDocumentNavigation` for why the two differ.
+	 */
+	| { outcome: 'login'; status: 302 | 401; location: string; reason: DenyReason }
 	/**
 	 * A handoff code was redeemed (ADR-0021). The ONLY outcome that sets a cookie: `session` is the
 	 * app-bound session to write host-only on this app's host, and `location` is where IAM said the
@@ -87,6 +94,13 @@ export interface AuthorizerOptions {
 	/** Unix seconds. Injectable for tests. */
 	now?: () => number
 }
+
+/**
+ * The browser's own description of what issued the request. Read from the FORWARDED headers like
+ * everything else a decision depends on — verified against caddy 2.10.2, whose `forward_auth`
+ * subrequest carries the original `Sec-Fetch-*` verbatim.
+ */
+const FETCH_MODE_HEADER = 'Sec-Fetch-Mode'
 
 /** Why a `human` attempt failed — mirrors `mintToken`'s reasons. */
 type SessionFailureReason = 'no_session' | 'invalid_session' | 'unknown_principal' | 'disabled'
@@ -164,7 +178,12 @@ export class Authorizer {
 		}
 
 		if (humanMiss !== null) {
-			return { outcome: 'login', status: 302, location: this.loginUrl(resolved.app, request.url), reason: humanMiss }
+			return {
+				outcome: 'login',
+				status: isDocumentNavigation(request.headers) ? 302 : 401,
+				location: this.loginUrl(resolved.app, request.url),
+				reason: humanMiss,
+			}
 		}
 		// Every matching rule was a `service` rule with no credential present.
 		return { outcome: 'deny', status: 401, reason: 'no_credential' }
@@ -351,4 +370,28 @@ export class Authorizer {
 		const issuer = this.options.issuer.replace(/\/+$/, '')
 		return `${issuer}/auth/login?app=${encodeURIComponent(app.id)}&${LOGIN_REDIRECT_PARAM}=${encodeURIComponent(target.toString())}`
 	}
+}
+
+/**
+ * Is this a top-level document navigation — the one caller a 302 actually helps?
+ *
+ * A redirect is not a neutral way to say "sign in". A cross-origin bounce to IAM is something a
+ * page's `fetch` cannot follow, so the console sees an opaque network failure instead of a sign-in;
+ * and a 302 destroys the request it answers, turning an in-flight POST into a bodyless GET — the same
+ * argument ADR-0021 makes for handing over a session rather than a bare token.
+ *
+ * **`Sec-Fetch-Mode` is the signal, not `Accept`.** It is written by the browser and not by the page:
+ * `Sec-` is a forbidden header PREFIX, so `fetch`/XHR cannot set it, and only a document or frame
+ * navigation carries `navigate` — `fetch()` and XHR emit `cors` / `same-origin` / `no-cors`. `Accept:
+ * text/html` (what the deleted SDK's `wantsHtml` used) is an ordinary header: any XHR may send it and
+ * a navigation may omit it, so it would let the CALLER pick the answer shape instead of describing
+ * what the caller is.
+ *
+ * **Absent → 302**, the answer this proxy has always given. A client old enough to omit the header is
+ * overwhelmingly a browser navigating, and a JSON body is unusable to one; a non-browser client that
+ * sends no `Sec-Fetch-Mode` is no worse off than before this distinction existed.
+ */
+function isDocumentNavigation(headers: Headers): boolean {
+	const mode = headers.get(FETCH_MODE_HEADER)
+	return mode === null || mode === '' || mode === 'navigate'
 }

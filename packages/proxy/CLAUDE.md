@@ -22,6 +22,15 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   anonymous token for the app (up to 24 h, not revocable) and `mintFromKey` signs `ptype: 'service'`.
   `px_token` is client-supplied — the proxy only ever writes `px_session` — so every tier of
   `authorizeSession` checks the claim. Share links are redeemed OFF the gate path.
+- **A `human` gate miss answers in the shape the caller can act on.** `Sec-Fetch-Mode: navigate`, or
+  the header absent, → the 302 bounce; any other value → **401** with
+  `{ error: { type: 'auth', message, loginUrl } }`, the envelope `@fabrika/app`'s browser RPC client
+  bounces on. A redirect a page's `fetch` cannot follow is an opaque failure, and a 302 turns an
+  in-flight POST into a bodyless GET. The signal is `Sec-Fetch-Mode` and not `Accept` because `Sec-`
+  is a forbidden header prefix — the browser states it and page JS cannot, so it describes the caller
+  instead of letting the caller choose the answer. Both forms carry the SAME login URL (`app=` +
+  `redirect=`, ADR-0021). Verified against caddy 2.10.2: `forward_auth` forwards `Sec-Fetch-*`
+  verbatim and returns a non-2xx auth response — status, `Content-Type` and body — to the client.
 - **The service binds to LOOPBACK.** It answers "is this request allowed" and hands back a signed
   token, so a publicly routable instance is a token oracle. Caddy is the only thing that may dial it.
 - **The request being authorized is described ENTIRELY by the forwarded headers.** Never read this
