@@ -345,3 +345,71 @@ dependency-free and jose-free ("Signing/verifying stays in the packages that own
 not depend on the app SDK. A package existing to share ~90 lines between two consumers with genuinely
 different cache lifetimes would be the over-engineering this sprint is removing. What must not drift is
 their **three-state semantics**, so pin that with a shared conformance test instead — folded into WU-F.
+
+**Wave 2 — WU-C2 landed.** 27 findings plus the OIDC boot asymmetry. Typecheck clean; `bun test` 1800
+pass / 0 fail with the Postgres suites actually executed against a throwaway `postgres:17`, and the
+console's Access plane verified against a running `local:up`.
+
+⚠ **The priority item was not the finding as written — it was worse and it also hit Operations.** The
+review said control's process-side gateway rewrote `Origin` to IAM's private RPC address while IAM
+compared against its public issuer. Both halves are gone: the rewrite is deleted and IAM now holds a
+REGISTRY of browser origins allowed to drive `/admin/*` (`FABRIKA_IAM_ADMIN_ORIGINS`, empty =
+fail-closed, bearer-only callers exempt). But the same class of bug sat unfixed in
+`operations-gateway.ts`, which compared `Origin` against `new URL(request.url).origin` — plain HTTP
+behind a TLS-terminating balancer, so every operator write through the console was 403 in production
+too. It now takes `publicOrigin` like the IAM gateway does. Backlog 50 fixed one of the two gateways.
+
+**What stops the confused deputy after the change**: control's own same-origin check in
+`forwardIamAdmin` / `forwardOperationsApi`, against `controlPublicOrigin(env)`. Verified live: a POST
+to `/iam/admin/rpc` with `Origin: https://evil.example.com` and a real `px_session` is refused by
+control with its own flat envelope, and IAM is never called. IAM's registry is the second, independent
+lock — it refuses an unregistered origin with its own RPC envelope, which is how the two are told
+apart in the test.
+
+**Item 2 — the machine hatch is deleted, not repaired.** `FABRIKA_IAM_PROVISIONING_KEY` could not
+pass a `service` gate and never will: it has no `credentials` row, so `mintFromKey` answers
+`invalid_key` at the proxy. Machine access to the control plane is an IAM-issued service key
+(`docs/reference/human-authentication.md` § First machine caller). IAM's own bootstrap use of the
+provisioning key over `/admin/*` is untouched.
+
+**Deviations from the decided plan, both deliberate:**
+
+- **SEC-2 binds every credential to an app, but `app IS NULL` stays legal for a PRINCIPAL-BOUND one.**
+  The decision said `app IS NULL` stops working. Taken literally it breaks the cross-app operator key
+  the local stack (and `provisionApiKey`'s "all apps" option) deliberately issues, and it buys nothing:
+  a bound credential carries no frozen authority — its permissions resolve per app through `grants`,
+  which are already app-filtered. The hard cutover applies exactly where the defect was, to ANONYMOUS
+  credentials, whose inline grants are frozen at issue and were delegation-checked against one app.
+  Pre-existing share links have no app and are dead until reissued; the Postgres migration NOTICEs
+  which ones.
+- **Share links now require an explicit `app`, which changed `IssueShareLinkRequest`.** There was no
+  other honest binding available: `createShareLinkUseCase` issued with `c.app` = `propustka`, i.e. IAM
+  itself, so binding to that would have made every share link useless. The delegation check moved with
+  it — an admin's permissions are now resolved AT THE TARGET APP, so an app-scoped admin delegates only
+  what they hold there. `iam-ui`'s issue form grew an app selector.
+
+**OIDC unified on fatal, and that made the local Cloudflare config password-only.** `buildOidc` now
+requires issuer/client id/secret whenever the method is enabled, matching the Bun path. `wrangler dev`
+has none of those, so `fabrika.config.ts`'s local vars flipped to `OIDC_ENABLED: 'false'` /
+`PASSWORD_ENABLED: 'true'` — which is what the docker stack already ran.
+
+**CORR-4 keys the mask on the ERROR TYPE and keeps the status mask.** Scrubbing only by `type:
+'internal'` would have un-masked the deliberate `fail(502, …)` on email delivery, which wave 1 wrote
+to be opaque. So: 5xx is replaced outright as before, AND every `type: 'internal'` envelope is scrubbed
+whatever the status — which is the half that was missing, because a batch always answers 200.
+
+**Two things the plan did not anticipate:**
+
+- **`packages/local-stack/__tests__/` is where a cross-package test belongs.** The gateway-to-IAM test
+  the acceptance asked for cannot live in either package — neither depends on the other, and it must
+  not. `proxy-gates.test.ts` had already established the pattern: outside `src/`, so `typecheck` never
+  follows the import. `console-access-plane.test.ts` composes control's real gateway over a real socket
+  in front of IAM's real app, with console origin ≠ issuer ≠ private address. Re-adding the header
+  rewrite fails exactly two of its cases.
+- **D1's 100-bound-parameter limit made CORR-9 a correctness bug, not tidiness.** The old prune spent
+  one parameter per KEPT value, so an app with a hundred actions could not reconcile at all. Fixed by
+  clearing then writing inside the same batch, which also made every statement's width constant.
+
+**Not done, and why:** SEC-22's cursor is wired through the RPC contract and the REST endpoints, but
+`iam-ui` and `dashboard` still render only the first page — they were excluded from the review and no
+"load more" control exists. Paging is available to them the moment someone adds one.
