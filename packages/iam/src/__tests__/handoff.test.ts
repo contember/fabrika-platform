@@ -1,4 +1,4 @@
-// The cross-host session handoff (ADR-0021).
+// The session handoff (ADR-0021, ADR-0023) — the only way a session reaches an app's host.
 //
 // The property under test throughout is that a code buys exactly ONE app session, for ONE app, for
 // as long as the login behind it lives — and nothing else. Every failure mode below is a way that
@@ -221,32 +221,12 @@ describe('GET /auth/login as a handoff', () => {
 		expect(location.searchParams.get('redirect')).toBeNull()
 	})
 
-	test('an app with an EMPTY registry has not opted in — the ordinary login still works', async () => {
-		// The proxy sends `app=` on every bounce, so treating "no registry" as a misconfiguration would
-		// break every installation that shares a cookie domain with IAM the moment it upgraded. The
-		// local stack is exactly that.
-		const { services, sessionToken } = await scenario({ origins: [] })
-		const response = await handleAuth(
-			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(ISSUER)}`, {
-				headers: { Cookie: `${SESSION_COOKIE}=${sessionToken}` },
-			}),
-			services,
-			AUTH_ENV,
-			new TestContext(),
-		)
-		// The ordinary login, unchanged: the form renders and carries no app, so nothing downstream
-		// issues a code. Not a 400, which is what an empty registry used to produce.
-		expect(response.status).toBe(200)
-		const html = await response.text()
-		expect(html).toContain('<form method="post" action="/auth/login">')
-		expect(html).not.toContain('name="app"')
-	})
-
-	test('an empty registry that CANNOT be served by the shared cookie is a 400, not a login loop', async () => {
-		// The narrow half of the opt-out above. With no cookie domain, `safeRedirect` refuses the app's
-		// host, so the ordinary path provably cannot carry the browser back: the fast path is skipped
-		// (there is no handoff), the form lands the human on IAM's root, they go back, and it repeats.
-		// Unbounded, and with OIDC completely silent — the IdP auto-approves every lap.
+	test('an EMPTY registry is a 400 naming the address, not a fallback (ADR-0023)', async () => {
+		// This used to be the shared-cookie opt-out: an app with no registry "had not opted in" and the
+		// browser took the ordinary login, which worked whenever IAM and the app shared a domain. With
+		// one session-delivery mechanism there is nothing to fall back TO — the login would succeed and
+		// land the browser on a host where it has no session, forever. So it is the same refusal as an
+		// address that is simply not in a non-empty registry, and it names what nobody registered.
 		const { services, sessionToken } = await scenario({ origins: [] })
 		const response = await handleAuth(
 			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private`)}`, {
@@ -257,8 +237,18 @@ describe('GET /auth/login as a handoff', () => {
 			new TestContext(),
 		)
 		expect(response.status).toBe(400)
-		// The message names the origin nobody registered — the one thing an operator has to act on.
 		expect(await response.text()).toContain(APP_ORIGIN)
+	})
+
+	test('an app named with NO return address at all is a 400 too', async () => {
+		const { services, sessionToken } = await scenario()
+		const response = await handleAuth(
+			new Request(`${ISSUER}/auth/login?app=notes`, { headers: { Cookie: `${SESSION_COOKIE}=${sessionToken}` } }),
+			services,
+			AUTH_ENV,
+			new TestContext(),
+		)
+		expect(response.status).toBe(400)
 	})
 
 	test('an unregistered return address is a 400, never a quiet fallback to the issuer', async () => {
@@ -272,6 +262,8 @@ describe('GET /auth/login as a handoff', () => {
 			new TestContext(),
 		)
 		expect(response.status).toBe(400)
+		// It names the address, which is the one thing an operator has to act on.
+		expect(await response.text()).toContain('https://evil.test')
 	})
 
 	test('without a session the password form carries BOTH the app and its return address forward', async () => {
@@ -285,9 +277,9 @@ describe('GET /auth/login as a handoff', () => {
 		expect(response.status).toBe(200)
 		const html = await response.text()
 		expect(html).toContain('name="app" value="notes"')
-		// `safeRedirect`'s allowlist is the session-cookie domain, which by construction excludes the
-		// cross-host case. Letting it rewrite this to the issuer strands the login on IAM — it did,
-		// live, and the form looked perfectly fine.
+		// `safeRedirect` admits IAM's own origin only, which by construction excludes the app host.
+		// Letting it rewrite this to the issuer strands the login on IAM — it did, live, and the form
+		// looked perfectly fine.
 		expect(html).toContain(`name="redirect" value="${APP_ORIGIN}/private"`)
 	})
 
@@ -347,7 +339,6 @@ describe('registering return origins', () => {
 			ISSUER: ISSUER,
 			FABRIKA_IAM_SIGNING_KEYS: '',
 			FABRIKA_IAM_PROVISIONING_KEY: '',
-			SESSION_COOKIE_DOMAIN: '',
 			OIDC_ISSUER: 'https://idp.test',
 			OIDC_CLIENT_ID: 'client',
 			OIDC_CLIENT_SECRET: 'secret',

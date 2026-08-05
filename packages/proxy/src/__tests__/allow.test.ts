@@ -58,7 +58,7 @@ describe('allow — human', () => {
 	test('a valid px_token cookie authorizes locally and is injected upstream', async () => {
 		const token = await signUserToken(3600)
 		const { iam, verify } = service({ rules: [{ path: '/*', kind: 'human' }] })
-		const response = await verify(verifyRequest({ cookie: `px_token=${token}; other=ignored` }))
+		const response = await verify(verifyRequest({ cookie: `__Host-px_token=${token}; other=ignored` }))
 		expect(response.status).toBe(204)
 		expect(response.headers.get(PROXY_TOKEN_HEADER)).toBe(token)
 		expect(iam.mintTokenCalls).toBe(0) // the whole point: warm path, no round trip
@@ -69,7 +69,7 @@ describe('allow — human', () => {
 		const { iam, verify } = service({ rules: [{ path: '/*', kind: 'human' }] }, {
 			mintToken: { ok: true, token, expiresAt: future() },
 		})
-		const response = await verify(verifyRequest({ cookie: 'px_session=sess-abc' }))
+		const response = await verify(verifyRequest({ cookie: '__Host-px_session=sess-abc' }))
 		expect(response.status).toBe(204)
 		expect(response.headers.get(PROXY_TOKEN_HEADER)).toBe(token)
 		expect(iam.seenSessions).toEqual(['sess-abc'])
@@ -137,7 +137,7 @@ describe('gate ordering — array order is the precedence', () => {
 	test('an ABSENT service credential falls through to the human rule', async () => {
 		const token = await signUserToken()
 		const { iam, verify } = service(SERVICE_THEN_HUMAN, { mintToken: { ok: true, token, expiresAt: future() } })
-		expect((await verify(verifyRequest({ cookie: 'px_session=s' }))).status).toBe(204)
+		expect((await verify(verifyRequest({ cookie: '__Host-px_session=s' }))).status).toBe(204)
 		expect(iam.mintFromKeyCalls).toBe(0)
 		expect(iam.mintTokenCalls).toBe(1)
 	})
@@ -148,15 +148,15 @@ describe('gate ordering — array order is the precedence', () => {
 		const cases: { gates: AppGates; request: VerifyRequestOptions }[] = [
 			{
 				gates: { rules: [{ path: '/*', kind: 'service', credential: { in: 'header', name: 'X-Service-Key' } }, { path: '/*', kind: 'human' }] },
-				request: { headers: { 'X-Service-Key': '   ' }, cookie: 'px_session=s' },
+				request: { headers: { 'X-Service-Key': '   ' }, cookie: '__Host-px_session=s' },
 			},
 			{
 				gates: { rules: [{ path: '/*', kind: 'service', credential: { in: 'query', name: 'key' } }, { path: '/*', kind: 'human' }] },
-				request: { path: '/x?key=', cookie: 'px_session=s' },
+				request: { path: '/x?key=', cookie: '__Host-px_session=s' },
 			},
 			{
 				gates: { rules: [{ path: '/*', kind: 'service', credential: { in: 'cookie', name: 'key' } }, { path: '/*', kind: 'human' }] },
-				request: { cookie: 'key=; px_session=s' },
+				request: { cookie: 'key=; __Host-px_session=s' },
 			},
 		]
 		for (const { gates, request } of cases) {
@@ -228,11 +228,11 @@ describe('app selection', () => {
 			issuer: ISSUER,
 		})
 		// The pin decides, so the open app's public rule is never reached...
-		expect((await verify(verifyRequest({ app: APP, host: HOST, cookie: `px_token=${token}` }))).status).toBe(204)
+		expect((await verify(verifyRequest({ app: APP, host: HOST, cookie: `__Host-px_token=${token}` }))).status).toBe(204)
 		expect((await verify(verifyRequest({ app: APP, host: HOST }))).status).toBe(302)
 		// ...and claiming a host the pinned app does not declare is refused outright, so the forwarded
 		// host can never end up building a URL for an origin the manifest never mentioned.
-		expect((await verify(verifyRequest({ app: APP, host: 'open.example.com', cookie: `px_token=${token}` }))).status).toBe(403)
+		expect((await verify(verifyRequest({ app: APP, host: 'open.example.com', cookie: `__Host-px_token=${token}` }))).status).toBe(403)
 	})
 
 	test('a pinned app still matches its own host case- and port-insensitively', async () => {

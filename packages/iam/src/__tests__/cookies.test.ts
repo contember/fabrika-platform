@@ -7,6 +7,7 @@
  * malformed segment in the middle of an otherwise valid header.
  */
 
+import { SESSION_COOKIE } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { clearCookie, readCookie, serializeCookie } from '../auth/cookies'
 
@@ -61,14 +62,21 @@ describe('serializeCookie / clearCookie', () => {
 	test('every option lands in the header, in a shape a browser accepts', () => {
 		expect(
 			serializeCookie('px_session', 'abc', {
-				domain: '.example.com',
 				maxAge: 3600,
 				httpOnly: true,
 				secure: true,
 				sameSite: 'Lax',
 				path: '/auth',
 			}),
-		).toBe('px_session=abc; Path=/auth; Domain=.example.com; Max-Age=3600; HttpOnly; Secure; SameSite=Lax')
+		).toBe('px_session=abc; Path=/auth; Max-Age=3600; HttpOnly; Secure; SameSite=Lax')
+	})
+
+	// There is no `domain` option, and its absence is the point: every cookie IAM writes is host-only,
+	// and `__Host-px_session` would be REFUSED by the browser if one were emitted (ADR-0023).
+	test('no option can produce a Domain attribute', () => {
+		const header = serializeCookie(SESSION_COOKIE, 'abc', { maxAge: 3600, httpOnly: true, secure: true, sameSite: 'Lax' })
+		expect(header).toBe(`${SESSION_COOKIE}=abc; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=Lax`)
+		expect(header).not.toContain('Domain')
 	})
 
 	test('`maxAge: 0` is emitted — it is how a cookie is expired, not an absent option', () => {
@@ -76,10 +84,11 @@ describe('serializeCookie / clearCookie', () => {
 	})
 
 	test('clearCookie expires the value and round-trips back to empty', () => {
-		const header = clearCookie('px_session', { domain: '.example.com', secure: true })
+		const header = clearCookie('px_session')
 		expect(header).toContain('px_session=')
 		expect(header).toContain('Max-Age=0')
-		expect(header).toContain('Domain=.example.com')
+		// `Secure` is unconditional: a deletion must satisfy the same attribute rules as the cookie it
+		// replaces, or the browser keeps the original.
 		expect(header).toContain('Secure')
 		expect(header).toContain('HttpOnly')
 		// What a browser would send back before it drops the cookie.

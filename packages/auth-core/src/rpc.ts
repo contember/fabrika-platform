@@ -13,7 +13,7 @@ import type { PermissionEntry, PrincipalType, Scope } from './types'
 export interface MintTokenInput {
 	/** The app requesting a permission token (the SDK bakes this into its constructor). */
 	app: string
-	/** The opaque SSO session cookie value (px_session); null when the browser has no session. */
+	/** The opaque session cookie value (`__Host-px_session`); null when the browser has no session. */
 	session: string | null
 	requestId: string
 }
@@ -43,17 +43,18 @@ export type MintFromKeyResult =
 	| { ok: true; token: string; expiresAt: number }
 	| { ok: false; reason: 'invalid_key' | 'unknown_principal' | 'disabled' }
 
-// ── Cross-host session handoff (ADR-0021) ─────────────────────────────────────
+// ── Session handoff (ADR-0021, ADR-0023) ──────────────────────────────────────
 //
-// How a browser that authenticated at IAM ends up authenticated at an app on a DIFFERENT domain,
-// where no cookie of IAM's can be read. IAM issues a single-use code bound to (session, app, return
-// URL); the proxy in front of the app redeems it and sets the returned APP SESSION as a host-only
-// cookie on the app's own host. Everything after that is the ordinary `mintToken` path.
+// The ONE way a browser that authenticated at IAM ends up authenticated at an app, whether or not the
+// two share a domain: no cookie of IAM's is ever readable from an app's host. IAM issues a single-use
+// code bound to (session, app, return URL); the proxy in front of the app redeems it and sets the
+// returned APP SESSION as a host-only cookie on the app's own host. Everything after that is the
+// ordinary `mintToken` path.
 //
 // The redemption yields a SESSION, not just an access token, and that is the point: an access token
 // lives `DEFAULT_TOKEN_TTL_SECONDS`, so a browser holding only one would be redirected on every
-// expiry — and a redirect turns an in-flight POST into a bodyless GET. The proxy must be able to
-// re-mint server-side, exactly as it does from `px_session` when the domains do happen to match.
+// expiry — and a redirect turns an in-flight POST into a bodyless GET. The proxy re-mints from the
+// app's own session, server-side.
 //
 // This lives on the PROXY surface (`/auth/mint/*`, gated by its own key), not on `IamRpc`. That is
 // ADR-0007's least-privilege split: the proxy is the only publicly-routed component and holds a key

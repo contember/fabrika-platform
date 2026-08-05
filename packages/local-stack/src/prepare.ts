@@ -1,7 +1,8 @@
+import { CONTROL_PROXY_GATES } from '@fabrika/control/gates'
 import { notesGates } from '@fabrika/example-zerops-app/gates'
-import { OPERATIONS_RELEASE_RECONCILE_PATH, OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'
+import { OPERATIONS_PROXY_GATES } from '@fabrika/operations/gates'
 import { buildCaddyConfig } from '@fabrika/proxy'
-import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-contract'
+import type { ProxyManifest } from '@fabrika/proxy-contract'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -115,63 +116,18 @@ const generateSecrets = async (): Promise<void> => {
 	])
 }
 
-type Gates = ProxyApp['gates']
-
 /**
- * The gates the LOCAL platform proxy enforces.
+ * The local platform proxy fronts the same three services a real installation does, with the SAME gate
+ * sets — `CONTROL_PROXY_GATES` and `OPERATIONS_PROXY_GATES`, imported from the packages that own them
+ * rather than copied. They used to be copies pinned by a test, because both lived in a
+ * `fabrika.config.ts` that imports `@fabrika/provider-cloudflare` and oblaka's raw TypeScript does not
+ * compile under this package's strict settings; each is now a provider-free module of its own.
  *
- * They are copies of the production sets — `CONTROL_PROXY_GATES` in `packages/control/fabrika.config.ts`
- * and `OPERATIONS_PROXY_GATES` in `packages/operations/fabrika.config.ts` — because neither is
- * importable from here: both live in a `fabrika.config.ts` that imports `@fabrika/provider-cloudflare`,
- * and pulling oblaka's raw TypeScript into this package's strict program does not compile. Copies drift,
- * so `__tests__/proxy-gates.test.ts` builds the real Cloudflare proxy Workers and fails if these stop
- * being equal to the manifests those Workers bake in.
- *
- * The local stack is one proxy in front of three services, which is the Zerops platform shape; on
- * Cloudflare each service has its own proxy Worker. That is the only structural difference, and it is
- * why the Operations entry keeps its own app id here (a manifest may not name one app twice) where the
- * Cloudflare Operations proxy reuses `vozka`.
+ * One proxy in front of three services is the ZEROPS shape; on Cloudflare each service has its own
+ * proxy Worker. That is the only structural difference, and it is why the Operations entry keeps its
+ * own app id here (a manifest may not name one app twice) where the Cloudflare Operations proxy reuses
+ * `vozka`.
  */
-const CONTROL_GATES: Gates = {
-	rules: [
-		{ path: '/api/*', kind: 'service' },
-		{ path: '/api/*', kind: 'human' },
-	],
-}
-
-const CONTROL_PROXY_GATES: Gates = {
-	rules: [
-		{ path: '/healthz', kind: 'public' },
-		{ path: '/api/health', kind: 'public' },
-		{ path: '/webhooks/github', kind: 'public' },
-		{ path: '/iam/admin', kind: 'service' },
-		{ path: '/iam/admin', kind: 'human' },
-		{ path: '/iam/admin/*', kind: 'service' },
-		{ path: '/iam/admin/*', kind: 'human' },
-		{ path: '/operations/api', kind: 'service' },
-		{ path: '/operations/api', kind: 'human' },
-		{ path: '/operations/api/*', kind: 'service' },
-		{ path: '/operations/api/*', kind: 'human' },
-		...CONTROL_GATES.rules,
-		{ path: '/*', kind: 'human' },
-	],
-}
-
-const OPERATIONS_PROXY_GATES: Gates = {
-	rules: [
-		{ path: '/healthz', kind: 'public' },
-		{ path: '/api/*/envelope/', kind: 'public' },
-		{ path: OPERATIONS_SOURCE_MAP_UPLOAD_PATH, kind: 'public' },
-		{ path: '/private/catalog/reconcile', kind: 'service' },
-		{ path: OPERATIONS_RELEASE_RECONCILE_PATH, kind: 'service' },
-		{ path: '/api/*', kind: 'service' },
-		{ path: '/api/*', kind: 'human' },
-	],
-}
-
-/** The production gate sets this manifest reproduces, exported for the drift test. */
-export const localProductionGates = { vozka: CONTROL_PROXY_GATES, operations: OPERATIONS_PROXY_GATES }
-
 export const localPlatformProxyManifest = (): ProxyManifest => ({
 	apps: [
 		{

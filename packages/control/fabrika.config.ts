@@ -12,8 +12,6 @@
 // Secrets are never inlined: the GitHub App key/webhook secret + the M4 vault key are declared by
 // NAME in `pipeline.secrets` and provisioned out-of-band (`wrangler secret put` / `.dev.vars`).
 
-import type { AppGates, AppSchema } from '@fabrika/auth'
-import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import { environmentAliases } from '@fabrika/platform'
 import {
 	createCloudflareProxyWorker,
@@ -25,26 +23,9 @@ import {
 	ServiceReference,
 	Worker,
 } from '@fabrika/provider-cloudflare'
-import { ACTIONS, SCOPES, VOZKA_APP_ID } from './src/actions'
-import { CONTROL_GATES } from './src/iam'
-
-const CONTROL_PROXY_GATES: AppGates = {
-	rules: [
-		{ path: '/healthz', kind: 'public' },
-		{ path: '/api/health', kind: 'public' },
-		{ path: '/webhooks/github', kind: 'public' },
-		{ path: '/iam/admin', kind: 'service' },
-		{ path: '/iam/admin', kind: 'human' },
-		{ path: '/iam/admin/*', kind: 'service' },
-		{ path: '/iam/admin/*', kind: 'human' },
-		{ path: '/operations/api', kind: 'service' },
-		{ path: '/operations/api', kind: 'human' },
-		{ path: '/operations/api/*', kind: 'service' },
-		{ path: '/operations/api/*', kind: 'human' },
-		...CONTROL_GATES.rules,
-		{ path: '/*', kind: 'human' },
-	],
-}
+import { CONTROL_PROXY_GATES } from './fabrika.gates'
+import { controlSchema } from './fabrika.schema'
+import { VOZKA_APP_ID } from './src/actions'
 
 /**
  * IAM's origin — the issuer both this Worker and the proxy in front of it verify tokens against.
@@ -171,51 +152,10 @@ export const buildControlWorker = (ctx: ResourceContext): Worker => {
 	})
 }
 
-/**
- * fabrika's authz vocabulary, reconciled into IAM so the admin UI can render real choices. Kept
- * in sync with the runtime by importing the SAME constants the Worker enforces against (src/actions.ts)
- * — the action strings and scope dimensions here are exactly what `auth.can(action, scope)` checks.
- *
- * Roles (origin='app'):
- *   - operator → `deploy.*`  (trigger + read any deploy; no registry/secret management)
- *   - admin    → `*`         (every action, every scope)
- */
-const schema: AppSchema = {
-	// The two scope dimensions fabrika authorizes within (flat + independent — see src/actions.ts).
-	scopes: [
-		{ type: SCOPES.APP, label: 'App' },
-		{ type: SCOPES.ENVIRONMENT, label: 'Environment' },
-	],
-	// The concrete actions fabrika enforces — imported from src/actions.ts so there is no drift.
-	actions: [
-		{ action: ACTIONS.DEPLOY_TRIGGER, description: 'Trigger a deploy run' },
-		{ action: ACTIONS.DEPLOY_READ, description: 'Read deploy runs + their logs' },
-		{ action: ACTIONS.APP_MANAGE, description: 'Manage the app registry (apps + app_envs)' },
-		{ action: ACTIONS.NAMESPACE_MANAGE, description: 'Manage deployment namespaces' },
-		{ action: ACTIONS.SECRET_MANAGE, description: 'Manage secret values + their references' },
-		{ action: OPERATIONS_ACTIONS.READ, description: 'Read Operations errors and activity' },
-		{ action: OPERATIONS_ACTIONS.TRIAGE, description: 'Triage Operations errors' },
-		{ action: OPERATIONS_ACTIONS.MANAGE, description: 'Manage Operations sources, alerts, and retention' },
-	],
-	roles: {
-		operator: {
-			name: 'Operator',
-			description: 'Trigger and read any deploy (no registry or secret management).',
-			// `deploy.*` covers deploy.trigger + deploy.read (prefix wildcard).
-			permissions: ['deploy.*', 'operations.*'],
-		},
-		admin: {
-			name: 'Admin',
-			description: 'Full access to every vozka action in every scope.',
-			permissions: ['*'],
-		},
-	},
-}
-
 export default defineApp({
 	id: VOZKA_APP_ID,
 	resources: buildControlWorker,
-	schema,
+	schema: controlSchema,
 	pipeline: {
 		// fabrika's Worker source lives alongside this config (packages/control).
 		workerDir: '.',

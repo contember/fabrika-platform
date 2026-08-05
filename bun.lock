@@ -6,6 +6,7 @@
       "name": "fabrika-platform",
       "devDependencies": {
         "@biomejs/biome": "^2.5.6",
+        "@fabrika/auth-core": "workspace:*",
         "@fabrika/local-stack": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
         "@opice/cli": "0.11.0",
@@ -249,7 +250,11 @@
     "packages/local-stack": {
       "name": "@fabrika/local-stack",
       "dependencies": {
+        "@fabrika/auth": "workspace:*",
+        "@fabrika/auth-core": "workspace:*",
+        "@fabrika/control": "workspace:*",
         "@fabrika/example-zerops-app": "workspace:*",
+        "@fabrika/operations": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
         "@fabrika/platform": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",

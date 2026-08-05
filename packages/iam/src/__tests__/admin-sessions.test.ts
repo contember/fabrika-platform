@@ -42,7 +42,6 @@ function env(h: Harness): Env {
 		ISSUER: ORIGIN,
 		FABRIKA_IAM_SIGNING_KEYS: '',
 		FABRIKA_IAM_PROVISIONING_KEY: '',
-		SESSION_COOKIE_DOMAIN: '',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: 'client',
 		OIDC_CLIENT_SECRET: 'secret',
@@ -55,7 +54,7 @@ function call(h: Harness, session: string, method: string, input: unknown): Prom
 	return createIamApp().fetch(
 		new Request(`${ORIGIN}/admin/rpc`, {
 			method: 'POST',
-			headers: { 'content-type': 'application/json', origin: ORIGIN, cookie: `px_session=${session}` },
+			headers: { 'content-type': 'application/json', origin: ORIGIN, cookie: `__Host-px_session=${session}` },
 			body: JSON.stringify({ method, input }),
 		}),
 		env(h),

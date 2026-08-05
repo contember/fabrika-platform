@@ -67,7 +67,7 @@ export interface BrowserPrincipal {
 /**
  * Who the browser is signed in as.
  *
- * There is nothing on the wire to read this from: the browser holds an opaque `px_session`, the proxy
+ * There is nothing on the wire to read this from: the browser holds an opaque session cookie, the proxy
  * mints the access token server-side and injects it as a request header, and the console publishes no
  * `me` surface a non-admin role is allowed to call. So the auth provider that created the principal
  * records it alongside the session it hands the context (`../browser-auth.ts`), and a scenario reads it

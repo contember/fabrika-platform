@@ -43,7 +43,7 @@ async function asAdmin(h: Harness): Promise<string> {
 }
 
 function req(path: string, method: string, session: string, body?: unknown): Request {
-	const headers = new Headers({ Cookie: `px_session=${session}` })
+	const headers = new Headers({ Cookie: `__Host-px_session=${session}` })
 	if (method !== 'GET') {
 		headers.set('Origin', ORIGIN)
 		headers.set('Content-Type', 'application/json')
@@ -77,7 +77,6 @@ function env(h: Harness): Env {
 		ISSUER,
 		FABRIKA_IAM_SIGNING_KEYS: '',
 		FABRIKA_IAM_PROVISIONING_KEY: '',
-		SESSION_COOKIE_DOMAIN: '',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: 'client',
 		OIDC_CLIENT_SECRET: 'secret',
@@ -91,7 +90,7 @@ function rotate(h: Harness, session: string, principalId: string, expiresAt?: nu
 	return createIamApp().fetch(
 		new Request(`${ORIGIN}/admin/rpc`, {
 			method: 'POST',
-			headers: { 'content-type': 'application/json', origin: ORIGIN, cookie: `px_session=${session}` },
+			headers: { 'content-type': 'application/json', origin: ORIGIN, cookie: `__Host-px_session=${session}` },
 			body: JSON.stringify({ method: 'apiKeys.rotate', input: { principalId, ...(expiresAt !== undefined ? { expiresAt } : {}) } }),
 		}),
 		env(h),

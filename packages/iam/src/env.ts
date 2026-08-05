@@ -75,11 +75,6 @@ export interface Env {
 	 */
 	FABRIKA_IAM_PROVISIONING_KEY: string
 	/**
-	 * Cookie `Domain` for the SSO session cookie, e.g. `.example.com`, so one login is shared across
-	 * `*.example.com` apps. Empty → host-only (single-host / local dev).
-	 */
-	SESSION_COOKIE_DOMAIN: string
-	/**
 	 * OIDC provider issuer URL (e.g. `https://accounts.google.com`, an Auth0/Okta/Keycloak/Entra
 	 * tenant). propustka discovers the endpoints from `${OIDC_ISSUER}/.well-known/openid-configuration`
 	 * — so ANY OIDC provider works via config, no per-provider code.

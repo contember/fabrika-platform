@@ -4,6 +4,7 @@ title: The proxy is the only enforcement point
 status: accepted
 date: 2026-08-05
 supersedes: 0007, 0008, 0010, 0021
+amended-by: 0023
 ---
 
 # 0022 — The proxy is the only enforcement point

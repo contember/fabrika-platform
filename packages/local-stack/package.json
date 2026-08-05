@@ -22,7 +22,11 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"@fabrika/auth": "workspace:*",
+		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/control": "workspace:*",
 		"@fabrika/example-zerops-app": "workspace:*",
+		"@fabrika/operations": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",
 		"@fabrika/platform": "workspace:*",
 		"@fabrika/proxy": "workspace:*",

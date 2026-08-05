@@ -19,8 +19,9 @@ behaviour.
   compatibility boundaries.
 - [`human-authentication.md`](human-authentication.md) — independently configured
   OIDC/password login, enrollment, reset, sessions, and bootstrap behavior.
-- [`cross-host-sso.md`](cross-host-sso.md) — how a browser authenticated at IAM ends
-  up authenticated at an app on another domain, with no shared cookie.
+- [`cross-host-sso.md`](cross-host-sso.md) — the session handoff: how a browser
+  authenticated at IAM ends up authenticated at an app, on any host, with no shared
+  cookie.
 - [`outbound-email.md`](outbound-email.md) — the portable sender contract,
   Resend adapter, configuration, and domain ownership boundary.
 - [`operations-errors.md`](operations-errors.md) — current Sentry ingest,

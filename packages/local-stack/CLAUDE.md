@@ -27,21 +27,25 @@ bun run test:browser  # the opice suites in tests/browser/
 ## Invariants
 
 - **The composition is secure by default and runs the REAL enforcement path.** The platform manifest
-  fronts control and Operations with the same gates their `fabrika.config.ts` declares, and no
-  synthetic persona exists anywhere — the app SDK no longer has one to select. The single dev bypass
-  is IAM's `LOCAL_DEV_LOGIN`, which mints a real session row and is refused at use once the flag is
-  off; the browser composition runs with it off. The gate sets in `src/prepare.ts` are copies —
-  the production ones cannot be imported without dragging oblaka's raw TypeScript into this package's
-  strict program — and `__tests__/proxy-gates.test.ts` (deliberately outside `src/`, so `typecheck`
-  never follows that import) fails if a copy drifts. Never widen a local gate to make something pass:
-  a refusal here is a refusal in production.
-- **The session reaches the console as a cookie on the shared `fabrika.localhost` parent.** Every host
-  is a `*.fabrika.localhost` name on one proxy, which is the case
-  [ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md) keeps the shared
-  cookie for. `vozka` has no return origins registered in IAM, so IAM reads the proxy's `app=` bounce
-  as "not opted in" and takes that path. The one-time-code handoff a Zerops installation uses
-  additionally needs the console registered in IAM as an app with return origins, which only a deploy
-  performs; local coverage of that path is still missing.
+  fronts control and Operations with the same gate declarations a deployed proxy carries — imported,
+  not copied: `CONTROL_PROXY_GATES` from `@fabrika/control/gates` and `OPERATIONS_PROXY_GATES` from
+  `@fabrika/operations/gates`, each a module free of `@fabrika/provider-cloudflare` AND of its own
+  package's `src/` (both packages relax `noUncheckedIndexedAccess` for oblaka's sake, so their runtime
+  graphs do not compile here). No synthetic persona exists anywhere — the app SDK has none to select.
+  The single dev bypass is IAM's `LOCAL_DEV_LOGIN`, which mints a real session row and is refused at
+  use once the flag is off; the browser composition runs with it off. Never widen a local gate to make
+  something pass: a refusal here is a refusal in production.
+- **`registerLocalApps` stands in for the deploy this composition does not have.** Since
+  [ADR-0023](../../docs/decisions/0023-one-session-per-host.md) a session reaches an app's host ONLY
+  through a one-time code for a REGISTERED return origin, and locally nothing deploys the console.
+  `src/app-registration.ts` therefore makes the same `reconcileSchema` call a deploy makes — same
+  endpoints, same admin credential — for `vozka` and `notes`, right after the composition reports
+  healthy. Every host then gets its own `__Host-px_session`. This is not a local-only mechanism, and
+  there is no local-only branch in IAM or the proxy to support it; an app missing from that list is a
+  400 naming its address at sign-in. `src/__tests__/app-registration.test.ts` pins the registered
+  origins against the manifest hosts, because a drift between them is invisible until someone logs in.
+  `__tests__/proxy-gates.test.ts` (deliberately outside `src/`, so `typecheck` never follows its
+  oblaka import) pins the other side: what a deployed Cloudflare proxy Worker actually bakes in.
 - **A script needs a `px_` service key, not the provisioning key.** `local:up` provisions one through
   IAM and writes `.state/machine.env`; `mintFromKey` cannot resolve `FABRIKA_IAM_PROVISIONING_KEY`
   (it has no `credentials` row), so the proxy refuses it before control sees the bearer.

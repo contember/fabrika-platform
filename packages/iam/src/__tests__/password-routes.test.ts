@@ -125,12 +125,19 @@ describe('password login modes and CSRF', () => {
 		expect((await handleAuth(request, services, AUTH_ENV, new TestContext())).status).toBe(400)
 	})
 
-	test('allows localhost redirects only in the local environment', () => {
+	test("a `?redirect=` may only stay on IAM's own origin", () => {
 		const h = createHarness()
 		const production = h.makeServices({ environment: 'stage', issuer: 'https://iam.example.com' }).config
 		const local = h.makeServices({ environment: 'local', issuer: ISSUER }).config
-		expect(safeRedirect('http://localhost:3000/callback', production)).toBe('https://iam.example.com')
-		expect(safeRedirect('http://localhost:3000/callback', local)).toBe('http://localhost:3000/callback')
+		expect(safeRedirect('https://iam.example.com/console', production)).toBe('https://iam.example.com/console')
+		expect(safeRedirect(`${ISSUER}/console`, local)).toBe(`${ISSUER}/console`)
+		// Everything else falls back to the issuer, including a sibling host and a local one. ADR-0023
+		// left the return-origin registry as the only authority on sending a browser to another host,
+		// and `readHandoff` has already consulted it by the time this runs.
+		expect(safeRedirect('https://evil.example/x', production)).toBe('https://iam.example.com')
+		expect(safeRedirect('http://localhost:3000/callback', local)).toBe(ISSUER)
+		expect(safeRedirect('http://notes.fabrika.localhost:18081/', local)).toBe(ISSUER)
+		expect(safeRedirect('https://iam.example.com.evil.test/', production)).toBe('https://iam.example.com')
 	})
 })
 

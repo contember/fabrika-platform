@@ -7,10 +7,10 @@
  * webhook remains outside this guard and is HMAC-gated instead.
  *
  * Nothing here evaluates a gate: since ADR-0007 the proxy is the only enforcement point, and it has
- * already refused (or bounced to login) anything that does not satisfy `CONTROL_GATES`.
+ * already refused (or bounced to login) anything that does not satisfy `CONTROL_PROXY_GATES`
+ * (`fabrika.gates.ts`).
  */
 import {
-	type AppGates,
 	type AuthCarrier,
 	type AuthContext,
 	type AuthFailure,
@@ -23,20 +23,6 @@ import {
 } from '@fabrika/auth'
 import { type ACTIONS, SCOPES, VOZKA_APP_ID } from './actions'
 import { error } from './http'
-
-/**
- * The per-path gates fabrika's control surface is fronted by. They are the source of
- * `CONTROL_PROXY_GATES` in `fabrika.config.ts` — the proxy manifest — and are NOT evaluated here.
- * Every `/api/*` route admits EITHER a machine `px_` key (automation / CI) OR a logged-in human (the
- * dashboard via SSO): two precedence-ordered rules sharing the glob. Health, the webhook and the
- * `POST /api/runs` relay are handled BEFORE this guard (index.ts), so they never reach the gates.
- */
-export const CONTROL_GATES: AppGates = {
-	rules: [
-		{ path: '/api/*', kind: 'service' },
-		{ path: '/api/*', kind: 'human' },
-	],
-}
 
 /** The bindings + vars the IAM factory needs (a subset of the Worker `Env`). */
 export interface IamEnv {

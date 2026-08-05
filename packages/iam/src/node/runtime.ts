@@ -102,7 +102,6 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		FABRIKA_IAM_SIGNING_KEYS: environmentAliases.read(source, { canonical: 'FABRIKA_IAM_SIGNING_KEYS', legacy: 'PROPUSTKA_SIGNING_KEYS' }) ?? '',
 		FABRIKA_IAM_PROVISIONING_KEY: environmentAliases.read(source, { canonical: 'FABRIKA_IAM_PROVISIONING_KEY', legacy: 'PROPUSTKA_PROVISIONING_KEY' })
 			?? '',
-		SESSION_COOKIE_DOMAIN: source['SESSION_COOKIE_DOMAIN'] ?? '',
 		OIDC_ENABLED: String(oidcEnabled),
 		PASSWORD_ENABLED: String(passwordEnabled),
 		OIDC_ISSUER: oidcIssuer,

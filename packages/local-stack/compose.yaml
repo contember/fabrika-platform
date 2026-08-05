@@ -89,11 +89,6 @@ services:
       PORT: "18080"
       ENVIRONMENT: local
       ISSUER: http://iam.fabrika.localhost:18080
-      # Every local host is a `*.fabrika.localhost` name on this one proxy, so the platform genuinely
-      # shares a parent domain with IAM — the case ADR-0021 keeps the shared session cookie for. The
-      # ADR-0021 handoff is what a Zerops installation uses instead, because `*.zerops.app` is a public
-      # suffix; it needs an app registered in IAM with return origins, which only a deploy does.
-      SESSION_COOKIE_DOMAIN: fabrika.localhost
       # IAM's own local bypass: `/auth/login` mints a real session row for the bootstrap admin instead
       # of calling an external IdP. It is refused at USE the moment this is off.
       LOCAL_DEV_LOGIN: "true"

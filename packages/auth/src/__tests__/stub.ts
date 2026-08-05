@@ -115,7 +115,7 @@ export function makeRequest(opts: {
 		headers.set('Authorization', `Bearer ${opts.bearer}`)
 	}
 	if (opts.cookie !== undefined) {
-		headers.set('Cookie', `px_token=${opts.cookie}; other=ignored`)
+		headers.set('Cookie', `__Host-px_token=${opts.cookie}; other=ignored`)
 	}
 	if (opts.ray !== undefined) {
 		headers.set('cf-ray', opts.ray)

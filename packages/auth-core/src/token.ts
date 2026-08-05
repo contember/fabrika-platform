@@ -28,10 +28,21 @@ import type { PermissionEntry, PermissionSource, PrincipalType, Scope } from './
 
 // ── Names & knobs on the wire (both sides agree) ───────────────────────────────
 
-/** Long-lived opaque SSO session id; propustka sets it on its parent cookie domain at login. */
-export const SESSION_COOKIE = 'px_session'
-/** Short-lived per-app access JWT; a host-only cookie the app's middleware sets and reads. */
-export const TOKEN_COOKIE = 'px_token'
+/**
+ * Long-lived opaque session id, HOST-ONLY on whichever host wrote it — IAM's own at login, an app's
+ * own after the proxy redeems a handoff code
+ * ([ADR-0023](../../../docs/decisions/0023-one-session-per-host.md)). Same name, different host,
+ * different `sessions` row.
+ *
+ * `__Host-` is a browser-enforced restatement of that: the prefix makes the browser refuse the cookie
+ * unless it carries `Secure`, omits `Domain` and uses `Path=/`, so a sibling host under a shared
+ * registrable domain cannot plant a second cookie of this name that the real host would then send
+ * alongside its own. Measured, not assumed: Chromium accepts it over plain HTTP on `*.localhost`,
+ * because those origins are potentially trustworthy.
+ */
+export const SESSION_COOKIE = '__Host-px_session'
+/** Short-lived per-app access JWT; a host-only cookie, `__Host-` for the same reason. */
+export const TOKEN_COOKIE = '__Host-px_token'
 /** Prefix marking a propustka opaque credential (API key / share link), e.g. `Bearer px_<random>`. */
 export const API_KEY_PREFIX = 'px_'
 

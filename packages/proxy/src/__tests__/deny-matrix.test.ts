@@ -139,14 +139,14 @@ describe('deny — human gate', () => {
 
 	test('an invalid session → 302, never a pass-through', async () => {
 		const iam = iamWith({ mintToken: { ok: false, reason: 'invalid_session' } })
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: 'px_session=zombie' }))
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: '__Host-px_session=zombie' }))
 		expect(response.status).toBe(302)
 		expect(iam.mintTokenCalls).toBe(1)
 	})
 
 	test('a disabled principal → 302', async () => {
 		const iam = iamWith({ mintToken: { ok: false, reason: 'disabled' } })
-		expect((await service(HUMAN, iam)(verifyRequest({ cookie: 'px_session=s' }))).status).toBe(302)
+		expect((await service(HUMAN, iam)(verifyRequest({ cookie: '__Host-px_session=s' }))).status).toBe(302)
 	})
 
 	test('a malformed Cookie header is treated as no cookie, not as a match', async () => {
@@ -158,7 +158,7 @@ describe('deny — human gate', () => {
 
 	test('an empty cookie value is absent, not an empty credential', async () => {
 		const iam = iamWith({})
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: 'px_session=; px_token=' }))
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: '__Host-px_session=; __Host-px_token=' }))
 		expect(response.status).toBe(302)
 		expect(iam.mintTokenCalls).toBe(0)
 	})
@@ -166,45 +166,45 @@ describe('deny — human gate', () => {
 	test('a forged px_token signed by a key IAM never published is rejected', async () => {
 		const forged = await signToken({ key: foreignPrivateKey, type: 'user' })
 		const iam = iamWith({}) // mintToken → no_session, so there is no second way in
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `px_token=${forged}; px_session=s` }))
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `__Host-px_token=${forged}; __Host-px_session=s` }))
 		expect(response.status).toBe(302)
 	})
 
 	test('a px_token minted for ANOTHER app is rejected (aud binding)', async () => {
 		const otherApp = await signToken({ audience: 'some-other-app', type: 'user' })
 		const iam = iamWith({})
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `px_token=${otherApp}` }))
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `__Host-px_token=${otherApp}` }))
 		expect(response.status).toBe(302)
 	})
 
 	test('a px_token from another issuer is rejected', async () => {
 		const wrongIssuer = await signToken({ issuer: 'https://evil.example', type: 'user' })
-		const response = await service(HUMAN, iamWith({}))(verifyRequest({ cookie: `px_token=${wrongIssuer}` }))
+		const response = await service(HUMAN, iamWith({}))(verifyRequest({ cookie: `__Host-px_token=${wrongIssuer}` }))
 		expect(response.status).toBe(302)
 	})
 
 	test('an expired px_token does not authorize', async () => {
 		const expired = await signToken({ ttlSeconds: -60, type: 'user' })
-		const response = await service(HUMAN, iamWith({}))(verifyRequest({ cookie: `px_token=${expired}` }))
+		const response = await service(HUMAN, iamWith({}))(verifyRequest({ cookie: `__Host-px_token=${expired}` }))
 		expect(response.status).toBe(302)
 	})
 
 	test('a token expiring inside the refresh skew is not ridden', async () => {
 		const nearlyExpired = await signToken({ ttlSeconds: TOKEN_REFRESH_SKEW_SECONDS - 5, type: 'user' })
 		const iam = iamWith({}) // no session → cannot refresh → deny
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `px_token=${nearlyExpired}` }))
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `__Host-px_token=${nearlyExpired}` }))
 		expect(response.status).toBe(302)
 	})
 
 	test('garbage in px_token is rejected without crashing', async () => {
-		const response = await service(HUMAN, iamWith({}))(verifyRequest({ cookie: 'px_token=not.a.jwt' }))
+		const response = await service(HUMAN, iamWith({}))(verifyRequest({ cookie: '__Host-px_token=not.a.jwt' }))
 		expect(response.status).toBe(302)
 	})
 
 	test('IAM mints a token we cannot verify → deny, never trust the mint', async () => {
 		const unverifiable = await signToken({ key: foreignPrivateKey, type: 'user' })
 		const iam = iamWith({ mintToken: { ok: true, token: unverifiable, expiresAt: future() } })
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: 'px_session=s' }))
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: '__Host-px_session=s' }))
 		expect(response.status).toBe(302)
 	})
 })
@@ -216,21 +216,21 @@ describe('deny — a human gate admits a USER principal, not merely a valid toke
 	test('an ANONYMOUS token (no ptype) in px_token does not satisfy a human gate', async () => {
 		const anonymous = await signToken({}) // exactly what `issueJwt` signs for a share link
 		const iam = iamWith({})
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `px_token=${anonymous}` }))
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `__Host-px_token=${anonymous}` }))
 		expect(response.status).toBe(302)
 		expectDenied(response)
 	})
 
 	test('a SERVICE token in px_token does not satisfy a human gate', async () => {
 		const machine = await signToken({ type: 'service' })
-		const response = await service(HUMAN, iamWith({}))(verifyRequest({ cookie: `px_token=${machine}` }))
+		const response = await service(HUMAN, iamWith({}))(verifyRequest({ cookie: `__Host-px_token=${machine}` }))
 		expect(response.status).toBe(302)
 	})
 
 	test('a non-user token cannot ride in on the session tier either', async () => {
 		// Even if IAM somehow answered a session exchange with a non-user token, it is not a human.
 		const iam = iamWith({ mintToken: { ok: true, token: await signToken({ type: 'service' }), expiresAt: future() } })
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: 'px_session=s' }))
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: '__Host-px_session=s' }))
 		expect(response.status).toBe(302)
 	})
 
@@ -291,7 +291,7 @@ describe('deny — a human miss answers in the shape the caller can act on', () 
 
 	test('the JSON body carries no deny reason — reasons are logged, never returned', async () => {
 		const iam = iamWith({ mintToken: { ok: false, reason: 'disabled' } })
-		const request = verifyRequest({ path: '/api/rpc', method: 'POST', cookie: 'px_session=s', headers: { 'Sec-Fetch-Mode': 'cors' } })
+		const request = verifyRequest({ path: '/api/rpc', method: 'POST', cookie: '__Host-px_session=s', headers: { 'Sec-Fetch-Mode': 'cors' } })
 		const response = await service(HUMAN, iam)(request)
 		expect(response.status).toBe(401)
 		const error = await errorEnvelope(response)
@@ -310,7 +310,7 @@ describe('deny — a human miss answers in the shape the caller can act on', () 
 
 	test('an outage is still a 503 for an XHR — never dressed up as a sign-in', async () => {
 		const iam = iamWith({ unreachable: true })
-		const request = verifyRequest({ path: '/api/rpc', method: 'POST', cookie: 'px_session=s', headers: { 'Sec-Fetch-Mode': 'cors' } })
+		const request = verifyRequest({ path: '/api/rpc', method: 'POST', cookie: '__Host-px_session=s', headers: { 'Sec-Fetch-Mode': 'cors' } })
 		const response = await service(HUMAN, iam)(request)
 		expect(response.status).toBe(503)
 		expect(await response.text()).toBe('unavailable')
@@ -362,7 +362,7 @@ describe('deny — service gate', () => {
 			mintFromKey: { ok: false, reason: 'invalid_key' },
 			mintToken: { ok: true, token: await signUserToken(), expiresAt: future() },
 		})
-		const response = await service(gates, iam)(verifyRequest({ bearer: 'px_bad', cookie: 'px_session=good' }))
+		const response = await service(gates, iam)(verifyRequest({ bearer: 'px_bad', cookie: '__Host-px_session=good' }))
 		expect(response.status).toBe(401)
 		expect(iam.mintTokenCalls).toBe(0) // the human rule was never reached
 	})
@@ -371,7 +371,7 @@ describe('deny — service gate', () => {
 describe('deny — IAM is unreachable', () => {
 	test('an unreachable IAM on the human path denies with 503, never allows', async () => {
 		const iam = iamWith({ unreachable: true })
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: 'px_session=s' }))
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: '__Host-px_session=s' }))
 		expect(response.status).toBe(503)
 		expect(response.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
 	})
@@ -407,14 +407,14 @@ describe('deny — "we could not check" is 503 on the human path, never a login 
 	test('a px_token that WOULD verify, with an unfetchable key set → 503', async () => {
 		const token = await signUserToken(3600)
 		const iam = iamWith({ jwksUnreachable: true })
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `px_token=${token}` }))
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `__Host-px_token=${token}` }))
 		expect(response.status).toBe(503)
 		expect(response.headers.get('location')).toBeNull()
 	})
 
 	test('a mint that SUCCEEDS but cannot be verified because the key set is down → 503', async () => {
 		const iam = iamWith({ jwksUnreachable: true, mintToken: { ok: true, token: await signUserToken(), expiresAt: future() } })
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: 'px_session=s' }))
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: '__Host-px_session=s' }))
 		expect(response.status).toBe(503)
 		expect(response.headers.get('location')).toBeNull()
 	})
@@ -423,7 +423,7 @@ describe('deny — "we could not check" is 503 on the human path, never a login 
 		const cache = new MemoryTokenCache()
 		cache.set(cacheKey(APP, 'session', 'sess-1'), { token: await signUserToken(3600), expiresAt: future(3600) })
 		const iam = iamWith({ jwksUnreachable: true })
-		const response = await service(HUMAN, iam, cache)(verifyRequest({ cookie: 'px_session=sess-1' }))
+		const response = await service(HUMAN, iam, cache)(verifyRequest({ cookie: '__Host-px_session=sess-1' }))
 		expect(response.status).toBe(503)
 		expect(iam.mintTokenCalls).toBe(0) // a fresh mint could not have been verified either
 		expect(cache.size).toBe(1)
@@ -451,7 +451,7 @@ describe('one request, one session resolution', () => {
 	test('two overlapping human rules mint at most once', async () => {
 		const gates: AppGates = { rules: [{ path: '/admin/*', kind: 'human' }, { path: '/*', kind: 'human' }] }
 		const iam = iamWith({ mintToken: { ok: false, reason: 'invalid_session' } })
-		const response = await service(gates, iam)(verifyRequest({ path: '/admin/users', cookie: 'px_session=s' }))
+		const response = await service(gates, iam)(verifyRequest({ path: '/admin/users', cookie: '__Host-px_session=s' }))
 		expect(response.status).toBe(302)
 		// Both rules match and both miss; the verdict cannot differ, so the exchange happens once.
 		expect(iam.mintTokenCalls).toBe(1)
@@ -473,7 +473,7 @@ describe('deny — an internal fault is still a deny', () => {
 			getJwks: () => Promise.reject(new TypeError('boom')),
 		}
 		const verify = createVerifyService({ manifest: manifestWith(HUMAN), iam: exploding, issuer: ISSUER })
-		const response = await verify(verifyRequest({ cookie: 'px_session=s' }))
+		const response = await verify(verifyRequest({ cookie: '__Host-px_session=s' }))
 		expectDenied(response)
 	})
 })

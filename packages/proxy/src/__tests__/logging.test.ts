@@ -45,12 +45,12 @@ describe('no secret material reaches the log', () => {
 			logger,
 		})
 
-		await verify(verifyRequest({ path: '/dashboard', cookie: `px_session=${SESSION}` })) // allow (human)
+		await verify(verifyRequest({ path: '/dashboard', cookie: `__Host-px_session=${SESSION}` })) // allow (human)
 		await verify(verifyRequest({ path: '/api/x', bearer: API_KEY })) // allow (service)
 		await verify(verifyRequest({ path: `/share/${SHARE}?pxt=${QUERY_TOKEN}` })) // deny (bad query token)
 		await verify(verifyRequest({ path: '/dashboard' })) // login bounce
 		await verify(verifyRequest({ path: '/nowhere-in-the-gates', app: 'unknown-app' })) // deny
-		await verify(verifyRequest({ path: '/dashboard', cookie: `px_token=${token}` })) // allow (warm)
+		await verify(verifyRequest({ path: '/dashboard', cookie: `__Host-px_token=${token}` })) // allow (warm)
 
 		expect(logger.lines.length).toBeGreaterThan(0)
 		const dumped = logger.dump()
@@ -59,8 +59,8 @@ describe('no secret material reaches the log', () => {
 		}
 		// Nor any of the header names' values, in whole or in part.
 		expect(dumped).not.toContain('Bearer')
-		expect(dumped).not.toContain('px_session=')
-		expect(dumped).not.toContain('px_token=')
+		expect(dumped).not.toContain('__Host-px_session=')
+		expect(dumped).not.toContain('__Host-px_token=')
 	})
 
 	test('the login bounce is logged without the redirect URL, in either shape', async () => {
@@ -83,7 +83,7 @@ describe('no secret material reaches the log', () => {
 			getJwks: () => Promise.reject(new Error('nope')),
 		}
 		const verify = createVerifyService({ manifest: manifestWith(GATES), iam: exploding, issuer: ISSUER, logger })
-		const response = await verify(verifyRequest({ path: '/x', cookie: `px_session=${SESSION}` }))
+		const response = await verify(verifyRequest({ path: '/x', cookie: `__Host-px_session=${SESSION}` }))
 		expect(response.status).toBeGreaterThanOrEqual(300)
 		expect(logger.dump()).not.toContain(SESSION)
 	})

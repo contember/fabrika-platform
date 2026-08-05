@@ -1,6 +1,5 @@
 import { defineApp, type Middleware, route } from '@fabrika/app'
 import { type AuthCarrier, type AuthContext, type Iam } from '@fabrika/auth'
-import type { AppGates } from '@fabrika/auth-core'
 import { OPERATIONS_RELEASE_RECONCILE_PATH, OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'
 import { handleSourceMapUploadRequest } from './artifact-upload.js'
 import { handleOperationsCatalogRequest } from './catalog.js'
@@ -12,18 +11,6 @@ import type { OperationsDataEnv } from './pipeline.js'
 import { handleOperationsReleaseRequest } from './releases.js'
 
 const INGEST_PATH = /^\/api\/[1-9][0-9]{0,18}\/envelope\/$/
-/**
- * The per-path gates the operator surface is fronted by — the source of Operations' proxy manifest
- * (`fabrika.config.ts`), NOT an in-process evaluator. Since ADR-0007 the proxy is the only enforcement
- * point; this app only verifies the token the proxy injected.
- */
-export const OPERATOR_GATES: AppGates = {
-	rules: [
-		{ path: '/api/*', kind: 'service' },
-		{ path: '/api/*', kind: 'human' },
-	],
-}
-
 export interface OperationsAppEnv extends OperationsDataEnv {
 	/** Hostname published for SDK envelope ingest and authenticated source-map upload. Empty disables public ingress. */
 	publicHost: string

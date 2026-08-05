@@ -20,7 +20,7 @@ function request(
 	if (options.origin !== undefined) headers.set('Origin', options.origin)
 	if (options.referer !== undefined) headers.set('Referer', options.referer)
 	if (options.bearer === true) headers.set('Authorization', 'Bearer px_machine_key')
-	if (options.session === true) headers.set('Cookie', 'px_session=abc')
+	if (options.session === true) headers.set('Cookie', '__Host-px_session=abc')
 	// The URL is what the PROCESS sees. Behind a TLS-terminating balancer that is plain HTTP, which is
 	// exactly the case the guard used to get wrong.
 	return new Request(`http://iam.example.com${options.path ?? '/admin/rpc'}`, { method: options.method ?? 'POST', headers })

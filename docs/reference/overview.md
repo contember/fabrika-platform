@@ -256,9 +256,11 @@ Nothing downstream of the proxy enforces. An application reads the proxy-injecte
 `AuthContext`; `@fabrika/auth` cannot evaluate a gate, exchange a session, or write a
 cookie.
 
-A browser that authenticated at IAM reaches an app on a **different** domain through a
-one-time code the proxy redeems at a reserved callback path — no cookie is shared
-between the two hosts. See [`cross-host-sso.md`](cross-host-sso.md).
+A browser that authenticated at IAM reaches an app through a one-time code the proxy
+redeems at a reserved callback path, whether or not the two share a domain — no cookie
+is ever shared between two hosts, and each host's session cookie carries the `__Host-`
+prefix ([ADR-0023](../decisions/0023-one-session-per-host.md)). See
+[`cross-host-sso.md`](cross-host-sso.md).
 
 The IAM service stays **global** — one identity database, one audit log, one admin
 UI. The proxy is stateless and horizontally scalable. Zerops owns one proxy per
@@ -281,8 +283,9 @@ variable for this path.
 
 - [`human-authentication.md`](human-authentication.md) — OIDC and password login,
   enrollment and reset, sessions, and bootstrap behaviour.
-- [`cross-host-sso.md`](cross-host-sso.md) — how a browser authenticated at IAM ends
-  up authenticated at an app on another domain, with no shared cookie.
+- [`cross-host-sso.md`](cross-host-sso.md) — the session handoff: how a browser
+  authenticated at IAM ends up authenticated at an app, on any host, with no shared
+  cookie.
 - [`deployment-namespaces.md`](deployment-namespaces.md) — placement lifecycle,
   resource claims, Zerops presets, and operator interfaces.
 - [`zerops-platform.md`](zerops-platform.md) — the established facts about Zerops

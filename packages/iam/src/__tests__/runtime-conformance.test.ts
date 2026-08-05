@@ -39,7 +39,6 @@ function env(overrides: Partial<Env> = {}): Env {
 		ISSUER,
 		FABRIKA_IAM_SIGNING_KEYS: '',
 		FABRIKA_IAM_PROVISIONING_KEY: '',
-		SESSION_COOKIE_DOMAIN: '',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: 'client',
 		OIDC_CLIENT_SECRET: 'secret',

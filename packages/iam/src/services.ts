@@ -48,8 +48,6 @@ export interface Config {
 	// ── propustka-native auth ──
 	/** propustka's own origin — the `iss` of minted tokens and the OIDC redirect base. */
 	readonly issuer: string
-	/** `Domain` for the SSO session cookie (e.g. `.example.com`); empty = host-only. */
-	readonly sessionCookieDomain: string
 }
 
 /** Parse a JSON array of strings (the central human-domain/email lists); [] on anything malformed. */
@@ -124,7 +122,6 @@ export function buildServices(env: Env): Services {
 				password: { enabled: passwordEnabled },
 			},
 			issuer: env.ISSUER,
-			sessionCookieDomain: env.SESSION_COOKIE_DOMAIN,
 		},
 	}
 }

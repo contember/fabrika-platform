@@ -25,8 +25,9 @@ that supersedes the four which decided it in stages.
 ## Active sprints
 
 - [Auth hardening (2026-08-04)](sprints/sprint-2026-08-04-auth-hardening.md) — makes
-  the proxy the only front door. Eleven work units have landed; WU-E is blocked on a
-  decision (`__Host-` versus the shared cookie) and the browser suite has one known
+  the proxy the only front door. Twelve work units have landed, WU-E included: the
+  shared session cookie is retired and both session cookies carry the `__Host-` prefix
+  ([ADR-0023](decisions/0023-one-session-per-host.md)). The browser suite has one known
   failure ([53](backlog/53-reauthor-the-operations-console-scenarios.md)).
 
 ## What's hot
@@ -36,9 +37,10 @@ that supersedes the four which decided it in stages.
 
 - **Auth:** there is now one enforcement point and one enforcement ADR —
   [0022](decisions/0022-the-proxy-is-the-only-enforcement-point.md), superseding
-  0007/0008/0010/0021. The SDK's duplicate in-process gate path is deleted. One
-  question is deliberately left open there: whether to retire the shared session
-  cookie so the `__Host-` prefix becomes available on both cookies.
+  0007/0008/0010/0021. The SDK's duplicate in-process gate path is deleted, and the
+  one question 0022 left open is answered by
+  [0023](decisions/0023-one-session-per-host.md): one session-delivery mechanism, one
+  session per host, `__Host-` on both cookies.
 - **Release activation:** run hosted CI, bootstrap the twenty npm packages, and prove the tokenless release path in
   [`backlog/25-bootstrap-npm-trusted-publishing.md`](backlog/25-bootstrap-npm-trusted-publishing.md).
 - **Zerops, post-bring-up:** the light tier is **live on a real account** (sprint
@@ -50,12 +52,12 @@ that supersedes the four which decided it in stages.
   which blocks every control-plane-triggered deploy. The production two-project shape and
   custom domains remain in [`05`](backlog/05-bring-up-on-a-real-zerops-account.md);
   [`39`](backlog/39-settle-zerops-override-semantics.md) is still unexercised.
-- **Cross-host SSO is live.** A browser authenticated at IAM reaches an app on a
-  different domain through a one-time code (sprint
-  [`exchange-token-sso`](archive/sprint-2026-08-04-exchange-token-sso.md)); how it
-  works is [`reference/cross-host-sso.md`](reference/cross-host-sso.md). The control
-  plane now projects an app's return origins into IAM on every deploy, so registering
-  one is no longer a manual call.
+- **The session handoff is the ONLY way a browser gets a session for an app.** IAM
+  issues a one-time code and the proxy on the app's own host redeems it
+  ([ADR-0023](decisions/0023-one-session-per-host.md); how it works is
+  [`reference/cross-host-sso.md`](reference/cross-host-sso.md)). The shared parent-domain
+  cookie is gone, both session cookies carry the `__Host-` prefix, and the control plane
+  projects an app's return origins into IAM on every deploy.
 - **Operations follow-up:** complete
   [Zerops release artifact correlation](backlog/36-complete-zerops-release-artifact-correlation.md),
   settle [managed-environment activation](backlog/37-activate-zerops-managed-environment-transactionally.md),

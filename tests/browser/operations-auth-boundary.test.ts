@@ -1,3 +1,4 @@
+import { SESSION_COOKIE } from '@fabrika/auth-core'
 import { browserTest, expect, getContext, getPage, invariant, step } from '@opice/harness'
 
 const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
@@ -19,7 +20,7 @@ browserTest(
 			manual: 'Open Operations in a private browser with no Fabrika session.',
 		}, async () => {
 			const cookies = await getContext().cookies()
-			expect(cookies.some((cookie) => cookie.name === 'px_session')).toBe(false)
+			expect(cookies.some((cookie) => cookie.name === SESSION_COOKIE)).toBe(false)
 		})
 
 		await step('the proxy refuses the console before it reaches the application', {

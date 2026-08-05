@@ -20,14 +20,14 @@ describe('Operations console gateway', () => {
 		const gateway = new RecordingGateway()
 		const response = await forwardOperationsApi(
 			new Request('https://console.test/operations/api/issues?status=open', {
-				headers: { cookie: 'px_session=session-one' },
+				headers: { cookie: '__Host-px_session=session-one' },
 			}),
 			{ gateway, publicIamUrl: 'https://iam.test' },
 		)
 
 		expect(response.status).toBe(200)
 		expect(gateway.requests[0]?.url).toBe('https://console.test/api/issues?status=open')
-		expect(gateway.requests[0]?.headers.get('cookie')).toBe('px_session=session-one')
+		expect(gateway.requests[0]?.headers.get('cookie')).toBe('__Host-px_session=session-one')
 	})
 
 	test('allows only safe methods without a same-origin proof, including guarding PUT', async () => {

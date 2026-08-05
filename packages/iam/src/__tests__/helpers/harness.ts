@@ -150,8 +150,6 @@ export interface MakeServicesOptions {
 	email?: EmailSender | null
 	/** propustka's own origin (token `iss` + OIDC redirect base). */
 	issuer?: string
-	/** SSO session cookie `Domain`; empty = host-only. */
-	sessionCookieDomain?: string
 }
 
 /** Stand up a fresh in-memory DB + helpers. Call once per test for isolation. */
@@ -178,7 +176,6 @@ export function createHarness(): Harness {
 				password: { enabled: options.authentication?.password ?? false },
 			},
 			issuer,
-			sessionCookieDomain: options.sessionCookieDomain ?? '',
 		}
 		return {
 			repositories,

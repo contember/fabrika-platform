@@ -56,7 +56,6 @@ function env(h: Harness): Env {
 		ISSUER: 'https://iam.example.com',
 		FABRIKA_IAM_SIGNING_KEYS: '',
 		FABRIKA_IAM_PROVISIONING_KEY: '',
-		SESSION_COOKIE_DOMAIN: '',
 		OIDC_ENABLED: 'false',
 		PASSWORD_ENABLED: 'true',
 		OIDC_ISSUER: '',

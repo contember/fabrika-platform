@@ -47,9 +47,16 @@ invalidates every IAM session. Always use `OPICE_AUTH_REFRESH=1` after a reset.
 - `admin` can use the unified console and both Operations sources.
 - `operations-notes` is scoped to the `browser-notes` application and can see
   only `Browser Notes / test`.
-- `anonymous` has no `px_session` cookie. The browser composition runs IAM with
-  `LOCAL_DEV_LOGIN` off, so an anonymous browser stays anonymous and the proxy's
-  refusal is observable; the developer stack (`local:up`) keeps the bypass on.
+- `admin` and `operations-notes` are signed in through the real handoff: the
+  seeded IAM login goes on `iam.fabrika.localhost`, and one
+  `GET /auth/login?app=…&redirect=…` per application host redeems a single-use
+  code into that host's own `__Host-px_session`. `browser-auth.ts` does this once
+  per role; `@fabrika/local-stack`'s `registerLocalApps` is what makes IAM willing
+  to issue the codes.
+- `anonymous` has no session cookie on any host. The browser composition runs IAM
+  with `LOCAL_DEV_LOGIN` off, so an anonymous browser stays anonymous and the
+  proxy's refusal is observable; the developer stack (`local:up`) keeps the bypass
+  on.
 - A scenario learns which principal it is signed in as with
   `readBrowserPrincipal()` from `support/fixtures.ts`. There is no token in the
   browser to read it from — the proxy injects that server-side.

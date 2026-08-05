@@ -8,6 +8,16 @@
 			"bun": "./src/index.ts",
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
+		},
+		"./gates": {
+			"bun": "./fabrika.gates.ts",
+			"types": "./fabrika.gates.ts",
+			"default": "./fabrika.gates.ts"
+		},
+		"./schema": {
+			"bun": "./fabrika.schema.ts",
+			"types": "./fabrika.schema.ts",
+			"default": "./fabrika.schema.ts"
 		}
 	},
 	"scripts": {

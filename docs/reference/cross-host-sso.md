@@ -1,18 +1,22 @@
-# Cross-host SSO
+# Session handoff
 
-A browser authenticates at IAM, on IAM's own host, and ends up authenticated at an
-app on a **different** domain. No cookie is shared between the two, and none has to
-be: the handoff travels as a one-time code. See
-[ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) for the
-settled model and [ADR-0021](../decisions/0021-exchange-token-session-handoff.md)
-for why the shared cookie could not stay.
+How a browser that authenticated at IAM ends up authenticated at an application.
+There is **one** way, and it is the same one whether or not the two share a domain:
+the session travels as a one-time code, and the proxy on the app's host redeems it
+into a cookie that belongs to that host alone. No cookie is ever shared between two
+hosts. See
+[ADR-0023](../decisions/0023-one-session-per-host.md) for why there is only one
+mechanism, [ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)
+for the enforcement model around it, and
+[ADR-0021](../decisions/0021-exchange-token-session-handoff.md) for the code's
+design.
 
 ## The round trip
 
 | # | Where    | What happens                                                                                                                                    |
 | - | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1 | app host | The proxy matches a `human` gate, finds no usable credential, and sends the browser to `${issuer}/auth/login?app=<id>&redirect=<original URL>`. |
-| 2 | IAM      | `?app=` + `?redirect=` are read as a handoff against that app's registered return origins — three ways it can go, below.                        |
+| 2 | IAM      | `?app=` + `?redirect=` are read as a handoff against that app's registered return origins — two ways it can go, below.                          |
 | 3 | IAM      | The human authenticates — password, OIDC, or an IAM session the browser already holds, in which case there is no prompt.                        |
 | 4 | IAM      | A single-use code bound to `(session, app, return URL)` is issued; 302 to `<app origin>/__fabrika/auth/callback?code=…`.                        |
 | 5 | app host | The proxy redeems the code, sets the returned app session as a **host-only** cookie, and 302s to the stored return URL.                         |
@@ -28,28 +32,42 @@ gate, so it cannot be behind one. Caddy returns a non-2xx auth response verbatim
 the 302 and its `Set-Cookie` reach the browser and the code never reaches the
 application.
 
-### Step 2 has three outcomes, not two
+### Step 2 has two outcomes
 
-The registry is what an app **opted in** to, so an app that has none is not a
-misconfiguration:
+| The `?app=` + `redirect=` the proxy sent        | Outcome                                        |
+| ----------------------------------------------- | ---------------------------------------------- |
+| no `?app=` at all                               | Not a handoff — an ordinary login on IAM.      |
+| its origin is in the app's registry             | A single-use code.                             |
+| missing, unparseable, or an unregistered origin | **400**, naming the address. Never a fallback. |
 
-| The app's registry           | The `redirect` the proxy sent                     | Outcome                                                   |
-| ---------------------------- | ------------------------------------------------- | --------------------------------------------------------- |
-| empty (or no `?app=` at all) | reachable by the session cookie domain, or absent | **Not a handoff.** The ordinary shared-cookie login runs. |
-| empty                        | outside the session cookie domain                 | **400**, naming the origin nobody registered.             |
-| holds origins                | its origin is registered                          | A single-use code.                                        |
-| holds origins                | missing, unparseable, or an unregistered origin   | **400**. Never a quiet fallback to the issuer.            |
-
-The middle case is the one that matters. The proxy sends `app=` on every bounce, so
-without the empty-registry opt-out an installation that never adopted the handoff
-would break the moment it upgraded — but the opt-out only holds while the shared
-cookie can actually reach the destination. When it provably cannot, falling back
-would strand the browser in a login loop with nothing logged anywhere, so that
-combination is refused instead.
+An **empty** registry falls in the last row: an app IAM has no return origin for
+cannot log anyone in, and that is reported rather than worked around. A fallback
+would produce a login that succeeds and lands the browser on a host where it has no
+session, i.e. a loop with nothing logged anywhere.
 
 The reading is redone at every step that could act on it — the login page, the OIDC
 start, the password `POST`, and the return from the IdP. The form is a hint, never a
 permission.
+
+## The cookies
+
+| Cookie              | Host                | Row                                                          |
+| ------------------- | ------------------- | ------------------------------------------------------------ |
+| `__Host-px_session` | IAM's own host      | The login. `app IS NULL`; it is what authorizes a handoff.   |
+| `__Host-px_session` | each app's own host | A child session, `app` set, `parent_session_id` set.         |
+| `__Host-px_token`   | each app's own host | Nothing writes it; the proxy reads it if a client sends one. |
+
+Same name, different hosts, independent rows. The `__Host-` prefix makes the browser
+enforce what the design already intends: it refuses any cookie of that name that
+lacks `Secure`, lacks `Path=/`, or names a `Domain`. What it adds beyond host-only is
+that a sibling subdomain cannot plant a **second** cookie of the same name that the
+real host would then send alongside its own.
+
+`Secure` is unconditional on every cookie IAM and the proxy write, because the prefix
+requires it. That is correct behind a TLS-terminating balancer, where the socket is
+plain HTTP and the browser spoke HTTPS, and on `localhost` / `*.localhost`, which
+browsers treat as potentially trustworthy. An installation served over cleartext HTTP
+on a public hostname cannot hold a session at all.
 
 ## What is stored, and for how long
 
@@ -62,11 +80,14 @@ permission.
 ## The rules that hold it together
 
 - **A return URL is validated, never trusted.** Origins are registered per app
-  through `apps.setReturnOrigins` and canonicalized on the way in. An app that has a
-  registry gets no fallback: an unregistered origin is refused rather than quietly
-  rewritten, and the URL that travels with the code is rebuilt from the registered
-  origin plus the requested path and query, never echoed. The app never names its own
-  origin — see [Configuration](#configuration) for who does.
+  through `apps.setReturnOrigins` and canonicalized on the way in. An unregistered
+  origin is refused rather than quietly rewritten, and the URL that travels with the
+  code is rebuilt from the registered origin plus the requested path and query, never
+  echoed. The app never names its own origin — see
+  [Configuration](#configuration) for who does.
+- **The registry is the only authority on sending a browser to another host.** IAM's
+  own `?redirect=` guard (`safeRedirect`) accepts nothing but IAM's own origin, so
+  there is no second, weaker answer to the same question.
 - **The destination is carried server-side.** Redemption returns the URL stored with
   the code, so a caller cannot point the browser elsewhere by editing the callback.
 - **An app session mints only for its own app.** The cookie is host-only, so a
@@ -76,6 +97,8 @@ permission.
 - **Revoking the IAM login revokes every app session under it.** The lookup joins to
   the parent on every use. An access token already minted stays valid for the rest of
   its TTL (300s) — that bound is unchanged, and local verification is why it exists.
+- **The proxy writes a cookie on exactly one path**: a successful redemption at the
+  reserved callback, and nowhere else.
 
 ## Configuration
 
@@ -101,18 +124,19 @@ plane holds for that app id, projected on every deploy:
 
 Three consequences worth knowing:
 
-- An app with no `publicOrigin` on any environment is **left alone**, not registered with
-  a guess. It stays on the empty-registry path in the table above: the shared cookie if
-  that can reach it, a 400 otherwise.
+- An app with no `publicOrigin` on any environment is **left alone**, not registered
+  with a guess — and, since it then has an empty registry, nobody can sign in to it.
+  Configure `publicOrigin` before expecting a login to work.
 - The projection is authoritative: an origin added by hand through the admin surface is
   replaced by the next deploy. Configure `publicOrigin` instead.
 - `apps.setReturnOrigins` **replaces** the set and refuses an empty array — clearing a
   registry is its own operation, `apps.clearReturnOrigins`, so an app is never
   un-registered by a body that only looks empty.
 
-`SESSION_COOKIE_DOMAIN` is no longer load-bearing for cross-host access. Set it only
-when hosts genuinely share a parent domain, where it saves a redirect by letting the
-proxy read the IAM session directly.
+The local composition has no deploy of its own for the console, so
+`@fabrika/local-stack` makes the same `reconcileSchema` call after `local:up` brings the
+services up — same endpoints, same admin credential, no local-only path in IAM or the
+proxy.
 
 ## Where redemption lives, and how much that protects
 
@@ -142,3 +166,9 @@ On 2026-08-04, between two `.zerops.app` hostnames in project `fabrika-test`, wi
 custom domain and no shared cookie domain: sign-in on the IAM host, `200` from the app
 on another host, two independent host-only session cookies, a second round trip with
 no prompt, and a revoked IAM login refusing to mint for the app session it had issued.
+
+On 2026-08-05, in Chromium 151.0.7922.34 over plain HTTP on
+`http://control.fabrika.localhost`: a `__Host-`-prefixed `Secure` cookie is accepted
+and returned, a `__Host-` cookie carrying `Domain` and one without `Secure` are both
+dropped, and a sibling host setting `Domain=fabrika.localhost` can plant a duplicate
+of an unprefixed name but not of a `__Host-` one.

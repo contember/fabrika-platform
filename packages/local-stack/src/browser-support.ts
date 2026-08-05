@@ -1,7 +1,9 @@
+import { SESSION_COOKIE } from '@fabrika/auth-core'
 import { buildOperationsDsn, operationsEnvelopeUrl } from '@fabrika/operations-contract'
 import { randomUUID } from 'node:crypto'
 import { readFileSync, rmSync, unlinkSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { registerLocalApps } from './app-registration'
 import { compose } from './compose'
 import { ensureMachineKey } from './machine-key'
 import { prepareLocalStack, STATE_DIR } from './prepare'
@@ -115,6 +117,7 @@ export async function createBrowserIdentity(role: BrowserIdentityRole): Promise<
 export async function startBrowserStack(): Promise<void> {
 	await prepareLocalStack()
 	await compose(['up', '--detach', '--wait', '--remove-orphans'], { browser: true })
+	await registerLocalApps()
 	await ensureMachineKey()
 	await seedBrowserFixtures()
 }
@@ -250,7 +253,7 @@ async function operationsRpc(session: string, method: string, input: unknown): P
 		method: 'POST',
 		headers: {
 			'content-type': 'application/json',
-			cookie: `px_session=${session}`,
+			cookie: `${SESSION_COOKIE}=${session}`,
 			origin: CONTROL_ORIGIN,
 		},
 		body: JSON.stringify({ method, input }),

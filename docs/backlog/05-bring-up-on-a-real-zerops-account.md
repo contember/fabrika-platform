@@ -30,12 +30,14 @@ them.
    IPv4 needs **both** A and AAAA records or routing fails silently — see
    [`09`](./09-confirm-multi-domain-per-service.md).
    Browser SSO no longer waits on this. It used to: the session cookie was shared
-   across hosts through `SESSION_COOKIE_DOMAIN`, and `*.zerops.app` is on the Public
-   Suffix List, so a browser refuses a cookie scoped to `prg1.zerops.app` outright.
-   [ADR-0021](../decisions/0021-exchange-token-session-handoff.md) replaced that with
-   a one-time code redeemed by the proxy, verified live across two `.zerops.app`
-   hostnames on 2026-08-04. Custom domains are now about operating a real
-   installation, not about making sign-in work.
+   across hosts through a parent-domain `Domain` attribute, and `*.zerops.app` is on
+   the Public Suffix List, so a browser refuses a cookie scoped to `prg1.zerops.app`
+   outright. [ADR-0021](../decisions/0021-exchange-token-session-handoff.md) replaced
+   that with a one-time code redeemed by the proxy, verified live across two
+   `.zerops.app` hostnames on 2026-08-04, and
+   [ADR-0023](../decisions/0023-one-session-per-host.md) has since deleted the shared
+   cookie outright. Custom domains are now about operating a real installation, not
+   about making sign-in work.
 3. **A git source, and the deploys that need one.** fabrika's GitHub App does not
    reach the Zerops path at all — see
    [`47`](./47-give-the-zerops-path-a-private-git-source.md). Until one exists,

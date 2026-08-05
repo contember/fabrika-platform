@@ -1,3 +1,4 @@
+import { SESSION_COOKIE } from '@fabrika/auth-core'
 import { browserTest, byLabel, byRole, expect, getPage, invariant, step } from '@opice/harness'
 import { randomUUID } from 'node:crypto'
 import { readBrowserFixtures, scenarioMarker, sendErrorFixture } from './support/fixtures'
@@ -60,7 +61,7 @@ async function identityRpc(session: string, method: string, input: unknown): Pro
 		method: 'POST',
 		headers: {
 			'content-type': 'application/json',
-			cookie: `px_session=${session}`,
+			cookie: `${SESSION_COOKIE}=${session}`,
 			origin: BASE_URL,
 		},
 		body: JSON.stringify({ method, input }),

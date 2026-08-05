@@ -371,7 +371,7 @@ Bookkeeping wrinkle: that commit also carries the deletion of `backlog/52`, whic
 content is in git history at `9d7396d^`. WU-I has since landed, so the deletion is correct in the end,
 just early.
 
-## ⚠ WU-E is blocked on a decision — `__Host-` and shared-cookie mode are incompatible
+## WU-E's decision, and how it went (resolved → [ADR-0023](../decisions/0023-one-session-per-host.md))
 
 `__Host-` **forbids the `Domain` attribute**. `SESSION_COOKIE_DOMAIN` exists to set one. So SEC-20 as
 decided ("prefix only") cannot be applied to `px_session` in any installation that uses the shared-cookie
@@ -389,8 +389,8 @@ cookies, `SESSION_COOKIE_DOMAIN` deleted.
 Against: it contradicts an explicitly-reasoned choice in an accepted ADR, and the shared cookie is
 genuinely the cheaper path when an app really does share a domain with IAM — it saves a redirect.
 
-**Decision needed.** Retire the shared cookie and take `__Host-` on both, or keep it and apply `__Host-`
-only to the per-app `px_token` (which is already host-only).
+**Decided: retire the shared cookie.** → [ADR-0023](../decisions/0023-one-session-per-host.md), which
+amends 0022 without editing it.
 
 **Considered and rejected — one shared `TokenVerifier`.** `packages/auth/src/verify.ts` is a near-twin of
 `packages/proxy/src/verifier.ts`. They cannot share code cheaply: `@fabrika/auth-core` is deliberately
@@ -488,6 +488,58 @@ admission allowlist described as required configuration, IAM's platform-specific
 three. `overview.md` additionally still called the proxy "not new code" and never mentioned cross-host
 SSO, and `INDEX.md` said no sprint was active. `packages/auth-core` gained the CLAUDE.md it never had.
 
-**Still open, and why this sprint is not closed:** WU-E is blocked on the `__Host-` versus shared-cookie
-decision above, and the browser suite has one known failure
+**Wave 3 — WU-E landed**, closing the question 0022 left open →
+[ADR-0023](../decisions/0023-one-session-per-host.md). `SESSION_COOKIE_DOMAIN` is gone from env,
+services, both installation templates and the local composition; `SESSION_COOKIE` is
+`__Host-px_session` and `TOKEN_COOKIE` is `__Host-px_token`; `readHandoff` is two outcomes;
+`safeRedirect` admits IAM's own origin only. Typecheck clean, `bun test` 1867 pass / 0 fail with the
+Postgres suites executed against a throwaway `postgres:17`, `local:up` + `local:smoke` green, browser
+suite **9 pass / 1 fail** — the one being [53](../backlog/53-reauthor-the-operations-console-scenarios.md),
+a status-filter assertion, unrelated to auth.
+
+**The measurement the decision hung on.** `__Host-` requires `Secure`, and the local stack is plain
+HTTP. In Chromium 151.0.7922.34 (what Playwright 1.62.1 installs, i.e. what the suite runs) on
+`http://control.fabrika.localhost`: a `__Host-` `Secure` cookie is **accepted and returned**; the same
+cookie with `Domain` and one without `Secure` are both dropped; and a sibling host setting
+`Domain=fabrika.localhost` planted a SECOND `px_session` the real host then sent alongside its own,
+while `__Host-px_session` could not be shadowed. So the prefix is usable locally AND buys something
+host-only alone does not — the second half is why "prefix only, no duplicate-aware reading" (SEC-20)
+is coherent.
+
+**`Secure` stopped being a decision, in IAM and in the proxy alike.** It was derived from the issuer's
+scheme / the manifest's scheme; the prefix makes a non-`Secure` cookie unstorable, so the conditional
+could only ever emit a cookie nothing keeps. It is unconditional now, and the `secure` parameter
+threaded through nine functions in `auth/routes.ts` is gone with it.
+
+⚠ **Two things that turned out not to be true, both found by running it:**
+
+- **`curl` cannot follow the local login.** It refuses to store a `Secure` cookie received over
+  `http://`, with no `localhost` exemption — so a curl session against the local stack loops between
+  the console and IAM forever. Browsers do not do this (`*.localhost` is potentially trustworthy).
+  Nothing in the repo depended on it: `local:smoke` authenticates with a bearer and only asserts the
+  anonymous 302. Worth knowing before someone debugs a "login loop" that is really a cookie jar.
+- **Playwright's `APIRequestContext` cannot follow a redirect carrying `Set-Cookie` under Bun.** It
+  parses the header against `IncomingMessage.url`, which Node leaves undefined on a client response
+  and Bun sets to the request PATH — `ERR_INVALID_URL`. The first version of `browser-auth.ts` drove
+  the handoff with `context.request.get` and three scenarios died on it. Driving it with a real
+  `page.goto` is both the fix and the more faithful thing to do.
+
+**The provider-free extraction happened.** `CONTROL_PROXY_GATES` → `packages/control/fabrika.gates.ts`,
+control's `AppSchema` → `packages/control/fabrika.schema.ts`, `OPERATIONS_PROXY_GATES` →
+`packages/operations/src/gates.ts`, each exported as a package subpath. They must avoid their own
+package's `src/` as well as the provider: both packages relax `noUncheckedIndexedAccess` for oblaka,
+so their runtime graphs do not compile inside local-stack's strict program. `prepare.ts` imports the
+real sets and the copies are deleted; `__tests__/proxy-gates.test.ts` keeps the half that is still not
+tautological — what a deployed Cloudflare proxy Worker actually bakes into its manifest.
+
+**Local sign-in moved to the handoff.** `registerLocalApps` (`local:up`, `local:reset`, `browser:up`)
+registers `vozka` and `notes` with the same `reconcileSchema` call a deploy makes. Observed chain:
+`302` console → `302` IAM `/auth/login?app=vozka&redirect=…` → `302`
+`/__fabrika/auth/callback?code=…` → `200` console, with `__Host-px_session` on
+`control.fabrika.localhost` AND on `iam.fabrika.localhost`, two independent rows. A second app is
+silent: `notes.fabrika.localhost` took the same three hops with no prompt and got its own cookie.
+Registering the console also closed the gap WU-K recorded — a non-admin role IS now grantable locally,
+because `vozka`'s action catalog reaches IAM without a deploy.
+
+**Still open:** the browser suite's one known failure
 ([53](../backlog/53-reauthor-the-operations-console-scenarios.md)).

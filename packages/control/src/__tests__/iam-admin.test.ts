@@ -19,7 +19,7 @@ describe('IAM admin gateway', () => {
 		const gateway = new RecordingGateway()
 		const response = await forwardIamAdmin(
 			new Request('https://console.test/iam/admin/apps/notes/schema?view=full', {
-				headers: { cookie: 'px_session=session-one' },
+				headers: { cookie: '__Host-px_session=session-one' },
 			}),
 			{ gateway, publicIamUrl: 'https://iam.test', publicOrigin: 'https://console.test' },
 		)
@@ -27,7 +27,7 @@ describe('IAM admin gateway', () => {
 		expect(response.status).toBe(200)
 		expect(gateway.requests).toHaveLength(1)
 		expect(gateway.requests[0]?.url).toBe('https://console.test/admin/apps/notes/schema?view=full')
-		expect(gateway.requests[0]?.headers.get('cookie')).toBe('px_session=session-one')
+		expect(gateway.requests[0]?.headers.get('cookie')).toBe('__Host-px_session=session-one')
 	})
 
 	test('rejects cross-origin mutations before they reach IAM', async () => {
@@ -101,7 +101,7 @@ describe('IAM admin gateway', () => {
 					headers: {
 						origin: 'http://control.localhost',
 						authorization: 'Bearer px_caller',
-						cookie: 'px_session=session-one',
+						cookie: '__Host-px_session=session-one',
 						'content-type': 'application/json',
 					},
 					body: '{"label":"test"}',
@@ -118,7 +118,7 @@ describe('IAM admin gateway', () => {
 			// The CALLER's credential, forwarded verbatim. The gateway never supplies one of its own —
 			// IAM authorizes and audits whoever actually made the request.
 			expect(received?.authorization).toBe('Bearer px_caller')
-			expect(received?.cookie).toBe('px_session=session-one')
+			expect(received?.cookie).toBe('__Host-px_session=session-one')
 			expect(received?.body).toBe('{"label":"test"}')
 		} finally {
 			await server.stop(true)
@@ -153,7 +153,7 @@ describe('the gateway CSRF guard', () => {
 	})
 
 	test('checks a bearer that arrives alongside any cookie', async () => {
-		expect((await forward({ authorization: 'Bearer px_machine', cookie: 'px_token=abc' })).status).toBe(403)
+		expect((await forward({ authorization: 'Bearer px_machine', cookie: '__Host-px_token=abc' })).status).toBe(403)
 	})
 
 	test('fails closed when no public origin is configured', async () => {

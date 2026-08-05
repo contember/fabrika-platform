@@ -74,6 +74,8 @@ bun test               # gates.test.ts · permissions.test.ts · token.test.ts �
   duplication is deliberate — the alternative is a runtime dependency, which the first invariant
   forbids.
 - Several comments in `token.ts` and `rpc.ts` still say "propustka" and describe the pre-merge
-  Cloudflare-Access world in the present tense. The wire names (`px_session`, `px_token`, `px_`)
-  are durable and must not be renamed; the historical framing around them is not a description of
-  current behaviour.
+  Cloudflare-Access world in the present tense. The wire names (`__Host-px_session`,
+  `__Host-px_token`, `px_`) are durable and must not be renamed; the historical framing around them
+  is not a description of current behaviour. `token.ts` says "parent cookie domain" nowhere any more:
+  ADR-0023 made every session cookie host-only and the `__Host-` prefix is the browser-enforced
+  restatement of that — a cookie of either name carrying a `Domain` is DROPPED, not widened.

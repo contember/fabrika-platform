@@ -142,7 +142,7 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 			}
 			if (decision.outcome === 'handoff') {
 				logger.info('handoff', fields)
-				return handoffResponse(decision, resolved.app.scheme === 'https')
+				return handoffResponse(decision)
 			}
 			return denied(logger, fields, decision)
 		} catch {
@@ -157,21 +157,21 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 /**
  * Render a redeemed handoff: set the app session on THIS host and send the browser where IAM said.
  *
- * The cookie is host-only — no `Domain` — which is the whole point of ADR-0021: it belongs to this
- * app's host and no sibling can read it. `Secure` follows the manifest's scheme rather than the
- * socket, because behind a terminating balancer the socket is plain HTTP and the flag would silently
- * drop off exactly where it matters most.
+ * This is the ONE place an app session is established — since ADR-0023 there is no other, because
+ * IAM's own cookie is host-only too and never reaches here.
+ *
+ * Every attribute is fixed by `SESSION_COOKIE`'s `__Host-` prefix: `Secure`, `Path=/`, and no
+ * `Domain`. The absent `Domain` is the substance — the session belongs to this app's host and no
+ * sibling can read it — and the prefix is the browser-enforced restatement, which additionally stops a
+ * sibling under a shared registrable domain from planting a second cookie of this name. `Secure` is
+ * unconditional rather than following the manifest's scheme: the prefix requires it, so a conditional
+ * could only produce a cookie the browser discards. It stays correct behind a terminating balancer
+ * (the socket is plain HTTP, the browser spoke HTTPS) and on `*.localhost`, which browsers treat as
+ * potentially trustworthy.
  */
-function handoffResponse(decision: Extract<Decision, { outcome: 'handoff' }>, secure: boolean): Response {
+function handoffResponse(decision: Extract<Decision, { outcome: 'handoff' }>): Response {
 	const maxAge = Math.max(0, decision.expiresAt - Math.floor(Date.now() / 1000))
-	const attributes = [
-		`${SESSION_COOKIE}=${decision.session}`,
-		'Path=/',
-		`Max-Age=${maxAge}`,
-		'HttpOnly',
-		'SameSite=Lax',
-		...(secure ? ['Secure'] : []),
-	]
+	const attributes = [`${SESSION_COOKIE}=${decision.session}`, 'Path=/', `Max-Age=${maxAge}`, 'HttpOnly', 'SameSite=Lax', 'Secure']
 	return new Response(null, {
 		status: 302,
 		headers: { location: decision.location, 'cache-control': 'no-store', 'set-cookie': attributes.join('; ') },

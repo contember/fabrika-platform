@@ -52,9 +52,9 @@
 // Verified live: a variable written through the env API resolves `${x_y}` at container start exactly as
 // one written here does, so nothing is lost in the move.
 //
-// (The superseded `packages/iam/zerops.yaml` baked `ISSUER: https://iam.example.com` and
-// `SESSION_COOKIE_DOMAIN: .example.com`. Those are per-installation, and a placeholder domain in a
-// committed file is a value that boots wrong rather than not booting.)
+// (The superseded `packages/iam/zerops.yaml` baked `ISSUER: https://iam.example.com`. That is
+// per-installation, and a placeholder domain in a committed file is a value that boots wrong rather
+// than not booting.)
 //
 // ── What a build container can and cannot see ──────────────────────────────────────────────────────
 //
@@ -84,7 +84,7 @@ const WORKSPACE_DEPLOY_FILES = ['package.json', 'bun.lock', 'node_modules', 'pac
  * advisory lock and transaction pooling does not preserve session state across statements),
  * `ENVIRONMENT`, `ISSUER` (this service's public origin; it is the `iss` of every minted token AND the
  * OIDC redirect base, so it must match the domain routed to the proxy in front of it),
- * `SESSION_COOKIE_DOMAIN`, `FABRIKA_IAM_ADMIN_ORIGINS` (a JSON array holding the CONSOLE's public
+ * `FABRIKA_IAM_ADMIN_ORIGINS` (a JSON array holding the CONSOLE's public
  * origin — the control plane's domain, which IAM cannot infer; an unset or empty value means no
  * browser may write to `/admin/*`, which closes the console's Access plane),
  * `HUMAN_EMAIL_DOMAINS`, `HUMAN_EMAILS`, `IAM_BOOTSTRAP_ADMINS`,

@@ -88,8 +88,9 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   Actions/scopes live in `src/actions.ts`. The GitHub webhook (`src/webhook.ts`) is the ONLY
   unauthenticated route — HMAC-gated instead.
 - **The PROXY is the front door; `src/iam.ts` only verifies (ADR-0022).** The proxy matches
-  `CONTROL_GATES` (service + human on `/api/*`, the source of `CONTROL_PROXY_GATES` in
-  `fabrika.config.ts`), resolves the credential, and injects the access token as `X-Fabrika-Token`.
+  `CONTROL_PROXY_GATES` (`fabrika.gates.ts` — a module deliberately free of the provider AND of
+  `src/`, so `@fabrika/local-stack` can import it into a strict program), resolves the credential, and
+  injects the access token as `X-Fabrika-Token`.
   `iam.authenticate(request)` re-verifies that token LOCALLY against IAM's JWKS — signature, `iss`,
   `aud`, `exp` — and builds the `AuthContext` for `can(action, scope?)` + audit. Nothing here evaluates
   a gate, exchanges a session, or writes a cookie, and a miss is a flat 401/403/503, never a login

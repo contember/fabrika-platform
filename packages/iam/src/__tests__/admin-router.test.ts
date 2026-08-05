@@ -53,7 +53,6 @@ function env(h: Harness): Env {
 		ISSUER: ORIGIN,
 		FABRIKA_IAM_SIGNING_KEYS: '',
 		FABRIKA_IAM_PROVISIONING_KEY: '',
-		SESSION_COOKIE_DOMAIN: '',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: 'client',
 		OIDC_CLIENT_SECRET: 'secret',
@@ -85,7 +84,7 @@ interface RequestOptions {
 function adminRequest(path: string, opts: RequestOptions = {}): Request {
 	const headers = new Headers()
 	if (opts.session) {
-		headers.set('Cookie', `px_session=${opts.session}`)
+		headers.set('Cookie', `__Host-px_session=${opts.session}`)
 	}
 	const method = opts.method ?? 'GET'
 	const stateChanging = method === 'POST' || method === 'PATCH' || method === 'DELETE' || method === 'PUT'
@@ -119,7 +118,7 @@ function rpc(h: Harness, session: string, method: string, input: unknown): Promi
 	return createIamApp().fetch(
 		new Request(`${ORIGIN}/admin/rpc`, {
 			method: 'POST',
-			headers: { 'content-type': 'application/json', origin: ORIGIN, cookie: `px_session=${session}` },
+			headers: { 'content-type': 'application/json', origin: ORIGIN, cookie: `__Host-px_session=${session}` },
 			body: JSON.stringify({ method, input }),
 		}),
 		env(h),

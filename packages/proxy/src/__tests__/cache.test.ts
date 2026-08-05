@@ -29,8 +29,8 @@ describe('cache disabled — same decisions, more calls', () => {
 		const uncached = run(HUMAN, options, null)
 
 		for (let i = 0; i < 3; i++) {
-			const a = await cached.verify(verifyRequest({ cookie: 'px_session=s' }))
-			const b = await uncached.verify(verifyRequest({ cookie: 'px_session=s' }))
+			const a = await cached.verify(verifyRequest({ cookie: '__Host-px_session=s' }))
+			const b = await uncached.verify(verifyRequest({ cookie: '__Host-px_session=s' }))
 			expect(a.status).toBe(204)
 			expect(b.status).toBe(a.status)
 			expect(b.headers.get(PROXY_TOKEN_HEADER)).toBe(a.headers.get(PROXY_TOKEN_HEADER))
@@ -57,7 +57,7 @@ describe('cache disabled — same decisions, more calls', () => {
 	test('every deny in the matrix denies identically with no cache', async () => {
 		const cases: { gates: AppGates; options: FakeIamOptions; request: Request }[] = [
 			{ gates: HUMAN, options: {}, request: verifyRequest({}) },
-			{ gates: HUMAN, options: { mintToken: { ok: false, reason: 'disabled' } }, request: verifyRequest({ cookie: 'px_session=s' }) },
+			{ gates: HUMAN, options: { mintToken: { ok: false, reason: 'disabled' } }, request: verifyRequest({ cookie: '__Host-px_session=s' }) },
 			{ gates: SERVICE, options: {}, request: verifyRequest({ bearer: 'px_nope' }) },
 			{ gates: SERVICE, options: { unreachable: true }, request: verifyRequest({ bearer: 'px_x' }) },
 			{ gates: { rules: [{ path: '/nope', kind: 'public' }] }, options: {}, request: verifyRequest({ path: '/yes' }) },

@@ -1,4 +1,4 @@
-// The proxy half of the cross-host handoff (ADR-0021).
+// The proxy half of the session handoff (ADR-0021, ADR-0023).
 //
 // This is the ONLY path on which the proxy sets a cookie, so the tests are as much about what it
 // does NOT do — set one on a failed redemption, trust the request for the destination, reach the
@@ -58,10 +58,14 @@ describe('the handoff callback', () => {
 		expect(response.headers.get('location')).toBe(RETURN_URL)
 	})
 
-	test('drops Secure when the app is served over plain http, so local development works', async () => {
+	test('keeps Secure even when the manifest says plain http — `__Host-` requires it (ADR-0023)', async () => {
+		// It used to be dropped for local development. `SESSION_COOKIE` now carries the `__Host-` prefix,
+		// which a browser honours only WITH `Secure`, so dropping it would produce a cookie nothing
+		// stores. Local development is unaffected: browsers treat `*.localhost` as potentially
+		// trustworthy and accept a `Secure` cookie there over plain HTTP.
 		const iam = new FakeIam({ exchangeAuthCode: { ok: true, session: 's', returnUrl: 'http://app.localhost/x', expiresAt: nowPlus(60) } })
 		const response = await service(iam, 'http')(callback('c'))
-		expect(cookie(response)?.attributes).not.toContain('Secure')
+		expect(cookie(response)?.attributes).toContain('Secure')
 	})
 
 	test('a refused code denies and sets NO cookie', async () => {

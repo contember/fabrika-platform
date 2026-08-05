@@ -2,7 +2,7 @@ import type { ControlRegistryRepository } from './db'
 
 /**
  * Assemble the return origins the control plane projects into IAM for one app
- * (ADR-0021; `docs/reference/cross-host-sso.md` § Who writes the registry).
+ * (ADR-0021/0023; `docs/reference/cross-host-sso.md` § Who writes the registry).
  *
  * IAM's registry is keyed by APP ID, while `public_origin` is per ENVIRONMENT — so the projected set
  * is every environment's origin, not the one being deployed. Sending only the deploying environment's

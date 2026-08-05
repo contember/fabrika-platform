@@ -60,33 +60,45 @@ describe('GET /.well-known/jwks.json', () => {
 })
 
 describe('GET /auth/login', () => {
-	test('creates a real shared-domain admin session when explicit local login is enabled', async () => {
+	test('creates a real HOST-ONLY admin session when explicit local login is enabled', async () => {
 		const h = createHarness()
 		const issuer = 'http://iam.fabrika.localhost:18080'
-		const redirect = 'http://notes.fabrika.localhost:18081/'
-		const services = h.makeServices({
-			issuer,
-			sessionCookieDomain: 'fabrika.localhost',
-			bootstrapAdmins: new Set(['admin@local.test']),
-			localDevLogin: true,
-		})
+		const services = h.makeServices({ issuer, bootstrapAdmins: new Set(['admin@local.test']), localDevLogin: true })
 		const res = await handleAuth(
-			new Request(`${issuer}/auth/login?redirect=${encodeURIComponent(redirect)}`),
+			new Request(`${issuer}/auth/login?redirect=${encodeURIComponent(`${issuer}/back`)}`),
 			services,
 			AUTH_ENV,
 			ctx(),
 		)
 
 		expect(res.status).toBe(302)
-		expect(res.headers.get('location')).toBe(redirect)
+		expect(res.headers.get('location')).toBe(`${issuer}/back`)
 		const sessionToken = setCookieValue(res, SESSION_COOKIE)
 		expect(sessionToken).toBeTruthy()
-		expect(res.headers.getSetCookie().some((cookie) => cookie.includes('Domain=fabrika.localhost'))).toBe(true)
+		// ADR-0023: the cookie belongs to IAM's host alone. `__Host-` is what a browser enforces that
+		// with, and it refuses any cookie of this name carrying a `Domain`.
+		expect(SESSION_COOKIE.startsWith('__Host-')).toBe(true)
+		expect(res.headers.getSetCookie().some((cookie) => cookie.includes('Domain='))).toBe(false)
 
 		const principal = await h.repositories.principals.getUserByExternalId('local-dev-admin')
 		expect(principal?.email).toBe('admin@local.test')
 		const session = await h.repositories.sessions.getActiveSessionByHash(await hashToken(sessionToken ?? ''))
 		expect(session?.principal_id).toBe(principal?.id)
+	})
+
+	test('a redirect to a SIBLING host is refused — only the registry may send a browser off IAM', async () => {
+		const h = createHarness()
+		const issuer = 'http://iam.fabrika.localhost:18080'
+		const services = h.makeServices({ issuer, bootstrapAdmins: new Set(['admin@local.test']), localDevLogin: true })
+		const res = await handleAuth(
+			new Request(`${issuer}/auth/login?redirect=${encodeURIComponent('http://notes.fabrika.localhost:18081/')}`),
+			services,
+			AUTH_ENV,
+			ctx(),
+		)
+		// It used to be admitted, because the shared cookie could reach it. Now the browser would land
+		// there with no session at all, so it goes nowhere but IAM — a `?app=` handoff is the only way.
+		expect(res.headers.get('location')).toBe(issuer)
 	})
 
 	test('302s to the IdP with PKCE and sets the in-flight cookie', async () => {
@@ -437,13 +449,14 @@ describe('/auth/logout', () => {
 	})
 })
 
-describe('cookie Secure flag behind a TLS-terminating balancer', () => {
-	// Zerops' project L7 balancer (and any reverse proxy) terminates TLS and forwards plain HTTP on
-	// the private network. The request the process sees is `http://…`, but the browser spoke HTTPS —
-	// so `Secure` has to come from the configured public origin, not from the socket.
+describe('every auth cookie is Secure, on every transport', () => {
+	// `__Host-` requires `Secure`, so the flag stopped being a decision: without it the browser refuses
+	// the cookie whatever the socket said. Which is also why it can no longer be derived from the
+	// issuer — Zerops' L7 balancer terminates TLS and forwards plain HTTP, so the socket was always the
+	// wrong signal, and the issuer was only ever a proxy for "the browser spoke HTTPS".
 	const secureFlags = (res: Response): boolean[] => res.headers.getSetCookie().map((header) => /;\s*Secure(;|$)/i.test(header))
 
-	test('an https ISSUER forces Secure even on a plain-HTTP request', async () => {
+	test('an https ISSUER on a plain-HTTP request (a TLS-terminating balancer)', async () => {
 		const h = createHarness()
 		const services = h.makeServices({ issuer: 'https://iam.example.com' })
 		const res = await handleAuth(new Request('http://iam:3000/auth/login'), services, AUTH_ENV, ctx())
@@ -451,14 +464,14 @@ describe('cookie Secure flag behind a TLS-terminating balancer', () => {
 		expect(secureFlags(res)).toEqual([true])
 	})
 
-	test('an http ISSUER on a plain-HTTP request stays insecure — local dev is unchanged', async () => {
+	test('an http ISSUER on a plain-HTTP request — the local stack, where *.localhost is trustworthy', async () => {
 		const h = createHarness()
 		const services = h.makeServices({ issuer: ISSUER })
 		const res = await handleAuth(new Request(`${ISSUER}/auth/login`), services, AUTH_ENV, ctx())
-		expect(secureFlags(res)).toEqual([false])
+		expect(secureFlags(res)).toEqual([true])
 	})
 
-	test('an https request is Secure regardless of the issuer', async () => {
+	test('an https request', async () => {
 		const h = createHarness()
 		const services = h.makeServices({ issuer: 'https://iam.example.com' })
 		const res = await handleAuth(

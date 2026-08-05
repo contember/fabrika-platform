@@ -22,8 +22,8 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   condition. A request matching no gate rule is denied.
 - **A `human` gate admits only `ptype: 'user'`.** A valid token is not a human: `issueJwt` signs an
   anonymous token for the app (up to 24 h, not revocable) and `mintFromKey` signs `ptype: 'service'`.
-  `px_token` is client-supplied — the proxy only ever writes `px_session` — so every tier of
-  `authorizeSession` checks the claim. Share links are redeemed OFF the gate path.
+  `__Host-px_token` is client-supplied — the proxy only ever writes `__Host-px_session` — so every
+  tier of `authorizeSession` checks the claim. Share links are redeemed OFF the gate path.
 - **A `human` gate miss answers in the shape the caller can act on.** `Sec-Fetch-Mode: navigate`, or
   the header absent, → the 302 bounce; any other value → **401** with
   `{ error: { type: 'auth', message, loginUrl } }`, the envelope `@fabrika/app`'s browser RPC client
@@ -73,11 +73,19 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
 - **If the auth service dies, Caddy answers 502 and every request is denied.** `start.sh` restarts it
   in a loop; that failure mode is by design, not a gap to paper over.
 
-## The cross-host handoff (ADR-0022)
+## The session handoff (ADR-0022, ADR-0023)
 
 - **The proxy sets a cookie on EXACTLY ONE path**: a successful redemption at the reserved callback,
   and nowhere else. It is otherwise a pure enforcement point; every extra write site is another place
-  a mistake establishes a session.
+  a mistake establishes a session. Since ADR-0023 that is also the only way ANY session reaches an
+  app's host — IAM's own cookie is host-only on IAM's host, so `authorizeSession`'s
+  `__Host-px_session` is always a child session this proxy itself wrote. That narrows the cookie's
+  provenance and nothing else: the three tiers are unchanged.
+- **The session cookie's attributes are fixed by its `__Host-` prefix**: `Secure`, `Path=/`, no
+  `Domain`. `Secure` is UNCONDITIONAL and no longer follows `ProxyApp.scheme` — the prefix requires
+  it, so a conditional could only emit a cookie the browser discards. It is right behind a
+  TLS-terminating balancer (plain HTTP socket, HTTPS browser) and on `*.localhost`, which browsers
+  treat as potentially trustworthy; measured in Chromium 151, not assumed.
 - **`/__fabrika/auth/callback` is reserved on every app host** and is answered BEFORE gate matching —
   it is how a browser becomes able to satisfy a gate, so it cannot be behind one. It must not shadow
   an application route, the same hazard `src/caddy.ts` documents for the health route. Its `?code=` is

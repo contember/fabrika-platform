@@ -60,7 +60,6 @@ async function stack(options: { adminOrigins: string[] }): Promise<Stack & { ses
 		ISSUER,
 		FABRIKA_IAM_SIGNING_KEYS: '',
 		FABRIKA_IAM_PROVISIONING_KEY: '',
-		SESSION_COOKIE_DOMAIN: '',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: 'client',
 		OIDC_CLIENT_SECRET: 'secret',
@@ -95,7 +94,7 @@ describe("the console's Access plane through the control-plane gateway", () => {
 	test('a registered console origin reaches IAM and is authorized as the BROWSER, not as control', async () => {
 		const { call, session, stop } = await stack({ adminOrigins: [CONSOLE] })
 		try {
-			const response = await call('me', null, { cookie: `px_session=${session}` })
+			const response = await call('me', null, { cookie: `__Host-px_session=${session}` })
 			expect(response.status).toBe(200)
 			const body: unknown = await response.json()
 			// The principal is the browser's admin. Control never substitutes an identity of its own; the
@@ -109,7 +108,7 @@ describe("the console's Access plane through the control-plane gateway", () => {
 	test('a state change survives the hop — the case that was 403 in production', async () => {
 		const { call, session, stop } = await stack({ adminOrigins: [CONSOLE] })
 		try {
-			const response = await call('principals.invite', { email: 'invited@contember.com' }, { cookie: `px_session=${session}` })
+			const response = await call('principals.invite', { email: 'invited@contember.com' }, { cookie: `__Host-px_session=${session}` })
 			expect(response.status).toBe(200)
 			expect(JSON.stringify(await response.json())).toContain('invited@contember.com')
 		} finally {
@@ -122,7 +121,7 @@ describe("the console's Access plane through the control-plane gateway", () => {
 		// the refusal comes from the service that owns the decision rather than from the transport.
 		const { call, session, stop } = await stack({ adminOrigins: [] })
 		try {
-			const response = await call('principals.invite', { email: 'nope@contember.com' }, { cookie: `px_session=${session}` })
+			const response = await call('principals.invite', { email: 'nope@contember.com' }, { cookie: `__Host-px_session=${session}` })
 			expect(response.status).toBe(403)
 			// IAM's RPC envelope, not control's flat one — proof of which hop refused.
 			expect(await response.json()).toEqual({ error: { type: 'forbidden', message: 'cross-origin request rejected' } })
@@ -138,7 +137,7 @@ describe("the console's Access plane through the control-plane gateway", () => {
 		const { call, session, stop } = await stack({ adminOrigins: [CONSOLE] })
 		try {
 			const response = await call('principals.invite', { email: 'evil@contember.com' }, {
-				cookie: `px_session=${session}`,
+				cookie: `__Host-px_session=${session}`,
 				origin: 'https://evil.example.test',
 			})
 			expect(response.status).toBe(403)
@@ -153,7 +152,7 @@ describe("the console's Access plane through the control-plane gateway", () => {
 		const { call, session, stop } = await stack({ adminOrigins: [CONSOLE] })
 		try {
 			const response = await call('principals.invite', { email: 'evil2@contember.com' }, {
-				cookie: `px_session=${session}`,
+				cookie: `__Host-px_session=${session}`,
 				origin: null,
 			})
 			expect(response.status).toBe(403)
@@ -171,7 +170,7 @@ describe("the console's Access plane through the control-plane gateway", () => {
 			// The console origin is not registered, but IAM's private loopback address is not registered
 			// either — so if the header were still rewritten this would be indistinguishable. What proves
 			// the point is that registering the CONSOLE (the previous tests) is what makes the call work.
-			const response = await call('principals.invite', { email: 'x@contember.com' }, { cookie: `px_session=${session}` })
+			const response = await call('principals.invite', { email: 'x@contember.com' }, { cookie: `__Host-px_session=${session}` })
 			expect(response.status).toBe(403)
 		} finally {
 			await stop()

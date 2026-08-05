@@ -24,6 +24,11 @@ shared session cookie). Those four are kept and are still where the _why_ lives 
 particular holds the three Caddy semantics mismatches verified against a running binary. None of
 them should be read as a description of current behaviour.
 
+[ADR-0023](0023-one-session-per-host.md) then answers the single question 0022 deliberately left
+open: the shared parent-domain session cookie is retired, so the one-time code is the only way a
+session reaches an application and both session cookies carry the `__Host-` prefix. It amends 0022
+rather than superseding it — every rule in 0022 still holds.
+
 ADR-0011 extends the provider-owned plan and target decisions in ADR-0002 and
 ADR-0009 across authoring, persistence, and the control lifecycle. It replaces
 their closed driver-registry mechanics with static provider bundles while

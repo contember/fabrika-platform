@@ -71,9 +71,11 @@ This command removes only the `fabrika-local` Compose volumes and
 ## Signing in
 
 The proxy is the only front door locally, exactly as it is in a deployed
-installation. It fronts each host with the gates that host's `fabrika.config.ts`
-declares — `CONTROL_PROXY_GATES` for the console, `OPERATIONS_PROXY_GATES` for the
-public Operations host — and IAM is `public` because it authenticates itself.
+installation. It fronts each host with the SAME gate declarations a
+deployed proxy carries — `CONTROL_PROXY_GATES` (`packages/control/fabrika.gates.ts`)
+for the console, `OPERATIONS_PROXY_GATES` (`packages/operations/src/gates.ts`) for the
+public Operations host, imported rather than copied — and IAM is `public` because it
+authenticates itself.
 Nothing reaches an application until a gate passes, and the application only ever
 verifies the token the proxy injected. There is no second way in: `@fabrika/auth`
 has one code path and no local mode, so no synthetic persona exists anywhere.
@@ -86,8 +88,11 @@ Opening the console therefore runs the real round trip:
    creates a **real** session row for the `admin@local.test` bootstrap admin
    instead of calling an external IdP. It is IAM's own mechanism and is refused at
    use the moment the flag is off;
-3. the browser returns to the original URL carrying `px_session`, and the proxy
-   exchanges it for a per-app token on every request.
+3. IAM issues a single-use code bound to `(session, vozka, return URL)` and 302s to
+   `control.fabrika.localhost:18080/__fabrika/auth/callback?code=…`;
+4. the proxy there redeems the code, sets `__Host-px_session` **on the console's own
+   host**, and 302s to the original URL. Every later request mints a per-app token
+   from that cookie.
 
 That session is a **global admin** — `LOCAL_DEV_LOGIN` resolves the fixed
 `admin@local.test` bootstrap admin and nothing else. Everything else about an
@@ -96,35 +101,31 @@ creates one, and `passwords.issueEnrollment` answers with the enrolment URL
 directly (`FABRIKA_EMAIL_PROVIDER` is `none`, so delivery is `manual`) — that
 principal can then sign in with a password.
 
-**A non-admin role for the console is not grantable locally yet.** A grant naming
-`vozka` is refused with `unknown app`, and a cross-app inline grant of
-`deploy.read` is refused because no registered app declares that pattern: fabrika's
-own `AppSchema` is reconciled into IAM only by a deploy, so locally IAM knows about
-`notes` (registered by `local:smoke`) and nothing else. Only the built-in cross-app
-`admin` role can be granted, which is another global admin. Registering the console
-as an app locally is the same missing piece the cross-host handoff waits on. There
-is no persona switch to fall back on, and adding one back would be a second
+That is the production round trip verbatim, including the handoff, because since
+[ADR-0023](../decisions/0023-one-session-per-host.md) there is no other way for a
+session to reach an application's host — no cookie is shared between hosts, and
+`__Host-` makes the browser enforce it. What makes it work locally is that `local:up`
+**registers the local apps with IAM** once the composition is healthy: `vozka` with
+`http://control.fabrika.localhost:18080` and `notes` with
+`http://notes.fabrika.localhost:18081`, through the same `reconcileSchema` call a
+deploy makes. Locally nothing deploys fabrika into its own composition, so the stack
+stands in for the deploy — the same way it already provisions the machine key. An app
+IAM has no return origin for answers `400` naming the address rather than trying
+something else.
+
+Because the console is now a registered app, a **non-admin role is grantable
+locally**: `vozka`'s `operator` role and its action catalog are in IAM from the first
+`local:up`, so an inline `deploy.read` grant or a role assignment resolves. There is
+no persona switch to fall back on, and adding one back would be a second
 authentication model.
 
-The session travels as a cookie on the shared `fabrika.localhost` parent
-(`SESSION_COOKIE_DOMAIN`). Every local host is a `*.fabrika.localhost` name served
-by one proxy, so this is the case
-[ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) keeps the
-shared cookie for. It is reached by the ordinary rule rather than by a local
-exception: `vozka` has no return origins registered in IAM, so IAM reads the
-proxy's `app=vozka` bounce as "not opted in" and runs the shared-cookie login. A
-Zerops installation cannot use that path — `*.zerops.app` is a public suffix — and
-takes the one-time-code handoff instead; exercising the handoff locally
-additionally needs the console registered in IAM as an app with return origins,
-which today only a deploy does.
-
 The **browser** composition (`browser:up`, `test:browser`) runs the same services
-with `LOCAL_DEV_LOGIN` off. Its scenarios seed a real principal, grant, and
-`sessions` row directly in IAM and hand the browser the resulting `px_session`
-cookie; nothing there is a shortcut past the proxy, and every request the suite
-makes is still gated and answered with an IAM-minted token. With the bypass off,
-the suite can also drive an unauthenticated browser and observe the proxy's `302`
-to IAM.
+with `LOCAL_DEV_LOGIN` off. Its scenarios seed a real principal, grant and `sessions`
+row directly in IAM, plant that login on **IAM's host**, and then drive the real
+handoff once per application host to obtain each host's own session. Nothing there is
+a shortcut past the proxy, and every request the suite makes is still gated and
+answered with an IAM-minted token. With the bypass off, the suite can also drive an
+unauthenticated browser and observe the proxy's `302` to IAM.
 
 ## Calling the API from a script
 

@@ -1,5 +1,3 @@
-import type { AppGates } from '@fabrika/auth-core'
-import { OPERATIONS_RELEASE_RECONCILE_PATH, OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'
 import { environmentAliases } from '@fabrika/platform'
 import {
 	createCloudflareProxyWorker,
@@ -11,7 +9,7 @@ import {
 	ServiceReference,
 	Worker,
 } from '@fabrika/provider-cloudflare'
-import { OPERATOR_GATES } from './src/app'
+import { OPERATIONS_PROXY_GATES } from './src/gates'
 
 /**
  * IAM's origin — the issuer both this Worker and the proxy in front of it verify tokens against.
@@ -28,17 +26,6 @@ const resolveIamUrl = (isLocal: boolean): string =>
 		},
 		{ canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' },
 	) ?? (isLocal ? LOCAL_IAM_URL : '')
-
-const OPERATIONS_PROXY_GATES: AppGates = {
-	rules: [
-		{ path: '/healthz', kind: 'public' },
-		{ path: '/api/*/envelope/', kind: 'public' },
-		{ path: OPERATIONS_SOURCE_MAP_UPLOAD_PATH, kind: 'public' },
-		{ path: '/private/catalog/reconcile', kind: 'service' },
-		{ path: OPERATIONS_RELEASE_RECONCILE_PATH, kind: 'service' },
-		...OPERATOR_GATES.rules,
-	],
-}
 
 export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 	const isLocal = ctx.env === 'local'

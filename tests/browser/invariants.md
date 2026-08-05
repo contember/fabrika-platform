@@ -4,11 +4,12 @@ Every authored scenario must preserve these properties:
 
 1. Browser mutations use `http://control.fabrika.localhost:18080/operations/api/rpc`.
    Tests do not call the private Operations operator API.
-2. Authenticated contexts contain a real IAM `px_session`, scoped to the shared
-   `fabrika.localhost` parent the way IAM issues it. Anonymous contexts contain
-   none, and the browser stack runs with IAM's local login bypass OFF so an
-   anonymous browser really is one. External OIDC is not part of this local
-   witness.
+2. Authenticated contexts hold one `__Host-px_session` PER HOST, each obtained
+   through the real one-time-code handoff and each a distinct `sessions` row
+   bound to that app (ADR-0023). The seeded IAM login is planted on IAM's own
+   host and never reaches an app's. Anonymous contexts hold none, and the browser
+   stack runs with IAM's local login bypass OFF so an anonymous browser really is
+   one. External OIDC is not part of this local witness.
 3. Every request is authorized by the proxy, against the same gates production
    uses. A scenario never asserts that an application refused something the
    proxy should have refused first, and never presents a credential the proxy

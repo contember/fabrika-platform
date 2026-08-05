@@ -30,7 +30,7 @@ The public hostname accepts only Sentry-compatible
 `/private/releases/reconcile` stay private. Control's same-origin gateway
 transports operator requests; Operations owns authentication, scoped
 authorization, IAM audit, and principal lookup. Authentication is verification
-only (ADR-0022): the proxy matches `OPERATOR_GATES` and injects the access token,
+only (ADR-0022): the proxy matches `OPERATIONS_PROXY_GATES` (`src/gates.ts`) and injects the access token,
 `iam.authenticate(request)` re-verifies it locally against IAM's JWKS, and an
 unresolved caller never reaches a handler. Operations evaluates no gate, writes
 no cookie, and never produces a login URL.

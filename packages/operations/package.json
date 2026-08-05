@@ -47,6 +47,11 @@
 			"types": "./src/operator-api.ts",
 			"default": "./src/operator-api.ts"
 		},
+		"./gates": {
+			"bun": "./src/gates.ts",
+			"types": "./src/gates.ts",
+			"default": "./src/gates.ts"
+		},
 		"./access": {
 			"bun": "./src/access.ts",
 			"types": "./src/access.ts",

@@ -71,7 +71,7 @@ describe('Cloudflare proxy Worker', () => {
 		)
 		const response = await createCloudflareProxyHandler(env)(
 			new Request(`https://${HOST}/private`, {
-				headers: { Cookie: `px_token=${token}`, 'X-Fabrika-Token': 'forged' },
+				headers: { Cookie: `__Host-px_token=${token}`, 'X-Fabrika-Token': 'forged' },
 			}),
 		)
 
@@ -100,7 +100,7 @@ describe('Cloudflare proxy Worker', () => {
 		}
 		const response = await createCloudflareProxyHandler(configured)(
 			new Request(`https://${HOST}/private`, {
-				headers: { Authorization: 'Bearer px_service', Cookie: 'px_session=ignored' },
+				headers: { Authorization: 'Bearer px_service', Cookie: '__Host-px_session=ignored' },
 			}),
 		)
 

@@ -2,17 +2,27 @@
  * How a scenario becomes a signed-in browser.
  *
  * A role is a REAL IAM principal with a REAL `sessions` row, seeded by
- * `packages/iam/src/node/browser-identity.ts`. The browser then carries that session exactly the way
- * IAM hands it out in the local composition: one `px_session` cookie on the shared `fabrika.localhost`
- * parent, which is the path the proxy takes for every host it fronts. Nothing here is a shortcut past
- * the proxy — every request the suite makes is still authorized by it and answered with an
- * IAM-minted token.
+ * `packages/iam/src/node/browser-identity.ts`. The browser then obtains a session on each application
+ * host **through the real handoff** — the one and only way a session reaches an app since
+ * [ADR-0023](../../docs/decisions/0023-one-session-per-host.md): the seeded login cookie is planted on
+ * IAM's own host, `GET /auth/login?app=…&redirect=…` sees it and issues a single-use code, and the
+ * proxy on the app's host redeems that code and sets the app's own `__Host-px_session`.
+ *
+ * So the suite carries one cookie per host, each a distinct `sessions` row bound to one app, exactly
+ * as a human's browser would. Nothing here is a shortcut past the proxy — every request the suite makes
+ * is still authorized by it and answered with an IAM-minted token, and the handoff itself is now
+ * covered by every run rather than only in production.
+ *
+ * The one thing that IS a fixture shortcut is planting the IAM cookie instead of typing a password: the
+ * browser composition runs with `LOCAL_DEV_LOGIN` off, on purpose, so an anonymous browser stays
+ * anonymous and the proxy's refusal is observable.
  *
  * The principal's own coordinates ride along in `localStorage`, because a scenario cannot read them off
  * the wire: the browser holds an opaque session, the proxy injects the token server-side, and the
  * console exposes no `me` surface a non-admin role may call.
  */
 
+import { SESSION_COOKIE } from '@fabrika/auth-core'
 import { type BrowserIdentity, type BrowserIdentityRole, createBrowserIdentity } from '@fabrika/local-stack/browser-support'
 import type { Browser, BrowserContext } from 'playwright'
 
@@ -24,8 +34,19 @@ interface AuthResolveContext {
 }
 
 const CONTROL_ORIGIN = process.env['FABRIKA_BROWSER_ORIGIN'] ?? 'http://control.fabrika.localhost:18080'
-/** Every local platform and application host hangs off this name; the session cookie is scoped to it. */
-const SESSION_COOKIE_DOMAIN = '.fabrika.localhost'
+const IAM_ORIGIN = process.env['FABRIKA_BROWSER_IAM_ORIGIN'] ?? 'http://iam.fabrika.localhost:18080'
+const NOTES_ORIGIN = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://notes.fabrika.localhost:18081'
+
+/**
+ * Every host a scenario is signed in to, with the app id IAM knows it by. `registerLocalApps` in
+ * `@fabrika/local-stack` registers exactly these origins, so a name added here without a registration
+ * there is a 400 at sign-in rather than a silent miss.
+ */
+const APP_HOSTS: readonly { app: string; origin: string }[] = [
+	{ app: 'vozka', origin: CONTROL_ORIGIN },
+	{ app: 'notes', origin: NOTES_ORIGIN },
+]
+
 /** Where a scenario reads the principal it is signed in as. Mirrored in `support/fixtures.ts`. */
 export const BROWSER_PRINCIPAL_KEY = 'fabrika.browser-principal'
 const EMPTY: StorageState = { cookies: [], origins: [] }
@@ -61,25 +82,59 @@ async function sessionIsValid(browser: Browser, state: StorageState, role: Brows
 	}
 }
 
-function stateFor(identity: BrowserIdentity): StorageState {
-	return {
-		cookies: [{
-			name: 'px_session',
+/**
+ * Drive the real handoff once per app host and return the resulting storage state.
+ *
+ * The seeded login is planted on IAM's host only. Each `/auth/login?app=…&redirect=…` then takes the
+ * "already signed in HERE" path: IAM issues a code and 302s to the app's reserved callback, the proxy
+ * there redeems it and writes that app's own host-only session, and the redirect chain ends on the
+ * return URL.
+ *
+ * The chain is followed by a real PAGE rather than by `context.request`. That is partly the point —
+ * the browser is what a handoff is designed for — and partly forced: Playwright's Node-side fetch
+ * parses `Set-Cookie` against `IncomingMessage.url`, which Node leaves undefined on a client response
+ * and Bun sets to the request PATH, so it throws `ERR_INVALID_URL` on any redirect that carries a
+ * cookie. A navigation never touches that code.
+ */
+async function signIn(browser: Browser, identity: BrowserIdentity): Promise<StorageState> {
+	const context = await browser.newContext()
+	try {
+		await context.addCookies([{
+			name: SESSION_COOKIE,
 			value: identity.session,
-			domain: SESSION_COOKIE_DOMAIN,
+			// Host-only, on IAM's host alone. `__Host-` additionally requires `Secure` and `Path=/`;
+			// browsers accept a `Secure` cookie over plain HTTP on `*.localhost`, which is a
+			// potentially-trustworthy origin.
+			domain: new URL(IAM_ORIGIN).hostname,
 			path: '/',
 			expires: identity.expiresAt,
 			httpOnly: true,
-			secure: false,
+			secure: true,
 			sameSite: 'Lax',
-		}],
-		origins: [{
-			origin: CONTROL_ORIGIN,
-			localStorage: [{
-				name: BROWSER_PRINCIPAL_KEY,
-				value: JSON.stringify({ id: identity.principalId, label: identity.label }),
-			}],
-		}],
+		}])
+		const page = await context.newPage()
+		for (const { app, origin } of APP_HOSTS) {
+			const login = `${IAM_ORIGIN}/auth/login?app=${encodeURIComponent(app)}&redirect=${encodeURIComponent(`${origin}/`)}`
+			const response = await page.goto(login, { waitUntil: 'domcontentloaded' })
+			if (response !== null && !response.ok()) {
+				throw new Error(`handoff to ${app} failed with status ${response.status()} — is the app registered in IAM?`)
+			}
+			if (!page.url().startsWith(origin)) {
+				throw new Error(`the handoff to ${app} ended on ${page.url()} instead of ${origin}`)
+			}
+			const cookies = await context.cookies(origin)
+			if (!cookies.some((cookie) => cookie.name === SESSION_COOKIE)) {
+				throw new Error(`the handoff to ${app} set no session on ${origin}`)
+			}
+		}
+		await page.goto(CONTROL_ORIGIN, { waitUntil: 'domcontentloaded' })
+		await page.evaluate(
+			({ key, principal }) => window.localStorage.setItem(key, principal),
+			{ key: BROWSER_PRINCIPAL_KEY, principal: JSON.stringify({ id: identity.principalId, label: identity.label }) },
+		)
+		return await context.storageState()
+	} finally {
+		await context.close()
 	}
 }
 
@@ -87,5 +142,5 @@ export async function authenticate(role: string, { cached, browser }: AuthResolv
 	if (role === 'anonymous') return EMPTY
 	if (role !== 'admin' && role !== 'operations-notes') return null
 	if (cached !== null && await sessionIsValid(browser, cached, role)) return cached
-	return stateFor(await createBrowserIdentity(role))
+	return signIn(browser, await createBrowserIdentity(role))
 }

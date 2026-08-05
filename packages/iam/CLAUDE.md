@@ -85,10 +85,29 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **A self-bound key (`issueKey` in `principalId` mode) MUST state an expiry.** It carries the
   issuer's live permissions with no inline downscope, so without one a 300-second passthrough token
   could mint a permanent installation-wide credential from itself.
-- **A mutating auth route requires `sameOrigin`, `/auth/logout` included.** `px_session` is
+- **A mutating auth route requires `sameOrigin`, `/auth/logout` included.** The session cookie is
   `SameSite=Lax`, so a cross-site top-level GET carried it; GET renders a confirm form, POST acts.
   Every 302 out of `src/auth/**` carries `cache-control: no-store` — those are the responses holding
   the session cookie and the single-use handoff code.
+- **THE LOGIN COOKIE BELONGS TO IAM'S HOST AND NOWHERE ELSE (ADR-0023).** There is no
+  `SESSION_COOKIE_DOMAIN` and `CookieOptions` has no `domain` field, so a parent-domain cookie is not
+  expressible. `SESSION_COOKIE` is `__Host-px_session`, and the prefix makes the BROWSER enforce the
+  same rule: it refuses any cookie of that name without `Secure`, without `Path=/`, or with a
+  `Domain`. A session reaches an application through the one-time code and nothing else, so an app
+  sharing a domain with IAM is not a special case any more — it pays one extra redirect on first
+  sign-in and gets the same cookie every other app gets.
+- **`readHandoff` has TWO outcomes once `?app=` is named**: the return address is in that app's
+  registry and the browser gets a code, or it is not and this is a 400 NAMING THE ADDRESS. An empty
+  registry is the second case, not an opt-out. Restoring a fallback recreates the login loop SEC-6
+  found — a login that succeeds and lands the browser where it has no session, with nothing logged.
+- **`safeRedirect` accepts IAM'S OWN ORIGIN AND NOTHING ELSE.** Not the cookie domain (there is
+  none), not `*.localhost` locally. The return-origin registry is the ONLY authority on sending a
+  browser to another host, and `readHandoff` has consulted it before this ever runs; a second, weaker
+  answer to the same question is how an open redirect gets in.
+- **`Secure` is unconditional on every cookie this service writes**, including the clear-cookie on
+  logout — a deletion must satisfy the same attribute rules or the browser keeps the original. It
+  used to be derived from the issuer's scheme; `__Host-` removed the decision, because without
+  `Secure` the browser stores nothing at all.
 - **Signing keys come from `FABRIKA_IAM_SIGNING_KEYS`** (a JSON array of private JWKs). Index 0 is
   the active signer; every key is published in the JWKS so a rotation key verifies before it is
   promoted. With no keys configured an EPHEMERAL key is generated per isolate — fine for dev,
@@ -113,8 +132,6 @@ fails if that stops being true — it is the guard, not documentation of one.
   already-fetched rows, so it is unit-testable without a database. Unparseable inline grant JSON and
   an unresolvable role key both contribute ZERO permissions. Wildcards stay as patterns — `permits()`
   in `@fabrika/auth-core` matches them; never pre-expand.
-- **The session cookie's `Secure` flag comes from the configured public issuer, never from the
-  request protocol.** Behind a TLS-terminating balancer the socket is the wrong signal.
 - **Both migration sets must land the same OUTCOME.** `migrations/` is immutable SQLite history;
   `migrations-postgres/` states the final schema once. `src/db.ts` runs unmodified against both, and
   `src/__tests__/postgres-schema.test.ts` pins it against a real database. Add a change to both,
@@ -136,7 +153,7 @@ fails if that stops being true — it is the guard, not documentation of one.
 ## Patterns
 
 - Minting is two fronts over one resolve→sign core (`src/tokens.ts`): `mintToken` from the browser's
-  opaque `px_session` cookie, `mintFromKey` from a `px_` credential. Both end in `signAccessToken`,
+  opaque `__Host-px_session` cookie, `mintFromKey` from a `px_` credential. Both end in `signAccessToken`,
   so this runs about once per TTL per app — not per request.
 - Human authentication methods compose (ADR-0020); password support is `src/password-*.ts` and its
   transient rows are pruned by the same cron as `auth_log`.

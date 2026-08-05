@@ -47,7 +47,6 @@ function env(h: Harness, options: EnvOptions = {}): Env {
 		ISSUER: ORIGIN,
 		FABRIKA_IAM_SIGNING_KEYS: '',
 		FABRIKA_IAM_PROVISIONING_KEY: options.provisioningKey ?? '',
-		SESSION_COOKIE_DOMAIN: '',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: 'client',
 		OIDC_CLIENT_SECRET: 'secret',
@@ -58,7 +57,7 @@ function env(h: Harness, options: EnvOptions = {}): Env {
 
 function rpcRequest(method: string, input: unknown, options: { session?: string; bearer?: string } = {}): Request {
 	const headers = new Headers({ 'content-type': 'application/json', origin: ORIGIN })
-	if (options.session !== undefined) headers.set('cookie', `px_session=${options.session}`)
+	if (options.session !== undefined) headers.set('cookie', `__Host-px_session=${options.session}`)
 	if (options.bearer !== undefined) headers.set('authorization', `Bearer ${options.bearer}`)
 	return new Request(`${ORIGIN}/admin/rpc`, { method: 'POST', headers, body: JSON.stringify({ method, input }) })
 }
