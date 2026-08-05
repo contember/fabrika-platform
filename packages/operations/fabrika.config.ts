@@ -1,3 +1,4 @@
+import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { environmentAliases } from '@fabrika/platform'
 import {
 	createCloudflareProxyWorker,
@@ -80,7 +81,7 @@ export const buildOperationsProxy = (ctx: ResourceContext): Worker => {
 	return createCloudflareProxyWorker({
 		name: 'operations-proxy',
 		app: buildOperationsWorker(ctx),
-		appId: 'vozka',
+		appId: OPERATIONS_APP_ID,
 		appHost: publicHost === '' ? 'localhost' : publicHost,
 		domain: ctx.domain,
 		gates: OPERATIONS_PROXY_GATES,
@@ -89,7 +90,7 @@ export const buildOperationsProxy = (ctx: ResourceContext): Worker => {
 }
 
 export default defineApp({
-	id: 'operations',
+	id: OPERATIONS_APP_ID,
 	resources: buildOperationsProxy,
 	pipeline: {
 		workerDir: '.',

@@ -1,5 +1,6 @@
 import { CONTROL_PROXY_GATES } from '@fabrika/control/gates'
 import { notesGates } from '@fabrika/example-zerops-app/gates'
+import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PROXY_GATES } from '@fabrika/operations/gates'
 import { buildCaddyConfig } from '@fabrika/proxy'
 import type { ProxyManifest } from '@fabrika/proxy-contract'
@@ -124,9 +125,9 @@ const generateSecrets = async (): Promise<void> => {
  * compile under this package's strict settings; each is now a provider-free module of its own.
  *
  * One proxy in front of three services is the ZEROPS shape; on Cloudflare each service has its own
- * proxy Worker. That is the only structural difference, and it is why the Operations entry keeps its
- * own app id here (a manifest may not name one app twice) where the Cloudflare Operations proxy reuses
- * `vozka`.
+ * proxy Worker. That is the only structural difference. Both compositions name the Operations host by
+ * the same `OPERATIONS_APP_ID`, which they must: a manifest may not name one app twice, so the
+ * Cloudflare entry's old `vozka` was the one shape a shared manifest could never express.
  */
 export const localPlatformProxyManifest = (): ProxyManifest => ({
 	apps: [
@@ -147,7 +148,7 @@ export const localPlatformProxyManifest = (): ProxyManifest => ({
 			scheme: 'http',
 		},
 		{
-			id: 'operations',
+			id: OPERATIONS_APP_ID,
 			hosts: ['errors.fabrika.localhost'],
 			upstream: 'operations:3000',
 			scheme: 'http',

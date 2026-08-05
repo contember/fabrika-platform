@@ -26,14 +26,19 @@ their protocol-specific HTTP surfaces.
 
 The public hostname accepts only Sentry-compatible
 `/api/:projectId/envelope/` ingest and the authenticated source-map upload path.
-`/api/*` operator routes, `/private/catalog/reconcile`, and
-`/private/releases/reconcile` stay private. Control's same-origin gateway
+`OPERATIONS_PROXY_GATES` (`src/gates.ts`) therefore declares exactly those two
+`public` rules; `/api/*` operator routes, `/private/catalog/reconcile`, and
+`/private/releases/reconcile` are 404 on that host and stay private, so they may
+not carry a rule there. Control's same-origin gateway
 transports operator requests; Operations owns authentication, scoped
 authorization, IAM audit, and principal lookup. Authentication is verification
-only (ADR-0022): the proxy matches `OPERATIONS_PROXY_GATES` (`src/gates.ts`) and injects the access token,
-`iam.authenticate(request)` re-verifies it locally against IAM's JWKS, and an
-unresolved caller never reaches a handler. Operations evaluates no gate, writes
-no cookie, and never produces a login URL.
+only (ADR-0022): the proxy in front of whichever surface the request arrived on
+injects the access token and `iam.authenticate(request)` re-verifies it locally
+against IAM's JWKS, and an unresolved caller never reaches a handler. Because the
+operator surface is fronted by the CONSOLE's proxy, `OPERATIONS_AUTH_APP_ID` is
+the console's app id, not `OPERATIONS_APP_ID` — see
+[`backlog 54`](../../docs/backlog/54-give-operations-its-own-proxy-app-identity.md).
+Operations evaluates no gate, writes no cookie, and never produces a login URL.
 
 Exact occurrence counts come from the append-only SQL occurrence index. Do not
 replace that correctness source with sampled Analytics Engine data. Blob storage

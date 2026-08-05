@@ -446,29 +446,28 @@ const proveNamespaceIsolation = async (): Promise<void> => {
 }
 
 /**
- * The public Operations hostname serves ingest and nothing else, and each refusal comes from the layer
- * that owns it — which is what makes it a boundary rather than a coincidence:
+ * The public Operations hostname serves ingest and nothing else, and the refusal comes from the PROXY —
+ * which is what makes it a boundary rather than a coincidence.
  *
- *   - `/healthz` passes a `public` gate and is hidden by Operations itself on the public host;
- *   - `/private/*` reconciliation is a `service` gate with no credential presented;
- *   - `/api/*` operator routes are a `human` gate, so the proxy sends the browser to IAM and the
- *     request never reaches Operations at all;
- *   - ingest passes its `public` gate and is challenged by Operations' own envelope credential check.
+ * `OPERATIONS_PROXY_GATES` declares two `public` rules and nothing else, so health, `/private/*`
+ * reconciliation and the whole `/api/*` operator surface match no rule and are denied outright (403).
+ * A valid machine credential buys nothing here either: it is not that the credential is wrong, it is
+ * that the host declares no route to spend it on. Ingest passes its `public` gate and is then
+ * challenged by Operations' own envelope credential check.
  */
-const proveOperationsPublicBoundary = async (): Promise<void> => {
-	const expected = new Map<string, number>([
-		['/healthz', 404],
-		['/private/catalog/reconcile', 401],
-		['/private/releases/reconcile', 401],
-		['/api/issues', 302],
-	])
-	for (const [path, status] of expected) {
-		const response = await fetch(`${OPERATIONS_ORIGIN}${path}`, { redirect: 'manual' })
-		if (response.status !== status) {
-			throw new Error(`public Operations path ${path} returned ${response.status}, expected ${status}`)
+const proveOperationsPublicBoundary = async (machineKey: string): Promise<void> => {
+	const denied = ['/healthz', '/private/catalog/reconcile', '/private/releases/reconcile', '/api/issues', '/api/rpc']
+	for (const path of denied) {
+		const anonymous = await fetch(`${OPERATIONS_ORIGIN}${path}`, { redirect: 'manual' })
+		if (anonymous.status !== 403) {
+			throw new Error(`public Operations path ${path} returned ${anonymous.status}, expected a proxy refusal`)
 		}
-		if (status === 302 && !(response.headers.get('location') ?? '').startsWith(`${IAM_ORIGIN}/auth/login`)) {
-			throw new Error(`public Operations path ${path} was not sent to IAM`)
+		const credentialed = await fetch(`${OPERATIONS_ORIGIN}${path}`, {
+			redirect: 'manual',
+			headers: { authorization: `Bearer ${machineKey}` },
+		})
+		if (credentialed.status !== 403) {
+			throw new Error(`public Operations path ${path} admitted a machine credential with ${credentialed.status}`)
 		}
 	}
 	const ingest = await fetch(`${OPERATIONS_ORIGIN}/api/1/envelope/`, {
@@ -710,7 +709,7 @@ const main = async (): Promise<void> => {
 	await requestJson(CONTROL_ORIGIN, '/healthz')
 	await requestJson(IAM_ORIGIN, '/healthz')
 	await requestJson(NOTES_ORIGIN, '/healthz')
-	await proveOperationsPublicBoundary()
+	await proveOperationsPublicBoundary(machineKey)
 	await proveControlIsGated()
 	await ensureNamespace(machineKey)
 	await ensureNotesApp(machineKey)

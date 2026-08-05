@@ -40,9 +40,10 @@ export interface LocalApp {
  *
  * Operations is absent too, and that is not an oversight: its own hostname serves ingest and the
  * source-map upload, both `public`, and every operator surface is reached through the console's
- * same-origin gateway on `vozka`'s host. Its `human` rules exist but no browser navigates to them —
- * see [backlog 54](../../../docs/backlog/54-give-operations-its-own-proxy-app-identity.md), which is
- * where the two compositions' disagreement about Operations' app id gets settled.
+ * same-origin gateway on `vozka`'s host — so no browser is ever handed a session for the Operations
+ * host and there is no return origin to register. Moving the operator surface onto that host is what
+ * would change it, and what it costs is
+ * [backlog 54](../../../docs/backlog/54-give-operations-its-own-proxy-app-identity.md).
  */
 export const localApps: readonly LocalApp[] = [
 	{ id: 'vozka', schema: controlSchema, returnOrigins: ['http://control.fabrika.localhost:18080'] },

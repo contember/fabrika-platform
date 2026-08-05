@@ -1,3 +1,4 @@
+import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { applicableGates, compileGates } from '@fabrika/proxy'
 import { describe, expect, test } from 'bun:test'
 import { localPlatformProxyManifest } from '../prepare'
@@ -7,22 +8,20 @@ const firstGate = (gates: ReturnType<typeof compileGates>, path: string): string
 
 describe('local Operations topology', () => {
 	test('the platform proxy admits ingest anonymously and nothing else', () => {
-		const operations = localPlatformProxyManifest().apps.find((app) => app.id === 'operations')
+		const operations = localPlatformProxyManifest().apps.find((app) => app.id === OPERATIONS_APP_ID)
 		expect(operations).toBeDefined()
 		if (operations === undefined) return
 		expect(operations.upstream).toBe('operations:3000')
 		expect(operations.hosts).toEqual(['errors.fabrika.localhost'])
 		const gates = compileGates(operations.gates)
-		// The SDK's two anonymous entry points, and the platform health probe.
+		// The SDK's two anonymous entry points — the only routes this host serves.
 		expect(firstGate(gates, '/api/123/envelope/')).toBe('public')
 		expect(firstGate(gates, '/api/artifacts/source-maps/')).toBe('public')
-		expect(firstGate(gates, '/healthz')).toBe('public')
-		// Private reconciliation is a machine credential; the operator API is a human. Neither is
-		// reachable anonymously, and Operations additionally hides both on its public host.
-		expect(applicableGates(gates, '/private/catalog/reconcile').map((gate) => gate.rule.kind)).toEqual(['service'])
-		expect(applicableGates(gates, '/api/issues').map((gate) => gate.rule.kind)).toEqual(['service', 'human'])
-		// Nothing else exists on this host at all.
-		expect(applicableGates(gates, '/operations/api/rpc')).toEqual([])
+		// Everything else matches NO rule, so the proxy denies it before Operations is asked. Health,
+		// private reconciliation and the operator API are all reached over the private network instead.
+		for (const path of ['/healthz', '/private/catalog/reconcile', '/private/releases/reconcile', '/api/issues', '/api/rpc']) {
+			expect(applicableGates(gates, path)).toEqual([])
+		}
 	})
 })
 

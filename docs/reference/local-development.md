@@ -37,10 +37,11 @@ machine API key described below.
    configuration, and deploy-scoped release values on the app service;
 7. checks the reconciled IAM schema, public and authenticated proxy routes, and
    a real notes write to PostgreSQL;
-8. verifies that an anonymous console `/api/*` call is refused by the PROXY, and
-   that the public Operations hostname hides health, refuses catalog and release
-   reconciliation without a credential, sends an operator route to IAM, and
-   rejects an ingest envelope without a source credential;
+8. verifies that an anonymous console `/api/*` call is refused by the PROXY, that
+   the public Operations hostname refuses health, catalog and release
+   reconciliation and every operator route outright — with and without a machine
+   credential, because it declares no rule for them — and that it rejects an
+   ingest envelope without a source credential;
 9. sends a credentialed Sentry envelope and observes one source-scoped issue
    after asynchronous Postgres queue consumption;
 10. stops Operations, persists duplicate queued deliveries, restarts the real

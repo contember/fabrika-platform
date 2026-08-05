@@ -204,3 +204,35 @@ sprint).
 - **`docs/sprints/sprint-2026-08-05-auth-track-closeout.md` fails `dprint check` at HEAD** (the
   Sequencing table's column padding), so `bun run format:check` is red for a reason that predates this
   unit. Left alone rather than reformatted mid-sprint — the file is shared with the other units.
+
+### WU-A — Operations' app identity (2026-08-05)
+
+- **The audience half of WU-A cannot be done in WU-A, and the plan did not see why.** The gate rules
+  were correctly called dead — verified on the live stack: a valid machine key on
+  `errors.fabrika.localhost/api/issues` passes the `service` gate and gets a **404** from Operations'
+  own public-host guard, and the `human` rule's bounce reaches `?app=operations`, which IAM answers
+  **400** because the app has never been registered. But the same `OPERATIONS_AUTH_APP_ID = 'vozka'`
+  the plan calls an outlier is what makes the console work: the operator surface is reached through
+  control's transport-only gateway, so the token Operations verifies was minted by the CONSOLE's proxy
+  and carries `aud: vozka`. Measured, not inferred — flipping the constant on the running stack turns
+  the console's operator RPC from **200 into 401**.
+- **And the console cannot be given an `operations` token where it is.** `mintToken`
+  (`packages/iam/src/tokens.ts:57`) refuses a session whose `app` is not the one being minted for, and
+  since ADR-0023 every app session is host-only and app-bound. A browser holding a `vozka` session on
+  the console's host can never hold an `operations` token there. The surface has to move to the host
+  whose proxy mints `operations` — cross-origin console + proxy CORS with a preflight answered before
+  gate matching, or the Operations views served from the Operations host. Either is a console
+  architecture change with its own ADR, and neither is `packages/operations/` + `local-stack/`.
+- **So WU-A shipped its reachable half and re-scoped the rest.** `OPERATIONS_PROXY_GATES` is now the
+  two `public` ingest rules and nothing else (the four dead ones deny at the proxy instead of reaching
+  a 404), and both compositions name the host by one `OPERATIONS_APP_ID` — the Cloudflare `vozka` entry
+  is gone, so a shared manifest can express the shape. `OPERATIONS_AUTH_APP_ID` stays, with the reason
+  written where someone would try to change it, and a test that fails if they do.
+  → [backlog 54](../backlog/54-give-operations-its-own-proxy-app-identity.md), re-scoped to the move.
+- **A general hazard worth naming: control's transport-only gateway pins the upstream's IAM identity
+  to the console's.** IAM's admin gateway escapes it only because IAM owns the session store and can
+  resolve any session row; no other upstream can. Anything else put behind that gateway inherits
+  `vozka`'s vocabulary whether or not that is intended.
+- **Not touched, and out of WU-A's scope:** `packages/control/fabrika.schema.ts` still declares
+  `operations.*` inside the console's vocabulary — correct today (that is the vocabulary the token
+  actually carries), wrong the moment the surface moves. It moves with backlog 54, not before.

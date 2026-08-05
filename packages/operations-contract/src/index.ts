@@ -1,4 +1,4 @@
-export { OPERATIONS_ACTIONS } from './access.js'
+export { OPERATIONS_ACTIONS, OPERATIONS_APP_ID } from './access.js'
 export type { OperationsAction } from './access.js'
 export {
 	canonicalOperationsCatalogSources,
