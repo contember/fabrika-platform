@@ -19,4 +19,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-None.
+- [sprint-2026-08-05-zerops-path-correctness](sprint-2026-08-05-zerops-path-correctness.md) —
+  make the live Zerops installation match HEAD and fix what the account proves is wrong.

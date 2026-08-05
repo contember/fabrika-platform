@@ -24,7 +24,11 @@ that supersedes the four which decided it in stages.
 
 ## Active sprints
 
-None. Two auth sprints shipped on 2026-08-05 —
+- [`zerops-path-correctness`](sprints/sprint-2026-08-05-zerops-path-correctness.md) — the live
+  installation has drifted from HEAD (the control plane is gated `/*` public there), one mechanism
+  is broken on every call (41), and four conformance corrections are unexercised.
+
+Two auth sprints shipped on 2026-08-05 —
 [hardening](archive/sprint-2026-08-04-auth-hardening.md), then
 [track closeout](archive/sprint-2026-08-05-auth-track-closeout.md). The Access-plane
 backlog is empty; what is left of item 54 is a console architecture decision, not auth work.
