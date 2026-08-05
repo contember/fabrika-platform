@@ -1,10 +1,17 @@
 ---
 id: 0010
 title: Gate evaluation stays in the auth service; Caddy routes are a fixed chain
-status: accepted
+status: superseded by 0022
 date: 2026-07-28
 amends: 0008
+superseded-by: 0022
 ---
+
+> **Superseded by [ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)**, which states the
+> settled enforcement model end to end. This ADR is kept for its reasoning, and it is the one to
+> read before ever revisiting the question: it records the **three verified Caddy semantics
+> mismatches** — case-insensitive path matching, `*` not crossing `/`, and fall-through being
+> inexpressible as a matcher — each checked against a running binary rather than assumed.
 
 # 0010 — Gate evaluation stays in the auth service; Caddy routes are a fixed chain
 

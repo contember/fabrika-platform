@@ -43,8 +43,8 @@ platform_, never _an app runs on both_.
 
 | Package                            | What it is                                                                                     |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `@fabrika/auth-core`               | Shared IAM domain: policy model, scope dimensions, evaluation.                                 |
-| `@fabrika/auth`                    | The published SDK apps depend on.                                                              |
+| `@fabrika/auth-core`               | The authz kernel every auth component shares: policy model, gate matcher, token and RPC wire.  |
+| `@fabrika/auth`                    | The published app-facing SDK. Verifies the proxy-injected token; enforces nothing.             |
 | `@fabrika/app`                     | Fetch routing, middleware, typed RPC, object authorization, client, explicit runtime adapters. |
 | `@fabrika/iam`                     | The IAM service itself: human authentication, identity, keys, policies, and audit.             |
 | `@fabrika/iam-contract`            | Runtime-neutral IAM admin REST DTOs and typed RPC contract.                                    |
@@ -132,7 +132,7 @@ The package root is runtime-neutral. Cloudflare and Bun lifecycle APIs live unde
 
 The platform's own IAM, Delivery, and Operations services use the same model.
 Each defines a runtime-neutral `app.ts` and keeps Cloudflare/Bun lifecycle code
-in its composition root. Delivery and Operations use the IAM SDK middleware;
+in its composition root. Delivery and Operations authenticate through the IAM SDK;
 IAM owns the identity boundary behind it. Their established REST and
 service-binding transports coexist with typed RPC in the same framework.
 The three concrete compositions, compatibility surfaces, and shared Postgres
@@ -140,9 +140,10 @@ migration wiring are documented in
 [`core-application-composition.md`](core-application-composition.md).
 
 The proxy and the application perform different checks. The proxy evaluates
-static path gates before a request reaches the private app service. App middleware
-verifies the injected Fabrika token and provides the canonical
-`@fabrika/auth` `AuthContext`. An RPC procedure's `.require(action, scope)` then
+static path gates before a request reaches the private app service. Each app's own
+middleware calls `iam.authenticate(request)`, which verifies the injected Fabrika
+token and provides the canonical `@fabrika/auth` `AuthContext` — the SDK ships no
+middleware of its own. An RPC procedure's `.require(action, scope)` then
 checks the application-owned object coordinate that a path gate cannot know. See
 [`application-runtime.md`](application-runtime.md) and
 [ADR-0012](../decisions/0012-fabrika-app-runtime.md) and
@@ -240,14 +241,24 @@ scope.
 
 ## How auth works
 
-Both provider compositions enforce authorization in a **proxy**
-([ADR-0007](../decisions/0007-proxy-based-auth-enforcement.md)). Only the proxy is
-publicly routed; app services stay internal, so bypassing auth stops being possible
-rather than merely discouraged. The proxy is not new code — it is the same
-session→token exchange, cache, gate matcher, and local JWKS verification, relocated
-into its own process. It is Caddy + `forward_auth` on Zerops and a thin Worker on
-Cloudflare, over one shared TypeScript auth service
-([ADR-0008](../decisions/0008-caddy-forward-auth-proxy.md)).
+The **proxy is the only enforcement point**, on both providers
+([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)). Only the
+proxy is publicly routed; app services stay internal, so bypassing auth stops being
+possible rather than merely discouraged. It is Caddy plus a loopback-bound Bun auth
+service on Zerops, and a thin Worker calling the same code in-process on Cloudflare.
+Caddy owns HTTP correctness and gets no vote on authorization: its configuration is a
+fixed three-step chain per app — delete the injected token and request-id headers,
+`forward_auth`, proxy to the private upstream — and gate rules are never compiled into
+route matchers. Gates are evaluated once, in TypeScript, against the manifest.
+
+Nothing downstream of the proxy enforces. An application reads the proxy-injected
+`X-Fabrika-Token`, verifies it locally against IAM's JWKS, and builds its
+`AuthContext`; `@fabrika/auth` cannot evaluate a gate, exchange a session, or write a
+cookie.
+
+A browser that authenticated at IAM reaches an app on a **different** domain through a
+one-time code the proxy redeems at a reserved callback path — no cookie is shared
+between the two hosts. See [`cross-host-sso.md`](cross-host-sso.md).
 
 The IAM service stays **global** — one identity database, one audit log, one admin
 UI. The proxy is stateless and horizontally scalable. Zerops owns one proxy per
@@ -268,6 +279,10 @@ variable for this path.
 
 ## Related reference
 
+- [`human-authentication.md`](human-authentication.md) — OIDC and password login,
+  enrollment and reset, sessions, and bootstrap behaviour.
+- [`cross-host-sso.md`](cross-host-sso.md) — how a browser authenticated at IAM ends
+  up authenticated at an app on another domain, with no shared cookie.
 - [`deployment-namespaces.md`](deployment-namespaces.md) — placement lifecycle,
   resource claims, Zerops presets, and operator interfaces.
 - [`zerops-platform.md`](zerops-platform.md) — the established facts about Zerops

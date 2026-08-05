@@ -18,8 +18,8 @@ S3-compatible storage, HTTP, static files, and platform cron.
 | `scheduled` handler         | Platform cron                                                                         |                                                                                                                                                       |
 | `waitUntil`                 | A `waitUntil` port                                                                    | Trivial on a long-running process; the seam exists so call sites don't branch.                                                                        |
 
-The ports are `SqlDatabase`, `BlobStore`, `JobQueue`, `DeployLocks`, `AssetServer`
-and `WaitUntil`, and they live in
+The ports are `SqlDatabase`, `BlobStore`, `JobQueue`, `DeployLocks`, `AssetServer`,
+`HttpService` and `WaitUntil`, and they live in
 [`@fabrika/platform`](../../packages/platform/src/). Cloudflare implementations sit
 with the workers that use them; the Bun/Postgres/S3 set is
 [`@fabrika/platform-node`](../../packages/platform-node/).
@@ -80,8 +80,12 @@ import Oblaka or interpret Cloudflare steps.
 
 ## IAM (`@fabrika/iam`) — port assessment
 
-IAM's inherited Cloudflare coupling is unusually narrow: of roughly **7,900 lines**,
-only `env.ts`, `index.ts`, `db.ts` and the test harness are platform-specific.
+IAM's runtime coupling is unusually narrow: of roughly **8,800 non-test lines**, the
+only platform-specific code is `src/index.ts` (the sole file that may import
+`cloudflare:workers`) and `src/node/` (the sole tree that may import `bun:*`/`node:*`
+or `@fabrika/platform-node`). `src/db.ts` runs unmodified against both engines.
+`src/__tests__/entrypoint-isolation.test.ts` walks both import graphs and fails if
+that stops being true — it is the guard, not a description of one.
 
 - **HTTP layer — already portable.** It is written fetch-style
   (`Request → Response`), which both Bun and Node accept natively. No work beyond

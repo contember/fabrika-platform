@@ -1,9 +1,18 @@
 ---
 id: 0021
 title: Hand a session to an app through a one-time code, not a shared cookie
-status: accepted
+status: superseded by 0022
 date: 2026-08-04
+superseded-by: 0022
 ---
+
+> **Superseded by [ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)**, which states the
+> settled enforcement model end to end and carries this ADR's invariants forward. This one is kept
+> for its reasoning — the Public Suffix List constraint that killed the shared cookie, why
+> redemption yields a session rather than a token, and the alternatives it rejected. Two statements
+> here are superseded rather than merely restated: an unregistered return origin is a 400 only when
+> the app **has** a registry (0022, rule 4), and the least-privilege split that keeps redemption off
+> `IamRpc` holds on Zerops but is a typing convention on Cloudflare (0022, Consequences).
 
 # 0021 — Hand a session to an app through a one-time code, not a shared cookie
 

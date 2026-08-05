@@ -4,8 +4,8 @@ The app-facing IAM SDK — what an application uses instead of hand-rolling auth
 `@fabrika/auth-core`: the binding is typed as the `IamRpc` CONTRACT, so the SDK never imports the IAM
 service. Assumes the root CLAUDE.md.
 
-**This package does not enforce anything.** [ADR-0007](../../docs/decisions/0007-proxy-based-auth-enforcement.md)
-made `@fabrika/proxy` the only enforcement point, and the duplicate in-process path is gone. There is
+**This package does not enforce anything.** [ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)
+makes `@fabrika/proxy` the only enforcement point, and the duplicate in-process path is gone. There is
 no gate evaluation here, no session→token exchange, no login bounce, and no cookie is ever written.
 
 `createIam(env, opts)` is the single request-time entry point. It returns an `Iam` carrying:
@@ -64,7 +64,7 @@ the service that owns identity.
   `origin='custom'` policies.
 - **`returnOrigins` is a SECOND call, and the two concepts never merge.** An `AppSchema` is
   vocabulary the APPLICATION declares; a return origin is a fact the CONTROL PLANE knows. Folding
-  origins into the schema body would let an app assert where it can be handed a session (ADR-0021),
+  origins into the schema body would let an app assert where it can be handed a session (ADR-0022),
   which is exactly what the registry exists to prevent — so they travel as two requests to two
   endpoints, and `returnOrigins` is never read off the schema. Order is load-bearing: the schema PUT
   runs first because it is what REGISTERS the app, and `apps.setReturnOrigins` 404s for an app IAM

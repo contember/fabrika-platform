@@ -1,7 +1,7 @@
 /**
  * Minting per-app access tokens — the heart of propustka-native auth.
  *
- * Two fronts over one resolve→sign core (see `propustka-native-spec.md`):
+ * Two fronts over one resolve→sign core:
  *   - `mintToken`   — from the browser's opaque SSO session cookie (a principal-bound credential in a
  *     cookie). Validates the session, resolves the principal's permissions for the calling app.
  *   - `mintFromKey` — from an opaque `px_` credential (API key / share link) presented as a bearer or

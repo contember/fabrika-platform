@@ -12,7 +12,7 @@
  *     here (`parseAccessClaims`) — structurally, so it reads them without an `as` cast — and maps a
  *     principal-bound token into the `ResolvedPrincipal` the existing `AuthContext` consumes.
  *
- * ONE shape, no `kind` discriminator (see `propustka-native-spec.md`). Every token carries
+ * ONE shape, no `kind` discriminator — the optional `ptype` carries the distinction. Every token carries
  * `perms: PermissionEntry[]` (authorized via `permits` — scopes + wildcards) and an OPTIONAL
  * principal (`ptype`): present means the token is bound to a user/service principal; absent means an
  * anonymous credential (a share link / standalone JWT), whose `perms` are narrow scoped entries and

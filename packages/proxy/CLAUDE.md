@@ -1,7 +1,9 @@
 # @fabrika/proxy
 
-The auth **enforcement point**: a Bun service answering Caddy's `forward_auth` subrequest. Nothing
-reaches an app until its gates pass (ADR-0007, ADR-0008, ADR-0010). Assumes the root CLAUDE.md. The
+The **only** auth enforcement point: a Bun service answering Caddy's `forward_auth` subrequest, and
+the same code called in-process by the Cloudflare proxy Worker. Nothing reaches an app until its
+gates pass ([ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md), which
+supersedes 0007/0008/0010/0021). Assumes the root CLAUDE.md. The
 manifest wire contract and its strict parser live in `@fabrika/proxy-contract`; the gate matcher and
 its compiled form live in `@fabrika/auth-core`.
 
@@ -29,7 +31,7 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   in-flight POST into a bodyless GET. The signal is `Sec-Fetch-Mode` and not `Accept` because `Sec-`
   is a forbidden header prefix — the browser states it and page JS cannot, so it describes the caller
   instead of letting the caller choose the answer. Both forms carry the SAME login URL (`app=` +
-  `redirect=`, ADR-0021). Verified against caddy 2.10.2: `forward_auth` forwards `Sec-Fetch-*`
+  `redirect=`, ADR-0022). Verified against caddy 2.10.2: `forward_auth` forwards `Sec-Fetch-*`
   verbatim and returns a non-2xx auth response — status, `Content-Type` and body — to the client.
 - **The service binds to LOOPBACK.** It answers "is this request allowed" and hands back a signed
   token, so a publicly routable instance is a token oracle. Caddy is the only thing that may dial it.
@@ -50,7 +52,7 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   credential is ABSENT falls through; a matching rule whose credential is PRESENT is terminal.
 - **The token cache is best-effort and per-process.** Every entry is re-verified against the JWKS
   before it is trusted, and `null` (no cache) is a supported configuration that changes only how many
-  times IAM is called — never which requests are allowed. ADR-0008 requires the proxy to stay
+  times IAM is called — never which requests are allowed. ADR-0022 requires the proxy to stay
   stateless, so never make it shared or persistent.
 - **`verify` is three-state.** "This token is bad" (401/403) and "we could not check" (503) are
   different denials. Both deny; only the second is an incident — including on the human path, where a
@@ -60,7 +62,10 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   `FABRIKA_IAM_KEY` are both REQUIRED — IAM's mint surface 404s without the key, so a proxy that boots
   without one 503s everything. The key is the only secret here: read once, never logged, never echoed,
   never put in a URL. `FABRIKA_IAM_URL` is canonicalized to an ORIGIN once, in `readProxyEnv`, because
-  the same string is compared byte-for-byte against a token's `iss` and used to build URLs.
+  the same string is compared byte-for-byte against a token's `iss` and used to build URLs. **This
+  holds on the Bun path only.** The Cloudflare proxy Worker does not call `readProxyEnv`: it refuses
+  a missing `IAM` binding and an empty manifest, but reads `FABRIKA_IAM_URL ?? ''`, so a misconfigured
+  issuer boots and fails every verification on `iss` instead.
 - **The manifest is the authority on hosts.** `parseProxyManifest` rejects two apps claiming one host
   and a host carrying a `:port` — not just `buildCaddyConfig`, which only sees the manifests it
   generates from. A pinned `?app=` is additionally cross-checked against that app's declared hosts,
@@ -68,7 +73,7 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
 - **If the auth service dies, Caddy answers 502 and every request is denied.** `start.sh` restarts it
   in a loop; that failure mode is by design, not a gap to paper over.
 
-## The cross-host handoff (ADR-0021)
+## The cross-host handoff (ADR-0022)
 
 - **The proxy sets a cookie on EXACTLY ONE path**: a successful redemption at the reserved callback,
   and nowhere else. It is otherwise a pure enforcement point; every extra write site is another place

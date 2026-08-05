@@ -8,7 +8,10 @@ decisions → reference → archive.
 fabrika-platform is and how the pieces fit — then skim
 [`decisions/README.md`](decisions/README.md) for the _why_. For the current error
 ingest, grouping, triage, and alert workflows, read
-[`reference/operations-errors.md`](reference/operations-errors.md).
+[`reference/operations-errors.md`](reference/operations-errors.md). For how
+authentication and authorization work, read
+[ADR-0022](decisions/0022-the-proxy-is-the-only-enforcement-point.md) — one document
+that supersedes the four which decided it in stages.
 
 ## Folders
 
@@ -21,16 +24,21 @@ ingest, grouping, triage, and alert workflows, read
 
 ## Active sprints
 
-No sprint is active.
+- [Auth hardening (2026-08-04)](sprints/sprint-2026-08-04-auth-hardening.md) — makes
+  the proxy the only front door. Eleven work units have landed; WU-E is blocked on a
+  decision (`__Host-` versus the shared cookie) and the browser suite has one known
+  failure ([53](backlog/53-reauthor-the-operations-console-scenarios.md)).
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
 
-- **Auth follow-up:** remove the duplicate in-process gate path in
-  [backlog 18](backlog/18-shrink-the-app-sdk.md) now that the Cloudflare proxy
-  enforcement path is shipped.
+- **Auth:** there is now one enforcement point and one enforcement ADR —
+  [0022](decisions/0022-the-proxy-is-the-only-enforcement-point.md), superseding
+  0007/0008/0010/0021. The SDK's duplicate in-process gate path is deleted. One
+  question is deliberately left open there: whether to retire the shared session
+  cookie so the `__Host-` prefix becomes available on both cookies.
 - **Release activation:** run hosted CI, bootstrap the twenty npm packages, and prove the tokenless release path in
   [`backlog/25-bootstrap-npm-trusted-publishing.md`](backlog/25-bootstrap-npm-trusted-publishing.md).
 - **Zerops, post-bring-up:** the light tier is **live on a real account** (sprint
@@ -42,13 +50,12 @@ No sprint is active.
   which blocks every control-plane-triggered deploy. The production two-project shape and
   custom domains remain in [`05`](backlog/05-bring-up-on-a-real-zerops-account.md);
   [`39`](backlog/39-settle-zerops-override-semantics.md) is still unexercised.
-- **Cross-host SSO is live.** A browser authenticated at IAM now reaches an app on a
-  different domain through a one-time code
-  ([ADR-0021](decisions/0021-exchange-token-session-handoff.md), sprint
+- **Cross-host SSO is live.** A browser authenticated at IAM reaches an app on a
+  different domain through a one-time code (sprint
   [`exchange-token-sso`](archive/sprint-2026-08-04-exchange-token-sso.md)); how it
-  works is [`reference/cross-host-sso.md`](reference/cross-host-sso.md). Registering
-  an app's return origin is still a manual call —
-  [`51`](backlog/51-project-return-origins-from-the-control-plane.md).
+  works is [`reference/cross-host-sso.md`](reference/cross-host-sso.md). The control
+  plane now projects an app's return origins into IAM on every deploy, so registering
+  one is no longer a manual call.
 - **Operations follow-up:** complete
   [Zerops release artifact correlation](backlog/36-complete-zerops-release-artifact-correlation.md),
   settle [managed-environment activation](backlog/37-activate-zerops-managed-environment-transactionally.md),

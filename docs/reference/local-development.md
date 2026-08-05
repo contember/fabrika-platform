@@ -102,22 +102,29 @@ principal can then sign in with a password.
 own `AppSchema` is reconciled into IAM only by a deploy, so locally IAM knows about
 `notes` (registered by `local:smoke`) and nothing else. Only the built-in cross-app
 `admin` role can be granted, which is another global admin. Registering the console
-as an app locally is the same missing piece the ADR-0021 handoff waits on. There is
-no persona switch to fall back on, and adding one back would be a second
+as an app locally is the same missing piece the cross-host handoff waits on. There
+is no persona switch to fall back on, and adding one back would be a second
 authentication model.
 
 The session travels as a cookie on the shared `fabrika.localhost` parent
 (`SESSION_COOKIE_DOMAIN`). Every local host is a `*.fabrika.localhost` name served
-by one proxy, so this is the case [ADR-0021](../decisions/0021-exchange-token-session-handoff.md)
-keeps the shared cookie for. A Zerops installation cannot use it — `*.zerops.app`
-is a public suffix — and takes the one-time-code handoff instead; exercising that
-path locally additionally needs the console registered in IAM as an app with
-return origins, which today only a deploy does.
+by one proxy, so this is the case
+[ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) keeps the
+shared cookie for. It is reached by the ordinary rule rather than by a local
+exception: `vozka` has no return origins registered in IAM, so IAM reads the
+proxy's `app=vozka` bounce as "not opted in" and runs the shared-cookie login. A
+Zerops installation cannot use that path — `*.zerops.app` is a public suffix — and
+takes the one-time-code handoff instead; exercising the handoff locally
+additionally needs the console registered in IAM as an app with return origins,
+which today only a deploy does.
 
 The **browser** composition (`browser:up`, `test:browser`) runs the same services
-with `LOCAL_DEV_LOGIN` off. Its scenarios present sessions seeded straight into
-IAM, and a suite that cannot show an unauthenticated browser cannot prove the
-proxy refuses one.
+with `LOCAL_DEV_LOGIN` off. Its scenarios seed a real principal, grant, and
+`sessions` row directly in IAM and hand the browser the resulting `px_session`
+cookie; nothing there is a shortcut past the proxy, and every request the suite
+makes is still gated and answered with an IAM-minted token. With the bypass off,
+the suite can also drive an unauthenticated browser and observe the proxy's `302`
+to IAM.
 
 ## Calling the API from a script
 

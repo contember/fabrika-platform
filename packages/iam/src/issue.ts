@@ -1,5 +1,5 @@
 /**
- * Issuing credentials. Two outputs, one delegation rule (see `propustka-native-spec.md`):
+ * Issuing credentials. Two outputs, one delegation rule:
  *   - `issueKey` — an opaque, stored, revocable `px_` credential (API key / share link). The token's
  *     EFFECTIVE permissions are resolved at use time (`mintFromKey`); this just persists the row.
  *   - `issueJwt` — a stateless passthrough access token, signed here and returned. Audit-only, not

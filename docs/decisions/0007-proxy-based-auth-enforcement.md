@@ -1,9 +1,15 @@
 ---
 id: 0007
 title: Enforce auth in a proxy instead of an in-process SDK
-status: accepted
+status: superseded by 0022
 date: 2026-07-28
+superseded-by: 0022
 ---
+
+> **Superseded by [ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)**, which states the
+> settled enforcement model end to end. This ADR is kept for its reasoning — why enforcement left
+> the in-process SDK at all, and the alternatives it rejected. Read 0022 for what the system does
+> now.
 
 # 0007 — Enforce auth in a proxy instead of an in-process SDK
 

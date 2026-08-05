@@ -1,10 +1,15 @@
 ---
 id: 0008
 title: Caddy + forward_auth on Zerops, a thin Worker on Cloudflare, over one shared TypeScript auth service
-status: accepted
+status: superseded by 0022
 date: 2026-07-28
 amended-by: 0010
+superseded-by: 0022
 ---
+
+> **Superseded by [ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)**, which states the
+> settled enforcement model end to end. This ADR is kept for its reasoning — above all why the auth
+> logic is not a Go plugin inside Caddy, and the proxy alternatives it rejected.
 
 > **Amended by [ADR-0010](0010-gate-evaluation-stays-in-the-auth-service.md).** The
 > core decision below stands — Caddy + `forward_auth`, not a Go plugin — but this

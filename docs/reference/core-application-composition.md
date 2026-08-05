@@ -11,8 +11,12 @@ require additional protocol and compatibility surfaces.
 | Plane        | Server application                    | Typed browser contract                                    | RPC endpoint | Authentication                                                                     | Postgres bundle |
 | ------------ | ------------------------------------- | --------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------- | --------------- |
 | Access / IAM | `@fabrika/iam` `createIamApp()`       | `IamAdminRpcContract` in `@fabrika/iam-contract`          | `/admin/rpc` | IAM resolves its own sessions, API keys, provisioning caller, and bootstrap caller | `iam`           |
-| Delivery     | `@fabrika/control` `controlApp`       | `ControlRpcContract` in `@fabrika/control-contract`       | `/api/rpc`   | `@fabrika/auth` middleware supplies the request `AuthContext`                      | `control`       |
-| Operations   | `@fabrika/operations` `operationsApp` | `OperationsRpcContract` in `@fabrika/operations-contract` | `/api/rpc`   | `@fabrika/auth` middleware owns operator authentication and IAM lookup             | `operations`    |
+| Delivery     | `@fabrika/control` `controlApp`       | `ControlRpcContract` in `@fabrika/control-contract`       | `/api/rpc`   | Own middleware over `@fabrika/auth` `iam.authenticate()`                           | `control`       |
+| Operations   | `@fabrika/operations` `operationsApp` | `OperationsRpcContract` in `@fabrika/operations-contract` | `/api/rpc`   | Own middleware over `iam.authenticate()`, plus IAM principal lookup                | `operations`    |
+
+`@fabrika/auth` ships no middleware. It owns the `Middleware<Ctx>` type that
+`@fabrika/app` consumes, and each application writes the handful of lines that call
+`iam.authenticate(request)` and shape its own error envelope.
 
 Each server defines a runtime-neutral application with `defineApp()`. The
 application owns context construction, middleware, routes, RPC dispatch, and
@@ -56,12 +60,27 @@ IAM's issuer. An unset or empty registry refuses every cookie-authenticated
 write, which is the fail-closed default; a machine caller presenting only a
 bearer is exempt, because a bearer is never attached by a browser on its own.
 
+### The proxy's surface is not the management surface
+
+The proxy never calls `IamRpc`. On the Bun composition it calls `/auth/mint/*` —
+`POST /auth/mint/session`, `/auth/mint/key`, `/auth/mint/exchange` — gated by
+`FABRIKA_IAM_PROXY_KEY`, which is a different secret from the `FABRIKA_IAM_RPC_KEY`
+that gates `/rpc/*`. Either key left unset makes its surface answer 404 as though it
+were never mounted; neither surface exists at all in the Cloudflare composition,
+where both are service-binding method calls. `@fabrika/proxy` narrows the binding to
+four methods (`mintToken`, `mintFromKey`, `exchangeAuthCode`, `getJwks`) structurally,
+so it never imports IAM. How far that separation actually goes per provider is in
+[`cross-host-sso.md`](cross-host-sso.md).
+
 ## Authorization boundary
 
-Delivery and Operations use the application-facing `@fabrika/auth` SDK. Their
-middleware verifies the IAM-issued token and builds the canonical
-`AuthContext`. A procedure or shared use case then performs the action and
-object-scope check that depends on validated application data.
+**The proxy is the only enforcement point**
+([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)). Delivery
+and Operations use the application-facing `@fabrika/auth` SDK, whose whole
+request-time job is to read the proxy-injected `X-Fabrika-Token`, verify it locally
+against IAM's JWKS, and build the canonical `AuthContext`. It cannot evaluate a gate,
+exchange a session, or write a cookie. A procedure or shared use case then performs
+the action and object-scope check that depends on validated application data.
 
 IAM is different only at the identity boundary: it authenticates its own admin
 callers before invoking the same typed RPC dispatcher. Every administration
@@ -83,16 +102,17 @@ object. Neither check replaces the other.
 Typed RPC is the browser-facing domain API, but it does not replace every HTTP
 surface:
 
-| Application | Compatibility or protocol surface                   | Why it remains                                                                                                       |
-| ----------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| IAM         | `/admin/*` REST — four machine operations           | Provisioning callers that cannot make a browser-shaped RPC call; see below.                                          |
-| IAM         | `/auth/*`, `/.well-known/jwks.json`                 | Login, callback, session, and JWKS are native identity protocols, not domain RPC calls.                              |
-| IAM         | service-binding `IamRpc` and Bun `/rpc/*` transport | Applications, Control, and the proxy use the process-to-process IAM contract; it is separate from browser admin RPC. |
-| Delivery    | `/api/*` REST                                       | CLI, integration, and established control API consumers retain their request and response contract.                  |
-| Delivery    | `/webhooks/github`, health, and assets              | Webhooks, probes, and static files have protocol-specific HTTP semantics.                                            |
-| Operations  | `/api/*` operator REST                              | Existing operator consumers and the same-origin gateway remain compatible while the console uses typed RPC.          |
-| Operations  | Sentry envelope ingest and source-map upload        | SDK ingest and artifact upload are established streaming/binary HTTP protocols.                                      |
-| Operations  | private catalog and release reconciliation          | Control-to-Operations synchronization is a service protocol, not a browser domain API.                               |
+| Application | Compatibility or protocol surface                   | Why it remains                                                                                                  |
+| ----------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| IAM         | `/admin/*` REST — four machine operations           | Provisioning callers that cannot make a browser-shaped RPC call; see below.                                     |
+| IAM         | `/auth/*`, `/.well-known/jwks.json`                 | Login, callback, session, and JWKS are native identity protocols, not domain RPC calls.                         |
+| IAM         | service-binding `IamRpc` and Bun `/rpc/*` transport | Applications and Control use the process-to-process management contract; it is separate from browser admin RPC. |
+| IAM         | `/auth/mint/*`                                      | The proxy's own least-privilege surface — session mint, key mint, handoff redemption; see below.                |
+| Delivery    | `/api/*` REST                                       | CLI, integration, and established control API consumers retain their request and response contract.             |
+| Delivery    | `/webhooks/github`, health, and assets              | Webhooks, probes, and static files have protocol-specific HTTP semantics.                                       |
+| Operations  | `/api/*` operator REST                              | Existing operator consumers and the same-origin gateway remain compatible while the console uses typed RPC.     |
+| Operations  | Sentry envelope ingest and source-map upload        | SDK ingest and artifact upload are established streaming/binary HTTP protocols.                                 |
+| Operations  | private catalog and release reconciliation          | Control-to-Operations synchronization is a service protocol, not a browser domain API.                          |
 
 RPC routes are mounted before their REST wildcards. `route.all()` mounts the
 established Fetch handlers inside the shared pipeline without changing their
@@ -103,7 +123,8 @@ migrate independently.
 ### IAM's `/admin/*` REST surface is closed
 
 It is a **provisioning** surface, not a second administration API. It serves
-exactly four operations, and every other `/admin/*` path answers 404:
+exactly four operations; an unmatched `/admin/*` path answers 404, and a wrong method
+on one of the two matched resources answers 405:
 
 | Operation                             | Caller                                                  |
 | ------------------------------------- | ------------------------------------------------------- |

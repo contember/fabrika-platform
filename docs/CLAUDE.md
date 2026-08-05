@@ -151,8 +151,10 @@ path (`git mv`); they are not edited afterward.
   `sprint-YYYY-MM-DD-<theme>.md`. Templates: `_template.md` (ignored by tooling).
 - Only `README.md` and this `CLAUDE.md` live in `docs/` root — everything else in
   a subfolder.
-- **Cross-references use relative paths.** When you move a file, `grep -r` its old
-  path under `docs/` and fix every reference before committing.
+- **Cross-references use relative paths.** When you move or delete a file, `grep -r`
+  its old path across the **whole repository**, not only `docs/` — source comments
+  cite docs too, and a pointer left behind in `packages/` is exactly how a dead path
+  survives a reorganisation unnoticed. Fix every reference before committing.
 - One navigation entry point: `docs/INDEX.md` maps everything. Keep it current.
 
 ## Things NOT to do

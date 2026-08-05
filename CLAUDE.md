@@ -5,8 +5,10 @@ An application platform with three planes: **Delivery** (declare/provision/deplo
 health). It targets a small fleet of apps on more than one cloud — Cloudflare and Zerops today.
 
 Read `docs/decisions/` before changing anything structural: much of what looks odd here is odd on
-purpose, and some invariants have already been retired by a later ADR (ADR-0010 amends ADR-0008;
-ADR-0009 extends ADR-0002). Before touching the Zerops path read
+purpose, and some invariants have already been retired by a later ADR (ADR-0022 supersedes ADR-0007,
+ADR-0008, ADR-0010 and ADR-0021; ADR-0009 extends ADR-0002). **For anything touching authentication
+or authorization, ADR-0022 is the one to read** — the four it supersedes are kept for their
+reasoning, not as a description of current behaviour. Before touching the Zerops path read
 [`docs/reference/zerops-platform.md`](./docs/reference/zerops-platform.md) — it records platform
 facts settled against a real account, several of which contradict Zerops' published documentation.
 
@@ -56,7 +58,7 @@ implementation set to one provider bundle.
 
 ```
 packages/
-  auth-core auth app              # authz kernel · app-facing IAM SDK · HTTP/RPC application runtime
+  auth-core auth app              # authz kernel · app-facing IAM SDK (verify only) · application runtime
   iam iam-contract iam-ui         # Access plane: login, token minting, /admin API, admin SPA
   operations operations-{contract,ui}  # Operations plane: ingest, grouping, triage, console views
   control control-contract        # Delivery control plane — Worker AND long-running Bun process
@@ -66,7 +68,7 @@ packages/
   provider-{contract,cloudflare,zerops}       # authoring, deploy, and control per cloud
   installation-{contract,cloudflare,zerops}   # `fabrika platform init/plan/deploy` per cloud
   runner-{contract,container,cloudflare}      # the Cloudflare out-of-band deploy executor
-  proxy proxy-contract            # the auth ENFORCEMENT point (ADR-0007, ADR-0008, ADR-0010)
+  proxy proxy-contract            # the ONLY auth enforcement point (ADR-0022)
   cli email local-stack           # the `fabrika` command · outbound email · the Docker dev stack
 examples/app examples/zerops-app  # a worked app per provider
 tests/browser                     # opice end-to-end suites against the local stack
@@ -101,6 +103,10 @@ needed only when there is no app config. Platform commands load the provider's
   cast — ask first.
 - **NEVER log credentials or secret values.** They flow control-plane → `RunnerJob` → child env only;
   on error log a short message, never an error object that may carry a clone URL with an embedded token.
+- **The proxy is the ONLY thing that enforces authorization** (ADR-0022). App services are not
+  publicly routed; an application reads the proxy-injected `X-Fabrika-Token`, verifies it locally,
+  and enforces nothing. Never add a second gate evaluator — not in `@fabrika/auth`, not in Caddy
+  config, not in a provider package. There is exactly one gate matcher, in `@fabrika/auth-core`.
 - **`fabrika.config.ts` is the single source of truth** for a worker's own resources; `oblaka.ts` is a
   thin shim over it. Never re-declare resources in `oblaka.ts`.
 - **Postgres migration identity is `(bundle, filename)` in a service-owned
@@ -116,8 +122,10 @@ needed only when there is no app config. Platform commands load the provider's
 Read the package's own CLAUDE.md before editing it. Beyond the packages that only carry a short
 contract note (`*-contract`), the substantial ones are:
 
-- `packages/app/` — the request pipeline, typed RPC, runtime adapters · `packages/auth/` — the
-  app-facing IAM SDK · `packages/iam/` — the Access service, on both runtimes.
+- `packages/auth-core/` — the authz kernel all three auth components share (gate matcher, token
+  claims, `IamRpc`) · `packages/auth/` — the app-facing IAM SDK, which verifies the injected token
+  and nothing else · `packages/app/` — the request pipeline, typed RPC, runtime adapters ·
+  `packages/iam/` — the Access service, on both runtimes.
 - `packages/control/` — API/ACL, vault, secret resolution, run lifecycle, webhook (+ `DATABASE.md`
   for its SQL and migration rules) · `packages/engine/` — the provider-neutral executor.
 - `packages/platform/` + `packages/platform-node/` — the runtime ports and their Postgres/S3/Bun

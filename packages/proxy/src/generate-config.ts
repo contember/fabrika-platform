@@ -3,7 +3,7 @@
  *
  * Runs in the Zerops build phase (see `zerops.yaml`), so the config is baked into the artifact and a
  * gate change ships with the app's next deploy — the mechanism
- * `docs/backlog/08-distribute-gate-config-to-proxy.md` chose over pushing to Caddy's admin API.
+ * `docs/archive/08-distribute-gate-config-to-proxy.md` chose over pushing to Caddy's admin API.
  *
  *   bun run src/generate-config.ts [manifest] [out] [--auth-upstream host:port] [--listen :8080]
  */

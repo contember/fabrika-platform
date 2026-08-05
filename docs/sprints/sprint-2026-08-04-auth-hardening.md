@@ -1,9 +1,9 @@
 # Sprint — Auth hardening: make the proxy the only front door
 
 **Theme.** A comprehensive review of `iam` / `proxy` / `auth` / `auth-core` produced 63 findings. The
-single decision that shapes the rest is [backlog 18](../backlog/18-shrink-the-app-sdk.md): the app
-SDK still carries a complete second enforcement path, and 15 findings live in code that is supposed
-to be deleted. So the sprint's goal is the one ADR-0007 stated and never finished — **the proxy is
+single decision that shapes the rest is **backlog 18** (shipped and deleted by WU-A; its text is at
+`52c916c^`): the app SDK still carries a complete second enforcement path, and 15 findings live in
+code that is supposed to be deleted. So the sprint's goal is the one ADR-0007 stated and never finished — **the proxy is
 the only thing that enforces, and every installation is secure by default** — plus the security and
 correctness debt the review surfaced along the way.
 
@@ -116,7 +116,8 @@ _Folds in:_ what remains of SEC-4 after WU-A.
 
 **WU-E — `__Host-` cookie prefix** · medium · coordinated across auth-core, proxy, iam (SEC-20)
 **WU-F — Cover the ADR-0021 path** · medium · TEST-1, TEST-2, TEST-3
-**WU-G — Project return origins from the control plane** · medium · closes [backlog 51](../backlog/51-project-return-origins-from-the-control-plane.md)
+**WU-G — Project return origins from the control plane** · medium · closes **backlog 51** (shipped and
+deleted in `9d7396d`; its text is at `9d7396d^`)
 
 **WU-M — A gate miss must be answerable by a fetch, not only by a browser** · small
 `authorize.ts` returns a 302 for every `human` gate miss. For a document navigation that is
@@ -149,7 +150,8 @@ _Touch points:_ `packages/iam/src/admin/**`, `packages/iam-contract/src/index.ts
 ### Wave 4
 
 **WU-H — Documentation sweep** · small · DOC-1, DOC-4…DOC-12, package CLAUDE.mds
-**WU-I — Operator session revocation** · medium · closes [backlog 52](../backlog/52-revoke-sessions-an-operator-no-longer-trusts.md)
+**WU-I — Operator session revocation** · medium · closes **backlog 52** (deleted in `9d7396d`, ahead of
+the work; its text is at `9d7396d^`)
 
 **WU-J — Consolidate the enforcement ADRs** · medium
 Where enforcement lives has been decided four times: ADR-0007 moved it to a proxy and retired an
@@ -365,8 +367,9 @@ than the deploying environment's alone: `setReturnOrigins` replaces, and IAM's r
 id while `public_origin` is per environment, so sending one environment's origin would un-register the
 others and a `stage` deploy would silently break `prod`'s sign-in.
 
-Bookkeeping wrinkle: that commit also carries the deletion of `backlog/52`, which belongs to WU-L and is
-still in flight. The item's content is in git history at `9d7396d^` if WU-L does not land.
+Bookkeeping wrinkle: that commit also carries the deletion of `backlog/52`, which belongs to WU-I. Its
+content is in git history at `9d7396d^`. WU-I has since landed, so the deletion is correct in the end,
+just early.
 
 ## ⚠ WU-E is blocked on a decision — `__Host-` and shared-cookie mode are incompatible
 
@@ -463,3 +466,28 @@ whatever the status — which is the half that was missing, because a batch alwa
 **Not done, and why:** SEC-22's cursor is wired through the RPC contract and the REST endpoints, but
 `iam-ui` and `dashboard` still render only the first page — they were excluded from the review and no
 "load more" control exists. Paging is available to them the moment someone adds one.
+
+**Wave 4 — WU-L and WU-I landed together** (`950fd19`), then **WU-F** (`a94078e`). `/admin/*` REST is
+down to the four provisioning operations a deploy step and the first-machine bootstrap actually call;
+about two dozen uncalled mirrors are gone, and `DELETE /admin/principals/:id` — the one with no RPC
+counterpart — became `principals.delete` rather than being lost. `sessions.list` / `revoke` /
+`revokeAll` close backlog 52. A consequence worth knowing: bearer-only is the sole exemption from the
+`FABRIKA_IAM_ADMIN_ORIGINS` check, so `reconcileSchema`'s admin key is now effectively required.
+
+**Wave 4 — WU-J and WU-H landed.** One ADR now states the enforcement model end to end —
+[ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) — and 0007/0008/0010/0021 are
+`superseded by 0022`, kept and unedited. It records the two things none of them did: the Cloudflare
+least-privilege asymmetry (ARCH-2) and the honest cost of keeping two session-delivery mechanisms,
+which it deliberately leaves open for WU-E.
+
+`docs/reference/` was re-derived against the code rather than against the ADRs. Six claims were false,
+not merely stale — the SDK still enforcing "as defence in depth", the proxy described as reaching IAM
+over the `IamRpc` / `/rpc/*` transport, "`@fabrika/auth` middleware" that no longer exists, the OIDC
+admission allowlist described as required configuration, IAM's platform-specific files listed as
+`env.ts`/`index.ts`/`db.ts`, and the handoff's registry check stated as two outcomes when the code has
+three. `overview.md` additionally still called the proxy "not new code" and never mentioned cross-host
+SSO, and `INDEX.md` said no sprint was active. `packages/auth-core` gained the CLAUDE.md it never had.
+
+**Still open, and why this sprint is not closed:** WU-E is blocked on the `__Host-` versus shared-cookie
+decision above, and the browser suite has one known failure
+([53](../backlog/53-reauthor-the-operations-console-scenarios.md)).

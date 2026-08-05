@@ -15,9 +15,20 @@ sets them through `FABRIKA_IAM_OIDC_ENABLED` and
 `FABRIKA_IAM_PASSWORD_ENABLED`. Missing switches retain the compatibility mode:
 OIDC enabled and password disabled. New installations write both explicitly.
 
-OIDC issuer, client ID, admission domains, and client secret are required only
-when OIDC is enabled. Enabling an email sender does not enable password login,
-and enabling password login does not provision a credential for any user.
+With OIDC enabled, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` are all
+required and startup fails without any of them, on **both** runtimes. Refusing to
+boot beats serving a method that can only fail at the redirect. A local
+`wrangler dev` therefore runs password-only.
+
+The human-admission allowlist (`FABRIKA_IAM_HUMAN_EMAIL_DOMAINS` /
+`FABRIKA_IAM_HUMAN_EMAILS`, a `*` in either meaning admit-all) governs
+self-provisioning at the OIDC callback only, and is matched against the
+IdP-verified email. It is not required configuration: empty and without a `*` it
+admits only already-known or invited principals and bootstrap admins, which is
+fail-closed. Password login never self-provisions, so it does not consult the list.
+
+Enabling an email sender does not enable password login, and enabling password
+login does not provision a credential for any user.
 
 ## Per-user state
 
@@ -37,6 +48,13 @@ completed password enrollment activates an invited user. Services are active at
 creation. Browser sessions record whether OIDC or password created them.
 Replacing or disabling a password revokes password sessions only; valid OIDC
 sessions remain active.
+
+An operator lists and revokes a principal's sessions from the Access plane
+(`sessions.list` / `sessions.revoke` / `sessions.revokeAll`). Revoking an IAM session
+also ends every app session derived from it, because a child session is valid only
+while its parent is — the lookup joins to the parent on every use, so it is one
+statement rather than a sweep. An access token already minted stays valid for the
+rest of its TTL; that bound is what local verification buys.
 
 ## Enrollment and reset
 

@@ -24,6 +24,6 @@ this one import.
   `migrate` → `deploy-worker` → `reconcile-schema` → `sync-secrets`. The engine executes steps by id
   in the order supplied and never interprets a `ProviderJobSpec.kind`.
 - **The proxy topology is: public Worker owns the route, private application Worker is bound to it.**
-  IAM remains a global service binding. See ADR-0007/ADR-0008.
+  IAM remains a global service binding. See ADR-0022.
 - **Never log credentials or secret values** — including an error object from a failed `wrangler`
   invocation, whose output can quote a clone URL with an embedded token.

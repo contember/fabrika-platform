@@ -164,7 +164,7 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 	routes.push({ handle: [{ handler: 'static_response', status_code: 404, body: 'not found' }] })
 
 	return {
-		// ADR-0008 keeps the proxy thin and stateless, and `docs/backlog/08` chose redeploy over live
+		// ADR-0022 keeps the proxy thin and stateless, and `docs/archive/08` chose redeploy over live
 		// config push. With no push there is no reason to expose a mutation surface in front of every app.
 		admin: { disabled: true },
 		logging: {

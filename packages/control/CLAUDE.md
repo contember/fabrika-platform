@@ -87,7 +87,7 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   (`src/iam.ts`); each handler then calls `authorize` with that resolved context and its action/scope.
   Actions/scopes live in `src/actions.ts`. The GitHub webhook (`src/webhook.ts`) is the ONLY
   unauthenticated route — HMAC-gated instead.
-- **The PROXY is the front door; `src/iam.ts` only verifies (ADR-0007).** The proxy matches
+- **The PROXY is the front door; `src/iam.ts` only verifies (ADR-0022).** The proxy matches
   `CONTROL_GATES` (service + human on `/api/*`, the source of `CONTROL_PROXY_GATES` in
   `fabrika.config.ts`), resolves the credential, and injects the access token as `X-Fabrika-Token`.
   `iam.authenticate(request)` re-verifies that token LOCALLY against IAM's JWKS — signature, `iss`,
@@ -131,7 +131,7 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   routing.** It is a canonical HTTP(S) origin, remains independent of `domain`,
   and is projected unchanged to Operations. PUT omission preserves the stored
   value; explicit `null` clears it. Never derive it from a provider hostname.
-- **The same column is also what IAM trusts as a return origin (ADR-0021).**
+- **The same column is also what IAM trusts as a return origin (ADR-0022).**
   `projectedReturnOrigins` (`src/return-origins.ts`) collects it from EVERY
   environment of the app and hands the set to the provider on `deploy` and on
   `reconcile`; the deploy's existing IAM touchpoint (`reconcileSchema`) writes it.

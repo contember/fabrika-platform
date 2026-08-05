@@ -40,19 +40,19 @@ emits at most one value-free warning per legacy name in a process.
 
 ## Authorization boundary
 
-The proxy boundary is complete in both provider compositions. Zerops uses Caddy
-plus the shared TypeScript auth service. Cloudflare authoring creates a public
-proxy Worker with a private application Worker child and the same authorizer.
-The first-party applications still retain their in-process auth path as
-defence in depth until [backlog 18](../backlog/18-shrink-the-app-sdk.md) removes
-the duplicate SDK enforcement.
+The proxy is the only enforcement point
+([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)). Zerops
+uses Caddy plus the shared TypeScript auth service. Cloudflare authoring creates a
+public proxy Worker with a private application Worker child and the same authorizer.
+No application evaluates a gate: `@fabrika/auth` exports nothing that can.
 
-Where the proxy path exists, proxy gates and procedure requirements are complementary:
+Proxy gates and procedure requirements are complementary:
 
 - The proxy evaluates the ordered static gate list and prevents unauthorized
   requests from reaching the private app service on both providers.
-- App auth middleware verifies the proxy-injected token and builds the canonical
-  `AuthContext` from `@fabrika/auth`.
+- An application's own middleware calls `iam.authenticate(request)`, which verifies
+  the proxy-injected `X-Fabrika-Token` locally against IAM's JWKS and builds the
+  canonical `AuthContext` from `@fabrika/auth`.
 - `.require(action, scopeResolver?)` calls `ctx.auth.can()` before the procedure
   handler. The optional resolver maps validated input and context to an
   application-owned `{ type, value }` coordinate.
