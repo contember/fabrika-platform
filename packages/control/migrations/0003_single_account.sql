@@ -7,7 +7,7 @@
 --
 -- After this migration the deploy target is vozka's OWN Worker config (src/env.ts), not a registry row:
 --   * CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN — vozka's single account/token (var + Worker secret).
---   * PROPUSTKA_URL + PROPUSTKA_CLIENT_ID/SECRET   — the one propustka's coords + provisioning key.
+--   * the IAM origin + its client credentials      — the one propustka's coords + provisioning key.
 -- These are injected into EVERY deploy job; WHETHER a deploy reconciles is decided by the app's own
 -- config (`access`/`schema` presence), not the registry.
 --

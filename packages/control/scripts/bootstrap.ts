@@ -56,7 +56,6 @@
  *   bun run scripts/bootstrap.ts --dry-run                                  # plan-only — graph + every step, no CF
  */
 
-import { environmentAliases } from '@fabrika/platform'
 import { deployCloudflareConfig } from '@fabrika/provider-cloudflare'
 import { resolve } from 'node:path'
 
@@ -77,35 +76,16 @@ function optional(name: string): string | undefined {
 	return value === undefined || value === '' ? undefined : value
 }
 
-function alias(canonical: string, legacy: string): string | undefined {
-	return environmentAliases.read(process.env, { canonical, legacy })
-}
-
-function requiredAlias(canonical: string, legacy: string): string {
-	const value = alias(canonical, legacy)
-	if (value === undefined || value === '') {
-		throw new Error(`Missing required env var ${canonical} (see this script's header for the full list).`)
-	}
-	process.env[canonical] = value
-	return value
-}
-
-function optionalAlias(canonical: string, legacy: string): string | undefined {
-	const value = alias(canonical, legacy)
-	if (value !== undefined && value !== '') process.env[canonical] = value
-	return value === '' ? undefined : value
-}
-
 async function main(): Promise<void> {
-	requiredAlias('FABRIKA_CONTROL_DOMAIN', 'VOZKA_DOMAIN')
+	required('FABRIKA_CONTROL_DOMAIN')
 	// FABRIKA_CONTROL_BOOTSTRAP_ADMINS is OPTIONAL so this script is idempotent — re-runnable as a break-glass
 	// self-deploy of an already-live fabrika WITHOUT reopening the escape hatch. Unset/empty → '[]' (hatch
 	// CLOSED), matching fabrika.config's own default (fabrika.config.ts). On a FIRST bring-up you MUST set it,
 	// else nobody — not even you — can authorize and you lock yourself out (the warning in main() is loud).
-	const bootstrapAdmins = optionalAlias('FABRIKA_CONTROL_BOOTSTRAP_ADMINS', 'VOZKA_BOOTSTRAP_ADMINS') ?? '[]'
+	const bootstrapAdmins = optional('FABRIKA_CONTROL_BOOTSTRAP_ADMINS') ?? '[]'
 	process.env['FABRIKA_CONTROL_BOOTSTRAP_ADMINS'] = bootstrapAdmins
 
-	const env = optionalAlias('FABRIKA_CONTROL_ENV', 'VOZKA_ENV') ?? 'prod'
+	const env = optional('FABRIKA_CONTROL_ENV') ?? 'prod'
 
 	// The secret VALUES fabrika needs at deploy, gathered by the SAME names the config declares in
 	// `pipeline.secrets`. Read from the environment; never inlined, never logged. CLOUDFLARE_API_TOKEN +
@@ -121,9 +101,9 @@ async function main(): Promise<void> {
 	) {
 		required(name)
 	}
-	requiredAlias('FABRIKA_IAM_URL', 'PROPUSTKA_URL')
-	requiredAlias('FABRIKA_IAM_PROVISIONING_KEY', 'PROPUSTKA_PROVISIONING_KEY')
-	requiredAlias('FABRIKA_CONTROL_VAULT_KEY', 'VOZKA_VAULT_KEY')
+	required('FABRIKA_IAM_URL')
+	required('FABRIKA_IAM_PROVISIONING_KEY')
+	required('FABRIKA_CONTROL_VAULT_KEY')
 
 	// The bootstrap admin list is set on the deploy's environment (the engine's `wrangler secret put` /
 	// var path picks up fabrika.config's `FABRIKA_CONTROL_BOOTSTRAP_ADMINS` var. We log

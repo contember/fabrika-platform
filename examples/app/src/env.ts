@@ -1,5 +1,4 @@
 import type { IamRpc } from '@fabrika/auth'
-import { environmentAliases } from '@fabrika/platform'
 
 export interface Env {
 	// The IAM Worker, reached over a service binding (oblaka `ServiceReference('propustka-worker')`).
@@ -8,12 +7,10 @@ export interface Env {
 	IAM: IamRpc
 	// IAM's origin — the `iss` the SDK verifies every token against, and the JWKS source.
 	FABRIKA_IAM_ISSUER?: string
-	/** @deprecated Use FABRIKA_IAM_ISSUER. */
-	PROPUSTKA_ISSUER?: string
 }
 
-export const readIamIssuer = (env: Pick<Env, 'FABRIKA_IAM_ISSUER' | 'PROPUSTKA_ISSUER'>): string => {
-	const issuer = environmentAliases.read(env, { canonical: 'FABRIKA_IAM_ISSUER', legacy: 'PROPUSTKA_ISSUER' })
+export const readIamIssuer = (env: Pick<Env, 'FABRIKA_IAM_ISSUER'>): string => {
+	const issuer = env.FABRIKA_IAM_ISSUER
 	if (issuer === undefined || issuer === '') {
 		throw new Error('FABRIKA_IAM_ISSUER is required')
 	}

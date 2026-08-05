@@ -33,10 +33,10 @@ protocol surfaces required by their platform roles. See
 RPC, authorization, persistence, compatibility, and environment boundaries.
 
 `@fabrika/auth` reads application identity from `FABRIKA_APP_ID` and the IAM
-origin from `FABRIKA_IAM_URL`. The deprecated `PROPUSTKA_APP_ID` and
-`PROPUSTKA_URL` names remain canonical-first fallbacks under ADR-0018. A shared
-runtime-neutral reader in `@fabrika/platform` applies the precedence rule and
-emits at most one value-free warning per legacy name in a process.
+origin from `FABRIKA_IAM_URL`, straight off the `Env` it is handed. Those are the
+only names it accepts; the predecessor names were retired by
+[ADR-0024](../decisions/0024-retire-the-legacy-environment-name-fallback.md), and
+there is no compatibility reader left to consult.
 
 ## Authorization boundary
 

@@ -21,24 +21,4 @@ describe('the Node IAM RPC process configuration', () => {
 			})
 		).toThrow('FABRIKA_IAM_RPC_URL is required')
 	})
-
-	test('accepts deprecated RPC names while canonical values win when both are set', () => {
-		expect(readIamRpcProcessConfig({
-			PROPUSTKA_RPC_URL: 'http://legacy-iam:3000',
-			PROPUSTKA_RPC_KEY: 'legacy-key-with-at-least-thirty-two-characters',
-		})).toEqual({
-			origin: 'http://legacy-iam:3000',
-			key: 'legacy-key-with-at-least-thirty-two-characters',
-		})
-
-		expect(readIamRpcProcessConfig({
-			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
-			PROPUSTKA_RPC_URL: 'http://legacy-iam:3000',
-			FABRIKA_IAM_RPC_KEY: 'canonical-key-with-at-least-thirty-two-characters',
-			PROPUSTKA_RPC_KEY: 'legacy-key-with-at-least-thirty-two-characters',
-		})).toEqual({
-			origin: 'http://iam:3000',
-			key: 'canonical-key-with-at-least-thirty-two-characters',
-		})
-	})
 })

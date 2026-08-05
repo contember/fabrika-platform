@@ -2,10 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { createRuntime } from '../node/runtime'
 
 const DATABASE_URL = 'postgres://postgres:postgres@127.0.0.1:1/iam'
-const CANONICAL_RPC_KEY = 'canonical-rpc-key-with-at-least-32-characters'
-const CANONICAL_PROXY_KEY = 'canonical-proxy-key-with-at-least-32-characters'
-const LEGACY_RPC_KEY = 'legacy-rpc-key-with-at-least-32-characters'
-const LEGACY_PROXY_KEY = 'legacy-proxy-key-with-at-least-32-characters'
+const RPC_KEY = 'rpc-key-with-at-least-thirty-two-characters'
+const PROXY_KEY = 'proxy-key-with-at-least-thirty-two-characters'
 
 const base = {
 	ENVIRONMENT: 'local',
@@ -15,21 +13,21 @@ const base = {
 	OIDC_CLIENT_SECRET: 'private-oidc-secret',
 }
 
-describe('IAM Bun runtime environment aliases', () => {
-	test('reads canonical configuration', async () => {
+describe('the IAM Bun runtime environment', () => {
+	test('reads its configuration', async () => {
 		const runtime = createRuntime({
 			...base,
 			FABRIKA_IAM_DATABASE_URL: DATABASE_URL,
-			FABRIKA_IAM_RPC_KEY: CANONICAL_RPC_KEY,
-			FABRIKA_IAM_PROXY_KEY: CANONICAL_PROXY_KEY,
-			FABRIKA_IAM_SIGNING_KEYS: 'canonical-signing',
-			FABRIKA_IAM_PROVISIONING_KEY: 'canonical-provisioning',
+			FABRIKA_IAM_RPC_KEY: RPC_KEY,
+			FABRIKA_IAM_PROXY_KEY: PROXY_KEY,
+			FABRIKA_IAM_SIGNING_KEYS: 'signing-key-material',
+			FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning',
 		})
 		try {
-			expect(runtime.config.rpcKey).toBe(CANONICAL_RPC_KEY)
-			expect(runtime.config.proxyKey).toBe(CANONICAL_PROXY_KEY)
-			expect(runtime.env.FABRIKA_IAM_SIGNING_KEYS).toBe('canonical-signing')
-			expect(runtime.env.FABRIKA_IAM_PROVISIONING_KEY).toBe('canonical-provisioning')
+			expect(runtime.config.rpcKey).toBe(RPC_KEY)
+			expect(runtime.config.proxyKey).toBe(PROXY_KEY)
+			expect(runtime.env.FABRIKA_IAM_SIGNING_KEYS).toBe('signing-key-material')
+			expect(runtime.env.FABRIKA_IAM_PROVISIONING_KEY).toBe('px_provisioning')
 			expect(runtime.env.OIDC_ENABLED).toBe('true')
 			expect(runtime.env.PASSWORD_ENABLED).toBe('false')
 			expect(runtime.env.EMAIL_PROVIDER).toBe('none')
@@ -38,50 +36,7 @@ describe('IAM Bun runtime environment aliases', () => {
 		}
 	})
 
-	test('accepts legacy configuration', async () => {
-		const runtime = createRuntime({
-			...base,
-			PROPUSTKA_DATABASE_URL: DATABASE_URL,
-			PROPUSTKA_RPC_KEY: LEGACY_RPC_KEY,
-			PROPUSTKA_PROXY_KEY: LEGACY_PROXY_KEY,
-			PROPUSTKA_SIGNING_KEYS: 'legacy-signing',
-			PROPUSTKA_PROVISIONING_KEY: 'legacy-provisioning',
-		})
-		try {
-			expect(runtime.config.rpcKey).toBe(LEGACY_RPC_KEY)
-			expect(runtime.config.proxyKey).toBe(LEGACY_PROXY_KEY)
-			expect(runtime.env.FABRIKA_IAM_SIGNING_KEYS).toBe('legacy-signing')
-			expect(runtime.env.FABRIKA_IAM_PROVISIONING_KEY).toBe('legacy-provisioning')
-		} finally {
-			await runtime.shutdown()
-		}
-	})
-
-	test('canonical configuration wins when both names are set', async () => {
-		const runtime = createRuntime({
-			...base,
-			FABRIKA_IAM_DATABASE_URL: DATABASE_URL,
-			PROPUSTKA_DATABASE_URL: 'postgres://legacy:legacy@127.0.0.1:2/iam',
-			FABRIKA_IAM_RPC_KEY: CANONICAL_RPC_KEY,
-			PROPUSTKA_RPC_KEY: LEGACY_RPC_KEY,
-			FABRIKA_IAM_PROXY_KEY: CANONICAL_PROXY_KEY,
-			PROPUSTKA_PROXY_KEY: LEGACY_PROXY_KEY,
-			FABRIKA_IAM_SIGNING_KEYS: 'canonical-signing',
-			PROPUSTKA_SIGNING_KEYS: 'legacy-signing',
-			FABRIKA_IAM_PROVISIONING_KEY: 'canonical-provisioning',
-			PROPUSTKA_PROVISIONING_KEY: 'legacy-provisioning',
-		})
-		try {
-			expect(runtime.config.rpcKey).toBe(CANONICAL_RPC_KEY)
-			expect(runtime.config.proxyKey).toBe(CANONICAL_PROXY_KEY)
-			expect(runtime.env.FABRIKA_IAM_SIGNING_KEYS).toBe('canonical-signing')
-			expect(runtime.env.FABRIKA_IAM_PROVISIONING_KEY).toBe('canonical-provisioning')
-		} finally {
-			await runtime.shutdown()
-		}
-	})
-
-	test('reports the canonical database name when neither alias is set', () => {
+	test('names the variable it needs when the database URL is unset', () => {
 		expect(() => createRuntime(base)).toThrow('FABRIKA_IAM_DATABASE_URL is required')
 	})
 

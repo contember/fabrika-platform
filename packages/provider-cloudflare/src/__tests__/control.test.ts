@@ -148,9 +148,8 @@ describe('Cloudflare control provider', () => {
 		expect(isCloudflareRunnerJob({ ...valid, credentials: { ...valid.credentials, FABRIKA_IAM_URL: 42 } })).toBe(false)
 		expect(isCloudflareRunnerJob({
 			...valid,
-			credentials: { ...valid.credentials, PROPUSTKA_URL: 'https://legacy-iam.example.com' },
+			credentials: { ...valid.credentials, FABRIKA_IAM_URL: 'https://iam.example.com' },
 		})).toBe(true)
-		expect(isCloudflareRunnerJob({ ...valid, credentials: { ...valid.credentials, PROPUSTKA_URL: 42 } })).toBe(false)
 		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: ['https://api.example.com'] })).toBe(true)
 		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: 'https://api.example.com' })).toBe(false)
 		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: [42] })).toBe(false)

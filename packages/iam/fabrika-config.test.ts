@@ -17,14 +17,7 @@ const REMOTE_DOMAIN = 'iam.example.com'
 const ENV_NAMES = [
 	...Object.keys(REMOTE_SOURCE),
 	'FABRIKA_IAM_HOSTNAME',
-	'PROPUSTKA_HOSTNAME',
-	'PROPUSTKA_HUMAN_EMAIL_DOMAINS',
-	'PROPUSTKA_OIDC_ISSUER',
-	'PROPUSTKA_OIDC_CLIENT_ID',
-	'PROPUSTKA_OIDC_ENABLED',
-	'PROPUSTKA_PASSWORD_ENABLED',
-	'PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL',
-	'PROPUSTKA_SIGNING_KEYS',
+	'FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL',
 	'FABRIKA_EMAIL_FROM',
 	'FABRIKA_EMAIL_RESEND_API_KEY',
 ]
@@ -185,44 +178,6 @@ describe('IAM resource graph', () => {
 		expect(() => iamPipelineVars({ ...REMOTE_SOURCE, FABRIKA_EMAIL_PROVIDER: 'smtp' })).toThrow(
 			'FABRIKA_EMAIL_PROVIDER must be none or resend',
 		)
-	})
-
-	test('legacy deploy inputs remain canonical-first fallbacks', () => {
-		const legacySource = {
-			PROPUSTKA_OIDC_ENABLED: 'true',
-			PROPUSTKA_PASSWORD_ENABLED: 'false',
-			PROPUSTKA_HUMAN_EMAIL_DOMAINS: '["legacy.example"]',
-			PROPUSTKA_OIDC_ISSUER: 'https://legacy-oidc.example.com',
-			PROPUSTKA_OIDC_CLIENT_ID: 'legacy-client-id',
-			PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL: 'false',
-			PROPUSTKA_SIGNING_KEYS: 'legacy-private-key-material',
-			OIDC_CLIENT_SECRET: 'private-oidc-secret',
-		}
-		const worker = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, legacySource)
-
-		expect(worker.options.vars?.['HUMAN_EMAIL_DOMAINS']).toBe('["legacy.example"]')
-		expect(worker.options.vars?.['OIDC_ISSUER']).toBe('https://legacy-oidc.example.com')
-		expect(worker.options.vars?.['OIDC_CLIENT_ID']).toBe('legacy-client-id')
-		expect(worker.options.vars?.['OIDC_REQUIRE_VERIFIED_EMAIL']).toBe('false')
-		expect(worker.options.vars?.['OIDC_ENABLED']).toBe('true')
-		expect(worker.options.vars?.['PASSWORD_ENABLED']).toBe('false')
-	})
-
-	test('canonical deploy inputs win when both names are present', () => {
-		const worker = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, {
-			...REMOTE_SOURCE,
-			PROPUSTKA_HUMAN_EMAIL_DOMAINS: '["legacy.example"]',
-			PROPUSTKA_OIDC_ISSUER: 'https://legacy-oidc.example.com',
-			PROPUSTKA_OIDC_CLIENT_ID: 'legacy-client-id',
-			FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
-			PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL: 'false',
-			PROPUSTKA_SIGNING_KEYS: 'legacy-private-key-material',
-		})
-
-		expect(worker.options.vars?.['HUMAN_EMAIL_DOMAINS']).toBe('["example.com"]')
-		expect(worker.options.vars?.['OIDC_ISSUER']).toBe('https://oidc.example.com')
-		expect(worker.options.vars?.['OIDC_CLIENT_ID']).toBe('client-id')
-		expect(worker.options.vars?.['OIDC_REQUIRE_VERIFIED_EMAIL']).toBe('true')
 	})
 
 	test('remote secrets are required but never enter plaintext Worker vars', () => {

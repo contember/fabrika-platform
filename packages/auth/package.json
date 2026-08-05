@@ -27,7 +27,6 @@
 	},
 	"dependencies": {
 		"@fabrika/auth-core": "workspace:*",
-		"@fabrika/platform": "workspace:*",
 		"jose": "^5.9.0"
 	},
 	"devDependencies": {

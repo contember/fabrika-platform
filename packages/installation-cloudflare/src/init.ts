@@ -9,7 +9,6 @@
  * into `.env`, `gh` over stdin, and child env — never through `log.ts`.
  */
 
-import { environmentAliases } from '@fabrika/platform'
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto'
 import { findZone, listZones, resolveAccountId, verifyToken } from './cloudflare'
 import { fromEnv, persistEnv } from './envfile'
@@ -55,22 +54,10 @@ const PLACEHOLDER_OIDC_CLIENT_ID = 'placeholder.apps.googleusercontent.com'
 const PLACEHOLDER_OIDC_CLIENT_SECRET = 'placeholder-oidc-client-secret-rotate-when-sso-wired'
 const ENVIRONMENT_SOURCE: Readonly<Record<string, string | undefined>> = process.env
 
-/** Resume reads apply canonical precedence first, then keep fromEnv's empty-string semantics. */
-export function readResumeEnvironmentAlias(
-	source: Readonly<Record<string, string | undefined>>,
-	canonical: string,
-	legacy: string,
-): string | undefined {
-	const canonicalValue = source[canonical]
-	const legacyValue = source[legacy]
-	const value = environmentAliases.read(
-		{
-			[canonical]: canonicalValue,
-			[legacy]: legacyValue === undefined || legacyValue === '' ? undefined : legacyValue,
-		},
-		{ canonical, legacy },
-	)
-	return value === '' ? undefined : value
+/** A resume read off an injectable source, with fromEnv's empty-string-is-absent semantics. */
+export function readResumeValue(source: Readonly<Record<string, string | undefined>>, name: string): string | undefined {
+	const value = source[name]
+	return value === undefined || value === '' ? undefined : value
 }
 
 export interface InstallerAuthMethods {
@@ -333,7 +320,7 @@ const vaultKeyDependencies: VaultKeyDependencies = {
 
 export async function ensureVaultKey(dependencies: VaultKeyDependencies = vaultKeyDependencies): Promise<string> {
 	step('Generate the vault master key (FABRIKA_CONTROL_VAULT_KEY)')
-	const existing = readResumeEnvironmentAlias(dependencies.source, 'FABRIKA_CONTROL_VAULT_KEY', 'VOZKA_VAULT_KEY')
+	const existing = readResumeValue(dependencies.source, 'FABRIKA_CONTROL_VAULT_KEY')
 	if (existing !== undefined) {
 		await dependencies.persist('FABRIKA_CONTROL_VAULT_KEY', existing)
 		ok('Reusing FABRIKA_CONTROL_VAULT_KEY from .env (resume).')
@@ -353,11 +340,11 @@ export async function ensureVaultKey(dependencies: VaultKeyDependencies = vaultK
  * once. IAM Stage 1 SEEDS it (the `FABRIKA_IAM_PROVISIONING_KEY` secret — `resolveCaller` admits a
  * bearer matching it as a synthetic admin) and fabrika Stage 2 USES it to authenticate schema reconciles.
  * Shaped like an IAM-native key (`px_` + 160 bits base64url). An operator who already has one can
- * pre-set `FABRIKA_IAM_PROVISIONING_KEY` in env; the deprecated name remains a resume fallback.
+ * pre-set `FABRIKA_IAM_PROVISIONING_KEY` in env and init reuses it.
  */
 async function ensureProvisioningKey(): Promise<string> {
 	step('Provisioning key (FABRIKA_IAM_PROVISIONING_KEY)')
-	const existing = readResumeEnvironmentAlias(ENVIRONMENT_SOURCE, 'FABRIKA_IAM_PROVISIONING_KEY', 'PROPUSTKA_PROVISIONING_KEY')
+	const existing = readResumeValue(ENVIRONMENT_SOURCE, 'FABRIKA_IAM_PROVISIONING_KEY')
 	if (existing !== undefined) {
 		await persistEnv('FABRIKA_IAM_PROVISIONING_KEY', existing)
 		ok('Reusing the provisioning key from .env (resume).')
@@ -402,7 +389,7 @@ function generateEs256Jwk(): JsonWebKey & { kid: string } {
  */
 async function ensureSigningKeys(): Promise<string> {
 	step('Generate the IAM signing key (FABRIKA_IAM_SIGNING_KEYS)')
-	const existing = readResumeEnvironmentAlias(ENVIRONMENT_SOURCE, 'FABRIKA_IAM_SIGNING_KEYS', 'PROPUSTKA_SIGNING_KEYS')
+	const existing = readResumeValue(ENVIRONMENT_SOURCE, 'FABRIKA_IAM_SIGNING_KEYS')
 	if (existing !== undefined) {
 		await persistEnv('FABRIKA_IAM_SIGNING_KEYS', existing)
 		ok('Reusing FABRIKA_IAM_SIGNING_KEYS from .env (resume).')
@@ -421,7 +408,7 @@ async function ensureSigningKeys(): Promise<string> {
  */
 async function ensureOidcClientSecret(placeholder: boolean): Promise<string> {
 	step('IAM OIDC client secret (FABRIKA_IAM_OIDC_CLIENT_SECRET)')
-	const existing = readResumeEnvironmentAlias(ENVIRONMENT_SOURCE, 'FABRIKA_IAM_OIDC_CLIENT_SECRET', 'PROPUSTKA_OIDC_CLIENT_SECRET')
+	const existing = readResumeValue(ENVIRONMENT_SOURCE, 'FABRIKA_IAM_OIDC_CLIENT_SECRET')
 	if (existing !== undefined) {
 		await persistEnv('FABRIKA_IAM_OIDC_CLIENT_SECRET', existing)
 		ok('Reusing FABRIKA_IAM_OIDC_CLIENT_SECRET from .env (resume).')

@@ -41,6 +41,11 @@ The auth-hardening sprint that preceded it shipped on 2026-08-05 —
   one question 0022 left open is answered by
   [0023](decisions/0023-one-session-per-host.md): one session-delivery mechanism, one
   session per host, `__Host-` on both cookies.
+- **Configuration names:** one spelling per setting. `FABRIKA_*` is the only family anything
+  reads — [ADR-0024](decisions/0024-retire-the-legacy-environment-name-fallback.md) retired
+  0018's `VOZKA_*`/`PROPUSTKA_*` fallback and deleted the shared alias reader with it. Durable
+  identifiers that carry those words as VALUES (app ids, worker/database/bucket/queue names,
+  migration identities) are untouched and stay that way.
 - **Release activation:** run hosted CI, bootstrap the twenty npm packages, and prove the tokenless release path in
   [`backlog/25-bootstrap-npm-trusted-publishing.md`](backlog/25-bootstrap-npm-trusted-publishing.md).
 - **Zerops, post-bring-up:** the light tier is **live on a real account** (sprint

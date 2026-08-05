@@ -372,8 +372,8 @@ describe('onboarding + registry CRUD', () => {
 		const { deps } = makeDeps()
 		await handleApi(req('POST', '/api/apps', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
 
-		// var upsert (plaintext config value, e.g. propustka's ACCESS_APPS)
-		const putVar = await handleApi(req('PUT', '/api/apps/app/vars', { name: 'PROPUSTKA_TEAM', value: 'https://contember.cloudflareaccess.com' }), deps)
+		// var upsert (plaintext config value — any name the app declares in `pipeline.vars`)
+		const putVar = await handleApi(req('PUT', '/api/apps/app/vars', { name: 'EXAMPLE_TEAM', value: 'https://contember.cloudflareaccess.com' }), deps)
 		expect(putVar.status).toBe(200)
 		// UNLIKE secrets, the VALUE is returned (vars are non-secret config).
 		const v = (await putVar.json()) as { name: string; value: string }
@@ -393,7 +393,7 @@ describe('onboarding + registry CRUD', () => {
 		expect(vars.items).toHaveLength(1)
 
 		// delete var (all-env layer)
-		const delVar = await handleApi(req('DELETE', '/api/apps/app/vars/PROPUSTKA_TEAM'), deps)
+		const delVar = await handleApi(req('DELETE', '/api/apps/app/vars/EXAMPLE_TEAM'), deps)
 		expect(delVar.status).toBe(200)
 		expect(await deps.repositories.registry.listAppVars('app')).toHaveLength(0)
 	})

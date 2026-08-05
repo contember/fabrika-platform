@@ -23,7 +23,6 @@
         "@fabrika/app": "workspace:*",
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
-        "@fabrika/platform": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
       },
       "devDependencies": {
@@ -64,7 +63,6 @@
       "version": "0.0.1",
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
-        "@fabrika/platform": "workspace:*",
         "jose": "^5.9.0",
       },
       "devDependencies": {
@@ -220,7 +218,6 @@
       "version": "0.0.1",
       "dependencies": {
         "@fabrika/installation-contract": "workspace:*",
-        "@fabrika/platform": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
       },
       "devDependencies": {
@@ -256,7 +253,6 @@
         "@fabrika/example-zerops-app": "workspace:*",
         "@fabrika/operations": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
-        "@fabrika/platform": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",
         "@fabrika/proxy": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
@@ -331,7 +327,6 @@
       "dependencies": {
         "@fabrika/auth": "workspace:*",
         "@fabrika/engine": "workspace:*",
-        "@fabrika/platform": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "@fabrika/proxy": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
@@ -411,7 +406,6 @@
       "dependencies": {
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
-        "@fabrika/platform": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
         "@fabrika/runner-contract": "workspace:*",
       },

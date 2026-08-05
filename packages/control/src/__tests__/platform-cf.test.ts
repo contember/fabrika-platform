@@ -7,7 +7,7 @@ import {
 } from '@fabrika/provider-cloudflare'
 import type { ProviderDeployInput, ProviderEnvelope } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import { cloudflareIamControlOptions, resolveControlEnvironmentAliases } from '../platform-cf'
+import { cloudflareIamControlOptions } from '../platform-cf'
 
 const envelope = <T>(codec: { version: number; encode(value: T): ProviderEnvelope['payload'] }, value: T): ProviderEnvelope => ({
 	provider: 'cloudflare',
@@ -43,12 +43,12 @@ const deployInput = (): ProviderDeployInput => ({
 	},
 })
 
-describe('Cloudflare control environment aliases', () => {
-	test('legacy-only IAM bindings reach queued jobs under canonical names', async () => {
-		const env = resolveControlEnvironmentAliases({
-			PROPUSTKA_URL: 'https://legacy-iam.example.test',
-			PROPUSTKA_PROVISIONING_KEY: 'px_legacy-provisioning',
-		})
+describe('Cloudflare control IAM options', () => {
+	test('the IAM coordinates reach queued jobs under their canonical names', async () => {
+		const env = {
+			FABRIKA_IAM_URL: 'https://iam.example.test',
+			FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning',
+		}
 		const jobs: CloudflareRunnerJob[] = []
 		const provider = createCloudflareControlProvider({
 			accountId: 'account-1',
@@ -62,18 +62,11 @@ describe('Cloudflare control environment aliases', () => {
 			cancelRun: async () => {},
 		})
 
-		expect(env).toMatchObject({
-			FABRIKA_IAM_URL: 'https://legacy-iam.example.test',
-			FABRIKA_IAM_PROVISIONING_KEY: 'px_legacy-provisioning',
-		})
-
 		await provider.deploy(deployInput())
 
 		expect(jobs[0]?.credentials).toMatchObject({
-			FABRIKA_IAM_URL: 'https://legacy-iam.example.test',
-			FABRIKA_IAM_PROVISIONING_KEY: 'px_legacy-provisioning',
+			FABRIKA_IAM_URL: 'https://iam.example.test',
+			FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning',
 		})
-		expect(jobs[0]?.credentials.PROPUSTKA_URL).toBeUndefined()
-		expect(jobs[0]?.credentials.PROPUSTKA_PROVISIONING_KEY).toBeUndefined()
 	})
 })

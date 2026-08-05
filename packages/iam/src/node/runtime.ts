@@ -10,7 +10,6 @@
 //   SqlDatabase → PostgresDatabase      (D1's place)
 //   WaitUntil   → createBackgroundTasks (ctx.waitUntil's place — supervised, never process-fatal)
 
-import { environmentAliases } from '@fabrika/platform'
 import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
 import { createIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
@@ -57,11 +56,11 @@ const MIN_RPC_KEY_LENGTH = 32
  * value — the database URL and the RPC key are credentials, and only their absence is reportable.
  */
 export function createRuntime(source: Record<string, string | undefined> = process.env): Runtime {
-	const databaseUrl = requiredAlias(source, 'FABRIKA_IAM_DATABASE_URL', 'PROPUSTKA_DATABASE_URL')
+	const databaseUrl = required(source, 'FABRIKA_IAM_DATABASE_URL')
 	const environment = required(source, 'ENVIRONMENT')
 	const issuer = required(source, 'ISSUER')
-	const oidcEnabled = booleanAlias(source, 'FABRIKA_IAM_OIDC_ENABLED', 'PROPUSTKA_OIDC_ENABLED', true)
-	const passwordEnabled = booleanAlias(source, 'FABRIKA_IAM_PASSWORD_ENABLED', 'PROPUSTKA_PASSWORD_ENABLED', false)
+	const oidcEnabled = booleanValue(source, 'FABRIKA_IAM_OIDC_ENABLED', true)
+	const passwordEnabled = booleanValue(source, 'FABRIKA_IAM_PASSWORD_ENABLED', false)
 	if (!oidcEnabled && !passwordEnabled) {
 		throw new Error('At least one IAM authentication method must be enabled')
 	}
@@ -79,8 +78,8 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 
 	const config: ProcessConfig = {
 		port: parsePort(source['PORT']),
-		rpcKey: sharedSecret(source, 'FABRIKA_IAM_RPC_KEY', 'PROPUSTKA_RPC_KEY'),
-		proxyKey: sharedSecret(source, 'FABRIKA_IAM_PROXY_KEY', 'PROPUSTKA_PROXY_KEY'),
+		rpcKey: sharedSecret(source, 'FABRIKA_IAM_RPC_KEY'),
+		proxyKey: sharedSecret(source, 'FABRIKA_IAM_PROXY_KEY'),
 	}
 
 	const db = PostgresDatabase.connect(databaseUrl)
@@ -99,9 +98,8 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		LOCAL_DEV_LOGIN: source['LOCAL_DEV_LOGIN'] ?? '',
 		ISSUER: issuer,
 		// Empty off-local is refused by `getSigner`, not here — one owner for that rule.
-		FABRIKA_IAM_SIGNING_KEYS: environmentAliases.read(source, { canonical: 'FABRIKA_IAM_SIGNING_KEYS', legacy: 'PROPUSTKA_SIGNING_KEYS' }) ?? '',
-		FABRIKA_IAM_PROVISIONING_KEY: environmentAliases.read(source, { canonical: 'FABRIKA_IAM_PROVISIONING_KEY', legacy: 'PROPUSTKA_PROVISIONING_KEY' })
-			?? '',
+		FABRIKA_IAM_SIGNING_KEYS: source['FABRIKA_IAM_SIGNING_KEYS'] ?? '',
+		FABRIKA_IAM_PROVISIONING_KEY: source['FABRIKA_IAM_PROVISIONING_KEY'] ?? '',
 		OIDC_ENABLED: String(oidcEnabled),
 		PASSWORD_ENABLED: String(passwordEnabled),
 		OIDC_ISSUER: oidcIssuer,
@@ -128,12 +126,12 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	}
 }
 
-function booleanAlias(source: Record<string, string | undefined>, canonical: string, legacy: string, fallback: boolean): boolean {
-	const raw = environmentAliases.read(source, { canonical, legacy })
+function booleanValue(source: Record<string, string | undefined>, name: string, fallback: boolean): boolean {
+	const raw = source[name]
 	if (raw === undefined || raw === '') return fallback
 	if (raw === 'true') return true
 	if (raw === 'false') return false
-	throw new Error(`${canonical} must be true or false`)
+	throw new Error(`${name} must be true or false`)
 }
 
 /**
@@ -141,18 +139,10 @@ function booleanAlias(source: Record<string, string | undefined>, canonical: str
  * not, and fails the boot — a guessable secret in front of an internet-reachable surface is worse
  * than no surface at all, and it would look configured.
  */
-function sharedSecret(source: Record<string, string | undefined>, canonical: string, legacy: string): string {
-	const value = environmentAliases.read(source, { canonical, legacy }) ?? ''
+function sharedSecret(source: Record<string, string | undefined>, name: string): string {
+	const value = source[name] ?? ''
 	if (value !== '' && value.length < MIN_RPC_KEY_LENGTH) {
-		throw new Error(`${canonical} must be at least ${MIN_RPC_KEY_LENGTH} characters (it is the only thing guarding its HTTP surface)`)
-	}
-	return value
-}
-
-function requiredAlias(source: Record<string, string | undefined>, canonical: string, legacy: string): string {
-	const value = environmentAliases.read(source, { canonical, legacy })
-	if (value === undefined || value.trim() === '') {
-		throw new Error(`${canonical} is required`)
+		throw new Error(`${name} must be at least ${MIN_RPC_KEY_LENGTH} characters (it is the only thing guarding its HTTP surface)`)
 	}
 	return value
 }

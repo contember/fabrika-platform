@@ -201,7 +201,7 @@ Cloudflare composition.
 
 ## Environment boundaries
 
-New configuration uses component-owned names from
+Configuration uses component-owned names from
 [ADR-0018](../decisions/0018-canonical-fabrika-environment-names.md):
 
 - applications use `FABRIKA_APP_ID` and `FABRIKA_IAM_URL`;
@@ -211,13 +211,12 @@ New configuration uses component-owned names from
 - Operations keeps its existing `FABRIKA_OPERATIONS_*` names and consumes IAM
   through `FABRIKA_IAM_*` names.
 
-Configuration writers, generated files, installation flows, and examples emit
-only the canonical names. Runtime and authoring readers retain canonical-first
-fallbacks for the deprecated `PROPUSTKA_*`, `VOZKA_*`, and `VOZKA_WORKSPACE`
-names. A reader warns at most once per legacy name and never includes the value
-in the warning.
+These are the only names anything reads. Every composition root reads its own
+canonical name off its own source, and there is no shared compatibility reader
+— [ADR-0024](../decisions/0024-retire-the-legacy-environment-name-fallback.md)
+retired the predecessor names and the fallback machinery together.
 
-This compatibility applies only to configuration names. Deployed resource
-names, stored application IDs, migration identities, provider envelopes, object
-keys, and other durable values that contain a predecessor name remain unchanged
-until a dedicated adoption or data-migration plan changes them.
+The retirement covered configuration names only. Deployed resource names, stored
+application IDs, migration identities, provider envelopes, object keys, and other
+durable values that contain a predecessor name remain unchanged until a dedicated
+adoption or data-migration plan changes them.

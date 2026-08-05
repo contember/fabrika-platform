@@ -9,13 +9,6 @@ const namespaceEnvironment = (): Record<string, string | undefined> => ({
 	FABRIKA_ZEROPS_PROXY_IAM_KEY: 'px_proxy_placeholder',
 })
 
-const legacyNamespaceEnvironment = (): Record<string, string | undefined> => ({
-	ZEROPS_CLIENT_ID: 'client-1',
-	ZEROPS_PROXY_BUILD_FROM_GIT: 'https://github.com/contember/fabrika-platform',
-	ZEROPS_PROXY_IAM_URL: 'https://iam.example.test',
-	ZEROPS_PROXY_IAM_KEY: 'px_proxy_placeholder',
-})
-
 const EXPECTED = {
 	clientId: 'client-1',
 	proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
@@ -28,7 +21,7 @@ describe('the Zerops namespace process configuration', () => {
 		expect(zeropsNamespaceProcessConfig(namespaceEnvironment())).toEqual(EXPECTED)
 	})
 
-	test('no canonical name uses the prefix Zerops reserves for itself', () => {
+	test('no name uses the prefix Zerops reserves for itself', () => {
 		// Verified live: `POST /service-stack/{id}/user-data` answers 400 userDataZeropsPrefixForbidden —
 		// "Custom env variables with 'ZEROPS_' prefix are forbidden." A canonical name that starts with
 		// `ZEROPS_` therefore cannot be written through the env API, which is the only channel a
@@ -37,15 +30,6 @@ describe('the Zerops namespace process configuration', () => {
 		for (const name of Object.keys(namespaceEnvironment())) {
 			expect(name.startsWith('ZEROPS_'), `${name} uses the reserved prefix`).toBe(false)
 		}
-	})
-
-	test('the deprecated names still answer, so an existing installation keeps booting while it renames', () => {
-		expect(zeropsNamespaceProcessConfig(legacyNamespaceEnvironment())).toEqual(EXPECTED)
-	})
-
-	test('and the canonical name wins when both are present', () => {
-		expect(zeropsNamespaceProcessConfig({ ...legacyNamespaceEnvironment(), FABRIKA_ZEROPS_CLIENT_ID: 'canonical' }))
-			.toMatchObject({ clientId: 'canonical' })
 	})
 
 	test('enables namespace lifecycle on the composed provider', () => {

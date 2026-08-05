@@ -2,17 +2,16 @@
  * Deploy the Cloudflare runner executor out of band.
  *
  * Required environment: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN.
- * Optional: FABRIKA_CONTROL_ENV (defaults to prod; VOZKA_ENV is deprecated).
+ * Optional: FABRIKA_CONTROL_ENV (defaults to prod).
  */
 
-import { environmentAliases } from '@fabrika/platform'
 import { deployCloudflareConfig } from '@fabrika/provider-cloudflare'
 import { resolve } from 'node:path'
 
 const dryRun = process.argv.includes('--dry-run')
 
 export function readRunnerEnvironment(source: Readonly<Record<string, string | undefined>>): string {
-	return environmentAliases.read(source, { canonical: 'FABRIKA_CONTROL_ENV', legacy: 'VOZKA_ENV' }) ?? 'prod'
+	return source['FABRIKA_CONTROL_ENV'] ?? 'prod'
 }
 
 const main = async (): Promise<void> => {

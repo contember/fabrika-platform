@@ -7,7 +7,6 @@
 // standalone Oblaka adapter).
 
 import type { AppSchema } from '@fabrika/auth-core'
-import { environmentAliases } from '@fabrika/platform'
 import { D1Database, defineApp, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 
 // Keep the legacy Oblaka namespace so the first fabrika deploy continues the existing cf-state.
@@ -39,9 +38,6 @@ interface EmailConfig {
 	from: string
 }
 
-const aliasValue = (source: EnvironmentSource, canonical: string, legacy: string): string | undefined =>
-	environmentAliases.read(source, { canonical, legacy })
-
 const requiredDomain = (domain: string | undefined): string => {
 	if (domain === undefined || domain === '') {
 		throw new Error('Missing FABRIKA_IAM_HOSTNAME')
@@ -49,18 +45,18 @@ const requiredDomain = (domain: string | undefined): string => {
 	return domain
 }
 
-const booleanValue = (source: EnvironmentSource, canonical: string, legacy: string, fallback: boolean): boolean => {
-	const raw = aliasValue(source, canonical, legacy)
+const booleanValue = (source: EnvironmentSource, name: string, fallback: boolean): boolean => {
+	const raw = source[name]
 	if (raw === undefined || raw === '') return fallback
 	if (raw === 'true') return true
 	if (raw === 'false') return false
-	throw new Error(`${canonical} must be true or false`)
+	throw new Error(`${name} must be true or false`)
 }
 
 const authenticationConfig = (source: EnvironmentSource): AuthenticationConfig => {
 	const config = {
-		oidcEnabled: booleanValue(source, 'FABRIKA_IAM_OIDC_ENABLED', 'PROPUSTKA_OIDC_ENABLED', true),
-		passwordEnabled: booleanValue(source, 'FABRIKA_IAM_PASSWORD_ENABLED', 'PROPUSTKA_PASSWORD_ENABLED', false),
+		oidcEnabled: booleanValue(source, 'FABRIKA_IAM_OIDC_ENABLED', true),
+		passwordEnabled: booleanValue(source, 'FABRIKA_IAM_PASSWORD_ENABLED', false),
 	}
 	if (!config.oidcEnabled && !config.passwordEnabled) {
 		throw new Error('At least one IAM authentication method must be enabled')
@@ -79,10 +75,10 @@ const emailConfig = (source: EnvironmentSource): EmailConfig => {
 const remoteConfig = (env: string, domain: string | undefined, source: EnvironmentSource): RemoteConfig => {
 	const authentication = authenticationConfig(source)
 	const email = emailConfig(source)
-	const humanEmailDomains = aliasValue(source, 'FABRIKA_IAM_HUMAN_EMAIL_DOMAINS', 'PROPUSTKA_HUMAN_EMAIL_DOMAINS')
-	const oidcIssuer = aliasValue(source, 'FABRIKA_IAM_OIDC_ISSUER', 'PROPUSTKA_OIDC_ISSUER')
-	const oidcClientId = aliasValue(source, 'FABRIKA_IAM_OIDC_CLIENT_ID', 'PROPUSTKA_OIDC_CLIENT_ID')
-	const signingKeys = aliasValue(source, 'FABRIKA_IAM_SIGNING_KEYS', 'PROPUSTKA_SIGNING_KEYS')
+	const humanEmailDomains = source['FABRIKA_IAM_HUMAN_EMAIL_DOMAINS']
+	const oidcIssuer = source['FABRIKA_IAM_OIDC_ISSUER']
+	const oidcClientId = source['FABRIKA_IAM_OIDC_CLIENT_ID']
+	const signingKeys = source['FABRIKA_IAM_SIGNING_KEYS']
 	const missing: string[] = []
 	if (authentication.oidcEnabled) {
 		if (!humanEmailDomains) missing.push('FABRIKA_IAM_HUMAN_EMAIL_DOMAINS')
@@ -145,15 +141,15 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 	return {
 		HUMAN_EMAIL_DOMAINS: config.humanEmailDomains,
 		ADMIN_ORIGINS: config.adminOrigins,
-		HUMAN_EMAILS: aliasValue(source, 'FABRIKA_IAM_HUMAN_EMAILS', 'PROPUSTKA_HUMAN_EMAILS') ?? '[]',
-		IAM_BOOTSTRAP_ADMINS: aliasValue(source, 'FABRIKA_IAM_BOOTSTRAP_ADMINS', 'PROPUSTKA_BOOTSTRAP_ADMINS') ?? '[]',
+		HUMAN_EMAILS: source['FABRIKA_IAM_HUMAN_EMAILS'] ?? '[]',
+		IAM_BOOTSTRAP_ADMINS: source['FABRIKA_IAM_BOOTSTRAP_ADMINS'] ?? '[]',
 		ISSUER: `https://${config.domain}`,
 		OIDC_ENABLED: String(config.oidcEnabled),
 		PASSWORD_ENABLED: String(config.passwordEnabled),
 		OIDC_ISSUER: config.oidcIssuer,
 		OIDC_CLIENT_ID: config.oidcClientId,
-		OIDC_SCOPES: aliasValue(source, 'FABRIKA_IAM_OIDC_SCOPES', 'PROPUSTKA_OIDC_SCOPES') ?? '',
-		OIDC_REQUIRE_VERIFIED_EMAIL: aliasValue(source, 'FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL', 'PROPUSTKA_OIDC_REQUIRE_VERIFIED_EMAIL') ?? 'true',
+		OIDC_SCOPES: source['FABRIKA_IAM_OIDC_SCOPES'] ?? '',
+		OIDC_REQUIRE_VERIFIED_EMAIL: source['FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL'] ?? 'true',
 		EMAIL_PROVIDER: config.emailProvider,
 		EMAIL_FROM: config.emailFrom,
 	}

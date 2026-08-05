@@ -28,7 +28,6 @@
 		"@fabrika/example-zerops-app": "workspace:*",
 		"@fabrika/operations": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",
-		"@fabrika/platform": "workspace:*",
 		"@fabrika/proxy": "workspace:*",
 		"@fabrika/proxy-contract": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*"

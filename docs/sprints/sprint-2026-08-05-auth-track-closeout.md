@@ -317,3 +317,58 @@ sprint).
   in-flight `packages/` edits are live inside my containers, and either command would have torn my
   stack down. WU-C's proxy/IAM edits were in the tree throughout this run; the suite was green with
   them, which is evidence but not a guarantee for whatever they land.
+
+### WU-E — retire the ADR-0018 legacy env fallback (2026-08-05)
+
+- **→ [ADR-0024](../decisions/0024-retire-the-legacy-environment-name-fallback.md).** Canonical
+  `FABRIKA_*` names only; ADR-0018 is `superseded by 0024` (status line only, body untouched). Its
+  naming rules and its durable-identifier exclusion both survive there.
+- **The plan's three named readers were not the list.** `sharedSecret`, `environmentAliases.read`
+  and `readResumeEnvironmentAlias` were three of TEN alias helpers over one shared reader:
+  `booleanAlias`/`requiredAlias` (IAM), `optionalAlias`/`requiredAlias` (Control, and separately
+  Operations' `requiredAlias`/`requiredSecretAlias`), `alias`/`requiredAlias` (the Zerops control
+  composition), `aliasValue`/`booleanValue` (IAM's `fabrika.config.ts`), `envAliasValue` (the local
+  stack's smoke), plus two alias readers inside `scripts/bootstrap.ts` and `scripts/seed.ts`. The
+  one that would have been missed by following the plan's list is
+  **`legacyEnvironmentName` in `packages/provider-cloudflare/src/command.ts`** — it derived a legacy
+  name from a canonical PREFIX (`FABRIKA_CONTROL_*` → `VOZKA_*`), so it covered names that appear
+  nowhere in the repo as a literal and no grep for `VOZKA_` would have found them.
+- **Two `ZEROPS_*` alias pairs the sprint plan did not mention were also live** — the Zerops control
+  provider read `ZEROPS_{CLIENT_ID,PROXY_BUILD_FROM_GIT,PROXY_IAM_URL,PROXY_IAM_KEY,ACCESS_TOKEN,API_BASE_URL}`
+  in `src/node/provider.ts` and `provider-zerops`'s `namespace-command.ts`. Retired with the rest.
+  The reason those names are `FABRIKA_ZEROPS_*` in the first place (Zerops reserves the bare
+  `ZEROPS_` prefix — `400 userDataZeropsPrefixForbidden`) is preserved where it was, and the test
+  that asserts no name starts with `ZEROPS_` stays.
+- **The deprecation warnings the suite printed came from `@fabrika/platform`'s `environment.ts`.**
+  The whole file is deleted, so the mechanism is gone, not just its inputs. Five packages
+  (`auth`, `provider-cloudflare`, `installation-cloudflare`, `local-stack`, `runner-container`) had
+  no other use for `@fabrika/platform` and no longer depend on it — the app-facing SDK now pulls in
+  only `@fabrika/auth-core` and `jose`.
+- **Deliberately left: `VOZKA_APP_ID`** (`packages/control/src/actions.ts:15`, 8 references). It is a
+  TypeScript symbol, not an environment variable, and its VALUE is the durable app id `vozka`.
+  Renaming the symbol is a readability change with no bearing on configuration; renaming the value is
+  a migration. Same for every other durable identifier — `vozka-runner`, `vozka-run-logs`,
+  `vozka-deploy`, `vozka-proxy`, `propustka-worker`, the `vozka`/`propustka` D1 databases and app ids.
+- **Migration-file comments: SQL untouched, four stale comments rewritten.** `migrations/` is
+  immutable history (`packages/control/DATABASE.md`), so this is a judgement call worth flagging:
+  the comments named `VOZKA_VAULT_KEY` / `PROPUSTKA_PROVISIONING_KEY` as live configuration and were
+  simply wrong, no statement changed, and neither ledger stores a content hash (identity is
+  `(bundle, filename)` — ADR-0017), so an applied migration cannot be re-run by the edit. Two more
+  (`0003_single_account.sql`, `0005_app_vars.sql`) narrated retired product config; their meaning is
+  kept without naming variables that no longer exist.
+- **Two `not.toContain('PROPUSTKA_')` guards were kept on purpose** — in
+  `installation-zerops/zerops/__tests__/zerops-yaml.test.ts` and
+  `installation-cloudflare/src/__tests__/scaffold.test.ts`. They are the proof that the two GENERATED
+  files (the root `zerops.yaml`, the scaffolded workflow) emit canonical names, which is also why the
+  sweep was safe: nothing outside this repo was ever told an old name by fabrika.
+- **Verified:** `typecheck`, `lint`, `format:check` clean; `bun test` 1874 pass / 9 skip / 0 fail with
+  `FABRIKA_TEST_POSTGRES_URL` set (only the two S3-backed suites skip — no host-published MinIO);
+  `local:up` + `local:smoke` green, then torn down. The smoke is the real witness: the control plane
+  boots on `required(source, 'FABRIKA_CONTROL_RUN_LOGS_*')` with no fallback, and every `.state/*.env`
+  the stack writes was already canonical.
+- **Pre-existing failure, NOT from this unit: `bun run release:validate` is red at HEAD.**
+  `@fabrika/provider-cloudflare: public dependencies must not depend on private package @fabrika/proxy`
+  — introduced by `18d9575` ("feat(proxy): enforce Cloudflare app routes through proxy"), which made
+  the public provider bundle depend on the private `@fabrika/proxy`. Reproduced against a pristine
+  `git archive HEAD` copy to be sure. Left alone: flipping `@fabrika/proxy` to public is a
+  publishability decision, not an env-name sweep.

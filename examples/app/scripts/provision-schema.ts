@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 
 import { reconcileSchema } from '@fabrika/auth'
-import { environmentAliases } from '@fabrika/platform'
 import { exampleAppId, exampleAppSchema } from '../fabrika.schema'
 
 function required(value: string | undefined, name: string): string {
@@ -25,20 +24,8 @@ async function main(): Promise<void> {
 		return
 	}
 
-	const url = required(
-		environmentAliases.read(
-			{ FABRIKA_IAM_URL: process.env['FABRIKA_IAM_URL'], PROPUSTKA_URL: process.env['PROPUSTKA_URL'] },
-			{ canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' },
-		),
-		'FABRIKA_IAM_URL',
-	)
-	const adminKey = environmentAliases.read(
-		{
-			FABRIKA_IAM_ADMIN_KEY: process.env['FABRIKA_IAM_ADMIN_KEY'],
-			PROPUSTKA_ADMIN_KEY: process.env['PROPUSTKA_ADMIN_KEY'],
-		},
-		{ canonical: 'FABRIKA_IAM_ADMIN_KEY', legacy: 'PROPUSTKA_ADMIN_KEY' },
-	)
+	const url = required(process.env['FABRIKA_IAM_URL'], 'FABRIKA_IAM_URL')
+	const adminKey = process.env['FABRIKA_IAM_ADMIN_KEY']
 	await reconcileSchema({
 		url,
 		app: exampleAppId,

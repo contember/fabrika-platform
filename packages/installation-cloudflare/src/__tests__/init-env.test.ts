@@ -1,27 +1,20 @@
 import { describe, expect, spyOn, test } from 'bun:test'
-import { ensureVaultKey, readInstallerAuthMethods, readInstallerEmailProvider, readResumeEnvironmentAlias } from '../init'
+import { ensureVaultKey, readInstallerAuthMethods, readInstallerEmailProvider, readResumeValue } from '../init'
 import { action } from '../log'
 
-const aliases: ReadonlyArray<readonly [string, string]> = [
-	['FABRIKA_CONTROL_VAULT_KEY', 'VOZKA_VAULT_KEY'],
-	['FABRIKA_IAM_PROVISIONING_KEY', 'PROPUSTKA_PROVISIONING_KEY'],
-	['FABRIKA_IAM_SIGNING_KEYS', 'PROPUSTKA_SIGNING_KEYS'],
-	['FABRIKA_IAM_OIDC_CLIENT_SECRET', 'PROPUSTKA_OIDC_CLIENT_SECRET'],
+const RESUMED_NAMES: readonly string[] = [
+	'FABRIKA_CONTROL_VAULT_KEY',
+	'FABRIKA_IAM_PROVISIONING_KEY',
+	'FABRIKA_IAM_SIGNING_KEYS',
+	'FABRIKA_IAM_OIDC_CLIENT_SECRET',
 ]
 
-describe('Cloudflare installer resume aliases', () => {
-	for (const [canonical, legacy] of aliases) {
-		test(`${canonical} treats an empty canonical value as absent without falling back`, () => {
-			expect(readResumeEnvironmentAlias({ [canonical]: '', [legacy]: 'legacy-value' }, canonical, legacy)).toBeUndefined()
-			expect(readResumeEnvironmentAlias({ [canonical]: '', [legacy]: '' }, canonical, legacy)).toBeUndefined()
-		})
-
-		test(`${canonical} falls back only when the canonical value is undefined`, () => {
-			expect(readResumeEnvironmentAlias({ [legacy]: 'legacy-value' }, canonical, legacy)).toBe('legacy-value')
-		})
-
-		test(`${canonical} keeps non-empty canonical precedence`, () => {
-			expect(readResumeEnvironmentAlias({ [canonical]: 'canonical-value', [legacy]: 'legacy-value' }, canonical, legacy)).toBe('canonical-value')
+describe('Cloudflare installer resume reads', () => {
+	for (const name of RESUMED_NAMES) {
+		test(`${name} treats an empty value as absent`, () => {
+			expect(readResumeValue({ [name]: '' }, name)).toBeUndefined()
+			expect(readResumeValue({}, name)).toBeUndefined()
+			expect(readResumeValue({ [name]: 'stored-value' }, name)).toBe('stored-value')
 		})
 	}
 

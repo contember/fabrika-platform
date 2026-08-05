@@ -1,5 +1,4 @@
 import { deploy } from '@fabrika/engine'
-import { environmentAliases } from '@fabrika/platform'
 import type { ProviderDeployResult, ProviderRunEvents, RuntimeProviderRun } from '@fabrika/provider-contract'
 import { resolve } from 'node:path'
 import { type CloudflareAppConfig, isCloudflareAppConfig } from './authoring'
@@ -25,18 +24,7 @@ const declaredValues = (names: readonly string[] | undefined): Record<string, st
 	return values
 }
 
-const environmentValue = (canonical: string): string | undefined => {
-	const legacy = legacyEnvironmentName(canonical)
-	return legacy === undefined ? process.env[canonical] : environmentAliases.read(process.env, { canonical, legacy })
-}
-
-const legacyEnvironmentName = (canonical: string): string | undefined => {
-	if (canonical === 'FABRIKA_APP_ID') return 'PROPUSTKA_APP_ID'
-	if (canonical === 'FABRIKA_RUNNER_WORKSPACE') return 'VOZKA_WORKSPACE'
-	if (canonical.startsWith('FABRIKA_CONTROL_')) return `VOZKA_${canonical.slice('FABRIKA_CONTROL_'.length)}`
-	if (canonical.startsWith('FABRIKA_IAM_')) return `PROPUSTKA_${canonical.slice('FABRIKA_IAM_'.length)}`
-	return undefined
-}
+const environmentValue = (name: string): string | undefined => process.env[name]
 
 const requiredValues = (names: readonly string[] | undefined): Record<string, string> => {
 	const values: Record<string, string> = {}

@@ -15,7 +15,6 @@
 //   RunnerGateway→ (none — ADR-0003: there is no deploy runner off Cloudflare)
 
 import { HttpIamRpc } from '@fabrika/auth'
-import { environmentAliases } from '@fabrika/platform'
 import { createBackgroundTasks, FileSystemAssetServer, PostgresDatabase, PostgresJobQueue, S3BlobStore } from '@fabrika/platform-node'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { createControlRepositories } from '../db'
@@ -72,23 +71,23 @@ export const DEPLOY_MAX_ATTEMPTS = 4
  * credentials, and only their ABSENCE is reportable.
  */
 export function createRuntime(source: Record<string, string | undefined> = process.env): Runtime {
-	const databaseUrl = requiredAlias(source, 'FABRIKA_CONTROL_DATABASE_URL', 'VOZKA_DATABASE_URL')
+	const databaseUrl = required(source, 'FABRIKA_CONTROL_DATABASE_URL')
 	const environment = required(source, 'ENVIRONMENT')
 
 	const config: ProcessConfig = {
 		port: parsePort(source['PORT']),
-		assetsDir: optionalAlias(source, 'FABRIKA_CONTROL_ASSETS_DIR', 'VOZKA_ASSETS_DIR') ?? './public',
+		assetsDir: source['FABRIKA_CONTROL_ASSETS_DIR'] ?? './public',
 	}
 
 	const db = PostgresDatabase.connect(databaseUrl)
 	const queue = new PostgresJobQueue<DeployJobMessage>(db, { queue: DEPLOY_QUEUE_NAME, maxAttempts: DEPLOY_MAX_ATTEMPTS })
 	const tasks = createBackgroundTasks({ label: 'control background task' })
 	const operations = operationsConfig(source)
-	const controlDomain = optionalAlias(source, 'FABRIKA_CONTROL_DOMAIN', 'VOZKA_DOMAIN')
-	const iamUrl = optionalAlias(source, 'FABRIKA_IAM_URL', 'PROPUSTKA_URL')
-	const bootstrapAdmins = optionalAlias(source, 'FABRIKA_CONTROL_BOOTSTRAP_ADMINS', 'VOZKA_BOOTSTRAP_ADMINS')
-	const iamProvisioningKey = optionalAlias(source, 'FABRIKA_IAM_PROVISIONING_KEY', 'PROPUSTKA_PROVISIONING_KEY')
-	const vaultKey = optionalAlias(source, 'FABRIKA_CONTROL_VAULT_KEY', 'VOZKA_VAULT_KEY')
+	const controlDomain = source['FABRIKA_CONTROL_DOMAIN']
+	const iamUrl = source['FABRIKA_IAM_URL']
+	const bootstrapAdmins = source['FABRIKA_CONTROL_BOOTSTRAP_ADMINS']
+	const iamProvisioningKey = source['FABRIKA_IAM_PROVISIONING_KEY']
+	const vaultKey = source['FABRIKA_CONTROL_VAULT_KEY']
 
 	const env: Env = {
 		DB: db,
@@ -99,7 +98,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		DEPLOY_QUEUE: queue,
 		WAIT_UNTIL: tasks.waitUntil,
 		IAM: iamRpc(source),
-		IAM_ADMIN: new HttpIamAdminGateway(requiredAlias(source, 'FABRIKA_IAM_RPC_URL', 'PROPUSTKA_RPC_URL')),
+		IAM_ADMIN: new HttpIamAdminGateway(required(source, 'FABRIKA_IAM_RPC_URL')),
 		ENVIRONMENT: environment,
 		...(operations === null
 			? {}
@@ -161,12 +160,12 @@ function operationsConfig(source: Record<string, string | undefined>): Operation
  * normally wants it, and R2/AWS accept it.
  */
 function blobStore(source: Record<string, string | undefined>): S3BlobStore {
-	const endpoint = optionalAlias(source, 'FABRIKA_CONTROL_RUN_LOGS_ENDPOINT', 'VOZKA_RUN_LOGS_ENDPOINT')
+	const endpoint = source['FABRIKA_CONTROL_RUN_LOGS_ENDPOINT']
 	return S3BlobStore.connect({
-		bucket: requiredAlias(source, 'FABRIKA_CONTROL_RUN_LOGS_BUCKET', 'VOZKA_RUN_LOGS_BUCKET'),
-		accessKeyId: requiredAlias(source, 'FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID', 'VOZKA_RUN_LOGS_ACCESS_KEY_ID'),
-		secretAccessKey: requiredAlias(source, 'FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY', 'VOZKA_RUN_LOGS_SECRET_ACCESS_KEY'),
-		region: optionalAlias(source, 'FABRIKA_CONTROL_RUN_LOGS_REGION', 'VOZKA_RUN_LOGS_REGION') ?? 'auto',
+		bucket: required(source, 'FABRIKA_CONTROL_RUN_LOGS_BUCKET'),
+		accessKeyId: required(source, 'FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID'),
+		secretAccessKey: required(source, 'FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY'),
+		region: source['FABRIKA_CONTROL_RUN_LOGS_REGION'] ?? 'auto',
 		virtualHostedStyle: false,
 		...(endpoint !== undefined && endpoint !== '' ? { endpoint } : {}),
 	})
@@ -195,28 +194,12 @@ export interface IamRpcProcessConfig {
  * The two happen to match in a single-process dev setup, but never across Zerops projects.
  */
 export function readIamRpcProcessConfig(source: Record<string, string | undefined>): IamRpcProcessConfig {
-	const origin = requiredAlias(source, 'FABRIKA_IAM_RPC_URL', 'PROPUSTKA_RPC_URL')
-	const key = requiredAlias(source, 'FABRIKA_IAM_RPC_KEY', 'PROPUSTKA_RPC_KEY')
+	const origin = required(source, 'FABRIKA_IAM_RPC_URL')
+	const key = required(source, 'FABRIKA_IAM_RPC_KEY')
 	if (key.length < MIN_RPC_KEY_LENGTH) {
 		throw new Error(`FABRIKA_IAM_RPC_KEY must be at least ${MIN_RPC_KEY_LENGTH} characters (it is the only thing guarding IAM's RPC surface)`)
 	}
 	return { origin, key }
-}
-
-function optionalAlias(
-	source: Record<string, string | undefined>,
-	canonical: string,
-	legacy: string,
-): string | undefined {
-	return environmentAliases.read(source, { canonical, legacy })
-}
-
-function requiredAlias(source: Record<string, string | undefined>, canonical: string, legacy: string): string {
-	const value = optionalAlias(source, canonical, legacy)
-	if (value === undefined || value.trim() === '') {
-		throw new Error(`${canonical} is required`)
-	}
-	return value
 }
 
 function required(source: Record<string, string | undefined>, name: string): string {

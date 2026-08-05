@@ -159,7 +159,7 @@ CREATE TABLE repo_poll_state (
 -- ── Vault (envelope-encrypted secret VALUES) ──────────────────────────────────
 --
 -- Each row carries its OWN random 256-bit data key (DEK) that encrypts the secret value (AES-256-GCM);
--- the DEK is itself wrapped by the master key (KEK) from `VOZKA_VAULT_KEY`. Plaintext DEKs and
+-- the DEK is itself wrapped by the master key (KEK) from `FABRIKA_CONTROL_VAULT_KEY`. Plaintext DEKs and
 -- plaintext values never touch the database. A `vault:<id>` ref (the id is this PK, a UUIDv7) is what
 -- gets written onto `app_secrets.value_ref`; `scope`/`label` are an audit aid only, never the key.
 CREATE TABLE vault (

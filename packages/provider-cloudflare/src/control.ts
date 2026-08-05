@@ -62,10 +62,6 @@ export interface CloudflareRunnerJob {
 		readonly CLOUDFLARE_API_TOKEN: string
 		readonly FABRIKA_IAM_URL?: string
 		readonly FABRIKA_IAM_PROVISIONING_KEY?: string
-		/** @deprecated Accepted only for queued jobs created before ADR-0018. */
-		readonly PROPUSTKA_URL?: string
-		/** @deprecated Accepted only for queued jobs created before ADR-0018. */
-		readonly PROPUSTKA_PROVISIONING_KEY?: string
 	}
 	readonly secrets?: Readonly<Record<string, string>>
 	readonly vars?: Readonly<Record<string, string>>
@@ -126,10 +122,6 @@ export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunner
 		|| ('FABRIKA_IAM_PROVISIONING_KEY' in credentials
 			&& credentials.FABRIKA_IAM_PROVISIONING_KEY !== undefined
 			&& typeof credentials.FABRIKA_IAM_PROVISIONING_KEY !== 'string')
-		|| ('PROPUSTKA_URL' in credentials && credentials.PROPUSTKA_URL !== undefined && typeof credentials.PROPUSTKA_URL !== 'string')
-		|| ('PROPUSTKA_PROVISIONING_KEY' in credentials
-			&& credentials.PROPUSTKA_PROVISIONING_KEY !== undefined
-			&& typeof credentials.PROPUSTKA_PROVISIONING_KEY !== 'string')
 		|| ('workerDir' in value && value.workerDir !== undefined && typeof value.workerDir !== 'string')
 		|| ('configPath' in value && value.configPath !== undefined && typeof value.configPath !== 'string')
 		|| ('stateNamespace' in value && value.stateNamespace !== undefined && typeof value.stateNamespace !== 'string')

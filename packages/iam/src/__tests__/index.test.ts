@@ -389,29 +389,16 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 	})
 })
 
-describe('IAM Worker environment aliases', () => {
-	test('accepts legacy secret bindings', () => {
+describe('the IAM Worker environment', () => {
+	test('maps the secret bindings onto the runtime-neutral env', () => {
 		const env = iamEnv({
 			...workerBindings(freshDb()),
-			PROPUSTKA_SIGNING_KEYS: 'legacy-signing',
-			PROPUSTKA_PROVISIONING_KEY: 'legacy-provisioning',
+			FABRIKA_IAM_SIGNING_KEYS: 'signing-key-material',
+			FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning',
 		})
 
-		expect(env.FABRIKA_IAM_SIGNING_KEYS).toBe('legacy-signing')
-		expect(env.FABRIKA_IAM_PROVISIONING_KEY).toBe('legacy-provisioning')
-	})
-
-	test('prefers canonical secret bindings', () => {
-		const env = iamEnv({
-			...workerBindings(freshDb()),
-			FABRIKA_IAM_SIGNING_KEYS: 'canonical-signing',
-			FABRIKA_IAM_PROVISIONING_KEY: 'canonical-provisioning',
-			PROPUSTKA_SIGNING_KEYS: 'legacy-signing',
-			PROPUSTKA_PROVISIONING_KEY: 'legacy-provisioning',
-		})
-
-		expect(env.FABRIKA_IAM_SIGNING_KEYS).toBe('canonical-signing')
-		expect(env.FABRIKA_IAM_PROVISIONING_KEY).toBe('canonical-provisioning')
+		expect(env.FABRIKA_IAM_SIGNING_KEYS).toBe('signing-key-material')
+		expect(env.FABRIKA_IAM_PROVISIONING_KEY).toBe('px_provisioning')
 	})
 
 	test('maps the provider-specific email secret to the runtime-neutral binding', () => {

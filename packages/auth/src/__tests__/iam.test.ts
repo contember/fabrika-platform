@@ -65,26 +65,12 @@ describe('createIam', () => {
 		expect(stub.listPrincipalsInputs[0]?.app).toBe(APP)
 	})
 
-	test('legacy-only IAM names remain supported', async () => {
+	test('the env app id is used when opts.appId is omitted', async () => {
 		const stub = new IamRpcStub({ listPrincipals: { ok: true, principals: [] } })
-		const iam = createIam({ IAM: stub, PROPUSTKA_URL: ISSUER, PROPUSTKA_APP_ID: APP })
+		const iam = createIam({ IAM: stub, FABRIKA_IAM_URL: ISSUER, FABRIKA_APP_ID: 'env-app' })
 
 		await iam.listPrincipals(new Request('https://app/x'))
-		expect(stub.listPrincipalsInputs[0]?.app).toBe(APP)
-	})
-
-	test('canonical app id wins when both names are set', async () => {
-		const stub = new IamRpcStub({ listPrincipals: { ok: true, principals: [] } })
-		const iam = createIam({
-			IAM: stub,
-			FABRIKA_IAM_URL: ISSUER,
-			PROPUSTKA_URL: 'https://legacy-iam.test',
-			FABRIKA_APP_ID: 'canonical-app',
-			PROPUSTKA_APP_ID: 'legacy-app',
-		})
-
-		await iam.listPrincipals(new Request('https://app/x'))
-		expect(stub.listPrincipalsInputs[0]?.app).toBe('canonical-app')
+		expect(stub.listPrincipalsInputs[0]?.app).toBe('env-app')
 	})
 
 	test('throws when no app id is resolvable', () => {

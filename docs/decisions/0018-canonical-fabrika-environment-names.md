@@ -1,7 +1,7 @@
 ---
 id: 0018
 title: Use plane-qualified fabrika environment names with legacy fallback
-status: accepted
+status: superseded by 0024
 date: 2026-07-31
 ---
 

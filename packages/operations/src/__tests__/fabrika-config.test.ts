@@ -30,7 +30,6 @@ describe('Operations Cloudflare composition', () => {
 		expect(binding(worker, 'CONTROL')).toBeUndefined()
 		expect(binding(worker, 'PIPELINE_METRICS')).toBeUndefined()
 		expect(worker.options.vars?.['FABRIKA_IAM_URL']).toBeDefined()
-		expect(worker.options.vars?.['PROPUSTKA_URL']).toBeUndefined()
 		expect(worker.options.triggers?.crons).toEqual(['* * * * *'])
 	})
 

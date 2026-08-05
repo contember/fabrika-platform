@@ -90,26 +90,19 @@ describe('defineApp(vozka config)', () => {
 	test('domain from ctx flows into the FABRIKA_CONTROL_DOMAIN var', () => {
 		const worker = application(config.resources({ env: 'stage', domain: 'vozka.test.example.com' }))
 		expect(worker.options.vars?.['FABRIKA_CONTROL_DOMAIN']).toBe('vozka.test.example.com')
-		expect(worker.options.vars?.['VOZKA_DOMAIN']).toBeUndefined()
 		expect(worker.options.vars?.['ENVIRONMENT']).toBe('stage')
 	})
 
-	test('canonical IAM and bootstrap values win over deprecated aliases', () => {
+	test('the IAM issuer and the bootstrap-admin list ride as canonical vars', () => {
 		process.env['FABRIKA_IAM_URL'] = 'https://iam.example.test'
-		process.env['PROPUSTKA_URL'] = 'https://legacy-iam.example.test'
 		process.env['FABRIKA_CONTROL_BOOTSTRAP_ADMINS'] = '["canonical@example.test"]'
-		process.env['VOZKA_BOOTSTRAP_ADMINS'] = '["legacy@example.test"]'
 		try {
 			const worker = application(buildControlWorker({ env: 'stage' }))
 			expect(worker.options.vars?.['FABRIKA_IAM_URL']).toBe('https://iam.example.test')
 			expect(worker.options.vars?.['FABRIKA_CONTROL_BOOTSTRAP_ADMINS']).toBe('["canonical@example.test"]')
-			expect(worker.options.vars?.['PROPUSTKA_URL']).toBeUndefined()
-			expect(worker.options.vars?.['VOZKA_BOOTSTRAP_ADMINS']).toBeUndefined()
 		} finally {
 			delete process.env['FABRIKA_IAM_URL']
-			delete process.env['PROPUSTKA_URL']
 			delete process.env['FABRIKA_CONTROL_BOOTSTRAP_ADMINS']
-			delete process.env['VOZKA_BOOTSTRAP_ADMINS']
 		}
 	})
 

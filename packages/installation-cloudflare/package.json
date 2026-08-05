@@ -27,7 +27,6 @@
 	},
 	"dependencies": {
 		"@fabrika/installation-contract": "workspace:*",
-		"@fabrika/platform": "workspace:*",
 		"@fabrika/provider-cloudflare": "workspace:*"
 	},
 	"devDependencies": {

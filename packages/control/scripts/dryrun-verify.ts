@@ -8,7 +8,6 @@
  *   bun run scripts/dryrun-verify.ts
  */
 import { deploy } from '@fabrika/engine'
-import { environmentAliases } from '@fabrika/platform'
 import {
 	cloudflareArtifact,
 	type CloudflareCollaborators,
@@ -18,11 +17,7 @@ import {
 import type { RuntimeProviderRun } from '@fabrika/provider-contract'
 import { resolve } from 'node:path'
 
-const domain = environmentAliases.read({
-	FABRIKA_CONTROL_DOMAIN: process.env['FABRIKA_CONTROL_DOMAIN'],
-	VOZKA_DOMAIN: process.env['VOZKA_DOMAIN'],
-}, { canonical: 'FABRIKA_CONTROL_DOMAIN', legacy: 'VOZKA_DOMAIN' })
-	?? 'control.stage.example.com'
+const domain = process.env['FABRIKA_CONTROL_DOMAIN'] ?? 'control.stage.example.com'
 process.env['FABRIKA_CONTROL_DOMAIN'] = domain
 
 const { default: config } = await import('../fabrika.config')

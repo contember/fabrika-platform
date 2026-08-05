@@ -1,5 +1,4 @@
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
-import { environmentAliases } from '@fabrika/platform'
 import {
 	createCloudflareProxyWorker,
 	D1Database,
@@ -19,14 +18,7 @@ import { OPERATIONS_PROXY_GATES } from './src/gates'
  */
 const LOCAL_IAM_URL = 'http://localhost:18191'
 
-const resolveIamUrl = (isLocal: boolean): string =>
-	environmentAliases.read(
-		{
-			FABRIKA_IAM_URL: process.env['FABRIKA_IAM_URL'],
-			PROPUSTKA_URL: process.env['PROPUSTKA_URL'],
-		},
-		{ canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' },
-	) ?? (isLocal ? LOCAL_IAM_URL : '')
+const resolveIamUrl = (isLocal: boolean): string => process.env['FABRIKA_IAM_URL'] ?? (isLocal ? LOCAL_IAM_URL : '')
 
 export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 	const isLocal = ctx.env === 'local'

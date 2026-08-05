@@ -59,7 +59,10 @@ migration before its own schema.
 ADR-0018 defines plane-qualified canonical environment names and a
 canonical-first compatibility window for the `VOZKA_*` and `PROPUSTKA_*`
 families. It explicitly excludes deployed resource names and migration
-identities from the naming sweep.
+identities from the naming sweep. **Superseded by
+[ADR-0024](0024-retire-the-legacy-environment-name-fallback.md)** — its naming
+rules and its durable-identifier exclusion both survive there; only the
+compatibility window is gone.
 
 ADR-0019 puts provider-neutral outbound email behind `@fabrika/email` rather than a runtime-specific binding or the no-I/O platform package. Domains retain templates, action state, outboxes, and retry scheduling.
 
@@ -76,6 +79,12 @@ TypeScript, a session reaches an app as a one-time code, and an app only ever ve
 token. It records two things none of the four did — that the least-privilege split around handoff
 redemption is a real key boundary on Zerops but only a typing convention on Cloudflare, and that
 the shared cookie's survival alongside the handoff is an open question with a real cost.
+
+ADR-0024 retires ADR-0018's legacy fallback: canonical `FABRIKA_*` names only, and the shared
+canonical-or-legacy reader in `@fabrika/platform` is deleted rather than left callerless. Read it
+together with 0018 — 0018 still holds the naming rules and the durable-identifier exclusion, and
+0024 states why the transitional half was safe to remove and that a configuration name now has
+exactly one spelling.
 
 ## Log
 
@@ -98,8 +107,10 @@ the shared cookie's survival alongside the handoff is an open question with a re
 - [0015](0015-repository-operations-are-the-sql-portability-seam.md) — Make repository operations the SQL portability seam — accepted (2026-07-30)
 - [0016](0016-independent-operations-plane.md) — Add an independent Operations plane — accepted (2026-07-30)
 - [0017](0017-service-owned-postgres-migrations.md) — Make Postgres migrations service-owned and bundle-qualified — accepted (2026-07-30)
-- [0018](0018-canonical-fabrika-environment-names.md) — Use plane-qualified fabrika environment names with legacy fallback — accepted (2026-07-31)
+- [0018](0018-canonical-fabrika-environment-names.md) — Use plane-qualified fabrika environment names with legacy fallback — superseded by 0024 (2026-07-31)
 - [0019](0019-portable-outbound-email.md) — Keep outbound email behind one portable service contract — accepted (2026-08-04)
 - [0020](0020-compose-human-authentication-methods.md) — Compose OIDC and password as independent human authentication methods — accepted (2026-08-04)
 - [0021](0021-exchange-token-session-handoff.md) — Hand a session to an app through a one-time code, not a shared cookie — superseded by 0022 (2026-08-04)
 - [0022](0022-the-proxy-is-the-only-enforcement-point.md) — The proxy is the only enforcement point (supersedes 0007, 0008, 0010, 0021) — accepted (2026-08-05)
+- [0023](0023-one-session-per-host.md) — One session per host — retire the shared session cookie (amends 0022) — accepted (2026-08-05)
+- [0024](0024-retire-the-legacy-environment-name-fallback.md) — Retire the legacy environment-name fallback; canonical names only (supersedes 0018) — accepted (2026-08-05)

@@ -35,5 +35,6 @@ The Postgres/S3/Bun implementations live in `@fabrika/platform-node`.
   depends on nothing but `SqlDatabase`, which is what lets the control Worker and a Bun process share
   one copy instead of two that drift. Keep that test: does it need any I/O primitive of its own?
 - The table name is a parameter where a second service may want its own lease table.
-- `environment.ts` reads a canonical name with a legacy fallback and warns; the warning callback
-  never receives an environment VALUE (ADR-0018).
+- **There is no environment-name compatibility layer here any more (ADR-0024).** Every composition
+  root reads its canonical `FABRIKA_*` name straight off its own source. A generic "canonical or
+  legacy" reader is the thing a future rename would re-adopt; write the rename instead.

@@ -12,7 +12,6 @@
 // Secrets are never inlined: the GitHub App key/webhook secret + the M4 vault key are declared by
 // NAME in `pipeline.secrets` and provisioned out-of-band (`wrangler secret put` / `.dev.vars`).
 
-import { environmentAliases } from '@fabrika/platform'
 import {
 	createCloudflareProxyWorker,
 	D1Database,
@@ -34,11 +33,7 @@ import { VOZKA_APP_ID } from './src/actions'
  */
 const LOCAL_IAM_URL = 'http://localhost:18191'
 
-const resolveIamUrl = (isLocal: boolean): string =>
-	environmentAliases.read({
-		FABRIKA_IAM_URL: process.env['FABRIKA_IAM_URL'],
-		PROPUSTKA_URL: process.env['PROPUSTKA_URL'],
-	}, { canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' }) ?? (isLocal ? LOCAL_IAM_URL : '')
+const resolveIamUrl = (isLocal: boolean): string => process.env['FABRIKA_IAM_URL'] ?? (isLocal ? LOCAL_IAM_URL : '')
 
 /**
  * Build fabrika's full Cloudflare resource graph for one environment. This is the SINGLE source of the
@@ -53,13 +48,7 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 	const { env, domain } = ctx
 	const isLocal = env === 'local'
 	const operationsArtifactOrigin = process.env['OPERATIONS_ARTIFACT_ORIGIN']
-	const bootstrapAdmins = environmentAliases.read({
-		FABRIKA_CONTROL_BOOTSTRAP_ADMINS: process.env['FABRIKA_CONTROL_BOOTSTRAP_ADMINS'],
-		VOZKA_BOOTSTRAP_ADMINS: process.env['VOZKA_BOOTSTRAP_ADMINS'],
-	}, {
-		canonical: 'FABRIKA_CONTROL_BOOTSTRAP_ADMINS',
-		legacy: 'VOZKA_BOOTSTRAP_ADMINS',
-	}) ?? '[]'
+	const bootstrapAdmins = process.env['FABRIKA_CONTROL_BOOTSTRAP_ADMINS'] ?? '[]'
 	const iamUrl = resolveIamUrl(isLocal)
 
 	return new Worker({

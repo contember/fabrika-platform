@@ -11,7 +11,7 @@
  * means the M5 declaration imports the SAME strings the runtime checks against (no drift).
  */
 
-/** Durable IAM application id; retained by ADR-0018. */
+/** Durable IAM application id — a deployed identity, not configuration branding (ADR-0018, ADR-0024). */
 export const VOZKA_APP_ID = 'vozka'
 
 /**

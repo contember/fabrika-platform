@@ -1,6 +1,6 @@
 -- The SEEDED PROVISIONING identity — the Postgres twin of `../migrations/0008_provisioning_principal.sql`.
 --
--- `resolveCaller` (src/auth.ts) resolves a bearer matching the PROPUSTKA_PROVISIONING_KEY secret to a
+-- `resolveCaller` (src/auth.ts) resolves a bearer matching the FABRIKA_IAM_PROVISIONING_KEY secret to a
 -- synthetic global-admin with this id: the machine analog of the IAM_BOOTSTRAP_ADMINS email
 -- bootstrap, used to bring a control plane up before any DB-backed admin credential exists. The row
 -- exists so the audit that key drives (iam.app.schema.reconcile, issued_by on issueKey, …) resolves

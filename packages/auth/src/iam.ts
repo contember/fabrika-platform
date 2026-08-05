@@ -20,7 +20,6 @@
  */
 
 import { API_KEY_PREFIX, type IamRpc, type MintFromKeyResult, PROXY_TOKEN_HEADER, TOKEN_REFRESH_SKEW_SECONDS } from '@fabrika/auth-core'
-import { environmentAliases } from '@fabrika/platform'
 import { buildAuthContext, IamClient } from './client'
 import { readRequestId } from './request'
 import type {
@@ -45,17 +44,13 @@ export interface IamEnv {
 	IAM?: IamRpc
 	/** IAM origin — the token `iss` this SDK verifies against. Canonicalized once in `createIam`. */
 	FABRIKA_IAM_URL?: string
-	/** Deprecated issuer fallback. */
-	PROPUSTKA_URL?: string
-	/** Canonical fallback app id when `opts.appId` is omitted. */
+	/** Fallback app id when `opts.appId` is omitted. */
 	FABRIKA_APP_ID?: string
-	/** Deprecated app id fallback. */
-	PROPUSTKA_APP_ID?: string
 }
 
-/** Options for `createIam`. `appId` falls back to `env.FABRIKA_APP_ID`, then the legacy name. */
+/** Options for `createIam`. `appId` falls back to `env.FABRIKA_APP_ID`. */
 export interface CreateIamOptions {
-	/** The IAM app id (baked in so it can never be mistyped). Falls back to the canonical env alias. */
+	/** The IAM app id (baked in so it can never be mistyped). Falls back to `env.FABRIKA_APP_ID`. */
 	appId?: string
 }
 
@@ -269,13 +264,12 @@ export class Iam {
 // ── createIam ──────────────────────────────────────────────────────────────────
 
 /**
- * The single request-time entry point. Reads `env.IAM` and the canonical-first IAM environment
- * aliases, and returns an `Iam` bound to them. Throws if the app id, the binding or the issuer is
- * missing or unusable — there is no mode in which any of the three is optional.
+ * The single request-time entry point. Reads `env.IAM` and the IAM environment names, and returns an
+ * `Iam` bound to them. Throws if the app id, the binding or the issuer is missing or unusable —
+ * there is no mode in which any of the three is optional.
  */
 export function createIam(env: IamEnv, opts: CreateIamOptions = {}): Iam {
-	const appId = opts.appId
-		?? environmentAliases.read(env, { canonical: 'FABRIKA_APP_ID', legacy: 'PROPUSTKA_APP_ID' })
+	const appId = opts.appId ?? env.FABRIKA_APP_ID
 	if (appId === undefined || appId === '') {
 		throw new Error('createIam: app id is required — pass opts.appId or set env.FABRIKA_APP_ID')
 	}
@@ -284,7 +278,7 @@ export function createIam(env: IamEnv, opts: CreateIamOptions = {}): Iam {
 	if (binding === undefined) {
 		throw new Error('createIam: the IAM service binding is missing (env.IAM) — check the IAM ServiceReference.')
 	}
-	const issuer = canonicalIssuer(environmentAliases.read(env, { canonical: 'FABRIKA_IAM_URL', legacy: 'PROPUSTKA_URL' }))
+	const issuer = canonicalIssuer(env.FABRIKA_IAM_URL)
 	return new Iam({
 		management: new IamClient(binding, appId),
 		binding,

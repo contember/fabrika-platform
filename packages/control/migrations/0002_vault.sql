@@ -8,7 +8,7 @@
 --   * each row carries its OWN random 256-bit data key (DEK) that encrypts the secret VALUE
 --     (AES-256-GCM, random 96-bit `value_iv`, authenticated — tampering fails the decrypt);
 --   * that DEK is itself wrapped (AES-256-GCM, random 96-bit `dek_iv`) by the MASTER key (KEK)
---     loaded from the Worker secret `VOZKA_VAULT_KEY` (32 raw bytes, base64). Plaintext DEKs and
+--     loaded from the Worker secret `FABRIKA_CONTROL_VAULT_KEY` (32 raw bytes, base64). Plaintext DEKs and
 --     plaintext values never touch D1.
 -- Master-key rotation re-wraps every DEK with the new KEK (src/vault.ts reencryptAll); it never
 -- needs to touch the value ciphertext, so a rotation never exposes a plaintext value.

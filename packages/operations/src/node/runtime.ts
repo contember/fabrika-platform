@@ -1,5 +1,4 @@
 import { HttpIamRpc } from '@fabrika/auth'
-import { environmentAliases } from '@fabrika/platform'
 import { PostgresDatabase, S3BlobStore } from '@fabrika/platform-node'
 import { OperationsAlertProducer } from '../alerts.js'
 import { createOperationsIam } from '../auth.js'
@@ -84,9 +83,9 @@ export interface OperationsIamProcessConfig {
 /** Resolve public IAM identity separately from its private management transport. */
 export function resolveOperationsIamProcessConfig(source: Record<string, string | undefined>): OperationsIamProcessConfig {
 	return {
-		issuer: requiredAlias(source, 'FABRIKA_IAM_URL', 'PROPUSTKA_URL'),
-		rpcOrigin: requiredAlias(source, 'FABRIKA_IAM_RPC_URL', 'PROPUSTKA_RPC_URL'),
-		rpcKey: requiredSecretAlias(source, 'FABRIKA_IAM_RPC_KEY', 'PROPUSTKA_RPC_KEY'),
+		issuer: required(source, 'FABRIKA_IAM_URL'),
+		rpcOrigin: required(source, 'FABRIKA_IAM_RPC_URL'),
+		rpcKey: requiredSecret(source, 'FABRIKA_IAM_RPC_KEY'),
 	}
 }
 
@@ -96,21 +95,9 @@ function required(source: Record<string, string | undefined>, name: string): str
 	return value
 }
 
-function requiredSecretAlias(source: Record<string, string | undefined>, canonical: string, legacy: string): string {
-	const value = requiredAlias(source, canonical, legacy)
-	if (value.length < 32) throw new Error(`${canonical} must be at least 32 characters`)
-	return value
-}
-
 function requiredSecret(source: Record<string, string | undefined>, name: string): string {
 	const value = required(source, name)
 	if (value.length < 32) throw new Error(`${name} must be at least 32 characters`)
-	return value
-}
-
-function requiredAlias(source: Record<string, string | undefined>, canonical: string, legacy: string): string {
-	const value = environmentAliases.read(source, { canonical, legacy })
-	if (value === undefined || value.trim() === '') throw new Error(`${canonical} is required`)
 	return value
 }
 
