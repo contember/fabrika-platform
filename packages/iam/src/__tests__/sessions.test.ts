@@ -56,7 +56,7 @@ describe('sessions db', () => {
 		const principal = seedUser(h.sqlite, { sub: 'g-4', email: 'g@h.cz' })
 		await h.repositories.sessions.createSession({ tokenHash: await hashToken('s1'), principalId: principal, idpSub: 'g-4', expiresAt: FUTURE })
 		await h.repositories.sessions.createSession({ tokenHash: await hashToken('s2'), principalId: principal, idpSub: 'g-4', expiresAt: FUTURE })
-		expect((await h.repositories.sessions.listSessionsForPrincipal(principal)).length).toBe(2)
+		expect((await h.repositories.sessions.listSessionsForPrincipal(principal, { limit: 50 })).length).toBe(2)
 	})
 
 	test('prune removes expired and revoked sessions', async () => {
@@ -70,6 +70,6 @@ describe('sessions db', () => {
 
 		const removed = await h.repositories.sessions.pruneSessions(Math.floor(Date.now() / 1000))
 		expect(removed).toBe(2)
-		expect((await h.repositories.sessions.listSessionsForPrincipal(principal)).length).toBe(1)
+		expect((await h.repositories.sessions.listSessionsForPrincipal(principal, { limit: 50 })).length).toBe(1)
 	})
 })

@@ -19,19 +19,24 @@ import type {
 	ListAuthLogInput,
 	ListPrincipalsInput,
 	ListRolesInput,
+	ListSessionsInput,
 	ListShareLinksInput,
 	MeDto,
 	OkResponse,
 	PasswordActionDelivery,
 	PolicyDto,
 	PrincipalDetail,
+	PrincipalIdInput,
 	PrincipalListItem,
 	ProvisionApiKeyRequest,
 	ProvisionApiKeyResponse,
 	ReturnOriginsDto,
+	RevokedSessionsResponse,
 	RoleDto,
 	RotateApiKeyInput,
 	RotateApiKeyResponse,
+	SessionDto,
+	SessionIdInput,
 	SetReturnOriginsRequest,
 	ShareLinkListItem,
 	UpdatePolicyInput,
@@ -46,12 +51,13 @@ import {
 	type PrincipalRow,
 	principalStatus,
 	type RoleRow,
+	type SessionRow,
 } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 import type { RequestContext } from '../env'
 import { normalizeOrigin } from '../handoff'
 import { issueKey } from '../issue'
-import { arrayField, booleanField, nullableStringField, numberField, parseJsonOrNull, prop, stringField } from '../json'
+import { arrayField, nullableStringField, numberField, parseJsonOrNull, prop, stringField } from '../json'
 import { deliverPasswordAction, issuePasswordAction } from '../password-service'
 import { computePermissions } from '../resolve'
 import { BUILTIN_ROLES, isKnownRole, makeRoleSource } from '../roles'
@@ -285,10 +291,6 @@ function adminAudit(
 
 // ── Me ────────────────────────────────────────────────────────────────────────
 
-export function handleMe(c: AdminContext): Response {
-	return json(adminUseCases.me(c))
-}
-
 function me(c: AdminContext): MeDto {
 	const me: MeDto = {
 		id: c.admin.id,
@@ -300,27 +302,6 @@ function me(c: AdminContext): MeDto {
 }
 
 // ── Principals ────────────────────────────────────────────────────────────────
-
-export async function listPrincipals(c: AdminContext): Promise<Response> {
-	const typeParam = c.url.searchParams.get('type')
-	const statusParam = c.url.searchParams.get('status')
-	if (statusParam !== null && statusParam !== 'invited' && statusParam !== 'active' && statusParam !== 'disabled') {
-		return json({ items: [], nextCursor: null })
-	}
-	const q = c.url.searchParams.get('q') ?? undefined
-	const before = c.url.searchParams.get('before') ?? undefined
-	const type = typeParam === 'user' || typeParam === 'service' ? typeParam : undefined
-	const status = statusParam === 'invited' || statusParam === 'active' || statusParam === 'disabled' ? statusParam : undefined
-	return json(
-		await adminUseCases.listPrincipals(c, {
-			type,
-			status,
-			...(q ? { q } : {}),
-			...(before ? { before } : {}),
-			limit: parseLimit(c.url),
-		}),
-	)
-}
 
 async function listPrincipalsUseCase(c: AdminContext, input: ListPrincipalsInput): Promise<CursorList<PrincipalListItem>> {
 	const limit = normalizeLimit(input.limit)
@@ -339,10 +320,6 @@ async function listPrincipalsUseCase(c: AdminContext, input: ListPrincipalsInput
 function cursorOf<T>(items: readonly T[], limit: number, id: (item: T) => string): string | null {
 	const last = items.at(-1)
 	return items.length === limit && last !== undefined ? id(last) : null
-}
-
-export async function getPrincipal(c: AdminContext, id: string): Promise<Response> {
-	return json(await adminUseCases.getPrincipal(c, { id }))
 }
 
 async function getPrincipalUseCase(c: AdminContext, input: { id: string }): Promise<PrincipalDetail> {
@@ -429,15 +406,6 @@ async function loadAppRoleMap(c: AdminContext, app: string | null): Promise<Reco
 	return map
 }
 
-export async function invitePrincipal(c: AdminContext): Promise<Response> {
-	const body = await readJson(c.request)
-	const email = stringField(body, 'email')
-	if (!email) {
-		return error(400, 'email required')
-	}
-	return json(await adminUseCases.invitePrincipal(c, { email }), { status: 201 })
-}
-
 async function invitePrincipalUseCase(c: AdminContext, input: InviteRequest): Promise<PrincipalListItem> {
 	const email = input.email.trim()
 	if (email === '') return fail(400, 'email required')
@@ -465,31 +433,26 @@ async function invitePrincipalUseCase(c: AdminContext, input: InviteRequest): Pr
 	return toPrincipalListItem(principal)
 }
 
-export async function deletePrincipal(c: AdminContext, id: string): Promise<Response> {
-	const row = await c.services.repositories.principals.getPrincipalById(id)
+/**
+ * Remove a principal — the only operation `principals.update` cannot express.
+ *
+ * An UNCLAIMED invite is cancelled by deleting the row: nothing references it yet, and leaving a
+ * disabled placeholder would also keep its mailbox reserved. A CLAIMED principal is soft-disabled
+ * instead, because audit history and grant rows point at it.
+ */
+async function deletePrincipalUseCase(c: AdminContext, input: PrincipalIdInput): Promise<OkResponse> {
+	const row = await c.services.repositories.principals.getPrincipalById(input.id)
 	if (!row) {
-		return error(404, 'principal not found')
+		return fail(404, 'principal not found')
 	}
-	const status = principalStatus(row)
-	if (status === 'invited') {
-		// Unclaimed invite → cancel it (hard-delete; nothing references it yet).
-		await c.services.repositories.principals.deletePrincipal(id)
-		await adminAudit(c, { action: 'iam.principal.invite_cancel', resourceType: 'principal', resourceId: id })
-		return json({ ok: true })
+	if (principalStatus(row) === 'invited') {
+		await c.services.repositories.principals.deletePrincipal(input.id)
+		await adminAudit(c, { action: 'iam.principal.invite_cancel', resourceType: 'principal', resourceId: input.id })
+		return { ok: true }
 	}
-	// Claimed principal → soft-disable (preserve audit history & grant references).
-	await c.services.repositories.principals.disablePrincipal(id)
-	await adminAudit(c, { action: 'iam.principal.disable', resourceType: 'principal', resourceId: id })
-	return json({ ok: true })
-}
-
-export async function patchPrincipal(c: AdminContext, id: string): Promise<Response> {
-	const body = await readJson(c.request)
-	const disabled = booleanField(body, 'disabled')
-	if (disabled === undefined) {
-		return error(400, 'disabled (boolean) required')
-	}
-	return json(await adminUseCases.updatePrincipal(c, { id, disabled }))
+	await c.services.repositories.principals.disablePrincipal(input.id)
+	await adminAudit(c, { action: 'iam.principal.disable', resourceType: 'principal', resourceId: input.id })
+	return { ok: true }
 }
 
 async function updatePrincipalUseCase(c: AdminContext, input: UpdatePrincipalInput): Promise<PrincipalListItem> {
@@ -508,6 +471,108 @@ async function updatePrincipalUseCase(c: AdminContext, input: UpdatePrincipalInp
 	const updated = await c.services.repositories.principals.getPrincipalById(id)
 	if (!updated) return fail(404, 'principal not found')
 	return toPrincipalListItem(updated)
+}
+
+// ── Sessions ──────────────────────────────────────────────────────────────────
+
+/**
+ * Sessions an operator can see and end.
+ *
+ * Before this, the only answer to "that session should not exist" was to disable the whole
+ * principal, which also locks the person out — `revokeSessionByHash` is reachable from
+ * `/auth/logout` and nowhere else, so only the session's own holder could end it. That is exactly
+ * the wrong shape for the case that motivated it (backlog 52): an installation that switched
+ * authentication method still honoured sessions minted under the old one for another thirty days.
+ *
+ * **Authorization is the same check every other principal-scoped operation uses**: the `iam.admin`
+ * gate on the procedure. That action is scope-less, so it is satisfied only by a GLOBAL permission —
+ * there is no such thing here as an admin who may administer some principals and not others, and a
+ * caller who cannot pass the gate reaches none of this. The gate is enumerated from the contract and
+ * asserted for a non-admin in `admin-rpc-gates.test.ts`, so a new procedure cannot lose it quietly.
+ */
+function toSessionDto(row: SessionRow, now: number): SessionDto {
+	return {
+		id: row.id,
+		principalId: row.principal_id,
+		authenticationMethod: row.authentication_method,
+		app: row.app,
+		parentSessionId: row.parent_session_id,
+		status: row.revoked_at !== null ? 'revoked' : row.expires_at <= now ? 'expired' : 'active',
+		createdAt: row.created_at,
+		expiresAt: row.expires_at,
+		revokedAt: row.revoked_at,
+	}
+}
+
+/**
+ * One page of a principal's sessions, newest first, INCLUDING revoked and expired ones — an operator
+ * asking "what did this account have open" needs the ones that are already dead too.
+ *
+ * A child session's own status is what is reported. It can read `active` while its parent is
+ * revoked, because revocation cascades at LOOKUP (the join in `getActiveSessionByHash`) and does not
+ * rewrite the child row; `parentSessionId` is on the DTO so the reader can follow it.
+ */
+async function listSessionsUseCase(c: AdminContext, input: ListSessionsInput): Promise<CursorList<SessionDto>> {
+	const principal = await c.services.repositories.principals.getPrincipalById(input.principalId)
+	if (!principal) {
+		return fail(404, 'principal not found')
+	}
+	const limit = normalizeLimit(input.limit)
+	const rows = await c.services.repositories.sessions.listSessionsForPrincipal(input.principalId, {
+		...(input.before ? { before: input.before } : {}),
+		limit,
+	})
+	const now = Math.floor(Date.now() / 1000)
+	const items = rows.map((row) => toSessionDto(row, now))
+	return { items, nextCursor: cursorOf(items, limit, (item) => item.id) }
+}
+
+/**
+ * Revoke ONE session.
+ *
+ * Revoking an IAM session ends every app session derived from it in the same write: a child is valid
+ * only while its parent is, and the lookup joins to the parent on every use (ADR-0021). So there is
+ * no sweep to run and no window in which a child outlives its parent.
+ */
+async function revokeSessionUseCase(c: AdminContext, input: SessionIdInput): Promise<RevokedSessionsResponse> {
+	const session = await c.services.repositories.sessions.getSessionById(input.id)
+	if (!session) {
+		return fail(404, 'session not found')
+	}
+	if (!(await c.services.repositories.sessions.revokeSessionById(input.id))) {
+		// Already revoked. Idempotent, and reported as such rather than as a failure.
+		return { revoked: 0 }
+	}
+	await adminAudit(c, {
+		action: 'iam.session.revoke',
+		resourceType: 'session',
+		resourceId: input.id,
+		metadata: {
+			principalId: session.principal_id,
+			authenticationMethod: session.authentication_method,
+			app: session.app,
+			parentSessionId: session.parent_session_id,
+		},
+	})
+	return { revoked: 1 }
+}
+
+/** Revoke every live session a principal holds — the "sign them out everywhere" answer. */
+async function revokeSessionsForPrincipalUseCase(c: AdminContext, input: PrincipalIdInput): Promise<RevokedSessionsResponse> {
+	const principal = await c.services.repositories.principals.getPrincipalById(input.id)
+	if (!principal) {
+		return fail(404, 'principal not found')
+	}
+	const revoked = await c.services.repositories.sessions.revokeSessionsForPrincipal(input.id)
+	if (revoked > 0) {
+		await adminAudit(c, {
+			action: 'iam.session.revoke_all',
+			resourceType: 'principal',
+			resourceId: input.id,
+			metadata: { revoked },
+		})
+	}
+	return { revoked }
 }
 
 // ── Password authentication ──────────────────────────────────────────────────
@@ -669,15 +734,6 @@ async function actionCatalog(c: AdminContext, app: string | null): Promise<strin
 	return [...catalog]
 }
 
-export async function createGrant(c: AdminContext): Promise<Response> {
-	const body = await readJson(c.request)
-	const principalId = stringField(body, 'principalId')
-	if (!principalId) {
-		return error(400, 'principalId required')
-	}
-	return json(await adminUseCases.createGrant(c, parseCreateGrantRequest(body)), { status: 201 })
-}
-
 async function createGrantUseCase(c: AdminContext, input: CreateGrantRequest): Promise<GrantDto> {
 	const principalId = input.principalId
 	if (principalId.trim() === '') return fail(400, 'principalId required')
@@ -727,10 +783,6 @@ async function createGrantUseCase(c: AdminContext, input: CreateGrantRequest): P
 	return toGrantDto(grant, cache)
 }
 
-export async function deleteGrant(c: AdminContext, id: string): Promise<Response> {
-	return json(await adminUseCases.deleteGrant(c, { id }))
-}
-
 async function deleteGrantUseCase(c: AdminContext, input: { id: string }): Promise<OkResponse> {
 	const id = input.id
 	const grant = await c.services.repositories.grants.getGrantById(id)
@@ -755,10 +807,6 @@ async function deleteGrantUseCase(c: AdminContext, input: { id: string }): Promi
 // ── Apps (read-only; the live registry derived from the schema tables) ────────
 
 /** The app ids a grant can be scoped to — the apps that have registered a vocabulary. */
-export async function listApps(c: AdminContext): Promise<Response> {
-	return json(await adminUseCases.listApps(c))
-}
-
 async function listAppsUseCase(c: AdminContext): Promise<{ items: AppDto[] }> {
 	const items: AppDto[] = (await knownApps(c)).map((id) => ({ id }))
 	return { items }
@@ -768,15 +816,9 @@ async function listAppsUseCase(c: AdminContext): Promise<{ items: AppDto[] }> {
 
 /**
  * The roles available to grant for an app: the built-ins (cross-app, e.g. `admin`)
- * plus the app's DB roles (origin 'app' + 'custom'). The app is taken from the `?app`
- * query param (a registered app id); without it, only built-ins are listed. Built-ins
- * win on a key collision so an app cannot shadow the cross-app `admin`.
+ * plus the app's DB roles (origin 'app' + 'custom'). Without an app, only built-ins are
+ * listed. Built-ins win on a key collision so an app cannot shadow the cross-app `admin`.
  */
-export async function listRoles(c: AdminContext): Promise<Response> {
-	const appParam = c.url.searchParams.get('app')
-	return json(await adminUseCases.listRoles(c, { app: appParam }))
-}
-
 async function listRolesUseCase(c: AdminContext, input: ListRolesInput): Promise<{ items: RoleDto[] }> {
 	const items: RoleDto[] = []
 	const appParam = input.app ?? null
@@ -1038,10 +1080,6 @@ function toPolicyDto(row: RoleRow): PolicyDto {
 }
 
 /** List an app's custom policies (origin='custom' role rows). */
-export async function listPolicies(c: AdminContext, app: string): Promise<Response> {
-	return json(await adminUseCases.listPolicies(c, { app }))
-}
-
 async function listPoliciesUseCase(c: AdminContext, input: AppInput): Promise<{ items: PolicyDto[] }> {
 	const app = input.app
 	if (!(await knownApps(c)).includes(app)) {
@@ -1088,14 +1126,6 @@ async function parsePolicyBody(
 }
 
 /** Create a custom policy (origin='custom' role). Rejects a key that already exists. */
-export async function createPolicy(c: AdminContext, app: string): Promise<Response> {
-	if (!(await knownApps(c)).includes(app)) {
-		return error(404, 'unknown app')
-	}
-	const body = await readJson(c.request)
-	return json(await adminUseCases.createPolicy(c, { app, policy: parseCreatePolicyRequest(body) }), { status: 201 })
-}
-
 async function createPolicyUseCase(c: AdminContext, input: CreatePolicyInput): Promise<PolicyDto> {
 	const { app, policy: body } = input
 	if (!(await knownApps(c)).includes(app)) return fail(404, 'unknown app')
@@ -1129,18 +1159,6 @@ async function createPolicyUseCase(c: AdminContext, input: CreatePolicyInput): P
 }
 
 /** Update a custom policy. Rejects if the key is missing or is an origin='app' role. */
-export async function updatePolicy(c: AdminContext, app: string, key: string): Promise<Response> {
-	if (!(await knownApps(c)).includes(app)) {
-		return error(404, 'unknown app')
-	}
-	const existing = await c.services.repositories.appSchema.getRole(app, key)
-	if (!existing || existing.origin !== 'custom') {
-		return error(404, 'custom policy not found')
-	}
-	const body = await readJson(c.request)
-	return json(await adminUseCases.updatePolicy(c, { app, key, policy: parseUpdatePolicyRequest(body) }))
-}
-
 async function updatePolicyUseCase(c: AdminContext, input: UpdatePolicyInput): Promise<PolicyDto> {
 	const { app, key, policy: body } = input
 	if (!(await knownApps(c)).includes(app)) {
@@ -1172,10 +1190,6 @@ async function updatePolicyUseCase(c: AdminContext, input: UpdatePolicyInput): P
 }
 
 /** Delete a custom policy. Refuses to delete an origin='app' (reconciled) role. */
-export async function deletePolicy(c: AdminContext, app: string, key: string): Promise<Response> {
-	return json(await adminUseCases.deletePolicy(c, { app, key }))
-}
-
 async function deletePolicyUseCase(c: AdminContext, input: { app: string; key: string }): Promise<OkResponse> {
 	const { app, key } = input
 	if (!(await knownApps(c)).includes(app)) {
@@ -1196,11 +1210,6 @@ async function deletePolicyUseCase(c: AdminContext, input: { app: string; key: s
 }
 
 // ── API keys (native service credentials) ─────────────────────────────────────
-
-export async function listApiKeys(c: AdminContext): Promise<Response> {
-	const before = c.url.searchParams.get('before') ?? undefined
-	return json(await adminUseCases.listApiKeys(c, { ...(before ? { before } : {}), limit: parseLimit(c.url) }))
-}
 
 /**
  * One page of service principals with their grants. TWO queries per page, whatever the page holds:
@@ -1350,17 +1359,7 @@ async function revokeApiKeyUseCase(c: AdminContext, input: { principalId: string
 }
 
 /**
- * Rotate an API key: principal and grants unchanged. Revoke the principal's old `px_`
- * credentials and mint a fresh one, returned ONCE. Effective immediately.
- */
-export async function rotateApiKey(c: AdminContext, principalId: string): Promise<Response> {
-	const body = c.request.headers.get('content-type') === null ? null : await readJson(c.request)
-	const expiresAt = body === null ? undefined : numberField(body, 'expiresAt')
-	return json(await adminUseCases.rotateApiKey(c, { principalId, ...(expiresAt !== undefined ? { expiresAt } : {}) }))
-}
-
-/**
- * Rotate: same principal, same grants, new secret.
+ * Rotate: same principal, same grants, new secret. Effective immediately.
  *
  * Two things the old implementation got wrong. It DROPPED the credential's expiry — a key provisioned
  * to die in 30 days came back immortal, and an operator rotating a key on schedule was quietly
@@ -1409,18 +1408,6 @@ async function rotateApiKeyUseCase(c: AdminContext, input: RotateApiKeyInput): P
 
 // ── Share links (anonymous credentials) ─────────────────────────────────────────
 
-export async function listShareLinks(c: AdminContext): Promise<Response> {
-	const p = c.url.searchParams
-	return json(
-		await adminUseCases.listShareLinks(c, {
-			...(p.get('app') ? { app: p.get('app') ?? undefined } : {}),
-			...(p.get('includeRevoked') === 'true' ? { includeRevoked: true } : {}),
-			...(p.get('before') ? { before: p.get('before') ?? undefined } : {}),
-			limit: parseLimit(c.url),
-		}),
-	)
-}
-
 /**
  * One page of share links. Two queries per page (the credentials read plus one grants read for the
  * page's ids), revoked links hidden unless asked for, and `app` finally filterable now that an
@@ -1440,15 +1427,6 @@ async function listShareLinksUseCase(c: AdminContext, input: ListShareLinksInput
 	)
 	const items = creds.map((cred) => toShareLinkListItem(cred, grants.get(cred.id) ?? []))
 	return { items, nextCursor: cursorOf(items, limit, (item) => item.id) }
-}
-
-export async function createShareLink(c: AdminContext): Promise<Response> {
-	const body = await readJson(c.request)
-	const grants = parseShareLinkGrants(prop(body, 'grants'))
-	if (grants === undefined || grants.length === 0) {
-		return error(400, 'grants required (each: { action, scope? })')
-	}
-	return json(await adminUseCases.createShareLink(c, parseIssueShareLinkRequest(body)), { status: 201 })
 }
 
 /**
@@ -1547,10 +1525,6 @@ function parseShareLinkGrants(value: unknown): KeyGrant[] | undefined {
 	return out
 }
 
-export async function revokeShareLink(c: AdminContext, id: string): Promise<Response> {
-	return json(await adminUseCases.revokeShareLink(c, { id }))
-}
-
 async function revokeShareLinkUseCase(c: AdminContext, input: { id: string }): Promise<OkResponse> {
 	const id = input.id
 	// Only anonymous credentials are share links; a principal-bound key is managed on the api-keys
@@ -1574,33 +1548,6 @@ async function revokeShareLinkUseCase(c: AdminContext, input: { id: string }): P
 const DEFAULT_LIMIT = 50
 const MAX_LIMIT = 200
 
-function parseLimit(url: URL): number {
-	const raw = url.searchParams.get('limit')
-	if (!raw) {
-		return DEFAULT_LIMIT
-	}
-	const n = Number.parseInt(raw, 10)
-	if (!Number.isFinite(n) || n <= 0) {
-		return DEFAULT_LIMIT
-	}
-	return Math.min(n, MAX_LIMIT)
-}
-
-export async function listAudit(c: AdminContext): Promise<Response> {
-	const p = c.url.searchParams
-	return json(
-		await adminUseCases.listAudit(c, {
-			...(p.get('resourceType') ? { resourceType: p.get('resourceType') ?? undefined } : {}),
-			...(p.get('resourceId') ? { resourceId: p.get('resourceId') ?? undefined } : {}),
-			...(p.get('principalId') ? { principalId: p.get('principalId') ?? undefined } : {}),
-			...(p.get('action') ? { action: p.get('action') ?? undefined } : {}),
-			...(p.get('requestId') ? { requestId: p.get('requestId') ?? undefined } : {}),
-			...(p.get('before') ? { before: p.get('before') ?? undefined } : {}),
-			limit: parseLimit(c.url),
-		}),
-	)
-}
-
 async function listAuditUseCase(c: AdminContext, input: ListAuditInput): Promise<{ items: AuditEventDto[]; nextCursor: string | null }> {
 	const limit = normalizeLimit(input.limit)
 	const rows = await c.services.repositories.audit.listAuditEvents({
@@ -1616,21 +1563,6 @@ async function listAuditUseCase(c: AdminContext, input: ListAuditInput): Promise
 	const last = items.at(-1)
 	const nextCursor = items.length === limit && last ? last.id : null
 	return { items, nextCursor }
-}
-
-export async function listAuthLog(c: AdminContext): Promise<Response> {
-	const p = c.url.searchParams
-	const decisionParam = p.get('decision')
-	const decision = decisionParam === 'allow' || decisionParam === 'deny' ? decisionParam : undefined
-	return json(
-		await adminUseCases.listAuthLog(c, {
-			...(p.get('principalId') ? { principalId: p.get('principalId') ?? undefined } : {}),
-			...(p.get('requestId') ? { requestId: p.get('requestId') ?? undefined } : {}),
-			...(decision ? { decision } : {}),
-			...(p.get('before') ? { before: p.get('before') ?? undefined } : {}),
-			limit: parseLimit(c.url),
-		}),
-	)
 }
 
 async function listAuthLogUseCase(c: AdminContext, input: ListAuthLogInput): Promise<{ items: AuthLogDto[]; nextCursor: string | null }> {
@@ -1654,9 +1586,14 @@ function normalizeLimit(limit: number | undefined): number {
 	return Math.min(Math.floor(limit), MAX_LIMIT)
 }
 
-function parseCreateGrantRequest(body: unknown): CreateGrantRequest {
-	const principalId = stringField(body, 'principalId')
-	if (!principalId) return fail(400, 'principalId required')
+/**
+ * The one surviving REST body parser: the bootstrap `POST /admin/api-keys`. Everything else that
+ * took a JSON body is an `/admin/rpc` procedure, and zod validates those from the contract.
+ */
+function parseProvisionApiKeyRequest(body: unknown): ProvisionApiKeyRequest {
+	const label = stringField(body, 'label')
+	const type = stringField(body, 'type')
+	if (label === undefined || type !== 'service') return fail(400, 'label and type=service required')
 	const roleKey = stringField(body, 'roleKey')
 	const permissions = arrayField(body, 'permissions')
 	const scopeType = nullableStringField(body, 'scopeType')
@@ -1664,7 +1601,8 @@ function parseCreateGrantRequest(body: unknown): CreateGrantRequest {
 	const app = nullableStringField(body, 'app')
 	const expiresAt = numberField(body, 'expiresAt')
 	return {
-		principalId,
+		label,
+		type,
 		...(roleKey !== undefined ? { roleKey } : {}),
 		...(permissions !== undefined ? { permissions } : {}),
 		...(scopeType !== undefined ? { scopeType } : {}),
@@ -1674,65 +1612,17 @@ function parseCreateGrantRequest(body: unknown): CreateGrantRequest {
 	}
 }
 
-function parseCreatePolicyRequest(body: unknown): CreatePolicyInput['policy'] {
-	const key = stringField(body, 'key')
-	const name = stringField(body, 'name')
-	const permissions = arrayField(body, 'permissions')
-	if (key === undefined || name === undefined || permissions === undefined) {
-		return fail(400, 'key, name and permissions (array) required')
-	}
-	const description = stringField(body, 'description')
-	return { key, name, permissions, ...(description !== undefined ? { description } : {}) }
-}
-
-function parseUpdatePolicyRequest(body: unknown): UpdatePolicyInput['policy'] {
-	const name = stringField(body, 'name')
-	const permissions = arrayField(body, 'permissions')
-	if (name === undefined || permissions === undefined) return fail(400, 'name and permissions (array) required')
-	const description = stringField(body, 'description')
-	return { name, permissions, ...(description !== undefined ? { description } : {}) }
-}
-
-function parseProvisionApiKeyRequest(body: unknown): ProvisionApiKeyRequest {
-	const label = stringField(body, 'label')
-	const type = stringField(body, 'type')
-	if (label === undefined || type !== 'service') return fail(400, 'label and type=service required')
-	const grant = parseCreateGrantRequest({ ...recordWithoutPrincipal(body), principalId: 'unused' })
-	const { principalId: _principalId, ...authorization } = grant
-	return { label, type, ...authorization }
-}
-
-function recordWithoutPrincipal(body: unknown): Record<string, unknown> {
-	const out: Record<string, unknown> = {}
-	for (const key of ['roleKey', 'permissions', 'scopeType', 'scopeValue', 'app', 'expiresAt']) {
-		const value = prop(body, key)
-		if (value !== undefined) out[key] = value
-	}
-	return out
-}
-
-function parseIssueShareLinkRequest(body: unknown): IssueShareLinkRequest {
-	const grants = parseShareLinkGrants(prop(body, 'grants'))
-	if (grants === undefined) return fail(400, 'grants required (each: { action, scope? })')
-	const app = stringField(body, 'app')
-	if (app === undefined || app.trim() === '') return fail(400, 'app required')
-	const label = stringField(body, 'label')
-	const expiresAt = numberField(body, 'expiresAt')
-	return {
-		app,
-		grants,
-		...(label !== undefined ? { label } : {}),
-		...(expiresAt !== undefined ? { expiresAt } : {}),
-	}
-}
-
-/** Shared typed application operations used by both REST and `/admin/rpc`. */
+/** The typed application operations. `/admin/rpc` serves all of them; REST serves four. */
 export const adminUseCases = {
 	me,
 	listPrincipals: listPrincipalsUseCase,
 	getPrincipal: getPrincipalUseCase,
 	invitePrincipal: invitePrincipalUseCase,
 	updatePrincipal: updatePrincipalUseCase,
+	deletePrincipal: deletePrincipalUseCase,
+	listSessions: listSessionsUseCase,
+	revokeSession: revokeSessionUseCase,
+	revokeSessionsForPrincipal: revokeSessionsForPrincipalUseCase,
 	issuePasswordEnrollment: issuePasswordEnrollmentUseCase,
 	issuePasswordReset: issuePasswordResetUseCase,
 	disablePassword: disablePasswordUseCase,

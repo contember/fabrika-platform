@@ -972,13 +972,51 @@ export class SessionRepository {
 		return (result.meta.changes ?? 0) > 0
 	}
 
-	/** Sessions for a principal (admin list / bulk revoke on disable). */
-	async listSessionsForPrincipal(principalId: string): Promise<SessionRow[]> {
+	/**
+	 * A session row by id, VALID OR NOT — the admin read, unlike `getActiveSessionById`. An operator
+	 * revoking a session must be able to address one this instance would already refuse, and be told
+	 * "already revoked" rather than "no such session".
+	 */
+	async getSessionById(id: string): Promise<SessionRow | null> {
+		return this.db.prepare('SELECT * FROM sessions WHERE id = ?').bind(id).first<SessionRow>()
+	}
+
+	/**
+	 * One page of a principal's sessions, newest first, valid or not. `before` is a keyset cursor over
+	 * the UUIDv7 id, which is monotonic with creation — the same paging every other admin list uses.
+	 */
+	async listSessionsForPrincipal(principalId: string, options: { before?: string; limit: number }): Promise<SessionRow[]> {
+		const where = options.before === undefined ? '' : ' AND id < ?'
+		const bindings = options.before === undefined ? [principalId, options.limit] : [principalId, options.before, options.limit]
 		const { results } = await this.db
-			.prepare('SELECT * FROM sessions WHERE principal_id = ? ORDER BY created_at DESC, id DESC')
-			.bind(principalId)
+			.prepare(`SELECT * FROM sessions WHERE principal_id = ?${where} ORDER BY id DESC LIMIT ?`)
+			.bind(...bindings)
 			.all<SessionRow>()
 		return results
+	}
+
+	/**
+	 * Revoke ONE session by id. Idempotent — already-revoked → false.
+	 *
+	 * **Revoking an IAM session revokes every app session derived from it**, with no sweep: a child
+	 * carries `parent_session_id`, and `getActiveSessionByHash`/`ById` join to the parent on every
+	 * lookup, so the child stops resolving the moment the parent's `revoked_at` is set (ADR-0021).
+	 */
+	async revokeSessionById(id: string): Promise<boolean> {
+		const result = await this.db
+			.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
+			.bind(unixNow(), id)
+			.run()
+		return (result.meta.changes ?? 0) > 0
+	}
+
+	/** Revoke every live session a principal holds. Returns how many rows this call revoked. */
+	async revokeSessionsForPrincipal(principalId: string): Promise<number> {
+		const result = await this.db
+			.prepare('UPDATE sessions SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL')
+			.bind(unixNow(), principalId)
+			.run()
+		return result.meta.changes ?? 0
 	}
 
 	/** Prune expired or revoked sessions (cron). Returns the number removed. */

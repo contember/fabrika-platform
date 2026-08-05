@@ -408,7 +408,7 @@ describe('password administration delivery and audit', () => {
 			'SELECT consumed_at FROM password_action_tokens WHERE principal_id = ?',
 		).get(user)
 		expect(action?.consumed_at).not.toBeNull()
-		const sessions = await h.repositories.sessions.listSessionsForPrincipal(user)
+		const sessions = await h.repositories.sessions.listSessionsForPrincipal(user, { limit: 50 })
 		expect(sessions.find((session) => session.authentication_method === 'oidc')?.revoked_at).toBeNull()
 		expect(sessions.find((session) => session.authentication_method === 'password')?.revoked_at).not.toBeNull()
 		const audit = h.sqlite.query<{ action: string }, []>("SELECT action FROM audit_events WHERE action = 'iam.password.disable'").get()

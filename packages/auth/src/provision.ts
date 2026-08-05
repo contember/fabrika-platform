@@ -40,9 +40,11 @@ export interface ReconcileSchemaOptions {
 	 */
 	returnOrigins?: readonly string[]
 	/**
-	 * An IAM-issued `px_` ADMIN key, sent as `Authorization: Bearer`. Omit for a LOCAL run —
-	 * the Worker's `ENVIRONMENT=local` + empty `FABRIKA_IAM_SIGNING_KEYS` resolves a fixed global-admin
-	 * for credential-less calls.
+	 * An IAM-issued `px_` ADMIN key, sent as `Authorization: Bearer`. Effectively required: IAM's CSRF
+	 * guard exempts BEARER-ONLY callers, and nothing else — a credential-less server-side call sends
+	 * neither `Origin` nor `Referer` and is refused whatever the admin-origin registry holds. The
+	 * exemption rests on one fact, that a browser never attaches `Authorization` by itself; no such
+	 * fact covers a credential-less request, and `resolveAdmin` would read it as a global admin.
 	 */
 	adminKey?: string
 	/** Cancels the in-flight request when schema reconciliation belongs to a deploy lifecycle. */

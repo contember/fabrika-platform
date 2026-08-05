@@ -1,3 +1,25 @@
+/**
+ * `/admin/*` — the MACHINE PROVISIONING surface, and the shared admission code `/admin/rpc` uses.
+ *
+ * It is not a second copy of the administration API. It used to be: about two dozen REST operations
+ * mirrored `/admin/rpc` procedure for procedure, and every one of them was a second place a gate
+ * could be forgotten (SEC-11) or an internal message could leak (CORR-4) — for operations that had
+ * no REST caller at all. They are gone. The console and every operator action go through
+ * `/admin/rpc`, so "policy, audit and hidden-object behaviour must not diverge by transport" is no
+ * longer a property anyone has to maintain for them; there is one transport.
+ *
+ * What is left is exactly what cannot be an RPC call from a browser:
+ *   - `GET|PUT /admin/apps/:app/schema` — a deploy step reconciling an app's vocabulary
+ *     (`reconcileSchema`, `@fabrika/auth`), which runs outside the installation over plain HTTPS;
+ *   - `POST /admin/api-keys`, `DELETE /admin/api-keys/:principalId` — first-machine-caller bootstrap,
+ *     which runs before a console exists.
+ * Both are bearer-authenticated in practice, which is also why they are exempt from the cross-origin
+ * check below. Adding a route here means proving no `/admin/rpc` procedure can serve the caller.
+ *
+ * `extractCredentials`, `rejectCrossOrigin` and `resolveAdmin` live here and are SHARED with
+ * `admin/rpc.ts`, so admission is decided in one place for both.
+ */
+
 import { type PermissionEntry, permits, type PrincipalType, SESSION_COOKIE } from '@fabrika/auth-core'
 import { isDevBypassSession, resolveCaller } from '../auth'
 import { principalStatus } from '../db'
@@ -8,34 +30,7 @@ import { requestId } from '../request-id'
 import { resolveUserPermissions } from '../resolve'
 import { hashToken } from '../secret'
 import type { Config, Services } from '../services'
-import { type AdminContext, AdminUseCaseError } from './handlers'
-import {
-	createGrant,
-	createPolicy,
-	createShareLink,
-	deleteGrant,
-	deletePolicy,
-	deletePrincipal,
-	getAppSchema,
-	getPrincipal,
-	handleMe,
-	invitePrincipal,
-	listApiKeys,
-	listApps,
-	listAudit,
-	listAuthLog,
-	listPolicies,
-	listPrincipals,
-	listRoles,
-	listShareLinks,
-	patchPrincipal,
-	provisionApiKey,
-	putAppSchema,
-	revokeApiKey,
-	revokeShareLink,
-	rotateApiKey,
-	updatePolicy,
-} from './handlers'
+import { type AdminContext, AdminUseCaseError, getAppSchema, provisionApiKey, putAppSchema, revokeApiKey } from './handlers'
 import { error } from './http'
 
 // The pinned sentinel action: only the `admin` role's `*` and bootstrap admins
@@ -121,6 +116,14 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
  * nothing against a bearer-only request while blocking every CI and provisioning caller — including
  * the documented first-administrator bootstrap. A request carrying a session cookie is checked even
  * if it also carries a bearer: ambient authority is present, so the defense applies.
+ *
+ * **A request with NO credential at all is CHECKED, not exempt, and that is deliberate.** The
+ * exemption above rests on one fact — a browser never attaches `Authorization` by itself — and there
+ * is no equivalent fact for a credential-less request: a hostile page can make a cross-site
+ * credential-less POST trivially. It matters because `resolveAdmin` treats "no credential presented"
+ * as the LOCAL-DEV BYPASS and answers with a synthetic global admin, so exempting it would hand any
+ * page a developer visits write access to their local IAM. A machine caller that means to write
+ * presents a key; that is what the local stack provisions and what `smoke.ts` sends.
  */
 export function rejectCrossOrigin(request: Request, config: Pick<Config, 'adminOrigins'>): Response | null {
 	if (SAFE_METHODS.has(request.method)) {
@@ -224,7 +227,7 @@ export async function resolveAdmin(
 }
 
 /**
- * Handle any `/admin/*` request. The caller is resolved from propustka-native credentials
+ * Handle a `/admin/*` PROVISIONING request. The caller is resolved from propustka-native credentials
  * (`px_session` SSO cookie or a `px_` bearer) and every handler runs only after `can('iam.admin')`
  * passes in-Worker (scope-less → global only). Returns 401 when the caller can't be authenticated,
  * 403 when authenticated but not an admin.
@@ -276,85 +279,40 @@ export async function handleAdmin(
 	}
 }
 
-// Path segments after '/admin/'. Returns the matched handler or a 404/405.
+/**
+ * Path segments after `/admin/`. Returns the matched handler, or 404/405.
+ *
+ * FOUR operations, and the list is closed. Anything an operator does — principals, grants, roles,
+ * policies, share links, sessions, audit — is `/admin/rpc` and only `/admin/rpc`.
+ */
 async function dispatch(c: AdminContext): Promise<Response> {
 	const method = c.request.method
 	const segments = c.url.pathname.replace(/^\/admin\/?/, '').split('/').filter(Boolean)
-	const [resource, idOrSub, action, subId] = segments
+	const [resource, idOrSub, action] = segments
 
 	switch (resource) {
-		case 'me':
-			return method === 'GET' ? handleMe(c) : methodNotAllowed()
-
-		case 'principals':
-			if (idOrSub === undefined) {
-				if (method === 'GET') return listPrincipals(c)
-				if (method === 'POST') return invitePrincipal(c)
-				return methodNotAllowed()
+		// GET|PUT /admin/apps/:app/schema — read / reconcile an app's vocabulary. The PUT is
+		// `reconcileSchema` in the app SDK, called from a DEPLOY: it runs outside the installation with
+		// nothing but a URL and a key, so a service binding is not available to it.
+		case 'apps':
+			if (segments.length !== 3 || idOrSub === undefined || action !== 'schema') {
+				return error(404, 'not found')
 			}
-			if (method === 'GET') return getPrincipal(c, idOrSub)
-			if (method === 'DELETE') return deletePrincipal(c, idOrSub)
-			if (method === 'PATCH') return patchPrincipal(c, idOrSub)
+			if (method === 'GET') return getAppSchema(c, idOrSub)
+			if (method === 'PUT') return putAppSchema(c, idOrSub)
 			return methodNotAllowed()
 
-		case 'grants':
-			if (idOrSub === undefined) {
-				return method === 'POST' ? createGrant(c) : methodNotAllowed()
-			}
-			return method === 'DELETE' ? deleteGrant(c, idOrSub) : methodNotAllowed()
-
-		case 'roles':
-			return method === 'GET' ? listRoles(c) : methodNotAllowed()
-
-		case 'apps':
-			// GET /admin/apps                          → list registered app ids
-			// GET|PUT  /admin/apps/:app/schema         → read / reconcile vocabulary
-			// GET|POST /admin/apps/:app/policies       → list / create custom policies
-			// PUT|DELETE /admin/apps/:app/policies/:key → update / delete a custom policy
-			if (idOrSub === undefined) {
-				return method === 'GET' ? listApps(c) : methodNotAllowed()
-			}
-			if (action === 'schema') {
-				if (method === 'GET') return getAppSchema(c, idOrSub)
-				if (method === 'PUT') return putAppSchema(c, idOrSub)
-				return methodNotAllowed()
-			}
-			if (action === 'policies') {
-				if (subId === undefined) {
-					if (method === 'GET') return listPolicies(c, idOrSub)
-					if (method === 'POST') return createPolicy(c, idOrSub)
-					return methodNotAllowed()
-				}
-				if (method === 'PUT') return updatePolicy(c, idOrSub, subId)
-				if (method === 'DELETE') return deletePolicy(c, idOrSub, subId)
-				return methodNotAllowed()
-			}
-			return error(404, 'not found')
-
+		// POST /admin/api-keys, DELETE /admin/api-keys/:principalId — the first machine caller.
+		// Bootstrap runs before any console exists, from a shell script or a stack bring-up holding the
+		// provisioning key, so it cannot be a browser-shaped RPC call either.
 		case 'api-keys':
 			if (idOrSub === undefined) {
-				if (method === 'GET') return listApiKeys(c)
-				if (method === 'POST') return provisionApiKey(c)
-				return methodNotAllowed()
+				return method === 'POST' ? provisionApiKey(c) : methodNotAllowed()
 			}
-			if (action === 'rotate') {
-				return method === 'POST' ? rotateApiKey(c, idOrSub) : methodNotAllowed()
+			if (segments.length !== 2) {
+				return error(404, 'not found')
 			}
 			return method === 'DELETE' ? revokeApiKey(c, idOrSub) : methodNotAllowed()
-
-		case 'share-links':
-			if (idOrSub === undefined) {
-				if (method === 'GET') return listShareLinks(c)
-				if (method === 'POST') return createShareLink(c)
-				return methodNotAllowed()
-			}
-			return method === 'DELETE' ? revokeShareLink(c, idOrSub) : methodNotAllowed()
-
-		case 'audit':
-			return method === 'GET' ? listAudit(c) : methodNotAllowed()
-
-		case 'auth-log':
-			return method === 'GET' ? listAuthLog(c) : methodNotAllowed()
 
 		default:
 			return error(404, 'not found')

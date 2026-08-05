@@ -64,9 +64,12 @@ middleware verifies the IAM-issued token and builds the canonical
 object-scope check that depends on validated application data.
 
 IAM is different only at the identity boundary: it authenticates its own admin
-callers before invoking the same typed RPC dispatcher. Its admin REST and RPC
-surfaces share typed use cases, so policy, audit, hidden-object behavior, and
-request correlation do not diverge by transport.
+callers before invoking the same typed RPC dispatcher. Every administration
+operation is a named `IamAdminRpcContract` procedure and has no second transport,
+so policy, audit, hidden-object behavior, and request correlation cannot diverge
+by transport for them. `/admin/*` REST retains four machine-provisioning
+operations only (below); they share the same use cases and the same admission
+code — `extractCredentials`, `rejectCrossOrigin`, `resolveAdmin`.
 
 On both providers, proxy gates run before application code and decide whether a
 request may reach a private service. Cloudflare authoring materializes a public
@@ -82,7 +85,7 @@ surface:
 
 | Application | Compatibility or protocol surface                   | Why it remains                                                                                                       |
 | ----------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| IAM         | `/admin/*` REST                                     | Existing clients and status/error behavior remain wire-compatible while the UI uses `/admin/rpc`.                    |
+| IAM         | `/admin/*` REST — four machine operations           | Provisioning callers that cannot make a browser-shaped RPC call; see below.                                          |
 | IAM         | `/auth/*`, `/.well-known/jwks.json`                 | Login, callback, session, and JWKS are native identity protocols, not domain RPC calls.                              |
 | IAM         | service-binding `IamRpc` and Bun `/rpc/*` transport | Applications, Control, and the proxy use the process-to-process IAM contract; it is separate from browser admin RPC. |
 | Delivery    | `/api/*` REST                                       | CLI, integration, and established control API consumers retain their request and response contract.                  |
@@ -96,6 +99,41 @@ established Fetch handlers inside the shared pipeline without changing their
 accepted methods, response bodies, or status codes. This allows RPC and REST to
 share authentication and runtime composition while compatibility consumers
 migrate independently.
+
+### IAM's `/admin/*` REST surface is closed
+
+It is a **provisioning** surface, not a second administration API. It serves
+exactly four operations, and every other `/admin/*` path answers 404:
+
+| Operation                             | Caller                                                  |
+| ------------------------------------- | ------------------------------------------------------- |
+| `PUT /admin/apps/:app/schema`         | `reconcileSchema` (`@fabrika/auth`) during a deploy     |
+| `GET /admin/apps/:app/schema`         | reading back what a deploy reconciled                   |
+| `POST /admin/api-keys`                | first-machine-caller bootstrap, before a console exists |
+| `DELETE /admin/api-keys/:principalId` | the same bootstrap tearing its key down                 |
+
+Both callers run outside the installation with nothing but a URL and a key: a
+deploy step has no service binding, and bootstrap has no browser. Everything an
+operator does — principals, grants, roles, policies, share links, sessions,
+audit, the auth log — is an `IamAdminRpcContract` procedure at `/admin/rpc` and
+is reachable no other way. Adding a route back means showing that no RPC
+procedure can serve the caller.
+
+A machine caller may therefore use both transports in one step. `reconcileSchema`
+does: `PUT /admin/apps/:app/schema` for the vocabulary, then
+`POST /admin/rpc` `{ method: "apps.setReturnOrigins" }` when the control plane
+supplies return origins. The split follows the rule above rather than the
+transport — the schema PUT stays REST because it is the operation that
+_registers_ an app, and return origins are an ordinary administration procedure
+that happens to have a machine caller.
+
+Every one of these calls presents a bearer and no cookie, so they are exempt from
+the `FABRIKA_IAM_ADMIN_ORIGINS` check by the same rule that exempts any
+bearer-only caller: a browser never attaches an `Authorization` header on its
+own. **A credential-less call is not exempt** — nothing stops a hostile page from
+making one, and IAM resolves "no credential presented" as the local-dev bypass, a
+synthetic global admin. A machine caller that writes to `/admin/*` presents a
+key, in every environment.
 
 ## Database and migration composition
 

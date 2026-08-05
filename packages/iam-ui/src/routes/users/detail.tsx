@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import type { GrantDto, PasswordActionDelivery, PermissionEntry, PrincipalDetail, UpdatePrincipalRequest } from '@fabrika/iam-contract'
+import type { GrantDto, PasswordActionDelivery, PermissionEntry, PrincipalDetail, SessionDto, UpdatePrincipalRequest } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { Badge } from '../../components/Badge'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
@@ -12,7 +12,10 @@ import { fmtAgo, fmtDate, fmtExpiry, fmtScope } from '../../lib/format'
 
 export default createPage()
 	.params({ id: 'string' })
-	.loader(async ({ params }) => ({ principal: await api.principals.get({ id: params.id }) }))
+	.loader(async ({ params }) => ({
+		principal: await api.principals.get({ id: params.id }),
+		sessions: await api.sessions.list({ principalId: params.id }),
+	}))
 	.route('/access/users/:id')
 	.render(({ data, invalidate }) => {
 		const { principal } = data
@@ -40,6 +43,8 @@ export default createPage()
 				</div>
 
 				<Authentication principal={principal} onDone={invalidate} />
+
+				<Sessions principalId={principal.id} sessions={data.sessions.items} onDone={invalidate} />
 
 				<section>
 					<div className="section-head">
@@ -245,6 +250,108 @@ function Authentication({ principal, onDone }: { principal: PrincipalDetail; onD
 				/>
 			)}
 		</section>
+	)
+}
+
+/**
+ * Open sessions, and the two ways to end one.
+ *
+ * Disabling the user was the only lever an operator had here, and it locks the person out. Revoking
+ * an IAM session also ends every app session derived from it — the app rows keep their own
+ * `active` status because the cascade happens at lookup, so the table says which parent each one
+ * hangs off rather than pretending the child was rewritten.
+ */
+function Sessions({ principalId, sessions, onDone }: { principalId: string; sessions: SessionDto[]; onDone: () => void }) {
+	const [confirmAll, setConfirmAll] = useState(false)
+	const live = sessions.filter((session) => session.status === 'active')
+
+	async function revokeAll() {
+		await api.sessions.revokeAll({ id: principalId })
+		setConfirmAll(false)
+		onDone()
+	}
+
+	return (
+		<section>
+			<div className="section-head">
+				<Icon name="clock" size={15} />
+				<h2>Sessions</h2>
+				<span className="spacer" />
+				{live.length > 0 && <button type="button" className="btn small danger" onClick={() => setConfirmAll(true)}>Revoke all</button>}
+			</div>
+			<p className="section-note">
+				Browser sign-ins. Revoking an IAM session also ends every app session derived from it; the user can sign in again.
+			</p>
+			<Table
+				colSpan={6}
+				isEmpty={sessions.length === 0}
+				empty={<EmptyState title="No sessions" body="This user has not signed in, or every session has been pruned." />}
+				head={
+					<tr>
+						<th className="grow">Signed in</th>
+						<th>Method</th>
+						<th>App</th>
+						<th>Expires</th>
+						<th>State</th>
+						<th />
+					</tr>
+				}
+			>
+				{sessions.map((session) => <SessionRow key={session.id} session={session} onDone={onDone} />)}
+			</Table>
+			{confirmAll && (
+				<ConfirmDialog
+					title="Revoke every session"
+					confirmLabel="Revoke all"
+					body={<p>End all {live.length} open sessions? The user keeps their account and can sign in again.</p>}
+					onConfirm={revokeAll}
+					onClose={() => setConfirmAll(false)}
+				/>
+			)}
+		</section>
+	)
+}
+
+function SessionRow({ session, onDone }: { session: SessionDto; onDone: () => void }) {
+	const [confirming, setConfirming] = useState(false)
+
+	async function revoke() {
+		await api.sessions.revoke({ id: session.id })
+		onDone()
+	}
+
+	return (
+		<tr>
+			<td className="muted small nowrap" title={fmtDate(session.createdAt)}>{fmtAgo(session.createdAt)}</td>
+			<td>{session.authenticationMethod}</td>
+			<td>
+				{session.app === null
+					? <span className="muted">IAM</span>
+					: <Chip title={session.parentSessionId === null ? undefined : `Derived from session ${session.parentSessionId}`}>{session.app}</Chip>}
+			</td>
+			<td>{fmtExpiry(session.expiresAt)}</td>
+			<td>
+				<Status lamp={session.status === 'active' ? 'ok' : 'idle'}>{session.status}</Status>
+			</td>
+			<td className="row-actions">
+				{session.status === 'active' && <button type="button" className="danger small" onClick={() => setConfirming(true)}>Revoke</button>}
+				{confirming && (
+					<ConfirmDialog
+						title="Revoke session"
+						confirmLabel="Revoke"
+						body={
+							<p>
+								End this session? {session.app === null
+									? 'Every app session derived from it ends with it.'
+									: 'Only this app session ends; the IAM sign-in it came from stays open.'}
+							</p>
+						}
+						onConfirm={revoke}
+						onClose={() => setConfirming(false)}
+					/>
+				)}
+			</td>
+		</tr>
 	)
 }
 

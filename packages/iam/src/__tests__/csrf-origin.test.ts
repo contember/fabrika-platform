@@ -23,7 +23,7 @@ function request(
 	if (options.session === true) headers.set('Cookie', 'px_session=abc')
 	// The URL is what the PROCESS sees. Behind a TLS-terminating balancer that is plain HTTP, which is
 	// exactly the case the guard used to get wrong.
-	return new Request(`http://iam.example.com${options.path ?? '/admin/principals'}`, { method: options.method ?? 'POST', headers })
+	return new Request(`http://iam.example.com${options.path ?? '/admin/rpc'}`, { method: options.method ?? 'POST', headers })
 }
 
 describe('rejectCrossOrigin', () => {
@@ -106,5 +106,19 @@ describe('rejectCrossOrigin', () => {
 
 	test('an empty registry fails closed rather than accepting anything', async () => {
 		expect(rejectCrossOrigin(request({ origin: CONSOLE, session: true }), { adminOrigins: [] })?.status).toBe(403)
+	})
+
+	test('a CREDENTIAL-LESS state change is checked, not exempt', async () => {
+		// The bearer exemption rests on "a browser never attaches Authorization by itself". Nothing
+		// equivalent is true of a request with no credential at all, and `resolveAdmin` reads that as the
+		// LOCAL-DEV BYPASS — a synthetic global admin. Exempting it would let any page a developer visits
+		// write to their local IAM. So: refused with an empty registry, and refused with a populated one
+		// unless the browser actually said where it came from.
+		expect(rejectCrossOrigin(request({}), { adminOrigins: [] })?.status).toBe(403)
+		expect(rejectCrossOrigin(request({}), CONFIG)?.status).toBe(403)
+		expect(rejectCrossOrigin(request({ origin: 'https://evil.example.com' }), CONFIG)?.status).toBe(403)
+		// A server-side `fetch` sends neither header, so a credential-less deploy-time reconcile is
+		// refused too. That is the answer: a machine caller that writes presents a key.
+		expect(rejectCrossOrigin(request({ method: 'PUT', path: '/admin/apps/vozka/schema' }), CONFIG)?.status).toBe(403)
 	})
 })

@@ -1,7 +1,7 @@
 # @fabrika/iam
 
 The Access service: SSO and password login, session and `px_` credential custody, per-app token
-minting, the `/admin` API, and the audit log. It runs on **two** targets — a Cloudflare
+minting, the administration API, and the audit log. It runs on **two** targets — a Cloudflare
 `WorkerEntrypoint` and a long-running Bun process — from one shared body of code. Assumes the root
 CLAUDE.md. Browser-safe admin DTOs live in `@fabrika/iam-contract`; the `IamRpc` contract, policy
 evaluation, and token shapes live in `@fabrika/auth-core`.
@@ -49,6 +49,23 @@ fails if that stops being true — it is the guard, not documentation of one.
   Its `state` cannot authenticate itself — whoever writes the cookie writes `state` too — and
   `Path=/auth` does not stop a sibling host under a shared domain from tossing in a second one. Every
   terminal outcome of `/auth/callback`, success or failure, clears it.
+- **ADMINISTRATION HAS ONE TRANSPORT. `/admin/*` REST IS A CLOSED PROVISIONING SURFACE.** Four
+  operations: `GET|PUT /admin/apps/:app/schema` (a deploy's `reconcileSchema`, which runs outside
+  the installation and has no service binding) and `POST /admin/api-keys` +
+  `DELETE /admin/api-keys/:principalId` (the first machine caller, bootstrapped before a console
+  exists). Every other `/admin/*` path is 404. About two dozen REST operations used to mirror
+  `/admin/rpc` procedure for procedure with no caller at all, and each was a second place a gate
+  could be forgotten (SEC-11) or an internal message could leak (CORR-4). Adding a route back means
+  showing no `/admin/rpc` procedure can serve the caller — otherwise "policy, audit and
+  hidden-object behaviour must not diverge by transport" becomes a property somebody has to
+  maintain again. `extractCredentials`/`rejectCrossOrigin`/`resolveAdmin` live in `admin/router.ts`
+  and are shared by both, so admission is decided once.
+- **REVOKING AN IAM SESSION REVOKES EVERY APP SESSION DERIVED FROM IT, AND THAT IS A JOIN, NOT A
+  SWEEP.** `getActiveSessionByHash`/`ById` join to `parent_session_id` on every lookup, so a child
+  stops resolving the moment the parent carries `revoked_at` — its own row is never rewritten, which
+  is why `sessions.revoke` is one statement and why a child can read `active` in `sessions.list`
+  while its parent is dead. Never "fix" that by walking children: IAM cannot set a cookie on the
+  hosts they belong to, and the walk would be the thing that races.
 - **WHICH BROWSER ORIGINS MAY DRIVE `/admin/*` IS A REGISTRY, NOT AN INFERENCE.** `ADMIN_ORIGINS`
   (deploy var `FABRIKA_IAM_ADMIN_ORIGINS`) holds the CONSOLE's public origin — the control plane's
   domain, which IAM has no way to derive. It used to compare `Origin` against its own issuer, which a

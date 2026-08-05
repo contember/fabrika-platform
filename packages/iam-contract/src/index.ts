@@ -1,4 +1,9 @@
-// @fabrika/iam-contract — runtime-neutral admin REST and typed RPC contracts.
+// @fabrika/iam-contract — the runtime-neutral IAM administration contract.
+//
+// `IamAdminRpcContract` at the bottom is the WHOLE administration API: one transport, so policy,
+// audit and hidden-object behaviour cannot diverge between two of them. What remains of `/admin/*`
+// REST is machine provisioning — an app's schema reconcile (`PutAppSchemaRequest`) and the
+// first-machine-caller bootstrap (`ProvisionApiKeyRequest`) — and it shares these same shapes.
 //
 // Shared by @fabrika/iam and its browser clients. Reuses @fabrika/auth-core types
 // where they fit. Keep these clean and complete: they are the admin API contract.
@@ -77,6 +82,28 @@ export interface UpdatePrincipalRequest {
 	disabled: boolean
 }
 
+// ── Sessions ──────────────────────────────────────────────────────────────────
+
+/**
+ * A browser session, as an operator sees it. Never the cookie or its hash — a session is addressed
+ * by `id`, which is not a credential.
+ */
+export interface SessionDto {
+	id: string
+	principalId: string
+	/** How the human proved who they were when this session was created. */
+	authenticationMethod: 'oidc' | 'password'
+	/** The app this session is bound to (an ADR-0021 child); null = the IAM session itself. */
+	app: string | null
+	/** The IAM session this was derived from; null on an IAM session. Revoking that one revokes this. */
+	parentSessionId: string | null
+	/** `active` until it is revoked or its expiry passes. A revoked session reads `revoked`. */
+	status: 'active' | 'revoked' | 'expired'
+	createdAt: number
+	expiresAt: number
+	revokedAt: number | null
+}
+
 // ── Grants ────────────────────────────────────────────────────────────────────
 
 export interface CreateGrantRequest {
@@ -115,7 +142,11 @@ export interface RoleDto {
 
 // ── App schema (reconciled vocabulary) ────────────────────────────────────────
 
-/** Reconcile an app's vocabulary. The request body IS the core `AppSchema`. */
+/**
+ * The body of `PUT /admin/apps/:app/schema` — one of the two surviving REST operations, because a
+ * deploy step reconciles an app's vocabulary from outside the installation. It IS the core
+ * `AppSchema`; `reconcileSchema` in `@fabrika/auth` sends exactly this.
+ */
 export type PutAppSchemaRequest = AppSchema
 
 /** GET schema response — the app's scopes, actions, and origin='app' roles. */
@@ -308,6 +339,20 @@ export interface PrincipalIdInput {
 	id: string
 }
 
+export interface ListSessionsInput extends PageInput {
+	/** Whose sessions to list. */
+	principalId: string
+}
+
+export interface SessionIdInput {
+	id: string
+}
+
+/** How many rows the call actually revoked; an already-revoked session is not counted again. */
+export interface RevokedSessionsResponse {
+	revoked: number
+}
+
 export interface UpdatePrincipalInput extends UpdatePrincipalRequest, PrincipalIdInput {}
 
 /** Password action sent by email, or a one-time URL shown only in this response. */
@@ -394,6 +439,17 @@ export interface IamAdminRpcContract {
 		get: RpcProcedure<PrincipalIdInput, PrincipalDetail>
 		invite: RpcProcedure<InviteRequest, PrincipalListItem>
 		update: RpcProcedure<UpdatePrincipalInput, PrincipalListItem>
+		/** Cancel an unclaimed invite, or disable a claimed principal. */
+		delete: RpcProcedure<PrincipalIdInput, OkResponse>
+	}
+	/**
+	 * Sessions an operator no longer trusts. Revoking an IAM session also ends every app session
+	 * derived from it — a child is only valid while its parent is — so this is one call, not a sweep.
+	 */
+	sessions: {
+		list: RpcProcedure<ListSessionsInput, CursorList<SessionDto>>
+		revoke: RpcProcedure<SessionIdInput, RevokedSessionsResponse>
+		revokeAll: RpcProcedure<PrincipalIdInput, RevokedSessionsResponse>
 	}
 	passwords: {
 		issueEnrollment: RpcProcedure<PrincipalIdInput, PasswordActionDelivery>

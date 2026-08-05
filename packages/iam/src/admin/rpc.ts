@@ -59,6 +59,26 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.input(z.object({ id: nonEmpty, disabled: z.boolean() }))
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.updatePrincipal(context(ctx), input)),
+		delete: t.procedure
+			.input(principalIdInput)
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.deletePrincipal(context(ctx), input)),
+	}),
+	// Revoking a PARENT already cascades to every app session derived from it, so `revoke` is one
+	// call and never a sweep — see `SessionRepository.revokeSessionById`.
+	sessions: t.router({
+		list: t.procedure
+			.input(z.object({ principalId: nonEmpty, ...pageInput }))
+			.require(ADMIN_ACTION)
+			.query(({ ctx, input }) => adminUseCases.listSessions(context(ctx), input)),
+		revoke: t.procedure
+			.input(z.object({ id: nonEmpty }))
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.revokeSession(context(ctx), input)),
+		revokeAll: t.procedure
+			.input(principalIdInput)
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.revokeSessionsForPrincipal(context(ctx), input)),
 	}),
 	passwords: t.router({
 		issueEnrollment: t.procedure

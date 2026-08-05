@@ -159,6 +159,28 @@ describe('POST /admin/rpc typed operations', () => {
 		expect(Array.isArray(items) ? items.some((item) => prop(item, 'id') === id) : false).toBe(true)
 	})
 
+	test('principals.delete cancels an unclaimed invite and disables a claimed principal', async () => {
+		// The one principal operation `update` cannot express, and the only reason it exists as its own
+		// procedure: an invite nobody claimed is removed, a claimed account is only soft-disabled because
+		// audit rows and grants point at it.
+		const h = createHarness()
+		const session = await admin(h)
+		const invite = await call(h, 'principals.invite', { email: 'cancel@example.com' }, { session })
+		const invitedId = prop(prop(await invite.json(), 'result'), 'id')
+		if (typeof invitedId !== 'string') throw new Error('expected principal id')
+
+		expect((await call(h, 'principals.delete', { id: invitedId }, { session })).status).toBe(200)
+		expect(await h.repositories.principals.getPrincipalById(invitedId)).toBeNull()
+
+		const claimed = seedUser(h.sqlite, { sub: 'sub-claimed', email: 'claimed@example.com' })
+		expect((await call(h, 'principals.delete', { id: claimed }, { session })).status).toBe(200)
+		const row = await h.repositories.principals.getPrincipalById(claimed)
+		expect(row).not.toBeNull()
+		expect(row?.disabled_at).not.toBeNull()
+
+		expect((await call(h, 'principals.delete', { id: 'missing' }, { session })).status).toBe(404)
+	})
+
 	test('returns API-key secrets once without exposing them from list queries', async () => {
 		const h = createHarness()
 		const session = await admin(h)

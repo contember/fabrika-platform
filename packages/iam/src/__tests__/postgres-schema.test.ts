@@ -466,10 +466,46 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(await db.sessions.revokeSessionByHash('sess-1')).toBe(true)
 		expect(await db.sessions.revokeSessionByHash('sess-1')).toBe(false)
 		expect(await db.sessions.getActiveSessionByHash('sess-1')).toBeNull()
-		expect(await db.sessions.listSessionsForPrincipal(p.id)).toHaveLength(2)
+		expect(await db.sessions.listSessionsForPrincipal(p.id, { limit: 50 })).toHaveLength(2)
 
 		expect(await db.sessions.pruneSessions(now())).toBe(2)
-		expect(await db.sessions.listSessionsForPrincipal(p.id)).toHaveLength(0)
+		expect(await db.sessions.listSessionsForPrincipal(p.id, { limit: 50 })).toHaveLength(0)
+	})
+
+	test('sessions: the operator surface — read by id, keyset page, revoke one, revoke all, cascade', async () => {
+		await reset()
+		const p = await db.principals.createUser('sub-ops', 'ops@x.cz')
+		const parent = await db.sessions.createSession({ tokenHash: 'ops-iam', principalId: p.id, idpSub: 'sub-ops', expiresAt: now() + 3600 })
+		const child = await db.sessions.createSession({
+			tokenHash: 'ops-app',
+			principalId: p.id,
+			idpSub: 'sub-ops',
+			expiresAt: now() + 3600,
+			app: 'opice',
+			parentSessionId: parent,
+		})
+		const spare = await db.sessions.createSession({ tokenHash: 'ops-spare', principalId: p.id, idpSub: 'sub-ops', expiresAt: now() + 3600 })
+
+		// The admin read returns a row whatever its state; the auth read filters.
+		expect((await db.sessions.getSessionById(child))?.parent_session_id).toBe(parent)
+		expect(await db.sessions.getSessionById('no-such-session')).toBeNull()
+
+		// Keyset page, newest first, `before` as an exclusive cursor over the UUIDv7 id.
+		const firstPage = await db.sessions.listSessionsForPrincipal(p.id, { limit: 2 })
+		expect(firstPage.map((row) => row.id)).toEqual([spare, child])
+		const rest = await db.sessions.listSessionsForPrincipal(p.id, { limit: 2, before: child })
+		expect(rest.map((row) => row.id)).toEqual([parent])
+
+		// Revoking the parent ends the derived app session WITHOUT rewriting its row.
+		expect(await db.sessions.revokeSessionById(parent)).toBe(true)
+		expect(await db.sessions.revokeSessionById(parent)).toBe(false)
+		expect(await db.sessions.getActiveSessionByHash('ops-app')).toBeNull()
+		expect((await db.sessions.getSessionById(child))?.revoked_at).toBeNull()
+		expect(await db.sessions.getActiveSessionByHash('ops-spare')).not.toBeNull()
+
+		expect(await db.sessions.revokeSessionsForPrincipal(p.id)).toBe(2)
+		expect(await db.sessions.revokeSessionsForPrincipal(p.id)).toBe(0)
+		expect(await db.sessions.getActiveSessionByHash('ops-spare')).toBeNull()
 	})
 
 	test('audit: write, filter, keyset-paginate, and prune the auth log', async () => {
