@@ -115,6 +115,13 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   `invalid_key` and the request never reaches this Worker. Machine access to `/api/*` is an
   IAM-ISSUED SERVICE KEY, which is a real credential the proxy can exchange
   (`docs/reference/human-authentication.md`).
+- **`ENVIRONMENT=local` IS REFUSED WHEN `FABRIKA_CONTROL_DOMAIN` IS NOT A LOOPBACK ORIGIN**
+  (`readEnvironmentName`, `@fabrika/auth-core`; both roots — `node/runtime.ts` at boot and
+  `controlEnv` on the Worker's first request). Control does not branch on the name today, which is
+  exactly why it must not drift: on `fabrika-test` it carried `local` while serving a public
+  `.zerops.app` host (backlog 59), so the next `=== 'local'` branch would inherit an installation
+  already claiming to be a laptop. The origin is read through `controlPublicOrigin`, so a bare host and
+  a full origin mean the same thing; stating no origin is supported and means no claim.
 - **Vault (`src/vault.ts`): envelope AES-256-GCM**, KEK from `FABRIKA_CONTROL_VAULT_KEY` (never in D1, never logged).
   Secret VALUES are write-only over the API; D1 stores only ciphertext + wrapped DEK. Losing the KEK is unrecoverable by design.
 - **Secrets resolve by ref scheme** (`src/secret-resolver.ts`): `vault:` / `secretstore:` / `env:` / `literal:`.

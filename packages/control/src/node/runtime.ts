@@ -15,10 +15,12 @@
 //   RunnerGateway→ (none — ADR-0003: there is no deploy runner off Cloudflare)
 
 import { HttpIamRpc } from '@fabrika/auth'
+import { readEnvironmentName } from '@fabrika/auth-core'
 import { createBackgroundTasks, FileSystemAssetServer, PostgresDatabase, PostgresJobQueue, S3BlobStore } from '@fabrika/platform-node'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { createControlRepositories } from '../db'
 import type { Env } from '../env'
+import { controlPublicOrigin } from '../iam'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { HttpIamAdminGateway } from './iam-admin'
 import { HttpOperationsService } from './operations'
@@ -72,7 +74,13 @@ export const DEPLOY_MAX_ATTEMPTS = 4
  */
 export function createRuntime(source: Record<string, string | undefined> = process.env): Runtime {
 	const databaseUrl = required(source, 'FABRIKA_CONTROL_DATABASE_URL')
-	const environment = required(source, 'ENVIRONMENT')
+	// The console's own public origin is the fact this root states about where it runs; `local` is
+	// refused against it. Control does not branch on the name today, and that is exactly why it must not
+	// drift — the next branch would inherit an installation already claiming to be a laptop.
+	const environment = readEnvironmentName(
+		required(source, 'ENVIRONMENT'),
+		controlPublicOrigin({ FABRIKA_CONTROL_DOMAIN: source['FABRIKA_CONTROL_DOMAIN'] }),
+	)
 
 	const config: ProcessConfig = {
 		port: parsePort(source['PORT']),

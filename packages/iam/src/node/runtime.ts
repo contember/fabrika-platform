@@ -10,6 +10,7 @@
 //   SqlDatabase → PostgresDatabase      (D1's place)
 //   WaitUntil   → createBackgroundTasks (ctx.waitUntil's place — supervised, never process-fatal)
 
+import { readEnvironmentName } from '@fabrika/auth-core'
 import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
 import { createIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
@@ -57,8 +58,10 @@ const MIN_RPC_KEY_LENGTH = 32
  */
 export function createRuntime(source: Record<string, string | undefined> = process.env): Runtime {
 	const databaseUrl = required(source, 'FABRIKA_IAM_DATABASE_URL')
-	const environment = required(source, 'ENVIRONMENT')
 	const issuer = required(source, 'ISSUER')
+	// Checked at BOOT as well as in `buildServices`: a process that comes up and then throws per request
+	// still answers `/healthz`, so the readiness probe would pass a deployment that serves nothing.
+	const environment = readEnvironmentName(required(source, 'ENVIRONMENT'), issuer)
 	const oidcEnabled = booleanValue(source, 'FABRIKA_IAM_OIDC_ENABLED', true)
 	const passwordEnabled = booleanValue(source, 'FABRIKA_IAM_PASSWORD_ENABLED', false)
 	if (!oidcEnabled && !passwordEnabled) {

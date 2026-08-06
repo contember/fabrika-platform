@@ -1,3 +1,4 @@
+import { LOCAL_ENVIRONMENT, readEnvironmentName } from '@fabrika/auth-core'
 import type { EmailSender } from '@fabrika/email'
 import { ResendEmailSender } from '@fabrika/email/resend'
 import type { IamRepositories } from './db'
@@ -97,6 +98,10 @@ function parseBootstrapAdmins(raw: string): Set<string> {
 }
 
 export function buildServices(env: Env): Services {
+	// This root's public origin IS `ISSUER`, so `local` cannot survive an IAM that mints tokens for a
+	// public name. Enforced here rather than per entrypoint because both engines pass through this
+	// function — the same reason `buildOidc` lives here.
+	const environment = readEnvironmentName(env.ENVIRONMENT, env.ISSUER)
 	const oidcEnabled = parseBooleanSwitch('OIDC_ENABLED', env.OIDC_ENABLED, true)
 	const passwordEnabled = parseBooleanSwitch('PASSWORD_ENABLED', env.PASSWORD_ENABLED, false)
 	if (!oidcEnabled && !passwordEnabled) {
@@ -115,8 +120,8 @@ export function buildServices(env: Env): Services {
 			},
 			bootstrapAdmins: parseBootstrapAdmins(env.IAM_BOOTSTRAP_ADMINS),
 			adminOrigins: parseAdminOrigins(env.ADMIN_ORIGINS),
-			environment: env.ENVIRONMENT,
-			localDevLogin: env.ENVIRONMENT === 'local' && env.LOCAL_DEV_LOGIN === 'true',
+			environment,
+			localDevLogin: environment === LOCAL_ENVIRONMENT && env.LOCAL_DEV_LOGIN === 'true',
 			authentication: {
 				oidc: { enabled: oidcEnabled },
 				password: { enabled: passwordEnabled },

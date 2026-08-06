@@ -409,4 +409,18 @@ describe('the IAM Worker environment', () => {
 
 		expect(env.EMAIL_API_KEY).toBe('private-resend-key')
 	})
+
+	// A Worker has no boot, so `local` from a public issuer fails where a Worker fails everything else:
+	// on the request. The Bun half of this witness is in fail-closed-boot.test.ts.
+	test('REFUSES ENVIRONMENT=local when the issuer it mints for is a public origin', () => {
+		const worker = makeEntrypoint(makeCtx(), { ...makeEnv(freshDb()), ISSUER: 'https://iam-abcd-3000.prg1.zerops.app' })
+
+		expect(() => worker.getJwks()).toThrow(/ENVIRONMENT=local is refused/)
+	})
+
+	test('still serves a genuinely local Worker — `wrangler dev` issues on localhost', async () => {
+		const worker = makeEntrypoint(makeCtx(), { ...makeEnv(freshDb()), ISSUER: 'http://localhost:18191' })
+
+		expect((await worker.getJwks()).keys.length).toBeGreaterThan(0)
+	})
 })

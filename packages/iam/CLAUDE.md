@@ -152,6 +152,16 @@ fails if that stops being true — it is the guard, not documentation of one.
   logout — a deletion must satisfy the same attribute rules or the browser keeps the original. It
   used to be derived from the issuer's scheme; `__Host-` removed the decision, because without
   `Secure` the browser stores nothing at all.
+- **`ENVIRONMENT=local` IS REFUSED WHEN `ISSUER` IS NOT A LOOPBACK ORIGIN** (`readEnvironmentName`,
+  `@fabrika/auth-core`). `local` is not a label — it is the one string `localDevLogin`, the ephemeral
+  signing key and the credential-less caller path are all gated on, and a live installation was
+  measured carrying it (backlog 59). What proves a process is not local is the PUBLIC ORIGIN it serves
+  on, because that value cannot be wrong quietly: it is the `iss` of every token it mints, the host
+  its `__Host-` cookie belongs to, and the address a browser is sent back to. The COMPOSITION ROOT
+  states it and shared code enforces it, the `client-address.ts` rule — and stating none is supported
+  and means no claim, never a guess. Enforced in `buildServices` (both engines, the `buildOidc` shape)
+  AND in `node/runtime.ts`, because a process that only fails per request still answers `/healthz` and
+  would pass its readiness probe.
 - **Signing keys come from `FABRIKA_IAM_SIGNING_KEYS`** (a JSON array of private JWKs). Index 0 is
   the active signer; every key is published in the JWKS so a rotation key verifies before it is
   promoted. With no keys configured an EPHEMERAL key is generated per isolate — fine for dev,

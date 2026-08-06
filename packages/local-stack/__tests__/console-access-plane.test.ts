@@ -28,6 +28,17 @@ const CONSOLE = 'http://console.example.test'
 /** IAM's public issuer. Deliberately NOT the console's origin, and not its private address either. */
 const ISSUER = 'https://iam.example.test'
 
+/**
+ * A durable ES256 signing key, because this fixture is a LIVE installation and names itself one.
+ * `ENVIRONMENT=stage` against a public issuer is the only self-consistent pair here — `local` is
+ * refused off loopback (`readEnvironmentName`), and off-local an ephemeral key is refused too. It also
+ * removes the credential-less local caller bypass as a possible explanation for anything below.
+ */
+async function signingKeys(): Promise<string> {
+	const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
+	return JSON.stringify([await crypto.subtle.exportKey('jwk', pair.privateKey)])
+}
+
 const unusedDatabase = {
 	prepare() {
 		throw new Error('database access goes through REPOSITORIES in this test')
@@ -61,9 +72,9 @@ async function stack(options: { adminOrigins: string[] }): Promise<Stack> {
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',
 		ADMIN_ORIGINS: JSON.stringify(options.adminOrigins),
-		ENVIRONMENT: 'local',
+		ENVIRONMENT: 'stage',
 		ISSUER,
-		FABRIKA_IAM_SIGNING_KEYS: '',
+		FABRIKA_IAM_SIGNING_KEYS: await signingKeys(),
 		FABRIKA_IAM_PROVISIONING_KEY: '',
 		OIDC_ISSUER: 'https://idp.test',
 		OIDC_CLIENT_ID: 'client',
@@ -71,7 +82,7 @@ async function stack(options: { adminOrigins: string[] }): Promise<Stack> {
 		OIDC_SCOPES: '',
 		OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
 	}
-	const services = harness.makeServices({ environment: 'local', issuer: ISSUER, adminOrigins: options.adminOrigins })
+	const services = harness.makeServices({ environment: 'stage', issuer: ISSUER, adminOrigins: options.adminOrigins })
 	const minted = await mintToken(services, env, { app: 'vozka', session, requestId: 'r1' })
 	if (!minted.result.ok) throw new Error(`proxy token mint failed: ${minted.result.reason}`)
 	const proxyToken = minted.result.token

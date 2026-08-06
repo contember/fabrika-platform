@@ -34,6 +34,7 @@
 	"dependencies": {
 		"@fabrika/app": "workspace:*",
 		"@fabrika/auth": "workspace:*",
+		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/engine": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",

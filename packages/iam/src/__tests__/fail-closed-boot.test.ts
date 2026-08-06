@@ -63,6 +63,32 @@ describe('process transport secrets', () => {
 	})
 })
 
+describe('the environment name', () => {
+	// The BUN/Zerops half of the witness for backlog 59 — `control` and `operations` on `fabrika-test`
+	// carried `ENVIRONMENT=local` while serving public `.zerops.app` hosts. The Cloudflare half is in
+	// index.test.ts. What proves a process is not local is the PUBLIC ORIGIN it serves on, because that
+	// is the value a misconfiguration cannot hide behind: it is the `iss` of every token it mints.
+	const base = {
+		FABRIKA_IAM_DATABASE_URL: 'postgres://user:pw@127.0.0.1:1/none',
+		FABRIKA_IAM_OIDC_ENABLED: 'false',
+		FABRIKA_IAM_PASSWORD_ENABLED: 'true',
+	}
+
+	test('a process serving a PUBLIC issuer refuses to boot as `local`', () => {
+		expect(() => createRuntime({ ...base, ENVIRONMENT: 'local', ISSUER: 'https://iam-abcd-3000.prg1.zerops.app' }))
+			.toThrow(/ENVIRONMENT=local is refused/)
+	})
+
+	test('the local stack still boots — it serves `*.fabrika.localhost`', () => {
+		// If this breaks, `bun run local:up` breaks with it. The issuer is compose.yaml's, verbatim.
+		expect(createRuntime({ ...base, ENVIRONMENT: 'local', ISSUER: 'http://iam.fabrika.localhost:18080' }).env.ENVIRONMENT).toBe('local')
+	})
+
+	test('a named installation on the same public issuer boots — the rule is about `local` alone', () => {
+		expect(createRuntime({ ...base, ENVIRONMENT: 'stage', ISSUER: 'https://iam-abcd-3000.prg1.zerops.app' }).env.ENVIRONMENT).toBe('stage')
+	})
+})
+
 describe('timingSafeEqualHex', () => {
 	test('equal digests compare equal', async () => {
 		const digest = await hashToken('px_a-real-looking-credential')

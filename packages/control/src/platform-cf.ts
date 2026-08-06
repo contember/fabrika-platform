@@ -9,12 +9,14 @@
 // The runner is not a core port: it is consumed only while composing the Cloudflare provider below.
 
 import type { IamRpc } from '@fabrika/auth'
+import { readEnvironmentName } from '@fabrika/auth-core'
 import type { BlobStore, HttpService, JobQueue } from '@fabrika/platform'
 import { type CloudflareRunnerJob, createCloudflareControlProvider } from '@fabrika/provider-cloudflare'
 import type { ControlProvider, ProviderSource, ProviderTerminalOutcome } from '@fabrika/provider-contract'
 import type { VozkaRunner } from '@fabrika/runner-cloudflare'
 import { createControlRepositories } from './db'
 import type { Env } from './env'
+import { controlPublicOrigin } from './iam'
 import type { DeployJobMessage } from './run-lifecycle'
 import { repoSource } from './services'
 
@@ -64,6 +66,9 @@ export function cloudflareIamControlOptions(
 export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL']): Env {
 	return {
 		...bindings,
+		// The Worker's equivalent of the process's boot check: a Worker has no boot, so the first request
+		// is where a `local` claim from a publicly-served console fails. Same shape as IAM's `buildOidc`.
+		ENVIRONMENT: readEnvironmentName(bindings.ENVIRONMENT, controlPublicOrigin(bindings)),
 		DB: bindings.DB,
 		REPOSITORIES: createControlRepositories(bindings.DB),
 		ASSETS: bindings.ASSETS,
