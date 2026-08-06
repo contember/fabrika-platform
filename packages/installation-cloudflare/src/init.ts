@@ -9,13 +9,27 @@
  * into `.env`, `gh` over stdin, and child env — never through `log.ts`.
  */
 
+import {
+	action,
+	configureEnvironment,
+	confirm,
+	detail,
+	info,
+	ok,
+	retry,
+	secret,
+	secretOrEnv,
+	select,
+	step,
+	text,
+	triggerPlatformWorkflow,
+	url,
+	warn,
+} from '@fabrika/installation-init'
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto'
 import { findZone, listZones, resolveAccountId, verifyToken } from './cloudflare'
 import { fromEnv, persistEnv } from './envfile'
-import { configureEnvironment, triggerPlatformWorkflow } from './environment'
 import { createAppViaManifest, type CreatedGitHubApp, promptInstall } from './github-app'
-import { action, detail, info, ok, step, url, warn } from './log'
-import { confirm, retry, secret, secretOrEnv, select, text } from './prompt'
 import { defaultCheckoutDir, readFabrikaRef, scaffoldPlatformRepo } from './scaffold'
 
 /** Everything collected before the scaffold + environment write. */

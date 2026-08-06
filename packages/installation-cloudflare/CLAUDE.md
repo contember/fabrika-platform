@@ -16,16 +16,18 @@ engine lives in `@fabrika/engine`.
 - `index.ts` — module surface consumed by `@fabrika/cli`.
 - `init.ts` — the orchestrator: CF token → account/zones → smart-default prompts → vault key → provisioning
   key → GitHub App → scaffold repo → GitHub Environment → trigger.
-- `scaffold.ts` — create/refresh `<org>/fabrika-platform` from `templates/` (`platform.yml`, `fabrika.ref`,
-  `README.md`, `gitignore`), commit + push. Idempotent.
-- `environment.ts` — create the GitHub Environment + write its secrets/vars (`gh secret/variable set --env`).
+- `scaffold.ts` — which files `<org>/fabrika-platform` carries (`templates/`: `platform.yml`, `fabrika.ref`,
+  `README.md`, `gitignore`) and the legacy two-ref migration that must stop a refresh. The
+  create/clone/commit/push mechanics are `@fabrika/installation-init`'s.
 - `github-app.ts` — the GitHub App manifest flow (PUBLIC when installed cross-org; see below).
-- `cloudflare.ts` / `gh.ts` — CF API + `gh` CLI helpers. `prompt.ts` / `log.ts` / `shell.ts` / `envfile.ts`
-  / `narrow.ts` — TTY, formatting, child-process, `.env` resume, runtime JSON narrowing.
+- `cloudflare.ts` — CF API helpers. `envfile.ts` / `narrow.ts` — `.env` resume, runtime JSON narrowing.
+- TTY prompts, console formatting, child processes, `gh`, and the GitHub Environment write live in
+  **`@fabrika/installation-init`**, shared with `@fabrika/installation-zerops`. The two inits are not
+  mirror images (ADR-0027) — only the mechanics are shared, never the flow.
 
 ## Invariants
 
-- **NEVER print a secret VALUE.** `log.ts` has no helper that takes one. The single intentional exception is
+- **NEVER print a secret VALUE.** `@fabrika/installation-init`'s `log.ts` has no helper that takes one. The single intentional exception is
   the vault KEK, printed ONCE (the operator must capture it — unrecoverable if lost). Secret values flow only
   into `.env`, `gh` over stdin, and the GitHub Environment.
 - **Idempotent + resumable.** Every captured value persists to `.env` (Bun auto-loads it next run); a re-run

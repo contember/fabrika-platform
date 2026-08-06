@@ -3,15 +3,19 @@
 The Zerops implementation of `@fabrika/installation-contract` plus the typed
 platform topology and generated installation artifacts.
 
-Two public commands. `fabrika platform plan --provider=zerops` validates the
+Three public commands. `fabrika platform plan --provider=zerops` validates the
 generated artifacts against Zerops' published schemas. `fabrika platform deploy
 --provider=zerops` brings an EXISTING installation to this checkout, unattended
 and idempotently — the full surface is in the `usage` string in `src/index.ts`,
-which is also what backlog 62 generates the operator's workflow from.
+which is also what the generated workflow is written against. `fabrika platform
+init --provider=zerops <installation>` creates and maintains the operator's
+sidecar repository that calls it.
 
-`platform init` is deliberately absent: the first bring-up (import the topology
-without code → write every secret → deploy) is still a hand step, and `deploy`
-updates an installation rather than creating one.
+**Neither `init` nor `deploy` creates an installation.** The first bring-up
+(import the topology without code → write every secret → deploy once, so the proxy
+has HTTP ports and therefore a public address) is still a hand sequence: before it,
+`zeropsSubdomain` names nothing, so the manifest — which has to be written before
+the proxy is built — has no hosts to carry.
 
 **On Zerops `platform deploy` owns the WHOLE ordered sequence; on Cloudflare it
 stays narrow and the scaffolded workflow keeps the order.** That asymmetry is
@@ -22,6 +26,8 @@ and is deliberate — someone reading only one path will guess wrong about the o
 
 - `src/index.ts` — exported `installationCli`, the `usage` text, and the real collaborators.
 - `src/deploy.ts` — the ordered deploy sequence. `src/deploy-options.ts` — its flags and variables.
+- `src/init.ts` — the sidecar-repository flow, its prompts and its confirmed outward steps.
+- `src/sidecar.ts` — what the sidecar repository contains + the tag rule. `src/templates/` — its four files.
 - `src/manifest.ts` — composing the platform's apps with an installation's application entries.
 - `src/hosts.ts` — where one installation answers. `src/log.ts` — progress, with no secret-taking helper.
 - `src/proxy-manifest.ts` — the proxy manifest TEMPLATE type and `resolvePlatformProxyManifest`.
@@ -57,6 +63,24 @@ and is deliberate — someone reading only one path will guess wrong about the o
   from the environment.** There is no `--token` and no `--admin-key`; an unknown
   flag is an error precisely so one cannot arrive on a command line. Every secret
   an installation holds is placed at bring-up.
+- **`platform init` GENERATES no credential and persists none.** Both Environment
+  secrets already belong to the installation (the operator's Zerops integration
+  token, and the `px_` provisioning key IAM was seeded with), so a value invented
+  here would not be one the installation accepts. They are read from a hidden
+  prompt or the environment, sent to GitHub over `gh` stdin, and — unlike the
+  Cloudflare init — never written to a `.env`.
+- **`init` confirms before every step that leaves the operator's disk**: creating
+  the repository, pushing it, writing the Environment, triggering the run.
+  Declining stops the outward steps and prints what to run; a re-run is safe.
+- **The sidecar pin is a published TAG and a branch is refused twice** — by
+  `assertPinnedTag` when init writes `fabrika.ref`, and by the generated workflow
+  at run time, because that file is operator-owned afterwards. What the tag pins is
+  what the pipeline DOES; it does not pin the revision Zerops BUILDS, because a
+  Zerops build source names a repository and not a revision. The generated README
+  says so; do not quietly imply otherwise.
+- **The sidecar Environment holds no admission list.** No bootstrap-admin variable
+  is written, because the deploy neither reads nor writes one — so there is no
+  escape hatch here for an operator to remember to close later.
 - **Every write is read-compare-write, so a re-run changes nothing.** `GET
   /service-stack/{id}/env` works on every service (`docs/reference/zerops-platform.md`),
   which is what makes the comparison possible; `putServiceEnv` stays write-first

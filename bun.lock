@@ -219,6 +219,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@fabrika/installation-contract": "workspace:*",
+        "@fabrika/installation-init": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
       },
       "devDependencies": {
@@ -229,6 +230,13 @@
       "name": "@fabrika/installation-contract",
       "version": "0.0.1",
     },
+    "packages/installation-init": {
+      "name": "@fabrika/installation-init",
+      "version": "0.0.1",
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
     "packages/installation-zerops": {
       "name": "@fabrika/installation-zerops",
       "version": "0.0.1",
@@ -236,6 +244,7 @@
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/installation-contract": "workspace:*",
+        "@fabrika/installation-init": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
@@ -634,6 +643,8 @@
     "@fabrika/installation-cloudflare": ["@fabrika/installation-cloudflare@workspace:packages/installation-cloudflare"],
 
     "@fabrika/installation-contract": ["@fabrika/installation-contract@workspace:packages/installation-contract"],
+
+    "@fabrika/installation-init": ["@fabrika/installation-init@workspace:packages/installation-init"],
 
     "@fabrika/installation-zerops": ["@fabrika/installation-zerops@workspace:packages/installation-zerops"],
 

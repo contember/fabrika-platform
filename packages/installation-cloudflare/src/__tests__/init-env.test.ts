@@ -1,6 +1,6 @@
+import { action } from '@fabrika/installation-init'
 import { describe, expect, spyOn, test } from 'bun:test'
 import { ensureVaultKey, readInstallerAuthMethods, readInstallerEmailProvider, readResumeValue } from '../init'
-import { action } from '../log'
 
 const RESUMED_NAMES: readonly string[] = [
 	'FABRIKA_CONTROL_VAULT_KEY',

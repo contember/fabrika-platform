@@ -2,18 +2,19 @@ import { describe, expect, test } from 'bun:test'
 import { installationCli } from '..'
 
 describe('Zerops installation capability', () => {
-	test('offers plan and deploy; the first bring-up is still a hand step', () => {
-		expect(installationCli.commands).toEqual(['plan', 'deploy'])
-		expect(installationCli.usage).toContain('`platform init` is not available for Zerops')
+	test('offers init, plan and deploy; neither of them creates an installation', () => {
+		expect(installationCli.commands).toEqual(['init', 'plan', 'deploy'])
+		expect(installationCli.usage).toContain('UPDATE AN INSTALLATION THAT ALREADY EXISTS')
 	})
 
-	test('rejects a direct init call', async () => {
-		await expect(installationCli.run('init', [])).rejects.toThrow('does not support `platform init`')
+	test('init names one installation and refuses anything that could carry a credential', async () => {
+		await expect(installationCli.run('init', [])).rejects.toThrow('requires an installation name')
+		await expect(installationCli.run('init', ['test', '--token=nope'])).rejects.toThrow('unexpected argument')
 	})
 
 	test('the usage text documents the surface a generated pipeline is written against', () => {
-		// Backlog 62 generates the operator's workflow FROM this text; a flag or a variable missing here is
-		// a workflow that cannot be written without reading the source.
+		// The sidecar workflow is generated FROM this text; a flag or a variable missing here is a workflow
+		// that cannot be written without reading the source. `sidecar.test.ts` checks the other direction.
 		for (const flag of ['--project-id', '--env', '--iam-host', '--console-host', '--operations-host', '--from-git', '--dry-run']) {
 			expect(installationCli.usage).toContain(flag)
 		}

@@ -19,6 +19,7 @@ const EXPECTED_PUBLIC_PACKAGES = [
 	'@fabrika/iam-contract',
 	'@fabrika/installation-cloudflare',
 	'@fabrika/installation-contract',
+	'@fabrika/installation-init',
 	'@fabrika/installation-zerops',
 	'@fabrika/operations',
 	'@fabrika/operations-contract',

@@ -15,7 +15,8 @@ root. Shared code receives that provider explicitly.
 | `@fabrika/control`                 | Provider-neutral registry, persistence, queue semantics, locking, run status, secret resolution, and HTTP API.                      |
 | `@fabrika/installation-contract`   | Open platform `init`, `plan`, and `deploy` command contract.                                                                        |
 | `@fabrika/installation-cloudflare` | Cloudflare account bootstrap and platform deployment composition.                                                                   |
-| `@fabrika/installation-zerops`     | Zerops platform topology, generated artifacts, and plan validation.                                                                 |
+| `@fabrika/installation-zerops`     | Zerops platform topology, generated artifacts, plan validation, and the ordered platform deploy.                                    |
+| `@fabrika/installation-init`       | The operator-side `platform init` mechanics both installation packages share: prompts, `gh`, and the sidecar scaffold.              |
 
 `@fabrika/platform` is a separate boundary. It describes host-runtime
 capabilities such as SQL, queues, blobs, locks, assets, and background work. A
@@ -203,14 +204,24 @@ checkpointed lifecycle.
 fabrika platform init --provider=cloudflare <account>
 fabrika platform plan --provider=cloudflare --runner-config=<path> --worker-config=<path>
 fabrika platform deploy --provider=cloudflare --runner-config=<path> --worker-config=<path>
+fabrika platform init --provider=zerops <installation> [--repo=<owner>/<name>]
 fabrika platform plan --provider=zerops
+fabrika platform deploy --provider=zerops [options]
 ```
 
-Cloudflare supports all three installation operations. Zerops currently supports
-only mutation-free `plan`, which validates the generated installation artifacts;
-real-account `init` and `deploy` stay unavailable until that path is exercised.
-The CLI maps the official `cloudflare` and `zerops` ids to their installation
-packages and treats any other provider value as an importable package specifier.
+Both providers support all three operations, and **how wide each one is, is the
+provider's own answer** ([ADR-0027](../decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)).
+Zerops' `plan` is mutation-free and validates the generated installation
+artifacts. Its `deploy` owns the whole ordered sequence, while Cloudflare's
+composes the runner/control pair and the scaffolded workflow keeps the order. Its
+`init` creates and maintains the operator's sidecar repository for an installation
+that already exists; on Zerops the first bring-up (import the topology without
+code, write every secret, deploy once) remains a hand sequence, because a proxy
+that has never been deployed publishes no hostname for the manifest to carry.
+`fabrika platform <command> --provider=<name> --help` prints the installation's own
+surface. The CLI maps the official `cloudflare` and `zerops` ids to their
+installation packages and treats any other provider value as an importable package
+specifier.
 
 For app commands, provider selection comes from the default-exported
 provider-authored config. An explicit `--provider` is required only when no app

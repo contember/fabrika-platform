@@ -67,6 +67,7 @@ packages/
   platform platform-node          # runtime PORTS · the Postgres/S3/Bun implementation set
   provider-{contract,cloudflare,zerops}       # authoring, deploy, and control per cloud
   installation-{contract,cloudflare,zerops}   # `fabrika platform init/plan/deploy` per cloud
+  installation-init               # the operator-side `init` mechanics both installations share
   runner-{contract,container,cloudflare}      # the Cloudflare out-of-band deploy executor
   proxy-core proxy proxy-contract  # the auth enforcement decision · its Caddy deployment · the wire contract
   cli email local-stack           # the `fabrika` command · outbound email · the Docker dev stack
@@ -130,7 +131,8 @@ contract note (`*-contract`), the substantial ones are:
   for its SQL and migration rules) · `packages/engine/` — the provider-neutral executor.
 - `packages/platform/` + `packages/platform-node/` — the runtime ports and their Postgres/S3/Bun
   implementations · `packages/provider-cloudflare/` + `packages/provider-zerops/` — the provider bundles.
-- `packages/installation-cloudflare/` + `packages/installation-zerops/` — platform installation ·
+- `packages/installation-cloudflare/` + `packages/installation-zerops/` — platform installation, each
+  generating the operator's own sidecar repository over the shared `packages/installation-init/` ·
   `packages/cli/` — command routing and provider inference.
 - `packages/proxy-core/` — the enforcement decision, public and runtime-neutral · `packages/proxy/` —
   its Caddy deployment, private because it is an artifact · `packages/operations/` + `packages/operations-ui/` —

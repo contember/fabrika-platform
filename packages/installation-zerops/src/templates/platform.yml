@@ -1,0 +1,126 @@
+name: platform
+
+# Deploys the {{INSTALLATION}} fabrika installation on Zerops. THIS repository is the per-installation
+# root of trust: it holds the account's credentials, so the platform never deploys itself (ADR-0025).
+#
+# IT UPDATES AN INSTALLATION THAT ALREADY EXISTS — it never creates one. The first bring-up (import the
+# topology without code, write every secret, then deploy) is still performed by hand; see the README.
+#
+# ONE step, deliberately. On Zerops `fabrika platform deploy` owns the whole ordered sequence: resolve
+# the project and its services, write every service's environment (including the composed proxy
+# manifest), deploy iam -> operations -> proxy -> control waiting for each, reconcile the console's app
+# schema, and ensure the public entry point. That order carries a security property — since ADR-0022 the
+# application enforces nothing, so the enforcement point is deployed BEFORE the service whose gates just
+# widened — and it therefore lives in code with a test rather than in this file, which an operator owns
+# and may edit (ADR-0027). The Cloudflare sidecar keeps three steps here; the asymmetry is deliberate.
+#
+# Generated and maintained by `fabrika platform init --provider=zerops {{INSTALLATION}}`. Secrets and
+# variables live in the `{{INSTALLATION}}` GitHub Environment (Settings -> Environments -> {{INSTALLATION}})
+# and are written there by that command — do not hand-edit them.
+#
+# contember/fabrika-platform is public and checked out tokenless at the TAG pinned in `fabrika.ref`.
+# Bump that tag and push to roll this installation forward.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >-
+          Read the installation and report what would change, writing nothing and deploying nothing.
+          The safe first run after an Environment edit.
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    # Only a version bump (or a workflow edit) redeploys — not a README tweak.
+    paths: ['fabrika.ref', '.github/workflows/platform.yml']
+
+concurrency:
+  group: platform-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Four builds, one after another: ~15 minutes with a warm cache. The command itself polls each build
+    # for up to 70 minutes (Zerops caps a pipeline at one hour), so this is the outer guard, not the gate.
+    timeout-minutes: 90
+    # Secrets + variables resolve from this GitHub Environment (created + populated by `fabrika platform init`).
+    environment: {{INSTALLATION}}
+    steps:
+      - name: Checkout this repository (the pinned ref and this workflow)
+        uses: actions/checkout@v5
+
+      - name: Resolve the pinned fabrika tag
+        id: ref
+        # A published TAG, never a branch. A namespace proxy and an installation both build from tags, so
+        # a moving ref would make "which version is this installation running" unanswerable (ADR-0025).
+        run: |
+          ref="$(tr -d '[:space:]' < fabrika.ref)"
+          case "$ref" in
+            v[0-9]*) ;;
+            *)
+              echo "fabrika.ref must pin a published tag such as v0.1.0, not '$ref'." >&2
+              exit 1
+              ;;
+          esac
+          echo "fabrika=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout contember/fabrika-platform@${{ steps.ref.outputs.fabrika }}
+        uses: actions/checkout@v5
+        with:
+          repository: contember/fabrika-platform
+          ref: ${{ steps.ref.outputs.fabrika }}
+          path: fabrika-platform
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install fabrika
+        working-directory: fabrika-platform
+        run: bun install --frozen-lockfile
+
+      - name: Put the fabrika workspace bin on PATH
+        working-directory: fabrika-platform
+        run: echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Deploy the platform
+        id: platform
+        working-directory: fabrika-platform
+        env:
+          # ── Credentials ──────────────────────────────────────────────────────────────────────────────
+          # `platform deploy` reads every credential from the environment and offers no flag for one, so
+          # none of these can reach a CI log line or a process listing. It writes no credential either.
+          FABRIKA_ZEROPS_ACCESS_TOKEN: ${{ secrets.FABRIKA_ZEROPS_ACCESS_TOKEN }}
+          FABRIKA_IAM_PROVISIONING_KEY: ${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}
+          # ── Which installation ───────────────────────────────────────────────────────────────────────
+          # An empty variable is treated as absent, so an unset optional one below changes nothing.
+          FABRIKA_ZEROPS_PROJECT_ID: ${{ vars.FABRIKA_ZEROPS_PROJECT_ID }}
+          FABRIKA_PLATFORM_ENVIRONMENT: ${{ vars.FABRIKA_PLATFORM_ENVIRONMENT }}
+          FABRIKA_PLATFORM_SCHEME: ${{ vars.FABRIKA_PLATFORM_SCHEME }}
+          # All three, or none. None derives them from the proxy's Zerops subdomains and publishes one;
+          # all three make this a custom-domain installation and publish nothing.
+          FABRIKA_PLATFORM_IAM_HOST: ${{ vars.FABRIKA_PLATFORM_IAM_HOST }}
+          FABRIKA_PLATFORM_CONSOLE_HOST: ${{ vars.FABRIKA_PLATFORM_CONSOLE_HOST }}
+          FABRIKA_PLATFORM_OPERATIONS_HOST: ${{ vars.FABRIKA_PLATFORM_OPERATIONS_HOST }}
+          # Where Zerops builds the SERVICE code from. Read the README before changing it: this URL
+          # selects a repository, NOT a revision.
+          FABRIKA_ZEROPS_BUILD_FROM_GIT: ${{ vars.FABRIKA_ZEROPS_BUILD_FROM_GIT }}
+          # Only for an installation outside the default region.
+          FABRIKA_ZEROPS_API_URL: ${{ vars.FABRIKA_ZEROPS_API_URL }}
+        run: fabrika platform deploy --provider=zerops ${{ inputs.dry_run && '--dry-run' || '' }}
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### platform deploy → {{INSTALLATION}} (zerops)"
+            echo ""
+            echo "- fabrika tag: \`${{ steps.ref.outputs.fabrika || '(unresolved)' }}\`"
+            echo "- mode: \`${{ inputs.dry_run && 'dry-run' || 'deploy' }}\`"
+            echo "- platform deploy: \`${{ steps.platform.outcome || 'not run' }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

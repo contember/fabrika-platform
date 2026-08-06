@@ -5,17 +5,49 @@ import { generatedArtifacts } from '../zerops/artifacts'
 import { assertArtifactMatchesSchema } from '../zerops/validate'
 import { deployPlatform, PLATFORM_DEPLOY_ORDER } from './deploy'
 import { parsePlatformDeployArgs } from './deploy-options'
+import { consoleInitCollaborators, parseInitArgs, runInit } from './init'
 import { consoleDeployLog } from './log'
 
 const USAGE = `Zerops installation
 
 Commands:
+  fabrika platform init   --provider=zerops <installation> [--repo=<owner>/<name>]
   fabrika platform plan   --provider=zerops
   fabrika platform deploy --provider=zerops [options]
 
-\`platform init\` is not available for Zerops: the first bring-up (import the topology without code,
-write every secret, then deploy) is still performed by hand. \`platform deploy\` updates an
-installation that already exists; it never creates one.
+Both commands UPDATE AN INSTALLATION THAT ALREADY EXISTS; neither creates one. The first bring-up
+(import the topology without code, write every secret, then deploy once so the proxy has HTTP ports)
+is still performed by hand: before that first deploy the proxy publishes no hostname, so nothing can
+name the addresses the manifest has to carry.
+
+── platform init ─────────────────────────────────────────────────────────────────────────────────
+
+Creates and maintains the operator's SIDECAR REPOSITORY: the GitHub pipeline that calls
+\`platform deploy\`, the tag it is pinned to, and the GitHub Environment holding this installation's
+credentials. ADR-0025 puts that pipeline in a repository the operator owns — fabrika ships the
+generator, never the pipeline, because one public repository cannot hold every account's credentials.
+
+Interactive and laptop-side. It does the whole job and CONFIRMS before every step that leaves the
+operator's disk: creating the repository, pushing it, writing the Environment, triggering the run.
+Declining any of them stops there and prints what to run instead; a re-run is safe.
+
+  <installation>                    names this installation: the GitHub Environment, the default
+                                    repository \`contember/fabrika-zerops-<installation>\`, and the
+                                    local checkout directory
+  --repo=<owner>/<name>             a different sidecar repository
+
+It writes TWO secrets into that Environment and GENERATES NEITHER — both already belong to the
+installation, so a value invented here would not be one it accepts:
+
+  FABRIKA_ZEROPS_ACCESS_TOKEN       a Zerops INTEGRATION token scoped to this installation's projects
+  FABRIKA_IAM_PROVISIONING_KEY      the px_ admin key this installation's IAM was seeded with
+
+Each is read from a hidden prompt or from the environment variable of the same name, sent to GitHub
+over \`gh\` stdin, and never printed and never written to disk.
+
+The generated pipeline pins a published TAG of contember/fabrika-platform and refuses a branch, at
+init and again in the workflow. That tag decides what the pipeline DOES; it does not decide which
+revision Zerops BUILDS, because a Zerops build source names a repository and not a revision.
 
 ── platform deploy ───────────────────────────────────────────────────────────────────────────────
 
@@ -107,9 +139,13 @@ const runDeploy = async (argv: readonly string[]): Promise<void> => {
 
 export const installationCli: InstallationCli = {
 	provider: 'zerops',
-	commands: ['plan', 'deploy'],
+	commands: ['init', 'plan', 'deploy'],
 	usage: USAGE,
 	run: async (command: InstallationCommand, argv: readonly string[]) => {
+		if (command === 'init') {
+			await runInit(parseInitArgs(argv), consoleInitCollaborators())
+			return
+		}
 		if (command === 'plan') {
 			runPlan(argv)
 			return

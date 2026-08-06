@@ -64,13 +64,11 @@ describe('runtime module validation', () => {
 })
 
 describe('installation capabilities', () => {
-	test('keeps the Zerops first bring-up out of the CLI, and routes `platform deploy` to the provider', async () => {
-		// Zerops offers `plan` and `deploy`; `init` is still a hand step (ADR-0027's split, and the
-		// installation's own usage text says so). A rejected `deploy` here comes from the PROVIDER's own
-		// argument parsing, which is what proves the routing reached it rather than stopping in the CLI.
-		await expect(runCli(['platform', 'init', '--provider=zerops'])).rejects.toThrow(
-			'zerops installation does not support `platform init`',
-		)
+	test('routes every Zerops platform command to the provider, argument parsing included', async () => {
+		// Each rejection below comes from the INSTALLATION's own argument parsing, not from this router —
+		// which is what proves the routing reached it. `init` scaffolds the operator's sidecar repository
+		// and `deploy` runs the whole ordered sequence; neither creates an installation.
+		await expect(runCli(['platform', 'init', '--provider=zerops'])).rejects.toThrow('requires an installation name')
 		await expect(runCli(['platform', 'deploy', '--provider=zerops'])).rejects.toThrow('FABRIKA_ZEROPS_PROJECT_ID')
 	})
 

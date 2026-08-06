@@ -8,9 +8,9 @@
  * trusting any field.
  */
 
+import { required, select } from '@fabrika/installation-init'
 import { fromEnv } from './envfile'
 import { isRecord, prop, stringProp } from './narrow'
-import { required, select } from './prompt'
 
 const CF_API = 'https://api.cloudflare.com/client/v4'
 

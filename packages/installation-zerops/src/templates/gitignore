@@ -1,0 +1,3 @@
+# `fabrika platform init --provider=zerops` writes no credential to disk. Nothing generated here needs
+# to be ignored — this entry exists so a stray local .env can never be committed by accident.
+.env

@@ -10,9 +10,8 @@
  * non-secret and safe to print.
  */
 
+import { action, detail, hasGhCli, info, ok, url } from '@fabrika/installation-init'
 import { randomBytes } from 'node:crypto'
-import { hasGhCli } from './gh'
-import { action, detail, info, ok, url } from './log'
 import { numberProp, stringProp } from './narrow'
 
 /** What the manifest conversion yields. `pem` + `webhookSecret` are secrets; the rest are public. */
