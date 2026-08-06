@@ -126,3 +126,4 @@ together with 0022 and 0023.
 - [0024](0024-retire-the-legacy-environment-name-fallback.md) — Retire the legacy environment-name fallback; canonical names only (supersedes 0018) — accepted (2026-08-05)
 - [0025](0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) — The operator installs the platform; fabrika deploys only apps — accepted (2026-08-06)
 - [0026](0026-bind-session-handoffs-to-the-browser.md) — Bind session handoffs to the browser that started them (amends 0022 and 0023) — accepted (2026-08-06)
+- [0027](0027-platform-deploy-is-as-wide-as-the-provider-needs.md) — `platform deploy` is as wide as its provider needs, not uniformly wide — accepted (2026-08-06)

@@ -119,8 +119,9 @@ is why they are WUs here rather than separate items.
    deploy from — a Zerops deploy is `triggerPipeline` against a service id with a setup name. And the
    proxy manifest must be regenerated and applied in the same run as the code it describes, which is
    cross-service state that no single pipeline step owns cleanly. Backlog 61's "the contract owning
-   the order" is superseded by this. **Write an ADR for it** — it constrains 62 and 63 and rejects the
-   mirror-Cloudflare alternative.
+   the order" is superseded by
+   [ADR-0027](../decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md), which records
+   this and the two alternatives it rejects.
 2. **`init` and `deploy` stay separate, and the split is the one Cloudflare already ships**
    (`installation-cloudflare/src/init.ts` header): `init` is interactive, one-time and laptop-side —
    collect credentials, create the GitHub App, scaffold the sidecar repository, write the Environment,

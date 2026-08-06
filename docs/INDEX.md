@@ -26,9 +26,14 @@ handoff amendment.
 
 ## Active sprints
 
-None. The install paths [ADR-0025](decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md)
-commits to are filed as backlog [`61`](backlog/61-make-platform-deploy-an-unattended-command.md),
-[`62`](backlog/62-generate-the-operators-sidecar-install-repository.md) and
+[`zerops-platform-deploy`](sprints/sprint-2026-08-06-zerops-platform-deploy.md) — an unattended
+`fabrika platform deploy --provider=zerops`, as wide as
+[ADR-0027](decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md) makes it. Consumes
+backlog [`58`](backlog/58-generate-the-platform-installations-proxy-manifest.md),
+[`59`](backlog/59-the-live-installation-calls-itself-local.md) and
+[`61`](backlog/61-make-platform-deploy-an-unattended-command.md); the other install paths
+[ADR-0025](decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) commits to stay
+filed as [`62`](backlog/62-generate-the-operators-sidecar-install-repository.md) and
 [`63`](backlog/63-a-one-click-install-from-the-public-repository.md).
 
 Two auth sprints shipped on 2026-08-05 —
