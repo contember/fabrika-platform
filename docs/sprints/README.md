@@ -19,7 +19,11 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-_None._ The install paths ADR-0025 commits to are filed as backlog
-[`61`](../backlog/61-make-platform-deploy-an-unattended-command.md),
-[`62`](../backlog/62-generate-the-operators-sidecar-install-repository.md) and
-[`63`](../backlog/63-a-one-click-install-from-the-public-repository.md).
+- [`sprint-2026-08-06-zerops-platform-deploy`](sprint-2026-08-06-zerops-platform-deploy.md) —
+  an unattended `platform deploy` on Zerops. Consumes backlog
+  [`58`](../backlog/58-generate-the-platform-installations-proxy-manifest.md),
+  [`59`](../backlog/59-the-live-installation-calls-itself-local.md) and
+  [`61`](../backlog/61-make-platform-deploy-an-unattended-command.md); the remaining install paths
+  ADR-0025 commits to stay filed as
+  [`62`](../backlog/62-generate-the-operators-sidecar-install-repository.md) and
+  [`63`](../backlog/63-a-one-click-install-from-the-public-repository.md).
