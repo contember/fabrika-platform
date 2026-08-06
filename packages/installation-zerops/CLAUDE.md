@@ -11,8 +11,10 @@ real credentials.
 ## Layout
 
 - `src/index.ts` — exported `installationCli`.
+- `src/proxy-manifest.ts` — the proxy manifest TEMPLATE type and `resolvePlatformProxyManifest`.
 - `zerops/setups.ts` — typed IAM, Operations, control, and proxy setup definitions.
 - `zerops/topology.ts` — project and service topology.
+- `zerops/proxy-manifest.ts` — the three fronted apps and their gates. **Dev-time only.**
 - `zerops/render.ts` — generated artifact writer and `--check` verifier.
 - `zerops/generated/` — committed installation artifacts.
 - `zerops/schemas/` — pinned published schemas and refresh script.
@@ -37,6 +39,17 @@ real credentials.
   without a live observation.
 - A PostgreSQL URL is always
   `${<host>_connectionString}/${<host>_dbName}?sslmode=require`.
+- **`zerops/proxy-manifest.ts` and `zerops/render.ts` are EXCLUDED from the published `files`, and that
+  is load-bearing.** Both import `@fabrika/control` — a PRIVATE package — through a devDependency, so
+  shipping either would put an unresolvable import in the tarball. What ships instead is
+  `src/proxy-manifest.ts` (types + resolver) and `zerops/generated/platform-proxy-manifest.ts` (the gate
+  sets, as data). A deploy command must read those two and never reach the generator; if you add a file
+  here that imports a devDependency, exclude it in the same change.
+- **The proxy manifest is split into a committed template and a deploy-time placement.** The template
+  is installation-independent (ids, upstreams, listener ports, gates) and `gen:check` proves it still
+  matches the gate modules. Hosts and scheme are one installation's, so they are arguments. A
+  `ProxyManifest` cannot carry the template alone — `parseProxyManifest` refuses an app with no hosts —
+  which is why the template is a type of its own rather than a manifest with the hosts left empty.
 - `enableSubdomainAccess` in a generated artifact is a DECLARATION, never a mechanism: the platform
   accepts it and drops it. Applying a `zerops-subdomain` artifact publishes nothing until an operator
   calls `PUT /service-stack/{id}/enable-subdomain-access` on the deployed proxy, and the artifact's

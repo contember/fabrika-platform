@@ -1,6 +1,7 @@
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { applicableGates, compileGates } from '@fabrika/proxy-core'
 import { describe, expect, test } from 'bun:test'
+import { PLATFORM_CONSOLE_APP_ID, PLATFORM_IAM_APP_ID } from '../../../installation-zerops/zerops/proxy-manifest'
 import { localPlatformProxyManifest } from '../prepare'
 
 /** The first matching rule decides when its credential is present, so this is the effective verdict. */
@@ -27,7 +28,7 @@ describe('local Operations topology', () => {
 
 describe('local control topology', () => {
 	test('the console is fronted by a human gate and opens only health and the webhook', () => {
-		const control = localPlatformProxyManifest().apps.find((app) => app.id === 'vozka')
+		const control = localPlatformProxyManifest().apps.find((app) => app.id === PLATFORM_CONSOLE_APP_ID)
 		expect(control).toBeDefined()
 		if (control === undefined) return
 		const gates = compileGates(control.gates)
@@ -49,7 +50,7 @@ describe('local control topology', () => {
 
 describe('local IAM topology', () => {
 	test('IAM is public at the proxy because it authenticates itself', () => {
-		const iam = localPlatformProxyManifest().apps.find((app) => app.id === 'iam-local')
+		const iam = localPlatformProxyManifest().apps.find((app) => app.id === PLATFORM_IAM_APP_ID)
 		expect(iam).toBeDefined()
 		if (iam === undefined) return
 		const gates = compileGates(iam.gates)

@@ -7,12 +7,15 @@
 // `gen:check` is redundant with the drift test in `__tests__/artifacts.test.ts` and exists anyway: it is
 // the form a CI step or a pre-commit hook wants, and it needs no test runner.
 //
-// Every document is validated against Zerops' published JSON schema before it is written. A generator
-// that can emit an invalid document is a generator whose output has to be checked by hand.
+// Every Zerops document is validated against Zerops' published JSON schema before it is written. A
+// generator that can emit an invalid document is a generator whose output has to be checked by hand.
+// The proxy manifest template is not a Zerops document and is checked against the proxy's OWN parser
+// instead, by the generator that builds it.
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { type Artifact, generatedArtifacts, REPO_ROOT } from './artifacts'
+import { platformProxyManifestArtifact } from './proxy-manifest'
 import { assertArtifactMatchesSchema } from './validate'
 
 const read = (path: string): string | null => {
@@ -31,10 +34,13 @@ const write = (artifact: Artifact): void => {
 }
 
 export const renderZeropsInstallation = (check: boolean): void => {
-	const artifacts = generatedArtifacts()
+	const zeropsDocuments = generatedArtifacts()
+	for (const document of zeropsDocuments) {
+		assertArtifactMatchesSchema(document)
+	}
+	const artifacts = [...zeropsDocuments, platformProxyManifestArtifact()]
 	const stale: string[] = []
 	for (const artifact of artifacts) {
-		assertArtifactMatchesSchema(artifact)
 		if (!check) {
 			write(artifact)
 			continue

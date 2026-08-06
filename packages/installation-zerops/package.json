@@ -12,7 +12,9 @@
 	"files": [
 		"src",
 		"zerops",
-		"!zerops/**/__tests__/**"
+		"!zerops/**/__tests__/**",
+		"!zerops/proxy-manifest.ts",
+		"!zerops/render.ts"
 	],
 	"exports": {
 		".": {
@@ -30,14 +32,17 @@
 		"gen:schemas": "bun zerops/schemas/refresh.ts"
 	},
 	"dependencies": {
+		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/installation-contract": "workspace:*",
 		"@fabrika/provider-zerops": "workspace:*",
 		"@fabrika/proxy-contract": "workspace:*"
 	},
 	"devDependencies": {
-		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/control": "workspace:*",
 		"@fabrika/engine": "workspace:*",
 		"@fabrika/example-zerops-app": "workspace:*",
+		"@fabrika/operations": "workspace:*",
+		"@fabrika/operations-contract": "workspace:*",
 		"@fabrika/proxy": "workspace:*",
 		"@types/bun": "latest"
 	}

@@ -1,12 +1,12 @@
-import { CONTROL_PROXY_GATES } from '@fabrika/control/gates'
 import { notesGates } from '@fabrika/example-zerops-app/gates'
-import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
-import { OPERATIONS_PROXY_GATES } from '@fabrika/operations/gates'
 import { buildCaddyConfig } from '@fabrika/proxy'
 import type { ProxyManifest } from '@fabrika/proxy-contract'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
+// A relative import, because the module it names is dev-time only and therefore outside
+// `@fabrika/installation-zerops`'s published surface — see its header for why it cannot be exported.
+import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '../../installation-zerops/zerops/proxy-manifest'
 
 export const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..')
 export const LOCAL_STACK_DIR = resolve(REPO_ROOT, 'packages', 'local-stack')
@@ -118,44 +118,31 @@ const generateSecrets = async (): Promise<void> => {
 }
 
 /**
- * The local platform proxy fronts the same three services a real installation does, with the SAME gate
- * sets — `CONTROL_PROXY_GATES` and `OPERATIONS_PROXY_GATES`, imported from the packages that own them
- * rather than copied. They used to be copies pinned by a test, because both lived in a
- * `fabrika.config.ts` that imports `@fabrika/provider-cloudflare` and oblaka's raw TypeScript does not
- * compile under this package's strict settings; each is now a provider-free module of its own.
+ * The local platform proxy fronts the same three apps a real installation does, generated from the same
+ * declaration — `platformProxyManifestTemplate()` in `@fabrika/installation-zerops` — so this
+ * composition can no longer be a second definition of the same document. Only what is genuinely local
+ * is supplied here: the hostnames, the scheme, and IAM's port.
+ *
+ * That is the point of the item this closes (backlog 58): the live installation's manifest was
+ * hand-written and gated the whole control plane `public` while `CONTROL_PROXY_GATES` said otherwise,
+ * and neither `local:smoke` nor any test could see it, because the two documents had no common source.
  *
  * One proxy in front of three services is the ZEROPS shape; on Cloudflare each service has its own
  * proxy Worker. That is the only structural difference. Both compositions name the Operations host by
  * the same `OPERATIONS_APP_ID`, which they must: a manifest may not name one app twice, so the
  * Cloudflare entry's old `vozka` was the one shape a shared manifest could never express.
  */
-export const localPlatformProxyManifest = (): ProxyManifest => ({
-	apps: [
-		{
-			id: 'iam-local',
-			hosts: ['iam.fabrika.localhost'],
-			upstream: 'iam:18080',
-			// IAM authenticates itself: its login, JWKS and admin surfaces own their own authorization,
-			// and a gate in front of the login page is a login loop. This is the production shape too.
-			gates: { rules: [{ path: '/*', kind: 'public' }] },
-			scheme: 'http',
+export const localPlatformProxyManifest = (): ProxyManifest =>
+	resolvePlatformProxyManifest(platformProxyManifestTemplate(), {
+		scheme: 'http',
+		placement: {
+			// IAM listens on the composition's public port here, because its issuer carries that port
+			// (`http://iam.fabrika.localhost:18080`); an installation runs it on 3000 like the rest.
+			iam: { hosts: ['iam.fabrika.localhost'], upstream: 'iam:18080' },
+			control: { hosts: ['control.fabrika.localhost'] },
+			operations: { hosts: ['errors.fabrika.localhost'] },
 		},
-		{
-			id: 'vozka',
-			hosts: ['control.fabrika.localhost'],
-			upstream: 'control:3000',
-			gates: CONTROL_PROXY_GATES,
-			scheme: 'http',
-		},
-		{
-			id: OPERATIONS_APP_ID,
-			hosts: ['errors.fabrika.localhost'],
-			upstream: 'operations:3000',
-			scheme: 'http',
-			gates: OPERATIONS_PROXY_GATES,
-		},
-	],
-})
+	})
 
 const generateProxyConfigs = async (): Promise<void> => {
 	const platformManifest = localPlatformProxyManifest()

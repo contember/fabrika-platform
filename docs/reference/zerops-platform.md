@@ -460,12 +460,21 @@ Two ordering rules, both of which cost something if ignored:
   proxy still carrying an older, more permissive manifest is an open API. IAM → Operations → **proxy**
   → control keeps the dependency order and never opens that window.
 
-**The platform installation's proxy manifest has no generator.** `compileNamespaceProxyManifest`
-(`packages/control/src/node/zerops-proxy.ts`) builds an APP namespace's manifest from the control
-registry, and `localPlatformProxyManifest` (`@fabrika/local-stack`) builds the local composition's —
-neither covers a deployed platform installation, so this one was hand-written at bring-up and then
-silently drifted from the gate modules for two days. See
-[backlog 58](../backlog/58-generate-the-platform-installations-proxy-manifest.md).
+**The platform installation's proxy manifest is generated in two halves.** The installation-independent
+half — which apps exist, their ids, their private upstreams, the public listener each answers on and
+their gates — is declared in `packages/installation-zerops/zerops/proxy-manifest.ts` and rendered into
+the committed `zerops/generated/platform-proxy-manifest.ts` by `bun run --filter
+@fabrika/installation-zerops gen`; CI's `gen:check` fails when it drifts from `CONTROL_PROXY_GATES` or
+`OPERATIONS_PROXY_GATES`. The hosts and the browser-facing scheme belong to one installation and are
+bound at deploy time by `resolvePlatformProxyManifest` (`packages/installation-zerops/src/proxy-manifest.ts`).
+`localPlatformProxyManifest` (`@fabrika/local-stack`) is a CALLER of the same generator with the local
+hosts, so the two compositions can no longer disagree; `compileNamespaceProxyManifest`
+(`packages/control/src/node/zerops-proxy.ts`) remains separate — it builds an APP namespace's manifest
+from the control registry.
+
+IAM's app id on a deployed installation is `iam`. The live document said `iam-local` until this
+generator replaced it, inherited from the local composition it was copied from at bring-up; the id is
+inert for an app whose every gate rule is `public`, so correcting it costs nothing.
 
 ## Fabrika placement mapping
 

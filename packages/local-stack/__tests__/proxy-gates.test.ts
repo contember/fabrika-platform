@@ -2,11 +2,12 @@
  * What the CLOUDFLARE proxy Workers bake into their own manifests is the same gate set the local
  * platform manifest fronts each service with.
  *
- * The local manifest no longer copies those sets — `prepare.ts` imports `CONTROL_PROXY_GATES` and
- * `OPERATIONS_PROXY_GATES` from the packages that own them, which is what removed the drift this file
- * used to exist for. What is left is the other half, and it is not tautological: the gates reach a
- * deployed proxy through `createCloudflareProxyWorker`, which serializes them into a var, and a
- * provider change could drop or reshape them without anything else noticing.
+ * The local manifest no longer copies those sets — `prepare.ts` calls the installation's own generator,
+ * which imports `CONTROL_PROXY_GATES` and `OPERATIONS_PROXY_GATES` from the packages that own them,
+ * and that is what removed the drift this file used to exist for. What is left is the other half, and
+ * it is not tautological: the gates reach a deployed CLOUDFLARE proxy through
+ * `createCloudflareProxyWorker`, which serializes them into a var, and a provider change could drop or
+ * reshape them without anything else noticing.
  *
  * It lives OUTSIDE `src/` because it must import `fabrika.config.ts`, which pulls in
  * `@fabrika/provider-cloudflare`: `tsconfig.json` includes `src/**` only, so oblaka's raw TypeScript

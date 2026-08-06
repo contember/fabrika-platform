@@ -377,10 +377,10 @@ const proxyManifestReference = `\${${FABRIKA_PROXY_MANIFEST_JSON}}`
  *
  * 8081 is deliberately absent: it is the health listener, which is never published.
  */
-const PROXY_PUBLIC_PORTS = [8080, 8082, 8083, 8084, 8085, 8086]
+export const PROXY_PUBLIC_PORTS = [8080, 8082, 8083, 8084, 8085, 8086]
 
 /** Liveness only, on its own unpublished listener. */
-const PROXY_HEALTH_PORT = 8081
+export const PROXY_HEALTH_PORT = 8081
 
 const proxy: ZeropsYamlSetupSpec = {
 	setup: 'proxy',

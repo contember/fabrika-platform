@@ -130,15 +130,70 @@ is why they are WUs here rather than separate items.
 
 ## Sequencing
 
-| | depends on | can run alongside |
-| --- | --- | --- |
-| WU1 (manifest generator) | — | WU3 |
-| WU3 (fail-closed environment) | — | WU1 |
-| WU2 (the deploy command) | WU1, WU3 | — |
+|                               | depends on | can run alongside |
+| ----------------------------- | ---------- | ----------------- |
+| WU1 (manifest generator)      | —          | WU3               |
+| WU3 (fail-closed environment) | —          | WU1               |
+| WU2 (the deploy command)      | WU1, WU3   | —                 |
 
 WU1 first: WU2 cannot write a manifest nothing generates, and WU1 is the piece with a witness that
 does not need a live account.
 
 ## Run log
 
-<!-- Append as you work. -->
+**WU1 — done.** The generator is `packages/installation-zerops/zerops/proxy-manifest.ts`, rendered into
+the committed `zerops/generated/platform-proxy-manifest.ts` by `render.ts` (so CI's existing `gen:check`
+step is the drift witness); `localPlatformProxyManifest` calls it. Three findings worth carrying:
+
+- **`iam-local` → `iam`.** The id is inert for an app whose every rule is `public`: gate matching
+  returns `allow` on the first rule with no token and no IAM call, so it never becomes a token audience
+  and never reaches a login bounce; the `?app=` pin and the manifest lookup are both generated from the
+  same list; and `exchangeAuthCode` binds a code to its issuing app (`packages/iam/src/handoff.ts:103`),
+  while no code can be issued for IAM at all because it has no registered return origin. **The live
+  installation's manifest therefore changes on its next deploy.**
+- **A `ProxyManifest` cannot carry the committed half alone** — `parseProxyManifest` refuses an app with
+  no hosts — so the artifact is a distinct template type. `resolvePlatformProxyManifest` binds hosts +
+  scheme and returns the result THROUGH `parseProxyManifest`, so nothing can emit a manifest the proxy
+  would reject.
+- **The listener→app assignment is now committed data.** On the subdomain path a port IS a hostname
+  (`proxy-292c-8080…`), so the template carries `port` per app: 8080 IAM, 8082 console, 8083 Operations,
+  with 8084-8086 left as the application slots `setups.ts` describes. WU2 resolves hosts from these.
+- **`installation-cloudflare` needed nothing.** Backlog 58 lists it as a touch point, but Cloudflare has
+  no shared manifest — each service's proxy Worker bakes its own single-app one from `fabrika.config.ts`
+  (`packages/local-stack/__tests__/proxy-gates.test.ts` already pins that side). Nothing to generate.
+
+**Verified against the live account (2026-08-06).** The generated template, resolved with
+`fabrika-test`'s hosts, reproduces the live `FABRIKA_PROXY_MANIFEST_JSON` app for app — `vozka` and
+`operations` identical in hosts, upstream, scheme AND gates; `iam-local` differs only in the id.
+
+⚠ **WU2 must MERGE, not replace.** The live manifest carries a fourth app, `notes` →
+`notesapi:3000` on 8084: on the light tier an application shares the project and therefore the platform
+proxy's one manifest. A `platform deploy` that writes the platform template alone deletes every app
+entry and takes the deployed applications offline. The platform generator deliberately emits only the
+three platform apps; composing them with the app entries is the deploy command's job.
+
+### WU3 — the refusal (2026-08-06)
+
+**The signal is the service's own PUBLIC ORIGIN**, stated by the composition root and enforced by
+`readEnvironmentName` in `@fabrika/auth-core`. Rejected alternatives, both for the same reason — one
+of them cannot be checked and the other does not exist:
+
+- A Zerops platform variable. The `ZEROPS_` prefix really is reserved (`reference/zerops-platform.md:202`,
+  F9 in the 08-03 archive), so any such key IS platform-written — but nothing in this repository verifies
+  that a RUNTIME container holds one. Only the env API's refusal to accept the prefix is verified. Built
+  on that, the refusal would be inert on the platform it is for, and settling it needs a live read.
+  **Cheap for WU2 to settle**: dump the key NAMES (never values) a running container sees.
+- A Cloudflare witness. workerd is the runtime in `wrangler dev` and in production alike; nothing at
+  boot distinguishes them. A one-cloud signal would leave the Cloudflare half unprovable.
+
+The origin is not a label: it is the `iss` of every token, the host a `__Host-` cookie belongs to, and
+the address a browser is returned to — it cannot be wrong quietly, which `ENVIRONMENT` demonstrably
+could. Loopback is RFC 6761 `localhost`/`*.localhost` plus `127.0.0.0/8` and `::1`, which is what every
+local composition here serves.
+
+**Ordering constraint for WU2:** write `ENVIRONMENT` on every service BEFORE deploying code carrying
+this refusal. `control` on `fabrika-test` currently pairs `local` with a public host, so it would fail
+its readiness check on the next deploy — loudly, which is the point, but it must not be a surprise.
+
+Left for WU2 (operational, not code): writing the environment name on every service, and deleting the
+inert `LOCAL_DEV_LOGIN` key from the live IAM.

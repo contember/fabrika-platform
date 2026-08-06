@@ -26,12 +26,15 @@ bun run test:browser  # the opice suites in tests/browser/
 
 ## Invariants
 
-- **The composition is secure by default and runs the REAL enforcement path.** The platform manifest
-  fronts control and Operations with the same gate declarations a deployed proxy carries — imported,
-  not copied: `CONTROL_PROXY_GATES` from `@fabrika/control/gates` and `OPERATIONS_PROXY_GATES` from
-  `@fabrika/operations/gates`, each a module free of `@fabrika/provider-cloudflare` AND of its own
-  package's `src/` (both packages relax `noUncheckedIndexedAccess` for oblaka's sake, so their runtime
-  graphs do not compile here). No synthetic persona exists anywhere — the app SDK has none to select.
+- **The composition is secure by default and runs the REAL enforcement path.** `localPlatformProxyManifest`
+  is a CALLER of the installation's own generator, not a second copy of it: it hands
+  `resolvePlatformProxyManifest` (`@fabrika/installation-zerops`, imported by relative path because the
+  generator is dev-time only) the local hosts, the local scheme and IAM's local port, and gets the same
+  three apps a deployed installation is fronted by, with the same gates. Everything else — which apps
+  exist, their ids, `CONTROL_PROXY_GATES`, `OPERATIONS_PROXY_GATES` — comes from that one declaration,
+  so a gate change cannot reach a deployed proxy and miss this one, or the reverse.
+  `src/__tests__/platform-manifest.test.ts` pins exactly which fields this composition is allowed to
+  differ in. No synthetic persona exists anywhere — the app SDK has none to select.
   The single dev bypass is IAM's `LOCAL_DEV_LOGIN`, which mints a real session row and is refused at
   use once the flag is off; the browser composition runs with it off. Never widen a local gate to make
   something pass: a refusal here is a refusal in production.

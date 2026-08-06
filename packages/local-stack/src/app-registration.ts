@@ -35,8 +35,8 @@ export interface LocalApp {
 }
 
 /**
- * Every app in the local composition a HUMAN can reach. `iam-local` is absent on purpose: IAM
- * authenticates on its own host and never needs a code to reach itself.
+ * Every app in the local composition a HUMAN can reach. IAM is absent on purpose: it authenticates on
+ * its own host and never needs a code to reach itself.
  *
  * Operations is absent too, and that is not an oversight: its own hostname serves ingest and the
  * source-map upload, both `public`, and every operator surface is reached through the console's
