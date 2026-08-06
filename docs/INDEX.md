@@ -24,9 +24,10 @@ that supersedes the four which decided it in stages.
 
 ## Active sprints
 
-- [`zerops-path-correctness`](sprints/sprint-2026-08-05-zerops-path-correctness.md) — the live
-  installation has drifted from HEAD (the control plane is gated `/*` public there), one mechanism
-  is broken on every call (41), and four conformance corrections are unexercised.
+None. The install paths [ADR-0025](decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md)
+commits to are filed as backlog [`61`](backlog/61-make-platform-deploy-an-unattended-command.md),
+[`62`](backlog/62-generate-the-operators-sidecar-install-repository.md) and
+[`63`](backlog/63-a-one-click-install-from-the-public-repository.md).
 
 Two auth sprints shipped on 2026-08-05 —
 [hardening](archive/sprint-2026-08-04-auth-hardening.md), then
@@ -60,12 +61,13 @@ backlog is empty; what is left of item 54 is a console architecture decision, no
 - **Zerops, post-bring-up:** the light tier is **live on a real account** (sprint
   [`zerops-live-bringup`](archive/sprint-2026-08-03-zerops-live-bringup.md)); the
   platform facts it settled are in [`reference/zerops-platform.md`](reference/zerops-platform.md).
-  Next: [`41`](backlog/41-write-service-variables-without-a-pre-read.md) — the env write
-  reads first and that read never succeeds, so nothing in `packages/` can write a
-  service variable — then [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md),
-  which blocks every control-plane-triggered deploy. The production two-project shape and
-  custom domains remain in [`05`](backlog/05-bring-up-on-a-real-zerops-account.md);
-  [`39`](backlog/39-settle-zerops-override-semantics.md) is still unexercised.
+  Sprint [`zerops-path-correctness`](archive/sprint-2026-08-05-zerops-path-correctness.md)
+  then fixed what the account proved wrong — the env write, four conformance corrections,
+  the `.zerops.app` entry point — and signed a browser in through the proxy live. Next:
+  [`61`](backlog/61-make-platform-deploy-an-unattended-command.md), because the installation
+  is still deployed by hand, and [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md),
+  which blocks a control-plane-triggered deploy of a private app. The production two-project
+  shape and custom domains remain in [`05`](backlog/05-bring-up-on-a-real-zerops-account.md).
 - **The session handoff is the ONLY way a browser gets a session for an app.** IAM
   issues a one-time code and the proxy on the app's own host redeems it
   ([ADR-0023](decisions/0023-one-session-per-host.md); how it works is

@@ -9,6 +9,11 @@ blocked-by: []
 **Summary.** `control` and `operations` on `fabrika-test` carry `ENVIRONMENT=local`; IAM on the same
 installation carries `stage`. Harmless today, load-bearing the moment anything branches on it. Effort S.
 
+The drift exists because nothing writes these variables as part of a deploy;
+[ADR-0025](../decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) makes that a
+step of `fabrika platform deploy` ([61](./61-make-platform-deploy-an-unattended-command.md)). Fixing
+the live values without that step just resets the clock.
+
 ## Problem
 
 Read live on 2026-08-05 (`zops env show --service <svc> --json`, compared without printing values):

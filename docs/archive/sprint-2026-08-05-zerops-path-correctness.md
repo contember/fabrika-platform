@@ -1,5 +1,37 @@
 # Sprint — Zerops path correctness (2026-08-05)
 
+## OUTCOME — closed 2026-08-06, 4 of 5 units shipped
+
+| Unit | Commit    | What shipped                                                                             |
+| ---- | --------- | ---------------------------------------------------------------------------------------- |
+| plan | `ad17de7` | the plan                                                                                 |
+| WU-1 | `f69bccd` | env write without a pre-read; `GET /service-stack/{id}/env` + `PUT /user-data/{id}`      |
+| WU-2 | `c559042` | four conformance corrections settled on the account, not the docs (items 39, 42, 43, 45) |
+| WU-3 | `bf33bd5` | `ensureSubdomainAccess` — establish the `.zerops.app` entry point or refuse to be ready  |
+| WU-4 | `bd59bc7` | live installation to HEAD; two browser-only defects in the sign-in path fixed            |
+
+**Verification at close.** `bun test` 1912 pass / 9 skip / 0 fail against a real Postgres (only the
+S3 suites skip); `typecheck`, `lint`, `format:check` clean. Live: an anonymous `GET /api/*` on
+`fabrika-test` is refused by Caddy with a 302 to the login bounce, and a real browser completes
+sign-in and reads an authorized route.
+
+**WU-5 did not ship, and its premise changed.** It was scoped as "give the Zerops deploy path a
+private git source", with fabrika's own installation among the things that needed one. While it was
+being sequenced, the boundary it assumed was settled the other way:
+[ADR-0025](../decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) — the
+operator installs the platform, fabrika deploys only apps. That removes fabrika's own code from the
+problem entirely (the namespace proxy now builds from a pinned tag of the public repository) and
+rejects the credentialed-clone-URL half outright. What remains is one API call, re-scoped into
+[`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md), and it is blocked on a human:
+linking a GitHub account to Zerops is an interactive OAuth flow. The install paths ADR-0025 commits
+to are filed as [`61`](../backlog/61-make-platform-deploy-an-unattended-command.md),
+[`62`](../backlog/62-generate-the-operators-sidecar-install-repository.md) and
+[`63`](../backlog/63-a-one-click-install-from-the-public-repository.md).
+
+**Deleted on close:** backlog items 39, 40, 41, 42, 43, 45 — all six settled live, with what they
+established recorded in [`reference/zerops-platform.md`](../reference/zerops-platform.md).
+**Filed during the run:** 58, 59, 60.
+
 **Goal.** Make the live Zerops installation match HEAD and fix what the account proves is wrong, so
 the Zerops path is a supported target rather than a demonstrated one.
 

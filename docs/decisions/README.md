@@ -114,3 +114,4 @@ exactly one spelling.
 - [0022](0022-the-proxy-is-the-only-enforcement-point.md) — The proxy is the only enforcement point (supersedes 0007, 0008, 0010, 0021) — accepted (2026-08-05)
 - [0023](0023-one-session-per-host.md) — One session per host — retire the shared session cookie (amends 0022) — accepted (2026-08-05)
 - [0024](0024-retire-the-legacy-environment-name-fallback.md) — Retire the legacy environment-name fallback; canonical names only (supersedes 0018) — accepted (2026-08-05)
+- [0025](0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) — The operator installs the platform; fabrika deploys only apps — accepted (2026-08-06)

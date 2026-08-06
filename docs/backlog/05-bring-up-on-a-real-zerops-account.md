@@ -1,7 +1,7 @@
 ---
 id: 05
-title: Finish the Zerops bring-up — production shape and the git-sourced deploy
-blocked-by: [./41-write-service-variables-without-a-pre-read.md]
+title: Finish the Zerops bring-up — the production two-project shape
+blocked-by: []
 ---
 
 # 05 — Finish the Zerops bring-up
@@ -38,19 +38,22 @@ them.
    [ADR-0023](../decisions/0023-one-session-per-host.md) has since deleted the shared
    cookie outright. Custom domains are now about operating a real installation, not
    about making sign-in work.
-3. **A git source, and the deploys that need one.** fabrika's GitHub App does not
-   reach the Zerops path at all — see
-   [`47`](./47-give-the-zerops-path-a-private-git-source.md). Until one exists,
-   neither the control-plane `trigger-deploy` step nor the namespace reconcile (which
-   builds the proxy from `proxyBuildFromGit`) can run, and therefore neither can the
-   Operations DSN that the control→Operations catalog projection mints.
+3. **A source a private app can build from.**
+   [ADR-0025](../decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) settled
+   the mechanism — fabrika configures the service's own repository integration rather than
+   cloning, see [`47`](./47-give-the-zerops-path-a-private-git-source.md). Until that
+   lands the control-plane `trigger-deploy` step cannot build a private repository, and
+   neither can the Operations DSN that the control→Operations catalog projection mints.
+   (The namespace proxy is no longer part of this: ADR-0025 builds it from a pinned tag
+   of the public repository, needing no credential.)
 4. **Operations ingest end to end.** Once 3 lands: an ingested exception reaching the
    private operator API, `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE` arriving in a
    deployed app, and release/source-map correlation
    ([`36`](./36-complete-zerops-release-artifact-correlation.md)).
-5. **`putServiceEnv` must stop pre-reading** — [`41`](./41-write-service-variables-without-a-pre-read.md).
-   The live bring-up had to work around it with a standalone script; nothing in
-   `packages/` writes a service variable successfully today.
+5. **The installation deploys itself from a pipeline, not a laptop.** Bringing this
+   installation to HEAD on 2026-08-05 took `zops push` per service in a hand-chosen
+   order — see [`61`](./61-make-platform-deploy-an-unattended-command.md) and
+   [`62`](./62-generate-the-operators-sidecar-install-repository.md).
 6. **Human authentication is done on this tier.** Password enrollment, sign-in,
    throttling, admin disable and the audit trail were exercised live on 2026-08-04,
    and so was cross-host browser SSO between two `.zerops.app` hostnames
@@ -59,12 +62,10 @@ them.
 
 ## Still-open semantics
 
-- **Is re-applying an unchanged import with `override: true` a no-op, or a redeploy?**
-  Not exercised. → [`39`](./39-settle-zerops-override-semantics.md).
 - **Does the project L7 balancer forward a client address a downstream may trust, and
   from what source range?** Settles whether the per-client abuse limit can key on the
   real client on Zerops (WU-C of
-  [`../sprints/sprint-2026-08-05-auth-track-closeout.md`](../sprints/sprint-2026-08-05-auth-track-closeout.md));
+  [`auth-track-closeout`](../archive/sprint-2026-08-05-auth-track-closeout.md));
   today it cannot, so `trusted_proxies` is unset and every client shares the
   balancer's bucket. One sitting: put a service behind the balancer that echoes
   `X-Forwarded-For`, `X-Real-Ip` and the socket peer; call it from a known public
@@ -76,9 +77,6 @@ them.
   still choose its own bucket, which is the case the limit must not be built on.
 - `GET /service-stack/{id}/app-version` list order. The client picks max `sequence`
   rather than trusting order; confirm `sequence` really is monotonic.
-- That `${host_connectionString}` reaches the intended database on a service not named
-  `db` — [`45`](./45-pin-the-zerops-postgres-connection-target.md). The light run only
-  ever used `db`.
 
 ## Acceptance
 

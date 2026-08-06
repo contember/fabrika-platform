@@ -9,6 +9,10 @@ blocked-by: []
 **Summary.** Two manifest generators exist and neither covers a deployed platform installation, so
 the live one is hand-written and drifts silently from the gate modules that own it. Effort S–M.
 
+[ADR-0025](../decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) scopes the
+**application** of this manifest as a step of `fabrika platform deploy`
+([61](./61-make-platform-deploy-an-unattended-command.md)); this item is the generator it calls.
+
 ## Problem
 
 `FABRIKA_PROXY_MANIFEST_JSON` on a platform installation's `proxy` service is the whole of the

@@ -66,6 +66,11 @@ that ships — only what genuinely helps a future reader. The git log holds the 
   browser scenarios are re-authored, and ADR-0018's legacy environment-name
   fallback is retired. Records why item 54's other half is a console architecture
   change rather than a rename.
+- [Zerops path correctness (2026-08-05)](sprint-2026-08-05-zerops-path-correctness.md)
+  — settled six conformance items against the real account rather than the docs,
+  unbroke the service-variable write, made the `.zerops.app` entry point real or
+  loud, and brought the live installation to HEAD — which is where a browser found
+  two sign-in defects no test could reach. Its fifth unit was overtaken by ADR-0025.
 - [Proxy gate-config delivery](08-distribute-gate-config-to-proxy.md) — the
   shipped redeploy decision retained as context for ADR-0007, ADR-0008, and
   ADR-0010.

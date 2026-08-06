@@ -21,15 +21,20 @@ Phase 0 merged and renamed the repositories. The portable runtime, static
 manifest, proxy, and Zerops control path are built and locally verified. Repository CI and release automation are built; activating npm trusted publishing remains external item 25.
 
 Items 39–45 came out of a conformance review of the Zerops implementation against
-upstream documentation. They are corrections and open semantics that item 05's
-bring-up will otherwise discover the hard way — 41 blocks its step 3 outright, and 39
-decides whether the steady-state re-apply is a reconcile or a redeploy.
+upstream documentation. All six were settled against the real account by sprint
+[`zerops-path-correctness`](../archive/sprint-2026-08-05-zerops-path-correctness.md)
+and deleted; what they established is in
+[`reference/zerops-platform.md`](../reference/zerops-platform.md).
+
+Items 61–63 come from [ADR-0025](../decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md):
+the platform is installed by its operator, so fabrika owes an unattended deploy command
+and the two things that call it.
 
 ## Items
 
 <!-- one line each: NN — short summary (link). Keep it short. -->
 
-- [05](05-bring-up-on-a-real-zerops-account.md) — The light tier is live on a real account; what remains is the production two-project shape, custom domains, and the git-sourced deploy.
+- [05](05-bring-up-on-a-real-zerops-account.md) — The light tier is live on a real account; what remains is the production two-project shape and custom domains.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
 - [25](25-bootstrap-npm-trusted-publishing.md) — Bootstrap the twenty package names once through protected CI, then activate tokenless OIDC publishing.
 - [26](26-retire-trasa-release-surface.md) — Publish `@fabrika/app`, deprecate `@trasa/core`, and archive the standalone repository.
@@ -37,20 +42,17 @@ decides whether the steady-state re-apply is a reconcile or a redeploy.
 - [36](36-complete-zerops-release-artifact-correlation.md) — Publish Zerops build source maps and link Delivery runs to Operations evidence.
 - [37](37-activate-zerops-managed-environment-transactionally.md) — Keep Zerops managed environment activation consistent with the app version that actually ships.
 - [38](38-add-dns-safe-operations-egress.md) — Prevent private-address and DNS-rebinding egress through Operations webhooks and active health checks.
-- [39](39-settle-zerops-override-semantics.md) — `override: true` is written on every service; upstream says runtime-only, and that it replaces rather than updates.
-- [40](40-subdomain-access-is-not-import-settable.md) — `enableSubdomainAccess` does not take effect on a service that has never been deployed.
-- [41](41-write-service-variables-without-a-pre-read.md) — The env write reads first, and that read NEVER succeeds; verified live. Nothing in `packages/` can write a service variable.
-- [42](42-size-the-platform-managed-postgres.md) — Two HA Postgres services declare no `profile`, so both default to the production tier.
-- [43](43-gate-zerops-deploys-on-readiness.md) — No `deploy.readinessCheck` anywhere, and no explicit timeouts on any check.
-- [45](45-pin-the-zerops-postgres-connection-target.md) — `connectionString` carries no database and no SSL mode; both are driver defaults today.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
-- [47](47-give-the-zerops-path-a-private-git-source.md) — fabrika's GitHub App never reaches the Zerops path, so a private repository cannot deploy there.
+- [47](47-give-the-zerops-path-a-private-git-source.md) — An app on Zerops can only build from a public URL; configure the service's own repository integration instead (ADR-0025).
 - [54](54-give-operations-its-own-proxy-app-identity.md) — Half shipped; what is left is moving the operator surface onto the Operations host, which is a console architecture change, not a rename.
 - [56](56-unbreak-the-release-dependency-gate.md) — `release:validate` red since `18d9575`: a published package depends on a private one. Blocks every release until it is decided.
 - [57](57-stop-the-caller-choosing-its-own-audit-correlation-id.md) — IAM takes `X-Request-Id` from the caller, unbounded, into `auth_log`; its Worker is edge-routed so the proxy strip never runs.
 - [58](58-generate-the-platform-installations-proxy-manifest.md) — Nothing generates a deployed installation's proxy manifest, so the live one is hand-written and drifted from the gate modules unnoticed.
 - [59](59-the-live-installation-calls-itself-local.md) — `control` and `operations` on `fabrika-test` carry `ENVIRONMENT=local`, the value every bypass is gated on.
 - [60](60-the-example-app-has-no-light-tier-descriptor.md) — Neither committed `zerops.yaml` names the shared `db` the example actually runs against, so the live app cannot be redeployed from HEAD.
+- [61](61-make-platform-deploy-an-unattended-command.md) — `fabrika platform deploy` is the public interface an operator's pipeline calls, and it does not deploy a Zerops installation at all.
+- [62](62-generate-the-operators-sidecar-install-repository.md) — Generate the per-account sidecar repository that installs the platform; fabrika ships the generator, never the pipeline.
+- [63](63-a-one-click-install-from-the-public-repository.md) — The second install shape: a running platform without creating a repository or a CI system.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.

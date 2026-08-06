@@ -102,7 +102,7 @@ GET  /service-stack/{id}/user-data  → 400 serviceStackNotFound
 POST /service-stack/{id}/user-data  → 200
 ```
 
-Confirms [`backlog/41`](../backlog/41-write-service-variables-without-a-pre-read.md) and
+Confirms `backlog/41` (since shipped and deleted) and
 goes past it: the list 400s on services that have deployed successfully too, so it is not
 "not readable yet" but _never readable_. `putServiceEnv` lists before it writes, so no
 code in `packages/` can write a Zerops service variable at all. POST on an existing key

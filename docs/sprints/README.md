@@ -19,5 +19,7 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- [sprint-2026-08-05-zerops-path-correctness](sprint-2026-08-05-zerops-path-correctness.md) —
-  make the live Zerops installation match HEAD and fix what the account proves is wrong.
+_None._ The install paths ADR-0025 commits to are filed as backlog
+[`61`](../backlog/61-make-platform-deploy-an-unattended-command.md),
+[`62`](../backlog/62-generate-the-operators-sidecar-install-repository.md) and
+[`63`](../backlog/63-a-one-click-install-from-the-public-repository.md).
