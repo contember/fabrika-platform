@@ -19,6 +19,7 @@ import { prop } from '../json'
 import { applyMigrations } from '../node/migrate'
 import type { Runtime } from '../node/runtime'
 import { createFetchHandler } from '../node/server'
+import { pkceChallenge, randomToken } from '../oidc'
 import { MINT_EXCHANGE_PATH, MINT_KEY_PATH, MINT_SESSION_PATH } from '../rpc-http'
 import { hashToken } from '../secret'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
@@ -1023,7 +1024,10 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 			email: 'exchange@x.cz',
 			expiresAt: now() + 3600,
 		})
-		const code = 'handoff-code-plaintext'
+		// The code carries its own S256 challenge as a suffix, so redemption needs the browser's verifier
+		// (ADR-0026). `issueAuthCode` builds this shape; here the row is written directly.
+		const verifier = randomToken(32)
+		const code = `handoff-code-plaintext.${await pkceChallenge(verifier)}`
 		await db.handoff.issueCode({
 			codeHash: await hashToken(code),
 			app: 'opice',
@@ -1033,7 +1037,7 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 		})
 
 		const h = handler()
-		const res = await h(mint(MINT_EXCHANGE_PATH, { app: 'opice', code, requestId: 'req-exchange-1' }))
+		const res = await h(mint(MINT_EXCHANGE_PATH, { app: 'opice', code, verifier, requestId: 'req-exchange-1' }))
 		expect(res.status).toBe(200)
 		const body: unknown = await res.json()
 		// The four fields `HttpIamGateway.exchangeAuthCode` reads; an empty or absent one is a 503 there.
@@ -1049,7 +1053,7 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 		expect(child?.parent_session_id).toBe(parent)
 
 		// Single use, through the guarded UPDATE — this is the assertion the command-tag decoding backs.
-		const replay = await h(mint(MINT_EXCHANGE_PATH, { app: 'opice', code, requestId: 'req-exchange-2' }))
+		const replay = await h(mint(MINT_EXCHANGE_PATH, { app: 'opice', code, verifier, requestId: 'req-exchange-2' }))
 		expect(replay.status).toBe(200)
 		const replayed: unknown = await replay.json()
 		expect(prop(replayed, 'ok')).toBe(false)
@@ -1064,7 +1068,8 @@ describe.skipIf(!hasPostgres)('the proxy mint surface, end to end on Postgres', 
 				[MINT_SESSION_PATH, { app: 'opice', session: null, requestId: 'r' }, 'no_session'],
 				[MINT_SESSION_PATH, { app: 'opice', session: 'nope', requestId: 'r' }, 'invalid_session'],
 				[MINT_KEY_PATH, { app: 'opice', key: 'px_nope', requestId: 'r' }, 'invalid_key'],
-				[MINT_EXCHANGE_PATH, { app: 'opice', code: 'never-issued', requestId: 'r' }, 'invalid_code'],
+				// The verifier is well-formed and never reached: an unknown code is spent-or-absent before it.
+				[MINT_EXCHANGE_PATH, { app: 'opice', code: 'never-issued', verifier: randomToken(32), requestId: 'r' }, 'invalid_code'],
 			] as const
 		) {
 			const res = await h(mint(path, body))
