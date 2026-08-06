@@ -28,6 +28,7 @@ const EXPECTED_PUBLIC_PACKAGES = [
 	'@fabrika/provider-contract',
 	'@fabrika/provider-zerops',
 	'@fabrika/proxy-contract',
+	'@fabrika/proxy-core',
 	'@fabrika/runner-contract',
 ]
 const TAG_PATTERN =

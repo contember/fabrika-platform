@@ -8,11 +8,8 @@
  */
 
 import { parseProxyManifest } from '@fabrika/proxy-contract'
-import { MemoryTokenCache } from './cache'
+import { consoleLogger, createVerifyService, HttpIamGateway, MemoryTokenCache } from '@fabrika/proxy-core'
 import { readProxyEnv } from './env'
-import { HttpIamGateway } from './iam'
-import { consoleLogger } from './log'
-import { createVerifyService } from './service'
 
 const env = readProxyEnv(Bun.env)
 

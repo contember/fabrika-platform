@@ -6,7 +6,7 @@
  * misconfigured — and it is read once and never logged, never echoed and never put in a URL.
  */
 
-import { DEFAULT_IAM_TIMEOUT_MS } from './constants'
+import { DEFAULT_IAM_TIMEOUT_MS } from '@fabrika/proxy-core'
 
 export interface ProxyEnv {
 	/** Path to the deployed `proxy.manifest.json`. */

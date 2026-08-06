@@ -1,11 +1,19 @@
 # @fabrika/proxy
 
-The **only** auth enforcement point: a Bun service answering Caddy's `forward_auth` subrequest, and
-the same code called in-process by the Cloudflare proxy Worker. Nothing reaches an app until its
-gates pass ([ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md), which
-supersedes 0007/0008/0010/0021). Assumes the root CLAUDE.md. The
-manifest wire contract and its strict parser live in `@fabrika/proxy-contract`; the gate matcher and
-its compiled form live in `@fabrika/auth-core`.
+The **Caddy deployment** of the auth enforcement point: the configuration that fronts the decision
+service, plus the Bun process that serves it. Nothing reaches an app until its gates pass
+([ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md), which supersedes
+0007/0008/0010/0021). Assumes the root CLAUDE.md.
+
+**The decision itself is [`@fabrika/proxy-core`](../proxy-core/CLAUDE.md)** — runtime-neutral, public,
+and shared verbatim with the Cloudflare proxy Worker. This package is an ARTIFACT rather than an API
+and stays `private: true`: `bun run build` compiles `src/main.ts` into a static musl binary with
+`caddy.json` beside it. The manifest wire contract and its strict parser live in
+`@fabrika/proxy-contract`; the gate matcher and its compiled form live in `@fabrika/auth-core`.
+
+Most of the invariants below are properties of the DECISION and therefore hold in `proxy-core`; they
+are documented here because this is where the enforcement point is described end to end. What is
+specific to this package is the Caddy configuration, `src/env.ts`, and the process lifecycle.
 
 ## Commands (this package)
 

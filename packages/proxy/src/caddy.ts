@@ -45,7 +45,7 @@ import {
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
 	UNTRUSTED_FORWARD_HEADERS,
-} from './constants'
+} from '@fabrika/proxy-core'
 
 /**
  * Caddy's own answer to "who is the client", resolved ONCE per request in `PrepareRequest` — before

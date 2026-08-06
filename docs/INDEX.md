@@ -52,9 +52,10 @@ backlog is empty; what is left of item 54 is a console architecture decision, no
   authentication method is disabled, and an abuse limit is keyed on a client coordinate
   the caller cannot set — the proxy observes and injects it, IAM enforces, because
   0022 forbids the proxy holding state a decision depends on.
-- **Release is blocked:** `release:validate` has been red since `18d9575` — a published
-  package depends on a private one ([56](backlog/56-unbreak-the-release-dependency-gate.md)).
-  Decide what `@fabrika/proxy` is before anything ships.
+- **Enforcement is one decision, two deployments.** `@fabrika/proxy-core` holds the decision and is
+  public; `@fabrika/proxy` is the Caddy artifact that serves it and stays private. That split is what
+  lets the published Cloudflare provider reach the enforcement code without publishing a binary, and
+  it is what unblocked `release:validate`.
 - **Configuration names:** one spelling per setting. `FABRIKA_*` is the only family anything
   reads — [ADR-0024](decisions/0024-retire-the-legacy-environment-name-fallback.md) retired
   0018's `VOZKA_*`/`PROPUSTKA_*` fallback and deleted the shared alias reader with it. Durable

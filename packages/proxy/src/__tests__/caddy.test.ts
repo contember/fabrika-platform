@@ -11,6 +11,7 @@
 
 import type { AppGates } from '@fabrika/auth-core'
 import type { ProxyManifest } from '@fabrika/proxy-contract'
+import { CLIENT_ADDRESS_HEADER, PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, UNTRUSTED_FORWARD_HEADERS } from '@fabrika/proxy-core'
 import { describe, expect, test } from 'bun:test'
 import {
 	buildCaddyConfig,
@@ -20,7 +21,6 @@ import {
 	type CaddySubrouteHandler,
 	uriRedactionPattern,
 } from '../caddy'
-import { CLIENT_ADDRESS_HEADER, PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, UNTRUSTED_FORWARD_HEADERS } from '../constants'
 
 const GATES: AppGates = { rules: [{ path: '/public/*', kind: 'public' }, { path: '/*', kind: 'human' }] }
 

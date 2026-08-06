@@ -1,5 +1,5 @@
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
-import { applicableGates, compileGates } from '@fabrika/proxy'
+import { applicableGates, compileGates } from '@fabrika/proxy-core'
 import { describe, expect, test } from 'bun:test'
 import { localPlatformProxyManifest } from '../prepare'
 

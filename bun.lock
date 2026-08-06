@@ -256,6 +256,7 @@
         "@fabrika/provider-zerops": "workspace:*",
         "@fabrika/proxy": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
+        "@fabrika/proxy-core": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -328,8 +329,8 @@
         "@fabrika/auth": "workspace:*",
         "@fabrika/engine": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
-        "@fabrika/proxy": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
+        "@fabrika/proxy-core": "workspace:*",
         "oblaka-iac": "^0.0.18",
       },
       "devDependencies": {
@@ -367,7 +368,7 @@
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
-        "jose": "^5.9.0",
+        "@fabrika/proxy-core": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -378,6 +379,18 @@
       "version": "0.0.1",
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
+    "packages/proxy-core": {
+      "name": "@fabrika/proxy-core",
+      "version": "0.0.1",
+      "dependencies": {
+        "@fabrika/auth-core": "workspace:*",
+        "@fabrika/proxy-contract": "workspace:*",
+        "jose": "^5.9.0",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -638,6 +651,8 @@
     "@fabrika/proxy": ["@fabrika/proxy@workspace:packages/proxy"],
 
     "@fabrika/proxy-contract": ["@fabrika/proxy-contract@workspace:packages/proxy-contract"],
+
+    "@fabrika/proxy-core": ["@fabrika/proxy-core@workspace:packages/proxy-core"],
 
     "@fabrika/runner-cloudflare": ["@fabrika/runner-cloudflare@workspace:packages/runner-cloudflare"],
 

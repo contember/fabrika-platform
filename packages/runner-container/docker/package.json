@@ -8,7 +8,7 @@
 		"packages/auth",
 		"packages/provider-contract",
 		"packages/proxy-contract",
-		"packages/proxy",
+		"packages/proxy-core",
 		"packages/provider-cloudflare",
 		"packages/engine",
 		"packages/platform",

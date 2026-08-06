@@ -1,4 +1,5 @@
-import type { IamGateway, ProxyLogger, VerifyService } from '@fabrika/proxy'
+import { parseProxyManifestJson, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-contract'
+import type { IamGateway, ProxyLogger, VerifyService } from '@fabrika/proxy-core'
 import {
 	CLIENT_ADDRESS_HEADER,
 	consoleLogger,
@@ -13,8 +14,7 @@ import {
 	REQUEST_ID_HEADER,
 	stripFabrikaCookies,
 	UNTRUSTED_FORWARD_HEADERS,
-} from '@fabrika/proxy'
-import { parseProxyManifestJson, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-contract'
+} from '@fabrika/proxy-core'
 
 /**
  * Cloudflare's managed client address — this composition's answer to "who is the client".

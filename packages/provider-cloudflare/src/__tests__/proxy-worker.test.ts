@@ -2,7 +2,7 @@ import type { AppGates } from '@fabrika/auth'
 import { encodeProxyManifestJson } from '@fabrika/proxy-contract'
 import { describe, expect, test } from 'bun:test'
 import { Worker } from 'oblaka-iac'
-import { APP, FakeIam, HOST, ISSUER, signUserToken } from '../../../proxy/src/__tests__/helpers'
+import { APP, FakeIam, HOST, ISSUER, signUserToken } from '../../../proxy-core/src/__tests__/helpers'
 import { createCloudflareProxyWorker } from '../proxy'
 import { type CloudflareProxyEnv, createCloudflareProxyHandler } from '../proxy-worker'
 

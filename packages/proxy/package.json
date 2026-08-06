@@ -25,7 +25,7 @@
 	"dependencies": {
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/proxy-contract": "workspace:*",
-		"jose": "^5.9.0"
+		"@fabrika/proxy-core": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "latest"

@@ -68,7 +68,7 @@ packages/
   provider-{contract,cloudflare,zerops}       # authoring, deploy, and control per cloud
   installation-{contract,cloudflare,zerops}   # `fabrika platform init/plan/deploy` per cloud
   runner-{contract,container,cloudflare}      # the Cloudflare out-of-band deploy executor
-  proxy proxy-contract            # the ONLY auth enforcement point (ADR-0022)
+  proxy-core proxy proxy-contract  # the auth enforcement decision · its Caddy deployment · the wire contract
   cli email local-stack           # the `fabrika` command · outbound email · the Docker dev stack
 examples/app examples/zerops-app  # a worked app per provider
 tests/browser                     # opice end-to-end suites against the local stack
@@ -132,7 +132,8 @@ contract note (`*-contract`), the substantial ones are:
   implementations · `packages/provider-cloudflare/` + `packages/provider-zerops/` — the provider bundles.
 - `packages/installation-cloudflare/` + `packages/installation-zerops/` — platform installation ·
   `packages/cli/` — command routing and provider inference.
-- `packages/proxy/` — the enforcement point · `packages/operations/` + `packages/operations-ui/` —
+- `packages/proxy-core/` — the enforcement decision, public and runtime-neutral · `packages/proxy/` —
+  its Caddy deployment, private because it is an artifact · `packages/operations/` + `packages/operations-ui/` —
   the Operations kernel and console views · `packages/dashboard/` — the SPA.
 - `packages/runner-container/` + `packages/runner-cloudflare/` — the deploy container and its Worker ·
   `packages/local-stack/` — the Docker dev stack behind every `local:*` command.

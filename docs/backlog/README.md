@@ -45,7 +45,6 @@ and the two things that call it.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
 - [47](47-give-the-zerops-path-a-private-git-source.md) — An app on Zerops can only build from a public URL; configure the service's own repository integration instead (ADR-0025).
 - [54](54-give-operations-its-own-proxy-app-identity.md) — Half shipped; what is left is moving the operator surface onto the Operations host, which is a console architecture change, not a rename.
-- [56](56-unbreak-the-release-dependency-gate.md) — `release:validate` red since `18d9575`: a published package depends on a private one. Blocks every release until it is decided.
 - [57](57-stop-the-caller-choosing-its-own-audit-correlation-id.md) — IAM takes `X-Request-Id` from the caller, unbounded, into `auth_log`; its Worker is edge-routed so the proxy strip never runs.
 - [58](58-generate-the-platform-installations-proxy-manifest.md) — Nothing generates a deployed installation's proxy manifest, so the live one is hand-written and drifted from the gate modules unnoticed.
 - [59](59-the-live-installation-calls-itself-local.md) — `control` and `operations` on `fabrika-test` carry `ENVIRONMENT=local`, the value every bypass is gated on.
