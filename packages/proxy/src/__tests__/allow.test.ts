@@ -55,15 +55,6 @@ describe('allow — public', () => {
 })
 
 describe('allow — human', () => {
-	test('a valid px_token cookie authorizes locally and is injected upstream', async () => {
-		const token = await signUserToken(3600)
-		const { iam, verify } = service({ rules: [{ path: '/*', kind: 'human' }] })
-		const response = await verify(verifyRequest({ cookie: `__Host-px_token=${token}; other=ignored` }))
-		expect(response.status).toBe(204)
-		expect(response.headers.get(PROXY_TOKEN_HEADER)).toBe(token)
-		expect(iam.mintTokenCalls).toBe(0) // the whole point: warm path, no round trip
-	})
-
 	test('a session cookie is exchanged once and the minted token is injected', async () => {
 		const token = await signUserToken()
 		const { iam, verify } = service({ rules: [{ path: '/*', kind: 'human' }] }, {
@@ -173,11 +164,17 @@ describe('gate ordering — array order is the precedence', () => {
 		expect(iam.mintTokenCalls).toBe(0)
 	})
 
-	test('a human rule that MISSES still falls through to a later public rule', async () => {
-		// Faithful to `AppGates`: only a matched-and-satisfied rule is terminal. An anonymous visitor
-		// therefore lands on the public rule rather than being bounced to login.
+	test('an ABSENT human credential falls through to a later public rule', async () => {
 		const { verify } = service({ rules: [{ path: '/*', kind: 'human' }, { path: '/*', kind: 'public' }] })
 		expect((await verify(verifyRequest({ path: '/secret' }))).status).toBe(204)
+	})
+
+	test('a PRESENT-but-invalid human credential is terminal before a later public rule', async () => {
+		const { verify } = service(
+			{ rules: [{ path: '/*', kind: 'human' }, { path: '/*', kind: 'public' }] },
+			{ mintToken: { ok: false, reason: 'invalid_session' } },
+		)
+		expect((await verify(verifyRequest({ path: '/secret', cookie: '__Host-px_session=invalid' }))).status).toBe(302)
 	})
 
 	test('reordering changes the outcome — precedence is load-bearing', async () => {
@@ -216,7 +213,7 @@ describe('gate ordering — array order is the precedence', () => {
 describe('app selection', () => {
 	test('the pinned ?app= wins, so a spoofed Host cannot pick another app', async () => {
 		const token = await signUserToken(3600)
-		const iam = new FakeIam({})
+		const iam = new FakeIam({ mintToken: { ok: true, token, expiresAt: future(3600) } })
 		const verify = createVerifyService({
 			manifest: {
 				apps: [
@@ -228,11 +225,11 @@ describe('app selection', () => {
 			issuer: ISSUER,
 		})
 		// The pin decides, so the open app's public rule is never reached...
-		expect((await verify(verifyRequest({ app: APP, host: HOST, cookie: `__Host-px_token=${token}` }))).status).toBe(204)
+		expect((await verify(verifyRequest({ app: APP, host: HOST, cookie: '__Host-px_session=session' }))).status).toBe(204)
 		expect((await verify(verifyRequest({ app: APP, host: HOST }))).status).toBe(302)
 		// ...and claiming a host the pinned app does not declare is refused outright, so the forwarded
 		// host can never end up building a URL for an origin the manifest never mentioned.
-		expect((await verify(verifyRequest({ app: APP, host: 'open.example.com', cookie: `__Host-px_token=${token}` }))).status).toBe(403)
+		expect((await verify(verifyRequest({ app: APP, host: 'open.example.com', cookie: '__Host-px_session=session' }))).status).toBe(403)
 	})
 
 	test('a pinned app still matches its own host case- and port-insensitively', async () => {

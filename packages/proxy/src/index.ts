@@ -37,6 +37,7 @@ export {
 } from './constants'
 export { applicableGates, compileGates, readBearer, readCookie, readServiceCredential } from './gates'
 export type { CompiledGate } from './gates'
+export { stripFabrikaCookies } from './handoff'
 export { HttpIamGateway, IamUnavailableError } from './iam'
 export type { HttpIamGatewayOptions, IamGateway } from './iam'
 export { consoleLogger, redactPath, redactUrl, silentLogger } from './log'

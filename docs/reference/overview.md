@@ -257,9 +257,12 @@ Nothing downstream of the proxy enforces. An application reads the proxy-injecte
 cookie.
 
 A browser that authenticated at IAM reaches an app through a one-time code the proxy
-redeems at a reserved callback path, whether or not the two share a domain — no cookie
-is ever shared between two hosts, and each host's session cookie carries the `__Host-`
-prefix ([ADR-0023](../decisions/0023-one-session-per-host.md)). See
+redeems at a reserved callback path, whether or not the two share a domain. A browser-held
+verifier binds that callback to the app host that started login. No cookie is ever shared
+between two hosts, each host's session cookie carries the `__Host-` prefix, and the proxy
+removes every Fabrika cookie before the application while preserving app-owned cookies
+([ADR-0023](../decisions/0023-one-session-per-host.md),
+[ADR-0026](../decisions/0026-bind-session-handoffs-to-the-browser.md)). See
 [`cross-host-sso.md`](cross-host-sso.md).
 
 The IAM service stays **global** — one identity database, one audit log, one admin

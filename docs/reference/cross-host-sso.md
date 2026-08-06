@@ -7,20 +7,23 @@ into a cookie that belongs to that host alone. No cookie is ever shared between 
 hosts. See
 [ADR-0023](../decisions/0023-one-session-per-host.md) for why there is only one
 mechanism, [ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)
-for the enforcement model around it, and
+for the enforcement model around it,
+[ADR-0026](../decisions/0026-bind-session-handoffs-to-the-browser.md) for the
+browser-bound proof, and
 [ADR-0021](../decisions/0021-exchange-token-session-handoff.md) for the code's
 design.
 
 ## The round trip
 
-| # | Where    | What happens                                                                                                                                    |
-| - | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1 | app host | The proxy matches a `human` gate, finds no usable credential, and sends the browser to `${issuer}/auth/login?app=<id>&redirect=<original URL>`. |
-| 2 | IAM      | `?app=` + `?redirect=` are read as a handoff against that app's registered return origins — two ways it can go, below.                          |
-| 3 | IAM      | The human authenticates — password, OIDC, or an IAM session the browser already holds, in which case there is no prompt.                        |
-| 4 | IAM      | A single-use code bound to `(session, app, return URL)` is issued; 302 to `<app origin>/__fabrika/auth/callback?code=…`.                        |
-| 5 | app host | The proxy redeems the code, sets the returned app session as a **host-only** cookie, and 302s to the stored return URL.                         |
-| 6 | app host | Every later request mints a short-lived per-app token from that cookie and verifies it locally, as it always has.                               |
+| # | Where    | What happens                                                                                                                                                                       |
+| - | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 | app host | The proxy creates `(state, verifier)`, stores the verifier in `__Host-px_handoff_<state>`, and sends `app`, `redirect`, `state`, and the verifier's S256 `code_challenge` to IAM.  |
+| 2 | IAM      | The public handoff fields are read against that app's registered return origins — two ways it can go, below.                                                                       |
+| 3 | IAM      | The human authenticates — password, OIDC, or an IAM session the browser already holds, in which case there is no prompt.                                                           |
+| 4 | IAM      | A single-use code bound to `(session, app, return URL, challenge)` is issued; 302 to `<app origin>/__fabrika/auth/callback?code=…&state=…`.                                        |
+| 5 | app host | The proxy selects the verifier cookie by state and privately redeems `(code, verifier)`. IAM atomically consumes the code before checking the proof.                               |
+| 6 | app host | The proxy sets the returned app session as a **host-only** cookie, clears the verifier cookie, and 302s to the stored return URL.                                                  |
+| 7 | app host | Every later request mints and verifies a short-lived per-app JWT. The proxy injects it as `X-Fabrika-Token`; neither the session nor a JWT cookie reaches the application request. |
 
 Step 1 answers in the shape the caller can act on: a **302** for a document
 navigation, a **401** carrying `{ error: { type, message, loginUrl } }` for anything
@@ -34,11 +37,11 @@ application.
 
 ### Step 2 has two outcomes
 
-| The `?app=` + `redirect=` the proxy sent        | Outcome                                        |
-| ----------------------------------------------- | ---------------------------------------------- |
-| no `?app=` at all                               | Not a handoff — an ordinary login on IAM.      |
-| its origin is in the app's registry             | A single-use code.                             |
-| missing, unparseable, or an unregistered origin | **400**, naming the address. Never a fallback. |
+| The handoff coordinates the proxy sent           | Outcome                                        |
+| ------------------------------------------------ | ---------------------------------------------- |
+| no `?app=` at all                                | Not a handoff — an ordinary login on IAM.      |
+| registered origin plus valid state and challenge | A single-use code.                             |
+| missing, unparseable, or an unregistered origin  | **400**, naming the address. Never a fallback. |
 
 An **empty** registry falls in the last row: an app IAM has no return origin for
 cannot log anyone in, and that is reported rather than worked around. A fallback
@@ -51,11 +54,11 @@ permission.
 
 ## The cookies
 
-| Cookie              | Host                | Row                                                          |
-| ------------------- | ------------------- | ------------------------------------------------------------ |
-| `__Host-px_session` | IAM's own host      | The login. `app IS NULL`; it is what authorizes a handoff.   |
-| `__Host-px_session` | each app's own host | A child session, `app` set, `parent_session_id` set.         |
-| `__Host-px_token`   | each app's own host | Nothing writes it; the proxy reads it if a client sends one. |
+| Cookie                      | Host                | Purpose                                                    |
+| --------------------------- | ------------------- | ---------------------------------------------------------- |
+| `__Host-px_session`         | IAM's own host      | The login. `app IS NULL`; it is what authorizes a handoff. |
+| `__Host-px_session`         | each app's own host | A child session, `app` set, `parent_session_id` set.       |
+| `__Host-px_handoff_<state>` | one app's own host  | Ten-minute browser-held verifier for one login attempt.    |
 
 Same name, different hosts, independent rows. The `__Host-` prefix makes the browser
 enforce what the design already intends: it refuses any cookie of that name that
@@ -71,9 +74,13 @@ on a public hostname cannot hold a session at all.
 
 ## What is stored, and for how long
 
-- **The code**: hash only, single-use, two minutes. The plaintext exists in one
-  redirect and one redemption. Consumption is a conditional `UPDATE`, so a replay
-  changes no rows and loses.
+- **The handoff attempt**: a random state and verifier on the app proxy. Only the
+  S256 challenge leaves the host during login. The verifier cookie lives for ten
+  minutes so an OIDC round trip can finish; the callback clears it.
+- **The code**: hash only, single-use, two minutes. Its plaintext integrity-binds
+  the challenge and exists in one redirect and one redemption. Consumption is a
+  conditional `UPDATE`, so a replay or a second verifier attempt changes no rows
+  and loses.
 - **The app session**: a `sessions` row with `app` set and `parent_session_id`
   pointing at the IAM login. It inherits the parent's absolute expiry.
 
@@ -90,6 +97,10 @@ on a public hostname cannot hold a session at all.
   there is no second, weaker answer to the same question.
 - **The destination is carried server-side.** Redemption returns the URL stored with
   the code, so a caller cannot point the browser elsewhere by editing the callback.
+- **The callback is bound to the browser that initiated it.** Public `state` only
+  selects a dynamic host-only cookie. The cookie's verifier must match the S256
+  challenge bound into the one-time code. A code copied into another browser cannot
+  establish or replace that browser's app session.
 - **An app session mints only for its own app.** The cookie is host-only, so a
   sibling cannot read it; the binding in `mintToken` is the second lock.
 - **A child cannot father another.** Only the IAM login itself authorizes a handoff,
@@ -97,8 +108,16 @@ on a public hostname cannot hold a session at all.
 - **Revoking the IAM login revokes every app session under it.** The lookup joins to
   the parent on every use. An access token already minted stays valid for the rest of
   its TTL (300s) — that bound is unchanged, and local verification is why it exists.
-- **The proxy writes a cookie on exactly one path**: a successful redemption at the
-  reserved callback, and nowhere else.
+- **The proxy writes the long-lived app session on exactly one path**: successful
+  redemption at the reserved callback. Starting login writes only the transient
+  verifier cookie.
+- **Fabrika cookies never reach the upstream application.** Both proxy runtimes strip
+  every `__Host-px_*` cookie on the upstream hop while preserving application-owned
+  cookies. The application reads only the proxy-injected JWT header.
+- **A gateway does not revive the cookie path.** Control translates its trusted proxy
+  JWT into a bearer for IAM admin calls and removes all console cookies on that private
+  hop. IAM verifies the signed app audience, identifies the principal, and resolves IAM
+  permissions live; it does not reuse the calling app's permission snapshot.
 
 ## Configuration
 
@@ -168,7 +187,7 @@ the provider:
 - **Zerops.** IAM serves two HTTP surfaces behind two different secrets: `/rpc/*` for
   management, gated by `FABRIKA_IAM_RPC_KEY`, and `/auth/mint/*` for the proxy, gated by
   `FABRIKA_IAM_PROXY_KEY` (the value the proxy holds as `FABRIKA_IAM_KEY`). The proxy
-  calls `POST /auth/mint/exchange`. A holder of the RPC key cannot redeem, and an unset
+  calls `POST /auth/mint/exchange` with the code and verifier in its body. A holder of the RPC key cannot redeem, and an unset
   key makes its surface 404 as if never mounted. The split is a real boundary.
 - **Cloudflare.** IAM is one `WorkerEntrypoint` implementing both contracts, so
   `exchangeAuthCode` is an ordinary method on it and every holder of the `IAM` service
@@ -177,9 +196,9 @@ the provider:
 
 The asymmetry is accepted, not a gap to work around — see
 [ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md). Exploiting it
-needs a first-party Worker holding the binding **and** a live code inside its two-minute
-window; what stops a replay is the code being single-use, hash-only and bound to
-`(session, app, return URL)`.
+needs a first-party Worker holding the binding **and** a live code plus the browser-held
+verifier inside its two-minute window. The code is single-use, hash-only, app-bound,
+destination-bound, and challenge-bound.
 
 ## Verified live
 

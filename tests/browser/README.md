@@ -48,8 +48,8 @@ invalidates every IAM session. Always use `OPICE_AUTH_REFRESH=1` after a reset.
 - `operations-notes` is scoped to the `browser-notes` application and can see
   only `Browser Notes / test`.
 - `admin` and `operations-notes` are signed in through the real handoff: the
-  seeded IAM login goes on `iam.fabrika.localhost`, and one
-  `GET /auth/login?app=…&redirect=…` per application host redeems a single-use
+  seeded IAM login goes on `iam.fabrika.localhost`, and one protected navigation
+  per application host starts a browser-bound handoff and redeems a single-use
   code into that host's own `__Host-px_session`. `browser-auth.ts` does this once
   per role; `@fabrika/local-stack`'s `registerLocalApps` is what makes IAM willing
   to issue the codes.

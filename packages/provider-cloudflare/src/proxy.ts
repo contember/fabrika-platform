@@ -57,7 +57,7 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 		compatibility_flags: ['nodejs_compat'],
 		compatibility_date: '2025-05-25',
 		routes: domain === undefined || domain === '' ? [] : [{ pattern: domain, custom_domain: true }],
-		observability: { enabled: true },
+		observability: { logs: { enabled: true, invocation_logs: false } },
 		vars: {
 			FABRIKA_PROXY_MANIFEST_JSON: encodeProxyManifestJson(manifest),
 			FABRIKA_IAM_URL: options.iamUrl ?? '',

@@ -25,5 +25,8 @@ this one import.
   in the order supplied and never interprets a `ProviderJobSpec.kind`.
 - **The proxy topology is: public Worker owns the route, private application Worker is bound to it.**
   IAM remains a global service binding. See ADR-0022.
+- **Proxy invocation logs stay disabled.** The reserved handoff callback carries a one-time code in
+  its query string, and Cloudflare's automatic invocation metadata is outside the proxy's redaction
+  layer. Structured application logs remain enabled and redact request queries.
 - **Never log credentials or secret values** — including an error object from a failed `wrangler`
   invocation, whose output can quote a clone URL with an embedded token.

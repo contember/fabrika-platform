@@ -16,11 +16,12 @@
  * NOTHING here returns an allow on an unexpected condition. Every `catch` maps to a deny.
  */
 
-import { API_KEY_PREFIX, AUTH_CODE_PARAM, SESSION_COOKIE, TOKEN_COOKIE, TOKEN_REFRESH_SKEW_SECONDS } from '@fabrika/auth-core'
+import { API_KEY_PREFIX, AUTH_CODE_PARAM, AUTH_HANDOFF_STATE_PARAM, SESSION_COOKIE, TOKEN_REFRESH_SKEW_SECONDS } from '@fabrika/auth-core'
 import type { ProxyApp } from '@fabrika/proxy-contract'
 import { cacheKey, type TokenCache } from './cache'
 import { LOGIN_REDIRECT_PARAM } from './constants'
 import { applicableGates, type CompiledGate, readCookie, readServiceCredential } from './gates'
+import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams } from './handoff'
 import { type IamGateway, IamUnavailableError } from './iam'
 import { TokenVerifier } from './verifier'
 
@@ -54,19 +55,19 @@ export type Decision =
 		/** Principal id (or credential id) for the log line. Never a secret. */
 		subject: string | null
 	}
-	| { outcome: 'deny'; status: 401 | 403 | 503; reason: DenyReason }
+	| { outcome: 'deny'; status: 401 | 403 | 503; reason: DenyReason; clearHandoffState?: string }
 	/**
 	 * A human hit a `human` gate without a usable session. `location` is where they must go to sign
 	 * in; `status` is only how they are TOLD — 302 for a document navigation, 401 for anything else,
 	 * whose body carries the same URL. See `isDocumentNavigation` for why the two differ.
 	 */
-	| { outcome: 'login'; status: 302 | 401; location: string; reason: DenyReason }
+	| { outcome: 'login'; status: 302 | 401; location: string; reason: DenyReason; handoff: HandoffAttempt }
 	/**
-	 * A handoff code was redeemed (ADR-0021). The ONLY outcome that sets a cookie: `session` is the
-	 * app-bound session to write host-only on this app's host, and `location` is where IAM said the
-	 * browser was going — read from the code server-side, never from the request.
+	 * A handoff code was redeemed (ADR-0021). The only outcome that writes the long-lived app
+	 * session: `session` is host-only on this app's host, and `location` is where IAM said the browser
+	 * was going — read from the code server-side, never from the request.
 	 */
-	| { outcome: 'handoff'; status: 302; location: string; session: string; expiresAt: number }
+	| { outcome: 'handoff'; status: 302; location: string; session: string; expiresAt: number; handoffState: string }
 
 /** The original request, reconstructed from what `forward_auth` forwarded. */
 export interface ForwardedRequest {
@@ -174,16 +175,14 @@ export class Authorizer {
 			if (session.status === 'unavailable') {
 				return { outcome: 'deny', status: 503, reason: 'iam_unavailable' }
 			}
+			if (session.reason !== 'no_session') {
+				return await this.loginDecision(resolved.app, request, session.reason)
+			}
 			humanMiss = session.reason
 		}
 
 		if (humanMiss !== null) {
-			return {
-				outcome: 'login',
-				status: isDocumentNavigation(request.headers) ? 302 : 401,
-				location: this.loginUrl(resolved.app, request.url),
-				reason: humanMiss,
-			}
+			return await this.loginDecision(resolved.app, request, humanMiss)
 		}
 		// Every matching rule was a `service` rule with no credential present.
 		return { outcome: 'deny', status: 401, reason: 'no_credential' }
@@ -239,30 +238,16 @@ export class Authorizer {
 	}
 
 	/**
-	 * Resolve a human. Three tiers, cheapest first:
-	 *   1. a `px_token` cookie that still verifies — no IAM call, no cache entry needed;
-	 *   2. a cached token minted earlier from the SAME session — no IAM call;
-	 *   3. exchange the `px_session` SSO cookie via `mintToken`.
+	 * Resolve a human. Two tiers, cheapest first:
+	 *   1. a cached token minted earlier from the SAME session — no IAM call;
+	 *   2. exchange the `px_session` SSO cookie via `mintToken`.
 	 *
 	 * Every tier additionally requires `ptype: 'user'`: a `human` gate asserts that a resolved USER
-	 * principal exists, and `px_token` is client-supplied — the proxy only ever writes `px_session`.
-	 * Without the check an anonymous share JWT or a `service` token presented in that cookie would
-	 * walk every human-gated path (see `issueJwt`, which signs up to 24 h and cannot be revoked).
+	 * principal exists. Without the check a broken IAM could turn a service token into a human allow.
 	 */
 	private async authorizeSession(app: ProxyApp, request: ForwardedRequest): Promise<SessionAttempt> {
 		const cookieHeader = request.headers.get('Cookie')
 		const now = this.now()
-
-		const tokenCookie = readCookie(cookieHeader, TOKEN_COOKIE)
-		if (tokenCookie !== null) {
-			const verified = await this.verifier.verify(tokenCookie, app.id)
-			if (!verified.ok && verified.reason === 'unavailable') {
-				return { ok: false, status: 'unavailable' }
-			}
-			if (verified.ok && verified.claims.ptype === 'user' && verified.claims.exp - now > TOKEN_REFRESH_SKEW_SECONDS) {
-				return { ok: true, token: tokenCookie, subject: verified.claims.sub }
-			}
-		}
 
 		const session = readCookie(cookieHeader, SESSION_COOKIE)
 		if (session === null) {
@@ -328,31 +313,51 @@ export class Authorizer {
 	 * IAM: a code that will not redeem twice would turn a retry into a loop.
 	 */
 	async authorizeCallback(resolved: ResolvedApp, request: ForwardedRequest): Promise<Decision> {
+		const state = request.url.searchParams.get(AUTH_HANDOFF_STATE_PARAM)
+		if (handoffCookieName(state) === null || state === null) {
+			return { outcome: 'deny', status: 403, reason: 'no_credential' }
+		}
 		try {
-			return await this.redeem(resolved, request)
+			return await this.redeem(resolved, request, state)
 		} catch (err) {
 			if (err instanceof IamUnavailableError) {
-				return { outcome: 'deny', status: 503, reason: 'iam_unavailable' }
+				return { outcome: 'deny', status: 503, reason: 'iam_unavailable', clearHandoffState: state }
 			}
-			return { outcome: 'deny', status: 403, reason: 'internal_error' }
+			return { outcome: 'deny', status: 403, reason: 'internal_error', clearHandoffState: state }
 		}
 	}
 
-	private async redeem(resolved: ResolvedApp, request: ForwardedRequest): Promise<Decision> {
+	private async redeem(resolved: ResolvedApp, request: ForwardedRequest, state: string): Promise<Decision> {
 		const code = request.url.searchParams.get(AUTH_CODE_PARAM)
 		if (code === null || code === '') {
-			return { outcome: 'deny', status: 403, reason: 'no_credential' }
+			return { outcome: 'deny', status: 403, reason: 'no_credential', clearHandoffState: state }
+		}
+		const cookieName = handoffCookieName(state)
+		const verifier = cookieName === null ? null : readCookie(request.headers.get('Cookie'), cookieName)
+		if (verifier === null) {
+			return { outcome: 'deny', status: 403, reason: 'invalid_session', clearHandoffState: state }
 		}
 		// Through `callIam` like every other IAM call, so an unreachable service is a 503 whatever kind
 		// of error the injected gateway happened to throw. `authorize`'s outer catch maps the rest.
 		const result = await this.callIam(
 			'exchangeAuthCode',
-			() => this.options.iam.exchangeAuthCode({ app: resolved.app.id, code, requestId: request.requestId }),
+			() => this.options.iam.exchangeAuthCode({ app: resolved.app.id, code, verifier, requestId: request.requestId }),
 		)
 		if (!result.ok) {
-			return { outcome: 'deny', status: 403, reason: 'invalid_session' }
+			return { outcome: 'deny', status: 403, reason: 'invalid_session', clearHandoffState: state }
 		}
-		return { outcome: 'handoff', status: 302, location: result.returnUrl, session: result.session, expiresAt: result.expiresAt }
+		return { outcome: 'handoff', status: 302, location: result.returnUrl, session: result.session, expiresAt: result.expiresAt, handoffState: state }
+	}
+
+	private async loginDecision(app: ProxyApp, request: ForwardedRequest, reason: SessionFailureReason): Promise<Decision> {
+		const handoff = await createHandoffAttempt()
+		return {
+			outcome: 'login',
+			status: isDocumentNavigation(request.headers) ? 302 : 401,
+			location: this.loginUrl(app, request.url, handoff),
+			reason,
+			handoff,
+		}
 	}
 
 	/**
@@ -362,13 +367,17 @@ export class Authorizer {
 	 * balancer the proxy is reached over plain HTTP and `X-Forwarded-Proto` says so, which would send
 	 * the browser back to an `http://` URL for an origin only served over `https://`.
 	 */
-	private loginUrl(app: ProxyApp, url: URL): string {
+	private loginUrl(app: ProxyApp, url: URL, handoff: HandoffAttempt): string {
 		const target = new URL(url)
 		target.protocol = `${app.scheme}:`
 		// `readProxyEnv` already reduces the issuer to an origin; this covers a composition root that
 		// does not go through it (the Cloudflare Worker reads its env directly).
 		const issuer = this.options.issuer.replace(/\/+$/, '')
-		return `${issuer}/auth/login?app=${encodeURIComponent(app.id)}&${LOGIN_REDIRECT_PARAM}=${encodeURIComponent(target.toString())}`
+		const login = new URL('/auth/login', issuer)
+		login.searchParams.set('app', app.id)
+		login.searchParams.set(LOGIN_REDIRECT_PARAM, target.toString())
+		setHandoffParams(login, handoff)
+		return login.toString()
 	}
 }
 

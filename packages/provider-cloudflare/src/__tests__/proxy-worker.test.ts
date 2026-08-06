@@ -26,6 +26,20 @@ describe('Cloudflare proxy Worker', () => {
 		)
 	})
 
+	test('disables automatic invocation logs because callback URLs carry a one-time code', () => {
+		const app = new Worker({
+			dir: '.',
+			name: APP,
+			main: './src/index.ts',
+			compatibility_flags: [],
+			bindings: {},
+			routes: [],
+			workers_dev: false,
+		})
+		const proxy = createCloudflareProxyWorker({ name: 'proxy', app, appId: APP, appHost: HOST, gates: { rules: [] } })
+		expect(proxy.options.observability).toEqual({ logs: { enabled: true, invocation_logs: false } })
+	})
+
 	test('forwards a public request with its method and body, but never a client token', async () => {
 		let seen: Request | undefined
 		const env = environment(
@@ -41,7 +55,11 @@ describe('Cloudflare proxy Worker', () => {
 			new Request(`https://${HOST}/public/stream?x=1`, {
 				method: 'POST',
 				body: 'payload',
-				headers: { 'X-Fabrika-Token': 'forged', 'X-Request-Id': 'request-1' },
+				headers: {
+					'X-Fabrika-Token': 'forged',
+					'X-Request-Id': 'request-1',
+					Cookie: '__Host-px_session=session-secret; app-cookie=kept; __Host-px_handoff_state=verifier',
+				},
 			}),
 		)
 
@@ -53,6 +71,7 @@ describe('Cloudflare proxy Worker', () => {
 		const requestId = seen?.headers.get('X-Request-Id')
 		expect(requestId).not.toBe('request-1')
 		expect(requestId).toMatch(/^[0-9a-f-]{36}$/)
+		expect(seen?.headers.get('Cookie')).toBe('app-cookie=kept')
 		expect(await seen?.text()).toBe('payload')
 		expect(await response.text()).toBe('streamed')
 	})
@@ -103,14 +122,19 @@ describe('Cloudflare proxy Worker', () => {
 				},
 			},
 		)
-		const response = await createCloudflareProxyHandler(env)(
+		const configured: CloudflareProxyEnv = {
+			...env,
+			IAM: new FakeIam({ mintToken: { ok: true, token, expiresAt: Math.floor(Date.now() / 1000) + 300 } }),
+		}
+		const response = await createCloudflareProxyHandler(configured)(
 			new Request(`https://${HOST}/private`, {
-				headers: { Cookie: `__Host-px_token=${token}`, 'X-Fabrika-Token': 'forged' },
+				headers: { Cookie: '__Host-px_session=session; app-cookie=kept', 'X-Fabrika-Token': 'forged' },
 			}),
 		)
 
 		expect(response.status).toBe(200)
 		expect(seen?.headers.get('X-Fabrika-Token')).toBe(token)
+		expect(seen?.headers.get('Cookie')).toBe('app-cookie=kept')
 	})
 
 	test('uses the shared service gate before a later human gate', async () => {
@@ -140,6 +164,7 @@ describe('Cloudflare proxy Worker', () => {
 
 		expect(response.status).toBe(200)
 		expect(seen?.headers.get('X-Fabrika-Token')).toBe(token)
+		expect(seen?.headers.get('Cookie')).toBeNull()
 	})
 
 	test('returns the shared login bounce and does not call the application', async () => {

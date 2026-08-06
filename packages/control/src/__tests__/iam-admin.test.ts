@@ -1,3 +1,4 @@
+import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import type { HttpService } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import { forwardIamAdmin } from '../iam-admin'
@@ -15,11 +16,11 @@ class RecordingGateway implements HttpService {
 }
 
 describe('IAM admin gateway', () => {
-	test('strips the console prefix and preserves the IAM-owned request', async () => {
+	test('strips the console prefix and replaces the app cookie with the proxy token', async () => {
 		const gateway = new RecordingGateway()
 		const response = await forwardIamAdmin(
 			new Request('https://console.test/iam/admin/apps/notes/schema?view=full', {
-				headers: { cookie: '__Host-px_session=session-one' },
+				headers: { cookie: '__Host-px_session=session-one; app_cookie=kept-here', [PROXY_TOKEN_HEADER]: 'proxy-jwt' },
 			}),
 			{ gateway, publicIamUrl: 'https://iam.test', publicOrigin: 'https://console.test' },
 		)
@@ -27,7 +28,8 @@ describe('IAM admin gateway', () => {
 		expect(response.status).toBe(200)
 		expect(gateway.requests).toHaveLength(1)
 		expect(gateway.requests[0]?.url).toBe('https://console.test/admin/apps/notes/schema?view=full')
-		expect(gateway.requests[0]?.headers.get('cookie')).toBe('__Host-px_session=session-one')
+		expect(gateway.requests[0]?.headers.get('cookie')).toBeNull()
+		expect(gateway.requests[0]?.headers.get('authorization')).toBe('Bearer proxy-jwt')
 	})
 
 	test('rejects cross-origin mutations before they reach IAM', async () => {
@@ -153,7 +155,7 @@ describe('the gateway CSRF guard', () => {
 	})
 
 	test('checks a bearer that arrives alongside any cookie', async () => {
-		expect((await forward({ authorization: 'Bearer px_machine', cookie: '__Host-px_token=abc' })).status).toBe(403)
+		expect((await forward({ authorization: 'Bearer px_machine', cookie: 'app_session=abc' })).status).toBe(403)
 	})
 
 	test('fails closed when no public origin is configured', async () => {

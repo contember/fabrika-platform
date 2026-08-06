@@ -1,10 +1,10 @@
 // Reading the fabrika-native credential off the incoming Request, to forward to the IAM service's
 // management RPCs (issueKey / issueJwt / revokeKey / listPrincipals). Precedence: the token the PROXY
 // injected (the one it already verified), then an `Authorization: Bearer` (a machine `px_` key or a
-// passthrough JWT), then the browser's `px_token` access cookie. None of this is a security boundary —
+// passthrough JWT). None of this is a security boundary —
 // IAM re-resolves and re-authorizes the caller server-side from this credential.
 
-import { PROXY_TOKEN_HEADER, TOKEN_COOKIE } from '@fabrika/auth-core'
+import { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 
 /** Cloudflare's per-request ray id; we use it as the correlation request id. */
 const RAY_HEADER = 'cf-ray'
@@ -25,8 +25,7 @@ export function readRequestId(req: Request): string {
 export function readCredentials(req: Request): ForwardedCredentials {
 	return {
 		credential: nonEmpty(req.headers.get(PROXY_TOKEN_HEADER))
-			?? readBearer(req.headers.get('Authorization'))
-			?? parseCookie(req.headers.get('Cookie'), TOKEN_COOKIE),
+			?? readBearer(req.headers.get('Authorization')),
 		requestId: readRequestId(req),
 	}
 }
@@ -46,21 +45,4 @@ function readBearer(header: string | null): string | null {
 	}
 	const match = /^Bearer\s+(.+)$/i.exec(header.trim())
 	return match ? (match[1]?.trim() ?? null) : null
-}
-
-/** Read a single cookie value out of a raw Cookie header. Returns null when absent. */
-function parseCookie(header: string | null, name: string): string | null {
-	if (!header) {
-		return null
-	}
-	for (const part of header.split(';')) {
-		const eq = part.indexOf('=')
-		if (eq === -1) {
-			continue
-		}
-		if (part.slice(0, eq).trim() === name) {
-			return part.slice(eq + 1).trim()
-		}
-	}
-	return null
 }

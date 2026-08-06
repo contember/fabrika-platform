@@ -11,6 +11,7 @@ import {
 	MemoryTokenCache,
 	PROXY_TOKEN_HEADER,
 	REQUEST_ID_HEADER,
+	stripFabrikaCookies,
 	UNTRUSTED_FORWARD_HEADERS,
 } from '@fabrika/proxy'
 import { parseProxyManifestJson, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-contract'
@@ -129,6 +130,7 @@ function proxyHandler(env: CloudflareProxyEnv, manifest: ProxyManifest, verify: 
 		// verify subrequest, not to this one.
 		const upstreamHeaders = new Headers(request.headers)
 		stripClientAsserted(upstreamHeaders)
+		stripFabrikaCookies(upstreamHeaders)
 		if (clientAddress !== null && clientAddress !== '') upstreamHeaders.set(CLIENT_ADDRESS_HEADER, clientAddress)
 		const token = verification.headers.get(PROXY_TOKEN_HEADER)
 		if (token !== null && token !== '') upstreamHeaders.set(PROXY_TOKEN_HEADER, token)

@@ -22,8 +22,8 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   condition. A request matching no gate rule is denied.
 - **A `human` gate admits only `ptype: 'user'`.** A valid token is not a human: `issueJwt` signs an
   anonymous token for the app (up to 24 h, not revocable) and `mintFromKey` signs `ptype: 'service'`.
-  `__Host-px_token` is client-supplied — the proxy only ever writes `__Host-px_session` — so every
-  tier of `authorizeSession` checks the claim. Share links are redeemed OFF the gate path.
+  Browser authentication starts from the host-only opaque `__Host-px_session`; the short-lived JWT
+  exists only in the proxy cache and the injected header. Share links are redeemed OFF the gate path.
 - **A `human` gate miss answers in the shape the caller can act on.** `Sec-Fetch-Mode: navigate`, or
   the header absent, → the 302 bounce; any other value → **401** with
   `{ error: { type: 'auth', message, loginUrl } }`, the envelope `@fabrika/app`'s browser RPC client
@@ -50,7 +50,8 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   as a matcher at all. Any of those mismatches silently widens or narrows an authorization rule. Read
   the header of `src/caddy.ts` before revisiting this.
 - **Gate semantics are `AppGates`', verbatim:** array order IS precedence; a matching rule whose
-  credential is ABSENT falls through; a matching rule whose credential is PRESENT is terminal.
+  credential is ABSENT falls through; a matching rule whose credential is PRESENT is terminal. A
+  rejected human session therefore never falls through to a later public or service rule.
 - **The token cache is best-effort and per-process.** Every entry is re-verified against the JWKS
   before it is trusted, and `null` (no cache) is a supported configuration that changes only how many
   times IAM is called — never which requests are allowed. ADR-0022 requires the proxy to stay
@@ -112,12 +113,14 @@ the state — IAM — keys its per-client abuse bucket on what arrives. Backlog 
 
 ## The session handoff (ADR-0022, ADR-0023)
 
-- **The proxy sets a cookie on EXACTLY ONE path**: a successful redemption at the reserved callback,
-  and nowhere else. It is otherwise a pure enforcement point; every extra write site is another place
-  a mistake establishes a session. Since ADR-0023 that is also the only way ANY session reaches an
-  app's host — IAM's own cookie is host-only on IAM's host, so `authorizeSession`'s
-  `__Host-px_session` is always a child session this proxy itself wrote. That narrows the cookie's
-  provenance and nothing else: the three tiers are unchanged.
+- **The proxy writes a long-lived app session on EXACTLY ONE path**: successful redemption at the
+  reserved callback. Starting login additionally writes one short-lived browser verifier cookie,
+  named `__Host-px_handoff_<state>` so parallel tabs do not overwrite each other; the callback clears
+  it on every terminal outcome. IAM receives only its S256 challenge. A callback without the matching
+  state and verifier cannot redeem or replace a browser's session.
+- **Fabrika cookies stop at the proxy.** Caddy and the Cloudflare proxy Worker remove every
+  `__Host-px_*` cookie only from the request sent upstream. Application-owned cookies remain intact;
+  the app receives identity through the verified `X-Fabrika-Token` header only.
 - **The session cookie's attributes are fixed by its `__Host-` prefix**: `Secure`, `Path=/`, no
   `Domain`. `Secure` is UNCONDITIONAL and no longer follows `ProxyApp.scheme` — the prefix requires
   it, so a conditional could only emit a cookie the browser discards. It is right behind a
@@ -125,9 +128,9 @@ the state — IAM — keys its per-client abuse bucket on what arrives. Backlog 
   treat as potentially trustworthy; measured in Chromium 151, not assumed.
 - **`/__fabrika/auth/callback` is reserved on every app host** and is answered BEFORE gate matching —
   it is how a browser becomes able to satisfy a gate, so it cannot be behind one. It must not shadow
-  an application route, the same hazard `src/caddy.ts` documents for the health route. Its `?code=` is
-  a bare random token, so the access-log redaction pattern carries it unconditionally: it is not a
-  declared credential and nothing else would ever contribute it.
+  an application route, the same hazard `src/caddy.ts` documents for the health route. Its `?code=`
+  and `?state=` are stripped from structured request logs; the Cloudflare proxy disables automatic
+  invocation logs because they would otherwise capture the raw callback URL.
 - **`ProxyApp.scheme` is configuration no header may supply.** A TLS-terminating balancer forwards
   plain HTTP and the next hop rewrites `X-Forwarded-Proto` to what _it_ received, so the login bounce
   and the callback are built from the manifest. Absent parses as `https`.

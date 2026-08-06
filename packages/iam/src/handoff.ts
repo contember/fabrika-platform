@@ -18,7 +18,7 @@
 
 import { AUTH_CODE_TTL_SECONDS, type ExchangeAuthCodeInput, type ExchangeAuthCodeResult } from '@fabrika/auth-core'
 import { principalStatus } from './db'
-import { randomToken } from './oidc'
+import { pkceChallenge, randomToken } from './oidc'
 import { normalizeOrigin } from './origin'
 import { hashToken } from './secret'
 import type { Services } from './services'
@@ -59,9 +59,11 @@ export async function resolveReturnUrl(services: Services, app: string, rawUrl: 
 /** Issue a single-use code for a validated return URL. */
 export async function issueAuthCode(
 	services: Services,
-	input: { app: string; parentSessionId: string; returnUrl: string },
+	input: { app: string; parentSessionId: string; returnUrl: string; challenge: string },
 ): Promise<IssuedAuthCode> {
-	const code = randomToken(32)
+	if (!validChallenge(input.challenge)) throw new Error('invalid handoff challenge')
+	// The stored hash integrity-binds the public challenge without adding a second persistence field.
+	const code = `${randomToken(32)}.${input.challenge}`
 	const expiresAt = Math.floor(Date.now() / 1000) + AUTH_CODE_TTL_SECONDS
 	await services.repositories.handoff.issueCode({
 		codeHash: await hashToken(code),
@@ -101,6 +103,10 @@ export async function exchangeAuthCode(services: Services, input: ExchangeAuthCo
 	if (consumed.app !== input.app) {
 		return { result: { ok: false, reason: 'wrong_app' }, principalId: null }
 	}
+	const challenge = challengeFromCode(input.code)
+	if (challenge === null || !validVerifier(input.verifier) || await pkceChallenge(input.verifier) !== challenge) {
+		return { result: { ok: false, reason: 'invalid_verifier' }, principalId: null }
+	}
 
 	// The login must still be usable: a code outliving a logout would resurrect the session it came from.
 	const parent = await services.repositories.sessions.getActiveSessionById(consumed.parent_session_id)
@@ -130,4 +136,22 @@ export async function exchangeAuthCode(services: Services, input: ExchangeAuthCo
 		result: { ok: true, session, returnUrl: consumed.return_url, expiresAt: parent.expires_at },
 		principalId: principal.id,
 	}
+}
+
+const CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43}$/
+const VERIFIER_PATTERN = /^[A-Za-z0-9_-]{43,128}$/
+
+function validChallenge(value: string): boolean {
+	return CHALLENGE_PATTERN.test(value)
+}
+
+function validVerifier(value: string): boolean {
+	return VERIFIER_PATTERN.test(value)
+}
+
+function challengeFromCode(code: string): string | null {
+	const separator = code.lastIndexOf('.')
+	if (separator === -1) return null
+	const challenge = code.slice(separator + 1)
+	return validChallenge(challenge) ? challenge : null
 }

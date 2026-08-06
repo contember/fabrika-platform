@@ -111,11 +111,14 @@ export class Signer {
 export async function verifyAccessToken(
 	signer: Signer,
 	token: string,
-	opts: { issuer: string; audience: string },
+	opts: { issuer: string; audience?: string },
 ): Promise<AccessTokenClaims | null> {
 	const jwks = createLocalJWKSet(signer.jwks())
 	try {
-		const { payload } = await jwtVerify(token, jwks, { issuer: opts.issuer, audience: opts.audience })
+		const { payload } = await jwtVerify(token, jwks, {
+			issuer: opts.issuer,
+			...(opts.audience === undefined ? {} : { audience: opts.audience }),
+		})
 		return parseAccessClaims(payload)
 	} catch {
 		return null

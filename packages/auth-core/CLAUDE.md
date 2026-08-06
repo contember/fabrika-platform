@@ -44,6 +44,9 @@ bun test               # gates.test.ts · permissions.test.ts · token.test.ts �
   separation survives only as a type — see
   [ADR-0022](../../docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md). Folding the
   method into `IamRpc` would remove even that.
+- **A handoff redemption includes a browser-held verifier.** The proxy sends only its S256 challenge
+  through the browser-facing login flow, then submits the verifier privately with the one-time code.
+  Keep `state`, the challenge, the dynamic cookie prefix, and their TTL in this shared wire contract.
 - **The gate matcher here is CANONICAL, and there must never be a second one.** `compileGates`
   compiles `*` to `.*` — it crosses `/` — matches case-sensitively, and matches the raw pathname
   with no normalization. Those are exactly the three properties Caddy's path matcher does not share,
@@ -74,8 +77,8 @@ bun test               # gates.test.ts · permissions.test.ts · token.test.ts �
   duplication is deliberate — the alternative is a runtime dependency, which the first invariant
   forbids.
 - Several comments in `token.ts` and `rpc.ts` still say "propustka" and describe the pre-merge
-  Cloudflare-Access world in the present tense. The wire names (`__Host-px_session`,
-  `__Host-px_token`, `px_`) are durable and must not be renamed; the historical framing around them
-  is not a description of current behaviour. `token.ts` says "parent cookie domain" nowhere any more:
+  Cloudflare-Access world in the present tense. The active wire names (`__Host-px_session`,
+  `__Host-px_handoff_`, `px_`) are durable and must not be renamed; the historical framing around
+  them is not a description of current behaviour. `token.ts` says "parent cookie domain" nowhere any more:
   ADR-0023 made every session cookie host-only and the `__Host-` prefix is the browser-enforced
   restatement of that — a cookie of either name carrying a `Domain` is DROPPED, not widened.

@@ -409,6 +409,7 @@ function decodeExchangeAuthCode(body: unknown): ExchangeAuthCodeInput {
 	return {
 		app: requiredString(body, 'app'),
 		code: requiredString(body, 'code'),
+		verifier: requiredString(body, 'verifier'),
 		requestId: requiredString(body, 'requestId'),
 	}
 }

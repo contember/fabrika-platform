@@ -1,3 +1,4 @@
+import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import type { HttpService } from '@fabrika/platform'
 import { error } from './http'
 
@@ -27,7 +28,14 @@ export async function forwardIamAdmin(request: Request, options: IamAdminGateway
 
 	const target = new URL(url)
 	target.pathname = `/admin${url.pathname.slice(PREFIX.length)}`
-	const response = await options.gateway.fetch(new Request(target, request))
+	const forwarded = new Request(target, request)
+	const proxyToken = request.headers.get(PROXY_TOKEN_HEADER)
+	if (proxyToken !== null && proxyToken !== '') {
+		forwarded.headers.set('Authorization', `Bearer ${proxyToken}`)
+	}
+	// Keep console-host cookies at the gateway; IAM receives the verified short-lived token.
+	forwarded.headers.delete('Cookie')
+	const response = await options.gateway.fetch(forwarded)
 	if (response.status !== 401 || options.publicIamUrl === undefined || options.publicIamUrl === '') {
 		return response
 	}

@@ -168,6 +168,16 @@ describe('the per-app chain is fail-closed by construction', () => {
 		}
 	})
 
+	test('the app upstream receives app cookies, never Fabrika browser credentials', () => {
+		const upstream = proxyHandler(subrouteOf(routes[0] as CaddyRoute).routes[2])
+		const replacements = upstream.headers?.request?.replace?.['Cookie'] ?? []
+		let cookie = '__Host-px_session=session; app-cookie=kept; __Host-px_handoff_state=verifier; theme=dark'
+		for (const replacement of replacements) {
+			cookie = cookie.replace(new RegExp(replacement.search_regexp, 'g'), replacement.replace)
+		}
+		expect(cookie).toBe('app-cookie=kept; theme=dark')
+	})
+
 	test('no reverse_proxy anywhere dials an app upstream outside such a chain', () => {
 		const upstreams = MANIFEST.apps.map((app) => app.upstream)
 		let found = 0

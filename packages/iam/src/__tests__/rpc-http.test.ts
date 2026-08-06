@@ -348,13 +348,21 @@ describe('the proxy mint surface', () => {
 		expect(rpc.calls).toEqual([{ method: 'mintFromKey', input: { app: 'opice', key: 'px_value', requestId: 'r1' } }])
 	})
 
-	test('/auth/mint/exchange forwards {app, code, requestId} to exchangeAuthCode', async () => {
+	test('/auth/mint/exchange forwards {app, code, verifier, requestId} to exchangeAuthCode', async () => {
 		// ADR-0021's third endpoint. It was added to `isMintPath` and to the dispatch without ever being
 		// named here, so a drift in either half would have shown up only as a 503 on the Zerops path.
-		const { rpc, response } = mint(MINT_EXCHANGE_PATH, { app: 'opice', code: 'handoff-code-value', requestId: 'r1' })
+		const { rpc, response } = mint(MINT_EXCHANGE_PATH, {
+			app: 'opice',
+			code: 'handoff-code-value',
+			verifier: 'browser-verifier',
+			requestId: 'r1',
+		})
 		const res = await response
 		expect(res.status).toBe(200)
-		expect(rpc.calls).toEqual([{ method: 'exchangeAuthCode', input: { app: 'opice', code: 'handoff-code-value', requestId: 'r1' } }])
+		expect(rpc.calls).toEqual([{
+			method: 'exchangeAuthCode',
+			input: { app: 'opice', code: 'handoff-code-value', verifier: 'browser-verifier', requestId: 'r1' },
+		}])
 		const body: unknown = await res.json()
 		// The four fields `HttpIamGateway.exchangeAuthCode` reads off a success. It raises on any of them
 		// missing or empty, which the proxy then answers as a 503.
@@ -367,7 +375,7 @@ describe('the proxy mint surface', () => {
 	test('a REFUSED redemption is 200 with a reason, exactly like a refused mint', async () => {
 		// A spent or expired code is the ordinary case — every successful sign-in leaves one behind. A
 		// status code here would turn each of them into an `IamUnavailableError` and a 503.
-		const { response } = mint(MINT_EXCHANGE_PATH, { app: 'opice', code: 'spent', requestId: 'r1' }, PROXY_KEY, {
+		const { response } = mint(MINT_EXCHANGE_PATH, { app: 'opice', code: 'spent', verifier: 'browser-verifier', requestId: 'r1' }, PROXY_KEY, {
 			exchangeAuthCode: { ok: false, reason: 'expired_code' },
 		})
 		const res = await response
@@ -385,6 +393,15 @@ describe('the proxy mint surface', () => {
 		const body: unknown = await res.json()
 		// Names the field, never the value — a code is a credential for as long as it lives.
 		expect(typeof body === 'object' && body !== null && 'error' in body ? String(body.error) : '').toContain("'code'")
+	})
+
+	test('an exchange missing its verifier is a 400 that never reaches the method', async () => {
+		const { rpc, response } = mint(MINT_EXCHANGE_PATH, { app: 'opice', code: 'code', requestId: 'r1' })
+		const res = await response
+		expect(res.status).toBe(400)
+		expect(rpc.calls).toEqual([])
+		const body: unknown = await res.json()
+		expect(typeof body === 'object' && body !== null && 'error' in body ? String(body.error) : '').toContain("'verifier'")
 	})
 
 	test('the exchange is closed without the proxy key, and disabled entirely without one configured', async () => {

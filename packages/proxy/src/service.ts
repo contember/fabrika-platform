@@ -21,7 +21,7 @@
  *      back on a 2xx, so the edge is the only thing that mints either.
  */
 
-import { AUTH_CALLBACK_PATH, SESSION_COOKIE, uuidv7 } from '@fabrika/auth-core'
+import { AUTH_CALLBACK_PATH, HANDOFF_COOKIE_TTL_SECONDS, SESSION_COOKIE, uuidv7 } from '@fabrika/auth-core'
 import type { ProxyManifest } from '@fabrika/proxy-contract'
 import { Authorizer, type AuthorizerOptions, type Decision, type DenyReason, type ForwardedRequest, type ResolvedApp } from './authorize'
 import type { TokenCache } from './cache'
@@ -37,6 +37,7 @@ import {
 	REQUEST_ID_HEADER,
 } from './constants'
 import { compileGates } from './gates'
+import { type HandoffAttempt, handoffCookieName } from './handoff'
 import type { IamGateway } from './iam'
 import { type LogFields, type ProxyLogger, redactPath, silentLogger } from './log'
 
@@ -157,8 +158,8 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 /**
  * Render a redeemed handoff: set the app session on THIS host and send the browser where IAM said.
  *
- * This is the ONE place an app session is established — since ADR-0023 there is no other, because
- * IAM's own cookie is host-only too and never reaches here.
+ * This is the ONE place the proxy writes the long-lived app session. It separately writes a
+ * short-lived handoff verifier when starting login, then clears that verifier here.
  *
  * Every attribute is fixed by `SESSION_COOKIE`'s `__Host-` prefix: `Secure`, `Path=/`, and no
  * `Domain`. The absent `Domain` is the substance — the session belongs to this app's host and no
@@ -171,10 +172,12 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
  */
 function handoffResponse(decision: Extract<Decision, { outcome: 'handoff' }>): Response {
 	const maxAge = Math.max(0, decision.expiresAt - Math.floor(Date.now() / 1000))
-	const attributes = [`${SESSION_COOKIE}=${decision.session}`, 'Path=/', `Max-Age=${maxAge}`, 'HttpOnly', 'SameSite=Lax', 'Secure']
+	const headers = new Headers({ location: decision.location, 'cache-control': 'no-store' })
+	headers.append('set-cookie', secureCookie(SESSION_COOKIE, decision.session, maxAge))
+	headers.append('set-cookie', clearHandoffCookie(decision.handoffState))
 	return new Response(null, {
 		status: 302,
-		headers: { location: decision.location, 'cache-control': 'no-store', 'set-cookie': attributes.join('; ') },
+		headers,
 	})
 }
 
@@ -183,15 +186,24 @@ function denied(logger: ProxyLogger, fields: LogFields, decision: Extract<Decisi
 	const reason: DenyReason = decision.reason
 	if (decision.outcome === 'login') {
 		logger.info('login', { ...fields, reason, status: decision.status })
-		return decision.status === 302 ? loginRedirect(decision.location) : loginRequired(decision.location)
+		return decision.status === 302
+			? loginRedirect(decision.location, decision.handoff)
+			: loginRequired(decision.location, decision.handoff)
 	}
 	logger.warn('deny', { ...fields, reason, status: decision.status })
-	return textResponse(decision.status, decision.status === 401 ? 'unauthorized' : decision.status === 503 ? 'unavailable' : 'forbidden')
+	const response = textResponse(decision.status, decision.status === 401 ? 'unauthorized' : decision.status === 503 ? 'unavailable' : 'forbidden')
+	if (decision.clearHandoffState !== undefined) {
+		response.headers.append('set-cookie', clearHandoffCookie(decision.clearHandoffState))
+	}
+	return response
 }
 
 /** The bounce a document navigation gets: the browser follows it and comes back signed in. */
-function loginRedirect(location: string): Response {
-	return new Response(null, { status: 302, headers: { location, 'cache-control': 'no-store' } })
+function loginRedirect(location: string, handoff: HandoffAttempt): Response {
+	return new Response(null, {
+		status: 302,
+		headers: { location, 'cache-control': 'no-store', 'set-cookie': handoffCookie(handoff) },
+	})
 }
 
 /**
@@ -205,11 +217,27 @@ function loginRedirect(location: string): Response {
  * Caddy logs request URIs and response headers, never bodies, and the access log already redacts
  * `?redirect=` out of both.
  */
-function loginRequired(loginUrl: string): Response {
+function loginRequired(loginUrl: string, handoff: HandoffAttempt): Response {
 	return new Response(JSON.stringify({ error: { type: 'auth', message: 'Authentication required', loginUrl } }), {
 		status: 401,
-		headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+		headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'set-cookie': handoffCookie(handoff) },
 	})
+}
+
+function handoffCookie(handoff: HandoffAttempt): string {
+	const name = handoffCookieName(handoff.state)
+	if (name === null) throw new Error('generated invalid handoff state')
+	return secureCookie(name, handoff.verifier, HANDOFF_COOKIE_TTL_SECONDS)
+}
+
+function clearHandoffCookie(state: string): string {
+	const name = handoffCookieName(state)
+	if (name === null) throw new Error('invalid handoff state')
+	return secureCookie(name, '', 0)
+}
+
+function secureCookie(name: string, value: string, maxAge: number): string {
+	return [`${name}=${value}`, 'Path=/', `Max-Age=${maxAge}`, 'HttpOnly', 'SameSite=Lax', 'Secure'].join('; ')
 }
 
 function textResponse(status: number, body: string): Response {

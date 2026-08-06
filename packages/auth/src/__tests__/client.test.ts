@@ -120,12 +120,6 @@ describe('IamClient.listPrincipals', () => {
 		expect(stub.listPrincipalsInputs[0]).toEqual({ app: 'app-z', credential: 'px_ci', requestId: 'ray-9' })
 	})
 
-	test('px_token cookie is used when no bearer is present', async () => {
-		const stub = new IamRpcStub({ listPrincipals: { ok: true, principals: [] } })
-		await new IamClient(stub, 'app-z').listPrincipals(makeRequest({ cookie: 'tok-abc', ray: 'ray-1' }))
-		expect(stub.listPrincipalsInputs[0]).toEqual({ app: 'app-z', credential: 'tok-abc', requestId: 'ray-1' })
-	})
-
 	test('absent credential → null; missing cf-ray → generated requestId', async () => {
 		const stub = new IamRpcStub({ listPrincipals: { ok: true, principals: [] } })
 		await new IamClient(stub, 'app-z').listPrincipals(makeRequest())

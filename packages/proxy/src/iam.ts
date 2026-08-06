@@ -145,7 +145,7 @@ export class HttpIamGateway implements IamGateway {
 		}
 		return {
 			ok: false,
-			reason: reasonOf(reason, ['invalid_code', 'expired_code', 'wrong_app', 'unknown_principal', 'disabled'], 'invalid_code'),
+			reason: reasonOf(reason, ['invalid_code', 'expired_code', 'wrong_app', 'invalid_verifier', 'unknown_principal', 'disabled'], 'invalid_code'),
 		}
 	}
 

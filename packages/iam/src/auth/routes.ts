@@ -25,7 +25,7 @@
  * the admin gate (`/admin/*`) applies only to the admin surface, never here.
  */
 
-import { AUTH_CALLBACK_PATH, AUTH_CODE_PARAM, SESSION_COOKIE } from '@fabrika/auth-core'
+import { AUTH_CALLBACK_PATH, AUTH_CODE_PARAM, AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM, SESSION_COOKIE } from '@fabrika/auth-core'
 import { LOCAL_DEV_ADMIN_EMAIL, LOCAL_DEV_ADMIN_ID, sessionUsable } from '../auth'
 import type { AuthenticationMethod } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
@@ -122,6 +122,8 @@ async function handleJwks(env: AuthEnv): Promise<Response> {
 interface Handoff {
 	app: string
 	returnUrl: string
+	state: string
+	challenge: string
 }
 
 /**
@@ -146,16 +148,25 @@ type HandoffReading =
  *
  * `none` survives only for a login with no `?app=` at all — someone opening IAM's own login page.
  */
-async function readHandoff(services: Services, app: string | null, redirect: string | null): Promise<HandoffReading> {
+async function readHandoff(
+	services: Services,
+	app: string | null,
+	redirect: string | null,
+	state: string | null,
+	challenge: string | null,
+): Promise<HandoffReading> {
 	if (app === null || app === '') {
 		return { kind: 'none' }
 	}
 	if (redirect === null || redirect === '') {
 		return { kind: 'refused', message: 'no return address was given for this app' }
 	}
+	if (!validHandoffState(state) || !validHandoffChallenge(challenge)) {
+		return { kind: 'refused', message: 'no valid browser handoff proof was given for this app' }
+	}
 	const returnUrl = await resolveReturnUrl(services, app, redirect)
 	if (returnUrl !== null) {
-		return { kind: 'handoff', handoff: { app, returnUrl } }
+		return { kind: 'handoff', handoff: { app, returnUrl, state, challenge } }
 	}
 	const origin = normalizeOrigin(redirect) ?? 'that address'
 	return { kind: 'refused', message: `${printable(origin)} is not a registered return origin for this app` }
@@ -168,7 +179,13 @@ function handoffOf(reading: HandoffReading): Handoff | null {
 
 async function handleLogin(request: Request, services: Services, env: AuthEnv, ctx: RequestContext): Promise<Response> {
 	const url = new URL(request.url)
-	const reading = await readHandoff(services, url.searchParams.get('app'), url.searchParams.get('redirect'))
+	const reading = await readHandoff(
+		services,
+		url.searchParams.get('app'),
+		url.searchParams.get('redirect'),
+		url.searchParams.get(AUTH_HANDOFF_STATE_PARAM),
+		url.searchParams.get(AUTH_HANDOFF_CHALLENGE_PARAM),
+	)
 	if (reading.kind === 'refused') {
 		return authError(reading.message, 400)
 	}
@@ -232,24 +249,43 @@ function handoffRedirectOr(handoff: Handoff | null, raw: string | null, services
  * destination origin its `form-action` must admit. The origin is taken from the REGISTERED return URL
  * `readHandoff` resolved, so it is the same value the 302 will use and never a caller's spelling.
  */
-function loginHandoffFields(handoff: Handoff | null): { app?: string; handoffOrigin?: string } {
+function loginHandoffFields(
+	handoff: Handoff | null,
+): { app?: string; handoffOrigin?: string; handoffState?: string; handoffChallenge?: string } {
 	if (handoff === null) return {}
 	const origin = normalizeOrigin(handoff.returnUrl)
-	return { app: handoff.app, ...(origin === null ? {} : { handoffOrigin: origin }) }
+	return {
+		app: handoff.app,
+		handoffState: handoff.state,
+		handoffChallenge: handoff.challenge,
+		...(origin === null ? {} : { handoffOrigin: origin }),
+	}
 }
 
 /** Issue the code and build the URL of the app's own callback. */
 async function handoffLocation(services: Services, handoff: Handoff, parentSessionId: string): Promise<string> {
-	const issued = await issueAuthCode(services, { app: handoff.app, parentSessionId, returnUrl: handoff.returnUrl })
+	const issued = await issueAuthCode(services, {
+		app: handoff.app,
+		parentSessionId,
+		returnUrl: handoff.returnUrl,
+		challenge: handoff.challenge,
+	})
 	const callback = new URL(AUTH_CALLBACK_PATH, handoff.returnUrl)
 	callback.searchParams.set(AUTH_CODE_PARAM, issued.code)
+	callback.searchParams.set(AUTH_HANDOFF_STATE_PARAM, handoff.state)
 	return callback.toString()
 }
 
 async function handleOidcStart(request: Request, services: Services, env: AuthEnv): Promise<Response> {
 	if (!services.config.authentication.oidc.enabled) return authError('OIDC login is disabled', 404)
 	const url = new URL(request.url)
-	const reading = await readHandoff(services, url.searchParams.get('app'), url.searchParams.get('redirect'))
+	const reading = await readHandoff(
+		services,
+		url.searchParams.get('app'),
+		url.searchParams.get('redirect'),
+		url.searchParams.get(AUTH_HANDOFF_STATE_PARAM),
+		url.searchParams.get(AUTH_HANDOFF_CHALLENGE_PARAM),
+	)
 	if (reading.kind === 'refused') {
 		return authError(reading.message, 400)
 	}
@@ -268,7 +304,14 @@ async function startOidc(
 	const state = randomToken(16)
 	const location = await services.oidc.authorizationUrl({ state, codeChallenge: challenge })
 
-	const flight = await encodeFlight(env, { state, verifier, redirect, ...(handoff === null ? {} : { app: handoff.app }) })
+	const flight = await encodeFlight(env, {
+		state,
+		verifier,
+		redirect,
+		...(handoff === null
+			? {}
+			: { app: handoff.app, handoffState: handoff.state, handoffChallenge: handoff.challenge }),
+	})
 	const headers = redirectHeaders(location)
 	// The in-flight cookie is scoped to /auth (only the callback reads it), single-use, and SIGNED —
 	// see `encodeFlight`.
@@ -354,7 +397,15 @@ async function handleCallback(
 
 	// Re-validate the handoff on the way back: the flight is ours (signature-checked), but the registry
 	// may have changed while the human was away at the IdP.
-	const reading = flight.app === undefined ? { kind: 'none' as const } : await readHandoff(services, flight.app, flight.redirect)
+	const reading = flight.app === undefined
+		? { kind: 'none' as const }
+		: await readHandoff(
+			services,
+			flight.app,
+			flight.redirect,
+			flight.handoffState ?? null,
+			flight.handoffChallenge ?? null,
+		)
 	if (reading.kind === 'refused') {
 		return refuse(reading.message, 400)
 	}
@@ -483,7 +534,13 @@ async function handlePasswordLogin(
 	const rawPassword = stringValue(form.get('password'))
 	// The form is a hint, not a permission: `readHandoff` re-checks the return URL against what the app
 	// has registered, so a hand-edited field buys nothing.
-	const reading = await readHandoff(services, stringValue(form.get('app')), stringValue(form.get('redirect')))
+	const reading = await readHandoff(
+		services,
+		stringValue(form.get('app')),
+		stringValue(form.get('redirect')),
+		stringValue(form.get(AUTH_HANDOFF_STATE_PARAM)),
+		stringValue(form.get(AUTH_HANDOFF_CHALLENGE_PARAM)),
+	)
 	if (reading.kind === 'refused') {
 		return authError(reading.message, 400)
 	}
@@ -770,6 +827,8 @@ interface Flight {
 	redirect: string
 	/** The handoff app, when this SSO detour started from one (ADR-0021). */
 	app?: string
+	handoffState?: string
+	handoffChallenge?: string
 }
 
 /** Audience of the flight token — never an app id, so a flight can never pass as an access token. */
@@ -799,10 +858,22 @@ async function decodeFlight(env: AuthEnv, raw: string | null): Promise<Flight | 
 	const verifier = stringField(payload, 'verifier')
 	const redirect = stringField(payload, 'redirect')
 	const app = stringField(payload, 'app')
+	const handoffState = stringField(payload, 'handoffState')
+	const handoffChallenge = stringField(payload, 'handoffChallenge')
 	if (state === undefined || verifier === undefined || redirect === undefined) {
 		return null
 	}
-	return app === undefined || app === '' ? { state, verifier, redirect } : { state, verifier, redirect, app }
+	if (app === undefined || app === '') return { state, verifier, redirect }
+	if (handoffState === undefined || handoffChallenge === undefined) return null
+	return { state, verifier, redirect, app, handoffState, handoffChallenge }
+}
+
+function validHandoffState(value: string | null): value is string {
+	return value !== null && /^[A-Za-z0-9_-]{16,128}$/.test(value)
+}
+
+function validHandoffChallenge(value: string | null): value is string {
+	return value !== null && /^[A-Za-z0-9_-]{43}$/.test(value)
 }
 
 /**

@@ -6,10 +6,11 @@
  * Each test names the failure and the status it must produce.
  */
 
-import { type AppGates, TOKEN_REFRESH_SKEW_SECONDS } from '@fabrika/auth-core'
+import { type AppGates, HANDOFF_COOKIE_PREFIX } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { cacheKey, MemoryTokenCache } from '../cache'
 import { PROXY_TOKEN_HEADER } from '../constants'
+import { handoffChallenge } from '../handoff'
 import { createVerifyService, type VerifyService } from '../service'
 import { APP, FakeIam, type FakeIamOptions, foreignPrivateKey, ISSUER, manifestWith, signToken, signUserToken, verifyRequest } from './helpers'
 
@@ -48,6 +49,17 @@ async function errorEnvelope(response: Response): Promise<Record<string, unknown
 		throw new Error('response body carries no error object')
 	}
 	return error
+}
+
+function expectLoginUrl(raw: string | null, returnUrl: string): void {
+	if (raw === null) throw new Error('missing login URL')
+	const url = new URL(raw)
+	expect(url.origin).toBe(ISSUER)
+	expect(url.pathname).toBe('/auth/login')
+	expect(url.searchParams.get('app')).toBe(APP)
+	expect(url.searchParams.get('redirect')).toBe(returnUrl)
+	expect(url.searchParams.get('state')).toMatch(/^[A-Za-z0-9_-]{16,128}$/)
+	expect(url.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/)
 }
 
 describe('deny — nothing matched', () => {
@@ -129,9 +141,14 @@ describe('deny — human gate', () => {
 		const iam = iamWith({})
 		const response = await service(HUMAN, iam)(verifyRequest({ path: '/dashboard' }))
 		expect(response.status).toBe(302)
-		expect(response.headers.get('location')).toBe(
-			`${ISSUER}/auth/login?app=example-app&redirect=${encodeURIComponent('https://app.example.com/dashboard')}`,
-		)
+		expectLoginUrl(response.headers.get('location'), 'https://app.example.com/dashboard')
+		const login = new URL(response.headers.get('location') ?? '')
+		const state = login.searchParams.get('state')
+		expect(response.headers.get('set-cookie')).toStartWith(`${HANDOFF_COOKIE_PREFIX}${state}=`)
+		const verifier = response.headers.get('set-cookie')?.split(';')[0]?.split('=')[1] ?? ''
+		const challenge = login.searchParams.get('code_challenge')
+		if (challenge === null) throw new Error('missing handoff challenge')
+		expect(await handoffChallenge(verifier)).toBe(challenge)
 		expect(response.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
 		// No session cookie → the answer is knowable locally; IAM is not consulted.
 		expect(iam.mintTokenCalls).toBe(0)
@@ -158,47 +175,17 @@ describe('deny — human gate', () => {
 
 	test('an empty cookie value is absent, not an empty credential', async () => {
 		const iam = iamWith({})
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: '__Host-px_session=; __Host-px_token=' }))
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: '__Host-px_session=' }))
 		expect(response.status).toBe(302)
 		expect(iam.mintTokenCalls).toBe(0)
 	})
 
-	test('a forged px_token signed by a key IAM never published is rejected', async () => {
-		const forged = await signToken({ key: foreignPrivateKey, type: 'user' })
-		const iam = iamWith({}) // mintToken → no_session, so there is no second way in
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `__Host-px_token=${forged}; __Host-px_session=s` }))
-		expect(response.status).toBe(302)
-	})
-
-	test('a px_token minted for ANOTHER app is rejected (aud binding)', async () => {
-		const otherApp = await signToken({ audience: 'some-other-app', type: 'user' })
+	test('the retired browser JWT cookie is ignored', async () => {
 		const iam = iamWith({})
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `__Host-px_token=${otherApp}` }))
+		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `__Host-px_token=${await signUserToken()}` }))
 		expect(response.status).toBe(302)
-	})
-
-	test('a px_token from another issuer is rejected', async () => {
-		const wrongIssuer = await signToken({ issuer: 'https://evil.example', type: 'user' })
-		const response = await service(HUMAN, iamWith({}))(verifyRequest({ cookie: `__Host-px_token=${wrongIssuer}` }))
-		expect(response.status).toBe(302)
-	})
-
-	test('an expired px_token does not authorize', async () => {
-		const expired = await signToken({ ttlSeconds: -60, type: 'user' })
-		const response = await service(HUMAN, iamWith({}))(verifyRequest({ cookie: `__Host-px_token=${expired}` }))
-		expect(response.status).toBe(302)
-	})
-
-	test('a token expiring inside the refresh skew is not ridden', async () => {
-		const nearlyExpired = await signToken({ ttlSeconds: TOKEN_REFRESH_SKEW_SECONDS - 5, type: 'user' })
-		const iam = iamWith({}) // no session → cannot refresh → deny
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `__Host-px_token=${nearlyExpired}` }))
-		expect(response.status).toBe(302)
-	})
-
-	test('garbage in px_token is rejected without crashing', async () => {
-		const response = await service(HUMAN, iamWith({}))(verifyRequest({ cookie: '__Host-px_token=not.a.jwt' }))
-		expect(response.status).toBe(302)
+		expect(iam.mintTokenCalls).toBe(0)
+		expect(iam.jwksCalls).toBe(0)
 	})
 
 	test('IAM mints a token we cannot verify → deny, never trust the mint', async () => {
@@ -210,23 +197,6 @@ describe('deny — human gate', () => {
 })
 
 describe('deny — a human gate admits a USER principal, not merely a valid token', () => {
-	// `px_token` is client-supplied — the proxy only ever sets `px_session` — and a valid token is not
-	// the same thing as a resolved user. `issueJwt` hands out an anonymous token for the app, up to 24h
-	// and not revocable; `mintFromKey` signs `ptype: 'service'`. Neither is a human.
-	test('an ANONYMOUS token (no ptype) in px_token does not satisfy a human gate', async () => {
-		const anonymous = await signToken({}) // exactly what `issueJwt` signs for a share link
-		const iam = iamWith({})
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `__Host-px_token=${anonymous}` }))
-		expect(response.status).toBe(302)
-		expectDenied(response)
-	})
-
-	test('a SERVICE token in px_token does not satisfy a human gate', async () => {
-		const machine = await signToken({ type: 'service' })
-		const response = await service(HUMAN, iamWith({}))(verifyRequest({ cookie: `__Host-px_token=${machine}` }))
-		expect(response.status).toBe(302)
-	})
-
 	test('a non-user token cannot ride in on the session tier either', async () => {
 		// Even if IAM somehow answered a session exchange with a non-user token, it is not a human.
 		const iam = iamWith({ mintToken: { ok: true, token: await signToken({ type: 'service' }), expiresAt: future() } })
@@ -244,8 +214,6 @@ describe('deny — a human miss answers in the shape the caller can act on', () 
 	// A 302 only helps a document navigation: a page's `fetch` cannot follow a cross-origin bounce to
 	// IAM, and a redirect turns an in-flight POST into a bodyless GET. The signal is `Sec-Fetch-Mode`,
 	// which the browser writes and page JS cannot — `Sec-` is a forbidden header prefix.
-	const RPC_LOGIN_URL = `${ISSUER}/auth/login?app=example-app&redirect=${encodeURIComponent('https://app.example.com/api/rpc')}`
-
 	function rpcPost(mode: string | null): Request {
 		return verifyRequest({ path: '/api/rpc', method: 'POST', ...(mode === null ? {} : { headers: { 'Sec-Fetch-Mode': mode } }) })
 	}
@@ -254,9 +222,7 @@ describe('deny — a human miss answers in the shape the caller can act on', () 
 		const request = verifyRequest({ path: '/dashboard', headers: { 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' } })
 		const response = await service(HUMAN, iamWith({}))(request)
 		expect(response.status).toBe(302)
-		expect(response.headers.get('location')).toBe(
-			`${ISSUER}/auth/login?app=example-app&redirect=${encodeURIComponent('https://app.example.com/dashboard')}`,
-		)
+		expectLoginUrl(response.headers.get('location'), 'https://app.example.com/dashboard')
 	})
 
 	test("the console's RPC POST gets 401 with the SAME login URL, in a JSON body", async () => {
@@ -268,7 +234,7 @@ describe('deny — a human miss answers in the shape the caller can act on', () 
 		expectDenied(response)
 		const error = await errorEnvelope(response)
 		expect(error['type']).toBe('auth')
-		expect(error['loginUrl']).toBe(RPC_LOGIN_URL)
+		expectLoginUrl(typeof error['loginUrl'] === 'string' ? error['loginUrl'] : null, 'https://app.example.com/api/rpc')
 	})
 
 	test('every non-navigate mode a browser can state gets the 401', async () => {
@@ -404,14 +370,6 @@ describe('deny — IAM is unreachable', () => {
 describe('deny — "we could not check" is 503 on the human path, never a login bounce', () => {
 	// A bounce would put the user in a login loop against an IAM that cannot answer, and would hide an
 	// incident behind something that looks exactly like an expired session.
-	test('a px_token that WOULD verify, with an unfetchable key set → 503', async () => {
-		const token = await signUserToken(3600)
-		const iam = iamWith({ jwksUnreachable: true })
-		const response = await service(HUMAN, iam)(verifyRequest({ cookie: `__Host-px_token=${token}` }))
-		expect(response.status).toBe(503)
-		expect(response.headers.get('location')).toBeNull()
-	})
-
 	test('a mint that SUCCEEDS but cannot be verified because the key set is down → 503', async () => {
 		const iam = iamWith({ jwksUnreachable: true, mintToken: { ok: true, token: await signUserToken(), expiresAt: future() } })
 		const response = await service(HUMAN, iam)(verifyRequest({ cookie: '__Host-px_session=s' }))

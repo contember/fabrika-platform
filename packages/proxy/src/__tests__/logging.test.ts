@@ -50,7 +50,6 @@ describe('no secret material reaches the log', () => {
 		await verify(verifyRequest({ path: `/share/${SHARE}?pxt=${QUERY_TOKEN}` })) // deny (bad query token)
 		await verify(verifyRequest({ path: '/dashboard' })) // login bounce
 		await verify(verifyRequest({ path: '/nowhere-in-the-gates', app: 'unknown-app' })) // deny
-		await verify(verifyRequest({ path: '/dashboard', cookie: `__Host-px_token=${token}` })) // allow (warm)
 
 		expect(logger.lines.length).toBeGreaterThan(0)
 		const dumped = logger.dump()
@@ -60,7 +59,6 @@ describe('no secret material reaches the log', () => {
 		// Nor any of the header names' values, in whole or in part.
 		expect(dumped).not.toContain('Bearer')
 		expect(dumped).not.toContain('__Host-px_session=')
-		expect(dumped).not.toContain('__Host-px_token=')
 	})
 
 	test('the login bounce is logged without the redirect URL, in either shape', async () => {

@@ -84,14 +84,15 @@ has one code path and no local mode, so no synthetic persona exists anywhere.
 Opening the console therefore runs the real round trip:
 
 1. the proxy matches a `human` gate and answers `302` to
-   `iam.fabrika.localhost:18080/auth/login?app=vozka&redirect=<original URL>`;
+   `iam.fabrika.localhost:18080/auth/login?app=vozka&redirect=<original URL>&state=…&code_challenge=…`,
+   after storing the verifier in a short-lived cookie on the console host;
 2. IAM authenticates. `LOCAL_DEV_LOGIN=true` makes that step non-interactive: IAM
    creates a **real** session row for the `admin@local.test` bootstrap admin
    instead of calling an external IdP. It is IAM's own mechanism and is refused at
    use the moment the flag is off;
-3. IAM issues a single-use code bound to `(session, vozka, return URL)` and 302s to
-   `control.fabrika.localhost:18080/__fabrika/auth/callback?code=…`;
-4. the proxy there redeems the code, sets `__Host-px_session` **on the console's own
+3. IAM issues a single-use code bound to `(session, vozka, return URL, challenge)` and 302s to
+   `control.fabrika.localhost:18080/__fabrika/auth/callback?code=…&state=…`;
+4. the proxy there redeems the code with the browser-held verifier, sets `__Host-px_session` **on the console's own
    host**, and 302s to the original URL. Every later request mints a per-app token
    from that cookie.
 

@@ -9,7 +9,7 @@
 //
 // The Postgres half skips (with a reason) when FABRIKA_TEST_POSTGRES_URL is unset — helpers/postgres.ts.
 
-import { AUTH_CALLBACK_PATH, SESSION_COOKIE } from '@fabrika/auth-core'
+import { AUTH_CALLBACK_PATH, AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM, SESSION_COOKIE } from '@fabrika/auth-core'
 import { PostgresDatabase } from '@fabrika/platform-node'
 import { Database } from 'bun:sqlite'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -21,6 +21,7 @@ import { handleAuth } from '../auth/routes'
 import { type AuthenticationMethod, createIamRepositories, type IamRepositories } from '../db'
 import type { RequestContext } from '../env'
 import { applyMigrations, postgresMigrations } from '../node/migrate'
+import { pkceChallenge } from '../oidc'
 import { hashToken } from '../secret'
 import type { Services } from '../services'
 import { mintToken } from '../tokens'
@@ -31,6 +32,8 @@ const ISSUER = 'https://iam.test'
 const APP_ORIGIN = 'https://app.test'
 const AUTH_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
 const ADMIN_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', FABRIKA_IAM_PROVISIONING_KEY: '', ENVIRONMENT: 'stage' }
+const HANDOFF_STATE = 'session-method-state'
+const HANDOFF_CHALLENGE = await pkceChallenge('session-method-verifier')
 
 if (!hasPostgres) {
 	console.warn(`session-method.test.ts (Postgres half) ${skipReason}`)
@@ -42,8 +45,13 @@ class TestContext implements RequestContext {
 
 /** The login page (200) rather than the 302 carrying a handoff code — i.e. `currentSession` said no. */
 async function handoffStatus(services: Services, session: string): Promise<number> {
+	const url = new URL('/auth/login', ISSUER)
+	url.searchParams.set('app', 'notes')
+	url.searchParams.set('redirect', `${APP_ORIGIN}/private`)
+	url.searchParams.set(AUTH_HANDOFF_STATE_PARAM, HANDOFF_STATE)
+	url.searchParams.set(AUTH_HANDOFF_CHALLENGE_PARAM, HANDOFF_CHALLENGE)
 	const response = await handleAuth(
-		new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private`)}`, {
+		new Request(url, {
 			headers: { Cookie: `${SESSION_COOKIE}=${session}` },
 		}),
 		services,

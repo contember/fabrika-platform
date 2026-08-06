@@ -1,13 +1,12 @@
 /**
  * The console's Access plane, end to end across the seam that actually broke.
  *
- * The unit tests on either side of it were both green while production answered every call to
- * `/iam/admin/*` with 403. The defect only existed BETWEEN them: control's process-side gateway
- * rewrote the browser's `Origin` to IAM's private RPC address, IAM's CSRF check compared `Origin`
- * against its PUBLIC issuer, and those two never agree in any deployment where the private RPC URL
- * differs from the public issuer — which is the normal production shape. So this test drives the real
- * `forwardIamAdmin` through the real `HttpIamAdminGateway` over a real HTTP hop into the real IAM
- * application, with the three coordinates a live installation actually has:
+ * The unit tests on either side of this seam were once green while production answered every call to
+ * `/iam/admin/*` with 403. The current boundary adds another cross-package invariant: the app session
+ * stops at the proxy, Control forwards the proxy-injected app JWT as a bearer, and IAM verifies its
+ * identity but resolves IAM permissions live. This test drives `forwardIamAdmin` through the real
+ * `HttpIamAdminGateway` over a real HTTP hop into the real IAM application, with the three coordinates
+ * a live installation actually has:
  *
  *   the console's public origin  ≠  IAM's public issuer  ≠  IAM's private RPC address
  *
@@ -15,12 +14,14 @@
  * `src/**` only, so reaching across into two other packages never enters this package's program.
  */
 
+import { PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { forwardIamAdmin } from '../../control/src/iam-admin'
 import { HttpIamAdminGateway } from '../../control/src/node/iam-admin'
 import { createHarness, seedGrant, seedUser } from '../../iam/src/__tests__/helpers/harness'
 import { createIamApp } from '../../iam/src/app'
 import type { Env } from '../../iam/src/env'
+import { mintToken } from '../../iam/src/tokens'
 
 /** The console's own public origin — the control plane's domain, which IAM cannot infer. */
 const CONSOLE = 'http://console.example.test'
@@ -38,12 +39,16 @@ const unusedDatabase = {
 
 interface Stack {
 	/** Drive a request at the CONSOLE, exactly as a browser would. */
-	call(method: string, input: unknown, options?: { origin?: string | null; cookie?: string; bearer?: string }): Promise<Response>
+	call(
+		method: string,
+		input: unknown,
+		options?: { origin?: string | null; cookie?: string; bearer?: string; proxyToken?: string | null },
+	): Promise<Response>
 	stop(): Promise<void>
 }
 
-/** Compose control's gateway in front of IAM over a real socket, and return an admin's session. */
-async function stack(options: { adminOrigins: string[] }): Promise<Stack & { session: string }> {
+/** Compose control's gateway in front of IAM over a real socket. */
+async function stack(options: { adminOrigins: string[] }): Promise<Stack> {
 	const harness = createHarness()
 	const adminId = seedUser(harness.sqlite, { sub: 'sub-console-admin', email: 'admin@contember.com' })
 	seedGrant(harness.sqlite, adminId, 'admin')
@@ -56,7 +61,7 @@ async function stack(options: { adminOrigins: string[] }): Promise<Stack & { ses
 		HUMAN_EMAILS: '[]',
 		IAM_BOOTSTRAP_ADMINS: '[]',
 		ADMIN_ORIGINS: JSON.stringify(options.adminOrigins),
-		ENVIRONMENT: 'stage',
+		ENVIRONMENT: 'local',
 		ISSUER,
 		FABRIKA_IAM_SIGNING_KEYS: '',
 		FABRIKA_IAM_PROVISIONING_KEY: '',
@@ -66,6 +71,10 @@ async function stack(options: { adminOrigins: string[] }): Promise<Stack & { ses
 		OIDC_SCOPES: '',
 		OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
 	}
+	const services = harness.makeServices({ environment: 'local', issuer: ISSUER, adminOrigins: options.adminOrigins })
+	const minted = await mintToken(services, env, { app: 'vozka', session, requestId: 'r1' })
+	if (!minted.result.ok) throw new Error(`proxy token mint failed: ${minted.result.reason}`)
+	const proxyToken = minted.result.token
 
 	const iam = createIamApp()
 	// IAM's PRIVATE address. A loopback port on plain HTTP, which is what a private service binding or
@@ -74,13 +83,13 @@ async function stack(options: { adminOrigins: string[] }): Promise<Stack & { ses
 	const gateway = new HttpIamAdminGateway(`http://127.0.0.1:${server.port}`)
 
 	return {
-		session,
 		call(method, input, callOptions = {}) {
 			const headers = new Headers({ 'content-type': 'application/json' })
 			const origin = callOptions.origin === undefined ? CONSOLE : callOptions.origin
 			if (origin !== null) headers.set('origin', origin)
 			if (callOptions.cookie !== undefined) headers.set('cookie', callOptions.cookie)
 			if (callOptions.bearer !== undefined) headers.set('authorization', `Bearer ${callOptions.bearer}`)
+			if (callOptions.proxyToken !== null) headers.set(PROXY_TOKEN_HEADER, proxyToken)
 			return forwardIamAdmin(
 				new Request(`${CONSOLE}/iam/admin/rpc`, { method: 'POST', headers, body: JSON.stringify({ method, input }) }),
 				{ gateway, publicIamUrl: ISSUER, publicOrigin: CONSOLE },
@@ -92,9 +101,9 @@ async function stack(options: { adminOrigins: string[] }): Promise<Stack & { ses
 
 describe("the console's Access plane through the control-plane gateway", () => {
 	test('a registered console origin reaches IAM and is authorized as the BROWSER, not as control', async () => {
-		const { call, session, stop } = await stack({ adminOrigins: [CONSOLE] })
+		const { call, stop } = await stack({ adminOrigins: [CONSOLE] })
 		try {
-			const response = await call('me', null, { cookie: `__Host-px_session=${session}` })
+			const response = await call('me', null)
 			expect(response.status).toBe(200)
 			const body: unknown = await response.json()
 			// The principal is the browser's admin. Control never substitutes an identity of its own; the
@@ -106,9 +115,9 @@ describe("the console's Access plane through the control-plane gateway", () => {
 	})
 
 	test('a state change survives the hop — the case that was 403 in production', async () => {
-		const { call, session, stop } = await stack({ adminOrigins: [CONSOLE] })
+		const { call, stop } = await stack({ adminOrigins: [CONSOLE] })
 		try {
-			const response = await call('principals.invite', { email: 'invited@contember.com' }, { cookie: `__Host-px_session=${session}` })
+			const response = await call('principals.invite', { email: 'invited@contember.com' })
 			expect(response.status).toBe(200)
 			expect(JSON.stringify(await response.json())).toContain('invited@contember.com')
 		} finally {
@@ -116,15 +125,11 @@ describe("the console's Access plane through the control-plane gateway", () => {
 		}
 	})
 
-	test('with the console origin unregistered, IAM refuses it — and it is IAM that refuses', async () => {
-		// The fail-closed default. An installation that has not named its console cannot drive it, and
-		// the refusal comes from the service that owns the decision rather than from the transport.
-		const { call, session, stop } = await stack({ adminOrigins: [] })
+	test('IAM does not apply its cookie-origin registry to a proxy-authenticated private hop', async () => {
+		const { call, stop } = await stack({ adminOrigins: [] })
 		try {
-			const response = await call('principals.invite', { email: 'nope@contember.com' }, { cookie: `__Host-px_session=${session}` })
-			expect(response.status).toBe(403)
-			// IAM's RPC envelope, not control's flat one — proof of which hop refused.
-			expect(await response.json()).toEqual({ error: { type: 'forbidden', message: 'cross-origin request rejected' } })
+			const response = await call('principals.invite', { email: 'allowed@contember.com' })
+			expect(response.status).toBe(200)
 		} finally {
 			await stop()
 		}
@@ -132,12 +137,12 @@ describe("the console's Access plane through the control-plane gateway", () => {
 
 	test('a hostile cross-origin POST is stopped by the DEPUTY, before IAM is asked', async () => {
 		// The confused-deputy attack: a hostile page POSTs to the console's own origin and the browser
-		// attaches `px_session` by itself. Control's own same-origin check refuses it, so the request
+		// attaches ambient cookies by itself. Control's own same-origin check refuses it, so the request
 		// never reaches the gateway — which is what makes the transport-only design safe.
-		const { call, session, stop } = await stack({ adminOrigins: [CONSOLE] })
+		const { call, stop } = await stack({ adminOrigins: [CONSOLE] })
 		try {
 			const response = await call('principals.invite', { email: 'evil@contember.com' }, {
-				cookie: `__Host-px_session=${session}`,
+				cookie: 'console_state=ambient',
 				origin: 'https://evil.example.test',
 			})
 			expect(response.status).toBe(403)
@@ -149,10 +154,10 @@ describe("the console's Access plane through the control-plane gateway", () => {
 	})
 
 	test('a cookie-bearing POST with no Origin at all is refused by the deputy', async () => {
-		const { call, session, stop } = await stack({ adminOrigins: [CONSOLE] })
+		const { call, stop } = await stack({ adminOrigins: [CONSOLE] })
 		try {
 			const response = await call('principals.invite', { email: 'evil2@contember.com' }, {
-				cookie: `__Host-px_session=${session}`,
+				cookie: 'console_state=ambient',
 				origin: null,
 			})
 			expect(response.status).toBe(403)
@@ -161,17 +166,11 @@ describe("the console's Access plane through the control-plane gateway", () => {
 		}
 	})
 
-	test('the gateway forwards the browser Origin unmodified, so IAM sees what the browser sent', async () => {
-		// The regression pin. Rewriting `Origin` to IAM's private address made the two checks compare
-		// values that can never agree; it also could not have been right, because the browser's origin is
-		// the console's and never IAM's.
-		const { call, session, stop } = await stack({ adminOrigins: ['http://somewhere.else.test'] })
+	test('IAM authority comes from the proxy token, not a forwarded app session', async () => {
+		const { call, stop } = await stack({ adminOrigins: ['http://somewhere.else.test'] })
 		try {
-			// The console origin is not registered, but IAM's private loopback address is not registered
-			// either — so if the header were still rewritten this would be indistinguishable. What proves
-			// the point is that registering the CONSOLE (the previous tests) is what makes the call work.
-			const response = await call('principals.invite', { email: 'x@contember.com' }, { cookie: `__Host-px_session=${session}` })
-			expect(response.status).toBe(403)
+			const response = await call('principals.invite', { email: 'x@contember.com' }, { cookie: 'app_cookie=not-forwarded' })
+			expect(response.status).toBe(200)
 		} finally {
 			await stop()
 		}
@@ -182,7 +181,7 @@ describe("the console's Access plane through the control-plane gateway", () => {
 		try {
 			// No cookie, so no ambient authority and nothing for CSRF to defend. It fails on the credential
 			// (401), not on the origin (403) — which is the distinction that matters.
-			const response = await call('me', null, { bearer: 'px_not_a_real_key', origin: null })
+			const response = await call('me', null, { bearer: 'px_not_a_real_key', origin: null, proxyToken: null })
 			expect(response.status).toBe(401)
 		} finally {
 			await stop()

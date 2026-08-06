@@ -3,7 +3,7 @@
  * fully disabled every decision is byte-identical — only the number of IAM calls changes.
  */
 
-import type { AppGates } from '@fabrika/auth-core'
+import { type AppGates, AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { cacheKey, MemoryTokenCache } from '../cache'
 import { PROXY_TOKEN_HEADER } from '../constants'
@@ -18,6 +18,14 @@ const SERVICE: AppGates = { rules: [{ path: '/*', kind: 'service' }] }
 function run(gates: AppGates, options: FakeIamOptions, cache: MemoryTokenCache | null) {
 	const iam = new FakeIam(options)
 	return { iam, verify: createVerifyService({ manifest: manifestWith(gates), iam, issuer: ISSUER, cache }) }
+}
+
+function stableLocation(raw: string | null): string | null {
+	if (raw === null) return null
+	const url = new URL(raw)
+	url.searchParams.delete(AUTH_HANDOFF_STATE_PARAM)
+	url.searchParams.delete(AUTH_HANDOFF_CHALLENGE_PARAM)
+	return url.toString()
 }
 
 describe('cache disabled — same decisions, more calls', () => {
@@ -66,7 +74,7 @@ describe('cache disabled — same decisions, more calls', () => {
 			const withCache = await run(gates, options, new MemoryTokenCache()).verify(request.clone())
 			const without = await run(gates, options, null).verify(request.clone())
 			expect(without.status).toBe(withCache.status)
-			expect(without.headers.get('location')).toBe(withCache.headers.get('location'))
+			expect(stableLocation(without.headers.get('location'))).toBe(stableLocation(withCache.headers.get('location')))
 		}
 	})
 

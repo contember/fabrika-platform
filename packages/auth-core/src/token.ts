@@ -28,6 +28,9 @@ import type { PermissionEntry, PermissionSource, PrincipalType, Scope } from './
 
 // ── Names & knobs on the wire (both sides agree) ───────────────────────────────
 
+/** Namespace reserved for browser credentials owned by IAM and the Fabrika proxy. */
+export const FABRIKA_COOKIE_PREFIX = '__Host-px_'
+
 /**
  * Long-lived opaque session id, HOST-ONLY on whichever host wrote it — IAM's own at login, an app's
  * own after the proxy redeems a handoff code
@@ -40,9 +43,7 @@ import type { PermissionEntry, PermissionSource, PrincipalType, Scope } from './
  * alongside its own. Measured, not assumed: Chromium accepts it over plain HTTP on `*.localhost`,
  * because those origins are potentially trustworthy.
  */
-export const SESSION_COOKIE = '__Host-px_session'
-/** Short-lived per-app access JWT; a host-only cookie, `__Host-` for the same reason. */
-export const TOKEN_COOKIE = '__Host-px_token'
+export const SESSION_COOKIE = `${FABRIKA_COOKIE_PREFIX}session`
 /** Prefix marking a propustka opaque credential (API key / share link), e.g. `Bearer px_<random>`. */
 export const API_KEY_PREFIX = 'px_'
 

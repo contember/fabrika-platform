@@ -5,6 +5,7 @@ import { createIamApp } from '../app'
 import type { Env, RequestContext } from '../env'
 import { prop } from '../json'
 import type { Services } from '../services'
+import { mintToken } from '../tokens'
 import { createHarness, type Harness, seedAppAction, seedGrant, seedRole, seedUser } from './helpers/harness'
 
 // FINDING TEST-2: the admin gate wiring in handleAdmin. Every /admin/* request must
@@ -33,12 +34,12 @@ const unusedDatabase: SqlDatabase = {
 // The admin app id every native session is resolved against (see admin/router.ts).
 const IAM_APP = 'propustka'
 
-// env slice handleAdmin needs. ENVIRONMENT='stage' keeps the local-dev bypass off, so the
-// session/credential paths are exercised for real.
+// A local signer avoids embedding a test private key. The Services config stays `stage`, which is
+// what keeps the local-dev bypass off and exercises the session/credential paths for real.
 const ADMIN_ENV: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'ENVIRONMENT'> = {
 	FABRIKA_IAM_SIGNING_KEYS: '',
 	FABRIKA_IAM_PROVISIONING_KEY: '',
-	ENVIRONMENT: 'stage',
+	ENVIRONMENT: 'local',
 }
 
 function env(h: Harness): Env {
@@ -76,6 +77,8 @@ interface RequestOptions {
 	method?: string
 	/** Plaintext `px_session` cookie value (a native SSO session). */
 	session?: string | null
+	/** Signed access token forwarded by a trusted application proxy. */
+	bearer?: string | null
 	/** Origin header to send (defaults to same-origin ORIGIN for state-changing methods). */
 	origin?: string | null
 	body?: unknown
@@ -85,6 +88,9 @@ function adminRequest(path: string, opts: RequestOptions = {}): Request {
 	const headers = new Headers()
 	if (opts.session) {
 		headers.set('Cookie', `__Host-px_session=${opts.session}`)
+	}
+	if (opts.bearer) {
+		headers.set('Authorization', `Bearer ${opts.bearer}`)
 	}
 	const method = opts.method ?? 'GET'
 	const stateChanging = method === 'POST' || method === 'PATCH' || method === 'DELETE' || method === 'PUT'
@@ -141,6 +147,20 @@ describe('handleAdmin — admin gate (scope-less iam.admin)', () => {
 
 		const session = await h.signSession(id)
 		const res = await run(h, adminRequest(READ_PATH, { session }))
+
+		expect(res.status).toBe(200)
+	})
+
+	test('a proxy JWT for another app resolves IAM permissions live', async () => {
+		const h = createHarness()
+		registerOpice(h)
+		const id = seedUser(h.sqlite, { sub: 'sub-proxy-admin', email: 'proxy-admin@example.com' })
+		seedGrant(h.sqlite, id, 'admin', null)
+		const session = await h.signSession(id)
+		const minted = await mintToken(adminServices(h), ADMIN_ENV, { app: 'vozka', session, requestId: 'r1' })
+		if (!minted.result.ok) throw new Error(`token mint failed: ${minted.result.reason}`)
+
+		const res = await run(h, adminRequest(READ_PATH, { bearer: minted.result.token }))
 
 		expect(res.status).toBe(200)
 	})

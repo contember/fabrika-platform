@@ -72,8 +72,13 @@ export function randomToken(bytes = 32): string {
 /** Generate a PKCE pair: a high-entropy `verifier` and its S256 `challenge`. */
 export async function generatePkce(): Promise<{ verifier: string; challenge: string }> {
 	const verifier = randomToken(32)
+	return { verifier, challenge: await pkceChallenge(verifier) }
+}
+
+/** Derive an S256 challenge from a browser-held verifier. */
+export async function pkceChallenge(verifier: string): Promise<string> {
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))
-	return { verifier, challenge: base64url(new Uint8Array(digest)) }
+	return base64url(new Uint8Array(digest))
 }
 
 // ── The client ───────────────────────────────────────────────────────────────────

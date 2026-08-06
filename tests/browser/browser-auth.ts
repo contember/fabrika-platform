@@ -5,8 +5,9 @@
  * `packages/iam/src/node/browser-identity.ts`. The browser then obtains a session on each application
  * host **through the real handoff** — the one and only way a session reaches an app since
  * [ADR-0023](../../docs/decisions/0023-one-session-per-host.md): the seeded login cookie is planted on
- * IAM's own host, `GET /auth/login?app=…&redirect=…` sees it and issues a single-use code, and the
- * proxy on the app's host redeems that code and sets the app's own `__Host-px_session`.
+ * IAM's own host. A protected request on each app host starts the handoff at that app's proxy, which
+ * stores a browser-held verifier, redirects to IAM, redeems the returned code, and sets the app's
+ * own `__Host-px_session`.
  *
  * So the suite carries one cookie per host, each a distinct `sessions` row bound to one app, exactly
  * as a human's browser would. Nothing here is a shortcut past the proxy — every request the suite makes
@@ -85,10 +86,10 @@ async function sessionIsValid(browser: Browser, state: StorageState, role: Brows
 /**
  * Drive the real handoff once per app host and return the resulting storage state.
  *
- * The seeded login is planted on IAM's host only. Each `/auth/login?app=…&redirect=…` then takes the
- * "already signed in HERE" path: IAM issues a code and 302s to the app's reserved callback, the proxy
- * there redeems it and writes that app's own host-only session, and the redirect chain ends on the
- * return URL.
+ * The seeded login is planted on IAM's host only. Each protected app navigation first reaches the
+ * proxy, which creates the browser-bound handoff attempt. IAM then takes its "already signed in
+ * HERE" path, issues a code, and redirects to the app's reserved callback. The proxy redeems it,
+ * writes that app's own host-only session, and returns to the original URL.
  *
  * The chain is followed by a real PAGE rather than by `context.request`. That is partly the point —
  * the browser is what a handoff is designed for — and partly forced: Playwright's Node-side fetch
@@ -114,8 +115,7 @@ async function signIn(browser: Browser, identity: BrowserIdentity): Promise<Stor
 		}])
 		const page = await context.newPage()
 		for (const { app, origin } of APP_HOSTS) {
-			const login = `${IAM_ORIGIN}/auth/login?app=${encodeURIComponent(app)}&redirect=${encodeURIComponent(`${origin}/`)}`
-			const response = await page.goto(login, { waitUntil: 'domcontentloaded' })
+			const response = await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded' })
 			if (response !== null && !response.ok()) {
 				throw new Error(`handoff to ${app} failed with status ${response.status()} — is the app registered in IAM?`)
 			}

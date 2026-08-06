@@ -108,6 +108,7 @@ export class FakeIam implements IamGateway {
 	readonly seenSessions: string[] = []
 	readonly seenKeys: string[] = []
 	readonly seenCodes: string[] = []
+	readonly seenVerifiers: string[] = []
 
 	constructor(private readonly options: FakeIamOptions = {}) {}
 
@@ -133,9 +134,10 @@ export class FakeIam implements IamGateway {
 		return Promise.resolve(typeof canned === 'function' ? canned() : (canned ?? { ok: false, reason: 'invalid_key' }))
 	}
 
-	exchangeAuthCode(input: { code: string }): Promise<ExchangeAuthCodeResult> {
+	exchangeAuthCode(input: { code: string; verifier: string }): Promise<ExchangeAuthCodeResult> {
 		this.exchangeCalls++
 		this.seenCodes.push(input.code)
+		this.seenVerifiers.push(input.verifier)
 		if (this.options.unreachable === true) {
 			return Promise.reject(new Error('connect ECONNREFUSED'))
 		}

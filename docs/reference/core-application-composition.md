@@ -41,9 +41,11 @@ The unified console reaches the three applications as follows:
 
 The two gateways preserve the nested RPC error envelope. They may add the public
 IAM login URL to an authentication error, but they do not reinterpret domain
-results. They forward the browser's request headers unchanged — the session
-cookie and the `Origin` above all — because the downstream service authenticates
-and authorizes the **browser's** principal, not the control plane's.
+results. They preserve the browser's `Origin` and the proxy-injected token because
+the downstream service authenticates and authorizes the **browser's** principal,
+not the control plane's. The IAM gateway translates that signed token to a bearer
+and removes all console cookies before the private hop; IAM resolves IAM permissions
+live rather than trusting Control's permission snapshot.
 
 Each gateway performs its own same-origin check before forwarding, against
 `FABRIKA_CONTROL_DOMAIN` (the console's public origin) rather than the

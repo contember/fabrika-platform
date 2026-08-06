@@ -65,6 +65,8 @@ export interface ExchangeAuthCodeInput {
 	app: string
 	/** The single-use code, as it arrived in the callback query. */
 	code: string
+	/** Browser-held proof for the S256 challenge integrity-bound into the code. */
+	verifier: string
 	requestId: string
 }
 
@@ -76,7 +78,7 @@ export type ExchangeAuthCodeResult =
 	 */
 	| { ok: true; session: string; returnUrl: string; expiresAt: number }
 	/** Every failure is terminal — a code is single-use, so there is nothing to retry. */
-	| { ok: false; reason: 'invalid_code' | 'expired_code' | 'wrong_app' | 'unknown_principal' | 'disabled' }
+	| { ok: false; reason: 'invalid_code' | 'expired_code' | 'wrong_app' | 'invalid_verifier' | 'unknown_principal' | 'disabled' }
 
 /**
  * Redemption, as a contract of its own rather than a method on `IamRpc`. Only the proxy calls it, and
@@ -95,6 +97,18 @@ export const AUTH_CALLBACK_PATH = '/__fabrika/auth/callback'
 
 /** Query parameter carrying the single-use code on the callback. */
 export const AUTH_CODE_PARAM = 'code'
+
+/** Public nonce that selects the app-host handoff cookie on the callback. */
+export const AUTH_HANDOFF_STATE_PARAM = 'state'
+
+/** S256 challenge sent to IAM when the proxy starts a handoff. */
+export const AUTH_HANDOFF_CHALLENGE_PARAM = 'code_challenge'
+
+/** Dynamic app-host cookie prefix; the public state suffix permits concurrent login tabs. */
+export const HANDOFF_COOKIE_PREFIX = '__Host-px_handoff_'
+
+/** A login attempt may wait at IAM or an upstream IdP before the code itself is issued. */
+export const HANDOFF_COOKIE_TTL_SECONDS = 10 * 60
 
 /**
  * How long a code may be held before redemption. Seconds, not minutes: it travels in one redirect

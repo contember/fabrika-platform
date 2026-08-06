@@ -29,6 +29,12 @@ open: the shared parent-domain session cookie is retired, so the one-time code i
 session reaches an application and both session cookies carry the `__Host-` prefix. It amends 0022
 rather than superseding it — every rule in 0022 still holds.
 
+[ADR-0026](0026-bind-session-handoffs-to-the-browser.md) closes the remaining browser boundary: a
+state-specific host-only verifier cookie and S256 challenge bind each callback to the browser that
+started it. It also retires the unused browser JWT-cookie path, strips Fabrika cookies before the
+application, and disables Cloudflare invocation logs that could capture a callback code. It amends
+0022 and 0023.
+
 ADR-0011 extends the provider-owned plan and target decisions in ADR-0002 and
 ADR-0009 across authoring, persistence, and the control lifecycle. It replaces
 their closed driver-registry mechanics with static provider bundles while
@@ -86,6 +92,10 @@ together with 0018 — 0018 still holds the naming rules and the durable-identif
 0024 states why the transitional half was safe to remove and that a configuration name now has
 exactly one spelling.
 
+ADR-0026 binds an app session handoff to its initiating browser with a private verifier, removes the
+unused browser JWT-cookie tier, and makes the proxy-to-app credential boundary explicit. Read it
+together with 0022 and 0023.
+
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
@@ -115,3 +125,4 @@ exactly one spelling.
 - [0023](0023-one-session-per-host.md) — One session per host — retire the shared session cookie (amends 0022) — accepted (2026-08-05)
 - [0024](0024-retire-the-legacy-environment-name-fallback.md) — Retire the legacy environment-name fallback; canonical names only (supersedes 0018) — accepted (2026-08-05)
 - [0025](0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) — The operator installs the platform; fabrika deploys only apps — accepted (2026-08-06)
+- [0026](0026-bind-session-handoffs-to-the-browser.md) — Bind session handoffs to the browser that started them (amends 0022 and 0023) — accepted (2026-08-06)

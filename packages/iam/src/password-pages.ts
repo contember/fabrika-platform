@@ -6,6 +6,8 @@ export function loginPage(input: {
 	readonly forgotEnabled: boolean
 	/** The app this login is a handoff for (ADR-0021); absent for a plain IAM login. */
 	readonly app?: string
+	readonly handoffState?: string
+	readonly handoffChallenge?: string
 	/**
 	 * The handoff destination's ORIGIN, and the one page on this service whose form may answer with a
 	 * redirect off it. Chromium applies `form-action` to the REDIRECT a submission answers with, not
@@ -19,7 +21,11 @@ export function loginPage(input: {
 }): Response {
 	// `app` rides both continuations so a form post and an SSO detour end in the same handoff. It is
 	// re-validated against the registered origins on the way back in — the form is never trusted.
-	const appQuery = input.app === undefined ? '' : `&app=${encodeURIComponent(input.app)}`
+	const appQuery = input.app === undefined
+		? ''
+		: `&app=${encodeURIComponent(input.app)}&state=${encodeURIComponent(input.handoffState ?? '')}&code_challenge=${
+			encodeURIComponent(input.handoffChallenge ?? '')
+		}`
 	const oidcUrl = `/auth/oidc/start?redirect=${encodeURIComponent(input.redirect)}${appQuery}`
 	return htmlPage(
 		'Sign in',
@@ -27,6 +33,8 @@ export function loginPage(input: {
 		<form method="post" action="/auth/login">
 			<input type="hidden" name="redirect" value="${escapeHtml(input.redirect)}">
 			${input.app === undefined ? '' : `<input type="hidden" name="app" value="${escapeHtml(input.app)}">`}
+			${input.handoffState === undefined ? '' : `<input type="hidden" name="state" value="${escapeHtml(input.handoffState)}">`}
+			${input.handoffChallenge === undefined ? '' : `<input type="hidden" name="code_challenge" value="${escapeHtml(input.handoffChallenge)}">`}
 			<label>Email<input name="email" type="email" autocomplete="username" inputmode="email" required></label>
 			${passwordInput('password', 'Password', 'current-password')}
 			<button type="submit">Sign in</button>

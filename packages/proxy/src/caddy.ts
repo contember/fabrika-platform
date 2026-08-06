@@ -9,10 +9,9 @@
  * evaluation to reproduce `AppGates`' first-match-wins precedence. It was checked against Caddy
  * v2.10.2's source rather than assumed, and it does not hold. Three independent reasons:
  *
- *  1. **Fall-through is not expressible.** A `service` rule whose credential is ABSENT falls through
- *     to the next matching rule; a `human` rule falls through when the session is missing OR invalid.
- *     "Invalid" is only knowable after an IAM exchange and a signature check. A Caddy matcher runs
- *     before any of that, so the fall-through arm of the gate semantics has no encoding.
+ *  1. **Fall-through is not expressible.** A matching rule whose credential is ABSENT falls through
+ *     to the next rule; a present credential is terminal. Presence may depend on a declared header,
+ *     query or cookie location, so the full decision still belongs to the canonical evaluator.
  *  2. **`path` is case-insensitive.** `MatchPath.Match` lower-cases both the pattern and the request
  *     path ("we do case-insensitive matching to mitigate security issues"). `AppGates`' glob is
  *     case-sensitive. `/Admin/*` would gate a different set of requests in the two engines.
@@ -34,7 +33,7 @@
  */
 
 import type { GateRule } from '@fabrika/auth-core'
-import { API_KEY_PREFIX, AUTH_CODE_PARAM } from '@fabrika/auth-core'
+import { API_KEY_PREFIX, AUTH_CODE_PARAM, FABRIKA_COOKIE_PREFIX } from '@fabrika/auth-core'
 import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-contract'
 import {
 	APP_QUERY_PARAM,
@@ -64,6 +63,12 @@ const CLIENT_IP_PLACEHOLDER = '{http.request.client_ip}'
 export interface CaddyHeaderOps {
 	set?: Record<string, string[]>
 	delete?: string[]
+	replace?: Record<string, CaddyHeaderReplacement[]>
+}
+
+export interface CaddyHeaderReplacement {
+	search_regexp: string
+	replace: string
 }
 
 export interface CaddyHeadersHandler {
@@ -271,8 +276,8 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
  *      replaced whether or not it was deleted, and it is never read back from the auth response: it
  *      describes the request as the EDGE saw it, and no inner hop gets a vote.
  *   2. `reverse_proxy` to the auth service — the `forward_auth` expansion.
- *   3. `reverse_proxy` to the app. Reached only when step 2 answered 2xx; any other status was
- *      already written to the client.
+ *   3. `reverse_proxy` to the app. Reached only when step 2 answered 2xx; it strips every
+ *      `__Host-px_*` cookie on that upstream hop while preserving application cookies.
  */
 function appRoute(app: ProxyApp, authUpstream: string): CaddyRoute {
 	return {
@@ -291,7 +296,25 @@ function appRoute(app: ProxyApp, authUpstream: string): CaddyRoute {
 					}],
 				},
 				{ handle: [forwardAuth(app, authUpstream)] },
-				{ handle: [{ handler: 'reverse_proxy', upstreams: [{ dial: app.upstream }] }] },
+				{
+					handle: [{
+						handler: 'reverse_proxy',
+						upstreams: [{ dial: app.upstream }],
+						headers: {
+							request: {
+								replace: {
+									Cookie: [
+										{
+											search_regexp: `(?:^|;[ \\t]*)${escapeRe2(FABRIKA_COOKIE_PREFIX)}[^=;]*=[^;]*`,
+											replace: '',
+										},
+										{ search_regexp: '^[; \\t]+', replace: '' },
+									],
+								},
+							},
+						},
+					}],
+				},
 			],
 		}],
 	}

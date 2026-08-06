@@ -20,7 +20,7 @@
  * `admin/rpc.ts`, so admission is decided in one place for both.
  */
 
-import { type PermissionEntry, permits, type PrincipalType, SESSION_COOKIE } from '@fabrika/auth-core'
+import { API_KEY_PREFIX, type PermissionEntry, permits, type PrincipalType, SESSION_COOKIE } from '@fabrika/auth-core'
 import { resolveCaller, sessionUsable } from '../auth'
 import { principalStatus } from '../db'
 import type { Env, RequestContext } from '../env'
@@ -30,6 +30,7 @@ import { requestId } from '../request-id'
 import { resolveUserPermissions } from '../resolve'
 import { hashToken } from '../secret'
 import type { Config, Services } from '../services'
+import { getSigner, verifyAccessToken } from '../signing'
 import { type AdminContext, AdminUseCaseError, getAppSchema, provisionApiKey, putAppSchema, revokeApiKey } from './handlers'
 import { error } from './http'
 
@@ -45,8 +46,8 @@ export const IAM_APP = 'propustka'
 
 /**
  * The propustka-native admin credentials read off the request: a browser SSO session
- * (`px_session` cookie) and/or an `Authorization: Bearer` machine credential (a `px_`
- * admin/provisioning key). There is no Cloudflare Access JWT anymore.
+ * (`px_session` cookie) and/or an `Authorization: Bearer` credential. A bearer may be a `px_`
+ * admin/provisioning key or a proxy-injected access JWT forwarded by a first-party gateway.
  */
 export function extractCredentials(request: Request, correlationId?: string): {
 	bearer: string | null
@@ -170,6 +171,7 @@ export type AdminResolution =
 
 /**
  * Resolve the admin caller from propustka-native credentials (no Cloudflare Access):
+ *   - an access JWT from a first-party app gateway → verify identity, then resolve IAM permissions;
  *   - an `Authorization: Bearer px_<key>` machine credential (CI / provisioning) → `resolveCaller`
  *     (which also covers the local-dev bypass when no credential is presented);
  *   - else the browser's `px_session` SSO cookie → session → principal → resolved permissions.
@@ -181,6 +183,34 @@ export async function resolveAdmin(
 	env: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'FABRIKA_IAM_PROVISIONING_KEY' | 'ENVIRONMENT'>,
 	creds: { bearer: string | null; session: string | null; requestId: string },
 ): Promise<AdminResolution> {
+	// The control gateway receives a proxy-injected access JWT after the browser session has stopped
+	// at the proxy. Its audience names the calling app, so verify that signed audience without treating
+	// its app-specific permission snapshot as IAM authority; IAM permissions are resolved live below.
+	if (creds.bearer !== null && !creds.bearer.startsWith(API_KEY_PREFIX)) {
+		const signer = await getSigner(env)
+		const claims = await verifyAccessToken(signer, creds.bearer, { issuer: services.config.issuer })
+		if (claims === null) {
+			return { ok: false, status: 401, reason: 'invalid_token' }
+		}
+		if (claims.ptype === undefined) {
+			return { ok: false, status: 403, reason: 'not_allowed' }
+		}
+		const principal = await services.repositories.principals.getPrincipalById(claims.sub)
+		if (principal === null) {
+			return { ok: false, status: 401, reason: 'invalid_token' }
+		}
+		if (principalStatus(principal) === 'disabled') {
+			return { ok: false, status: 403, reason: 'disabled' }
+		}
+		const permissions = await resolveUserPermissions({
+			repositories: services.repositories,
+			principal,
+			bootstrapAdmins: services.config.bootstrapAdmins,
+			app: IAM_APP,
+		})
+		return { ok: true, admin: { id: principal.id, type: principal.type, label: principal.label, permissions } }
+	}
+
 	// Bearer credential (or no credential at all → local-dev bypass) goes through `resolveCaller`.
 	if (creds.bearer !== null || creds.session === null) {
 		const res = await resolveCaller(services, env, { app: IAM_APP, credential: creds.bearer, requestId: creds.requestId })

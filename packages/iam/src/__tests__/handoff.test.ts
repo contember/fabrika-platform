@@ -4,7 +4,7 @@
 // as long as the login behind it lives — and nothing else. Every failure mode below is a way that
 // could stop being true.
 
-import { AUTH_CALLBACK_PATH, SESSION_COOKIE } from '@fabrika/auth-core'
+import { AUTH_CALLBACK_PATH, AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM, SESSION_COOKIE } from '@fabrika/auth-core'
 import type { SqlDatabase } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import { resolveAdmin } from '../admin/router'
@@ -14,6 +14,7 @@ import { handleAuth } from '../auth/routes'
 import type { Env, RequestContext } from '../env'
 import { exchangeAuthCode, issueAuthCode, normalizeOrigin, resolveReturnUrl } from '../handoff'
 import { prop } from '../json'
+import { pkceChallenge } from '../oidc'
 import { hashToken } from '../secret'
 import type { Services } from '../services'
 import { mintToken } from '../tokens'
@@ -21,6 +22,9 @@ import { createHarness, type Harness, seedAppAction, seedGrant, seedUser } from 
 
 const ISSUER = 'https://iam.test'
 const APP_ORIGIN = 'https://app.test'
+const HANDOFF_STATE = 'state-state-state1'
+const HANDOFF_VERIFIER = 'browser-held-verifier-browser-held-verifier-1'
+const HANDOFF_CHALLENGE = await pkceChallenge(HANDOFF_VERIFIER)
 const AUTH_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
 const ADMIN_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', FABRIKA_IAM_PROVISIONING_KEY: '', ENVIRONMENT: 'stage' }
 /** The admin surface reaches the database only through `REPOSITORIES`; this proves it. */
@@ -59,8 +63,22 @@ async function scenario(options: { origins?: string[] } = {}) {
 }
 
 async function codeFor(services: Services, sessionId: string, returnUrl = `${APP_ORIGIN}/private`): Promise<string> {
-	const issued = await issueAuthCode(services, { app: 'notes', parentSessionId: sessionId, returnUrl })
+	const issued = await issueAuthCode(services, {
+		app: 'notes',
+		parentSessionId: sessionId,
+		returnUrl,
+		challenge: HANDOFF_CHALLENGE,
+	})
 	return issued.code
+}
+
+function handoffLoginUrl(returnUrl: string): string {
+	const url = new URL('/auth/login', ISSUER)
+	url.searchParams.set('app', 'notes')
+	url.searchParams.set('redirect', returnUrl)
+	url.searchParams.set(AUTH_HANDOFF_STATE_PARAM, HANDOFF_STATE)
+	url.searchParams.set(AUTH_HANDOFF_CHALLENGE_PARAM, HANDOFF_CHALLENGE)
+	return url.toString()
 }
 
 describe('normalizeOrigin', () => {
@@ -108,7 +126,7 @@ describe('exchangeAuthCode', () => {
 		const { services, principalId, sessionId } = await scenario()
 		const code = await codeFor(services, sessionId)
 
-		const { result } = await exchangeAuthCode(services, { app: 'notes', code, requestId: 'r1' })
+		const { result } = await exchangeAuthCode(services, { app: 'notes', code, verifier: HANDOFF_VERIFIER, requestId: 'r1' })
 		expect(result.ok).toBe(true)
 		if (!result.ok) return
 		expect(result.returnUrl).toBe(`${APP_ORIGIN}/private`)
@@ -122,9 +140,9 @@ describe('exchangeAuthCode', () => {
 	test('a replayed code is refused — consumption is the guard, not the read', async () => {
 		const { services, sessionId } = await scenario()
 		const code = await codeFor(services, sessionId)
-		expect((await exchangeAuthCode(services, { app: 'notes', code, requestId: 'r1' })).result.ok).toBe(true)
+		expect((await exchangeAuthCode(services, { app: 'notes', code, verifier: HANDOFF_VERIFIER, requestId: 'r1' })).result.ok).toBe(true)
 
-		const replay = await exchangeAuthCode(services, { app: 'notes', code, requestId: 'r2' })
+		const replay = await exchangeAuthCode(services, { app: 'notes', code, verifier: HANDOFF_VERIFIER, requestId: 'r2' })
 		expect(replay.result).toEqual({ ok: false, reason: 'expired_code' })
 	})
 
@@ -132,14 +150,20 @@ describe('exchangeAuthCode', () => {
 		const { services, sessionId } = await scenario()
 		const code = await codeFor(services, sessionId)
 
-		expect((await exchangeAuthCode(services, { app: 'other', code, requestId: 'r1' })).result).toEqual({ ok: false, reason: 'wrong_app' })
+		expect((await exchangeAuthCode(services, { app: 'other', code, verifier: HANDOFF_VERIFIER, requestId: 'r1' })).result).toEqual({
+			ok: false,
+			reason: 'wrong_app',
+		})
 		// Spent: a code that survived a failed redemption would be a code an attacker keeps trying.
-		expect((await exchangeAuthCode(services, { app: 'notes', code, requestId: 'r2' })).result).toEqual({ ok: false, reason: 'expired_code' })
+		expect((await exchangeAuthCode(services, { app: 'notes', code, verifier: HANDOFF_VERIFIER, requestId: 'r2' })).result).toEqual({
+			ok: false,
+			reason: 'expired_code',
+		})
 	})
 
 	test('an unknown code is invalid_code, not expired_code', async () => {
 		const { services } = await scenario()
-		expect((await exchangeAuthCode(services, { app: 'notes', code: 'never-issued', requestId: 'r1' })).result).toEqual({
+		expect((await exchangeAuthCode(services, { app: 'notes', code: 'never-issued', verifier: HANDOFF_VERIFIER, requestId: 'r1' })).result).toEqual({
 			ok: false,
 			reason: 'invalid_code',
 		})
@@ -149,21 +173,41 @@ describe('exchangeAuthCode', () => {
 		const { services, harness, sessionId } = await scenario()
 		const code = await codeFor(services, sessionId)
 		harness.sqlite.run('UPDATE auth_codes SET expires_at = ?', [Math.floor(Date.now() / 1000) - 1])
-		expect((await exchangeAuthCode(services, { app: 'notes', code, requestId: 'r1' })).result).toEqual({ ok: false, reason: 'expired_code' })
+		expect((await exchangeAuthCode(services, { app: 'notes', code, verifier: HANDOFF_VERIFIER, requestId: 'r1' })).result).toEqual({
+			ok: false,
+			reason: 'expired_code',
+		})
 	})
 
 	test('a code outlives no logout — revoking the login refuses redemption', async () => {
 		const { services, sessionToken, sessionId } = await scenario()
 		const code = await codeFor(services, sessionId)
 		await services.repositories.sessions.revokeSessionByHash(await hashToken(sessionToken))
-		expect((await exchangeAuthCode(services, { app: 'notes', code, requestId: 'r1' })).result).toEqual({ ok: false, reason: 'invalid_code' })
+		expect((await exchangeAuthCode(services, { app: 'notes', code, verifier: HANDOFF_VERIFIER, requestId: 'r1' })).result).toEqual({
+			ok: false,
+			reason: 'invalid_code',
+		})
+	})
+
+	test('a code cannot be redeemed without the verifier held by the initiating browser', async () => {
+		const { services, sessionId } = await scenario()
+		const code = await codeFor(services, sessionId)
+		expect((await exchangeAuthCode(services, { app: 'notes', code, verifier: 'attacker-verifier', requestId: 'r1' })).result).toEqual({
+			ok: false,
+			reason: 'invalid_verifier',
+		})
 	})
 })
 
 describe('the child session', () => {
 	test('dies with its parent — this is what makes logout reach a host IAM cannot set a cookie on', async () => {
 		const { services, sessionToken, sessionId } = await scenario()
-		const { result } = await exchangeAuthCode(services, { app: 'notes', code: await codeFor(services, sessionId), requestId: 'r1' })
+		const { result } = await exchangeAuthCode(services, {
+			app: 'notes',
+			code: await codeFor(services, sessionId),
+			verifier: HANDOFF_VERIFIER,
+			requestId: 'r1',
+		})
 		if (!result.ok) throw new Error('exchange failed')
 		const childHash = await hashToken(result.session)
 		expect(await services.repositories.sessions.getActiveSessionByHash(childHash)).not.toBeNull()
@@ -174,7 +218,12 @@ describe('the child session', () => {
 
 	test('mints for its own app and is refused for any other', async () => {
 		const { services, sessionId } = await scenario()
-		const { result } = await exchangeAuthCode(services, { app: 'notes', code: await codeFor(services, sessionId), requestId: 'r1' })
+		const { result } = await exchangeAuthCode(services, {
+			app: 'notes',
+			code: await codeFor(services, sessionId),
+			verifier: HANDOFF_VERIFIER,
+			requestId: 'r1',
+		})
 		if (!result.ok) throw new Error('exchange failed')
 
 		const own = await mintToken(services, AUTH_ENV, { app: 'notes', session: result.session, requestId: 'r2' })
@@ -187,11 +236,16 @@ describe('the child session', () => {
 	test('cannot itself authorize another handoff', async () => {
 		// Only the IAM login may father app sessions; otherwise one app could mint access to the next.
 		const { services, sessionId } = await scenario()
-		const { result } = await exchangeAuthCode(services, { app: 'notes', code: await codeFor(services, sessionId), requestId: 'r1' })
+		const { result } = await exchangeAuthCode(services, {
+			app: 'notes',
+			code: await codeFor(services, sessionId),
+			verifier: HANDOFF_VERIFIER,
+			requestId: 'r1',
+		})
 		if (!result.ok) throw new Error('exchange failed')
 
 		const response = await handleAuth(
-			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private`)}`, {
+			new Request(handoffLoginUrl(`${APP_ORIGIN}/private`), {
 				headers: { Cookie: `${SESSION_COOKIE}=${result.session}` },
 			}),
 			services,
@@ -207,7 +261,7 @@ describe('GET /auth/login as a handoff', () => {
 	test('an existing IAM session is handed off with no prompt', async () => {
 		const { services, sessionToken } = await scenario()
 		const response = await handleAuth(
-			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private?x=1`)}`, {
+			new Request(handoffLoginUrl(`${APP_ORIGIN}/private?x=1`), {
 				headers: { Cookie: `${SESSION_COOKIE}=${sessionToken}` },
 			}),
 			services,
@@ -219,6 +273,7 @@ describe('GET /auth/login as a handoff', () => {
 		expect(location.origin).toBe(APP_ORIGIN)
 		expect(location.pathname).toBe(AUTH_CALLBACK_PATH)
 		expect(location.searchParams.get('code')).toBeTruthy()
+		expect(location.searchParams.get(AUTH_HANDOFF_STATE_PARAM)).toBe(HANDOFF_STATE)
 		// The destination is NOT in the redirect — it was stored with the code.
 		expect(location.searchParams.get('redirect')).toBeNull()
 	})
@@ -231,7 +286,7 @@ describe('GET /auth/login as a handoff', () => {
 		// address that is simply not in a non-empty registry, and it names what nobody registered.
 		const { services, sessionToken } = await scenario({ origins: [] })
 		const response = await handleAuth(
-			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private`)}`, {
+			new Request(handoffLoginUrl(`${APP_ORIGIN}/private`), {
 				headers: { Cookie: `${SESSION_COOKIE}=${sessionToken}` },
 			}),
 			services,
@@ -256,7 +311,7 @@ describe('GET /auth/login as a handoff', () => {
 	test('an unregistered return address is a 400, never a quiet fallback to the issuer', async () => {
 		const { services, sessionToken } = await scenario()
 		const response = await handleAuth(
-			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent('https://evil.test/')}`, {
+			new Request(handoffLoginUrl('https://evil.test/'), {
 				headers: { Cookie: `${SESSION_COOKIE}=${sessionToken}` },
 			}),
 			services,
@@ -271,7 +326,7 @@ describe('GET /auth/login as a handoff', () => {
 	test('without a session the password form carries BOTH the app and its return address forward', async () => {
 		const { services } = await scenario()
 		const response = await handleAuth(
-			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private`)}`),
+			new Request(handoffLoginUrl(`${APP_ORIGIN}/private`)),
 			services,
 			AUTH_ENV,
 			new TestContext(),
@@ -292,7 +347,7 @@ describe('GET /auth/login as a handoff', () => {
 		// Measured in Chromium 149. The widened origin is the REGISTERED one, never the caller's.
 		const { services } = await scenario()
 		const handoff = await handleAuth(
-			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private`)}`),
+			new Request(handoffLoginUrl(`${APP_ORIGIN}/private`)),
 			services,
 			AUTH_ENV,
 			new TestContext(),
@@ -315,7 +370,14 @@ describe('GET /auth/login as a handoff', () => {
 			new Request(`${ISSUER}/auth/login`, {
 				method: 'POST',
 				headers: { Origin: ISSUER, 'Content-Type': 'application/x-www-form-urlencoded' },
-				body: new URLSearchParams({ email: 'human@contember.com', password, app: 'notes', redirect: `${APP_ORIGIN}/private` }),
+				body: new URLSearchParams({
+					email: 'human@contember.com',
+					password,
+					app: 'notes',
+					redirect: `${APP_ORIGIN}/private`,
+					[AUTH_HANDOFF_STATE_PARAM]: HANDOFF_STATE,
+					[AUTH_HANDOFF_CHALLENGE_PARAM]: HANDOFF_CHALLENGE,
+				}),
 			}),
 			services,
 			AUTH_ENV,
@@ -468,7 +530,7 @@ describe('registering return origins', () => {
 			authentication: { oidc: true, password: true },
 		})
 		const response = await handleAuth(
-			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private?page=2`)}`, {
+			new Request(handoffLoginUrl(`${APP_ORIGIN}/private?page=2`), {
 				headers: { Cookie: `${SESSION_COOKIE}=${stack.session}` },
 			}),
 			services,
@@ -483,7 +545,12 @@ describe('registering return origins', () => {
 		expect(code).toBeTruthy()
 
 		// …and the destination stored with the code is the app's URL, not the registered origin alone.
-		const { result } = await exchangeAuthCode(services, { app: 'notes', code: code ?? '', requestId: 'r1' })
+		const { result } = await exchangeAuthCode(services, {
+			app: 'notes',
+			code: code ?? '',
+			verifier: HANDOFF_VERIFIER,
+			requestId: 'r1',
+		})
 		expect(result.ok).toBe(true)
 		if (!result.ok) return
 		expect(result.returnUrl).toBe(`${APP_ORIGIN}/private?page=2`)
@@ -545,7 +612,7 @@ describe('a session minted by the local-dev bypass', () => {
 	test('cannot silently hand an app a global admin through the handoff', async () => {
 		const { services, token } = await bypassSession(false)
 		const response = await handleAuth(
-			new Request(`${ISSUER}/auth/login?app=notes&redirect=${encodeURIComponent(`${APP_ORIGIN}/private`)}`, {
+			new Request(handoffLoginUrl(`${APP_ORIGIN}/private`), {
 				headers: { Cookie: `${SESSION_COOKIE}=${token}` },
 			}),
 			services,

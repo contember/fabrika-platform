@@ -98,13 +98,12 @@ export class IamRpcStub implements IamRpc {
 /**
  * Build a Request carrying a forwarded native credential + a cf-ray. `proxyToken` sets the header the
  * proxy injects; `bearer` sets an `Authorization: Bearer` header (a machine `px_` key / passthrough
- * JWT); `cookie` sets the `px_token` access cookie. `readCredentials` prefers them in that order.
+ * JWT). `readCredentials` prefers the proxy token over the bearer.
  */
 export function makeRequest(opts: {
 	url?: string
 	proxyToken?: string
 	bearer?: string
-	cookie?: string
 	ray?: string
 } = {}): Request {
 	const headers = new Headers()
@@ -113,9 +112,6 @@ export function makeRequest(opts: {
 	}
 	if (opts.bearer !== undefined) {
 		headers.set('Authorization', `Bearer ${opts.bearer}`)
-	}
-	if (opts.cookie !== undefined) {
-		headers.set('Cookie', `__Host-px_token=${opts.cookie}; other=ignored`)
 	}
 	if (opts.ray !== undefined) {
 		headers.set('cf-ray', opts.ray)

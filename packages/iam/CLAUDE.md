@@ -64,6 +64,14 @@ fails if that stops being true — it is the guard, not documentation of one.
   Its `state` cannot authenticate itself — whoever writes the cookie writes `state` too — and
   `Path=/auth` does not stop a sibling host under a shared domain from tossing in a second one. Every
   terminal outcome of `/auth/callback`, success or failure, clears it.
+- **A handoff code is bound to the browser that started it.** The app proxy sends IAM an S256
+  challenge and keeps the verifier in a host-only `__Host-` cookie. IAM integrity-binds the challenge
+  into the hashed one-time code and requires the verifier during redemption. Consume the code before
+  comparing the verifier: every redemption attempt remains single-use, including a wrong proof.
+- **A proxy JWT proves identity across a first-party gateway, not IAM authority.** Control receives
+  the short-lived app-audience token after the browser session stops at the proxy and forwards it as
+  a bearer to IAM admin. IAM verifies its issuer and signed audience, then resolves the principal's
+  IAM permissions live. Never authorize IAM from the token's calling-app `perms` snapshot.
 - **ADMINISTRATION HAS ONE TRANSPORT. `/admin/*` REST IS A CLOSED PROVISIONING SURFACE.** Four
   operations: `GET|PUT /admin/apps/:app/schema` (a deploy's `reconcileSchema`, which runs outside
   the installation and has no service binding) and `POST /admin/api-keys` +

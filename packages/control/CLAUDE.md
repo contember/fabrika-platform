@@ -51,8 +51,10 @@ transport-only Operations gateway · `/api/*` → ACL-gated control surface ·
 everything else → dashboard `ASSETS`. `/healthz` is a liveness-only route on
 the shared app and is exposed by both the Cloudflare and Bun compositions.
 Neither gateway changes service ownership;
-IAM and Operations authenticate, authorize, and audit their own requests — so both gateways forward
-the browser's headers UNCHANGED, the session cookie and `Origin` above all. Rewriting `Origin` to the
+IAM and Operations authenticate, authorize, and audit their own requests. Both preserve the browser's
+`Origin`; the Operations gateway preserves the proxy-injected token, while the IAM gateway translates
+that trusted token to `Authorization` and removes every console cookie before the private hop. IAM
+verifies the signed calling-app audience and resolves IAM permissions live. Rewriting `Origin` to the
 private upstream's address is exactly the bug that answered 403 to the console's whole Access plane:
 the browser's origin is the console's, never the upstream's, so no rewriting scheme could make an
 issuer comparison correct. Each gateway performs its OWN same-origin check first, against
