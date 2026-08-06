@@ -52,6 +52,24 @@ export interface PlatformProxyManifestTemplate {
 	readonly apps: readonly PlatformProxyApp[]
 }
 
+/**
+ * The template's entry for one platform service.
+ *
+ * The app IDS live in the template, so a caller that needs one — the deploy's schema reconcile needs
+ * the console's — reads it from there rather than restating a literal that could drift from the
+ * document the proxy is actually configured with.
+ */
+export const platformProxyAppFor = (
+	template: PlatformProxyManifestTemplate,
+	service: PlatformProxyService,
+): PlatformProxyApp => {
+	const app = template.apps.find((candidate) => candidate.service === service)
+	if (app === undefined) {
+		throw new Error(`the platform proxy manifest template fronts no \`${service}\` service`)
+	}
+	return app
+}
+
 /** Where one app answers in a particular composition. */
 export interface PlatformProxyPlacement {
 	/** Public hostnames, without a port — `parseProxyManifest` refuses a `:port` suffix. */

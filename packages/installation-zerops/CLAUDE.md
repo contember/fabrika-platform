@@ -3,18 +3,32 @@
 The Zerops implementation of `@fabrika/installation-contract` plus the typed
 platform topology and generated installation artifacts.
 
-The public command is `fabrika platform plan --provider=zerops`. It validates
-the generated artifacts against Zerops' published schemas. Real-account `init`
-and `deploy` remain unsupported until the installation has been exercised with
-real credentials.
+Two public commands. `fabrika platform plan --provider=zerops` validates the
+generated artifacts against Zerops' published schemas. `fabrika platform deploy
+--provider=zerops` brings an EXISTING installation to this checkout, unattended
+and idempotently — the full surface is in the `usage` string in `src/index.ts`,
+which is also what backlog 62 generates the operator's workflow from.
+
+`platform init` is deliberately absent: the first bring-up (import the topology
+without code → write every secret → deploy) is still a hand step, and `deploy`
+updates an installation rather than creating one.
+
+**On Zerops `platform deploy` owns the WHOLE ordered sequence; on Cloudflare it
+stays narrow and the scaffolded workflow keeps the order.** That asymmetry is
+[ADR-0027](../../docs/decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)
+and is deliberate — someone reading only one path will guess wrong about the other.
 
 ## Layout
 
-- `src/index.ts` — exported `installationCli`.
+- `src/index.ts` — exported `installationCli`, the `usage` text, and the real collaborators.
+- `src/deploy.ts` — the ordered deploy sequence. `src/deploy-options.ts` — its flags and variables.
+- `src/manifest.ts` — composing the platform's apps with an installation's application entries.
+- `src/hosts.ts` — where one installation answers. `src/log.ts` — progress, with no secret-taking helper.
 - `src/proxy-manifest.ts` — the proxy manifest TEMPLATE type and `resolvePlatformProxyManifest`.
 - `zerops/setups.ts` — typed IAM, Operations, control, and proxy setup definitions.
 - `zerops/topology.ts` — project and service topology.
 - `zerops/proxy-manifest.ts` — the three fronted apps and their gates. **Dev-time only.**
+- `zerops/console-schema.ts` — the console's `AppSchema`, copied from `@fabrika/control`. **Dev-time only.**
 - `zerops/render.ts` — generated artifact writer and `--check` verifier.
 - `zerops/generated/` — committed installation artifacts.
 - `zerops/schemas/` — pinned published schemas and refresh script.
@@ -27,9 +41,26 @@ real credentials.
 - Do not claim real-account support from schema validation or dry runs.
 - Preserve the import-without-code → write service secrets → deploy bring-up
   order.
-- Preserve the IAM → Operations → control deployment order. Operations owns
-  separate `operationsdb` and `operationsstorage` services; only the proxy may
-  expose its ingest and source-map paths.
+- **`platform deploy`'s order is IAM → Operations → proxy → control, and the
+  proxy's position is a SECURITY property, not a dependency.** Since ADR-0022 the
+  application enforces nothing, so control at a new version behind the previous,
+  more permissive manifest is an open `/api/*` for the length of the deploy.
+  Operations owns separate `operationsdb` and `operationsstorage` services; only
+  the proxy may expose its ingest and source-map paths.
+- **`platform deploy` MERGES the proxy manifest, never replaces it.** On the light
+  tier an application shares the project and therefore the platform proxy's one
+  `FABRIKA_PROXY_MANIFEST_JSON`; the generator emits only the three platform apps,
+  so composing them with the application entries is the deploy's job. A live entry
+  standing on one of the platform's own public hosts is superseded and reported —
+  a host belongs to exactly one app.
+- **`platform deploy` writes no credential, and reads every credential it holds
+  from the environment.** There is no `--token` and no `--admin-key`; an unknown
+  flag is an error precisely so one cannot arrive on a command line. Every secret
+  an installation holds is placed at bring-up.
+- **Every write is read-compare-write, so a re-run changes nothing.** `GET
+  /service-stack/{id}/env` works on every service (`docs/reference/zerops-platform.md`),
+  which is what makes the comparison possible; `putServiceEnv` stays write-first
+  because it must also work on a service that has never been deployed.
 - Every managed service names its `profile` explicitly. An import cannot change
   one afterwards, and omitting it silently buys `oltp-production` on HA.
 - Every setup declares both `run.healthCheck` (liveness) and
@@ -39,12 +70,14 @@ real credentials.
   without a live observation.
 - A PostgreSQL URL is always
   `${<host>_connectionString}/${<host>_dbName}?sslmode=require`.
-- **`zerops/proxy-manifest.ts` and `zerops/render.ts` are EXCLUDED from the published `files`, and that
-  is load-bearing.** Both import `@fabrika/control` — a PRIVATE package — through a devDependency, so
-  shipping either would put an unresolvable import in the tarball. What ships instead is
-  `src/proxy-manifest.ts` (types + resolver) and `zerops/generated/platform-proxy-manifest.ts` (the gate
-  sets, as data). A deploy command must read those two and never reach the generator; if you add a file
-  here that imports a devDependency, exclude it in the same change.
+- **`zerops/proxy-manifest.ts`, `zerops/console-schema.ts` and `zerops/render.ts` are EXCLUDED from the
+  published `files`, and that is load-bearing.** All three import `@fabrika/control` — a PRIVATE package
+  — through a devDependency, so shipping any of them would put an unresolvable import in the tarball.
+  What ships instead is `src/proxy-manifest.ts` (types + resolver) plus
+  `zerops/generated/platform-proxy-manifest.ts` (the gate sets) and
+  `zerops/generated/platform-console-schema.ts` (the console's vocabulary), both as DATA. `src/deploy.ts`
+  reads the generated pair and never reaches a generator; if you add a file here that imports a
+  devDependency, exclude it in the same change.
 - **The proxy manifest is split into a committed template and a deploy-time placement.** The template
   is installation-independent (ids, upstreams, listener ports, gates) and `gen:check` proves it still
   matches the gate modules. Hosts and scheme are one installation's, so they are arguments. A

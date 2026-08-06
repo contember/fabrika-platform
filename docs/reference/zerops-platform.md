@@ -476,6 +476,39 @@ IAM's app id on a deployed installation is `iam`. The live document said `iam-lo
 generator replaced it, inherited from the local composition it was copied from at bring-up; the id is
 inert for an app whose every gate rule is `public`, so correcting it costs nothing.
 
+### `fabrika platform deploy --provider=zerops`
+
+Both ordering rules above, plus the manifest composition, now live in code:
+`packages/installation-zerops/src/deploy.ts`. On Zerops the command owns the WHOLE ordered sequence —
+resolve the project and its services, write each service's environment, deploy
+IAM → Operations → proxy → control waiting for each, reconcile the console's schema, ensure the public
+entry point — so an operator's pipeline calls one step. On Cloudflare the same command stays narrow and
+the scaffolded workflow keeps the order. The asymmetry is deliberate
+([ADR-0027](../decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)); its full flag and
+variable surface is the `usage` string in `packages/installation-zerops/src/index.ts`.
+
+Three behaviours worth knowing before reading that file:
+
+- **The manifest is MERGED.** On the light tier an application shares the project and therefore the
+  platform proxy's one `FABRIKA_PROXY_MANIFEST_JSON` — `fabrika-test` carries `notes` → `notesapi:3000`
+  beside the three platform apps. Application entries are carried through unchanged; an entry standing
+  on one of the platform's own public hosts is superseded and reported, because a host belongs to
+  exactly one app.
+- **Hosts come from `zeropsSubdomain` unless the operator names them.** That variable is a NAME and not
+  a state (see above), so it can be read one step before `enableSubdomainAccess`. Naming all three hosts
+  instead marks the installation `custom-domain`, and no subdomain is published.
+- **Every variable is read and compared before it is written**, through `GET /service-stack/{id}/env`,
+  so a re-run writes nothing. `putServiceEnv` itself stays write-first — it must also work on a service
+  that has never been deployed.
+
+Measured against the live `fabrika-test` on 2026-08-06 with `--dry-run` (reads only): of the
+per-installation variables the command derives, only `ENVIRONMENT` on `operations`, `control` and
+`proxy` and the proxy manifest differ from what was placed by hand. Every origin — `ISSUER`,
+`FABRIKA_IAM_ADMIN_ORIGINS`, `FABRIKA_CONTROL_DOMAIN`, `OPERATIONS_ARTIFACT_ORIGIN`,
+`FABRIKA_OPERATIONS_PUBLIC_HOST`, `FABRIKA_IAM_URL`, `FABRIKA_ZEROPS_PROXY_IAM_URL` — reproduces the
+live value byte for byte, and the composed manifest reproduces `vozka`, `operations` and `notes`
+identically while replacing `iam-local` with `iam`.
+
 ## Fabrika placement mapping
 
 The Fabrika platform project contains:

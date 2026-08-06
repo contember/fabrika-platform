@@ -233,8 +233,10 @@
       "name": "@fabrika/installation-zerops",
       "version": "0.0.1",
       "dependencies": {
+        "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/installation-contract": "workspace:*",
+        "@fabrika/provider-contract": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
       },
@@ -255,6 +257,7 @@
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/control": "workspace:*",
         "@fabrika/example-zerops-app": "workspace:*",
+        "@fabrika/installation-zerops": "workspace:*",
         "@fabrika/operations": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",

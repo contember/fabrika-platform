@@ -16,6 +16,10 @@ Usage:
 
 For app commands, the provider is read from the config returned by the selected provider's defineApp().
 An explicit --provider is required only when no app config is available.
+
+Which platform commands exist, and how WIDE each one is, is the provider's own answer — Zerops'
+\`platform deploy\` owns the whole ordered sequence while Cloudflare's is one step of a scaffolded
+workflow (ADR-0027). Run \`fabrika platform <command> --provider=<name> --help\` for that surface.
 `
 
 export interface ParsedCommand {
@@ -161,6 +165,12 @@ const runNamespace = async (parsed: ParsedCommand): Promise<void> => {
 
 export const runCli = async (argv: readonly string[]): Promise<void> => {
 	const parsed = parseCliArgs(argv)
+	if (parsed.help && parsed.area === 'platform' && parsed.provider !== undefined && parsed.provider !== '') {
+		// A platform command's real surface is the installation's, not this router's — and on Zerops that
+		// text is what backlog 62 generates the operator's workflow from, so `--help` must reach it.
+		console.info(installationCliFromModule(await installationModule(parsed.provider)).usage)
+		return
+	}
 	if (parsed.help || parsed.area === undefined) {
 		console.info(USAGE)
 		return

@@ -22,4 +22,11 @@ installation or provider package. It contains no provider implementation.
 - `fabrika-cloudflare-executor` is internal to the runner container.
 - Keep command routing thin. Provider behavior belongs in the provider or
   installation package.
+- **How WIDE a platform command is, is the provider's answer, not this package's**
+  ([ADR-0027](../../docs/decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)).
+  Zerops' `platform deploy` owns a whole ordered sequence; Cloudflare's composes
+  one runner/control pair and the scaffolded workflow keeps the order. `--help` on
+  a platform command therefore prints the INSTALLATION's usage — that text is the
+  provider's real surface, and on Zerops it is what an operator's workflow is
+  generated from.
 - Do not add a closed provider union to a shared contract.
