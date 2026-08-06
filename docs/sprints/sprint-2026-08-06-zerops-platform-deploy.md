@@ -99,11 +99,32 @@ is why they are WUs here rather than separate items.
 - **Touch points.** `packages/*/src/node/runtime.ts`, `packages/iam/src/services.ts`, the live
   service variables.
 
+### WU4 — `platform init --provider=zerops` and the sidecar repository (effort M) · closes backlog 62
+
+- **Problem.** Nothing produces the caller for Zerops. `platform deploy` is the public interface an
+  operator's pipeline invokes, and ADR-0025 forbids that pipeline living in this repository. Note that
+  backlog 62's "Nothing produces the caller" is only true of Zerops:
+  `packages/installation-cloudflare/src/templates/` already ships the three-file shape, scaffolded by
+  `scaffold.ts` and populated by `environment.ts`.
+- **Verify first.** Read the Cloudflare init end to end and decide what is genuinely shared versus what
+  merely looks alike. **The two are not mirror images**: Cloudflare builds a runner image on first
+  bring-up and needs a GitHub App; Zerops has no runner (ADR-0003) and needs the one-time GitHub↔Zerops
+  OAuth link instead (backlog 47). What should be shared is `scaffold.ts` and `environment.ts`, not the
+  flow.
+- **Scope.** Zerops templates (`platform.yml`, `fabrika.ref`, `README.md`, `gitignore`) whose workflow
+  calls WU2's CLI surface; `runInit` for Zerops per decisions 4 and 5. Pin a **tag**, and refuse a
+  branch — ADR-0025 makes published tags load-bearing.
+- **Acceptance / witness.** A generated sidecar repository deploys the `fabrika-test` installation with
+  no step taken inside this repository, and bumping its pinned ref rolls the installation forward.
+  That run is the sprint's live acceptance and closes backlog 61 as well.
+- **Open question to settle, not inherit.** The predecessor seeded `VOZKA_BOOTSTRAP_ADMINS` and told
+  the operator to reset it to `[]` and re-run once a real admin existed. A documented-but-never-closed
+  escape hatch is backlog 59 all over again — prefer a mechanism that closes itself.
+- **Touch points.** `packages/installation-zerops/src/`, `packages/cli/`, and whatever moves out of
+  `packages/installation-cloudflare/src/{scaffold,environment,gh,prompt,log}.ts` to be shared.
+
 ## Out of scope (explicit)
 
-- **The sidecar repository for Zerops** — backlog 62. WU2 is the thing it calls; generating the caller
-  is the next sprint, and it should reuse `installation-cloudflare`'s `scaffold.ts`/`environment.ts`
-  rather than growing a second copy.
 - **A private Git source** — backlog 47, blocked on a one-time interactive GitHub↔Zerops OAuth link
   the operator performs. Unrelated to installing the platform: the namespace proxy builds from a
   pinned tag of the public repository and needs no credential (ADR-0025).
@@ -127,6 +148,19 @@ is why they are WUs here rather than separate items.
    collect credentials, create the GitHub App, scaffold the sidecar repository, write the Environment,
    trigger. `deploy` is unattended and runs in the operator's CI. Not one idempotent command; both are
    idempotent, but they run in different places for different reasons.
+3. **The live acceptance runs through the operator's pipeline, not from a laptop.** Backlog 61's
+   acceptance is a live deploy, and the honest way to perform it is the way an operator would — so
+   backlog 62 is pulled INTO this sprint as WU4 rather than deferred. Running `platform deploy` from a
+   developer's machine would verify the command while leaving the thing it exists to be called by
+   untested, and the root `CLAUDE.md` forbids deploying from localhost besides.
+4. **`platform init --provider=zerops` does the whole job, but confirms before every outward-facing
+   step.** It mirrors what `installation-cloudflare` already ships — create the repository, push the
+   scaffold, write the GitHub Environment including secret VALUES over `gh` stdin, trigger the workflow
+   — and asks first each time it reaches outside the operator's disk. Full automation, never silent.
+   `installation-cloudflare/src/prompt.ts` already has `confirm`.
+5. **The sidecar repository is `contember/fabrika-zerops-test`**, following the
+   `contember/vozka-platform-mangoweb` precedent, named so its relation to the `fabrika-test`
+   installation is obvious.
 
 ## Sequencing
 
@@ -135,9 +169,12 @@ is why they are WUs here rather than separate items.
 | WU1 (manifest generator)      | —          | WU3               |
 | WU3 (fail-closed environment) | —          | WU1               |
 | WU2 (the deploy command)      | WU1, WU3   | —                 |
+| WU4 (init + the sidecar)      | WU2        | —                 |
+| Live acceptance               | WU4        | —                 |
 
 WU1 first: WU2 cannot write a manifest nothing generates, and WU1 is the piece with a witness that
-does not need a live account.
+does not need a live account. WU4 last of the code: it generates a workflow that calls WU2's CLI
+surface, so that surface has to exist and be settled first.
 
 ## Run log
 
