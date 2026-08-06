@@ -9,10 +9,11 @@ fabrika is the merger of two Cloudflare-only projects: **propustka** (IAM & audi
 (deploy control plane). The merge exists to break the Cloudflare assumption: a client picks **one**
 platform — Cloudflare or [zerops.io](https://zerops.io) — and the whole stack runs there.
 
-> **Status.** The Cloudflare path works. The portable runtime, static provider boundary, Zerops
-> provider, auth proxy, and Operations foundation are implemented and locally
-> verified. Zerops support has not yet been run against a real account, so treat
-> it as well-formed but unexercised.
+> **Status — work in progress.** The Cloudflare path works. The Zerops path has been exercised
+> against a real account: provisioning, service variables, the `.zerops.app` entry point, and a
+> browser signing in through the auth proxy all run live. Two things are **not** built yet — fabrika
+> does not deploy _itself_ to a fresh account (that pipeline belongs to whoever installs it, not to
+> this repository), and an app deployed to Zerops cannot yet build from a private repository.
 
 ## What it does
 
@@ -83,4 +84,4 @@ and [`docs/decisions/README.md`](docs/decisions/README.md) for the decisions beh
 
 ## License
 
-MIT
+[MIT](./LICENSE) © Contember Limited
