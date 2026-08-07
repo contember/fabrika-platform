@@ -69,13 +69,12 @@ backlog is empty; what is left of item 54 is a console architecture decision, no
   0018's `VOZKA_*`/`PROPUSTKA_*` fallback and deleted the shared alias reader with it. Durable
   identifiers that carry those words as VALUES (app ids, worker/database/bucket/queue names,
   migration identities) are untouched and stay that way.
-- **Release activation: the packages exist, the path does not yet.** All twenty-two `@fabrika`
-  packages were published at `0.0.1` on 2026-08-07 and each one trusts `release.yml`
-  ([`25`](backlog/25-bootstrap-npm-trusted-publishing.md)). They went up from the operator's own npm
-  session, because npm requires an interactive one-time password for a first publish — so `0.0.1`
-  carries **no provenance**, and since it is already on the registry a `v0.0.1` tag makes the release
-  workflow skip every package. **OIDC therefore stays unexercised until `v0.0.2`.** What a `v0.0.1`
-  tag does unblock is the sidecar install path, which needs only that a `v[0-9]*` tag exist.
+- **Releases are live and tokenless.** All twenty-two `@fabrika` packages are on npm at **`0.0.2`**,
+  every one published by `release.yml` through OIDC with a provenance attestation, and every one
+  trusting only that workflow ([`25`](backlog/25-bootstrap-npm-trusted-publishing.md)). `0.0.1` was
+  the bootstrap: npm demands an interactive one-time password for a first publish, so it went up from
+  a laptop and carries no provenance — which is exactly why `0.0.2` exists. **`v0.0.2` is also the
+  first tag this repository has ever had**, which is what the sidecar install path was waiting on.
 - **Zerops, post-bring-up:** the light tier is **live on a real account** (sprint
   [`zerops-live-bringup`](archive/sprint-2026-08-03-zerops-live-bringup.md)); the
   platform facts it settled are in [`reference/zerops-platform.md`](reference/zerops-platform.md).

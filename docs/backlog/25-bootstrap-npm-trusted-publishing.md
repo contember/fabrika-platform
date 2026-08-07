@@ -35,17 +35,24 @@ Two facts worth keeping:
   11.11.0), produced identical tarballs for all twenty-two packages. That is what makes a later
   `release.yml` run on tag `v0.0.1` a verified no-op instead of a hard failure.
 
+## The tokenless path, proven — `v0.0.2` (2026-08-07)
+
+`0.0.1` could never prove anything: it was already on the registry, so tagging it would have made
+`release:publish` skip all twenty-two packages. The workspace was co-versioned to `0.0.2` (`8aa695b`)
+and tagged — **the first tag in this repository's history** — and run `31195403277` published it.
+
+Verified against the registry rather than against the workflow's own conclusion: **22/22 packages at
+`0.0.2`, all twenty-two carrying provenance attestations, `dist-tag latest` = `0.0.2`**. No token was
+involved at any point; `release.yml` carries no secret. `release:registry-smoke` in the same run is
+the external witness — it installs every exact version from the public registry into a clean project.
+
+`0.0.1` remains provenance-less, permanently. Nothing can be done about it and nothing should be: it
+is the bootstrap version, and `latest` never pointed at it for longer than one afternoon.
+
 ## What remains
 
-- **The tokenless path is still unproven.** Because `0.0.1` is already on the registry, a `v0.0.1` tag
-  makes `release:publish` skip every package as already-published. OIDC will not actually run until a
-  version that is NOT yet on npm is released — `v0.0.2`. Until then the trust bindings are configured
-  but never exercised.
-- **`v0.0.1` has no provenance and never will.** Provenance requires a cloud CI runner
-  ([npm docs](https://docs.npmjs.com/generating-provenance-statements)), so a local publish cannot
-  attach one, and the later CI run on the same tag is a no-op. The first provenance-bearing release is
-  `v0.0.2`.
-- **Step 9 below is not done**: token publishing is still permitted per package.
+- **Step 9 below**: token publishing is still permitted per package. Until it is restricted, the trust
+  bindings are the preferred path rather than the only one.
 
 ## Original boundary (kept for its reasoning)
 
