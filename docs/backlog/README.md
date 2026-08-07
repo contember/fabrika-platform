@@ -28,7 +28,8 @@ and deleted; what they established is in
 
 Items 61–63 come from [ADR-0025](../decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md):
 the platform is installed by its operator, so fabrika owes an unattended deploy command
-and the two things that call it.
+and the two things that call it. Items 64–65 are what building 61 and 62 uncovered — an
+escape hatch nobody closes, and a pin that pins half of what it claims.
 
 ## Items
 
@@ -36,7 +37,7 @@ and the two things that call it.
 
 - [05](05-bring-up-on-a-real-zerops-account.md) — The light tier is live on a real account; what remains is the production two-project shape and custom domains.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
-- [25](25-bootstrap-npm-trusted-publishing.md) — Bootstrap the twenty package names once through protected CI, then activate tokenless OIDC publishing.
+- [25](25-bootstrap-npm-trusted-publishing.md) — Bootstrap the twenty-two package names once through protected CI, then activate tokenless OIDC publishing. Now also gates the first `v*` tag, and through it backlog 62's live acceptance.
 - [26](26-retire-trasa-release-surface.md) — Publish `@fabrika/app`, deprecate `@trasa/core`, and archive the standalone repository.
 - [34](34-retire-standalone-poplach.md) — Adopt existing state and retire the standalone Poplach app.
 - [36](36-complete-zerops-release-artifact-correlation.md) — Publish Zerops build source maps and link Delivery runs to Operations evidence.
@@ -50,8 +51,10 @@ and the two things that call it.
 - [59](59-the-live-installation-calls-itself-local.md) — `control` and `operations` on `fabrika-test` carry `ENVIRONMENT=local`, the value every bypass is gated on.
 - [60](60-the-example-app-has-no-light-tier-descriptor.md) — Neither committed `zerops.yaml` names the shared `db` the example actually runs against, so the live app cannot be redeployed from HEAD.
 - [61](61-make-platform-deploy-an-unattended-command.md) — `fabrika platform deploy` is the public interface an operator's pipeline calls, and it does not deploy a Zerops installation at all.
-- [62](62-generate-the-operators-sidecar-install-repository.md) — Generate the per-account sidecar repository that installs the platform; fabrika ships the generator, never the pipeline.
+- [62](62-generate-the-operators-sidecar-install-repository.md) — The generator now exists on both providers; what remains is the live acceptance and the fresh-account bring-up it does not cover.
 - [63](63-a-one-click-install-from-the-public-repository.md) — The second install shape: a running platform without creating a repository or a CI system.
+- [64](64-close-the-bootstrap-admission-hatch-automatically.md) — A Cloudflare installation comes up admitting on a standing admin list, and closing it is an instruction printed to a human.
+- [65](65-pin-a-zerops-build-to-a-revision.md) — A Zerops build source names a repository, not a revision, so `fabrika.ref` pins the pipeline but not the code Zerops builds.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.

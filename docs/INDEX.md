@@ -28,13 +28,16 @@ handoff amendment.
 
 [`zerops-platform-deploy`](sprints/sprint-2026-08-06-zerops-platform-deploy.md) — an unattended
 `fabrika platform deploy --provider=zerops`, as wide as
-[ADR-0027](decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md) makes it. Consumes
-backlog [`58`](backlog/58-generate-the-platform-installations-proxy-manifest.md),
-[`59`](backlog/59-the-live-installation-calls-itself-local.md) and
-[`61`](backlog/61-make-platform-deploy-an-unattended-command.md); the other install paths
-[ADR-0025](decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) commits to stay
-filed as [`62`](backlog/62-generate-the-operators-sidecar-install-repository.md) and
-[`63`](backlog/63-a-one-click-install-from-the-public-repository.md).
+[ADR-0027](decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md) makes it. All four work
+units are committed, consuming backlog [`58`](backlog/58-generate-the-platform-installations-proxy-manifest.md),
+[`59`](backlog/59-the-live-installation-calls-itself-local.md),
+[`61`](backlog/61-make-platform-deploy-an-unattended-command.md) and most of
+[`62`](backlog/62-generate-the-operators-sidecar-install-repository.md). **Nothing has run against a
+live account**: the generated sidecar needs a published `v*` tag, so the live acceptance now waits on
+[`25`](backlog/25-bootstrap-npm-trusted-publishing.md). It also left
+[`64`](backlog/64-close-the-bootstrap-admission-hatch-automatically.md) and
+[`65`](backlog/65-pin-a-zerops-build-to-a-revision.md) behind; the second install path ADR-0025 commits
+to stays filed as [`63`](backlog/63-a-one-click-install-from-the-public-repository.md).
 
 Two auth sprints shipped on 2026-08-05 —
 [hardening](archive/sprint-2026-08-04-auth-hardening.md), then
@@ -66,18 +69,22 @@ backlog is empty; what is left of item 54 is a console architecture decision, no
   0018's `VOZKA_*`/`PROPUSTKA_*` fallback and deleted the shared alias reader with it. Durable
   identifiers that carry those words as VALUES (app ids, worker/database/bucket/queue names,
   migration identities) are untouched and stay that way.
-- **Release activation:** run hosted CI, bootstrap the twenty npm packages, and prove the tokenless release path in
-  [`backlog/25-bootstrap-npm-trusted-publishing.md`](backlog/25-bootstrap-npm-trusted-publishing.md).
+- **Release activation is now on the critical path.** Bootstrap the twenty-two npm packages and prove
+  the tokenless release path — [`25`](backlog/25-bootstrap-npm-trusted-publishing.md). The repository has
+  **no tags at all**, and a generated sidecar workflow accepts only `v[0-9]*` while `release.yml`
+  triggers on `v*`, so the first tag necessarily runs the release pipeline. Until it does, no
+  installation can be deployed the way an operator would.
 - **Zerops, post-bring-up:** the light tier is **live on a real account** (sprint
   [`zerops-live-bringup`](archive/sprint-2026-08-03-zerops-live-bringup.md)); the
   platform facts it settled are in [`reference/zerops-platform.md`](reference/zerops-platform.md).
   Sprint [`zerops-path-correctness`](archive/sprint-2026-08-05-zerops-path-correctness.md)
   then fixed what the account proved wrong — the env write, four conformance corrections,
-  the `.zerops.app` entry point — and signed a browser in through the proxy live. Next:
-  [`61`](backlog/61-make-platform-deploy-an-unattended-command.md), because the installation
-  is still deployed by hand, and [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md),
-  which blocks a control-plane-triggered deploy of a private app. The production two-project
-  shape and custom domains remain in [`05`](backlog/05-bring-up-on-a-real-zerops-account.md).
+  the `.zerops.app` entry point — and signed a browser in through the proxy live. The installation is
+  still deployed **by hand**: `platform deploy` and `platform init` are written and unit-tested, but
+  neither has run against the account, so the hand sequence remains the only proven one. Next is the
+  live acceptance above, then [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md), which
+  blocks a control-plane-triggered deploy of a private app. The production two-project shape and
+  custom domains remain in [`05`](backlog/05-bring-up-on-a-real-zerops-account.md).
 - **The session handoff is the ONLY way a browser gets a session for an app.** IAM
   issues a browser-bound one-time code and the proxy on the app's own host redeems it
   ([ADR-0023](decisions/0023-one-session-per-host.md),

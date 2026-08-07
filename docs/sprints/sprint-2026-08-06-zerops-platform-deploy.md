@@ -157,7 +157,8 @@ is why they are WUs here rather than separate items.
    step.** It mirrors what `installation-cloudflare` already ships — create the repository, push the
    scaffold, write the GitHub Environment including secret VALUES over `gh` stdin, trigger the workflow
    — and asks first each time it reaches outside the operator's disk. Full automation, never silent.
-   `installation-cloudflare/src/prompt.ts` already has `confirm`.
+   The `confirm` prompt this needs shipped in `installation-cloudflare/src/prompt.ts`; WU4 moved it to
+   `@fabrika/installation-init`, which is where both inits now read it from.
 5. **The sidecar repository is `contember/fabrika-zerops-test`**, following the
    `contember/vozka-platform-mangoweb` precedent, named so its relation to the `fabrika-test`
    installation is obvious.
@@ -234,3 +235,78 @@ its readiness check on the next deploy — loudly, which is the point, but it mu
 
 Left for WU2 (operational, not code): writing the environment name on every service, and deleting the
 inert `LOCAL_DEV_LOGIN` key from the live IAM.
+
+### WU2 — the deploy command (2026-08-06, `eb103f9`)
+
+`fabrika platform deploy --provider=zerops` now owns the sequence ADR-0027 gave it: resolve services,
+write every environment, deploy IAM → Operations → proxy → control waiting for each, reconcile the
+console's schema, ensure the public entry point. The surface is the `usage` string in
+`packages/installation-zerops/src/index.ts` — WU4's generated workflow is written against it, so it is
+a contract, not help text.
+
+- **The console's `AppSchema` needed WU1's treatment too.** `controlSchema` lives in the private
+  `@fabrika/control`, so it is rendered into `zerops/generated/platform-console-schema.ts` by a
+  dev-time script and reaches a deployed installation as DATA. `gen:check` now witnesses both artifacts.
+- **The merge is what makes WU1's rename safe.** An entry standing on a platform host is superseded
+  with a warning, and `iam-local` → `iam` is exactly that case: carrying both would produce a document
+  `parseProxyManifest` rejects. Entries the platform does not own are copied byte-for-byte.
+- **`--dry-run` against the live account (2026-08-06).** The derivation reproduces the hand-placed
+  installation: every return origin already matches byte for byte, and only `ENVIRONMENT` on three
+  services and the manifest differ. That is the whole delta between a hand-built installation and a
+  generated one, and it is the WU3 ordering constraint showing up exactly where it was predicted.
+- **Still not done, and not code:** deleting the inert `LOCAL_DEV_LOGIN` key from the live IAM. The
+  deploy neither writes nor removes it. It is harmless only because WU3's refusal will stop `local`
+  from surviving on a public origin at all.
+
+### WU4 — init and the sidecar repository (2026-08-06, `a820ac9`) · consumes backlog 62
+
+`fabrika platform init --provider=zerops <installation>` generates and maintains the operator's sidecar
+repository. The workflow calls ONE step because ADR-0027 put the order inside the command, pins a
+published tag, restricts its push trigger to `['fabrika.ref', '.github/workflows/platform.yml']`, and
+carries a `dry_run` input for the first pass after an Environment edit.
+
+- **A new PUBLIC package, `@fabrika/installation-init`** — the hidden secret prompt, the shell rules
+  that never log a child env, the `gh` wrapper, the GitHub Environment write, and a generic sidecar
+  scaffold, moved out of `installation-cloudflare` with `git mv`. ~600 lines whose whole point is that
+  no helper accepts a secret VALUE; two copies of that invariant is what the invariant exists to
+  prevent. The FLOW stays per-provider (ADR-0027) — Zerops has no GitHub App, no runner image, no vault
+  key. `EXPECTED_PUBLIC_PACKAGES` in `scripts/release.ts` went 21 → 22.
+- **The bootstrap-admin hatch is closed by not existing here.** `platform deploy` on Zerops writes no
+  credential and no admission list, so `init` has nothing to seed and the operator has nothing to reset
+  to `[]` later; a test asserts no Environment key contains `BOOTSTRAP`. **The Cloudflare path still has
+  the open hatch** the sprint warned about — `installation-cloudflare/src/init.ts:522-524` prints reset
+  instructions and trusts the operator to follow them. → backlog
+  [64](../backlog/64-close-the-bootstrap-admission-hatch-automatically.md).
+- **A Zerops build source names a REPOSITORY, not a revision.** So `fabrika.ref` pins what the pipeline
+  DOES — the order, the composed manifest, the gates, the console schema, every written variable — but
+  not the revision Zerops BUILDS. The generated README says so rather than implying otherwise.
+  **ADR-0025:72 claims `proxyBuildFromGit` "names a tag"; `zerops/topology.ts:126` sets a bare URL.**
+  That is real drift in a decision, not a not-yet-built gap. → backlog
+  [65](../backlog/65-pin-a-zerops-build-to-a-revision.md).
+- **Scope is an installation that ALREADY EXISTS.** A fresh account still needs the hand bring-up: a
+  proxy that has never deployed publishes no HTTP ports, so no subdomain exists to derive hosts from
+  while the manifest must be written first. Backlog 62's acceptance named a fresh account and this does
+  not meet it — 62 is rewritten rather than deleted.
+
+**Verification (`a820ac9`).** 2021 pass / 9 skip / 0 fail against `postgres:17`; typecheck, lint,
+format, `gen:check` and `release:validate --tag` all 0 over 22 public packages.
+
+### Live acceptance — blocked (2026-08-07)
+
+Not started. Four things stand in front of it, and only the first is ours to fix in code:
+
+1. **No tag exists.** `git tag -l` is empty. The generated workflow accepts only `v[0-9]*`
+   (`templates/platform.yml:64`) and `.github/workflows/release.yml` triggers on `v*` — the first
+   pattern is a SUBSET of the second, so no tag name can run the sidecar while missing the release
+   pipeline. Settled 2026-08-07: bootstrap npm first (backlog 25), then tag.
+2. **Credentials are the operator's** — `FABRIKA_ZEROPS_ACCESS_TOKEN` (an integration token, never the
+   personal one `zops` holds) and the `px_` `FABRIKA_IAM_PROVISIONING_KEY`. Neither is in the repo.
+3. **`init` is outward-facing** — it creates `contember/fabrika-zerops-test`, pushes, writes the
+   Environment and triggers. Run it with a human watching each confirmation.
+4. **Run `dry_run` first.** It is the only cheap witness for the two sequences that have never
+   executed: the environment-write-before-deploy ordering against a live `control` that still pairs
+   `local` with a public host, and the manifest merge, whose failure mode is taking a deployed
+   application offline.
+
+Backlog [47](../backlog/47-give-the-zerops-path-a-private-git-source.md) does **not** block this: the
+platform services build from the public repository, and the OAuth link it needs is for a private APP.

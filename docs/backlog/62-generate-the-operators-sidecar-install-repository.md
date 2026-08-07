@@ -1,62 +1,71 @@
 ---
 id: 62
 title: Generate the operator's sidecar install repository
-blocked-by: [./61-make-platform-deploy-an-unattended-command.md]
+blocked-by: [./25-bootstrap-npm-trusted-publishing.md]
 ---
 
 # 62 — Generate the operator's sidecar install repository
 
 **Summary.** [ADR-0025](../decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md)
 puts the install pipeline in a repository the operator owns. fabrika ships the generator for it, not
-the pipeline. Effort M.
+the pipeline. **The generator now exists on both providers**; what is left is proving it against a
+real account, and the fresh-account bring-up it deliberately does not cover. Effort S, plus one
+genuinely unbuilt piece.
 
-## Problem
+## What shipped
 
-Nothing produces the caller. `fabrika platform deploy` — once [61](./61-make-platform-deploy-an-unattended-command.md)
-makes it real — needs something to invoke it with an account's credentials, and ADR-0025 forbids that
-something living in this repository.
+- **Cloudflare** — `packages/installation-cloudflare/src/{scaffold,init}.ts` and `src/templates/`
+  already produced the vozka three-file shape before this item was written. The item's original
+  premise, "nothing produces the caller", was false when filed.
+- **Zerops** — `fabrika platform init --provider=zerops <installation>`
+  (`packages/installation-zerops/src/{init,sidecar}.ts`, `a820ac9`). One workflow step, because
+  [ADR-0027](../decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md) put the deploy
+  order inside the command; a `dry_run` input; a push trigger narrowed to the ref file and the
+  workflow itself.
+- **The shared mechanics** — `@fabrika/installation-init`, the 22nd public package: hidden secret
+  prompt, shell rules that never log a child env, the `gh` wrapper, the GitHub Environment write, and
+  a generic sidecar scaffold. The FLOW is not shared and should not become shared (ADR-0027).
+- **The four questions this item raised** are answered: what differs per provider (the flow, not the
+  mechanics); how much authority the CLI takes (everything, confirming before each outward step);
+  bootstrap closure (**answered on Zerops by having no hatch at all** — see below); tag pinning (a
+  published tag, refused twice, by `assertPinnedTag` and again in the generated workflow).
 
-## The shape, which already exists in the predecessor
+Bootstrap closure did NOT generalise. Zerops needs no admission list because its `platform deploy`
+writes no credential; the Cloudflare path still opens the hatch and trusts the operator to close it
+(`installation-cloudflare/src/init.ts:522-524`). That residue is
+[64](./64-close-the-bootstrap-admission-hatch-automatically.md).
 
-`contember/vozka-platform-mangoweb` is three files and is worth copying rather than redesigning:
+## What remains
 
-- `.github/workflows/platform.yml` — checkout self, read the pinned ref, checkout the public platform
-  repository at it, `bun install`, run the platform deploy. `concurrency: platform-deploy` with
-  `cancel-in-progress: false`; `push` restricted to paths `[<ref file>, <workflow>]` so a README tweak
-  does not redeploy; a `workflow_dispatch` for manual runs.
-- `vozka.ref` — one line pinning the platform version. Bump it and push to roll out.
-- `README.md` — states that this repository is the per-account root of trust and that the platform
-  never deploys itself.
+**1. The live acceptance, which has never run.** Everything above is verified by unit tests against
+fake APIs. `init` has never been executed once, against any account. Blocked in order on:
 
-Its secrets and non-secret variables live in a **GitHub Environment** named for the account, written
-by `vozka init <account>`, not hand-edited. Note its workaround: GitHub reserves the `GITHUB_` prefix
-for Environment secret names, so the App id/key/webhook secret are stored as `GH_*` and mapped in the
-workflow's `env:` block.
+- a published `v[0-9]*` tag — the generated workflow refuses a branch, and `release.yml` triggers on
+  `v*`, so the first tag also runs the release pipeline. Settled 2026-08-07: do
+  [25](./25-bootstrap-npm-trusted-publishing.md) first;
+- the operator's two credentials (a Zerops **integration** token and the `px_` provisioning key),
+  which live in neither this repository nor a developer's shell;
+- a `dry_run` pass before the first real one — the only cheap witness for the environment-write-before-
+  deploy ordering and for the proxy-manifest merge, whose failure mode is taking a deployed
+  application offline.
 
-## Approach
-
-`fabrika platform init` generates and maintains it. Open questions worth settling before building:
-
-- **What differs per provider.** The Cloudflare pipeline needs a runner-image build on first bring-up
-  (`--build-runner-image` in the predecessor); Zerops has no runner (ADR-0003) and needs the one-time
-  GitHub↔Zerops link instead ([47](./47-give-the-zerops-path-a-private-git-source.md)).
-- **How much the CLI is allowed to do to someone's GitHub account.** The predecessor created the
-  repository, the GitHub App, and the Environment with its secrets. That is a lot of authority for one
-  command; decide what it does versus what it prints for a human to do.
-- **Bootstrap and its closure.** The predecessor seeded `VOZKA_BOOTSTRAP_ADMINS` and told the operator
-  to set it to `[]` and re-run once a real admin exists. An escape hatch that is documented but never
-  closed is [59](./59-the-live-installation-calls-itself-local.md) again — prefer a mechanism that
-  closes itself.
-- **Pinning by tag, not branch.** ADR-0025 makes published tags load-bearing; the generated pipeline
-  should pin a tag and the generator should refuse a branch.
+**2. A fresh account, which is genuinely unbuilt.** The original acceptance below named one; the
+shipped command explicitly covers only an installation that already exists. The obstacle is an
+ordering cycle, not an oversight: a proxy that has never deployed publishes no HTTP ports, so
+`zeropsSubdomain` names nothing — yet the proxy manifest, which needs those hosts, must be written
+before the proxy is built. Breaking that cycle (a two-pass deploy? a placeholder manifest the first
+run replaces?) is a design question, not a coding task.
 
 ## Acceptance
 
-A generated sidecar repository deploys a fabrika installation to a fresh account with no step taken
-inside this repository, and bumping its pinned ref rolls the installation to a new version.
+A generated sidecar repository deploys a fabrika installation **to the existing `fabrika-test`
+account** with no step taken inside this repository, and bumping its pinned ref rolls the installation
+to a new version. The fresh-account case is explicitly deferred — it needs the cycle above broken
+first, and should become its own item once someone has designed the break.
 
 ## Touch points
 
-`packages/cli/`, `packages/installation-contract/`, `packages/installation-{cloudflare,zerops}/`.
+`packages/installation-{cloudflare,zerops}/`, `packages/installation-init/`, `packages/cli/`.
 
-<!-- Origin: ADR-0025. Reference implementation: contember/vozka-platform-mangoweb. -->
+<!-- Origin: ADR-0025. Reference implementation: contember/vozka-platform-mangoweb.
+     Largely delivered by sprint-2026-08-06-zerops-platform-deploy (WU4). -->
