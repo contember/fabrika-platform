@@ -1,0 +1,107 @@
+name: Bootstrap npm packages
+
+# TEMPORARY — delete this file, its token and its Environment once every @fabrika package exists
+# and its trusted publisher is bound to release.yml (backlog 25, steps 6 and 9).
+#
+# npm cannot create a package name through trusted publishing: `npm trust` requires the package to
+# already exist, and npm/cli#8544 ("Allow publishing initial version with OIDC") is still open. So the
+# FIRST publish of each name needs a token, and this workflow is the only place one is ever used.
+# Routine releases stay tokenless in release.yml, which carries no secret at all.
+#
+# It mirrors release.yml's toolchain EXACTLY — same runner, bun, node, npm, same install — because a
+# later release.yml run on tag v0.0.1 compares each registry tarball's integrity against a freshly
+# packed one and FAILS on a mismatch (scripts/release.ts:420-440). That comparison is the point: it is
+# what makes the first real release a verified no-op instead of a second, unrelated upload. Two runs of
+# `release:pack` were measured byte-identical across all 22 tarballs on 2026-08-07, so npm pack does not
+# leak the staging directory's mtimes — but do not "modernise" one of these two files alone.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag to bootstrap, e.g. v0.0.1. Must match the single source version.'
+        required: true
+        default: v0.0.1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bootstrap-npm
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Holds NPM_TOKEN and, through its required reviewers, the approval to spend it.
+    environment: npm-bootstrap
+    permissions:
+      contents: read
+      # Provenance attestation. The repository is public, which `--provenance` requires.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Pin trusted-publishing npm CLI
+        run: npm install --global npm@11.6.2
+
+      - run: bun install --frozen-lockfile
+      - run: bun run release:validate --tag=${{ inputs.version }}
+      - run: bun run release:pack --tag=${{ inputs.version }}
+      - run: bun run release:smoke --tag=${{ inputs.version }}
+
+      # `bun run release:publish` CANNOT be used here: its missing-package gate throws before its first
+      # mutation (scripts/release.ts:474-482), which is exactly what keeps the CI dry-run green. This
+      # loop is `publishCommand()` (:459-464) without that gate, in the same dependency-first order, and
+      # it skips a name already at this version so a run that dies half way can simply be dispatched
+      # again.
+      - name: Publish each tarball once
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          semver="${VERSION#v}"
+          jq -r '.packages[] | "\(.name)\t\(.filename)"' .release/release-manifest.json |
+            while IFS=$'\t' read -r name file; do
+              if npm view "$name@$semver" version >/dev/null 2>&1; then
+                echo "skip     $name@$semver — already on the registry"
+                continue
+              fi
+              echo "publish  $name@$semver"
+              npm publish ".release/$file" --access public --ignore-scripts --provenance
+            done
+
+      - name: Summary
+        if: always()
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          semver="${VERSION#v}"
+          {
+            echo "### npm bootstrap → \`$VERSION\`"
+            echo ""
+            if [ -f .release/release-manifest.json ]; then
+              jq -r '.packages[].name' .release/release-manifest.json | while read -r name; do
+                if npm view "$name@$semver" version >/dev/null 2>&1; then
+                  echo "- \`$name\` — present"
+                else
+                  echo "- \`$name\` — **MISSING**"
+                fi
+              done
+            else
+              echo "No release manifest was produced; nothing was published."
+            fi
+            echo ""
+            echo "Next: bind each package's trusted publisher to \`release.yml\`, then delete this workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
