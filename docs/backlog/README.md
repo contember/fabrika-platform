@@ -37,7 +37,7 @@ escape hatch nobody closes, and a pin that pins half of what it claims.
 
 - [05](05-bring-up-on-a-real-zerops-account.md) — The light tier is live on a real account; what remains is the production two-project shape and custom domains.
 - [22](22-unix-second-columns-overflow-in-2038.md) — int4 timestamps; `BIGINT` costs every reader a string. Decide before it is urgent.
-- [25](25-bootstrap-npm-trusted-publishing.md) — Bootstrap the twenty-two package names once through protected CI, then activate tokenless OIDC publishing. Now also gates the first `v*` tag, and through it backlog 62's live acceptance.
+- [25](25-bootstrap-npm-trusted-publishing.md) — All 22 packages are on npm at 0.0.1 and trust `release.yml`; what remains is proving the tokenless path, which needs a version not yet published.
 - [26](26-retire-trasa-release-surface.md) — Publish `@fabrika/app`, deprecate `@trasa/core`, and archive the standalone repository.
 - [34](34-retire-standalone-poplach.md) — Adopt existing state and retire the standalone Poplach app.
 - [36](36-complete-zerops-release-artifact-correlation.md) — Publish Zerops build source maps and link Delivery runs to Operations evidence.

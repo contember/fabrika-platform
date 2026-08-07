@@ -69,11 +69,13 @@ backlog is empty; what is left of item 54 is a console architecture decision, no
   0018's `VOZKA_*`/`PROPUSTKA_*` fallback and deleted the shared alias reader with it. Durable
   identifiers that carry those words as VALUES (app ids, worker/database/bucket/queue names,
   migration identities) are untouched and stay that way.
-- **Release activation is now on the critical path.** Bootstrap the twenty-two npm packages and prove
-  the tokenless release path — [`25`](backlog/25-bootstrap-npm-trusted-publishing.md). The repository has
-  **no tags at all**, and a generated sidecar workflow accepts only `v[0-9]*` while `release.yml`
-  triggers on `v*`, so the first tag necessarily runs the release pipeline. Until it does, no
-  installation can be deployed the way an operator would.
+- **Release activation: the packages exist, the path does not yet.** All twenty-two `@fabrika`
+  packages were published at `0.0.1` on 2026-08-07 and each one trusts `release.yml`
+  ([`25`](backlog/25-bootstrap-npm-trusted-publishing.md)). They went up from the operator's own npm
+  session, because npm requires an interactive one-time password for a first publish — so `0.0.1`
+  carries **no provenance**, and since it is already on the registry a `v0.0.1` tag makes the release
+  workflow skip every package. **OIDC therefore stays unexercised until `v0.0.2`.** What a `v0.0.1`
+  tag does unblock is the sidecar install path, which needs only that a `v[0-9]*` tag exist.
 - **Zerops, post-bring-up:** the light tier is **live on a real account** (sprint
   [`zerops-live-bringup`](archive/sprint-2026-08-03-zerops-live-bringup.md)); the
   platform facts it settled are in [`reference/zerops-platform.md`](reference/zerops-platform.md).

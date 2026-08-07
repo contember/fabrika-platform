@@ -12,7 +12,42 @@ release can be tokenless. **Now on the critical path**: the repository has no ta
 [62](./62-generate-the-operators-sidecar-install-repository.md)'s live acceptance needs the first
 `v*` tag, which necessarily runs `release.yml`.
 
-## Current boundary
+## Done on 2026-08-07
+
+All twenty-two packages exist on npm at `0.0.1`, and every one trusts `release.yml`. Verified by
+reading, not by exit codes: each package's registry `dist.integrity` equals the SHA-512 of the local
+tarball (22/22 — the same comparison `scripts/release.ts:420-440` will make), and `npm trust list`
+returns exactly one binding per package, `type: github`, `file: release.yml`, `repository:
+contember/fabrika-platform`, `permissions: ["createPackage"]`.
+
+**The bootstrap did not happen the way this item planned, and no token was ever created.** npm demands
+an interactive one-time password for a first publish — a stored `~/.npmrc` credential produced `EOTP`
+— so the packages went up from the operator's own authenticated session rather than from CI with a
+granular token. The temporary workflow and its protected Environment were built, never used, and
+deleted (`19bc3b2`). `npm trust` needs an OTP as well; both accept `--otp=<code>`, and one code covers
+a parallel batch, which is how twenty-two publishes fit inside one thirty-second window.
+
+Two facts worth keeping:
+
+- **`createPackage` is the stored name of the `npm publish` permission.** `--allow-publish` writes it;
+  `--allow-stage-publish` writes `createStagedPackage`. A binding reading `createPackage` is correct.
+- **`npm pack` is byte-reproducible here.** Two runs, and two different npm versions (11.6.2 and
+  11.11.0), produced identical tarballs for all twenty-two packages. That is what makes a later
+  `release.yml` run on tag `v0.0.1` a verified no-op instead of a hard failure.
+
+## What remains
+
+- **The tokenless path is still unproven.** Because `0.0.1` is already on the registry, a `v0.0.1` tag
+  makes `release:publish` skip every package as already-published. OIDC will not actually run until a
+  version that is NOT yet on npm is released — `v0.0.2`. Until then the trust bindings are configured
+  but never exercised.
+- **`v0.0.1` has no provenance and never will.** Provenance requires a cloud CI runner
+  ([npm docs](https://docs.npmjs.com/generating-provenance-statements)), so a local publish cannot
+  attach one, and the later CI run on the same tag is a no-op. The first provenance-bearing release is
+  `v0.0.2`.
+- **Step 9 below is not done**: token publishing is still permitted per package.
+
+## Original boundary (kept for its reasoning)
 
 All twenty-two public packages are absent from the registry — verified 2026-08-07 by anonymous
 `GET https://registry.npmjs.org/@fabrika%2f<name>`: 404 for every one, and a registry search for
