@@ -85,10 +85,15 @@ the only way a `@fabrika` package changes.
 
 ## Open questions
 
-- Does `@fabrika` exist and is 2FA on? Not verifiable anonymously — npmjs.com returns 403 to
-  unauthenticated requests whether or not an org exists.
+- **Settled 2026-08-07:** the `@fabrika` org exists with `matej21` as **owner** (`npm org ls fabrika`),
+  and account 2FA is on in `auth-only` mode (`npm profile get`) — enabled at account level, as `npm
+  trust` requires, without forcing an OTP on every publish.
+- **Which credential `npm trust` will accept.** Its prerequisites exclude granular access tokens with
+  bypass-2FA, so the `~/.npmrc` credential on the operator's machine may or may not qualify depending
+  on how it was issued. Not inspectable without reading the token; it surfaces at step 5.
 - The exact `npm trust github` flag spellings, which are only visible from `npm trust github --help`
-  on npm ≥ 11.15.0.
+  on npm ≥ 11.15.0. The machine has 11.11.0, so this needs an upgrade — or `npx npm@latest trust …`,
+  which avoids replacing the global install.
 - Whether npm's `workflow_call` caveat touches `release.yml`. It should not — the `npm publish` runs
   in `release.yml`'s own `publish` job and `ci.yml` never publishes — but a wrong OIDC claim surfaces
   as `ENEEDAUTH` on the first real release, which is the second reason to bootstrap at a prerelease.
