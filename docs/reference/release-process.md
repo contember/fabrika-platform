@@ -23,7 +23,7 @@ The release set is derived from workspace manifests and checked against an expli
 - depend only on public workspace packages at its published boundary; and
 - participate in an acyclic dependency graph.
 
-`scripts/release.ts` validates these rules and computes the dependency-first order. The current set contains twenty packages.
+`scripts/release.ts` validates these rules and computes the dependency-first order. The current set contains twenty-two packages.
 
 ## Local artifact verification
 
@@ -48,7 +48,7 @@ A `v<semver>` tag starts `.github/workflows/release.yml` on a GitHub-hosted runn
 
 Packages publish in dependency order. A prerelease version uses the `next` dist-tag. On retry, the tool compares the registry's `dist.integrity` with the local tarball's SHA-512 integrity. It accepts an existing version only when the contents match and fails closed on a mismatch.
 
-After publication, `release:registry-smoke` waits for the expected `latest` or `next` dist-tag on all twenty packages, installs every exact version from npm into a clean project, verifies the installed manifests, imports the representative application/provider surfaces, and executes the installed CLI.
+After publication, `release:registry-smoke` waits for the expected `latest` or `next` dist-tag on all twenty-two packages, installs every exact version from npm into a clean project, verifies the installed manifests, imports the representative application/provider surfaces, and executes the installed CLI.
 
 The workflow refuses to start publication while any package name is absent from npm. The one-time external activation procedure is tracked in [backlog 25](../backlog/25-bootstrap-npm-trusted-publishing.md).
 
