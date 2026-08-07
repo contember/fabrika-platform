@@ -49,6 +49,13 @@ the external witness — it installs every exact version from the public registr
 `0.0.1` remains provenance-less, permanently. Nothing can be done about it and nothing should be: it
 is the bootstrap version, and `latest` never pointed at it for longer than one afternoon.
 
+**The same-tag retry is a verified no-op, not a skipped one.** Re-running `31195403277` printed
+`already published @fabrika/…@0.0.2` twenty-two times and made **zero** publish attempts. That line
+is only reachable through `published()` (`scripts/release.ts:420-440`), which compares the registry's
+`dist.integrity` against a SHA-512 of a tarball packed on that runner and **throws** when they differ.
+So the retry proves something stronger than idempotence: `npm pack` is reproducible across separate
+GitHub runners, not merely across two runs on one machine.
+
 ## What remains
 
 - **Step 9 below**: token publishing is still permitted per package. Until it is restricted, the trust
