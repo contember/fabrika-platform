@@ -26,6 +26,14 @@ handoff amendment.
 
 ## Active sprints
 
+[`zerops-from-scratch-install`](sprints/sprint-2026-08-07-zerops-from-scratch-install.md) — the
+operator creates an empty Zerops project by hand and `fabrika` does the rest, password-only. Closes
+the fresh-account half of [`62`](backlog/62-generate-the-operators-sidecar-install-repository.md) that
+`init` and `deploy` deliberately leave open, and gives
+[`63`](backlog/63-a-one-click-install-from-the-public-repository.md) its missing half. The predecessor
+sprint's live acceptance moves here: a fresh project is a better witness than `fabrika-test`, which
+hosts a live application.
+
 [`zerops-platform-deploy`](sprints/sprint-2026-08-06-zerops-platform-deploy.md) — an unattended
 `fabrika platform deploy --provider=zerops`, as wide as
 [ADR-0027](decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md) makes it. All four work
