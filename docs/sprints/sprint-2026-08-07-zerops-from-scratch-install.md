@@ -184,4 +184,33 @@ WU1 first because it is cheap and the whole design rests on it.
 
 ## Run log
 
-_(empty)_
+**WU1 — done (2026-08-08).** Observed on a throwaway project `fabrika-wu1-probe`, since deleted. The
+measurements are in
+[`reference/zerops-platform.md`](../reference/zerops-platform.md#verified-live-2026-08-08-account-prg1-throwaway-project-fabrika-wu1-probe--a-proxy-before-it-fronts-anything).
+The design holds:
+
+- **A proxy carrying `{"apps":[]}` is a complete service.** Built ~190 s, deployed ~60 s, `ACTIVE`, and
+  answered **404** on public listener 8080 — `setups.ts:409`'s claim, now observed rather than reasoned.
+- **No poll is needed after pass 1.** The six per-port subdomain lines were present in the same 10 s
+  poll that first saw `ACTIVE`. Open question 4 is closed: there is no measurable lag.
+- **`putServiceEnv` works on a never-deployed service**, immediately after the import's processes
+  report `FINISHED`. Open question 2 is closed for the light path.
+- **The two-pass shape is still required, and for a sharper reason than expected.** Before a deploy
+  `zeropsSubdomain` is present but holds ONE line with **no port segment**
+  (`https://proxy-2b16.prg1.zerops.app`), so `parseZeropsSubdomains` finds no `-<digits>` and
+  `derivePlatformHosts` throws — correctly. The `<4 chars>` segment is nonetheless **unchanged** across
+  the deploy, so the per-port hosts were predictable in hindsight. **Do not act on that**: it is one
+  observation of one format, and composing a hostname is what `hosts.ts:83-88` deliberately refuses.
+  Recorded as a possible future one-pass optimisation, not a plan.
+
+Two things this did NOT establish, stated so nobody reads more into it than it says:
+
+- Whether a proxy whose auth binary cannot boot still reaches `ACTIVE`. The run wrote a legal
+  `FABRIKA_IAM_URL`/`FABRIKA_IAM_KEY` pair, as a bring-up will, so the case does not arise. The
+  survey's reasoning from `start.sh` and the `:8081` health server remains untested.
+- Anything about the other five services. Only `proxy` was provisioned.
+
+**Tooling note.** `zops env list` and `zops env set` fail with `Service stack not found` on service ids
+that `zops service list` returned one line earlier, on two separate projects; `zops env show` works.
+The probe used `@fabrika/provider-zerops`'s own client instead, which is the code path the bootstrap
+will use anyway. Not investigated further — it is not our CLI.

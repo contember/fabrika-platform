@@ -431,6 +431,32 @@ subdomain is live:
 Read the service's `subdomainAccess` to know whether a subdomain is live, and `zeropsSubdomain` only to
 learn what it is called.
 
+### Verified live (2026-08-08, account `prg1`, throwaway project `fabrika-wu1-probe`) — a proxy before it fronts anything
+
+Measured to settle whether a Zerops installation can be brought up from an empty project. One `alpine@3.21`
+service named `proxy`, imported with `startWithoutCode: true`, then built from the public repository.
+
+| Behaviour                                                                 | Result                                                                                    |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `zeropsSubdomain` **before any deploy**                                   | **Present**, a single line with **no port segment**: `https://proxy-2b16.prg1.zerops.app` |
+| The same variable **after** a deploy publishing six HTTP ports            | Six lines, `https://proxy-2b16-<port>...`, one per port                                   |
+| The `<4 chars>` segment across that transition                            | **Unchanged** (`2b16` before and after)                                                   |
+| Lag between the version reaching `ACTIVE` and the six lines appearing     | **None measurable** — both were true in the same 10 s poll                                |
+| `POST /service-stack/{id}/user-data` on a service that has never deployed | **Works**, immediately after the import's processes report `FINISHED`                     |
+| Service fields `zeropsSubdomain` / `ports` before a deploy                | **Absent** and `[]` — the subdomain is a generated ENV VARIABLE, never a service field    |
+| `enableSubdomainAccess` on a freshly deployed service                     | `subdomainAccess` read back `true` within 5 s                                             |
+
+**A proxy carrying `FABRIKA_PROXY_MANIFEST_JSON={"apps":[]}` is a complete, deployable service.** It built
+in ~190 s, deployed in ~60 s, reached `ACTIVE`, and answered **404** on public listener 8080 — which is
+exactly what `zerops/setups.ts:409` claims an empty app list produces. This is what makes a two-pass
+bring-up possible: pass 1 publishes the ports, pass 2 reads the per-port names and writes the real manifest.
+
+Two limits on the above. The port segment is **predictable in hindsight** (`proxy-2b16` + `-<port>`), but
+that is one observation of one format, and `derivePlatformHosts` still refuses to compose a hostname rather
+than read one. And this run gave the proxy a legal `FABRIKA_IAM_URL`/`FABRIKA_IAM_KEY`, so it does **not**
+establish what happens when the auth binary cannot boot — a bring-up writes a legal pair, so the case does
+not arise.
+
 ### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — updating a running installation
 
 How the four platform services on `fabrika-test` were taken from a two-day-old build to `HEAD`. There
