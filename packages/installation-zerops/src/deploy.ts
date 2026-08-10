@@ -91,17 +91,32 @@ const SUBDOMAIN_READBACK_ATTEMPTS = 10
 const USER_DATA_SYNC_RUNNING = 'userDataSyncRunning'
 const TRIGGER_RETRY_ATTEMPTS = 6
 
-/** Everything `deployPlatform` reaches the outside world through. */
-export interface PlatformDeployCollaborators {
+/**
+ * What deploying ONE service needs. Narrower than the whole command's collaborators so the bring-up
+ * (`install.ts`), which deploys the proxy alone before any manifest exists, can reuse `deployPlatformService`
+ * without inventing an IAM reconciler it has no use for.
+ */
+export interface PlatformServiceDeployCollaborators {
 	readonly api: ZeropsApi
-	readonly reconcileSchema: SchemaReconciler
 	readonly sleep: Sleeper
 	readonly log: DeployLog
 	readonly signal: AbortSignal
 }
 
+/** Everything `deployPlatform` reaches the outside world through. */
+export interface PlatformDeployCollaborators extends PlatformServiceDeployCollaborators {
+	readonly reconcileSchema: SchemaReconciler
+}
+
+/** What deploying ONE service needs from the caller's input. `PlatformDeployInput` satisfies it. */
+export interface PlatformServiceDeployInput {
+	/** Public Git repository URL for a one-time build. Omitted uses the service's own Git integration. */
+	readonly buildFromGit?: string
+	readonly dryRun: boolean
+}
+
 /** One resolved platform service. */
-interface ResolvedService {
+export interface ResolvedService {
 	readonly hostname: PlatformDeployService
 	readonly id: string
 }
@@ -184,9 +199,9 @@ const serviceOf = (services: ReadonlyMap<PlatformDeployService, ResolvedService>
 }
 
 /** Read one service's environment as a key → value map. Values are never logged. */
-const readServiceEnv = async (
+export const readServiceEnv = async (
 	serviceId: string,
-	{ api, signal }: PlatformDeployCollaborators,
+	{ api, signal }: Pick<PlatformServiceDeployCollaborators, 'api' | 'signal'>,
 ): Promise<Map<string, string>> => {
 	const variables = await api.listServiceEnv({ serviceId, signal })
 	return new Map(variables.map((variable) => [variable.key, variable.content]))
@@ -303,8 +318,8 @@ const applyServiceEnv = async (
 /** Trigger one service's pipeline, riding out a userData synchronisation that has not settled yet. */
 const triggerPipeline = async (
 	service: ResolvedService,
-	input: PlatformDeployInput,
-	{ api, sleep, log, signal }: PlatformDeployCollaborators,
+	input: PlatformServiceDeployInput,
+	{ api, sleep, log, signal }: PlatformServiceDeployCollaborators,
 ): Promise<string | undefined> => {
 	for (let attempt = 0;; attempt += 1) {
 		assertRunning(signal)
@@ -331,7 +346,7 @@ const triggerPipeline = async (
 const awaitNewVersion = async (
 	service: ResolvedService,
 	baseline: number,
-	{ api, sleep, signal }: PlatformDeployCollaborators,
+	{ api, sleep, signal }: PlatformServiceDeployCollaborators,
 ): Promise<string> => {
 	for (let attempt = 0;; attempt += 1) {
 		assertRunning(signal)
@@ -352,11 +367,15 @@ const awaitNewVersion = async (
  * A failed deploy throws, which stops the sequence: the platform keeps the previous version serving
  * (`deploy.readinessCheck` is a real gate, live-verified), so a failure here leaves the installation
  * consistent — old code behind the manifest that was written for it.
+ *
+ * Exported for the BRING-UP, which builds the proxy on its own before any manifest exists so that the
+ * service publishes the HTTP ports its public hostnames are named after (`install.ts`, pass 1). That is
+ * one service, not an order — the order below stays this file's.
  */
-const deployService = async (
+export const deployPlatformService = async (
 	service: ResolvedService,
-	input: PlatformDeployInput,
-	collaborators: PlatformDeployCollaborators,
+	input: PlatformServiceDeployInput,
+	collaborators: PlatformServiceDeployCollaborators,
 ): Promise<void> => {
 	const { api, sleep, log, signal } = collaborators
 	if (input.dryRun) {
@@ -512,7 +531,7 @@ export const deployPlatform = async (
 	// of new code — and `ENVIRONMENT` is in place before any service that refuses `local` restarts.
 	log.step(`Deploy ${PLATFORM_DEPLOY_ORDER.join(' → ')}`)
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
-		await deployService(serviceOf(services, hostname), input, collaborators)
+		await deployPlatformService(serviceOf(services, hostname), input, collaborators)
 	}
 
 	log.step('Register the console with IAM')

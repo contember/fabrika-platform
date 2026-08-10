@@ -457,6 +457,44 @@ than read one. And this run gave the proxy a legal `FABRIKA_IAM_URL`/`FABRIKA_IA
 establish what happens when the auth binary cannot boot — a bring-up writes a legal pair, so the case does
 not arise.
 
+### Verified live (2026-08-10, account `prg1`, project `fabrika-install-test`) — a services-only import into an operator-created project
+
+Measured by applying the committed `platform-light.services.provision.zerops-import.yaml` — a document
+with **no `project:` block** — to a project created EMPTY by hand
+(`1pNsLftARwS3N2RM0yxDvA`).
+
+| Behaviour                                                                  | Result                                                                                    |
+| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `POST /project/{id}/service-stack/import` with a services-only document    | **Works.** All six services created. This is the right endpoint for an operator's project |
+| Processes returned, per service                                            | **1** for each managed service (`db`, `storage`), **2** for each runtime one              |
+| The four runtime services immediately after the call returns               | **`status: NEW`, ZERO environment keys** — not even the platform's own generated ones     |
+| Order and pace of creation                                                 | **Sequential, in the document's `priority` order, ~15 s apart**                           |
+| When a service gains its ten generated keys (`zeropsSubdomain` among them) | **Once it leaves `NEW`** (first read at `CREATING`)                                       |
+| Whole light topology from import to all six `ACTIVE`                       | **~61 s**                                                                                 |
+
+Measured, one line per 15 s poll (`status/env-key-count`, `+sub` = `zeropsSubdomain` present):
+
+```
++0s   db=ACTIVE/15  storage=ACTIVE/10  iam=CREATING/10+sub  operations=NEW/0        control=NEW/0            proxy=NEW/0
++15s  …             …                  iam=ACTIVE/10+sub    operations=CREATING/10+sub  control=NEW/0        proxy=NEW/0
++31s  …             …                  …                    …                       control=CREATING/10+sub  proxy=NEW/0
++46s  …             …                  …                    …                       …                        proxy=CREATING/10+sub
++61s  db=ACTIVE/15  storage=ACTIVE/10  iam=ACTIVE/10+sub    operations=ACTIVE/10+sub    control=ACTIVE/10+sub    proxy=ACTIVE/10+sub
+```
+
+Consequences, and they are ordering rules rather than facts about a field:
+
+- **`importServices` returning is not "the services are usable".** A caller must wait on every process
+  id the import handed back before it reads OR writes anything — a read of `zeropsSubdomain` before that
+  comes back empty, and `POST /service-stack/{id}/user-data` has nothing to attach to. Wait on the
+  processes; do not sleep on a number the platform never promised. Budget ~15 s per runtime service and
+  leave the attempt bound comfortably larger.
+- **This narrows WU1's `zeropsSubdomain` finding rather than contradicting it.** The variable really is
+  present before any deploy — but only once the service has left `NEW`. Both facts hold; their order is
+  what a bring-up depends on.
+- **A service still reading `NEW` cannot be adopted by a later run**, which holds no process ids for it.
+  `platform install` refuses rather than sleeping, and says to run it again shortly.
+
 ### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — updating a running installation
 
 How the four platform services on `fabrika-test` were taken from a two-day-old build to `HEAD`. There
@@ -534,6 +572,46 @@ per-installation variables the command derives, only `ENVIRONMENT` on `operation
 `FABRIKA_OPERATIONS_PUBLIC_HOST`, `FABRIKA_IAM_URL`, `FABRIKA_ZEROPS_PROXY_IAM_URL` — reproduces the
 live value byte for byte, and the composed manifest reproduces `vozka`, `operations` and `notes`
 identically while replacing `iam-local` with `iam`.
+
+### `fabrika platform install --provider=zerops`
+
+The from-scratch bring-up: `packages/installation-zerops/src/install.ts`. The operator creates an
+EMPTY project (core package `LIGHT`, `envIsolation: service` — a project-level setting the platform
+accepts at creation only and never hands back, so nothing can verify it), and this command does the
+rest. It is interactive and laptop-side, confirming before every step that leaves the operator's disk,
+and it is the only command that generates a credential for an installation.
+
+Its shape is decided by three of the facts above:
+
+- **Two passes, because the public hostnames come from a DEPLOY.** `zeropsSubdomain` names one host
+  per deployed HTTP port and the proxy's ports come from its app version, not from the import — so
+  pass 1 writes the legal empty manifest `{"apps":[]}` plus a syntactically valid IAM URL and key,
+  builds the proxy alone, and reads the six lines back. Pass 2 writes everything else and hands the
+  whole ordered sequence to `platform deploy`, which owns it (ADR-0027).
+- **The import is skipped when the services already exist**, because re-applying a
+  `startWithoutCode: true` document at a service carrying code activates an EMPTY app version and
+  demotes the running one to `BACKUP`. A PARTIAL set is refused rather than completed: an import
+  applies as one document and cannot skip the services that are already there. A service still reading
+  `NEW` is refused too — see the 08-10 section above.
+- **Every process the import returns is waited on before anything is read or written**, because a
+  service holds no environment at all until it leaves `NEW`.
+- **Generated secrets are written blind.** They are never read back for comparison, so the command
+  cannot tell a correct value from a stale one — which is why it refuses a project that already carries
+  those KEYS instead of writing over them. A second bring-up would roll a new vault KEK (unrecoverable)
+  and new signing keys (every live token invalid).
+
+It places six generated values — IAM's ES256 signing keys, the IAM RPC key, the proxy key, the
+provisioning key, the Operations sync key and the control vault KEK — plus one minted on the account:
+a Zerops INTEGRATION token (`POST /client/{id}/integration-token`, client role `NO_ACCESS`, `ADMIN` on
+this project only), so the installation never holds the personal token the operator authenticated
+with. Exactly one value is printed: the provisioning key, once, at the end, because it lives nowhere
+else and `platform init` asks for it.
+
+**Partly unverified against a real account.** The import step's behaviour is measured (08-10 section
+above) and the command is written against it. Everything after it is not: in particular
+`createIntegrationToken`, whose every runtime behaviour is unmeasured (`provider-zerops/src/api.ts`) —
+whether client `NO_ACCESS` beside a project `ADMIN` grant is even accepted, and what the minted value
+looks like — and the two passes as a whole.
 
 ## Fabrika placement mapping
 

@@ -7,6 +7,7 @@ import { resolve } from 'node:path'
 const USAGE = `fabrika — application platform CLI
 
 Usage:
+  fabrika platform install --provider=zerops [provider options]
   fabrika platform init --provider=<cloudflare|zerops> [provider options]
   fabrika platform plan --provider=<cloudflare|zerops> [provider options]
   fabrika platform deploy --provider=<cloudflare|zerops> [provider options]
@@ -19,7 +20,8 @@ An explicit --provider is required only when no app config is available.
 
 Which platform commands exist, and how WIDE each one is, is the provider's own answer — Zerops'
 \`platform deploy\` owns the whole ordered sequence while Cloudflare's is one step of a scaffolded
-workflow (ADR-0027). Run \`fabrika platform <command> --provider=<name> --help\` for that surface.
+workflow (ADR-0027), and only Zerops offers \`platform install\`, the from-scratch bring-up. Run
+\`fabrika platform <command> --provider=<name> --help\` for that surface.
 `
 
 export interface ParsedCommand {

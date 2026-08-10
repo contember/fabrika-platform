@@ -276,3 +276,71 @@ zero schema errors) and `gen:check` covers (11 up to date).
   said in the file the operator applies.
 - **Only the light tier gets one**, pinned by a test. The standard tier is two projects fabrika creates
   itself; app namespaces already had their own services-only compile.
+
+**WU3 — code done, live acceptance NOT met (2026-08-10).** `fabrika platform install --provider=zerops`
+exists, is unit-tested against the fake account, and has **never been run against a real one** — the
+acceptance ("against a fresh project the installation comes up and a token mints") is still open and
+cannot be closed from this repository. `InstallationCommand` gained `install`; Cloudflare does not
+declare it, and `packages/cli` already prints the provider's usage for an unsupported command.
+
+What the code does, in order: read the project and refuse a `mode` that contradicts the tier · import
+the WU2 services-only document and wait for its processes · generate six secrets and mint the control
+plane's integration token · pass 1 (three proxy variables, build, derive hosts) · write the remaining
+38 variables · hand pass 2 to `deployPlatform` whole · print the provisioning key once.
+
+Four things the plan did not say, each a decision taken while implementing:
+
+- **A re-run had to be refused, not merely made idempotent.** Generated secrets are written blind, so
+  a second `install` would roll a new vault KEK over the old one — unrecoverable — and new signing
+  keys. The command now reads the four platform services' env KEYS (never values) and refuses when any
+  generated key is already present. That is what makes the skip-import branch coherent: services may
+  exist from a partial run, secrets may not.
+- **A PARTIAL set of services is refused rather than completed.** An import applies as one document
+  and cannot skip what is already there, so completing one would re-apply `startWithoutCode` at the
+  services that exist.
+- **An unreadable project `mode` warns rather than refuses.** The client narrows an unknown value to
+  absent; refusing on an absence of evidence would block an install on an API response variation, and
+  nothing destructive follows.
+- **`FABRIKA_ZEROPS_API_BASE_URL` is written on `control` when the operator names a region.** It is
+  absent from the sprint's matrix and control requires it off the default region — see the findings
+  below.
+
+Findings against the plan's environment matrix, all re-verified in the runtimes:
+
+- **`FABRIKA_ZEROPS_API_BASE_URL` was missing.** `control/src/node/provider.ts:57` reads that spelling;
+  the CLI's own is `FABRIKA_ZEROPS_API_URL`. Without it a non-default-region installation's control
+  plane talks to `prg1`. Written conditionally.
+- **Operations does not read `ENVIRONMENT` at all** on Bun (`operations/src/node/runtime.ts` never
+  looks at it; only the Worker's `Env` declares it). Neither does the proxy (`proxy/src/env.ts`). Both
+  are written anyway, because `platform deploy` already writes them and a disagreement between the two
+  commands would be a permanent diff.
+- **`FABRIKA_OPERATIONS_BLOB_REGION` / `FABRIKA_CONTROL_RUN_LOGS_REGION` are deliberately unwritten.**
+  Both default to `auto`, which is what the local MinIO composition runs on.
+- The rest of the matrix is correct as written, including every `FABRIKA_IAM_*` spelling — verified
+  one at a time in `iam/src/node/runtime.ts` rather than trusted.
+- **`packages/installation-zerops` does NOT relax `noUncheckedIndexedAccess` or
+  `noPropertyAccessFromIndexSignature`** (the plan said it does). It is fully strict, and stayed so.
+
+**The import step is now measured, not reasoned (2026-08-10).** The committed services-only document was
+applied to a project created EMPTY (`fabrika-install-test`), settling the survey's open question: that
+endpoint is the right one, and it created all six services. Recorded in
+[`reference/zerops-platform.md`](../reference/zerops-platform.md#verified-live-2026-08-10-account-prg1-project-fabrika-install-test--a-services-only-import-into-an-operator-created-project).
+What it changed here:
+
+- **`importServices` returns before the services are usable.** All four runtime services read
+  `status: NEW` with **zero** environment keys the instant the call returned — not even the platform's
+  generated ones — and they are created SEQUENTIALLY in `priority` order, ~15 s apart, gaining their ten
+  keys (`zeropsSubdomain` included) only on leaving `NEW`. The whole light topology settles in ~61 s.
+  The command already waited on every returned process id before writing; the measurement shows the wait
+  gates the READS too, and a test now pins both. It also pins that every id handed back is waited on —
+  live that is 1 process per managed service and 2 per runtime one, so a count cannot be assumed.
+- **This narrows WU1 rather than contradicting it.** `zeropsSubdomain` is present before any deploy, and
+  only once the service has left `NEW`.
+- **One gap the measurement exposed is now closed.** A service still reading `NEW` from an earlier,
+  interrupted run cannot be waited on — that run held the process ids, this one does not — so the
+  command refuses with "run it again shortly" rather than sleeping on a number the platform never
+  promised.
+
+Still open, and only a live run can close it: everything after the import. `createIntegrationToken`'s
+runtime behaviour is unmeasured — whether client `NO_ACCESS` alongside a project `ADMIN` grant is
+accepted at all, and what the minted value looks like — as are both passes end to end.

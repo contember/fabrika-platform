@@ -45,11 +45,9 @@ import {
 	warn as consoleWarn,
 } from '@fabrika/installation-init'
 import { createZeropsApi } from '@fabrika/provider-zerops'
+import { FABRIKA_REPOSITORY_URL } from './install-options'
 import type { InitLog } from './log'
 import { assertPinnedTag, defaultCheckoutDir, defaultSidecarRepo, materializeSidecarScaffold, readPinnedTag, SIDECAR_FILES } from './sidecar'
-
-/** The public repository every installation is built and deployed from. */
-const FABRIKA_REPOSITORY_URL = 'https://github.com/contember/fabrika-platform'
 
 /** The name every bypass in this platform is gated on, and therefore the one name an installation cannot take. */
 const LOCAL_ENVIRONMENT = 'local'

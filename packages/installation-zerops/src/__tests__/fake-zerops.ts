@@ -1,9 +1,20 @@
-// A Zerops account, in memory — enough of one to drive the whole deploy sequence and read back the
-// ORDER it happened in. Every method of `ZeropsApi` is present; the ones this command must never call
-// throw, so a future step that reaches for `importServices` or a project-level write fails the suite
-// instead of quietly working.
+// A Zerops account, in memory — enough of one to drive the whole deploy sequence AND the from-scratch
+// bring-up, and to read back the ORDER either happened in.
+//
+// Every method of `ZeropsApi` is present. The BOOTSTRAP surface — `importServices`, `getProcess` and
+// `createIntegrationToken` — throws unless the fixture opts into it, so a `platform deploy` that ever
+// reaches for one fails the suite instead of quietly working; a project-level write has no opt-in at
+// all, because nothing may ever make one (ADR-0004).
 
-import { type ZeropsApi, ZeropsApiError, type ZeropsAppVersion, type ZeropsService, type ZeropsServiceEnv } from '@fabrika/provider-zerops'
+import {
+	type ZeropsApi,
+	ZeropsApiError,
+	type ZeropsAppVersion,
+	type ZeropsProjectMode,
+	type ZeropsService,
+	type ZeropsServiceEnv,
+	type ZeropsServiceStatus,
+} from '@fabrika/provider-zerops'
 
 export interface FakeServiceSpec {
 	readonly name: string
@@ -11,12 +22,35 @@ export interface FakeServiceSpec {
 	readonly subdomainAccess?: boolean
 	readonly env?: Readonly<Record<string, string>>
 	readonly sequence?: number
+	/** What `listProjectServices` reports. `NEW` is a service the platform has not finished creating. */
+	readonly status?: ZeropsServiceStatus
+	/** How many processes an import of this service hands back. Live: 1 for managed, 2 for a runtime. */
+	readonly importProcesses?: number
+}
+
+/** What an `importServices` call is allowed to create, and which client a token may be minted on. */
+export interface FakeBootstrap {
+	readonly clientId: string
+	/** The services the imported document creates, in the order the platform reports them. */
+	readonly imported: readonly FakeServiceSpec[]
 }
 
 export interface FakeZerops {
 	readonly api: ZeropsApi
 	/** Every effect, in the order it happened: `env:<service>:<KEY>`, `deploy:<service>`, … */
 	readonly calls: string[]
+	/**
+	 * Every API call including the READS, in order — `readenv:<service>`, `services:`, `process:<id>`.
+	 * Separate from `calls` because a read is not an effect, and several suites assert that a run made no
+	 * effect at all while reading plenty.
+	 */
+	readonly timeline: string[]
+	/** Every process id an import handed back, so a test can prove each one was waited on. */
+	readonly importedProcesses: string[]
+	/** Every import document applied, as the YAML text that was sent. */
+	readonly imports: string[]
+	/** The plaintext of every integration token this fake minted, so a test can hunt for it in a log. */
+	readonly mintedTokens: string[]
 	env(service: string): Map<string, string>
 	subdomainAccess(service: string): boolean
 	/** Make one write fail, so the fail-closed path can be exercised. */
@@ -34,17 +68,25 @@ const NEVER = (name: string) => (): never => {
 export const fakeZerops = (options: {
 	readonly projectId: string
 	readonly projectName: string
+	readonly projectMode?: ZeropsProjectMode
 	readonly services: readonly FakeServiceSpec[]
+	readonly bootstrap?: FakeBootstrap
 }): FakeZerops => {
 	const calls: string[] = []
-	const byName = new Map(options.services.map((service) => [service.name, service]))
-	const idToName = new Map(options.services.map((service) => [service.id, service.name]))
-	const env = new Map(options.services.map((service) => [service.name, new Map(Object.entries(service.env ?? {}))]))
-	const published = new Map(options.services.map((service) => [service.name, service.subdomainAccess === true]))
-	const sequence = new Map(options.services.map((service) => [service.name, service.sequence ?? 0]))
+	const timeline: string[] = []
+	const importedProcesses: string[] = []
+	const imports: string[] = []
+	const mintedTokens: string[] = []
+	const live: FakeServiceSpec[] = [...options.services]
+	const byName = new Map(live.map((service) => [service.name, service]))
+	const idToName = new Map(live.map((service) => [service.id, service.name]))
+	const env = new Map(live.map((service) => [service.name, new Map(Object.entries(service.env ?? {}))]))
+	const published = new Map(live.map((service) => [service.name, service.subdomainAccess === true]))
+	const sequence = new Map(live.map((service) => [service.name, service.sequence ?? 0]))
 	const failedWrites = new Set<string>()
 	const failedDeploys = new Set<string>()
 	const blockedTriggers = new Map<string, number>()
+	const processes = new Map<string, string>()
 
 	const nameOf = (serviceId: string): string => {
 		const name = idToName.get(serviceId)
@@ -61,12 +103,39 @@ export const fakeZerops = (options: {
 		return values
 	}
 
+	/** An EFFECT: recorded in both, because `calls` is what a test asserting "nothing happened" reads. */
+	const effect = (entry: string): void => {
+		calls.push(entry)
+		timeline.push(entry)
+	}
+	/** A READ: the timeline only. */
+	const observe = (entry: string): void => void timeline.push(entry)
+
+	const bootstrap = options.bootstrap
+	/** Which service each in-flight import process belongs to, so the last one can settle it. */
+	const settles = new Map<string, FakeServiceSpec>()
+
+	const admit = (service: FakeServiceSpec): void => {
+		live.push(service)
+		byName.set(service.name, service)
+		idToName.set(service.id, service.name)
+		env.set(service.name, new Map(Object.entries(service.env ?? {})))
+		published.set(service.name, service.subdomainAccess === true)
+		sequence.set(service.name, service.sequence ?? 0)
+	}
+	/** A service leaving `NEW`: the status moves and the platform's generated keys appear with it. */
+	const replace = (service: FakeServiceSpec): void => {
+		const at = live.findIndex((existing) => existing.name === service.name)
+		if (at >= 0) {
+			live[at] = service
+		}
+		byName.set(service.name, service)
+		env.set(service.name, new Map(Object.entries(service.env ?? {})))
+	}
+
 	const api: ZeropsApi = {
-		importServices: NEVER('importServices'),
 		importProject: NEVER('importProject'),
 		cancelBuild: NEVER('cancelBuild'),
-		getProcess: NEVER('getProcess'),
-		createIntegrationToken: NEVER('createIntegrationToken'),
 		deleteServiceEnv: NEVER('deleteServiceEnv'),
 		getProjectEnv: NEVER('getProjectEnv'),
 		getLogAccess: NEVER('getLogAccess'),
@@ -74,31 +143,108 @@ export const fakeZerops = (options: {
 		listProjects: NEVER('listProjects'),
 		findService: NEVER('findService'),
 
+		importServices: async ({ projectId, yaml }) => {
+			if (bootstrap === undefined) {
+				return NEVER('importServices')()
+			}
+			if (projectId !== options.projectId) {
+				throw new Error(`zerops: service-stack import failed (404)`)
+			}
+			effect(`import:${projectId}`)
+			imports.push(yaml)
+			// Live: the call returns at once and the services are `NEW` with ZERO environment keys, gaining
+			// them one service at a time as the platform works down `priority`. Modelled by admitting each
+			// service as NEW and flipping it once its LAST process reports FINISHED.
+			return {
+				projectId,
+				services: bootstrap.imported.map((service) => {
+					if (!byName.has(service.name)) {
+						admit({ ...service, status: 'NEW', env: {} })
+					}
+					const ids = Array.from({ length: service.importProcesses ?? 1 }, (_, index) => `process-import-${service.name}-${index}`)
+					for (const id of ids) {
+						processes.set(id, 'PENDING')
+						importedProcesses.push(id)
+						settles.set(id, service)
+					}
+					return { id: service.id, name: service.name, processes: ids.map((id) => ({ id, status: 'PENDING' })) }
+				}),
+			}
+		},
+
+		/** One poll answers `PENDING`, the next `FINISHED` — so a caller that never waits is visible. */
+		getProcess: async ({ processId }) => {
+			if (bootstrap === undefined) {
+				return NEVER('getProcess')()
+			}
+			observe(`process:${processId}`)
+			const seen = processes.get(processId)
+			processes.set(processId, 'FINISHED')
+			if (seen !== 'PENDING') {
+				// The service leaves `NEW` and gains its generated keys only now, which is the ordering the
+				// install must respect: nothing may read or write it before this.
+				const settled = settles.get(processId)
+				if (settled !== undefined && [...processes].every(([id, status]) => settles.get(id) !== settled || status === 'FINISHED')) {
+					replace({ ...settled, status: 'ACTIVE' })
+				}
+			}
+			return { id: processId, status: seen === 'PENDING' ? 'PENDING' : 'FINISHED' }
+		},
+
+		createIntegrationToken: async ({ clientId, name, projects, roleCode }) => {
+			if (bootstrap === undefined) {
+				return NEVER('createIntegrationToken')()
+			}
+			if (clientId !== bootstrap.clientId) {
+				throw new Error(`zerops: create integration token failed (404)`)
+			}
+			effect(`token:${clientId}`)
+			const token = `zerops-integration-token-${mintedTokens.length}-must-never-be-printed`
+			mintedTokens.push(token)
+			return {
+				id: `token-${mintedTokens.length}`,
+				name,
+				token,
+				projects: projects.map((grant) => ({ projectId: grant.projectId, roleCode: grant.roleCode })),
+				...(roleCode === undefined ? {} : { roleCode }),
+			}
+		},
+
 		getProject: async ({ projectId }) => {
 			if (projectId !== options.projectId) {
 				throw new Error(`zerops: get project failed (404)`)
 			}
-			return { id: options.projectId, name: options.projectName, status: 'ACTIVE' }
+			observe(`project:${projectId}`)
+			return {
+				id: options.projectId,
+				name: options.projectName,
+				status: 'ACTIVE',
+				...(options.projectMode === undefined ? {} : { mode: options.projectMode }),
+			}
 		},
 
 		findProjects: async ({ name }) => (name === options.projectName ? [{ id: options.projectId, name }] : []),
 
-		listProjectServices: async () =>
-			options.services.map((service): ZeropsService => ({
+		listProjectServices: async () => {
+			observe('services:')
+			return live.map((service): ZeropsService => ({
 				id: service.id,
 				name: service.name,
 				projectId: options.projectId,
-				status: 'ACTIVE',
+				status: service.status ?? 'ACTIVE',
 				subdomainAccess: published.get(service.name) === true,
-			})),
+			}))
+		},
 
 		getService: async ({ serviceId }) => {
 			const name = nameOf(serviceId)
+			observe(`service:${name}`)
 			return { id: serviceId, name, projectId: options.projectId, subdomainAccess: published.get(name) === true }
 		},
 
 		listServiceEnv: async ({ serviceId }) => {
 			const name = nameOf(serviceId)
+			observe(`readenv:${name}`)
 			return [...envOf(name)].map(([key, content]): ZeropsServiceEnv => ({ id: `${name}:${key}`, key, content, serviceStackId: serviceId }))
 		},
 
@@ -107,7 +253,7 @@ export const fakeZerops = (options: {
 			if (failedWrites.has(`${name}:${key}`)) {
 				throw new Error(`zerops: create service env failed (400)`)
 			}
-			calls.push(`env:${name}:${key}`)
+			effect(`env:${name}:${key}`)
 			envOf(name).set(key, value)
 		},
 
@@ -116,15 +262,21 @@ export const fakeZerops = (options: {
 			const blocked = blockedTriggers.get(name) ?? 0
 			if (blocked > 0) {
 				blockedTriggers.set(name, blocked - 1)
-				calls.push(`blocked:${name}`)
+				effect(`blocked:${name}`)
 				throw new ZeropsApiError('zerops: trigger-pipeline failed (400)', 400, 'userDataSyncRunning')
 			}
 			if (zeropsSetup !== name) {
 				throw new Error(`zerops: setup ${zeropsSetup ?? '(none)'} does not match service ${name}`)
 			}
-			calls.push(`deploy:${name}`)
+			effect(`deploy:${name}`)
 			const next = (sequence.get(name) ?? 0) + 1
 			sequence.set(name, next)
+			// Live-observed (WU1): the six per-port lines appear with the version that publishes the ports,
+			// in the same poll that first reads ACTIVE. Before that the variable names one host with no port
+			// segment, which `derivePlatformHosts` correctly refuses.
+			if (name === 'proxy') {
+				envOf(name).set('zeropsSubdomain', SUBDOMAINS)
+			}
 			return { id: `process-${name}-${next}`, appVersionId: `${name}-v${next}` }
 		},
 
@@ -141,7 +293,7 @@ export const fakeZerops = (options: {
 
 		enableSubdomainAccess: async ({ serviceId }) => {
 			const name = nameOf(serviceId)
-			calls.push(`subdomain:${name}`)
+			effect(`subdomain:${name}`)
 			published.set(name, true)
 		},
 	}
@@ -149,6 +301,10 @@ export const fakeZerops = (options: {
 	return {
 		api,
 		calls,
+		timeline,
+		importedProcesses,
+		imports,
+		mintedTokens,
 		env: (service) => envOf(service),
 		subdomainAccess: (service) => published.get(service) === true,
 		failWrite: (service, key) => void failedWrites.add(`${service}:${key}`),
@@ -156,6 +312,24 @@ export const fakeZerops = (options: {
 		blockTrigger: (service, times) => void blockedTriggers.set(service, times),
 	}
 }
+
+/**
+ * The six services the light services-only provisioning document creates, as a settled but
+ * never-deployed project has them.
+ *
+ * The process COUNTS are the ones a live import returned (2026-08-10): one per managed service, two per
+ * runtime service. `zeropsSubdomain` naming ONE host with no port segment is what WU1 read off a real
+ * proxy before its first deploy — and, per the same measurement, it appears only once the service has
+ * left `NEW`, which is what the fake's process bookkeeping models.
+ */
+export const importedLightServices = (): FakeServiceSpec[] => [
+	{ name: 'db', id: 'svc-db', importProcesses: 1 },
+	{ name: 'storage', id: 'svc-storage', importProcesses: 1 },
+	{ name: 'iam', id: 'svc-iam', importProcesses: 2 },
+	{ name: 'operations', id: 'svc-operations', importProcesses: 2 },
+	{ name: 'control', id: 'svc-control', importProcesses: 2 },
+	{ name: 'proxy', id: 'svc-proxy', importProcesses: 2, env: { zeropsSubdomain: 'https://proxy-292c.prg1.zerops.app' } },
+]
 
 /** The four platform services, shaped like the live `fabrika-test` installation. */
 export const platformServices = (env: Readonly<Record<string, Readonly<Record<string, string>>>> = {}): FakeServiceSpec[] => [

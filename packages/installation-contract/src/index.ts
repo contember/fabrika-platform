@@ -1,6 +1,16 @@
-export type InstallationCommand = 'init' | 'plan' | 'deploy'
+/**
+ * The platform commands a provider MAY offer. Every one of them is optional — a provider declares the
+ * subset it implements and the CLI prints its usage for anything else.
+ *
+ * `install` is the newest and the narrowest in support: it BRINGS UP an installation that does not
+ * exist yet, generating and placing every credential it needs. Only Zerops declares it, because only
+ * there is a from-scratch bring-up a sequence of API calls; on Cloudflare the same ground is covered by
+ * `init` plus the workflow it scaffolds.
+ */
+export type InstallationCommand = 'init' | 'install' | 'plan' | 'deploy'
 
-export const isInstallationCommand = (value: unknown): value is InstallationCommand => value === 'init' || value === 'plan' || value === 'deploy'
+export const isInstallationCommand = (value: unknown): value is InstallationCommand =>
+	value === 'init' || value === 'install' || value === 'plan' || value === 'deploy'
 
 export interface InstallationCli {
 	readonly provider: string

@@ -3,19 +3,21 @@
 The Zerops implementation of `@fabrika/installation-contract` plus the typed
 platform topology and generated installation artifacts.
 
-Three public commands. `fabrika platform plan --provider=zerops` validates the
+Four public commands. `fabrika platform plan --provider=zerops` validates the
 generated artifacts against Zerops' published schemas. `fabrika platform deploy
 --provider=zerops` brings an EXISTING installation to this checkout, unattended
 and idempotently — the full surface is in the `usage` string in `src/index.ts`,
 which is also what the generated workflow is written against. `fabrika platform
 init --provider=zerops <installation>` creates and maintains the operator's
-sidecar repository that calls it.
+sidecar repository that calls it. `fabrika platform install --provider=zerops`
+CREATES one, in a project the operator made empty.
 
-**Neither `init` nor `deploy` creates an installation.** The first bring-up
-(import the topology without code → write every secret → deploy once, so the proxy
-has HTTP ports and therefore a public address) is still a hand sequence: before it,
-`zeropsSubdomain` names nothing, so the manifest — which has to be written before
-the proxy is built — has no hosts to carry.
+**`install` is the only command that creates an installation; `init` and `deploy`
+both refuse to.** It runs first and hands `init` the provisioning key it generated.
+The bring-up is two passes, because `zeropsSubdomain` names nothing until the proxy
+has deployed HTTP ports while the manifest must be written before the proxy is
+built: pass 1 gives the proxy the legal EMPTY manifest and builds it, and only then
+can the three public hosts be READ off the subdomains it published.
 
 **On Zerops `platform deploy` owns the WHOLE ordered sequence; on Cloudflare it
 stays narrow and the scaffolded workflow keeps the order.** That asymmetry is
@@ -26,6 +28,8 @@ and is deliberate — someone reading only one path will guess wrong about the o
 
 - `src/index.ts` — exported `installationCli`, the `usage` text, and the real collaborators.
 - `src/deploy.ts` — the ordered deploy sequence. `src/deploy-options.ts` — its flags and variables.
+- `src/install.ts` — the from-scratch bring-up: the two passes and the whole environment matrix.
+  `src/install-options.ts` — its flags. `src/secrets.ts` — the six values it generates.
 - `src/init.ts` — the sidecar-repository flow, its prompts and its confirmed outward steps.
 - `src/sidecar.ts` — what the sidecar repository contains + the tag rule. `src/templates/` — its four files.
 - `src/manifest.ts` — composing the platform's apps with an installation's application entries.
@@ -46,6 +50,28 @@ and is deliberate — someone reading only one path will guess wrong about the o
 - Keep credentials out of generated artifacts.
 - Do not claim real-account support from schema validation or dry runs.
 - Preserve the import-without-code → write service secrets → deploy bring-up
+  order. `platform install` is that order, executed.
+- **`platform install` GENERATES credentials, which is why it is a third command
+  and not a flag on either of the other two.** It writes six generated secrets plus
+  a minted Zerops integration token, and prints exactly ONE value — the provisioning
+  key, once, at the end, because it is stored nowhere else and `platform init` asks
+  the operator for it. That is the only exception to the no-secret-in-a-log rule on
+  this path; `src/log.ts` still has no helper that takes a value.
+- **`install` is a BRING-UP and never a reconcile.** It refuses a project that
+  already carries its generated secret KEYS (checked by key, never by value) —
+  re-rolling the vault KEK is unrecoverable and re-rolling the signing keys logs
+  everyone out — and it skips the provisioning import when the services already
+  exist, because re-applying `startWithoutCode` at a service carrying code activates
+  an EMPTY app version. A partial set of services is refused, not completed.
+- **The import step WAITS on every process it is handed, before it reads or writes
+  anything.** Live-measured: `importServices` returns immediately, the services are
+  created sequentially in `priority` order ~15 s apart, and a service holds NO
+  environment at all — not even the platform's generated keys — until it leaves
+  `NEW`. Never replace that wait with a sleep, and never assume the process count:
+  it is 1 per managed service and 2 per runtime one. A service already reading `NEW`
+  when the command starts is refused, because no process id for it exists here.
+- **`install` never restates the deploy order.** Pass 2 is `deployPlatform`, whole;
+  pass 1 reuses `deployPlatformService` for the proxy alone. One service is not an
   order.
 - **`platform deploy`'s order is IAM → Operations → proxy → control, and the
   proxy's position is a SECURITY property, not a dependency.** Since ADR-0022 the

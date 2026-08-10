@@ -1,24 +1,66 @@
 import { reconcileSchema } from '@fabrika/auth'
 import type { InstallationCli, InstallationCommand } from '@fabrika/installation-contract'
+import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { createZeropsApi, defaultSleep } from '@fabrika/provider-zerops'
 import { generatedArtifacts } from '../zerops/artifacts'
 import { assertArtifactMatchesSchema } from '../zerops/validate'
 import { deployPlatform, PLATFORM_DEPLOY_ORDER } from './deploy'
 import { parsePlatformDeployArgs } from './deploy-options'
 import { consoleInitCollaborators, parseInitArgs, runInit } from './init'
+import { consoleInstallCollaborators, runInstall } from './install'
+import { parsePlatformInstallArgs } from './install-options'
 import { consoleDeployLog } from './log'
 
 const USAGE = `Zerops installation
 
 Commands:
-  fabrika platform init   --provider=zerops <installation> [--repo=<owner>/<name>]
-  fabrika platform plan   --provider=zerops
-  fabrika platform deploy --provider=zerops [options]
+  fabrika platform install --provider=zerops [options]
+  fabrika platform init    --provider=zerops <installation> [--repo=<owner>/<name>]
+  fabrika platform plan    --provider=zerops
+  fabrika platform deploy  --provider=zerops [options]
 
-Both commands UPDATE AN INSTALLATION THAT ALREADY EXISTS; neither creates one. The first bring-up
-(import the topology without code, write every secret, then deploy once so the proxy has HTTP ports)
-is still performed by hand: before that first deploy the proxy publishes no hostname, so nothing can
-name the addresses the manifest has to carry.
+\`install\` CREATES an installation in a project you created empty; \`init\` and \`deploy\` UPDATE AN
+INSTALLATION THAT ALREADY EXISTS. Run them in that order: install generates the provisioning key that
+init then writes into the operator's GitHub Environment.
+
+── platform install ──────────────────────────────────────────────────────────────────────────────
+
+The from-scratch bring-up. You create an EMPTY Zerops project with core package LIGHT and
+\`envIsolation: service\` — a project-level setting Zerops accepts at creation only, and which this
+command cannot read back or correct — and everything after that is this command.
+
+Interactive and laptop-side. It CONFIRMS before every step that leaves your machine: reading the
+project, importing the services, minting the token, building the proxy, writing the variables, and
+deploying. Declining any of them stops there; nothing before the import is a mutation.
+
+  1. read the project and refuse a core package the selected tier does not match
+  2. import ${PLATFORM_DEPLOY_ORDER.length + 2} services without code, and wait for the import's processes
+  3. generate six secrets and mint the control plane's Zerops INTEGRATION token
+     (client role NO_ACCESS, ADMIN on this project only — never your personal token)
+  4. pass 1: give the proxy an EMPTY manifest and build it, so it publishes one public hostname per
+     HTTP port; the three platform hosts are then READ off those, never composed
+  5. write every remaining variable on all four services
+  6. pass 2: hand the whole ordered sequence to \`platform deploy\`
+  7. print the provisioning key ONCE — it is stored nowhere else
+
+It REFUSES a project that already holds an installation's generated secrets: a second bring-up would
+roll a new vault key over the old one, which is unrecoverable, and new signing keys, which logs
+everyone out. Update an existing installation with \`platform deploy\`.
+
+Only the LIGHT tier can be installed this way — it is the one topology that emits a services-only
+import document. Authentication is PASSWORD ONLY; no administrator exists yet when this finishes.
+
+Options (a flag beats the environment variable beside it):
+
+  --project-id=<id>                 FABRIKA_ZEROPS_PROJECT_ID       the empty project you created
+  --client-id=<id>                  FABRIKA_ZEROPS_CLIENT_ID        the client the token is minted on
+  --env=<name>                      FABRIKA_PLATFORM_ENVIRONMENT    written to every service as ENVIRONMENT
+  --scheme=<http|https>             FABRIKA_PLATFORM_SCHEME         default https
+  --from-git=<url>                  FABRIKA_ZEROPS_BUILD_FROM_GIT   public repository every service builds from
+  --tier=light                      FABRIKA_PLATFORM_TIER           default light, and the only value
+
+  FABRIKA_ZEROPS_ACCESS_TOKEN       required   Zerops access token, environment only and no flag
+  FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
 
 ── platform init ─────────────────────────────────────────────────────────────────────────────────
 
@@ -115,6 +157,17 @@ const runPlan = (argv: readonly string[]): void => {
 	console.info(`${artifacts.length} Zerops installation artifact(s) validated`)
 }
 
+/** The one collaborator both the deploy and the install reach IAM's provisioning surface through. */
+const consoleSchemaReconciler: SchemaReconciler = (call) =>
+	reconcileSchema({
+		url: call.url,
+		app: call.app,
+		schema: call.schema,
+		...(call.returnOrigins === undefined ? {} : { returnOrigins: call.returnOrigins }),
+		...(call.adminKey === undefined ? {} : { adminKey: call.adminKey }),
+		signal: call.signal,
+	})
+
 const runDeploy = async (argv: readonly string[]): Promise<void> => {
 	const input = parsePlatformDeployArgs(argv, process.env)
 	await deployPlatform(input, {
@@ -122,26 +175,27 @@ const runDeploy = async (argv: readonly string[]): Promise<void> => {
 			token: input.accessToken,
 			...(input.apiBaseUrl === undefined ? {} : { baseUrl: input.apiBaseUrl }),
 		}),
-		reconcileSchema: (call) =>
-			reconcileSchema({
-				url: call.url,
-				app: call.app,
-				schema: call.schema,
-				...(call.returnOrigins === undefined ? {} : { returnOrigins: call.returnOrigins }),
-				...(call.adminKey === undefined ? {} : { adminKey: call.adminKey }),
-				signal: call.signal,
-			}),
+		reconcileSchema: consoleSchemaReconciler,
 		sleep: defaultSleep,
 		log: consoleDeployLog(),
 		signal: neverAborted(),
 	})
 }
 
+const runPlatformInstall = async (argv: readonly string[]): Promise<void> => {
+	const input = parsePlatformInstallArgs(argv, process.env)
+	await runInstall(input, consoleInstallCollaborators(input, consoleSchemaReconciler))
+}
+
 export const installationCli: InstallationCli = {
 	provider: 'zerops',
-	commands: ['init', 'plan', 'deploy'],
+	commands: ['install', 'init', 'plan', 'deploy'],
 	usage: USAGE,
 	run: async (command: InstallationCommand, argv: readonly string[]) => {
+		if (command === 'install') {
+			await runPlatformInstall(argv)
+			return
+		}
 		if (command === 'init') {
 			await runInit(parseInitArgs(argv), consoleInitCollaborators())
 			return
