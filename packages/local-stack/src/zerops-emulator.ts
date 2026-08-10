@@ -36,16 +36,60 @@ interface AppVersionRecord {
 	activateAt?: number
 }
 
+/**
+ * One asynchronous platform operation.
+ *
+ * `pendingReads` is how many more `GET /process/{id}` calls answer `PENDING` before the process reports
+ * `FINISHED`; it starts at 1. Handing back `FINISHED` on the first read would be simpler, but then a
+ * caller that never polls passes here and hangs on the platform — proving the wait runs is the only
+ * reason to double a process at all. One PENDING read is enough to make the loop turn without making the
+ * local stack sleep through every bring-up.
+ */
+interface ProcessRecord {
+	id: string
+	actionName: string
+	serviceStackId?: string
+	appVersionId?: string
+	pendingReads: number
+}
+
+/** The tiered access role shared by an integration token's request and its response. */
+type RoleCode = 'OWNER' | 'ADMIN' | 'BASIC_USER' | 'READ_ONLY' | 'NO_ACCESS'
+
+/** One project grant carried by an integration token. `roleCode` is echoed, never defaulted — see `readGrant`. */
+interface TokenGrantRecord {
+	projectId: string
+	roleCode?: RoleCode
+}
+
+/**
+ * One minted integration token, MINUS its value: the double derives that from the id
+ * (`fakeIntegrationTokenValue`) so nothing credential-shaped is ever written to the state file or served
+ * by `/__local/state`.
+ */
+interface IntegrationTokenRecord {
+	id: string
+	clientId: string
+	name: string
+	created: string
+	lastUpdate: string
+	projects: TokenGrantRecord[]
+	roleCode?: RoleCode
+}
+
 interface EmulatorSnapshot {
 	nextProject: number
 	nextService: number
 	nextEnv: number
 	nextVersion: number
 	nextProcess: number
+	nextIntegrationToken: number
 	projects: ProjectRecord[]
 	services: ServiceRecord[]
 	serviceEnv: ServiceEnvRecord[]
 	appVersions: AppVersionRecord[]
+	processes: ProcessRecord[]
+	integrationTokens: IntegrationTokenRecord[]
 }
 
 /**
@@ -58,6 +102,12 @@ interface ImportService {
 	hostname: string
 	type?: string
 	profile?: string
+}
+
+/** What one entry of an import document did. `process` is absent when the service was already there. */
+interface ImportOutcome {
+	service: ServiceRecord
+	process?: ProcessRecord
 }
 
 interface ImportDocument {
@@ -83,10 +133,13 @@ const emptySnapshot = (): EmulatorSnapshot => ({
 	nextEnv: 1,
 	nextVersion: 1,
 	nextProcess: 1,
+	nextIntegrationToken: 1,
 	projects: [],
 	services: [],
 	serviceEnv: [],
 	appVersions: [],
+	processes: [],
+	integrationTokens: [],
 })
 
 const property = (value: unknown, key: string): unknown =>
@@ -172,11 +225,15 @@ const readSnapshot = async (path: string | undefined): Promise<EmulatorSnapshot>
 	const value: unknown = await Bun.file(path).json()
 	const counters = ['nextProject', 'nextService', 'nextEnv', 'nextVersion', 'nextProcess']
 	const arrays = ['projects', 'services', 'serviceEnv', 'appVersions']
+	// Processes and integration tokens arrived after the first state files were written; a file that
+	// predates them simply has none, and refusing it would cost a `local:reset` for no reader's benefit.
+	const laterArrays = ['processes', 'integrationTokens']
 	if (
 		typeof value !== 'object'
 		|| value === null
 		|| counters.some((key) => typeof property(value, key) !== 'number')
 		|| arrays.some((key) => !Array.isArray(property(value, key)))
+		|| laterArrays.some((key) => property(value, key) !== undefined && !Array.isArray(property(value, key)))
 	) {
 		throw new Error('invalid Zerops emulator state file')
 	}
@@ -193,11 +250,19 @@ const readSnapshot = async (path: string | undefined): Promise<EmulatorSnapshot>
 		nextEnv: readCounter(value, 'nextEnv'),
 		nextVersion: readCounter(value, 'nextVersion'),
 		nextProcess: readCounter(value, 'nextProcess'),
+		nextIntegrationToken: property(value, 'nextIntegrationToken') === undefined ? 1 : readCounter(value, 'nextIntegrationToken'),
 		projects: projects.map(readProjectRecord),
 		services: services.map(readServiceRecord),
 		serviceEnv: serviceEnv.map(readServiceEnvRecord),
 		appVersions: appVersions.map(readAppVersionRecord),
+		processes: laterArray(value, 'processes').map(readProcessRecord),
+		integrationTokens: laterArray(value, 'integrationTokens').map(readIntegrationTokenRecord),
 	}
+}
+
+const laterArray = (value: unknown, key: string): unknown[] => {
+	const found = property(value, key)
+	return Array.isArray(found) ? found : []
 }
 
 const requiredString = (value: unknown, key: string): string => {
@@ -275,6 +340,67 @@ const readAppVersionRecord = (value: unknown): AppVersionRecord => {
 		...(activateAt === undefined ? {} : { activateAt }),
 	}
 }
+
+const readProcessRecord = (value: unknown): ProcessRecord => {
+	const pendingReads = numberProperty(value, 'pendingReads')
+	if (pendingReads === undefined || !Number.isInteger(pendingReads) || pendingReads < 0) {
+		throw new Error('invalid process pending-read count in state')
+	}
+	return {
+		id: requiredString(value, 'id'),
+		actionName: requiredString(value, 'actionName'),
+		pendingReads,
+		...(stringProperty(value, 'serviceStackId') === undefined ? {} : { serviceStackId: stringProperty(value, 'serviceStackId') }),
+		...(stringProperty(value, 'appVersionId') === undefined ? {} : { appVersionId: stringProperty(value, 'appVersionId') }),
+	}
+}
+
+const ROLE_CODES: readonly RoleCode[] = ['OWNER', 'ADMIN', 'BASIC_USER', 'READ_ONLY', 'NO_ACCESS']
+
+/** A role this double does not know is refused, never silently downgraded. */
+const asRoleCode = (value: unknown, context: string): RoleCode => {
+	const roleCode = ROLE_CODES.find((role) => role === value)
+	if (roleCode === undefined) {
+		throw new Error(`unknown roleCode in ${context}`)
+	}
+	return roleCode
+}
+
+/**
+ * One project grant, read the same way from a request body and from the state file.
+ *
+ * An ABSENT `roleCode` is carried through as absent rather than filled in with the schema's documented
+ * `NO_ACCESS` default: the client refuses to guess a grant it was not told about, and a double that
+ * invented one would hide exactly that.
+ */
+const readGrant = (value: unknown): TokenGrantRecord => {
+	const projectId = requiredString(value, 'projectId')
+	const raw = property(value, 'roleCode')
+	return raw === undefined ? { projectId } : { projectId, roleCode: asRoleCode(raw, `the integration token grant for ${projectId}`) }
+}
+
+const readIntegrationTokenRecord = (value: unknown): IntegrationTokenRecord => {
+	const projects = property(value, 'projects')
+	if (!Array.isArray(projects)) {
+		throw new Error('invalid integration token grants in state')
+	}
+	const roleCode = property(value, 'roleCode')
+	return {
+		id: requiredString(value, 'id'),
+		clientId: requiredString(value, 'clientId'),
+		name: requiredString(value, 'name'),
+		created: requiredString(value, 'created'),
+		lastUpdate: requiredString(value, 'lastUpdate'),
+		projects: projects.map(readGrant),
+		...(roleCode === undefined ? {} : { roleCode: asRoleCode(roleCode, 'the integration token') }),
+	}
+}
+
+/**
+ * The value served as a minted token's `token`. It is a LABEL, not a credential: no bearer check anywhere
+ * accepts it, and it is derived from the record id so the state file never holds anything secret-shaped.
+ */
+const fakeIntegrationTokenValue = (tokenId: string): string => `not-a-real-zerops-${tokenId}`
 
 class ZeropsEmulator {
 	private constructor(
@@ -366,17 +492,25 @@ class ZeropsEmulator {
 			if (version.status === 'ACTIVE') {
 				service.activeAppVersionId = version.id
 			}
-			const processId = id('process', this.state.nextProcess++)
+			// `stack.deploy` is the platform's own name for this one (docs/reference/zerops-platform.md).
+			const started = this.createProcess('stack.deploy', { serviceStackId: service.id, appVersionId: version.id })
 			await this.persist()
-			return json({
-				process: {
-					id: processId,
-					status: 'FINISHED',
-					actionName: 'triggerPipeline',
-					serviceStackId: service.id,
-					appVersion: { id: version.id },
-				},
-			})
+			return json({ process: this.processResponse(started) })
+		}
+
+		const processDetail = path.match(/^\/process\/([^/]+)$/)
+		if (processDetail !== null && request.method === 'GET') {
+			const found = this.process(decodeURIComponent(processDetail[1] ?? ''))
+			if (found === undefined) {
+				return error(404, 'PROCESS_NOT_FOUND', 'process not found')
+			}
+			// Render first, then spend the PENDING read: the first poll must SEE `PENDING`, or the wait never runs.
+			const body = this.processResponse(found)
+			if (found.pendingReads > 0) {
+				found.pendingReads -= 1
+				await this.persist()
+			}
+			return json(body)
 		}
 
 		const appVersion = path.match(/^\/app-version\/([^/]+)$/)
@@ -412,7 +546,9 @@ class ZeropsEmulator {
 		// The precondition is real: the platform answers 400 `serviceStackIsNotHttp` until the service has
 		// deployed an HTTP port, which is why an import alone can never establish a subdomain. An active
 		// app version stands in for "has a deployed port" here. The double is idempotent where the platform
-		// hands back a process that then fails; the client decides on the read-back either way.
+		// hands back a process that then fails; the client decides on the read-back either way. Note the
+		// consequence for the process too: the one this returns always reaches FINISHED, where the
+		// platform's FAILS on a service that already has a subdomain.
 		const enableSubdomain = path.match(/^\/service-stack\/([^/]+)\/enable-subdomain-access$/)
 		if (enableSubdomain !== null && request.method === 'PUT') {
 			const found = this.service(decodeURIComponent(enableSubdomain[1] ?? ''))
@@ -423,9 +559,9 @@ class ZeropsEmulator {
 				return error(400, 'serviceStackIsNotHttp', 'Service stack is not http or https')
 			}
 			found.subdomainAccess = true
-			const processId = id('process', this.state.nextProcess++)
+			const started = this.createProcess('stack.enableSubdomainAccess', { serviceStackId: found.id })
 			await this.persist()
-			return json({ id: processId, status: 'FINISHED', actionName: 'stack.enableSubdomainAccess', serviceStackId: found.id })
+			return json(this.processResponse(started))
 		}
 
 		const serviceByName = path.match(/^\/service-stack-by-name\/([^/]+)\/([^/]+)$/)
@@ -453,6 +589,42 @@ class ZeropsEmulator {
 			const clientId = decodeURIComponent(listProjects[1] ?? '')
 			const list = this.state.projects.filter((item) => item.clientId === clientId)
 			return json({ list: this.page(list, url), totalCount: list.length })
+		}
+
+		// Mints a LABEL, not a credential — see `fakeIntegrationTokenValue`. The grants are recorded and
+		// echoed back so a caller can check the scope it asked for, and nothing else happens: this double
+		// enforces no scope, so the minted value opens exactly as much here as the configured bearer does.
+		// Whether the platform rejects an unknown project, a repeated name, or client `NO_ACCESS` beside a
+		// project grant is unverified against a real account, so none of it is refused here either.
+		const integrationToken = path.match(/^\/client\/([^/]+)\/integration-token$/)
+		if (integrationToken !== null && request.method === 'POST') {
+			const body = await parseJsonBody(request)
+			const grants = property(body, 'projects')
+			if (!Array.isArray(grants)) {
+				return error(400, 'invalidUserInput', 'projects is required')
+			}
+			const roleCode = property(body, 'roleCode')
+			const timestamp = new Date(this.now()).toISOString()
+			const record: IntegrationTokenRecord = {
+				id: id('token', this.state.nextIntegrationToken++),
+				clientId: decodeURIComponent(integrationToken[1] ?? ''),
+				name: requiredString(body, 'name'),
+				created: timestamp,
+				lastUpdate: timestamp,
+				projects: grants.map(readGrant),
+				...(roleCode === undefined ? {} : { roleCode: asRoleCode(roleCode, 'the integration token request') }),
+			}
+			this.state.integrationTokens.push(record)
+			await this.persist()
+			return json({
+				id: record.id,
+				name: record.name,
+				created: record.created,
+				lastUpdate: record.lastUpdate,
+				projects: record.projects,
+				token: fakeIntegrationTokenValue(record.id),
+				...(record.roleCode === undefined ? {} : { roleCode: record.roleCode }),
+			}, 201)
 		}
 
 		const projectsByName = path.match(/^\/client\/([^/]+)\/projects-by-name\/([^/]+)$/)
@@ -571,13 +743,13 @@ class ZeropsEmulator {
 		return project
 	}
 
-	private importServices(projectId: string, specs: ImportService[]): ServiceRecord[] {
+	private importServices(projectId: string, specs: ImportService[]): ImportOutcome[] {
 		return specs.map((spec) => {
 			const existing = this.state.services.find((service) => service.projectId === projectId && service.name === spec.hostname)
 			if (existing !== undefined) {
 				existing.base = spec.type
 				existing.autoscalingProfileId = spec.profile
-				return existing
+				return { service: existing }
 			}
 			// `subdomainAccess` starts false and no import ever moves it — see `ImportService`.
 			const service: ServiceRecord = {
@@ -590,15 +762,45 @@ class ZeropsEmulator {
 				...(spec.profile === undefined ? {} : { autoscalingProfileId: spec.profile }),
 			}
 			this.state.services.push(service)
-			return service
+			// UNVERIFIED NAME: nothing records what the platform calls an import's own processes. The
+			// existence of one per created service is the verified half.
+			return { service, process: this.createProcess('stack.create', { serviceStackId: service.id }) }
 		})
 	}
 
-	private importResponse(project: ProjectRecord, services: ServiceRecord[]): unknown {
+	private importResponse(project: ProjectRecord, imported: ImportOutcome[]): unknown {
 		return {
 			projectId: project.id,
 			projectName: project.name,
-			serviceStacks: services.map((service) => ({ id: service.id, name: service.name, processes: [] })),
+			serviceStacks: imported.map((entry) => ({
+				id: entry.service.id,
+				name: entry.service.name,
+				// Only a service this import CREATED gets a process: re-applying an unchanged document is a
+				// complete no-op live — same ids, no processes (docs/reference/zerops-platform.md).
+				processes: entry.process === undefined ? [] : [this.processResponse(entry.process)],
+			})),
+		}
+	}
+
+	private createProcess(actionName: string, fields: { serviceStackId?: string; appVersionId?: string }): ProcessRecord {
+		const record: ProcessRecord = {
+			id: id('process', this.state.nextProcess++),
+			actionName,
+			pendingReads: 1,
+			...(fields.serviceStackId === undefined ? {} : { serviceStackId: fields.serviceStackId }),
+			...(fields.appVersionId === undefined ? {} : { appVersionId: fields.appVersionId }),
+		}
+		this.state.processes.push(record)
+		return record
+	}
+
+	private processResponse(record: ProcessRecord): unknown {
+		return {
+			id: record.id,
+			status: record.pendingReads > 0 ? 'PENDING' : 'FINISHED',
+			actionName: record.actionName,
+			...(record.serviceStackId === undefined ? {} : { serviceStackId: record.serviceStackId }),
+			...(record.appVersionId === undefined ? {} : { appVersion: { id: record.appVersionId } }),
 		}
 	}
 
@@ -619,6 +821,10 @@ class ZeropsEmulator {
 
 	private version(appVersionId: string): AppVersionRecord | undefined {
 		return this.state.appVersions.find((version) => version.id === appVersionId)
+	}
+
+	private process(processId: string): ProcessRecord | undefined {
+		return this.state.processes.find((record) => record.id === processId)
 	}
 
 	private now(): number {

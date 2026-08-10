@@ -1,18 +1,29 @@
-import { createZeropsApi, type FetchLike } from '@fabrika/provider-zerops'
+import { createZeropsApi, type FetchLike, type Sleeper, waitForProcess } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { createZeropsEmulator } from '../zerops-emulator'
 
 const token = 'local-test-token'
 const signal = AbortSignal.timeout(5_000)
 
-const client = async (options: { activationDelayMs?: number; now?: () => number } = {}) => {
+const emulator = async (options: { activationDelayMs?: number; now?: () => number } = {}) => {
 	const handler = await createZeropsEmulator({ token, ...options })
 	const fetchImpl: FetchLike = async (input, init) => handler(new Request(input, init))
-	return createZeropsApi({
-		token,
-		baseUrl: 'http://zerops.local/api/rest/public',
-		fetchImpl,
-	})
+	return {
+		handler,
+		api: createZeropsApi({
+			token,
+			baseUrl: 'http://zerops.local/api/rest/public',
+			fetchImpl,
+		}),
+	}
+}
+
+const client = async (options: { activationDelayMs?: number; now?: () => number } = {}) => (await emulator(options)).api
+
+/** Read one string off a raw emulator response without asserting anything about its shape. */
+const stringField = (value: unknown, key: string): string | undefined => {
+	const found = typeof value === 'object' && value !== null && key in value ? Reflect.get(value, key) : undefined
+	return typeof found === 'string' ? found : undefined
 }
 
 describe('local Zerops emulator', () => {
@@ -74,7 +85,9 @@ describe('local Zerops emulator', () => {
 		expect(environment[0]?.content).toBe('secret-two')
 
 		const process = await api.triggerPipeline({ serviceId: notes.id, buildFromGit: 'https://example.test/repo.git', signal })
-		expect(process?.status).toBe('FINISHED')
+		// A just-started process has not finished. It reports FINISHED from the second read on.
+		expect(process?.status).toBe('PENDING')
+		expect(process?.actionName).toBe('stack.deploy')
 		const version = await api.latestAppVersion({ serviceId: notes.id, signal })
 		expect(version?.status).toBe('ACTIVE')
 		if (version === null) {
@@ -161,6 +174,132 @@ describe('local Zerops emulator', () => {
 		await api.triggerPipeline({ serviceId, buildFromGit: 'https://example.test/repo.git', signal })
 		await api.enableSubdomainAccess({ serviceId, signal })
 		expect((await api.getService({ serviceId, signal })).subdomainAccess).toBe(true)
+	})
+
+	test('hands an import a process per service it CREATED, and none for one it only re-applied', async () => {
+		const api = await client()
+		const imported = await api.importProject({
+			clientId: 'local-client',
+			yaml: ['project:', '  name: processes', 'services:', '  - hostname: iam', '    type: alpine/bun@1.3'].join('\n'),
+			signal,
+		})
+		const created = imported.services[0]?.processes ?? []
+		expect(created).toHaveLength(1)
+		expect(created[0]?.id).not.toBe('')
+		expect(created[0]?.actionName).toBe('stack.create')
+		expect(created[0]?.serviceStackId).toBe(imported.services[0]?.id)
+
+		const again = await api.importServices({
+			projectId: imported.projectId,
+			yaml: [
+				'services:',
+				'  - hostname: iam',
+				'    type: alpine/bun@1.3',
+				'  - hostname: control',
+				'    type: alpine/bun@1.3',
+			].join('\n'),
+			signal,
+		})
+		// Re-applying an unchanged service is a complete no-op live — same id, no process.
+		expect(again.services[0]?.processes).toEqual([])
+		expect(again.services[1]?.processes).toHaveLength(1)
+	})
+
+	test('polls a process from PENDING to FINISHED, so a caller that waits really waits', async () => {
+		const api = await client()
+		const imported = await api.importProject({
+			clientId: 'local-client',
+			yaml: ['project:', '  name: waiting', 'services:', '  - hostname: iam', '    type: alpine/bun@1.3'].join('\n'),
+			signal,
+		})
+		const started = imported.services[0]?.processes[0]
+		if (started === undefined) {
+			throw new Error('the import returned no process to wait on')
+		}
+		expect(started.status).toBe('PENDING')
+
+		const slept: number[] = []
+		const sleep: Sleeper = async (ms) => {
+			slept.push(ms)
+		}
+		const finished = await waitForProcess({ api, processId: started.id, sleep, signal, intervalMs: 3 })
+
+		expect(finished.id).toBe(started.id)
+		expect(finished.status).toBe('FINISHED')
+		// One PENDING read then FINISHED: the loop turned once. A double that answered FINISHED immediately
+		// would pass this line while proving that a caller which never polls also works — it does not.
+		expect(slept).toEqual([3])
+	})
+
+	test('names the app version on a pipeline process and 404s an id it never issued', async () => {
+		const api = await client()
+		const imported = await api.importProject({
+			clientId: 'local-client',
+			yaml: ['project:', '  name: pipeline', 'services:', '  - hostname: api', '    type: alpine/bun@1.3'].join('\n'),
+			signal,
+		})
+		const serviceId = imported.services[0]?.id ?? ''
+		const triggered = await api.triggerPipeline({ serviceId, buildFromGit: 'https://example.test/repo.git', signal })
+		if (triggered === null) {
+			throw new Error('the pipeline returned no process')
+		}
+
+		const read = await api.getProcess({ processId: triggered.id, signal })
+		expect(read.appVersionId).toBe(triggered.appVersionId)
+		expect(read.serviceStackId).toBe(serviceId)
+		await expect(api.getProcess({ processId: 'process-999999', signal })).rejects.toThrow('(404)')
+	})
+
+	test('mints an integration token that is plainly not a credential', async () => {
+		const { api, handler } = await emulator({ now: () => 1_000 })
+		const minted = await api.createIntegrationToken({
+			clientId: 'local-client',
+			name: 'fabrika-control',
+			projects: [{ projectId: 'project-000001', roleCode: 'ADMIN' }],
+			signal,
+		})
+
+		expect(minted.id).not.toBe('')
+		expect(minted.name).toBe('fabrika-control')
+		// The client always sends the client-wide role, even at its default; the double echoes it back.
+		expect(minted.roleCode).toBe('NO_ACCESS')
+		expect(minted.projects).toEqual([{ projectId: 'project-000001', roleCode: 'ADMIN' }])
+		expect(minted.token).toBe(`not-a-real-zerops-${minted.id}`)
+
+		// The value is a LABEL: the double accepts exactly one bearer, the configured one. A flow that mints
+		// and then authenticates with the result gets 401 here and would not on the platform.
+		const refused = await handler(
+			new Request('http://zerops.local/api/rest/public/__local/state', { headers: { authorization: `Bearer ${minted.token}` } }),
+		)
+		expect(refused.status).toBe(401)
+	})
+
+	test('stamps a minted token with the timestamps the schema requires', async () => {
+		const { handler } = await emulator({ now: () => 1_000 })
+		const response = await handler(
+			new Request('http://zerops.local/api/rest/public/client/local-client/integration-token', {
+				method: 'POST',
+				headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+				body: JSON.stringify({ name: 'stamped', roleCode: 'NO_ACCESS', projects: [{ projectId: 'project-000001', roleCode: 'ADMIN' }] }),
+			}),
+		)
+		const body: unknown = await response.json()
+
+		expect(response.status).toBe(201)
+		expect(stringField(body, 'created')).toBe(new Date(1_000).toISOString())
+		expect(stringField(body, 'lastUpdate')).toBe(new Date(1_000).toISOString())
+	})
+
+	test('refuses an integration token request that names an unknown role', async () => {
+		const { handler } = await emulator()
+		const response = await handler(
+			new Request('http://zerops.local/api/rest/public/client/local-client/integration-token', {
+				method: 'POST',
+				headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+				body: JSON.stringify({ name: 'wrong', projects: [{ projectId: 'project-000001', roleCode: 'SUPERUSER' }] }),
+			}),
+		)
+		expect(response.status).toBe(400)
 	})
 
 	test('rejects the wrong bearer before exposing state', async () => {
