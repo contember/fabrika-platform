@@ -120,7 +120,7 @@ is strictly better than proving it against `fabrika-test`, which hosts a live `n
   it (`api.ts:781-786`). Generated secrets are written blind and never compared. Confirm before every
   outward step, matching the predecessor sprint's decision 4.
 - **Acceptance.** Against a fresh project: the installation comes up, and **a token mints** — not
-  merely a green readiness probe. Then `platform init` and a sidecar CI deploy on top of it.
+  merely a green readiness probe. Handing off to WU5 is WU5's acceptance, not this one's.
 - **Touch points.** `packages/installation-contract/`, `packages/installation-zerops/src/`,
   `packages/cli/`, `packages/provider-zerops/src/api.ts`.
 
@@ -134,6 +134,37 @@ is strictly better than proving it against `fabrika-test`, which hosts a live `n
   write a real grant rather than seeding an admission list.
 - **Acceptance.** A human opens the printed URL in a browser, sets a password, and reaches the console
   as an administrator, with **no `IAM_BOOTSTRAP_ADMINS` value set anywhere**.
+
+### WU5 — Run `platform init` and let CI deploy (effort S) · the one thing that has never happened
+
+- **Problem.** `fabrika platform init --provider=zerops` shipped on 2026-08-06 (`a820ac9`) and **has
+  never been executed once, against any account.** Everything about it — the repository creation, the
+  scaffold push, the GitHub Environment write, the workflow dispatch, and the CI `platform deploy` it
+  triggers — is verified only by unit tests against fake APIs. It is the last untested link, and it is
+  the reason this sprint and its predecessor exist. It was previously buried as a clause in WU3's
+  acceptance and as an undefined row in the sequencing table; that was a planning defect.
+- **This does NOT depend on WU2–WU4.** `init` is shipped code. What it needs is an installation to
+  point at and two credentials, nothing else. Consequences worth stating plainly:
+  - **Against `fabrika-test` it is runnable today.** The tag `v0.0.2` exists, `--dry-run` has been run
+    against that project and reproduces it, and the manifest merge carries the live `notes` app
+    through. The cost is that a real deploy mutates a project hosting a live application.
+  - **Against a fresh installation it waits for WU3**, and is then the natural last step.
+- **Verify first.** Run the generated workflow with its `dry_run` input before any real run. It is the
+  only cheap witness for the two sequences that have never executed: the `ENVIRONMENT`-write-before-
+  deploy ordering, against a `control` that today pairs `local` with a public host, and the proxy
+  manifest merge, whose failure mode is taking a deployed application offline.
+- **Scope.** Supply the two credentials (a Zerops **integration** token — WU3 mints one, or the
+  operator provides one — and the `px_` provisioning key). Run `init`, confirming each outward step.
+  Let it create the sidecar repository, write the Environment and dispatch. Then bump `fabrika.ref`
+  and prove a version roll.
+- **Acceptance, in order:**
+  1. The sidecar repository exists and carries exactly the four scaffolded files.
+  2. Its workflow runs green in **`dry_run`** and reports a plan that matches the local `--dry-run`.
+  3. It runs green for real, and the installation serves the version the pinned tag names.
+  4. Bumping `fabrika.ref` and pushing rolls the installation forward — the whole point of the file.
+  5. A re-run with no change is a no-op: every write is read-compare-write.
+- **Touch points.** None in this repository if it passes. Anything it forces is a finding, and findings
+  from this WU are the most valuable thing in the sprint — nothing else has touched this path.
 
 ## Out of scope (explicit)
 
@@ -172,15 +203,21 @@ is strictly better than proving it against `fabrika-test`, which hosts a live `n
 
 ## Sequencing
 
-|                              | depends on | can run alongside |
-| ---------------------------- | ---------- | ----------------- |
-| WU1 (observe pass-1 proxy)   | —          | WU2               |
-| WU2 (services-only artifact) | —          | WU1               |
-| WU3 (the install command)    | WU1, WU2   | —                 |
-| WU4 (first administrator)    | WU3        | —                 |
-| Live acceptance              | WU4        | —                 |
+|                                 | depends on          | can run alongside |
+| ------------------------------- | ------------------- | ----------------- |
+| WU1 (observe pass-1 proxy)      | —                   | WU2, WU5          |
+| WU2 (services-only artifact)    | —                   | WU1, WU5          |
+| WU3 (the install command)       | WU1, WU2            | WU5†              |
+| WU4 (first administrator)       | WU3                 | —                 |
+| WU5 (run `init`, let CI deploy) | **nothing in code** | WU1–WU3           |
 
-WU1 first because it is cheap and the whole design rests on it.
+WU1 first because it is cheap and the whole design rests on it — done.
+
+† **WU5's placement is a decision, not a dependency.** It needs no code from this sprint; it needs a
+target and two credentials. Run it against `fabrika-test` and it can start immediately, at the cost of
+mutating a project that hosts a live application. Run it against a fresh installation and it becomes
+the last step, after WU3. Either way it must not be left implicit again: it is the only work here that
+tests code nothing has ever executed.
 
 ## Run log
 
