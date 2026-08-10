@@ -121,6 +121,46 @@ describe('the handoff callback', () => {
 		expect(response.status).toBeGreaterThanOrEqual(300)
 	})
 
+	test('a failed redemption is readable — this is the one denial a person sees', async () => {
+		const response = await service(new FakeIam({ exchangeAuthCode: { ok: false, reason: 'expired_code' } }))(callback('c'))
+
+		expect(response.status).toBe(403)
+		expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8')
+		const body = await response.text()
+		expect(body).not.toContain('forbidden')
+		expect(body).toContain('Sign-in did not complete')
+		// A link the reader clicks, relative to this app — never an automatic bounce back into login,
+		// which loops forever for a browser that keeps IAM's session but drops the handoff cookie.
+		expect(body).toContain('href="/"')
+		expect(response.headers.get('location')).toBeNull()
+	})
+
+	test('the page names no deny reason — coarse reasons stay in the log', async () => {
+		for (const reason of ['invalid_code', 'expired_code', 'wrong_app', 'invalid_verifier', 'disabled'] as const) {
+			const body = await (await service(new FakeIam({ exchangeAuthCode: { ok: false, reason } }))(callback('c'))).text()
+			expect(body).not.toContain(reason)
+		}
+		// The two 403 causes the proxy decides on its own are equally indistinguishable from out here.
+		const missingVerifier = await (await service(new FakeIam({}))(callback('c', { verifier: null }))).text()
+		const missingCode = await (await service(new FakeIam({}))(callback(null))).text()
+		expect(missingVerifier).toBe(missingCode)
+	})
+
+	test('an unreachable IAM says so, rather than blaming the link', async () => {
+		const body = await (await service(new FakeIam({ unreachable: true }))(callback('c'))).text()
+		expect(body).toContain('Sign-in is unavailable')
+		expect(body).not.toContain('expired')
+	})
+
+	test('an ordinary deny is untouched — only the callback answers in HTML', async () => {
+		// The same 503 the callback now renders as a page, off the callback path: still flat text, because
+		// on every other path the reader is a program.
+		const response = await service(new FakeIam({ unreachable: true }))(verifyRequest({ path: '/dashboard', cookie: `${SESSION_COOKIE}=s` }))
+		expect(response.status).toBe(503)
+		expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+		expect(await response.text()).toBe('unavailable')
+	})
+
 	test('only a login bounce or callback sets a proxy cookie', async () => {
 		const iam = new FakeIam({ mintToken: { ok: true, token: 'tok', expiresAt: nowPlus(300) } })
 		for (const path of ['/healthz']) {

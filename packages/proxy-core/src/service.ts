@@ -123,7 +123,8 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 			// The handoff callback is checked BEFORE the gates: it is how a browser becomes able to
 			// satisfy one, so it cannot itself be behind one. Because Caddy returns a non-2xx auth
 			// response verbatim, answering 302 + Set-Cookie here reaches the client and never the app.
-			const decision = forwarded.url.pathname === AUTH_CALLBACK_PATH
+			const isCallback = forwarded.url.pathname === AUTH_CALLBACK_PATH
+			const decision = isCallback
 				? await authorizer.authorizeCallback(resolved, forwarded)
 				: await authorizer.authorize(resolved, forwarded)
 			const fields: LogFields = {
@@ -145,7 +146,7 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 				logger.info('handoff', fields)
 				return handoffResponse(decision)
 			}
-			return denied(logger, fields, decision)
+			return denied(logger, fields, decision, isCallback)
 		} catch {
 			// The last line of the fail-closed guarantee. No `err` is inspected or logged: a caught
 			// error can stringify a URL, a header or a body, any of which may carry a credential.
@@ -182,7 +183,12 @@ function handoffResponse(decision: Extract<Decision, { outcome: 'handoff' }>): R
 }
 
 /** Emit the log line for a refusal and render its response. The reason is logged, never returned. */
-function denied(logger: ProxyLogger, fields: LogFields, decision: Extract<Decision, { outcome: 'deny' | 'login' }>): Response {
+function denied(
+	logger: ProxyLogger,
+	fields: LogFields,
+	decision: Extract<Decision, { outcome: 'deny' | 'login' }>,
+	isCallback = false,
+): Response {
 	const reason: DenyReason = decision.reason
 	if (decision.outcome === 'login') {
 		logger.info('login', { ...fields, reason, status: decision.status })
@@ -191,11 +197,64 @@ function denied(logger: ProxyLogger, fields: LogFields, decision: Extract<Decisi
 			: loginRequired(decision.location, decision.handoff)
 	}
 	logger.warn('deny', { ...fields, reason, status: decision.status })
-	const response = textResponse(decision.status, decision.status === 401 ? 'unauthorized' : decision.status === 503 ? 'unavailable' : 'forbidden')
+	const response = isCallback
+		? callbackFailure(decision.status)
+		: textResponse(decision.status, decision.status === 401 ? 'unauthorized' : decision.status === 503 ? 'unavailable' : 'forbidden')
 	if (decision.clearHandoffState !== undefined) {
 		response.headers.append('set-cookie', clearHandoffCookie(decision.clearHandoffState))
 	}
 	return response
+}
+
+/**
+ * The callback refusal is the one denial a person reads. Every other one answers a program — an XHR,
+ * an app request, Caddy itself — but this path is only ever reached by a browser following IAM's
+ * redirect, and a viewport containing `forbidden` describes nothing the reader can act on.
+ *
+ * It deliberately does NOT bounce back into login. A browser that dropped the handoff cookie on this
+ * host while keeping IAM's session would be sent straight back here, and the automatic retry becomes
+ * an endless loop; a link someone has to click cannot loop on its own.
+ *
+ * The text is fixed per status and names no reason, because the reasons are not distinguishable from
+ * out here anyway: `invalid_session` covers an expired verifier and a code IAM refused alike. Coarse
+ * deny reasons stay in the log (`../proxy/CLAUDE.md`).
+ */
+function callbackFailure(status: number): Response {
+	const [title, detail] = status === 503
+		? ['Sign-in is unavailable', 'The sign-in service could not be reached. Please try again in a moment.']
+		: ['Sign-in did not complete', 'The sign-in link has expired or has already been used. Signing in again will issue a new one.']
+	// No script and no external reference: this page is served on the application's own origin, and a
+	// deployment may sit behind a strict CSP that would blank anything else.
+	const body = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title}</title>
+<style>
+body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f4f4f5; color: #18181b;
+	font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 27rem; padding: 2rem; }
+h1 { margin: 0 0 .5rem; font-size: 1.25rem; }
+p { margin: 0 0 1.5rem; color: #52525b; }
+a { display: inline-block; padding: .55rem 1.1rem; border-radius: .375rem; background: #18181b; color: #fafafa; text-decoration: none; }
+@media (prefers-color-scheme: dark) {
+	body { background: #18181b; color: #fafafa; }
+	p { color: #a1a1aa; }
+	a { background: #fafafa; color: #18181b; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>${title}</h1>
+<p>${detail}</p>
+<a href="/">Start again</a>
+</main>
+</body>
+</html>
+`
+	return new Response(body, { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } })
 }
 
 /** The bounce a document navigation gets: the browser follows it and comes back signed in. */

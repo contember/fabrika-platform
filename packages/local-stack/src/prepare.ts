@@ -192,7 +192,7 @@ export const prepareLocalStack = async (): Promise<void> => {
 	//
 	// This is reached only from `local:up`, `local:reset` and `browser:up`. It is deliberately NOT a
 	// `prepare` script any more — as one it ran inside every `bun install`, spawning this nested build
-	// against a `node_modules` the outer install was still writing. See docs/backlog/66.
+	// against a `node_modules` the outer install was still writing. See this package's CLAUDE.md.
 	await run(['bun', 'run', '--filter', '@fabrika/dashboard', 'build'])
 	await generateSecrets()
 	await generateProxyConfigs()
