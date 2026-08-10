@@ -74,7 +74,15 @@ jobs:
       # The Cloudflare provider spawns a BARE `wrangler` (Bun.spawn), so the workspace bins must be on PATH.
       - name: Put fabrika workspace bins on PATH
         working-directory: fabrika-platform
+        # `fabrika` itself is asserted rather than assumed: `bun install` links a workspace package's bin
+        # only when the root package depends on it, so an older pinned tag can install cleanly and still
+        # have no `fabrika` at all — a bare `command not found` several steps later, naming nothing.
         run: |
+          if [ ! -x node_modules/.bin/fabrika ]; then
+            echo "fabrika-platform@${{ steps.ref.outputs.fabrika }} installed no \`fabrika\` binary." >&2
+            echo "Pin a tag whose root package.json depends on @fabrika/cli." >&2
+            exit 1
+          fi
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
           echo "$PWD/packages/control/node_modules/.bin" >> "$GITHUB_PATH"
           echo "$PWD/packages/runner-cloudflare/node_modules/.bin" >> "$GITHUB_PATH"
