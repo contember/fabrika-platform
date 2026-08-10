@@ -254,6 +254,53 @@ Two things this did NOT establish, stated so nobody reads more into it than it s
   survey's reasoning from `start.sh` and the `:8081` health server remains untested.
 - Anything about the other five services. Only `proxy` was provisioned.
 
+### WU3 — the install command, and its first live run (2026-08-10)
+
+Committed as `2caeebc`, then run against a project created EMPTY (`fabrika-install-test`). It reached
+step 11 of 13 and died; the defect it found is the whole return on doing this live.
+
+**What worked, first time, on a real account:**
+
+- The services-only import into an operator-created project — six services from a document with no
+  `project:` block.
+- **The integration token mint.** Until this run nothing about `createIntegrationToken` was verified at
+  runtime; the platform accepts client role `NO_ACCESS` alongside a per-project `ADMIN` grant, which
+  was the open question. `setups.ts:246-247` had named the call correctly all along.
+- Pass 1 — the empty-manifest proxy — and the three hosts READ off the subdomains it published
+  (`proxy-2ec8-8080` iam, `-8082` console, `-8083` Operations).
+- Pass 2 — `iam → operations → proxy → control`, every one ACTIVE.
+
+**What it found.** `PUT /admin/apps/vozka/schema failed (502)`. Registering the console talks to IAM
+over its PUBLIC host, and `deployPlatform` published the proxy's subdomain in the NEXT step. On an
+installation whose subdomain is already live the ordering is invisible, which is how it survived every
+test and every previous deploy; on a first bring-up nothing is reachable and every call 502s. Fixed by
+publishing first (`8000963`) — not a widening, because the proxy enforces the manifest it was built
+with (ADR-0022) and registration only teaches IAM where a session may return to.
+
+**The test for it passed BEFORE the fix**, which is the more useful half of the lesson: the default
+fixture models a proxy that is already published — exactly the state that hid the defect. A test whose
+fixture cannot express the broken state proves nothing about it.
+
+**Verified after the fix**, by behaviour rather than by readiness:
+
+| Probe                             | Result                                                                         |
+| --------------------------------- | ------------------------------------------------------------------------------ |
+| `platform deploy` re-run          | all four ACTIVE; entry point published at step 5, console registered at step 6 |
+| `GET <iam>/healthz`               | **200**                                                                        |
+| `GET <console>/`                  | **302** — the proxy bouncing an unauthenticated browser to sign-in             |
+| `GET <operations>/`               | **403** — only ingest and source-map paths are public                          |
+| `GET <iam>/.well-known/jwks.json` | **one `EC` / `P-256` / `ES256` / `use=sig` key, no private `d`**               |
+
+That last row is what `/healthz` cannot tell you: IAM's health route is a static 200 that never touches
+the signer, so an ACTIVE deploy with a malformed `FABRIKA_IAM_SIGNING_KEYS` looks identical to a
+working one. A served JWKS means `Signer.fromPrivateJwks` parsed the generated key. A full mint — a
+signed session — still waits on the first sign-in, which is WU4.
+
+**Finding to weigh, not yet filed.** Every confirmation in `install` defaults to yes, and an empty
+answer is indistinguishable from EOF, so the command runs unattended end to end when stdin is closed.
+It reads as a guard against a human typing `n`, not against non-interactive execution — worth deciding
+deliberately for a command that mutates a cloud account.
+
 **Tooling note.** `zops env list` and `zops env set` fail with `Service stack not found` on service ids
 that `zops service list` returned one line earlier, on two separate projects; `zops env show` works.
 The probe used `@fabrika/provider-zerops`'s own client instead, which is the code path the bootstrap
