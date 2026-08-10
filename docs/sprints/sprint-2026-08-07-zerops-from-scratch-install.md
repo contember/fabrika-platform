@@ -143,20 +143,27 @@ is strictly better than proving it against `fabrika-test`, which hosts a live `n
   triggers — is verified only by unit tests against fake APIs. It is the last untested link, and it is
   the reason this sprint and its predecessor exist. It was previously buried as a clause in WU3's
   acceptance and as an undefined row in the sequencing table; that was a planning defect.
-- **This does NOT depend on WU2–WU4.** `init` is shipped code. What it needs is an installation to
-  point at and two credentials, nothing else. Consequences worth stating plainly:
-  - **Against `fabrika-test` it is runnable today.** The tag `v0.0.2` exists, `--dry-run` has been run
-    against that project and reproduces it, and the manifest merge carries the live `notes` app
-    through. The cost is that a real deploy mutates a project hosting a live application.
-  - **Against a fresh installation it waits for WU3**, and is then the natural last step.
+- **This depends on nothing — including the operator.** `init` is shipped code, and **both secrets it
+  writes already live on the installation**, verified 2026-08-08 by reading the service environments
+  through `@fabrika/provider-zerops` (names and lengths only, never values):
+  `FABRIKA_IAM_PROVISIONING_KEY` on `iam` and `control`, and `FABRIKA_ZEROPS_ACCESS_TOKEN` on
+  `control`. That is exactly what the invariant means by "both Environment secrets already belong to
+  the installation" — so `init` sources them from the installation, and asking a human to paste a
+  secret is the wrong shape: it puts the value somewhere it was not before.
+  - **Against `fabrika-test` this is runnable today, with no input from anyone.** The tag `v0.0.2`
+    exists and `--dry-run` reproduces the project. The only cost is that a real deploy mutates a
+    project hosting a live application — a decision, not a blocker.
+  - **Against a fresh installation it waits for WU3**, which generates the same two values instead of
+    reading them.
 - **Verify first.** Run the generated workflow with its `dry_run` input before any real run. It is the
   only cheap witness for the two sequences that have never executed: the `ENVIRONMENT`-write-before-
-  deploy ordering, against a `control` that today pairs `local` with a public host, and the proxy
-  manifest merge, whose failure mode is taking a deployed application offline.
-- **Scope.** Supply the two credentials (a Zerops **integration** token — WU3 mints one, or the
-  operator provides one — and the `px_` provisioning key). Run `init`, confirming each outward step.
-  Let it create the sidecar repository, write the Environment and dispatch. Then bump `fabrika.ref`
-  and prove a version roll.
+  deploy ordering and the proxy manifest merge, whose failure mode is taking a deployed application
+  offline. That ordering is **not hypothetical**: `ENVIRONMENT` on `fabrika-test`'s `control` and
+  `operations` is still five characters long — `local` — on services answering public hosts, so the
+  next real deploy is also the first exercise of WU3-the-refusal against a live installation.
+- **Scope.** Read both secrets from the installation into the environment `init` reads. Run `init`,
+  confirming each outward step. Let it create the sidecar repository, write the GitHub Environment and
+  dispatch. Then bump `fabrika.ref` and prove a version roll.
 - **Acceptance, in order:**
   1. The sidecar repository exists and carries exactly the four scaffolded files.
   2. Its workflow runs green in **`dry_run`** and reports a plan that matches the local `--dry-run`.
