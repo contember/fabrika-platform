@@ -95,6 +95,28 @@ describe('the order', () => {
 		expect(PLATFORM_DEPLOY_ORDER).toEqual(['iam', 'operations', 'proxy', 'control'])
 	})
 
+	// Found by running `platform install` on an empty project (2026-08-10): registering the console talks
+	// to IAM over its PUBLIC host, so on a first bring-up it 502s until the proxy is published. The
+	// default fixture models an already-published proxy — which is exactly the state that hid this — so
+	// this one unpublishes it.
+	test('publishes the public entry point BEFORE it registers the console', async () => {
+		const zerops = fakeZerops({
+			...PROJECT,
+			services: platformServices({ proxy: { zeropsSubdomain: SUBDOMAINS, [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest } })
+				.map((service) => service.name === 'proxy' ? { ...service, subdomainAccess: false } : service),
+		})
+		let publishedFirst: boolean | undefined
+		await deployPlatform(input(), {
+			api: zerops.api,
+			reconcileSchema: async () => void (publishedFirst = zerops.calls.includes('subdomain:proxy')),
+			sleep: async () => {},
+			log: recordingDeployLog(),
+			signal: new AbortController().signal,
+		})
+		expect(zerops.calls).toContain('subdomain:proxy')
+		expect(publishedFirst).toBe(true)
+	})
+
 	test('puts the PROXY ahead of control, because the application enforces nothing (ADR-0022)', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		await fixture.run()

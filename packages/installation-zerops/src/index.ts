@@ -101,8 +101,8 @@ ONE step — on Cloudflare the order lives in the scaffolded workflow instead, d
   2. write each service's environment: the composed proxy manifest, the installation's environment
      name, and the origins derived from the resolved public hosts
   3. deploy ${PLATFORM_DEPLOY_ORDER.join(' → ')}, waiting for each to become ACTIVE
-  4. reconcile the console's app schema and register its return origin with IAM
-  5. ensure the proxy's public entry point
+  4. ensure the proxy's public entry point
+  5. reconcile the console's app schema and register its return origin with IAM
 
 The order is a security property, not just a dependency: the application enforces nothing
 (ADR-0022), so the proxy is deployed BEFORE control, and every environment write happens before any
@@ -126,7 +126,7 @@ Options (a flag beats the environment variable beside it):
   --dry-run                                                         read everything, change nothing
 
 Naming NO host derives all three from the proxy service's Zerops subdomains and makes this a
-\`zerops-subdomain\` installation, whose public entry point step 5 ensures. Naming all three makes it a
+\`zerops-subdomain\` installation, whose public entry point step 4 ensures. Naming all three makes it a
 \`custom-domain\` installation: the domains are bound to the project balancer out of band and no
 subdomain is published.
 

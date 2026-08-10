@@ -534,6 +534,18 @@ export const deployPlatform = async (
 		await deployPlatformService(serviceOf(services, hostname), input, collaborators)
 	}
 
+	// BEFORE the console registration, not after: that step talks to IAM over its PUBLIC host, and on a
+	// first bring-up the proxy has no public address until this runs — every call 502s. On an already
+	// published installation this is a no-op, which is why the old order survived until `platform install`
+	// ran it on an empty project. Publishing first is not a widening: the proxy enforces the manifest it
+	// was just built with (ADR-0022), and registration only teaches IAM where a session may return to.
+	log.step('Ensure the public entry point')
+	if (placement.zeropsSubdomain) {
+		await ensureSubdomainAccess(proxy, input, collaborators)
+	} else {
+		log.info('custom-domain installation: the operator binds each domain to the project balancer; no subdomain is published')
+	}
+
 	log.step('Register the console with IAM')
 	const consoleApp = platformProxyAppFor(PLATFORM_PROXY_MANIFEST_TEMPLATE, 'control')
 	const consoleOrigin = platformOrigin(placement.scheme, placement.hosts.control)
@@ -551,13 +563,6 @@ export const deployPlatform = async (
 			signal,
 		})
 		log.info(`\`${consoleApp.id}\` reconciled; return origin ${consoleOrigin}`)
-	}
-
-	log.step('Ensure the public entry point')
-	if (placement.zeropsSubdomain) {
-		await ensureSubdomainAccess(proxy, input, collaborators)
-	} else {
-		log.info('custom-domain installation: the operator binds each domain to the project balancer; no subdomain is published')
 	}
 
 	log.step(input.dryRun ? 'Dry run complete — nothing was written' : 'Installation deployed')
