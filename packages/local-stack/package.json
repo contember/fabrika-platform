@@ -8,7 +8,7 @@
 	},
 	"scripts": {
 		"emulator": "bun src/emulator-server.ts",
-		"prepare": "bun src/prepare.ts",
+		"prepare-stack": "bun src/prepare.ts",
 		"up": "bun src/cli.ts up",
 		"status": "bun src/cli.ts status",
 		"smoke": "bun src/smoke.ts",

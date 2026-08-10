@@ -52,6 +52,13 @@ bun run test:browser  # the opice suites in tests/browser/
 - **A script needs a `px_` service key, not the provisioning key.** `local:up` provisions one through
   IAM and writes `.state/machine.env`; `mintFromKey` cannot resolve `FABRIKA_IAM_PROVISIONING_KEY`
   (it has no `credentials` row), so the proxy refuses it before control sees the bearer.
+- **`prepareLocalStack` must never be a `prepare` script again.** It was one, so it ran inside every
+  `bun install` of this workspace — spawning a nested `bun run --filter @fabrika/dashboard build`
+  against a `node_modules` the outer install was still writing. That race failed a release and a live
+  Zerops platform build (`Cannot find module '@fabrika/auth'`, `ENOENT … @buzola/codegen`), and it hit
+  `iam`, `operations` and `proxy`, none of which want a console. `control` names the console build in
+  its own `buildCommands`, which is where a service's build belongs. Reach this from `local:up`,
+  `local:reset` and `browser:up` only.
 - **`.state/` holds generated local credentials and is disposable**, but only `local:reset` may
   remove it — it wipes the `fabrika-local` volumes in the same step. Deleting one without the other
   leaves services holding credentials the databases no longer accept.

@@ -430,3 +430,37 @@ package's bin only when the ROOT package depends on it, and the root `package.js
 
 This is the defect class WU5 exists for: `init` and its generated pipeline shipped on 2026-08-06, are
 covered by unit tests against fake APIs, and had never been executed once.
+
+**Acceptance 2 met.** After bumping the pin to `v0.0.3`, the sidecar's `dry_run` reported a plan
+identical to the local `--dry-run`, line for line: same three derived hosts, `3 app(s)` in the manifest,
+four services reporting `already correct`, the subdomain `already published`, and
+`nothing was written`. The `[skip ci]` on the pin commit held — no push-triggered run fired — which is
+the convention that stops a scaffold push deploying before the Environment exists.
+
+**Finding C — `bun install` built the console, and the race it caused broke a platform build.**
+`@fabrika/local-stack` declared a `prepare` script whose first act was
+`bun run --filter @fabrika/dashboard build`. `prepare` runs on install, so every `bun install` of this
+workspace spawned that nested build against a `node_modules` the outer install was still writing. It
+failed three times on 2026-08-10, all reported as
+`error: prepare script from "@fabrika/local-stack" exited with 1`:
+
+| Where                           | Inner failure                                                      |
+| ------------------------------- | ------------------------------------------------------------------ |
+| CI `Build deployable artifacts` | `ENOENT reading …/packages/dashboard/node_modules/@buzola/codegen` |
+| the `v0.0.3` release            | `bun failed with exit code 127`                                    |
+| the Zerops `iam` build          | `Cannot find module '@fabrika/auth'` ×6, `Exited with code 2`      |
+
+The middle one blocked a release until an unchanged re-run passed; the last one is the one that
+matters, because it took `BUILD_FAILED` on the first service of the real CI deploy — and `iam`,
+`operations` and `proxy` have no use for a console at all. `control` already names the console build in
+its own `buildCommands`, which is where a service's build belongs, so the hook was redundant even for
+the one service that needs it.
+
+Fixed by renaming the script to `prepare-stack`. The three real callers — `local:up`, `local:reset`,
+`browser:up` — already call `prepareLocalStack()` directly, so nothing else moves; `bun install` in a
+clean tree now runs no workspace build. Guarded by an invariant in
+`packages/local-stack/CLAUDE.md`, because the failure mode is invisible until an install happens to
+have work to do.
+
+**The ordered deploy behaved correctly under the failure.** It stopped at `iam` and never triggered
+`operations`, `proxy` or `control` — the property ADR-0027 puts in code rather than in the workflow.

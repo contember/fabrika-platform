@@ -187,10 +187,12 @@ const run = async (command: string[]): Promise<void> => {
 
 export const prepareLocalStack = async (): Promise<void> => {
 	mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
-	// Plain `bun run`. This is a `prepare` script, so it executes on every `bun install` of the
-	// workspace — including inside CI and inside a Zerops build container, neither of which has a
-	// developer's local core-leasing wrapper on PATH. Wrapping it made `bun install --frozen-lockfile`
-	// exit 1 with `Executable not found in $PATH: "cpu-lease"` and took every platform build down with it.
+	// Plain `bun run`, never wrapped in the developer's core-leasing helper: this also runs where that
+	// helper is not on PATH, and wrapping it once failed with `Executable not found in $PATH: "cpu-lease"`.
+	//
+	// This is reached only from `local:up`, `local:reset` and `browser:up`. It is deliberately NOT a
+	// `prepare` script any more — as one it ran inside every `bun install`, spawning this nested build
+	// against a `node_modules` the outer install was still writing. See docs/backlog/66.
 	await run(['bun', 'run', '--filter', '@fabrika/dashboard', 'build'])
 	await generateSecrets()
 	await generateProxyConfigs()
