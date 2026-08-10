@@ -6,10 +6,10 @@
 // what an operator actually feeds to the platform, so it should be reviewable in a diff — but nobody
 // should hand-edit it, because the types are upstream of it.
 
-import { renderYaml } from '@fabrika/provider-zerops'
+import { renderYaml, type ZeropsImportDocument } from '@fabrika/provider-zerops'
 import { resolve } from 'node:path'
 import { fabrikaZeropsYaml } from './setups'
-import { compileTopology, fabrikaTopologies } from './topology'
+import { type CompiledDocument, compileTopology, fabrikaTopologies } from './topology'
 
 /** Repository root, from this file's own location. */
 export const REPO_ROOT = resolve(import.meta.dir, '../../..')
@@ -23,17 +23,50 @@ export interface Artifact {
 
 const banner = (lines: string[]): string => `${lines.map((line) => (line === '' ? '#' : `# ${line}`)).join('\n')}\n#\n`
 
-const IMPORT_HEADER = (source: string, applyTo: string, notes: string[]): string =>
+/**
+ * Which endpoint takes THIS document, read off the document rather than off the form it was compiled in.
+ *
+ * A `project:` block is only valid at the endpoint that CREATES a project; the service-stack endpoint
+ * imports into one that already exists. Both forms of a project-bearing topology therefore name the
+ * project-import endpoint — the steady form used to claim the other one, which was wrong in the file's
+ * own first instruction.
+ */
+const applyTo = (document: ZeropsImportDocument): string =>
+	document.project === undefined
+		? 'POST /project/{projectId}/service-stack/import  { yaml }'
+		: 'POST /client/{clientId}/project/import  { yaml }'
+
+/**
+ * ADR-0004's line, told truthfully for each shape.
+ *
+ * A services-only document sets no project-level isolation and cannot: `envIsolation` is settable at
+ * project CREATION only. The per-service value the compiler writes overrides the project's, which is
+ * what makes dropping the block safe — but the project it lands in still has to have been created right,
+ * and nothing in this document can check that.
+ */
+const isolationNote = (document: ZeropsImportDocument): string[] =>
+	document.project === undefined
+		? [
+			'`envIsolation: service` on EVERY service is written by the compiler, not by the declaration, and',
+			"re-checked before serialization; a service-level value overrides the project's (ADR-0004). This",
+			'document sets NO project-level isolation and cannot — the field is settable at project CREATION',
+			'only, so the project this is imported into must already carry `envIsolation: service`.',
+		]
+		: [
+			'`envIsolation: service` at BOTH levels and the absence of any project-level `envVariables` are',
+			'written by the compiler, not by the declaration, and re-checked before serialization (ADR-0004).',
+		]
+
+const IMPORT_HEADER = (source: string, document: ZeropsImportDocument, notes: string[]): string =>
 	banner([
 		'GENERATED FILE — DO NOT EDIT BY HAND.',
 		'',
 		`Source: packages/installation-zerops/zerops/${source}`,
 		'Regenerate: bun run --filter @fabrika/installation-zerops gen',
 		'',
-		`Apply with: ${applyTo}`,
+		`Apply with: ${applyTo(document)}`,
 		'',
-		'`envIsolation: service` at BOTH levels and the absence of any project-level `envVariables` are',
-		'written by the compiler, not by the declaration, and re-checked before serialization (ADR-0004).',
+		...isolationNote(document),
 		...notes,
 	])
 
@@ -55,7 +88,7 @@ const publicAccessNote = (publicService: string): string[] => [
 ]
 
 /**
- * The two forms every project topology is emitted in.
+ * The forms every project topology is emitted in.
  *
  *   *.provision.*  every service `startWithoutCode: true`. FIRST bring-up: the services exist, so their
  *                  secrets can be written through the env API (which is addressed BY SERVICE), and only
@@ -63,22 +96,24 @@ const publicAccessNote = (publicService: string): string[] => [
  *   (plain)        steady state. Re-applying it is how a Zerops deploy is idempotent — every service
  *                  carries `override: true`, so an existing hostname is tolerated rather than a
  *                  collision. It does NOT reconcile: a changed field in this document is ignored.
+ *   *.services.*   the same two, with no `project:` block, for a project the OPERATOR created. Emitted
+ *                  only for a topology that declares a `servicesTarget`.
  */
 const topologyArtifacts = (): Artifact[] =>
 	fabrikaTopologies().flatMap((topology) => {
 		const compiled = compileTopology(topology, 'prod')
 		const subdomain = compiled.steady.document.services.find((service) => service.enableSubdomainAccess === true)
 		const notes = subdomain === undefined ? [] : publicAccessNote(subdomain.hostname)
-		return [
-			{
-				path: `packages/installation-zerops/zerops/generated/${topology.id}.provision.zerops-import.yaml`,
-				content: IMPORT_HEADER('topology.ts', 'POST /client/{clientId}/project/import  { yaml }', notes) + compiled.provision.yaml,
-			},
-			{
-				path: `packages/installation-zerops/zerops/generated/${topology.id}.zerops-import.yaml`,
-				content: IMPORT_HEADER('topology.ts', 'POST /project/{projectId}/service-stack/import  { yaml }', notes) + compiled.steady.yaml,
-			},
+		const forms: Array<{ suffix: string; form: CompiledDocument }> = [
+			{ suffix: '.provision', form: compiled.provision },
+			{ suffix: '', form: compiled.steady },
+			...(compiled.servicesProvision === undefined ? [] : [{ suffix: '.services.provision', form: compiled.servicesProvision }]),
+			...(compiled.servicesSteady === undefined ? [] : [{ suffix: '.services', form: compiled.servicesSteady }]),
 		]
+		return forms.map(({ suffix, form }) => ({
+			path: `packages/installation-zerops/zerops/generated/${topology.id}${suffix}.zerops-import.yaml`,
+			content: IMPORT_HEADER('topology.ts', form.document, notes) + form.yaml,
+		}))
 	})
 
 /**

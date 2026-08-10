@@ -3,26 +3,18 @@
 # Source: packages/installation-zerops/zerops/topology.ts
 # Regenerate: bun run --filter @fabrika/installation-zerops gen
 #
-# Apply with: POST /client/{clientId}/project/import  { yaml }
+# Apply with: POST /project/{projectId}/service-stack/import  { yaml }
 #
-# `envIsolation: service` at BOTH levels and the absence of any project-level `envVariables` are
-# written by the compiler, not by the declaration, and re-checked before serialization (ADR-0004).
+# `envIsolation: service` on EVERY service is written by the compiler, not by the declaration, and
+# re-checked before serialization; a service-level value overrides the project's (ADR-0004). This
+# document sets NO project-level isolation and cannot — the field is settable at project CREATION
+# only, so the project this is imported into must already carry `envIsolation: service`.
 #
 # APPLYING THIS FILE PUBLISHES NOTHING. `enableSubdomainAccess: true` on `proxy` is a
 # declaration of intent that the platform accepts and drops; the service reads back
 # `subdomainAccess: false`. Once `proxy` has deployed an HTTP port, publish it with
 # `PUT /service-stack/{id}/enable-subdomain-access` and confirm `subdomainAccess: true` on the service.
 #
-project:
-  name: platform
-  envIsolation: service
-  description: "fabrika light tier: control plane, Operations, IAM, the auth proxy and the apps they serve, on shared data services."
-  corePackage: LIGHT
-  tags:
-    - fabrika
-    - platform
-    - light
-    - prod
 services:
   - hostname: db
     type: "postgresql:single@18"
@@ -30,6 +22,7 @@ services:
     override: true
     priority: 100
     profile: oltp-staging
+    startWithoutCode: true
   - hostname: storage
     type: object-storage
     envIsolation: service
@@ -38,6 +31,7 @@ services:
     objectStoragePolicy: private
     priority: 100
     enableCdn: false
+    startWithoutCode: true
   - hostname: iam
     type: alpine/bun@1.3
     envIsolation: service
@@ -46,6 +40,7 @@ services:
     priority: 50
     minContainers: 1
     maxContainers: 2
+    startWithoutCode: true
   - hostname: operations
     type: alpine/bun@1.3
     envIsolation: service
@@ -54,6 +49,7 @@ services:
     priority: 40
     minContainers: 1
     maxContainers: 2
+    startWithoutCode: true
   - hostname: control
     type: alpine/bun@1.3
     envIsolation: service
@@ -62,6 +58,7 @@ services:
     priority: 30
     minContainers: 1
     maxContainers: 2
+    startWithoutCode: true
   - hostname: proxy
     type: alpine@3.21
     envIsolation: service
@@ -70,3 +67,4 @@ services:
     priority: 10
     minContainers: 1
     maxContainers: 2
+    startWithoutCode: true

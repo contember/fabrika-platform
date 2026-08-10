@@ -10,7 +10,11 @@
 // fact; check it against a real account first.
 //
 // SECURITY. The token is a Zerops PERSONAL ACCESS TOKEN and carries account-wide admin rights. It is
-// never logged, never included in an error message, and never returned from a method.
+// never logged, never included in an error message, and never returned from a method. There is exactly
+// one credential this module DOES hand back — the integration token `createIntegrationToken` mints, which
+// exists so that nothing has to reuse the personal one; it obeys the same no-log, no-error-message rule.
+
+import type { Sleeper } from './collaborators'
 
 /** Every status a Zerops application version can be in. VERIFIED: `OutDtoGetAppVersion.status` enum. */
 export type ZeropsAppVersionStatus =
@@ -67,6 +71,29 @@ export interface ZeropsProcess {
 	serviceStackId?: string
 	appVersionId?: string
 }
+
+/**
+ * The status a process that succeeded carries.
+ *
+ * VERIFIED AS A VALUE, not as an enum member: `docs/reference/zerops-platform.md` records
+ * `stack.updateUserData`, `stack.enableSubdomainAccess` and an import's processes reaching exactly this
+ * string live. `ResponseProcess.status` is an untyped string in the published document, so the platform
+ * declares no set anywhere.
+ */
+export const ZEROPS_PROCESS_FINISHED = 'FINISHED'
+
+/**
+ * Statuses a process never leaves.
+ *
+ * UNVERIFIED AS A CLOSED SET — the OpenAPI document gives `ResponseProcess.status` no enum at all. These
+ * are the values `zops process list --status` documents (`PENDING, RUNNING, FINISHED, FAILED, CANCELED`)
+ * minus the two that mean "still going". Note the single `L` in `CANCELED`: an app VERSION spells the same
+ * idea `CANCELLED`, and the two vocabularies are not the same one.
+ *
+ * `waitForProcess` treats everything not in here as "keep waiting", so a status this build has never seen
+ * can only ever cost time — it can never be read as success.
+ */
+export const ZEROPS_PROCESS_TERMINAL: ReadonlySet<string> = new Set(['FINISHED', 'FAILED', 'CANCELED'])
 
 /** One service created or updated by an import. VERIFIED: `OutDtoProjectImportServiceStack`. */
 export interface ZeropsImportedService {
@@ -154,6 +181,47 @@ export interface ZeropsProject {
 	description?: string
 	/** VERIFIED: `ResponseProject.tagList`. */
 	tagList?: string[]
+}
+
+/**
+ * A Zerops access role. VERIFIED: the `roleCode` enum, shared by `RequestClientIntegrationToken` and
+ * `ResponseClientIntegrationTokenRaw`.
+ *
+ * Tiered, and the schema's own description states the order: `OWNER > ADMIN > BASIC_USER > READ_ONLY >
+ * NO_ACCESS`, with a PROJECT role overriding the client-wide one. That override is the whole mechanism
+ * behind a scoped token — client `NO_ACCESS` plus one project `ADMIN` reaches exactly one project.
+ */
+export type ZeropsRoleCode = 'OWNER' | 'ADMIN' | 'BASIC_USER' | 'READ_ONLY' | 'NO_ACCESS'
+
+/**
+ * One project grant carried by an integration token. VERIFIED:
+ * `ResponseClientIntegrationTokenRaw.projects[]` — `projectId` is required and `roleCode` is not, so a
+ * grant read back can omit it (the schema documents `NO_ACCESS` as the default; this client does not
+ * substitute one, because an assumed grant is worse than an absent one).
+ */
+export interface ZeropsTokenProjectGrant {
+	projectId: string
+	roleCode?: ZeropsRoleCode
+}
+
+/**
+ * A freshly minted integration token. VERIFIED: `ResponseClientIntegrationTokenRaw` — `id`, `name`,
+ * `projects` and `token` are all in its `required` list.
+ *
+ * THE ONE SHAPE ON THIS CLIENT THAT CARRIES A CREDENTIAL, and the `Raw` in the schema's name is why: the
+ * plaintext `token` appears in this one response and nowhere afterwards. Everything the module header says
+ * about the personal access token applies to it — never logged, never in an error message — with the
+ * single exception that it must reach whatever is going to store it.
+ */
+export interface ZeropsIntegrationToken {
+	id: string
+	name: string
+	/** The bearer value. NEVER log it. */
+	token: string
+	/** The grants the platform actually recorded, so a caller can check the scope it asked for. */
+	projects: ZeropsTokenProjectGrant[]
+	/** The client-wide role. Absent from the response's `required` list, so it can genuinely be missing. */
+	roleCode?: ZeropsRoleCode
 }
 
 /**
@@ -276,6 +344,24 @@ export interface ZeropsApi {
 	/** Cancel an in-flight build — what a cancelled run does with the work it started. VERIFIED: `PUT /app-version/{id}/cancel-build`. */
 	cancelBuild(input: { appVersionId: string; signal: AbortSignal }): Promise<void>
 
+	// ── process: the asynchronous half of almost every write ──────────────────────
+
+	/**
+	 * One platform operation's current state. VERIFIED: `GET /process/{id}` (`GetProcessDetails`,
+	 * response `ResponseProcess`).
+	 *
+	 * WHAT IT IS FOR. Several writes here return a process INSTEAD of their result and complete afterwards:
+	 * an import hands back one per service it touched, and `POST /service-stack/{id}/user-data` answers with
+	 * a process rather than the record it created. A caller that imports services and then immediately
+	 * writes their environment needs to know the import's processes finished, and until this existed
+	 * nothing could ask.
+	 *
+	 * UNVERIFIED BEHAVIOUR: the status VOCABULARY (see `ZEROPS_PROCESS_TERMINAL`). The published document
+	 * types `status` as a bare string defaulting to `PENDING`, so it stays `string` here rather than being
+	 * narrowed to a set nobody publishes.
+	 */
+	getProcess(input: { processId: string; signal: AbortSignal }): Promise<ZeropsProcess>
+
 	// ── service-stack: public access ──────────────────────────────────────────────
 
 	/**
@@ -353,6 +439,46 @@ export interface ZeropsApi {
 	 * Read-only ON PURPOSE — see the note on this interface. Present so drift can be REPORTED.
 	 */
 	getProjectEnv(input: { projectEnvId: string; signal: AbortSignal }): Promise<ZeropsServiceEnv>
+
+	// ── client: minting a credential ──────────────────────────────────────────────
+
+	/**
+	 * Mint a project-scoped INTEGRATION token. VERIFIED: `POST /client/{id}/integration-token`
+	 * (`createIntegrationToken`), body `RequestClientIntegrationToken` — `name` and `projects` are its two
+	 * required members — response `ResponseClientIntegrationTokenRaw`, whose `required` list contains
+	 * `token`.
+	 *
+	 * WHAT IT IS FOR. A control plane deployed on Zerops holds a Zerops credential, and it must not be the
+	 * personal access token an operator or a bootstrap authenticated with: that one carries account-wide
+	 * admin rights (module header). An integration token left at client `NO_ACCESS` with one project
+	 * granted `ADMIN` can do nothing outside that project.
+	 *
+	 * `roleCode` IS ALWAYS SENT, even when its value is the schema's own default, for the reason
+	 * `compile.ts` writes `envIsolation` instead of inheriting it: a security-relevant field that never
+	 * reaches the wire is a field nobody can review.
+	 *
+	 * NOT EXPOSED, deliberately: `canCreateProjects` — a token that creates projects receives `OWNER` on
+	 * what it creates, which is exactly the scope this call exists to avoid — and `canViewFinances` /
+	 * `canEditFinances`. All three default to `false`, and fabrika has no use for any of them.
+	 *
+	 * UNVERIFIED BEHAVIOUR: EVERYTHING AT RUNTIME. No token has ever been minted against a real account —
+	 * doing so is a mutation, not an inspection — so the shapes below are the published document's and the
+	 * behaviours are unmeasured: whether a repeated `name` conflicts, whether client `NO_ACCESS` alongside
+	 * a project grant is accepted, and what the token's own prefix or length looks like.
+	 *
+	 * THE RESPONSE CARRIES A SECRET, so the implementation redacts the server's message from any error it
+	 * raises. This is the one endpoint whose error envelope could quote a token value back.
+	 */
+	createIntegrationToken(input: {
+		clientId: string
+		/** The token's label in the Zerops UI. Not a secret and not unique as far as any document says. */
+		name: string
+		/** Per-project grants. `ADMIN` is what a control plane needs on a project it deploys into. */
+		projects: readonly { projectId: string; roleCode: ZeropsRoleCode }[]
+		/** The client-wide role. Defaults to `NO_ACCESS`, which is the entire point of a scoped token. */
+		roleCode?: ZeropsRoleCode
+		signal: AbortSignal
+	}): Promise<ZeropsIntegrationToken>
 
 	// ── logs ──────────────────────────────────────────────────────────────────────
 
@@ -556,6 +682,22 @@ const readProject = (value: unknown): ZeropsProject => ({
 	...(stringList(value, 'tagList') !== undefined ? { tagList: stringList(value, 'tagList') } : {}),
 })
 
+const ROLE_CODES: readonly ZeropsRoleCode[] = ['OWNER', 'ADMIN', 'BASIC_USER', 'READ_ONLY', 'NO_ACCESS']
+
+/** `undefined` means Zerops sent a role this build does not know — reported as absent, never as a guess. */
+const asRoleCode = (value: unknown): ZeropsRoleCode | undefined => ROLE_CODES.find((role) => role === value)
+
+const readIntegrationToken = (value: unknown): ZeropsIntegrationToken => ({
+	id: str(value, 'id') ?? '',
+	name: str(value, 'name') ?? '',
+	token: str(value, 'token') ?? '',
+	projects: arr(value, 'projects').map((entry) => ({
+		projectId: str(entry, 'projectId') ?? '',
+		roleCode: asRoleCode(prop(entry, 'roleCode')),
+	})),
+	roleCode: asRoleCode(prop(value, 'roleCode')),
+})
+
 const readServiceEnv = (value: unknown): ZeropsServiceEnv => ({
 	id: str(value, 'id') ?? '',
 	key: str(value, 'key') ?? '',
@@ -719,6 +861,8 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			await request('cancel-build', 'PUT', `/app-version/${appVersionId}/cancel-build`, { signal })
 		},
 
+		getProcess: async ({ processId, signal }) => readProcess(await request('get process', 'GET', `/process/${processId}`, { signal })),
+
 		enableSubdomainAccess: async ({ serviceId, signal }) => {
 			// No body: the operation takes none, and sending one would add a content-type the platform did not ask for.
 			await request('enable subdomain access', 'PUT', `/service-stack/${serviceId}/enable-subdomain-access`, { signal })
@@ -794,6 +938,21 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		getProjectEnv: async ({ projectEnvId, signal }) =>
 			readServiceEnv(await request('get project env', 'GET', `/project-env/${projectEnvId}`, { signal })),
 
+		createIntegrationToken: async ({ clientId, name, projects, roleCode, signal }) =>
+			// `redactDetail`: unlike every other write here the SECRET is in the RESPONSE, not the request, so
+			// this is the one error envelope that could quote a minted token back at us.
+			readIntegrationToken(
+				await request('create integration token', 'POST', `/client/${clientId}/integration-token`, {
+					body: {
+						name,
+						roleCode: roleCode ?? 'NO_ACCESS',
+						projects: projects.map((grant) => ({ projectId: grant.projectId, roleCode: grant.roleCode })),
+					},
+					signal,
+					redactDetail: true,
+				}),
+			),
+
 		getLogAccess: async ({ projectId, signal }) => {
 			const payload = await request('get log access', 'GET', `/project/${projectId}/log`, { signal })
 			return {
@@ -821,5 +980,62 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			const text = await response.text()
 			return text.split('\n').filter((line) => line.trim() !== '').map((line) => ({ message: line }))
 		},
+	}
+}
+
+// ── waiting on a process ────────────────────────────────────────────────────────
+
+/**
+ * How often `waitForProcess` polls. The two process durations anyone has measured are 0.7 s
+ * (`stack.enableSubdomainAccess`) and 2.6 s (`stack.updateUserData`), so 5 s — the platform DEPLOY's
+ * interval — would spend most of its time asleep on a call that already finished.
+ */
+const PROCESS_POLL_INTERVAL_MS = 2_000
+
+/** ~5 minutes. The slow case is an import that creates managed services, not a build; a build is polled through `/app-version`. */
+const PROCESS_POLL_ATTEMPTS = 150
+
+/**
+ * Poll ONE process to completion.
+ *
+ * The same loop `installation-zerops`'s `deployService` runs over `/app-version`, run over `/process`
+ * instead: read, decide ONLY on a status this build knows to be terminal, sleep, and give up on a deadline
+ * of our own rather than on a coincidence. Returns the finished process so a caller can read
+ * `actionName`/`appVersionId` off it.
+ *
+ * Anything outside `ZEROPS_PROCESS_TERMINAL` means "keep waiting", including a status this build has never
+ * seen — which is why an unpublished vocabulary (see that constant) can cost a timeout and never a false
+ * success. A non-`FINISHED` terminal status throws, naming the status and nothing else.
+ */
+export const waitForProcess = async (input: {
+	api: Pick<ZeropsApi, 'getProcess'>
+	processId: string
+	sleep: Sleeper
+	signal: AbortSignal
+	/** What to call this process in a failure or timeout message. Defaults to its id. */
+	label?: string
+	intervalMs?: number
+	attempts?: number
+}): Promise<ZeropsProcess> => {
+	const label = input.label ?? input.processId
+	const intervalMs = input.intervalMs ?? PROCESS_POLL_INTERVAL_MS
+	const attempts = input.attempts ?? PROCESS_POLL_ATTEMPTS
+	for (let attempt = 0;; attempt += 1) {
+		// A `Sleeper` resolves early on abort, so without this the loop would spin out its whole budget
+		// against a cancelled run.
+		if (input.signal.aborted) {
+			throw new Error(`zerops: waiting for ${label} was cancelled`)
+		}
+		const process = await input.api.getProcess({ processId: input.processId, signal: input.signal })
+		if (process.status !== undefined && ZEROPS_PROCESS_TERMINAL.has(process.status)) {
+			if (process.status !== ZEROPS_PROCESS_FINISHED) {
+				throw new Error(`zerops: ${label} finished as ${process.status}`)
+			}
+			return process
+		}
+		if (attempt >= attempts) {
+			throw new Error(`zerops: ${label} did not finish in time`)
+		}
+		await input.sleep(intervalMs, input.signal)
 	}
 }

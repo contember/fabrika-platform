@@ -65,6 +65,8 @@ export const fakeZerops = (options: {
 		importServices: NEVER('importServices'),
 		importProject: NEVER('importProject'),
 		cancelBuild: NEVER('cancelBuild'),
+		getProcess: NEVER('getProcess'),
+		createIntegrationToken: NEVER('createIntegrationToken'),
 		deleteServiceEnv: NEVER('deleteServiceEnv'),
 		getProjectEnv: NEVER('getProjectEnv'),
 		getLogAccess: NEVER('getLogAccess'),

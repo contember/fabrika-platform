@@ -24,11 +24,16 @@
 // for a whole project. Each platform service is deployed on its own, by its own pipeline, selecting its
 // own named setup from the repository-root `zerops.yaml` (see `./setups.ts`).
 //
+// The light tier ALSO emits the same services with no `project:` block, for a project the operator
+// created by hand — that is `POST /project/{id}/service-stack/import`, and a `project:` block is invalid
+// there. See `ProjectTopology.servicesTarget`.
+//
 // ── Two things that cannot be fixed afterwards ────────────────────────────────────────────────────
 //
 //   1. `envIsolation` is settable at project CREATION only — `RequestPutProject` has no such field. A
 //      project created without it can never be corrected, so the compiler writes it unconditionally at
-//      BOTH levels and `assertZeropsInvariants` refuses to serialize a document missing it.
+//      both levels of a document that creates a project, and on every service of one that does not;
+//      `assertZeropsInvariants` refuses to serialize a document missing it.
 //   2. `corePackage` is upgrade-only and its upgrade is partially destructive. `assertCorePackageIsExplicit`
 //      makes leaving it to the LIGHT default an error rather than a silent choice.
 //
@@ -112,6 +117,15 @@ export interface ProjectTopology {
 	id: string
 	/** The source declaration compiled into the generated topology artifacts. */
 	target: ZeropsSourceTarget
+	/**
+	 * The SAME services with no `project` block, for a project the operator created by hand.
+	 *
+	 * A document carrying `project:` is only valid at `POST /client/{clientId}/project/import`, which
+	 * CREATES a project — and Zerops permits duplicate project names, so applying one at an existing
+	 * installation risks a second project rather than failing. Present only on the tiers a bootstrap
+	 * imports into an existing project.
+	 */
+	servicesTarget?: ZeropsSourceTarget
 	/** The one service allowed to be publicly routed (ADR-0007). Always the proxy. */
 	publicService: string
 	/** Present on app namespaces so fixtures can prove the selected isolation tier. */
@@ -297,60 +311,67 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
  * `corePackage: LIGHT` is stated rather than defaulted for exactly the reason `assertCorePackageIsExplicit`
  * exists: it is upgrade-only, and an installation that starts here should have chosen to.
  */
-const lightPlatformTopology = (options: TopologyOptions, publicAccess: PublicAccess): ProjectTopology => ({
-	id: 'platform-light',
-	publicService: PROXY_HOSTNAME,
-	target: {
-		platform: 'zerops',
-		project: {
-			name: 'platform',
-			description: 'fabrika light tier: control plane, Operations, IAM, the auth proxy and the apps they serve, on shared data services.',
-			corePackage: 'LIGHT',
-			tags: ['fabrika', 'platform', 'light', options.env],
+const lightPlatformTopology = (options: TopologyOptions, publicAccess: PublicAccess): ProjectTopology => {
+	// ONE services function behind both targets, so the services-only form cannot drift from the one
+	// that creates the project. Same shape as `compileZeropsNamespaceTopology` in @fabrika/provider-zerops.
+	const services = (): ZeropsServiceSpec[] => [
+		{
+			// ONE database for IAM, control, Operations and every app in this project. Which schema each
+			// one gets is not expressed here — it is `FABRIKA_*_DATABASE_URL`, written per installation
+			// through the env API, because this same repository-root `zerops.yaml` serves both tiers and
+			// a `${operationsdb_connectionString}` baked into it would name a service `light` does not have.
+			hostname: 'db',
+			type: 'postgresql:single@18',
+			// `oltp-staging` is also this type's default, written out because a default is not a
+			// choice. It is the one profile below `oltp-production` that still sets a 1 GB memory
+			// floor, and this single service holds IAM, control, Operations AND the apps beside them
+			// — `oltp-hobby` sets no floor at all, which is right for one dev database and not for
+			// four tenants sharing one.
+			profile: 'oltp-staging',
+			priority: 100,
 		},
-		services: () => [
-			{
-				// ONE database for IAM, control, Operations and every app in this project. Which schema each
-				// one gets is not expressed here — it is `FABRIKA_*_DATABASE_URL`, written per installation
-				// through the env API, because this same repository-root `zerops.yaml` serves both tiers and
-				// a `${operationsdb_connectionString}` baked into it would name a service `light` does not have.
-				hostname: 'db',
-				type: 'postgresql:single@18',
-				// `oltp-staging` is also this type's default, written out because a default is not a
-				// choice. It is the one profile below `oltp-production` that still sets a 1 GB memory
-				// floor, and this single service holds IAM, control, Operations AND the apps beside them
-				// — `oltp-hobby` sets no floor at all, which is right for one dev database and not for
-				// four tenants sharing one.
-				profile: 'oltp-staging',
-				priority: 100,
+		{
+			// ONE bucket. Prefix-disjoint by construction: `runs/` (control) vs `events/`, `dead/` and
+			// `source-maps/` (Operations).
+			hostname: 'storage',
+			type: 'object-storage',
+			objectStorageSize: 25,
+			objectStoragePolicy: 'private',
+			enableCdn: false,
+			priority: 100,
+		},
+		runtime({ hostname: 'iam', type: 'alpine/bun@1.3', priority: 50, minContainers: 1, maxContainers: 2 }),
+		runtime({ hostname: 'operations', type: 'alpine/bun@1.3', priority: 40, minContainers: 1, maxContainers: 2 }),
+		runtime({ hostname: 'control', type: 'alpine/bun@1.3', priority: 30, minContainers: 1, maxContainers: 2 }),
+		runtime({
+			hostname: PROXY_HOSTNAME,
+			type: 'alpine@3.21',
+			priority: 10,
+			public: publicAccess === 'zerops-subdomain',
+			// Still the only publicly routed service (ADR-0007). One container is a real availability
+			// trade and the reason this tier is not for production; it is not a relaxation of the rule
+			// about WHICH service faces the internet.
+			minContainers: 1,
+			maxContainers: 2,
+		}),
+	]
+	return {
+		id: 'platform-light',
+		publicService: PROXY_HOSTNAME,
+		target: {
+			platform: 'zerops',
+			project: {
+				name: 'platform',
+				description: 'fabrika light tier: control plane, Operations, IAM, the auth proxy and the apps they serve, on shared data services.',
+				corePackage: 'LIGHT',
+				tags: ['fabrika', 'platform', 'light', options.env],
 			},
-			{
-				// ONE bucket. Prefix-disjoint by construction: `runs/` (control) vs `events/`, `dead/` and
-				// `source-maps/` (Operations).
-				hostname: 'storage',
-				type: 'object-storage',
-				objectStorageSize: 25,
-				objectStoragePolicy: 'private',
-				enableCdn: false,
-				priority: 100,
-			},
-			runtime({ hostname: 'iam', type: 'alpine/bun@1.3', priority: 50, minContainers: 1, maxContainers: 2 }),
-			runtime({ hostname: 'operations', type: 'alpine/bun@1.3', priority: 40, minContainers: 1, maxContainers: 2 }),
-			runtime({ hostname: 'control', type: 'alpine/bun@1.3', priority: 30, minContainers: 1, maxContainers: 2 }),
-			runtime({
-				hostname: PROXY_HOSTNAME,
-				type: 'alpine@3.21',
-				priority: 10,
-				public: publicAccess === 'zerops-subdomain',
-				// Still the only publicly routed service (ADR-0007). One container is a real availability
-				// trade and the reason this tier is not for production; it is not a relaxation of the rule
-				// about WHICH service faces the internet.
-				minContainers: 1,
-				maxContainers: 2,
-			}),
-		],
-	},
-})
+			services,
+		},
+		// The light tier is the one an operator installs into a project they created themselves.
+		servicesTarget: { platform: 'zerops', services },
+	}
+}
 
 /**
  * An application namespace: one proxy plus the namespace-owned resources selected by its preset.
@@ -414,7 +435,13 @@ export const fabrikaTopologies = (): ProjectTopology[] => [
 	appsTopology({ env: 'prod', corePackage: 'SERIOUS' }),
 ]
 
-/** A compiled topology in both of the forms an operator needs. */
+/** One compiled form: the document, and the YAML text an operator applies. */
+export interface CompiledDocument {
+	document: ZeropsImportDocument
+	yaml: string
+}
+
+/** A compiled topology in every form an operator needs. */
 export interface CompiledTopology {
 	topology: ProjectTopology
 	/**
@@ -422,7 +449,7 @@ export interface CompiledTopology {
 	 * deploy. Applying this a second time at a project whose services already carry code activates a new
 	 * EMPTY app version on each of them — verified live. It is not a reconcile document.
 	 */
-	provision: { document: ZeropsImportDocument; yaml: string }
+	provision: CompiledDocument
 	/**
 	 * Steady state: the same document, re-appliable because every service carries `override: true`.
 	 *
@@ -431,7 +458,19 @@ export interface CompiledTopology {
 	 * as it is — a changed `profile`, `minContainers` or `objectStorageSize` in here is accepted by the
 	 * API and silently ignored. Changing a live service is a separate, field-specific API call.
 	 */
-	steady: { document: ZeropsImportDocument; yaml: string }
+	steady: CompiledDocument
+	/**
+	 * The two forms above with no `project:` block, present only when the topology declares a
+	 * `servicesTarget`. These are what `POST /project/{projectId}/service-stack/import` takes, so they
+	 * are the ones a bootstrap applies to a project the operator created.
+	 *
+	 * Nothing is lost by dropping the block: `envIsolation` is settable at project CREATION only, so a
+	 * `project:` here could not correct an existing project even if the endpoint tolerated it, and the
+	 * per-service `envIsolation: service` the compiler writes overrides the project's value anyway
+	 * (ADR-0004).
+	 */
+	servicesProvision?: CompiledDocument
+	servicesSteady?: CompiledDocument
 }
 
 /**
@@ -447,5 +486,14 @@ export const compileTopology = (topology: ProjectTopology, env: string): Compile
 	const steady = compileImportYaml(input)
 	assertTopologyInvariants(provision.document, topology.publicService)
 	assertTopologyInvariants(steady.document, topology.publicService)
-	return { topology, provision, steady }
+	const servicesTarget = topology.servicesTarget
+	if (servicesTarget === undefined) {
+		return { topology, provision, steady }
+	}
+	const servicesInput = { target: servicesTarget, ctx: { env } }
+	const servicesProvision = compileProvisioningYaml(servicesInput)
+	const servicesSteady = compileImportYaml(servicesInput)
+	assertTopologyInvariants(servicesProvision.document, topology.publicService)
+	assertTopologyInvariants(servicesSteady.document, topology.publicService)
+	return { topology, provision, steady, servicesProvision, servicesSteady }
 }

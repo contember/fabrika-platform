@@ -175,6 +175,10 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 		return versions[versions.length - 1] ?? null
 	},
 	cancelBuild: async () => {},
+	getProcess: async ({ processId }) => ({ id: processId, status: 'FINISHED' }),
+	createIntegrationToken: async () => {
+		throw new Error('the namespace operator must not mint a Zerops token')
+	},
 	enableSubdomainAccess: async ({ serviceId }) => {
 		state.calls.push(`enableSubdomain:${serviceId}`)
 		if (state.subdomainNotHttp) {

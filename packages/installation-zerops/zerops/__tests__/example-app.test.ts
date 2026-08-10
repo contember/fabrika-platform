@@ -72,6 +72,8 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		},
 		latestAppVersion: () => Promise.resolve(record('latestAppVersion', { id: 'ver-1', sequence: 1 })),
 		cancelBuild: () => Promise.resolve(record('cancelBuild', undefined)),
+		getProcess: ({ processId }) => Promise.resolve(record('getProcess', { id: processId, status: 'FINISHED' })),
+		createIntegrationToken: () => Promise.reject(new Error('an application deploy must not mint a Zerops token')),
 		enableSubdomainAccess: () => Promise.resolve(record('enableSubdomainAccess', undefined)),
 		getService: ({ serviceId }) => Promise.resolve(record('getService', { id: serviceId, name: NOTES_SERVICE })),
 		findService: ({ hostname }) => Promise.resolve(record('findService', { id: 'svc-api', name: hostname })),

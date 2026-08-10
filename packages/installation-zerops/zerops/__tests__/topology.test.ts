@@ -19,7 +19,15 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { type Artifact, generatedArtifacts, REPO_ROOT } from '../artifacts'
 import { assertCorePackageIsExplicit, assertOnlyPublicService, assertZeropsHostnames } from '../invariants'
-import { appsTopology, compileTopology, fabrikaTopologies, platformTopology, PROXY_HOSTNAME } from '../topology'
+import {
+	appsTopology,
+	type CompiledDocument,
+	type CompiledTopology,
+	compileTopology,
+	fabrikaTopologies,
+	platformTopology,
+	PROXY_HOSTNAME,
+} from '../topology'
 import { validateYaml } from '../validate'
 
 const compiled = fabrikaTopologies().map((topology) => compileTopology(topology, 'prod'))
@@ -43,15 +51,25 @@ describe('every generated import document validates against the PUBLISHED JSON s
 		})
 	}
 
-	test('all six documents exist — provisioning and steady state, for both tiers and the apps project', () => {
+	test('all eight documents exist — provisioning and steady state, plus the light tier services-only pair', () => {
 		expect(importArtifacts().map((artifact) => artifact.path)).toEqual([
 			'packages/installation-zerops/zerops/generated/platform.provision.zerops-import.yaml',
 			'packages/installation-zerops/zerops/generated/platform.zerops-import.yaml',
 			'packages/installation-zerops/zerops/generated/platform-light.provision.zerops-import.yaml',
 			'packages/installation-zerops/zerops/generated/platform-light.zerops-import.yaml',
+			'packages/installation-zerops/zerops/generated/platform-light.services.provision.zerops-import.yaml',
+			'packages/installation-zerops/zerops/generated/platform-light.services.zerops-import.yaml',
 			'packages/installation-zerops/zerops/generated/apps-prod.provision.zerops-import.yaml',
 			'packages/installation-zerops/zerops/generated/apps-prod.zerops-import.yaml',
 		])
+	})
+
+	test('every document names the endpoint that actually accepts it — a `project:` block is project-import only', () => {
+		for (const artifact of importArtifacts()) {
+			const createsProject = /^project:/m.test(artifact.content)
+			expect(`${artifact.path}: ${artifact.content.includes('Apply with: POST /client/{clientId}/project/import') ? 'create' : 'services'}`)
+				.toBe(`${artifact.path}: ${createsProject ? 'create' : 'services'}`)
+		}
 	})
 })
 
@@ -321,6 +339,79 @@ describe('provisioning vs steady state', () => {
 		for (const entry of compiled) {
 			expect(entry.provision.yaml.replaceAll('\n    startWithoutCode: true', '')).toBe(entry.steady.yaml)
 		}
+	})
+})
+
+describe('the light tier also compiles services-only, for a project the operator created by hand', () => {
+	// `POST /client/{clientId}/project/import` is the only endpoint a `project:` block is valid at, and it
+	// CREATES a project — Zerops permits duplicate project names, so applying one at an installation that
+	// already exists yields a second project rather than an error. A bootstrap imports into the operator's
+	// project through `POST /project/{projectId}/service-stack/import`, which takes no such block.
+	const servicesForm = (entry: CompiledTopology | undefined, form: 'servicesProvision' | 'servicesSteady'): CompiledDocument => {
+		const compiledForm = entry?.[form]
+		if (compiledForm === undefined) {
+			throw new Error(`the light topology compiled no \`${form}\` document`)
+		}
+		return compiledForm
+	}
+
+	const servicesProvision = servicesForm(light, 'servicesProvision')
+	const servicesSteady = servicesForm(light, 'servicesSteady')
+	const pairs = [
+		{ label: 'platform-light (services, provision)', form: servicesProvision, paired: light?.provision },
+		{ label: 'platform-light (services, steady)', form: servicesSteady, paired: light?.steady },
+	]
+
+	for (const { label, form, paired } of pairs) {
+		test(`${label}: carries no \`project:\` key, in the document or in the rendered text`, () => {
+			expect(form.document.project).toBeUndefined()
+			expect(form.yaml).not.toMatch(/^project:/m)
+		})
+
+		test(`${label}: EVERY service still carries \`envIsolation: service\` — which is why the block can go`, () => {
+			// ADR-0004's protection survives the missing block because the per-service value overrides the
+			// project's, and the compiler writes it from a constant on every entry it builds. Without this the
+			// document would be relying on an isolation setting nothing here can set or read back.
+			expect(form.document.services.length).toBeGreaterThan(0)
+			expect(form.document.services.map((service) => service.envIsolation)).toEqual(form.document.services.map(() => 'service'))
+			expect(form.yaml).not.toContain('envIsolation: none')
+		})
+
+		test(`${label}: declares exactly what the project-creating form declares`, () => {
+			// One `services` function behind both targets. A failure here means the bootstrap would provision
+			// something other than what the committed topology describes.
+			expect(form.document.services).toEqual(paired?.document.services ?? [])
+			// Same text, minus the leading block — the only difference between the two documents.
+			expect(paired?.yaml.endsWith(form.yaml)).toBe(true)
+		})
+	}
+
+	test('the services-only provisioning form starts EVERY service without code, so secrets precede any build', () => {
+		expect(servicesProvision.document.services.map((service) => service.startWithoutCode)).toEqual(
+			servicesProvision.document.services.map(() => true),
+		)
+		expect(servicesProvision.yaml).toContain('startWithoutCode: true')
+	})
+
+	test('and the services-only steady form does not — re-applying THAT at a service carrying code blanks it', () => {
+		expect(servicesSteady.document.services.every((service) => service.startWithoutCode === undefined)).toBe(true)
+		expect(servicesSteady.yaml).not.toContain('startWithoutCode')
+	})
+
+	test('both are committed, and the committed text has no `project:` line either', () => {
+		const committed = importArtifacts().filter((artifact) => artifact.path.includes('.services'))
+		expect(committed.map((artifact) => artifact.path)).toEqual([
+			'packages/installation-zerops/zerops/generated/platform-light.services.provision.zerops-import.yaml',
+			'packages/installation-zerops/zerops/generated/platform-light.services.zerops-import.yaml',
+		])
+		for (const artifact of committed) {
+			expect(artifact.content).not.toMatch(/^project:/m)
+			expect(artifact.content).toContain('Apply with: POST /project/{projectId}/service-stack/import')
+		}
+	})
+
+	test('only the light tier declares one — the standard tier spans two projects fabrika creates itself', () => {
+		expect(compiled.filter((entry) => entry.servicesProvision !== undefined).map((entry) => entry.topology.id)).toEqual(['platform-light'])
 	})
 })
 

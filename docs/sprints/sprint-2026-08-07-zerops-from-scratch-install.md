@@ -258,3 +258,21 @@ Two things this did NOT establish, stated so nobody reads more into it than it s
 that `zops service list` returned one line earlier, on two separate projects; `zops env show` works.
 The probe used `@fabrika/provider-zerops`'s own client instead, which is the code path the bootstrap
 will use anyway. Not investigated further — it is not our CLI.
+
+**WU2 — done (2026-08-10).** `platform-light` now declares a `servicesTarget`: the SAME `services`
+function behind a second `ZeropsSourceTarget` with `project` omitted, exactly the shape
+`compileZeropsNamespaceTopology` already used (`provider-zerops/src/namespace.ts:416`). It compiles
+through `compileProvisioningYaml` and `compileImportYaml` into two committed artifacts,
+`platform-light.services{,.provision}.zerops-import.yaml`, which `platform plan` validates (9 artifacts,
+zero schema errors) and `gen:check` covers (11 up to date).
+
+- **The header fix is wider than the sprint said.** `artifacts.ts` mislabelled the endpoint AND the
+  isolation note. `Apply with:` is now derived from the document — a `project:` block means
+  `POST /client/{clientId}/project/import`, its absence means the service-stack endpoint — which
+  corrected the steady header on all three project-bearing artifacts, not only the light one. The
+  ADR-0004 line said "`envIsolation: service` at BOTH levels" and would have been false on a
+  services-only document; it now states, for that shape, that the project it lands in must already
+  carry `envIsolation: service`. That is the open decision's "the operator instructions must say it",
+  said in the file the operator applies.
+- **Only the light tier gets one**, pinned by a test. The standard tier is two projects fabrika creates
+  itself; app namespaces already had their own services-only compile.

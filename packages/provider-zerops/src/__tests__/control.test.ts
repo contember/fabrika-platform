@@ -127,6 +127,10 @@ const makeApi = (recorded: Recorded, status: () => ZeropsAppVersionStatus = () =
 	cancelBuild: async ({ appVersionId }) => {
 		recorded.calls.push(`cancelBuild:${appVersionId}`)
 	},
+	getProcess: async ({ processId }) => ({ id: processId, status: 'FINISHED' }),
+	createIntegrationToken: async () => {
+		throw new Error('the control provider must not mint a Zerops token')
+	},
 	enableSubdomainAccess: async ({ serviceId }) => {
 		recorded.calls.push(`enableSubdomainAccess:${serviceId}`)
 	},

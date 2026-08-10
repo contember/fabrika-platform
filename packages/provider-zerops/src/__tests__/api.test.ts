@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { createZeropsApi, type FetchLike, ZEROPS_SERVICE_NOT_HTTP, ZeropsApiError } from '../api'
+import { createZeropsApi, type FetchLike, waitForProcess, ZEROPS_SERVICE_NOT_HTTP, ZeropsApiError } from '../api'
+import type { Sleeper } from '../collaborators'
 
 const jsonResponse = (body: unknown, status = 200): Response =>
 	new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -319,5 +320,214 @@ describe('Zerops subdomain access', () => {
 
 		expect(error).toBeInstanceOf(ZeropsApiError)
 		expect(error instanceof ZeropsApiError ? error.code : '').toBe(ZEROPS_SERVICE_NOT_HTTP)
+	})
+})
+
+describe('Zerops integration tokens', () => {
+	test('mints a project-scoped token and states the client role even when it is the schema default', async () => {
+		const log: { method: string; url: string; body: unknown }[] = []
+		const fetchImpl: FetchLike = async (url, init) => {
+			log.push({ method: init?.method ?? 'GET', url, body: init?.body === undefined ? undefined : JSON.parse(init.body) })
+			return jsonResponse({
+				id: 'token-1',
+				name: 'fabrika-control',
+				token: 'zi-minted-value',
+				roleCode: 'NO_ACCESS',
+				projects: [{ projectId: 'project-1', roleCode: 'ADMIN' }],
+				created: '2026-08-10T00:00:00Z',
+				lastUpdate: '2026-08-10T00:00:00Z',
+			})
+		}
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await expect(
+			api.createIntegrationToken({
+				clientId: 'client-1',
+				name: 'fabrika-control',
+				projects: [{ projectId: 'project-1', roleCode: 'ADMIN' }],
+				signal: signal(),
+			}),
+		).resolves.toEqual({
+			id: 'token-1',
+			name: 'fabrika-control',
+			token: 'zi-minted-value',
+			roleCode: 'NO_ACCESS',
+			projects: [{ projectId: 'project-1', roleCode: 'ADMIN' }],
+		})
+		expect(log).toEqual([{
+			method: 'POST',
+			url: 'https://zerops.test/client/client-1/integration-token',
+			// `roleCode` is on the wire although `NO_ACCESS` is what the schema would have defaulted to.
+			body: { name: 'fabrika-control', roleCode: 'NO_ACCESS', projects: [{ projectId: 'project-1', roleCode: 'ADMIN' }] },
+		}])
+	})
+
+	test('sends an explicitly requested client role and never asks for project creation', async () => {
+		const bodies: unknown[] = []
+		const fetchImpl: FetchLike = async (_url, init) => {
+			bodies.push(init?.body === undefined ? undefined : JSON.parse(init.body))
+			return jsonResponse({ id: 'token-1', name: 'ci', token: 'zi-x', projects: [] })
+		}
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await api.createIntegrationToken({
+			clientId: 'client-1',
+			name: 'ci',
+			projects: [{ projectId: 'project-1', roleCode: 'BASIC_USER' }],
+			roleCode: 'READ_ONLY',
+			signal: signal(),
+		})
+
+		expect(bodies).toEqual([{ name: 'ci', roleCode: 'READ_ONLY', projects: [{ projectId: 'project-1', roleCode: 'BASIC_USER' }] }])
+		expect(JSON.stringify(bodies)).not.toContain('canCreateProjects')
+	})
+
+	test('reports a role this build does not know as absent rather than guessing one', async () => {
+		const fetchImpl: FetchLike = async () =>
+			jsonResponse({ id: 'token-1', name: 'ci', token: 'zi-x', roleCode: 'ARCHITECT', projects: [{ projectId: 'project-1' }] })
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await expect(
+			api.createIntegrationToken({ clientId: 'client-1', name: 'ci', projects: [{ projectId: 'project-1', roleCode: 'ADMIN' }], signal: signal() }),
+		).resolves.toEqual({
+			id: 'token-1',
+			name: 'ci',
+			token: 'zi-x',
+			roleCode: undefined,
+			// The response omitted this grant's `roleCode`; the schema's `NO_ACCESS` default is not substituted.
+			projects: [{ projectId: 'project-1', roleCode: undefined }],
+		})
+	})
+
+	test('drops a server message that quotes the minted token and keeps the platform code', async () => {
+		const minted = 'zi-token-that-must-not-leak'
+		const fetchImpl: FetchLike = async () => jsonResponse({ error: { code: 'invalidUserInput', message: `token ${minted} could not be stored` } }, 422)
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		const error = await api
+			.createIntegrationToken({ clientId: 'client-1', name: 'ci', projects: [{ projectId: 'project-1', roleCode: 'ADMIN' }], signal: signal() })
+			.catch((cause: unknown) => cause)
+
+		expect(error).toBeInstanceOf(ZeropsApiError)
+		const message = error instanceof Error ? error.message : String(error)
+		expect(message).toBe('zerops: create integration token failed (422) — invalidUserInput')
+		expect(message).not.toContain(minted)
+		expect(error instanceof ZeropsApiError ? error.status : 0).toBe(422)
+		expect(error instanceof ZeropsApiError ? error.code : '').toBe('invalidUserInput')
+	})
+
+	test('propagates a non-2xx that carries no error envelope', async () => {
+		const fetchImpl: FetchLike = async () => new Response('nope', { status: 503 })
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		const error = await api
+			.createIntegrationToken({ clientId: 'client-1', name: 'ci', projects: [{ projectId: 'project-1', roleCode: 'ADMIN' }], signal: signal() })
+			.catch((cause: unknown) => cause)
+
+		expect(error).toBeInstanceOf(ZeropsApiError)
+		expect(error instanceof ZeropsApiError ? error.status : 0).toBe(503)
+		expect(error instanceof Error ? error.message : '').toBe('zerops: create integration token failed (503)')
+	})
+})
+
+/** Answer `GET /process/{id}` with one status per call, holding the last one once the script runs out. */
+const processStatuses = (statuses: readonly string[], urls: string[]): FetchLike => {
+	let poll = 0
+	return async (url) => {
+		urls.push(url)
+		const status = statuses[Math.min(poll, statuses.length - 1)]
+		poll++
+		return jsonResponse({ id: 'process-1', status, actionName: 'stack.updateUserData', serviceStackId: 'service-1' })
+	}
+}
+
+const recordingSleep = (slept: number[]): Sleeper => async (ms) => {
+	slept.push(ms)
+}
+
+describe('Zerops processes', () => {
+	test('reads one process by id and lifts the app-version id out of its nested object', async () => {
+		const urls: string[] = []
+		const fetchImpl: FetchLike = async (url) => {
+			urls.push(url)
+			return jsonResponse({
+				id: 'process-1',
+				status: 'FINISHED',
+				actionName: 'stack.deploy',
+				serviceStackId: 'service-1',
+				appVersion: { id: 'version-9', sequence: 3 },
+			})
+		}
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await expect(api.getProcess({ processId: 'process-1', signal: signal() })).resolves.toEqual({
+			id: 'process-1',
+			status: 'FINISHED',
+			actionName: 'stack.deploy',
+			serviceStackId: 'service-1',
+			appVersionId: 'version-9',
+		})
+		expect(urls).toEqual(['https://zerops.test/process/process-1'])
+	})
+
+	test('keeps the platform code when a process cannot be read', async () => {
+		const fetchImpl: FetchLike = async () => jsonResponse({ error: { code: 'processNotFound', message: 'Process not found.' } }, 404)
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		const error = await api.getProcess({ processId: 'process-1', signal: signal() }).catch((cause: unknown) => cause)
+
+		expect(error).toBeInstanceOf(ZeropsApiError)
+		expect(error instanceof ZeropsApiError ? error.status : 0).toBe(404)
+		expect(error instanceof ZeropsApiError ? error.code : '').toBe('processNotFound')
+	})
+
+	test('polls until the process reports FINISHED and returns it', async () => {
+		const urls: string[] = []
+		const slept: number[] = []
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: processStatuses(['PENDING', 'RUNNING', 'FINISHED'], urls),
+		})
+
+		const finished = await waitForProcess({ api, processId: 'process-1', sleep: recordingSleep(slept), signal: signal(), intervalMs: 7 })
+
+		expect(finished.id).toBe('process-1')
+		expect(finished.status).toBe('FINISHED')
+		expect(urls).toHaveLength(3)
+		expect(slept).toEqual([7, 7])
+	})
+
+	test('throws naming the terminal status a failed process ended on', async () => {
+		const urls: string[] = []
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: processStatuses(['RUNNING', 'FAILED'], urls) })
+
+		await expect(
+			waitForProcess({ api, processId: 'process-1', sleep: recordingSleep([]), signal: signal(), intervalMs: 1, label: 'the import' }),
+		).rejects.toThrow('zerops: the import finished as FAILED')
+	})
+
+	test('treats a status this build has never seen as "keep waiting", so it times out instead of succeeding', async () => {
+		const urls: string[] = []
+		const slept: number[] = []
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: processStatuses(['SOMETHING_NEW'], urls) })
+
+		await expect(
+			waitForProcess({ api, processId: 'process-1', sleep: recordingSleep(slept), signal: signal(), intervalMs: 1, attempts: 3 }),
+		).rejects.toThrow('zerops: process-1 did not finish in time')
+		expect(urls).toHaveLength(4)
+		expect(slept).toEqual([1, 1, 1])
+	})
+
+	test('stops on a cancelled run instead of spending its whole budget against an early-resolving sleeper', async () => {
+		const urls: string[] = []
+		const controller = new AbortController()
+		controller.abort()
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: processStatuses(['PENDING'], urls) })
+
+		await expect(
+			waitForProcess({ api, processId: 'process-1', sleep: recordingSleep([]), signal: controller.signal, intervalMs: 1 }),
+		).rejects.toThrow('zerops: waiting for process-1 was cancelled')
+		expect(urls).toEqual([])
 	})
 })

@@ -62,6 +62,10 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		cancelBuild: async () => {
 			recorded.calls.push('cancelBuild')
 		},
+		getProcess: async ({ processId }) => ({ id: processId, status: 'FINISHED' }),
+		createIntegrationToken: async () => {
+			throw new Error('the deploy driver must not mint a Zerops token')
+		},
 		enableSubdomainAccess: async () => {
 			recorded.calls.push('enableSubdomainAccess')
 		},

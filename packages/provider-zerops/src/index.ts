@@ -1,4 +1,15 @@
-export { asAppVersionStatus, createZeropsApi, ZEROPS_ACTIVE, ZEROPS_API_BASE, ZEROPS_SERVICE_NOT_HTTP, ZEROPS_TERMINAL, ZeropsApiError } from './api'
+export {
+	asAppVersionStatus,
+	createZeropsApi,
+	waitForProcess,
+	ZEROPS_ACTIVE,
+	ZEROPS_API_BASE,
+	ZEROPS_PROCESS_FINISHED,
+	ZEROPS_PROCESS_TERMINAL,
+	ZEROPS_SERVICE_NOT_HTTP,
+	ZEROPS_TERMINAL,
+	ZeropsApiError,
+} from './api'
 export type {
 	FetchLike,
 	ZeropsApi,
@@ -7,15 +18,18 @@ export type {
 	ZeropsAppVersionStatus,
 	ZeropsImportedService,
 	ZeropsImportResult,
+	ZeropsIntegrationToken,
 	ZeropsLogAccess,
 	ZeropsLogLine,
 	ZeropsProcess,
 	ZeropsProject,
 	ZeropsProjectMode,
 	ZeropsProjectStatus,
+	ZeropsRoleCode,
 	ZeropsService,
 	ZeropsServiceEnv,
 	ZeropsServiceStatus,
+	ZeropsTokenProjectGrant,
 } from './api'
 export { defineApp, isZeropsAppConfig, useSharedPostgres, zeropsSharedServiceHostname, zeropsSharedServicePrefix } from './authoring'
 export type { ZeropsAuthoredAppConfig } from './authoring'

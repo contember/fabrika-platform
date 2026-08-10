@@ -3,7 +3,7 @@
 # Source: packages/installation-zerops/zerops/topology.ts
 # Regenerate: bun run --filter @fabrika/installation-zerops gen
 #
-# Apply with: POST /project/{projectId}/service-stack/import  { yaml }
+# Apply with: POST /client/{clientId}/project/import  { yaml }
 #
 # `envIsolation: service` at BOTH levels and the absence of any project-level `envVariables` are
 # written by the compiler, not by the declaration, and re-checked before serialization (ADR-0004).
