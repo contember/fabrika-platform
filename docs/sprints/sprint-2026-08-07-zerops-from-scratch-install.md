@@ -484,3 +484,14 @@ Verified afterwards by behaviour, not readiness:
 | `GET <console>/`                  | **302**                                                    |
 | `GET <operations>/`               | **403**                                                    |
 | `GET <iam>/.well-known/jwks.json` | **1 key, `EC`/`P-256`/`ES256`, `use=sig`, no private `d`** |
+
+**Acceptance 4 met, and WU5 is done.** Editing `fabrika.ref` from `v0.0.4`'s predecessor and pushing —
+no `[skip ci]`, no dispatch — produced a `push` run titled after that commit which deployed the whole
+installation green and left the four probes above unchanged. That is the file doing the one job it
+exists for.
+
+**What WU5 cost and returned.** Two releases (`v0.0.3`, `v0.0.4`), five CI runs on the sidecar, and
+three defects, every one of them in code that shipped, carried unit tests against fake APIs, and had
+never been executed. None of the three is reachable from this repository's test suite: one is a
+terminal-interaction property, one is a workspace-linking property, and one is an install-ordering
+race. The emulator would have reproduced none of them.
