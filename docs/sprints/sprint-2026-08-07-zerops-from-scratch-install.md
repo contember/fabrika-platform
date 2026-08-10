@@ -391,3 +391,42 @@ What it changed here:
 Still open, and only a live run can close it: everything after the import. `createIntegrationToken`'s
 runtime behaviour is unmeasured — whether client `NO_ACCESS` alongside a project `ADMIN` grant is
 accepted at all, and what the minted value looks like — as are both passes end to end.
+
+### WU5 — `platform init`, run for the first time (2026-08-10)
+
+Run against the WU3 installation. Both Environment secrets were READ off it — the minted integration
+token from `control`, the provisioning key from `iam` — and reached `init` through the environment, so
+neither was typed at a prompt or printed. `init`'s own project check passed **with the minted token**,
+which is the second live confirmation that client `NO_ACCESS` alongside a per-project `ADMIN` grant is
+a working platform credential.
+
+**Acceptance 1 met.** `contember/fabrika-zerops-install-test` exists, private, carrying exactly the four
+scaffolded files and pinned at `v0.0.2`.
+
+**Finding A — `init` cannot be driven by a pipe at all.** Every prompt opens its own readline and closes
+it, and closing a readline over a piped stdin discards whatever is already buffered — so answer 2 and
+everything after it is swallowed and the command hangs on question 2. It is the exact mirror of the
+`install` finding above: `install` runs unattended too easily (an empty answer is indistinguishable from
+EOF, and every confirmation defaults to yes), while `init` cannot be run unattended at all. Both were
+found the same way, and neither is visible from a test. Driven here over a PTY.
+
+**Finding B — the generated workflow's `fabrika` did not exist.** The `dry_run` witness failed at the
+deploy step with `fabrika: command not found` (exit 127), having written and deployed nothing. The
+workflow puts `node_modules/.bin` on `PATH` and calls `fabrika`; `bun install` links a workspace
+package's bin only when the ROOT package depends on it, and the root `package.json` never depended on
+`@fabrika/cli`. Confirmed locally rather than inferred: `node_modules/.bin/` held `biome`, `dprint`,
+`opice`, `playwright`, `tsc`, `tsserver` — every one an external dependency — and no `fabrika`.
+
+- **Fixed at the cause.** The root package now declares `@fabrika/cli` as a workspace devDependency,
+  exactly as it already did for `@fabrika/auth-core`, `@fabrika/local-stack` and
+  `@fabrika/operations-contract`. `node_modules/.bin/fabrika` links, and `fabrika platform …` works from
+  a local checkout too — which every document in this repository already assumed.
+- **Both templates now assert the binary** before putting it on `PATH`, so a sidecar pinned to a tag
+  older than this fix fails at that step naming the cause, instead of `exit 127` two steps later.
+- **The Cloudflare sidecar carried the identical line** and is fixed by the same root change; it has
+  never been run either, so nothing had reported it.
+- The workflow file pushes over SSH (`gh` is configured with `git_protocol: ssh`), so the operator's
+  `gh` token needs no `workflow` scope. Worth knowing before someone adds one.
+
+This is the defect class WU5 exists for: `init` and its generated pipeline shipped on 2026-08-06, are
+covered by unit tests against fake APIs, and had never been executed once.
