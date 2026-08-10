@@ -1,5 +1,49 @@
 # Sprint — a Zerops installation from an empty project (2026-08-07)
 
+> ## OUTCOME — shipped 2026-08-10
+>
+> **An operator creates an empty Zerops project and everything after that is `fabrika`.** Proven on a
+> project created EMPTY (`fabrika-install-test`): `platform install` imported six services, generated
+> six secrets, minted control's integration token, ran both passes, and printed the provisioning key;
+> `platform init` created the operator's sidecar repository; that repository's CI deployed the whole
+> installation and, on a later push, rolled it forward. A human then opened an enrollment URL, set a
+> password, signed in, and reached all three console planes — **with `IAM_BOOTSTRAP_ADMINS` set
+> nowhere**, re-read off the running service afterwards to be sure.
+>
+> **Commits.** `d3d2dd9` observe the pass-1 proxy (WU1) · `56d1a84` services-only import (WU2) ·
+> `2caeebc` the install command + `8000963` publish the entry point before registering the console
+> (WU3) · `2946bcf` link the `fabrika` binary + `05bbe13` stop building the console inside
+> `bun install` (WU5 findings B and C) · `22681d0` a readable sign-in failure (WU4 finding D) ·
+> `c80f1c8`/`ac42752` co-versioning at 0.0.3 and 0.0.4, both released to reach the sidecar.
+>
+> **Verification.** Every acceptance is an exercised behaviour, never a readiness probe. On the live
+> installation: `GET <iam>/healthz` 200, `GET <console>/` 302, `GET <operations>/` 403, and a served
+> JWKS of one `EC`/`P-256`/`ES256`/`use=sig` key with **no private `d`** — the one probe that proves the
+> generated signing key parsed. The sidecar's `dry_run` matched the local `--dry-run` line for line, the
+> real run brought `iam → operations → proxy → control` to ACTIVE in that order, and a re-run that
+> deployed new code still reported `already correct` for all four services. `ENVIRONMENT` reads
+> `install-test`, not `local`. Repository-side: typecheck, biome and dprint clean.
+>
+> **Backlog closed.** [62](../backlog/62-generate-the-operators-sidecar-install-repository.md) — the
+> generator existed; what it waited on was a real account and the fresh-account bring-up it deliberately
+> did not cover, and both happened here.
+>
+> **What it cost, and what that bought.** Two releases and five sidecar CI runs. Five defects, every one
+> of them in code that had shipped, carried unit tests against fake APIs, and had never been executed:
+> a registration ordering only a first bring-up exposes, a `fabrika` binary that was never linked, a
+> `prepare` script that raced `bun install` and took `BUILD_FAILED` on a real deploy, a sign-in failure
+> rendered as the single word `Forbidden`, and an `admin` grant scoped to one app leaving two thirds of
+> the console working. None is reachable from this repository's test suite and the Zerops emulator would
+> have reproduced none of them.
+>
+> **Deferred, honestly.** The first administrator is still four hand-made RPC calls — no command does it
+> → [67](../backlog/67-command-for-the-first-administrator.md). `install` and `init` mishandle a closed
+> stdin in opposite directions → [68](../backlog/68-platform-commands-mishandle-a-closed-stdin.md). The
+> Cloudflare sidecar carried the same unlinked-binary defect and is fixed by the same root change, but
+> has still never been run. [65](../backlog/65-pin-a-zerops-build-to-a-revision.md) is now an observation
+> rather than a worry: the WU5 fix reached the platform builds through `main` and not through the pinned
+> tag, because a Zerops build source names a repository.
+
 **Goal.** The operator creates an empty Zerops project by hand. Everything after that is `fabrika`:
 provision the topology, generate and place every secret, bring the installation up, and hand the
 operator the one key `platform init` will ask for. Authentication is **password only**.
@@ -296,10 +340,9 @@ the signer, so an ACTIVE deploy with a malformed `FABRIKA_IAM_SIGNING_KEYS` look
 working one. A served JWKS means `Signer.fromPrivateJwks` parsed the generated key. A full mint — a
 signed session — still waits on the first sign-in, which is WU4.
 
-**Finding to weigh, not yet filed.** Every confirmation in `install` defaults to yes, and an empty
-answer is indistinguishable from EOF, so the command runs unattended end to end when stdin is closed.
-It reads as a guard against a human typing `n`, not against non-interactive execution — worth deciding
-deliberately for a command that mutates a cloud account.
+**Finding.** Every confirmation in `install` defaults to yes and an empty answer is indistinguishable
+from EOF, so the command runs unattended end to end when stdin is closed — a guard against a human
+typing `n`, not against nobody being there. → [68](../backlog/68-platform-commands-mishandle-a-closed-stdin.md).
 
 **Tooling note.** `zops env list` and `zops env set` fail with `Service stack not found` on service ids
 that `zops service list` returned one line earlier, on two separate projects; `zops env show` works.
@@ -405,10 +448,9 @@ scaffolded files and pinned at `v0.0.2`.
 
 **Finding A — `init` cannot be driven by a pipe at all.** Every prompt opens its own readline and closes
 it, and closing a readline over a piped stdin discards whatever is already buffered — so answer 2 and
-everything after it is swallowed and the command hangs on question 2. It is the exact mirror of the
-`install` finding above: `install` runs unattended too easily (an empty answer is indistinguishable from
-EOF, and every confirmation defaults to yes), while `init` cannot be run unattended at all. Both were
-found the same way, and neither is visible from a test. Driven here over a PTY.
+everything after it is swallowed and the command hangs on question 2. Driven here over a PTY instead.
+It is the exact mirror of the `install` finding above, and the two were filed together →
+[68](../backlog/68-platform-commands-mishandle-a-closed-stdin.md).
 
 **Finding B — the generated workflow's `fabrika` did not exist.** The `dry_run` witness failed at the
 deploy step with `fabrika: command not found` (exit 127), having written and deployed nothing. The
@@ -495,3 +537,48 @@ three defects, every one of them in code that shipped, carried unit tests agains
 never been executed. None of the three is reachable from this repository's test suite: one is a
 terminal-interaction property, one is a workspace-linking property, and one is an install-ordering
 race. The emulator would have reproduced none of them.
+
+### WU4 — the first administrator, and the first human sign-in (2026-08-10)
+
+Walked against the WU3 installation through `/admin/rpc` with the provisioning key, in four calls:
+`principals.list` (so a re-run is idempotent), `principals.invite`, `grants.create`,
+`passwords.issueEnrollment`. The operator opened the printed URL, set a password, signed in, and
+reached the console.
+
+**Acceptance met, and decision 2 holds in the deployed state rather than only in the plan.** The `iam`
+service's environment was re-read afterwards — KEYS only, never values — and carries no
+`IAM_BOOTSTRAP_ADMINS` and no `FABRIKA_IAM_BOOTSTRAP_ADMINS` at all. `ENVIRONMENT` reads `install-test`
+on both `iam` and `control`, so the defect [59](../backlog/59-the-live-installation-calls-itself-local.md)
+records against `fabrika-test` does not reproduce on an installation `platform install` created.
+
+**No command does any of this** — it is four RPC calls a throwaway script made, and the sprint's scope
+never asked for more. → [67](../backlog/67-command-for-the-first-administrator.md), which also carries
+the input-shape trap found on the way: `grants.create` takes `principalId` while
+`passwords.issueEnrollment` takes `PrincipalIdInput`, which keys on `id`, so the obvious call returns
+`400 id: Required`.
+
+**Finding D — the first sign-in failed twice, in two different ways, and only one was a defect.**
+
+1. _"Invalid email or password"_ was not a fault. `audit.listAuthLog` separates the two cases and the
+   sign-in form cannot: the failed attempts carried no `principalId` (no such email), while a
+   deliberately wrong password against the right address carried the principal's id. The operator had
+   typed a different address. `ACCOUNT_MAX_ATTEMPTS` is 5, so the diagnostic attempt was budgeted before
+   it was spent. Keep the technique — that column is the only thing that distinguishes a typo in the
+   address from a typo in the password.
+2. The callback answered a bare `Forbidden`. The handoff was issued at 14:20:17 and opened at 14:50:53;
+   `HANDOFF_COOKIE_TTL_SECONDS` is ten minutes, so the refusal was correct and fail-closed. The word was
+   not. It is the ONE denial a person ever reads — every other one answers an XHR, an app request or
+   Caddy — and it named neither the cause nor a way forward. Fixed in `22681d0`: a self-contained page
+   with a relative link back, no script and no external reference so a strict CSP cannot blank it, and
+   wording that stays coarse because `invalid_session` covers an expired verifier and a refused code
+   alike. Deliberately not an automatic bounce into login — a browser holding IAM's session but not the
+   handoff cookie would loop forever.
+
+**Finding E — an app-scoped `admin` grant is not IAM admin, and the console half-works.** Delivery and
+Operations worked at the first sign-in; Access refused with "your session does not include
+`iam.admin`". Grants filter to the calling app and WU4's grant named `app: vozka`. IAM's own app id
+`propustka` is **not** in `apps.list` — only `vozka` is registered — so a grant naming it would dangle.
+A cross-app grant (`app: null`) fixed it and the console accepted it immediately, with no re-login:
+permissions are read per request, not carried in the session. Whatever command replaces the script must
+write the cross-app grant. An app-scoped one produces a console that is two-thirds working, which is
+harder to diagnose than one that fails outright.

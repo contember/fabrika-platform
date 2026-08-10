@@ -11,9 +11,10 @@ commits to: an evaluator gets a running platform without creating a repository o
 
 ## Problem
 
-The sidecar repository ([62](./62-generate-the-operators-sidecar-install-repository.md)) is the right
-shape for an installation that will be maintained, and too much ceremony for someone deciding whether
-to adopt fabrika at all. Zerops imports a project from a YAML document, and this repository already
+The sidecar repository (shipped and proven live —
+[archive](../archive/sprint-2026-08-07-zerops-from-scratch-install.md)) is the right shape for an
+installation that will be maintained, and too much ceremony for someone deciding whether to adopt
+fabrika at all. Zerops imports a project from a YAML document, and this repository already
 generates and commits those documents — so most of the input exists.
 
 What is missing is everything the document cannot carry:

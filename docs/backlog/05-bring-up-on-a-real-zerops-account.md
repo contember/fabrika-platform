@@ -52,8 +52,10 @@ them.
    ([`36`](./36-complete-zerops-release-artifact-correlation.md)).
 5. **The installation deploys itself from a pipeline, not a laptop.** Bringing this
    installation to HEAD on 2026-08-05 took `zops push` per service in a hand-chosen
-   order — see [`61`](./61-make-platform-deploy-an-unattended-command.md) and
-   [`62`](./62-generate-the-operators-sidecar-install-repository.md).
+   order — see [`61`](./61-make-platform-deploy-an-unattended-command.md). A DIFFERENT,
+   fresh installation has since been deployed and rolled forward entirely from an
+   operator's CI ([archive](../archive/sprint-2026-08-07-zerops-from-scratch-install.md));
+   `fabrika-test` itself has not.
 6. **Human authentication is done on this tier.** Password enrollment, sign-in,
    throttling, admin disable and the audit trail were exercised live on 2026-08-04,
    and so was cross-host browser SSO between two `.zerops.app` hostnames

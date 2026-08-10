@@ -8,9 +8,10 @@ blocked-by: []
 
 **Summary.** npm trusted publishing cannot create a package name for the first time, so the
 twenty-two public packages need one authorized token-based publish through CI before every later
-release can be tokenless. **Now on the critical path**: the repository has no tags, and
-[62](./62-generate-the-operators-sidecar-install-repository.md)'s live acceptance needs the first
-`v*` tag, which necessarily runs `release.yml`.
+release can be tokenless. No longer on the critical path: `v0.0.2`, `v0.0.3` and `v0.0.4` released
+tokenlessly and carried a live installation
+([archive](../archive/sprint-2026-08-07-zerops-from-scratch-install.md)). What is left is step 9 —
+restricting the granular token to the packages it must still touch.
 
 ## Done on 2026-08-07
 

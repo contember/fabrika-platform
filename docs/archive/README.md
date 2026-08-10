@@ -9,6 +9,10 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [A Zerops installation from an empty project (2026-08-07)](sprint-2026-08-07-zerops-from-scratch-install.md)
+  — the operator creates an empty project and `fabrika` does the rest: install, sidecar repository, CI
+  deploy, first administrator. Proven end to end on a fresh account; five defects, all in shipped code
+  that had never been executed.
 - [Exchange-token SSO (2026-08-04)](sprint-2026-08-04-exchange-token-sso.md) — a
   one-time code replaces the shared session cookie, so a browser authenticated at IAM
   reaches an app on any domain; proven live across two `.zerops.app` hostnames.

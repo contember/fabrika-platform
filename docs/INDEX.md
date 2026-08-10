@@ -26,26 +26,18 @@ handoff amendment.
 
 ## Active sprints
 
-[`zerops-from-scratch-install`](sprints/sprint-2026-08-07-zerops-from-scratch-install.md) — the
-operator creates an empty Zerops project by hand and `fabrika` does the rest, password-only. Closes
-the fresh-account half of [`62`](backlog/62-generate-the-operators-sidecar-install-repository.md) that
-`init` and `deploy` deliberately leave open, and gives
-[`63`](backlog/63-a-one-click-install-from-the-public-repository.md) its missing half. The predecessor
-sprint's live acceptance moves here: a fresh project is a better witness than `fabrika-test`, which
-hosts a live application.
-
 [`zerops-platform-deploy`](sprints/sprint-2026-08-06-zerops-platform-deploy.md) — an unattended
 `fabrika platform deploy --provider=zerops`, as wide as
 [ADR-0027](decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md) makes it. All four work
 units are committed, consuming backlog [`58`](backlog/58-generate-the-platform-installations-proxy-manifest.md),
-[`59`](backlog/59-the-live-installation-calls-itself-local.md),
-[`61`](backlog/61-make-platform-deploy-an-unattended-command.md) and most of
-[`62`](backlog/62-generate-the-operators-sidecar-install-repository.md). **Nothing has run against a
-live account**: the generated sidecar needs a published `v*` tag, so the live acceptance now waits on
-[`25`](backlog/25-bootstrap-npm-trusted-publishing.md). It also left
-[`64`](backlog/64-close-the-bootstrap-admission-hatch-automatically.md) and
-[`65`](backlog/65-pin-a-zerops-build-to-a-revision.md) behind; the second install path ADR-0025 commits
-to stays filed as [`63`](backlog/63-a-one-click-install-from-the-public-repository.md).
+[`59`](backlog/59-the-live-installation-calls-itself-local.md) and
+[`61`](backlog/61-make-platform-deploy-an-unattended-command.md). Its successor
+([archived](archive/sprint-2026-08-07-zerops-from-scratch-install.md)) has since run this command
+unattended from an operator's CI against a fresh installation — the live witness this sprint was
+waiting on, though not the `fabrika-test` target `61` names, and the anonymous `GET /api/*` probe in
+that acceptance was not run. It left [`64`](backlog/64-close-the-bootstrap-admission-hatch-automatically.md)
+and [`65`](backlog/65-pin-a-zerops-build-to-a-revision.md) behind; the second install path ADR-0025
+commits to stays filed as [`63`](backlog/63-a-one-click-install-from-the-public-repository.md).
 
 Two auth sprints shipped on 2026-08-05 —
 [hardening](archive/sprint-2026-08-04-auth-hardening.md), then

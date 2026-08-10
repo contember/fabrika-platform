@@ -51,10 +51,11 @@ escape hatch nobody closes, and a pin that pins half of what it claims.
 - [59](59-the-live-installation-calls-itself-local.md) — `control` and `operations` on `fabrika-test` carry `ENVIRONMENT=local`, the value every bypass is gated on.
 - [60](60-the-example-app-has-no-light-tier-descriptor.md) — Neither committed `zerops.yaml` names the shared `db` the example actually runs against, so the live app cannot be redeployed from HEAD.
 - [61](61-make-platform-deploy-an-unattended-command.md) — `fabrika platform deploy` is the public interface an operator's pipeline calls, and it does not deploy a Zerops installation at all.
-- [62](62-generate-the-operators-sidecar-install-repository.md) — The generator now exists on both providers; what remains is the live acceptance and the fresh-account bring-up it does not cover.
 - [63](63-a-one-click-install-from-the-public-repository.md) — The second install shape: a running platform without creating a repository or a CI system.
 - [64](64-close-the-bootstrap-admission-hatch-automatically.md) — A Cloudflare installation comes up admitting on a standing admin list, and closing it is an instruction printed to a human.
 - [65](65-pin-a-zerops-build-to-a-revision.md) — A Zerops build source names a repository, not a revision, so `fabrika.ref` pins the pipeline but not the code Zerops builds.
+- [67](67-command-for-the-first-administrator.md) — A fresh installation comes up with nobody able to sign in, and the four RPC calls that fix that live in a throwaway script.
+- [68](68-platform-commands-mishandle-a-closed-stdin.md) — `platform install` runs unattended when it should refuse, and `platform init` cannot be run unattended at all.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.

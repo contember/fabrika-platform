@@ -5,9 +5,10 @@ clean environment, unattended, idempotently — no `zops` invocation and no hand
 
 **Theme.** [ADR-0025](../decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md)
 makes this command the public interface an operator's pipeline calls. Everything else in the install
-story waits on it: [62](../backlog/62-generate-the-operators-sidecar-install-repository.md) generates
-the caller, [63](../backlog/63-a-one-click-install-from-the-public-repository.md) is the same
-sequence driven from elsewhere. Backlog [58](../backlog/58-generate-the-platform-installations-proxy-manifest.md)
+story waits on it: the sidecar repository generates the caller (since shipped and proven live —
+[archive](../archive/sprint-2026-08-07-zerops-from-scratch-install.md)), and
+[63](../backlog/63-a-one-click-install-from-the-public-repository.md) is the same sequence driven from
+elsewhere. Backlog [58](../backlog/58-generate-the-platform-installations-proxy-manifest.md)
 and [59](../backlog/59-the-live-installation-calls-itself-local.md) are not siblings of
 [61](../backlog/61-make-platform-deploy-an-unattended-command.md) — they are steps inside it, which
 is why they are WUs here rather than separate items.
