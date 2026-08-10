@@ -464,3 +464,23 @@ have work to do.
 
 **The ordered deploy behaved correctly under the failure.** It stopped at `iam` and never triggered
 `operations`, `proxy` or `control` — the property ADR-0027 puts in code rather than in the workflow.
+
+**Acceptance 3 met.** The re-run deployed the whole installation from the operator's CI: four app
+versions built and reached `ACTIVE` in the order `iam → operations → proxy → control`, the entry point
+was ensured, and `vozka` was reconciled with its return origin. Because the Zerops build source names a
+repository and not a revision ([65](../backlog/65-pin-a-zerops-build-to-a-revision.md)), the fix reached
+those builds through `main` rather than through the pinned tag — which is that backlog item stated as an
+observation rather than a worry.
+
+**Acceptance 5 came with it.** Step 3 reported `already correct` for all four services and step 5
+`already published`, on a run that deployed new code — so the read-compare-write claim holds where it
+matters, on a re-run rather than on an empty installation.
+
+Verified afterwards by behaviour, not readiness:
+
+| Probe                             | Result                                                     |
+| --------------------------------- | ---------------------------------------------------------- |
+| `GET <iam>/healthz`               | **200**                                                    |
+| `GET <console>/`                  | **302**                                                    |
+| `GET <operations>/`               | **403**                                                    |
+| `GET <iam>/.well-known/jwks.json` | **1 key, `EC`/`P-256`/`ES256`, `use=sig`, no private `d`** |
