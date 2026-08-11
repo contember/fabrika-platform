@@ -48,11 +48,12 @@ running it live finds, not in what the code looks like when it is written.
   (`control.ts:234-262`), with `managedEnvironment: {}` passed into the run because Zerops has no
   runner to inject them. So WU4 is an observation, not new code — unless it is not.
 - ⚠ **A Zerops run's build log never reaches the run record.** The provider relays it faithfully
-  (`provider.ts:92-114`), but the control plane wires `events.log` to
-  `console.info(\`deploy run ${run.id}: ${line}\`)`(`run-lifecycle.ts:314`).`markRunStarted`stamps`log_key = runs/<id>/logs.ndjson`and the read APIs serve that object (`api/runs.ts:154,176`), whose
-  only writer is the **Cloudflare** runner relay (`runner-cloudflare/src/relay.ts:114`). Every Zerops
-  run therefore answers`GET /runs/:id/log`with`{ lines: [] }`. No CLAUDE.md or ADR mentions this —
-  it reads as an oversight, not a decision. → [`69`](../backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md).
+  (`provider.ts:92-114`), but the control plane wires `events.log` to a `console.info` line and nothing
+  else (`run-lifecycle.ts:314`). `markRunStarted` stamps a `log_key` on the run row and the read APIs
+  serve that object (`api/runs.ts:154,176`), whose only writer is the **Cloudflare** runner relay
+  (`runner-cloudflare/src/relay.ts:114`). Every Zerops run therefore answers `GET /runs/:id/log` with an
+  empty line list. No CLAUDE.md or ADR mentions this — it reads as an oversight, not a decision. →
+  [`69`](../backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md).
 - ⚠ **Neither committed descriptor for the example names a database the light tier has** —
   [`60`](../backlog/60-the-example-app-has-no-light-tier-descriptor.md), unchanged.
 
