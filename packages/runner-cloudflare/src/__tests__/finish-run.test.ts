@@ -52,6 +52,7 @@ describe('finishRun', () => {
 		expect(rec).toHaveLength(1)
 		// The guard makes a double-write (control plane + vozka-runner) idempotent.
 		expect(rec[0]?.query).toContain("status IN ('pending','running')")
+		expect(rec[0]?.query).toContain('cancel_requested_at IS NULL')
 		// `unixepoch()` is SQLite-only; the timestamp is bound, so the statement stays portable.
 		expect(rec[0]?.query).not.toContain('unixepoch')
 		expect(rec[0]?.query).toContain('finished_at = ?')

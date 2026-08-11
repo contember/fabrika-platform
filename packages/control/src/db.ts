@@ -11,6 +11,7 @@
 
 import { DEFAULT_OPERATIONS_SERVICE_KEY } from '@fabrika/operations-contract/catalog'
 import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
+import type { JsonValue } from '@fabrika/provider-contract'
 import { uuidv7 } from './uuid'
 
 // ── Row shapes (snake_case, as migrations/0001_init.sql defines) ───────────────
@@ -151,6 +152,50 @@ export interface RunRow {
 	finished_at: number | null
 	/** Provider-owned operation id, persisted as soon as the provider accepts asynchronous work. */
 	external_run_id: string | null
+	/** Credential-free provider-owned progress, validated before writes and reads. */
+	provider_state_json: string | null
+	/** Set while cancellation owns provider cleanup and blocks ordinary lifecycle writes. */
+	cancel_requested_at: number | null
+}
+
+const isJsonValue = (value: unknown, seen: WeakSet<object> = new WeakSet()): value is JsonValue => {
+	if (value === null || typeof value === 'string' || typeof value === 'boolean') return true
+	if (typeof value === 'number') return Number.isFinite(value)
+	if (typeof value !== 'object' || seen.has(value)) return false
+	if (!Array.isArray(value)) {
+		const prototype: unknown = Object.getPrototypeOf(value)
+		if (prototype !== Object.prototype && prototype !== null) return false
+		if (Reflect.ownKeys(value).length !== Object.keys(value).length) return false
+	}
+	seen.add(value)
+	const valid = Array.isArray(value)
+		? value.every((entry) => isJsonValue(entry, seen))
+		: Object.values(value).every((entry) => isJsonValue(entry, seen))
+	seen.delete(value)
+	return valid
+}
+
+const MAX_PROVIDER_STATE_BYTES = 16 * 1024
+
+/** Parse provider-owned JSON without trusting persisted database text. */
+export const parseProviderJson = (raw: string, label: string): JsonValue => {
+	if (new TextEncoder().encode(raw).byteLength > MAX_PROVIDER_STATE_BYTES) throw new Error(`${label} exceeds 16 KiB`)
+	let value: unknown
+	try {
+		value = JSON.parse(raw)
+	} catch {
+		throw new Error(`${label} is not valid JSON`)
+	}
+	if (!isJsonValue(value)) throw new Error(`${label} is not a JSON value`)
+	return value
+}
+
+const serializeProviderJson = (value: JsonValue): string => {
+	if (!isJsonValue(value)) throw new Error('provider checkpoint is not a JSON value')
+	const serialized = JSON.stringify(value)
+	if (typeof serialized !== 'string') throw new Error('provider checkpoint is not serializable')
+	if (new TextEncoder().encode(serialized).byteLength > MAX_PROVIDER_STATE_BYTES) throw new Error('provider checkpoint exceeds 16 KiB')
+	return serialized
 }
 
 /**
@@ -836,11 +881,28 @@ export class RunRepository {
 		return this.d1.prepare('SELECT * FROM runs WHERE id = ?').bind(id).first<RunRow>()
 	}
 
-	/** Persist a provider-owned operation id as soon as asynchronous work is accepted. */
-	async setRunExternalId(id: string, externalRunId: string): Promise<boolean> {
+	/** Persist a provider-owned operation id and optional resume state in one guarded write. */
+	async setRunExternalId(id: string, externalRunId: string, providerState?: JsonValue): Promise<boolean> {
+		const statement = providerState === undefined
+			? this.d1.prepare(`UPDATE runs SET external_run_id = ?
+				WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL
+					AND (external_run_id IS NULL OR external_run_id = ?)`)
+				.bind(externalRunId, id, externalRunId)
+			: this.d1
+				.prepare(`UPDATE runs SET external_run_id = ?, provider_state_json = ?
+					WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL
+						AND (external_run_id IS NULL OR external_run_id = ?)`)
+				.bind(externalRunId, serializeProviderJson(providerState), id, externalRunId)
+		const result = await statement.run()
+		return (result.meta.changes ?? 0) > 0
+	}
+
+	/** Replace provider resume state only while the run remains active. */
+	async checkpointRunProviderState(id: string, providerState: JsonValue): Promise<boolean> {
 		const result = await this.d1
-			.prepare(`UPDATE runs SET external_run_id = ? WHERE id = ? AND status = 'running'`)
-			.bind(externalRunId, id)
+			.prepare(`UPDATE runs SET provider_state_json = ?
+				WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL AND external_run_id IS NOT NULL`)
+			.bind(serializeProviderJson(providerState), id)
 			.run()
 		return (result.meta.changes ?? 0) > 0
 	}
@@ -892,15 +954,30 @@ export class RunRepository {
 	async markRunStarted(id: string, logKey: string): Promise<boolean> {
 		const result = await this.d1
 			.prepare(`UPDATE runs SET status = 'running', started_at = ?, log_key = ?
-				WHERE id = ? AND status = 'pending'`)
+				WHERE id = ? AND status = 'pending' AND cancel_requested_at IS NULL`)
 			.bind(this.now(), logKey, id)
 			.run()
 		return (result.meta.changes ?? 0) > 0
 	}
 
-	/** Record the resolved commit sha for a run (once the ref is resolved by the runner). */
-	async setRunCommit(id: string, commitSha: string): Promise<void> {
-		await this.d1.prepare('UPDATE runs SET commit_sha = ? WHERE id = ?').bind(commitSha, id).run()
+	/** Record one resolved commit while the active run still accepts provider lifecycle writes. */
+	async setRunCommit(id: string, commitSha: string): Promise<boolean> {
+		const result = await this.d1
+			.prepare(`UPDATE runs SET commit_sha = ?
+				WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL
+					AND (commit_sha IS NULL OR LOWER(commit_sha) = ?)`)
+			.bind(commitSha, id, commitSha)
+			.run()
+		return (result.meta.changes ?? 0) > 0
+	}
+
+	/** Atomically claim cancellation and return the latest active run snapshot. */
+	async beginRunCancellation(id: string): Promise<RunRow | null> {
+		return this.d1
+			.prepare(`UPDATE runs SET cancel_requested_at = COALESCE(cancel_requested_at, ?)
+				WHERE id = ? AND status IN ('pending','running') RETURNING *`)
+			.bind(this.now(), id)
+			.first<RunRow>()
 	}
 
 	/**
@@ -913,8 +990,18 @@ export class RunRepository {
 	async markRunFinished(id: string, status: 'succeeded' | 'failed', exitCode: number | null): Promise<boolean> {
 		const result = await this.d1
 			.prepare(`UPDATE runs SET status = ?, exit_code = ?, finished_at = ?
-				WHERE id = ? AND status IN ('pending','running')`)
+				WHERE id = ? AND status IN ('pending','running') AND cancel_requested_at IS NULL`)
 			.bind(status, exitCode, this.now(), id)
+			.run()
+		return (result.meta.changes ?? 0) > 0
+	}
+
+	/** Finish a run only after cancellation has durably claimed and completed provider cleanup. */
+	async markRunCancellationFinished(id: string): Promise<boolean> {
+		const result = await this.d1
+			.prepare(`UPDATE runs SET status = 'failed', exit_code = NULL, finished_at = ?
+				WHERE id = ? AND status IN ('pending','running') AND cancel_requested_at IS NOT NULL`)
+			.bind(this.now(), id)
 			.run()
 		return (result.meta.changes ?? 0) > 0
 	}
@@ -935,6 +1022,7 @@ export class RunRepository {
 		const result = await this.d1
 			.prepare(`UPDATE runs SET status = 'failed', finished_at = ?
 				WHERE status IN ('pending','running')
+					AND cancel_requested_at IS NULL
 					AND COALESCE(started_at, created_at) < ?
 					AND external_run_id IS NULL`)
 			.bind(now, now - maxAgeSeconds)

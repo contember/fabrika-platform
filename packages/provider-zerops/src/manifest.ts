@@ -3,8 +3,10 @@ import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
 import type { ZeropsAppConfig, ZeropsNamespaceResourceRequirement, ZeropsProxySpec, ZeropsSharedPostgresBinding } from './types'
 
-export const FABRIKA_MANIFEST_VERSION = 2
+export const FABRIKA_MANIFEST_VERSION = 3
+export const ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES = 256 * 1024
 export const ZEROPS_SERVICE_HOSTNAME_PATTERN = /^[a-z0-9]{1,25}$/
+const SHA256_PATTERN = /^[0-9a-f]{64}$/
 
 /**
  * The one reference an app may declare for the namespace-owned PostgreSQL service.
@@ -22,6 +24,12 @@ export interface FabrikaImportDocument {
 	readonly services: ReadonlyArray<{ readonly [key: string]: JsonValue }>
 }
 
+export interface ZeropsArtifactSourceDescriptor {
+	readonly path: 'zerops.yaml'
+	readonly contents: string
+	readonly sha256: string
+}
+
 export interface FabrikaManifest {
 	manifestVersion: typeof FABRIKA_MANIFEST_VERSION
 	app: {
@@ -35,6 +43,8 @@ export interface FabrikaManifest {
 	}
 	target: {
 		platform: 'zerops'
+		/** The exact repository-root build descriptor used for this artifact. */
+		sourceDescriptor: ZeropsArtifactSourceDescriptor
 		/** The canonical document used both for resource claims and the Zerops API payload. */
 		importDocument: FabrikaImportDocument
 		deployService: string
@@ -264,6 +274,50 @@ const parseImportDocument = (value: unknown): FabrikaImportDocument => {
 	return project === undefined ? { services } : { project, services }
 }
 
+const parseSourceDescriptor = (value: unknown): ZeropsArtifactSourceDescriptor => {
+	if (value === undefined) {
+		throw new Error('invalid fabrika manifest Zerops source descriptor')
+	}
+	const raw = jsonObject(value, 'Zerops source descriptor')
+	const unknownKeys = Object.keys(raw).filter((key) => key !== 'path' && key !== 'contents' && key !== 'sha256')
+	if (unknownKeys.length > 0) {
+		throw new Error(`invalid fabrika manifest Zerops source descriptor field \`${unknownKeys[0]}\``)
+	}
+	const contents = raw['contents']
+	const sha256 = raw['sha256']
+	if (
+		raw['path'] !== 'zerops.yaml'
+		|| typeof contents !== 'string'
+		|| contents === ''
+		|| new TextEncoder().encode(contents).byteLength > ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES
+		|| typeof sha256 !== 'string'
+		|| !SHA256_PATTERN.test(sha256)
+	) {
+		throw new Error('invalid fabrika manifest Zerops source descriptor')
+	}
+	return { path: 'zerops.yaml', contents, sha256 }
+}
+
+export const createZeropsArtifactSourceDescriptor = async (contents: string): Promise<ZeropsArtifactSourceDescriptor> => {
+	const bytes = new TextEncoder().encode(contents)
+	if (bytes.byteLength === 0) {
+		throw new Error('Zerops source descriptor must not be empty')
+	}
+	if (bytes.byteLength > ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES) {
+		throw new Error(`Zerops source descriptor exceeds ${ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES} bytes`)
+	}
+	const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+	const sha256 = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
+	return { path: 'zerops.yaml', contents, sha256 }
+}
+
+export const verifyZeropsArtifactSourceDescriptor = async (descriptor: ZeropsArtifactSourceDescriptor): Promise<void> => {
+	const actual = await createZeropsArtifactSourceDescriptor(descriptor.contents)
+	if (actual.sha256 !== descriptor.sha256) {
+		throw new Error('Zerops artifact source descriptor digest mismatch')
+	}
+}
+
 export const manifestServiceHostnames = (manifest: FabrikaManifest): string[] =>
 	manifest.target.importDocument.services.map((service) => {
 		const hostname = service['hostname']
@@ -312,6 +366,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	}
 
 	const rawTarget = prop(value, 'target')
+	const sourceDescriptor = parseSourceDescriptor(prop(rawTarget, 'sourceDescriptor'))
 	const rawImportDocument = prop(rawTarget, 'importDocument')
 	const deployService = nonEmptyString(rawTarget, 'deployService')
 	if (
@@ -372,6 +427,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 		},
 		target: {
 			platform: 'zerops',
+			sourceDescriptor,
 			importDocument,
 			deployService,
 			...(zeropsSetup !== null ? { zeropsSetup } : {}),
@@ -381,7 +437,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	}
 }
 
-export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): FabrikaManifest {
+export function compileFabrikaManifest(config: ZeropsAppConfig, env: string, sourceDescriptor: ZeropsArtifactSourceDescriptor): FabrikaManifest {
 	if (config.target.services === undefined) {
 		throw new Error('fabrika app build requires a source Zerops config')
 	}
@@ -414,6 +470,7 @@ export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): Fa
 			},
 			target: {
 				platform: 'zerops',
+				sourceDescriptor,
 				importDocument: parseImportDocument(document),
 				deployService,
 				...(config.target.zeropsSetup !== undefined ? { zeropsSetup: config.target.zeropsSetup } : {}),
@@ -436,7 +493,7 @@ export function compileFabrikaManifest(config: ZeropsAppConfig, env: string): Fa
 
 /** Provider artifact codec. Its envelope version and manifest payload version advance independently. */
 export const zeropsArtifactCodec: ProviderCodec<FabrikaManifest> = {
-	version: 2,
+	version: 3,
 	encode: jsonValue,
 	decode: (payload) => parseFabrikaManifest(payload),
 }

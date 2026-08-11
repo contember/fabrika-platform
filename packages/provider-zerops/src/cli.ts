@@ -1,8 +1,15 @@
 #!/usr/bin/env bun
+import { constants } from 'node:fs'
+import { open } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { isZeropsAppConfig } from './authoring'
 import { parseZeropsCliArgs } from './cli-args'
-import { compileFabrikaManifest, manifestServiceHostnames } from './manifest'
+import {
+	compileFabrikaManifest,
+	createZeropsArtifactSourceDescriptor,
+	manifestServiceHostnames,
+	ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES,
+} from './manifest'
 import { runZeropsNamespaceCommand } from './namespace-command'
 import type { ZeropsAppConfig } from './types'
 
@@ -47,6 +54,38 @@ const loadConfig = async (path: string): Promise<ZeropsAppConfig> => {
 	return config
 }
 
+export const readZeropsSourceDescriptor = async (root: string = process.cwd()) => {
+	const path = resolve(root, 'zerops.yaml')
+	const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch((error: unknown) => {
+		if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+			throw new Error(`Missing repository-root Zerops source descriptor: ${path}`)
+		}
+		if (error instanceof Error && 'code' in error && error.code === 'ELOOP') {
+			throw new Error(`Repository-root Zerops source descriptor must not be a symlink: ${path}`)
+		}
+		throw error
+	})
+	try {
+		const metadata = await file.stat()
+		if (!metadata.isFile()) {
+			throw new Error(`Repository-root Zerops source descriptor must be a regular file: ${path}`)
+		}
+		if (metadata.size > ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES) {
+			throw new Error(`Zerops source descriptor exceeds ${ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES} bytes: ${path}`)
+		}
+		const bytes = await file.readFile()
+		let contents: string
+		try {
+			contents = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+		} catch {
+			throw new Error(`Zerops source descriptor is not valid UTF-8: ${path}`)
+		}
+		return await createZeropsArtifactSourceDescriptor(contents)
+	} finally {
+		await file.close()
+	}
+}
+
 export const runZeropsCli = async (argv: readonly string[]): Promise<void> => {
 	const args = parseZeropsCliArgs(argv)
 	if (args.help || args.command === undefined) {
@@ -68,7 +107,8 @@ export const runZeropsCli = async (argv: readonly string[]): Promise<void> => {
 		throw new Error('`build` requires --env=<env>')
 	}
 	const config = await loadConfig(args.config)
-	const manifest = compileFabrikaManifest(config, args.env)
+	const sourceDescriptor = await readZeropsSourceDescriptor()
+	const manifest = compileFabrikaManifest(config, args.env, sourceDescriptor)
 	const output = resolve(process.cwd(), args.output)
 	await Bun.write(output, `${JSON.stringify(manifest, null, '\t')}\n`)
 	console.info(`wrote ${output} (${manifestServiceHostnames(manifest).length} service(s))`)

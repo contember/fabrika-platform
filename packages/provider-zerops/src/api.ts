@@ -62,6 +62,13 @@ export interface ZeropsAppVersion {
 	build?: { startDate?: string; endDate?: string; pipelineStart?: string; pipelineFinish?: string; pipelineFailed?: string }
 }
 
+/** The credential-bearing result of reserving one upload-backed application version. */
+export interface ZeropsAppVersionUpload {
+	id: string
+	/** Presigned object-storage destination. Never log it or include it in an error. */
+	uploadUrl: string
+}
+
 /** An asynchronous platform operation. VERIFIED: `OutDtoProcess`. */
 export interface ZeropsProcess {
 	id: string
@@ -328,6 +335,27 @@ export interface ZeropsApi {
 		zeropsSetup?: string
 		signal: AbortSignal
 	}): Promise<ZeropsProcess | null>
+
+	/**
+	 * Reserve an upload-backed application version. VERIFIED: `POST /service-stack/{id}/app-version`,
+	 * optional body `{ name }`, response `ResponsePostAppVersion`.
+	 */
+	createAppVersion(input: { serviceId: string; name?: string; signal: AbortSignal }): Promise<ZeropsAppVersionUpload>
+
+	/**
+	 * Build and deploy an application version whose source archive has already been uploaded. VERIFIED:
+	 * `PUT /app-version/{id}/build-and-deploy`, required body `{ zeropsYaml }` and optional
+	 * `zeropsYamlSetup`.
+	 */
+	buildAndDeployAppVersion(input: {
+		appVersionId: string
+		zeropsYaml: string
+		zeropsYamlSetup?: string
+		signal: AbortSignal
+	}): Promise<ZeropsProcess>
+
+	/** Delete an application version, including an untriggered upload reservation. VERIFIED: `DELETE /app-version/{id}`. */
+	deleteAppVersion(input: { appVersionId: string; signal: AbortSignal }): Promise<void>
 
 	/** One application version's current state — the poll target. VERIFIED: `GET /app-version/{id}`. */
 	getAppVersion(input: { appVersionId: string; signal: AbortSignal }): Promise<ZeropsAppVersion>
@@ -745,6 +773,8 @@ const apiError = (label: string, status: number, body: unknown, redactDetail: bo
 export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 	const base = (options.baseUrl ?? ZEROPS_API_BASE).replace(/\/+$/, '')
 	const doFetch = options.fetchImpl ?? fetch
+	const abortError = (): DOMException => new DOMException('The operation was aborted', 'AbortError')
+	const isAbortError = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError'
 
 	const request = async (
 		label: string,
@@ -754,24 +784,54 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		 * `redactDetail` drops the server's message from the thrown error, keeping only its code. Set it on
 		 * any call whose BODY carries a secret value: a validation error can quote what it rejected, and an
 		 * error that echoes a secret into a deploy log is a leak whichever end wrote it.
+		 * `omitErrorResponseDetails` also drops the code for upload flows whose response may carry a
+		 * credential; nothing from that response body may reach an error.
 		 */
-		init: { body?: unknown; signal: AbortSignal; redactDetail?: boolean },
+		init: { body?: unknown; signal: AbortSignal; redactDetail?: boolean; omitErrorResponseDetails?: boolean },
 	): Promise<unknown> => {
+		if (init.signal.aborted) {
+			throw abortError()
+		}
 		const headers: Record<string, string> = { authorization: `Bearer ${options.token}`, accept: 'application/json' }
 		if (init.body !== undefined) {
 			headers['content-type'] = 'application/json'
 		}
-		const response = await doFetch(`${base}${path}`, {
-			method,
-			headers,
-			body: init.body === undefined ? undefined : JSON.stringify(init.body),
-			signal: init.signal,
-		})
-		const payload: unknown = await response.json().catch(() => null)
+		let response: Response
+		try {
+			response = await doFetch(`${base}${path}`, {
+				method,
+				headers,
+				body: init.body === undefined ? undefined : JSON.stringify(init.body),
+				signal: init.signal,
+			})
+		} catch (error) {
+			if (init.signal.aborted || isAbortError(error)) throw abortError()
+			throw error
+		}
+		let payload: unknown
+		try {
+			payload = await response.json()
+		} catch (error) {
+			if (init.signal.aborted || isAbortError(error)) throw abortError()
+			payload = null
+		}
 		if (!response.ok) {
+			if (init.omitErrorResponseDetails === true) {
+				throw new ZeropsApiError(`zerops: ${label} failed (${response.status})`, response.status, '')
+			}
 			throw apiError(label, response.status, payload, init.redactDetail === true)
 		}
 		return payload
+	}
+
+	const invalidResponse = (label: string): Error => new Error(`zerops: ${label} returned an invalid response`)
+
+	const requiredString = (payload: unknown, key: string, label: string): string => {
+		const value = str(payload, key)
+		if (value === undefined || value.trim() === '') {
+			throw invalidResponse(label)
+		}
+		return value
 	}
 
 	const readImportResult = (payload: unknown): ZeropsImportResult => ({
@@ -842,6 +902,48 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			const payload = await request('trigger-pipeline', 'PUT', `/service-stack/${serviceId}/trigger-pipeline`, { body, signal })
 			const process = prop(payload, 'process')
 			return process === undefined || process === null ? null : readProcess(process)
+		},
+
+		createAppVersion: async ({ serviceId, name, signal }) => {
+			const body = name === undefined ? {} : { name }
+			const payload = await request('create app-version', 'POST', `/service-stack/${serviceId}/app-version`, {
+				body,
+				signal,
+				omitErrorResponseDetails: true,
+			})
+			const responseServiceId = requiredString(payload, 'serviceStackId', 'create app-version')
+			if (responseServiceId !== serviceId) {
+				throw invalidResponse('create app-version')
+			}
+			return {
+				id: requiredString(payload, 'id', 'create app-version'),
+				uploadUrl: requiredString(payload, 'uploadUrl', 'create app-version'),
+			}
+		},
+
+		buildAndDeployAppVersion: async ({ appVersionId, zeropsYaml, zeropsYamlSetup, signal }) => {
+			const body = zeropsYamlSetup === undefined ? { zeropsYaml } : { zeropsYaml, zeropsYamlSetup }
+			const payload = await request('build and deploy app-version', 'PUT', `/app-version/${appVersionId}/build-and-deploy`, {
+				body,
+				signal,
+				omitErrorResponseDetails: true,
+			})
+			const processId = requiredString(payload, 'id', 'build and deploy app-version')
+			const responseAppVersionId = str(prop(payload, 'appVersion'), 'id')
+			if (responseAppVersionId !== undefined && (responseAppVersionId.trim() === '' || responseAppVersionId !== appVersionId)) {
+				throw invalidResponse('build and deploy app-version')
+			}
+			return { ...readProcess(payload), id: processId, appVersionId }
+		},
+
+		deleteAppVersion: async ({ appVersionId, signal }) => {
+			const payload = await request('delete app-version', 'DELETE', `/app-version/${appVersionId}`, {
+				signal,
+				omitErrorResponseDetails: true,
+			})
+			if (prop(payload, 'success') !== true) {
+				throw invalidResponse('delete app-version')
+			}
 		},
 
 		getAppVersion: async ({ appVersionId, signal }) =>

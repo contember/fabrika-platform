@@ -155,7 +155,9 @@ describe.skipIf(!hasPostgres)('the Postgres schema — column types the row shap
 		const { results } = await raw
 			.prepare(`SELECT table_name, column_name, data_type FROM information_schema.columns
 				WHERE table_schema = ?
-				  AND column_name IN ('created_at','started_at','finished_at','last_polled_at','rotated_at','exit_code','github_installation_id')
+				  AND column_name IN (
+					'created_at','started_at','finished_at','cancel_requested_at','last_polled_at','rotated_at','exit_code','github_installation_id'
+				  )
 				  AND table_name <> 'jobs'
 				ORDER BY table_name, column_name`)
 			.bind(fixture?.schema ?? '')
@@ -514,11 +516,15 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(running?.status).toBe('running')
 		expect(typeof running?.started_at).toBe('number')
 
-		await db.runs.setRunCommit(first.id, 'deadbeef')
+		expect(await db.runs.setRunCommit(first.id, 'deadbeef')).toBe(true)
 		expect((await db.runs.getRun(first.id))?.commit_sha).toBe('deadbeef')
-		expect(await db.runs.setRunExternalId(first.id, 'harbor-operation-1')).toBe(true)
+		expect(await db.runs.setRunExternalId(first.id, 'harbor-operation-1', { phase: 'accepted', attempt: 1 })).toBe(true)
 		expect((await db.runs.listInFlightRuns('harbor')).map((run) => run.id)).toEqual([first.id])
-		expect((await db.runs.getRun(first.id))?.external_run_id).toBe('harbor-operation-1')
+		const accepted = await db.runs.getRun(first.id)
+		expect(accepted?.external_run_id).toBe('harbor-operation-1')
+		expect(JSON.parse(accepted?.provider_state_json ?? '')).toEqual({ phase: 'accepted', attempt: 1 })
+		expect(await db.runs.checkpointRunProviderState(first.id, { phase: 'building', attempt: 1 })).toBe(true)
+		expect(JSON.parse((await db.runs.getRun(first.id))?.provider_state_json ?? '')).toEqual({ phase: 'building', attempt: 1 })
 
 		// The terminal write is guarded too — it is co-written by vozka-runner's `finishRun`.
 		expect(await db.runs.markRunFinished(first.id, 'succeeded', 0)).toBe(true)
@@ -526,6 +532,17 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		const done = await db.runs.getRun(first.id)
 		expect(done?.status).toBe('succeeded')
 		expect(done?.exit_code).toBe(0)
+		expect(await db.runs.checkpointRunProviderState(first.id, { phase: 'late' })).toBe(false)
+
+		const cancelled = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.markRunStarted(cancelled.id, `runs/${cancelled.id}/logs.ndjson`)
+		await db.runs.setRunExternalId(cancelled.id, 'operation-2', { phase: 'uploaded' })
+		const cancellation = await db.runs.beginRunCancellation(cancelled.id)
+		expect(typeof cancellation?.cancel_requested_at).toBe('number')
+		expect(cancellation?.external_run_id).toBe('operation-2')
+		expect(await db.runs.markRunFinished(cancelled.id, 'succeeded', 0)).toBe(false)
+		expect(await db.runs.markRunCancellationFinished(cancelled.id)).toBe(true)
+		expect((await db.runs.getRun(cancelled.id))?.status).toBe('failed')
 
 		// The sweep only reaps genuinely aged pending/running rows — `second` is still pending and young.
 		expect(await db.runs.sweepStaleRuns(3600)).toBe(0)

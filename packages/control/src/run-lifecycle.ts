@@ -15,7 +15,15 @@ import type {
 	ProviderEnvironment,
 	ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
-import { type AppEnvRow, type AppRow, type ControlRegistryRepository, type ControlRepositories, type DeploymentNamespaceRow, type RunRow } from './db'
+import {
+	type AppEnvRow,
+	type AppRow,
+	type ControlRegistryRepository,
+	type ControlRepositories,
+	type DeploymentNamespaceRow,
+	parseProviderJson,
+	type RunRow,
+} from './db'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
 import { projectedReturnOrigins } from './return-origins'
 import type { SecretResolver } from './secret-resolver'
@@ -44,6 +52,19 @@ export interface DeployJobMessage {
 }
 
 const logsKey = (runId: string): string => `runs/${runId}/logs.ndjson`
+
+const immutableGitObjectId = (value: string, label: string): string => {
+	const normalized = value.toLowerCase()
+	if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(normalized)) {
+		throw new Error(`${label} is not an immutable Git object id`)
+	}
+	return normalized
+}
+
+const providerAppAtCommit = (app: ProviderApp, commitSha: string): ProviderApp => ({
+	...app,
+	source: { ...app.source, ref: commitSha },
+})
 
 class RunLogWriter {
 	readonly #lines: RunLogLine[] = []
@@ -257,22 +278,18 @@ export async function executeDeploy(
 		if (!(await deps.repositories.runs.markRunStarted(run.id, logsKey(run.id)))) {
 			return { runId: run.id, status: 'skipped' }
 		}
-		const startedRun = await deps.repositories.runs.getRun(run.id)
+		let startedRun = await deps.repositories.runs.getRun(run.id)
 		if (startedRun === null) return { runId: run.id, status: 'skipped' }
 		if (startedRun.log_key === null) throw new Error('started run has no log key')
-		const releaseContext = deps.operations === undefined
-			? null
-			: await projectOperationsRun(deps.operations, startedRun, {
-				dryRun: message.dryRun === true,
-				phase: 'started',
-				artifactState: 'pending',
-			})
+		const startedLogKey = startedRun.log_key
 		const app = await deps.repositories.registry.getApp(run.app_id)
 		const appEnv = await deps.repositories.registry.getAppEnv(run.app_id, run.env)
 		if (app === null || appEnv === null) {
-			await deps.repositories.runs.markRunFinished(run.id, 'failed', null)
-			await projectTerminalRun(deps, run.id, message.dryRun === true, 'failed')
-			return { runId: run.id, status: 'failed' }
+			if (await deps.repositories.runs.markRunFinished(run.id, 'failed', null)) {
+				await projectTerminalRun(deps, run.id, message.dryRun === true, 'failed')
+				return { runId: run.id, status: 'failed' }
+			}
+			return { runId: run.id, status: 'skipped' }
 		}
 		if (appEnv.provider !== deps.provider.id) {
 			throw new Error(
@@ -281,7 +298,7 @@ export async function executeDeploy(
 		}
 		const appInput = providerApp(app, run)
 		const environmentInput = await providerEnvironment(deps.repositories.registry, appEnv, { requireReadyNamespace: true })
-		const registration = deps.provider.normalizeRegistration({
+		let registration = deps.provider.normalizeRegistration({
 			app: appInput,
 			environment: environmentInput,
 		})
@@ -300,6 +317,37 @@ export async function executeDeploy(
 			throw new Error('provider returned a deploy registration for different coordinates')
 		}
 		await assertNamespaceResourceClaims(deps.repositories.registry, deps.provider, registration)
+		const abortController = new AbortController()
+		if (message.dryRun !== true && deps.provider.resolveSource !== undefined) {
+			const expectedCommitSha = startedRun.commit_sha === null
+				? undefined
+				: immutableGitObjectId(startedRun.commit_sha, 'recorded commit')
+			const resolution = await deps.provider.resolveSource({
+				runId: run.id,
+				app: registration.app,
+				environment: registration.environment,
+				...(expectedCommitSha === undefined ? {} : { expectedCommitSha }),
+				signal: abortController.signal,
+			})
+			const commitSha = immutableGitObjectId(resolution.commitSha, 'resolved commit')
+			if (expectedCommitSha !== undefined && commitSha !== expectedCommitSha) {
+				throw new Error('resolved commit does not match the recorded commit')
+			}
+			if (!(await deps.repositories.runs.setRunCommit(run.id, commitSha))) {
+				throw new Error('run stopped accepting source resolution')
+			}
+			const resolvedRun = await deps.repositories.runs.getRun(run.id)
+			if (resolvedRun === null) throw new Error('resolved run disappeared')
+			startedRun = resolvedRun
+			registration = { ...registration, app: providerAppAtCommit(registration.app, commitSha) }
+		}
+		const releaseContext = deps.operations === undefined
+			? null
+			: await projectOperationsRun(deps.operations, startedRun, {
+				dryRun: message.dryRun === true,
+				phase: 'started',
+				artifactState: 'pending',
+			})
 
 		const vars = await resolveVars(deps.repositories.registry, app.id, appEnv.env)
 		const operationsCollisions = operationsManagedEnvironmentCollisions(Object.keys(vars))
@@ -327,7 +375,7 @@ export async function executeDeploy(
 			Object.assign(managedEnvironment, releaseContext.managedEnvironment)
 		}
 		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, app.id)
-		const runLogs = new RunLogWriter(deps.logs, startedRun.log_key, run.id)
+		const runLogs = new RunLogWriter(deps.logs, startedLogKey, run.id)
 		let outcome: ProviderTerminalOutcome
 		try {
 			outcome = await deps.provider.deploy({
@@ -340,13 +388,14 @@ export async function executeDeploy(
 				...(returnOrigins === undefined ? {} : { returnOrigins }),
 				dryRun: message.dryRun === true,
 				...(releaseContext?.artifactUpload === undefined ? {} : { artifactUpload: releaseContext.artifactUpload }),
-				signal: new AbortController().signal,
+				signal: abortController.signal,
 				events: {
 					log: (line) => runLogs.log(line),
-					externalId: async (externalId) => {
-						await deps.repositories.runs.setRunExternalId(run.id, externalId)
+					externalId: async (externalId, providerState) => {
+						const persisted = await deps.repositories.runs.setRunExternalId(run.id, externalId, providerState)
+						if (!persisted) throw new Error('provider operation belongs to an inactive run')
 						const acceptedRun = await deps.repositories.runs.getRun(run.id)
-						if (deps.operations !== undefined && acceptedRun !== null) {
+						if (deps.operations !== undefined && acceptedRun !== null && acceptedRun.cancel_requested_at === null) {
 							await projectOperationsRun(deps.operations, acceptedRun, {
 								dryRun: message.dryRun === true,
 								phase: 'provider_accepted',
@@ -354,19 +403,28 @@ export async function executeDeploy(
 							})
 						}
 					},
+					checkpoint: async (providerState) => {
+						if (!(await deps.repositories.runs.checkpointRunProviderState(run.id, providerState))) {
+							throw new Error('provider checkpoint belongs to an inactive run')
+						}
+					},
 				},
 			})
 		} finally {
 			await runLogs.flush()
 		}
-		await deps.repositories.runs.markRunFinished(run.id, outcome.state, outcome.exitCode ?? null)
+		if (!(await deps.repositories.runs.markRunFinished(run.id, outcome.state, outcome.exitCode ?? null))) {
+			return { runId: run.id, status: 'skipped' }
+		}
 		await projectTerminalRun(deps, run.id, message.dryRun === true, outcome.state, outcome.artifactState)
 		return { runId: run.id, status: outcome.state }
 	} catch (error) {
 		console.error(`deploy run ${run.id} failed:`, error instanceof Error ? error.message : 'unknown error')
-		await deps.repositories.runs.markRunFinished(run.id, 'failed', null)
-		await projectTerminalRun(deps, run.id, message.dryRun === true, 'failed')
-		return { runId: run.id, status: 'failed' }
+		if (await deps.repositories.runs.markRunFinished(run.id, 'failed', null)) {
+			await projectTerminalRun(deps, run.id, message.dryRun === true, 'failed')
+			return { runId: run.id, status: 'failed' }
+		}
+		return { runId: run.id, status: 'skipped' }
 	} finally {
 		await deps.lock.release(lockKey, run.id)
 	}
@@ -395,21 +453,25 @@ export async function cancelDeploy(
 	deps: Pick<RunDeps, 'repositories' | 'provider'> & { lock: Pick<DeployLockGate, 'release'> },
 	run: RunRow,
 ): Promise<void> {
-	const appEnv = await deps.repositories.registry.getAppEnv(run.app_id, run.env)
-	if (
-		appEnv !== null
-		&& appEnv.provider === deps.provider.id
-		&& run.external_run_id !== null
-		&& deps.provider.cancel !== undefined
-	) {
+	const cancelling = await deps.repositories.runs.beginRunCancellation(run.id)
+	if (cancelling === null) return
+	const appEnv = await deps.repositories.registry.getAppEnv(cancelling.app_id, cancelling.env)
+	if (cancelling.external_run_id !== null && deps.provider.cancel !== undefined) {
+		if (appEnv === null) throw new Error(`provider environment ${cancelling.app_id}/${cancelling.env} disappeared during cancellation`)
+		if (appEnv.provider !== deps.provider.id) {
+			throw new Error(`provider environment ${cancelling.app_id}/${cancelling.env} changed owner during cancellation`)
+		}
 		await deps.provider.cancel({
-			runId: run.id,
-			externalId: run.external_run_id,
+			runId: cancelling.id,
+			externalId: cancelling.external_run_id,
 			environment: await providerEnvironment(deps.repositories.registry, appEnv),
+			...(cancelling.provider_state_json === null
+				? {}
+				: { providerState: parseProviderJson(cancelling.provider_state_json, `provider state for run ${cancelling.id}`) }),
 		})
 	}
-	await deps.repositories.runs.markRunFinished(run.id, 'failed', null)
-	await deps.lock.release(`${run.app_id}:${run.env}`, run.id)
+	await deps.repositories.runs.markRunCancellationFinished(cancelling.id)
+	await deps.lock.release(`${cancelling.app_id}:${cancelling.env}`, cancelling.id)
 }
 
 /** Map a pushed git ref to the app environment it triggers. */

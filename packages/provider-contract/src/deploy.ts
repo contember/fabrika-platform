@@ -1,4 +1,4 @@
-import type { ProviderEnvelope } from './json'
+import type { JsonValue, ProviderEnvelope } from './json'
 
 /** One provider-owned unit of deploy work. Core treats `kind` as an open string. */
 export interface ProviderJobSpec {
@@ -45,7 +45,10 @@ export interface ProviderDeployResult {
 /** Events whose persistence and presentation belong to the control plane. */
 export interface ProviderRunEvents {
 	log(line: string): void
-	externalId(id: string): Promise<void>
+	/** Atomically persist the external operation id and, when supplied, its credential-free resume state. */
+	externalId(id: string, state?: JsonValue): Promise<void>
+	/** Replace the credential-free resume state while this run remains active. */
+	checkpoint(state: JsonValue): Promise<void>
 }
 
 /** Complete platform-owned runtime state. A null value removes the key from persistent targets. */

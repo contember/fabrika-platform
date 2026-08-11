@@ -12,7 +12,7 @@ import {
 	type ZeropsServiceEnv,
 } from '../api'
 import { useSharedPostgres } from '../authoring'
-import { compileFabrikaManifest, manifestServiceHostnames } from '../manifest'
+import { compileFabrikaManifest, manifestServiceHostnames, type ZeropsArtifactSourceDescriptor } from '../manifest'
 import {
 	compileZeropsNamespaceTopology,
 	createZeropsNamespaceCapabilities,
@@ -60,6 +60,11 @@ const freshState = (): FakeState => ({
 const projectId = 'project-1'
 const proxyId = 'proxy-service'
 const postgresId = 'postgres-service'
+const SOURCE_DESCRIPTOR: ZeropsArtifactSourceDescriptor = {
+	path: 'zerops.yaml',
+	contents: 'zerops:\n  - setup: test\n',
+	sha256: '560802d669a116e27e5ce76af3312048e3e9e7743a4fb7d6e73f14d800dc46d1',
+}
 
 const project = (
 	id: string,
@@ -162,6 +167,36 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 			throw new Error('pipeline response lost')
 		}
 		return { id: `process-${state.triggerCount}`, appVersionId: version.id }
+	},
+	createAppVersion: async ({ serviceId }) => {
+		const versions = state.versions.get(serviceId) ?? []
+		const version: ZeropsAppVersion = {
+			id: `uploaded-version-${versions.length + 1}`,
+			status: 'UPLOADING',
+			sequence: versions.length + 1,
+			serviceStackId: serviceId,
+		}
+		versions.push(version)
+		state.versions.set(serviceId, versions)
+		state.calls.push(`createAppVersion:${serviceId}`)
+		return { id: version.id, uploadUrl: 'https://upload.test/archive?signature=test' }
+	},
+	buildAndDeployAppVersion: async ({ appVersionId }) => {
+		for (const versions of state.versions.values()) {
+			const version = versions.find((candidate) => candidate.id === appVersionId)
+			if (version !== undefined) {
+				version.status = 'ACTIVE'
+				state.calls.push(`buildAndDeployAppVersion:${appVersionId}`)
+				return { id: `process-${appVersionId}`, appVersionId }
+			}
+		}
+		throw new Error(`missing version ${appVersionId}`)
+	},
+	deleteAppVersion: async ({ appVersionId }) => {
+		for (const [serviceId, versions] of state.versions) {
+			state.versions.set(serviceId, versions.filter((candidate) => candidate.id !== appVersionId))
+		}
+		state.calls.push(`deleteAppVersion:${appVersionId}`)
 	},
 	getAppVersion: async ({ appVersionId }) => {
 		for (const versions of state.versions.values()) {
@@ -365,7 +400,10 @@ describe('Zerops namespace policy and topology', () => {
 				services: () => [{ hostname: `${id}api`, type: 'alpine/bun@1.3' }],
 			},
 		})
-		const manifests = [compileFabrikaManifest(config('notes'), 'prod'), compileFabrikaManifest(config('billing'), 'prod')]
+		const manifests = [
+			compileFabrikaManifest(config('notes'), 'prod', SOURCE_DESCRIPTOR),
+			compileFabrikaManifest(config('billing'), 'prod', SOURCE_DESCRIPTOR),
+		]
 
 		for (const manifest of manifests) {
 			expect(manifest.target.namespaceResources).toEqual([{
@@ -392,7 +430,7 @@ describe('Zerops namespace policy and topology', () => {
 			},
 		}
 
-		expect(() => compileFabrikaManifest(config, 'prod')).toThrow('cannot declare a namespace-owned service')
+		expect(() => compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)).toThrow('cannot declare a namespace-owned service')
 	})
 })
 

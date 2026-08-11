@@ -12,7 +12,7 @@
 // order (status, exit_code, finished_at, id). `finished_at` is stamped CALLER-side in unix seconds
 // (never `unixepoch()`, which does not exist in Postgres), exactly as `Db.markRunFinished` does.
 //
-// The `WHERE status IN ('pending','running')` guard makes the write idempotent and order-independent:
+// The status + cancellation guards make the write idempotent and order-independent:
 // whichever of vozka-runner / the (possibly still-alive) control plane writes FIRST wins the
 // pending|running → terminal transition; the other finds no matching row and is a harmless no-op.
 
@@ -36,7 +36,7 @@ export const finishRun = async (
 ): Promise<boolean> => {
 	const result = await db
 		.prepare(`UPDATE runs SET status = ?, exit_code = ?, finished_at = ?
-			WHERE id = ? AND status IN ('pending','running')`)
+			WHERE id = ? AND status IN ('pending','running') AND cancel_requested_at IS NULL`)
 		.bind(status, exitCode, now(), runId)
 		.run()
 	return (result.meta.changes ?? 0) > 0

@@ -135,6 +135,9 @@ export const fakeZerops = (options: {
 
 	const api: ZeropsApi = {
 		importProject: NEVER('importProject'),
+		createAppVersion: NEVER('createAppVersion'),
+		buildAndDeployAppVersion: NEVER('buildAndDeployAppVersion'),
+		deleteAppVersion: NEVER('deleteAppVersion'),
 		cancelBuild: NEVER('cancelBuild'),
 		deleteServiceEnv: NEVER('deleteServiceEnv'),
 		getProjectEnv: NEVER('getProjectEnv'),

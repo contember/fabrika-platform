@@ -53,14 +53,17 @@ export { createZeropsControlProvider, zeropsStoredTargetCodec } from './control'
 export type { ZeropsBeforeDeploy, ZeropsBeforeDeployInput, ZeropsControlProviderOptions, ZeropsProviderExecutor, ZeropsStoredTarget } from './control'
 export {
 	compileFabrikaManifest,
+	createZeropsArtifactSourceDescriptor,
 	FABRIKA_MANIFEST_VERSION,
 	manifestServiceHostnames,
 	parseFabrikaManifest,
 	renderFabrikaImportYaml,
+	verifyZeropsArtifactSourceDescriptor,
 	ZEROPS_SERVICE_HOSTNAME_PATTERN,
+	ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES,
 	zeropsArtifactCodec,
 } from './manifest'
-export type { FabrikaImportDocument, FabrikaManifest, ManifestExpectation } from './manifest'
+export type { FabrikaImportDocument, FabrikaManifest, ManifestExpectation, ZeropsArtifactSourceDescriptor } from './manifest'
 export {
 	compileZeropsNamespaceTopology,
 	createZeropsNamespaceCapabilities,
@@ -90,6 +93,56 @@ export type { ZeropsJobSpec, ZeropsPlan, ZeropsStepKind } from './plan'
 export { CANCELLED, createZeropsProvider, interpolateManifest, zeropsProvider } from './provider'
 export type { ZeropsProvider } from './provider'
 export type * from './schema.generated'
+export {
+	buildZeropsSourceCancelRequest,
+	buildZeropsSourceCancelResponse,
+	buildZeropsSourceErrorEnvelope,
+	buildZeropsSourceResolveInstallationRequest,
+	buildZeropsSourceResolveInstallationResponse,
+	buildZeropsSourceResolveRequest,
+	buildZeropsSourceResolveResponse,
+	buildZeropsSourceUploadRequest,
+	buildZeropsSourceUploadResponse,
+	decodeZeropsSourceCancelRequest,
+	decodeZeropsSourceCancelResponse,
+	decodeZeropsSourceErrorEnvelope,
+	decodeZeropsSourceResolveInstallationRequest,
+	decodeZeropsSourceResolveInstallationResponse,
+	decodeZeropsSourceResolveRequest,
+	decodeZeropsSourceResolveResponse,
+	decodeZeropsSourceUploadRequest,
+	decodeZeropsSourceUploadResponse,
+	normalizeZeropsSourceRepository,
+	ZEROPS_SOURCE_CANCEL_PATH,
+	ZEROPS_SOURCE_ERROR_CODES,
+	ZEROPS_SOURCE_ERROR_STAGES,
+	ZEROPS_SOURCE_PROTOCOL_VERSION,
+	ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH,
+	ZEROPS_SOURCE_RESOLVE_PATH,
+	ZEROPS_SOURCE_UPLOAD_PATH,
+} from './source'
+export type {
+	ZeropsSourceCancelInput,
+	ZeropsSourceCancelRequestV1,
+	ZeropsSourceCancelResponseV1,
+	ZeropsSourceCancelResult,
+	ZeropsSourceClient,
+	ZeropsSourceDescriptor,
+	ZeropsSourceErrorCode,
+	ZeropsSourceErrorEnvelope,
+	ZeropsSourceErrorStage,
+	ZeropsSourceRepository,
+	ZeropsSourceResolveInput,
+	ZeropsSourceResolveInstallationRequestV1,
+	ZeropsSourceResolveInstallationResponseV1,
+	ZeropsSourceResolveRequestV1,
+	ZeropsSourceResolveResponseV1,
+	ZeropsSourceResolveResult,
+	ZeropsSourceUploadInput,
+	ZeropsSourceUploadRequestV1,
+	ZeropsSourceUploadResponseV1,
+	ZeropsSourceUploadResult,
+} from './source'
 export type {
 	ZeropsAppConfig,
 	ZeropsCompilerOwnedProjectField,

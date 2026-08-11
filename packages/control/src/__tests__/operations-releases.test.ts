@@ -38,7 +38,7 @@ class ReleaseService implements HttpService {
 	}
 }
 
-async function seed(harness: ReturnType<typeof createHarness>): Promise<string> {
+async function seed(harness: ReturnType<typeof createHarness>, commitSha: string | null = COMMIT): Promise<string> {
 	await harness.repositories.registry.createApp({ id: 'notes', repoUrl: 'https://github.com/acme/notes' })
 	await harness.repositories.registry.upsertAppEnv({
 		appId: 'notes',
@@ -53,7 +53,7 @@ async function seed(harness: ReturnType<typeof createHarness>): Promise<string> 
 		appId: 'notes',
 		env: 'prod',
 		ref: 'refs/heads/main',
-		commitSha: COMMIT,
+		commitSha,
 		trigger: 'webhook',
 	})
 	return run.id
@@ -74,6 +74,46 @@ function provider(inputs: ProviderDeployInput[]): ControlProvider {
 }
 
 describe('Control release projection', () => {
+	test('resolves the exact commit before the first Operations projection and provider deploy', async () => {
+		const harness = createHarness(() => NOW_S)
+		const runId = await seed(harness, null)
+		const calls: string[] = []
+		const exactCommit = 'b'.repeat(40)
+		const controlProvider: ControlProvider = {
+			id: 'memory',
+			normalizeRegistration: (input) => input,
+			resolveSource: async () => {
+				calls.push('resolve')
+				expect(await harness.repositories.operationsReleases.get(runId)).toBeNull()
+				return { commitSha: exactCommit }
+			},
+			deploy: async (input) => {
+				calls.push('deploy')
+				expect(input.app.source.ref).toBe(exactCommit)
+				expect(input.managedEnvironment[FABRIKA_RELEASE]).toContain(exactCommit)
+				expect(Number((await harness.repositories.operationsReleases.get(runId))?.desired_revision)).toBe(1)
+				await input.events.externalId('provider-operation')
+				const acceptedProjection = await harness.repositories.operationsReleases.get(runId)
+				expect(Number(acceptedProjection?.desired_revision)).toBe(2)
+				expect(acceptedProjection?.payload_json).toContain('"phase":"provider_accepted"')
+				expect(acceptedProjection?.payload_json).toContain(`"commitSha":"${exactCommit}"`)
+				return { state: 'succeeded' }
+			},
+		}
+		const deps: RunDeps = {
+			repositories: harness.repositories,
+			provider: controlProvider,
+			secrets: new EnvSecretResolver({}),
+			lock: makeFakeLock(),
+			logs: { put: () => Promise.resolve() },
+			operations: { repository: harness.repositories.operationsReleases },
+		}
+
+		expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
+		expect(calls).toEqual(['resolve', 'deploy'])
+		expect((await harness.repositories.runs.getRun(runId))?.commit_sha).toBe(exactCommit)
+	})
+
 	test('keeps deploy success independent from Operations and replays every lifecycle projection', async () => {
 		const harness = createHarness(() => NOW_S)
 		const runId = await seed(harness)

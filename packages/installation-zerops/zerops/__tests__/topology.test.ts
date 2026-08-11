@@ -10,6 +10,7 @@ import cheapNotesConfig from '@fabrika/example-zerops-app/cheap'
 import {
 	compileFabrikaManifest,
 	compileImport,
+	createZeropsArtifactSourceDescriptor,
 	renderYaml,
 	ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
 	type ZeropsImportDocument,
@@ -43,6 +44,7 @@ const light = compiled.find((entry) => entry.topology.id === 'platform-light')
 const apps = compiled.find((entry) => entry.topology.id === 'apps-prod')
 
 const importArtifacts = (): Artifact[] => generatedArtifacts().filter((artifact) => artifact.path.endsWith('.zerops-import.yaml'))
+const SOURCE_DESCRIPTOR = await createZeropsArtifactSourceDescriptor(readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zerops.yaml'), 'utf8'))
 
 describe('every generated import document validates against the PUBLISHED JSON schema', () => {
 	for (const artifact of importArtifacts()) {
@@ -433,7 +435,7 @@ describe('cheap, mid, and full namespace fixtures', () => {
 			appsTopology({ env: 'prod', corePackage: 'SERIOUS', preset: 'cheap', projectName: 'cheap-prod' }),
 			'prod',
 		)
-		const app = compileFabrikaManifest(cheapNotesConfig, 'prod')
+		const app = compileFabrikaManifest(cheapNotesConfig, 'prod', SOURCE_DESCRIPTOR)
 
 		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual(['postgres', PROXY_HOSTNAME])
 		expect(namespace.steady.document.services.find((service) => service.hostname === 'postgres')?.type).toBe('postgresql:ha@18')
@@ -459,7 +461,7 @@ describe('cheap, mid, and full namespace fixtures', () => {
 			appsTopology({ env: 'prod', corePackage: 'SERIOUS', preset: 'mid' }),
 			'prod',
 		)
-		const app = compileFabrikaManifest(notesConfig, 'prod')
+		const app = compileFabrikaManifest(notesConfig, 'prod', SOURCE_DESCRIPTOR)
 
 		expect(namespace.topology.namespacePreset).toBe('mid')
 		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual([PROXY_HOSTNAME])
@@ -478,7 +480,7 @@ describe('cheap, mid, and full namespace fixtures', () => {
 			}),
 			'prod',
 		)
-		const app = compileFabrikaManifest(notesConfig, 'prod')
+		const app = compileFabrikaManifest(notesConfig, 'prod', SOURCE_DESCRIPTOR)
 
 		expect(namespace.topology.namespacePreset).toBe('full')
 		expect(namespace.topology.exclusiveAppId).toBe(notesConfig.id)

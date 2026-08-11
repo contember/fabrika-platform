@@ -11,7 +11,7 @@ import {
 	operationsEnvelopeUrl,
 	operationsReleaseName,
 } from '@fabrika/operations-contract'
-import { compileFabrikaManifest, zeropsArtifactCodec } from '@fabrika/provider-zerops'
+import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, zeropsArtifactCodec } from '@fabrika/provider-zerops'
 import { createHmac, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -194,7 +194,8 @@ const ensureNamespace = async (machineKey: string): Promise<void> => {
 
 const ensureNotesApp = async (machineKey: string): Promise<void> => {
 	const apps = await controlRequest('/apps', machineKey)
-	const manifest = compileFabrikaManifest(cheapNotesConfig, 'prod')
+	const sourceDescriptor = await createZeropsArtifactSourceDescriptor(readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zerops.yaml'), 'utf8'))
+	const manifest = compileFabrikaManifest(cheapNotesConfig, 'prod', sourceDescriptor)
 	const target = { provider: 'zerops', version: 2, payload: {} }
 	const artifact = {
 		provider: 'zerops',

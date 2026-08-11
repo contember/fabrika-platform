@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import type { ZeropsApi, ZeropsAppVersion, ZeropsLogAccess, ZeropsProcess } from '../api'
 import type { ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
-import { compileFabrikaManifest } from '../manifest'
+import { compileFabrikaManifest, type ZeropsArtifactSourceDescriptor } from '../manifest'
 import { CANCELLED, createZeropsProvider } from '../provider'
 import type { ZeropsServiceType } from '../schema.generated'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget, ZeropsServiceSpec } from '../types'
@@ -52,6 +52,17 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 			recorded.calls.push('triggerPipeline')
 			recorded.triggers.push({ serviceId, buildFromGit, zeropsSetup })
 			return overrides.triggerVersionId === undefined ? null : { id: 'process-1', appVersionId: overrides.triggerVersionId }
+		},
+		createAppVersion: async ({ serviceId }) => {
+			recorded.calls.push(`createAppVersion:${serviceId}`)
+			return { id: 'version-1', uploadUrl: 'https://upload.test/archive?signature=test' }
+		},
+		buildAndDeployAppVersion: async ({ appVersionId }) => {
+			recorded.calls.push(`buildAndDeployAppVersion:${appVersionId}`)
+			return { id: 'process-1', appVersionId }
+		},
+		deleteAppVersion: async ({ appVersionId }) => {
+			recorded.calls.push(`deleteAppVersion:${appVersionId}`)
 		},
 		getAppVersion: async ({ appVersionId }) => {
 			recorded.calls.push('getAppVersion')
@@ -109,6 +120,11 @@ const makeCollaborators = (recorded: Recorded, overrides: Overrides = {}): Zerop
 const SCHEMA: AppSchema = { scopes: [], actions: [], roles: {} }
 const API: ZeropsServiceSpec = { hostname: 'api', type: 'alpine/bun@1.3' }
 const DB: ZeropsServiceSpec = { hostname: 'db', type: 'postgresql:single@18', priority: 10 }
+const SOURCE_DESCRIPTOR: ZeropsArtifactSourceDescriptor = {
+	path: 'zerops.yaml',
+	contents: 'zerops:\n  - setup: test\n',
+	sha256: '560802d669a116e27e5ce76af3312048e3e9e7743a4fb7d6e73f14d800dc46d1',
+}
 
 const app = (services: ZeropsServiceSpec[] = [API]): ZeropsAppConfig => ({
 	id: 'demo',
@@ -154,9 +170,10 @@ const runtimeRun = (
 		externalId: async (id) => {
 			recorded.externalIds.push(id)
 		},
+		checkpoint: async () => {},
 	},
 	target: provider.encodeTarget(targetValue),
-	artifact: provider.encodeArtifact(compileFabrikaManifest(app([DB, API]), 'prod')),
+	artifact: provider.encodeArtifact(compileFabrikaManifest(app([DB, API]), 'prod', SOURCE_DESCRIPTOR)),
 })
 
 const execute = async (run: RuntimeProviderRun, provider: ReturnType<typeof createZeropsProvider>): Promise<void> => {

@@ -60,6 +60,7 @@ const deployInput = (provider: string): ProviderDeployInput => ({
 	events: {
 		log: () => {},
 		externalId: async () => {},
+		checkpoint: async () => {},
 	},
 })
 

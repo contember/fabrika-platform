@@ -20,6 +20,7 @@ import {
 	compileFabrikaManifest,
 	compileImport,
 	compileImportYaml,
+	createZeropsArtifactSourceDescriptor,
 	createZeropsProvider,
 	type ZeropsApi,
 	type ZeropsAppVersionStatus,
@@ -30,6 +31,9 @@ import {
 import { buildCaddyConfig } from '@fabrika/proxy'
 import { encodeProxyManifestJson, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { REPO_ROOT } from '../artifacts'
 import { assertOnlyPublicService, assertZeropsHostnames } from '../invariants'
 import { validateYaml } from '../validate'
 
@@ -65,6 +69,9 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 			rec.triggers.push({ serviceId, buildFromGit, zeropsSetup })
 			return Promise.resolve(record('triggerPipeline', { id: 'proc-1', appVersionId: 'ver-1' }))
 		},
+		createAppVersion: () => Promise.reject(new Error('upload-backed app versions are not expected in this fixture')),
+		buildAndDeployAppVersion: () => Promise.reject(new Error('upload-backed app versions are not expected in this fixture')),
+		deleteAppVersion: () => Promise.reject(new Error('upload-backed app versions are not expected in this fixture')),
 		getAppVersion: ({ appVersionId }) => {
 			const status = statuses[Math.min(poll, statuses.length - 1)]
 			poll += 1
@@ -126,7 +133,8 @@ const TARGET: ZeropsRuntimeTarget = {
 	adminKey: 'px_admin_placeholder',
 }
 
-const MANIFEST = compileFabrikaManifest(notesConfig, 'prod')
+const SOURCE_DESCRIPTOR = await createZeropsArtifactSourceDescriptor(readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zerops.yaml'), 'utf8'))
+const MANIFEST = compileFabrikaManifest(notesConfig, 'prod', SOURCE_DESCRIPTOR)
 
 const makeRun = (provider: ZeropsProvider, recorded: Recorded, overrides: Partial<RuntimeProviderRun> = {}): RuntimeProviderRun => ({
 	appId: notesConfig.id,
@@ -144,6 +152,7 @@ const makeRun = (provider: ZeropsProvider, recorded: Recorded, overrides: Partia
 			recorded.logs.push(line)
 		},
 		externalId: () => Promise.resolve(),
+		checkpoint: () => Promise.resolve(),
 	},
 	...overrides,
 })

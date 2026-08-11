@@ -78,6 +78,7 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 	const events: ProviderRunEvents = {
 		log: options.log ?? ((line) => console.log(line)),
 		externalId: async () => {},
+		checkpoint: async () => {},
 	}
 	const domain = environmentValue('FABRIKA_CONTROL_DOMAIN')
 	const iamUrl = environmentValue('FABRIKA_IAM_URL')

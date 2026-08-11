@@ -23,6 +23,82 @@ function provider(outcomes: Readonly<Record<string, ProviderReconcileOutcome>>, 
 }
 
 describe('reconcileProviderRuns', () => {
+	test('retries durable provider cancellation without reconciling or losing checkpoint state', async () => {
+		const { db } = createHarness()
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
+		await db.runs.createRun({ id: 'cancelling', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.markRunStarted('cancelling', 'runs/cancelling/logs.ndjson')
+		await db.runs.setRunExternalId('cancelling', 'operation', { phase: 'uploaded' })
+		await db.runs.beginRunCancellation('cancelling')
+
+		let cancellationAttempts = 0
+		let reconcileAttempts = 0
+		const states: unknown[] = []
+		const released: string[] = []
+		const controlProvider: ControlProvider = {
+			id: TEST_PROVIDER_ID,
+			normalizeRegistration: (input) => input,
+			deploy: () => Promise.resolve({ state: 'succeeded' }),
+			cancel: (input) => {
+				cancellationAttempts++
+				states.push(input.providerState)
+				if (cancellationAttempts === 1) return Promise.reject(new Error('temporary cancel failure'))
+				return Promise.resolve()
+			},
+			reconcile: () => {
+				reconcileAttempts++
+				return Promise.resolve({ state: 'succeeded' })
+			},
+		}
+		const deps = {
+			repositories: db,
+			provider: controlProvider,
+			releaseLock: (key: string, holder: string) => {
+				released.push(`${key}/${holder}`)
+				return Promise.resolve()
+			},
+		}
+
+		await expect(reconcileProviderRuns(deps)).rejects.toThrow('temporary cancel failure')
+		expect((await db.runs.getRun('cancelling'))?.status).toBe('running')
+		expect((await db.runs.getRun('cancelling'))?.cancel_requested_at).not.toBeNull()
+		expect(released).toEqual([])
+
+		expect(await reconcileProviderRuns(deps)).toMatchObject({ checked: 1, failed: 1 })
+		expect((await db.runs.getRun('cancelling'))?.status).toBe('failed')
+		expect(states).toEqual([{ phase: 'uploaded' }, { phase: 'uploaded' }])
+		expect(reconcileAttempts).toBe(0)
+		expect(released).toEqual(['app:prod/cancelling'])
+	})
+
+	test('hands persisted provider checkpoint state to reconciliation', async () => {
+		const { db } = createHarness()
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
+		await db.runs.createRun({ id: 'resumed', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.markRunStarted('resumed', 'runs/resumed/logs.ndjson')
+		await db.runs.setRunExternalId('resumed', 'operation', { appVersionId: 'version-1', phase: 'uploaded' })
+
+		const states: unknown[] = []
+		expect(
+			await reconcileProviderRuns({
+				repositories: db,
+				provider: {
+					id: TEST_PROVIDER_ID,
+					normalizeRegistration: (input) => input,
+					deploy: () => Promise.resolve({ state: 'succeeded' }),
+					reconcile: (input) => {
+						states.push(input.providerState)
+						return Promise.resolve({ state: 'running' })
+					},
+				},
+				releaseLock: () => Promise.resolve(),
+			}),
+		).toMatchObject({ checked: 1, inProgress: 1 })
+		expect(states).toEqual([{ appVersionId: 'version-1', phase: 'uploaded' }])
+	})
+
 	test('finishes terminal operations through a third provider and leaves pending work untouched', async () => {
 		const { db } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })

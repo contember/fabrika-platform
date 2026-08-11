@@ -96,6 +96,7 @@ describe('createProvider', () => {
 				externalId: async (id) => {
 					externalIds.push(id)
 				},
+				checkpoint: async () => {},
 			},
 			target,
 			artifact,
@@ -148,6 +149,7 @@ describe('createProvider', () => {
 			events: {
 				log: () => {},
 				externalId: async () => {},
+				checkpoint: async () => {},
 			},
 			target: { provider: 'other', version: 3, payload: { region: 'eu-west' } },
 			artifact: harbor.encodeArtifact({ image: 'registry.example/api:v4', replicas: 3 }),
@@ -177,6 +179,7 @@ describe('createProvider', () => {
 			events: {
 				log: () => {},
 				externalId: async () => {},
+				checkpoint: async () => {},
 			},
 		}
 

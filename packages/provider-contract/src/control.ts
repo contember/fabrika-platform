@@ -46,6 +46,21 @@ export interface ProviderRegistrationInput {
 /** Canonical registration returned after provider-owned validation and normalization. */
 export type ProviderRegistration = ProviderRegistrationInput
 
+/** Provider-neutral input for resolving one requested source ref to an immutable Git object id. */
+export interface ProviderSourceResolutionInput {
+	readonly runId: string
+	readonly app: ProviderApp
+	readonly environment: ProviderEnvironment
+	/** An immutable commit already recorded by the trigger, which resolution must verify exactly. */
+	readonly expectedCommitSha?: string
+	readonly signal: AbortSignal
+}
+
+/** The exact source revision a provider resolved before starting deploy work. */
+export interface ProviderSourceResolution {
+	readonly commitSha: string
+}
+
 /** One control-plane deploy invocation. */
 export interface ProviderDeployInput {
 	readonly runId: string
@@ -89,6 +104,8 @@ export interface ProviderRunReference {
 	readonly runId: string
 	readonly externalId: string
 	readonly environment: ProviderEnvironment
+	/** Credential-free provider-owned progress needed to resume the external operation. */
+	readonly providerState?: JsonValue
 }
 
 export type ProviderCancelInput = ProviderRunReference
@@ -216,6 +233,7 @@ export interface ProviderNamespaceCapabilities {
 export interface ControlProvider {
 	readonly id: string
 	normalizeRegistration(input: ProviderRegistrationInput): ProviderRegistration
+	resolveSource?(input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution>
 	deploy(input: ProviderDeployInput): Promise<ProviderTerminalOutcome>
 	cancel?(input: ProviderCancelInput): Promise<void>
 	reconcile?(input: ProviderReconcileInput): Promise<ProviderReconcileOutcome>

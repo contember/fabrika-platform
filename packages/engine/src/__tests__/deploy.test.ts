@@ -22,6 +22,7 @@ const makeRun = (options: { signal?: AbortSignal; dryRun?: boolean; logs?: strin
 			options.logs?.push(line)
 		},
 		externalId: async () => {},
+		checkpoint: async () => {},
 	},
 	target: envelope('eu-west'),
 	artifact: envelope('registry.example/api:v4'),

@@ -430,6 +430,239 @@ describe('Zerops integration tokens', () => {
 	})
 })
 
+describe('Zerops upload-backed app versions', () => {
+	test('creates named and unnamed versions with the exact request shape', async () => {
+		const requests: { method: string; url: string; body: unknown; signal: AbortSignal | undefined }[] = []
+		let sequence = 0
+		const fetchImpl: FetchLike = async (url, init) => {
+			sequence++
+			requests.push({
+				method: init?.method ?? 'GET',
+				url,
+				body: init?.body === undefined ? undefined : JSON.parse(init.body),
+				signal: init?.signal,
+			})
+			return jsonResponse({
+				id: `version-${sequence}`,
+				serviceStackId: 'service-1',
+				uploadUrl: `https://upload.test/archive-${sequence}?signature=secret`,
+			})
+		}
+		const api = createZeropsApi({ token: 'zerops-secret', baseUrl: 'https://zerops.test', fetchImpl })
+		const controller = new AbortController()
+
+		await expect(api.createAppVersion({ serviceId: 'service-1', signal: controller.signal })).resolves.toEqual({
+			id: 'version-1',
+			uploadUrl: 'https://upload.test/archive-1?signature=secret',
+		})
+		await expect(api.createAppVersion({ serviceId: 'service-1', name: 'release 42', signal: controller.signal })).resolves.toEqual({
+			id: 'version-2',
+			uploadUrl: 'https://upload.test/archive-2?signature=secret',
+		})
+		expect(requests).toEqual([
+			{
+				method: 'POST',
+				url: 'https://zerops.test/service-stack/service-1/app-version',
+				body: {},
+				signal: controller.signal,
+			},
+			{
+				method: 'POST',
+				url: 'https://zerops.test/service-stack/service-1/app-version',
+				body: { name: 'release 42' },
+				signal: controller.signal,
+			},
+		])
+	})
+
+	test('builds an uploaded version with zeropsYamlSetup on the documented wire key', async () => {
+		const requests: { method: string; url: string; body: unknown }[] = []
+		const fetchImpl: FetchLike = async (url, init) => {
+			requests.push({
+				method: init?.method ?? 'GET',
+				url,
+				body: init?.body === undefined ? undefined : JSON.parse(init.body),
+			})
+			return jsonResponse({
+				id: 'process-1',
+				status: 'PENDING',
+				actionName: 'stack.build',
+				serviceStackId: 'service-1',
+				appVersion: { id: 'version-1' },
+			})
+		}
+		const api = createZeropsApi({ token: 'zerops-secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await expect(
+			api.buildAndDeployAppVersion({
+				appVersionId: 'version-1',
+				zeropsYaml: 'zerops:\n  - setup: app\n',
+				zeropsYamlSetup: 'app',
+				signal: signal(),
+			}),
+		).resolves.toEqual({
+			id: 'process-1',
+			status: 'PENDING',
+			actionName: 'stack.build',
+			serviceStackId: 'service-1',
+			appVersionId: 'version-1',
+		})
+		expect(requests).toEqual([{
+			method: 'PUT',
+			url: 'https://zerops.test/app-version/version-1/build-and-deploy',
+			body: { zeropsYaml: 'zerops:\n  - setup: app\n', zeropsYamlSetup: 'app' },
+		}])
+	})
+
+	test('accepts a documented process without appVersion, omits zeropsYamlSetup, and deletes with a bodiless request', async () => {
+		const requests: { method: string; url: string; body: unknown }[] = []
+		const fetchImpl: FetchLike = async (url, init) => {
+			requests.push({
+				method: init?.method ?? 'GET',
+				url,
+				body: init?.body === undefined ? undefined : JSON.parse(init.body),
+			})
+			return init?.method === 'DELETE'
+				? jsonResponse({ success: true })
+				: jsonResponse({ id: 'process-1' })
+		}
+		const api = createZeropsApi({ token: 'zerops-secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await api.buildAndDeployAppVersion({ appVersionId: 'version-1', zeropsYaml: 'zerops: []\n', signal: signal() })
+		await expect(api.deleteAppVersion({ appVersionId: 'version-1', signal: signal() })).resolves.toBeUndefined()
+		expect(requests).toEqual([
+			{
+				method: 'PUT',
+				url: 'https://zerops.test/app-version/version-1/build-and-deploy',
+				body: { zeropsYaml: 'zerops: []\n' },
+			},
+			{ method: 'DELETE', url: 'https://zerops.test/app-version/version-1', body: undefined },
+		])
+	})
+
+	test('rejects missing create fields and mismatched response coordinates without exposing the upload URL', async () => {
+		const uploadUrl = 'https://upload.test/archive?signature=must-not-leak'
+		const responses = [
+			{ serviceStackId: 'service-1', uploadUrl },
+			{ id: 'version-2', serviceStackId: 'different-service', uploadUrl },
+		]
+		let call = 0
+		const fetchImpl: FetchLike = async () => jsonResponse(responses[call++])
+		const api = createZeropsApi({ token: 'zerops-secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		for (let attempt = 0; attempt < responses.length; attempt++) {
+			const error = await api.createAppVersion({ serviceId: 'service-1', signal: signal() }).catch((cause: unknown) => cause)
+			expect(error instanceof Error ? error.message : '').toBe('zerops: create app-version returned an invalid response')
+			expect(error instanceof Error ? error.message : '').not.toContain(uploadUrl)
+		}
+	})
+
+	test('rejects a malformed build process and a different app-version coordinate without exposing the response', async () => {
+		const responseSecret = 'response-value-that-must-not-leak'
+		const responses = [
+			{ id: '', message: responseSecret },
+			{ id: 'process-2', appVersion: { id: 'version-other' }, message: responseSecret },
+		]
+		let call = 0
+		const fetchImpl: FetchLike = async () => jsonResponse(responses[call++])
+		const api = createZeropsApi({ token: 'zerops-secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		for (let attempt = 0; attempt < responses.length; attempt++) {
+			const error = await api
+				.buildAndDeployAppVersion({ appVersionId: 'version-1', zeropsYaml: 'zerops: []\n', signal: signal() })
+				.catch((cause: unknown) => cause)
+			expect(error instanceof Error ? error.message : '').toBe('zerops: build and deploy app-version returned an invalid response')
+			expect(error instanceof Error ? error.message : '').not.toContain(responseSecret)
+		}
+	})
+
+	test('requires an explicit successful delete response without exposing malformed content', async () => {
+		const responseSecret = 'delete-response-that-must-not-leak'
+		const responses = [{ success: false, message: responseSecret }, { message: responseSecret }, null]
+		let call = 0
+		const fetchImpl: FetchLike = async () => jsonResponse(responses[call++])
+		const api = createZeropsApi({ token: 'zerops-secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		for (let attempt = 0; attempt < responses.length; attempt++) {
+			const error = await api.deleteAppVersion({ appVersionId: 'version-1', signal: signal() }).catch((cause: unknown) => cause)
+			expect(error instanceof Error ? error.message : '').toBe('zerops: delete app-version returned an invalid response')
+			expect(error instanceof Error ? error.message : '').not.toContain(responseSecret)
+		}
+	})
+
+	test('preserves a sanitized AbortError before fetch, during fetch, and while reading the response body', async () => {
+		const abortDetail = 'credential-bearing abort detail that must not leak'
+		const before = new AbortController()
+		before.abort(new Error(abortDetail))
+		let beforeFetchCalls = 0
+		const beforeApi = createZeropsApi({
+			token: 'zerops-secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => {
+				beforeFetchCalls++
+				return jsonResponse({ success: true })
+			},
+		})
+
+		const duringApi = createZeropsApi({
+			token: 'zerops-secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => {
+				throw new DOMException(abortDetail, 'AbortError')
+			},
+		})
+
+		class AbortingJsonResponse extends Response {
+			override json(): Promise<never> {
+				return Promise.reject(new DOMException(abortDetail, 'AbortError'))
+			}
+		}
+		const bodyApi = createZeropsApi({
+			token: 'zerops-secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => new AbortingJsonResponse(null, { status: 200 }),
+		})
+
+		const errors = await Promise.all([
+			beforeApi.deleteAppVersion({ appVersionId: 'version-1', signal: before.signal }).catch((cause: unknown) => cause),
+			duringApi.deleteAppVersion({ appVersionId: 'version-1', signal: signal() }).catch((cause: unknown) => cause),
+			bodyApi.deleteAppVersion({ appVersionId: 'version-1', signal: signal() }).catch((cause: unknown) => cause),
+		])
+		expect(beforeFetchCalls).toBe(0)
+		for (const error of errors) {
+			expect(error instanceof Error ? error.name : '').toBe('AbortError')
+			expect(error instanceof Error ? error.message : '').toBe('The operation was aborted')
+			expect(error instanceof Error ? error.message : '').not.toContain(abortDetail)
+		}
+	})
+
+	test('redacts non-2xx build and delete response bodies', async () => {
+		const responseSecret = 'response-value-that-must-not-leak'
+		const uploadUrl = 'https://upload.test/archive?signature=must-not-leak'
+		const token = 'zerops-token-that-must-not-leak'
+		const fetchImpl: FetchLike = async () => jsonResponse({ error: { code: 'platformCode', message: `${responseSecret} ${uploadUrl} ${token}` } }, 503)
+		const api = createZeropsApi({ token, baseUrl: 'https://zerops.test', fetchImpl })
+
+		const errors = await Promise.all([
+			api
+				.buildAndDeployAppVersion({ appVersionId: 'version-1', zeropsYaml: 'zerops: []\n', signal: signal() })
+				.catch((cause: unknown) => cause),
+			api.deleteAppVersion({ appVersionId: 'version-1', signal: signal() }).catch((cause: unknown) => cause),
+		])
+		expect(errors.map((error) => error instanceof Error ? error.message : '')).toEqual([
+			'zerops: build and deploy app-version failed (503)',
+			'zerops: delete app-version failed (503)',
+		])
+		for (const error of errors) {
+			const message = error instanceof Error ? error.message : ''
+			expect(message).not.toContain(responseSecret)
+			expect(message).not.toContain(uploadUrl)
+			expect(message).not.toContain(token)
+			expect(error instanceof ZeropsApiError ? error.code : 'unexpected').toBe('')
+		}
+	})
+})
+
 /** Answer `GET /process/{id}` with one status per call, holding the last one once the script runs out. */
 const processStatuses = (statuses: readonly string[], urls: string[]): FetchLike => {
 	let poll = 0

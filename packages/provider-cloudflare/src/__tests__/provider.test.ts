@@ -93,6 +93,7 @@ const open = (
 				rec.logs.push(line)
 			},
 			externalId: async () => {},
+			checkpoint: async () => {},
 		},
 		target: provider.encodeTarget({
 			accountId: 'acc-1',

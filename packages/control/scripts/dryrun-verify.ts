@@ -64,6 +64,7 @@ const run: RuntimeProviderRun = {
 	events: {
 		log: (line) => console.log(line),
 		externalId: async () => {},
+		checkpoint: async () => {},
 	},
 }
 

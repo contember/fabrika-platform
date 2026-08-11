@@ -12,7 +12,7 @@ import type { ZeropsApi, ZeropsAppVersionStatus } from '../api'
 import { useSharedPostgres } from '../authoring'
 import { zeropsTargetCodec } from '../codec'
 import { createZeropsControlProvider, type ZeropsControlProviderOptions, type ZeropsProviderExecutor, zeropsStoredTargetCodec } from '../control'
-import { compileFabrikaManifest, zeropsArtifactCodec } from '../manifest'
+import { compileFabrikaManifest, zeropsArtifactCodec, type ZeropsArtifactSourceDescriptor } from '../manifest'
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
 import { zeropsSharedServiceHostname } from '../service-names'
 import type { ZeropsAppConfig } from '../types'
@@ -48,6 +48,11 @@ const config: ZeropsAppConfig = {
 }
 
 const SCHEMA: AppSchema = { scopes: [], actions: [], roles: {} }
+const SOURCE_DESCRIPTOR: ZeropsArtifactSourceDescriptor = {
+	path: 'zerops.yaml',
+	contents: 'zerops:\n  - setup: test\n',
+	sha256: '560802d669a116e27e5ce76af3312048e3e9e7743a4fb7d6e73f14d800dc46d1',
+}
 
 const app: ProviderApp = {
 	id: 'notes',
@@ -86,7 +91,7 @@ const environment = (overrides: Partial<ProviderEnvironment> = {}): ProviderEnvi
 	artifact: {
 		provider: 'zerops',
 		version: zeropsArtifactCodec.version,
-		payload: zeropsArtifactCodec.encode(compileFabrikaManifest(config, 'prod')),
+		payload: zeropsArtifactCodec.encode(compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)),
 	},
 	...overrides,
 })
@@ -107,6 +112,7 @@ const deployInput = (recorded: Recorded): ProviderDeployInput => ({
 		externalId: async (id) => {
 			recorded.externalIds.push(id)
 		},
+		checkpoint: async () => {},
 	},
 })
 
@@ -121,6 +127,17 @@ const makeApi = (recorded: Recorded, status: () => ZeropsAppVersionStatus = () =
 		recorded.calls.push('triggerPipeline')
 		recorded.triggers.push({ serviceId, buildFromGit, zeropsSetup })
 		return { id: 'process-1', appVersionId: 'version-1' }
+	},
+	createAppVersion: async ({ serviceId }) => {
+		recorded.calls.push(`createAppVersion:${serviceId}`)
+		return { id: 'version-1', uploadUrl: 'https://upload.test/archive?signature=test' }
+	},
+	buildAndDeployAppVersion: async ({ appVersionId }) => {
+		recorded.calls.push(`buildAndDeployAppVersion:${appVersionId}`)
+		return { id: 'process-1', appVersionId }
+	},
+	deleteAppVersion: async ({ appVersionId }) => {
+		recorded.calls.push(`deleteAppVersion:${appVersionId}`)
 	},
 	getAppVersion: async ({ appVersionId }) => {
 		recorded.calls.push(`getAppVersion:${appVersionId}`)
@@ -336,7 +353,7 @@ describe('Zerops ControlProvider registration', () => {
 				artifact: {
 					provider: 'zerops',
 					version: zeropsArtifactCodec.version,
-					payload: zeropsArtifactCodec.encode(compileFabrikaManifest(namespacedConfig, 'prod')),
+					payload: zeropsArtifactCodec.encode(compileFabrikaManifest(namespacedConfig, 'prod', SOURCE_DESCRIPTOR)),
 				},
 			}),
 		})
@@ -379,7 +396,7 @@ describe('Zerops ControlProvider registration', () => {
 					artifact: {
 						provider: 'zerops',
 						version: zeropsArtifactCodec.version,
-						payload: zeropsArtifactCodec.encode(compileFabrikaManifest(candidate, 'prod')),
+						payload: zeropsArtifactCodec.encode(compileFabrikaManifest(candidate, 'prod', SOURCE_DESCRIPTOR)),
 					},
 				}),
 			})
@@ -412,7 +429,7 @@ describe('Zerops ControlProvider registration', () => {
 
 describe('Zerops ControlProvider lifecycle', () => {
 	test('rejects structured manifest drift before beforeDeploy or the Zerops API', async () => {
-		const manifest = compileFabrikaManifest(config, 'prod')
+		const manifest = compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)
 		const service = manifest.target.importDocument.services[0]
 		if (service === undefined) throw new Error('expected a service')
 		const drifted = {
@@ -650,7 +667,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 			api: makeApi(recorded),
 			sleep: () => Promise.resolve(),
 		})
-		const manifest = compileFabrikaManifest(sharedConfig, 'prod')
+		const manifest = compileFabrikaManifest(sharedConfig, 'prod', SOURCE_DESCRIPTOR)
 		const input = deployInput(recorded)
 		await control.deploy({
 			...input,
@@ -701,7 +718,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 			artifact: {
 				provider: 'zerops',
 				version: zeropsArtifactCodec.version,
-				payload: zeropsArtifactCodec.encode(compileFabrikaManifest({ ...config, schema: SCHEMA }, 'prod')),
+				payload: zeropsArtifactCodec.encode(compileFabrikaManifest({ ...config, schema: SCHEMA }, 'prod', SOURCE_DESCRIPTOR)),
 			},
 		})
 
@@ -777,7 +794,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 				artifact: {
 					provider: 'zerops',
 					version: zeropsArtifactCodec.version,
-					payload: zeropsArtifactCodec.encode(compileFabrikaManifest({ ...config, schema: SCHEMA }, 'prod')),
+					payload: zeropsArtifactCodec.encode(compileFabrikaManifest({ ...config, schema: SCHEMA }, 'prod', SOURCE_DESCRIPTOR)),
 				},
 			}),
 		}

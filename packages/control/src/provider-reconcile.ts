@@ -1,5 +1,5 @@
 import type { ControlProvider } from '@fabrika/provider-contract'
-import type { ControlRepositories } from './db'
+import { type ControlRepositories, parseProviderJson } from './db'
 import type { OperationsReleaseProjectionDeps } from './operations-releases'
 import { projectedReturnOrigins } from './return-origins'
 import { projectTerminalRun, providerEnvironment } from './run-lifecycle'
@@ -31,6 +31,32 @@ export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promis
 	}
 
 	for (const run of runs) {
+		if (run.cancel_requested_at !== null) {
+			if (run.external_run_id !== null && deps.provider.cancel !== undefined) {
+				const appEnv = await deps.repositories.registry.getAppEnv(run.app_id, run.env)
+				if (appEnv === null) {
+					throw new Error(`provider environment ${run.app_id}/${run.env} disappeared during cancellation`)
+				}
+				await deps.provider.cancel({
+					runId: run.id,
+					externalId: run.external_run_id,
+					environment: await providerEnvironment(deps.repositories.registry, appEnv),
+					...(run.provider_state_json === null
+						? {}
+						: { providerState: parseProviderJson(run.provider_state_json, `provider state for run ${run.id}`) }),
+				})
+			}
+			summary.checked++
+			if (await deps.repositories.runs.markRunCancellationFinished(run.id)) {
+				await projectTerminalRun(deps, run.id, false, 'failed')
+				await deps.releaseLock(`${run.app_id}:${run.env}`, run.id)
+				summary.failed++
+			} else {
+				summary.inProgress++
+			}
+			continue
+		}
+
 		if (run.external_run_id === null) {
 			summary.waiting++
 			continue
@@ -53,6 +79,9 @@ export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promis
 			runId: run.id,
 			externalId: run.external_run_id,
 			environment: await providerEnvironment(deps.repositories.registry, appEnv),
+			...(run.provider_state_json === null
+				? {}
+				: { providerState: parseProviderJson(run.provider_state_json, `provider state for run ${run.id}`) }),
 			...(returnOrigins === undefined ? {} : { returnOrigins }),
 		})
 		summary.checked++
@@ -62,7 +91,10 @@ export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promis
 			continue
 		}
 
-		await deps.repositories.runs.markRunFinished(run.id, outcome.state, outcome.exitCode ?? null)
+		if (!(await deps.repositories.runs.markRunFinished(run.id, outcome.state, outcome.exitCode ?? null))) {
+			summary.inProgress++
+			continue
+		}
 		await projectTerminalRun(deps, run.id, false, outcome.state)
 		await deps.releaseLock(`${run.app_id}:${run.env}`, run.id)
 		summary[outcome.state]++

@@ -3,6 +3,7 @@ import {
 	defineApp,
 	type ZeropsAppVersion,
 	zeropsArtifactCodec,
+	type ZeropsArtifactSourceDescriptor,
 	zeropsNamespaceTargetCodec,
 	zeropsStoredTargetCodec,
 } from '@fabrika/provider-zerops'
@@ -10,6 +11,12 @@ import { FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
 import { describe, expect, test } from 'bun:test'
 import { createHarness } from '../../__tests__/helpers/harness'
 import { compileNamespaceProxyManifest, syncZeropsProxy } from '../zerops-proxy'
+
+const SOURCE_DESCRIPTOR: ZeropsArtifactSourceDescriptor = {
+	path: 'zerops.yaml',
+	contents: 'zerops:\n  - setup: test\n',
+	sha256: '560802d669a116e27e5ce76af3312048e3e9e7743a4fb7d6e73f14d800dc46d1',
+}
 
 const appManifest = (id: string, env: string, upstream: string) =>
 	compileFabrikaManifest(
@@ -22,6 +29,7 @@ const appManifest = (id: string, env: string, upstream: string) =>
 			},
 		}),
 		env,
+		SOURCE_DESCRIPTOR,
 	)
 
 const envelope = <T>(codec: { version: number; encode(value: T): unknown }, value: T) => ({

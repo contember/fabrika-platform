@@ -37,7 +37,7 @@ const normalize = (provider: string, input: ProviderRegistrationInput): Provider
 
 async function seedRun(
 	db: ControlRepositories,
-	options: { provider?: string; secretRef?: string; externalId?: string } = {},
+	options: { provider?: string; secretRef?: string; externalId?: string; commitSha?: string } = {},
 ): Promise<string> {
 	const provider = options.provider ?? 'memory'
 	await db.registry.createApp({
@@ -72,6 +72,7 @@ async function seedRun(
 		appId: 'app',
 		env: 'prod',
 		ref: 'refs/heads/deploy/prod',
+		...(options.commitSha === undefined ? {} : { commitSha: options.commitSha }),
 		trigger: 'manual',
 	})
 	if (options.externalId !== undefined) {
@@ -170,6 +171,191 @@ const requireRun = async (db: ControlRepositories, id: string): Promise<RunRow> 
 }
 
 describe('provider-neutral run lifecycle', () => {
+	test('resolves and persists an exact source revision before provider deploy', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const calls: string[] = []
+		let resolutionSignal: AbortSignal | undefined
+		const inputs: ProviderDeployInput[] = []
+		const provider = makeProvider(inputs, { state: 'succeeded' })
+		provider.resolveSource = (input) => {
+			calls.push(`resolve:${input.app.source.ref}:${input.expectedCommitSha ?? 'none'}`)
+			resolutionSignal = input.signal
+			return Promise.resolve({ commitSha: 'A'.repeat(40) })
+		}
+		provider.deploy = async (input) => {
+			calls.push(`deploy:${input.app.source.ref}`)
+			if (resolutionSignal === undefined) throw new Error('source was not resolved')
+			expect(input.signal).toBe(resolutionSignal)
+			inputs.push(input)
+			return { state: 'succeeded' }
+		}
+
+		expect((await executeDeploy(makeDeps(db, provider), { runId })).status).toBe('succeeded')
+		expect(calls).toEqual([
+			'resolve:refs/heads/deploy/prod:none',
+			`deploy:${'a'.repeat(40)}`,
+		])
+		expect((await requireRun(db, runId)).commit_sha).toBe('a'.repeat(40))
+	})
+
+	test('verifies an existing trigger commit and deploys that exact revision', async () => {
+		const { db } = createHarness()
+		const expected = 'b'.repeat(40)
+		const runId = await seedRun(db, { commitSha: expected.toUpperCase() })
+		const inputs: ProviderDeployInput[] = []
+		const provider = makeProvider(inputs, { state: 'succeeded' })
+		provider.resolveSource = (input) => {
+			expect(input.expectedCommitSha).toBe(expected)
+			return Promise.resolve({ commitSha: expected })
+		}
+
+		expect((await executeDeploy(makeDeps(db, provider), { runId })).status).toBe('succeeded')
+		expect(inputs[0]?.app.source.ref).toBe(expected)
+		expect((await requireRun(db, runId)).commit_sha).toBe(expected)
+	})
+
+	test('fails before deploy when source resolution returns an invalid or mismatched commit', async () => {
+		for (const resolution of ['not-a-commit', 'c'.repeat(40)]) {
+			const { db } = createHarness()
+			const runId = await seedRun(db, { commitSha: 'b'.repeat(40) })
+			const inputs: ProviderDeployInput[] = []
+			const provider = makeProvider(inputs, { state: 'succeeded' })
+			provider.resolveSource = () => Promise.resolve({ commitSha: resolution })
+
+			expect((await executeDeploy(makeDeps(db, provider), { runId })).status).toBe('failed')
+			expect(inputs).toEqual([])
+			const failed = await requireRun(db, runId)
+			expect(failed.status).toBe('failed')
+			expect(failed.commit_sha).toBe('b'.repeat(40))
+		}
+	})
+
+	test('does not resolve source during a dry run', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const inputs: ProviderDeployInput[] = []
+		const provider = makeProvider(inputs, { state: 'succeeded' })
+		provider.resolveSource = () => Promise.reject(new Error('dry run must not resolve source'))
+
+		expect((await executeDeploy(makeDeps(db, provider), { runId, dryRun: true })).status).toBe('succeeded')
+		expect(inputs[0]?.app.source.ref).toBe('refs/heads/deploy/prod')
+		expect((await requireRun(db, runId)).commit_sha).toBeNull()
+	})
+
+	test('atomically persists provider acceptance state and later checkpoints', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const provider = makeProvider([], { state: 'succeeded' })
+		provider.deploy = async (input) => {
+			await input.events.externalId('operation-1', { phase: 'accepted', version: 7 })
+			const accepted = await requireRun(db, runId)
+			expect(accepted.external_run_id).toBe('operation-1')
+			expect(JSON.parse(accepted.provider_state_json ?? '')).toEqual({ phase: 'accepted', version: 7 })
+			await input.events.checkpoint({ phase: 'deployed', version: 7 })
+			return { state: 'succeeded' }
+		}
+
+		expect((await executeDeploy(makeDeps(db, provider), { runId })).status).toBe('succeeded')
+		expect(JSON.parse((await requireRun(db, runId)).provider_state_json ?? '')).toEqual({ phase: 'deployed', version: 7 })
+	})
+
+	test('guards provider acceptance identity, checkpoint order, size, and cancellation freeze', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		await db.runs.markRunStarted(runId, `runs/${runId}/logs.ndjson`)
+
+		expect(await db.runs.checkpointRunProviderState(runId, { phase: 'too-early' })).toBe(false)
+		expect(await db.runs.setRunExternalId(runId, 'operation-1', { phase: 'accepted' })).toBe(true)
+		expect(await db.runs.setRunExternalId(runId, 'operation-1', { phase: 'replayed' })).toBe(true)
+		expect(await db.runs.setRunExternalId(runId, 'operation-2', { phase: 'wrong-owner' })).toBe(false)
+		expect(JSON.parse((await requireRun(db, runId)).provider_state_json ?? '')).toEqual({ phase: 'replayed' })
+		await expect(db.runs.checkpointRunProviderState(runId, { payload: 'x'.repeat(17 * 1024) })).rejects.toThrow('16 KiB')
+
+		const cancelling = await db.runs.beginRunCancellation(runId)
+		expect(cancelling?.external_run_id).toBe('operation-1')
+		expect(await db.runs.setRunCommit(runId, 'a'.repeat(40))).toBe(false)
+		expect(await db.runs.setRunExternalId(runId, 'operation-1')).toBe(false)
+		expect(await db.runs.checkpointRunProviderState(runId, { phase: 'late' })).toBe(false)
+		expect(await db.runs.markRunFinished(runId, 'succeeded', 0)).toBe(false)
+	})
+
+	test('a cancellation during source resolution prevents provider deploy and Operations projection', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const staleRun = await requireRun(db, runId)
+		let enteredResolution = () => {}
+		const resolutionEntered = new Promise<void>((resolve) => {
+			enteredResolution = resolve
+		})
+		let finishResolution = () => {}
+		const resolutionFinished = new Promise<void>((resolve) => {
+			finishResolution = resolve
+		})
+		const inputs: ProviderDeployInput[] = []
+		const provider = makeProvider(inputs, { state: 'succeeded' })
+		provider.resolveSource = async () => {
+			enteredResolution()
+			await resolutionFinished
+			return { commitSha: 'a'.repeat(40) }
+		}
+		const lock = makeFakeLock()
+		const deps = makeDeps(db, provider, new EnvSecretResolver({}), lock)
+		deps.operations = { repository: db.operationsReleases }
+
+		const deploying = executeDeploy(deps, { runId })
+		await resolutionEntered
+		await cancelDeploy(deps, staleRun)
+		finishResolution()
+
+		expect(await deploying).toEqual({ runId, status: 'skipped' })
+		expect(inputs).toEqual([])
+		expect((await requireRun(db, runId)).status).toBe('failed')
+		expect(await db.operationsReleases.get(runId)).toBeNull()
+	})
+
+	test('cancellation uses the latest checkpoint and suppresses a late provider success', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db, { commitSha: 'a'.repeat(40) })
+		const staleRun = await requireRun(db, runId)
+		let checkpointReady = () => {}
+		const checkpointed = new Promise<void>((resolve) => {
+			checkpointReady = resolve
+		})
+		let finishProvider = () => {}
+		const providerFinished = new Promise<void>((resolve) => {
+			finishProvider = resolve
+		})
+		const cancelledStates: unknown[] = []
+		const provider = makeProvider([], { state: 'succeeded' })
+		provider.deploy = async (input) => {
+			await input.events.externalId('operation-1', { phase: 'accepted' })
+			await input.events.checkpoint({ phase: 'uploaded', version: 3 })
+			checkpointReady()
+			await providerFinished
+			return { state: 'succeeded' }
+		}
+		provider.cancel = (input) => {
+			cancelledStates.push(input.providerState)
+			return Promise.resolve()
+		}
+		const lock = makeFakeLock()
+		const deps = makeDeps(db, provider, new EnvSecretResolver({}), lock)
+		deps.operations = { repository: db.operationsReleases }
+
+		const deploying = executeDeploy(deps, { runId })
+		await checkpointed
+		await cancelDeploy(deps, staleRun)
+		finishProvider()
+
+		expect(await deploying).toEqual({ runId, status: 'skipped' })
+		expect(cancelledStates).toEqual([{ phase: 'uploaded', version: 3 }])
+		expect((await requireRun(db, runId)).status).toBe('failed')
+		const projection = await db.operationsReleases.get(runId)
+		expect(projection?.payload_json).toContain('"phase":"provider_accepted"')
+		expect(projection?.payload_json).not.toContain('"outcome":"succeeded"')
+	})
+
 	test('resolves layered values and records a successful provider run', async () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db)
