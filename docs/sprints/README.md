@@ -19,6 +19,11 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
+- [`sprint-2026-08-11-fabrika-deploys-an-app-on-zerops`](sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md)
+  — an application deployed by fabrika through the control plane, signed into and reporting its own
+  errors. Consumes [`60`](../backlog/60-the-example-app-has-no-light-tier-descriptor.md) and
+  [`69`](../backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md); its last work unit closes
+  [`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md) and waits on the operator.
 - [`sprint-2026-08-06-zerops-platform-deploy`](sprint-2026-08-06-zerops-platform-deploy.md) —
   an unattended `platform deploy` on Zerops. Consumes backlog
   [`58`](../backlog/58-generate-the-platform-installations-proxy-manifest.md),
