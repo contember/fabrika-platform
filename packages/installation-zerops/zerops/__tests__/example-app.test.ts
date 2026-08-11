@@ -230,7 +230,7 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 		expect(narrative).toEqual([
 			`[dry-run] would POST the import for 2 service(s) to project ${TARGET.projectId}:`,
 			`[dry-run] would trigger the Zerops pipeline for service ${TARGET.serviceId} (${NOTES_SERVICE}) from the service's configured Git integration`,
-			'[dry-run] would poll /app-version until it is ACTIVE and relay the build log',
+			'[dry-run] would poll the pipeline process when available and /app-version until it is ACTIVE, relaying the build log',
 			`[dry-run] would reconcile schema for \`${NOTES_APP_ID}\` against https://iam.example.test`,
 		])
 	})
@@ -261,12 +261,15 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 			// 3-N. watch it. Build and deploy are ONE platform-side operation, so what fabrika splits is
 			// triggering from observing.
 			'getLogAccess',
+			'getProcess',
 			'getAppVersion',
 			'readBuildLog',
 			'sleep',
+			'getProcess',
 			'getAppVersion',
 			'readBuildLog',
 			'sleep',
+			'getProcess',
 			'getAppVersion',
 			'readBuildLog',
 			// N+1. the one portable step: reconcile the authz vocabulary into IAM

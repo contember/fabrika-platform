@@ -1,11 +1,11 @@
 import type { AppSchema } from '@fabrika/auth-core'
 import type { RuntimeProviderRun } from '@fabrika/provider-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
-import type { ZeropsApi, ZeropsAppVersion, ZeropsLogAccess } from '../api'
+import type { ZeropsApi, ZeropsAppVersion, ZeropsLogAccess, ZeropsProcess } from '../api'
 import type { ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
 import { compileFabrikaManifest } from '../manifest'
-import { createZeropsProvider } from '../provider'
+import { CANCELLED, createZeropsProvider } from '../provider'
 import type { ZeropsServiceType } from '../schema.generated'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget, ZeropsServiceSpec } from '../types'
 
@@ -24,6 +24,7 @@ const fresh = (): Recorded => ({ calls: [], imports: [], triggers: [], externalI
 
 interface Overrides {
 	statuses?: Array<ZeropsAppVersion['status']>
+	processStatuses?: Array<ZeropsProcess['status']>
 	triggerVersionId?: string
 	latestVersion?: ZeropsAppVersion | null
 }
@@ -39,6 +40,7 @@ const LOG_ACCESS: ZeropsLogAccess = {
 
 const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 	let poll = 0
+	let processPoll = 0
 	return {
 		importServices: async ({ projectId, yaml }) => {
 			recorded.calls.push('importServices')
@@ -62,7 +64,13 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		cancelBuild: async () => {
 			recorded.calls.push('cancelBuild')
 		},
-		getProcess: async ({ processId }) => ({ id: processId, status: 'FINISHED' }),
+		getProcess: async ({ processId }) => {
+			recorded.calls.push('getProcess')
+			const statuses = overrides.processStatuses ?? ['FINISHED']
+			const status = statuses[Math.min(processPoll, statuses.length - 1)]
+			processPoll++
+			return { id: processId, status }
+		},
 		createIntegrationToken: async () => {
 			throw new Error('the deploy driver must not mint a Zerops token')
 		},
@@ -166,11 +174,21 @@ beforeEach(() => {
 describe('Zerops provider', () => {
 	test('owns a distinct plan and executes it through the typed provider contract', async () => {
 		const controller = new AbortController()
-		const provider = createZeropsProvider(() => makeCollaborators(recorded, { statuses: ['BUILDING', 'ACTIVE'] }))
+		const provider = createZeropsProvider(() =>
+			makeCollaborators(recorded, { statuses: ['BUILDING', 'ACTIVE'], processStatuses: ['RUNNING', 'FINISHED'], triggerVersionId: 'version-1' })
+		)
 		const session = await provider.runtime.open(runtimeRun(recorded, provider, target(), false, controller.signal))
 		expect(session.plan.steps.map((step) => step.kind)).toEqual(['apply-import', 'trigger-deploy', 'await-deploy', 'reconcile-schema'])
 		await execute(runtimeRun(recorded, provider, target(), false, controller.signal), provider)
-		expect(recorded.calls).toEqual(['importServices', 'triggerPipeline', 'getAppVersion', 'getAppVersion', 'reconcileSchema'])
+		expect(recorded.calls).toEqual([
+			'importServices',
+			'triggerPipeline',
+			'getProcess',
+			'getAppVersion',
+			'getProcess',
+			'getAppVersion',
+			'reconcileSchema',
+		])
 		expect(recorded.externalIds).toEqual(['version-1'])
 		expect(recorded.sleeps).toEqual([3000])
 		expect(recorded.imports[0]?.yaml).toContain('registry.test/demo:v2')
@@ -183,6 +201,69 @@ describe('Zerops provider', () => {
 		expect(recorded.schemaSignals).toEqual([controller.signal])
 		expect(recorded.logs.join('\n')).not.toContain('zt-secret')
 		expect(recorded.logs.join('\n')).not.toContain('px-secret')
+	})
+
+	test('fails on the trigger process after one poll when the app version remains waiting', async () => {
+		const provider = createZeropsProvider(() =>
+			makeCollaborators(recorded, { statuses: ['WAITING_TO_BUILD'], processStatuses: ['FAILED'], triggerVersionId: 'version-waiting' })
+		)
+		const session = await provider.runtime.open(runtimeRun(recorded, provider))
+		await session.execute('trigger-deploy')
+
+		const error = await session.execute('await-deploy').catch((reason: unknown) => reason)
+
+		expect(error).toEqual(
+			new Error('zerops: pipeline process process-1 is FAILED while app-version version-waiting is WAITING_TO_BUILD'),
+		)
+		expect(recorded.calls).toEqual(['triggerPipeline', 'getProcess', 'getAppVersion'])
+		expect(recorded.sleeps).toEqual([])
+	})
+
+	test('does not accept an active app version when its trigger process failed', async () => {
+		const provider = createZeropsProvider(() =>
+			makeCollaborators(recorded, { statuses: ['ACTIVE'], processStatuses: ['FAILED'], triggerVersionId: 'version-active' })
+		)
+		const session = await provider.runtime.open(runtimeRun(recorded, provider))
+		await session.execute('trigger-deploy')
+
+		const error = await session.execute('await-deploy').catch((reason: unknown) => reason)
+
+		expect(error).toEqual(
+			new Error('zerops: pipeline process process-1 is FAILED while app-version version-active is ACTIVE'),
+		)
+		expect(recorded.calls).toEqual(['triggerPipeline', 'getProcess', 'getAppVersion'])
+		expect(recorded.sleeps).toEqual([])
+	})
+
+	test('preserves version-only polling when the trigger response has no process', async () => {
+		const provider = createZeropsProvider(() => makeCollaborators(recorded, { statuses: ['ACTIVE'] }))
+		const session = await provider.runtime.open(runtimeRun(recorded, provider))
+		await session.execute('trigger-deploy')
+		await session.execute('await-deploy')
+
+		expect(recorded.calls).toEqual(['triggerPipeline', 'getAppVersion'])
+		expect(recorded.externalIds).toEqual(['version-1'])
+	})
+
+	test('cancels the build after an observed process and version when the run is aborted', async () => {
+		const controller = new AbortController()
+		const provider = createZeropsProvider(() => ({
+			...makeCollaborators(recorded, {
+				statuses: ['BUILDING'],
+				processStatuses: ['RUNNING'],
+				triggerVersionId: 'version-1',
+			}),
+			sleep: async (ms) => {
+				recorded.sleeps.push(ms)
+				controller.abort()
+			},
+		}))
+		const session = await provider.runtime.open(runtimeRun(recorded, provider, target(), false, controller.signal))
+		await session.execute('trigger-deploy')
+
+		await expect(session.execute('await-deploy')).rejects.toThrow(CANCELLED)
+		expect(recorded.calls).toEqual(['triggerPipeline', 'getProcess', 'getAppVersion', 'cancelBuild'])
+		expect(recorded.sleeps).toEqual([3000])
 	})
 
 	test('propagates cancellation into an active schema reconciliation', async () => {

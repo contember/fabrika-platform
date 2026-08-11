@@ -10,7 +10,7 @@
 // cancel the build it started rather than leaving it running.
 
 import { createProvider, type ProviderDeploySession, type ProviderModule, type TypedProviderRun } from '@fabrika/provider-contract'
-import { ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsAppVersion, type ZeropsLogAccess } from './api'
+import { ZEROPS_ACTIVE, ZEROPS_PROCESS_FINISHED, ZEROPS_PROCESS_TERMINAL, ZEROPS_TERMINAL, type ZeropsAppVersion, type ZeropsLogAccess } from './api'
 import { zeropsTargetCodec } from './codec'
 import { defaultZeropsCollaborators, type ZeropsCollaboratorFactory, type ZeropsCollaborators } from './collaborators'
 import { type FabrikaManifest, manifestServiceHostnames, renderFabrikaImportYaml, zeropsArtifactCodec } from './manifest'
@@ -74,7 +74,7 @@ interface StepEnv {
 	signal: AbortSignal
 	dryRun: boolean
 	/** Set by `trigger-deploy`, read by `await-deploy` — the only state that crosses a step boundary. */
-	state: { appVersionId?: string }
+	state: { appVersionId?: string; processId?: string }
 }
 
 /**
@@ -83,7 +83,7 @@ interface StepEnv {
  * Deliberately FAILURE-TOLERANT: the log service's protocol is the one shape in this driver nobody could
  * verify against a document (see `ZeropsApi.readBuildLog`). An unverified endpoint must never be able to
  * fail a deploy, so a broken guess degrades to "no lines relayed" and the run still succeeds or fails on
- * `/app-version` status alone.
+ * the platform's process and app-version statuses.
  *
  * Relay is pull-based (ADR-0003), so each poll re-reads a window that overlaps the last one; `seen` keeps
  * the run log from repeating itself. Two genuinely identical lines with no timestamp collapse into one —
@@ -119,13 +119,14 @@ const openLog = async (env: StepEnv): Promise<ZeropsLogAccess | null> => {
 }
 
 /**
- * Poll `/app-version` until the version reaches a terminal state, relaying the build log as it goes.
+ * Poll the trigger process and `/app-version` until the version reaches a terminal state, relaying the
+ * build log as it goes. The process is optional because the trigger response may omit its id.
  *
  * A run cancelled here asks Zerops to cancel the BUILD too. That is not tidiness: the platform is running
  * the work, so abandoning the poll loop without telling it leaves a build container burning through the
  * pipeline's hour.
  */
-const awaitVersion = async (env: StepEnv, appVersionId: string): Promise<void> => {
+const awaitVersion = async (env: StepEnv, appVersionId: string, processId: string | undefined): Promise<void> => {
 	const { zerops, signal, log } = env
 	const access = await openLog(env)
 	const seen = new Set<string>()
@@ -138,6 +139,7 @@ const awaitVersion = async (env: StepEnv, appVersionId: string): Promise<void> =
 			await zerops.api.cancelBuild({ appVersionId, signal: AbortSignal.timeout(5000) }).catch(() => {})
 			throw new Error(CANCELLED)
 		}
+		const process = processId === undefined ? undefined : await zerops.api.getProcess({ processId, signal })
 		const version = await zerops.api.getAppVersion({ appVersionId, signal })
 		if (version.status !== previous) {
 			log(`  ${appVersionId}: ${version.status ?? 'unknown'}`)
@@ -145,6 +147,11 @@ const awaitVersion = async (env: StepEnv, appVersionId: string): Promise<void> =
 		}
 		await relayLog(env, access, seen)
 
+		if (process?.status !== undefined && ZEROPS_PROCESS_TERMINAL.has(process.status) && process.status !== ZEROPS_PROCESS_FINISHED) {
+			throw new Error(
+				`zerops: pipeline process ${process.id} is ${process.status} while app-version ${appVersionId} is ${version.status ?? 'in an unknown state'}`,
+			)
+		}
 		if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) {
 			if (version.status === ZEROPS_ACTIVE) {
 				return
@@ -203,6 +210,9 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 				throw new Error(`zerops: pipeline triggered for service ${target.serviceId} but no app-version could be resolved`)
 			}
 			state.appVersionId = version.id
+			if (process?.id !== undefined && process.id !== '') {
+				state.processId = process.id
+			}
 			await run.events.externalId(version.id)
 			log(`  triggered: app-version ${version.id} (build+deploy is ONE platform-side operation)`)
 			return
@@ -210,7 +220,7 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 
 		case 'await-deploy': {
 			if (dryRun) {
-				log('  [dry-run] would poll /app-version until it is ACTIVE and relay the build log')
+				log('  [dry-run] would poll the pipeline process when available and /app-version until it is ACTIVE, relaying the build log')
 				return
 			}
 			const appVersionId = state.appVersionId
@@ -218,7 +228,7 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 				throw new Error('zerops: await-deploy has no app-version to watch (trigger-deploy did not run)')
 			}
 			assertRunning(signal)
-			await awaitVersion(env, appVersionId)
+			await awaitVersion(env, appVersionId, state.processId)
 			return
 		}
 
