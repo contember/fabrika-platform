@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { decodePushEvent, normalizeRepoUrl, parseGitHubRepo, pemToPkcs8, verifyWebhookSignature } from '../repo-source'
+import { decodePushEvent, GitHubAppRepoSource, normalizeRepoUrl, parseGitHubRepo, pemToPkcs8, verifyWebhookSignature } from '../repo-source'
 import { signWebhook } from './helpers/harness'
 
-// Primitive-level unit tests for the RepoSource pure logic: HMAC-SHA256 webhook verification
-// (good/bad/malformed), repo-URL normalization, and push decoding. The GitHub network calls
-// (installation-token mint, App JWT sign) are CF/integration only and not unit-tested here.
+// Primitive-level unit tests for the control-owned RepoSource logic: HMAC-SHA256 webhook
+// verification, repo-URL normalization, push decoding, and the public-repository path. The shared
+// @fabrika/github-app package tests App JWT signing and GitHub API calls separately.
 
 describe('verifyWebhookSignature (HMAC-SHA256)', () => {
 	const secret = 'top-secret'
@@ -60,21 +60,103 @@ describe('decodePushEvent', () => {
 	test('reads ref / clone_url / after / installation id', () => {
 		const event = decodePushEvent(
 			{ ref: 'refs/heads/deploy/prod', after: 'sha1', repository: { clone_url: 'https://github.com/a/b.git' }, installation: { id: 7 } },
-			null,
 		)
 		expect(event).toEqual({ ref: 'refs/heads/deploy/prod', repoUrl: 'https://github.com/a/b.git', commitSha: 'sha1', installationId: 7 })
 	})
 
-	test('falls back to html_url and the header installation id', () => {
-		const event = decodePushEvent({ ref: 'r', repository: { html_url: 'https://github.com/a/b' } }, 99)
+	test('falls back to html_url but never invents an installation id outside the payload', () => {
+		const event = decodePushEvent({ ref: 'r', repository: { html_url: 'https://github.com/a/b' } })
 		expect(event?.repoUrl).toBe('https://github.com/a/b')
-		expect(event?.installationId).toBe(99)
+		expect(event?.installationId).toBeNull()
 		expect(event?.commitSha).toBeNull()
 	})
 
 	test('returns null when ref or repo is missing', () => {
-		expect(decodePushEvent({ repository: { clone_url: 'x' } }, null)).toBeNull()
-		expect(decodePushEvent({ ref: 'r' }, null)).toBeNull()
+		expect(decodePushEvent({ repository: { clone_url: 'x' } })).toBeNull()
+		expect(decodePushEvent({ ref: 'r' })).toBeNull()
+	})
+})
+
+describe('GitHubAppRepoSource separation', () => {
+	test('public clone and webhook verification do not require App credentials', async () => {
+		const source = new GitHubAppRepoSource({ appId: '', privateKeyPem: '', webhookSecret: 'hook-secret' })
+		expect(await source.clone('github.com/acme/public', 'refs/heads/main')).toEqual({
+			cloneUrl: 'https://github.com/acme/public',
+			ref: 'refs/heads/main',
+		})
+		expect((await source.clone('github.com/acme/public.git', 'refs/tags/v1')).cloneUrl).toBe('https://github.com/acme/public')
+		const body = JSON.stringify({ ref: 'refs/heads/main', repository: { clone_url: 'https://github.com/acme/public.git' } })
+		const signature = await signWebhook(body, 'hook-secret')
+		const event = await source.verifyWebhook(
+			new Request('https://control.test/webhooks/github', { method: 'POST', body, headers: { 'X-Hub-Signature-256': signature } }),
+		)
+		expect(event?.repoUrl).toBe('https://github.com/acme/public.git')
+	})
+
+	test('rejects caller-controlled clone destinations before creating a credential client', async () => {
+		let requests = 0
+		const source = new GitHubAppRepoSource({
+			appId: '',
+			privateKeyPem: '',
+			webhookSecret: 'hook-secret',
+			fetch: () => {
+				requests += 1
+				return Promise.reject(new Error('must not mint'))
+			},
+		})
+		for (
+			const repoUrl of [
+				'https://evil.example/acme/repo',
+				'https://github.com/acme/repo',
+				'http://github.com/acme/repo',
+				'github.com@evil.example/acme/repo',
+				'github.com/acme/repo?next=evil',
+				'github.com/acme/repo#fragment',
+				'github.com/acme/repo/extra',
+			]
+		) {
+			await expect(source.clone(repoUrl, 'refs/heads/main', 7)).rejects.toThrow('invalid canonical GitHub repository')
+		}
+		expect(requests).toBe(0)
+	})
+
+	test('ignores the hook target header as an installation-id source', async () => {
+		const source = new GitHubAppRepoSource({ appId: '', privateKeyPem: '', webhookSecret: 'hook-secret' })
+		const body = JSON.stringify({ ref: 'refs/heads/main', repository: { clone_url: 'https://github.com/acme/public.git' } })
+		const signature = await signWebhook(body, 'hook-secret')
+		const event = await source.verifyWebhook(
+			new Request('https://control.test/webhooks/github', {
+				method: 'POST',
+				body,
+				headers: { 'X-Hub-Signature-256': signature, 'X-GitHub-Hook-Installation-Target-ID': '99' },
+			}),
+		)
+		expect(event?.installationId).toBeNull()
+	})
+
+	test('does not collapse caller cancellation into an installation lookup miss', async () => {
+		const { generateKeyPairSync } = await import('node:crypto')
+		const { privateKey } = generateKeyPairSync('rsa', {
+			modulusLength: 2048,
+			publicKeyEncoding: { type: 'spki', format: 'pem' },
+			privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+		})
+		let requests = 0
+		const source = new GitHubAppRepoSource({
+			appId: '1',
+			privateKeyPem: privateKey,
+			webhookSecret: 'hook-secret',
+			fetch: () => {
+				requests += 1
+				return Promise.reject(new Error('must not run'))
+			},
+		})
+		const controller = new AbortController()
+		controller.abort('private caller reason')
+		const error = await source.resolveInstallationId('github.com/acme/private', controller.signal).catch((cause: unknown) => cause)
+		expect(error).toBeInstanceOf(DOMException)
+		expect(error instanceof Error ? error.name : '').toBe('AbortError')
+		expect(requests).toBe(0)
 	})
 })
 

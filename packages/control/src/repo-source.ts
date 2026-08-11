@@ -9,7 +9,10 @@
 // in `src/index.ts` `scheduled`. Polling lives there (standalone — no webhook HMAC applies to a public
 // feed), not as a `RepoSource` method; this interface stays focused on clone + webhook verification.
 
+import { GitHubAppClient, type GitHubAppFetch, pemToPkcs8 } from '@fabrika/github-app'
 import { prop, stringField } from './json'
+
+export { pemToPkcs8 }
 
 /** The decoded, verified payload of a GitHub `push` webhook (only the fields we use). */
 export interface PushEvent {
@@ -38,15 +41,15 @@ export interface CloneTarget {
  *  - `verifyWebhook(req)` → the decoded `PushEvent` iff the HMAC signature checks out, else null.
  */
 export interface RepoSource {
-	clone(repoUrl: string, ref: string, installationId?: number | null): Promise<CloneTarget>
+	clone(repoUrl: string, ref: string, installationId?: number | null, signal?: AbortSignal): Promise<CloneTarget>
 	verifyWebhook(request: Request): Promise<PushEvent | null>
 	/**
 	 * Resolve the GitHub App installation id that grants access to `repoUrl` (so onboarding a private
 	 * repo can auto-fill it instead of pasting the number by hand). Returns null when the App isn't
-	 * installed on the repo, the host isn't GitHub, or the lookup fails — NEVER throws (a miss must not
-	 * fail app creation; the operator can still set it manually).
+	 * installed on the repo, the host isn't GitHub, or the lookup fails. Caller cancellation remains an
+	 * AbortError; an ordinary miss must not fail app creation because the operator can set it manually.
 	 */
-	resolveInstallationId(repoUrl: string): Promise<number | null>
+	resolveInstallationId(repoUrl: string, signal?: AbortSignal): Promise<number | null>
 }
 
 // ── HMAC-SHA256 webhook signature verification (shared by real + fake) ─────────
@@ -142,7 +145,7 @@ export function parseGitHubRepo(repoUrl: string): { owner: string; repo: string 
 }
 
 /** Decode a verified GitHub push payload into our `PushEvent` (structural, no casts). */
-export function decodePushEvent(body: unknown, installationFromHeader: number | null): PushEvent | null {
+export function decodePushEvent(body: unknown): PushEvent | null {
 	const ref = stringField(body, 'ref')
 	if (ref === undefined) {
 		return null
@@ -154,7 +157,7 @@ export function decodePushEvent(body: unknown, installationFromHeader: number | 
 	}
 	const commitSha = stringField(body, 'after') ?? null
 	const installationRaw = prop(prop(body, 'installation'), 'id')
-	const installationId = typeof installationRaw === 'number' ? installationRaw : installationFromHeader
+	const installationId = typeof installationRaw === 'number' && Number.isSafeInteger(installationRaw) && installationRaw > 0 ? installationRaw : null
 	return { ref, repoUrl, commitSha, installationId }
 }
 
@@ -169,41 +172,40 @@ export interface GitHubAppConfig {
 	webhookSecret: string
 	/** Base API URL; override for GitHub Enterprise. Defaults to api.github.com. */
 	apiBaseUrl?: string
-}
-
-/** Minted installation access token (short-lived) for cloning a private repo. */
-interface InstallationToken {
-	token: string
-	expiresAt: number
+	/** Injected HTTP implementation for tests and non-global runtimes. */
+	fetch?: GitHubAppFetch
+	/** Injected millisecond clock for deterministic tests. */
+	now?: () => number
+	/** Upper bound for a GitHub API request, including the response body. */
+	timeoutMs?: number
 }
 
 /**
  * The v1 RepoSource backed by a GitHub App: mints an installation access token to build an
- * authenticated clone URL for a private repo, and HMAC-verifies inbound webhooks. JWT signing uses
- * WebCrypto (RS256). Tokens are never logged and are embedded in the clone URL only at the moment the
- * runner needs them (the URL itself is sensitive — treated like a credential by the runner).
- *
- * NOTE: the actual network calls to GitHub's token endpoint (mint installation token, sign App JWT)
- * run only against the real GitHub API — they're exercised in CF/integration, not unit tests. The
- * pure logic (HMAC verify, ref→env mapping, push decoding) is fully unit-tested via FakeRepoSource +
- * the exported `verifyWebhookSignature` / `decodePushEvent`.
+ * authenticated clone URL for a private repo, and HMAC-verifies inbound webhooks. The shared
+ * GitHub App client owns credentials and GitHub API calls; webhook authentication remains here.
  */
 export class GitHubAppRepoSource implements RepoSource {
-	private readonly apiBaseUrl: string
+	private client: Promise<GitHubAppClient> | undefined
 
-	constructor(private readonly config: GitHubAppConfig) {
-		this.apiBaseUrl = config.apiBaseUrl ?? 'https://api.github.com'
-	}
+	constructor(private readonly config: GitHubAppConfig) {}
 
-	async clone(repoUrl: string, ref: string, installationId?: number | null): Promise<CloneTarget> {
-		// The registry stores a NORMALIZED, scheme-less repo URL (`github.com/owner/repo`); git needs a real
-		// https URL to clone. Add the scheme back (idempotent when one is already present).
-		const httpsUrl = repoUrl.startsWith('http') ? repoUrl : `https://${repoUrl}`
+	async clone(repoUrl: string, ref: string, installationId?: number | null, signal?: AbortSignal): Promise<CloneTarget> {
+		const repository = parseCanonicalGitHubRepository(repoUrl)
+		if (repository === null) {
+			throw new Error('invalid canonical GitHub repository')
+		}
+		const httpsUrl = `https://github.com/${repository.owner}/${repository.repo}`
 		// A public repo (no installation) clones from the bare https URL — no token needed.
 		if (installationId === undefined || installationId === null) {
 			return { cloneUrl: httpsUrl, ref }
 		}
-		const token = await this.mintInstallationToken(installationId)
+		const token = await (await this.githubClient()).mintRepositoryToken({
+			installationId,
+			owner: repository.owner,
+			repository: repository.repo,
+			...(signal === undefined ? {} : { signal }),
+		})
 		// x-access-token is GitHub's documented installation-token clone scheme.
 		const url = new URL(httpsUrl)
 		url.username = 'x-access-token'
@@ -216,25 +218,19 @@ export class GitHubAppRepoSource implements RepoSource {
 	 * 404 = the App isn't installed on that repo → null. Any other non-2xx / non-GitHub host → null too,
 	 * so onboarding never fails on a lookup miss. CF/integration only (real GitHub API). Never logs the JWT.
 	 */
-	async resolveInstallationId(repoUrl: string): Promise<number | null> {
+	async resolveInstallationId(repoUrl: string, signal?: AbortSignal): Promise<number | null> {
 		const target = parseGitHubRepo(repoUrl)
 		if (target === null) {
 			return null
 		}
-		const jwt = await this.signAppJwt()
-		const response = await fetch(`${this.apiBaseUrl}/repos/${target.owner}/${target.repo}/installation`, {
-			headers: {
-				authorization: `Bearer ${jwt}`,
-				accept: 'application/vnd.github+json',
-				'user-agent': 'vozka',
-			},
-		})
-		if (!response.ok) {
+		try {
+			return await (await this.githubClient()).resolveInstallationId(target.owner, target.repo, signal)
+		} catch (error) {
+			if (error instanceof Error && error.name === 'AbortError') {
+				throw error
+			}
 			return null
 		}
-		const json: unknown = await response.json()
-		const id = prop(json, 'id')
-		return typeof id === 'number' ? id : null
 	}
 
 	async verifyWebhook(request: Request): Promise<PushEvent | null> {
@@ -250,119 +246,20 @@ export class GitHubAppRepoSource implements RepoSource {
 		} catch {
 			return null
 		}
-		const installHeader = request.headers.get('X-GitHub-Hook-Installation-Target-ID')
-		const installationFromHeader = installHeader !== null && /^\d+$/.test(installHeader) ? Number.parseInt(installHeader, 10) : null
-		return decodePushEvent(body, installationFromHeader)
+		return decodePushEvent(body)
 	}
 
-	/**
-	 * Mint a short-lived installation access token for cloning. Signs an App JWT (RS256, ≤10 min),
-	 * then exchanges it at `/app/installations/:id/access_tokens`. CF/integration only.
-	 */
-	private async mintInstallationToken(installationId: number): Promise<InstallationToken> {
-		const jwt = await this.signAppJwt()
-		const response = await fetch(`${this.apiBaseUrl}/app/installations/${installationId}/access_tokens`, {
-			method: 'POST',
-			headers: {
-				authorization: `Bearer ${jwt}`,
-				accept: 'application/vnd.github+json',
-				'user-agent': 'vozka',
-			},
+	private githubClient(): Promise<GitHubAppClient> {
+		this.client ??= GitHubAppClient.create({
+			appId: this.config.appId,
+			privateKeyPem: this.config.privateKeyPem,
+			...(this.config.apiBaseUrl === undefined ? {} : { apiBaseUrl: this.config.apiBaseUrl }),
+			...(this.config.fetch === undefined ? {} : { fetch: this.config.fetch }),
+			...(this.config.now === undefined ? {} : { now: this.config.now }),
+			...(this.config.timeoutMs === undefined ? {} : { timeoutMs: this.config.timeoutMs }),
 		})
-		if (!response.ok) {
-			// Never include the response body verbatim — it can echo the (bearer) JWT in error contexts.
-			throw new Error(`GitHub installation-token mint failed: ${response.status}`)
-		}
-		const json: unknown = await response.json()
-		const token = stringField(json, 'token')
-		const expiresAtStr = stringField(json, 'expires_at')
-		if (token === undefined) {
-			throw new Error('GitHub installation-token response missing token')
-		}
-		return { token, expiresAt: expiresAtStr !== undefined ? Date.parse(expiresAtStr) : Date.now() + 60 * 60 * 1000 }
+		return this.client
 	}
-
-	/** Sign a GitHub App JWT (RS256) valid for ~10 minutes. CF/integration only. */
-	private async signAppJwt(): Promise<string> {
-		const now = Math.floor(Date.now() / 1000)
-		const header = { alg: 'RS256', typ: 'JWT' }
-		const payload = { iat: now - 30, exp: now + 9 * 60, iss: this.config.appId }
-		const encode = (obj: unknown): string => base64url(utf8(JSON.stringify(obj)))
-		const signingInput = `${encode(header)}.${encode(payload)}`
-		const key = await crypto.subtle.importKey(
-			'pkcs8',
-			pemToPkcs8(this.config.privateKeyPem),
-			{ name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-			false,
-			['sign'],
-		)
-		const signature = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, utf8(signingInput))
-		return `${signingInput}.${base64url(new Uint8Array(signature))}`
-	}
-}
-
-/** base64url-encode bytes (no padding) — for JWT segments. */
-function base64url(bytes: Uint8Array): string {
-	let binary = ''
-	for (const b of bytes) {
-		binary += String.fromCharCode(b)
-	}
-	return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-/** Decode a PEM PKCS#8 private key body to its DER bytes for `importKey`. */
-export function pemToPkcs8(pem: string): Uint8Array<ArrayBuffer> {
-	// WebCrypto's importKey only accepts PKCS8 (`BEGIN PRIVATE KEY`). A GitHub App key downloaded from
-	// GitHub is PKCS1 (`BEGIN RSA PRIVATE KEY`) — detect that and wrap the DER in a PKCS8 envelope, else
-	// importKey('pkcs8') throws "Data provided to an operation does not meet requirements".
-	const isPkcs1 = /BEGIN RSA PRIVATE KEY/.test(pem)
-	const body = pem
-		.replace(/-----BEGIN [^-]+-----/, '')
-		.replace(/-----END [^-]+-----/, '')
-		.replace(/\s+/g, '')
-	const binary = atob(body)
-	const der = new Uint8Array(binary.length)
-	for (let i = 0; i < binary.length; i++) {
-		der[i] = binary.charCodeAt(i)
-	}
-	return isPkcs1 ? wrapPkcs1AsPkcs8(der) : der
-}
-
-/** Encode one DER TLV: a tag byte, a definite-length prefix, then the content bytes. */
-function derTlv(tag: number, content: Uint8Array): Uint8Array<ArrayBuffer> {
-	let lengthBytes: number[]
-	if (content.length < 0x80) {
-		lengthBytes = [content.length]
-	} else {
-		const big: number[] = []
-		let n = content.length
-		while (n > 0) {
-			big.unshift(n & 0xff)
-			n >>= 8
-		}
-		lengthBytes = [0x80 | big.length, ...big]
-	}
-	const out = new Uint8Array(1 + lengthBytes.length + content.length)
-	out[0] = tag
-	out.set(lengthBytes, 1)
-	out.set(content, 1 + lengthBytes.length)
-	return out
-}
-
-/**
- * Wrap a PKCS1 `RSAPrivateKey` DER in a PKCS8 `PrivateKeyInfo` envelope (rsaEncryption, NULL params) so
- * WebCrypto's importKey('pkcs8') accepts it. GitHub serves App keys as PKCS1; WebCrypto only takes PKCS8.
- */
-function wrapPkcs1AsPkcs8(pkcs1: Uint8Array): Uint8Array<ArrayBuffer> {
-	const version = new Uint8Array([0x02, 0x01, 0x00]) // INTEGER 0
-	// SEQUENCE { OID 1.2.840.113549.1.1.1 (rsaEncryption), NULL }
-	const algorithmId = new Uint8Array([0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00])
-	const privateKey = derTlv(0x04, pkcs1) // OCTET STRING { RSAPrivateKey }
-	const inner = new Uint8Array(version.length + algorithmId.length + privateKey.length)
-	inner.set(version, 0)
-	inner.set(algorithmId, version.length)
-	inner.set(privateKey, version.length + algorithmId.length)
-	return derTlv(0x30, inner) // SEQUENCE { ... } = PrivateKeyInfo
 }
 
 // ── FakeRepoSource (tests / local) ─────────────────────────────────────────────
@@ -418,6 +315,16 @@ export class FakeRepoSource implements RepoSource {
 		} catch {
 			return null
 		}
-		return decodePushEvent(body, null)
+		return decodePushEvent(body)
 	}
+}
+
+function parseCanonicalGitHubRepository(repoUrl: string): { owner: string; repo: string } | null {
+	const match = /^github\.com\/([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100}?)(?:\.git)?$/.exec(repoUrl)
+	const owner = match?.[1]
+	const repo = match?.[2]
+	if (owner === undefined || repo === undefined || owner === '.' || owner === '..' || repo === '.' || repo === '..') {
+		return null
+	}
+	return { owner, repo }
 }

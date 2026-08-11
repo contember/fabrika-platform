@@ -102,6 +102,7 @@
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/engine": "workspace:*",
+        "@fabrika/github-app": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
         "@fabrika/platform": "workspace:*",
         "@fabrika/platform-node": "workspace:*",
@@ -167,6 +168,13 @@
       "dependencies": {
         "@fabrika/provider-contract": "workspace:*",
       },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
+    "packages/github-app": {
+      "name": "@fabrika/github-app",
+      "version": "0.0.4",
       "devDependencies": {
         "@types/bun": "latest",
       },
@@ -635,6 +643,8 @@
     "@fabrika/example-app": ["@fabrika/example-app@workspace:examples/app"],
 
     "@fabrika/example-zerops-app": ["@fabrika/example-zerops-app@workspace:examples/zerops-app"],
+
+    "@fabrika/github-app": ["@fabrika/github-app@workspace:packages/github-app"],
 
     "@fabrika/iam": ["@fabrika/iam@workspace:packages/iam"],
 
