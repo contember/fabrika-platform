@@ -1,257 +1,291 @@
-# Sprint — fabrika deploys an application on Zerops (2026-08-11)
+# Sprint — add a GitHub repository, get a deployed app on Zerops (2026-08-11)
 
-**Goal.** The Delivery plane does the job it is named for on this provider: an application deployed by
-**fabrika**, through the control plane, onto an installation fabrika built — and a browser signs into
-it, and an exception it throws reaches the operator API.
+**Goal.** An operator adds a GitHub repository — **public or private** — to the control plane, and
+fabrika deploys it into the Zerops account. Nothing short of that counts as done.
 
-**Theme.** Everything proven on Zerops so far is the platform _running_. The predecessor sprint
-([archive](../archive/sprint-2026-08-07-zerops-from-scratch-install.md)) closed the last gap in getting
-an installation up from an empty project, and the one after that closed `platform deploy`. None of them
-deployed an **application**. The control plane's Zerops deploy path is fully written and unit-tested
-against fakes, and its `trigger-deploy` step **has never built anything on a real account**, because it
-passes no build source and nothing configures one. That is one step, and every remaining item on
-[`05`](../backlog/05-bring-up-on-a-real-zerops-account.md) sits behind it.
+**The gate.** This sprint has ONE acceptance criterion and every work unit exists to serve it:
 
-This is the same shape as the last two sprints and should be read the same way: the value is in what
-running it live finds, not in what the code looks like when it is written.
+> Register an app in the control plane naming a GitHub repository and an environment, trigger a deploy,
+> and the application builds from that repository and runs in `fabrika-install-test`. Done **twice** —
+> once with the repository public, once with the same repository private. Then a browser signs into it
+> through the handoff, and an exception it throws reaches the private operator API.
+
+A work unit that does not move that criterion is out of scope, however tempting.
+
+**Blocked on the operator, for the whole sprint and not just one unit.** The private half needs the
+Zerops account to authorize GitHub repository access — an OAuth pass only the account owner can
+perform. Verified still absent on 2026-08-11 (`getGithubRepositories` → `Github authorization
+required`). The public half can proceed without it; the gate cannot be closed without it.
+
+**Theme.** Everything proven on Zerops so far is the platform _running_. Its predecessors got an
+installation up from an empty project and taught `platform deploy` to run unattended from CI. Neither
+deployed an **application** — the thing fabrika exists to do. The control plane's Zerops path is fully
+written, unit-tested against fakes, and `trigger-deploy` has never built anything on a real account.
+
+The pleasant surprise from scoping: **the control plane already holds the repository.** `apps.repo_url`
+is required, `default_branch` defaults to `main`, the console form already asks for a GitHub URL, and
+`runs.ref` is resolved on every deploy. Cloudflare consumes all of it. Zerops ignores all of it. So this
+is mostly a wiring sprint with two live unknowns, not a design sprint.
 
 ## Refs re-verified at HEAD (2026-08-11)
 
-- ⚠ **The control-plane app path passes NO build source.** `trigger-deploy` calls
-  `triggerPipeline({ …, buildFromGit: target.buildFromGit, … })` (`provider-zerops/src/provider.ts:190`),
-  and the runtime target composed for a control-plane deploy never sets that field —
-  `control.ts:263-270` carries only `projectId`, `serviceId`, `accessToken`, `apiBaseUrl`,
-  `propustkaUrl`, `adminKey`. So the call takes the "build from the service's configured Git
-  integration" branch (`api.ts:314-320`).
-- ⚠ **Nothing configures that integration.** `external-repository-integration` appears nowhere in
-  `packages/` or `examples/` — grepped, not assumed. This is what
-  [`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md) records, and it is **wider than
-  that item states**: it blocks every control-plane app deploy on Zerops, not only private ones.
-- ⚠ **The account still has no GitHub authorization.** `getGithubRepositories` →
-  `Github authorization required`, checked 2026-08-11 — the same answer
-  [`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md) recorded on 2026-08-03. Only the
-  account owner can change that.
-- ✔ **A public build URL is an established mechanism here, not a new one.** The platform's own four
-  services build from one: `buildFromGit` defaults to `FABRIKA_REPOSITORY_URL`
-  (`installation-zerops/src/install-options.ts:123`), and the namespace proxy builds from a pinned tag
-  of the same public repository (`provider-zerops/src/namespace.ts:860`).
-- ✔ **The example app declares no build source**, and a test pins that:
-  `expect(rec.triggers).toEqual([{ serviceId, buildFromGit: undefined, zeropsSetup }])`
-  (`installation-zerops/zerops/__tests__/example-app.test.ts:286`). Whatever WU1 decides, that
-  expectation changes with it.
-- ✔ **The deploy plan is `apply-import → trigger-deploy → await-deploy → reconcile-schema`**
-  (`provider-zerops/src/plan.ts:39-48`); the last step only when the app declares a schema and a
-  `propustkaUrl` is configured.
-- ✔ **Return origins and the Operations keys ARE projected on this path.** `reconcile-schema` PUTs the
-  schema and then `setReturnOrigins` (`provider.ts:233,242-249`), and `FABRIKA_OPERATIONS_DSN` /
-  `FABRIKA_RELEASE` are written as **service-scoped env vars before the plan runs**
-  (`control.ts:234-262`), with `managedEnvironment: {}` passed into the run because Zerops has no
-  runner to inject them. So WU4 is an observation, not new code — unless it is not.
-- ⚠ **A Zerops run's build log never reaches the run record.** The provider relays it faithfully
-  (`provider.ts:92-114`), but the control plane wires `events.log` to a `console.info` line and nothing
-  else (`run-lifecycle.ts:314`). `markRunStarted` stamps a `log_key` on the run row and the read APIs
-  serve that object (`api/runs.ts:154,176`), whose only writer is the **Cloudflare** runner relay
-  (`runner-cloudflare/src/relay.ts:114`). Every Zerops run therefore answers `GET /runs/:id/log` with an
-  empty line list. No CLAUDE.md or ADR mentions this — it reads as an oversight, not a decision. →
-  [`69`](../backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md).
-- ⚠ **Neither committed descriptor for the example names a database the light tier has** —
-  [`60`](../backlog/60-the-example-app-has-no-light-tier-descriptor.md), unchanged.
+- ✔ **The control plane already takes a repository, and it is not optional.** `apps` carries
+  `repo_url`, `default_branch` (default `'main'`), `worker_dir`, `build_cmd`, `config_path`,
+  `github_installation_id` (`migrations/0001_init.sql:33`, row shape `control/src/db.ts:18`); `repoUrl`
+  is required on `CreateAppRequest` and `RegisterAppRequest` (`control-contract/src/index.ts:44,201`);
+  the console form's second field is "GitHub repo URL" (`dashboard/src/routes/apps/new.tsx`).
+- ✔ **A deploy already resolves a concrete ref.** `input.ref ?? concrete trigger_ref ?? refs/heads/<default_branch>`
+  (`control/src/api/runs.ts:248-249`), stored on `runs.ref`.
+- ⚠ **Zerops throws all of it away.** `ProviderDeployInput.app.source` reaches the Zerops control
+  provider, which reads exactly one field off it — `cwd: input.app.source.workerDir ?? '.'`
+  (`provider-zerops/src/control.ts:276`). `source.repoUrl` and `source.ref` appear nowhere in
+  `packages/provider-zerops/src/`. The runtime target it composes omits `buildFromGit` (`control.ts:263-270`),
+  so `trigger-deploy` takes the "build from the service's configured Git integration" branch
+  (`provider.ts:183`, `api.ts:314-320`) — and nothing configures one.
+- ✔ **Cloudflare consumes the same input correctly**, which is the shape to copy: `buildJob` resolves
+  `input.app.source` and puts `{ repoUrl, ref }` on the runner job
+  (`provider-cloudflare/src/control.ts:189,198-199`), and the container clones that ref.
+- ✔ **`ZeropsStoredTarget` is one field**, `{ serviceId }`, codec version 2 (`control.ts:25,44`), and it
+  is **discovered rather than supplied** — `prepareRegistration` imports the manifest's services and
+  finds `deployService` by hostname (`control.ts:351-386`), which is why the console posts an empty
+  target placeholder. Any new persisted field means a codec version bump, not a migration.
+- ⚠ **Registration still requires a locally built manifest, pasted as text.** `fabrika app build` writes
+  `fabrika.manifest.json` to disk and makes no network call (`provider-zerops/src/cli.ts:72-74`); it
+  reaches control only as the `artifact` field, stored inline in `app_envs.provider_artifact_json`
+  (`control/src/registry.ts:216`), and the console offers a `<textarea>` for it
+  (`dashboard/src/routes/apps/new.tsx:169-183`). There is no artifact upload endpoint. See the open
+  decision below — this is the one part of the gate that is not obviously satisfied.
+- ⚠ **The private path forces the descriptor to the repository root.** Read live off the API:
+  `SetupExternalRepositoryIntegration` takes
+  `{repositoryFullName, branchName, eventType, isActive, triggerBuild, tagRegex, zeropsYamlSetup}` — a
+  setup NAME and no descriptor — and `TriggerExternalRepositoryIntegration` takes only
+  `{userData, userDataEnvFile}`. There is **no `zeropsYaml` and no path field on either.** So an app
+  whose `zerops.yaml` is not at its repository root cannot be deployed privately, at all.
+- ✔ **Inline `zeropsYaml` works, but only on the public trigger.** Proven live: a setup named
+  `wu1inline`, which exists nowhere in `contember/fabrika-platform`, built from that repository and
+  reached `ACTIVE` (14:50:37 → 14:51:37). Useful to know, and deliberately **not** the foundation — see
+  decision 2.
+- ⚠ **The account has no GitHub authorization.** `getGithubRepositories` → `Github authorization
+  required`, 2026-08-11, the same answer [`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md)
+  recorded on 2026-08-03.
+- ⚠ **A Zerops run's build log never reaches the run record.** Relayed faithfully by the provider
+  (`provider.ts:92-114`), then wired to a `console.info` line and nothing else
+  (`run-lifecycle.ts:314`); the run's `log_key` object is written only by the Cloudflare runner relay
+  (`runner-cloudflare/src/relay.ts:114`). Every Zerops run answers `GET /runs/:id/log` with an empty
+  list. → [`69`](../backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md).
 
 ## Work units
 
-### WU1 — Give an app deploy a build source (effort M) · everything waits on this
+### WU1 — An app on Zerops is a repository root (effort S) · decide this first
 
-- **Problem.** The refs above: no source is passed and no integration exists, so `trigger-deploy`
-  cannot build. The step has never succeeded against an account.
-- **Verify first.** One cheap live experiment before any code: an app's service spec may already carry
-  `buildFromGit`, which the compiler copies into the import document
-  (`provider-zerops/src/compile.ts:100-101`). Apply such an import by hand and trigger the pipeline
-  **without** `buildFromGit`, exactly as `provider.ts:190` does. If the platform builds, the app config
-  already holds the answer and this WU is small; if it does not, the source must be threaded to the
-  trigger. Record the answer in `reference/zerops-platform.md` either way — it is a platform fact.
-- **Scope.** Thread a public build source from the app's own configuration through
-  `ZeropsStoredTarget` → `ZeropsRuntimeTarget` → `trigger-deploy`. Decide where it is authored: the
-  app's `fabrika.config.ts` (the app knows its own repository) or the control plane's registration
-  record (the installation knows what it is allowed to build). Prefer the app config unless the
-  experiment says otherwise — it needs no schema change and no migration.
-- **Scope guard.** A **public** URL only. A credentialed clone URL is refused by
-  [ADR-0025](../decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) because the
-  platform persists what it is given, so a short-lived token becomes durable service state that
-  expires. Do not reintroduce it; WU5 is the sanctioned path for anything private.
-- **Acceptance / witness.** `POST /api/deploy` for `examples/zerops-app` against `fabrika-install-test`
-  produces a Zerops app version that reaches **ACTIVE**, and the app answers on its own host. Not a
-  green plan — a running application.
-- **Touch points.** `packages/provider-zerops/src/{control,provider,types}.ts`,
-  `packages/control/src/`, `examples/zerops-app/fabrika.config.ts`,
+- **Problem.** Both deploy paths require `zerops.yaml` at the root of the repository being built, and the
+  private path offers no alternative at all (refs above). The example app keeps its descriptor in
+  `examples/zerops-app/`, inside this monorepo, and its own header admits it is pretending
+  ("it lives here because this example IS that repo … for convenience"). Nothing can deploy it.
+- **Scope.** Write the ADR — an application fabrika deploys to Zerops is a Git repository whose root
+  carries `zerops.yaml`, and fabrika does not paper over that with an inline descriptor. Move
+  `examples/zerops-app/` to its own repository with the descriptor at the root. Keep it reachable from
+  this repository's typecheck and tests, or state plainly what coverage is lost.
+- **Acceptance / witness.** The ADR exists and the example repository builds on Zerops from its own
+  root. **One repository serves both halves of the gate**: create it public, and flip it to private for
+  the second half — same code, same descriptor, only visibility changes, which is the cleanest possible
+  A/B for WU2 and WU3.
+- **Touch points.** `docs/decisions/`, `examples/zerops-app/`, a new public repository,
   `packages/installation-zerops/zerops/__tests__/example-app.test.ts`.
 
-### WU2 — The example app names the database it actually runs against (effort S)
+### WU2 — The Zerops provider reads the repository the control plane already has (effort M)
 
-- **Problem.** [`60`](../backlog/60-the-example-app-has-no-light-tier-descriptor.md). Both committed
-  descriptors interpolate a service the light tier does not have (`notesdb`, `postgres`); the tier has
-  one shared `db`. A key a service declares in its own `zerops.yaml` conflicts with the env API on
-  create and never appears in `GET /service-stack/{id}/env` — verified live, see
-  `reference/zerops-platform.md`.
-- **Verify first.** Which owner wins is the whole question. Before choosing, confirm on the target
-  installation what happens when a descriptor declares a key the env API already owns.
-- **Scope.** Decide how an app names a database it does not own, from the three candidates item 60
-  already lists. ADR-0004's answer for every other per-installation value is "the env API owns it",
-  which points at dropping the key from `run.envVariables` — but that makes the descriptor
-  incomplete on its own, which is a real cost, not a detail.
-- **Acceptance / witness.** The example deploys **from a clean checkout, with no file edited**, against
-  the shared `db`, and reads and writes rows.
-- **Touch points.** `examples/zerops-app/zerops*.yaml`,
-  `packages/installation-zerops/zerops/topology.ts`, `docs/reference/zerops-platform.md`.
+- **Problem.** `apps.repo_url` and the resolved `runs.ref` reach the provider and are dropped
+  (refs above). This is the whole public half of the gate.
+- **Scope.** Thread `input.app.source` into the Zerops deploy the way Cloudflare already does: derive
+  the build source from `repoUrl` + `ref`, put it on `ZeropsRuntimeTarget`, and pass it at
+  `trigger-deploy`. The codec bump belongs to the RUNTIME target, which is composed per run and
+  persists nothing — prefer that over widening `ZeropsStoredTarget`, which would need a version 3 and a
+  backfill for no gain.
+- **Scope guard.** A **public** URL carries no credential. A credentialed clone URL stays refused by
+  [ADR-0025](../decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) — the
+  platform persists what it is given, so a short-lived token becomes durable state that expires. WU3 is
+  the sanctioned path for anything private.
+- **Acceptance / witness.** A deploy triggered from the console against the **public** example
+  repository builds and reaches `ACTIVE` in `fabrika-install-test`, and the app answers on its own host.
+- **Touch points.** `packages/provider-zerops/src/{control,provider,types}.ts`.
 
-### WU3 — A Zerops run's log reaches the run record (effort S) · independent
+### WU3 — The repository integration, and whether it replaces WU2 rather than joining it (effort M)
 
-- **Problem.** The ref above. The build log is relayed and then dropped into stdout; the run's log
-  endpoint is empty for every Zerops deploy that has ever run. On Cloudflare the runner relay writes
-  the object, so the console shows logs on one provider and nothing on the other.
-- **Scope.** Write the relayed lines to the run's `log_key` object from the control plane, so the
-  writer is the plane that owns the run rather than a provider-specific runner. Keep the stdout line —
-  it is the only thing that works when the blob store is down.
-- **Acceptance / witness.** `GET /runs/:id/log` for the WU1 deploy returns the Zerops build log, and the
-  console shows it. Written against the live run, not a fixture.
-- **Touch points.** `packages/control/src/run-lifecycle.ts`, `packages/control/src/api/runs.ts`.
+- **Problem.** [`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md). A private repository
+  cannot be built from a URL; the integration is the only path, and nothing in `packages/` configures
+  one — `external-repository-integration` appears nowhere.
+- **Verify first, and it is the sprint's most valuable question.** Does the integration also serve a
+  **public** repository? If it does, fabrika needs ONE mechanism and WU2's URL path becomes a fallback
+  worth deleting rather than a second code path to maintain. Measure it the day the authorization
+  exists, before writing the second half.
+- **Scope.** `SetupExternalRepositoryIntegration` on the API client; configure it when fabrika creates
+  an app's service, from `repo_url` + `default_branch` + the manifest's `zeropsSetup`; take the
+  integration branch at `trigger-deploy`. Per ADR-0025 the integration is durable configuration fabrika
+  SETS, never a credential fabrika holds.
+- **Acceptance / witness.** The same example repository, now **private**, deploys through the control
+  plane into `fabrika-install-test`. Plus a recorded answer to the public question above, whichever way
+  it goes.
+- **Touch points.** `packages/provider-zerops/src/api.ts`, `packages/provider-zerops/src/control.ts`.
 
-### WU4 — The live acceptance: a signed-in app that reports its own errors (effort M)
+### WU4 — A failed build fails the deploy (effort S) · protects every other unit
+
+- **Problem.** [`70`](../backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md),
+  found while scoping this sprint. A `stack.build` that fails before it creates a container leaves its
+  app version at `WAITING_TO_BUILD` permanently, and `await-deploy` polls only the version, with a
+  70-minute timeout.
+- **Why it is in this sprint rather than the backlog.** WU2 and WU3 will each fail their first attempt
+  in exactly this way — a wrong setup name, a repository the integration cannot see — and every one of
+  those attempts would cost seventy minutes and report nothing.
+- **Acceptance / witness.** A deploy whose build cannot start fails in seconds naming the failed
+  process, and a suite test drives the fake through the live state pair (`process FAILED` +
+  `version WAITING_TO_BUILD`).
+- **Touch points.** `packages/provider-zerops/src/{provider,api}.ts`.
+
+### WU5 — The gate's last mile: signed in, and reporting its own errors (effort M)
 
 - **Problem.** [`05`](../backlog/05-bring-up-on-a-real-zerops-account.md) items 3 and 4 have never been
-  observed. The code that should make them true exists (see refs), which is exactly the condition under
-  which the last three sprints each found defects.
-- **Scope.** Observe, then fix what the observation breaks. Nothing here is planned code.
-- **Acceptance / witness**, in order:
-  1. A browser signs into the deployed app through the handoff — its return origin was registered by
-     the deploy itself, not by hand.
-  2. `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE` are present **on the running service**, read back
-     from the account (keys and non-secret values only).
-  3. An exception thrown by the app reaches the private operator API and appears in the Operations
-     console, correlated to the release the deploy recorded
-     ([`36`](../backlog/36-complete-zerops-release-artifact-correlation.md) is the follow-on if the
-     correlation is what breaks).
-- **Touch points.** Unknown by construction. Anything it forces is the return on the sprint.
+  observed. The code that should make them true exists — return origins are projected by
+  `reconcile-schema` (`provider.ts:233,242-249`) and the Operations keys are written as service-scoped
+  env vars before the plan runs (`control.ts:234-262`) — which is precisely the condition under which
+  the last three sprints each found a defect.
+- **Scope.** Observe, then fix what the observation breaks. No planned code.
+- **Acceptance / witness**, and these are the gate's closing clauses:
+  1. A browser signs into the deployed app through the handoff — its return origin registered by the
+     deploy, not by hand.
+  2. `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE` are present on the running service, read back from
+     the account.
+  3. An exception the app throws reaches the private operator API and appears in the Operations console,
+     correlated to the release the deploy recorded.
+- **Touch points.** Unknown by construction.
 
-### WU5 — The repository integration, for apps that are not public (effort M) · blocked on the operator
+### WU6 — A Zerops deploy's log is readable (effort S)
 
-- **Problem.** [`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md). WU1 makes a **public**
-  app deployable; a private one still cannot build, and neither can the Operations DSN that the
-  control→Operations catalog projection mints for it.
-- **Blocked by one thing only.** The Zerops account must authorize GitHub repository access — an OAuth
-  pass the account owner performs. Verified still absent on 2026-08-11.
-- **Scope.** `PUT /service-stack/{id}/external-repository-integration` on the API client; configure it
-  when fabrika creates an app's service; take the integration branch of `triggerPipeline`. Per ADR-0025
-  the integration is durable configuration fabrika sets, not a credential fabrika holds.
-- **Acceptance / witness.** A private repository deploys through the control plane onto
-  `fabrika-install-test`, and the same app's ingest reaches Operations.
-- **Touch points.** `packages/provider-zerops/src/api.ts`, `packages/provider-zerops/src/control.ts`.
+- **Problem.** [`69`](../backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md), refs above.
+- **Why it is in this sprint.** Six live deploys are about to be debugged, and on this provider the
+  console shows nothing. It pays for itself during WU2 alone.
+- **Scope.** Write the relayed lines to the run's `log_key` object from the control plane, so the writer
+  is the plane that owns the run rather than a provider-specific runner. Keep the stdout line.
+- **Acceptance / witness.** `GET /runs/:id/log` for a WU2 deploy returns its Zerops build log, and the
+  console renders it. Against a live run, not a fixture.
+- **Touch points.** `packages/control/src/run-lifecycle.ts`, `packages/control/src/api/runs.ts`.
 
 ## Out of scope (explicit)
 
+- **[`60`](../backlog/60-the-example-app-has-no-light-tier-descriptor.md), the shared-database
+  descriptor.** It is a `fabrika-test` problem: `notesapi` there was created by hand against the shared
+  `db`. On a fresh installation the example's own import creates `notesdb`, which is exactly what its
+  committed `zerops.yaml` interpolates. Confirm that on the target and leave the item alone.
 - **The production two-project shape and custom domains** — [`05`](../backlog/05-bring-up-on-a-real-zerops-account.md)
-  items 1 and 2. This sprint stays on the light tier, on one installation.
-- **`fabrika app deploy` for Zerops as a CLI verb.** The CLI accepts only `build` for the Zerops app
-  area (`cli/src/index.ts:145-150`) and the control plane is the entry point by design. Widening the
-  CLI is a separate decision, not a step here.
-- **The Cloudflare install path**, which has still never been run. Same defect class as the last sprint
-  found, one whole provider wide — but a different sprint.
+  items 1 and 2. One installation, light tier.
+- **`fabrika app deploy` as a Zerops CLI verb.** The CLI accepts only `build` for the Zerops app area
+  (`cli/src/index.ts:145-150`) and the control plane is the entry point by design.
+- **A live Cloudflare bring-up.** The mechanism has precedent in the predecessor project (vozka); what
+  this repository has never done is exercise it. Its own sprint.
 - **[`67`](../backlog/67-command-for-the-first-administrator.md) and
   [`68`](../backlog/68-platform-commands-mishandle-a-closed-stdin.md).** `fabrika-install-test` already
-  has an administrator, so neither blocks anything here.
+  has an administrator.
 
 ## Decisions
 
-1. **Public build source first, repository integration second.** Chosen deliberately over doing only
-   one. The public path needs nothing from the operator and proves the whole Delivery chain end to end;
-   the integration is the mechanism ADR-0025 actually settled and the only one that serves a private
-   app. The risk accepted is two mechanisms in the code until it is clear whether the first stays — and
-   it probably should stay, because the platform's own services already build that way.
-2. **This is not a workaround around ADR-0025.** That decision rejected a **credentialed** clone URL,
-   because the platform persists what it is handed and a one-hour token would become durable state that
-   expires. A public URL carries no credential and is what `install-options.ts:123` already does for
-   every platform service.
-3. **Target `fabrika-install-test`.** It was created by `platform install` and nothing has been done to
-   it by hand, so an observation from it means what it says. `fabrika-test` carries hand-written
-   service env and a `notesapi` on an old build — which is what item 60 is about — so evidence from it
-   would have to be qualified every time.
+1. **One acceptance criterion, stated as a gate.** Both halves — public and private — or the sprint is
+   not done. This replaces the earlier plan's "public now, integration later", which would have shipped
+   a mechanism that cannot serve a private repository and called it progress.
+2. **An app on Zerops is a repository root, and fabrika does not hide that.** Forced by measurement, not
+   preference: the integration API can name a setup and nothing else. An inline descriptor works on the
+   public trigger and would therefore let a monorepo app deploy publicly and break on the day it went
+   private — a trap worth naming, because the earlier plan recommended exactly it.
+3. **Prefer one mechanism to two.** If the integration serves public repositories as well, WU2's URL
+   path is a fallback to delete rather than a peer to maintain. WU3 measures this before the code is
+   written.
+4. **The build source belongs on the RUNTIME target, not the stored one.** It is derivable from
+   `apps.repo_url` + the run's resolved `ref` on every deploy, so persisting it would duplicate a
+   registry field and cost a codec version.
+5. **Target `fabrika-install-test`.** Created by `platform install`, untouched by hand, so an
+   observation from it means what it says.
+
+## Open decision — the gate says "add a repository", registration also wants a manifest
+
+Today an operator registers an app by pasting a locally built `fabrika.manifest.json` into a textarea.
+So what the gate literally asks for — add a repository, get a deploy — is today "add a repository AND
+paste a compiled artifact". Three ways out, and this needs an answer before WU2 is called done:
+
+- **Accept it for this sprint** and say so in the outcome. The gate's substance is that the deployed
+  CODE comes from the repository, which WU2 and WU3 deliver; the artifact is registration ergonomics.
+- **The CLI pushes the manifest** to a new endpoint, so the operator runs one command instead of copying
+  a file. Small, and does not change who evaluates the app's config.
+- **The control plane builds the manifest itself** from the repository. This is the honest reading of
+  the gate and the largest of the three by far — it means the control plane clones an app repository and
+  **evaluates its TypeScript config**, which is running the app author's code inside the plane that
+  holds every credential. That is a security decision needing its own ADR, not a work unit.
+
+Recommendation: the first for this sprint, the second as a follow-up item, and the third only behind an
+ADR that faces the sandboxing question directly.
 
 ## Sequencing
 
-|                                   | depends on                              | can run alongside |
-| --------------------------------- | --------------------------------------- | ----------------- |
-| WU1 (build source)                | —                                       | WU2, WU3          |
-| WU2 (example descriptor)          | —                                       | WU1, WU3          |
-| WU3 (run log into the run record) | —                                       | WU1, WU2          |
-| WU4 (live acceptance)             | WU1, WU2                                | WU3               |
-| WU5 (repository integration)      | **the operator's GitHub authorization** | anything          |
+|                                     | depends on                    | can run alongside |
+| ----------------------------------- | ----------------------------- | ----------------- |
+| WU1 (repository-root ADR + example) | —                             | WU4, WU6          |
+| WU4 (fail a failed build fast)      | —                             | WU1, WU6          |
+| WU6 (run log into the run record)   | —                             | WU1, WU4          |
+| WU2 (read the repository, public)   | WU1                           | WU3's measurement |
+| WU3 (repository integration)        | WU1, **GitHub authorization** | —                 |
+| WU5 (sign-in + Operations ingest)   | WU2 _or_ WU3                  | —                 |
 
-WU1's live experiment comes first and is cheap; it decides how big WU1 is. WU5 can start the moment the
-authorization exists and is otherwise independent — do not let it block WU4.
+WU4 and WU6 first even though they are not the gate: they are what makes the six live attempts after
+them debuggable rather than seventy minutes of silence each. WU1 before both deploy units because it
+decides what is being deployed. WU3's public-repository measurement happens as early as the
+authorization allows, because a positive answer deletes half of WU2.
 
 ## Run log
 
-### WU1 — the build-source experiment (2026-08-11)
+### Scoping probes (2026-08-11)
 
-Run against `fabrika-install-test` (`AI6fLiNmTQGJQvlhbUtBaw`) on a throwaway service `wu1probe`
-(`alpine/bun@1.3`, one container), not on the example app — the question is a platform behaviour and
-does not need a database or a working application to answer.
+Run against `fabrika-install-test` (`AI6fLiNmTQGJQvlhbUtBaw`) on throwaway services `wu1probe` and
+`wu1inline`, both deleted afterwards. Neither needed the example app or a database — every question here
+is a platform behaviour.
 
-**An app can already declare a build source, with no code change.**
-`ZeropsServiceSpec = Omit<ZeropsImportService, ZeropsCompilerOwnedServiceField>` and the owned set is
-`envIsolation | override | envSecrets | dotEnvSecrets | mode | os` (`types.ts:69-80`) — `buildFromGit`
-is not subtracted. Compiling the committed example with one added to `notesapi` emits
-`buildFromGit: "https://github.com/contember/fabrika-platform"` into the import document verbatim. So
-the authoring surface is not the gap; the trigger is.
-
-**An import that declares `buildFromGit` starts a build by itself.** The `ImportServiceStack` response
-carried a second process, `actionName: stack.build`, with an app version whose
-`publicGitSource` was `{gitUrl, branchName: "main", configContentFromImport: false, explicitSetup: true}`.
-Recorded as a platform fact, not a guess.
-
-**But the source does NOT persist for a later trigger.** On that same service, in this order:
+**A build source is a property of an app VERSION, never of the service.** On one service, in this order:
 
 | call                                                             | result                                             |
 | ---------------------------------------------------------------- | -------------------------------------------------- |
+| import declaring `buildFromGit`                                  | created the service AND started a build by itself  |
 | `PUT trigger-pipeline` body `{}`                                 | refused — `Service stack not found`                |
 | `PUT trigger-pipeline` body `{"zeropsSetup":"iam"}`              | refused — `Invalid parameter provided`             |
 | `PUT trigger-pipeline` body `{"buildFromGit":…,"zeropsSetup":…}` | accepted — the version BUILT, then `DEPLOY_FAILED` |
 | `PUT trigger-pipeline` body `{}`, **after that build**           | refused again — `Service stack not found`          |
 | `PUT trigger-pipeline` body `{"zeropsSetup":"iam"}`, after it    | refused again — `Invalid parameter provided`       |
 
-The last two rows are what make this conclusive rather than suggestive. The service had by then built
-and deployed a version **from that very source**, and a bare trigger was refused with the identical two
-errors — so nothing about a successful build turns the source into service configuration.
-`publicGitSource` is a property of an app VERSION and only that.
-**`trigger-deploy` must pass the source on every deploy.** WU1 is therefore the larger version: thread
-it from the app config through `ZeropsStoredTarget` → `ZeropsRuntimeTarget` → the trigger. The small
-version — "the import already carries it, nothing to do" — is dead.
+The last two rows make it conclusive rather than suggestive: the service had by then built and deployed
+a version **from that very source**, and a bare trigger was still refused with the identical errors. The
+`DEPLOY_FAILED` is not a finding — the probe built IAM's setup into a service with none of IAM's
+environment; `BUILDING → DEPLOYING` is the part that answers the question. Recorded in
+[`reference/zerops-platform.md`](../reference/zerops-platform.md).
 
-The `DEPLOY_FAILED` is expected and not a finding: the probe built IAM's setup into a service with none
-of IAM's environment. The build reaching `BUILDING → DEPLOYING` is the part that answers the question —
-a public source builds fine. `wu1probe` was deleted afterwards; the two refusals above are the last
-thing that happened to it.
+The two refusals disagree with each other about the same missing input and neither mentions a build
+source. Worth knowing before someone debugs a real one.
 
-The two refusals name nothing useful and disagree with each other on the same missing input, which is
-worth knowing before anyone debugs a real one: neither error mentions a build source.
+**An app can already declare `buildFromGit`, and it was the wrong place to put it.**
+`ZeropsServiceSpec = Omit<ZeropsImportService, ZeropsCompilerOwnedServiceField>` does not subtract the
+field (`types.ts:69-80`), and compiling the example with one added emits it into the import document
+verbatim. The scoping conclusion was therefore "author it in `fabrika.config.ts`" — **wrong**, and the
+control-plane survey is what corrected it: `apps.repo_url` is already required and already reaches the
+provider. An app config field would have been a second place to say the same thing.
 
-**Finding A — a failed `stack.build` leaves the app version at `WAITING_TO_BUILD` forever.** The
-import's build process was `FAILED` 500 ms after it started (12:33:41.202 → 12:33:41.702, no build
-container, no message on the process object), and its app version still read `WAITING_TO_BUILD` eight
-minutes later. `await-deploy` polls `getAppVersion` and nothing else (`provider.ts:211-219`) with
-`POLL_TIMEOUT_MS = 70 * 60 * 1000` — so this failure mode hangs a deploy for **seventy minutes** and
-then reports a timeout that names neither the build nor the reason. →
-[`70`](../backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md).
+**Inline `zeropsYaml` works on the public trigger.** Setup `wu1inline`, absent from
+`contember/fabrika-platform`, built from that repository and reached `ACTIVE` (14:50:37 → 14:51:37). No
+subdirectory or path field exists anywhere — not in the import service schema, not in the trigger body —
+so this was the only candidate for deploying an app whose descriptor is not at its repository root.
 
-**Finding B — the example app is not shaped like the app it claims to be.** Zerops reads `zerops.yaml`
-from the root of the repository it builds, and the example's lives at
-`examples/zerops-app/zerops.yaml` inside this monorepo — which its own header already admits ("it
-lives here because this example IS that repo … for convenience"). A public build source pointed at
-`contember/fabrika-platform` therefore cannot find the `notesapi` setup. Either the example moves to
-its own public repository, or the deploy passes `zeropsYaml` inline (the trigger body supports it and
-`api.ts:326` already declares it, but `provider.ts:190` does not send it). This is a WU1 decision, not
-a detail — it changes what a fabrika app on Zerops has to look like.
+**And then the integration schema killed it as a foundation.** `SetupExternalRepositoryIntegration`
+takes `{repositoryFullName, branchName, eventType, isActive, triggerBuild, tagRegex, zeropsYamlSetup}`
+and `TriggerExternalRepositoryIntegration` takes `{userData, userDataEnvFile}` — no descriptor on
+either, only a setup name. So the private path cannot carry an inline descriptor, and building the
+public path on one would have produced apps that deploy until they go private. → decision 2, WU1.
 
-**WU2 may be smaller than filed.** [`60`](../backlog/60-the-example-app-has-no-light-tier-descriptor.md)
-is about `fabrika-test`, where `notesapi` was created by hand against the shared `db`. On a fresh
-installation the example's own import creates `notesdb`, which is exactly what its committed
-`zerops.yaml` interpolates. Confirm on the target before spending the WU.
+**Finding — a failed `stack.build` leaves the app version at `WAITING_TO_BUILD` forever.** The import's
+build process was `FAILED` 500 ms after starting (12:33:41.202 → 12:33:41.702), with no build container
+and no message on the process object; its version had not moved eight minutes later. →
+[`70`](../backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md), promoted into
+this sprint as WU4.

@@ -27,15 +27,18 @@ handoff amendment.
 ## Active sprints
 
 [`fabrika-deploys-an-app-on-zerops`](sprints/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md) —
-the Delivery plane does its job on this provider: an application deployed **by fabrika**, through the
-control plane, signed into by a browser, reporting its own errors. The blocker is one step —
-`trigger-deploy` passes no build source and nothing configures one
-(`provider-zerops/src/control.ts:263-270`, [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md)),
-which blocks every control-plane app deploy on Zerops and not only private ones. Public build source
-first, the repository integration second; the second waits on the operator authorizing GitHub on the
-Zerops account. Consumes [`60`](backlog/60-the-example-app-has-no-light-tier-descriptor.md) and
-[`69`](backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md), and answers items 3 and 4 of
-[`05`](backlog/05-bring-up-on-a-real-zerops-account.md).
+**one gate: add a GitHub repository, public or private, to the control plane and get it deployed into
+the Zerops account**, signed into by a browser and reporting its own errors. The control plane already
+holds the repository (`apps.repo_url` is required and reaches the provider); Zerops throws it away
+(`provider-zerops/src/control.ts:263-270,276`) and nothing configures the integration a private repo
+needs. Measured while scoping: a build source belongs to an app VERSION and never persists, and the
+integration API can name a setup but carries no descriptor — so **an app on Zerops is a repository whose
+root holds `zerops.yaml`**, and the example moves out of this monorepo. The private half waits on the
+operator authorizing GitHub on the Zerops account. Consumes
+[`47`](backlog/47-give-the-zerops-path-a-private-git-source.md),
+[`69`](backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md) and
+[`70`](backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md), and answers items 3
+and 4 of [`05`](backlog/05-bring-up-on-a-real-zerops-account.md).
 
 [`zerops-platform-deploy`](sprints/sprint-2026-08-06-zerops-platform-deploy.md) — an unattended
 `fabrika platform deploy --provider=zerops`, as wide as
