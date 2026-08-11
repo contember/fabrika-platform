@@ -1,5 +1,6 @@
 import { FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_OPERATIONS_DSN, FABRIKA_SERVICE_KEY } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
+import type { BlobStore } from '@fabrika/platform'
 import type {
 	ControlProvider,
 	ProviderDeployInput,
@@ -8,11 +9,13 @@ import type {
 	ProviderRegistrationInput,
 } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
+import { getRunLogUseCase } from '../api/runs'
 import type { ControlRepositories, RunRow } from '../db'
 import { uuidv7 } from '../db'
 import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelope, type RunDeps, type RunOutcome } from '../run-lifecycle'
 import { EnvSecretResolver, type SecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
+import { allowAllAuth } from './helpers/iam'
 import { makeFakeLock } from './helpers/lock'
 
 const envelope = (provider: string, payload: string): ProviderEnvelope => ({
@@ -130,7 +133,32 @@ function makeDeps(
 	secrets: SecretResolver = new EnvSecretResolver({}),
 	lock = makeFakeLock(),
 ): RunDeps {
-	return { repositories: db, provider, secrets, lock }
+	return { repositories: db, provider, secrets, lock, logs: { put: () => Promise.resolve() } }
+}
+
+function memoryLogs(
+	initial: Readonly<Record<string, string>> = {},
+	beforePut: (putNumber: number) => Promise<void> = () => Promise.resolve(),
+): { logs: BlobStore; objects: Map<string, string>; puts: string[] } {
+	const objects = new Map(Object.entries(initial))
+	const puts: string[] = []
+	const logs: BlobStore = {
+		put: async (key, value) => {
+			if (typeof value !== 'string') throw new Error('test log store accepts strings only')
+			puts.push(key)
+			await beforePut(puts.length)
+			objects.set(key, value)
+		},
+		get: (key) => {
+			const value = objects.get(key)
+			return Promise.resolve(value === undefined ? null : { body: new Blob([value]).stream(), text: () => Promise.resolve(value) })
+		},
+		delete: (key) => {
+			objects.delete(key)
+			return Promise.resolve()
+		},
+	}
+	return { logs, objects, puts }
 }
 
 const requireRun = async (db: ControlRepositories, id: string): Promise<RunRow> => {
@@ -187,6 +215,137 @@ describe('provider-neutral run lifecycle', () => {
 		expect(run.external_run_id).toBe('memory-run-1')
 		expect(run.log_key).toBe(`runs/${runId}/logs.ndjson`)
 		expect(lock.held.size).toBe(0)
+	})
+
+	test('persists provider log lines as ordered NDJSON readable through the run log use case', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		let markFirstStarted = () => {}
+		const firstStarted = new Promise<void>((resolve) => {
+			markFirstStarted = resolve
+		})
+		let finishFirst = () => {}
+		const firstFinished = new Promise<void>((resolve) => {
+			finishFirst = resolve
+		})
+		let markSecondStarted = () => {}
+		const secondStarted = new Promise<void>((resolve) => {
+			markSecondStarted = resolve
+		})
+		let finishSecond = () => {}
+		const secondFinished = new Promise<void>((resolve) => {
+			finishSecond = resolve
+		})
+		const stored = memoryLogs({}, async (putNumber) => {
+			if (putNumber === 1) {
+				markFirstStarted()
+				await firstFinished
+			}
+			if (putNumber === 2) {
+				markSecondStarted()
+				await secondFinished
+			}
+		})
+		const provider = makeProvider([], { state: 'succeeded', exitCode: 0 })
+		provider.deploy = async (input) => {
+			input.events.log('checking source')
+			input.events.log('deploy complete')
+			return { state: 'succeeded', exitCode: 0 }
+		}
+		const deps = makeDeps(db, provider)
+		deps.logs = stored.logs
+
+		const deploy = executeDeploy(deps, { runId })
+		await firstStarted
+		expect(stored.puts).toEqual([`runs/${runId}/logs.ndjson`])
+		expect((await requireRun(db, runId)).status).toBe('running')
+		finishFirst()
+		await secondStarted
+		expect(stored.puts).toEqual([`runs/${runId}/logs.ndjson`, `runs/${runId}/logs.ndjson`])
+		expect((await requireRun(db, runId)).status).toBe('running')
+		finishSecond()
+		expect(await deploy).toEqual({ runId, status: 'succeeded' })
+		const response = await getRunLogUseCase({
+			repositories: db,
+			queue: { send: () => Promise.resolve() },
+			logs: stored.logs,
+			cancel: () => Promise.resolve(),
+			auth: allowAllAuth(),
+		}, runId)
+		expect(response.status).toBe('succeeded')
+		expect(response.lines.map(({ stream, text }) => ({ stream, text }))).toEqual([
+			{ stream: 'meta', text: 'checking source' },
+			{ stream: 'meta', text: 'deploy complete' },
+		])
+		expect(response.lines.every((line) => Number.isFinite(line.ts))).toBe(true)
+	})
+
+	test('does not overwrite an existing runner log when the provider emits no control-side lines', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const key = `runs/${runId}/logs.ndjson`
+		const runnerContents = '{"ts":1,"stream":"stdout","text":"runner-owned"}\n'
+		const stored = memoryLogs({ [key]: runnerContents })
+		const deps = makeDeps(db, makeProvider([], { state: 'succeeded' }))
+		deps.logs = stored.logs
+
+		expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
+		expect(stored.puts).toEqual([])
+		expect(stored.objects.get(key)).toBe(runnerContents)
+	})
+
+	test('waits for queued log writes after a provider throw before recording failure', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		let startWrite = () => {}
+		const writeStarted = new Promise<void>((resolve) => {
+			startWrite = resolve
+		})
+		let finishWrite = () => {}
+		const writeFinished = new Promise<void>((resolve) => {
+			finishWrite = resolve
+		})
+		const provider = makeProvider([], { state: 'succeeded' })
+		provider.deploy = async (input) => {
+			input.events.log('provider started')
+			throw new Error('provider failed')
+		}
+		const deps = makeDeps(db, provider)
+		deps.logs = {
+			put: async () => {
+				startWrite()
+				await writeFinished
+			},
+		}
+
+		const deploy = executeDeploy(deps, { runId })
+		await writeStarted
+		expect((await requireRun(db, runId)).status).toBe('running')
+		finishWrite()
+		expect((await deploy).status).toBe('failed')
+		expect((await requireRun(db, runId)).status).toBe('failed')
+	})
+
+	test('keeps provider success when blob persistence fails and does not log storage error details', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const provider = makeProvider([], { state: 'succeeded' })
+		provider.deploy = async (input) => {
+			input.events.log('safe provider output')
+			return { state: 'succeeded' }
+		}
+		const deps = makeDeps(db, provider)
+		deps.logs = { put: () => Promise.reject(new Error('credential-must-not-leak')) }
+		const errors: string[] = []
+		const originalError = console.error
+		console.error = (...values) => errors.push(values.map(String).join(' '))
+		try {
+			expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
+		} finally {
+			console.error = originalError
+		}
+		expect(errors).toEqual([`deploy run ${runId}: failed to persist log output`])
+		expect(errors.join('\n')).not.toContain('credential-must-not-leak')
 	})
 
 	test('injects only an active Operations configuration and leaves application vars separate', async () => {

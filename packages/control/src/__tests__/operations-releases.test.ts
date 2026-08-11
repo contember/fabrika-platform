@@ -91,6 +91,7 @@ describe('Control release projection', () => {
 			provider: provider(inputs),
 			secrets: new EnvSecretResolver({}),
 			lock: makeFakeLock(),
+			logs: { put: () => Promise.resolve() },
 			operations,
 		}
 
@@ -134,6 +135,7 @@ describe('Control release projection', () => {
 			provider: provider(inputs),
 			secrets: new EnvSecretResolver({}),
 			lock: makeFakeLock(),
+			logs: { put: () => Promise.resolve() },
 			operations: {
 				repository: harness.repositories.operationsReleases,
 				syncKey: SYNC_KEY,
@@ -154,6 +156,7 @@ describe('Control release projection', () => {
 				provider: provider(inputs),
 				secrets: new EnvSecretResolver({}),
 				lock: makeFakeLock(),
+				logs: { put: () => Promise.resolve() },
 				operations: {
 					repository: harness.repositories.operationsReleases,
 					syncKey: SYNC_KEY,

@@ -1,9 +1,11 @@
+import type { RunLogLine } from '@fabrika/control-contract'
 import {
 	OPERATIONS_MANAGED_ENVIRONMENT_KEYS,
 	operationsManagedEnvironment,
 	operationsManagedEnvironmentCollisions,
 } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
+import type { BlobStore } from '@fabrika/platform'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -32,6 +34,7 @@ export interface RunDeps {
 	secrets: SecretResolver
 	provider: ControlProvider
 	lock: DeployLockGate
+	logs: Pick<BlobStore, 'put'>
 	operations?: OperationsReleaseProjectionDeps
 }
 
@@ -41,6 +44,30 @@ export interface DeployJobMessage {
 }
 
 const logsKey = (runId: string): string => `runs/${runId}/logs.ndjson`
+
+class RunLogWriter {
+	readonly #lines: RunLogLine[] = []
+	#writeQueue: Promise<void> = Promise.resolve()
+
+	constructor(
+		private readonly logs: Pick<BlobStore, 'put'>,
+		private readonly key: string,
+		private readonly runId: string,
+	) {}
+
+	log(text: string): void {
+		console.info(`deploy run ${this.runId}: ${text}`)
+		this.#lines.push({ ts: Date.now(), stream: 'meta', text })
+		const contents = `${this.#lines.map((line) => JSON.stringify(line)).join('\n')}\n`
+		this.#writeQueue = this.#writeQueue
+			.then(() => this.logs.put(this.key, contents))
+			.catch(() => console.error(`deploy run ${this.runId}: failed to persist log output`))
+	}
+
+	async flush(): Promise<void> {
+		await this.#writeQueue
+	}
+}
 
 const isJsonValue = (value: unknown): value is JsonValue => {
 	if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
@@ -232,6 +259,7 @@ export async function executeDeploy(
 		}
 		const startedRun = await deps.repositories.runs.getRun(run.id)
 		if (startedRun === null) return { runId: run.id, status: 'skipped' }
+		if (startedRun.log_key === null) throw new Error('started run has no log key')
 		const releaseContext = deps.operations === undefined
 			? null
 			: await projectOperationsRun(deps.operations, startedRun, {
@@ -299,32 +327,38 @@ export async function executeDeploy(
 			Object.assign(managedEnvironment, releaseContext.managedEnvironment)
 		}
 		const returnOrigins = await projectedReturnOrigins(deps.repositories.registry, app.id)
-		const outcome = await deps.provider.deploy({
-			runId: run.id,
-			app: registration.app,
-			environment: registration.environment,
-			secrets: await resolveSecrets(deps, app.id, appEnv.env),
-			vars,
-			managedEnvironment,
-			...(returnOrigins === undefined ? {} : { returnOrigins }),
-			dryRun: message.dryRun === true,
-			...(releaseContext?.artifactUpload === undefined ? {} : { artifactUpload: releaseContext.artifactUpload }),
-			signal: new AbortController().signal,
-			events: {
-				log: (line) => console.info(`deploy run ${run.id}: ${line}`),
-				externalId: async (externalId) => {
-					await deps.repositories.runs.setRunExternalId(run.id, externalId)
-					const acceptedRun = await deps.repositories.runs.getRun(run.id)
-					if (deps.operations !== undefined && acceptedRun !== null) {
-						await projectOperationsRun(deps.operations, acceptedRun, {
-							dryRun: message.dryRun === true,
-							phase: 'provider_accepted',
-							artifactState: 'pending',
-						})
-					}
+		const runLogs = new RunLogWriter(deps.logs, startedRun.log_key, run.id)
+		let outcome: ProviderTerminalOutcome
+		try {
+			outcome = await deps.provider.deploy({
+				runId: run.id,
+				app: registration.app,
+				environment: registration.environment,
+				secrets: await resolveSecrets(deps, app.id, appEnv.env),
+				vars,
+				managedEnvironment,
+				...(returnOrigins === undefined ? {} : { returnOrigins }),
+				dryRun: message.dryRun === true,
+				...(releaseContext?.artifactUpload === undefined ? {} : { artifactUpload: releaseContext.artifactUpload }),
+				signal: new AbortController().signal,
+				events: {
+					log: (line) => runLogs.log(line),
+					externalId: async (externalId) => {
+						await deps.repositories.runs.setRunExternalId(run.id, externalId)
+						const acceptedRun = await deps.repositories.runs.getRun(run.id)
+						if (deps.operations !== undefined && acceptedRun !== null) {
+							await projectOperationsRun(deps.operations, acceptedRun, {
+								dryRun: message.dryRun === true,
+								phase: 'provider_accepted',
+								artifactState: 'pending',
+							})
+						}
+					},
 				},
-			},
-		})
+			})
+		} finally {
+			await runLogs.flush()
+		}
 		await deps.repositories.runs.markRunFinished(run.id, outcome.state, outcome.exitCode ?? null)
 		await projectTerminalRun(deps, run.id, message.dryRun === true, outcome.state, outcome.artifactState)
 		return { runId: run.id, status: outcome.state }

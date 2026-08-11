@@ -51,6 +51,7 @@ const deps = (db: ControlRepositories, vault: Vault, inputs: ProviderDeployInput
 	provider: provider(inputs),
 	secrets: new VaultSecretResolver({ vault }),
 	lock: makeFakeLock(),
+	logs: { put: () => Promise.resolve() },
 })
 
 describe('provider deploy through the vault', () => {

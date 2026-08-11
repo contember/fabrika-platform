@@ -90,6 +90,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 			acquire: (key, holder) => locks(env).acquire(key, holder, DEPLOY_LOCK_TTL_MS),
 			release: (key, holder) => locks(env).release(key, holder),
 		},
+		logs: env.RUN_LOGS,
 		operations: operationsReleaseDeps(env),
 	}
 }
