@@ -83,6 +83,11 @@ export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promis
 				? {}
 				: { providerState: parseProviderJson(run.provider_state_json, `provider state for run ${run.id}`) }),
 			...(returnOrigins === undefined ? {} : { returnOrigins }),
+			checkpoint: async (providerState) => {
+				if (!(await deps.repositories.runs.checkpointRunProviderState(run.id, providerState))) {
+					throw new Error('provider reconciliation checkpoint belongs to an inactive run')
+				}
+			},
 		})
 		summary.checked++
 

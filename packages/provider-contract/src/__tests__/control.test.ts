@@ -103,6 +103,7 @@ describe('ControlProvider', () => {
 			runId: input.runId,
 			externalId: 'harbor-run-9',
 			environment: registration.environment,
+			checkpoint: () => Promise.resolve(),
 		})
 		await harbor.cancel({
 			runId: input.runId,

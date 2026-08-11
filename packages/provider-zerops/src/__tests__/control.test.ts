@@ -1,5 +1,6 @@
 import type { AppSchema } from '@fabrika/auth-core'
 import type {
+	JsonValue,
 	ProviderApp,
 	ProviderDeployInput,
 	ProviderDeploymentNamespace,
@@ -8,14 +9,15 @@ import type {
 	RuntimeProviderRun,
 } from '@fabrika/provider-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
-import type { ZeropsApi, ZeropsAppVersionStatus } from '../api'
+import { type ZeropsApi, ZeropsApiError, type ZeropsAppVersionStatus } from '../api'
 import { useSharedPostgres } from '../authoring'
 import { zeropsTargetCodec } from '../codec'
 import { createZeropsControlProvider, type ZeropsControlProviderOptions, type ZeropsProviderExecutor, zeropsStoredTargetCodec } from '../control'
 import { compileFabrikaManifest, zeropsArtifactCodec, type ZeropsArtifactSourceDescriptor } from '../manifest'
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
 import { zeropsSharedServiceHostname } from '../service-names'
-import type { ZeropsAppConfig } from '../types'
+import type { ZeropsSourceClient } from '../source'
+import type { ZeropsAppConfig, ZeropsRuntimeTarget } from '../types'
 
 interface Recorded {
 	calls: string[]
@@ -53,12 +55,13 @@ const SOURCE_DESCRIPTOR: ZeropsArtifactSourceDescriptor = {
 	contents: 'zerops:\n  - setup: test\n',
 	sha256: '560802d669a116e27e5ce76af3312048e3e9e7743a4fb7d6e73f14d800dc46d1',
 }
+const COMMIT_SHA = '0123456789abcdef0123456789abcdef01234567'
 
 const app: ProviderApp = {
 	id: 'notes',
 	source: {
 		repoUrl: 'https://github.com/acme/notes',
-		ref: 'refs/heads/main',
+		ref: COMMIT_SHA,
 		workerDir: 'apps/notes',
 	},
 }
@@ -116,7 +119,7 @@ const deployInput = (recorded: Recorded): ProviderDeployInput => ({
 	},
 })
 
-const makeApi = (recorded: Recorded, status: () => ZeropsAppVersionStatus = () => 'ACTIVE'): ZeropsApi => ({
+const makeApi = (recorded: Recorded, status: () => ZeropsAppVersionStatus | undefined = () => 'ACTIVE'): ZeropsApi => ({
 	importServices: async ({ projectId, yaml }) => {
 		recorded.calls.push('importServices')
 		recorded.imports.push({ projectId, yaml })
@@ -186,12 +189,37 @@ const executeProvider: ZeropsProviderExecutor = async (provider, run) => {
 	}
 }
 
-type TestControlProviderOptions = Omit<ZeropsControlProviderOptions, 'execute'> & {
+const makeSource = (calls: string[] = []): ZeropsSourceClient => ({
+	resolveInstallationId: async () => null,
+	resolve: async (input) => {
+		calls.push(`resolve:${input.repository.owner}/${input.repository.name}:${input.requestedRef}`)
+		return {
+			runId: input.runId,
+			commitSha: input.expectedCommitSha ?? COMMIT_SHA,
+			descriptorSha256: input.descriptorSha256,
+		}
+	},
+	upload: async (input) => {
+		calls.push(`upload:${input.runId}:${input.appVersionId}:${input.commitSha}`)
+		return {
+			runId: input.runId,
+			appVersionId: input.appVersionId,
+			commitSha: input.commitSha,
+			descriptorSha256: input.descriptor.sha256,
+		}
+	},
+	cancel: async (input) => {
+		calls.push(`sourceCancel:${input.runId}:${input.appVersionId}`)
+	},
+})
+
+type TestControlProviderOptions = Omit<ZeropsControlProviderOptions, 'execute' | 'source'> & {
 	readonly execute?: ZeropsProviderExecutor
+	readonly source?: ZeropsSourceClient
 }
 
 const createTestControlProvider = (options: TestControlProviderOptions) =>
-	createZeropsControlProvider({ ...options, execute: options.execute ?? executeProvider })
+	createZeropsControlProvider({ ...options, source: options.source ?? makeSource(), execute: options.execute ?? executeProvider })
 
 let recorded: Recorded
 beforeEach(() => {
@@ -428,6 +456,67 @@ describe('Zerops ControlProvider registration', () => {
 })
 
 describe('Zerops ControlProvider lifecycle', () => {
+	test('verifies and binds source resolution before any deploy effect', async () => {
+		const resolutions: Array<{
+			runId: string
+			repository: { owner: string; name: string }
+			requestedRef: string
+			expectedCommitSha?: string
+			githubInstallationId?: number
+			descriptorSha256: string
+			signal: AbortSignal
+		}> = []
+		const source: ZeropsSourceClient = {
+			...makeSource(),
+			resolve: async (input) => {
+				resolutions.push(input)
+				return { runId: input.runId, commitSha: COMMIT_SHA, descriptorSha256: input.descriptorSha256 }
+			},
+		}
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded), source })
+		if (control.resolveSource === undefined) throw new Error('expected Zerops source resolution')
+		const signal = new AbortController().signal
+		const privateApp = { ...app, source: { ...app.source, githubInstallationId: 42 } }
+
+		expect(
+			await control.resolveSource({
+				runId: 'run-1',
+				app: privateApp,
+				environment: environment(),
+				expectedCommitSha: COMMIT_SHA,
+				signal,
+			}),
+		).toEqual({ commitSha: COMMIT_SHA })
+		expect(resolutions).toEqual([{
+			runId: 'run-1',
+			repository: { owner: 'acme', name: 'notes' },
+			requestedRef: COMMIT_SHA,
+			expectedCommitSha: COMMIT_SHA,
+			githubInstallationId: 42,
+			descriptorSha256: SOURCE_DESCRIPTOR.sha256,
+			signal,
+		}])
+		expect(recorded.calls).toEqual([])
+
+		const drifted = compileFabrikaManifest(config, 'prod', {
+			...SOURCE_DESCRIPTOR,
+			contents: `${SOURCE_DESCRIPTOR.contents}# changed after registration\n`,
+		})
+		await expect(control.resolveSource({
+			runId: 'run-2',
+			app,
+			environment: environment({
+				artifact: {
+					provider: 'zerops',
+					version: zeropsArtifactCodec.version,
+					payload: zeropsArtifactCodec.encode(drifted),
+				},
+			}),
+			signal,
+		})).rejects.toThrow('source descriptor digest')
+		expect(resolutions).toHaveLength(1)
+	})
+
 	test('rejects structured manifest drift before beforeDeploy or the Zerops API', async () => {
 		const manifest = compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)
 		const service = manifest.target.importDocument.services[0]
@@ -491,7 +580,11 @@ describe('Zerops ControlProvider lifecycle', () => {
 			projectId: 'project-1',
 			serviceId: 'service-1',
 			accessToken: 'zt-secret',
-			buildFromGit: 'https://github.com/acme/notes@main',
+			source: {
+				runId: 'run-1',
+				repository: { owner: 'acme', name: 'notes' },
+				commitSha: COMMIT_SHA,
+			},
 			apiBaseUrl: 'https://api.test',
 			propustkaUrl: 'https://iam.test',
 			adminKey: 'px-secret',
@@ -499,32 +592,27 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(outcome).toEqual({ state: 'succeeded' })
 		expect(recorded.beforeDeploy).toEqual(['notes:apps-prod:project-1:proxy-service-1'])
 		expect(recorded.externalIds).toEqual(['version-1'])
-		expect(recorded.triggers).toEqual([{
-			serviceId: 'service-1',
-			buildFromGit: 'https://github.com/acme/notes@main',
-			zeropsSetup: undefined,
-		}])
+		expect(recorded.triggers).toEqual([])
+		expect(recorded.calls).toContain('createAppVersion:service-1')
+		expect(recorded.calls).toContain('buildAndDeployAppVersion:version-1')
 		expect(recorded.calls.indexOf('beforeDeploy')).toBeLessThan(recorded.calls.indexOf('importServices'))
 		expect(observedRun.cwd).toBe('apps/notes')
 		expect(recorded.logs.join('\n')).not.toContain('zt-secret')
 		expect(JSON.stringify(deployInput(recorded).environment)).not.toContain('zt-secret')
 	})
 
-	test('derives an HTTPS runtime build source from full and plain refs without persisting it', async () => {
+	test('uses the same credential-free upload coordinates for public and private repositories', async () => {
 		const cases = [
-			{ repoUrl: 'github.com/acme/notes', ref: 'refs/heads/main', expected: 'https://github.com/acme/notes@main' },
-			{ repoUrl: 'https://github.com/acme/notes', ref: 'refs/tags/v1.2.3', expected: 'https://github.com/acme/notes@v1.2.3' },
-			{ repoUrl: 'github.com/acme/notes', ref: '0123456789abcdef', expected: 'https://github.com/acme/notes@0123456789abcdef' },
-			{ repoUrl: 'github.com/acme/notes', ref: 'release/next', expected: 'https://github.com/acme/notes@release/next' },
+			{ repoUrl: 'github.com/acme/notes', githubInstallationId: undefined },
+			{ repoUrl: 'https://github.com/acme/notes', githubInstallationId: 42 },
 		]
-		const observed: string[] = []
+		const observed: Array<ZeropsRuntimeTarget['source']> = []
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
 			execute: async (_provider, run) => {
 				const target = zeropsTargetCodec.decode(run.target.payload)
-				if (target.buildFromGit === undefined) throw new Error('expected a public runtime source')
-				observed.push(target.buildFromGit)
+				observed.push(target.source)
 				return { state: 'succeeded' }
 			},
 		})
@@ -534,12 +622,20 @@ describe('Zerops ControlProvider lifecycle', () => {
 				...deployInput(recorded),
 				app: {
 					...app,
-					source: { ...app.source, repoUrl: candidate.repoUrl, ref: candidate.ref },
+					source: {
+						...app.source,
+						repoUrl: candidate.repoUrl,
+						ref: COMMIT_SHA,
+						...(candidate.githubInstallationId === undefined ? {} : { githubInstallationId: candidate.githubInstallationId }),
+					},
 				},
 			})
 		}
 
-		expect(observed).toEqual(cases.map((candidate) => candidate.expected))
+		expect(observed).toEqual([
+			{ runId: 'run-1', repository: { owner: 'acme', name: 'notes' }, commitSha: COMMIT_SHA },
+			{ runId: 'run-1', repository: { owner: 'acme', name: 'notes' }, commitSha: COMMIT_SHA, githubInstallationId: 42 },
+		])
 		expect(environment().target.payload).toEqual({ serviceId: 'service-1' })
 	})
 
@@ -549,8 +645,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 			'https://x-access-token:credential-must-not-leak@github.com/acme/notes',
 			'https://github.com/acme/notes?token=credential-must-not-leak',
 			'https://github.com/acme/notes#credential-must-not-leak',
-			'https://github.com/acme/notes?',
-			'https://github.com/acme/notes#',
 			'file:/tmp/repo',
 			'https:\\\\x-access-token:credential-must-not-leak@github.com/acme/notes',
 			'https:////x-access-token:credential-must-not-leak@github.com/acme/notes',
@@ -572,7 +666,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 			await expect(control.deploy({
 				...deployInput(recorded),
 				app: { ...app, source: { ...app.source, repoUrl } },
-			})).rejects.toThrow('Zerops public repository must be an HTTPS URL without credentials, query, or fragment')
+			})).rejects.toThrow('source repository URL')
 		}
 
 		expect(recorded.beforeDeploy).toEqual([])
@@ -641,13 +735,24 @@ describe('Zerops ControlProvider lifecycle', () => {
 
 	test('dry-run names managed service values without mutating Zerops or exposing values', async () => {
 		const dsn = 'https://operations-public-key@errors.test/1'
-		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		const sourceCalls: string[] = []
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			source: makeSource(sourceCalls),
+			beforeDeploy: async () => {
+				recorded.beforeDeploy.push('called')
+			},
+		})
 		await control.deploy({
 			...deployInput(recorded),
 			dryRun: true,
 			managedEnvironment: { FABRIKA_OPERATIONS_DSN: dsn },
 		})
 		expect(recorded.envWrites).toEqual([])
+		expect(recorded.calls).toEqual([])
+		expect(recorded.beforeDeploy).toEqual([])
+		expect(sourceCalls).toEqual([])
 		expect(recorded.logs.join('\n')).toContain('FABRIKA_OPERATIONS_DSN')
 		expect(recorded.logs.join('\n')).not.toContain(dsn)
 	})
@@ -788,6 +893,8 @@ describe('Zerops ControlProvider lifecycle', () => {
 		const reference = {
 			runId: 'run-1',
 			externalId: 'version-1',
+			providerState: { appVersionId: 'version-1', phase: 'build_triggered' },
+			checkpoint: () => Promise.resolve(),
 			// A resumed deploy finishes the same IAM touchpoint, so it projects the same set.
 			returnOrigins: ['https://notes.example.test'],
 			environment: environment({
@@ -816,6 +923,339 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.calls).toContain('cancelBuild:version-1')
 		expect(recorded.calls).not.toContain('importServices')
 		expect(recorded.calls).not.toContain('triggerPipeline')
+	})
+
+	test('checkpoints recovered upload before the one build trigger and then records its process', async () => {
+		const timeline: string[] = []
+		const checkpoints: unknown[] = []
+		const api: ZeropsApi = {
+			...makeApi(recorded),
+			buildAndDeployAppVersion: async ({ appVersionId, zeropsYaml, zeropsYamlSetup }) => {
+				timeline.push(`build:${appVersionId}`)
+				expect(zeropsYaml).toBe(SOURCE_DESCRIPTOR.contents)
+				expect(zeropsYamlSetup).toBeUndefined()
+				return { id: 'process-1', appVersionId }
+			},
+		}
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api })
+		if (control.reconcile === undefined) throw new Error('expected Zerops reconciliation')
+
+		const outcome = await control.reconcile({
+			runId: 'run-1',
+			externalId: 'version-1',
+			providerState: { appVersionId: 'version-1', phase: 'source_uploaded' },
+			environment: environment(),
+			checkpoint: (state) => {
+				checkpoints.push(state)
+				const phase = typeof state === 'object' && state !== null && !Array.isArray(state) ? state['phase'] : undefined
+				timeline.push(`checkpoint:${typeof phase === 'string' ? phase : 'invalid'}`)
+				return Promise.resolve()
+			},
+		})
+
+		expect(outcome).toEqual({ state: 'succeeded' })
+		expect(timeline).toEqual([
+			'checkpoint:build_trigger_requested',
+			'build:version-1',
+			'checkpoint:build_triggered',
+		])
+		expect(checkpoints).toEqual([
+			{ appVersionId: 'version-1', phase: 'build_trigger_requested' },
+			{ appVersionId: 'version-1', phase: 'build_triggered', processId: 'process-1' },
+		])
+	})
+
+	test('never triggers twice from the ambiguous build-requested checkpoint', async () => {
+		const checkpoints: unknown[] = []
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded, () => 'BUILDING'),
+			sleep: async (ms) => {
+				recorded.calls.push(`sleep:${ms}`)
+			},
+		})
+		if (control.reconcile === undefined) throw new Error('expected Zerops reconciliation')
+
+		expect(
+			await control.reconcile({
+				runId: 'run-1',
+				externalId: 'version-1',
+				providerState: { appVersionId: 'version-1', phase: 'build_trigger_requested' },
+				environment: environment(),
+				checkpoint: (state) => {
+					checkpoints.push(state)
+					return Promise.resolve()
+				},
+			}),
+		).toEqual({ state: 'running' })
+		expect(checkpoints).toEqual([{ appVersionId: 'version-1', phase: 'build_triggered' }])
+		expect(recorded.calls).toEqual(['sleep:10000', 'getAppVersion:version-1', 'getAppVersion:version-1'])
+		expect(recorded.calls).not.toContain('buildAndDeployAppVersion:version-1')
+	})
+
+	test('keeps unknown and unavailable build-request observations retryable', async () => {
+		const checkpoints: unknown[] = []
+		const reference = {
+			runId: 'run-1',
+			externalId: 'version-1',
+			providerState: { appVersionId: 'version-1', phase: 'build_trigger_requested' },
+			environment: environment(),
+			checkpoint: (state: JsonValue) => {
+				checkpoints.push(state)
+				return Promise.resolve()
+			},
+		}
+		const unknown = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded, () => undefined),
+			sleep: () => Promise.resolve(),
+		})
+		if (unknown.reconcile === undefined || unknown.cancel === undefined) throw new Error('expected Zerops lifecycle capabilities')
+
+		expect(await unknown.reconcile(reference)).toEqual({ state: 'running' })
+		await expect(unknown.cancel(reference)).rejects.toThrow('status is not observable')
+		expect(recorded.calls).toEqual(['getAppVersion:version-1', 'getAppVersion:version-1'])
+		expect(checkpoints).toEqual([])
+
+		const unavailableApi: ZeropsApi = {
+			...makeApi(recorded),
+			getAppVersion: async () => {
+				recorded.calls.push('getAppVersion:unavailable')
+				throw new Error('temporary observation failure')
+			},
+		}
+		const unavailable = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: unavailableApi,
+			sleep: () => Promise.resolve(),
+		})
+		if (unavailable.reconcile === undefined) throw new Error('expected Zerops reconciliation')
+		expect(await unavailable.reconcile(reference)).toEqual({ state: 'running' })
+		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
+	})
+
+	test('keeps an accepted build retryable when its result checkpoint fails', async () => {
+		let checkpoint = 0
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		if (control.reconcile === undefined) throw new Error('expected Zerops reconciliation')
+
+		expect(
+			await control.reconcile({
+				runId: 'run-1',
+				externalId: 'version-1',
+				providerState: { appVersionId: 'version-1', phase: 'source_uploaded' },
+				environment: environment(),
+				checkpoint: () => {
+					checkpoint++
+					return checkpoint === 1 ? Promise.resolve() : Promise.reject(new Error('checkpoint unavailable'))
+				},
+			}),
+		).toEqual({ state: 'running' })
+		expect(recorded.calls).toEqual(['buildAndDeployAppVersion:version-1'])
+		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
+	})
+
+	test('keeps a lost build response retryable when follow-up observation fails', async () => {
+		const api: ZeropsApi = {
+			...makeApi(recorded),
+			buildAndDeployAppVersion: async () => {
+				recorded.calls.push('buildAndDeployAppVersion:version-1')
+				throw new Error('build response lost')
+			},
+			getAppVersion: async () => {
+				recorded.calls.push('getAppVersion:unavailable')
+				throw new Error('temporary observation failure')
+			},
+		}
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api, sleep: () => Promise.resolve() })
+		if (control.reconcile === undefined) throw new Error('expected Zerops reconciliation')
+
+		expect(
+			await control.reconcile({
+				runId: 'run-1',
+				externalId: 'version-1',
+				providerState: { appVersionId: 'version-1', phase: 'source_uploaded' },
+				environment: environment(),
+				checkpoint: () => Promise.resolve(),
+			}),
+		).toEqual({ state: 'running' })
+		expect(recorded.calls).toEqual(['buildAndDeployAppVersion:version-1', 'getAppVersion:unavailable'])
+		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
+	})
+
+	test('bounds failed and hanging source cancellation before every Zerops cleanup', async () => {
+		let cancellations = 0
+		const sourceSignals: AbortSignal[] = []
+		const deleteSignals: AbortSignal[] = []
+		const source: ZeropsSourceClient = {
+			...makeSource(),
+			cancel: async ({ signal }) => {
+				cancellations++
+				sourceSignals.push(signal)
+				if (cancellations % 2 === 1) throw new Error('source cancellation unavailable')
+				return new Promise<void>(() => {})
+			},
+		}
+		const api: ZeropsApi = {
+			...makeApi(recorded, () => 'UPLOADING'),
+			buildAndDeployAppVersion: async ({ appVersionId }) => {
+				recorded.calls.push(`buildAndDeployAppVersion:${appVersionId}`)
+				throw new ZeropsApiError('zerops: build rejected', 400, 'invalidBuild')
+			},
+			deleteAppVersion: async ({ appVersionId, signal }) => {
+				recorded.calls.push(`deleteAppVersion:${appVersionId}`)
+				deleteSignals.push(signal)
+			},
+		}
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api,
+			source,
+			sourceCancelSleep: () => Promise.resolve(),
+			sleep: () => Promise.resolve(),
+		})
+		if (control.reconcile === undefined || control.cancel === undefined) throw new Error('expected Zerops lifecycle capabilities')
+		const reference = {
+			runId: 'run-1',
+			externalId: 'version-1',
+			environment: environment(),
+			checkpoint: () => Promise.resolve(),
+		}
+
+		expect(
+			await control.reconcile({
+				...reference,
+				providerState: { appVersionId: 'version-1', phase: 'version_created' },
+			}),
+		).toEqual({ state: 'failed' })
+		await control.cancel({
+			runId: 'run-1',
+			externalId: 'version-1',
+			environment: environment(),
+			providerState: { appVersionId: 'version-1', phase: 'source_uploaded' },
+		})
+		expect(
+			await control.reconcile({
+				...reference,
+				providerState: { appVersionId: 'version-1', phase: 'build_trigger_requested' },
+			}),
+		).toEqual({ state: 'failed' })
+		expect(
+			await control.reconcile({
+				...reference,
+				providerState: { appVersionId: 'version-1', phase: 'source_uploaded' },
+			}),
+		).toEqual({ state: 'failed' })
+		expect(cancellations).toBe(4)
+		expect(sourceSignals.every((signal) => signal.aborted)).toBe(true)
+		expect(deleteSignals.every((signal) => !signal.aborted)).toBe(true)
+		expect(deleteSignals.some((signal) => sourceSignals.includes(signal))).toBe(false)
+		expect(recorded.calls).toEqual([
+			'deleteAppVersion:version-1',
+			'deleteAppVersion:version-1',
+			'getAppVersion:version-1',
+			'deleteAppVersion:version-1',
+			'buildAndDeployAppVersion:version-1',
+			'deleteAppVersion:version-1',
+		])
+	})
+
+	test('deletes known pre-trigger crash phases and fails closed', async () => {
+		const sourceCalls: string[] = []
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded, () => 'UPLOADING'),
+			source: makeSource(sourceCalls),
+			sleep: () => Promise.resolve(),
+		})
+		if (control.reconcile === undefined) throw new Error('expected Zerops reconciliation')
+		const reference = {
+			runId: 'run-1',
+			externalId: 'version-1',
+			environment: environment(),
+			checkpoint: () => Promise.resolve(),
+		}
+
+		expect(
+			await control.reconcile({
+				...reference,
+				providerState: { appVersionId: 'version-1', phase: 'version_created' },
+			}),
+		).toEqual({ state: 'failed' })
+		expect(
+			await control.reconcile({
+				...reference,
+				providerState: { appVersionId: 'version-1', phase: 'build_trigger_requested' },
+			}),
+		).toEqual({ state: 'failed' })
+		const driftedArtifact = compileFabrikaManifest(config, 'prod', {
+			...SOURCE_DESCRIPTOR,
+			contents: `${SOURCE_DESCRIPTOR.contents}# changed after upload\n`,
+		})
+		expect(
+			await control.reconcile({
+				...reference,
+				providerState: { appVersionId: 'version-1', phase: 'source_uploaded' },
+				environment: environment({
+					artifact: {
+						provider: 'zerops',
+						version: zeropsArtifactCodec.version,
+						payload: zeropsArtifactCodec.encode(driftedArtifact),
+					},
+				}),
+			}),
+		).toEqual({ state: 'failed' })
+		expect(sourceCalls).toEqual([
+			'sourceCancel:run-1:version-1',
+			'sourceCancel:run-1:version-1',
+			'sourceCancel:run-1:version-1',
+		])
+		expect(recorded.calls).toEqual([
+			'deleteAppVersion:version-1',
+			'getAppVersion:version-1',
+			'deleteAppVersion:version-1',
+			'deleteAppVersion:version-1',
+		])
+	})
+
+	test('validates durable state and uses its latest phase for cancellation', async () => {
+		const sourceCalls: string[] = []
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded), source: makeSource(sourceCalls) })
+		if (control.reconcile === undefined || control.cancel === undefined) throw new Error('expected Zerops lifecycle capabilities')
+		const reference = {
+			runId: 'run-1',
+			externalId: 'version-1',
+			environment: environment(),
+			checkpoint: () => Promise.resolve(),
+		}
+		const invalidStates: Array<JsonValue | undefined> = [
+			undefined,
+			{ appVersionId: 'different', phase: 'build_triggered' },
+			{ appVersionId: 'version-1', phase: 'unknown' },
+			{ appVersionId: 'version-1', phase: 'source_uploaded', uploadUrl: 'must-not-persist' },
+		]
+		for (const providerState of invalidStates) {
+			await expect(control.reconcile({ ...reference, providerState })).rejects.toThrow('Zerops run state')
+		}
+		expect(recorded.calls).toEqual([])
+
+		await control.cancel({
+			runId: 'run-1',
+			externalId: 'version-1',
+			environment: environment(),
+			providerState: { appVersionId: 'version-1', phase: 'source_uploaded' },
+		})
+		await control.cancel({
+			runId: 'run-1',
+			externalId: 'version-1',
+			environment: environment(),
+			providerState: { appVersionId: 'version-1', phase: 'build_triggered', processId: 'process-1' },
+		})
+		expect(sourceCalls).toEqual([
+			'sourceCancel:run-1:version-1',
+			'sourceCancel:run-1:version-1',
+		])
+		expect(recorded.calls).toEqual(['deleteAppVersion:version-1', 'cancelBuild:version-1'])
 	})
 
 	test('writes and deletes one service-level secret and returns an opaque reference', async () => {

@@ -6,6 +6,7 @@ import type {
 	ProviderDeploymentNamespace,
 	ProviderEnvelope,
 	ProviderEnvironment,
+	ProviderReconcileInput,
 	ProviderReconcileOutcome,
 	ProviderRegistration,
 	ProviderRegistrationInput,
@@ -14,12 +15,29 @@ import type {
 	RuntimeProviderRun,
 	SchemaReconciler,
 } from '@fabrika/provider-contract'
-import { createZeropsApi, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi } from './api'
+import {
+	createZeropsApi,
+	ZEROPS_ACTIVE,
+	ZEROPS_PROCESS_FINISHED,
+	ZEROPS_PROCESS_TERMINAL,
+	ZEROPS_TERMINAL,
+	type ZeropsApi,
+	ZeropsApiError,
+	type ZeropsAppVersion,
+	type ZeropsProcess,
+} from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
-import { type FabrikaManifest, parseFabrikaManifest, renderFabrikaProvisioningYaml, zeropsArtifactCodec } from './manifest'
+import {
+	type FabrikaManifest,
+	parseFabrikaManifest,
+	renderFabrikaProvisioningYaml,
+	verifyZeropsArtifactSourceDescriptor,
+	zeropsArtifactCodec,
+} from './manifest'
 import { createZeropsNamespaceCapabilities, type ZeropsNamespaceTarget, zeropsNamespaceTargetCodec } from './namespace'
 import { createZeropsProvider } from './provider'
-import type { ZeropsRuntimeTarget } from './types'
+import { normalizeZeropsSourceRepository, type ZeropsSourceClient } from './source'
+import type { ZeropsRunState, ZeropsRuntimeTarget } from './types'
 
 /** Provider coordinates that are safe to persist. Credentials are composed only for a live run. */
 export interface ZeropsStoredTarget {
@@ -91,8 +109,10 @@ export interface ZeropsControlProviderOptions {
 	readonly propustkaUrl?: string
 	readonly adminKey?: string
 	readonly api?: ZeropsApi
+	readonly source: ZeropsSourceClient
 	readonly reconcileSchema?: SchemaReconciler
 	readonly sleep?: Sleeper
+	readonly sourceCancelSleep?: Sleeper
 	readonly execute: ZeropsProviderExecutor
 	readonly beforeDeploy?: ZeropsBeforeDeploy
 	readonly namespaces?: {
@@ -185,55 +205,51 @@ const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegist
 
 const abortSignal = (): AbortSignal => new AbortController().signal
 
-const invalidPublicRepository = (): Error => new Error('Zerops public repository must be an HTTPS URL without credentials, query, or fragment')
+const IMMUTABLE_GIT_OBJECT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
+const BUILD_TRIGGER_CONSISTENCY_MS = 10_000
+const SOURCE_CANCEL_TIMEOUT_MS = 5000
 
-const URI_SCHEME = /^[a-z][a-z0-9+.-]*:/i
-const EXPLICIT_HTTPS_REPOSITORY = /^https:\/\/[^/]/i
-const SCHEMELESS_REPOSITORY = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\/[a-z0-9._~%-]+(?:\/[a-z0-9._~%-]+)+$/i
-
-const hasUnsafeRepositoryCharacter = (value: string): boolean => {
-	for (const character of value) {
-		const code = character.charCodeAt(0)
-		if (character === '\\' || code <= 0x20 || code === 0x7f) return true
+const parseRunState = (value: JsonValue | undefined, externalId: string): ZeropsRunState => {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+		throw new Error('Zerops run state must be an object')
 	}
-	return false
+	const appVersionId = value['appVersionId']
+	const phase = value['phase']
+	if (typeof appVersionId !== 'string' || appVersionId === '' || appVersionId !== externalId) {
+		throw new Error('Zerops run state appVersionId must match the external id')
+	}
+	if (phase === 'version_created' || phase === 'source_uploaded' || phase === 'build_trigger_requested') {
+		if (Object.keys(value).some((key) => key !== 'appVersionId' && key !== 'phase')) {
+			throw new Error('Zerops run state contains an unknown field')
+		}
+		return { appVersionId, phase }
+	}
+	if (phase !== 'build_triggered') {
+		throw new Error('Zerops run state phase is invalid')
+	}
+	if (Object.keys(value).some((key) => key !== 'appVersionId' && key !== 'phase' && key !== 'processId')) {
+		throw new Error('Zerops run state contains an unknown field')
+	}
+	const processId = value['processId']
+	if (processId !== undefined && (typeof processId !== 'string' || processId === '')) {
+		throw new Error('Zerops run state processId must be a non-empty string when present')
+	}
+	return { appVersionId, phase, ...(processId === undefined ? {} : { processId }) }
 }
 
-const publicBuildFromGit = (repoUrl: string, ref: string): string => {
-	if (hasUnsafeRepositoryCharacter(repoUrl)) {
-		throw invalidPublicRepository()
-	}
-	const hasScheme = URI_SCHEME.test(repoUrl)
-	if ((hasScheme && !EXPLICIT_HTTPS_REPOSITORY.test(repoUrl)) || (!hasScheme && !SCHEMELESS_REPOSITORY.test(repoUrl))) {
-		throw invalidPublicRepository()
-	}
-	let url: URL
-	try {
-		url = new URL(hasScheme ? repoUrl : `https://${repoUrl}`)
-	} catch {
-		throw invalidPublicRepository()
-	}
-	if (
-		url.protocol !== 'https:'
-		|| url.hostname === ''
-		|| url.pathname === '/'
-		|| url.username !== ''
-		|| url.password !== ''
-		|| repoUrl.includes('?')
-		|| repoUrl.includes('#')
-	) {
-		throw invalidPublicRepository()
-	}
-	const normalizedRef = ref.startsWith('refs/heads/')
-		? ref.slice('refs/heads/'.length)
-		: ref.startsWith('refs/tags/')
-		? ref.slice('refs/tags/'.length)
-		: ref
-	if (normalizedRef === '') {
-		throw new Error('Zerops public repository ref must be a non-empty string')
-	}
-	return `${url.href.replace(/\/$/, '')}@${normalizedRef}`
-}
+const runState = (
+	appVersionId: string,
+	phase: Exclude<ZeropsRunState['phase'], 'build_triggered'>,
+): Exclude<ZeropsRunState, { phase: 'build_triggered' }> => ({ appVersionId, phase })
+
+const buildTriggeredState = (
+	appVersionId: string,
+	processId?: string,
+): Extract<ZeropsRunState, { phase: 'build_triggered' }> => ({
+	appVersionId,
+	phase: 'build_triggered',
+	...(processId === undefined ? {} : { processId }),
+})
 
 /** Build the complete Zerops lifecycle bundle without importing control-plane persistence. */
 export const createZeropsControlProvider = (options: ZeropsControlProviderOptions): ControlProvider => {
@@ -245,6 +261,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		const defaults = defaultZeropsCollaborators(target)
 		return {
 			api,
+			source: options.source,
+			...(options.sourceCancelSleep === undefined ? {} : { sourceCancelSleep: options.sourceCancelSleep }),
 			reconcileSchema: options.reconcileSchema ?? defaults.reconcileSchema,
 			sleep: options.sleep ?? defaultSleep,
 		}
@@ -257,11 +275,109 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
 		})
 
+	const artifactFor = (environment: ProviderEnvironment): FabrikaManifest =>
+		parseFabrikaManifest(
+			decodeEnvelope('artifact', environment.artifact, zeropsArtifactCodec),
+			{ appId: environment.appId, env: environment.env },
+		)
+
+	const cancelSourceBestEffort = async (runId: string, appVersionId: string): Promise<void> => {
+		const sourceController = new AbortController()
+		const timeoutController = new AbortController()
+		const cancel = Promise.resolve()
+			.then(() => options.source.cancel({ runId, appVersionId, signal: sourceController.signal }))
+			.catch(() => {})
+		const timeout = Promise.resolve()
+			.then(() => (options.sourceCancelSleep ?? defaultSleep)(SOURCE_CANCEL_TIMEOUT_MS, timeoutController.signal))
+			.then(() => sourceController.abort())
+			.catch(() => {})
+		await Promise.race([cancel, timeout])
+		timeoutController.abort()
+		sourceController.abort()
+	}
+
+	const reconcileActiveSchema = async (
+		input: ProviderReconcileInput,
+		placement: ReturnType<typeof resolvedEnvironment>,
+		signal: AbortSignal,
+	): Promise<void> => {
+		const artifact = artifactFor(input.environment)
+		if (artifact.app.schema === undefined || options.propustkaUrl === undefined) return
+		const runtimeTarget: ZeropsRuntimeTarget = {
+			projectId: placement.projectId,
+			serviceId: placement.target.serviceId,
+			accessToken: options.accessToken,
+			...(options.apiBaseUrl !== undefined ? { apiBaseUrl: options.apiBaseUrl } : {}),
+			propustkaUrl: options.propustkaUrl,
+			...(options.adminKey !== undefined ? { adminKey: options.adminKey } : {}),
+		}
+		const reconcileSchema = options.reconcileSchema ?? defaultZeropsCollaborators(runtimeTarget).reconcileSchema
+		await reconcileSchema({
+			url: options.propustkaUrl,
+			app: artifact.app.id,
+			schema: artifact.app.schema,
+			...(input.returnOrigins === undefined || input.returnOrigins.length === 0 ? {} : { returnOrigins: input.returnOrigins }),
+			adminKey: options.adminKey,
+			signal,
+		})
+	}
+
+	const reconcileTriggered = async (
+		input: ProviderReconcileInput,
+		state: Extract<ZeropsRunState, { phase: 'build_triggered' }>,
+		placement: ReturnType<typeof resolvedEnvironment>,
+		signal: AbortSignal,
+	): Promise<ProviderReconcileOutcome> => {
+		if (state.processId !== undefined) {
+			const process = await api.getProcess({ processId: state.processId, signal })
+			if (process.id !== state.processId) throw new Error('Zerops process response has different coordinates')
+			if (
+				process.status !== undefined
+				&& ZEROPS_PROCESS_TERMINAL.has(process.status)
+				&& process.status !== ZEROPS_PROCESS_FINISHED
+			) {
+				return { state: 'failed' }
+			}
+		}
+		const version = await api.getAppVersion({ appVersionId: state.appVersionId, signal })
+		if (version.id !== state.appVersionId) throw new Error('Zerops app-version response has different coordinates')
+		if (version.status === ZEROPS_ACTIVE) {
+			await reconcileActiveSchema(input, placement, signal)
+			return { state: 'succeeded' }
+		}
+		if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) return { state: 'failed' }
+		return { state: 'running' }
+	}
+
 	return {
 		id: 'zerops',
 		normalizeRegistration,
+		resolveSource: async (input) => {
+			const registration = normalizeRegistration({ app: input.app, environment: input.environment })
+			const artifact = decodeEnvelope('artifact', registration.environment.artifact, zeropsArtifactCodec)
+			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
+			const repository = normalizeZeropsSourceRepository(registration.app.source.repoUrl)
+			const result = await options.source.resolve({
+				runId: input.runId,
+				repository,
+				requestedRef: registration.app.source.ref,
+				...(input.expectedCommitSha === undefined ? {} : { expectedCommitSha: input.expectedCommitSha }),
+				...(registration.app.source.githubInstallationId === undefined
+					? {}
+					: { githubInstallationId: registration.app.source.githubInstallationId }),
+				descriptorSha256: artifact.target.sourceDescriptor.sha256,
+				signal: input.signal,
+			})
+			if (
+				result.runId !== input.runId
+				|| result.descriptorSha256 !== artifact.target.sourceDescriptor.sha256
+				|| (input.expectedCommitSha !== undefined && result.commitSha !== input.expectedCommitSha)
+			) {
+				throw new Error('Zerops source resolution returned different coordinates')
+			}
+			return { commitSha: result.commitSha }
+		},
 		deploy: async (input: ProviderDeployInput): Promise<ProviderTerminalOutcome> => {
-			const buildFromGit = publicBuildFromGit(input.app.source.repoUrl, input.app.source.ref)
 			const registration = normalizeRegistration({ app: input.app, environment: input.environment })
 			const placement = resolvedEnvironment(registration.environment, { requireReady: true })
 			const proxyServiceId = placement.proxyServiceId
@@ -269,19 +385,36 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				throw new Error(`Zerops deployment namespace \`${placement.namespace.id}\` has no proxy service id`)
 			}
 			const artifact = decodeEnvelope('artifact', registration.environment.artifact, zeropsArtifactCodec)
-			await options.beforeDeploy?.({
-				appId: input.app.id,
-				env: input.environment.env,
-				namespaceId: placement.namespace.id,
-				target: {
-					serviceId: placement.target.serviceId,
-					projectId: placement.projectId,
-					proxyServiceId,
-				},
-				artifact,
-				api,
-				signal: input.signal,
-			})
+			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
+			let source: ZeropsRuntimeTarget['source']
+			if (!input.dryRun) {
+				if (!IMMUTABLE_GIT_OBJECT.test(input.app.source.ref)) {
+					throw new Error('Zerops deploy source must be an exact lowercase Git object id')
+				}
+				source = {
+					runId: input.runId,
+					repository: normalizeZeropsSourceRepository(input.app.source.repoUrl),
+					commitSha: input.app.source.ref,
+					...(input.app.source.githubInstallationId === undefined
+						? {}
+						: { githubInstallationId: input.app.source.githubInstallationId }),
+				}
+			}
+			if (!input.dryRun) {
+				await options.beforeDeploy?.({
+					appId: input.app.id,
+					env: input.environment.env,
+					namespaceId: placement.namespace.id,
+					target: {
+						serviceId: placement.target.serviceId,
+						projectId: placement.projectId,
+						proxyServiceId,
+					},
+					artifact,
+					api,
+					signal: input.signal,
+				})
+			}
 			const managedEnvironment = input.managedEnvironment
 			const managedEntries = Object.entries(managedEnvironment).sort(([left], [right]) => left.localeCompare(right))
 			const managedNames = managedEntries.map(([name]) => name)
@@ -315,7 +448,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				projectId: placement.projectId,
 				serviceId: placement.target.serviceId,
 				accessToken: options.accessToken,
-				buildFromGit,
+				...(source === undefined ? {} : { source }),
 				...(options.apiBaseUrl !== undefined ? { apiBaseUrl: options.apiBaseUrl } : {}),
 				...(options.propustkaUrl !== undefined ? { propustkaUrl: options.propustkaUrl } : {}),
 				...(options.adminKey !== undefined ? { adminKey: options.adminKey } : {}),
@@ -338,42 +471,116 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		},
 		cancel: async (input) => {
 			resolvedEnvironment(input.environment, { requireReady: false })
-			await api.cancelBuild({ appVersionId: input.externalId, signal: abortSignal() })
+			const state = parseRunState(input.providerState, input.externalId)
+			await cancelSourceBestEffort(input.runId, state.appVersionId)
+			if (state.phase === 'build_triggered') {
+				await api.cancelBuild({ appVersionId: state.appVersionId, signal: abortSignal() })
+				return
+			}
+			if (state.phase === 'build_trigger_requested') {
+				await (options.sleep ?? defaultSleep)(BUILD_TRIGGER_CONSISTENCY_MS, abortSignal())
+				const version = await api.getAppVersion({ appVersionId: state.appVersionId, signal: abortSignal() })
+				if (version.id !== state.appVersionId) throw new Error('Zerops app-version response has different coordinates')
+				if (version.status === undefined) {
+					throw new Error('Zerops app-version status is not observable yet')
+				}
+				if (version.status !== 'UPLOADING') {
+					await api.cancelBuild({ appVersionId: state.appVersionId, signal: abortSignal() })
+					return
+				}
+			}
+			await api.deleteAppVersion({ appVersionId: state.appVersionId, signal: abortSignal() })
 		},
 		reconcile: async (input): Promise<ProviderReconcileOutcome> => {
 			const signal = abortSignal()
 			const placement = resolvedEnvironment(input.environment, { requireReady: false })
-			const version = await api.getAppVersion({ appVersionId: input.externalId, signal })
-			if (version.status === ZEROPS_ACTIVE) {
-				const artifact = parseFabrikaManifest(
-					decodeEnvelope('artifact', input.environment.artifact, zeropsArtifactCodec),
-					{ appId: input.environment.appId, env: input.environment.env },
-				)
-				if (artifact.app.schema !== undefined && options.propustkaUrl !== undefined) {
-					const runtimeTarget: ZeropsRuntimeTarget = {
-						projectId: placement.projectId,
-						serviceId: placement.target.serviceId,
-						accessToken: options.accessToken,
-						...(options.apiBaseUrl !== undefined ? { apiBaseUrl: options.apiBaseUrl } : {}),
-						propustkaUrl: options.propustkaUrl,
-						...(options.adminKey !== undefined ? { adminKey: options.adminKey } : {}),
-					}
-					const reconcileSchema = options.reconcileSchema ?? defaultZeropsCollaborators(runtimeTarget).reconcileSchema
-					await reconcileSchema({
-						url: options.propustkaUrl,
-						app: artifact.app.id,
-						schema: artifact.app.schema,
-						...(input.returnOrigins === undefined || input.returnOrigins.length === 0 ? {} : { returnOrigins: input.returnOrigins }),
-						adminKey: options.adminKey,
-						signal,
-					})
-				}
-				return { state: 'succeeded' }
-			}
-			if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) {
+			const state = parseRunState(input.providerState, input.externalId)
+			if (state.phase === 'version_created') {
+				await cancelSourceBestEffort(input.runId, state.appVersionId)
+				await api.deleteAppVersion({ appVersionId: state.appVersionId, signal: abortSignal() })
 				return { state: 'failed' }
 			}
-			return { state: 'running' }
+			if (state.phase === 'source_uploaded') {
+				let artifact: FabrikaManifest
+				try {
+					artifact = artifactFor(input.environment)
+					await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
+				} catch {
+					await cancelSourceBestEffort(input.runId, state.appVersionId)
+					await api.deleteAppVersion({ appVersionId: state.appVersionId, signal: abortSignal() })
+					return { state: 'failed' }
+				}
+				try {
+					await input.checkpoint(runState(state.appVersionId, 'build_trigger_requested'))
+				} catch {
+					return { state: 'running' }
+				}
+				let process: ZeropsProcess
+				try {
+					process = await api.buildAndDeployAppVersion({
+						appVersionId: state.appVersionId,
+						zeropsYaml: artifact.target.sourceDescriptor.contents,
+						...(artifact.target.zeropsSetup === undefined ? {} : { zeropsYamlSetup: artifact.target.zeropsSetup }),
+						signal,
+					})
+				} catch (error) {
+					if (error instanceof ZeropsApiError && error.status >= 400 && error.status < 500) {
+						await cancelSourceBestEffort(input.runId, state.appVersionId)
+						await api.deleteAppVersion({ appVersionId: state.appVersionId, signal: abortSignal() })
+						return { state: 'failed' }
+					}
+					let observed: ZeropsAppVersion
+					try {
+						await (options.sleep ?? defaultSleep)(BUILD_TRIGGER_CONSISTENCY_MS, signal)
+						observed = await api.getAppVersion({ appVersionId: state.appVersionId, signal })
+					} catch {
+						return { state: 'running' }
+					}
+					if (observed.id !== state.appVersionId || observed.status === undefined) return { state: 'running' }
+					if (observed.status === 'UPLOADING') {
+						await cancelSourceBestEffort(input.runId, state.appVersionId)
+						await api.deleteAppVersion({ appVersionId: state.appVersionId, signal: abortSignal() })
+						return { state: 'failed' }
+					}
+					const triggered = buildTriggeredState(state.appVersionId)
+					try {
+						await input.checkpoint(triggered)
+					} catch {
+						return { state: 'running' }
+					}
+					return reconcileTriggered(input, triggered, placement, signal)
+				}
+				const triggered = buildTriggeredState(state.appVersionId, process.id)
+				try {
+					await input.checkpoint(triggered)
+				} catch {
+					return { state: 'running' }
+				}
+				return reconcileTriggered(input, triggered, placement, signal)
+			}
+			if (state.phase === 'build_trigger_requested') {
+				let version: ZeropsAppVersion
+				try {
+					await (options.sleep ?? defaultSleep)(BUILD_TRIGGER_CONSISTENCY_MS, signal)
+					version = await api.getAppVersion({ appVersionId: state.appVersionId, signal })
+				} catch {
+					return { state: 'running' }
+				}
+				if (version.id !== state.appVersionId || version.status === undefined) return { state: 'running' }
+				if (version.status === 'UPLOADING') {
+					await cancelSourceBestEffort(input.runId, state.appVersionId)
+					await api.deleteAppVersion({ appVersionId: state.appVersionId, signal: abortSignal() })
+					return { state: 'failed' }
+				}
+				const triggered = buildTriggeredState(state.appVersionId)
+				try {
+					await input.checkpoint(triggered)
+				} catch {
+					return { state: 'running' }
+				}
+				return reconcileTriggered(input, triggered, placement, signal)
+			}
+			return reconcileTriggered(input, state, placement, signal)
 		},
 		secrets: {
 			put: async (input) => {

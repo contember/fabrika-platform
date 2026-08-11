@@ -10,12 +10,27 @@
 // cancel the build it started rather than leaving it running.
 
 import { createProvider, type ProviderDeploySession, type ProviderModule, type TypedProviderRun } from '@fabrika/provider-contract'
-import { ZEROPS_ACTIVE, ZEROPS_PROCESS_FINISHED, ZEROPS_PROCESS_TERMINAL, ZEROPS_TERMINAL, type ZeropsAppVersion, type ZeropsLogAccess } from './api'
+import {
+	ZEROPS_ACTIVE,
+	ZEROPS_PROCESS_FINISHED,
+	ZEROPS_PROCESS_TERMINAL,
+	ZEROPS_TERMINAL,
+	ZeropsApiError,
+	type ZeropsAppVersion,
+	type ZeropsLogAccess,
+	type ZeropsProcess,
+} from './api'
 import { zeropsTargetCodec } from './codec'
-import { defaultZeropsCollaborators, type ZeropsCollaboratorFactory, type ZeropsCollaborators } from './collaborators'
-import { type FabrikaManifest, manifestServiceHostnames, renderFabrikaImportYaml, zeropsArtifactCodec } from './manifest'
+import { defaultSleep, defaultZeropsCollaborators, type ZeropsCollaboratorFactory, type ZeropsCollaborators } from './collaborators'
+import {
+	type FabrikaManifest,
+	manifestServiceHostnames,
+	renderFabrikaImportYaml,
+	verifyZeropsArtifactSourceDescriptor,
+	zeropsArtifactCodec,
+} from './manifest'
 import { buildZeropsPlan, resolveDeployHostname, type ZeropsJobSpec, type ZeropsPlan } from './plan'
-import type { ZeropsRuntimeTarget } from './types'
+import type { ZeropsRunState, ZeropsRuntimeSource, ZeropsRuntimeTarget } from './types'
 
 export const CANCELLED = 'deploy cancelled'
 
@@ -26,6 +41,12 @@ const POLL_INTERVAL_MS = 3000
 
 /** Give up after this long. Zerops' own pipeline limit is 1 hour; we allow a little slack past it. */
 const POLL_TIMEOUT_MS = 70 * 60 * 1000
+
+/** Delay before deciding whether an ambiguous build trigger remained pre-trigger. */
+const BUILD_TRIGGER_CONSISTENCY_MS = 10_000
+
+/** Source cancellation cannot hold Zerops cleanup hostage. */
+const SOURCE_CANCEL_TIMEOUT_MS = 5000
 
 /** Abandon the step if the run was cancelled. Checked before every real mutation and each poll iteration. */
 const assertRunning = (signal: AbortSignal): void => {
@@ -75,6 +96,51 @@ interface StepEnv {
 	dryRun: boolean
 	/** Set by `trigger-deploy`, read by `await-deploy` — the only state that crosses a step boundary. */
 	state: { appVersionId?: string; processId?: string }
+}
+
+const runState = (
+	appVersionId: string,
+	phase: Exclude<ZeropsRunState['phase'], 'build_triggered'>,
+): Exclude<ZeropsRunState, { phase: 'build_triggered' }> => ({ appVersionId, phase })
+
+const buildTriggeredState = (
+	appVersionId: string,
+	processId?: string,
+): Extract<ZeropsRunState, { phase: 'build_triggered' }> => ({
+	appVersionId,
+	phase: 'build_triggered',
+	...(processId === undefined ? {} : { processId }),
+})
+
+const requireSource = (env: StepEnv): { runtime: ZeropsRuntimeSource; client: NonNullable<ZeropsCollaborators['source']> } => {
+	const runtime = env.run.target.source
+	const client = env.zerops.source
+	if (runtime === undefined || client === undefined) {
+		throw new Error('zerops: upload-backed deploy requires source coordinates and a source client')
+	}
+	return { runtime, client }
+}
+
+const cancelSourceBestEffort = async (env: StepEnv, source: ZeropsRuntimeSource, appVersionId: string): Promise<void> => {
+	const client = env.zerops.source
+	if (client === undefined) return
+	const sourceController = new AbortController()
+	const timeoutController = new AbortController()
+	const cancel = Promise.resolve()
+		.then(() => client.cancel({ runId: source.runId, appVersionId, signal: sourceController.signal }))
+		.catch(() => {})
+	const timeout = Promise.resolve()
+		.then(() => (env.zerops.sourceCancelSleep ?? defaultSleep)(SOURCE_CANCEL_TIMEOUT_MS, timeoutController.signal))
+		.then(() => sourceController.abort())
+		.catch(() => {})
+	await Promise.race([cancel, timeout])
+	timeoutController.abort()
+	sourceController.abort()
+}
+
+const cleanupPreTriggerVersion = async (env: StepEnv, source: ZeropsRuntimeSource, appVersionId: string): Promise<void> => {
+	await cancelSourceBestEffort(env, source, appVersionId)
+	await env.zerops.api.deleteAppVersion({ appVersionId, signal: AbortSignal.timeout(5000) })
 }
 
 /**
@@ -139,8 +205,19 @@ const awaitVersion = async (env: StepEnv, appVersionId: string, processId: strin
 			await zerops.api.cancelBuild({ appVersionId, signal: AbortSignal.timeout(5000) }).catch(() => {})
 			throw new Error(CANCELLED)
 		}
-		const process = processId === undefined ? undefined : await zerops.api.getProcess({ processId, signal })
-		const version = await zerops.api.getAppVersion({ appVersionId, signal })
+		let process: ZeropsProcess | undefined
+		let version: ZeropsAppVersion
+		try {
+			process = processId === undefined ? undefined : await zerops.api.getProcess({ processId, signal })
+			version = await zerops.api.getAppVersion({ appVersionId, signal })
+		} catch {
+			log(`  ${appVersionId}: status observation unavailable; retrying`)
+			if (Date.now() > deadline) {
+				throw new Error(`zerops: timed out after ${Math.round(POLL_TIMEOUT_MS / 60000)}m waiting for app-version ${appVersionId}`)
+			}
+			await zerops.sleep(POLL_INTERVAL_MS, signal)
+			continue
+		}
 		if (version.status !== previous) {
 			log(`  ${appVersionId}: ${version.status ?? 'unknown'}`)
 			previous = version.status
@@ -187,34 +264,87 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 		}
 
 		case 'trigger-deploy': {
-			const source = target.buildFromGit === undefined ? "the service's configured Git integration" : target.buildFromGit
 			if (dryRun) {
-				log(`  [dry-run] would trigger the Zerops pipeline for service ${target.serviceId} (${env.deployHostname}) from ${source}`)
+				log(`  [dry-run] would create an app version, upload the resolved repository snapshot, and trigger build+deploy for service ${target.serviceId}`)
 				return
 			}
 			assertRunning(signal)
-			const zeropsSetup = artifact.target.zeropsSetup
-			const process = await zerops.api.triggerPipeline({
-				serviceId: target.serviceId,
-				buildFromGit: target.buildFromGit,
-				zeropsSetup,
-				signal,
-			})
-			// The trigger response's app-version id is optional on the wire, so resolve the version we just
-			// created rather than depending on it — and fail loudly if there is none, since awaiting a
-			// version we cannot name would silently watch someone else's deploy.
-			const version = process?.appVersionId !== undefined
-				? { id: process.appVersionId }
-				: await zerops.api.latestAppVersion({ serviceId: target.serviceId, signal })
-			if (version === null || version.id === '') {
-				throw new Error(`zerops: pipeline triggered for service ${target.serviceId} but no app-version could be resolved`)
-			}
+			const source = requireSource(env)
+			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
+			const version = await zerops.api.createAppVersion({ serviceId: target.serviceId, name: source.runtime.runId, signal })
 			state.appVersionId = version.id
-			if (process?.id !== undefined && process.id !== '') {
+			let buildTriggerRequested = false
+			try {
+				await run.events.externalId(version.id, runState(version.id, 'version_created'))
+				const uploaded = await source.client.upload({
+					runId: source.runtime.runId,
+					appVersionId: version.id,
+					repository: source.runtime.repository,
+					commitSha: source.runtime.commitSha,
+					...(source.runtime.githubInstallationId === undefined
+						? {}
+						: { githubInstallationId: source.runtime.githubInstallationId }),
+					uploadUrl: version.uploadUrl,
+					descriptor: {
+						path: artifact.target.sourceDescriptor.path,
+						sha256: artifact.target.sourceDescriptor.sha256,
+					},
+					signal,
+				})
+				if (
+					uploaded.runId !== source.runtime.runId
+					|| uploaded.appVersionId !== version.id
+					|| uploaded.commitSha !== source.runtime.commitSha
+					|| uploaded.descriptorSha256 !== artifact.target.sourceDescriptor.sha256
+				) {
+					throw new Error('zerops: source upload returned different coordinates')
+				}
+				await run.events.checkpoint(runState(version.id, 'source_uploaded'))
+				await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
+				await run.events.checkpoint(runState(version.id, 'build_trigger_requested'))
+				buildTriggerRequested = true
+				let process: ZeropsProcess
+				try {
+					process = await zerops.api.buildAndDeployAppVersion({
+						appVersionId: version.id,
+						zeropsYaml: artifact.target.sourceDescriptor.contents,
+						...(artifact.target.zeropsSetup === undefined ? {} : { zeropsYamlSetup: artifact.target.zeropsSetup }),
+						signal,
+					})
+				} catch (error) {
+					if (error instanceof ZeropsApiError && error.status >= 400 && error.status < 500) {
+						await cleanupPreTriggerVersion(env, source.runtime, version.id)
+						throw error
+					}
+					let observed: ZeropsAppVersion | undefined
+					try {
+						await zerops.sleep(BUILD_TRIGGER_CONSISTENCY_MS, signal)
+						observed = await zerops.api.getAppVersion({ appVersionId: version.id, signal })
+					} catch {
+						log(`  ${version.id}: build-trigger observation unavailable; continuing to poll`)
+						return
+					}
+					if (observed.id === version.id && observed.status === 'UPLOADING') {
+						await cleanupPreTriggerVersion(env, source.runtime, version.id)
+						throw error
+					}
+					if (observed.id === version.id && observed.status !== undefined) {
+						await run.events.checkpoint(buildTriggeredState(version.id)).catch(() => {})
+						log(`  recovered accepted build trigger for app-version ${version.id}`)
+					} else {
+						log(`  ${version.id}: build-trigger state is not known yet; continuing to poll`)
+					}
+					return
+				}
 				state.processId = process.id
+				await run.events.checkpoint(buildTriggeredState(version.id, process.id)).catch(() => {})
+				log(`  triggered: app-version ${version.id} (build+deploy is ONE platform-side operation)`)
+			} catch (error) {
+				if (!buildTriggerRequested) {
+					await cleanupPreTriggerVersion(env, source.runtime, version.id)
+				}
+				throw error
 			}
-			await run.events.externalId(version.id)
-			log(`  triggered: app-version ${version.id} (build+deploy is ONE platform-side operation)`)
 			return
 		}
 

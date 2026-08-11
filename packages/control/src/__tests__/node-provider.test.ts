@@ -49,6 +49,8 @@ describe('the Zerops namespace process configuration', () => {
 		}, {
 			...namespaceEnvironment(),
 			FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
+			FABRIKA_ZEROPS_SOURCE_URL: 'http://source:3000',
+			FABRIKA_ZEROPS_SOURCE_RPC_KEY: 'source-rpc-key-at-least-32-characters',
 		})
 
 		if (provider.namespaces === undefined) {
@@ -69,6 +71,31 @@ describe('the Zerops namespace process configuration', () => {
 		})
 		harness.sqlite.close()
 	})
+
+	for (const name of ['FABRIKA_ZEROPS_SOURCE_URL', 'FABRIKA_ZEROPS_SOURCE_RPC_KEY']) {
+		test(`${name} is required by the composed provider`, () => {
+			const source: Record<string, string | undefined> = {
+				...namespaceEnvironment(),
+				FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
+				FABRIKA_ZEROPS_SOURCE_URL: 'http://source:3000',
+				FABRIKA_ZEROPS_SOURCE_RPC_KEY: 'source-rpc-key-at-least-32-characters',
+			}
+			source[name] = ' '
+			const harness = createHarness()
+			expect(() =>
+				zeropsControlProvider({
+					DB: harness.d1,
+					REPOSITORIES: harness.repositories,
+					ASSETS: { fetch: () => Promise.resolve(new Response()) },
+					RUN_LOGS: { put: () => Promise.resolve(), get: () => Promise.resolve(null), delete: () => Promise.resolve() },
+					DEPLOY_QUEUE: { send: () => Promise.resolve() },
+					WAIT_UNTIL: () => {},
+					ENVIRONMENT: 'prod',
+				}, source)
+			).toThrow(`${name} is required by the Zerops provider`)
+			harness.sqlite.close()
+		})
+	}
 
 	for (
 		const name of [

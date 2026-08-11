@@ -113,6 +113,8 @@ export type ProviderCancelInput = ProviderRunReference
 export interface ProviderReconcileInput extends ProviderRunReference {
 	/** See `ProviderDeployInput.returnOrigins`; a provider that finishes a resumed deploy projects the same set. */
 	readonly returnOrigins?: readonly string[]
+	/** Persist a credential-free recovery checkpoint before the next irreversible provider call. */
+	checkpoint(state: JsonValue): Promise<void>
 }
 
 /** The latest state reported while reconciling a platform-owned run. */

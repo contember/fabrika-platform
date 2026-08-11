@@ -9,6 +9,7 @@ import type {
 	ZeropsYamlRun,
 	ZeropsYamlSetup,
 } from './schema.generated'
+import type { ZeropsSourceRepository } from './source'
 
 export interface ZeropsResourceContext {
 	env: string
@@ -113,12 +114,28 @@ export interface ZeropsAppConfig extends AppConfigBase {
 	target: ZeropsSourceTarget
 }
 
+/** Exact, credential-free source coordinates composed for one non-dry runtime invocation. */
+export interface ZeropsRuntimeSource {
+	runId: string
+	repository: ZeropsSourceRepository
+	commitSha: string
+	githubInstallationId?: number
+}
+
+/** Credential-free recovery state persisted beside one Zerops app-version id. */
+export type ZeropsRunState =
+	| { appVersionId: string; phase: 'version_created' }
+	| { appVersionId: string; phase: 'source_uploaded' }
+	| { appVersionId: string; phase: 'build_trigger_requested' }
+	| { appVersionId: string; phase: 'build_triggered'; processId?: string }
+
 /** Ephemeral runtime coordinates. This value is encoded only after credentials are composed. */
 export interface ZeropsRuntimeTarget {
 	projectId: string
 	serviceId: string
 	accessToken: string
-	buildFromGit?: string
+	/** Absent only for dry runs, which perform no source or Zerops mutation. */
+	source?: ZeropsRuntimeSource
 	apiBaseUrl?: string
 	propustkaUrl?: string
 	adminKey?: string

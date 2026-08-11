@@ -1,7 +1,8 @@
 import type { AppSchema } from '@fabrika/auth-core'
-import type { RuntimeProviderRun } from '@fabrika/provider-contract'
+import type { JsonValue, RuntimeProviderRun } from '@fabrika/provider-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
-import type { ZeropsApi, ZeropsAppVersion, ZeropsLogAccess, ZeropsProcess } from '../api'
+import { type ZeropsApi, ZeropsApiError, type ZeropsAppVersion, type ZeropsLogAccess, type ZeropsProcess } from '../api'
+import { zeropsTargetCodec } from '../codec'
 import type { ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
 import { compileFabrikaManifest, type ZeropsArtifactSourceDescriptor } from '../manifest'
@@ -18,15 +19,44 @@ interface Recorded {
 	schemas: string[]
 	schemaSignals: AbortSignal[]
 	sleeps: number[]
+	externalStates: Array<JsonValue | undefined>
+	checkpoints: JsonValue[]
+	creates: Array<{ serviceId: string; name?: string }>
+	builds: Array<{ appVersionId: string; zeropsYaml: string; zeropsYamlSetup?: string }>
+	uploads: Array<{ runId: string; appVersionId: string; commitSha: string; descriptorSha256: string; githubInstallationId?: number }>
+	timeline: string[]
+	sourceCancelSignals: AbortSignal[]
+	deleteSignals: AbortSignal[]
 }
 
-const fresh = (): Recorded => ({ calls: [], imports: [], triggers: [], externalIds: [], logs: [], schemas: [], schemaSignals: [], sleeps: [] })
+const fresh = (): Recorded => ({
+	calls: [],
+	imports: [],
+	triggers: [],
+	externalIds: [],
+	logs: [],
+	schemas: [],
+	schemaSignals: [],
+	sleeps: [],
+	externalStates: [],
+	checkpoints: [],
+	creates: [],
+	builds: [],
+	uploads: [],
+	timeline: [],
+	sourceCancelSignals: [],
+	deleteSignals: [],
+})
 
 interface Overrides {
 	statuses?: Array<ZeropsAppVersion['status']>
 	processStatuses?: Array<ZeropsProcess['status']>
 	triggerVersionId?: string
 	latestVersion?: ZeropsAppVersion | null
+	buildError?: Error
+	uploadError?: Error
+	versionErrors?: number
+	cancelMode?: 'throw' | 'hang'
 }
 
 const LOG_ACCESS: ZeropsLogAccess = {
@@ -41,6 +71,7 @@ const LOG_ACCESS: ZeropsLogAccess = {
 const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 	let poll = 0
 	let processPoll = 0
+	let versionErrors = overrides.versionErrors ?? 0
 	return {
 		importServices: async ({ projectId, yaml }) => {
 			recorded.calls.push('importServices')
@@ -53,19 +84,29 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 			recorded.triggers.push({ serviceId, buildFromGit, zeropsSetup })
 			return overrides.triggerVersionId === undefined ? null : { id: 'process-1', appVersionId: overrides.triggerVersionId }
 		},
-		createAppVersion: async ({ serviceId }) => {
+		createAppVersion: async ({ serviceId, name }) => {
 			recorded.calls.push(`createAppVersion:${serviceId}`)
-			return { id: 'version-1', uploadUrl: 'https://upload.test/archive?signature=test' }
+			recorded.timeline.push('create')
+			recorded.creates.push({ serviceId, ...(name === undefined ? {} : { name }) })
+			return { id: overrides.triggerVersionId ?? 'version-1', uploadUrl: 'https://upload.test/archive?signature=test' }
 		},
-		buildAndDeployAppVersion: async ({ appVersionId }) => {
+		buildAndDeployAppVersion: async ({ appVersionId, zeropsYaml, zeropsYamlSetup }) => {
 			recorded.calls.push(`buildAndDeployAppVersion:${appVersionId}`)
+			recorded.timeline.push('build-call')
+			recorded.builds.push({ appVersionId, zeropsYaml, ...(zeropsYamlSetup === undefined ? {} : { zeropsYamlSetup }) })
+			if (overrides.buildError !== undefined) throw overrides.buildError
 			return { id: 'process-1', appVersionId }
 		},
-		deleteAppVersion: async ({ appVersionId }) => {
+		deleteAppVersion: async ({ appVersionId, signal }) => {
 			recorded.calls.push(`deleteAppVersion:${appVersionId}`)
+			recorded.deleteSignals.push(signal)
 		},
 		getAppVersion: async ({ appVersionId }) => {
 			recorded.calls.push('getAppVersion')
+			if (versionErrors > 0) {
+				versionErrors--
+				throw new Error('status observation unavailable')
+			}
 			const statuses = overrides.statuses ?? ['ACTIVE']
 			const status = statuses[Math.min(poll, statuses.length - 1)]
 			poll++
@@ -107,6 +148,41 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 
 const makeCollaborators = (recorded: Recorded, overrides: Overrides = {}): ZeropsCollaborators => ({
 	api: makeApi(recorded, overrides),
+	source: {
+		resolveInstallationId: async () => null,
+		resolve: async (input) => ({
+			runId: input.runId,
+			commitSha: input.expectedCommitSha ?? input.requestedRef,
+			descriptorSha256: input.descriptorSha256,
+		}),
+		upload: async (input) => {
+			recorded.calls.push(`sourceUpload:${input.appVersionId}`)
+			recorded.timeline.push('upload')
+			if (overrides.uploadError !== undefined) throw overrides.uploadError
+			recorded.uploads.push({
+				runId: input.runId,
+				appVersionId: input.appVersionId,
+				commitSha: input.commitSha,
+				descriptorSha256: input.descriptor.sha256,
+				...(input.githubInstallationId === undefined ? {} : { githubInstallationId: input.githubInstallationId }),
+			})
+			return {
+				runId: input.runId,
+				appVersionId: input.appVersionId,
+				commitSha: input.commitSha,
+				descriptorSha256: input.descriptor.sha256,
+			}
+		},
+		cancel: async ({ appVersionId, signal }) => {
+			recorded.calls.push(`sourceCancel:${appVersionId}`)
+			recorded.sourceCancelSignals.push(signal)
+			if (overrides.cancelMode === 'throw') throw new Error('source cancellation unavailable')
+			if (overrides.cancelMode === 'hang') return new Promise<void>(() => {})
+		},
+	},
+	sourceCancelSleep: async () => {
+		if (overrides.cancelMode === 'hang') recorded.calls.push('sourceCancelTimeout')
+	},
 	reconcileSchema: async ({ app, signal }) => {
 		recorded.calls.push('reconcileSchema')
 		recorded.schemas.push(app)
@@ -142,7 +218,11 @@ const target = (overrides: Partial<ZeropsRuntimeTarget> = {}): ZeropsRuntimeTarg
 	projectId: 'project-1',
 	serviceId: 'service-1',
 	accessToken: 'zt-secret',
-	buildFromGit: 'https://github.com/acme/demo',
+	source: {
+		runId: 'run-1',
+		repository: { owner: 'acme', name: 'demo' },
+		commitSha: '0123456789abcdef0123456789abcdef01234567',
+	},
 	propustkaUrl: 'https://iam.test',
 	adminKey: 'px-secret',
 	...overrides,
@@ -167,10 +247,16 @@ const runtimeRun = (
 		log: (line) => {
 			recorded.logs.push(line)
 		},
-		externalId: async (id) => {
+		externalId: async (id, state) => {
 			recorded.externalIds.push(id)
+			recorded.externalStates.push(state)
+			recorded.timeline.push('external-id')
 		},
-		checkpoint: async () => {},
+		checkpoint: async (state) => {
+			recorded.checkpoints.push(state)
+			const phase = typeof state === 'object' && state !== null && !Array.isArray(state) ? state['phase'] : undefined
+			recorded.timeline.push(`checkpoint:${typeof phase === 'string' ? phase : 'invalid'}`)
+		},
 	},
 	target: provider.encodeTarget(targetValue),
 	artifact: provider.encodeArtifact(compileFabrikaManifest(app([DB, API]), 'prod', SOURCE_DESCRIPTOR)),
@@ -199,7 +285,9 @@ describe('Zerops provider', () => {
 		await execute(runtimeRun(recorded, provider, target(), false, controller.signal), provider)
 		expect(recorded.calls).toEqual([
 			'importServices',
-			'triggerPipeline',
+			'createAppVersion:service-1',
+			'sourceUpload:version-1',
+			'buildAndDeployAppVersion:version-1',
 			'getProcess',
 			'getAppVersion',
 			'getProcess',
@@ -207,17 +295,41 @@ describe('Zerops provider', () => {
 			'reconcileSchema',
 		])
 		expect(recorded.externalIds).toEqual(['version-1'])
+		expect(recorded.externalStates).toEqual([{ appVersionId: 'version-1', phase: 'version_created' }])
+		expect(recorded.checkpoints).toEqual([
+			{ appVersionId: 'version-1', phase: 'source_uploaded' },
+			{ appVersionId: 'version-1', phase: 'build_trigger_requested' },
+			{ appVersionId: 'version-1', phase: 'build_triggered', processId: 'process-1' },
+		])
+		expect(recorded.timeline).toEqual([
+			'create',
+			'external-id',
+			'upload',
+			'checkpoint:source_uploaded',
+			'checkpoint:build_trigger_requested',
+			'build-call',
+			'checkpoint:build_triggered',
+		])
+		expect(recorded.creates).toEqual([{ serviceId: 'service-1', name: 'run-1' }])
+		expect(recorded.uploads).toEqual([{
+			runId: 'run-1',
+			appVersionId: 'version-1',
+			commitSha: '0123456789abcdef0123456789abcdef01234567',
+			descriptorSha256: SOURCE_DESCRIPTOR.sha256,
+		}])
+		expect(recorded.builds).toEqual([{
+			appVersionId: 'version-1',
+			zeropsYaml: SOURCE_DESCRIPTOR.contents,
+			zeropsYamlSetup: 'api',
+		}])
 		expect(recorded.sleeps).toEqual([3000])
 		expect(recorded.imports[0]?.yaml).toContain('registry.test/demo:v2')
-		expect(recorded.triggers).toEqual([{
-			serviceId: 'service-1',
-			buildFromGit: 'https://github.com/acme/demo',
-			zeropsSetup: 'api',
-		}])
+		expect(recorded.triggers).toEqual([])
 		expect(recorded.schemas).toEqual(['demo'])
 		expect(recorded.schemaSignals).toEqual([controller.signal])
 		expect(recorded.logs.join('\n')).not.toContain('zt-secret')
 		expect(recorded.logs.join('\n')).not.toContain('px-secret')
+		expect(recorded.logs.join('\n')).not.toContain('signature=test')
 	})
 
 	test('fails on the trigger process after one poll when the app version remains waiting', async () => {
@@ -232,7 +344,13 @@ describe('Zerops provider', () => {
 		expect(error).toEqual(
 			new Error('zerops: pipeline process process-1 is FAILED while app-version version-waiting is WAITING_TO_BUILD'),
 		)
-		expect(recorded.calls).toEqual(['triggerPipeline', 'getProcess', 'getAppVersion'])
+		expect(recorded.calls).toEqual([
+			'createAppVersion:service-1',
+			'sourceUpload:version-waiting',
+			'buildAndDeployAppVersion:version-waiting',
+			'getProcess',
+			'getAppVersion',
+		])
 		expect(recorded.sleeps).toEqual([])
 	})
 
@@ -248,18 +366,159 @@ describe('Zerops provider', () => {
 		expect(error).toEqual(
 			new Error('zerops: pipeline process process-1 is FAILED while app-version version-active is ACTIVE'),
 		)
-		expect(recorded.calls).toEqual(['triggerPipeline', 'getProcess', 'getAppVersion'])
+		expect(recorded.calls).toEqual([
+			'createAppVersion:service-1',
+			'sourceUpload:version-active',
+			'buildAndDeployAppVersion:version-active',
+			'getProcess',
+			'getAppVersion',
+		])
 		expect(recorded.sleeps).toEqual([])
 	})
 
-	test('preserves version-only polling when the trigger response has no process', async () => {
+	test('uses the process returned by upload-backed build-and-deploy', async () => {
 		const provider = createZeropsProvider(() => makeCollaborators(recorded, { statuses: ['ACTIVE'] }))
 		const session = await provider.runtime.open(runtimeRun(recorded, provider))
 		await session.execute('trigger-deploy')
 		await session.execute('await-deploy')
 
-		expect(recorded.calls).toEqual(['triggerPipeline', 'getAppVersion'])
+		expect(recorded.calls).toEqual([
+			'createAppVersion:service-1',
+			'sourceUpload:version-1',
+			'buildAndDeployAppVersion:version-1',
+			'getProcess',
+			'getAppVersion',
+		])
 		expect(recorded.externalIds).toEqual(['version-1'])
+	})
+
+	test('deletes a reserved version when source upload fails without exposing its destination', async () => {
+		const provider = createZeropsProvider(() =>
+			makeCollaborators(recorded, { uploadError: new Error('source upload failed'), statuses: ['UPLOADING'] })
+		)
+		const session = await provider.runtime.open(runtimeRun(recorded, provider))
+
+		await expect(session.execute('trigger-deploy')).rejects.toThrow('source upload failed')
+
+		expect(recorded.calls).toEqual([
+			'createAppVersion:service-1',
+			'sourceUpload:version-1',
+			'sourceCancel:version-1',
+			'deleteAppVersion:version-1',
+		])
+		expect(recorded.timeline).toEqual(['create', 'external-id', 'upload'])
+		expect(recorded.logs.join('\n')).not.toContain('signature=test')
+	})
+
+	test('deletes a pre-trigger version when Zerops rejects build-and-deploy', async () => {
+		const provider = createZeropsProvider(() =>
+			makeCollaborators(recorded, { buildError: new ZeropsApiError('zerops: build rejected', 400, 'invalidBuild') })
+		)
+		const session = await provider.runtime.open(runtimeRun(recorded, provider))
+
+		await expect(session.execute('trigger-deploy')).rejects.toThrow('zerops: build rejected')
+
+		expect(recorded.calls).toEqual([
+			'createAppVersion:service-1',
+			'sourceUpload:version-1',
+			'buildAndDeployAppVersion:version-1',
+			'sourceCancel:version-1',
+			'deleteAppVersion:version-1',
+		])
+		expect(recorded.checkpoints).toContainEqual({ appVersionId: 'version-1', phase: 'build_trigger_requested' })
+	})
+
+	test('keeps an ambiguous build trigger observable when its first status read fails', async () => {
+		const provider = createZeropsProvider(() =>
+			makeCollaborators(recorded, {
+				buildError: new Error('build response lost'),
+				versionErrors: 1,
+				statuses: ['ACTIVE'],
+			})
+		)
+		const session = await provider.runtime.open(runtimeRun(recorded, provider))
+
+		await session.execute('trigger-deploy')
+		await session.execute('await-deploy')
+
+		expect(recorded.calls).toEqual([
+			'createAppVersion:service-1',
+			'sourceUpload:version-1',
+			'buildAndDeployAppVersion:version-1',
+			'getAppVersion',
+			'getAppVersion',
+		])
+		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
+		expect(recorded.sleeps).toEqual([10000])
+	})
+
+	test('does not delete an ambiguous build while Zerops omits its status', async () => {
+		const provider = createZeropsProvider(() =>
+			makeCollaborators(recorded, {
+				buildError: new Error('build response lost'),
+				statuses: [undefined, 'ACTIVE'],
+			})
+		)
+		const session = await provider.runtime.open(runtimeRun(recorded, provider))
+
+		await session.execute('trigger-deploy')
+		await session.execute('await-deploy')
+
+		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
+		expect(recorded.checkpoints).not.toContainEqual({ appVersionId: 'version-1', phase: 'build_triggered' })
+	})
+
+	test('continues observing an accepted build when the result checkpoint fails', async () => {
+		const provider = createZeropsProvider(() => makeCollaborators(recorded, { statuses: ['ACTIVE'] }))
+		const run = runtimeRun(recorded, provider)
+		const session = await provider.runtime.open({
+			...run,
+			events: {
+				...run.events,
+				checkpoint: async (state) => {
+					recorded.checkpoints.push(state)
+					const phase = typeof state === 'object' && state !== null && !Array.isArray(state) ? state['phase'] : undefined
+					if (phase === 'build_triggered') throw new Error('checkpoint unavailable')
+				},
+			},
+		})
+
+		await session.execute('trigger-deploy')
+		await session.execute('await-deploy')
+
+		expect(recorded.calls).toContain('getAppVersion')
+		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
+		expect(recorded.checkpoints).toContainEqual({ appVersionId: 'version-1', phase: 'build_trigger_requested' })
+	})
+
+	test('bounds a hanging source cancellation before deleting the version', async () => {
+		const provider = createZeropsProvider(() => makeCollaborators(recorded, { uploadError: new Error('source upload failed'), cancelMode: 'hang' }))
+		const session = await provider.runtime.open(runtimeRun(recorded, provider))
+
+		await expect(session.execute('trigger-deploy')).rejects.toThrow('source upload failed')
+		expect(recorded.calls).toEqual([
+			'createAppVersion:service-1',
+			'sourceUpload:version-1',
+			'sourceCancel:version-1',
+			'sourceCancelTimeout',
+			'deleteAppVersion:version-1',
+		])
+		expect(recorded.sourceCancelSignals[0]?.aborted).toBe(true)
+		expect(recorded.deleteSignals[0]?.aborted).toBe(false)
+		expect(recorded.deleteSignals[0]).not.toBe(recorded.sourceCancelSignals[0])
+	})
+
+	test('rejects a changed registered descriptor before reserving an app version', async () => {
+		const provider = createZeropsProvider(() => makeCollaborators(recorded))
+		const run = runtimeRun(recorded, provider)
+		const driftedArtifact = provider.encodeArtifact(compileFabrikaManifest(app([DB, API]), 'prod', {
+			...SOURCE_DESCRIPTOR,
+			contents: `${SOURCE_DESCRIPTOR.contents}# changed after registration\n`,
+		}))
+		const session = await provider.runtime.open({ ...run, artifact: driftedArtifact })
+
+		await expect(session.execute('trigger-deploy')).rejects.toThrow('source descriptor digest')
+		expect(recorded.calls).toEqual([])
 	})
 
 	test('cancels the build after an observed process and version when the run is aborted', async () => {
@@ -279,7 +538,14 @@ describe('Zerops provider', () => {
 		await session.execute('trigger-deploy')
 
 		await expect(session.execute('await-deploy')).rejects.toThrow(CANCELLED)
-		expect(recorded.calls).toEqual(['triggerPipeline', 'getProcess', 'getAppVersion', 'cancelBuild'])
+		expect(recorded.calls).toEqual([
+			'createAppVersion:service-1',
+			'sourceUpload:version-1',
+			'buildAndDeployAppVersion:version-1',
+			'getProcess',
+			'getAppVersion',
+			'cancelBuild',
+		])
 		expect(recorded.sleeps).toEqual([3000])
 	})
 
@@ -333,6 +599,29 @@ describe('Zerops provider', () => {
 		const provider = createZeropsProvider(() => makeCollaborators(recorded))
 		const run = runtimeRun(recorded, provider)
 		expect(provider.runtime.open({ ...run, appId: 'other' })).rejects.toThrow('artifact app drift')
+	})
+
+	test('rejects unknown runtime target fields and mutable source refs', () => {
+		expect(() =>
+			zeropsTargetCodec.decode({
+				projectId: 'project-1',
+				serviceId: 'service-1',
+				accessToken: 'zt-secret',
+				unknown: 'value',
+			})
+		).toThrow('unknown field')
+		expect(() =>
+			zeropsTargetCodec.decode({
+				projectId: 'project-1',
+				serviceId: 'service-1',
+				accessToken: 'zt-secret',
+				source: {
+					runId: 'run-1',
+					repository: { owner: 'acme', name: 'demo' },
+					commitSha: 'refs/heads/main',
+				},
+			})
+		).toThrow('exact lowercase Git object id')
 	})
 })
 

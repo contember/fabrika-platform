@@ -19,6 +19,7 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import { createZeropsControlProvider } from '@fabrika/provider-zerops'
 import type { Env } from '../env'
 import { repositories } from '../services'
+import { HttpZeropsSourceClient } from './source-client'
 import { syncZeropsProxy } from './zerops-proxy'
 
 const required = (source: Record<string, string | undefined>, name: string): string => {
@@ -53,6 +54,10 @@ export function zeropsControlProvider(
 ): ControlProvider {
 	return createZeropsControlProvider({
 		accessToken: required(source, 'FABRIKA_ZEROPS_ACCESS_TOKEN'),
+		source: new HttpZeropsSourceClient({
+			origin: required(source, 'FABRIKA_ZEROPS_SOURCE_URL'),
+			rpcKey: required(source, 'FABRIKA_ZEROPS_SOURCE_RPC_KEY'),
+		}),
 		...((): { apiBaseUrl?: string } => {
 			const apiBaseUrl = source['FABRIKA_ZEROPS_API_BASE_URL']
 			return apiBaseUrl === undefined ? {} : { apiBaseUrl }
