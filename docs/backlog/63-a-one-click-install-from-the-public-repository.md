@@ -27,12 +27,13 @@ What is missing is everything the document cannot carry:
   they are written per service through the env API after the services exist.
 - **No code.** The provisioning document is `startWithoutCode: true` throughout, so something must
   build the four services afterwards.
-- **The proxy manifest** ([58](./58-generate-the-platform-installations-proxy-manifest.md)) and the
-  environment name ([59](./59-the-live-installation-calls-itself-local.md)) are still unwritten.
+- **The proxy manifest and the environment name are written by the deploy, not by the document.** Both
+  now have a generator and a command that applies them
+  ([archive](../archive/sprint-2026-08-06-zerops-platform-deploy.md)) — this item needs that sequence
+  driven from somewhere other than an operator's CI.
 
 So a one-click install is not "apply the committed YAML" — it is the import plus the whole of
-[61](./61-make-platform-deploy-an-unattended-command.md), driven from somewhere other than the
-operator's CI.
+`fabrika platform install` + `platform deploy`, driven without a repository.
 
 ## Approach
 

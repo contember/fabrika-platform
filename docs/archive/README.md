@@ -9,6 +9,10 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [An unattended `platform deploy` on Zerops (2026-08-06)](sprint-2026-08-06-zerops-platform-deploy.md)
+  — the command an operator's pipeline calls: generated proxy manifest, ordered deploy, fail-closed
+  environment name, and the sidecar repository that invokes it. Its live acceptance was performed by
+  the sprint below, on a fresh installation rather than the `fabrika-test` it named.
 - [A Zerops installation from an empty project (2026-08-07)](sprint-2026-08-07-zerops-from-scratch-install.md)
   — the operator creates an empty project and `fabrika` does the rest: install, sidecar repository, CI
   deploy, first administrator. Proven end to end on a fresh account; five defects, all in shipped code

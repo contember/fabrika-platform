@@ -26,10 +26,14 @@ upstream documentation. All six were settled against the real account by sprint
 and deleted; what they established is in
 [`reference/zerops-platform.md`](../reference/zerops-platform.md).
 
-Items 61–63 come from [ADR-0025](../decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md):
-the platform is installed by its operator, so fabrika owes an unattended deploy command
-and the two things that call it. Items 64–65 are what building 61 and 62 uncovered — an
-escape hatch nobody closes, and a pin that pins half of what it claims.
+Items 61–63 came from [ADR-0025](../decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md):
+the platform is installed by its operator, so fabrika owed an unattended deploy command and the two
+things that call it. The command and the sidecar shipped and were proven live
+([archive](../archive/sprint-2026-08-06-zerops-platform-deploy.md),
+[archive](../archive/sprint-2026-08-07-zerops-from-scratch-install.md)); only
+[63](63-a-one-click-install-from-the-public-repository.md), the install shape that needs no repository
+at all, is still open. Items 64–65 are what building them uncovered — an escape hatch nobody closes,
+and a pin that pins half of what it claims.
 
 ## Items
 
@@ -47,10 +51,8 @@ escape hatch nobody closes, and a pin that pins half of what it claims.
 - [47](47-give-the-zerops-path-a-private-git-source.md) — An app on Zerops can only build from a public URL; configure the service's own repository integration instead (ADR-0025).
 - [54](54-give-operations-its-own-proxy-app-identity.md) — Half shipped; what is left is moving the operator surface onto the Operations host, which is a console architecture change, not a rename.
 - [57](57-stop-the-caller-choosing-its-own-audit-correlation-id.md) — IAM takes `X-Request-Id` from the caller, unbounded, into `auth_log`; its Worker is edge-routed so the proxy strip never runs.
-- [58](58-generate-the-platform-installations-proxy-manifest.md) — Nothing generates a deployed installation's proxy manifest, so the live one is hand-written and drifted from the gate modules unnoticed.
-- [59](59-the-live-installation-calls-itself-local.md) — `control` and `operations` on `fabrika-test` carry `ENVIRONMENT=local`, the value every bypass is gated on.
+- [59](59-the-live-installation-calls-itself-local.md) — `fabrika-test` has never been deployed by the command that fixes it; `control` and `operations` still carry `ENVIRONMENT=local`.
 - [60](60-the-example-app-has-no-light-tier-descriptor.md) — Neither committed `zerops.yaml` names the shared `db` the example actually runs against, so the live app cannot be redeployed from HEAD.
-- [61](61-make-platform-deploy-an-unattended-command.md) — `fabrika platform deploy` is the public interface an operator's pipeline calls, and it does not deploy a Zerops installation at all.
 - [63](63-a-one-click-install-from-the-public-repository.md) — The second install shape: a running platform without creating a repository or a CI system.
 - [64](64-close-the-bootstrap-admission-hatch-automatically.md) — A Cloudflare installation comes up admitting on a standing admin list, and closing it is an instruction printed to a human.
 - [65](65-pin-a-zerops-build-to-a-revision.md) — A Zerops build source names a repository, not a revision, so `fabrika.ref` pins the pipeline but not the code Zerops builds.

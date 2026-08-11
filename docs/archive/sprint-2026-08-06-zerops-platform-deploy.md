@@ -1,5 +1,48 @@
 # Sprint — an unattended `platform deploy` on Zerops (2026-08-06)
 
+> ## OUTCOME — shipped 2026-08-11
+>
+> **`fabrika platform deploy --provider=zerops` brings a Zerops installation to HEAD from an
+> operator's CI, unattended and idempotently.** All four work units landed on 2026-08-06; the live
+> acceptance was performed on 2026-08-10 by the successor sprint
+> ([archive](sprint-2026-08-07-zerops-from-scratch-install.md)), which had a fresh installation to
+> point it at. Read that sprint's outcome for the run itself — a sidecar repository deployed
+> `iam → operations → proxy → control` to ACTIVE in that order, a pin bump rolled the installation
+> forward on a push, and a re-run reported `already correct` for all four services while deploying new
+> code.
+>
+> **Commits.** `442f09e` the proxy-manifest generator (WU1) · `6af790f` the fail-closed environment
+> refusal, `@fabrika/auth-core` `environment.ts:64-78` (WU3) · `eb103f9` the deploy command (WU2) ·
+> `a820ac9` `platform init` and the sidecar, which also created the public
+> `@fabrika/installation-init` (WU4).
+>
+> **The one acceptance clause nobody had run, run at close (2026-08-11).** WU2 asked that an anonymous
+> `GET /api/*` be refused by the proxy. Against the live installation: a document navigation to
+> `/api/apps`, `/api/deploy` and `/api/rpc` answers **302** to sign-in, the same paths as an XHR answer
+> **401**, and a bogus `Bearer px_…` answers **401**. Refused in every shape; nothing reaches the
+> control plane.
+>
+> **Target substitution, stated plainly.** Every acceptance here named `fabrika-test`, and every one was
+> met on **`fabrika-install-test`** instead — an installation created by `platform install` and never
+> touched by hand, which is a better witness than the one hosting a live application. Decision 5's
+> sidecar name went the same way: `contember/fabrika-zerops-install-test`, not
+> `contember/fabrika-zerops-test`. The command is proven; `fabrika-test` itself has still never been
+> deployed by it.
+>
+> **Backlog closed.** [`58`](../backlog/58-generate-the-platform-installations-proxy-manifest.md) — the
+> generator exists at `installation-zerops/zerops/proxy-manifest.ts`, is rendered into a committed
+> artifact that `gen:check` witnesses, and reproduced the live manifest app for app.
+> [`61`](../backlog/61-make-platform-deploy-an-unattended-command.md) — the command exists and ran
+> unattended from an operator's CI. Its "the contract should own the deploy order" clause was rejected
+> rather than met, by [ADR-0027](../decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md).
+>
+> **Deferred, honestly.** `fabrika-test` remains drifted: `control` and `operations` still read
+> `ENVIRONMENT=local` and `iam` still carries `LOCAL_DEV_LOGIN`, re-read 2026-08-11. WU3's refusal is
+> **inert there** — neither service declares its own public origin, so `readEnvironmentName` returns
+> `local` unchallenged — and it arms the moment an origin is written without the environment name being
+> fixed in the same run, which is exactly what `platform deploy` does write together. Folded into
+> [`59`](../backlog/59-the-live-installation-calls-itself-local.md), which now owns the whole residue.
+
 **Goal.** `fabrika platform deploy --provider=zerops` brings a Zerops installation to HEAD from a
 clean environment, unattended, idempotently — no `zops` invocation and no hand step.
 

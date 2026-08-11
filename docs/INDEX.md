@@ -40,19 +40,6 @@ operator authorizing GitHub on the Zerops account. Consumes
 [`70`](backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md), and answers items 3
 and 4 of [`05`](backlog/05-bring-up-on-a-real-zerops-account.md).
 
-[`zerops-platform-deploy`](sprints/sprint-2026-08-06-zerops-platform-deploy.md) — an unattended
-`fabrika platform deploy --provider=zerops`, as wide as
-[ADR-0027](decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md) makes it. All four work
-units are committed, consuming backlog [`58`](backlog/58-generate-the-platform-installations-proxy-manifest.md),
-[`59`](backlog/59-the-live-installation-calls-itself-local.md) and
-[`61`](backlog/61-make-platform-deploy-an-unattended-command.md). Its successor
-([archived](archive/sprint-2026-08-07-zerops-from-scratch-install.md)) has since run this command
-unattended from an operator's CI against a fresh installation — the live witness this sprint was
-waiting on, though not the `fabrika-test` target `61` names, and the anonymous `GET /api/*` probe in
-that acceptance was not run. It left [`64`](backlog/64-close-the-bootstrap-admission-hatch-automatically.md)
-and [`65`](backlog/65-pin-a-zerops-build-to-a-revision.md) behind; the second install path ADR-0025
-commits to stays filed as [`63`](backlog/63-a-one-click-install-from-the-public-repository.md).
-
 Two auth sprints shipped on 2026-08-05 —
 [hardening](archive/sprint-2026-08-04-auth-hardening.md), then
 [track closeout](archive/sprint-2026-08-05-auth-track-closeout.md). The Access-plane
