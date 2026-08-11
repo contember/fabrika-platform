@@ -21,6 +21,7 @@ interface Recorded {
 	calls: string[]
 	externalIds: string[]
 	logs: string[]
+	triggers: Array<{ serviceId: string; buildFromGit?: string; zeropsSetup?: string }>
 	envWrites: Array<{ serviceId: string; key: string; value: string }>
 	envDeletes: string[]
 	beforeDeploy: string[]
@@ -31,6 +32,7 @@ const fresh = (): Recorded => ({
 	calls: [],
 	externalIds: [],
 	logs: [],
+	triggers: [],
 	envWrites: [],
 	envDeletes: [],
 	beforeDeploy: [],
@@ -115,8 +117,9 @@ const makeApi = (recorded: Recorded, status: () => ZeropsAppVersionStatus = () =
 		return { projectId, services: [{ id: 'service-1', name: 'notes', processes: [] }] }
 	},
 	importProject: async ({ clientId }) => ({ projectId: clientId, services: [] }),
-	triggerPipeline: async () => {
+	triggerPipeline: async ({ serviceId, buildFromGit, zeropsSetup }) => {
 		recorded.calls.push('triggerPipeline')
+		recorded.triggers.push({ serviceId, buildFromGit, zeropsSetup })
 		return { id: 'process-1', appVersionId: 'version-1' }
 	},
 	getAppVersion: async ({ appVersionId }) => {
@@ -183,6 +186,8 @@ describe('Zerops ControlProvider registration', () => {
 		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
 		const normalized = control.normalizeRegistration({ app, environment: environment() })
 		expect(normalized.environment.target.payload).toEqual({ serviceId: 'service-1' })
+		expect(JSON.stringify(normalized.environment.target)).not.toContain('buildFromGit')
+		expect(JSON.stringify(normalized.environment.target)).not.toContain(app.source.repoUrl)
 		expect(normalized.environment.publicOrigin).toBe('https://public.notes.example.test')
 		expect(JSON.stringify(normalized.environment)).not.toContain('zt-secret')
 	})
@@ -469,6 +474,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 			projectId: 'project-1',
 			serviceId: 'service-1',
 			accessToken: 'zt-secret',
+			buildFromGit: 'https://github.com/acme/notes@main',
 			apiBaseUrl: 'https://api.test',
 			propustkaUrl: 'https://iam.test',
 			adminKey: 'px-secret',
@@ -476,9 +482,86 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(outcome).toEqual({ state: 'succeeded' })
 		expect(recorded.beforeDeploy).toEqual(['notes:apps-prod:project-1:proxy-service-1'])
 		expect(recorded.externalIds).toEqual(['version-1'])
+		expect(recorded.triggers).toEqual([{
+			serviceId: 'service-1',
+			buildFromGit: 'https://github.com/acme/notes@main',
+			zeropsSetup: undefined,
+		}])
 		expect(recorded.calls.indexOf('beforeDeploy')).toBeLessThan(recorded.calls.indexOf('importServices'))
+		expect(observedRun.cwd).toBe('apps/notes')
 		expect(recorded.logs.join('\n')).not.toContain('zt-secret')
 		expect(JSON.stringify(deployInput(recorded).environment)).not.toContain('zt-secret')
+	})
+
+	test('derives an HTTPS runtime build source from full and plain refs without persisting it', async () => {
+		const cases = [
+			{ repoUrl: 'github.com/acme/notes', ref: 'refs/heads/main', expected: 'https://github.com/acme/notes@main' },
+			{ repoUrl: 'https://github.com/acme/notes', ref: 'refs/tags/v1.2.3', expected: 'https://github.com/acme/notes@v1.2.3' },
+			{ repoUrl: 'github.com/acme/notes', ref: '0123456789abcdef', expected: 'https://github.com/acme/notes@0123456789abcdef' },
+			{ repoUrl: 'github.com/acme/notes', ref: 'release/next', expected: 'https://github.com/acme/notes@release/next' },
+		]
+		const observed: string[] = []
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			execute: async (_provider, run) => {
+				const target = zeropsTargetCodec.decode(run.target.payload)
+				if (target.buildFromGit === undefined) throw new Error('expected a public runtime source')
+				observed.push(target.buildFromGit)
+				return { state: 'succeeded' }
+			},
+		})
+
+		for (const candidate of cases) {
+			await control.deploy({
+				...deployInput(recorded),
+				app: {
+					...app,
+					source: { ...app.source, repoUrl: candidate.repoUrl, ref: candidate.ref },
+				},
+			})
+		}
+
+		expect(observed).toEqual(cases.map((candidate) => candidate.expected))
+		expect(environment().target.payload).toEqual({ serviceId: 'service-1' })
+	})
+
+	test('rejects credential-bearing and stateful repository URLs before platform mutation', async () => {
+		const unsafe = [
+			'https://git@github.com/acme/notes',
+			'https://x-access-token:credential-must-not-leak@github.com/acme/notes',
+			'https://github.com/acme/notes?token=credential-must-not-leak',
+			'https://github.com/acme/notes#credential-must-not-leak',
+			'https://github.com/acme/notes?',
+			'https://github.com/acme/notes#',
+			'file:/tmp/repo',
+			'https:\\\\x-access-token:credential-must-not-leak@github.com/acme/notes',
+			'https:////x-access-token:credential-must-not-leak@github.com/acme/notes',
+			'http://github.com/acme/notes',
+			' github.com/acme/notes',
+			'github.com/acme/not es',
+			'github.com/acme/notes\n',
+			'github.com/acme/\u0000notes',
+		]
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			beforeDeploy: async () => {
+				recorded.beforeDeploy.push('called')
+			},
+		})
+
+		for (const repoUrl of unsafe) {
+			await expect(control.deploy({
+				...deployInput(recorded),
+				app: { ...app, source: { ...app.source, repoUrl } },
+			})).rejects.toThrow('Zerops public repository must be an HTTPS URL without credentials, query, or fragment')
+		}
+
+		expect(recorded.beforeDeploy).toEqual([])
+		expect(recorded.calls).toEqual([])
+		expect(recorded.envWrites).toEqual([])
+		expect(recorded.logs.join('\n')).not.toContain('credential-must-not-leak')
 	})
 
 	test('writes managed environment only to the app service and never to YAML or logs', async () => {

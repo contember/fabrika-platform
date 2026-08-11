@@ -185,6 +185,56 @@ const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegist
 
 const abortSignal = (): AbortSignal => new AbortController().signal
 
+const invalidPublicRepository = (): Error => new Error('Zerops public repository must be an HTTPS URL without credentials, query, or fragment')
+
+const URI_SCHEME = /^[a-z][a-z0-9+.-]*:/i
+const EXPLICIT_HTTPS_REPOSITORY = /^https:\/\/[^/]/i
+const SCHEMELESS_REPOSITORY = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\/[a-z0-9._~%-]+(?:\/[a-z0-9._~%-]+)+$/i
+
+const hasUnsafeRepositoryCharacter = (value: string): boolean => {
+	for (const character of value) {
+		const code = character.charCodeAt(0)
+		if (character === '\\' || code <= 0x20 || code === 0x7f) return true
+	}
+	return false
+}
+
+const publicBuildFromGit = (repoUrl: string, ref: string): string => {
+	if (hasUnsafeRepositoryCharacter(repoUrl)) {
+		throw invalidPublicRepository()
+	}
+	const hasScheme = URI_SCHEME.test(repoUrl)
+	if ((hasScheme && !EXPLICIT_HTTPS_REPOSITORY.test(repoUrl)) || (!hasScheme && !SCHEMELESS_REPOSITORY.test(repoUrl))) {
+		throw invalidPublicRepository()
+	}
+	let url: URL
+	try {
+		url = new URL(hasScheme ? repoUrl : `https://${repoUrl}`)
+	} catch {
+		throw invalidPublicRepository()
+	}
+	if (
+		url.protocol !== 'https:'
+		|| url.hostname === ''
+		|| url.pathname === '/'
+		|| url.username !== ''
+		|| url.password !== ''
+		|| repoUrl.includes('?')
+		|| repoUrl.includes('#')
+	) {
+		throw invalidPublicRepository()
+	}
+	const normalizedRef = ref.startsWith('refs/heads/')
+		? ref.slice('refs/heads/'.length)
+		: ref.startsWith('refs/tags/')
+		? ref.slice('refs/tags/'.length)
+		: ref
+	if (normalizedRef === '') {
+		throw new Error('Zerops public repository ref must be a non-empty string')
+	}
+	return `${url.href.replace(/\/$/, '')}@${normalizedRef}`
+}
+
 /** Build the complete Zerops lifecycle bundle without importing control-plane persistence. */
 export const createZeropsControlProvider = (options: ZeropsControlProviderOptions): ControlProvider => {
 	if (options.accessToken === '') {
@@ -211,6 +261,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		id: 'zerops',
 		normalizeRegistration,
 		deploy: async (input: ProviderDeployInput): Promise<ProviderTerminalOutcome> => {
+			const buildFromGit = publicBuildFromGit(input.app.source.repoUrl, input.app.source.ref)
 			const registration = normalizeRegistration({ app: input.app, environment: input.environment })
 			const placement = resolvedEnvironment(registration.environment, { requireReady: true })
 			const proxyServiceId = placement.proxyServiceId
@@ -264,6 +315,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				projectId: placement.projectId,
 				serviceId: placement.target.serviceId,
 				accessToken: options.accessToken,
+				buildFromGit,
 				...(options.apiBaseUrl !== undefined ? { apiBaseUrl: options.apiBaseUrl } : {}),
 				...(options.propustkaUrl !== undefined ? { propustkaUrl: options.propustkaUrl } : {}),
 				...(options.adminKey !== undefined ? { adminKey: options.adminKey } : {}),
