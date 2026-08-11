@@ -289,3 +289,27 @@ build process was `FAILED` 500 ms after starting (12:33:41.202 → 12:33:41.702)
 and no message on the process object; its version had not moved eight minutes later. →
 [`70`](../backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md), promoted into
 this sprint as WU4.
+
+### WU1 checkpoint (2026-08-11)
+
+The example is now a self-contained repository-root tree while remaining under
+`examples/zerops-app/` for workspace typecheck and test coverage. ADR-0028 records the repository-root
+invariant. The public mirror is `contember/fabrika-example-zerops`.
+
+An isolated export passed `bun install --frozen-lockfile`, typecheck and all 17 example tests against
+the published `@fabrika/*` 0.0.4 packages. The workspace's example, topology and Zerops YAML suites
+passed 152 tests.
+
+Live in `fabrika-install-test`, disposable service `wu1root` built from
+`https://github.com/contember/fabrika-example-zerops@main` with explicit setup `notesapi`. Zerops read
+the repository-root descriptor, completed every build command, and uploaded a 47.3 MiB deploy artifact.
+The later deploy failed as expected because this build-only probe had neither the app database nor its
+runtime environment. The disposable service was deleted afterwards.
+
+### GitHub authorization recheck (2026-08-11)
+
+The operator completed a GitHub authorization in the browser, but the Zerops API identity used by the
+installation still answers `githubAuthorizationRequired`. That identity is Zerops owner
+`matejka@contember.com` (display name `David`) in the `Contember` organization. The authorization was
+therefore either completed as another Zerops user or did not finish for this identity. WU3 remains
+blocked until `getGithubRepositories` succeeds for the installation identity.

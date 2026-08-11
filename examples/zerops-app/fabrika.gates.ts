@@ -2,16 +2,17 @@
 //
 // ── These are not enforced by this app ────────────────────────────────────────────────────────────
 //
-// They are enforced by the PROXY, in front of it (ADR-0007). The app service has no public route at
-// all; the proxy is the only publicly routed service in the project, so a request that fails a gate
-// never reaches this process — and neither does a request to a path the app forgot to protect. That
-// structural unreachability is the whole reason the rules moved out of the app.
+// They are enforced by the PROXY, in front of it. The app service has no public route at all, so a
+// request that fails a gate never reaches this process — and neither does a request to a path the app
+// forgot to protect. That structural unreachability is the whole reason the rules live outside the
+// app. See
+// https://github.com/contember/fabrika-platform/blob/main/docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md.
 //
 // The proxy reads this list VERBATIM from its manifest, order preserved, and evaluates it in the
-// TypeScript auth service. It is never compiled into Caddy routes: ADR-0010 records why (fall-through
-// is inexpressible as a matcher, Caddy's path matching is case-insensitive where these globs are
-// case-sensitive, and Caddy's `*` stops at `/` where these do not) — all three widen or narrow a rule
-// silently, in the permissive direction.
+// TypeScript auth service. It is never compiled into Caddy routes: fall-through is inexpressible as a
+// matcher, Caddy's path matching is case-insensitive where these globs are case-sensitive, and Caddy's
+// `*` stops at `/` where these do not. A second evaluator would therefore admit a different request
+// set.
 //
 // ── Semantics ─────────────────────────────────────────────────────────────────────────────────────
 //

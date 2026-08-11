@@ -3,11 +3,29 @@
 A small notes API, deployed by fabrika **to Zerops**. It is a worked example meant to be copied: every
 file here is one an app author writes, and nothing in it is a stub.
 
-The Cloudflare example lives next door in [`../app`](../app). This is a **second example** because each
-provider owns its authoring surface and build command. A config imports only the provider it targets,
-so provider-specific resource types do not leak into a shared union. On Cloudflare the app imports the
-SDK and enforces its own gates in-process; here it does not enforce them at all, because the proxy does
-([ADR-0007](../../docs/decisions/0007-proxy-based-auth-enforcement.md)).
+This directory is both a fabrika-platform workspace fixture and the complete root of the standalone
+[`contember/fabrika-example-zerops`](https://github.com/contember/fabrika-example-zerops) repository.
+Zerops requires `zerops.yaml` at the root of the repository it builds. The standalone repository must
+therefore contain this directory's files directly, not the surrounding monorepo or an extra directory.
+
+The monorepo directory is the source of truth. Mirror it without changing the tree:
+
+```bash
+git subtree split --prefix=examples/zerops-app -b fabrika-example-zerops
+git push https://github.com/contember/fabrika-example-zerops.git fabrika-example-zerops:main
+git branch -D fabrika-example-zerops
+```
+
+Do not edit the mirror directly. A fresh export must pass `bun install --frozen-lockfile`,
+`bun run typecheck`, and `bun test` from its repository root. The normal fabrika-platform workspace
+checks continue to exercise the same files locally.
+
+The [Cloudflare example](https://github.com/contember/fabrika-platform/tree/main/examples/app) is a
+separate example because each provider owns its authoring surface and build command. A config imports
+only the provider it targets, so provider-specific resource types do not leak into a shared union. On
+both providers the proxy enforces route gates. The app only verifies the proxy-injected token and
+applies per-object checks that a path gate cannot express
+([ADR-0022](https://github.com/contember/fabrika-platform/blob/main/docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md)).
 
 ## What is where
 
@@ -32,7 +50,7 @@ apply-import → trigger-deploy → await-deploy → reconcile-schema
 ```
 
 Four steps, and the differences from Cloudflare's plan are all deliberate
-([ADR-0003](../../docs/decisions/0003-no-deploy-runner-on-zerops.md)):
+([ADR-0003](https://github.com/contember/fabrika-platform/blob/main/docs/decisions/0003-no-deploy-runner-on-zerops.md)):
 
 - **no `build`** — Zerops has its own CI. fabrika triggers it; it does not run it, and there is no
   deploy runner and no container anywhere on this path.
@@ -41,12 +59,12 @@ Four steps, and the differences from Cloudflare's plan are all deliberate
 - **no `migrate`** — `run.initCommands` runs on every container start.
 - **no `sync-secrets`**, and this one is a decision rather than an omission. On Zerops the platform is
   the system of record for secret values and they change without a redeploy
-  ([ADR-0004](../../docs/decisions/0004-secrets-live-in-the-platform.md)), so a deploy-time push would
+  ([ADR-0004](https://github.com/contember/fabrika-platform/blob/main/docs/decisions/0004-secrets-live-in-the-platform.md)), so a deploy-time push would
   silently overwrite a client's GUI edit.
 
-`packages/installation-zerops/zerops/__tests__/example-app.test.ts` drives the neutral deploy executor with the Zerops
-provider over a recording fake. It asserts that exact plan and the exact ordered sequence of API calls
-a real run would make.
+The fabrika-platform test suite drives the neutral deploy executor with the Zerops provider over a
+recording fake. It asserts that exact plan and the exact ordered sequence of API calls a real run would
+make.
 
 ## Where the secrets go
 
@@ -85,8 +103,8 @@ The example covers all three namespace tiers without changing the application pr
 - **full** — use the same default app files as mid, but assign the environment to a namespace whose
   `exclusiveAppId` is `notes`. The project then contains only the proxy and this app's services.
 
-`packages/installation-zerops/zerops/__tests__/topology.test.ts` compiles these fixtures and proves their exact service
-ownership boundaries.
+The fabrika-platform topology tests compile these fixtures and prove their exact service ownership
+boundaries.
 
 ## Running it
 
@@ -108,14 +126,16 @@ NOTES_DATABASE_URL=postgres://…  NOTES_APP_ID=notes  FABRIKA_IAM_ISSUER=https:
 Requests then need an `X-Fabrika-Token` the IAM service minted — in production the proxy puts it there,
 and nothing else can reach the port.
 
-## What has not been proven
+## What has been proven
 
-Nobody has run this against a real Zerops account. The import document is valid against Zerops'
-published JSON schema, `zerops.yaml` is valid against its own published schema, and the deploy's call
-sequence is asserted against the real driver — but "well-formed" is not "it deploys".
+On 2026-08-11 Zerops built the public repository's `main` branch from this repository root. Its build
+container ran `bun install --frozen-lockfile`, completed every build command, and prepared and uploaded
+a 47.3 MiB artifact. This proves the repository-root layout, descriptor discovery, and standalone
+lockfile in a real Zerops build environment.
 
-The real Operations custom domain and proxy path isolation are therefore also
-unproven. In addition, Zerops owns the build filesystem and the current provider
-does not publish its source maps to Operations; that remaining release-artifact
-work is tracked in
-[backlog 36](../../docs/backlog/36-complete-zerops-release-artifact-correlation.md).
+The disposable probe service omitted the app database and runtime environment, so its later deploy
+failed before the app could become active. A complete deploy, the readiness gate, the real Operations
+custom domain, and proxy path isolation remain unproven. Zerops also owns the build filesystem and the
+current provider does not publish its source maps to Operations; that remaining release-artifact work
+is tracked in
+[fabrika-platform backlog 36](https://github.com/contember/fabrika-platform/blob/main/docs/backlog/36-complete-zerops-release-artifact-correlation.md).

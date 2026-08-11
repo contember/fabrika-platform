@@ -33,7 +33,8 @@ holds the repository (`apps.repo_url` is required and reaches the provider); Zer
 (`provider-zerops/src/control.ts:263-270,276`) and nothing configures the integration a private repo
 needs. Measured while scoping: a build source belongs to an app VERSION and never persists, and the
 integration API can name a setup but carries no descriptor — so **an app on Zerops is a repository whose
-root holds `zerops.yaml`**, and the example moves out of this monorepo. The private half waits on the
+root holds `zerops.yaml`**. The example remains a tested workspace fixture and is mirrored unchanged as
+a standalone repository root. The private half waits on the
 operator authorizing GitHub on the Zerops account. Consumes
 [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md),
 [`69`](backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md) and

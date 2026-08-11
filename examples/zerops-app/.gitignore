@@ -1,0 +1,4 @@
+node_modules/
+fabrika.manifest.json
+.env
+*.local

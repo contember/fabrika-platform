@@ -37,15 +37,16 @@
     "examples/zerops-app": {
       "name": "@fabrika/example-zerops-app",
       "dependencies": {
-        "@fabrika/app": "workspace:*",
-        "@fabrika/auth-core": "workspace:*",
-        "@fabrika/provider-zerops": "workspace:*",
+        "@fabrika/app": "^0.0.4",
+        "@fabrika/auth-core": "^0.0.4",
+        "@fabrika/provider-zerops": "^0.0.4",
         "@sentry/browser": "10.69.0",
         "jose": "^5.9.0",
       },
       "devDependencies": {
-        "@fabrika/cli": "workspace:*",
+        "@fabrika/cli": "^0.0.4",
         "@types/bun": "latest",
+        "typescript": "^5.9.3",
       },
     },
     "packages/app": {

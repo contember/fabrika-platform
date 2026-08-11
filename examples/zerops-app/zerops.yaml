@@ -1,26 +1,21 @@
-# The build/run descriptor for this app, at ITS repository root.
+# The build/run descriptor at this app repository's root.
 #
-# Zerops reads `zerops.yaml` from the root of the repository it builds, so in a real deployment this
-# file sits beside `package.json` at the top of the app's own repo. It lives here because this example
-# IS that repo, checked into fabrika's monorepo for convenience — the paths below are relative to this
-# directory, and copying the directory somewhere else needs no path changes.
+# This directory is mirrored unchanged to `contember/fabrika-example-zerops` with `git subtree split`.
+# It remains a workspace fixture here, but it is the complete root tree in the standalone repository.
+# All paths below are therefore relative to this directory in both locations.
 #
 # `setup` must match the service hostname (`notesapi`), which is also what `zeropsSetup` in
 # `fabrika.config.ts` selects. One setup here, because one service in this repo carries code; the
 # `notesdb` PostgreSQL service is provisioned by the import document and has nothing to build.
 #
-# Hand-written, unlike fabrika's own root `zerops.yaml` (which is generated from
-# `packages/installation-zerops/zerops/setups.ts`). The line between them: generate a file that must AGREE with something
-# else — fabrika's has to stay in step with the hostnames in its import documents — and write by hand a
-# file that stands alone, which is every app's. Both are validated against Zerops' published
-# `zerops.yaml` JSON schema by `packages/installation-zerops/zerops/__tests__/zerops-yaml.test.ts`, so "hand-written" does not
-# mean "unchecked".
+# Hand-written, unlike fabrika-platform's generated descriptor. Its test suite validates this file
+# against Zerops' published `zerops.yaml` JSON schema.
 #
 # ── Where the secrets are ──────────────────────────────────────────────────────────────────────────
 #
 # Not here. This file is committed and plaintext, so it carries only what is true for every deployment
 # of this app: ports, and `${service_variable}` REFERENCES that the platform resolves at container
-# start. Two categories live elsewhere, both addressed BY SERVICE through the env API (ADR-0004):
+# start. Two categories live elsewhere, both addressed BY SERVICE through the env API:
 #
 #   per-environment config   FABRIKA_IAM_ISSUER   the IAM service's public origin — the `iss` of every
 #                                                 token this app verifies, and the JWKS it fetches.
@@ -62,7 +57,8 @@ zerops:
     #
     # Every duration is a QUOTED Go duration and none is under 10s. The published JSON schema types these
     # as integers and the platform refuses an integer (`cannot unmarshal !!int into time.Duration`); it
-    # also rejects anything outside [10s, 1h]. Both verified live — see docs/reference/zerops-platform.md.
+    # also rejects anything outside [10s, 1h]. Both were verified live; details are recorded at
+    # https://github.com/contember/fabrika-platform/blob/main/docs/reference/zerops-platform.md.
     deploy:
       readinessCheck:
         httpGet:

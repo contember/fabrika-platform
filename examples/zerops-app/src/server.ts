@@ -1,7 +1,7 @@
 // The Zerops entrypoint — `run.start` in zerops.yaml. A long-running Bun process, not a Worker.
 //
-// It listens on 0.0.0.0 because the project's private network is how the proxy reaches it; it has no
-// public route of its own, so binding wide is not the same as being exposed (ADR-0007).
+// It listens on 0.0.0.0 because the project's private network is how the proxy reaches it. It has no
+// public route of its own, so binding wide is not the same as being exposed.
 
 import { createBunHandler } from '@fabrika/app/bun'
 import { SQL } from 'bun'

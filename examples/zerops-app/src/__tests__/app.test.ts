@@ -1,8 +1,9 @@
 // What this app is responsible for, proven without a database, without a proxy and without IAM.
 //
-// The gates themselves are NOT tested here — they are not this process's job (ADR-0007), and the proxy
-// package has its own deny-matrix tests. What is tested is the half the proxy cannot do: verifying the
-// injected token and authorizing a specific action on a specific workspace.
+// The gates themselves are NOT tested here — only the proxy evaluates them. What is tested is the
+// half the proxy cannot do: verifying the injected token and authorizing a specific action on a
+// specific workspace. See
+// https://github.com/contember/fabrika-platform/blob/main/docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md.
 
 import { createBunHandler } from '@fabrika/app/bun'
 import { type AccessTokenClaims, type PermissionEntry, TOKEN_ALG } from '@fabrika/auth-core'

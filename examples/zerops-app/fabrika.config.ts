@@ -1,24 +1,23 @@
 // A worked fabrika app that targets ZEROPS.
 //
-// The Cloudflare example (`examples/app`) declares `resources()` — an oblaka `Worker` graph. This one
-// declares `target: { platform: 'zerops', … }`, which is a set of SERVICES in a project. The two are
-// separate examples because each provider owns its authoring contract, so one config cannot accidentally
-// mix both. The deployments disagree about the thing that matters most — on Cloudflare the app enforces its own gates
-// in-process, and here it does not enforce them at all, because the proxy does (ADR-0007).
+// A Cloudflare app declares `resources()` — an oblaka `Worker` graph. This one declares
+// `target: { platform: 'zerops', … }`, which is a set of SERVICES in a project. Each provider owns its
+// authoring contract, so one config cannot accidentally mix both. On both providers the proxy alone
+// evaluates route gates; the app verifies the injected token and owns only per-object checks.
+// See https://github.com/contember/fabrika-platform/blob/main/docs/decisions/0022-the-proxy-is-the-only-enforcement-point.md.
 //
 // ── What is deliberately NOT here ─────────────────────────────────────────────────────────────────
 //
-// `project`. The Zerops project already exists and its id is a REGISTRY field — `app_envs.zerops_project_id`
-// (ADR-0006). Nothing in this file or the provider assumes an app→project mapping, and
-// nothing keys off a naming convention. This app's services are imported INTO the project the registry
-// names; `packages/installation-zerops/zerops/generated/apps-prod.zerops-import.yaml` is the import that created it.
+// `project`. The Zerops project already exists and its id belongs to the control-plane registry.
+// Nothing in this file or the provider assumes an app→project mapping or keys off a naming convention.
+// This app's services are imported INTO the project the registry names.
 //
 // `pipeline.vars`. That surface exists to inject values into `process.env` before `resources()` builds a
 // Cloudflare resource graph. There is no resource graph here, and per-environment configuration reaches
 // a Zerops service as a service-level environment variable instead.
 //
-// A `build` command. Zerops has its own CI; `zerops.yaml` in this directory describes the build, and the
-// deploy TRIGGERS it rather than running it (ADR-0003).
+// A `build` command. Zerops has its own CI; the repository-root `zerops.yaml` describes the build, and
+// the deploy TRIGGERS it rather than running it.
 
 import { defineApp, type ZeropsResourceContext, type ZeropsServiceSpec } from '@fabrika/provider-zerops'
 import { notesGates } from './fabrika.gates'
@@ -40,9 +39,9 @@ export const NOTES_UPSTREAM = `${NOTES_SERVICE}:3000`
  * letters and digits ONLY. No hyphens — `notes-api` is illegal, which is why these read the way they do.
  * There is no `pattern` in the schema, so nothing but `assertZeropsHostnames` catches a violation.
  *
- * Note also what is NOT in these names: an environment suffix. One project per environment (ADR-0006)
- * means `notesapi` in `apps-stage` and `notesapi` in `apps-prod` are different services on different
- * private networks, and staging genuinely cannot reach production's database.
+ * Note also what is NOT in these names: an environment suffix. One project per environment means
+ * `notesapi` in staging and `notesapi` in production are different services on different private
+ * networks, and staging genuinely cannot reach production's database.
  */
 const services = (ctx: ZeropsResourceContext): ZeropsServiceSpec[] => [
 	{
@@ -68,7 +67,7 @@ const services = (ctx: ZeropsResourceContext): ZeropsServiceSpec[] => [
 		// NOT PUBLIC, and written explicitly rather than left to the platform default. The default already
 		// protects a service nobody thought about; writing `false` makes turning it on a one-line diff in
 		// review. It does not undo one enabled by hand — a re-applied import leaves an existing service
-		// untouched. The proxy is the only publicly routed service in the project (ADR-0007).
+		// untouched. The proxy is the only publicly routed service in the project.
 		enableSubdomainAccess: false,
 		minContainers: ctx.env === 'prod' ? 2 : 1,
 		maxContainers: 4,
@@ -84,7 +83,7 @@ export default defineApp({
 		/**
 		 * DOCUMENTATION ON ZEROPS, NOT A DEPLOY STEP. The Zerops plan has no `sync-secrets` — the platform
 		 * is the system of record for secret values and they change without a redeploy, so pushing them at
-		 * deploy time would silently overwrite a GUI edit (ADR-0004). These are written once, as
+		 * deploy time would silently overwrite a GUI edit. These are written once, as
 		 * service-level `envSecrets` on `notesapi`, through the env API. Listing them here says what the
 		 * app needs; nothing in this repo transports a value.
 		 */

@@ -127,3 +127,4 @@ together with 0022 and 0023.
 - [0025](0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) — The operator installs the platform; fabrika deploys only apps — accepted (2026-08-06)
 - [0026](0026-bind-session-handoffs-to-the-browser.md) — Bind session handoffs to the browser that started them (amends 0022 and 0023) — accepted (2026-08-06)
 - [0027](0027-platform-deploy-is-as-wide-as-the-provider-needs.md) — `platform deploy` is as wide as its provider needs, not uniformly wide — accepted (2026-08-06)
+- [0028](0028-zerops-apps-own-their-repository-root.md) — Zerops apps own their repository root — accepted (2026-08-11)
