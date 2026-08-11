@@ -495,6 +495,37 @@ Consequences, and they are ordering rules rather than facts about a field:
 - **A service still reading `NEW` cannot be adopted by a later run**, which holds no process ids for it.
   `platform install` refuses rather than sleeping, and says to run it again shortly.
 
+### Verified live (2026-08-11, account `prg1`, project `fabrika-install-test`) — where a build source lives
+
+Measured on a throwaway `alpine/bun@1.3` service (`wu1probe`), since deleted, against the public
+`contember/fabrika-platform`.
+
+| Behaviour                                                             | Result                                                                                          |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| An import whose service declares `buildFromGit`                       | **Starts a build by itself** — the response carries a second process, `actionName: stack.build` |
+| What the resulting app version records                                | `publicGitSource: {gitUrl, branchName: "main", configContentFromImport: false, explicitSetup}`  |
+| `PUT /service-stack/{id}/trigger-pipeline` with **no** `buildFromGit` | **Refused**, both before and after a successful build from that source                          |
+| The same call **with** `buildFromGit`                                 | Accepted; the version built and moved on to deploy                                              |
+| Branch, when the URL names none                                       | **`main`**, chosen by the platform                                                              |
+
+**A public build source is a property of an app VERSION, never of the service.** Nothing durable is
+configured by handing one to an import or to a trigger — so **every** deploy must supply it again. The
+alternative is the repository integration
+([`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md)), which is the durable form and the
+only one that reaches a private repository.
+
+Two smaller things, both worth knowing before debugging one:
+
+- **The refusal names nothing.** A trigger with no source answered `Service stack not found` for an
+  empty body and `Invalid parameter provided` when only `zeropsSetup` was set — two different errors
+  for the same missing input, neither mentioning a build source, on a service id that the very next
+  call accepted.
+- **A `stack.build` that fails before it creates a container leaves its app version at
+  `WAITING_TO_BUILD` permanently.** The process was `FAILED` 500 ms in and carried no message; the
+  version had not moved eight minutes later. Polling the version alone therefore cannot distinguish a
+  failed build from a queued one — see
+  [`70`](../backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md).
+
 ### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — updating a running installation
 
 How the four platform services on `fabrika-test` were taken from a two-day-old build to `HEAD`. There

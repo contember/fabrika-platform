@@ -210,25 +210,37 @@ Recorded as a platform fact, not a guess.
 
 **But the source does NOT persist for a later trigger.** On that same service, in this order:
 
-| call                                                             | result                                    |
-| ---------------------------------------------------------------- | ----------------------------------------- |
-| `PUT trigger-pipeline` body `{}`                                 | refused — `Service stack not found`       |
-| `PUT trigger-pipeline` body `{"zeropsSetup":"iam"}`              | refused — `Invalid parameter provided`    |
-| `PUT trigger-pipeline` body `{"buildFromGit":…,"zeropsSetup":…}` | accepted — app version reached `BUILDING` |
+| call                                                             | result                                             |
+| ---------------------------------------------------------------- | -------------------------------------------------- |
+| `PUT trigger-pipeline` body `{}`                                 | refused — `Service stack not found`                |
+| `PUT trigger-pipeline` body `{"zeropsSetup":"iam"}`              | refused — `Invalid parameter provided`             |
+| `PUT trigger-pipeline` body `{"buildFromGit":…,"zeropsSetup":…}` | accepted — the version BUILT, then `DEPLOY_FAILED` |
+| `PUT trigger-pipeline` body `{}`, **after that build**           | refused again — `Service stack not found`          |
+| `PUT trigger-pipeline` body `{"zeropsSetup":"iam"}`, after it    | refused again — `Invalid parameter provided`       |
 
-The two refusals name nothing useful and disagree with each other, which is worth knowing on its own;
-what matters is that the same service id accepted the call the moment a source was in the body. So
-`publicGitSource` is a property of an app VERSION, not durable service configuration —
+The last two rows are what make this conclusive rather than suggestive. The service had by then built
+and deployed a version **from that very source**, and a bare trigger was refused with the identical two
+errors — so nothing about a successful build turns the source into service configuration.
+`publicGitSource` is a property of an app VERSION and only that.
 **`trigger-deploy` must pass the source on every deploy.** WU1 is therefore the larger version: thread
 it from the app config through `ZeropsStoredTarget` → `ZeropsRuntimeTarget` → the trigger. The small
 version — "the import already carries it, nothing to do" — is dead.
+
+The `DEPLOY_FAILED` is expected and not a finding: the probe built IAM's setup into a service with none
+of IAM's environment. The build reaching `BUILDING → DEPLOYING` is the part that answers the question —
+a public source builds fine. `wu1probe` was deleted afterwards; the two refusals above are the last
+thing that happened to it.
+
+The two refusals name nothing useful and disagree with each other on the same missing input, which is
+worth knowing before anyone debugs a real one: neither error mentions a build source.
 
 **Finding A — a failed `stack.build` leaves the app version at `WAITING_TO_BUILD` forever.** The
 import's build process was `FAILED` 500 ms after it started (12:33:41.202 → 12:33:41.702, no build
 container, no message on the process object), and its app version still read `WAITING_TO_BUILD` eight
 minutes later. `await-deploy` polls `getAppVersion` and nothing else (`provider.ts:211-219`) with
 `POLL_TIMEOUT_MS = 70 * 60 * 1000` — so this failure mode hangs a deploy for **seventy minutes** and
-then reports a timeout that names neither the build nor the reason. Needs its own item.
+then reports a timeout that names neither the build nor the reason. →
+[`70`](../backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md).
 
 **Finding B — the example app is not shaped like the app it claims to be.** Zerops reads `zerops.yaml`
 from the root of the repository it builds, and the example's lives at
