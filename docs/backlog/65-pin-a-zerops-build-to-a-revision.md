@@ -15,11 +15,12 @@ otherwise. Effort S to settle, unknown to fix.
 ## Problem
 
 `triggerPipeline`'s `buildFromGit` is documented in our own client as _"a one-time build from that
-PUBLIC repository URL"_ (`packages/provider-zerops/src/api.ts:246-256`), and every caller passes a bare
+PUBLIC repository URL"_ (`packages/provider-zerops/src/api.ts:246-256`). The WU2 application path now
+passes `https://github.com/contember/fabrika-example-zerops@main`, and Zerops accepted and built it
+live. That proves the `@main` form is accepted, but not that Zerops pins a non-default tag or commit:
+`main` is also the repository's default branch. The remaining installation caller still passes a bare
 URL — `FABRIKA_PROXY_SOURCE = 'https://github.com/contember/fabrika-platform'`
-(`packages/installation-zerops/zerops/topology.ts:126`). `docs/reference/zerops-platform.md:100-102`
-already records the honest position: _"The public documentation does not establish that this URL is an
-immutable content pin."_
+(`packages/installation-zerops/zerops/topology.ts:126`).
 
 Two consequences, one of them drift in a decision:
 
@@ -35,12 +36,13 @@ Two consequences, one of them drift in a decision:
 
 ## Approach / acceptance
 
-Settle the platform question first, live, the way `sprint-2026-08-03-zerops-live-bringup` settled the
-rest of `reference/zerops-platform.md`. Nothing in this repository or in Zerops' published docs
-establishes a `<url>@<ref>` form; do not invent one.
+Settle the immutable-pin question live, the way `sprint-2026-08-03-zerops-live-bringup` settled the
+rest of `reference/zerops-platform.md`. The accepted `@main` probe establishes a branch-shaped form,
+not tag or SHA semantics.
 
-1. **Ask the platform.** Does `trigger-pipeline` (or the import format's `buildFromGit`) accept a
-   revision, tag, or ref in any form? Try it against `fabrika-test` and record the response verbatim.
+1. **Ask the platform.** Does `trigger-pipeline` (or the import format's `buildFromGit`) accept an
+   immutable tag or SHA? Try a non-default tag and a commit against `fabrika-test`, then record which
+   revision Zerops actually built.
 2. Then one of:
    - **It can be pinned** → pass the same tag `fabrika.ref` carries, everywhere `buildFromGit` is set,
      and the sidecar's pin becomes whole.
@@ -53,9 +55,10 @@ reconciled by a new ADR, and — if pinning is possible — a `platform deploy` 
 builds the same service code twice in a row regardless of what moved on the default branch meanwhile.
 
 Related but **not** the same as [47](./47-give-the-zerops-path-a-private-git-source.md): 47 is about
-reaching a **private** source at all; this is about identifying **which revision** of a source — public
-or private — was built. Fixing 47 through the repository integration may change the answer here, so
-settle 47's mechanism before building anything for this one.
+reaching a **private application** source at all; this item is about identifying **which revision** a
+public `buildFromGit` source built, especially the namespace proxy. ADR-0029's application upload path
+resolves an exact commit and records it before upload, but it does not answer whether Zerops can pin the
+remaining public `buildFromGit` path.
 
 ## Touch points
 

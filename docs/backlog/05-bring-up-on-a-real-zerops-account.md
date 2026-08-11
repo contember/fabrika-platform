@@ -39,11 +39,12 @@ them.
    cookie outright. Custom domains are now about operating a real installation, not
    about making sign-in work.
 3. **A source a private app can build from.**
-   [ADR-0025](../decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) settled
-   the mechanism — fabrika configures the service's own repository integration rather than
-   cloning, see [`47`](./47-give-the-zerops-path-a-private-git-source.md). Until that
-   lands the control-plane `trigger-deploy` step cannot build a private repository, and
-   neither can the Operations DSN that the control→Operations catalog projection mints.
+   [ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md) settled
+   the mechanism after a live probe disproved ADR-0025's native-integration assumption: an
+   operator-owned GitHub App authorizes a per-installation `source` service, which uploads an exact
+   repository snapshot for Zerops to build, see [`47`](./47-give-the-zerops-path-a-private-git-source.md).
+   Until that lands the control-plane deploy cannot build a private repository, and neither can the
+   Operations DSN that the control→Operations catalog projection mints.
    (The namespace proxy is no longer part of this: ADR-0025 builds it from a pinned tag
    of the public repository, needing no credential.)
 4. **Operations ingest end to end.** Once 3 lands: an ingested exception reaching the

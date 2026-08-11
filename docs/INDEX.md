@@ -28,14 +28,14 @@ handoff amendment.
 
 [`fabrika-deploys-an-app-on-zerops`](sprints/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md) —
 **one gate: add a GitHub repository, public or private, to the control plane and get it deployed into
-the Zerops account**, signed into by a browser and reporting its own errors. The control plane already
-holds the repository (`apps.repo_url` is required and reaches the provider); Zerops throws it away
-(`provider-zerops/src/control.ts:263-270,276`) and nothing configures the integration a private repo
-needs. Measured while scoping: a build source belongs to an app VERSION and never persists, and the
-integration API can name a setup but carries no descriptor — so **an app on Zerops is a repository whose
-root holds `zerops.yaml`**. The example remains a tested workspace fixture and is mirrored unchanged as
-a standalone repository root. The private half waits on the
-operator authorizing GitHub on the Zerops account. Consumes
+the Zerops account**, signed into by a browser and reporting its own errors. The public source seam,
+fast build-failure detection and persisted run logs are implemented checkpoints. A live probe then
+proved Zerops' GUI OAuth grant cannot be consumed by the installation's project-scoped token.
+[ADR-0029](decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md) replaces that native
+integration plan with an operator-owned GitHub App and a non-public per-installation `source` service.
+It fetches an exact commit and uploads the repository archive; Zerops still builds and deploys it. The
+example remains a tested workspace fixture and standalone repository whose root holds `zerops.yaml`.
+Consumes
 [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md),
 [`69`](backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md) and
 [`70`](backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md), and answers items 3
@@ -85,8 +85,9 @@ backlog is empty; what is left of item 54 is a console architecture decision, no
   the `.zerops.app` entry point — and signed a browser in through the proxy live. The installation is
   still deployed **by hand**: `platform deploy` and `platform init` are written and unit-tested, but
   neither has run against the account, so the hand sequence remains the only proven one. Next is the
-  live acceptance above, then [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md), which
-  blocks a control-plane-triggered deploy of a private app. The production two-project shape and
+  live acceptance above, including [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md): an
+  operator-owned GitHub App and source-upload service now replace the disproved native-integration
+  approach. The production two-project shape and
   custom domains remain in [`05`](backlog/05-bring-up-on-a-real-zerops-account.md).
 - **The session handoff is the ONLY way a browser gets a session for an app.** IAM
   issues a browser-bound one-time code and the proxy on the app's own host redeems it

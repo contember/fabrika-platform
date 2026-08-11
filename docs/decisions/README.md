@@ -96,13 +96,19 @@ ADR-0026 binds an app session handoff to its initiating browser with a private v
 unused browser JWT-cookie tier, and makes the proxy-to-app credential boundary explicit. Read it
 together with 0022 and 0023.
 
+ADR-0029 amends ADR-0003 and ADR-0025 after a live account disproved the assumed Zerops OAuth
+delegation. Zerops integration tokens cannot configure a service from a user's GitHub grant, so an
+operator-owned GitHub App and an internal per-installation `source` service fetch an exact commit and
+upload its archive. Zerops still executes every application build and deploy; Fabrika still never
+deploys its own installation.
+
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
 
 - [0001](0001-merge-propustka-and-vozka.md) — Merge propustka and vozka into fabrika-platform under the `@fabrika/*` scope — accepted (2026-07-28)
 - [0002](0002-deploy-driver-owns-the-plan.md) — Multi-cloud through a `DeployDriver`; the deploy plan belongs to the driver — accepted; extended by 0011 (2026-07-28)
-- [0003](0003-no-deploy-runner-on-zerops.md) — No deploy runner on Zerops — the platform executes the deploy — accepted (2026-07-28)
+- [0003](0003-no-deploy-runner-on-zerops.md) — No deploy runner on Zerops — the platform executes the deploy — accepted; filesystem-helper boundary amended by 0029 (2026-07-28)
 - [0004](0004-secrets-live-in-the-platform.md) — The platform holds secret values; fabrika holds only references — accepted (2026-07-28)
 - [0005](0005-compile-app-config-to-static-manifest.md) — Compile app config to a static manifest; the control plane never executes app code — accepted (2026-07-28)
 - [0006](0006-zerops-project-topology-is-a-registry-field.md) — Zerops project topology is a registry field, defaulting to project-per-environment — accepted (2026-07-28)
@@ -124,7 +130,8 @@ together with 0022 and 0023.
 - [0022](0022-the-proxy-is-the-only-enforcement-point.md) — The proxy is the only enforcement point (supersedes 0007, 0008, 0010, 0021) — accepted (2026-08-05)
 - [0023](0023-one-session-per-host.md) — One session per host — retire the shared session cookie (amends 0022) — accepted (2026-08-05)
 - [0024](0024-retire-the-legacy-environment-name-fallback.md) — Retire the legacy environment-name fallback; canonical names only (supersedes 0018) — accepted (2026-08-05)
-- [0025](0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) — The operator installs the platform; fabrika deploys only apps — accepted (2026-08-06)
+- [0025](0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) — The operator installs the platform; fabrika deploys only apps — accepted; private-source mechanism amended by 0029 (2026-08-06)
 - [0026](0026-bind-session-handoffs-to-the-browser.md) — Bind session handoffs to the browser that started them (amends 0022 and 0023) — accepted (2026-08-06)
 - [0027](0027-platform-deploy-is-as-wide-as-the-provider-needs.md) — `platform deploy` is as wide as its provider needs, not uniformly wide — accepted (2026-08-06)
 - [0028](0028-zerops-apps-own-their-repository-root.md) — Zerops apps own their repository root — accepted (2026-08-11)
+- [0029](0029-an-operator-owned-github-app-delivers-zerops-sources.md) — An operator-owned GitHub App delivers Zerops application sources — accepted (2026-08-11)

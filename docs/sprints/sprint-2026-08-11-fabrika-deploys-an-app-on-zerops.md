@@ -12,20 +12,22 @@ fabrika deploys it into the Zerops account. Nothing short of that counts as done
 
 A work unit that does not move that criterion is out of scope, however tempting.
 
-**Blocked on the operator, for the whole sprint and not just one unit.** The private half needs the
-Zerops account to authorize GitHub repository access — an OAuth pass only the account owner can
-perform. Verified still absent on 2026-08-11 (`getGithubRepositories` → `Github authorization
-required`). The public half can proceed without it; the gate cannot be closed without it.
+**Operator prerequisite for the private gate.** The operator creates an organization-owned GitHub App,
+installs it on `contember/fabrika-example-zerops`, and configures its identity, private key and webhook
+secret once for this Fabrika installation. No Zerops GitHub OAuth grant or per-service GUI connection is
+part of the product path. The public source-upload path can be built and proved before those credentials
+exist; the private gate needs them.
 
 **Theme.** Everything proven on Zerops so far is the platform _running_. Its predecessors got an
 installation up from an empty project and taught `platform deploy` to run unattended from CI. Neither
 deployed an **application** — the thing fabrika exists to do. The control plane's Zerops path is fully
 written, unit-tested against fakes, and `trigger-deploy` has never built anything on a real account.
 
-The pleasant surprise from scoping: **the control plane already holds the repository.** `apps.repo_url`
-is required, `default_branch` defaults to `main`, the console form already asks for a GitHub URL, and
-`runs.ref` is resolved on every deploy. Cloudflare consumes all of it. Zerops ignores all of it. So this
-is mostly a wiring sprint with two live unknowns, not a design sprint.
+The control plane already holds the repository and the GitHub App installation id. What changed during
+the run is the transport: Zerops' user-scoped OAuth integration cannot be configured by the installation
+token. [ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md) therefore
+adds a per-installation `source` service that fetches an exact commit and uploads its archive into the
+Zerops build pipeline.
 
 ## Refs re-verified at HEAD (2026-08-11)
 
@@ -36,12 +38,10 @@ is mostly a wiring sprint with two live unknowns, not a design sprint.
   the console form's second field is "GitHub repo URL" (`dashboard/src/routes/apps/new.tsx`).
 - ✔ **A deploy already resolves a concrete ref.** `input.ref ?? concrete trigger_ref ?? refs/heads/<default_branch>`
   (`control/src/api/runs.ts:248-249`), stored on `runs.ref`.
-- ⚠ **Zerops throws all of it away.** `ProviderDeployInput.app.source` reaches the Zerops control
-  provider, which reads exactly one field off it — `cwd: input.app.source.workerDir ?? '.'`
-  (`provider-zerops/src/control.ts:276`). `source.repoUrl` and `source.ref` appear nowhere in
-  `packages/provider-zerops/src/`. The runtime target it composes omits `buildFromGit` (`control.ts:263-270`),
-  so `trigger-deploy` takes the "build from the service's configured Git integration" branch
-  (`provider.ts:183`, `api.ts:314-320`) — and nothing configures one.
+- ✔ **The public checkpoint now consumes the repository.** WU2 derives an ephemeral `buildFromGit`
+  from `ProviderDeployInput.app.source` and passes it only on the runtime target
+  (`provider-zerops/src/control.ts:263-264,314-319`). It is a proved code seam, not the final source
+  transport: WU3 removes it after artifact upload passes the public live gate.
 - ✔ **Cloudflare consumes the same input correctly**, which is the shape to copy: `buildJob` resolves
   `input.app.source` and puts `{ repoUrl, ref }` on the runner job
   (`provider-cloudflare/src/control.ts:189,198-199`), and the container clones that ref.
@@ -65,9 +65,11 @@ is mostly a wiring sprint with two live unknowns, not a design sprint.
   `wu1inline`, which exists nowhere in `contember/fabrika-platform`, built from that repository and
   reached `ACTIVE` (14:50:37 → 14:51:37). Useful to know, and deliberately **not** the foundation — see
   decision 2.
-- ⚠ **The account has no GitHub authorization.** `getGithubRepositories` → `Github authorization
-  required`, 2026-08-11, the same answer [`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md)
-  recorded on 2026-08-03.
+- ⚠ **Zerops OAuth is user-scoped, not available to the installation token.** The GUI grant lists the
+  example repository, but `SetupExternalRepositoryIntegration` on a disposable service, called with
+  the exact token installed on `control`, returned `400 githubAuthorizationRequired`. A follow-up read
+  returned `noExternalRepositoryIntegration`; the disposable service was deleted. The native
+  integration cannot be Fabrika's unattended private-source mechanism.
 - ⚠ **A Zerops run's build log never reaches the run record.** Relayed faithfully by the provider
   (`provider.ts:92-114`), then wired to a `console.info` line and nothing else
   (`run-lifecycle.ts:314`); the run's `log_key` object is written only by the Cloudflare runner relay
@@ -93,7 +95,7 @@ is mostly a wiring sprint with two live unknowns, not a design sprint.
 - **Touch points.** `docs/decisions/`, `examples/zerops-app/`, a new public repository,
   `packages/installation-zerops/zerops/__tests__/example-app.test.ts`.
 
-### WU2 — The Zerops provider reads the repository the control plane already has (effort M)
+### WU2 — Public `buildFromGit` proves the source seam (effort M) · completed checkpoint
 
 - **Problem.** `apps.repo_url` and the resolved `runs.ref` reach the provider and are dropped
   (refs above). This is the whole public half of the gate.
@@ -103,30 +105,68 @@ is mostly a wiring sprint with two live unknowns, not a design sprint.
   persists nothing — prefer that over widening `ZeropsStoredTarget`, which would need a version 3 and a
   backfill for no gain.
 - **Scope guard.** A **public** URL carries no credential. A credentialed clone URL stays refused by
-  [ADR-0025](../decisions/0025-the-operator-installs-the-platform-fabrika-deploys-apps.md) — the
-  platform persists what it is given, so a short-lived token becomes durable state that expires. WU3 is
-  the sanctioned path for anything private.
+  [ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md) — the platform
+  records what it is given. WU3 replaces this checkpoint with the one transport used by public and
+  private application repositories.
 - **Acceptance / witness.** A deploy triggered from the console against the **public** example
   repository builds and reaches `ACTIVE` in `fabrika-install-test`, and the app answers on its own host.
 - **Touch points.** `packages/provider-zerops/src/{control,provider,types}.ts`.
 
-### WU3 — The repository integration, and whether it replaces WU2 rather than joining it (effort M)
+### WU3 — An operator-owned GitHub App delivers source archives (effort L)
 
-- **Problem.** [`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md). A private repository
-  cannot be built from a URL; the integration is the only path, and nothing in `packages/` configures
-  one — `external-repository-integration` appears nowhere.
-- **Verify first, and it is the sprint's most valuable question.** Does the integration also serve a
-  **public** repository? If it does, fabrika needs ONE mechanism and WU2's URL path becomes a fallback
-  worth deleting rather than a second code path to maintain. Measure it the day the authorization
-  exists, before writing the second half.
-- **Scope.** `SetupExternalRepositoryIntegration` on the API client; configure it when fabrika creates
-  an app's service, from `repo_url` + `default_branch` + the manifest's `zeropsSetup`; take the
-  integration branch at `trigger-deploy`. Per ADR-0025 the integration is durable configuration fabrika
-  SETS, never a credential fabrika holds.
-- **Acceptance / witness.** The same example repository, now **private**, deploys through the control
-  plane into `fabrika-install-test`. Plus a recorded answer to the public question above, whichever way
-  it goes.
-- **Touch points.** `packages/provider-zerops/src/api.ts`, `packages/provider-zerops/src/control.ts`.
+- **Problem.** [`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md). The native Zerops
+  integration requires a user identity even after the account OAuth grant exists. The control plane's
+  project-scoped integration token cannot configure it, so it cannot be the unattended product path.
+- **Verify first — passed live.** The supported `zops push` sequence ran against disposable service
+  `wu3uploadprobe` using the installation token: it created an app version, streamed the public
+  repository-root archive and called `build-and-deploy` with setup `notesapi`. Zerops downloaded
+  24.9 KiB, completed every build command and produced a 47.3 MiB deploy artifact. Runtime deploy then
+  failed as expected because the probe had no application database or environment. The service was
+  deleted. This is sufficient to start the GitHub/source-service half.
+- **Upload destination — measured live.** A second disposable app version returned HTTPS host
+  `proxy.app-prg1.zerops.io`, exact path `/api/rest/object-storage/upload`, no port or fragment, and a
+  signed query. Only this origin and path are accepted for the `prg1` installation; redirects are
+  refused. The probe service was deleted.
+- **Crash state — measured live.** Zerops kept an app version at `UPLOADING` after a successful archive
+  PUT, so platform status cannot distinguish partial from complete source upload. `deleteAppVersion`
+  returned success and removed both an unuploaded version and a successfully uploaded, untriggered
+  version. The disposable `wu3stateprobe` service was deleted.
+- **Scope.** Implement ADR-0029:
+  - provision one non-public `source` service alongside `control` in the Zerops installation;
+  - split webhook verification from GitHub App token minting so Zerops `control` keeps only the webhook
+    secret and delegates installation lookup, ref resolution and source transport to authenticated
+    source RPC;
+  - embed the bounded root `zerops.yaml` and its digest in the registration artifact, resolve the exact
+    source commit before Operations release projection, and refuse descriptor drift;
+  - have `control` create and durably record the app version, pass only its presigned upload URL and the
+    exact commit to `source`, and retain the Zerops integration token and later `build-and-deploy` call;
+  - persist the provider checkpoint
+    `version_created → source_uploaded → build_trigger_requested → build_triggered`; conservatively
+    delete and fail a pre-trigger version after an ambiguous crash instead of repeating an upload or
+    trigger whose response was lost;
+  - resolve the requested ref to an exact commit, inspect and archive Git objects without a checkout,
+    and stream the repository-root archive to that upload URL;
+  - keep the GitHub App private key only as a `source` service secret, and return only the resolved
+    commit, descriptor digest, upload outcome and redacted events to `control`;
+  - use the upload path for public and private repositories, then remove WU2's application
+    `buildFromGit` path.
+- **Security gates.** Project-network reachability is not authorization. Tests must prove an unsigned
+  source request is refused; the request binds repository, ref, installation, app version, upload URL
+  and run; only the live-verified Zerops HTTPS upload origin, path, empty userinfo and non-empty signed
+  query are accepted; redirects and an
+  attacker destination receive zero bytes; no repository content is returned; symlinks, submodules,
+  special entries, escaping paths and trees above hard count or byte limits are rejected without
+  reading local files; an upstream error cannot disclose a clone URL,
+  token or presigned upload URL; the Zerops token never enters `source`; cancellation cleans temporary
+  data and the orphaned app version; and app code is never executed by `source`.
+- **Acceptance / witness.** Through the control-plane API, the same exact example commit builds and
+  reaches `ACTIVE` once while the repository is public and once after it becomes private. Both runs use
+  the artifact-upload path, name the same resolved commit, and expose no GitHub credential in Fabrika
+  logs, Zerops process data or application-version metadata.
+- **Touch points.** New `packages/source-zerops/`; `packages/control/src/repo-source.ts` and composition;
+  `packages/provider-zerops/src/{api,control,provider,types}.ts`; `packages/installation-zerops/` and its
+  generated topology; the run repository and migrations for provider checkpoints; run-log, recovery
+  and release correlation tests.
 
 ### WU4 — A failed build fails the deploy (effort S) · protects every other unit
 
@@ -134,9 +174,9 @@ is mostly a wiring sprint with two live unknowns, not a design sprint.
   found while scoping this sprint. A `stack.build` that fails before it creates a container leaves its
   app version at `WAITING_TO_BUILD` permanently, and `await-deploy` polls only the version, with a
   70-minute timeout.
-- **Why it is in this sprint rather than the backlog.** WU2 and WU3 will each fail their first attempt
-  in exactly this way — a wrong setup name, a repository the integration cannot see — and every one of
-  those attempts would cost seventy minutes and report nothing.
+- **Why it is in this sprint rather than the backlog.** Source delivery attempts fail in exactly this
+  state for a wrong setup, invalid archive or inaccessible repository, and each would otherwise cost
+  seventy minutes and report nothing.
 - **Acceptance / witness.** A deploy whose build cannot start fails in seconds naming the failed
   process, and a suite test drives the fake through the live state pair (`process FAILED` +
   `version WAITING_TO_BUILD`).
@@ -195,14 +235,20 @@ is mostly a wiring sprint with two live unknowns, not a design sprint.
    preference: the integration API can name a setup and nothing else. An inline descriptor works on the
    public trigger and would therefore let a monorepo app deploy publicly and break on the day it went
    private — a trap worth naming, because the earlier plan recommended exactly it.
-3. **Prefer one mechanism to two.** If the integration serves public repositories as well, WU2's URL
-   path is a fallback to delete rather than a peer to maintain. WU3 measures this before the code is
-   written.
-4. **The build source belongs on the RUNTIME target, not the stored one.** It is derivable from
-   `apps.repo_url` + the run's resolved `ref` on every deploy, so persisting it would duplicate a
-   registry field and cost a codec version.
+3. **One application-source transport.** Public and private repositories both become an uploaded app
+   version. Public fetches need no GitHub credential; private fetches mint a GitHub App installation
+   token. WU2's application `buildFromGit` path is deleted after WU3 proves parity.
+4. **The source helper is not a deploy runner.** It resolves, fetches, packages and uploads one exact
+   commit from Git objects, but never checks it out or executes repository code. The provider artifact
+   carries the bounded root descriptor required by Zerops; source returns only its digest. Zerops still
+   performs the build and deploy. The helper
+   runs as a non-public `source` service beside `control`, with authenticated RPC because application
+   services can share the project network.
 5. **Target `fabrika-install-test`.** Created by `platform install`, untouched by hand, so an
    observation from it means what it says.
+6. **The GitHub machine identity is operator-owned.** Each installation uses an organization-owned
+   GitHub App installed on selected repositories. Fabrika does not operate a central App or hold a
+   credential shared across operators. → [ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md).
 
 ## Open decision — the gate says "add a repository", registration also wants a manifest
 
@@ -224,19 +270,19 @@ ADR that faces the sandboxing question directly.
 
 ## Sequencing
 
-|                                     | depends on                    | can run alongside |
-| ----------------------------------- | ----------------------------- | ----------------- |
-| WU1 (repository-root ADR + example) | —                             | WU4, WU6          |
-| WU4 (fail a failed build fast)      | —                             | WU1, WU6          |
-| WU6 (run log into the run record)   | —                             | WU1, WU4          |
-| WU2 (read the repository, public)   | WU1                           | WU3's measurement |
-| WU3 (repository integration)        | WU1, **GitHub authorization** | —                 |
-| WU5 (sign-in + Operations ingest)   | WU2 _or_ WU3                  | —                 |
+|                                     | depends on                       | can run alongside        |
+| ----------------------------------- | -------------------------------- | ------------------------ |
+| WU1 (repository-root ADR + example) | —                                | WU4, WU6                 |
+| WU4 (fail a failed build fast)      | —                                | WU1, WU6                 |
+| WU6 (run log into the run record)   | —                                | WU1, WU4                 |
+| WU2 (public source seam checkpoint) | WU1                              | WU3 upload measurement   |
+| WU3 (GitHub App + source service)   | WU1, upload measurement          | WU2 live public baseline |
+| WU5 (sign-in + Operations ingest)   | WU3 live public + private deploy | —                        |
 
-WU4 and WU6 first even though they are not the gate: they are what makes the six live attempts after
-them debuggable rather than seventy minutes of silence each. WU1 before both deploy units because it
-decides what is being deployed. WU3's public-repository measurement happens as early as the
-authorization allows, because a positive answer deletes half of WU2.
+WU4 and WU6 landed first because they make the later live attempts debuggable rather than seventy
+minutes of silence each. WU3 begins with the smallest disposable upload probe. Its source-service code
+starts only after the installation token proves it can complete the three app-version operations. The
+GitHub App is required only for WU3's private acceptance, not for that upload proof.
 
 ## Run log
 
@@ -306,13 +352,17 @@ the repository-root descriptor, completed every build command, and uploaded a 47
 The later deploy failed as expected because this build-only probe had neither the app database nor its
 runtime environment. The disposable service was deleted afterwards.
 
-### GitHub authorization recheck (2026-08-11)
+### GitHub authorization boundary (2026-08-11)
 
-The operator completed a GitHub authorization in the browser, but the Zerops API identity used by the
-installation still answers `githubAuthorizationRequired`. That identity is Zerops owner
-`matejka@contember.com` (display name `David`) in the `Contember` organization. The authorization was
-therefore either completed as another Zerops user or did not finish for this identity. WU3 remains
-blocked until `getGithubRepositories` succeeds for the installation identity.
+The operator completed the Zerops GitHub OAuth flow, and the GUI repository picker listed
+`contember/fabrika-example-zerops`. The earlier inference that authorization had not completed was
+wrong: `getGithubRepositories` was being called with an identity that cannot consume a user's grant.
+
+The decisive probe used the exact project-scoped integration token stored on `control`, not a local
+personal token. On disposable service `wu3oauthprobe`, `SetupExternalRepositoryIntegration` returned
+`400 githubAuthorizationRequired`; the status endpoint then returned
+`noExternalRepositoryIntegration`. The service was deleted. This proves the native integration cannot
+be configured by the installation identity even when the GUI OAuth grant exists. → ADR-0029.
 
 ### WU2, WU4 and WU6 code checkpoint (2026-08-11)
 
@@ -339,7 +389,22 @@ artifact verification. These are code and integration-test witnesses only: WU2's
 WU4's live fast failure and WU6's live API/console log remain open until a release reaches the
 installation.
 
-The GitHub authorization was checked again after this checkpoint and still returned
-`githubAuthorizationRequired` for the same installation identity. No release was cut: the required WU3
-public-repository measurement decides whether its integration replaces WU2's public URL path, and the
-installation should roll out that decision once rather than deploy two competing mechanisms in turn.
+No release was cut at this checkpoint. The later direct integration probe established that the
+installation token cannot consume the GUI user's OAuth grant, so releasing WU2 alone would still leave
+the private half of the gate impossible.
+
+### WU3 architecture checkpoint (2026-08-11)
+
+The native repository-integration plan is retired by the authorization-boundary probe above. The
+replacement is [ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md):
+an operator-owned GitHub App supplies machine identity, and a non-public per-installation `source`
+service transports an exact repository snapshot through Zerops' app-version upload pipeline. Zerops
+still executes the application build and deploy.
+
+The upload prerequisite then passed live on disposable service `wu3uploadprobe`. The existing
+installation token created app version `vjY1dFq2Q2uXWASEjGizWg`, uploaded 24.9 KiB of source and started
+process `zyEbPBfKSpSKSvCNy6nZOw`. Zerops completed `bun install --frozen-lockfile`, built the application
+and uploaded a 47.3 MiB deploy artifact. The runtime deploy failed because the deliberately empty probe
+had neither the app database nor runtime environment. The service was deleted. WU3 can now implement
+the service, authenticated RPC, GitHub App setup, private-source fetch and removal of WU2's temporary
+application `buildFromGit` path.

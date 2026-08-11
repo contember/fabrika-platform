@@ -23,5 +23,7 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
   — one gate: add a GitHub repository, **public or private**, and get it deployed into the Zerops
   account. Consumes [`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md),
   [`69`](../backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md) and
-  [`70`](../backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md). The private
-  half waits on the operator authorizing GitHub on the Zerops account.
+  [`70`](../backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md). A live probe
+  proved Zerops' GUI OAuth grant is unavailable to the control plane's integration token. The private
+  half now uses an operator-owned GitHub App and a per-installation `source` service that uploads an
+  exact repository snapshot for Zerops to build ([ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md)).

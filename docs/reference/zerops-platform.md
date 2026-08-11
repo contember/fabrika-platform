@@ -500,19 +500,21 @@ Consequences, and they are ordering rules rather than facts about a field:
 Measured on a throwaway `alpine/bun@1.3` service (`wu1probe`), since deleted, against the public
 `contember/fabrika-platform`.
 
-| Behaviour                                                             | Result                                                                                          |
-| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| An import whose service declares `buildFromGit`                       | **Starts a build by itself** — the response carries a second process, `actionName: stack.build` |
-| What the resulting app version records                                | `publicGitSource: {gitUrl, branchName: "main", configContentFromImport: false, explicitSetup}`  |
-| `PUT /service-stack/{id}/trigger-pipeline` with **no** `buildFromGit` | **Refused**, both before and after a successful build from that source                          |
-| The same call **with** `buildFromGit`                                 | Accepted; the version built and moved on to deploy                                              |
-| Branch, when the URL names none                                       | **`main`**, chosen by the platform                                                              |
+| Behaviour                                                                                     | Result                                                                                          |
+| --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| An import whose service declares `buildFromGit`                                               | **Starts a build by itself** — the response carries a second process, `actionName: stack.build` |
+| What the resulting app version records                                                        | `publicGitSource: {gitUrl, branchName: "main", configContentFromImport: false, explicitSetup}`  |
+| `PUT /service-stack/{id}/trigger-pipeline` with **no** `buildFromGit`                         | **Refused**, both before and after a successful build from that source                          |
+| The same call **with** `buildFromGit`                                                         | Accepted; the version built and moved on to deploy                                              |
+| Branch, when the URL names none                                                               | **`main`**, chosen by the platform                                                              |
+| App-version create → presigned upload → `build-and-deploy`, using a project integration token | **Accepted**; Zerops unpacked the uploaded repository root and completed its build              |
 
 **A public build source is a property of an app VERSION, never of the service.** Nothing durable is
-configured by handing one to an import or to a trigger — so **every** deploy must supply it again. The
-alternative is the repository integration
-([`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md)), which is the durable form and the
-only one that reaches a private repository.
+configured by handing one to an import or to a trigger — so **every** deploy must supply it again.
+Zerops also offers a durable user-scoped repository integration, but the Fabrika installation token
+cannot consume that user's OAuth grant. Fabrika's unattended private-source path therefore creates an
+app version and uploads source through the operator-owned GitHub App described by
+[`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md) and ADR-0029.
 
 Two smaller things, both worth knowing before debugging one:
 
@@ -525,6 +527,28 @@ Two smaller things, both worth knowing before debugging one:
   version had not moved eight minutes later. Polling the version alone therefore cannot distinguish a
   failed build from a queued one — see
   [`70`](../backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md).
+
+The upload row was measured on 2026-08-11 with the exact project-scoped integration token installed on
+`control`, against disposable service `wu3uploadprobe` in `fabrika-install-test` (deleted afterwards).
+The uploaded standalone example was 24.9 KiB compressed / 71.7 KiB extracted. Zerops completed
+`bun install --frozen-lockfile`, prepared a 47.3 MiB deploy artifact and uploaded 9.6 MiB of it. The app
+version recorded `source: CLI` and no `publicGitSource` or GitHub integration. Its runtime deploy then
+failed as expected because the probe had no application database or environment; the completed build
+is the witness relevant to source transport.
+
+A second disposable app-version probe measured the credential-bearing destination without recording
+its query: HTTPS, host `proxy.app-prg1.zerops.io`, no explicit port, exact path
+`/api/rest/object-storage/upload`, empty username and password, a non-empty query, and no fragment. The
+service `wu3urlprobe` was deleted afterwards. A source transporter can therefore reject every other
+origin or path before it reads repository bytes and can refuse redirects instead of forwarding a
+presigned upload credential.
+
+A third disposable service (`wu3stateprobe`) tested the pre-trigger recovery boundary. A new app
+version reported `UPLOADING`; after a successful archive PUT it still reported `UPLOADING` even after
+the request had returned. `deleteAppVersion` then returned `{ success: true }` and the version was no
+longer readable. The same delete also removed a second version that had received no upload. Fabrika
+must therefore persist its own upload-complete checkpoint, and it can clean both ambiguous pre-trigger
+states with the exact API available to the project integration token. The service was deleted.
 
 ### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — updating a running installation
 
