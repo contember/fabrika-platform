@@ -190,4 +190,56 @@ authorization exists and is otherwise independent — do not let it block WU4.
 
 ## Run log
 
-<!-- Append as you work. -->
+### WU1 — the build-source experiment (2026-08-11)
+
+Run against `fabrika-install-test` (`AI6fLiNmTQGJQvlhbUtBaw`) on a throwaway service `wu1probe`
+(`alpine/bun@1.3`, one container), not on the example app — the question is a platform behaviour and
+does not need a database or a working application to answer.
+
+**An app can already declare a build source, with no code change.**
+`ZeropsServiceSpec = Omit<ZeropsImportService, ZeropsCompilerOwnedServiceField>` and the owned set is
+`envIsolation | override | envSecrets | dotEnvSecrets | mode | os` (`types.ts:69-80`) — `buildFromGit`
+is not subtracted. Compiling the committed example with one added to `notesapi` emits
+`buildFromGit: "https://github.com/contember/fabrika-platform"` into the import document verbatim. So
+the authoring surface is not the gap; the trigger is.
+
+**An import that declares `buildFromGit` starts a build by itself.** The `ImportServiceStack` response
+carried a second process, `actionName: stack.build`, with an app version whose
+`publicGitSource` was `{gitUrl, branchName: "main", configContentFromImport: false, explicitSetup: true}`.
+Recorded as a platform fact, not a guess.
+
+**But the source does NOT persist for a later trigger.** On that same service, in this order:
+
+| call                                                             | result                                    |
+| ---------------------------------------------------------------- | ----------------------------------------- |
+| `PUT trigger-pipeline` body `{}`                                 | refused — `Service stack not found`       |
+| `PUT trigger-pipeline` body `{"zeropsSetup":"iam"}`              | refused — `Invalid parameter provided`    |
+| `PUT trigger-pipeline` body `{"buildFromGit":…,"zeropsSetup":…}` | accepted — app version reached `BUILDING` |
+
+The two refusals name nothing useful and disagree with each other, which is worth knowing on its own;
+what matters is that the same service id accepted the call the moment a source was in the body. So
+`publicGitSource` is a property of an app VERSION, not durable service configuration —
+**`trigger-deploy` must pass the source on every deploy.** WU1 is therefore the larger version: thread
+it from the app config through `ZeropsStoredTarget` → `ZeropsRuntimeTarget` → the trigger. The small
+version — "the import already carries it, nothing to do" — is dead.
+
+**Finding A — a failed `stack.build` leaves the app version at `WAITING_TO_BUILD` forever.** The
+import's build process was `FAILED` 500 ms after it started (12:33:41.202 → 12:33:41.702, no build
+container, no message on the process object), and its app version still read `WAITING_TO_BUILD` eight
+minutes later. `await-deploy` polls `getAppVersion` and nothing else (`provider.ts:211-219`) with
+`POLL_TIMEOUT_MS = 70 * 60 * 1000` — so this failure mode hangs a deploy for **seventy minutes** and
+then reports a timeout that names neither the build nor the reason. Needs its own item.
+
+**Finding B — the example app is not shaped like the app it claims to be.** Zerops reads `zerops.yaml`
+from the root of the repository it builds, and the example's lives at
+`examples/zerops-app/zerops.yaml` inside this monorepo — which its own header already admits ("it
+lives here because this example IS that repo … for convenience"). A public build source pointed at
+`contember/fabrika-platform` therefore cannot find the `notesapi` setup. Either the example moves to
+its own public repository, or the deploy passes `zeropsYaml` inline (the trigger body supports it and
+`api.ts:326` already declares it, but `provider.ts:190` does not send it). This is a WU1 decision, not
+a detail — it changes what a fabrika app on Zerops has to look like.
+
+**WU2 may be smaller than filed.** [`60`](../backlog/60-the-example-app-has-no-light-tier-descriptor.md)
+is about `fabrika-test`, where `notesapi` was created by hand against the shared `db`. On a fresh
+installation the example's own import creates `notesdb`, which is exactly what its committed
+`zerops.yaml` interpolates. Confirm on the target before spending the WU.
