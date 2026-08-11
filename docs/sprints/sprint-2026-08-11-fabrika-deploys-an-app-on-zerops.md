@@ -313,3 +313,33 @@ installation still answers `githubAuthorizationRequired`. That identity is Zerop
 `matejka@contember.com` (display name `David`) in the `Contember` organization. The authorization was
 therefore either completed as another Zerops user or did not finish for this identity. WU3 remains
 blocked until `getGithubRepositories` succeeds for the installation identity.
+
+### WU2, WU4 and WU6 code checkpoint (2026-08-11)
+
+WU4 now watches the pipeline process as well as the app version. A terminal process failure takes
+precedence over an apparently active version and names both ids and both observed statuses. The focused
+provider and installation suites passed 36 tests; independent review found and closed the
+`process=FAILED` + `version=ACTIVE` ordering edge. Commit: `ebb4d3c`.
+
+WU6 now serializes provider event lines as `RunLogLine` NDJSON into the run's existing `log_key` object
+and flushes the queue before either success or failure becomes terminal. A provider that emits no
+control-side lines performs no object write, so a Cloudflare runner-owned log is not overwritten. The
+focused control suites passed 38 tests; the success-path test holds two writes open in turn and proves
+both serialization and the terminal-transition barrier through the existing run-log reader. Commit:
+`96a782b`.
+
+WU2 now derives an ephemeral public `buildFromGit` value from the registered repository and resolved
+run ref. It normalizes full head and tag refs, refuses credential-bearing or malformed repository URLs
+before any platform mutation, and does not widen the stored target. The focused provider suites passed
+33 tests after independent review found and closed malformed URI-scheme rewriting. Commit: `8e95c1c`.
+
+All three units passed their package typechecks, dprint checks and scoped diff checks. Main-branch CI
+run `31508206043` then passed quality, the complete PostgreSQL/S3 suite, deployable builds and release
+artifact verification. These are code and integration-test witnesses only: WU2's `ACTIVE` application,
+WU4's live fast failure and WU6's live API/console log remain open until a release reaches the
+installation.
+
+The GitHub authorization was checked again after this checkpoint and still returned
+`githubAuthorizationRequired` for the same installation identity. No release was cut: the required WU3
+public-repository measurement decides whether its integration replaces WU2's public URL path, and the
+installation should roll out that decision once rather than deploy two competing mechanisms in turn.
