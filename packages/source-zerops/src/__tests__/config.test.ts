@@ -45,7 +45,12 @@ describe('source runtime configuration', () => {
 			githubFetch: (input, init) => {
 				requests.push(input instanceof Request ? input.url : input.toString())
 				expect(new Headers(init?.headers).get('authorization')).toStartWith('Bearer ')
-				return Promise.resolve(Response.json({ id: 42 }))
+				return Promise.resolve(Response.json({
+					id: 42,
+					app_id: 123,
+					target_type: 'Organization',
+					account: { login: 'contember', type: 'Organization' },
+				}))
 			},
 		})
 		const response = await runtime.service.fetch(

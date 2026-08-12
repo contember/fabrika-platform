@@ -18,6 +18,28 @@ export interface GitHubInstallationToken {
 	expiresAt: number
 }
 
+export interface GitHubAppIdentity {
+	readonly id: number
+	readonly slug: string
+	readonly htmlUrl: string
+	readonly owner: {
+		readonly login: string
+		readonly type: 'Organization' | 'User'
+	}
+}
+
+export interface GitHubAppWebhookConfig {
+	readonly url: string
+	readonly contentType: 'json' | 'form'
+	readonly insecureSsl: '0' | '1'
+}
+
+export interface GitHubAppWebhookUpdate {
+	readonly url: string
+	readonly secret: string
+	readonly signal?: AbortSignal
+}
+
 export interface GitHubRepositoryTokenRequest {
 	installationId: number
 	owner: string
@@ -36,6 +58,7 @@ const GITHUB_API_VERSION = '2022-11-28'
 const GITHUB_USER_AGENT = 'vozka'
 const APP_ID_PATTERN = /^[1-9][0-9]*$/
 const REPOSITORY_COMPONENT_PATTERN = /^[A-Za-z0-9_.-]+$/
+const APP_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/
 const NOT_FOUND = Symbol('not-found')
 
 /** GitHub App machine identity. Webhook authentication belongs to the receiving service. */
@@ -74,6 +97,54 @@ export class GitHubAppClient {
 		return new GitHubAppClient(config.appId, privateKey, apiBaseUrl, config.fetch ?? fetch, config.now ?? Date.now, timeoutMs)
 	}
 
+	/** Read and bind the public identity represented by this client's App credentials. */
+	async getAuthenticatedApp(signal?: AbortSignal): Promise<GitHubAppIdentity> {
+		const body = await this.requestJson('/app', {}, signal, false)
+		if (body === NOT_FOUND) throw responseError()
+		const identity = decodeAppIdentity(body)
+		if (identity === null || String(identity.id) !== this.appId) throw responseError()
+		return identity
+	}
+
+	/** Read the App webhook transport settings without exposing GitHub's masked secret field. */
+	async getWebhookConfig(signal?: AbortSignal): Promise<GitHubAppWebhookConfig> {
+		const body = await this.requestJson('/app/hook/config', {}, signal, false)
+		if (body === NOT_FOUND) throw responseError()
+		const config = decodeWebhookConfig(body)
+		if (config === null) throw responseError()
+		return config
+	}
+
+	/** Set the App webhook to JSON over verified TLS and bind GitHub's response to that request. */
+	async updateWebhookConfig(input: GitHubAppWebhookUpdate): Promise<GitHubAppWebhookConfig> {
+		const webhookUrl = normalizeWebhookUrl(input.url)
+		validateWebhookSecret(input.secret)
+		const body = await this.requestJson(
+			'/app/hook/config',
+			{
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ url: webhookUrl, content_type: 'json', insecure_ssl: '0', secret: input.secret }),
+			},
+			input.signal,
+			false,
+		)
+		if (body === NOT_FOUND) throw responseError()
+		const config = decodeWebhookConfig(body)
+		if (config === null || config.url !== webhookUrl || config.contentType !== 'json' || config.insecureSsl !== '0') {
+			throw responseError()
+		}
+		return config
+	}
+
+	/** Resolve the App installation owned by one organization. A 404 is an expected miss. */
+	async resolveOrganizationInstallationId(organization: string, signal?: AbortSignal): Promise<number | null> {
+		validateRepositoryComponent(organization)
+		const body = await this.requestJson(`/orgs/${organization}/installation`, {}, signal, true)
+		if (body === NOT_FOUND) return null
+		return this.decodeInstallationId(body, organization, 'Organization')
+	}
+
 	/** Resolve the App installation for one GitHub repository. A 404 is an expected miss. */
 	async resolveInstallationId(owner: string, repository: string, signal?: AbortSignal): Promise<number | null> {
 		validateRepositoryComponent(owner)
@@ -82,11 +153,7 @@ export class GitHubAppClient {
 		if (body === NOT_FOUND) {
 			return null
 		}
-		const id = objectField(body, 'id')
-		if (typeof id !== 'number' || !isPositiveSafeInteger(id)) {
-			throw responseError()
-		}
-		return id
+		return this.decodeInstallationId(body, owner)
 	}
 
 	/** Mint a read-only token restricted to one repository in the selected installation. */
@@ -180,6 +247,24 @@ export class GitHubAppClient {
 		} catch {
 			throw configurationError()
 		}
+	}
+
+	private decodeInstallationId(body: unknown, accountLogin: string, requiredType?: 'Organization' | 'User'): number {
+		const id = objectField(body, 'id')
+		const appId = objectField(body, 'app_id')
+		const targetType = objectField(body, 'target_type')
+		const account = objectField(body, 'account')
+		const login = objectField(account, 'login')
+		const accountType = objectField(account, 'type')
+		if (
+			typeof id !== 'number' || !isPositiveSafeInteger(id) || typeof appId !== 'number' || !isPositiveSafeInteger(appId)
+			|| String(appId) !== this.appId || (targetType !== 'Organization' && targetType !== 'User') || accountType !== targetType
+			|| (requiredType !== undefined && targetType !== requiredType) || typeof login !== 'string'
+			|| login.toLowerCase() !== accountLogin.toLowerCase()
+		) {
+			throw responseError()
+		}
+		return id
 	}
 
 	private now(): number {
@@ -363,6 +448,79 @@ function validateRepositoryComponent(value: string): void {
 	if (value.length === 0 || value.length > 100 || !REPOSITORY_COMPONENT_PATTERN.test(value) || value === '.' || value === '..') {
 		throw configurationError()
 	}
+}
+
+function normalizeWebhookUrl(value: string): string {
+	let url: URL
+	try {
+		url = new URL(value)
+	} catch {
+		throw configurationError()
+	}
+	if (
+		url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '' || url.hostname === ''
+	) {
+		throw configurationError()
+	}
+	return url.toString()
+}
+
+function validateWebhookSecret(value: string): void {
+	if (value.length === 0 || value.length > 4096 || hasAsciiControl(value)) throw configurationError()
+}
+
+function decodeAppIdentity(value: unknown): GitHubAppIdentity | null {
+	const id = objectField(value, 'id')
+	const slug = objectField(value, 'slug')
+	const htmlUrl = objectField(value, 'html_url')
+	const owner = objectField(value, 'owner')
+	const login = objectField(owner, 'login')
+	const type = objectField(owner, 'type')
+	if (
+		typeof id !== 'number' || !isPositiveSafeInteger(id) || typeof slug !== 'string' || !APP_SLUG_PATTERN.test(slug)
+		|| typeof htmlUrl !== 'string' || typeof login !== 'string' || login.length === 0 || login.length > 100
+		|| !REPOSITORY_COMPONENT_PATTERN.test(login) || (type !== 'Organization' && type !== 'User')
+	) {
+		return null
+	}
+	let parsedHtmlUrl: URL
+	try {
+		parsedHtmlUrl = new URL(htmlUrl)
+	} catch {
+		return null
+	}
+	if (
+		parsedHtmlUrl.protocol !== 'https:' || parsedHtmlUrl.hostname !== 'github.com' || parsedHtmlUrl.port !== ''
+		|| parsedHtmlUrl.username !== '' || parsedHtmlUrl.password !== '' || parsedHtmlUrl.search !== '' || parsedHtmlUrl.hash !== ''
+		|| parsedHtmlUrl.pathname !== `/apps/${slug}`
+	) {
+		return null
+	}
+	return { id, slug, htmlUrl, owner: { login, type } }
+}
+
+function decodeWebhookConfig(value: unknown): GitHubAppWebhookConfig | null {
+	const url = objectField(value, 'url')
+	const contentType = objectField(value, 'content_type')
+	const insecureSsl = objectField(value, 'insecure_ssl')
+	if (typeof url !== 'string' || (contentType !== 'json' && contentType !== 'form')) return null
+	let normalized: string
+	try {
+		normalized = normalizeWebhookUrl(url)
+	} catch {
+		return null
+	}
+	if (normalized !== url) return null
+	if (insecureSsl !== '0' && insecureSsl !== '1' && insecureSsl !== 0 && insecureSsl !== 1) return null
+	return { url, contentType, insecureSsl: String(insecureSsl) === '0' ? '0' : '1' }
+}
+
+function hasAsciiControl(value: string): boolean {
+	for (const character of value) {
+		const code = character.charCodeAt(0)
+		if (code < 32 || code === 127) return true
+	}
+	return false
 }
 
 function isPositiveSafeInteger(value: number): boolean {

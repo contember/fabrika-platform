@@ -6,6 +6,8 @@ const NOW = Date.UTC(2026, 7, 11, 10, 20, 30)
 const EXPIRES_AT = '2026-08-11T11:20:30.000Z'
 const SECRET_TOKEN = 'ghs_private-installation-token'
 const SECRET_BODY = 'upstream-secret-response-body'
+const WEBHOOK_URL = 'https://control.example.test/webhooks/github'
+const WEBHOOK_SECRET = 'private-webhook-secret'
 
 const keyPair = (format: 'pkcs1' | 'pkcs8'): string => {
 	const { privateKey } = generateKeyPairSync('rsa', {
@@ -18,6 +20,29 @@ const keyPair = (format: 'pkcs1' | 'pkcs8'): string => {
 
 const PKCS1_KEY = keyPair('pkcs1')
 const PKCS8_KEY = keyPair('pkcs8')
+
+const installation = (id: number, login = 'contember', type: 'Organization' | 'User' = 'Organization'): Record<string, unknown> => ({
+	id,
+	app_id: 123456,
+	target_type: type,
+	account: { login, type },
+})
+
+const appIdentity = (overrides: Readonly<Record<string, unknown>> = {}): Record<string, unknown> => ({
+	id: 123456,
+	slug: 'fabrika-test',
+	html_url: 'https://github.com/apps/fabrika-test',
+	owner: { login: 'contember', type: 'Organization' },
+	...overrides,
+})
+
+const webhookConfig = (overrides: Readonly<Record<string, unknown>> = {}): Record<string, unknown> => ({
+	url: WEBHOOK_URL,
+	content_type: 'json',
+	insecure_ssl: '0',
+	secret: '********',
+	...overrides,
+})
 
 interface CapturedRequest {
 	url: string
@@ -89,7 +114,7 @@ async function errorOf(operation: Promise<unknown>): Promise<Error> {
 describe('GitHubAppClient boot and JWT', () => {
 	test('imports and caches both GitHub PKCS1 and PKCS8 keys at async boot', async () => {
 		for (const privateKeyPem of [PKCS1_KEY, PKCS8_KEY]) {
-			const capture = capturingFetch([Response.json({ id: 42 })])
+			const capture = capturingFetch([Response.json(installation(42))])
 			const github = await client(capture.fetch, privateKeyPem)
 			expect(await github.resolveInstallationId('contember', 'fabrika')).toBe(42)
 		}
@@ -107,7 +132,7 @@ describe('GitHubAppClient boot and JWT', () => {
 	})
 
 	test('signs bounded RS256 App JWT claims using the injected clock', async () => {
-		const capture = capturingFetch([Response.json({ id: 42 })])
+		const capture = capturingFetch([Response.json(installation(42))])
 		expect(await (await client(capture.fetch)).resolveInstallationId('contember', 'fabrika')).toBe(42)
 		const authorization = new Headers(requestAt(capture.requests, 0).init?.headers).get('authorization')
 		const jwt = authorization?.slice('Bearer '.length) ?? ''
@@ -124,7 +149,7 @@ describe('GitHubAppClient boot and JWT', () => {
 describe('GitHubAppClient requests', () => {
 	test('uses exact lookup path and a repository-scoped read-only token request', async () => {
 		const capture = capturingFetch([
-			Response.json({ id: 77 }),
+			Response.json(installation(77)),
 			Response.json({ token: SECRET_TOKEN, expires_at: EXPIRES_AT }),
 		])
 		const github = await client(capture.fetch)
@@ -175,6 +200,107 @@ describe('GitHubAppClient requests', () => {
 		const error = await errorOf((await client(capture.fetch)).mintRepositoryToken(tokenInput()))
 		expect(error.message).toBe('GitHub App response is invalid')
 		expect(error.message).not.toContain(SECRET_BODY)
+	})
+})
+
+describe('GitHubAppClient operator verification', () => {
+	test('reads and binds the authenticated App identity with the exact App-JWT request', async () => {
+		const capture = capturingFetch([Response.json(appIdentity())])
+		const github = await client(capture.fetch)
+		expect(await github.getAuthenticatedApp()).toEqual({
+			id: 123456,
+			slug: 'fabrika-test',
+			htmlUrl: 'https://github.com/apps/fabrika-test',
+			owner: { login: 'contember', type: 'Organization' },
+		})
+		const request = requestAt(capture.requests, 0)
+		expect(request.url).toBe('https://github.example/api/v3/app')
+		expect(request.init?.method).toBeUndefined()
+		expect(new Headers(request.init?.headers).get('authorization')).toStartWith('Bearer ')
+		expect(request.init?.redirect).toBe('error')
+	})
+
+	test('reads webhook config without returning its masked secret', async () => {
+		const capture = capturingFetch([Response.json(webhookConfig())])
+		const github = await client(capture.fetch)
+		const config = await github.getWebhookConfig()
+		expect(config).toEqual({ url: WEBHOOK_URL, contentType: 'json', insecureSsl: '0' })
+		expect(requestAt(capture.requests, 0).url).toBe('https://github.example/api/v3/app/hook/config')
+		expect(JSON.stringify(config)).not.toContain('********')
+	})
+
+	test('updates webhook config with an exact secure body and binds the response', async () => {
+		const capture = capturingFetch([Response.json(webhookConfig())])
+		const github = await client(capture.fetch)
+		expect(await github.updateWebhookConfig({ url: WEBHOOK_URL, secret: WEBHOOK_SECRET })).toEqual({
+			url: WEBHOOK_URL,
+			contentType: 'json',
+			insecureSsl: '0',
+		})
+		const request = requestAt(capture.requests, 0)
+		expect(request.url).toBe('https://github.example/api/v3/app/hook/config')
+		expect(request.init?.method).toBe('PATCH')
+		expect(request.init?.body).toBe(JSON.stringify({
+			url: WEBHOOK_URL,
+			content_type: 'json',
+			insecure_ssl: '0',
+			secret: WEBHOOK_SECRET,
+		}))
+		expect(new Headers(request.init?.headers).get('content-type')).toBe('application/json')
+	})
+
+	test('verifies organization and repository installations without modifying repository access', async () => {
+		const capture = capturingFetch([
+			Response.json(installation(71, 'Contember')),
+			Response.json(installation(72, 'Contember', 'User')),
+		])
+		const github = await client(capture.fetch)
+		expect(await github.resolveOrganizationInstallationId('contember')).toBe(71)
+		expect(await github.resolveInstallationId('contember', 'fabrika')).toBe(72)
+		expect(capture.requests.map((request) => request.url)).toEqual([
+			'https://github.example/api/v3/orgs/contember/installation',
+			'https://github.example/api/v3/repos/contember/fabrika/installation',
+		])
+		for (const request of capture.requests) expect(request.init?.method).toBeUndefined()
+	})
+
+	test('rejects repository installations bound to another App, owner, or account type', async () => {
+		const responses = [
+			Response.json({ ...installation(72), app_id: 999 }),
+			Response.json(installation(72, 'attacker')),
+			Response.json({ ...installation(72), target_type: 'User' }),
+			Response.json({ ...installation(72), account: { login: 'contember', type: 'User' } }),
+		]
+		for (const response of responses) {
+			const github = await client(capturingFetch([response]).fetch)
+			await expect(github.resolveInstallationId('contember', 'fabrika')).rejects.toThrow('GitHub App response is invalid')
+		}
+	})
+
+	test('treats organization installation 404 as a miss', async () => {
+		const capture = capturingFetch([new Response(SECRET_BODY, { status: 404 })])
+		expect(await (await client(capture.fetch)).resolveOrganizationInstallationId('contember')).toBeNull()
+	})
+
+	test('rejects identities, webhook updates, and installations that are not bound to the request', async () => {
+		const cases: Array<(github: GitHubAppClient) => Promise<unknown>> = [
+			(github) => github.getAuthenticatedApp(),
+			(github) => github.updateWebhookConfig({ url: WEBHOOK_URL, secret: WEBHOOK_SECRET }),
+			(github) => github.resolveOrganizationInstallationId('contember'),
+			(github) => github.resolveInstallationId('contember', 'fabrika'),
+		]
+		const responses: Response[] = [
+			Response.json(appIdentity({ id: 999 })),
+			Response.json(webhookConfig({ url: 'https://attacker.example/hook' })),
+			Response.json(installation(71, 'attacker')),
+			Response.json({ ...installation(72), id: 'not-an-id' }),
+		]
+		const operations = cases[Symbol.iterator]()
+		for (const response of responses) {
+			const operation = operations.next().value
+			if (operation === undefined) throw new Error('missing verification case')
+			await expect(operation(await client(capturingFetch([response]).fetch))).rejects.toThrow('GitHub App response is invalid')
+		}
 	})
 })
 
@@ -236,6 +362,30 @@ describe('GitHubAppClient cancellation', () => {
 		expect(error.name).toBe('TimeoutError')
 		expect(error.message).toBe('GitHub App request timed out')
 	})
+
+	test('applies caller cancellation and the body deadline to operator methods', async () => {
+		const controller = new AbortController()
+		controller.abort(`operator leaked ${WEBHOOK_SECRET}`)
+		let requests = 0
+		const preAborted = await client(() => {
+			requests++
+			return Promise.reject(new Error('must not run'))
+		})
+		const aborted = await errorOf(preAborted.getAuthenticatedApp(controller.signal))
+		expect(aborted.name).toBe('AbortError')
+		expect(aborted.message).not.toContain(WEBHOOK_SECRET)
+		expect(requests).toBe(0)
+
+		const hangingBody = new ReadableStream<Uint8Array>({
+			start(bodyController) {
+				bodyController.enqueue(new TextEncoder().encode('{'))
+			},
+		})
+		const timed = await GitHubAppClient.create({ ...config(() => Promise.resolve(new Response(hangingBody))), timeoutMs: 5 })
+		const timeout = await errorOf(timed.getWebhookConfig())
+		expect(timeout.name).toBe('TimeoutError')
+		expect(timeout.message).toBe('GitHub App request timed out')
+	})
 })
 
 describe('GitHubAppClient validation and redaction', () => {
@@ -257,6 +407,11 @@ describe('GitHubAppClient validation and redaction', () => {
 		await expect(github.mintRepositoryToken({ installationId: 0, owner: 'owner', repository: 'repo' })).rejects.toThrow(
 			'GitHub App configuration is invalid',
 		)
+		await expect(github.resolveOrganizationInstallationId('../org')).rejects.toThrow('GitHub App configuration is invalid')
+		for (const url of ['http://control.example.test/hook', 'https://user:secret@control.example.test/hook', 'https://control.example.test/hook?q=1']) {
+			await expect(github.updateWebhookConfig({ url, secret: WEBHOOK_SECRET })).rejects.toThrow('GitHub App configuration is invalid')
+		}
+		await expect(github.updateWebhookConfig({ url: WEBHOOK_URL, secret: '' })).rejects.toThrow('GitHub App configuration is invalid')
 	})
 
 	test('redacts status, malformed body, network URL, JWT, token, and PEM details', async () => {
@@ -275,5 +430,12 @@ describe('GitHubAppClient validation and redaction', () => {
 		const malformed = capturingFetch([new Response(`${SECRET_BODY} ${SECRET_TOKEN}`, { status: 200 })])
 		const malformedError = await errorOf((await client(malformed.fetch)).mintRepositoryToken(tokenInput()))
 		expect(malformedError.message).toBe('GitHub App response is invalid')
+
+		const webhookStatus = capturingFetch([new Response(`${SECRET_BODY} ${WEBHOOK_SECRET}`, { status: 422 })])
+		const webhookError = await errorOf((await client(webhookStatus.fetch)).updateWebhookConfig({ url: WEBHOOK_URL, secret: WEBHOOK_SECRET }))
+		expect(webhookError.message).toBe('GitHub App request failed with status 422')
+		for (const secret of [SECRET_BODY, WEBHOOK_SECRET, requestAt(webhookStatus.requests, 0).url]) {
+			expect(webhookError.message).not.toContain(secret)
+		}
 	})
 })
