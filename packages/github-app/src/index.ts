@@ -22,6 +22,11 @@ export interface GitHubAppIdentity {
 	readonly id: number
 	readonly slug: string
 	readonly htmlUrl: string
+	readonly public: boolean
+	readonly permissions: {
+		readonly contents: 'read'
+	}
+	readonly events: readonly string[]
 	readonly owner: {
 		readonly login: string
 		readonly type: 'Organization' | 'User'
@@ -473,13 +478,18 @@ function decodeAppIdentity(value: unknown): GitHubAppIdentity | null {
 	const id = objectField(value, 'id')
 	const slug = objectField(value, 'slug')
 	const htmlUrl = objectField(value, 'html_url')
+	const publicApp = objectField(value, 'public')
+	const permissions = objectField(value, 'permissions')
+	const contents = objectField(permissions, 'contents')
+	const events = objectField(value, 'events')
 	const owner = objectField(value, 'owner')
 	const login = objectField(owner, 'login')
 	const type = objectField(owner, 'type')
 	if (
 		typeof id !== 'number' || !isPositiveSafeInteger(id) || typeof slug !== 'string' || !APP_SLUG_PATTERN.test(slug)
 		|| typeof htmlUrl !== 'string' || typeof login !== 'string' || login.length === 0 || login.length > 100
-		|| !REPOSITORY_COMPONENT_PATTERN.test(login) || (type !== 'Organization' && type !== 'User')
+		|| !REPOSITORY_COMPONENT_PATTERN.test(login) || (type !== 'Organization' && type !== 'User') || typeof publicApp !== 'boolean'
+		|| contents !== 'read' || !hasExactAppPermissions(permissions) || !isStringArray(events) || !events.includes('push')
 	) {
 		return null
 	}
@@ -496,7 +506,7 @@ function decodeAppIdentity(value: unknown): GitHubAppIdentity | null {
 	) {
 		return null
 	}
-	return { id, slug, htmlUrl, owner: { login, type } }
+	return { id, slug, htmlUrl, public: publicApp, permissions: { contents }, events, owner: { login, type } }
 }
 
 function decodeWebhookConfig(value: unknown): GitHubAppWebhookConfig | null {
@@ -521,6 +531,18 @@ function hasAsciiControl(value: string): boolean {
 		if (code < 32 || code === 127) return true
 	}
 	return false
+}
+
+function isStringArray(value: unknown): value is string[] {
+	return Array.isArray(value) && value.length <= 100 && value.every((item) => typeof item === 'string' && item.length > 0 && item.length <= 100)
+}
+
+function hasExactAppPermissions(value: unknown): boolean {
+	if (typeof value !== 'object' || value === null || objectField(value, 'contents') !== 'read') return false
+	const keys = Object.keys(value)
+	if (keys.some((key) => key !== 'contents' && key !== 'metadata')) return false
+	const metadata = objectField(value, 'metadata')
+	return metadata === undefined || metadata === 'read'
 }
 
 function isPositiveSafeInteger(value: number): boolean {

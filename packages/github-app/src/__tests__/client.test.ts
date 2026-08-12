@@ -32,6 +32,9 @@ const appIdentity = (overrides: Readonly<Record<string, unknown>> = {}): Record<
 	id: 123456,
 	slug: 'fabrika-test',
 	html_url: 'https://github.com/apps/fabrika-test',
+	public: false,
+	permissions: { contents: 'read', metadata: 'read' },
+	events: ['push'],
 	owner: { login: 'contember', type: 'Organization' },
 	...overrides,
 })
@@ -211,6 +214,9 @@ describe('GitHubAppClient operator verification', () => {
 			id: 123456,
 			slug: 'fabrika-test',
 			htmlUrl: 'https://github.com/apps/fabrika-test',
+			public: false,
+			permissions: { contents: 'read' },
+			events: ['push'],
 			owner: { login: 'contember', type: 'Organization' },
 		})
 		const request = requestAt(capture.requests, 0)
@@ -218,6 +224,30 @@ describe('GitHubAppClient operator verification', () => {
 		expect(request.init?.method).toBeUndefined()
 		expect(new Headers(request.init?.headers).get('authorization')).toStartWith('Bearer ')
 		expect(request.init?.redirect).toBe('error')
+	})
+
+	test('returns visibility and rejects missing repository authority or push delivery', async () => {
+		const publicCapture = capturingFetch([Response.json(appIdentity({ public: true, events: ['installation', 'push'] }))])
+		expect(await (await client(publicCapture.fetch)).getAuthenticatedApp()).toMatchObject({
+			public: true,
+			permissions: { contents: 'read' },
+			events: ['installation', 'push'],
+		})
+		for (
+			const response of [
+				appIdentity({ public: 'false' }),
+				appIdentity({ permissions: {} }),
+				appIdentity({ permissions: { contents: 'write' } }),
+				appIdentity({ permissions: { contents: 'read', administration: 'write' } }),
+				appIdentity({ permissions: { contents: 'read', metadata: 'write' } }),
+				appIdentity({ events: [] }),
+				appIdentity({ events: ['pull_request'] }),
+			]
+		) {
+			await expect((await client(capturingFetch([Response.json(response)]).fetch)).getAuthenticatedApp()).rejects.toThrow(
+				'GitHub App response is invalid',
+			)
+		}
 	})
 
 	test('reads webhook config without returning its masked secret', async () => {
