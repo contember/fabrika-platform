@@ -249,6 +249,11 @@ Consequences:
   read `/env` for the record id and `PUT /user-data/{id}` with `key` AND `content`.
   Delete-then-create is **not** needed — `PUT` replaces in place, so there is no
   window where the variable is missing.
+- **Init credential repair is create-only.** Missing RPC and GitHub variables use
+  `POST /service-stack/{id}/user-data` once and never follow a duplicate with
+  `PUT`. A duplicate or ambiguous result is accepted only when a bounded `/env`
+  reread returns the exact intended value. This prevents init from overwriting a
+  credential written by another operator.
 - **A key the service declares in its own `zerops.yaml` cannot be written through
   this API.** It conflicts on `POST` yet never appears in `/env`, so the conflict
   cannot be resolved to a record id. Fabrika refuses rather than guessing; replacing
@@ -710,10 +715,11 @@ operator authenticated with. The source key is written under different names on 
 has one value. Exactly one value is printed: the provisioning key, once, at the end, because it lives
 nowhere else and `platform init` asks for it.
 
-GitHub source configuration is optional at fresh install. `GITHUB_APP_ID` and
-`GITHUB_APP_PRIVATE_KEY` must be supplied together and are written only to source; without them public
-repositories still deploy anonymously. `GITHUB_WEBHOOK_SECRET` is independently optional and is
-written only to control. Source gets neither the Zerops integration token nor any GitHub API-base
+GitHub source configuration is optional at fresh install. An all-or-none App id/private-key pair is
+written only to source, and the independently optional webhook secret only to control. Without them,
+public repositories deploy anonymously. The subsequent interactive init either preserves a complete
+live App configuration, verifies an existing App or creates an organization-owned App through
+GitHub's manifest flow. Source gets neither the Zerops integration token nor any GitHub API-base
 setting.
 
 **Partly unverified against a real account.** The import step's behaviour is measured (08-10 section
@@ -722,7 +728,7 @@ above) and the command is written against it. Everything after it is not: in par
 whether client `NO_ACCESS` beside a project `ADMIN` grant is even accepted, and what the minted value
 looks like — and the two passes as a whole.
 
-### `fabrika platform init --provider=zerops` source upgrade
+### `fabrika platform init --provider=zerops` source and GitHub App setup
 
 Interactive `platform init` is also the supported upgrade/configuration path for an existing
 installation. After a separate operator confirmation, it reads the project and imports only `source`
@@ -730,7 +736,7 @@ when that service is missing. The import is a source-only services document with
 `startWithoutCode: true`; init waits for each exact process id returned by Zerops before reading or
 writing the service. Existing platform services and their app versions are not re-imported.
 
-The command then reconciles the shared RPC key directly in Zerops:
+The command reconciles the shared RPC key directly in Zerops:
 
 - equal valid keys on source and control are reused;
 - if exactly one side has a valid key and the other key is absent, that value repairs the absent side;
@@ -738,14 +744,59 @@ The command then reconciles the shared RPC key directly in Zerops:
 - an invalid value or two different values is refused rather than rotated.
 
 The one-sided rule makes a retry safe after the first of the two environment writes succeeds and the
-second fails. Optional App id/private key and webhook inputs follow the same ownership as fresh install.
-Omitting them preserves existing values. None of these source credentials is written to the sidecar
-checkout, repository or GitHub Environment; the sidecar still receives only the Zerops integration
-token and IAM provisioning key it already needs for deploy.
+second fails. Missing RPC and GitHub variables use create-only writes. A duplicate or ambiguous write
+is accepted only after a bounded exact reread proves the intended value; final repeated reads prove
+that the RPC keys match and that all three GitHub values equal the selected state. Init never uses the
+normal update seam to replace these credentials.
 
-**Not yet verified live.** The source-only import, one-sided key repair and optional credential writes
-are covered by the local installation suite, including a fail-after-first-write rerun. They have not
-yet been run against `fabrika-install-test`.
+[ADR-0030](../decisions/0030-persist-github-app-creation-before-success.md) defines the App-creation
+durability boundary. The shared manifest helper supports an optional, awaited and bounded `onCreated`
+callback. Zerops init supplies that callback and publishes the exact one-time App response to an
+absolute XDG state path outside the worktree before the helper reports success. The directory is
+owner-only (`0700`), the bounded final
+and fixed temporary files are owner-only (`0600`), and publication uses fsync, atomic rename and a
+parent-directory fsync. The strict file binds installation, project id and exact live control origin.
+Recognized safe stale temporary state is removed; an unsafe one is refused.
+
+Init classifies state before writing:
+
+| Live App id/key/webhook state | Bound recovery   | Requested repositories | Result                                                                                  |
+| ----------------------------- | ---------------- | ---------------------- | --------------------------------------------------------------------------------------- |
+| empty                         | absent           | none                   | Offer `create`, `existing` or `anonymous`; anonymous needs no control or proxy origin.  |
+| empty                         | absent           | one or more            | Offer `create` or `existing`; a requested repository requires an App.                   |
+| partial                       | absent           | any                    | Refuse; init does not guess or overwrite the missing fields.                            |
+| empty or matching partial     | exact match      | any                    | `resume` from recovery and create only the missing live fields.                         |
+| complete                      | absent/matching  | any                    | `preserve` the live fields and verify the App; do not rewrite them.                     |
+| any                           | invalid/mismatch | any                    | Refuse; the recovery binding and every present live value must agree before a mutation. |
+
+`create` requires empty live state and no recovery. Repositories in the App owner's organization
+default to a private App; cross-organization repositories require an explicit public App choice.
+`existing` verifies supplied App credentials rather than trusting their identifiers.
+
+Every App-backed path binds the manifest homepage and webhook URL to the exact live HTTPS control
+origin. Init authenticates as the App and verifies its identity, owner, visibility, exact permissions
+(`contents: read`, plus only GitHub's optional implicit `metadata: read`) and `push` event. It patches
+the webhook to the exact URL, JSON content type and TLS verification and reads the structure back.
+GitHub masks the webhook secret, so the GET cannot compare its value. Recovery is deleted only after
+the Zerops credentials and those GitHub checks succeed, and before the installation UI opens. Each
+App-backed init run then verifies the App installation for the organization or for every requested
+repository through App-JWT endpoints; Fabrika does not add repositories to an installation.
+
+A loopback TCP lock keyed by Zerops project and installation serializes init on one host. It is
+independent of the XDG recovery root and is not a distributed lock. Create-only conflicts and final
+exact rereads fail closed when they observe a competing writer, but cannot prevent another writer
+after final verification. The supported operational rule is one operator per project at a time.
+
+None of the source credentials enters the sidecar checkout, repository or GitHub Environment; the
+sidecar still receives only the Zerops integration token and IAM provisioning key it needs for deploy.
+One narrow orphan window remains: GitHub can irreversibly accept manifest conversion before
+`onCreated` begins or can persist its response. That App must be deleted and recreated because its
+private key cannot be recovered.
+
+**Not yet verified live.** The source-only import, RPC repair, App create/resume/preserve/existing
+states, anonymous path, create-only writes and verification are covered locally. The complete flow has
+not run against GitHub and `fabrika-install-test`. WU3's public and private application deploys remain
+live-only acceptance gates too.
 
 ## Fabrika placement mapping
 

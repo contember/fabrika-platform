@@ -12,11 +12,11 @@ fabrika deploys it into the Zerops account. Nothing short of that counts as done
 
 A work unit that does not move that criterion is out of scope, however tempting.
 
-**Operator prerequisite for the private gate.** The operator creates an organization-owned GitHub App,
-installs it on `contember/fabrika-example-zerops`, and configures its identity, private key and webhook
-secret once for this Fabrika installation. No Zerops GitHub OAuth grant or per-service GUI connection is
-part of the product path. The public source-upload path can be built and proved before those credentials
-exist; the private gate needs them.
+**Operator prerequisite for the private gate.** Interactive init creates or verifies the
+organization-owned GitHub App and configures its credentials once for this Fabrika installation. The
+operator approves its installation on `contember/fabrika-example-zerops` in GitHub's UI. No Zerops
+GitHub OAuth grant or per-service GUI connection is part of the product path. The public source-upload
+path works anonymously; the private gate needs the installed App.
 
 **Theme.** Everything proven on Zerops so far is the platform _running_. Its predecessors got an
 installation up from an empty project and taught `platform deploy` to run unattended from CI. Neither
@@ -152,9 +152,14 @@ Zerops build pipeline.
     `buildFromGit` path; both are implemented, with live parity still to prove.
 - **Code witness.** Commits `d091d67`, `49f3b17`, `4084234`, `4ab9ec2`, `5bc1f0e`, `68854f3` and
   `71e406a` implement this scope; `b55d059` makes archive order independent of GitHub metadata order
-  and `5c9d99f` migrates active legacy Zerops runs into the exact recoverable checkpoint. The source
-  service, provider lifecycle, control delegation, installation topology and supported upgrade flow
-  are locally verified. The acceptance below remains open until both live deploys succeed.
+  and `5c9d99f` migrates active legacy Zerops runs into the exact recoverable checkpoint. Commit
+  `627c5d9` implements the shared manifest flow, `419dffb` adopts it on Cloudflare without the
+  `onCreated` durability hook, and `0592334` adds the optional awaited bounded hook. Commits `3e4c2b6`,
+  `1e6f4b1` and `6a36a2d` implement App-JWT verification and create-only service variables; `e74bd1c`
+  supplies `onCreated` from Zerops and composes the seamless init described by
+  [ADR-0030](../decisions/0030-persist-github-app-creation-before-success.md). The source service,
+  provider lifecycle, control delegation, installation topology and supported upgrade flow are locally
+  verified. The complete live init and both live deploys remain open.
 - **Security gates.** Project-network reachability is not authorization. Tests must prove an unsigned
   source request is refused; the request binds repository, ref, installation, app version, upload URL
   and run; only the live-verified Zerops HTTPS upload origin, path, empty userinfo and non-empty signed
@@ -454,16 +459,41 @@ Commit `68854f3` added private `source` to both Zerops topologies and the genera
 on port 3000, installs `git`, has no public route or Zerops token, and is deployed in the enforced order
 `iam → operations → source → proxy → control`. Fresh `platform install` generates one shared RPC key;
 the source-side spelling is `FABRIKA_SOURCE_RPC_KEY` and the control-side spelling is
-`FABRIKA_ZEROPS_SOURCE_RPC_KEY`. The optional App pair is written only to source and the independently
-optional webhook secret only to control.
+`FABRIKA_ZEROPS_SOURCE_RPC_KEY`. A fresh install may receive an optional all-or-none App pair for source
+and an independently optional webhook secret for control. Otherwise source starts in anonymous mode
+and interactive init configures the App later.
 
-Interactive `platform init` is the supported upgrade path for an existing project. After confirmation,
-it imports only a missing source service from a services-only document with `startWithoutCode: true`,
-waits for the exact processes returned by Zerops and writes source settings directly to Zerops. It
-reuses matching valid RPC keys; copies a valid one-sided key to the absent side, including after a
-crash between writes; generates a key only when both are absent; and refuses invalid or mismatched
-values. Blank optional credential answers preserve the live settings. Source credentials never enter
-the sidecar checkout, repository or GitHub Environment.
+Commit `627c5d9` added the shared manifest helper. Commit `419dffb` adopted that helper on Cloudflare
+without an `onCreated` durability hook. Commit `0592334` added the optional, awaited and bounded
+`onCreated` callback. Zerops supplies it in commit `e74bd1c`: init writes GitHub's one-time conversion
+response to an absolute XDG state path outside the worktree before the helper reports success. The
+bounded recovery file has an exact installation, project and live-control-origin binding, owner-only
+directory and file modes, an atomic fsync-backed publish and strict stale-file cleanup.
+
+Commits `3e4c2b6` and `1e6f4b1` added strict App-JWT verification of the App identity, owner,
+visibility, exact read-only authority, `push` event, webhook structure and organization/repository
+installation. Commit `6a36a2d` added the create-only Zerops service-variable seam. Commit `e74bd1c`
+composed these pieces into `platform init`:
+
+- anonymous mode is offered only for empty live state with no recovery and no requested repository;
+- create, resume, existing and preserve modes require strict, mutually compatible live and recovery
+  state; partial or mismatched state is refused;
+- App-backed modes bind the manifest and webhook to the exact live HTTPS control origin, default a
+  same-organization App to private and require an explicit public choice across organizations;
+- missing RPC and GitHub values use create-only writes, with bounded exact rereads after duplicate or
+  ambiguous results and final stability reads for both RPC keys and all three GitHub fields;
+- recovery is deleted after durable Zerops credentials plus App identity and webhook structural
+  verification, before the App installation UI opens; every App-backed init run then verifies the
+  organization or each requested repository through App-JWT endpoints.
+
+The helper cannot close the instant after GitHub irreversibly accepts manifest conversion but before
+`onCreated` begins or can persist. Such an App must be deleted and recreated. GitHub masks the webhook
+secret, so readback verifies only the URL, JSON content type and TLS setting after the patch. A
+loopback TCP lock keyed by Zerops project and installation serializes init on one host independently of
+the XDG recovery root. It is not distributed: create-only conflicts and final rereads fail closed on
+observed interference, but cannot stop another host writing after final verification. One operator per
+project at a time is the supported operational boundary. Source credentials never enter the sidecar
+checkout, repository or GitHub Environment.
 
 Local witnesses for the landed code:
 
@@ -471,12 +501,13 @@ Local witnesses for the landed code:
   across four files;
 - the focused control verification for the delegation and lifecycle: 116 tests across 11 suites, plus
   the control and provider package typechecks;
-- the installation package suite: 307 passed, 0 failed, 2,813 expectations, plus its package typecheck
-  and `gen:check` reporting all 11 generated artifacts current;
+- the final installation package suite: 335 passed, 0 failed, 2,918 expectations; the focused seamless
+  init verification: 46 passed, 0 failed, 190 expectations; plus package typecheck and `gen:check`;
 - dprint, Biome, scoped diff checks and the repository no-type-hacks scan passed for each landed unit.
 
-No release or end-to-end live application deploy was performed at this checkpoint. WU3 therefore still
-needs the same exact commit to reach `ACTIVE` through app-version upload first as a public repository
-and then as a private repository in `fabrika-install-test`, with credential absence checked in logs and
-Zerops metadata. WU5's browser handoff, managed Operations environment and correlated exception ingest
-also remain live-only gates. The sprint and backlog item 47 stay open until those witnesses exist.
+No release, complete live GitHub/Zerops init or end-to-end live application deploy was performed at
+this checkpoint. WU3 therefore still needs the same exact commit to reach `ACTIVE` through app-version
+upload first as a public repository and then as a private repository in `fabrika-install-test`, with
+credential absence checked in logs and Zerops metadata. WU5's browser handoff, managed Operations
+environment and correlated exception ingest also remain live-only gates. The sprint and backlog item
+47 stay open until those witnesses exist.

@@ -9,8 +9,9 @@ blocked-by: []
 **Summary.** The operator-owned GitHub App, per-installation `source` service and application-version
 upload lifecycle from
 [ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md) are implemented
-and locally verified. This item stays open for the live public/private parity and credential-absence
-witness in `fabrika-install-test`. Effort L.
+and locally verified. [ADR-0030](../decisions/0030-persist-github-app-creation-before-success.md)
+makes the one-time App creation response durable during init. This item stays open for the complete
+live init, public/private parity and credential-absence witness in `fabrika-install-test`. Effort L.
 
 ## Problem
 
@@ -67,13 +68,30 @@ delivered the foundation; `b55d059` made the archive order canonical across GitH
   upgrades an existing project with a source-only `startWithoutCode: true` import and crash-safe key
   reconciliation: matching keys are reused, a valid one-sided key repairs the absent side, both absent
   generate one, and invalid or mismatched values are refused.
+- The shared manifest helper supports an optional, awaited and bounded `onCreated` hook. Zerops init
+  supplies it and durably stores the one-time App result before the helper reports success, in an
+  owner-only, bounded absolute XDG recovery file outside the worktree. It supports strict `create`,
+  `resume`, `existing`, `preserve` and `anonymous` states; partial or mismatched state fails closed.
+- Missing RPC and GitHub values use create-only Zerops writes. Duplicate or ambiguous results are
+  accepted only after bounded exact rereads, and final reads prove both RPC sides and all three GitHub
+  fields. A same-organization App defaults to private; a cross-organization App requires an explicit
+  public choice.
+- Init verifies App identity, owner, visibility, exact authority and webhook structure before deleting
+  recovery and opening the installation step. Every App-backed init run verifies the organization or
+  each repository through App-JWT endpoints. It never adds a repository to the installation.
 
-## Prerequisite that is not code
+A loopback TCP lock keyed by Zerops project and installation serializes init on one host. It is
+independent of the XDG recovery root. There is no distributed serialization. Create-only conflicts and
+final rereads fail closed when they observe concurrent remote writes, but cannot prevent a writer after
+final verification. One operator per project at a time is a supported operational requirement.
 
-The public witness needs no GitHub App. For the private witness, the operator creates one
-organization-owned GitHub App, installs it on the selected repository, and configures its identity and
-private key on source plus the independently held webhook secret on control. This is one
-installation-level action, not one Zerops GUI action per application service.
+## Operator step that remains
+
+The public witness needs no GitHub App. For the private witness, init creates or verifies the
+organization-owned GitHub App and configures source and control without exposing its credentials to
+the sidecar. The operator must still approve the App installation on the selected organization or
+repositories in GitHub's UI. This is one installation-level action, not one Zerops GUI action per
+application service.
 
 ## Acceptance
 
@@ -82,8 +100,12 @@ repository is public and again after it becomes private. Both runs use app-versi
 credential appears in Fabrika logs, Zerops process data or application-version metadata. An attacker
 upload URL receives zero bytes, and repository entries cannot expose local source-service files.
 
-The code-level attacker-destination and repository-safety checks pass. The two successful live deploys
-and live credential inspection have not been performed; they are the remaining acceptance work.
+The code-level attacker-destination, repository-safety and init recovery checks pass. The complete
+live App creation/install flow, two successful live deploys and live credential inspection have not
+been performed; they are the remaining acceptance work. GitHub can still accept manifest conversion
+and fail before `onCreated` can persist the response; that narrow orphan requires deleting and
+recreating the App. GitHub also masks the webhook secret, so post-patch readback proves only the URL,
+JSON content type and TLS setting.
 
 ## Touch points
 

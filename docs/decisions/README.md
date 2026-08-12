@@ -104,6 +104,12 @@ deploys its own installation. The service is now implemented for public anonymou
 private repositories. Production is fixed to `github.com`; it has no GitHub Enterprise configuration
 surface.
 
+ADR-0030 amends only ADR-0029's init durability detail. When Zerops supplies `onCreated`, the shared
+manifest helper does not report success until Zerops durably persists GitHub's one-time App
+credentials. Zerops init keeps that recovery in a bounded owner-only XDG file outside the worktree,
+uses create-only remote writes and exact rereads, and deletes recovery after the live App and webhook
+configuration are verified.
+
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
@@ -137,3 +143,4 @@ surface.
 - [0027](0027-platform-deploy-is-as-wide-as-the-provider-needs.md) — `platform deploy` is as wide as its provider needs, not uniformly wide — accepted (2026-08-06)
 - [0028](0028-zerops-apps-own-their-repository-root.md) — Zerops apps own their repository root — accepted (2026-08-11)
 - [0029](0029-an-operator-owned-github-app-delivers-zerops-sources.md) — An operator-owned GitHub App delivers Zerops application sources — accepted (2026-08-11)
+- [0030](0030-persist-github-app-creation-before-success.md) — Persist GitHub App creation before success — accepted; amends 0029's init durability detail (2026-08-12)

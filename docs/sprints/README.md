@@ -27,5 +27,7 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
   proved Zerops' GUI OAuth grant is unavailable to the control plane's integration token. The private
   half now uses an operator-owned GitHub App and a per-installation `source` service that uploads an
   exact repository snapshot for Zerops to build ([ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md)).
-  That service, the upload lifecycle and the install/init path are locally implemented; the public and
-  private live deploys plus WU5 remain open.
+  Its seamless init persists GitHub's one-time App response before success and verifies the resulting
+  remote state ([ADR-0030](../decisions/0030-persist-github-app-creation-before-success.md)). That
+  service, the upload lifecycle and the install/init path are locally implemented; the complete live
+  init, public and private live deploys, and WU5 remain open.
