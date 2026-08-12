@@ -1,12 +1,17 @@
 import type { EnvironmentConfig, SidecarScaffoldInput, SidecarScaffoldResult } from '@fabrika/installation-init'
+import type { ZeropsApi } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { rm } from 'node:fs/promises'
-import { checkedEnvironmentName, configureSourceService, type InitCollaborators, parseInitArgs, runInit } from '../init'
+import type { GitHubAppRecovery, GitHubAppRecoveryLock } from '../github-app-recovery'
+import { checkedEnvironmentName, configureSourceService, type InitCollaborators, parseGitHubRepositories, parseInitArgs, runInit } from '../init'
 import { recordingInitLog } from '../log'
 import { fakeZerops, platformServices } from './fake-zerops'
 
 const ACCESS_TOKEN = 'zerops-access-token-value-that-must-never-be-printed'
 const PROVISIONING_KEY = 'px_provisioning-key-value-that-must-never-be-printed'
+const APP_PEM = `-----BEGIN PRIVATE KEY-----
+ZmFrZQ==
+-----END PRIVATE KEY-----`
 
 interface Recorder {
 	readonly collaborators: InitCollaborators
@@ -16,6 +21,11 @@ interface Recorder {
 	readonly environments: EnvironmentConfig[]
 	readonly scaffolds: SidecarScaffoldInput[]
 	readonly sourceInputs: Parameters<InitCollaborators['effects']['configureSource']>[0][]
+	readonly selectOptions: Array<{ readonly question: string; readonly labels: readonly string[] }>
+	readonly sourceEnv: Map<string, string>
+	readonly controlEnv: Map<string, string>
+	hasRecovery(): boolean
+	resumeReads(): void
 }
 
 /**
@@ -27,19 +37,71 @@ const recorder = (options: {
 	readonly confirms?: Record<string, boolean>
 	readonly repositoryExists?: boolean
 	readonly custom?: boolean
+	readonly appMode?: 'anonymous' | 'existing' | 'create'
+	readonly appOwner?: string
+	readonly appPublic?: boolean
+	readonly sourceEnvironment?: Readonly<Record<string, string>>
+	readonly controlEnvironment?: Readonly<Record<string, string>>
+	readonly installedRepositories?: readonly string[]
+	readonly recovery?: GitHubAppRecovery
+	readonly proxyPublished?: boolean
+	readonly crashAfterWriteKey?: string
+	readonly ambiguousWriteKey?: string
+	readonly delayedVisibility?: { readonly key: string; readonly reads: number }
+	readonly conflictAfterCompleteSourceReads?: number
 }): Recorder => {
 	const asked: string[] = []
 	const effects: string[] = []
 	const environments: EnvironmentConfig[] = []
 	const scaffolds: SidecarScaffoldInput[] = []
 	const sourceInputs: Parameters<InitCollaborators['effects']['configureSource']>[0][] = []
+	const selectOptions: Array<{ readonly question: string; readonly labels: readonly string[] }> = []
+	const derivedControlHost = 'proxy-292c-8082.prg1.zerops.app'
+	const sourceEnv = new Map([['FABRIKA_SOURCE_RPC_KEY', 'r'.repeat(32)], ...Object.entries(options.sourceEnvironment ?? {})])
+	const controlEnv = new Map([
+		['FABRIKA_ZEROPS_SOURCE_RPC_KEY', 'r'.repeat(32)],
+		['FABRIKA_CONTROL_DOMAIN', options.custom === true ? options.answers['Console hostname'] ?? '' : derivedControlHost],
+		...Object.entries(options.controlEnvironment ?? {}),
+	])
+	const proxyEnv = new Map([[
+		'zeropsSubdomain',
+		[
+			'https://proxy-292c-8080.prg1.zerops.app',
+			'https://proxy-292c-8082.prg1.zerops.app',
+			'https://proxy-292c-8083.prg1.zerops.app',
+		].join('\n'),
+	]])
+	let recovery: GitHubAppRecovery | undefined = options.recovery
+	let readsBlocked = false
+	let delayedWrite: { readonly serviceId: string; readonly key: string; readonly value: string; remaining: number } | undefined
+	let completeSourceReads = 0
+	const recoveryLock: GitHubAppRecoveryLock = {
+		hasRecovery: () => Promise.resolve(recovery !== undefined),
+		read: () => Promise.resolve(recovery),
+		write: (value) => {
+			recovery = value
+			return Promise.resolve()
+		},
+		delete: (_binding, credentials) => {
+			if (recovery !== undefined && JSON.stringify(recovery.app) !== JSON.stringify(credentials)) throw new Error('recovery mismatch')
+			recovery = undefined
+			effects.push('recovery-delete')
+			return Promise.resolve()
+		},
+		release: () => Promise.resolve(),
+	}
 	const log = recordingInitLog()
 	return {
 		asked,
 		effects,
+		sourceEnv,
+		controlEnv,
+		hasRecovery: () => recovery !== undefined,
+		resumeReads: () => void (readsBlocked = false),
 		environments,
 		scaffolds,
 		sourceInputs,
+		selectOptions,
 		lines: log.lines,
 		collaborators: {
 			log,
@@ -58,7 +120,15 @@ const recorder = (options: {
 				},
 				select: async (question, choices) => {
 					asked.push(`select: ${question}`)
-					const chosen = choices[options.custom === true ? 1 : 0]
+					selectOptions.push({ question, labels: choices.map((choice) => choice.label) })
+					const index = question === 'Where does this installation answer?'
+						? options.custom === true ? 1 : 0
+						: options.appMode === 'existing'
+						? 1
+						: options.appMode === 'create'
+						? 0
+						: 2
+					const chosen = choices[index]
 					if (chosen === undefined) {
 						throw new Error('no option')
 					}
@@ -68,6 +138,8 @@ const recorder = (options: {
 					asked.push(`secret: ${variable}`)
 					if (variable === 'FABRIKA_ZEROPS_ACCESS_TOKEN') return ACCESS_TOKEN
 					if (variable === 'FABRIKA_IAM_PROVISIONING_KEY') return PROVISIONING_KEY
+					if (variable === 'GITHUB_APP_PRIVATE_KEY') return APP_PEM
+					if (variable === 'GITHUB_WEBHOOK_SECRET') return 'webhook-secret'
 					return ''
 				},
 			},
@@ -94,8 +166,90 @@ const recorder = (options: {
 					sourceInputs.push(input)
 					const { projectId } = input
 					effects.push(`source: ${projectId}`)
-					return { created: false, reusedRpcKey: true, writtenKeys: [] }
+					return {
+						created: false,
+						reusedRpcKey: true,
+						writtenKeys: [],
+						sourceServiceId: 'svc-source',
+						controlServiceId: 'svc-control',
+						proxyServiceId: 'svc-proxy',
+						sourceEnv,
+						controlEnv,
+						proxyEnv,
+						proxyPublished: options.proxyPublished ?? true,
+					}
 				},
+				readServiceEnvironment: async ({ serviceId }) => {
+					if (readsBlocked) throw new Error('simulated process crash after remote write')
+					const environment = serviceId === 'svc-source' ? sourceEnv : controlEnv
+					if (
+						serviceId === 'svc-source' && sourceEnv.has('GITHUB_APP_ID') && sourceEnv.has('GITHUB_APP_PRIVATE_KEY')
+						&& controlEnv.has('GITHUB_WEBHOOK_SECRET')
+					) {
+						completeSourceReads += 1
+						if (completeSourceReads === options.conflictAfterCompleteSourceReads) sourceEnv.set('GITHUB_APP_ID', '999')
+					}
+					if (delayedWrite?.serviceId === serviceId) {
+						if (delayedWrite.remaining === 0) {
+							environment.set(delayedWrite.key, delayedWrite.value)
+							delayedWrite = undefined
+						} else {
+							delayedWrite.remaining -= 1
+						}
+					}
+					return new Map(environment)
+				},
+				createServiceEnvironment: async ({ serviceId, key, value }) => {
+					if (key === options.delayedVisibility?.key) {
+						delayedWrite = { serviceId, key, value, remaining: options.delayedVisibility.reads }
+					} else {
+						;(serviceId === 'svc-source' ? sourceEnv : controlEnv).set(key, value)
+					}
+					if (key === options.crashAfterWriteKey) readsBlocked = true
+					if (key === options.ambiguousWriteKey) throw new Error('upstream response was lost with private detail')
+				},
+				sleep: async (ms) => void effects.push(`sleep:${ms}`),
+				acquireRecovery: () => Promise.resolve(recoveryLock),
+				createGitHubApp: async (input, onCreated) => {
+					effects.push(`create-app:${input.organization}:${input.public}`)
+					const app = {
+						id: 123,
+						slug: 'fabrika-test',
+						htmlUrl: 'https://github.com/apps/fabrika-test',
+						pem: APP_PEM,
+						webhookSecret: 'webhook-secret',
+					}
+					await onCreated(app, new AbortController().signal)
+					return app
+				},
+				createGitHubClient: async () => ({
+					getAuthenticatedApp: async () => ({
+						id: 123,
+						slug: 'fabrika-test',
+						htmlUrl: 'https://github.com/apps/fabrika-test',
+						public: options.appPublic ?? false,
+						permissions: { contents: 'read' },
+						events: ['push'],
+						owner: { login: options.appOwner ?? 'contember', type: 'Organization' },
+					}),
+					updateWebhookConfig: async ({ url }) => {
+						effects.push(`webhook:${url}`)
+						return { url, contentType: 'json', insecureSsl: '0' }
+					},
+					getWebhookConfig: async () => ({
+						url: `https://${options.custom === true ? options.answers['Console hostname'] ?? '' : derivedControlHost}/webhooks/github`,
+						contentType: 'json',
+						insecureSsl: '0',
+					}),
+					resolveOrganizationInstallationId: async (organization) => {
+						effects.push(`verify-org:${organization}`)
+						return options.installedRepositories?.some((item) => item.toLowerCase() === organization.toLowerCase()) === true ? 76 : null
+					},
+					resolveInstallationId: async (owner, repository) => {
+						effects.push(`verify-repo:${owner}/${repository}`)
+						return options.installedRepositories?.some((item) => item.toLowerCase() === `${owner}/${repository}`.toLowerCase()) === true ? 77 : null
+					},
+				}),
 			},
 		},
 	}
@@ -195,44 +349,6 @@ describe('fabrika platform init --provider=zerops', () => {
 		await cleanCheckout(recorded)
 	})
 
-	test('sends optional source settings only to Zerops and not the GitHub Environment', async () => {
-		const appKey = 'private-key-that-must-never-be-printed'
-		const webhook = 'webhook-secret-that-must-never-be-printed'
-		const recorded = recorder({
-			answers: {
-				...ANSWERS,
-				'GitHub App id for private repositories (blank = anonymous public mode)': '123',
-				GITHUB_APP_PRIVATE_KEY: appKey,
-				GITHUB_WEBHOOK_SECRET: webhook,
-			},
-		})
-		const collaborators: InitCollaborators = {
-			...recorded.collaborators,
-			prompts: {
-				...recorded.collaborators.prompts,
-				secret: async (variable, question) => {
-					if (variable === 'GITHUB_APP_PRIVATE_KEY') return appKey
-					if (variable === 'GITHUB_WEBHOOK_SECRET') return webhook
-					return recorded.collaborators.prompts.secret(variable, question)
-				},
-			},
-		}
-
-		await runInit({ installation: 'test' }, collaborators)
-
-		expect(recorded.sourceInputs[0]).toMatchObject({
-			githubAppId: '123',
-			githubAppPrivateKey: appKey,
-			githubWebhookSecret: webhook,
-		})
-		expect(JSON.stringify(recorded.environments[0])).not.toContain(appKey)
-		expect(JSON.stringify(recorded.environments[0])).not.toContain(webhook)
-		const transcript = recorded.lines.join('\n')
-		expect(transcript).not.toContain(appKey)
-		expect(transcript).not.toContain(webhook)
-		await cleanCheckout(recorded)
-	})
-
 	test('redacts a source configuration failure before it reaches the operator', async () => {
 		const sentinel = 'private-source-error-body'
 		const recorded = recorder({ answers: ANSWERS })
@@ -248,6 +364,18 @@ describe('fabrika platform init --provider=zerops', () => {
 		expect(raised).toBeInstanceOf(Error)
 		expect(raised instanceof Error ? raised.message : sentinel).not.toContain(sentinel)
 		expect(raised instanceof Error ? raised.message : '').toContain('source configuration did not complete')
+	})
+
+	test('declining source configuration stops before scaffold, Environment, and workflow effects', async () => {
+		const recorded = recorder({
+			answers: ANSWERS,
+			confirms: { 'Create or configure `source` in Zerops project project-id-1?': false },
+		})
+		await runInit({ installation: 'test' }, recorded.collaborators)
+		expect(recorded.effects).toEqual(['describe: project-id-1'])
+		expect(recorded.effects.some((effect) => effect.startsWith('exists:'))).toBe(false)
+		expect(recorded.effects.some((effect) => effect.startsWith('environment:'))).toBe(false)
+		expect(recorded.effects.some((effect) => effect.startsWith('trigger:'))).toBe(false)
 	})
 
 	test('declining the repository stops there and says what to run', async () => {
@@ -314,6 +442,275 @@ describe('fabrika platform init --provider=zerops', () => {
 		expect(() => parseInitArgs(['test', '--token=secret'])).toThrow('unexpected argument')
 		expect(() => parseInitArgs(['test', '--repo=nope'])).toThrow('is not a <owner>/<name> repository')
 	})
+
+	test('parses, canonicalizes, and deduplicates requested GitHub repositories', () => {
+		expect(parseGitHubRepositories('Contember/Fabrika, contember/fabrika, other/app')).toEqual([
+			{ owner: 'Contember', repository: 'Fabrika' },
+			{ owner: 'other', repository: 'app' },
+		])
+		expect(() => parseGitHubRepositories('../owner/repo')).toThrow('not a GitHub')
+		expect(() => parseGitHubRepositories('_owner/repo')).toThrow('not a GitHub')
+	})
+
+	test('creates a private same-organization App, persists before writes, and verifies every requested repository', async () => {
+		const recorded = recorder({
+			appMode: 'create',
+			appOwner: 'contember',
+			answers: {
+				...ANSWERS,
+				'Application repositories the GitHub App must access (comma-separated owner/repo; blank = none)': 'contember/app, contember/other',
+				'GitHub organization that will own the App': 'contember',
+				'GitHub App name': 'fabrika-test',
+			},
+			confirms: { 'Has the GitHub App been installed with the requested access?': true },
+			installedRepositories: ['contember/app', 'contember/other'],
+		})
+		await runInit({ installation: 'test' }, recorded.collaborators)
+		expect(recorded.effects).toContain('create-app:contember:false')
+		expect(recorded.sourceEnv.get('GITHUB_APP_PRIVATE_KEY')).toBe(APP_PEM)
+		expect(recorded.sourceEnv.get('GITHUB_APP_ID')).toBe('123')
+		expect(recorded.controlEnv.get('GITHUB_WEBHOOK_SECRET')).toBe('webhook-secret')
+		expect(recorded.effects.filter((effect) => effect.startsWith('verify-repo:'))).toEqual([
+			'verify-repo:contember/app',
+			'verify-repo:contember/other',
+		])
+		expect(recorded.lines.join('\n')).not.toContain(APP_PEM)
+		await cleanCheckout(recorded)
+	})
+
+	test('does not offer anonymous mode when repository access was requested', async () => {
+		const recorded = recorder({
+			appMode: 'create',
+			appOwner: 'contember',
+			answers: {
+				...ANSWERS,
+				'Application repositories the GitHub App must access (comma-separated owner/repo; blank = none)': 'contember/app',
+				'GitHub organization that will own the App': 'contember',
+				'GitHub App name': 'fabrika-test',
+			},
+			confirms: { 'Has the GitHub App been installed with the requested access?': true },
+			installedRepositories: ['contember/app'],
+		})
+		await runInit({ installation: 'test' }, recorded.collaborators)
+		const modeSelection = recorded.selectOptions.find((selection) => selection.question === 'How should source access GitHub repositories?')
+		expect(modeSelection?.labels).toEqual([
+			'Create an organization-owned GitHub App',
+			'Use an existing organization-owned GitHub App',
+		])
+		await cleanCheckout(recorded)
+	})
+
+	test('accepts a complete existing App bundle and never invokes manifest creation', async () => {
+		const recorded = recorder({
+			appMode: 'existing',
+			appOwner: 'contember',
+			answers: { ...ANSWERS, 'Existing GitHub App id': '123' },
+			confirms: { 'Has the GitHub App been installed with the requested access?': true },
+			installedRepositories: ['contember'],
+		})
+		await runInit({ installation: 'test' }, recorded.collaborators)
+		expect(recorded.effects.some((effect) => effect.startsWith('create-app:'))).toBe(false)
+		expect(recorded.sourceEnv.get('GITHUB_APP_ID')).toBe('123')
+		expect(recorded.sourceEnv.get('GITHUB_APP_PRIVATE_KEY')).toBe(APP_PEM)
+		expect(recorded.controlEnv.get('GITHUB_WEBHOOK_SECRET')).toBe('webhook-secret')
+		await cleanCheckout(recorded)
+	})
+
+	test('requires an explicit public choice for cross-organization creation', async () => {
+		const declined = recorder({
+			appMode: 'create',
+			answers: {
+				...ANSWERS,
+				'Application repositories the GitHub App must access (comma-separated owner/repo; blank = none)': 'other/app',
+				'GitHub organization that will own the App': 'contember',
+			},
+			confirms: { 'Requested repositories cross organization boundaries. Create a PUBLIC GitHub App?': false },
+		})
+		await expect(runInit({ installation: 'test' }, declined.collaborators)).rejects.toThrow('configuration did not complete')
+		expect(declined.effects.some((effect) => effect.startsWith('create-app:'))).toBe(false)
+		const accepted = recorder({
+			appMode: 'create',
+			appPublic: true,
+			answers: {
+				...ANSWERS,
+				'Application repositories the GitHub App must access (comma-separated owner/repo; blank = none)': 'other/app',
+				'GitHub organization that will own the App': 'contember',
+				'GitHub App name': 'fabrika-test',
+			},
+			confirms: {
+				'Requested repositories cross organization boundaries. Create a PUBLIC GitHub App?': true,
+				'Has the GitHub App been installed with the requested access?': true,
+			},
+			installedRepositories: ['other/app'],
+		})
+		await runInit({ installation: 'test' }, accepted.collaborators)
+		expect(accepted.effects).toContain('create-app:contember:true')
+		await cleanCheckout(accepted)
+	})
+
+	test('preserves a complete live App and repeats installation verification without manifest creation', async () => {
+		const recorded = recorder({
+			appOwner: 'contember',
+			answers: {
+				...ANSWERS,
+				'Application repositories the GitHub App must access (comma-separated owner/repo; blank = none)': 'contember/app',
+			},
+			sourceEnvironment: { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: APP_PEM },
+			controlEnvironment: { GITHUB_WEBHOOK_SECRET: 'webhook-secret' },
+			confirms: { 'Has the GitHub App been installed with the requested access?': true },
+			installedRepositories: ['contember/app'],
+		})
+		await runInit({ installation: 'test' }, recorded.collaborators)
+		expect(recorded.effects.some((effect) => effect.startsWith('create-app:'))).toBe(false)
+		expect(recorded.effects).toContain('verify-repo:contember/app')
+		await cleanCheckout(recorded)
+	})
+
+	test('requires an organization installation when an App has no requested repository yet', async () => {
+		const recorded = recorder({
+			appMode: 'create',
+			appOwner: 'contember',
+			answers: { ...ANSWERS, 'GitHub organization that will own the App': 'contember', 'GitHub App name': 'fabrika-test' },
+			confirms: { 'Has the GitHub App been installed with the requested access?': true },
+			installedRepositories: ['contember'],
+		})
+		await runInit({ installation: 'test' }, recorded.collaborators)
+		expect(recorded.effects).toContain('verify-org:contember')
+		await cleanCheckout(recorded)
+	})
+
+	test('does not let a declined App installation confirmation bypass the same check on rerun', async () => {
+		const confirms: Record<string, boolean> = { 'Has the GitHub App been installed with the requested access?': false }
+		const recorded = recorder({
+			answers: ANSWERS,
+			confirms,
+			appOwner: 'contember',
+			sourceEnvironment: { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: APP_PEM },
+			controlEnvironment: { GITHUB_WEBHOOK_SECRET: 'webhook-secret' },
+			installedRepositories: ['contember'],
+		})
+		await expect(runInit({ installation: 'test' }, recorded.collaborators)).rejects.toThrow('installation verification did not complete')
+		expect(recorded.effects).not.toContain('verify-org:contember')
+		expect(recorded.hasRecovery()).toBe(false)
+		expect(recorded.effects).toContain('recovery-delete')
+		confirms['Has the GitHub App been installed with the requested access?'] = true
+		await runInit({ installation: 'test' }, recorded.collaborators)
+		expect(recorded.asked.filter((question) => question === 'confirm: Has the GitHub App been installed with the requested access?')).toHaveLength(2)
+		expect(recorded.effects).toContain('verify-org:contember')
+		await cleanCheckout(recorded)
+	})
+
+	test('refuses a private App for cross-organization repositories before changing its webhook', async () => {
+		const recorded = recorder({
+			appOwner: 'contember',
+			answers: {
+				...ANSWERS,
+				'Application repositories the GitHub App must access (comma-separated owner/repo; blank = none)': 'other/app',
+			},
+			sourceEnvironment: { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: APP_PEM },
+			controlEnvironment: { GITHUB_WEBHOOK_SECRET: 'webhook-secret' },
+		})
+		await expect(runInit({ installation: 'test' }, recorded.collaborators)).rejects.toThrow('configuration did not complete')
+		expect(recorded.effects.some((effect) => effect.startsWith('webhook:'))).toBe(false)
+	})
+
+	test('fails closed on partial live App state before creating or writing credentials', async () => {
+		const recorded = recorder({ answers: ANSWERS, sourceEnvironment: { GITHUB_APP_ID: '123' } })
+		await expect(runInit({ installation: 'test' }, recorded.collaborators)).rejects.toThrow('configuration did not complete')
+		expect(recorded.effects.some((effect) => effect.startsWith('create-app:'))).toBe(false)
+		expect(recorded.sourceEnv.has('GITHUB_APP_PRIVATE_KEY')).toBe(false)
+	})
+
+	test('refuses a mismatched custom origin and an unpublished derived proxy before GitHub mutation', async () => {
+		const mismatch = recorder({
+			appMode: 'create',
+			custom: true,
+			answers: {
+				...ANSWERS,
+				'IAM hostname': 'iam.example.test',
+				'Console hostname': 'control.example.test',
+				'Operations ingest hostname': 'operations.example.test',
+			},
+			controlEnvironment: { FABRIKA_CONTROL_DOMAIN: 'other.example.test' },
+		})
+		await expect(runInit({ installation: 'test' }, mismatch.collaborators)).rejects.toThrow('configuration did not complete')
+		expect(mismatch.effects.some((effect) => effect.startsWith('create-app:'))).toBe(false)
+
+		const unpublished = recorder({ answers: ANSWERS, appMode: 'create', proxyPublished: false })
+		await expect(runInit({ installation: 'test' }, unpublished.collaborators)).rejects.toThrow('configuration did not complete')
+		expect(unpublished.effects.some((effect) => effect.startsWith('create-app:'))).toBe(false)
+	})
+
+	test('allows explicit anonymous mode without validating an unpublished proxy origin', async () => {
+		const recorded = recorder({ answers: ANSWERS, appMode: 'anonymous', proxyPublished: false })
+		await runInit({ installation: 'test' }, recorded.collaborators)
+		expect(recorded.effects.some((effect) => effect.startsWith('create-app:'))).toBe(false)
+		expect(recorded.effects.some((effect) => effect.startsWith('webhook:'))).toBe(false)
+		await cleanCheckout(recorded)
+	})
+
+	test('resumes safely after a crash following each individual Zerops credential write', async () => {
+		for (const key of ['GITHUB_APP_PRIVATE_KEY', 'GITHUB_APP_ID', 'GITHUB_WEBHOOK_SECRET']) {
+			const recorded = recorder({
+				appMode: 'create',
+				appOwner: 'contember',
+				answers: { ...ANSWERS, 'GitHub organization that will own the App': 'contember', 'GitHub App name': 'fabrika-test' },
+				confirms: { 'Has the GitHub App been installed with the requested access?': true },
+				installedRepositories: ['contember'],
+				crashAfterWriteKey: key,
+			})
+			await expect(runInit({ installation: 'test' }, recorded.collaborators)).rejects.toThrow('configuration did not complete')
+			expect(recorded.effects.filter((effect) => effect.startsWith('create-app:'))).toHaveLength(1)
+			recorded.resumeReads()
+			await runInit({ installation: 'test' }, recorded.collaborators)
+			expect(recorded.effects.filter((effect) => effect.startsWith('create-app:'))).toHaveLength(1)
+			expect(recorded.sourceEnv.get('GITHUB_APP_PRIVATE_KEY')).toBe(APP_PEM)
+			expect(recorded.sourceEnv.get('GITHUB_APP_ID')).toBe('123')
+			expect(recorded.controlEnv.get('GITHUB_WEBHOOK_SECRET')).toBe('webhook-secret')
+			await cleanCheckout(recorded)
+		}
+	})
+
+	test('accepts an ambiguous Zerops write only when exact plaintext reads back', async () => {
+		const recorded = recorder({
+			appMode: 'create',
+			appOwner: 'contember',
+			answers: { ...ANSWERS, 'GitHub organization that will own the App': 'contember', 'GitHub App name': 'fabrika-test' },
+			confirms: { 'Has the GitHub App been installed with the requested access?': true },
+			installedRepositories: ['contember'],
+			ambiguousWriteKey: 'GITHUB_APP_ID',
+		})
+		await runInit({ installation: 'test' }, recorded.collaborators)
+		expect(recorded.sourceEnv.get('GITHUB_APP_ID')).toBe('123')
+		expect(recorded.lines.join('\n')).not.toContain('upstream response')
+		await cleanCheckout(recorded)
+	})
+
+	test('polls boundedly until a successful Zerops write becomes visible', async () => {
+		const recorded = recorder({
+			appMode: 'create',
+			appOwner: 'contember',
+			answers: { ...ANSWERS, 'GitHub organization that will own the App': 'contember', 'GitHub App name': 'fabrika-test' },
+			confirms: { 'Has the GitHub App been installed with the requested access?': true },
+			installedRepositories: ['contember'],
+			delayedVisibility: { key: 'GITHUB_APP_PRIVATE_KEY', reads: 2 },
+		})
+		await runInit({ installation: 'test' }, recorded.collaborators)
+		expect(recorded.effects.filter((effect) => effect === 'sleep:500')).toHaveLength(4)
+		expect(recorded.sourceEnv.get('GITHUB_APP_PRIVATE_KEY')).toBe(APP_PEM)
+		await cleanCheckout(recorded)
+	})
+
+	test('fails closed when a concurrent writer changes credentials during final stability reads', async () => {
+		const recorded = recorder({
+			appMode: 'create',
+			appOwner: 'contember',
+			answers: { ...ANSWERS, 'GitHub organization that will own the App': 'contember', 'GitHub App name': 'fabrika-test' },
+			conflictAfterCompleteSourceReads: 2,
+		})
+		await expect(runInit({ installation: 'test' }, recorded.collaborators)).rejects.toThrow('configuration did not complete')
+		expect(recorded.effects.some((effect) => effect.startsWith('webhook:'))).toBe(false)
+	})
 })
 
 describe('the supported source-service upgrade', () => {
@@ -362,7 +759,7 @@ describe('the supported source-service upgrade', () => {
 			new AbortController().signal,
 		)
 
-		expect(result).toEqual({ created: false, reusedRpcKey: true, writtenKeys: [] })
+		expect(result).toMatchObject({ created: false, reusedRpcKey: true, writtenKeys: [] })
 		expect(zerops.calls).toEqual([])
 		expect(zerops.env('source').get('GITHUB_APP_PRIVATE_KEY')).toBe('old-key')
 		expect(zerops.env('control').get('GITHUB_WEBHOOK_SECRET')).toBe('old-webhook')
@@ -392,10 +789,39 @@ describe('the supported source-service upgrade', () => {
 				new AbortController().signal,
 			)
 
-			expect(result).toEqual({ created: false, reusedRpcKey: true, writtenKeys: [item.writtenKey] })
+			expect(result).toMatchObject({ created: false, reusedRpcKey: true, writtenKeys: [item.writtenKey] })
 			expect(zerops.env('source').get('FABRIKA_SOURCE_RPC_KEY')).toBe(key)
 			expect(zerops.env('control').get('FABRIKA_ZEROPS_SOURCE_RPC_KEY')).toBe(key)
 		}
+	})
+
+	test('uses create-only RPC writes and rejects a conflicting value injected before final reread', async () => {
+		const key = 'r'.repeat(32)
+		const zerops = fakeZerops({
+			projectId: 'project-id-1',
+			projectName: 'fabrika-test',
+			services: platformServices({ source: { FABRIKA_SOURCE_RPC_KEY: key }, control: {} }),
+		})
+		let controlReads = 0
+		const api: ZeropsApi = {
+			...zerops.api,
+			putServiceEnv: () => Promise.reject(new Error('update-capable RPC write was called')),
+			listServiceEnv: async (input) => {
+				if (input.serviceId === 'svc-control') {
+					controlReads += 1
+					if (controlReads === 2) zerops.env('control').set('FABRIKA_ZEROPS_SOURCE_RPC_KEY', 'x'.repeat(32))
+				}
+				return zerops.api.listServiceEnv(input)
+			},
+		}
+		await expect(
+			configureSourceService(
+				{ projectId: 'project-id-1', environment: 'test' },
+				api,
+				async () => {},
+				new AbortController().signal,
+			),
+		).rejects.toThrow('did not retain one matching source RPC key')
 	})
 
 	test('repairs a run that failed after writing the first generated RPC key', async () => {
@@ -408,7 +834,7 @@ describe('the supported source-service upgrade', () => {
 				async () => {},
 				new AbortController().signal,
 			),
-		).rejects.toThrow('create service env failed')
+		).rejects.toThrow('source RPC configuration conflicts')
 
 		const sourceKey = zerops.env('source').get('FABRIKA_SOURCE_RPC_KEY')
 		expect(sourceKey).toBeDefined()
@@ -421,7 +847,7 @@ describe('the supported source-service upgrade', () => {
 			new AbortController().signal,
 		)
 
-		expect(result).toEqual({ created: false, reusedRpcKey: true, writtenKeys: ['control.FABRIKA_ZEROPS_SOURCE_RPC_KEY'] })
+		expect(result).toMatchObject({ created: false, reusedRpcKey: true, writtenKeys: ['control.FABRIKA_ZEROPS_SOURCE_RPC_KEY'] })
 		expect(zerops.env('control').get('FABRIKA_ZEROPS_SOURCE_RPC_KEY')).toBe(sourceKey)
 	})
 
@@ -445,7 +871,7 @@ describe('the supported source-service upgrade', () => {
 		}
 	})
 
-	test('places optional credentials only on their owning service', async () => {
+	test('does not change GitHub credentials while ensuring the source RPC transport', async () => {
 		const key = 'r'.repeat(32)
 		const zerops = fakeZerops({
 			projectId: 'project-id-1',
@@ -453,21 +879,15 @@ describe('the supported source-service upgrade', () => {
 			services: platformServices({ source: { FABRIKA_SOURCE_RPC_KEY: key }, control: { FABRIKA_ZEROPS_SOURCE_RPC_KEY: key } }),
 		})
 		await configureSourceService(
-			{
-				projectId: 'project-id-1',
-				environment: 'test',
-				githubAppId: '123',
-				githubAppPrivateKey: 'private-key',
-				githubWebhookSecret: 'webhook-secret',
-			},
+			{ projectId: 'project-id-1', environment: 'test' },
 			zerops.api,
 			async () => {},
 			new AbortController().signal,
 		)
-		expect(zerops.env('source').get('GITHUB_APP_ID')).toBe('123')
-		expect(zerops.env('source').get('GITHUB_APP_PRIVATE_KEY')).toBe('private-key')
+		expect(zerops.env('source').has('GITHUB_APP_ID')).toBe(false)
+		expect(zerops.env('source').has('GITHUB_APP_PRIVATE_KEY')).toBe(false)
 		expect(zerops.env('source').has('GITHUB_WEBHOOK_SECRET')).toBe(false)
-		expect(zerops.env('control').get('GITHUB_WEBHOOK_SECRET')).toBe('webhook-secret')
+		expect(zerops.env('control').has('GITHUB_WEBHOOK_SECRET')).toBe(false)
 		expect(zerops.env('control').has('GITHUB_APP_PRIVATE_KEY')).toBe(false)
 	})
 })

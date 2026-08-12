@@ -61,6 +61,13 @@ builds. This is the one place where the pin does not reach.
 
 Written by `fabrika platform init --provider=zerops {{INSTALLATION}}`, not by hand.
 
+The same init configures the organization-owned GitHub App used for private application source. Its
+private key stays on the platform's `source` service and its webhook secret stays on `control`; neither
+is copied into this repository or Environment. Select anonymous mode only when no private repository is
+requested. A rerun verifies the App installation again and never overwrites a partial or different live
+credential bundle. Run init from one host/operator per Zerops project; its lock is local, while
+create-only Zerops writes and repeated final readback fail closed on observed cross-host conflicts.
+
 **Secrets** — both belong to the installation and are placed on it at bring-up. `init` copies them
 here; it never generates one, because a value this repository invented would not be the value the
 installation already holds.

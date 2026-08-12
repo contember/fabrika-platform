@@ -79,10 +79,14 @@ Declining any of them stops there and prints what to run instead; a re-run is sa
 
 For an existing installation, init imports only a missing source service with a steady services-only
 document, waits for its exact processes, and writes one shared RPC key to source and control. A matching
-existing key is reused; a mismatch is refused. GitHub App id + private key are optional but all-or-none
-and stay only on source. An independently optional
-webhook secret stays only on control. Blank optional answers preserve live values. No source credential
-is written to GitHub or disk.
+existing key is reused; a mismatch is refused. It then preserves a complete live organization-owned
+GitHub App, accepts a complete existing App, creates one through GitHub's manifest flow, or explicitly
+keeps anonymous public-repository access. App creation uses an owner-only XDG recovery file until the
+private key on source, webhook secret on control, App identity, and webhook configuration verify. App
+installation access is then checked independently on every rerun. Partial or mismatched live state is
+never overwritten. The local lock covers one host; run one operator per project. Cross-host conflicts
+are refused by create-only Zerops writes and repeated final readback, not by a distributed lock. No
+source credential reaches the sidecar or GitHub Environment.
 
   <installation>                    names this installation: the GitHub Environment, the default
                                     repository \`contember/fabrika-zerops-<installation>\`, and the

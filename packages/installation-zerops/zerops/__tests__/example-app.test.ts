@@ -111,6 +111,7 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		findProjects: () => Promise.resolve(record('findProjects', [])),
 		listProjectServices: () => Promise.resolve(record('listProjectServices', [])),
 		listServiceEnv: () => Promise.resolve(record('listServiceEnv', [])),
+		createServiceEnv: () => Promise.resolve(record('createServiceEnv', undefined)),
 		putServiceEnv: () => Promise.resolve(record('putServiceEnv', undefined)),
 		deleteServiceEnv: () => Promise.resolve(record('deleteServiceEnv', undefined)),
 		getProjectEnv: ({ projectEnvId }) => Promise.resolve(record('getProjectEnv', { id: projectEnvId, key: 'K', content: 'V' })),

@@ -251,6 +251,14 @@ export const fakeZerops = (options: {
 			return [...envOf(name)].map(([key, content]): ZeropsServiceEnv => ({ id: `${name}:${key}`, key, content, serviceStackId: serviceId }))
 		},
 
+		createServiceEnv: async ({ serviceId, key, value }) => {
+			const name = nameOf(serviceId)
+			if (failedWrites.delete(`${name}:${key}`)) throw new Error('zerops: create-only service env failed')
+			if (envOf(name).has(key)) throw new Error('zerops: create-only service env failed')
+			effect(`env:${name}:${key}`)
+			envOf(name).set(key, value)
+		},
+
 		putServiceEnv: async ({ serviceId, key, value }) => {
 			const name = nameOf(serviceId)
 			if (failedWrites.delete(`${name}:${key}`)) {

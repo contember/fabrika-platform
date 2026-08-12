@@ -18,18 +18,21 @@
 //
 // Two deployment credentials, and this command generates neither. Both already belong to the
 // installation. Source configuration is separate: a source RPC key is generated only when neither
-// source nor control has one; a valid key on one side repairs the absent side. It is written directly
-// to Zerops, never GitHub or disk. Optional
-// GitHub App credentials also go directly to their owning Zerops service and are never logged.
-// Unlike the Cloudflare init there is no `.env` resume, deliberately: this flow is short enough to
-// repeat, and the alternative is a Zerops account token sitting in a plaintext file.
+// source nor control has one; a valid key on one side repairs the absent side. That RPC key is written
+// directly to Zerops, never GitHub or disk. A newly created GitHub App's one-time bundle is the narrow
+// exception: it is first persisted in an owner-only XDG recovery file, then deleted after durable
+// Zerops credentials and exact App identity/webhook verification. No deployment token enters it.
 
+import { GitHubAppClient, type GitHubAppIdentity, type GitHubAppWebhookConfig } from '@fabrika/github-app'
 import {
 	action as consoleAction,
 	configureEnvironment,
 	confirm as promptConfirm,
+	type CreatedGitHubApp,
+	createGitHubAppViaManifest,
 	type EnvironmentConfig,
 	ghRepoExists,
+	githubAppInstallationUrl,
 	info as consoleInfo,
 	ok as consoleOk,
 	scaffoldSidecarRepository,
@@ -53,7 +56,17 @@ import {
 	type ZeropsService,
 } from '@fabrika/provider-zerops'
 import { randomBytes } from 'node:crypto'
+import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../zerops/generated/platform-proxy-manifest'
 import { sourceServiceSpec } from '../zerops/topology'
+import {
+	acquireGitHubAppRecoveryLock,
+	classifyGitHubAppState,
+	type GitHubAppCredentials,
+	type GitHubAppRecovery,
+	type GitHubAppRecoveryLock,
+	type LiveGitHubAppState,
+} from './github-app-recovery'
+import { derivePlatformHosts, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
 import { FABRIKA_REPOSITORY_URL } from './install-options'
 import type { InitLog } from './log'
 import { assertPinnedTag, defaultCheckoutDir, defaultSidecarRepo, materializeSidecarScaffold, readPinnedTag, SIDECAR_FILES } from './sidecar'
@@ -82,6 +95,23 @@ export interface InitEffects {
 	/** Read one Zerops project's name — the cheapest proof that the token and the project id agree. */
 	describeProject(input: { projectId: string; accessToken: string; apiBaseUrl?: string }): Promise<string>
 	configureSource(input: ConfigureSourceInput): Promise<ConfigureSourceResult>
+	readServiceEnvironment(input: { serviceId: string; accessToken: string; apiBaseUrl?: string }): Promise<ReadonlyMap<string, string>>
+	createServiceEnvironment(input: { serviceId: string; key: string; value: string; accessToken: string; apiBaseUrl?: string }): Promise<void>
+	sleep(ms: number, signal: AbortSignal): Promise<void>
+	acquireRecovery(projectId: string, installation: string): Promise<GitHubAppRecoveryLock>
+	createGitHubApp(
+		input: { organization: string; appName: string; homepageUrl: string; webhookUrl: string; public: boolean },
+		onCreated: (app: CreatedGitHubApp, signal: AbortSignal) => Promise<void>,
+	): Promise<CreatedGitHubApp>
+	createGitHubClient(credentials: Pick<GitHubAppCredentials, 'id' | 'privateKeyPem'>): Promise<InitGitHubAppClient>
+}
+
+export interface InitGitHubAppClient {
+	getAuthenticatedApp(signal?: AbortSignal): Promise<GitHubAppIdentity>
+	updateWebhookConfig(input: { url: string; secret: string; signal?: AbortSignal }): Promise<GitHubAppWebhookConfig>
+	getWebhookConfig(signal?: AbortSignal): Promise<GitHubAppWebhookConfig>
+	resolveOrganizationInstallationId(organization: string, signal?: AbortSignal): Promise<number | null>
+	resolveInstallationId(owner: string, repository: string, signal?: AbortSignal): Promise<number | null>
 }
 
 export interface InitCollaborators {
@@ -159,9 +189,7 @@ interface Collected {
 	readonly apiBaseUrl?: string
 	readonly accessToken: string
 	readonly provisioningKey: string
-	readonly githubAppId?: string
-	readonly githubAppPrivateKey?: string
-	readonly githubWebhookSecret?: string
+	readonly requestedRepositories: readonly GitHubRepository[]
 }
 
 export interface ConfigureSourceInput {
@@ -169,15 +197,32 @@ export interface ConfigureSourceInput {
 	readonly environment: string
 	readonly accessToken: string
 	readonly apiBaseUrl?: string
-	readonly githubAppId?: string
-	readonly githubAppPrivateKey?: string
-	readonly githubWebhookSecret?: string
 }
 
 export interface ConfigureSourceResult {
 	readonly created: boolean
 	readonly reusedRpcKey: boolean
 	readonly writtenKeys: readonly string[]
+	readonly sourceServiceId: string
+	readonly controlServiceId: string
+	readonly proxyServiceId: string
+	readonly sourceEnv: ReadonlyMap<string, string>
+	readonly controlEnv: ReadonlyMap<string, string>
+	readonly proxyEnv: ReadonlyMap<string, string>
+	readonly proxyPublished: boolean
+}
+
+export interface GitHubRepository {
+	readonly owner: string
+	readonly repository: string
+}
+
+type GitHubAppMode = 'create' | 'existing' | 'anonymous'
+
+interface GitHubInstallationPlan {
+	readonly client: InitGitHubAppClient
+	readonly identity: GitHubAppIdentity
+	readonly repositories: readonly GitHubRepository[]
 }
 
 const requiredAnswer = async (prompts: InitPrompts, question: string, fallback?: string): Promise<string> => {
@@ -194,6 +239,26 @@ const bareHost = (value: string, label: string): string => {
 		throw new Error(`\`${value}\` is not a bare hostname — ${label} carries no scheme and no port`)
 	}
 	return host
+}
+
+const REPOSITORY_COMPONENT_PATTERN = /^[A-Za-z0-9_.-]+$/
+const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
+
+export const parseGitHubRepositories = (value: string): GitHubRepository[] => {
+	const repositories = new Map<string, GitHubRepository>()
+	for (const item of value.split(',').map((entry) => entry.trim()).filter((entry) => entry !== '')) {
+		const parts = item.split('/')
+		const owner = parts[0]
+		const repository = parts[1]
+		if (
+			parts.length !== 2 || owner === undefined || repository === undefined || owner === '.' || owner === '..' || repository === '.'
+			|| repository === '..' || owner.length > 39 || repository.length > 100 || !GITHUB_OWNER_PATTERN.test(owner)
+			|| !REPOSITORY_COMPONENT_PATTERN.test(repository)
+		) throw new Error(`\`${item}\` is not a GitHub <owner>/<repository>`)
+		const key = `${owner.toLowerCase()}/${repository.toLowerCase()}`
+		if (!repositories.has(key)) repositories.set(key, { owner, repository })
+	}
+	return [...repositories.values()]
 }
 
 const collect = async (args: InitArguments, { log, prompts }: InitCollaborators): Promise<Collected> => {
@@ -237,19 +302,9 @@ const collect = async (args: InitArguments, { log, prompts }: InitCollaborators)
 		'FABRIKA_IAM_PROVISIONING_KEY',
 		"IAM provisioning key (the px_ admin key this installation's IAM already holds)",
 	)
-	log.info('Optional source and webhook settings are written directly to their owning Zerops services, never GitHub or disk.')
-	const githubAppId = (await prompts.setting('GITHUB_APP_ID', 'GitHub App id for private repositories (blank = anonymous public mode)')).trim()
-	const githubAppPrivateKey = (await prompts.secret(
-		'GITHUB_APP_PRIVATE_KEY',
-		'GitHub App private key for the source service (blank = anonymous public mode)',
-	)).trim()
-	if ((githubAppId === '') !== (githubAppPrivateKey === '')) {
-		throw new Error('GitHub App id and private key must be supplied together; neither is needed for anonymous public repositories')
-	}
-	const githubWebhookSecret = (await prompts.secret(
-		'GITHUB_WEBHOOK_SECRET',
-		'GitHub webhook secret for control (blank = preserve the current value)',
-	)).trim()
+	const requestedRepositories = parseGitHubRepositories(
+		await prompts.text('Application repositories the GitHub App must access (comma-separated owner/repo; blank = none)', ''),
+	)
 	if (accessToken.trim() === '' || provisioningKey.trim() === '') {
 		throw new Error('both credentials are required: the deploy authenticates to Zerops and to IAM with them')
 	}
@@ -262,9 +317,7 @@ const collect = async (args: InitArguments, { log, prompts }: InitCollaborators)
 		placement,
 		accessToken: accessToken.trim(),
 		provisioningKey: provisioningKey.trim(),
-		...(githubAppId === '' ? {} : { githubAppId }),
-		...(githubAppPrivateKey === '' ? {} : { githubAppPrivateKey }),
-		...(githubWebhookSecret === '' ? {} : { githubWebhookSecret }),
+		requestedRepositories,
 		...(buildFromGit === '' ? {} : { buildFromGit }),
 		...(apiBaseUrl === '' ? {} : { apiBaseUrl }),
 	}
@@ -295,9 +348,6 @@ export const configureSourceService = async (
 	sleep: Sleeper,
 	signal: AbortSignal,
 ): Promise<ConfigureSourceResult> => {
-	if ((input.githubAppId === undefined) !== (input.githubAppPrivateKey === undefined)) {
-		throw new Error('GitHub App id and private key must be supplied together')
-	}
 	let services = await api.listProjectServices({ projectId: input.projectId, signal })
 	for (const name of ['iam', 'operations', 'proxy', 'control']) {
 		const service = oneService(services, name)
@@ -322,8 +372,11 @@ export const configureSourceService = async (
 	}
 	const control = oneService(services, 'control')
 	if (control === undefined || control.id === '') throw new Error(`Zerops project ${input.projectId} has no \`control\` service`)
+	const proxy = oneService(services, 'proxy')
+	if (proxy === undefined || proxy.id === '') throw new Error(`Zerops project ${input.projectId} has no \`proxy\` service`)
 	const sourceEnv = new Map((await api.listServiceEnv({ serviceId: source.id, signal })).map((item) => [item.key, item.content]))
 	const controlEnv = new Map((await api.listServiceEnv({ serviceId: control.id, signal })).map((item) => [item.key, item.content]))
+	const proxyEnv = new Map((await api.listServiceEnv({ serviceId: proxy.id, signal })).map((item) => [item.key, item.content]))
 	const sourceRpcKey = sourceEnv.get('FABRIKA_SOURCE_RPC_KEY')
 	const controlRpcKey = controlEnv.get('FABRIKA_ZEROPS_SOURCE_RPC_KEY')
 	let rpcKey: string
@@ -343,26 +396,315 @@ export const configureSourceService = async (
 		rpcKey = sourceRpcKey
 		reusedRpcKey = true
 	}
-	const desired: Array<{ serviceId: string; service: string; key: string; value: string; live: ReadonlyMap<string, string> }> = [
+	const desired: Array<{ serviceId: string; service: string; key: string; value: string; live: Map<string, string> }> = [
 		{ serviceId: source.id, service: 'source', key: 'FABRIKA_SOURCE_RPC_KEY', value: rpcKey, live: sourceEnv },
 		{ serviceId: control.id, service: 'control', key: 'FABRIKA_ZEROPS_SOURCE_RPC_KEY', value: rpcKey, live: controlEnv },
 	]
-	if (input.githubAppId !== undefined && input.githubAppPrivateKey !== undefined) {
-		desired.push(
-			{ serviceId: source.id, service: 'source', key: 'GITHUB_APP_ID', value: input.githubAppId, live: sourceEnv },
-			{ serviceId: source.id, service: 'source', key: 'GITHUB_APP_PRIVATE_KEY', value: input.githubAppPrivateKey, live: sourceEnv },
-		)
-	}
-	if (input.githubWebhookSecret !== undefined) {
-		desired.push({ serviceId: control.id, service: 'control', key: 'GITHUB_WEBHOOK_SECRET', value: input.githubWebhookSecret, live: controlEnv })
-	}
 	const writtenKeys: string[] = []
 	for (const item of desired) {
 		if (item.live.get(item.key) === item.value) continue
-		await api.putServiceEnv({ serviceId: item.serviceId, key: item.key, value: item.value, signal })
+		try {
+			await api.createServiceEnv({ serviceId: item.serviceId, key: item.key, value: item.value, signal })
+		} catch {
+			const reread = new Map((await api.listServiceEnv({ serviceId: item.serviceId, signal })).map((value) => [value.key, value.content]))
+			if (reread.get(item.key) !== item.value) throw new Error('source RPC configuration conflicts with a live Zerops value')
+		}
 		writtenKeys.push(`${item.service}.${item.key}`)
 	}
-	return { created, reusedRpcKey, writtenKeys }
+	const finalSourceEnv = new Map((await api.listServiceEnv({ serviceId: source.id, signal })).map((item) => [item.key, item.content]))
+	const finalControlEnv = new Map((await api.listServiceEnv({ serviceId: control.id, signal })).map((item) => [item.key, item.content]))
+	if (finalSourceEnv.get('FABRIKA_SOURCE_RPC_KEY') !== rpcKey || finalControlEnv.get('FABRIKA_ZEROPS_SOURCE_RPC_KEY') !== rpcKey) {
+		throw new Error('source and control did not retain one matching source RPC key')
+	}
+	return {
+		created,
+		reusedRpcKey,
+		writtenKeys,
+		sourceServiceId: source.id,
+		controlServiceId: control.id,
+		proxyServiceId: proxy.id,
+		sourceEnv: finalSourceEnv,
+		controlEnv: finalControlEnv,
+		proxyEnv,
+		proxyPublished: proxy.subdomainAccess === true,
+	}
+}
+
+const controlOrigin = (collected: Collected, source: ConfigureSourceResult): string => {
+	const liveHost = source.controlEnv.get('FABRIKA_CONTROL_DOMAIN')
+	if (liveHost === undefined) {
+		throw new Error('the live control service has no configured public domain; deploy the platform before configuring GitHub')
+	}
+	const host = bareHost(liveHost, 'the live control domain')
+	if (collected.placement.hosts !== undefined) {
+		if (collected.placement.hosts.control !== host) {
+			throw new Error('the requested console hostname does not match the live control domain; refusing to configure a webhook for the wrong origin')
+		}
+		return `https://${host}`
+	}
+	if (!source.proxyPublished) throw new Error('the proxy is not published on its Zerops subdomain; deploy the platform before configuring GitHub')
+	const subdomains = source.proxyEnv.get(ZEROPS_SUBDOMAIN_VARIABLE)
+	if (subdomains === undefined || subdomains.trim() === '') throw new Error('the published proxy has no generated Zerops subdomain')
+	const listeners = PLATFORM_PROXY_MANIFEST_TEMPLATE.apps.map((app) => ({ service: app.service, port: app.port }))
+	const derived = derivePlatformHosts(subdomains, listeners).control
+	if (derived !== host) throw new Error('the live control domain does not match the proxy control listener; refusing to guess the webhook origin')
+	return `https://${host}`
+}
+
+const liveGitHubState = (sourceEnv: ReadonlyMap<string, string>, controlEnv: ReadonlyMap<string, string>): LiveGitHubAppState => {
+	const appId = sourceEnv.get('GITHUB_APP_ID')
+	const privateKeyPem = sourceEnv.get('GITHUB_APP_PRIVATE_KEY')
+	const webhookSecret = controlEnv.get('GITHUB_WEBHOOK_SECRET')
+	return {
+		...(appId === undefined ? {} : { appId }),
+		...(privateKeyPem === undefined ? {} : { privateKeyPem }),
+		...(webhookSecret === undefined ? {} : { webhookSecret }),
+	}
+}
+
+const credentialsFromCreated = (app: CreatedGitHubApp): GitHubAppCredentials => ({
+	id: String(app.id),
+	slug: app.slug,
+	htmlUrl: app.htmlUrl,
+	privateKeyPem: app.pem,
+	webhookSecret: app.webhookSecret,
+})
+
+const verifiedCredentials = async (
+	client: InitGitHubAppClient,
+	credentials: GitHubAppCredentials,
+	expected: { readonly owner?: string; readonly public?: boolean },
+	signal: AbortSignal,
+): Promise<{ readonly credentials: GitHubAppCredentials; readonly identity: GitHubAppIdentity }> => {
+	const identity = await client.getAuthenticatedApp(signal)
+	if (
+		String(identity.id) !== credentials.id || identity.owner.type !== 'Organization'
+		|| (expected.owner !== undefined && identity.owner.login.toLowerCase() !== expected.owner.toLowerCase())
+		|| (expected.public !== undefined && identity.public !== expected.public)
+	) throw new Error('GitHub App identity does not match the requested installation')
+	return {
+		identity,
+		credentials: { ...credentials, slug: identity.slug, htmlUrl: identity.htmlUrl },
+	}
+}
+
+const readCredentialState = async (
+	collected: Collected,
+	source: ConfigureSourceResult,
+	effects: InitEffects,
+): Promise<
+	{ readonly sourceEnv: ReadonlyMap<string, string>; readonly controlEnv: ReadonlyMap<string, string>; readonly live: LiveGitHubAppState }
+> => {
+	const sourceEnv = await effects.readServiceEnvironment({
+		serviceId: source.sourceServiceId,
+		accessToken: collected.accessToken,
+		...(collected.apiBaseUrl === undefined ? {} : { apiBaseUrl: collected.apiBaseUrl }),
+	})
+	const controlEnv = await effects.readServiceEnvironment({
+		serviceId: source.controlServiceId,
+		accessToken: collected.accessToken,
+		...(collected.apiBaseUrl === undefined ? {} : { apiBaseUrl: collected.apiBaseUrl }),
+	})
+	return { sourceEnv, controlEnv, live: liveGitHubState(sourceEnv, controlEnv) }
+}
+
+const writeCredential = async (
+	input: { readonly serviceId: string; readonly key: string; readonly value: string; readonly service: 'source' | 'control' },
+	collected: Collected,
+	source: ConfigureSourceResult,
+	effects: InitEffects,
+	signal: AbortSignal,
+): Promise<void> => {
+	let writeFailed = false
+	try {
+		await effects.createServiceEnvironment({
+			serviceId: input.serviceId,
+			key: input.key,
+			value: input.value,
+			accessToken: collected.accessToken,
+			...(collected.apiBaseUrl === undefined ? {} : { apiBaseUrl: collected.apiBaseUrl }),
+		})
+	} catch {
+		writeFailed = true
+	}
+	for (let attempt = 0; attempt < 8; attempt += 1) {
+		const state = await readCredentialState(collected, source, effects).catch(() => undefined)
+		const live = input.service === 'source' ? state?.sourceEnv.get(input.key) : state?.controlEnv.get(input.key)
+		if (live === input.value) return
+		if (live !== undefined && live !== input.value) {
+			throw new Error('GitHub App configuration conflicts with a live Zerops value; nothing was overwritten')
+		}
+		if (attempt < 7) await effects.sleep(500, signal)
+	}
+	throw new Error(
+		writeFailed
+			? 'Zerops did not confirm whether a GitHub App credential write succeeded'
+			: 'Zerops did not expose the GitHub App credential after writing it',
+	)
+}
+
+const reconcileCredentials = async (
+	credentials: GitHubAppCredentials,
+	collected: Collected,
+	source: ConfigureSourceResult,
+	effects: InitEffects,
+	signal: AbortSignal,
+): Promise<void> => {
+	const desired: Array<{ readonly serviceId: string; readonly service: 'source' | 'control'; readonly key: string; readonly value: string }> = [
+		{ serviceId: source.sourceServiceId, service: 'source', key: 'GITHUB_APP_PRIVATE_KEY', value: credentials.privateKeyPem },
+		{ serviceId: source.sourceServiceId, service: 'source', key: 'GITHUB_APP_ID', value: credentials.id },
+		{ serviceId: source.controlServiceId, service: 'control', key: 'GITHUB_WEBHOOK_SECRET', value: credentials.webhookSecret },
+	]
+	for (const item of desired) {
+		const state = await readCredentialState(collected, source, effects)
+		const live = item.service === 'source' ? state.sourceEnv.get(item.key) : state.controlEnv.get(item.key)
+		if (live === item.value) continue
+		if (live !== undefined) throw new Error('GitHub App configuration conflicts with a live Zerops value; nothing was overwritten')
+		await writeCredential(item, collected, source, effects, signal)
+	}
+}
+
+const verifyStableCredentials = async (
+	credentials: GitHubAppCredentials,
+	collected: Collected,
+	source: ConfigureSourceResult,
+	effects: InitEffects,
+	signal: AbortSignal,
+): Promise<void> => {
+	const expectedRpcKey = source.sourceEnv.get('FABRIKA_SOURCE_RPC_KEY')
+	if (expectedRpcKey === undefined || source.controlEnv.get('FABRIKA_ZEROPS_SOURCE_RPC_KEY') !== expectedRpcKey) {
+		throw new Error('source RPC configuration is not stable')
+	}
+	for (let observation = 0; observation < 3; observation += 1) {
+		const state = await readCredentialState(collected, source, effects)
+		if (
+			state.sourceEnv.get('FABRIKA_SOURCE_RPC_KEY') !== expectedRpcKey
+			|| state.controlEnv.get('FABRIKA_ZEROPS_SOURCE_RPC_KEY') !== expectedRpcKey
+			|| state.live.appId !== credentials.id || state.live.privateKeyPem !== credentials.privateKeyPem
+			|| state.live.webhookSecret !== credentials.webhookSecret
+		) throw new Error('Zerops credential state changed during final verification')
+		if (observation < 2) await effects.sleep(500, signal)
+	}
+}
+
+const requiredSecret = async (prompts: InitPrompts, variable: string, question: string): Promise<string> => {
+	const value = (await prompts.secret(variable, question)).trim()
+	if (value === '') throw new Error(`${variable} is required for an existing GitHub App`)
+	return value
+}
+
+const configureGitHubApp = async (
+	installation: string,
+	collected: Collected,
+	source: ConfigureSourceResult,
+	origin: string,
+	recoveryLock: GitHubAppRecoveryLock,
+	selectedMode: Exclude<GitHubAppMode, 'anonymous'> | undefined,
+	{ prompts, effects }: InitCollaborators,
+	signal: AbortSignal,
+): Promise<GitHubInstallationPlan> => {
+	const binding = { installation, projectId: collected.projectId, controlOrigin: origin }
+	const recovery = await recoveryLock.read(binding)
+	const observed = await readCredentialState(collected, source, effects)
+	let decision = classifyGitHubAppState(observed.live, recovery)
+	let expectedIdentity: { readonly owner?: string; readonly public?: boolean } = recovery === undefined
+		? {}
+		: { owner: recovery.owner, public: recovery.public }
+	if (decision.kind === 'conflict') throw new Error('GitHub App credentials are partial or conflict with recovery state; no value was changed')
+	if (decision.kind === 'create') {
+		if (selectedMode === undefined) throw new Error('GitHub App mode was not selected for empty live state')
+		const mode = selectedMode
+		if (mode === 'existing') {
+			const candidate: GitHubAppCredentials = {
+				id: await requiredAnswer(prompts, 'Existing GitHub App id'),
+				slug: '',
+				htmlUrl: '',
+				privateKeyPem: await requiredSecret(prompts, 'GITHUB_APP_PRIVATE_KEY', 'Existing GitHub App private key'),
+				webhookSecret: await requiredSecret(prompts, 'GITHUB_WEBHOOK_SECRET', 'Existing webhook secret already configured on the App'),
+			}
+			const client = await effects.createGitHubClient(candidate)
+			const verified = await verifiedCredentials(client, candidate, {}, signal)
+			const createdRecovery: GitHubAppRecovery = {
+				version: 1,
+				...binding,
+				owner: verified.identity.owner.login,
+				public: verified.identity.public,
+				app: verified.credentials,
+			}
+			await recoveryLock.write(createdRecovery, signal)
+			expectedIdentity = { owner: verified.identity.owner.login, public: verified.identity.public }
+			decision = { kind: 'resume', credentials: verified.credentials }
+		} else {
+			const owner = await requiredAnswer(prompts, 'GitHub organization that will own the App')
+			if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner)) throw new Error('GitHub organization is invalid')
+			const crossOrganization = collected.requestedRepositories.some((repository) => repository.owner.toLowerCase() !== owner.toLowerCase())
+			let publicApp = false
+			if (crossOrganization) {
+				publicApp = await prompts.confirm('Requested repositories cross organization boundaries. Create a PUBLIC GitHub App?', false)
+				if (!publicApp) throw new Error('cross-organization repositories require an explicitly public GitHub App')
+			}
+			const appName = await requiredAnswer(prompts, 'GitHub App name', `fabrika-${installation}`)
+			const app = await effects.createGitHubApp(
+				{ organization: owner, appName, homepageUrl: origin, webhookUrl: `${origin}/webhooks/github`, public: publicApp },
+				async (created, persistenceSignal) => {
+					await recoveryLock.write({ version: 1, ...binding, owner, public: publicApp, app: credentialsFromCreated(created) }, persistenceSignal)
+				},
+			)
+			expectedIdentity = { owner, public: publicApp }
+			decision = { kind: 'resume', credentials: credentialsFromCreated(app) }
+		}
+	}
+	let credentials = decision.credentials
+	let client = await effects.createGitHubClient(credentials)
+	const initiallyVerified = await verifiedCredentials(client, credentials, expectedIdentity, signal)
+	credentials = initiallyVerified.credentials
+	if (
+		!initiallyVerified.identity.public
+		&& collected.requestedRepositories.some((repository) => repository.owner.toLowerCase() !== initiallyVerified.identity.owner.login.toLowerCase())
+	) throw new Error('a private GitHub App cannot access requested repositories outside its owner organization')
+	if (decision.kind === 'resume') await reconcileCredentials(credentials, collected, source, effects, signal)
+	await verifyStableCredentials(credentials, collected, source, effects, signal)
+	client = await effects.createGitHubClient(credentials)
+	const identity = await verifiedCredentials(client, credentials, {
+		owner: initiallyVerified.identity.owner.login,
+		public: initiallyVerified.identity.public,
+	}, signal)
+	const webhookUrl = `${origin}/webhooks/github`
+	await client.updateWebhookConfig({ url: webhookUrl, secret: credentials.webhookSecret, signal })
+	const webhook = await client.getWebhookConfig(signal)
+	if (webhook.url !== webhookUrl || webhook.contentType !== 'json' || webhook.insecureSsl !== '0') {
+		throw new Error('GitHub App webhook configuration did not read back exactly')
+	}
+	await verifiedCredentials(client, credentials, { owner: identity.identity.owner.login, public: identity.identity.public }, signal)
+	await recoveryLock.delete(binding, credentials)
+	return { client, identity: identity.identity, repositories: collected.requestedRepositories }
+}
+
+const verifyGitHubInstallation = async (
+	plan: GitHubInstallationPlan,
+	{ log, prompts }: InitCollaborators,
+	signal: AbortSignal,
+): Promise<void> => {
+	log.action('OPERATOR ACTION — install the GitHub App', [
+		`1. Open: ${url(githubAppInstallationUrl(plan.identity.slug))}`,
+		plan.repositories.length === 0
+			? `2. Install it on the ${plan.identity.owner.login} organization; repository grants can be selected now or during onboarding.`
+			: `2. Grant access to: ${plan.repositories.map((repository) => `${repository.owner}/${repository.repository}`).join(', ')}`,
+	])
+	if (!(await prompts.confirm('Has the GitHub App been installed with the requested access?', false))) {
+		throw new Error('GitHub App installation is required before repository deploys can run')
+	}
+	if (plan.repositories.length === 0) {
+		if (await plan.client.resolveOrganizationInstallationId(plan.identity.owner.login, signal) === null) {
+			throw new Error(`GitHub App is not installed on the ${plan.identity.owner.login} organization`)
+		}
+		return
+	}
+	for (const repository of plan.repositories) {
+		if (await plan.client.resolveInstallationId(repository.owner, repository.repository, signal) === null) {
+			throw new Error(`GitHub App installation is incomplete for ${repository.owner}/${repository.repository}`)
+		}
+	}
 }
 
 /** The Environment the generated workflow reads. Secret VALUES appear here and nowhere else. */
@@ -408,6 +750,22 @@ const verifyProject = async (collected: Collected, { log, prompts, effects }: In
 		)
 	})
 	log.ok(`Zerops project ${name} (${collected.projectId}) is readable with this token.`)
+}
+
+const withRecoveryLock = async <T>(lock: GitHubAppRecoveryLock, operation: () => Promise<T>): Promise<T> => {
+	let outcome: { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: unknown }
+	try {
+		outcome = { ok: true, value: await operation() }
+	} catch (error) {
+		outcome = { ok: false, error }
+	}
+	try {
+		await lock.release()
+	} catch {
+		if (outcome.ok) throw new Error('the Zerops init lock could not be released')
+	}
+	if (!outcome.ok) throw outcome.error
+	return outcome.value
 }
 
 /**
@@ -461,23 +819,23 @@ export const runInit = async (args: InitArguments, collaborators: InitCollaborat
 
 	const collected = await collect(args, collaborators)
 	await verifyProject(collected, collaborators)
-
-	log.step('Configure the private source service')
-	log.info('This writes credentials only to Zerops: the GitHub App key stays on source, and the webhook secret stays on control.')
-	if (!(await prompts.confirm(`Create or configure \`source\` in Zerops project ${collected.projectId}?`, true))) {
-		log.action('OPERATOR ACTION — source was not changed; run init again to continue', [
-			`fabrika platform init --provider=zerops ${args.installation} --repo=${collected.repo}`,
-		])
-		return
-	} else {
+	const recoveryLock = await effects.acquireRecovery(collected.projectId, args.installation)
+	const sourceStage = await withRecoveryLock(recoveryLock, async (): Promise<
+		{ readonly continued: false } | { readonly continued: true; readonly installation?: GitHubInstallationPlan }
+	> => {
+		log.step('Configure the private source service')
+		log.info('This writes credentials only to Zerops: the GitHub App key stays on source, and the webhook secret stays on control.')
+		if (!(await prompts.confirm(`Create or configure \`source\` in Zerops project ${collected.projectId}?`, true))) {
+			log.action('OPERATOR ACTION — source was not changed; run init again to continue', [
+				`fabrika platform init --provider=zerops ${args.installation} --repo=${collected.repo}`,
+			])
+			return { continued: false }
+		}
 		const result = await effects.configureSource({
 			projectId: collected.projectId,
 			environment: collected.environmentName,
 			accessToken: collected.accessToken,
 			...(collected.apiBaseUrl === undefined ? {} : { apiBaseUrl: collected.apiBaseUrl }),
-			...(collected.githubAppId === undefined ? {} : { githubAppId: collected.githubAppId }),
-			...(collected.githubAppPrivateKey === undefined ? {} : { githubAppPrivateKey: collected.githubAppPrivateKey }),
-			...(collected.githubWebhookSecret === undefined ? {} : { githubWebhookSecret: collected.githubWebhookSecret }),
 		}).catch(() => {
 			throw new Error('source configuration did not complete; no credential value is shown. Inspect source and control in Zerops, then run init again')
 		})
@@ -486,6 +844,40 @@ export const runInit = async (args: InitArguments, collaborators: InitCollaborat
 			result.reusedRpcKey ? 'reused the matching source RPC key already held by source and control' : 'generated one source RPC key inside this run',
 		)
 		if (result.writtenKeys.length > 0) log.ok(`Zerops variables written: ${result.writtenKeys.join(', ')}`)
+		const signal = new AbortController().signal
+		let mode: Exclude<GitHubAppMode, 'anonymous'> | undefined
+		const live = liveGitHubState(result.sourceEnv, result.controlEnv)
+		if (Object.keys(live).length === 0 && !(await recoveryLock.hasRecovery())) {
+			const modes: Array<{ label: string; value: GitHubAppMode }> = [
+				{ label: 'Create an organization-owned GitHub App', value: 'create' },
+				{ label: 'Use an existing organization-owned GitHub App', value: 'existing' },
+			]
+			if (collected.requestedRepositories.length === 0) {
+				modes.push({ label: 'Anonymous public repositories only', value: 'anonymous' })
+			}
+			const selected = await prompts.select<GitHubAppMode>('How should source access GitHub repositories?', modes)
+			if (selected === 'anonymous') {
+				if (collected.requestedRepositories.length > 0) throw new Error('requested repositories require a GitHub App')
+				log.info('source remains in anonymous public-repository mode; no GitHub App or webhook was changed')
+				return { continued: true }
+			}
+			mode = selected
+		}
+		const installation = await Promise.resolve().then(() => {
+			const origin = controlOrigin(collected, result)
+			return configureGitHubApp(args.installation, collected, result, origin, recoveryLock, mode, collaborators, signal)
+		}).catch(() => {
+			throw new Error(
+				'GitHub App configuration did not complete; no credential value is shown. Inspect the protected recovery state and Zerops, then run init again',
+			)
+		})
+		return { continued: true, installation }
+	})
+	if (!sourceStage.continued) return
+	if (sourceStage.installation !== undefined) {
+		await verifyGitHubInstallation(sourceStage.installation, collaborators, new AbortController().signal).catch(() => {
+			throw new Error('GitHub App installation verification did not complete. Inspect the App installation on GitHub, then run init again')
+		})
 	}
 
 	const dir = await scaffold(args.installation, collected, collaborators)
@@ -557,5 +949,17 @@ export const consoleInitCollaborators = (): InitCollaborators => ({
 			const api = createZeropsApi({ token: input.accessToken, ...(input.apiBaseUrl === undefined ? {} : { baseUrl: input.apiBaseUrl }) })
 			return configureSourceService(input, api, defaultSleep, new AbortController().signal)
 		},
+		readServiceEnvironment: async ({ serviceId, accessToken, apiBaseUrl }) => {
+			const api = createZeropsApi({ token: accessToken, ...(apiBaseUrl === undefined ? {} : { baseUrl: apiBaseUrl }) })
+			return new Map((await api.listServiceEnv({ serviceId, signal: new AbortController().signal })).map((item) => [item.key, item.content]))
+		},
+		createServiceEnvironment: async ({ serviceId, key, value, accessToken, apiBaseUrl }) => {
+			const api = createZeropsApi({ token: accessToken, ...(apiBaseUrl === undefined ? {} : { baseUrl: apiBaseUrl }) })
+			await api.createServiceEnv({ serviceId, key, value, signal: new AbortController().signal })
+		},
+		sleep: defaultSleep,
+		acquireRecovery: (projectId, installation) => acquireGitHubAppRecoveryLock({ projectId, installation }),
+		createGitHubApp: (input, onCreated) => createGitHubAppViaManifest(input, { onCreated }),
+		createGitHubClient: ({ id, privateKeyPem }) => GitHubAppClient.create({ appId: id, privateKeyPem }),
 	},
 })

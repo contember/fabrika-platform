@@ -89,14 +89,21 @@ and is deliberate — someone reading only one path will guess wrong about the o
   from the environment.** There is no `--token` and no `--admin-key`; an unknown
   flag is an error precisely so one cannot arrive on a command line. Every secret
   an installation holds is placed at bring-up.
-- **`platform init` persists no credential to disk.** Both GitHub Environment
+- **`platform init` keeps deployment credentials off disk.** Both GitHub Environment
   secrets already belong to the installation (the operator's Zerops integration
   token, and the `px_` provisioning key IAM was seeded with). The source upgrade
   generates one RPC key only when neither source nor control has one, and writes
   it directly to those Zerops services. A valid key on only one side repairs the
   absent side; a matching pair is reused; invalid or mismatched values are refused.
-  Optional GitHub App credentials stay only on source and
-  the independent webhook secret stays only on control.
+  GitHub App creation is the narrow exception: its one-time PEM and webhook secret first enter an
+  owner-only recovery file under `${XDG_STATE_HOME}/fabrika-platform/zerops-init/`, then init fills only
+  absent live keys and deletes the file after durable Zerops credentials and exact App identity and
+  webhook configuration verify. Installation access is checked independently on every rerun. The
+  private key ends on source and the independent webhook secret on control; neither enters the sidecar
+  or GitHub Environment. A partial or mismatched live bundle is refused rather than overwritten.
+  The loopback lock coordinates this host only. Run one operator per Zerops project; cross-host safety
+  relies on create-only remote writes and final repeated readback, which detects rather than serializes
+  a concurrent writer.
 - **`init` confirms before every step that leaves the operator's disk**: reading
   the project, configuring source, creating or pushing the repository, writing
   the Environment, and triggering the run.
