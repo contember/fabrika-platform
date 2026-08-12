@@ -41,7 +41,8 @@ public `contember/fabrika-platform` repository, which needs no credential and no
 ## Implemented foundation
 
 Commits `d091d67`, `49f3b17`, `4084234`, `4ab9ec2`, `5bc1f0e`, `68854f3` and `71e406a`
-delivered the foundation; `b55d059` made the archive order canonical across GitHub metadata order:
+delivered the foundation; `b55d059` made the archive order canonical across GitHub metadata order and
+`5c9d99f` added legacy active-run recovery:
 
 - `source` is private and authenticates every RPC before reading its bounded body. Requests and
   responses bind the run, repository, exact commit, descriptor digest and app version; upload also

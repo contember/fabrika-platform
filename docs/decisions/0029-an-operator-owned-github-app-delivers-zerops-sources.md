@@ -122,10 +122,12 @@ stores only the App and installation identifiers needed to select the credential
 The source contract and persisted run state (`d091d67`), isolated GitHub App credential client
 (`49f3b17`), provider upload lifecycle (`4084234`), control delegation and webhook verification
 (`4ab9ec2`, `5bc1f0e`), installation topology (`68854f3`), private source runtime (`71e406a`) and
-canonical archive order (`b55d059`) implement this decision. The application provider no longer has a
-`buildFromGit` branch: resolve, application-version creation, upload and `build-and-deploy` are now the
-one application lifecycle. This is a local implementation witness, not the live public/private
-acceptance gate recorded by the active sprint.
+canonical archive order (`b55d059`) implement this decision. Commit `5c9d99f` migrates active legacy
+Zerops runs whose external app-version id predates provider checkpoints to the historically exact
+`build_triggered` phase and isolates per-run reconciliation failures. The application provider no
+longer has a `buildFromGit` branch: resolve, application-version creation, upload and
+`build-and-deploy` are now the one application lifecycle. This is a local implementation witness, not
+the live public/private acceptance gate recorded by the active sprint.
 
 The production source runtime is fixed to `github.com` and `api.github.com`. It has no operator-facing
 GitHub Enterprise or API-base setting; dependency-injected origins exist only as test seams. Before it

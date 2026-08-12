@@ -151,9 +151,10 @@ Zerops build pipeline.
   - use the upload path for public and private repositories and remove WU2's application
     `buildFromGit` path; both are implemented, with live parity still to prove.
 - **Code witness.** Commits `d091d67`, `49f3b17`, `4084234`, `4ab9ec2`, `5bc1f0e`, `68854f3` and
-  `71e406a` implement this scope; `b55d059` makes archive order independent of GitHub metadata order.
-  The source service, provider lifecycle, control delegation, installation topology and supported
-  upgrade flow are locally verified. The acceptance below remains open until both live deploys succeed.
+  `71e406a` implement this scope; `b55d059` makes archive order independent of GitHub metadata order
+  and `5c9d99f` migrates active legacy Zerops runs into the exact recoverable checkpoint. The source
+  service, provider lifecycle, control delegation, installation topology and supported upgrade flow
+  are locally verified. The acceptance below remains open until both live deploys succeed.
 - **Security gates.** Project-network reachability is not authorization. Tests must prove an unsigned
   source request is refused; the request binds repository, ref, installation, app version, upload URL
   and run; only the live-verified Zerops HTTPS upload origin, path, empty userinfo and non-empty signed
@@ -421,6 +422,11 @@ control HTTP client and persisted provider run state. Commit `49f3b17` isolated 
 installation lookup and short-lived token minting in the credential-owning package. Commit `4084234`
 then implemented the provider's resolve → app-version create → upload → build-and-deploy lifecycle,
 including durable checkpoints and conservative cleanup after ambiguous pre-trigger failures.
+
+Commit `5c9d99f` maps only active legacy Zerops runs with an external app-version id and no provider
+checkpoint to `build_triggered`, matching the historical order in which that id was persisted. One
+malformed or failing reconciliation row no longer prevents later rows from progressing, and failures
+after a terminal database transition cannot reclassify that run as active.
 
 Commits `4ab9ec2` and `5bc1f0e` moved Zerops repository installation lookup, commit resolution and
 archive upload behind the authenticated source RPC while keeping strict webhook HMAC verification on
