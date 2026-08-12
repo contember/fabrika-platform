@@ -7,7 +7,13 @@ import {
 	type ZeropsSourceUploadInput,
 } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
-import { HttpZeropsSourceClient, ZEROPS_SOURCE_RESPONSE_MAX_BYTES, ZeropsSourceClientError, type ZeropsSourceFetch } from '../source-client'
+import {
+	HttpZeropsSourceClient,
+	ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS,
+	ZEROPS_SOURCE_RESPONSE_MAX_BYTES,
+	ZeropsSourceClientError,
+	type ZeropsSourceFetch,
+} from '../source-client'
 
 const ORIGIN = 'http://source:3000'
 const RPC_KEY = 'source-rpc-key-that-is-at-least-32-characters'
@@ -51,13 +57,19 @@ const body = (call: RecordedCall): unknown => {
 	return parsed
 }
 
-const harness = (respond: ZeropsSourceFetch): { client: HttpZeropsSourceClient; calls: RecordedCall[] } => {
+const harness = (
+	respond: ZeropsSourceFetch,
+	timeoutsMs?: { resolveInstallation?: number; resolve?: number; upload?: number; cancel?: number },
+): { client: HttpZeropsSourceClient; calls: RecordedCall[] } => {
 	const calls: RecordedCall[] = []
 	const fetch: ZeropsSourceFetch = (url, init) => {
 		calls.push({ url, init })
 		return respond(url, init)
 	}
-	return { client: new HttpZeropsSourceClient({ origin: `${ORIGIN}/`, rpcKey: RPC_KEY, fetch }), calls }
+	return {
+		client: new HttpZeropsSourceClient({ origin: `${ORIGIN}/`, rpcKey: RPC_KEY, fetch, ...(timeoutsMs === undefined ? {} : { timeoutsMs }) }),
+		calls,
+	}
 }
 
 const clientError = async (operation: Promise<unknown>): Promise<ZeropsSourceClientError> => {
@@ -71,6 +83,12 @@ const clientError = async (operation: Promise<unknown>): Promise<ZeropsSourceCli
 }
 
 describe('HTTP Zerops source client requests', () => {
+	test('provides an internal abort signal when onboarding does not supply one', async () => {
+		const { client, calls } = harness(async () => jsonResponse({ protocolVersion: 1, githubInstallationId: 42 }))
+		await expect(client.resolveInstallationId('github.com/contember/fabrika-platform')).resolves.toBe(42)
+		expect(calls[0]?.init.signal).toBeInstanceOf(AbortSignal)
+	})
+
 	test('uses shared endpoints, bearer authentication, JSON, redirect refusal, and each caller signal', async () => {
 		const installationSignal = new AbortController().signal
 		const resolveSignal = new AbortController().signal
@@ -115,7 +133,9 @@ describe('HTTP Zerops source client requests', () => {
 			`${ORIGIN}${ZEROPS_SOURCE_UPLOAD_PATH}`,
 			`${ORIGIN}${ZEROPS_SOURCE_CANCEL_PATH}`,
 		])
-		expect(calls.map((call) => call.init.signal)).toEqual([installationSignal, resolveSignal, uploadSignal, cancelSignal])
+		for (const call of calls) {
+			expect(call.init.signal).toBeInstanceOf(AbortSignal)
+		}
 		for (const call of calls) {
 			const headers = new Headers(call.init.headers)
 			expect(call.init.method).toBe('POST')
@@ -149,6 +169,66 @@ describe('HTTP Zerops source client requests', () => {
 })
 
 describe('HTTP Zerops source client response validation', () => {
+	test('preserves caller cancellation before and during installation lookup', async () => {
+		let calls = 0
+		const preAborted = harness(async () => {
+			calls++
+			throw new Error('must not run')
+		})
+		const first = new AbortController()
+		first.abort('private reason')
+		const firstError = await preAborted.client.resolveInstallationId('github.com/acme/app', first.signal).catch((error: unknown) => error)
+		expect(firstError).toBeInstanceOf(DOMException)
+		expect(firstError instanceof Error ? firstError.name : '').toBe('AbortError')
+		expect(firstError instanceof Error ? firstError.message : '').not.toContain('private reason')
+		expect(calls).toBe(0)
+
+		const second = new AbortController()
+		const inFlight = harness((_url, init) =>
+			new Promise<Response>((_resolve, reject) => {
+				const signal = init.signal
+				if (!(signal instanceof AbortSignal)) throw new Error('expected linked abort signal')
+				signal.addEventListener('abort', () => reject(new Error('private transport reason')), { once: true })
+			})
+		)
+		const pending = inFlight.client.resolveInstallationId('github.com/acme/app', second.signal)
+		second.abort('private caller reason')
+		const secondError = await pending.catch((error: unknown) => error)
+		expect(secondError).toBeInstanceOf(DOMException)
+		expect(secondError instanceof Error ? secondError.name : '').toBe('AbortError')
+		expect(secondError instanceof Error ? secondError.message : '').not.toContain('private')
+	})
+
+	test('bounds source calls and keeps timeout retryability operation-aware', async () => {
+		const neverResponds: ZeropsSourceFetch = (_url, init) =>
+			new Promise<Response>((_resolve, reject) => {
+				const signal = init.signal
+				if (!(signal instanceof AbortSignal)) throw new Error('expected linked abort signal')
+				signal.addEventListener('abort', () => reject(new Error('deadline contained a secret')), { once: true })
+			})
+		const resolve = harness(neverResponds, { resolveInstallation: 5 })
+		const resolveError = await clientError(resolve.client.resolveInstallationId('github.com/acme/app'))
+		expect(resolveError).toMatchObject({ operation: 'resolve-installation', code: 'transport_error', retryable: true })
+		expect(resolveError.message).not.toContain('secret')
+
+		const upload = harness(neverResponds, { upload: 5 })
+		const uploadError = await clientError(upload.client.upload(uploadInput(new AbortController().signal)))
+		expect(uploadError).toMatchObject({ operation: 'upload', code: 'transport_error', retryable: false })
+		expect(uploadError.message).not.toContain('secret')
+	})
+
+	test('allows each source operation more than its normal server-side window', async () => {
+		expect(ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.resolveInstallation).toBeGreaterThan(30_000)
+		expect(ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.resolve).toBeGreaterThan(2 * 60_000)
+		expect(ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.upload).toBeGreaterThan(10 * 60_000)
+
+		const delayed = harness(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 15))
+			return jsonResponse({ protocolVersion: 1, githubInstallationId: 42 })
+		}, { resolveInstallation: 50, resolve: 5, upload: 5, cancel: 5 })
+		await expect(delayed.client.resolveInstallationId('github.com/acme/app')).resolves.toBe(42)
+	})
+
 	test('preserves only a valid redacted non-success envelope', async () => {
 		const { client } = harness(async () => jsonResponse({ error: { code: 'upload_failed', stage: 'upload', retryable: true } }, 503))
 		const error = await clientError(client.upload(uploadInput(new AbortController().signal)))

@@ -12,7 +12,7 @@ import { ACTIONS } from '../actions'
 import type { ControlRepositories, RunRow } from '../db'
 import { error } from '../http'
 import { appScope, authorize } from '../iam'
-import type { RepoSource } from '../repo-source'
+import type { RepoEvents } from '../repo-source'
 import type { Vault } from '../vault'
 import { adoptNamespace, createNamespace, getNamespace, listNamespaces, type NamespaceContext, planNamespace, reconcileNamespace } from './namespaces'
 import {
@@ -49,7 +49,7 @@ export interface ApiDeps {
 	queue: DeployQueue
 	logs: LogReader
 	/** Used by the registry handlers to auto-detect an app's GitHub installation id at onboarding. */
-	repoSource: RepoSource
+	repoSource: RepoEvents
 	/** The installation's one statically composed provider. */
 	provider: ControlProvider
 	/** Cancel a run: destroy its container (off-local) + mark failed + free the deploy lock. */

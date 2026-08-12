@@ -11,7 +11,7 @@ import {
 	replayOperationsCatalog,
 } from './operations-catalog'
 import type { OperationsReleaseProjectionDeps } from './operations-releases'
-import { GitHubAppRepoSource, type RepoSource } from './repo-source'
+import type { RepoEvents } from './repo-source'
 import { cancelDeploy, type RunDeps } from './run-lifecycle'
 import { VaultSecretResolver } from './secret-resolver'
 import { Vault } from './vault'
@@ -59,12 +59,8 @@ export function replayOperationsCatalogProjection(env: Env): Promise<OperationsC
 	return replayOperationsCatalog(operationsCatalogDeps(env))
 }
 
-export function repoSource(env: Env): RepoSource {
-	return new GitHubAppRepoSource({
-		appId: env.GITHUB_APP_ID ?? '',
-		privateKeyPem: env.GITHUB_APP_PRIVATE_KEY ?? '',
-		webhookSecret: env.GITHUB_WEBHOOK_SECRET ?? '',
-	})
+export function repoEvents(env: Env): RepoEvents {
+	return env.REPO_EVENTS
 }
 
 export function vault(env: Env): Promise<Vault> {
@@ -81,10 +77,6 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		provider,
 		secrets: new VaultSecretResolver({
 			...(env.FABRIKA_CONTROL_VAULT_KEY !== undefined ? { vault: await vault(env) } : {}),
-			env: {
-				GITHUB_WEBHOOK_SECRET: env.GITHUB_WEBHOOK_SECRET,
-				GITHUB_APP_ID: env.GITHUB_APP_ID,
-			},
 		}),
 		lock: {
 			acquire: (key, holder) => locks(env).acquire(key, holder, DEPLOY_LOCK_TTL_MS),
@@ -106,7 +98,7 @@ export function buildApiDeps(env: Env, provider: ControlProvider, auth: AuthCont
 		auth,
 		queue: env.DEPLOY_QUEUE,
 		logs: env.RUN_LOGS,
-		repoSource: repoSource(env),
+		repoSource: repoEvents(env),
 		provider,
 		cancelRun: (run) => cancelRun(env, provider, run),
 		vault: () => vault(env),

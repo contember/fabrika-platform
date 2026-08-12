@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import type { ApiDeps } from '../api/router'
 import { handleApi } from '../api/router'
 import { uuidv7 } from '../db'
-import { FakeRepoSource } from '../repo-source'
+import { FakeRepoSource, type RepoEvents } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { createHarness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
@@ -16,7 +16,7 @@ import { allowAllAuth } from './helpers/iam'
 // the data path here; ACL is covered separately in acl.test.ts.
 
 function makeDeps(
-	opts: { installationId?: number | null; provider?: ControlProvider; catalogChanged?: () => void } = {},
+	opts: { installationId?: number | null; provider?: ControlProvider; catalogChanged?: () => void; repoSource?: RepoEvents } = {},
 ): { deps: ApiDeps; queue: DeployJobMessage[]; logStore: Map<string, string> } {
 	const { db } = createHarness()
 	const queue: DeployJobMessage[] = []
@@ -38,7 +38,7 @@ function makeDeps(
 				return Promise.resolve(v === undefined ? null : { body: new Blob([v]).stream(), text: () => Promise.resolve(v) })
 			},
 		},
-		repoSource: new FakeRepoSource({ fakeInstallationId: opts.installationId ?? null }),
+		repoSource: opts.repoSource ?? new FakeRepoSource({ fakeInstallationId: opts.installationId ?? null }),
 		provider: opts.provider ?? fakeProvider,
 		// Stand in for the runner: mark the run failed (the real seam destroys the container + frees the lock).
 		cancelRun: (run) => db.runs.markRunFinished(run.id, 'failed', null).then(() => {}),
@@ -130,6 +130,22 @@ function req(method: string, path: string, body?: unknown): Request {
 }
 
 describe('onboarding + registry CRUD', () => {
+	test('passes the registry request signal into delegated installation lookup', async () => {
+		let observed: AbortSignal | undefined
+		const { deps } = makeDeps({
+			repoSource: {
+				verifyWebhook: () => Promise.resolve(null),
+				resolveInstallationId(_repoUrl, signal) {
+					observed = signal
+					return Promise.resolve(42)
+				},
+			},
+		})
+		const request = req('POST', '/api/apps', { id: 'signal-app', repoUrl: 'https://github.com/acme/signal-app', resolveInstallationId: true })
+		expect((await handleApi(request, deps)).status).toBe(201)
+		expect(observed).toBe(request.signal)
+	})
+
 	test('schedules every catalog-affecting mutation without letting a scheduling failure change the response', async () => {
 		let scheduled = 0
 		const { deps } = makeDeps({

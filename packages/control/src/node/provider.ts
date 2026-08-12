@@ -16,7 +16,7 @@
 
 import { deploy } from '@fabrika/engine'
 import type { ControlProvider } from '@fabrika/provider-contract'
-import { createZeropsControlProvider } from '@fabrika/provider-zerops'
+import { createZeropsControlProvider, type ZeropsSourceClient } from '@fabrika/provider-zerops'
 import type { Env } from '../env'
 import { repositories } from '../services'
 import { HttpZeropsSourceClient } from './source-client'
@@ -47,17 +47,23 @@ export const zeropsNamespaceProcessConfig = (
 	iamKey: required(source, 'FABRIKA_ZEROPS_PROXY_IAM_KEY'),
 })
 
+/** Construct and validate the one source transport shared by Zerops provider and onboarding. */
+export function zeropsSourceClient(source: Record<string, string | undefined>): HttpZeropsSourceClient {
+	return new HttpZeropsSourceClient({
+		origin: required(source, 'FABRIKA_ZEROPS_SOURCE_URL'),
+		rpcKey: required(source, 'FABRIKA_ZEROPS_SOURCE_RPC_KEY'),
+	})
+}
+
 /** Compose the only provider available in the process installation. */
 export function zeropsControlProvider(
 	env: Env,
 	source: Record<string, string | undefined>,
+	sourceClient: ZeropsSourceClient = zeropsSourceClient(source),
 ): ControlProvider {
 	return createZeropsControlProvider({
 		accessToken: required(source, 'FABRIKA_ZEROPS_ACCESS_TOKEN'),
-		source: new HttpZeropsSourceClient({
-			origin: required(source, 'FABRIKA_ZEROPS_SOURCE_URL'),
-			rpcKey: required(source, 'FABRIKA_ZEROPS_SOURCE_RPC_KEY'),
-		}),
+		source: sourceClient,
 		...((): { apiBaseUrl?: string } => {
 			const apiBaseUrl = source['FABRIKA_ZEROPS_API_BASE_URL']
 			return apiBaseUrl === undefined ? {} : { apiBaseUrl }

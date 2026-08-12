@@ -23,7 +23,7 @@ import { readJson } from '../http'
 import type { Authorized } from '../iam'
 import { booleanField, nullableStringField, numberField, prop, stringField } from '../json'
 import { canonicalPublicOrigin, PublicOriginValidationError } from '../public-origin'
-import { normalizeRepoUrl, type RepoSource } from '../repo-source'
+import { normalizeRepoUrl, type RepoEvents } from '../repo-source'
 import { fail, jsonAdapter } from './domain'
 import { parseStoredEnvelope, readProviderEnvelope } from './provider-envelope'
 
@@ -31,7 +31,7 @@ export interface RegistryContext {
 	readonly repositories: ControlRepositories
 	readonly request: Request
 	readonly url: URL
-	readonly repoSource: RepoSource
+	readonly repoSource: RepoEvents
 	readonly provider: ControlProvider
 	readonly authorized: Authorized
 	readonly catalogChanged?: () => void
@@ -39,7 +39,7 @@ export interface RegistryContext {
 
 export interface RegistryUseCaseContext {
 	readonly repositories: ControlRepositories
-	readonly repoSource: RepoSource
+	readonly repoSource: RepoEvents
 	readonly provider: ControlProvider
 	readonly auth: AuthContext
 	readonly signal: AbortSignal
@@ -539,7 +539,7 @@ async function installationIdField(
 	repoUrl: string,
 ): Promise<{ githubInstallationId?: number | null }> {
 	if (input.githubInstallationId !== undefined) return { githubInstallationId: input.githubInstallationId }
-	if (input.resolveInstallationId === true) return { githubInstallationId: await c.repoSource.resolveInstallationId(repoUrl) }
+	if (input.resolveInstallationId === true) return { githubInstallationId: await c.repoSource.resolveInstallationId(repoUrl, c.signal) }
 	return {}
 }
 

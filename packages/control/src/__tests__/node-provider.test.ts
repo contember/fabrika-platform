@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { zeropsControlProvider, zeropsNamespaceProcessConfig } from '../node/provider'
+import { FakeRepoSource } from '../repo-source'
 import { createHarness } from './helpers/harness'
 
 const namespaceEnvironment = (): Record<string, string | undefined> => ({
@@ -45,6 +46,7 @@ describe('the Zerops namespace process configuration', () => {
 			},
 			DEPLOY_QUEUE: { send: () => Promise.resolve() },
 			WAIT_UNTIL: () => {},
+			REPO_EVENTS: new FakeRepoSource(),
 			ENVIRONMENT: 'prod',
 		}, {
 			...namespaceEnvironment(),
@@ -90,6 +92,7 @@ describe('the Zerops namespace process configuration', () => {
 					RUN_LOGS: { put: () => Promise.resolve(), get: () => Promise.resolve(null), delete: () => Promise.resolve() },
 					DEPLOY_QUEUE: { send: () => Promise.resolve() },
 					WAIT_UNTIL: () => {},
+					REPO_EVENTS: new FakeRepoSource(),
 					ENVIRONMENT: 'prod',
 				}, source)
 			).toThrow(`${name} is required by the Zerops provider`)

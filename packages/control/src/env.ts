@@ -21,6 +21,7 @@
 import type { IamRpc } from '@fabrika/auth'
 import type { AssetServer, BlobStore, HttpService, JobQueue, SqlDatabase, WaitUntil } from '@fabrika/platform'
 import type { ControlRepositories } from './db'
+import type { RepoEvents } from './repo-source'
 import type { DeployJobMessage } from './run-lifecycle'
 
 export interface Env {
@@ -40,6 +41,8 @@ export interface Env {
 	DEPLOY_QUEUE: JobQueue<DeployJobMessage>
 	/** Runtime-specific supervised background work (`ctx.waitUntil` or the Bun task tracker). */
 	WAIT_UNTIL: WaitUntil
+	/** Verified GitHub push events and installation lookup, composed per provider/runtime. */
+	REPO_EVENTS: RepoEvents
 	/**
 	 * IAM — authorization + audit. A service binding on Workers; an `HttpIamRpc`
 	 * (`@fabrika/auth`) over the project's private network in a process. Required in practice —
@@ -77,12 +80,6 @@ export interface Env {
 	FABRIKA_CONTROL_BOOTSTRAP_ADMINS?: string
 
 	// ── Secrets (provisioned out-of-band; never in oblaka.ts `vars` / zerops.yaml `envVariables`) ──
-	/** GitHub App webhook secret — HMAC-verifies inbound `POST /webhooks/github`. */
-	GITHUB_WEBHOOK_SECRET?: string
-	/** GitHub App id (numeric string) — signs the App JWT for installation-token minting. */
-	GITHUB_APP_ID?: string
-	/** GitHub App PEM private key — signs the App JWT. NEVER logged. */
-	GITHUB_APP_PRIVATE_KEY?: string
 	/**
 	 * The seeded IAM provisioning bearer. Core accepts it as a machine bootstrap credential;
 	 * provider composition roots may also use it for schema reconciliation.

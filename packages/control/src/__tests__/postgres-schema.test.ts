@@ -22,6 +22,7 @@ import { type ControlRepositories, createControlRepositories, uuidv7 } from '../
 import type { Env } from '../env'
 import { applyMigrations } from '../node/migrate'
 import { createFetchHandler } from '../node/server'
+import { FakeRepoSource } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { Vault } from '../vault'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
@@ -801,6 +802,7 @@ function env(): Env {
 		RUN_LOGS: logs,
 		DEPLOY_QUEUE: new PostgresJobQueue<DeployJobMessage>(raw, { queue: 'vozka-deploy' }),
 		WAIT_UNTIL: () => {},
+		REPO_EVENTS: new FakeRepoSource(),
 		ENVIRONMENT: 'local',
 		...testIamEnv,
 		// No feed fetch happens in these tests (the poller needs a resolvable feed), so the maintenance

@@ -11,12 +11,12 @@ import type { ControlRepositories } from './db'
 import { uuidv7 } from './db'
 import { error, json } from './http'
 import { refMatches } from './ref-match'
-import { normalizeRepoUrl, type RepoSource } from './repo-source'
+import { normalizeRepoUrl, type RepoEvents } from './repo-source'
 import type { DeployJobMessage } from './run-lifecycle'
 
 export interface WebhookDeps {
 	repositories: ControlRepositories
-	repoSource: RepoSource
+	repoSource: RepoEvents
 	queue: JobQueue<DeployJobMessage>
 }
 

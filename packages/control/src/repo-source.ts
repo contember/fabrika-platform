@@ -14,6 +14,8 @@ import { prop, stringField } from './json'
 
 export { pemToPkcs8 }
 
+export const GITHUB_WEBHOOK_MAX_BYTES = 1024 * 1024
+
 /** The decoded, verified payload of a GitHub `push` webhook (only the fields we use). */
 export interface PushEvent {
 	/** The pushed git ref, e.g. `refs/heads/deploy/prod`. */
@@ -40,8 +42,7 @@ export interface CloneTarget {
  *    install when one is given; otherwise returns the bare URL for a public repo).
  *  - `verifyWebhook(req)` → the decoded `PushEvent` iff the HMAC signature checks out, else null.
  */
-export interface RepoSource {
-	clone(repoUrl: string, ref: string, installationId?: number | null, signal?: AbortSignal): Promise<CloneTarget>
+export interface RepoEvents {
 	verifyWebhook(request: Request): Promise<PushEvent | null>
 	/**
 	 * Resolve the GitHub App installation id that grants access to `repoUrl` (so onboarding a private
@@ -49,6 +50,14 @@ export interface RepoSource {
 	 * installed on the repo, the host isn't GitHub, or the lookup fails. Caller cancellation remains an
 	 * AbortError; an ordinary miss must not fail app creation because the operator can set it manually.
 	 */
+	resolveInstallationId(repoUrl: string, signal?: AbortSignal): Promise<number | null>
+}
+
+export interface RepoSource extends RepoEvents {
+	clone(repoUrl: string, ref: string, installationId?: number | null, signal?: AbortSignal): Promise<CloneTarget>
+}
+
+export interface RepoInstallationLookup {
 	resolveInstallationId(repoUrl: string, signal?: AbortSignal): Promise<number | null>
 }
 
@@ -60,7 +69,7 @@ export interface RepoSource {
  * body string on success so the caller parses it once. `null` on any mismatch / malformed header.
  */
 export async function verifyWebhookSignature(rawBody: string, signatureHeader: string | null, secret: string): Promise<boolean> {
-	if (signatureHeader === null || !signatureHeader.startsWith('sha256=')) {
+	if (secret === '' || signatureHeader === null || !signatureHeader.startsWith('sha256=')) {
 		return false
 	}
 	const provided = hexToBytes(signatureHeader.slice('sha256='.length))
@@ -78,6 +87,26 @@ export async function verifyWebhookSignature(rawBody: string, signatureHeader: s
 	return crypto.subtle.verify('HMAC', key, provided, utf8(rawBody))
 }
 
+/** Keep webhook authentication local while delegating installation ownership to the source service. */
+export class LocalGitHubRepoEvents implements RepoEvents {
+	constructor(
+		private readonly webhookSecret: string | undefined,
+		private readonly installations: RepoInstallationLookup,
+	) {}
+
+	resolveInstallationId(repoUrl: string, signal?: AbortSignal): Promise<number | null> {
+		return this.installations.resolveInstallationId(repoUrl, signal)
+	}
+
+	async verifyWebhook(request: Request): Promise<PushEvent | null> {
+		const secret = this.webhookSecret
+		if (secret === undefined || secret === '') {
+			return null
+		}
+		return verifyPushWebhook(request, secret)
+	}
+}
+
 /**
  * UTF-8 encode a string into an `ArrayBuffer`-backed view. `TextEncoder().encode` is typed
  * `Uint8Array<ArrayBufferLike>`, which doesn't satisfy WebCrypto's `BufferSource` (ArrayBuffer-backed)
@@ -93,7 +122,7 @@ function utf8(text: string): Uint8Array<ArrayBuffer> {
 
 /** Parse an even-length hex string to bytes; null on any non-hex / odd length. */
 function hexToBytes(hex: string): Uint8Array<ArrayBuffer> | null {
-	if (hex.length === 0 || hex.length % 2 !== 0) {
+	if (hex.length !== 64) {
 		return null
 	}
 	const out = new Uint8Array(hex.length / 2)
@@ -234,19 +263,10 @@ export class GitHubAppRepoSource implements RepoSource {
 	}
 
 	async verifyWebhook(request: Request): Promise<PushEvent | null> {
-		const rawBody = await request.text()
-		const signature = request.headers.get('X-Hub-Signature-256')
-		const ok = await verifyWebhookSignature(rawBody, signature, this.config.webhookSecret)
-		if (!ok) {
+		if (this.config.webhookSecret === '') {
 			return null
 		}
-		let body: unknown
-		try {
-			body = JSON.parse(rawBody)
-		} catch {
-			return null
-		}
-		return decodePushEvent(body)
+		return verifyPushWebhook(request, this.config.webhookSecret)
 	}
 
 	private githubClient(): Promise<GitHubAppClient> {
@@ -259,6 +279,60 @@ export class GitHubAppRepoSource implements RepoSource {
 			...(this.config.timeoutMs === undefined ? {} : { timeoutMs: this.config.timeoutMs }),
 		})
 		return this.client
+	}
+}
+
+const verifyPushWebhook = async (request: Request, secret: string): Promise<PushEvent | null> => {
+	const rawBody = await readWebhookBody(request)
+	if (rawBody === null || !(await verifyWebhookSignature(rawBody, request.headers.get('X-Hub-Signature-256'), secret))) {
+		return null
+	}
+	let body: unknown
+	try {
+		body = JSON.parse(rawBody)
+	} catch {
+		return null
+	}
+	return decodePushEvent(body)
+}
+
+const readWebhookBody = async (request: Request): Promise<string | null> => {
+	const declaredLength = request.headers.get('content-length')
+	if (declaredLength !== null) {
+		const parsedLength = Number(declaredLength)
+		if (Number.isFinite(parsedLength) && parsedLength > GITHUB_WEBHOOK_MAX_BYTES) {
+			await request.body?.cancel().catch(() => {})
+			return null
+		}
+	}
+	if (request.body === null) return ''
+	const reader = request.body.getReader()
+	const chunks: Uint8Array[] = []
+	let length = 0
+	try {
+		while (true) {
+			const result = await reader.read()
+			if (result.done) break
+			length += result.value.byteLength
+			if (length > GITHUB_WEBHOOK_MAX_BYTES) {
+				await reader.cancel().catch(() => {})
+				return null
+			}
+			chunks.push(result.value)
+		}
+	} catch {
+		return null
+	}
+	const bytes = new Uint8Array(length)
+	let offset = 0
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset)
+		offset += chunk.byteLength
+	}
+	try {
+		return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+	} catch {
+		return null
 	}
 }
 

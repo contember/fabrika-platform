@@ -7,7 +7,7 @@ import { error } from './http'
 import { controlAuthMiddleware, controlPublicOrigin } from './iam'
 import { forwardIamAdmin } from './iam-admin'
 import { forwardOperationsApi } from './operations-gateway'
-import { buildApiDeps, repositories, repoSource } from './services'
+import { buildApiDeps, repoEvents, repositories } from './services'
 import { handleWebhook } from './webhook'
 
 export interface ControlAppEnv {
@@ -39,7 +39,7 @@ export const controlApp = defineApp<ControlAppEnv, ControlAppContext>({
 		route.post('/webhooks/github', (ctx) =>
 			handleWebhook(ctx.request, {
 				repositories: repositories(ctx.env),
-				repoSource: repoSource(ctx.env),
+				repoSource: repoEvents(ctx.env),
 				queue: ctx.env.DEPLOY_QUEUE,
 			})),
 		route.all('/iam/admin', (ctx) => iamAdmin(ctx)),

@@ -17,16 +17,15 @@ import type { VozkaRunner } from '@fabrika/runner-cloudflare'
 import { createControlRepositories } from './db'
 import type { Env } from './env'
 import { controlPublicOrigin } from './iam'
+import { GitHubAppRepoSource, type RepoSource } from './repo-source'
 import type { DeployJobMessage } from './run-lifecycle'
-import { repoSource } from './services'
 
 /**
  * The control-plane Worker's raw Cloudflare bindings + vars/secrets — what `WorkerEntrypoint` fills
- * `this.env` with. It differs from `Env` in exactly the five handles and in nothing else: every var and
- * secret is inherited, so there is one place to add one.
+ * `this.env` with. GitHub App credentials stay in this adapter and are never copied into shared `Env`.
  */
 export interface WorkerBindings
-	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'WAIT_UNTIL' | 'IAM' | 'IAM_ADMIN'>
+	extends Omit<Env, 'DB' | 'REPOSITORIES' | 'ASSETS' | 'RUN_LOGS' | 'DEPLOY_QUEUE' | 'WAIT_UNTIL' | 'REPO_EVENTS' | 'IAM' | 'IAM_ADMIN'>
 {
 	/** Registry + run history + vault + deploy locks. Migrations in `./migrations` (SQLite dialect). */
 	DB: D1Database
@@ -40,6 +39,12 @@ export interface WorkerBindings
 	CLOUDFLARE_ACCOUNT_ID?: string
 	/** Account-wide deploy credential. It is passed to the runner only for a live deploy. */
 	CLOUDFLARE_API_TOKEN?: string
+	/** GitHub App webhook secret — HMAC-verifies inbound deliveries. */
+	GITHUB_WEBHOOK_SECRET?: string
+	/** GitHub App id used only by the Cloudflare source adapter. */
+	GITHUB_APP_ID?: string
+	/** GitHub App private key used only by the Cloudflare source adapter. */
+	GITHUB_APP_PRIVATE_KEY?: string
 	/**
 	 * vozka-runner — the deploy EXECUTOR, over a service binding. Split into its own worker so a deploy
 	 * of fabrika never resets the container running that deploy. OPTIONAL because it is declared
@@ -64,8 +69,9 @@ export function cloudflareIamControlOptions(
 
 /** Present the Worker's bindings as the runtime-neutral `Env` the shared layer consumes. */
 export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL']): Env {
+	const { GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_WEBHOOK_SECRET, ...sharedBindings } = bindings
 	return {
-		...bindings,
+		...sharedBindings,
 		// The Worker's equivalent of the process's boot check: a Worker has no boot, so the first request
 		// is where a `local` claim from a publicly-served console fails. Same shape as IAM's `buildOidc`.
 		ENVIRONMENT: readEnvironmentName(bindings.ENVIRONMENT, controlPublicOrigin(bindings)),
@@ -75,8 +81,17 @@ export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL'
 		RUN_LOGS: r2BlobStore(bindings.RUN_LOGS),
 		DEPLOY_QUEUE: cfJobQueue(bindings.DEPLOY_QUEUE),
 		WAIT_UNTIL: waitUntil,
+		REPO_EVENTS: cloudflareRepoSource({ GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_WEBHOOK_SECRET }),
 		...(bindings.IAM === undefined ? {} : { IAM: bindings.IAM, IAM_ADMIN: bindings.IAM }),
 	}
+}
+
+function cloudflareRepoSource(bindings: Pick<WorkerBindings, 'GITHUB_APP_ID' | 'GITHUB_APP_PRIVATE_KEY' | 'GITHUB_WEBHOOK_SECRET'>): RepoSource {
+	return new GitHubAppRepoSource({
+		appId: bindings.GITHUB_APP_ID ?? '',
+		privateKeyPem: bindings.GITHUB_APP_PRIVATE_KEY ?? '',
+		webhookSecret: bindings.GITHUB_WEBHOOK_SECRET ?? '',
+	})
 }
 
 /** Present an R2 bucket as a `BlobStore` (the control plane reads run logs; vozka-runner writes them). */
@@ -117,11 +132,12 @@ const required = (value: string | undefined, name: string): string => {
 	return value
 }
 
-const resolveSource = async (env: Env, source: ProviderSource) => {
-	const target = await repoSource(env).clone(
+const resolveSource = async (bindings: WorkerBindings, source: ProviderSource, signal: AbortSignal) => {
+	const target = await cloudflareRepoSource(bindings).clone(
 		source.repoUrl,
 		source.ref,
 		source.githubInstallationId,
+		signal,
 	)
 	return { repoUrl: target.cloneUrl, ref: target.ref }
 }
@@ -145,7 +161,7 @@ export function cloudflareControlProvider(bindings: WorkerBindings, env: Env): C
 		accountId: bindings.CLOUDFLARE_ACCOUNT_ID ?? '',
 		apiToken: bindings.CLOUDFLARE_API_TOKEN ?? '',
 		...cloudflareIamControlOptions(env),
-		resolveSource: (source) => resolveSource(env, source),
+		resolveSource: (source, signal) => resolveSource(bindings, source, signal),
 		startRun: (job) => {
 			required(bindings.CLOUDFLARE_ACCOUNT_ID, 'CLOUDFLARE_ACCOUNT_ID')
 			required(bindings.CLOUDFLARE_API_TOKEN, 'CLOUDFLARE_API_TOKEN')

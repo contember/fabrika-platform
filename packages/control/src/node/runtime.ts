@@ -21,10 +21,11 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import { createControlRepositories } from '../db'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
+import { LocalGitHubRepoEvents } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { HttpIamAdminGateway } from './iam-admin'
 import { HttpOperationsService } from './operations'
-import { zeropsControlProvider } from './provider'
+import { zeropsControlProvider, zeropsSourceClient } from './provider'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
 export interface ProcessConfig {
@@ -96,6 +97,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	const bootstrapAdmins = source['FABRIKA_CONTROL_BOOTSTRAP_ADMINS']
 	const iamProvisioningKey = source['FABRIKA_IAM_PROVISIONING_KEY']
 	const vaultKey = source['FABRIKA_CONTROL_VAULT_KEY']
+	const sourceClient = zeropsSourceClient(source)
 
 	const env: Env = {
 		DB: db,
@@ -105,6 +107,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		RUN_LOGS: blobStore(source),
 		DEPLOY_QUEUE: queue,
 		WAIT_UNTIL: tasks.waitUntil,
+		REPO_EVENTS: new LocalGitHubRepoEvents(source['GITHUB_WEBHOOK_SECRET'], sourceClient),
 		IAM: iamRpc(source),
 		IAM_ADMIN: new HttpIamAdminGateway(required(source, 'FABRIKA_IAM_RPC_URL')),
 		ENVIRONMENT: environment,
@@ -121,16 +124,13 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 			? { OPERATIONS_ARTIFACT_ORIGIN: source['OPERATIONS_ARTIFACT_ORIGIN'] }
 			: {}),
 		...(bootstrapAdmins === undefined ? {} : { FABRIKA_CONTROL_BOOTSTRAP_ADMINS: bootstrapAdmins }),
-		...(source['GITHUB_WEBHOOK_SECRET'] !== undefined ? { GITHUB_WEBHOOK_SECRET: source['GITHUB_WEBHOOK_SECRET'] } : {}),
-		...(source['GITHUB_APP_ID'] !== undefined ? { GITHUB_APP_ID: source['GITHUB_APP_ID'] } : {}),
-		...(source['GITHUB_APP_PRIVATE_KEY'] !== undefined ? { GITHUB_APP_PRIVATE_KEY: source['GITHUB_APP_PRIVATE_KEY'] } : {}),
 		...(iamProvisioningKey === undefined ? {} : { FABRIKA_IAM_PROVISIONING_KEY: iamProvisioningKey }),
 		...(vaultKey === undefined || vaultKey === '' ? {} : { FABRIKA_CONTROL_VAULT_KEY: vaultKey }),
 	}
 
 	return {
 		env,
-		provider: zeropsControlProvider(env, source),
+		provider: zeropsControlProvider(env, source, sourceClient),
 		config,
 		queue,
 		async shutdown(): Promise<void> {

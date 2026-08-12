@@ -1,5 +1,15 @@
 import { describe, expect, test } from 'bun:test'
-import { decodePushEvent, GitHubAppRepoSource, normalizeRepoUrl, parseGitHubRepo, pemToPkcs8, verifyWebhookSignature } from '../repo-source'
+import { createHmac } from 'node:crypto'
+import {
+	decodePushEvent,
+	GITHUB_WEBHOOK_MAX_BYTES,
+	GitHubAppRepoSource,
+	LocalGitHubRepoEvents,
+	normalizeRepoUrl,
+	parseGitHubRepo,
+	pemToPkcs8,
+	verifyWebhookSignature,
+} from '../repo-source'
 import { signWebhook } from './helpers/harness'
 
 // Primitive-level unit tests for the control-owned RepoSource logic: HMAC-SHA256 webhook
@@ -30,6 +40,70 @@ describe('verifyWebhookSignature (HMAC-SHA256)', () => {
 		expect(await verifyWebhookSignature(body, 'not-prefixed', secret)).toBe(false)
 		expect(await verifyWebhookSignature(body, 'sha256=zzzz', secret)).toBe(false) // non-hex
 		expect(await verifyWebhookSignature(body, 'sha256=abc', secret)).toBe(false) // odd length
+		expect(await verifyWebhookSignature(body, `sha256=${'a'.repeat(66)}`, secret)).toBe(false)
+	})
+
+	test('rejects an empty webhook key even when the signature was computed with it', async () => {
+		const emptyKeySignature = `sha256=${createHmac('sha256', '').update(body).digest('hex')}`
+		expect(await verifyWebhookSignature(body, emptyKeySignature, '')).toBe(false)
+	})
+})
+
+describe('LocalGitHubRepoEvents', () => {
+	const body = JSON.stringify({ ref: 'refs/heads/main', repository: { clone_url: 'https://github.com/acme/app.git' } })
+
+	test('keeps webhook HMAC local and delegates installation lookup with the caller signal', async () => {
+		const calls: Array<{ repoUrl: string; signal?: AbortSignal }> = []
+		const events = new LocalGitHubRepoEvents('hook-secret', {
+			resolveInstallationId(repoUrl, signal) {
+				calls.push({ repoUrl, ...(signal === undefined ? {} : { signal }) })
+				return Promise.resolve(73)
+			},
+		})
+		const signal = new AbortController().signal
+		await expect(events.resolveInstallationId('github.com/acme/app', signal)).resolves.toBe(73)
+		expect(calls).toEqual([{ repoUrl: 'github.com/acme/app', signal }])
+
+		const signature = await signWebhook(body, 'hook-secret')
+		const event = await events.verifyWebhook(
+			new Request('https://control.test/webhooks/github', {
+				method: 'POST',
+				body,
+				headers: { 'X-Hub-Signature-256': signature },
+			}),
+		)
+		expect(event?.repoUrl).toBe('https://github.com/acme/app.git')
+	})
+
+	test.each([undefined, ''])('fails closed when the webhook secret is %s', async (secret) => {
+		let lookups = 0
+		const events = new LocalGitHubRepoEvents(secret, {
+			resolveInstallationId() {
+				lookups += 1
+				return Promise.resolve(null)
+			},
+		})
+		const emptyKeySignature = `sha256=${createHmac('sha256', '').update(body).digest('hex')}`
+		const request = new Request('https://control.test/webhooks/github', {
+			method: 'POST',
+			body,
+			headers: { 'X-Hub-Signature-256': emptyKeySignature },
+		})
+		await expect(events.verifyWebhook(request)).resolves.toBeNull()
+		expect(lookups).toBe(0)
+		expect(request.bodyUsed).toBe(false)
+	})
+
+	test('rejects an oversized body before HMAC or JSON decoding', async () => {
+		const events = new LocalGitHubRepoEvents('hook-secret', { resolveInstallationId: () => Promise.resolve(null) })
+		const oversized = 'x'.repeat(GITHUB_WEBHOOK_MAX_BYTES + 1)
+		await expect(events.verifyWebhook(
+			new Request('https://control.test/webhooks/github', {
+				method: 'POST',
+				body: oversized,
+				headers: { 'X-Hub-Signature-256': await signWebhook(oversized, 'hook-secret') },
+			}),
+		)).resolves.toBeNull()
 	})
 })
 
@@ -78,6 +152,60 @@ describe('decodePushEvent', () => {
 })
 
 describe('GitHubAppRepoSource separation', () => {
+	test('passes pre-aborted and in-flight caller cancellation through private clone token minting', async () => {
+		const { generateKeyPairSync } = await import('node:crypto')
+		const { privateKey } = generateKeyPairSync('rsa', {
+			modulusLength: 2048,
+			publicKeyEncoding: { type: 'spki', format: 'pem' },
+			privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+		})
+		let requests = 0
+		const started = Promise.withResolvers<void>()
+		const source = new GitHubAppRepoSource({
+			appId: '1',
+			privateKeyPem: privateKey,
+			webhookSecret: 'hook-secret',
+			fetch: (_url, init) => {
+				requests += 1
+				started.resolve()
+				const signal = init?.signal
+				if (!(signal instanceof AbortSignal)) throw new Error('expected caller-linked signal')
+				return new Promise<Response>((_resolve, reject) => {
+					signal.addEventListener('abort', () => reject(new Error('private reason')), { once: true })
+				})
+			},
+		})
+
+		const preAborted = new AbortController()
+		preAborted.abort('private reason')
+		const first = await source.clone('github.com/acme/private', 'refs/heads/main', 7, preAborted.signal).catch((error: unknown) => error)
+		expect(first).toBeInstanceOf(DOMException)
+		expect(first instanceof Error ? first.name : '').toBe('AbortError')
+		expect(requests).toBe(0)
+
+		const inFlight = new AbortController()
+		const pending = source.clone('github.com/acme/private', 'refs/heads/main', 7, inFlight.signal)
+		await started.promise
+		inFlight.abort('private reason')
+		const second = await pending.catch((error: unknown) => error)
+		expect(second).toBeInstanceOf(DOMException)
+		expect(second instanceof Error ? second.name : '').toBe('AbortError')
+		expect(second instanceof Error ? second.message : '').not.toContain('private')
+		expect(requests).toBe(1)
+	})
+
+	test('rejects an oversized webhook body', async () => {
+		const source = new GitHubAppRepoSource({ appId: '', privateKeyPem: '', webhookSecret: 'hook-secret' })
+		const oversized = 'x'.repeat(GITHUB_WEBHOOK_MAX_BYTES + 1)
+		await expect(source.verifyWebhook(
+			new Request('https://control.test/webhooks/github', {
+				method: 'POST',
+				body: oversized,
+				headers: { 'X-Hub-Signature-256': await signWebhook(oversized, 'hook-secret') },
+			}),
+		)).resolves.toBeNull()
+	})
+
 	test('public clone and webhook verification do not require App credentials', async () => {
 		const source = new GitHubAppRepoSource({ appId: '', privateKeyPem: '', webhookSecret: 'hook-secret' })
 		expect(await source.clone('github.com/acme/public', 'refs/heads/main')).toEqual({

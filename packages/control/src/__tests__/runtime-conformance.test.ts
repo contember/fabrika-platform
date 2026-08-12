@@ -2,6 +2,7 @@ import { assertAppRuntimeConformance } from '@fabrika/app/testing'
 import { describe, expect, test } from 'bun:test'
 import { controlApp } from '../app'
 import type { Env } from '../env'
+import { FakeRepoSource } from '../repo-source'
 import { createHarness } from './helpers/harness'
 import { fakeControlProvider } from './helpers/provider'
 import { testIamEnv } from './helpers/tokens'
@@ -19,6 +20,7 @@ function env(): Env {
 		},
 		DEPLOY_QUEUE: { send: () => Promise.resolve() },
 		WAIT_UNTIL: () => {},
+		REPO_EVENTS: new FakeRepoSource(),
 		ENVIRONMENT: 'local',
 		...testIamEnv,
 	}

@@ -148,7 +148,7 @@ export interface CloudflareControlOptions {
 	readonly apiToken: string
 	readonly propustkaUrl?: string
 	readonly propustkaProvisioningKey?: string
-	resolveSource(source: ProviderSource): Promise<ResolvedCloudflareSource>
+	resolveSource(source: ProviderSource, signal: AbortSignal): Promise<ResolvedCloudflareSource>
 	startRun(job: CloudflareRunnerJob): Promise<ProviderTerminalOutcome>
 	cancelRun(runId: string): Promise<void>
 }
@@ -186,7 +186,7 @@ const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegist
 }
 
 const buildJob = async (options: CloudflareControlOptions, input: ProviderDeployInput): Promise<CloudflareRunnerJob> => {
-	const source = await options.resolveSource(input.app.source)
+	const source = await options.resolveSource(input.app.source, input.signal)
 	const storedTarget = decodeEnvelope('target', input.environment.target, cloudflareStoredTargetCodec)
 	const artifact = decodeEnvelope('artifact', input.environment.artifact, cloudflareArtifactCodec)
 	const managedEnvironment: Record<string, string> = {}

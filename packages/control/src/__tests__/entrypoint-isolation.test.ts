@@ -169,4 +169,11 @@ describe('entrypoint isolation', () => {
 			expect(`${entry}: ${[...walk(entry).externals].filter((specifier) => PROVIDERS.has(specifier)).join(',')}`).toBe(`${entry}: `)
 		}
 	})
+
+	test('the Zerops process graph does not read or expose GitHub App credentials', () => {
+		for (const file of walk('node/server.ts').files) {
+			const source = readFileSync(resolve(SRC, file), 'utf8')
+			expect(`${file}: ${source.includes('GITHUB_APP_ID') || source.includes('GITHUB_APP_PRIVATE_KEY')}`).toBe(`${file}: false`)
+		}
+	})
 })

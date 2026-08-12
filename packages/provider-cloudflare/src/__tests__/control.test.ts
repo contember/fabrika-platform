@@ -58,6 +58,35 @@ const deployInput = (): ProviderDeployInput => ({
 })
 
 describe('Cloudflare control provider', () => {
+	test('passes caller cancellation through source resolution', async () => {
+		const observed: AbortSignal[] = []
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			resolveSource: async (_source, signal) => {
+				observed.push(signal)
+				if (signal.aborted) throw new DOMException('private caller reason', 'AbortError')
+				return new Promise((_resolve, reject) => {
+					signal.addEventListener('abort', () => reject(new DOMException('private caller reason', 'AbortError')), { once: true })
+				})
+			},
+			startRun: async () => ({ state: 'succeeded' }),
+			cancelRun: async () => {},
+		})
+		const preAborted = new AbortController()
+		preAborted.abort()
+		const preError = await provider.deploy({ ...deployInput(), signal: preAborted.signal }).catch((error: unknown) => error)
+		expect(preError).toBeInstanceOf(DOMException)
+		expect(observed[0]).toBe(preAborted.signal)
+
+		const inFlight = new AbortController()
+		const pending = provider.deploy({ ...deployInput(), signal: inFlight.signal })
+		inFlight.abort()
+		const inFlightError = await pending.catch((error: unknown) => error)
+		expect(inFlightError).toBeInstanceOf(DOMException)
+		expect(observed[1]).toBe(inFlight.signal)
+	})
+
 	test('normalizes registration and builds the runner request without persisting credentials', async () => {
 		const jobs: CloudflareRunnerJob[] = []
 		const externalIds: string[] = []

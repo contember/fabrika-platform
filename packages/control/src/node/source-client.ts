@@ -25,6 +25,12 @@ import {
 const MIN_RPC_KEY_LENGTH = 32
 const MALFORMED = Symbol('malformed source response')
 export const ZEROPS_SOURCE_RESPONSE_MAX_BYTES = 64 * 1024
+export const ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS = {
+	resolveInstallation: 45_000,
+	resolve: 5 * 60_000,
+	upload: 20 * 60_000,
+	cancel: 30_000,
+}
 
 interface SourceResponse {
 	status: number
@@ -41,6 +47,12 @@ export interface HttpZeropsSourceClientOptions {
 	origin: string
 	rpcKey: string
 	fetch?: ZeropsSourceFetch
+	timeoutsMs?: {
+		resolveInstallation?: number
+		resolve?: number
+		upload?: number
+		cancel?: number
+	}
 }
 
 /** A detail-free transport failure. It deliberately carries no cause, request, response body, or URL. */
@@ -61,6 +73,7 @@ export class HttpZeropsSourceClient implements ZeropsSourceClient {
 	private readonly origin: string
 	private readonly rpcKey: string
 	private readonly fetchImpl: ZeropsSourceFetch
+	private readonly timeoutsMs: typeof ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS
 
 	constructor(options: HttpZeropsSourceClientOptions) {
 		this.origin = sourceOrigin(options.origin)
@@ -69,9 +82,20 @@ export class HttpZeropsSourceClient implements ZeropsSourceClient {
 		}
 		this.rpcKey = options.rpcKey
 		this.fetchImpl = options.fetch ?? globalThis.fetch
+		this.timeoutsMs = {
+			resolveInstallation: options.timeoutsMs?.resolveInstallation ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.resolveInstallation,
+			resolve: options.timeoutsMs?.resolve ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.resolve,
+			upload: options.timeoutsMs?.upload ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.upload,
+			cancel: options.timeoutsMs?.cancel ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.cancel,
+		}
+		for (const timeout of Object.values(this.timeoutsMs)) {
+			if (!Number.isSafeInteger(timeout) || timeout <= 0) {
+				throw new Error('source RPC timeouts must be positive integers')
+			}
+		}
 	}
 
-	async resolveInstallationId(repoUrl: string, signal: AbortSignal): Promise<number | null> {
+	async resolveInstallationId(repoUrl: string, signal: AbortSignal = new AbortController().signal): Promise<number | null> {
 		const operation = 'resolve-installation'
 		const request = this.build(operation, () => buildZeropsSourceResolveInstallationRequest(repoUrl))
 		const result = await this.post(operation, ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH, request, signal)
@@ -157,6 +181,7 @@ export class HttpZeropsSourceClient implements ZeropsSourceClient {
 
 	private async post(operation: ZeropsSourceClientOperation, path: string, body: unknown, signal: AbortSignal): Promise<SourceResponse> {
 		if (signal.aborted) throw abortError()
+		const deadline = linkedDeadline(signal, timeoutFor(operation, this.timeoutsMs))
 		let response: Response
 		try {
 			response = await this.fetchImpl(`${this.origin}${path}`, {
@@ -168,34 +193,72 @@ export class HttpZeropsSourceClient implements ZeropsSourceClient {
 				},
 				body: JSON.stringify(body),
 				redirect: 'error',
-				signal,
+				signal: deadline.signal,
 			})
 		} catch {
+			deadline.dispose()
 			if (signal.aborted) throw abortError()
+			if (deadline.timedOut()) throw transportError(operation)
 			throw new ZeropsSourceClientError(operation, null, 'transport_error', 'transport', operation !== 'upload')
 		}
 
-		const value = await readResponseJson(response)
-		if (signal.aborted) throw abortError()
-		if (!response.ok) {
-			if (value !== MALFORMED) {
-				try {
-					const envelope = decodeZeropsSourceErrorEnvelope(value)
-					throw new ZeropsSourceClientError(
-						operation,
-						response.status,
-						envelope.error.code,
-						envelope.error.stage,
-						envelope.error.retryable,
-					)
-				} catch (error) {
-					if (error instanceof ZeropsSourceClientError) throw error
+		try {
+			const value = await readResponseJson(response, deadline.signal)
+			if (signal.aborted) throw abortError()
+			if (deadline.timedOut()) throw transportError(operation)
+			if (!response.ok) {
+				if (value !== MALFORMED) {
+					try {
+						const envelope = decodeZeropsSourceErrorEnvelope(value)
+						throw new ZeropsSourceClientError(
+							operation,
+							response.status,
+							envelope.error.code,
+							envelope.error.stage,
+							envelope.error.retryable,
+						)
+					} catch (error) {
+						if (error instanceof ZeropsSourceClientError) throw error
+					}
 				}
+				throw invalidResponse(operation, response.status)
 			}
-			throw invalidResponse(operation, response.status)
+			if (value === MALFORMED) throw invalidResponse(operation, response.status)
+			return { status: response.status, value }
+		} finally {
+			deadline.dispose()
 		}
-		if (value === MALFORMED) throw invalidResponse(operation, response.status)
-		return { status: response.status, value }
+	}
+}
+
+const timeoutFor = (operation: ZeropsSourceClientOperation, timeouts: typeof ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS): number => {
+	if (operation === 'resolve-installation') return timeouts.resolveInstallation
+	return timeouts[operation]
+}
+
+interface LinkedDeadline {
+	readonly signal: AbortSignal
+	timedOut(): boolean
+	dispose(): void
+}
+
+const linkedDeadline = (caller: AbortSignal, timeoutMs: number): LinkedDeadline => {
+	const controller = new AbortController()
+	let timedOut = false
+	const callerAborted = (): void => controller.abort()
+	caller.addEventListener('abort', callerAborted, { once: true })
+	if (caller.aborted) controller.abort()
+	const timer = setTimeout(() => {
+		timedOut = true
+		controller.abort()
+	}, timeoutMs)
+	return {
+		signal: controller.signal,
+		timedOut: () => timedOut,
+		dispose() {
+			clearTimeout(timer)
+			caller.removeEventListener('abort', callerAborted)
+		},
 	}
 }
 
@@ -225,9 +288,12 @@ const sourceOrigin = (origin: string): string => {
 const invalidResponse = (operation: ZeropsSourceClientOperation, status: number): ZeropsSourceClientError =>
 	new ZeropsSourceClientError(operation, status, 'invalid_response', 'transport', operation !== 'upload' && status >= 500)
 
+const transportError = (operation: ZeropsSourceClientOperation): ZeropsSourceClientError =>
+	new ZeropsSourceClientError(operation, null, 'transport_error', 'transport', operation !== 'upload')
+
 const abortError = (): DOMException => new DOMException('The source request was aborted', 'AbortError')
 
-const readResponseJson = async (response: Response): Promise<unknown | typeof MALFORMED> => {
+const readResponseJson = async (response: Response, signal: AbortSignal): Promise<unknown | typeof MALFORMED> => {
 	const declaredLength = response.headers.get('content-length')
 	if (declaredLength !== null) {
 		const parsedLength = Number(declaredLength)
@@ -238,10 +304,18 @@ const readResponseJson = async (response: Response): Promise<unknown | typeof MA
 	}
 	if (response.body === null) return MALFORMED
 	const reader = response.body.getReader()
+	const abortRead = (): void => {
+		void reader.cancel().catch(() => {})
+	}
+	signal.addEventListener('abort', abortRead, { once: true })
 	const chunks: Uint8Array[] = []
 	let length = 0
 	try {
 		while (true) {
+			if (signal.aborted) {
+				await reader.cancel().catch(() => {})
+				return MALFORMED
+			}
 			const result = await reader.read()
 			if (result.done) break
 			length += result.value.byteLength
@@ -253,6 +327,8 @@ const readResponseJson = async (response: Response): Promise<unknown | typeof MA
 		}
 	} catch {
 		return MALFORMED
+	} finally {
+		signal.removeEventListener('abort', abortRead)
 	}
 	const bytes = new Uint8Array(length)
 	let offset = 0

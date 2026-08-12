@@ -2,12 +2,14 @@ import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import { describe, expect, test } from 'bun:test'
 import { controlApp } from '../app'
 import type { Env } from '../env'
+import { FakeRepoSource } from '../repo-source'
 import { createHarness } from './helpers/harness'
 import { fakeControlProvider } from './helpers/provider'
 import { adminToken, operatorToken, testIamEnv, viewerToken } from './helpers/tokens'
 
 function application(overrides: Partial<Env> = {}) {
 	const harness = createHarness()
+	const { REPO_EVENTS = new FakeRepoSource(), ...rest } = overrides
 	const env: Env = {
 		DB: harness.d1,
 		REPOSITORIES: harness.repositories,
@@ -19,9 +21,10 @@ function application(overrides: Partial<Env> = {}) {
 		},
 		DEPLOY_QUEUE: { send: () => Promise.resolve() },
 		WAIT_UNTIL: () => {},
+		REPO_EVENTS,
 		ENVIRONMENT: 'local',
 		...testIamEnv,
-		...overrides,
+		...rest,
 	}
 	return (request: Request) =>
 		controlApp.fetch(request, { env, provider: fakeControlProvider }, {
