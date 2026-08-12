@@ -19,7 +19,8 @@ engine lives in `@fabrika/engine`.
 - `scaffold.ts` — which files `<org>/fabrika-platform` carries (`templates/`: `platform.yml`, `fabrika.ref`,
   `README.md`, `gitignore`) and the legacy two-ref migration that must stop a refresh. The
   create/clone/commit/push mechanics are `@fabrika/installation-init`'s.
-- `github-app.ts` — the GitHub App manifest flow (PUBLIC when installed cross-org; see below).
+- `@fabrika/installation-init` owns the shared GitHub App manifest handshake; this package decides its
+  Cloudflare-specific homepage, webhook URL, visibility and installation prompt.
 - `cloudflare.ts` — CF API helpers. `envfile.ts` / `narrow.ts` — `.env` resume, runtime JSON narrowing.
 - TTY prompts, console formatting, child processes, `gh`, and the GitHub Environment write live in
   **`@fabrika/installation-init`**, shared with `@fabrika/installation-zerops`. The two inits are not

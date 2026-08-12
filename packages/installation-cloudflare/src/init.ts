@@ -13,7 +13,10 @@ import {
 	action,
 	configureEnvironment,
 	confirm,
+	type CreatedGitHubApp,
+	createGitHubAppViaManifest,
 	detail,
+	githubAppInstallationUrl,
 	info,
 	ok,
 	retry,
@@ -28,8 +31,7 @@ import {
 } from '@fabrika/installation-init'
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto'
 import { findZone, listZones, resolveAccountId, verifyToken } from './cloudflare'
-import { fromEnv, persistEnv } from './envfile'
-import { createAppViaManifest, type CreatedGitHubApp, promptInstall } from './github-app'
+import { fromEnv, persistEnv, persistEnvBundle } from './envfile'
 import { defaultCheckoutDir, readFabrikaRef, scaffoldPlatformRepo } from './scaffold'
 
 /** Everything collected before the scaffold + environment write. */
@@ -452,46 +454,108 @@ async function ensureResendApiKey(): Promise<string> {
 	return value
 }
 
-/** Create the GitHub App via the manifest flow (or reuse from .env), then prompt to install it. */
-async function ensureGitHubApp(collected: Collected): Promise<CreatedGitHubApp> {
-	step('Create the fabrika GitHub App (manifest flow)')
-	const pem = fromEnv('GITHUB_APP_PRIVATE_KEY')
-	const webhookSecret = fromEnv('GITHUB_WEBHOOK_SECRET')
-	if (pem !== undefined && webhookSecret !== undefined) {
-		const slug = fromEnv('GITHUB_APP_SLUG') ?? 'fabrika'
-		ok('Reusing the GitHub App from .env (resume) — skipping manifest creation.')
-		const app: CreatedGitHubApp = {
-			id: Number(fromEnv('GITHUB_APP_ID') ?? '0'),
-			slug,
-			htmlUrl: fromEnv('GITHUB_APP_URL') ?? `https://github.com/apps/${slug}`,
-			pem,
-			webhookSecret,
-		}
-		detail(`Install (if needed): ${url(`https://github.com/apps/${app.slug}/installations/new`)}`)
-		return app
+const GITHUB_APP_RESUME_ERROR =
+	'Stored GitHub App resume state is incomplete or invalid; restore all GitHub App values in .env or remove all five and rerun init'
+const GITHUB_APP_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/
+const GITHUB_APP_PEM = /^-----BEGIN (?:RSA )?PRIVATE KEY-----[\s\S]+-----END (?:RSA )?PRIVATE KEY-----\s*$/
+
+const readGitHubAppResume = (source: Readonly<Record<string, string | undefined>>): CreatedGitHubApp | undefined => {
+	const pem = readResumeValue(source, 'GITHUB_APP_PRIVATE_KEY')
+	const webhookSecret = readResumeValue(source, 'GITHUB_WEBHOOK_SECRET')
+	const idText = readResumeValue(source, 'GITHUB_APP_ID')
+	const slug = readResumeValue(source, 'GITHUB_APP_SLUG')
+	const htmlUrl = readResumeValue(source, 'GITHUB_APP_URL')
+	const values = [pem, webhookSecret, idText, slug, htmlUrl]
+	if (values.every((value) => value === undefined)) return undefined
+	if (pem === undefined || webhookSecret === undefined || idText === undefined || slug === undefined || htmlUrl === undefined) {
+		throw new Error(GITHUB_APP_RESUME_ERROR)
 	}
-	const appName = await text('GitHub App name', `fabrika-${collected.account}`)
-	// PUBLIC iff installed across orgs: GitHub only lets a private App install on its OWNER's repos, so an
-	// App owned by this account's org but deploying repos in another org (e.g. manGoweb-owned, deploying
-	// contember/poplach) must be public. Same-org installs stay private.
-	const ownerOrg = collected.githubOrg.toLowerCase()
-	const isPublic = collected.installRepos.some((repo) => (repo.split('/')[0] ?? '').toLowerCase() !== ownerOrg)
-	const app = await createAppViaManifest({
-		org: collected.githubOrg,
-		appName,
-		controlPlaneDomain: collected.controlPlaneDomain,
-		public: isPublic,
-	})
-	await persistEnv('GITHUB_APP_PRIVATE_KEY', app.pem)
-	await persistEnv('GITHUB_WEBHOOK_SECRET', app.webhookSecret)
-	await persistEnv('GITHUB_APP_ID', String(app.id))
-	await persistEnv('GITHUB_APP_SLUG', app.slug)
-	await persistEnv('GITHUB_APP_URL', app.htmlUrl)
-	ok('GitHub App credentials saved to .env (resume-safe).')
-	if (collected.installRepos.length > 0) {
-		await promptInstall(app, collected.installRepos)
+	const id = Number(idText)
+	let parsedUrl: URL
+	try {
+		parsedUrl = new URL(htmlUrl)
+	} catch {
+		throw new Error(GITHUB_APP_RESUME_ERROR)
+	}
+	if (
+		!Number.isSafeInteger(id) || id <= 0 || String(id) !== idText || !GITHUB_APP_SLUG.test(slug)
+		|| !GITHUB_APP_PEM.test(pem) || pem.length > 64 * 1024 || webhookSecret.length === 0 || webhookSecret.length > 4096
+		|| [...webhookSecret].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+		|| parsedUrl.protocol !== 'https:' || parsedUrl.hostname !== 'github.com' || parsedUrl.port !== ''
+		|| parsedUrl.username !== '' || parsedUrl.password !== '' || parsedUrl.search !== '' || parsedUrl.hash !== ''
+		|| parsedUrl.pathname !== `/apps/${slug}`
+	) {
+		throw new Error(GITHUB_APP_RESUME_ERROR)
+	}
+	return { id, slug, htmlUrl, pem, webhookSecret }
+}
+
+interface GitHubAppInitContext {
+	account: string
+	controlPlaneDomain: string
+	githubOrg: string
+	installRepos: string[]
+}
+
+interface GitHubAppInitDependencies {
+	source: Readonly<Record<string, string | undefined>>
+	create: typeof createGitHubAppViaManifest
+	persist(values: Readonly<Record<string, string>>): Promise<void>
+	appName(defaultValue: string): Promise<string>
+	confirmInstallation(question: string, defaultYes: boolean): Promise<boolean>
+	installAction(title: string, details: string[]): void
+}
+
+const githubAppInitDependencies: GitHubAppInitDependencies = {
+	source: ENVIRONMENT_SOURCE,
+	create: createGitHubAppViaManifest,
+	persist: persistEnvBundle,
+	appName: (defaultValue) => text('GitHub App name', defaultValue),
+	confirmInstallation: confirm,
+	installAction: action,
+}
+
+/** Create or resume one complete GitHub App, then require the repository installation grant. */
+export async function ensureGitHubApp(
+	collected: GitHubAppInitContext,
+	dependencies: GitHubAppInitDependencies = githubAppInitDependencies,
+): Promise<CreatedGitHubApp> {
+	step('Create the fabrika GitHub App (manifest flow)')
+	let app = readGitHubAppResume(dependencies.source)
+	if (app !== undefined) {
+		ok('Reusing the GitHub App from .env (resume) — skipping manifest creation.')
 	} else {
-		detail(`Install the App on the repos fabrika will deploy when you onboard them: ${url(`https://github.com/apps/${app.slug}/installations/new`)}`)
+		const appName = await dependencies.appName(`fabrika-${collected.account}`)
+		const ownerOrg = collected.githubOrg.toLowerCase()
+		const isPublic = collected.installRepos.some((repo) => (repo.split('/')[0] ?? '').toLowerCase() !== ownerOrg)
+		const controlOrigin = `https://${collected.controlPlaneDomain}`
+		app = await dependencies.create({
+			organization: collected.githubOrg,
+			appName,
+			homepageUrl: controlOrigin,
+			webhookUrl: `${controlOrigin}/webhooks/github`,
+			public: isPublic,
+		})
+		await dependencies.persist({
+			GITHUB_APP_PRIVATE_KEY: app.pem,
+			GITHUB_WEBHOOK_SECRET: app.webhookSecret,
+			GITHUB_APP_ID: String(app.id),
+			GITHUB_APP_SLUG: app.slug,
+			GITHUB_APP_URL: app.htmlUrl,
+		})
+		ok('GitHub App credentials saved to .env (resume-safe).')
+	}
+	if (collected.installRepos.length > 0) {
+		dependencies.installAction('OPERATOR ACTION — install the GitHub App', [
+			`1. Open: ${url(githubAppInstallationUrl(app.slug))}`,
+			`2. Install it on: ${collected.installRepos.join(', ')}`,
+			'3. Grant access to those repositories, then return here.',
+		])
+		if (!(await dependencies.confirmInstallation('Has the GitHub App been installed on those repositories?', false))) {
+			throw new Error('GitHub App installation is required before private repository deploys can run')
+		}
+	} else {
+		detail(`Install the App on the repos fabrika will deploy when you onboard them: ${url(githubAppInstallationUrl(app.slug))}`)
 	}
 	return app
 }

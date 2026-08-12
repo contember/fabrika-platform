@@ -11,7 +11,9 @@
  * path and the KEY names it wrote.
  */
 
-import { resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { open, rename, rm } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 
 /** The `.env` the CLI persists into — the same file Bun auto-loads, resolved against the cwd. */
 const ENV_PATH = resolve(process.cwd(), '.env')
@@ -34,21 +36,44 @@ export function fromEnv(name: string): string | undefined {
  * `.env` loader. NEVER logs the value.
  */
 export async function persistEnv(key: string, value: string): Promise<void> {
-	const file = Bun.file(ENV_PATH)
+	await persistEnvBundle({ [key]: value })
+}
+
+/** Persist a related resume bundle with one same-filesystem atomic replacement. */
+export async function persistEnvBundle(values: Readonly<Record<string, string>>): Promise<void> {
+	await persistEnvBundleAt(ENV_PATH, values)
+	for (const [key, value] of Object.entries(values)) process.env[key] = value
+}
+
+/** Package-local test seam for the same atomic `.env` replacement used in production. */
+export async function persistEnvBundleAt(path: string, values: Readonly<Record<string, string>>): Promise<void> {
+	const file = Bun.file(path)
 	const existing = (await file.exists()) ? await file.text() : ''
 	const lines = existing === '' ? [] : existing.split('\n')
-	const newLine = `${key}=${encodeEnvValue(value)}`
-	const index = lines.findIndex((line) => stripExport(line).startsWith(`${key}=`))
-	if (index >= 0) {
-		lines[index] = newLine
-	} else {
-		while (lines.length > 0 && lines[lines.length - 1] === '') {
-			lines.pop()
+	for (const [key, value] of Object.entries(values)) {
+		const newLine = `${key}=${encodeEnvValue(value)}`
+		const index = lines.findIndex((line) => stripExport(line).startsWith(`${key}=`))
+		if (index >= 0) {
+			lines[index] = newLine
+		} else {
+			while (lines.length > 0 && lines[lines.length - 1] === '') {
+				lines.pop()
+			}
+			lines.push(newLine)
 		}
-		lines.push(newLine)
 	}
-	await Bun.write(ENV_PATH, `${lines.join('\n')}\n`)
-	process.env[key] = value
+	const temporaryPath = join(dirname(path), `.env.${randomUUID()}.tmp`)
+	const temporary = await open(temporaryPath, 'wx', 0o600)
+	try {
+		await temporary.writeFile(`${lines.join('\n')}\n`, 'utf8')
+		await temporary.sync()
+		await temporary.close()
+		await rename(temporaryPath, path)
+	} catch (error) {
+		await temporary.close().catch(() => {})
+		await rm(temporaryPath, { force: true }).catch(() => {})
+		throw error
+	}
 }
 
 /** Drop a leading `export ` so `KEY=` matching works whether or not the line is export-prefixed. */
