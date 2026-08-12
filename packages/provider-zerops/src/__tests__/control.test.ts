@@ -164,6 +164,9 @@ const makeApi = (recorded: Recorded, status: () => ZeropsAppVersionStatus | unde
 	findProjects: async () => [],
 	listProjectServices: async () => [],
 	listServiceEnv: async () => [{ id: 'env-1', key: 'TOKEN', content: 'blurred' }],
+	createServiceEnv: async ({ serviceId, key, value }) => {
+		recorded.envWrites.push({ serviceId, key, value })
+	},
 	putServiceEnv: async ({ serviceId, key, value }) => {
 		recorded.envWrites.push({ serviceId, key, value })
 	},

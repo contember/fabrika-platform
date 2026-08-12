@@ -229,6 +229,77 @@ async (url, init) => {
 }
 
 describe('Zerops service-level environment writes', () => {
+	test('creates a variable once with the exact POST body and caller signal', async () => {
+		const controller = new AbortController()
+		const requests: Array<{
+			readonly method: string | undefined
+			readonly url: string
+			readonly body: string | undefined
+			readonly signal: AbortSignal | undefined
+		}> = []
+		const fetchImpl: FetchLike = async (url, init) => {
+			requests.push({ method: init?.method, url, body: init?.body, signal: init?.signal })
+			return jsonResponse({ id: 'process-1' })
+		}
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await api.createServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_RELEASE', value: 'v1', signal: controller.signal })
+
+		expect(requests).toEqual([{
+			method: 'POST',
+			url: 'https://zerops.test/service-stack/service-1/user-data',
+			body: JSON.stringify({ key: 'FABRIKA_RELEASE', content: 'v1' }),
+			signal: controller.signal,
+		}])
+	})
+
+	test('keeps a duplicate generic and never reads or updates it', async () => {
+		const secret = 'create-only-secret-that-must-not-leak'
+		const calls: string[] = []
+		const fetchImpl: FetchLike = async (url, init) => {
+			calls.push(`${init?.method ?? 'GET'} ${url.replace('https://zerops.test', '')}`)
+			return jsonResponse(
+				{ error: { code: 'userDataDuplicateKey', message: `duplicate value ${secret}` } },
+				400,
+			)
+		}
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		const error = await api.createServiceEnv({ serviceId: 'service-1', key: 'TOKEN', value: secret, signal: signal() }).catch(
+			(cause: unknown) => cause,
+		)
+
+		expect(error).toBeInstanceOf(Error)
+		expect(error instanceof Error ? error.message : '').toBe('zerops: create-only service env failed')
+		expect(error instanceof Error ? error.message : '').not.toContain(secret)
+		expect(error instanceof Error ? error.message : '').not.toContain('userDataDuplicateKey')
+		expect(calls).toEqual(['POST /service-stack/service-1/user-data'])
+	})
+
+	test('redacts transport failures and preserves caller cancellation', async () => {
+		const secret = 'transport-secret-that-must-not-leak'
+		let calls = 0
+		const failingFetch: FetchLike = async () => {
+			calls++
+			throw new Error(`transport echoed ${secret}`)
+		}
+		const failed = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: failingFetch })
+		const failure = await failed.createServiceEnv({ serviceId: 'service-1', key: 'TOKEN', value: secret, signal: signal() }).catch(
+			(cause: unknown) => cause,
+		)
+		expect(failure instanceof Error ? failure.message : '').toBe('zerops: create-only service env failed')
+		expect(failure instanceof Error ? failure.message : '').not.toContain(secret)
+
+		const controller = new AbortController()
+		controller.abort()
+		const aborted = await failed.createServiceEnv({ serviceId: 'service-1', key: 'TOKEN', value: secret, signal: controller.signal }).catch(
+			(cause: unknown) => cause,
+		)
+		expect(aborted).toBeInstanceOf(DOMException)
+		expect(aborted instanceof Error ? aborted.name : '').toBe('AbortError')
+		expect(calls).toBe(1)
+	})
+
 	test('creates a variable without reading the service first', async () => {
 		const log: { method: string; path: string; body: unknown }[] = []
 		const fetchImpl = zeropsEnvDouble([], log)

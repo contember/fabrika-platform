@@ -242,6 +242,18 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 	findProjects: async ({ name }) => [...state.projects.values()].filter((candidate) => candidate.name === name),
 	listProjectServices: async ({ projectId: id }) => [...(state.services.get(id) ?? [])],
 	listServiceEnv: async ({ serviceId }) => [...ensureServiceEnv(state, serviceId).values()],
+	createServiceEnv: async ({ serviceId, key, value }) => {
+		state.calls.push(`create:${serviceId}:${key}`)
+		const environment = ensureServiceEnv(state, serviceId)
+		if (environment.has(key)) throw new Error('duplicate service environment key')
+		environment.set(key, {
+			id: `${serviceId}:${key}`,
+			key,
+			content: value,
+			serviceStackId: serviceId,
+			type: key === ZEROPS_NAMESPACE_IAM_KEY_VARIABLE ? 'SECRET' : 'EDITABLE',
+		})
+	},
 	putServiceEnv: async ({ serviceId, key, value }) => {
 		state.calls.push(`put:${serviceId}:${key}`)
 		ensureServiceEnv(state, serviceId).set(key, {

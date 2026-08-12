@@ -275,10 +275,10 @@ export interface ZeropsLogLine {
  * case cancellation was added for, and an abandoned run must not keep an HTTP request alive.
  *
  * WIDER THAN THE DRIVER, on purpose. The driver uses four of these; the rest are the CONTROL PLANE's
- * Zerops surface — `putServiceEnv`/`listServiceEnv` for the edit-time secret writes that ADR-0004 says are
- * not a deploy step, `importProject` for creating a managed project, and `getAppVersion`/`latestAppVersion`
- * for the startup reconciliation of in-flight runs that ADR-0003 makes a requirement. One client, so there
- * is one place the Zerops contract is written down.
+ * Zerops surface — the service-env methods for the edit-time secret writes that ADR-0004 says are not a
+ * deploy step, `importProject` for creating a managed project, and `getAppVersion`/`latestAppVersion` for
+ * the startup reconciliation of in-flight runs that ADR-0003 makes a requirement. One client, so there is
+ * one place the Zerops contract is written down.
  *
  * NOTE WHAT IS ABSENT. There is no method that writes a PROJECT-level environment variable. That is not
  * an oversight and must not be "completed": project-level variables are injected into every service in the
@@ -447,6 +447,16 @@ export interface ZeropsApi {
 	 * variables the service's own `zerops.yaml` declares (`type: ENV`); fabrika never writes those.
 	 */
 	listServiceEnv(input: { serviceId: string; signal: AbortSignal }): Promise<ZeropsServiceEnv[]>
+
+	/**
+	 * Create ONE service-level variable only when the key is absent.
+	 * VERIFIED: `POST /service-stack/{id}/user-data`, body `{ key, content }`.
+	 *
+	 * Unlike `putServiceEnv`, a duplicate is an error and is never followed by a read or update. Error
+	 * details are intentionally unavailable because both the request and an upstream response can contain
+	 * the secret value.
+	 */
+	createServiceEnv(input: { serviceId: string; key: string; value: string; signal: AbortSignal }): Promise<void>
 
 	/**
 	 * Create-or-update ONE service-level variable — the only way fabrika ever writes a secret, and it is
@@ -1005,6 +1015,19 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			readAllPages('list project services', `/project/${projectId}/service-stack`, signal, readService),
 
 		listServiceEnv,
+
+		createServiceEnv: async ({ serviceId, key, value, signal }) => {
+			try {
+				await request('create-only service env', 'POST', `/service-stack/${serviceId}/user-data`, {
+					body: { key, content: value },
+					signal,
+					omitErrorResponseDetails: true,
+				})
+			} catch (error) {
+				if (error instanceof Error && error.name === 'AbortError') throw error
+				throw new Error('zerops: create-only service env failed')
+			}
+		},
 
 		putServiceEnv: async ({ serviceId, key, value, signal }) => {
 			// `redactDetail` on both writes: this is the one place a secret VALUE is in the request body.

@@ -136,6 +136,9 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		findProjects: async () => [],
 		listProjectServices: async () => [],
 		listServiceEnv: async () => [],
+		createServiceEnv: async () => {
+			recorded.calls.push('createServiceEnv')
+		},
 		putServiceEnv: async () => {
 			recorded.calls.push('putServiceEnv')
 		},
