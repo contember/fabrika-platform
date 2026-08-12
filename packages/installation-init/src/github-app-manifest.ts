@@ -23,12 +23,17 @@ export type GitHubAppManifestFetch = (input: string | URL | Request, init?: Requ
 export interface GitHubAppManifestRuntime {
 	readonly fetch?: GitHubAppManifestFetch
 	readonly callbackTimeoutMs?: number
+	readonly persistenceTimeoutMs?: number
 	/** Receives the loopback entry point after the server starts. Useful to launch or test the browser handoff. */
 	readonly onLocalUrl?: (localUrl: string) => void
+	/** Persist the one-time credentials before the browser or caller is told creation succeeded. */
+	readonly onCreated?: (app: CreatedGitHubApp, signal: AbortSignal) => Promise<void>
 }
 
 const DEFAULT_CALLBACK_TIMEOUT_MS = 5 * 60 * 1000
 const MAX_CALLBACK_TIMEOUT_MS = 60 * 60 * 1000
+const DEFAULT_PERSISTENCE_TIMEOUT_MS = 30 * 1000
+const MAX_PERSISTENCE_TIMEOUT_MS = 5 * 60 * 1000
 const CONVERSION_TIMEOUT_MS = 30 * 1000
 const MAX_CONVERSION_BYTES = 128 * 1024
 const ORGANIZATION_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
@@ -176,6 +181,31 @@ const readBoundedJson = async (response: Response, signal: AbortSignal): Promise
 	}
 }
 
+const persistCreatedApp = async (
+	app: CreatedGitHubApp,
+	onCreated: GitHubAppManifestRuntime['onCreated'],
+	timeoutMs: number,
+): Promise<void> => {
+	if (onCreated === undefined) return
+	const controller = new AbortController()
+	let rejectTimeout: (error: Error) => void
+	const timeout = new Promise<never>((_resolve, reject) => {
+		rejectTimeout = reject
+	})
+	const timer = setTimeout(() => {
+		rejectTimeout(new Error('GitHub App credential persistence timed out'))
+		controller.abort()
+	}, timeoutMs)
+	try {
+		await Promise.race([onCreated(app, controller.signal), timeout])
+		if (controller.signal.aborted) throw new Error('GitHub App credential persistence timed out')
+	} catch {
+		throw new Error('GitHub App credential persistence failed')
+	} finally {
+		clearTimeout(timer)
+	}
+}
+
 /** Exchange the one-time manifest code. The returned PEM and webhook secret are never logged. */
 export const exchangeGitHubAppManifestCode = async (
 	code: string,
@@ -222,6 +252,10 @@ export async function createGitHubAppViaManifest(
 	if (!Number.isSafeInteger(callbackTimeoutMs) || callbackTimeoutMs <= 0 || callbackTimeoutMs > MAX_CALLBACK_TIMEOUT_MS) {
 		throw new Error('GitHub App manifest callback timeout is invalid')
 	}
+	const persistenceTimeoutMs = runtime.persistenceTimeoutMs ?? DEFAULT_PERSISTENCE_TIMEOUT_MS
+	if (!Number.isSafeInteger(persistenceTimeoutMs) || persistenceTimeoutMs <= 0 || persistenceTimeoutMs > MAX_PERSISTENCE_TIMEOUT_MS) {
+		throw new Error('GitHub App credential persistence timeout is invalid')
+	}
 	const state = randomBytes(16).toString('hex')
 	const manifest = buildGitHubAppManifest(input)
 	let resolveApp: (app: CreatedGitHubApp) => void
@@ -263,10 +297,11 @@ export async function createGitHubAppViaManifest(
 					if (callbackTimer !== undefined) clearTimeout(callbackTimer)
 					try {
 						const app = await exchangeGitHubAppManifestCode(code, runtime.fetch)
+						await persistCreatedApp(app, runtime.onCreated, persistenceTimeoutMs)
 						resolveApp(app)
 						return new Response(renderDonePage(), { headers: { 'content-type': 'text/html; charset=utf-8' } })
 					} catch {
-						rejectApp(new Error('GitHub App manifest conversion failed'))
+						rejectApp(new Error('GitHub App manifest callback failed'))
 						return new Response(renderErrorPage(), { status: 400, headers: { 'content-type': 'text/html; charset=utf-8' } })
 					}
 				}
@@ -289,6 +324,10 @@ export async function createGitHubAppViaManifest(
 		// Let Bun flush the callback page before the loopback server disappears.
 		await Bun.sleep(25)
 		return app
+	} catch (error) {
+		// The callback failure page needs the same flush window as the success page.
+		await Bun.sleep(25)
+		throw error
 	} finally {
 		if (callbackTimer !== undefined) clearTimeout(callbackTimer)
 		server.stop(true)
