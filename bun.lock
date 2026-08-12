@@ -462,6 +462,17 @@
         "@types/bun": "latest",
       },
     },
+    "packages/source-zerops": {
+      "name": "@fabrika/source-zerops",
+      "version": "0.0.4",
+      "dependencies": {
+        "@fabrika/github-app": "workspace:*",
+        "@fabrika/provider-zerops": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
   },
   "packages": {
     "@babel/code-frame": ["@babel/code-frame@7.29.7", "", { "dependencies": { "@babel/helper-validator-identifier": "^7.29.7", "js-tokens": "^4.0.0", "picocolors": "^1.1.1" } }, "sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw=="],
@@ -689,6 +700,8 @@
     "@fabrika/runner-container": ["@fabrika/runner-container@workspace:packages/runner-container"],
 
     "@fabrika/runner-contract": ["@fabrika/runner-contract@workspace:packages/runner-contract"],
+
+    "@fabrika/source-zerops": ["@fabrika/source-zerops@workspace:packages/source-zerops"],
 
     "@fontsource-variable/ibm-plex-sans": ["@fontsource-variable/ibm-plex-sans@5.3.0", "", {}, "sha512-agG8tXFEo0hD9+J7npa4vbbWult52eMLVaQ6WQRlhs/iCAojrMAoejru85W9HTVXHfyUj96KM7gp/KGAS87XaQ=="],
 

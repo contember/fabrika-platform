@@ -9,6 +9,7 @@
 		{ "path": "./packages/auth-core" },
 		{ "path": "./packages/auth" },
 		{ "path": "./packages/github-app" },
+		{ "path": "./packages/source-zerops" },
 		{ "path": "./packages/app" },
 		{ "path": "./packages/proxy-contract" },
 		{ "path": "./packages/proxy" },
