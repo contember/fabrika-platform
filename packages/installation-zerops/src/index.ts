@@ -35,11 +35,11 @@ deploying. Declining any of them stops there; nothing before the import is a mut
 
   1. read the project and refuse a core package the selected tier does not match
   2. import ${PLATFORM_DEPLOY_ORDER.length + 2} services without code, and wait for the import's processes
-  3. generate six secrets and mint the control plane's Zerops INTEGRATION token
+  3. generate seven secrets and mint the control plane's Zerops INTEGRATION token
      (client role NO_ACCESS, ADMIN on this project only — never your personal token)
   4. pass 1: give the proxy an EMPTY manifest and build it, so it publishes one public hostname per
      HTTP port; the three platform hosts are then READ off those, never composed
-  5. write every remaining variable on all four services
+  5. write every remaining variable on all five runtime services
   6. pass 2: hand the whole ordered sequence to \`platform deploy\`
   7. print the provisioning key ONCE — it is stored nowhere else
 
@@ -61,17 +61,28 @@ Options (a flag beats the environment variable beside it):
 
   FABRIKA_ZEROPS_ACCESS_TOKEN       required   Zerops access token, environment only and no flag
   FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
+  GITHUB_APP_ID                     optional   with GITHUB_APP_PRIVATE_KEY; source stays anonymous otherwise
+  GITHUB_APP_PRIVATE_KEY            optional   with GITHUB_APP_ID; written only to source
+  GITHUB_WEBHOOK_SECRET             optional   written only to control
 
 ── platform init ─────────────────────────────────────────────────────────────────────────────────
 
-Creates and maintains the operator's SIDECAR REPOSITORY: the GitHub pipeline that calls
+Configures the installation's private source service, then creates and maintains the operator's SIDECAR REPOSITORY: the GitHub pipeline that calls
 \`platform deploy\`, the tag it is pinned to, and the GitHub Environment holding this installation's
 credentials. ADR-0025 puts that pipeline in a repository the operator owns — fabrika ships the
 generator, never the pipeline, because one public repository cannot hold every account's credentials.
 
 Interactive and laptop-side. It does the whole job and CONFIRMS before every step that leaves the
-operator's disk: creating the repository, pushing it, writing the Environment, triggering the run.
+operator's disk: reading the project, configuring source, creating or pushing the repository, writing
+the Environment, and triggering the run.
 Declining any of them stops there and prints what to run instead; a re-run is safe.
+
+For an existing installation, init imports only a missing source service with a steady services-only
+document, waits for its exact processes, and writes one shared RPC key to source and control. A matching
+existing key is reused; a mismatch is refused. GitHub App id + private key are optional but all-or-none
+and stay only on source. An independently optional
+webhook secret stays only on control. Blank optional answers preserve live values. No source credential
+is written to GitHub or disk.
 
   <installation>                    names this installation: the GitHub Environment, the default
                                     repository \`contember/fabrika-zerops-<installation>\`, and the

@@ -4,9 +4,9 @@
 // ── Why this is a THIRD command ───────────────────────────────────────────────────────────────────
 //
 // The two that already exist state, as invariants, that they cannot do this. `platform deploy` "writes
-// no credential" and has no flag that could carry one; `platform init` "GENERATES no credential and
-// persists none", because both values it hands GitHub already belong to an installation. A bring-up
-// generates six secrets and writes eighteen variables, so it fits inside neither. It runs BEFORE `init`
+// no credential" and has no flag that could carry one; `platform init` only creates or reconciles the
+// source RPC key and never owns the installation-wide secret set. A bring-up generates seven secrets
+// and writes the complete environment, so it fits inside neither. It runs BEFORE `init`
 // and hands `init` the provisioning key it generated.
 //
 // ── The sequence, and why it is two passes ────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@
 //
 // ── Credentials ───────────────────────────────────────────────────────────────────────────────────
 //
-// Six generated (`secrets.ts`) plus one minted on the account — the control plane's Zerops INTEGRATION
+// Seven generated (`secrets.ts`) plus one minted on the account — the control plane's Zerops INTEGRATION
 // token, client role `NO_ACCESS` with `ADMIN` on this one project, so the installation never holds the
 // account-wide personal token the operator authenticated with. NOTHING here logs a value, with one
 // intentional exception stated at the end: the provisioning key is printed ONCE, because `platform
@@ -138,6 +138,9 @@ export interface InstallationEnvInput {
 	readonly secrets: InstallationSecrets
 	/** The Zerops integration token minted for the control plane. Never logged, never printed. */
 	readonly zeropsAccessToken: string
+	readonly githubAppId?: string
+	readonly githubAppPrivateKey?: string
+	readonly githubWebhookSecret?: string
 }
 
 /**
@@ -152,7 +155,7 @@ export interface InstallationEnvInput {
  *     ones that file actually reads; the unprefixed ones are the ones it actually reads too.
  *   • No key any service declares in its own `zerops.yaml` appears here — `PORT`,
  *     `FABRIKA_IAM_RPC_URL`, `FABRIKA_OPERATIONS_URL`, `FABRIKA_CONTROL_ASSETS_DIR`,
- *     `FABRIKA_CONTROL_URL`, `FABRIKA_PROXY_MANIFEST`, `FABRIKA_PROXY_PORT`. The env API refuses those
+ *     `FABRIKA_CONTROL_URL`, `FABRIKA_ZEROPS_SOURCE_URL`, `FABRIKA_PROXY_MANIFEST`, `FABRIKA_PROXY_PORT`. The env API refuses those
  *     (`provider-zerops/src/api.ts`), because the conflict cannot be resolved to a record id.
  *
  * The proxy manifest is deliberately absent: pass 1 writes an empty one and `deployPlatform` owns the
@@ -163,6 +166,11 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 	const iamOrigin = platformOrigin(input.scheme, input.hosts.iam)
 	const consoleOrigin = platformOrigin(input.scheme, input.hosts.control)
 	const operationsOrigin = platformOrigin(input.scheme, input.hosts.operations)
+	const source = new Map([['FABRIKA_SOURCE_RPC_KEY', secrets.sourceRpcKey]])
+	if (input.githubAppId !== undefined && input.githubAppPrivateKey !== undefined) {
+		source.set('GITHUB_APP_ID', input.githubAppId)
+		source.set('GITHUB_APP_PRIVATE_KEY', input.githubAppPrivateKey)
+	}
 	const control = new Map([
 		['FABRIKA_CONTROL_DATABASE_URL', POSTGRES_URL],
 		['ENVIRONMENT', input.environment],
@@ -186,7 +194,9 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 		['FABRIKA_ZEROPS_PROXY_IAM_URL', iamOrigin],
 		['FABRIKA_ZEROPS_PROXY_IAM_KEY', secrets.proxyKey],
 		['FABRIKA_ZEROPS_ACCESS_TOKEN', input.zeropsAccessToken],
+		['FABRIKA_ZEROPS_SOURCE_RPC_KEY', secrets.sourceRpcKey],
 	])
+	if (input.githubWebhookSecret !== undefined) control.set('GITHUB_WEBHOOK_SECRET', input.githubWebhookSecret)
 	if (input.apiBaseUrl !== undefined) {
 		// Only when the installation is not on the default region. Control spells it `_API_BASE_URL` while
 		// the CLI reads `FABRIKA_ZEROPS_API_URL`; they are different processes reading different sources.
@@ -226,6 +236,7 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 				['FABRIKA_IAM_RPC_KEY', secrets.rpcKey],
 			]),
 		],
+		['source', source],
 		['control', control],
 		[
 			'proxy',
@@ -259,8 +270,10 @@ export const GENERATED_SECRET_KEYS: ReadonlyMap<PlatformDeployService, readonly 
 			'FABRIKA_IAM_PROVISIONING_KEY',
 			'FABRIKA_ZEROPS_PROXY_IAM_KEY',
 			'FABRIKA_ZEROPS_ACCESS_TOKEN',
+			'FABRIKA_ZEROPS_SOURCE_RPC_KEY',
 		],
 	],
+	['source', ['FABRIKA_SOURCE_RPC_KEY']],
 	['proxy', ['FABRIKA_IAM_KEY']],
 ])
 
@@ -560,7 +573,9 @@ export const runInstall = async (input: PlatformInstallInput, collaborators: Ins
 
 	log.step("Generate this installation's secrets")
 	const secrets = generateInstallationSecrets()
-	log.ok('IAM signing keys (1 × ES256), the RPC key, the proxy key, the provisioning key, the Operations sync key and the vault key')
+	log.ok(
+		'IAM signing keys (1 × ES256), the IAM RPC key, the source RPC key, the proxy key, the provisioning key, the Operations sync key and the vault key',
+	)
 	log.info('None of them is written to disk. Only the provisioning key is printed, once, at the end.')
 
 	log.step("Mint the control plane's Zerops token")
@@ -594,6 +609,9 @@ export const runInstall = async (input: PlatformInstallInput, collaborators: Ins
 		buildFromGit: input.buildFromGit,
 		secrets,
 		zeropsAccessToken: token.token,
+		...(input.githubAppId === undefined ? {} : { githubAppId: input.githubAppId }),
+		...(input.githubAppPrivateKey === undefined ? {} : { githubAppPrivateKey: input.githubAppPrivateKey }),
+		...(input.githubWebhookSecret === undefined ? {} : { githubWebhookSecret: input.githubWebhookSecret }),
 		...(input.apiBaseUrl === undefined ? {} : { apiBaseUrl: input.apiBaseUrl }),
 	})
 	const total = [...desired.values()].reduce((sum, keys) => sum + keys.size, 0)
@@ -630,7 +648,7 @@ export const runInstall = async (input: PlatformInstallInput, collaborators: Ins
 	log.action('CAPTURE THIS NOW — it is stored nowhere else and cannot be recovered', [
 		`FABRIKA_IAM_PROVISIONING_KEY=${secrets.provisioningKey}`,
 	])
-	log.info('`fabrika platform init --provider=zerops <installation>` asks for exactly two secrets:')
+	log.info('`fabrika platform init --provider=zerops <installation>` asks for two required deployment secrets:')
 	log.info('  FABRIKA_IAM_PROVISIONING_KEY   the key above')
 	log.info('  FABRIKA_ZEROPS_ACCESS_TOKEN    the integration token just minted — read it back from the `control` service, never printed here')
 	log.info(`The console answers at ${platformOrigin(input.scheme, hosts.control)}, once someone can sign in: nobody can yet.`)

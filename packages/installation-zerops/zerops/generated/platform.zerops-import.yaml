@@ -62,12 +62,20 @@ services:
     priority: 40
     minContainers: 1
     maxContainers: 3
+  - hostname: source
+    type: alpine/bun@1.3
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: false
+    priority: 35
+    minContainers: 1
+    maxContainers: 2
   - hostname: control
     type: alpine/bun@1.3
     envIsolation: service
     override: true
     enableSubdomainAccess: false
-    priority: 30
+    priority: 20
     minContainers: 1
     maxContainers: 2
   - hostname: proxy
@@ -75,6 +83,6 @@ services:
     envIsolation: service
     override: true
     enableSubdomainAccess: false
-    priority: 10
+    priority: 30
     minContainers: 2
     maxContainers: 6

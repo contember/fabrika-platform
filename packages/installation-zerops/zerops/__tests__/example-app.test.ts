@@ -27,6 +27,7 @@ import {
 	type ZeropsCollaborators,
 	type ZeropsProvider,
 	type ZeropsRuntimeTarget,
+	type ZeropsSourceClient,
 } from '@fabrika/provider-zerops'
 import { buildCaddyConfig } from '@fabrika/proxy'
 import { encodeProxyManifestJson, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-contract'
@@ -43,12 +44,30 @@ interface Recorded {
 	/** Every collaborator method invoked, in order — the sequence these tests assert on. */
 	calls: string[]
 	imports: Array<{ projectId: string; yaml: string }>
-	triggers: Array<{ serviceId: string; buildFromGit?: string; zeropsSetup?: string }>
+	resolves: Array<{ runId: string; requestedRef: string; descriptorSha256: string }>
+	creates: Array<{ serviceId: string; name?: string }>
+	uploads: Array<{ runId: string; appVersionId: string; commitSha: string; descriptorSha256: string }>
+	builds: Array<{ appVersionId: string; zeropsYaml: string; zeropsYamlSetup?: string }>
+	externalIds: string[]
+	externalStates: unknown[]
+	checkpoints: unknown[]
 	schemas: Array<{ url: string; app: string }>
 	logs: string[]
 }
 
-const fresh = (): Recorded => ({ calls: [], imports: [], triggers: [], schemas: [], logs: [] })
+const fresh = (): Recorded => ({
+	calls: [],
+	imports: [],
+	resolves: [],
+	creates: [],
+	uploads: [],
+	builds: [],
+	externalIds: [],
+	externalStates: [],
+	checkpoints: [],
+	schemas: [],
+	logs: [],
+})
 
 /** Statuses handed back by successive polls; the last one repeats. */
 const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi => {
@@ -65,13 +84,16 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 			)
 		},
 		importProject: ({ clientId, yaml: _yaml }) => Promise.resolve(record('importProject', { projectId: clientId, projectName: 'p', services: [] })),
-		triggerPipeline: ({ serviceId, buildFromGit, zeropsSetup }) => {
-			rec.triggers.push({ serviceId, buildFromGit, zeropsSetup })
-			return Promise.resolve(record('triggerPipeline', { id: 'proc-1', appVersionId: 'ver-1' }))
+		triggerPipeline: () => Promise.reject(new Error('the upload-backed deploy must not trigger a Git pipeline')),
+		createAppVersion: ({ serviceId, name }) => {
+			rec.creates.push({ serviceId, ...(name === undefined ? {} : { name }) })
+			return Promise.resolve(record('createAppVersion', { id: 'ver-1', uploadUrl: 'https://upload.test/archive?signature=test' }))
 		},
-		createAppVersion: () => Promise.reject(new Error('upload-backed app versions are not expected in this fixture')),
-		buildAndDeployAppVersion: () => Promise.reject(new Error('upload-backed app versions are not expected in this fixture')),
-		deleteAppVersion: () => Promise.reject(new Error('upload-backed app versions are not expected in this fixture')),
+		buildAndDeployAppVersion: ({ appVersionId, zeropsYaml, zeropsYamlSetup }) => {
+			rec.builds.push({ appVersionId, zeropsYaml, ...(zeropsYamlSetup === undefined ? {} : { zeropsYamlSetup }) })
+			return Promise.resolve(record('buildAndDeployAppVersion', { id: 'proc-1', appVersionId }))
+		},
+		deleteAppVersion: ({ appVersionId }) => Promise.resolve(record(`deleteAppVersion:${appVersionId}`, undefined)),
 		getAppVersion: ({ appVersionId }) => {
 			const status = statuses[Math.min(poll, statuses.length - 1)]
 			poll += 1
@@ -107,8 +129,34 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 	}
 }
 
-const makeCollaborators = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsCollaborators => ({
+const makeSource = (rec: Recorded): ZeropsSourceClient => ({
+	resolveInstallationId: () => Promise.resolve(null),
+	resolve: (input) => {
+		rec.calls.push('sourceResolve')
+		rec.resolves.push({ runId: input.runId, requestedRef: input.requestedRef, descriptorSha256: input.descriptorSha256 })
+		return Promise.resolve({ runId: input.runId, commitSha: COMMIT_SHA, descriptorSha256: input.descriptorSha256 })
+	},
+	upload: (input) => {
+		rec.calls.push('sourceUpload')
+		rec.uploads.push({
+			runId: input.runId,
+			appVersionId: input.appVersionId,
+			commitSha: input.commitSha,
+			descriptorSha256: input.descriptor.sha256,
+		})
+		return Promise.resolve({
+			runId: input.runId,
+			appVersionId: input.appVersionId,
+			commitSha: input.commitSha,
+			descriptorSha256: input.descriptor.sha256,
+		})
+	},
+	cancel: () => Promise.resolve(),
+})
+
+const makeCollaborators = (rec: Recorded, statuses: ZeropsAppVersionStatus[], source: ZeropsSourceClient): ZeropsCollaborators => ({
 	api: makeApi(rec, statuses),
+	source,
 	reconcileSchema: (input) => {
 		rec.calls.push('reconcileSchema')
 		rec.schemas.push({ url: input.url, app: input.app })
@@ -135,11 +183,19 @@ const TARGET: ZeropsRuntimeTarget = {
 
 const SOURCE_DESCRIPTOR = await createZeropsArtifactSourceDescriptor(readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zerops.yaml'), 'utf8'))
 const MANIFEST = compileFabrikaManifest(notesConfig, 'prod', SOURCE_DESCRIPTOR)
+const RUN_ID = 'run-example-1'
+const COMMIT_SHA = '0123456789abcdef0123456789abcdef01234567'
+const REPOSITORY = { owner: 'contember', name: 'fabrika-platform' }
 
-const makeRun = (provider: ZeropsProvider, recorded: Recorded, overrides: Partial<RuntimeProviderRun> = {}): RuntimeProviderRun => ({
+const makeRun = (
+	provider: ZeropsProvider,
+	recorded: Recorded,
+	target: ZeropsRuntimeTarget,
+	overrides: Partial<RuntimeProviderRun> = {},
+): RuntimeProviderRun => ({
 	appId: notesConfig.id,
 	env: 'prod',
-	target: provider.encodeTarget(TARGET),
+	target: provider.encodeTarget(target),
 	artifact: provider.encodeArtifact(MANIFEST),
 	secrets: {},
 	vars: {},
@@ -151,8 +207,15 @@ const makeRun = (provider: ZeropsProvider, recorded: Recorded, overrides: Partia
 		log: (line) => {
 			recorded.logs.push(line)
 		},
-		externalId: () => Promise.resolve(),
-		checkpoint: () => Promise.resolve(),
+		externalId: (externalId, state) => {
+			recorded.externalIds.push(externalId)
+			recorded.externalStates.push(state)
+			return Promise.resolve()
+		},
+		checkpoint: (state) => {
+			recorded.checkpoints.push(state)
+			return Promise.resolve()
+		},
 	},
 	...overrides,
 })
@@ -162,8 +225,25 @@ const deployExample = (
 	statuses: ZeropsAppVersionStatus[] = ['ACTIVE'],
 	overrides: Partial<RuntimeProviderRun> = {},
 ) => {
-	const provider = createZeropsProvider(() => makeCollaborators(recorded, statuses))
-	return deploy(provider.runtime, makeRun(provider, recorded, overrides))
+	const source = makeSource(recorded)
+	const provider = createZeropsProvider(() => makeCollaborators(recorded, statuses, source))
+	if (overrides.dryRun === true) return deploy(provider.runtime, makeRun(provider, recorded, TARGET, overrides))
+	return source.resolve({
+		runId: RUN_ID,
+		repository: REPOSITORY,
+		requestedRef: 'refs/heads/main',
+		expectedCommitSha: COMMIT_SHA,
+		descriptorSha256: SOURCE_DESCRIPTOR.sha256,
+		signal: overrides.signal ?? new AbortController().signal,
+	}).then((resolved) =>
+		deploy(
+			provider.runtime,
+			makeRun(provider, recorded, {
+				...TARGET,
+				source: { runId: RUN_ID, repository: REPOSITORY, commitSha: resolved.commitSha },
+			}, overrides),
+		)
+	)
 }
 
 let rec: Recorded
@@ -229,23 +309,26 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 	})
 
 	test('not one collaborator call is made', async () => {
-		await deployExample(rec, ['ACTIVE'], { dryRun: true })
+		const result = await deployExample(rec, ['ACTIVE'], { dryRun: true })
+		expect(result.status).toBe('succeeded')
 		expect(rec.calls).toEqual([])
 	})
 
 	test('the narrative names all four effects, in order', async () => {
-		await deployExample(rec, ['ACTIVE'], { dryRun: true })
+		const result = await deployExample(rec, ['ACTIVE'], { dryRun: true })
+		expect(result.status).toBe('succeeded')
 		const narrative = rec.logs.filter((line) => line.includes('[dry-run]')).map((line) => line.trim())
 		expect(narrative).toEqual([
 			`[dry-run] would POST the import for 2 service(s) to project ${TARGET.projectId}:`,
-			`[dry-run] would trigger the Zerops pipeline for service ${TARGET.serviceId} (${NOTES_SERVICE}) from the service's configured Git integration`,
+			`[dry-run] would create an app version, upload the resolved repository snapshot, and trigger build+deploy for service ${TARGET.serviceId}`,
 			'[dry-run] would poll the pipeline process when available and /app-version until it is ACTIVE, relaying the build log',
 			`[dry-run] would reconcile schema for \`${NOTES_APP_ID}\` against https://iam.example.test`,
 		])
 	})
 
 	test('the import it would POST is echoed in full, so a plan is reviewable without credentials', async () => {
-		await deployExample(rec, ['ACTIVE'], { dryRun: true })
+		const result = await deployExample(rec, ['ACTIVE'], { dryRun: true })
+		expect(result.status).toBe('succeeded')
 		const echoed = rec.logs.filter((line) => line.startsWith('  │ ')).map((line) => line.slice(4)).join('\n')
 		expect(validateYaml('import', echoed)).toEqual([])
 		expect(echoed).toContain(`hostname: ${NOTES_SERVICE}`)
@@ -253,22 +336,26 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 	})
 
 	test('and the access token never reaches the log', async () => {
-		await deployExample(rec, ['ACTIVE'], { dryRun: true })
+		const result = await deployExample(rec, ['ACTIVE'], { dryRun: true })
+		expect(result.status).toBe('succeeded')
 		expect(rec.logs.join('\n')).not.toContain(TARGET.accessToken)
 	})
 })
 
 describe('a real run makes exactly these calls, in exactly this order', () => {
-	test('import → trigger → open the log → poll → relay → reconcile', async () => {
+	test('resolve → import → create → upload → build+deploy → observe → reconcile', async () => {
 		const result = await deployExample(rec, ['BUILDING', 'DEPLOYING', 'ACTIVE'])
 		expect(result.status).toBe('succeeded')
 		expect(rec.calls).toEqual([
-			// 1. apply the import (`override: true` makes re-applying safe)
+			// 1. bind the requested source to one immutable commit and descriptor digest.
+			'sourceResolve',
+			// 2. apply the import (`override: true` makes re-applying safe).
 			'importServices',
-			// 2. trigger the platform's own CI — fabrika does not run the build (ADR-0003)
-			'triggerPipeline',
-			// 3-N. watch it. Build and deploy are ONE platform-side operation, so what fabrika splits is
-			// triggering from observing.
+			// 3. reserve an app version, upload the exact snapshot, and ask Zerops to build that version.
+			'createAppVersion',
+			'sourceUpload',
+			'buildAndDeployAppVersion',
+			// 4-N. Watch it. Build and deploy are ONE platform-side operation.
 			'getLogAccess',
 			'getProcess',
 			'getAppVersion',
@@ -284,34 +371,54 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 			// N+1. the one portable step: reconcile the authz vocabulary into IAM
 			'reconcileSchema',
 		])
+		expect(rec.resolves).toEqual([{ runId: RUN_ID, requestedRef: 'refs/heads/main', descriptorSha256: SOURCE_DESCRIPTOR.sha256 }])
+		expect(rec.creates).toEqual([{ serviceId: TARGET.serviceId, name: RUN_ID }])
+		expect(rec.uploads).toEqual([{
+			runId: RUN_ID,
+			appVersionId: 'ver-1',
+			commitSha: COMMIT_SHA,
+			descriptorSha256: SOURCE_DESCRIPTOR.sha256,
+		}])
+		expect(rec.builds).toEqual([{ appVersionId: 'ver-1', zeropsYaml: SOURCE_DESCRIPTOR.contents, zeropsYamlSetup: NOTES_SERVICE }])
+		expect(rec.externalIds).toEqual(['ver-1'])
+		expect(rec.externalStates).toEqual([{ appVersionId: 'ver-1', phase: 'version_created' }])
+		expect(rec.checkpoints).toEqual([
+			{ appVersionId: 'ver-1', phase: 'source_uploaded' },
+			{ appVersionId: 'ver-1', phase: 'build_trigger_requested' },
+			{ appVersionId: 'ver-1', phase: 'build_triggered', processId: 'proc-1' },
+		])
 	})
 
 	test('the import goes to the project the REGISTRY named, and carries the compiled document', async () => {
-		await deployExample(rec)
+		const result = await deployExample(rec)
+		expect(result.status).toBe('succeeded')
 		expect(rec.imports).toHaveLength(1)
 		expect(rec.imports[0]?.projectId).toBe(TARGET.projectId)
 		expect(validateYaml('import', rec.imports[0]?.yaml ?? '')).toEqual([])
 	})
 
-	test("the pipeline trigger selects the app's named setup from its repository-root zerops.yaml", async () => {
-		await deployExample(rec)
-		expect(rec.triggers).toEqual([{ serviceId: TARGET.serviceId, buildFromGit: undefined, zeropsSetup: NOTES_SERVICE }])
+	test("the upload-backed build selects the app's named setup and exact repository-root zerops.yaml", async () => {
+		const result = await deployExample(rec)
+		expect(result.status).toBe('succeeded')
+		expect(rec.builds).toEqual([{ appVersionId: 'ver-1', zeropsYaml: SOURCE_DESCRIPTOR.contents, zeropsYamlSetup: NOTES_SERVICE }])
 	})
 
 	test("the schema reconcile names the app id the token's `aud` will carry", async () => {
-		await deployExample(rec)
+		const result = await deployExample(rec)
+		expect(result.status).toBe('succeeded')
 		expect(rec.schemas).toEqual([{ url: 'https://iam.example.test', app: NOTES_APP_ID }])
 	})
 
 	test('NO secret is pushed as part of the deploy, even though the app declares two', async () => {
 		expect(notesConfig.pipeline?.secrets).toEqual(['NOTES_SESSION_PEPPER', 'NOTES_WEBHOOK_SIGNING_KEY'])
-		await deployExample(rec, ['ACTIVE'], { secrets: { NOTES_SESSION_PEPPER: 'x', NOTES_WEBHOOK_SIGNING_KEY: 'y' } })
+		const result = await deployExample(rec, ['ACTIVE'], { secrets: { NOTES_SESSION_PEPPER: 'x', NOTES_WEBHOOK_SIGNING_KEY: 'y' } })
+		expect(result.status).toBe('succeeded')
 		// On Zerops the platform is the system of record; a deploy-time write would silently correct a
 		// client's GUI edit (ADR-0004). So: no env write, and no `sync-secrets` step to make one.
 		expect(rec.calls).not.toContain('putServiceEnv')
 	})
 
-	test('a failed pipeline fails the run and SKIPS the reconcile — a broken build never touches IAM', async () => {
+	test('a failed build fails the run and SKIPS the reconcile — a broken build never touches IAM', async () => {
 		const result = await deployExample(rec, ['BUILDING', 'BUILD_FAILED'])
 		expect(result.status).toBe('failed')
 		expect(result.steps.find((step) => step.spec.id === 'reconcile-schema')?.status).toBe('skipped')

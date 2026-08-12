@@ -83,16 +83,17 @@ const harness = (proxyEnv: Readonly<Record<string, string>> = {}): Harness => {
 const manifestOf = (zerops: FakeZerops): string => zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON) ?? ''
 
 describe('the order', () => {
-	test('deploys IAM → Operations → proxy → control', async () => {
+	test('deploys IAM → Operations → source → proxy → control', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		await fixture.run()
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))).toEqual([
 			'deploy:iam',
 			'deploy:operations',
+			'deploy:source',
 			'deploy:proxy',
 			'deploy:control',
 		])
-		expect(PLATFORM_DEPLOY_ORDER).toEqual(['iam', 'operations', 'proxy', 'control'])
+		expect(PLATFORM_DEPLOY_ORDER).toEqual(['iam', 'operations', 'source', 'proxy', 'control'])
 	})
 
 	// Found by running `platform install` on an empty project (2026-08-10): registering the console talks
@@ -201,7 +202,7 @@ describe('fail closed', () => {
 				log: recordingDeployLog(),
 				signal: new AbortController().signal,
 			}),
-		).rejects.toThrow('has no operations, proxy, control service')
+		).rejects.toThrow('has no operations, source, proxy, control service')
 	})
 })
 
@@ -218,7 +219,7 @@ describe('idempotence', () => {
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('subdomain:'))).toEqual([])
 		expect(manifestOf(fixture.zerops)).toBe(afterFirst)
 		// Deploying IS what a re-run does; it is the configuration that must not move.
-		expect(fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))).toHaveLength(4)
+		expect(fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))).toHaveLength(5)
 	})
 
 	test('a subdomain someone turned off comes back, and one already on is left alone', async () => {

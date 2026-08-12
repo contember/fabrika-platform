@@ -1,8 +1,9 @@
 import type { EnvironmentConfig, SidecarScaffoldInput, SidecarScaffoldResult } from '@fabrika/installation-init'
 import { describe, expect, test } from 'bun:test'
 import { rm } from 'node:fs/promises'
-import { checkedEnvironmentName, type InitCollaborators, parseInitArgs, runInit } from '../init'
+import { checkedEnvironmentName, configureSourceService, type InitCollaborators, parseInitArgs, runInit } from '../init'
 import { recordingInitLog } from '../log'
+import { fakeZerops, platformServices } from './fake-zerops'
 
 const ACCESS_TOKEN = 'zerops-access-token-value-that-must-never-be-printed'
 const PROVISIONING_KEY = 'px_provisioning-key-value-that-must-never-be-printed'
@@ -14,6 +15,7 @@ interface Recorder {
 	readonly lines: readonly string[]
 	readonly environments: EnvironmentConfig[]
 	readonly scaffolds: SidecarScaffoldInput[]
+	readonly sourceInputs: Parameters<InitCollaborators['effects']['configureSource']>[0][]
 }
 
 /**
@@ -30,18 +32,24 @@ const recorder = (options: {
 	const effects: string[] = []
 	const environments: EnvironmentConfig[] = []
 	const scaffolds: SidecarScaffoldInput[] = []
+	const sourceInputs: Parameters<InitCollaborators['effects']['configureSource']>[0][] = []
 	const log = recordingInitLog()
 	return {
 		asked,
 		effects,
 		environments,
 		scaffolds,
+		sourceInputs,
 		lines: log.lines,
 		collaborators: {
 			log,
 			prompts: {
 				text: async (question, fallback) => {
 					asked.push(`text: ${question}`)
+					return options.answers[question] ?? fallback ?? ''
+				},
+				setting: async (variable, question, fallback) => {
+					asked.push(`setting: ${variable}`)
 					return options.answers[question] ?? fallback ?? ''
 				},
 				confirm: async (question, defaultYes) => {
@@ -58,7 +66,9 @@ const recorder = (options: {
 				},
 				secret: async (variable) => {
 					asked.push(`secret: ${variable}`)
-					return variable === 'FABRIKA_ZEROPS_ACCESS_TOKEN' ? ACCESS_TOKEN : PROVISIONING_KEY
+					if (variable === 'FABRIKA_ZEROPS_ACCESS_TOKEN') return ACCESS_TOKEN
+					if (variable === 'FABRIKA_IAM_PROVISIONING_KEY') return PROVISIONING_KEY
+					return ''
 				},
 			},
 			effects: {
@@ -79,6 +89,12 @@ const recorder = (options: {
 				describeProject: async ({ projectId }) => {
 					effects.push(`describe: ${projectId}`)
 					return 'fabrika-test'
+				},
+				configureSource: async (input) => {
+					sourceInputs.push(input)
+					const { projectId } = input
+					effects.push(`source: ${projectId}`)
+					return { created: false, reusedRpcKey: true, writtenKeys: [] }
 				},
 			},
 		},
@@ -105,17 +121,19 @@ describe('fabrika platform init --provider=zerops', () => {
 
 		expect(recorded.effects).toEqual([
 			'describe: project-id-1',
+			'source: project-id-1',
 			'exists: contember/fabrika-zerops-test',
 			'scaffold: contember/fabrika-zerops-test',
 			'environment: test',
 			'trigger: contember/fabrika-zerops-test',
 		])
 		const confirmations = recorded.asked.filter((entry) => entry.startsWith('confirm: '))
-		expect(confirmations).toHaveLength(4)
+		expect(confirmations).toHaveLength(5)
 		expect(confirmations[0]).toContain('Read Zerops project project-id-1')
-		expect(confirmations[1]).toContain('Create contember/fabrika-zerops-test (private) on GitHub')
-		expect(confirmations[2]).toContain('Write them to the test Environment now')
-		expect(confirmations[3]).toContain('Run the platform workflow')
+		expect(confirmations[1]).toContain('Create or configure `source`')
+		expect(confirmations[2]).toContain('Create contember/fabrika-zerops-test (private) on GitHub')
+		expect(confirmations[3]).toContain('Write them to the test Environment now')
+		expect(confirmations[4]).toContain('Run the platform workflow')
 		await cleanCheckout(recorded)
 	})
 
@@ -177,6 +195,61 @@ describe('fabrika platform init --provider=zerops', () => {
 		await cleanCheckout(recorded)
 	})
 
+	test('sends optional source settings only to Zerops and not the GitHub Environment', async () => {
+		const appKey = 'private-key-that-must-never-be-printed'
+		const webhook = 'webhook-secret-that-must-never-be-printed'
+		const recorded = recorder({
+			answers: {
+				...ANSWERS,
+				'GitHub App id for private repositories (blank = anonymous public mode)': '123',
+				GITHUB_APP_PRIVATE_KEY: appKey,
+				GITHUB_WEBHOOK_SECRET: webhook,
+			},
+		})
+		const collaborators: InitCollaborators = {
+			...recorded.collaborators,
+			prompts: {
+				...recorded.collaborators.prompts,
+				secret: async (variable, question) => {
+					if (variable === 'GITHUB_APP_PRIVATE_KEY') return appKey
+					if (variable === 'GITHUB_WEBHOOK_SECRET') return webhook
+					return recorded.collaborators.prompts.secret(variable, question)
+				},
+			},
+		}
+
+		await runInit({ installation: 'test' }, collaborators)
+
+		expect(recorded.sourceInputs[0]).toMatchObject({
+			githubAppId: '123',
+			githubAppPrivateKey: appKey,
+			githubWebhookSecret: webhook,
+		})
+		expect(JSON.stringify(recorded.environments[0])).not.toContain(appKey)
+		expect(JSON.stringify(recorded.environments[0])).not.toContain(webhook)
+		const transcript = recorded.lines.join('\n')
+		expect(transcript).not.toContain(appKey)
+		expect(transcript).not.toContain(webhook)
+		await cleanCheckout(recorded)
+	})
+
+	test('redacts a source configuration failure before it reaches the operator', async () => {
+		const sentinel = 'private-source-error-body'
+		const recorded = recorder({ answers: ANSWERS })
+		const collaborators: InitCollaborators = {
+			...recorded.collaborators,
+			effects: {
+				...recorded.collaborators.effects,
+				configureSource: () => Promise.reject(new Error(sentinel)),
+			},
+		}
+
+		const raised = await runInit({ installation: 'test' }, collaborators).then(() => undefined, (error: unknown) => error)
+		expect(raised).toBeInstanceOf(Error)
+		expect(raised instanceof Error ? raised.message : sentinel).not.toContain(sentinel)
+		expect(raised instanceof Error ? raised.message : '').toContain('source configuration did not complete')
+	})
+
 	test('declining the repository stops there and says what to run', async () => {
 		const recorded = recorder({
 			answers: ANSWERS,
@@ -185,7 +258,7 @@ describe('fabrika platform init --provider=zerops', () => {
 
 		await runInit({ installation: 'test' }, recorded.collaborators)
 
-		expect(recorded.effects).toEqual(['describe: project-id-1', 'exists: contember/fabrika-zerops-test'])
+		expect(recorded.effects).toEqual(['describe: project-id-1', 'source: project-id-1', 'exists: contember/fabrika-zerops-test'])
 		expect(recorded.lines.join('\n')).toContain('fabrika platform init --provider=zerops test --repo=contember/fabrika-zerops-test')
 	})
 
@@ -240,5 +313,161 @@ describe('fabrika platform init --provider=zerops', () => {
 		expect(() => parseInitArgs(['test', 'other'])).toThrow('name ONE installation')
 		expect(() => parseInitArgs(['test', '--token=secret'])).toThrow('unexpected argument')
 		expect(() => parseInitArgs(['test', '--repo=nope'])).toThrow('is not a <owner>/<name> repository')
+	})
+})
+
+describe('the supported source-service upgrade', () => {
+	test('imports only missing source with the steady document, waits, and places one shared RPC key', async () => {
+		const source = { name: 'source', id: 'svc-source', importProcesses: 2 }
+		const zerops = fakeZerops({
+			projectId: 'project-id-1',
+			projectName: 'fabrika-test',
+			services: platformServices().filter((service) => service.name !== 'source'),
+			bootstrap: { clientId: 'client-1', imported: [source] },
+		})
+		const result = await configureSourceService(
+			{ projectId: 'project-id-1', environment: 'test' },
+			zerops.api,
+			async () => {},
+			new AbortController().signal,
+		)
+
+		expect(result).toMatchObject({ created: true, reusedRpcKey: false })
+		expect(zerops.imports).toHaveLength(1)
+		expect(zerops.imports[0]).toContain('hostname: source')
+		expect(zerops.imports[0]).not.toContain('hostname: control')
+		expect(zerops.imports[0]).toContain('startWithoutCode: true')
+		expect(zerops.importedProcesses).toHaveLength(2)
+		expect(zerops.timeline.indexOf('process:process-import-source-1')).toBeLessThan(zerops.timeline.indexOf('env:source:FABRIKA_SOURCE_RPC_KEY'))
+		const sourceKey = zerops.env('source').get('FABRIKA_SOURCE_RPC_KEY')
+		expect(sourceKey).toBeDefined()
+		expect(zerops.env('control').get('FABRIKA_ZEROPS_SOURCE_RPC_KEY')).toBe(sourceKey)
+		expect(zerops.env('source').has('FABRIKA_ZEROPS_ACCESS_TOKEN')).toBe(false)
+	})
+
+	test('reuses a matching valid key and preserves omitted App and webhook credentials', async () => {
+		const key = 'r'.repeat(32)
+		const zerops = fakeZerops({
+			projectId: 'project-id-1',
+			projectName: 'fabrika-test',
+			services: platformServices({
+				source: { FABRIKA_SOURCE_RPC_KEY: key, GITHUB_APP_ID: 'old-app', GITHUB_APP_PRIVATE_KEY: 'old-key' },
+				control: { FABRIKA_ZEROPS_SOURCE_RPC_KEY: key, GITHUB_WEBHOOK_SECRET: 'old-webhook' },
+			}),
+		})
+		const result = await configureSourceService(
+			{ projectId: 'project-id-1', environment: 'test' },
+			zerops.api,
+			async () => {},
+			new AbortController().signal,
+		)
+
+		expect(result).toEqual({ created: false, reusedRpcKey: true, writtenKeys: [] })
+		expect(zerops.calls).toEqual([])
+		expect(zerops.env('source').get('GITHUB_APP_PRIVATE_KEY')).toBe('old-key')
+		expect(zerops.env('control').get('GITHUB_WEBHOOK_SECRET')).toBe('old-webhook')
+	})
+
+	test('repairs either missing side from the one valid RPC key', async () => {
+		const key = 'r'.repeat(32)
+		const cases: ReadonlyArray<{
+			readonly env: Readonly<Record<string, Readonly<Record<string, string>>>>
+			readonly writtenKey: string
+		}> = [
+			{
+				env: { source: { FABRIKA_SOURCE_RPC_KEY: key }, control: {} },
+				writtenKey: 'control.FABRIKA_ZEROPS_SOURCE_RPC_KEY',
+			},
+			{
+				env: { source: {}, control: { FABRIKA_ZEROPS_SOURCE_RPC_KEY: key } },
+				writtenKey: 'source.FABRIKA_SOURCE_RPC_KEY',
+			},
+		]
+		for (const item of cases) {
+			const zerops = fakeZerops({ projectId: 'project-id-1', projectName: 'fabrika-test', services: platformServices(item.env) })
+			const result = await configureSourceService(
+				{ projectId: 'project-id-1', environment: 'test' },
+				zerops.api,
+				async () => {},
+				new AbortController().signal,
+			)
+
+			expect(result).toEqual({ created: false, reusedRpcKey: true, writtenKeys: [item.writtenKey] })
+			expect(zerops.env('source').get('FABRIKA_SOURCE_RPC_KEY')).toBe(key)
+			expect(zerops.env('control').get('FABRIKA_ZEROPS_SOURCE_RPC_KEY')).toBe(key)
+		}
+	})
+
+	test('repairs a run that failed after writing the first generated RPC key', async () => {
+		const zerops = fakeZerops({ projectId: 'project-id-1', projectName: 'fabrika-test', services: platformServices() })
+		zerops.failWrite('control', 'FABRIKA_ZEROPS_SOURCE_RPC_KEY')
+		await expect(
+			configureSourceService(
+				{ projectId: 'project-id-1', environment: 'test' },
+				zerops.api,
+				async () => {},
+				new AbortController().signal,
+			),
+		).rejects.toThrow('create service env failed')
+
+		const sourceKey = zerops.env('source').get('FABRIKA_SOURCE_RPC_KEY')
+		expect(sourceKey).toBeDefined()
+		expect(zerops.env('control').has('FABRIKA_ZEROPS_SOURCE_RPC_KEY')).toBe(false)
+
+		const result = await configureSourceService(
+			{ projectId: 'project-id-1', environment: 'test' },
+			zerops.api,
+			async () => {},
+			new AbortController().signal,
+		)
+
+		expect(result).toEqual({ created: false, reusedRpcKey: true, writtenKeys: ['control.FABRIKA_ZEROPS_SOURCE_RPC_KEY'] })
+		expect(zerops.env('control').get('FABRIKA_ZEROPS_SOURCE_RPC_KEY')).toBe(sourceKey)
+	})
+
+	test('refuses a mismatched or invalid RPC key without writing either side', async () => {
+		const environments: ReadonlyArray<Readonly<Record<string, Readonly<Record<string, string>>>>> = [
+			{ source: { FABRIKA_SOURCE_RPC_KEY: 'a'.repeat(32) }, control: { FABRIKA_ZEROPS_SOURCE_RPC_KEY: 'b'.repeat(32) } },
+			{ source: { FABRIKA_SOURCE_RPC_KEY: 'short' }, control: {} },
+			{ source: {}, control: { FABRIKA_ZEROPS_SOURCE_RPC_KEY: 'short' } },
+		]
+		for (const env of environments) {
+			const zerops = fakeZerops({ projectId: 'project-id-1', projectName: 'fabrika-test', services: platformServices(env) })
+			await expect(
+				configureSourceService(
+					{ projectId: 'project-id-1', environment: 'test' },
+					zerops.api,
+					async () => {},
+					new AbortController().signal,
+				),
+			).rejects.toThrow('refusing to rotate either side')
+			expect(zerops.calls).toEqual([])
+		}
+	})
+
+	test('places optional credentials only on their owning service', async () => {
+		const key = 'r'.repeat(32)
+		const zerops = fakeZerops({
+			projectId: 'project-id-1',
+			projectName: 'fabrika-test',
+			services: platformServices({ source: { FABRIKA_SOURCE_RPC_KEY: key }, control: { FABRIKA_ZEROPS_SOURCE_RPC_KEY: key } }),
+		})
+		await configureSourceService(
+			{
+				projectId: 'project-id-1',
+				environment: 'test',
+				githubAppId: '123',
+				githubAppPrivateKey: 'private-key',
+				githubWebhookSecret: 'webhook-secret',
+			},
+			zerops.api,
+			async () => {},
+			new AbortController().signal,
+		)
+		expect(zerops.env('source').get('GITHUB_APP_ID')).toBe('123')
+		expect(zerops.env('source').get('GITHUB_APP_PRIVATE_KEY')).toBe('private-key')
+		expect(zerops.env('source').has('GITHUB_WEBHOOK_SECRET')).toBe(false)
+		expect(zerops.env('control').get('GITHUB_WEBHOOK_SECRET')).toBe('webhook-secret')
+		expect(zerops.env('control').has('GITHUB_APP_PRIVATE_KEY')).toBe(false)
 	})
 })

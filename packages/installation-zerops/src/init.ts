@@ -1,27 +1,26 @@
-// `fabrika platform init --provider=zerops <installation>` — create and maintain the operator's sidecar
-// repository for an installation that ALREADY EXISTS.
+// `fabrika platform init --provider=zerops <installation>` — configure source and maintain the operator's
+// sidecar repository for an installation that ALREADY EXISTS.
 //
 // ── What this does, and the one thing it does not ─────────────────────────────────────────────────
 //
-// It creates `<owner>/fabrika-zerops-<installation>`, pushes the pipeline that calls
+// It creates the private source service when an older installation lacks it, reconciles its direct
+// Zerops configuration, creates `<owner>/fabrika-zerops-<installation>`, pushes the pipeline that calls
 // `fabrika platform deploy --provider=zerops`, writes the GitHub Environment that pipeline reads, and
-// triggers it. It does NOT bring an installation up: the first bring-up (import the topology without
-// code → write every secret → deploy once so the proxy has HTTP ports and therefore a public address)
-// is still a hand sequence, because a proxy that has never been deployed publishes no hostname while
-// the manifest must be written before the proxy is built.
+// triggers it. It does NOT create the installation: `platform install` owns the first bring-up.
 //
 // ── It does the whole job, and confirms before every step that leaves this disk ───────────────────
 //
-// Creating the repository, pushing it, writing the Environment, triggering the workflow — each asks
-// first. Full automation, never silent. Declining stops the outward steps and prints what to run
+// Reading the project, configuring source, creating or pushing the repository, writing the Environment,
+// and triggering the workflow each ask first. Full automation, never silent. Declining stops the outward steps and prints what to run
 // instead; `init` is idempotent, so the answer to a declined step is to run it again.
 //
 // ── Credentials ───────────────────────────────────────────────────────────────────────────────────
 //
-// Two, and this command GENERATES NEITHER. Both already belong to the installation — the Zerops access
-// token is the operator's, and the IAM provisioning key is the one IAM was seeded with at bring-up, so
-// a value invented here would simply not be the value IAM admits. They are read from a hidden prompt or
-// from the environment, sent to GitHub over `gh` stdin, and never written to disk and never logged.
+// Two deployment credentials, and this command generates neither. Both already belong to the
+// installation. Source configuration is separate: a source RPC key is generated only when neither
+// source nor control has one; a valid key on one side repairs the absent side. It is written directly
+// to Zerops, never GitHub or disk. Optional
+// GitHub App credentials also go directly to their owning Zerops service and are never logged.
 // Unlike the Cloudflare init there is no `.env` resume, deliberately: this flow is short enough to
 // repeat, and the alternative is a Zerops account token sitting in a plaintext file.
 
@@ -44,7 +43,17 @@ import {
 	url,
 	warn as consoleWarn,
 } from '@fabrika/installation-init'
-import { createZeropsApi } from '@fabrika/provider-zerops'
+import {
+	compileProvisioningYaml,
+	createZeropsApi,
+	defaultSleep,
+	type Sleeper,
+	waitForProcess,
+	type ZeropsApi,
+	type ZeropsService,
+} from '@fabrika/provider-zerops'
+import { randomBytes } from 'node:crypto'
+import { sourceServiceSpec } from '../zerops/topology'
 import { FABRIKA_REPOSITORY_URL } from './install-options'
 import type { InitLog } from './log'
 import { assertPinnedTag, defaultCheckoutDir, defaultSidecarRepo, materializeSidecarScaffold, readPinnedTag, SIDECAR_FILES } from './sidecar'
@@ -55,6 +64,8 @@ const LOCAL_ENVIRONMENT = 'local'
 /** Everything `runInit` asks the operator. Injected so the flow can be exercised without a TTY. */
 export interface InitPrompts {
 	text(question: string, fallback?: string): Promise<string>
+	/** A non-secret prompt with an environment-variable fallback. */
+	setting(variable: string, question: string, fallback?: string): Promise<string>
 	confirm(question: string, defaultYes?: boolean): Promise<boolean>
 	select<T>(question: string, options: { label: string; value: T }[]): Promise<T>
 	/** A hidden prompt, or the named environment variable when it is already set. NEVER echoed. */
@@ -70,6 +81,7 @@ export interface InitEffects {
 	triggerWorkflow(repo: string): Promise<void>
 	/** Read one Zerops project's name — the cheapest proof that the token and the project id agree. */
 	describeProject(input: { projectId: string; accessToken: string; apiBaseUrl?: string }): Promise<string>
+	configureSource(input: ConfigureSourceInput): Promise<ConfigureSourceResult>
 }
 
 export interface InitCollaborators {
@@ -147,6 +159,25 @@ interface Collected {
 	readonly apiBaseUrl?: string
 	readonly accessToken: string
 	readonly provisioningKey: string
+	readonly githubAppId?: string
+	readonly githubAppPrivateKey?: string
+	readonly githubWebhookSecret?: string
+}
+
+export interface ConfigureSourceInput {
+	readonly projectId: string
+	readonly environment: string
+	readonly accessToken: string
+	readonly apiBaseUrl?: string
+	readonly githubAppId?: string
+	readonly githubAppPrivateKey?: string
+	readonly githubWebhookSecret?: string
+}
+
+export interface ConfigureSourceResult {
+	readonly created: boolean
+	readonly reusedRpcKey: boolean
+	readonly writtenKeys: readonly string[]
 }
 
 const requiredAnswer = async (prompts: InitPrompts, question: string, fallback?: string): Promise<string> => {
@@ -206,6 +237,19 @@ const collect = async (args: InitArguments, { log, prompts }: InitCollaborators)
 		'FABRIKA_IAM_PROVISIONING_KEY',
 		"IAM provisioning key (the px_ admin key this installation's IAM already holds)",
 	)
+	log.info('Optional source and webhook settings are written directly to their owning Zerops services, never GitHub or disk.')
+	const githubAppId = (await prompts.setting('GITHUB_APP_ID', 'GitHub App id for private repositories (blank = anonymous public mode)')).trim()
+	const githubAppPrivateKey = (await prompts.secret(
+		'GITHUB_APP_PRIVATE_KEY',
+		'GitHub App private key for the source service (blank = anonymous public mode)',
+	)).trim()
+	if ((githubAppId === '') !== (githubAppPrivateKey === '')) {
+		throw new Error('GitHub App id and private key must be supplied together; neither is needed for anonymous public repositories')
+	}
+	const githubWebhookSecret = (await prompts.secret(
+		'GITHUB_WEBHOOK_SECRET',
+		'GitHub webhook secret for control (blank = preserve the current value)',
+	)).trim()
 	if (accessToken.trim() === '' || provisioningKey.trim() === '') {
 		throw new Error('both credentials are required: the deploy authenticates to Zerops and to IAM with them')
 	}
@@ -218,9 +262,107 @@ const collect = async (args: InitArguments, { log, prompts }: InitCollaborators)
 		placement,
 		accessToken: accessToken.trim(),
 		provisioningKey: provisioningKey.trim(),
+		...(githubAppId === '' ? {} : { githubAppId }),
+		...(githubAppPrivateKey === '' ? {} : { githubAppPrivateKey }),
+		...(githubWebhookSecret === '' ? {} : { githubWebhookSecret }),
 		...(buildFromGit === '' ? {} : { buildFromGit }),
 		...(apiBaseUrl === '' ? {} : { apiBaseUrl }),
 	}
+}
+
+const rpcKeyValid = (value: string | undefined): value is string => value !== undefined && value.length >= 32 && value.length <= 4096
+
+const generateSourceRpcKey = (): string => {
+	for (;;) {
+		const value = randomBytes(32).toString('base64url')
+		if (!value.startsWith('-') && !value.startsWith('_')) return value
+	}
+}
+
+const oneService = (services: readonly ZeropsService[], name: string): ZeropsService | undefined => {
+	const matches = services.filter((service) => service.name === name)
+	if (matches.length > 1) throw new Error(`Zerops project has ${matches.length} services named \`${name}\``)
+	return matches[0]
+}
+
+const sourceProvisioningImport = (environment: string): string =>
+	compileProvisioningYaml({ target: { platform: 'zerops', services: () => [sourceServiceSpec()] }, ctx: { env: environment } }).yaml
+
+/** Add/configure the private source service without persisting any credential outside Zerops. */
+export const configureSourceService = async (
+	input: Omit<ConfigureSourceInput, 'accessToken' | 'apiBaseUrl'>,
+	api: ZeropsApi,
+	sleep: Sleeper,
+	signal: AbortSignal,
+): Promise<ConfigureSourceResult> => {
+	if ((input.githubAppId === undefined) !== (input.githubAppPrivateKey === undefined)) {
+		throw new Error('GitHub App id and private key must be supplied together')
+	}
+	let services = await api.listProjectServices({ projectId: input.projectId, signal })
+	for (const name of ['iam', 'operations', 'proxy', 'control']) {
+		const service = oneService(services, name)
+		if (service === undefined || service.id === '') throw new Error(`Zerops project ${input.projectId} has no \`${name}\` service`)
+	}
+	let source = oneService(services, 'source')
+	let created = false
+	if (source?.status === 'NEW') {
+		throw new Error('Zerops is still creating `source`; run init again after its import process finishes')
+	}
+	if (source === undefined) {
+		const result = await api.importServices({ projectId: input.projectId, yaml: sourceProvisioningImport(input.environment), signal })
+		const imported = result.services.find((service) => service.name === 'source')
+		if (imported === undefined || imported.processes.length === 0) throw new Error('the source import returned no source process')
+		for (const process of imported.processes) {
+			await waitForProcess({ api, processId: process.id, sleep, signal, label: 'the source import' })
+		}
+		services = await api.listProjectServices({ projectId: input.projectId, signal })
+		source = oneService(services, 'source')
+		if (source === undefined || source.id === '') throw new Error('Zerops created no `source` service after its import completed')
+		created = true
+	}
+	const control = oneService(services, 'control')
+	if (control === undefined || control.id === '') throw new Error(`Zerops project ${input.projectId} has no \`control\` service`)
+	const sourceEnv = new Map((await api.listServiceEnv({ serviceId: source.id, signal })).map((item) => [item.key, item.content]))
+	const controlEnv = new Map((await api.listServiceEnv({ serviceId: control.id, signal })).map((item) => [item.key, item.content]))
+	const sourceRpcKey = sourceEnv.get('FABRIKA_SOURCE_RPC_KEY')
+	const controlRpcKey = controlEnv.get('FABRIKA_ZEROPS_SOURCE_RPC_KEY')
+	let rpcKey: string
+	let reusedRpcKey = false
+	if (sourceRpcKey === undefined && controlRpcKey === undefined) {
+		rpcKey = generateSourceRpcKey()
+	} else if (rpcKeyValid(sourceRpcKey) && controlRpcKey === undefined) {
+		rpcKey = sourceRpcKey
+		reusedRpcKey = true
+	} else if (sourceRpcKey === undefined && rpcKeyValid(controlRpcKey)) {
+		rpcKey = controlRpcKey
+		reusedRpcKey = true
+	} else {
+		if (!rpcKeyValid(sourceRpcKey) || !rpcKeyValid(controlRpcKey) || sourceRpcKey !== controlRpcKey) {
+			throw new Error('source and control do not hold one matching valid source RPC key; refusing to rotate either side')
+		}
+		rpcKey = sourceRpcKey
+		reusedRpcKey = true
+	}
+	const desired: Array<{ serviceId: string; service: string; key: string; value: string; live: ReadonlyMap<string, string> }> = [
+		{ serviceId: source.id, service: 'source', key: 'FABRIKA_SOURCE_RPC_KEY', value: rpcKey, live: sourceEnv },
+		{ serviceId: control.id, service: 'control', key: 'FABRIKA_ZEROPS_SOURCE_RPC_KEY', value: rpcKey, live: controlEnv },
+	]
+	if (input.githubAppId !== undefined && input.githubAppPrivateKey !== undefined) {
+		desired.push(
+			{ serviceId: source.id, service: 'source', key: 'GITHUB_APP_ID', value: input.githubAppId, live: sourceEnv },
+			{ serviceId: source.id, service: 'source', key: 'GITHUB_APP_PRIVATE_KEY', value: input.githubAppPrivateKey, live: sourceEnv },
+		)
+	}
+	if (input.githubWebhookSecret !== undefined) {
+		desired.push({ serviceId: control.id, service: 'control', key: 'GITHUB_WEBHOOK_SECRET', value: input.githubWebhookSecret, live: controlEnv })
+	}
+	const writtenKeys: string[] = []
+	for (const item of desired) {
+		if (item.live.get(item.key) === item.value) continue
+		await api.putServiceEnv({ serviceId: item.serviceId, key: item.key, value: item.value, signal })
+		writtenKeys.push(`${item.service}.${item.key}`)
+	}
+	return { created, reusedRpcKey, writtenKeys }
 }
 
 /** The Environment the generated workflow reads. Secret VALUES appear here and nowhere else. */
@@ -320,6 +462,32 @@ export const runInit = async (args: InitArguments, collaborators: InitCollaborat
 	const collected = await collect(args, collaborators)
 	await verifyProject(collected, collaborators)
 
+	log.step('Configure the private source service')
+	log.info('This writes credentials only to Zerops: the GitHub App key stays on source, and the webhook secret stays on control.')
+	if (!(await prompts.confirm(`Create or configure \`source\` in Zerops project ${collected.projectId}?`, true))) {
+		log.action('OPERATOR ACTION — source was not changed; run init again to continue', [
+			`fabrika platform init --provider=zerops ${args.installation} --repo=${collected.repo}`,
+		])
+		return
+	} else {
+		const result = await effects.configureSource({
+			projectId: collected.projectId,
+			environment: collected.environmentName,
+			accessToken: collected.accessToken,
+			...(collected.apiBaseUrl === undefined ? {} : { apiBaseUrl: collected.apiBaseUrl }),
+			...(collected.githubAppId === undefined ? {} : { githubAppId: collected.githubAppId }),
+			...(collected.githubAppPrivateKey === undefined ? {} : { githubAppPrivateKey: collected.githubAppPrivateKey }),
+			...(collected.githubWebhookSecret === undefined ? {} : { githubWebhookSecret: collected.githubWebhookSecret }),
+		}).catch(() => {
+			throw new Error('source configuration did not complete; no credential value is shown. Inspect source and control in Zerops, then run init again')
+		})
+		log.ok(result.created ? 'source created and configured' : 'source configuration reconciled')
+		log.info(
+			result.reusedRpcKey ? 'reused the matching source RPC key already held by source and control' : 'generated one source RPC key inside this run',
+		)
+		if (result.writtenKeys.length > 0) log.ok(`Zerops variables written: ${result.writtenKeys.join(', ')}`)
+	}
+
 	const dir = await scaffold(args.installation, collected, collaborators)
 	if (dir === undefined) {
 		return
@@ -367,6 +535,7 @@ export const consoleInitCollaborators = (): InitCollaborators => ({
 	},
 	prompts: {
 		text: (question, fallback) => promptText(question, fallback),
+		setting: (variable, question, fallback) => promptText(question, process.env[variable] ?? fallback),
 		confirm: (question, defaultYes) => promptConfirm(question, defaultYes),
 		select: (question, options) => promptSelect(question, options),
 		secret: (variable, question) => secretOrEnv(variable, question),
@@ -383,6 +552,10 @@ export const consoleInitCollaborators = (): InitCollaborators => ({
 				throw new Error(`Zerops project ${projectId} could not be read with this token`)
 			}
 			return project.name
+		},
+		configureSource: async (input) => {
+			const api = createZeropsApi({ token: input.accessToken, ...(input.apiBaseUrl === undefined ? {} : { baseUrl: input.apiBaseUrl }) })
+			return configureSourceService(input, api, defaultSleep, new AbortController().signal)
 		},
 	},
 })

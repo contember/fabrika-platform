@@ -34,7 +34,7 @@ describe('Zerops installation capability', () => {
 		for (const variable of ['FABRIKA_ZEROPS_ACCESS_TOKEN', 'FABRIKA_IAM_PROVISIONING_KEY', 'FABRIKA_PLATFORM_ENVIRONMENT']) {
 			expect(installationCli.usage).toContain(variable)
 		}
-		expect(installationCli.usage).toContain('iam → operations → proxy → control')
+		expect(installationCli.usage).toContain('iam → operations → source → proxy → control')
 	})
 
 	test('deploy refuses an unknown argument rather than ignoring it', async () => {

@@ -3,12 +3,12 @@ name: platform
 # Deploys the {{INSTALLATION}} fabrika installation on Zerops. THIS repository is the per-installation
 # root of trust: it holds the account's credentials, so the platform never deploys itself (ADR-0025).
 #
-# IT UPDATES AN INSTALLATION THAT ALREADY EXISTS — it never creates one. The first bring-up (import the
-# topology without code, write every secret, then deploy) is still performed by hand; see the README.
+# IT UPDATES AN INSTALLATION THAT ALREADY EXISTS — it never creates one. `fabrika platform install`
+# owns the first bring-up: import the topology without code, write every secret, then deploy.
 #
 # ONE step, deliberately. On Zerops `fabrika platform deploy` owns the whole ordered sequence: resolve
 # the project and its services, write every service's environment (including the composed proxy
-# manifest), deploy iam -> operations -> proxy -> control waiting for each, reconcile the console's app
+# manifest), deploy iam -> operations -> source -> proxy -> control waiting for each, reconcile the console's app
 # schema, and ensure the public entry point. That order carries a security property — since ADR-0022 the
 # application enforces nothing, so the enforcement point is deployed BEFORE the service whose gates just
 # widened — and it therefore lives in code with a test rather than in this file, which an operator owns
@@ -45,7 +45,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Four builds, one after another: ~15 minutes with a warm cache. The command itself polls each build
+    # Five builds, one after another: ~20 minutes with a warm cache. The command itself polls each build
     # for up to 70 minutes (Zerops caps a pipeline at one hour), so this is the outer guard, not the gate.
     timeout-minutes: 90
     # Secrets + variables resolve from this GitHub Environment (created + populated by `fabrika platform init`).

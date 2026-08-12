@@ -8,7 +8,7 @@ operators install from.
 
 ## This pipeline UPDATES an installation. It does not create one.
 
-Running it against a project that has no `iam`, `operations`, `proxy` and `control` service fails and
+Running it against a project that has no `iam`, `operations`, `source`, `proxy` and `control` service fails and
 changes nothing. The first bring-up is still a hand sequence, in this order:
 
 1. import the Zerops topology **without code** — `fabrika platform plan --provider=zerops` lists and
@@ -27,7 +27,7 @@ The whole ordered sequence lives inside `fabrika platform deploy --provider=zero
 ```
 resolve the project and its services
   → write every service's environment (the composed proxy manifest, the environment name, the origins)
-  → deploy iam → operations → proxy → control, waiting for each
+  → deploy iam → operations → source → proxy → control, waiting for each
   → reconcile the console's app schema with IAM
   → ensure the public entry point
 ```
@@ -74,7 +74,7 @@ installation already holds.
 
 | Variable                           | Required | What it is                                                                                               |
 | ---------------------------------- | -------- | -------------------------------------------------------------------------------------------------------- |
-| `FABRIKA_ZEROPS_PROJECT_ID`        | yes      | The Zerops project holding the four platform services.                                                   |
+| `FABRIKA_ZEROPS_PROJECT_ID`        | yes      | The Zerops project holding the five platform runtime services.                                           |
 | `FABRIKA_PLATFORM_ENVIRONMENT`     | yes      | The name this installation calls itself; written to every service as `ENVIRONMENT`. Never `local`.       |
 | `FABRIKA_PLATFORM_SCHEME`          | yes      | `https` for anything reachable from a browser.                                                           |
 | `FABRIKA_PLATFORM_IAM_HOST`        | no       | Where IAM answers publicly.                                                                              |

@@ -68,12 +68,21 @@ services:
     minContainers: 1
     maxContainers: 3
     startWithoutCode: true
+  - hostname: source
+    type: alpine/bun@1.3
+    envIsolation: service
+    override: true
+    enableSubdomainAccess: false
+    priority: 35
+    minContainers: 1
+    maxContainers: 2
+    startWithoutCode: true
   - hostname: control
     type: alpine/bun@1.3
     envIsolation: service
     override: true
     enableSubdomainAccess: false
-    priority: 30
+    priority: 20
     minContainers: 1
     maxContainers: 2
     startWithoutCode: true
@@ -82,7 +91,7 @@ services:
     envIsolation: service
     override: true
     enableSubdomainAccess: false
-    priority: 10
+    priority: 30
     minContainers: 2
     maxContainers: 6
     startWithoutCode: true

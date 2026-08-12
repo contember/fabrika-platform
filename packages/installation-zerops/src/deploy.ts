@@ -9,7 +9,7 @@
 //   • **The order carries a security property.** Since ADR-0022 the application enforces nothing, so
 //     deploying control at a new version while the previous, more permissive manifest is still in
 //     front of it leaves `/api/*` open for the length of the deploy. The order is therefore
-//     IAM → Operations → **proxy** → control: the dependency order, with the enforcement point moved
+//     IAM → Operations → source → **proxy** → control: the dependency order, with the enforcement point moved
 //     ahead of the service whose gates just widened. `__tests__/deploy.test.ts` pins it.
 //
 // Bringing `fabrika-test` to HEAD on 2026-08-05 took `zops push` from a laptop, once per service, in a
@@ -54,17 +54,17 @@ import { mergePlatformProxyManifest, readLiveProxyManifest } from './manifest'
 import { platformProxyAppFor, resolvePlatformProxyManifest } from './proxy-manifest'
 
 /**
- * The four services this command deploys, IN THE ORDER IT DEPLOYS THEM.
+ * The five services this command deploys, IN THE ORDER IT DEPLOYS THEM.
  *
- * IAM first because everything authenticates against it; Operations next because control holds a
- * private dependency on it; **the proxy before control** because enforcement must never describe an
- * older version of the gate modules than the code behind it; control last.
+ * IAM first because everything authenticates against it; Operations and source before their control
+ * consumers; **the proxy before control** because enforcement must never describe an older version of
+ * the gate modules than the code behind it; control last.
  *
  * Each name is a service hostname in the topology AND the `zerops.yaml` setup name the pipeline
  * selects — the platform's own "setup name defaults to the hostname" rule.
  * `zerops/__tests__/deploy-order.test.ts` pins both against the declarations that own them.
  */
-export const PLATFORM_DEPLOY_ORDER = ['iam', 'operations', 'proxy', 'control'] as const
+export const PLATFORM_DEPLOY_ORDER = ['iam', 'operations', 'source', 'proxy', 'control'] as const
 
 export type PlatformDeployService = (typeof PLATFORM_DEPLOY_ORDER)[number]
 
@@ -265,6 +265,7 @@ const desiredServiceEnv = (
 				['FABRIKA_OPERATIONS_PUBLIC_HOST', placement.hosts.operations],
 			]),
 		],
+		['source', new Map()],
 		[
 			'proxy',
 			new Map([

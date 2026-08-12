@@ -1,4 +1,4 @@
-// The six values `fabrika platform install --provider=zerops` GENERATES, and their shapes.
+// The seven values `fabrika platform install --provider=zerops` GENERATES, and their shapes.
 //
 // Every one of them is written to a Zerops service and never stored anywhere else — there is no `.env`
 // on this path, deliberately (see `init.ts`). Only the provisioning key is ever printed, once, at the
@@ -63,6 +63,8 @@ export interface InstallationSecrets {
 	readonly provisioningKey: string
 	/** The catalog credential control and Operations share. No `px_` prefix — it is not an IAM credential. */
 	readonly operationsSyncKey: string
+	/** Authenticates control to the private source RPC. */
+	readonly sourceRpcKey: string
 	/** The control plane's vault KEK: 32 raw bytes at base64. Its loss is unrecoverable by design. */
 	readonly vaultKey: string
 }
@@ -74,6 +76,7 @@ export const generateInstallationSecrets = (): InstallationSecrets => ({
 	proxyKey: randomPxKey(),
 	provisioningKey: randomPxKey(),
 	operationsSyncKey: randomSecret(),
+	sourceRpcKey: randomSecret(),
 	// base64, NOT base64url: the vault imports these bytes as an AES key.
 	vaultKey: randomBytes(32).toString('base64'),
 })

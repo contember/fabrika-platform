@@ -28,6 +28,9 @@ export interface PlatformInstallInput {
 	/** Public Git URL every service builds from. Effectively mandatory here — see the usage text. */
 	readonly buildFromGit: string
 	readonly tier: InstallablePlatformTier
+	readonly githubAppId?: string
+	readonly githubAppPrivateKey?: string
+	readonly githubWebhookSecret?: string
 }
 
 /** The public repository every installation is built from, and the default for `--from-git`. */
@@ -112,6 +115,12 @@ export const parsePlatformInstallArgs = (
 ): PlatformInstallInput => {
 	assertKnownArguments(argv)
 	const apiBaseUrl = readEnv(env, 'FABRIKA_ZEROPS_API_URL')
+	const githubAppId = readEnv(env, 'GITHUB_APP_ID')
+	const githubAppPrivateKey = readEnv(env, 'GITHUB_APP_PRIVATE_KEY')
+	if ((githubAppId === undefined) !== (githubAppPrivateKey === undefined)) {
+		throw new Error('GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY must be supplied together')
+	}
+	const githubWebhookSecret = readEnv(env, 'GITHUB_WEBHOOK_SECRET')
 	return {
 		projectId: required(setting(argv, env, '--project-id', 'FABRIKA_ZEROPS_PROJECT_ID'), '--project-id', 'FABRIKA_ZEROPS_PROJECT_ID'),
 		// Named even when the project id is known: `POST /client/{id}/integration-token` is addressed by
@@ -123,5 +132,8 @@ export const parsePlatformInstallArgs = (
 		buildFromGit: setting(argv, env, '--from-git', 'FABRIKA_ZEROPS_BUILD_FROM_GIT') ?? FABRIKA_REPOSITORY_URL,
 		tier: assertInstallableTier(setting(argv, env, '--tier', 'FABRIKA_PLATFORM_TIER')),
 		...(apiBaseUrl === undefined ? {} : { apiBaseUrl }),
+		...(githubAppId === undefined ? {} : { githubAppId }),
+		...(githubAppPrivateKey === undefined ? {} : { githubAppPrivateKey }),
+		...(githubWebhookSecret === undefined ? {} : { githubWebhookSecret }),
 	}
 }

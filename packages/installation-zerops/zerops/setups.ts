@@ -238,7 +238,7 @@ const iam: ZeropsYamlSetupSpec = {
  *
  * Secrets (`envSecrets`): `FABRIKA_IAM_RPC_KEY` (authenticates this process to IAM's RPC surface — the
  * same value IAM holds), `FABRIKA_CONTROL_VAULT_KEY` (the vault KEK; its loss is unrecoverable by design),
- * `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `CLOUDFLARE_API_TOKEN`,
+ * `GITHUB_WEBHOOK_SECRET`, `FABRIKA_ZEROPS_SOURCE_RPC_KEY`, `CLOUDFLARE_API_TOKEN`,
  * `FABRIKA_IAM_PROVISIONING_KEY`, `FABRIKA_ZEROPS_PROXY_IAM_KEY` (the same credential IAM receives as
  * `FABRIKA_IAM_PROXY_KEY`), `OPERATIONS_SYNC_KEY` (the same catalog credential Operations receives),
  * and — when this control plane deploys to Zerops — `FABRIKA_ZEROPS_ACCESS_TOKEN`. Give it a Zerops
@@ -273,7 +273,34 @@ const control: ZeropsYamlSetupSpec = {
 			// it is the public token issuer and is supplied per installation through the env API.
 			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
 			FABRIKA_OPERATIONS_URL: 'http://operations:3000',
+			FABRIKA_ZEROPS_SOURCE_URL: 'http://source:3000',
 		},
+	},
+}
+
+/**
+ * Private Git-object transporter. It has no Zerops token and no public route.
+ *
+ * Secrets (`envSecrets`): `FABRIKA_SOURCE_RPC_KEY`, shared only with control. Optional
+ * `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` are an all-or-none pair for private repositories;
+ * without them the service supports anonymous public repositories. Neither value belongs on control.
+ */
+const source: ZeropsYamlSetupSpec = {
+	setup: 'source',
+	build: {
+		base: ['alpine/bun@1.3'],
+		buildCommands: ['bun install --frozen-lockfile'],
+		deployFiles: WORKSPACE_DEPLOY_FILES,
+		cache: ['node_modules'],
+	},
+	deploy: { readinessCheck: { httpGet: { port: 3000, path: '/healthz' }, ...READINESS_IMMEDIATE } },
+	run: {
+		base: 'alpine/bun@1.3',
+		prepareCommands: ['apk add --no-cache git'],
+		start: 'bun packages/source-zerops/src/server.ts',
+		ports: [{ port: 3000, httpSupport: true }],
+		healthCheck: { httpGet: { port: 3000, path: '/healthz' }, ...LIVENESS },
+		envVariables: { PORT: '3000' },
 	},
 }
 
@@ -438,4 +465,4 @@ const proxy: ZeropsYamlSetupSpec = {
 }
 
 /** The repository-root `zerops.yaml`, in the order the setups appear in it. */
-export const fabrikaZeropsYaml: ZeropsYamlSpec = { zerops: [iam, operations, control, proxy] }
+export const fabrikaZeropsYaml: ZeropsYamlSpec = { zerops: [iam, operations, source, proxy, control] }

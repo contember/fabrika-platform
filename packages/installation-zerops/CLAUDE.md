@@ -29,13 +29,13 @@ and is deliberate — someone reading only one path will guess wrong about the o
 - `src/index.ts` — exported `installationCli`, the `usage` text, and the real collaborators.
 - `src/deploy.ts` — the ordered deploy sequence. `src/deploy-options.ts` — its flags and variables.
 - `src/install.ts` — the from-scratch bring-up: the two passes and the whole environment matrix.
-  `src/install-options.ts` — its flags. `src/secrets.ts` — the six values it generates.
+  `src/install-options.ts` — its flags. `src/secrets.ts` — the seven values it generates.
 - `src/init.ts` — the sidecar-repository flow, its prompts and its confirmed outward steps.
 - `src/sidecar.ts` — what the sidecar repository contains + the tag rule. `src/templates/` — its four files.
 - `src/manifest.ts` — composing the platform's apps with an installation's application entries.
 - `src/hosts.ts` — where one installation answers. `src/log.ts` — progress, with no secret-taking helper.
 - `src/proxy-manifest.ts` — the proxy manifest TEMPLATE type and `resolvePlatformProxyManifest`.
-- `zerops/setups.ts` — typed IAM, Operations, control, and proxy setup definitions.
+- `zerops/setups.ts` — typed IAM, Operations, source, proxy, and control setup definitions.
 - `zerops/topology.ts` — project and service topology.
 - `zerops/proxy-manifest.ts` — the three fronted apps and their gates. **Dev-time only.**
 - `zerops/console-schema.ts` — the console's `AppSchema`, copied from `@fabrika/control`. **Dev-time only.**
@@ -52,7 +52,7 @@ and is deliberate — someone reading only one path will guess wrong about the o
 - Preserve the import-without-code → write service secrets → deploy bring-up
   order. `platform install` is that order, executed.
 - **`platform install` GENERATES credentials, which is why it is a third command
-  and not a flag on either of the other two.** It writes six generated secrets plus
+  and not a flag on either of the other two.** It writes seven generated secrets plus
   a minted Zerops integration token, and prints exactly ONE value — the provisioning
   key, once, at the end, because it is stored nowhere else and `platform init` asks
   the operator for it. That is the only exception to the no-secret-in-a-log rule on
@@ -73,7 +73,7 @@ and is deliberate — someone reading only one path will guess wrong about the o
 - **`install` never restates the deploy order.** Pass 2 is `deployPlatform`, whole;
   pass 1 reuses `deployPlatformService` for the proxy alone. One service is not an
   order.
-- **`platform deploy`'s order is IAM → Operations → proxy → control, and the
+- **`platform deploy`'s order is IAM → Operations → source → proxy → control, and the
   proxy's position is a SECURITY property, not a dependency.** Since ADR-0022 the
   application enforces nothing, so control at a new version behind the previous,
   more permissive manifest is an open `/api/*` for the length of the deploy.
@@ -89,14 +89,17 @@ and is deliberate — someone reading only one path will guess wrong about the o
   from the environment.** There is no `--token` and no `--admin-key`; an unknown
   flag is an error precisely so one cannot arrive on a command line. Every secret
   an installation holds is placed at bring-up.
-- **`platform init` GENERATES no credential and persists none.** Both Environment
+- **`platform init` persists no credential to disk.** Both GitHub Environment
   secrets already belong to the installation (the operator's Zerops integration
-  token, and the `px_` provisioning key IAM was seeded with), so a value invented
-  here would not be one the installation accepts. They are read from a hidden
-  prompt or the environment, sent to GitHub over `gh` stdin, and — unlike the
-  Cloudflare init — never written to a `.env`.
-- **`init` confirms before every step that leaves the operator's disk**: creating
-  the repository, pushing it, writing the Environment, triggering the run.
+  token, and the `px_` provisioning key IAM was seeded with). The source upgrade
+  generates one RPC key only when neither source nor control has one, and writes
+  it directly to those Zerops services. A valid key on only one side repairs the
+  absent side; a matching pair is reused; invalid or mismatched values are refused.
+  Optional GitHub App credentials stay only on source and
+  the independent webhook secret stays only on control.
+- **`init` confirms before every step that leaves the operator's disk**: reading
+  the project, configuring source, creating or pushing the repository, writing
+  the Environment, and triggering the run.
   Declining stops the outward steps and prints what to run; a re-run is safe.
 - **The sidecar pin is a published TAG and a branch is refused twice** — by
   `assertPinnedTag` when init writes `fabrika.ref`, and by the generated workflow

@@ -84,7 +84,8 @@ export type PublicAccess = 'custom-domain' | 'zerops-subdomain'
  * enough containers that no single one is a point of failure.
  *
  * `light` is one project, one `postgresql:single@18` and one bucket shared by IAM, Operations, control
- * AND the apps deployed alongside them, at one container per service. It exists because the standard
+ * AND the apps deployed alongside them, at one container per service. The private source service has
+ * no data service. This tier exists because the standard
  * shape costs ~13 containers before a single application is deployed, which is more platform than a
  * small fleet — or an evaluation — can justify.
  *
@@ -171,6 +172,10 @@ const runtime = (
 	const { public: isPublic, ...rest } = spec
 	return { ...rest, enableSubdomainAccess: isPublic === true }
 }
+
+/** The one service an existing installation may add through a source-only steady import. */
+export const sourceServiceSpec = (): ZeropsServiceSpec =>
+	runtime({ hostname: 'source', type: 'alpine/bun@1.3', priority: 35, minContainers: 1, maxContainers: 2 })
 
 /**
  * The **platform** project: fabrika itself.
@@ -267,12 +272,13 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 					minContainers: 1,
 					maxContainers: 3,
 				}),
+				sourceServiceSpec(),
 				runtime({
 					hostname: 'control',
 					type: 'alpine/bun@1.3',
-					// IAM → Operations → control is the code deployment order too: control has a private
-					// Operations dependency and must never start against a missing service.
-					priority: 30,
+					// IAM → Operations → source → proxy → control is the code deployment order too:
+					// control must never start against a missing private dependency.
+					priority: 20,
 					// Deliberately allowed to be a single container. The control plane is CRASH-SAFE across a
 					// deploy by design — it may trigger its own redeploy and die, then reconcile in-flight runs
 					// by polling `/app-version` on restart (ADR-0003) — so an outage window here is a delay,
@@ -285,7 +291,7 @@ export const platformTopology = (options: TopologyOptions): ProjectTopology => {
 					// Alpine custom runtime: a Caddy binary plus a compiled Bun auth service, no interpreter
 					// (ADR-0008). `run.os` is deprecated — the OS is the service type.
 					type: 'alpine@3.21',
-					priority: 10,
+					priority: 30,
 					// THE ONLY PUBLICLY ROUTED SERVICE. Everything above is reachable only over the project's
 					// private network; the proxy is what the internet talks to, including for IAM's own OIDC
 					// login and the control-plane dashboard.
@@ -342,11 +348,12 @@ const lightPlatformTopology = (options: TopologyOptions, publicAccess: PublicAcc
 		},
 		runtime({ hostname: 'iam', type: 'alpine/bun@1.3', priority: 50, minContainers: 1, maxContainers: 2 }),
 		runtime({ hostname: 'operations', type: 'alpine/bun@1.3', priority: 40, minContainers: 1, maxContainers: 2 }),
-		runtime({ hostname: 'control', type: 'alpine/bun@1.3', priority: 30, minContainers: 1, maxContainers: 2 }),
+		sourceServiceSpec(),
+		runtime({ hostname: 'control', type: 'alpine/bun@1.3', priority: 20, minContainers: 1, maxContainers: 2 }),
 		runtime({
 			hostname: PROXY_HOSTNAME,
 			type: 'alpine@3.21',
-			priority: 10,
+			priority: 30,
 			public: publicAccess === 'zerops-subdomain',
 			// Still the only publicly routed service (ADR-0007). One container is a real availability
 			// trade and the reason this tier is not for production; it is not a relaxation of the rule

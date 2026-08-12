@@ -117,7 +117,7 @@ const topologyArtifacts = (): Artifact[] =>
 	})
 
 /**
- * The repository-root `zerops.yaml`. One file, four named setups, selected by `zeropsSetup` (which
+ * The repository-root `zerops.yaml`. One file, five named setups, selected by `zeropsSetup` (which
  * defaults to the service hostname) — see `./setups.ts` for why this rather than inline `zeropsYaml`.
  */
 const zeropsYamlArtifact = (): Artifact => ({
@@ -128,9 +128,9 @@ const zeropsYamlArtifact = (): Artifact => ({
 		'Source: packages/installation-zerops/zerops/setups.ts  (which is where the per-field commentary lives)',
 		'Regenerate: bun run --filter @fabrika/installation-zerops gen',
 		'',
-		"Zerops reads `zerops.yaml` from the REPOSITORY ROOT, so fabrika's four deployable services share",
-		'ONE file with four named setups. A service selects its setup by name; the name defaults to the',
-		'service hostname, which is why `iam`, `operations`, `control` and `proxy` below are also hostnames in',
+		"Zerops reads `zerops.yaml` from the REPOSITORY ROOT, so fabrika's five deployable services share",
+		'ONE file with five named setups. A service selects its setup by name; the name defaults to the',
+		'service hostname, which is why `iam`, `operations`, `source`, `proxy` and `control` below are also hostnames in',
 		'packages/installation-zerops/zerops/generated/*.zerops-import.yaml.',
 		'',
 		'NO SECRETS AND NO PER-INSTALLATION VALUES ARE IN HERE — including no `${x_y}` reference to a',

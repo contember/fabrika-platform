@@ -16,7 +16,7 @@ import { compileTopology, platformTopology, PROXY_HOSTNAME } from '../topology'
 const services = (tier: 'standard' | 'light'): string[] =>
 	compileTopology(platformTopology({ env: 'prod', tier }), 'prod').steady.document.services.map((service) => service.hostname)
 
-describe('the four services a platform deploy touches', () => {
+describe('the five services a platform deploy touches', () => {
 	test('each is a service BOTH tiers create', () => {
 		for (const hostname of PLATFORM_DEPLOY_ORDER) {
 			expect(services('standard')).toContain(hostname)
@@ -29,9 +29,9 @@ describe('the four services a platform deploy touches', () => {
 		expect([...setups].sort()).toEqual([...PLATFORM_DEPLOY_ORDER].sort())
 	})
 
-	test('is exactly the fronted apps plus the proxy that fronts them', () => {
+	test('is exactly the fronted apps, the private source service, and the proxy that fronts them', () => {
 		expect(PLATFORM_PROXY_SERVICE).toBe(PROXY_HOSTNAME)
-		expect(new Set(PLATFORM_DEPLOY_ORDER)).toEqual(new Set([...PLATFORM_PROXY_APPS.map((app) => app.service), PROXY_HOSTNAME]))
+		expect(new Set(PLATFORM_DEPLOY_ORDER)).toEqual(new Set([...PLATFORM_PROXY_APPS.map((app) => app.service), 'source', PROXY_HOSTNAME]))
 	})
 
 	test('and the ORDER puts the enforcement point ahead of the service whose gates it carries', () => {
@@ -41,6 +41,7 @@ describe('the four services a platform deploy touches', () => {
 		// …without giving up the dependency order control's private Operations dependency needs.
 		expect(PLATFORM_DEPLOY_ORDER.indexOf('iam')).toBeLessThan(PLATFORM_DEPLOY_ORDER.indexOf('operations'))
 		expect(PLATFORM_DEPLOY_ORDER.indexOf('operations')).toBeLessThan(PLATFORM_DEPLOY_ORDER.indexOf('control'))
+		expect(PLATFORM_DEPLOY_ORDER.indexOf('source')).toBeLessThan(PLATFORM_DEPLOY_ORDER.indexOf('proxy'))
 	})
 })
 

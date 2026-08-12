@@ -253,7 +253,7 @@ export const fakeZerops = (options: {
 
 		putServiceEnv: async ({ serviceId, key, value }) => {
 			const name = nameOf(serviceId)
-			if (failedWrites.has(`${name}:${key}`)) {
+			if (failedWrites.delete(`${name}:${key}`)) {
 				throw new Error(`zerops: create service env failed (400)`)
 			}
 			effect(`env:${name}:${key}`)
@@ -330,6 +330,7 @@ export const importedLightServices = (): FakeServiceSpec[] => [
 	{ name: 'storage', id: 'svc-storage', importProcesses: 1 },
 	{ name: 'iam', id: 'svc-iam', importProcesses: 2 },
 	{ name: 'operations', id: 'svc-operations', importProcesses: 2 },
+	{ name: 'source', id: 'svc-source', importProcesses: 2 },
 	{ name: 'control', id: 'svc-control', importProcesses: 2 },
 	{ name: 'proxy', id: 'svc-proxy', importProcesses: 2, env: { zeropsSubdomain: 'https://proxy-292c.prg1.zerops.app' } },
 ]
@@ -339,6 +340,7 @@ export const platformServices = (env: Readonly<Record<string, Readonly<Record<st
 	{ name: 'db', id: 'svc-db' },
 	{ name: 'iam', id: 'svc-iam', sequence: 4, ...(env['iam'] === undefined ? {} : { env: env['iam'] }) },
 	{ name: 'operations', id: 'svc-operations', sequence: 4, ...(env['operations'] === undefined ? {} : { env: env['operations'] }) },
+	{ name: 'source', id: 'svc-source', sequence: 4, ...(env['source'] === undefined ? {} : { env: env['source'] }) },
 	{ name: 'control', id: 'svc-control', sequence: 4, ...(env['control'] === undefined ? {} : { env: env['control'] }) },
 	{ name: 'proxy', id: 'svc-proxy', sequence: 4, subdomainAccess: true, ...(env['proxy'] === undefined ? {} : { env: env['proxy'] }) },
 	// A stopped build runtime shares the project and must never be mistaken for a platform service.
