@@ -245,7 +245,12 @@ describe('Git repository source', () => {
 		).toBe(true)
 		await first.cleanup()
 
-		const second = await source.prepareArchive(input)
+		const shuffledSource = new GitRepositorySource({
+			repositoryUrl: () => fixture.remoteUrl,
+			tempRoot: fixture.root,
+			metadata: fixtureMetadata({ ...fixture, entries: [...fixture.entries].reverse() }),
+		})
+		const second = await shuffledSource.prepareArchive(input)
 		try {
 			expect(
 				new Uint8Array(await Bun.file(second.tarPath).arrayBuffer()),

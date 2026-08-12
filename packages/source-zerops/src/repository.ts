@@ -183,7 +183,7 @@ export class GitRepositorySource implements RepositorySource {
 					'resolve',
 					this.gitOperationTimeoutMs,
 				)
-				const entries = snapshot.entries.filter(isBlob)
+				const entries = orderedBlobs(snapshot.entries)
 				const descriptor = await verifyDescriptor(
 					repositoryDir,
 					entries,
@@ -264,7 +264,7 @@ export class GitRepositorySource implements RepositorySource {
 				'archive',
 				this.gitOperationTimeoutMs,
 			)
-			const entries = snapshot.entries.filter(isBlob)
+			const entries = orderedBlobs(snapshot.entries)
 			const descriptor = await verifyDescriptor(
 				repositoryDir,
 				entries,
@@ -553,6 +553,15 @@ function isBlob(entry: GitHubTreeEntry): entry is GitHubTreeBlob {
 	return entry.type === 'blob'
 }
 
+/** Canonicalize archive order independently of the GitHub REST response order. */
+function orderedBlobs(entries: GitHubTreeEntry[]): GitHubTreeBlob[] {
+	return entries.filter(isBlob).sort((left, right) => compareUtf8Paths(left.path, right.path))
+}
+
+function compareUtf8Paths(left: string, right: string): number {
+	return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'))
+}
+
 function treeSummary(entries: TreeEntry[]): TreeSummary {
 	const descriptor = entries.find((entry) => entry.path === 'zerops.yaml')
 	if (descriptor === undefined) {
@@ -690,7 +699,7 @@ function parentDirectories(entries: TreeEntry[]): string[] {
 	}
 	return [...directories].sort((left, right) => {
 		const depth = left.split('/').length - right.split('/').length
-		return depth === 0 ? left.localeCompare(right, 'en') : depth
+		return depth === 0 ? compareUtf8Paths(left, right) : depth
 	})
 }
 
