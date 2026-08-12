@@ -115,6 +115,8 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0010_operations_release_sync.sql' },
 			{ bundle: 'control', name: '0011_operations_ingest_configs.sql' },
 			{ bundle: 'control', name: '0012_app_env_public_origin.sql' },
+			{ bundle: 'control', name: '0013_provider_run_state.sql' },
+			{ bundle: 'control', name: '0014_zerops_legacy_run_state.sql' },
 		])
 	})
 

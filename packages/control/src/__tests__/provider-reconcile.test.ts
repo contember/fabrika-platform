@@ -1,6 +1,6 @@
 import type { ControlProvider, ProviderReconcileOutcome } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import { reconcileProviderRuns } from '../provider-reconcile'
+import { type ProviderReconcileSummary, reconcileProviderRuns } from '../provider-reconcile'
 import { createHarness } from './helpers/harness'
 import { providerEnvironment, TEST_PROVIDER_ID } from './helpers/provider'
 
@@ -60,7 +60,7 @@ describe('reconcileProviderRuns', () => {
 			},
 		}
 
-		await expect(reconcileProviderRuns(deps)).rejects.toThrow('temporary cancel failure')
+		expect(await reconcileProviderRuns(deps)).toMatchObject({ checked: 1, inProgress: 1 })
 		expect((await db.runs.getRun('cancelling'))?.status).toBe('running')
 		expect((await db.runs.getRun('cancelling'))?.cancel_requested_at).not.toBeNull()
 		expect(released).toEqual([])
@@ -244,7 +244,7 @@ describe('reconcileProviderRuns', () => {
 			operations: { repository: db.operationsReleases },
 		}
 
-		await expect(reconcileProviderRuns(deps)).rejects.toThrow('process stopped during post-provider work')
+		expect(await reconcileProviderRuns(deps)).toMatchObject({ checked: 1, inProgress: 1 })
 		expect((await db.runs.getRun('recovering'))?.status).toBe('running')
 		expect(await db.operationsReleases.get('recovering')).toBeNull()
 		expect(released).toEqual([])
@@ -328,5 +328,107 @@ describe('reconcileProviderRuns', () => {
 		})
 		expect((await db.runs.getRun('owned'))?.status).toBe('running')
 		expect((await db.runs.getRun('waiting'))?.status).toBe('pending')
+	})
+
+	test('isolates a malformed provider row, redacts its failure, and reconciles later rows', async () => {
+		const { db } = createHarness()
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
+		for (const id of ['broken', 'healthy']) {
+			await db.runs.createRun({ id, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+			await db.runs.markRunStarted(id, `runs/${id}/logs.ndjson`)
+			await db.runs.setRunExternalId(id, `${id}-operation`)
+		}
+
+		const secret = 'private-provider-response'
+		const errors: string[] = []
+		const originalError = console.error
+		console.error = (...values) => errors.push(values.map(String).join(' '))
+		let summary: ProviderReconcileSummary | undefined
+		try {
+			summary = await reconcileProviderRuns({
+				repositories: db,
+				provider: {
+					id: TEST_PROVIDER_ID,
+					normalizeRegistration: (input) => input,
+					deploy: () => Promise.resolve({ state: 'succeeded' }),
+					reconcile: (input) => {
+						if (input.runId === 'broken') throw new Error(secret)
+						return Promise.resolve({ state: 'succeeded' })
+					},
+				},
+				releaseLock: () => Promise.resolve(),
+			})
+		} finally {
+			console.error = originalError
+		}
+
+		expect(summary).toEqual({ checked: 2, succeeded: 1, failed: 0, inProgress: 1, waiting: 0 })
+		expect((await db.runs.getRun('broken'))?.status).toBe('running')
+		expect((await db.runs.getRun('healthy'))?.status).toBe('succeeded')
+		expect(errors).toEqual(['provider reconcile failed for run broken'])
+		expect(errors.join('\n')).not.toContain(secret)
+		expect(errors.join('\n')).not.toContain('broken-operation')
+	})
+
+	test('keeps terminal counters truthful when lock release fails and continues after cancellation', async () => {
+		const { db } = createHarness()
+		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
+		for (const id of ['cancelling', 'failed', 'succeeded']) {
+			await db.runs.createRun({ id, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
+			await db.runs.markRunStarted(id, `runs/${id}/logs.ndjson`)
+			await db.runs.setRunExternalId(id, `${id}-operation`, { phase: 'accepted' })
+		}
+		await db.runs.beginRunCancellation('cancelling')
+
+		const projectionSecret = 'private-projection-error'
+		const releaseSecret = 'private-lock-driver-error'
+		const errors: string[] = []
+		const projected: string[] = []
+		const releases: string[] = []
+		const originalError = console.error
+		console.error = (...values) => errors.push(values.map(String).join(' '))
+		let summary: ProviderReconcileSummary | undefined
+		try {
+			summary = await reconcileProviderRuns({
+				repositories: db,
+				provider: {
+					id: TEST_PROVIDER_ID,
+					normalizeRegistration: (input) => input,
+					deploy: () => Promise.resolve({ state: 'succeeded' }),
+					cancel: () => Promise.resolve(),
+					reconcile: (input) => Promise.resolve(input.runId === 'failed' ? { state: 'failed' } : { state: 'succeeded' }),
+				},
+				projectTerminal: (_deps, runId) => {
+					projected.push(runId)
+					return Promise.reject(new Error(projectionSecret))
+				},
+				releaseLock: (_key, runId) => {
+					releases.push(runId)
+					return Promise.reject(new Error(releaseSecret))
+				},
+			})
+		} finally {
+			console.error = originalError
+		}
+
+		expect(summary).toEqual({ checked: 3, succeeded: 1, failed: 2, inProgress: 0, waiting: 0 })
+		expect((await db.runs.getRun('cancelling'))?.status).toBe('failed')
+		expect((await db.runs.getRun('failed'))?.status).toBe('failed')
+		expect((await db.runs.getRun('succeeded'))?.status).toBe('succeeded')
+		expect(projected).toEqual(['cancelling', 'failed', 'succeeded'])
+		expect(releases).toEqual(['cancelling', 'failed', 'succeeded'])
+		expect(errors).toEqual([
+			'provider reconcile terminal projection failed for run cancelling',
+			'provider reconcile lock release failed for run cancelling',
+			'provider reconcile terminal projection failed for run failed',
+			'provider reconcile lock release failed for run failed',
+			'provider reconcile terminal projection failed for run succeeded',
+			'provider reconcile lock release failed for run succeeded',
+		])
+		expect(errors.join('\n')).not.toContain(projectionSecret)
+		expect(errors.join('\n')).not.toContain(releaseSecret)
+		expect(errors.join('\n')).not.toContain('-operation')
 	})
 })

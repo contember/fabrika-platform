@@ -34,6 +34,60 @@ const applySqliteMigrationStrictly = (sqlite: Database, filename: string): void 
 }
 
 describe('generic provider persistence', () => {
+	test('backfills only active legacy Zerops runs as already-triggered app versions', () => {
+		const sqlite = new Database(':memory:')
+		sqlite.exec('PRAGMA foreign_keys = ON')
+		applySqliteMigrationsThrough(sqlite, '0017_provider_run_state.sql')
+		sqlite.run("INSERT INTO apps (id, repo_url) VALUES ('app', 'github.com/acme/app')")
+		for (const provider of ['zerops', 'cloudflare']) {
+			sqlite.query(
+				'INSERT INTO app_envs (app_id, env, provider, provider_target_json, provider_artifact_json) VALUES (?, ?, ?, ?, ?)',
+			).run(
+				'app',
+				provider,
+				provider,
+				JSON.stringify({ provider, version: 1, payload: {} }),
+				JSON.stringify({ provider, version: 1, payload: {} }),
+			)
+		}
+		for (
+			const [id, env, status] of [
+				['active-zerops', 'zerops', 'running'],
+				['pending-zerops', 'zerops', 'pending'],
+				['terminal-zerops', 'zerops', 'succeeded'],
+				['active-cloudflare', 'cloudflare', 'running'],
+			]
+		) {
+			sqlite.query(
+				'INSERT INTO runs (id, app_id, env, ref, trigger, status, external_run_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+			).run(
+				id,
+				'app',
+				env,
+				'main',
+				'manual',
+				status,
+				id === 'active-zerops' ? 'version-"quoted"' : `${id}-operation`,
+			)
+		}
+
+		applySqliteMigrationStrictly(sqlite, '0018_zerops_legacy_run_state.sql')
+
+		const rows = queryRows(sqlite, 'SELECT id, provider_state_json FROM runs ORDER BY id')
+		expect(rows).toEqual([
+			{ id: 'active-cloudflare', provider_state_json: null },
+			{
+				id: 'active-zerops',
+				provider_state_json: JSON.stringify({ appVersionId: 'version-"quoted"', phase: 'build_triggered' }),
+			},
+			{
+				id: 'pending-zerops',
+				provider_state_json: JSON.stringify({ appVersionId: 'pending-zerops-operation', phase: 'build_triggered' }),
+			},
+			{ id: 'terminal-zerops', provider_state_json: null },
+		])
+	})
+
 	test('round-trips a third provider without changing the schema or query surface', async () => {
 		const { db } = createHarness()
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
