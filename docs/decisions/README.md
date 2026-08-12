@@ -100,7 +100,9 @@ ADR-0029 amends ADR-0003 and ADR-0025 after a live account disproved the assumed
 delegation. Zerops integration tokens cannot configure a service from a user's GitHub grant, so an
 operator-owned GitHub App and an internal per-installation `source` service fetch an exact commit and
 upload its archive. Zerops still executes every application build and deploy; Fabrika still never
-deploys its own installation.
+deploys its own installation. The service is now implemented for public anonymous and App-authenticated
+private repositories. Production is fixed to `github.com`; it has no GitHub Enterprise configuration
+surface.
 
 ## Log
 

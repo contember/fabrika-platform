@@ -6,15 +6,15 @@ blocked-by: []
 
 # 47 — Deliver private GitHub source through an operator-owned GitHub App
 
-**Summary.** An application deployed to Zerops cannot give `buildFromGit` a private repository, and
-the control plane's integration token cannot consume a Zerops user's GitHub OAuth grant.
-[ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md) settles the
-replacement: an operator-owned GitHub App authenticates a per-installation `source` service, which
-uploads an exact repository snapshot for Zerops to build and deploy. Effort L.
+**Summary.** The operator-owned GitHub App, per-installation `source` service and application-version
+upload lifecycle from
+[ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md) are implemented
+and locally verified. This item stays open for the live public/private parity and credential-absence
+witness in `fabrika-install-test`. Effort L.
 
 ## Problem
 
-`triggerPipeline` (`packages/provider-zerops/src/api.ts:246`) offers two sources:
+The original Zerops `triggerPipeline` seam offered two sources:
 
 - `buildFromGit: <url>` — a one-time build from a **public** repository, or
 - nothing — build from the service's configured Git integration, which its own doc comment calls
@@ -30,36 +30,48 @@ This blocks more than `trigger-deploy`. Because the Operations ingest DSN is min
 control→Operations catalog projection that follows a successful deploy, error ingest for a
 fabrika-deployed private app is unreachable as well.
 
-**Not in scope.** Do not hand `buildFromGit` a credentialed clone URL. The platform records what it is
-given, so a one-hour installation token can survive in platform state or diagnostics. ADR-0029 keeps
-the GitHub credential inside the source service and sends Zerops only repository bytes.
+**Not in scope.** Do not hand `buildFromGit` a credentialed clone URL. Zerops records what it is given,
+so a one-hour installation token can survive in platform state or diagnostics. ADR-0029 keeps the
+GitHub credential inside the source service and sends Zerops only repository bytes; application deploys
+no longer call this seam.
 
 **Also not in scope:** fabrika's own namespace proxy. ADR-0025 puts it on a pinned **tag** of the
 public `contember/fabrika-platform` repository, which needs no credential and no integration.
 
-## Approach
+## Implemented foundation
 
-Provision one non-public `source` service beside `control`:
+Commits `d091d67`, `49f3b17`, `4084234`, `4ab9ec2`, `5bc1f0e`, `68854f3` and `71e406a`
+delivered the foundation; `b55d059` made the archive order canonical across GitHub metadata order:
 
-- Authenticate every control→source request; private-network reachability is not authorization.
-- Bind repository, ref, GitHub App installation, app version, upload URL and run in every request.
-- Use the operator-owned GitHub App to resolve one exact commit without executing repository code.
-- Let `control` create the Zerops app version and pass only its presigned upload URL to `source`; keep
-  the project integration token and `build-and-deploy` call in `control`.
-- Accept only the measured Zerops HTTPS upload origin and path, refuse redirects, and send zero bytes to
-  every other destination.
-- Inspect and archive Git objects without a checkout. Reject symlinks, submodules, special entries,
-  escaping paths and trees above hard count or expanded-byte limits.
-- Embed the bounded root `zerops.yaml` and its digest in the registration artifact. Source returns only
-  the resolved commit and matching digest, then `control` builds with the registered descriptor and
-  selected setup.
-- Use this upload path for public and private repositories. Remove the temporary public application
-  `buildFromGit` path after live parity.
+- `source` is private and authenticates every RPC before reading its bounded body. Requests and
+  responses bind the run, repository, exact commit, descriptor digest and app version; upload also
+  binds the presigned URL. Stable errors contain no upstream body, URL or credential.
+- `control` owns the Zerops token, app-version creation, durable checkpoints, cleanup and
+  `build-and-deploy`. Source owns GitHub identity, Git metadata validation, Git-object archiving and the
+  upload PUT. Source receives no Zerops token and executes no application code.
+- Production is fixed to `github.com` and `api.github.com`; there is no GitHub Enterprise or API-base
+  setting. Public repositories work anonymously. A private repository uses the operator's optional
+  all-or-none App id and private key, held only by source.
+- GitHub REST metadata is checked before Git fetch. GitHub's
+  [recursive tree endpoint](https://docs.github.com/en/rest/git/trees#get-a-tree) allows up to 100,000
+  entries or 7 MB; Fabrika limits the repository to 50,000 entries and 512 MiB expanded, bounds the
+  response, refuses truncation and rechecks the fetched objects against the metadata.
+- Only the measured `prg1` HTTPS upload host and exact path are accepted. Redirects are refused. The
+  repository is archived from Git objects without a checkout; symlinks, submodules, special entries,
+  unsafe paths and excessive trees are rejected.
+- `zerops.yaml` exact bytes and digest are embedded in the provider artifact. Drift fails before an
+  Operations release or Zerops app version is created. Public and private applications now use the
+  same app-version upload lifecycle; the temporary application `buildFromGit` branch is deleted.
+- Fresh install provisions source and generates the shared RPC key. Interactive `platform init`
+  upgrades an existing project with a source-only `startWithoutCode: true` import and crash-safe key
+  reconciliation: matching keys are reused, a valid one-sided key repairs the absent side, both absent
+  generate one, and invalid or mismatched values are refused.
 
 ## Prerequisite that is not code
 
-The operator creates one organization-owned GitHub App, installs it on selected repositories, and
-configures its identity, private key and webhook secret for the Fabrika installation. This is one
+The public witness needs no GitHub App. For the private witness, the operator creates one
+organization-owned GitHub App, installs it on the selected repository, and configures its identity and
+private key on source plus the independently held webhook secret on control. This is one
 installation-level action, not one Zerops GUI action per application service.
 
 ## Acceptance
@@ -68,6 +80,9 @@ A control-plane-triggered deploy of the same exact commit succeeds on `fabrika-i
 repository is public and again after it becomes private. Both runs use app-version upload, and no
 credential appears in Fabrika logs, Zerops process data or application-version metadata. An attacker
 upload URL receives zero bytes, and repository entries cannot expose local source-service files.
+
+The code-level attacker-destination and repository-safety checks pass. The two successful live deploys
+and live credential inspection have not been performed; they are the remaining acceptance work.
 
 ## Touch points
 

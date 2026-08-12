@@ -42,10 +42,11 @@ We amend ADR-0025's private-source mechanism and ADR-0003's statement that the Z
 needs no filesystem helper. Their ownership boundaries remain: **the operator installs the platform,
 Fabrika deploys applications, and Zerops executes every application build and deploy.**
 
-Each Zerops installation will have one internal `source` service alongside `control`. The operator
-will create an organization-owned GitHub App, install it on the repositories that installation may
-deploy, and configure its App identity and private key once for the Fabrika installation. There is no
-central Fabrika-owned GitHub App and no shared credential across operators.
+Each Zerops installation has one internal `source` service alongside `control`. Public repositories
+work anonymously. To deploy a private repository, the operator creates an organization-owned GitHub
+App, installs it on the repositories that installation may deploy, and configures its App identity and
+private key once for the Fabrika installation. There is no central Fabrika-owned GitHub App and no
+shared credential across operators.
 
 `fabrika app build` also embeds the bounded repository-root `zerops.yaml` and its SHA-256 digest in the
 provider artifact. That artifact already describes the resources and selected setup used at
@@ -74,9 +75,9 @@ For each application deploy:
    version, relays logs, and records the same commit as the release source.
 
 Public and private application repositories use this one artifact-upload path. The public
-`buildFromGit` application path added as an intermediate checkpoint is removed after the upload path
-passes the same live public gate. Public `buildFromGit` remains valid for Fabrika-owned installation
-artifacts such as the namespace proxy; those repositories carry no application credential.
+`buildFromGit` application path added as an intermediate checkpoint has been removed. Public
+`buildFromGit` remains valid for Fabrika-owned installation artifacts such as the namespace proxy;
+those repositories carry no application credential.
 
 The GitHub App private key is an installation secret held by Zerops on the `source` service. Fabrika
 stores only the App and installation identifiers needed to select the credential, consistent with
@@ -115,6 +116,42 @@ stores only the App and installation identifiers needed to select the credential
   Zerops. A recovered `build_trigger_requested` observes the app version: a build/deploy state is
   reconciled, while a version still `UPLOADING` after a bounded consistency delay is deleted and failed,
   never triggered a second time. `build_triggered` follows the recorded process and app version.
+
+## Implementation record (2026-08-12)
+
+The source contract and persisted run state (`d091d67`), isolated GitHub App credential client
+(`49f3b17`), provider upload lifecycle (`4084234`), control delegation and webhook verification
+(`4ab9ec2`, `5bc1f0e`), installation topology (`68854f3`), private source runtime (`71e406a`) and
+canonical archive order (`b55d059`) implement this decision. The application provider no longer has a
+`buildFromGit` branch: resolve, application-version creation, upload and `build-and-deploy` are now the
+one application lifecycle. This is a local implementation witness, not the live public/private
+acceptance gate recorded by the active sprint.
+
+The production source runtime is fixed to `github.com` and `api.github.com`. It has no operator-facing
+GitHub Enterprise or API-base setting; dependency-injected origins exist only as test seams. Before it
+fetches Git objects, it resolves the commit and recursively reads the tree through GitHub REST. GitHub's
+[recursive tree endpoint](https://docs.github.com/en/rest/git/trees#get-a-tree) limits a response to
+100,000 entries or 7 MB. Fabrika is deliberately stricter on repository shape: at most 50,000 entries
+and 512 MiB of declared expanded blob bytes, with a bounded 8 MiB REST response and an explicit refusal
+of GitHub's `truncated` result. The fetched Git objects are then checked against that approved metadata,
+the exact commit and the registered descriptor digest before any upload.
+
+Every control→source call has an outer deadline: 45 seconds for installation lookup, five minutes for
+resolve, 20 minutes for upload and 30 seconds for cancellation. The source service expires the first
+three operations sooner—30 seconds, four minutes and 15 minutes respectively—so it can return a
+redacted protocol result before control's deadline. The upload PUT itself is bounded to ten minutes.
+
+Fresh `platform install` provisions private `source`, creates one RPC key under
+`FABRIKA_SOURCE_RPC_KEY` on source and `FABRIKA_ZEROPS_SOURCE_RPC_KEY` on control, and deploys
+`iam → operations → source → proxy → control`. GitHub App id and private key are optional but
+all-or-none and are written only to source; the independently optional webhook secret is written only
+to control. An anonymous public installation therefore needs no GitHub App configuration. For an
+existing installation, interactive `platform init` offers a supported upgrade: it imports only a
+missing source service with `startWithoutCode: true`, waits for the exact returned processes, and
+writes source configuration directly to Zerops. Matching RPC keys are reused; if exactly one side has
+a valid key, the absent side is repaired; if neither has one, one key is generated; invalid or
+different values are refused. Omitted optional credentials preserve their live values. No source
+credential is copied to disk, the sidecar repository or its GitHub Environment.
 
 ## Consequences
 

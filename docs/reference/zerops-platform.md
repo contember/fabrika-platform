@@ -550,6 +550,51 @@ longer readable. The same delete also removed a second version that had received
 must therefore persist its own upload-complete checkpoint, and it can clean both ambiguous pre-trigger
 states with the exact API available to the project integration token. The service was deleted.
 
+### Fabrika application source transport
+
+Fabrika application deploys no longer use `buildFromGit`. Public and private GitHub repositories share
+one provider lifecycle: source resolves the exact commit and registered root `zerops.yaml` digest;
+control creates and records an application version; source uploads the bound Git-object archive; and
+control calls `build-and-deploy` with the registered descriptor and selected setup. Public
+`buildFromGit` remains in use for Fabrika-owned installation artifacts such as the proxy, not for an
+application deployment.
+
+The installation has a private `source` service on `http://source:3000`. It installs `git`, exposes
+only an unauthenticated private-network `/healthz` liveness endpoint, and authenticates every RPC before
+reading its bounded body. The shared RPC secret is `FABRIKA_SOURCE_RPC_KEY` on source and
+`FABRIKA_ZEROPS_SOURCE_RPC_KEY` on control. Source receives no Zerops token. The optional
+`GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` pair is all-or-none and exists only on source; public
+repositories work anonymously without it. The independently optional `GITHUB_WEBHOOK_SECRET` stays on
+control, which verifies webhook HMAC locally.
+
+Production repository and REST origins are fixed to `github.com` and `api.github.com`. There is no
+operator-facing GitHub Enterprise or GitHub API-base setting; alternate origins are dependency-injected
+test seams only. Before any Git fetch, source asks GitHub REST for the exact commit and recursive tree.
+GitHub's [Get a tree](https://docs.github.com/en/rest/git/trees#get-a-tree) response is limited to
+100,000 entries or 7 MB. Fabrika admits at most 50,000 entries and 512 MiB of declared expanded blob
+bytes, bounds the recursive-tree response to 8 MiB and refuses a `truncated` response. The 8 MiB
+transport ceiling leaves JSON overhead around GitHub's documented 7 MB tree limit; the stricter
+Fabrika admission limits are the entry count and expanded repository size. Source then rechecks the
+fetched Git objects against the approved paths, modes, object ids and sizes before archiving them. A
+different exact commit, descriptor digest or blob size fails before upload.
+
+The source service accepts only the measured `prg1` upload destination: HTTPS host
+`proxy.app-prg1.zerops.io`, exact path `/api/rest/object-storage/upload`, empty userinfo, no explicit
+port or fragment, and a non-empty signed query. It refuses redirects. The credential-bearing upload URL
+is present only in the authenticated request and live PUT; neither side persists or logs it.
+
+Control's outer RPC deadlines are 45 seconds for installation lookup, five minutes for resolve,
+20 minutes for upload and 30 seconds for cancellation. Source expires installation lookup after
+30 seconds, resolve after four minutes and upload after 15 minutes, leaving time for a redacted response
+before the outer deadline. The upload PUT itself is bounded to ten minutes. Caller cancellation is
+propagated through GitHub REST, Git operations, response reads, archive cleanup and upload.
+
+This transport, topology and upgrade flow are locally implemented and tested. They have not yet passed
+the active sprint's live gate: the same commit must reach `ACTIVE` through application-version upload
+once while public and once while private in `fabrika-install-test`, and the live logs, process data and
+application-version metadata must be inspected for credentials. The subsequent browser handoff and
+Operations exception-ingest witness is also live-only.
+
 ### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — updating a running installation
 
 How the four platform services on `fabrika-test` were taken from a two-day-old build to `HEAD`. There
@@ -574,10 +619,10 @@ Two ordering rules, both of which cost something if ignored:
   synchronisation dies on `userDataSyncRunning` and leaves the app version stuck `UPLOADING`, which
   `deployAppVersion` does not recover from.
 - **Deploy the PROXY before the service it fronts, whenever the gate list is widening enforcement.**
-  The order that matters is not the dependency order (IAM → Operations → control) but the exposure
+  The order that matters is not the dependency order (IAM → Operations → source → control) but the exposure
   order: the application no longer enforces anything (ADR-0022), so a control plane at `HEAD` behind a
-  proxy still carrying an older, more permissive manifest is an open API. IAM → Operations → **proxy**
-  → control keeps the dependency order and never opens that window.
+  proxy still carrying an older, more permissive manifest is an open API. IAM → Operations → source →
+  **proxy** → control keeps the dependency order and never opens that window.
 
 **The platform installation's proxy manifest is generated in two halves.** The installation-independent
 half — which apps exist, their ids, their private upstreams, the public listener each answers on and
@@ -600,7 +645,7 @@ inert for an app whose every gate rule is `public`, so correcting it costs nothi
 Both ordering rules above, plus the manifest composition, now live in code:
 `packages/installation-zerops/src/deploy.ts`. On Zerops the command owns the WHOLE ordered sequence —
 resolve the project and its services, write each service's environment, deploy
-IAM → Operations → proxy → control waiting for each, reconcile the console's schema, ensure the public
+IAM → Operations → source → proxy → control waiting for each, reconcile the console's schema, ensure the public
 entry point — so an operator's pipeline calls one step. On Cloudflare the same command stays narrow and
 the scaffolded workflow keeps the order. The asymmetry is deliberate
 ([ADR-0027](../decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)); its full flag and
@@ -647,7 +692,9 @@ Its shape is decided by three of the facts above:
   `startWithoutCode: true` document at a service carrying code activates an EMPTY app version and
   demotes the running one to `BACKUP`. A PARTIAL set is refused rather than completed: an import
   applies as one document and cannot skip the services that are already there. A service still reading
-  `NEW` is refused too — see the 08-10 section above.
+  `NEW` is refused too — see the 08-10 section above. This describes fresh `platform install`; the
+  source-only `platform init` upgrade below uses a dedicated one-service document and does not re-import
+  an existing runtime.
 - **Every process the import returns is waited on before anything is read or written**, because a
   service holds no environment at all until it leaves `NEW`.
 - **Generated secrets are written blind.** They are never read back for comparison, so the command
@@ -655,12 +702,19 @@ Its shape is decided by three of the facts above:
   those KEYS instead of writing over them. A second bring-up would roll a new vault KEK (unrecoverable)
   and new signing keys (every live token invalid).
 
-It places six generated values — IAM's ES256 signing keys, the IAM RPC key, the proxy key, the
-provisioning key, the Operations sync key and the control vault KEK — plus one minted on the account:
-a Zerops INTEGRATION token (`POST /client/{id}/integration-token`, client role `NO_ACCESS`, `ADMIN` on
-this project only), so the installation never holds the personal token the operator authenticated
-with. Exactly one value is printed: the provisioning key, once, at the end, because it lives nowhere
-else and `platform init` asks for it.
+It places seven generated values — IAM's ES256 signing keys, the IAM RPC key, the source RPC key, the
+proxy key, the provisioning key, the Operations sync key and the control vault KEK — plus one minted on
+the account: a Zerops INTEGRATION token (`POST /client/{id}/integration-token`, client role
+`NO_ACCESS`, `ADMIN` on this project only), so the installation never holds the personal token the
+operator authenticated with. The source key is written under different names on source and control but
+has one value. Exactly one value is printed: the provisioning key, once, at the end, because it lives
+nowhere else and `platform init` asks for it.
+
+GitHub source configuration is optional at fresh install. `GITHUB_APP_ID` and
+`GITHUB_APP_PRIVATE_KEY` must be supplied together and are written only to source; without them public
+repositories still deploy anonymously. `GITHUB_WEBHOOK_SECRET` is independently optional and is
+written only to control. Source gets neither the Zerops integration token nor any GitHub API-base
+setting.
 
 **Partly unverified against a real account.** The import step's behaviour is measured (08-10 section
 above) and the command is written against it. Everything after it is not: in particular
@@ -668,17 +722,43 @@ above) and the command is written against it. Everything after it is not: in par
 whether client `NO_ACCESS` beside a project `ADMIN` grant is even accepted, and what the minted value
 looks like — and the two passes as a whole.
 
+### `fabrika platform init --provider=zerops` source upgrade
+
+Interactive `platform init` is also the supported upgrade/configuration path for an existing
+installation. After a separate operator confirmation, it reads the project and imports only `source`
+when that service is missing. The import is a source-only services document with
+`startWithoutCode: true`; init waits for each exact process id returned by Zerops before reading or
+writing the service. Existing platform services and their app versions are not re-imported.
+
+The command then reconciles the shared RPC key directly in Zerops:
+
+- equal valid keys on source and control are reused;
+- if exactly one side has a valid key and the other key is absent, that value repairs the absent side;
+- if neither side has a key, init generates one and writes both sides;
+- an invalid value or two different values is refused rather than rotated.
+
+The one-sided rule makes a retry safe after the first of the two environment writes succeeds and the
+second fails. Optional App id/private key and webhook inputs follow the same ownership as fresh install.
+Omitting them preserves existing values. None of these source credentials is written to the sidecar
+checkout, repository or GitHub Environment; the sidecar still receives only the Zerops integration
+token and IAM provisioning key it already needs for deploy.
+
+**Not yet verified live.** The source-only import, one-sided key repair and optional credential writes
+are covered by the local installation suite, including a fail-after-first-write rerun. They have not
+yet been run against `fabrika-install-test`.
+
 ## Fabrika placement mapping
 
 The Fabrika platform project contains:
 
-- `iam`, `operations`, `control`, and the only public `proxy` runtime;
+- `iam`, `operations`, `source`, `control`, and the only public `proxy` runtime;
 - one shared `db` PostgreSQL service for IAM and control;
 - a separate `operationsdb` PostgreSQL service for Operations;
 - private `storage` for run logs and `operationsstorage` for raw events and
   source maps.
 
-IAM, Operations, and control deploy in that dependency order. Operations uses
+IAM, Operations, source, proxy, and control deploy in that order. Source is private, installs `git`,
+and accepts authenticated source RPC on port 3000; it has no Zerops token. Operations uses
 `run.initCommands` for service-owned plus `platform-node` queue migrations,
 `run.start` for its HTTP server and Postgres job consumer, and `run.crontab` for
 health and notification maintenance. Its database and object store are separate

@@ -48,7 +48,7 @@ and a pin that pins half of what it claims.
 - [37](37-activate-zerops-managed-environment-transactionally.md) — Keep Zerops managed environment activation consistent with the app version that actually ships.
 - [38](38-add-dns-safe-operations-egress.md) — Prevent private-address and DNS-rebinding egress through Operations webhooks and active health checks.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
-- [47](47-give-the-zerops-path-a-private-git-source.md) — Deliver public and private GitHub sources through an operator-owned GitHub App and a per-installation Zerops source service (ADR-0029).
+- [47](47-give-the-zerops-path-a-private-git-source.md) — Source upload and the per-installation GitHub App service are locally implemented; prove public/private parity and credential absence live (ADR-0029).
 - [54](54-give-operations-its-own-proxy-app-identity.md) — Half shipped; what is left is moving the operator surface onto the Operations host, which is a console architecture change, not a rename.
 - [57](57-stop-the-caller-choosing-its-own-audit-correlation-id.md) — IAM takes `X-Request-Id` from the caller, unbounded, into `auth_log`; its Worker is edge-routed so the proxy strip never runs.
 - [59](59-the-live-installation-calls-itself-local.md) — `fabrika-test` has never been deployed by the command that fixes it; `control` and `operations` still carry `ENVIRONMENT=local`.

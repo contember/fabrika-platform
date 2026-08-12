@@ -38,10 +38,10 @@ Zerops build pipeline.
   the console form's second field is "GitHub repo URL" (`dashboard/src/routes/apps/new.tsx`).
 - ✔ **A deploy already resolves a concrete ref.** `input.ref ?? concrete trigger_ref ?? refs/heads/<default_branch>`
   (`control/src/api/runs.ts:248-249`), stored on `runs.ref`.
-- ✔ **The public checkpoint now consumes the repository.** WU2 derives an ephemeral `buildFromGit`
-  from `ProviderDeployInput.app.source` and passes it only on the runtime target
-  (`provider-zerops/src/control.ts:263-264,314-319`). It is a proved code seam, not the final source
-  transport: WU3 removes it after artifact upload passes the public live gate.
+- ✔ **The application deploy now uses one source-upload path.** WU2's ephemeral application
+  `buildFromGit` checkpoint has been removed. The provider resolves the exact commit and registered
+  descriptor digest before creating the Operations release, then creates an app version, uploads the
+  bound archive and calls `build-and-deploy`. Public and private repositories share this lifecycle.
 - ✔ **Cloudflare consumes the same input correctly**, which is the shape to copy: `buildJob` resolves
   `input.app.source` and puts `{ repoUrl, ref }` on the runner job
   (`provider-cloudflare/src/control.ts:189,198-199`), and the container clones that ref.
@@ -112,7 +112,7 @@ Zerops build pipeline.
   repository builds and reaches `ACTIVE` in `fabrika-install-test`, and the app answers on its own host.
 - **Touch points.** `packages/provider-zerops/src/{control,provider,types}.ts`.
 
-### WU3 — An operator-owned GitHub App delivers source archives (effort L)
+### WU3 — An operator-owned GitHub App delivers source archives (effort L) · code complete; live gate open
 
 - **Problem.** [`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md). The native Zerops
   integration requires a user identity even after the account OAuth grant exists. The control plane's
@@ -148,8 +148,12 @@ Zerops build pipeline.
     and stream the repository-root archive to that upload URL;
   - keep the GitHub App private key only as a `source` service secret, and return only the resolved
     commit, descriptor digest, upload outcome and redacted events to `control`;
-  - use the upload path for public and private repositories, then remove WU2's application
-    `buildFromGit` path.
+  - use the upload path for public and private repositories and remove WU2's application
+    `buildFromGit` path; both are implemented, with live parity still to prove.
+- **Code witness.** Commits `d091d67`, `49f3b17`, `4084234`, `4ab9ec2`, `5bc1f0e`, `68854f3` and
+  `71e406a` implement this scope; `b55d059` makes archive order independent of GitHub metadata order.
+  The source service, provider lifecycle, control delegation, installation topology and supported
+  upgrade flow are locally verified. The acceptance below remains open until both live deploys succeed.
 - **Security gates.** Project-network reachability is not authorization. Tests must prove an unsigned
   source request is refused; the request binds repository, ref, installation, app version, upload URL
   and run; only the live-verified Zerops HTTPS upload origin, path, empty userinfo and non-empty signed
@@ -237,7 +241,8 @@ Zerops build pipeline.
    private — a trap worth naming, because the earlier plan recommended exactly it.
 3. **One application-source transport.** Public and private repositories both become an uploaded app
    version. Public fetches need no GitHub credential; private fetches mint a GitHub App installation
-   token. WU2's application `buildFromGit` path is deleted after WU3 proves parity.
+   token. WU2's application `buildFromGit` path is deleted; public/private live parity remains the
+   acceptance witness, not a second production branch.
 4. **The source helper is not a deploy runner.** It resolves, fetches, packages and uploads one exact
    commit from Git objects, but never checks it out or executes repository code. The provider artifact
    carries the bounded root descriptor required by Zerops; source returns only its digest. Zerops still
@@ -405,6 +410,67 @@ The upload prerequisite then passed live on disposable service `wu3uploadprobe`.
 installation token created app version `vjY1dFq2Q2uXWASEjGizWg`, uploaded 24.9 KiB of source and started
 process `zyEbPBfKSpSKSvCNy6nZOw`. Zerops completed `bun install --frozen-lockfile`, built the application
 and uploaded a 47.3 MiB deploy artifact. The runtime deploy failed because the deliberately empty probe
-had neither the app database nor runtime environment. The service was deleted. WU3 can now implement
-the service, authenticated RPC, GitHub App setup, private-source fetch and removal of WU2's temporary
-application `buildFromGit` path.
+had neither the app database nor runtime environment. The service was deleted. This probe established
+the upload API prerequisite; the implementation checkpoint below supersedes the earlier pending-work
+conclusion.
+
+### WU3 implementation checkpoint (2026-08-12)
+
+Commit `d091d67` added the public source RPC contract, descriptor-bearing provider artifact, bounded
+control HTTP client and persisted provider run state. Commit `49f3b17` isolated GitHub App JWT,
+installation lookup and short-lived token minting in the credential-owning package. Commit `4084234`
+then implemented the provider's resolve → app-version create → upload → build-and-deploy lifecycle,
+including durable checkpoints and conservative cleanup after ambiguous pre-trigger failures.
+
+Commits `4ab9ec2` and `5bc1f0e` moved Zerops repository installation lookup, commit resolution and
+archive upload behind the authenticated source RPC while keeping strict webhook HMAC verification on
+control. The provider binds the descriptor digest before Operations projection. The temporary
+application `buildFromGit` path is gone.
+
+Commit `71e406a` added the private source runtime. Production accepts only `github.com` repositories and
+uses `api.github.com`; there is no GitHub Enterprise or API-base configuration knob. GitHub App id and
+private key are optional together, so anonymous public fetch remains available without App
+configuration. Before any Git fetch, the runtime resolves commit metadata and the recursive tree over
+GitHub REST. GitHub documents a maximum of 100,000 entries or 7 MB for its
+[recursive tree response](https://docs.github.com/en/rest/git/trees#get-a-tree). Fabrika admits at most
+50,000 entries and 512 MiB of declared expanded bytes, bounds the REST response to 8 MiB, refuses a
+truncated tree and rechecks fetched Git objects against the approved metadata. It archives objects
+without a checkout and rejects symlinks, submodules, special entries and unsafe paths.
+Commit `b55d059` made file and parent-directory ordering explicit UTF-8 byte order, so the same Git tree
+produces the same archive even when GitHub returns metadata entries in a different order.
+
+The control-side RPC deadlines are 45 seconds for installation lookup, five minutes for resolve,
+20 minutes for upload and 30 seconds for cancellation. Source expires installation lookup after
+30 seconds, resolve after four minutes and upload after 15 minutes, with a ten-minute upload PUT cap.
+This leaves time to return the stable redacted error envelope before control's outer deadline.
+
+Commit `68854f3` added private `source` to both Zerops topologies and the generated artifacts. It runs
+on port 3000, installs `git`, has no public route or Zerops token, and is deployed in the enforced order
+`iam → operations → source → proxy → control`. Fresh `platform install` generates one shared RPC key;
+the source-side spelling is `FABRIKA_SOURCE_RPC_KEY` and the control-side spelling is
+`FABRIKA_ZEROPS_SOURCE_RPC_KEY`. The optional App pair is written only to source and the independently
+optional webhook secret only to control.
+
+Interactive `platform init` is the supported upgrade path for an existing project. After confirmation,
+it imports only a missing source service from a services-only document with `startWithoutCode: true`,
+waits for the exact processes returned by Zerops and writes source settings directly to Zerops. It
+reuses matching valid RPC keys; copies a valid one-sided key to the absent side, including after a
+crash between writes; generates a key only when both are absent; and refuses invalid or mismatched
+values. Blank optional credential answers preserve the live settings. Source credentials never enter
+the sidecar checkout, repository or GitHub Environment.
+
+Local witnesses for the landed code:
+
+- the source package suite: `bun test packages/source-zerops` — 68 passed, 0 failed, 153 expectations
+  across four files;
+- the focused control verification for the delegation and lifecycle: 116 tests across 11 suites, plus
+  the control and provider package typechecks;
+- the installation package suite: 307 passed, 0 failed, 2,813 expectations, plus its package typecheck
+  and `gen:check` reporting all 11 generated artifacts current;
+- dprint, Biome, scoped diff checks and the repository no-type-hacks scan passed for each landed unit.
+
+No release or end-to-end live application deploy was performed at this checkpoint. WU3 therefore still
+needs the same exact commit to reach `ACTIVE` through app-version upload first as a public repository
+and then as a private repository in `fabrika-install-test`, with credential absence checked in logs and
+Zerops metadata. WU5's browser handoff, managed Operations environment and correlated exception ingest
+also remain live-only gates. The sprint and backlog item 47 stay open until those witnesses exist.

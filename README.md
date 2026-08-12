@@ -11,9 +11,11 @@ platform — Cloudflare or [zerops.io](https://zerops.io) — and the whole stac
 
 > **Status — work in progress.** The Cloudflare path works. The Zerops path has been exercised
 > against a real account: provisioning, service variables, the `.zerops.app` entry point, and a
-> browser signing in through the auth proxy all run live. Two things are **not** built yet — fabrika
-> does not deploy _itself_ to a fresh account (that pipeline belongs to whoever installs it, not to
-> this repository), and an app deployed to Zerops cannot yet build from a private repository.
+> browser signing in through the auth proxy all run live. Operator-owned install/deploy automation and
+> the application source-upload path for public and private GitHub repositories are implemented and
+> locally verified. Their end-to-end real-account gates are still open: the same app commit has not yet
+> reached `ACTIVE` through upload as both public and private, and the resulting browser/Operations flow
+> has not yet been observed live.
 
 ## What it does
 

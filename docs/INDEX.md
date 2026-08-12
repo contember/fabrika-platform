@@ -33,8 +33,10 @@ fast build-failure detection and persisted run logs are implemented checkpoints.
 proved Zerops' GUI OAuth grant cannot be consumed by the installation's project-scoped token.
 [ADR-0029](decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md) replaces that native
 integration plan with an operator-owned GitHub App and a non-public per-installation `source` service.
-It fetches an exact commit and uploads the repository archive; Zerops still builds and deploys it. The
-example remains a tested workspace fixture and standalone repository whose root holds `zerops.yaml`.
+The service, application upload lifecycle and install/init paths are locally implemented; production
+is fixed to `github.com`. It fetches an exact commit and uploads the repository archive; Zerops still
+builds and deploys it. The public/private live deploys and the browser/Operations last mile remain open.
+The example remains a tested workspace fixture and standalone repository whose root holds `zerops.yaml`.
 Consumes
 [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md),
 [`69`](backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md) and
@@ -87,7 +89,7 @@ backlog is empty; what is left of item 54 is a console architecture decision, no
   neither has run against the account, so the hand sequence remains the only proven one. Next is the
   live acceptance above, including [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md): an
   operator-owned GitHub App and source-upload service now replace the disproved native-integration
-  approach. The production two-project shape and
+  approach in code, but still need their public/private live witness. The production two-project shape and
   custom domains remain in [`05`](backlog/05-bring-up-on-a-real-zerops-account.md).
 - **The session handoff is the ONLY way a browser gets a session for an app.** IAM
   issues a browser-bound one-time code and the proxy on the app's own host redeems it
