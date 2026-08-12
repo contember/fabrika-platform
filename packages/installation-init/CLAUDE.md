@@ -19,6 +19,7 @@ Public because both installation packages are, and
 - `log.ts` — the presentation layer. `step` / `info` / `detail` / `ok` / `warn` / `fail` / `action` / `url`.
 - `shell.ts` — `run` / `capture` / `probe` over `Bun.spawn`; argv verbatim, never a shell.
 - `gh.ts` — `hasGhCli` / `ghRepoExists`.
+- `github-app-manifest.ts` — the loopback-only GitHub App manifest handshake and strict conversion decoder.
 - `environment.ts` — create the GitHub Environment, write its secrets over `gh` stdin and its variables.
 - `scaffold.ts` — create or refresh a sidecar repository around a provider-supplied `materialize`.
 
