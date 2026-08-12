@@ -40,6 +40,7 @@ describe('verifyWebhookSignature (HMAC-SHA256)', () => {
 		expect(await verifyWebhookSignature(body, 'not-prefixed', secret)).toBe(false)
 		expect(await verifyWebhookSignature(body, 'sha256=zzzz', secret)).toBe(false) // non-hex
 		expect(await verifyWebhookSignature(body, 'sha256=abc', secret)).toBe(false) // odd length
+		expect(await verifyWebhookSignature(body, `sha256=${'aa'.repeat(31)}0g`, secret)).toBe(false) // partial hex pair
 		expect(await verifyWebhookSignature(body, `sha256=${'a'.repeat(66)}`, secret)).toBe(false)
 	})
 

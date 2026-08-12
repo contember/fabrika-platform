@@ -122,7 +122,7 @@ function utf8(text: string): Uint8Array<ArrayBuffer> {
 
 /** Parse an even-length hex string to bytes; null on any non-hex / odd length. */
 function hexToBytes(hex: string): Uint8Array<ArrayBuffer> | null {
-	if (hex.length !== 64) {
+	if (!/^[0-9a-f]{64}$/i.test(hex)) {
 		return null
 	}
 	const out = new Uint8Array(hex.length / 2)
