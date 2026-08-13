@@ -23,6 +23,7 @@ const MAX_ENV_ENTRIES = 256
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/
 const DEFAULT_REREAD_ATTEMPTS = 5
 const DEFAULT_REREAD_DELAY_MS = 250
+const ADOPTION_CONNECTION_DOMAIN = 'fabrika:zerops-source-connection:v1'
 
 export type SourceConnectionInspection =
 	| { readonly state: 'unavailable' }
@@ -52,9 +53,14 @@ export interface SourceConnectionStatusInput {
 	readonly signal: AbortSignal
 }
 
+export interface SourceConnectionAdoptExistingInput {
+	readonly signal: AbortSignal
+}
+
 /** Provider-neutral lifecycle consumed by the future authenticated control connection flow. */
 export interface SourceConnectionAdmin {
 	inspect(signal: AbortSignal): Promise<SourceConnectionInspection>
+	adoptExisting(input: SourceConnectionAdoptExistingInput): Promise<ZeropsSourceCredentialActivateResponseV1>
 	activate(input: SourceConnectionActivateInput): Promise<ZeropsSourceCredentialActivateResponseV1>
 	status(input: SourceConnectionStatusInput): Promise<SourceConnectionStatus>
 	configureWebhook(input: ZeropsSourceWebhookConfigureInput): Promise<ZeropsSourceWebhookConfigureResponseV1>
@@ -119,8 +125,30 @@ export function createZeropsSourceConnectionAdmin(options: ZeropsSourceConnectio
 		return await withDigest(classify(service, environment))
 	}
 
-	return {
+	const admin: SourceConnectionAdmin = {
 		inspect: async (signal) => (await inspectInternal(signal)).public,
+
+		adoptExisting: async (input) => {
+			const existing = await inspectInternal(input.signal)
+			if (
+				(existing.public.state !== 'legacy-complete' && existing.public.state !== 'durable')
+				|| existing.bundle === undefined
+			) throw new SourceConnectionAdminError('credential_conflict')
+			let credentialSha256: string
+			try {
+				credentialSha256 = existing.public.state === 'durable'
+					? existing.public.credentialSha256
+					: await sha256ZeropsSourceCredentialBundle(existing.bundle)
+			} catch {
+				throw new SourceConnectionAdminError('credential_conflict')
+			}
+			return await admin.activate({
+				connectionId: await adoptionConnectionId(options.projectId, credentialSha256),
+				credentialBundle: existing.bundle,
+				credentialSha256,
+				signal: input.signal,
+			})
+		},
 
 		activate: async (input) => {
 			let digest: string
@@ -234,6 +262,13 @@ export function createZeropsSourceConnectionAdmin(options: ZeropsSourceConnectio
 			}
 		},
 	}
+	return admin
+}
+
+async function adoptionConnectionId(projectId: string, credentialSha256: string): Promise<string> {
+	const material = `${ADOPTION_CONNECTION_DOMAIN}\0${projectId}\0${credentialSha256}`
+	const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(material)))
+	return `zsrc-${[...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`
 }
 
 async function requireDurableDigest(

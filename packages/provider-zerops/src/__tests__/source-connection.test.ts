@@ -156,6 +156,48 @@ describe('Zerops source connection administration', () => {
 		expect(await admin.inspect(signal())).toEqual({ state: 'durable', credentialSha256 })
 	})
 
+	test('adopts existing legacy credentials with one deterministic provider-derived connection id', async () => {
+		const legacy = state({ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: PEM })
+		const source = new FakeSource()
+		const admin = createZeropsSourceConnectionAdmin({ api: fakeApi(legacy), source, projectId: PROJECT_ID })
+		const first = await admin.adoptExisting({ signal: signal() })
+		const second = await admin.adoptExisting({ signal: signal() })
+		expect(first.connectionId).toMatch(/^zsrc-[a-f0-9]{64}$/)
+		expect(second.connectionId).toBe(first.connectionId)
+		expect(first.credentialSha256).toBe(await sha256ZeropsSourceCredentialBundle(BUNDLE))
+		expect(first.githubApp).toEqual(IDENTITY)
+		expect(legacy.created).toEqual([{ key: ZEROPS_SOURCE_CREDENTIAL_ENV, value: BUNDLE }])
+		expect(source.activations.map((input) => input.connectionId)).toEqual([first.connectionId, first.connectionId])
+		const otherProject = state({ [ZEROPS_SOURCE_CREDENTIAL_ENV]: BUNDLE })
+		otherProject.findResult = { id: SERVICE_ID, name: 'source', projectId: 'project-2' }
+		const other = await createZeropsSourceConnectionAdmin({ api: fakeApi(otherProject), source: new FakeSource(), projectId: 'project-2' })
+			.adoptExisting({ signal: signal() })
+		expect(other.connectionId).not.toBe(first.connectionId)
+		const serialized = JSON.stringify([first, second])
+		expect(serialized).not.toContain(PEM)
+		expect(serialized).not.toContain('privateKeyPem')
+	})
+
+	test('adopts a canonical durable bundle without rewriting it', async () => {
+		const durable = state({ [ZEROPS_SOURCE_CREDENTIAL_ENV]: BUNDLE })
+		const source = new FakeSource()
+		const admin = createZeropsSourceConnectionAdmin({ api: fakeApi(durable), source, projectId: PROJECT_ID })
+		const adopted = await admin.adoptExisting({ signal: signal() })
+		expect(adopted.connectionId).toMatch(/^zsrc-[a-f0-9]{64}$/)
+		expect(durable.created).toHaveLength(0)
+		expect(source.activations).toHaveLength(1)
+	})
+
+	test('refuses adoption without one complete exact existing credential set', async () => {
+		for (const current of [state(), state({ GITHUB_APP_ID: '123' }), state({ GITHUB_APP_PRIVATE_KEY: PEM })]) {
+			const admin = createZeropsSourceConnectionAdmin({ api: fakeApi(current), source: new FakeSource(), projectId: PROJECT_ID })
+			const raised = await admin.adoptExisting({ signal: signal() }).catch((error: unknown) => error)
+			expect(raised).toMatchObject({ code: 'credential_conflict' })
+			expect(raised instanceof Error ? raised.message : '').not.toContain(PEM)
+			expect(current.created).toHaveLength(0)
+		}
+	})
+
 	test('creates one atomic bundle, proves an exact bounded reread, and activates the same digest', async () => {
 		const durable = state()
 		durable.delayedReads = 2

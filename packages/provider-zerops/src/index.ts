@@ -199,6 +199,7 @@ export type {
 	SourceConnectionActivateInput,
 	SourceConnectionAdmin,
 	SourceConnectionAdminErrorCode,
+	SourceConnectionAdoptExistingInput,
 	SourceConnectionInspection,
 	SourceConnectionStatus,
 	SourceConnectionStatusInput,
