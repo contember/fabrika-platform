@@ -34,6 +34,8 @@ export const ACTIONS = {
 	 * provisioning creds — are fabrika's own Worker secrets, not managed through this action.)
 	 */
 	SECRET_MANAGE: 'secret.manage',
+	/** Manage the platform GitHub source connection. Global because it changes control-wide credentials. */
+	SOURCE_CONNECTION_MANAGE: 'source.connection.manage',
 } as const
 
 export type VozkaAction = (typeof ACTIONS)[keyof typeof ACTIONS]

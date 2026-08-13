@@ -400,6 +400,7 @@ function logFieldFilters(manifest: ProxyManifest): Record<string, CaddyLogFilter
  *   - the ADR-0021 handoff `?code=…`. UNCONDITIONAL: the reserved callback exists on every app host,
  *     the code is a bare `randomToken(32)` with no `px_` prefix, and it is not a declared credential,
  *     so nothing else in this file would ever contribute it;
+ *   - `?state=…`, an OAuth capability that must never reach request or redirect logs;
  *   - `?redirect=…`, the login bounce's return URL. It is not itself a credential, it is a carrier:
  *     the whole original URL is percent-encoded into it, so a declared `query` credential re-appears
  *     as `%3Fpxt%3D…` after being stripped from the logged URI;
@@ -420,6 +421,7 @@ export function uriRedactionPattern(manifest: ProxyManifest): string {
 	const alternatives = [
 		`${API_KEY_PREFIX}[A-Za-z0-9_.\\-]+`,
 		`[?&]${escapeRe2(AUTH_CODE_PARAM)}=[^&]*`,
+		`[?&]state=[^&]*`,
 		`[?&]${escapeRe2(LOGIN_REDIRECT_PARAM)}=[^&]*`,
 	]
 	for (const name of [...names].sort()) {

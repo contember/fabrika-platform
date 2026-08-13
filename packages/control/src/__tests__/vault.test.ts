@@ -45,6 +45,19 @@ describe('Vault crypto (AES-256-GCM envelope)', () => {
 		}
 	})
 
+	test('platform secrets require an exact purpose match', async () => {
+		const { d1 } = createHarness()
+		const vault = await Vault.create(d1, testKey())
+		const ref = await vault.putSecret('platform', 'platform:github-source:a:webhook', 'hook-secret')
+		expect(await vault.getSecretForPurpose(ref, { scope: 'platform', label: 'platform:github-source:a:webhook' })).toBe('hook-secret')
+		await expect(vault.getSecretForPurpose(ref, { scope: 'platform', label: 'platform:github-source:b:webhook' })).rejects.toThrow(
+			'purpose mismatch',
+		)
+		await expect(vault.getSecretForPurpose(ref, { scope: 'app', label: 'platform:github-source:a:webhook' })).rejects.toThrow(
+			'purpose mismatch',
+		)
+	})
+
 	test('the stored row contains NO plaintext (only ciphertext + IVs)', async () => {
 		const { d1, sqlite } = createHarness()
 		const vault = await Vault.create(d1, testKey())

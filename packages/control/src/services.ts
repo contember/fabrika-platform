@@ -11,7 +11,7 @@ import {
 	replayOperationsCatalog,
 } from './operations-catalog'
 import type { OperationsReleaseProjectionDeps } from './operations-releases'
-import type { RepoEvents } from './repo-source'
+import { LocalGitHubRepoEvents, type RepoEvents } from './repo-source'
 import { cancelDeploy, type RunDeps } from './run-lifecycle'
 import { VaultSecretResolver } from './secret-resolver'
 import { Vault } from './vault'
@@ -60,7 +60,7 @@ export function replayOperationsCatalogProjection(env: Env): Promise<OperationsC
 }
 
 export function repoEvents(env: Env): RepoEvents {
-	return env.REPO_EVENTS
+	return env.GITHUB_WEBHOOK_SECRETS === undefined ? env.REPO_EVENTS : new LocalGitHubRepoEvents(env.GITHUB_WEBHOOK_SECRETS, env.REPO_EVENTS)
 }
 
 export function vault(env: Env): Promise<Vault> {

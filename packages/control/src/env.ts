@@ -21,7 +21,7 @@
 import type { IamRpc } from '@fabrika/auth'
 import type { AssetServer, BlobStore, HttpService, JobQueue, SqlDatabase, WaitUntil } from '@fabrika/platform'
 import type { ControlRepositories } from './db'
-import type { RepoEvents } from './repo-source'
+import type { RepoEvents, WebhookSecretProvider } from './repo-source'
 import type { DeployJobMessage } from './run-lifecycle'
 
 export interface Env {
@@ -43,6 +43,8 @@ export interface Env {
 	WAIT_UNTIL: WaitUntil
 	/** Verified GitHub push events and installation lookup, composed per provider/runtime. */
 	REPO_EVENTS: RepoEvents
+	/** Optional dynamic webhook secret capability; provider composition selects it explicitly. */
+	GITHUB_WEBHOOK_SECRETS?: WebhookSecretProvider
 	/**
 	 * IAM — authorization + audit. A service binding on Workers; an `HttpIamRpc`
 	 * (`@fabrika/auth`) over the project's private network in a process. Required in practice —

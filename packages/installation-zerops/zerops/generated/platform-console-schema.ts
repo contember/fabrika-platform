@@ -21,6 +21,7 @@ export const PLATFORM_CONSOLE_APP_SCHEMA: AppSchema = {
 		{ action: 'app.manage', description: 'Manage the app registry (apps + app_envs)' },
 		{ action: 'namespace.manage', description: 'Manage deployment namespaces' },
 		{ action: 'secret.manage', description: 'Manage secret values + their references' },
+		{ action: 'source.connection.manage', description: 'Manage the platform GitHub source connection' },
 		{ action: 'operations.read', description: 'Read Operations errors and activity' },
 		{ action: 'operations.triage', description: 'Triage Operations errors' },
 		{ action: 'operations.manage', description: 'Manage Operations sources, alerts, and retention' },

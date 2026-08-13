@@ -106,6 +106,48 @@ describe('LocalGitHubRepoEvents', () => {
 			}),
 		)).resolves.toBeNull()
 	})
+
+	test('reads a dynamic secret for every delivery', async () => {
+		let secret = 'first'
+		let reads = 0
+		const events = new LocalGitHubRepoEvents({
+			getSecret() {
+				reads += 1
+				return Promise.resolve(secret)
+			},
+		}, { resolveInstallationId: () => Promise.resolve(null) })
+		const first = await signWebhook(body, secret)
+		expect(
+			await events.verifyWebhook(
+				new Request('https://control.test/webhooks/github', {
+					method: 'POST',
+					body,
+					headers: { 'X-Hub-Signature-256': first },
+				}),
+			),
+		).not.toBeNull()
+		secret = 'second'
+		const second = await signWebhook(body, secret)
+		expect(
+			await events.verifyWebhook(
+				new Request('https://control.test/webhooks/github', {
+					method: 'POST',
+					body,
+					headers: { 'X-Hub-Signature-256': second },
+				}),
+			),
+		).not.toBeNull()
+		expect(reads).toBe(2)
+	})
+
+	test('a missing dynamic secret fails before reading the unauthenticated body', async () => {
+		const events = new LocalGitHubRepoEvents({ getSecret: () => Promise.resolve(null) }, {
+			resolveInstallationId: () => Promise.resolve(null),
+		})
+		const request = new Request('https://control.test/webhooks/github', { method: 'POST', body })
+		await expect(events.verifyWebhook(request)).resolves.toBeNull()
+		expect(request.bodyUsed).toBe(false)
+	})
 })
 
 describe('normalizeRepoUrl', () => {

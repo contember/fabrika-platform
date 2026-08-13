@@ -30,6 +30,7 @@ export const controlSchema: AppSchema = {
 		{ action: ACTIONS.APP_MANAGE, description: 'Manage the app registry (apps + app_envs)' },
 		{ action: ACTIONS.NAMESPACE_MANAGE, description: 'Manage deployment namespaces' },
 		{ action: ACTIONS.SECRET_MANAGE, description: 'Manage secret values + their references' },
+		{ action: ACTIONS.SOURCE_CONNECTION_MANAGE, description: 'Manage the platform GitHub source connection' },
 		{ action: OPERATIONS_ACTIONS.READ, description: 'Read Operations errors and activity' },
 		{ action: OPERATIONS_ACTIONS.TRIAGE, description: 'Triage Operations errors' },
 		{ action: OPERATIONS_ACTIONS.MANAGE, description: 'Manage Operations sources, alerts, and retention' },

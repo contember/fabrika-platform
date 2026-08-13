@@ -61,6 +61,20 @@ export interface RepoInstallationLookup {
 	resolveInstallationId(repoUrl: string, signal?: AbortSignal): Promise<number | null>
 }
 
+/** Supplies the current webhook HMAC secret without exposing it through connection state. */
+export interface WebhookSecretProvider {
+	getSecret(signal?: AbortSignal): Promise<string | null>
+}
+
+export class StaticWebhookSecretProvider implements WebhookSecretProvider {
+	constructor(private readonly value: string | undefined) {}
+
+	getSecret(signal?: AbortSignal): Promise<string | null> {
+		if (signal?.aborted) return Promise.reject(new DOMException('The operation was aborted', 'AbortError'))
+		return Promise.resolve(this.value === undefined || this.value === '' ? null : this.value)
+	}
+}
+
 // ── HMAC-SHA256 webhook signature verification (shared by real + fake) ─────────
 
 /**
@@ -89,20 +103,22 @@ export async function verifyWebhookSignature(rawBody: string, signatureHeader: s
 
 /** Keep webhook authentication local while delegating installation ownership to the source service. */
 export class LocalGitHubRepoEvents implements RepoEvents {
+	private readonly webhookSecrets: WebhookSecretProvider
+
 	constructor(
-		private readonly webhookSecret: string | undefined,
+		webhookSecret: string | undefined | WebhookSecretProvider,
 		private readonly installations: RepoInstallationLookup,
-	) {}
+	) {
+		this.webhookSecrets = typeof webhookSecret === 'object' ? webhookSecret : new StaticWebhookSecretProvider(webhookSecret)
+	}
 
 	resolveInstallationId(repoUrl: string, signal?: AbortSignal): Promise<number | null> {
 		return this.installations.resolveInstallationId(repoUrl, signal)
 	}
 
 	async verifyWebhook(request: Request): Promise<PushEvent | null> {
-		const secret = this.webhookSecret
-		if (secret === undefined || secret === '') {
-			return null
-		}
+		const secret = await this.webhookSecrets.getSecret(request.signal)
+		if (secret === null || secret === '') return null
 		return verifyPushWebhook(request, secret)
 	}
 }

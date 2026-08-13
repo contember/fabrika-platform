@@ -1,5 +1,5 @@
-// The encrypted secret VAULT (M4) — at-rest envelope encryption for per-app / per-env third-party
-// secret values, backed by the `vault` D1 table (migrations/0002_vault.sql).
+// The encrypted secret VAULT (M4) — at-rest envelope encryption for per-app, per-env, and
+// control-owned platform secret values, backed by the `vault` table.
 //
 // THREAT MODEL: D1 at rest (or a leaked DB dump) must not reveal any secret value. The control-plane
 // Worker decrypts in memory only at deploy time, passes the plaintext to the selected provider, and
@@ -30,7 +30,12 @@
 import type { SqlStatement } from '@fabrika/platform'
 import { uuidv7 } from './uuid'
 
-export type SecretScope = 'app' | 'app-env'
+export type SecretScope = 'app' | 'app-env' | 'platform'
+
+export interface VaultSecretPurpose {
+	scope: SecretScope
+	label: string
+}
 
 const ALG = 'AES-GCM'
 /** GCM standard nonce length: 96 bits. A fresh random IV per encryption (value + DEK wrap). */
@@ -124,6 +129,18 @@ interface Envelope {
 	dekIv: string
 }
 
+/** Ciphertext prepared for an atomic transaction with another control-plane state change. */
+export interface PreparedVaultSecret {
+	id: string
+	ref: string
+	scope: SecretScope
+	label: string
+	ciphertext: string
+	valueIv: string
+	wrappedDek: string
+	dekIv: string
+}
+
 /**
  * Envelope-encrypt a plaintext value under the master key: generate a DEK, AES-GCM the value with it,
  * then AES-GCM-wrap the DEK's raw bytes with the KEK. Returns only ciphertext + IVs (no plaintext).
@@ -204,21 +221,45 @@ export class Vault {
 
 	/**
 	 * Encrypt + store a new secret value. Returns its `vault:<id>` ref (to write onto the
-	 * accounts/app_secrets row). `label` is an audit handle only — never the value.
+	 * owning state row). `label` is an audit handle only — never the value.
 	 */
 	async putSecret(scope: SecretScope, label: string, value: string): Promise<string> {
-		const id = uuidv7()
-		const env = await seal(this.masterKey, value)
+		const prepared = await this.prepareSecret(scope, label, value)
 		await this.d1
 			.prepare(`INSERT INTO vault (id, scope, label, ciphertext, value_iv, wrapped_dek, dek_iv) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-			.bind(id, scope, label, env.ciphertext, env.valueIv, env.wrappedDek, env.dekIv)
+			.bind(prepared.id, prepared.scope, prepared.label, prepared.ciphertext, prepared.valueIv, prepared.wrappedDek, prepared.dekIv)
 			.run()
-		return vaultRef(id)
+		return prepared.ref
+	}
+
+	/** Encrypt without persisting so a repository can commit the row with its owning checkpoint. */
+	async prepareSecret(scope: SecretScope, label: string, value: string): Promise<PreparedVaultSecret> {
+		const id = uuidv7()
+		const env = await seal(this.masterKey, value)
+		return {
+			id,
+			ref: vaultRef(id),
+			scope,
+			label,
+			ciphertext: env.ciphertext,
+			valueIv: env.valueIv,
+			wrappedDek: env.wrappedDek,
+			dekIv: env.dekIv,
+		}
 	}
 
 	/** Decrypt + return the plaintext value a `vault:<id>` ref points at. Throws if missing or on tamper. */
 	async getSecret(ref: string): Promise<string> {
 		const row = await this.loadRow(ref)
+		return open(this.masterKey, { ciphertext: row.ciphertext, valueIv: row.value_iv, wrappedDek: row.wrapped_dek, dekIv: row.dek_iv })
+	}
+
+	/** Decrypt only when the immutable scope and audit label match the caller's purpose. */
+	async getSecretForPurpose(ref: string, purpose: VaultSecretPurpose): Promise<string> {
+		const row = await this.loadRow(ref)
+		if (row.scope !== purpose.scope || row.label !== purpose.label) {
+			throw new Error('vault secret purpose mismatch')
+		}
 		return open(this.masterKey, { ciphertext: row.ciphertext, valueIv: row.value_iv, wrappedDek: row.wrapped_dek, dekIv: row.dek_iv })
 	}
 

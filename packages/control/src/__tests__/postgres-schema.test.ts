@@ -13,13 +13,19 @@
 // Skips cleanly (with a reason) when FABRIKA_TEST_POSTGRES_URL is unset — see helpers/postgres.ts.
 
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
-import { type BlobStore, SqlDeployLocks } from '@fabrika/platform'
+import { type BlobStore, type SqlDatabase, SqlDeployLocks, type SqlQueryResult, type SqlStatement } from '@fabrika/platform'
 import { PostgresDatabase, PostgresJobQueue } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { runDeployJob } from '../consumer'
 import { runMaintenance } from '../cron'
 import { type ControlRepositories, createControlRepositories, uuidv7 } from '../db'
 import type { Env } from '../env'
+import {
+	GitHubConnectionStore,
+	githubRecoverySecretLabel,
+	githubWebhookSecretLabel,
+	type PublishGitHubConnectionInput,
+} from '../github-connection-store'
 import { applyMigrations } from '../node/migrate'
 import { createFetchHandler } from '../node/server'
 import { FakeRepoSource } from '../repo-source'
@@ -54,6 +60,8 @@ afterAll(async () => {
 async function reset(): Promise<void> {
 	for (
 		const table of [
+			'github_source_connections',
+			'github_source_setup_attempts',
 			'namespace_resource_claims',
 			'jobs',
 			'deploy_locks',
@@ -94,6 +102,30 @@ function kek(): string {
 	return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
 }
 
+class TwoConnectionBarrier {
+	private arrivals = 0
+	private readonly ready = Promise.withResolvers<void>()
+
+	wait(): Promise<void> {
+		this.arrivals += 1
+		if (this.arrivals === 2) this.ready.resolve()
+		return this.ready.promise
+	}
+}
+
+class PostgresBarrierDatabase implements SqlDatabase {
+	constructor(private readonly inner: SqlDatabase, private readonly barrier: TwoConnectionBarrier) {}
+
+	prepare(sql: string): SqlStatement {
+		return this.inner.prepare(sql)
+	}
+
+	async batch<T = Record<string, unknown>>(statements: SqlStatement[]): Promise<SqlQueryResult<T>[]> {
+		await this.barrier.wait()
+		return this.inner.batch<T>(statements)
+	}
+}
+
 describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 	test('applies every shipped file and is a no-op on the second run', async () => {
 		// The fixture already applied them once. `run.initCommands` re-runs this on EVERY container start,
@@ -117,6 +149,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0012_app_env_public_origin.sql' },
 			{ bundle: 'control', name: '0013_provider_run_state.sql' },
 			{ bundle: 'control', name: '0014_zerops_legacy_run_state.sql' },
+			{ bundle: 'control', name: '0015_github_source_connections.sql' },
 		])
 	})
 
@@ -142,6 +175,8 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'operations_catalog_sync',
 				'operations_release_sync',
 				'operations_ingest_configs',
+				'github_source_setup_attempts',
+				'github_source_connections',
 			]
 		) {
 			expect(names).toContain(table)
@@ -610,10 +645,11 @@ describe.skipIf(!hasPostgres)('src/vault.ts — envelope encryption, unmodified,
 		await expect(vault.getSecret(ref)).rejects.toThrow()
 	})
 
-	test('the scope CHECK admits only the two app scopes the vault still holds', async () => {
+	test('the scope CHECK admits app and platform scopes, but no retired global scope', async () => {
 		await reset()
 		const vault = await Vault.create(raw, kek())
 		await vault.putSecret('app', 'app:acme/API_KEY', 'v')
+		await vault.putSecret('platform', 'platform:github-source:a:webhook', 'hook')
 		await expect(
 			raw.prepare('INSERT INTO vault (id, scope, label, ciphertext, value_iv, wrapped_dek, dek_iv) VALUES (?, ?, ?, ?, ?, ?, ?)')
 				.bind(uuidv7(), 'global', null, 'c', 'i', 'w', 'd')
@@ -635,6 +671,158 @@ describe.skipIf(!hasPostgres)('src/vault.ts — envelope encryption, unmodified,
 		const rotated = await Vault.create(raw, newKek)
 		expect(await rotated.getSecret(a)).toBe('value-a')
 		expect(await rotated.getSecret(b)).toBe('value-b')
+	})
+})
+
+describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres', () => {
+	test('uses the same callback CAS and atomic platform-secret checkpoint', async () => {
+		await reset()
+		const vault = await Vault.create(raw, kek())
+		const started = await db.githubConnections.beginAttempt({
+			id: uuidv7(),
+			stateHash: 'a'.repeat(64),
+			initiatedBy: 'principal-1',
+			expectedOrigin: 'https://control.example',
+			desiredOwner: 'acme',
+			desiredAppName: 'fabrika-source',
+			desiredPublic: false,
+			requestedRepositories: ['acme/app'],
+			expiresAt: now() + 60,
+		})
+		const claimed = await db.githubConnections.claimCallback('a'.repeat(64), 'principal-1')
+		if (claimed === null) throw new Error('callback claim failed')
+		const recovery = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'one-time-credential')
+		const stored = await db.githubConnections.storeSecretAndCheckpoint(
+			started.id,
+			claimed.version,
+			'exchange_claimed',
+			'recovery_stored',
+			'recovery',
+			recovery,
+		)
+		expect(stored?.phase).toBe('recovery_stored')
+		expect(await vault.getSecretForPurpose(recovery.ref, { scope: 'platform', label: githubRecoverySecretLabel(started.id) })).toBe(
+			'one-time-credential',
+		)
+		expect(await db.githubConnections.claimCallback('a'.repeat(64), 'principal-1')).toBeNull()
+	})
+
+	test('two real connections have exactly one atomic secret-checkpoint CAS winner', async () => {
+		await reset()
+		if (postgresUrl === null || fixture === null) throw new Error('Postgres fixture is unavailable')
+		const secondRaw = PostgresDatabase.connect(postgresUrl, { connection: { search_path: fixture.schema }, max: 1 })
+		try {
+			const masterKey = kek()
+			const vault = await Vault.create(raw, masterKey)
+			const started = await db.githubConnections.beginAttempt({
+				id: uuidv7(),
+				stateHash: 'b'.repeat(64),
+				initiatedBy: 'principal-1',
+				expectedOrigin: 'https://control.example',
+				desiredOwner: 'acme',
+				desiredAppName: 'fabrika-source',
+				desiredPublic: false,
+				requestedRepositories: [],
+				expiresAt: now() + 60,
+			})
+			const claimed = await db.githubConnections.claimCallback('b'.repeat(64), 'principal-1')
+			if (claimed === null) throw new Error('callback claim failed')
+			const first = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'first')
+			const second = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'second')
+			const barrier = new TwoConnectionBarrier()
+			const left = new GitHubConnectionStore(new PostgresBarrierDatabase(raw, barrier))
+			const right = new GitHubConnectionStore(new PostgresBarrierDatabase(secondRaw, barrier))
+			const outcomes = await Promise.allSettled([
+				left.storeSecretAndCheckpoint(started.id, claimed.version, 'exchange_claimed', 'recovery_stored', 'recovery', first),
+				right.storeSecretAndCheckpoint(started.id, claimed.version, 'exchange_claimed', 'recovery_stored', 'recovery', second),
+			])
+			expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+			expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
+			expect((await raw.prepare('SELECT COUNT(*)::int AS count FROM vault').first<{ count: number }>())?.count).toBe(1)
+			expect((await db.githubConnections.getAttempt(started.id))?.phase).toBe('recovery_stored')
+		} finally {
+			await secondRaw.close()
+		}
+	})
+
+	test('two real connections have exactly one atomic connection-publish CAS winner', async () => {
+		await reset()
+		if (postgresUrl === null || fixture === null) throw new Error('Postgres fixture is unavailable')
+		const secondRaw = PostgresDatabase.connect(postgresUrl, { connection: { search_path: fixture.schema }, max: 1 })
+		try {
+			const vault = await Vault.create(raw, kek())
+			const store = db.githubConnections
+			const started = await store.beginAttempt({
+				id: uuidv7(),
+				stateHash: 'c'.repeat(64),
+				initiatedBy: 'principal-1',
+				expectedOrigin: 'https://control.example',
+				desiredOwner: 'acme',
+				desiredAppName: 'fabrika-source',
+				desiredPublic: false,
+				requestedRepositories: ['acme/app'],
+				expiresAt: now() + 60,
+			})
+			const claimed = await store.claimCallback('c'.repeat(64), 'principal-1')
+			if (claimed === null) throw new Error('callback claim failed')
+			const recovery = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'recovery')
+			const recovered = await store.storeSecretAndCheckpoint(
+				started.id,
+				claimed.version,
+				'exchange_claimed',
+				'recovery_stored',
+				'recovery',
+				recovery,
+			)
+			if (recovered === null) throw new Error('recovery checkpoint failed')
+			const written = await store.checkpoint(started.id, recovered.version, 'recovery_stored', 'source_bundle_written', {
+				credentialSha256: 'd'.repeat(64),
+			})
+			if (written === null) throw new Error('source write checkpoint failed')
+			const activated = await store.checkpoint(started.id, written.version, 'source_bundle_written', 'source_activated', {
+				appId: '123',
+				appSlug: 'fabrika-source',
+				appHtmlUrl: 'https://github.com/apps/fabrika-source',
+			})
+			if (activated === null) throw new Error('source activation checkpoint failed')
+			const webhook = await vault.prepareSecret('platform', githubWebhookSecretLabel(started.id), 'webhook')
+			const webhookStored = await store.storeSecretAndCheckpoint(
+				started.id,
+				activated.version,
+				'source_activated',
+				'webhook_secret_stored',
+				'webhook',
+				webhook,
+			)
+			if (webhookStored === null) throw new Error('webhook checkpoint failed')
+			const webhookConfigured = await store.checkpoint(started.id, webhookStored.version, 'webhook_secret_stored', 'webhook_configured')
+			if (webhookConfigured === null) throw new Error('webhook config checkpoint failed')
+			const verified = await store.checkpoint(started.id, webhookConfigured.version, 'webhook_configured', 'configuration_verified')
+			if (verified === null) throw new Error('configuration verification checkpoint failed')
+			const ready = await store.discardRecoveryAndCheckpoint(started.id, verified.version)
+			if (ready === null) throw new Error('recovery discard failed')
+
+			const barrier = new TwoConnectionBarrier()
+			const left = new GitHubConnectionStore(new PostgresBarrierDatabase(raw, barrier))
+			const right = new GitHubConnectionStore(new PostgresBarrierDatabase(secondRaw, barrier))
+			const input: PublishGitHubConnectionInput = {
+				attemptId: started.id,
+				expectedVersion: ready.version,
+				webhookUrl: 'https://control.example/webhooks/github',
+				installationId: 45,
+				installationAccountLogin: 'acme',
+				installationSelection: 'selected',
+				verifiedRepositories: ['acme/app'],
+				verifiedAt: now(),
+			}
+			const outcomes = await Promise.allSettled([left.publishConnection(input), right.publishConnection(input)])
+			expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+			expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
+			expect((await raw.prepare('SELECT COUNT(*)::int AS count FROM github_source_connections').first<{ count: number }>())?.count).toBe(1)
+			expect((await store.getAttempt(started.id))?.status).toBe('completed')
+		} finally {
+			await secondRaw.close()
+		}
 	})
 })
 

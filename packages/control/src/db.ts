@@ -12,6 +12,7 @@
 import { DEFAULT_OPERATIONS_SERVICE_KEY } from '@fabrika/operations-contract/catalog'
 import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
+import { GitHubConnectionStore } from './github-connection-store'
 import { uuidv7 } from './uuid'
 
 // ── Row shapes (snake_case, as migrations/0001_init.sql defines) ───────────────
@@ -1393,6 +1394,7 @@ export interface ControlRepositories {
 	polling: RepoPollingRepository
 	operationsCatalog: OperationsCatalogRepository
 	operationsReleases: OperationsReleaseRepository
+	githubConnections: GitHubConnectionStore
 }
 
 /** The portable repository bundle. A composition root may replace one complete capability. */
@@ -1411,6 +1413,7 @@ export function createControlRepositories(
 		polling: replacements.polling ?? new RepoPollingRepository(db),
 		operationsCatalog: replacements.operationsCatalog ?? new OperationsCatalogRepository(db, now),
 		operationsReleases: replacements.operationsReleases ?? new OperationsReleaseRepository(db, now),
+		githubConnections: replacements.githubConnections ?? new GitHubConnectionStore(db, now),
 	}
 }
 

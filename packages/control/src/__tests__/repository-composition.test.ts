@@ -27,5 +27,6 @@ describe('control repository composition', () => {
 		expect(repositories.runs).toBeDefined()
 		expect(repositories.polling).toBeDefined()
 		expect(repositories.operationsCatalog).toBeDefined()
+		expect(repositories.githubConnections).toBeDefined()
 	})
 })

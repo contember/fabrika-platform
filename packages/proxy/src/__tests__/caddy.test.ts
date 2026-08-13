@@ -283,6 +283,12 @@ describe('access-log redaction', () => {
 		expect('/__fabrika/auth/callback?code=deadbeef&x=1'.replace(pattern, 'REDACTED')).toBe('/__fabrika/auth/callbackREDACTED&x=1')
 	})
 
+	test('OAuth state is redacted from request and redirect URLs on every app', () => {
+		const pattern = new RegExp(uriRedactionPattern(MANIFEST), 'g')
+		expect('/api/source/callback?state=CAPABILITY&code=CODE'.replace(pattern, 'REDACTED')).not.toContain('CAPABILITY')
+		expect('https://github.com/apps/example/installations/new?state=CAPABILITY'.replace(pattern, 'REDACTED')).not.toContain('CAPABILITY')
+	})
+
 	test('a Location is filtered with the same pattern, and covers the login bounce', () => {
 		const fields = buildCaddyConfig(MANIFEST, OPTIONS).logging.logs['default']?.encoder.fields ?? {}
 		// `resp_headers`, NOT `response>headers`: that is the log record's own field path (verified
