@@ -1,14 +1,22 @@
 import {
 	buildZeropsSourceCancelRequest,
+	buildZeropsSourceCredentialActivateRequest,
+	buildZeropsSourceCredentialBundle,
+	buildZeropsSourceCredentialStatusRequest,
 	buildZeropsSourceResolveInstallationRequest,
 	buildZeropsSourceResolveRequest,
 	buildZeropsSourceUploadRequest,
 	decodeZeropsSourceErrorEnvelope,
+	serializeZeropsSourceCredentialBundle,
+	sha256ZeropsSourceCredentialBundle,
+	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
 } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { GitHubConnection, type SourceGitHubClient, type SourceGitHubConnection } from '../github-connection'
 import type { PreparedRepositoryArchive, RepositorySource } from '../repository'
 import { ZeropsSourceService } from '../service'
 
@@ -17,6 +25,10 @@ const repository = { owner: 'contember', name: 'fabrika-platform' }
 const commitSha = 'a'.repeat(40)
 const descriptorSha256 = 'b'.repeat(64)
 const uploadUrl = 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=private'
+const credentialPem = `-----BEGIN PRIVATE KEY-----
+MAMCAQE=
+-----END PRIVATE KEY-----
+`
 
 function rpcRequest(path: string, value: unknown, key = rpcKey): Request {
 	return new Request(`http://source.test${path}`, {
@@ -80,6 +92,257 @@ async function preparedArchive(
 }
 
 describe('Zerops source RPC authentication and routing', () => {
+	test('serves redacted credential status and activates only a digest-bound verified App', async () => {
+		const github = await GitHubConnection.create({
+			createClient: async () => ({
+				getAuthenticatedApp: async () => ({
+					id: 123,
+					slug: 'fabrika-test',
+					htmlUrl: 'https://github.com/apps/fabrika-test',
+					public: false,
+					owner: { login: 'contember', type: 'Organization' },
+					permissions: { contents: 'read' },
+					events: ['push'],
+				}),
+				resolveInstallationId: async () => 42,
+				mintRepositoryToken: async () => ({ token: 'must-not-leak', expiresAt: Date.now() + 60_000 }),
+			}),
+		})
+		const service = new ZeropsSourceService({ rpcKey, github, repository: resolvingRepository() })
+		const anonymous = await service.fetch(rpcRequest(
+			ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
+			buildZeropsSourceCredentialStatusRequest({ connectionId: 'connection-1', signal: new AbortController().signal }),
+		))
+		expect(await anonymous.json()).toEqual({ protocolVersion: 1, connectionId: 'connection-1', state: 'anonymous' })
+
+		const credentialBundle = serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({
+			githubAppId: '123',
+			privateKeyPem: credentialPem,
+		}))
+		const credentialSha256 = await sha256ZeropsSourceCredentialBundle(credentialBundle)
+		const activated = await service.fetch(rpcRequest(
+			ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
+			buildZeropsSourceCredentialActivateRequest({
+				connectionId: 'connection-1',
+				credentialBundle,
+				credentialSha256,
+				signal: new AbortController().signal,
+			}),
+		))
+		const activatedText = await activated.text()
+		expect(activated.status).toBe(200)
+		expect(activatedText).not.toContain('PRIVATE KEY')
+		expect(activatedText).not.toContain('must-not-leak')
+		expect(JSON.parse(activatedText)).toMatchObject({ connectionId: 'connection-1', credentialSha256 })
+
+		const active = await service.fetch(rpcRequest(
+			ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
+			buildZeropsSourceCredentialStatusRequest({ connectionId: 'connection-1', signal: new AbortController().signal }),
+		))
+		expect(await active.json()).toMatchObject({ state: 'active', connectionId: 'connection-1', credentialSha256 })
+
+		const conflictingBundle = serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({
+			githubAppId: '124',
+			privateKeyPem: credentialPem,
+		}))
+		const conflict = await service.fetch(rpcRequest(
+			ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
+			buildZeropsSourceCredentialActivateRequest({
+				connectionId: 'connection-2',
+				credentialBundle: conflictingBundle,
+				credentialSha256: await sha256ZeropsSourceCredentialBundle(conflictingBundle),
+				signal: new AbortController().signal,
+			}),
+		))
+		const conflictText = await conflict.text()
+		expect(conflict.status).toBe(409)
+		expect(conflictText).not.toContain('PRIVATE KEY')
+		expect(decodeZeropsSourceErrorEnvelope(JSON.parse(conflictText)).error).toEqual({
+			code: 'credentials_conflict',
+			stage: 'credentials',
+			retryable: false,
+		})
+	})
+
+	test('captures one GitHub client snapshot for an installation lookup while activation replaces later operations', async () => {
+		const firstStarted = Promise.withResolvers<void>()
+		const releaseFirst = Promise.withResolvers<void>()
+		const firstClient: SourceGitHubClient = {
+			getAuthenticatedApp: async () => ({
+				id: 123,
+				slug: 'fabrika-test',
+				htmlUrl: 'https://github.com/apps/fabrika-test',
+				public: false,
+				owner: { login: 'contember', type: 'Organization' },
+				permissions: { contents: 'read' },
+				events: ['push'],
+			}),
+			resolveInstallationId: async () => {
+				firstStarted.resolve()
+				await releaseFirst.promise
+				return 41
+			},
+			mintRepositoryToken: async () => ({ token: 'first', expiresAt: Date.now() + 60_000 }),
+		}
+		const secondClient: SourceGitHubClient = {
+			...firstClient,
+			resolveInstallationId: async () => 42,
+		}
+		let current = firstClient
+		let snapshots = 0
+		const github: SourceGitHubConnection = {
+			snapshot: () => {
+				snapshots++
+				return { client: current, appId: '123', credentialSha256: 'a'.repeat(64) }
+			},
+			activate: async () => {
+				throw new Error('activation not expected')
+			},
+			status: async () => {
+				throw new Error('status not expected')
+			},
+		}
+		const service = new ZeropsSourceService({ rpcKey, github, repository: resolvingRepository() })
+		const lookup = service.fetch(rpcRequest(
+			'/v1/installations/resolve',
+			buildZeropsSourceResolveInstallationRequest('github.com/contember/fabrika-platform'),
+		))
+		await firstStarted.promise
+		current = secondClient
+		releaseFirst.resolve()
+		expect(await (await lookup).json()).toMatchObject({ githubInstallationId: 41 })
+		const later = await service.fetch(rpcRequest(
+			'/v1/installations/resolve',
+			buildZeropsSourceResolveInstallationRequest('github.com/contember/fabrika-platform'),
+		))
+		expect(await later.json()).toMatchObject({ githubInstallationId: 42 })
+		expect(snapshots).toBe(2)
+	})
+
+	test('authenticates credential routes before reading bodies and applies the dedicated 128 KiB cap', async () => {
+		const service = new ZeropsSourceService({ rpcKey, repository: resolvingRepository() })
+		const unauthorized = await service.fetch(
+			new Request(`http://source.test${ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH}`, {
+				method: 'POST',
+				body: '{ not json',
+			}),
+		)
+		expect(unauthorized.status).toBe(401)
+		const aboveDefaultLimit = await service.fetch(rpcRequest(
+			ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
+			{ padding: 'x'.repeat(70 * 1024) },
+		))
+		expect(aboveDefaultLimit.status).toBe(400)
+
+		const oversized = await service.fetch(rpcRequest(ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH, { padding: 'x'.repeat(129 * 1024) }))
+		expect(oversized.status).toBe(413)
+		expect(decodeZeropsSourceErrorEnvelope(await oversized.json()).error).toEqual({
+			code: 'invalid_request',
+			stage: 'validate',
+			retryable: false,
+		})
+	})
+
+	test('stops reading an authenticated credential body when the caller aborts', async () => {
+		const service = new ZeropsSourceService({ rpcKey, repository: resolvingRepository() })
+		const controller = new AbortController()
+		const started = Promise.withResolvers<void>()
+		const body = new TransformStream<Uint8Array, Uint8Array>()
+		const writer = body.writable.getWriter()
+		const responsePromise = service.fetch(
+			new Request(`http://source.test${ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH}`, {
+				method: 'POST',
+				headers: { authorization: `Bearer ${rpcKey}`, 'content-type': 'application/json' },
+				body: body.readable,
+				signal: controller.signal,
+			}),
+		)
+		void writer.write(new TextEncoder().encode('{')).then(() => started.resolve())
+		await started.promise
+		controller.abort()
+		const response = await responsePromise
+		expect(response.status).toBe(409)
+		expect(decodeZeropsSourceErrorEnvelope(await response.json()).error).toEqual({
+			code: 'cancelled',
+			stage: 'credentials',
+			retryable: false,
+		})
+	})
+
+	test('bounds the complete authenticated credential request including body read', async () => {
+		const service = new ZeropsSourceService({ rpcKey, repository: resolvingRepository(), credentialTimeoutMs: 5 })
+		const body = new TransformStream<Uint8Array, Uint8Array>()
+		const writer = body.writable.getWriter()
+		void writer.write(new TextEncoder().encode('{'))
+		const response = await service.fetch(
+			new Request(`http://source.test${ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH}`, {
+				method: 'POST',
+				headers: { authorization: `Bearer ${rpcKey}`, 'content-type': 'application/json' },
+				body: body.readable,
+			}),
+		)
+		expect(response.status).toBe(504)
+		expect(decodeZeropsSourceErrorEnvelope(await response.json()).error).toEqual({
+			code: 'internal',
+			stage: 'credentials',
+			retryable: true,
+		})
+	})
+
+	test('bounds a credential client import that ignores cancellation and never swaps a late candidate', async () => {
+		const createStarted = Promise.withResolvers<void>()
+		const candidate = Promise.withResolvers<SourceGitHubClient>()
+		const github = await GitHubConnection.create({
+			createClient: () => {
+				createStarted.resolve()
+				return candidate.promise
+			},
+		})
+		const service = new ZeropsSourceService({
+			rpcKey,
+			github,
+			repository: resolvingRepository(),
+			credentialTimeoutMs: 5,
+		})
+		const credentialBundle = serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({
+			githubAppId: '123',
+			privateKeyPem: credentialPem,
+		}))
+		const responsePromise = service.fetch(rpcRequest(
+			ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
+			buildZeropsSourceCredentialActivateRequest({
+				connectionId: 'connection-1',
+				credentialBundle,
+				credentialSha256: await sha256ZeropsSourceCredentialBundle(credentialBundle),
+				signal: new AbortController().signal,
+			}),
+		))
+		await createStarted.promise
+		const response = await responsePromise
+		expect(response.status).toBe(504)
+		expect(decodeZeropsSourceErrorEnvelope(await response.json()).error).toEqual({
+			code: 'internal',
+			stage: 'credentials',
+			retryable: true,
+		})
+		expect(github.snapshot()).toBeUndefined()
+		candidate.resolve({
+			getAuthenticatedApp: async () => ({
+				id: 123,
+				slug: 'late-candidate',
+				htmlUrl: 'https://github.com/apps/late-candidate',
+				public: false,
+				owner: { login: 'contember', type: 'Organization' },
+				permissions: { contents: 'read' },
+				events: ['push'],
+			}),
+			resolveInstallationId: async () => 42,
+			mintRepositoryToken: async () => ({ token: 'must-not-leak', expiresAt: Date.now() + 60_000 }),
+		})
+		await Bun.sleep(0)
+		expect(github.snapshot()).toBeUndefined()
+	})
+
 	test('authenticates before reading an untrusted body', async () => {
 		const service = new ZeropsSourceService({
 			rpcKey,

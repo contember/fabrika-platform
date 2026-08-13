@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import type { SourceGitHubClient, SourceGitHubConnection } from '../github-connection'
 import { GitHubMetadataClient, type GitHubTreeEntry } from '../github-metadata'
 import {
 	gitChildEnvironment,
@@ -112,16 +113,36 @@ describe('Git repository source', () => {
 				return baseMetadataResponse(fixture, input.toString())
 			},
 		})
+		const client: SourceGitHubClient = {
+			getAuthenticatedApp: async () => {
+				throw new Error('identity not expected')
+			},
+			resolveInstallationId: async () => {
+				throw new Error('installation lookup not expected')
+			},
+			mintRepositoryToken: async (input) => {
+				mintCalls.push(input)
+				return { token, expiresAt: Date.now() + 60_000 }
+			},
+		}
+		let snapshots = 0
+		const github: SourceGitHubConnection = {
+			snapshot: () => {
+				snapshots++
+				return { client, appId: '123', credentialSha256: 'a'.repeat(64) }
+			},
+			activate: async () => {
+				throw new Error('activation not expected')
+			},
+			status: async () => {
+				throw new Error('status not expected')
+			},
+		}
 		const source = new GitRepositorySource({
 			repositoryUrl: () => fixture.remoteUrl,
 			tempRoot: fixture.root,
 			metadata,
-			github: {
-				mintRepositoryToken: async (input) => {
-					mintCalls.push(input)
-					return { token, expiresAt: Date.now() + 60_000 }
-				},
-			},
+			github,
 		})
 		const signal = new AbortController().signal
 		expect(
@@ -137,6 +158,7 @@ describe('Git repository source', () => {
 			{ installationId: 42, owner: 'contember', repository: 'fixture', signal },
 		])
 		expect(authorizations).toEqual([`Bearer ${token}`, `Bearer ${token}`])
+		expect(snapshots).toBe(1)
 	})
 
 	test('resolves an exact commit, verifies the root descriptor, and archives Git objects without executing repository code', async () => {

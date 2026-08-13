@@ -1,10 +1,10 @@
-import type { GitHubAppClient } from '@fabrika/github-app'
 import { ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES, type ZeropsSourceRepository } from '@fabrika/provider-zerops'
 import { createHash } from 'node:crypto'
 import { type FileHandle, mkdtemp, open, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cancelled, SourceFailure, throwIfAborted } from './failure'
+import type { SourceGitHubClient, SourceGitHubConnection } from './github-connection'
 import { GitHubMetadataClient, type GitHubRepositorySnapshot, type GitHubTreeBlob, type GitHubTreeEntry } from './github-metadata'
 
 export const SOURCE_MAX_TREE_ENTRIES = 50_000
@@ -55,7 +55,7 @@ export interface RepositorySource {
 }
 
 export interface GitRepositorySourceOptions {
-	github?: Pick<GitHubAppClient, 'mintRepositoryToken'>
+	github?: SourceGitHubConnection
 	metadata?: GitHubMetadataClient
 	/** Tests may point at a local filtered remote; production always uses the fixed GitHub origin. */
 	repositoryUrl?: (repository: ZeropsSourceRepository) => string
@@ -128,7 +128,9 @@ export class GitRepositorySource implements RepositorySource {
 		input: RepositoryResolveInput,
 	): Promise<RepositoryResolveResult> {
 		throwIfAborted(input.signal, 'resolve')
+		const github = this.options.github?.snapshot()?.client
 		const credentials = await this.credentials(
+			github,
 			input.repository,
 			input.githubInstallationId,
 			input.signal,
@@ -206,7 +208,9 @@ export class GitRepositorySource implements RepositorySource {
 		if (!OBJECT_ID_PATTERN.test(input.commitSha)) {
 			throw new SourceFailure('commit_mismatch', 'archive', false, 409)
 		}
+		const github = this.options.github?.snapshot()?.client
 		const credentials = await this.credentials(
+			github,
 			input.repository,
 			input.githubInstallationId,
 			input.signal,
@@ -332,17 +336,18 @@ export class GitRepositorySource implements RepositorySource {
 	}
 
 	private async credentials(
+		github: SourceGitHubClient | undefined,
 		repository: ZeropsSourceRepository,
 		githubInstallationId: number | undefined,
 		signal: AbortSignal,
 		stage: RepositoryStage,
 	): Promise<GitCredentials> {
 		if (githubInstallationId === undefined) return {}
-		if (this.options.github === undefined) {
+		if (github === undefined) {
 			throw new SourceFailure('installation_not_found', stage, false, 404)
 		}
 		try {
-			const token = await this.options.github.mintRepositoryToken({
+			const token = await github.mintRepositoryToken({
 				installationId: githubInstallationId,
 				owner: repository.owner,
 				repository: repository.name,

@@ -1,6 +1,13 @@
 export { createSourceRuntime, type SourceEnvironment, type SourceRuntime, type SourceRuntimeOptions } from './config'
 export { SourceFailure } from './failure'
 export {
+	GitHubConnection,
+	type GitHubConnectionOptions,
+	type SourceGitHubClient,
+	type SourceGitHubConnection,
+	type SourceGitHubSnapshot,
+} from './github-connection'
+export {
 	GITHUB_METADATA_MAX_RESPONSE_BYTES,
 	GitHubMetadataClient,
 	type GitHubMetadataClientOptions,

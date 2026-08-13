@@ -1,4 +1,5 @@
 import { GitHubAppClient, type GitHubAppFetch } from '@fabrika/github-app'
+import { GitHubConnection, type SourceGitHubClient } from './github-connection'
 import { GitHubMetadataClient, type GitHubMetadataFetch } from './github-metadata'
 import { GitRepositorySource, type RepositorySource } from './repository'
 import { type SourceUploadFetch, ZeropsSourceService } from './service'
@@ -15,6 +16,7 @@ export interface SourceRuntimeOptions {
 	metadataFetch?: GitHubMetadataFetch
 	uploadFetch?: SourceUploadFetch
 	repository?: RepositorySource
+	createGitHubClient?: (input: { readonly appId: string; readonly privateKeyPem: string }) => Promise<SourceGitHubClient>
 }
 
 export interface SourceRuntime {
@@ -29,23 +31,23 @@ export async function createSourceRuntime(
 ): Promise<SourceRuntime> {
 	const env = options.env ?? process.env
 	const rpcKey = required(env, 'FABRIKA_SOURCE_RPC_KEY')
-	const appId = optional(env, 'GITHUB_APP_ID')
-	const privateKeyPem = optional(env, 'GITHUB_APP_PRIVATE_KEY')
-	if ((appId === undefined) !== (privateKeyPem === undefined)) {
-		throw new Error('GitHub App configuration is incomplete')
-	}
-	const github = appId === undefined || privateKeyPem === undefined
-		? undefined
-		: await GitHubAppClient.create({
-			appId,
-			privateKeyPem,
-			...(options.githubFetch === undefined
-				? {}
-				: { fetch: options.githubFetch }),
-		})
+	const credentialBundle = optional(env, 'GITHUB_APP_CREDENTIALS')
+	const legacyAppId = optional(env, 'GITHUB_APP_ID')
+	const legacyPrivateKeyPem = optional(env, 'GITHUB_APP_PRIVATE_KEY')
+	const createGitHubClient = options.createGitHubClient ?? ((input) =>
+		GitHubAppClient.create({
+			...input,
+			...(options.githubFetch === undefined ? {} : { fetch: options.githubFetch }),
+		}))
+	const github = await GitHubConnection.create({
+		...(credentialBundle === undefined ? {} : { credentialBundle }),
+		...(legacyAppId === undefined ? {} : { legacyAppId }),
+		...(legacyPrivateKeyPem === undefined ? {} : { legacyPrivateKeyPem }),
+		createClient: createGitHubClient,
+	})
 	const repository = options.repository
 		?? new GitRepositorySource({
-			...(github === undefined ? {} : { github }),
+			github,
 			metadata: new GitHubMetadataClient({
 				...(options.metadataFetch === undefined ? {} : { fetch: options.metadataFetch }),
 			}),
@@ -53,14 +55,14 @@ export async function createSourceRuntime(
 	const service = new ZeropsSourceService({
 		rpcKey,
 		repository,
-		...(github === undefined ? {} : { github }),
+		github,
 		...(options.uploadFetch === undefined
 			? {}
 			: { uploadFetch: options.uploadFetch }),
 	})
 	return {
 		port: parsePort(optional(env, 'PORT')),
-		githubEnabled: github !== undefined,
+		githubEnabled: github.snapshot() !== undefined,
 		service,
 	}
 }

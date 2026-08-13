@@ -1,4 +1,8 @@
-import { buildZeropsSourceResolveInstallationRequest } from '@fabrika/provider-zerops'
+import {
+	buildZeropsSourceCredentialBundle,
+	buildZeropsSourceResolveInstallationRequest,
+	serializeZeropsSourceCredentialBundle,
+} from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { createSourceRuntime } from '../config'
 
@@ -31,6 +35,44 @@ describe('source runtime configuration', () => {
 			},
 		})
 		expect(runtime.githubEnabled).toBe(true)
+	})
+
+	test('boots the canonical atomic credential bundle and accepts matching legacy compatibility fields', async () => {
+		const privateKey = await privateKeyPem()
+		const credentials = serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({
+			githubAppId: '123',
+			privateKeyPem: privateKey,
+		}))
+		for (
+			const env of [
+				{ FABRIKA_SOURCE_RPC_KEY: rpcKey, GITHUB_APP_CREDENTIALS: credentials },
+				{
+					FABRIKA_SOURCE_RPC_KEY: rpcKey,
+					GITHUB_APP_CREDENTIALS: credentials,
+					GITHUB_APP_ID: '123',
+					GITHUB_APP_PRIVATE_KEY: privateKey,
+				},
+			]
+		) {
+			const runtime = await createSourceRuntime({ env })
+			expect(runtime.githubEnabled).toBe(true)
+		}
+	})
+
+	test('rejects atomic and legacy credentials that disagree', async () => {
+		const privateKey = await privateKeyPem()
+		const credentials = serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({
+			githubAppId: '123',
+			privateKeyPem: privateKey,
+		}))
+		await expect(createSourceRuntime({
+			env: {
+				FABRIKA_SOURCE_RPC_KEY: rpcKey,
+				GITHUB_APP_CREDENTIALS: credentials,
+				GITHUB_APP_ID: '124',
+				GITHUB_APP_PRIVATE_KEY: privateKey,
+			},
+		})).rejects.toThrow('configuration conflicts')
 	})
 
 	test('ignores arbitrary API-host environment input and sends the App JWT only to api.github.com', async () => {

@@ -1,15 +1,19 @@
-import type { GitHubAppClient } from '@fabrika/github-app'
 import {
 	buildZeropsSourceCancelResponse,
+	buildZeropsSourceCredentialStatusResponse,
 	buildZeropsSourceErrorEnvelope,
 	buildZeropsSourceResolveInstallationResponse,
 	buildZeropsSourceResolveResponse,
 	buildZeropsSourceUploadResponse,
 	decodeZeropsSourceCancelRequest,
+	decodeZeropsSourceCredentialActivateRequest,
+	decodeZeropsSourceCredentialStatusRequest,
 	decodeZeropsSourceResolveInstallationRequest,
 	decodeZeropsSourceResolveRequest,
 	decodeZeropsSourceUploadRequest,
 	ZEROPS_SOURCE_CANCEL_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
 	ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH,
 	ZEROPS_SOURCE_RESOLVE_PATH,
 	ZEROPS_SOURCE_UPLOAD_PATH,
@@ -17,10 +21,13 @@ import {
 } from '@fabrika/provider-zerops'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { cancelled, SourceFailure } from './failure'
+import type { SourceGitHubConnection } from './github-connection'
 import { GitRepositorySource, type RepositorySource } from './repository'
 
 const MAX_REQUEST_BYTES = 64 * 1024
+const MAX_CREDENTIAL_ACTIVATE_REQUEST_BYTES = 128 * 1024
 const DEFAULT_UPLOAD_TIMEOUT_MS = 10 * 60 * 1000
+const DEFAULT_CREDENTIAL_OPERATION_TIMEOUT_MS = 30_000
 /** These expire before control's 45 s / 5 min / 20 min RPC deadlines, leaving time for the response. */
 export const SOURCE_OPERATION_TIMEOUTS_MS = {
 	resolveInstallation: 30_000,
@@ -42,10 +49,11 @@ export type SourceUploadFetch = (
 
 export interface ZeropsSourceServiceOptions {
 	rpcKey: string
-	github?: GitHubAppClient
+	github?: SourceGitHubConnection
 	repository?: RepositorySource
 	uploadFetch?: SourceUploadFetch
 	uploadTimeoutMs?: number
+	credentialTimeoutMs?: number
 	operationTimeoutsMs?: {
 		resolveInstallation?: number
 		resolve?: number
@@ -65,7 +73,8 @@ export class ZeropsSourceService {
 	private readonly uploadFetch: SourceUploadFetch
 	private readonly uploadTimeoutMs: number
 	private readonly operationTimeoutsMs: typeof SOURCE_OPERATION_TIMEOUTS_MS
-	private readonly github: GitHubAppClient | undefined
+	private readonly credentialTimeoutMs: number
+	private readonly github: SourceGitHubConnection | undefined
 	private readonly running = new Map<string, RunningUpload>()
 
 	constructor(options: ZeropsSourceServiceOptions) {
@@ -89,6 +98,8 @@ export class ZeropsSourceService {
 			)
 		this.uploadFetch = options.uploadFetch ?? ((input, init) => fetch(input, init))
 		this.uploadTimeoutMs = uploadTimeoutMs
+		this.credentialTimeoutMs = options.credentialTimeoutMs ?? DEFAULT_CREDENTIAL_OPERATION_TIMEOUT_MS
+		validateOperationTimeout(this.credentialTimeoutMs, DEFAULT_CREDENTIAL_OPERATION_TIMEOUT_MS)
 		this.operationTimeoutsMs = {
 			resolveInstallation: options.operationTimeoutsMs?.resolveInstallation ?? SOURCE_OPERATION_TIMEOUTS_MS.resolveInstallation,
 			resolve: options.operationTimeoutsMs?.resolve ?? SOURCE_OPERATION_TIMEOUTS_MS.resolve,
@@ -121,9 +132,35 @@ export class ZeropsSourceService {
 				new SourceFailure('invalid_request', 'validate', false, 404),
 			)
 		}
+		const credentialDeadline = stage === 'credentials' ? operationDeadline(request.signal, this.credentialTimeoutMs) : undefined
+		const requestSignal = credentialDeadline?.signal ?? request.signal
 		try {
-			const body = await readRequestJson(request)
+			const body = await readRequestJson(
+				request,
+				path === ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH ? MAX_CREDENTIAL_ACTIVATE_REQUEST_BYTES : MAX_REQUEST_BYTES,
+				stage,
+				requestSignal,
+			)
 			switch (path) {
+				case ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH: {
+					const input = decodeRequest(() => decodeZeropsSourceCredentialStatusRequest(body))
+					if (this.github === undefined) {
+						return jsonResponse(buildZeropsSourceCredentialStatusResponse({ connectionId: input.connectionId, state: 'anonymous' }))
+					}
+					return jsonResponse(await this.github.status(input.connectionId, requestSignal))
+				}
+				case ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH: {
+					const input = decodeRequest(() => decodeZeropsSourceCredentialActivateRequest(body))
+					if (this.github === undefined) throw new SourceFailure('credentials_invalid', 'credentials', false, 503)
+					return jsonResponse(
+						await this.github.activate(
+							input.connectionId,
+							input.credentialBundle,
+							input.credentialSha256,
+							requestSignal,
+						),
+					)
+				}
 				case ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH: {
 					const input = decodeRequest(() => decodeZeropsSourceResolveInstallationRequest(body))
 					const deadline = operationDeadline(request.signal, this.operationTimeoutsMs.resolveInstallation)
@@ -270,7 +307,13 @@ export class ZeropsSourceService {
 				}
 			}
 		} catch (error) {
+			if (request.signal.aborted) return failureResponse(cancelled(stage))
+			if (credentialDeadline?.timedOut() === true) {
+				return failureResponse(new SourceFailure('internal', 'credentials', true, 504))
+			}
 			return failureResponse(toFailure(error, stage))
+		} finally {
+			credentialDeadline?.dispose()
 		}
 		return failureResponse(
 			new SourceFailure('invalid_request', 'validate', false, 404),
@@ -290,9 +333,10 @@ export class ZeropsSourceService {
 		repository: string,
 		signal: AbortSignal,
 	): Promise<number | null> {
-		if (this.github === undefined) return null
+		const github = this.github?.snapshot()?.client
+		if (github === undefined) return null
 		try {
-			return await this.github.resolveInstallationId(owner, repository, signal)
+			return await github.resolveInstallationId(owner, repository, signal)
 		} catch (error) {
 			if (
 				signal.aborted
@@ -430,12 +474,18 @@ export function validateUploadUrl(value: string): void {
 	}
 }
 
-async function readRequestJson(request: Request): Promise<unknown> {
+async function readRequestJson(
+	request: Request,
+	maximumBytes: number,
+	stage: ZeropsSourceErrorStage,
+	signal: AbortSignal,
+): Promise<unknown> {
+	if (signal.aborted) throw cancelled(stage)
 	const length = request.headers.get('content-length')
 	if (
 		length !== null
 		&& /^[0-9]+$/.test(length)
-		&& Number(length) > MAX_REQUEST_BYTES
+		&& Number(length) > maximumBytes
 	) {
 		throw new SourceFailure('invalid_request', 'validate', false, 413)
 	}
@@ -447,10 +497,11 @@ async function readRequestJson(request: Request): Promise<unknown> {
 	let total = 0
 	try {
 		while (true) {
-			const result = await reader.read()
+			const result = await readRequestChunk(reader, signal, stage)
+			if (signal.aborted) throw cancelled(stage)
 			if (result.done) break
 			total += result.value.byteLength
-			if (total > MAX_REQUEST_BYTES) {
+			if (total > maximumBytes) {
 				throw new SourceFailure('invalid_request', 'validate', false, 413)
 			}
 			chunks.push(result.value)
@@ -472,6 +523,33 @@ async function readRequestJson(request: Request): Promise<unknown> {
 	} catch {
 		throw new SourceFailure('invalid_request', 'validate', false, 400)
 	}
+}
+
+function readRequestChunk(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	signal: AbortSignal,
+	stage: ZeropsSourceErrorStage,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+	if (signal.aborted) return Promise.reject(cancelled(stage))
+	return new Promise((resolve, reject) => {
+		const abort = (): void => {
+			cleanup()
+			void reader.cancel().catch(() => {})
+			reject(cancelled(stage))
+		}
+		const cleanup = (): void => signal.removeEventListener('abort', abort)
+		signal.addEventListener('abort', abort, { once: true })
+		reader.read().then(
+			(result) => {
+				cleanup()
+				resolve(result.done ? { done: true, value: undefined } : { done: false, value: result.value })
+			},
+			() => {
+				cleanup()
+				reject(signal.aborted ? cancelled(stage) : new SourceFailure('invalid_request', 'validate', false, 400))
+			},
+		)
+	})
 }
 
 function toFailure(
@@ -500,6 +578,7 @@ function stageForPath(path: string): ZeropsSourceErrorStage {
 	if (path === ZEROPS_SOURCE_RESOLVE_PATH) return 'resolve'
 	if (path === ZEROPS_SOURCE_UPLOAD_PATH) return 'upload'
 	if (path === ZEROPS_SOURCE_CANCEL_PATH) return 'cancel'
+	if (path === ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH || path === ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH) return 'credentials'
 	return 'validate'
 }
 
