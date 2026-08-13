@@ -374,6 +374,7 @@ describe('what reaches which service', () => {
 	test('`GENERATED_SECRET_KEYS` names exactly the keys whose value is generated', () => {
 		const secrets = generateInstallationSecrets()
 		const matrix = installationServiceEnv({
+			projectId: PROJECT.projectId,
 			environment: 'stage',
 			scheme: 'https',
 			hosts: { iam: IAM_HOST, control: CONSOLE_HOST, operations: OPERATIONS_HOST },
@@ -393,6 +394,7 @@ describe('what reaches which service', () => {
 
 	test('the region API base reaches control only when the installation names one', () => {
 		const withRegion = installationServiceEnv({
+			projectId: PROJECT.projectId,
 			environment: 'stage',
 			scheme: 'https',
 			hosts: { iam: IAM_HOST, control: CONSOLE_HOST, operations: OPERATIONS_HOST },
@@ -405,8 +407,9 @@ describe('what reaches which service', () => {
 		expect(withRegion.get('control')?.get('FABRIKA_ZEROPS_API_BASE_URL')).toBe('https://api.app-brn1.zerops.io/api/rest/public')
 	})
 
-	test('optional GitHub credentials stay on source and the webhook secret stays on control', () => {
+	test('fresh installs are anonymous while project identity reaches control', () => {
 		const matrix = installationServiceEnv({
+			projectId: PROJECT.projectId,
 			environment: 'stage',
 			scheme: 'https',
 			hosts: { iam: IAM_HOST, control: CONSOLE_HOST, operations: OPERATIONS_HOST },
@@ -414,14 +417,13 @@ describe('what reaches which service', () => {
 			buildFromGit: 'https://github.com/contember/fabrika-platform',
 			secrets: generateInstallationSecrets(),
 			zeropsAccessToken: 'minted',
-			githubAppId: '123',
-			githubAppPrivateKey: 'private-key',
-			githubWebhookSecret: 'webhook-secret',
 		})
-		expect(matrix.get('source')?.get('GITHUB_APP_ID')).toBe('123')
-		expect(matrix.get('source')?.get('GITHUB_APP_PRIVATE_KEY')).toBe('private-key')
+		expect(matrix.get('source')?.has('GITHUB_APP_CREDENTIALS')).toBe(false)
+		expect(matrix.get('source')?.has('GITHUB_APP_ID')).toBe(false)
+		expect(matrix.get('source')?.has('GITHUB_APP_PRIVATE_KEY')).toBe(false)
 		expect(matrix.get('source')?.has('GITHUB_WEBHOOK_SECRET')).toBe(false)
-		expect(matrix.get('control')?.get('GITHUB_WEBHOOK_SECRET')).toBe('webhook-secret')
+		expect(matrix.get('control')?.get('FABRIKA_ZEROPS_PROJECT_ID')).toBe(PROJECT.projectId)
+		expect(matrix.get('control')?.has('GITHUB_WEBHOOK_SECRET')).toBe(false)
 		expect(matrix.get('control')?.has('GITHUB_APP_PRIVATE_KEY')).toBe(false)
 	})
 })
@@ -640,24 +642,13 @@ describe('the argument surface', () => {
 		)
 	})
 
-	test('accepts an optional complete GitHub App pair and rejects a partial pair before install can run', () => {
-		const base = {
+	test('ignores GitHub credential environment during anonymous fresh install', () => {
+		const parsed = parsePlatformInstallArgs(['--project-id=p1', '--client-id=c1', '--env=stage'], {
 			FABRIKA_ZEROPS_ACCESS_TOKEN: 'token',
-			GITHUB_APP_ID: '123',
-			GITHUB_APP_PRIVATE_KEY: 'private-key',
-			GITHUB_WEBHOOK_SECRET: 'webhook-secret',
-		}
-		expect(parsePlatformInstallArgs(['--project-id=p1', '--client-id=c1', '--env=stage'], base)).toMatchObject({
-			githubAppId: '123',
-			githubAppPrivateKey: 'private-key',
-			githubWebhookSecret: 'webhook-secret',
+			GITHUB_APP_CREDENTIALS: 'must-not-be-consumed-by-install',
+			GITHUB_WEBHOOK_SECRET: 'must-not-be-consumed-by-install',
 		})
-		expect(() =>
-			parsePlatformInstallArgs(['--project-id=p1', '--client-id=c1', '--env=stage'], {
-				FABRIKA_ZEROPS_ACCESS_TOKEN: 'token',
-				GITHUB_APP_ID: '123',
-			})
-		).toThrow('must be supplied together')
+		expect(Object.keys(parsed)).not.toContain('githubAppCredentials')
 	})
 })
 

@@ -16,7 +16,16 @@
 
 import { deploy } from '@fabrika/engine'
 import type { ControlProvider } from '@fabrika/provider-contract'
-import { createZeropsControlProvider, type ZeropsSourceClient } from '@fabrika/provider-zerops'
+import {
+	createZeropsApi,
+	createZeropsControlProvider,
+	createZeropsSourceConnectionAdmin,
+	type SourceConnectionAdmin,
+	SourceConnectionAdminError,
+	type SourceConnectionZeropsApi,
+	type ZeropsSourceClient,
+	type ZeropsSourceCredentialManager,
+} from '@fabrika/provider-zerops'
 import type { Env } from '../env'
 import { repositories } from '../services'
 import { HttpZeropsSourceClient } from './source-client'
@@ -52,6 +61,33 @@ export function zeropsSourceClient(source: Record<string, string | undefined>): 
 	return new HttpZeropsSourceClient({
 		origin: required(source, 'FABRIKA_ZEROPS_SOURCE_URL'),
 		rpcKey: required(source, 'FABRIKA_ZEROPS_SOURCE_RPC_KEY'),
+	})
+}
+
+/** Compose the privileged installation connection seam without exposing it to provider-neutral core. */
+export function zeropsSourceConnectionAdmin(
+	source: Record<string, string | undefined>,
+	sourceClient: ZeropsSourceCredentialManager = zeropsSourceClient(source),
+	api: SourceConnectionZeropsApi = createZeropsApi({
+		token: required(source, 'FABRIKA_ZEROPS_ACCESS_TOKEN'),
+		...((): { baseUrl?: string } => {
+			const baseUrl = source['FABRIKA_ZEROPS_API_BASE_URL']
+			return baseUrl === undefined ? {} : { baseUrl }
+		})(),
+	}),
+): SourceConnectionAdmin {
+	const projectId = source['FABRIKA_ZEROPS_PROJECT_ID']?.trim()
+	if (projectId === undefined || projectId === '') {
+		return {
+			inspect: () => Promise.resolve({ state: 'unavailable' }),
+			activate: () => Promise.reject(new SourceConnectionAdminError('invalid_configuration')),
+			status: () => Promise.resolve({ state: 'unavailable' }),
+		}
+	}
+	return createZeropsSourceConnectionAdmin({
+		api,
+		source: sourceClient,
+		projectId,
 	})
 }
 

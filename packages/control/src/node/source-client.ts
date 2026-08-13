@@ -1,19 +1,30 @@
 import {
 	buildZeropsSourceCancelRequest,
+	buildZeropsSourceCredentialActivateRequest,
+	buildZeropsSourceCredentialStatusRequest,
 	buildZeropsSourceResolveInstallationRequest,
 	buildZeropsSourceResolveRequest,
 	buildZeropsSourceUploadRequest,
 	decodeZeropsSourceCancelResponse,
+	decodeZeropsSourceCredentialActivateResponse,
+	decodeZeropsSourceCredentialStatusResponse,
 	decodeZeropsSourceErrorEnvelope,
 	decodeZeropsSourceResolveInstallationResponse,
 	decodeZeropsSourceResolveResponse,
 	decodeZeropsSourceUploadResponse,
 	ZEROPS_SOURCE_CANCEL_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
 	ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH,
 	ZEROPS_SOURCE_RESOLVE_PATH,
 	ZEROPS_SOURCE_UPLOAD_PATH,
 	type ZeropsSourceCancelInput,
 	type ZeropsSourceClient,
+	type ZeropsSourceCredentialActivateInput,
+	type ZeropsSourceCredentialActivateResponseV1,
+	type ZeropsSourceCredentialManager,
+	type ZeropsSourceCredentialStatusInput,
+	type ZeropsSourceCredentialStatusResponseV1,
 	type ZeropsSourceErrorCode,
 	type ZeropsSourceErrorStage,
 	type ZeropsSourceResolveInput,
@@ -30,6 +41,8 @@ export const ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS = {
 	resolve: 5 * 60_000,
 	upload: 20 * 60_000,
 	cancel: 30_000,
+	activateCredentials: 60_000,
+	credentialStatus: 30_000,
 }
 
 interface SourceResponse {
@@ -37,7 +50,7 @@ interface SourceResponse {
 	value: unknown
 }
 
-export type ZeropsSourceClientOperation = 'resolve-installation' | 'resolve' | 'upload' | 'cancel'
+export type ZeropsSourceClientOperation = 'resolve-installation' | 'resolve' | 'upload' | 'cancel' | 'activate-credentials' | 'credential-status'
 export type ZeropsSourceClientErrorCode = ZeropsSourceErrorCode | 'transport_error' | 'invalid_response'
 export type ZeropsSourceClientErrorStage = ZeropsSourceErrorStage | 'transport'
 
@@ -52,6 +65,8 @@ export interface HttpZeropsSourceClientOptions {
 		resolve?: number
 		upload?: number
 		cancel?: number
+		activateCredentials?: number
+		credentialStatus?: number
 	}
 }
 
@@ -69,7 +84,7 @@ export class ZeropsSourceClientError extends Error {
 	}
 }
 
-export class HttpZeropsSourceClient implements ZeropsSourceClient {
+export class HttpZeropsSourceClient implements ZeropsSourceClient, ZeropsSourceCredentialManager {
 	private readonly origin: string
 	private readonly rpcKey: string
 	private readonly fetchImpl: ZeropsSourceFetch
@@ -87,6 +102,8 @@ export class HttpZeropsSourceClient implements ZeropsSourceClient {
 			resolve: options.timeoutsMs?.resolve ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.resolve,
 			upload: options.timeoutsMs?.upload ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.upload,
 			cancel: options.timeoutsMs?.cancel ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.cancel,
+			activateCredentials: options.timeoutsMs?.activateCredentials ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.activateCredentials,
+			credentialStatus: options.timeoutsMs?.credentialStatus ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.credentialStatus,
 		}
 		for (const timeout of Object.values(this.timeoutsMs)) {
 			if (!Number.isSafeInteger(timeout) || timeout <= 0) {
@@ -171,6 +188,36 @@ export class HttpZeropsSourceClient implements ZeropsSourceClient {
 		}
 	}
 
+	async activate(input: ZeropsSourceCredentialActivateInput): Promise<ZeropsSourceCredentialActivateResponseV1> {
+		const operation = 'activate-credentials'
+		const request = this.build(operation, () => buildZeropsSourceCredentialActivateRequest(input))
+		const result = await this.post(operation, ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH, request, input.signal)
+		try {
+			const response = decodeZeropsSourceCredentialActivateResponse(result.value)
+			if (response.connectionId !== input.connectionId || response.credentialSha256 !== input.credentialSha256) {
+				throw invalidResponse(operation, result.status)
+			}
+			return response
+		} catch (error) {
+			if (error instanceof ZeropsSourceClientError) throw error
+			throw invalidResponse(operation, result.status)
+		}
+	}
+
+	async status(input: ZeropsSourceCredentialStatusInput): Promise<ZeropsSourceCredentialStatusResponseV1> {
+		const operation = 'credential-status'
+		const request = this.build(operation, () => buildZeropsSourceCredentialStatusRequest(input))
+		const result = await this.post(operation, ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH, request, input.signal)
+		try {
+			const response = decodeZeropsSourceCredentialStatusResponse(result.value)
+			if (response.connectionId !== input.connectionId) throw invalidResponse(operation, result.status)
+			return response
+		} catch (error) {
+			if (error instanceof ZeropsSourceClientError) throw error
+			throw invalidResponse(operation, result.status)
+		}
+	}
+
 	private build<T>(operation: ZeropsSourceClientOperation, builder: () => T): T {
 		try {
 			return builder()
@@ -199,7 +246,7 @@ export class HttpZeropsSourceClient implements ZeropsSourceClient {
 			deadline.dispose()
 			if (signal.aborted) throw abortError()
 			if (deadline.timedOut()) throw transportError(operation)
-			throw new ZeropsSourceClientError(operation, null, 'transport_error', 'transport', operation !== 'upload')
+			throw new ZeropsSourceClientError(operation, null, 'transport_error', 'transport', transportRetryable(operation))
 		}
 
 		try {
@@ -233,6 +280,8 @@ export class HttpZeropsSourceClient implements ZeropsSourceClient {
 
 const timeoutFor = (operation: ZeropsSourceClientOperation, timeouts: typeof ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS): number => {
 	if (operation === 'resolve-installation') return timeouts.resolveInstallation
+	if (operation === 'activate-credentials') return timeouts.activateCredentials
+	if (operation === 'credential-status') return timeouts.credentialStatus
 	return timeouts[operation]
 }
 
@@ -286,10 +335,12 @@ const sourceOrigin = (origin: string): string => {
 }
 
 const invalidResponse = (operation: ZeropsSourceClientOperation, status: number): ZeropsSourceClientError =>
-	new ZeropsSourceClientError(operation, status, 'invalid_response', 'transport', operation !== 'upload' && status >= 500)
+	new ZeropsSourceClientError(operation, status, 'invalid_response', 'transport', transportRetryable(operation) && status >= 500)
 
 const transportError = (operation: ZeropsSourceClientOperation): ZeropsSourceClientError =>
-	new ZeropsSourceClientError(operation, null, 'transport_error', 'transport', operation !== 'upload')
+	new ZeropsSourceClientError(operation, null, 'transport_error', 'transport', transportRetryable(operation))
+
+const transportRetryable = (operation: ZeropsSourceClientOperation): boolean => operation !== 'upload' && operation !== 'activate-credentials'
 
 const abortError = (): DOMException => new DOMException('The source request was aborted', 'AbortError')
 

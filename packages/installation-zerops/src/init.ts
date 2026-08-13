@@ -399,6 +399,7 @@ export const configureSourceService = async (
 	const desired: Array<{ serviceId: string; service: string; key: string; value: string; live: Map<string, string> }> = [
 		{ serviceId: source.id, service: 'source', key: 'FABRIKA_SOURCE_RPC_KEY', value: rpcKey, live: sourceEnv },
 		{ serviceId: control.id, service: 'control', key: 'FABRIKA_ZEROPS_SOURCE_RPC_KEY', value: rpcKey, live: controlEnv },
+		{ serviceId: control.id, service: 'control', key: 'FABRIKA_ZEROPS_PROJECT_ID', value: input.projectId, live: controlEnv },
 	]
 	const writtenKeys: string[] = []
 	for (const item of desired) {
@@ -415,6 +416,9 @@ export const configureSourceService = async (
 	const finalControlEnv = new Map((await api.listServiceEnv({ serviceId: control.id, signal })).map((item) => [item.key, item.content]))
 	if (finalSourceEnv.get('FABRIKA_SOURCE_RPC_KEY') !== rpcKey || finalControlEnv.get('FABRIKA_ZEROPS_SOURCE_RPC_KEY') !== rpcKey) {
 		throw new Error('source and control did not retain one matching source RPC key')
+	}
+	if (finalControlEnv.get('FABRIKA_ZEROPS_PROJECT_ID') !== input.projectId) {
+		throw new Error('control did not retain the exact Zerops platform project id')
 	}
 	return {
 		created,

@@ -170,6 +170,23 @@ export type {
 	ZeropsSourceUploadResponseV1,
 	ZeropsSourceUploadResult,
 } from './source'
+export {
+	createZeropsSourceConnectionAdmin,
+	SourceConnectionAdminError,
+	ZEROPS_SOURCE_CREDENTIAL_ENV,
+	ZEROPS_SOURCE_LEGACY_APP_ID_ENV,
+	ZEROPS_SOURCE_LEGACY_PRIVATE_KEY_ENV,
+} from './source-connection'
+export type {
+	SourceConnectionActivateInput,
+	SourceConnectionAdmin,
+	SourceConnectionAdminErrorCode,
+	SourceConnectionInspection,
+	SourceConnectionStatus,
+	SourceConnectionStatusInput,
+	SourceConnectionZeropsApi,
+	ZeropsSourceConnectionAdminOptions,
+} from './source-connection'
 export type {
 	ZeropsAppConfig,
 	ZeropsCompilerOwnedProjectField,

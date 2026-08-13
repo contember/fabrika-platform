@@ -60,6 +60,7 @@ const recorder = (options: {
 	const sourceEnv = new Map([['FABRIKA_SOURCE_RPC_KEY', 'r'.repeat(32)], ...Object.entries(options.sourceEnvironment ?? {})])
 	const controlEnv = new Map([
 		['FABRIKA_ZEROPS_SOURCE_RPC_KEY', 'r'.repeat(32)],
+		['FABRIKA_ZEROPS_PROJECT_ID', 'project-id-1'],
 		['FABRIKA_CONTROL_DOMAIN', options.custom === true ? options.answers['Console hostname'] ?? '' : derivedControlHost],
 		...Object.entries(options.controlEnvironment ?? {}),
 	])
@@ -759,8 +760,8 @@ describe('the supported source-service upgrade', () => {
 			new AbortController().signal,
 		)
 
-		expect(result).toMatchObject({ created: false, reusedRpcKey: true, writtenKeys: [] })
-		expect(zerops.calls).toEqual([])
+		expect(result).toMatchObject({ created: false, reusedRpcKey: true, writtenKeys: ['control.FABRIKA_ZEROPS_PROJECT_ID'] })
+		expect(zerops.calls).toEqual(['env:control:FABRIKA_ZEROPS_PROJECT_ID'])
 		expect(zerops.env('source').get('GITHUB_APP_PRIVATE_KEY')).toBe('old-key')
 		expect(zerops.env('control').get('GITHUB_WEBHOOK_SECRET')).toBe('old-webhook')
 	})
@@ -789,7 +790,11 @@ describe('the supported source-service upgrade', () => {
 				new AbortController().signal,
 			)
 
-			expect(result).toMatchObject({ created: false, reusedRpcKey: true, writtenKeys: [item.writtenKey] })
+			expect(result).toMatchObject({
+				created: false,
+				reusedRpcKey: true,
+				writtenKeys: [item.writtenKey, 'control.FABRIKA_ZEROPS_PROJECT_ID'],
+			})
 			expect(zerops.env('source').get('FABRIKA_SOURCE_RPC_KEY')).toBe(key)
 			expect(zerops.env('control').get('FABRIKA_ZEROPS_SOURCE_RPC_KEY')).toBe(key)
 		}
@@ -847,7 +852,11 @@ describe('the supported source-service upgrade', () => {
 			new AbortController().signal,
 		)
 
-		expect(result).toMatchObject({ created: false, reusedRpcKey: true, writtenKeys: ['control.FABRIKA_ZEROPS_SOURCE_RPC_KEY'] })
+		expect(result).toMatchObject({
+			created: false,
+			reusedRpcKey: true,
+			writtenKeys: ['control.FABRIKA_ZEROPS_SOURCE_RPC_KEY', 'control.FABRIKA_ZEROPS_PROJECT_ID'],
+		})
 		expect(zerops.env('control').get('FABRIKA_ZEROPS_SOURCE_RPC_KEY')).toBe(sourceKey)
 	})
 

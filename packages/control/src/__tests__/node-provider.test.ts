@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { zeropsControlProvider, zeropsNamespaceProcessConfig } from '../node/provider'
+import { zeropsControlProvider, zeropsNamespaceProcessConfig, zeropsSourceConnectionAdmin } from '../node/provider'
+import { createRuntime } from '../node/runtime'
 import { FakeRepoSource } from '../repo-source'
 import { createHarness } from './helpers/harness'
 
@@ -18,6 +19,70 @@ const EXPECTED = {
 }
 
 describe('the Zerops namespace process configuration', () => {
+	test('binds source connection administration to the exact configured platform project', async () => {
+		const projects: string[] = []
+		const admin = zeropsSourceConnectionAdmin(
+			{
+				FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
+				FABRIKA_ZEROPS_PROJECT_ID: 'platform-project-1',
+			},
+			{
+				activate: () => Promise.reject(new Error('not called')),
+				status: () => Promise.reject(new Error('not called')),
+			},
+			{
+				findService: ({ projectId }) => {
+					projects.push(projectId)
+					return Promise.resolve({ id: 'source-1', name: 'source', projectId })
+				},
+				listServiceEnv: () => Promise.resolve([]),
+				createServiceEnv: () => Promise.reject(new Error('not called')),
+			},
+		)
+		expect(await admin.inspect(new AbortController().signal)).toEqual({ state: 'anonymous' })
+		expect(projects).toEqual(['platform-project-1'])
+	})
+
+	test('keeps legacy installations bootable and reports connection repair when project identity is absent', async () => {
+		const admin = zeropsSourceConnectionAdmin(
+			{ FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder' },
+			{ activate: () => Promise.reject(new Error('not called')), status: () => Promise.reject(new Error('not called')) },
+			{
+				findService: () => Promise.resolve(null),
+				listServiceEnv: () => Promise.resolve([]),
+				createServiceEnv: () => Promise.resolve(),
+			},
+		)
+		expect(await admin.inspect(new AbortController().signal)).toEqual({ state: 'unavailable' })
+		expect(await admin.status({ connectionId: 'connection-1', signal: new AbortController().signal })).toEqual({ state: 'unavailable' })
+		await expect(
+			admin.activate({
+				connectionId: 'connection-1',
+				credentialBundle: 'must-not-be-read',
+				credentialSha256: 'a'.repeat(64),
+				signal: new AbortController().signal,
+			}),
+		).rejects.toMatchObject({ code: 'invalid_configuration' })
+	})
+
+	test('boots the legacy process environment without a platform project id', async () => {
+		const runtime = createRuntime({
+			...namespaceEnvironment(),
+			FABRIKA_CONTROL_DATABASE_URL: 'postgres://user:password@127.0.0.1:1/fabrika',
+			FABRIKA_CONTROL_RUN_LOGS_BUCKET: 'run-logs',
+			FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID: 'access-key',
+			FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY: 'secret-key',
+			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
+			FABRIKA_IAM_RPC_KEY: 'iam-rpc-key-at-least-32-characters',
+			FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
+			FABRIKA_ZEROPS_SOURCE_URL: 'http://source:3000',
+			FABRIKA_ZEROPS_SOURCE_RPC_KEY: 'source-rpc-key-at-least-32-characters',
+			ENVIRONMENT: 'stage',
+		})
+		expect(await runtime.sourceConnectionAdmin.inspect(new AbortController().signal)).toEqual({ state: 'unavailable' })
+		await runtime.shutdown()
+	})
+
 	test('maps every explicit environment variable to the provider contract', () => {
 		expect(zeropsNamespaceProcessConfig(namespaceEnvironment())).toEqual(EXPECTED)
 	})

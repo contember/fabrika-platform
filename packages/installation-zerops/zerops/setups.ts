@@ -282,8 +282,8 @@ const control: ZeropsYamlSetupSpec = {
  * Private Git-object transporter. It has no Zerops token and no public route.
  *
  * Secrets (`envSecrets`): `FABRIKA_SOURCE_RPC_KEY`, shared only with control. Optional
- * `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` are an all-or-none pair for private repositories;
- * without them the service supports anonymous public repositories. Neither value belongs on control.
+ * `GITHUB_APP_CREDENTIALS` is the optional atomic App id/private-key bundle for private repositories;
+ * without it the service supports anonymous public repositories. It never belongs on control.
  */
 const source: ZeropsYamlSetupSpec = {
 	setup: 'source',

@@ -129,6 +129,7 @@ const passOneProxyEnv = (secrets: InstallationSecrets): ReadonlyMap<string, stri
 
 /** What `installationServiceEnv` needs. Everything in it is settled before the first write. */
 export interface InstallationEnvInput {
+	readonly projectId: string
 	readonly environment: string
 	readonly scheme: 'http' | 'https'
 	readonly hosts: PlatformHosts
@@ -138,9 +139,6 @@ export interface InstallationEnvInput {
 	readonly secrets: InstallationSecrets
 	/** The Zerops integration token minted for the control plane. Never logged, never printed. */
 	readonly zeropsAccessToken: string
-	readonly githubAppId?: string
-	readonly githubAppPrivateKey?: string
-	readonly githubWebhookSecret?: string
 }
 
 /**
@@ -167,10 +165,6 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 	const consoleOrigin = platformOrigin(input.scheme, input.hosts.control)
 	const operationsOrigin = platformOrigin(input.scheme, input.hosts.operations)
 	const source = new Map([['FABRIKA_SOURCE_RPC_KEY', secrets.sourceRpcKey]])
-	if (input.githubAppId !== undefined && input.githubAppPrivateKey !== undefined) {
-		source.set('GITHUB_APP_ID', input.githubAppId)
-		source.set('GITHUB_APP_PRIVATE_KEY', input.githubAppPrivateKey)
-	}
 	const control = new Map([
 		['FABRIKA_CONTROL_DATABASE_URL', POSTGRES_URL],
 		['ENVIRONMENT', input.environment],
@@ -194,9 +188,9 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 		['FABRIKA_ZEROPS_PROXY_IAM_URL', iamOrigin],
 		['FABRIKA_ZEROPS_PROXY_IAM_KEY', secrets.proxyKey],
 		['FABRIKA_ZEROPS_ACCESS_TOKEN', input.zeropsAccessToken],
+		['FABRIKA_ZEROPS_PROJECT_ID', input.projectId],
 		['FABRIKA_ZEROPS_SOURCE_RPC_KEY', secrets.sourceRpcKey],
 	])
-	if (input.githubWebhookSecret !== undefined) control.set('GITHUB_WEBHOOK_SECRET', input.githubWebhookSecret)
 	if (input.apiBaseUrl !== undefined) {
 		// Only when the installation is not on the default region. Control spells it `_API_BASE_URL` while
 		// the CLI reads `FABRIKA_ZEROPS_API_URL`; they are different processes reading different sources.
@@ -602,6 +596,7 @@ export const runInstall = async (input: PlatformInstallInput, collaborators: Ins
 
 	log.step('Write every remaining variable')
 	const desired = installationServiceEnv({
+		projectId: input.projectId,
 		environment,
 		scheme: input.scheme,
 		hosts,
@@ -609,9 +604,6 @@ export const runInstall = async (input: PlatformInstallInput, collaborators: Ins
 		buildFromGit: input.buildFromGit,
 		secrets,
 		zeropsAccessToken: token.token,
-		...(input.githubAppId === undefined ? {} : { githubAppId: input.githubAppId }),
-		...(input.githubAppPrivateKey === undefined ? {} : { githubAppPrivateKey: input.githubAppPrivateKey }),
-		...(input.githubWebhookSecret === undefined ? {} : { githubWebhookSecret: input.githubWebhookSecret }),
 		...(input.apiBaseUrl === undefined ? {} : { apiBaseUrl: input.apiBaseUrl }),
 	})
 	const total = [...desired.values()].reduce((sum, keys) => sum + keys.size, 0)

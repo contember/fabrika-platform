@@ -18,6 +18,7 @@ import { HttpIamRpc } from '@fabrika/auth'
 import { readEnvironmentName } from '@fabrika/auth-core'
 import { createBackgroundTasks, FileSystemAssetServer, PostgresDatabase, PostgresJobQueue, S3BlobStore } from '@fabrika/platform-node'
 import type { ControlProvider } from '@fabrika/provider-contract'
+import type { SourceConnectionAdmin } from '@fabrika/provider-zerops'
 import { createControlRepositories } from '../db'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
@@ -25,7 +26,7 @@ import { LocalGitHubRepoEvents } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
 import { HttpIamAdminGateway } from './iam-admin'
 import { HttpOperationsService } from './operations'
-import { zeropsControlProvider, zeropsSourceClient } from './provider'
+import { zeropsControlProvider, zeropsSourceClient, zeropsSourceConnectionAdmin } from './provider'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
 export interface ProcessConfig {
@@ -39,6 +40,8 @@ export interface Runtime {
 	env: Env
 	/** The single provider selected by this process composition root. */
 	provider: ControlProvider
+	/** Privileged provider-owned GitHub connection lifecycle, consumed by the authenticated admin route. */
+	sourceConnectionAdmin: SourceConnectionAdmin
 	config: ProcessConfig
 	/** The deploy queue, as the concrete producer the in-process consumer is built from. */
 	queue: PostgresJobQueue<DeployJobMessage>
@@ -98,6 +101,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	const iamProvisioningKey = source['FABRIKA_IAM_PROVISIONING_KEY']
 	const vaultKey = source['FABRIKA_CONTROL_VAULT_KEY']
 	const sourceClient = zeropsSourceClient(source)
+	const sourceConnectionAdmin = zeropsSourceConnectionAdmin(source, sourceClient)
 
 	const env: Env = {
 		DB: db,
@@ -131,6 +135,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	return {
 		env,
 		provider: zeropsControlProvider(env, source, sourceClient),
+		sourceConnectionAdmin,
 		config,
 		queue,
 		async shutdown(): Promise<void> {

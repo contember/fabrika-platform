@@ -59,11 +59,8 @@ Options (a flag beats the environment variable beside it):
   --from-git=<url>                  FABRIKA_ZEROPS_BUILD_FROM_GIT   public repository every service builds from
   --tier=light                      FABRIKA_PLATFORM_TIER           default light, and the only value
 
-  FABRIKA_ZEROPS_ACCESS_TOKEN       required   Zerops access token, environment only and no flag
-  FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
-  GITHUB_APP_ID                     optional   with GITHUB_APP_PRIVATE_KEY; source stays anonymous otherwise
-  GITHUB_APP_PRIVATE_KEY            optional   with GITHUB_APP_ID; written only to source
-  GITHUB_WEBHOOK_SECRET             optional   written only to control
+	FABRIKA_ZEROPS_ACCESS_TOKEN       required   Zerops access token, environment only and no flag
+	FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
 
 ── platform init ─────────────────────────────────────────────────────────────────────────────────
 

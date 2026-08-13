@@ -1,8 +1,11 @@
 import {
 	ZEROPS_SOURCE_CANCEL_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
 	ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH,
 	ZEROPS_SOURCE_RESOLVE_PATH,
 	ZEROPS_SOURCE_UPLOAD_PATH,
+	type ZeropsSourceGitHubAppIdentityV1,
 	type ZeropsSourceResolveInput,
 	type ZeropsSourceUploadInput,
 } from '@fabrika/provider-zerops'
@@ -21,6 +24,17 @@ const COMMIT = 'a'.repeat(40)
 const DESCRIPTOR_SHA = 'b'.repeat(64)
 const UPLOAD_URL = 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=upload-secret'
 const REPOSITORY = { owner: 'contember', name: 'fabrika-platform' }
+const CREDENTIAL_SHA = 'c'.repeat(64)
+const CREDENTIAL_BUNDLE = '{"version":1,"githubAppId":"123","privateKeyPem":"-----BEGIN PRIVATE KEY-----\\nMAMCAQE=\\n-----END PRIVATE KEY-----\\n"}'
+const APP_IDENTITY: ZeropsSourceGitHubAppIdentityV1 = {
+	id: 123,
+	slug: 'fabrika-test',
+	htmlUrl: 'https://github.com/apps/fabrika-test',
+	public: false,
+	owner: { login: 'contember', type: 'Organization' },
+	permissions: { contents: 'read' },
+	events: ['push'],
+}
 
 interface RecordedCall {
 	url: string
@@ -59,7 +73,14 @@ const body = (call: RecordedCall): unknown => {
 
 const harness = (
 	respond: ZeropsSourceFetch,
-	timeoutsMs?: { resolveInstallation?: number; resolve?: number; upload?: number; cancel?: number },
+	timeoutsMs?: {
+		resolveInstallation?: number
+		resolve?: number
+		upload?: number
+		cancel?: number
+		activateCredentials?: number
+		credentialStatus?: number
+	},
 ): { client: HttpZeropsSourceClient; calls: RecordedCall[] } => {
 	const calls: RecordedCall[] = []
 	const fetch: ZeropsSourceFetch = (url, init) => {
@@ -83,6 +104,72 @@ const clientError = async (operation: Promise<unknown>): Promise<ZeropsSourceCli
 }
 
 describe('HTTP Zerops source client requests', () => {
+	test('activates and inspects credentials through bound shared endpoints', async () => {
+		const { client, calls } = harness(async (url) =>
+			url.endsWith(ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH)
+				? jsonResponse({
+					protocolVersion: 1,
+					connectionId: 'connection-1',
+					credentialVersion: 1,
+					credentialSha256: CREDENTIAL_SHA,
+					githubApp: APP_IDENTITY,
+				})
+				: jsonResponse({
+					protocolVersion: 1,
+					connectionId: 'connection-1',
+					state: 'active',
+					credentialVersion: 1,
+					credentialSha256: CREDENTIAL_SHA,
+					githubApp: APP_IDENTITY,
+				})
+		)
+		const signal = new AbortController().signal
+		await expect(
+			client.activate({ connectionId: 'connection-1', credentialBundle: CREDENTIAL_BUNDLE, credentialSha256: CREDENTIAL_SHA, signal }),
+		).resolves.toMatchObject({ connectionId: 'connection-1', credentialSha256: CREDENTIAL_SHA })
+		await expect(client.status({ connectionId: 'connection-1', signal })).resolves.toMatchObject({
+			connectionId: 'connection-1',
+			state: 'active',
+			credentialSha256: CREDENTIAL_SHA,
+		})
+		expect(calls.map((call) => call.url)).toEqual([
+			`${ORIGIN}${ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH}`,
+			`${ORIGIN}${ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH}`,
+		])
+		expect(body(calls[0] ?? missingCall())).toEqual({
+			protocolVersion: 1,
+			connectionId: 'connection-1',
+			credentialBundle: CREDENTIAL_BUNDLE,
+			credentialSha256: CREDENTIAL_SHA,
+		})
+		expect(body(calls[1] ?? missingCall())).toEqual({ protocolVersion: 1, connectionId: 'connection-1' })
+	})
+
+	test('rejects stale credential responses and treats ambiguous activation transport as non-retryable', async () => {
+		const stale = harness(async () =>
+			jsonResponse({
+				protocolVersion: 1,
+				connectionId: 'other',
+				credentialVersion: 1,
+				credentialSha256: CREDENTIAL_SHA,
+				githubApp: APP_IDENTITY,
+			})
+		)
+		const signal = new AbortController().signal
+		const staleError = await clientError(
+			stale.client.activate({ connectionId: 'connection-1', credentialBundle: CREDENTIAL_BUNDLE, credentialSha256: CREDENTIAL_SHA, signal }),
+		)
+		expect(staleError.code).toBe('invalid_response')
+		expect(staleError.retryable).toBe(false)
+
+		const failed = harness(() => Promise.reject(new Error(`secret ${CREDENTIAL_BUNDLE}`)))
+		const transportError = await clientError(
+			failed.client.activate({ connectionId: 'connection-1', credentialBundle: CREDENTIAL_BUNDLE, credentialSha256: CREDENTIAL_SHA, signal }),
+		)
+		expect(transportError.retryable).toBe(false)
+		expect(transportError.message).not.toContain(CREDENTIAL_BUNDLE)
+	})
+
 	test('provides an internal abort signal when onboarding does not supply one', async () => {
 		const { client, calls } = harness(async () => jsonResponse({ protocolVersion: 1, githubInstallationId: 42 }))
 		await expect(client.resolveInstallationId('github.com/contember/fabrika-platform')).resolves.toBe(42)
@@ -215,12 +302,32 @@ describe('HTTP Zerops source client response validation', () => {
 		const uploadError = await clientError(upload.client.upload(uploadInput(new AbortController().signal)))
 		expect(uploadError).toMatchObject({ operation: 'upload', code: 'transport_error', retryable: false })
 		expect(uploadError.message).not.toContain('secret')
+
+		const signal = new AbortController().signal
+		const activate = harness(neverResponds, { activateCredentials: 5 })
+		const activateError = await clientError(
+			activate.client.activate({
+				connectionId: 'connection-1',
+				credentialBundle: CREDENTIAL_BUNDLE,
+				credentialSha256: CREDENTIAL_SHA,
+				signal,
+			}),
+		)
+		expect(activateError).toMatchObject({ operation: 'activate-credentials', code: 'transport_error', retryable: false })
+		expect(activateError.message).not.toContain(CREDENTIAL_BUNDLE)
+
+		const status = harness(neverResponds, { credentialStatus: 5 })
+		const statusError = await clientError(status.client.status({ connectionId: 'connection-1', signal }))
+		expect(statusError).toMatchObject({ operation: 'credential-status', code: 'transport_error', retryable: true })
+		expect(statusError.message).not.toContain('secret')
 	})
 
 	test('allows each source operation more than its normal server-side window', async () => {
 		expect(ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.resolveInstallation).toBeGreaterThan(30_000)
 		expect(ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.resolve).toBeGreaterThan(2 * 60_000)
 		expect(ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.upload).toBeGreaterThan(10 * 60_000)
+		expect(ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.activateCredentials).toBeGreaterThan(30_000)
+		expect(ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.credentialStatus).toBeGreaterThan(10_000)
 
 		const delayed = harness(async () => {
 			await new Promise((resolve) => setTimeout(resolve, 15))
