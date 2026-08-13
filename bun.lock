@@ -243,6 +243,9 @@
     "packages/installation-init": {
       "name": "@fabrika/installation-init",
       "version": "0.0.4",
+      "dependencies": {
+        "@fabrika/github-app": "workspace:*",
+      },
       "devDependencies": {
         "@types/bun": "latest",
       },

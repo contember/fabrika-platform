@@ -110,6 +110,12 @@ credentials. Zerops init keeps that recovery in a bounded owner-only XDG file ou
 uses create-only remote writes and exact rereads, and deletes recovery after the live App and webhook
 configuration are verified.
 
+ADR-0031 supersedes ADR-0030 only for normal Zerops GitHub setup. Fresh installation remains
+anonymous, and an authenticated control-plane action creates and verifies the organization-owned App
+without a PAT. Control owns a dynamic encrypted webhook secret; source receives one atomic canonical
+App-id/private-key bundle and activates it through a digest-bound private RPC. The CLI is a repair path
+over the same remote state. ADR-0030 still records the shared loopback helper's durability contract.
+
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
@@ -144,3 +150,4 @@ configuration are verified.
 - [0028](0028-zerops-apps-own-their-repository-root.md) — Zerops apps own their repository root — accepted (2026-08-11)
 - [0029](0029-an-operator-owned-github-app-delivers-zerops-sources.md) — An operator-owned GitHub App delivers Zerops application sources — accepted (2026-08-11)
 - [0030](0030-persist-github-app-creation-before-success.md) — Persist GitHub App creation before success — accepted; amends 0029's init durability detail (2026-08-12)
+- [0031](0031-manage-zerops-github-source-from-control.md) — Manage the Zerops GitHub source connection from control — accepted; supersedes 0030 for normal Zerops setup (2026-08-13)

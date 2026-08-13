@@ -78,7 +78,10 @@ describe('GitHub App manifest mechanic', () => {
 			() => Promise.resolve(new Response(JSON.stringify({ value: sentinel }).repeat(20_000))),
 		]
 		for (const fetchImplementation of cases) {
-			const raised = await exchangeGitHubAppManifestCode('temporary-code', fetchImplementation).then(() => undefined, (error: unknown) => error)
+			const raised = await exchangeGitHubAppManifestCode('temporary-code', fetchImplementation).then(
+				() => undefined,
+				(error: unknown) => error,
+			)
 			expect(raised).toBeInstanceOf(Error)
 			expect(raised instanceof Error ? raised.message : sentinel).not.toContain(sentinel)
 		}

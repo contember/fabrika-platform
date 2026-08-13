@@ -1,24 +1,16 @@
+import {
+	buildGitHubAppManifest,
+	type CreatedGitHubApp,
+	exchangeGitHubAppManifestCode as exchangeSharedGitHubAppManifestCode,
+	type GitHubAppFetch,
+	type GitHubAppManifestInput,
+} from '@fabrika/github-app'
 import { randomBytes } from 'node:crypto'
 import { action, detail, info, ok, url } from './log'
 
-export interface CreatedGitHubApp {
-	readonly id: number
-	readonly slug: string
-	readonly htmlUrl: string
-	readonly pem: string
-	readonly webhookSecret: string
-}
-
-export interface GitHubAppManifestInput {
-	readonly organization: string
-	readonly appName: string
-	readonly homepageUrl: string
-	readonly webhookUrl: string
-	/** GitHub requires a public App when repositories outside its owner organization need it. */
-	readonly public: boolean
-}
-
-export type GitHubAppManifestFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
+export { buildGitHubAppManifest }
+export type { CreatedGitHubApp, GitHubAppManifestInput }
+export type GitHubAppManifestFetch = GitHubAppFetch
 
 export interface GitHubAppManifestRuntime {
 	readonly fetch?: GitHubAppManifestFetch
@@ -34,152 +26,18 @@ const DEFAULT_CALLBACK_TIMEOUT_MS = 5 * 60 * 1000
 const MAX_CALLBACK_TIMEOUT_MS = 60 * 60 * 1000
 const DEFAULT_PERSISTENCE_TIMEOUT_MS = 30 * 1000
 const MAX_PERSISTENCE_TIMEOUT_MS = 5 * 60 * 1000
-const CONVERSION_TIMEOUT_MS = 30 * 1000
-const MAX_CONVERSION_BYTES = 128 * 1024
-const ORGANIZATION_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
 const APP_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/
-const MANIFEST_CODE_PATTERN = /^[A-Za-z0-9_-]{1,256}$/
 
-const hasAsciiControl = (value: string): boolean => {
-	for (const character of value) {
-		const code = character.charCodeAt(0)
-		if (code < 32 || code === 127) return true
-	}
-	return false
-}
-
-const objectField = (value: unknown, key: string): unknown => {
-	if (typeof value !== 'object' || value === null) return undefined
-	return Reflect.get(value, key)
-}
-
-const safeHttpsUrl = (value: string): URL => {
-	let parsed: URL
-	try {
-		parsed = new URL(value)
-	} catch {
-		throw new Error('GitHub App manifest configuration is invalid')
-	}
-	if (parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== '' || parsed.hash !== '') {
-		throw new Error('GitHub App manifest configuration is invalid')
-	}
-	return parsed
-}
-
-const validateInput = (input: GitHubAppManifestInput): void => {
-	if (
-		!ORGANIZATION_PATTERN.test(input.organization) || input.appName.length === 0 || input.appName.length > 100 || hasAsciiControl(input.appName)
-	) {
-		throw new Error('GitHub App manifest configuration is invalid')
-	}
-	safeHttpsUrl(input.homepageUrl)
-	safeHttpsUrl(input.webhookUrl)
-}
-
-/** Build the one App shape every Fabrika installation uses for repository source and push events. */
-export const buildGitHubAppManifest = (input: GitHubAppManifestInput): Readonly<Record<string, unknown>> => {
-	validateInput(input)
-	return {
-		name: input.appName,
-		url: input.homepageUrl,
-		hook_attributes: { url: input.webhookUrl, active: true },
-		public: input.public,
-		default_permissions: { contents: 'read' },
-		default_events: ['push'],
-	}
-}
-
-const parseConversion = (value: unknown): CreatedGitHubApp | null => {
-	const id = objectField(value, 'id')
-	const slug = objectField(value, 'slug')
-	const htmlUrl = objectField(value, 'html_url')
-	const pem = objectField(value, 'pem')
-	const webhookSecret = objectField(value, 'webhook_secret')
-	if (
-		typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0 || typeof slug !== 'string' || !APP_SLUG_PATTERN.test(slug)
-		|| typeof htmlUrl !== 'string' || typeof pem !== 'string' || typeof webhookSecret !== 'string'
-		|| pem.length === 0 || pem.length > 64 * 1024 || webhookSecret.length === 0 || webhookSecret.length > 4096
-		|| hasAsciiControl(webhookSecret)
-	) {
-		return null
-	}
-	let parsedHtmlUrl: URL
-	try {
-		parsedHtmlUrl = new URL(htmlUrl)
-	} catch {
-		return null
-	}
-	if (
-		parsedHtmlUrl.protocol !== 'https:' || parsedHtmlUrl.hostname !== 'github.com' || parsedHtmlUrl.port !== ''
-		|| parsedHtmlUrl.username !== '' || parsedHtmlUrl.password !== '' || parsedHtmlUrl.search !== '' || parsedHtmlUrl.hash !== ''
-		|| parsedHtmlUrl.pathname !== `/apps/${slug}`
-		|| !/^-----BEGIN (?:RSA )?PRIVATE KEY-----[\s\S]+-----END (?:RSA )?PRIVATE KEY-----\s*$/.test(pem)
-	) {
-		return null
-	}
-	return { id, slug, htmlUrl, pem, webhookSecret }
-}
-
-const readChunk = (
-	reader: ReadableStreamDefaultReader<Uint8Array>,
-	signal: AbortSignal,
-): Promise<{ readonly done: true } | { readonly done: false; readonly value: Uint8Array }> => {
-	if (signal.aborted) return Promise.reject(new Error('GitHub App manifest conversion timed out'))
-	return new Promise((resolve, reject) => {
-		const abort = (): void => {
-			cleanup()
-			reject(new Error('GitHub App manifest conversion timed out'))
-		}
-		const cleanup = (): void => signal.removeEventListener('abort', abort)
-		signal.addEventListener('abort', abort, { once: true })
-		reader.read().then(
-			(result) => {
-				cleanup()
-				resolve(result.done ? { done: true } : { done: false, value: result.value })
-			},
-			() => {
-				cleanup()
-				reject(new Error(signal.aborted ? 'GitHub App manifest conversion timed out' : 'GitHub App manifest conversion returned an invalid response'))
-			},
-		)
+/** Backward-compatible positional wrapper around the runtime-neutral GitHub App exchange. */
+export const exchangeGitHubAppManifestCode = (
+	code: string,
+	fetchImplementation?: GitHubAppManifestFetch,
+	timeoutMs?: number,
+): Promise<CreatedGitHubApp> =>
+	exchangeSharedGitHubAppManifestCode(code, {
+		...(fetchImplementation === undefined ? {} : { fetch: fetchImplementation }),
+		...(timeoutMs === undefined ? {} : { timeoutMs }),
 	})
-}
-
-const readBoundedJson = async (response: Response, signal: AbortSignal): Promise<unknown> => {
-	const contentLength = response.headers.get('content-length')
-	if (contentLength !== null && /^[0-9]+$/.test(contentLength) && Number(contentLength) > MAX_CONVERSION_BYTES) {
-		throw new Error('GitHub App manifest conversion returned an invalid response')
-	}
-	const reader = response.body?.getReader()
-	if (reader === undefined) throw new Error('GitHub App manifest conversion returned an invalid response')
-	const chunks: Uint8Array[] = []
-	let total = 0
-	try {
-		while (true) {
-			const result = await readChunk(reader, signal)
-			if (result.done) break
-			total += result.value.byteLength
-			if (total > MAX_CONVERSION_BYTES) throw new Error('GitHub App manifest conversion returned an invalid response')
-			chunks.push(result.value)
-		}
-	} catch (error) {
-		void reader.cancel().catch(() => {})
-		throw error
-	} finally {
-		reader.releaseLock()
-	}
-	const bytes = new Uint8Array(total)
-	let offset = 0
-	for (const chunk of chunks) {
-		bytes.set(chunk, offset)
-		offset += chunk.byteLength
-	}
-	try {
-		return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
-	} catch {
-		throw new Error('GitHub App manifest conversion returned an invalid response')
-	}
-}
 
 const persistCreatedApp = async (
 	app: CreatedGitHubApp,
@@ -201,43 +59,6 @@ const persistCreatedApp = async (
 		if (controller.signal.aborted) throw new Error('GitHub App credential persistence timed out')
 	} catch {
 		throw new Error('GitHub App credential persistence failed')
-	} finally {
-		clearTimeout(timer)
-	}
-}
-
-/** Exchange the one-time manifest code. The returned PEM and webhook secret are never logged. */
-export const exchangeGitHubAppManifestCode = async (
-	code: string,
-	fetchImplementation: GitHubAppManifestFetch = fetch,
-	timeoutMs = CONVERSION_TIMEOUT_MS,
-): Promise<CreatedGitHubApp> => {
-	if (!MANIFEST_CODE_PATTERN.test(code)) throw new Error('GitHub App manifest callback is invalid')
-	if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > CONVERSION_TIMEOUT_MS) {
-		throw new Error('GitHub App manifest conversion timeout is invalid')
-	}
-	const controller = new AbortController()
-	const timer = setTimeout(() => controller.abort(), timeoutMs)
-	try {
-		let response: Response
-		try {
-			response = await fetchImplementation(`https://api.github.com/app-manifests/${encodeURIComponent(code)}/conversions`, {
-				method: 'POST',
-				headers: {
-					accept: 'application/vnd.github+json',
-					'user-agent': 'fabrika-cli',
-					'x-github-api-version': '2022-11-28',
-				},
-				redirect: 'error',
-				signal: controller.signal,
-			})
-		} catch {
-			throw new Error(controller.signal.aborted ? 'GitHub App manifest conversion timed out' : 'GitHub App manifest conversion failed')
-		}
-		if (!response.ok) throw new Error('GitHub App manifest conversion failed')
-		const app = parseConversion(await readBoundedJson(response, controller.signal))
-		if (app === null) throw new Error('GitHub App manifest conversion returned an invalid response')
-		return app
 	} finally {
 		clearTimeout(timer)
 	}

@@ -54,6 +54,30 @@ export interface GitHubRepositoryTokenRequest {
 
 export type GitHubAppFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 
+export interface CreatedGitHubApp {
+	readonly id: number
+	readonly slug: string
+	readonly htmlUrl: string
+	readonly pem: string
+	readonly webhookSecret: string
+}
+
+export interface GitHubAppManifestInput {
+	readonly organization: string
+	readonly appName: string
+	readonly homepageUrl: string
+	readonly webhookUrl: string
+	readonly redirectUrl?: string
+	/** GitHub requires a public App when repositories outside its owner organization need it. */
+	readonly public: boolean
+}
+
+export interface GitHubAppManifestExchangeOptions {
+	readonly fetch?: GitHubAppFetch
+	readonly signal?: AbortSignal
+	readonly timeoutMs?: number
+}
+
 const DEFAULT_API_BASE_URL = 'https://api.github.com'
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 const MAX_REQUEST_TIMEOUT_MS = 120_000
@@ -61,10 +85,72 @@ const MAX_RESPONSE_BYTES = 64 * 1024
 const GITHUB_ACCEPT = 'application/vnd.github+json'
 const GITHUB_API_VERSION = '2022-11-28'
 const GITHUB_USER_AGENT = 'vozka'
+const GITHUB_MANIFEST_USER_AGENT = 'fabrika'
 const APP_ID_PATTERN = /^[1-9][0-9]*$/
 const REPOSITORY_COMPONENT_PATTERN = /^[A-Za-z0-9_.-]+$/
 const APP_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/
+const ORGANIZATION_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
+const MANIFEST_CODE_PATTERN = /^[A-Za-z0-9_-]{1,256}$/
+const MANIFEST_CONVERSION_TIMEOUT_MS = 30_000
+const MAX_MANIFEST_CONVERSION_BYTES = 128 * 1024
+const MAX_MANIFEST_URL_LENGTH = 2048
 const NOT_FOUND = Symbol('not-found')
+
+/** Build the one least-authority App manifest used by Fabrika repository source. */
+export function buildGitHubAppManifest(input: GitHubAppManifestInput): Readonly<Record<string, unknown>> {
+	validateManifestInput(input)
+	return {
+		name: input.appName,
+		url: input.homepageUrl,
+		hook_attributes: { url: input.webhookUrl, active: true },
+		...(input.redirectUrl === undefined ? {} : { redirect_url: input.redirectUrl }),
+		public: input.public,
+		default_permissions: { contents: 'read' },
+		default_events: ['push'],
+	}
+}
+
+/** Exchange a bounded one-time GitHub manifest code without exposing response details. */
+export async function exchangeGitHubAppManifestCode(
+	code: string,
+	options: GitHubAppManifestExchangeOptions = {},
+): Promise<CreatedGitHubApp> {
+	if (!MANIFEST_CODE_PATTERN.test(code)) throw new Error('GitHub App manifest callback is invalid')
+	const timeoutMs = options.timeoutMs ?? MANIFEST_CONVERSION_TIMEOUT_MS
+	if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MANIFEST_CONVERSION_TIMEOUT_MS) {
+		throw new Error('GitHub App manifest conversion timeout is invalid')
+	}
+	const cancellation = createManifestCancellation(options.signal, timeoutMs)
+	try {
+		cancellation.throwIfCancelled()
+		let response: Response
+		try {
+			response = await (options.fetch ?? fetch)(
+				`https://api.github.com/app-manifests/${encodeURIComponent(code)}/conversions`,
+				{
+					method: 'POST',
+					headers: {
+						accept: GITHUB_ACCEPT,
+						'user-agent': GITHUB_MANIFEST_USER_AGENT,
+						'x-github-api-version': GITHUB_API_VERSION,
+					},
+					redirect: 'error',
+					signal: cancellation.signal,
+				},
+			)
+		} catch {
+			cancellation.throwIfCancelled()
+			throw new Error('GitHub App manifest conversion failed')
+		}
+		cancellation.throwIfCancelled()
+		if (!response.ok) throw new Error('GitHub App manifest conversion failed')
+		const app = decodeManifestConversion(await readManifestConversionJson(response, cancellation))
+		if (app === null) throw new Error('GitHub App manifest conversion returned an invalid response')
+		return app
+	} finally {
+		cancellation.dispose()
+	}
+}
 
 /** GitHub App machine identity. Webhook authentication belongs to the receiving service. */
 export class GitHubAppClient {
@@ -292,6 +378,110 @@ interface RequestCancellation {
 	dispose(): void
 }
 
+interface ManifestCancellation {
+	readonly signal: AbortSignal
+	throwIfCancelled(): void
+	dispose(): void
+}
+
+function createManifestCancellation(callerSignal: AbortSignal | undefined, timeoutMs: number): ManifestCancellation {
+	const controller = new AbortController()
+	let timedOut = false
+	const abortFromCaller = (): void => controller.abort()
+	if (callerSignal?.aborted === true) controller.abort()
+	else callerSignal?.addEventListener('abort', abortFromCaller, { once: true })
+	const timer = setTimeout(() => {
+		timedOut = true
+		controller.abort()
+	}, timeoutMs)
+	return {
+		signal: controller.signal,
+		throwIfCancelled() {
+			if (callerSignal?.aborted === true) throw new DOMException('GitHub App manifest conversion was aborted', 'AbortError')
+			if (timedOut) throw new DOMException('GitHub App manifest conversion timed out', 'TimeoutError')
+			if (controller.signal.aborted) throw new DOMException('GitHub App manifest conversion was aborted', 'AbortError')
+		},
+		dispose() {
+			clearTimeout(timer)
+			callerSignal?.removeEventListener('abort', abortFromCaller)
+		},
+	}
+}
+
+async function readManifestConversionJson(response: Response, cancellation: ManifestCancellation): Promise<unknown> {
+	cancellation.throwIfCancelled()
+	const contentLength = response.headers.get('content-length')
+	if (contentLength !== null && /^[0-9]+$/.test(contentLength) && Number(contentLength) > MAX_MANIFEST_CONVERSION_BYTES) {
+		throw new Error('GitHub App manifest conversion returned an invalid response')
+	}
+	const reader = response.body?.getReader()
+	if (reader === undefined) throw new Error('GitHub App manifest conversion returned an invalid response')
+	const chunks: Uint8Array[] = []
+	let total = 0
+	try {
+		while (true) {
+			const result = await readManifestChunk(reader, cancellation)
+			if (result.done) break
+			total += result.value.byteLength
+			if (total > MAX_MANIFEST_CONVERSION_BYTES) throw new Error('GitHub App manifest conversion returned an invalid response')
+			chunks.push(result.value)
+		}
+	} catch (error) {
+		void reader.cancel().catch(() => {})
+		cancellation.throwIfCancelled()
+		throw error
+	} finally {
+		reader.releaseLock()
+	}
+	const bytes = new Uint8Array(total)
+	let offset = 0
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset)
+		offset += chunk.byteLength
+	}
+	cancellation.throwIfCancelled()
+	try {
+		return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+	} catch {
+		cancellation.throwIfCancelled()
+		throw new Error('GitHub App manifest conversion returned an invalid response')
+	}
+}
+
+function readManifestChunk(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	cancellation: ManifestCancellation,
+): Promise<{ readonly done: true } | { readonly done: false; readonly value: Uint8Array }> {
+	cancellation.throwIfCancelled()
+	return new Promise((resolve, reject) => {
+		const abort = (): void => {
+			cleanup()
+			try {
+				cancellation.throwIfCancelled()
+			} catch (error) {
+				reject(error)
+			}
+		}
+		const cleanup = (): void => cancellation.signal.removeEventListener('abort', abort)
+		cancellation.signal.addEventListener('abort', abort, { once: true })
+		reader.read().then(
+			(result) => {
+				cleanup()
+				resolve(result.done ? { done: true } : { done: false, value: result.value })
+			},
+			() => {
+				cleanup()
+				try {
+					cancellation.throwIfCancelled()
+					reject(new Error('GitHub App manifest conversion returned an invalid response'))
+				} catch (error) {
+					reject(error)
+				}
+			},
+		)
+	})
+}
+
 function createCancellation(callerSignal: AbortSignal | undefined, timeoutMs: number): RequestCancellation {
 	const controller = new AbortController()
 	let timedOut = false
@@ -468,6 +658,66 @@ function normalizeWebhookUrl(value: string): string {
 		throw configurationError()
 	}
 	return url.toString()
+}
+
+function validateManifestInput(input: GitHubAppManifestInput): void {
+	if (
+		!ORGANIZATION_PATTERN.test(input.organization) || input.appName.length === 0 || input.appName.length > 100
+		|| hasAsciiControl(input.appName)
+	) {
+		throw new Error('GitHub App manifest configuration is invalid')
+	}
+	validateManifestUrl(input.homepageUrl)
+	validateManifestUrl(input.webhookUrl)
+	if (input.redirectUrl !== undefined) validateManifestUrl(input.redirectUrl)
+}
+
+function validateManifestUrl(value: string): void {
+	if (value.length === 0 || value.length > MAX_MANIFEST_URL_LENGTH || hasAsciiControl(value)) {
+		throw new Error('GitHub App manifest configuration is invalid')
+	}
+	let parsed: URL
+	try {
+		parsed = new URL(value)
+	} catch {
+		throw new Error('GitHub App manifest configuration is invalid')
+	}
+	if (
+		parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== '' || parsed.hash !== '' || parsed.hostname === ''
+	) {
+		throw new Error('GitHub App manifest configuration is invalid')
+	}
+}
+
+function decodeManifestConversion(value: unknown): CreatedGitHubApp | null {
+	const id = objectField(value, 'id')
+	const slug = objectField(value, 'slug')
+	const htmlUrl = objectField(value, 'html_url')
+	const pem = objectField(value, 'pem')
+	const webhookSecret = objectField(value, 'webhook_secret')
+	if (
+		typeof id !== 'number' || !isPositiveSafeInteger(id) || typeof slug !== 'string' || !APP_SLUG_PATTERN.test(slug)
+		|| typeof htmlUrl !== 'string' || typeof pem !== 'string' || typeof webhookSecret !== 'string'
+		|| pem.length === 0 || pem.length > 64 * 1024 || webhookSecret.length === 0 || webhookSecret.length > 4096
+		|| hasAsciiControl(webhookSecret)
+	) {
+		return null
+	}
+	let parsedHtmlUrl: URL
+	try {
+		parsedHtmlUrl = new URL(htmlUrl)
+	} catch {
+		return null
+	}
+	if (
+		parsedHtmlUrl.protocol !== 'https:' || parsedHtmlUrl.hostname !== 'github.com' || parsedHtmlUrl.port !== ''
+		|| parsedHtmlUrl.username !== '' || parsedHtmlUrl.password !== '' || parsedHtmlUrl.search !== '' || parsedHtmlUrl.hash !== ''
+		|| parsedHtmlUrl.pathname !== `/apps/${slug}`
+		|| !/^-----BEGIN (?:RSA )?PRIVATE KEY-----[\s\S]+-----END (?:RSA )?PRIVATE KEY-----\s*$/.test(pem)
+	) {
+		return null
+	}
+	return { id, slug, htmlUrl, pem, webhookSecret }
 }
 
 function validateWebhookSecret(value: string): void {
