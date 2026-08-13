@@ -5,6 +5,8 @@ export const ZEROPS_SOURCE_UPLOAD_PATH = '/v1/source/upload'
 export const ZEROPS_SOURCE_CANCEL_PATH = '/v1/source/cancel'
 export const ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH = '/v1/source/credentials/activate'
 export const ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH = '/v1/source/credentials/status'
+export const ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH = '/v1/source/github/webhook/configure'
+export const ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH = '/v1/source/github/installations/verify'
 export const ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION = 1
 
 const MAX_ID_LENGTH = 128
@@ -12,6 +14,9 @@ const MAX_REF_LENGTH = 255
 const MAX_UPLOAD_URL_LENGTH = 4096
 const MAX_SOURCE_CREDENTIAL_BUNDLE_BYTES = 72 * 1024
 const MAX_GITHUB_APP_PRIVATE_KEY_LENGTH = 64 * 1024
+const MAX_WEBHOOK_URL_LENGTH = 2048
+const MAX_WEBHOOK_SECRET_LENGTH = 4096
+const MAX_INSTALLATION_REPOSITORIES = 100
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const COMMIT_SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 const ID_PATTERN = /^[A-Za-z0-9._:-]+$/
@@ -76,6 +81,63 @@ export interface ZeropsSourceCredentialActiveStatusResponseV1 extends ZeropsSour
 export type ZeropsSourceCredentialStatusResponseV1 =
 	| ZeropsSourceCredentialAnonymousStatusResponseV1
 	| ZeropsSourceCredentialActiveStatusResponseV1
+
+export interface ZeropsSourceWebhookConfigureInput {
+	readonly connectionId: string
+	readonly credentialSha256: string
+	readonly url: string
+	readonly secret: string
+	readonly signal: AbortSignal
+}
+
+export interface ZeropsSourceWebhookConfigureRequestV1 {
+	readonly protocolVersion: typeof ZEROPS_SOURCE_PROTOCOL_VERSION
+	readonly connectionId: string
+	readonly credentialSha256: string
+	readonly url: string
+	readonly secret: string
+}
+
+export interface ZeropsSourceWebhookConfigureResponseV1 {
+	readonly protocolVersion: typeof ZEROPS_SOURCE_PROTOCOL_VERSION
+	readonly connectionId: string
+	readonly credentialSha256: string
+	readonly webhook: { readonly url: string; readonly contentType: 'json'; readonly insecureSsl: '0' }
+}
+
+export type ZeropsSourceInstallationScopeV1 =
+	| { readonly kind: 'organization'; readonly organization: string }
+	| { readonly kind: 'repositories'; readonly repositories: readonly ZeropsSourceRepository[] }
+
+export interface ZeropsSourceInstallationsVerifyInput {
+	readonly connectionId: string
+	readonly credentialSha256: string
+	readonly scope: ZeropsSourceInstallationScopeV1
+	readonly signal: AbortSignal
+}
+
+export interface ZeropsSourceInstallationsVerifyRequestV1 {
+	readonly protocolVersion: typeof ZEROPS_SOURCE_PROTOCOL_VERSION
+	readonly connectionId: string
+	readonly credentialSha256: string
+	readonly scope: ZeropsSourceInstallationScopeV1
+}
+
+export type ZeropsSourceInstallationVerificationV1 =
+	| { readonly status: 'missing' }
+	| {
+		readonly status: 'installed'
+		readonly installationId: number
+		readonly accountLogin: string
+		readonly repositorySelection: 'all' | 'selected'
+	}
+
+export interface ZeropsSourceInstallationsVerifyResponseV1 {
+	readonly protocolVersion: typeof ZEROPS_SOURCE_PROTOCOL_VERSION
+	readonly connectionId: string
+	readonly credentialSha256: string
+	readonly installation: ZeropsSourceInstallationVerificationV1
+}
 
 export interface ZeropsSourceRepository {
 	owner: string
@@ -277,6 +339,8 @@ export interface ZeropsSourceCredentialStatusInput {
 export interface ZeropsSourceCredentialManager {
 	activate(input: ZeropsSourceCredentialActivateInput): Promise<ZeropsSourceCredentialActivateResponseV1>
 	status(input: ZeropsSourceCredentialStatusInput): Promise<ZeropsSourceCredentialStatusResponseV1>
+	configureWebhook(input: ZeropsSourceWebhookConfigureInput): Promise<ZeropsSourceWebhookConfigureResponseV1>
+	verifyInstallations(input: ZeropsSourceInstallationsVerifyInput): Promise<ZeropsSourceInstallationsVerifyResponseV1>
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -650,6 +714,149 @@ export function buildZeropsSourceCredentialStatusResponse(
 		| Omit<ZeropsSourceCredentialActiveStatusResponseV1, 'protocolVersion'>,
 ): ZeropsSourceCredentialStatusResponseV1 {
 	return decodeZeropsSourceCredentialStatusResponse({ protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION, ...input })
+}
+
+const webhookUrl = (value: unknown, label: string): string => {
+	const candidate = boundedString(value, label, MAX_WEBHOOK_URL_LENGTH)
+	let parsed: URL
+	try {
+		parsed = new URL(candidate)
+	} catch {
+		throw new Error(`${label} must be a secure URL`)
+	}
+	if (
+		parsed.protocol !== 'https:' || parsed.port !== '' || parsed.username !== '' || parsed.password !== '' || parsed.search !== '' || parsed.hash !== ''
+		|| parsed.pathname !== '/webhooks/github' || parsed.hostname === '' || candidate !== parsed.href
+	) throw new Error(`${label} must be an exact secure GitHub webhook URL`)
+	return candidate
+}
+
+const webhookSecret = (value: unknown, label: string): string => {
+	const secret = boundedString(value, label, MAX_WEBHOOK_SECRET_LENGTH)
+	if ([...secret].some((character) => character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f)) {
+		throw new Error(`${label} is invalid`)
+	}
+	return secret
+}
+
+export function decodeZeropsSourceWebhookConfigureRequest(value: unknown): ZeropsSourceWebhookConfigureRequestV1 {
+	const parsed = record(value, 'source webhook configure request')
+	exactKeys(parsed, ['protocolVersion', 'connectionId', 'credentialSha256', 'url', 'secret'], 'source webhook configure request')
+	return {
+		protocolVersion: protocolVersion(parsed, 'source webhook configure request'),
+		connectionId: identifier(parsed['connectionId'], 'source webhook configure request.connectionId'),
+		credentialSha256: sha256(parsed['credentialSha256'], 'source webhook configure request.credentialSha256'),
+		url: webhookUrl(parsed['url'], 'source webhook configure request.url'),
+		secret: webhookSecret(parsed['secret'], 'source webhook configure request.secret'),
+	}
+}
+
+export function buildZeropsSourceWebhookConfigureRequest(input: ZeropsSourceWebhookConfigureInput): ZeropsSourceWebhookConfigureRequestV1 {
+	return decodeZeropsSourceWebhookConfigureRequest({
+		protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION,
+		connectionId: input.connectionId,
+		credentialSha256: input.credentialSha256,
+		url: input.url,
+		secret: input.secret,
+	})
+}
+
+export function decodeZeropsSourceWebhookConfigureResponse(value: unknown): ZeropsSourceWebhookConfigureResponseV1 {
+	const parsed = record(value, 'source webhook configure response')
+	exactKeys(parsed, ['protocolVersion', 'connectionId', 'credentialSha256', 'webhook'], 'source webhook configure response')
+	const webhook = record(parsed['webhook'], 'source webhook configure response.webhook')
+	exactKeys(webhook, ['url', 'contentType', 'insecureSsl'], 'source webhook configure response.webhook')
+	if (webhook['contentType'] !== 'json' || webhook['insecureSsl'] !== '0') throw new Error('source webhook configure response is insecure')
+	return {
+		protocolVersion: protocolVersion(parsed, 'source webhook configure response'),
+		connectionId: identifier(parsed['connectionId'], 'source webhook configure response.connectionId'),
+		credentialSha256: sha256(parsed['credentialSha256'], 'source webhook configure response.credentialSha256'),
+		webhook: { url: webhookUrl(webhook['url'], 'source webhook configure response.webhook.url'), contentType: 'json', insecureSsl: '0' },
+	}
+}
+
+export function buildZeropsSourceWebhookConfigureResponse(
+	input: Omit<ZeropsSourceWebhookConfigureResponseV1, 'protocolVersion'>,
+): ZeropsSourceWebhookConfigureResponseV1 {
+	return decodeZeropsSourceWebhookConfigureResponse({ protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION, ...input })
+}
+
+const installationScope = (value: unknown, label: string): ZeropsSourceInstallationScopeV1 => {
+	const parsed = record(value, label)
+	if (parsed['kind'] === 'organization') {
+		exactKeys(parsed, ['kind', 'organization'], label)
+		const organization = boundedString(parsed['organization'], `${label}.organization`, 39).toLowerCase()
+		if (!GITHUB_OWNER_PATTERN.test(organization)) throw new Error(`${label}.organization is invalid`)
+		return { kind: 'organization', organization }
+	}
+	if (parsed['kind'] !== 'repositories') throw new Error(`${label}.kind is invalid`)
+	exactKeys(parsed, ['kind', 'repositories'], label)
+	if (!Array.isArray(parsed['repositories']) || parsed['repositories'].length === 0 || parsed['repositories'].length > MAX_INSTALLATION_REPOSITORIES) {
+		throw new Error(`${label}.repositories is invalid`)
+	}
+	const repositories = parsed['repositories'].map((entry) => repository(entry, `${label}.repositories entry`))
+	const keys = repositories.map((entry) => `${entry.owner}/${entry.name}`)
+	if (new Set(keys).size !== keys.length) throw new Error(`${label}.repositories contains a duplicate`)
+	return { kind: 'repositories', repositories }
+}
+
+export function decodeZeropsSourceInstallationsVerifyRequest(value: unknown): ZeropsSourceInstallationsVerifyRequestV1 {
+	const parsed = record(value, 'source installations verify request')
+	exactKeys(parsed, ['protocolVersion', 'connectionId', 'credentialSha256', 'scope'], 'source installations verify request')
+	return {
+		protocolVersion: protocolVersion(parsed, 'source installations verify request'),
+		connectionId: identifier(parsed['connectionId'], 'source installations verify request.connectionId'),
+		credentialSha256: sha256(parsed['credentialSha256'], 'source installations verify request.credentialSha256'),
+		scope: installationScope(parsed['scope'], 'source installations verify request.scope'),
+	}
+}
+
+export function buildZeropsSourceInstallationsVerifyRequest(
+	input: ZeropsSourceInstallationsVerifyInput,
+): ZeropsSourceInstallationsVerifyRequestV1 {
+	return decodeZeropsSourceInstallationsVerifyRequest({
+		protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION,
+		connectionId: input.connectionId,
+		credentialSha256: input.credentialSha256,
+		scope: input.scope,
+	})
+}
+
+const installationVerification = (value: unknown, label: string): ZeropsSourceInstallationVerificationV1 => {
+	const parsed = record(value, label)
+	if (parsed['status'] === 'missing') {
+		exactKeys(parsed, ['status'], label)
+		return { status: 'missing' }
+	}
+	if (parsed['status'] !== 'installed') throw new Error(`${label}.status is invalid`)
+	exactKeys(parsed, ['status', 'installationId', 'accountLogin', 'repositorySelection'], label)
+	const accountLogin = boundedString(parsed['accountLogin'], `${label}.accountLogin`, 100)
+	if (!GITHUB_LOGIN_PATTERN.test(accountLogin)) throw new Error(`${label}.accountLogin is invalid`)
+	const repositorySelection = parsed['repositorySelection']
+	if (repositorySelection !== 'all' && repositorySelection !== 'selected') throw new Error(`${label}.repositorySelection is invalid`)
+	return {
+		status: 'installed',
+		installationId: installationId(parsed['installationId'], `${label}.installationId`),
+		accountLogin,
+		repositorySelection,
+	}
+}
+
+export function decodeZeropsSourceInstallationsVerifyResponse(value: unknown): ZeropsSourceInstallationsVerifyResponseV1 {
+	const parsed = record(value, 'source installations verify response')
+	exactKeys(parsed, ['protocolVersion', 'connectionId', 'credentialSha256', 'installation'], 'source installations verify response')
+	return {
+		protocolVersion: protocolVersion(parsed, 'source installations verify response'),
+		connectionId: identifier(parsed['connectionId'], 'source installations verify response.connectionId'),
+		credentialSha256: sha256(parsed['credentialSha256'], 'source installations verify response.credentialSha256'),
+		installation: installationVerification(parsed['installation'], 'source installations verify response.installation'),
+	}
+}
+
+export function buildZeropsSourceInstallationsVerifyResponse(
+	input: Omit<ZeropsSourceInstallationsVerifyResponseV1, 'protocolVersion'>,
+): ZeropsSourceInstallationsVerifyResponseV1 {
+	return decodeZeropsSourceInstallationsVerifyResponse({ protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION, ...input })
 }
 
 export function decodeZeropsSourceResolveInstallationRequest(value: unknown): ZeropsSourceResolveInstallationRequestV1 {

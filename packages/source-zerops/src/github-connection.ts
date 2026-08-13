@@ -1,19 +1,36 @@
-import type { GitHubAppIdentity, GitHubInstallationToken, GitHubRepositoryTokenRequest } from '@fabrika/github-app'
+import type {
+	GitHubAppIdentity,
+	GitHubAppInstallation,
+	GitHubAppWebhookConfig,
+	GitHubAppWebhookUpdate,
+	GitHubInstallationToken,
+	GitHubRepositoryTokenRequest,
+} from '@fabrika/github-app'
 import {
 	buildZeropsSourceCredentialActivateResponse,
 	buildZeropsSourceCredentialBundle,
 	buildZeropsSourceCredentialStatusResponse,
+	buildZeropsSourceInstallationsVerifyResponse,
+	buildZeropsSourceWebhookConfigureResponse,
 	decodeZeropsSourceCredentialBundle,
 	serializeZeropsSourceCredentialBundle,
 	sha256ZeropsSourceCredentialBundle,
 	type ZeropsSourceCredentialActivateResponseV1,
 	type ZeropsSourceCredentialStatusResponseV1,
 	type ZeropsSourceGitHubAppIdentityV1,
+	type ZeropsSourceInstallationScopeV1,
+	type ZeropsSourceInstallationsVerifyResponseV1,
+	type ZeropsSourceWebhookConfigureResponseV1,
 } from '@fabrika/provider-zerops'
 import { cancelled, SourceFailure, throwIfAborted } from './failure'
 
 export interface SourceGitHubClient {
 	getAuthenticatedApp(signal?: AbortSignal): Promise<GitHubAppIdentity>
+	getWebhookConfig?(signal?: AbortSignal): Promise<GitHubAppWebhookConfig>
+	updateWebhookConfig?(input: GitHubAppWebhookUpdate): Promise<GitHubAppWebhookConfig>
+	resolveOrganizationInstallation?(organization: string, signal?: AbortSignal): Promise<GitHubAppInstallation | null>
+	resolveRepositoryInstallation?(owner: string, repository: string, signal?: AbortSignal): Promise<GitHubAppInstallation | null>
+	resolveOrganizationInstallationId?(organization: string, signal?: AbortSignal): Promise<number | null>
 	resolveInstallationId(owner: string, repository: string, signal?: AbortSignal): Promise<number | null>
 	mintRepositoryToken(input: GitHubRepositoryTokenRequest): Promise<GitHubInstallationToken>
 }
@@ -40,10 +57,24 @@ export interface SourceGitHubConnection {
 		signal: AbortSignal,
 	): Promise<ZeropsSourceCredentialActivateResponseV1>
 	status(connectionId: string, signal: AbortSignal): Promise<ZeropsSourceCredentialStatusResponseV1>
+	configureWebhook?(
+		connectionId: string,
+		credentialSha256: string,
+		url: string,
+		secret: string,
+		signal: AbortSignal,
+	): Promise<ZeropsSourceWebhookConfigureResponseV1>
+	verifyInstallations?(
+		connectionId: string,
+		credentialSha256: string,
+		scope: ZeropsSourceInstallationScopeV1,
+		signal: AbortSignal,
+	): Promise<ZeropsSourceInstallationsVerifyResponseV1>
 }
 
 interface ActiveSnapshot extends SourceGitHubSnapshot {
 	readonly githubApp?: ZeropsSourceGitHubAppIdentityV1
+	readonly connectionId?: string
 }
 
 /** Owns the one atomic GitHub client used by every source operation. */
@@ -131,8 +162,11 @@ export class GitHubConnection implements SourceGitHubConnection {
 		if (current !== undefined && current.credentialSha256 !== actualDigest) {
 			throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
 		}
-		if (current === before || current === undefined || current.githubApp === undefined) {
-			this.active = { client, appId: bundle.githubAppId, credentialSha256: actualDigest, githubApp }
+		if (current?.connectionId !== undefined && current.connectionId !== connectionId) {
+			throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
+		}
+		if (current === before || current === undefined || current.githubApp === undefined || current.connectionId === undefined) {
+			this.active = { client, appId: bundle.githubAppId, credentialSha256: actualDigest, githubApp, connectionId }
 		}
 		return buildZeropsSourceCredentialActivateResponse({
 			connectionId,
@@ -146,6 +180,9 @@ export class GitHubConnection implements SourceGitHubConnection {
 		throwIfAborted(signal, 'credentials')
 		const snapshot = this.active
 		if (snapshot === undefined) return buildZeropsSourceCredentialStatusResponse({ connectionId, state: 'anonymous' })
+		if (snapshot.connectionId !== undefined && snapshot.connectionId !== connectionId) {
+			throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
+		}
 		let githubApp = snapshot.githubApp
 		if (githubApp === undefined) {
 			try {
@@ -154,16 +191,125 @@ export class GitHubConnection implements SourceGitHubConnection {
 			} catch (error) {
 				throw credentialFailure(error, signal)
 			}
-			if (this.active === snapshot) this.active = { ...snapshot, githubApp }
+			const current = this.active
+			if (current === snapshot) {
+				this.active = { ...snapshot, githubApp, connectionId }
+			} else if (
+				current === undefined || current.connectionId !== connectionId || current.credentialSha256 !== snapshot.credentialSha256
+			) {
+				throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
+			} else {
+				githubApp = current.githubApp ?? githubApp
+			}
+		}
+		const current = this.active
+		if (current === undefined || current.connectionId !== connectionId) {
+			throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
 		}
 		return buildZeropsSourceCredentialStatusResponse({
 			connectionId,
 			state: 'active',
 			credentialVersion: 1,
-			credentialSha256: snapshot.credentialSha256,
+			credentialSha256: current.credentialSha256,
 			githubApp,
 		})
 	}
+
+	async configureWebhook(
+		connectionId: string,
+		credentialSha256: string,
+		url: string,
+		secret: string,
+		signal: AbortSignal,
+	): Promise<ZeropsSourceWebhookConfigureResponseV1> {
+		const snapshot = this.requireActive(connectionId, credentialSha256)
+		try {
+			const update = snapshot.client.updateWebhookConfig
+			const read = snapshot.client.getWebhookConfig
+			if (update === undefined || read === undefined) throw new SourceFailure('credentials_invalid', 'credentials', false, 503)
+			const updated = await abortable(update.call(snapshot.client, { url, secret, signal }), signal)
+			const verified = await abortable(read.call(snapshot.client, signal), signal)
+			if (
+				updated.url !== url || updated.contentType !== 'json' || updated.insecureSsl !== '0'
+				|| verified.url !== url || verified.contentType !== 'json' || verified.insecureSsl !== '0'
+			) throw new SourceFailure('credentials_invalid', 'credentials', false, 422)
+			return buildZeropsSourceWebhookConfigureResponse({
+				connectionId,
+				credentialSha256,
+				webhook: { url, contentType: 'json', insecureSsl: '0' },
+			})
+		} catch (error) {
+			throw credentialFailure(error, signal)
+		}
+	}
+
+	async verifyInstallations(
+		connectionId: string,
+		credentialSha256: string,
+		scope: ZeropsSourceInstallationScopeV1,
+		signal: AbortSignal,
+	): Promise<ZeropsSourceInstallationsVerifyResponseV1> {
+		const snapshot = this.requireActive(connectionId, credentialSha256)
+		try {
+			const installation = scope.kind === 'organization'
+				? await resolveOrganizationInstallation(snapshot.client, scope.organization, signal)
+				: await resolveRepositoryInstallations(snapshot.client, scope.repositories, signal)
+			return buildZeropsSourceInstallationsVerifyResponse({
+				connectionId,
+				credentialSha256,
+				installation: installation === null
+					? { status: 'missing' }
+					: {
+						status: 'installed',
+						installationId: installation.id,
+						accountLogin: installation.accountLogin,
+						repositorySelection: installation.repositorySelection,
+					},
+			})
+		} catch (error) {
+			throw credentialFailure(error, signal)
+		}
+	}
+
+	private requireActive(connectionId: string, credentialSha256: string): ActiveSnapshot {
+		const snapshot = this.active
+		if (
+			snapshot === undefined || snapshot.githubApp === undefined || snapshot.connectionId !== connectionId
+			|| snapshot.credentialSha256 !== credentialSha256
+		) throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
+		return snapshot
+	}
+}
+
+async function resolveOrganizationInstallation(
+	client: SourceGitHubClient,
+	organization: string,
+	signal: AbortSignal,
+): Promise<GitHubAppInstallation | null> {
+	const resolve = client.resolveOrganizationInstallation
+	if (resolve === undefined) throw new SourceFailure('credentials_invalid', 'credentials', false, 503)
+	return await abortable(resolve.call(client, organization, signal), signal)
+}
+
+async function resolveRepositoryInstallations(
+	client: SourceGitHubClient,
+	repositories: readonly { readonly owner: string; readonly name: string }[],
+	signal: AbortSignal,
+): Promise<GitHubAppInstallation | null> {
+	const resolve = client.resolveRepositoryInstallation
+	if (resolve === undefined) throw new SourceFailure('credentials_invalid', 'credentials', false, 503)
+	let verified: GitHubAppInstallation | undefined
+	for (const repository of repositories) {
+		const installation = await abortable(resolve.call(client, repository.owner, repository.name, signal), signal)
+		if (installation === null) return null
+		if (
+			verified !== undefined
+			&& (verified.id !== installation.id || verified.accountLogin.toLowerCase() !== installation.accountLogin.toLowerCase()
+				|| verified.repositorySelection !== installation.repositorySelection)
+		) throw new SourceFailure('credentials_invalid', 'credentials', false, 422)
+		verified = installation
+	}
+	return verified ?? null
 }
 
 function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {

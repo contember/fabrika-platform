@@ -2,22 +2,28 @@ import {
 	buildZeropsSourceCancelRequest,
 	buildZeropsSourceCredentialActivateRequest,
 	buildZeropsSourceCredentialStatusRequest,
+	buildZeropsSourceInstallationsVerifyRequest,
 	buildZeropsSourceResolveInstallationRequest,
 	buildZeropsSourceResolveRequest,
 	buildZeropsSourceUploadRequest,
+	buildZeropsSourceWebhookConfigureRequest,
 	decodeZeropsSourceCancelResponse,
 	decodeZeropsSourceCredentialActivateResponse,
 	decodeZeropsSourceCredentialStatusResponse,
 	decodeZeropsSourceErrorEnvelope,
+	decodeZeropsSourceInstallationsVerifyResponse,
 	decodeZeropsSourceResolveInstallationResponse,
 	decodeZeropsSourceResolveResponse,
 	decodeZeropsSourceUploadResponse,
+	decodeZeropsSourceWebhookConfigureResponse,
 	ZEROPS_SOURCE_CANCEL_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
+	ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH,
 	ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH,
 	ZEROPS_SOURCE_RESOLVE_PATH,
 	ZEROPS_SOURCE_UPLOAD_PATH,
+	ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH,
 	type ZeropsSourceCancelInput,
 	type ZeropsSourceClient,
 	type ZeropsSourceCredentialActivateInput,
@@ -27,10 +33,14 @@ import {
 	type ZeropsSourceCredentialStatusResponseV1,
 	type ZeropsSourceErrorCode,
 	type ZeropsSourceErrorStage,
+	type ZeropsSourceInstallationsVerifyInput,
+	type ZeropsSourceInstallationsVerifyResponseV1,
 	type ZeropsSourceResolveInput,
 	type ZeropsSourceResolveResult,
 	type ZeropsSourceUploadInput,
 	type ZeropsSourceUploadResult,
+	type ZeropsSourceWebhookConfigureInput,
+	type ZeropsSourceWebhookConfigureResponseV1,
 } from '@fabrika/provider-zerops'
 
 const MIN_RPC_KEY_LENGTH = 32
@@ -43,6 +53,8 @@ export const ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS = {
 	cancel: 30_000,
 	activateCredentials: 60_000,
 	credentialStatus: 30_000,
+	configureWebhook: 30_000,
+	verifyInstallations: 30_000,
 }
 
 interface SourceResponse {
@@ -50,7 +62,15 @@ interface SourceResponse {
 	value: unknown
 }
 
-export type ZeropsSourceClientOperation = 'resolve-installation' | 'resolve' | 'upload' | 'cancel' | 'activate-credentials' | 'credential-status'
+export type ZeropsSourceClientOperation =
+	| 'resolve-installation'
+	| 'resolve'
+	| 'upload'
+	| 'cancel'
+	| 'activate-credentials'
+	| 'credential-status'
+	| 'configure-webhook'
+	| 'verify-installations'
 export type ZeropsSourceClientErrorCode = ZeropsSourceErrorCode | 'transport_error' | 'invalid_response'
 export type ZeropsSourceClientErrorStage = ZeropsSourceErrorStage | 'transport'
 
@@ -67,6 +87,8 @@ export interface HttpZeropsSourceClientOptions {
 		cancel?: number
 		activateCredentials?: number
 		credentialStatus?: number
+		configureWebhook?: number
+		verifyInstallations?: number
 	}
 }
 
@@ -104,6 +126,8 @@ export class HttpZeropsSourceClient implements ZeropsSourceClient, ZeropsSourceC
 			cancel: options.timeoutsMs?.cancel ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.cancel,
 			activateCredentials: options.timeoutsMs?.activateCredentials ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.activateCredentials,
 			credentialStatus: options.timeoutsMs?.credentialStatus ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.credentialStatus,
+			configureWebhook: options.timeoutsMs?.configureWebhook ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.configureWebhook,
+			verifyInstallations: options.timeoutsMs?.verifyInstallations ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.verifyInstallations,
 		}
 		for (const timeout of Object.values(this.timeoutsMs)) {
 			if (!Number.isSafeInteger(timeout) || timeout <= 0) {
@@ -218,6 +242,42 @@ export class HttpZeropsSourceClient implements ZeropsSourceClient, ZeropsSourceC
 		}
 	}
 
+	async configureWebhook(input: ZeropsSourceWebhookConfigureInput): Promise<ZeropsSourceWebhookConfigureResponseV1> {
+		const operation = 'configure-webhook'
+		const request = this.build(operation, () => buildZeropsSourceWebhookConfigureRequest(input))
+		const result = await this.post(operation, ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH, request, input.signal)
+		try {
+			const response = decodeZeropsSourceWebhookConfigureResponse(result.value)
+			if (
+				response.connectionId !== input.connectionId || response.credentialSha256 !== input.credentialSha256
+				|| response.webhook.url !== input.url
+			) throw invalidResponse(operation, result.status)
+			return response
+		} catch (error) {
+			if (error instanceof ZeropsSourceClientError) throw error
+			throw invalidResponse(operation, result.status)
+		}
+	}
+
+	async verifyInstallations(input: ZeropsSourceInstallationsVerifyInput): Promise<ZeropsSourceInstallationsVerifyResponseV1> {
+		const operation = 'verify-installations'
+		const request = this.build(operation, () => buildZeropsSourceInstallationsVerifyRequest(input))
+		const result = await this.post(operation, ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH, request, input.signal)
+		try {
+			const response = decodeZeropsSourceInstallationsVerifyResponse(result.value)
+			if (
+				response.connectionId !== input.connectionId || response.credentialSha256 !== input.credentialSha256
+				|| !installationResponseMatchesScope(response, input)
+			) {
+				throw invalidResponse(operation, result.status)
+			}
+			return response
+		} catch (error) {
+			if (error instanceof ZeropsSourceClientError) throw error
+			throw invalidResponse(operation, result.status)
+		}
+	}
+
 	private build<T>(operation: ZeropsSourceClientOperation, builder: () => T): T {
 		try {
 			return builder()
@@ -282,6 +342,8 @@ const timeoutFor = (operation: ZeropsSourceClientOperation, timeouts: typeof ZER
 	if (operation === 'resolve-installation') return timeouts.resolveInstallation
 	if (operation === 'activate-credentials') return timeouts.activateCredentials
 	if (operation === 'credential-status') return timeouts.credentialStatus
+	if (operation === 'configure-webhook') return timeouts.configureWebhook
+	if (operation === 'verify-installations') return timeouts.verifyInstallations
 	return timeouts[operation]
 }
 
@@ -340,7 +402,18 @@ const invalidResponse = (operation: ZeropsSourceClientOperation, status: number)
 const transportError = (operation: ZeropsSourceClientOperation): ZeropsSourceClientError =>
 	new ZeropsSourceClientError(operation, null, 'transport_error', 'transport', transportRetryable(operation))
 
-const transportRetryable = (operation: ZeropsSourceClientOperation): boolean => operation !== 'upload' && operation !== 'activate-credentials'
+const transportRetryable = (operation: ZeropsSourceClientOperation): boolean =>
+	operation !== 'upload' && operation !== 'activate-credentials' && operation !== 'configure-webhook'
+
+const installationResponseMatchesScope = (
+	response: ZeropsSourceInstallationsVerifyResponseV1,
+	input: ZeropsSourceInstallationsVerifyInput,
+): boolean => {
+	if (response.installation.status === 'missing') return true
+	const account = response.installation.accountLogin.toLowerCase()
+	if (input.scope.kind === 'organization') return account === input.scope.organization.toLowerCase()
+	return input.scope.repositories.every((repository) => repository.owner.toLowerCase() === account)
+}
 
 const abortError = (): DOMException => new DOMException('The source request was aborted', 'AbortError')
 

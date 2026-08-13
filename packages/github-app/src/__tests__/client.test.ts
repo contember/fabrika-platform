@@ -26,6 +26,7 @@ const installation = (id: number, login = 'contember', type: 'Organization' | 'U
 	app_id: 123456,
 	target_type: type,
 	account: { login, type },
+	repository_selection: 'selected',
 })
 
 const appIdentity = (overrides: Readonly<Record<string, unknown>> = {}): Record<string, unknown> => ({
@@ -282,16 +283,40 @@ describe('GitHubAppClient operator verification', () => {
 	test('verifies organization and repository installations without modifying repository access', async () => {
 		const capture = capturingFetch([
 			Response.json(installation(71, 'Contember')),
+			Response.json(installation(71, 'Contember')),
+			Response.json(installation(72, 'Contember', 'User')),
 			Response.json(installation(72, 'Contember', 'User')),
 		])
 		const github = await client(capture.fetch)
 		expect(await github.resolveOrganizationInstallationId('contember')).toBe(71)
+		expect(await github.resolveOrganizationInstallation('contember')).toEqual({
+			id: 71,
+			accountLogin: 'Contember',
+			accountType: 'Organization',
+			repositorySelection: 'selected',
+		})
 		expect(await github.resolveInstallationId('contember', 'fabrika')).toBe(72)
+		expect(await github.resolveRepositoryInstallation('contember', 'fabrika')).toEqual({
+			id: 72,
+			accountLogin: 'Contember',
+			accountType: 'User',
+			repositorySelection: 'selected',
+		})
 		expect(capture.requests.map((request) => request.url)).toEqual([
 			'https://github.example/api/v3/orgs/contember/installation',
+			'https://github.example/api/v3/orgs/contember/installation',
+			'https://github.example/api/v3/repos/contember/fabrika/installation',
 			'https://github.example/api/v3/repos/contember/fabrika/installation',
 		])
 		for (const request of capture.requests) expect(request.init?.method).toBeUndefined()
+	})
+
+	test('rejects an installation without a documented repository selection', async () => {
+		const response = installation(72)
+		delete response['repository_selection']
+		await expect((await client(capturingFetch([Response.json(response)]).fetch)).resolveInstallationId('contember', 'fabrika')).rejects.toThrow(
+			'GitHub App response is invalid',
+		)
 	})
 
 	test('rejects repository installations bound to another App, owner, or account type', async () => {

@@ -91,6 +91,7 @@ describe('source runtime configuration', () => {
 					id: 42,
 					app_id: 123,
 					target_type: 'Organization',
+					repository_selection: 'selected',
 					account: { login: 'contember', type: 'Organization' },
 				}))
 			},

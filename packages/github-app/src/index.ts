@@ -18,6 +18,13 @@ export interface GitHubInstallationToken {
 	expiresAt: number
 }
 
+export interface GitHubAppInstallation {
+	readonly id: number
+	readonly accountLogin: string
+	readonly accountType: 'Organization' | 'User'
+	readonly repositorySelection: 'all' | 'selected'
+}
+
 export interface GitHubAppIdentity {
 	readonly id: number
 	readonly slug: string
@@ -230,21 +237,31 @@ export class GitHubAppClient {
 
 	/** Resolve the App installation owned by one organization. A 404 is an expected miss. */
 	async resolveOrganizationInstallationId(organization: string, signal?: AbortSignal): Promise<number | null> {
+		return (await this.resolveOrganizationInstallation(organization, signal))?.id ?? null
+	}
+
+	/** Resolve and strictly bind the installation authority owned by one organization. */
+	async resolveOrganizationInstallation(organization: string, signal?: AbortSignal): Promise<GitHubAppInstallation | null> {
 		validateRepositoryComponent(organization)
 		const body = await this.requestJson(`/orgs/${organization}/installation`, {}, signal, true)
 		if (body === NOT_FOUND) return null
-		return this.decodeInstallationId(body, organization, 'Organization')
+		return this.decodeInstallation(body, organization, 'Organization')
 	}
 
 	/** Resolve the App installation for one GitHub repository. A 404 is an expected miss. */
 	async resolveInstallationId(owner: string, repository: string, signal?: AbortSignal): Promise<number | null> {
+		return (await this.resolveRepositoryInstallation(owner, repository, signal))?.id ?? null
+	}
+
+	/** Resolve and strictly bind the installation authority that grants one repository. */
+	async resolveRepositoryInstallation(owner: string, repository: string, signal?: AbortSignal): Promise<GitHubAppInstallation | null> {
 		validateRepositoryComponent(owner)
 		validateRepositoryComponent(repository)
 		const body = await this.requestJson(`/repos/${owner}/${repository}/installation`, {}, signal, true)
 		if (body === NOT_FOUND) {
 			return null
 		}
-		return this.decodeInstallationId(body, owner)
+		return this.decodeInstallation(body, owner)
 	}
 
 	/** Mint a read-only token restricted to one repository in the selected installation. */
@@ -340,22 +357,24 @@ export class GitHubAppClient {
 		}
 	}
 
-	private decodeInstallationId(body: unknown, accountLogin: string, requiredType?: 'Organization' | 'User'): number {
+	private decodeInstallation(body: unknown, accountLogin: string, requiredType?: 'Organization' | 'User'): GitHubAppInstallation {
 		const id = objectField(body, 'id')
 		const appId = objectField(body, 'app_id')
 		const targetType = objectField(body, 'target_type')
 		const account = objectField(body, 'account')
 		const login = objectField(account, 'login')
 		const accountType = objectField(account, 'type')
+		const repositorySelection = objectField(body, 'repository_selection')
 		if (
 			typeof id !== 'number' || !isPositiveSafeInteger(id) || typeof appId !== 'number' || !isPositiveSafeInteger(appId)
 			|| String(appId) !== this.appId || (targetType !== 'Organization' && targetType !== 'User') || accountType !== targetType
 			|| (requiredType !== undefined && targetType !== requiredType) || typeof login !== 'string'
 			|| login.toLowerCase() !== accountLogin.toLowerCase()
+			|| (repositorySelection !== 'all' && repositorySelection !== 'selected')
 		) {
 			throw responseError()
 		}
-		return id
+		return { id, accountLogin: login, accountType: targetType, repositorySelection }
 	}
 
 	private now(): number {

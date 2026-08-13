@@ -8,6 +8,10 @@ import {
 	type ZeropsSourceCredentialManager,
 	type ZeropsSourceCredentialStatusResponseV1,
 	type ZeropsSourceGitHubAppIdentityV1,
+	type ZeropsSourceInstallationsVerifyInput,
+	type ZeropsSourceInstallationsVerifyResponseV1,
+	type ZeropsSourceWebhookConfigureInput,
+	type ZeropsSourceWebhookConfigureResponseV1,
 } from './source'
 
 export const ZEROPS_SOURCE_CREDENTIAL_ENV = 'GITHUB_APP_CREDENTIALS'
@@ -53,6 +57,8 @@ export interface SourceConnectionAdmin {
 	inspect(signal: AbortSignal): Promise<SourceConnectionInspection>
 	activate(input: SourceConnectionActivateInput): Promise<ZeropsSourceCredentialActivateResponseV1>
 	status(input: SourceConnectionStatusInput): Promise<SourceConnectionStatus>
+	configureWebhook(input: ZeropsSourceWebhookConfigureInput): Promise<ZeropsSourceWebhookConfigureResponseV1>
+	verifyInstallations(input: ZeropsSourceInstallationsVerifyInput): Promise<ZeropsSourceInstallationsVerifyResponseV1>
 }
 
 export type SourceConnectionZeropsApi = Pick<ZeropsApi, 'findService' | 'listServiceEnv' | 'createServiceEnv'>
@@ -154,7 +160,23 @@ export function createZeropsSourceConnectionAdmin(options: ZeropsSourceConnectio
 				activated = await options.source.activate(input)
 			} catch (error) {
 				if (isAbort(error, input.signal)) throw error
-				throw new SourceConnectionAdminError('credential_activation')
+				let status: ZeropsSourceCredentialStatusResponseV1
+				try {
+					status = await options.source.status({ connectionId: input.connectionId, signal: input.signal })
+				} catch (statusError) {
+					if (isAbort(statusError, input.signal)) throw statusError
+					throw new SourceConnectionAdminError('credential_activation')
+				}
+				if (
+					status.state !== 'active' || status.connectionId !== input.connectionId || status.credentialSha256 !== digest
+				) throw new SourceConnectionAdminError('credential_activation')
+				activated = {
+					protocolVersion: 1,
+					connectionId: input.connectionId,
+					credentialVersion: status.credentialVersion,
+					credentialSha256: status.credentialSha256,
+					githubApp: status.githubApp,
+				}
 			}
 			if (activated.connectionId !== input.connectionId || activated.credentialSha256 !== digest) {
 				throw new SourceConnectionAdminError('credential_activation')
@@ -180,6 +202,48 @@ export function createZeropsSourceConnectionAdmin(options: ZeropsSourceConnectio
 			}
 			return { state: 'active', credentialSha256: runtime.credentialSha256, githubApp: runtime.githubApp }
 		},
+
+		configureWebhook: async (input) => {
+			await requireDurableDigest(input.credentialSha256, input.signal, inspectInternal)
+			try {
+				const response = await options.source.configureWebhook(input)
+				if (
+					response.connectionId !== input.connectionId || response.credentialSha256 !== input.credentialSha256
+					|| response.webhook.url !== input.url || response.webhook.contentType !== 'json' || response.webhook.insecureSsl !== '0'
+				) throw new SourceConnectionAdminError('credential_activation')
+				return response
+			} catch (error) {
+				if (isAbort(error, input.signal)) throw error
+				if (error instanceof SourceConnectionAdminError) throw error
+				throw new SourceConnectionAdminError('credential_activation')
+			}
+		},
+
+		verifyInstallations: async (input) => {
+			await requireDurableDigest(input.credentialSha256, input.signal, inspectInternal)
+			try {
+				const response = await options.source.verifyInstallations(input)
+				if (response.connectionId !== input.connectionId || response.credentialSha256 !== input.credentialSha256) {
+					throw new SourceConnectionAdminError('credential_activation')
+				}
+				return response
+			} catch (error) {
+				if (isAbort(error, input.signal)) throw error
+				if (error instanceof SourceConnectionAdminError) throw error
+				throw new SourceConnectionAdminError('credential_activation')
+			}
+		},
+	}
+}
+
+async function requireDurableDigest(
+	digest: string,
+	signal: AbortSignal,
+	inspect: (signal: AbortSignal) => Promise<DurableInspection>,
+): Promise<void> {
+	const durable = await inspect(signal)
+	if (durable.public.state !== 'durable' || durable.public.credentialSha256 !== digest) {
+		throw new SourceConnectionAdminError('credential_conflict')
 	}
 }
 

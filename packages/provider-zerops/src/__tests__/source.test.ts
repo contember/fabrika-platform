@@ -8,12 +8,16 @@ import {
 	buildZeropsSourceCredentialStatusRequest,
 	buildZeropsSourceCredentialStatusResponse,
 	buildZeropsSourceErrorEnvelope,
+	buildZeropsSourceInstallationsVerifyRequest,
+	buildZeropsSourceInstallationsVerifyResponse,
 	buildZeropsSourceResolveInstallationRequest,
 	buildZeropsSourceResolveInstallationResponse,
 	buildZeropsSourceResolveRequest,
 	buildZeropsSourceResolveResponse,
 	buildZeropsSourceUploadRequest,
 	buildZeropsSourceUploadResponse,
+	buildZeropsSourceWebhookConfigureRequest,
+	buildZeropsSourceWebhookConfigureResponse,
 	decodeZeropsSourceCancelRequest,
 	decodeZeropsSourceCancelResponse,
 	decodeZeropsSourceCredentialActivateRequest,
@@ -22,18 +26,24 @@ import {
 	decodeZeropsSourceCredentialStatusRequest,
 	decodeZeropsSourceCredentialStatusResponse,
 	decodeZeropsSourceErrorEnvelope,
+	decodeZeropsSourceInstallationsVerifyRequest,
+	decodeZeropsSourceInstallationsVerifyResponse,
 	decodeZeropsSourceResolveInstallationRequest,
 	decodeZeropsSourceResolveInstallationResponse,
 	decodeZeropsSourceResolveRequest,
 	decodeZeropsSourceResolveResponse,
 	decodeZeropsSourceUploadRequest,
 	decodeZeropsSourceUploadResponse,
+	decodeZeropsSourceWebhookConfigureRequest,
+	decodeZeropsSourceWebhookConfigureResponse,
 	normalizeZeropsSourceRepository,
 	serializeZeropsSourceCredentialBundle,
 	sha256ZeropsSourceCredentialBundle,
 	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
+	ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH,
 	ZEROPS_SOURCE_PROTOCOL_VERSION,
+	ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH,
 	type ZeropsSourceCancelRequestV1,
 	type ZeropsSourceCredentialActivateRequestV1,
 	type ZeropsSourceCredentialActivateResponseV1,
@@ -243,6 +253,66 @@ describe('Zerops source credential bundle and management wire', () => {
 		expect(message).toContain('unknown field')
 		expect(message).not.toContain(secretKey)
 		expect(message).not.toContain('ghs_must-not-leak')
+	})
+
+	test('strictly binds webhook configuration without returning its secret', () => {
+		const input = {
+			connectionId: 'connection-1',
+			credentialSha256: descriptorSha,
+			url: 'https://control.example.test/webhooks/github',
+			secret: 'must-not-leak',
+			signal: signal(),
+		}
+		const request = buildZeropsSourceWebhookConfigureRequest(input)
+		expect(decodeZeropsSourceWebhookConfigureRequest(request)).toEqual(request)
+		const response = buildZeropsSourceWebhookConfigureResponse({
+			connectionId: input.connectionId,
+			credentialSha256: input.credentialSha256,
+			webhook: { url: input.url, contentType: 'json', insecureSsl: '0' },
+		})
+		expect(decodeZeropsSourceWebhookConfigureResponse(response)).toEqual(response)
+		expect(JSON.stringify(response)).not.toContain(input.secret)
+		expect(ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH).toBe('/v1/source/github/webhook/configure')
+		expect(() => decodeZeropsSourceWebhookConfigureRequest({ ...request, secret: 'bad\nsecret' })).toThrow()
+	})
+
+	test('bounds and exactly decodes organization and repository installation scopes', () => {
+		const organization = buildZeropsSourceInstallationsVerifyRequest({
+			connectionId: 'connection-1',
+			credentialSha256: descriptorSha,
+			scope: { kind: 'organization', organization: 'contember' },
+			signal: signal(),
+		})
+		expect(decodeZeropsSourceInstallationsVerifyRequest(organization)).toEqual(organization)
+		const repositories = buildZeropsSourceInstallationsVerifyRequest({
+			connectionId: 'connection-1',
+			credentialSha256: descriptorSha,
+			scope: { kind: 'repositories', repositories: [repository] },
+			signal: signal(),
+		})
+		expect(decodeZeropsSourceInstallationsVerifyRequest(repositories)).toEqual(repositories)
+		const response = buildZeropsSourceInstallationsVerifyResponse({
+			connectionId: 'connection-1',
+			credentialSha256: descriptorSha,
+			installation: { status: 'installed', installationId: 42, accountLogin: 'contember', repositorySelection: 'selected' },
+		})
+		expect(decodeZeropsSourceInstallationsVerifyResponse(response)).toEqual(response)
+		expect(ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH).toBe('/v1/source/github/installations/verify')
+		expect(() =>
+			decodeZeropsSourceInstallationsVerifyRequest({
+				...repositories,
+				scope: { kind: 'repositories', repositories: [repository, repository] },
+			})
+		).toThrow()
+		expect(() =>
+			decodeZeropsSourceInstallationsVerifyResponse({
+				...response,
+				installation: { ...response.installation, token: 'secret' },
+			})
+		).toThrow()
+		expect(decodeZeropsSourceInstallationsVerifyResponse({ ...response, installation: { status: 'missing' } }).installation).toEqual({
+			status: 'missing',
+		})
 	})
 })
 

@@ -82,6 +82,8 @@ export function zeropsSourceConnectionAdmin(
 			inspect: () => Promise.resolve({ state: 'unavailable' }),
 			activate: () => Promise.reject(new SourceConnectionAdminError('invalid_configuration')),
 			status: () => Promise.resolve({ state: 'unavailable' }),
+			configureWebhook: () => Promise.reject(new SourceConnectionAdminError('invalid_configuration')),
+			verifyInstallations: () => Promise.reject(new SourceConnectionAdminError('invalid_configuration')),
 		}
 	}
 	return createZeropsSourceConnectionAdmin({

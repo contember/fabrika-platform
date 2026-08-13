@@ -1,4 +1,4 @@
-import type { GitHubAppIdentity } from '@fabrika/github-app'
+import type { GitHubAppIdentity, GitHubAppInstallation } from '@fabrika/github-app'
 import {
 	buildZeropsSourceCredentialBundle,
 	serializeZeropsSourceCredentialBundle,
@@ -25,10 +25,22 @@ const identity = (id = 123): GitHubAppIdentity => ({
 function client(app = identity()): SourceGitHubClient {
 	return {
 		getAuthenticatedApp: async () => app,
+		getWebhookConfig: async () => ({ url: 'https://control.example.test/webhooks/github', contentType: 'json', insecureSsl: '0' }),
+		updateWebhookConfig: async (input) => ({ url: input.url, contentType: 'json', insecureSsl: '0' }),
+		resolveOrganizationInstallation: async () => installation(41),
+		resolveRepositoryInstallation: async () => installation(42),
+		resolveOrganizationInstallationId: async () => 41,
 		resolveInstallationId: async () => 42,
 		mintRepositoryToken: async () => ({ token: 'token', expiresAt: Date.now() + 60_000 }),
 	}
 }
+
+const installation = (id: number, accountLogin = 'contember'): GitHubAppInstallation => ({
+	id,
+	accountLogin,
+	accountType: 'Organization',
+	repositorySelection: 'selected',
+})
 
 function bundle(appId = '123', privateKeyPem = PEM): string {
 	return serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({ githubAppId: appId, privateKeyPem }))
@@ -220,10 +232,143 @@ describe('source GitHub connection activation', () => {
 			}),
 		})
 		const first = await connection.status('connection-1', new AbortController().signal)
-		const second = await connection.status('connection-2', new AbortController().signal)
+		const second = await connection.status('connection-1', new AbortController().signal)
 		expect(first.state).toBe('active')
 		expect(second.state).toBe('active')
 		expect(calls).toBe(1)
 		expect(JSON.stringify([first, second])).not.toContain('PRIVATE KEY')
+	})
+
+	test('binds only one connection id when concurrent status calls verify one boot snapshot', async () => {
+		const release = Promise.withResolvers<void>()
+		let calls = 0
+		const connection = await GitHubConnection.create({
+			credentialBundle: bundle(),
+			createClient: async () => ({
+				...client(),
+				getAuthenticatedApp: async () => {
+					calls++
+					await release.promise
+					return identity()
+				},
+			}),
+		})
+		const first = connection.status('connection-1', new AbortController().signal)
+		const second = connection.status('connection-2', new AbortController().signal)
+		while (calls < 2) await Bun.sleep(1)
+		release.resolve()
+		const results = await Promise.allSettled([first, second])
+		expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+		expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
+		expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+			status: 'rejected',
+			reason: { code: 'credentials_conflict' },
+		})
+	})
+
+	test('configures a structurally verified webhook and verifies installations on the bound active snapshot', async () => {
+		const secrets: string[] = []
+		const connection = await GitHubConnection.create({
+			createClient: async () => ({
+				...client(),
+				updateWebhookConfig: async (input) => {
+					secrets.push(input.secret)
+					return { url: input.url, contentType: 'json', insecureSsl: '0' }
+				},
+			}),
+		})
+		const value = bundle()
+		const digest = await sha256ZeropsSourceCredentialBundle(value)
+		await connection.activate('connection-1', value, digest, new AbortController().signal)
+		const webhook = await connection.configureWebhook(
+			'connection-1',
+			digest,
+			'https://control.example.test/webhooks/github',
+			'must-not-leak',
+			new AbortController().signal,
+		)
+		expect(JSON.stringify(webhook)).not.toContain('must-not-leak')
+		expect(secrets).toEqual(['must-not-leak'])
+		expect(
+			await connection.verifyInstallations(
+				'connection-1',
+				digest,
+				{ kind: 'repositories', repositories: [{ owner: 'contember', name: 'fabrika-platform' }] },
+				new AbortController().signal,
+			),
+		).toMatchObject({
+			installation: { status: 'installed', installationId: 42, accountLogin: 'contember', repositorySelection: 'selected' },
+		})
+	})
+
+	test('rejects repository grants that resolve to different installations or accounts', async () => {
+		let call = 0
+		const connection = await GitHubConnection.create({
+			createClient: async () => ({
+				...client(),
+				resolveRepositoryInstallation: async () => call++ === 0 ? installation(42) : installation(43, 'attacker'),
+			}),
+		})
+		const value = bundle()
+		const digest = await sha256ZeropsSourceCredentialBundle(value)
+		await connection.activate('connection-1', value, digest, new AbortController().signal)
+		await expect(connection.verifyInstallations(
+			'connection-1',
+			digest,
+			{
+				kind: 'repositories',
+				repositories: [{ owner: 'contember', name: 'one' }, { owner: 'contember', name: 'two' }],
+			},
+			new AbortController().signal,
+		)).rejects.toMatchObject({ code: 'credentials_invalid', status: 422 })
+	})
+
+	test('rejects inactive or mismatched connection administration without calling GitHub', async () => {
+		let calls = 0
+		const connection = await GitHubConnection.create({
+			createClient: async () => ({
+				...client(),
+				updateWebhookConfig: async () => {
+					calls++
+					return { url: 'https://control.example.test/webhooks/github', contentType: 'json', insecureSsl: '0' }
+				},
+			}),
+		})
+		await expect(connection.verifyInstallations(
+			'connection-1',
+			'a'.repeat(64),
+			{ kind: 'organization', organization: 'contember' },
+			new AbortController().signal,
+		)).rejects.toMatchObject({ code: 'credentials_conflict' })
+		expect(calls).toBe(0)
+	})
+
+	test('preserves cancellation during webhook mutation without replacing the active snapshot', async () => {
+		const started = Promise.withResolvers<void>()
+		const connection = await GitHubConnection.create({
+			createClient: async () => ({
+				...client(),
+				updateWebhookConfig: async () => {
+					started.resolve()
+					return new Promise(() => {})
+				},
+			}),
+		})
+		const value = bundle()
+		const digest = await sha256ZeropsSourceCredentialBundle(value)
+		await connection.activate('connection-1', value, digest, new AbortController().signal)
+		const before = connection.snapshot()
+		const controller = new AbortController()
+		const operation = connection.configureWebhook(
+			'connection-1',
+			digest,
+			'https://control.example.test/webhooks/github',
+			'must-not-leak',
+			controller.signal,
+		)
+		await started.promise
+		controller.abort('private reason')
+		await expect(operation).rejects.toMatchObject({ code: 'cancelled', stage: 'credentials' })
+		expect(connection.snapshot()).toBe(before)
 	})
 })

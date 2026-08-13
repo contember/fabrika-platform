@@ -8,15 +8,19 @@ import {
 	decodeZeropsSourceCancelRequest,
 	decodeZeropsSourceCredentialActivateRequest,
 	decodeZeropsSourceCredentialStatusRequest,
+	decodeZeropsSourceInstallationsVerifyRequest,
 	decodeZeropsSourceResolveInstallationRequest,
 	decodeZeropsSourceResolveRequest,
 	decodeZeropsSourceUploadRequest,
+	decodeZeropsSourceWebhookConfigureRequest,
 	ZEROPS_SOURCE_CANCEL_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
+	ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH,
 	ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH,
 	ZEROPS_SOURCE_RESOLVE_PATH,
 	ZEROPS_SOURCE_UPLOAD_PATH,
+	ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH,
 	type ZeropsSourceErrorStage,
 } from '@fabrika/provider-zerops'
 import { createHash, timingSafeEqual } from 'node:crypto'
@@ -157,6 +161,37 @@ export class ZeropsSourceService {
 							input.connectionId,
 							input.credentialBundle,
 							input.credentialSha256,
+							requestSignal,
+						),
+					)
+				}
+				case ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH: {
+					const input = decodeRequest(() => decodeZeropsSourceWebhookConfigureRequest(body))
+					if (this.github === undefined) throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
+					const configureWebhook = this.github.configureWebhook
+					if (configureWebhook === undefined) throw new SourceFailure('credentials_invalid', 'credentials', false, 503)
+					return jsonResponse(
+						await configureWebhook.call(
+							this.github,
+							input.connectionId,
+							input.credentialSha256,
+							input.url,
+							input.secret,
+							requestSignal,
+						),
+					)
+				}
+				case ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH: {
+					const input = decodeRequest(() => decodeZeropsSourceInstallationsVerifyRequest(body))
+					if (this.github === undefined) throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
+					const verifyInstallations = this.github.verifyInstallations
+					if (verifyInstallations === undefined) throw new SourceFailure('credentials_invalid', 'credentials', false, 503)
+					return jsonResponse(
+						await verifyInstallations.call(
+							this.github,
+							input.connectionId,
+							input.credentialSha256,
+							input.scope,
 							requestSignal,
 						),
 					)
@@ -309,7 +344,8 @@ export class ZeropsSourceService {
 		} catch (error) {
 			if (request.signal.aborted) return failureResponse(cancelled(stage))
 			if (credentialDeadline?.timedOut() === true) {
-				return failureResponse(new SourceFailure('internal', 'credentials', true, 504))
+				const retryable = path !== ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH && path !== ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH
+				return failureResponse(new SourceFailure('internal', 'credentials', retryable, 504))
 			}
 			return failureResponse(toFailure(error, stage))
 		} finally {
@@ -578,7 +614,10 @@ function stageForPath(path: string): ZeropsSourceErrorStage {
 	if (path === ZEROPS_SOURCE_RESOLVE_PATH) return 'resolve'
 	if (path === ZEROPS_SOURCE_UPLOAD_PATH) return 'upload'
 	if (path === ZEROPS_SOURCE_CANCEL_PATH) return 'cancel'
-	if (path === ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH || path === ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH) return 'credentials'
+	if (
+		path === ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH || path === ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH
+		|| path === ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH || path === ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH
+	) return 'credentials'
 	return 'validate'
 }
 

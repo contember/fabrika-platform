@@ -29,6 +29,8 @@ describe('the Zerops namespace process configuration', () => {
 			{
 				activate: () => Promise.reject(new Error('not called')),
 				status: () => Promise.reject(new Error('not called')),
+				configureWebhook: () => Promise.reject(new Error('not called')),
+				verifyInstallations: () => Promise.reject(new Error('not called')),
 			},
 			{
 				findService: ({ projectId }) => {
@@ -46,7 +48,12 @@ describe('the Zerops namespace process configuration', () => {
 	test('keeps legacy installations bootable and reports connection repair when project identity is absent', async () => {
 		const admin = zeropsSourceConnectionAdmin(
 			{ FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder' },
-			{ activate: () => Promise.reject(new Error('not called')), status: () => Promise.reject(new Error('not called')) },
+			{
+				activate: () => Promise.reject(new Error('not called')),
+				status: () => Promise.reject(new Error('not called')),
+				configureWebhook: () => Promise.reject(new Error('not called')),
+				verifyInstallations: () => Promise.reject(new Error('not called')),
+			},
 			{
 				findService: () => Promise.resolve(null),
 				listServiceEnv: () => Promise.resolve([]),

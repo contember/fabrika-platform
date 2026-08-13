@@ -2,9 +2,11 @@ import {
 	ZEROPS_SOURCE_CANCEL_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
+	ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH,
 	ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH,
 	ZEROPS_SOURCE_RESOLVE_PATH,
 	ZEROPS_SOURCE_UPLOAD_PATH,
+	ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH,
 	type ZeropsSourceGitHubAppIdentityV1,
 	type ZeropsSourceResolveInput,
 	type ZeropsSourceUploadInput,
@@ -80,6 +82,8 @@ const harness = (
 		cancel?: number
 		activateCredentials?: number
 		credentialStatus?: number
+		configureWebhook?: number
+		verifyInstallations?: number
 	},
 ): { client: HttpZeropsSourceClient; calls: RecordedCall[] } => {
 	const calls: RecordedCall[] = []
@@ -143,6 +147,100 @@ describe('HTTP Zerops source client requests', () => {
 			credentialSha256: CREDENTIAL_SHA,
 		})
 		expect(body(calls[1] ?? missingCall())).toEqual({ protocolVersion: 1, connectionId: 'connection-1' })
+	})
+
+	test('configures webhook without echoing its secret and binds installation results to the requested scope', async () => {
+		const webhookUrl = 'https://control.example.test/webhooks/github'
+		const { client, calls } = harness(async (url) => {
+			if (url.endsWith(ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH)) {
+				return jsonResponse({
+					protocolVersion: 1,
+					connectionId: 'connection-1',
+					credentialSha256: CREDENTIAL_SHA,
+					webhook: { url: webhookUrl, contentType: 'json', insecureSsl: '0' },
+				})
+			}
+			return jsonResponse({
+				protocolVersion: 1,
+				connectionId: 'connection-1',
+				credentialSha256: CREDENTIAL_SHA,
+				installation: { status: 'installed', installationId: 42, accountLogin: 'contember', repositorySelection: 'selected' },
+			})
+		})
+		const signal = new AbortController().signal
+		const webhook = await client.configureWebhook({
+			connectionId: 'connection-1',
+			credentialSha256: CREDENTIAL_SHA,
+			url: webhookUrl,
+			secret: 'must-not-leak',
+			signal,
+		})
+		expect(JSON.stringify(webhook)).not.toContain('must-not-leak')
+		await expect(client.verifyInstallations({
+			connectionId: 'connection-1',
+			credentialSha256: CREDENTIAL_SHA,
+			scope: { kind: 'repositories', repositories: [{ owner: 'contember', name: 'fabrika-platform' }] },
+			signal,
+		})).resolves.toMatchObject({ installation: { status: 'installed', installationId: 42, accountLogin: 'contember' } })
+		expect(calls.map((call) => call.url)).toEqual([
+			`${ORIGIN}${ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH}`,
+			`${ORIGIN}${ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH}`,
+		])
+		expect(body(calls[0] ?? missingCall())).toMatchObject({ secret: 'must-not-leak' })
+	})
+
+	test('rejects an installation response bound to a different account', async () => {
+		const { client } = harness(async () =>
+			jsonResponse({
+				protocolVersion: 1,
+				connectionId: 'connection-1',
+				credentialSha256: CREDENTIAL_SHA,
+				installation: { status: 'installed', installationId: 42, accountLogin: 'attacker', repositorySelection: 'all' },
+			})
+		)
+		const error = await clientError(client.verifyInstallations({
+			connectionId: 'connection-1',
+			credentialSha256: CREDENTIAL_SHA,
+			scope: { kind: 'repositories', repositories: [{ owner: 'contember', name: 'fabrika-platform' }] },
+			signal: new AbortController().signal,
+		}))
+		expect(error).toMatchObject({ code: 'invalid_response', retryable: false })
+	})
+
+	test('bounds webhook mutation, preserves cancellation, and never exposes its secret', async () => {
+		const neverResponds: ZeropsSourceFetch = (_url, init) =>
+			new Promise((_resolve, reject) => {
+				init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+			})
+		const timed = harness(neverResponds, { configureWebhook: 5 })
+		const input = {
+			connectionId: 'connection-1',
+			credentialSha256: CREDENTIAL_SHA,
+			url: 'https://control.example.test/webhooks/github',
+			secret: 'must-not-leak',
+			signal: new AbortController().signal,
+		}
+		const timeout = await clientError(timed.client.configureWebhook(input))
+		expect(timeout).toMatchObject({ operation: 'configure-webhook', code: 'transport_error', retryable: false })
+		expect(timeout.message).not.toContain(input.secret)
+		const controller = new AbortController()
+		controller.abort(`private ${input.secret}`)
+		const cancelled = await timed.client.configureWebhook({ ...input, signal: controller.signal }).catch((error: unknown) => error)
+		expect(cancelled).toBeInstanceOf(DOMException)
+		expect(cancelled instanceof Error ? cancelled.message : '').not.toContain(input.secret)
+	})
+
+	test('preserves non-retryable source ambiguity after webhook dispatch', async () => {
+		const { client } = harness(async () => jsonResponse({ error: { code: 'internal', stage: 'credentials', retryable: false } }, 504))
+		const error = await clientError(client.configureWebhook({
+			connectionId: 'connection-1',
+			credentialSha256: CREDENTIAL_SHA,
+			url: 'https://control.example.test/webhooks/github',
+			secret: 'must-not-leak',
+			signal: new AbortController().signal,
+		}))
+		expect(error).toMatchObject({ operation: 'configure-webhook', status: 504, code: 'internal', retryable: false })
+		expect(error.message).not.toContain('must-not-leak')
 	})
 
 	test('rejects stale credential responses and treats ambiguous activation transport as non-retryable', async () => {

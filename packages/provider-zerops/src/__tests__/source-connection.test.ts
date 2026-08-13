@@ -62,10 +62,12 @@ const fakeApi = (state: FakeState): SourceConnectionZeropsApi => ({
 
 class FakeSource implements ZeropsSourceCredentialManager {
 	readonly activations: ZeropsSourceCredentialActivateInput[] = []
+	activationFailure?: Error
 	statusResult: ZeropsSourceCredentialStatusResponseV1 | undefined
 
 	async activate(input: ZeropsSourceCredentialActivateInput): Promise<ZeropsSourceCredentialActivateResponseV1> {
 		this.activations.push(input)
+		if (this.activationFailure !== undefined) throw this.activationFailure
 		return {
 			protocolVersion: 1,
 			connectionId: input.connectionId,
@@ -77,6 +79,29 @@ class FakeSource implements ZeropsSourceCredentialManager {
 
 	status(input: ZeropsSourceCredentialStatusInput): Promise<ZeropsSourceCredentialStatusResponseV1> {
 		return Promise.resolve(this.statusResult ?? { protocolVersion: 1, connectionId: input.connectionId, state: 'anonymous' })
+	}
+
+	configureWebhook(
+		input: Parameters<ZeropsSourceCredentialManager['configureWebhook']>[0],
+	): ReturnType<ZeropsSourceCredentialManager['configureWebhook']> {
+		return Promise.resolve({
+			protocolVersion: 1,
+			connectionId: input.connectionId,
+			credentialSha256: input.credentialSha256,
+			webhook: { url: input.url, contentType: 'json', insecureSsl: '0' },
+		})
+	}
+
+	verifyInstallations(
+		input: Parameters<ZeropsSourceCredentialManager['verifyInstallations']>[0],
+	): ReturnType<ZeropsSourceCredentialManager['verifyInstallations']> {
+		const accountLogin = input.scope.kind === 'organization' ? input.scope.organization : input.scope.repositories[0]?.owner ?? 'missing'
+		return Promise.resolve({
+			protocolVersion: 1,
+			connectionId: input.connectionId,
+			credentialSha256: input.credentialSha256,
+			installation: { status: 'installed', installationId: 42, accountLogin, repositorySelection: 'selected' },
+		})
 	}
 }
 
@@ -204,6 +229,63 @@ describe('Zerops source connection administration', () => {
 			credentialSha256: digest,
 			githubApp: IDENTITY,
 		})
+	})
+
+	test('recovers an ambiguous activation only through an exact runtime status readback', async () => {
+		const digest = await sha256ZeropsSourceCredentialBundle(BUNDLE)
+		const source = new FakeSource()
+		source.activationFailure = new Error('lost activation response with private upstream detail')
+		source.statusResult = {
+			protocolVersion: 1,
+			connectionId: 'connection-1',
+			state: 'active',
+			credentialVersion: 1,
+			credentialSha256: digest,
+			githubApp: IDENTITY,
+		}
+		const admin = createZeropsSourceConnectionAdmin({
+			api: fakeApi(state({ [ZEROPS_SOURCE_CREDENTIAL_ENV]: BUNDLE })),
+			source,
+			projectId: PROJECT_ID,
+		})
+		await expect(admin.activate({ connectionId: 'connection-1', credentialBundle: BUNDLE, credentialSha256: digest, signal: signal() }))
+			.resolves.toMatchObject({ connectionId: 'connection-1', credentialSha256: digest, githubApp: IDENTITY })
+		source.statusResult = { ...source.statusResult, credentialSha256: 'f'.repeat(64) }
+		const raised = await admin.activate({ connectionId: 'connection-1', credentialBundle: BUNDLE, credentialSha256: digest, signal: signal() })
+			.catch((error: unknown) => error)
+		expect(raised).toMatchObject({ code: 'credential_activation' })
+		expect(raised instanceof Error ? raised.message : '').not.toContain('private upstream detail')
+	})
+
+	test('binds webhook and installation administration to the exact durable digest', async () => {
+		const digest = await sha256ZeropsSourceCredentialBundle(BUNDLE)
+		const admin = createZeropsSourceConnectionAdmin({
+			api: fakeApi(state({ [ZEROPS_SOURCE_CREDENTIAL_ENV]: BUNDLE })),
+			source: new FakeSource(),
+			projectId: PROJECT_ID,
+		})
+		await expect(admin.configureWebhook({
+			connectionId: 'connection-1',
+			credentialSha256: digest,
+			url: 'https://control.example.test/webhooks/github',
+			secret: 'must-not-leak',
+			signal: signal(),
+		})).resolves.toMatchObject({ credentialSha256: digest, webhook: { contentType: 'json', insecureSsl: '0' } })
+		await expect(admin.verifyInstallations({
+			connectionId: 'connection-1',
+			credentialSha256: digest,
+			scope: { kind: 'organization', organization: 'contember' },
+			signal: signal(),
+		})).resolves.toMatchObject({
+			installation: { status: 'installed', installationId: 42, accountLogin: 'contember', repositorySelection: 'selected' },
+		})
+		await expect(admin.configureWebhook({
+			connectionId: 'connection-1',
+			credentialSha256: 'd'.repeat(64),
+			url: 'https://control.example.test/webhooks/github',
+			secret: 'must-not-leak',
+			signal: signal(),
+		})).rejects.toMatchObject({ code: 'credential_conflict' })
 	})
 
 	test('preserves abort without including its reason', async () => {
