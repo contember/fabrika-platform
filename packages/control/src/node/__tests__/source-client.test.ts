@@ -1,15 +1,21 @@
 import {
 	ZEROPS_SOURCE_CANCEL_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2,
 	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2,
 	ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH,
 	ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH,
 	ZEROPS_SOURCE_RESOLVE_PATH,
+	ZEROPS_SOURCE_RESOLVE_PATH_V2,
 	ZEROPS_SOURCE_UPLOAD_PATH,
+	ZEROPS_SOURCE_UPLOAD_PATH_V2,
 	ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH,
 	type ZeropsSourceGitHubAppIdentityV1,
 	type ZeropsSourceResolveInput,
+	type ZeropsSourceResolveInputV2,
 	type ZeropsSourceUploadInput,
+	type ZeropsSourceUploadInputV2,
 } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import {
@@ -67,6 +73,27 @@ const uploadInput = (signal: AbortSignal): ZeropsSourceUploadInput => ({
 	signal,
 })
 
+const resolveInputV2 = (signal: AbortSignal): ZeropsSourceResolveInputV2 => ({
+	runId: 'run-2',
+	repository: REPOSITORY,
+	requestedRef: 'refs/heads/main',
+	expectedCommitSha: COMMIT,
+	privateBinding: { connectionId: 'connection-2', installationId: 84 },
+	descriptorSha256: DESCRIPTOR_SHA,
+	signal,
+})
+
+const uploadInputV2 = (signal: AbortSignal): ZeropsSourceUploadInputV2 => ({
+	runId: 'run-2',
+	appVersionId: 'version-2',
+	repository: REPOSITORY,
+	commitSha: COMMIT,
+	privateBinding: { connectionId: 'connection-2', installationId: 84 },
+	uploadUrl: UPLOAD_URL,
+	descriptor: { path: 'zerops.yaml', sha256: DESCRIPTOR_SHA },
+	signal,
+})
+
 const body = (call: RecordedCall): unknown => {
 	if (typeof call.init.body !== 'string') throw new Error('expected a JSON string body')
 	const parsed: unknown = JSON.parse(call.init.body)
@@ -108,6 +135,67 @@ const clientError = async (operation: Promise<unknown>): Promise<ZeropsSourceCli
 }
 
 describe('HTTP Zerops source client requests', () => {
+	test('uses the exact v2 credential, resolve, and upload paths with bound private coordinates', async () => {
+		const { client, calls } = harness(async (url) => {
+			if (url.endsWith(ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2)) {
+				return jsonResponse({
+					protocolVersion: 2,
+					connectionId: 'connection-2',
+					credentialVersion: 2,
+					credentialSha256: CREDENTIAL_SHA,
+					githubApp: APP_IDENTITY,
+				})
+			}
+			if (url.endsWith(ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2)) {
+				return jsonResponse({ protocolVersion: 2, connectionId: 'connection-2', state: 'anonymous' })
+			}
+			if (url.endsWith(ZEROPS_SOURCE_RESOLVE_PATH_V2)) {
+				return jsonResponse({ protocolVersion: 2, runId: 'run-2', commitSha: COMMIT, descriptorSha256: DESCRIPTOR_SHA })
+			}
+			return jsonResponse({
+				protocolVersion: 2,
+				runId: 'run-2',
+				appVersionId: 'version-2',
+				commitSha: COMMIT,
+				descriptorSha256: DESCRIPTOR_SHA,
+			})
+		})
+		const signal = new AbortController().signal
+		await expect(client.activateV2({
+			connectionId: 'connection-2',
+			credentialBundle: JSON.stringify({
+				version: 2,
+				connectionId: 'connection-2',
+				githubAppId: '123',
+				privateKeyPem: '-----BEGIN PRIVATE KEY-----\nMAMCAQE=\n-----END PRIVATE KEY-----\n',
+			}),
+			credentialSha256: CREDENTIAL_SHA,
+			signal,
+		})).resolves.toMatchObject({ protocolVersion: 2, connectionId: 'connection-2' })
+		await expect(client.statusV2({ connectionId: 'connection-2', signal })).resolves.toEqual({
+			protocolVersion: 2,
+			connectionId: 'connection-2',
+			state: 'anonymous',
+		})
+		await expect(client.resolveV2(resolveInputV2(signal))).resolves.toMatchObject({ runId: 'run-2', commitSha: COMMIT })
+		await expect(client.uploadV2(uploadInputV2(signal))).resolves.toMatchObject({ runId: 'run-2', appVersionId: 'version-2' })
+
+		expect(calls.map((call) => call.url)).toEqual([
+			`${ORIGIN}${ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2}`,
+			`${ORIGIN}${ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2}`,
+			`${ORIGIN}${ZEROPS_SOURCE_RESOLVE_PATH_V2}`,
+			`${ORIGIN}${ZEROPS_SOURCE_UPLOAD_PATH_V2}`,
+		])
+		expect(body(calls[2] ?? missingCall())).toMatchObject({
+			protocolVersion: 2,
+			privateBinding: { connectionId: 'connection-2', installationId: 84 },
+		})
+		expect(body(calls[3] ?? missingCall())).toMatchObject({
+			protocolVersion: 2,
+			privateBinding: { connectionId: 'connection-2', installationId: 84 },
+		})
+	})
+
 	test('activates and inspects credentials through bound shared endpoints', async () => {
 		const { client, calls } = harness(async (url) =>
 			url.endsWith(ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH)
@@ -354,6 +442,28 @@ describe('HTTP Zerops source client requests', () => {
 })
 
 describe('HTTP Zerops source client response validation', () => {
+	test('rejects stale v2 resolve and upload response coordinates without exposing response fields', async () => {
+		const secret = 'response-secret-that-must-not-leak'
+		const resolve = harness(async () =>
+			jsonResponse({ protocolVersion: 2, runId: 'other-run', commitSha: COMMIT, descriptorSha256: DESCRIPTOR_SHA, secret })
+		)
+		const resolveError = await clientError(resolve.client.resolveV2(resolveInputV2(new AbortController().signal)))
+		expect(resolveError).toMatchObject({ operation: 'resolve-v2', code: 'invalid_response' })
+		expect(resolveError.message).not.toContain(secret)
+
+		const upload = harness(async () =>
+			jsonResponse({
+				protocolVersion: 2,
+				runId: 'run-2',
+				appVersionId: 'other-version',
+				commitSha: COMMIT,
+				descriptorSha256: DESCRIPTOR_SHA,
+			})
+		)
+		const uploadError = await clientError(upload.client.uploadV2(uploadInputV2(new AbortController().signal)))
+		expect(uploadError).toMatchObject({ operation: 'upload-v2', code: 'invalid_response', retryable: false })
+	})
+
 	test('preserves caller cancellation before and during installation lookup', async () => {
 		let calls = 0
 		const preAborted = harness(async () => {

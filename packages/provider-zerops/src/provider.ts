@@ -30,11 +30,23 @@ import {
 	zeropsArtifactCodec,
 } from './manifest'
 import { buildZeropsPlan, resolveDeployHostname, type ZeropsJobSpec, type ZeropsPlan } from './plan'
+import type { ZeropsSourceUploadInputV2, ZeropsSourceUploadResult } from './source'
 import type { ZeropsRunState, ZeropsRuntimeSource, ZeropsRuntimeTarget } from './types'
 
 export const CANCELLED = 'deploy cancelled'
 
 type ZeropsRun = TypedProviderRun<ZeropsRuntimeTarget, FabrikaManifest>
+
+export interface ZeropsSourceTransportBinding {
+	readonly connectionId: string
+	readonly installationId: number
+	readonly transportKind: 'legacy-v1' | 'keyed-v2'
+}
+
+export interface ZeropsSourceTransportRouting {
+	bindingForRun(runId: string): ZeropsSourceTransportBinding | undefined
+	uploadV2(input: ZeropsSourceUploadInputV2): Promise<ZeropsSourceUploadResult>
+}
 
 /** How often `await-deploy` asks Zerops for the version's status. */
 const POLL_INTERVAL_MS = 3000
@@ -94,6 +106,7 @@ interface StepEnv {
 	log: (line: string) => void
 	signal: AbortSignal
 	dryRun: boolean
+	sourceTransport?: ZeropsSourceTransportRouting
 	/** Set by `trigger-deploy`, read by `await-deploy` — the only state that crosses a step boundary. */
 	state: { appVersionId?: string; processId?: string }
 }
@@ -276,7 +289,7 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 			let buildTriggerRequested = false
 			try {
 				await run.events.externalId(version.id, runState(version.id, 'version_created'))
-				const uploaded = await source.client.upload({
+				const uploadInput = {
 					runId: source.runtime.runId,
 					appVersionId: version.id,
 					repository: source.runtime.repository,
@@ -290,7 +303,22 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 						sha256: artifact.target.sourceDescriptor.sha256,
 					},
 					signal,
-				})
+				}
+				const sourceTransport = env.sourceTransport
+				const binding = sourceTransport?.bindingForRun(source.runtime.runId)
+				if (binding !== undefined && source.runtime.githubInstallationId !== binding.installationId) {
+					throw new Error('zerops: source transport binding has different installation coordinates')
+				}
+				let uploaded: ZeropsSourceUploadResult
+				if (binding?.transportKind === 'keyed-v2') {
+					if (sourceTransport === undefined) throw new Error('zerops: keyed source transport is unavailable')
+					uploaded = await sourceTransport.uploadV2({
+						...uploadInput,
+						privateBinding: { connectionId: binding.connectionId, installationId: binding.installationId },
+					})
+				} else {
+					uploaded = await source.client.upload(uploadInput)
+				}
 				if (
 					uploaded.runId !== source.runtime.runId
 					|| uploaded.appVersionId !== version.id
@@ -404,6 +432,7 @@ export type ZeropsProvider = ProviderModule<'zerops', ZeropsRuntimeTarget, Fabri
 /** Construct an independently testable Zerops provider against one collaborator factory. */
 export const createZeropsProvider = (
 	collaborators: ZeropsCollaboratorFactory = defaultZeropsCollaborators,
+	sourceTransport?: ZeropsSourceTransportRouting,
 ): ZeropsProvider =>
 	createProvider({
 		id: 'zerops',
@@ -431,6 +460,7 @@ export const createZeropsProvider = (
 				log: run.events.log,
 				signal: run.signal,
 				dryRun: run.dryRun,
+				...(sourceTransport === undefined ? {} : { sourceTransport }),
 				state: {},
 			}
 			const byId = new Map(plan.steps.map((step): [string, ZeropsJobSpec] => [step.id, step]))

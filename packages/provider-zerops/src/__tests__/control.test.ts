@@ -15,8 +15,9 @@ import { zeropsTargetCodec } from '../codec'
 import { createZeropsControlProvider, type ZeropsControlProviderOptions, type ZeropsProviderExecutor, zeropsStoredTargetCodec } from '../control'
 import { compileFabrikaManifest, zeropsArtifactCodec, type ZeropsArtifactSourceDescriptor } from '../manifest'
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
+import type { ZeropsSourceTransportBinding } from '../provider'
 import { zeropsSharedServiceHostname } from '../service-names'
-import type { ZeropsSourceClient } from '../source'
+import type { ZeropsSourceClient, ZeropsSourceClientV2 } from '../source'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget } from '../types'
 
 interface Recorded {
@@ -218,7 +219,7 @@ const makeSource = (calls: string[] = []): ZeropsSourceClient => ({
 
 type TestControlProviderOptions = Omit<ZeropsControlProviderOptions, 'execute' | 'source'> & {
 	readonly execute?: ZeropsProviderExecutor
-	readonly source?: ZeropsSourceClient
+	readonly source?: ZeropsSourceClient & Partial<ZeropsSourceClientV2>
 }
 
 const createTestControlProvider = (options: TestControlProviderOptions) =>
@@ -459,7 +460,8 @@ describe('Zerops ControlProvider registration', () => {
 })
 
 describe('Zerops ControlProvider lifecycle', () => {
-	test('verifies and binds source resolution before any deploy effect', async () => {
+	test('uses v1 immediately after a source restart when the durable row explicitly says legacy-v1', async () => {
+		const sourceCalls: string[] = []
 		const resolutions: Array<{
 			runId: string
 			repository: { owner: string; name: string }
@@ -470,24 +472,24 @@ describe('Zerops ControlProvider lifecycle', () => {
 			signal: AbortSignal
 		}> = []
 		const source: ZeropsSourceClient = {
-			...makeSource(),
+			...makeSource(sourceCalls),
 			resolve: async (input) => {
 				resolutions.push(input)
 				return { runId: input.runId, commitSha: COMMIT_SHA, descriptorSha256: input.descriptorSha256 }
 			},
 		}
 		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded), source })
-		if (control.resolveSource === undefined) throw new Error('expected Zerops source resolution')
 		const signal = new AbortController().signal
-		const privateApp = { ...app, source: { ...app.source, githubInstallationId: 42 } }
+		const privateApp = { ...app, source: { ...app.source, githubConnectionId: 'legacy-connection', githubInstallationId: 42 } }
 
 		expect(
-			await control.resolveSource({
+			await control.resolveSourceWithBinding({
 				runId: 'run-1',
 				app: privateApp,
 				environment: environment(),
 				expectedCommitSha: COMMIT_SHA,
 				signal,
+				sourceBinding: { connectionId: 'legacy-connection', installationId: 42, transportKind: 'legacy-v1' },
 			}),
 		).toEqual({ commitSha: COMMIT_SHA })
 		expect(resolutions).toEqual([{
@@ -500,12 +502,20 @@ describe('Zerops ControlProvider lifecycle', () => {
 			signal,
 		}])
 		expect(recorded.calls).toEqual([])
+		await expect(control.deployWithBinding({
+			...deployInput(recorded),
+			app: privateApp,
+			sourceBinding: { connectionId: 'legacy-connection', installationId: 42, transportKind: 'legacy-v1' },
+		})).resolves.toMatchObject({ state: 'succeeded' })
+		expect(sourceCalls).toContain(`upload:run-1:version-1:${COMMIT_SHA}`)
 
 		const drifted = compileFabrikaManifest(config, 'prod', {
 			...SOURCE_DESCRIPTOR,
 			contents: `${SOURCE_DESCRIPTOR.contents}# changed after registration\n`,
 		})
-		await expect(control.resolveSource({
+		const resolveSource = control.resolveSource
+		if (resolveSource === undefined) throw new Error('expected source resolution')
+		await expect(resolveSource({
 			runId: 'run-2',
 			app,
 			environment: environment({
@@ -518,6 +528,72 @@ describe('Zerops ControlProvider lifecycle', () => {
 			signal,
 		})).rejects.toThrow('source descriptor digest')
 		expect(resolutions).toHaveLength(1)
+	})
+
+	test('routes two keyed connections through exact v2 resolve and upload bindings', async () => {
+		const calls: string[] = []
+		const source: ZeropsSourceClient & ZeropsSourceClientV2 = {
+			...makeSource(calls),
+			resolveV2: async (input) => {
+				const binding = input.privateBinding
+				if (binding === undefined) throw new Error('missing private binding')
+				calls.push(`resolve-v2:${input.runId}:${binding.connectionId}:${binding.installationId}`)
+				return { runId: input.runId, commitSha: input.expectedCommitSha ?? COMMIT_SHA, descriptorSha256: input.descriptorSha256 }
+			},
+			uploadV2: async (input) => {
+				const binding = input.privateBinding
+				if (binding === undefined) throw new Error('missing private binding')
+				calls.push(`upload-v2:${input.runId}:${binding.connectionId}:${binding.installationId}`)
+				return {
+					runId: input.runId,
+					appVersionId: input.appVersionId,
+					commitSha: input.commitSha,
+					descriptorSha256: input.descriptor.sha256,
+				}
+			},
+		}
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded), source })
+		const binding1: ZeropsSourceTransportBinding = { connectionId: 'connection-1', installationId: 41, transportKind: 'keyed-v2' }
+		const binding2: ZeropsSourceTransportBinding = { connectionId: 'connection-2', installationId: 42, transportKind: 'keyed-v2' }
+		const app1 = { ...app, source: { ...app.source, githubConnectionId: binding1.connectionId, githubInstallationId: binding1.installationId } }
+		const app2 = { ...app, source: { ...app.source, githubConnectionId: binding2.connectionId, githubInstallationId: binding2.installationId } }
+		const signal = new AbortController().signal
+
+		await Promise.all([
+			control.resolveSourceWithBinding({ runId: 'run-1', app: app1, environment: environment(), signal, sourceBinding: binding1 }),
+			control.resolveSourceWithBinding({ runId: 'run-2', app: app2, environment: environment(), signal, sourceBinding: binding2 }),
+		])
+		await Promise.all([
+			control.deployWithBinding({ ...deployInput(recorded), runId: 'run-1', app: app1, sourceBinding: binding1 }),
+			control.deployWithBinding({ ...deployInput(recorded), runId: 'run-2', app: app2, sourceBinding: binding2 }),
+		])
+
+		expect(calls).toContain('resolve-v2:run-1:connection-1:41')
+		expect(calls).toContain('resolve-v2:run-2:connection-2:42')
+		expect(calls).toContain('upload-v2:run-1:connection-1:41')
+		expect(calls).toContain('upload-v2:run-2:connection-2:42')
+		expect(calls.some((call) => call.startsWith('resolve:') || call.startsWith('upload:'))).toBe(false)
+	})
+
+	test('rejects partial, unbound, and swapped private source coordinates before source calls', async () => {
+		const calls: string[] = []
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded), source: makeSource(calls) })
+		const signal = new AbortController().signal
+		const partial = { ...app, source: { ...app.source, githubInstallationId: 42 } }
+		expect(() => control.normalizeRegistration({ app: partial, environment: environment() })).toThrow('both connection and installation')
+		const privateApp = { ...app, source: { ...app.source, githubConnectionId: 'connection-1', githubInstallationId: 42 } }
+		if (control.resolveSource === undefined) throw new Error('expected source resolution')
+		await expect(control.resolveSource({ runId: 'run-1', app: privateApp, environment: environment(), signal })).rejects.toThrow(
+			'explicit transport binding',
+		)
+		await expect(control.resolveSourceWithBinding({
+			runId: 'run-1',
+			app: privateApp,
+			environment: environment(),
+			signal,
+			sourceBinding: { connectionId: 'connection-2', installationId: 42, transportKind: 'legacy-v1' },
+		})).rejects.toThrow('different application coordinates')
+		expect(calls).toEqual([])
 	})
 
 	test('rejects structured manifest drift before beforeDeploy or the Zerops API', async () => {
@@ -604,11 +680,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(JSON.stringify(deployInput(recorded).environment)).not.toContain('zt-secret')
 	})
 
-	test('uses the same credential-free upload coordinates for public and private repositories', async () => {
-		const cases = [
-			{ repoUrl: 'github.com/acme/notes', githubInstallationId: undefined },
-			{ repoUrl: 'https://github.com/acme/notes', githubInstallationId: 42 },
-		]
+	test('uses the same credential-free runtime coordinates for public and explicitly bound legacy repositories', async () => {
 		const observed: Array<ZeropsRuntimeTarget['source']> = []
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
@@ -620,20 +692,24 @@ describe('Zerops ControlProvider lifecycle', () => {
 			},
 		})
 
-		for (const candidate of cases) {
-			await control.deploy({
-				...deployInput(recorded),
-				app: {
-					...app,
-					source: {
-						...app.source,
-						repoUrl: candidate.repoUrl,
-						ref: COMMIT_SHA,
-						...(candidate.githubInstallationId === undefined ? {} : { githubInstallationId: candidate.githubInstallationId }),
-					},
+		await control.deploy({
+			...deployInput(recorded),
+			app: { ...app, source: { ...app.source, repoUrl: 'github.com/acme/notes', ref: COMMIT_SHA } },
+		})
+		await control.deployWithBinding({
+			...deployInput(recorded),
+			app: {
+				...app,
+				source: {
+					...app.source,
+					repoUrl: 'https://github.com/acme/notes',
+					ref: COMMIT_SHA,
+					githubConnectionId: 'legacy-connection',
+					githubInstallationId: 42,
 				},
-			})
-		}
+			},
+			sourceBinding: { connectionId: 'legacy-connection', installationId: 42, transportKind: 'legacy-v1' },
+		})
 
 		expect(observed).toEqual([
 			{ runId: 'run-1', repository: { owner: 'acme', name: 'notes' }, commitSha: COMMIT_SHA },

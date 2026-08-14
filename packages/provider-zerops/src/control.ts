@@ -10,6 +10,8 @@ import type {
 	ProviderReconcileOutcome,
 	ProviderRegistration,
 	ProviderRegistrationInput,
+	ProviderSourceResolution,
+	ProviderSourceResolutionInput,
 	ProviderTerminalOutcome,
 	RuntimeProvider,
 	RuntimeProviderRun,
@@ -35,8 +37,8 @@ import {
 	zeropsArtifactCodec,
 } from './manifest'
 import { createZeropsNamespaceCapabilities, type ZeropsNamespaceTarget, zeropsNamespaceTargetCodec } from './namespace'
-import { createZeropsProvider } from './provider'
-import { normalizeZeropsSourceRepository, type ZeropsSourceClient } from './source'
+import { createZeropsProvider, type ZeropsSourceTransportBinding } from './provider'
+import { normalizeZeropsSourceRepository, type ZeropsSourceClient, type ZeropsSourceClientV2, type ZeropsSourceResolveResult } from './source'
 import type { ZeropsRunState, ZeropsRuntimeTarget } from './types'
 
 /** Provider coordinates that are safe to persist. Credentials are composed only for a live run. */
@@ -109,7 +111,7 @@ export interface ZeropsControlProviderOptions {
 	readonly propustkaUrl?: string
 	readonly adminKey?: string
 	readonly api?: ZeropsApi
-	readonly source: ZeropsSourceClient
+	readonly source: ZeropsSourceClient & Partial<ZeropsSourceClientV2>
 	readonly reconcileSchema?: SchemaReconciler
 	readonly sleep?: Sleeper
 	readonly sourceCancelSleep?: Sleeper
@@ -121,6 +123,19 @@ export interface ZeropsControlProviderOptions {
 		readonly iamUrl: string
 		readonly iamKey: string
 	}
+}
+
+export interface ZeropsBoundSourceResolutionInput extends ProviderSourceResolutionInput {
+	readonly sourceBinding: ZeropsSourceTransportBinding
+}
+
+export interface ZeropsBoundDeployInput extends ProviderDeployInput {
+	readonly sourceBinding: ZeropsSourceTransportBinding
+}
+
+export interface ZeropsControlProvider extends ControlProvider {
+	resolveSourceWithBinding(input: ZeropsBoundSourceResolutionInput): Promise<ProviderSourceResolution>
+	deployWithBinding(input: ZeropsBoundDeployInput): Promise<ProviderTerminalOutcome>
 }
 
 interface DecodedZeropsEnvironment {
@@ -183,6 +198,9 @@ const resolvedEnvironment = (
 const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegistration => {
 	if (input.app.id !== input.environment.appId) {
 		throw new Error(`Zerops environment belongs to app \`${input.environment.appId}\`, expected \`${input.app.id}\``)
+	}
+	if ((input.app.source.githubConnectionId === undefined) !== (input.app.source.githubInstallationId === undefined)) {
+		throw new Error('Zerops private source requires both connection and installation coordinates')
 	}
 	const decoded = decodeEnvironment(input.environment)
 	const artifact = parseFabrikaManifest(
@@ -252,11 +270,12 @@ const buildTriggeredState = (
 })
 
 /** Build the complete Zerops lifecycle bundle without importing control-plane persistence. */
-export const createZeropsControlProvider = (options: ZeropsControlProviderOptions): ControlProvider => {
+export const createZeropsControlProvider = (options: ZeropsControlProviderOptions): ZeropsControlProvider => {
 	if (options.accessToken === '') {
 		throw new Error('Zerops access token must be a non-empty string')
 	}
 	const api = options.api ?? createZeropsApi({ token: options.accessToken, baseUrl: options.apiBaseUrl })
+	const sourceBindings = new Map<string, ZeropsSourceTransportBinding>()
 	const runtimeProvider = createZeropsProvider((target) => {
 		const defaults = defaultZeropsCollaborators(target)
 		return {
@@ -266,6 +285,13 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			reconcileSchema: options.reconcileSchema ?? defaults.reconcileSchema,
 			sleep: options.sleep ?? defaultSleep,
 		}
+	}, {
+		bindingForRun: (runId) => sourceBindings.get(runId),
+		uploadV2: async (input) => {
+			const uploadV2 = options.source.uploadV2
+			if (uploadV2 === undefined) throw new Error('Zerops keyed source transport is unavailable')
+			return uploadV2.call(options.source, input)
+		},
 	})
 	const namespaceCapabilities = options.namespaces === undefined
 		? undefined
@@ -349,35 +375,68 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		return { state: 'running' }
 	}
 
-	return {
+	const assertSourceBinding = (
+		input: Pick<ProviderDeployInput, 'app'>,
+		binding: ZeropsSourceTransportBinding | undefined,
+	): void => {
+		const connectionId = input.app.source.githubConnectionId
+		const installationId = input.app.source.githubInstallationId
+		if (binding === undefined) {
+			if (connectionId !== undefined || installationId !== undefined) {
+				throw new Error('Zerops private source requires an explicit transport binding')
+			}
+			return
+		}
+		if (connectionId !== binding.connectionId || installationId !== binding.installationId) {
+			throw new Error('Zerops source transport binding has different application coordinates')
+		}
+	}
+
+	const resolveSource = async (
+		input: ProviderSourceResolutionInput,
+		binding?: ZeropsSourceTransportBinding,
+	): Promise<ProviderSourceResolution> => {
+		assertSourceBinding(input, binding)
+		const registration = normalizeRegistration({ app: input.app, environment: input.environment })
+		const artifact = decodeEnvelope('artifact', registration.environment.artifact, zeropsArtifactCodec)
+		await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
+		const base = {
+			runId: input.runId,
+			repository: normalizeZeropsSourceRepository(registration.app.source.repoUrl),
+			requestedRef: registration.app.source.ref,
+			...(input.expectedCommitSha === undefined ? {} : { expectedCommitSha: input.expectedCommitSha }),
+			descriptorSha256: artifact.target.sourceDescriptor.sha256,
+			signal: input.signal,
+		}
+		let result: ZeropsSourceResolveResult
+		if (binding?.transportKind === 'keyed-v2') {
+			const resolveV2 = options.source.resolveV2
+			if (resolveV2 === undefined) throw new Error('Zerops keyed source transport is unavailable')
+			result = await resolveV2.call(options.source, {
+				...base,
+				privateBinding: { connectionId: binding.connectionId, installationId: binding.installationId },
+			})
+		} else {
+			result = await options.source.resolve({
+				...base,
+				...(binding === undefined ? {} : { githubInstallationId: binding.installationId }),
+			})
+		}
+		if (
+			result.runId !== input.runId
+			|| result.descriptorSha256 !== artifact.target.sourceDescriptor.sha256
+			|| (input.expectedCommitSha !== undefined && result.commitSha !== input.expectedCommitSha)
+		) throw new Error('Zerops source resolution returned different coordinates')
+		return { commitSha: result.commitSha }
+	}
+
+	const controlProvider: ZeropsControlProvider = {
 		id: 'zerops',
 		normalizeRegistration,
-		resolveSource: async (input) => {
-			const registration = normalizeRegistration({ app: input.app, environment: input.environment })
-			const artifact = decodeEnvelope('artifact', registration.environment.artifact, zeropsArtifactCodec)
-			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
-			const repository = normalizeZeropsSourceRepository(registration.app.source.repoUrl)
-			const result = await options.source.resolve({
-				runId: input.runId,
-				repository,
-				requestedRef: registration.app.source.ref,
-				...(input.expectedCommitSha === undefined ? {} : { expectedCommitSha: input.expectedCommitSha }),
-				...(registration.app.source.githubInstallationId === undefined
-					? {}
-					: { githubInstallationId: registration.app.source.githubInstallationId }),
-				descriptorSha256: artifact.target.sourceDescriptor.sha256,
-				signal: input.signal,
-			})
-			if (
-				result.runId !== input.runId
-				|| result.descriptorSha256 !== artifact.target.sourceDescriptor.sha256
-				|| (input.expectedCommitSha !== undefined && result.commitSha !== input.expectedCommitSha)
-			) {
-				throw new Error('Zerops source resolution returned different coordinates')
-			}
-			return { commitSha: result.commitSha }
-		},
+		resolveSource: (input) => resolveSource(input),
+		resolveSourceWithBinding: (input) => resolveSource(input, input.sourceBinding),
 		deploy: async (input: ProviderDeployInput): Promise<ProviderTerminalOutcome> => {
+			assertSourceBinding(input, sourceBindings.get(input.runId))
 			const registration = normalizeRegistration({ app: input.app, environment: input.environment })
 			const placement = resolvedEnvironment(registration.environment, { requireReady: true })
 			const proxyServiceId = placement.proxyServiceId
@@ -468,6 +527,17 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				target: runtimeProvider.encodeTarget(runtimeTarget),
 				artifact: registration.environment.artifact,
 			})
+		},
+		deployWithBinding: async (input) => {
+			const { sourceBinding, ...deployInput } = input
+			assertSourceBinding(deployInput, sourceBinding)
+			if (sourceBindings.has(input.runId)) throw new Error('Zerops source transport binding is already active for this run')
+			sourceBindings.set(input.runId, sourceBinding)
+			try {
+				return await controlProvider.deploy(deployInput)
+			} finally {
+				if (sourceBindings.get(input.runId) === sourceBinding) sourceBindings.delete(input.runId)
+			}
 		},
 		cancel: async (input) => {
 			resolvedEnvironment(input.environment, { requireReady: false })
@@ -646,4 +716,5 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				},
 			}),
 	}
+	return controlProvider
 }

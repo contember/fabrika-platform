@@ -6,7 +6,7 @@ import { zeropsTargetCodec } from '../codec'
 import type { ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
 import { compileFabrikaManifest, type ZeropsArtifactSourceDescriptor } from '../manifest'
-import { CANCELLED, createZeropsProvider } from '../provider'
+import { CANCELLED, createZeropsProvider, type ZeropsSourceTransportBinding, type ZeropsSourceTransportRouting } from '../provider'
 import type { ZeropsServiceType } from '../schema.generated'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget, ZeropsServiceSpec } from '../types'
 
@@ -24,6 +24,7 @@ interface Recorded {
 	creates: Array<{ serviceId: string; name?: string }>
 	builds: Array<{ appVersionId: string; zeropsYaml: string; zeropsYamlSetup?: string }>
 	uploads: Array<{ runId: string; appVersionId: string; commitSha: string; descriptorSha256: string; githubInstallationId?: number }>
+	v2Uploads: Array<{ connectionId: string; installationId: number }>
 	timeline: string[]
 	sourceCancelSignals: AbortSignal[]
 	deleteSignals: AbortSignal[]
@@ -43,6 +44,7 @@ const fresh = (): Recorded => ({
 	creates: [],
 	builds: [],
 	uploads: [],
+	v2Uploads: [],
 	timeline: [],
 	sourceCancelSignals: [],
 	deleteSignals: [],
@@ -278,6 +280,65 @@ beforeEach(() => {
 })
 
 describe('Zerops provider', () => {
+	test('routes uploads only from the explicit immutable transport kind', async () => {
+		let binding: ZeropsSourceTransportBinding = {
+			connectionId: 'legacy-connection',
+			installationId: 42,
+			transportKind: 'legacy-v1',
+		}
+		const routing: ZeropsSourceTransportRouting = {
+			bindingForRun: () => binding,
+			uploadV2: async (input) => {
+				const privateBinding = input.privateBinding
+				if (privateBinding === undefined) throw new Error('missing private binding')
+				recorded.v2Uploads.push(privateBinding)
+				return {
+					runId: input.runId,
+					appVersionId: input.appVersionId,
+					commitSha: input.commitSha,
+					descriptorSha256: input.descriptor.sha256,
+				}
+			},
+		}
+		const provider = createZeropsProvider(() => makeCollaborators(recorded), routing)
+		const privateTarget = target({
+			source: {
+				runId: 'run-1',
+				repository: { owner: 'acme', name: 'demo' },
+				commitSha: '0123456789abcdef0123456789abcdef01234567',
+				githubInstallationId: 42,
+			},
+		})
+
+		await execute(runtimeRun(recorded, provider, privateTarget), provider)
+		expect(recorded.uploads).toHaveLength(1)
+		expect(recorded.v2Uploads).toHaveLength(0)
+
+		binding = { connectionId: 'keyed-connection', installationId: 42, transportKind: 'keyed-v2' }
+		await execute(runtimeRun(recorded, provider, privateTarget), provider)
+		expect(recorded.uploads).toHaveLength(1)
+		expect(recorded.v2Uploads).toEqual([{ connectionId: 'keyed-connection', installationId: 42 }])
+	})
+
+	test('rejects a routed binding whose installation differs from the runtime source', async () => {
+		const provider = createZeropsProvider(() => makeCollaborators(recorded), {
+			bindingForRun: () => ({ connectionId: 'keyed-connection', installationId: 84, transportKind: 'keyed-v2' }),
+			uploadV2: () => Promise.reject(new Error('must not upload')),
+		})
+		const privateTarget = target({
+			source: {
+				runId: 'run-1',
+				repository: { owner: 'acme', name: 'demo' },
+				commitSha: '0123456789abcdef0123456789abcdef01234567',
+				githubInstallationId: 42,
+			},
+		})
+		const session = await provider.runtime.open(runtimeRun(recorded, provider, privateTarget))
+		await session.execute('apply-import')
+		await expect(session.execute('trigger-deploy')).rejects.toThrow('different installation coordinates')
+		expect(recorded.v2Uploads).toHaveLength(0)
+	})
+
 	test('owns a distinct plan and executes it through the typed provider contract', async () => {
 		const controller = new AbortController()
 		const provider = createZeropsProvider(() =>

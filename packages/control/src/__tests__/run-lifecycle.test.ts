@@ -7,6 +7,8 @@ import type {
 	ProviderEnvelope,
 	ProviderRegistration,
 	ProviderRegistrationInput,
+	ProviderSourceResolution,
+	ProviderSourceResolutionInput,
 } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { getRunLogUseCase } from '../api/runs'
@@ -37,15 +39,26 @@ const normalize = (provider: string, input: ProviderRegistrationInput): Provider
 
 async function seedRun(
 	db: ControlRepositories,
-	options: { provider?: string; secretRef?: string; externalId?: string; commitSha?: string } = {},
+	options: {
+		provider?: string
+		secretRef?: string
+		externalId?: string
+		commitSha?: string
+		sourceBinding?: { connectionId: string; installationId: number }
+	} = {},
 ): Promise<string> {
 	const provider = options.provider ?? 'memory'
 	await db.registry.createApp({
 		id: 'app',
-		repoUrl: 'https://github.com/acme/app.git',
+		repoUrl: options.sourceBinding === undefined ? 'https://github.com/acme/app.git' : 'github.com/acme/app',
 		workerDir: 'worker',
 		configPath: 'fabrika.config.ts',
-		githubInstallationId: 42,
+		...(options.sourceBinding === undefined
+			? { githubInstallationId: 42 }
+			: {
+				githubConnectionId: options.sourceBinding.connectionId,
+				githubInstallationId: options.sourceBinding.installationId,
+			}),
 	})
 	await db.registry.upsertAppEnv({
 		appId: 'app',
@@ -80,6 +93,21 @@ async function seedRun(
 		await db.runs.setRunExternalId(runId, options.externalId)
 	}
 	return runId
+}
+
+function insertSourceConnection(
+	sqlite: ReturnType<typeof createHarness>['sqlite'],
+	input: { connectionId: string; installationId: number; transportKind: 'legacy-v1' | 'keyed-v2' },
+): void {
+	sqlite.query(`INSERT INTO github_source_connections_keyed (
+		connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+		credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+		installation_account_login, installation_selection, verified_repositories_json,
+		requested_repositories_json, connected_by, connected_at, verified_at, version
+	) VALUES (?, ?, 'github-app', 'github-app', 'https://github.com/apps/github-app', 'acme', 'github-app', 0,
+		?, 'https://control.example.test/webhooks/github', 'vault:webhook', ?,
+		'acme', 'all', '[]', '[]', 'operator', 1, 1, 1)`)
+		.run(input.connectionId, input.transportKind, 'c'.repeat(64), input.installationId)
 }
 
 async function activateOperationsIngest(db: ControlRepositories): Promise<string> {
@@ -170,7 +198,121 @@ const requireRun = async (db: ControlRepositories, id: string): Promise<RunRow> 
 	return run
 }
 
+interface TestSourceBinding {
+	readonly connectionId: string
+	readonly installationId: number
+	readonly transportKind: 'legacy-v1' | 'keyed-v2'
+}
+
+interface TestBoundProvider extends ControlProvider {
+	resolveSourceWithBinding(input: ProviderSourceResolutionInput & { readonly sourceBinding: TestSourceBinding }): Promise<ProviderSourceResolution>
+	deployWithBinding(input: ProviderDeployInput & { readonly sourceBinding: TestSourceBinding }): Promise<RunOutcome>
+}
+
 describe('provider-neutral run lifecycle', () => {
+	test('loads and carries the exact keyed source binding through resolve and deploy', async () => {
+		const { db, sqlite } = createHarness()
+		insertSourceConnection(sqlite, { connectionId: 'connection-1', installationId: 42, transportKind: 'keyed-v2' })
+		const runId = await seedRun(db, {
+			provider: 'zerops',
+			sourceBinding: { connectionId: 'connection-1', installationId: 42 },
+		})
+		const seen: Array<{ phase: string; binding: TestSourceBinding; connectionId?: string; installationId?: number }> = []
+		const provider: TestBoundProvider = {
+			id: 'zerops',
+			normalizeRegistration: (input) => normalize('zerops', input),
+			resolveSource: () => Promise.reject(new Error('unbound resolution must not run')),
+			resolveSourceWithBinding: (input) => {
+				seen.push({
+					phase: 'resolve',
+					binding: input.sourceBinding,
+					...(input.app.source.githubConnectionId === undefined ? {} : { connectionId: input.app.source.githubConnectionId }),
+					...(input.app.source.githubInstallationId === undefined ? {} : { installationId: input.app.source.githubInstallationId }),
+				})
+				return Promise.resolve({ commitSha: 'a'.repeat(40) })
+			},
+			deploy: () => Promise.reject(new Error('unbound deploy must not run')),
+			deployWithBinding: async (input) => {
+				seen.push({
+					phase: 'deploy',
+					binding: input.sourceBinding,
+					...(input.app.source.githubConnectionId === undefined ? {} : { connectionId: input.app.source.githubConnectionId }),
+					...(input.app.source.githubInstallationId === undefined ? {} : { installationId: input.app.source.githubInstallationId }),
+				})
+				await input.events.externalId('version-1')
+				return { state: 'succeeded' }
+			},
+		}
+
+		expect((await executeDeploy(makeDeps(db, provider), { runId })).status).toBe('succeeded')
+		expect(seen).toEqual([
+			{
+				phase: 'resolve',
+				binding: { connectionId: 'connection-1', installationId: 42, transportKind: 'keyed-v2' },
+				connectionId: 'connection-1',
+				installationId: 42,
+			},
+			{
+				phase: 'deploy',
+				binding: { connectionId: 'connection-1', installationId: 42, transportKind: 'keyed-v2' },
+				connectionId: 'connection-1',
+				installationId: 42,
+			},
+		])
+	})
+
+	test('fails before provider source effects on partial, missing, stale, or swapped Zerops bindings', async () => {
+		const cases: Array<{
+			kind: string
+			appBinding?: { connectionId: string; installationId: number }
+			storedBinding?: { connectionId: string; installationId: number; transportKind: 'legacy-v1' | 'keyed-v2' }
+		}> = [
+			{ kind: 'partial', appBinding: undefined, storedBinding: undefined },
+			{
+				kind: 'missing',
+				appBinding: { connectionId: 'missing-connection', installationId: 42 },
+				storedBinding: undefined,
+			},
+			{
+				kind: 'stale-installation',
+				appBinding: { connectionId: 'connection-1', installationId: 84 },
+				storedBinding: { connectionId: 'connection-1', installationId: 42, transportKind: 'keyed-v2' },
+			},
+			{
+				kind: 'swapped-connection',
+				appBinding: { connectionId: 'connection-2', installationId: 42 },
+				storedBinding: { connectionId: 'connection-1', installationId: 42, transportKind: 'keyed-v2' },
+			},
+		]
+		for (const current of cases) {
+			const { db, sqlite } = createHarness()
+			if (current.storedBinding !== undefined) insertSourceConnection(sqlite, current.storedBinding)
+			const runId = await seedRun(db, {
+				provider: 'memory',
+				...(current.appBinding === undefined ? {} : { sourceBinding: current.appBinding }),
+			})
+			sqlite.query(`UPDATE app_envs SET provider = 'zerops' WHERE app_id = 'app' AND env = 'prod'`).run()
+			let calls = 0
+			const provider = makeProvider([], { state: 'succeeded' }, { id: 'zerops' })
+			provider.resolveSource = () => {
+				calls++
+				return Promise.resolve({ commitSha: 'a'.repeat(40) })
+			}
+			expect((await executeDeploy(makeDeps(db, provider), { runId })).status, current.kind).toBe('failed')
+			expect(calls, current.kind).toBe(0)
+		}
+	})
+
+	test('preserves Cloudflare installation-only source coordinates', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db, { provider: 'cloudflare' })
+		const inputs: ProviderDeployInput[] = []
+		const provider = makeProvider(inputs, { state: 'succeeded' }, { id: 'cloudflare' })
+		expect((await executeDeploy(makeDeps(db, provider), { runId })).status).toBe('succeeded')
+		expect(inputs[0]?.app.source).toMatchObject({ githubInstallationId: 42 })
+		expect(inputs[0]?.app.source.githubConnectionId).toBeUndefined()
+	})
+
 	test('resolves and persists an exact source revision before provider deploy', async () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db)
