@@ -161,6 +161,128 @@ describe('Git repository source', () => {
 		expect(snapshots).toBe(1)
 	})
 
+	test('routes concurrent v2 private reads to the exact keyed client without consulting the v1 default', async () => {
+		const fixture = await repositoryFixture()
+		const mintCalls: Array<{ connectionId: string; installationId: number }> = []
+		const clientFor = (connectionId: string): SourceGitHubClient => ({
+			getAuthenticatedApp: async () => {
+				throw new Error('identity not expected')
+			},
+			resolveInstallationId: async () => {
+				throw new Error('installation lookup not expected')
+			},
+			mintRepositoryToken: async (input) => {
+				mintCalls.push({ connectionId, installationId: input.installationId })
+				return { token: `token-${connectionId}`, expiresAt: Date.now() + 60_000 }
+			},
+		})
+		const clients = new Map([
+			['connection-1', clientFor('connection-1')],
+			['connection-2', clientFor('connection-2')],
+		])
+		const github: SourceGitHubConnection = {
+			snapshot: () => {
+				throw new Error('v1 snapshot must not serve v2 requests')
+			},
+			snapshotV2: (connectionId) => {
+				const selected = clients.get(connectionId)
+				return selected === undefined ? undefined : { client: selected, appId: '123', credentialSha256: 'a'.repeat(64) }
+			},
+			activate: async () => {
+				throw new Error('activation not expected')
+			},
+			status: async () => {
+				throw new Error('status not expected')
+			},
+		}
+		const source = new GitRepositorySource({
+			repositoryUrl: () => fixture.remoteUrl,
+			tempRoot: fixture.root,
+			metadata: fixtureMetadata(fixture),
+			github,
+		})
+		const firstResolve = source.resolve({
+			repository: { owner: 'contember', name: 'fixture' },
+			requestedRef: fixture.commitSha,
+			privateBinding: { connectionId: 'connection-1', installationId: 41 },
+			descriptorSha256,
+			signal: new AbortController().signal,
+		})
+		const secondResolve = source.resolve({
+			repository: { owner: 'contember', name: 'fixture' },
+			requestedRef: fixture.commitSha,
+			privateBinding: { connectionId: 'connection-2', installationId: 42 },
+			descriptorSha256,
+			signal: new AbortController().signal,
+		})
+		const firstArchive = source.prepareArchive({
+			repository: { owner: 'contember', name: 'fixture' },
+			commitSha: fixture.commitSha,
+			privateBinding: { connectionId: 'connection-1', installationId: 41 },
+			descriptorSha256,
+			signal: new AbortController().signal,
+		})
+		const secondArchive = source.prepareArchive({
+			repository: { owner: 'contember', name: 'fixture' },
+			commitSha: fixture.commitSha,
+			privateBinding: { connectionId: 'connection-2', installationId: 42 },
+			descriptorSha256,
+			signal: new AbortController().signal,
+		})
+		await Promise.all([firstResolve, secondResolve, firstArchive, secondArchive])
+		const archives = await Promise.all([firstArchive, secondArchive])
+		await Promise.all(archives.map((archive) => archive.cleanup()))
+		expect(mintCalls).toContainEqual({ connectionId: 'connection-1', installationId: 41 })
+		expect(mintCalls).toContainEqual({ connectionId: 'connection-2', installationId: 42 })
+		expect(mintCalls).toHaveLength(4)
+	})
+
+	test('keeps v1 private reads on the legacy snapshot', async () => {
+		const fixture = await repositoryFixture()
+		let v1Snapshots = 0
+		let v2Snapshots = 0
+		const client: SourceGitHubClient = {
+			getAuthenticatedApp: async () => {
+				throw new Error('identity not expected')
+			},
+			resolveInstallationId: async () => {
+				throw new Error('installation lookup not expected')
+			},
+			mintRepositoryToken: async () => ({ token: 'legacy-token', expiresAt: Date.now() + 60_000 }),
+		}
+		const github: SourceGitHubConnection = {
+			snapshot: () => {
+				v1Snapshots++
+				return { client, appId: '123', credentialSha256: 'a'.repeat(64) }
+			},
+			snapshotV2: () => {
+				v2Snapshots++
+				return undefined
+			},
+			activate: async () => {
+				throw new Error('activation not expected')
+			},
+			status: async () => {
+				throw new Error('status not expected')
+			},
+		}
+		const source = new GitRepositorySource({
+			repositoryUrl: () => fixture.remoteUrl,
+			tempRoot: fixture.root,
+			metadata: fixtureMetadata(fixture),
+			github,
+		})
+		await source.resolve({
+			repository: { owner: 'contember', name: 'fixture' },
+			requestedRef: fixture.commitSha,
+			githubInstallationId: 42,
+			descriptorSha256,
+			signal: new AbortController().signal,
+		})
+		expect(v1Snapshots).toBe(1)
+		expect(v2Snapshots).toBe(0)
+	})
+
 	test('resolves an exact commit, verifies the root descriptor, and archives Git objects without executing repository code', async () => {
 		const fixture = await repositoryFixture()
 		const marker = join(fixture.root, 'must-not-exist')

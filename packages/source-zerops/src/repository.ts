@@ -1,4 +1,4 @@
-import { ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES, type ZeropsSourceRepository } from '@fabrika/provider-zerops'
+import { ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES, type ZeropsSourcePrivateBindingV2, type ZeropsSourceRepository } from '@fabrika/provider-zerops'
 import { createHash } from 'node:crypto'
 import { type FileHandle, mkdtemp, open, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -21,6 +21,7 @@ export interface RepositoryResolveInput {
 	requestedRef: string
 	expectedCommitSha?: string
 	githubInstallationId?: number
+	privateBinding?: ZeropsSourcePrivateBindingV2
 	descriptorSha256: string
 	signal: AbortSignal
 }
@@ -34,6 +35,7 @@ export interface RepositoryArchiveInput {
 	repository: ZeropsSourceRepository
 	commitSha: string
 	githubInstallationId?: number
+	privateBinding?: ZeropsSourcePrivateBindingV2
 	descriptorSha256: string
 	signal: AbortSignal
 }
@@ -128,11 +130,16 @@ export class GitRepositorySource implements RepositorySource {
 		input: RepositoryResolveInput,
 	): Promise<RepositoryResolveResult> {
 		throwIfAborted(input.signal, 'resolve')
-		const github = this.options.github?.snapshot()?.client
+		const github = input.privateBinding === undefined
+			? this.options.github?.snapshot()?.client
+			: this.options.github?.snapshotV2?.(input.privateBinding.connectionId)?.client
+		if (input.githubInstallationId !== undefined && input.privateBinding !== undefined) {
+			throw new SourceFailure('invalid_request', 'resolve', false, 400)
+		}
 		const credentials = await this.credentials(
 			github,
 			input.repository,
-			input.githubInstallationId,
+			input.privateBinding?.installationId ?? input.githubInstallationId,
 			input.signal,
 			'resolve',
 		)
@@ -208,11 +215,16 @@ export class GitRepositorySource implements RepositorySource {
 		if (!OBJECT_ID_PATTERN.test(input.commitSha)) {
 			throw new SourceFailure('commit_mismatch', 'archive', false, 409)
 		}
-		const github = this.options.github?.snapshot()?.client
+		const github = input.privateBinding === undefined
+			? this.options.github?.snapshot()?.client
+			: this.options.github?.snapshotV2?.(input.privateBinding.connectionId)?.client
+		if (input.githubInstallationId !== undefined && input.privateBinding !== undefined) {
+			throw new SourceFailure('invalid_request', 'archive', false, 400)
+		}
 		const credentials = await this.credentials(
 			github,
 			input.repository,
-			input.githubInstallationId,
+			input.privateBinding?.installationId ?? input.githubInstallationId,
 			input.signal,
 			'archive',
 		)

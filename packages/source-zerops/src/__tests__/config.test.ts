@@ -1,7 +1,10 @@
 import {
 	buildZeropsSourceCredentialBundle,
+	buildZeropsSourceCredentialBundleV2,
 	buildZeropsSourceResolveInstallationRequest,
 	serializeZeropsSourceCredentialBundle,
+	serializeZeropsSourceCredentialBundleV2,
+	zeropsSourceCredentialEnvV2,
 } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { createSourceRuntime } from '../config'
@@ -57,6 +60,39 @@ describe('source runtime configuration', () => {
 			const runtime = await createSourceRuntime({ env })
 			expect(runtime.githubEnabled).toBe(true)
 		}
+	})
+
+	test('discovers every keyed v2 credential slot while keeping the legacy bundle optional', async () => {
+		const privateKey = await privateKeyPem()
+		const env: Record<string, string> = { FABRIKA_SOURCE_RPC_KEY: rpcKey }
+		for (
+			const entry of [
+				{ connectionId: 'connection-1', appId: '123' },
+				{ connectionId: 'connection-2', appId: '124' },
+				{ connectionId: 'connection-3', appId: '125' },
+			]
+		) {
+			const { connectionId, appId } = entry
+			env[await zeropsSourceCredentialEnvV2(connectionId)] = serializeZeropsSourceCredentialBundleV2(
+				buildZeropsSourceCredentialBundleV2({ connectionId, githubAppId: appId, privateKeyPem: privateKey }),
+			)
+		}
+		const runtime = await createSourceRuntime({ env })
+		expect(runtime.githubEnabled).toBe(true)
+	})
+
+	test('blocks boot on an invalid keyed slot without echoing credential material', async () => {
+		const secret = 'must-not-leak'
+		const name = await zeropsSourceCredentialEnvV2('connection-1')
+		const raised = await createSourceRuntime({
+			env: { FABRIKA_SOURCE_RPC_KEY: rpcKey, [name]: secret },
+		}).then(
+			() => undefined,
+			(error: unknown) => error,
+		)
+		expect(raised).toBeInstanceOf(Error)
+		expect(raised instanceof Error ? raised.message : secret).toBe('GitHub App configuration is invalid')
+		expect(raised instanceof Error ? raised.message : '').not.toContain(secret)
 	})
 
 	test('rejects atomic and legacy credentials that disagree', async () => {

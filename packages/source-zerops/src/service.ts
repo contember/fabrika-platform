@@ -1,27 +1,42 @@
 import {
 	buildZeropsSourceCancelResponse,
 	buildZeropsSourceCredentialStatusResponse,
+	buildZeropsSourceCredentialStatusResponseV2,
 	buildZeropsSourceErrorEnvelope,
 	buildZeropsSourceResolveInstallationResponse,
 	buildZeropsSourceResolveResponse,
+	buildZeropsSourceResolveResponseV2,
 	buildZeropsSourceUploadResponse,
+	buildZeropsSourceUploadResponseV2,
 	decodeZeropsSourceCancelRequest,
 	decodeZeropsSourceCredentialActivateRequest,
+	decodeZeropsSourceCredentialActivateRequestV2,
 	decodeZeropsSourceCredentialStatusRequest,
+	decodeZeropsSourceCredentialStatusRequestV2,
 	decodeZeropsSourceInstallationsVerifyRequest,
 	decodeZeropsSourceResolveInstallationRequest,
 	decodeZeropsSourceResolveRequest,
+	decodeZeropsSourceResolveRequestV2,
 	decodeZeropsSourceUploadRequest,
+	decodeZeropsSourceUploadRequestV2,
 	decodeZeropsSourceWebhookConfigureRequest,
 	ZEROPS_SOURCE_CANCEL_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2,
 	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2,
 	ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH,
 	ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH,
 	ZEROPS_SOURCE_RESOLVE_PATH,
+	ZEROPS_SOURCE_RESOLVE_PATH_V2,
 	ZEROPS_SOURCE_UPLOAD_PATH,
+	ZEROPS_SOURCE_UPLOAD_PATH_V2,
 	ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH,
 	type ZeropsSourceErrorStage,
+	type ZeropsSourceResolveRequestV1,
+	type ZeropsSourceResolveRequestV2,
+	type ZeropsSourceUploadRequestV1,
+	type ZeropsSourceUploadRequestV2,
 } from '@fabrika/provider-zerops'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { cancelled, SourceFailure } from './failure'
@@ -141,7 +156,9 @@ export class ZeropsSourceService {
 		try {
 			const body = await readRequestJson(
 				request,
-				path === ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH ? MAX_CREDENTIAL_ACTIVATE_REQUEST_BYTES : MAX_REQUEST_BYTES,
+				path === ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH || path === ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2
+					? MAX_CREDENTIAL_ACTIVATE_REQUEST_BYTES
+					: MAX_REQUEST_BYTES,
 				stage,
 				requestSignal,
 			)
@@ -158,6 +175,30 @@ export class ZeropsSourceService {
 					if (this.github === undefined) throw new SourceFailure('credentials_invalid', 'credentials', false, 503)
 					return jsonResponse(
 						await this.github.activate(
+							input.connectionId,
+							input.credentialBundle,
+							input.credentialSha256,
+							requestSignal,
+						),
+					)
+				}
+				case ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2: {
+					const input = decodeRequest(() => decodeZeropsSourceCredentialStatusRequestV2(body))
+					const statusV2 = this.github?.statusV2
+					if (statusV2 === undefined) {
+						return jsonResponse(buildZeropsSourceCredentialStatusResponseV2({ connectionId: input.connectionId, state: 'anonymous' }))
+					}
+					return jsonResponse(await statusV2.call(this.github, input.connectionId, requestSignal))
+				}
+				case ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2: {
+					const input = decodeRequest(() => decodeZeropsSourceCredentialActivateRequestV2(body))
+					const activateV2 = this.github?.activateV2
+					if (activateV2 === undefined || this.github === undefined) {
+						throw new SourceFailure('credentials_invalid', 'credentials', false, 503)
+					}
+					return jsonResponse(
+						await activateV2.call(
+							this.github,
 							input.connectionId,
 							input.credentialBundle,
 							input.credentialSha256,
@@ -221,108 +262,19 @@ export class ZeropsSourceService {
 				}
 				case ZEROPS_SOURCE_RESOLVE_PATH: {
 					const input = decodeRequest(() => decodeZeropsSourceResolveRequest(body))
-					const deadline = operationDeadline(request.signal, this.operationTimeoutsMs.resolve)
-					let result: Awaited<ReturnType<RepositorySource['resolve']>>
-					try {
-						result = await this.repository.resolve({
-							repository: input.repository,
-							requestedRef: input.requestedRef,
-							...(input.expectedCommitSha === undefined
-								? {}
-								: { expectedCommitSha: input.expectedCommitSha }),
-							...(input.githubInstallationId === undefined
-								? {}
-								: { githubInstallationId: input.githubInstallationId }),
-							descriptorSha256: input.descriptorSha256,
-							signal: deadline.signal,
-						})
-						if (request.signal.aborted) throw cancelled('resolve')
-						if (deadline.timedOut()) throw operationTimedOut('resolve', true)
-					} catch (error) {
-						if (request.signal.aborted) throw cancelled('resolve')
-						if (deadline.timedOut()) throw operationTimedOut('resolve', true)
-						throw error
-					} finally {
-						deadline.dispose()
-					}
-					return jsonResponse(
-						buildZeropsSourceResolveResponse({ runId: input.runId, ...result }),
-					)
+					return await this.resolveSource(input, request.signal)
+				}
+				case ZEROPS_SOURCE_RESOLVE_PATH_V2: {
+					const input = decodeRequest(() => decodeZeropsSourceResolveRequestV2(body))
+					return await this.resolveSource(input, request.signal)
 				}
 				case ZEROPS_SOURCE_UPLOAD_PATH: {
 					const input = decodeRequest(() => decodeZeropsSourceUploadRequest(body))
-					validateUploadUrl(input.uploadUrl)
-					if (this.running.has(input.runId)) {
-						throw new SourceFailure('invalid_request', 'upload', false, 409)
-					}
-					const controller = linkedController(request.signal)
-					const deadline = operationDeadline(controller.signal, this.operationTimeoutsMs.upload)
-					this.running.set(input.runId, {
-						appVersionId: input.appVersionId,
-						controller,
-					})
-					let putStarted = false
-					try {
-						const archive = await this.repository.prepareArchive({
-							repository: input.repository,
-							commitSha: input.commitSha,
-							...(input.githubInstallationId === undefined
-								? {}
-								: { githubInstallationId: input.githubInstallationId }),
-							descriptorSha256: input.descriptor.sha256,
-							signal: deadline.signal,
-						})
-						if (controller.signal.aborted || deadline.timedOut()) {
-							await archive.cleanup().catch(() => {})
-							if (controller.signal.aborted) throw cancelled('upload')
-							throw operationTimedOut('archive', true)
-						}
-						let putFailure: unknown
-						try {
-							putStarted = true
-							await this.upload(
-								input.uploadUrl,
-								archive.tarPath,
-								deadline.signal,
-							)
-						} catch (error) {
-							putFailure = error
-						}
-						try {
-							await archive.cleanup()
-						} catch (error) {
-							putFailure ??= error
-						}
-						if (controller.signal.aborted) throw cancelled('upload')
-						if (deadline.timedOut()) throw operationTimedOut('upload', false)
-						if (putFailure !== undefined) {
-							if (
-								controller.signal.aborted
-								|| (putFailure instanceof Error
-									&& putFailure.name === 'AbortError')
-							) {
-								throw cancelled('upload')
-							}
-							throw new SourceFailure('upload_failed', 'upload', false, 502)
-						}
-						return jsonResponse(
-							buildZeropsSourceUploadResponse({
-								runId: input.runId,
-								appVersionId: input.appVersionId,
-								commitSha: archive.commitSha,
-								descriptorSha256: archive.descriptorSha256,
-							}),
-						)
-					} catch (error) {
-						if (controller.signal.aborted) throw cancelled('upload')
-						if (deadline.timedOut()) {
-							throw operationTimedOut(putStarted ? 'upload' : 'archive', !putStarted)
-						}
-						throw error
-					} finally {
-						deadline.dispose()
-						this.running.delete(input.runId)
-					}
+					return await this.uploadSource(input, request.signal)
+				}
+				case ZEROPS_SOURCE_UPLOAD_PATH_V2: {
+					const input = decodeRequest(() => decodeZeropsSourceUploadRequestV2(body))
+					return await this.uploadSource(input, request.signal)
 				}
 				case ZEROPS_SOURCE_CANCEL_PATH: {
 					const input = decodeRequest(() => decodeZeropsSourceCancelRequest(body))
@@ -344,7 +296,9 @@ export class ZeropsSourceService {
 		} catch (error) {
 			if (request.signal.aborted) return failureResponse(cancelled(stage))
 			if (credentialDeadline?.timedOut() === true) {
-				const retryable = path !== ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH && path !== ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH
+				const retryable = path !== ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH
+					&& path !== ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2
+					&& path !== ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH
 				return failureResponse(new SourceFailure('internal', 'credentials', retryable, 504))
 			}
 			return failureResponse(toFailure(error, stage))
@@ -381,6 +335,116 @@ export class ZeropsSourceService {
 				throw cancelled('resolve-installation')
 			}
 			throw new SourceFailure('internal', 'resolve-installation', true, 502)
+		}
+	}
+
+	private async resolveSource(
+		input: ZeropsSourceResolveRequestV1 | ZeropsSourceResolveRequestV2,
+		requestSignal: AbortSignal,
+	): Promise<Response> {
+		const deadline = operationDeadline(requestSignal, this.operationTimeoutsMs.resolve)
+		let result: Awaited<ReturnType<RepositorySource['resolve']>>
+		try {
+			result = await this.repository.resolve({
+				repository: input.repository,
+				requestedRef: input.requestedRef,
+				...(input.expectedCommitSha === undefined ? {} : { expectedCommitSha: input.expectedCommitSha }),
+				...(input.protocolVersion === 1 && input.githubInstallationId !== undefined
+					? { githubInstallationId: input.githubInstallationId }
+					: {}),
+				...(input.protocolVersion === 2 && input.privateBinding !== undefined
+					? { privateBinding: input.privateBinding }
+					: {}),
+				descriptorSha256: input.descriptorSha256,
+				signal: deadline.signal,
+			})
+			if (requestSignal.aborted) throw cancelled('resolve')
+			if (deadline.timedOut()) throw operationTimedOut('resolve', true)
+		} catch (error) {
+			if (requestSignal.aborted) throw cancelled('resolve')
+			if (deadline.timedOut()) throw operationTimedOut('resolve', true)
+			throw error
+		} finally {
+			deadline.dispose()
+		}
+		const response = { runId: input.runId, ...result }
+		return jsonResponse(
+			input.protocolVersion === 1
+				? buildZeropsSourceResolveResponse(response)
+				: buildZeropsSourceResolveResponseV2(response),
+		)
+	}
+
+	private async uploadSource(
+		input: ZeropsSourceUploadRequestV1 | ZeropsSourceUploadRequestV2,
+		requestSignal: AbortSignal,
+	): Promise<Response> {
+		validateUploadUrl(input.uploadUrl)
+		if (this.running.has(input.runId)) {
+			throw new SourceFailure('invalid_request', 'upload', false, 409)
+		}
+		const controller = linkedController(requestSignal)
+		const deadline = operationDeadline(controller.signal, this.operationTimeoutsMs.upload)
+		this.running.set(input.runId, { appVersionId: input.appVersionId, controller })
+		let putStarted = false
+		try {
+			const archive = await this.repository.prepareArchive({
+				repository: input.repository,
+				commitSha: input.commitSha,
+				...(input.protocolVersion === 1 && input.githubInstallationId !== undefined
+					? { githubInstallationId: input.githubInstallationId }
+					: {}),
+				...(input.protocolVersion === 2 && input.privateBinding !== undefined
+					? { privateBinding: input.privateBinding }
+					: {}),
+				descriptorSha256: input.descriptor.sha256,
+				signal: deadline.signal,
+			})
+			if (controller.signal.aborted || deadline.timedOut()) {
+				await archive.cleanup().catch(() => {})
+				if (controller.signal.aborted) throw cancelled('upload')
+				throw operationTimedOut('archive', true)
+			}
+			let putFailure: unknown
+			try {
+				putStarted = true
+				await this.upload(input.uploadUrl, archive.tarPath, deadline.signal)
+			} catch (error) {
+				putFailure = error
+			}
+			try {
+				await archive.cleanup()
+			} catch (error) {
+				putFailure ??= error
+			}
+			if (controller.signal.aborted) throw cancelled('upload')
+			if (deadline.timedOut()) throw operationTimedOut('upload', false)
+			if (putFailure !== undefined) {
+				if (controller.signal.aborted || (putFailure instanceof Error && putFailure.name === 'AbortError')) {
+					throw cancelled('upload')
+				}
+				throw new SourceFailure('upload_failed', 'upload', false, 502)
+			}
+			const response = {
+				runId: input.runId,
+				appVersionId: input.appVersionId,
+				commitSha: archive.commitSha,
+				descriptorSha256: archive.descriptorSha256,
+			}
+			return jsonResponse(
+				input.protocolVersion === 1
+					? buildZeropsSourceUploadResponse(response)
+					: buildZeropsSourceUploadResponseV2(response),
+			)
+		} catch (error) {
+			if (controller.signal.aborted) throw cancelled('upload')
+			if (deadline.timedOut()) {
+				throw operationTimedOut(putStarted ? 'upload' : 'archive', !putStarted)
+			}
+			throw error
+		} finally {
+			deadline.dispose()
+			this.running.delete(input.runId)
 		}
 	}
 
@@ -611,11 +675,12 @@ function stageForPath(path: string): ZeropsSourceErrorStage {
 	if (path === ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH) {
 		return 'resolve-installation'
 	}
-	if (path === ZEROPS_SOURCE_RESOLVE_PATH) return 'resolve'
-	if (path === ZEROPS_SOURCE_UPLOAD_PATH) return 'upload'
+	if (path === ZEROPS_SOURCE_RESOLVE_PATH || path === ZEROPS_SOURCE_RESOLVE_PATH_V2) return 'resolve'
+	if (path === ZEROPS_SOURCE_UPLOAD_PATH || path === ZEROPS_SOURCE_UPLOAD_PATH_V2) return 'upload'
 	if (path === ZEROPS_SOURCE_CANCEL_PATH) return 'cancel'
 	if (
 		path === ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH || path === ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH
+		|| path === ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2 || path === ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2
 		|| path === ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH || path === ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH
 	) return 'credentials'
 	return 'validate'

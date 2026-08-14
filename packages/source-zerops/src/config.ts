@@ -1,4 +1,5 @@
 import { GitHubAppClient, type GitHubAppFetch } from '@fabrika/github-app'
+import { ZEROPS_SOURCE_CREDENTIAL_ENV_V2_PREFIX } from '@fabrika/provider-zerops'
 import { GitHubConnection, type SourceGitHubClient } from './github-connection'
 import { GitHubMetadataClient, type GitHubMetadataFetch } from './github-metadata'
 import { GitRepositorySource, type RepositorySource } from './repository'
@@ -34,6 +35,7 @@ export async function createSourceRuntime(
 	const credentialBundle = optional(env, 'GITHUB_APP_CREDENTIALS')
 	const legacyAppId = optional(env, 'GITHUB_APP_ID')
 	const legacyPrivateKeyPem = optional(env, 'GITHUB_APP_PRIVATE_KEY')
+	const credentialSlotsV2 = sourceCredentialSlotsV2(env)
 	const createGitHubClient = options.createGitHubClient ?? ((input) =>
 		GitHubAppClient.create({
 			...input,
@@ -43,6 +45,7 @@ export async function createSourceRuntime(
 		...(credentialBundle === undefined ? {} : { credentialBundle }),
 		...(legacyAppId === undefined ? {} : { legacyAppId }),
 		...(legacyPrivateKeyPem === undefined ? {} : { legacyPrivateKeyPem }),
+		...(credentialSlotsV2.length === 0 ? {} : { credentialSlotsV2 }),
 		createClient: createGitHubClient,
 	})
 	const repository = options.repository
@@ -62,9 +65,19 @@ export async function createSourceRuntime(
 	})
 	return {
 		port: parsePort(optional(env, 'PORT')),
-		githubEnabled: github.snapshot() !== undefined,
+		githubEnabled: github.hasAnySnapshot(),
 		service,
 	}
+}
+
+function sourceCredentialSlotsV2(env: SourceEnvironment): readonly { readonly name: string; readonly credentialBundle: string }[] {
+	const slots: { name: string; credentialBundle: string }[] = []
+	for (const [name, value] of Object.entries(env)) {
+		if (!name.startsWith(ZEROPS_SOURCE_CREDENTIAL_ENV_V2_PREFIX)) continue
+		if (value === undefined || value.length === 0) throw new Error('GitHub App configuration is invalid')
+		slots.push({ name, credentialBundle: value })
+	}
+	return slots
 }
 
 function required(env: SourceEnvironment, name: string): string {

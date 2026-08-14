@@ -1,8 +1,12 @@
 import type { GitHubAppIdentity, GitHubAppInstallation } from '@fabrika/github-app'
 import {
 	buildZeropsSourceCredentialBundle,
+	buildZeropsSourceCredentialBundleV2,
 	serializeZeropsSourceCredentialBundle,
+	serializeZeropsSourceCredentialBundleV2,
 	sha256ZeropsSourceCredentialBundle,
+	sha256ZeropsSourceCredentialBundleV2,
+	zeropsSourceCredentialEnvV2,
 } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { GitHubConnection, type SourceGitHubClient } from '../github-connection'
@@ -44,6 +48,14 @@ const installation = (id: number, accountLogin = 'contember'): GitHubAppInstalla
 
 function bundle(appId = '123', privateKeyPem = PEM): string {
 	return serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({ githubAppId: appId, privateKeyPem }))
+}
+
+function bundleV2(connectionId: string, appId = '123', privateKeyPem = PEM): string {
+	return serializeZeropsSourceCredentialBundleV2(buildZeropsSourceCredentialBundleV2({
+		connectionId,
+		githubAppId: appId,
+		privateKeyPem,
+	}))
 }
 
 describe('source GitHub connection startup', () => {
@@ -100,9 +112,96 @@ describe('source GitHub connection startup', () => {
 		expect(raised).toBeInstanceOf(Error)
 		expect(raised instanceof Error ? raised.message : PEM).not.toContain(PEM)
 	})
+
+	test('loads keyed v2 slots without replacing or exposing the legacy default', async () => {
+		const first = bundleV2('connection-1', '124')
+		const second = bundleV2('connection-2', '125')
+		const connection = await GitHubConnection.create({
+			credentialBundle: bundle('123'),
+			credentialSlotsV2: [
+				{ name: await zeropsSourceCredentialEnvV2('connection-1'), credentialBundle: first },
+				{ name: await zeropsSourceCredentialEnvV2('connection-2'), credentialBundle: second },
+			],
+			createClient: async (input) => client(identity(Number(input.appId))),
+		})
+		expect(connection.snapshot()?.appId).toBe('123')
+		expect(connection.snapshotV2('connection-1')?.appId).toBe('124')
+		expect(connection.snapshotV2('connection-2')?.appId).toBe('125')
+		expect(connection.snapshotV2('missing')).toBeUndefined()
+	})
+
+	test('rejects mismatched and duplicate v2 slots without leaking their bundle', async () => {
+		const secret = bundleV2('connection-1')
+		for (
+			const slots of [
+				[{ name: await zeropsSourceCredentialEnvV2('connection-2'), credentialBundle: secret }],
+				[
+					{ name: await zeropsSourceCredentialEnvV2('connection-1'), credentialBundle: secret },
+					{ name: await zeropsSourceCredentialEnvV2('connection-1'), credentialBundle: secret },
+				],
+			]
+		) {
+			const raised = await GitHubConnection.create({ credentialSlotsV2: slots, createClient: async () => client() }).then(
+				() => undefined,
+				(error: unknown) => error,
+			)
+			expect(raised).toBeInstanceOf(Error)
+			expect(raised instanceof Error ? raised.message : secret).toBe('GitHub App configuration is invalid')
+			expect(raised instanceof Error ? raised.message : '').not.toContain(secret)
+		}
+	})
 })
 
 describe('source GitHub connection activation', () => {
+	test('activates independent v2 connections atomically while leaving the v1 default untouched', async () => {
+		const release = Promise.withResolvers<void>()
+		let verifications = 0
+		const connection = await GitHubConnection.create({
+			credentialBundle: bundle(),
+			createClient: async (input) => ({
+				...client(identity(Number(input.appId))),
+				getAuthenticatedApp: async () => {
+					verifications++
+					await release.promise
+					return identity(Number(input.appId))
+				},
+			}),
+		})
+		const first = bundleV2('connection-1', '124')
+		const second = bundleV2('connection-2', '125')
+		const activations = [
+			connection.activateV2('connection-1', first, await sha256ZeropsSourceCredentialBundleV2(first), new AbortController().signal),
+			connection.activateV2('connection-2', second, await sha256ZeropsSourceCredentialBundleV2(second), new AbortController().signal),
+		]
+		while (verifications < 2) await Bun.sleep(1)
+		release.resolve()
+		await expect(Promise.all(activations)).resolves.toHaveLength(2)
+		expect(connection.snapshot()?.appId).toBe('123')
+		expect(connection.snapshotV2('connection-1')?.appId).toBe('124')
+		expect(connection.snapshotV2('connection-2')?.appId).toBe('125')
+	})
+
+	test('binds v2 activation and status to the exact connection id and redacts credentials', async () => {
+		const connection = await GitHubConnection.create({ createClient: async () => client() })
+		const value = bundleV2('connection-1')
+		const digest = await sha256ZeropsSourceCredentialBundleV2(value)
+		await expect(
+			connection.activateV2('connection-2', value, digest, new AbortController().signal),
+		).rejects.toMatchObject({ code: 'credentials_invalid', status: 400 })
+		const activated = await connection.activateV2('connection-1', value, digest, new AbortController().signal)
+		expect(JSON.stringify(activated)).not.toContain('PRIVATE KEY')
+		expect(await connection.statusV2('connection-1', new AbortController().signal)).toMatchObject({
+			protocolVersion: 2,
+			state: 'active',
+			connectionId: 'connection-1',
+			credentialSha256: digest,
+		})
+		expect(await connection.statusV2('connection-2', new AbortController().signal)).toEqual({
+			protocolVersion: 2,
+			connectionId: 'connection-2',
+			state: 'anonymous',
+		})
+	})
 	test('imports and verifies before one atomic swap, then returns only bound identity and digest', async () => {
 		const calls: string[] = []
 		const connection = await GitHubConnection.create({

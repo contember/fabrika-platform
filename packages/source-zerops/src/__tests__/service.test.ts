@@ -1,18 +1,27 @@
 import {
 	buildZeropsSourceCancelRequest,
 	buildZeropsSourceCredentialActivateRequest,
+	buildZeropsSourceCredentialActivateRequestV2,
 	buildZeropsSourceCredentialBundle,
+	buildZeropsSourceCredentialBundleV2,
 	buildZeropsSourceCredentialStatusRequest,
+	buildZeropsSourceCredentialStatusRequestV2,
 	buildZeropsSourceInstallationsVerifyRequest,
 	buildZeropsSourceResolveInstallationRequest,
 	buildZeropsSourceResolveRequest,
+	buildZeropsSourceResolveRequestV2,
 	buildZeropsSourceUploadRequest,
+	buildZeropsSourceUploadRequestV2,
 	buildZeropsSourceWebhookConfigureRequest,
 	decodeZeropsSourceErrorEnvelope,
 	serializeZeropsSourceCredentialBundle,
+	serializeZeropsSourceCredentialBundleV2,
 	sha256ZeropsSourceCredentialBundle,
+	sha256ZeropsSourceCredentialBundleV2,
 	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2,
 	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2,
 	ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH,
 	ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH,
 } from '@fabrika/provider-zerops'
@@ -685,9 +694,154 @@ describe('Zerops source RPC authentication and routing', () => {
 			descriptorSha256,
 		})
 	})
+
+	test('routes v2 credentials and private bindings without exposing the bundle', async () => {
+		const github = await GitHubConnection.create({
+			createClient: async () => ({
+				getAuthenticatedApp: async () => ({
+					id: 123,
+					slug: 'fabrika-test',
+					htmlUrl: 'https://github.com/apps/fabrika-test',
+					public: false,
+					owner: { login: 'contember', type: 'Organization' },
+					permissions: { contents: 'read' },
+					events: ['push'],
+				}),
+				resolveInstallationId: async () => 42,
+				mintRepositoryToken: async () => ({ token: 'must-not-leak', expiresAt: Date.now() + 60_000 }),
+			}),
+		})
+		const resolveInputs: unknown[] = []
+		const repositorySource: RepositorySource = {
+			resolve: async (input) => {
+				resolveInputs.push(input.privateBinding)
+				return { commitSha, descriptorSha256 }
+			},
+			prepareArchive: async () => {
+				throw new Error('archive not expected')
+			},
+		}
+		const service = new ZeropsSourceService({ rpcKey, github, repository: repositorySource })
+		const credentialBundle = serializeZeropsSourceCredentialBundleV2(buildZeropsSourceCredentialBundleV2({
+			connectionId: 'connection-1',
+			githubAppId: '123',
+			privateKeyPem: credentialPem,
+		}))
+		const credentialSha256 = await sha256ZeropsSourceCredentialBundleV2(credentialBundle)
+		const activated = await service.fetch(rpcRequest(
+			ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2,
+			buildZeropsSourceCredentialActivateRequestV2({
+				connectionId: 'connection-1',
+				credentialBundle,
+				credentialSha256,
+				signal: new AbortController().signal,
+			}),
+		))
+		const activatedText = await activated.text()
+		expect(activated.status).toBe(200)
+		expect(activatedText).not.toContain('PRIVATE KEY')
+		expect(activatedText).not.toContain('must-not-leak')
+
+		const status = await service.fetch(rpcRequest(
+			ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2,
+			buildZeropsSourceCredentialStatusRequestV2({ connectionId: 'connection-1', signal: new AbortController().signal }),
+		))
+		expect(await status.json()).toMatchObject({ protocolVersion: 2, state: 'active', connectionId: 'connection-1' })
+
+		const resolved = await service.fetch(rpcRequest(
+			'/v2/source/resolve',
+			buildZeropsSourceResolveRequestV2({
+				runId: 'run-v2',
+				repository,
+				requestedRef: 'main',
+				privateBinding: { connectionId: 'connection-1', installationId: 42 },
+				descriptorSha256,
+				signal: new AbortController().signal,
+			}),
+		))
+		expect(await resolved.json()).toEqual({ protocolVersion: 2, runId: 'run-v2', commitSha, descriptorSha256 })
+		expect(resolveInputs).toEqual([{ connectionId: 'connection-1', installationId: 42 }])
+	})
+
+	test('rejects a partial v2 private binding before repository access', async () => {
+		let resolves = 0
+		const service = new ZeropsSourceService({
+			rpcKey,
+			repository: {
+				resolve: async () => {
+					resolves++
+					return { commitSha, descriptorSha256 }
+				},
+				prepareArchive: async () => {
+					throw new Error('archive not expected')
+				},
+			},
+		})
+		const response = await service.fetch(rpcRequest('/v2/source/resolve', {
+			protocolVersion: 2,
+			runId: 'run-v2',
+			repository,
+			requestedRef: 'main',
+			privateBinding: { connectionId: 'connection-1' },
+			descriptorSha256,
+		}))
+		expect(response.status).toBe(400)
+		expect(resolves).toBe(0)
+	})
 })
 
 describe('Zerops source upload', () => {
+	test('routes v2 upload binding and lets the v1 cancel endpoint stop it', async () => {
+		const prepared = await preparedArchive()
+		const archiveInputs: unknown[] = []
+		const started = Promise.withResolvers<void>()
+		const service = new ZeropsSourceService({
+			rpcKey,
+			repository: {
+				resolve: async () => ({ commitSha, descriptorSha256 }),
+				prepareArchive: async (input) => {
+					archiveInputs.push(input.privateBinding)
+					return prepared.archive
+				},
+			},
+			uploadFetch: async (_destination, init) =>
+				await new Promise<Response>((_resolve, reject) => {
+					started.resolve()
+					init.signal?.addEventListener('abort', () => reject(new DOMException('private reason', 'AbortError')), { once: true })
+				}),
+		})
+		const uploading = service.fetch(rpcRequest(
+			'/v2/source/upload',
+			buildZeropsSourceUploadRequestV2({
+				runId: 'run-v2',
+				appVersionId: 'version-v2',
+				repository,
+				commitSha,
+				privateBinding: { connectionId: 'connection-2', installationId: 52 },
+				uploadUrl,
+				descriptor: { path: 'zerops.yaml', sha256: descriptorSha256 },
+				signal: new AbortController().signal,
+			}),
+		))
+		await started.promise
+		await service.fetch(rpcRequest(
+			'/v1/source/cancel',
+			buildZeropsSourceCancelRequest({
+				runId: 'run-v2',
+				appVersionId: 'version-v2',
+				signal: new AbortController().signal,
+			}),
+		))
+		const response = await uploading
+		expect(response.status).toBe(409)
+		expect(decodeZeropsSourceErrorEnvelope(await response.json()).error).toEqual({
+			code: 'cancelled',
+			stage: 'upload',
+			retryable: false,
+		})
+		expect(archiveInputs).toEqual([{ connectionId: 'connection-2', installationId: 52 }])
+		expect(prepared.cleaned()).toBe(true)
+	})
 	test.each([
 		'https://attacker.test/api/rest/object-storage/upload?signature=x',
 		'http://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=x',
