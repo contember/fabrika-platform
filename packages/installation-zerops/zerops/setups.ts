@@ -296,7 +296,7 @@ const source: ZeropsYamlSetupSpec = {
 	deploy: { readinessCheck: { httpGet: { port: 3000, path: '/healthz' }, ...READINESS_IMMEDIATE } },
 	run: {
 		base: 'alpine/bun@1.3',
-		prepareCommands: ['apk add --no-cache git'],
+		// Zerops' Bun runtime already includes git; an unnecessary apk prepare makes deploy depend on root access.
 		start: 'bun packages/source-zerops/src/server.ts',
 		ports: [{ port: 3000, httpSupport: true }],
 		healthCheck: { httpGet: { port: 3000, path: '/healthz' }, ...LIVENESS },

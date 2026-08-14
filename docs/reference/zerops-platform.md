@@ -564,7 +564,9 @@ control calls `build-and-deploy` with the registered descriptor and selected set
 `buildFromGit` remains in use for Fabrika-owned installation artifacts such as the proxy, not for an
 application deployment.
 
-The installation has a private `source` service on `http://source:3000`. It installs `git`, exposes
+The installation has a private `source` service on `http://source:3000`. Zerops' Bun runtime already
+contains `git`; adding it again from `run.prepareCommands` failed live because package installation
+requires `sudo`. Source exposes
 only an unauthenticated private-network `/healthz` liveness endpoint, and authenticates every RPC before
 reading its bounded body. The shared RPC secret is `FABRIKA_SOURCE_RPC_KEY` on source and
 `FABRIKA_ZEROPS_SOURCE_RPC_KEY` on control. Source receives no Zerops token. Fresh source services

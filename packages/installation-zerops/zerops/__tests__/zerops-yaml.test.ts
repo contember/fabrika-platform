@@ -44,9 +44,9 @@ describe('one root file, several named setups — the merged-file decision, chec
 		expect(setupNames('zerops.yaml')).toEqual(['iam', 'operations', 'source', 'proxy', 'control'])
 	})
 
-	test('source is private, installs git, and control reaches it only over the project network', () => {
+	test('source is private, relies on the Bun runtime git, and control reaches it only over the project network', () => {
 		const yaml = read('zerops.yaml')
-		expect(yaml).toContain('apk add --no-cache git')
+		expect(yaml).not.toContain('apk add --no-cache git')
 		expect(yaml).toContain('FABRIKA_ZEROPS_SOURCE_URL: "http://source:3000"')
 		expect(yaml).toContain('bun packages/source-zerops/src/server.ts')
 		expect(yaml).not.toContain('FABRIKA_SOURCE_ZEROPS_ACCESS_TOKEN')
