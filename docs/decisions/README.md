@@ -116,6 +116,13 @@ without a PAT. Control owns a dynamic encrypted webhook secret; source receives 
 App-id/private-key bundle and activates it through a digest-bound private RPC. The CLI is a repair path
 over the same remote state. ADR-0030 still records the shared loopback helper's durability contract.
 
+ADR-0032 extends ADR-0029 and ADR-0031 from one installation-wide GitHub source connection to one
+private App per organization and multiple connections per Zerops installation. New credentials use
+create-only connection-keyed v2 bundles, source operations and webhooks bind the connection and
+installation explicitly, and an immutable transport marker keeps the copied Zerops singleton on its
+v1 compatibility route. Cloudflare preserves its static-secret and installation-id webhook behavior.
+There is no Fabrika connection-count limit; individual payloads and pages remain bounded.
+
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
@@ -151,3 +158,4 @@ over the same remote state. ADR-0030 still records the shared loopback helper's 
 - [0029](0029-an-operator-owned-github-app-delivers-zerops-sources.md) — An operator-owned GitHub App delivers Zerops application sources — accepted (2026-08-11)
 - [0030](0030-persist-github-app-creation-before-success.md) — Persist GitHub App creation before success — accepted; amends 0029's init durability detail (2026-08-12)
 - [0031](0031-manage-zerops-github-source-from-control.md) — Manage the Zerops GitHub source connection from control — accepted; supersedes 0030 for normal Zerops setup (2026-08-13)
+- [0032](0032-support-multiple-private-github-source-connections.md) — Support one private GitHub source connection per organization — accepted; extends 0029 and 0031 (2026-08-14)

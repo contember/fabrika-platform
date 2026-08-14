@@ -19,6 +19,15 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
+- [`sprint-2026-08-14-multiple-private-github-source-connections`](sprint-2026-08-14-multiple-private-github-source-connections.md)
+  — extend the live Zerops source path from one installation-wide GitHub App to one private App per
+  organization. The additive design keeps the existing Zerops v1 credential and generic webhook route,
+  gives every new connection a create-only keyed v2 credential and scoped webhook, and binds app
+  registry entries on the Zerops private-source path to connection plus installation. Cloudflare keeps
+  its static-secret and installation-id webhook behavior. There is no explicit connection-count limit.
+  Local compatibility gates and live Zerops restart plus second-organization deployment witnesses remain open
+  ([ADR-0032](../decisions/0032-support-multiple-private-github-source-connections.md)).
+
 - [`sprint-2026-08-11-fabrika-deploys-an-app-on-zerops`](sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md)
   — one gate: add a GitHub repository, **public or private**, and get it deployed into the Zerops
   account. Consumes [`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md),
