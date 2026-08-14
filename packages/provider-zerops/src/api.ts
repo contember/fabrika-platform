@@ -445,6 +445,8 @@ export interface ZeropsApi {
 	 * NOT `GET /service-stack/{id}/user-data`, which answers `400 serviceStackNotFound` on every
 	 * service, deployed or not — see `docs/reference/zerops-platform.md`. The `/env` reading omits
 	 * variables the service's own `zerops.yaml` declares (`type: ENV`); fabrika never writes those.
+	 * The OpenAPI publishes no lookup/pagination terms and live probes found query terms ignored, so the
+	 * implementation reads one full response under a byte bound rather than imposing an entry-count cap.
 	 */
 	listServiceEnv(input: { serviceId: string; signal: AbortSignal }): Promise<ZeropsServiceEnv[]>
 
@@ -785,6 +787,58 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 	const doFetch = options.fetchImpl ?? fetch
 	const abortError = (): DOMException => new DOMException('The operation was aborted', 'AbortError')
 	const isAbortError = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError'
+	const SERVICE_ENV_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+	class ResponseByteBoundError extends Error {}
+
+	const boundedJson = async (response: Response, label: string, maxBytes: number, signal: AbortSignal): Promise<unknown> => {
+		if (signal.aborted) {
+			void response.body?.cancel().catch(() => {})
+			throw abortError()
+		}
+		const contentLength = response.headers.get('content-length')
+		if (contentLength !== null) {
+			const declaredBytes = Number(contentLength)
+			if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
+				void response.body?.cancel().catch(() => {})
+				throw new ResponseByteBoundError(`zerops: ${label} response exceeded its byte bound`)
+			}
+		}
+		if (response.body === null) return null
+		const reader = response.body.getReader()
+		let abortRead = (): void => {}
+		const aborted = new Promise<never>((_resolve, reject) => {
+			abortRead = (): void => {
+				void reader.cancel().catch(() => {})
+				reject(abortError())
+			}
+			signal.addEventListener('abort', abortRead, { once: true })
+			if (signal.aborted) abortRead()
+		})
+		const chunks: Uint8Array[] = []
+		let receivedBytes = 0
+		try {
+			while (true) {
+				const next = await Promise.race([reader.read(), aborted])
+				if (signal.aborted) throw abortError()
+				if (next.done) break
+				receivedBytes += next.value.byteLength
+				if (receivedBytes > maxBytes) {
+					void reader.cancel().catch(() => {})
+					throw new ResponseByteBoundError(`zerops: ${label} response exceeded its byte bound`)
+				}
+				chunks.push(next.value)
+			}
+		} finally {
+			signal.removeEventListener('abort', abortRead)
+		}
+		const bytes = new Uint8Array(receivedBytes)
+		let offset = 0
+		for (const chunk of chunks) {
+			bytes.set(chunk, offset)
+			offset += chunk.byteLength
+		}
+		return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+	}
 
 	const request = async (
 		label: string,
@@ -797,7 +851,13 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		 * `omitErrorResponseDetails` also drops the code for upload flows whose response may carry a
 		 * credential; nothing from that response body may reach an error.
 		 */
-		init: { body?: unknown; signal: AbortSignal; redactDetail?: boolean; omitErrorResponseDetails?: boolean },
+		init: {
+			body?: unknown
+			signal: AbortSignal
+			redactDetail?: boolean
+			omitErrorResponseDetails?: boolean
+			responseMaxBytes?: number
+		},
 	): Promise<unknown> => {
 		if (init.signal.aborted) {
 			throw abortError()
@@ -820,9 +880,12 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		}
 		let payload: unknown
 		try {
-			payload = await response.json()
+			payload = init.responseMaxBytes === undefined
+				? await response.json()
+				: await boundedJson(response, label, init.responseMaxBytes, init.signal)
 		} catch (error) {
 			if (init.signal.aborted || isAbortError(error)) throw abortError()
+			if (error instanceof ResponseByteBoundError) throw error
 			payload = null
 		}
 		if (!response.ok) {
@@ -887,8 +950,13 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 	 * that hands it over on every service is `/env` (`/user-data` answers 400 unconditionally).
 	 */
 	const listServiceEnv: ZeropsApi['listServiceEnv'] = async ({ serviceId, signal }) => {
-		const payload = await request('list service env', 'GET', `/service-stack/${serviceId}/env`, { signal })
-		return arr(payload, 'items').map(readServiceEnv)
+		const payload = await request('list service env', 'GET', `/service-stack/${serviceId}/env`, {
+			signal,
+			responseMaxBytes: SERVICE_ENV_RESPONSE_MAX_BYTES,
+		})
+		const items = prop(payload, 'items')
+		if (!Array.isArray(items)) throw invalidResponse('list service env')
+		return items.map(readServiceEnv)
 	}
 
 	return {

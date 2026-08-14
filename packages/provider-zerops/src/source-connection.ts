@@ -2,11 +2,19 @@ import type { ZeropsApi, ZeropsService, ZeropsServiceEnv } from './api'
 import {
 	buildZeropsSourceCredentialBundle,
 	decodeZeropsSourceCredentialBundle,
+	decodeZeropsSourceCredentialBundleV2,
 	serializeZeropsSourceCredentialBundle,
 	sha256ZeropsSourceCredentialBundle,
+	sha256ZeropsSourceCredentialBundleV2,
+	ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION_V2,
+	ZEROPS_SOURCE_PROTOCOL_VERSION_V2,
 	type ZeropsSourceCredentialActivateResponseV1,
+	type ZeropsSourceCredentialActivateResponseV2,
+	zeropsSourceCredentialEnvV2,
 	type ZeropsSourceCredentialManager,
+	type ZeropsSourceCredentialManagerV2,
 	type ZeropsSourceCredentialStatusResponseV1,
+	type ZeropsSourceCredentialStatusResponseV2,
 	type ZeropsSourceGitHubAppIdentityV1,
 	type ZeropsSourceInstallationsVerifyInput,
 	type ZeropsSourceInstallationsVerifyResponseV1,
@@ -19,7 +27,6 @@ export const ZEROPS_SOURCE_LEGACY_APP_ID_ENV = 'GITHUB_APP_ID'
 export const ZEROPS_SOURCE_LEGACY_PRIVATE_KEY_ENV = 'GITHUB_APP_PRIVATE_KEY'
 
 const SOURCE_HOSTNAME = 'source'
-const MAX_ENV_ENTRIES = 256
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/
 const DEFAULT_REREAD_ATTEMPTS = 5
 const DEFAULT_REREAD_DELAY_MS = 250
@@ -62,16 +69,23 @@ export interface SourceConnectionAdmin {
 	inspect(signal: AbortSignal): Promise<SourceConnectionInspection>
 	adoptExisting(input: SourceConnectionAdoptExistingInput): Promise<ZeropsSourceCredentialActivateResponseV1>
 	activate(input: SourceConnectionActivateInput): Promise<ZeropsSourceCredentialActivateResponseV1>
+	activateV2?(input: SourceConnectionActivateInput): Promise<ZeropsSourceCredentialActivateResponseV2>
 	status(input: SourceConnectionStatusInput): Promise<SourceConnectionStatus>
+	statusV2?(input: SourceConnectionStatusInput): Promise<SourceConnectionStatus>
 	configureWebhook(input: ZeropsSourceWebhookConfigureInput): Promise<ZeropsSourceWebhookConfigureResponseV1>
 	verifyInstallations(input: ZeropsSourceInstallationsVerifyInput): Promise<ZeropsSourceInstallationsVerifyResponseV1>
+}
+
+interface CompleteSourceConnectionAdmin extends SourceConnectionAdmin {
+	activateV2(input: SourceConnectionActivateInput): Promise<ZeropsSourceCredentialActivateResponseV2>
+	statusV2(input: SourceConnectionStatusInput): Promise<SourceConnectionStatus>
 }
 
 export type SourceConnectionZeropsApi = Pick<ZeropsApi, 'findService' | 'listServiceEnv' | 'createServiceEnv'>
 
 export interface ZeropsSourceConnectionAdminOptions {
 	readonly api: SourceConnectionZeropsApi
-	readonly source: ZeropsSourceCredentialManager
+	readonly source: ZeropsSourceCredentialManager & Partial<ZeropsSourceCredentialManagerV2>
 	readonly projectId: string
 	readonly reread?: {
 		readonly attempts?: number
@@ -102,7 +116,16 @@ interface DurableInspection {
 	readonly bundle?: string
 }
 
-export function createZeropsSourceConnectionAdmin(options: ZeropsSourceConnectionAdminOptions): SourceConnectionAdmin {
+interface DurableInspectionV2 {
+	readonly public:
+		| { readonly state: 'anonymous' }
+		| { readonly state: 'durable'; readonly credentialSha256: string }
+	readonly service: ZeropsService
+	readonly environmentKey: string
+	readonly bundle?: string
+}
+
+export function createZeropsSourceConnectionAdmin(options: ZeropsSourceConnectionAdminOptions): CompleteSourceConnectionAdmin {
 	if (!PROJECT_ID_PATTERN.test(options.projectId)) throw new SourceConnectionAdminError('invalid_configuration')
 	const attempts = options.reread?.attempts ?? DEFAULT_REREAD_ATTEMPTS
 	const delayMs = options.reread?.delayMs ?? DEFAULT_REREAD_DELAY_MS
@@ -111,7 +134,7 @@ export function createZeropsSourceConnectionAdmin(options: ZeropsSourceConnectio
 	}
 	const sleep = options.reread?.sleep ?? defaultSleep
 
-	const inspectInternal = async (signal: AbortSignal): Promise<DurableInspection> => {
+	const readEnvironment = async (signal: AbortSignal): Promise<{ service: ZeropsService; environment: ZeropsServiceEnv[] }> => {
 		throwIfAborted(signal)
 		const service = await exactSourceService(options.api, options.projectId, signal)
 		let environment: ZeropsServiceEnv[]
@@ -122,10 +145,26 @@ export function createZeropsSourceConnectionAdmin(options: ZeropsSourceConnectio
 			throw new SourceConnectionAdminError('credential_persistence')
 		}
 		throwIfAborted(signal)
-		return await withDigest(classify(service, environment))
+		return { service, environment }
 	}
 
-	const admin: SourceConnectionAdmin = {
+	const inspectInternal = async (signal: AbortSignal): Promise<DurableInspection> => {
+		const current = await readEnvironment(signal)
+		return await withDigest(classify(current.service, current.environment))
+	}
+
+	const inspectV2Internal = async (connectionId: string, signal: AbortSignal): Promise<DurableInspectionV2> => {
+		let environmentKey: string
+		try {
+			environmentKey = await zeropsSourceCredentialEnvV2(connectionId)
+		} catch {
+			throw new SourceConnectionAdminError('credential_conflict')
+		}
+		const current = await readEnvironment(signal)
+		return await classifyV2(current.service, current.environment, environmentKey, connectionId)
+	}
+
+	const admin: CompleteSourceConnectionAdmin = {
 		inspect: async (signal) => (await inspectInternal(signal)).public,
 
 		adoptExisting: async (input) => {
@@ -212,6 +251,68 @@ export function createZeropsSourceConnectionAdmin(options: ZeropsSourceConnectio
 			return activated
 		},
 
+		activateV2: async (input) => {
+			if (options.source.activateV2 === undefined || options.source.statusV2 === undefined) {
+				throw new SourceConnectionAdminError('credential_activation')
+			}
+			const activateV2 = options.source.activateV2.bind(options.source)
+			const statusV2 = options.source.statusV2.bind(options.source)
+			let digest: string
+			try {
+				const bundle = decodeZeropsSourceCredentialBundleV2(input.credentialBundle)
+				if (bundle.connectionId !== input.connectionId) throw new Error('connection mismatch')
+				digest = await sha256ZeropsSourceCredentialBundleV2(input.credentialBundle)
+			} catch {
+				throw new SourceConnectionAdminError('credential_conflict')
+			}
+			if (digest !== input.credentialSha256) throw new SourceConnectionAdminError('credential_conflict')
+			const initial = await inspectV2Internal(input.connectionId, input.signal)
+			if (initial.public.state === 'durable') {
+				if (initial.bundle !== input.credentialBundle || initial.public.credentialSha256 !== digest) {
+					throw new SourceConnectionAdminError('credential_conflict')
+				}
+			} else {
+				try {
+					await options.api.createServiceEnv({
+						serviceId: initial.service.id,
+						key: initial.environmentKey,
+						value: input.credentialBundle,
+						signal: input.signal,
+					})
+				} catch (error) {
+					if (isAbort(error, input.signal)) throw error
+				}
+				await proveDurableV2(input, digest, attempts, delayMs, sleep, inspectV2Internal)
+			}
+			let activated: ZeropsSourceCredentialActivateResponseV2
+			try {
+				activated = await activateV2(input)
+			} catch (error) {
+				if (isAbort(error, input.signal)) throw error
+				let status: ZeropsSourceCredentialStatusResponseV2
+				try {
+					status = await statusV2({ connectionId: input.connectionId, signal: input.signal })
+				} catch (statusError) {
+					if (isAbort(statusError, input.signal)) throw statusError
+					throw new SourceConnectionAdminError('credential_activation')
+				}
+				if (
+					status.state !== 'active' || status.connectionId !== input.connectionId || status.credentialSha256 !== digest
+				) throw new SourceConnectionAdminError('credential_activation')
+				activated = {
+					protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION_V2,
+					connectionId: input.connectionId,
+					credentialVersion: ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION_V2,
+					credentialSha256: status.credentialSha256,
+					githubApp: status.githubApp,
+				}
+			}
+			if (activated.connectionId !== input.connectionId || activated.credentialSha256 !== digest) {
+				throw new SourceConnectionAdminError('credential_activation')
+			}
+			return activated
+		},
+
 		status: async (input) => {
 			const durable = await inspectInternal(input.signal)
 			if (durable.public.state !== 'durable') return durable.public
@@ -231,8 +332,30 @@ export function createZeropsSourceConnectionAdmin(options: ZeropsSourceConnectio
 			return { state: 'active', credentialSha256: runtime.credentialSha256, githubApp: runtime.githubApp }
 		},
 
+		statusV2: async (input) => {
+			const durable = await inspectV2Internal(input.connectionId, input.signal)
+			if (durable.public.state !== 'durable') return durable.public
+			const statusV2 = options.source.statusV2
+			if (statusV2 === undefined) throw new SourceConnectionAdminError('credential_activation')
+			const readStatusV2 = statusV2.bind(options.source)
+			let runtime: ZeropsSourceCredentialStatusResponseV2
+			try {
+				runtime = await readStatusV2(input)
+			} catch (error) {
+				if (isAbort(error, input.signal)) throw error
+				throw new SourceConnectionAdminError('credential_activation')
+			}
+			if (runtime.connectionId !== input.connectionId || runtime.state === 'anonymous') {
+				return { state: 'activation-required', credentialSha256: durable.public.credentialSha256 }
+			}
+			if (runtime.credentialSha256 !== durable.public.credentialSha256) {
+				throw new SourceConnectionAdminError('credential_conflict')
+			}
+			return { state: 'active', credentialSha256: runtime.credentialSha256, githubApp: runtime.githubApp }
+		},
+
 		configureWebhook: async (input) => {
-			await requireDurableDigest(input.credentialSha256, input.signal, inspectInternal)
+			await requireDurableDigest(input.connectionId, input.credentialSha256, input.signal, inspectInternal, inspectV2Internal)
 			try {
 				const response = await options.source.configureWebhook(input)
 				if (
@@ -248,7 +371,7 @@ export function createZeropsSourceConnectionAdmin(options: ZeropsSourceConnectio
 		},
 
 		verifyInstallations: async (input) => {
-			await requireDurableDigest(input.credentialSha256, input.signal, inspectInternal)
+			await requireDurableDigest(input.connectionId, input.credentialSha256, input.signal, inspectInternal, inspectV2Internal)
 			try {
 				const response = await options.source.verifyInstallations(input)
 				if (response.connectionId !== input.connectionId || response.credentialSha256 !== input.credentialSha256) {
@@ -272,10 +395,17 @@ async function adoptionConnectionId(projectId: string, credentialSha256: string)
 }
 
 async function requireDurableDigest(
+	connectionId: string,
 	digest: string,
 	signal: AbortSignal,
 	inspect: (signal: AbortSignal) => Promise<DurableInspection>,
+	inspectV2: (connectionId: string, signal: AbortSignal) => Promise<DurableInspectionV2>,
 ): Promise<void> {
+	const keyed = await inspectV2(connectionId, signal)
+	if (keyed.public.state === 'durable') {
+		if (keyed.public.credentialSha256 === digest) return
+		throw new SourceConnectionAdminError('credential_conflict')
+	}
 	const durable = await inspect(signal)
 	if (durable.public.state !== 'durable' || durable.public.credentialSha256 !== digest) {
 		throw new SourceConnectionAdminError('credential_conflict')
@@ -298,7 +428,6 @@ async function exactSourceService(api: SourceConnectionZeropsApi, projectId: str
 }
 
 function classify(service: ZeropsService, environment: readonly ZeropsServiceEnv[]): DurableInspection {
-	if (environment.length > MAX_ENV_ENTRIES) throw new SourceConnectionAdminError('source_mismatch')
 	const bundleEntries = environment.filter((entry) => entry.key === ZEROPS_SOURCE_CREDENTIAL_ENV)
 	const legacyIdEntries = environment.filter((entry) => entry.key === ZEROPS_SOURCE_LEGACY_APP_ID_ENV)
 	const legacyKeyEntries = environment.filter((entry) => entry.key === ZEROPS_SOURCE_LEGACY_PRIVATE_KEY_ENV)
@@ -337,6 +466,31 @@ function classify(service: ZeropsService, environment: readonly ZeropsServiceEnv
 	return { public: { state: 'legacy-partial' }, service }
 }
 
+async function classifyV2(
+	service: ZeropsService,
+	environment: readonly ZeropsServiceEnv[],
+	environmentKey: string,
+	connectionId: string,
+): Promise<DurableInspectionV2> {
+	const entries = environment.filter((entry) => entry.key === environmentKey)
+	if (entries.length > 1) throw new SourceConnectionAdminError('credential_conflict')
+	if (entries.length === 0) return { public: { state: 'anonymous' }, service, environmentKey }
+	const bundle = entries[0]?.content
+	if (bundle === undefined) throw new SourceConnectionAdminError('credential_conflict')
+	try {
+		const decoded = decodeZeropsSourceCredentialBundleV2(bundle)
+		if (decoded.connectionId !== connectionId) throw new Error('connection mismatch')
+		return {
+			public: { state: 'durable', credentialSha256: await sha256ZeropsSourceCredentialBundleV2(bundle) },
+			service,
+			environmentKey,
+			bundle,
+		}
+	} catch {
+		throw new SourceConnectionAdminError('credential_conflict')
+	}
+}
+
 async function withDigest(inspection: DurableInspection): Promise<DurableInspection> {
 	if (inspection.public.state !== 'durable' || inspection.bundle === undefined) return inspection
 	return {
@@ -362,6 +516,25 @@ async function proveDurable(
 		}
 		if (durable.public.state !== 'anonymous') throw new SourceConnectionAdminError('credential_conflict')
 		if (attempt + 1 < attempts) await sleep(delayMs, signal)
+	}
+	throw new SourceConnectionAdminError('credential_persistence')
+}
+
+async function proveDurableV2(
+	input: SourceConnectionActivateInput,
+	digest: string,
+	attempts: number,
+	delayMs: number,
+	sleep: (delayMs: number, signal: AbortSignal) => Promise<void>,
+	inspect: (connectionId: string, signal: AbortSignal) => Promise<DurableInspectionV2>,
+): Promise<void> {
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		const durable = await inspect(input.connectionId, input.signal)
+		if (durable.public.state === 'durable') {
+			if (durable.bundle === input.credentialBundle && durable.public.credentialSha256 === digest) return
+			throw new SourceConnectionAdminError('credential_conflict')
+		}
+		if (attempt + 1 < attempts) await sleep(delayMs, input.signal)
 	}
 	throw new SourceConnectionAdminError('credential_persistence')
 }

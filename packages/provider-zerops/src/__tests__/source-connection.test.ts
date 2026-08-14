@@ -1,16 +1,23 @@
 import { describe, expect, test } from 'bun:test'
 import {
+	buildZeropsSourceCredentialBundleV2,
 	serializeZeropsSourceCredentialBundle,
+	serializeZeropsSourceCredentialBundleV2,
 	sha256ZeropsSourceCredentialBundle,
+	sha256ZeropsSourceCredentialBundleV2,
 	type ZeropsSourceCredentialActivateInput,
 	type ZeropsSourceCredentialActivateResponseV1,
+	type ZeropsSourceCredentialActivateResponseV2,
+	zeropsSourceCredentialEnvV2,
 	type ZeropsSourceCredentialManager,
 	type ZeropsSourceCredentialStatusInput,
 	type ZeropsSourceCredentialStatusResponseV1,
+	type ZeropsSourceCredentialStatusResponseV2,
 	type ZeropsSourceGitHubAppIdentityV1,
 } from '../source'
 import {
 	createZeropsSourceConnectionAdmin,
+	type SourceConnectionActivateInput,
 	SourceConnectionAdminError,
 	type SourceConnectionInspection,
 	type SourceConnectionZeropsApi,
@@ -24,6 +31,18 @@ MAMCAQE=
 -----END PRIVATE KEY-----
 `
 const BUNDLE = serializeZeropsSourceCredentialBundle({ version: 1, githubAppId: '123', privateKeyPem: PEM })
+const CONNECTION_1 = 'connection-1'
+const CONNECTION_2 = 'connection-2'
+const BUNDLE_V2_1 = serializeZeropsSourceCredentialBundleV2(buildZeropsSourceCredentialBundleV2({
+	connectionId: CONNECTION_1,
+	githubAppId: '123',
+	privateKeyPem: PEM,
+}))
+const BUNDLE_V2_2 = serializeZeropsSourceCredentialBundleV2(buildZeropsSourceCredentialBundleV2({
+	connectionId: CONNECTION_2,
+	githubAppId: '456',
+	privateKeyPem: PEM,
+}))
 const IDENTITY: ZeropsSourceGitHubAppIdentityV1 = {
 	id: 123,
 	slug: 'fabrika-test',
@@ -36,7 +55,9 @@ const IDENTITY: ZeropsSourceGitHubAppIdentityV1 = {
 
 interface FakeState {
 	readonly environment: Map<string, string>
+	environmentEntries?: Array<{ readonly key: string; readonly content: string }>
 	findResult?: { id: string; name: string; projectId?: string } | null
+	listFailure?: Error
 	createFailure?: Error
 	delayedReads?: number
 	created: Array<{ key: string; value: string }>
@@ -45,13 +66,13 @@ interface FakeState {
 const fakeApi = (state: FakeState): SourceConnectionZeropsApi => ({
 	findService: () => Promise.resolve(state.findResult === undefined ? { id: SERVICE_ID, name: 'source', projectId: PROJECT_ID } : state.findResult),
 	listServiceEnv: () => {
+		if (state.listFailure !== undefined) return Promise.reject(state.listFailure)
 		if ((state.delayedReads ?? 0) > 0) {
 			state.delayedReads = (state.delayedReads ?? 0) - 1
 			return Promise.resolve([])
 		}
-		return Promise.resolve(
-			[...state.environment].map(([key, content], index) => ({ id: `env-${index}`, key, content, serviceStackId: SERVICE_ID })),
-		)
+		const entries = state.environmentEntries ?? [...state.environment].map(([key, content]) => ({ key, content }))
+		return Promise.resolve(entries.map((entry, index) => ({ id: `env-${index}`, ...entry, serviceStackId: SERVICE_ID })))
 	},
 	createServiceEnv: ({ key, value }) => {
 		state.created.push({ key, value })
@@ -62,8 +83,11 @@ const fakeApi = (state: FakeState): SourceConnectionZeropsApi => ({
 
 class FakeSource implements ZeropsSourceCredentialManager {
 	readonly activations: ZeropsSourceCredentialActivateInput[] = []
+	readonly activationsV2: ZeropsSourceCredentialActivateInput[] = []
 	activationFailure?: Error
+	activationFailureV2?: Error
 	statusResult: ZeropsSourceCredentialStatusResponseV1 | undefined
+	statusResultV2 = new Map<string, ZeropsSourceCredentialStatusResponseV2>()
 
 	async activate(input: ZeropsSourceCredentialActivateInput): Promise<ZeropsSourceCredentialActivateResponseV1> {
 		this.activations.push(input)
@@ -79,6 +103,24 @@ class FakeSource implements ZeropsSourceCredentialManager {
 
 	status(input: ZeropsSourceCredentialStatusInput): Promise<ZeropsSourceCredentialStatusResponseV1> {
 		return Promise.resolve(this.statusResult ?? { protocolVersion: 1, connectionId: input.connectionId, state: 'anonymous' })
+	}
+
+	async activateV2(input: ZeropsSourceCredentialActivateInput): Promise<ZeropsSourceCredentialActivateResponseV2> {
+		this.activationsV2.push(input)
+		if (this.activationFailureV2 !== undefined) throw this.activationFailureV2
+		return {
+			protocolVersion: 2,
+			connectionId: input.connectionId,
+			credentialVersion: 2,
+			credentialSha256: input.credentialSha256,
+			githubApp: IDENTITY,
+		}
+	}
+
+	statusV2(input: ZeropsSourceCredentialStatusInput): Promise<ZeropsSourceCredentialStatusResponseV2> {
+		return Promise.resolve(
+			this.statusResultV2.get(input.connectionId) ?? { protocolVersion: 2, connectionId: input.connectionId, state: 'anonymous' },
+		)
 	}
 
 	configureWebhook(
@@ -142,6 +184,19 @@ describe('Zerops source connection administration', () => {
 			projectId: PROJECT_ID,
 		})
 		expect(await compatible.inspect(signal())).toEqual({ state: 'durable', credentialSha256: digest })
+	})
+
+	test('maps an invalid environment response to a detail-free persistence error', async () => {
+		const secret = 'invalid-response-bytes-that-must-not-leak'
+		const current = state()
+		current.listFailure = new Error(`invalid environment response: ${secret}`)
+		const admin = createZeropsSourceConnectionAdmin({ api: fakeApi(current), source: new FakeSource(), projectId: PROJECT_ID })
+
+		const error = await admin.inspect(signal()).catch((cause: unknown) => cause)
+		expect(error).toBeInstanceOf(SourceConnectionAdminError)
+		expect(error).toMatchObject({ code: 'credential_persistence' })
+		expect(error instanceof Error ? error.message : '').toBe('source connection administration failed (credential_persistence)')
+		expect(error instanceof Error ? error.message : '').not.toContain(secret)
 	})
 
 	test('adopts a complete legacy pair through one create-only canonical bundle write', async () => {
@@ -225,6 +280,105 @@ describe('Zerops source connection administration', () => {
 		await admin.activate({ connectionId: 'connection-1', credentialBundle: BUNDLE, credentialSha256, signal: signal() })
 		await admin.activate({ connectionId: 'connection-1', credentialBundle: BUNDLE, credentialSha256, signal: signal() })
 		expect(durable.created).toHaveLength(1)
+	})
+
+	test('persists distinct create-only v2 slots and makes repeated activation idempotent', async () => {
+		const durable = state()
+		const source = new FakeSource()
+		const admin = createZeropsSourceConnectionAdmin({ api: fakeApi(durable), source, projectId: PROJECT_ID })
+		const digest1 = await sha256ZeropsSourceCredentialBundleV2(BUNDLE_V2_1)
+		const digest2 = await sha256ZeropsSourceCredentialBundleV2(BUNDLE_V2_2)
+
+		await admin.activateV2({ connectionId: CONNECTION_1, credentialBundle: BUNDLE_V2_1, credentialSha256: digest1, signal: signal() })
+		await admin.activateV2({ connectionId: CONNECTION_2, credentialBundle: BUNDLE_V2_2, credentialSha256: digest2, signal: signal() })
+		await admin.activateV2({ connectionId: CONNECTION_1, credentialBundle: BUNDLE_V2_1, credentialSha256: digest1, signal: signal() })
+
+		expect(durable.created).toEqual([
+			{ key: await zeropsSourceCredentialEnvV2(CONNECTION_1), value: BUNDLE_V2_1 },
+			{ key: await zeropsSourceCredentialEnvV2(CONNECTION_2), value: BUNDLE_V2_2 },
+		])
+		expect(source.activationsV2.map((input) => input.connectionId)).toEqual([CONNECTION_1, CONNECTION_2, CONNECTION_1])
+		expect(await admin.statusV2({ connectionId: CONNECTION_1, signal: signal() })).toEqual({
+			state: 'activation-required',
+			credentialSha256: digest1,
+		})
+		source.statusResultV2.set(CONNECTION_1, {
+			protocolVersion: 2,
+			connectionId: CONNECTION_1,
+			state: 'active',
+			credentialVersion: 2,
+			credentialSha256: digest1,
+			githubApp: IDENTITY,
+		})
+		expect(await admin.statusV2({ connectionId: CONNECTION_1, signal: signal() })).toEqual({
+			state: 'active',
+			credentialSha256: digest1,
+			githubApp: IDENTITY,
+		})
+	})
+
+	test('recovers an ambiguous v2 create only from the exact connection slot', async () => {
+		const durable = state()
+		durable.createFailure = new Error(`upstream echoed ${BUNDLE_V2_1}`)
+		const source = new FakeSource()
+		const admin = createZeropsSourceConnectionAdmin({ api: fakeApi(durable), source, projectId: PROJECT_ID })
+		const digest = await sha256ZeropsSourceCredentialBundleV2(BUNDLE_V2_1)
+
+		await expect(
+			admin.activateV2({ connectionId: CONNECTION_1, credentialBundle: BUNDLE_V2_1, credentialSha256: digest, signal: signal() }),
+		).resolves.toMatchObject({ protocolVersion: 2, connectionId: CONNECTION_1, credentialSha256: digest })
+		expect(durable.created).toEqual([{ key: await zeropsSourceCredentialEnvV2(CONNECTION_1), value: BUNDLE_V2_1 }])
+	})
+
+	test('rejects v2 slot, bundle, request, and digest mismatches without rewriting durable state', async () => {
+		const slot1 = await zeropsSourceCredentialEnvV2(CONNECTION_1)
+		const mismatchedBundle = serializeZeropsSourceCredentialBundleV2(buildZeropsSourceCredentialBundleV2({
+			connectionId: CONNECTION_1,
+			githubAppId: '789',
+			privateKeyPem: PEM,
+		}))
+		const digest1 = await sha256ZeropsSourceCredentialBundleV2(BUNDLE_V2_1)
+		const cases: Array<{ durable: FakeState; input: SourceConnectionActivateInput }> = [
+			{
+				durable: state({ [slot1]: mismatchedBundle }),
+				input: { connectionId: CONNECTION_1, credentialBundle: BUNDLE_V2_1, credentialSha256: digest1, signal: signal() },
+			},
+			{
+				durable: state({ [slot1]: BUNDLE_V2_2 }),
+				input: { connectionId: CONNECTION_1, credentialBundle: BUNDLE_V2_1, credentialSha256: digest1, signal: signal() },
+			},
+			{
+				durable: state(),
+				input: { connectionId: CONNECTION_2, credentialBundle: BUNDLE_V2_1, credentialSha256: digest1, signal: signal() },
+			},
+			{
+				durable: state(),
+				input: { connectionId: CONNECTION_1, credentialBundle: BUNDLE_V2_1, credentialSha256: 'f'.repeat(64), signal: signal() },
+			},
+		]
+		const duplicate = state()
+		duplicate.environmentEntries = [{ key: slot1, content: BUNDLE_V2_1 }, { key: slot1, content: BUNDLE_V2_1 }]
+		cases.push({
+			durable: duplicate,
+			input: { connectionId: CONNECTION_1, credentialBundle: BUNDLE_V2_1, credentialSha256: digest1, signal: signal() },
+		})
+		for (const current of cases) {
+			const admin = createZeropsSourceConnectionAdmin({ api: fakeApi(current.durable), source: new FakeSource(), projectId: PROJECT_ID })
+			await expect(admin.activateV2(current.input)).rejects.toMatchObject({ code: 'credential_conflict' })
+			expect(current.durable.created).toHaveLength(0)
+		}
+	})
+
+	test('does not impose an aggregate environment-entry count cap', async () => {
+		const manyEntries: Record<string, string> = {}
+		for (let index = 0; index < 600; index++) manyEntries[`UNRELATED_${index}`] = `value-${index}`
+		const admin = createZeropsSourceConnectionAdmin({
+			api: fakeApi(state(manyEntries)),
+			source: new FakeSource(),
+			projectId: PROJECT_ID,
+		})
+		await expect(admin.inspect(signal())).resolves.toEqual({ state: 'anonymous' })
+		await expect(admin.statusV2({ connectionId: CONNECTION_1, signal: signal() })).resolves.toEqual({ state: 'anonymous' })
 	})
 
 	test('fails closed on partial or mismatched legacy, mismatched durable values, and non-exact service discovery', async () => {
@@ -325,6 +479,30 @@ describe('Zerops source connection administration', () => {
 			connectionId: 'connection-1',
 			credentialSha256: 'd'.repeat(64),
 			url: 'https://control.example.test/webhooks/github',
+			secret: 'must-not-leak',
+			signal: signal(),
+		})).rejects.toMatchObject({ code: 'credential_conflict' })
+	})
+
+	test('binds webhook administration to the exact v2 connection slot when legacy credentials coexist', async () => {
+		const slot = await zeropsSourceCredentialEnvV2(CONNECTION_1)
+		const digest = await sha256ZeropsSourceCredentialBundleV2(BUNDLE_V2_1)
+		const admin = createZeropsSourceConnectionAdmin({
+			api: fakeApi(state({ [ZEROPS_SOURCE_CREDENTIAL_ENV]: BUNDLE, [slot]: BUNDLE_V2_1 })),
+			source: new FakeSource(),
+			projectId: PROJECT_ID,
+		})
+		await expect(admin.configureWebhook({
+			connectionId: CONNECTION_1,
+			credentialSha256: digest,
+			url: 'https://control.example.test/webhooks/github/connection-1',
+			secret: 'must-not-leak',
+			signal: signal(),
+		})).resolves.toMatchObject({ connectionId: CONNECTION_1, credentialSha256: digest })
+		await expect(admin.configureWebhook({
+			connectionId: CONNECTION_2,
+			credentialSha256: digest,
+			url: 'https://control.example.test/webhooks/github/connection-2',
 			secret: 'must-not-leak',
 			signal: signal(),
 		})).rejects.toMatchObject({ code: 'credential_conflict' })

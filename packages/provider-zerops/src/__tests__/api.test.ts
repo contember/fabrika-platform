@@ -176,6 +176,145 @@ describe('Zerops API discovery', () => {
 		expect(urls).toEqual(['https://zerops.test/service-stack/service-1/env'])
 	})
 
+	test('accepts every service environment entry inside the response byte bound', async () => {
+		const items = Array.from({ length: 600 }, (_, index) => ({
+			id: `env-${index}`,
+			key: `KEY_${index}`,
+			content: `value-${index}`,
+			serviceStackId: 'service-1',
+			type: 'SECRET',
+		}))
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => jsonResponse({ items }),
+		})
+
+		await expect(api.listServiceEnv({ serviceId: 'service-1', signal: signal() })).resolves.toHaveLength(600)
+	})
+
+	test('rejects invalid UTF-8 in a successful service environment response', async () => {
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => new Response(new Uint8Array([0x7b, 0xff, 0x7d])),
+		})
+
+		await expect(api.listServiceEnv({ serviceId: 'service-1', signal: signal() })).rejects.toThrow(
+			'zerops: list service env returned an invalid response',
+		)
+	})
+
+	test('rejects invalid JSON in a successful service environment response without exposing it', async () => {
+		const secret = 'invalid-json-secret-that-must-not-leak'
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => new Response(`{"items":["${secret}"`),
+		})
+
+		const error = await api.listServiceEnv({ serviceId: 'service-1', signal: signal() }).catch((cause: unknown) => cause)
+		expect(error instanceof Error ? error.message : '').toBe('zerops: list service env returned an invalid response')
+		expect(error instanceof Error ? error.message : '').not.toContain(secret)
+	})
+
+	test('rejects a successful service environment response with no items field', async () => {
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => jsonResponse({ totalCount: 0 }),
+		})
+
+		await expect(api.listServiceEnv({ serviceId: 'service-1', signal: signal() })).rejects.toThrow(
+			'zerops: list service env returned an invalid response',
+		)
+	})
+
+	test('rejects a successful service environment response whose items field is not an array', async () => {
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => jsonResponse({ items: { id: 'env-1' } }),
+		})
+
+		await expect(api.listServiceEnv({ serviceId: 'service-1', signal: signal() })).rejects.toThrow(
+			'zerops: list service env returned an invalid response',
+		)
+	})
+
+	test('rejects an oversized declared service environment response before parsing its body', async () => {
+		let cancelled = false
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				controller.enqueue(new TextEncoder().encode('{"items":[]}'))
+				controller.close()
+			},
+			cancel() {
+				cancelled = true
+			},
+		})
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => new Response(body, { headers: { 'content-length': String(8 * 1024 * 1024 + 1) } }),
+		})
+
+		await expect(api.listServiceEnv({ serviceId: 'service-1', signal: signal() })).rejects.toThrow(
+			'zerops: list service env response exceeded its byte bound',
+		)
+		expect(cancelled).toBe(true)
+	})
+
+	test('stops an undeclared service environment body when streamed bytes cross the bound', async () => {
+		let cancelled = false
+		const chunk = new Uint8Array(1024 * 1024)
+		let chunks = 0
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				chunks++
+				controller.enqueue(chunk)
+			},
+			cancel() {
+				cancelled = true
+			},
+		})
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => new Response(body),
+		})
+
+		await expect(api.listServiceEnv({ serviceId: 'service-1', signal: signal() })).rejects.toThrow(
+			'zerops: list service env response exceeded its byte bound',
+		)
+		// Streams may keep one chunk queued ahead of the reader.
+		expect(chunks).toBeGreaterThanOrEqual(9)
+		expect(cancelled).toBe(true)
+	})
+
+	test('cancels a hanging service environment body when the caller aborts', async () => {
+		let cancelled = false
+		const body = new ReadableStream<Uint8Array>({
+			cancel() {
+				cancelled = true
+			},
+		})
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => new Response(body),
+		})
+		const controller = new AbortController()
+		const pending = api.listServiceEnv({ serviceId: 'service-1', signal: controller.signal })
+		controller.abort('private abort reason')
+
+		const error = await pending.catch((cause: unknown) => cause)
+		expect(error).toBeInstanceOf(DOMException)
+		expect(error instanceof Error ? error.name : '').toBe('AbortError')
+		expect(error instanceof Error ? error.message : '').not.toContain('private abort reason')
+		expect(cancelled).toBe(true)
+	})
+
 	test('fails when pagination ends before the documented totalCount', async () => {
 		let calls = 0
 		const fetchImpl: FetchLike = async () => {
