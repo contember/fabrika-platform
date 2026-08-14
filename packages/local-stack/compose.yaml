@@ -81,6 +81,19 @@ services:
       timeout: 2s
       retries: 30
 
+  source:
+    <<: *bun
+    command: bun packages/source-zerops/src/server.ts
+    env_file: .state/source.env
+    environment:
+      PORT: "3000"
+    networks: [platform]
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:3000/healthz]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   iam:
     <<: *bun
     command: [sh, -c, "bun packages/iam/src/node/migrate.ts && exec bun packages/iam/src/node/server.ts"]
@@ -117,7 +130,7 @@ services:
 
   control:
     <<: *bun
-    command: [sh, -c, "bun packages/control/src/node/migrate.ts && exec bun packages/control/src/node/server.ts"]
+    command: [sh, -c, "bun packages/control/src/node/migrate.ts && bun packages/local-stack/src/source-connection-fixture-seed.ts && exec bun packages/control/src/node/server.ts"]
     env_file: .state/control.env
     environment:
       PORT: "3000"
@@ -133,6 +146,7 @@ services:
       FABRIKA_CONTROL_RUN_LOGS_ENDPOINT: http://minio:9000
       FABRIKA_CONTROL_RUN_LOGS_REGION: us-east-1
       FABRIKA_ZEROPS_API_BASE_URL: http://zerops-emulator:3000/api/rest/public
+      FABRIKA_ZEROPS_SOURCE_URL: http://source:3000
       FABRIKA_ZEROPS_CLIENT_ID: local-client
       FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT: https://github.com/contember/fabrika-platform
       FABRIKA_ZEROPS_PROXY_IAM_URL: http://iam.fabrika.localhost:18080
@@ -147,6 +161,8 @@ services:
       operations:
         condition: service_healthy
       zerops-emulator:
+        condition: service_healthy
+      source:
         condition: service_healthy
     healthcheck:
       test: [CMD, wget, -qO-, http://127.0.0.1:3000/healthz]

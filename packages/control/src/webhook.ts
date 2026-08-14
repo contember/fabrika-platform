@@ -11,14 +11,19 @@ import type { ControlRepositories } from './db'
 import { uuidv7 } from './db'
 import { error, json } from './http'
 import { refMatches } from './ref-match'
-import { normalizeRepoUrl, type RepoEvents } from './repo-source'
+import { normalizeRepoUrl, parseGitHubRepo, type PushEvent, type RepoEvents } from './repo-source'
 import type { DeployJobMessage } from './run-lifecycle'
 
 export interface WebhookDeps {
 	repositories: ControlRepositories
 	repoSource: RepoEvents
 	queue: JobQueue<DeployJobMessage>
+	binding: WebhookBinding
 }
+
+export type WebhookBinding =
+	| { readonly kind: 'installation-only' }
+	| { readonly kind: 'connection'; readonly connectionId: string }
 
 /**
  * Handle `POST /webhooks/github`. Verify the HMAC, decode the push, and for every (app, env) whose
@@ -28,15 +33,23 @@ export interface WebhookDeps {
  *   - 200 with the created run ids when one or more deploys were triggered.
  */
 export async function handleWebhook(request: Request, deps: WebhookDeps): Promise<Response> {
-	const push = await deps.repoSource.verifyWebhook(request)
+	let push: PushEvent | null
+	try {
+		push = await deps.repoSource.verifyWebhook(request)
+	} catch {
+		return error(401, 'invalid webhook signature')
+	}
 	if (push === null) {
 		// Either a bad signature or an undecodable body — both are 401 on this HMAC-gated route (we do
 		// not distinguish, to avoid leaking which check failed).
 		return error(401, 'invalid webhook signature')
 	}
+	if (push.installationId === null) return new Response(null, { status: 204 })
 
 	const normalized = normalizeRepoUrl(push.repoUrl)
-	const apps = await deps.repositories.registry.getAppsByRepoUrl(normalized)
+	const apps = deps.binding.kind === 'installation-only'
+		? (await deps.repositories.registry.getAppsByRepoUrl(normalized)).filter((app) => app.github_installation_id === push.installationId)
+		: await getConnectionApps(normalized, push.installationId, deps.binding.connectionId, deps.repositories)
 	if (apps.length === 0) {
 		// No app registered for this repo — acknowledge so GitHub doesn't retry.
 		return new Response(null, { status: 204 })
@@ -49,6 +62,7 @@ export async function handleWebhook(request: Request, deps: WebhookDeps): Promis
 		// concrete pushed ref, never the pattern.
 		const envs = await deps.repositories.registry.listTriggerEnvs(app.id)
 		for (const appEnv of envs) {
+			if (deps.binding.kind === 'connection' && appEnv.provider !== 'zerops') continue
 			if (appEnv.trigger_ref === null || !refMatches(appEnv.trigger_ref, push.ref)) {
 				continue
 			}
@@ -69,4 +83,17 @@ export async function handleWebhook(request: Request, deps: WebhookDeps): Promis
 		return new Response(null, { status: 204 })
 	}
 	return json({ triggered })
+}
+
+async function getConnectionApps(
+	repoUrl: string,
+	installationId: number,
+	connectionId: string,
+	repositories: ControlRepositories,
+) {
+	const connection = await repositories.githubConnections.getConnectionById(connectionId)
+	if (connection === null || connection.installationId !== installationId) return []
+	const repository = parseGitHubRepo(repoUrl)
+	if (repository === null || repository.owner.toLowerCase() !== connection.appOwner.toLowerCase()) return []
+	return repositories.registry.getZeropsAppsByRepoUrlAndSourceBinding(repoUrl, connectionId, installationId)
 }

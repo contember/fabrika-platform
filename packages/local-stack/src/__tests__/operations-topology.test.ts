@@ -32,7 +32,7 @@ describe('local control topology', () => {
 		expect(control).toBeDefined()
 		if (control === undefined) return
 		const gates = compileGates(control.gates)
-		for (const path of ['/healthz', '/api/health', '/webhooks/github']) {
+		for (const path of ['/healthz', '/api/health', '/webhooks/github', '/webhooks/github/local-keyed-alpha']) {
 			expect(firstGate(gates, path)).toBe('public')
 		}
 		// A machine key first, a logged-in human otherwise — and the terminal `/*` rule keeps the fall

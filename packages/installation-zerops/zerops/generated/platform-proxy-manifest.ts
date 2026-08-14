@@ -37,6 +37,7 @@ export const PLATFORM_PROXY_MANIFEST_TEMPLATE: PlatformProxyManifestTemplate = {
 					{ path: '/healthz', kind: 'public' },
 					{ path: '/api/health', kind: 'public' },
 					{ path: '/webhooks/github', kind: 'public' },
+					{ path: '/webhooks/github/*', kind: 'public' },
 					{ path: '/iam/admin', kind: 'service' },
 					{ path: '/iam/admin', kind: 'human' },
 					{ path: '/iam/admin/*', kind: 'service' },

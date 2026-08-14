@@ -7,6 +7,7 @@ import { resolve } from 'node:path'
 // A relative import, because the module it names is dev-time only and therefore outside
 // `@fabrika/installation-zerops`'s published surface — see its header for why it cannot be exported.
 import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '../../installation-zerops/zerops/proxy-manifest'
+import { localSourceCredentialFixture } from './source-connection-fixture'
 
 export const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..')
 export const LOCAL_STACK_DIR = resolve(REPO_ROOT, 'packages', 'local-stack')
@@ -47,6 +48,19 @@ const writeEnv = async (name: string, values: Record<string, string>): Promise<v
 	await Bun.write(statePath(name), `${lines.join('\n')}\n`)
 }
 
+const readEnv = async (name: string): Promise<Record<string, string>> => {
+	const values: Record<string, string> = {}
+	for (const line of (await Bun.file(statePath(name)).text()).split('\n')) {
+		if (line === '') continue
+		const separator = line.indexOf('=')
+		if (separator <= 0) throw new Error(`${name} contains an invalid environment entry`)
+		const key = line.slice(0, separator)
+		if (values[key] !== undefined) throw new Error(`${name} contains a duplicate environment entry`)
+		values[key] = line.slice(separator + 1)
+	}
+	return values
+}
+
 const writeJson = (name: string, value: unknown): Promise<number> => Bun.write(statePath(name), `${JSON.stringify(value, null, '\t')}\n`)
 
 const generateSecrets = async (): Promise<void> => {
@@ -63,6 +77,7 @@ const generateSecrets = async (): Promise<void> => {
 		'emulator.env',
 	]
 	if (requiredFiles.every((file) => existsSync(statePath(file)))) {
+		await ensureSourceSecrets()
 		return
 	}
 
@@ -74,9 +89,15 @@ const generateSecrets = async (): Promise<void> => {
 	const provisioningKey = `px_${randomSecret()}`
 	const operationsSyncKey = randomSecret()
 	const githubWebhookSecret = randomSecret()
+	const sourceRpcKey = randomSecret()
 	const emulatorToken = randomSecret()
 	const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+	const { privateKey: githubPrivateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 	const signingKeys = JSON.stringify([privateKey.export({ format: 'jwk' })])
+	const sourceCredentials = await localSourceCredentialFixture(
+		sourceRpcKey,
+		githubPrivateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+	)
 
 	await Promise.all([
 		writeEnv('platform-db.env', { POSTGRES_PASSWORD: platformDatabasePassword }),
@@ -104,10 +125,12 @@ const generateSecrets = async (): Promise<void> => {
 			FABRIKA_IAM_PROVISIONING_KEY: provisioningKey,
 			OPERATIONS_SYNC_KEY: operationsSyncKey,
 			GITHUB_WEBHOOK_SECRET: githubWebhookSecret,
+			FABRIKA_ZEROPS_SOURCE_RPC_KEY: sourceRpcKey,
 			FABRIKA_CONTROL_VAULT_KEY: randomBase64Key(),
 			FABRIKA_ZEROPS_ACCESS_TOKEN: emulatorToken,
 			FABRIKA_ZEROPS_PROXY_IAM_KEY: proxyKey,
 		}),
+		writeEnv('source.env', sourceCredentials),
 		writeEnv('platform-proxy.env', { FABRIKA_IAM_KEY: proxyKey }),
 		writeEnv('apps-proxy.env', { FABRIKA_IAM_KEY: proxyKey }),
 		writeEnv('notes.env', {
@@ -115,6 +138,32 @@ const generateSecrets = async (): Promise<void> => {
 		}),
 		writeEnv('emulator.env', { LOCAL_ZEROPS_TOKEN: emulatorToken }),
 	])
+}
+
+/** Add the private source service to an existing local state without rotating its durable credentials. */
+async function ensureSourceSecrets(): Promise<void> {
+	const control = await readEnv('control.env')
+	const source = existsSync(statePath('source.env')) ? await readEnv('source.env') : null
+	const controlRpcKey = envValue(control, 'FABRIKA_ZEROPS_SOURCE_RPC_KEY')
+	const sourceRpcKey = source === null ? undefined : envValue(source, 'FABRIKA_SOURCE_RPC_KEY')
+	if (controlRpcKey !== undefined && sourceRpcKey !== undefined && controlRpcKey !== sourceRpcKey) {
+		throw new Error('the local source RPC credentials do not match')
+	}
+	const rpcKey = controlRpcKey ?? sourceRpcKey ?? randomSecret()
+	if (source === null) {
+		const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+		await writeEnv(
+			'source.env',
+			await localSourceCredentialFixture(rpcKey, privateKey.export({ format: 'pem', type: 'pkcs8' }).toString()),
+		)
+	} else if (sourceRpcKey === undefined) {
+		throw new Error('the local source environment has no RPC credential')
+	}
+	if (controlRpcKey === undefined) await writeEnv('control.env', { ...control, FABRIKA_ZEROPS_SOURCE_RPC_KEY: rpcKey })
+}
+
+function envValue(values: Record<string, string>, key: string): string | undefined {
+	return values[key]
 }
 
 /**

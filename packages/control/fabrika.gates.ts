@@ -29,6 +29,7 @@ export const CONTROL_PROXY_GATES: AppGates = {
 		{ path: '/healthz', kind: 'public' },
 		{ path: '/api/health', kind: 'public' },
 		{ path: '/webhooks/github', kind: 'public' },
+		{ path: '/webhooks/github/*', kind: 'public' },
 		{ path: '/iam/admin', kind: 'service' },
 		{ path: '/iam/admin', kind: 'human' },
 		{ path: '/iam/admin/*', kind: 'service' },

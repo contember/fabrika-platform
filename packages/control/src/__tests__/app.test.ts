@@ -5,14 +5,15 @@ import { ACTIONS } from '../actions'
 import { controlApp } from '../app'
 import { projectSingletonSourceConnectionPage } from '../control-rpc'
 import type { Env } from '../env'
-import { FakeRepoSource } from '../repo-source'
+import { GitHubConnectionWebhookSecretProvider, githubWebhookSecretLabel } from '../github-connection-store'
+import { FakeRepoSource, StaticWebhookSecretProvider } from '../repo-source'
 import { unavailableSourceConnection } from '../source-connection-port'
-import { createHarness } from './helpers/harness'
+import { Vault } from '../vault'
+import { createHarness, type Harness, pushWebhookRequest } from './helpers/harness'
 import { fakeControlProvider } from './helpers/provider'
 import { adminToken, operatorToken, testIamEnv, testToken, viewerToken } from './helpers/tokens'
 
-function application(overrides: Partial<Env> = {}) {
-	const harness = createHarness()
+function application(overrides: Partial<Env> = {}, harness: Harness = createHarness()) {
 	const { REPO_EVENTS = new FakeRepoSource(), ...rest } = overrides
 	const env: Env = {
 		DB: harness.d1,
@@ -215,7 +216,182 @@ describe('controlApp', () => {
 		expect(projectSingletonSourceConnectionPage(connected, {})).toEqual({ items: [connected], nextCursor: null, workflow: null })
 		expect(projectSingletonSourceConnectionPage(connected, { cursor: 'later-page' })).toEqual({ items: [], nextCursor: null, workflow: null })
 	})
+
+	test('mounts scoped Zerops webhooks with their exact vault secret and no static fallback', async () => {
+		const harness = createHarness()
+		const vaultKey = testVaultKey()
+		const vault = await Vault.create(harness.d1, vaultKey)
+		const secretRefA = await vault.putSecret('platform', githubWebhookSecretLabel('connection-a'), 'secret-a')
+		const secretRefB = await vault.putSecret('platform', githubWebhookSecretLabel('connection-b'), 'secret-b')
+		insertConnection(harness, {
+			connectionId: 'connection-a',
+			transportKind: 'keyed-v2',
+			owner: 'acme',
+			installationId: 42,
+			webhookSecretRef: secretRefA,
+		})
+		insertConnection(harness, {
+			connectionId: 'connection-b',
+			transportKind: 'keyed-v2',
+			owner: 'beta',
+			installationId: 43,
+			webhookSecretRef: secretRefB,
+		})
+		for (
+			const app of [
+				{ id: 'scoped-app-a', repoUrl: 'github.com/acme/app', connectionId: 'connection-a', installationId: 42 },
+				{ id: 'scoped-app-b', repoUrl: 'github.com/beta/app', connectionId: 'connection-b', installationId: 43 },
+			]
+		) {
+			await harness.repositories.registry.createApp({
+				id: app.id,
+				repoUrl: app.repoUrl,
+				githubConnectionId: app.connectionId,
+				githubInstallationId: app.installationId,
+			})
+			await seedZeropsTrigger(harness, app.id)
+		}
+		const fetch = application({
+			FABRIKA_CONTROL_VAULT_KEY: vaultKey,
+			GITHUB_WEBHOOK_SECRETS: new StaticWebhookSecretProvider('legacy-fallback'),
+		}, harness)
+		const exactA = await webhookRequest('/webhooks/github/connection-a', 'secret-a', 'github.com/acme/app', 42)
+		const exactB = await webhookRequest('/webhooks/github/connection-b', 'secret-b', 'github.com/beta/app', 43)
+		const crossConnection = await webhookRequest('/webhooks/github/connection-b', 'secret-a', 'github.com/acme/app', 42)
+		const swappedInstallation = await webhookRequest('/webhooks/github/connection-a', 'secret-a', 'github.com/acme/app', 43)
+		const unknownUsingFallback = await webhookRequest('/webhooks/github/unknown', 'legacy-fallback', 'github.com/acme/app', 42)
+		const genericUsingFallback = await webhookRequest('/webhooks/github', 'legacy-fallback', 'github.com/acme/app', 42)
+
+		expect((await fetch(exactA)).status).toBe(200)
+		expect((await fetch(exactB)).status).toBe(200)
+		expect((await fetch(crossConnection)).status).toBe(401)
+		expect((await fetch(swappedInstallation)).status).toBe(204)
+		expect((await fetch(unknownUsingFallback)).status).toBe(401)
+		expect((await fetch(genericUsingFallback)).status).toBe(401)
+		expect(await harness.repositories.runs.listRuns({ limit: 10 })).toHaveLength(2)
+	})
+
+	test('keeps the generic Zerops route bound only to the legacy-v1 connection', async () => {
+		const harness = createHarness()
+		const vaultKey = testVaultKey()
+		const vault = await Vault.create(harness.d1, vaultKey)
+		const legacyRef = await vault.putSecret('platform', githubWebhookSecretLabel('legacy'), 'legacy-secret')
+		const keyedRef = await vault.putSecret('platform', githubWebhookSecretLabel('keyed'), 'keyed-secret')
+		insertConnection(harness, {
+			connectionId: 'legacy',
+			transportKind: 'legacy-v1',
+			owner: 'acme',
+			installationId: 42,
+			webhookSecretRef: legacyRef,
+		})
+		insertConnection(harness, {
+			connectionId: 'keyed',
+			transportKind: 'keyed-v2',
+			owner: 'beta',
+			installationId: 43,
+			webhookSecretRef: keyedRef,
+		})
+		for (
+			const app of [
+				{ id: 'legacy-app', repoUrl: 'github.com/acme/app', connectionId: 'legacy', installationId: 42 },
+				{ id: 'keyed-app', repoUrl: 'github.com/beta/app', connectionId: 'keyed', installationId: 43 },
+			]
+		) {
+			await harness.repositories.registry.createApp({
+				id: app.id,
+				repoUrl: app.repoUrl,
+				githubConnectionId: app.connectionId,
+				githubInstallationId: app.installationId,
+			})
+			await seedZeropsTrigger(harness, app.id)
+		}
+		const fetch = application({
+			FABRIKA_CONTROL_VAULT_KEY: vaultKey,
+			GITHUB_WEBHOOK_SECRETS: new GitHubConnectionWebhookSecretProvider(
+				harness.repositories.githubConnections,
+				vault,
+				new StaticWebhookSecretProvider('static-fallback'),
+			),
+		}, harness)
+
+		expect((await fetch(await webhookRequest('/webhooks/github', 'legacy-secret', 'github.com/acme/app', 42))).status).toBe(200)
+		expect((await fetch(await webhookRequest('/webhooks/github', 'keyed-secret', 'github.com/beta/app', 43))).status).toBe(401)
+		const runs = await harness.repositories.runs.listRuns({ limit: 10 })
+		expect(runs).toHaveLength(1)
+		expect(runs[0]?.app_id).toBe('legacy-app')
+	})
+
+	test('keeps the Cloudflare generic route static-secret and installation-only', async () => {
+		const harness = createHarness()
+		await harness.repositories.registry.createApp({
+			id: 'cloudflare-app',
+			repoUrl: 'github.com/acme/app',
+			githubInstallationId: 42,
+		})
+		await harness.repositories.registry.upsertAppEnv({
+			appId: 'cloudflare-app',
+			env: 'prod',
+			namespaceId: null,
+			provider: 'cloudflare',
+			providerTargetJson: '{}',
+			providerArtifactJson: '{}',
+			triggerRef: 'refs/heads/deploy/prod',
+		})
+		const fetch = application({ REPO_EVENTS: new FakeRepoSource({ webhookSecret: 'cloudflare-secret' }) }, harness)
+
+		expect((await fetch(await webhookRequest('/webhooks/github', 'cloudflare-secret', 'github.com/acme/app', 43))).status).toBe(204)
+		expect((await fetch(await webhookRequest('/webhooks/github', 'cloudflare-secret', 'github.com/acme/app', 42))).status).toBe(200)
+		const runs = await harness.repositories.runs.listRuns({ limit: 10 })
+		expect(runs).toHaveLength(1)
+		expect(runs[0]?.app_id).toBe('cloudflare-app')
+	})
 })
+
+function insertConnection(harness: Harness, input: {
+	connectionId: string
+	transportKind: 'legacy-v1' | 'keyed-v2'
+	owner: string
+	installationId: number
+	webhookSecretRef: string
+}): void {
+	harness.sqlite.query(`INSERT INTO github_source_connections_keyed (
+		connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+		credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+		installation_account_login, installation_selection, verified_repositories_json,
+		requested_repositories_json, connected_by, connected_at, verified_at, version
+	) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'all', '[]', '[]', 'test', 1, 1, 1)`)
+		.run(
+			input.connectionId,
+			input.transportKind,
+			`${input.connectionId}-app-id`,
+			`${input.connectionId}-app`,
+			`https://github.com/apps/${input.connectionId}-app`,
+			input.owner,
+			`${input.connectionId}-app`,
+			'a'.repeat(64),
+			`https://control.test/webhooks/github${input.transportKind === 'keyed-v2' ? `/${input.connectionId}` : ''}`,
+			input.webhookSecretRef,
+			input.installationId,
+			input.owner,
+		)
+}
+
+async function seedZeropsTrigger(harness: Harness, appId: string): Promise<void> {
+	await harness.repositories.registry.upsertAppEnv({
+		appId,
+		env: 'prod',
+		namespaceId: null,
+		provider: 'zerops',
+		providerTargetJson: '{}',
+		providerArtifactJson: '{}',
+		triggerRef: 'refs/heads/deploy/prod',
+	})
+}
+
+async function webhookRequest(path: string, secret: string, cloneUrl: string, installationId: number): Promise<Request> {
+	const signed = await pushWebhookRequest({ ref: 'refs/heads/deploy/prod', cloneUrl, installationId, secret })
+	return new Request(`https://control.test${path}`, { method: 'POST', headers: signed.headers, body: await signed.text() })
+}
 
 /** A control REST request carrying the token the proxy would have injected. */
 function apiRequest(url: string, token: string): Request {
