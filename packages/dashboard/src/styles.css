@@ -1728,6 +1728,205 @@ td.empty:hover {
 	background: var(--wash-stop);
 }
 
+/* ── Source connection ────────────────────────────────────────────────────── */
+
+/* One physical signal path, not three cards: authority flows left to right and every boundary has
+   one lamp. The line remains useful at narrow widths by becoming the rail the nodes hang from. */
+.source-chain {
+	display: flex;
+	align-items: stretch;
+	margin: 0 0 var(--s-6);
+	padding: 0;
+	border: 1px solid var(--rule);
+	border-radius: var(--r-2);
+	background: var(--plate);
+}
+
+.source-chain-segment {
+	display: contents;
+}
+
+.source-chain-node {
+	flex: 1 1 0;
+	min-width: 0;
+	padding: var(--s-4);
+}
+
+.source-chain-node > span:last-child {
+	display: block;
+	margin-top: var(--s-1);
+	color: var(--ink-3);
+	font-family: var(--font-mono);
+	font-size: var(--t-xs);
+	overflow-wrap: anywhere;
+}
+
+.source-chain-link {
+	display: flex;
+	align-items: center;
+	padding-inline: var(--s-2);
+	border-inline: 1px solid var(--rule-soft);
+	color: var(--ink-4);
+}
+
+.source-checkpoint {
+	max-width: 52rem;
+	padding: var(--s-5);
+	border: 1px solid var(--rule);
+	border-radius: var(--r-2);
+	background: var(--plate);
+}
+
+.source-checkpoint > p {
+	max-width: var(--measure);
+	color: var(--ink-2);
+}
+
+.source-checkpoint-failed {
+	border-color: color-mix(in srgb, var(--lamp-stop) 34%, transparent);
+}
+
+.source-checkpoint .section-head {
+	margin-bottom: var(--s-2);
+}
+
+.source-checkpoint .form-actions {
+	align-items: flex-start;
+	margin-top: var(--s-4);
+	flex-wrap: wrap;
+}
+
+.source-checkpoint-meta,
+.source-app {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--s-2) var(--s-4);
+	margin: var(--s-4) 0;
+	padding-block: var(--s-3);
+	border-block: 1px solid var(--rule-soft);
+	color: var(--ink-3);
+	font-size: var(--t-sm);
+}
+
+.source-checkpoint-meta code {
+	color: var(--ink-2);
+}
+
+.source-app a {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--s-1);
+	font-weight: 600;
+}
+
+.source-app span:not(:last-child)::after {
+	content: '·';
+	margin-left: var(--s-4);
+	color: var(--ink-4);
+}
+
+.source-facts {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	margin: var(--s-4) 0 0;
+	border-top: 1px solid var(--rule);
+	border-left: 1px solid var(--rule);
+}
+
+.source-facts > div {
+	min-width: 0;
+	padding: var(--s-3) var(--s-4);
+	border-right: 1px solid var(--rule);
+	border-bottom: 1px solid var(--rule);
+}
+
+.source-facts dt {
+	margin-bottom: var(--s-1);
+	color: var(--engrave);
+	font-size: var(--t-xxs);
+	font-weight: 600;
+	letter-spacing: 0.085em;
+	text-transform: uppercase;
+}
+
+.source-facts dd {
+	margin: 0;
+	color: var(--ink-2);
+	font-size: var(--t-sm);
+	overflow-wrap: anywhere;
+}
+
+.source-form {
+	max-width: none;
+	margin-top: var(--s-5);
+	padding-top: var(--s-5);
+	border-top: 1px solid var(--rule);
+}
+
+.source-visibility {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--s-2) var(--s-4);
+	margin: 0;
+	padding: var(--s-3) var(--s-4);
+	border: 1px solid var(--rule);
+	border-radius: var(--r-1);
+	background: var(--recess);
+}
+
+.source-visibility legend {
+	padding-inline: var(--s-1);
+	color: var(--engrave);
+	font-size: var(--t-xxs);
+	font-weight: 600;
+	letter-spacing: 0.085em;
+	text-transform: uppercase;
+}
+
+.source-visibility label {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--s-2);
+	color: var(--ink-2);
+	font-size: var(--t-sm);
+}
+
+.source-visibility .hint {
+	flex: 1 1 100%;
+	margin: 0;
+}
+
+.source-mutation {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--s-2);
+}
+
+@media (max-width: 720px) {
+	.source-chain {
+		flex-direction: column;
+	}
+
+	.source-chain-segment {
+		display: block;
+	}
+
+	.source-chain-node {
+		border-left: 2px solid var(--rule-strong);
+	}
+
+	.source-chain-link {
+		display: none;
+	}
+
+	.source-facts {
+		grid-template-columns: 1fr;
+	}
+}
+
 /* ── Notices ───────────────────────────────────────────────────────────────── */
 
 .error-text {

@@ -83,6 +83,38 @@ describe('Delivery RPC client', () => {
 		])
 	})
 
+	test('maps source connection procedures without browser-side credential fields', async () => {
+		const calls: RpcCall[] = []
+		const client = createControlClient(recordingFetch(calls, { provider: 'zerops', kind: 'github-app', state: 'anonymous' }))
+		await client.sourceConnection.status()
+		await client.sourceConnection.start({
+			organization: 'acme',
+			appName: 'acme-fabrika',
+			visibility: 'private',
+			repositories: [{ owner: 'acme', name: 'api' }],
+		})
+		await client.sourceConnection.adoptExisting()
+		await client.sourceConnection.verifyInstallation({ connectionId: 'connection-1' })
+		await client.sourceConnection.repair({ connectionId: 'connection-1' })
+		expect(calls).toEqual([
+			{ method: 'sourceConnection.status', input: null },
+			{
+				method: 'sourceConnection.start',
+				input: {
+					organization: 'acme',
+					appName: 'acme-fabrika',
+					visibility: 'private',
+					repositories: [{ owner: 'acme', name: 'api' }],
+				},
+			},
+			{ method: 'sourceConnection.adoptExisting', input: null },
+			{ method: 'sourceConnection.verifyInstallation', input: { connectionId: 'connection-1' } },
+			{ method: 'sourceConnection.repair', input: { connectionId: 'connection-1' } },
+		])
+		expect(JSON.stringify(calls)).not.toContain('privateKey')
+		expect(JSON.stringify(calls)).not.toContain('webhookSecret')
+	})
+
 	test('maps run, deploy, and registration procedures without changing cursor inputs', async () => {
 		const calls: RpcCall[] = []
 		const client = createControlClient(recordingFetch(calls))

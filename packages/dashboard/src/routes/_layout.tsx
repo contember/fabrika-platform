@@ -9,6 +9,7 @@ type Page =
 	| 'apps'
 	| 'namespaces'
 	| 'runs'
+	| 'settings/source'
 	| 'access'
 	| 'access/users'
 	| 'access/credentials'
@@ -56,6 +57,7 @@ const NAV: NavSection[] = [
 			{ to: 'apps', label: 'Applications', description: 'Sources and targets', icon: 'app', match: '/apps' },
 			{ to: 'namespaces', label: 'Namespaces', description: 'Runtime boundaries', icon: 'bay', match: '/namespaces' },
 			{ to: 'runs', label: 'Deploy runs', description: 'Build and release log', icon: 'runs', match: '/runs' },
+			{ to: 'settings/source', label: 'Source connection', description: 'GitHub source authority', icon: 'link', match: '/settings/source' },
 		],
 	},
 	{

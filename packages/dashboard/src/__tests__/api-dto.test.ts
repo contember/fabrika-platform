@@ -5,6 +5,7 @@ import type {
 	CreateDeploymentNamespaceRequest,
 	DeploymentNamespaceDetailDto,
 	DeploymentNamespaceDto,
+	GitHubSourceConnectionStatusDto,
 	PlanDeploymentNamespaceRequest,
 	PlanDeploymentNamespaceResponse,
 } from '../lib/api'
@@ -76,5 +77,60 @@ describe('namespace API DTOs', () => {
 		expect(adopt.exclusiveAppId).toBe('billing')
 		expect(appEnv.namespaceId).toBe(namespace.id)
 		expect(detail.presentation?.facts[0]?.value).toBe('shared')
+	})
+})
+
+describe('source connection API DTOs', () => {
+	test('cover every browser-safe lifecycle state without a credential field', () => {
+		const app = {
+			id: 123,
+			slug: 'acme-fabrika',
+			htmlUrl: 'https://github.com/apps/acme-fabrika',
+			public: false,
+			owner: { login: 'acme', type: 'Organization' },
+			permissions: { contents: 'read' },
+			events: ['push'],
+		}
+		const states: readonly GitHubSourceConnectionStatusDto[] = [
+			{ provider: 'zerops', kind: 'github-app', state: 'anonymous' },
+			{ provider: 'legacy', kind: 'github-app', state: 'unavailable' },
+			{ provider: 'zerops', kind: 'github-app', state: 'adoption-required' },
+			{
+				provider: 'zerops',
+				kind: 'github-app',
+				state: 'setup-pending',
+				connectionId: 'connection-1',
+				phase: 'awaiting-manifest-callback',
+				continuePath: '/api/source/github/manifest/connection-1',
+			},
+			{
+				provider: 'zerops',
+				kind: 'github-app',
+				state: 'installation-required',
+				connectionId: 'connection-1',
+				app,
+				installationUrl: 'https://github.com/apps/acme-fabrika/installations/new',
+			},
+			{
+				provider: 'zerops',
+				kind: 'github-app',
+				state: 'connected',
+				connectionId: 'connection-1',
+				app,
+				installation: { id: 42, accountLogin: 'acme', repositorySelection: 'selected', verifiedRepositories: [{ owner: 'acme', name: 'api' }] },
+			},
+			{ provider: 'zerops', kind: 'github-app', state: 'repair-required', connectionId: 'connection-1', reason: 'credential-activation', app },
+		]
+		expect(states.map((state) => state.state)).toEqual([
+			'anonymous',
+			'unavailable',
+			'adoption-required',
+			'setup-pending',
+			'installation-required',
+			'connected',
+			'repair-required',
+		])
+		const wire = JSON.stringify(states)
+		for (const forbidden of ['privateKey', 'credentialBundle', 'webhookSecret', 'sourceRpcKey']) expect(wire).not.toContain(forbidden)
 	})
 })
