@@ -76,14 +76,18 @@ Declining any of them stops there and prints what to run instead; a re-run is sa
 
 For an existing installation, init imports only a missing source service with a steady services-only
 document, waits for its exact processes, and writes one shared RPC key to source and control. A matching
-existing key is reused; a mismatch is refused. It then preserves a complete live organization-owned
-GitHub App, accepts a complete existing App, creates one through GitHub's manifest flow, or explicitly
-keeps anonymous public-repository access. App creation uses an owner-only XDG recovery file until the
-private key on source, webhook secret on control, App identity, and webhook configuration verify. App
-installation access is then checked independently on every rerun. Partial or mismatched live state is
-never overwritten. The local lock covers one host; run one operator per project. Cross-host conflicts
-are refused by create-only Zerops writes and repeated final readback, not by a distributed lock. No
-source credential reaches the sidecar or GitHub Environment.
+existing key is reused; a mismatch is refused. It also repairs the nonsecret project binding used by
+Control. Normal init leaves source in anonymous public-repository mode. GitHub App creation, activation,
+webhook configuration, and installation verification belong to the authenticated Control UI at
+\`Settings → Source\`. A complete legacy or atomic source credential set is preserved and reported for
+Control adoption. Partial, invalid, or mismatched credentials fail closed. Init never prompts for,
+writes, recovers, or prints GitHub App credentials, and no source credential reaches the sidecar or
+GitHub Environment.
+
+If an older init left an owner-only local recovery file, this release does not open or delete it. When
+the complete credential set is already remote, adopt it in Control and delete the old file only after
+Control reports the connection as connected. When remote state is empty or partial and that file is the
+only complete copy, use the last compatible CLI release to finish remote persistence first.
 
   <installation>                    names this installation: the GitHub Environment, the default
                                     repository \`contember/fabrika-zerops-<installation>\`, and the

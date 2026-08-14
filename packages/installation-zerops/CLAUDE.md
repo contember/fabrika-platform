@@ -95,15 +95,17 @@ and is deliberate — someone reading only one path will guess wrong about the o
   generates one RPC key only when neither source nor control has one, and writes
   it directly to those Zerops services. A valid key on only one side repairs the
   absent side; a matching pair is reused; invalid or mismatched values are refused.
-  GitHub App creation is the narrow exception: its one-time PEM and webhook secret first enter an
-  owner-only recovery file under `${XDG_STATE_HOME}/fabrika-platform/zerops-init/`, then init fills only
-  absent live keys and deletes the file after durable Zerops credentials and exact App identity and
-  webhook configuration verify. Installation access is checked independently on every rerun. The
-  private key ends on source and the independent webhook secret on control; neither enters the sidecar
-  or GitHub Environment. A partial or mismatched live bundle is refused rather than overwritten.
-  The loopback lock coordinates this host only. Run one operator per Zerops project; cross-host safety
-  relies on create-only remote writes and final repeated readback, which detects rather than serializes
-  a concurrent writer.
+  It also creates a missing nonsecret Control project binding. Normal init leaves
+  GitHub source anonymous. GitHub App setup is an authenticated Control UI flow.
+  Init only reports a complete legacy or atomic source credential set for Control
+  adoption; it refuses partial, invalid, or mismatched state. It never prompts for,
+  writes, prints, or stores locally a GitHub App private key or webhook secret,
+  and it never accesses an XDG recovery path.
+- **Old XDG recovery files are an explicit compatibility case.** This release never
+  discovers, opens, or deletes them. If remote credentials are complete, the operator
+  adopts them in Control and deletes the old file only after Control reports connected.
+  If remote state is empty or partial and the file is the only complete copy, the
+  operator must use the last compatible CLI release to finish remote persistence.
 - **`init` confirms before every step that leaves the operator's disk**: reading
   the project, configuring source, creating or pushing the repository, writing
   the Environment, and triggering the run.

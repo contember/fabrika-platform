@@ -256,7 +256,6 @@
       "dependencies": {
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
-        "@fabrika/github-app": "workspace:*",
         "@fabrika/installation-contract": "workspace:*",
         "@fabrika/installation-init": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
