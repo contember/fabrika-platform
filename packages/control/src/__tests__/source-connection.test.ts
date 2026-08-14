@@ -176,6 +176,21 @@ describe('GitHub source connection workflow', () => {
 		expect(body).not.toContain('<script')
 	})
 
+	test('uses the configured public origin behind a TLS-terminating proxy', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const started = await startSourceConnection(
+			deps(env, source, new Request('http://control:3000/api/rpc', { method: 'POST', headers: { origin: ORIGIN } })),
+			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)
+		const response = await manifestHandoff(
+			deps(env, source, new Request(`http://control:3000${started.continuePath}`)),
+			started.connectionId,
+		)
+		expect(response.status).toBe(200)
+		expect(await response.text()).toContain(`${ORIGIN}/api/source/github/callback`)
+	})
+
 	test('keeps the manifest handoff resumable when post-commit audit delivery fails', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()

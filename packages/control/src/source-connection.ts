@@ -173,7 +173,7 @@ export async function startSourceConnection(
 
 export async function manifestHandoff(deps: SourceConnectionWorkflowDeps, connectionId: string): Promise<Response> {
 	const principalId = requireHuman(deps.auth)
-	const origin = requireControlRequestOrigin(deps.env, deps.request)
+	const origin = requireControlOrigin(deps.env)
 	if (connectionId === '' || connectionId.length > MAX_CONNECTION_ID_LENGTH || new URL(deps.request.url).search !== '') {
 		throw new SourceConnectionWorkflowError(400)
 	}
@@ -211,7 +211,7 @@ export async function manifestHandoff(deps: SourceConnectionWorkflowDeps, connec
 
 export async function manifestCallback(deps: SourceConnectionWorkflowDeps): Promise<Response> {
 	const principalId = requireHuman(deps.auth)
-	const origin = requireControlRequestOrigin(deps.env, deps.request)
+	const origin = requireControlOrigin(deps.env)
 	const url = new URL(deps.request.url)
 	if (url.search.length > MAX_CALLBACK_QUERY_LENGTH) throw new SourceConnectionWorkflowError(400)
 	if ([...url.searchParams.keys()].some((key) => key !== 'state' && key !== 'code')) throw new SourceConnectionWorkflowError(400)
@@ -604,15 +604,15 @@ function requireHuman(auth: AuthContext): string {
 }
 
 function requireSameOrigin(env: Env, request: Request): string {
-	const expected = requireControlRequestOrigin(env, request)
+	const expected = requireControlOrigin(env)
 	const origin = request.headers.get('origin')
 	if (origin !== expected) throw new SourceConnectionWorkflowError(403)
 	return expected
 }
 
-function requireControlRequestOrigin(env: Env, request: Request): string {
+function requireControlOrigin(env: Env): string {
 	const expected = controlPublicOrigin(env)
-	if (expected === undefined || new URL(request.url).origin !== expected) throw new SourceConnectionWorkflowError(403)
+	if (expected === undefined) throw new SourceConnectionWorkflowError(403)
 	return expected
 }
 
