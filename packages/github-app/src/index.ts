@@ -201,7 +201,11 @@ export class GitHubAppClient {
 		if (body === NOT_FOUND) throw responseError()
 		const identity = decodeAppIdentity(body)
 		if (identity === null || String(identity.id) !== this.appId) throw responseError()
-		return identity
+		const publicBody = await this.requestJson(`/apps/${identity.slug}`, {}, signal, true, false)
+		if (publicBody === NOT_FOUND) return { ...identity, public: false }
+		const publicIdentity = decodeAppIdentity(publicBody)
+		if (publicIdentity === null || !sameAppIdentity(identity, publicIdentity)) throw responseError()
+		return { ...identity, public: true }
 	}
 
 	/** Read the App webhook transport settings without exposing GitHub's masked secret field. */
@@ -301,20 +305,23 @@ export class GitHubAppClient {
 		init: RequestInit,
 		callerSignal: AbortSignal | undefined,
 		allowNotFound: boolean,
+		authenticate = true,
 	): Promise<unknown | typeof NOT_FOUND> {
 		const cancellation = createCancellation(callerSignal, this.timeoutMs)
 		try {
 			cancellation.throwIfCancelled()
-			let jwt: string
-			try {
-				jwt = await this.signAppJwt()
-			} catch (error) {
-				cancellation.throwIfCancelled()
-				throw error
-			}
-			cancellation.throwIfCancelled()
 			const headers = new Headers(init.headers)
-			headers.set('authorization', `Bearer ${jwt}`)
+			if (authenticate) {
+				let jwt: string
+				try {
+					jwt = await this.signAppJwt()
+				} catch (error) {
+					cancellation.throwIfCancelled()
+					throw error
+				}
+				cancellation.throwIfCancelled()
+				headers.set('authorization', `Bearer ${jwt}`)
+			}
 			headers.set('accept', GITHUB_ACCEPT)
 			headers.set('x-github-api-version', GITHUB_API_VERSION)
 			headers.set('user-agent', GITHUB_USER_AGENT)
@@ -743,11 +750,10 @@ function validateWebhookSecret(value: string): void {
 	if (value.length === 0 || value.length > 4096 || hasAsciiControl(value)) throw configurationError()
 }
 
-function decodeAppIdentity(value: unknown): GitHubAppIdentity | null {
+function decodeAppIdentity(value: unknown): Omit<GitHubAppIdentity, 'public'> | null {
 	const id = objectField(value, 'id')
 	const slug = objectField(value, 'slug')
 	const htmlUrl = objectField(value, 'html_url')
-	const publicApp = objectField(value, 'public')
 	const permissions = objectField(value, 'permissions')
 	const contents = objectField(permissions, 'contents')
 	const events = objectField(value, 'events')
@@ -757,7 +763,7 @@ function decodeAppIdentity(value: unknown): GitHubAppIdentity | null {
 	if (
 		typeof id !== 'number' || !isPositiveSafeInteger(id) || typeof slug !== 'string' || !APP_SLUG_PATTERN.test(slug)
 		|| typeof htmlUrl !== 'string' || typeof login !== 'string' || login.length === 0 || login.length > 100
-		|| !REPOSITORY_COMPONENT_PATTERN.test(login) || (type !== 'Organization' && type !== 'User') || typeof publicApp !== 'boolean'
+		|| !REPOSITORY_COMPONENT_PATTERN.test(login) || (type !== 'Organization' && type !== 'User')
 		|| contents !== 'read' || !hasExactAppPermissions(permissions) || !isStringArray(events) || !events.includes('push')
 	) {
 		return null
@@ -775,7 +781,16 @@ function decodeAppIdentity(value: unknown): GitHubAppIdentity | null {
 	) {
 		return null
 	}
-	return { id, slug, htmlUrl, public: publicApp, permissions: { contents }, events, owner: { login, type } }
+	return { id, slug, htmlUrl, permissions: { contents }, events, owner: { login, type } }
+}
+
+function sameAppIdentity(
+	left: Omit<GitHubAppIdentity, 'public'>,
+	right: Omit<GitHubAppIdentity, 'public'>,
+): boolean {
+	return left.id === right.id && left.slug === right.slug && left.htmlUrl === right.htmlUrl
+		&& left.owner.login === right.owner.login && left.owner.type === right.owner.type
+		&& left.events.length === right.events.length && left.events.every((event, index) => event === right.events[index])
 }
 
 function decodeWebhookConfig(value: unknown): GitHubAppWebhookConfig | null {

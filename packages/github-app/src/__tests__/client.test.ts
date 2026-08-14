@@ -33,7 +33,6 @@ const appIdentity = (overrides: Readonly<Record<string, unknown>> = {}): Record<
 	id: 123456,
 	slug: 'fabrika-test',
 	html_url: 'https://github.com/apps/fabrika-test',
-	public: false,
 	permissions: { contents: 'read', metadata: 'read' },
 	events: ['push'],
 	owner: { login: 'contember', type: 'Organization' },
@@ -209,7 +208,7 @@ describe('GitHubAppClient requests', () => {
 
 describe('GitHubAppClient operator verification', () => {
 	test('reads and binds the authenticated App identity with the exact App-JWT request', async () => {
-		const capture = capturingFetch([Response.json(appIdentity())])
+		const capture = capturingFetch([Response.json(appIdentity()), new Response(null, { status: 404 })])
 		const github = await client(capture.fetch)
 		expect(await github.getAuthenticatedApp()).toEqual({
 			id: 123456,
@@ -220,15 +219,20 @@ describe('GitHubAppClient operator verification', () => {
 			events: ['push'],
 			owner: { login: 'contember', type: 'Organization' },
 		})
-		const request = requestAt(capture.requests, 0)
-		expect(request.url).toBe('https://github.example/api/v3/app')
-		expect(request.init?.method).toBeUndefined()
-		expect(new Headers(request.init?.headers).get('authorization')).toStartWith('Bearer ')
-		expect(request.init?.redirect).toBe('error')
+		const authenticated = requestAt(capture.requests, 0)
+		expect(authenticated.url).toBe('https://github.example/api/v3/app')
+		expect(authenticated.init?.method).toBeUndefined()
+		expect(new Headers(authenticated.init?.headers).get('authorization')).toStartWith('Bearer ')
+		expect(authenticated.init?.redirect).toBe('error')
+		const visibility = requestAt(capture.requests, 1)
+		expect(visibility.url).toBe('https://github.example/api/v3/apps/fabrika-test')
+		expect(new Headers(visibility.init?.headers).has('authorization')).toBe(false)
+		expect(visibility.init?.redirect).toBe('error')
 	})
 
 	test('returns visibility and rejects missing repository authority or push delivery', async () => {
-		const publicCapture = capturingFetch([Response.json(appIdentity({ public: true, events: ['installation', 'push'] }))])
+		const publicIdentity = appIdentity({ events: ['installation', 'push'] })
+		const publicCapture = capturingFetch([Response.json(publicIdentity), Response.json(publicIdentity)])
 		expect(await (await client(publicCapture.fetch)).getAuthenticatedApp()).toMatchObject({
 			public: true,
 			permissions: { contents: 'read' },
@@ -236,7 +240,6 @@ describe('GitHubAppClient operator verification', () => {
 		})
 		for (
 			const response of [
-				appIdentity({ public: 'false' }),
 				appIdentity({ permissions: {} }),
 				appIdentity({ permissions: { contents: 'write' } }),
 				appIdentity({ permissions: { contents: 'read', administration: 'write' } }),
@@ -249,6 +252,8 @@ describe('GitHubAppClient operator verification', () => {
 				'GitHub App response is invalid',
 			)
 		}
+		const mismatchedPublicIdentity = capturingFetch([Response.json(appIdentity()), Response.json(appIdentity({ id: 999 }))])
+		await expect((await client(mismatchedPublicIdentity.fetch)).getAuthenticatedApp()).rejects.toThrow('GitHub App response is invalid')
 	})
 
 	test('reads webhook config without returning its masked secret', async () => {
