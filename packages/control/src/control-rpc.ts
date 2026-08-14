@@ -1,6 +1,14 @@
 import { initRpc, type RpcRouterFor } from '@fabrika/app'
 import type { AuthContext } from '@fabrika/auth'
-import type { ControlRpcContract, ProviderEnvelopeDto } from '@fabrika/control-contract'
+import {
+	type ControlRpcContract,
+	GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE,
+	GITHUB_SOURCE_CONNECTION_PAGE_CURSOR_MAX_LENGTH,
+	type GitHubSourceConnectionListInput,
+	type GitHubSourceConnectionListResponse,
+	type GitHubSourceConnectionStatusDto,
+	type ProviderEnvelopeDto,
+} from '@fabrika/control-contract'
 import type { ControlProvider, JsonValue } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { ACTIONS } from './actions'
@@ -128,6 +136,10 @@ const registerInput = z.object({
 const githubOwner = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/)
 const githubRepositoryName = z.string().regex(/^[A-Za-z0-9._-]{1,100}$/)
 const sourceConnectionId = z.object({ connectionId: z.string().min(1).max(128) }).strict()
+const sourceConnectionListInput = z.object({
+	cursor: z.string().min(1).max(GITHUB_SOURCE_CONNECTION_PAGE_CURSOR_MAX_LENGTH).optional(),
+	limit: z.number().int().min(1).max(GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE).optional(),
+}).strict()
 const startSourceConnectionInput = z.object({
 	organization: githubOwner,
 	appName: z.string().min(1).max(100),
@@ -139,6 +151,9 @@ export const controlRpcRouter: RpcRouterFor<ControlRpcContext, ControlRpcContrac
 	sourceConnection: rpc.router({
 		status: rpc.procedure.require(ACTIONS.SOURCE_CONNECTION_MANAGE).query(({ ctx }) =>
 			controlCall(() => sourceConnectionStatus(sourceConnectionContext(ctx)))
+		),
+		list: rpc.procedure.input(sourceConnectionListInput).require(ACTIONS.SOURCE_CONNECTION_MANAGE).query(({ ctx, input }) =>
+			controlCall(async () => projectSingletonSourceConnectionPage(await sourceConnectionStatus(sourceConnectionContext(ctx)), input))
 		),
 		start: rpc.procedure.input(startSourceConnectionInput).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
 			controlCall(() => startSourceConnection(sourceConnectionContext(ctx), input))
@@ -244,6 +259,17 @@ export const controlRpcRouter: RpcRouterFor<ControlRpcContext, ControlRpcContrac
 		controlCall(() => registerAppUseCase(registryContext(ctx), input))
 	),
 })
+
+/** Compatibility projection until keyed persistence replaces the singleton workflow. */
+export function projectSingletonSourceConnectionPage(
+	status: GitHubSourceConnectionStatusDto,
+	input: GitHubSourceConnectionListInput,
+): GitHubSourceConnectionListResponse {
+	if (status.state === 'connected') {
+		return { items: input.cursor === undefined ? [status] : [], nextCursor: null, workflow: null }
+	}
+	return { items: [], nextCursor: null, workflow: status }
+}
 
 function sourceConnectionContext(ctx: ControlRpcContext) {
 	return { env: ctx.env, source: ctx.sourceConnection, auth: ctx.auth, request: ctx.request }

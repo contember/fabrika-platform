@@ -3,59 +3,97 @@ import {
 	buildZeropsSourceCancelRequest,
 	buildZeropsSourceCancelResponse,
 	buildZeropsSourceCredentialActivateRequest,
+	buildZeropsSourceCredentialActivateRequestV2,
 	buildZeropsSourceCredentialActivateResponse,
+	buildZeropsSourceCredentialActivateResponseV2,
 	buildZeropsSourceCredentialBundle,
+	buildZeropsSourceCredentialBundleV2,
 	buildZeropsSourceCredentialStatusRequest,
+	buildZeropsSourceCredentialStatusRequestV2,
 	buildZeropsSourceCredentialStatusResponse,
+	buildZeropsSourceCredentialStatusResponseV2,
 	buildZeropsSourceErrorEnvelope,
 	buildZeropsSourceInstallationsVerifyRequest,
 	buildZeropsSourceInstallationsVerifyResponse,
 	buildZeropsSourceResolveInstallationRequest,
 	buildZeropsSourceResolveInstallationResponse,
 	buildZeropsSourceResolveRequest,
+	buildZeropsSourceResolveRequestV2,
 	buildZeropsSourceResolveResponse,
+	buildZeropsSourceResolveResponseV2,
 	buildZeropsSourceUploadRequest,
+	buildZeropsSourceUploadRequestV2,
 	buildZeropsSourceUploadResponse,
+	buildZeropsSourceUploadResponseV2,
 	buildZeropsSourceWebhookConfigureRequest,
 	buildZeropsSourceWebhookConfigureResponse,
 	decodeZeropsSourceCancelRequest,
 	decodeZeropsSourceCancelResponse,
 	decodeZeropsSourceCredentialActivateRequest,
+	decodeZeropsSourceCredentialActivateRequestV2,
 	decodeZeropsSourceCredentialActivateResponse,
+	decodeZeropsSourceCredentialActivateResponseV2,
 	decodeZeropsSourceCredentialBundle,
+	decodeZeropsSourceCredentialBundleV2,
 	decodeZeropsSourceCredentialStatusRequest,
+	decodeZeropsSourceCredentialStatusRequestV2,
 	decodeZeropsSourceCredentialStatusResponse,
+	decodeZeropsSourceCredentialStatusResponseV2,
 	decodeZeropsSourceErrorEnvelope,
 	decodeZeropsSourceInstallationsVerifyRequest,
 	decodeZeropsSourceInstallationsVerifyResponse,
 	decodeZeropsSourceResolveInstallationRequest,
 	decodeZeropsSourceResolveInstallationResponse,
 	decodeZeropsSourceResolveRequest,
+	decodeZeropsSourceResolveRequestV2,
 	decodeZeropsSourceResolveResponse,
+	decodeZeropsSourceResolveResponseV2,
 	decodeZeropsSourceUploadRequest,
+	decodeZeropsSourceUploadRequestV2,
 	decodeZeropsSourceUploadResponse,
+	decodeZeropsSourceUploadResponseV2,
 	decodeZeropsSourceWebhookConfigureRequest,
 	decodeZeropsSourceWebhookConfigureResponse,
 	normalizeZeropsSourceRepository,
 	serializeZeropsSourceCredentialBundle,
+	serializeZeropsSourceCredentialBundleV2,
 	sha256ZeropsSourceCredentialBundle,
+	sha256ZeropsSourceCredentialBundleV2,
+	ZEROPS_SOURCE_CANCEL_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2,
+	ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION,
+	ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION_V2,
 	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
+	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2,
 	ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH,
 	ZEROPS_SOURCE_PROTOCOL_VERSION,
+	ZEROPS_SOURCE_PROTOCOL_VERSION_V2,
+	ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH,
+	ZEROPS_SOURCE_RESOLVE_PATH,
+	ZEROPS_SOURCE_RESOLVE_PATH_V2,
+	ZEROPS_SOURCE_UPLOAD_PATH,
+	ZEROPS_SOURCE_UPLOAD_PATH_V2,
 	ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH,
 	type ZeropsSourceCancelRequestV1,
 	type ZeropsSourceCredentialActivateRequestV1,
+	type ZeropsSourceCredentialActivateRequestV2,
 	type ZeropsSourceCredentialActivateResponseV1,
+	type ZeropsSourceCredentialActivateResponseV2,
 	type ZeropsSourceCredentialBundleV1,
+	type ZeropsSourceCredentialBundleV2,
+	zeropsSourceCredentialEnvV2,
 	type ZeropsSourceCredentialStatusRequestV1,
 	type ZeropsSourceCredentialStatusResponseV1,
+	type ZeropsSourceCredentialStatusResponseV2,
 	type ZeropsSourceDescriptor,
 	type ZeropsSourceErrorEnvelope,
 	type ZeropsSourceGitHubAppIdentityV1,
 	type ZeropsSourceResolveRequestV1,
+	type ZeropsSourceResolveRequestV2,
 	type ZeropsSourceUploadRequestV1,
-} from '../source'
+	type ZeropsSourceUploadRequestV2,
+} from '../index'
 
 const sha40 = 'a'.repeat(40)
 const sha64 = 'b'.repeat(64)
@@ -313,6 +351,171 @@ describe('Zerops source credential bundle and management wire', () => {
 		expect(decodeZeropsSourceInstallationsVerifyResponse({ ...response, installation: { status: 'missing' } }).installation).toEqual({
 			status: 'missing',
 		})
+	})
+})
+
+describe('Zerops source v2 credential bundle and management wire', () => {
+	const connectionId = 'connection:0198'
+	const bundleObject = { version: 2, connectionId, githubAppId: '123', privateKeyPem } satisfies ZeropsSourceCredentialBundleV2
+	const bundle =
+		`{"version":2,"connectionId":"connection:0198","githubAppId":"123","privateKeyPem":"-----BEGIN PRIVATE KEY-----\\nMAMCAQE=\\n-----END PRIVATE KEY-----\\n"}`
+	const identity = {
+		id: 123,
+		slug: 'fabrika-test',
+		htmlUrl: 'https://github.com/apps/fabrika-test',
+		public: false,
+		owner: { login: 'Contember', type: 'Organization' },
+		permissions: { contents: 'read' },
+		events: ['push'],
+	} satisfies ZeropsSourceGitHubAppIdentityV1
+
+	test('freezes canonical connection-bound bytes, digest, and environment slot', async () => {
+		expect(buildZeropsSourceCredentialBundleV2({ connectionId, githubAppId: '123', privateKeyPem })).toEqual(bundleObject)
+		expect(serializeZeropsSourceCredentialBundleV2(bundleObject)).toBe(bundle)
+		expect(decodeZeropsSourceCredentialBundleV2(bundle)).toEqual(bundleObject)
+		expect(await sha256ZeropsSourceCredentialBundleV2(bundle)).toMatch(/^[a-f0-9]{64}$/)
+		expect(await zeropsSourceCredentialEnvV2(connectionId)).toBe(
+			'GITHUB_APP_CREDENTIALS_V2_f038055c4021ef312b11e68b1cc66a7dc3322527dd89baf25aabcb9c8f88e645',
+		)
+	})
+
+	test('keeps v1 and v2 credential bundles disjoint', () => {
+		const v1 = serializeZeropsSourceCredentialBundle({ githubAppId: '123', privateKeyPem, version: 1 })
+		expect(() => decodeZeropsSourceCredentialBundle(bundle)).toThrow()
+		expect(() => decodeZeropsSourceCredentialBundleV2(v1)).toThrow()
+		expect(() =>
+			decodeZeropsSourceCredentialBundleV2(
+				`{"version":2,"githubAppId":"123","privateKeyPem":${JSON.stringify(privateKeyPem)},"connectionId":"${connectionId}"}`,
+			)
+		).toThrow()
+		expect(() => decodeZeropsSourceCredentialBundleV2(`${bundle.slice(0, -1)},"token":"ghs_secret"}`)).toThrow()
+	})
+
+	test('binds v2 activation and status to the bundle connection', async () => {
+		const credentialSha256 = await sha256ZeropsSourceCredentialBundleV2(bundle)
+		const request = {
+			protocolVersion: 2,
+			connectionId,
+			credentialBundle: bundle,
+			credentialSha256,
+		} satisfies ZeropsSourceCredentialActivateRequestV2
+		expect(buildZeropsSourceCredentialActivateRequestV2({ ...request, signal: signal() })).toEqual(request)
+		expect(decodeZeropsSourceCredentialActivateRequestV2(request)).toEqual(request)
+		expect(() => decodeZeropsSourceCredentialActivateRequestV2({ ...request, connectionId: 'connection:other' })).toThrow(
+			'does not match',
+		)
+		const response = {
+			protocolVersion: 2,
+			connectionId,
+			credentialVersion: 2,
+			credentialSha256,
+			githubApp: identity,
+		} satisfies ZeropsSourceCredentialActivateResponseV2
+		expect(buildZeropsSourceCredentialActivateResponseV2(response)).toEqual(response)
+		expect(decodeZeropsSourceCredentialActivateResponseV2(response)).toEqual(response)
+		expect(buildZeropsSourceCredentialStatusRequestV2({ connectionId, signal: signal() })).toEqual({ protocolVersion: 2, connectionId })
+		expect(decodeZeropsSourceCredentialStatusRequestV2({ protocolVersion: 2, connectionId })).toEqual({ protocolVersion: 2, connectionId })
+		expect(buildZeropsSourceCredentialStatusResponseV2({ connectionId, state: 'anonymous' })).toEqual({
+			protocolVersion: 2,
+			connectionId,
+			state: 'anonymous',
+		})
+		const active = { ...response, state: 'active' } satisfies ZeropsSourceCredentialStatusResponseV2
+		expect(buildZeropsSourceCredentialStatusResponseV2(active)).toEqual(active)
+		expect(decodeZeropsSourceCredentialStatusResponseV2(active)).toEqual(active)
+	})
+
+	test('freezes the additive v2 paths while v1 paths stay unchanged', () => {
+		expect(ZEROPS_SOURCE_PROTOCOL_VERSION).toBe(1)
+		expect(ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION).toBe(1)
+		expect(ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH).toBe('/v1/source/credentials/activate')
+		expect(ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH).toBe('/v1/source/credentials/status')
+		expect(ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH).toBe('/v1/installations/resolve')
+		expect(ZEROPS_SOURCE_RESOLVE_PATH).toBe('/v1/source/resolve')
+		expect(ZEROPS_SOURCE_UPLOAD_PATH).toBe('/v1/source/upload')
+		expect(ZEROPS_SOURCE_CANCEL_PATH).toBe('/v1/source/cancel')
+		expect(ZEROPS_SOURCE_PROTOCOL_VERSION_V2).toBe(2)
+		expect(ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION_V2).toBe(2)
+		expect(ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2).toBe('/v2/source/credentials/activate')
+		expect(ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2).toBe('/v2/source/credentials/status')
+		expect(ZEROPS_SOURCE_RESOLVE_PATH_V2).toBe('/v2/source/resolve')
+		expect(ZEROPS_SOURCE_UPLOAD_PATH_V2).toBe('/v2/source/upload')
+	})
+})
+
+describe('Zerops source v2 resolve and upload wire contracts', () => {
+	const privateBinding = { connectionId: 'connection:0198', installationId: 987 }
+	const resolve = {
+		protocolVersion: 2,
+		runId: 'run:0198',
+		repository,
+		requestedRef: 'refs/heads/main',
+		expectedCommitSha: sha40,
+		privateBinding,
+		descriptorSha256: descriptorSha,
+	} satisfies ZeropsSourceResolveRequestV2
+	const descriptor: ZeropsSourceDescriptor = { path: 'zerops.yaml', sha256: descriptorSha }
+	const upload = {
+		protocolVersion: 2,
+		runId: 'run:0198',
+		appVersionId: 'version:0198',
+		repository,
+		commitSha: sha40,
+		privateBinding,
+		uploadUrl: 'https://storage.example.test/upload?signature=secret',
+		descriptor,
+	} satisfies ZeropsSourceUploadRequestV2
+
+	test('binds one exact private connection-and-installation object', () => {
+		expect(buildZeropsSourceResolveRequestV2({ ...resolve, signal: signal() })).toEqual(resolve)
+		expect(decodeZeropsSourceResolveRequestV2(resolve)).toEqual(resolve)
+		expect(buildZeropsSourceUploadRequestV2({ ...upload, signal: signal() })).toEqual(upload)
+		expect(decodeZeropsSourceUploadRequestV2(upload)).toEqual(upload)
+	})
+
+	test('represents public access only by omitting the private binding', () => {
+		const { privateBinding: _resolveBinding, ...publicResolve } = resolve
+		const { privateBinding: _uploadBinding, ...publicUpload } = upload
+		expect(decodeZeropsSourceResolveRequestV2(publicResolve)).toEqual(publicResolve)
+		expect(decodeZeropsSourceUploadRequestV2(publicUpload)).toEqual(publicUpload)
+	})
+
+	test('rejects partial, flattened, extended, or v1 resolve coordinates', () => {
+		for (
+			const value of [
+				{ ...resolve, privateBinding: { connectionId: privateBinding.connectionId } },
+				{ ...resolve, privateBinding: { installationId: privateBinding.installationId } },
+				{ ...resolve, privateBinding: { ...privateBinding, token: 'ghs_secret' } },
+				{ ...resolve, githubConnectionId: privateBinding.connectionId, githubInstallationId: privateBinding.installationId },
+				{ ...resolve, protocolVersion: 1 },
+			]
+		) expect(() => decodeZeropsSourceResolveRequestV2(value)).toThrow()
+	})
+
+	test('rejects partial, malformed, flattened, or extended upload coordinates', () => {
+		for (
+			const value of [
+				{ ...upload, privateBinding: { connectionId: privateBinding.connectionId } },
+				{ ...upload, privateBinding: { installationId: privateBinding.installationId } },
+				{ ...upload, privateBinding: null },
+				{ ...upload, githubInstallationId: privateBinding.installationId },
+				{ ...upload, credential: 'secret' },
+			]
+		) expect(() => decodeZeropsSourceUploadRequestV2(value)).toThrow()
+	})
+
+	test('binds v2 responses to the existing result coordinates', () => {
+		const resolveResult = { runId: resolve.runId, commitSha: sha40, descriptorSha256: descriptorSha }
+		const uploadResult = { ...resolveResult, appVersionId: upload.appVersionId }
+		expect(buildZeropsSourceResolveResponseV2(resolveResult)).toEqual({ protocolVersion: 2, ...resolveResult })
+		expect(decodeZeropsSourceResolveResponseV2({ protocolVersion: 2, ...resolveResult })).toEqual({ protocolVersion: 2, ...resolveResult })
+		expect(buildZeropsSourceUploadResponseV2(uploadResult)).toEqual({ protocolVersion: 2, ...uploadResult })
+		expect(decodeZeropsSourceUploadResponseV2({ protocolVersion: 2, ...uploadResult })).toEqual({ protocolVersion: 2, ...uploadResult })
+	})
+
+	test('keeps every v1 decoder closed to v2 messages', () => {
+		expect(() => decodeZeropsSourceResolveRequest(resolve)).toThrow()
+		expect(() => decodeZeropsSourceUploadRequest(upload)).toThrow()
 	})
 })
 

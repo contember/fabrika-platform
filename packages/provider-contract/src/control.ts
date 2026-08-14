@@ -8,6 +8,7 @@ export interface ProviderSource {
 	readonly workerDir?: string
 	readonly buildCommand?: string
 	readonly configPath?: string
+	readonly githubConnectionId?: string
 	readonly githubInstallationId?: number
 }
 

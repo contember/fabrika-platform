@@ -1,7 +1,9 @@
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
+import { GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE, type GitHubSourceConnectionStatusDto } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
 import { ACTIONS } from '../actions'
 import { controlApp } from '../app'
+import { projectSingletonSourceConnectionPage } from '../control-rpc'
 import type { Env } from '../env'
 import { FakeRepoSource } from '../repo-source'
 import { unavailableSourceConnection } from '../source-connection-port'
@@ -160,6 +162,18 @@ describe('controlApp', () => {
 		expect(status.status).toBe(200)
 		const statusBody: unknown = await status.json()
 		expect(statusBody).toEqual({ result: { provider: 'harbor', kind: 'github-app', state: 'unavailable' } })
+		const list = await fetch(rpcRequest('sourceConnection.list', {}, adminToken))
+		expect(list.status).toBe(200)
+		const listBody: unknown = await list.json()
+		expect(listBody).toEqual({
+			result: {
+				items: [],
+				nextCursor: null,
+				workflow: { provider: 'harbor', kind: 'github-app', state: 'unavailable' },
+			},
+		})
+		expect((await fetch(rpcRequest('sourceConnection.list', { limit: GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE + 1 }, adminToken))).status).toBe(400)
+		expect((await fetch(rpcRequest('sourceConnection.list', { credential: 'must-not-be-accepted' }, adminToken))).status).toBe(400)
 
 		const anonymous = await fetch(new Request('https://control.test/api/source/github/callback?code=a&state=b'))
 		expect(anonymous.status).toBe(401)
@@ -178,6 +192,28 @@ describe('controlApp', () => {
 		const machine = await fetch(apiRequest('https://control.test/api/source/github/manifest/connection', service))
 		expect(machine.status).toBe(403)
 		expect(machine.headers.get('cache-control')).toBe('no-store')
+	})
+
+	test('projects the singleton connected state only on the first compatibility page', () => {
+		const connected = {
+			provider: 'zerops',
+			kind: 'github-app',
+			state: 'connected',
+			connectionId: 'connection-1',
+			app: {
+				id: 123,
+				slug: 'fabrika-test',
+				htmlUrl: 'https://github.com/apps/fabrika-test',
+				public: false,
+				owner: { login: 'Contember', type: 'Organization' },
+				permissions: { contents: 'read' },
+				events: ['push'],
+			},
+			installation: { id: 456, accountLogin: 'Contember', repositorySelection: 'all', verifiedRepositories: [] },
+		} satisfies GitHubSourceConnectionStatusDto
+
+		expect(projectSingletonSourceConnectionPage(connected, {})).toEqual({ items: [connected], nextCursor: null, workflow: null })
+		expect(projectSingletonSourceConnectionPage(connected, { cursor: 'later-page' })).toEqual({ items: [], nextCursor: null, workflow: null })
 	})
 })
 

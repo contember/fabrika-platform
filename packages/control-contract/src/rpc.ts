@@ -9,6 +9,8 @@ import type {
 	CursorList,
 	DeploymentNamespaceDetailDto,
 	DeploymentNamespaceListResponse,
+	GitHubSourceConnectionListInput,
+	GitHubSourceConnectionListResponse,
 	GitHubSourceConnectionStatusDto,
 	ListResponse,
 	PlanDeploymentNamespaceRequest,
@@ -103,6 +105,7 @@ export interface GitHubSourceConnectionInput {
 /** Provider-neutral admin seam. A statically composed provider implements these GitHub operations. */
 export interface GitHubSourceConnectionRpcContract {
 	status: RpcProcedure<void, GitHubSourceConnectionStatusDto>
+	list: RpcProcedure<GitHubSourceConnectionListInput, GitHubSourceConnectionListResponse>
 	start: RpcProcedure<StartGitHubSourceConnectionRequest, StartGitHubSourceConnectionResponse>
 	adoptExisting: RpcProcedure<void, GitHubSourceConnectionStatusDto>
 	verifyInstallation: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionStatusDto>
