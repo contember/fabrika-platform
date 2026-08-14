@@ -48,7 +48,7 @@ and a pin that pins half of what it claims.
 - [37](37-activate-zerops-managed-environment-transactionally.md) — Keep Zerops managed environment activation consistent with the app version that actually ships.
 - [38](38-add-dns-safe-operations-egress.md) — Prevent private-address and DNS-rebinding egress through Operations webhooks and active health checks.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
-- [47](47-give-the-zerops-path-a-private-git-source.md) — Source upload and durable GitHub App init are locally implemented; prove seamless init, public/private parity and credential absence live (ADRs 0029 and 0030).
+- [47](47-give-the-zerops-path-a-private-git-source.md) — Source upload and authenticated Control GitHub App setup are locally implemented; prove the browser flow, public/private parity and credential absence live (ADRs 0029–0031).
 - [54](54-give-operations-its-own-proxy-app-identity.md) — Half shipped; what is left is moving the operator surface onto the Operations host, which is a console architecture change, not a rename.
 - [57](57-stop-the-caller-choosing-its-own-audit-correlation-id.md) — IAM takes `X-Request-Id` from the caller, unbounded, into `auth_log`; its Worker is edge-routed so the proxy strip never runs.
 - [59](59-the-live-installation-calls-itself-local.md) — `fabrika-test` has never been deployed by the command that fixes it; `control` and `operations` still carry `ENVIRONMENT=local`.
@@ -60,6 +60,7 @@ and a pin that pins half of what it claims.
 - [68](68-platform-commands-mishandle-a-closed-stdin.md) — `platform install` runs unattended when it should refuse, and `platform init` cannot be run unattended at all.
 - [69](69-a-zerops-runs-log-never-reaches-the-run-record.md) — The Zerops build log is relayed and then dropped into stdout, so every Zerops run's log endpoint is empty.
 - [70](70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md) — A build that fails before it creates a container leaves its app version at `WAITING_TO_BUILD`, which `await-deploy` waits out.
+- [71](71-deliver-domain-audit-events-durably.md) — Add stable event ids, idempotent IAM acknowledgement and transactional producer outboxes for every domain mutation.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.

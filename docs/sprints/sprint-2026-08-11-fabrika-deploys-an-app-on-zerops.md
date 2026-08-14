@@ -12,11 +12,12 @@ fabrika deploys it into the Zerops account. Nothing short of that counts as done
 
 A work unit that does not move that criterion is out of scope, however tempting.
 
-**Operator prerequisite for the private gate.** Interactive init creates or verifies the
-organization-owned GitHub App and configures its credentials once for this Fabrika installation. The
-operator approves its installation on `contember/fabrika-example-zerops` in GitHub's UI. No Zerops
-GitHub OAuth grant or per-service GUI connection is part of the product path. The public source-upload
-path works anonymously; the private gate needs the installed App.
+**Operator prerequisite for the private gate.** An authenticated administrator opens **Settings →
+Source** in Control, creates or adopts the organization-owned GitHub App and approves its installation
+on `contember/fabrika-example-zerops` in GitHub's UI. `platform init` repairs the source transport but
+is not a second normal App-creation path. No Zerops GitHub OAuth grant or per-service GUI connection is
+part of the product path. The public source-upload path works anonymously; the private gate needs the
+installed App.
 
 **Theme.** Everything proven on Zerops so far is the platform _running_. Its predecessors got an
 installation up from an empty project and taught `platform deploy` to run unattended from CI. Neither
@@ -156,10 +157,11 @@ Zerops build pipeline.
   `627c5d9` implements the shared manifest flow, `419dffb` adopts it on Cloudflare without the
   `onCreated` durability hook, and `0592334` adds the optional awaited bounded hook. Commits `3e4c2b6`,
   `1e6f4b1` and `6a36a2d` implement App-JWT verification and create-only service variables; `e74bd1c`
-  supplies `onCreated` from Zerops and composes the seamless init described by
-  [ADR-0030](../decisions/0030-persist-github-app-creation-before-success.md). The source service,
-  provider lifecycle, control delegation, installation topology and supported upgrade flow are locally
-  verified. The complete live init and both live deploys remain open.
+  is the historical seamless CLI implementation described by ADR-0030. Commits `a64278f`, `d6dd195`,
+  `459bc64` and `ecd49b9` add legacy credential adoption, narrow init to anonymous bootstrap/repair,
+  implement the authenticated Control workflow from ADR-0031 and expose it in the dashboard. The
+  source service, provider lifecycle, control delegation, installation topology and supported upgrade
+  flow are locally verified. The complete live browser setup and both live deploys remain open.
 - **Security gates.** Project-network reachability is not authorization. Tests must prove an unsigned
   source request is refused; the request binds repository, ref, installation, app version, upload URL
   and run; only the live-verified Zerops HTTPS upload origin, path, empty userinfo and non-empty signed
@@ -511,3 +513,45 @@ upload first as a public repository and then as a private repository in `fabrika
 credential absence checked in logs and Zerops metadata. WU5's browser handoff, managed Operations
 environment and correlated exception ingest also remain live-only gates. The sprint and backlog item
 47 stay open until those witnesses exist.
+
+### WU3 Control-managed source checkpoint (2026-08-14)
+
+The normal setup authority has moved from laptop-side init into authenticated Control, as accepted by
+[ADR-0031](../decisions/0031-manage-zerops-github-source-from-control.md):
+
+- commit `a64278f` added deterministic adoption of a complete legacy or canonical source credential
+  set. It creates the atomic bundle only when needed, activates the exact digest and returns no
+  credential to Control;
+- commit `d6dd195` removed App creation and XDG recovery from current Zerops init. Fresh installations
+  stay anonymous. Upgrades preserve complete remote credentials for Control adoption and refuse
+  partial or conflicting state, while init repairs the source RPC transport and creates the nonsecret
+  Control project binding;
+- commit `459bc64` added the human-gated Control workflow, encrypted manifest and recovery state,
+  compare-and-set phase leases, create-only source persistence, in-process activation, dynamic
+  vault-backed webhook verification, exact App/installation verification and repair; and
+- commit `ecd49b9` added **Settings → Source**, covering anonymous creation, legacy adoption, resumable
+  manifest handoff, installation verification, repair, connected and unavailable states. Its polling
+  runs only while setup is pending, and its continuation link accepts only the exact same-origin path
+  bound to the persisted connection id.
+
+The callback is still subject to GitHub's unavoidable acceptance-to-persistence orphan window, but a
+durable recovery or adoption checkpoint now resumes after a bounded phase lease instead of remaining
+pending forever. The browser never receives the App private key, webhook secret, source RPC key,
+GitHub token or manifest code. Opaque callback state passes only through the bounded handoff form and
+never enters a browser DTO, log, error or persisted plaintext. App creation and installation remain
+live-only witnesses; no release or live GitHub/Zerops flow was performed at this checkpoint.
+
+Local witnesses at this checkpoint:
+
+- provider adoption: 12 focused tests passed with 59 expectations;
+- Control workflow, persistence and secure callback handling: 42 focused tests passed with 181
+  expectations;
+- Zerops init/repair: 16 focused tests passed with 88 expectations;
+- dashboard DTO, RPC and lifecycle presentation: 15 focused tests passed with 47 expectations, and
+  the package typecheck and production build passed under a CPU lease; and
+- the four focused commands reported zero failures. Documentation formatting and link checks belong
+  to this checkpoint's documentation change.
+
+The workflow emits the same best-effort domain audit calls as existing Control mutations. Making audit
+delivery durable is repository-wide follow-up [`71`](../backlog/71-deliver-domain-audit-events-durably.md),
+not a private WU3 blocker.

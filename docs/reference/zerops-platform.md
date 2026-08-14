@@ -567,10 +567,13 @@ application deployment.
 The installation has a private `source` service on `http://source:3000`. It installs `git`, exposes
 only an unauthenticated private-network `/healthz` liveness endpoint, and authenticates every RPC before
 reading its bounded body. The shared RPC secret is `FABRIKA_SOURCE_RPC_KEY` on source and
-`FABRIKA_ZEROPS_SOURCE_RPC_KEY` on control. Source receives no Zerops token. The optional
-`GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` pair is all-or-none and exists only on source; public
-repositories work anonymously without it. The independently optional `GITHUB_WEBHOOK_SECRET` stays on
-control, which verifies webhook HMAC locally.
+`FABRIKA_ZEROPS_SOURCE_RPC_KEY` on control. Source receives no Zerops token. Fresh source services
+start anonymously, so public repositories need no GitHub credential. An App-backed connection stores
+one versioned canonical id-and-private-key bundle in the create-only `GITHUB_APP_CREDENTIALS` source
+variable. Source activates that exact SHA-256-bound bundle in memory without a restart. Legacy
+all-or-none `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` values can be adopted into the atomic bundle;
+partial or conflicting state fails closed. The independent webhook secret is encrypted in Control's
+platform vault and resolved dynamically for every webhook verification.
 
 Production repository and REST origins are fixed to `github.com` and `api.github.com`. There is no
 operator-facing GitHub Enterprise or GitHub API-base setting; alternate origins are dependency-injected
@@ -715,12 +718,10 @@ operator authenticated with. The source key is written under different names on 
 has one value. Exactly one value is printed: the provisioning key, once, at the end, because it lives
 nowhere else and `platform init` asks for it.
 
-GitHub source configuration is optional at fresh install. An all-or-none App id/private-key pair is
-written only to source, and the independently optional webhook secret only to control. Without them,
-public repositories deploy anonymously. The subsequent interactive init either preserves a complete
-live App configuration, verifies an existing App or creates an organization-owned App through
-GitHub's manifest flow. Source gets neither the Zerops integration token nor any GitHub API-base
-setting.
+Fresh install always leaves GitHub source anonymous. It writes the source RPC key and nonsecret
+project binding needed by the later authenticated Control flow, but no App private key or webhook
+secret. Public repositories therefore deploy without another setup step. Source gets neither the
+Zerops integration token nor any GitHub API-base setting.
 
 **Partly unverified against a real account.** The import step's behaviour is measured (08-10 section
 above) and the command is written against it. Everything after it is not: in particular
@@ -728,75 +729,61 @@ above) and the command is written against it. Everything after it is not: in par
 whether client `NO_ACCESS` beside a project `ADMIN` grant is even accepted, and what the minted value
 looks like — and the two passes as a whole.
 
-### `fabrika platform init --provider=zerops` source and GitHub App setup
+### GitHub source connection in Control and CLI repair
 
-Interactive `platform init` is also the supported upgrade/configuration path for an existing
-installation. After a separate operator confirmation, it reads the project and imports only `source`
-when that service is missing. The import is a source-only services document with
-`startWithoutCode: true`; init waits for each exact process id returned by Zerops before reading or
-writing the service. Existing platform services and their app versions are not re-imported.
+Normal GitHub App setup runs in the authenticated Control console at **Settings → Source**
+([ADR-0031](../decisions/0031-manage-zerops-github-source-from-control.md)). Fresh Zerops installations
+boot with anonymous source access. A human principal holding `source.connection.manage` starts setup
+for one GitHub organization and an optional same-owner repository set. Control returns only a
+same-origin continuation path; no private key, webhook secret, source RPC key, manifest code or opaque
+state enters a browser DTO, URL log or error.
 
-The command reconciles the shared RPC key directly in Zerops:
+The continuation submits a least-authority manifest directly to `github.com`. The callback requires
+the same authenticated human principal, exact Control origin and one-use encrypted state. It rejects
+unknown or duplicate query fields, bounds the GitHub response and redirects to a clean
+`/settings/source` URL. Before the browser can observe success, Control stores GitHub's one-time App id
+and private key in its encrypted platform vault. The setup state stores only nonsecret phases, hashes,
+verified identities and vault references. Expiring phase leases turn abandoned work into either a
+terminal pre-credential failure or a repairable durable checkpoint.
 
-- equal valid keys on source and control are reused;
-- if exactly one side has a valid key and the other key is absent, that value repairs the absent side;
-- if neither side has a key, init generates one and writes both sides;
-- an invalid value or two different values is refused rather than rotated.
+Control then:
 
-The one-sided rule makes a retry safe after the first of the two environment writes succeeds and the
-second fails. Missing RPC and GitHub variables use create-only writes. A duplicate or ambiguous write
-is accepted only after a bounded exact reread proves the intended value; final repeated reads prove
-that the RPC keys match and that all three GitHub values equal the selected state. Init never uses the
-normal update seam to replace these credentials.
+1. creates the exact canonical id-and-private-key bundle on source with create-only semantics;
+2. proves the durable SHA-256-bound value and activates it in the running source process;
+3. verifies the organization-owned App identity, visibility, `contents: read` permission and sole
+   `push` event;
+4. creates a new webhook secret in the Control vault, configures the exact HTTPS callback and verifies
+   the returned URL, JSON content type and TLS setting;
+5. deletes the temporary encrypted recovery copy; and
+6. asks the administrator to install the App, then verifies the organization or every requested
+   repository through App-JWT endpoints before publishing the connection.
 
-[ADR-0030](../decisions/0030-persist-github-app-creation-before-success.md) defines the App-creation
-durability boundary. The shared manifest helper supports an optional, awaited and bounded `onCreated`
-callback. Zerops init supplies that callback and publishes the exact one-time App response to an
-absolute XDG state path outside the worktree before the helper reports success. The directory is
-owner-only (`0700`), the bounded final
-and fixed temporary files are owner-only (`0600`), and publication uses fsync, atomic rename and a
-parent-directory fsync. The strict file binds installation, project id and exact live control origin.
-Recognized safe stale temporary state is removed; an unsafe one is refused.
+GitHub masks the webhook secret, so the structural readback cannot compare that value. Control starts
+using the new vault-backed secret after structural webhook verification, including while installation
+is still pending. Once connected, every status read also compares the source-reported credential
+digest and strict App identity with durable Control state. A mismatch or transient remote failure is
+reported as unavailable rather than silently trusting the database.
 
-Init classifies state before writing:
+`platform init` remains the operator-side source upgrade and repair command. It imports only a missing
+`source` service, waits for the returned Zerops processes, reconciles the two-sided RPC key and creates
+the nonsecret Control project binding. Equal valid RPC keys are reused; one valid side repairs an
+absent side; both absent generate one; invalid or mismatched values are refused. Normal init neither
+creates nor receives GitHub App credentials and never opens an XDG recovery file. It preserves a
+complete legacy or atomic remote credential set for Control's **Adopt existing GitHub App** action, and
+refuses partial or conflicting state. Adoption canonicalizes a complete legacy pair into the atomic
+source bundle with a deterministic project-and-digest connection id, activates it, and continues
+through the same Control webhook and installation verification phases.
 
-| Live App id/key/webhook state | Bound recovery   | Requested repositories | Result                                                                                  |
-| ----------------------------- | ---------------- | ---------------------- | --------------------------------------------------------------------------------------- |
-| empty                         | absent           | none                   | Offer `create`, `existing` or `anonymous`; anonymous needs no control or proxy origin.  |
-| empty                         | absent           | one or more            | Offer `create` or `existing`; a requested repository requires an App.                   |
-| partial                       | absent           | any                    | Refuse; init does not guess or overwrite the missing fields.                            |
-| empty or matching partial     | exact match      | any                    | `resume` from recovery and create only the missing live fields.                         |
-| complete                      | absent/matching  | any                    | `preserve` the live fields and verify the App; do not rewrite them.                     |
-| any                           | invalid/mismatch | any                    | Refuse; the recovery binding and every present live value must agree before a mutation. |
+Older ADR-0030 CLI recovery files are compatibility evidence only. This release does not discover,
+open or delete them. If the complete credentials are already remote, adopt them in Control and delete
+the old file only after the console reports connected. If the file is the only complete copy, use the
+last compatible CLI release to finish remote persistence before adoption. Source credentials never
+enter the sidecar checkout, repository or GitHub Environment.
 
-`create` requires empty live state and no recovery. Repositories in the App owner's organization
-default to a private App; cross-organization repositories require an explicit public App choice.
-`existing` verifies supplied App credentials rather than trusting their identifiers.
-
-Every App-backed path binds the manifest homepage and webhook URL to the exact live HTTPS control
-origin. Init authenticates as the App and verifies its identity, owner, visibility, exact permissions
-(`contents: read`, plus only GitHub's optional implicit `metadata: read`) and `push` event. It patches
-the webhook to the exact URL, JSON content type and TLS verification and reads the structure back.
-GitHub masks the webhook secret, so the GET cannot compare its value. Recovery is deleted only after
-the Zerops credentials and those GitHub checks succeed, and before the installation UI opens. Each
-App-backed init run then verifies the App installation for the organization or for every requested
-repository through App-JWT endpoints; Fabrika does not add repositories to an installation.
-
-A loopback TCP lock keyed by Zerops project and installation serializes init on one host. It is
-independent of the XDG recovery root and is not a distributed lock. Create-only conflicts and final
-exact rereads fail closed when they observe a competing writer, but cannot prevent another writer
-after final verification. The supported operational rule is one operator per project at a time.
-
-None of the source credentials enters the sidecar checkout, repository or GitHub Environment; the
-sidecar still receives only the Zerops integration token and IAM provisioning key it needs for deploy.
-One narrow orphan window remains: GitHub can irreversibly accept manifest conversion before
-`onCreated` begins or can persist its response. That App must be deleted and recreated because its
-private key cannot be recovered.
-
-**Not yet verified live.** The source-only import, RPC repair, App create/resume/preserve/existing
-states, anonymous path, create-only writes and verification are covered locally. The complete flow has
-not run against GitHub and `fabrika-install-test`. WU3's public and private application deploys remain
-live-only acceptance gates too.
+The complete browser → GitHub → Control → source flow and WU3's public/private application deploys
+remain live-only acceptance gates. One unavoidable orphan window remains after GitHub accepts manifest
+conversion but before the callback durably stores the response; such an App must be deleted and
+recreated.
 
 ## Fabrika placement mapping
 

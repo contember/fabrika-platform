@@ -33,11 +33,14 @@ fast build-failure detection and persisted run logs are implemented checkpoints.
 proved Zerops' GUI OAuth grant cannot be consumed by the installation's project-scoped token.
 [ADR-0029](decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md) replaces that native
 integration plan with an operator-owned GitHub App and a non-public per-installation `source` service.
-The service, application upload lifecycle and install/init paths are locally implemented; production
-is fixed to `github.com`. [ADR-0030](decisions/0030-persist-github-app-creation-before-success.md)
-makes the one-time App creation response durable before init reports success. The service fetches an
-exact commit and uploads the repository archive; Zerops still builds and deploys it. The complete live
-init, public/private live deploys and the browser/Operations last mile remain open.
+The service and application upload lifecycle are locally implemented; production is fixed to
+`github.com`. Fresh installation leaves source anonymous. Normal App creation, encrypted recovery,
+source activation, webhook configuration, legacy adoption and installation verification now run in
+the authenticated Control console under
+[ADR-0031](decisions/0031-manage-zerops-github-source-from-control.md); ADR-0030 remains the legacy CLI
+recovery record. Source fetches an exact commit and uploads the repository archive; Zerops still builds
+and deploys it. The complete live browser flow, public/private live deploys and the browser/Operations
+last mile remain open.
 The example remains a tested workspace fixture and standalone repository whose root holds `zerops.yaml`.
 Consumes
 [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md),
@@ -91,10 +94,17 @@ backlog is empty; what is left of item 54 is a console architecture decision, no
   neither has run against the account, so the hand sequence remains the only proven one. Next is the
   live acceptance above, including [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md): an
   operator-owned GitHub App and source-upload service now replace the disproved native-integration
-  approach in code. Its one-time creation response is durably recovered and verified by the init flow
-  ([ADR-0030](decisions/0030-persist-github-app-creation-before-success.md)), but the complete flow and
-  public/private deploys still need live witnesses. The production two-project shape and custom domains
-  remain in [`05`](backlog/05-bring-up-on-a-real-zerops-account.md).
+  approach in code. The authenticated Control workflow durably recovers the one-time App id and private
+  key, activates the source credentials and verifies the App installation
+  ([ADR-0031](decisions/0031-manage-zerops-github-source-from-control.md)); the CLI is now a narrow
+  repair/adoption path. The complete browser flow and public/private deploys still need live witnesses.
+  The production two-project shape and custom domains remain in
+  [`05`](backlog/05-bring-up-on-a-real-zerops-account.md).
+- **Domain audit delivery is best-effort today.** `IamRpc.audit` intentionally returns before the IAM
+  write is durable, which is the existing semantics followed by every Control mutation, including the
+  source-connection flow. Repository-wide stable event ids, idempotent IAM acknowledgement and
+  transactional producer outboxes are tracked in
+  [`71`](backlog/71-deliver-domain-audit-events-durably.md); this is not a private blocker for item 47.
 - **The session handoff is the ONLY way a browser gets a session for an app.** IAM
   issues a browser-bound one-time code and the proxy on the app's own host redeems it
   ([ADR-0023](decisions/0023-one-session-per-host.md),
