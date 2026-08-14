@@ -27,10 +27,12 @@ export type GitHubSetupPhase =
 
 export interface GitHubSetupAttempt {
 	id: string
+	setupKind: 'manifest' | 'adoption'
 	status: GitHubSetupStatus
 	phase: GitHubSetupPhase
 	version: number
 	stateHash: string | null
+	manifestStateSecretRef: string | null
 	initiatedBy: string
 	expectedOrigin: string
 	desiredOwner: string
@@ -72,6 +74,11 @@ export interface GitHubSourceConnection {
 	version: number
 }
 
+export interface GitHubWebhookSecretBinding {
+	connectionId: string
+	webhookSecretRef: string
+}
+
 /** Safe projection for authenticated state queries. It excludes capability hashes and vault refs. */
 export type GitHubConnectionState =
 	| { state: 'anonymous' }
@@ -90,6 +97,7 @@ export type GitHubConnectionState =
 	| { state: 'repair_required'; attemptId: string; phase: GitHubSetupPhase; errorCode: GitHubSetupErrorCode | null; updatedAt: number }
 	| {
 		state: 'connected'
+		connectionId: string
 		appId: string
 		appSlug: string
 		appHtmlUrl: string
@@ -106,10 +114,12 @@ export type GitHubConnectionState =
 
 interface GitHubSetupAttemptRow {
 	id: string
+	setup_kind: string
 	status: string
 	phase: string
 	version: number
 	state_hash: string | null
+	manifest_state_secret_ref: string | null
 	initiated_by: string
 	expected_origin: string
 	desired_owner: string
@@ -183,6 +193,19 @@ export interface PublishGitHubConnectionInput {
 	verifiedAt: number
 }
 
+export interface BeginGitHubAdoptionInput {
+	id: string
+	initiatedBy: string
+	expectedOrigin: string
+	appId: string
+	appSlug: string
+	appHtmlUrl: string
+	appOwner: string
+	appPublic: boolean
+	credentialSha256: string
+	expiresAt: number
+}
+
 export type GitHubSetupSecretKind = 'recovery' | 'webhook'
 
 export class GitHubConnectionCasError extends Error {
@@ -204,8 +227,15 @@ const ACTIVE_PHASES: readonly GitHubSetupPhase[] = [
 	'installation_required',
 ]
 
+// Exceeds the bounded source activation/configuration sequence; crash recovery appears after this lease.
+const DEFAULT_OPERATION_LEASE_SECONDS = 10 * 60
+
 export function githubRecoverySecretLabel(attemptId: string): string {
 	return `platform:github-source:${attemptId}:recovery`
+}
+
+export function githubManifestStateSecretLabel(attemptId: string): string {
+	return `platform:github-source:${attemptId}:manifest-state`
 }
 
 export function githubWebhookSecretLabel(connectionId: string): string {
@@ -216,7 +246,12 @@ export class GitHubConnectionStore {
 	constructor(
 		private readonly db: SqlDatabase,
 		private readonly now: () => number = () => Math.floor(Date.now() / 1000),
-	) {}
+		private readonly operationLeaseSeconds: number = DEFAULT_OPERATION_LEASE_SECONDS,
+	) {
+		if (!Number.isSafeInteger(operationLeaseSeconds) || operationLeaseSeconds <= 0 || operationLeaseSeconds > 24 * 60 * 60) {
+			throw new Error('invalid GitHub setup operation lease')
+		}
+	}
 
 	async beginAttempt(input: BeginGitHubSetupInput): Promise<GitHubSetupAttempt> {
 		const id = input.id ?? uuidv7()
@@ -254,6 +289,121 @@ export class GitHubConnectionStore {
 		}
 	}
 
+	/** Atomically persist an expiring attempt and its encrypted one-use manifest state. */
+	async beginAttemptWithManifestState(input: BeginGitHubSetupInput, secret: PreparedVaultSecret): Promise<GitHubSetupAttempt> {
+		const id = input.id ?? uuidv7()
+		const now = this.now()
+		validateSha256(input.stateHash, 'state hash')
+		validateNonEmpty(input.initiatedBy, 'principal')
+		validateControlOrigin(input.expectedOrigin)
+		validateGitHubOwner(input.desiredOwner)
+		validateNonEmpty(input.desiredAppName, 'desired app name')
+		if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now) throw new Error('invalid setup expiry')
+		const repositories = canonicalRepositories(input.requestedRepositories)
+		if (
+			secret.scope !== 'platform' || secret.label !== githubManifestStateSecretLabel(id) || secret.ref !== vaultRef(secret.id)
+			|| secret.ciphertext === '' || secret.valueIv === '' || secret.wrappedDek === '' || secret.dekIv === ''
+		) throw new Error('invalid GitHub manifest state secret')
+		const attempt = this.db.prepare(`INSERT INTO github_source_setup_attempts (
+			id, status, phase, version, state_hash, manifest_state_secret_ref, initiated_by, expected_origin, desired_owner,
+			desired_app_name, desired_public, requested_repositories_json, created_at, updated_at, expires_at
+		) VALUES (?, 'active', 'awaiting_manifest_callback', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`)
+			.bind(
+				id,
+				input.stateHash,
+				secret.ref,
+				input.initiatedBy,
+				input.expectedOrigin,
+				input.desiredOwner,
+				input.desiredAppName,
+				input.desiredPublic ? 1 : 0,
+				JSON.stringify(repositories),
+				now,
+				now,
+				input.expiresAt,
+			)
+		const vaultInsert = this.db.prepare(`INSERT INTO vault (id, scope, label, ciphertext, value_iv, wrapped_dek, dek_iv)
+			SELECT ?, ?, ?, ?, ?, ?, ? FROM github_source_setup_attempts
+			WHERE id = ? AND version = 1 AND status = 'active' AND phase = 'awaiting_manifest_callback'
+				AND state_hash = ? AND manifest_state_secret_ref = ?
+			UNION ALL SELECT ?, 'invalid', ?, ?, ?, ?, ? WHERE (
+				SELECT COUNT(*) FROM github_source_setup_attempts
+				WHERE id = ? AND version = 1 AND status = 'active' AND phase = 'awaiting_manifest_callback'
+					AND state_hash = ? AND manifest_state_secret_ref = ?
+			) <> 1 RETURNING id`)
+			.bind(
+				secret.id,
+				secret.scope,
+				secret.label,
+				secret.ciphertext,
+				secret.valueIv,
+				secret.wrappedDek,
+				secret.dekIv,
+				id,
+				input.stateHash,
+				secret.ref,
+				secret.id,
+				secret.label,
+				secret.ciphertext,
+				secret.valueIv,
+				secret.wrappedDek,
+				secret.dekIv,
+				id,
+				input.stateHash,
+				secret.ref,
+			)
+		try {
+			const results = await this.db.batch<GitHubSetupAttemptRow>([attempt, vaultInsert])
+			const row = results[0]?.results[0]
+			if (results[0]?.results.length !== 1 || results[1]?.results.length !== 1 || row === undefined) throw new Error('invalid result')
+			return decodeAttempt(row)
+		} catch {
+			throw new Error('GitHub source setup could not be started')
+		}
+	}
+
+	async beginAdoption(input: BeginGitHubAdoptionInput): Promise<GitHubSetupAttempt> {
+		const now = this.now()
+		validateConnectionId(input.id)
+		validateNonEmpty(input.initiatedBy, 'principal')
+		validateControlOrigin(input.expectedOrigin)
+		validateGitHubOwner(input.appOwner)
+		validateSha256(input.credentialSha256, 'credential digest')
+		if (!/^[1-9][0-9]*$/.test(input.appId) || !/^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/.test(input.appSlug)) {
+			throw new Error('invalid GitHub adoption App identity')
+		}
+		if (input.appHtmlUrl !== `https://github.com/apps/${input.appSlug}` || !Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now) {
+			throw new Error('invalid GitHub adoption App identity')
+		}
+		try {
+			const row = await this.db.prepare(`INSERT INTO github_source_setup_attempts (
+				id, setup_kind, status, phase, version, initiated_by, expected_origin, desired_owner,
+				desired_app_name, desired_public, requested_repositories_json, app_id, app_slug, app_html_url,
+				credential_sha256, created_at, updated_at, expires_at
+			) VALUES (?, 'adoption', 'active', 'source_activated', 1, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?) RETURNING *`)
+				.bind(
+					input.id,
+					input.initiatedBy,
+					input.expectedOrigin,
+					input.appOwner.toLowerCase(),
+					input.appSlug,
+					input.appPublic ? 1 : 0,
+					input.appId,
+					input.appSlug,
+					input.appHtmlUrl,
+					input.credentialSha256,
+					now,
+					now,
+					input.expiresAt,
+				)
+				.first<GitHubSetupAttemptRow>()
+			if (row === null) throw new Error('adoption did not return state')
+			return decodeAttempt(row)
+		} catch {
+			throw new Error('GitHub source adoption could not be started')
+		}
+	}
+
 	async getAttempt(id: string): Promise<GitHubSetupAttempt | null> {
 		const row = await this.db.prepare('SELECT * FROM github_source_setup_attempts WHERE id = ?').bind(id).first<GitHubSetupAttemptRow>()
 		return row === null ? null : decodeAttempt(row)
@@ -264,11 +414,43 @@ export class GitHubConnectionStore {
 		return row === null ? null : decodeConnection(row)
 	}
 
+	async getWebhookSecretBinding(): Promise<GitHubWebhookSecretBinding | null> {
+		const connection = await this.getConnection()
+		if (connection !== null) return { connectionId: connection.connectionId, webhookSecretRef: connection.webhookSecretRef }
+		const row = await this.db.prepare(`SELECT * FROM github_source_setup_attempts
+			WHERE status IN ('active','repair_required') AND webhook_secret_ref IS NOT NULL
+				AND phase IN ('webhook_configured','configuration_verified','installation_required')
+			ORDER BY updated_at DESC LIMIT 1`).first<GitHubSetupAttemptRow>()
+		if (row === null) return null
+		const attempt = decodeAttempt(row)
+		if (attempt.webhookSecretRef === null) return null
+		return { connectionId: attempt.id, webhookSecretRef: attempt.webhookSecretRef }
+	}
+
+	/** Convert an expired phase lease into a safe resumable or terminal state. */
+	async reapExpiredAttempt(): Promise<GitHubSetupAttempt | null> {
+		const now = this.now()
+		const row = await this.db.prepare(`SELECT * FROM github_source_setup_attempts
+			WHERE status = 'active' AND phase <> 'installation_required' AND expires_at <= ?
+			ORDER BY updated_at ASC LIMIT 1`).bind(now).first<GitHubSetupAttemptRow>()
+		if (row === null) return null
+		const attempt = decodeAttempt(row)
+		if (attempt.phase === 'awaiting_manifest_callback' && attempt.manifestStateSecretRef !== null) {
+			return await this.expireManifestCallback(attempt, now)
+		}
+		if (attempt.recoverySecretRef === null && attempt.setupKind === 'manifest') {
+			return await this.markExpired(attempt, now, 'failed', 'callback_expired')
+		}
+		return await this.markExpired(attempt, now, 'repair_required', errorForExpiredPhase(attempt.phase))
+	}
+
 	async getState(): Promise<GitHubConnectionState> {
+		await this.reapExpiredAttempt()
 		const connection = await this.getConnection()
 		if (connection !== null) {
 			return {
 				state: 'connected',
+				connectionId: connection.connectionId,
 				appId: connection.appId,
 				appSlug: connection.appSlug,
 				appHtmlUrl: connection.appHtmlUrl,
@@ -326,13 +508,78 @@ export class GitHubConnectionStore {
 	async claimCallback(stateHash: string, principalId: string): Promise<GitHubSetupAttempt | null> {
 		validateSha256(stateHash, 'state hash')
 		const now = this.now()
-		const row = await this.db.prepare(`UPDATE github_source_setup_attempts
-			SET phase = 'exchange_claimed', state_hash = NULL, version = version + 1, updated_at = ?
+		const existing = await this.db.prepare(`SELECT * FROM github_source_setup_attempts
 			WHERE state_hash = ? AND initiated_by = ? AND status = 'active'
-				AND phase = 'awaiting_manifest_callback' AND expires_at > ?
-			RETURNING *`)
-			.bind(now, stateHash, principalId, now)
+				AND phase = 'awaiting_manifest_callback' AND expires_at > ?`)
+			.bind(stateHash, principalId, now)
 			.first<GitHubSetupAttemptRow>()
+		if (existing === null || existing.manifest_state_secret_ref === null) return null
+		const attempt = decodeAttempt(existing)
+		const ref = existing.manifest_state_secret_ref
+		const vaultId = ref.slice('vault:'.length)
+		const label = githubManifestStateSecretLabel(attempt.id)
+		const claim = this.db.prepare(`UPDATE github_source_setup_attempts
+			SET phase = 'exchange_claimed', state_hash = NULL, version = version + 1, updated_at = ?, expires_at = ?
+			WHERE id = ? AND version = ? AND state_hash = ? AND manifest_state_secret_ref = ?
+				AND initiated_by = ? AND status = 'active' AND phase = 'awaiting_manifest_callback' AND expires_at > ?
+				AND EXISTS (SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?)
+			RETURNING *`)
+			.bind(now, this.leaseExpiresAt(), attempt.id, attempt.version, stateHash, ref, principalId, now, vaultId, label)
+		const remove = this.db.prepare(`DELETE FROM vault WHERE id = ? AND scope = 'platform' AND label = ? AND EXISTS (
+			SELECT 1 FROM github_source_setup_attempts WHERE id = ? AND version = ? AND status = 'active'
+				AND phase = 'exchange_claimed' AND state_hash IS NULL AND manifest_state_secret_ref = ?
+		) RETURNING id`).bind(vaultId, label, attempt.id, attempt.version + 1, ref)
+		const clear = this.db.prepare(`UPDATE github_source_setup_attempts SET manifest_state_secret_ref = NULL
+			WHERE id = ? AND version = ? AND status = 'active' AND phase = 'exchange_claimed'
+				AND manifest_state_secret_ref = ? AND NOT EXISTS (
+					SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?
+				) RETURNING *`).bind(attempt.id, attempt.version + 1, ref, vaultId, label)
+		const assertion = this.db.prepare(`INSERT INTO vault (id, scope, label, ciphertext, value_iv, wrapped_dek, dek_iv)
+			SELECT 'invalid-manifest-claim', 'invalid', 'invalid', '', '', '', '' WHERE (
+				SELECT COUNT(*) FROM github_source_setup_attempts WHERE id = ? AND version = ? AND status = 'active'
+					AND phase = 'exchange_claimed' AND state_hash IS NULL AND manifest_state_secret_ref IS NULL
+			) <> 1 RETURNING id`).bind(attempt.id, attempt.version + 1)
+		try {
+			const results = await this.db.batch<GitHubSetupAttemptRow>([claim, remove, clear, assertion])
+			const row = results[2]?.results[0]
+			if (
+				results[0]?.results.length !== 1 || results[1]?.results.length !== 1 || results[2]?.results.length !== 1
+				|| results[3]?.results.length !== 0 || row === undefined
+			) return null
+			return decodeAttempt(row)
+		} catch {
+			return null
+		}
+	}
+
+	async renewManifestHandoff(
+		id: string,
+		expectedVersion: number,
+		principalId: string,
+		expectedOrigin: string,
+		expiresAt: number,
+	): Promise<GitHubSetupAttempt | null> {
+		const now = this.now()
+		if (!Number.isSafeInteger(expiresAt) || expiresAt <= now) throw new Error('invalid manifest handoff expiry')
+		const row = await this.db.prepare(`UPDATE github_source_setup_attempts SET
+			expires_at = ?, version = version + 1, updated_at = ?
+			WHERE id = ? AND version = ? AND initiated_by = ? AND expected_origin = ?
+				AND status = 'active' AND phase = 'awaiting_manifest_callback' AND expires_at > ?
+				AND manifest_state_secret_ref IS NOT NULL AND EXISTS (
+					SELECT 1 FROM vault WHERE id = substr(manifest_state_secret_ref, 7)
+						AND scope = 'platform' AND label = ?
+				) RETURNING *`)
+			.bind(expiresAt, now, id, expectedVersion, principalId, expectedOrigin, now, githubManifestStateSecretLabel(id))
+			.first<GitHubSetupAttemptRow>()
+		return row === null ? null : decodeAttempt(row)
+	}
+
+	async resumeRepair(id: string, expectedVersion: number): Promise<GitHubSetupAttempt | null> {
+		const row = await this.db.prepare(`UPDATE github_source_setup_attempts SET
+			status = 'active', last_error_code = NULL, version = version + 1, updated_at = ?, expires_at = ?
+			WHERE id = ? AND version = ? AND status = 'repair_required'
+				AND (recovery_secret_ref IS NOT NULL OR setup_kind = 'adoption')
+			RETURNING *`).bind(this.now(), this.leaseExpiresAt(), id, expectedVersion).first<GitHubSetupAttemptRow>()
 		return row === null ? null : decodeAttempt(row)
 	}
 
@@ -351,14 +598,23 @@ export class GitHubConnectionStore {
 		if (nextPhase === 'source_activated' && (patch.appId === undefined || patch.appSlug === undefined || patch.appHtmlUrl === undefined)) {
 			throw new Error('source activation checkpoint requires verified App identity')
 		}
+		if (
+			nextPhase === 'source_activated'
+			&& (
+				patch.appId === undefined || !/^[1-9][0-9]*$/.test(patch.appId)
+				|| patch.appSlug === undefined || !/^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/.test(patch.appSlug)
+				|| patch.appHtmlUrl !== `https://github.com/apps/${patch.appSlug}`
+			)
+		) throw new Error('source activation checkpoint requires verified App identity')
 		const row = await this.db.prepare(`UPDATE github_source_setup_attempts SET
-			phase = ?, version = version + 1, updated_at = ?,
+			phase = ?, version = version + 1, updated_at = ?, expires_at = ?,
 			app_id = COALESCE(?, app_id), app_slug = COALESCE(?, app_slug), app_html_url = COALESCE(?, app_html_url),
 			credential_sha256 = COALESCE(?, credential_sha256), last_error_code = COALESCE(?, last_error_code)
 			WHERE id = ? AND version = ? AND status = 'active' AND phase = ? RETURNING *`)
 			.bind(
 				nextPhase,
 				this.now(),
+				this.leaseExpiresAt(),
 				patch.appId ?? null,
 				patch.appSlug ?? null,
 				patch.appHtmlUrl ?? null,
@@ -389,9 +645,9 @@ export class GitHubConnectionStore {
 		}
 		const refColumn = kind === 'recovery' ? 'recovery_secret_ref' : 'webhook_secret_ref'
 		const update = this.db.prepare(`UPDATE github_source_setup_attempts SET
-			phase = ?, ${refColumn} = ?, version = version + 1, updated_at = ?
+			phase = ?, ${refColumn} = ?, version = version + 1, updated_at = ?, expires_at = ?
 			WHERE id = ? AND version = ? AND status = 'active' AND phase = ? RETURNING *`)
-			.bind(nextPhase, secret.ref, this.now(), id, expectedVersion, expectedPhase)
+			.bind(nextPhase, secret.ref, this.now(), this.leaseExpiresAt(), id, expectedVersion, expectedPhase)
 		const insert = this.db.prepare(`INSERT INTO vault (id, scope, label, ciphertext, value_iv, wrapped_dek, dek_iv)
 			SELECT ?, ?, ?, ?, ?, ?, ? FROM github_source_setup_attempts
 			WHERE id = ? AND version = ? AND status = 'active' AND phase = ? AND ${refColumn} = ?
@@ -446,12 +702,12 @@ export class GitHubConnectionStore {
 		const vaultId = attempt.recoverySecretRef.slice('vault:'.length)
 		const recoveryLabel = githubRecoverySecretLabel(id)
 		const advance = this.db.prepare(`UPDATE github_source_setup_attempts SET
-			phase = 'installation_required', version = version + 1, updated_at = ?
+			phase = 'installation_required', version = version + 1, updated_at = ?, expires_at = ?
 			WHERE id = ? AND version = ? AND status = 'active' AND phase = 'configuration_verified'
 				AND recovery_secret_ref = ? AND EXISTS (
 					SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?
 				) RETURNING id`)
-			.bind(this.now(), id, expectedVersion, attempt.recoverySecretRef, vaultId, recoveryLabel)
+			.bind(this.now(), this.leaseExpiresAt(), id, expectedVersion, attempt.recoverySecretRef, vaultId, recoveryLabel)
 		const remove = this.db.prepare(`DELETE FROM vault WHERE id = ? AND scope = 'platform' AND label = ? AND EXISTS (
 			SELECT 1 FROM github_source_setup_attempts
 			WHERE id = ? AND version = ? AND status = 'active' AND phase = 'installation_required'
@@ -563,20 +819,95 @@ export class GitHubConnectionStore {
 			.first<GitHubSetupAttemptRow>()
 		return row === null ? null : decodeAttempt(row)
 	}
+
+	private leaseExpiresAt(): number {
+		return this.now() + this.operationLeaseSeconds
+	}
+
+	private async markExpired(
+		attempt: GitHubSetupAttempt,
+		now: number,
+		status: 'repair_required' | 'failed',
+		errorCode: GitHubSetupErrorCode,
+	): Promise<GitHubSetupAttempt | null> {
+		const row = await this.db.prepare(`UPDATE github_source_setup_attempts SET
+			status = ?, state_hash = NULL, last_error_code = ?, version = version + 1,
+			updated_at = ?, terminal_at = ?
+			WHERE id = ? AND version = ? AND status = 'active' AND expires_at <= ? RETURNING *`)
+			.bind(status, errorCode, now, status === 'failed' ? now : null, attempt.id, attempt.version, now)
+			.first<GitHubSetupAttemptRow>()
+		return row === null ? null : decodeAttempt(row)
+	}
+
+	private async expireManifestCallback(attempt: GitHubSetupAttempt, now: number): Promise<GitHubSetupAttempt | null> {
+		if (attempt.manifestStateSecretRef === null) return null
+		const ref = attempt.manifestStateSecretRef
+		const vaultId = ref.slice('vault:'.length)
+		const label = githubManifestStateSecretLabel(attempt.id)
+		const expire = this.db.prepare(`UPDATE github_source_setup_attempts SET
+			status = 'failed', state_hash = NULL, last_error_code = 'callback_expired', version = version + 1,
+			updated_at = ?, terminal_at = ?
+			WHERE id = ? AND version = ? AND status = 'active' AND phase = 'awaiting_manifest_callback'
+				AND expires_at <= ? AND manifest_state_secret_ref = ?
+				AND EXISTS (SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?)
+			RETURNING id`).bind(now, now, attempt.id, attempt.version, now, ref, vaultId, label)
+		const remove = this.db.prepare(`DELETE FROM vault WHERE id = ? AND scope = 'platform' AND label = ? AND EXISTS (
+			SELECT 1 FROM github_source_setup_attempts WHERE id = ? AND version = ? AND status = 'failed'
+				AND phase = 'awaiting_manifest_callback' AND manifest_state_secret_ref = ?
+		) RETURNING id`).bind(vaultId, label, attempt.id, attempt.version + 1, ref)
+		const clear = this.db.prepare(`UPDATE github_source_setup_attempts SET manifest_state_secret_ref = NULL
+			WHERE id = ? AND version = ? AND status = 'failed' AND phase = 'awaiting_manifest_callback'
+				AND manifest_state_secret_ref = ? AND NOT EXISTS (
+					SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?
+				) RETURNING *`).bind(attempt.id, attempt.version + 1, ref, vaultId, label)
+		try {
+			const results = await this.db.batch<GitHubSetupAttemptRow>([expire, remove, clear])
+			const expired = results[2]?.results[0]
+			if (results[0]?.results.length !== 1 || results[1]?.results.length !== 1 || results[2]?.results.length !== 1 || expired === undefined) {
+				return await this.expireManifestCallbackWithoutResolvableSecret(attempt, now, vaultId, label)
+			}
+			return decodeAttempt(expired)
+		} catch {
+			return await this.expireManifestCallbackWithoutResolvableSecret(attempt, now, vaultId, label)
+		}
+	}
+
+	private async expireManifestCallbackWithoutResolvableSecret(
+		attempt: GitHubSetupAttempt,
+		now: number,
+		vaultId: string,
+		label: string,
+	): Promise<GitHubSetupAttempt | null> {
+		const row = await this.db.prepare(`UPDATE github_source_setup_attempts SET
+			status = 'failed', state_hash = NULL, manifest_state_secret_ref = NULL,
+			last_error_code = 'callback_expired', version = version + 1, updated_at = ?, terminal_at = ?
+			WHERE id = ? AND version = ? AND status = 'active' AND phase = 'awaiting_manifest_callback'
+				AND expires_at <= ? AND manifest_state_secret_ref = ? AND NOT EXISTS (
+					SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?
+				) RETURNING *`)
+			.bind(now, now, attempt.id, attempt.version, now, attempt.manifestStateSecretRef, vaultId, label)
+			.first<GitHubSetupAttemptRow>()
+		return row === null ? null : decodeAttempt(row)
+	}
 }
 
 /** Reads the current connection on every delivery, so rotation takes effect without a restart. */
 export class GitHubConnectionWebhookSecretProvider implements WebhookSecretProvider {
-	constructor(private readonly store: GitHubConnectionStore, private readonly vault: Vault) {}
+	constructor(
+		private readonly store: GitHubConnectionStore,
+		private readonly vault: Vault | (() => Promise<Vault>),
+		private readonly fallback?: WebhookSecretProvider,
+	) {}
 
 	async getSecret(signal?: AbortSignal): Promise<string | null> {
 		throwIfAborted(signal)
-		const connection = await this.store.getConnection()
+		const binding = await this.store.getWebhookSecretBinding()
 		throwIfAborted(signal)
-		if (connection === null) return null
-		const secret = await this.vault.getSecretForPurpose(connection.webhookSecretRef, {
+		if (binding === null) return this.fallback?.getSecret(signal) ?? null
+		const secretVault = typeof this.vault === 'function' ? await this.vault() : this.vault
+		const secret = await secretVault.getSecretForPurpose(binding.webhookSecretRef, {
 			scope: 'platform',
-			label: githubWebhookSecretLabel(connection.connectionId),
+			label: githubWebhookSecretLabel(binding.connectionId),
 		})
 		throwIfAborted(signal)
 		return secret
@@ -600,10 +931,12 @@ function decodeAttempt(row: GitHubSetupAttemptRow): GitHubSetupAttempt {
 	validatePhaseFields(row, phase)
 	return {
 		id: required(row.id, 'attempt id'),
+		setupKind: parseSetupKind(row.setup_kind),
 		status,
 		phase,
 		version: row.version,
 		stateHash: optionalSha256(row.state_hash, 'state hash'),
+		manifestStateSecretRef: optionalVaultRef(row.manifest_state_secret_ref),
 		initiatedBy: required(row.initiated_by, 'initiating principal'),
 		expectedOrigin: required(row.expected_origin, 'expected origin'),
 		desiredOwner: required(row.desired_owner, 'desired owner'),
@@ -628,7 +961,8 @@ function validatePhaseFields(row: GitHubSetupAttemptRow, phase: GitHubSetupPhase
 	const sourceWritten = phaseIndex(phase) >= phaseIndex('source_bundle_written')
 	const sourceActivated = phaseIndex(phase) >= phaseIndex('source_activated')
 	const webhookStored = phaseIndex(phase) >= phaseIndex('webhook_secret_stored')
-	const recoveryExpected = phaseIndex(phase) >= phaseIndex('recovery_stored') && phaseIndex(phase) < phaseIndex('installation_required')
+	const recoveryExpected = row.setup_kind === 'manifest'
+		&& phaseIndex(phase) >= phaseIndex('recovery_stored') && phaseIndex(phase) < phaseIndex('installation_required')
 	if (sourceWritten && row.credential_sha256 === null) throw new Error('invalid GitHub setup credential state')
 	if (sourceActivated && (row.app_id === null || row.app_slug === null || row.app_html_url === null)) {
 		throw new Error('invalid GitHub setup App state')
@@ -692,6 +1026,11 @@ function decodeConnection(row: GitHubSourceConnectionRow): GitHubSourceConnectio
 function parseStatus(value: string): GitHubSetupStatus {
 	if (value === 'active' || value === 'repair_required' || value === 'completed' || value === 'failed') return value
 	throw new Error('invalid GitHub setup status')
+}
+
+function parseSetupKind(value: string): 'manifest' | 'adoption' {
+	if (value === 'manifest' || value === 'adoption') return value
+	throw new Error('invalid GitHub setup kind')
 }
 
 function parseInstallationSelection(value: string): 'all' | 'selected' {
@@ -777,6 +1116,10 @@ function validateGitHubOwner(value: string): void {
 	if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(value)) throw new Error('invalid GitHub setup owner')
 }
 
+function validateConnectionId(value: string): void {
+	if (!/^[A-Za-z0-9._:-]{1,128}$/.test(value)) throw new Error('invalid GitHub setup connection id')
+}
+
 function optionalNonEmpty(value: string | null, field: string): string | null {
 	if (value === null) return null
 	return required(value, field)
@@ -832,6 +1175,14 @@ function parseOptionalErrorCode(value: string | null): GitHubSetupErrorCode | nu
 
 function expectedSecretLabel(id: string, kind: GitHubSetupSecretKind): string {
 	return kind === 'recovery' ? githubRecoverySecretLabel(id) : githubWebhookSecretLabel(id)
+}
+
+function errorForExpiredPhase(phase: GitHubSetupPhase): GitHubSetupErrorCode {
+	if (phase === 'recovery_stored' || phase === 'source_bundle_written') return 'credential_activation'
+	if (phase === 'source_activated') return 'credential_persistence'
+	if (phase === 'webhook_secret_stored' || phase === 'webhook_configured') return 'webhook_configuration'
+	if (phase === 'installation_required') return 'installation_verification'
+	return 'configuration_verification'
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

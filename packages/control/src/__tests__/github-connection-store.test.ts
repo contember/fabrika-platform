@@ -4,6 +4,7 @@ import {
 	GitHubConnectionCasError,
 	GitHubConnectionStore,
 	GitHubConnectionWebhookSecretProvider,
+	githubManifestStateSecretLabel,
 	githubRecoverySecretLabel,
 	githubWebhookSecretLabel,
 	type PublishGitHubConnectionInput,
@@ -49,7 +50,8 @@ async function configuredAttempt() {
 	const harness = createHarness(() => 1_000)
 	const store = harness.repositories.githubConnections
 	const vault = await Vault.create(harness.d1, testKey(), () => 1_000)
-	const started = await store.beginAttempt({
+	const stateSecret = await vault.prepareSecret('platform', githubManifestStateSecretLabel('attempt-1'), 'opaque-state')
+	const started = await store.beginAttemptWithManifestState({
 		id: 'attempt-1',
 		stateHash: STATE_DIGEST,
 		initiatedBy: 'principal-1',
@@ -59,7 +61,7 @@ async function configuredAttempt() {
 		desiredPublic: false,
 		requestedRepositories: ['acme/z', 'acme/a', 'acme/a'],
 		expiresAt: 2_000,
-	})
+	}, stateSecret)
 	const claimed = await store.claimCallback(STATE_DIGEST, 'principal-1')
 	if (claimed === null) throw new Error('claim failed')
 	const recovery = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'one-time-pem')
@@ -93,10 +95,231 @@ async function configuredAttempt() {
 }
 
 describe('GitHubConnectionStore', () => {
+	test('expires an unclaimed callback atomically, removes its capability, and permits a new attempt', async () => {
+		let clock = 100
+		const { d1 } = createHarness(() => clock)
+		const store = new GitHubConnectionStore(d1, () => clock, 10)
+		const vault = await Vault.create(d1, testKey(), () => clock)
+		const stateSecret = await vault.prepareSecret('platform', githubManifestStateSecretLabel('expired'), 'opaque-state')
+		await store.beginAttemptWithManifestState({
+			id: 'expired',
+			stateHash: STATE_DIGEST,
+			initiatedBy: 'alice',
+			expectedOrigin: 'https://control.example',
+			desiredOwner: 'acme',
+			desiredAppName: 'source',
+			desiredPublic: false,
+			requestedRepositories: [],
+			expiresAt: 110,
+		}, stateSecret)
+		clock = 110
+		expect(await store.getState()).toEqual({ state: 'anonymous' })
+		const expired = await store.getAttempt('expired')
+		expect(expired).toMatchObject({ status: 'failed', lastErrorCode: 'callback_expired', manifestStateSecretRef: null })
+		await expect(vault.getSecret(stateSecret.ref)).rejects.toThrow()
+		const nextSecret = await vault.prepareSecret('platform', githubManifestStateSecretLabel('next'), 'next-state')
+		await expect(store.beginAttemptWithManifestState({
+			id: 'next',
+			stateHash: OTHER_STATE_DIGEST,
+			initiatedBy: 'alice',
+			expectedOrigin: 'https://control.example',
+			desiredOwner: 'acme',
+			desiredAppName: 'source',
+			desiredPublic: false,
+			requestedRepositories: [],
+			expiresAt: 120,
+		}, nextSecret)).resolves.toMatchObject({ id: 'next' })
+	})
+
+	test('fails closed and unblocks setup when an expired manifest secret has the wrong purpose', async () => {
+		let clock = 100
+		const { d1, sqlite } = createHarness(() => clock)
+		const store = new GitHubConnectionStore(d1, () => clock, 10)
+		const vault = await Vault.create(d1, testKey(), () => clock)
+		const secret = await vault.prepareSecret('platform', githubManifestStateSecretLabel('tampered'), 'opaque-state')
+		await store.beginAttemptWithManifestState({
+			id: 'tampered',
+			stateHash: STATE_DIGEST,
+			initiatedBy: 'alice',
+			expectedOrigin: 'https://control.example',
+			desiredOwner: 'acme',
+			desiredAppName: 'source',
+			desiredPublic: false,
+			requestedRepositories: [],
+			expiresAt: 110,
+		}, secret)
+		sqlite.query(`UPDATE vault SET scope = 'app' WHERE id = ?`).run(secret.id)
+		clock = 110
+		expect(await store.getState()).toEqual({ state: 'anonymous' })
+		expect(await store.getAttempt('tampered')).toMatchObject({ status: 'failed', manifestStateSecretRef: null })
+		expect(queryRows(sqlite, 'SELECT id FROM vault WHERE id = ?', secret.id)).toHaveLength(1)
+	})
+
+	test('callback claim wins the expiry boundary and renews the operation lease', async () => {
+		let clock = 100
+		const { d1 } = createHarness(() => clock)
+		const store = new GitHubConnectionStore(d1, () => clock, 10)
+		const vault = await Vault.create(d1, testKey(), () => clock)
+		const secret = await vault.prepareSecret('platform', githubManifestStateSecretLabel('claimed'), 'opaque-state')
+		await store.beginAttemptWithManifestState({
+			id: 'claimed',
+			stateHash: STATE_DIGEST,
+			initiatedBy: 'alice',
+			expectedOrigin: 'https://control.example',
+			desiredOwner: 'acme',
+			desiredAppName: 'source',
+			desiredPublic: false,
+			requestedRepositories: [],
+			expiresAt: 101,
+		}, secret)
+		const claimed = await store.claimCallback(STATE_DIGEST, 'alice')
+		expect(claimed).toMatchObject({ phase: 'exchange_claimed', expiresAt: 110 })
+		clock = 101
+		expect(await store.getState()).toMatchObject({ state: 'setup_pending', phase: 'exchange_claimed' })
+		clock = 110
+		expect(await store.getState()).toEqual({ state: 'anonymous' })
+		expect(await store.getAttempt('claimed')).toMatchObject({ status: 'failed', phase: 'exchange_claimed' })
+	})
+
+	test('turns a crashed durable manifest or adoption phase into repair after its lease', async () => {
+		let clock = 100
+		const { d1 } = createHarness(() => clock)
+		const store = new GitHubConnectionStore(d1, () => clock, 10)
+		const vault = await Vault.create(d1, testKey(), () => clock)
+		const stateSecret = await vault.prepareSecret('platform', githubManifestStateSecretLabel('manifest-crash'), 'opaque-state')
+		await store.beginAttemptWithManifestState({
+			id: 'manifest-crash',
+			stateHash: STATE_DIGEST,
+			initiatedBy: 'alice',
+			expectedOrigin: 'https://control.example',
+			desiredOwner: 'acme',
+			desiredAppName: 'source',
+			desiredPublic: false,
+			requestedRepositories: [],
+			expiresAt: 110,
+		}, stateSecret)
+		const claimed = await store.claimCallback(STATE_DIGEST, 'alice')
+		if (claimed === null) throw new Error('claim failed')
+		const recovery = await vault.prepareSecret('platform', githubRecoverySecretLabel('manifest-crash'), 'bundle')
+		const recovered = await store.storeSecretAndCheckpoint(
+			'manifest-crash',
+			claimed.version,
+			'exchange_claimed',
+			'recovery_stored',
+			'recovery',
+			recovery,
+		)
+		if (recovered === null) throw new Error('recovery failed')
+		clock = 110
+		expect(await store.getState()).toMatchObject({ state: 'repair_required', attemptId: 'manifest-crash', phase: 'recovery_stored' })
+
+		const { d1: adoptionDb } = createHarness(() => clock)
+		const adoption = new GitHubConnectionStore(adoptionDb, () => clock, 10)
+		await adoption.beginAdoption({
+			id: 'adoption-crash',
+			initiatedBy: 'alice',
+			expectedOrigin: 'https://control.example',
+			appId: '123',
+			appSlug: 'source',
+			appHtmlUrl: 'https://github.com/apps/source',
+			appOwner: 'acme',
+			appPublic: false,
+			credentialSha256: CREDENTIAL_DIGEST,
+			expiresAt: 120,
+		})
+		clock = 120
+		expect(await adoption.getState()).toMatchObject({ state: 'repair_required', attemptId: 'adoption-crash', phase: 'source_activated' })
+
+		let writtenClock = 100
+		const { d1: writtenDb } = createHarness(() => writtenClock)
+		const writtenStore = new GitHubConnectionStore(writtenDb, () => writtenClock, 10)
+		const writtenVault = await Vault.create(writtenDb, testKey(), () => writtenClock)
+		const writtenState = await writtenVault.prepareSecret('platform', githubManifestStateSecretLabel('written-crash'), 'opaque-state')
+		await writtenStore.beginAttemptWithManifestState({
+			id: 'written-crash',
+			stateHash: STATE_DIGEST,
+			initiatedBy: 'alice',
+			expectedOrigin: 'https://control.example',
+			desiredOwner: 'acme',
+			desiredAppName: 'source',
+			desiredPublic: false,
+			requestedRepositories: [],
+			expiresAt: 110,
+		}, writtenState)
+		const writtenClaim = await writtenStore.claimCallback(STATE_DIGEST, 'alice')
+		if (writtenClaim === null) throw new Error('claim failed')
+		const writtenRecovery = await writtenVault.prepareSecret('platform', githubRecoverySecretLabel('written-crash'), 'bundle')
+		const writtenRecovered = await writtenStore.storeSecretAndCheckpoint(
+			'written-crash',
+			writtenClaim.version,
+			'exchange_claimed',
+			'recovery_stored',
+			'recovery',
+			writtenRecovery,
+		)
+		if (writtenRecovered === null) throw new Error('recovery failed')
+		const written = await writtenStore.checkpoint(
+			'written-crash',
+			writtenRecovered.version,
+			'recovery_stored',
+			'source_bundle_written',
+			{ credentialSha256: CREDENTIAL_DIGEST },
+		)
+		if (written === null) throw new Error('source checkpoint failed')
+		writtenClock = 110
+		expect(await writtenStore.getState()).toMatchObject({ state: 'repair_required', attemptId: 'written-crash', phase: 'source_bundle_written' })
+	})
+
+	test('reaps every post-activation checkpoint, including remote-call-before-checkpoint windows', async () => {
+		for (const target of ['webhook_secret_stored', 'webhook_configured', 'configuration_verified']) {
+			let clock = 100
+			const { d1 } = createHarness(() => clock)
+			const store = new GitHubConnectionStore(d1, () => clock, 10)
+			const vault = await Vault.create(d1, testKey(), () => clock)
+			let attempt = await store.beginAdoption({
+				id: `crash-${target}`,
+				initiatedBy: 'alice',
+				expectedOrigin: 'https://control.example',
+				appId: '123',
+				appSlug: 'source',
+				appHtmlUrl: 'https://github.com/apps/source',
+				appOwner: 'acme',
+				appPublic: false,
+				credentialSha256: CREDENTIAL_DIGEST,
+				expiresAt: 110,
+			})
+			const webhook = await vault.prepareSecret('platform', githubWebhookSecretLabel(attempt.id), 'webhook')
+			const stored = await store.storeSecretAndCheckpoint(
+				attempt.id,
+				attempt.version,
+				'source_activated',
+				'webhook_secret_stored',
+				'webhook',
+				webhook,
+			)
+			if (stored === null) throw new Error('webhook checkpoint failed')
+			attempt = stored
+			if (target === 'webhook_configured' || target === 'configuration_verified') {
+				const configured = await store.checkpoint(attempt.id, attempt.version, 'webhook_secret_stored', 'webhook_configured')
+				if (configured === null) throw new Error('webhook configuration checkpoint failed')
+				attempt = configured
+			}
+			if (target === 'configuration_verified') {
+				const verified = await store.checkpoint(attempt.id, attempt.version, 'webhook_configured', 'configuration_verified')
+				if (verified === null) throw new Error('verification checkpoint failed')
+				attempt = verified
+			}
+			clock = 110
+			expect(await store.getState()).toMatchObject({ state: 'repair_required', attemptId: attempt.id, phase: target })
+		}
+	})
+
 	test('claims a callback once and binds it to the initiating principal', async () => {
-		const { repositories } = createHarness(() => 100)
+		const { repositories, d1 } = createHarness(() => 100)
 		const store = repositories.githubConnections
-		await store.beginAttempt({
+		const vault = await Vault.create(d1, testKey())
+		const stateSecret = await vault.prepareSecret('platform', githubManifestStateSecretLabel('a'), 'opaque-state')
+		await store.beginAttemptWithManifestState({
 			id: 'a',
 			stateHash: STATE_DIGEST,
 			initiatedBy: 'alice',
@@ -106,7 +329,7 @@ describe('GitHubConnectionStore', () => {
 			desiredPublic: false,
 			requestedRepositories: [],
 			expiresAt: 200,
-		})
+		}, stateSecret)
 		expect(await store.claimCallback(STATE_DIGEST, 'bob')).toBeNull()
 		const claimed = await store.claimCallback(STATE_DIGEST, 'alice')
 		expect(claimed?.phase).toBe('exchange_claimed')
@@ -189,6 +412,45 @@ describe('GitHubConnectionStore', () => {
 		expect(await provider.getSecret()).toBe('webhook-value')
 	})
 
+	test('keeps installation-required stable after the operation lease expires', async () => {
+		let clock = 100
+		const { d1 } = createHarness(() => clock)
+		const store = new GitHubConnectionStore(d1, () => clock, 10)
+		const vault = await Vault.create(d1, testKey(), () => clock)
+		const adopted = await store.beginAdoption({
+			id: 'installation-wait',
+			initiatedBy: 'principal-1',
+			expectedOrigin: 'https://control.example',
+			appId: '123',
+			appSlug: 'fabrika-source',
+			appHtmlUrl: 'https://github.com/apps/fabrika-source',
+			appOwner: 'acme',
+			appPublic: false,
+			credentialSha256: CREDENTIAL_DIGEST,
+			expiresAt: 110,
+		})
+		const webhook = await vault.prepareSecret('platform', githubWebhookSecretLabel(adopted.id), 'webhook-value')
+		const stored = await store.storeSecretAndCheckpoint(
+			adopted.id,
+			adopted.version,
+			'source_activated',
+			'webhook_secret_stored',
+			'webhook',
+			webhook,
+		)
+		if (stored === null) throw new Error('webhook checkpoint failed')
+		const configured = await store.checkpoint(stored.id, stored.version, 'webhook_secret_stored', 'webhook_configured')
+		if (configured === null) throw new Error('webhook configuration failed')
+		const verified = await store.checkpoint(configured.id, configured.version, 'webhook_configured', 'configuration_verified')
+		if (verified === null) throw new Error('configuration verification failed')
+		const waiting = await store.checkpoint(verified.id, verified.version, 'configuration_verified', 'installation_required')
+		if (waiting === null) throw new Error('installation checkpoint failed')
+
+		clock = 1_000
+		expect(await store.getState()).toMatchObject({ state: 'installation_required', attemptId: adopted.id })
+		expect(await store.getAttempt(adopted.id)).toMatchObject({ status: 'active', phase: 'installation_required' })
+	})
+
 	test('rejects malformed durable state instead of guessing a phase', async () => {
 		const { repositories, sqlite } = createHarness(() => 100)
 		await repositories.githubConnections.beginAttempt({
@@ -246,7 +508,8 @@ describe('GitHubConnectionStore', () => {
 	test('a batch barrier gives exactly one secret-checkpoint CAS winner', async () => {
 		const harness = createHarness(() => 1_000)
 		const vault = await Vault.create(harness.d1, testKey(), () => 1_000)
-		const started = await harness.repositories.githubConnections.beginAttempt({
+		const stateSecret = await vault.prepareSecret('platform', githubManifestStateSecretLabel('contended-attempt'), 'opaque-state')
+		const started = await harness.repositories.githubConnections.beginAttemptWithManifestState({
 			id: 'contended-attempt',
 			stateHash: STATE_DIGEST,
 			initiatedBy: 'principal-1',
@@ -256,7 +519,7 @@ describe('GitHubConnectionStore', () => {
 			desiredPublic: false,
 			requestedRepositories: [],
 			expiresAt: 2_000,
-		})
+		}, stateSecret)
 		const claimed = await harness.repositories.githubConnections.claimCallback(STATE_DIGEST, 'principal-1')
 		if (claimed === null) throw new Error('callback claim failed')
 		const first = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'first')
@@ -368,5 +631,58 @@ describe('GitHubConnectionStore', () => {
 		controller.abort()
 		const provider = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault)
 		await expect(provider.getSecret(controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+	})
+
+	test('switches webhook authority after structural verification and keeps it after publish', async () => {
+		const flow = await configuredAttempt()
+		const provider = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault)
+		expect(await provider.getSecret()).toBe('webhook-value')
+		const ready = await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)
+		if (ready === null) throw new Error('recovery discard failed')
+		expect(await provider.getSecret()).toBe('webhook-value')
+		await flow.store.publishConnection({
+			attemptId: flow.started.id,
+			expectedVersion: ready.version,
+			webhookUrl: 'https://control.example/webhooks/github',
+			installationId: 45,
+			installationAccountLogin: 'acme',
+			installationSelection: 'selected',
+			verifiedRepositories: ['acme/a', 'acme/z'],
+			verifiedAt: 1_000,
+		})
+		expect(await provider.getSecret()).toBe('webhook-value')
+	})
+
+	test('uses legacy webhook fallback only before a durable connection exists', async () => {
+		const harness = createHarness(() => 1_000)
+		let fallbackReads = 0
+		const fallback = {
+			getSecret: () => {
+				fallbackReads += 1
+				return Promise.resolve('legacy-secret')
+			},
+		}
+		const emptyVault = await Vault.create(harness.d1, testKey())
+		const empty = new GitHubConnectionWebhookSecretProvider(harness.repositories.githubConnections, emptyVault, fallback)
+		expect(await empty.getSecret()).toBe('legacy-secret')
+		expect(fallbackReads).toBe(1)
+
+		const flow = await configuredAttempt()
+		const ready = await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)
+		if (ready === null) throw new Error('recovery discard failed')
+		await flow.store.publishConnection({
+			attemptId: flow.started.id,
+			expectedVersion: ready.version,
+			webhookUrl: 'https://control.example/webhooks/github',
+			installationId: 45,
+			installationAccountLogin: 'acme',
+			installationSelection: 'selected',
+			verifiedRepositories: ['acme/a', 'acme/z'],
+			verifiedAt: 1_000,
+		})
+		await flow.vault.delete(flow.webhook.ref)
+		const connected = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault, fallback)
+		await expect(connected.getSecret()).rejects.toThrow('unresolvable vault ref')
+		expect(fallbackReads).toBe(1)
 	})
 })

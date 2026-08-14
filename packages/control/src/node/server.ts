@@ -22,18 +22,20 @@ import { decodeDeployJobMessage, runDeployJob } from '../consumer'
 import type { Env } from '../env'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import { DEPLOY_LOCK_TTL_MS, locks, operationsReleaseDeps, repositories } from '../services'
+import type { SourceConnectionPort } from '../source-connection-port'
 import { createRuntime, type Runtime } from './runtime'
 
 /** Build the server's fetch handler for an assembled env. Exported so a test can drive it directly. */
 export function createFetchHandler(
 	env: Env,
 	provider: Runtime['provider'],
+	sourceConnection: SourceConnectionPort,
 ): (request: Request) => Promise<Response> {
-	return createControlBunHandler(env, provider).fetch
+	return createControlBunHandler(env, provider, sourceConnection).fetch
 }
 
-function createControlBunHandler(env: Env, provider: Runtime['provider']): BunHandler {
-	return createBunHandler(controlApp, { env, provider }, {
+function createControlBunHandler(env: Env, provider: Runtime['provider'], sourceConnection: SourceConnectionPort): BunHandler {
+	return createBunHandler(controlApp, { env, provider, sourceConnection }, {
 		onBackgroundError() {
 			console.error('control background task failed')
 		},
@@ -95,7 +97,7 @@ async function main(): Promise<void> {
 			+ `failed=${reconciliation.failed} in-progress=${reconciliation.inProgress} waiting=${reconciliation.waiting}`,
 	)
 	consumer.start()
-	const appHandler = createControlBunHandler(runtime.env, runtime.provider)
+	const appHandler = createControlBunHandler(runtime.env, runtime.provider, runtime.sourceConnection)
 
 	const server = Bun.serve({
 		port: runtime.config.port,

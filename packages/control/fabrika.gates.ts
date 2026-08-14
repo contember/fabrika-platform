@@ -14,10 +14,8 @@
 import type { AppGates } from '@fabrika/auth-core'
 
 /**
- * The control surface's own pair: every `/api/*` route admits EITHER a machine `px_` key (automation /
- * CI) OR a logged-in human (the console). Two precedence-ordered rules sharing the glob. Health, the
- * webhook and the `POST /api/runs` relay are handled BEFORE the application's IAM guard (`src/iam.ts`),
- * so they never reach these.
+ * The control surface's default pair: `/api/*` admits a machine `px_` key or a logged-in human. The
+ * source connection browser routes override it with earlier human-only rules.
  */
 const CONTROL_GATES: AppGates = {
 	rules: [
@@ -39,6 +37,8 @@ export const CONTROL_PROXY_GATES: AppGates = {
 		{ path: '/operations/api', kind: 'human' },
 		{ path: '/operations/api/*', kind: 'service' },
 		{ path: '/operations/api/*', kind: 'human' },
+		{ path: '/api/source/github/manifest/*', kind: 'human' },
+		{ path: '/api/source/github/callback', kind: 'human' },
 		...CONTROL_GATES.rules,
 		{ path: '/*', kind: 'human' },
 	],

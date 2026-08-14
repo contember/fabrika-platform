@@ -22,6 +22,7 @@ import { type ControlRepositories, createControlRepositories, uuidv7 } from '../
 import type { Env } from '../env'
 import {
 	GitHubConnectionStore,
+	githubManifestStateSecretLabel,
 	githubRecoverySecretLabel,
 	githubWebhookSecretLabel,
 	type PublishGitHubConnectionInput,
@@ -30,6 +31,7 @@ import { applyMigrations } from '../node/migrate'
 import { createFetchHandler } from '../node/server'
 import { FakeRepoSource } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
+import { unavailableSourceConnection } from '../source-connection-port'
 import { Vault } from '../vault'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 import { fakeControlProvider } from './helpers/provider'
@@ -150,6 +152,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0013_provider_run_state.sql' },
 			{ bundle: 'control', name: '0014_zerops_legacy_run_state.sql' },
 			{ bundle: 'control', name: '0015_github_source_connections.sql' },
+			{ bundle: 'control', name: '0016_github_manifest_state.sql' },
 		])
 	})
 
@@ -678,8 +681,10 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 	test('uses the same callback CAS and atomic platform-secret checkpoint', async () => {
 		await reset()
 		const vault = await Vault.create(raw, kek())
-		const started = await db.githubConnections.beginAttempt({
-			id: uuidv7(),
+		const attemptId = uuidv7()
+		const manifestState = await vault.prepareSecret('platform', githubManifestStateSecretLabel(attemptId), 'opaque-state')
+		const started = await db.githubConnections.beginAttemptWithManifestState({
+			id: attemptId,
 			stateHash: 'a'.repeat(64),
 			initiatedBy: 'principal-1',
 			expectedOrigin: 'https://control.example',
@@ -688,7 +693,7 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 			desiredPublic: false,
 			requestedRepositories: ['acme/app'],
 			expiresAt: now() + 60,
-		})
+		}, manifestState)
 		const claimed = await db.githubConnections.claimCallback('a'.repeat(64), 'principal-1')
 		if (claimed === null) throw new Error('callback claim failed')
 		const recovery = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'one-time-credential')
@@ -714,8 +719,10 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 		try {
 			const masterKey = kek()
 			const vault = await Vault.create(raw, masterKey)
-			const started = await db.githubConnections.beginAttempt({
-				id: uuidv7(),
+			const attemptId = uuidv7()
+			const manifestState = await vault.prepareSecret('platform', githubManifestStateSecretLabel(attemptId), 'opaque-state')
+			const started = await db.githubConnections.beginAttemptWithManifestState({
+				id: attemptId,
 				stateHash: 'b'.repeat(64),
 				initiatedBy: 'principal-1',
 				expectedOrigin: 'https://control.example',
@@ -724,7 +731,7 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 				desiredPublic: false,
 				requestedRepositories: [],
 				expiresAt: now() + 60,
-			})
+			}, manifestState)
 			const claimed = await db.githubConnections.claimCallback('b'.repeat(64), 'principal-1')
 			if (claimed === null) throw new Error('callback claim failed')
 			const first = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'first')
@@ -752,8 +759,10 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 		try {
 			const vault = await Vault.create(raw, kek())
 			const store = db.githubConnections
-			const started = await store.beginAttempt({
-				id: uuidv7(),
+			const attemptId = uuidv7()
+			const manifestState = await vault.prepareSecret('platform', githubManifestStateSecretLabel(attemptId), 'opaque-state')
+			const started = await store.beginAttemptWithManifestState({
+				id: attemptId,
 				stateHash: 'c'.repeat(64),
 				initiatedBy: 'principal-1',
 				expectedOrigin: 'https://control.example',
@@ -762,7 +771,7 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 				desiredPublic: false,
 				requestedRepositories: ['acme/app'],
 				expiresAt: now() + 60,
-			})
+			}, manifestState)
 			const claimed = await store.claimCallback('c'.repeat(64), 'principal-1')
 			if (claimed === null) throw new Error('callback claim failed')
 			const recovery = await vault.prepareSecret('platform', githubRecoverySecretLabel(started.id), 'recovery')
@@ -889,7 +898,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 	test('serves liveness, the API and the SPA fallback from one handler', async () => {
 		await reset()
 		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
-		const handler = createFetchHandler(env(), fakeControlProvider)
+		const handler = createFetchHandler(env(), fakeControlProvider, unavailableSourceConnection('harbor'))
 
 		// The process-level liveness route is claimed before the SPA fallback.
 		expect((await handler(new Request('http://localhost:18291/healthz'))).status).toBe(200)
@@ -921,6 +930,7 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 				},
 			},
 			fakeControlProvider,
+			unavailableSourceConnection('harbor'),
 		)
 		const response = await handler(new Request('http://localhost:18291/anything'))
 		expect(response.status).toBe(500)

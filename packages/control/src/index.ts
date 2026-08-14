@@ -5,6 +5,7 @@ import { runMaintenance } from './cron'
 import type { Env } from './env'
 import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './platform-cf'
 import type { DeployJobMessage } from './run-lifecycle'
+import { unavailableSourceConnection } from './source-connection-port'
 
 /**
  * The fabrika control plane — the CLOUDFLARE entrypoint, and nothing more. A single `WorkerEntrypoint`
@@ -28,7 +29,11 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 
 	override fetch(request: Request): Promise<Response> {
 		const env = this.control
-		return controlApp.fetch(request, { env, provider: cloudflareControlProvider(this.env, env) }, this.ctx)
+		return controlApp.fetch(request, {
+			env,
+			provider: cloudflareControlProvider(this.env, env),
+			sourceConnection: unavailableSourceConnection('cloudflare'),
+		}, this.ctx)
 	}
 
 	/**

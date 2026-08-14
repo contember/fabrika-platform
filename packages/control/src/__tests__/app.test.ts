@@ -1,11 +1,13 @@
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import { describe, expect, test } from 'bun:test'
+import { ACTIONS } from '../actions'
 import { controlApp } from '../app'
 import type { Env } from '../env'
 import { FakeRepoSource } from '../repo-source'
+import { unavailableSourceConnection } from '../source-connection-port'
 import { createHarness } from './helpers/harness'
 import { fakeControlProvider } from './helpers/provider'
-import { adminToken, operatorToken, testIamEnv, viewerToken } from './helpers/tokens'
+import { adminToken, operatorToken, testIamEnv, testToken, viewerToken } from './helpers/tokens'
 
 function application(overrides: Partial<Env> = {}) {
 	const harness = createHarness()
@@ -27,7 +29,7 @@ function application(overrides: Partial<Env> = {}) {
 		...rest,
 	}
 	return (request: Request) =>
-		controlApp.fetch(request, { env, provider: fakeControlProvider }, {
+		controlApp.fetch(request, { env, provider: fakeControlProvider, sourceConnection: unavailableSourceConnection('harbor') }, {
 			waitUntil() {},
 		})
 }
@@ -149,6 +151,33 @@ describe('controlApp', () => {
 
 		expect(bearer.status).toBe(401)
 		expect(absent.status).toBe(401)
+	})
+
+	test('keeps manifest and callback paths human-only and returns a browser-safe unavailable status', async () => {
+		const fetch = application({ FABRIKA_CONTROL_DOMAIN: 'https://control.test' })
+		const service = await testToken({ label: 'automation', type: 'service', actions: [ACTIONS.SOURCE_CONNECTION_MANAGE] })
+		const status = await fetch(rpcRequest('sourceConnection.status', null, adminToken))
+		expect(status.status).toBe(200)
+		const statusBody: unknown = await status.json()
+		expect(statusBody).toEqual({ result: { provider: 'harbor', kind: 'github-app', state: 'unavailable' } })
+
+		const anonymous = await fetch(new Request('https://control.test/api/source/github/callback?code=a&state=b'))
+		expect(anonymous.status).toBe(401)
+		expect(anonymous.headers.get('cache-control')).toBe('no-store')
+		expect(anonymous.headers.get('referrer-policy')).toBe('no-referrer')
+		expect(anonymous.headers.get('x-content-type-options')).toBe('nosniff')
+		expect(await anonymous.text()).not.toContain('code=a')
+		const replay = await fetch(apiRequest('https://control.test/api/source/github/callback?code=secret-code&state=secret-state', adminToken))
+		expect(replay.status).toBe(409)
+		expect(replay.headers.get('cache-control')).toBe('no-store')
+		expect(replay.headers.get('referrer-policy')).toBe('no-referrer')
+		expect(replay.headers.get('x-content-type-options')).toBe('nosniff')
+		const replayBody = await replay.text()
+		expect(replayBody).not.toContain('secret-code')
+		expect(replayBody).not.toContain('secret-state')
+		const machine = await fetch(apiRequest('https://control.test/api/source/github/manifest/connection', service))
+		expect(machine.status).toBe(403)
+		expect(machine.headers.get('cache-control')).toBe('no-store')
 	})
 })
 

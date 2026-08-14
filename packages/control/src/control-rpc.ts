@@ -45,10 +45,19 @@ import { deleteAppSecretValueUseCase, rotateAppSecretValueUseCase, setAppSecretV
 import type { Env } from './env'
 import { appScope } from './iam'
 import { buildApiDeps } from './services'
+import {
+	adoptExistingSourceConnection,
+	repairSourceConnection,
+	sourceConnectionStatus,
+	startSourceConnection,
+	verifySourceInstallation,
+} from './source-connection'
+import type { SourceConnectionPort } from './source-connection-port'
 
 interface ControlRpcContext {
 	readonly env: Env
 	readonly provider: ControlProvider
+	readonly sourceConnection: SourceConnectionPort
 	readonly request: Request
 	readonly auth: AuthContext
 }
@@ -116,8 +125,34 @@ const registerInput = z.object({
 	artifact: providerEnvelope,
 	...appOptionalFields,
 })
+const githubOwner = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/)
+const githubRepositoryName = z.string().regex(/^[A-Za-z0-9._-]{1,100}$/)
+const sourceConnectionId = z.object({ connectionId: z.string().min(1).max(128) }).strict()
+const startSourceConnectionInput = z.object({
+	organization: githubOwner,
+	appName: z.string().min(1).max(100),
+	visibility: z.enum(['private', 'public']),
+	repositories: z.array(z.object({ owner: githubOwner, name: githubRepositoryName }).strict()).max(100),
+}).strict()
 
 export const controlRpcRouter: RpcRouterFor<ControlRpcContext, ControlRpcContract> = rpc.router({
+	sourceConnection: rpc.router({
+		status: rpc.procedure.require(ACTIONS.SOURCE_CONNECTION_MANAGE).query(({ ctx }) =>
+			controlCall(() => sourceConnectionStatus(sourceConnectionContext(ctx)))
+		),
+		start: rpc.procedure.input(startSourceConnectionInput).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
+			controlCall(() => startSourceConnection(sourceConnectionContext(ctx), input))
+		),
+		adoptExisting: rpc.procedure.require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx }) =>
+			controlCall(() => adoptExistingSourceConnection(sourceConnectionContext(ctx)))
+		),
+		verifyInstallation: rpc.procedure.input(sourceConnectionId).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
+			controlCall(() => verifySourceInstallation(sourceConnectionContext(ctx), input.connectionId))
+		),
+		repair: rpc.procedure.input(sourceConnectionId).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
+			controlCall(() => repairSourceConnection(sourceConnectionContext(ctx), input.connectionId))
+		),
+	}),
 	apps: rpc.router({
 		list: rpc.procedure.require(ACTIONS.APP_MANAGE).query(({ ctx }) => controlCall(() => listAppsUseCase(registryContext(ctx)))),
 		get: rpc.procedure.input(appId).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).query(({ ctx, input }) =>
@@ -209,6 +244,10 @@ export const controlRpcRouter: RpcRouterFor<ControlRpcContext, ControlRpcContrac
 		controlCall(() => registerAppUseCase(registryContext(ctx), input))
 	),
 })
+
+function sourceConnectionContext(ctx: ControlRpcContext) {
+	return { env: ctx.env, source: ctx.sourceConnection, auth: ctx.auth, request: ctx.request }
+}
 
 function registryContext(ctx: ControlRpcContext): RegistryUseCaseContext {
 	const deps = buildApiDeps(ctx.env, ctx.provider, ctx.auth)

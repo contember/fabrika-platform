@@ -132,7 +132,13 @@ function authFailureResponse(path: string, failure: AuthFailure): Response {
 		const type = failure.status === 401 ? 'auth' : failure.status === 403 ? 'forbidden' : 'error'
 		return Response.json({ error: { type, message: failure.reason } }, { status: failure.status })
 	}
-	return error(failure.status, failure.reason)
+	const response = error(failure.status, failure.reason)
+	if (path === '/api/source/github/callback' || path.startsWith('/api/source/github/manifest/')) {
+		response.headers.set('cache-control', 'no-store')
+		response.headers.set('referrer-policy', 'no-referrer')
+		response.headers.set('x-content-type-options', 'nosniff')
+	}
+	return response
 }
 
 /**

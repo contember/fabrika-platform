@@ -9,6 +9,7 @@ import type {
 	CursorList,
 	DeploymentNamespaceDetailDto,
 	DeploymentNamespaceListResponse,
+	GitHubSourceConnectionStatusDto,
 	ListResponse,
 	PlanDeploymentNamespaceRequest,
 	PlanDeploymentNamespaceResponse,
@@ -21,6 +22,8 @@ import type {
 	RunLogResponse,
 	RunTailResponse,
 	SetSecretValueRequest,
+	StartGitHubSourceConnectionRequest,
+	StartGitHubSourceConnectionResponse,
 	TriggerDeployRequest,
 	UpdateAppRequest,
 } from './index.js'
@@ -93,8 +96,22 @@ export interface TailRunInput extends RunIdInput {
 	readonly after?: number
 }
 
+export interface GitHubSourceConnectionInput {
+	readonly connectionId: string
+}
+
+/** Provider-neutral admin seam. A statically composed provider implements these GitHub operations. */
+export interface GitHubSourceConnectionRpcContract {
+	status: RpcProcedure<void, GitHubSourceConnectionStatusDto>
+	start: RpcProcedure<StartGitHubSourceConnectionRequest, StartGitHubSourceConnectionResponse>
+	adoptExisting: RpcProcedure<void, GitHubSourceConnectionStatusDto>
+	verifyInstallation: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionStatusDto>
+	repair: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionStatusDto>
+}
+
 /** Portable Delivery control API, implemented alongside the backward-compatible REST transport. */
 export interface ControlRpcContract {
+	sourceConnection: GitHubSourceConnectionRpcContract
 	apps: {
 		list: RpcProcedure<void, ListResponse<AppDto>>
 		get: RpcProcedure<AppIdInput, AppDto>

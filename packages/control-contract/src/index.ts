@@ -15,6 +15,102 @@ export interface CursorList<T> {
 
 export type ProviderEnvelopeDto = ProviderEnvelope
 
+export interface GitHubSourceRepositoryDto {
+	readonly owner: string
+	readonly name: string
+}
+
+export interface GitHubSourceConnectionAppDto {
+	readonly id: number
+	readonly slug: string
+	readonly htmlUrl: string
+	readonly public: boolean
+	readonly owner: {
+		readonly login: string
+		readonly type: 'Organization'
+	}
+	readonly permissions: {
+		readonly contents: 'read'
+	}
+	readonly events: readonly ['push']
+}
+
+export interface GitHubSourceConnectionInstallationDto {
+	readonly id: number
+	readonly accountLogin: string
+	readonly repositorySelection: 'all' | 'selected'
+	readonly verifiedRepositories: readonly GitHubSourceRepositoryDto[]
+}
+
+interface GitHubSourceConnectionBaseDto {
+	readonly provider: string
+	readonly kind: 'github-app'
+}
+
+export interface GitHubSourceConnectionAnonymousDto extends GitHubSourceConnectionBaseDto {
+	readonly state: 'anonymous'
+}
+
+export interface GitHubSourceConnectionUnavailableDto extends GitHubSourceConnectionBaseDto {
+	readonly state: 'unavailable'
+}
+
+export interface GitHubSourceConnectionAdoptionRequiredDto extends GitHubSourceConnectionBaseDto {
+	readonly state: 'adoption-required'
+}
+
+export interface GitHubSourceConnectionSetupPendingDto extends GitHubSourceConnectionBaseDto {
+	readonly state: 'setup-pending'
+	readonly connectionId: string
+	readonly phase: 'starting' | 'awaiting-manifest-callback' | 'persisting' | 'activating'
+	/** Present only while the same-origin manifest handoff can be resumed. */
+	readonly continuePath?: string
+}
+
+export interface GitHubSourceConnectionInstallationRequiredDto extends GitHubSourceConnectionBaseDto {
+	readonly state: 'installation-required'
+	readonly connectionId: string
+	readonly app: GitHubSourceConnectionAppDto
+	readonly installationUrl: string
+}
+
+export interface GitHubSourceConnectionConnectedDto extends GitHubSourceConnectionBaseDto {
+	readonly state: 'connected'
+	readonly connectionId: string
+	readonly app: GitHubSourceConnectionAppDto
+	readonly installation: GitHubSourceConnectionInstallationDto
+}
+
+export interface GitHubSourceConnectionRepairRequiredDto extends GitHubSourceConnectionBaseDto {
+	readonly state: 'repair-required'
+	readonly connectionId: string
+	readonly reason: 'interrupted-setup' | 'credential-activation' | 'installation-verification'
+	readonly app?: GitHubSourceConnectionAppDto
+}
+
+/** Browser-safe setup state. It never carries a private key, webhook secret, token, or source RPC key. */
+export type GitHubSourceConnectionStatusDto =
+	| GitHubSourceConnectionAnonymousDto
+	| GitHubSourceConnectionUnavailableDto
+	| GitHubSourceConnectionAdoptionRequiredDto
+	| GitHubSourceConnectionSetupPendingDto
+	| GitHubSourceConnectionInstallationRequiredDto
+	| GitHubSourceConnectionConnectedDto
+	| GitHubSourceConnectionRepairRequiredDto
+
+export interface StartGitHubSourceConnectionRequest {
+	readonly organization: string
+	readonly appName: string
+	readonly visibility: 'private' | 'public'
+	readonly repositories: readonly GitHubSourceRepositoryDto[]
+}
+
+export interface StartGitHubSourceConnectionResponse {
+	readonly connectionId: string
+	/** Same-origin path that starts the GitHub manifest handoff. */
+	readonly continuePath: string
+}
+
 /** One redacted line of deploy output exposed by the control API. */
 export interface RunLogLine {
 	readonly ts: number
@@ -259,6 +355,8 @@ export type {
 	AppNamedValueInput,
 	ControlRpcContract,
 	CreateAppRequest,
+	GitHubSourceConnectionInput,
+	GitHubSourceConnectionRpcContract,
 	NamespaceIdInput,
 	OkResponse,
 	PutAppEnvironmentInput,

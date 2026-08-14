@@ -45,6 +45,8 @@ export const PLATFORM_PROXY_MANIFEST_TEMPLATE: PlatformProxyManifestTemplate = {
 					{ path: '/operations/api', kind: 'human' },
 					{ path: '/operations/api/*', kind: 'service' },
 					{ path: '/operations/api/*', kind: 'human' },
+					{ path: '/api/source/github/manifest/*', kind: 'human' },
+					{ path: '/api/source/github/callback', kind: 'human' },
 					{ path: '/api/*', kind: 'service' },
 					{ path: '/api/*', kind: 'human' },
 					{ path: '/*', kind: 'human' },

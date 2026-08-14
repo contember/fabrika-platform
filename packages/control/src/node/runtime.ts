@@ -21,12 +21,16 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import type { SourceConnectionAdmin } from '@fabrika/provider-zerops'
 import { createControlRepositories } from '../db'
 import type { Env } from '../env'
+import { GitHubConnectionWebhookSecretProvider } from '../github-connection-store'
 import { controlPublicOrigin } from '../iam'
-import { LocalGitHubRepoEvents } from '../repo-source'
+import { LocalGitHubRepoEvents, StaticWebhookSecretProvider } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
+import type { SourceConnectionPort } from '../source-connection-port'
+import { Vault } from '../vault'
 import { HttpIamAdminGateway } from './iam-admin'
 import { HttpOperationsService } from './operations'
 import { zeropsControlProvider, zeropsSourceClient, zeropsSourceConnectionAdmin } from './provider'
+import { zeropsSourceConnectionPort } from './source-connection'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
 export interface ProcessConfig {
@@ -42,6 +46,8 @@ export interface Runtime {
 	provider: ControlProvider
 	/** Privileged provider-owned GitHub connection lifecycle, consumed by the authenticated admin route. */
 	sourceConnectionAdmin: SourceConnectionAdmin
+	/** Provider-neutral adapter consumed by the shared authenticated workflow. */
+	sourceConnection: SourceConnectionPort
 	config: ProcessConfig
 	/** The deploy queue, as the concrete producer the in-process consumer is built from. */
 	queue: PostgresJobQueue<DeployJobMessage>
@@ -102,16 +108,28 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	const vaultKey = source['FABRIKA_CONTROL_VAULT_KEY']
 	const sourceClient = zeropsSourceClient(source)
 	const sourceConnectionAdmin = zeropsSourceConnectionAdmin(source, sourceClient)
+	const sourceConnection = zeropsSourceConnectionPort(sourceConnectionAdmin)
+	const controlRepositories = createControlRepositories(db)
+	const legacyWebhookSecrets = new StaticWebhookSecretProvider(source['GITHUB_WEBHOOK_SECRET'])
+	const dynamicWebhookSecrets = new GitHubConnectionWebhookSecretProvider(
+		controlRepositories.githubConnections,
+		() => {
+			if (vaultKey === undefined || vaultKey === '') return Promise.reject(new Error('control vault is unavailable'))
+			return Vault.create(db, vaultKey)
+		},
+		legacyWebhookSecrets,
+	)
 
 	const env: Env = {
 		DB: db,
-		REPOSITORIES: createControlRepositories(db),
+		REPOSITORIES: controlRepositories,
 		// SPA fallback on: the dashboard is client-routed, so `/apps/foo` must serve index.html.
 		ASSETS: new FileSystemAssetServer(config.assetsDir, { spaFallback: true }),
 		RUN_LOGS: blobStore(source),
 		DEPLOY_QUEUE: queue,
 		WAIT_UNTIL: tasks.waitUntil,
 		REPO_EVENTS: new LocalGitHubRepoEvents(source['GITHUB_WEBHOOK_SECRET'], sourceClient),
+		GITHUB_WEBHOOK_SECRETS: dynamicWebhookSecrets,
 		IAM: iamRpc(source),
 		IAM_ADMIN: new HttpIamAdminGateway(required(source, 'FABRIKA_IAM_RPC_URL')),
 		ENVIRONMENT: environment,
@@ -136,6 +154,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		env,
 		provider: zeropsControlProvider(env, source, sourceClient),
 		sourceConnectionAdmin,
+		sourceConnection,
 		config,
 		queue,
 		async shutdown(): Promise<void> {
