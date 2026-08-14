@@ -27,7 +27,7 @@ import {
 	githubWebhookSecretLabel,
 	type PublishGitHubConnectionInput,
 } from '../github-connection-store'
-import { applyMigrations } from '../node/migrate'
+import { applyMigrations, postgresMigrations } from '../node/migrate'
 import { createFetchHandler } from '../node/server'
 import { FakeRepoSource } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
@@ -62,6 +62,7 @@ afterAll(async () => {
 async function reset(): Promise<void> {
 	for (
 		const table of [
+			'github_source_connections_keyed',
 			'github_source_connections',
 			'github_source_setup_attempts',
 			'namespace_resource_claims',
@@ -153,6 +154,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0014_zerops_legacy_run_state.sql' },
 			{ bundle: 'control', name: '0015_github_source_connections.sql' },
 			{ bundle: 'control', name: '0016_github_manifest_state.sql' },
+			{ bundle: 'control', name: '0017_keyed_github_source_connections.sql' },
 		])
 	})
 
@@ -180,6 +182,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'operations_ingest_configs',
 				'github_source_setup_attempts',
 				'github_source_connections',
+				'github_source_connections_keyed',
 			]
 		) {
 			expect(names).toContain(table)
@@ -272,6 +275,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(created.default_branch).toBe('trunk')
 		// int4, so it comes back as a number rather than a string.
 		expect(created.github_installation_id).toBe(4242)
+		expect(created.github_connection_id).toBeNull()
 		expect(created.build_cmd).toBeNull()
 
 		expect((await db.registry.getApp('acme'))?.worker_dir).toBe('apps/web')
@@ -678,6 +682,153 @@ describe.skipIf(!hasPostgres)('src/vault.ts — envelope encryption, unmodified,
 })
 
 describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres', () => {
+	test('upgrades singleton evidence and applies the exact Zerops-only registry backfill', async () => {
+		if (postgresUrl === null) throw new Error('Postgres fixture is unavailable')
+		const schema = `github_upgrade_${Math.random().toString(36).slice(2, 10)}`
+		const admin = PostgresDatabase.connect(postgresUrl, { max: 1 })
+		let upgrade: PostgresDatabase | null = null
+		try {
+			await admin.prepare(`CREATE SCHEMA ${schema}`).run()
+			upgrade = PostgresDatabase.connect(postgresUrl, { connection: { search_path: schema }, max: 1 })
+			const upgradeDatabase = upgrade
+			const migrations = postgresMigrations()
+			await applyMigrations(upgrade, migrations.slice(0, -1))
+			await upgrade.prepare(`INSERT INTO github_source_connections (
+				singleton, connection_id, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+				credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+				installation_account_login, installation_selection, verified_repositories_json,
+				requested_repositories_json, connected_by, connected_at, verified_at, version
+			) VALUES (1, 'legacy-connection', '123', 'legacy-app', 'https://github.com/apps/legacy-app',
+				'Acme', 'legacy-app', 0, ?, 'https://control.example/webhooks/github', 'vault:legacy', 45,
+				'acme', 'all', '["acme/app"]', '["acme/app"]', 'principal-1', 800, 900, 3)`)
+				.bind('c'.repeat(64))
+				.run()
+			const legacyApps: readonly (readonly [string, number])[] = [
+				['zerops-match', 45],
+				['zerops-mismatch', 46],
+				['mixed', 45],
+				['cloudflare-only', 45],
+			]
+			for (const [id, installationId] of legacyApps) {
+				await upgrade.prepare('INSERT INTO apps (id, repo_url, github_installation_id) VALUES (?, ?, ?)')
+					.bind(id, `github.com/acme/${id}`, installationId)
+					.run()
+			}
+			const insertEnvironment = (appId: string, env: string, provider: string) =>
+				upgradeDatabase.prepare(`INSERT INTO app_envs (
+					app_id, env, provider, provider_target_json, provider_artifact_json
+				) VALUES (?, ?, ?, '{}', '{}')`).bind(appId, env, provider).run()
+			await insertEnvironment('zerops-match', 'prod', 'zerops')
+			await insertEnvironment('zerops-mismatch', 'prod', 'zerops')
+			await insertEnvironment('mixed', 'prod', 'zerops')
+			await insertEnvironment('mixed', 'stage', 'cloudflare')
+			await insertEnvironment('cloudflare-only', 'prod', 'cloudflare')
+			await upgrade.prepare(`INSERT INTO github_source_setup_attempts (
+				id, status, phase, version, initiated_by, expected_origin, desired_owner, desired_app_name,
+				desired_public, requested_repositories_json, created_at, updated_at, expires_at
+			) VALUES ('repair', 'repair_required', 'awaiting_manifest_callback', 1, 'principal-1',
+				'https://control.example', 'repair-owner', 'repair-app', 0, '[]', 1, 1, 2)`)
+				.run()
+
+			await applyMigrations(upgrade, migrations.slice(-1))
+			const upgraded = createControlRepositories(upgrade)
+			const { results: legacyEvidence } = await upgrade.prepare(`SELECT
+				connection_id, 'legacy-v1' AS transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+				credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+				installation_account_login, installation_selection, verified_repositories_json,
+				requested_repositories_json, connected_by, connected_at, verified_at, version
+				FROM github_source_connections WHERE singleton = 1`).all<Record<string, unknown>>()
+			const { results: keyedLegacy } = await upgrade.prepare(`SELECT
+				connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+				credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+				installation_account_login, installation_selection, verified_repositories_json,
+				requested_repositories_json, connected_by, connected_at, verified_at, version
+				FROM github_source_connections_keyed WHERE transport_kind = 'legacy-v1'`).all<Record<string, unknown>>()
+			expect(keyedLegacy).toEqual(legacyEvidence)
+			const { results: apps } = await upgrade.prepare('SELECT id, github_connection_id FROM apps ORDER BY id')
+				.all<{ id: string; github_connection_id: string | null }>()
+			expect(apps).toEqual([
+				{ id: 'cloudflare-only', github_connection_id: null },
+				{ id: 'mixed', github_connection_id: null },
+				{ id: 'zerops-match', github_connection_id: 'legacy-connection' },
+				{ id: 'zerops-mismatch', github_connection_id: null },
+			])
+			await expect(upgraded.githubConnections.beginAttempt({
+				id: 'blocked-by-repair',
+				stateHash: 'a'.repeat(64),
+				initiatedBy: 'principal-1',
+				expectedOrigin: 'https://control.example',
+				desiredOwner: 'other',
+				desiredAppName: 'other',
+				desiredPublic: false,
+				requestedRepositories: [],
+				expiresAt: now() + 60,
+			})).rejects.toThrow('could not be started')
+			const insertKeyedConnection = (connectionId: string, owner: string, installationId: number) =>
+				upgradeDatabase.prepare(`INSERT INTO github_source_connections_keyed (
+					connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+					credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+					installation_account_login, installation_selection, verified_repositories_json,
+					requested_repositories_json, connected_by, connected_at, verified_at, version
+				) SELECT ?, 'keyed-v2', app_id, app_slug, app_html_url, ?, ?, 0,
+					credential_sha256, ?, ?, ?, ?, installation_selection, verified_repositories_json,
+					requested_repositories_json, connected_by, connected_at, verified_at, version
+				FROM github_source_connections_keyed WHERE transport_kind = 'legacy-v1'`)
+					.bind(
+						connectionId,
+						owner,
+						`${connectionId}-app`,
+						`https://control.example/webhooks/github/${connectionId}`,
+						`vault:${connectionId}-webhook`,
+						installationId,
+						owner.toLowerCase(),
+					)
+					.run()
+			await insertKeyedConnection('keyed-beta', 'Beta', 46)
+			await insertKeyedConnection('keyed-gamma', 'Gamma', 47)
+			await expect(insertKeyedConnection('keyed-beta-duplicate', 'beta', 48)).rejects.toThrow()
+			const firstPage = await upgraded.githubConnections.listConnections({ limit: 2 })
+			expect(firstPage.items.map((connection) => connection.connectionId)).toEqual(['keyed-beta', 'keyed-gamma'])
+			expect(firstPage.nextCursor).toBe('keyed-gamma')
+			expect((await upgraded.githubConnections.listConnections({ cursor: firstPage.nextCursor ?? '', limit: 2 })).items
+				.map((connection) => connection.connectionId)).toEqual(['legacy-connection'])
+			expect(await upgraded.registry.getZeropsSourceBinding('zerops-match', 'prod')).toEqual({
+				connectionId: 'legacy-connection',
+				installationId: 45,
+				transportKind: 'legacy-v1',
+			})
+			await expect(upgraded.registry.getZeropsSourceBinding('mixed', 'prod')).rejects.toThrow('incomplete')
+			expect(await upgraded.registry.getZeropsSourceBinding('cloudflare-only', 'prod')).toBeNull()
+			expect(
+				await upgraded.registry.replaceAppGitHubSourceBinding('zerops-match', {
+					connectionId: null,
+					installationId: null,
+				}),
+			).toMatchObject({ github_connection_id: null, github_installation_id: null })
+			expect(
+				await upgraded.registry.replaceAppGitHubSourceBinding('zerops-match', {
+					connectionId: 'legacy-connection',
+					installationId: 45,
+				}),
+			).toMatchObject({ github_connection_id: 'legacy-connection', github_installation_id: 45 })
+			expect(
+				await upgraded.registry.replaceAppGitHubSourceBinding('cloudflare-only', {
+					connectionId: null,
+					installationId: 45,
+				}),
+			).toMatchObject({ github_connection_id: null, github_installation_id: 45 })
+			await expect(
+				upgrade.prepare(
+					`UPDATE github_source_connections_keyed SET transport_kind = 'keyed-v2' WHERE connection_id = 'legacy-connection'`,
+				).run(),
+			).rejects.toThrow('immutable')
+		} finally {
+			await upgrade?.close()
+			await admin.prepare(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).run()
+			await admin.close()
+		}
+	})
+
 	test('uses the same callback CAS and atomic platform-secret checkpoint', async () => {
 		await reset()
 		const vault = await Vault.create(raw, kek())
@@ -817,7 +968,7 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 			const input: PublishGitHubConnectionInput = {
 				attemptId: started.id,
 				expectedVersion: ready.version,
-				webhookUrl: 'https://control.example/webhooks/github',
+				webhookUrl: `https://control.example/webhooks/github/${started.id}`,
 				installationId: 45,
 				installationAccountLogin: 'acme',
 				installationSelection: 'selected',
@@ -827,7 +978,12 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 			const outcomes = await Promise.allSettled([left.publishConnection(input), right.publishConnection(input)])
 			expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
 			expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
-			expect((await raw.prepare('SELECT COUNT(*)::int AS count FROM github_source_connections').first<{ count: number }>())?.count).toBe(1)
+			expect((await raw.prepare('SELECT COUNT(*)::int AS count FROM github_source_connections').first<{ count: number }>())?.count).toBe(0)
+			expect(
+				await raw.prepare('SELECT transport_kind FROM github_source_connections_keyed WHERE connection_id = ?')
+					.bind(started.id)
+					.first<{ transport_kind: string }>(),
+			).toEqual({ transport_kind: 'keyed-v2' })
 			expect((await store.getAttempt(started.id))?.status).toBe('completed')
 		} finally {
 			await secondRaw.close()

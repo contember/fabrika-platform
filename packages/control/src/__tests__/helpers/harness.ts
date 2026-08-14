@@ -10,13 +10,35 @@ import { type ControlRepositories, createControlRepositories } from '../../db'
 
 // ── Cumulative migrations (every migrations/*.sql, filename order) ─────────────
 
-export function allMigrations(): string {
+function migrationFiles(): string[] {
 	const dir = join(import.meta.dir, '..', '..', '..', 'migrations')
 	return readdirSync(dir)
 		.filter((f) => f.endsWith('.sql'))
 		.sort()
-		.map((f) => readFileSync(join(dir, f), 'utf8'))
+}
+
+function migrationsMatching(predicate: (filename: string) => boolean): string {
+	const dir = join(import.meta.dir, '..', '..', '..', 'migrations')
+	return migrationFiles()
+		.filter(predicate)
+		.map((filename) => readFileSync(join(dir, filename), 'utf8'))
 		.join('\n')
+}
+
+export function allMigrations(): string {
+	return migrationsMatching(() => true)
+}
+
+/** Cumulative historical schema through one immutable migration, inclusive. */
+export function migrationsThrough(filename: string): string {
+	if (!migrationFiles().includes(filename)) throw new Error(`unknown control migration ${filename}`)
+	return migrationsMatching((candidate) => candidate <= filename)
+}
+
+/** Every migration strictly after one immutable historical migration. */
+export function migrationsAfter(filename: string): string {
+	if (!migrationFiles().includes(filename)) throw new Error(`unknown control migration ${filename}`)
+	return migrationsMatching((candidate) => candidate > filename)
 }
 
 // ── D1-compatible adapter over bun:sqlite (mirrors propustka's harness) ─────────
@@ -150,9 +172,18 @@ export interface Harness {
  * (unix SECONDS) overrides repository clocks so caller-stamped `*_at` assertions are deterministic.
  */
 export function createHarness(now?: () => number): Harness {
+	return createHarnessWithMigrations(migration, now)
+}
+
+/** Stand up a historical schema so an upgrade migration can be tested against real pre-upgrade rows. */
+export function createHarnessThrough(filename: string, now?: () => number): Harness {
+	return createHarnessWithMigrations(migrationsThrough(filename), now)
+}
+
+function createHarnessWithMigrations(migrations: string, now?: () => number): Harness {
 	const sqlite = new Database(':memory:')
 	sqlite.exec('PRAGMA foreign_keys = ON')
-	sqlite.exec(migration)
+	sqlite.exec(migrations)
 	const d1 = new TestD1Database(sqlite)
 	const repositories = createControlRepositories(d1, { ...(now === undefined ? {} : { now }) })
 	return { sqlite, repositories, db: repositories, d1 }

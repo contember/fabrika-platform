@@ -1,9 +1,15 @@
+import {
+	GITHUB_SOURCE_CONNECTION_DEFAULT_PAGE_SIZE,
+	GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE,
+	GITHUB_SOURCE_CONNECTION_PAGE_CURSOR_MAX_LENGTH,
+} from '@fabrika/control-contract'
 import type { SqlDatabase } from '@fabrika/platform'
 import type { WebhookSecretProvider } from './repo-source'
 import { uuidv7 } from './uuid'
 import { type PreparedVaultSecret, type Vault, vaultRef } from './vault'
 
 export type GitHubSetupStatus = 'active' | 'repair_required' | 'completed' | 'failed'
+export type GitHubSourceTransportKind = 'legacy-v1' | 'keyed-v2'
 export type GitHubSetupErrorCode =
 	| 'callback_expired'
 	| 'manifest_exchange'
@@ -54,6 +60,7 @@ export interface GitHubSetupAttempt {
 
 export interface GitHubSourceConnection {
 	connectionId: string
+	transportKind: GitHubSourceTransportKind
 	appId: string
 	appSlug: string
 	appHtmlUrl: string
@@ -140,8 +147,8 @@ interface GitHubSetupAttemptRow {
 }
 
 interface GitHubSourceConnectionRow {
-	singleton: number
 	connection_id: string
+	transport_kind: string
 	app_id: string
 	app_slug: string
 	app_html_url: string
@@ -160,6 +167,16 @@ interface GitHubSourceConnectionRow {
 	connected_at: number
 	verified_at: number
 	version: number
+}
+
+export interface GitHubSourceConnectionPageInput {
+	readonly cursor?: string
+	readonly limit?: number
+}
+
+export interface GitHubSourceConnectionPage {
+	readonly items: readonly GitHubSourceConnection[]
+	readonly nextCursor: string | null
 }
 
 export interface BeginGitHubSetupInput {
@@ -410,20 +427,98 @@ export class GitHubConnectionStore {
 	}
 
 	async getConnection(): Promise<GitHubSourceConnection | null> {
-		const row = await this.db.prepare('SELECT * FROM github_source_connections WHERE singleton = 1').first<GitHubSourceConnectionRow>()
+		const legacy = await this.getLegacyConnection()
+		if (legacy !== null) return legacy
+		const page = await this.listConnections({ limit: 1 })
+		return page.items[0] ?? null
+	}
+
+	async getLegacyConnection(): Promise<GitHubSourceConnection | null> {
+		const row = await this.db.prepare(
+			`SELECT * FROM github_source_connections_keyed WHERE transport_kind = 'legacy-v1' LIMIT 1`,
+		).first<GitHubSourceConnectionRow>()
 		return row === null ? null : decodeConnection(row)
 	}
 
+	async getConnectionById(connectionId: string): Promise<GitHubSourceConnection | null> {
+		validateConnectionId(connectionId)
+		const row = await this.db.prepare('SELECT * FROM github_source_connections_keyed WHERE connection_id = ?')
+			.bind(connectionId)
+			.first<GitHubSourceConnectionRow>()
+		return row === null ? null : decodeConnection(row)
+	}
+
+	async getConnectionByOwner(owner: string): Promise<GitHubSourceConnection | null> {
+		validateGitHubOwner(owner)
+		const row = await this.db.prepare(
+			`SELECT * FROM github_source_connections_keyed WHERE lower(app_owner) = lower(?) LIMIT 1`,
+		).bind(owner).first<GitHubSourceConnectionRow>()
+		return row === null ? null : decodeConnection(row)
+	}
+
+	async getConnectionByBinding(connectionId: string, installationId: number): Promise<GitHubSourceConnection | null> {
+		validateConnectionId(connectionId)
+		validateSafePositive(installationId, 'installation id')
+		const row = await this.db.prepare(
+			'SELECT * FROM github_source_connections_keyed WHERE connection_id = ? AND installation_id = ?',
+		).bind(connectionId, installationId).first<GitHubSourceConnectionRow>()
+		return row === null ? null : decodeConnection(row)
+	}
+
+	async listConnections(input: GitHubSourceConnectionPageInput = {}): Promise<GitHubSourceConnectionPage> {
+		const limit = input.limit ?? GITHUB_SOURCE_CONNECTION_DEFAULT_PAGE_SIZE
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE) {
+			throw new Error('invalid GitHub source connection page size')
+		}
+		if (
+			input.cursor !== undefined
+			&& (input.cursor.length === 0 || input.cursor.length > GITHUB_SOURCE_CONNECTION_PAGE_CURSOR_MAX_LENGTH)
+		) throw new Error('invalid GitHub source connection cursor')
+		const statement = input.cursor === undefined
+			? this.db.prepare('SELECT * FROM github_source_connections_keyed ORDER BY connection_id LIMIT ?').bind(limit + 1)
+			: this.db.prepare('SELECT * FROM github_source_connections_keyed WHERE connection_id > ? ORDER BY connection_id LIMIT ?')
+				.bind(input.cursor, limit + 1)
+		const { results } = await statement.all<GitHubSourceConnectionRow>()
+		const pageRows = results.slice(0, limit)
+		return {
+			items: pageRows.map(decodeConnection),
+			nextCursor: results.length > limit ? pageRows[pageRows.length - 1]?.connection_id ?? null : null,
+		}
+	}
+
+	async getWorkflowAttempt(): Promise<GitHubSetupAttempt | null> {
+		await this.reapExpiredAttempt()
+		const row = await this.db.prepare(
+			`SELECT * FROM github_source_setup_attempts
+			WHERE status IN ('active','repair_required') ORDER BY updated_at DESC LIMIT 1`,
+		).first<GitHubSetupAttemptRow>()
+		return row === null ? null : decodeAttempt(row)
+	}
+
 	async getWebhookSecretBinding(): Promise<GitHubWebhookSecretBinding | null> {
-		const connection = await this.getConnection()
+		const connection = await this.getLegacyConnection()
 		if (connection !== null) return { connectionId: connection.connectionId, webhookSecretRef: connection.webhookSecretRef }
 		const row = await this.db.prepare(`SELECT * FROM github_source_setup_attempts
-			WHERE status IN ('active','repair_required') AND webhook_secret_ref IS NOT NULL
+			WHERE setup_kind = 'adoption' AND status IN ('active','repair_required') AND webhook_secret_ref IS NOT NULL
 				AND phase IN ('webhook_configured','configuration_verified','installation_required')
 			ORDER BY updated_at DESC LIMIT 1`).first<GitHubSetupAttemptRow>()
 		if (row === null) return null
 		const attempt = decodeAttempt(row)
 		if (attempt.webhookSecretRef === null) return null
+		return { connectionId: attempt.id, webhookSecretRef: attempt.webhookSecretRef }
+	}
+
+	async getWebhookSecretBindingByConnectionId(connectionId: string): Promise<GitHubWebhookSecretBinding | null> {
+		const connection = await this.getConnectionById(connectionId)
+		if (connection?.transportKind === 'keyed-v2') {
+			return { connectionId: connection.connectionId, webhookSecretRef: connection.webhookSecretRef }
+		}
+		const attempt = await this.getAttempt(connectionId)
+		if (
+			attempt === null || attempt.setupKind !== 'manifest' || !['active', 'repair_required'].includes(attempt.status)
+			|| attempt.webhookSecretRef === null
+			|| !['webhook_configured', 'configuration_verified', 'installation_required'].includes(attempt.phase)
+		) return null
 		return { connectionId: attempt.id, webhookSecretRef: attempt.webhookSecretRef }
 	}
 
@@ -739,7 +834,9 @@ export class GitHubConnectionStore {
 			|| attempt.appId === null || attempt.appSlug === null || attempt.appHtmlUrl === null || attempt.credentialSha256 === null
 			|| attempt.webhookSecretRef === null || input.installationAccountLogin.toLowerCase() !== attempt.desiredOwner.toLowerCase()
 			|| JSON.stringify(verifiedRepositories) !== JSON.stringify(attempt.requestedRepositories)
-			|| input.webhookUrl !== `${attempt.expectedOrigin}/webhooks/github`
+			|| input.webhookUrl !== (attempt.setupKind === 'adoption'
+					? `${attempt.expectedOrigin}/webhooks/github`
+					: `${attempt.expectedOrigin}/webhooks/github/${encodeURIComponent(attempt.id)}`)
 		) return null
 		const webhookVaultId = attempt.webhookSecretRef.slice('vault:'.length)
 		const webhookLabel = githubWebhookSecretLabel(input.attemptId)
@@ -752,12 +849,13 @@ export class GitHubConnectionStore {
 					SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?
 				) RETURNING *`)
 			.bind(terminalAt, terminalAt, input.attemptId, input.expectedVersion, attempt.webhookSecretRef, webhookVaultId, webhookLabel)
-		const connectionInsert = this.db.prepare(`INSERT INTO github_source_connections (
-			singleton, connection_id, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+		const connectionInsert = this.db.prepare(`INSERT INTO github_source_connections_keyed (
+			connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
 			credential_sha256, webhook_url, webhook_secret_ref, installation_id,
 			installation_account_login, installation_selection, verified_repositories_json,
 			requested_repositories_json, connected_by, connected_at, verified_at, version
-		) SELECT 1, id, app_id, app_slug, app_html_url, desired_owner, desired_app_name, desired_public,
+		) SELECT id, CASE setup_kind WHEN 'adoption' THEN 'legacy-v1' ELSE 'keyed-v2' END,
+			app_id, app_slug, app_html_url, desired_owner, desired_app_name, desired_public,
 			credential_sha256, ?, webhook_secret_ref, ?, ?, ?, ?, requested_repositories_json,
 			initiated_by, ?, ?, 1 FROM github_source_setup_attempts
 			WHERE id = ? AND version = ? AND status = 'completed' AND phase = 'connected'
@@ -765,7 +863,7 @@ export class GitHubConnectionStore {
 				AND credential_sha256 IS NOT NULL AND webhook_secret_ref = ?
 				AND EXISTS (SELECT 1 FROM vault WHERE id = ? AND scope = 'platform' AND label = ?)
 			UNION ALL SELECT
-				2, 'invalid', '1', 'invalid', 'https://github.com/apps/invalid', 'invalid', 'invalid', 0,
+				'invalid', 'invalid', '1', 'invalid', 'https://github.com/apps/invalid', 'invalid', 'invalid', 0,
 				'0000000000000000000000000000000000000000000000000000000000000000',
 				'https://invalid.example/webhooks/github', 'vault:invalid', 1, 'invalid', 'selected', '[]', '[]', 'invalid', 0, 0, 1
 			WHERE (
@@ -897,13 +995,19 @@ export class GitHubConnectionWebhookSecretProvider implements WebhookSecretProvi
 		private readonly store: GitHubConnectionStore,
 		private readonly vault: Vault | (() => Promise<Vault>),
 		private readonly fallback?: WebhookSecretProvider,
+		private readonly connectionId?: string,
 	) {}
 
 	async getSecret(signal?: AbortSignal): Promise<string | null> {
 		throwIfAborted(signal)
-		const binding = await this.store.getWebhookSecretBinding()
+		const binding = this.connectionId === undefined
+			? await this.store.getWebhookSecretBinding()
+			: await this.store.getWebhookSecretBindingByConnectionId(this.connectionId)
 		throwIfAborted(signal)
-		if (binding === null) return this.fallback?.getSecret(signal) ?? null
+		if (binding === null) {
+			if (this.connectionId !== undefined) return null
+			return this.fallback?.getSecret(signal) ?? null
+		}
 		const secretVault = typeof this.vault === 'function' ? await this.vault() : this.vault
 		const secret = await secretVault.getSecretForPurpose(binding.webhookSecretRef, {
 			scope: 'platform',
@@ -995,13 +1099,13 @@ function phaseIndex(phase: GitHubSetupPhase): number {
 }
 
 function decodeConnection(row: GitHubSourceConnectionRow): GitHubSourceConnection {
-	if (row.singleton !== 1) throw new Error('invalid GitHub connection singleton')
 	validateSafePositive(row.version, 'connection version')
 	validateSafePositive(row.installation_id, 'installation id')
 	validateSafeNonNegative(row.connected_at, 'connected timestamp')
 	validateSafeNonNegative(row.verified_at, 'verified timestamp')
 	return {
 		connectionId: required(row.connection_id, 'connection id'),
+		transportKind: parseTransportKind(row.transport_kind),
 		appId: required(row.app_id, 'app id'),
 		appSlug: required(row.app_slug, 'app slug'),
 		appHtmlUrl: required(row.app_html_url, 'app HTML URL'),
@@ -1021,6 +1125,11 @@ function decodeConnection(row: GitHubSourceConnectionRow): GitHubSourceConnectio
 		verifiedAt: row.verified_at,
 		version: row.version,
 	}
+}
+
+function parseTransportKind(value: string): GitHubSourceTransportKind {
+	if (value === 'legacy-v1' || value === 'keyed-v2') return value
+	throw new Error('invalid GitHub source transport kind')
 }
 
 function parseStatus(value: string): GitHubSetupStatus {

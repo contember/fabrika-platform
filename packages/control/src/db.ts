@@ -12,7 +12,7 @@
 import { DEFAULT_OPERATIONS_SERVICE_KEY } from '@fabrika/operations-contract/catalog'
 import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
-import { GitHubConnectionStore } from './github-connection-store'
+import { GitHubConnectionStore, type GitHubSourceTransportKind } from './github-connection-store'
 import { uuidv7 } from './uuid'
 
 // ── Row shapes (snake_case, as migrations/0001_init.sql defines) ───────────────
@@ -24,6 +24,7 @@ export interface AppRow {
 	worker_dir: string | null
 	build_cmd: string | null
 	config_path: string | null
+	github_connection_id: string | null
 	github_installation_id: number | null
 	created_at: number
 }
@@ -87,7 +88,14 @@ export interface AppInput {
 	workerDir?: string | null
 	buildCmd?: string | null
 	configPath?: string | null
+	githubConnectionId?: string | null
 	githubInstallationId?: number | null
+}
+
+export interface ZeropsSourceBinding {
+	readonly connectionId: string
+	readonly installationId: number
+	readonly transportKind: GitHubSourceTransportKind
 }
 
 export interface NamespaceResourceClaimOwner {
@@ -321,14 +329,97 @@ export class ControlRegistryRepository {
 		return results
 	}
 
+	/** Exact repository, connection and installation lookup for a scoped Zerops webhook. */
+	async getZeropsAppsByRepoUrlAndSourceBinding(
+		repoUrl: string,
+		connectionId: string,
+		installationId: number,
+	): Promise<AppRow[]> {
+		await this.validateZeropsSourceBinding(repoUrl, connectionId, installationId)
+		const { results } = await this.d1.prepare(`SELECT DISTINCT a.* FROM apps a
+			INNER JOIN app_envs e ON e.app_id = a.id AND e.provider = 'zerops'
+			INNER JOIN github_source_connections_keyed c
+				ON c.connection_id = a.github_connection_id
+				AND c.installation_id = a.github_installation_id
+			WHERE a.repo_url = ? AND a.github_connection_id = ? AND a.github_installation_id = ?
+			ORDER BY a.id`)
+			.bind(repoUrl, connectionId, installationId)
+			.all<AppRow>()
+		return results
+	}
+
+	/**
+	 * Resolve the credential selector for one Zerops app environment. Public source is represented by
+	 * neither coordinate. Partial, stale, cross-owner and cross-installation bindings fail closed.
+	 */
+	async getZeropsSourceBinding(appId: string, env: string): Promise<ZeropsSourceBinding | null> {
+		const row = await this.d1.prepare(`SELECT
+				a.repo_url, a.github_connection_id, a.github_installation_id,
+				e.provider, c.transport_kind, c.app_owner
+			FROM apps a
+			INNER JOIN app_envs e ON e.app_id = a.id AND e.env = ?
+			LEFT JOIN github_source_connections_keyed c
+				ON c.connection_id = a.github_connection_id
+				AND c.installation_id = a.github_installation_id
+			WHERE a.id = ?`).bind(env, appId).first<ZeropsSourceBindingRow>()
+		if (row === null || row.provider !== 'zerops') return null
+		const connectionId = row.github_connection_id
+		const installationId = row.github_installation_id
+		if (connectionId === null && installationId === null) return null
+		if (connectionId === null || installationId === null || row.transport_kind === null || row.app_owner === null) {
+			throw new Error('incomplete Zerops GitHub source binding')
+		}
+		const repositoryOwner = githubRepositoryOwner(row.repo_url)
+		if (repositoryOwner === null || repositoryOwner.toLowerCase() !== row.app_owner.toLowerCase()) {
+			throw new Error('Zerops GitHub source binding does not own the repository')
+		}
+		return {
+			connectionId,
+			installationId,
+			transportKind: parseGitHubSourceTransportKind(row.transport_kind),
+		}
+	}
+
+	/** Validate a proposed Zerops registration before the app row exists. */
+	async validateZeropsSourceBinding(
+		repoUrl: string,
+		githubConnectionId: string | null,
+		githubInstallationId: number | null,
+	): Promise<ZeropsSourceBinding | null> {
+		if (githubConnectionId === null && githubInstallationId === null) return null
+		if (githubConnectionId === null || githubInstallationId === null) throw new Error('incomplete Zerops GitHub source binding')
+		const row = await this.d1.prepare(`SELECT transport_kind, app_owner
+			FROM github_source_connections_keyed WHERE connection_id = ? AND installation_id = ?`)
+			.bind(githubConnectionId, githubInstallationId)
+			.first<ZeropsConnectionBindingRow>()
+		if (row === null) throw new Error('unknown Zerops GitHub source binding')
+		const repositoryOwner = githubRepositoryOwner(repoUrl)
+		if (repositoryOwner === null || repositoryOwner.toLowerCase() !== row.app_owner.toLowerCase()) {
+			throw new Error('Zerops GitHub source binding does not own the repository')
+		}
+		return {
+			connectionId: githubConnectionId,
+			installationId: githubInstallationId,
+			transportKind: parseGitHubSourceTransportKind(row.transport_kind),
+		}
+	}
+
+	async validateStoredZeropsSourceBinding(appId: string): Promise<ZeropsSourceBinding | null> {
+		const app = await this.getApp(appId)
+		if (app === null) return null
+		return this.validateZeropsSourceBinding(app.repo_url, app.github_connection_id, app.github_installation_id)
+	}
+
 	async createApp(input: AppInput): Promise<AppRow> {
 		return firstRow<AppRow>(this.appInsertStatement(input))
 	}
 
 	private appInsertStatement(input: AppInput): SqlStatement {
 		return this.d1
-			.prepare(`INSERT INTO apps (id, repo_url, default_branch, worker_dir, build_cmd, config_path, github_installation_id)
-				VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`)
+			.prepare(`INSERT INTO apps (
+				id, repo_url, default_branch, worker_dir, build_cmd, config_path,
+				github_connection_id, github_installation_id
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`)
 			.bind(
 				input.id,
 				input.repoUrl,
@@ -336,6 +427,7 @@ export class ControlRegistryRepository {
 				input.workerDir ?? null,
 				input.buildCmd ?? null,
 				input.configPath ?? null,
+				input.githubConnectionId ?? null,
 				input.githubInstallationId ?? null,
 			)
 	}
@@ -346,6 +438,7 @@ export class ControlRegistryRepository {
 		workerDir?: string | null
 		buildCmd?: string | null
 		configPath?: string | null
+		githubConnectionId?: string | null
 		githubInstallationId?: number | null
 	}): Promise<AppRow | null> {
 		return this.d1
@@ -355,7 +448,8 @@ export class ControlRegistryRepository {
 				worker_dir = COALESCE(?, worker_dir),
 				build_cmd = COALESCE(?, build_cmd),
 				config_path = COALESCE(?, config_path),
-				github_installation_id = COALESCE(?, github_installation_id)
+				github_connection_id = CASE WHEN ? = 1 THEN ? ELSE github_connection_id END,
+				github_installation_id = CASE WHEN ? = 1 THEN ? ELSE github_installation_id END
 				WHERE id = ? RETURNING *`)
 			.bind(
 				patch.repoUrl ?? null,
@@ -363,10 +457,28 @@ export class ControlRegistryRepository {
 				patch.workerDir ?? null,
 				patch.buildCmd ?? null,
 				patch.configPath ?? null,
+				patch.githubConnectionId === undefined ? 0 : 1,
+				patch.githubConnectionId ?? null,
+				patch.githubInstallationId === undefined ? 0 : 1,
 				patch.githubInstallationId ?? null,
 				id,
 			)
 			.first<AppRow>()
+	}
+
+	/** Atomically replace or clear both GitHub source coordinates, including explicit NULL values. */
+	async replaceAppGitHubSourceBinding(
+		id: string,
+		binding: { readonly connectionId: string | null; readonly installationId: number | null },
+	): Promise<AppRow | null> {
+		if (binding.connectionId !== null && binding.connectionId.trim() === '') throw new Error('invalid GitHub source connection id')
+		if (binding.installationId !== null && (!Number.isSafeInteger(binding.installationId) || binding.installationId <= 0)) {
+			throw new Error('invalid GitHub installation id')
+		}
+		return this.updateApp(id, {
+			githubConnectionId: binding.connectionId,
+			githubInstallationId: binding.installationId,
+		})
 	}
 
 	async deleteApp(id: string): Promise<boolean> {
@@ -561,6 +673,7 @@ export class ControlRegistryRepository {
 
 	/** Upsert an (app, env) target. ON CONFLICT (app_id, env) overwrites the mutable columns. */
 	async upsertAppEnv(input: AppEnvInput): Promise<AppEnvRow> {
+		if (input.provider === 'zerops') await this.validateStoredZeropsSourceBinding(input.appId)
 		return firstRow<AppEnvRow>(this.appEnvUpsertStatement(input))
 	}
 
@@ -575,6 +688,7 @@ export class ControlRegistryRepository {
 		if (input.namespaceId === null) {
 			throw new Error('namespace resource claims require an environment namespace')
 		}
+		if (input.provider === 'zerops') await this.validateStoredZeropsSourceBinding(input.appId)
 		const owner: NamespaceResourceClaimOwner = {
 			namespaceId: input.namespaceId,
 			ownerAppId: input.appId,
@@ -613,6 +727,13 @@ export class ControlRegistryRepository {
 		}
 		if (appInput.id !== environmentInput.appId) {
 			throw new Error('app and environment coordinates do not match')
+		}
+		if (environmentInput.provider === 'zerops') {
+			await this.validateZeropsSourceBinding(
+				appInput.repoUrl,
+				appInput.githubConnectionId ?? null,
+				appInput.githubInstallationId ?? null,
+			)
 		}
 		const owner: NamespaceResourceClaimOwner = {
 			namespaceId: environmentInput.namespaceId,
@@ -1046,7 +1167,8 @@ export class RepoPollingRepository {
 		const { results } = await this.d1
 			.prepare(`SELECT
 					a.id AS a_id, a.repo_url AS a_repo_url, a.default_branch AS a_default_branch, a.worker_dir AS a_worker_dir,
-					a.build_cmd AS a_build_cmd, a.config_path AS a_config_path, a.github_installation_id AS a_github_installation_id,
+					a.build_cmd AS a_build_cmd, a.config_path AS a_config_path,
+					a.github_connection_id AS a_github_connection_id, a.github_installation_id AS a_github_installation_id,
 					a.created_at AS a_created_at,
 						e.app_id AS e_app_id, e.env AS e_env, e.domain AS e_domain, e.public_origin AS e_public_origin,
 						e.trigger_ref AS e_trigger_ref,
@@ -1067,6 +1189,7 @@ export class RepoPollingRepository {
 				worker_dir: r.a_worker_dir,
 				build_cmd: r.a_build_cmd,
 				config_path: r.a_config_path,
+				github_connection_id: r.a_github_connection_id,
 				github_installation_id: r.a_github_installation_id,
 				created_at: r.a_created_at,
 			},
@@ -1425,6 +1548,7 @@ interface PollEligibleJoinRow {
 	a_worker_dir: string | null
 	a_build_cmd: string | null
 	a_config_path: string | null
+	a_github_connection_id: string | null
 	a_github_installation_id: number | null
 	a_created_at: number
 	e_app_id: string
@@ -1437,6 +1561,30 @@ interface PollEligibleJoinRow {
 	e_provider_target_json: string
 	e_provider_artifact_json: string
 	e_created_at: number
+}
+
+interface ZeropsSourceBindingRow {
+	repo_url: string
+	github_connection_id: string | null
+	github_installation_id: number | null
+	provider: string
+	transport_kind: string | null
+	app_owner: string | null
+}
+
+interface ZeropsConnectionBindingRow {
+	transport_kind: string
+	app_owner: string
+}
+
+function parseGitHubSourceTransportKind(value: string): GitHubSourceTransportKind {
+	if (value === 'legacy-v1' || value === 'keyed-v2') return value
+	throw new Error('invalid GitHub source transport kind')
+}
+
+function githubRepositoryOwner(repoUrl: string): string | null {
+	const match = /^github\.com\/([^/]+)\/[^/]+$/.exec(repoUrl)
+	return match?.[1] ?? null
 }
 
 export { uuidv7 }

@@ -10,7 +10,7 @@ import {
 	type PublishGitHubConnectionInput,
 } from '../github-connection-store'
 import { Vault } from '../vault'
-import { createHarness, queryRows } from './helpers/harness'
+import { createHarness, createHarnessThrough, type Harness, migrationsAfter, queryRows } from './helpers/harness'
 
 function testKey(): string {
 	let binary = ''
@@ -21,6 +21,27 @@ function testKey(): string {
 const STATE_DIGEST = 'a'.repeat(64)
 const OTHER_STATE_DIGEST = 'b'.repeat(64)
 const CREDENTIAL_DIGEST = 'c'.repeat(64)
+
+function insertKeyedConnection(sqlite: Harness['sqlite'], connectionId: string, owner: string, installationId: number): void {
+	sqlite.query(`INSERT INTO github_source_connections_keyed (
+		connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+		credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+		installation_account_login, installation_selection, verified_repositories_json,
+		requested_repositories_json, connected_by, connected_at, verified_at, version
+	) SELECT ?, 'keyed-v2', app_id, app_slug, app_html_url, ?, ?, 0,
+		credential_sha256, ?, ?, ?, ?, installation_selection, verified_repositories_json,
+		requested_repositories_json, connected_by, connected_at, verified_at, version
+	FROM github_source_connections_keyed WHERE transport_kind = 'legacy-v1'`)
+		.run(
+			connectionId,
+			owner,
+			`${connectionId}-app`,
+			`https://control.example/webhooks/github/${connectionId}`,
+			`vault:${connectionId}-webhook`,
+			installationId,
+			owner.toLowerCase(),
+		)
+}
 
 class TwoPartyBarrier {
 	private arrivals = 0
@@ -95,6 +116,156 @@ async function configuredAttempt() {
 }
 
 describe('GitHubConnectionStore', () => {
+	test('upgrades singleton evidence into the keyed authority and backfills only unambiguous Zerops apps', async () => {
+		const harness = createHarnessThrough('0020_github_manifest_state.sql', () => 1_000)
+		const { sqlite } = harness
+		sqlite.query(`INSERT INTO github_source_connections (
+			singleton, connection_id, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+			credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+			installation_account_login, installation_selection, verified_repositories_json,
+			requested_repositories_json, connected_by, connected_at, verified_at, version
+		) VALUES (1, ?, '123', 'legacy-app', 'https://github.com/apps/legacy-app', 'Acme', 'legacy-app', 0,
+			?, 'https://control.example/webhooks/github', 'vault:legacy-webhook', 45,
+			'acme', 'all', '["acme/app"]', '["acme/app"]', 'principal-1', 800, 900, 3)`)
+			.run('legacy-connection', CREDENTIAL_DIGEST)
+		const legacyApps: readonly (readonly [string, number])[] = [
+			['zerops-match', 45],
+			['zerops-mismatch', 46],
+			['mixed', 45],
+			['cloudflare-only', 45],
+		]
+		for (const [id, installationId] of legacyApps) {
+			sqlite.query('INSERT INTO apps (id, repo_url, github_installation_id) VALUES (?, ?, ?)')
+				.run(id, `github.com/acme/${id}`, installationId)
+		}
+		const insertEnvironment = sqlite.query(`INSERT INTO app_envs (
+			app_id, env, provider, provider_target_json, provider_artifact_json
+		) VALUES (?, ?, ?, '{}', '{}')`)
+		insertEnvironment.run('zerops-match', 'prod', 'zerops')
+		insertEnvironment.run('zerops-mismatch', 'prod', 'zerops')
+		insertEnvironment.run('mixed', 'prod', 'zerops')
+		insertEnvironment.run('mixed', 'stage', 'cloudflare')
+		insertEnvironment.run('cloudflare-only', 'prod', 'cloudflare')
+		sqlite.query(`INSERT INTO github_source_setup_attempts (
+			id, status, phase, version, initiated_by, expected_origin, desired_owner, desired_app_name,
+			desired_public, requested_repositories_json, created_at, updated_at, expires_at
+		) VALUES ('repair', 'repair_required', 'awaiting_manifest_callback', 1, 'principal-1',
+			'https://control.example', 'repair-owner', 'repair-app', 0, '[]', 1, 1, 2)`)
+			.run()
+
+		sqlite.exec(migrationsAfter('0020_github_manifest_state.sql'))
+
+		expect(queryRows(sqlite, 'SELECT * FROM github_source_connections')).toHaveLength(1)
+		expect(queryRows(
+			sqlite,
+			`SELECT
+			connection_id, 'legacy-v1' AS transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+			credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+			installation_account_login, installation_selection, verified_repositories_json,
+			requested_repositories_json, connected_by, connected_at, verified_at, version
+			FROM github_source_connections WHERE singleton = 1`,
+		)).toEqual(queryRows(
+			sqlite,
+			`SELECT
+			connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+			credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+			installation_account_login, installation_selection, verified_repositories_json,
+			requested_repositories_json, connected_by, connected_at, verified_at, version
+			FROM github_source_connections_keyed WHERE transport_kind = 'legacy-v1'`,
+		))
+		expect(queryRows(sqlite, 'SELECT id, github_connection_id FROM apps ORDER BY id')).toEqual([
+			{ id: 'cloudflare-only', github_connection_id: null },
+			{ id: 'mixed', github_connection_id: null },
+			{ id: 'zerops-match', github_connection_id: 'legacy-connection' },
+			{ id: 'zerops-mismatch', github_connection_id: null },
+		])
+		await expect(harness.repositories.githubConnections.beginAttempt({
+			id: 'blocked-by-repair',
+			stateHash: STATE_DIGEST,
+			initiatedBy: 'principal-1',
+			expectedOrigin: 'https://control.example',
+			desiredOwner: 'other',
+			desiredAppName: 'other',
+			desiredPublic: false,
+			requestedRepositories: [],
+			expiresAt: 2_000,
+		})).rejects.toThrow('could not be started')
+
+		insertKeyedConnection(sqlite, 'keyed-beta', 'Beta', 46)
+		insertKeyedConnection(sqlite, 'keyed-gamma', 'Gamma', 47)
+		expect(() => insertKeyedConnection(sqlite, 'keyed-beta-duplicate', 'beta', 48)).toThrow()
+		expect((await harness.repositories.githubConnections.getConnectionByOwner('ACME'))?.connectionId).toBe('legacy-connection')
+		expect(await harness.repositories.githubConnections.getWebhookSecretBindingByConnectionId('legacy-connection')).toBeNull()
+		let exactFallbackReads = 0
+		const exactLegacyProvider = new GitHubConnectionWebhookSecretProvider(
+			harness.repositories.githubConnections,
+			await Vault.create(harness.d1, testKey()),
+			{
+				getSecret: () => {
+					exactFallbackReads += 1
+					return Promise.resolve('must-not-be-used')
+				},
+			},
+			'legacy-connection',
+		)
+		expect(await exactLegacyProvider.getSecret()).toBeNull()
+		expect(exactFallbackReads).toBe(0)
+		expect(() => sqlite.query(`UPDATE github_source_connections_keyed SET transport_kind = 'legacy-v1' WHERE connection_id = ?`).run('keyed-beta'))
+			.toThrow('immutable')
+
+		const firstPage = await harness.repositories.githubConnections.listConnections({ limit: 2 })
+		expect(firstPage.items.map((connection) => connection.connectionId)).toEqual(['keyed-beta', 'keyed-gamma'])
+		expect(firstPage.nextCursor).toBe('keyed-gamma')
+		expect((await harness.repositories.githubConnections.listConnections({ cursor: firstPage.nextCursor ?? '', limit: 2 })).items
+			.map((connection) => connection.connectionId)).toEqual(['legacy-connection'])
+		await expect(harness.repositories.githubConnections.listConnections({ limit: 0 })).rejects.toThrow('page size')
+		await expect(harness.repositories.githubConnections.listConnections({ limit: 101 })).rejects.toThrow('page size')
+		await expect(harness.repositories.githubConnections.listConnections({ cursor: 'x'.repeat(513) })).rejects.toThrow('cursor')
+
+		expect(await harness.repositories.registry.getZeropsSourceBinding('zerops-match', 'prod')).toEqual({
+			connectionId: 'legacy-connection',
+			installationId: 45,
+			transportKind: 'legacy-v1',
+		})
+		await expect(harness.repositories.registry.getZeropsSourceBinding('zerops-mismatch', 'prod')).rejects.toThrow('incomplete')
+		await expect(harness.repositories.registry.getZeropsSourceBinding('mixed', 'prod')).rejects.toThrow('incomplete')
+		expect(await harness.repositories.registry.getZeropsSourceBinding('cloudflare-only', 'prod')).toBeNull()
+		expect(
+			(await harness.repositories.registry.getZeropsAppsByRepoUrlAndSourceBinding('github.com/acme/zerops-match', 'legacy-connection', 45))
+				.map((app) => app.id),
+		).toEqual(['zerops-match'])
+
+		expect(
+			await harness.repositories.registry.replaceAppGitHubSourceBinding('zerops-match', {
+				connectionId: null,
+				installationId: null,
+			}),
+		).toMatchObject({ github_connection_id: null, github_installation_id: null })
+		expect(
+			await harness.repositories.registry.replaceAppGitHubSourceBinding('zerops-match', {
+				connectionId: 'legacy-connection',
+				installationId: 45,
+			}),
+		).toMatchObject({ github_connection_id: 'legacy-connection', github_installation_id: 45 })
+		expect(
+			await harness.repositories.registry.replaceAppGitHubSourceBinding('cloudflare-only', {
+				connectionId: null,
+				installationId: 45,
+			}),
+		).toMatchObject({ github_connection_id: null, github_installation_id: 45 })
+		expect(
+			await harness.repositories.registry.updateApp('zerops-match', {
+				repoUrl: 'github.com/public/zerops-match',
+				githubConnectionId: null,
+				githubInstallationId: null,
+			}),
+		).toMatchObject({
+			repo_url: 'github.com/public/zerops-match',
+			github_connection_id: null,
+			github_installation_id: null,
+		})
+	})
+
 	test('expires an unclaimed callback atomically, removes its capability, and permits a new attempt', async () => {
 		let clock = 100
 		const { d1 } = createHarness(() => clock)
@@ -393,14 +564,15 @@ describe('GitHubConnectionStore', () => {
 		const connection = await flow.store.publishConnection({
 			attemptId: flow.started.id,
 			expectedVersion: ready.version,
-			webhookUrl: 'https://control.example/webhooks/github',
+			webhookUrl: 'https://control.example/webhooks/github/attempt-1',
 			installationId: 45,
 			installationAccountLogin: 'acme',
 			installationSelection: 'selected',
 			verifiedRepositories: ['acme/a', 'acme/z'],
 			verifiedAt: 1_000,
 		})
-		expect(connection?.appOwner).toBe('acme')
+		expect(connection).toMatchObject({ appOwner: 'acme', transportKind: 'keyed-v2' })
+		expect(queryRows(flow.sqlite, 'SELECT * FROM github_source_connections')).toEqual([])
 		const state = await flow.store.getState()
 		expect(state.state).toBe('connected')
 		const serialized = JSON.stringify(state)
@@ -408,7 +580,7 @@ describe('GitHubConnectionStore', () => {
 		expect(serialized).not.toContain(STATE_DIGEST)
 		expect(serialized).not.toContain(CREDENTIAL_DIGEST)
 
-		const provider = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault)
+		const provider = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault, undefined, flow.started.id)
 		expect(await provider.getSecret()).toBe('webhook-value')
 	})
 
@@ -449,6 +621,7 @@ describe('GitHubConnectionStore', () => {
 		clock = 1_000
 		expect(await store.getState()).toMatchObject({ state: 'installation_required', attemptId: adopted.id })
 		expect(await store.getAttempt(adopted.id)).toMatchObject({ status: 'active', phase: 'installation_required' })
+		expect(await new GitHubConnectionWebhookSecretProvider(store, vault, undefined, adopted.id).getSecret()).toBeNull()
 	})
 
 	test('rejects malformed durable state instead of guessing a phase', async () => {
@@ -476,7 +649,7 @@ describe('GitHubConnectionStore', () => {
 		const base: PublishGitHubConnectionInput = {
 			attemptId: flow.started.id,
 			expectedVersion: ready.version,
-			webhookUrl: 'https://control.example/webhooks/github',
+			webhookUrl: 'https://control.example/webhooks/github/attempt-1',
 			installationId: 45,
 			installationAccountLogin: 'acme',
 			installationSelection: 'selected',
@@ -547,7 +720,7 @@ describe('GitHubConnectionStore', () => {
 		const input: PublishGitHubConnectionInput = {
 			attemptId: flow.started.id,
 			expectedVersion: ready.version,
-			webhookUrl: 'https://control.example/webhooks/github',
+			webhookUrl: 'https://control.example/webhooks/github/attempt-1',
 			installationId: 45,
 			installationAccountLogin: 'acme',
 			installationSelection: 'selected',
@@ -587,7 +760,7 @@ describe('GitHubConnectionStore', () => {
 		await expect(flow.store.publishConnection({
 			attemptId: flow.started.id,
 			expectedVersion: ready.version,
-			webhookUrl: 'https://control.example/webhooks/github',
+			webhookUrl: 'https://control.example/webhooks/github/attempt-1',
 			installationId: 45,
 			installationAccountLogin: 'acme',
 			installationSelection: 'selected',
@@ -620,7 +793,7 @@ describe('GitHubConnectionStore', () => {
 		await flow.store.publishConnection({
 			attemptId: flow.started.id,
 			expectedVersion: ready.version,
-			webhookUrl: 'https://control.example/webhooks/github',
+			webhookUrl: 'https://control.example/webhooks/github/attempt-1',
 			installationId: 45,
 			installationAccountLogin: 'acme',
 			installationSelection: 'selected',
@@ -629,13 +802,13 @@ describe('GitHubConnectionStore', () => {
 		})
 		const controller = new AbortController()
 		controller.abort()
-		const provider = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault)
+		const provider = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault, undefined, flow.started.id)
 		await expect(provider.getSecret(controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
 	})
 
 	test('switches webhook authority after structural verification and keeps it after publish', async () => {
 		const flow = await configuredAttempt()
-		const provider = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault)
+		const provider = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault, undefined, flow.started.id)
 		expect(await provider.getSecret()).toBe('webhook-value')
 		const ready = await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)
 		if (ready === null) throw new Error('recovery discard failed')
@@ -643,7 +816,7 @@ describe('GitHubConnectionStore', () => {
 		await flow.store.publishConnection({
 			attemptId: flow.started.id,
 			expectedVersion: ready.version,
-			webhookUrl: 'https://control.example/webhooks/github',
+			webhookUrl: 'https://control.example/webhooks/github/attempt-1',
 			installationId: 45,
 			installationAccountLogin: 'acme',
 			installationSelection: 'selected',
@@ -673,7 +846,7 @@ describe('GitHubConnectionStore', () => {
 		await flow.store.publishConnection({
 			attemptId: flow.started.id,
 			expectedVersion: ready.version,
-			webhookUrl: 'https://control.example/webhooks/github',
+			webhookUrl: 'https://control.example/webhooks/github/attempt-1',
 			installationId: 45,
 			installationAccountLogin: 'acme',
 			installationSelection: 'selected',
@@ -681,7 +854,7 @@ describe('GitHubConnectionStore', () => {
 			verifiedAt: 1_000,
 		})
 		await flow.vault.delete(flow.webhook.ref)
-		const connected = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault, fallback)
+		const connected = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault, fallback, flow.started.id)
 		await expect(connected.getSecret()).rejects.toThrow('unresolvable vault ref')
 		expect(fallbackReads).toBe(1)
 	})
