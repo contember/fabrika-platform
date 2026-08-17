@@ -2,40 +2,183 @@ import { createPage } from '@buzola/router'
 import { useEffect, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { type Lamp, Status } from '../../components/Status'
-import { api, ApiError, type GitHubSourceConnectionAppDto, type GitHubSourceConnectionStatusDto } from '../../lib/api'
+import { EmptyState, Table } from '../../components/Table'
 import {
+	api,
+	ApiError,
+	GITHUB_SOURCE_CONNECTION_DEFAULT_PAGE_SIZE,
+	type GitHubSourceConnectionAppDto,
+	type GitHubSourceConnectionConnectedDto,
+	type GitHubSourceConnectionStatusDto,
+	type GitHubSourceConnectionWorkflowDto,
+} from '../../lib/api'
+import {
+	appendSourceConnectionPage,
+	initialSourceConnectionCollection,
 	MAX_SOURCE_APP_NAME_LENGTH,
 	MAX_SOURCE_ORGANIZATION_LENGTH,
 	MAX_SOURCE_REPOSITORIES_TEXT_LENGTH,
 	parseSourceRepositories,
+	privateSourceConnectionRequest,
+	reconcileSourceConnectionFirstPage,
 	scheduleSourceConnectionPoll,
 	sourceChain,
+	sourceConnectionInput,
 	sourceManifestContinuePath,
+	sourceStartContinuePath,
 } from '../../lib/source-connection'
 
 export default createPage()
-	.loader(async () => ({ status: await api.sourceConnection.status() }))
+	.loader(async () => ({ page: await api.sourceConnection.list({ limit: GITHUB_SOURCE_CONNECTION_DEFAULT_PAGE_SIZE }) }))
 	.route('/settings/source')
 	.render(({ data, invalidate }) => {
+		const [collection, setCollection] = useState(() => initialSourceConnectionCollection(data.page))
+		const [adding, setAdding] = useState(false)
+		const [loadingMore, setLoadingMore] = useState(false)
+		const [loadError, setLoadError] = useState<string | null>(null)
+
 		useEffect(() => {
-			return scheduleSourceConnectionPoll(data.status, invalidate, (callback, delayMs) => {
+			setCollection((current) => reconcileSourceConnectionFirstPage(current, data.page))
+			if (data.page.workflow !== null && data.page.workflow.state !== 'anonymous') setAdding(false)
+		}, [data.page])
+
+		useEffect(() => {
+			return scheduleSourceConnectionPoll(data.page.workflow, invalidate, (callback, delayMs) => {
 				const timer = window.setTimeout(callback, delayMs)
 				return () => window.clearTimeout(timer)
 			})
-		}, [data.status, invalidate])
+		}, [data.page.workflow, invalidate])
+
+		async function loadMore() {
+			if (collection.nextCursor === null) return
+			setLoadingMore(true)
+			setLoadError(null)
+			try {
+				const page = await api.sourceConnection.list({
+					cursor: collection.nextCursor,
+					limit: GITHUB_SOURCE_CONNECTION_DEFAULT_PAGE_SIZE,
+				})
+				setCollection((current) => appendSourceConnectionPage(current, page))
+			} catch (cause) {
+				setLoadError(cause instanceof ApiError ? cause.message : 'More source connections could not be loaded.')
+			} finally {
+				setLoadingMore(false)
+			}
+		}
 
 		return (
 			<>
 				<div className="page-head">
 					<p className="eyebrow">Delivery checkpoint</p>
 					<h1>Source connection</h1>
-					<p className="hint">Give the private source service read-only GitHub authority without placing App credentials in this browser.</p>
+					<p className="hint">Connect one private GitHub App per organization without placing App credentials in this browser.</p>
 				</div>
-				<ConnectionChain status={data.status} />
-				<SourceAction status={data.status} invalidate={invalidate} />
+				<ConnectedConnections connections={collection.items} />
+				{loadError !== null && <p className="error-text" role="alert">{loadError}</p>}
+				{collection.nextCursor !== null && (
+					<div className="pager source-connections-pager">
+						<button type="button" onClick={loadMore} disabled={loadingMore}>{loadingMore ? 'Loading…' : 'Load more connections'}</button>
+					</div>
+				)}
+				<SourceWorkflow
+					workflow={data.page.workflow}
+					connectionCount={collection.items.length}
+					adding={adding}
+					onAdd={() => setAdding(true)}
+					onCancelAdd={() => setAdding(false)}
+					invalidate={invalidate}
+				/>
 			</>
 		)
 	})
+
+export function ConnectedConnections({ connections }: { connections: readonly GitHubSourceConnectionConnectedDto[] }) {
+	return (
+		<section aria-labelledby="connected-source-connections">
+			<div className="section-head">
+				<h2 id="connected-source-connections">Connected organizations</h2>
+			</div>
+			<p className="section-note">Each organization uses its own GitHub App, installation and private source credential.</p>
+			<Table
+				colSpan={4}
+				isEmpty={connections.length === 0}
+				empty={<EmptyState icon="link" title="No organizations connected" body="Add the first private GitHub source connection below." />}
+				head={
+					<tr>
+						<th className="grow">Organization and App</th>
+						<th>Installation</th>
+						<th>Repository access</th>
+						<th>Status</th>
+					</tr>
+				}
+			>
+				{connections.map((connection) => (
+					<tr key={connection.connectionId} aria-label={`GitHub source connection for ${connection.app.owner.login}`}>
+						<td>
+							<strong>{connection.app.owner.login}</strong>
+							<div className="muted small">
+								<a href={connection.app.htmlUrl} target="_blank" rel="noreferrer">
+									{connection.app.slug} <Icon name="external" size={12} />
+								</a>
+								{' · '}
+								{connection.app.public ? 'legacy public App' : 'private App'}
+							</div>
+						</td>
+						<td>
+							<code>{connection.installation.id}</code>
+							<div className="muted small">{connection.installation.accountLogin}</div>
+						</td>
+						<td>
+							{connection.installation.repositorySelection === 'all' ? 'All repositories' : 'Selected repositories'}
+							<div className="muted small">{verifiedRepositoryCopy(connection)}</div>
+						</td>
+						<td>
+							<Status lamp="ok">Connected</Status>
+						</td>
+					</tr>
+				))}
+			</Table>
+		</section>
+	)
+}
+
+export function SourceWorkflow(
+	{ workflow, connectionCount, adding, onAdd, onCancelAdd, invalidate }: {
+		workflow: GitHubSourceConnectionWorkflowDto | null
+		connectionCount: number
+		adding: boolean
+		onAdd: () => void
+		onCancelAdd: () => void
+		invalidate: () => void
+	},
+) {
+	const idle = workflow === null || workflow.state === 'anonymous'
+	return (
+		<section aria-labelledby="source-connection-workflow">
+			<div className="section-head">
+				<h2 id="source-connection-workflow">Connection setup</h2>
+			</div>
+			{idle && connectionCount > 0 && !adding
+				? (
+					<div className="source-checkpoint">
+						<CheckpointHead lamp="ok" title="Ready for another organization" />
+						<p>Connected organizations remain active while you add another private GitHub App.</p>
+						<div className="form-actions">
+							<button className="primary" type="button" onClick={onAdd}>Add connection</button>
+						</div>
+					</div>
+				)
+				: idle
+				? <ConnectionForm onCancel={connectionCount > 0 ? onCancelAdd : undefined} />
+				: (
+					<>
+						<ConnectionChain status={workflow} />
+						<SourceAction status={workflow} connectionCount={connectionCount} invalidate={invalidate} />
+					</>
+				)}
+		</section>
+	)
+}
 
 function ConnectionChain({ status }: { status: GitHubSourceConnectionStatusDto }) {
 	return (
@@ -57,8 +200,10 @@ function ConnectionChain({ status }: { status: GitHubSourceConnectionStatusDto }
 	)
 }
 
-function SourceAction({ status, invalidate }: { status: GitHubSourceConnectionStatusDto; invalidate: () => void }) {
-	if (status.state === 'anonymous') return <ConnectionForm />
+function SourceAction(
+	{ status, connectionCount, invalidate }: { status: GitHubSourceConnectionWorkflowDto; connectionCount: number; invalidate: () => void },
+) {
+	if (status.state === 'anonymous') return null
 	if (status.state === 'unavailable') {
 		return (
 			<section className="source-checkpoint">
@@ -68,6 +213,14 @@ function SourceAction({ status, invalidate }: { status: GitHubSourceConnectionSt
 		)
 	}
 	if (status.state === 'adoption-required') {
+		if (connectionCount > 0) {
+			return (
+				<section className="source-checkpoint source-checkpoint-failed">
+					<CheckpointHead lamp="stop" title="Legacy adoption unavailable" />
+					<p>The existing source credential can be adopted only before the first organization connection is recorded.</p>
+				</section>
+			)
+		}
 		return (
 			<section className="source-checkpoint">
 				<CheckpointHead lamp="run" title="Adopt the existing GitHub App" />
@@ -96,7 +249,9 @@ function SourceAction({ status, invalidate }: { status: GitHubSourceConnectionSt
 					<span>Refreshes automatically</span>
 				</div>
 				<div className="form-actions">
-					{continuePath !== null && <a className="btn primary" href={continuePath}>Continue to GitHub</a>}
+					{continuePath !== null && (
+						<a className="btn primary" href={continuePath} aria-label={`Continue GitHub setup ${status.connectionId}`}>Continue to GitHub</a>
+					)}
 					<button type="button" onClick={invalidate}>
 						<Icon name="refresh" size={14} /> Refresh now
 					</button>
@@ -111,13 +266,21 @@ function SourceAction({ status, invalidate }: { status: GitHubSourceConnectionSt
 				<p>The App is active on the private source. Grant it access in GitHub, then verify the installation here.</p>
 				<AppFacts app={status.app} />
 				<div className="form-actions">
-					<a className="btn primary" href={status.installationUrl} target="_blank" rel="noreferrer">
+					<a
+						className="btn primary"
+						href={status.installationUrl}
+						target="_blank"
+						rel="noreferrer"
+						aria-label={`Open GitHub installation for ${status.app.owner.login}`}
+					>
 						Open GitHub installation <Icon name="external" size={14} />
 					</a>
 					<ConnectionMutation
 						label="Verify installation"
+						ariaLabel={`Verify GitHub installation for ${status.app.owner.login}`}
+						connectionId={status.connectionId}
 						pending="Verifying…"
-						action={() => api.sourceConnection.verifyInstallation({ connectionId: status.connectionId })}
+						action={() => api.sourceConnection.verifyInstallation(sourceConnectionInput(status.connectionId))}
 						onDone={invalidate}
 					/>
 				</div>
@@ -133,50 +296,20 @@ function SourceAction({ status, invalidate }: { status: GitHubSourceConnectionSt
 				<ConnectionMutation
 					primary
 					label="Repair connection"
+					ariaLabel={`Repair GitHub source connection ${status.app?.owner.login ?? status.connectionId}`}
+					connectionId={status.connectionId}
 					pending="Repairing…"
-					action={() => api.sourceConnection.repair({ connectionId: status.connectionId })}
+					action={() => api.sourceConnection.repair(sourceConnectionInput(status.connectionId))}
 					onDone={invalidate}
 				/>
 			</section>
 		)
 	}
-	return (
-		<section className="source-checkpoint">
-			<CheckpointHead lamp="ok" title="Source connected" />
-			<p>The private source holds the App credentials. Control receives webhook deliveries without exposing either secret here.</p>
-			<AppFacts app={status.app} />
-			<dl className="source-facts">
-				<div>
-					<dt>Installation</dt>
-					<dd>
-						<code>{status.installation.id}</code>
-					</dd>
-				</div>
-				<div>
-					<dt>Account</dt>
-					<dd>{status.installation.accountLogin}</dd>
-				</div>
-				<div>
-					<dt>Repository access</dt>
-					<dd>{status.installation.repositorySelection}</dd>
-				</div>
-				<div>
-					<dt>Verified repositories</dt>
-					<dd>
-						{status.installation.verifiedRepositories.length === 0
-							? 'Organization grant'
-							: status.installation.verifiedRepositories.map((repo) => `${repo.owner}/${repo.name}`).join(', ')}
-					</dd>
-				</div>
-			</dl>
-		</section>
-	)
 }
 
-function ConnectionForm() {
+function ConnectionForm({ onCancel }: { onCancel?: () => void }) {
 	const [organization, setOrganization] = useState('')
 	const [appName, setAppName] = useState('')
-	const [visibility, setVisibility] = useState<'private' | 'public'>('private')
 	const [repositories, setRepositories] = useState('')
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
@@ -193,13 +326,10 @@ function ConnectionForm() {
 		}
 		setBusy(true)
 		try {
-			const started = await api.sourceConnection.start({
-				organization: organization.trim().toLowerCase(),
-				appName: appName.trim(),
-				visibility,
-				repositories: parsedRepositories,
-			})
-			window.location.assign(started.continuePath)
+			const started = await api.sourceConnection.start(privateSourceConnectionRequest(organization, appName, parsedRepositories))
+			const continuePath = sourceStartContinuePath(started)
+			if (continuePath === null) throw new Error('invalid source connection handoff')
+			window.location.assign(continuePath)
 		} catch (cause) {
 			setError(cause instanceof ApiError ? cause.message : 'Source connection could not start.')
 			setBusy(false)
@@ -233,18 +363,7 @@ function ConnectionForm() {
 						/>
 					</label>
 				</div>
-				<fieldset className="source-visibility">
-					<legend>App visibility</legend>
-					<label>
-						<input type="radio" name="visibility" value="private" checked={visibility === 'private'} onChange={() => setVisibility('private')} /> Private
-					</label>
-					<label>
-						<input type="radio" name="visibility" value="public" checked={visibility === 'public'} onChange={() => setVisibility('public')} /> Public
-					</label>
-					<span className="hint">
-						A public App may be installed by other organizations later. This initial verified repository set must stay in the owner organization.
-					</span>
-				</fieldset>
+				<p className="hint">The new App is private and belongs only to this organization.</p>
 				<label>
 					Repositories (optional)<textarea
 						value={repositories}
@@ -260,6 +379,7 @@ function ConnectionForm() {
 					<button className="primary" type="submit" disabled={busy || organization.trim() === '' || appName.trim() === ''}>
 						{busy ? 'Starting…' : 'Connect GitHub source'}
 					</button>
+					{onCancel !== undefined && <button className="ghost" type="button" disabled={busy} onClick={onCancel}>Cancel</button>}
 				</div>
 			</form>
 		</section>
@@ -267,8 +387,10 @@ function ConnectionForm() {
 }
 
 function ConnectionMutation(
-	{ label, pending, primary = false, action, onDone }: {
+	{ label, ariaLabel, connectionId, pending, primary = false, action, onDone }: {
 		label: string
+		ariaLabel?: string
+		connectionId?: string
 		pending: string
 		primary?: boolean
 		action: () => Promise<unknown>
@@ -290,7 +412,16 @@ function ConnectionMutation(
 	}
 	return (
 		<div className="source-mutation">
-			<button className={primary ? 'primary' : undefined} type="button" disabled={busy} onClick={run}>{busy ? pending : label}</button>
+			<button
+				aria-label={ariaLabel}
+				data-connection-id={connectionId}
+				className={primary ? 'primary' : undefined}
+				type="button"
+				disabled={busy}
+				onClick={run}
+			>
+				{busy ? pending : label}
+			</button>
 			{error !== null && <p className="error-text" role="alert">{error}</p>}
 		</div>
 	)
@@ -316,6 +447,12 @@ function AppFacts({ app }: { app: GitHubSourceConnectionAppDto }) {
 			<span>push events</span>
 		</div>
 	)
+}
+
+function verifiedRepositoryCopy(connection: GitHubSourceConnectionConnectedDto): string {
+	const repositories = connection.installation.verifiedRepositories
+	if (repositories.length === 0) return connection.installation.accountLogin
+	return repositories.map((repository) => `${repository.owner}/${repository.name}`).join(', ')
 }
 
 function phaseCopy(phase: Extract<GitHubSourceConnectionStatusDto, { state: 'setup-pending' }>['phase']): string {

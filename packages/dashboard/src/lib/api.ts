@@ -2,6 +2,7 @@ import { createRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
 import type { ControlRpcContract } from '@fabrika/control-contract'
 
 export type * from '@fabrika/control-contract'
+export { GITHUB_SOURCE_CONNECTION_DEFAULT_PAGE_SIZE } from '@fabrika/control-contract'
 
 const RPC_BASE = '/api/rpc'
 const LOGIN_BOUNCE_KEY = 'fabrika.delivery.auth.login-bounce'

@@ -5,6 +5,7 @@ import type {
 	CreateDeploymentNamespaceRequest,
 	DeploymentNamespaceDetailDto,
 	DeploymentNamespaceDto,
+	GitHubSourceConnectionListResponse,
 	GitHubSourceConnectionStatusDto,
 	PlanDeploymentNamespaceRequest,
 	PlanDeploymentNamespaceResponse,
@@ -132,5 +133,16 @@ describe('source connection API DTOs', () => {
 		])
 		const wire = JSON.stringify(states)
 		for (const forbidden of ['privateKey', 'credentialBundle', 'webhookSecret', 'sourceRpcKey']) expect(wire).not.toContain(forbidden)
+
+		const connected = states.find((state) => state.state === 'connected')
+		const workflow = states.find((state) => state.state === 'setup-pending')
+		if (connected?.state !== 'connected' || workflow?.state !== 'setup-pending') throw new Error('source fixtures are incomplete')
+		const collection: GitHubSourceConnectionListResponse = {
+			items: [connected],
+			nextCursor: 'page-2',
+			workflow,
+		}
+		expect(collection.items[0]?.connectionId).toBe('connection-1')
+		expect(JSON.stringify(collection)).not.toContain('privateKey')
 	})
 })
