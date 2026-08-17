@@ -1,8 +1,12 @@
 import type { AuthContext } from '@fabrika/auth'
 import type {
 	GitHubSourceConnectionAppDto,
+	GitHubSourceConnectionConnectedDto,
+	GitHubSourceConnectionListInput,
+	GitHubSourceConnectionListResponse,
 	GitHubSourceConnectionSetupPendingDto,
 	GitHubSourceConnectionStatusDto,
+	GitHubSourceConnectionWorkflowDto,
 	StartGitHubSourceConnectionRequest,
 	StartGitHubSourceConnectionResponse,
 } from '@fabrika/control-contract'
@@ -10,12 +14,12 @@ import { buildGitHubAppManifest, exchangeGitHubAppManifestCode, type GitHubAppFe
 import { ACTIONS } from './actions'
 import type { Env } from './env'
 import {
-	type GitHubConnectionState,
 	githubManifestStateSecretLabel,
 	githubRecoverySecretLabel,
 	type GitHubSetupAttempt,
 	type GitHubSetupErrorCode,
 	type GitHubSetupPhase,
+	type GitHubSourceConnection,
 	githubWebhookSecretLabel,
 } from './github-connection-store'
 import { controlPublicOrigin } from './iam'
@@ -58,26 +62,67 @@ export class SourceConnectionWorkflowError extends Error {
 
 export async function sourceConnectionStatus(deps: SourceConnectionWorkflowDeps): Promise<GitHubSourceConnectionStatusDto> {
 	requireHuman(deps.auth)
-	const state = await deps.env.REPOSITORIES.githubConnections.getState()
-	if (state.state !== 'anonymous') {
-		if (state.state !== 'connected') return stateDto(deps.source.provider, state)
-		const connection = await deps.env.REPOSITORIES.githubConnections.getConnection()
-		if (connection === null || connection.connectionId !== state.connectionId) return baseStatus(deps.source.provider, 'unavailable')
+	const [compatibilityConnection, workflow] = await Promise.all([
+		deps.env.REPOSITORIES.githubConnections.getConnection(),
+		deps.env.REPOSITORIES.githubConnections.getWorkflowAttempt(),
+	])
+	let connection = compatibilityConnection
+	if (workflow !== null) {
+		const published = await deps.env.REPOSITORIES.githubConnections.getConnectionById(workflow.id)
+		if (published === null) return workflowDto(deps.source.provider, workflow)
+		connection = published
+	}
+	if (connection !== null) {
 		try {
-			const remote = await deps.source.status({ connectionId: state.connectionId, signal: deps.request.signal })
+			const remote = await deps.source.status({
+				connectionId: connection.connectionId,
+				transportKind: connection.transportKind,
+				signal: deps.request.signal,
+			})
 			if (
 				remote.state !== 'active' || remote.credentialSha256 !== connection.credentialSha256
-				|| remote.githubApp.id !== Number(state.appId) || remote.githubApp.slug !== state.appSlug
-				|| remote.githubApp.htmlUrl !== state.appHtmlUrl || remote.githubApp.public !== state.appPublic
-				|| remote.githubApp.owner.type !== 'Organization' || remote.githubApp.owner.login.toLowerCase() !== state.appOwner.toLowerCase()
+				|| remote.githubApp.id !== Number(connection.appId) || remote.githubApp.slug !== connection.appSlug
+				|| remote.githubApp.htmlUrl !== connection.appHtmlUrl || remote.githubApp.public !== connection.appPublic
+				|| remote.githubApp.owner.type !== 'Organization' || remote.githubApp.owner.login.toLowerCase() !== connection.appOwner.toLowerCase()
 				|| remote.githubApp.permissions.contents !== 'read' || remote.githubApp.events.length !== 1 || remote.githubApp.events[0] !== 'push'
 			) return baseStatus(deps.source.provider, 'unavailable')
-			return stateDto(deps.source.provider, state)
+			return connectionDto(deps.source.provider, connection)
 		} catch {
 			throwIfAborted(deps.request.signal)
 			return baseStatus(deps.source.provider, 'unavailable')
 		}
 	}
+	return inspectEmptySource(deps)
+}
+
+export async function sourceConnectionList(
+	deps: SourceConnectionWorkflowDeps,
+	input: GitHubSourceConnectionListInput,
+): Promise<GitHubSourceConnectionListResponse> {
+	requireHuman(deps.auth)
+	const [page, workflow] = await Promise.all([
+		deps.env.REPOSITORIES.githubConnections.listConnections(input),
+		deps.env.REPOSITORIES.githubConnections.getWorkflowAttempt(),
+	])
+	const publishedWorkflowConnection = workflow === null
+		? null
+		: await deps.env.REPOSITORIES.githubConnections.getConnectionById(workflow.id)
+	let projectedWorkflow: GitHubSourceConnectionWorkflowDto | null = workflow === null || publishedWorkflowConnection !== null
+		? null
+		: workflowDto(deps.source.provider, workflow)
+	if (projectedWorkflow === null) {
+		const hasConnections = publishedWorkflowConnection !== null || page.items.length > 0
+			|| (input.cursor !== undefined && (await deps.env.REPOSITORIES.githubConnections.listConnections({ limit: 1 })).items.length > 0)
+		if (!hasConnections) projectedWorkflow = await inspectEmptySource(deps)
+	}
+	return {
+		items: page.items.map((connection) => connectionDto(deps.source.provider, connection)),
+		nextCursor: page.nextCursor,
+		workflow: projectedWorkflow,
+	}
+}
+
+async function inspectEmptySource(deps: SourceConnectionWorkflowDeps): Promise<GitHubSourceConnectionWorkflowDto> {
 	try {
 		const inspection = await deps.source.inspect(deps.request.signal)
 		if (inspection.state === 'anonymous') return baseStatus(deps.source.provider, 'anonymous')
@@ -92,8 +137,11 @@ export async function sourceConnectionStatus(deps: SourceConnectionWorkflowDeps)
 export async function adoptExistingSourceConnection(deps: SourceConnectionWorkflowDeps): Promise<GitHubSourceConnectionStatusDto> {
 	const principalId = requireHuman(deps.auth)
 	const origin = requireSameOrigin(deps.env, deps.request)
-	const existing = await deps.env.REPOSITORIES.githubConnections.getState()
-	if (existing.state !== 'anonymous') throw new SourceConnectionWorkflowError(409)
+	const [existing, workflow] = await Promise.all([
+		deps.env.REPOSITORIES.githubConnections.listConnections({ limit: 1 }),
+		deps.env.REPOSITORIES.githubConnections.getWorkflowAttempt(),
+	])
+	if (existing.items.length > 0 || workflow !== null) throw new SourceConnectionWorkflowError(409)
 	let activated: Awaited<ReturnType<SourceConnectionPort['adoptExisting']>>
 	try {
 		activated = await deps.source.adoptExisting({ signal: deps.request.signal })
@@ -104,18 +152,23 @@ export async function adoptExistingSourceConnection(deps: SourceConnectionWorkfl
 	validateAdoptedIdentity(activated.githubApp)
 	const connectionId = activated.connectionId
 	const now = deps.now?.() ?? Math.floor(Date.now() / 1000)
-	let attempt = await deps.env.REPOSITORIES.githubConnections.beginAdoption({
-		id: connectionId,
-		initiatedBy: principalId,
-		expectedOrigin: origin,
-		appId: String(activated.githubApp.id),
-		appSlug: activated.githubApp.slug,
-		appHtmlUrl: activated.githubApp.htmlUrl,
-		appOwner: activated.githubApp.owner.login,
-		appPublic: activated.githubApp.public,
-		credentialSha256: activated.credentialSha256,
-		expiresAt: now + SETUP_TTL_SECONDS,
-	})
+	let attempt: GitHubSetupAttempt
+	try {
+		attempt = await deps.env.REPOSITORIES.githubConnections.beginAdoption({
+			id: connectionId,
+			initiatedBy: principalId,
+			expectedOrigin: origin,
+			appId: String(activated.githubApp.id),
+			appSlug: activated.githubApp.slug,
+			appHtmlUrl: activated.githubApp.htmlUrl,
+			appOwner: activated.githubApp.owner.login,
+			appPublic: activated.githubApp.public,
+			credentialSha256: activated.credentialSha256,
+			expiresAt: now + SETUP_TTL_SECONDS,
+		})
+	} catch {
+		throw new SourceConnectionWorkflowError(409)
+	}
 	try {
 		await advanceWithDeadline(deps, attempt)
 	} catch {
@@ -126,7 +179,9 @@ export async function adoptExistingSourceConnection(deps: SourceConnectionWorkfl
 		throwIfAborted(deps.request.signal)
 	}
 	await audit(deps.auth, 'source.connection.adopt', connectionId)
-	return stateDto(deps.source.provider, await deps.env.REPOSITORIES.githubConnections.getState())
+	const current = await deps.env.REPOSITORIES.githubConnections.getAttempt(connectionId)
+	if (current === null) throw new SourceConnectionWorkflowError(409)
+	return workflowDto(deps.source.provider, current)
 }
 
 export async function startSourceConnection(
@@ -138,35 +193,48 @@ export async function startSourceConnection(
 	if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(input.organization) || input.appName.length < 1 || input.appName.length > 100) {
 		throw new SourceConnectionWorkflowError(400)
 	}
+	if (input.visibility !== 'private') throw new SourceConnectionWorkflowError(400)
+	const owner = input.organization.toLowerCase()
 	const repositories = canonicalRepositories(input.organization, input.repositories)
-	buildManifest(input.organization.toLowerCase(), input.appName, input.visibility === 'public', origin)
-	if ((await deps.env.REPOSITORIES.githubConnections.getState()).state !== 'anonymous') throw new SourceConnectionWorkflowError(409)
-	let inspection: Awaited<ReturnType<SourceConnectionPort['inspect']>>
-	try {
-		inspection = await deps.source.inspect(deps.request.signal)
-	} catch {
-		throwIfAborted(deps.request.signal)
-		throw new SourceConnectionWorkflowError(503)
-	}
-	if (inspection.state !== 'anonymous') throw new SourceConnectionWorkflowError(409)
-
 	const attemptId = uuidv7()
+	buildManifest(owner, input.appName, origin, attemptId)
+	const [existing, workflow, sameOwner] = await Promise.all([
+		deps.env.REPOSITORIES.githubConnections.listConnections({ limit: 1 }),
+		deps.env.REPOSITORIES.githubConnections.getWorkflowAttempt(),
+		deps.env.REPOSITORIES.githubConnections.getConnectionByOwner(owner),
+	])
+	if (workflow !== null || sameOwner !== null) throw new SourceConnectionWorkflowError(409)
+	if (existing.items.length === 0) {
+		let inspection: Awaited<ReturnType<SourceConnectionPort['inspect']>>
+		try {
+			inspection = await deps.source.inspect(deps.request.signal)
+		} catch {
+			throwIfAborted(deps.request.signal)
+			throw new SourceConnectionWorkflowError(503)
+		}
+		if (inspection.state === 'unavailable') throw new SourceConnectionWorkflowError(503)
+		if (inspection.state !== 'anonymous') throw new SourceConnectionWorkflowError(409)
+	}
 	const state = randomToken(STATE_BYTES, deps.randomBytes)
 	const stateHash = await sha256(state)
 	const secretVault = await vault(deps.env)
 	const prepared = await secretVault.prepareSecret('platform', githubManifestStateSecretLabel(attemptId), state)
 	const now = deps.now?.() ?? Math.floor(Date.now() / 1000)
-	await deps.env.REPOSITORIES.githubConnections.beginAttemptWithManifestState({
-		id: attemptId,
-		stateHash,
-		initiatedBy: principalId,
-		expectedOrigin: origin,
-		desiredOwner: input.organization.toLowerCase(),
-		desiredAppName: input.appName,
-		desiredPublic: input.visibility === 'public',
-		requestedRepositories: repositories.map((repository) => `${repository.owner}/${repository.name}`),
-		expiresAt: now + SETUP_TTL_SECONDS,
-	}, prepared)
+	try {
+		await deps.env.REPOSITORIES.githubConnections.beginAttemptWithManifestState({
+			id: attemptId,
+			stateHash,
+			initiatedBy: principalId,
+			expectedOrigin: origin,
+			desiredOwner: owner,
+			desiredAppName: input.appName,
+			desiredPublic: false,
+			requestedRepositories: repositories.map((repository) => `${repository.owner}/${repository.name}`),
+			expiresAt: now + SETUP_TTL_SECONDS,
+		}, prepared)
+	} catch {
+		throw new SourceConnectionWorkflowError(409)
+	}
 	await audit(deps.auth, 'source.connection.start', attemptId)
 	return { connectionId: attemptId, continuePath: `${MANIFEST_PATH}/${encodeURIComponent(attemptId)}` }
 }
@@ -204,7 +272,7 @@ export async function manifestHandoff(deps: SourceConnectionWorkflowDeps, connec
 		throw new SourceConnectionWorkflowError(409)
 	}
 	if (await sha256(state) !== attempt.stateHash) throw new SourceConnectionWorkflowError(409)
-	const manifest = buildManifest(attempt.desiredOwner, attempt.desiredAppName, attempt.desiredPublic, origin)
+	const manifest = buildManifest(attempt.desiredOwner, attempt.desiredAppName, origin, attempt.id)
 	const action = `https://github.com/organizations/${encodeURIComponent(attempt.desiredOwner)}/settings/apps/new?state=${encodeURIComponent(state)}`
 	return secureHtml(manifestForm(action, JSON.stringify(manifest)))
 }
@@ -240,7 +308,7 @@ export async function manifestCallback(deps: SourceConnectionWorkflowDeps): Prom
 		let stored: GitHubSetupAttempt | null
 		try {
 			preparedCredential = await abortable(
-				deps.source.prepareCredential({ appId: String(created.id), privateKeyPem: created.pem }),
+				deps.source.prepareCredential({ connectionId: claimed.id, appId: String(created.id), privateKeyPem: created.pem }),
 				persistence.signal,
 			)
 			const secretVault = await abortable(vault(deps.env), persistence.signal)
@@ -282,6 +350,7 @@ export async function verifySourceInstallation(deps: SourceConnectionWorkflowDep
 	try {
 		verification = await deps.source.verifyInstallations({
 			connectionId: attempt.id,
+			transportKind: transportKind(attempt),
 			credentialSha256: attempt.credentialSha256,
 			scope,
 			signal: deps.request.signal,
@@ -296,7 +365,7 @@ export async function verifySourceInstallation(deps: SourceConnectionWorkflowDep
 	const published = await deps.env.REPOSITORIES.githubConnections.publishConnection({
 		attemptId: attempt.id,
 		expectedVersion: attempt.version,
-		webhookUrl: `${attempt.expectedOrigin}/webhooks/github`,
+		webhookUrl: webhookUrl(attempt),
 		installationId: verification.installationId,
 		installationAccountLogin: verification.accountLogin,
 		installationSelection: verification.repositorySelection,
@@ -305,7 +374,7 @@ export async function verifySourceInstallation(deps: SourceConnectionWorkflowDep
 	})
 	if (published === null) throw new SourceConnectionWorkflowError(409)
 	await audit(deps.auth, 'source.connection.connected', attempt.id)
-	return stateDto(deps.source.provider, await deps.env.REPOSITORIES.githubConnections.getState())
+	return connectionDto(deps.source.provider, published)
 }
 
 export async function repairSourceConnection(deps: SourceConnectionWorkflowDeps, connectionId: string): Promise<GitHubSourceConnectionStatusDto> {
@@ -327,7 +396,9 @@ export async function repairSourceConnection(deps: SourceConnectionWorkflowDeps,
 		throwIfAborted(deps.request.signal)
 	}
 	await audit(deps.auth, 'source.connection.repair', attempt.id)
-	return stateDto(deps.source.provider, await deps.env.REPOSITORIES.githubConnections.getState())
+	const current = await deps.env.REPOSITORIES.githubConnections.getAttempt(attempt.id)
+	if (current === null) throw new SourceConnectionWorkflowError(409)
+	return workflowDto(deps.source.provider, current)
 }
 
 async function advanceConfiguration(
@@ -345,6 +416,7 @@ async function advanceConfiguration(
 		if (credential === undefined) throw new Error('setup recovery is unavailable')
 		const activated = await deps.source.activate({
 			connectionId: attempt.id,
+			transportKind: transportKind(attempt),
 			credentialBundle: credential.bundle,
 			credentialSha256: credential.sha256,
 			signal,
@@ -372,7 +444,7 @@ async function advanceConfiguration(
 	}
 	if (attempt.phase === 'source_bundle_written') {
 		if (credential === undefined) throw new Error('setup recovery is unavailable')
-		const status = await deps.source.status({ connectionId: attempt.id, signal })
+		const status = await deps.source.status({ connectionId: attempt.id, transportKind: transportKind(attempt), signal })
 		if (status.state !== 'active') throw new Error('source activation is incomplete')
 		validateIdentity(attempt, status.githubApp, credential.sha256, status.credentialSha256)
 		attempt = requiredCheckpoint(
@@ -409,14 +481,15 @@ async function advanceConfiguration(
 		})
 		const configured = await deps.source.configureWebhook({
 			connectionId: attempt.id,
+			transportKind: transportKind(attempt),
 			credentialSha256: attempt.credentialSha256,
-			url: `${attempt.expectedOrigin}/webhooks/github`,
+			url: webhookUrl(attempt),
 			secret: webhookSecret,
 			signal,
 		})
 		if (
 			configured.connectionId !== attempt.id || configured.credentialSha256 !== attempt.credentialSha256
-			|| configured.webhook.url !== `${attempt.expectedOrigin}/webhooks/github`
+			|| configured.webhook.url !== webhookUrl(attempt)
 			|| configured.webhook.contentType !== 'json' || configured.webhook.insecureSsl !== '0'
 		) throw new Error('webhook configuration binding does not match setup')
 		attempt = requiredCheckpoint(
@@ -430,7 +503,7 @@ async function advanceConfiguration(
 	}
 	if (attempt.phase === 'webhook_configured') {
 		if (attempt.credentialSha256 === null) throw new Error('setup state is incomplete')
-		const status = await deps.source.status({ connectionId: attempt.id, signal })
+		const status = await deps.source.status({ connectionId: attempt.id, transportKind: transportKind(attempt), signal })
 		if (status.state !== 'active') throw new Error('source configuration is incomplete')
 		validateIdentity(attempt, status.githubApp, attempt.credentialSha256, status.credentialSha256)
 		attempt = requiredCheckpoint(
@@ -482,55 +555,74 @@ async function readRecoveryCredential(
 	return { bundle, sha256: await sha256(bundle) }
 }
 
-function stateDto(provider: string, state: GitHubConnectionState): GitHubSourceConnectionStatusDto {
-	if (state.state === 'anonymous') return baseStatus(provider, 'anonymous')
-	if (state.state === 'setup_pending') {
-		const pending: GitHubSourceConnectionSetupPendingDto = {
-			provider,
-			kind: 'github-app',
-			state: 'setup-pending',
-			connectionId: state.attemptId,
-			phase: publicPhase(state.phase),
-		}
-		if (state.phase !== 'awaiting_manifest_callback') return pending
-		return { ...pending, continuePath: `${MANIFEST_PATH}/${encodeURIComponent(state.attemptId)}` }
-	}
-	if (state.state === 'repair_required') {
+function workflowDto(provider: string, attempt: GitHubSetupAttempt): GitHubSourceConnectionWorkflowDto {
+	if (attempt.status === 'repair_required') {
+		const app = attemptAppDto(attempt)
 		return {
 			provider,
 			kind: 'github-app',
 			state: 'repair-required',
-			connectionId: state.attemptId,
-			reason: repairReason(state.errorCode),
+			connectionId: attempt.id,
+			reason: repairReason(attempt.lastErrorCode),
+			...(app === null ? {} : { app }),
 		}
 	}
-	if (state.state === 'installation_required') {
+	if (attempt.status !== 'active') throw new SourceConnectionWorkflowError(500)
+	if (attempt.phase === 'installation_required') {
+		const app = attemptAppDto(attempt)
+		if (app === null || attempt.appHtmlUrl === null) throw new SourceConnectionWorkflowError(500)
 		return {
 			provider,
 			kind: 'github-app',
 			state: 'installation-required',
-			connectionId: state.attemptId,
-			app: appDto(state),
-			installationUrl: state.installationUrl,
+			connectionId: attempt.id,
+			app,
+			installationUrl: `${attempt.appHtmlUrl}/installations/new`,
 		}
 	}
+	if (attempt.phase === 'connected') throw new SourceConnectionWorkflowError(500)
+	{
+		const pending: GitHubSourceConnectionSetupPendingDto = {
+			provider,
+			kind: 'github-app',
+			state: 'setup-pending',
+			connectionId: attempt.id,
+			phase: publicPhase(attempt.phase),
+		}
+		if (attempt.phase !== 'awaiting_manifest_callback') return pending
+		return { ...pending, continuePath: `${MANIFEST_PATH}/${encodeURIComponent(attempt.id)}` }
+	}
+}
+
+function connectionDto(provider: string, connection: GitHubSourceConnection): GitHubSourceConnectionConnectedDto {
 	return {
 		provider,
 		kind: 'github-app',
 		state: 'connected',
-		connectionId: state.connectionId,
-		app: appDto(state),
+		connectionId: connection.connectionId,
+		app: appDto(connection),
 		installation: {
-			id: state.installationId,
-			accountLogin: state.installationAccountLogin,
-			repositorySelection: state.installationSelection,
-			verifiedRepositories: state.verifiedRepositories.map(splitRepository),
+			id: connection.installationId,
+			accountLogin: connection.installationAccountLogin,
+			repositorySelection: connection.installationSelection,
+			verifiedRepositories: connection.verifiedRepositories.map(splitRepository),
 		},
 	}
 }
 
-function baseStatus(provider: string, state: 'anonymous' | 'unavailable' | 'adoption-required'): GitHubSourceConnectionStatusDto {
+function baseStatus(provider: string, state: 'anonymous' | 'unavailable' | 'adoption-required'): GitHubSourceConnectionWorkflowDto {
 	return { provider, kind: 'github-app', state }
+}
+
+function attemptAppDto(attempt: GitHubSetupAttempt): GitHubSourceConnectionAppDto | null {
+	if (attempt.appId === null || attempt.appSlug === null || attempt.appHtmlUrl === null) return null
+	return appDto({
+		appId: attempt.appId,
+		appSlug: attempt.appSlug,
+		appHtmlUrl: attempt.appHtmlUrl,
+		appPublic: attempt.desiredPublic,
+		appOwner: attempt.desiredOwner,
+	})
 }
 
 function appDto(state: {
@@ -595,6 +687,16 @@ function errorForPhase(phase: GitHubSetupPhase): GitHubSetupErrorCode {
 	if (phase === 'webhook_secret_stored' || phase === 'webhook_configured') return 'webhook_configuration'
 	if (phase === 'installation_required') return 'installation_verification'
 	return 'configuration_verification'
+}
+
+function transportKind(attempt: GitHubSetupAttempt): 'legacy-v1' | 'keyed-v2' {
+	return attempt.setupKind === 'adoption' ? 'legacy-v1' : 'keyed-v2'
+}
+
+function webhookUrl(attempt: GitHubSetupAttempt): string {
+	return attempt.setupKind === 'adoption'
+		? `${attempt.expectedOrigin}/webhooks/github`
+		: `${attempt.expectedOrigin}/webhooks/github/${encodeURIComponent(attempt.id)}`
 }
 
 function requireHuman(auth: AuthContext): string {
@@ -683,15 +785,15 @@ function manifestForm(action: string, manifest: string): string {
 	}"><input type="hidden" name="manifest" value="${html(manifest)}"><button type="submit">Continue to GitHub</button></form></body></html>`
 }
 
-function buildManifest(organization: string, appName: string, isPublic: boolean, origin: string) {
+function buildManifest(organization: string, appName: string, origin: string, connectionId: string) {
 	try {
 		return buildGitHubAppManifest({
 			organization,
 			appName,
 			homepageUrl: origin,
-			webhookUrl: `${origin}/webhooks/github`,
+			webhookUrl: `${origin}/webhooks/github/${encodeURIComponent(connectionId)}`,
 			redirectUrl: `${origin}${CALLBACK_PATH}`,
-			public: isPublic,
+			public: false,
 		})
 	} catch {
 		throw new SourceConnectionWorkflowError(400)

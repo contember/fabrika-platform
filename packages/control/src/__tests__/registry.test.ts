@@ -3,12 +3,13 @@ import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type { ControlProvider, JsonValue, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
 import { logsKey } from '@fabrika/runner-cloudflare'
 import { describe, expect, test } from 'bun:test'
+import { registerAppUseCase, updateAppUseCase } from '../api/registry'
 import type { ApiDeps } from '../api/router'
 import { handleApi } from '../api/router'
 import { uuidv7 } from '../db'
 import { FakeRepoSource, type RepoEvents } from '../repo-source'
 import type { DeployJobMessage } from '../run-lifecycle'
-import { createHarness } from './helpers/harness'
+import { createHarness, type Harness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 
 // Registry + onboarding row creation, and run-history reads, driven through the real `handleApi`
@@ -17,8 +18,8 @@ import { allowAllAuth } from './helpers/iam'
 
 function makeDeps(
 	opts: { installationId?: number | null; provider?: ControlProvider; catalogChanged?: () => void; repoSource?: RepoEvents } = {},
-): { deps: ApiDeps; queue: DeployJobMessage[]; logStore: Map<string, string> } {
-	const { db } = createHarness()
+): { deps: ApiDeps; queue: DeployJobMessage[]; logStore: Map<string, string>; sqlite: Harness['sqlite'] } {
+	const { db, sqlite } = createHarness()
 	const queue: DeployJobMessage[] = []
 	const logStore = new Map<string, string>()
 	const deps: ApiDeps = {
@@ -44,7 +45,7 @@ function makeDeps(
 		cancelRun: (run) => db.runs.markRunFinished(run.id, 'failed', null).then(() => {}),
 		...(opts.catalogChanged === undefined ? {} : { catalogChanged: opts.catalogChanged }),
 	}
-	return { deps, queue, logStore }
+	return { deps, queue, logStore, sqlite }
 }
 
 const payloadObject = (envelope: ProviderEnvelope): { readonly [key: string]: JsonValue } => {
@@ -88,6 +89,43 @@ const fakeProvider: ControlProvider = {
 	},
 	deploy: () => Promise.resolve({ state: 'succeeded' }),
 }
+
+const zeropsProvider: ControlProvider = {
+	id: 'zerops',
+	normalizeRegistration: (input) => {
+		if (input.environment.target.provider !== 'zerops' || input.environment.artifact.provider !== 'zerops') {
+			throw new Error('fake Zerops provider rejects foreign envelopes')
+		}
+		return input
+	},
+	deploy: () => Promise.resolve({ state: 'succeeded' }),
+}
+
+function insertSourceConnection(sqlite: Harness['sqlite'], connectionId: string, owner: string, installationId: number): void {
+	sqlite.query(`INSERT INTO github_source_connections_keyed (
+		connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
+		credential_sha256, webhook_url, webhook_secret_ref, installation_id,
+		installation_account_login, installation_selection, verified_repositories_json,
+		requested_repositories_json, connected_by, connected_at, verified_at, version
+	) VALUES (?, 'keyed-v2', '123', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'selected', '[]', '[]', 'user-1', 1, 1, 1)`)
+		.run(
+			connectionId,
+			`${connectionId}-app`,
+			`https://github.com/apps/${connectionId}-app`,
+			owner,
+			`${connectionId}-app`,
+			'c'.repeat(64),
+			`https://control.example/webhooks/github/${connectionId}`,
+			`vault:${connectionId}`,
+			installationId,
+			owner.toLowerCase(),
+		)
+}
+
+const zeropsRegistrationEnvelopes = (): { target: ProviderEnvelope; artifact: ProviderEnvelope } => ({
+	target: { provider: 'zerops', version: 1, payload: {} },
+	artifact: { provider: 'zerops', version: 1, payload: {} },
+})
 
 const registrationEnvelopes = (): { target: ProviderEnvelope; artifact: ProviderEnvelope } => ({
 	target: { provider: 'harbor', version: 1, payload: { region: 'eu' } },
@@ -342,6 +380,92 @@ describe('onboarding + registry CRUD', () => {
 		const patched = await handleApi(req('PATCH', '/api/apps/existing', { resolveInstallationId: true }), deps)
 		expect(patched.status).toBe(200)
 		expect((await deps.repositories.registry.getApp('existing'))?.github_installation_id).toBe(555)
+	})
+
+	test('Zerops onboarding persists the repository owner pair and rejects direct or two-step reassignment', async () => {
+		let installationLookups = 0
+		const { deps, sqlite } = makeDeps({
+			provider: zeropsProvider,
+			repoSource: {
+				verifyWebhook: () => Promise.resolve(null),
+				resolveInstallationId: () => {
+					installationLookups += 1
+					return Promise.resolve(999)
+				},
+			},
+		})
+		insertSourceConnection(sqlite, 'connection-acme', 'Acme', 101)
+		insertSourceConnection(sqlite, 'connection-beta', 'Beta', 202)
+		const context = {
+			repositories: deps.repositories,
+			repoSource: deps.repoSource,
+			provider: deps.provider,
+			auth: deps.auth,
+			signal: new AbortController().signal,
+		}
+		const registered = await registerAppUseCase(context, {
+			id: 'beta-app',
+			repoUrl: 'https://github.com/BETA/private-app.git',
+			env: 'prod',
+			resolveInstallationId: true,
+			...zeropsRegistrationEnvelopes(),
+		})
+		expect(registered.app).toMatchObject({
+			githubConnectionId: 'connection-beta',
+			githubInstallationId: 202,
+		})
+		expect(await deps.repositories.registry.getApp('beta-app')).toMatchObject({
+			github_connection_id: 'connection-beta',
+			github_installation_id: 202,
+		})
+		expect(installationLookups).toBe(0)
+		await expect(updateAppUseCase(context, 'beta-app', {
+			repoUrl: 'https://github.com/acme/private-app',
+			resolveInstallationId: true,
+		})).rejects.toMatchObject({ httpStatus: 409 })
+		expect(await deps.repositories.registry.getApp('beta-app')).toMatchObject({
+			repo_url: 'github.com/BETA/private-app',
+			github_connection_id: 'connection-beta',
+			github_installation_id: 202,
+		})
+
+		await expect(registerAppUseCase(context, {
+			id: 'mismatch',
+			repoUrl: 'https://github.com/beta/mismatch',
+			env: 'prod',
+			githubInstallationId: 101,
+			...zeropsRegistrationEnvelopes(),
+		})).rejects.toMatchObject({ httpStatus: 409 })
+		await expect(registerAppUseCase(context, {
+			id: 'unknown-owner',
+			repoUrl: 'https://github.com/gamma/private',
+			env: 'prod',
+			resolveInstallationId: true,
+			...zeropsRegistrationEnvelopes(),
+		})).rejects.toMatchObject({ httpStatus: 409 })
+
+		await expect(updateAppUseCase(context, 'beta-app', {
+			repoUrl: 'https://github.com/gamma/public-app',
+		})).rejects.toMatchObject({ httpStatus: 409 })
+		await expect(updateAppUseCase(context, 'beta-app', {
+			githubInstallationId: null,
+		})).rejects.toMatchObject({ httpStatus: 409 })
+		expect(await deps.repositories.registry.getApp('beta-app')).toMatchObject({
+			repo_url: 'github.com/BETA/private-app',
+			github_connection_id: 'connection-beta',
+			github_installation_id: 202,
+		})
+
+		const publicRegistration = await registerAppUseCase(context, {
+			id: 'public-app',
+			repoUrl: 'https://github.com/gamma/public-app',
+			env: 'prod',
+			...zeropsRegistrationEnvelopes(),
+		})
+		expect(publicRegistration.app).toMatchObject({
+			githubConnectionId: null,
+			githubInstallationId: null,
+		})
 	})
 
 	test('registerApp rejects a missing field (400) and a duplicate id (409)', async () => {

@@ -67,6 +67,35 @@ class BarrierDatabase implements SqlDatabase {
 	}
 }
 
+class FirstBatchGateDatabase implements SqlDatabase {
+	private readonly arrival = Promise.withResolvers<void>()
+	private readonly releaseGate = Promise.withResolvers<void>()
+	private first = true
+
+	constructor(private readonly inner: SqlDatabase) {}
+
+	prepare(sql: string): SqlStatement {
+		return this.inner.prepare(sql)
+	}
+
+	async batch<T = Record<string, unknown>>(statements: SqlStatement[]): Promise<SqlQueryResult<T>[]> {
+		if (this.first) {
+			this.first = false
+			this.arrival.resolve()
+			await this.releaseGate.promise
+		}
+		return this.inner.batch<T>(statements)
+	}
+
+	waitUntilBlocked(): Promise<void> {
+		return this.arrival.promise
+	}
+
+	release(): void {
+		this.releaseGate.resolve()
+	}
+}
+
 async function configuredAttempt() {
 	const harness = createHarness(() => 1_000)
 	const store = harness.repositories.githubConnections
@@ -582,6 +611,18 @@ describe('GitHubConnectionStore', () => {
 
 		const provider = new GitHubConnectionWebhookSecretProvider(flow.store, flow.vault, undefined, flow.started.id)
 		expect(await provider.getSecret()).toBe('webhook-value')
+		await expect(flow.store.beginAdoption({
+			id: 'late-adoption',
+			initiatedBy: 'principal-1',
+			expectedOrigin: 'https://control.example',
+			appId: '456',
+			appSlug: 'late-adoption',
+			appHtmlUrl: 'https://github.com/apps/late-adoption',
+			appOwner: 'other',
+			appPublic: false,
+			credentialSha256: CREDENTIAL_DIGEST,
+			expiresAt: 2_000,
+		})).rejects.toThrow('could not be started')
 	})
 
 	test('keeps installation-required stable after the operation lease expires', async () => {
@@ -732,6 +773,43 @@ describe('GitHubConnectionStore', () => {
 		expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
 		expect(await flow.store.getConnection()).not.toBeNull()
 		expect((await flow.store.getAttempt(flow.started.id))?.status).toBe('completed')
+	})
+
+	test('a publish between owner preflight and atomic start rolls back the attempt and manifest secret', async () => {
+		const flow = await configuredAttempt()
+		const ready = await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)
+		if (ready === null) throw new Error('recovery discard failed')
+		const gate = new FirstBatchGateDatabase(flow.d1)
+		const delayedStart = new GitHubConnectionStore(gate, () => 1_000)
+		expect(await delayedStart.getConnectionByOwner('ACME')).toBeNull()
+		const stateSecret = await flow.vault.prepareSecret('platform', githubManifestStateSecretLabel('late-start'), 'late-state')
+		const start = delayedStart.beginAttemptWithManifestState({
+			id: 'late-start',
+			stateHash: OTHER_STATE_DIGEST,
+			initiatedBy: 'principal-2',
+			expectedOrigin: 'https://control.example',
+			desiredOwner: 'ACME',
+			desiredAppName: 'late-source',
+			desiredPublic: false,
+			requestedRepositories: [],
+			expiresAt: 2_000,
+		}, stateSecret)
+		await gate.waitUntilBlocked()
+		await flow.store.publishConnection({
+			attemptId: flow.started.id,
+			expectedVersion: ready.version,
+			webhookUrl: 'https://control.example/webhooks/github/attempt-1',
+			installationId: 45,
+			installationAccountLogin: 'acme',
+			installationSelection: 'selected',
+			verifiedRepositories: ['acme/a', 'acme/z'],
+			verifiedAt: 1_000,
+		})
+		gate.release()
+		await expect(start).rejects.toThrow('could not be started')
+		expect(await flow.store.getAttempt('late-start')).toBeNull()
+		expect(queryRows(flow.sqlite, 'SELECT id FROM vault WHERE id = ?', stateSecret.id)).toEqual([])
+		expect((await flow.store.getConnectionByOwner('acme'))?.connectionId).toBe(flow.started.id)
 	})
 
 	test('recovery deletion requires the exact platform purpose', async () => {

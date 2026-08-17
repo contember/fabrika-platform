@@ -10,6 +10,8 @@ export interface SourceConnectionPort {
 	verifyInstallations(input: SourceInstallationVerificationInput): Promise<SourceInstallationVerification>
 }
 
+export type SourceConnectionTransportKind = 'legacy-v1' | 'keyed-v2'
+
 export type SourceConnectionInspection =
 	| { readonly state: 'unavailable' }
 	| { readonly state: 'anonymous' }
@@ -18,6 +20,7 @@ export type SourceConnectionInspection =
 	| { readonly state: 'durable'; readonly credentialSha256: string }
 
 export interface SourceCredentialInput {
+	readonly connectionId: string
 	readonly appId: string
 	readonly privateKeyPem: string
 }
@@ -29,6 +32,7 @@ export interface PreparedSourceCredential {
 
 export interface SourceConnectionBindingInput {
 	readonly connectionId: string
+	readonly transportKind: SourceConnectionTransportKind
 	readonly signal: AbortSignal
 }
 

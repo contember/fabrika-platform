@@ -284,7 +284,10 @@ export class GitHubConnectionStore {
 			const row = await this.db.prepare(`INSERT INTO github_source_setup_attempts (
 				id, status, phase, version, state_hash, initiated_by, expected_origin, desired_owner,
 				desired_app_name, desired_public, requested_repositories_json, created_at, updated_at, expires_at
-			) VALUES (?, 'active', 'awaiting_manifest_callback', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`)
+			) SELECT ?, 'active', 'awaiting_manifest_callback', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			WHERE NOT EXISTS (
+				SELECT 1 FROM github_source_connections_keyed WHERE lower(app_owner) = lower(?)
+			) RETURNING *`)
 				.bind(
 					id,
 					input.stateHash,
@@ -297,6 +300,7 @@ export class GitHubConnectionStore {
 					now,
 					now,
 					input.expiresAt,
+					input.desiredOwner,
 				)
 				.first<GitHubSetupAttemptRow>()
 			if (row === null) throw new Error('setup write did not return state')
@@ -324,7 +328,10 @@ export class GitHubConnectionStore {
 		const attempt = this.db.prepare(`INSERT INTO github_source_setup_attempts (
 			id, status, phase, version, state_hash, manifest_state_secret_ref, initiated_by, expected_origin, desired_owner,
 			desired_app_name, desired_public, requested_repositories_json, created_at, updated_at, expires_at
-		) VALUES (?, 'active', 'awaiting_manifest_callback', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`)
+		) SELECT ?, 'active', 'awaiting_manifest_callback', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM github_source_connections_keyed WHERE lower(app_owner) = lower(?)
+		) RETURNING *`)
 			.bind(
 				id,
 				input.stateHash,
@@ -338,6 +345,7 @@ export class GitHubConnectionStore {
 				now,
 				now,
 				input.expiresAt,
+				input.desiredOwner,
 			)
 		const vaultInsert = this.db.prepare(`INSERT INTO vault (id, scope, label, ciphertext, value_iv, wrapped_dek, dek_iv)
 			SELECT ?, ?, ?, ?, ?, ?, ? FROM github_source_setup_attempts
@@ -397,7 +405,8 @@ export class GitHubConnectionStore {
 				id, setup_kind, status, phase, version, initiated_by, expected_origin, desired_owner,
 				desired_app_name, desired_public, requested_repositories_json, app_id, app_slug, app_html_url,
 				credential_sha256, created_at, updated_at, expires_at
-			) VALUES (?, 'adoption', 'active', 'source_activated', 1, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?) RETURNING *`)
+			) SELECT ?, 'adoption', 'active', 'source_activated', 1, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?
+			WHERE NOT EXISTS (SELECT 1 FROM github_source_connections_keyed) RETURNING *`)
 				.bind(
 					input.id,
 					input.initiatedBy,

@@ -23,7 +23,7 @@ import { readJson } from '../http'
 import type { Authorized } from '../iam'
 import { booleanField, nullableStringField, numberField, prop, stringField } from '../json'
 import { canonicalPublicOrigin, PublicOriginValidationError } from '../public-origin'
-import { normalizeRepoUrl, type RepoEvents } from '../repo-source'
+import { normalizeRepoUrl, parseGitHubRepo, type RepoEvents } from '../repo-source'
 import { fail, jsonAdapter } from './domain'
 import { parseStoredEnvelope, readProviderEnvelope } from './provider-envelope'
 
@@ -65,6 +65,7 @@ function toAppDto(row: AppRow): AppDto {
 		workerDir: row.worker_dir,
 		buildCmd: row.build_cmd,
 		configPath: row.config_path,
+		githubConnectionId: row.github_connection_id,
 		githubInstallationId: row.github_installation_id,
 		createdAt: row.created_at,
 	}
@@ -101,6 +102,7 @@ const toProviderApp = (row: AppRow): ProviderApp => ({
 		...(row.worker_dir === null ? {} : { workerDir: row.worker_dir }),
 		...(row.build_cmd === null ? {} : { buildCommand: row.build_cmd }),
 		...(row.config_path === null ? {} : { configPath: row.config_path }),
+		...(row.github_connection_id === null ? {} : { githubConnectionId: row.github_connection_id }),
 		...(row.github_installation_id === null ? {} : { githubInstallationId: row.github_installation_id }),
 	},
 })
@@ -130,11 +132,12 @@ export async function createApp(c: RegistryContext): Promise<Response> {
 export async function createAppUseCase(c: RegistryUseCaseContext, input: CreateAppRequest): Promise<AppDto> {
 	if (await c.repositories.registry.getApp(input.id)) fail(409, 'an app with this id already exists')
 	const normalized = normalizeRepoUrl(input.repoUrl)
+	const sourceBinding = await sourceBindingFields(c, input, normalized)
 	const row = await c.repositories.registry.createApp({
 		id: input.id,
 		repoUrl: normalized,
 		...appFields(input),
-		...(await installationIdField(c, input, normalized)),
+		...sourceBinding,
 	})
 	await c.auth.audit({ action: 'app.create', resourceType: 'app', resourceId: input.id, metadata: { repoUrl: row.repo_url } })
 	notifyCatalogChanged(c)
@@ -149,10 +152,11 @@ export async function updateAppUseCase(c: RegistryUseCaseContext, id: string, in
 	const existing = await c.repositories.registry.getApp(id)
 	if (existing === null) fail(404, 'app not found')
 	const resolveTarget = input.repoUrl === undefined ? existing.repo_url : normalizeRepoUrl(input.repoUrl)
+	const sourceBinding = await sourceBindingFields(c, input, resolveTarget, existing)
 	const row = await c.repositories.registry.updateApp(id, {
 		...(input.repoUrl === undefined ? {} : { repoUrl: normalizeRepoUrl(input.repoUrl) }),
 		...appFields(input),
-		...(await installationIdField(c, input, resolveTarget)),
+		...sourceBinding,
 	})
 	await c.auth.audit({ action: 'app.update', resourceType: 'app', resourceId: id })
 	notifyCatalogChanged(c)
@@ -330,7 +334,7 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 	const { id, repoUrl, env } = input
 	if (await c.repositories.registry.getApp(id)) fail(409, 'an app with this id already exists')
 	const normalized = normalizeRepoUrl(repoUrl)
-	const installation = await installationIdField(c, input, normalized)
+	const sourceBinding = await sourceBindingFields(c, input, normalized)
 	const publicOrigin = canonicalOrigin(input.publicOrigin, null)
 	const providerApp: ProviderApp = {
 		id,
@@ -340,9 +344,12 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 			...(input.workerDir === undefined || input.workerDir === null ? {} : { workerDir: input.workerDir }),
 			...(input.buildCmd === undefined || input.buildCmd === null ? {} : { buildCommand: input.buildCmd }),
 			...(input.configPath === undefined || input.configPath === null ? {} : { configPath: input.configPath }),
-			...(installation.githubInstallationId === undefined || installation.githubInstallationId === null
+			...(sourceBinding.githubConnectionId === undefined || sourceBinding.githubConnectionId === null
 				? {}
-				: { githubInstallationId: installation.githubInstallationId }),
+				: { githubConnectionId: sourceBinding.githubConnectionId }),
+			...(sourceBinding.githubInstallationId === undefined || sourceBinding.githubInstallationId === null
+				? {}
+				: { githubInstallationId: sourceBinding.githubInstallationId }),
 		},
 	}
 	const namespace = await resolveRegistrationNamespace(c, input.namespaceId, id, env, null)
@@ -369,6 +376,7 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 		workerDir: source.workerDir ?? null,
 		buildCmd: source.buildCommand ?? null,
 		configPath: source.configPath ?? null,
+		githubConnectionId: source.githubConnectionId ?? null,
 		githubInstallationId: source.githubInstallationId ?? null,
 	}
 	const environmentInput = {
@@ -402,6 +410,7 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 			const prepared = await preparation({ registration, signal: c.signal })
 			if (
 				prepared.app.id !== id
+				|| !sameGitHubSourceBinding(prepared.app, registration.app)
 				|| prepared.environment.appId !== id
 				|| prepared.environment.env !== env
 				|| prepared.environment.publicOrigin !== registration.environment.publicOrigin
@@ -437,6 +446,7 @@ function normalizeRegistration(provider: ControlProvider, app: ProviderApp, envi
 		const registration = provider.normalizeRegistration({ app, environment })
 		if (
 			registration.app.id !== app.id
+			|| !sameGitHubSourceBinding(registration.app, app)
 			|| registration.environment.appId !== app.id
 			|| registration.environment.env !== environment.env
 			|| registration.environment.publicOrigin !== environment.publicOrigin
@@ -449,6 +459,11 @@ function normalizeRegistration(provider: ControlProvider, app: ProviderApp, envi
 		if (isDomainError(cause)) throw cause
 		fail(400, cause instanceof Error ? cause.message : 'invalid provider registration')
 	}
+}
+
+function sameGitHubSourceBinding(actual: ProviderApp, expected: ProviderApp): boolean {
+	return actual.source.githubConnectionId === expected.source.githubConnectionId
+		&& actual.source.githubInstallationId === expected.source.githubInstallationId
 }
 
 function sameNamespaceCoordinates(
@@ -533,14 +548,47 @@ function appFields(input: AppOptionalFields): {
 	}
 }
 
-async function installationIdField(
+async function sourceBindingFields(
 	c: RegistryUseCaseContext,
 	input: AppOptionalFields,
 	repoUrl: string,
-): Promise<{ githubInstallationId?: number | null }> {
-	if (input.githubInstallationId !== undefined) return { githubInstallationId: input.githubInstallationId }
-	if (input.resolveInstallationId === true) return { githubInstallationId: await c.repoSource.resolveInstallationId(repoUrl, c.signal) }
+	existing?: AppRow,
+): Promise<{ githubConnectionId?: string | null; githubInstallationId?: number | null }> {
+	if (c.provider.id !== 'zerops') {
+		if (input.githubInstallationId !== undefined) return { githubInstallationId: input.githubInstallationId }
+		if (input.resolveInstallationId === true) return { githubInstallationId: await c.repoSource.resolveInstallationId(repoUrl, c.signal) }
+		return {}
+	}
+	if (existing?.github_connection_id !== null && existing?.github_connection_id !== undefined) {
+		if (repoOwnerChanged(existing.repo_url, repoUrl) || input.githubInstallationId === null) {
+			fail(409, 'an application source connection cannot be reassigned')
+		}
+	}
+	if (input.githubInstallationId === null) return { githubConnectionId: null, githubInstallationId: null }
+	if (input.githubInstallationId !== undefined || input.resolveInstallationId === true) {
+		const repository = parseGitHubRepo(repoUrl)
+		if (repository === null) fail(400, 'a private Zerops source must be a GitHub repository')
+		const connection = await c.repositories.githubConnections.getConnectionByOwner(repository.owner)
+		if (connection === null) fail(409, 'the repository organization has no GitHub source connection')
+		if (
+			existing?.github_connection_id !== null && existing?.github_connection_id !== undefined
+			&& existing.github_connection_id !== connection.connectionId
+		) {
+			fail(409, 'an application source connection cannot be reassigned')
+		}
+		if (input.githubInstallationId !== undefined && input.githubInstallationId !== connection.installationId) {
+			fail(409, 'the GitHub installation does not match the repository organization')
+		}
+		return { githubConnectionId: connection.connectionId, githubInstallationId: connection.installationId }
+	}
 	return {}
+}
+
+function repoOwnerChanged(currentRepoUrl: string, nextRepoUrl: string): boolean {
+	const current = parseGitHubRepo(currentRepoUrl)
+	const next = parseGitHubRepo(nextRepoUrl)
+	if (current === null || next === null) return currentRepoUrl !== nextRepoUrl
+	return current.owner.toLowerCase() !== next.owner.toLowerCase()
 }
 
 function parseCreateApp(body: unknown): CreateAppRequest {

@@ -1,6 +1,8 @@
+import { decodeZeropsSourceCredentialBundleV2, type SourceConnectionAdmin, type ZeropsSourceGitHubAppIdentityV1 } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { zeropsControlProvider, zeropsNamespaceProcessConfig, zeropsSourceConnectionAdmin } from '../node/provider'
 import { createRuntime } from '../node/runtime'
+import { zeropsSourceConnectionPort } from '../node/source-connection'
 import { FakeRepoSource } from '../repo-source'
 import { createHarness } from './helpers/harness'
 
@@ -19,6 +21,90 @@ const EXPECTED = {
 }
 
 describe('the Zerops namespace process configuration', () => {
+	test('builds connection-bound v2 credentials and routes keyed activation and status only through v2', async () => {
+		const calls: string[] = []
+		const identity: ZeropsSourceGitHubAppIdentityV1 = {
+			id: 123,
+			slug: 'fabrika-source',
+			htmlUrl: 'https://github.com/apps/fabrika-source',
+			public: false,
+			owner: { login: 'acme', type: 'Organization' },
+			permissions: { contents: 'read' },
+			events: ['push'],
+		}
+		const admin: SourceConnectionAdmin = {
+			inspect: () => Promise.resolve({ state: 'anonymous' }),
+			adoptExisting: () =>
+				Promise.resolve({
+					protocolVersion: 1,
+					connectionId: 'legacy',
+					credentialVersion: 1,
+					credentialSha256: 'a'.repeat(64),
+					githubApp: identity,
+				}),
+			activate: (input) => {
+				calls.push('activate-v1')
+				return Promise.resolve({
+					protocolVersion: 1,
+					connectionId: input.connectionId,
+					credentialVersion: 1,
+					credentialSha256: input.credentialSha256,
+					githubApp: identity,
+				})
+			},
+			activateV2: (input) => {
+				calls.push('activate-v2')
+				return Promise.resolve({
+					protocolVersion: 2,
+					connectionId: input.connectionId,
+					credentialVersion: 2,
+					credentialSha256: input.credentialSha256,
+					githubApp: identity,
+				})
+			},
+			status: () => {
+				calls.push('status-v1')
+				return Promise.resolve({ state: 'anonymous' })
+			},
+			statusV2: () => {
+				calls.push('status-v2')
+				return Promise.resolve({ state: 'anonymous' })
+			},
+			configureWebhook: (input) =>
+				Promise.resolve({
+					protocolVersion: 1,
+					connectionId: input.connectionId,
+					credentialSha256: input.credentialSha256,
+					webhook: { url: input.url, contentType: 'json', insecureSsl: '0' },
+				}),
+			verifyInstallations: (input) =>
+				Promise.resolve({
+					protocolVersion: 1,
+					connectionId: input.connectionId,
+					credentialSha256: input.credentialSha256,
+					installation: { status: 'missing' },
+				}),
+		}
+		const port = zeropsSourceConnectionPort(admin)
+		const privateKeyPem = '-----BEGIN PRIVATE KEY-----\nMAMCAQE=\n-----END PRIVATE KEY-----\n'
+		const prepared = await port.prepareCredential({ connectionId: 'connection-1', appId: '123', privateKeyPem })
+		expect(decodeZeropsSourceCredentialBundleV2(prepared.bundle)).toEqual({
+			version: 2,
+			connectionId: 'connection-1',
+			githubAppId: '123',
+			privateKeyPem,
+		})
+		await port.activate({
+			connectionId: 'connection-1',
+			transportKind: 'keyed-v2',
+			credentialBundle: prepared.bundle,
+			credentialSha256: prepared.sha256,
+			signal: new AbortController().signal,
+		})
+		await port.status({ connectionId: 'connection-1', transportKind: 'keyed-v2', signal: new AbortController().signal })
+		expect(calls).toEqual(['activate-v2', 'status-v2'])
+	})
+
 	test('binds source connection administration to the exact configured platform project', async () => {
 		const projects: string[] = []
 		const admin = zeropsSourceConnectionAdmin(

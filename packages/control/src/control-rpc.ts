@@ -56,6 +56,7 @@ import { buildApiDeps } from './services'
 import {
 	adoptExistingSourceConnection,
 	repairSourceConnection,
+	sourceConnectionList,
 	sourceConnectionStatus,
 	startSourceConnection,
 	verifySourceInstallation,
@@ -153,7 +154,7 @@ export const controlRpcRouter: RpcRouterFor<ControlRpcContext, ControlRpcContrac
 			controlCall(() => sourceConnectionStatus(sourceConnectionContext(ctx)))
 		),
 		list: rpc.procedure.input(sourceConnectionListInput).require(ACTIONS.SOURCE_CONNECTION_MANAGE).query(({ ctx, input }) =>
-			controlCall(async () => projectSingletonSourceConnectionPage(await sourceConnectionStatus(sourceConnectionContext(ctx)), input))
+			controlCall(() => sourceConnectionList(sourceConnectionContext(ctx), input))
 		),
 		start: rpc.procedure.input(startSourceConnectionInput).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
 			controlCall(() => startSourceConnection(sourceConnectionContext(ctx), input))
@@ -260,7 +261,7 @@ export const controlRpcRouter: RpcRouterFor<ControlRpcContext, ControlRpcContrac
 	),
 })
 
-/** Compatibility projection until keyed persistence replaces the singleton workflow. */
+/** Frozen compatibility helper for older direct callers; the RPC list uses keyed persistence. */
 export function projectSingletonSourceConnectionPage(
 	status: GitHubSourceConnectionStatusDto,
 	input: GitHubSourceConnectionListInput,
