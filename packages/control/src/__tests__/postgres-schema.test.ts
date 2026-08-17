@@ -730,7 +730,7 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 				'https://control.example', 'repair-owner', 'repair-app', 0, '[]', 1, 1, 2)`)
 				.run()
 
-			await applyMigrations(upgrade, migrations.slice(-1))
+			await applyMigrations(upgrade, migrations)
 			const upgraded = createControlRepositories(upgrade)
 			const { results: legacyEvidence } = await upgrade.prepare(`SELECT
 				connection_id, 'legacy-v1' AS transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
