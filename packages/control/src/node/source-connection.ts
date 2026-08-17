@@ -4,7 +4,7 @@ import {
 	sha256ZeropsSourceCredentialBundleV2,
 	type SourceConnectionAdmin,
 } from '@fabrika/provider-zerops'
-import type { SourceConnectionPort } from '../source-connection-port'
+import type { SourceConnectionBindingInput, SourceConnectionPort } from '../source-connection-port'
 
 /** Keep provider protocol types at the process composition edge. */
 export function zeropsSourceConnectionPort(admin: SourceConnectionAdmin): SourceConnectionPort {
@@ -37,15 +37,18 @@ export function zeropsSourceConnectionPort(admin: SourceConnectionAdmin): Source
 			if (admin.statusV2 === undefined) return Promise.resolve({ state: 'unavailable' })
 			return admin.statusV2(status)
 		},
-		configureWebhook: (input) =>
-			admin.configureWebhook({
+		configureWebhook: async (input) => {
+			await bindLegacyRuntime(admin, input)
+			return admin.configureWebhook({
 				connectionId: input.connectionId,
 				credentialSha256: input.credentialSha256,
 				url: input.url,
 				secret: input.secret,
 				signal: input.signal,
-			}),
+			})
+		},
 		verifyInstallations: async (input) => {
+			await bindLegacyRuntime(admin, input)
 			const response = await admin.verifyInstallations({
 				connectionId: input.connectionId,
 				credentialSha256: input.credentialSha256,
@@ -54,5 +57,16 @@ export function zeropsSourceConnectionPort(admin: SourceConnectionAdmin): Source
 			})
 			return response.installation
 		},
+	}
+}
+
+async function bindLegacyRuntime(
+	admin: SourceConnectionAdmin,
+	input: SourceConnectionBindingInput & { readonly credentialSha256: string },
+): Promise<void> {
+	if (input.transportKind !== 'legacy-v1') return
+	const status = await admin.status({ connectionId: input.connectionId, signal: input.signal })
+	if (status.state !== 'active' || status.credentialSha256 !== input.credentialSha256) {
+		throw new Error('legacy source connection is not active')
 	}
 }

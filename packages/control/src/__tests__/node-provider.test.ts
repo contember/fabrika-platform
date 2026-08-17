@@ -105,6 +105,75 @@ describe('the Zerops namespace process configuration', () => {
 		expect(calls).toEqual(['activate-v2', 'status-v2'])
 	})
 
+	test('rebinds a restarted legacy runtime before connection-bound administration', async () => {
+		const calls: string[] = []
+		const credentialSha256 = 'a'.repeat(64)
+		const identity: ZeropsSourceGitHubAppIdentityV1 = {
+			id: 123,
+			slug: 'fabrika-source',
+			htmlUrl: 'https://github.com/apps/fabrika-source',
+			public: false,
+			owner: { login: 'acme', type: 'Organization' },
+			permissions: { contents: 'read' },
+			events: ['push'],
+		}
+		const admin: SourceConnectionAdmin = {
+			inspect: () => Promise.resolve({ state: 'anonymous' }),
+			adoptExisting: () => Promise.reject(new Error('not called')),
+			activate: () => Promise.reject(new Error('not called')),
+			status: (input) => {
+				calls.push(`status:${input.connectionId}`)
+				return Promise.resolve({ state: 'active', credentialSha256, githubApp: identity })
+			},
+			configureWebhook: (input) => {
+				calls.push(`configure:${input.connectionId}`)
+				return Promise.resolve({
+					protocolVersion: 1,
+					connectionId: input.connectionId,
+					credentialSha256: input.credentialSha256,
+					webhook: { url: input.url, contentType: 'json', insecureSsl: '0' },
+				})
+			},
+			verifyInstallations: (input) => {
+				calls.push(`verify:${input.connectionId}`)
+				return Promise.resolve({
+					protocolVersion: 1,
+					connectionId: input.connectionId,
+					credentialSha256: input.credentialSha256,
+					installation: { status: 'missing' },
+				})
+			},
+		}
+		const port = zeropsSourceConnectionPort(admin)
+		const signal = new AbortController().signal
+		await port.configureWebhook({
+			connectionId: 'connection-1',
+			transportKind: 'legacy-v1',
+			credentialSha256,
+			url: 'https://control.example.test/webhooks/github',
+			secret: 'webhook-secret-at-least-32-characters',
+			signal,
+		})
+		await port.verifyInstallations({
+			connectionId: 'connection-1',
+			transportKind: 'legacy-v1',
+			credentialSha256,
+			scope: { kind: 'organization', organization: 'acme' },
+			signal,
+		})
+		expect(calls).toEqual(['status:connection-1', 'configure:connection-1', 'status:connection-1', 'verify:connection-1'])
+
+		calls.length = 0
+		await port.verifyInstallations({
+			connectionId: 'connection-2',
+			transportKind: 'keyed-v2',
+			credentialSha256,
+			scope: { kind: 'organization', organization: 'acme' },
+			signal,
+		})
+		expect(calls).toEqual(['verify:connection-2'])
+	})
+
 	test('binds source connection administration to the exact configured platform project', async () => {
 		const projects: string[] = []
 		const admin = zeropsSourceConnectionAdmin(
