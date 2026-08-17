@@ -570,12 +570,25 @@ requires `sudo`. Source exposes
 only an unauthenticated private-network `/healthz` liveness endpoint, and authenticates every RPC before
 reading its bounded body. The shared RPC secret is `FABRIKA_SOURCE_RPC_KEY` on source and
 `FABRIKA_ZEROPS_SOURCE_RPC_KEY` on control. Source receives no Zerops token. Fresh source services
-start anonymously, so public repositories need no GitHub credential. An App-backed connection stores
-one versioned canonical id-and-private-key bundle in the create-only `GITHUB_APP_CREDENTIALS` source
-variable. Source activates that exact SHA-256-bound bundle in memory without a restart. Legacy
-all-or-none `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` values can be adopted into the atomic bundle;
-partial or conflicting state fails closed. The independent webhook secret is encrypted in Control's
-platform vault and resolved dynamically for every webhook verification.
+start anonymously, so public repositories need no GitHub credential. The migrated App keeps one v1
+canonical id-and-private-key bundle in the create-only `GITHUB_APP_CREDENTIALS` source variable. Each
+new organization-owned private App gets a v2 canonical bundle in a separate create-only environment
+slot derived from its connection id. The slot name and bundle both bind that id; source validates the
+binding at startup and keeps immutable credential snapshots keyed by connection id. It activates a new
+SHA-256-bound bundle without restarting and routes v2 resolve and upload calls by the exact connection
+and installation pair. The immutable `legacy-v1` or `keyed-v2` marker selects the protocol; there is no
+fallback or credential search. Legacy all-or-none `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` values can
+be adopted into the v1 atomic bundle; partial or conflicting state fails closed. Fabrika sets no total
+connection limit. Request bodies, repository lists, environment responses and Control pages remain
+bounded.
+
+Each connection has an independent webhook secret encrypted in Control's platform vault. A new
+`keyed-v2` App receives `/webhooks/github/:connectionId`; Control resolves that exact connection and
+secret before reading and authenticating the bounded body, then requires the payload installation,
+repository and registered application pair to match it. The generic `/webhooks/github` route remains
+only for the migrated Zerops `legacy-v1` connection. It does not fall back to keyed connections.
+Cloudflare continues to use its generic static-secret and installation-id path without a source
+connection row.
 
 Production repository and REST origins are fixed to `github.com` and `api.github.com`. There is no
 operator-facing GitHub Enterprise or GitHub API-base setting; alternate origins are dependency-injected
@@ -735,8 +748,11 @@ looks like — and the two passes as a whole.
 
 Normal GitHub App setup runs in the authenticated Control console at **Settings → Source**
 ([ADR-0031](../decisions/0031-manage-zerops-github-source-from-control.md)). Fresh Zerops installations
-boot with anonymous source access. A human principal holding `source.connection.manage` starts setup
-for one GitHub organization and an optional same-owner repository set. Control returns only a
+boot with anonymous source access. The page lists stable connections in bounded pages and presents the
+one global setup or repair workflow separately. A human principal holding `source.connection.manage`
+can add another private organization-owned App while stable rows remain. Only one nonterminal workflow
+may exist, and the same organization cannot be connected twice, but Fabrika imposes no total
+connection-count limit. Setup accepts an optional same-owner repository set. Control returns only a
 same-origin continuation path; no private key, webhook secret, source RPC key, manifest code or opaque
 state enters a browser DTO, URL log or error.
 
@@ -748,14 +764,15 @@ and private key in its encrypted platform vault. The setup state stores only non
 verified identities and vault references. Expiring phase leases turn abandoned work into either a
 terminal pre-credential failure or a repairable durable checkpoint.
 
-Control then:
+For every new connection, Control then:
 
-1. creates the exact canonical id-and-private-key bundle on source with create-only semantics;
+1. creates the exact canonical v2 id-and-private-key bundle in its derived source slot with create-only
+   semantics;
 2. proves the durable SHA-256-bound value and activates it in the running source process;
 3. verifies the organization-owned App identity, visibility, `contents: read` permission and sole
    `push` event;
-4. creates a new webhook secret in the Control vault, configures the exact HTTPS callback and verifies
-   the returned URL, JSON content type and TLS setting;
+4. creates a new webhook secret in the Control vault, configures the exact scoped HTTPS callback and
+   verifies the returned URL, JSON content type and TLS setting;
 5. deletes the temporary encrypted recovery copy; and
 6. asks the administrator to install the App, then verifies the organization or every requested
    repository through App-JWT endpoints before publishing the connection.
@@ -765,6 +782,12 @@ using the new vault-backed secret after structural webhook verification, includi
 is still pending. Once connected, every status read also compares the source-reported credential
 digest and strict App identity with durable Control state. A mismatch or transient remote failure is
 reported as unavailable rather than silently trusting the database.
+
+A Zerops private application is registered against the connection whose canonical organization owns
+its repository. Control persists both the connection id and GitHub installation id or neither. Deploy
+resolution and scoped webhooks require that exact pair. Changing the repository owner of an already
+bound application is refused; re-registration is required. Public Zerops repositories need no pair,
+and Cloudflare's installation-only rows remain valid.
 
 `platform init` remains the operator-side source upgrade and repair command. It imports only a missing
 `source` service, waits for the returned Zerops processes, reconciles the two-sided RPC key and creates
@@ -782,10 +805,15 @@ the old file only after the console reports connected. If the file is the only c
 last compatible CLI release to finish remote persistence before adoption. Source credentials never
 enter the sidecar checkout, repository or GitHub Environment.
 
-The complete browser → GitHub → Control → source flow and WU3's public/private application deploys
-remain live-only acceptance gates. One unavoidable orphan window remains after GitHub accepts manifest
-conversion but before the callback durably stores the response; such an App must be deleted and
-recreated.
+Rollout proceeds source → proxy → Control/dashboard so the existing v1 client and generic webhook
+remain compatible before a keyed v2 connection is added. Rolling source back after a v2 slot exists is
+unsupported; recovery rolls forward because an old source must reject v2 calls. The existing App stays
+on the legacy-v1 generic `/webhooks/github` route, while each new App uses its keyed-v2 scoped
+`/webhooks/github/:connectionId` route. One unavoidable orphan window remains after GitHub accepts
+manifest conversion but before the callback durably stores the response; such an App must be deleted
+and recreated. Live acceptance evidence is tracked in the
+[active multi-connection sprint](../sprints/sprint-2026-08-14-multiple-private-github-source-connections.md)
+and [private-source backlog item](../backlog/47-give-the-zerops-path-a-private-git-source.md).
 
 ## Fabrika placement mapping
 

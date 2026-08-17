@@ -32,8 +32,10 @@ installation. [ADR-0032](decisions/0032-support-multiple-private-github-source-c
 the live Zerops v1 credential and generic webhook as a marker-selected compatibility path, gives new
 connections keyed v2 credentials and scoped webhooks, and binds every Zerops private app to a
 connection-and-installation pair. Cloudflare keeps its static-secret and installation-id webhook
-model. Fabrika sets no explicit connection-count limit; local compatibility gates and the live Zerops
-restart plus second-organization deploy remain open.
+model. Fabrika sets no explicit connection-count limit. Deterministic local compatibility and isolation
+gates are complete. The local fixture cannot exercise the GitHub manifest/install browser E2E; that
+live flow, the Zerops restart, second-organization private deploy, one legacy-v1 generic delivery and
+one keyed-v2 scoped delivery remain open.
 
 [`fabrika-deploys-an-app-on-zerops`](sprints/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md) —
 **one gate: add a GitHub repository, public or private, to the control plane and get it deployed into
@@ -107,10 +109,12 @@ backlog is empty; what is left of item 54 is a console architecture decision, no
   key, activates the source credentials and verifies the App installation
   ([ADR-0031](decisions/0031-manage-zerops-github-source-from-control.md)); the CLI is now a narrow
   repair/adoption path. [ADR-0032](decisions/0032-support-multiple-private-github-source-connections.md)
-  now schedules one private App per organization with keyed credentials and exact-pair source and
-  webhook routing, without an explicit connection-count limit. Its local compatibility gates and live
-  second-organization witness remain open. The complete browser flow and public/private deploys still
-  need live witnesses.
+  implements one private App per organization with keyed credentials and exact-pair source and webhook
+  routing, without an explicit connection-count limit. Its deterministic local compatibility and
+  isolation gates are complete. The local fixture cannot exercise the GitHub manifest/install browser
+  E2E; that flow, the ordered live rollout, restart, second-organization private deploy, one legacy-v1
+  generic delivery and one keyed-v2 scoped delivery remain open. The complete browser flow and
+  public/private deploys still need live witnesses.
   The production two-project shape and custom domains remain in
   [`05`](backlog/05-bring-up-on-a-real-zerops-account.md).
 - **Domain audit delivery is best-effort today.** `IamRpc.audit` intentionally returns before the IAM

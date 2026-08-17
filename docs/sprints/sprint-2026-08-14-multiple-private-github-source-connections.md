@@ -300,16 +300,20 @@ while preserving the already-live v1 connection as a compatibility path. The gov
 - **Scope.** Deploy source first and prove v1 compatibility. Deploy proxy second and probe both webhook
   paths. Deploy Control/dashboard last. Create a second private organization connection through the UI,
   restart source, verify both clients recover, register the second organization's repository and deploy
-  it. Exercise a scoped push webhook for each organization.
+  it. Exercise one genuine positive delivery from the existing App through the legacy-v1 generic
+  `/webhooks/github` route and one from the new App through its keyed-v2 scoped
+  `/webhooks/github/:connectionId` route.
 - **Acceptance / witness.** Record these live facts with redacted identifiers and timestamps:
   (1) Zerops accepts the derived create-only v2 environment key and exact value reread;
   (2) source restart reconstructs the old v1 client and the new v2 client;
   (3) the existing organization's generic webhook/deploy remains healthy;
   (4) a second private organization App completes callback, install and verification;
   (5) that organization's private repository resolves, uploads, builds and becomes active;
-  (6) a genuine positive scoped delivery from each connected App triggers its bound app. Negative
-  cross-binding isolation remains a deterministic local gate unless a separately reviewed safe live
-  method is established. A missing positive witness keeps the sprint open.
+  (6) one genuine positive delivery from the existing App through the legacy-v1 generic
+  `/webhooks/github` route triggers its bound app; and (7) one genuine positive delivery from the new
+  App through its keyed-v2 scoped `/webhooks/github/:connectionId` route triggers its bound app.
+  Negative cross-binding isolation remains a deterministic local gate unless a separately reviewed
+  safe live method is established. A missing positive witness keeps the sprint open.
 - **Write territory.** No repository files. WU10 changes only the authorized live GitHub/Zerops state
   and triggers the deployment workflow. It returns redacted witness facts to WU0 for the sprint log;
   no credential value enters that report.
@@ -383,7 +387,8 @@ focused tests; cross-unit integration and reference-doc updates land before the 
 - `cpu-lease run -n 4 -- bun test`, with backend-dependent skips reported separately.
 - `FABRIKA_TEST_POSTGRES_URL=...` PostgreSQL source-connection migration and repository tests.
 - `cpu-lease run -n 4 -- bun run release:validate`.
-- Local composed legacy-plus-two-v2 source flow and browser flow.
+- Local composed legacy-plus-two-v2 source flow. The GitHub manifest/install browser E2E remains a
+  live-only gate because the local fixture does not support it.
 
 ### Live-only gates
 
@@ -391,8 +396,10 @@ focused tests; cross-unit integration and reference-doc updates land before the 
 - Existing Zerops v1 connection and generic webhook survive the ordered rollout.
 - A second organization-owned private App is created, installed and verified through Control.
 - A private repository in that second organization resolves, uploads, builds and deploys on Zerops.
-- Positive scoped webhook deliveries from both connected Apps reach their bound applications. Negative
-  cross-binding isolation is proved locally unless a safe live method is reviewed first.
+- One genuine positive delivery from the existing App traverses the legacy-v1 generic
+  `/webhooks/github` route, and one from the new App traverses its keyed-v2 scoped
+  `/webhooks/github/:connectionId` route. Each reaches its bound application. Negative cross-binding
+  isolation is proved locally unless a safe live method is reviewed first.
 
 ## Run log
 
@@ -401,3 +408,28 @@ focused tests; cross-unit integration and reference-doc updates land before the 
 
 - 2026-08-14 — Plan accepted with no explicit connection-count limit. Implementation not yet claimed
   complete; local and live gates above remain required.
+- 2026-08-17 — ADR and implementation landed as `3e102ae` (`docs(github): decide multiple private
+  source connections`), `7ba3e19` (`feat(source): define multi-connection contracts`), `99cce8e`
+  (`feat(source): route multiple GitHub connections`), `42b43d2` (`feat(control): persist keyed GitHub
+  connections`), `ca9205e` (`feat(zerops): persist keyed source credentials`), `ce4a411`
+  (`feat(zerops): route deploys by source connection`), `a8734c2` (`feat(control): scope GitHub source
+  webhooks`), `6549fe0` (`feat(control): manage multiple GitHub connections`) and `882e6c5`
+  (`feat(dashboard): manage multiple GitHub connections`). The sprint stays active for WU10.
+- 2026-08-17 — WU9 deterministic local compatibility and isolation gates passed: full tests reported
+  2,478 pass, 162 skip and 0 fail; full typecheck passed; `format:check` and lint exited 0. Lint reported
+  six warnings and 825 infos, with no changed-file error. `release:validate` checked 23 packages, and
+  Zerops `gen:check` checked 11 generated artifacts. The WU6 local-stack witness composes one legacy v1
+  plus two keyed v2 source credentials, seeds all three keyed Control rows with vault-encrypted webhook
+  secrets, and exposes the generic plus scoped proxy paths. A dedicated PostgreSQL 17 run on a
+  temporary local instance first exposed an upgrade-fixture error that passed only the last migration
+  into the second step. The separate `65bc44b` fixture fix (`fix(control): exercise full Postgres
+  upgrade plan`) passes the full migration list; `postgres-schema.test.ts` then passed 29 tests, 217
+  assertions and 0 failures, including keyed upgrade/backfill, callback compare-and-set and two
+  real-connection secret/publish races. The temporary container was stopped and removed. S3-dependent
+  suites skipped without `FABRIKA_TEST_S3_*`; that skip is not S3 backend evidence. The local fixture
+  does not support the GitHub manifest/install browser E2E, so that witness remains live WU10 work.
+- 2026-08-17 — WU10 remains open. Live Zerops must still prove the derived v2 environment slot and
+  exact reread, restart reconstruction of v1 plus v2, continued legacy generic webhook/deploy health,
+  a second private organization App create/install/verify flow, its private repository deploy, and
+  one genuine positive delivery through the existing App's legacy-v1 generic `/webhooks/github` route
+  plus one through the new App's keyed-v2 scoped `/webhooks/github/:connectionId` route.

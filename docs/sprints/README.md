@@ -25,7 +25,10 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
   gives every new connection a create-only keyed v2 credential and scoped webhook, and binds app
   registry entries on the Zerops private-source path to connection plus installation. Cloudflare keeps
   its static-secret and installation-id webhook behavior. There is no explicit connection-count limit.
-  Local compatibility gates and live Zerops restart plus second-organization deployment witnesses remain open
+  Deterministic local compatibility and isolation gates are complete. The local fixture cannot
+  exercise the GitHub manifest/install browser E2E; that live flow, the Zerops restart,
+  second-organization private deployment, one legacy-v1 generic delivery and one keyed-v2 scoped
+  delivery remain open
   ([ADR-0032](../decisions/0032-support-multiple-private-github-source-connections.md)).
 
 - [`sprint-2026-08-11-fabrika-deploys-an-app-on-zerops`](sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md)
@@ -42,4 +45,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
   ([ADR-0031](../decisions/0031-manage-zerops-github-source-from-control.md)); ADR-0030 remains the
   legacy CLI recovery record. The service, upload lifecycle, Control workflow, dashboard and narrow
   CLI repair path are locally implemented. The complete live browser flow, public and private live
-  deploys, and WU5 remain open.
+  deploys, multi-organization rollout and Operations last mile remain open.

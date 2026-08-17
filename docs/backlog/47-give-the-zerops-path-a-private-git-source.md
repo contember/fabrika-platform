@@ -11,8 +11,11 @@ upload lifecycle from
 [ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md) are implemented
 and locally verified. Normal App creation and adoption now run in authenticated Control under
 [ADR-0031](../decisions/0031-manage-zerops-github-source-from-control.md); ADR-0030 remains the legacy
-CLI recovery record. This item stays open for the complete live browser flow, public/private parity and
-credential-absence witness in `fabrika-install-test`. Effort L.
+CLI recovery record. Multiple private organization connections, keyed source credentials and scoped
+webhooks are locally implemented under
+[ADR-0032](../decisions/0032-support-multiple-private-github-source-connections.md). This item stays
+open for the ordered live rollout, complete browser flow, public/private parity, second-organization
+deploy and credential-absence witness in `fabrika-install-test`. Effort L.
 
 ## Problem
 
@@ -84,6 +87,10 @@ added the browser UI:
   conflicting or unverifiable state. Old ADR-0030 XDG files remain a CLI compatibility case only.
 - The console verifies the organization or every requested same-owner repository through App-JWT
   endpoints before publishing the connection. It never adds a repository to the installation.
+- One installation can hold multiple private organization-owned Apps. The migrated connection keeps
+  the v1 source credential and generic webhook; each new connection uses a create-only keyed v2 slot,
+  exact connection-and-installation registry pair and scoped webhook. Cloudflare keeps its
+  installation-only generic route. Fabrika defines no total connection-count limit.
 
 ## Operator step that remains
 
@@ -91,7 +98,8 @@ The public witness needs no GitHub App. For the private witness, an authenticate
 **Settings → Source**, creates or adopts the organization-owned App and approves its installation on
 the selected organization or repositories in GitHub. This is one installation-level action, not one
 Zerops GUI action per application service. `platform init` remains available for source/RPC repair and
-legacy-state inspection, not as a second normal App-creation path.
+legacy-state inspection, not as a second normal App-creation path. Adding another private organization
+uses the same Control flow while existing connections remain available.
 
 ## Acceptance
 
@@ -101,11 +109,15 @@ credential appears in Fabrika logs, Zerops process data or application-version m
 upload URL receives zero bytes, and repository entries cannot expose local source-service files.
 
 The code-level attacker-destination, repository-safety, Control recovery and legacy-adoption checks
-pass. The complete live browser/App creation/install flow, two successful live deploys and live
-credential inspection have not been performed; they are the remaining acceptance work. GitHub can
-still accept manifest conversion before Control persists the callback response; that narrow orphan
-requires deleting and recreating the App. GitHub also masks the webhook secret, so post-patch readback
-proves only the URL, JSON content type and TLS setting.
+pass. Deterministic multi-connection compatibility and isolation gates pass locally. The local fixture
+does not support the GitHub manifest/install browser E2E. The complete live browser/App
+creation/install flow, ordered v1-plus-v2 rollout, source restart, two successful public/private live
+deploys, a second-organization private deploy, one genuine positive legacy-v1 generic delivery, one
+genuine positive keyed-v2 scoped delivery and live credential inspection have not been performed; they
+are the remaining WU10 and backlog-47 acceptance work. GitHub can still accept manifest conversion
+before Control persists the callback response; that narrow orphan requires deleting and recreating the
+App. GitHub also masks the webhook secret, so post-patch readback proves only the URL, JSON content type
+and TLS setting.
 
 ## Touch points
 
