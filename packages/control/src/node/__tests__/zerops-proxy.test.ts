@@ -94,8 +94,10 @@ describe('Zerops proxy manifest delivery', () => {
 				written = input.value
 				return Promise.resolve()
 			},
-			triggerPipeline: () => {
-				calls.push('trigger')
+			triggerPipeline: (input: { buildFromGit?: string }) => {
+				const { buildFromGit } = input
+				// A namespace proxy has no Git integration, so a trigger without a source answers 400.
+				calls.push(`trigger:${buildFromGit ?? '(none)'}`)
 				return Promise.resolve({ id: 'process-1', appVersionId: 'version-1' })
 			},
 			latestAppVersion: () => Promise.resolve(null),
@@ -111,9 +113,14 @@ describe('Zerops proxy manifest delivery', () => {
 			api,
 			namespaceId: 'apps-prod',
 			proxyServiceId: 'proxy-shared',
+			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			sleep: () => Promise.resolve(),
 		})
-		expect(calls).toEqual([`put:proxy-shared:${FABRIKA_PROXY_MANIFEST_JSON}`, 'trigger', 'poll'])
+		expect(calls).toEqual([
+			`put:proxy-shared:${FABRIKA_PROXY_MANIFEST_JSON}`,
+			'trigger:https://github.com/contember/fabrika-platform',
+			'poll',
+		])
 		expect(JSON.parse(written)).toEqual({
 			apps: [
 				{

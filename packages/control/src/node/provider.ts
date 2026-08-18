@@ -124,6 +124,7 @@ export function zeropsControlProvider(
 				api: input.api,
 				namespaceId: input.namespaceId,
 				proxyServiceId: input.target.proxyServiceId,
+				proxyBuildFromGit: input.target.proxyBuildFromGit,
 				signal: input.signal,
 			})
 		},

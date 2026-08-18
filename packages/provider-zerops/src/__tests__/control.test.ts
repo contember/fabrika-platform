@@ -76,6 +76,7 @@ const readyNamespace = (): ProviderDeploymentNamespace => ({
 		payload: zeropsNamespaceTargetCodec.encode({
 			projectId: 'project-1',
 			proxyServiceId: 'proxy-service-1',
+			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			ready: true,
 		}),
 	},
@@ -864,6 +865,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 						payload: zeropsNamespaceTargetCodec.encode({
 							projectId: 'project-1',
 							proxyServiceId: 'proxy-service-1',
+							proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 							postgres: { type: 'postgresql:ha@18' },
 							postgresServiceId: 'postgres-service-1',
 							ready: true,
@@ -942,6 +944,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 						payload: zeropsNamespaceTargetCodec.encode({
 							projectId: 'project-1',
 							proxyServiceId: 'proxy-service-1',
+							proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 							ready: false,
 						}),
 					},

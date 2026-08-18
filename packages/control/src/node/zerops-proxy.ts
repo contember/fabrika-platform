@@ -67,6 +67,8 @@ export interface SyncZeropsProxyInput {
 	api: ProxyApi
 	namespaceId: string
 	proxyServiceId: string
+	/** The namespace proxy has no Git integration, so its pipeline must be told what to build. */
+	proxyBuildFromGit: string
 	signal?: AbortSignal
 	sleep?: (ms: number) => Promise<void>
 }
@@ -84,7 +86,14 @@ export async function syncZeropsProxy(input: SyncZeropsProxyInput): Promise<void
 		value: encodeProxyManifestJson(manifest),
 		signal,
 	})
-	const process = await input.api.triggerPipeline({ serviceId: input.proxyServiceId, zeropsSetup: 'proxy', signal })
+	// WITHOUT `buildFromGit` the platform builds from the service's configured Git integration, and a
+	// namespace proxy has none — the call then answers 400 `projectImportInvalidParameter`.
+	const process = await input.api.triggerPipeline({
+		serviceId: input.proxyServiceId,
+		buildFromGit: input.proxyBuildFromGit,
+		zeropsSetup: 'proxy',
+		signal,
+	})
 	const version = process?.appVersionId === undefined
 		? await input.api.latestAppVersion({ serviceId: input.proxyServiceId, signal })
 		: { id: process.appVersionId }

@@ -92,6 +92,8 @@ export interface ZeropsBeforeDeployInput {
 	readonly target: ZeropsStoredTarget & {
 		readonly projectId: string
 		readonly proxyServiceId: string
+		/** The namespace proxy has no Git integration, so its pipeline must be told what to build. */
+		readonly proxyBuildFromGit: string
 	}
 	readonly artifact: FabrikaManifest
 	readonly api: ZeropsApi
@@ -175,7 +177,7 @@ const decodeNamespace = (
 const resolvedEnvironment = (
 	environment: ProviderEnvironment,
 	options: { requireReady: boolean },
-): DecodedZeropsEnvironment & { projectId: string; proxyServiceId?: string } => {
+): DecodedZeropsEnvironment & { projectId: string; proxyServiceId?: string; proxyBuildFromGit?: string } => {
 	const decoded = decodeEnvironment(environment)
 	const projectId = decoded.namespaceTarget.projectId
 	if (projectId === undefined) {
@@ -188,10 +190,15 @@ const resolvedEnvironment = (
 	if (options.requireReady && proxyServiceId === undefined) {
 		throw new Error(`Zerops deployment namespace \`${decoded.namespace.id}\` has no proxy service id`)
 	}
+	const proxyBuildFromGit = decoded.namespaceTarget.proxyBuildFromGit
+	if (options.requireReady && proxyBuildFromGit === undefined) {
+		throw new Error(`Zerops deployment namespace \`${decoded.namespace.id}\` has no proxy build source`)
+	}
 	return {
 		...decoded,
 		projectId,
 		...(proxyServiceId === undefined ? {} : { proxyServiceId }),
+		...(proxyBuildFromGit === undefined ? {} : { proxyBuildFromGit }),
 	}
 }
 
@@ -443,6 +450,10 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			if (proxyServiceId === undefined) {
 				throw new Error(`Zerops deployment namespace \`${placement.namespace.id}\` has no proxy service id`)
 			}
+			const proxyBuildFromGit = placement.proxyBuildFromGit
+			if (proxyBuildFromGit === undefined) {
+				throw new Error(`Zerops deployment namespace \`${placement.namespace.id}\` has no proxy build source`)
+			}
 			const artifact = decodeEnvelope('artifact', registration.environment.artifact, zeropsArtifactCodec)
 			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
 			let source: ZeropsRuntimeTarget['source']
@@ -468,6 +479,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 						serviceId: placement.target.serviceId,
 						projectId: placement.projectId,
 						proxyServiceId,
+						proxyBuildFromGit,
 					},
 					artifact,
 					api,
