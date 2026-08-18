@@ -582,6 +582,9 @@ export const runInstall = async (input: PlatformInstallInput, collaborators: Ins
 		name: `fabrika-${environment}`,
 		projects: [{ projectId: project.id, roleCode: 'ADMIN' }],
 		roleCode: 'NO_ACCESS',
+		// An app namespace IS a project, so a control plane that cannot create one cannot deploy an
+		// application at all (ADR-0034). `NO_ACCESS` still keeps every project it did not create out of reach.
+		canCreateProjects: true,
 		signal,
 	})
 	if (token.token === '') {
