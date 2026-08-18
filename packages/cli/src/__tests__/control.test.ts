@@ -242,3 +242,51 @@ describe('control namespaces', () => {
 		expect(captured.calls[0]?.body).toMatchObject({ input: { exclusiveAppId: 'notes' } })
 	})
 })
+
+describe('control register source binding', () => {
+	const registerArgs = (extra: string[]): string[] => [
+		`--manifest=${import.meta.dir}/fixtures/manifest.json`,
+		'--app=notes',
+		'--repo=https://github.com/acme/notes',
+		'--env=prod',
+		...extra,
+	]
+
+	test('--installation-id=none registers the anonymous public-repository source', async () => {
+		const captured = captureFetch({ result: { app: { id: 'notes' }, env: { env: 'prod', provider: 'zerops' } } })
+		await captureStdout(() => runControlCli('register', registerArgs(['--installation-id=none']), 'zerops', CONTROL_ENV))
+		expect(captured.calls[0]?.body).toMatchObject({ input: { githubInstallationId: null } })
+	})
+
+	test('takes the envelope version from the manifest rather than a literal', async () => {
+		const captured = captureFetch({ result: { app: { id: 'notes' }, env: { env: 'prod', provider: 'zerops' } } })
+		await captureStdout(() =>
+			runControlCli(
+				'register',
+				registerArgs(['--installation-id=none', `--manifest=${import.meta.dir}/fixtures/manifest-v3.json`]),
+				'zerops',
+				CONTROL_ENV,
+			)
+		)
+		expect(captured.calls[0]?.body).toMatchObject({
+			input: { artifact: { version: 3 }, target: { version: 3 } },
+		})
+	})
+
+	test('refuses a file that is not a built manifest', async () => {
+		await expect(
+			runControlCli(
+				'register',
+				registerArgs(['--installation-id=none', `--manifest=${import.meta.dir}/fixtures/not-a-manifest.json`]),
+				'zerops',
+				CONTROL_ENV,
+			),
+		).rejects.toThrow('declares no manifestVersion')
+	})
+
+	test('a numeric --installation-id names one installation outright', async () => {
+		const captured = captureFetch({ result: { app: { id: 'notes' }, env: { env: 'prod', provider: 'zerops' } } })
+		await captureStdout(() => runControlCli('register', registerArgs(['--installation-id=154387356']), 'zerops', CONTROL_ENV))
+		expect(captured.calls[0]?.body).toMatchObject({ input: { githubInstallationId: 154387356 } })
+	})
+})

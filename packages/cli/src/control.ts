@@ -29,7 +29,7 @@ Usage:
   fabrika control apps get --app=<id>
   fabrika control register --provider=<name> --app=<id> --repo=<url> --env=<name> --manifest=<path>
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>]
-                           [--namespace=<id>] [--installation-id=<n>]
+                           [--namespace=<id>] [--installation-id=<n|none>]
   fabrika control namespaces list
   fabrika control namespaces plan   --namespace=<id> --env=<name> --preset=<cheap|mid|full> [placement]
   fabrika control namespaces create --namespace=<id> --env=<name> --preset=<cheap|mid|full> [placement]
@@ -38,6 +38,10 @@ Usage:
   fabrika control runs list [--app=<id>] [--env=<name>] [--limit=<n>]
   fabrika control runs get --run=<id>
   fabrika control runs log --run=<id>
+
+\`--installation-id\` has three states: omitted resolves the installation from the organization's
+connected GitHub App, \`none\` registers an anonymous PUBLIC repository source, and a number names one
+installation outright.
 
 Namespace placement options, each defaulting to what the preset would choose:
 
@@ -190,6 +194,17 @@ const emit = (flags: Flags, result: unknown, render: () => string): void => {
 	console.info(flags.json ? JSON.stringify(result, null, 2) : render())
 }
 
+/** `fabrika app build` writes `manifestVersion`; it is the version the provider's artifact codec accepts. */
+const manifestVersion = (manifest: JsonValue, path: string): number => {
+	const version = typeof manifest === 'object' && manifest !== null && !Array.isArray(manifest)
+		? Reflect.get(manifest, 'manifestVersion')
+		: undefined
+	if (typeof version !== 'number' || !Number.isSafeInteger(version) || version <= 0) {
+		throw new Error(`${path} declares no manifestVersion — run \`fabrika app build\` to produce one`)
+	}
+	return version
+}
+
 const appLine = (app: AppDto): string => `${app.id}\t${app.repoUrl}\t${app.defaultBranch}`
 
 const runLine = (run: RunDto): string => `${run.id}\t${run.appId}\t${run.env}\t${run.status}\t${run.ref}`
@@ -256,8 +271,15 @@ const runRegister = async (flags: Flags, provider: string | undefined, env: Read
 	if (provider === undefined || provider === '') {
 		throw new Error('--provider=<name> is required: it labels the envelope this registration carries.')
 	}
-	const manifest = await readJsonFile(required(flags, 'manifest'))
+	const manifestPath = required(flags, 'manifest')
+	const manifest = await readJsonFile(manifestPath)
+	// The envelope's version is the manifest's own, never a literal: `fabrika app build` writes the
+	// version its provider's codec accepts, and a hardcoded one goes stale the moment that codec moves.
+	const version = manifestVersion(manifest, manifestPath)
 	const installationId = optional(flags, 'installation-id')
+	// Three states, because the registry has three: absent resolves from the connected GitHub App,
+	// `none` is the anonymous public-repository path, and a number names one installation outright.
+	const anonymousSource = installationId === 'none'
 	const domain = optional(flags, 'domain')
 	const publicOrigin = optional(flags, 'public-origin')
 	const triggerRef = optional(flags, 'trigger-ref')
@@ -266,11 +288,14 @@ const runRegister = async (flags: Flags, provider: string | undefined, env: Read
 		id: required(flags, 'app'),
 		repoUrl: required(flags, 'repo'),
 		env: required(flags, 'env'),
-		target: { provider, version: 2, payload: {} },
-		artifact: { provider, version: 2, payload: manifest },
-		// Blank → resolve from the installed GitHub App, which is what the console's empty field means.
+		// An empty placeholder: registration DISCOVERS the real target from the manifest and replaces this.
+		target: { provider, version, payload: {} },
+		artifact: { provider, version, payload: manifest },
 		...(installationId === undefined
+			// Blank → resolve from the installed GitHub App, which is what the console's empty field means.
 			? { resolveInstallationId: true }
+			: anonymousSource
+			? { githubInstallationId: null }
 			: { githubInstallationId: positiveInteger(installationId, 'installation-id') }),
 		...(domain === undefined ? {} : { domain }),
 		...(publicOrigin === undefined ? {} : { publicOrigin }),

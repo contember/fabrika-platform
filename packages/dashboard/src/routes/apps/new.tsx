@@ -44,6 +44,11 @@ export default createPage()
 				setError('Paste a valid fabrika.manifest.json.')
 				return
 			}
+			const manifestVersion = readManifestVersion(manifestPayload)
+			if (manifestVersion === null) {
+				setError('That file declares no manifestVersion — paste the fabrika.manifest.json that `fabrika app build` wrote.')
+				return
+			}
 			const installTrimmed = installationId.trim()
 			// Blank → auto-detect from the installed GitHub App; a number → set it manually.
 			const installField = installTrimmed === ''
@@ -57,8 +62,10 @@ export default createPage()
 				...(publicOrigin.trim() === '' ? {} : { publicOrigin: publicOrigin.trim() }),
 				...(triggerRef.trim() === '' ? {} : { triggerRef: triggerRef.trim() }),
 				namespaceId,
-				target: { provider: 'zerops', version: 2, payload: {} },
-				artifact: { provider: 'zerops', version: 2, payload: manifestPayload },
+				// The pasted manifest declares the version its provider's codec accepts. A literal here goes
+				// stale the moment that codec moves, and registration then refuses every artifact.
+				target: { provider: 'zerops', version: manifestVersion, payload: {} },
+				artifact: { provider: 'zerops', version: manifestVersion, payload: manifestPayload },
 				...installField,
 			}
 			setBusy(true)
@@ -206,6 +213,15 @@ export default createPage()
 			</>
 		)
 	})
+
+/** `fabrika app build` writes `manifestVersion`; it is the version the provider's artifact codec accepts. */
+function readManifestVersion(manifest: JsonValue): number | null {
+	if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+		return null
+	}
+	const version = Reflect.get(manifest, 'manifestVersion')
+	return typeof version === 'number' && Number.isSafeInteger(version) && version > 0 ? version : null
+}
 
 function isJsonValue(value: unknown): value is JsonValue {
 	if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
