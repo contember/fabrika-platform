@@ -11,6 +11,7 @@
 
 import { createProvider, type ProviderDeploySession, type ProviderModule, type TypedProviderRun } from '@fabrika/provider-contract'
 import {
+	waitForProcess,
 	ZEROPS_ACTIVE,
 	ZEROPS_PROCESS_FINISHED,
 	ZEROPS_PROCESS_TERMINAL,
@@ -273,6 +274,17 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 			// `override: true` on every service (written by the compiler) is what makes re-applying safe.
 			const result = await zerops.api.importServices({ projectId: target.projectId, yaml: compiled.yaml, signal })
 			log(`  imported: ${result.services.map((service) => `${service.name} (${service.id})`).join(', ') || '(none reported)'}`)
+			// An import ANSWERS before its services exist. Triggering a pipeline on a service Zerops is
+			// still creating answers 400 `projectImportInvalidParameter`, which is what the first deploy
+			// into a fresh namespace hit; a re-apply onto services that already exist reports none.
+			const pending = result.services.flatMap((service) => service.processes.map((process) => ({ service: service.name, id: process.id })))
+			for (const process of pending) {
+				assertRunning(signal)
+				await waitForProcess({ api: zerops.api, processId: process.id, sleep: zerops.sleep, signal, label: `the ${process.service} import` })
+			}
+			if (pending.length > 0) {
+				log(`  awaited ${pending.length} import process(es)`)
+			}
 			return
 		}
 

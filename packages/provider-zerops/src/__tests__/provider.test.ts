@@ -59,6 +59,7 @@ interface Overrides {
 	uploadError?: Error
 	versionErrors?: number
 	cancelMode?: 'throw' | 'hang'
+	importProcesses?: { id: string; status: ZeropsProcess['status'] }[]
 }
 
 const LOG_ACCESS: ZeropsLogAccess = {
@@ -78,7 +79,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		importServices: async ({ projectId, yaml }) => {
 			recorded.calls.push('importServices')
 			recorded.imports.push({ projectId, yaml })
-			return { projectId, services: [{ id: 'service-1', name: 'api', processes: [] }] }
+			return { projectId, services: [{ id: 'service-1', name: 'api', processes: overrides.importProcesses ?? [] }] }
 		},
 		importProject: async ({ clientId }) => ({ projectId: clientId, services: [] }),
 		triggerPipeline: async ({ serviceId, buildFromGit, zeropsSetup }) => {
@@ -337,6 +338,22 @@ describe('Zerops provider', () => {
 		await session.execute('apply-import')
 		await expect(session.execute('trigger-deploy')).rejects.toThrow('different installation coordinates')
 		expect(recorded.v2Uploads).toHaveLength(0)
+	})
+
+	test('waits for the import processes before triggering, because an import answers before its services exist', async () => {
+		const provider = createZeropsProvider(() =>
+			makeCollaborators(recorded, {
+				importProcesses: [{ id: 'import-1', status: 'RUNNING' }],
+				processStatuses: ['RUNNING', 'FINISHED', 'FINISHED'],
+				triggerVersionId: 'version-1',
+			})
+		)
+		const session = await provider.runtime.open(runtimeRun(recorded, provider, target()))
+		await session.execute('apply-import')
+
+		// Triggering a pipeline on a service Zerops is still creating answers 400
+		// `projectImportInvalidParameter`; the first deploy into a fresh namespace hit exactly that.
+		expect(recorded.calls).toEqual(['importServices', 'getProcess', 'getProcess'])
 	})
 
 	test('owns a distinct plan and executes it through the typed provider contract', async () => {
