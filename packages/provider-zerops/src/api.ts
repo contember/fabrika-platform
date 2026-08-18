@@ -32,6 +32,15 @@ export type ZeropsAppVersionStatus =
 	| 'BACKUP'
 	| 'CANCELLED'
 
+/**
+ * `sensitive` on every user-data WRITE, create and update alike. Required by the platform — omitting it answers
+ * `400 invalidUserInput` with `{"sensitive":["field is required"]}` (measured live, 2026-08-18) — and
+ * `true` because most of what fabrika writes is a credential. It costs nothing to read: a sensitive
+ * variable's `content` still comes back verbatim from `GET /service-stack/{id}/env`, also measured, so the
+ * compare-before-write both `platform deploy` and the create-only credential slots depend on still works.
+ */
+const SENSITIVE_USER_DATA = true
+
 /** The one status that means "this version is live". */
 export const ZEROPS_ACTIVE: ZeropsAppVersionStatus = 'ACTIVE'
 
@@ -497,9 +506,14 @@ export interface ZeropsApi {
 	 * `compile.ts` writes `envIsolation` instead of inheriting it: a security-relevant field that never
 	 * reaches the wire is a field nobody can review.
 	 *
-	 * NOT EXPOSED, deliberately: `canCreateProjects` — a token that creates projects receives `OWNER` on
-	 * what it creates, which is exactly the scope this call exists to avoid — and `canViewFinances` /
-	 * `canEditFinances`. All three default to `false`, and fabrika has no use for any of them.
+	 * `canCreateProjects` IS EXPOSED, because a control plane that provisions app namespaces cannot work
+	 * without it: every namespace preset creates a project, and `POST /client/{id}/project/import` answers
+	 * `403 insufficientPermissions` to a token without the flag (measured live, 2026-08-18; ADR-0034).
+	 * The cost is real and bounded — the token receives `OWNER` on what it creates, and nothing else:
+	 * `roleCode` stays `NO_ACCESS`, so a project it never created and was never granted stays unreachable.
+	 *
+	 * NOT EXPOSED, deliberately: `canViewFinances` / `canEditFinances`. Both default to `false`, and
+	 * fabrika has no use for either.
 	 *
 	 * UNVERIFIED BEHAVIOUR: EVERYTHING AT RUNTIME. No token has ever been minted against a real account —
 	 * doing so is a mutation, not an inspection — so the shapes below are the published document's and the
@@ -517,6 +531,8 @@ export interface ZeropsApi {
 		projects: readonly { projectId: string; roleCode: ZeropsRoleCode }[]
 		/** The client-wide role. Defaults to `NO_ACCESS`, which is the entire point of a scoped token. */
 		roleCode?: ZeropsRoleCode
+		/** Let the token create projects, which it then OWNS. Required to provision app namespaces (ADR-0034). */
+		canCreateProjects?: boolean
 		signal: AbortSignal
 	}): Promise<ZeropsIntegrationToken>
 
@@ -1087,7 +1103,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		createServiceEnv: async ({ serviceId, key, value, signal }) => {
 			try {
 				await request('create-only service env', 'POST', `/service-stack/${serviceId}/user-data`, {
-					body: { key, content: value },
+					body: { key, content: value, sensitive: SENSITIVE_USER_DATA },
 					signal,
 					omitErrorResponseDetails: true,
 				})
@@ -1101,7 +1117,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			// `redactDetail` on both writes: this is the one place a secret VALUE is in the request body.
 			try {
 				await request('create service env', 'POST', `/service-stack/${serviceId}/user-data`, {
-					body: { key, content: value },
+					body: { key, content: value, sensitive: SENSITIVE_USER_DATA },
 					signal,
 					redactDetail: true,
 				})
@@ -1121,7 +1137,11 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 					`zerops: service ${serviceId} already defines \`${key}\` outside the environment API — it cannot be written`,
 				)
 			}
-			await request('update service env', 'PUT', `/user-data/${existing.id}`, { body: { key, content: value }, signal, redactDetail: true })
+			await request('update service env', 'PUT', `/user-data/${existing.id}`, {
+				body: { key, content: value, sensitive: SENSITIVE_USER_DATA },
+				signal,
+				redactDetail: true,
+			})
 		},
 
 		deleteServiceEnv: async ({ envId, signal }) => {
@@ -1131,7 +1151,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		getProjectEnv: async ({ projectEnvId, signal }) =>
 			readServiceEnv(await request('get project env', 'GET', `/project-env/${projectEnvId}`, { signal })),
 
-		createIntegrationToken: async ({ clientId, name, projects, roleCode, signal }) =>
+		createIntegrationToken: async ({ clientId, name, projects, roleCode, canCreateProjects, signal }) =>
 			// `redactDetail`: unlike every other write here the SECRET is in the RESPONSE, not the request, so
 			// this is the one error envelope that could quote a minted token back at us.
 			readIntegrationToken(
@@ -1139,6 +1159,9 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 					body: {
 						name,
 						roleCode: roleCode ?? 'NO_ACCESS',
+						// Always sent, like `roleCode`: a security-relevant field that never reaches the wire is a
+						// field nobody can review.
+						canCreateProjects: canCreateProjects ?? false,
 						projects: projects.map((grant) => ({ projectId: grant.projectId, roleCode: grant.roleCode })),
 					},
 					signal,

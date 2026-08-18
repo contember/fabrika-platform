@@ -387,9 +387,24 @@ describe('Zerops service-level environment writes', () => {
 		expect(requests).toEqual([{
 			method: 'POST',
 			url: 'https://zerops.test/service-stack/service-1/user-data',
-			body: JSON.stringify({ key: 'FABRIKA_RELEASE', content: 'v1' }),
+			body: JSON.stringify({ key: 'FABRIKA_RELEASE', content: 'v1', sensitive: true }),
 			signal: controller.signal,
 		}])
+	})
+
+	test('marks every user-data write sensitive, which the platform requires', async () => {
+		const bodies: unknown[] = []
+		const fetchImpl: FetchLike = async (_url, init) => {
+			bodies.push(typeof init?.body === 'string' ? JSON.parse(init.body) : null)
+			return jsonResponse({ id: 'process-1' })
+		}
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_PROXY_MANIFEST_JSON', value: '{}', signal: signal() })
+
+		// Omitting it answers 400 `invalidUserInput` with `{"sensitive":["field is required"]}` on the live
+		// platform, which is how a namespace's very first proxy variable failed to be written.
+		expect(bodies).toEqual([{ key: 'FABRIKA_PROXY_MANIFEST_JSON', content: '{}', sensitive: true }])
 	})
 
 	test('keeps a duplicate generic and never reads or updates it', async () => {
@@ -446,7 +461,11 @@ describe('Zerops service-level environment writes', () => {
 
 		await api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_RELEASE', value: 'v1', signal: signal() })
 
-		expect(log).toEqual([{ method: 'POST', path: '/service-stack/service-1/user-data', body: { key: 'FABRIKA_RELEASE', content: 'v1' } }])
+		expect(log).toEqual([{
+			method: 'POST',
+			path: '/service-stack/service-1/user-data',
+			body: { key: 'FABRIKA_RELEASE', content: 'v1', sensitive: true },
+		}])
 	})
 
 	test('updates an existing key through its record id after the create conflicts', async () => {
@@ -461,8 +480,8 @@ describe('Zerops service-level environment writes', () => {
 			'GET /service-stack/service-1/env',
 			'PUT /user-data/env-7',
 		])
-		// Zerops rejects an update that sends `content` alone.
-		expect(log[2]?.body).toEqual({ key: 'FABRIKA_RELEASE', content: 'v2' })
+		// Zerops rejects an update that sends `content` alone, and one that omits `sensitive`.
+		expect(log[2]?.body).toEqual({ key: 'FABRIKA_RELEASE', content: 'v2', sensitive: true })
 	})
 
 	test('refuses a key the service declares outside the environment API, without echoing the value', async () => {
@@ -567,12 +586,18 @@ describe('Zerops integration tokens', () => {
 		expect(log).toEqual([{
 			method: 'POST',
 			url: 'https://zerops.test/client/client-1/integration-token',
-			// `roleCode` is on the wire although `NO_ACCESS` is what the schema would have defaulted to.
-			body: { name: 'fabrika-control', roleCode: 'NO_ACCESS', projects: [{ projectId: 'project-1', roleCode: 'ADMIN' }] },
+			// `roleCode` and `canCreateProjects` are both on the wire although each is what the schema would
+			// have defaulted to: a security-relevant field nobody can see is a field nobody can review.
+			body: {
+				name: 'fabrika-control',
+				roleCode: 'NO_ACCESS',
+				canCreateProjects: false,
+				projects: [{ projectId: 'project-1', roleCode: 'ADMIN' }],
+			},
 		}])
 	})
 
-	test('sends an explicitly requested client role and never asks for project creation', async () => {
+	test('sends an explicitly requested client role and asks for project creation only when told to', async () => {
 		const bodies: unknown[] = []
 		const fetchImpl: FetchLike = async (_url, init) => {
 			bodies.push(init?.body === undefined ? undefined : JSON.parse(init.body))
@@ -588,8 +613,13 @@ describe('Zerops integration tokens', () => {
 			signal: signal(),
 		})
 
-		expect(bodies).toEqual([{ name: 'ci', roleCode: 'READ_ONLY', projects: [{ projectId: 'project-1', roleCode: 'BASIC_USER' }] }])
-		expect(JSON.stringify(bodies)).not.toContain('canCreateProjects')
+		expect(bodies).toEqual([{
+			name: 'ci',
+			roleCode: 'READ_ONLY',
+			canCreateProjects: false,
+			projects: [{ projectId: 'project-1', roleCode: 'BASIC_USER' }],
+		}])
+		expect(JSON.stringify(bodies)).not.toContain('canViewFinances')
 	})
 
 	test('reports a role this build does not know as absent rather than guessing one', async () => {

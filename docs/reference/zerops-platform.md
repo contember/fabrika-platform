@@ -618,6 +618,28 @@ once while public and once while private in `fabrika-install-test`, and the live
 application-version metadata must be inspected for credentials. The subsequent browser handoff and
 Operations exception-ingest witness is also live-only.
 
+### Verified live (2026-08-18, account `prg1`, projects `fabrika-install-test` + `fabrika-notes-prod`) — provisioning an app namespace
+
+The first namespace ever provisioned on a real account. Three platform facts, each measured rather
+than read, and each of which stopped the provision dead until it was addressed.
+
+| Behaviour                                                                                                              | Result                                                                                                                                                                                                                                  |
+| ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /client/{id}/project/import` with the installation's integration token (client `NO_ACCESS`, one project `ADMIN`) | **`403 insufficientPermissions`.** Client-scoped READS with the same token answer `200`, so the token is healthy — it simply may not create a project ([ADR-0034](../decisions/0034-the-control-plane-creates-the-projects-it-owns.md)) |
+| The same call after `zops token integration update <id> --can-create-projects`                                         | **Accepted.** The token's grant list gains the new project at `OWNER`, automatically and without being asked                                                                                                                            |
+| `POST /service-stack/{id}/user-data` without `sensitive`                                                               | **`400 invalidUserInput`**, `meta.metadata = {"sensitive":["field is required"]}`. The same applies to `PUT /user-data/{id}`                                                                                                            |
+| A user-data write with `sensitive: true`                                                                               | Accepted, and `GET /service-stack/{id}/env` still returns its `content` VERBATIM — so compare-before-write keeps working on secrets                                                                                                     |
+| `enableSubdomainAccess` immediately after the namespace proxy's first build reports ACTIVE                             | **`serviceStackIsNotHttp`** — "exposes no deployed HTTP port". The ports appear a moment later; the next reconcile succeeds                                                                                                             |
+
+The last one is worth stating plainly, because it contradicts the natural reading of the
+`enableSubdomainAccess`-after-first-deploy rule recorded above: an ACTIVE app version is not yet
+sufficient. The published HTTP ports lag it, so a namespace provision must tolerate one retry rather
+than treat the error as terminal.
+
+Grants are fixed at mint time and the update API replaces the grant set WHOLESALE, so an operator
+repairing a live token must re-pass every existing project grant in the same call or silently remove
+it.
+
 ### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — updating a running installation
 
 How the four platform services on `fabrika-test` were taken from a two-day-old build to `HEAD`. There
