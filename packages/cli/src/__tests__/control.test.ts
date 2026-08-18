@@ -226,6 +226,14 @@ describe('control namespaces', () => {
 		})
 	})
 
+	test('reconcile resumes one namespace by id instead of planning a second', async () => {
+		const captured = captureFetch({ result: { id: 'notes-prod', env: 'prod', state: 'ready', exclusiveAppId: null } })
+		const out = await captureStdout(() => runControlCli('namespaces', ['reconcile', '--namespace=notes-prod'], undefined, CONTROL_ENV))
+		expect(captured.calls).toHaveLength(1)
+		expect(captured.calls[0]?.body).toEqual({ method: 'namespaces.reconcile', input: { namespaceId: 'notes-prod' } })
+		expect(out).toBe('notes-prod\tprod\tready\t-')
+	})
+
 	test('carries an exclusive app through both calls for the full preset', async () => {
 		const captured = captureFetch({ result: { namespace: { target: { provider: 'zerops', version: 1, payload: {} } } } })
 		await captureStdout(() =>

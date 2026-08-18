@@ -33,6 +33,7 @@ Usage:
   fabrika control namespaces list
   fabrika control namespaces plan   --namespace=<id> --env=<name> --preset=<cheap|mid|full> [placement]
   fabrika control namespaces create --namespace=<id> --env=<name> --preset=<cheap|mid|full> [placement]
+  fabrika control namespaces reconcile --namespace=<id>
   fabrika control deploy --app=<id> --env=<name> [--ref=<ref>]
   fabrika control runs list [--app=<id>] [--env=<name>] [--limit=<n>]
   fabrika control runs get --run=<id>
@@ -354,6 +355,13 @@ const runNamespaces = async (verb: string | undefined, flags: Flags, env: Readon
 	if (verb === 'plan') {
 		const result = await client.namespaces.plan(namespacePlan(flags))
 		emit(flags, result, () => JSON.stringify(result.namespace.target.payload))
+		return
+	}
+	if (verb === 'reconcile') {
+		// Provisioning checkpoints its progress, so a namespace left `failed` by a timeout or a denied
+		// call is resumed by reconciling it again rather than by creating a second one.
+		const result = await client.namespaces.reconcile({ namespaceId: required(flags, 'namespace') })
+		emit(flags, result, () => namespaceLine(result))
 		return
 	}
 	if (verb === 'create') {
