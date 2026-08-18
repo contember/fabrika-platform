@@ -159,3 +159,4 @@ There is no Fabrika connection-count limit; individual payloads and pages remain
 - [0030](0030-persist-github-app-creation-before-success.md) — Persist GitHub App creation before success — accepted; amends 0029's init durability detail (2026-08-12)
 - [0031](0031-manage-zerops-github-source-from-control.md) — Manage the Zerops GitHub source connection from control — accepted; supersedes 0030 for normal Zerops setup (2026-08-13)
 - [0032](0032-support-multiple-private-github-source-connections.md) — Support one private GitHub source connection per organization — accepted; extends 0029 and 0031 (2026-08-14)
+- [0033](0033-operate-the-control-plane-from-the-cli.md) — Operate the control plane from the CLI — accepted (2026-08-18)
