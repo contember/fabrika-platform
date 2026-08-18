@@ -11,7 +11,15 @@
 
 import { createRpcClient, RpcError } from '@fabrika/app'
 import type { IssueKeyInput, IssueKeyResult } from '@fabrika/auth-core'
-import type { AppDto, ControlRpcContract, JsonValue, RegisterAppRequest, RunDto } from '@fabrika/control-contract'
+import type {
+	AppDto,
+	ControlRpcContract,
+	DeploymentNamespaceDto,
+	JsonValue,
+	PlanDeploymentNamespaceRequest,
+	RegisterAppRequest,
+	RunDto,
+} from '@fabrika/control-contract'
 
 const USAGE = `fabrika control — operate the Delivery control plane
 
@@ -22,10 +30,23 @@ Usage:
   fabrika control register --provider=<name> --app=<id> --repo=<url> --env=<name> --manifest=<path>
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>]
                            [--namespace=<id>] [--installation-id=<n>]
+  fabrika control namespaces list
+  fabrika control namespaces plan   --namespace=<id> --env=<name> --preset=<cheap|mid|full> [placement]
+  fabrika control namespaces create --namespace=<id> --env=<name> --preset=<cheap|mid|full> [placement]
   fabrika control deploy --app=<id> --env=<name> [--ref=<ref>]
   fabrika control runs list [--app=<id>] [--env=<name>] [--limit=<n>]
   fabrika control runs get --run=<id>
   fabrika control runs log --run=<id>
+
+Namespace placement options, each defaulting to what the preset would choose:
+
+  --project=<name>                  the provider project the namespace owns
+  --core-package=<LIGHT|SERIOUS>    defaults to SERIOUS for \`prod\`, LIGHT elsewhere
+  --public-access=<custom-domain|zerops-subdomain>
+  --exclusive-app=<id>              required by, and only by, the \`full\` preset
+
+\`namespaces plan\` is a preview and changes nothing; \`namespaces create\` plans and then commits
+that exact plan, which is what the console's two-step form does.
 
 Every command accepts --json, which prints the procedure's result verbatim.
 
@@ -301,6 +322,57 @@ const runRuns = async (verb: string | undefined, flags: Flags, env: Readonly<Rec
 	throw new Error(`Unknown \`control runs\` verb: ${verb ?? '(missing)'}`)
 }
 
+const namespaceLine = (namespace: DeploymentNamespaceDto): string =>
+	`${namespace.id}\t${namespace.env}\t${namespace.state}\t${namespace.exclusiveAppId ?? '-'}`
+
+/** Placement flags are the preset's overrides, so only the ones actually given are sent. */
+const namespacePlan = (flags: Flags): PlanDeploymentNamespaceRequest => {
+	const exclusiveAppId = optional(flags, 'exclusive-app')
+	const options: Record<string, JsonValue> = {}
+	const project = optional(flags, 'project')
+	const corePackage = optional(flags, 'core-package')
+	const publicAccess = optional(flags, 'public-access')
+	if (project !== undefined) options['projectName'] = project
+	if (corePackage !== undefined) options['corePackage'] = corePackage
+	if (publicAccess !== undefined) options['publicAccess'] = publicAccess
+	return {
+		id: required(flags, 'namespace'),
+		env: required(flags, 'env'),
+		preset: required(flags, 'preset'),
+		...(exclusiveAppId === undefined ? {} : { exclusiveAppId }),
+		...(Object.keys(options).length === 0 ? {} : { options }),
+	}
+}
+
+const runNamespaces = async (verb: string | undefined, flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
+	const client = controlClient(flags, env)
+	if (verb === 'list') {
+		const result = await client.namespaces.list()
+		emit(flags, result, () => result.items.map(namespaceLine).join('\n'))
+		return
+	}
+	if (verb === 'plan') {
+		const result = await client.namespaces.plan(namespacePlan(flags))
+		emit(flags, result, () => JSON.stringify(result.namespace.target.payload))
+		return
+	}
+	if (verb === 'create') {
+		const request = namespacePlan(flags)
+		// Plan then commit THAT plan, exactly as the console's two-step form does — never a second
+		// derivation, which could differ if the provider's defaults moved between the two calls.
+		const planned = await client.namespaces.plan(request)
+		const result = await client.namespaces.create({
+			id: request.id,
+			env: request.env,
+			target: planned.namespace.target,
+			...(request.exclusiveAppId === undefined ? {} : { exclusiveAppId: request.exclusiveAppId }),
+		})
+		emit(flags, result, () => namespaceLine(result))
+		return
+	}
+	throw new Error(`Unknown \`control namespaces\` verb: ${verb ?? '(missing)'}`)
+}
+
 const runDeploy = async (flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
 	const ref = optional(flags, 'ref')
 	const result = await controlClient(flags, env).deploy({
@@ -337,6 +409,9 @@ export const runControlCli = async (
 				return
 			case 'runs':
 				await runRuns(verb, flags, env)
+				return
+			case 'namespaces':
+				await runNamespaces(verb, flags, env)
 				return
 			case 'register':
 				await runRegister(flags, provider, env)

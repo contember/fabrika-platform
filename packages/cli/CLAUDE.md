@@ -23,6 +23,8 @@ label the envelope a registration carries.
 - `control key issue` is the bootstrap: a fresh installation's provisioning key is
   held in env and never in the DB, so the proxy — which resolves bearers through
   IAM's `mintFromKey` — cannot admit it. The command mints a DB-backed key instead.
+- `namespaces create` commits the plan it just read, never a second derivation —
+  the console's two-step form has the same rule for the same reason.
 - **Do not add source-connection verbs.** Creating a GitHub App connection needs a
   human principal (ADR-0031); the console owns it.
 

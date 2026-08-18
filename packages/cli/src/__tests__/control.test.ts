@@ -193,3 +193,44 @@ describe('control key issue', () => {
 			.rejects.toThrow('IAM refused the issue request: HTTP 500')
 	})
 })
+
+describe('control namespaces', () => {
+	test('plan sends only the placement options actually given', async () => {
+		const captured = captureFetch({ result: { namespace: { target: { provider: 'zerops', version: 1, payload: { corePackage: 'LIGHT' } } } } })
+		await captureStdout(() =>
+			runControlCli('namespaces', ['plan', '--namespace=notes-prod', '--env=prod', '--preset=mid', '--core-package=LIGHT'], undefined, CONTROL_ENV)
+		)
+		expect(captured.calls[0]?.body).toEqual({
+			method: 'namespaces.plan',
+			input: { id: 'notes-prod', env: 'prod', preset: 'mid', options: { corePackage: 'LIGHT' } },
+		})
+	})
+
+	test('create commits the plan it just read rather than deriving a second one', async () => {
+		const calls: Captured[] = []
+		globalThis.fetch = asFetch(async (input, init) => {
+			const raw = init?.body
+			const body: unknown = typeof raw === 'string' ? JSON.parse(raw) : null
+			calls.push({ url: String(input), authorization: null, body })
+			const method = typeof body === 'object' && body !== null ? Reflect.get(body, 'method') : null
+			const result = method === 'namespaces.plan'
+				? { namespace: { target: { provider: 'zerops', version: 1, payload: { projectName: 'fabrika-notes-prod' } } } }
+				: { id: 'notes-prod', env: 'prod', state: 'ready', exclusiveAppId: null }
+			return new Response(JSON.stringify({ result }), { status: 200, headers: { 'content-type': 'application/json' } })
+		})
+		await captureStdout(() => runControlCli('namespaces', ['create', '--namespace=notes-prod', '--env=prod', '--preset=mid'], undefined, CONTROL_ENV))
+		expect(calls).toHaveLength(2)
+		expect(calls[1]?.body).toEqual({
+			method: 'namespaces.create',
+			input: { id: 'notes-prod', env: 'prod', target: { provider: 'zerops', version: 1, payload: { projectName: 'fabrika-notes-prod' } } },
+		})
+	})
+
+	test('carries an exclusive app through both calls for the full preset', async () => {
+		const captured = captureFetch({ result: { namespace: { target: { provider: 'zerops', version: 1, payload: {} } } } })
+		await captureStdout(() =>
+			runControlCli('namespaces', ['plan', '--namespace=notes-prod', '--env=prod', '--preset=full', '--exclusive-app=notes'], undefined, CONTROL_ENV)
+		)
+		expect(captured.calls[0]?.body).toMatchObject({ input: { exclusiveAppId: 'notes' } })
+	})
+})

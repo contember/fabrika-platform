@@ -15,7 +15,7 @@ Usage:
   fabrika app deploy [--provider=cloudflare] --env=<env> [--config=<path>] [--dry-run]
   fabrika app build [--provider=zerops] --env=<env> [--config=<path>] [--output=<path>]
   fabrika namespace <plan|create|adopt|reconcile> --provider=zerops [provider options]
-  fabrika control <key|apps|register|deploy|runs> [options]
+  fabrika control <key|apps|namespaces|register|deploy|runs> [options]
 
 For app commands, the provider is read from the config returned by the selected provider's defineApp().
 An explicit --provider is required only when no app config is available.
