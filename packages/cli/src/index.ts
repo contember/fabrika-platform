@@ -3,6 +3,7 @@
 import { installationCliFromModule, isInstallationCommand, supportsInstallationCommand } from '@fabrika/installation-contract'
 import { authoredAppProvider } from '@fabrika/provider-contract'
 import { resolve } from 'node:path'
+import { CONTROL_USAGE, runControlCli } from './control.js'
 
 const USAGE = `fabrika — application platform CLI
 
@@ -14,9 +15,14 @@ Usage:
   fabrika app deploy [--provider=cloudflare] --env=<env> [--config=<path>] [--dry-run]
   fabrika app build [--provider=zerops] --env=<env> [--config=<path>] [--output=<path>]
   fabrika namespace <plan|create|adopt|reconcile> --provider=zerops [provider options]
+  fabrika control <key|apps|register|deploy|runs> [options]
 
 For app commands, the provider is read from the config returned by the selected provider's defineApp().
 An explicit --provider is required only when no app config is available.
+
+\`fabrika control\` is the operator's non-browser client for the control plane (ADR-0033). It is
+provider-neutral, loads no installation package, and speaks the same typed API the console does. Run
+\`fabrika control --help\` for its surface.
 
 Which platform commands exist, and how WIDE each one is, is the provider's own answer — Zerops'
 \`platform deploy\` owns the whole ordered sequence while Cloudflare's is one step of a scaffolded
@@ -173,6 +179,10 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 		console.info(installationCliFromModule(await installationModule(parsed.provider)).usage)
 		return
 	}
+	if (parsed.help && parsed.area === 'control') {
+		console.info(CONTROL_USAGE)
+		return
+	}
 	if (parsed.help || parsed.area === undefined) {
 		console.info(USAGE)
 		return
@@ -187,6 +197,10 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 	}
 	if (parsed.area === 'namespace') {
 		await runNamespace(parsed)
+		return
+	}
+	if (parsed.area === 'control') {
+		await runControlCli(parsed.command, parsed.rest, parsed.provider)
 		return
 	}
 	throw new Error(`Unknown command area: ${parsed.area}\n\n${USAGE}`)

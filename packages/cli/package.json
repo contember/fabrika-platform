@@ -29,6 +29,9 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"@fabrika/app": "workspace:*",
+		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/installation-cloudflare": "workspace:*",
 		"@fabrika/installation-contract": "workspace:*",
 		"@fabrika/installation-zerops": "workspace:*",

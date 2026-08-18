@@ -1,8 +1,30 @@
 # @fabrika/cli
 
 The single public `fabrika` executable. It parses the top-level `platform`,
-`app`, and `namespace` command areas, resolves one provider, then delegates to an
-installation or provider package. It contains no provider implementation.
+`app`, `namespace`, and `control` command areas, resolves one provider where a
+command has one, then delegates to an installation or provider package. It
+contains no provider implementation.
+
+## The `control` area
+
+`src/control.ts` is the operator's non-browser client for the Delivery control
+plane ([ADR-0033](../../docs/decisions/0033-operate-the-control-plane-from-the-cli.md)).
+It is the ONE area that resolves no provider and loads no installation package,
+because the control API is provider-neutral. `--provider` reaches it only to
+label the envelope a registration carries.
+
+- It adds no server surface: every verb is one procedure of `ControlRpcContract`,
+  called through the same `createRpcClient` the console uses. A procedure is
+  reachable from both clients or neither.
+- Output contract, as in `zops`: stdout carries DATA ONLY, progress and errors go
+  to stderr, `--json` prints the result verbatim.
+- Credentials come from the ENVIRONMENT ONLY and have no flag, so they cannot
+  reach a CI log or a process listing. The origin is not a credential and takes both.
+- `control key issue` is the bootstrap: a fresh installation's provisioning key is
+  held in env and never in the DB, so the proxy — which resolves bearers through
+  IAM's `mintFromKey` — cannot admit it. The command mints a DB-backed key instead.
+- **Do not add source-connection verbs.** Creating a GitHub App connection needs a
+  human principal (ADR-0031); the console owns it.
 
 ## Provider selection
 
