@@ -18,6 +18,7 @@ import type {
 	JsonValue,
 	PlanDeploymentNamespaceRequest,
 	PutAppEnvRequest,
+	PutAppVarRequest,
 	RegisterAppRequest,
 	RunDto,
 } from '@fabrika/control-contract'
@@ -31,6 +32,9 @@ Usage:
   fabrika control apps environments list --app=<id>
   fabrika control apps environments put --provider=<name> --app=<id> --env=<name> --manifest=<path>
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>] [--namespace=<id>]
+  fabrika control apps variables list --app=<id>
+  fabrika control apps variables put --app=<id> --name=<name> --value=<text> [--env=<name>]
+  fabrika control apps variables delete --app=<id> --name=<name> [--env=<name>]
   fabrika control register --provider=<name> --app=<id> --repo=<url> --env=<name> --manifest=<path>
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>]
                            [--namespace=<id>] [--installation-id=<n|none>]
@@ -360,12 +364,48 @@ const runEnvironments = async (
 	throw new Error(`Unknown \`control apps environments\` verb: ${verb ?? '(missing)'}`)
 }
 
+/**
+ * A variable is NOT a secret: its value is stored and read back in clear, so it takes a flag. The one
+ * thing an app cannot commit and fabrika cannot infer — an installation's IAM issuer, say — is written
+ * here, and the deploy carries it to the service's environment.
+ */
+const runVariables = async (verb: string | undefined, flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
+	const client = controlClient(flags, env)
+	const appId = required(flags, 'app')
+	const scope = optional(flags, 'env')
+	if (verb === 'list') {
+		const result = await client.apps.variables.list({ appId })
+		emit(flags, result, () => result.items.map((item) => `${item.env ?? '*'}\t${item.name}\t${item.value}`).join('\n'))
+		return
+	}
+	if (verb === 'put') {
+		const variable: PutAppVarRequest = {
+			name: required(flags, 'name'),
+			value: required(flags, 'value'),
+			...(scope === undefined ? {} : { env: scope }),
+		}
+		const result = await client.apps.variables.put({ appId, variable })
+		emit(flags, result, () => `${result.env ?? '*'}\t${result.name}\t${result.value}`)
+		return
+	}
+	if (verb === 'delete') {
+		const result = await client.apps.variables.delete({ appId, name: required(flags, 'name'), ...(scope === undefined ? {} : { env: scope }) })
+		emit(flags, result, () => (result.ok ? 'deleted' : 'not deleted'))
+		return
+	}
+	throw new Error(`Unknown \`control apps variables\` verb: ${verb ?? '(missing)'}`)
+}
+
 const runApps = async (
 	verb: string | undefined,
 	flags: Flags,
 	provider: string | undefined,
 	env: Readonly<Record<string, string | undefined>>,
 ): Promise<void> => {
+	if (verb === 'variables') {
+		await runVariables(flags.positional[1], flags, env)
+		return
+	}
 	if (verb === 'environments') {
 		await runEnvironments(flags.positional[1], flags, provider, env)
 		return

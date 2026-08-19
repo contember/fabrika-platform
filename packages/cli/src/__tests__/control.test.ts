@@ -147,6 +147,36 @@ describe('control register', () => {
 	})
 })
 
+describe('control apps variables', () => {
+	test('put and delete carry the optional environment scope, list omits it', async () => {
+		const put = captureFetch({ result: { appId: 'notes', env: 'prod', name: 'FABRIKA_IAM_ISSUER', value: 'https://iam.test' } })
+		await captureStdout(() =>
+			runControlCli(
+				'apps',
+				['variables', 'put', '--app=notes', '--env=prod', '--name=FABRIKA_IAM_ISSUER', '--value=https://iam.test'],
+				undefined,
+				CONTROL_ENV,
+			)
+		)
+		expect(put.calls[0]?.body).toEqual({
+			method: 'apps.variables.put',
+			input: { appId: 'notes', variable: { name: 'FABRIKA_IAM_ISSUER', value: 'https://iam.test', env: 'prod' } },
+		})
+
+		const listed = captureFetch({ result: { items: [] } })
+		await captureStdout(() => runControlCli('apps', ['variables', 'list', '--app=notes'], undefined, CONTROL_ENV))
+		expect(listed.calls[0]?.body).toEqual({ method: 'apps.variables.list', input: { appId: 'notes' } })
+
+		const removed = captureFetch({ result: { ok: true } })
+		await captureStdout(() => runControlCli('apps', ['variables', 'delete', '--app=notes', '--name=OLD'], undefined, CONTROL_ENV))
+		expect(removed.calls[0]?.body).toEqual({ method: 'apps.variables.delete', input: { appId: 'notes', name: 'OLD' } })
+
+		await expect(runControlCli('apps', ['variables', 'rotate', '--app=notes'], undefined, CONTROL_ENV)).rejects.toThrow(
+			'Unknown `control apps variables` verb: rotate',
+		)
+	})
+})
+
 describe('control apps environments', () => {
 	test('put re-registers a changed manifest against an app that already exists', async () => {
 		const captured = captureFetch({ result: { appId: 'notes', env: 'prod', provider: 'zerops' } })

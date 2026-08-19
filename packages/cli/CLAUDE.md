@@ -25,6 +25,9 @@ label the envelope a registration carries.
   IAM's `mintFromKey` — cannot admit it. The command mints a DB-backed key instead.
 - `namespaces create` commits the plan it just read, never a second derivation —
   the console's two-step form has the same rule for the same reason.
+- `apps variables` writes an app's operator-set values. On Zerops they are
+  currently inert — see backlog 76 — so do not read a successful `put` as a
+  deployed variable until that is decided.
 - `register` CREATES; a changed manifest goes through `apps environments put`,
   which replaces one environment's envelopes and clears every placement field
   left out. Both are one procedure of the contract, so neither invents a merge.
