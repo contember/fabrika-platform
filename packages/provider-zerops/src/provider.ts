@@ -152,9 +152,21 @@ const cancelSourceBestEffort = async (env: StepEnv, source: ZeropsRuntimeSource,
 	sourceController.abort()
 }
 
+/**
+ * Drop a version that was created and never handed to the platform.
+ *
+ * BEST EFFORT ON PURPOSE. Every caller runs this while already failing, so a cleanup that throws would
+ * replace the reason the deploy failed with the reason the cleanup did — which is what happened live,
+ * where a real `trigger-deploy` failure surfaced as `delete app-version failed (400)` and the cause was
+ * gone. The leftover version is visible on the platform; the lost diagnosis was not.
+ */
 const cleanupPreTriggerVersion = async (env: StepEnv, source: ZeropsRuntimeSource, appVersionId: string): Promise<void> => {
 	await cancelSourceBestEffort(env, source, appVersionId)
-	await env.zerops.api.deleteAppVersion({ appVersionId, signal: AbortSignal.timeout(5000) })
+	try {
+		await env.zerops.api.deleteAppVersion({ appVersionId, signal: AbortSignal.timeout(5000) })
+	} catch (error) {
+		env.log(`  [warn] app-version ${appVersionId} was left behind: ${error instanceof Error ? error.message : 'unknown error'}`)
+	}
 }
 
 /**

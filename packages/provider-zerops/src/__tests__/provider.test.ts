@@ -56,6 +56,7 @@ interface Overrides {
 	triggerVersionId?: string
 	latestVersion?: ZeropsAppVersion | null
 	buildError?: Error
+	deleteError?: Error
 	uploadError?: Error
 	versionErrors?: number
 	cancelMode?: 'throw' | 'hang'
@@ -103,6 +104,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		deleteAppVersion: async ({ appVersionId, signal }) => {
 			recorded.calls.push(`deleteAppVersion:${appVersionId}`)
 			recorded.deleteSignals.push(signal)
+			if (overrides.deleteError !== undefined) throw overrides.deleteError
 		},
 		getAppVersion: async ({ appVersionId }) => {
 			recorded.calls.push('getAppVersion')
@@ -507,6 +509,23 @@ describe('Zerops provider', () => {
 			'deleteAppVersion:version-1',
 		])
 		expect(recorded.checkpoints).toContainEqual({ appVersionId: 'version-1', phase: 'build_trigger_requested' })
+	})
+
+	test('keeps the build refusal when the cleanup delete fails too', async () => {
+		// Live, a real `trigger-deploy` failure surfaced as `delete app-version failed (400)`: the cleanup
+		// threw over the cause and the reason the deploy failed was gone.
+		const provider = createZeropsProvider(() =>
+			makeCollaborators(recorded, {
+				buildError: new ZeropsApiError('zerops: build and deploy app-version failed (400) — userDataSyncRunning', 400, 'userDataSyncRunning'),
+				deleteError: new ZeropsApiError('zerops: delete app-version failed (400)', 400, ''),
+			})
+		)
+		const session = await provider.runtime.open(runtimeRun(recorded, provider))
+
+		await expect(session.execute('trigger-deploy')).rejects.toThrow('userDataSyncRunning')
+
+		expect(recorded.calls).toContain('deleteAppVersion:version-1')
+		expect(recorded.logs.join('\n')).toContain('app-version version-1 was left behind')
 	})
 
 	test('keeps an ambiguous build trigger observable when its first status read fails', async () => {
