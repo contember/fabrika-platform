@@ -737,6 +737,47 @@ const resolveServices = async (
 	return postgres === null ? { proxy } : { proxy, postgres }
 }
 
+export interface NamespaceProxyIamInput {
+	readonly api: Pick<ZeropsApi, 'listServiceEnv' | 'putServiceEnv'>
+	readonly proxyServiceId: string
+	/** The public IAM origin the proxy compares a token's `iss` against. */
+	readonly iamUrl: string
+	readonly iamKey: string
+	readonly signal: AbortSignal
+}
+
+/**
+ * Converge the two variables the namespace proxy's own CODE reads, and call this from everywhere that
+ * code is replaced — not only where the namespace is created.
+ *
+ * `syncZeropsProxy` rebuilds the proxy from git on every app deploy, so a proxy can take new code
+ * whose configuration nobody rewrote. That is not hypothetical: the `FABRIKA_IAM_URL` →
+ * `FABRIKA_IAM_ISSUER` rename ([ADR-0035](../../../docs/decisions/0035-the-platform-owns-the-application-iam-issuer.md))
+ * left a live namespace proxy crash-looping on `FABRIKA_IAM_ISSUER is required`, because provisioning
+ * had written the old name months earlier and the deploy path only ever wrote the manifest. Writing
+ * these BEFORE the pipeline is triggered is what makes a rename a flag day rather than an outage
+ * ([ADR-0024](../../../docs/decisions/0024-retire-the-legacy-environment-name-fallback.md)).
+ */
+export const ensureNamespaceProxyIam = async (input: NamespaceProxyIamInput): Promise<void> => {
+	const variables = await input.api.listServiceEnv({ serviceId: input.proxyServiceId, signal: input.signal })
+	const issuer = variables.find((variable) => variable.key === ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE)
+	if (issuer?.content !== input.iamUrl) {
+		await input.api.putServiceEnv({
+			serviceId: input.proxyServiceId,
+			key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
+			value: input.iamUrl,
+			signal: input.signal,
+		})
+	}
+	// Secret read-back is not trustworthy, so overwrite it idempotently without inspecting its value.
+	await input.api.putServiceEnv({
+		serviceId: input.proxyServiceId,
+		key: ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
+		value: input.iamKey,
+		signal: input.signal,
+	})
+}
+
 const ensureProxyConfiguration = async (
 	target: NormalizedZeropsNamespaceTarget,
 	options: ZeropsNamespaceOptions,
@@ -759,20 +800,11 @@ const ensureProxyConfiguration = async (
 		})
 		deployRequired = true
 	}
-	const iamUrl = byKey.get(ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE)
-	if (iamUrl?.content !== options.iamUrl) {
-		await options.api.putServiceEnv({
-			serviceId: proxyServiceId,
-			key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
-			value: options.iamUrl,
-			signal,
-		})
-	}
-	// Secret read-back is not trustworthy, so overwrite it idempotently without inspecting its value.
-	await options.api.putServiceEnv({
-		serviceId: proxyServiceId,
-		key: ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
-		value: options.iamKey,
+	await ensureNamespaceProxyIam({
+		api: options.api,
+		proxyServiceId,
+		iamUrl: options.iamUrl,
+		iamKey: options.iamKey,
 		signal,
 	})
 	return deployRequired

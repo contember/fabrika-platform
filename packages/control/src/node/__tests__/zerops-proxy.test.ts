@@ -1,6 +1,8 @@
 import {
 	compileFabrikaManifest,
 	defineApp,
+	ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
+	ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
 	type ZeropsAppVersion,
 	zeropsArtifactCodec,
 	type ZeropsArtifactSourceDescriptor,
@@ -89,9 +91,14 @@ describe('Zerops proxy manifest delivery', () => {
 		let written = ''
 		const active: ZeropsAppVersion = { id: 'version-1', status: 'ACTIVE' }
 		const api = {
+			// The proxy already carries the PREVIOUS installation's issuer, which is the case that took a
+			// live proxy down: new code, configuration nobody rewrote.
+			listServiceEnv: () => Promise.resolve([{ id: 'env-1', key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, content: 'https://iam.stale.example' }]),
 			putServiceEnv: (input: { serviceId: string; key: string; value: string; signal: AbortSignal }) => {
 				calls.push(`put:${input.serviceId}:${input.key}`)
-				written = input.value
+				if (input.key === FABRIKA_PROXY_MANIFEST_JSON) {
+					written = input.value
+				}
 				return Promise.resolve()
 			},
 			triggerPipeline: (input: { buildFromGit?: string }) => {
@@ -114,10 +121,15 @@ describe('Zerops proxy manifest delivery', () => {
 			namespaceId: 'apps-prod',
 			proxyServiceId: 'proxy-shared',
 			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+			iamUrl: 'https://iam.example.com',
+			iamKey: 'px_proxy',
 			sleep: () => Promise.resolve(),
 		})
+		// Every variable the proxy's code reads is written BEFORE the pipeline that replaces that code.
 		expect(calls).toEqual([
 			`put:proxy-shared:${FABRIKA_PROXY_MANIFEST_JSON}`,
+			`put:proxy-shared:${ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE}`,
+			`put:proxy-shared:${ZEROPS_NAMESPACE_IAM_KEY_VARIABLE}`,
 			'trigger:https://github.com/contember/fabrika-platform',
 			'poll',
 		])

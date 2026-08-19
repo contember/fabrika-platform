@@ -69,6 +69,7 @@ export {
 	compileZeropsNamespaceTopology,
 	createZeropsNamespaceCapabilities,
 	createZeropsNamespaceOperator,
+	ensureNamespaceProxyIam,
 	ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
 	ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
 	ZEROPS_NAMESPACE_POSTGRES_HOSTNAME,
@@ -78,6 +79,7 @@ export {
 	zeropsNamespaceTargetCodec,
 } from './namespace'
 export type {
+	NamespaceProxyIamInput,
 	ZeropsNamespaceOperatorOptions,
 	ZeropsNamespaceOptions,
 	ZeropsNamespacePlanOptions,

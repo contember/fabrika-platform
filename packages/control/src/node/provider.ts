@@ -102,6 +102,7 @@ export function zeropsControlProvider(
 	source: Record<string, string | undefined>,
 	sourceClient: ZeropsSourceClient = zeropsSourceClient(source),
 ): ControlProvider {
+	const namespaces = zeropsNamespaceProcessConfig(source)
 	return createZeropsControlProvider({
 		accessToken: required(source, 'FABRIKA_ZEROPS_ACCESS_TOKEN'),
 		source: sourceClient,
@@ -113,7 +114,7 @@ export function zeropsControlProvider(
 		...(env.FABRIKA_IAM_PROVISIONING_KEY === undefined
 			? {}
 			: { adminKey: env.FABRIKA_IAM_PROVISIONING_KEY }),
-		namespaces: zeropsNamespaceProcessConfig(source),
+		namespaces,
 		execute: async (provider, run) => {
 			const result = await deploy(provider, run)
 			return { state: result.status === 'succeeded' ? 'succeeded' : 'failed' }
@@ -125,6 +126,8 @@ export function zeropsControlProvider(
 				namespaceId: input.namespaceId,
 				proxyServiceId: input.target.proxyServiceId,
 				proxyBuildFromGit: input.target.proxyBuildFromGit,
+				iamUrl: namespaces.iamUrl,
+				iamKey: namespaces.iamKey,
 				signal: input.signal,
 			})
 		},

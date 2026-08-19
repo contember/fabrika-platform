@@ -1,5 +1,6 @@
 import type { ProviderCodec, ProviderEnvelope } from '@fabrika/provider-contract'
 import {
+	ensureNamespaceProxyIam,
 	type FabrikaManifest,
 	parseFabrikaManifest,
 	ZEROPS_ACTIVE,
@@ -14,7 +15,7 @@ import { parseProviderEnvelope } from '../run-lifecycle'
 const POLL_INTERVAL_MS = 3000
 const POLL_TIMEOUT_MS = 70 * 60 * 1000
 
-type ProxyApi = Pick<ZeropsApi, 'putServiceEnv' | 'triggerPipeline' | 'latestAppVersion' | 'getAppVersion'>
+type ProxyApi = Pick<ZeropsApi, 'listServiceEnv' | 'putServiceEnv' | 'triggerPipeline' | 'latestAppVersion' | 'getAppVersion'>
 
 const decodeEnvelope = <T>(kind: string, envelope: ProviderEnvelope, codec: ProviderCodec<T>): T => {
 	if (envelope.provider !== 'zerops' || envelope.version !== codec.version) {
@@ -69,13 +70,21 @@ export interface SyncZeropsProxyInput {
 	proxyServiceId: string
 	/** The namespace proxy has no Git integration, so its pipeline must be told what to build. */
 	proxyBuildFromGit: string
+	/** The public IAM origin this installation's proxies verify against. */
+	iamUrl: string
+	iamKey: string
 	signal?: AbortSignal
 	sleep?: (ms: number) => Promise<void>
 }
 
 /**
- * Write the baked proxy manifest through the service-level env API, then roll the proxy so its build
- * materializes the new JSON. No project-level variable method exists on the API surface.
+ * Converge every variable the namespace proxy reads, then roll the proxy so its build materializes
+ * them. No project-level variable method exists on the API surface.
+ *
+ * The ORDER is the point. This rebuilds the proxy from git, so it is the step that can hand a
+ * namespace proxy code newer than its configuration — which is exactly how the
+ * `FABRIKA_IAM_URL` → `FABRIKA_IAM_ISSUER` rename took a live proxy down. Writing the identity
+ * first makes the new code find what it expects; writing only the manifest, as this once did, does not.
  */
 export async function syncZeropsProxy(input: SyncZeropsProxyInput): Promise<void> {
 	const signal = input.signal ?? new AbortController().signal
@@ -84,6 +93,13 @@ export async function syncZeropsProxy(input: SyncZeropsProxyInput): Promise<void
 		serviceId: input.proxyServiceId,
 		key: FABRIKA_PROXY_MANIFEST_JSON,
 		value: encodeProxyManifestJson(manifest),
+		signal,
+	})
+	await ensureNamespaceProxyIam({
+		api: input.api,
+		proxyServiceId: input.proxyServiceId,
+		iamUrl: input.iamUrl,
+		iamKey: input.iamKey,
 		signal,
 	})
 	// WITHOUT `buildFromGit` the platform builds from the service's configured Git integration, and a
