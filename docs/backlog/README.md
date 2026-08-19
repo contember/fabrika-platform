@@ -64,6 +64,7 @@ and a pin that pins half of what it claims.
 - [72](72-a-failed-namespace-reports-nothing-an-operator-can-act-on.md) — Every namespace failure looks the same: the provider's error is discarded, not redacted.
 - [73](73-a-failed-namespace-cannot-be-removed.md) — No delete, so a failed namespace holds its id forever and a retry must rename.
 - [74](74-namespace-provisioning-outlives-the-request-that-asked-for-it.md) — Five minutes of work inside one HTTP call: the caller always times out and cannot learn the outcome.
+- [75](75-a-running-installation-keeps-a-token-that-cannot-create-projects.md) — Installations minted before ADR-0034 hold a token that cannot create projects, and nothing says so.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.
