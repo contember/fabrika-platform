@@ -36,7 +36,7 @@ applies per-object checks that a path gate cannot express
 | `fabrika.schema.ts`           | The authorization vocabulary (scopes, actions, roles), reconciled into IAM by the deploy.               |
 | `fabrika.gates.ts`            | The per-path gates. Enforced by the **proxy**, never by this process.                                   |
 | `zerops.yaml`                 | The build/run descriptor Zerops reads from the repository root.                                         |
-| `zerops.shared-postgres.yaml` | Cheap-tier build descriptor using `${postgres_connectionString}`.                                       |
+| `zerops.shared-postgres.yaml` | Cheap-tier build descriptor using `${postgres_connectionTlsString}`.                                    |
 | `src/server.ts`               | `run.start` — the `@fabrika/app` Bun adapter. Listens on the project's private network only.            |
 | `src/migrate.ts`              | `run.initCommands` — migrations at container start, which is why the deploy plan has no `migrate` step. |
 | `src/authz.ts`                | Verifies the proxy-injected token and answers `can()` / `scopedTo()`.                                   |
