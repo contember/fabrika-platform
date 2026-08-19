@@ -102,7 +102,7 @@ const REQUIRED_PROJECT_MODE: ZeropsProjectMode = 'LIGHT'
 const PRIVATE_IAM_URL = 'http://iam:3000'
 
 /** The canonical fabrika PostgreSQL DSN on Zerops — see `zerops/setups.ts` for why both suffixes exist. */
-const POSTGRES_URL = '${db_connectionString}/${db_dbName}?sslmode=require'
+const POSTGRES_URL = '${db_connectionTlsString}/${db_dbName}?sslmode=require'
 
 /** The light tier's one object-storage service, as the platform's own `${service_variable}` references. */
 const STORAGE = {

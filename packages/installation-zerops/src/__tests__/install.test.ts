@@ -326,7 +326,7 @@ describe('what reaches which service', () => {
 
 		await fixture.run()
 
-		const dsn = '${db_connectionString}/${db_dbName}?sslmode=require'
+		const dsn = '${db_connectionTlsString}/${db_dbName}?sslmode=require'
 		expect(fixture.zerops.env('iam').get('FABRIKA_IAM_DATABASE_URL')).toBe(dsn)
 		expect(fixture.zerops.env('operations').get('FABRIKA_OPERATIONS_DATABASE_URL')).toBe(dsn)
 		expect(fixture.zerops.env('control').get('FABRIKA_CONTROL_DATABASE_URL')).toBe(dsn)

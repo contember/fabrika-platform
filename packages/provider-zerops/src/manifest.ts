@@ -17,7 +17,7 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/
  * asserts the two never diverge.
  */
 const SHARED_POSTGRES_CONNECTION_STRING: ZeropsSharedPostgresBinding['connectionString'] =
-	'${postgres_connectionString}/${postgres_dbName}?sslmode=require'
+	'${postgres_connectionTlsString}/${postgres_dbName}?sslmode=require'
 
 export interface FabrikaImportDocument {
 	readonly project?: { readonly [key: string]: JsonValue }

@@ -274,17 +274,17 @@ describe('every deploy is gated, and every duration says what it means', () => {
 	})
 })
 
-describe('a PostgreSQL URL names its database and its TLS mode', () => {
-	// `${x_connectionString}` is `postgresql://${user}:${password}@${hostname}:${port}` — no database
-	// path — so without `/${x_dbName}` the driver falls back to the user name. And 5432 does speak TLS,
-	// contrary to the published documentation: `sslmode=require` connects encrypted, `verify-full` fails
-	// on the self-signed certificate. Both verified live; neither may be left to a driver default.
+describe('a PostgreSQL URL names its port, its database and its TLS mode', () => {
+	// `${x_connectionTlsString}` is `postgresql://${user}:${password}@${hostname}:${portTls}` — no
+	// database path — so without `/${x_dbName}` the driver falls back to the user name. The TLS port is
+	// named rather than the direct one because `postgresql:ha@18` offers TLS on no other, and it keeps
+	// the session state the migration lock needs. All verified live; none may be left to a driver default.
 	for (const file of ['examples/zerops-app/zerops.yaml', 'examples/zerops-app/zerops.shared-postgres.yaml']) {
-		test(`${file}: every connectionString reference carries a database and an sslmode`, () => {
-			const matches = [...read(file).matchAll(/\$\{[a-z0-9]+_connectionString\}\S*/g)].map((match) => match[0])
+		test(`${file}: every connection reference names the TLS port, a database and an sslmode`, () => {
+			const matches = [...read(file).matchAll(/\$\{[a-z0-9]+_connection(?:Tls)?String\}\S*/g)].map((match) => match[0])
 			expect(matches.length).toBeGreaterThan(0)
 			for (const reference of matches) {
-				expect(reference).toMatch(/^\$\{([a-z0-9]+)_connectionString\}\/\$\{\1_dbName\}\?sslmode=require$/)
+				expect(reference).toMatch(/^\$\{([a-z0-9]+)_connectionTlsString\}\/\$\{\1_dbName\}\?sslmode=require$/)
 			}
 		})
 	}

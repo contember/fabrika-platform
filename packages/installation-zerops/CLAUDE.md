@@ -131,7 +131,9 @@ and is deliberate — someone reading only one path will guess wrong about the o
   duration properties the published schema gets wrong; do not widen that list
   without a live observation.
 - A PostgreSQL URL is always
-  `${<host>_connectionString}/${<host>_dbName}?sslmode=require`.
+  `${<host>_connectionTlsString}/${<host>_dbName}?sslmode=require` — the TLS
+  port, because `postgresql:ha@18` offers TLS on no other, and it keeps the
+  session state the migration lock needs.
 - **`zerops/proxy-manifest.ts`, `zerops/console-schema.ts` and `zerops/render.ts` are EXCLUDED from the
   published `files`, and that is load-bearing.** All three import `@fabrika/control` — a PRIVATE package
   — through a devDependency, so shipping any of them would put an unresolvable import in the tarball.

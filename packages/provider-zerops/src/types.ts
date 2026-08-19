@@ -95,7 +95,7 @@ export interface ZeropsProxySpec {
 export interface ZeropsSharedPostgresBinding {
 	readonly resourceKey: 'service:postgres'
 	readonly hostname: 'postgres'
-	readonly connectionString: '${postgres_connectionString}/${postgres_dbName}?sslmode=require'
+	readonly connectionString: '${postgres_connectionTlsString}/${postgres_dbName}?sslmode=require'
 }
 
 export type ZeropsNamespaceResourceRequirement = ZeropsSharedPostgresBinding

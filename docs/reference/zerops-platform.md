@@ -358,6 +358,11 @@ only `/ready` was 503, and that alone failed the deploy about 70s after containe
 
 Read with `zops env show --service <svc> --json`, on a service deliberately NOT named `db`.
 
+> **The TLS rows below are true of the service they were measured on and DO NOT generalise.** The
+> `@18` service types behave differently — see
+> [the 2026-08-19 section](#verified-live-2026-08-19-account-prg1-project-fabrika-notes-prod--postgresql-tls-is-per-service-type),
+> which is what fabrika's canonical DSN now follows.
+
 | Fact                                                        | Result                                                                                                         |
 | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | The stored `connectionString`                               | The literal template `postgresql://${user}:${password}@${hostname}:${port}` — **no database path**             |
@@ -370,17 +375,12 @@ Read with `zops env show --service <svc> --json`, on a service deliberately NOT 
 | `pg_settings.ssl` server-side on 5432                       | `on`                                                                                                           |
 | `${a_connectionString}` referenced from a DIFFERENT service | Resolves, under `envIsolation: service` — explicit cross-service references are unaffected                     |
 
-So the canonical fabrika DSN on Zerops is
+Without the database path the driver falls back to the USER name — which lands on the right database
+only because the platform always names both `db`, a convention no document states. And `require` is the
+strongest TLS mode available: it encrypts, and `verify-full` cannot work without Zerops' CA.
 
-```
-${<host>_connectionString}/${<host>_dbName}?sslmode=require
-```
-
-Both suffixes are load-bearing. Without the database path the driver falls back to the USER name — which
-lands on the right database only because the platform always names both `db`, a convention no document
-states. And `require` is the strongest TLS mode available: it encrypts, and `verify-full` cannot work
-without Zerops' CA. This is still the DIRECT port; 6432 is pgBouncer, whose transaction pooling would
-break the session-level advisory lock the migration runner takes.
+The PORT half of this was later measured to be service-type-specific, and the canonical DSN moved to
+`portTls` — see below.
 
 ### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — public subdomain access
 
@@ -659,6 +659,36 @@ Two consequences. Every user-data write must be waited out before the next opera
 which is why `putServiceEnv`, `createServiceEnv` and `deleteServiceEnv` now poll their own process
 before returning. And an endpoint whose error CODE is dropped is undiagnosable: `build-and-deploy`
 keeps its code from now on, because nothing in that request or response is a secret.
+
+### Verified live (2026-08-19, account `prg1`, project `fabrika-notes-prod`) — PostgreSQL TLS is per service type
+
+The example app's first deploy into a namespace built and shipped, then failed its deploy gate in
+`run.initCommands`: `PostgresError: Server does not support SSL (ERR_POSTGRES_TLS_NOT_AVAILABLE)`. The
+DSN was the canonical form recorded above, and that form had been measured on a single-node service.
+
+Measured from a throwaway `alpine/bun@1.3` service against one `postgresql:ha@18` and one
+`postgresql:single@18` in the same project, both created and deleted for the purpose.
+
+| Connection                          | `postgresql:ha@18`                                | `postgresql:single@18`     |
+| ----------------------------------- | ------------------------------------------------- | -------------------------- |
+| `port` (5432), `sslmode=disable`    | Connects, `pg_stat_ssl.ssl = false`               | Connects, `ssl = false`    |
+| `port` (5432), `sslmode=require`    | **Fails: `Server does not support SSL`**          | Connects, **`ssl = true`** |
+| `portTls` (6432), `sslmode=disable` | **Fails: `SSL required`**                         | **Fails: `SSL required`**  |
+| `portTls` (6432), `sslmode=require` | **Connects**, backend `inet_server_port() = 5432` | **Connects**, `ssl = true` |
+
+So `portTls` + `sslmode=require` is the ONE form that works on both, and it is what fabrika now writes
+everywhere: `ZEROPS_SHARED_POSTGRES_CONNECTION_STRING`, the installation's `POSTGRES_URL`, and the
+example app's two descriptors. It matters beyond the example — the installation's `standard` tier runs
+`postgresql:ha@18` and would have failed the same way the first time anyone brought it up.
+
+On HA the TLS session terminates in front of PostgreSQL: the backend reports `pg_stat_ssl.ssl = false`
+and `inet_server_port() = 5432` on a connection made to 6432. The hop from that terminator to the
+database stays inside the service.
+
+**`portTls` is not a transaction pool**, which is what the older note above assumed from the port
+number. On both service types the same connection kept its backend pid across statements, kept a `SET
+SESSION` value, and took and saw a session-level advisory lock — so the migration runner's lock is safe
+there.
 
 ### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — updating a running installation
 

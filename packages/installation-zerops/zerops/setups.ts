@@ -63,19 +63,23 @@
 // The URLs are not in this file, but their FORM is fabrika's to decide, so it is stated once here.
 // Whichever service it names, a fabrika PostgreSQL URL on Zerops is written as:
 //
-//   ${<host>_connectionString}/${<host>_dbName}?sslmode=require
+//   ${<host>_connectionTlsString}/${<host>_dbName}?sslmode=require
 //
-// Both suffixes are load-bearing, and both were settled on a live account rather than inferred:
+// Every part is load-bearing, and all of it was settled on a live account rather than inferred:
 //
-//   • `connectionString` is `postgresql://${user}:${password}@${hostname}:${port}` — it carries no
-//     database path, so without `/${…_dbName}` the driver falls back to the USER name. Every Zerops
+//   • `connectionTlsString` is `postgresql://${user}:${password}@${hostname}:${portTls}` — it carries
+//     no database path, so without `/${…_dbName}` the driver falls back to the USER name. Every Zerops
 //     PostgreSQL service names its database AND its user `db`, whatever the service hostname is
 //     (checked on a service called `wu2db`), so the fallback is right — by an undocumented platform
 //     convention rather than by anything fabrika states. Naming it removes the dependency.
-//   • Port 5432 speaks TLS, which the published documentation denies. `sslmode=require` connects with
-//     `pg_stat_ssl.ssl = true`; `verify-full` fails on the self-signed certificate. So `require` is
-//     the strongest available mode, and pinning it beats inheriting whatever the client defaults to.
-//     This is still the DIRECT port, not pgBouncer on 6432 — the migration lock is session-level.
+//   • THE TLS PORT, NOT THE DIRECT ONE. `postgresql:single@18` speaks TLS on both, but
+//     `postgresql:ha@18` — what the `standard` tier runs — answers `sslmode=require` on the direct
+//     port with "Server does not support SSL". One form has to serve both tiers, and only this one does.
+//   • The TLS port preserves SESSION state on both types: same backend pid across statements, `SET
+//     SESSION` kept, advisory lock taken and visible. So the migration runner's session-level lock is
+//     safe there — it is a TLS endpoint, not the transaction pool the port number suggests.
+//   • `verify-full` fails on the self-signed certificate, so `require` is the strongest available mode,
+//     and pinning it beats inheriting whatever the client defaults to.
 //
 // ── What a build container can and cannot see ──────────────────────────────────────────────────────
 //
@@ -158,9 +162,9 @@ const WORKSPACE_DEPLOY_FILES = ['package.json', 'bun.lock', 'node_modules', 'pac
  * The IAM service — identity, tokens, audit, and the private admin API.
  *
  * Per-installation variables (env API): `FABRIKA_IAM_DATABASE_URL`
- * (`${db_connectionString}/${db_dbName}?sslmode=require` — the canonical form above, on the DIRECT
- * Postgres port 5432, never pgBouncer on 6432: the migration runner takes a session-level advisory
- * lock and transaction pooling does not preserve session state across statements),
+ * (`${db_connectionTlsString}/${db_dbName}?sslmode=require` — the canonical form above, on the TLS
+ * port, which is the only one an HA PostgreSQL service offers TLS on and which preserves the session
+ * state the migration runner's advisory lock needs),
  * `ENVIRONMENT`, `ISSUER` (this service's public origin; it is the `iss` of every minted token AND the
  * OIDC redirect base, so it must match the domain routed to the proxy in front of it),
  * `FABRIKA_IAM_ADMIN_ORIGINS` (a JSON array holding the CONSOLE's public
@@ -222,7 +226,7 @@ const iam: ZeropsYamlSetupSpec = {
  * The control plane — registry, run lifecycle, vault, webhook, and the dashboard SPA.
  *
  * Per-installation variables (env API): `FABRIKA_CONTROL_DATABASE_URL`
- * (`${db_connectionString}/${db_dbName}?sslmode=require`), the
+ * (`${db_connectionTlsString}/${db_dbName}?sslmode=require`), the
  * four `FABRIKA_CONTROL_RUN_LOGS_*` coordinates of its object storage (`${storage_bucketName}`,
  * `${storage_apiUrl}`, `${storage_accessKeyId}`, `${storage_secretAccessKey}` — `S3BlobStore` uses
  * path-style addressing, which MinIO wants and R2/AWS accept, so one implementation serves both

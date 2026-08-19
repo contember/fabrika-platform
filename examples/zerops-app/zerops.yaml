@@ -110,16 +110,22 @@ zerops:
 
       envVariables:
         PORT: "3000"
-        # The DIRECT Postgres port (5432), not pgBouncer on 6432: the migration lock is session-level and
-        # pgBouncer's transaction pooling does not preserve session state across statements. `${notesdb_…}`
-        # is a reference to the `notesdb` service's own variable — the value never appears in this file.
+        # The TLS port (`portTls`), not the direct one. `notesdb` is `postgresql:ha@18`, and an HA
+        # PostgreSQL service answers `sslmode=require` on the direct port with "Server does not support
+        # SSL" — the direct port is plaintext there, whatever the single-node flavour does. Measured live,
+        # and it is what made this app's first deploy into a namespace fail at its migration.
+        #
+        # Using it costs nothing the migration needs: the TLS port keeps SESSION state on both flavours —
+        # same backend pid across statements, `SET SESSION` kept, advisory lock held — so it is a TLS
+        # endpoint rather than the transaction pool the port number suggests. `${notesdb_…}` is a
+        # reference to the `notesdb` service's own variable; the value never appears in this file.
         #
         # The DATABASE and the TLS MODE are named rather than inherited from the driver, and both matter.
-        # `connectionString` is `postgresql://${user}:${password}@${hostname}:${port}` with no database
-        # path, so without `/${notesdb_dbName}` the driver falls back to the user name — which happens to
-        # be right, because every Zerops PostgreSQL service names its database and its user `db` whatever
-        # the service is called. And 5432 does speak TLS, contrary to the published documentation:
-        # `sslmode=require` connects encrypted, `verify-full` fails on a self-signed certificate.
-        NOTES_DATABASE_URL: ${notesdb_connectionString}/${notesdb_dbName}?sslmode=require
+        # `connectionTlsString` is `postgresql://${user}:${password}@${hostname}:${portTls}` with no
+        # database path, so without `/${notesdb_dbName}` the driver falls back to the user name — which
+        # happens to be right, because every Zerops PostgreSQL service names its database and its user
+        # `db` whatever the service is called. `verify-full` fails on a self-signed certificate, so
+        # `require` is the strongest mode there is.
+        NOTES_DATABASE_URL: ${notesdb_connectionTlsString}/${notesdb_dbName}?sslmode=require
         # Must equal `id` in fabrika.config.ts and the `aud` of every token minted for this app.
         NOTES_APP_ID: notes

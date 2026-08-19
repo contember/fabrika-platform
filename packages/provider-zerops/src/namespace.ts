@@ -34,21 +34,24 @@ export const ZEROPS_NAMESPACE_POSTGRES_HOSTNAME = 'postgres'
 export const ZEROPS_NAMESPACE_IAM_URL_VARIABLE = 'FABRIKA_IAM_URL'
 export const ZEROPS_NAMESPACE_IAM_KEY_VARIABLE = 'FABRIKA_IAM_KEY'
 /**
- * How an app reaches the namespace-owned PostgreSQL service — database and TLS mode NAMED, not defaulted.
+ * How an app reaches the namespace-owned PostgreSQL service — port, database and TLS mode NAMED, not
+ * defaulted. Every part settled against a live account, none of it safe to infer:
  *
- * Three facts settled against a live account, none of them safe to infer:
- *
- *   • `${x_connectionString}` is `postgresql://${user}:${password}@${hostname}:${port}` — no database
- *     path. With none, the libpq/postgres.js convention falls back to the USER name.
+ *   • `${x_connectionTlsString}` is `postgresql://${user}:${password}@${hostname}:${portTls}` — no
+ *     database path. With none, the libpq/postgres.js convention falls back to the USER name.
  *   • `dbName` and `user` are both literally `db` on EVERY PostgreSQL service, whatever its hostname
  *     (checked on a service named `wu2db`). So the fallback lands right today — by construction rather
  *     than by luck, but still by a rule nobody wrote down. `/${x_dbName}` says it out loud.
- *   • Port 5432 speaks TLS. `sslmode=require` connects with `pg_stat_ssl.ssl = true`; `sslmode=disable`
- *     connects in the clear. `verify-full` fails (`self signed certificate`), so `require` is the
- *     strongest mode available and the one worth pinning — the alternative is whatever the driver
- *     happens to default to.
+ *   • THE TLS PORT, NOT THE DIRECT ONE, and this is the one that changed. `postgresql:single@18`
+ *     speaks TLS on both; `postgresql:ha@18` speaks it ONLY on `portTls` and answers `sslmode=require`
+ *     on the direct port with "Server does not support SSL". A namespace picks `ha` for `prod` and
+ *     `single` everywhere else, so a DSN naming the direct port is one preset away from failing.
+ *   • `portTls` preserves SESSION state on both — same backend pid across statements, `SET SESSION`
+ *     kept, advisory lock held and visible — so the migration runner's session-level lock is safe
+ *     there. It is a TLS endpoint, not the transaction pool the port number suggests.
+ *   • `verify-full` fails (`self signed certificate`), so `require` is the strongest mode available.
  */
-export const ZEROPS_SHARED_POSTGRES_CONNECTION_STRING = '${postgres_connectionString}/${postgres_dbName}?sslmode=require'
+export const ZEROPS_SHARED_POSTGRES_CONNECTION_STRING = '${postgres_connectionTlsString}/${postgres_dbName}?sslmode=require'
 
 const PROXY_TYPE = 'alpine@3.21'
 const EMPTY_PROXY_MANIFEST = encodeProxyManifestJson({ apps: [] })
