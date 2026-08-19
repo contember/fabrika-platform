@@ -678,8 +678,11 @@ class ZeropsEmulator {
 				type: 'SECRET',
 			}
 			this.state.serviceEnv.push(record)
+			const created = this.createProcess('stack.updateUserData', { serviceStackId: serviceId })
 			await this.persist()
-			return json(record, 201)
+			// Live answers the PROCESS, not the record, and refuses the next operation on the service until
+			// it finishes (`400 userDataSyncRunning`) — see docs/reference/zerops-platform.md.
+			return json(this.processResponse(created), 201)
 		}
 
 		const env = path.match(/^\/user-data\/([^/]+)$/)
@@ -697,13 +700,17 @@ class ZeropsEmulator {
 				}
 				current.key = requiredString(body, 'key')
 				current.content = requiredString(body, 'content')
+				const replaced = this.createProcess('stack.updateUserData', { serviceStackId: current.serviceStackId })
 				await this.persist()
-				return json(current)
+				return json(this.processResponse(replaced))
 			}
 			if (request.method === 'DELETE') {
-				this.state.serviceEnv.splice(index, 1)
+				const removed = this.state.serviceEnv.splice(index, 1)[0]
+				const dropped = this.createProcess('stack.updateUserData', {
+					...(removed === undefined ? {} : { serviceStackId: removed.serviceStackId }),
+				})
 				await this.persist()
-				return new Response(null, { status: 204 })
+				return json(this.processResponse(dropped))
 			}
 		}
 

@@ -446,6 +446,12 @@ export interface ZeropsApi {
 	listProjectServices(input: { projectId: string; signal: AbortSignal }): Promise<ZeropsService[]>
 
 	// ── user-data: SERVICE-level environment variables (ADR-0004) ─────────────────
+	//
+	// EVERY WRITE HERE IS ASYNCHRONOUS. Create, replace and delete each answer with a PENDING
+	// `stack.updateUserData` process rather than the record, and while one is running the platform
+	// refuses the next operation on that service with `400 userDataSyncRunning`. So all three wait for
+	// their own process before returning: a caller that writes a variable and then builds — which is
+	// what every deploy does — must not have to know that.
 
 	/**
 	 * Every environment variable of ONE service, each with the record id `deleteServiceEnv` takes.
@@ -576,6 +582,8 @@ export interface ZeropsApiOptions {
 	/** Override for a different region's API host. */
 	baseUrl?: string
 	fetchImpl?: FetchLike
+	/** How the user-data writes wait for their platform process. Tests pass a sleeper that does not sleep. */
+	sleep?: Sleeper
 }
 
 /** Read a property off an unknown value without asserting anything about the value's shape. */
@@ -797,10 +805,29 @@ const apiError = (label: string, status: number, body: unknown, redactDetail: bo
 	return new ZeropsApiError(`zerops: ${label} failed (${status})${detail === '' ? '' : ` — ${detail.slice(0, 300)}`}`, status, code)
 }
 
+const timerSleep: Sleeper = (ms, signal) =>
+	new Promise<void>((resolve) => {
+		if (signal.aborted) {
+			resolve()
+			return
+		}
+		const timer = setTimeout(() => {
+			signal.removeEventListener('abort', onAbort)
+			resolve()
+		}, ms)
+		const onAbort = (): void => {
+			clearTimeout(timer)
+			resolve()
+		}
+		signal.addEventListener('abort', onAbort, { once: true })
+	})
+
 /** Build the real client. Every request carries the bearer and the run's signal. */
 export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 	const base = (options.baseUrl ?? ZEROPS_API_BASE).replace(/\/+$/, '')
 	const doFetch = options.fetchImpl ?? fetch
+	// Its own, rather than `collaborators`' — that module imports this one, so taking the value back would close a cycle.
+	const sleep = options.sleep ?? timerSleep
 	const abortError = (): DOMException => new DOMException('The operation was aborted', 'AbortError')
 	const isAbortError = (error: unknown): boolean => error instanceof Error && error.name === 'AbortError'
 	const SERVICE_ENV_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
@@ -975,6 +1002,30 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		return items.map(readServiceEnv)
 	}
 
+	const getProcess: ZeropsApi['getProcess'] = async ({ processId, signal }) =>
+		readProcess(await request('get process', 'GET', `/process/${processId}`, { signal }))
+
+	/**
+	 * Wait out the `stack.updateUserData` process every user-data write answers with.
+	 *
+	 * While one runs the platform refuses the NEXT operation on that service with `400
+	 * userDataSyncRunning` — which is how a deploy that wrote an app's environment and then asked for a
+	 * build failed, one second before the sync it had started finished. Measured live: PENDING → RUNNING →
+	 * FINISHED in about three seconds, on a deployed service and on one that has never had code alike.
+	 *
+	 * The response is recognised by `actionName`, not by having an `id`: a user-data RECORD carries an id
+	 * too, and polling `/process/{recordId}` would hang instead of failing. An unrecognised response is
+	 * left alone — nothing then says the write is still settling.
+	 */
+	const awaitUserDataSync = async (payload: unknown, label: string, signal: AbortSignal): Promise<void> => {
+		const processId = str(payload, 'id')
+		const action = str(payload, 'actionName')
+		if (processId === undefined || processId.trim() === '' || action === undefined || action.trim() === '') {
+			return
+		}
+		await waitForProcess({ api: { getProcess }, processId, sleep, signal, label })
+	}
+
 	return {
 		importServices: async ({ projectId, yaml, signal }) =>
 			readImportResult(await request('service-stack import', 'POST', `/project/${projectId}/service-stack/import`, { body: { yaml }, signal })),
@@ -1017,10 +1068,13 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 
 		buildAndDeployAppVersion: async ({ appVersionId, zeropsYaml, zeropsYamlSetup, signal }) => {
 			const body = zeropsYamlSetup === undefined ? { zeropsYaml } : { zeropsYaml, zeropsYamlSetup }
+			// `redactDetail`, not `omitErrorResponseDetails`: this request body is the app's COMMITTED
+			// descriptor and this response carries no upload URL, so there is nothing here to protect by
+			// dropping the code as well — and a bare `(400)` is what made `userDataSyncRunning` cost a day.
 			const payload = await request('build and deploy app-version', 'PUT', `/app-version/${appVersionId}/build-and-deploy`, {
 				body,
 				signal,
-				omitErrorResponseDetails: true,
+				redactDetail: true,
 			})
 			const processId = requiredString(payload, 'id', 'build and deploy app-version')
 			const responseAppVersionId = str(prop(payload, 'appVersion'), 'id')
@@ -1057,7 +1111,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			await request('cancel-build', 'PUT', `/app-version/${appVersionId}/cancel-build`, { signal })
 		},
 
-		getProcess: async ({ processId, signal }) => readProcess(await request('get process', 'GET', `/process/${processId}`, { signal })),
+		getProcess,
 
 		enableSubdomainAccess: async ({ serviceId, signal }) => {
 			// No body: the operation takes none, and sending one would add a content-type the platform did not ask for.
@@ -1101,8 +1155,9 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		listServiceEnv,
 
 		createServiceEnv: async ({ serviceId, key, value, signal }) => {
+			let started: unknown
 			try {
-				await request('create-only service env', 'POST', `/service-stack/${serviceId}/user-data`, {
+				started = await request('create-only service env', 'POST', `/service-stack/${serviceId}/user-data`, {
 					body: { key, content: value, sensitive: SENSITIVE_USER_DATA },
 					signal,
 					omitErrorResponseDetails: true,
@@ -1111,16 +1166,19 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 				if (error instanceof Error && error.name === 'AbortError') throw error
 				throw new Error('zerops: create-only service env failed')
 			}
+			await awaitUserDataSync(started, `the user-data sync on service ${serviceId}`, signal)
 		},
 
 		putServiceEnv: async ({ serviceId, key, value, signal }) => {
+			const label = `the user-data sync on service ${serviceId}`
 			// `redactDetail` on both writes: this is the one place a secret VALUE is in the request body.
 			try {
-				await request('create service env', 'POST', `/service-stack/${serviceId}/user-data`, {
+				const created = await request('create service env', 'POST', `/service-stack/${serviceId}/user-data`, {
 					body: { key, content: value, sensitive: SENSITIVE_USER_DATA },
 					signal,
 					redactDetail: true,
 				})
+				await awaitUserDataSync(created, label, signal)
 				return
 			} catch (error) {
 				if (!(error instanceof ZeropsApiError) || error.code !== USER_DATA_DUPLICATE_KEY) {
@@ -1137,15 +1195,17 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 					`zerops: service ${serviceId} already defines \`${key}\` outside the environment API — it cannot be written`,
 				)
 			}
-			await request('update service env', 'PUT', `/user-data/${existing.id}`, {
+			const updated = await request('update service env', 'PUT', `/user-data/${existing.id}`, {
 				body: { key, content: value, sensitive: SENSITIVE_USER_DATA },
 				signal,
 				redactDetail: true,
 			})
+			await awaitUserDataSync(updated, label, signal)
 		},
 
 		deleteServiceEnv: async ({ envId, signal }) => {
-			await request('delete service env', 'DELETE', `/user-data/${envId}`, { signal })
+			const deleted = await request('delete service env', 'DELETE', `/user-data/${envId}`, { signal })
+			await awaitUserDataSync(deleted, `the user-data sync for record ${envId}`, signal)
 		},
 
 		getProjectEnv: async ({ projectEnvId, signal }) =>

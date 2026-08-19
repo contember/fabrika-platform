@@ -407,6 +407,55 @@ describe('Zerops service-level environment writes', () => {
 		expect(bodies).toEqual([{ key: 'FABRIKA_PROXY_MANIFEST_JSON', content: '{}', sensitive: true }])
 	})
 
+	test('waits out the user-data sync a write starts, because the next operation is refused until it ends', async () => {
+		// Live: each write answers a PENDING `stack.updateUserData`, and asking for a build while one runs
+		// answers `400 userDataSyncRunning`. That is exactly how a deploy that set an app's environment and
+		// then triggered its build failed, one second before the sync it had started finished.
+		const calls: string[] = []
+		let polls = 0
+		const fetchImpl: FetchLike = async (url, init) => {
+			calls.push(`${init?.method ?? 'GET'} ${url.replace('https://zerops.test', '')}`)
+			if (url.includes('/process/')) {
+				polls += 1
+				return jsonResponse({ id: 'process-1', actionName: 'stack.updateUserData', status: polls > 1 ? 'FINISHED' : 'RUNNING' })
+			}
+			return jsonResponse({ id: 'process-1', actionName: 'stack.updateUserData', status: 'PENDING' })
+		}
+		const slept: number[] = []
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl,
+			sleep: async (ms) => {
+				slept.push(ms)
+			},
+		})
+
+		await api.putServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_IAM_ISSUER', value: 'https://iam.test', signal: signal() })
+
+		expect(calls).toEqual([
+			'POST /service-stack/service-1/user-data',
+			'GET /process/process-1',
+			'GET /process/process-1',
+		])
+		expect(slept).toEqual([2_000])
+	})
+
+	test('leaves a user-data response that is not a process alone rather than polling its record id', async () => {
+		// A record carries an `id` too. Polling `/process/{recordId}` would hang, so recognition is by
+		// `actionName` and an unrecognised response ends the write.
+		const calls: string[] = []
+		const fetchImpl: FetchLike = async (url, init) => {
+			calls.push(`${init?.method ?? 'GET'} ${url.replace('https://zerops.test', '')}`)
+			return jsonResponse({ id: 'env-1', key: 'FABRIKA_RELEASE', content: 'v1' })
+		}
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl, sleep: async () => {} })
+
+		await api.createServiceEnv({ serviceId: 'service-1', key: 'FABRIKA_RELEASE', value: 'v1', signal: signal() })
+
+		expect(calls).toEqual(['POST /service-stack/service-1/user-data'])
+	})
+
 	test('keeps a duplicate generic and never reads or updates it', async () => {
 		const secret = 'create-only-secret-that-must-not-leak'
 		const calls: string[] = []
@@ -876,7 +925,7 @@ describe('Zerops upload-backed app versions', () => {
 		}
 	})
 
-	test('redacts non-2xx build and delete response bodies', async () => {
+	test('keeps the code of a refused build and drops every response body', async () => {
 		const responseSecret = 'response-value-that-must-not-leak'
 		const uploadUrl = 'https://upload.test/archive?signature=must-not-leak'
 		const token = 'zerops-token-that-must-not-leak'
@@ -889,16 +938,18 @@ describe('Zerops upload-backed app versions', () => {
 				.catch((cause: unknown) => cause),
 			api.deleteAppVersion({ appVersionId: 'version-1', signal: signal() }).catch((cause: unknown) => cause),
 		])
+		// The build keeps the CODE — a refusal an operator can act on, `userDataSyncRunning` above all —
+		// and the delete keeps nothing, because its response is the one that can carry an upload URL.
 		expect(errors.map((error) => error instanceof Error ? error.message : '')).toEqual([
-			'zerops: build and deploy app-version failed (503)',
+			'zerops: build and deploy app-version failed (503) — platformCode',
 			'zerops: delete app-version failed (503)',
 		])
+		expect(errors.map((error) => error instanceof ZeropsApiError ? error.code : 'unexpected')).toEqual(['platformCode', ''])
 		for (const error of errors) {
 			const message = error instanceof Error ? error.message : ''
 			expect(message).not.toContain(responseSecret)
 			expect(message).not.toContain(uploadUrl)
 			expect(message).not.toContain(token)
-			expect(error instanceof ZeropsApiError ? error.code : 'unexpected').toBe('')
 		}
 	})
 })

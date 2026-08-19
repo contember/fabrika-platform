@@ -640,6 +640,26 @@ Grants are fixed at mint time and the update API replaces the grant set WHOLESAL
 repairing a live token must re-pass every existing project grant in the same call or silently remove
 it.
 
+### Verified live (2026-08-19, account `prg1`, project `fabrika-notes-prod`) — a user-data write is an asynchronous process
+
+The first app deploy into a namespace failed at `build-and-deploy` with a bare `400`, deterministically
+and eleven seconds in, while the same call issued by hand with the same token, the same descriptor and
+the same uploaded archive answered `200`. The difference was the five environment variables the deploy
+writes to the app's service immediately before it asks for the build.
+
+| Behaviour                                                                             | Result                                                                                                                 |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `POST /service-stack/{id}/user-data`, `PUT /user-data/{id}`, `DELETE /user-data/{id}` | Each answers a **`PENDING` `stack.updateUserData` process**, not the record. `DELETE` answers a process too, not `204` |
+| `PUT /app-version/{id}/build-and-deploy` while such a process is running              | **`400 userDataSyncRunning`** — "Process of synchronizing userData is already running"                                 |
+| The same process, polled                                                              | `PENDING` → `RUNNING` → `FINISHED` in about **3 s**, on a deployed service and on a `startWithoutCode` one alike       |
+| `PUT /app-version/{id}/build-and-deploy` with no user-data process running            | Accepted — with an uploaded archive, with an archive uploaded by hand, and with no upload at all                       |
+| `GET /app-version/{id}` for an id that no longer exists                               | **`400`**, not `404` — so a bare 400 from this family says nothing about which condition was violated                  |
+
+Two consequences. Every user-data write must be waited out before the next operation on that service,
+which is why `putServiceEnv`, `createServiceEnv` and `deleteServiceEnv` now poll their own process
+before returning. And an endpoint whose error CODE is dropped is undiagnosable: `build-and-deploy`
+keeps its code from now on, because nothing in that request or response is a secret.
+
 ### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — updating a running installation
 
 How the four platform services on `fabrika-test` were taken from a two-day-old build to `HEAD`. There

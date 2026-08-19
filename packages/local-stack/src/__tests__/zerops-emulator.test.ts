@@ -14,6 +14,9 @@ const emulator = async (options: { activationDelayMs?: number; now?: () => numbe
 			token,
 			baseUrl: 'http://zerops.local/api/rest/public',
 			fetchImpl,
+			// Every user-data write now waits out its `stack.updateUserData` process; against the emulator
+			// that is one extra read, and there is nothing to wait between them for.
+			sleep: async () => {},
 		}),
 	}
 }
