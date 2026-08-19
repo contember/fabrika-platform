@@ -117,6 +117,8 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		},
 		logs: env.RUN_LOGS,
 		operations: operationsReleaseDeps(env),
+		// The installation's own IAM issuer, which every application it deploys verifies against (ADR-0035).
+		...(env.FABRIKA_IAM_ISSUER === undefined ? {} : { iamIssuer: env.FABRIKA_IAM_ISSUER }),
 	}
 }
 

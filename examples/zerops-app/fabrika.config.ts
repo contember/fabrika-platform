@@ -12,9 +12,12 @@
 // Nothing in this file or the provider assumes an app→project mapping or keys off a naming convention.
 // This app's services are imported INTO the project the registry names.
 //
-// `pipeline.vars`. That surface exists to inject values into `process.env` before `resources()` builds a
-// Cloudflare resource graph. There is no resource graph here, and per-environment configuration reaches
-// a Zerops service as a service-level environment variable instead.
+// `pipeline.vars`. That surface injects values into `process.env` before the app's configuration is
+// compiled — on Cloudflare before `resources()` builds a resource graph, here before the import document
+// is rendered, where a declared name becomes a `${NAME}` the deploy substitutes. This app declares none:
+// the one per-installation value it needs is `FABRIKA_IAM_ISSUER`, which the platform owns and every
+// deploy writes into the service (ADR-0035). A variable this file does not declare is refused where it
+// is set, rather than stored and ignored.
 //
 // A `build` command. Zerops has its own CI; the repository-root `zerops.yaml` describes the build, and
 // the deploy TRIGGERS it rather than running it.

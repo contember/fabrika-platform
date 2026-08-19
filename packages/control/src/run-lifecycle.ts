@@ -1,3 +1,4 @@
+import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
 import type { RunLogLine } from '@fabrika/control-contract'
 import {
 	OPERATIONS_MANAGED_ENVIRONMENT_KEYS,
@@ -47,6 +48,12 @@ export interface RunDeps {
 	lock: DeployLockGate
 	logs: Pick<BlobStore, 'put'>
 	operations?: OperationsReleaseProjectionDeps
+	/**
+	 * This installation's IAM issuer, delivered to every application it deploys (ADR-0035). Optional
+	 * because a composition may not know its own public IAM origin; then the name is REMOVED from the
+	 * service rather than left stale, and an app that requires it fails its own boot, loudly.
+	 */
+	iamIssuer?: string
 }
 
 type SourceTransportKind = 'legacy-v1' | 'keyed-v2'
@@ -391,8 +398,16 @@ export async function executeDeploy(
 		if (operationsCollisions.length > 0) {
 			throw new Error(`application variable "${operationsCollisions[0]}" is managed by Fabrika`)
 		}
-		const managedEnvironment: Record<string, string | null> = { [FABRIKA_RELEASE]: null }
+		if (vars[FABRIKA_IAM_ISSUER] !== undefined) {
+			throw new Error(`application variable "${FABRIKA_IAM_ISSUER}" is managed by Fabrika`)
+		}
+		const managedEnvironment: Record<string, string | null> = { [FABRIKA_RELEASE]: null, [FABRIKA_IAM_ISSUER]: null }
 		for (const key of OPERATIONS_MANAGED_ENVIRONMENT_KEYS) managedEnvironment[key] = null
+		// `null` means REMOVE, so an installation that cannot name its own issuer strips a stale one
+		// instead of deploying an app that verifies against the previous installation's tokens.
+		if (deps.iamIssuer !== undefined && deps.iamIssuer.trim() !== '') {
+			managedEnvironment[FABRIKA_IAM_ISSUER] = deps.iamIssuer.trim()
+		}
 		const ingest = await deps.repositories.operationsCatalog.getActiveIngestConfig(app.id, appEnv.env)
 		if (ingest?.dsn !== null && ingest?.dsn !== undefined) {
 			Object.assign(

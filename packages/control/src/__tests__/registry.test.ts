@@ -1,3 +1,4 @@
+import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
 import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type { ControlProvider, JsonValue, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
@@ -88,6 +89,17 @@ const fakeProvider: ControlProvider = {
 		}
 	},
 	deploy: () => Promise.resolve({ state: 'succeeded' }),
+}
+
+/** A provider that CAN read its own artifact's declarations — the shape `declaredVariables` exists for. */
+const declaringProvider: ControlProvider = {
+	...fakeProvider,
+	// Passthrough, unlike `fakeProvider`, which rewrites the artifact payload down to its image name.
+	normalizeRegistration: (input) => input,
+	declaredVariables: ({ artifact }) => {
+		const declared = payloadObject(artifact)['declaredVars']
+		return Array.isArray(declared) ? declared.filter((name): name is string => typeof name === 'string') : undefined
+	},
 }
 
 const zeropsProvider: ControlProvider = {
@@ -536,6 +548,56 @@ describe('onboarding + registry CRUD', () => {
 		const delVar = await handleApi(req('DELETE', '/api/apps/app/vars/EXAMPLE_TEAM'), deps)
 		expect(delVar.status).toBe(200)
 		expect(await deps.repositories.registry.listAppVars('app')).toHaveLength(0)
+	})
+
+	test('refuses a variable the artifact does not declare, and says where to declare it', async () => {
+		// ADR-0035: a variable is an input to the app's own config, so a name the config never reads is
+		// stored and then ignored. A provider that can read its artifact's declarations refuses it here.
+		const { deps } = makeDeps({ provider: declaringProvider })
+		await handleApi(req('POST', '/api/apps', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
+
+		// Before any environment exists there is nothing to check against, so the write stands.
+		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'ANYTHING', value: 'v' }), deps)).status).toBe(200)
+
+		// Built directly: `req` substitutes its own envelopes into an env PUT, and this test is about the
+		// artifact's own payload.
+		const registered = await handleApi(
+			new Request('https://vozka.example/api/apps/app/envs/prod', {
+				method: 'PUT',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					target: { provider: 'harbor', version: 1, payload: { region: 'eu' } },
+					artifact: { provider: 'harbor', version: 1, payload: { image: 'registry.example/app:v1', declaredVars: ['TEAM'] } },
+				}),
+			}),
+			deps,
+		)
+		expect(registered.status).toBe(200)
+
+		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TEAM', value: 'core' }), deps)).status).toBe(200)
+		const refused = await handleApi(req('PUT', '/api/apps/app/vars', { name: 'UNDECLARED', value: 'v' }), deps)
+		expect(refused.status).toBe(400)
+		expect(((await refused.json()) as { error: string }).error).toContain('pipeline.vars')
+
+		// The reserved issuer is refused as managed, not as undeclared.
+		const managed = await handleApi(req('PUT', '/api/apps/app/vars', { name: FABRIKA_IAM_ISSUER, value: 'https://attacker.example' }), deps)
+		expect(managed.status).toBe(400)
+		expect(((await managed.json()) as { error: string }).error).toContain('managed by Fabrika')
+	})
+
+	test('a provider that cannot read its artifact constrains nothing', async () => {
+		// `undefined` is the honest answer for an artifact that names a config path in the repository;
+		// guessing an empty set there would refuse a variable that works.
+		const { deps } = makeDeps()
+		await handleApi(req('POST', '/api/apps', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
+		await handleApi(
+			req('PUT', '/api/apps/app/envs/prod', {
+				target: { provider: 'harbor', version: 1, payload: { region: 'eu' } },
+				artifact: { provider: 'harbor', version: 1, payload: { image: 'registry.example/app:v1' } },
+			}),
+			deps,
+		)
+		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'WHATEVER', value: 'v' }), deps)).status).toBe(200)
 	})
 })
 

@@ -242,4 +242,14 @@ export interface ControlProvider {
 	reconcile?(input: ProviderReconcileInput): Promise<ProviderReconcileOutcome>
 	readonly secrets?: ProviderManagedSecrets
 	readonly namespaces?: ProviderNamespaceCapabilities
+	/**
+	 * The variable names this artifact declares, so core can refuse one it would silently ignore
+	 * ([ADR-0035](../../../docs/decisions/0035-the-platform-owns-the-application-iam-issuer.md)).
+	 *
+	 * OPTIONAL, and `undefined` is the honest answer rather than an empty set: a provider whose artifact
+	 * names a config path in the repository cannot know what that config declares, and guessing would
+	 * refuse a variable that works. A provider that CAN answer — one whose artifact is the compiled
+	 * manifest — constrains what an operator may set.
+	 */
+	declaredVariables?(input: { readonly artifact: ProviderEnvelope }): readonly string[] | undefined
 }

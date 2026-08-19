@@ -112,6 +112,29 @@ tests for routes that are intentionally portable. Keep composition-specific
 surfaces separate; for example, IAM's process health and shared-secret HTTP RPC
 transports exist only in the Bun composition.
 
+## What the platform writes into an application
+
+A deploy writes a small, fixed set of names into the deployed application's environment on every
+provider — `managedEnvironment`. They are not application configuration: each is one value per
+installation or per deploy that the control plane is the only thing to know, so an application neither
+commits them nor sets them, and an application VARIABLE of the same name is refused at deploy
+([ADR-0035](../decisions/0035-the-platform-owns-the-application-iam-issuer.md)).
+
+| Name                                                           | What it is                                                                   |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `FABRIKA_IAM_ISSUER`                                           | The IAM origin: the `iss` of every token the app verifies, and its JWKS base |
+| `FABRIKA_RELEASE`                                              | The deploy-scoped release name                                               |
+| `FABRIKA_OPERATIONS_DSN`                                       | The browser-safe public ingest DSN for this application environment          |
+| `FABRIKA_APP_ID`, `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY` | The ingest coordinates that DSN reports under                                |
+
+A name whose value the installation cannot supply is REMOVED from the service rather than left stale —
+an app verifying against a previous installation's issuer is worse than one that fails to boot.
+
+Everything else an app needs per environment is its own `pipeline.vars`, which are inputs to the app's
+CONFIGURATION rather than its runtime environment: the deploy makes each declared name available while
+the app's config is compiled, and the config decides what to do with it. A variable the artifact does
+not declare is refused where it is set.
+
 ## Browser error reporting
 
 Fabrika supplies an application's Operations ingest settings as two managed

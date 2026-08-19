@@ -1,3 +1,4 @@
+import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
 import { FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_OPERATIONS_DSN, FABRIKA_SERVICE_KEY } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type { BlobStore } from '@fabrika/platform'
@@ -534,6 +535,7 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_ENVIRONMENT]: null,
 			[FABRIKA_SERVICE_KEY]: null,
 			[FABRIKA_RELEASE]: null,
+			[FABRIKA_IAM_ISSUER]: null,
 		})
 		expect(input.dryRun).toBe(true)
 
@@ -689,6 +691,7 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_ENVIRONMENT]: null,
 			[FABRIKA_SERVICE_KEY]: null,
 			[FABRIKA_RELEASE]: null,
+			[FABRIKA_IAM_ISSUER]: null,
 		})
 
 		const secondRunId = uuidv7()
@@ -711,7 +714,48 @@ describe('provider-neutral run lifecycle', () => {
 			[FABRIKA_ENVIRONMENT]: 'prod',
 			[FABRIKA_SERVICE_KEY]: 'default',
 			[FABRIKA_RELEASE]: null,
+			[FABRIKA_IAM_ISSUER]: null,
 		})
+	})
+
+	test('delivers the installation issuer and refuses an application that names its own', async () => {
+		// ADR-0035: the issuer is the `iss` of every token this app verifies and the platform is the only
+		// thing that knows it, so it travels in `managedEnvironment` and an app variable of that name is a
+		// deploy failure rather than a value that quietly wins or quietly loses.
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const inputs: ProviderDeployInput[] = []
+		const deps = { ...makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), iamIssuer: 'https://iam.example.test' }
+		expect((await executeDeploy(deps, { runId })).status).toBe('succeeded')
+		expect(inputs[0]?.managedEnvironment[FABRIKA_IAM_ISSUER]).toBe('https://iam.example.test')
+
+		const conflicting = uuidv7()
+		await db.registry.upsertAppVar({ appId: 'app', env: 'prod', name: FABRIKA_IAM_ISSUER, value: 'https://attacker.example' })
+		await db.runs.createRun({
+			id: conflicting,
+			appId: 'app',
+			env: 'prod',
+			ref: 'refs/heads/deploy/prod',
+			trigger: 'manual',
+			commitSha: null,
+		})
+		const refused: ProviderDeployInput[] = []
+		expect(
+			(await executeDeploy({ ...makeDeps(db, makeProvider(refused, { state: 'succeeded' })), iamIssuer: 'https://iam.example.test' }, {
+				runId: conflicting,
+			})).status,
+		).toBe('failed')
+		expect(refused).toEqual([])
+	})
+
+	test('removes a stale issuer when the installation cannot name its own', async () => {
+		// `null` is REMOVE. An installation with no issuer configured must strip whatever the previous one
+		// wrote rather than leave an app verifying against another installation's tokens.
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const inputs: ProviderDeployInput[] = []
+		expect((await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' })), { runId })).status).toBe('succeeded')
+		expect(inputs[0]?.managedEnvironment[FABRIKA_IAM_ISSUER]).toBeNull()
 	})
 
 	test('rejects legacy user values under reserved Operations names without logging their value', async () => {

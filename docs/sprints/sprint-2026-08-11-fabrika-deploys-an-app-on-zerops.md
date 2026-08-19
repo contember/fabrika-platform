@@ -600,8 +600,12 @@ concurrent read occasionally sees nothing.
 (`fabrika/notes/prod/default/1919eb31…`, the mirrored source commit) read back from the live service.
 The browser sign-in and the exception reaching Operations are still open.
 
-**Still open, and both need the operator.** The private half needs **Settings → Source** for the
-second organization and the repository flipped to private. And one variable is a decision, not a bug:
-`FABRIKA_IAM_ISSUER` had to be written straight through the Zerops env API because an app variable
-set in the control plane never reaches a Zerops service —
-[`76`](../backlog/76-an-app-variable-never-reaches-a-zerops-service.md).
+**Still open, and it needs the operator.** The private half needs **Settings → Source** for the second
+organization and the repository flipped to private.
+
+`FABRIKA_IAM_ISSUER` had to be written straight through the Zerops env API here, because an app
+variable set in the control plane reached no Zerops service. That was a decision rather than a bug and
+it is settled: [ADR-0035](../decisions/0035-the-platform-owns-the-application-iam-issuer.md) makes the
+issuer platform-owned, delivers it in `managedEnvironment` on both clouds, and refuses a variable the
+app's artifact does not declare instead of storing one that does nothing. `backlog/76` is consumed and
+deleted.

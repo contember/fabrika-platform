@@ -440,6 +440,19 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 	const controlProvider: ZeropsControlProvider = {
 		id: 'zerops',
 		normalizeRegistration,
+		/**
+		 * A Zerops artifact IS the compiled manifest, so the declaration is right here and core can refuse
+		 * a variable this app would never read. An artifact that will not decode answers `undefined`
+		 * rather than an empty set: a broken envelope is a registration problem, and reporting it as an
+		 * undeclared variable would point the operator at the wrong thing.
+		 */
+		declaredVariables: ({ artifact }) => {
+			try {
+				return parseFabrikaManifest(decodeEnvelope('artifact', artifact, zeropsArtifactCodec)).app.pipeline.vars
+			} catch {
+				return undefined
+			}
+		},
 		resolveSource: (input) => resolveSource(input),
 		resolveSourceWithBinding: (input) => resolveSource(input, input.sourceBinding),
 		deploy: async (input: ProviderDeployInput): Promise<ProviderTerminalOutcome> => {

@@ -27,6 +27,21 @@
 /** The environment name every bypass is gated on. Compared literally; there is no other spelling. */
 export const LOCAL_ENVIRONMENT = 'local'
 
+/**
+ * The ONE name an IAM issuer travels under, from the platform's own configuration to the application
+ * that verifies tokens against it ([ADR-0035](../../../docs/decisions/0035-the-platform-owns-the-application-iam-issuer.md)).
+ *
+ * PLATFORM-OWNED, which is why it is a constant here rather than a string each reader spells. It is the
+ * `iss` of every token, it is identical for every application on an installation, and the control plane
+ * is the only thing that knows it — so a deploy delivers it in `managedEnvironment` and an application
+ * that declares it for itself is refused rather than quietly pointed somewhere else.
+ *
+ * It lives in this package because everything that reads or writes it — `@fabrika/auth`, both proxies,
+ * `@fabrika/provider-contract` and the control plane — already depends on `@fabrika/auth-core`, and
+ * `@fabrika/auth-core` depends on nothing.
+ */
+export const FABRIKA_IAM_ISSUER = 'FABRIKA_IAM_ISSUER'
+
 export class EnvironmentNameError extends Error {
 	constructor(publicOrigin: string) {
 		super(

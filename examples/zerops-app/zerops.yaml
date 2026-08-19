@@ -15,16 +15,20 @@
 #
 # Not here. This file is committed and plaintext, so it carries only what is true for every deployment
 # of this app: ports, and `${service_variable}` REFERENCES that the platform resolves at container
-# start. Two categories live elsewhere, both addressed BY SERVICE through the env API:
+# start. Two categories live elsewhere:
 #
-#   per-environment config   FABRIKA_IAM_ISSUER   the IAM service's public origin — the `iss` of every
+#   platform-owned config    FABRIKA_IAM_ISSUER   the IAM service's public origin — the `iss` of every
 #                                                 token this app verifies, and the JWKS it fetches.
-#                                                 Differs per installation, so it is not committed;
-#                                                 `src/env.ts` refuses to boot without it.
+#                                                 WRITTEN BY THE DEPLOY, in `managedEnvironment`
+#                                                 (ADR-0035): it is one value per installation and the
+#                                                 control plane is the only thing that knows it, so this
+#                                                 app neither commits it nor sets it. Naming it here, or
+#                                                 as an application variable, is refused.
 #   secrets                  NOTES_SESSION_PEPPER, NOTES_WEBHOOK_SIGNING_KEY — declared in
 #                                                 `fabrika.config.ts` under `pipeline.secrets` purely as
-#                                                 documentation. Nothing in fabrika transports their
-#                                                 values on Zerops; the platform holds them.
+#                                                 documentation, and addressed BY SERVICE through the env
+#                                                 API. Nothing in fabrika transports their values on
+#                                                 Zerops; the platform holds them.
 
 zerops:
   - setup: notesapi

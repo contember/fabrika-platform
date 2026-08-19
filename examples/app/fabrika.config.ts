@@ -16,9 +16,9 @@ export const buildExampleWorker = (): Worker =>
 		bindings: {
 			IAM: new ServiceReference('propustka-worker'),
 		},
-		vars: {
-			FABRIKA_IAM_ISSUER: process.env.FABRIKA_IAM_ISSUER ?? 'http://localhost:18191',
-		},
+		// No `FABRIKA_IAM_ISSUER` here: the platform owns it and every deploy writes it into this Worker's
+		// environment (ADR-0035). Declaring it would be REFUSED, because an app that names its own issuer
+		// can point itself at a different one.
 	})
 
 export const buildExampleProxy = (ctx: ResourceContext): Worker =>
