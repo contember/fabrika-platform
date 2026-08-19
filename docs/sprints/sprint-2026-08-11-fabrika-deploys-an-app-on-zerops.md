@@ -609,3 +609,30 @@ it is settled: [ADR-0035](../decisions/0035-the-platform-owns-the-application-ia
 issuer platform-owned, delivers it in `managedEnvironment` on both clouds, and refuses a variable the
 app's artifact does not declare instead of storing one that does nothing. `backlog/76` is consumed and
 deleted.
+
+### Rolling the rename onto the live installation (2026-08-19)
+
+`v0.0.15` published, `fabrika.ref` bumped, the example mirror pushed, `notes/prod` re-registered
+against the new descriptor and redeployed. The refusals ADR-0035 specifies were witnessed against the
+live control plane, each with its own message:
+
+```
+apps variables put FABRIKA_IAM_ISSUER  → 400 application variable "FABRIKA_IAM_ISSUER" is managed by Fabrika
+apps variables put NOTES_NOT_DECLARED  → 400 application variable "NOTES_NOT_DECLARED" is not declared by notes/prod
+```
+
+**The rename then took the namespace down, and it exposed a real defect rather than a slip.** The
+deploy succeeded — migrations applied, `notesapi` reached `ACTIVE` — but every route answered 502,
+because `syncZeropsProxy` had rebuilt the namespace proxy from `main` as it does on every deploy, and
+the new binary refused to boot: `ProxyEnvError: FABRIKA_IAM_ISSUER is required`. The proxy's own
+variable was still `FABRIKA_IAM_URL`, written once when the namespace was provisioned.
+
+So the one step that can hand a proxy NEW CODE was the one step that never wrote that code's
+CONFIGURATION — those two variables belonged solely to `ensureProxyConfiguration`, which runs on
+namespace provision and reconcile. Fixed by giving both paths one `ensureNamespaceProxyIam` and
+calling it before the pipeline is triggered: configuration first, then the code that reads it. That
+ordering is what ADR-0024 assumes when it forbids transitional fallbacks and calls a rename a flag day.
+
+The live proxy was repaired by hand — the new name written, the old one removed — before the fix
+existed, because the namespace was down. A sixth defect, in the same series as the five above, and the
+only one whose blast radius was a whole namespace rather than one deploy.
