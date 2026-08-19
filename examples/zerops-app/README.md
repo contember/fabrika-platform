@@ -8,13 +8,21 @@ This directory is both a fabrika-platform workspace fixture and the complete roo
 Zerops requires `zerops.yaml` at the root of the repository it builds. The standalone repository must
 therefore contain this directory's files directly, not the surrounding monorepo or an extra directory.
 
-The monorepo directory is the source of truth. Mirror it without changing the tree:
+The monorepo directory is the source of truth and the mirror's tree must equal it byte for byte. The
+mirror's HISTORY is curated rather than replayed, so an update is one commit on top of what is there:
 
 ```bash
-git subtree split --prefix=examples/zerops-app -b fabrika-example-zerops
-git push https://github.com/contember/fabrika-example-zerops.git fabrika-example-zerops:main
-git branch -D fabrika-example-zerops
+git clone git@github.com:contember/fabrika-example-zerops.git /tmp/fabrika-example-zerops
+cd /tmp/fabrika-example-zerops
+git fetch /path/to/fabrika-platform main
+git read-tree -u --reset FETCH_HEAD:examples/zerops-app
+git commit -m "…" && git push origin main
 ```
+
+`read-tree -u --reset` makes the index and the working tree exactly this directory, so a file deleted
+here is deleted there and no local edit survives. `git subtree split` is NOT the mechanism, however
+much it looks like the job: it replays the monorepo's entire history into a public example repository,
+and it rewrites the commit ids the platform has already recorded as deployed releases.
 
 Do not edit the mirror directly. A fresh export must pass `bun install --frozen-lockfile`,
 `bun run typecheck`, and `bun test` from its repository root. The normal fabrika-platform workspace
