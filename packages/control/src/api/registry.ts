@@ -198,15 +198,31 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		if (await c.repositories.registry.hasInFlightRun(appId, env)) fail(409, 'deployment namespace cannot change while a deploy is in progress')
 		if (await c.repositories.registry.hasSuccessfulRun(appId, env)) fail(409, 'deployment namespace cannot change after a successful deploy')
 	}
-	const registration = normalizeRegistration(c.provider, toProviderApp(app), {
-		appId,
-		env,
-		...(input.domain === undefined || input.domain === null ? {} : { domain: input.domain }),
-		...(publicOrigin === null ? {} : { publicOrigin }),
-		...(namespace === undefined ? {} : { namespace }),
-		target: input.target,
-		artifact: input.artifact,
-	})
+	const requested: ProviderRegistration = {
+		app: toProviderApp(app),
+		environment: {
+			appId,
+			env,
+			...(input.domain === undefined || input.domain === null ? {} : { domain: input.domain }),
+			...(publicOrigin === null ? {} : { publicOrigin }),
+			...(namespace === undefined ? {} : { namespace }),
+			target: input.target,
+			artifact: input.artifact,
+		},
+	}
+	const preparation = c.provider.namespaces?.prepareRegistration
+	let registration: ProviderRegistration
+	if (preparation === undefined) {
+		registration = normalizeRegistration(c.provider, requested.app, requested.environment)
+	} else {
+		// Unlike `register`, nothing has been written yet, so a refusal here leaves the environment as it
+		// was and there is nothing to roll back.
+		try {
+			registration = await prepareRegistration(c, preparation, requested)
+		} catch {
+			return fail(502, 'provider registration preparation failed')
+		}
+	}
 	const resourceClaims = registrationResourceClaims(c.provider, registration)
 	const persistence = {
 		appId,
@@ -407,16 +423,7 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 	}
 	if (preparation !== undefined) {
 		try {
-			const prepared = await preparation({ registration, signal: c.signal })
-			if (
-				prepared.app.id !== id
-				|| !sameGitHubSourceBinding(prepared.app, registration.app)
-				|| prepared.environment.appId !== id
-				|| prepared.environment.env !== env
-				|| prepared.environment.publicOrigin !== registration.environment.publicOrigin
-				|| !sameNamespaceCoordinates(prepared.environment.namespace, registration.environment.namespace, c.provider.id)
-			) throw new Error('provider returned a prepared registration for different coordinates')
-			registration = normalizeRegistration(c.provider, prepared.app, prepared.environment)
+			registration = await prepareRegistration(c, preparation, registration)
 			appEnv = (await c.repositories.registry.upsertAppEnvWithNamespaceResourceClaims({
 				...environmentInput,
 				domain: registration.environment.domain ?? null,
@@ -439,6 +446,32 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 	})
 	notifyCatalogChanged(c)
 	return { app: toAppDto(app), env: toAppEnvDto(appEnv) }
+}
+
+/**
+ * Run the provider's registration preparation and normalise what it hands back.
+ *
+ * A provider that has one OWNS the target envelope: on Zerops the target is a service id the provider
+ * discovers by importing the app's provisioning document, and a caller cannot know it. Both the
+ * create path and the update path go through here, or the two disagree about who builds the target —
+ * which is how `apps.environments.put` came to refuse every Zerops manifest whose artifact codec had
+ * moved on, while `register` accepted it.
+ */
+async function prepareRegistration(
+	c: RegistryUseCaseContext,
+	preparation: NonNullable<NonNullable<ControlProvider['namespaces']>['prepareRegistration']>,
+	requested: ProviderRegistration,
+): Promise<ProviderRegistration> {
+	const prepared = await preparation({ registration: requested, signal: c.signal })
+	if (
+		prepared.app.id !== requested.app.id
+		|| !sameGitHubSourceBinding(prepared.app, requested.app)
+		|| prepared.environment.appId !== requested.app.id
+		|| prepared.environment.env !== requested.environment.env
+		|| prepared.environment.publicOrigin !== requested.environment.publicOrigin
+		|| !sameNamespaceCoordinates(prepared.environment.namespace, requested.environment.namespace, c.provider.id)
+	) throw new Error('provider returned a prepared registration for different coordinates')
+	return normalizeRegistration(c.provider, prepared.app, prepared.environment)
 }
 
 function normalizeRegistration(provider: ControlProvider, app: ProviderApp, environment: ProviderEnvironment): ProviderRegistration {

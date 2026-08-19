@@ -548,6 +548,59 @@ describe('app environment namespace assignment', () => {
 		expect((await deps.repositories.registry.getAppEnv('billing', 'prod'))?.provider_target_json).toBe(JSON.stringify(target('discovered')))
 	})
 
+	test('an environment update goes through the same provider preparation the registration did', async () => {
+		// `apps.environments.put` used to normalise the caller's envelope directly, so a provider that
+		// OWNS its target — every namespaced one — could never take a changed manifest through it.
+		const recording = providerRecording()
+		const base = namespacedProvider(recording)
+		if (base.namespaces === undefined) {
+			throw new Error('expected namespace capabilities')
+		}
+		let prepared = 0
+		const provider: ControlProvider = {
+			...base,
+			namespaces: {
+				...base.namespaces,
+				prepareRegistration: (input) => {
+					prepared += 1
+					return Promise.resolve({
+						app: input.registration.app,
+						environment: { ...input.registration.environment, target: target(`discovered-${prepared}`) },
+					})
+				},
+			},
+		}
+		const { deps } = makeDeps(provider)
+		await deps.repositories.registry.createDeploymentNamespaceWithResourceClaims({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(target('namespace')),
+			state: 'ready',
+		}, ['service:proxy'])
+		const registered = await handleApi(
+			request('POST', '/register-app', {
+				id: 'billing',
+				repoUrl: 'github.com/acme/billing',
+				env: 'prod',
+				namespaceId: 'apps-prod',
+				...registrationBody(),
+			}),
+			deps,
+		)
+		expect(registered.status).toBe(201)
+
+		const updated = await handleApi(
+			request('PUT', '/apps/billing/envs/prod', { namespaceId: 'apps-prod', ...registrationBody() }),
+			deps,
+		)
+
+		expect(updated.status).toBe(200)
+		expect(prepared).toBe(2)
+		expect((await deps.repositories.registry.getAppEnv('billing', 'prod'))?.provider_target_json).toBe(JSON.stringify(target('discovered-2')))
+	})
+
 	test('removes the provisional app and claims when provider preparation fails', async () => {
 		const recording = providerRecording()
 		const base = namespacedProvider(recording)
