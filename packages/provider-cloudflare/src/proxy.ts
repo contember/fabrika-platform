@@ -60,7 +60,7 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 		observability: { logs: { enabled: true, invocation_logs: false } },
 		vars: {
 			FABRIKA_PROXY_MANIFEST_JSON: encodeProxyManifestJson(manifest),
-			FABRIKA_IAM_URL: options.iamUrl ?? '',
+			FABRIKA_IAM_ISSUER: options.iamUrl ?? '',
 		},
 		bindings: {
 			IAM: new ServiceReference(options.iamService ?? 'propustka-worker'),

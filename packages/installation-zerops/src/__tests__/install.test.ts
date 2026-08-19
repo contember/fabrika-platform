@@ -177,7 +177,7 @@ describe('pass 1', () => {
 		const untilBuild = fixture.zerops.calls.slice(0, fixture.zerops.calls.indexOf('deploy:proxy'))
 		expect(untilBuild.filter((call) => call.startsWith('env:'))).toEqual([
 			'env:proxy:FABRIKA_PROXY_MANIFEST_JSON',
-			'env:proxy:FABRIKA_IAM_URL',
+			'env:proxy:FABRIKA_IAM_ISSUER',
 			'env:proxy:FABRIKA_IAM_KEY',
 		])
 	})

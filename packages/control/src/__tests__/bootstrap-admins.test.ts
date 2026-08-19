@@ -96,7 +96,7 @@ describe('parseBootstrapAdmins', () => {
 })
 
 /** The one env shape there is: the IAM binding plus the issuer its tokens are verified against. */
-const ENV = { ENVIRONMENT: 'stage', IAM: serviceIam, FABRIKA_IAM_URL: ISSUER } as const
+const ENV = { ENVIRONMENT: 'stage', IAM: serviceIam, FABRIKA_IAM_ISSUER: ISSUER } as const
 
 describe('controlAuthMiddleware bootstrap semantics', () => {
 	test('the provisioning key buys nothing here — machine access is an IAM-issued service key', async () => {

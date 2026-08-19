@@ -35,9 +35,9 @@ export class ProxyEnvError extends Error {
 }
 
 export function readProxyEnv(source: Record<string, string | undefined>): ProxyEnv {
-	const rawIamUrl = source['FABRIKA_IAM_URL']
+	const rawIamUrl = source['FABRIKA_IAM_ISSUER']
 	if (rawIamUrl === undefined || rawIamUrl === '') {
-		throw new ProxyEnvError('FABRIKA_IAM_URL is required')
+		throw new ProxyEnvError('FABRIKA_IAM_ISSUER is required')
 	}
 	const key = source['FABRIKA_IAM_KEY']
 	if (key === undefined || key === '') {
@@ -63,10 +63,10 @@ function originOf(raw: string): string {
 	try {
 		url = new URL(raw)
 	} catch {
-		throw new ProxyEnvError('FABRIKA_IAM_URL must be an absolute http(s) URL')
+		throw new ProxyEnvError('FABRIKA_IAM_ISSUER must be an absolute http(s) URL')
 	}
 	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-		throw new ProxyEnvError('FABRIKA_IAM_URL must be an absolute http(s) URL')
+		throw new ProxyEnvError('FABRIKA_IAM_ISSUER must be an absolute http(s) URL')
 	}
 	return url.origin
 }

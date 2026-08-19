@@ -35,7 +35,7 @@ const jwks: Jwks = {
 	}],
 }
 
-const operationsIam = () => createOperationsIam({ IAM: sessionRpc('unused'), FABRIKA_IAM_URL: issuer })
+const operationsIam = () => createOperationsIam({ IAM: sessionRpc('unused'), FABRIKA_IAM_ISSUER: issuer })
 
 const handler = (harness = createHarness(), iam = operationsIam()) => {
 	return createOperationsFetchHandler({

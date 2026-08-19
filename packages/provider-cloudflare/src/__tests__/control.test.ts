@@ -129,7 +129,7 @@ describe('Cloudflare control provider', () => {
 			credentials: {
 				CLOUDFLARE_ACCOUNT_ID: 'account-1',
 				CLOUDFLARE_API_TOKEN: 'token-1',
-				FABRIKA_IAM_URL: 'https://iam.example.com',
+				FABRIKA_IAM_ISSUER: 'https://iam.example.com',
 			},
 			secrets: { API_KEY: 'secret' },
 			vars: { FEATURE: 'on' },
@@ -175,10 +175,10 @@ describe('Cloudflare control provider', () => {
 		expect(isCloudflareRunnerJob({ ...valid, dryRun: 'yes' })).toBe(false)
 		expect(isCloudflareRunnerJob({ ...valid, secrets: { API_KEY: 42 } })).toBe(false)
 		expect(isCloudflareRunnerJob({ ...valid, managedEnvironment: { FABRIKA_RELEASE: 42 } })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, credentials: { ...valid.credentials, FABRIKA_IAM_URL: 42 } })).toBe(false)
+		expect(isCloudflareRunnerJob({ ...valid, credentials: { ...valid.credentials, FABRIKA_IAM_ISSUER: 42 } })).toBe(false)
 		expect(isCloudflareRunnerJob({
 			...valid,
-			credentials: { ...valid.credentials, FABRIKA_IAM_URL: 'https://iam.example.com' },
+			credentials: { ...valid.credentials, FABRIKA_IAM_ISSUER: 'https://iam.example.com' },
 		})).toBe(true)
 		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: ['https://api.example.com'] })).toBe(true)
 		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: 'https://api.example.com' })).toBe(false)

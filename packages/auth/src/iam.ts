@@ -43,7 +43,7 @@ export interface IamEnv {
 	/** The IAM service binding. Typed as the `IamRpc` contract — never the IAM Worker. */
 	IAM?: IamRpc
 	/** IAM origin — the token `iss` this SDK verifies against. Canonicalized once in `createIam`. */
-	FABRIKA_IAM_URL?: string
+	FABRIKA_IAM_ISSUER?: string
 	/** Fallback app id when `opts.appId` is omitted. */
 	FABRIKA_APP_ID?: string
 }
@@ -278,7 +278,7 @@ export function createIam(env: IamEnv, opts: CreateIamOptions = {}): Iam {
 	if (binding === undefined) {
 		throw new Error('createIam: the IAM service binding is missing (env.IAM) — check the IAM ServiceReference.')
 	}
-	const issuer = canonicalIssuer(env.FABRIKA_IAM_URL)
+	const issuer = canonicalIssuer(env.FABRIKA_IAM_ISSUER)
 	return new Iam({
 		management: new IamClient(binding, appId),
 		binding,
@@ -294,16 +294,16 @@ export function createIam(env: IamEnv, opts: CreateIamOptions = {}): Iam {
  */
 function canonicalIssuer(raw: string | undefined): string {
 	if (raw === undefined || raw.trim() === '') {
-		throw new Error('createIam: FABRIKA_IAM_URL is missing — it is the issuer every token is verified against.')
+		throw new Error('createIam: FABRIKA_IAM_ISSUER is missing — it is the issuer every token is verified against.')
 	}
 	let url: URL
 	try {
 		url = new URL(raw.trim())
 	} catch {
-		throw new Error('createIam: FABRIKA_IAM_URL is not an absolute URL.')
+		throw new Error('createIam: FABRIKA_IAM_ISSUER is not an absolute URL.')
 	}
 	if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-		throw new Error('createIam: FABRIKA_IAM_URL must be an http(s) origin.')
+		throw new Error('createIam: FABRIKA_IAM_ISSUER must be an http(s) origin.')
 	}
 	return url.origin
 }

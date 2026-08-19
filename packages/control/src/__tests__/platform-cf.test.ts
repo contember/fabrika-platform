@@ -47,7 +47,7 @@ const deployInput = (): ProviderDeployInput => ({
 describe('Cloudflare control IAM options', () => {
 	test('the IAM coordinates reach queued jobs under their canonical names', async () => {
 		const env = {
-			FABRIKA_IAM_URL: 'https://iam.example.test',
+			FABRIKA_IAM_ISSUER: 'https://iam.example.test',
 			FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning',
 		}
 		const jobs: CloudflareRunnerJob[] = []
@@ -66,7 +66,7 @@ describe('Cloudflare control IAM options', () => {
 		await provider.deploy(deployInput())
 
 		expect(jobs[0]?.credentials).toMatchObject({
-			FABRIKA_IAM_URL: 'https://iam.example.test',
+			FABRIKA_IAM_ISSUER: 'https://iam.example.test',
 			FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning',
 		})
 	})

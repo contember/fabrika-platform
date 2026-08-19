@@ -92,7 +92,7 @@ describe('Runner pipeline', () => {
 			domain: 'stage.acme.com',
 			returnOrigins: ['https://app.acme.com', 'https://stage.acme.com'],
 			stateNamespace: 'legacy-state',
-			credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef', FABRIKA_IAM_URL: 'https://iam.acme.com' },
+			credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef', FABRIKA_IAM_ISSUER: 'https://iam.acme.com' },
 			secrets: { SAMPLE_API_KEY: 'super-secret-value' },
 			vars: { PUBLIC_ORIGIN: 'public-value' },
 			managedEnvironment: {
@@ -106,7 +106,7 @@ describe('Runner pipeline', () => {
 		expect(deploy?.env).toMatchObject({
 			CLOUDFLARE_ACCOUNT_ID: 'acc-123456',
 			CLOUDFLARE_API_TOKEN: 'tok-abcdef',
-			FABRIKA_IAM_URL: 'https://iam.acme.com',
+			FABRIKA_IAM_ISSUER: 'https://iam.acme.com',
 			FABRIKA_CONTROL_DOMAIN: 'stage.acme.com',
 			FABRIKA_IAM_RETURN_ORIGINS: 'https://app.acme.com,https://stage.acme.com',
 			CLOUDFLARE_STATE_NAMESPACE: 'legacy-state',

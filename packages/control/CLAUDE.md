@@ -99,10 +99,10 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   bounce (only `src/iam-admin.ts` / `src/operations-gateway.ts` attach a `loginUrl`, and theirs comes
   from an UPSTREAM 401). `env.IAM` is the `IamRpc` CONTRACT, so it is a service binding on Cloudflare
   and `HttpIamRpc` (`@fabrika/auth`, bearer `FABRIKA_IAM_RPC_KEY` against IAM's `/rpc/*` at the private
-  `FABRIKA_IAM_RPC_URL`) in a process. `FABRIKA_IAM_URL` remains the public issuer. ONE `HttpIamRpc` per
+  `FABRIKA_IAM_RPC_URL`) in a process. `FABRIKA_IAM_ISSUER` remains the public issuer. ONE `HttpIamRpc` per
   process, never per request: the SDK caches the JWKS in a WeakMap keyed by that object.
 - **ONE auth path, locally included — there is no `DEV` var any more.** `env.IAM` and
-  `FABRIKA_IAM_URL` are required in every environment; `createIam` refuses to build without them, and
+  `FABRIKA_IAM_ISSUER` are required in every environment; `createIam` refuses to build without them, and
   `fabrika.config.ts` binds IAM locally for the same reason (the proxy Worker in front already did).
   The synthetic `DEV` persona roster this Worker used to pass to the SDK — selected by an
   `X-Dev-Principal` header or a cookie, defaulting to a global admin — was a SECOND authentication

@@ -73,7 +73,7 @@ describe('platform scaffold', () => {
 				workflow.indexOf('name: Deploy Operations'),
 				workflow.indexOf('name: Deploy fabrika runner + control plane'),
 			)
-			expect(operationsStep).toContain('FABRIKA_IAM_URL: ${{ vars.FABRIKA_IAM_URL }}')
+			expect(operationsStep).toContain('FABRIKA_IAM_ISSUER: ${{ vars.FABRIKA_IAM_ISSUER }}')
 			expect(workflow).toContain('FABRIKA_CONTROL_VAULT_KEY: ${{ secrets.FABRIKA_CONTROL_VAULT_KEY }}')
 			expect(workflow).toContain('FABRIKA_CONTROL_DOMAIN: ${{ vars.FABRIKA_CONTROL_DOMAIN }}')
 			expect(workflow).toContain('FABRIKA_CONTROL_BOOTSTRAP_ADMINS: ${{ vars.FABRIKA_CONTROL_BOOTSTRAP_ADMINS }}')

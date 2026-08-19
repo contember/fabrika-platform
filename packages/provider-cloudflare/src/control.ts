@@ -60,7 +60,7 @@ export interface CloudflareRunnerJob {
 	readonly credentials: {
 		readonly CLOUDFLARE_ACCOUNT_ID: string
 		readonly CLOUDFLARE_API_TOKEN: string
-		readonly FABRIKA_IAM_URL?: string
+		readonly FABRIKA_IAM_ISSUER?: string
 		readonly FABRIKA_IAM_PROVISIONING_KEY?: string
 	}
 	readonly secrets?: Readonly<Record<string, string>>
@@ -118,7 +118,7 @@ export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunner
 		return false
 	}
 	if (
-		('FABRIKA_IAM_URL' in credentials && credentials.FABRIKA_IAM_URL !== undefined && typeof credentials.FABRIKA_IAM_URL !== 'string')
+		('FABRIKA_IAM_ISSUER' in credentials && credentials.FABRIKA_IAM_ISSUER !== undefined && typeof credentials.FABRIKA_IAM_ISSUER !== 'string')
 		|| ('FABRIKA_IAM_PROVISIONING_KEY' in credentials
 			&& credentials.FABRIKA_IAM_PROVISIONING_KEY !== undefined
 			&& typeof credentials.FABRIKA_IAM_PROVISIONING_KEY !== 'string')
@@ -201,7 +201,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		credentials: {
 			CLOUDFLARE_ACCOUNT_ID: options.accountId,
 			CLOUDFLARE_API_TOKEN: options.apiToken,
-			...(options.propustkaUrl === undefined ? {} : { FABRIKA_IAM_URL: options.propustkaUrl }),
+			...(options.propustkaUrl === undefined ? {} : { FABRIKA_IAM_ISSUER: options.propustkaUrl }),
 			...(options.propustkaProvisioningKey === undefined
 				? {}
 				: { FABRIKA_IAM_PROVISIONING_KEY: options.propustkaProvisioningKey }),

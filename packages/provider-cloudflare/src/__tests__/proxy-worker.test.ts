@@ -11,7 +11,7 @@ const environment = (
 	upstream: CloudflareProxyEnv['APP'] = { fetch: () => Promise.resolve(new Response('upstream')) },
 ): CloudflareProxyEnv => ({
 	IAM: new FakeIam(),
-	FABRIKA_IAM_URL: ISSUER,
+	FABRIKA_IAM_ISSUER: ISSUER,
 	FABRIKA_PROXY_MANIFEST_JSON: encodeProxyManifestJson({
 		apps: [{ id: APP, hosts: [HOST], upstream: 'APP', scheme: 'https', gates }],
 	}),
@@ -220,13 +220,13 @@ describe('Cloudflare proxy Worker', () => {
 		}
 		const base = environment({ rules: [{ path: '/*', kind: 'public' }] }, upstream)
 		for (const issuer of [undefined, '', '   ', 'not a url', 'ftp://iam.test']) {
-			const handler = createCloudflareProxyHandler({ ...base, FABRIKA_IAM_URL: issuer })
+			const handler = createCloudflareProxyHandler({ ...base, FABRIKA_IAM_ISSUER: issuer })
 			expect((await handler(new Request(`https://${HOST}/anything`))).status).toBe(503)
 		}
 		expect(calls).toBe(0)
 
 		// A trailing slash is the same issuer, not a second one — jose would disagree.
-		const canonical = createCloudflareProxyHandler({ ...base, FABRIKA_IAM_URL: `${ISSUER}/` })
+		const canonical = createCloudflareProxyHandler({ ...base, FABRIKA_IAM_ISSUER: `${ISSUER}/` })
 		expect((await canonical(new Request(`https://${HOST}/anything`))).status).toBe(200)
 	})
 })

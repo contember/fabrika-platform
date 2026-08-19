@@ -102,7 +102,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	const tasks = createBackgroundTasks({ label: 'control background task' })
 	const operations = operationsConfig(source)
 	const controlDomain = source['FABRIKA_CONTROL_DOMAIN']
-	const iamUrl = source['FABRIKA_IAM_URL']
+	const iamUrl = source['FABRIKA_IAM_ISSUER']
 	const bootstrapAdmins = source['FABRIKA_CONTROL_BOOTSTRAP_ADMINS']
 	const iamProvisioningKey = source['FABRIKA_IAM_PROVISIONING_KEY']
 	const vaultKey = source['FABRIKA_CONTROL_VAULT_KEY']
@@ -141,7 +141,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		// master key instead of running the env/literal path, and `FABRIKA_CONTROL_DOMAIN: ''` would be read as
 		// "no public domain" — which is exactly what it means, but only when it really is unset.
 		...(controlDomain === undefined ? {} : { FABRIKA_CONTROL_DOMAIN: controlDomain }),
-		...(iamUrl === undefined ? {} : { FABRIKA_IAM_URL: iamUrl }),
+		...(iamUrl === undefined ? {} : { FABRIKA_IAM_ISSUER: iamUrl }),
 		...(source['OPERATIONS_ARTIFACT_ORIGIN'] !== undefined
 			? { OPERATIONS_ARTIFACT_ORIGIN: source['OPERATIONS_ARTIFACT_ORIGIN'] }
 			: {}),
@@ -222,7 +222,7 @@ export interface IamRpcProcessConfig {
 }
 
 /**
- * Keep transport addressing separate from `FABRIKA_IAM_URL`, which is the public token issuer.
+ * Keep transport addressing separate from `FABRIKA_IAM_ISSUER`, which is the public token issuer.
  * The two happen to match in a single-process dev setup, but never across Zerops projects.
  */
 export function readIamRpcProcessConfig(source: Record<string, string | undefined>): IamRpcProcessConfig {

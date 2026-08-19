@@ -127,7 +127,7 @@ function iamAdmin(ctx: ControlAppContext): Promise<Response> {
 	const publicOrigin = controlPublicOrigin(ctx.env)
 	return forwardIamAdmin(ctx.request, {
 		gateway,
-		...(ctx.env.FABRIKA_IAM_URL === undefined ? {} : { publicIamUrl: ctx.env.FABRIKA_IAM_URL }),
+		...(ctx.env.FABRIKA_IAM_ISSUER === undefined ? {} : { publicIamUrl: ctx.env.FABRIKA_IAM_ISSUER }),
 		...(publicOrigin === undefined ? {} : { publicOrigin }),
 	})
 }
@@ -140,7 +140,7 @@ function operationsApi(ctx: ControlAppContext): Promise<Response> {
 	const publicOrigin = controlPublicOrigin(ctx.env)
 	return forwardOperationsApi(ctx.request, {
 		gateway,
-		...(ctx.env.FABRIKA_IAM_URL === undefined ? {} : { publicIamUrl: ctx.env.FABRIKA_IAM_URL }),
+		...(ctx.env.FABRIKA_IAM_ISSUER === undefined ? {} : { publicIamUrl: ctx.env.FABRIKA_IAM_ISSUER }),
 		...(publicOrigin === undefined ? {} : { publicOrigin }),
 	})
 }

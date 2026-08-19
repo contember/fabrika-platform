@@ -31,7 +31,7 @@ import type { ZeropsServiceSpec, ZeropsSourceTarget } from './types'
 
 export const ZEROPS_NAMESPACE_PROXY_HOSTNAME = 'proxy'
 export const ZEROPS_NAMESPACE_POSTGRES_HOSTNAME = 'postgres'
-export const ZEROPS_NAMESPACE_IAM_URL_VARIABLE = 'FABRIKA_IAM_URL'
+export const ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE = 'FABRIKA_IAM_ISSUER'
 export const ZEROPS_NAMESPACE_IAM_KEY_VARIABLE = 'FABRIKA_IAM_KEY'
 /**
  * How an app reaches the namespace-owned PostgreSQL service — port, database and TLS mode NAMED, not
@@ -759,11 +759,11 @@ const ensureProxyConfiguration = async (
 		})
 		deployRequired = true
 	}
-	const iamUrl = byKey.get(ZEROPS_NAMESPACE_IAM_URL_VARIABLE)
+	const iamUrl = byKey.get(ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE)
 	if (iamUrl?.content !== options.iamUrl) {
 		await options.api.putServiceEnv({
 			serviceId: proxyServiceId,
-			key: ZEROPS_NAMESPACE_IAM_URL_VARIABLE,
+			key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
 			value: options.iamUrl,
 			signal,
 		})

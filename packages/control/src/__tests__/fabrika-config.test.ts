@@ -81,7 +81,7 @@ describe('defineApp(vozka config)', () => {
 		expect(binding(proxy, 'IAM')).toBeInstanceOf(ServiceReference)
 		const worker = application(proxy)
 		expect(binding(worker, 'IAM')).toBeInstanceOf(ServiceReference)
-		expect(worker.options.vars?.['FABRIKA_IAM_URL']).toBe('http://localhost:18191')
+		expect(worker.options.vars?.['FABRIKA_IAM_ISSUER']).toBe('http://localhost:18191')
 		// Operations and vozka-runner stay off-local (no container deploys in dev).
 		expect(binding(worker, 'OPERATIONS')).toBeUndefined()
 		expect(binding(worker, 'RUNNER_SVC')).toBeUndefined()
@@ -94,14 +94,14 @@ describe('defineApp(vozka config)', () => {
 	})
 
 	test('the IAM issuer and the bootstrap-admin list ride as canonical vars', () => {
-		process.env['FABRIKA_IAM_URL'] = 'https://iam.example.test'
+		process.env['FABRIKA_IAM_ISSUER'] = 'https://iam.example.test'
 		process.env['FABRIKA_CONTROL_BOOTSTRAP_ADMINS'] = '["canonical@example.test"]'
 		try {
 			const worker = application(buildControlWorker({ env: 'stage' }))
-			expect(worker.options.vars?.['FABRIKA_IAM_URL']).toBe('https://iam.example.test')
+			expect(worker.options.vars?.['FABRIKA_IAM_ISSUER']).toBe('https://iam.example.test')
 			expect(worker.options.vars?.['FABRIKA_CONTROL_BOOTSTRAP_ADMINS']).toBe('["canonical@example.test"]')
 		} finally {
-			delete process.env['FABRIKA_IAM_URL']
+			delete process.env['FABRIKA_IAM_ISSUER']
 			delete process.env['FABRIKA_CONTROL_BOOTSTRAP_ADMINS']
 		}
 	})

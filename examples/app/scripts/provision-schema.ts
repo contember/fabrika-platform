@@ -24,7 +24,7 @@ async function main(): Promise<void> {
 		return
 	}
 
-	const url = required(process.env['FABRIKA_IAM_URL'], 'FABRIKA_IAM_URL')
+	const url = required(process.env['FABRIKA_IAM_ISSUER'], 'FABRIKA_IAM_ISSUER')
 	const adminKey = process.env['FABRIKA_IAM_ADMIN_KEY']
 	await reconcileSchema({
 		url,

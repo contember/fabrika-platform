@@ -22,4 +22,4 @@ export const emptyIamBinding: IamRpc = {
 	revokeKey: () => Promise.resolve({ ok: false, reason: 'not_found' }),
 }
 
-export const testOperationsIam = () => createOperationsIam({ IAM: emptyIamBinding, FABRIKA_IAM_URL: TEST_ISSUER })
+export const testOperationsIam = () => createOperationsIam({ IAM: emptyIamBinding, FABRIKA_IAM_ISSUER: TEST_ISSUER })

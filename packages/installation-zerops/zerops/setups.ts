@@ -231,7 +231,7 @@ const iam: ZeropsYamlSetupSpec = {
  * `${storage_apiUrl}`, `${storage_accessKeyId}`, `${storage_secretAccessKey}` — `S3BlobStore` uses
  * path-style addressing, which MinIO wants and R2/AWS accept, so one implementation serves both
  * platforms), `FABRIKA_CONTROL_RUN_LOGS_REGION`, `ENVIRONMENT`, `FABRIKA_CONTROL_DOMAIN`,
- * `FABRIKA_IAM_URL` (the public IAM issuer),
+ * `FABRIKA_IAM_ISSUER` (the public IAM issuer),
  * `OPERATIONS_ARTIFACT_ORIGIN` (the public proxy origin for source-map upload), `CLOUDFLARE_ACCOUNT_ID`,
  * `FABRIKA_CONTROL_BOOTSTRAP_ADMINS`, `FABRIKA_ZEROPS_CLIENT_ID`, `FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT`, and
  * `FABRIKA_ZEROPS_PROXY_IAM_URL` (the public IAM origin reachable from application projects).
@@ -273,7 +273,7 @@ const control: ZeropsYamlSetupSpec = {
 		envVariables: {
 			PORT: '3000',
 			FABRIKA_CONTROL_ASSETS_DIR: 'packages/dashboard/dist',
-			// Intra-project transport for management RPC. `FABRIKA_IAM_URL` is deliberately absent here:
+			// Intra-project transport for management RPC. `FABRIKA_IAM_ISSUER` is deliberately absent here:
 			// it is the public token issuer and is supplied per installation through the env API.
 			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
 			FABRIKA_OPERATIONS_URL: 'http://operations:3000',
@@ -314,7 +314,7 @@ const source: ZeropsYamlSetupSpec = {
  *
  * Per-installation variables (env API): `FABRIKA_OPERATIONS_DATABASE_URL`, the five
  * `FABRIKA_OPERATIONS_BLOB_*` coordinates, `ENVIRONMENT`, `FABRIKA_OPERATIONS_PUBLIC_HOST` and
- * `FABRIKA_IAM_URL` (the public IAM issuer). `FABRIKA_OPERATIONS_DATABASE_URL` takes the canonical
+ * `FABRIKA_IAM_ISSUER` (the public IAM issuer). `FABRIKA_OPERATIONS_DATABASE_URL` takes the canonical
  * form above. On the `standard` tier the data references are `${operationsdb_*}` and
  * `${operationsstorage_*}`; on `light` they are `${db_*}` and `${storage_*}`, which is precisely why
  * they cannot be written here.
@@ -352,7 +352,7 @@ const operations: ZeropsYamlSetupSpec = {
  *
  * This is the only setup deployed into BOTH projects, and the only publicly routed service in either.
  *
- * Per-service variables (env API): `FABRIKA_IAM_URL` — `http://iam:3000` in the platform project, the
+ * Per-service variables (env API): `FABRIKA_IAM_ISSUER` — `http://iam:3000` in the platform project, the
  * IAM service's PUBLIC origin in an apps project, because there is no private network between projects
  * (ADR-0006). And `FABRIKA_PROXY_MANIFEST_JSON`; see below.
  *

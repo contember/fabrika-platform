@@ -39,7 +39,7 @@
  *   CLOUDFLARE_API_TOKEN                           — the account-wide CF token. Authenticates THIS deploy
  *                                                    AND becomes fabrika's runtime secret (it deploys every
  *                                                    other app with the same token — single-account).
- *   FABRIKA_IAM_URL, FABRIKA_IAM_PROVISIONING_KEY — IAM's base URL + fabrika's seeded provisioning
+ *   FABRIKA_IAM_ISSUER, FABRIKA_IAM_PROVISIONING_KEY — IAM's base URL + fabrika's seeded provisioning
  *                                                    `px_` key. Become fabrika's runtime config.
  *   FABRIKA_CONTROL_DOMAIN                         — fabrika's hostname.
  *   FABRIKA_CONTROL_VAULT_KEY                      — the M4 vault master key (32 raw bytes, base64).
@@ -101,7 +101,7 @@ async function main(): Promise<void> {
 	) {
 		required(name)
 	}
-	required('FABRIKA_IAM_URL')
+	required('FABRIKA_IAM_ISSUER')
 	required('FABRIKA_IAM_PROVISIONING_KEY')
 	required('FABRIKA_CONTROL_VAULT_KEY')
 

@@ -138,7 +138,7 @@ services:
       ENVIRONMENT: local
       FABRIKA_CONTROL_DOMAIN: http://control.fabrika.localhost:18080
       FABRIKA_CONTROL_BOOTSTRAP_ADMINS: "[]"
-      FABRIKA_IAM_URL: http://iam.fabrika.localhost:18080
+      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
       FABRIKA_IAM_RPC_URL: http://iam:18080
       FABRIKA_OPERATIONS_URL: http://operations:3000
       OPERATIONS_ARTIFACT_ORIGIN: http://errors.fabrika.localhost:18080
@@ -183,7 +183,7 @@ services:
       FABRIKA_OPERATIONS_BLOB_REGION: us-east-1
       FABRIKA_IAM_RPC_URL: http://iam:18080
       FABRIKA_CONTROL_URL: http://control:3000
-      FABRIKA_IAM_URL: http://iam.fabrika.localhost:18080
+      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
     networks: [platform]
     depends_on:
       platform-db:
@@ -205,7 +205,7 @@ services:
     environment:
       FABRIKA_PROXY_MANIFEST: /local-state/platform-proxy.manifest.json
       FABRIKA_PROXY_PORT: "9000"
-      FABRIKA_IAM_URL: http://iam.fabrika.localhost:18080
+      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
     volumes:
       - ../..:/workspace
       - ./.state:/local-state:ro
@@ -267,7 +267,7 @@ services:
     environment:
       FABRIKA_PROXY_MANIFEST: /local-state/apps-proxy.manifest.json
       FABRIKA_PROXY_PORT: "9000"
-      FABRIKA_IAM_URL: http://iam.fabrika.localhost:18080
+      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
     volumes:
       - ../..:/workspace
       - ./.state:/local-state:ro

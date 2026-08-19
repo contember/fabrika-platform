@@ -109,7 +109,7 @@ export function zeropsControlProvider(
 			const apiBaseUrl = source['FABRIKA_ZEROPS_API_BASE_URL']
 			return apiBaseUrl === undefined ? {} : { apiBaseUrl }
 		})(),
-		...(env.FABRIKA_IAM_URL === undefined ? {} : { propustkaUrl: env.FABRIKA_IAM_URL }),
+		...(env.FABRIKA_IAM_ISSUER === undefined ? {} : { propustkaUrl: env.FABRIKA_IAM_ISSUER }),
 		...(env.FABRIKA_IAM_PROVISIONING_KEY === undefined
 			? {}
 			: { adminKey: env.FABRIKA_IAM_PROVISIONING_KEY }),

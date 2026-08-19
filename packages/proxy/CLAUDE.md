@@ -68,13 +68,13 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   different denials. Both deny; only the second is an incident — including on the human path, where a
   503 must NOT degrade into a bounce to login (that is a login loop hiding an outage). A cache entry
   is dropped only when it PROVED bad, never when it merely could not be checked.
-- **Refusing to boot beats booting misconfigured** (`src/env.ts`). `FABRIKA_IAM_URL` and
+- **Refusing to boot beats booting misconfigured** (`src/env.ts`). `FABRIKA_IAM_ISSUER` and
   `FABRIKA_IAM_KEY` are both REQUIRED — IAM's mint surface 404s without the key, so a proxy that boots
   without one 503s everything. The key is the only secret here: read once, never logged, never echoed,
-  never put in a URL. `FABRIKA_IAM_URL` is canonicalized to an ORIGIN once, in `readProxyEnv`, because
+  never put in a URL. `FABRIKA_IAM_ISSUER` is canonicalized to an ORIGIN once, in `readProxyEnv`, because
   the same string is compared byte-for-byte against a token's `iss` and used to build URLs. **This
   holds on the Bun path only.** The Cloudflare proxy Worker does not call `readProxyEnv`: it refuses
-  a missing `IAM` binding and an empty manifest, but reads `FABRIKA_IAM_URL ?? ''`, so a misconfigured
+  a missing `IAM` binding and an empty manifest, but reads `FABRIKA_IAM_ISSUER ?? ''`, so a misconfigured
   issuer boots and fails every verification on `iss` instead.
 - **The manifest is the authority on hosts.** `parseProxyManifest` rejects two apps claiming one host
   and a host carrying a `:port` — not just `buildCaddyConfig`, which only sees the manifests it

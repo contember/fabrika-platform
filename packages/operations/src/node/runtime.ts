@@ -70,7 +70,7 @@ function operationsIam(source: Record<string, string | undefined>) {
 			origin: config.rpcOrigin,
 			key: config.rpcKey,
 		}),
-		FABRIKA_IAM_URL: config.issuer,
+		FABRIKA_IAM_ISSUER: config.issuer,
 	})
 }
 
@@ -83,7 +83,7 @@ export interface OperationsIamProcessConfig {
 /** Resolve public IAM identity separately from its private management transport. */
 export function resolveOperationsIamProcessConfig(source: Record<string, string | undefined>): OperationsIamProcessConfig {
 	return {
-		issuer: required(source, 'FABRIKA_IAM_URL'),
+		issuer: required(source, 'FABRIKA_IAM_ISSUER'),
 		rpcOrigin: required(source, 'FABRIKA_IAM_RPC_URL'),
 		rpcKey: requiredSecret(source, 'FABRIKA_IAM_RPC_KEY'),
 	}

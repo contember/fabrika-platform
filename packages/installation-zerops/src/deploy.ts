@@ -261,7 +261,7 @@ const desiredServiceEnv = (
 			'operations',
 			new Map([
 				['ENVIRONMENT', environment],
-				['FABRIKA_IAM_URL', iamOrigin],
+				['FABRIKA_IAM_ISSUER', iamOrigin],
 				['FABRIKA_OPERATIONS_PUBLIC_HOST', placement.hosts.operations],
 			]),
 		],
@@ -272,7 +272,7 @@ const desiredServiceEnv = (
 				['ENVIRONMENT', environment],
 				// Compared byte-for-byte against a token's `iss`, so this is the PUBLIC issuer and not the
 				// private `iam:3000` the manifest dials — `readProxyEnv` canonicalizes it to an origin.
-				['FABRIKA_IAM_URL', iamOrigin],
+				['FABRIKA_IAM_ISSUER', iamOrigin],
 				[FABRIKA_PROXY_MANIFEST_JSON, manifestJson],
 			]),
 		],
@@ -280,7 +280,7 @@ const desiredServiceEnv = (
 			'control',
 			new Map([
 				['ENVIRONMENT', environment],
-				['FABRIKA_IAM_URL', iamOrigin],
+				['FABRIKA_IAM_ISSUER', iamOrigin],
 				// A bare host: `controlPublicOrigin` accepts either spelling, and this is also what the
 				// same-origin check on both first-party gateways is decided against.
 				['FABRIKA_CONTROL_DOMAIN', placement.hosts.control],

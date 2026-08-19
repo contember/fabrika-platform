@@ -33,7 +33,7 @@ protocol surfaces required by their platform roles. See
 RPC, authorization, persistence, compatibility, and environment boundaries.
 
 `@fabrika/auth` reads application identity from `FABRIKA_APP_ID` and the IAM
-origin from `FABRIKA_IAM_URL`, straight off the `Env` it is handed. Those are the
+origin from `FABRIKA_IAM_ISSUER`, straight off the `Env` it is handed. Those are the
 only names it accepts; the predecessor names were retired by
 [ADR-0024](../decisions/0024-retire-the-legacy-environment-name-fallback.md), and
 there is no compatibility reader left to consult.

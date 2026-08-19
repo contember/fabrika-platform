@@ -18,7 +18,7 @@ import { OPERATIONS_PROXY_GATES } from './src/gates'
  */
 const LOCAL_IAM_URL = 'http://localhost:18191'
 
-const resolveIamUrl = (isLocal: boolean): string => process.env['FABRIKA_IAM_URL'] ?? (isLocal ? LOCAL_IAM_URL : '')
+const resolveIamUrl = (isLocal: boolean): string => process.env['FABRIKA_IAM_ISSUER'] ?? (isLocal ? LOCAL_IAM_URL : '')
 
 export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 	const isLocal = ctx.env === 'local'
@@ -39,7 +39,7 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 		vars: {
 			ENVIRONMENT: ctx.env,
 			OPERATIONS_PUBLIC_HOST: publicHost,
-			FABRIKA_IAM_URL: iamUrl,
+			FABRIKA_IAM_ISSUER: iamUrl,
 		},
 		bindings: {
 			DB: new D1Database({ name: 'operations', migrationsDir: './migrations', locationHint: 'weur' }),

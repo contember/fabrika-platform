@@ -137,7 +137,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           # The provider's app-deploy adapter reads FABRIKA_CONTROL_DOMAIN as the selected app domain.
           FABRIKA_CONTROL_DOMAIN: ${{ vars.OPERATIONS_HOSTNAME }}
-          FABRIKA_IAM_URL: ${{ vars.FABRIKA_IAM_URL }}
+          FABRIKA_IAM_ISSUER: ${{ vars.FABRIKA_IAM_ISSUER }}
           OPERATIONS_SYNC_KEY: ${{ secrets.OPERATIONS_SYNC_KEY }}
         run: fabrika app deploy --provider=cloudflare --env=prod --config=fabrika.config.ts
 
@@ -159,7 +159,7 @@ jobs:
           # Non-secret config (Environment Variables).
           FABRIKA_CONTROL_DOMAIN: ${{ vars.FABRIKA_CONTROL_DOMAIN }}
           GITHUB_APP_ID: ${{ vars.GH_APP_ID }}
-          FABRIKA_IAM_URL: ${{ vars.FABRIKA_IAM_URL }}
+          FABRIKA_IAM_ISSUER: ${{ vars.FABRIKA_IAM_ISSUER }}
           OPERATIONS_ARTIFACT_ORIGIN: https://${{ vars.OPERATIONS_HOSTNAME }}
           FABRIKA_CONTROL_BOOTSTRAP_ADMINS: ${{ vars.FABRIKA_CONTROL_BOOTSTRAP_ADMINS }}
         run: |

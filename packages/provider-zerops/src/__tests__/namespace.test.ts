@@ -17,8 +17,8 @@ import {
 	compileZeropsNamespaceTopology,
 	createZeropsNamespaceCapabilities,
 	createZeropsNamespaceOperator,
+	ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
 	ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
-	ZEROPS_NAMESPACE_IAM_URL_VARIABLE,
 	ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
 	type ZeropsNamespaceOptions,
 	zeropsNamespacePreset,
@@ -471,7 +471,7 @@ describe('Zerops namespace lifecycle', () => {
 		expect(state.importProjectCount).toBe(1)
 		expect(state.triggerCount).toBe(1)
 		expect(state.env.get(proxyId)?.get(FABRIKA_PROXY_MANIFEST_JSON)?.content).toBe('{"apps":[]}')
-		expect(state.env.get(proxyId)?.get(ZEROPS_NAMESPACE_IAM_URL_VARIABLE)?.content).toBe('https://iam.example.test')
+		expect(state.env.get(proxyId)?.get(ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE)?.content).toBe('https://iam.example.test')
 		expect(JSON.stringify(checkpoints)).not.toContain('proxy-key-that-must-never-be-persisted')
 	})
 
@@ -639,9 +639,9 @@ describe('Zerops namespace lifecycle', () => {
 			key: FABRIKA_PROXY_MANIFEST_JSON,
 			content: '{"apps":[{"id":"notes"}]}',
 		})
-		ensureServiceEnv(state, proxyId).set(ZEROPS_NAMESPACE_IAM_URL_VARIABLE, {
+		ensureServiceEnv(state, proxyId).set(ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE, {
 			id: 'iam-url',
-			key: ZEROPS_NAMESPACE_IAM_URL_VARIABLE,
+			key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
 			content: 'https://iam.example.test',
 		})
 		const capabilities = createZeropsNamespaceCapabilities(options(state))

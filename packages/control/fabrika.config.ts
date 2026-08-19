@@ -33,7 +33,7 @@ import { VOZKA_APP_ID } from './src/actions'
  */
 const LOCAL_IAM_URL = 'http://localhost:18191'
 
-const resolveIamUrl = (isLocal: boolean): string => process.env['FABRIKA_IAM_URL'] ?? (isLocal ? LOCAL_IAM_URL : '')
+const resolveIamUrl = (isLocal: boolean): string => process.env['FABRIKA_IAM_ISSUER'] ?? (isLocal ? LOCAL_IAM_URL : '')
 
 /**
  * Build fabrika's full Cloudflare resource graph for one environment. This is the SINGLE source of the
@@ -81,7 +81,7 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			// The selected Cloudflare provider's account id and IAM origin. The composition root
 			// injects them into provider jobs without persisting credentials in the registry.
 			CLOUDFLARE_ACCOUNT_ID: process.env['CLOUDFLARE_ACCOUNT_ID'] ?? '',
-			FABRIKA_IAM_URL: iamUrl,
+			FABRIKA_IAM_ISSUER: iamUrl,
 			...(operationsArtifactOrigin === undefined || operationsArtifactOrigin === ''
 				? {}
 				: { OPERATIONS_ARTIFACT_ORIGIN: operationsArtifactOrigin }),

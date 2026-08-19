@@ -28,7 +28,7 @@ import { error } from './http'
 export interface IamEnv {
 	IAM?: IamRpc
 	/** IAM's origin — the issuer every token is verified against. */
-	FABRIKA_IAM_URL?: string
+	FABRIKA_IAM_ISSUER?: string
 	/**
 	 * JSON array of bootstrap-admin emails (normally `'[]'`). A caller whose verified email is listed
 	 * here is authorized as admin (`can` → true for every action) even when IAM denies — the

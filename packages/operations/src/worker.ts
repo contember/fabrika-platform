@@ -21,7 +21,7 @@ interface OperationsWorkerBindings {
 	OPERATIONS_PUBLIC_HOST: string
 	OPERATIONS_SYNC_KEY: string
 	ENVIRONMENT: string
-	FABRIKA_IAM_URL?: string
+	FABRIKA_IAM_ISSUER?: string
 	IAM?: IamRpc
 }
 

@@ -48,7 +48,7 @@ async function sign(opts: SignOptions = {}): Promise<string> {
 
 const PERMS: PermissionEntry[] = [{ action: 'demo.read', scope: null, source: 'grant' }]
 
-const iamEnv = (stub: IamRpcStub): IamEnv => ({ IAM: stub, FABRIKA_IAM_URL: ISSUER, FABRIKA_APP_ID: APP })
+const iamEnv = (stub: IamRpcStub): IamEnv => ({ IAM: stub, FABRIKA_IAM_ISSUER: ISSUER, FABRIKA_APP_ID: APP })
 
 /** A request carrying the token the proxy injected. */
 function proxied(token: string, url = 'https://app/page'): Request {
@@ -67,7 +67,7 @@ describe('createIam', () => {
 
 	test('the env app id is used when opts.appId is omitted', async () => {
 		const stub = new IamRpcStub({ listPrincipals: { ok: true, principals: [] } })
-		const iam = createIam({ IAM: stub, FABRIKA_IAM_URL: ISSUER, FABRIKA_APP_ID: 'env-app' })
+		const iam = createIam({ IAM: stub, FABRIKA_IAM_ISSUER: ISSUER, FABRIKA_APP_ID: 'env-app' })
 
 		await iam.listPrincipals(new Request('https://app/x'))
 		expect(stub.listPrincipalsInputs[0]?.app).toBe('env-app')
@@ -78,11 +78,11 @@ describe('createIam', () => {
 	})
 
 	test('throws when the IAM binding is missing — there is no mode that makes it optional', () => {
-		expect(() => createIam({ FABRIKA_IAM_URL: ISSUER, FABRIKA_APP_ID: APP })).toThrow(/IAM service binding is missing/)
+		expect(() => createIam({ FABRIKA_IAM_ISSUER: ISSUER, FABRIKA_APP_ID: APP })).toThrow(/IAM service binding is missing/)
 	})
 
 	test('throws when no IAM URL is resolvable', () => {
-		expect(() => createIam({ IAM: new IamRpcStub(), FABRIKA_APP_ID: APP })).toThrow(/FABRIKA_IAM_URL is missing/)
+		expect(() => createIam({ IAM: new IamRpcStub(), FABRIKA_APP_ID: APP })).toThrow(/FABRIKA_IAM_ISSUER is missing/)
 	})
 })
 
@@ -92,7 +92,7 @@ describe('createIam — the issuer is canonicalized once', () => {
 	test('a trailing slash and a bare origin are the SAME issuer', async () => {
 		const token = await sign()
 		const withSlash = createIam(iamEnv(new IamRpcStub({ jwks: JWKS })), { appId: APP })
-		const bare = createIam({ IAM: new IamRpcStub({ jwks: JWKS }), FABRIKA_IAM_URL: `${ISSUER}/`, FABRIKA_APP_ID: APP })
+		const bare = createIam({ IAM: new IamRpcStub({ jwks: JWKS }), FABRIKA_IAM_ISSUER: `${ISSUER}/`, FABRIKA_APP_ID: APP })
 
 		expect((await withSlash.authenticate(proxied(token))).ok).toBe(true)
 		expect((await bare.authenticate(proxied(token))).ok).toBe(true)
@@ -100,13 +100,13 @@ describe('createIam — the issuer is canonicalized once', () => {
 
 	test('a path, query or fragment is discarded — only the origin is the issuer', async () => {
 		const token = await sign()
-		const iam = createIam({ IAM: new IamRpcStub({ jwks: JWKS }), FABRIKA_IAM_URL: `${ISSUER}/some/path?x=1#y`, FABRIKA_APP_ID: APP })
+		const iam = createIam({ IAM: new IamRpcStub({ jwks: JWKS }), FABRIKA_IAM_ISSUER: `${ISSUER}/some/path?x=1#y`, FABRIKA_APP_ID: APP })
 		expect((await iam.authenticate(proxied(token))).ok).toBe(true)
 	})
 
 	test('an unparseable or non-http(s) issuer throws at construction', () => {
-		expect(() => createIam({ IAM: new IamRpcStub(), FABRIKA_IAM_URL: 'not a url', FABRIKA_APP_ID: APP })).toThrow(/not an absolute URL/)
-		expect(() => createIam({ IAM: new IamRpcStub(), FABRIKA_IAM_URL: 'ftp://iam.test', FABRIKA_APP_ID: APP })).toThrow(/http\(s\) origin/)
+		expect(() => createIam({ IAM: new IamRpcStub(), FABRIKA_IAM_ISSUER: 'not a url', FABRIKA_APP_ID: APP })).toThrow(/not an absolute URL/)
+		expect(() => createIam({ IAM: new IamRpcStub(), FABRIKA_IAM_ISSUER: 'ftp://iam.test', FABRIKA_APP_ID: APP })).toThrow(/http\(s\) origin/)
 	})
 })
 

@@ -57,10 +57,10 @@ export interface WorkerBindings
 
 /** Provider options must come from the `Env` the shared layer consumes, never the raw Worker bindings. */
 export function cloudflareIamControlOptions(
-	env: Pick<Env, 'FABRIKA_IAM_URL' | 'FABRIKA_IAM_PROVISIONING_KEY'>,
+	env: Pick<Env, 'FABRIKA_IAM_ISSUER' | 'FABRIKA_IAM_PROVISIONING_KEY'>,
 ): { propustkaUrl?: string; propustkaProvisioningKey?: string } {
 	return {
-		...(env.FABRIKA_IAM_URL === undefined ? {} : { propustkaUrl: env.FABRIKA_IAM_URL }),
+		...(env.FABRIKA_IAM_ISSUER === undefined ? {} : { propustkaUrl: env.FABRIKA_IAM_ISSUER }),
 		...(env.FABRIKA_IAM_PROVISIONING_KEY === undefined
 			? {}
 			: { propustkaProvisioningKey: env.FABRIKA_IAM_PROVISIONING_KEY }),

@@ -14,7 +14,7 @@ interface Ctx {
  * the header is never trusted blindly — and turns it into an `AuthContext`. It evaluates no gate.
  */
 const authMiddleware = (env: Env): Middleware<Ctx> => {
-	const iam = createIam({ IAM: env.IAM, FABRIKA_IAM_URL: readIamIssuer(env), FABRIKA_APP_ID: exampleAppId })
+	const iam = createIam({ IAM: env.IAM, FABRIKA_IAM_ISSUER: readIamIssuer(env), FABRIKA_APP_ID: exampleAppId })
 	return async (request, ctx, next) => {
 		const result = await iam.authenticate(request)
 		if (result.ok) {

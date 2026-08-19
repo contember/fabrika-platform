@@ -33,7 +33,7 @@ const CLOUDFLARE_CLIENT_ADDRESS_HEADER = 'CF-Connecting-IP'
 export interface CloudflareProxyEnv {
 	readonly IAM?: unknown
 	readonly FABRIKA_PROXY_MANIFEST_JSON?: string
-	readonly FABRIKA_IAM_URL?: string
+	readonly FABRIKA_IAM_ISSUER?: string
 	readonly [binding: string]: unknown
 }
 
@@ -75,7 +75,7 @@ function canonicalIssuer(raw: string | undefined): string | null {
 /** Factory exported for Lopata and unit tests; production uses the default Worker fetch below. */
 export function createCloudflareProxyHandler(env: CloudflareProxyEnv, logger: ProxyLogger = consoleLogger): ProxyFetch {
 	const manifestJson = env.FABRIKA_PROXY_MANIFEST_JSON ?? ''
-	const canonical = canonicalIssuer(env.FABRIKA_IAM_URL)
+	const canonical = canonicalIssuer(env.FABRIKA_IAM_ISSUER)
 	if (!isIamGateway(env.IAM) || manifestJson === '' || canonical === null) return () => Promise.resolve(UNAVAILABLE.clone())
 	const issuer = canonical
 

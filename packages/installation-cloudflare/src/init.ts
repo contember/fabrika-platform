@@ -159,7 +159,7 @@ export async function runInit(account: string): Promise<void> {
 			FABRIKA_CONTROL_DOMAIN: collected.controlPlaneDomain,
 			OPERATIONS_HOSTNAME: collected.operationsHostname,
 			GH_APP_ID: String(app.id),
-			FABRIKA_IAM_URL: collected.iamUrl,
+			FABRIKA_IAM_ISSUER: collected.iamUrl,
 			FABRIKA_CONTROL_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
 			// IAM Stage 1 non-secret config (read by IAM's fabrika config).
 			FABRIKA_IAM_HOSTNAME: collected.iamHostname,

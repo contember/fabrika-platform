@@ -81,7 +81,7 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 		checkpoint: async () => {},
 	}
 	const domain = environmentValue('FABRIKA_CONTROL_DOMAIN')
-	const iamUrl = environmentValue('FABRIKA_IAM_URL')
+	const iamUrl = environmentValue('FABRIKA_IAM_ISSUER')
 	const iamProvisioningKey = environmentValue('FABRIKA_IAM_PROVISIONING_KEY')
 	const returnOrigins = parseReturnOrigins(environmentValue('FABRIKA_IAM_RETURN_ORIGINS'))
 	const run: RuntimeProviderRun = {

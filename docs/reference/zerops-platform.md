@@ -458,7 +458,7 @@ bring-up possible: pass 1 publishes the ports, pass 2 reads the per-port names a
 
 Two limits on the above. The port segment is **predictable in hindsight** (`proxy-2b16` + `-<port>`), but
 that is one observation of one format, and `derivePlatformHosts` still refuses to compose a hostname rather
-than read one. And this run gave the proxy a legal `FABRIKA_IAM_URL`/`FABRIKA_IAM_KEY`, so it does **not**
+than read one. And this run gave the proxy a legal `FABRIKA_IAM_ISSUER`/`FABRIKA_IAM_KEY`, so it does **not**
 establish what happens when the auth binary cannot boot — a bring-up writes a legal pair, so the case does
 not arise.
 
@@ -764,7 +764,7 @@ Measured against the live `fabrika-test` on 2026-08-06 with `--dry-run` (reads o
 per-installation variables the command derives, only `ENVIRONMENT` on `operations`, `control` and
 `proxy` and the proxy manifest differ from what was placed by hand. Every origin — `ISSUER`,
 `FABRIKA_IAM_ADMIN_ORIGINS`, `FABRIKA_CONTROL_DOMAIN`, `OPERATIONS_ARTIFACT_ORIGIN`,
-`FABRIKA_OPERATIONS_PUBLIC_HOST`, `FABRIKA_IAM_URL`, `FABRIKA_ZEROPS_PROXY_IAM_URL` — reproduces the
+`FABRIKA_OPERATIONS_PUBLIC_HOST`, `FABRIKA_IAM_ISSUER`, `FABRIKA_ZEROPS_PROXY_IAM_URL` — reproduces the
 live value byte for byte, and the composed manifest reproduces `vozka`, `operations` and `notes`
 identically while replacing `iam-local` with `iam`.
 

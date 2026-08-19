@@ -47,7 +47,7 @@ export const testIamBinding: IamRpc = {
 }
 
 /** The two `Env` fields `createIam` needs, for spreading into a test env. */
-export const testIamEnv = { IAM: testIamBinding, FABRIKA_IAM_URL: TEST_ISSUER } as const
+export const testIamEnv = { IAM: testIamBinding, FABRIKA_IAM_ISSUER: TEST_ISSUER } as const
 
 function base64Url(value: string | Uint8Array): string {
 	const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value

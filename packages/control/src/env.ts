@@ -72,7 +72,7 @@ export interface Env {
 	 * IAM base URL. It is also the issuer used to authenticate control-plane
 	 * callers. Provider composition roots may pass it into their schema reconciliation capability.
 	 */
-	FABRIKA_IAM_URL?: string
+	FABRIKA_IAM_ISSUER?: string
 	/**
 	 * JSON array of bootstrap-admin emails (normally `'[]'`). When a caller's email is in this list,
 	 * src/iam.ts authorizes them as admin even if IAM denies / is not wired yet — the escape

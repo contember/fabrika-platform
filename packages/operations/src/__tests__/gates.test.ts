@@ -38,7 +38,7 @@ const jwksRpc: IamRpc = {
 	revokeKey: () => Promise.resolve({ ok: false, reason: 'not_found' }),
 }
 
-const iam = createOperationsIam({ IAM: jwksRpc, FABRIKA_IAM_URL: issuer })
+const iam = createOperationsIam({ IAM: jwksRpc, FABRIKA_IAM_ISSUER: issuer })
 
 const handler = createOperationsFetchHandler({
 	repositories: createHarness().repositories,

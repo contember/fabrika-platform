@@ -17,7 +17,7 @@ export const buildExampleWorker = (): Worker =>
 			IAM: new ServiceReference('propustka-worker'),
 		},
 		vars: {
-			FABRIKA_IAM_ISSUER: process.env.FABRIKA_IAM_URL ?? 'http://localhost:18191',
+			FABRIKA_IAM_ISSUER: process.env.FABRIKA_IAM_ISSUER ?? 'http://localhost:18191',
 		},
 	})
 
@@ -29,7 +29,7 @@ export const buildExampleProxy = (ctx: ResourceContext): Worker =>
 		appHost: ctx.domain ?? 'localhost',
 		domain: ctx.domain,
 		gates: exampleGates,
-		iamUrl: process.env.FABRIKA_IAM_URL ?? 'http://localhost:18191',
+		iamUrl: process.env.FABRIKA_IAM_ISSUER ?? 'http://localhost:18191',
 	})
 
 export default defineApp({

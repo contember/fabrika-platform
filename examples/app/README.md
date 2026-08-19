@@ -60,10 +60,10 @@ IAM. Run [`scripts/provision-schema.ts`](./scripts/provision-schema.ts):
 bun run provision-schema -- --dry-run
 
 # push against a running Worker (local: ENVIRONMENT=local dev bypass → no auth needed)
-FABRIKA_IAM_URL=http://127.0.0.1:18191 bun run provision-schema
+FABRIKA_IAM_ISSUER=http://127.0.0.1:18191 bun run provision-schema
 
 # remote: the admin API is gated by IAM itself — supply an IAM-issued `px_` admin key
-FABRIKA_IAM_URL=https://iam.example.com \
+FABRIKA_IAM_ISSUER=https://iam.example.com \
 FABRIKA_IAM_ADMIN_KEY=px_… \
 bun run provision-schema
 ```

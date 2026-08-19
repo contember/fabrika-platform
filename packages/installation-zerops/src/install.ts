@@ -116,14 +116,14 @@ const STORAGE = {
  * The three variables pass 1 writes on the proxy, and nothing else.
  *
  * The manifest is EMPTY on purpose: it is the only legal document that can be written before the hosts
- * exist, and the build bakes whatever is here (`zerops/setups.ts`). `FABRIKA_IAM_URL` is the private
+ * exist, and the build bakes whatever is here (`zerops/setups.ts`). `FABRIKA_IAM_ISSUER` is the private
  * address rather than the public issuer for the same reason — the public one is not known yet — and
  * `deployPlatform` corrects it in pass 2, before the manifest it belongs to is applied.
  */
 const passOneProxyEnv = (secrets: InstallationSecrets): ReadonlyMap<string, string> =>
 	new Map([
 		[FABRIKA_PROXY_MANIFEST_JSON, encodeProxyManifestJson({ apps: [] })],
-		['FABRIKA_IAM_URL', PRIVATE_IAM_URL],
+		['FABRIKA_IAM_ISSUER', PRIVATE_IAM_URL],
 		['FABRIKA_IAM_KEY', secrets.proxyKey],
 	])
 
@@ -171,7 +171,7 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 		// A bare HOST, not an origin: `controlPublicOrigin` accepts either, and this is also what the
 		// same-origin check on both first-party gateways is decided against.
 		['FABRIKA_CONTROL_DOMAIN', input.hosts.control],
-		['FABRIKA_IAM_URL', iamOrigin],
+		['FABRIKA_IAM_ISSUER', iamOrigin],
 		['OPERATIONS_ARTIFACT_ORIGIN', operationsOrigin],
 		['FABRIKA_CONTROL_RUN_LOGS_BUCKET', STORAGE.bucket],
 		['FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID', STORAGE.accessKeyId],
@@ -225,7 +225,7 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 				['FABRIKA_OPERATIONS_BLOB_ENDPOINT', STORAGE.endpoint],
 				['FABRIKA_OPERATIONS_PUBLIC_HOST', input.hosts.operations],
 				['ENVIRONMENT', input.environment],
-				['FABRIKA_IAM_URL', iamOrigin],
+				['FABRIKA_IAM_ISSUER', iamOrigin],
 				['OPERATIONS_SYNC_KEY', secrets.operationsSyncKey],
 				['FABRIKA_IAM_RPC_KEY', secrets.rpcKey],
 			]),
@@ -238,7 +238,7 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 				['ENVIRONMENT', input.environment],
 				// Compared byte-for-byte against a token's `iss`, so this is the PUBLIC issuer and not the
 				// private `iam:3000` pass 1 wrote.
-				['FABRIKA_IAM_URL', iamOrigin],
+				['FABRIKA_IAM_ISSUER', iamOrigin],
 				['FABRIKA_IAM_KEY', secrets.proxyKey],
 			]),
 		],
