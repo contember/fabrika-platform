@@ -1,10 +1,10 @@
 ---
-id: 76
+id: 77
 title: A `latest` dependency makes CI fail on commits that did not change
 blocked-by: []
 ---
 
-# 76 — A `latest` dependency makes CI fail on commits that did not change
+# 77 — A `latest` dependency makes CI fail on commits that did not change
 
 **Summary.** Three packages declare `"lopata": "latest"`. CI installs with `--frozen-lockfile`, so the
 committed lockfile goes stale the moment lopata publishes and every subsequent commit fails at
