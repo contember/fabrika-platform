@@ -636,3 +636,15 @@ ordering is what ADR-0024 assumes when it forbids transitional fallbacks and cal
 The live proxy was repaired by hand — the new name written, the old one removed — before the fix
 existed, because the namespace was down. A sixth defect, in the same series as the five above, and the
 only one whose blast radius was a whole namespace rather than one deploy.
+
+Verified on `v0.0.16` by the step that had broken it. The deploy's process order in the notes project
+is the whole property, read back from the account:
+
+```
+14:24:47 → 14:24:50  stack.updateUserData   the proxy manifest
+14:24:51 → 14:24:54  stack.updateUserData   the proxy's IAM key (the issuer already matched, so skipped)
+14:24:56             stack.build            the proxy rebuild
+```
+
+Two writes COMPLETE before the build starts; the run that took the namespace down had one. Proxy
+app-version 12 is `ACTIVE`, and the namespace answered `200` on `/healthz` and `302` to IAM throughout.
