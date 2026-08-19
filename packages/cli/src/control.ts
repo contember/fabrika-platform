@@ -17,6 +17,7 @@ import type {
 	DeploymentNamespaceDto,
 	JsonValue,
 	PlanDeploymentNamespaceRequest,
+	PutAppEnvRequest,
 	RegisterAppRequest,
 	RunDto,
 } from '@fabrika/control-contract'
@@ -27,6 +28,9 @@ Usage:
   fabrika control key issue --label=<name> --permissions=<a,b,c> [--expires-in=<seconds>]
   fabrika control apps list
   fabrika control apps get --app=<id>
+  fabrika control apps environments list --app=<id>
+  fabrika control apps environments put --provider=<name> --app=<id> --env=<name> --manifest=<path>
+                           [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>] [--namespace=<id>]
   fabrika control register --provider=<name> --app=<id> --repo=<url> --env=<name> --manifest=<path>
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>]
                            [--namespace=<id>] [--installation-id=<n|none>]
@@ -38,6 +42,10 @@ Usage:
   fabrika control runs list [--app=<id>] [--env=<name>] [--limit=<n>]
   fabrika control runs get --run=<id>
   fabrika control runs log --run=<id>
+
+\`register\` CREATES an app and refuses a second one with the same id. Re-registering a changed
+manifest — a new \`zerops.yaml\`, a new import document — is \`apps environments put\`, which replaces
+one environment's envelopes and leaves the app row alone.
 
 \`--installation-id\` has three states: omitted resolves the installation from the organization's
 connected GitHub App, \`none\` registers an anonymous PUBLIC repository source, and a number names one
@@ -306,7 +314,62 @@ const runRegister = async (flags: Flags, provider: string | undefined, env: Read
 	emit(flags, result, () => `${result.app.id}\t${result.env.env}\t${result.env.provider}`)
 }
 
-const runApps = async (verb: string | undefined, flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
+/**
+ * `apps environments put` is how a REGISTERED app takes a changed manifest — `register` creates and
+ * refuses a second app with the same id, so it cannot serve a redeploy of a moved descriptor.
+ *
+ * It replaces the whole environment record, so every optional placement flag left out is cleared. That
+ * is the procedure's own semantics, shared with the console, not a choice made here.
+ */
+const runEnvironments = async (
+	verb: string | undefined,
+	flags: Flags,
+	provider: string | undefined,
+	env: Readonly<Record<string, string | undefined>>,
+): Promise<void> => {
+	const client = controlClient(flags, env)
+	if (verb === 'list') {
+		const result = await client.apps.environments.list({ appId: required(flags, 'app') })
+		emit(flags, result, () => result.items.map((item) => `${item.appId}\t${item.env}\t${item.provider}\t${item.domain ?? '-'}`).join('\n'))
+		return
+	}
+	if (verb === 'put') {
+		if (provider === undefined || provider === '') {
+			throw new Error('--provider=<name> is required: it labels the envelope this environment carries.')
+		}
+		const manifestPath = required(flags, 'manifest')
+		const manifest = await readJsonFile(manifestPath)
+		const version = manifestVersion(manifest, manifestPath)
+		const domain = optional(flags, 'domain')
+		const publicOrigin = optional(flags, 'public-origin')
+		const triggerRef = optional(flags, 'trigger-ref')
+		const namespaceId = optional(flags, 'namespace')
+		const environment: PutAppEnvRequest = {
+			// The same empty placeholder `register` sends: the target is DISCOVERED from the manifest.
+			target: { provider, version, payload: {} },
+			artifact: { provider, version, payload: manifest },
+			...(domain === undefined ? {} : { domain }),
+			...(publicOrigin === undefined ? {} : { publicOrigin }),
+			...(triggerRef === undefined ? {} : { triggerRef }),
+			...(namespaceId === undefined ? {} : { namespaceId }),
+		}
+		const result = await client.apps.environments.put({ appId: required(flags, 'app'), env: required(flags, 'env'), environment })
+		emit(flags, result, () => `${result.appId}\t${result.env}\t${result.provider}`)
+		return
+	}
+	throw new Error(`Unknown \`control apps environments\` verb: ${verb ?? '(missing)'}`)
+}
+
+const runApps = async (
+	verb: string | undefined,
+	flags: Flags,
+	provider: string | undefined,
+	env: Readonly<Record<string, string | undefined>>,
+): Promise<void> => {
+	if (verb === 'environments') {
+		await runEnvironments(flags.positional[1], flags, provider, env)
+		return
+	}
 	const client = controlClient(flags, env)
 	if (verb === 'list') {
 		const result = await client.apps.list()
@@ -438,7 +501,7 @@ export const runControlCli = async (
 				await runKeyIssue(flags, env)
 				return
 			case 'apps':
-				await runApps(verb, flags, env)
+				await runApps(verb, flags, provider, env)
 				return
 			case 'runs':
 				await runRuns(verb, flags, env)

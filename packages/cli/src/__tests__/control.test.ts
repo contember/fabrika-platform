@@ -147,6 +147,45 @@ describe('control register', () => {
 	})
 })
 
+describe('control apps environments', () => {
+	test('put re-registers a changed manifest against an app that already exists', async () => {
+		const captured = captureFetch({ result: { appId: 'notes', env: 'prod', provider: 'zerops' } })
+		const manifest = `${import.meta.dir}/fixtures/manifest.json`
+		await captureStdout(() =>
+			runControlCli(
+				'apps',
+				['environments', 'put', '--app=notes', '--env=prod', `--manifest=${manifest}`, '--namespace=notes-prod'],
+				'zerops',
+				CONTROL_ENV,
+			)
+		)
+		expect(captured.calls[0]?.body).toEqual({
+			method: 'apps.environments.put',
+			input: {
+				appId: 'notes',
+				env: 'prod',
+				environment: {
+					target: { provider: 'zerops', version: 2, payload: {} },
+					artifact: { provider: 'zerops', version: 2, payload: { manifestVersion: 2, app: { id: 'notes' } } },
+					namespaceId: 'notes-prod',
+				},
+			},
+		})
+	})
+
+	test('list reaches the nested procedure and put still refuses to invent the provider', async () => {
+		const captured = captureFetch({ result: { items: [] } })
+		await captureStdout(() => runControlCli('apps', ['environments', 'list', '--app=notes'], undefined, CONTROL_ENV))
+		expect(captured.calls[0]?.body).toEqual({ method: 'apps.environments.list', input: { appId: 'notes' } })
+		await expect(runControlCli('apps', ['environments', 'put', '--app=notes'], undefined, CONTROL_ENV)).rejects.toThrow(
+			'--provider=<name> is required',
+		)
+		await expect(runControlCli('apps', ['environments', 'rename'], undefined, CONTROL_ENV)).rejects.toThrow(
+			'Unknown `control apps environments` verb: rename',
+		)
+	})
+})
+
 describe('control routing', () => {
 	test('rejects an unknown group and an unknown verb separately', async () => {
 		await expect(runControlCli('sources', [], undefined, CONTROL_ENV)).rejects.toThrow('Unknown control command: sources')

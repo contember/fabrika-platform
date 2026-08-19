@@ -25,6 +25,9 @@ label the envelope a registration carries.
   IAM's `mintFromKey` — cannot admit it. The command mints a DB-backed key instead.
 - `namespaces create` commits the plan it just read, never a second derivation —
   the console's two-step form has the same rule for the same reason.
+- `register` CREATES; a changed manifest goes through `apps environments put`,
+  which replaces one environment's envelopes and clears every placement field
+  left out. Both are one procedure of the contract, so neither invents a merge.
 - **Do not add source-connection verbs.** Creating a GitHub App connection needs a
   human principal (ADR-0031); the console owns it.
 
