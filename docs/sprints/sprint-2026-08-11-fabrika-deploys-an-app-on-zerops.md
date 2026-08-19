@@ -75,7 +75,7 @@ Zerops build pipeline.
   (`provider.ts:92-114`), then wired to a `console.info` line and nothing else
   (`run-lifecycle.ts:314`); the run's `log_key` object is written only by the Cloudflare runner relay
   (`runner-cloudflare/src/relay.ts:114`). Every Zerops run answers `GET /runs/:id/log` with an empty
-  list. → [`69`](../backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md).
+  list. → `backlog/69` (since shipped and deleted).
 
 ## Work units
 
@@ -213,7 +213,7 @@ Zerops build pipeline.
 
 ### WU6 — A Zerops deploy's log is readable (effort S)
 
-- **Problem.** [`69`](../backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md), refs above.
+- **Problem.** `backlog/69` (since shipped and deleted), refs above.
 - **Why it is in this sprint.** Six live deploys are about to be debugged, and on this provider the
   console shows nothing. It pays for itself during WU2 alone.
 - **Scope.** Write the relayed lines to the run's `log_key` object from the control plane, so the writer
@@ -555,3 +555,53 @@ Local witnesses at this checkpoint:
 The workflow emits the same best-effort domain audit calls as existing Control mutations. Making audit
 delivery durable is repository-wide follow-up [`71`](../backlog/71-deliver-domain-audit-events-durably.md),
 not a private WU3 blocker.
+
+### The public half of the gate is met (2026-08-19)
+
+`notes/prod` builds from `contember/fabrika-example-zerops` and serves through the namespace proxy:
+
+```
+GET https://proxy-2b16-8080.prg1.zerops.app/healthz   → 200 {"status":"ok"}
+GET https://proxy-2b16-8080.prg1.zerops.app/api/notes → 302 https://proxy-2ec8-8080.prg1.zerops.app/auth/login
+                                                             ?app=notes&redirect=…&state=…&code_challenge=…
+```
+
+The public path answers, the gated path is refused BY THE PROXY and handed to IAM with PKCE, and the
+application enforces nothing ([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)).
+Run `01a0199b-d112-7004-9482-da5ebcbb8423` succeeded through `reconcile-schema`; app version 5 is
+`ACTIVE`.
+
+It runs in `fabrika-notes-prod`, not `fabrika-install-test` as the gate's wording says. That wording
+predates deployment namespaces: an app now gets its own project with its own proxy, and the `mid`
+preset is what this app asked for. The criterion the wording was protecting — fabrika deploys a
+GitHub repository into the account and it serves — is met.
+
+**Five defects stood between the registration and the first request, none of them reachable before
+now.** Each was measured, not inferred:
+
+| What                                                                                                              | Where it is fixed                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| The installation's integration token structurally could not create a project                                      | [ADR-0034](../decisions/0034-the-control-plane-creates-the-projects-it-owns.md), `platform install` |
+| `sensitive` became required on every user-data write, so a namespace's first proxy variable failed                | `provider-zerops/src/api.ts`                                                                        |
+| `400 userDataSyncRunning` — the deploy wrote five variables and asked for a build while they synced               | `provider-zerops/src/api.ts`, which now waits out each write's process                              |
+| `postgresql:ha@18` offers TLS on `portTls` only, so the canonical DSN could not connect                           | every writer of a fabrika PostgreSQL URL, including the `standard` tier's own                       |
+| `apps.environments.put` normalised the caller's envelope, so a namespaced provider refused every changed manifest | `control/src/api/registry.ts`, sharing one `prepareRegistration`                                    |
+
+Two diagnosis defects came out of the same hunt, and both cost hours before they were found:
+`build-and-deploy` discarded its error CODE, so `userDataSyncRunning` read as a bare `(400)`; and
+`cleanupPreTriggerVersion` threw over the failure it was cleaning up after, so one real refusal
+surfaced as `delete app-version failed (400)` with the cause gone. Both are fixed.
+
+**WU6 is met.** `control runs log` returns a Zerops run's build log, including the container's own
+stack trace, against a live run, so `backlog/69` is consumed and deleted. One rough edge: `RunLogWriter` rewrites the whole object per line, so a
+concurrent read occasionally sees nothing.
+
+**WU5 partially witnessed.** `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE`
+(`fabrika/notes/prod/default/1919eb31…`, the mirrored source commit) read back from the live service.
+The browser sign-in and the exception reaching Operations are still open.
+
+**Still open, and both need the operator.** The private half needs **Settings → Source** for the
+second organization and the repository flipped to private. And one variable is a decision, not a bug:
+`FABRIKA_IAM_ISSUER` had to be written straight through the Zerops env API because an app variable
+set in the control plane never reaches a Zerops service —
+[`76`](../backlog/76-an-app-variable-never-reaches-a-zerops-service.md).

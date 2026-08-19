@@ -55,7 +55,7 @@ last mile remain open.
 The example remains a tested workspace fixture and standalone repository whose root holds `zerops.yaml`.
 Consumes
 [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md),
-[`69`](backlog/69-a-zerops-runs-log-never-reaches-the-run-record.md) and
+`backlog/69` (since shipped and deleted) and
 [`70`](backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md), and answers items 3
 and 4 of [`05`](backlog/05-bring-up-on-a-real-zerops-account.md).
 
