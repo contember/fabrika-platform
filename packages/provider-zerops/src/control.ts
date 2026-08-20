@@ -31,7 +31,9 @@ import {
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
 import {
 	type FabrikaManifest,
+	manifestServiceHostnames,
 	parseFabrikaManifest,
+	renderFabrikaImportYaml,
 	renderFabrikaProvisioningYaml,
 	verifyZeropsArtifactSourceDescriptor,
 	zeropsArtifactCodec,
@@ -707,6 +709,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 						if (namespaceTarget.ready !== true || namespaceTarget.projectId === undefined) {
 							throw new Error(`Zerops deployment namespace \`${namespace.id}\` is not ready`)
 						}
+						const projectId = namespaceTarget.projectId
 						const manifest = parseFabrikaManifest(
 							decodeEnvelope('artifact', input.registration.environment.artifact, zeropsArtifactCodec),
 							{
@@ -714,19 +717,29 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 								env: input.registration.environment.env,
 							},
 						)
+						const hostnames = manifestServiceHostnames(manifest)
+						const observed = await Promise.all(hostnames.map(async (hostname) => ({
+							hostname,
+							service: await api.findService({ projectId, hostname, signal: input.signal }),
+						})))
+						const present = observed.filter((entry) => entry.service !== null)
+						if (present.length !== 0 && present.length !== observed.length) {
+							throw new Error(`Zerops registration found only ${present.length} of ${observed.length} declared services`)
+						}
+						// startWithoutCode is safe only before the namespace contains an application service.
 						const imported = await api.importServices({
-							projectId: namespaceTarget.projectId,
-							yaml: renderFabrikaProvisioningYaml(manifest),
+							projectId,
+							yaml: present.length === 0 ? renderFabrikaProvisioningYaml(manifest) : renderFabrikaImportYaml(manifest),
 							signal: input.signal,
 						})
 						const reported = imported.services.find((service) => service.name === manifest.target.deployService)
-						const discovered = reported === undefined
-							? await api.findService({
-								projectId: namespaceTarget.projectId,
+						const observedDeployService = observed.find((entry) => entry.hostname === manifest.target.deployService)?.service
+						const discovered = reported ?? observedDeployService
+							?? await api.findService({
+								projectId,
 								hostname: manifest.target.deployService,
 								signal: input.signal,
 							})
-							: reported
 						if (discovered === null || discovered === undefined || discovered.id === '') {
 							throw new Error(`Zerops import did not create deploy service \`${manifest.target.deployService}\``)
 						}

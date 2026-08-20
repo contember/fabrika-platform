@@ -311,9 +311,10 @@ describe('Zerops ControlProvider registration', () => {
 	})
 
 	test('prepares codeless services and discovers the deploy-service id', async () => {
+		const api = makeApi(recorded)
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
-			api: makeApi(recorded),
+			api: { ...api, findService: async () => null },
 			namespaces: {
 				clientId: 'client-1',
 				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
@@ -339,6 +340,77 @@ describe('Zerops ControlProvider registration', () => {
 		expect(recorded.imports).toHaveLength(1)
 		expect(recorded.imports[0]?.projectId).toBe('project-1')
 		expect(recorded.imports[0]?.yaml).toContain('startWithoutCode: true')
+	})
+
+	test('uses the steady-state import when every declared service already exists', async () => {
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			namespaces: {
+				clientId: 'client-1',
+				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				iamUrl: 'https://iam.example.test',
+				iamKey: 'proxy-key',
+			},
+		})
+		const prepare = control.namespaces?.prepareRegistration
+		if (prepare === undefined) throw new Error('expected registration preparation')
+
+		const prepared = await prepare({
+			registration: {
+				app,
+				environment: environment({ target: { provider: 'zerops', version: zeropsStoredTargetCodec.version, payload: {} } }),
+			},
+			signal: new AbortController().signal,
+		})
+
+		expect(prepared.environment.target.payload).toEqual({ serviceId: 'service-1' })
+		expect(recorded.imports).toHaveLength(1)
+		expect(recorded.imports[0]?.yaml).not.toContain('startWithoutCode')
+	})
+
+	test('refuses a partial declared-service set without importing anything', async () => {
+		const partialConfig: ZeropsAppConfig = {
+			id: 'notes',
+			target: {
+				platform: 'zerops',
+				services: () => [
+					{ hostname: 'notes', type: 'alpine/bun@1.3' },
+					{ hostname: 'notesdb', type: 'postgresql:single@18' },
+				],
+				deployService: 'notes',
+			},
+		}
+		const partialManifest = compileFabrikaManifest(partialConfig, 'prod', SOURCE_DESCRIPTOR)
+		const api = makeApi(recorded)
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: { ...api, findService: async ({ hostname }) => hostname === 'notes' ? { id: 'service-1', name: hostname } : null },
+			namespaces: {
+				clientId: 'client-1',
+				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				iamUrl: 'https://iam.example.test',
+				iamKey: 'proxy-key',
+			},
+		})
+		const prepare = control.namespaces?.prepareRegistration
+		if (prepare === undefined) throw new Error('expected registration preparation')
+
+		await expect(prepare({
+			registration: {
+				app,
+				environment: environment({
+					target: { provider: 'zerops', version: zeropsStoredTargetCodec.version, payload: {} },
+					artifact: {
+						provider: 'zerops',
+						version: zeropsArtifactCodec.version,
+						payload: zeropsArtifactCodec.encode(partialManifest),
+					},
+				}),
+			},
+			signal: new AbortController().signal,
+		})).rejects.toThrow('only 1 of 2 declared services')
+		expect(recorded.imports).toEqual([])
 	})
 
 	test('derives reserved and app-owned claims from the canonical structured import', () => {
