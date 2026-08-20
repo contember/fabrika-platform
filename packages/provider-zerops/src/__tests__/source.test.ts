@@ -739,3 +739,35 @@ describe('Zerops source redacted error envelope', () => {
 		expect(message).not.toContain('ghs_must-not-leak')
 	})
 })
+
+describe('webhook configure URL grammar', () => {
+	const response = (url: string) =>
+		buildZeropsSourceWebhookConfigureResponse({
+			connectionId: '01a01e55-9ee5-7035-862b-80b1548b6597',
+			credentialSha256: 'a'.repeat(64),
+			webhook: { url, contentType: 'json', insecureSsl: '0' },
+		})
+
+	test('takes the legacy route and a connection-scoped one', () => {
+		expect(response('https://control.example.test/webhooks/github').webhook.url).toBe('https://control.example.test/webhooks/github')
+		// Every keyed connection appends its id; rejecting this shape broke `configureWebhook` for all of them.
+		expect(response('https://control.example.test/webhooks/github/01a01e55-9ee5-7035-862b-80b1548b6597').webhook.url)
+			.toBe('https://control.example.test/webhooks/github/01a01e55-9ee5-7035-862b-80b1548b6597')
+	})
+
+	test('still refuses anything that is not exactly one of those two', () => {
+		for (
+			const url of [
+				'http://control.example.test/webhooks/github',
+				'https://control.example.test/webhooks/github/one/two',
+				'https://control.example.test/webhooks/github/',
+				'https://control.example.test/webhooks/github/../admin',
+				'https://control.example.test/webhooks/github/a%2Fb',
+				'https://control.example.test/webhooks/github?x=1',
+				'https://control.example.test/webhooks/github#x',
+				'https://user:pass@control.example.test/webhooks/github',
+				'https://control.example.test:8443/webhooks/github',
+			]
+		) expect(() => response(url)).toThrow()
+	})
+})

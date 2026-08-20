@@ -1030,6 +1030,21 @@ export function buildZeropsSourceCredentialStatusResponseV2(
 	return decodeZeropsSourceCredentialStatusResponseV2({ protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION_V2, ...input })
 }
 
+const WEBHOOK_PATH = '/webhooks/github'
+
+/**
+ * `/webhooks/github` is the legacy single-connection route; every keyed connection appends its own id
+ * so one App's deliveries cannot be replayed against another. Requiring the bare path rejected every
+ * multi-connection setup at `configureWebhook`.
+ */
+const isWebhookPath = (pathname: string): boolean => {
+	if (pathname === WEBHOOK_PATH) return true
+	if (!pathname.startsWith(`${WEBHOOK_PATH}/`)) return false
+	const connectionId = pathname.slice(WEBHOOK_PATH.length + 1)
+	// `ID_PATTERN` has no `%`, so a percent-escape in the path fails here rather than round-tripping.
+	return connectionId.length > 0 && connectionId.length <= MAX_ID_LENGTH && ID_PATTERN.test(connectionId)
+}
+
 const webhookUrl = (value: unknown, label: string): string => {
 	const candidate = boundedString(value, label, MAX_WEBHOOK_URL_LENGTH)
 	let parsed: URL
@@ -1040,7 +1055,7 @@ const webhookUrl = (value: unknown, label: string): string => {
 	}
 	if (
 		parsed.protocol !== 'https:' || parsed.port !== '' || parsed.username !== '' || parsed.password !== '' || parsed.search !== '' || parsed.hash !== ''
-		|| parsed.pathname !== '/webhooks/github' || parsed.hostname === '' || candidate !== parsed.href
+		|| !isWebhookPath(parsed.pathname) || parsed.hostname === '' || candidate !== parsed.href
 	) throw new Error(`${label} must be an exact secure GitHub webhook URL`)
 	return candidate
 }
