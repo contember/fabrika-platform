@@ -52,7 +52,7 @@
 		"@cloudflare/workers-types": "^4.20260702.1",
 		"@fabrika/auth-core": "workspace:*",
 		"@types/bun": "latest",
-		"lopata": "latest",
+		"lopata": "^0.21.0",
 		"oblaka-iac": "^0.0.18",
 		"wrangler": "^4.24.0"
 	}
