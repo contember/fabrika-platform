@@ -39,6 +39,9 @@ async function main(): Promise<void> {
 	const runtime = createRuntime()
 	const server = Bun.serve({
 		port: runtime.config.port,
+		// Bun closes an idle socket after 10s by default, and a handler that is still working counts as
+		// idle — a slow upstream answered as an unattributable 502 instead of its own error.
+		idleTimeout: 255,
 		// The project's L7 balancer terminates TLS and forwards plain HTTP on the private network, so
 		// this listener speaks HTTP and holds no certificates. The session cookie is still marked
 		// `Secure`: the auth handler decides that from the configured public origin (`ISSUER`), not from
