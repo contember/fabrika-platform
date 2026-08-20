@@ -51,6 +51,31 @@ export interface SourceConnectionWorkflowDeps {
 	readonly githubFetch?: GitHubAppFetch
 }
 
+/**
+ * A short, BOUNDED reason a source call failed — the port's own code and HTTP status, and nothing else.
+ *
+ * The cause used to be discarded here, so an operator who could not finish a connection saw a bare
+ * status and no reason, and the control plane logged nothing either. Finding that a redeployed source
+ * container was refusing `verifyInstallations` took hours of reading logs that did not record it.
+ *
+ * Deliberately STRUCTURAL rather than `error.message`: a port implementation's message is not ours to
+ * trust with a browser, and a credential must never reach one (root CLAUDE.md). A code and a status
+ * cannot carry a token; a message can.
+ */
+const sourceFailureReason = (error: unknown): string | undefined => {
+	if (typeof error !== 'object' || error === null) return undefined
+	const code = 'code' in error && typeof error.code === 'string' ? error.code : undefined
+	const status = 'status' in error && typeof error.status === 'number' ? error.status : undefined
+	if (code === undefined && status === undefined) return undefined
+	return [code, status === undefined ? undefined : `status ${status}`].filter((part) => part !== undefined).join(', ')
+}
+
+/** `502` with the port's reason attached when it gave one, so the console names something actionable. */
+const sourceUnavailable = (error: unknown): SourceConnectionWorkflowError => {
+	const reason = sourceFailureReason(error)
+	return new SourceConnectionWorkflowError(502, reason === undefined ? 'the source service did not answer' : `the source service refused: ${reason}`)
+}
+
 export class SourceConnectionWorkflowError extends Error {
 	readonly type = 'source_connection'
 
@@ -299,7 +324,9 @@ export async function manifestCallback(deps: SourceConnectionWorkflowDeps): Prom
 	} catch {
 		await deps.env.REPOSITORIES.githubConnections.markFailed(claimed.id, claimed.version, 'manifest_exchange').catch(() => null)
 		throwIfAborted(deps.request.signal)
-		throw new SourceConnectionWorkflowError(502)
+		// Names the phase and NOTHING of the cause on purpose: this call carries the one-time manifest
+		// code, and a rejected fetch can carry the URL it was made against.
+		throw new SourceConnectionWorkflowError(502, 'the GitHub App manifest exchange failed')
 	}
 
 	let preparedCredential: Awaited<ReturnType<SourceConnectionPort['prepareCredential']>>
@@ -355,9 +382,9 @@ export async function verifySourceInstallation(deps: SourceConnectionWorkflowDep
 			scope,
 			signal: deps.request.signal,
 		})
-	} catch {
+	} catch (error) {
 		throwIfAborted(deps.request.signal)
-		throw new SourceConnectionWorkflowError(502)
+		throw sourceUnavailable(error)
 	}
 	if (verification.status === 'missing' || verification.accountLogin.toLowerCase() !== attempt.desiredOwner.toLowerCase()) {
 		throw new SourceConnectionWorkflowError(409, 'GitHub App installation is incomplete')
