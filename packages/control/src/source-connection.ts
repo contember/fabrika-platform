@@ -70,6 +70,12 @@ const sourceFailureReason = (error: unknown): string | undefined => {
 	return [code, status === undefined ? undefined : `status ${status}`].filter((part) => part !== undefined).join(', ')
 }
 
+/** Same, for a resumed setup: the phase lamp says WHERE it stopped, this says why. */
+const repairFailed = (error: unknown): SourceConnectionWorkflowError => {
+	const reason = sourceFailureReason(error)
+	return new SourceConnectionWorkflowError(502, reason === undefined ? 'the setup could not be resumed' : `the setup could not be resumed: ${reason}`)
+}
+
 /** `502` with the port's reason attached when it gave one, so the console names something actionable. */
 const sourceUnavailable = (error: unknown): SourceConnectionWorkflowError => {
 	const reason = sourceFailureReason(error)
@@ -413,9 +419,11 @@ export async function repairSourceConnection(deps: SourceConnectionWorkflowDeps,
 	}
 	const resumed = await deps.env.REPOSITORIES.githubConnections.resumeRepair(attempt.id, attempt.version)
 	if (resumed === null) throw new SourceConnectionWorkflowError(409)
+	let failure: unknown
 	try {
 		await advanceWithDeadline(deps, resumed)
-	} catch {
+	} catch (error) {
+		failure = error
 		const current = await deps.env.REPOSITORIES.githubConnections.getAttempt(resumed.id).catch(() => null)
 		if (current !== null && current.status === 'active') {
 			await deps.env.REPOSITORIES.githubConnections.markRepairRequired(current.id, current.version, errorForPhase(current.phase)).catch(() => null)
@@ -423,6 +431,9 @@ export async function repairSourceConnection(deps: SourceConnectionWorkflowDeps,
 		throwIfAborted(deps.request.signal)
 	}
 	await audit(deps.auth, 'source.connection.repair', attempt.id)
+	// A resume that changed nothing used to answer 200 with the same red lamp, which reads as success
+	// to every caller and leaves the console with no reason to show.
+	if (failure !== undefined) throw repairFailed(failure)
 	const current = await deps.env.REPOSITORIES.githubConnections.getAttempt(attempt.id)
 	if (current === null) throw new SourceConnectionWorkflowError(409)
 	return workflowDto(deps.source.provider, current)

@@ -600,6 +600,31 @@ describe('GitHub source connection workflow', () => {
 		expect(JSON.stringify(await queryRowsFromEnv(env, `SELECT label FROM vault WHERE label LIKE '%:recovery'`))).toBe('[]')
 	})
 
+	test('reports why a repair stopped instead of answering 200 with the same red lamp', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		await connectLegacy(env, source)
+		source.githubOwner = 'beta'
+		source.githubAppId = 234
+		source.githubAppSlug = 'fabrika-beta'
+		source.activateFails = true
+		const started = await startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'beta', appName: 'fabrika-beta', visibility: 'private', repositories: [] },
+		)
+		expect(
+			(await manifestCallback({
+				...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=beta&state=${token(32)}`)),
+				exchangeManifest: () => Promise.resolve(createdApp(234, 'fabrika-beta')),
+			})).status,
+		).toBe(303)
+		// The resume hits the same wall. Answering 200 here reads as success to every caller and leaves
+		// the console with a red lamp and no reason, which is how a broken setup looked like a stuck button.
+		await expect(repairSourceConnection(deps(env, source, mutationRequest('/api/rpc')), started.connectionId))
+			.rejects.toMatchObject({ httpStatus: 502, message: expect.stringContaining('could not be resumed') })
+		expect((await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId))?.status).toBe('repair_required')
+	})
+
 	test('rejects a same-owner publish race atomically without retaining an attempt or manifest secret', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()

@@ -407,6 +407,9 @@ function ConnectionMutation(
 			onDone()
 		} catch (cause) {
 			setError(cause instanceof ApiError ? cause.message : 'The connection action failed.')
+		} finally {
+			// Clear on EVERY path: an action that succeeds without changing the state re-renders this same
+			// button, and leaving `busy` set locks it on its pending label with nothing to click.
 			setBusy(false)
 		}
 	}
