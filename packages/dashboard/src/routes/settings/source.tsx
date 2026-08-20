@@ -1,4 +1,4 @@
-import { createPage } from '@buzola/router'
+import { createPage, useRouter } from '@buzola/router'
 import { useEffect, useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { type Lamp, Status } from '../../components/Status'
@@ -308,6 +308,7 @@ function SourceAction(
 }
 
 function ConnectionForm({ onCancel }: { onCancel?: () => void }) {
+	const router = useRouter()
 	const [organization, setOrganization] = useState('')
 	const [appName, setAppName] = useState('')
 	const [repositories, setRepositories] = useState('')
@@ -329,7 +330,10 @@ function ConnectionForm({ onCancel }: { onCancel?: () => void }) {
 			const started = await api.sourceConnection.start(privateSourceConnectionRequest(organization, appName, parsedRepositories))
 			const continuePath = sourceStartContinuePath(started)
 			if (continuePath === null) throw new Error('invalid source connection handoff')
-			window.location.assign(continuePath)
+			// Control serves this path, not the console (ADR-0031). `location.assign` would raise a
+			// navigate event the router's catch-all 404 matches, and it would render "Not found"
+			// without a request ever leaving the browser.
+			router.leaveApp(continuePath)
 		} catch (cause) {
 			setError(cause instanceof ApiError ? cause.message : 'Source connection could not start.')
 			setBusy(false)

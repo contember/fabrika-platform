@@ -1,3 +1,5 @@
+import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/router'
+import { BuzolaProvider } from '@buzola/router/react'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -26,15 +28,26 @@ const connection = (connectionId: string, owner: string, isPublic = false): GitH
 	},
 })
 
+// The setup form reaches for the router to hand the GitHub handoff to the browser, so it needs a
+// provider. A memory adapter keeps that out of the DOM.
+const withRouter = (element: React.ReactElement): React.ReactElement =>
+	createElement(BuzolaProvider, {
+		router: new Router({
+			routes: buildRouteTree([{ path: '/', component: () => null, isIndex: true }]),
+			adapter: createMemoryNavigationAdapter(),
+			pageRegistry: {},
+		}),
+	}, element)
+
 const workflowMarkup = (workflow: GitHubSourceConnectionWorkflowDto | null, connectionCount: number, adding = false): string =>
-	renderToStaticMarkup(createElement(SourceWorkflow, {
+	renderToStaticMarkup(withRouter(createElement(SourceWorkflow, {
 		workflow,
 		connectionCount,
 		adding,
 		onAdd: () => undefined,
 		onCancelAdd: () => undefined,
 		invalidate: () => undefined,
-	}))
+	})))
 
 describe('source connection collection components', () => {
 	test('renders the zero-connection private setup without a public-App control', () => {

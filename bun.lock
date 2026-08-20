@@ -137,7 +137,7 @@
       "name": "@fabrika/dashboard",
       "version": "0.0.4",
       "dependencies": {
-        "@buzola/router": "^0.0.12",
+        "@buzola/router": "^0.0.16",
         "@fabrika/app": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/iam-contract": "workspace:*",
@@ -149,8 +149,8 @@
         "react-dom": "^19.0.0",
       },
       "devDependencies": {
-        "@buzola/codegen": "^0.0.12",
-        "@buzola/vite-plugin": "^0.0.12",
+        "@buzola/codegen": "^0.0.16",
+        "@buzola/vite-plugin": "^0.0.16",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
         "@vitejs/plugin-react": "^5.0.0",
@@ -217,7 +217,7 @@
       "name": "@fabrika/iam-ui",
       "version": "0.0.4",
       "dependencies": {
-        "@buzola/router": "^0.0.12",
+        "@buzola/router": "^0.0.16",
         "@fabrika/app": "workspace:*",
         "@fabrika/iam-contract": "workspace:*",
         "react": "^19.0.0",
@@ -326,7 +326,7 @@
       "name": "@fabrika/operations-ui",
       "version": "0.0.4",
       "dependencies": {
-        "@buzola/router": "^0.0.12",
+        "@buzola/router": "^0.0.16",
         "@fabrika/app": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
         "react": "^19.0.0",
@@ -537,11 +537,11 @@
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.6", "", { "os": "win32", "cpu": "x64" }, "sha512-WN05KwXnTO/2J45RQPvzZMXf7tZUIofHoR35xIPfCo7pQ2RFidxI8sfb5mGsaTxdMmEOzHzOPRCdA5/fCpc7xQ=="],
 
-    "@buzola/codegen": ["@buzola/codegen@0.0.12", "", { "dependencies": { "@buzola/router": "^0.0.12" }, "bin": { "buzola": "dist/cli.js" } }, "sha512-Ulcm0mVngRNSG9k4uh+siYSgXXd0uND4W0+PSzbyPp538dzxqzRHWi3BNutmsC02A1VMokzr23t1V7tleDTkEQ=="],
+    "@buzola/codegen": ["@buzola/codegen@0.0.16", "", { "dependencies": { "@buzola/router": "^0.0.16" }, "bin": { "buzola": "dist/cli.js" } }, "sha512-SMnwwS5Lmg9SzB/Lw/KXLy/4Wi+JVo+20RuQ2Jmv2laxTfJxhoIQYlht8bYx5TFEdcS3aCefmMhtITvj7ps8Cw=="],
 
-    "@buzola/router": ["@buzola/router@0.0.12", "", { "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-aV6U5ma2VkGLZHBqm8tBBUQ39c0tLxy6ojksgbRSpZM19+DfVGrydzhelW4SOflBuvVEe7BdW1FoE//LzNAH+g=="],
+    "@buzola/router": ["@buzola/router@0.0.16", "", { "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-MjQ+15/QBOKFBC1YoHhUvQmf1Ym59TH8fVHUDEkMLQJmw5aAegHDvFkom+6ofVYoMSuElepzx9E7dEji+iOhiw=="],
 
-    "@buzola/vite-plugin": ["@buzola/vite-plugin@0.0.12", "", { "dependencies": { "@buzola/codegen": "^0.0.12", "@buzola/router": "^0.0.12" } }, "sha512-NGkDQiMcIxzGuOPnGteWhIzNTdNQWkCMKzrv7qsuAj3YU5ScVonP16vz316O4j3yiDxOWtMa6nd0laFA9mPrAQ=="],
+    "@buzola/vite-plugin": ["@buzola/vite-plugin@0.0.16", "", { "dependencies": { "@buzola/codegen": "^0.0.16", "@buzola/router": "^0.0.16" } }, "sha512-0vWXJsrZaQozvSbUIuqV9LyLOIkrywlB9glmx/IMNTktznMAZ974PoxdJD4ilO2oQT3QYtOBWNGXLxhVTAe/Fw=="],
 
     "@cloudflare/containers": ["@cloudflare/containers@0.0.30", "", {}, "sha512-i148xBgmyn/pje82ZIyuTr/Ae0BT/YWwa1/GTJcw6DxEjUHAzZLaBCiX446U9OeuJ2rBh/L/9FIzxX5iYNt1AQ=="],
 

@@ -25,7 +25,7 @@
 		"test": "bun test src/__tests__"
 	},
 	"dependencies": {
-		"@buzola/router": "^0.0.12",
+		"@buzola/router": "^0.0.16",
 		"@fabrika/app": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",
 		"react": "^19.0.0"

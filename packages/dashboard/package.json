@@ -11,7 +11,7 @@
 		"preview": "vite preview"
 	},
 	"dependencies": {
-		"@buzola/router": "^0.0.12",
+		"@buzola/router": "^0.0.16",
 		"@fabrika/app": "workspace:*",
 		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/iam-contract": "workspace:*",
@@ -23,8 +23,8 @@
 		"react-dom": "^19.0.0"
 	},
 	"devDependencies": {
-		"@buzola/codegen": "^0.0.12",
-		"@buzola/vite-plugin": "^0.0.12",
+		"@buzola/codegen": "^0.0.16",
+		"@buzola/vite-plugin": "^0.0.16",
 		"@types/react": "^19.0.0",
 		"@types/react-dom": "^19.0.0",
 		"@vitejs/plugin-react": "^5.0.0",
