@@ -736,3 +736,27 @@ Live on `v0.0.18`: repair answered **`200` in 0.94 s** and the chain moved to
 `Verify installation` now answers **`409`, 88 bytes** — `GitHub App installation is incomplete` —
 which is the correct answer to an App that exists but is not yet installed on the organization, and
 the first time this flow has named its own state instead of a number.
+
+## The private repository deployed on the live installation (2026-08-20)
+
+The first real private-source run, `01a01f03-445b-70d5-86ae-cc54dbeed844`, failed before checkout:
+`resolve-v2` answered `404 installation_not_found`. Control had correctly bound `notes` to the sole
+`contember` connection, `01a00085-40d6-70df-a62d-6bb0d15f0a9a`, and GitHub still reported App
+`fabrika-test` installed for all repositories as installation `154387356`. The missing object was the
+source credential slot for that connection. The console nevertheless labelled the database row
+`Connected`: the collection query projects stable rows without calling source, despite the living
+reference saying every status read compares source identity and digest.
+
+The connection and the legacy source credential were created sixteen seconds apart on 14 August and
+name the same GitHub App. The legacy bundle therefore still held the exact key material needed by the
+missing keyed-v2 slot. Recovery constructed the canonical v2 bundle with the existing connection id,
+created only the absent derived environment key as sensitive, and restarted only `source`. It did not
+delete or re-register `notes`, change its sticky source binding, create a new App, or replace another
+credential slot.
+
+Run `01a01f10-c0ea-703f-b26c-9500b10435d6` is the live positive witness. Against the still-private
+`contember/fabrika-example-zerops` repository it resolved commit
+`6b686fc35d4f44debd4f0725478f8e7fe9faff8e`, finished the Zerops build, activated app version
+`z93o2XEBSLiAbNiRg6ri2A`, and reached `succeeded`. The deployed `/healthz` answered `200`. Inspection
+of the version metadata found no private-key marker, GitHub token prefix or credential-bearing GitHub
+URL.
