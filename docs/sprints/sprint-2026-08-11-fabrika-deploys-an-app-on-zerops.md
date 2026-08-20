@@ -648,3 +648,32 @@ is the whole property, read back from the account:
 
 Two writes COMPLETE before the build starts; the run that took the namespace down had one. Proxy
 app-version 12 is `ACTIVE`, and the namespace answered `200` on `/healthz` and `302` to IAM throughout.
+
+### The private half stalled on `Verify installation` (2026-08-20)
+
+The operator reached `installation-required` for `contember`, granted the App **all repositories** in
+GitHub, and the console answered a bare `502`. **That symptom is still unexplained** and it is worth
+saying so rather than claiming the fixes below caused it: a naked status can only come from the RPC
+client's non-JSON branch (`app/src/client.ts`), so a proxy produced it and the control plane never
+answered — most likely a click that landed inside the `v0.0.16` control rollover. It needs one more
+attempt to settle.
+
+Reading for it found two defects anyway, neither reachable from the console's own message.
+
+**The legacy source binding did not survive a restart.** `GITHUB_APP_CREDENTIALS` carries an App id
+and a private key and nothing else; the connection id and the App identity are set only by `activate`,
+in memory. `status` could recover them from GitHub, `requireActive` — the gate on `verifyInstallations`
+and `configureWebhook` — could not, and answered `credentials_conflict`. The source service runs
+**more than one container**, so the console's `status` binds one while the operator's next click lands
+on another, and every platform deploy replaces all of them. One `bindActive` now serves all three
+operations. The regression test fails on the previous implementation at exactly that line.
+
+**And the control plane discarded the reason.** `verifySourceInstallation` caught the source call's
+failure and threw a naked 502, logging nothing, which is why the above took hours against container
+logs that do not record it either. It now reports the port's `code` and `status` — read structurally,
+never `error.message`, because a message can carry a credential and two such fields cannot. The
+manifest exchange keeps a cause-free message on purpose: it carries the one-time manifest code.
+
+A third, unrelated: `"lopata": "latest"` against `--frozen-lockfile` failed CI twice in a day on
+commits that touched no dependency. Pinned to `^0.21.0` in all three packages, which also ended the
+workspace carrying two versions of one dev tool. `backlog/77` is consumed and deleted.
