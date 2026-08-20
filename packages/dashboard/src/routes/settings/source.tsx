@@ -73,7 +73,7 @@ export default createPage()
 					<h1>Source connection</h1>
 					<p className="hint">Connect one private GitHub App per organization without placing App credentials in this browser.</p>
 				</div>
-				<ConnectedConnections connections={collection.items} />
+				<ConnectedConnections connections={collection.items} invalidate={invalidate} />
 				{loadError !== null && <p className="error-text" role="alert">{loadError}</p>}
 				{collection.nextCursor !== null && (
 					<div className="pager source-connections-pager">
@@ -92,13 +92,18 @@ export default createPage()
 		)
 	})
 
-export function ConnectedConnections({ connections }: { connections: readonly GitHubSourceConnectionConnectedDto[] }) {
+export function ConnectedConnections(
+	{ connections, invalidate }: { connections: readonly GitHubSourceConnectionConnectedDto[]; invalidate: () => void },
+) {
 	return (
 		<section aria-labelledby="connected-source-connections">
 			<div className="section-head">
 				<h2 id="connected-source-connections">Connected organizations</h2>
 			</div>
-			<p className="section-note">Each organization uses its own GitHub App, installation and private source credential.</p>
+			<p className="section-note">
+				Each organization uses its own GitHub App, installation and private source credential. Reconcile reapplies the stored webhook configuration
+				without rotating it.
+			</p>
 			<Table
 				colSpan={4}
 				isEmpty={connections.length === 0}
@@ -134,6 +139,14 @@ export function ConnectedConnections({ connections }: { connections: readonly Gi
 						</td>
 						<td>
 							<Status lamp="ok">Connected</Status>
+							<ConnectionMutation
+								label="Reconcile"
+								ariaLabel={`Reconcile GitHub source connection ${connection.app.owner.login}`}
+								connectionId={connection.connectionId}
+								pending="Reconciling…"
+								action={() => api.sourceConnection.reconcile(sourceConnectionInput(connection.connectionId))}
+								onDone={invalidate}
+							/>
 						</td>
 					</tr>
 				))}

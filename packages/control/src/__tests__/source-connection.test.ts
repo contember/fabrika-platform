@@ -12,6 +12,7 @@ import {
 	adoptExistingSourceConnection,
 	manifestCallback,
 	manifestHandoff,
+	reconcileSourceConnection,
 	repairSourceConnection,
 	sourceConnectionList,
 	sourceConnectionStatus,
@@ -73,6 +74,9 @@ class FakeSourceConnection implements SourceConnectionPort {
 	githubAppSlug = 'fabrika-source'
 	prepareFails = false
 	activateFails = false
+	webhookFailure: unknown | undefined
+	readonly webhookSecrets: string[] = []
+	readonly webhookUrls: string[] = []
 	abortAdoption: (() => void) | undefined
 
 	inspect(): Promise<typeof this.inspection> {
@@ -116,6 +120,9 @@ class FakeSourceConnection implements SourceConnectionPort {
 		this.calls.push('webhook')
 		this.transportKinds.push(input.transportKind)
 		if (input.signal.aborted) return Promise.reject(new DOMException('aborted', 'AbortError'))
+		if (this.webhookFailure !== undefined) return Promise.reject(this.webhookFailure)
+		this.webhookSecrets.push(input.secret)
+		this.webhookUrls.push(input.url)
 		return Promise.resolve({
 			connectionId: input.connectionId,
 			credentialSha256: input.credentialSha256,
@@ -625,6 +632,61 @@ describe('GitHub source connection workflow', () => {
 		expect((await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId))?.status).toBe('repair_required')
 	})
 
+	test('reconciles a stable keyed webhook from its purpose-bound vault secret without changing connection state', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await connectKeyed(env, source)
+		const before = await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)
+		const setupSecret = source.webhookSecrets.at(-1)
+		if (before === null || setupSecret === undefined) throw new Error('keyed connection fixture is incomplete')
+		source.calls.splice(0)
+		source.transportKinds.splice(0)
+		source.webhookSecrets.splice(0)
+		source.webhookUrls.splice(0)
+		const caller = auth()
+
+		const reconciled = await reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc'), caller), connectionId)
+
+		expect(reconciled).toMatchObject({ state: 'connected', connectionId })
+		expect(source.calls).toEqual(['webhook'])
+		expect(source.transportKinds).toEqual(['keyed-v2'])
+		expect(source.webhookSecrets).toEqual([setupSecret])
+		expect(source.webhookUrls).toEqual([`${ORIGIN}/webhooks/github/${connectionId}`])
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toEqual(before)
+		expect(caller.events.at(-1)).toEqual({
+			action: 'source.connection.reconcile',
+			resourceType: 'source_connection',
+			resourceId: connectionId,
+		})
+	})
+
+	test('fails a stable reconciliation closed with a bounded source reason', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await connectKeyed(env, source)
+		source.webhookFailure = { code: 'credentials_conflict', status: 409, message: 'must not reach the browser' }
+
+		await expect(reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), connectionId)).rejects.toMatchObject({
+			httpStatus: 502,
+			message: 'the source service refused: credentials_conflict, status 409',
+		})
+		await expect(reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), 'missing')).rejects.toMatchObject({ httpStatus: 404 })
+	})
+
+	test('requires a same-origin human to reconcile a stable connection', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await connectKeyed(env, source)
+		await expect(reconcileSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc'), auth('service')),
+			connectionId,
+		)).rejects.toMatchObject({ httpStatus: 403 })
+		await expect(reconcileSourceConnection(
+			deps(env, source, new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers: { origin: 'https://evil.example' } })),
+			connectionId,
+		)).rejects.toMatchObject({ httpStatus: 403 })
+	})
+
 	test('rejects a same-owner publish race atomically without retaining an attempt or manifest secret', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
@@ -669,6 +731,24 @@ async function connectLegacy(env: Env, source: FakeSourceConnection): Promise<st
 	if (adopted.state !== 'installation-required') throw new Error('legacy adoption did not reach installation')
 	const connected = await verifySourceInstallation(deps(env, source, mutationRequest('/api/rpc')), adopted.connectionId)
 	if (connected.state !== 'connected') throw new Error('legacy adoption did not connect')
+	return connected.connectionId
+}
+
+async function connectKeyed(env: Env, source: FakeSourceConnection): Promise<string> {
+	source.githubOwner = 'acme'
+	source.githubAppId = 123
+	source.githubAppSlug = 'fabrika-source'
+	const started = await startSourceConnection(
+		deps(env, source, mutationRequest('/api/rpc')),
+		{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+	)
+	const callback = await manifestCallback({
+		...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=created&state=${token(32)}`)),
+		exchangeManifest: () => Promise.resolve(createdApp()),
+	})
+	if (callback.status !== 303) throw new Error('keyed callback did not redirect')
+	const connected = await verifySourceInstallation(deps(env, source, mutationRequest('/api/rpc')), started.connectionId)
+	if (connected.state !== 'connected') throw new Error('keyed setup did not connect')
 	return connected.connectionId
 }
 

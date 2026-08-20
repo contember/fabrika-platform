@@ -49,9 +49,12 @@ const workflowMarkup = (workflow: GitHubSourceConnectionWorkflowDto | null, conn
 		invalidate: () => undefined,
 	})))
 
+const connectedMarkup = (connections: readonly GitHubSourceConnectionConnectedDto[]): string =>
+	renderToStaticMarkup(createElement(ConnectedConnections, { connections, invalidate: () => undefined }))
+
 describe('source connection collection components', () => {
 	test('renders the zero-connection private setup without a public-App control', () => {
-		const collection = renderToStaticMarkup(createElement(ConnectedConnections, { connections: [] }))
+		const collection = connectedMarkup([])
 		const workflow = workflowMarkup({ provider: 'zerops', kind: 'github-app', state: 'anonymous' }, 0)
 		expect(collection).toContain('No organizations connected')
 		expect(workflow).toContain('The new App is private')
@@ -60,7 +63,7 @@ describe('source connection collection components', () => {
 	})
 
 	test('keeps a migrated connection readable, including legacy public state', () => {
-		const markup = renderToStaticMarkup(createElement(ConnectedConnections, { connections: [connection('legacy-1', 'Acme', true)] }))
+		const markup = connectedMarkup([connection('legacy-1', 'Acme', true)])
 		expect(markup).toContain('GitHub source connection for Acme')
 		expect(markup).toContain('Acme-fabrika')
 		expect(markup).toContain('legacy public App')
@@ -68,11 +71,11 @@ describe('source connection collection components', () => {
 	})
 
 	test('distinguishes several organizations and offers an additive connection action', () => {
-		const markup = renderToStaticMarkup(createElement(ConnectedConnections, {
-			connections: [connection('connection-1', 'acme'), connection('connection-2', 'beta')],
-		}))
+		const markup = connectedMarkup([connection('connection-1', 'acme'), connection('connection-2', 'beta')])
 		expect(markup).toContain('GitHub source connection for acme')
 		expect(markup).toContain('GitHub source connection for beta')
+		expect(markup).toContain('aria-label="Reconcile GitHub source connection acme"')
+		expect(markup).toContain('data-connection-id="connection-2"')
 		expect(workflowMarkup(null, 2)).toContain('Add connection')
 	})
 
@@ -85,7 +88,7 @@ describe('source connection collection components', () => {
 	})
 
 	test('renders pending setup separately without hiding stable rows and preserves callback resume', () => {
-		const stable = renderToStaticMarkup(createElement(ConnectedConnections, { connections: [connection('connection-1', 'acme')] }))
+		const stable = connectedMarkup([connection('connection-1', 'acme')])
 		const pending = workflowMarkup({
 			provider: 'zerops',
 			kind: 'github-app',

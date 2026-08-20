@@ -55,6 +55,7 @@ import { appScope } from './iam'
 import { buildApiDeps } from './services'
 import {
 	adoptExistingSourceConnection,
+	reconcileSourceConnection,
 	repairSourceConnection,
 	sourceConnectionList,
 	sourceConnectionStatus,
@@ -167,6 +168,9 @@ export const controlRpcRouter: RpcRouterFor<ControlRpcContext, ControlRpcContrac
 		),
 		repair: rpc.procedure.input(sourceConnectionId).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
 			controlCall(() => repairSourceConnection(sourceConnectionContext(ctx), input.connectionId))
+		),
+		reconcile: rpc.procedure.input(sourceConnectionId).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
+			controlCall(() => reconcileSourceConnection(sourceConnectionContext(ctx), input.connectionId))
 		),
 	}),
 	apps: rpc.router({

@@ -110,6 +110,7 @@ export interface GitHubSourceConnectionRpcContract {
 	adoptExisting: RpcProcedure<void, GitHubSourceConnectionStatusDto>
 	verifyInstallation: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionStatusDto>
 	repair: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionStatusDto>
+	reconcile: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionStatusDto>
 }
 
 /** Portable Delivery control API, implemented alongside the backward-compatible REST transport. */

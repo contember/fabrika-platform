@@ -855,6 +855,13 @@ is still pending. Once connected, every status read also compares the source-rep
 digest and strict App identity with durable Control state. A mismatch or transient remote failure is
 reported as unavailable rather than silently trusting the database.
 
+A stable connection can be reconciled from the same page. Reconciliation reads the connection's
+purpose-bound webhook secret from the Control vault and reapplies its exact stored webhook URL,
+content type, TLS setting and secret through the credential-bound source client. It does not rotate
+the App credential, webhook secret, connection id or application binding. This is the repair path for
+remote webhook drift after a completed setup; the generic webhook route remains reserved for the
+legacy connection.
+
 A Zerops private application is registered against the connection whose canonical organization owns
 its repository. Control persists both the connection id and GitHub installation id or neither. Deploy
 resolution and scoped webhooks require that exact pair. Changing the repository owner of an already

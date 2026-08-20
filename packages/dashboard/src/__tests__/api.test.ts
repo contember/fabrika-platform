@@ -97,6 +97,7 @@ describe('Delivery RPC client', () => {
 		await client.sourceConnection.adoptExisting()
 		await client.sourceConnection.verifyInstallation({ connectionId: 'connection-1' })
 		await client.sourceConnection.repair({ connectionId: 'connection-1' })
+		await client.sourceConnection.reconcile({ connectionId: 'connection-1' })
 		expect(calls).toEqual([
 			{ method: 'sourceConnection.status', input: null },
 			{ method: 'sourceConnection.list', input: { cursor: 'page-2', limit: 50 } },
@@ -112,6 +113,7 @@ describe('Delivery RPC client', () => {
 			{ method: 'sourceConnection.adoptExisting', input: null },
 			{ method: 'sourceConnection.verifyInstallation', input: { connectionId: 'connection-1' } },
 			{ method: 'sourceConnection.repair', input: { connectionId: 'connection-1' } },
+			{ method: 'sourceConnection.reconcile', input: { connectionId: 'connection-1' } },
 		])
 		expect(JSON.stringify(calls)).not.toContain('privateKey')
 		expect(JSON.stringify(calls)).not.toContain('webhookSecret')

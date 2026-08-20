@@ -439,6 +439,40 @@ export async function repairSourceConnection(deps: SourceConnectionWorkflowDeps,
 	return workflowDto(deps.source.provider, current)
 }
 
+/** Reapply one stable connection's durable webhook binding without rotating its credential or secret. */
+export async function reconcileSourceConnection(deps: SourceConnectionWorkflowDeps, connectionId: string): Promise<GitHubSourceConnectionStatusDto> {
+	requireHuman(deps.auth)
+	requireSameOrigin(deps.env, deps.request)
+	const connection = await deps.env.REPOSITORIES.githubConnections.getConnectionById(connectionId)
+	if (connection === null) throw new SourceConnectionWorkflowError(404)
+	const secretVault = await vault(deps.env)
+	const webhookSecret = await secretVault.getSecretForPurpose(connection.webhookSecretRef, {
+		scope: 'platform',
+		label: githubWebhookSecretLabel(connection.connectionId),
+	})
+	let configured: Awaited<ReturnType<SourceConnectionPort['configureWebhook']>>
+	try {
+		configured = await deps.source.configureWebhook({
+			connectionId: connection.connectionId,
+			transportKind: connection.transportKind,
+			credentialSha256: connection.credentialSha256,
+			url: connection.webhookUrl,
+			secret: webhookSecret,
+			signal: deps.request.signal,
+		})
+	} catch (error) {
+		throwIfAborted(deps.request.signal)
+		throw sourceUnavailable(error)
+	}
+	if (
+		configured.connectionId !== connection.connectionId || configured.credentialSha256 !== connection.credentialSha256
+		|| configured.webhook.url !== connection.webhookUrl
+		|| configured.webhook.contentType !== 'json' || configured.webhook.insecureSsl !== '0'
+	) throw new SourceConnectionWorkflowError(502, 'the source service returned a mismatched webhook binding')
+	await audit(deps.auth, 'source.connection.reconcile', connection.connectionId)
+	return connectionDto(deps.source.provider, connection)
+}
+
 async function advanceConfiguration(
 	deps: SourceConnectionWorkflowDeps,
 	initial: GitHubSetupAttempt,
