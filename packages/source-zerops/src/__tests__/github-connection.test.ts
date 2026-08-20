@@ -400,6 +400,48 @@ describe('source GitHub connection activation', () => {
 		})
 	})
 
+	test('rebinds a restarted container so verification and webhook configuration survive a redeploy', async () => {
+		// A container that booted from `GITHUB_APP_CREDENTIALS` has the key and NOTHING else: no
+		// connection id, no App identity. It must still serve, because the service runs more than one
+		// container and every platform deploy replaces them — the console's `status` call can bind one
+		// while the operator's next click lands on another.
+		const value = bundle()
+		const digest = await sha256ZeropsSourceCredentialBundle(value)
+		const secrets: string[] = []
+		const restarted = await GitHubConnection.create({
+			credentialBundle: value,
+			createClient: async () => ({
+				...client(),
+				updateWebhookConfig: async (input) => {
+					secrets.push(input.secret)
+					return { url: input.url, contentType: 'json', insecureSsl: '0' }
+				},
+			}),
+		})
+		expect(
+			await restarted.verifyInstallations(
+				'connection-1',
+				digest,
+				{ kind: 'organization', organization: 'contember' },
+				new AbortController().signal,
+			),
+		).toMatchObject({ installation: { status: 'installed', accountLogin: 'contember' } })
+		expect(
+			await restarted.configureWebhook(
+				'connection-1',
+				digest,
+				'https://control.example.test/webhooks/github',
+				'must-not-leak',
+				new AbortController().signal,
+			),
+		).toBeDefined()
+		expect(secrets).toEqual(['must-not-leak'])
+		// The binding is to ONE connection: a second id may not borrow the credential it did not activate.
+		await expect(
+			restarted.verifyInstallations('connection-2', digest, { kind: 'organization', organization: 'contember' }, new AbortController().signal),
+		).rejects.toMatchObject({ code: 'credentials_conflict' })
+	})
+
 	test('rejects repository grants that resolve to different installations or accounts', async () => {
 		let call = 0
 		const connection = await GitHubConnection.create({

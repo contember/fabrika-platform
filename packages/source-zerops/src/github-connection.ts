@@ -93,6 +93,12 @@ interface ActiveSnapshot extends SourceGitHubSnapshot {
 	readonly connectionId?: string
 }
 
+/** A snapshot whose identity binding is known, which is the only kind an operation may act through. */
+interface BoundSnapshot extends ActiveSnapshot {
+	readonly githubApp: ZeropsSourceGitHubAppIdentityV1
+	readonly connectionId: string
+}
+
 interface KeyedSnapshot extends SourceGitHubSnapshot {
 	readonly connectionId: string
 	readonly githubApp?: ZeropsSourceGitHubAppIdentityV1
@@ -229,40 +235,14 @@ export class GitHubConnection implements SourceGitHubConnection {
 
 	async status(connectionId: string, signal: AbortSignal): Promise<ZeropsSourceCredentialStatusResponseV1> {
 		throwIfAborted(signal, 'credentials')
-		const snapshot = this.active
-		if (snapshot === undefined) return buildZeropsSourceCredentialStatusResponse({ connectionId, state: 'anonymous' })
-		if (snapshot.connectionId !== undefined && snapshot.connectionId !== connectionId) {
-			throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
-		}
-		let githubApp = snapshot.githubApp
-		if (githubApp === undefined) {
-			try {
-				githubApp = verifiedIdentity(await abortable(snapshot.client.getAuthenticatedApp(signal), signal), snapshot.appId)
-				throwIfAborted(signal, 'credentials')
-			} catch (error) {
-				throw credentialFailure(error, signal)
-			}
-			const current = this.active
-			if (current === snapshot) {
-				this.active = { ...snapshot, githubApp, connectionId }
-			} else if (
-				current === undefined || current.connectionId !== connectionId || current.credentialSha256 !== snapshot.credentialSha256
-			) {
-				throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
-			} else {
-				githubApp = current.githubApp ?? githubApp
-			}
-		}
-		const current = this.active
-		if (current === undefined || current.connectionId !== connectionId) {
-			throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
-		}
+		if (this.active === undefined) return buildZeropsSourceCredentialStatusResponse({ connectionId, state: 'anonymous' })
+		const bound = await this.bindActive(connectionId, undefined, signal)
 		return buildZeropsSourceCredentialStatusResponse({
 			connectionId,
 			state: 'active',
 			credentialVersion: 1,
-			credentialSha256: current.credentialSha256,
-			githubApp,
+			credentialSha256: bound.credentialSha256,
+			githubApp: bound.githubApp,
 		})
 	}
 
@@ -360,7 +340,7 @@ export class GitHubConnection implements SourceGitHubConnection {
 		secret: string,
 		signal: AbortSignal,
 	): Promise<ZeropsSourceWebhookConfigureResponseV1> {
-		const snapshot = this.requireActive(connectionId, credentialSha256)
+		const snapshot = await this.bindActive(connectionId, credentialSha256, signal)
 		try {
 			const update = snapshot.client.updateWebhookConfig
 			const read = snapshot.client.getWebhookConfig
@@ -387,7 +367,7 @@ export class GitHubConnection implements SourceGitHubConnection {
 		scope: ZeropsSourceInstallationScopeV1,
 		signal: AbortSignal,
 	): Promise<ZeropsSourceInstallationsVerifyResponseV1> {
-		const snapshot = this.requireActive(connectionId, credentialSha256)
+		const snapshot = await this.bindActive(connectionId, credentialSha256, signal)
 		try {
 			const installation = scope.kind === 'organization'
 				? await resolveOrganizationInstallation(snapshot.client, scope.organization, signal)
@@ -409,15 +389,59 @@ export class GitHubConnection implements SourceGitHubConnection {
 		}
 	}
 
-	private requireActive(connectionId: string, credentialSha256: string): ActiveSnapshot {
+	/**
+	 * Return the snapshot an operation may act through, REBINDING the legacy one when this container
+	 * has never seen an activation.
+	 *
+	 * The legacy bundle in `GITHUB_APP_CREDENTIALS` carries an App id and a private key and nothing
+	 * else — no `connectionId`, no App identity. Those are set only by `activate`, in memory. So every
+	 * operation must be able to recover them, not just `status`, and two things guarantee the need:
+	 * this service runs MORE THAN ONE CONTAINER, so a caller's `status` can bind container A while its
+	 * next request lands on B, and a platform deploy restarts all of them. When only `status` could
+	 * rebind, `verifyInstallations` and `configureWebhook` answered `credentials_conflict` at random,
+	 * which reached the console as a bare 502.
+	 *
+	 * `credentialSha256` is omitted by `status`, which authenticates the caller but carries no digest.
+	 * A CONFLICTING binding is still refused: a snapshot already bound to another connection, or one
+	 * whose digest does not match, is never rebound to the caller's.
+	 */
+	private async bindActive(
+		connectionId: string,
+		credentialSha256: string | undefined,
+		signal: AbortSignal,
+	): Promise<BoundSnapshot> {
 		const keyed = this.keyed.get(connectionId)
-		if (keyed !== undefined && keyed.githubApp !== undefined && keyed.credentialSha256 === credentialSha256) return keyed
+		if (keyed?.githubApp !== undefined && (credentialSha256 === undefined || keyed.credentialSha256 === credentialSha256)) {
+			return { ...keyed, githubApp: keyed.githubApp }
+		}
 		const snapshot = this.active
 		if (
-			snapshot === undefined || snapshot.githubApp === undefined || snapshot.connectionId !== connectionId
-			|| snapshot.credentialSha256 !== credentialSha256
+			snapshot === undefined || (credentialSha256 !== undefined && snapshot.credentialSha256 !== credentialSha256)
+			|| (snapshot.connectionId !== undefined && snapshot.connectionId !== connectionId)
 		) throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
-		return snapshot
+		if (snapshot.githubApp !== undefined && snapshot.connectionId !== undefined) {
+			return { ...snapshot, githubApp: snapshot.githubApp, connectionId: snapshot.connectionId }
+		}
+		let githubApp: ZeropsSourceGitHubAppIdentityV1
+		try {
+			githubApp = snapshot.githubApp
+				?? verifiedIdentity(await abortable(snapshot.client.getAuthenticatedApp(signal), signal), snapshot.appId)
+			throwIfAborted(signal, 'credentials')
+		} catch (error) {
+			throw credentialFailure(error, signal)
+		}
+		const bound: BoundSnapshot = { ...snapshot, githubApp, connectionId }
+		// Only publish the binding if nothing replaced the snapshot while GitHub was answering; a
+		// concurrent activation owns `this.active` and its binding is the newer fact.
+		if (this.active === snapshot) {
+			this.active = bound
+			return bound
+		}
+		const current = this.active
+		if (current === undefined || current.connectionId !== connectionId || current.credentialSha256 !== snapshot.credentialSha256) {
+			throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
+		}
+		return { ...current, githubApp: current.githubApp ?? githubApp, connectionId }
 	}
 }
 
