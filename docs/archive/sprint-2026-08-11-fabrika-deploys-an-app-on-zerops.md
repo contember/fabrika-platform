@@ -1,5 +1,61 @@
 # Sprint — add a GitHub repository, get a deployed app on Zerops (2026-08-11)
 
+> ## OUTCOME — shipped 2026-08-20
+>
+> **The whole gate is met on the live Zerops installation.** Fabrika registered the example
+> application, resolved an exact Git commit, uploaded the repository archive, built it on Zerops and
+> served it behind its namespace proxy. The same commit
+> `1919eb312186b3b5618ac8413bf6327f98011000` first deployed while the repository was public (run
+> `01a0199b-d112-7004-9482-da5ebcbb8423`, app version sequence 5) and then while it was private through
+> the operator-owned GitHub App (run `01a01fba-4956-709d-aa17-1862c880c8fe`, sequence 15). Both used
+> Fabrika's app-version upload path. The current private revision
+> `0d608e0071119c85ac144f78c1ad1509f7a22ab7` was restored afterwards by run
+> `01a01fc5-9e7a-7033-b9a1-074278809fc3`; sequence 16 is `ACTIVE` and `/healthz` answers 200.
+>
+> **The browser and Operations clauses are also exercised.** A human followed the cross-host IAM
+> handoff and loaded the protected Operations witness page on the application origin. The exact Bun
+> bundle served by that page was then executed by a clean Chromium session on the same live origin. Its
+> envelope reached the public Operations ingest with 202 and became occurrence
+> `01a01ff7-06b4-703a-9282-50af58565f46`, event `dcc19727db754bf396dd86cc239b1e72`, under the deployed
+> application's production source. The private operator API read back three exception frames and the
+> exact release for revision `0d608e0071119c85ac144f78c1ad1509f7a22ab7`, linked to the succeeded
+> restore run above. The human's browser blocked the telemetry request before it reached
+> Caddy even though `Sentry.flush()` returned true; the clean Chromium witness is the server-confirmed
+> transport proof, and the run log records why the page's local `Sent` label is not an acknowledgement.
+>
+> **The failure and containment witnesses are live, not only fake-API tests.** A deliberately failing
+> build reached `BUILD_FAILED`/`FAILED`, and Fabrika failed run
+> `01a01fb5-135f-702f-aa3c-0468fce1e532` within seconds while the old active version kept serving.
+> Reapplying an unchanged manifest after release `v0.0.22` preserved the exact active application
+> version and health; registration no longer activates an empty code version on an existing service.
+>
+> **Commits.** WU1 → `b34fb59` · WU2 → `8e95c1c` · WU4 → `ebb4d3c` · WU6 → `96a782b` · WU3's
+> source transport and Control workflow → `d091d67`, `49f3b17`, `4084234`, `4ab9ec2`, `5bc1f0e`,
+> `68854f3`, `71e406a`, `459bc64`, `ecd49b9` · multi-connection defects exposed by the live flow →
+> `225e47b`, `f668ff5`, `df593d1`, `60b40d6` · durable credential recovery → `b7bc771`, `87aa2ed` ·
+> steady-state registration containment → `222c5f4` (`v0.0.22`). The detailed checkpoint map remains
+> in the run log below.
+>
+> **Verification.** The final repository run reported 2,528 passed, 162 environment-gated skips and
+> zero failures; full typecheck, Biome, dprint and CI run `32381100311` passed. Release run
+> `32381243071` published `v0.0.22`, and the installation sidecar rollout completed in CI. Credential
+> scans covered three Fabrika run logs, the public/private/current Zerops build logs, eight hours of
+> source/control/proxy runtime logs, and the relevant process and app-version metadata. Private-key
+> markers, GitHub token forms, authorization headers and credential-bearing GitHub URLs all had zero
+> matches.
+>
+> **Backlog closed.** Items 47 (private GitHub application source) and 70 (failed build hangs
+> `await-deploy`) are consumed and deleted. The production two-project topology and custom domains
+> remain in [05](../backlog/05-bring-up-on-a-real-zerops-account.md).
+>
+> **Decision and deferred work.** This sprint accepts the existing local manifest compiler and Control
+> registration RPC: deployed code still comes from the exact repository commit, while application
+> TypeScript executes only on the operator's machine. One local build-and-register command is follow-up
+> [78](../backlog/78-register-a-zerops-app-from-local-config-in-one-command.md). A second private
+> organization deploy and the remaining legacy-v1 half of the compatibility matrix belong to the still-active
+> [multi-connection sprint](../sprints/sprint-2026-08-14-multiple-private-github-source-connections.md).
+> Complete Zerops source-map artifact correlation remains [36](../backlog/36-complete-zerops-release-artifact-correlation.md).
+
 **Goal.** An operator adds a GitHub repository — **public or private** — to the control plane, and
 fabrika deploys it into the Zerops account. Nothing short of that counts as done.
 
@@ -14,7 +70,7 @@ A work unit that does not move that criterion is out of scope, however tempting.
 
 **Operator prerequisite for the private gate.** An authenticated administrator opens **Settings →
 Source** in Control, creates or adopts the organization-owned GitHub App and approves its installation
-on `contember/fabrika-example-zerops` in GitHub's UI. `platform init` repairs the source transport but
+on the standalone example repository in GitHub's UI. `platform init` repairs the source transport but
 is not a second normal App-creation path. No Zerops GitHub OAuth grant or per-service GUI connection is
 part of the product path. The public source-upload path works anonymously; the private gate needs the
 installed App.
@@ -115,7 +171,7 @@ Zerops build pipeline.
 
 ### WU3 — An operator-owned GitHub App delivers source archives (effort L) · code complete; live gate open
 
-- **Problem.** [`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md). The native Zerops
+- **Problem.** Backlog 47, consumed by this sprint. The native Zerops
   integration requires a user identity even after the account OAuth grant exists. The control plane's
   project-scoped integration token cannot configure it, so it cannot be the unattended product path.
 - **Verify first — passed live.** The supported `zops push` sequence ran against disposable service
@@ -182,7 +238,7 @@ Zerops build pipeline.
 
 ### WU4 — A failed build fails the deploy (effort S) · protects every other unit
 
-- **Problem.** [`70`](../backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md),
+- **Problem.** Backlog 70, consumed by this sprint,
   found while scoping this sprint. A `stack.build` that fails before it creates a container leaves its
   app version at `WAITING_TO_BUILD` permanently, and `await-deploy` polls only the version, with a
   70-minute timeout.
@@ -263,23 +319,21 @@ Zerops build pipeline.
    GitHub App installed on selected repositories. Fabrika does not operate a central App or hold a
    credential shared across operators. → [ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md).
 
-## Open decision — the gate says "add a repository", registration also wants a manifest
+## Decision — registration keeps manifest compilation local
 
-Today an operator registers an app by pasting a locally built `fabrika.manifest.json` into a textarea.
-So what the gate literally asks for — add a repository, get a deploy — is today "add a repository AND
-paste a compiled artifact". Three ways out, and this needs an answer before WU2 is called done:
+Today an operator can register an app by pasting a locally built `fabrika.manifest.json` into the
+dashboard or by passing the file to `fabrika control register`. The gate therefore remains "add a
+repository AND compile its registration artifact locally", even though the deployed code itself comes
+only from the resolved repository commit.
 
-- **Accept it for this sprint** and say so in the outcome. The gate's substance is that the deployed
-  CODE comes from the repository, which WU2 and WU3 deliver; the artifact is registration ergonomics.
-- **The CLI pushes the manifest** to a new endpoint, so the operator runs one command instead of copying
-  a file. Small, and does not change who evaluates the app's config.
-- **The control plane builds the manifest itself** from the repository. This is the honest reading of
-  the gate and the largest of the three by far — it means the control plane clones an app repository and
-  **evaluates its TypeScript config**, which is running the app author's code inside the plane that
-  holds every credential. That is a security decision needing its own ADR, not a work unit.
+The accepted choice is to keep compilation local for this sprint. Control does not clone a repository
+or evaluate an application author's TypeScript while holding platform credentials. No new upload
+endpoint is necessary: the existing typed registration RPC already carries the complete manifest.
 
-Recommendation: the first for this sprint, the second as a follow-up item, and the third only behind an
-ADR that faces the sandboxing question directly.
+The ergonomic follow-up is one local command that compiles the manifest in memory and invokes the
+existing registration RPC → [backlog 78](../backlog/78-register-a-zerops-app-from-local-config-in-one-command.md).
+A URL-only Control workflow would instead need either a committed generated manifest or a sandboxed
+builder. The latter changes the security model and still requires an ADR before implementation.
 
 ## Sequencing
 
@@ -345,30 +399,29 @@ public path on one would have produced apps that deploy until they go private. �
 
 **Finding — a failed `stack.build` leaves the app version at `WAITING_TO_BUILD` forever.** The import's
 build process was `FAILED` 500 ms after starting (12:33:41.202 → 12:33:41.702), with no build container
-and no message on the process object; its version had not moved eight minutes later. →
-[`70`](../backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md), promoted into
-this sprint as WU4.
+and no message on the process object; its version had not moved eight minutes later. → backlog 70,
+promoted into this sprint as WU4 and consumed at close.
 
 ### WU1 checkpoint (2026-08-11)
 
 The example is now a self-contained repository-root tree while remaining under
 `examples/zerops-app/` for workspace typecheck and test coverage. ADR-0028 records the repository-root
-invariant. The public mirror is `contember/fabrika-example-zerops`.
+invariant. A standalone repository mirrors that tree for live deployment.
 
 An isolated export passed `bun install --frozen-lockfile`, typecheck and all 17 example tests against
 the published `@fabrika/*` 0.0.4 packages. The workspace's example, topology and Zerops YAML suites
 passed 152 tests.
 
-Live in `fabrika-install-test`, disposable service `wu1root` built from
-`https://github.com/contember/fabrika-example-zerops@main` with explicit setup `notesapi`. Zerops read
+Live in `fabrika-install-test`, disposable service `wu1root` built from the standalone repository's
+`main` branch with explicit setup `notesapi`. Zerops read
 the repository-root descriptor, completed every build command, and uploaded a 47.3 MiB deploy artifact.
 The later deploy failed as expected because this build-only probe had neither the app database nor its
 runtime environment. The disposable service was deleted afterwards.
 
 ### GitHub authorization boundary (2026-08-11)
 
-The operator completed the Zerops GitHub OAuth flow, and the GUI repository picker listed
-`contember/fabrika-example-zerops`. The earlier inference that authorization had not completed was
+The operator completed the Zerops GitHub OAuth flow, and the GUI repository picker listed the
+standalone example repository. The earlier inference that authorization had not completed was
 wrong: `getGithubRepositories` was being called with an identity that cannot consume a user's grant.
 
 The decisive probe used the exact project-scoped integration token stored on `control`, not a local
@@ -558,7 +611,7 @@ not a private WU3 blocker.
 
 ### The public half of the gate is met (2026-08-19)
 
-`notes/prod` builds from `contember/fabrika-example-zerops` and serves through the namespace proxy:
+The example application builds from its standalone repository and serves through the namespace proxy:
 
 ```
 GET https://proxy-2b16-8080.prg1.zerops.app/healthz   → 200 {"status":"ok"}
@@ -755,7 +808,7 @@ delete or re-register `notes`, change its sticky source binding, create a new Ap
 credential slot.
 
 Run `01a01f10-c0ea-703f-b26c-9500b10435d6` is the live positive witness. Against the still-private
-`contember/fabrika-example-zerops` repository it resolved commit
+standalone example repository it resolved commit
 `6b686fc35d4f44debd4f0725478f8e7fe9faff8e`, finished the Zerops build, activated app version
 `z93o2XEBSLiAbNiRg6ri2A`, and reached `succeeded`. The deployed `/healthz` answered `200`. Inspection
 of the version metadata found no private-key marker, GitHub token prefix or credential-bearing GitHub
@@ -789,3 +842,52 @@ Zerops built application version 10 under the same run id and activated app vers
 artifact-upload path rather than Zerops Git integration. The deployed `/healthz` answered
 `200 {"status":"ok"}`. This closes WU2's private-source deploy witness and the scoped push-triggered
 deploy witness found open during the live gate.
+
+## The exact public/private A/B and remaining live gates closed (2026-08-20)
+
+The earlier private deploy proved the transport but not the sprint's exact A/B clause: its public and
+private runs named different commits. The final comparison reused commit
+`1919eb312186b3b5618ac8413bf6327f98011000`, which public run
+`01a0199b-d112-7004-9482-da5ebcbb8423` had already resolved and deployed while the example repository
+was public. With the repository private and bound to its keyed-v2 GitHub App connection, run
+`01a01fba-4956-709d-aa17-1862c880c8fe` resolved the same SHA, uploaded it, built app version
+`UJzbMYVeTg6PaOcCUzVXlA` and reached `succeeded`. The old and new versions both report source `CLI` and
+no public Git source, GitHub integration or GitLab integration.
+
+The old manifest was used only for that comparison. The original current manifest was restored and
+run `01a01fc5-9e7a-7033-b9a1-074278809fc3` redeployed commit
+`0d608e0071119c85ac144f78c1ad1509f7a22ab7`. App version `QlqX3i5sQ8OtPrXe4iAdjQ`, sequence 16, is
+`ACTIVE`; `/healthz` remained 200 throughout the build and after activation.
+
+The credential-absence scan did not print candidate values. It counted sensitive patterns across the
+public baseline, exact private A/B and restored-current Fabrika logs; all three corresponding Zerops
+build logs; eight hours of source, control and proxy runtime logs; and the relevant process and
+app-version metadata. Every count was zero for PEM private-key headers, GitHub token prefixes,
+fine-grained PATs, authorization headers, `x-access-token` URLs and generic credential-bearing GitHub
+URLs.
+
+WU4 received its live failure witness against a temporary branch whose valid `zerops.yaml` ran
+`exit 23` during the build. Zerops app version `FiXLKIVBSyiHONfgvD5Svg` reached `BUILD_FAILED`, process
+`S68gRz1cSum3VSraFShfbg` reached `FAILED`, and run
+`01a01fb5-135f-702f-aa3c-0468fce1e532` failed in seconds with both ids and statuses. The previously
+active version kept serving 200. The temporary branch was deleted. The suite already covers the
+original live pair `process FAILED` + `version WAITING_TO_BUILD`.
+
+The same live work exposed a steady-state registration defect. Provisioning imports always carried
+`startWithoutCode: true`, so changing an existing application's manifest could activate an empty code
+version before the next deploy. The live probe briefly made the application unavailable, and a normal
+deploy restored it immediately. Commit `222c5f4` makes registration preflight all declared services:
+none present uses the provisioning import, all present uses the steady import, and a partial set fails
+before mutation. After `v0.0.22` rolled out, reapplying the unchanged manifest preserved the exact
+active app-version id and sequence and `/healthz` stayed 200.
+
+Finally, a human followed the IAM handoff and loaded the protected Operations SDK page. The human's
+browser generated an event id but blocked the telemetry request before Caddy; `Sentry.flush()` still
+returned true, so the witness page's `Sent` label is only a local queue result and must not be used as
+server evidence. A clean agent-browser Chromium session then executed the exact Bun-produced bundle
+served by the application on the live application origin. Caddy recorded the envelope POST with 202.
+The private operator API read back event `dcc19727db754bf396dd86cc239b1e72`, marker
+`40140031-ab3a-44e7-9d14-cd8f119a003d`, three frames and a release for revision
+`0d608e0071119c85ac144f78c1ad1509f7a22ab7`. Operations links that release to the restored succeeded
+deploy run. This closes all three WU5 clauses without treating a client-side flush as an ingest
+acknowledgement.

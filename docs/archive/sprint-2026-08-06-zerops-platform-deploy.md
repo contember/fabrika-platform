@@ -352,5 +352,5 @@ Not started. Four things stand in front of it, and only the first is ours to fix
    `local` with a public host, and the manifest merge, whose failure mode is taking a deployed
    application offline.
 
-Backlog [47](../backlog/47-give-the-zerops-path-a-private-git-source.md) does **not** block this: the
+The later [application deploy sprint](sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md) does **not** block this: the
 platform services build from the public repository, and the OAuth link it needs is for a private APP.

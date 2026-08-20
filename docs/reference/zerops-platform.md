@@ -518,8 +518,9 @@ Measured on a throwaway `alpine/bun@1.3` service (`wu1probe`), since deleted, ag
 configured by handing one to an import or to a trigger — so **every** deploy must supply it again.
 Zerops also offers a durable user-scoped repository integration, but the Fabrika installation token
 cannot consume that user's OAuth grant. Fabrika's unattended private-source path therefore creates an
-app version and uploads source through the operator-owned GitHub App described by
-[`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md) and ADR-0029.
+app version and uploads source through the operator-owned GitHub App described by ADR-0029 and proven
+by the archived
+[application deploy sprint](../archive/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md).
 
 Two smaller things, both worth knowing before debugging one:
 
@@ -529,9 +530,9 @@ Two smaller things, both worth knowing before debugging one:
   call accepted.
 - **A `stack.build` that fails before it creates a container leaves its app version at
   `WAITING_TO_BUILD` permanently.** The process was `FAILED` 500 ms in and carried no message; the
-  version had not moved eight minutes later. Polling the version alone therefore cannot distinguish a
-  failed build from a queued one — see
-  [`70`](../backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md).
+  version had not moved eight minutes later. Fabrika now watches both objects and fails immediately
+  when the process fails; the live witness is in the archived
+  [application deploy sprint](../archive/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md).
 
 The upload row was measured on 2026-08-11 with the exact project-scoped integration token installed on
 `control`, against disposable service `wu3uploadprobe` in `fabrika-install-test` (deleted afterwards).
@@ -694,8 +695,7 @@ there.
 ### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — updating a running installation
 
 How the four platform services on `fabrika-test` were taken from a two-day-old build to `HEAD`. There
-is no git remote on this repository and `buildFromGit` needs a public URL
-([backlog 47](../backlog/47-give-the-zerops-path-a-private-git-source.md)), so the source reaches the
+is no git remote on this repository and `buildFromGit` needs a public URL, so the source reaches the
 platform as an upload: `zops push <service> --project fabrika-test`, which archives the working tree
 (git-tracked plus untracked-not-ignored), uploads it, and runs the repository-root `zerops.yaml` setup
 whose name matches the service hostname.
@@ -852,9 +852,11 @@ For every new connection, Control then:
 
 GitHub masks the webhook secret, so the structural readback cannot compare that value. Control starts
 using the new vault-backed secret after structural webhook verification, including while installation
-is still pending. Once connected, every status read also compares the source-reported credential
-digest and strict App identity with durable Control state. A mismatch or transient remote failure is
-reported as unavailable rather than silently trusting the database.
+is still pending. The compatibility status endpoint compares the source-reported credential digest and
+strict App identity with durable Control state. The paginated connection list projects stable database
+rows without a source call, so its `connected` label does not prove that the durable credential slot is
+present. Resolve, upload, webhook handling and explicit reconciliation still fail closed on a missing or
+conflicting credential.
 
 A stable connection can be reconciled from the same page. Reconciliation reads the connection's
 purpose-bound webhook secret from the Control vault and reapplies its exact stored webhook URL,
@@ -897,13 +899,14 @@ enter the sidecar checkout, repository or GitHub Environment.
 
 Rollout proceeds source → proxy → Control/dashboard so the existing v1 client and generic webhook
 remain compatible before a keyed v2 connection is added. Rolling source back after a v2 slot exists is
-unsupported; recovery rolls forward because an old source must reject v2 calls. The existing App stays
-on the legacy-v1 generic `/webhooks/github` route, while each new App uses its keyed-v2 scoped
-`/webhooks/github/:connectionId` route. One unavoidable orphan window remains after GitHub accepts
+unsupported; recovery rolls forward because an old source must reject v2 calls. An App migrated as a
+`legacy-v1` connection stays on the generic `/webhooks/github` route, while each `keyed-v2` App uses
+its scoped `/webhooks/github/:connectionId` route. One unavoidable orphan window remains after GitHub accepts
 manifest conversion but before the callback durably stores the response; such an App must be deleted
-and recreated. Live acceptance evidence is tracked in the
-[active multi-connection sprint](../sprints/sprint-2026-08-14-multiple-private-github-source-connections.md)
-and [private-source backlog item](../backlog/47-give-the-zerops-path-a-private-git-source.md).
+and recreated. Multi-connection acceptance evidence is tracked in the
+[active multi-connection sprint](../sprints/sprint-2026-08-14-multiple-private-github-source-connections.md).
+The single-connection public/private deployment gate is recorded by the archived
+[application deploy sprint](../archive/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md).
 
 ## Fabrika placement mapping
 

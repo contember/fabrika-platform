@@ -9,6 +9,11 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [A public and private GitHub application deployed on Zerops (2026-08-11)](sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md)
+  — one exact application commit deployed first from a public repository and then from the same
+  repository after it became private, through an operator-owned GitHub App and Fabrika's source-upload
+  path. Also proves fast failed-build detection, readable run logs, cross-host sign-in and
+  release-correlated browser exception ingest on the live installation.
 - [An unattended `platform deploy` on Zerops (2026-08-06)](sprint-2026-08-06-zerops-platform-deploy.md)
   — the command an operator's pipeline calls: generated proxy manifest, ordered deploy, fail-closed
   environment name, and the sidecar repository that invokes it. Its live acceptance was performed by

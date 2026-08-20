@@ -289,7 +289,7 @@ while preserving the already-live v1 connection as a compatibility path. The gov
   `FABRIKA_TEST_POSTGRES_URL`; a skip is recorded as unverified, not green evidence.
 - **Write territory.** None. WU9 runs commands and reports evidence only.
 
-### WU10 — Roll out and collect live-only witnesses (effort L)
+### WU10 — Roll out and collect live-only witnesses (effort L) · partially complete
 
 - **Problem.** Local doubles cannot prove Zerops accepts dynamic hashed environment keys, exact reread
   survives a source restart, or GitHub and Zerops complete a real second-organization deployment.
@@ -300,16 +300,16 @@ while preserving the already-live v1 connection as a compatibility path. The gov
 - **Scope.** Deploy source first and prove v1 compatibility. Deploy proxy second and probe both webhook
   paths. Deploy Control/dashboard last. Create a second private organization connection through the UI,
   restart source, verify both clients recover, register the second organization's repository and deploy
-  it. Exercise one genuine positive delivery from the existing App through the legacy-v1 generic
+  it. Exercise one genuine positive delivery from an App bound to `legacy-v1` through the generic
   `/webhooks/github` route and one from the new App through its keyed-v2 scoped
   `/webhooks/github/:connectionId` route.
 - **Acceptance / witness.** Record these live facts with redacted identifiers and timestamps:
   (1) Zerops accepts the derived create-only v2 environment key and exact value reread;
   (2) source restart reconstructs the old v1 client and the new v2 client;
-  (3) the existing organization's generic webhook/deploy remains healthy;
+  (3) a migrated `legacy-v1` connection's generic webhook/deploy remains healthy;
   (4) a second private organization App completes callback, install and verification;
   (5) that organization's private repository resolves, uploads, builds and becomes active;
-  (6) one genuine positive delivery from the existing App through the legacy-v1 generic
+  (6) one genuine positive delivery from an App bound to `legacy-v1` through the generic
   `/webhooks/github` route triggers its bound app; and (7) one genuine positive delivery from the new
   App through its keyed-v2 scoped `/webhooks/github/:connectionId` route triggers its bound app.
   Negative cross-binding isolation remains a deterministic local gate unless a separately reviewed
@@ -392,14 +392,17 @@ focused tests; cross-unit integration and reference-doc updates land before the 
 
 ### Live-only gates
 
-- Zerops dynamic hashed environment-key creation, exact reread and persistence after source restart.
-- Existing Zerops v1 connection and generic webhook survive the ordered rollout.
-- A second organization-owned private App is created, installed and verified through Control.
-- A private repository in that second organization resolves, uploads, builds and deploys on Zerops.
-- One genuine positive delivery from the existing App traverses the legacy-v1 generic
-  `/webhooks/github` route, and one from the new App traverses its keyed-v2 scoped
-  `/webhooks/github/:connectionId` route. Each reaches its bound application. Negative cross-binding
-  isolation is proved locally unless a safe live method is reviewed first.
+- ✔ Zerops accepted derived hashed environment keys, exact reread completed, and the legacy base plus
+  three keyed-v2 slots persisted across source restarts.
+- ✔ Two additional organization-owned private Apps completed create, install and verification through
+  Control.
+- ✔ A genuine keyed-v2 scoped `/webhooks/github/:connectionId` delivery reached its bound private
+  application and deployed it.
+- ⚠ A private repository owned by a second connected organization still must resolve, upload, build
+  and deploy on Zerops.
+- ⚠ A genuine `legacy-v1` connection still must deliver through the generic `/webhooks/github` route
+  to its bound application. The live application used for the keyed witness is not a substitute.
+- ✔ Negative cross-binding isolation is proved deterministically in the local composed fixture.
 
 ## Run log
 
@@ -433,3 +436,15 @@ focused tests; cross-unit integration and reference-doc updates land before the 
   a second private organization App create/install/verify flow, its private repository deploy, and
   one genuine positive delivery through the existing App's legacy-v1 generic `/webhooks/github` route
   plus one through the new App's keyed-v2 scoped `/webhooks/github/:connectionId` route.
+- 2026-08-20 — The live setup now has three connected organization-owned Apps. Two additional
+  organizations completed create/install/verify through the browser. Zerops currently holds the
+  legacy base credential plus three derived keyed-v2 slots; all survived subsequent source rollouts,
+  and the service boots with the combined set. Recovery and reconciliation repaired one keyed slot
+  whose stable Control row had outlived its source credential. A private push then traversed that
+  connection's scoped webhook, created run `01a01f7c-037b-702e-8ec8-b3f186144b22`, resolved exact
+  commit `0d608e0071119c85ac144f78c1ad1509f7a22ab7`, uploaded the archive and reached `ACTIVE` with
+  `/healthz` 200. A second exact-commit private run and later release rollout reconfirmed keyed-v2
+  resolution after restart. WU10 therefore retains two live gates: deploy a private repository owned
+  by a second connected organization, and trigger one bound application through a genuine
+  `legacy-v1` generic `/webhooks/github` delivery. The current proven application is keyed-v2, so its
+  successful scoped delivery cannot satisfy the legacy gate.

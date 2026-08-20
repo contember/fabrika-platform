@@ -219,7 +219,8 @@ is strictly better than proving it against `fabrika-test`, which hosts a live `n
 
 ## Out of scope (explicit)
 
-- **A private Git source** — [47](../backlog/47-give-the-zerops-path-a-private-git-source.md). The
+- **A private Git source** — completed by the later
+  [application deploy sprint](sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md). The
   four services build from a public `buildFromGit` URL, so `--from-git` is effectively mandatory here.
 - **Pinning what Zerops builds** — [65](../backlog/65-pin-a-zerops-build-to-a-revision.md). A build
   source names a repository, not a revision; the bootstrap cannot fix that.

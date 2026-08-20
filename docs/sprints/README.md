@@ -25,24 +25,8 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
   gives every new connection a create-only keyed v2 credential and scoped webhook, and binds app
   registry entries on the Zerops private-source path to connection plus installation. Cloudflare keeps
   its static-secret and installation-id webhook behavior. There is no explicit connection-count limit.
-  Deterministic local compatibility and isolation gates are complete. The local fixture cannot
-  exercise the GitHub manifest/install browser E2E; that live flow, the Zerops restart,
-  second-organization private deployment, one legacy-v1 generic delivery and one keyed-v2 scoped
-  delivery remain open
+  Deterministic local compatibility and isolation gates are complete. Live setup created and verified
+  Apps for two additional organizations, the source restarted with the legacy base credential plus
+  three keyed v2 slots, and a keyed-v2 scoped push deployed its bound private application. A private
+  deploy from a second organization and a genuine legacy-v1 generic delivery remain open
   ([ADR-0032](../decisions/0032-support-multiple-private-github-source-connections.md)).
-
-- [`sprint-2026-08-11-fabrika-deploys-an-app-on-zerops`](sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md)
-  — one gate: add a GitHub repository, **public or private**, and get it deployed into the Zerops
-  account. Consumes [`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md),
-  `backlog/69` (since shipped and deleted) and
-  [`70`](../backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md). A live probe
-  proved Zerops' GUI OAuth grant is unavailable to the control plane's integration token. The private
-  half now uses an operator-owned GitHub App and a per-installation `source` service that uploads an
-  exact repository snapshot for Zerops to build ([ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md)).
-  Fresh installations now leave source anonymous. Normal organization-owned App creation, encrypted
-  recovery, source activation, webhook configuration, legacy credential adoption and installation
-  verification run behind the authenticated Control console
-  ([ADR-0031](../decisions/0031-manage-zerops-github-source-from-control.md)); ADR-0030 remains the
-  legacy CLI recovery record. The service, upload lifecycle, Control workflow, dashboard and narrow
-  CLI repair path are locally implemented. The complete live browser flow, public and private live
-  deploys, multi-organization rollout and Operations last mile remain open.

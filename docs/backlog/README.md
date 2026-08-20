@@ -50,7 +50,6 @@ and a pin that pins half of what it claims.
 - [37](37-activate-zerops-managed-environment-transactionally.md) — Keep Zerops managed environment activation consistent with the app version that actually ships.
 - [38](38-add-dns-safe-operations-egress.md) — Prevent private-address and DNS-rebinding egress through Operations webhooks and active health checks.
 - [46](46-add-portable-email-alert-delivery.md) — Add email alert delivery without coupling the portable Operations outbox to Cloudflare Email Routing.
-- [47](47-give-the-zerops-path-a-private-git-source.md) — Source upload and multiple private Control GitHub App connections are locally implemented; prove ordered rollout, browser flow, public/private parity and credential absence live (ADRs 0029–0032).
 - [54](54-give-operations-its-own-proxy-app-identity.md) — Half shipped; what is left is moving the operator surface onto the Operations host, which is a console architecture change, not a rename.
 - [57](57-stop-the-caller-choosing-its-own-audit-correlation-id.md) — IAM takes `X-Request-Id` from the caller, unbounded, into `auth_log`; its Worker is edge-routed so the proxy strip never runs.
 - [59](59-the-live-installation-calls-itself-local.md) — `fabrika-test` has never been deployed by the command that fixes it; `control` and `operations` still carry `ENVIRONMENT=local`.
@@ -60,12 +59,12 @@ and a pin that pins half of what it claims.
 - [65](65-pin-a-zerops-build-to-a-revision.md) — A Zerops build source names a repository, not a revision, so `fabrika.ref` pins the pipeline but not the code Zerops builds.
 - [67](67-command-for-the-first-administrator.md) — A fresh installation comes up with nobody able to sign in, and the four RPC calls that fix that live in a throwaway script.
 - [68](68-platform-commands-mishandle-a-closed-stdin.md) — `platform install` runs unattended when it should refuse, and `platform init` cannot be run unattended at all.
-- [70](70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md) — A build that fails before it creates a container leaves its app version at `WAITING_TO_BUILD`, which `await-deploy` waits out.
 - [71](71-deliver-domain-audit-events-durably.md) — Add stable event ids, idempotent IAM acknowledgement and transactional producer outboxes for every domain mutation.
 - [72](72-a-failed-namespace-reports-nothing-an-operator-can-act-on.md) — Every namespace failure looks the same: the provider's error is discarded, not redacted.
 - [73](73-a-failed-namespace-cannot-be-removed.md) — No delete, so a failed namespace holds its id forever and a retry must rename.
 - [74](74-namespace-provisioning-outlives-the-request-that-asked-for-it.md) — Five minutes of work inside one HTTP call: the caller always times out and cannot learn the outcome.
 - [75](75-a-running-installation-keeps-a-token-that-cannot-create-projects.md) — Installations minted before ADR-0034 hold a token that cannot create projects, and nothing says so.
+- [78](78-register-a-zerops-app-from-local-config-in-one-command.md) — Compose the existing local manifest build and Control registration into one command without executing application code in Control.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.

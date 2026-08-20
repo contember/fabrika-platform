@@ -38,26 +38,13 @@ them.
    [ADR-0023](../decisions/0023-one-session-per-host.md) has since deleted the shared
    cookie outright. Custom domains are now about operating a real installation, not
    about making sign-in work.
-3. **A source a private app can build from.**
-   [ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md) settled
-   the mechanism after a live probe disproved ADR-0025's native-integration assumption: an
-   operator-owned GitHub App authorizes a per-installation `source` service, which uploads an exact
-   repository snapshot for Zerops to build, see [`47`](./47-give-the-zerops-path-a-private-git-source.md).
-   Until that lands the control-plane deploy cannot build a private repository, and neither can the
-   Operations DSN that the control→Operations catalog projection mints.
-   (The namespace proxy is no longer part of this: ADR-0025 builds it from a pinned tag
-   of the public repository, needing no credential.)
-4. **Operations ingest end to end.** Once 3 lands: an ingested exception reaching the
-   private operator API, `FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE` arriving in a
-   deployed app, and release/source-map correlation
-   ([`36`](./36-complete-zerops-release-artifact-correlation.md)).
-5. **The installation deploys itself from a pipeline, not a laptop.** The command
+3. **The installation deploys itself from a pipeline, not a laptop.** The command
    exists and a DIFFERENT, fresh installation has been deployed and rolled forward
    entirely from an operator's CI
    ([archive](../archive/sprint-2026-08-07-zerops-from-scratch-install.md)).
    `fabrika-test` itself has not — it is still on the hand-chosen `zops push` order of
    2026-08-05 → [`59`](./59-the-live-installation-calls-itself-local.md).
-6. **Human authentication is done on this tier.** Password enrollment, sign-in,
+4. **Human authentication is done on this tier.** Password enrollment, sign-in,
    throttling, admin disable and the audit trail were exercised live on 2026-08-04,
    and so was cross-host browser SSO between two `.zerops.app` hostnames
    ([ADR-0021](../decisions/0021-exchange-token-session-handoff.md)). Nothing
@@ -83,9 +70,10 @@ them.
 
 ## Acceptance
 
-The production two-project topology boots; the proxy is reachable on custom IAM,
-control and Operations domains; a human signs in through the browser; and one deploy
-of the example app completes **through the control plane** with its logs relayed into
-the run record and an ingested exception reaching the private operator API. Then fold
-what you learned into [`../reference/zerops-platform.md`](../reference/zerops-platform.md)
-and delete this file.
+The production two-project topology boots; the proxy is reachable on custom IAM, control and
+Operations domains; and the installation deploys itself from its operator-owned pipeline. Private
+application source, browser handoff, run-log relay and release-correlated Operations ingest were
+already proven by the archived
+[application deploy sprint](../archive/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md). Fold the
+remaining production-shape findings into
+[`../reference/zerops-platform.md`](../reference/zerops-platform.md) and delete this file.

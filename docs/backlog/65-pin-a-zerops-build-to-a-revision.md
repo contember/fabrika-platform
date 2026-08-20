@@ -15,11 +15,11 @@ otherwise. Effort S to settle, unknown to fix.
 ## Problem
 
 `triggerPipeline`'s `buildFromGit` is documented in our own client as _"a one-time build from that
-PUBLIC repository URL"_ (`packages/provider-zerops/src/api.ts:246-256`). The WU2 application path now
-passes `https://github.com/contember/fabrika-example-zerops@main`, and Zerops accepted and built it
-live. That proves the `@main` form is accepted, but not that Zerops pins a non-default tag or commit:
-`main` is also the repository's default branch. The remaining installation caller still passes a bare
-URL — `FABRIKA_PROXY_SOURCE = 'https://github.com/contember/fabrika-platform'`
+PUBLIC repository URL"_ (`packages/provider-zerops/src/api.ts:246-256`). The application checkpoint
+passed a public example repository URL ending in `@main`, and Zerops accepted and built it live. That
+proves the `@main` form is accepted, but not that Zerops pins a non-default tag or commit: `main` is
+also the repository's default branch. The remaining installation caller still passes a bare URL —
+`FABRIKA_PROXY_SOURCE = 'https://github.com/contember/fabrika-platform'`
 (`packages/installation-zerops/zerops/topology.ts:126`).
 
 Two consequences, one of them drift in a decision:
@@ -54,11 +54,11 @@ Acceptance: `reference/zerops-platform.md` states the answer with live evidence,
 reconciled by a new ADR, and — if pinning is possible — a `platform deploy` at a given `fabrika.ref`
 builds the same service code twice in a row regardless of what moved on the default branch meanwhile.
 
-Related but **not** the same as [47](./47-give-the-zerops-path-a-private-git-source.md): 47 is about
-reaching a **private application** source at all; this item is about identifying **which revision** a
-public `buildFromGit` source built, especially the namespace proxy. ADR-0029's application upload path
-resolves an exact commit and records it before upload, but it does not answer whether Zerops can pin the
-remaining public `buildFromGit` path.
+Related but **not** the same as the archived
+[private-source sprint](../archive/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md): that work
+made a private application source reachable and records its exact commit before upload. This item is
+about identifying **which revision** the remaining public `buildFromGit` path built, especially the
+namespace proxy.
 
 ## Touch points
 

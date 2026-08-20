@@ -22,7 +22,7 @@ being sequenced, the boundary it assumed was settled the other way:
 operator installs the platform, fabrika deploys only apps. That removes fabrika's own code from the
 problem entirely (the namespace proxy now builds from a pinned tag of the public repository) and
 rejects the credentialed-clone-URL half outright. What remains is one API call, re-scoped into
-[`47`](../backlog/47-give-the-zerops-path-a-private-git-source.md), and it is blocked on a human:
+the later [application deploy sprint](sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md), and it is blocked on a human:
 linking a GitHub account to Zerops is an interactive OAuth flow. The install paths ADR-0025 commits
 to are filed as [`61`](../backlog/61-make-platform-deploy-an-unattended-command.md),
 [`62`](../backlog/62-generate-the-operators-sidecar-install-repository.md) and

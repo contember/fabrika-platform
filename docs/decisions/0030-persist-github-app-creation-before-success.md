@@ -99,4 +99,4 @@ project at a time is therefore a supported operational requirement.
 
 - [ADR-0029 — An operator-owned GitHub App delivers Zerops application sources](0029-an-operator-owned-github-app-delivers-zerops-sources.md)
 - [Zerops platform reference](../reference/zerops-platform.md)
-- [Active Zerops deploy sprint](../sprints/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md)
+- [Archived Zerops deploy sprint](../archive/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md)

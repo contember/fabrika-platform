@@ -33,31 +33,10 @@ the live Zerops v1 credential and generic webhook as a marker-selected compatibi
 connections keyed v2 credentials and scoped webhooks, and binds every Zerops private app to a
 connection-and-installation pair. Cloudflare keeps its static-secret and installation-id webhook
 model. Fabrika sets no explicit connection-count limit. Deterministic local compatibility and isolation
-gates are complete. The local fixture cannot exercise the GitHub manifest/install browser E2E; that
-live flow, the Zerops restart, second-organization private deploy, one legacy-v1 generic delivery and
-one keyed-v2 scoped delivery remain open.
-
-[`fabrika-deploys-an-app-on-zerops`](sprints/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md) —
-**one gate: add a GitHub repository, public or private, to the control plane and get it deployed into
-the Zerops account**, signed into by a browser and reporting its own errors. The public source seam,
-fast build-failure detection and persisted run logs are implemented checkpoints. A live probe then
-proved Zerops' GUI OAuth grant cannot be consumed by the installation's project-scoped token.
-[ADR-0029](decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md) replaces that native
-integration plan with an operator-owned GitHub App and a non-public per-installation `source` service.
-The service and application upload lifecycle are locally implemented; production is fixed to
-`github.com`. Fresh installation leaves source anonymous. Normal App creation, encrypted recovery,
-source activation, webhook configuration, legacy adoption and installation verification now run in
-the authenticated Control console under
-[ADR-0031](decisions/0031-manage-zerops-github-source-from-control.md); ADR-0030 remains the legacy CLI
-recovery record. Source fetches an exact commit and uploads the repository archive; Zerops still builds
-and deploys it. The complete live browser flow, public/private live deploys and the browser/Operations
-last mile remain open.
-The example remains a tested workspace fixture and standalone repository whose root holds `zerops.yaml`.
-Consumes
-[`47`](backlog/47-give-the-zerops-path-a-private-git-source.md),
-`backlog/69` (since shipped and deleted) and
-[`70`](backlog/70-a-failed-zerops-build-hangs-await-deploy-for-seventy-minutes.md), and answers items 3
-and 4 of [`05`](backlog/05-bring-up-on-a-real-zerops-account.md).
+gates are complete. Live setup created and verified Apps for two additional organizations, the source
+restarted with the legacy base credential plus three keyed v2 slots, and a keyed-v2 scoped push
+deployed its bound private application. A private deploy from a second organization and a genuine
+legacy-v1 generic delivery remain open.
 
 Two auth sprints shipped on 2026-08-05 —
 [hardening](archive/sprint-2026-08-04-auth-hardening.md), then
@@ -95,33 +74,25 @@ backlog is empty; what is left of item 54 is a console architecture decision, no
   the bootstrap: npm demands an interactive one-time password for a first publish, so it went up from
   a laptop and carries no provenance — which is exactly why `0.0.2` exists. **`v0.0.2` is also the
   first tag this repository has ever had**, which is what the sidecar install path was waiting on.
-- **Zerops, post-bring-up:** the light tier is **live on a real account** (sprint
-  [`zerops-live-bringup`](archive/sprint-2026-08-03-zerops-live-bringup.md)); the
-  platform facts it settled are in [`reference/zerops-platform.md`](reference/zerops-platform.md).
-  Sprint [`zerops-path-correctness`](archive/sprint-2026-08-05-zerops-path-correctness.md)
-  then fixed what the account proved wrong — the env write, four conformance corrections,
-  the `.zerops.app` entry point — and signed a browser in through the proxy live. The installation is
-  still deployed **by hand**: `platform deploy` and `platform init` are written and unit-tested, but
-  neither has run against the account, so the hand sequence remains the only proven one. Next is the
-  live acceptance above, including [`47`](backlog/47-give-the-zerops-path-a-private-git-source.md): an
-  operator-owned GitHub App and source-upload service now replace the disproved native-integration
-  approach in code. The authenticated Control workflow durably recovers the one-time App id and private
-  key, activates the source credentials and verifies the App installation
-  ([ADR-0031](decisions/0031-manage-zerops-github-source-from-control.md)); the CLI is now a narrow
-  repair/adoption path. [ADR-0032](decisions/0032-support-multiple-private-github-source-connections.md)
-  implements one private App per organization with keyed credentials and exact-pair source and webhook
-  routing, without an explicit connection-count limit. Its deterministic local compatibility and
-  isolation gates are complete. The local fixture cannot exercise the GitHub manifest/install browser
-  E2E; that flow, the ordered live rollout, restart, second-organization private deploy, one legacy-v1
-  generic delivery and one keyed-v2 scoped delivery remain open. The complete browser flow and
-  public/private deploys still need live witnesses.
-  The production two-project shape and custom domains remain in
-  [`05`](backlog/05-bring-up-on-a-real-zerops-account.md).
+- **Zerops application delivery is live.** The light platform tier is installed and rolled forward by
+  its operator-owned CI. The archived
+  [application deploy sprint](archive/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md) proved the
+  same exact application commit through the public and private source-upload paths, a private push
+  webhook, fast failed-build detection, readable run logs, cross-host sign-in and release-correlated
+  browser exception ingest. ADR-0029 owns the source transport and ADR-0031 the authenticated Control
+  setup. The active
+  [multi-connection sprint](sprints/sprint-2026-08-14-multiple-private-github-source-connections.md)
+  still owes its second-organization deploy and a genuine legacy-v1 generic delivery; keyed-v2 scoped
+  delivery is proven live. The
+  production two-project shape and custom domains remain in
+  [`05`](backlog/05-bring-up-on-a-real-zerops-account.md); one-command local registration is
+  [`78`](backlog/78-register-a-zerops-app-from-local-config-in-one-command.md).
 - **Domain audit delivery is best-effort today.** `IamRpc.audit` intentionally returns before the IAM
   write is durable, which is the existing semantics followed by every Control mutation, including the
   source-connection flow. Repository-wide stable event ids, idempotent IAM acknowledgement and
   transactional producer outboxes are tracked in
-  [`71`](backlog/71-deliver-domain-audit-events-durably.md); this is not a private blocker for item 47.
+  [`71`](backlog/71-deliver-domain-audit-events-durably.md); this is not a blocker for the source
+  connection workflow.
 - **The session handoff is the ONLY way a browser gets a session for an app.** IAM
   issues a browser-bound one-time code and the proxy on the app's own host redeems it
   ([ADR-0023](decisions/0023-one-session-per-host.md),

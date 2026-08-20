@@ -21,7 +21,7 @@
 > **Deferred, with the user's agreement.** The production two-project topology,
 > custom domains, browser SSO (needs them), and every deploy the control plane
 > triggers itself — the last blocked on
-> [`backlog/47`](../backlog/47-give-the-zerops-path-a-private-git-source.md).
+> the later [application deploy sprint](sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md).
 > Remaining scope folded back into
 > [`backlog/05`](../backlog/05-bring-up-on-a-real-zerops-account.md); the platform
 > facts into [`reference/zerops-platform.md`](../reference/zerops-platform.md).
@@ -117,7 +117,9 @@ driver offers a public `buildFromGit` URL or nothing; the private-repo path is _
 own_ GitHub OAuth integration, connected per service
 (`SetupExternalRepositoryIntegration`, `repositoryFullName` + branch + `zeropsYamlSetup`).
 The account has no GitHub authorization yet (`githubAuthorizationRequired`), and the repo
-has no git remote. → [`backlog/47`](../backlog/47-give-the-zerops-path-a-private-git-source.md).
+has no git remote. The later
+[application deploy sprint](sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md) delivered the
+private application-source path.
 
 ### F6 — version aliases are real; `zz catalog` lists only concrete versions
 
