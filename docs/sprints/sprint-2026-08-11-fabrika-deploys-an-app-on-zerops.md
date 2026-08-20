@@ -677,3 +677,62 @@ manifest exchange keeps a cause-free message on purpose: it carries the one-time
 A third, unrelated: `"lopata": "latest"` against `--frozen-lockfile` failed CI twice in a day on
 commits that touched no dependency. Pinned to `^0.21.0` in all three packages, which also ended the
 workspace carrying two versions of one dev tool. `backlog/77` is consumed and deleted.
+
+## The multi-connection path had never once completed (2026-08-20)
+
+The operator reported the console still stuck. Two states, in sequence: `Verify installation`
+answered a bare `502`, and after a fresh setup the chain settled on `Private source: repair
+required` with `Repair connection` locked on its pending label.
+
+Caddy's access log on the platform proxy settled what the console could not. The two clicks are
+there — `POST /api/rpc`, referer `/settings/source`, **`duration 0.163s`, `size 83`,
+`status 502`**. Eighty-three bytes is exactly
+`{"error":{"type":"source_connection","message":"source connection request failed"}}`; the other
+candidate message is 88. So control answered, in JSON, in 163 ms. Not a timeout, not the proxy — a
+fast deterministic refusal, which is the opposite of what the earlier reading of that `502` assumed.
+Recording it here because the wrong inference cost a day: **a bare status in the console is not
+evidence of a non-JSON response** when the dashboard renders `cause.message` and the message is the
+default one.
+
+**The root cause was a URL grammar, and it was total.** `buildZeropsSourceWebhookConfigureRequest`
+and its response twin validate the webhook URL against the literal path `/webhooks/github`. That is
+the legacy single-connection route. Since multi-connection landed, control derives
+`/webhooks/github/<connectionId>` for every setup that is not an adoption, so one App's deliveries
+cannot be replayed against another connection. `configureWebhook` therefore **rejected its own
+request and its own response**, every keyed connection, always. Setup stopped at
+`webhook_secret_stored`, settled to `repair_required`, and the resume hit the same wall. The path
+could not have worked once.
+
+No test reached it: the unit tests built the response with the legacy URL only, the source-service
+tests stub the client, and the local-stack fixture builds the scoped URL without passing it through
+the protocol builders. The grammar now takes one path segment matching `ID_PATTERN`, which has no
+`%`, so a percent-escape fails rather than round-tripping.
+
+**Second defect, found while proving the first.** `bindActive` — the fix from the previous section —
+rebound only the _legacy_ snapshot. A keyed slot restored from the environment carries no App
+identity, because `create()` builds it from the bundle alone, so every keyed operation fell through
+to `this.active`, whose digest belongs to a different App, and could only answer
+`credentials_conflict`. `statusV2` had always done this correctly, which is precisely why `status`
+worked while `configureWebhook` and `verifyInstallations` did not — and why the earlier reading
+blamed container restarts. A keyed connection worked exactly as long as the container that ran
+`activateV2` stayed up. The fallback was wrong on its own terms too: binding a keyed connection
+through the legacy App answers for the wrong App instead of failing.
+
+Both fixes were reverted one at a time against the new test, which fails with `credentials_invalid`
+(422) without the grammar and `credentials_conflict` without the keyed bind.
+
+**Two more that turned a broken flow into an unreadable one.** `repairSourceConnection` caught the
+resume failure, marked the attempt `repair_required` again and returned **200 with the unchanged
+DTO** — success to every caller, so the console re-rendered the same red lamp with no reason, and
+the button, which cleared its pending state only on the error path, locked. And every long-running
+`Bun.serve` took the default `idleTimeout` of 10 s while allowing far more — the source client
+permits 30 s per call and the configuration deadline is five minutes. A handler slower than the
+default loses its connection mid-flight and the proxy answers `502` with no body. Verified locally:
+a 15 s handler is cut at ~12 s with no response. `runner-container` had already set `idleTimeout:
+255` for this reason; the other four now match it.
+
+Live on `v0.0.18`: repair answered **`200` in 0.94 s** and the chain moved to
+`GitHub App ✓ · Private source: credentials active ✓ · Webhook: awaiting repository grant`.
+`Verify installation` now answers **`409`, 88 bytes** — `GitHub App installation is incomplete` —
+which is the correct answer to an App that exists but is not yet installed on the organization, and
+the first time this flow has named its own state instead of a number.
