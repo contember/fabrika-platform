@@ -411,8 +411,13 @@ export class GitHubConnection implements SourceGitHubConnection {
 		signal: AbortSignal,
 	): Promise<BoundSnapshot> {
 		const keyed = this.keyed.get(connectionId)
-		if (keyed?.githubApp !== undefined && (credentialSha256 === undefined || keyed.credentialSha256 === credentialSha256)) {
-			return { ...keyed, githubApp: keyed.githubApp }
+		if (keyed !== undefined) {
+			if (credentialSha256 !== undefined && keyed.credentialSha256 !== credentialSha256) {
+				throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
+			}
+			// A keyed slot NEVER falls back to the legacy one: the legacy slot holds a different App, so
+			// binding through it would answer for the wrong connection instead of failing.
+			return keyed.githubApp === undefined ? await this.bindKeyed(keyed, signal) : { ...keyed, githubApp: keyed.githubApp }
 		}
 		const snapshot = this.active
 		if (
@@ -442,6 +447,28 @@ export class GitHubConnection implements SourceGitHubConnection {
 			throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
 		}
 		return { ...current, githubApp: current.githubApp ?? githubApp, connectionId }
+	}
+
+	/** A keyed slot restored from the environment carries no identity yet; bind it through its own client. */
+	private async bindKeyed(slot: KeyedSnapshot, signal: AbortSignal): Promise<BoundSnapshot> {
+		let githubApp: ZeropsSourceGitHubAppIdentityV1
+		try {
+			githubApp = verifiedIdentity(await abortable(slot.client.getAuthenticatedApp(signal), signal), slot.appId)
+			throwIfAborted(signal, 'credentials')
+		} catch (error) {
+			throw credentialFailure(error, signal)
+		}
+		const current = this.keyed.get(slot.connectionId)
+		// A concurrent activation owns the slot while GitHub was answering, and its binding is the newer fact.
+		if (current === undefined || current.credentialSha256 !== slot.credentialSha256) {
+			throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
+		}
+		if (current.githubApp !== undefined) return { ...current, githubApp: current.githubApp }
+		const bound: KeyedSnapshot = { ...current, githubApp }
+		const updated = new Map(this.keyed)
+		updated.set(slot.connectionId, bound)
+		this.keyed = updated
+		return { ...bound, githubApp }
 	}
 }
 

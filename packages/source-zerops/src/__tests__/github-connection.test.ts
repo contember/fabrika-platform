@@ -442,6 +442,65 @@ describe('source GitHub connection activation', () => {
 		).rejects.toMatchObject({ code: 'credentials_conflict' })
 	})
 
+	test('binds a keyed slot restored from the environment instead of falling back to the legacy App', async () => {
+		// The live shape: a container boots holding BOTH a legacy `GITHUB_APP_CREDENTIALS` from an older
+		// connection and the keyed slot of the new one. A slot restored from the environment carries no
+		// App identity, and the legacy slot answers for a DIFFERENT App — so a keyed operation that falls
+		// back to it can only refuse. Every deploy replaces the container, so this is the normal state,
+		// not an edge case: without this the whole multi-connection setup works exactly once.
+		const legacy = bundle('123', PEM)
+		const keyed = bundleV2('01a01e55-9ee5-7035-862b-80b1548b6597', '456', PEM)
+		const keyedDigest = await sha256ZeropsSourceCredentialBundleV2(keyed)
+		const secrets: string[] = []
+		const restarted = await GitHubConnection.create({
+			credentialBundle: legacy,
+			credentialSlotsV2: [{ name: await zeropsSourceCredentialEnvV2('01a01e55-9ee5-7035-862b-80b1548b6597'), credentialBundle: keyed }],
+			createClient: async (input) => {
+				let configured = 'https://control.example.test/webhooks/github'
+				return {
+					...client(identity(Number(input.appId))),
+					getWebhookConfig: async () => ({ url: configured, contentType: 'json', insecureSsl: '0' }),
+					updateWebhookConfig: async (update) => {
+						secrets.push(update.secret)
+						configured = update.url
+						return { url: update.url, contentType: 'json', insecureSsl: '0' }
+					},
+				}
+			},
+		})
+		expect(
+			await restarted.configureWebhook(
+				'01a01e55-9ee5-7035-862b-80b1548b6597',
+				keyedDigest,
+				'https://control.example.test/webhooks/github/01a01e55-9ee5-7035-862b-80b1548b6597',
+				'must-not-leak',
+				new AbortController().signal,
+			),
+		).toMatchObject({ connectionId: '01a01e55-9ee5-7035-862b-80b1548b6597', credentialSha256: keyedDigest })
+		expect(secrets).toEqual(['must-not-leak'])
+		// It bound the KEYED App (456), never the legacy one (123) sharing the container.
+		expect(
+			await restarted.verifyInstallations(
+				'01a01e55-9ee5-7035-862b-80b1548b6597',
+				keyedDigest,
+				{ kind: 'organization', organization: 'contember' },
+				new AbortController().signal,
+			),
+		).toMatchObject({ installation: { status: 'installed', accountLogin: 'contember' } })
+		expect(await restarted.statusV2('01a01e55-9ee5-7035-862b-80b1548b6597', new AbortController().signal))
+			.toMatchObject({ githubApp: { id: 456 } })
+		// A keyed slot still refuses a digest that is not its own, rather than borrowing the legacy one.
+		await expect(
+			restarted.configureWebhook(
+				'01a01e55-9ee5-7035-862b-80b1548b6597',
+				await sha256ZeropsSourceCredentialBundle(legacy),
+				'https://control.example.test/webhooks/github',
+				'must-not-leak',
+				new AbortController().signal,
+			),
+		).rejects.toMatchObject({ code: 'credentials_conflict' })
+	})
+
 	test('rejects repository grants that resolve to different installations or accounts', async () => {
 		let call = 0
 		const connection = await GitHubConnection.create({
