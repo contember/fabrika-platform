@@ -1,4 +1,4 @@
-/** Provider-neutral privileged source administration used only by the authenticated setup workflow. */
+/** Provider-neutral privileged source administration used by authenticated setup and recovery. */
 export interface SourceConnectionPort {
 	readonly provider: string
 	inspect(signal: AbortSignal): Promise<SourceConnectionInspection>

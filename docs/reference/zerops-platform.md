@@ -857,10 +857,13 @@ reported as unavailable rather than silently trusting the database.
 
 A stable connection can be reconciled from the same page. Reconciliation reads the connection's
 purpose-bound webhook secret from the Control vault and reapplies its exact stored webhook URL,
-content type, TLS setting and secret through the credential-bound source client. It does not rotate
-the App credential, webhook secret, connection id or application binding. This is the repair path for
-remote webhook drift after a completed setup; the generic webhook route remains reserved for the
-legacy connection.
+content type, TLS setting and secret through the credential-bound source client. If the durable source
+slot contains another active private key for the same exact GitHub App, reconciliation first proves the
+App identity and webhook configuration, then compare-and-set rebinds Control to the source-reported
+digest ([ADR-0036](../decisions/0036-recover-a-source-credential-binding.md)). It never reads or replaces
+the private key, changes the App, webhook secret, connection id or application binding, or adopts a
+credential from another App. This is the repair path for credential-binding and remote webhook drift
+after a completed setup; the generic webhook route remains reserved for the legacy connection.
 
 A Zerops private application is registered against the connection whose canonical organization owns
 its repository. Control persists both the connection id and GitHub installation id or neither. Deploy

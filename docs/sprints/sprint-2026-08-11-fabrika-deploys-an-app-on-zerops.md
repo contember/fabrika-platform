@@ -748,9 +748,9 @@ source credential slot for that connection. The console nevertheless labelled th
 reference saying every status read compares source identity and digest.
 
 The connection and the legacy source credential were created sixteen seconds apart on 14 August and
-name the same GitHub App. The legacy bundle therefore still held the exact key material needed by the
-missing keyed-v2 slot. Recovery constructed the canonical v2 bundle with the existing connection id,
-created only the absent derived environment key as sensitive, and restarted only `source`. It did not
+name the same GitHub App. Recovery constructed a canonical v2 bundle from that App's still-active
+legacy credential with the existing connection id, created only the absent derived environment key as
+sensitive, and restarted only `source`. It did not
 delete or re-register `notes`, change its sticky source binding, create a new App, or replace another
 credential slot.
 
@@ -760,3 +760,12 @@ Run `01a01f10-c0ea-703f-b26c-9500b10435d6` is the live positive witness. Against
 `z93o2XEBSLiAbNiRg6ri2A`, and reached `succeeded`. The deployed `/healthz` answered `200`. Inspection
 of the version metadata found no private-key marker, GitHub token prefix or credential-bearing GitHub
 URL.
+
+That successful deploy proved the App key worked, not that it was byte-identical to the deleted setup
+credential. The later stable `Reconcile` call answered `502 credential_conflict`: the restored bundle's
+digest differed from Control's final row, and ADR-0031 had already deleted the original recovery copy.
+ADR-0036 closes that recovery gap. A same-origin human reconciliation now verifies the active durable
+credential belongs to the exact stored GitHub App, reconfigures the exact webhook with Control's
+existing vault secret, and only then compare-and-set rebinds the row to the source-reported digest. It
+returns a specific `409` for identity conflicts and `503` for dependency failures instead of collapsing
+this path into a generic `502`.

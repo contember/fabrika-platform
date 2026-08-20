@@ -77,6 +77,7 @@ class FakeSourceConnection implements SourceConnectionPort {
 	webhookFailure: unknown | undefined
 	readonly webhookSecrets: string[] = []
 	readonly webhookUrls: string[] = []
+	readonly webhookCredentialDigests: string[] = []
 	abortAdoption: (() => void) | undefined
 
 	inspect(): Promise<typeof this.inspection> {
@@ -123,6 +124,7 @@ class FakeSourceConnection implements SourceConnectionPort {
 		if (this.webhookFailure !== undefined) return Promise.reject(this.webhookFailure)
 		this.webhookSecrets.push(input.secret)
 		this.webhookUrls.push(input.url)
+		this.webhookCredentialDigests.push(input.credentialSha256)
 		return Promise.resolve({
 			connectionId: input.connectionId,
 			credentialSha256: input.credentialSha256,
@@ -643,21 +645,63 @@ describe('GitHub source connection workflow', () => {
 		source.transportKinds.splice(0)
 		source.webhookSecrets.splice(0)
 		source.webhookUrls.splice(0)
+		source.webhookCredentialDigests.splice(0)
 		const caller = auth()
 
 		const reconciled = await reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc'), caller), connectionId)
 
 		expect(reconciled).toMatchObject({ state: 'connected', connectionId })
-		expect(source.calls).toEqual(['webhook'])
-		expect(source.transportKinds).toEqual(['keyed-v2'])
+		expect(source.calls).toEqual(['status', 'webhook'])
+		expect(source.transportKinds).toEqual(['keyed-v2', 'keyed-v2'])
 		expect(source.webhookSecrets).toEqual([setupSecret])
 		expect(source.webhookUrls).toEqual([`${ORIGIN}/webhooks/github/${connectionId}`])
+		expect(source.webhookCredentialDigests).toEqual([CREDENTIAL_DIGEST])
 		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toEqual(before)
 		expect(caller.events.at(-1)).toEqual({
 			action: 'source.connection.reconcile',
 			resourceType: 'source_connection',
 			resourceId: connectionId,
 		})
+	})
+
+	test('recovers a stable connection from a different credential for the same durable GitHub App', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await connectKeyed(env, source)
+		const before = await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)
+		const replacementDigest = 'd'.repeat(64)
+		if (before === null) throw new Error('keyed connection fixture is incomplete')
+		source.credentialDigests.set(connectionId, replacementDigest)
+		source.calls.splice(0)
+		source.transportKinds.splice(0)
+		source.webhookCredentialDigests.splice(0)
+
+		const reconciled = await reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), connectionId)
+
+		expect(reconciled).toMatchObject({ state: 'connected', connectionId })
+		expect(source.calls).toEqual(['status', 'webhook'])
+		expect(source.webhookCredentialDigests).toEqual([replacementDigest])
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toMatchObject({
+			credentialSha256: replacementDigest,
+			version: before.version + 1,
+		})
+	})
+
+	test('refuses to recover a stable connection from a different GitHub App', async () => {
+		const env = environment()
+		const source = new FakeSourceConnection()
+		const connectionId = await connectKeyed(env, source)
+		const before = await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)
+		source.credentialDigests.set(connectionId, 'd'.repeat(64))
+		source.githubAppId = 999
+		source.calls.splice(0)
+
+		await expect(reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), connectionId)).rejects.toMatchObject({
+			httpStatus: 409,
+			message: 'the durable source credential belongs to a different GitHub App',
+		})
+		expect(source.calls).toEqual(['status'])
+		expect(await env.REPOSITORIES.githubConnections.getConnectionById(connectionId)).toEqual(before)
 	})
 
 	test('fails a stable reconciliation closed with a bounded source reason', async () => {
@@ -667,8 +711,8 @@ describe('GitHub source connection workflow', () => {
 		source.webhookFailure = { code: 'credentials_conflict', status: 409, message: 'must not reach the browser' }
 
 		await expect(reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), connectionId)).rejects.toMatchObject({
-			httpStatus: 502,
-			message: 'the source service refused: credentials_conflict, status 409',
+			httpStatus: 503,
+			message: 'the source service could not configure the GitHub webhook: credentials_conflict, status 409',
 		})
 		await expect(reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), 'missing')).rejects.toMatchObject({ httpStatus: 404 })
 	})

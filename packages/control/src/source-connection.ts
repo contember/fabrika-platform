@@ -24,7 +24,7 @@ import {
 } from './github-connection-store'
 import { controlPublicOrigin } from './iam'
 import { vault } from './services'
-import type { SourceConnectionPort, SourceGitHubAppIdentity, SourceInstallationScope } from './source-connection-port'
+import type { SourceConnectionPort, SourceConnectionRuntimeStatus, SourceGitHubAppIdentity, SourceInstallationScope } from './source-connection-port'
 import { uuidv7 } from './uuid'
 
 const CALLBACK_PATH = '/api/source/github/callback'
@@ -82,6 +82,15 @@ const sourceUnavailable = (error: unknown): SourceConnectionWorkflowError => {
 	return new SourceConnectionWorkflowError(502, reason === undefined ? 'the source service did not answer' : `the source service refused: ${reason}`)
 }
 
+const reconcileUnavailable = (stage: 'inspect' | 'configure', error: unknown): SourceConnectionWorkflowError => {
+	const reason = sourceFailureReason(error)
+	const action = stage === 'inspect' ? 'inspect the durable credential' : 'configure the GitHub webhook'
+	return new SourceConnectionWorkflowError(
+		503,
+		reason === undefined ? `the source service could not ${action}` : `the source service could not ${action}: ${reason}`,
+	)
+}
+
 export class SourceConnectionWorkflowError extends Error {
 	readonly type = 'source_connection'
 
@@ -111,12 +120,10 @@ export async function sourceConnectionStatus(deps: SourceConnectionWorkflowDeps)
 				signal: deps.request.signal,
 			})
 			if (
-				remote.state !== 'active' || remote.credentialSha256 !== connection.credentialSha256
-				|| remote.githubApp.id !== Number(connection.appId) || remote.githubApp.slug !== connection.appSlug
-				|| remote.githubApp.htmlUrl !== connection.appHtmlUrl || remote.githubApp.public !== connection.appPublic
-				|| remote.githubApp.owner.type !== 'Organization' || remote.githubApp.owner.login.toLowerCase() !== connection.appOwner.toLowerCase()
-				|| remote.githubApp.permissions.contents !== 'read' || remote.githubApp.events.length !== 1 || remote.githubApp.events[0] !== 'push'
-			) return baseStatus(deps.source.provider, 'unavailable')
+				remote.state !== 'active' || remote.credentialSha256 !== connection.credentialSha256 || !matchesConnectionIdentity(connection, remote.githubApp)
+			) {
+				return baseStatus(deps.source.provider, 'unavailable')
+			}
 			return connectionDto(deps.source.provider, connection)
 		} catch {
 			throwIfAborted(deps.request.signal)
@@ -439,12 +446,27 @@ export async function repairSourceConnection(deps: SourceConnectionWorkflowDeps,
 	return workflowDto(deps.source.provider, current)
 }
 
-/** Reapply one stable connection's durable webhook binding without rotating its credential or secret. */
+/** Recover one stable connection from its verified durable credential and reapply its webhook binding. */
 export async function reconcileSourceConnection(deps: SourceConnectionWorkflowDeps, connectionId: string): Promise<GitHubSourceConnectionStatusDto> {
 	requireHuman(deps.auth)
 	requireSameOrigin(deps.env, deps.request)
 	const connection = await deps.env.REPOSITORIES.githubConnections.getConnectionById(connectionId)
 	if (connection === null) throw new SourceConnectionWorkflowError(404)
+	let status: SourceConnectionRuntimeStatus
+	try {
+		status = await deps.source.status({
+			connectionId: connection.connectionId,
+			transportKind: connection.transportKind,
+			signal: deps.request.signal,
+		})
+	} catch (error) {
+		throwIfAborted(deps.request.signal)
+		throw reconcileUnavailable('inspect', error)
+	}
+	if (status.state !== 'active') throw new SourceConnectionWorkflowError(409, 'the durable source credential is not active')
+	if (!matchesConnectionIdentity(connection, status.githubApp)) {
+		throw new SourceConnectionWorkflowError(409, 'the durable source credential belongs to a different GitHub App')
+	}
 	const secretVault = await vault(deps.env)
 	const webhookSecret = await secretVault.getSecretForPurpose(connection.webhookSecretRef, {
 		scope: 'platform',
@@ -455,22 +477,40 @@ export async function reconcileSourceConnection(deps: SourceConnectionWorkflowDe
 		configured = await deps.source.configureWebhook({
 			connectionId: connection.connectionId,
 			transportKind: connection.transportKind,
-			credentialSha256: connection.credentialSha256,
+			credentialSha256: status.credentialSha256,
 			url: connection.webhookUrl,
 			secret: webhookSecret,
 			signal: deps.request.signal,
 		})
 	} catch (error) {
 		throwIfAborted(deps.request.signal)
-		throw sourceUnavailable(error)
+		throw reconcileUnavailable('configure', error)
 	}
 	if (
-		configured.connectionId !== connection.connectionId || configured.credentialSha256 !== connection.credentialSha256
+		configured.connectionId !== connection.connectionId || configured.credentialSha256 !== status.credentialSha256
 		|| configured.webhook.url !== connection.webhookUrl
 		|| configured.webhook.contentType !== 'json' || configured.webhook.insecureSsl !== '0'
-	) throw new SourceConnectionWorkflowError(502, 'the source service returned a mismatched webhook binding')
+	) throw new SourceConnectionWorkflowError(503, 'the source service returned a mismatched webhook binding')
+	let reconciled = connection
+	if (status.credentialSha256 !== connection.credentialSha256) {
+		const rebound = await deps.env.REPOSITORIES.githubConnections.rebindCredential(
+			connection.connectionId,
+			connection.version,
+			connection.credentialSha256,
+			status.credentialSha256,
+		)
+		if (rebound === null) {
+			const current = await deps.env.REPOSITORIES.githubConnections.getConnectionById(connection.connectionId)
+			if (current === null || current.credentialSha256 !== status.credentialSha256) {
+				throw new SourceConnectionWorkflowError(409, 'the source connection changed while it was being reconciled')
+			}
+			reconciled = current
+		} else {
+			reconciled = rebound
+		}
+	}
 	await audit(deps.auth, 'source.connection.reconcile', connection.connectionId)
-	return connectionDto(deps.source.provider, connection)
+	return connectionDto(deps.source.provider, reconciled)
 }
 
 async function advanceConfiguration(
@@ -724,6 +764,14 @@ function validateIdentity(attempt: GitHubSetupAttempt, app: SourceGitHubAppIdent
 		|| app.public !== attempt.desiredPublic || app.permissions.contents !== 'read'
 		|| app.events.length !== 1 || app.events[0] !== 'push'
 	) throw new Error('verified App identity does not match setup')
+}
+
+function matchesConnectionIdentity(connection: GitHubSourceConnection, app: SourceGitHubAppIdentity): boolean {
+	return validRemoteIdentity(app)
+		&& app.id === Number(connection.appId) && app.slug === connection.appSlug && app.htmlUrl === connection.appHtmlUrl
+		&& app.public === connection.appPublic && app.owner.type === 'Organization'
+		&& app.owner.login.toLowerCase() === connection.appOwner.toLowerCase()
+		&& app.permissions.contents === 'read' && app.events.length === 1 && app.events[0] === 'push'
 }
 
 function validateAdoptedIdentity(app: SourceGitHubAppIdentity): void {

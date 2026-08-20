@@ -162,3 +162,4 @@ There is no Fabrika connection-count limit; individual payloads and pages remain
 - [0033](0033-operate-the-control-plane-from-the-cli.md) — Operate the control plane from the CLI — accepted (2026-08-18)
 - [0034](0034-the-control-plane-creates-the-projects-it-owns.md) — The control plane creates the projects it owns — accepted; amends 0025's token scope (2026-08-18)
 - [0035](0035-the-platform-owns-the-application-iam-issuer.md) — The platform owns the application's IAM issuer, and an undeclared variable is refused — accepted; renames `FABRIKA_IAM_URL` under 0024 (2026-08-19)
+- [0036](0036-recover-a-source-credential-binding.md) — Recover a source credential binding from durable state — accepted; amends 0032's rotation scope (2026-08-20)

@@ -101,8 +101,8 @@ export function ConnectedConnections(
 				<h2 id="connected-source-connections">Connected organizations</h2>
 			</div>
 			<p className="section-note">
-				Each organization uses its own GitHub App, installation and private source credential. Reconcile reapplies the stored webhook configuration
-				without rotating it.
+				Each organization uses its own GitHub App, installation and private source credential. Reconcile repairs the credential binding and reapplies the
+				stored webhook configuration without exposing or replacing the private key.
 			</p>
 			<Table
 				colSpan={4}

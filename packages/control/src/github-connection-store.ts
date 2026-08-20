@@ -457,6 +457,25 @@ export class GitHubConnectionStore {
 		return row === null ? null : decodeConnection(row)
 	}
 
+	/** Bind a stable row to a verified durable credential without changing its source slot or App identity. */
+	async rebindCredential(
+		connectionId: string,
+		expectedVersion: number,
+		expectedCredentialSha256: string,
+		credentialSha256: string,
+	): Promise<GitHubSourceConnection | null> {
+		validateConnectionId(connectionId)
+		validateSafePositive(expectedVersion, 'connection version')
+		validateSha256(expectedCredentialSha256, 'expected credential digest')
+		validateSha256(credentialSha256, 'credential digest')
+		const row = await this.db.prepare(`UPDATE github_source_connections_keyed SET
+			credential_sha256 = ?, version = version + 1
+			WHERE connection_id = ? AND version = ? AND credential_sha256 = ? RETURNING *`)
+			.bind(credentialSha256, connectionId, expectedVersion, expectedCredentialSha256)
+			.first<GitHubSourceConnectionRow>()
+		return row === null ? null : decodeConnection(row)
+	}
+
 	async getConnectionByOwner(owner: string): Promise<GitHubSourceConnection | null> {
 		validateGitHubOwner(owner)
 		const row = await this.db.prepare(
