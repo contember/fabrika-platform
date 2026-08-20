@@ -769,3 +769,23 @@ credential belongs to the exact stored GitHub App, reconfigures the exact webhoo
 existing vault secret, and only then compare-and-set rebinds the row to the source-reported digest. It
 returns a specific `409` for identity conflicts and `503` for dependency failures instead of collapsing
 this path into a generic `502`.
+
+## A private push deployed the application (2026-08-20)
+
+Release `v0.0.21` rolled the recovery path to a live test installation. The human `Reconcile` call
+completed with `200` in 0.972 seconds. It
+verified the durable same-App credential, restored the exact scoped webhook configuration and rebound
+Control's digest without reading or replacing the private key.
+
+Private repository commit `0d608e0071119c85ac144f78c1ad1509f7a22ab7` then produced a GitHub delivery
+at its connection-scoped webhook path. Control answered `200` with one triggered run, not a
+generic-route `401` or an acknowledged no-op. Run
+`01a01f7c-037b-702e-8ec8-b3f186144b22` persisted trigger `webhook`, concrete ref
+`refs/heads/main` and that exact commit, then succeeded.
+
+Zerops built application version 10 under the same run id and activated app version
+`haveZKs7So2jjGl00vhxGQ`. The version reported source `CLI`, with `githubIntegration`,
+`gitlabIntegration` and `publicGitSource` all `null`; the build therefore came through Fabrika's
+artifact-upload path rather than Zerops Git integration. The deployed `/healthz` answered
+`200 {"status":"ok"}`. This closes WU2's private-source deploy witness and the scoped push-triggered
+deploy witness found open during the live gate.

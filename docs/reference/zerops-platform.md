@@ -612,11 +612,12 @@ Control's outer RPC deadlines are 45 seconds for installation lookup, five minut
 before the outer deadline. The upload PUT itself is bounded to ten minutes. Caller cancellation is
 propagated through GitHub REST, Git operations, response reads, archive cleanup and upload.
 
-This transport, topology and upgrade flow are locally implemented and tested. They have not yet passed
-the active sprint's live gate: the same commit must reach `ACTIVE` through application-version upload
-once while public and once while private in `fabrika-install-test`, and the live logs, process data and
-application-version metadata must be inspected for credentials. The subsequent browser handoff and
-Operations exception-ingest witness is also live-only.
+This transport, topology and upgrade flow are locally implemented and tested. The same example commit
+reached `ACTIVE` through application-version upload while the repository was public and again after it
+became private. A later private push also completed the scoped webhook path end to end: verified event,
+webhook-triggered run, private source resolve and upload, Zerops build, active version and healthy app.
+The inspected application version used source `CLI` and carried no GitHub, GitLab or public-Git source.
+The subsequent browser handoff and Operations exception-ingest witness remains live-only.
 
 ### Verified live (2026-08-18, account `prg1`, projects `fabrika-install-test` + `fabrika-notes-prod`) — provisioning an app namespace
 
@@ -870,6 +871,13 @@ its repository. Control persists both the connection id and GitHub installation 
 resolution and scoped webhooks require that exact pair. Changing the repository owner of an already
 bound application is refused; re-registration is required. Public Zerops repositories need no pair,
 and Cloudflare's installation-only rows remain valid.
+
+Verified live on 2026-08-20, recovery on `v0.0.21` rebound one stable connection to its durable
+same-App credential and reconfigured its webhook in 0.97 seconds. The next private repository push
+reached that connection's scoped webhook route, passed HMAC verification and created run
+`01a01f7c-037b-702e-8ec8-b3f186144b22` for exact commit
+`0d608e0071119c85ac144f78c1ad1509f7a22ab7`. The run succeeded, Zerops version
+`haveZKs7So2jjGl00vhxGQ` reached `ACTIVE`, and the deployed `/healthz` answered `200`.
 
 `platform init` remains the operator-side source upgrade and repair command. It imports only a missing
 `source` service, waits for the returned Zerops processes, reconciles the two-sided RPC key and creates
