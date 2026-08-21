@@ -95,7 +95,7 @@ Re-read the load-bearing facts in the actual code before planning on them.
   first by where the fixture can be imported from both sides without a new package), `package.json`
   scripts, `docs/reference/zerops-platform.md`, root `CLAUDE.md` (the skip-cleanly list).
 
-### WU2 — The catalog sync says what it did, and a deploy says what it lacked (effort M) · backlog [`84`](../backlog/84-the-first-deploy-after-registration-can-miss-its-operations-ingest.md)
+### WU2 — The catalog sync says what it did, and a deploy says what it lacked (effort M) · backlog [`84`](../backlog/84-a-catalog-projection-can-wait-out-a-dead-flush-holders-lease.md)
 
 - **Problem.** A freshly registered app deployed twice without its Operations-managed environment while
   Operations already listed it; a later catalog change fixed it; no log line anywhere explains which.

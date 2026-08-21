@@ -18,6 +18,8 @@ const CATALOG_LOCK_TTL_MS = 5 * 60 * 1000
 const CATALOG_REQUEST_TIMEOUT_MS = 15_000
 const MIN_SYNC_KEY_LENGTH = 32
 const MAX_COALESCED_PASSES = 20
+/** Guarded flushes after a release, for a change that coalesced against this holder's own handoff. */
+const MAX_HANDOFF_PASSES = 2
 
 export type OperationsCatalogSyncOutcome = 'disabled' | 'applied' | 'unchanged' | 'coalesced' | 'failed'
 
@@ -55,34 +57,81 @@ async function runCatalogSync(
 	let requestedRevision: number | null = null
 	try {
 		requestedRevision = mode === 'change' ? await deps.catalog.markDirty() : await deps.catalog.ensurePending()
-		if (deps.service === undefined || deps.syncKey === undefined || deps.syncKey.length < MIN_SYNC_KEY_LENGTH) {
-			await deps.catalog.markFailed('operations catalog transport is not configured')
-			return { outcome: 'failed', revision: requestedRevision }
+		const service = deps.service
+		const syncKey = deps.syncKey
+		if (service === undefined || syncKey === undefined || syncKey.length < MIN_SYNC_KEY_LENGTH) {
+			return await failCatalogSync(deps.catalog, requestedRevision, 'operations catalog transport is not configured')
 		}
-		if (deps.operationsOrigin === undefined || deps.operationsOrigin.trim() === '') {
-			await deps.catalog.markFailed('operations public origin is not configured')
-			return { outcome: 'failed', revision: requestedRevision }
+		const operationsOrigin = deps.operationsOrigin?.trim()
+		if (operationsOrigin === undefined || operationsOrigin === '') {
+			return await failCatalogSync(deps.catalog, requestedRevision, 'operations public origin is not configured')
 		}
 
-		const holder = uuidv7()
-		if (!(await deps.locks.acquire(CATALOG_LOCK_KEY, holder, CATALOG_LOCK_TTL_MS))) {
+		let summary = await flushUnderLock(deps, service, syncKey, operationsOrigin)
+		if (summary === null) {
+			logCatalogSync('coalesced', requestedRevision)
 			return { outcome: 'coalesced', revision: requestedRevision }
 		}
-		try {
-			return await flushCatalog(deps.catalog, deps.service, deps.syncKey, deps.operationsOrigin)
-		} finally {
-			try {
-				await deps.locks.release(CATALOG_LOCK_KEY, holder)
-			} catch {
-				console.warn('operations catalog lock release failed')
-			}
+		// A change that advanced `desired` after the holder's last read but before its release is invisible
+		// to the flush loop, and used to wait for the 5-minute maintenance replay (backlog 84). The last
+		// pass has the same window, so this narrows the gap rather than removing it; a `coalesced` flush
+		// already gave up under churn, so replaying it here would only burn the lease.
+		for (let pass = 0; pass < MAX_HANDOFF_PASSES && summary.outcome !== 'coalesced'; pass++) {
+			const state = await deps.catalog.getState()
+			if (state.desiredRevision <= state.appliedRevision) break
+			const handoff = await flushUnderLock(deps, service, syncKey, operationsOrigin)
+			if (handoff === null) break
+			summary = handoff
 		}
+		logCatalogSync(summary.outcome, summary.revision)
+		return summary
 	} catch (cause) {
 		const message = cause instanceof CatalogSyncError ? cause.message : 'operations catalog sync failed'
 		await recordCatalogFailure(deps.catalog, message)
-		console.warn('operations catalog sync failed')
+		// Only a CatalogSyncError carries a reason worth printing; the fallback just repeats the outcome.
+		logCatalogSync('failed', requestedRevision, cause instanceof CatalogSyncError ? cause.message : undefined)
 		return { outcome: 'failed', revision: requestedRevision }
 	}
+}
+
+/** One guarded flush. `null` means another holder owns the lease and is delivering the same desired revision. */
+async function flushUnderLock(
+	deps: OperationsCatalogSyncDeps,
+	service: HttpService,
+	syncKey: string,
+	operationsOrigin: string,
+): Promise<OperationsCatalogSyncSummary | null> {
+	const holder = uuidv7()
+	if (!(await deps.locks.acquire(CATALOG_LOCK_KEY, holder, CATALOG_LOCK_TTL_MS))) return null
+	try {
+		return await flushCatalog(deps.catalog, service, syncKey, operationsOrigin)
+	} finally {
+		try {
+			await deps.locks.release(CATALOG_LOCK_KEY, holder)
+		} catch {
+			console.warn('operations catalog lock release failed')
+		}
+	}
+}
+
+async function failCatalogSync(
+	catalog: OperationsCatalogRepository,
+	revision: number | null,
+	message: string,
+): Promise<OperationsCatalogSyncSummary> {
+	await catalog.markFailed(message)
+	logCatalogSync('failed', revision, message)
+	return { outcome: 'failed', revision }
+}
+
+/** One line per sync, so an installation can answer "what did the catalog do" without database access. */
+function logCatalogSync(outcome: OperationsCatalogSyncOutcome, revision: number | null, reason?: string): void {
+	const at = revision === null ? '' : ` revision ${revision}`
+	if (outcome === 'failed') {
+		console.warn(`operations catalog sync: failed${at}${reason === undefined ? '' : ` (${reason})`}`)
+		return
+	}
+	console.info(`operations catalog sync: ${outcome}${at}`)
 }
 
 async function flushCatalog(

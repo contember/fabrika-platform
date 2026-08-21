@@ -63,7 +63,7 @@ and a pin that pins half of what it claims.
 - [81](81-exercise-a-private-keyed-deploy-in-the-local-stack.md) — The local stack cannot exercise a keyed private deploy or a bound-app webhook: `source` mints installation tokens against real GitHub.
 - [82](82-a-duplicate-cross-app-grant-answers-500.md) — IAM answers 500, not 409, when the same cross-app grant is created twice.
 - [83](83-a-proxy-target-registers-without-the-domain-its-deploy-needs.md) — A proxy-target manifest registers without a `domain`; the first deploy fails instead, and nothing names the hosts a `zerops-subdomain` namespace can serve.
-- [84](84-the-first-deploy-after-registration-can-miss-its-operations-ingest.md) — The first deploys of a newly registered app carried no Operations-managed values although Operations listed the source; a later catalog change fixed it and the cause is not established.
+- [84](84-a-catalog-projection-can-wait-out-a-dead-flush-holders-lease.md) — A catalog projection can wait out a lease left behind by a dead flush holder: every change and every maintenance replay coalesces until the 5-minute lease expires.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.

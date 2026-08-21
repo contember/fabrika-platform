@@ -8,8 +8,11 @@ import { providerEnvironment } from './helpers/provider'
 const SYNC_KEY = 'catalog-sync-key-with-at-least-32-characters'
 
 class AvailableLock implements DeployLocks {
+	/** Set to model another holder mid-flush, the only way a caller observes `coalesced`. */
+	held = false
+
 	acquire(): Promise<boolean> {
-		return Promise.resolve(true)
+		return Promise.resolve(!this.held)
 	}
 
 	release(): Promise<void> {
@@ -216,6 +219,74 @@ describe('Control Operations catalog projection', () => {
 			appliedRevision: 2,
 		})
 		expect(await harness.repositories.operationsCatalog.getIngestConfig('app-a', 'prod')).toBeNull()
+	})
+
+	test('logs one line per sync naming the outcome and the revision, and no secret', async () => {
+		const harness = createHarness()
+		await harness.repositories.registry.createApp({ id: 'app-a', repoUrl: 'github.com/acme/app-a' })
+		await harness.repositories.registry.upsertAppEnv(providerEnvironment('app-a', 'prod'))
+		const locks = new AvailableLock()
+		const service = new CatalogService()
+		const deps = {
+			catalog: harness.repositories.operationsCatalog,
+			locks,
+			service,
+			syncKey: SYNC_KEY,
+			operationsOrigin: 'https://errors.example.test',
+		}
+		const lines: string[] = []
+		const originalInfo = console.info
+		const originalWarn = console.warn
+		console.info = (...values) => lines.push(values.map(String).join(' '))
+		console.warn = (...values) => lines.push(values.map(String).join(' '))
+		try {
+			await projectOperationsCatalogChange(deps)
+			service.acceptThenDrop = true
+			await replayOperationsCatalog(deps)
+			await replayOperationsCatalog(deps)
+			locks.held = true
+			await projectOperationsCatalogChange(deps)
+			locks.held = false
+			await projectOperationsCatalogChange({ ...deps, operationsOrigin: undefined })
+		} finally {
+			console.info = originalInfo
+			console.warn = originalWarn
+		}
+
+		expect(lines).toEqual([
+			'operations catalog sync: applied revision 1',
+			'operations catalog sync: failed revision 2 (operations catalog request failed)',
+			'operations catalog sync: unchanged revision 2',
+			'operations catalog sync: coalesced revision 3',
+			'operations catalog sync: failed revision 4 (operations public origin is not configured)',
+		])
+		expect(lines.join('\n')).not.toContain(SYNC_KEY)
+		expect(lines.join('\n')).not.toContain('errors.example.test')
+	})
+
+	test('an unwired composition is silent and advances no revision', async () => {
+		const harness = createHarness()
+		await harness.repositories.registry.createApp({ id: 'app-a', repoUrl: 'github.com/acme/app-a' })
+		await harness.repositories.registry.upsertAppEnv(providerEnvironment('app-a', 'prod'))
+		const lines: string[] = []
+		const originalInfo = console.info
+		const originalWarn = console.warn
+		console.info = (...values) => lines.push(values.map(String).join(' '))
+		console.warn = (...values) => lines.push(values.map(String).join(' '))
+		try {
+			expect(
+				await projectOperationsCatalogChange({
+					catalog: harness.repositories.operationsCatalog,
+					locks: new AvailableLock(),
+				}),
+			).toEqual({ outcome: 'disabled', revision: null })
+		} finally {
+			console.info = originalInfo
+			console.warn = originalWarn
+		}
+		expect(lines).toEqual([])
+		// Desired stays 0, which is what a deploy reads as "Operations is not wired" rather than "late".
+		expect(await harness.repositories.operationsCatalog.getState()).toMatchObject({ desiredRevision: 0, appliedRevision: 0 })
 	})
 
 	test('fails closed before delivery when a persisted public origin is invalid', async () => {

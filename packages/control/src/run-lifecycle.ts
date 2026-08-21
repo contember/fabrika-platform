@@ -25,6 +25,7 @@ import {
 	type ControlRegistryRepository,
 	type ControlRepositories,
 	type DeploymentNamespaceRow,
+	type OperationsCatalogRepository,
 	parseProviderJson,
 	type RunRow,
 } from './db'
@@ -281,6 +282,29 @@ const resolveVars = async (db: ControlRegistryRepository, appId: string, env: st
 	return vars
 }
 
+/**
+ * Name the catalog state a deploy observed when the environment has no active ingest configuration
+ * (backlog 84). Informational only, so a catalog that cannot be read never fails the deploy.
+ *
+ * A composition with no Operations transport returns `disabled` before it advances a revision, so a
+ * registered application whose desired revision is still 0 is the one signal here that Operations is
+ * not wired at all — the run deps carry no such flag (`buildRunDeps` always populates them).
+ */
+async function operationsCatalogGap(catalog: OperationsCatalogRepository): Promise<string> {
+	try {
+		const state = await catalog.getState()
+		if (state.lastError !== null) {
+			return `catalog revision ${state.attemptedRevision ?? state.desiredRevision} failed: ${state.lastError}`
+		}
+		if (state.desiredRevision === 0 && state.lastSuccessAt === null) return 'operations catalog is disabled'
+		if (state.lastAttemptAt === null && state.lastSuccessAt === null) return 'no catalog sync yet'
+		if (state.desiredRevision > state.appliedRevision) return `catalog revision ${state.desiredRevision} pending`
+		return `catalog revision ${state.appliedRevision} applied with no configuration for this environment`
+	} catch {
+		return 'catalog state unreadable'
+	}
+}
+
 const resolveSecrets = async (
 	deps: RunDeps,
 	appId: string,
@@ -422,6 +446,7 @@ export async function executeDeploy(
 			managedEnvironment[FABRIKA_IAM_ISSUER] = deps.iamIssuer.trim()
 		}
 		const ingest = await deps.repositories.operationsCatalog.getActiveIngestConfig(app.id, appEnv.env)
+		let ingestGap: string | null = null
 		if (ingest?.dsn !== null && ingest?.dsn !== undefined) {
 			Object.assign(
 				managedEnvironment,
@@ -432,6 +457,8 @@ export async function executeDeploy(
 					serviceKey: ingest.service_key,
 				}),
 			)
+		} else {
+			ingestGap = await operationsCatalogGap(deps.repositories.operationsCatalog)
 		}
 		if (releaseContext !== null) {
 			for (const key of Object.keys(releaseContext.managedEnvironment)) {
@@ -443,6 +470,12 @@ export async function executeDeploy(
 		const runLogs = new RunLogWriter(deps.logs, startedLogKey, run.id)
 		let outcome: ProviderTerminalOutcome
 		try {
+			if (ingestGap !== null) {
+				runLogs.log(`operations ingest not injected: app has no active ingest config (${ingestGap})`)
+				// A relay-backed provider re-flushes its own full buffer to this key, so the line survives
+				// only in the control log there — flush first so ours can never land after a relay flush.
+				await runLogs.flush()
+			}
 			const deployInput: ProviderDeployInput = {
 				runId: run.id,
 				app: registration.app,

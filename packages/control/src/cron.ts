@@ -76,10 +76,8 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	if (swept > 0) {
 		console.warn(`run sweep: marked ${swept} stale run(s) failed (> ${STALE_RUN_MAX_AGE_S}s in pending/running)`)
 	}
+	// The sync logs its own outcome line (operations-catalog.ts), so a second warn here would only repeat it.
 	const operations = await (options.operations ?? (() => replayOperationsCatalogProjection(env)))()
-	if (operations.outcome === 'failed') {
-		console.warn('operations catalog maintenance replay failed')
-	}
 	const releases = await (options.releases ?? (() => replayOperationsReleases(operationsReleaseDeps(env))))()
 	if (releases.failed > 0) console.warn(`operations release maintenance replay failed for ${releases.failed} run(s)`)
 	return { poll, reconcile, swept, operations, releases }

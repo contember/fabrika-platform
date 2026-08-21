@@ -550,6 +550,9 @@ describe('provider-neutral run lifecycle', () => {
 	test('persists provider log lines as ordered NDJSON readable through the run log use case', async () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db)
+		// An active ingest config keeps the deploy from adding its own catalog-gap line, so the writes
+		// this test choreographs are the provider's alone.
+		await activateOperationsIngest(db)
 		let markFirstStarted = () => {}
 		const firstStarted = new Promise<void>((resolve) => {
 			markFirstStarted = resolve
@@ -613,6 +616,7 @@ describe('provider-neutral run lifecycle', () => {
 	test('does not overwrite an existing runner log when the provider emits no control-side lines', async () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db)
+		await activateOperationsIngest(db)
 		const key = `runs/${runId}/logs.ndjson`
 		const runnerContents = '{"ts":1,"stream":"stdout","text":"runner-owned"}\n'
 		const stored = memoryLogs({ [key]: runnerContents })
@@ -659,6 +663,7 @@ describe('provider-neutral run lifecycle', () => {
 	test('keeps provider success when blob persistence fails and does not log storage error details', async () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db)
+		await activateOperationsIngest(db)
 		const provider = makeProvider([], { state: 'succeeded' })
 		provider.deploy = async (input) => {
 			input.events.log('safe provider output')
