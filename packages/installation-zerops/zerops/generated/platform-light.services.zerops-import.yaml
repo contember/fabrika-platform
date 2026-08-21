@@ -21,7 +21,7 @@ services:
     envIsolation: service
     override: true
     priority: 100
-    profile: oltp-staging
+    profile: oltp-hobby
   - hostname: storage
     type: object-storage
     envIsolation: service

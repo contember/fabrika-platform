@@ -4,12 +4,12 @@ import { notesGates } from './fabrika.gates'
 import { NOTES_APP_ID, notesSchema } from './fabrika.schema'
 
 /** Cheap-tier variant: the runtime consumes the namespace-owned `postgres` service. */
-const services = (ctx: ZeropsResourceContext): ZeropsServiceSpec[] => [{
+const services = (_ctx: ZeropsResourceContext): ZeropsServiceSpec[] => [{
 	hostname: NOTES_SERVICE,
 	type: 'alpine/bun@1.3',
 	priority: 10,
 	enableSubdomainAccess: false,
-	minContainers: ctx.env === 'prod' ? 2 : 1,
+	minContainers: 1,
 	maxContainers: 4,
 }]
 

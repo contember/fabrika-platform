@@ -343,25 +343,36 @@ const registrationResourceClaims = (registration: ProviderRegistration): string[
 }
 
 /**
- * The namespace-owned PostgreSQL service, sized rather than defaulted.
+ * The namespace-owned PostgreSQL service: the cheapest shape that runs, on EVERY environment.
  *
- * Omitting `profile` is not neutral: an HA service silently gets `oltp-production` (two DEDICATED cores
- * and 4 GB per container, three containers) and a single one gets `oltp-staging`. Both verified by
- * reading the profile back off a live service. Production takes the production preset deliberately;
- * everything else takes the cheapest one its type offers, because a namespace database for a staging
- * app should cost what staging is worth.
+ * A profile sets the FLOOR and the tuning preset, never the cap — `oltp-hobby` and `oltp-production`
+ * share the same 8-core / 48 GB / 250 GB ceiling and the same vertical autoscaler, so the production
+ * preset does not buy headroom, it buys an idle bill. `oltp-hobby` starts at one SHARED core and
+ * 0.25 GB and grows under load; the shape is proven by a live app with dozens of tables.
+ *
+ * Keying this off `env === 'prod'` is what this default used to do, and it was wrong: most apps are
+ * small on every environment they have, and a name is not a size. HA and a bigger floor stay
+ * available and become a DELIBERATE act — `--postgres-type` and `--postgres-profile` on the namespace
+ * command — because the failure mode of over-provisioning is silent and monthly, while the failure
+ * mode of under-provisioning is visible and fixable at any time.
+ *
+ * Omitting `profile` would not be neutral: an HA service silently gets `oltp-production` (two
+ * DEDICATED cores and 4 GB per container, three containers) and a single one `oltp-staging`. Both
+ * read back off a live service.
  */
-const defaultPostgres = (env: string): ZeropsNamespacePostgres =>
-	env === 'prod' ? { type: 'postgresql:ha@18', profile: 'oltp-production' } : { type: 'postgresql:single@18', profile: 'oltp-hobby' }
+const defaultPostgres = (): ZeropsNamespacePostgres => ({ type: 'postgresql:single@18', profile: 'oltp-hobby' })
 
 export const zeropsNamespacePreset = (input: ZeropsNamespacePresetInput): ZeropsNamespaceTarget => ({
 	projectName: input.projectName,
-	corePackage: input.corePackage ?? (input.env === 'prod' ? 'SERIOUS' : 'LIGHT'),
+	// `LIGHT` on every environment. An APP namespace is not the platform project — the argument for
+	// `SERIOUS` in `installation-zerops` is that the platform repairs the apps project, which no app
+	// namespace does. `corePackage` is upgrade-only, so this stays the caller's explicit choice.
+	corePackage: input.corePackage ?? 'LIGHT',
 	publicAccess: input.publicAccess ?? 'custom-domain',
 	proxyBuildFromGit: input.proxyBuildFromGit,
 	managed: true,
 	ready: false,
-	...(input.preset === 'cheap' ? { postgres: input.postgres ?? defaultPostgres(input.env) } : {}),
+	...(input.preset === 'cheap' ? { postgres: input.postgres ?? defaultPostgres() } : {}),
 })
 
 const projectMarker = (namespace: ProviderDeploymentNamespace): string => `Managed by Fabrika namespace ${namespace.id} (${namespace.env}).`
@@ -380,7 +391,11 @@ const proxyService = (publicAccess: ZeropsNamespacePublicAccess): ZeropsServiceS
 	type: PROXY_TYPE,
 	priority: 10,
 	enableSubdomainAccess: publicAccess === 'zerops-subdomain',
-	minContainers: 2,
+	// One container is a real availability trade — the proxy is the only enforcement point (ADR-0022),
+	// so a restart is a short outage rather than a rolling one — taken because it is a whole core of
+	// idle floor on every namespace, and most namespaces hold one small app. `maxContainers` is
+	// unchanged, so load still scales out.
+	minContainers: 1,
 	maxContainers: 6,
 })
 
@@ -481,7 +496,7 @@ const namespacePresentation = (
 ): ProviderNamespacePresentation => {
 	const preset = target.postgres !== undefined ? 'cheap' : namespace.exclusiveAppId === undefined ? 'mid' : 'full'
 	const projectName = target.projectName ?? namespace.id
-	const corePackage = target.corePackage ?? (namespace.env === 'prod' ? 'SERIOUS' : 'LIGHT')
+	const corePackage = target.corePackage ?? 'LIGHT'
 	const publicAccess = target.publicAccess ?? 'custom-domain'
 	const postgres = target.postgres === undefined
 		? 'App-owned database services'
@@ -574,7 +589,7 @@ const normalizeTarget = (
 	return {
 		...decoded,
 		projectName: decoded.projectName ?? namespace.id,
-		corePackage: decoded.corePackage ?? (namespace.env === 'prod' ? 'SERIOUS' : 'LIGHT'),
+		corePackage: decoded.corePackage ?? 'LIGHT',
 		publicAccess: decoded.publicAccess ?? 'custom-domain',
 		proxyBuildFromGit,
 		managed: decoded.managed ?? decoded.projectId === undefined,

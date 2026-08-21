@@ -25,6 +25,6 @@ services:
     override: true
     enableSubdomainAccess: false
     priority: 10
-    minContainers: 2
+    minContainers: 1
     maxContainers: 6
     startWithoutCode: true

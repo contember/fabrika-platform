@@ -292,7 +292,7 @@ describe('the Zerops namespace process configuration', () => {
 		})
 		expect(normalized.target.payload).toEqual({
 			projectName: 'apps-prod',
-			corePackage: 'SERIOUS',
+			corePackage: 'LIGHT',
 			publicAccess: 'custom-domain',
 			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			managed: true,

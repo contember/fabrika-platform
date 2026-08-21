@@ -46,19 +46,22 @@ export const NOTES_UPSTREAM = `${NOTES_SERVICE}:3000`
  * `notesapi` in staging and `notesapi` in production are different services on different private
  * networks, and staging genuinely cannot reach production's database.
  */
-const services = (ctx: ZeropsResourceContext): ZeropsServiceSpec[] => [
+const services = (_ctx: ZeropsResourceContext): ZeropsServiceSpec[] => [
 	{
 		hostname: NOTES_DATABASE_SERVICE,
-		// Availability is encoded in the TYPE, deliberately: `mode` is deprecated in the published schema
-		// and is not even representable in `ZeropsServiceSpec`. Production gets HA; every other
-		// environment gets a single node, because a staging outage costs a retry and HA costs money in
-		// every environment that has it.
-		type: ctx.env === 'prod' ? 'postgresql:ha@18' : 'postgresql:single@18',
-		// Sized, not defaulted. Omitting `profile` is not a neutral act: an HA service silently gets
-		// `oltp-production` (two DEDICATED cores and 4 GB per container, three containers) and a single
-		// one gets `oltp-staging`. A non-production database wants `oltp-hobby`, which is the cheapest
-		// preset its type offers — and an example is where people copy their defaults from.
-		profile: ctx.env === 'prod' ? 'oltp-production' : 'oltp-hobby',
+		// One node on EVERY environment, `prod` included. Availability is encoded in the TYPE — `mode` is
+		// deprecated in the published schema and is not representable in `ZeropsServiceSpec` — so moving to
+		// HA is a new service and a data migration, not an edit. That is a deliberate trade: most apps are
+		// small on every environment they have, and paying three DEDICATED containers on the chance one of
+		// them is not costs more, every month, than the migration costs once.
+		type: 'postgresql:single@18',
+		// Sized, not defaulted. Omitting `profile` is not a neutral act: a single service silently gets
+		// `oltp-staging` and an HA one `oltp-production` (two DEDICATED cores and 4 GB per container,
+		// three containers). `oltp-hobby` is the cheapest preset this type offers, and cheap is not small:
+		// every profile shares the same 8-core / 48 GB ceiling and the same autoscaler, so a profile picks
+		// the FLOOR and the tuning preset, never the cap. An example is where people copy their defaults
+		// from, so this one copies well.
+		profile: 'oltp-hobby',
 		// Higher priority is created FIRST, so the database exists before the runtime that migrates into
 		// it at container start (`run.initCommands` in zerops.yaml).
 		priority: 100,
@@ -72,7 +75,9 @@ const services = (ctx: ZeropsResourceContext): ZeropsServiceSpec[] => [
 		// review. It does not undo one enabled by hand — a re-applied import leaves an existing service
 		// untouched. The proxy is the only publicly routed service in the project.
 		enableSubdomainAccess: false,
-		minContainers: ctx.env === 'prod' ? 2 : 1,
+		// One container, and `maxContainers` unchanged: the floor is what an idle app pays for, the
+		// ceiling is what a busy one reaches.
+		minContainers: 1,
 		maxContainers: 4,
 	},
 ]

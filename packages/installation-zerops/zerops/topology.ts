@@ -328,12 +328,18 @@ const lightPlatformTopology = (options: TopologyOptions, publicAccess: PublicAcc
 			// a `${operationsdb_connectionString}` baked into it would name a service `light` does not have.
 			hostname: 'db',
 			type: 'postgresql:single@18',
-			// `oltp-staging` is also this type's default, written out because a default is not a
-			// choice. It is the one profile below `oltp-production` that still sets a 1 GB memory
-			// floor, and this single service holds IAM, control, Operations AND the apps beside them
-			// — `oltp-hobby` sets no floor at all, which is right for one dev database and not for
-			// four tenants sharing one.
-			profile: 'oltp-staging',
+			// `oltp-hobby`, written out because a default is not a choice — this type's default is
+			// `oltp-staging`, whose only difference here is a 1 GB memory FLOOR.
+			//
+			// A floor is not headroom. Every PostgreSQL profile shares the same 8-core / 48 GB / 250 GB
+			// ceiling and the same vertical autoscaler, so `oltp-staging` does not let this service grow
+			// any further than `oltp-hobby` does — it only pre-pays for memory the tier is idle on. That
+			// this single service holds IAM, control, Operations and the apps beside them is an argument
+			// about the ceiling, which is unchanged.
+			//
+			// An installation that wants a specific floor sets one on the service — `minRam` accepts a
+			// float — which is where a per-installation value belongs (ADR-0004), not in this document.
+			profile: 'oltp-hobby',
 			priority: 100,
 		},
 		{

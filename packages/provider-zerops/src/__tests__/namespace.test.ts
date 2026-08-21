@@ -139,9 +139,11 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 		const name = yaml.includes('name: cheap-prod') ? 'cheap-prod' : 'apps-prod'
 		const namespaceId = name
 		const description = `Managed by Fabrika namespace ${namespaceId} (prod).`
-		state.projects.set(projectId, project(projectId, name, description))
+		// The double creates what the DOCUMENT asked for, the way the platform does — reading both the
+		// core package and the PostgreSQL flavour back out of the yaml rather than assuming either.
+		state.projects.set(projectId, project(projectId, name, description, yaml.includes('corePackage: SERIOUS') ? 'SERIOUS' : 'LIGHT'))
 		state.services.set(projectId, [
-			...(yaml.includes('hostname: postgres') ? [postgres()] : []),
+			...(yaml.includes('hostname: postgres') ? [postgres(yaml.includes('postgresql:single@18') ? 'postgresql:single@18' : 'postgresql:ha@18')] : []),
 			proxy(),
 		])
 		if (state.failImportAfterMutation) {
@@ -327,8 +329,8 @@ describe('Zerops namespace policy and topology', () => {
 		const full = operator.plan({ id: 'billing-prod', env: 'prod', preset: 'full', exclusiveAppId: 'billing' })
 		expect(zeropsNamespaceTargetCodec.decode(cheap.namespace.target.payload)).toMatchObject({
 			projectName: 'apps-prod',
-			corePackage: 'SERIOUS',
-			postgres: { type: 'postgresql:ha@18' },
+			corePackage: 'LIGHT',
+			postgres: { type: 'postgresql:single@18' },
 		})
 		expect(zeropsNamespaceTargetCodec.decode(mid.namespace.target.payload).postgres).toBeUndefined()
 		expect(full.namespace.exclusiveAppId).toBe('billing')
@@ -357,11 +359,16 @@ describe('Zerops namespace policy and topology', () => {
 			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 		})
 
-		// Sized, never defaulted: an HA service with no `profile` silently gets `oltp-production` anyway.
-		expect(cheap.postgres).toEqual({ type: 'postgresql:ha@18', profile: 'oltp-production' })
+		// Sized, never defaulted: a service with no `profile` silently gets its type's default —
+		// `oltp-staging` for single, `oltp-production` for HA — so the cheapest preset is written out.
+		expect(cheap.postgres).toEqual({ type: 'postgresql:single@18', profile: 'oltp-hobby' })
 		expect(mid.postgres).toBeUndefined()
-		expect(mid.corePackage).toBe('LIGHT')
 		expect(full.postgres).toBeUndefined()
+		// `prod` buys no bigger default than any other environment: the name is not a size, and HA is a
+		// deliberate act through the namespace command's explicit provider fields.
+		expect(cheap.corePackage).toBe('LIGHT')
+		expect(mid.corePackage).toBe('LIGHT')
+		expect(full.corePackage).toBe('LIGHT')
 	})
 
 	test('compiles proxy plus one namespace-owned PostgreSQL service for cheap', () => {
@@ -374,7 +381,7 @@ describe('Zerops namespace policy and topology', () => {
 		const topology = compileZeropsNamespaceTopology(namespace(target, { id: 'cheap-prod' }), target)
 
 		expect(topology.source.services({ env: 'prod' }).map((service) => [service.hostname, service.type])).toEqual([
-			['postgres', 'postgresql:ha@18'],
+			['postgres', 'postgresql:single@18'],
 			['proxy', 'alpine@3.21'],
 		])
 		expect(topology.createYaml).toContain('envIsolation: service')

@@ -304,7 +304,7 @@ describe('Zerops ControlProvider registration', () => {
 		expect(withoutNamespaces.namespaces).toBeUndefined()
 		expect(zeropsNamespaceTargetCodec.decode(withNamespaces.namespaces.normalize(value).target.payload)).toMatchObject({
 			projectName: 'apps-prod',
-			corePackage: 'SERIOUS',
+			corePackage: 'LIGHT',
 			managed: true,
 			ready: false,
 		})

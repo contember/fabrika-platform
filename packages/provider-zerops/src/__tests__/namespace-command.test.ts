@@ -47,8 +47,8 @@ describe('fabrika namespace commands', () => {
 		} = JSON.parse(output.join(''))
 		expect(plan.namespace.target.payload).toMatchObject({
 			projectName: 'apps-prod',
-			corePackage: 'SERIOUS',
-			postgres: { type: 'postgresql:ha@18' },
+			corePackage: 'LIGHT',
+			postgres: { type: 'postgresql:single@18' },
 		})
 		expect(plan.presentation.preset).toBe('cheap')
 	})

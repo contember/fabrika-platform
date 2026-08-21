@@ -309,11 +309,15 @@ describe('no managed service is sized by a default', () => {
 		expect(profiles.get('operationsdb')).toBe('oltp-staging')
 	})
 
-	test('the example app gives a non-production database the cheapest preset its type has', () => {
-		const stage = notesConfig.target.services({ env: 'stage' }).find((service) => service.hostname === NOTES_DATABASE_SERVICE)
-		const prod = notesConfig.target.services({ env: 'prod' }).find((service) => service.hostname === NOTES_DATABASE_SERVICE)
-		expect(stage?.profile).toBe('oltp-hobby')
-		expect(prod?.profile).toBe('oltp-production')
+	test('the example app gives EVERY environment the cheapest preset its type has, `prod` included', () => {
+		const profileIn = (env: string): string | undefined =>
+			notesConfig.target.services({ env }).find((service) => service.hostname === NOTES_DATABASE_SERVICE)?.profile
+		// An example is where people copy their defaults from, so it must not teach that naming an
+		// environment `prod` is how you buy a bigger database. A profile picks the FLOOR and the tuning
+		// preset — every one shares the same 8-core / 48 GB ceiling — so the cheapest preset costs no
+		// headroom, only a smaller idle bill.
+		expect(profileIn('stage')).toBe('oltp-hobby')
+		expect(profileIn('prod')).toBe('oltp-hobby')
 	})
 })
 
@@ -442,7 +446,7 @@ describe('cheap, mid, and full namespace fixtures', () => {
 		const app = compileFabrikaManifest(cheapNotesConfig, 'prod', SOURCE_DESCRIPTOR)
 
 		expect(namespace.steady.document.services.map((service) => service.hostname)).toEqual(['postgres', PROXY_HOSTNAME])
-		expect(namespace.steady.document.services.find((service) => service.hostname === 'postgres')?.type).toBe('postgresql:ha@18')
+		expect(namespace.steady.document.services.find((service) => service.hostname === 'postgres')?.type).toBe('postgresql:single@18')
 		expect(app.target.importDocument.services.map((service) => service['hostname'])).toEqual([NOTES_SERVICE])
 		expect(app.target.namespaceResources).toEqual([{
 			resourceKey: 'service:postgres',

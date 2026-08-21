@@ -287,12 +287,16 @@ describe('the app compiles to an import that is applied INTO an existing project
 		expect(() => assertZeropsHostnames(document)).not.toThrow()
 	})
 
-	test('the database type is chosen per environment: HA in prod, single elsewhere', () => {
+	test('the database type does NOT vary by environment: one node everywhere, `prod` included', () => {
 		const typeIn = (env: string): string | undefined =>
 			compileImport({ target: notesConfig.target, ctx: { env } }).services.find((service) => service.hostname === NOTES_DATABASE_SERVICE)?.type
-		expect(typeIn('prod')).toBe('postgresql:ha@18')
+		// Naming an environment `prod` used to buy `postgresql:ha@18` — three DEDICATED containers — and
+		// most apps are small on every environment they have. HA is still available; it is now an explicit
+		// act rather than a consequence of a name.
+		expect(typeIn('prod')).toBe('postgresql:single@18')
 		expect(typeIn('stage')).toBe('postgresql:single@18')
-		// Availability is in the TYPE; the deprecated `mode` is not representable.
+		// Availability is in the TYPE; the deprecated `mode` is not representable. That is also why moving
+		// to HA later is a new service and a data migration, not an edit.
 		expect(yaml).not.toContain('mode:')
 	})
 })
