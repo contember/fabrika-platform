@@ -23,9 +23,11 @@ promise. And the from-scratch path — proven once, on 2026-08-10, and never sin
 way back, so every defect that made that run expensive is worth fixing _before_ the rebuild, not
 after.
 
-The success condition is one command sequence an operator can run unattended, ending in a
-signed-in console and an application serving, on an installation whose idle floor is measured in
-single-digit dollars.
+The success condition is a platform bring-up an operator can run unattended — install, init, the
+sidecar deploy and the first administrator — ending in a signed-in console, followed by an application
+serving, on an installation whose idle floor is measured in single-digit dollars. Application
+onboarding (a keyed source connection, registration) stays a hand sequence in this sprint; that is
+[`78`](../backlog/78-register-a-zerops-app-from-local-config-in-one-command.md)'s work, not WU8's.
 
 ## Refs re-verified at HEAD (2026-08-21)
 
@@ -92,6 +94,19 @@ single-digit dollars.
   no removal — `packages/control-contract/src/rpc.ts:146-153`. `reconcile` takes `NamespaceIdInput`,
   so a stored target cannot be changed after creation either.
 
+**The source transporter, being rewritten beside this plan**
+
+- ✔ `source` packages from Git objects today: REST commit + recursive tree, `git init --bare` +
+  `git fetch` into a temp dir, per-blob `git cat-file` into a tar on disk, gzip on upload —
+  `packages/source-zerops/src/repository.ts` (~1 200 lines) and `github-metadata.ts`. The tar was
+  always on disk; the "512 MB on one heap" belief that justified a RAM floor on `source` was wrong.
+- ✔ Nothing on the control side reads `entryCount`, `expandedBytes` or an archive digest —
+  `grep` over `packages/provider-zerops/src` and `packages/control/src` — so the archive need not be
+  byte-deterministic.
+- ⚠ ADR-0029's bold invariant says `source` "packages directly from Git objects". The rewrite amends
+  it, so it carries its own ADR (0037) and ADR-0029 is not edited. WU0's and WU1's ADRs take the
+  numbers after it.
+
 **The cheap defaults, already landed**
 
 - ✔ `3ecf86d` — namespaces default to `postgresql:single@18` at `oltp-hobby` and `corePackage: LIGHT`
@@ -119,9 +134,36 @@ single-digit dollars.
   whatever project WU8 creates. Update `backlog/README.md` and `INDEX.md`.
 - **Acceptance / witness.** No file outside `archive/` mentions `fabrika-test` as a live target; the
   ADR is linked from `decisions/README.md`; `backlog/README.md`'s item list matches the files present.
-- **Touch points.** `docs/decisions/0037-*.md` (next free number — confirm at write time),
-  `docs/backlog/59-*.md`, `docs/backlog/60-*.md`, `docs/backlog/65-*.md`, `docs/backlog/README.md`,
+- **Touch points.** `docs/decisions/0038-*.md` (0037 is WU1a's — confirm the next free number at
+  write time), `docs/backlog/59-*.md`, `docs/backlog/60-*.md`, `docs/backlog/65-*.md`, `docs/backlog/README.md`,
   `docs/INDEX.md`.
+
+### WU1a — `source` streams GitHub tarballs instead of packaging Git objects (effort M) · in flight
+
+- **Problem.** The Git-object path costs ~1 560 lines, two git subprocess round-trips per job, twice the
+  repository on disk, and a double read of the tree (REST, then git) — and the memory argument that
+  justified a separate, RAM-floored `source` never held. A private deploy has not been exercised on a
+  fresh installation since 2026-08-11; the next live run is WU8, so the simpler transporter must land
+  before it, not after.
+- **Verify first.** Confirm control's handling of a failed upload: ADR-0029 says every pre-trigger
+  failure deletes the app version, which is what lets a validation failure abort an in-flight PUT.
+- **Scope.** `resolve` = REST commit lookup + `contents/zerops.yaml` digest. `archive` = tarball
+  endpoint → 302 to `codeload.github.com` only → gunzip → tar rewrite (strip the prefix, regular files
+  only, reject symlinks / hard links / `.gitmodules` / traversal / duplicates, 50 000 entries and
+  512 MiB enforced in the stream, descriptor digest checked in the stream) → gzip → PUT. No git, no
+  temp disk, memory bounded to one header plus one pax record. The RPC contract with control, the
+  upload-URL validation, the failure codes and the deadlines stay. ADR-0037 amends ADR-0029's
+  packaging invariant; `docs/reference/zerops-platform.md` describes the new path.
+- **Acceptance / witness.** Unit: `git archive`-generated fixtures round-trip through the rewrite and
+  the captured PUT body unpacks to the expected paths, modes and content; symlink, `.gitmodules`, long
+  pax path, oversize, truncated, wrong-prefix, traversal, foreign-redirect, descriptor-missing and
+  descriptor-mismatch fixtures are refused with the existing codes. Live: WU8 item (4) is this unit's
+  only end-to-end witness — record that the 302 target was `codeload.github.com` and that `source`
+  ran with no git binary invoked and no disk growth.
+- **Touch points.** `packages/source-zerops/src/{repository,github-metadata,service,config,index}.ts`
+  and their tests, one comment in `packages/installation-zerops/zerops/setups.ts`,
+  `docs/decisions/0037-*.md`, `docs/decisions/README.md`, `docs/reference/zerops-platform.md`.
+  **WU1 edits `source-zerops/src/config.ts` too — WU1 starts after this unit is merged.**
 
 ### WU1 — Remove the legacy v1 source credential path (effort L)
 
@@ -151,13 +193,14 @@ single-digit dollars.
   without a connection id is a 404, proved by a test; fresh and upgrade migrations pass on SQLite/D1
   and PostgreSQL, with the upgrade fixture exercising the FULL migration list (the trap
   `65bc44b` already fixed once); `grep -rn "legacy-v1\|GITHUB_APP_ID\b" packages/` returns nothing
-  outside `archive/`; public export tests still cover every surviving v2 symbol.
+  (`docs/archive/` may still mention them; `packages/` may not); public export tests still cover every surviving v2 symbol.
 - **Touch points.** `packages/provider-zerops/src/{source,source-connection}.ts`,
   `packages/source-zerops/src/{config,github-connection}.ts`,
   `packages/control/src/{app,webhook,source-connection,source-connection-port,github-connection-store,run-lifecycle,db}.ts`,
   `packages/control/fabrika.gates.ts`, new `packages/control/migrations/00NN_*.sql` and
   `packages/control/migrations-postgres/00NN_*.sql`, `packages/dashboard/src/routes/settings/source.tsx`,
-  their tests, and a superseding ADR for 0032's compatibility clause.
+  their tests, and a superseding ADR for 0032's compatibility clause (0039 — after WU1a's 0037 and
+  WU0's 0038). Starts after WU1a is merged: both rewrite `source-zerops/src/config.ts`.
 
 ### WU2 — Make stdin agree with each command's intent (effort S) · backlog [`68`](../backlog/68-platform-commands-mishandle-a-closed-stdin.md)
 
@@ -260,9 +303,11 @@ single-digit dollars.
   `packages/control/migrations-postgres/0005_deployment_namespaces.sql` declares
   `ON DELETE RESTRICT` on both.
 - **Scope.** Removal for the narrow case only: a namespace with no registered app environments,
-  refused while any app references it. Decide explicitly, and record, whether it also deletes the
-  provider project it created. Deleting a READY namespace that hosts running applications is a
-  destructive act needing its own design and is out of scope.
+  refused while any app references it. It removes the ROW and releases the id; it does NOT delete a
+  provider project the failed provisioning may have created — that is a destructive act on live state,
+  and the operator is told the project's id so they can delete it by hand. Decided here so WU8 does not
+  decide it under pressure. Deleting a READY namespace that hosts running applications is likewise
+  out of scope.
 - **Acceptance / witness.** A namespace that never reached `ready` and owns no app environment is
   removed, its id is immediately reusable by a create under the same name, and a namespace with an app
   environment refuses removal with a message naming the app.
@@ -312,7 +357,8 @@ single-digit dollars.
   session reaching all three console planes with `IAM_BOOTSTRAP_ADMINS` set nowhere, re-read off the
   running service; (3) `namespaces create` returns inside a normal timeout and the namespace reaches
   `ready` with the caller disconnected; (4) a private repository resolves, uploads, builds and serves,
-  with `/healthz` 200; (5) `zops scale get` on every service shows the cheap floors this sprint's
+  with `/healthz` 200 — through WU1a's tarball path: the redirect target was `codeload.github.com`,
+  no git binary ran on `source`, and its disk did not grow; (5) `zops scale get` on every service shows the cheap floors this sprint's
   defaults declare, and the project's reported 30-day cost is single-digit dollars; (6) no service
   carries an autoscaling value fabrika did not write — the hand-set 1 GB floor on `source` must not
   reappear.
@@ -357,22 +403,23 @@ single-digit dollars.
 3. **Delete by reachability, never by the `V1` suffix.** The suffix is a message version and v2 reuses
    several of those types (`source.ts:77`, `:437`, `:463`).
 4. **The gap between the deletion and the rebuild is the risk to manage.** The from-scratch path works
-   today and nothing re-proves it while the account is empty. If WU1–WU7 run long, stand a cheap
-   installation up immediately after WU8's deletion and roll the fixes into it, rather than staying
-   dark.
+   today and nothing re-proves it while the account is empty. Deletion is NOT pulled forward to save
+   the bill — the two projects cost about $3 a day, less than a second teardown. If WU1–WU7 are not
+   merged by **2026-08-28**, run WU8 from HEAD with whatever has landed, record which units it did not
+   witness, and re-run only their live acceptance later, rather than staying dark or tearing down twice.
 
 ## Sequencing
 
 | Stage | Units                       | Notes                                                                                                                                                  |
 | ----- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1     | WU0                         | Independent. Do it first so the ADR and the dead items do not rot behind the code.                                                                     |
-| 2     | **WU1** ∥ **WU2** ∥ **WU5** | Disjoint write territories: source/webhook, prompts/install, namespace error projection.                                                               |
-| 3     | **WU3** ∥ **WU4** ∥ **WU6** | WU3 needs WU2's prompt decision; WU4 and WU6 both touch `api/namespaces.ts` and `control-contract` — sequence those two against each other, WU4 first. |
+| 1     | WU0 ∥ **WU1a**              | Independent of each other. WU1a is already in flight; WU0 is docs only.                                                                                |
+| 2     | **WU1** ∥ **WU2** ∥ **WU4** | The two long poles start here. WU1 waits for WU1a (shared `config.ts`); WU4 is the riskiest design change on WU8's path, so it no longer waits on WU5. |
+| 3     | **WU3** ∥ WU5 → WU6         | WU3 needs WU2's prompt decision; WU5 and WU6 both touch `api/namespaces.ts` after WU4 — run them in that order, not in parallel.                       |
 | 4     | WU7                         | Cheapest after WU5, whose projection may already carry the message.                                                                                    |
 | 5     | **WU8**                     | The live run. Everything above is unproven until this passes.                                                                                          |
 
-WU1 is the long pole and is fully independent of WU2–WU7 — start it first and run the bring-up fixes
-beside it.
+WU1 and WU4 are the long poles. WU1 is independent of WU2–WU7 but not of WU1a; WU4 is independent of
+everything except WU6, which follows it.
 
 ## Run log
 
@@ -387,3 +434,10 @@ beside it.
   `source` on `fabrika-install-test` carries `GITHUB_APP_CREDENTIALS` plus three keyed v2 slots —
   confirmed by key name only, no value read — which is the evidence WU1 acts on. `fabrika-test` was
   already gone from the account before this sprint began.
+- 2026-08-21 — WU1a added: the `source` tarball rewrite was decided and started the same day this plan
+  was written (ADR-0037). WU0's ADR moves to 0038 and WU1's to 0039. WU4 moved up to stage 2 and WU5
+  down to stage 3 so the two long poles start together. WU6 now decides the provider-project question
+  (it does not delete one). Decision 4 got a date.
+- 2026-08-21 — WU1a landed locally in `40fa310`: `source-zerops` 127 pass / 0 fail, full typecheck,
+  lint and format clean. Not yet exercised against a live GitHub tarball — WU8 item (4) stays its
+  witness. WU1 may start.
