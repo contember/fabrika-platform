@@ -129,6 +129,12 @@ installation explicitly, and an immutable transport marker keeps the copied Zero
 v1 compatibility route. Cloudflare preserves its static-secret and installation-id webhook behavior.
 There is no Fabrika connection-count limit; individual payloads and pages remain bounded.
 
+ADR-0038 removes the environment NAME from namespace sizing. Every environment now gets
+`postgresql:single@18` at `oltp-hobby`, `corePackage: LIGHT` and a one-container proxy floor, and the
+light tier's shared `db` moves to `oltp-hobby` — because a Zerops profile chooses the floor and the
+tuning preset, never the cap. HA and larger floors stay reachable through `--postgres-type` and
+`--postgres-profile`. The standard two-project platform tier keeps its HA databases.
+
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
@@ -170,3 +176,4 @@ There is no Fabrika connection-count limit; individual payloads and pages remain
 - [0035](0035-the-platform-owns-the-application-iam-issuer.md) — The platform owns the application's IAM issuer, and an undeclared variable is refused — accepted; renames `FABRIKA_IAM_URL` under 0024 (2026-08-19)
 - [0036](0036-recover-a-source-credential-binding.md) — Recover a source credential binding from durable state — accepted; amends 0032's rotation scope (2026-08-20)
 - [0037](0037-stream-github-tarballs-for-zerops-sources.md) — Stream GitHub tarballs for Zerops sources — accepted; amends 0029's packaging mechanism (2026-08-21)
+- [0038](0038-size-namespaces-cheaply-by-default.md) — Size namespaces cheaply by default; an environment name never chooses a size — accepted (2026-08-21)

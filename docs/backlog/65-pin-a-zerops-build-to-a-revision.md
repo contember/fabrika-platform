@@ -15,12 +15,12 @@ otherwise. Effort S to settle, unknown to fix.
 ## Problem
 
 `triggerPipeline`'s `buildFromGit` is documented in our own client as _"a one-time build from that
-PUBLIC repository URL"_ (`packages/provider-zerops/src/api.ts:246-256`). The application checkpoint
+PUBLIC repository URL"_ (`packages/provider-zerops/src/api.ts:326-331`). The application checkpoint
 passed a public example repository URL ending in `@main`, and Zerops accepted and built it live. That
 proves the `@main` form is accepted, but not that Zerops pins a non-default tag or commit: `main` is
 also the repository's default branch. The remaining installation caller still passes a bare URL —
 `FABRIKA_PROXY_SOURCE = 'https://github.com/contember/fabrika-platform'`
-(`packages/installation-zerops/zerops/topology.ts:126`).
+(`packages/installation-zerops/zerops/topology.ts:141`).
 
 Two consequences, one of them drift in a decision:
 
@@ -41,8 +41,8 @@ rest of `reference/zerops-platform.md`. The accepted `@main` probe establishes a
 not tag or SHA semantics.
 
 1. **Ask the platform.** Does `trigger-pipeline` (or the import format's `buildFromGit`) accept an
-   immutable tag or SHA? Try a non-default tag and a commit against `fabrika-test`, then record which
-   revision Zerops actually built.
+   immutable tag or SHA? Try a non-default tag and a commit against a throwaway service in the
+   rebuilt light-tier installation, then record which revision Zerops actually built.
 2. Then one of:
    - **It can be pinned** → pass the same tag `fabrika.ref` carries, everywhere `buildFromGit` is set,
      and the sidecar's pin becomes whole.
