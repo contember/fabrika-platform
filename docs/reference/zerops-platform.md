@@ -560,14 +560,14 @@ states with the exact API available to the project integration token. The servic
 
 Fabrika application deploys no longer use `buildFromGit`. Public and private GitHub repositories share
 one provider lifecycle: source resolves the exact commit and registered root `zerops.yaml` digest;
-control creates and records an application version; source uploads the bound Git-object archive; and
-control calls `build-and-deploy` with the registered descriptor and selected setup. Public
-`buildFromGit` remains in use for Fabrika-owned installation artifacts such as the proxy, not for an
-application deployment.
+control creates and records an application version; source streams the repository tarball for that
+exact commit into the upload; and control calls `build-and-deploy` with the registered descriptor and
+selected setup. Public `buildFromGit` remains in use for Fabrika-owned installation artifacts such as
+the proxy, not for an application deployment.
 
-The installation has a private `source` service on `http://source:3000`. Zerops' Bun runtime already
-contains `git`; adding it again from `run.prepareCommands` failed live because package installation
-requires `sudo`. Source exposes
+The installation has a private `source` service on `http://source:3000`. It needs no `git` binary and no
+`run.prepareCommands`, which matters because package installation on a Zerops runtime requires `sudo`.
+Source exposes
 only an unauthenticated private-network `/healthz` liveness endpoint, and authenticates every RPC before
 reading its bounded body. The shared RPC secret is `FABRIKA_SOURCE_RPC_KEY` on source and
 `FABRIKA_ZEROPS_SOURCE_RPC_KEY` on control. Source receives no Zerops token. Fresh source services
@@ -591,16 +591,29 @@ only for the migrated Zerops `legacy-v1` connection. It does not fall back to ke
 Cloudflare continues to use its generic static-secret and installation-id path without a source
 connection row.
 
-Production repository and REST origins are fixed to `github.com` and `api.github.com`. There is no
-operator-facing GitHub Enterprise or GitHub API-base setting; alternate origins are dependency-injected
-test seams only. Before any Git fetch, source asks GitHub REST for the exact commit and recursive tree.
-GitHub's [Get a tree](https://docs.github.com/en/rest/git/trees#get-a-tree) response is limited to
-100,000 entries or 7 MB. Fabrika admits at most 50,000 entries and 512 MiB of declared expanded blob
-bytes, bounds the recursive-tree response to 8 MiB and refuses a `truncated` response. The 8 MiB
-transport ceiling leaves JSON overhead around GitHub's documented 7 MB tree limit; the stricter
-Fabrika admission limits are the entry count and expanded repository size. Source then rechecks the
-fetched Git objects against the approved paths, modes, object ids and sizes before archiving them. A
-different exact commit, descriptor digest or blob size fails before upload.
+Production origins are fixed to `api.github.com` and `codeload.github.com`. There is no operator-facing
+GitHub Enterprise or GitHub API-base setting; alternate origins are dependency-injected test seams only.
+Resolve reads two bounded REST responses: the commit for the requested ref, then the root `zerops.yaml`
+through `/contents` with `Accept: application/vnd.github.raw+json`, whose SHA-256 must equal the digest
+registered in the provider artifact.
+
+Archive and upload are one streamed operation. Source requests
+[`/repos/{owner}/{repo}/tarball/{sha}`](https://docs.github.com/en/rest/repos/contents#download-a-repository-archive-tar)
+with `redirect: 'manual'`, requires the `Location` origin to be exactly `https://codeload.github.com`,
+and fetches that URL without the installation Authorization header — the codeload URL carries its own
+short-lived token in its query and is treated as a credential in transit. The response is piped
+`gunzip → tar rewrite → gzip → PUT`, so no repository byte is staged on disk or buffered whole.
+
+The tar rewrite reads GitHub's `git archive` output 512 bytes at a time. It confirms the commit from
+the pax global header's `comment`, strips the single archive prefix, keeps regular files only, drops
+directory entries, and rewrites each header with mode `0755` or `0644`, uid and gid `0` and a fixed
+mtime. It rejects symlinks, hard links, devices, GNU long-name entries, every other special typeflag, a
+root `.gitmodules`, paths outside the prefix or containing `.`/`..`, duplicate paths, a pax `linkpath`
+record, a pax record over 64 KiB, and a truncated stream. It admits at most 50,000 files and 512 MiB of
+file content, counted incrementally. It hashes the root `zerops.yaml` as it passes: a missing or
+drifted descriptor fails the operation. Because the tarball is `git archive` output, `.gitattributes`
+`export-ignore` and `export-subst` apply. Archives are not byte-deterministic across runs and nothing
+depends on that.
 
 The source service accepts only the measured `prg1` upload destination: HTTPS host
 `proxy.app-prg1.zerops.io`, exact path `/api/rest/object-storage/upload`, empty userinfo, no explicit
@@ -610,8 +623,14 @@ is present only in the authenticated request and live PUT; neither side persists
 Control's outer RPC deadlines are 45 seconds for installation lookup, five minutes for resolve,
 20 minutes for upload and 30 seconds for cancellation. Source expires installation lookup after
 30 seconds, resolve after four minutes and upload after 15 minutes, leaving time for a redacted response
-before the outer deadline. The upload PUT itself is bounded to ten minutes. Caller cancellation is
-propagated through GitHub REST, Git operations, response reads, archive cleanup and upload.
+before the outer deadline. The upload PUT itself is bounded to ten minutes, and that bound covers
+the whole download-rewrite-upload pipe. Caller cancellation is propagated through GitHub REST, the
+tarball download, the rewrite and the upload.
+
+Validation happens while the PUT is in flight, so a rejected repository aborts the upload. Source
+settles the archive verdict before it blames the transport: control receives `archive_rejected`,
+`descriptor_missing`, `descriptor_mismatch` or `commit_mismatch` rather than `upload_failed`. Every
+such failure is pre-trigger, and control deletes the app version on every pre-trigger failure.
 
 This transport, topology and upgrade flow are locally implemented and tested. The same example commit
 reached `ACTIVE` through application-version upload while the repository was public and again after it

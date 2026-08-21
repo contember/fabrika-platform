@@ -116,6 +116,12 @@ without a PAT. Control owns a dynamic encrypted webhook secret; source receives 
 App-id/private-key bundle and activates it through a digest-bound private RPC. The CLI is a repair path
 over the same remote state. ADR-0030 still records the shared loopback helper's durability contract.
 
+ADR-0037 amends ADR-0029's packaging mechanism, not its boundary. `source` drops git, the temp
+directory and the recursive tree endpoint: it streams GitHub's `git archive` tarball through a
+512-byte-block rewrite straight into the upload PUT. Reading it matters for two new facts — the fixed
+`codeload.github.com` origin whose URL is itself a credential, and `export-ignore` now applying to a
+deploy archive.
+
 ADR-0032 extends ADR-0029 and ADR-0031 from one installation-wide GitHub source connection to one
 private App per organization and multiple connections per Zerops installation. New credentials use
 create-only connection-keyed v2 bundles, source operations and webhooks bind the connection and
@@ -155,7 +161,7 @@ There is no Fabrika connection-count limit; individual payloads and pages remain
 - [0026](0026-bind-session-handoffs-to-the-browser.md) — Bind session handoffs to the browser that started them (amends 0022 and 0023) — accepted (2026-08-06)
 - [0027](0027-platform-deploy-is-as-wide-as-the-provider-needs.md) — `platform deploy` is as wide as its provider needs, not uniformly wide — accepted (2026-08-06)
 - [0028](0028-zerops-apps-own-their-repository-root.md) — Zerops apps own their repository root — accepted (2026-08-11)
-- [0029](0029-an-operator-owned-github-app-delivers-zerops-sources.md) — An operator-owned GitHub App delivers Zerops application sources — accepted (2026-08-11)
+- [0029](0029-an-operator-owned-github-app-delivers-zerops-sources.md) — An operator-owned GitHub App delivers Zerops application sources — accepted; packaging mechanism amended by 0037 (2026-08-11)
 - [0030](0030-persist-github-app-creation-before-success.md) — Persist GitHub App creation before success — accepted; amends 0029's init durability detail (2026-08-12)
 - [0031](0031-manage-zerops-github-source-from-control.md) — Manage the Zerops GitHub source connection from control — accepted; supersedes 0030 for normal Zerops setup (2026-08-13)
 - [0032](0032-support-multiple-private-github-source-connections.md) — Support one private GitHub source connection per organization — accepted; extends 0029 and 0031 (2026-08-14)
@@ -163,3 +169,4 @@ There is no Fabrika connection-count limit; individual payloads and pages remain
 - [0034](0034-the-control-plane-creates-the-projects-it-owns.md) — The control plane creates the projects it owns — accepted; amends 0025's token scope (2026-08-18)
 - [0035](0035-the-platform-owns-the-application-iam-issuer.md) — The platform owns the application's IAM issuer, and an undeclared variable is refused — accepted; renames `FABRIKA_IAM_URL` under 0024 (2026-08-19)
 - [0036](0036-recover-a-source-credential-binding.md) — Recover a source credential binding from durable state — accepted; amends 0032's rotation scope (2026-08-20)
+- [0037](0037-stream-github-tarballs-for-zerops-sources.md) — Stream GitHub tarballs for Zerops sources — accepted; amends 0029's packaging mechanism (2026-08-21)

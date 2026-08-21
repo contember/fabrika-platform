@@ -7,27 +7,16 @@ export {
 	type SourceGitHubConnection,
 	type SourceGitHubSnapshot,
 } from './github-connection'
+export { GitHubMetadataClient, type GitHubMetadataClientOptions, type GitHubMetadataFetch, type GitHubMetadataStage } from './github-metadata'
 export {
-	GITHUB_METADATA_MAX_RESPONSE_BYTES,
-	GitHubMetadataClient,
-	type GitHubMetadataClientOptions,
-	type GitHubMetadataFetch,
-	type GitHubRepositorySnapshot,
-	type GitHubTreeBlob,
-	type GitHubTreeDirectory,
-	type GitHubTreeEntry,
-} from './github-metadata'
-export {
-	GitRepositorySource,
-	type GitRepositorySourceOptions,
-	type PreparedRepositoryArchive,
+	type RepositoryArchive,
 	type RepositoryArchiveInput,
 	type RepositoryResolveInput,
 	type RepositoryResolveResult,
 	type RepositorySource,
-	SOURCE_MAX_EXPANDED_BYTES,
-	SOURCE_MAX_TREE_ENTRIES,
-	validateGitTree,
+	type SourceDownloadFetch,
+	TarballRepositorySource,
+	type TarballRepositorySourceOptions,
 } from './repository'
 export {
 	gzipStream,
@@ -37,3 +26,14 @@ export {
 	ZeropsSourceService,
 	type ZeropsSourceServiceOptions,
 } from './service'
+export {
+	type ArchiveSummary,
+	createTarRewrite,
+	SOURCE_DESCRIPTOR_PATH,
+	SOURCE_MAX_EXPANDED_BYTES,
+	SOURCE_MAX_TREE_ENTRIES,
+	SOURCE_SUBMODULE_MARKER,
+	type SourceBytes,
+	type TarRewrite,
+	type TarRewriteInput,
+} from './tar'

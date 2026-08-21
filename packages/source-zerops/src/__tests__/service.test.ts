@@ -26,12 +26,11 @@ import {
 	ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH,
 } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { SourceFailure } from '../failure'
 import { GitHubConnection, type SourceGitHubClient, type SourceGitHubConnection } from '../github-connection'
-import type { PreparedRepositoryArchive, RepositorySource } from '../repository'
+import type { RepositoryArchive, RepositorySource } from '../repository'
 import { ZeropsSourceService } from '../service'
+import type { ArchiveSummary, SourceBytes } from '../tar'
 
 const rpcKey = 'source-rpc-key-that-is-at-least-32-characters'
 const repository = { owner: 'contember', name: 'fabrika-platform' }
@@ -60,7 +59,7 @@ function resolvingRepository(): RepositorySource {
 			commitSha,
 			descriptorSha256: input.descriptorSha256,
 		}),
-		prepareArchive: async () => {
+		archive: async () => {
 			throw new Error('archive not expected')
 		},
 	}
@@ -81,26 +80,37 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
 	})
 }
 
-async function preparedArchive(
+/** A streamed archive whose verdict settles only when the destination has read the whole body. */
+function preparedArchive(
 	contents = 'tar bytes',
-): Promise<{ archive: PreparedRepositoryArchive; cleaned: () => boolean }> {
-	const directory = await mkdtemp(join(tmpdir(), 'source-service-test-'))
-	const tarPath = join(directory, 'source.tar')
-	await writeFile(tarPath, contents)
-	let didClean = false
+): { archive: RepositoryArchive; disposed: () => boolean } {
+	const payload = new TextEncoder().encode(contents)
+	const outcome = Promise.withResolvers<ArchiveSummary>()
+	outcome.promise.catch(() => {})
+	const summary: ArchiveSummary = { commitSha, descriptorSha256, entryCount: 1, expandedBytes: payload.byteLength }
+	let sent = false
+	let didDispose = false
+	const body = new ReadableStream<SourceBytes>({
+		pull(controller) {
+			if (sent) {
+				controller.close()
+				outcome.resolve(summary)
+				return
+			}
+			sent = true
+			controller.enqueue(new Uint8Array(payload))
+		},
+	})
 	return {
 		archive: {
-			tarPath,
-			commitSha,
-			descriptorSha256,
-			entryCount: 1,
-			expandedBytes: contents.length,
-			cleanup: async () => {
-				didClean = true
-				await rm(directory, { recursive: true, force: true })
+			body,
+			completed: outcome.promise,
+			dispose: () => {
+				didDispose = true
+				outcome.reject(new SourceFailure('upload_failed', 'upload', false, 502))
 			},
 		},
-		cleaned: () => didClean,
+		disposed: () => didDispose,
 	}
 }
 
@@ -548,7 +558,7 @@ describe('Zerops source RPC authentication and routing', () => {
 			resolve: async () => {
 				throw new Error(`upstream failed with ${secret}`)
 			},
-			prepareArchive: async () => {
+			archive: async () => {
 				throw new Error('archive not expected')
 			},
 		}
@@ -585,7 +595,7 @@ describe('Zerops source RPC authentication and routing', () => {
 				await delay(20, input.signal)
 				return { commitSha, descriptorSha256 }
 			},
-			prepareArchive: async () => {
+			archive: async () => {
 				throw new Error('archive not expected')
 			},
 		}
@@ -621,7 +631,7 @@ describe('Zerops source RPC authentication and routing', () => {
 				await delay(1_000, input.signal)
 				return { commitSha, descriptorSha256 }
 			},
-			prepareArchive: async () => {
+			archive: async () => {
 				throw new Error('archive not expected')
 			},
 		}
@@ -717,7 +727,7 @@ describe('Zerops source RPC authentication and routing', () => {
 				resolveInputs.push(input.privateBinding)
 				return { commitSha, descriptorSha256 }
 			},
-			prepareArchive: async () => {
+			archive: async () => {
 				throw new Error('archive not expected')
 			},
 		}
@@ -772,7 +782,7 @@ describe('Zerops source RPC authentication and routing', () => {
 					resolves++
 					return { commitSha, descriptorSha256 }
 				},
-				prepareArchive: async () => {
+				archive: async () => {
 					throw new Error('archive not expected')
 				},
 			},
@@ -792,14 +802,14 @@ describe('Zerops source RPC authentication and routing', () => {
 
 describe('Zerops source upload', () => {
 	test('routes v2 upload binding and lets the v1 cancel endpoint stop it', async () => {
-		const prepared = await preparedArchive()
+		const prepared = preparedArchive()
 		const archiveInputs: unknown[] = []
 		const started = Promise.withResolvers<void>()
 		const service = new ZeropsSourceService({
 			rpcKey,
 			repository: {
 				resolve: async () => ({ commitSha, descriptorSha256 }),
-				prepareArchive: async (input) => {
+				archive: async (input) => {
 					archiveInputs.push(input.privateBinding)
 					return prepared.archive
 				},
@@ -840,7 +850,7 @@ describe('Zerops source upload', () => {
 			retryable: false,
 		})
 		expect(archiveInputs).toEqual([{ connectionId: 'connection-2', installationId: 52 }])
-		expect(prepared.cleaned()).toBe(true)
+		expect(prepared.disposed()).toBe(true)
 	})
 	test.each([
 		'https://attacker.test/api/rest/object-storage/upload?signature=x',
@@ -856,9 +866,9 @@ describe('Zerops source upload', () => {
 			let uploads = 0
 			const repositorySource: RepositorySource = {
 				resolve: async () => ({ commitSha, descriptorSha256 }),
-				prepareArchive: async () => {
+				archive: async () => {
 					prepares++
-					return (await preparedArchive()).archive
+					return preparedArchive().archive
 				},
 			}
 			const service = new ZeropsSourceService({
@@ -880,11 +890,11 @@ describe('Zerops source upload', () => {
 	)
 
 	test('streams gzip(tar), refuses redirects, and cleans the staged repository', async () => {
-		const prepared = await preparedArchive('verified tar payload')
+		const prepared = preparedArchive('verified tar payload')
 		let compressed = new Uint8Array()
 		const repositorySource: RepositorySource = {
 			resolve: async () => ({ commitSha, descriptorSha256 }),
-			prepareArchive: async () => prepared.archive,
+			archive: async () => prepared.archive,
 		}
 		const service = new ZeropsSourceService({
 			rpcKey,
@@ -915,14 +925,14 @@ describe('Zerops source upload', () => {
 		expect(new TextDecoder().decode(Bun.gunzipSync(compressed))).toBe(
 			'verified tar payload',
 		)
-		expect(prepared.cleaned()).toBe(true)
+		expect(prepared.disposed()).toBe(true)
 	})
 
 	test('bounds archive preparation plus PUT with one overall non-retryable post-PUT deadline', async () => {
-		const prepared = await preparedArchive()
+		const prepared = preparedArchive()
 		const repositorySource: RepositorySource = {
 			resolve: async () => ({ commitSha, descriptorSha256 }),
-			prepareArchive: async (input) => {
+			archive: async (input) => {
 				await delay(20, input.signal)
 				return prepared.archive
 			},
@@ -944,14 +954,14 @@ describe('Zerops source upload', () => {
 			stage: 'upload',
 			retryable: false,
 		})
-		expect(prepared.cleaned()).toBe(true)
+		expect(prepared.disposed()).toBe(true)
 	})
 
 	test('times out archive preparation before PUT without sending destination bytes', async () => {
 		let uploads = 0
 		const repositorySource: RepositorySource = {
 			resolve: async () => ({ commitSha, descriptorSha256 }),
-			prepareArchive: async (input) => {
+			archive: async (input) => {
 				await delay(40, input.signal)
 				throw new Error('archive preparation should have been cancelled')
 			},
@@ -977,14 +987,14 @@ describe('Zerops source upload', () => {
 	})
 
 	test('cancels an in-flight upload and cleans its temporary archive', async () => {
-		const prepared = await preparedArchive()
+		const prepared = preparedArchive()
 		let uploadStarted: (() => void) | undefined
 		const started = new Promise<void>((resolve) => {
 			uploadStarted = resolve
 		})
 		const repositorySource: RepositorySource = {
 			resolve: async () => ({ commitSha, descriptorSha256 }),
-			prepareArchive: async () => prepared.archive,
+			archive: async () => prepared.archive,
 		}
 		const service = new ZeropsSourceService({
 			rpcKey,
@@ -1019,24 +1029,16 @@ describe('Zerops source upload', () => {
 		expect(
 			decodeZeropsSourceErrorEnvelope(await response.json()).error,
 		).toEqual({ code: 'cancelled', stage: 'upload', retryable: false })
-		expect(prepared.cleaned()).toBe(true)
+		expect(prepared.disposed()).toBe(true)
 	})
 
-	test.each(['transport', 'redirect', 'response body', 'timeout', 'cleanup'])(
+	test.each(['transport', 'redirect', 'response body', 'timeout'])(
 		'marks a %s failure after PUT starts as non-retryable',
 		async (failureKind) => {
-			const prepared = await preparedArchive()
-			const archive = failureKind === 'cleanup'
-				? {
-					...prepared.archive,
-					cleanup: async () => {
-						throw new Error('cleanup failed with private temporary path')
-					},
-				}
-				: prepared.archive
+			const prepared = preparedArchive()
 			const repositorySource: RepositorySource = {
 				resolve: async () => ({ commitSha, descriptorSha256 }),
-				prepareArchive: async () => archive,
+				archive: async () => prepared.archive,
 			}
 			const service = new ZeropsSourceService({
 				rpcKey,
@@ -1075,23 +1077,68 @@ describe('Zerops source upload', () => {
 			expect(
 				decodeZeropsSourceErrorEnvelope(await response.json()).error,
 			).toEqual({ code: 'upload_failed', stage: 'upload', retryable: false })
-			if (failureKind !== 'cleanup') expect(prepared.cleaned()).toBe(true)
+			expect(prepared.disposed()).toBe(true)
 		},
 	)
 
-	test('preserves caller cancellation that arrives during post-PUT cleanup', async () => {
-		const prepared = await preparedArchive()
-		const cleanupStarted = Promise.withResolvers<void>()
-		const finishCleanup = Promise.withResolvers<void>()
+	test.each([
+		{
+			name: 'a rejected repository',
+			failure: new SourceFailure('archive_rejected', 'archive', false, 422),
+			expected: { code: 'archive_rejected', stage: 'archive', retryable: false },
+			status: 422,
+		},
+		{
+			name: 'a drifted descriptor',
+			failure: new SourceFailure('descriptor_mismatch', 'archive', false, 409),
+			expected: { code: 'descriptor_mismatch', stage: 'archive', retryable: false },
+			status: 409,
+		},
+	])('reports $name that aborted an in-flight PUT instead of the transport error', async ({ failure, expected, status }) => {
+		const outcome = Promise.withResolvers<ArchiveSummary>()
+		outcome.promise.catch(() => {})
 		const repositorySource: RepositorySource = {
 			resolve: async () => ({ commitSha, descriptorSha256 }),
-			prepareArchive: async () => ({
-				...prepared.archive,
-				cleanup: async () => {
-					cleanupStarted.resolve()
-					await finishCleanup.promise
-					await prepared.archive.cleanup()
-				},
+			archive: async () => ({
+				body: new ReadableStream<SourceBytes>({
+					pull: (controller) => {
+						outcome.reject(failure)
+						controller.error(failure)
+					},
+				}),
+				completed: outcome.promise,
+				dispose: () => {},
+			}),
+		}
+		const service = new ZeropsSourceService({
+			rpcKey,
+			repository: repositorySource,
+			uploadFetch: async (_destination, init) => {
+				await new Response(init.body).arrayBuffer()
+				return new Response(null, { status: 200 })
+			},
+		})
+		const response = await service.fetch(rpcRequest('/v1/source/upload', uploadRequest()))
+
+		expect(response.status).toBe(status)
+		expect(decodeZeropsSourceErrorEnvelope(await response.json()).error).toEqual(expected)
+	})
+
+	test('preserves caller cancellation that arrives while the archive verdict settles', async () => {
+		const verdictAwaited = Promise.withResolvers<void>()
+		const releaseVerdict = Promise.withResolvers<void>()
+		const completed = verdictAwaited.promise.then(async () => {
+			await releaseVerdict.promise
+			return { commitSha, descriptorSha256, entryCount: 1, expandedBytes: 9 }
+		})
+		const repositorySource: RepositorySource = {
+			resolve: async () => ({ commitSha, descriptorSha256 }),
+			archive: async () => ({
+				body: new ReadableStream<SourceBytes>({
+					pull: (controller) => controller.close(),
+				}),
+				completed,
+				dispose: () => verdictAwaited.resolve(),
 			}),
 		}
 		const service = new ZeropsSourceService({
@@ -1111,15 +1158,17 @@ describe('Zerops source upload', () => {
 				signal: controller.signal,
 			}),
 		)
-		await cleanupStarted.promise
+		await verdictAwaited.promise
 		controller.abort()
-		finishCleanup.resolve()
+		releaseVerdict.resolve()
 		const response = await uploading
+
 		expect(response.status).toBe(409)
-		expect(
-			decodeZeropsSourceErrorEnvelope(await response.json()).error,
-		).toEqual({ code: 'cancelled', stage: 'upload', retryable: false })
-		expect(prepared.cleaned()).toBe(true)
+		expect(decodeZeropsSourceErrorEnvelope(await response.json()).error).toEqual({
+			code: 'cancelled',
+			stage: 'upload',
+			retryable: false,
+		})
 	})
 })
 

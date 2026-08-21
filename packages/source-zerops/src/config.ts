@@ -2,7 +2,7 @@ import { GitHubAppClient, type GitHubAppFetch } from '@fabrika/github-app'
 import { ZEROPS_SOURCE_CREDENTIAL_ENV_V2_PREFIX } from '@fabrika/provider-zerops'
 import { GitHubConnection, type SourceGitHubClient } from './github-connection'
 import { GitHubMetadataClient, type GitHubMetadataFetch } from './github-metadata'
-import { GitRepositorySource, type RepositorySource } from './repository'
+import { type RepositorySource, type SourceDownloadFetch, TarballRepositorySource } from './repository'
 import { type SourceUploadFetch, ZeropsSourceService } from './service'
 
 const DEFAULT_PORT = 8080
@@ -15,6 +15,7 @@ export interface SourceRuntimeOptions {
 	env?: SourceEnvironment
 	githubFetch?: GitHubAppFetch
 	metadataFetch?: GitHubMetadataFetch
+	downloadFetch?: SourceDownloadFetch
 	uploadFetch?: SourceUploadFetch
 	repository?: RepositorySource
 	createGitHubClient?: (input: { readonly appId: string; readonly privateKeyPem: string }) => Promise<SourceGitHubClient>
@@ -49,11 +50,12 @@ export async function createSourceRuntime(
 		createClient: createGitHubClient,
 	})
 	const repository = options.repository
-		?? new GitRepositorySource({
+		?? new TarballRepositorySource({
 			github,
 			metadata: new GitHubMetadataClient({
 				...(options.metadataFetch === undefined ? {} : { fetch: options.metadataFetch }),
 			}),
+			...(options.downloadFetch === undefined ? {} : { downloadFetch: options.downloadFetch }),
 		})
 	const service = new ZeropsSourceService({
 		rpcKey,

@@ -2,6 +2,7 @@ import {
 	buildZeropsSourceCredentialBundle,
 	buildZeropsSourceCredentialBundleV2,
 	buildZeropsSourceResolveInstallationRequest,
+	buildZeropsSourceUploadRequest,
 	serializeZeropsSourceCredentialBundle,
 	serializeZeropsSourceCredentialBundleV2,
 	zeropsSourceCredentialEnvV2,
@@ -142,6 +143,40 @@ describe('source runtime configuration', () => {
 
 		expect(response.status).toBe(200)
 		expect(requests).toEqual(['https://api.github.com/repos/contember/fabrika-platform/installation'])
+		expect(requests.join('\n')).not.toContain('attacker.test')
+	})
+
+	test('sends the assembled runtime to the fixed GitHub tarball origin', async () => {
+		const requests: string[] = []
+		const runtime = await createSourceRuntime({
+			env: { FABRIKA_SOURCE_RPC_KEY: rpcKey, GITHUB_API_BASE_URL: 'https://attacker.test/api/v3' },
+			metadataFetch: async (input) =>
+				input.toString().includes('/commits/')
+					? Response.json({ sha: 'a'.repeat(40) })
+					: new Response('zerops:\n  - setup: app\n'),
+			downloadFetch: async (input) => {
+				requests.push(input)
+				return new Response(null, { status: 500 })
+			},
+		})
+		const response = await runtime.service.fetch(
+			new Request('http://source.test/v1/source/upload', {
+				method: 'POST',
+				headers: { authorization: `Bearer ${rpcKey}`, 'content-type': 'application/json' },
+				body: JSON.stringify(buildZeropsSourceUploadRequest({
+					runId: 'run-1',
+					appVersionId: 'version-1',
+					repository: { owner: 'contember', name: 'fabrika-platform' },
+					commitSha: 'a'.repeat(40),
+					uploadUrl: 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=private',
+					descriptor: { path: 'zerops.yaml', sha256: 'b'.repeat(64) },
+					signal: new AbortController().signal,
+				})),
+			}),
+		)
+
+		expect(response.status).toBe(502)
+		expect(requests).toEqual(['https://api.github.com/repos/contember/fabrika-platform/tarball/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'])
 		expect(requests.join('\n')).not.toContain('attacker.test')
 	})
 

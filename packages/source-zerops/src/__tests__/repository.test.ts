@@ -1,118 +1,53 @@
+import { buildZeropsSourceUploadRequest } from '@fabrika/provider-zerops'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import type { SourceGitHubClient, SourceGitHubConnection } from '../github-connection'
-import { GitHubMetadataClient, type GitHubTreeEntry } from '../github-metadata'
-import {
-	gitChildEnvironment,
-	githubRepositoryUrl,
-	GitRepositorySource,
-	SOURCE_MAX_EXPANDED_BYTES,
-	SOURCE_MAX_TREE_ENTRIES,
-	validateGitTree,
-} from '../repository'
+import { GitHubMetadataClient } from '../github-metadata'
+import { type RepositoryArchive, type SourceDownloadFetch, TarballRepositorySource } from '../repository'
+import { ZeropsSourceService } from '../service'
+import { createTarRewrite, SOURCE_MAX_EXPANDED_BYTES, SOURCE_MAX_TREE_ENTRIES, type SourceBytes } from '../tar'
 
-const objectId = 'a'.repeat(40)
 const descriptor = 'zerops:\n  - setup: app\n'
 const descriptorSha256 = createHash('sha256').update(descriptor).digest('hex')
+const repository = { owner: 'contember', name: 'fixture' }
+const codeloadUrl = 'https://codeload.github.com/contember/fixture/tar.gz/refs/heads/main?token=must-not-leak'
+const uploadUrl = 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=private'
+const handCommitSha = 'a'.repeat(40)
+const handPrefix = 'contember-fixture-aaaaaaa/'
 const roots: string[] = []
 
 afterEach(async () => {
-	await Promise.all(
-		roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-	)
+	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
-function treeEntry(
-	mode: string,
-	type: string,
-	size: string,
-	path: string,
-): string {
-	return `${mode} ${type} ${objectId} ${size.padStart(7)}\t${path}\0`
-}
-
-describe('Git tree preflight', () => {
-	test('accepts only ordinary blobs and accounts exact expanded bytes', () => {
-		const summary = validateGitTree(
-			treeEntry('100644', 'blob', '25', 'zerops.yaml')
-				+ treeEntry('100755', 'blob', '9', 'bin/start'),
-		)
-		expect(summary).toEqual({
-			entryCount: 2,
-			expandedBytes: 34,
-			descriptorSize: 25,
-		})
+describe('Zerops source resolve', () => {
+	test('resolves an exact commit and the registered descriptor digest through two bounded REST reads', async () => {
+		const fixture = await gitFixture()
+		const requests: string[] = []
+		const source = sourceFor(fixture, { onMetadataRequest: (url) => requests.push(url) })
+		expect(
+			await source.resolve({
+				repository,
+				requestedRef: 'main',
+				descriptorSha256,
+				signal: new AbortController().signal,
+			}),
+		).toEqual({ commitSha: fixture.commitSha, descriptorSha256 })
+		expect(requests).toEqual([
+			'https://api.github.com/repos/contember/fixture/commits/main',
+			`https://api.github.com/repos/contember/fixture/contents/zerops.yaml?ref=${fixture.commitSha}`,
+		])
 	})
 
-	test.each([
-		treeEntry('120000', 'blob', '4', 'link'),
-		treeEntry('160000', 'commit', '-', 'module'),
-		treeEntry('040000', 'tree', '-', 'folder'),
-		treeEntry('100644', 'blob', '4', '/absolute'),
-		treeEntry('100644', 'blob', '4', '../escape'),
-		treeEntry('100644', 'blob', '4', 'nested/../../escape'),
-		treeEntry('100644', 'blob', '4', 'nested//empty'),
-		treeEntry('100644', 'blob', '4', 'windows\\path'),
-		treeEntry('100644', 'blob', '4', 'line\nbreak'),
-	])('rejects special or unsafe tree entry %#', (entry) => {
-		expect(() => validateGitTree(treeEntry('100644', 'blob', '25', 'zerops.yaml') + entry)).toThrow('source operation failed')
-	})
-
-	test('requires a regular root descriptor and enforces count and byte limits from metadata', () => {
-		expect(() => validateGitTree(treeEntry('100644', 'blob', '1', 'nested/zerops.yaml'))).toThrow()
-		expect(() =>
-			validateGitTree(
-				treeEntry(
-					'100644',
-					'blob',
-					String(SOURCE_MAX_EXPANDED_BYTES),
-					'zerops.yaml',
-				) + treeEntry('100644', 'blob', '1', 'extra'),
-			)
-		).toThrow()
-		const entries = [treeEntry('100644', 'blob', '1', 'zerops.yaml')]
-		for (let index = 0; index < SOURCE_MAX_TREE_ENTRIES; index++) {
-			entries.push(treeEntry('100644', 'blob', '0', `file-${index}`))
-		}
-		expect(() => validateGitTree(entries.join(''))).toThrow()
-	})
-})
-
-describe('Git repository source', () => {
-	test('uses a fixed GitHub origin and places a scoped token only in the isolated child environment', () => {
-		const token = 'ghs_repository_scoped_secret'
-		const url = githubRepositoryUrl({
-			owner: 'contember',
-			name: 'fabrika-platform',
-		})
-		expect(url).toBe('https://github.com/contember/fabrika-platform.git')
-		expect(url).not.toContain(token)
-		const environment = gitChildEnvironment('/usr/bin', token)
-		expect(environment.GIT_CONFIG_KEY_1).toBe(
-			'http.https://github.com/.extraHeader',
-		)
-		expect(environment.GIT_CONFIG_VALUE_1).toBe(
-			`Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`,
-		)
-		expect(environment.GIT_CONFIG_VALUE_0).toBe('false')
-	})
-
-	test('mints one repository-scoped token and uses it for private REST metadata', async () => {
-		const fixture = await repositoryFixture()
+	test('mints one repository-scoped token and sends it only to api.github.com', async () => {
+		const fixture = await gitFixture()
 		const token = 'ghs_private_repository'
 		const mintCalls: unknown[] = []
-		const authorizations: Array<string | null> = []
-		const baseMetadata = fixtureMetadata(fixture)
-		const metadata = new GitHubMetadataClient({
-			fetch: async (input, init) => {
-				authorizations.push(new Headers(init?.headers).get('authorization'))
-				return baseMetadataResponse(fixture, input.toString())
-			},
-		})
+		const metadataAuthorizations: Array<string | null> = []
+		const downloadAuthorizations: Array<[string, string | null]> = []
 		const client: SourceGitHubClient = {
 			getAuthenticatedApp: async () => {
 				throw new Error('identity not expected')
@@ -138,31 +73,39 @@ describe('Git repository source', () => {
 				throw new Error('status not expected')
 			},
 		}
-		const source = new GitRepositorySource({
-			repositoryUrl: () => fixture.remoteUrl,
-			tempRoot: fixture.root,
-			metadata,
+		const source = sourceFor(fixture, {
 			github,
+			onMetadataAuthorization: (value) => metadataAuthorizations.push(value),
+			onDownloadAuthorization: (url, value) => downloadAuthorizations.push([new URL(url).host, value]),
 		})
 		const signal = new AbortController().signal
-		expect(
-			await source.resolve({
-				repository: { owner: 'contember', name: 'fixture' },
-				requestedRef: fixture.commitSha,
-				githubInstallationId: 42,
-				descriptorSha256,
-				signal,
-			}),
-		).toEqual({ commitSha: fixture.commitSha, descriptorSha256 })
+		await source.resolve({
+			repository,
+			requestedRef: fixture.commitSha,
+			githubInstallationId: 42,
+			descriptorSha256,
+			signal,
+		})
+		const archived = await runArchive(source, {
+			repository,
+			commitSha: fixture.commitSha,
+			githubInstallationId: 42,
+			descriptorSha256,
+			signal,
+		})
+
+		expect(archived.summary?.commitSha).toBe(fixture.commitSha)
 		expect(mintCalls).toEqual([
 			{ installationId: 42, owner: 'contember', repository: 'fixture', signal },
+			{ installationId: 42, owner: 'contember', repository: 'fixture', signal },
 		])
-		expect(authorizations).toEqual([`Bearer ${token}`, `Bearer ${token}`])
-		expect(snapshots).toBe(1)
+		expect(metadataAuthorizations).toEqual([`Bearer ${token}`, `Bearer ${token}`])
+		expect(downloadAuthorizations).toEqual([['api.github.com', `Bearer ${token}`], ['codeload.github.com', null]])
+		expect(snapshots).toBe(2)
 	})
 
 	test('routes concurrent v2 private reads to the exact keyed client without consulting the v1 default', async () => {
-		const fixture = await repositoryFixture()
+		const fixture = await gitFixture()
 		const mintCalls: Array<{ connectionId: string; installationId: number }> = []
 		const clientFor = (connectionId: string): SourceGitHubClient => ({
 			getAuthenticatedApp: async () => {
@@ -195,588 +138,633 @@ describe('Git repository source', () => {
 				throw new Error('status not expected')
 			},
 		}
-		const source = new GitRepositorySource({
-			repositoryUrl: () => fixture.remoteUrl,
-			tempRoot: fixture.root,
-			metadata: fixtureMetadata(fixture),
-			github,
-		})
-		const firstResolve = source.resolve({
-			repository: { owner: 'contember', name: 'fixture' },
-			requestedRef: fixture.commitSha,
-			privateBinding: { connectionId: 'connection-1', installationId: 41 },
-			descriptorSha256,
-			signal: new AbortController().signal,
-		})
-		const secondResolve = source.resolve({
-			repository: { owner: 'contember', name: 'fixture' },
-			requestedRef: fixture.commitSha,
-			privateBinding: { connectionId: 'connection-2', installationId: 42 },
-			descriptorSha256,
-			signal: new AbortController().signal,
-		})
-		const firstArchive = source.prepareArchive({
-			repository: { owner: 'contember', name: 'fixture' },
-			commitSha: fixture.commitSha,
-			privateBinding: { connectionId: 'connection-1', installationId: 41 },
-			descriptorSha256,
-			signal: new AbortController().signal,
-		})
-		const secondArchive = source.prepareArchive({
-			repository: { owner: 'contember', name: 'fixture' },
-			commitSha: fixture.commitSha,
-			privateBinding: { connectionId: 'connection-2', installationId: 42 },
-			descriptorSha256,
-			signal: new AbortController().signal,
-		})
-		await Promise.all([firstResolve, secondResolve, firstArchive, secondArchive])
-		const archives = await Promise.all([firstArchive, secondArchive])
-		await Promise.all(archives.map((archive) => archive.cleanup()))
+		const source = sourceFor(fixture, { github })
+		const signal = new AbortController().signal
+		await Promise.all([
+			source.resolve({
+				repository,
+				requestedRef: 'main',
+				privateBinding: { connectionId: 'connection-1', installationId: 41 },
+				descriptorSha256,
+				signal,
+			}),
+			source.resolve({
+				repository,
+				requestedRef: 'main',
+				privateBinding: { connectionId: 'connection-2', installationId: 42 },
+				descriptorSha256,
+				signal,
+			}),
+			runArchive(source, {
+				repository,
+				commitSha: fixture.commitSha,
+				privateBinding: { connectionId: 'connection-1', installationId: 41 },
+				descriptorSha256,
+				signal,
+			}),
+			runArchive(source, {
+				repository,
+				commitSha: fixture.commitSha,
+				privateBinding: { connectionId: 'connection-2', installationId: 42 },
+				descriptorSha256,
+				signal,
+			}),
+		])
 		expect(mintCalls).toContainEqual({ connectionId: 'connection-1', installationId: 41 })
 		expect(mintCalls).toContainEqual({ connectionId: 'connection-2', installationId: 42 })
 		expect(mintCalls).toHaveLength(4)
 	})
 
-	test('keeps v1 private reads on the legacy snapshot', async () => {
-		const fixture = await repositoryFixture()
-		let v1Snapshots = 0
-		let v2Snapshots = 0
-		const client: SourceGitHubClient = {
-			getAuthenticatedApp: async () => {
-				throw new Error('identity not expected')
-			},
-			resolveInstallationId: async () => {
-				throw new Error('installation lookup not expected')
-			},
-			mintRepositoryToken: async () => ({ token: 'legacy-token', expiresAt: Date.now() + 60_000 }),
-		}
-		const github: SourceGitHubConnection = {
-			snapshot: () => {
-				v1Snapshots++
-				return { client, appId: '123', credentialSha256: 'a'.repeat(64) }
-			},
-			snapshotV2: () => {
-				v2Snapshots++
-				return undefined
-			},
-			activate: async () => {
-				throw new Error('activation not expected')
-			},
-			status: async () => {
-				throw new Error('status not expected')
-			},
-		}
-		const source = new GitRepositorySource({
-			repositoryUrl: () => fixture.remoteUrl,
-			tempRoot: fixture.root,
-			metadata: fixtureMetadata(fixture),
-			github,
-		})
-		await source.resolve({
-			repository: { owner: 'contember', name: 'fixture' },
-			requestedRef: fixture.commitSha,
-			githubInstallationId: 42,
-			descriptorSha256,
-			signal: new AbortController().signal,
-		})
-		expect(v1Snapshots).toBe(1)
-		expect(v2Snapshots).toBe(0)
-	})
-
-	test('resolves an exact commit, verifies the root descriptor, and archives Git objects without executing repository code', async () => {
-		const fixture = await repositoryFixture()
-		const marker = join(fixture.root, 'must-not-exist')
-		const source = sourceForFixture(fixture)
-		const signal = new AbortController().signal
-		const resolved = await source.resolve({
-			repository: { owner: 'contember', name: 'fixture' },
-			requestedRef: 'main',
-			descriptorSha256,
-			signal,
-		})
-		expect(resolved).toEqual({
-			commitSha: fixture.commitSha,
-			descriptorSha256,
-		})
-
-		const archive = await source.prepareArchive({
-			repository: { owner: 'contember', name: 'fixture' },
-			commitSha: fixture.commitSha,
-			descriptorSha256,
-			signal,
-		})
-		try {
-			const paths = await commandText(['tar', '-tf', archive.tarPath])
-			expect(paths.split('\n')).toContain('zerops.yaml')
-			expect(paths.split('\n')).toContain('bin/')
-			expect(paths.split('\n')).toContain('bin/run')
-			expect(paths.split('\n')).toContain('.gitattributes')
-			expect(
-				await commandText(['tar', '-xOf', archive.tarPath, 'zerops.yaml']),
-			).toBe(descriptor)
-			expect(
-				await commandText(['tar', '-xOf', archive.tarPath, 'bin/run']),
-			).toContain('$Format:%H$')
-			expect(await Bun.file(marker).exists()).toBe(false)
-			expect(archive.entryCount).toBe(3)
-		} finally {
-			await archive.cleanup()
-		}
-	})
-
-	test('rejects descriptor drift before producing an archive', async () => {
-		const fixture = await repositoryFixture()
-		const source = sourceForFixture(fixture)
+	test('rejects a resolved commit that is not the expected one', async () => {
+		const fixture = await gitFixture()
 		await expect(
-			source.prepareArchive({
-				repository: { owner: 'contember', name: 'fixture' },
-				commitSha: fixture.commitSha,
-				descriptorSha256: 'f'.repeat(64),
-				signal: new AbortController().signal,
-			}),
-		).rejects.toMatchObject({ code: 'descriptor_mismatch', stage: 'archive' })
-	})
-
-	test('rejects REST size drift while streaming the approved blob', async () => {
-		const fixture = await repositoryFixture()
-		const entries = fixture.entries.map((entry) =>
-			entry.type === 'blob' && entry.path === 'bin/run'
-				? { ...entry, size: entry.size - 1 }
-				: entry
-		)
-		const source = new GitRepositorySource({
-			repositoryUrl: () => fixture.remoteUrl,
-			tempRoot: fixture.root,
-			metadata: fixtureMetadata({ ...fixture, entries }),
-		})
-		await expect(
-			source.prepareArchive({
-				repository: { owner: 'contember', name: 'fixture' },
-				commitSha: fixture.commitSha,
+			sourceFor(fixture).resolve({
+				repository,
+				requestedRef: 'main',
+				expectedCommitSha: 'b'.repeat(40),
 				descriptorSha256,
 				signal: new AbortController().signal,
 			}),
-		).rejects.toMatchObject({ code: 'archive_rejected', stage: 'archive' })
+		).rejects.toMatchObject({ code: 'commit_mismatch', stage: 'resolve', status: 409 })
 	})
 
-	test('writes a deterministic tar with explicit parents, long paths, and preserved executable modes', async () => {
-		const longPath = `${'nested-'.repeat(15)}directory/child/file.txt`
-		const fixture = await repositoryFixture({ longPath })
-		const source = sourceForFixture(fixture)
-		const input = {
-			repository: { owner: 'contember', name: 'fixture' },
-			commitSha: fixture.commitSha,
-			descriptorSha256,
-			signal: new AbortController().signal,
-		}
-		const first = await source.prepareArchive(input)
-		const firstBytes = new Uint8Array(
-			await Bun.file(first.tarPath).arrayBuffer(),
-		)
-		const paths = (await commandText(['tar', '-tf', first.tarPath])).split(
-			'\n',
-		)
-		const verbose = await commandText(['tar', '-tvf', first.tarPath])
-		expect(paths).toContain(
-			`${longPath.slice(0, longPath.lastIndexOf('/child/file.txt'))}/`,
-		)
-		expect(paths).toContain(longPath)
-		expect(
-			verbose
-				.split('\n')
-				.find((line) => line.endsWith(' bin/run'))
-				?.startsWith('-rwxr-xr-x'),
-		).toBe(true)
-		await first.cleanup()
-
-		const shuffledSource = new GitRepositorySource({
-			repositoryUrl: () => fixture.remoteUrl,
-			tempRoot: fixture.root,
-			metadata: fixtureMetadata({ ...fixture, entries: [...fixture.entries].reverse() }),
-		})
-		const second = await shuffledSource.prepareArchive(input)
-		try {
-			expect(
-				new Uint8Array(await Bun.file(second.tarPath).arrayBuffer()),
-			).toEqual(firstBytes)
-		} finally {
-			await second.cleanup()
-		}
-	})
-
-	test('hashes and archives descriptor bytes exactly when UTF-8 starts with a BOM', async () => {
-		const bomDescriptor = new Uint8Array([
-			0xef,
-			0xbb,
-			0xbf,
-			...new TextEncoder().encode(descriptor),
-		])
-		const bomSha256 = createHash('sha256').update(bomDescriptor).digest('hex')
-		const fixture = await repositoryFixture({ descriptor: bomDescriptor })
-		const source = sourceForFixture(fixture)
-		const archive = await source.prepareArchive({
-			repository: { owner: 'contember', name: 'fixture' },
-			commitSha: fixture.commitSha,
-			descriptorSha256: bomSha256,
-			signal: new AbortController().signal,
-		})
-		try {
-			expect(
-				await commandBytes(['tar', '-xOf', archive.tarPath, 'zerops.yaml']),
-			).toEqual(bomDescriptor)
-		} finally {
-			await archive.cleanup()
-		}
-	})
-
-	test('supports repositories and requested commits with 64-hex object ids', async () => {
-		const fixture = await repositoryFixture({ objectFormat: 'sha256' })
-		expect(fixture.commitSha).toHaveLength(64)
-		const source = sourceForFixture(fixture)
-		const resolved = await source.resolve({
-			repository: { owner: 'contember', name: 'fixture' },
-			requestedRef: fixture.commitSha,
-			expectedCommitSha: fixture.commitSha,
-			descriptorSha256,
-			signal: new AbortController().signal,
-		})
-		expect(resolved.commitSha).toBe(fixture.commitSha)
-	})
-
-	test('rejects unsafe metadata before requesting any blob', async () => {
-		const fixture = await repositoryFixture({ unsafeSymlink: true })
-		let blobReads = 0
-		const source = new GitRepositorySource({
-			repositoryUrl: () => fixture.remoteUrl,
-			tempRoot: fixture.root,
-			metadata: fixtureMetadata(fixture),
-			onBlobRead: () => blobReads++,
+	test.each([
+		{ name: 'a missing descriptor', descriptorStatus: 404, expected: { code: 'descriptor_missing', status: 422 } },
+		{ name: 'a drifted descriptor digest', descriptorStatus: 200, expected: { code: 'descriptor_mismatch', status: 409 } },
+	])('rejects $name before any archive byte is read', async ({ descriptorStatus, expected }) => {
+		const fixture = await gitFixture()
+		let downloads = 0
+		const source = sourceFor(fixture, {
+			descriptorResponse: () => descriptorStatus === 404 ? new Response(null, { status: 404 }) : new Response('zerops: drifted\n'),
+			onDownload: () => downloads++,
 		})
 		await expect(
-			source.resolve({
-				repository: { owner: 'contember', name: 'fixture' },
-				requestedRef: fixture.commitSha,
-				descriptorSha256,
-				signal: new AbortController().signal,
-			}),
-		).rejects.toMatchObject({ code: 'archive_rejected', stage: 'resolve' })
-		expect(blobReads).toBe(0)
+			source.resolve({ repository, requestedRef: 'main', descriptorSha256, signal: new AbortController().signal }),
+		).rejects.toMatchObject({ ...expected, stage: 'resolve' })
+		expect(downloads).toBe(0)
 	})
-
-	test.each(['timeout', 'caller cancellation'])(
-		'bounds Git operations, preserves %s, and removes its temporary repository',
-		async (kind) => {
-			const tempRoot = await mkdtemp(
-				join(tmpdir(), 'source-git-timeout-test-'),
-			)
-			roots.push(tempRoot)
-			const server = Bun.serve({
-				hostname: '127.0.0.1',
-				port: 0,
-				fetch: async () => await new Promise<Response>(() => {}),
-			})
-			try {
-				const controller = new AbortController()
-				const source = new GitRepositorySource({
-					repositoryUrl: () => `${server.url}repository.git`,
-					tempRoot,
-					metadata: fixtureMetadata(await repositoryFixture()),
-					gitOperationTimeoutMs: kind === 'timeout' ? 50 : 5_000,
-				})
-				if (kind === 'caller cancellation') {
-					setTimeout(() => controller.abort(), 50)
-				}
-				const failure = source.resolve({
-					repository: { owner: 'contember', name: 'fixture' },
-					requestedRef: 'main',
-					descriptorSha256,
-					signal: controller.signal,
-				})
-				if (kind === 'timeout') {
-					await expect(failure).rejects.toMatchObject({
-						code: 'internal',
-						stage: 'resolve',
-						retryable: true,
-					})
-				} else {
-					await expect(failure).rejects.toMatchObject({
-						code: 'cancelled',
-						stage: 'resolve',
-						retryable: false,
-					})
-				}
-				expect(await readdir(tempRoot)).toEqual([])
-			} finally {
-				await server.stop(true)
-			}
-		},
-	)
 
 	test('requires GitHub App configuration when an installation id is supplied', async () => {
-		const source = new GitRepositorySource({})
 		await expect(
-			source.resolve({
+			new TarballRepositorySource({}).resolve({
 				repository: { owner: 'contember', name: 'private' },
 				requestedRef: 'main',
 				githubInstallationId: 42,
 				descriptorSha256,
 				signal: new AbortController().signal,
 			}),
-		).rejects.toMatchObject({
-			code: 'installation_not_found',
-			stage: 'resolve',
-		})
+		).rejects.toMatchObject({ code: 'installation_not_found', stage: 'resolve' })
 	})
 })
 
-async function repositoryFixture(
-	options: {
-		descriptor?: string | Uint8Array
-		longPath?: string
-		objectFormat?: 'sha1' | 'sha256'
-		unsafeSymlink?: boolean
-	} = {},
-): Promise<{
-	root: string
-	working: string
-	remoteUrl: string
+describe('Zerops source archive', () => {
+	test('streams the tarball into a flat archive with fixed modes and no directory entries', async () => {
+		const fixture = await gitFixture()
+		const archived = await runArchive(sourceFor(fixture), {
+			repository,
+			commitSha: fixture.commitSha,
+			descriptorSha256,
+			signal: new AbortController().signal,
+		})
+
+		expect(archived.failure).toBeUndefined()
+		expect(archived.summary).toEqual({
+			commitSha: fixture.commitSha,
+			descriptorSha256,
+			entryCount: 3,
+			expandedBytes: entries(archived).reduce((total, entry) => total + entry.content.byteLength, 0),
+		})
+		expect(entries(archived).map((entry) => [entry.path, entry.mode, entry.type])).toEqual([
+			['.gitattributes', 0o644, '0'],
+			['bin/run', 0o755, '0'],
+			['zerops.yaml', 0o644, '0'],
+		])
+		expect(text(archived, 'zerops.yaml')).toBe(descriptor)
+	})
+
+	test('rejects a repository whose tarball carries a symlink', async () => {
+		const fixture = await gitFixture({ symlink: true })
+		const archived = await runArchive(sourceFor(fixture), {
+			repository,
+			commitSha: fixture.commitSha,
+			descriptorSha256,
+			signal: new AbortController().signal,
+		})
+
+		expect(archived.failure).toMatchObject({ code: 'archive_rejected', stage: 'archive', status: 422 })
+	})
+
+	test('honours export-ignore and export-subst because the tarball is git archive', async () => {
+		const fixture = await gitFixture({ exportIgnored: true })
+		const archived = await runArchive(sourceFor(fixture), {
+			repository,
+			commitSha: fixture.commitSha,
+			descriptorSha256,
+			signal: new AbortController().signal,
+		})
+
+		expect(entries(archived).map((entry) => entry.path)).not.toContain('secrets/local.env')
+		expect(text(archived, 'bin/run')).toContain(fixture.commitSha)
+		expect(text(archived, 'bin/run')).not.toContain('$Format')
+	})
+
+	test('carries a long path through its own pax header', async () => {
+		const longPath = `${'nested-'.repeat(15)}directory/child/file.txt`
+		const fixture = await gitFixture({ longPath })
+		const archived = await runArchive(sourceFor(fixture), {
+			repository,
+			commitSha: fixture.commitSha,
+			descriptorSha256,
+			signal: new AbortController().signal,
+		})
+
+		expect(entries(archived).map((entry) => entry.path)).toContain(longPath)
+		expect(text(archived, longPath)).toBe('long path contents')
+	})
+
+	test.each([
+		'https://attacker.test/contember/fixture/tar.gz/main',
+		'http://codeload.github.com/contember/fixture/tar.gz/main',
+		'https://codeload.github.com:8443/contember/fixture/tar.gz/main',
+		'https://user@codeload.github.com/contember/fixture/tar.gz/main',
+		'/contember/fixture/tar.gz/main',
+	])('refuses redirect target %s without naming it', async (location) => {
+		const fixture = await gitFixture()
+		let downloads = 0
+		const source = sourceFor(fixture, { location, onDownload: () => downloads++ })
+		const raised = await source
+			.archive({ repository, commitSha: fixture.commitSha, descriptorSha256, signal: new AbortController().signal })
+			.then(() => undefined, (error: unknown) => error)
+
+		expect(raised).toMatchObject({ code: 'archive_rejected', stage: 'archive', status: 422 })
+		expect(JSON.stringify(raised)).not.toContain('attacker')
+		expect(downloads).toBe(0)
+	})
+
+	test('maps an unknown commit to ref_not_found', async () => {
+		const fixture = await gitFixture()
+		const source = sourceFor(fixture, { redirectResponse: () => new Response(null, { status: 404 }) })
+		await expect(
+			source.archive({ repository, commitSha: fixture.commitSha, descriptorSha256, signal: new AbortController().signal }),
+		).rejects.toMatchObject({ code: 'ref_not_found', stage: 'archive', status: 404 })
+	})
+
+	test('rejects a commit sha that is not an object id before any request', async () => {
+		const fixture = await gitFixture()
+		let downloads = 0
+		const source = sourceFor(fixture, { onDownload: () => downloads++ })
+		await expect(
+			source.archive({ repository, commitSha: 'main', descriptorSha256, signal: new AbortController().signal }),
+		).rejects.toMatchObject({ code: 'commit_mismatch', stage: 'archive', status: 409 })
+		expect(downloads).toBe(0)
+	})
+
+	test.each([
+		{ name: 'a symlink', tarball: () => handTarball([entry({ name: `${handPrefix}link`, type: '2', linkname: 'zerops.yaml' })]) },
+		{ name: 'a hard link', tarball: () => handTarball([entry({ name: `${handPrefix}link`, type: '1', linkname: 'zerops.yaml' })]) },
+		{ name: 'a character device', tarball: () => handTarball([entry({ name: `${handPrefix}dev`, type: '3' })]) },
+		{ name: 'a GNU long-name entry', tarball: () => handTarball([entry({ name: `${handPrefix}long`, type: 'L', content: bytes('x') })]) },
+		{ name: 'a submodule marker', tarball: () => handTarball([file(`${handPrefix}.gitmodules`, '[submodule "x"]\n')]) },
+		{ name: 'a second path prefix', tarball: () => handTarball([file(`${handPrefix}zerops.yaml`, descriptor), file('other-repo-aaaaaaa/extra', 'x')]) },
+		{ name: 'a traversing path', tarball: () => handTarball([file(`${handPrefix}../escape`, 'x')]) },
+		{
+			name: 'an absolute path',
+			tarball: () => handTarball([paxed('path=/absolute\n', entry({ name: `${handPrefix}placeholder`, content: bytes('x') }))]),
+		},
+		{ name: 'a duplicate path', tarball: () => handTarball([file(`${handPrefix}same`, 'x'), file(`${handPrefix}same`, 'y')]) },
+		{ name: 'a pax linkpath record', tarball: () => handTarball([paxed(`linkpath=elsewhere\n`, file(`${handPrefix}zerops.yaml`, descriptor))]) },
+		{
+			name: 'an oversized pax record',
+			tarball: () => handTarball([paxed(`path=${handPrefix}${'x'.repeat(70 * 1024)}\n`, entry({ name: `${handPrefix}placeholder` }))]),
+		},
+		{
+			name: 'a truncated entry',
+			tarball: () => concat(globalHeader(handCommitSha), entry({ name: `${handPrefix}zerops.yaml`, size: 4096 }), bytes('short')),
+		},
+		{ name: 'a missing end-of-archive', tarball: () => concat(globalHeader(handCommitSha), file(`${handPrefix}zerops.yaml`, descriptor)) },
+		{ name: 'a missing pax global header', tarball: () => concat(file(`${handPrefix}zerops.yaml`, descriptor), new Uint8Array(1024)) },
+		{ name: 'a corrupt header checksum', tarball: () => handTarball([corrupt(file(`${handPrefix}zerops.yaml`, descriptor))]) },
+	])('rejects $name', async ({ tarball }) => {
+		const archived = await runArchive(handSource(tarball()), {
+			repository,
+			commitSha: handCommitSha,
+			descriptorSha256,
+			signal: new AbortController().signal,
+		})
+		expect(archived.collected.ok).toBe(false)
+		expect(archived.failure).toMatchObject({ stage: 'archive', retryable: false })
+		expect(archived.failure).toBeInstanceOf(Error)
+	})
+
+	test('rejects a tarball that names a different commit', async () => {
+		const archived = await runArchive(handSource(handTarball([file(`${handPrefix}zerops.yaml`, descriptor)], { commitSha: 'c'.repeat(40) })), {
+			repository,
+			commitSha: handCommitSha,
+			descriptorSha256,
+			signal: new AbortController().signal,
+		})
+		expect(archived.failure).toMatchObject({ code: 'commit_mismatch', stage: 'archive', status: 409 })
+	})
+
+	test.each([
+		{
+			name: 'entry count',
+			tarball: () => handTarball(Array.from({ length: SOURCE_MAX_TREE_ENTRIES + 1 }, (_value, index) => entry({ name: `${handPrefix}file-${index}` }))),
+		},
+		{
+			name: 'expanded bytes',
+			tarball: () => concat(globalHeader(handCommitSha), entry({ name: `${handPrefix}huge`, size: SOURCE_MAX_EXPANDED_BYTES + 1 })),
+		},
+	])('refuses a repository over the $name limit while streaming', async ({ tarball }) => {
+		const archived = await runArchive(handSource(tarball()), {
+			repository,
+			commitSha: handCommitSha,
+			descriptorSha256,
+			signal: new AbortController().signal,
+		})
+		expect(archived.failure).toMatchObject({ code: 'archive_rejected', stage: 'archive', status: 413 })
+	})
+
+	test.each([
+		{ name: 'drifted', entries: [file(`${handPrefix}zerops.yaml`, 'zerops: drifted\n')], expected: { code: 'descriptor_mismatch', status: 409 } },
+		{ name: 'missing', entries: [file(`${handPrefix}other.yaml`, descriptor)], expected: { code: 'descriptor_missing', status: 422 } },
+		{ name: 'nested only', entries: [file(`${handPrefix}nested/zerops.yaml`, descriptor)], expected: { code: 'descriptor_missing', status: 422 } },
+		{
+			name: 'oversized',
+			entries: [entry({ name: `${handPrefix}zerops.yaml`, size: 512 * 1024 })],
+			expected: { code: 'archive_rejected', status: 422 },
+		},
+	])('rejects a $name root descriptor', async ({ entries: parts, expected }) => {
+		const archived = await runArchive(handSource(handTarball(parts)), {
+			repository,
+			commitSha: handCommitSha,
+			descriptorSha256,
+			signal: new AbortController().signal,
+		})
+		expect(archived.failure).toMatchObject({ ...expected, stage: 'archive' })
+	})
+
+	test('rejects a descriptor digest that is not a SHA-256 hex value', async () => {
+		await expect(
+			handSource(handTarball([file(`${handPrefix}zerops.yaml`, descriptor)])).archive({
+				repository,
+				commitSha: handCommitSha,
+				descriptorSha256: 'not-a-digest',
+				signal: new AbortController().signal,
+			}),
+		).rejects.toMatchObject({ code: 'descriptor_mismatch', stage: 'archive', status: 409 })
+	})
+
+	test('hands the destination gzip(tar) of exactly the rewritten archive', async () => {
+		const fixture = await gitFixture({ longPath: 'deeply/nested/but/quite/short.txt' })
+		let uploaded = new Uint8Array()
+		const service = new ZeropsSourceService({
+			rpcKey: 'source-rpc-key-that-is-at-least-32-characters',
+			repository: sourceFor(fixture),
+			uploadFetch: async (destination, init) => {
+				expect(destination).toBe(uploadUrl)
+				expect(init.method).toBe('PUT')
+				expect(init.duplex).toBe('half')
+				expect(init.redirect).toBe('error')
+				uploaded = new Uint8Array(await new Response(init.body).arrayBuffer())
+				return new Response(null, { status: 200 })
+			},
+		})
+		const response = await service.fetch(
+			new Request('http://source.test/v1/source/upload', {
+				method: 'POST',
+				headers: { authorization: 'Bearer source-rpc-key-that-is-at-least-32-characters', 'content-type': 'application/json' },
+				body: JSON.stringify(buildZeropsSourceUploadRequest({
+					runId: 'run-1',
+					appVersionId: 'version-1',
+					repository,
+					commitSha: fixture.commitSha,
+					uploadUrl,
+					descriptor: { path: 'zerops.yaml', sha256: descriptorSha256 },
+					signal: new AbortController().signal,
+				})),
+			}),
+		)
+		const delivered = parseTar(new Uint8Array(Bun.gunzipSync(uploaded)))
+
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({
+			protocolVersion: 1,
+			runId: 'run-1',
+			appVersionId: 'version-1',
+			commitSha: fixture.commitSha,
+			descriptorSha256,
+		})
+		expect(delivered.map((part) => [part.path, part.mode])).toEqual([
+			['.gitattributes', 0o644],
+			['bin/run', 0o755],
+			['deeply/nested/but/quite/short.txt', 0o644],
+			['zerops.yaml', 0o644],
+		])
+		expect(delivered.every((part) => part.type === '0')).toBe(true)
+		expect(new TextDecoder().decode(delivered[3]?.content)).toBe(descriptor)
+	})
+
+	test('passes file content through without buffering a whole entry', async () => {
+		const chunkBytes = 64 * 1024
+		const content: SourceBytes = new Uint8Array(3 * 1024 * 1024).fill(0x61)
+		const tarball = handTarball([file(`${handPrefix}zerops.yaml`, descriptor), entry({ name: `${handPrefix}big`, content })])
+		const rewrite = createTarRewrite({ commitSha: handCommitSha, descriptorSha256 })
+		const observed: number[] = []
+		let pushed = 0
+		const source = new ReadableStream<SourceBytes>({
+			pull(controller) {
+				if (pushed >= tarball.byteLength) {
+					controller.close()
+					return
+				}
+				const next = tarball.subarray(pushed, Math.min(pushed + chunkBytes, tarball.byteLength))
+				pushed += next.byteLength
+				controller.enqueue(next.slice())
+			},
+		})
+		const reader = source.pipeThrough(rewrite.transform).getReader()
+		let total = 0
+		while (true) {
+			const result = await reader.read()
+			if (result.done) break
+			observed.push(result.value.byteLength)
+			total += result.value.byteLength
+		}
+		const summary = await rewrite.completed
+
+		expect(summary.expandedBytes).toBe(descriptor.length + content.byteLength)
+		expect(Math.max(...observed)).toBeLessThanOrEqual(chunkBytes)
+		expect(observed.length).toBeGreaterThan(content.byteLength / chunkBytes)
+		expect(total).toBeGreaterThan(content.byteLength)
+	})
+})
+
+interface ArchivedEntry {
+	path: string
+	mode: number
+	type: string
+	content: SourceBytes
+}
+
+interface ArchiveRun {
+	collected: { ok: boolean; bytes: SourceBytes }
+	summary: Awaited<RepositoryArchive['completed']> | undefined
+	failure: unknown
+}
+
+async function runArchive(
+	source: TarballRepositorySource,
+	input: Parameters<TarballRepositorySource['archive']>[0],
+): Promise<ArchiveRun> {
+	const archive = await source.archive(input)
+	const collected = await new Response(archive.body).arrayBuffer().then(
+		(value) => ({ ok: true, bytes: new Uint8Array(value) }),
+		() => ({ ok: false, bytes: new Uint8Array() }),
+	)
+	archive.dispose()
+	return await archive.completed.then(
+		(summary) => ({ collected, summary, failure: undefined }),
+		(failure: unknown) => ({ collected, summary: undefined, failure }),
+	)
+}
+
+function entries(run: ArchiveRun): ArchivedEntry[] {
+	return parseTar(run.collected.bytes)
+}
+
+function text(run: ArchiveRun, path: string): string {
+	const found = entries(run).find((candidate) => candidate.path === path)
+	if (found === undefined) throw new Error(`archive has no ${path}`)
+	return new TextDecoder().decode(found.content)
+}
+
+/** Parse the rewritten archive the way the destination would, so assertions read real tar bytes. */
+function parseTar(archive: SourceBytes): ArchivedEntry[] {
+	const parsed: ArchivedEntry[] = []
+	let offset = 0
+	let pendingPath: string | undefined
+	while (offset + 512 <= archive.byteLength) {
+		const block = archive.subarray(offset, offset + 512)
+		offset += 512
+		if (block.every((byte) => byte === 0)) break
+		const name = field(block, 0, 100)
+		const mode = Number.parseInt(field(block, 100, 8), 8)
+		const size = Number.parseInt(field(block, 124, 12), 8)
+		const type = String.fromCharCode(block[156] ?? 0)
+		const content = archive.subarray(offset, offset + size)
+		offset += size + ((512 - (size % 512)) % 512)
+		if (type === 'x') {
+			const record = new TextDecoder().decode(content)
+			const match = /^\d+ path=(.*)\n$/.exec(record)
+			if (match?.[1] === undefined) throw new Error('unreadable pax record')
+			pendingPath = match[1]
+			continue
+		}
+		parsed.push({ path: pendingPath ?? name, mode, type, content })
+		pendingPath = undefined
+	}
+	return parsed
+}
+
+function field(block: SourceBytes, offset: number, length: number): string {
+	const slice = block.subarray(offset, offset + length)
+	const end = slice.indexOf(0)
+	return new TextDecoder().decode(slice.subarray(0, end === -1 ? slice.byteLength : end)).trim()
+}
+
+interface FixtureOptions {
+	longPath?: string
+	symlink?: boolean
+	exportIgnored?: boolean
+}
+
+interface Fixture {
 	commitSha: string
-	treeSha: string
-	entries: GitHubTreeEntry[]
-}> {
+	tarball: SourceBytes
+}
+
+async function gitFixture(options: FixtureOptions = {}): Promise<Fixture> {
 	const root = await mkdtemp(join(tmpdir(), 'source-repository-test-'))
 	roots.push(root)
 	const working = join(root, 'working')
 	await mkdir(working)
-	await command([
-		'git',
-		'init',
-		'--quiet',
-		'--initial-branch=main',
-		`--object-format=${options.objectFormat ?? 'sha1'}`,
-		working,
-	])
-	await command([
-		'git',
-		'-C',
-		working,
-		'config',
-		'user.email',
-		'source-test@example.test',
-	])
+	await command(['git', 'init', '--quiet', '--initial-branch=main', working])
+	await command(['git', '-C', working, 'config', 'user.email', 'source-test@example.test'])
 	await command(['git', '-C', working, 'config', 'user.name', 'Source Test'])
-	await command([
-		'git',
-		'-C',
-		working,
-		'config',
-		'uploadpack.allowFilter',
-		'true',
-	])
 	await mkdir(join(working, 'bin'))
-	await writeFile(
-		join(working, 'zerops.yaml'),
-		options.descriptor ?? descriptor,
-	)
-	await writeFile(
-		join(working, 'bin/run'),
-		`#!/bin/sh\nprintf '$Format:%H$'\ntouch ${join(root, 'must-not-exist')}\n`,
-	)
+	await writeFile(join(working, 'zerops.yaml'), descriptor)
+	await writeFile(join(working, 'bin/run'), "#!/bin/sh\nprintf '$Format:%H$'\n")
 	await writeFile(
 		join(working, '.gitattributes'),
-		'zerops.yaml export-ignore\nbin/run export-subst\n',
+		`bin/run export-subst\n${options.exportIgnored === true ? 'secrets/ export-ignore\n' : ''}`,
 	)
+	if (options.exportIgnored === true) {
+		await mkdir(join(working, 'secrets'))
+		await writeFile(join(working, 'secrets/local.env'), 'TOKEN=must-not-ship\n')
+	}
 	if (options.longPath !== undefined) {
-		const directory = join(
-			working,
-			options.longPath.slice(0, options.longPath.lastIndexOf('/')),
-		)
-		await mkdir(directory, { recursive: true })
+		await mkdir(join(working, options.longPath.slice(0, options.longPath.lastIndexOf('/'))), { recursive: true })
 		await writeFile(join(working, options.longPath), 'long path contents')
 	}
-	if (options.unsafeSymlink === true) {
-		await symlink('zerops.yaml', join(working, 'unsafe-link'))
-	}
+	if (options.symlink === true) await symlink('zerops.yaml', join(working, 'unsafe-link'))
 	await command(['git', '-C', working, 'add', '.'])
-	await command([
+	await command(['git', '-C', working, 'update-index', '--chmod=+x', 'bin/run'])
+	await command(['git', '-C', working, 'commit', '--quiet', '-m', 'fixture'])
+	const commitSha = (await commandText(['git', '-C', working, 'rev-parse', 'HEAD'])).trim()
+	const tar = await commandBytes([
 		'git',
 		'-C',
 		working,
-		'update-index',
-		'--chmod=+x',
-		'bin/run',
-	])
-	await command(['git', '-C', working, 'commit', '--quiet', '-m', 'fixture'])
-	const commitSha = (
-		await commandText(['git', '-C', working, 'rev-parse', 'HEAD'])
-	).trim()
-	const treeSha = (
-		await commandText(['git', '-C', working, 'rev-parse', 'HEAD^{tree}'])
-	).trim()
-	const entries = parseFixtureEntries(
-		await commandBytes([
-			'git',
-			'-C',
-			working,
-			'ls-tree',
-			'-r',
-			'-t',
-			'-z',
-			'-l',
-			'--full-tree',
-			'HEAD',
-		]),
-	)
-	return {
-		root,
-		working,
-		remoteUrl: pathToFileURL(working).href,
+		'archive',
+		'--format=tar',
+		`--prefix=contember-fixture-${commitSha.slice(0, 7)}/`,
 		commitSha,
-		treeSha,
-		entries,
-	}
+	])
+	return { commitSha, tarball: Bun.gzipSync(tar) }
 }
 
-function sourceForFixture(
-	fixture: Awaited<ReturnType<typeof repositoryFixture>>,
-): GitRepositorySource {
-	return new GitRepositorySource({
-		repositoryUrl: () => fixture.remoteUrl,
-		tempRoot: fixture.root,
-		metadata: fixtureMetadata(fixture),
+interface SourceOptions {
+	github?: SourceGitHubConnection
+	location?: string
+	redirectResponse?: () => Response
+	descriptorResponse?: () => Response
+	onDownload?: () => void
+	onMetadataRequest?: (url: string) => void
+	onMetadataAuthorization?: (value: string | null) => void
+	onDownloadAuthorization?: (url: string, value: string | null) => void
+}
+
+function sourceFor(fixture: Fixture, options: SourceOptions = {}): TarballRepositorySource {
+	return new TarballRepositorySource({
+		...(options.github === undefined ? {} : { github: options.github }),
+		metadata: new GitHubMetadataClient({
+			fetch: async (input, init) => {
+				const url = input.toString()
+				options.onMetadataRequest?.(url)
+				options.onMetadataAuthorization?.(new Headers(init?.headers).get('authorization'))
+				if (url.includes('/commits/')) return Response.json({ sha: fixture.commitSha })
+				if (url.includes('/contents/')) return options.descriptorResponse?.() ?? new Response(descriptor)
+				return new Response(null, { status: 404 })
+			},
+		}),
+		downloadFetch: downloadFetchFor(fixture.tarball, options),
 	})
 }
 
-function fixtureMetadata(
-	fixture: Awaited<ReturnType<typeof repositoryFixture>>,
-): GitHubMetadataClient {
-	return new GitHubMetadataClient({
-		fetch: async (input) => baseMetadataResponse(fixture, input.toString()),
-	})
+function handSource(tarball: SourceBytes, options: SourceOptions = {}): TarballRepositorySource {
+	return new TarballRepositorySource({ downloadFetch: downloadFetchFor(Bun.gzipSync(tarball), options) })
 }
 
-function baseMetadataResponse(
-	fixture: Awaited<ReturnType<typeof repositoryFixture>>,
-	input: string,
-): Response {
-	const url = new URL(input)
-	if (url.pathname.includes('/commits/')) {
-		return Response.json({
-			sha: fixture.commitSha,
-			commit: { tree: { sha: fixture.treeSha } },
-		})
+function downloadFetchFor(gzipped: SourceBytes, options: SourceOptions): SourceDownloadFetch {
+	return async (input, init) => {
+		options.onDownloadAuthorization?.(input, new Headers(init.headers).get('authorization'))
+		if (input.startsWith('https://api.github.com/')) {
+			expect(init.redirect).toBe('manual')
+			return options.redirectResponse?.()
+				?? new Response(null, { status: 302, headers: { location: options.location ?? codeloadUrl } })
+		}
+		expect(input).toBe(codeloadUrl)
+		expect(init.redirect).toBe('error')
+		options.onDownload?.()
+		return new Response(gzipped, { status: 200 })
 	}
-	if (url.pathname.includes('/git/trees/')) {
-		return Response.json({
-			sha: fixture.treeSha,
-			truncated: false,
-			tree: fixture.entries.map(restEntry),
-		})
+}
+
+interface EntryOptions {
+	name: string
+	type?: string
+	mode?: number
+	size?: number
+	content?: SourceBytes
+	linkname?: string
+}
+
+function entry(options: EntryOptions): SourceBytes {
+	const content = options.content ?? new Uint8Array()
+	const size = options.size ?? content.byteLength
+	const block = new Uint8Array(512)
+	writeField(block, 0, options.name)
+	writeField(block, 100, (options.mode ?? 0o644).toString(8).padStart(7, '0'))
+	writeField(block, 108, '0000000')
+	writeField(block, 116, '0000000')
+	writeField(block, 124, size.toString(8).padStart(11, '0'))
+	writeField(block, 136, '00000000000')
+	block.fill(0x20, 148, 156)
+	block[156] = (options.type ?? '0').charCodeAt(0)
+	if (options.linkname !== undefined) writeField(block, 157, options.linkname)
+	writeField(block, 257, 'ustar')
+	writeField(block, 263, '00')
+	let checksum = 0
+	for (const byte of block) checksum += byte
+	writeField(block, 148, checksum.toString(8).padStart(6, '0'))
+	block[154] = 0
+	block[155] = 0x20
+	return concat(block, padded(content))
+}
+
+function file(name: string, contents: string, mode = 0o644): SourceBytes {
+	return entry({ name, mode, content: bytes(contents) })
+}
+
+function paxed(payload: string, next: SourceBytes): SourceBytes {
+	const record = bytes(`${payload.length + 1 + String(payload.length + 4).length} ${payload}`)
+	return concat(entry({ name: 'PaxHeaders/0', type: 'x', size: record.byteLength }), padded(record), next)
+}
+
+function globalHeader(commitSha: string): SourceBytes {
+	const body = `comment=${commitSha}\n`
+	const record = bytes(`${body.length + 1 + String(body.length + 4).length} ${body}`)
+	return concat(entry({ name: 'pax_global_header', type: 'g', size: record.byteLength }), padded(record))
+}
+
+function corrupt(block: SourceBytes): SourceBytes {
+	const damaged = block.slice()
+	damaged[0] = 0x7a
+	return damaged
+}
+
+function handTarball(parts: readonly SourceBytes[], options: { commitSha?: string } = {}): SourceBytes {
+	return concat(globalHeader(options.commitSha ?? handCommitSha), ...parts, new Uint8Array(1024))
+}
+
+function padded(content: SourceBytes): SourceBytes {
+	const padding = (512 - (content.byteLength % 512)) % 512
+	return padding === 0 ? content : concat(content, new Uint8Array(padding))
+}
+
+function writeField(block: SourceBytes, offset: number, value: string): void {
+	block.set(new TextEncoder().encode(value), offset)
+}
+
+function bytes(value: string): SourceBytes {
+	return new TextEncoder().encode(value)
+}
+
+function concat(...parts: readonly SourceBytes[]): SourceBytes {
+	const total = parts.reduce((sum, part) => sum + part.byteLength, 0)
+	const output = new Uint8Array(total)
+	let offset = 0
+	for (const part of parts) {
+		output.set(part, offset)
+		offset += part.byteLength
 	}
-	return new Response(null, { status: 404 })
-}
-
-function restEntry(entry: GitHubTreeEntry): Record<string, unknown> {
-	return entry.type === 'blob'
-		? {
-			path: entry.path,
-			mode: entry.mode,
-			type: entry.type,
-			sha: entry.objectId,
-			size: entry.size,
-		}
-		: {
-			path: entry.path,
-			mode: entry.mode,
-			type: entry.type,
-			sha: entry.objectId,
-		}
-}
-
-function parseFixtureEntries(bytes: Uint8Array): GitHubTreeEntry[] {
-	const output = new TextDecoder().decode(bytes)
-	const rawEntries = output.split('\0')
-	if (rawEntries.at(-1) === '') rawEntries.pop()
-	return rawEntries.map((entry) => {
-		const tab = entry.indexOf('\t')
-		const match = /^(\d{6}) (blob|tree) ([a-f0-9]+) +(-|\d+)$/.exec(
-			entry.slice(0, tab),
-		)
-		const path = entry.slice(tab + 1)
-		if (
-			match?.[1] === '040000'
-			&& match[2] === 'tree'
-			&& match[3] !== undefined
-		) {
-			return { path, mode: '040000', type: 'tree', objectId: match[3] }
-		}
-		if (
-			(match?.[1] === '100644' || match?.[1] === '100755')
-			&& match[2] === 'blob'
-			&& match[3] !== undefined
-			&& match[4] !== undefined
-		) {
-			return {
-				path,
-				mode: match[1],
-				type: 'blob',
-				objectId: match[3],
-				size: Number(match[4]),
-			}
-		}
-		if (
-			match?.[1] === '120000'
-			&& match[2] === 'blob'
-			&& match[3] !== undefined
-			&& match[4] !== undefined
-		) {
-			return {
-				path,
-				mode: '100644',
-				type: 'blob',
-				objectId: match[3],
-				size: Number(match[4]),
-			}
-		}
-		throw new Error('fixture tree is invalid')
-	})
+	return output
 }
 
 async function command(args: string[]): Promise<void> {
-	const process = Bun.spawn(args, {
-		stdin: 'ignore',
-		stdout: 'ignore',
-		stderr: 'ignore',
-	})
+	const process = Bun.spawn(args, { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' })
 	if ((await process.exited) !== 0) throw new Error('fixture command failed')
 }
 
 async function commandText(args: string[]): Promise<string> {
-	const process = Bun.spawn(args, {
-		stdin: 'ignore',
-		stdout: 'pipe',
-		stderr: 'ignore',
-	})
-	if (process.stdout === undefined) {
-		throw new Error('fixture command stdout missing')
-	}
-	const output = await new Response(process.stdout).text()
-	if ((await process.exited) !== 0) throw new Error('fixture command failed')
-	return output
+	return new TextDecoder().decode(await commandBytes(args))
 }
 
-async function commandBytes(args: string[]): Promise<Uint8Array> {
-	const process = Bun.spawn(args, {
-		stdin: 'ignore',
-		stdout: 'pipe',
-		stderr: 'ignore',
-	})
-	if (process.stdout === undefined) {
-		throw new Error('fixture command stdout missing')
-	}
-	const output = new Uint8Array(
-		await new Response(process.stdout).arrayBuffer(),
-	)
+async function commandBytes(args: string[]): Promise<SourceBytes> {
+	const process = Bun.spawn(args, { stdin: 'ignore', stdout: 'pipe', stderr: 'ignore' })
+	if (process.stdout === undefined) throw new Error('fixture command stdout missing')
+	const output = new Uint8Array(await new Response(process.stdout).arrayBuffer())
 	if ((await process.exited) !== 0) throw new Error('fixture command failed')
 	return output
 }

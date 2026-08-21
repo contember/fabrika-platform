@@ -41,7 +41,8 @@ import {
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { cancelled, SourceFailure } from './failure'
 import type { SourceGitHubConnection } from './github-connection'
-import { GitRepositorySource, type RepositorySource } from './repository'
+import { type RepositorySource, TarballRepositorySource } from './repository'
+import type { ArchiveSummary, SourceBytes } from './tar'
 
 const MAX_REQUEST_BYTES = 64 * 1024
 const MAX_CREDENTIAL_ACTIVATE_REQUEST_BYTES = 128 * 1024
@@ -112,7 +113,7 @@ export class ZeropsSourceService {
 		}
 		this.rpcKeyDigest = digest(options.rpcKey)
 		this.repository = options.repository
-			?? new GitRepositorySource(
+			?? new TarballRepositorySource(
 				options.github === undefined ? {} : { github: options.github },
 			)
 		this.uploadFetch = options.uploadFetch ?? ((input, init) => fetch(input, init))
@@ -388,7 +389,7 @@ export class ZeropsSourceService {
 		this.running.set(input.runId, { appVersionId: input.appVersionId, controller })
 		let putStarted = false
 		try {
-			const archive = await this.repository.prepareArchive({
+			const archive = await this.repository.archive({
 				repository: input.repository,
 				commitSha: input.commitSha,
 				...(input.protocolVersion === 1 && input.githubInstallationId !== undefined
@@ -401,35 +402,44 @@ export class ZeropsSourceService {
 				signal: deadline.signal,
 			})
 			if (controller.signal.aborted || deadline.timedOut()) {
-				await archive.cleanup().catch(() => {})
+				archive.dispose()
+				await archive.completed.catch(() => {})
 				if (controller.signal.aborted) throw cancelled('upload')
 				throw operationTimedOut('archive', true)
 			}
 			let putFailure: unknown
 			try {
 				putStarted = true
-				await this.upload(input.uploadUrl, archive.tarPath, deadline.signal)
+				await this.upload(input.uploadUrl, archive.body, deadline.signal)
 			} catch (error) {
 				putFailure = error
 			}
+			archive.dispose()
+			let summary: ArchiveSummary | undefined
+			let archiveFailure: unknown
 			try {
-				await archive.cleanup()
+				summary = await archive.completed
 			} catch (error) {
-				putFailure ??= error
+				archiveFailure = error
 			}
 			if (controller.signal.aborted) throw cancelled('upload')
 			if (deadline.timedOut()) throw operationTimedOut('upload', false)
+			// A rejected repository aborts the PUT it is already inside, so the archive verdict is the reason.
+			if (archiveFailure instanceof SourceFailure) throw archiveFailure
 			if (putFailure !== undefined) {
 				if (controller.signal.aborted || (putFailure instanceof Error && putFailure.name === 'AbortError')) {
 					throw cancelled('upload')
 				}
 				throw new SourceFailure('upload_failed', 'upload', false, 502)
 			}
+			if (summary === undefined) {
+				throw new SourceFailure('upload_failed', 'upload', false, 502)
+			}
 			const response = {
 				runId: input.runId,
 				appVersionId: input.appVersionId,
-				commitSha: archive.commitSha,
-				descriptorSha256: archive.descriptorSha256,
+				commitSha: summary.commitSha,
+				descriptorSha256: summary.descriptorSha256,
 			}
 			return jsonResponse(
 				input.protocolVersion === 1
@@ -450,13 +460,13 @@ export class ZeropsSourceService {
 
 	private async upload(
 		uploadUrl: string,
-		tarPath: string,
+		source: ReadableStream<SourceBytes>,
 		signal: AbortSignal,
 	): Promise<void> {
 		const timeout = AbortSignal.timeout(this.uploadTimeoutMs)
 		const combined = linkedController(signal, timeout)
 		try {
-			const body = gzipStream(tarPath)
+			const body = gzipStream(source)
 			let response: Response
 			try {
 				response = await this.uploadFetch(uploadUrl, {
@@ -490,9 +500,11 @@ export class ZeropsSourceService {
 	}
 }
 
-/** Stream a staged tar through gzip without buffering repository contents in memory. */
-export function gzipStream(tarPath: string): ReadableStream<Uint8Array> {
-	return Bun.file(tarPath).stream().pipeThrough(new CompressionStream('gzip'))
+/** Compress the rewritten tar on the way to the destination; nothing is staged on disk or in memory. */
+export function gzipStream(
+	source: ReadableStream<SourceBytes>,
+): ReadableStream<SourceBytes> {
+	return source.pipeThrough(new CompressionStream('gzip'))
 }
 
 function digest(value: string): Buffer {

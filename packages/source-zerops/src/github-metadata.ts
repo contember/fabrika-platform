@@ -1,12 +1,13 @@
-import type { ZeropsSourceRepository } from '@fabrika/provider-zerops'
+import { ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES, type ZeropsSourceRepository } from '@fabrika/provider-zerops'
 import { cancelled, SourceFailure } from './failure'
+import { SOURCE_DESCRIPTOR_PATH } from './tar'
 
-export const GITHUB_METADATA_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 const GITHUB_COMMIT_MAX_RESPONSE_BYTES = 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 30_000
 const MAX_TIMEOUT_MS = 120_000
 const OBJECT_ID_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 const GITHUB_ACCEPT = 'application/vnd.github+json'
+const GITHUB_RAW_ACCEPT = 'application/vnd.github.raw+json'
 const GITHUB_API_VERSION = '2022-11-28'
 const GITHUB_USER_AGENT = 'fabrika-source-zerops'
 
@@ -15,28 +16,7 @@ export type GitHubMetadataFetch = (
 	init?: RequestInit,
 ) => Promise<Response>
 
-export interface GitHubTreeBlob {
-	path: string
-	mode: '100644' | '100755'
-	type: 'blob'
-	objectId: string
-	size: number
-}
-
-export interface GitHubTreeDirectory {
-	path: string
-	mode: '040000'
-	type: 'tree'
-	objectId: string
-}
-
-export type GitHubTreeEntry = GitHubTreeBlob | GitHubTreeDirectory
-
-export interface GitHubRepositorySnapshot {
-	commitSha: string
-	treeSha: string
-	entries: GitHubTreeEntry[]
-}
+export type GitHubMetadataStage = 'resolve' | 'archive'
 
 export interface GitHubMetadataClientOptions {
 	apiBaseUrl?: string
@@ -65,55 +45,72 @@ export class GitHubMetadataClient {
 		this.timeoutMs = timeoutMs
 	}
 
-	async snapshot(
+	/** Resolve a branch, tag or sha to the one exact commit the whole run is then bound to. */
+	async commit(
 		repository: ZeropsSourceRepository,
 		ref: string,
 		token: string | undefined,
 		signal: AbortSignal,
-		stage: 'resolve' | 'archive',
-	): Promise<GitHubRepositorySnapshot> {
-		const prefix = `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`
-		const commitBody = await this.requestJson(
-			`${prefix}/commits/${encodeURIComponent(ref)}`,
+		stage: GitHubMetadataStage,
+	): Promise<string> {
+		const body = await this.request(
+			`${prefix(repository)}/commits/${encodeURIComponent(ref)}`,
+			GITHUB_ACCEPT,
 			token,
 			signal,
 			stage,
 			GITHUB_COMMIT_MAX_RESPONSE_BYTES,
+			() => new SourceFailure('archive_rejected', stage, false, 413),
 		)
-		const commitSha = requiredObjectId(commitBody, 'sha', stage)
-		const commit = requiredObject(commitBody, 'commit', stage)
-		const tree = requiredObject(commit, 'tree', stage)
-		const treeSha = requiredObjectId(tree, 'sha', stage)
-		const treeBody = await this.requestJson(
-			`${prefix}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`,
+		let parsed: unknown
+		try {
+			parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
+		} catch {
+			throw rejected(stage)
+		}
+		if (!isObject(parsed)) throw rejected(stage)
+		const sha = parsed['sha']
+		if (typeof sha !== 'string' || !OBJECT_ID_PATTERN.test(sha)) {
+			throw rejected(stage)
+		}
+		return sha
+	}
+
+	/** Read the repository-root descriptor at an exact commit, bounded, without any other repository content. */
+	async descriptor(
+		repository: ZeropsSourceRepository,
+		commitSha: string,
+		token: string | undefined,
+		signal: AbortSignal,
+		stage: GitHubMetadataStage,
+	): Promise<Uint8Array> {
+		return await this.request(
+			`${prefix(repository)}/contents/${SOURCE_DESCRIPTOR_PATH}?ref=${encodeURIComponent(commitSha)}`,
+			GITHUB_RAW_ACCEPT,
 			token,
 			signal,
 			stage,
-			GITHUB_METADATA_MAX_RESPONSE_BYTES,
+			ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES,
+			() => new SourceFailure('archive_rejected', stage, false, 422),
+			() => new SourceFailure('descriptor_missing', stage, false, 422),
 		)
-		if (
-			treeBody['truncated'] !== false
-			|| treeBody['sha'] !== treeSha
-			|| !Array.isArray(treeBody['tree'])
-		) {
-			throw rejected(stage)
-		}
-		const entries = treeBody['tree'].map((entry) => parseEntry(entry, stage))
-		return { commitSha, treeSha, entries }
 	}
 
-	private async requestJson(
+	private async request(
 		path: string,
+		accept: string,
 		token: string | undefined,
 		callerSignal: AbortSignal,
-		stage: 'resolve' | 'archive',
+		stage: GitHubMetadataStage,
 		maximumBytes: number,
-	): Promise<Record<string, unknown>> {
+		tooLarge: () => SourceFailure,
+		notFound: () => SourceFailure = () => new SourceFailure('ref_not_found', stage, false, 404),
+	): Promise<Uint8Array> {
 		const timeout = AbortSignal.timeout(this.timeoutMs)
 		const controller = linkedController(callerSignal, timeout)
 		try {
 			const headers = new Headers({
-				accept: GITHUB_ACCEPT,
+				accept,
 				'user-agent': GITHUB_USER_AGENT,
 				'x-github-api-version': GITHUB_API_VERSION,
 			})
@@ -140,35 +137,26 @@ export class GitHubMetadataClient {
 			}
 			if (!response.ok) {
 				await response.body?.cancel().catch(() => {})
-				throw new SourceFailure(
-					response.status === 404 ? 'ref_not_found' : 'internal',
-					stage,
-					response.status >= 500,
-					response.status === 404 ? 404 : 502,
-				)
+				if (response.status === 404) throw notFound()
+				throw new SourceFailure('internal', stage, response.status >= 500, 502)
 			}
-			const bytes = await readBounded(
+			return await readBounded(
 				response,
 				maximumBytes,
 				controller,
 				callerSignal,
 				timeout,
 				stage,
+				tooLarge,
 			)
-			let parsed: unknown
-			try {
-				parsed = JSON.parse(
-					new TextDecoder('utf-8', { fatal: true }).decode(bytes),
-				)
-			} catch {
-				throw rejected(stage)
-			}
-			if (!isObject(parsed)) throw rejected(stage)
-			return parsed
 		} finally {
 			controller.abort()
 		}
 	}
+}
+
+function prefix(repository: ZeropsSourceRepository): string {
+	return `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`
 }
 
 async function readBounded(
@@ -177,7 +165,8 @@ async function readBounded(
 	controller: AbortController,
 	callerSignal: AbortSignal,
 	timeout: AbortSignal,
-	stage: 'resolve' | 'archive',
+	stage: GitHubMetadataStage,
+	tooLarge: () => SourceFailure,
 ): Promise<Uint8Array> {
 	const contentLength = response.headers.get('content-length')
 	if (
@@ -186,7 +175,7 @@ async function readBounded(
 		&& Number(contentLength) > maximumBytes
 	) {
 		controller.abort()
-		throw new SourceFailure('archive_rejected', stage, false, 413)
+		throw tooLarge()
 	}
 	const reader = response.body?.getReader()
 	if (reader === undefined) throw rejected(stage)
@@ -199,7 +188,7 @@ async function readBounded(
 			total += result.value.byteLength
 			if (total > maximumBytes) {
 				controller.abort()
-				throw new SourceFailure('archive_rejected', stage, false, 413)
+				throw tooLarge()
 			}
 			chunks.push(result.value)
 		}
@@ -221,7 +210,7 @@ async function readNext(
 	reader: ReadableStreamDefaultReader<Uint8Array>,
 	callerSignal: AbortSignal,
 	timeout: AbortSignal,
-	stage: 'resolve' | 'archive',
+	stage: GitHubMetadataStage,
 ) {
 	try {
 		return await reader.read()
@@ -231,79 +220,8 @@ async function readNext(
 	}
 }
 
-function parseEntry(
-	value: unknown,
-	stage: 'resolve' | 'archive',
-): GitHubTreeEntry {
-	if (!isObject(value)) throw rejected(stage)
-	const path = value['path']
-	const mode = value['mode']
-	const type = value['type']
-	const objectId = value['sha']
-	if (
-		typeof path !== 'string'
-		|| !safeRepositoryPath(path)
-		|| typeof objectId !== 'string'
-		|| !OBJECT_ID_PATTERN.test(objectId)
-	) {
-		throw rejected(stage)
-	}
-	if (mode === '040000' && type === 'tree') {
-		return { path, mode, type, objectId }
-	}
-	const size = value['size']
-	if (
-		(mode !== '100644' && mode !== '100755')
-		|| type !== 'blob'
-		|| typeof size !== 'number'
-		|| !Number.isSafeInteger(size)
-		|| size < 0
-	) {
-		throw rejected(stage)
-	}
-	return { path, mode, type, objectId, size }
-}
-
-function requiredObject(
-	value: Record<string, unknown>,
-	key: string,
-	stage: 'resolve' | 'archive',
-): Record<string, unknown> {
-	const field = value[key]
-	if (!isObject(field)) throw rejected(stage)
-	return field
-}
-
-function requiredObjectId(
-	value: Record<string, unknown>,
-	key: string,
-	stage: 'resolve' | 'archive',
-): string {
-	const field = value[key]
-	if (typeof field !== 'string' || !OBJECT_ID_PATTERN.test(field)) {
-		throw rejected(stage)
-	}
-	return field
-}
-
 function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function safeRepositoryPath(path: string): boolean {
-	if (
-		path === ''
-		|| path.startsWith('/')
-		|| path.includes('\\')
-		|| [...path].some(
-			(character) => character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f,
-		)
-	) {
-		return false
-	}
-	return path
-		.split('/')
-		.every((segment) => segment !== '' && segment !== '.' && segment !== '..')
 }
 
 function normalizedApiBaseUrl(value: string): string {
@@ -341,6 +259,6 @@ function linkedController(...signals: AbortSignal[]): AbortController {
 	return controller
 }
 
-function rejected(stage: 'resolve' | 'archive'): SourceFailure {
+function rejected(stage: GitHubMetadataStage): SourceFailure {
 	return new SourceFailure('archive_rejected', stage, false, 422)
 }
