@@ -657,6 +657,13 @@ drifted descriptor fails the operation. Because the tarball is `git archive` out
 `export-ignore` and `export-subst` apply. Archives are not byte-deterministic across runs and nothing
 depends on that.
 
+Measured 2026-08-21 on the test installation (`source` at its `0.125 GB` floor, read once a second
+through `GET /service-stack/{id}/container` → `currentHardwareResource`, the allocation vertical
+autoscaling raises when a container needs more): a 250 MB incompressible repository (25 × 10 MB
+random files beside the 62 MB example app) deployed in 3 min 22 s with the tarball stream taking
+about 17 s, and the example app alone in 3 min 08 s — `source` stayed at **one container × 128 MB**
+for both. The memory claim behind the streamed path is a reading now, not an inference.
+
 The source service accepts only the measured `prg1` upload destination: HTTPS host
 `proxy.app-prg1.zerops.io`, exact path `/api/rest/object-storage/upload`, empty userinfo, no explicit
 port or fragment, and a non-empty signed query. It refuses redirects. The credential-bearing upload URL
