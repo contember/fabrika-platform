@@ -24,6 +24,16 @@ window can wait about ten minutes for the ingest configuration its first deploy 
 `packages/control/src/__tests__/operations-catalog-window.test.ts` ("a lock left behind by a dead
 holder drops every change until the lease expires").
 
+**Seen live (2026-08-21, the test installation).** Three minutes after `platform upgrade` replaced
+the control container, a registration's own sync logged `operations catalog sync: coalesced revision
+10`; a deploy 80 ms later wrote `operations ingest not injected: app has no active ingest config
+(catalog revision 10 pending)` and the application, which requires the DSN at boot, failed. A deploy
+seven minutes later carried all four Operations keys — the replay after the lease expired had
+delivered revision 10. A roll is therefore the common trigger: the container that dies mid-flush is
+the one the roll replaces. The cheapest close is a holder that releases its lease on `SIGTERM`, or a
+lease that the replacing container may take over; measure which one the platform's stop sequence
+allows (it sends the stop and waits, `docs/reference/zerops-platform.md`).
+
 Three smaller findings from the same reproduction, none changed yet:
 
 - The handoff passes narrow the coalescing window rather than close it: after the last pass there is

@@ -1122,12 +1122,17 @@ The Fabrika platform project contains:
 - private `storage` for run logs and `operationsstorage` for raw events and
   source maps.
 
-IAM, Operations, source, proxy, and control deploy in that order. Source is private, installs `git`,
+IAM, Operations and source deploy at once, then proxy, then control. Source is private, installs `git`,
 and accepts authenticated source RPC on port 3000; it has no Zerops token. Operations uses
 `run.initCommands` for service-owned plus `platform-node` queue migrations,
 `run.start` for its HTTP server and Postgres job consumer, and `run.crontab` for
 health and notification maintenance. Its database and object store are separate
 failure/capacity domains from IAM and control.
+
+A `run.crontab` command runs in its own process, and the service log records only that it
+started (`USER zerops pid <n> cmd /opt/zerops/bin/zsc crontab run crontab-0`) — nothing the
+command writes to stdout or stderr is collected (seen 2026-08-21 on control's five-minute
+maintenance: its `operations catalog sync: …` line never appears in the log; backlog 85).
 
 The platform proxy routes the configured Operations public hostname only to
 Sentry envelope ingest and authenticated source-map upload. The operator API,
