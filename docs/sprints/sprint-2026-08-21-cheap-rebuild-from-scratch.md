@@ -496,3 +496,29 @@ everything except WU6, which follows it.
   need a GitHub App connection, which only the console's manifest flow can create — the operator's
   step. Leftover on the account: the old `fabrika-install-test` integration token still exists with
   `canCreateProjects` and no projects.
+- 2026-08-21 — WU8, second half: the private deploy, which found two defects the fake APIs had hidden
+  and shipped two patch releases. The operator connected the organization's GitHub App through the
+  console. `register` then answered `502 provider registration preparation failed` in 30 ms, with
+  nothing in control's log: the platform answers a missing service by name with `400
+  serviceStackNotFound`, `findService` matched only a 404, and the registry swallowed the cause. Fixed
+  in `c8e4d5d` (code-based check, emulator mirrors the 400, registry logs the reason; response stays
+  opaque as its test pins) and rolled out as `v0.0.24` through the sidecar. `register` then resolved the
+  connection from the organization and imported the app service. The first deploy failed in one
+  second: a proxy target needs a `domain`, which registration had accepted without (backlog 83); set
+  to one of the namespace proxy's `zerops.app` hosts through `apps environments put`. The second deploy
+  resolved, uploaded and built — and `BUILD_FAILED` 45 s in with no line after "unpacking" and no
+  reason on the app version or process. The same tree pushed with the CLI deployed. Three hand uploads
+  isolated it: regular files only fails, the same files with one directory entry per parent deploys,
+  the fixed rewrite's archive deploys — the platform's unpacker creates no directory it was not told
+  about, and the first tarball rewrite dropped them. Fixed in `9441c3d` (parents derived from file
+  paths, written once, outermost first), `v0.0.25`, sidecar rolled. (4) The third run succeeded:
+  `apply-import → trigger-deploy → await-deploy (WAITING_TO_BUILD → BUILDING → DEPLOYING → ACTIVE) →
+  reconcile-schema`, 3 minutes end to end, from the PRIVATE example repository through the keyed v2
+  connection; `/healthz` through the namespace proxy answers 200 and `/` the gate's 302. The
+  redirect target is pinned to `codeload.github.com` in code and the same code path against the same
+  commit showed it locally; `source` spawns nothing (zero subprocess references) and stages nothing
+  on disk, so there is no disk to grow. Both platform facts are in `reference/zerops-platform.md`.
+  Also observed twice: the Release's `registry-smoke` fails on `@fabrika/control-contract` because
+  npm shows the published version about five minutes late while the other 22 packages are visible
+  within seconds; re-running the job passes (publish is idempotent). Open: (7) the second
+  organization still needs its own GitHub App connection; the 30-day cost is still unreadable.
