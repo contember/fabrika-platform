@@ -330,3 +330,36 @@ identifiers redacted where they are credentials.
   by-id, by-name and a second DELETE answer `400 serviceStackNotFound`; a successful user-data POST
   answers 200 (the emulator said 201); user-data on an absent service is `400 serviceStackNotFound`
   (the emulator said 404).
+- 2026-08-21 — Waves 1–2 landed, each unit implemented by an Opus agent, reviewed by a second one
+  on the frozen diff, fixed once, gated by the leader (package typecheck + tests; then the full
+  `bun run typecheck`, `bun test` with PostgreSQL 2 932 pass / 42 skip / 0 fail, lint identical to
+  the base, `format:check`, `release:validate` 23 packages). Commit map: WU2 → `c9f9d46`, WU7 →
+  `b9736a7`, WU5 → `59f503a`, WU3 + WU4 → `b97e93f` (one commit: both extend the same usage text
+  and capability test, and their hunks interleave), WU6 → `b5440bb`, WU1 → `07ac08f` + `4922fa5`.
+  Deviations from the plan: WU7's CI warning on the example's pins is dropped — the example
+  repository is PRIVATE, so an anonymous read 404s on every release; `release:example-pin` stays
+  operator-run (Decision 3 holds). WU2 found no single proven cause for backlog 84's timeline; the
+  reproduction proved a stale-lease window and closed the release-handoff window, the rest is the
+  instrumentation's job on the next occurrence (backlog 84 rewritten to the one remaining window).
+  WU2 decision (4): no bounded wait in the deploy — the residual window is a dead holder's lease
+  plus a cron period, no deploy-sized wait closes it, and a wait would couple Delivery liveness to
+  Operations liveness. WU5 records the hosts at provision/reconcile (a placement provisioned before
+  this change lists none until its next reconcile). WU3's `upgrade` verifies the tag through
+  `git/matching-refs` (a prefix match, compared exactly) because `git/ref/tags` 404s for a missing
+  tag in the same way a rate limit does.
+- 2026-08-21 — WU1 live witness. First run against a throwaway project: 27 pass / 4 fail — every
+  failure a table/doc error: a re-import of a `startWithoutCode` document starts one `stack.deploy`
+  (the no-op facts hold for documents without it); `GET /service-stack/{id}/user-data` answers a
+  200 list now; `zeropsSubdomain` is absent before any deploy and `SYSTEM` once the empty version
+  deployed; the two-process create is the `startWithoutCode` case. After the corrections:
+  **37 pass / 0 fail with `FABRIKA_LIVE_ZEROPS_SLOW=1` in 4 min 49 s**, the two unpacker rows
+  included (flat archive → `BUILD_FAILED`, with directory entries → `ACTIVE`), four services
+  created and deleted. The negative control (by-name row set to 404) fails both consumers with the
+  same message. Project deleted afterwards.
+- 2026-08-21 — WU8. Read through `GET /service-stack/{id}/container` once a second
+  (`currentHardwareResource.memoryMBytes`, the allocation vertical autoscaling would raise), on
+  the test installation at `v0.0.25`. A 250 MB incompressible throwaway branch of the example
+  repository (25 × 10 MB random files, plus the 62 MB app): deploy succeeded in 3 min 22 s, the
+  tarball stream took ~17 s (version reserved 18:29:31Z, build-and-deploy 18:29:48Z), `source`
+  stayed at **1 container × 128 MB** for the whole run. The small branch alone: 3 min 08 s, the
+  same 1 × 128 MB. The floor held for both; written into the reference doc beside ADR-0037.
