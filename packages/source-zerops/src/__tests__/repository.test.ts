@@ -228,7 +228,7 @@ describe('Zerops source resolve', () => {
 })
 
 describe('Zerops source archive', () => {
-	test('streams the tarball into a flat archive with fixed modes and no directory entries', async () => {
+	test('streams the tarball into an archive of regular files with fixed modes, each parent directory written once before its first file', async () => {
 		const fixture = await gitFixture()
 		const archived = await runArchive(sourceFor(fixture), {
 			repository,
@@ -244,12 +244,41 @@ describe('Zerops source archive', () => {
 			entryCount: 3,
 			expandedBytes: entries(archived).reduce((total, entry) => total + entry.content.byteLength, 0),
 		})
+		// The Zerops unpacker creates no directory it was not told about, so `bin/` precedes `bin/run`.
 		expect(entries(archived).map((entry) => [entry.path, entry.mode, entry.type])).toEqual([
 			['.gitattributes', 0o644, '0'],
+			['bin/', 0o755, '5'],
 			['bin/run', 0o755, '0'],
 			['zerops.yaml', 0o644, '0'],
 		])
 		expect(text(archived, 'zerops.yaml')).toBe(descriptor)
+	})
+
+	test('writes nested parent directories outermost first and never twice', async () => {
+		const tarball = handTarball([
+			file(`${handPrefix}src/app/a.ts`, 'a'),
+			file(`${handPrefix}src/app/b.ts`, 'b'),
+			file(`${handPrefix}src/lib/c.ts`, 'c'),
+			file(`${handPrefix}zerops.yaml`, descriptor),
+		])
+		const archived = await runArchive(handSource(tarball), {
+			repository,
+			commitSha: handCommitSha,
+			descriptorSha256,
+			signal: new AbortController().signal,
+		})
+
+		expect(archived.failure).toBeUndefined()
+		expect(archived.summary?.entryCount).toBe(4)
+		expect(entries(archived).map((entry) => [entry.path, entry.type])).toEqual([
+			['src/', '5'],
+			['src/app/', '5'],
+			['src/app/a.ts', '0'],
+			['src/app/b.ts', '0'],
+			['src/lib/', '5'],
+			['src/lib/c.ts', '0'],
+			['zerops.yaml', '0'],
+		])
 	})
 
 	test('rejects a repository whose tarball carries a symlink', async () => {
@@ -290,6 +319,8 @@ describe('Zerops source archive', () => {
 
 		expect(entries(archived).map((entry) => entry.path)).toContain(longPath)
 		expect(text(archived, longPath)).toBe('long path contents')
+		const directory = entries(archived).find((entry) => entry.path === `${'nested-'.repeat(15)}directory/`)
+		expect(directory?.type).toBe('5')
 	})
 
 	test.each([
@@ -465,14 +496,18 @@ describe('Zerops source archive', () => {
 			commitSha: fixture.commitSha,
 			descriptorSha256,
 		})
-		expect(delivered.map((part) => [part.path, part.mode])).toEqual([
-			['.gitattributes', 0o644],
-			['bin/run', 0o755],
-			['deeply/nested/but/quite/short.txt', 0o644],
-			['zerops.yaml', 0o644],
+		expect(delivered.map((part) => [part.path, part.mode, part.type])).toEqual([
+			['.gitattributes', 0o644, '0'],
+			['bin/', 0o755, '5'],
+			['bin/run', 0o755, '0'],
+			['deeply/', 0o755, '5'],
+			['deeply/nested/', 0o755, '5'],
+			['deeply/nested/but/', 0o755, '5'],
+			['deeply/nested/but/quite/', 0o755, '5'],
+			['deeply/nested/but/quite/short.txt', 0o644, '0'],
+			['zerops.yaml', 0o644, '0'],
 		])
-		expect(delivered.every((part) => part.type === '0')).toBe(true)
-		expect(new TextDecoder().decode(delivered[3]?.content)).toBe(descriptor)
+		expect(new TextDecoder().decode(delivered.find((part) => part.path === 'zerops.yaml')?.content)).toBe(descriptor)
 	})
 
 	test('passes file content through without buffering a whole entry', async () => {

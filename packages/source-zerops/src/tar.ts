@@ -115,6 +115,7 @@ class TarRewriter {
 	private descriptorHash: Hash | undefined
 	private descriptorDigest: string | undefined
 	private readonly paths = new Set<string>()
+	private readonly directories = new Set<string>()
 
 	constructor(private readonly input: TarRewriteInput) {}
 
@@ -232,7 +233,7 @@ class TarRewriter {
 		this.pendingSize = undefined
 		this.started = true
 		const relative = this.strip(path)
-		// git never tracks an empty directory, so every kept path arrives with its own entry.
+		// Directory entries are derived from file paths below, so the tarball's own are not needed.
 		if (header.typeflag === '5') {
 			this.phase = skipPhase(size)
 			return
@@ -276,6 +277,7 @@ class TarRewriter {
 			}
 			this.descriptorHash = createHash('sha256')
 		}
+		this.writeParentDirectories(path, controller)
 		this.writeEntryHeader(path, mode, size, controller)
 		if (size === 0) {
 			this.completeEntry()
@@ -296,10 +298,39 @@ class TarRewriter {
 		this.descriptorDigest = digest
 	}
 
+	/**
+	 * The Zerops unpacker creates no directory it was not told about: an archive of regular files alone
+	 * fails its build at "unpacking" (docs/reference/zerops-platform.md). Each parent directory is
+	 * therefore written once, outermost first, before the first file beneath it — the set it costs is
+	 * bounded by the file paths already kept.
+	 */
+	private writeParentDirectories(
+		path: string,
+		controller: TransformStreamDefaultController<SourceBytes>,
+	): void {
+		const segments = path.split('/')
+		for (let depth = 1; depth < segments.length; depth++) {
+			const directory = segments.slice(0, depth).join('/')
+			if (this.directories.has(directory)) continue
+			this.directories.add(directory)
+			this.writeHeader(`${directory}/`, 0o755, 0, '5', controller)
+		}
+	}
+
 	private writeEntryHeader(
 		path: string,
 		mode: number,
 		size: number,
+		controller: TransformStreamDefaultController<SourceBytes>,
+	): void {
+		this.writeHeader(path, (mode & 0o111) === 0 ? 0o644 : 0o755, size, '0', controller)
+	}
+
+	private writeHeader(
+		path: string,
+		mode: number,
+		size: number,
+		type: '0' | '5',
 		controller: TransformStreamDefaultController<SourceBytes>,
 	): void {
 		let name = path
@@ -311,12 +342,10 @@ class TarRewriter {
 			controller.enqueue(record)
 			const padding = paddingFor(record.byteLength)
 			if (padding > 0) controller.enqueue(new Uint8Array(padding))
-			name = `PaxEntry/${this.paxIndex}`
+			name = type === '5' ? `PaxEntry/${this.paxIndex}/` : `PaxEntry/${this.paxIndex}`
 			this.paxIndex++
 		}
-		controller.enqueue(
-			tarHeader(name, (mode & 0o111) === 0 ? 0o644 : 0o755, size, '0'),
-		)
+		controller.enqueue(tarHeader(name, mode, size, type))
 	}
 
 	private beginPax(size: number, global: boolean): void {
@@ -479,7 +508,7 @@ function tarHeader(
 	path: string,
 	mode: number,
 	size: number,
-	type: '0' | 'x',
+	type: '0' | '5' | 'x',
 ): SourceBytes {
 	const header = new Uint8Array(BLOCK_BYTES)
 	writeTarText(header, 0, 100, path)

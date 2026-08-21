@@ -605,9 +605,12 @@ short-lived token in its query and is treated as a credential in transit. The re
 `gunzip → tar rewrite → gzip → PUT`, so no repository byte is staged on disk or buffered whole.
 
 The tar rewrite reads GitHub's `git archive` output 512 bytes at a time. It confirms the commit from
-the pax global header's `comment`, strips the single archive prefix, keeps regular files only, drops
-directory entries, and rewrites each header with mode `0755` or `0644`, uid and gid `0` and a fixed
-mtime. It rejects symlinks, hard links, devices, GNU long-name entries, every other special typeflag, a
+the pax global header's `comment`, strips the single archive prefix, keeps regular files only and
+rewrites each header with mode `0755` or `0644`, uid and gid `0` and a fixed mtime. The tarball's own
+directory entries are dropped; instead each parent directory is written once, outermost first, before
+the first file beneath it, because the platform's unpacker creates no directory it was not told about
+(measured 2026-08-21, below; ADR-0037's "drops directory entries" describes the first cut, which failed
+that build). It rejects symlinks, hard links, devices, GNU long-name entries, every other special typeflag, a
 root `.gitmodules`, paths outside the prefix or containing `.`/`..`, duplicate paths, a pax `linkpath`
 record, a pax record over 64 KiB, and a truncated stream. It admits at most 50,000 files and 512 MiB of
 file content, counted incrementally. It hashes the root `zerops.yaml` as it passes: a missing or
@@ -693,6 +696,25 @@ failed`. The look-up that should have said "absent" had thrown instead.
 The same code the `user-data` LIST returns on every service (see 2026-08-03 above), here meaning what it
 says. A client deciding "present or absent" by HTTP status treats an absent service as a failure; the
 decision has to read the error code. The local emulator answers the same 400 since the same day.
+
+### Verified live (2026-08-21, account `prg1`, project `apps-test2`) — the unpacker needs directory entries
+
+The first deploy through the streamed tarball path (ADR-0037) reached `BUILDING` and failed 45 s later
+with no line after "DOWNLOADING APPLICATION SOURCE CODE … unpacking it on the container"; the
+app-version and its process carried no reason. The same tree pushed with the CLI built and deployed.
+Three hand uploads of the same 21 files through `POST /service-stack/{id}/app-version` → `PUT
+uploadUrl` → `PUT /app-version/{id}/build-and-deploy` isolated the variable:
+
+| Archive                                                                                                          | Result                                              |
+| ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Regular files only (`0` entries), `Content-Length` upload                                                        | **`BUILD_FAILED`** at unpacking, no reason recorded |
+| The same files preceded by one `5` entry per parent directory (`src/`, `src/__tests__/`), mode `0755`, mtime `0` | **`ACTIVE`**                                        |
+| The rewrite with parent directories derived from file paths                                                      | **`ACTIVE`**                                        |
+
+So the platform's unpacker does not create a missing parent directory on its own; an archive must name
+every directory before the first file inside it. The CLI's archive does exactly that (directories first,
+file mtime `0` like ours), so nothing else in the header differs. The streamed PUT without a
+`Content-Length` was not the cause: the same flat archive failed with one.
 
 ### Verified live (2026-08-19, account `prg1`, project `fabrika-notes-prod`) — a user-data write is an asynchronous process
 
