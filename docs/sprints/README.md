@@ -19,9 +19,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- [`sprint-2026-08-21-cheap-rebuild-from-scratch`](sprint-2026-08-21-cheap-rebuild-from-scratch.md)
-  — empty the Zerops account, remove the legacy v1 source path its deletion makes unreachable, fix the
-  five defects that make a from-scratch bring-up expensive (stdin intent, the first administrator,
-  asynchronous namespace provisioning, actionable namespace failures, removal of a failed namespace),
-  and stand one installation back up on the cheap defaults landed in `3ecf86d`. The rebuild is the
-  single live acceptance for all of it.
+- none — the last sprint, [cheap rebuild from scratch (2026-08-21)](../archive/sprint-2026-08-21-cheap-rebuild-from-scratch.md), shipped on 2026-08-21.

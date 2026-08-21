@@ -26,13 +26,15 @@ handoff amendment.
 
 ## Active sprints
 
-[`cheap-rebuild-from-scratch`](sprints/sprint-2026-08-21-cheap-rebuild-from-scratch.md) — delete both
-live Zerops projects, remove the legacy v1 source credential path their deletion makes unreachable, fix
-the five defects that make a from-scratch bring-up expensive, and stand one installation back up on the
-cheap defaults. [ADR-0038](decisions/0038-size-namespaces-cheaply-by-default.md) records the defaults
-`3ecf86d` already landed: an app namespace no longer keys its database off the environment NAME, so
-`prod` stops buying three dedicated HA containers. The rebuild is the single live acceptance for the
-whole batch.
+None. The last one, [cheap rebuild from scratch](archive/sprint-2026-08-21-cheap-rebuild-from-scratch.md),
+shipped on 2026-08-21: it emptied both live Zerops projects, removed the legacy v1 source credential path
+their deletion made unreachable ([ADR-0039](decisions/0039-retire-the-legacy-v1-source-credential-path.md)),
+made `source` stream GitHub tarballs ([ADR-0037](decisions/0037-stream-github-tarballs-for-zerops-sources.md)),
+sized namespaces cheaply by default ([ADR-0038](decisions/0038-size-namespaces-cheaply-by-default.md)),
+fixed the five bring-up defects, and stood one installation back up unattended with two private
+applications from two GitHub organizations — the second-organization deploy the multi-connection sprint
+had left open. The live run found two platform facts the emulator had hidden (recorded in
+[`reference/zerops-platform.md`](reference/zerops-platform.md)) and left backlog 83–84.
 
 The archived [multi-connection sprint](archive/sprint-2026-08-14-multiple-private-github-source-connections.md) —
 extend the Zerops source path to one private GitHub App per organization and multiple connections per

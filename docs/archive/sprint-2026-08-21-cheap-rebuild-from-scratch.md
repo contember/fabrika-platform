@@ -1,10 +1,18 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU1 → <sha>,
-> WU2 → <sha>, … Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
+> **OUTCOME — shipped 2026-08-21.** The account was emptied and one installation stood back up on
+> the cheap defaults, unattended where the commands now allow it, and deployed two private
+> applications from two GitHub organizations through their own keyed connections into one shared
+> namespace. The rebuild found and fixed two platform facts the fake APIs had hidden (a missing
+> service is a `400`, the unpacker needs directory entries) and shipped them as `v0.0.24` and
+> `v0.0.25`. The two projects cost $8.70 and $3.98 per 30 days. Commit map: WU1a → `40fa310`
+> (ADR-0037); WU0 → `30251be` (ADR-0038); WU2 → `da77242`; WU4 → `6fb69c5`; WU1 → `b1c0849`
+> (ADR-0039); WU3 → `ee3ec4d`; WU5+6 → `e1976e5`; WU7 → `513aeae` (decided, not built); WU8 fixes →
+> `c8e4d5d`, `9441c3d`; run log → `410cac3`, `a6169af`. Verification: after WU5+6 `bun run typecheck`
+> 35/35, `bun test` 2 782 pass / 9 skip / 0 fail with PostgreSQL, lint and format clean,
+> `release:validate` exit 0; CI and Release green on `v0.0.23`–`v0.0.25`; WU8 witnesses (1)–(8) in
+> the run log. Backlog closed: 59, 60, 67, 68, 72, 73, 74 deleted; 65 re-pointed; 75 rescoped. Filed:
+> 79–84. Deferred: backlog 75's synchronous preflight (now buildable with the token-introspection
+> probe), the `registry-smoke` wait that is shorter than npm's replication lag, and backlog 84's
+> cause — the first deploy of a freshly registered app can miss its Operations ingest.
 
 # Sprint — a cheap installation, rebuilt from scratch (2026-08-21)
 
@@ -522,3 +530,17 @@ everything except WU6, which follows it.
   npm shows the published version about five minutes late while the other 22 packages are visible
   within seconds; re-running the job passes (publish is idempotent). Open: (7) the second
   organization still needs its own GitHub App connection; the 30-day cost is still unreadable.
+- 2026-08-21 — WU8, close. (5) The account now reports the 30-day cost of current resources:
+  the platform project $8.70 (6 shared cores, 1.5 GB RAM, 6 GB disk) and the namespace project $3.98
+  (3 shared cores, 0.625 GB RAM, 3 GB disk) — single-digit dollars each, as the acceptance asked.
+  (7) The operator connected a SECOND organization through the console (its own GitHub App, installed
+  on the whole organization). A private repository there (a copy of the example with a
+  shared-namespace-conformant id and hostname — the first attempt with a hyphenated id was refused by
+  the prefix rule at registration, correctly) registered through that organization's own connection
+  and installation, and deployed into the same namespace beside the first app: resolve, upload, build,
+  deploy, `ACTIVE`, `reconcile-schema`. Its first two deploys failed at start for want of the
+  Operations-managed environment, which a later catalog change supplied (backlog 84). Follow-ups
+  filed: backlog 83 (a proxy target registers without the domain its deploy needs), backlog 84. Left
+  on the account deliberately: the two throwaway projects, the second organization's test repository,
+  the `sprint-wu8` machine key (24 h), and the old `fabrika-install-test` integration token — the
+  operator's call. Every acceptance item (1)–(8) is recorded above.
