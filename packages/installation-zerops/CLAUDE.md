@@ -57,6 +57,12 @@ and is deliberate — someone reading only one path will guess wrong about the o
   key, once, at the end, because it is stored nowhere else and `platform init` asks
   the operator for it. That is the only exception to the no-secret-in-a-log rule on
   this path; `src/log.ts` still has no helper that takes a value.
+- **`install` REFUSES a stdin that is not a terminal unless `--yes` is passed.**
+  Every confirmation defaults to yes, so a pipe carrying blank lines answers all
+  six of them with nobody reading what they agree to. `--yes` makes an
+  unattended bring-up an explicit choice on the command line, and it has no
+  environment variable beside it. The gate is `installPrompts` in `src/install.ts`,
+  applied before anything is contacted.
 - **`install` is a BRING-UP and never a reconcile.** It refuses a project that
   already carries its generated secret KEYS (checked by key, never by value) —
   re-rolling the vault KEK is unrecoverable and re-rolling the signing keys logs

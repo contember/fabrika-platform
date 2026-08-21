@@ -19,6 +19,17 @@ export interface ShellStep {
 }
 
 /**
+ * What a streaming child gets on stdin.
+ *
+ * A TTY child may INHERIT it — `git` and `gh` prompt on their own, and a terminal is shared by turns.
+ * A piped stdin may not: `prompt.ts` gives one reader the whole stream for the command's life, and a
+ * child inheriting it between two questions consumes the answers nobody has read yet, so the next
+ * prompt dies on a line the child ate. `capture` has always used `'ignore'` for the same reason.
+ */
+export const childStdin = (step: ShellStep, isTty: boolean = process.stdin.isTTY === true): Uint8Array | 'inherit' | 'ignore' =>
+	step.stdin !== undefined ? new TextEncoder().encode(step.stdin) : isTty ? 'inherit' : 'ignore'
+
+/**
  * Run a step, STREAMING its stdout/stderr to this terminal so the operator watches the underlying
  * tool live (git/gh print progress). Throws on a non-zero exit. The thrown message names the command
  * + exit code only.
@@ -32,7 +43,7 @@ export async function run(step: ShellStep): Promise<void> {
 	const proc = Bun.spawn([step.command, ...step.args], {
 		cwd: step.cwd,
 		env: { ...process.env, ...step.env },
-		stdin: step.stdin !== undefined ? new TextEncoder().encode(step.stdin) : 'inherit',
+		stdin: childStdin(step),
 		stdout: 'pipe',
 		stderr: 'pipe',
 	})

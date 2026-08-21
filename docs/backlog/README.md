@@ -56,7 +56,6 @@ and a pin that pins half of what it claims.
 - [64](64-close-the-bootstrap-admission-hatch-automatically.md) — A Cloudflare installation comes up admitting on a standing admin list, and closing it is an instruction printed to a human.
 - [65](65-pin-a-zerops-build-to-a-revision.md) — A Zerops build source names a repository, not a revision, so `fabrika.ref` pins the pipeline but not the code Zerops builds.
 - [67](67-command-for-the-first-administrator.md) — A fresh installation comes up with nobody able to sign in, and the four RPC calls that fix that live in a throwaway script.
-- [68](68-platform-commands-mishandle-a-closed-stdin.md) — `platform install` runs unattended when it should refuse, and `platform init` cannot be run unattended at all.
 - [71](71-deliver-domain-audit-events-durably.md) — Add stable event ids, idempotent IAM acknowledgement and transactional producer outboxes for every domain mutation.
 - [72](72-a-failed-namespace-reports-nothing-an-operator-can-act-on.md) — Every namespace failure looks the same: the provider's error is discarded, not redacted.
 - [73](73-a-failed-namespace-cannot-be-removed.md) — No delete, so a failed namespace holds its id forever and a retry must rename.

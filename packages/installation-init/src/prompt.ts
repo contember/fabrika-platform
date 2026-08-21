@@ -1,28 +1,34 @@
 /**
- * Interactive prompts for the fabrika CLI, over `node:readline/promises` on the real TTY.
+ * Interactive prompts for the fabrika CLI, over `node:readline/promises`.
  *
  * `secret()` is the security-critical one: it reads a value WITHOUT echoing it to the terminal (no
  * keystrokes, no final value), so a token/key pasted at the prompt never lands in scrollback or a
  * screen-share. Every other prompt echoes normally. None of these functions ever log the value they
  * return — the caller routes secrets into a child-process env, never back through `log.ts`.
+ *
+ * ── Why stdin is read two different ways ──────────────────────────────────────────────────────────
+ *
+ * A PIPED stdin is read by ONE reader for the whole command. Closing a readline discards whatever it
+ * has already buffered, so a fresh interface per question swallows every answer after the first and
+ * the command stops on question 2 — which is what made `platform init` undrivable without a PTY.
+ *
+ * A TTY keeps a fresh interface per question, closed afterwards. A persistent one holds the terminal
+ * in raw mode (`-icanon -echo`, measured) between questions, and `init` spawns `git` and `gh` between
+ * them — a child inheriting a raw terminal echoes nothing and stair-steps its output.
  */
 
 import { createInterface, type Interface } from 'node:readline/promises'
+import type { Readable, Writable } from 'node:stream'
 import { fail, info } from './log'
 
 /** A free-text prompt. Returns the trimmed answer, or `fallback` when the operator just hits enter. */
 export async function text(question: string, fallback?: string): Promise<string> {
-	const rl = openReadline()
-	try {
-		const suffix = fallback !== undefined && fallback !== '' ? ` [${fallback}]` : ''
-		const answer = stripTerminalCruft(await rl.question(`${question}${suffix}: `)).trim()
-		if (answer === '' && fallback !== undefined) {
-			return fallback
-		}
-		return answer
-	} finally {
-		rl.close()
+	const suffix = fallback !== undefined && fallback !== '' ? ` [${fallback}]` : ''
+	const answer = stripTerminalCruft(await ask(`${question}${suffix}: `)).trim()
+	if (answer === '' && fallback !== undefined) {
+		return fallback
 	}
+	return answer
 }
 
 /**
@@ -47,16 +53,14 @@ export async function required(question: string, fallback?: string): Promise<str
  */
 export async function secret(question: string): Promise<string> {
 	process.stdout.write(`${question}: `)
-	const rl = openReadline()
 	// While reading, intercept the output stream so readline's own echo of the typed characters is
 	// suppressed — only the newline at the end is allowed through, to move the cursor down.
 	const muted = muteOutput()
 	try {
-		const answer = await rl.question('')
+		const answer = await ask('', question)
 		return stripTerminalCruft(answer)
 	} finally {
 		muted.restore()
-		rl.close()
 		// readline swallowed the echoed newline while muted; emit one so the next line starts fresh.
 		process.stdout.write('\n')
 	}
@@ -109,17 +113,12 @@ export async function secretOrEnv(envName: string, question: string): Promise<st
 
 /** A yes/no confirmation. Defaults to `defaultYes` on an empty answer. */
 export async function confirm(question: string, defaultYes = false): Promise<boolean> {
-	const rl = openReadline()
-	try {
-		const hint = defaultYes ? 'Y/n' : 'y/N'
-		const answer = stripTerminalCruft(await rl.question(`${question} [${hint}]: `)).trim().toLowerCase()
-		if (answer === '') {
-			return defaultYes
-		}
-		return answer === 'y' || answer === 'yes'
-	} finally {
-		rl.close()
+	const hint = defaultYes ? 'Y/n' : 'y/N'
+	const answer = stripTerminalCruft(await ask(`${question} [${hint}]: `)).trim().toLowerCase()
+	if (answer === '') {
+		return defaultYes
 	}
+	return answer === 'y' || answer === 'yes'
 }
 
 /**
@@ -158,25 +157,130 @@ export async function select<T>(question: string, options: { label: string; valu
 	options.forEach((opt, i) => {
 		console.log(`    ${i + 1}) ${opt.label}`)
 	})
-	const rl = openReadline()
-	try {
-		for (;;) {
-			const answer = stripTerminalCruft(await rl.question('    choose [1]: ')).trim()
-			const index = answer === '' ? 0 : Number.parseInt(answer, 10) - 1
-			const chosen = options[index]
-			if (chosen !== undefined) {
-				return chosen.value
-			}
-			console.log(`    (enter a number between 1 and ${options.length})`)
+	for (;;) {
+		const answer = stripTerminalCruft(await ask('    choose [1]: ')).trim()
+		const index = answer === '' ? 0 : Number.parseInt(answer, 10) - 1
+		const chosen = options[index]
+		if (chosen !== undefined) {
+			return chosen.value
 		}
-	} finally {
-		rl.close()
+		console.log(`    (enter a number between 1 and ${options.length})`)
 	}
 }
 
-/** Open a fresh readline interface bound to the process stdio. */
-function openReadline(): Interface {
-	return createInterface({ input: process.stdin, output: process.stdout, terminal: true })
+/** One command's reader over a stdin nobody is typing at. */
+export interface PipedPrompt {
+	/**
+	 * Write `query`, then take the next line — from what is already buffered, or from what arrives.
+	 * `label` names the question in a failure; `secret()` needs it because its own query is empty.
+	 */
+	ask(query: string, label?: string): Promise<string>
+}
+
+/**
+ * A reader that OWNS the stream for the whole command, so several answers piped at once survive.
+ *
+ * The interface stays open, and every line it emits is queued whether or not a question is waiting for
+ * it — that queue is the fix. It idles paused between questions so a finished command still exits, and
+ * a stream that ends or faults raises instead of hanging forever on a question nothing will answer.
+ *
+ * Exported for tests, which drive it over an in-memory stream; the CLI has exactly one, over stdin.
+ */
+export const pipedPrompt = (input: Readable, output: Writable): PipedPrompt => {
+	const rl = createInterface({ input, output, terminal: false })
+	const buffered: string[] = []
+	let waiting: (() => void) | undefined
+	let delivered: string | undefined
+	let ended = false
+	let failure: Error | undefined
+	const settle = (line: string | undefined): void => {
+		const pending = waiting
+		waiting = undefined
+		delivered = line
+		pending?.()
+	}
+	rl.on('line', (line: string) => {
+		if (waiting === undefined) {
+			buffered.push(line)
+			return
+		}
+		rl.pause()
+		settle(line)
+	})
+	rl.on('close', () => {
+		ended = true
+		settle(undefined)
+	})
+	// A read fault (EIO on a closed pty, a broken pipe) settles the pending question too. Without this
+	// the promise nothing will ever resolve is the whole command's last act. BOTH objects are listened
+	// to: readline re-emits the input's error, and an `error` nobody listens for on the interface is an
+	// uncaught exception rather than a failed prompt.
+	const faulted = (error: Error): void => {
+		if (failure !== undefined) {
+			return
+		}
+		ended = true
+		failure = new Error(`stdin could not be read: ${error.message}`)
+		settle(undefined)
+	}
+	rl.on('error', faulted)
+	input.on('error', faulted)
+	return {
+		ask: async (query: string, label?: string): Promise<string> => {
+			const named = label ?? query
+			const ready = buffered.shift()
+			if (ready !== undefined) {
+				output.write(query)
+				// Nothing echoes an answer that came off a pipe, so close the line here: a scripted run's
+				// transcript reads one question per line, like the terminal one it stands in for.
+				output.write('\n')
+				return ready
+			}
+			if (ended) {
+				throw failure ?? unanswered(named)
+			}
+			if (waiting !== undefined) {
+				// One stream, one queue, one reader: two overlapping questions would race for the same line.
+				throw new Error('pipedPrompt: a question is already waiting')
+			}
+			rl.setPrompt(query)
+			rl.prompt()
+			await new Promise<void>((resolve) => {
+				waiting = resolve
+			})
+			const line = delivered
+			delivered = undefined
+			if (line === undefined) {
+				throw failure ?? unanswered(named)
+			}
+			output.write('\n')
+			return line
+		},
+	}
+}
+
+const unanswered = (label: string): Error => {
+	const prompt = label.trim().replace(/:$/, '')
+	return new Error(
+		`stdin ended before ${prompt === '' ? 'a prompt' : `\`${prompt}\``} was answered — a piped run must supply one line per question`,
+	)
+}
+
+/** The one piped reader this command has. Created on the first question, never closed by hand. */
+let piped: PipedPrompt | undefined
+
+/** Ask one question, on whichever stdin this command was given. `label` names it in a failure. */
+async function ask(query: string, label?: string): Promise<string> {
+	if (process.stdin.isTTY === true) {
+		const rl: Interface = createInterface({ input: process.stdin, output: process.stdout, terminal: true })
+		try {
+			return await rl.question(query)
+		} finally {
+			rl.close()
+		}
+	}
+	piped ??= pipedPrompt(process.stdin, process.stdout)
+	return piped.ask(query, label)
 }
 
 /**

@@ -72,6 +72,19 @@ describe('installation capabilities', () => {
 		await expect(runCli(['platform', 'deploy', '--provider=zerops'])).rejects.toThrow('FABRIKA_ZEROPS_PROJECT_ID')
 	})
 
+	test('forwards a value-less provider flag verbatim, `--yes` included', async () => {
+		expect(parseCliArgs(['platform', 'install', '--provider=zerops', '--yes'])).toEqual({
+			area: 'platform',
+			command: 'install',
+			provider: 'zerops',
+			rest: ['--yes'],
+			help: false,
+		})
+		// And the installation accepts it: this rejection is the missing project id, not `--yes` being
+		// refused as an unknown option, which is what an unrouted flag would produce.
+		await expect(runCli(['platform', 'install', '--provider=zerops', '--yes'])).rejects.toThrow('FABRIKA_ZEROPS_PROJECT_ID')
+	})
+
 	test('`--help` on a platform command shows the INSTALLATION surface, not this router', async () => {
 		const lines: string[] = []
 		const info = console.info

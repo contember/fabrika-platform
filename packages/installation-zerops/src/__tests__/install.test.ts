@@ -11,8 +11,8 @@ import { FABRIKA_PROXY_MANIFEST_JSON, parseProxyManifestJson } from '@fabrika/pr
 import { describe, expect, test } from 'bun:test'
 import { generatedArtifacts } from '../../zerops/artifacts'
 import { PLATFORM_DEPLOY_ORDER, type PlatformDeployService } from '../deploy'
-import { GENERATED_SECRET_KEYS, installationServiceEnv, type InstallCollaborators, runInstall } from '../install'
-import { parsePlatformInstallArgs, type PlatformInstallInput } from '../install-options'
+import { GENERATED_SECRET_KEYS, installationServiceEnv, type InstallCollaborators, installPrompts, runInstall } from '../install'
+import { parsePlatformInstallArgs, type PlatformInstallInput, UNATTENDED_FLAG } from '../install-options'
 import { recordingInitLog } from '../log'
 import { generateInstallationSecrets } from '../secrets'
 import { type FakeServiceSpec, type FakeZerops, fakeZerops, importedLightServices } from './fake-zerops'
@@ -33,6 +33,7 @@ const input = (overrides: Partial<PlatformInstallInput> = {}): PlatformInstallIn
 	scheme: 'https',
 	buildFromGit: 'https://github.com/contember/fabrika-platform',
 	tier: 'light',
+	unattended: false,
 	...overrides,
 })
 
@@ -620,6 +621,36 @@ describe('every outward step is confirmed', () => {
 	})
 })
 
+describe('a stdin nobody is typing at', () => {
+	const silent = (): void => {}
+
+	test('refuses the bring-up and names the flag that would allow it', () => {
+		// `{}` is a stdin that is not a terminal: a pipe, a closed descriptor, a CI runner.
+		expect(() => installPrompts(input(), {}, silent)).toThrow('stdin is not a terminal')
+		expect(() => installPrompts(input(), {}, silent)).toThrow(UNATTENDED_FLAG)
+		expect(() => installPrompts(input(), { isTTY: false }, silent)).toThrow(UNATTENDED_FLAG)
+	})
+
+	test('`--yes` answers every confirmation without reading stdin, and records each one', async () => {
+		const announced: string[] = []
+		const prompts = installPrompts(input({ unattended: true }), {}, (line) => void announced.push(line))
+
+		// Including one whose default is NO: the flag is the operator's yes, given once for the sequence.
+		expect(await prompts.confirm('Import 7 services?', true)).toBe(true)
+		expect(await prompts.confirm('Deploy the installation now?', false)).toBe(true)
+		// An unattended run still says what it agreed to — otherwise the transcript of the one run that
+		// nobody watched is the only one with no record of its own decisions.
+		expect(announced).toEqual([
+			`Import 7 services? yes (${UNATTENDED_FLAG})`,
+			`Deploy the installation now? yes (${UNATTENDED_FLAG})`,
+		])
+	})
+
+	test('a terminal is prompted, not refused and not assumed', () => {
+		expect(() => installPrompts(input(), { isTTY: true }, silent)).not.toThrow()
+	})
+})
+
 describe('the argument surface', () => {
 	test('reads flags first, then the environment, and refuses anything that could carry a credential', () => {
 		expect(
@@ -634,12 +665,28 @@ describe('the argument surface', () => {
 			scheme: 'https',
 			buildFromGit: 'https://github.com/contember/fabrika-platform',
 			tier: 'light',
+			unattended: false,
 		})
 		expect(() => parsePlatformInstallArgs(['--token=nope'], {})).toThrow('unexpected argument')
 		expect(() => parsePlatformInstallArgs([], { FABRIKA_ZEROPS_ACCESS_TOKEN: 'token' })).toThrow('FABRIKA_ZEROPS_PROJECT_ID is required')
 		expect(() => parsePlatformInstallArgs(['--project-id=p1', '--client-id=c1', '--env=stage'], {})).toThrow(
 			'FABRIKA_ZEROPS_ACCESS_TOKEN is required',
 		)
+	})
+
+	test('`--yes` is the one flag that carries no value, and it is off unless it is written', () => {
+		const parsed = parsePlatformInstallArgs(['--project-id=p1', '--client-id=c1', '--env=stage', UNATTENDED_FLAG], {
+			FABRIKA_ZEROPS_ACCESS_TOKEN: 'token',
+		})
+		expect(parsed.unattended).toBe(true)
+		// No environment variable beside it: an unattended bring-up is a deliberate act on a command line,
+		// not something a `.env` an operator forgot about can turn on.
+		expect(
+			parsePlatformInstallArgs(['--project-id=p1', '--client-id=c1', '--env=stage'], {
+				FABRIKA_ZEROPS_ACCESS_TOKEN: 'token',
+				FABRIKA_PLATFORM_UNATTENDED: 'true',
+			}).unattended,
+		).toBe(false)
 	})
 
 	test('ignores GitHub credential environment during anonymous fresh install', () => {

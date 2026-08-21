@@ -76,7 +76,7 @@ import {
 } from './deploy'
 import { derivePlatformHosts, type PlatformHosts, platformOrigin, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
 import { checkedEnvironmentName } from './init'
-import type { PlatformInstallInput } from './install-options'
+import { type PlatformInstallInput, UNATTENDED_FLAG } from './install-options'
 import type { InitLog } from './log'
 import { generateInstallationSecrets, type InstallationSecrets } from './secrets'
 
@@ -649,21 +649,60 @@ export const runInstall = async (input: PlatformInstallInput, collaborators: Ins
 	log.info(`The console answers at ${platformOrigin(input.scheme, hosts.control)}, once someone can sign in: nobody can yet.`)
 }
 
+/**
+ * How this command's confirmations are answered — and the refusal when nothing can answer them.
+ *
+ * The confirmations are the only thing standing between a stray invocation and an installation: this
+ * command generates seven credentials, mints a Zerops token on the account and deploys. Every one of
+ * them defaults to yes, so a pipe carrying blank lines answers all six of them with nobody reading
+ * what they agree to. So a run with no terminal is refused unless the operator asked for it by name.
+ */
+export const installPrompts = (
+	input: PlatformInstallInput,
+	stdin: { readonly isTTY?: boolean },
+	announce: (line: string) => void,
+): InstallPrompts => {
+	if (input.unattended) {
+		// The flag IS the yes, given once for the whole sequence; nothing reads stdin after it. Each
+		// question is still printed with the answer it was given, so an unattended run leaves the same
+		// record of what was agreed to that an interactive one does.
+		return {
+			confirm: (question) => {
+				announce(`${question} yes (${UNATTENDED_FLAG})`)
+				return Promise.resolve(true)
+			},
+		}
+	}
+	if (stdin.isTTY !== true) {
+		throw new Error(
+			"stdin is not a terminal, so nobody is here to confirm what this command does — it generates this installation's "
+				+ 'credentials, mints a Zerops integration token and deploys. Run it from a terminal, or pass `'
+				+ UNATTENDED_FLAG
+				+ '` to answer every confirmation yes unattended',
+		)
+	}
+	return { confirm: (question, defaultYes) => promptConfirm(question, defaultYes) }
+}
+
 /** The real collaborators: a TTY for the confirmations, the Zerops API, and IAM's own schema reconciler. */
-export const consoleInstallCollaborators = (input: PlatformInstallInput, reconcileSchema: SchemaReconciler): InstallCollaborators => ({
-	api: createZeropsApi({
-		token: input.accessToken,
-		...(input.apiBaseUrl === undefined ? {} : { baseUrl: input.apiBaseUrl }),
-	}),
-	reconcileSchema,
-	sleep: defaultSleep,
-	log: {
-		step: (title) => consoleStep(title),
-		info: (message) => consoleInfo(message),
-		warn: (message) => consoleWarn(message),
-		ok: (message) => consoleOk(message),
-		action: (title, lines) => consoleAction(title, [...lines]),
-	},
-	prompts: { confirm: (question, defaultYes) => promptConfirm(question, defaultYes) },
-	signal: new AbortController().signal,
-})
+export const consoleInstallCollaborators = (input: PlatformInstallInput, reconcileSchema: SchemaReconciler): InstallCollaborators => {
+	// First, before anything is built or contacted: a bring-up nobody can confirm does not start.
+	const prompts = installPrompts(input, process.stdin, (line) => consoleInfo(line))
+	return {
+		api: createZeropsApi({
+			token: input.accessToken,
+			...(input.apiBaseUrl === undefined ? {} : { baseUrl: input.apiBaseUrl }),
+		}),
+		reconcileSchema,
+		sleep: defaultSleep,
+		log: {
+			step: (title) => consoleStep(title),
+			info: (message) => consoleInfo(message),
+			warn: (message) => consoleWarn(message),
+			ok: (message) => consoleOk(message),
+			action: (title, lines) => consoleAction(title, [...lines]),
+		},
+		prompts,
+		signal: new AbortController().signal,
+	}
+}

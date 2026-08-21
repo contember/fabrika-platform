@@ -28,12 +28,23 @@ export interface PlatformInstallInput {
 	/** Public Git URL every service builds from. Effectively mandatory here — see the usage text. */
 	readonly buildFromGit: string
 	readonly tier: InstallablePlatformTier
+	/** `--yes`: answer every confirmation yes, for a bring-up with nobody at the keyboard. */
+	readonly unattended: boolean
 }
 
 /** The public repository every installation is built from, and the default for `--from-git`. */
 export const FABRIKA_REPOSITORY_URL = 'https://github.com/contember/fabrika-platform'
 
 const FLAGS = ['--project-id', '--client-id', '--env', '--scheme', '--from-git', '--tier'] as const
+
+/**
+ * The one way this command runs with nobody watching it.
+ *
+ * Every confirmation defaults to yes, so a pipe carrying blank lines answers all six of them with
+ * nobody reading what they agree to — which is why saying yes unattended is a FLAG and never an
+ * inference: it makes the choice explicit, and it puts it in the shell history of whoever ran it.
+ */
+export const UNATTENDED_FLAG = '--yes'
 
 const readFlag = (argv: readonly string[], name: string): string | undefined => {
 	const prefix = `${name}=`
@@ -66,6 +77,9 @@ const required = (value: string | undefined, flag: string, variable: string): st
 
 const assertKnownArguments = (argv: readonly string[]): void => {
 	for (const arg of argv) {
+		if (arg === UNATTENDED_FLAG) {
+			continue
+		}
 		const name = arg.split('=')[0] ?? arg
 		if (!FLAGS.some((flag) => flag === name) || !arg.includes('=')) {
 			throw new Error(
@@ -122,6 +136,7 @@ export const parsePlatformInstallArgs = (
 		scheme: readScheme(argv, env),
 		buildFromGit: setting(argv, env, '--from-git', 'FABRIKA_ZEROPS_BUILD_FROM_GIT') ?? FABRIKA_REPOSITORY_URL,
 		tier: assertInstallableTier(setting(argv, env, '--tier', 'FABRIKA_PLATFORM_TIER')),
+		unattended: argv.includes(UNATTENDED_FLAG),
 		...(apiBaseUrl === undefined ? {} : { apiBaseUrl }),
 	}
 }

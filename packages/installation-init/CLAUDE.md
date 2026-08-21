@@ -15,7 +15,9 @@ Public because both installation packages are, and
 
 ## Layout
 
-- `prompt.ts` — `text` / `required` / `secret` / `secretOrEnv` / `confirm` / `select` / `retry` on the real TTY.
+- `prompt.ts` — `text` / `required` / `secret` / `secretOrEnv` / `confirm` / `select` / `retry`. A TTY
+  gets a fresh readline per question; a PIPED stdin gets ONE queued reader for the whole command,
+  because closing a readline discards what it has already buffered.
 - `log.ts` — the presentation layer. `step` / `info` / `detail` / `ok` / `warn` / `fail` / `action` / `url`.
 - `shell.ts` — `run` / `capture` / `probe` over `Bun.spawn`; argv verbatim, never a shell.
 - `gh.ts` — `hasGhCli` / `ghRepoExists`.

@@ -8,7 +8,7 @@ import { deployPlatform, PLATFORM_DEPLOY_ORDER } from './deploy'
 import { parsePlatformDeployArgs } from './deploy-options'
 import { consoleInitCollaborators, parseInitArgs, runInit } from './init'
 import { consoleInstallCollaborators, runInstall } from './install'
-import { parsePlatformInstallArgs } from './install-options'
+import { parsePlatformInstallArgs, UNATTENDED_FLAG } from './install-options'
 import { consoleDeployLog } from './log'
 
 const USAGE = `Zerops installation
@@ -31,7 +31,9 @@ command cannot read back or correct — and everything after that is this comman
 
 Interactive and laptop-side. It CONFIRMS before every step that leaves your machine: reading the
 project, importing the services, minting the token, building the proxy, writing the variables, and
-deploying. Declining any of them stops there; nothing before the import is a mutation.
+deploying. Declining any of them stops there; nothing before the import is a mutation. A stdin that
+is not a terminal is refused unless \`${UNATTENDED_FLAG}\` is given — with nobody there to answer, a default yes
+is not consent.
 
   1. read the project and refuse a core package the selected tier does not match
   2. import ${PLATFORM_DEPLOY_ORDER.length + 2} services without code, and wait for the import's processes
@@ -58,6 +60,8 @@ Options (a flag beats the environment variable beside it):
   --scheme=<http|https>             FABRIKA_PLATFORM_SCHEME         default https
   --from-git=<url>                  FABRIKA_ZEROPS_BUILD_FROM_GIT   public repository every service builds from
   --tier=light                      FABRIKA_PLATFORM_TIER           default light, and the only value
+  ${UNATTENDED_FLAG}                                                             answer every confirmation yes —
+                                                                    required when stdin is not a terminal
 
 	FABRIKA_ZEROPS_ACCESS_TOKEN       required   Zerops access token, environment only and no flag
 	FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
