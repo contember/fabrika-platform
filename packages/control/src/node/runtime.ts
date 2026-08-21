@@ -24,7 +24,7 @@ import type { Env } from '../env'
 import { GitHubConnectionWebhookSecretProvider } from '../github-connection-store'
 import { controlPublicOrigin } from '../iam'
 import { LocalGitHubRepoEvents, StaticWebhookSecretProvider } from '../repo-source'
-import type { DeployJobMessage } from '../run-lifecycle'
+import type { ControlJobMessage } from '../run-lifecycle'
 import type { SourceConnectionPort } from '../source-connection-port'
 import { Vault } from '../vault'
 import { HttpIamAdminGateway } from './iam-admin'
@@ -49,8 +49,8 @@ export interface Runtime {
 	/** Provider-neutral adapter consumed by the shared authenticated workflow. */
 	sourceConnection: SourceConnectionPort
 	config: ProcessConfig
-	/** The deploy queue, as the concrete producer the in-process consumer is built from. */
-	queue: PostgresJobQueue<DeployJobMessage>
+	/** The control queue (deploys + namespace jobs), as the concrete producer the consumer is built from. */
+	queue: PostgresJobQueue<ControlJobMessage>
 	/** Close the connection pool. Callers stop the consumer and the server first. */
 	shutdown(): Promise<void>
 }
@@ -98,7 +98,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	}
 
 	const db = PostgresDatabase.connect(databaseUrl)
-	const queue = new PostgresJobQueue<DeployJobMessage>(db, { queue: DEPLOY_QUEUE_NAME, maxAttempts: DEPLOY_MAX_ATTEMPTS })
+	const queue = new PostgresJobQueue<ControlJobMessage>(db, { queue: DEPLOY_QUEUE_NAME, maxAttempts: DEPLOY_MAX_ATTEMPTS })
 	const tasks = createBackgroundTasks({ label: 'control background task' })
 	const operations = operationsConfig(source)
 	const controlDomain = source['FABRIKA_CONTROL_DOMAIN']

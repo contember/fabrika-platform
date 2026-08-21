@@ -294,7 +294,7 @@ function registryContext(ctx: ControlRpcContext): RegistryUseCaseContext {
 
 function namespaceContext(ctx: ControlRpcContext): NamespaceUseCaseContext {
 	const deps = buildApiDeps(ctx.env, ctx.provider, ctx.auth)
-	return { repositories: deps.repositories, provider: deps.provider, auth: ctx.auth, signal: ctx.request.signal }
+	return { repositories: deps.repositories, provider: deps.provider, auth: ctx.auth, signal: ctx.request.signal, queue: deps.queue }
 }
 
 function runsContext(ctx: ControlRpcContext): RunsUseCaseContext {

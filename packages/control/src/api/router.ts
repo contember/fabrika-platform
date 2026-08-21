@@ -107,7 +107,7 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 		if (!authorized.ok) {
 			return authorized.response
 		}
-		return { repositories: deps.repositories, provider: deps.provider, request, authorized }
+		return { repositories: deps.repositories, provider: deps.provider, request, authorized, queue: deps.queue }
 	}
 	// Build a vault context (constructs the Vault via the factory; a missing/invalid master key is a
 	// clean 500 here, isolated to vault routes). Returns the error/Response otherwise.

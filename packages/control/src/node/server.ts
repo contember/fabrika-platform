@@ -3,9 +3,10 @@
 // The sibling of `src/index.ts`, not a fork of it. Both use the same application and jobs:
 //
 //   controlApp    (src/app.ts)      — health, the webhook, `/api/*`, the SPA, and IAM middleware.
-//   runDeployJob  (src/consumer.ts) — one queued deploy, end to end. On Workers the platform calls
-//                                     `queue()` with a batch; here `PostgresJobConsumer` polls a table
-//                                     and calls the same function. See below for the ack/retry mapping.
+//   runControlJob (src/consumer.ts) — one queued job — a deploy or a namespace mutation — end to end.
+//                                     On Workers the platform calls `queue()` with a batch; here
+//                                     `PostgresJobConsumer` polls a table and calls the same function.
+//                                     See below for the ack/retry mapping.
 //   runMaintenance(src/cron.ts)     — the `scheduled` handler's work. NOT scheduled from in here: the
 //                                     platform cron drives it (`run.crontab` → `node/cron.ts`), which
 //                                     is the same shape as `triggers.crons` driving `scheduled`.
@@ -18,9 +19,10 @@
 import { type BunHandler, createBunHandler } from '@fabrika/app/bun'
 import { PostgresJobConsumer } from '@fabrika/platform-node'
 import { controlApp } from '../app'
-import { decodeDeployJobMessage, runDeployJob } from '../consumer'
+import { controlJobLogLine, decodeControlJobMessage, runControlJob } from '../consumer'
 import type { Env } from '../env'
 import { reconcileProviderRuns } from '../provider-reconcile'
+import type { ControlJobMessage } from '../run-lifecycle'
 import { DEPLOY_LOCK_TTL_MS, locks, operationsReleaseDeps, repositories } from '../services'
 import type { SourceConnectionPort } from '../source-connection-port'
 import { createRuntime, type Runtime } from './runtime'
@@ -43,42 +45,46 @@ function createControlBunHandler(env: Env, provider: Runtime['provider'], source
 }
 
 /**
- * Build the in-process deploy consumer — the replacement for the Worker's `queue()` handler.
+ * Build the in-process control consumer — the replacement for the Worker's `queue()` handler.
  *
- * THE ACK/RETRY MAPPING, which is the whole reason this is three lines and not a loop: `runDeployJob`
- * returns normally for every HANDLED message (including a `failed` run and a `deferred` one, whose
- * re-enqueue it has already done) and throws only on something unexpected. `PostgresJobConsumer` acks
- * a handler that returns and reschedules one that throws, so the two entrypoints agree without either
- * of them knowing the other's protocol.
+ * THE ACK/RETRY MAPPING, which is the whole reason this is three lines and not a loop: `runControlJob`
+ * returns normally for every HANDLED message (including a `failed` run, a `failed` namespace and a
+ * `deferred` one, whose re-enqueue it has already done) and throws only on something unexpected.
+ * `PostgresJobConsumer` acks a handler that returns and reschedules one that throws, so the two
+ * entrypoints agree without either of them knowing the other's protocol.
  *
- * ONE JOB AT A TIME (`batchSize: 1`, the default): a deploy is a long, serialized, low-volume
- * operation, and the per-app-env lock would defer a concurrent one anyway. Clarity over throughput.
+ * ONE JOB AT A TIME (`batchSize: 1`, the default): a deploy and a namespace provision are both long,
+ * serialized, low-volume operations, and their leases would defer a concurrent one anyway. The price is
+ * that a namespace provision holds this loop for its duration; namespaces are provisioned a handful of
+ * times per installation, so clarity beats throughput here.
  *
- * The visibility timeout is the DEPLOY LOCK's TTL on purpose. A redelivery while a handler is still
- * running is already harmless — `executeDeploy` is status-guarded, so it would skip — but matching the
- * two windows means a message can only come back once the lease it would contend for is also stale.
+ * The visibility timeout is the DEPLOY LOCK's TTL on purpose: a redelivered deploy is already harmless
+ * (`executeDeploy` is status-guarded), and matching the two windows means the message can only come back
+ * once the app-env lease it would contend for is also stale. A NAMESPACE is the opposite case — a row
+ * left `provisioning` is deliberately resumable, so nothing refuses the redelivery and the lease is the
+ * only guard. That is why it runs on `NAMESPACE_LOCK_TTL_MS`, which outlives this window on purpose.
  */
-export function createConsumer(runtime: Runtime): PostgresJobConsumer<{ runId: string; dryRun?: boolean }> {
+export function createConsumer(runtime: Runtime): PostgresJobConsumer<ControlJobMessage> {
 	return new PostgresJobConsumer(runtime.queue, {
-		decode: decodeDeployJobMessage,
+		decode: decodeControlJobMessage,
 		handler: async (job) => {
 			// The lifecycle's answer is for the LOG, not for the consumer: every non-throwing outcome is a
 			// handled message, so nothing here branches on it (see the contract in src/consumer.ts).
-			const result = await runDeployJob(runtime.env, runtime.provider, job.payload)
-			console.info(`deploy run ${result.runId}: ${result.status}`)
+			console.info(controlJobLogLine(await runControlJob(runtime.env, runtime.provider, job.payload)))
 		},
 		visibilityTimeoutMs: DEPLOY_LOCK_TTL_MS,
 		// Never log the error object: it can carry a clone URL with an embedded installation token.
 		onError: (error, job) => {
 			console.error(
-				`deploy job ${job.id} failed (attempt ${job.attempts}/${job.maxAttempts}):`,
+				`control job ${job.id} failed (attempt ${job.attempts}/${job.maxAttempts}):`,
 				error instanceof Error ? error.message : 'unknown error',
 			)
 		},
 		onAbandoned: (job) => {
-			// The run row is NOT left dangling: the cron sweep marks any run stuck in pending/running past
-			// its max age as failed, which is the same backstop a lost Cloudflare message relies on.
-			console.warn(`deploy job ${job.id} abandoned after ${job.attempts} attempt(s)`)
+			// A run row is NOT left dangling: the cron sweep marks any run stuck in pending/running past its
+			// max age as failed, the same backstop a lost Cloudflare message relies on. A namespace has no
+			// such sweep — an operator re-enqueues it with `namespaces reconcile`.
+			console.warn(`control job ${job.id} abandoned after ${job.attempts} attempt(s); a namespace is re-enqueued by \`namespaces reconcile\``)
 		},
 	})
 }

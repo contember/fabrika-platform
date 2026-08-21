@@ -172,6 +172,18 @@ const poll = async <T>(description: string, read: () => Promise<T>, done: (value
 	throw new Error(`timed out waiting for ${description}`)
 }
 
+/** Provisioning runs behind the control queue now, so the request only enqueues it (backlog 74). */
+const namespaceIsReady = async (machineKey: string): Promise<void> => {
+	const namespace = await poll(
+		'deployment namespace apps-prod to become ready',
+		() => controlRequest('/namespaces/apps-prod', machineKey),
+		(value) => property(value, 'state') === 'ready' || property(value, 'state') === 'failed',
+	)
+	if (property(namespace, 'state') === 'failed') {
+		throw new Error(`deployment namespace apps-prod failed to provision: ${String(property(namespace, 'lastError') ?? 'no reason recorded')}`)
+	}
+}
+
 const ensureNamespace = async (machineKey: string): Promise<void> => {
 	const namespaces = await controlRequest('/namespaces', machineKey)
 	const existing = requiredArray(namespaces, 'items').find((item) => property(item, 'id') === 'apps-prod')
@@ -180,6 +192,7 @@ const ensureNamespace = async (machineKey: string): Promise<void> => {
 	}
 	if (existing !== undefined) {
 		await controlRequest('/namespaces/apps-prod/reconcile', machineKey, { body: {} })
+		await namespaceIsReady(machineKey)
 		return
 	}
 	const plan = await controlRequest('/namespaces/plan', machineKey, {
@@ -190,6 +203,7 @@ const ensureNamespace = async (machineKey: string): Promise<void> => {
 		throw new Error('namespace plan is missing namespace')
 	}
 	await controlRequest('/namespaces', machineKey, { body: namespace })
+	await namespaceIsReady(machineKey)
 }
 
 const ensureNotesApp = async (machineKey: string): Promise<void> => {

@@ -83,10 +83,11 @@ export default createPage()
 				target: plan.namespace.target,
 			}
 			try {
+				// `create` answers as soon as the job is enqueued; the detail page follows it to `ready`.
 				const created = await api.namespaces.create(body)
 				navigate('namespaces/detail', { params: { id: created.id } })
 			} catch (cause) {
-				setError(cause instanceof ApiError ? cause.message : 'Namespace provisioning failed.')
+				setError(cause instanceof ApiError ? cause.message : 'Could not start provisioning.')
 				setBusy(null)
 			}
 		}
@@ -99,7 +100,7 @@ export default createPage()
 						All namespaces
 					</Link>
 					<h1>Provision a namespace</h1>
-					<p className="hint">Prepare the provider-owned plan, review its boundary, then provision it.</p>
+					<p className="hint">Prepare the provider-owned plan, review its boundary, then provision it in the background.</p>
 				</div>
 
 				<form className="panel form" onSubmit={preparePlan}>
@@ -154,7 +155,7 @@ export default createPage()
 						/>
 						<div className="form-actions namespace-provision-actions">
 							<button type="button" className="primary" disabled={busy !== null} onClick={provision}>
-								{busy === 'provision' ? 'Provisioning…' : 'Provision namespace'}
+								{busy === 'provision' ? 'Starting…' : 'Provision namespace'}
 							</button>
 							<button type="button" disabled={busy !== null} onClick={() => setPlan(null)}>Discard plan</button>
 						</div>

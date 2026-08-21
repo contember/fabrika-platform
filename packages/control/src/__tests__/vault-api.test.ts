@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import type { ApiDeps } from '../api/router'
 import { handleApi } from '../api/router'
 import { FakeRepoSource } from '../repo-source'
-import type { DeployJobMessage } from '../run-lifecycle'
+import type { ControlJobMessage } from '../run-lifecycle'
 import { parseVaultRef, Vault } from '../vault'
 import { createHarness } from './helpers/harness'
 import { authWithActions } from './helpers/iam'
@@ -43,9 +43,9 @@ const storedEnvironment = (provider = 'memory') => ({
 })
 
 /** Router deps over a real sqlite D1, a recording queue, and a vault factory bound to the SAME db. */
-function makeDeps(auth: AuthContext): { deps: ApiDeps; vault: Promise<Vault>; queue: DeployJobMessage[] } {
+function makeDeps(auth: AuthContext): { deps: ApiDeps; vault: Promise<Vault>; queue: ControlJobMessage[] } {
 	const { db, d1 } = createHarness()
-	const queue: DeployJobMessage[] = []
+	const queue: ControlJobMessage[] = []
 	const vault = Vault.create(d1, testKey())
 	const deps: ApiDeps = {
 		repositories: db,

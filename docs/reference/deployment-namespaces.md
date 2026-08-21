@@ -39,6 +39,16 @@ The namespace lifecycle reports durable provider checkpoints through
 `ProviderNamespaceEvents.checkpoint`. Shared control persists each checkpoint
 before the provider continues to its next external mutation.
 
+The provider mutation does not run inside the request. `create`, `adopt`, and
+`reconcile` persist the row, enqueue a namespace job on the control queue, audit,
+and answer `pending`; a worker then claims `pending` to `provisioning`, runs the
+provider mutation with its own signal, and records `ready` or `failed`. A caller
+polls `GET /api/namespaces/:id` and may disconnect without affecting the outcome.
+A namespace left `provisioning` by a crashed worker is resumed from its
+checkpoints, and a job for a namespace that already settled is a no-op.
+`reconcile` on a namespace that is still settling only enqueues: it never rewrites
+the provider target, because a job in flight may be checkpointing it.
+
 ## Persistence and assignment
 
 `deployment_namespaces` stores:
@@ -188,10 +198,10 @@ All namespace HTTP routes require the global `namespace.manage` action:
 | ------------------------------------ | -------------------------------------------------- |
 | `GET /api/namespaces`                | List namespaces and provider-owned preset metadata |
 | `POST /api/namespaces/plan`          | Produce a mutation-free provider plan              |
-| `POST /api/namespaces`               | Persist claims, create, and provision a namespace  |
+| `POST /api/namespaces`               | Persist claims and queue provisioning              |
 | `GET /api/namespaces/:id`            | Read lifecycle state and provider presentation     |
 | `POST /api/namespaces/:id/adopt`     | Adopt and reconcile an existing placement          |
-| `POST /api/namespaces/:id/reconcile` | Reconcile stored provider state                    |
+| `POST /api/namespaces/:id/reconcile` | Queue a reconcile of stored provider state         |
 
 Application onboarding and `PUT /api/apps/:app/envs/:env` accept `namespaceId`.
 The response exposes that assignment alongside opaque provider target and

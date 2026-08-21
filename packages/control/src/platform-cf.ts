@@ -18,7 +18,7 @@ import { createControlRepositories } from './db'
 import type { Env } from './env'
 import { controlPublicOrigin } from './iam'
 import { GitHubAppRepoSource, type RepoSource } from './repo-source'
-import type { DeployJobMessage } from './run-lifecycle'
+import type { ControlJobMessage } from './run-lifecycle'
 
 /**
  * The control-plane Worker's raw Cloudflare bindings + vars/secrets — what `WorkerEntrypoint` fills
@@ -34,7 +34,7 @@ export interface WorkerBindings
 	/** R2 bucket run logs + terminal status are written into (by vozka-runner), keyed by run id. */
 	RUN_LOGS: R2Bucket
 	/** Deploy job queue — producer here, consumer via the Worker's `queue()` handler. */
-	DEPLOY_QUEUE: Queue<DeployJobMessage>
+	DEPLOY_QUEUE: Queue<ControlJobMessage>
 	/** The single Cloudflare account selected by this composition root. */
 	CLOUDFLARE_ACCOUNT_ID?: string
 	/** Account-wide deploy credential. It is passed to the runner only for a live deploy. */

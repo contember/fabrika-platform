@@ -9,7 +9,7 @@ import type { ApiDeps } from '../api/router'
 import { handleApi } from '../api/router'
 import { uuidv7 } from '../db'
 import { FakeRepoSource, type RepoEvents } from '../repo-source'
-import type { DeployJobMessage } from '../run-lifecycle'
+import type { ControlJobMessage } from '../run-lifecycle'
 import { createHarness, type Harness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 
@@ -19,9 +19,9 @@ import { allowAllAuth } from './helpers/iam'
 
 function makeDeps(
 	opts: { installationId?: number | null; provider?: ControlProvider; catalogChanged?: () => void; repoSource?: RepoEvents } = {},
-): { deps: ApiDeps; queue: DeployJobMessage[]; logStore: Map<string, string>; sqlite: Harness['sqlite'] } {
+): { deps: ApiDeps; queue: ControlJobMessage[]; logStore: Map<string, string>; sqlite: Harness['sqlite'] } {
 	const { db, sqlite } = createHarness()
-	const queue: DeployJobMessage[] = []
+	const queue: ControlJobMessage[] = []
 	const logStore = new Map<string, string>()
 	const deps: ApiDeps = {
 		repositories: db,

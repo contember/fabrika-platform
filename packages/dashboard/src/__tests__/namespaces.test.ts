@@ -1,6 +1,6 @@
-import { describe, expect, test } from 'bun:test'
-import type { AppEnvDto, DeploymentNamespaceDto } from '../lib/api'
-import { compatibleNamespaces, namespaceAssignmentRequest } from '../lib/namespaces'
+import { describe, expect, jest, test } from 'bun:test'
+import type { AppEnvDto, DeploymentNamespaceDto, DeploymentNamespaceState } from '../lib/api'
+import { compatibleNamespaces, namespaceAssignmentRequest, scheduleNamespacePoll } from '../lib/namespaces'
 
 const envelope = { provider: 'zerops', version: 1, payload: {} }
 
@@ -38,6 +38,7 @@ describe('compatibleNamespaces', () => {
 			namespace({ id: 'apps-stage', env: 'stage' }),
 			namespace({ id: 'cf-prod', provider: 'cloudflare' }),
 			namespace({ id: 'pending', state: 'pending' }),
+			namespace({ id: 'provisioning', state: 'provisioning' }),
 		])
 
 		expect(result.map((item) => item.id)).toEqual(['apps-prod', 'notes-prod'])
@@ -57,5 +58,53 @@ describe('compatibleNamespaces', () => {
 		expect(request.publicOrigin).toBe(environment.publicOrigin)
 		expect(request.target).toBe(environment.target)
 		expect(request.artifact).toBe(environment.artifact)
+	})
+})
+
+describe('scheduleNamespacePoll', () => {
+	test('follows a settling placement and stops once it is terminal', () => {
+		const scheduled: number[] = []
+		const schedule = (_callback: () => void, delayMs: number) => {
+			scheduled.push(delayMs)
+			return () => undefined
+		}
+
+		scheduleNamespacePoll('pending', () => undefined, schedule)
+		scheduleNamespacePoll('provisioning', () => undefined, schedule)
+		expect(scheduled).toEqual([2_000, 2_000])
+
+		scheduleNamespacePoll('ready', () => undefined, schedule)
+		scheduleNamespacePoll('failed', () => undefined, schedule)
+		expect(scheduled).toEqual([2_000, 2_000])
+	})
+
+	test('keeps refreshing until the namespace settles, with no caller attached to the mutation', () => {
+		jest.useFakeTimers()
+		try {
+			const states: DeploymentNamespaceState[] = ['pending', 'provisioning', 'ready']
+			const schedule = (callback: () => void, delayMs: number) => {
+				const timer = setTimeout(callback, delayMs)
+				return () => clearTimeout(timer)
+			}
+			let index = 0
+			let refreshes = 0
+			let cancel = () => undefined
+			const render = () => {
+				cancel()
+				cancel = scheduleNamespacePoll(states[index] ?? 'ready', () => {
+					refreshes++
+					index++
+					render()
+				}, schedule)
+			}
+
+			render()
+			jest.advanceTimersByTime(10_000)
+
+			expect(refreshes).toBe(2)
+			cancel()
+		} finally {
+			jest.useRealTimers()
+		}
 	})
 })

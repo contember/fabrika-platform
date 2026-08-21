@@ -556,6 +556,20 @@ export class ControlRegistryRepository {
 			.first<DeploymentNamespaceRow>()
 	}
 
+	/**
+	 * Queue a SETTLED namespace for another provider mutation. Guarded to the terminal states and it
+	 * never writes `provider_target_json`, so a request that arrives while a job is in flight cannot
+	 * overwrite a checkpoint the worker has just written. NULL = it was not settled; leave it alone.
+	 */
+	async requeueDeploymentNamespace(id: string): Promise<DeploymentNamespaceRow | null> {
+		return this.d1
+			.prepare(`UPDATE deployment_namespaces
+				SET state = 'pending', last_error = NULL
+				WHERE id = ? AND state IN ('ready', 'failed') RETURNING *`)
+			.bind(id)
+			.first<DeploymentNamespaceRow>()
+	}
+
 	async listNamespaceResourceClaims(namespaceId: string): Promise<NamespaceResourceClaimRow[]> {
 		const { results } = await this.d1
 			.prepare('SELECT * FROM namespace_resource_claims WHERE namespace_id = ? ORDER BY resource_key')

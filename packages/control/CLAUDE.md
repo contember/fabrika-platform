@@ -29,14 +29,14 @@ Migration commands and the Postgres-backed test setup are in [`DATABASE.md`](./D
 
 ## Two entrypoints, one body of code
 
-|                 | Cloudflare                                     | Bun process (Zerops)                                                |
-| --------------- | ---------------------------------------------- | ------------------------------------------------------------------- |
-| entrypoint      | `src/index.ts` (`cloudflare:workers`)          | `src/node/server.ts` (`Bun.serve`)                                  |
-| HTTP            | `fetch()` → `controlApp`                       | `@fabrika/app/bun` → `controlApp`                                   |
-| deploy consumer | `queue()` → `runDeployJob`                     | `PostgresJobConsumer` → `runDeployJob`                              |
-| cron            | `scheduled()` → `runMaintenance`               | `run.crontab` → `src/node/cron.ts` → `runMaintenance`               |
-| migrations      | `wrangler d1 migrations apply` (`migrations/`) | `run.initCommands` → `src/node/migrate.ts` (`migrations-postgres/`) |
-| provider        | `@fabrika/provider-cloudflare` + `RUNNER_SVC`  | `@fabrika/provider-zerops` + neutral engine                         |
+|              | Cloudflare                                     | Bun process (Zerops)                                                |
+| ------------ | ---------------------------------------------- | ------------------------------------------------------------------- |
+| entrypoint   | `src/index.ts` (`cloudflare:workers`)          | `src/node/server.ts` (`Bun.serve`)                                  |
+| HTTP         | `fetch()` → `controlApp`                       | `@fabrika/app/bun` → `controlApp`                                   |
+| job consumer | `queue()` → `runControlJob`                    | `PostgresJobConsumer` → `runControlJob`                             |
+| cron         | `scheduled()` → `runMaintenance`               | `run.crontab` → `src/node/cron.ts` → `runMaintenance`               |
+| migrations   | `wrangler d1 migrations apply` (`migrations/`) | `run.initCommands` → `src/node/migrate.ts` (`migrations-postgres/`) |
+| provider     | `@fabrika/provider-cloudflare` + `RUNNER_SVC`  | `@fabrika/provider-zerops` + neutral engine                         |
 
 The shared layer is `app.ts` · `consumer.ts` · `cron.ts` · `services.ts` and everything they reach.
 It imports only `@fabrika/provider-contract`. `src/index.ts` statically selects Cloudflare;
@@ -63,7 +63,9 @@ plain HTTP behind a TLS-terminating balancer. That check is the confused-deputy 
 page POSTing to the console's own origin with the victim's cookies is refused here, before the
 upstream is asked. Absent configuration fails CLOSED. A
 trigger writes a `pending` run to the
-database then enqueues. The consumer resolves the statically selected `ControlProvider` and calls its
+database then enqueues. ONE queue (`DEPLOY_QUEUE`) carries both kinds of work — deploy jobs and
+namespace provisioning jobs — as a discriminated union; a payload with no `kind` is a deploy job.
+The consumer resolves the statically selected `ControlProvider` and calls its
 capabilities. Cloudflare hands the provider-owned job to vozka-runner. Zerops executes its provider
 session in process. Core owns registry/run writes, locking, secret resolution, and generic envelopes.
 
@@ -173,6 +175,14 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   preserved). The lease is non-reentrant + TTL-bounded (self-heals if a consumer dies) + holder-checked on
   release; `acquire` is ONE conditional upsert (`meta.changes` is the answer) so there is no read-then-write
   race, which is why it works identically on SQLite and Postgres. Never split it into a read + a write.
+- **Namespace provisioning is a JOB, not a request** (`src/api/namespaces.ts`, backlog 74). `create` /
+  `adopt` / `reconcile` persist the row `pending`, enqueue, audit and return; the worker claims
+  `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.
+  The job holds a `namespace:<id>` lease in the same `deploy_locks` table, on `NAMESPACE_LOCK_TTL_MS`
+  (double the deploy TTL) — a namespace left `provisioning` is deliberately RESUMABLE, so unlike a run
+  nothing else refuses a redelivery and the lease must outlive the queue's visibility timeout.
+  `reconcile` on a namespace that is still settling ONLY enqueues: it must never rewrite
+  `provider_target_json`, or a checkpoint the running job just wrote is rolled back under it.
 - **Never log a secret/credential** (see root). The run row is written before the queue is touched (durable trigger).
 - **`fabrika.config.ts` is the source of truth** for fabrika's own resources; keep `oblaka.ts` a thin shim (see root).
 - **The Zerops executor is injected.** `createZeropsControlProvider` requires an `execute` collaborator.

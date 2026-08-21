@@ -59,7 +59,6 @@ and a pin that pins half of what it claims.
 - [71](71-deliver-domain-audit-events-durably.md) — Add stable event ids, idempotent IAM acknowledgement and transactional producer outboxes for every domain mutation.
 - [72](72-a-failed-namespace-reports-nothing-an-operator-can-act-on.md) — Every namespace failure looks the same: the provider's error is discarded, not redacted.
 - [73](73-a-failed-namespace-cannot-be-removed.md) — No delete, so a failed namespace holds its id forever and a retry must rename.
-- [74](74-namespace-provisioning-outlives-the-request-that-asked-for-it.md) — Five minutes of work inside one HTTP call: the caller always times out and cannot learn the outcome.
 - [75](75-a-running-installation-keeps-a-token-that-cannot-create-projects.md) — Installations minted before ADR-0034 hold a token that cannot create projects, and nothing says so.
 - [78](78-register-a-zerops-app-from-local-config-in-one-command.md) — Compose the existing local manifest build and Control registration into one command without executing application code in Control.
 - [79](79-a-namespace-target-cannot-be-changed-after-creation.md) — A namespace's provider target is written once; no API takes a new one, and a hand-edited one is refused against the live service.

@@ -22,7 +22,7 @@ import type { IamRpc } from '@fabrika/auth'
 import type { AssetServer, BlobStore, HttpService, JobQueue, SqlDatabase, WaitUntil } from '@fabrika/platform'
 import type { ControlRepositories } from './db'
 import type { RepoEvents, WebhookSecretProvider } from './repo-source'
-import type { DeployJobMessage } from './run-lifecycle'
+import type { ControlJobMessage } from './run-lifecycle'
 
 export interface Env {
 	/**
@@ -37,8 +37,11 @@ export interface Env {
 	ASSETS: AssetServer
 	/** Run logs + terminal status, keyed by run id. */
 	RUN_LOGS: BlobStore
-	/** Deploy job PRODUCER (trigger/webhook/poll). The consumer is per-runtime — see the header. */
-	DEPLOY_QUEUE: JobQueue<DeployJobMessage>
+	/**
+	 * The control job PRODUCER — deploy triggers (manual/webhook/poll) AND namespace provisioning. ONE
+	 * queue carrying a discriminated union, not two; the consumer is per-runtime — see the header.
+	 */
+	DEPLOY_QUEUE: JobQueue<ControlJobMessage>
 	/** Runtime-specific supervised background work (`ctx.waitUntil` or the Bun task tracker). */
 	WAIT_UNTIL: WaitUntil
 	/** Verified GitHub push events and installation lookup, composed per provider/runtime. */

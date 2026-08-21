@@ -17,11 +17,11 @@ import { error, readJson } from '../http'
 import { appScope, envScope } from '../iam'
 import { stringField } from '../json'
 import { isRefPattern } from '../ref-match'
-import type { DeployJobMessage } from '../run-lifecycle'
+import type { ControlJobMessage } from '../run-lifecycle'
 import { fail, jsonAdapter } from './domain'
 
-/** The deploy queue producer — the platform `JobQueue` port, carrying the run pointer. */
-export type DeployQueue = JobQueue<DeployJobMessage>
+/** The one control queue producer. This surface only ever sends the run pointer; namespaces share it. */
+export type DeployQueue = JobQueue<ControlJobMessage>
 
 /**
  * The blob-store slice the log reads need. Narrowed to `get` on purpose: the control plane only READS

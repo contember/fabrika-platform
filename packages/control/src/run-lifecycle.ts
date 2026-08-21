@@ -80,7 +80,21 @@ interface SourceBindingControlProvider extends ControlProvider {
 export interface DeployJobMessage {
 	runId: string
 	dryRun?: boolean
+	/** Absent on a deploy job — declared so the union discriminates and pre-namespace payloads still decode. */
+	kind?: undefined
 }
+
+export type NamespaceJobMutation = 'provision' | 'reconcile'
+
+/** Namespace provisioning as a queued job: the request records the row and returns (backlog 74). */
+export interface NamespaceJobMessage {
+	kind: 'namespace'
+	namespaceId: string
+	mutation: NamespaceJobMutation
+}
+
+/** Everything the ONE control queue carries. A payload without `kind` is a deploy job. */
+export type ControlJobMessage = DeployJobMessage | NamespaceJobMessage
 
 const logsKey = (runId: string): string => `runs/${runId}/logs.ndjson`
 

@@ -1,10 +1,10 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { controlApp } from './app'
-import { runDeployJob } from './consumer'
+import { controlJobLogLine, runControlJob } from './consumer'
 import { runMaintenance } from './cron'
 import type { Env } from './env'
 import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './platform-cf'
-import type { DeployJobMessage } from './run-lifecycle'
+import type { ControlJobMessage } from './run-lifecycle'
 import { unavailableSourceConnection } from './source-connection-port'
 
 /**
@@ -37,19 +37,20 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 	}
 
 	/**
-	 * The deploy consumer. One run per message (maxBatchSize 1). ack on a handled run — including a
-	 * `deferred` one, whose re-enqueue `runDeployJob` has already done; retry only on an unexpected
-	 * throw (Cloudflare redelivers, bounded by the queue's maxRetries).
+	 * The control consumer — deploy jobs and namespace jobs off one queue. One job per message
+	 * (maxBatchSize 1). ack on a handled message — including a `deferred` one, whose re-enqueue
+	 * `runControlJob` has already done; retry only on an unexpected throw (Cloudflare redelivers,
+	 * bounded by the queue's maxRetries).
 	 */
-	override async queue(batch: MessageBatch<DeployJobMessage>): Promise<void> {
+	override async queue(batch: MessageBatch<ControlJobMessage>): Promise<void> {
 		const env = this.control
 		const provider = cloudflareControlProvider(this.env, env)
 		for (const message of batch.messages) {
 			try {
-				await runDeployJob(env, provider, message.body)
+				console.info(controlJobLogLine(await runControlJob(env, provider, message.body)))
 				message.ack()
 			} catch (err) {
-				console.error('deploy consumer error', err instanceof Error ? err.message : 'unknown error')
+				console.error('control consumer error', err instanceof Error ? err.message : 'unknown error')
 				message.retry()
 			}
 		}

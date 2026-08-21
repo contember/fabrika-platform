@@ -1,10 +1,13 @@
 import type { AuthContext } from '@fabrika/auth'
 import type { ControlProvider, ProviderDeploymentNamespace, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
+import { type NamespaceJobResult, runNamespaceJob } from '../api/namespaces'
 import type { ApiDeps } from '../api/router'
 import { handleApi } from '../api/router'
 import { FakeRepoSource } from '../repo-source'
+import type { ControlJobMessage } from '../run-lifecycle'
 import { createHarness } from './helpers/harness'
+import { makeFakeLock } from './helpers/lock'
 
 const target = (phase: string): ProviderEnvelope => ({
 	provider: 'harbor',
@@ -125,23 +128,48 @@ function authContext(actions: string[], audits: AuditRecord[]): AuthContext {
 	}
 }
 
+interface NamespaceHarness {
+	deps: ApiDeps
+	audits: AuditRecord[]
+	/** Everything the request path enqueued, in order. */
+	sent: ControlJobMessage[]
+	/** Run every enqueued namespace job exactly as a consumer would, and forget the messages. */
+	drain(): Promise<NamespaceJobResult[]>
+}
+
 function makeDeps(
 	provider: ControlProvider,
 	actions: string[] = ['*'],
-): { deps: ApiDeps; audits: AuditRecord[] } {
+): NamespaceHarness {
 	const { db } = createHarness()
 	const audits: AuditRecord[] = []
+	const sent: ControlJobMessage[] = []
+	const lock = makeFakeLock()
 	return {
 		deps: {
 			repositories: db,
 			auth: authContext(actions, audits),
-			queue: { send: () => Promise.resolve() },
+			queue: {
+				send(message) {
+					sent.push(message)
+					return Promise.resolve()
+				},
+			},
 			logs: { get: () => Promise.resolve(null) },
 			repoSource: new FakeRepoSource(),
 			provider,
 			cancelRun: () => Promise.resolve(),
 		},
 		audits,
+		sent,
+		async drain(): Promise<NamespaceJobResult[]> {
+			const results: NamespaceJobResult[] = []
+			for (const message of sent.splice(0)) {
+				if (message.kind !== 'namespace') continue
+				results.push(await runNamespaceJob({ repositories: db, provider, lock }, message))
+			}
+			return results
+		},
 	}
 }
 
@@ -205,14 +233,20 @@ describe('deployment namespace API', () => {
 
 	test('creates, lists, gets, adopts, and reconciles namespaces with audit events', async () => {
 		const recording = providerRecording()
-		const { deps, audits } = makeDeps(namespacedProvider(recording))
+		const { deps, audits, sent, drain } = makeDeps(namespacedProvider(recording))
 
 		const created = await handleApi(request('POST', '/namespaces', namespaceBody('apps-prod')), deps)
 		expect(created.status).toBe(201)
 		const createdBody: { id: string; state: string; target: ProviderEnvelope } = await created.json()
-		expect(createdBody).toEqual(expect.objectContaining({ id: 'apps-prod', state: 'ready', target: target('ready') }))
-		expect(recording.provisions).toEqual(['apps-prod'])
+		// The request records the placement and returns; the provider is not touched inside it.
+		expect(createdBody).toEqual(expect.objectContaining({ id: 'apps-prod', state: 'pending', target: target('requested') }))
+		expect(recording.provisions).toEqual([])
+		expect(sent).toEqual([{ kind: 'namespace', namespaceId: 'apps-prod', mutation: 'provision' }])
+		expect(audits.at(-1)).toEqual(expect.objectContaining({ action: 'namespace.create', metadata: expect.objectContaining({ state: 'pending' }) }))
 		expect((await deps.repositories.registry.listNamespaceResourceClaims('apps-prod')).map((claim) => claim.resource_key)).toEqual(['service:proxy'])
+		expect(await drain()).toEqual([{ namespaceId: 'apps-prod', status: 'ready' }])
+		expect(recording.provisions).toEqual(['apps-prod'])
+		expect((await deps.repositories.registry.getDeploymentNamespace('apps-prod'))?.state).toBe('ready')
 
 		const listed = await handleApi(request('GET', '/namespaces'), deps)
 		const listBody: { items: Array<{ id: string }>; operator: { presets: Array<{ id: string }> } } = await listed.json()
@@ -228,10 +262,16 @@ describe('deployment namespace API', () => {
 			deps,
 		)
 		expect(adopted.status).toBe(201)
+		expect(recording.reconciles).toEqual([])
+		expect(await drain()).toEqual([{ namespaceId: 'legacy', status: 'ready' }])
 		expect(recording.reconciles).toEqual(['legacy'])
 
 		const reconciled = await handleApi(request('POST', '/namespaces/apps-prod/reconcile'), deps)
 		expect(reconciled.status).toBe(200)
+		const reconciledBody: { state: string } = await reconciled.json()
+		// A reconcile of a READY namespace goes back to `pending` so the worker's claim still means something.
+		expect(reconciledBody.state).toBe('pending')
+		expect(await drain()).toEqual([{ namespaceId: 'apps-prod', status: 'ready' }])
 		expect(recording.reconciles).toEqual(['legacy', 'apps-prod'])
 		expect(audits.map((event) => event.action)).toEqual([
 			'namespace.create',
@@ -242,7 +282,7 @@ describe('deployment namespace API', () => {
 
 	test('reserves missing namespace-owned claims before reconciling a legacy namespace', async () => {
 		const recording = providerRecording()
-		const { deps } = makeDeps(namespacedProvider(recording))
+		const { deps, drain } = makeDeps(namespacedProvider(recording))
 		await deps.repositories.registry.createDeploymentNamespace({
 			id: 'legacy',
 			env: 'prod',
@@ -255,20 +295,26 @@ describe('deployment namespace API', () => {
 		const reconciled = await handleApi(request('POST', '/namespaces/legacy/reconcile'), deps)
 
 		expect(reconciled.status).toBe(200)
-		expect(recording.reconciles).toEqual(['legacy'])
+		// Claims are reserved in the REQUEST, before the job the request enqueued has run.
+		expect(recording.reconciles).toEqual([])
 		expect((await deps.repositories.registry.listNamespaceResourceClaims('legacy')).map((claim) => [
 			claim.resource_key,
 			claim.owner_app_id,
 		])).toEqual([['service:proxy', null]])
+		expect(await drain()).toEqual([{ namespaceId: 'legacy', status: 'ready' }])
+		expect(recording.reconciles).toEqual(['legacy'])
 	})
 
 	test('preserves the last checkpoint and records a generic failure', async () => {
 		const recording = providerRecording()
 		recording.failProvision = true
-		const { deps, audits } = makeDeps(namespacedProvider(recording))
+		const { deps, audits, drain } = makeDeps(namespacedProvider(recording))
 
 		const response = await handleApi(request('POST', '/namespaces', namespaceBody('apps-prod')), deps)
-		expect(response.status).toBe(502)
+		// The caller is answered before the provider is asked, so a refusal is the JOB's outcome, not the
+		// request's — and it is a handled one, which is why the job returns rather than throwing.
+		expect(response.status).toBe(201)
+		expect(await drain()).toEqual([{ namespaceId: 'apps-prod', status: 'failed' }])
 		const row = await deps.repositories.registry.getDeploymentNamespace('apps-prod')
 		expect(row?.state).toBe('failed')
 		expect(row?.last_error).toBe('namespace provision failed')

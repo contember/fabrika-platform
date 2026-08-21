@@ -4,7 +4,7 @@ import type { ApiDeps } from '../api/router'
 import { handleApi } from '../api/router'
 import { uuidv7 } from '../db'
 import { FakeRepoSource } from '../repo-source'
-import type { DeployJobMessage } from '../run-lifecycle'
+import type { ControlJobMessage } from '../run-lifecycle'
 import { createHarness } from './helpers/harness'
 import { allowAllAuth, authWithActions, authWithPermissions } from './helpers/iam'
 import { fakeControlProvider, providerEnvironment } from './helpers/provider'
@@ -13,9 +13,9 @@ import { fakeControlProvider, providerEnvironment } from './helpers/provider'
 // permissions array that `can()` checks against the requested action and scope.
 
 /** In-memory deps for the router: real Db over sqlite, a recording queue, an empty R2 reader. */
-function makeDeps(auth: AuthContext): { deps: ApiDeps; queue: DeployJobMessage[]; sqlite: ReturnType<typeof createHarness>['sqlite'] } {
+function makeDeps(auth: AuthContext): { deps: ApiDeps; queue: ControlJobMessage[]; sqlite: ReturnType<typeof createHarness>['sqlite'] } {
 	const { db, sqlite } = createHarness()
-	const queue: DeployJobMessage[] = []
+	const queue: ControlJobMessage[] = []
 	const deps: ApiDeps = {
 		repositories: db,
 		auth,
