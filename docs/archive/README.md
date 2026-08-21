@@ -14,6 +14,11 @@ that ships — only what genuinely helps a future reader. The git log holds the 
   `source` (ADR-0037), sized namespaces cheaply (ADR-0038), fixed the bring-up defects, and stood one
   installation back up unattended with two private apps from two organizations; the live run found
   two platform facts the emulator had hidden and left backlog 83–84.
+- [A bring-up without surprises (2026-08-21)](sprint-2026-08-21-bring-up-without-surprises.md)
+  — `install --create-project`, `upgrade --to=<tag>` with concurrent platform builds, the
+  machine-key block, domain-checked registration with listed hosts, a logged catalog sync and a deploy
+  that names a missing ingest config, a patient registry smoke, a version-scoped build-log relay, a
+  platform-fact table asserted of the emulator and the account, and the `source` memory reading.
 - [Multiple private GitHub source connections (2026-08-14)](sprint-2026-08-14-multiple-private-github-source-connections.md)
   — one installation, one private GitHub App per organization, keyed v2 credentials and
   connection-scoped webhooks (ADR-0032), witnessed live through a keyed-v2 private deploy and a

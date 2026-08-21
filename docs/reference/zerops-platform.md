@@ -959,7 +959,12 @@ declaration the services import comes from. A created project is polled to `ACTI
 import into a `CREATING` project succeeds has not been measured; its id is printed before the wait so
 an interrupted run resumes with `--project-id`. The command is interactive and laptop-side,
 confirming before every step that leaves the operator's disk, and it is the only command that
-generates a credential for an installation.
+generates a credential for an installation. `platform admin` and `platform init` end with a pasteable
+block for the first machine key: `export FABRIKA_IAM_RPC_URL=<IAM's PUBLIC origin>` (the value
+`control` holds as `FABRIKA_IAM_ISSUER`), the NAMES of `FABRIKA_IAM_RPC_KEY` and
+`FABRIKA_IAM_PROVISIONING_KEY` with the place each can be read from, and the `fabrika control key
+issue` line — never a value. `http://iam:3000` answers only inside the project; `key issue` says so
+when it cannot connect.
 
 Its shape is decided by three of the facts above:
 

@@ -26,14 +26,14 @@ handoff amendment.
 
 ## Active sprints
 
-[`bring-up-without-surprises`](sprints/sprint-2026-08-21-bring-up-without-surprises.md) — the
-follow-up to the cheap rebuild: every place its run log shows the tooling quiet or wrong becomes a
-command that says what it needs. A platform-fact table the live account and the emulator both assert,
-a catalog sync that logs its outcome and a deploy that names a missing ingest config (backlog 84),
-`platform upgrade` and concurrent platform builds, `install --create-project`, registration that
-refuses a proxy target without its domain (backlog 83), help text with the right IAM origin, a
-registry smoke that waits out npm, a build-log relay scoped to one app version, and the `source`
-memory reading ADR-0037 still owes.
+None. The [bring-up without surprises](archive/sprint-2026-08-21-bring-up-without-surprises.md)
+shipped on 2026-08-21: `platform install --create-project`, `platform upgrade --to=<tag>` with the
+first three platform builds concurrent, a machine-key block after `admin`/`init`, registration that
+refuses a proxy target without its domain and a `namespaces get` that lists the hosts, a catalog
+sync that logs every outcome and a deploy that names a missing ingest config (backlog 84's cause:
+the lease a roll's dead container leaves behind), a registry smoke that waits out npm, a build-log
+relay scoped to one app version, a table of 48 platform facts asserted by the emulator and an
+opt-in live suite, and the `source` memory reading (1 × 128 MB through a 250 MB upload).
 
 The [cheap rebuild from scratch](archive/sprint-2026-08-21-cheap-rebuild-from-scratch.md)
 shipped on 2026-08-21: it emptied both live Zerops projects, removed the legacy v1 source credential path

@@ -1,10 +1,29 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU1 → <sha>,
-> WU2 → <sha>, … Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
+> **OUTCOME — shipped 2026-08-21.** Every unit landed and was witnessed on the account the same
+> day. A bring-up is now: `platform install --create-project` (one command from an empty client,
+> 15 min 51 s to seven `ACTIVE` services), `platform admin`/`init` ending with a pasteable machine-key
+> block (a key minted from a fresh shell on the first try), `platform upgrade --to=<tag>` for every
+> later roll (6 min 52 s wall clock, the three first builds overlapping — the rebuild's rolls took
+> 9 min 50 s, not the 20 minutes this plan assumed), a registration that refuses a proxy target
+> without `--domain` and a `namespaces get` that lists the hosts with the taken ones marked, a
+> catalog sync that logs every outcome and a deploy that names a missing ingest config in its run
+> log (which is how backlog 84's cause was finally read off a live run: the lease a roll's dead
+> container leaves behind), a release whose registry smoke waits out npm, a run log scoped to one
+> app version, and a table of 48 platform facts that the emulator (30) and an opt-in live suite
+> (34, 36 with the unpacker probe) both assert — its first live run corrected four facts the
+> reference doc had wrong. `source` held 1 × 128 MB through a 250 MB upload.
+> Commit map: WU2 → `c9f9d46`, WU7 → `b9736a7`, WU5 → `59f503a`, WU3 + WU4 → `b97e93f`, WU6 →
+> `b5440bb`, WU1 → `07ac08f` + `4922fa5`, WU8 → `829753b`; backlog/docs → `ec237d3`; release
+> `v0.0.26`. Verification: `bun run typecheck` clean; `bun test` with PostgreSQL 2 932 pass / 42 skip
+> / 0 fail; lint identical to the base; `format:check`; `release:validate` 23 packages; the live suite
+> 37/37 with `SLOW=1`; Release run green without a re-run. Backlog closed: 83 deleted, 84 rewritten
+> to the dead-holder lease with the roll as its trigger, 85 filed (crontab output is not collected).
+> Deferred: the example repository is private, so the planned CI warning on its pins was dropped
+> (`release:example-pin` stays operator-run) — making it public is the operator's call; the
+> dead-holder lease itself (backlog 84); `deleteService` on the Zerops client (the live suite deletes
+> through its own transport); consolidating the two `zeropsSubdomain` parsers; validating `--domain`
+> as a bare hostname; the run-log line on relay-backed (Cloudflare) providers survives only in the
+> control log; `gh run watch`'s banner in a non-TTY transcript. WU3 and WU4 share one commit because
+> their usage-text hunks interleave.
 
 # Sprint — a bring-up without surprises (2026-08-21)
 
@@ -363,3 +382,42 @@ identifiers redacted where they are credentials.
   tarball stream took ~17 s (version reserved 18:29:31Z, build-and-deploy 18:29:48Z), `source`
   stayed at **1 container × 128 MB** for the whole run. The small branch alone: 3 min 08 s, the
   same 1 × 128 MB. The floor held for both; written into the reference doc beside ADR-0037.
+- 2026-08-21 — Release `v0.0.26` (run 32514719921): verify → publish → `registry-smoke` passed 23
+  packages with no manual re-run, 4 min 04 s end to end (WU7 witness).
+- 2026-08-21 — WU3 witness. `fabrika platform upgrade --provider=zerops --to=v0.0.26 --sidecar=<checkout>`:
+  `--dry-run` printed `v0.0.25 → v0.0.26` and the fixed subject and wrote nothing; the real roll
+  committed `645d2b2`, pushed, printed the run URL first and watched it to green — **exit 0 in
+  6 min 52 s wall clock** (rebuild: 9 min 50 s). The sidecar log proves the overlap: three `building`
+  lines at 18:47:56–57Z, `ACTIVE` at 18:50:09/15/20Z (iam 133 s · source 139 s · operations 143 s),
+  proxy 97 s, control 144 s; deploy step 6 min 27 s (was 9 min 36 s); no `userDataSyncRunning` retry.
+  Three simultaneous `trigger-pipeline` calls in one project are tolerated. Noted: `gh run watch`
+  repeats its "Refreshing run status" banner in a non-TTY transcript — cosmetic, a follow-up.
+- 2026-08-21 — WU5 witness. `namespaces get --namespace=apps-test2` listed no hosts before a
+  reconcile (as documented), `reconcile` → `ready` in 20 s, then six lines: 8080 `taken by notes/test2`,
+  8082 `taken by notesmgw/test2`, 8083–8086 `free`. `register` of a proxy-target manifest without
+  `--domain` → `bad_request: Zerops proxy target`wu5probe/test2`requires a public domain: pass
+  --domain with a host this namespace serves (`namespaces get apps-test2`lists them)`, exit 1,
+  nothing created. (A manifest carries its app id, so the probe needed a copy with `app.id` changed.)
+- 2026-08-21 — WU2 witness, and backlog 84's cause. App `wu2probe` (branch `wu2probe` of the example
+  repository, domain 8083) registered at 18:57:24.98Z, deployed 80 ms later. Control's log:
+  `operations catalog sync: coalesced revision 10` at the registration — the lease was held by the
+  control container `platform upgrade` had replaced three minutes earlier (the dead-holder window).
+  The run log named it — `operations ingest not injected: app has no active ingest config (catalog
+  revision 10 pending)` — and the deploy failed on the app's own `FABRIKA_OPERATIONS_DSN is required`.
+  A deploy seven minutes later succeeded with all four keys (`FABRIKA_OPERATIONS_DSN`, `FABRIKA_APP_ID`,
+  `FABRIKA_ENVIRONMENT`, `FABRIKA_SERVICE_KEY`): the replay after the lease expired delivered the
+  revision. Its own log line never appeared — a Zerops crontab command's output is not collected
+  (→ backlog 85; backlog 84 rewritten with the roll as the trigger).
+- 2026-08-21 — WU6 witness. `platform admin` printed the block with `export FABRIKA_IAM_RPC_URL=https://<iam host>`
+  and the two key NAMES; zero `px_`/`rpc_`/`sk_` prefixes in the transcript. In an `env -i` shell
+  with only the pasted block and the two keys read from `control`'s env: `control key issue
+  --label=wu6-witness --permissions=app.manage` minted a `px_` key on the first try. Negative
+  controls: `http://iam:3000` → "IAM could not be reached … (ConnectionRefused) … must be IAM's PUBLIC
+  origin"; a scheme-less value → "is not a URL — it needs the `https://` scheme".
+- 2026-08-21 — WU4 witness. `platform install --yes --create-project --project-name=fabrika-wu4-witness
+  --client-id=… --env=wu4 --from-git=…` from an empty client: `✓ created Zerops project <id>
+  (fabrika-wu4-witness) — resume with --project-id=<id> if this run is interrupted` printed before the
+  wait; 7 services imported; pass 1 proxy; pass 2 iam + operations + source together, then proxy,
+  then control; **`install exit 0` in 15 min 51 s**, `zops` shows the project `LIGHT` and seven
+  services `ACTIVE`. (`envIsolation` cannot be read back from any public shape — known.) Project and
+  its integration token deleted afterwards.
