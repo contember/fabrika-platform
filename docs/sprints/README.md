@@ -19,6 +19,12 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
+- [`sprint-2026-08-21-cheap-rebuild-from-scratch`](sprint-2026-08-21-cheap-rebuild-from-scratch.md)
+  — empty the Zerops account, remove the legacy v1 source path its deletion makes unreachable, fix the
+  five defects that make a from-scratch bring-up expensive (stdin intent, the first administrator,
+  asynchronous namespace provisioning, actionable namespace failures, removal of a failed namespace),
+  and stand one installation back up on the cheap defaults landed in `3ecf86d`. The rebuild is the
+  single live acceptance for all of it.
 - [`sprint-2026-08-14-multiple-private-github-source-connections`](sprint-2026-08-14-multiple-private-github-source-connections.md)
   — extend the live Zerops source path from one installation-wide GitHub App to one private App per
   organization. The additive design keeps the existing Zerops v1 credential and generic webhook route,

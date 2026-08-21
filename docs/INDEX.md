@@ -26,6 +26,13 @@ handoff amendment.
 
 ## Active sprints
 
+[`cheap-rebuild-from-scratch`](sprints/sprint-2026-08-21-cheap-rebuild-from-scratch.md) — delete both
+live Zerops projects, remove the legacy v1 source credential path their deletion makes unreachable, fix
+the five defects that make a from-scratch bring-up expensive, and stand one installation back up on the
+cheap defaults. `3ecf86d` already landed those defaults: an app namespace no longer keys its database
+off the environment NAME, so `prod` stops buying three dedicated HA containers. The rebuild is the
+single live acceptance for the whole batch.
+
 [`multiple-private-github-source-connections`](sprints/sprint-2026-08-14-multiple-private-github-source-connections.md) —
 extend the Zerops source path to one private GitHub App per organization and multiple connections per
 installation. [ADR-0032](decisions/0032-support-multiple-private-github-source-connections.md) keeps
