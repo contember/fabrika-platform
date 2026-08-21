@@ -471,3 +471,28 @@ everything except WU6, which follows it.
   endpoint. Backlog 82 records the IAM 500 on a duplicate cross-app grant found by WU3's contract test.
   Gate after WU5+6: typecheck 35/35, `bun test` 2 782 pass / 9 skip / 0 fail with Postgres, lint and
   format clean. Everything before WU8 is done; WU8 is the operator's live run.
+- 2026-08-21 — WU8, first half, run from this machine after `v0.0.23` (Release green; the sidecar pins
+  it). Empty project `fabrika-test2` created through `CreateProject` with `envIsolation: service`
+  (`zops project create` has no such flag). Witnesses so far, identifiers redacted where they are
+  credentials: (1) `install < /dev/null` refused, exit 1, naming `--yes`; `install --yes` ran
+  unattended to `install exit 0` with every confirmation logged `yes (--yes)`, five services ACTIVE;
+  `printf … | init` drove every question from the pipe with no PTY, created
+  `contember/fabrika-zerops-test2`, wrote the Environment and triggered the workflow, which deployed
+  green. (2) `platform admin` invited the principal, wrote the cross-app `admin` grant and printed one
+  URL; a re-run reported the existing principal, grant and outstanding enrollment and issued nothing.
+  The URL set a password and the session reached Applications, Users and Errors; `IAM_BOOTSTRAP_ADMINS`
+  is set on no service (read back off all five). (3) `namespaces create --preset=cheap` answered
+  `pending` in 0.12 s; the namespace reached `ready` 6.5 minutes later with no client attached, and
+  control created the `apps-test2` project itself. (5)(6) Every runtime floors at 1 shared core /
+  0.125 GB / 1 container (proxy 1–2 on the platform, 1–6 in the namespace); `db` and the namespace
+  `postgres` are `oltp-hobby` at 0.25 GB; no service carries a value fabrika did not write — the old
+  1 GB floor on `source` is gone. The 30-day cost is not yet readable on projects minutes old.
+  (8) With control's token swapped for a deliberately under-granted one (no `canCreateProjects`),
+  `create` answered `pending` and the row failed with `lastErrorCode: insufficientPermissions` and the
+  platform's own message; no project was created. Then `namespaces remove` freed the id, `create`
+  reused it at once, and a second `remove` cleaned up; the original token was restored and
+  `reconcile` reached `ready` again. The verify-first probe found the introspection endpoint backlog
+  75 needed (reference doc updated). Open: (4) the private deploy and (7) the second organization
+  need a GitHub App connection, which only the console's manifest flow can create — the operator's
+  step. Leftover on the account: the old `fabrika-install-test` integration token still exists with
+  `canCreateProjects` and no projects.

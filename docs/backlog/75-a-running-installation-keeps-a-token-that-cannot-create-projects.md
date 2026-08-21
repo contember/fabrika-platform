@@ -25,17 +25,20 @@ repair: no `fabrika` command re-mints or updates the token, and there is no pre-
 left to exercise one against, so this ships only when one exists or when a fresh token can be
 deliberately under-granted for the test.
 
-A synchronous preflight (refusing `create` before enqueueing) was considered and not built: no
-introspection endpoint that reads a token's own capabilities is recorded in
-[`../reference/zerops-platform.md`](../reference/zerops-platform.md), and guessing one is not evidence.
-If the rebuild's live run finds such an endpoint, record it there first.
+A synchronous preflight (refusing `create` before enqueueing) is now buildable: the 2026-08-21 live
+probe in [`../reference/zerops-platform.md`](../reference/zerops-platform.md) established that an
+integration token reads its own id from `GET /user/info` and its `canCreateProjects` from
+`GET /client/{clientId}/integration-token/{tokenId}`. Two reads before the first mutation would turn
+the asynchronous `failed: insufficientPermissions` into a synchronous refusal of `namespaces create`.
 
 ## Approach / acceptance
 
-A `fabrika platform` verb that re-mints or updates the installation's token in place, carrying every
-existing project grant forward and writing the new value to the `control` service only. Witness: on an
-installation whose token lacks the flag, one documented command restores it without dropping a grant,
-and the next `namespaces create` reaches `ready`.
+1. The preflight: `namespaces create` reads the token's capabilities and refuses with 409 naming
+   `canCreateProjects` before enqueueing; `provider-zerops` gains the two reads, control the check.
+2. The repair: a `fabrika platform` verb that re-mints or updates the installation's token in place, carrying every
+   existing project grant forward and writing the new value to the `control` service only. Witness: on an
+   installation whose token lacks the flag, one documented command restores it without dropping a grant,
+   and the next `namespaces create` reaches `ready`.
 
 ## Touch points
 

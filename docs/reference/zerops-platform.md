@@ -661,6 +661,24 @@ Grants are fixed at mint time and the update API replaces the grant set WHOLESAL
 repairing a live token must re-pass every existing project grant in the same call or silently remove
 it.
 
+### Verified live (2026-08-21, account `prg1`, project `fabrika-test2`) — an integration token can read its own capabilities
+
+| Call, authenticated with the installation's INTEGRATION token (client role `NO_ACCESS`)   | Result                                                                                                   |
+| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `GET /user/info` (`GetUserInfo`)                                                          | **200.** `id` is the token's own id; `fullName` is the token's name; `clientUserList[]` names the client |
+| `GET /client/{clientId}/integration-token/{tokenId}` (`getIntegrationToken`) with that id | **200.** Carries `canCreateProjects`, `roleCode` and the `projects[]` grants                             |
+| `GET /client/{clientId}/integration-token/list` (`listIntegrationTokens`)                 | **200** — the token reads EVERY integration token of the client, not only its own                        |
+
+So a control plane CAN learn, before it mutates anything, whether its token may create projects: two
+reads, no guessing. That is the preflight backlog 75 could not build for lack of this evidence. The
+third row is a platform fact worth knowing: an integration token is not confined to its own record.
+
+Also measured the same day: `zops env set … --sensitive` on an EXISTING sensitive variable is refused
+with `sensitive: field is required` (the CLI's update body omits it); the raw `PUT /user-data/{id}`
+(`UpdateUserDataById`) with `{ key, content, sensitive: true }` is accepted and returns a
+`stack.updateUserData` process. A token swapped that way is read by the service only after
+`service restart`.
+
 ### Verified live (2026-08-19, account `prg1`, project `fabrika-notes-prod`) — a user-data write is an asynchronous process
 
 The first app deploy into a namespace failed at `build-and-deploy` with a bare `400`, deterministically
