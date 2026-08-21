@@ -114,7 +114,7 @@ describe('local Zerops emulator', () => {
 		})
 		const serviceId = imported.services[0]?.id ?? ''
 
-		// The list endpoint answers 400 on every service, so nothing may read before it writes.
+		// `/env` is the read path the client uses; `/service-stack/{id}/user-data` is a second one it does not.
 		await expect(api.listServiceEnv({ serviceId, signal })).resolves.toEqual([])
 		await api.putServiceEnv({ serviceId, key: 'FABRIKA_IAM_KEY', value: 'first', signal })
 		await api.putServiceEnv({ serviceId, key: 'FABRIKA_IAM_KEY', value: 'second', signal })
@@ -360,6 +360,8 @@ describe('the platform-facts table, against the double', () => {
 		context.set('projectId', projectId)
 		context.set('hostname', 'factsvc')
 		context.set('deleteHostname', 'factdel')
+		context.set('countHostname', 'factcount')
+		context.set('noopHostname', 'factnoop')
 		context.set('absentHostname', 'factabsent')
 		context.set('setupProbeHostname', 'factsetup')
 		context.set('absentAppVersionId', 'version-999999')

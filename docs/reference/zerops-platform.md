@@ -216,7 +216,7 @@ The following were confirmed against a real account and are no longer inferences
 | A variable written through the env API resolves `${service_var}` at container start | **Yes** — identical to one written in `run.envVariables`                                                                       |
 | A BUILD container can read its service's env-API variables directly                 | **No** — every one reads as the empty string, silently                                                                         |
 | `build.envVariables: { X: '${RUNTIME_X}' }` lifts them into the build               | **Yes**, and it resolves nested references too                                                                                 |
-| `GET /service-stack/{id}/user-data`                                                 | **Always 400 `serviceStackNotFound`**, before AND after a successful deploy                                                    |
+| `GET /service-stack/{id}/user-data`                                                 | **Always 400 `serviceStackNotFound`**, before AND after a successful deploy — **SUPERSEDED, see 2026-08-21 below**             |
 | `POST /service-stack/{id}/user-data`                                                | Works from the moment the service exists                                                                                       |
 | `POST /user-data/search` (with `clientId` **and** `serviceStackId`)                 | Works, but is not in the published OpenAPI document and needs a `clientId` — see `/env` below                                  |
 | Secret value read-back                                                              | **Yes.** Env-API writes are stored `type: SECRET` and `content` returns the plaintext to a write-capable token                 |
@@ -231,9 +231,12 @@ The following were confirmed against a real account and are no longer inferences
 Two consequences worth stating separately, because they are ordering constraints
 rather than facts about a field:
 
-- **Never read before writing a service variable.** The list endpoint's 400 is not
-  "no such service" and not "not deployed yet" — it never succeeds. A reconciler
-  that lists first fails on every environment, always.
+- **Never read before writing a service variable.** ~~The list endpoint's 400 is
+  not "no such service" and not "not deployed yet" — it never succeeds.~~
+  **SUPERSEDED 2026-08-21**: the endpoint answers a list. The ordering rule
+  survives it for a different reason — the create must work on a service that has
+  never been deployed, which is ADR-0004's bring-up order — and the client still
+  reads `/env`, because that is where the record ids it writes with come from.
 - **A second deploy cannot start while a `userData` synchronisation is running**
   ("Process of synchronizing userData is already running"). Writing variables and
   then immediately pushing needs a retry loop. This does NOT apply to the writes
@@ -244,19 +247,19 @@ rather than facts about a field:
 Written while fixing the write path. Every row was produced with `zops` against the
 live account; the operation ids are `zops api --list --tag UserData`.
 
-| Behaviour                                                                   | Result                                                                                                                                |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /service-stack/{id}/user-data` (`ListServiceStackUserData`)            | **Still always 400 `serviceStackNotFound`** — on `notesapi`, `iam`, `proxy` and `db`, with and without `limit`/`offset`/`keyContains` |
-| `POST /service-stack/{id}/user-data` (`CreateUserData`)                     | Works. Returns a **process**, not the created record — the new record's id is not in the response                                     |
-| `POST` on a key the service already has                                     | **400 `userDataDuplicateKey`**, "not unique in service stack frame of reference". Nothing is written; it does not replace             |
-| **`GET /service-stack/{id}/env` (`GetServiceStackEnvList`)**                | **Works on every service** — ACTIVE, managed (`db`, `storage`) and a stopped build runtime alike. This is the read path               |
-| The `id` in that response                                                   | **Is the user-data record id** — the same value `POST /user-data/search` returns, and accepted by `PUT`/`DELETE /user-data/{id}`      |
-| `PUT /user-data/{id}` (`UpdateUserDataById`)                                | **Replaces in place**: same record id, new `content`, `lastUpdate` moves. Non-destructive — no delete window exists                   |
-| `PUT /user-data/{id}` with `content` but no `key`                           | **Refused** — 400 `invalidUserInput`. Both fields are required even when the key is unchanged                                         |
-| `GET /user-data/{id}` (`GetUserDataById`)                                   | Works — a single record by id, unlike the list                                                                                        |
-| Three `POST`s to one service back to back                                   | **All three succeed.** The "synchronizing userData is already running" conflict gates a DEPLOY, not another write                     |
-| `type: ENV` variables (from the service's `zerops.yaml` `run.envVariables`) | **Absent from `/env`, present in `POST /user-data/search`** — and they still make a `POST` answer `userDataDuplicateKey`              |
-| The error envelope                                                          | `{ error: { code, message, meta[] } }`. `code` is a stable identifier; `message` can quote the value it rejected                      |
+| Behaviour                                                                   | Result                                                                                                                           |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /service-stack/{id}/user-data` (`ListServiceStackUserData`)            | **Still always 400 `serviceStackNotFound`** — **SUPERSEDED, see 2026-08-21 below**: it answers a list now                        |
+| `POST /service-stack/{id}/user-data` (`CreateUserData`)                     | Works. Returns a **process**, not the created record — the new record's id is not in the response                                |
+| `POST` on a key the service already has                                     | **400 `userDataDuplicateKey`**, "not unique in service stack frame of reference". Nothing is written; it does not replace        |
+| **`GET /service-stack/{id}/env` (`GetServiceStackEnvList`)**                | **Works on every service** — ACTIVE, managed (`db`, `storage`) and a stopped build runtime alike. This is the read path          |
+| The `id` in that response                                                   | **Is the user-data record id** — the same value `POST /user-data/search` returns, and accepted by `PUT`/`DELETE /user-data/{id}` |
+| `PUT /user-data/{id}` (`UpdateUserDataById`)                                | **Replaces in place**: same record id, new `content`, `lastUpdate` moves. Non-destructive — no delete window exists              |
+| `PUT /user-data/{id}` with `content` but no `key`                           | **Refused** — 400 `invalidUserInput`. Both fields are required even when the key is unchanged                                    |
+| `GET /user-data/{id}` (`GetUserDataById`)                                   | Works — a single record by id, unlike the list                                                                                   |
+| Three `POST`s to one service back to back                                   | **All three succeed.** The "synchronizing userData is already running" conflict gates a DEPLOY, not another write                |
+| `type: ENV` variables (from the service's `zerops.yaml` `run.envVariables`) | **Absent from `/env`, present in `POST /user-data/search`** — and they still make a `POST` answer `userDataDuplicateKey`         |
+| The error envelope                                                          | `{ error: { code, message, meta[] } }`. `code` is a stable identifier; `message` can quote the value it rejected                 |
 
 Consequences:
 
@@ -293,6 +296,17 @@ is `zops api ImportServiceStack --param id=@project --project fabrika-test --bod
 row below.
 
 #### `override` is a name-collision escape, not an update and not a replace
+
+**Precondition, measured 2026-08-21: both no-op rows below hold only for a document that does NOT carry
+`startWithoutCode`.** That flag asks for an EMPTY DEPLOY, and it does so every time the document is
+applied — so a `startWithoutCode` service imports with TWO processes (`stack.create` and `stack.deploy`)
+and every later re-apply with `override: true`, unchanged or with a changed `maxContainers`, starts exactly
+one `stack.deploy` more. It is the same fact as "re-importing a `startWithoutCode` document at a service
+that HAS code is destructive", seen before there is any code to lose. Without the flag an import starts one
+`stack.create`, the service settles at **`READY_TO_DEPLOY`**, an unchanged re-apply answers
+`processes: []`, and a re-apply carrying `maxContainers: 3` answers `processes: []` with the read-back
+`horizontalAutoscaling.maxContainerCount` unmoved at its default of 10. Every fabrika provisioning document
+carries `startWithoutCode`, so **no fabrika re-import is a no-op** — it re-activates an empty version.
 
 | Behaviour                                                                           | Result                                                                                                                    |
 | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
@@ -446,8 +460,9 @@ Two consequences the client shape depends on:
 
 #### `zeropsSubdomain` is a NAME, not a state
 
-`GET /service-stack/{id}/env` returns a `READ_ONLY` `zeropsSubdomain` variable. It is not evidence that a
-subdomain is live:
+`GET /service-stack/{id}/env` returns a `zeropsSubdomain` variable — `type: SYSTEM`, corrected from
+`READ_ONLY` on 2026-08-21 — once the service has deployed something. It is not evidence that a subdomain is
+live:
 
 | Behaviour                                                        | Result                                                                                |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -464,15 +479,17 @@ learn what it is called.
 Measured to settle whether a Zerops installation can be brought up from an empty project. One `alpine@3.21`
 service named `proxy`, imported with `startWithoutCode: true`, then built from the public repository.
 
-| Behaviour                                                                 | Result                                                                                    |
-| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `zeropsSubdomain` **before any deploy**                                   | **Present**, a single line with **no port segment**: `https://proxy-2b16.prg1.zerops.app` |
-| The same variable **after** a deploy publishing six HTTP ports            | Six lines, `https://proxy-2b16-<port>...`, one per port                                   |
-| The `<4 chars>` segment across that transition                            | **Unchanged** (`2b16` before and after)                                                   |
-| Lag between the version reaching `ACTIVE` and the six lines appearing     | **None measurable** — both were true in the same 10 s poll                                |
-| `POST /service-stack/{id}/user-data` on a service that has never deployed | **Works**, immediately after the import's processes report `FINISHED`                     |
-| Service fields `zeropsSubdomain` / `ports` before a deploy                | **Absent** and `[]` — the subdomain is a generated ENV VARIABLE, never a service field    |
-| `enableSubdomainAccess` on a freshly deployed service                     | `subdomainAccess` read back `true` within 5 s                                             |
+| Behaviour                                                                 | Result                                                                                      |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `zeropsSubdomain` **before any deploy**                                   | **Present**, a single line with **no port segment**: `https://proxy-2b16.prg1.zerops.app`   |
+| …but only once SOMETHING has deployed (corrected 2026-08-21)              | On a service imported WITHOUT `startWithoutCode` the key is **absent from `/env` entirely** |
+| The same variable **after** a deploy publishing six HTTP ports            | Six lines, `https://proxy-2b16-<port>...`, one per port                                     |
+| The `<4 chars>` segment across that transition                            | **Unchanged** (`2b16` before and after)                                                     |
+| Lag between the version reaching `ACTIVE` and the six lines appearing     | **None measurable** — both were true in the same 10 s poll                                  |
+| `POST /service-stack/{id}/user-data` on a service that has never deployed | **Works**, immediately after the import's processes report `FINISHED`                       |
+| Service fields `zeropsSubdomain` / `ports` before a deploy                | **Absent** and `[]` — the subdomain is a generated ENV VARIABLE, never a service field      |
+| The variable's `type` (corrected 2026-08-21)                              | **`SYSTEM`**, not the `READ_ONLY` this section first recorded                               |
+| `enableSubdomainAccess` on a freshly deployed service                     | `subdomainAccess` read back `true` within 5 s                                               |
 
 **A proxy carrying `FABRIKA_PROXY_MANIFEST_JSON={"apps":[]}` is a complete, deployable service.** It built
 in ~190 s, deployed in ~60 s, reached `ACTIVE`, and answered **404** on public listener 8080 — which is
@@ -764,6 +781,38 @@ by-name finding above rather than narrowing it: nothing in this family answers 4
 A delete is asynchronous like every other service mutation: the 200 is the process starting, and only
 that process reaching `FINISHED` means the service is gone. A read taken BETWEEN the two was not
 measured, so the double removes the record at once and the suite reads only after the wait.
+
+### Verified live (2026-08-21, account `prg1`, a throwaway project since deleted) — what the first automated run corrected
+
+The first run of the `platform-facts` table against a real account failed four rows, and all four were
+this document being out of date rather than the platform misbehaving. Measured on `alpine/bun@1.3`
+services created and deleted for the purpose.
+
+| Behaviour                                                                             | Result                                                                                                                    |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `GET /service-stack/{id}/user-data` on a live service, with code and without          | **200** `{ list: [{ id, created, lastUpdate, clientId, projectId, serviceStackId, key, content, type, … }], totalCount }` |
+| The same call on an id no service has                                                 | **400 `serviceStackNotFound`** — unchanged, and now the ONLY condition that answers it                                    |
+| `zeropsSubdomain` in `/env` on a service imported WITHOUT `startWithoutCode`          | **Absent.** Not empty — the key is not in the response at all, and the service reads `status: READY_TO_DEPLOY`            |
+| `zeropsSubdomain` once a `startWithoutCode` service's EMPTY version has deployed      | **Present**, one line, no port segment, **`type: SYSTEM`** — the 2026-08-08 section called it `READ_ONLY`                 |
+| An import whose service carries `startWithoutCode: true`                              | **Two processes**: `stack.create` and `stack.deploy` — the empty deploy that flag asks for                                |
+| Re-applying that document with `override: true`, unchanged or with `maxContainers: 3` | **One `stack.deploy` every time.** A document carrying the flag is never a no-op                                          |
+| An import whose service does NOT carry it                                             | **One process** (`stack.create`); the service then reads `READY_TO_DEPLOY`                                                |
+| Re-applying THAT document, unchanged or with `maxContainers: 3`                       | **`processes: []`**, and the read-back `horizontalAutoscaling.maxContainerCount` stays at its default of 10               |
+
+Three consequences, none of them cosmetic:
+
+- **The user-data LIST endpoint is no longer a trap.** Two dated sections above record it answering
+  `400 serviceStackNotFound` unconditionally; that is no longer true and they are marked superseded. The
+  client is unchanged and still reads `GET /service-stack/{id}/env`: that is the endpoint whose record ids
+  `PUT`/`DELETE /user-data/{id}` take, and this one's paging terms have never been verified. The bring-up
+  ordering rule survives for its own reason — a create must work on a service that has never deployed.
+- **`zeropsSubdomain` appears at the first DEPLOY, not at the import.** Every earlier measurement was taken
+  on a `startWithoutCode` service, whose empty version deploys as part of the import, which is why the
+  variable looked like it was there "before any deploy". A reader must treat an absent key as "no name
+  yet"; `derivePlatformHosts` already refuses to compose a hostname rather than read one.
+- **A fabrika re-import is never a no-op.** Every provisioning document fabrika emits carries
+  `startWithoutCode`, so every reconcile re-activates an empty version. The `override` section's two no-op
+  rows describe documents without the flag.
 
 ### Verified live (2026-08-19, account `prg1`, project `fabrika-notes-prod`) — a user-data write is an asynchronous process
 

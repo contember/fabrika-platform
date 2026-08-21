@@ -106,6 +106,8 @@ interface ImportService {
 	profile?: string
 	/** Without it the platform refuses a name that already exists — the WHOLE document, not just the entry. */
 	override?: boolean
+	/** It asks for an EMPTY deploy, which is why a document carrying it is never a no-op on re-apply. */
+	startWithoutCode?: boolean
 	zeropsSetup?: string
 	buildFromGit?: string
 }
@@ -196,6 +198,7 @@ const parseImportDocument = (yaml: string): ImportDocument => {
 			...(stringProperty(entry, 'type') === undefined ? {} : { type: stringProperty(entry, 'type') }),
 			...(stringProperty(entry, 'profile') === undefined ? {} : { profile: stringProperty(entry, 'profile') }),
 			...(booleanProperty(entry, 'override') === undefined ? {} : { override: booleanProperty(entry, 'override') }),
+			...(booleanProperty(entry, 'startWithoutCode') === undefined ? {} : { startWithoutCode: booleanProperty(entry, 'startWithoutCode') }),
 			...(zeropsSetup === undefined ? {} : { zeropsSetup }),
 			...(buildFromGit === undefined ? {} : { buildFromGit }),
 		}
@@ -710,11 +713,17 @@ class ZeropsEmulator {
 			return json({ list: this.page(list, url), totalCount: list.length })
 		}
 
-		// The real platform answers 400 `serviceStackNotFound` here on EVERY service, deployed or not — and on
-		// an id that never existed — so a client that lists before writing must fail against the double too
-		// (docs/reference/zerops-platform.md).
-		if (/^\/service-stack\/[^/]+\/user-data$/.test(path) && request.method === 'GET') {
-			return serviceStackNotFound()
+		// SUPERSEDED 2026-08-21: this endpoint used to answer `400 serviceStackNotFound` on every service,
+		// deployed or not; it now answers a list. Only an ABSENT service id still gets the 400. The client
+		// still reads `/env` — that is where the record ids it writes with come from.
+		const userDataList = path.match(/^\/service-stack\/([^/]+)\/user-data$/)
+		if (userDataList !== null && request.method === 'GET') {
+			const serviceId = decodeURIComponent(userDataList[1] ?? '')
+			if (this.service(serviceId) === undefined) {
+				return serviceStackNotFound()
+			}
+			const list = this.state.serviceEnv.filter((item) => item.serviceStackId === serviceId)
+			return json({ list: this.page(list, url), totalCount: list.length })
 		}
 
 		const serviceEnvList = path.match(/^\/service-stack\/([^/]+)\/env$/)
@@ -848,7 +857,14 @@ class ZeropsEmulator {
 			if (existing !== undefined) {
 				// An `override` re-apply reconciles NOTHING live: a changed `type`, `profile`, `maxContainers` or
 				// `objectStorageSize` is silently ignored and the service is left exactly as it is.
-				return { service: existing }
+				//
+				// One exception, and it is not a reconcile: `startWithoutCode` asks for an EMPTY deploy every time
+				// the document is applied, so a document carrying it is never a no-op (measured 2026-08-21). No app
+				// version is activated here — live the empty version publishes no HTTP port either, which is why
+				// `enable-subdomain-access` still refuses afterwards.
+				return spec.startWithoutCode === true
+					? { service: existing, process: this.createProcess('stack.deploy', { serviceStackId: existing.id }) }
+					: { service: existing }
 			}
 			// `subdomainAccess` starts false and no import ever moves it — see `ImportService`.
 			const service: ServiceRecord = {
@@ -874,8 +890,8 @@ class ZeropsEmulator {
 			serviceStacks: imported.map((entry) => ({
 				id: entry.service.id,
 				name: entry.service.name,
-				// Only a service this import CREATED gets a process: re-applying an unchanged document is a
-				// complete no-op live — same ids, no processes (docs/reference/zerops-platform.md).
+				// A service this import CREATED gets one, and a re-applied `startWithoutCode` one gets its empty
+				// deploy; re-applying anything else is a complete no-op live (docs/reference/zerops-platform.md).
 				processes: entry.process === undefined ? [] : [this.processResponse(entry.process)],
 			})),
 		}

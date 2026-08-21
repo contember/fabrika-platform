@@ -461,8 +461,9 @@ export interface ZeropsApi {
 	 * Every environment variable of ONE service, each with the record id `deleteServiceEnv` takes.
 	 * VERIFIED: `GET /service-stack/{id}/env` (`{ items }`).
 	 *
-	 * NOT `GET /service-stack/{id}/user-data`, which answers `400 serviceStackNotFound` on every
-	 * service, deployed or not — see `docs/reference/zerops-platform.md`. The `/env` reading omits
+	 * NOT `GET /service-stack/{id}/user-data`: it answers a list now (2026-08-21), but `/env` is the
+	 * endpoint whose record ids `PUT`/`DELETE /user-data/{id}` take, and the list's paging terms were
+	 * never verified — see `docs/reference/zerops-platform.md`. The `/env` reading omits
 	 * variables the service's own `zerops.yaml` declares (`type: ENV`); fabrika never writes those.
 	 * The OpenAPI publishes no lookup/pagination terms and live probes found query terms ignored, so the
 	 * implementation reads one full response under a byte bound rather than imposing an entry-count cap.

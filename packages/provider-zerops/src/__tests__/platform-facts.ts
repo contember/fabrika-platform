@@ -43,7 +43,6 @@ export type FactFieldCheck =
 	| { kind: 'nonEmptyString' }
 	/** Present and a string, and the value is NEVER rendered into a failure message — for a field that may carry a credential. */
 	| { kind: 'presentUnrendered' }
-	| { kind: 'lengthEquals'; length: number }
 	| { kind: 'equals'; value: string }
 	| { kind: 'oneOf'; values: readonly string[] }
 	| { kind: 'boolean'; value: boolean }
@@ -59,8 +58,13 @@ export interface FactExpectation {
 	code?: string
 	/** A substring `error.message` must contain. Never a whole message — the platform quotes rejected values. */
 	messageContains?: string
-	/** Field path → check. Paths are dotted; see `resolvePath` for the two bracket forms. */
+	/** Field path → check on the FIRST match. Paths are dotted; see `resolvePath` for the two bracket forms. */
 	bodyShape?: Readonly<Record<string, FactFieldCheck>>
+	/**
+	 * Field path → how many values it must match. This is the question `bodyShape` cannot ask: a filtered
+	 * path like `processes[actionName=stack.deploy]` is about how many entries there are, not what the first one is.
+	 */
+	bodyCounts?: Readonly<Record<string, number>>
 }
 
 /** One request in a row's sequence. */
@@ -115,25 +119,26 @@ export interface PlatformFact {
 
 // ── the table ───────────────────────────────────────────────────────────────────
 
-const SECTION_2026_08_03 = 'Verified live (2026-08-03, account `prg1`) — docs/reference/zerops-platform.md:208'
-const SECTION_2026_08_05 = 'Verified live (2026-08-05) — the user-data write path — docs/reference/zerops-platform.md:240'
-const SECTION_OVERRIDE = '`override` is a name-collision escape, not an update — docs/reference/zerops-platform.md:293'
-const SECTION_SUBDOMAIN = 'An import document cannot establish a subdomain — docs/reference/zerops-platform.md:413'
-const SECTION_SUBDOMAIN_NAME = '`zeropsSubdomain` is a NAME, not a state — docs/reference/zerops-platform.md:445'
-const SECTION_PROXY_FIRST = 'Verified live (2026-08-08) — a proxy before it fronts anything — docs/reference/zerops-platform.md:460'
+const SECTION_2026_08_03 = 'Verified live (2026-08-03, account `prg1`) — docs/reference/zerops-platform.md:210'
+const SECTION_2026_08_05 = 'Verified live (2026-08-05) — the user-data write path — docs/reference/zerops-platform.md:245'
+const SECTION_OVERRIDE = '`override` is a name-collision escape, not an update — docs/reference/zerops-platform.md:298'
+const SECTION_SUBDOMAIN = 'An import document cannot establish a subdomain — docs/reference/zerops-platform.md:429'
+const SECTION_SUBDOMAIN_NAME = '`zeropsSubdomain` is a NAME, not a state — docs/reference/zerops-platform.md:461'
+const SECTION_PROXY_FIRST = 'Verified live (2026-08-08) — a proxy before it fronts anything — docs/reference/zerops-platform.md:477'
 const SECTION_SERVICES_IMPORT =
-	'Verified live (2026-08-10) — a services-only import into an operator-created project — docs/reference/zerops-platform.md:486'
-const SECTION_BUILD_SOURCE = 'Verified live (2026-08-11) — where a build source lives — docs/reference/zerops-platform.md:524'
-const SECTION_NAMESPACE = 'Verified live (2026-08-18) — provisioning an app namespace — docs/reference/zerops-platform.md:665'
+	'Verified live (2026-08-10) — a services-only import into an operator-created project — docs/reference/zerops-platform.md:505'
+const SECTION_BUILD_SOURCE = 'Verified live (2026-08-11) — where a build source lives — docs/reference/zerops-platform.md:543'
+const SECTION_NAMESPACE = 'Verified live (2026-08-18) — provisioning an app namespace — docs/reference/zerops-platform.md:684'
 const SECTION_TOKEN_CAPABILITIES =
-	'Verified live (2026-08-21) — an integration token can read its own capabilities — docs/reference/zerops-platform.md:687'
-const SECTION_BY_NAME = 'Verified live (2026-08-21) — a missing service by name is a 400 — docs/reference/zerops-platform.md:705'
-const SECTION_UNPACKER = 'Verified live (2026-08-21) — the unpacker needs directory entries — docs/reference/zerops-platform.md:720'
-const SECTION_DELETE = 'Verified live (2026-08-21) — deleting a service, and what an absent id answers — docs/reference/zerops-platform.md:739'
-const SECTION_USER_DATA_PROCESS = 'Verified live (2026-08-19) — a user-data write is an asynchronous process — docs/reference/zerops-platform.md:766'
-const SECTION_POSTGRES_TLS = 'Verified live (2026-08-19) — PostgreSQL TLS is per service type — docs/reference/zerops-platform.md:786'
-const SECTION_REST_API = 'REST API — docs/reference/zerops-platform.md:147'
+	'Verified live (2026-08-21) — an integration token can read its own capabilities — docs/reference/zerops-platform.md:706'
+const SECTION_BY_NAME = 'Verified live (2026-08-21) — a missing service by name is a 400 — docs/reference/zerops-platform.md:724'
+const SECTION_UNPACKER = 'Verified live (2026-08-21) — the unpacker needs directory entries — docs/reference/zerops-platform.md:739'
+const SECTION_DELETE = 'Verified live (2026-08-21) — deleting a service, and what an absent id answers — docs/reference/zerops-platform.md:758'
+const SECTION_USER_DATA_PROCESS = 'Verified live (2026-08-19) — a user-data write is an asynchronous process — docs/reference/zerops-platform.md:817'
+const SECTION_POSTGRES_TLS = 'Verified live (2026-08-19) — PostgreSQL TLS is per service type — docs/reference/zerops-platform.md:837'
+const SECTION_REST_API = 'REST API — docs/reference/zerops-platform.md:149'
 const SECTION_HIERARCHY = 'Hierarchy and isolation — docs/reference/zerops-platform.md:28'
+const SECTION_CORRECTIONS = 'Verified live (2026-08-21) — what the first automated run corrected — docs/reference/zerops-platform.md:785'
 
 /** The keys the rows write. Literals, not credentials — nothing here is a secret and nothing is printed. */
 const KEY_PROCESS = 'FABRIKA_FACT_PROCESS'
@@ -170,7 +175,26 @@ const importDocument = (options: { override: boolean; maxContainers?: number }):
 		'',
 	].join('\n')
 
-/** One runtime service, so a create response can be counted on its own. */
+/**
+ * One runtime service WITHOUT `startWithoutCode`, which is the precondition every no-op fact needs.
+ *
+ * Measured 2026-08-21: `startWithoutCode: true` makes an import start an EMPTY DEPLOY as well as a create,
+ * and every later re-apply starts that deploy again — so a document carrying it is never a no-op, however
+ * unchanged it is. Without the flag an import starts one `stack.create`, the service settles at
+ * `READY_TO_DEPLOY`, and a re-apply really does nothing.
+ */
+const noopImportDocument = (options: { maxContainers?: number }): string =>
+	[
+		'services:',
+		'  - hostname: {noopHostname}',
+		'    type: alpine/bun@1.3',
+		'    envIsolation: service',
+		'    override: true',
+		...(options.maxContainers === undefined ? [] : [`    maxContainers: ${options.maxContainers}`]),
+		'',
+	].join('\n')
+
+/** One runtime service WITH `startWithoutCode`, so a create response can be counted on its own. */
 const COUNT_IMPORT_DOCUMENT = [
 	'services:',
 	'  - hostname: {countHostname}',
@@ -302,19 +326,80 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 	},
 	{
 		id: 'import-process-count-per-service',
-		section: SECTION_SERVICES_IMPORT,
+		section: SECTION_CORRECTIONS,
 		// Its OWN service: the count is a property of a CREATE response, and the row above already consumed
 		// the only other create this run makes.
 		request: { method: 'POST', path: '/project/{projectId}/service-stack/import', body: { yaml: COUNT_IMPORT_DOCUMENT } },
-		// Two per RUNTIME service. The managed half (exactly one) needs a database service the suite will not
-		// provision, so that half stays prose in the reference doc.
-		expect: { status: 200, bodyShape: { 'serviceStacks[name={countHostname}].processes': { kind: 'lengthEquals', length: 2 } } },
+		// TWO for a runtime service imported `startWithoutCode: true`, and the two are the create and the
+		// EMPTY DEPLOY that flag asks for — not two halves of one creation. A runtime service imported without
+		// the flag gets ONE (the row below), and a MANAGED service gets one, which needs a database service
+		// this suite will not provision and so stays prose in the reference doc.
+		expect: {
+			status: 200,
+			bodyCounts: {
+				'serviceStacks[name={countHostname}].processes[*]': 2,
+				'serviceStacks[name={countHostname}].processes[actionName=stack.create]': 1,
+				'serviceStacks[name={countHostname}].processes[actionName=stack.deploy]': 1,
+			},
+		},
 		awaitProcess: 'serviceStacks[*].processes[*].id',
 		capture: { countServiceId: 'serviceStacks[name={countHostname}].id' },
 		live: 'service',
 		emulator: false,
 		emulatorNote:
-			'the double creates exactly one `stack.create` per created service; splitting managed from runtime needs a service catalog nobody has written down, and guessing one is what this table exists to stop',
+			'the double creates one `stack.create` and models no empty deploy on create; splitting managed from runtime would also need a service catalog nobody has written down, and guessing one is what this table exists to stop',
+	},
+	{
+		id: 'reimport-of-start-without-code-redeploys',
+		section: SECTION_OVERRIDE,
+		// The setup CREATES the service where it does not exist and RE-APPLIES it where it does, so both sides
+		// reach the same state and the request below is a re-apply either way.
+		setup: [{
+			method: 'POST',
+			path: '/project/{projectId}/service-stack/import',
+			body: { yaml: COUNT_IMPORT_DOCUMENT },
+			awaitProcess: 'serviceStacks[*].processes[*].id',
+			capture: { countServiceId: 'serviceStacks[name={countHostname}].id' },
+		}],
+		// `override` is a no-op only for a document that does NOT carry `startWithoutCode`. This one does, so
+		// every re-apply activates an empty version again — the destructive case, seen from the other side.
+		request: { method: 'POST', path: '/project/{projectId}/service-stack/import', body: { yaml: COUNT_IMPORT_DOCUMENT } },
+		expect: {
+			status: 200,
+			bodyCounts: {
+				'serviceStacks[name={countHostname}].processes[*]': 1,
+				'serviceStacks[name={countHostname}].processes[actionName=stack.deploy]': 1,
+			},
+		},
+		awaitProcess: 'serviceStacks[*].processes[*].id',
+		live: 'service',
+		emulator: true,
+	},
+	{
+		id: 'import-without-start-without-code-is-one-process',
+		section: SECTION_CORRECTIONS,
+		request: { method: 'POST', path: '/project/{projectId}/service-stack/import', body: { yaml: noopImportDocument({}) } },
+		expect: {
+			status: 200,
+			bodyCounts: {
+				'serviceStacks[name={noopHostname}].processes[*]': 1,
+				'serviceStacks[name={noopHostname}].processes[actionName=stack.create]': 1,
+			},
+		},
+		awaitProcess: 'serviceStacks[*].processes[*].id',
+		capture: { noopServiceId: 'serviceStacks[name={noopHostname}].id' },
+		live: 'service',
+		emulator: true,
+	},
+	{
+		id: 'service-without-code-reads-ready-to-deploy',
+		section: SECTION_CORRECTIONS,
+		request: { method: 'GET', path: '/service-stack/{noopServiceId}' },
+		expect: { status: 200, bodyShape: { status: { kind: 'equals', value: 'READY_TO_DEPLOY' } } },
+		live: 'service',
+		emulator: false,
+		emulatorNote:
+			'the double creates every service `ACTIVE` and models no pre-deploy lifecycle state — the same divergence as `import-returns-before-services-exist`',
 	},
 	{
 		id: 'service-by-name-present-is-200',
@@ -327,8 +412,9 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 	{
 		id: 'import-unchanged-is-a-noop',
 		section: SECTION_OVERRIDE,
-		request: { method: 'POST', path: '/project/{projectId}/service-stack/import', body: { yaml: importDocument({ override: true }) } },
-		expect: { status: 200, bodyShape: { 'serviceStacks[name={hostname}].processes': { kind: 'emptyArray' } } },
+		// The NO-startWithoutCode service, and that is the whole precondition: see `noopImportDocument`.
+		request: { method: 'POST', path: '/project/{projectId}/service-stack/import', body: { yaml: noopImportDocument({}) } },
+		expect: { status: 200, bodyShape: { 'serviceStacks[name={noopHostname}].processes': { kind: 'emptyArray' } } },
 		live: 'service',
 		emulator: true,
 	},
@@ -338,10 +424,13 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		request: {
 			method: 'POST',
 			path: '/project/{projectId}/service-stack/import',
-			body: { yaml: importDocument({ override: true, maxContainers: 3 }) },
+			body: { yaml: noopImportDocument({ maxContainers: 3 }) },
 		},
 		// Zero processes IS the fact: a changed sizing field starts nothing, so the re-apply reconciles nothing.
-		expect: { status: 200, bodyShape: { 'serviceStacks[name={hostname}].processes': { kind: 'emptyArray' } } },
+		// The read-back stays at the platform default too (measured 2026-08-21:
+		// `horizontalAutoscaling.maxContainerCount` unmoved at 10), which the reference doc records — a row
+		// cannot assert a default without asserting the default itself.
+		expect: { status: 200, bodyShape: { 'serviceStacks[name={noopHostname}].processes': { kind: 'emptyArray' } } },
 		live: 'service',
 		emulator: true,
 	},
@@ -358,6 +447,8 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		section: SECTION_SUBDOMAIN,
 		request: { method: 'POST', path: '/project/{projectId}/service-stack/import', body: { yaml: IMPORT_WITH_SUBDOMAIN_FLAG } },
 		expect: { status: 200 },
+		// It carries `startWithoutCode`, so the re-apply starts an empty deploy; read the flag back after it.
+		awaitProcess: 'serviceStacks[*].processes[*].id',
 		then: [{
 			method: 'GET',
 			path: '/service-stack/{serviceId}',
@@ -382,14 +473,6 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		// ever read off the wire — so the row asserts what was measured and no more.
 		request: { method: 'PUT', path: '/service-stack/{serviceId}/trigger-pipeline', body: {} },
 		expect: { status: 400 },
-		live: 'service',
-		emulator: true,
-	},
-	{
-		id: 'user-data-list-always-400',
-		section: SECTION_2026_08_03,
-		request: { method: 'GET', path: '/service-stack/{serviceId}/user-data' },
-		expect: { status: 400, code: 'serviceStackNotFound' },
 		live: 'service',
 		emulator: true,
 	},
@@ -419,6 +502,28 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 			},
 		},
 		awaitProcess: 'id',
+		live: 'service',
+		emulator: true,
+	},
+	{
+		id: 'user-data-list-is-a-200-list',
+		section: SECTION_CORRECTIONS,
+		// SUPERSEDES the 2026-08-03 and 2026-08-05 measurements, which recorded an unconditional
+		// `400 serviceStackNotFound` here. Measured 2026-08-21: 200 with `{ list, totalCount }` on a service
+		// with code and without. The client still reads `/env` — that is where the record ids it writes with
+		// come from, and this endpoint's paging terms were never verified.
+		request: { method: 'GET', path: '/service-stack/{serviceId}/user-data' },
+		expect: {
+			status: 200,
+			bodyShape: {
+				list: { kind: 'array' },
+				// The key the row above wrote, so the item shape is read off a record this run owns.
+				[`list[key=${KEY_PROCESS}].id`]: { kind: 'nonEmptyString' },
+				[`list[key=${KEY_PROCESS}].serviceStackId`]: { kind: 'equals', value: '{serviceId}' },
+				[`list[key=${KEY_PROCESS}].content`]: { kind: 'nonEmptyString' },
+				[`list[key=${KEY_PROCESS}].type`]: { kind: 'nonEmptyString' },
+			},
+		},
 		live: 'service',
 		emulator: true,
 	},
@@ -526,14 +631,29 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		emulator: true,
 	},
 	{
-		id: 'subdomain-name-before-deploy',
-		section: SECTION_PROXY_FIRST,
-		request: { method: 'GET', path: '/service-stack/{serviceId}/env' },
+		id: 'subdomain-name-absent-before-any-deploy',
+		section: SECTION_CORRECTIONS,
+		// The service imported WITHOUT `startWithoutCode`, so nothing has ever deployed on it. Measured
+		// 2026-08-21: the key is not there at all — a reader must treat its absence as "no name yet", never as
+		// an empty name.
+		request: { method: 'GET', path: '/service-stack/{noopServiceId}/env' },
+		expect: { status: 200, bodyShape: { items: { kind: 'array' }, 'items[key=zeropsSubdomain].key': { kind: 'absent' } } },
+		live: 'service',
+		// The double writes no platform variables of its own, so it agrees here by construction.
+		emulator: true,
+	},
+	{
+		id: 'subdomain-name-after-empty-deploy',
+		section: SECTION_CORRECTIONS,
+		// The `startWithoutCode` service, whose EMPTY version has deployed — that deploy is the precondition,
+		// not the import. Measured 2026-08-21: present, one line, no port segment, and `type: SYSTEM`
+		// (the 2026-08-08 note called it `READ_ONLY`).
+		request: { method: 'GET', path: '/service-stack/{countServiceId}/env' },
 		expect: {
 			status: 200,
 			bodyShape: {
 				'items[key=zeropsSubdomain].content': { kind: 'nonEmptyString' },
-				'items[key=zeropsSubdomain].type': { kind: 'equals', value: 'READ_ONLY' },
+				'items[key=zeropsSubdomain].type': { kind: 'equals', value: 'SYSTEM' },
 			},
 		},
 		live: 'service',
@@ -810,9 +930,12 @@ const member = (value: unknown, key: string): unknown =>
  * Two bracket forms, which is all the rows need: `name[*]` walks every element of an array, and
  * `name[field=value]` selects the elements of an array whose `field` equals `value`.
  */
+/** Segments split on `.` — but never inside a bracket, where a filter value may hold one. */
+const segmentsOf = (path: string): string[] => path.match(/[^.[\]]+(?:\[[^\]]*\])?/g) ?? []
+
 export const resolvePath = (value: unknown, path: string): unknown[] => {
 	let current: unknown[] = [value]
-	for (const segment of path.split('.')) {
+	for (const segment of segmentsOf(path)) {
 		const parsed = SEGMENT.exec(segment)
 		if (parsed === null) {
 			throw new Error(`platform-facts: unreadable path segment \`${segment}\``)
@@ -857,10 +980,6 @@ const checkField = (found: unknown, check: FactFieldCheck, context: FactContext)
 		case 'presentUnrendered':
 			// Deliberately says nothing about the value: this check exists for fields that carry a credential.
 			return typeof found === 'string' ? null : 'expected a string; the value is not rendered because it may be a credential'
-		case 'lengthEquals':
-			return Array.isArray(found) && found.length === check.length
-				? null
-				: `expected an array of ${check.length}, found ${Array.isArray(found) ? `${found.length}` : render(found)}`
 		case 'equals': {
 			const wanted = substitute(check.value, context)
 			return found === wanted ? null : `expected ${JSON.stringify(wanted)}, found ${render(found)}`
@@ -945,6 +1064,13 @@ const assertExpectation = (fact: PlatformFact, label: string, outcome: StepOutco
 				fact.section,
 				`${label} answered a message that does not contain ${JSON.stringify(expect.messageContains)}`,
 			)
+		}
+	}
+	for (const [path, count] of Object.entries(expect.bodyCounts ?? {})) {
+		const resolved = substitute(path, context)
+		const matched = resolvePath(outcome.body, resolved)
+		if (matched.length !== count) {
+			throw new PlatformFactError(fact.id, fact.section, `${label} \`${resolved}\` matched ${matched.length} value(s), expected ${count}`)
 		}
 	}
 	for (const [path, check] of Object.entries(expect.bodyShape ?? {})) {

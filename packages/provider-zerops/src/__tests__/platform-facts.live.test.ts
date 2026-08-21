@@ -7,7 +7,7 @@
 //     bun test packages/provider-zerops/src/__tests__/platform-facts.live.test.ts
 //   FABRIKA_LIVE_ZEROPS_SLOW=1 …    also runs the two build-length unpacker rows (minutes each)
 //
-// WHAT IT DOES TO THE PROJECT. It imports three throwaway services named `wu1<run id>*`, writes and removes
+// WHAT IT DOES TO THE PROJECT. It imports four throwaway services named `wu1<run id>*`, writes and removes
 // a handful of `FABRIKA_FACT_*` variables on one of them, and deletes both services again — including when
 // a row failed. It never creates or deletes a project, never touches a service it did not create, and never
 // adopts one left behind by an earlier run: a leaked name is REPORTED at startup and left alone, because
@@ -83,7 +83,7 @@ const account = readLiveAccount(process.env)
 const hasLiveAccount = account !== null
 
 export const skipReason = `skipped: set ${TOKEN_VAR} and ${PROJECT_VAR} (plus ${SLOW_VAR}=1 for the two build-length rows) to run `
-	+ `the platform-facts table against a real Zerops account — it imports three throwaway ${RUN_PREFIX}* services into that `
+	+ `the platform-facts table against a real Zerops account — it imports four throwaway ${RUN_PREFIX}* services into that `
 	+ `project, writes and deletes their variables, and deletes every service it created again`
 
 if (!hasLiveAccount) {
@@ -209,11 +209,13 @@ describe.skipIf(!hasLiveAccount)('the platform-facts table, against a real Zerop
 		context.set('hostname', hostname)
 		context.set('deleteHostname', `${hostname}d`)
 		context.set('countHostname', `${hostname}c`)
+		// The one imported WITHOUT `startWithoutCode`, which is the precondition every no-op fact needs.
+		context.set('noopHostname', `${hostname}n`)
 		context.set('absentHostname', `${hostname}x`)
 		context.set('setupProbeHostname', `${hostname}s`)
 		// A syntactically well-formed id this account has never issued. The fact under test is the STATUS.
 		context.set('absentAppVersionId', 'AAAAAAAAAAAAAAAAAAAAAA')
-		created.push(hostname, `${hostname}d`, `${hostname}c`)
+		created.push(hostname, `${hostname}d`, `${hostname}c`, `${hostname}n`)
 		// The `zeropsSetup` row expects a refusal; if the platform ever accepts it, the service is still ours.
 		cleanup.push(...created, `${hostname}s`)
 		console.info(`platform-facts.live: run ${runId} will create ${created.join(', ')} in the configured project`)
