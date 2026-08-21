@@ -11,10 +11,23 @@
 /** The only tier a bootstrap can install. See `assertInstallableTier`. */
 export type InstallablePlatformTier = 'light'
 
+/**
+ * Where the installation's project comes from.
+ *
+ * A UNION rather than an optional id beside a boolean, because the two mistakes worth making
+ * unrepresentable are "neither" and "both": the parser is the only place that can tell them apart, and
+ * downstream code must not have to ask a second time.
+ */
+export type InstallProjectSource =
+	/** One the operator created, empty, by hand. */
+	| { readonly kind: 'existing'; readonly projectId: string }
+	/** One this command creates, from the same declaration the provisioning import is compiled from. */
+	| { readonly kind: 'create'; readonly projectName: string }
+
 /** Every input `runInstall` takes from the operator. */
 export interface PlatformInstallInput {
-	/** The project the operator created, empty, by hand. */
-	readonly projectId: string
+	/** The project this installation is brought up in — named, or created here. */
+	readonly project: InstallProjectSource
 	/** The client the project belongs to — required, because the control plane's token is minted on it. */
 	readonly clientId: string
 	/** Zerops personal access token. Environment only. */
@@ -35,7 +48,7 @@ export interface PlatformInstallInput {
 /** The public repository every installation is built from, and the default for `--from-git`. */
 export const FABRIKA_REPOSITORY_URL = 'https://github.com/contember/fabrika-platform'
 
-const FLAGS = ['--project-id', '--client-id', '--env', '--scheme', '--from-git', '--tier'] as const
+const FLAGS = ['--project-id', '--project-name', '--client-id', '--env', '--scheme', '--from-git', '--tier'] as const
 
 /**
  * The one way this command runs with nobody watching it.
@@ -45,6 +58,12 @@ const FLAGS = ['--project-id', '--client-id', '--env', '--scheme', '--from-git',
  * inference: it makes the choice explicit, and it puts it in the shell history of whoever ran it.
  */
 export const UNATTENDED_FLAG = '--yes'
+
+/** `--create-project`: bring the project up too, instead of naming one the operator made. */
+export const CREATE_PROJECT_FLAG = '--create-project'
+
+/** The two flags that carry no value. Written with one, they are `unexpected argument` like any other. */
+const BOOLEAN_FLAGS = [UNATTENDED_FLAG, CREATE_PROJECT_FLAG] as const
 
 const readFlag = (argv: readonly string[], name: string): string | undefined => {
 	const prefix = `${name}=`
@@ -77,7 +96,7 @@ const required = (value: string | undefined, flag: string, variable: string): st
 
 const assertKnownArguments = (argv: readonly string[]): void => {
 	for (const arg of argv) {
-		if (arg === UNATTENDED_FLAG) {
+		if (BOOLEAN_FLAGS.some((flag) => flag === arg)) {
 			continue
 		}
 		const name = arg.split('=')[0] ?? arg
@@ -119,6 +138,41 @@ const readScheme = (argv: readonly string[], env: Record<string, string | undefi
 	throw new Error('--scheme must be http or https')
 }
 
+const readEnvironment = (argv: readonly string[], env: Record<string, string | undefined>): string =>
+	required(setting(argv, env, '--env', 'FABRIKA_PLATFORM_ENVIRONMENT'), '--env', 'FABRIKA_PLATFORM_ENVIRONMENT')
+
+/** The name a created project takes when the operator did not choose one: the installation's own. */
+const defaultProjectName = (environment: string): string => `fabrika-${environment}`
+
+/**
+ * Decide which project this run installs into, and refuse the two ways of asking for both.
+ *
+ * `--project-id` and `--create-project` are alternatives, not a pair — one of them names a project
+ * that exists and the other makes one, and a run that was given both cannot be resolved to the operator's
+ * intent. The refusal names the SOURCE the id came from, because an id inherited from a shell that
+ * exported `FABRIKA_ZEROPS_PROJECT_ID` is the case where the collision is invisible on the command line.
+ */
+const readProjectSource = (argv: readonly string[], env: Record<string, string | undefined>): InstallProjectSource => {
+	const projectId = setting(argv, env, '--project-id', 'FABRIKA_ZEROPS_PROJECT_ID')
+	const projectName = readFlag(argv, '--project-name')
+	if (!argv.includes(CREATE_PROJECT_FLAG)) {
+		if (projectName !== undefined) {
+			throw new Error(
+				`--project-name names a project to CREATE, so it needs ${CREATE_PROJECT_FLAG} beside it. Installing into a project that already `
+					+ 'exists takes --project-id=<id>, which names it by id',
+			)
+		}
+		return { kind: 'existing', projectId: required(projectId, '--project-id', 'FABRIKA_ZEROPS_PROJECT_ID') }
+	}
+	if (projectId !== undefined) {
+		const source = readFlag(argv, '--project-id') === undefined ? 'FABRIKA_ZEROPS_PROJECT_ID' : '--project-id'
+		throw new Error(
+			`${CREATE_PROJECT_FLAG} creates the project and ${source} names one that already exists — pass one or the other, never both`,
+		)
+	}
+	return { kind: 'create', projectName: projectName ?? defaultProjectName(readEnvironment(argv, env)) }
+}
+
 /** Parse the command's arguments and environment into the one input `runInstall` takes. */
 export const parsePlatformInstallArgs = (
 	argv: readonly string[],
@@ -127,12 +181,12 @@ export const parsePlatformInstallArgs = (
 	assertKnownArguments(argv)
 	const apiBaseUrl = readEnv(env, 'FABRIKA_ZEROPS_API_URL')
 	return {
-		projectId: required(setting(argv, env, '--project-id', 'FABRIKA_ZEROPS_PROJECT_ID'), '--project-id', 'FABRIKA_ZEROPS_PROJECT_ID'),
+		project: readProjectSource(argv, env),
 		// Named even when the project id is known: `POST /client/{id}/integration-token` is addressed by
 		// CLIENT, and the project read does not hand one back.
 		clientId: required(setting(argv, env, '--client-id', 'FABRIKA_ZEROPS_CLIENT_ID'), '--client-id', 'FABRIKA_ZEROPS_CLIENT_ID'),
 		accessToken: required(readEnv(env, 'FABRIKA_ZEROPS_ACCESS_TOKEN'), '(no flag)', 'FABRIKA_ZEROPS_ACCESS_TOKEN'),
-		environment: required(setting(argv, env, '--env', 'FABRIKA_PLATFORM_ENVIRONMENT'), '--env', 'FABRIKA_PLATFORM_ENVIRONMENT'),
+		environment: readEnvironment(argv, env),
 		scheme: readScheme(argv, env),
 		buildFromGit: setting(argv, env, '--from-git', 'FABRIKA_ZEROPS_BUILD_FROM_GIT') ?? FABRIKA_REPOSITORY_URL,
 		tier: assertInstallableTier(setting(argv, env, '--tier', 'FABRIKA_PLATFORM_TIER')),

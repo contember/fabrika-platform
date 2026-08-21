@@ -8,9 +8,10 @@
 //     pipeline step owns a document spanning every service the pipeline deploys.
 //   • **The order carries a security property.** Since ADR-0022 the application enforces nothing, so
 //     deploying control at a new version while the previous, more permissive manifest is still in
-//     front of it leaves `/api/*` open for the length of the deploy. The order is therefore
-//     IAM → Operations → source → **proxy** → control: the dependency order, with the enforcement point moved
-//     ahead of the service whose gates just widened. `__tests__/deploy.test.ts` pins it.
+//     front of it leaves `/api/*` open for the length of the deploy. The sequence is therefore
+//     (IAM + Operations + source) → **proxy** → control: the three that order nothing against each
+//     other built at once, with the enforcement point ahead of the service whose gates just widened.
+//     `__tests__/deploy.test.ts` pins it.
 //
 // Bringing `fabrika-test` to HEAD on 2026-08-05 took `zops push` from a laptop, once per service, in a
 // hand-chosen order, and everything that made that run correct stayed in a run log. This file is that
@@ -54,11 +55,12 @@ import { mergePlatformProxyManifest, readLiveProxyManifest } from './manifest'
 import { platformProxyAppFor, resolvePlatformProxyManifest } from './proxy-manifest'
 
 /**
- * The five services this command deploys, IN THE ORDER IT DEPLOYS THEM.
+ * The five services this command touches, in the order it RESOLVES and WRITES them.
  *
- * IAM first because everything authenticates against it; Operations and source before their control
- * consumers; **the proxy before control** because enforcement must never describe an older version of
- * the gate modules than the code behind it; control last.
+ * It is no longer the order they are deployed in — that is `PLATFORM_CONCURRENT_DEPLOY` followed by
+ * `PLATFORM_SEQUENTIAL_DEPLOY`, and the two stages concatenate back to this list (pinned by
+ * `zerops/__tests__/deploy-order.test.ts`). What this list still decides is which services must exist
+ * and which environment is written, both of which happen for ALL FIVE before any of them is deployed.
  *
  * Each name is a service hostname in the topology AND the `zerops.yaml` setup name the pipeline
  * selects — the platform's own "setup name defaults to the hostname" rule.
@@ -67,6 +69,26 @@ import { platformProxyAppFor, resolvePlatformProxyManifest } from './proxy-manif
 export const PLATFORM_DEPLOY_ORDER = ['iam', 'operations', 'source', 'proxy', 'control'] as const
 
 export type PlatformDeployService = (typeof PLATFORM_DEPLOY_ORDER)[number]
+
+/**
+ * The three services built AT ONCE, because nothing orders them against each other.
+ *
+ * None of the three calls a sibling at boot: IAM holds no sibling origin at all, Operations only
+ * CONSTRUCTS its IAM client (the first request is the first call), and source imports a key with no
+ * network. Each readiness gate hits the service's own `/healthz`, and no deploy-written variable of one
+ * is read by another's BUILD — the only build-time read on the whole path is the proxy reading its own
+ * manifest. So the order among them was arbitrary, and paying for it sequentially cost about 3 min 45 s
+ * of the ~9 min 35 s a warm five-service roll took (two measured runs, 2026-08-21).
+ *
+ * What is NOT arbitrary stays: every environment write happens before any of these starts, the proxy
+ * is deployed after all three, and control after the proxy (ADR-0022 — the enforcement point ahead of
+ * the service whose gates just widened). `zerops/__tests__/deploy-order.test.ts` and
+ * `__tests__/deploy.test.ts` fail if that sequence changes.
+ */
+export const PLATFORM_CONCURRENT_DEPLOY = ['iam', 'operations', 'source'] as const
+
+/** What is deployed after the concurrent stage, one at a time and in this order. */
+export const PLATFORM_SEQUENTIAL_DEPLOY = ['proxy', 'control'] as const
 
 /** The proxy's hostname. The only publicly routed service, and the one that carries the manifest. */
 export const PLATFORM_PROXY_SERVICE = 'proxy'
@@ -408,6 +430,38 @@ export const deployPlatformService = async (
 }
 
 /**
+ * Build `PLATFORM_CONCURRENT_DEPLOY` at once, and let every one of them finish before failing.
+ *
+ * `allSettled` rather than `all`: a rejection from `all` would leave the other two builds running with
+ * nobody polling them, so the command would exit while the platform was still writing app versions —
+ * and the second rejection would be unhandled. Here every build is followed to a terminal status.
+ *
+ * EVERY failure is logged and the first is thrown, where "first" is this list's order and not the order
+ * they failed in — three builds that started together have no meaningful chronology, and a command that
+ * reported only one of two broken services would send the operator back for a second run to find the
+ * other. `deployPlatformService` names the service in each message.
+ */
+const deployConcurrently = async (
+	services: ReadonlyMap<PlatformDeployService, ResolvedService>,
+	input: PlatformDeployInput,
+	collaborators: PlatformDeployCollaborators,
+): Promise<void> => {
+	const outcomes = await Promise.allSettled(
+		PLATFORM_CONCURRENT_DEPLOY.map((hostname) => deployPlatformService(serviceOf(services, hostname), input, collaborators)),
+	)
+	const failures = outcomes.flatMap((outcome) =>
+		outcome.status === 'rejected' ? [outcome.reason instanceof Error ? outcome.reason : new Error(String(outcome.reason))] : []
+	)
+	for (const failure of failures) {
+		collaborators.log.warn(failure.message)
+	}
+	const first = failures[0]
+	if (first !== undefined) {
+		throw first
+	}
+}
+
+/**
  * Publish the proxy on its `*.zerops.app` subdomain — the one thing an import document cannot do.
  *
  * The decision is the READ-BACK and never the call returning: on an already-published service the
@@ -530,8 +584,9 @@ export const deployPlatform = async (
 	// EVERY deploy is after EVERY write. That is what makes the sequence fail closed: a manifest this
 	// command could not apply leaves the previous manifest in front of the previous code, never in front
 	// of new code — and `ENVIRONMENT` is in place before any service that refuses `local` restarts.
-	log.step(`Deploy ${PLATFORM_DEPLOY_ORDER.join(' → ')}`)
-	for (const hostname of PLATFORM_DEPLOY_ORDER) {
+	log.step(`Deploy ${PLATFORM_CONCURRENT_DEPLOY.join(' + ')} together, then ${PLATFORM_SEQUENTIAL_DEPLOY.join(' → ')}`)
+	await deployConcurrently(services, input, collaborators)
+	for (const hostname of PLATFORM_SEQUENTIAL_DEPLOY) {
 		await deployPlatformService(serviceOf(services, hostname), input, collaborators)
 	}
 

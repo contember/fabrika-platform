@@ -7,12 +7,14 @@ import { generatedArtifacts } from '../zerops/artifacts'
 import { assertArtifactMatchesSchema } from '../zerops/validate'
 import { consoleAdminCollaborators, runPlatformAdmin } from './admin'
 import { parsePlatformAdminArgs, REISSUE_FLAG } from './admin-options'
-import { deployPlatform, PLATFORM_DEPLOY_ORDER } from './deploy'
+import { deployPlatform, PLATFORM_CONCURRENT_DEPLOY, PLATFORM_DEPLOY_ORDER, PLATFORM_SEQUENTIAL_DEPLOY } from './deploy'
 import { parsePlatformDeployArgs } from './deploy-options'
 import { consoleInitCollaborators, parseInitArgs, runInit } from './init'
 import { consoleInstallCollaborators, runInstall } from './install'
 import { parsePlatformInstallArgs, UNATTENDED_FLAG } from './install-options'
 import { consoleDeployLog } from './log'
+import { consoleUpgradeCollaborators, FABRIKA_REPOSITORY, runUpgrade, SIDECAR_BRANCH } from './upgrade'
+import { parsePlatformUpgradeArgs, UPGRADE_DRY_RUN_FLAG } from './upgrade-options'
 
 const USAGE = `Zerops installation
 
@@ -22,17 +24,21 @@ Commands:
   fabrika platform plan    --provider=zerops
   fabrika platform deploy  --provider=zerops [options]
   fabrika platform admin   --provider=zerops --email=<address> --iam-host=<host> [--scheme=<http|https>] [${REISSUE_FLAG}]
+  fabrika platform upgrade --provider=zerops --to=<tag> [<installation>] [--sidecar=<path>|<owner>/<name>] [${UPGRADE_DRY_RUN_FLAG}]
 
 \`install\` CREATES an installation in a project you created empty; \`init\` and \`deploy\` UPDATE AN
 INSTALLATION THAT ALREADY EXISTS. Run them in that order: install generates the provisioning key that
 init then writes into the operator's GitHub Environment. \`admin\` comes LAST, once the installation is
-serving: it admits the first human, and nothing before it can sign in.
+serving: it admits the first human, and nothing before it can sign in. \`upgrade\` is the one you run
+again and again afterwards: it moves the sidecar's pin to a newer published release and follows the
+deploy that push triggers.
 
 ── platform install ──────────────────────────────────────────────────────────────────────────────
 
-The from-scratch bring-up. You create an EMPTY Zerops project with core package LIGHT and
-\`envIsolation: service\` — a project-level setting Zerops accepts at creation only, and which this
-command cannot read back or correct — and everything after that is this command.
+The from-scratch bring-up. With \`--create-project\` it creates the project too, with core package
+LIGHT and \`envIsolation: service\` — the two settings Zerops accepts at project CREATION only and never
+afterwards. \`--project-id=<id>\` installs into an empty project you created yourself instead, with both
+already right; nothing here can read \`envIsolation\` back or correct it.
 
 Interactive and laptop-side. It CONFIRMS before every step that leaves your machine: reading the
 project, importing the services, minting the token, building the proxy, writing the variables, and
@@ -40,7 +46,8 @@ deploying. Declining any of them stops there; nothing before the import is a mut
 is not a terminal is refused unless \`${UNATTENDED_FLAG}\` is given — with nobody there to answer, a default yes
 is not consent.
 
-  1. read the project and refuse a core package the selected tier does not match
+  1. create the project and wait for it to be ACTIVE (\`--create-project\`; its id is printed before
+     the wait), or read the one you named — and refuse a core package the tier does not match
   2. import ${PLATFORM_DEPLOY_ORDER.length + 2} services without code, and wait for the import's processes
   3. generate seven secrets and mint the control plane's Zerops INTEGRATION token
      (client role NO_ACCESS, ADMIN on this project only — never your personal token)
@@ -60,6 +67,10 @@ import document. Authentication is PASSWORD ONLY; no administrator exists yet wh
 Options (a flag beats the environment variable beside it):
 
   --project-id=<id>                 FABRIKA_ZEROPS_PROJECT_ID       the empty project you created
+  --create-project                                                  create the project on --client-id instead of
+                                                                    naming one with --project-id
+  --project-name=<name>                                             the created project's name, default
+                                                                    fabrika-<env>
   --client-id=<id>                  FABRIKA_ZEROPS_CLIENT_ID        the client the token is minted on
   --env=<name>                      FABRIKA_PLATFORM_ENVIRONMENT    written to every service as ENVIRONMENT
   --scheme=<http|https>             FABRIKA_PLATFORM_SCHEME         default https
@@ -125,13 +136,16 @@ ONE step — on Cloudflare the order lives in the scaffolded workflow instead, d
   1. resolve the project and its ${PLATFORM_DEPLOY_ORDER.join(', ')} services by hostname
   2. write each service's environment: the composed proxy manifest, the installation's environment
      name, and the origins derived from the resolved public hosts
-  3. deploy ${PLATFORM_DEPLOY_ORDER.join(' → ')}, waiting for each to become ACTIVE
+  3. deploy ${PLATFORM_CONCURRENT_DEPLOY.join(' + ')} together, then ${PLATFORM_SEQUENTIAL_DEPLOY.join(' → ')}, waiting for each to become ACTIVE
   4. ensure the proxy's public entry point
   5. reconcile the console's app schema and register its return origin with IAM
 
 The order is a security property, not just a dependency: the application enforces nothing
 (ADR-0022), so the proxy is deployed BEFORE control, and every environment write happens before any
-deploy. A run that cannot apply the manifest never reaches step 3.
+deploy. A run that cannot apply the manifest never reaches step 3. ${PLATFORM_CONCURRENT_DEPLOY.join(', ')} order
+NOTHING against each other — none calls a sibling at boot and none reads a variable another's build
+needs — so they build at once; a failure of one is reported with that service named, and the other two
+are still followed to their end.
 
 The proxy manifest is MERGED, never replaced. On a shared project an application's entry lives in the
 same document; entries the platform does not own are carried through unchanged. An entry standing on
@@ -193,6 +207,41 @@ Options (a flag beats the environment variable beside it):
   ${REISSUE_FLAG}                                                         replace an outstanding enrollment
 
   FABRIKA_IAM_PROVISIONING_KEY      required   the px_ admin key \`install\` printed, environment only
+
+── platform upgrade ──────────────────────────────────────────────────────────────────────────────
+
+Roll a RUNNING installation onto a newer published fabrika release. Five steps in the sidecar
+repository \`platform init\` created, in one command: check that ${FABRIKA_REPOSITORY} carries the tag,
+write it to \`fabrika.ref\`, commit it as \`chore: roll <installation> forward to fabrika <tag>\`, push —
+and the push is what triggers the pipeline — then print the run's URL and watch it to its conclusion.
+
+The run URL is printed BEFORE the watch begins, so an operator who closes the terminal can come back
+to it. The generated workflow QUEUES behind an earlier roll rather than cancelling it, so a run may sit
+\`queued\` for a while; that is reported, not waited on silently.
+
+A published TAG stays the only acceptable pin (ADR-0025): a branch or a commit SHA is refused here,
+before anything is contacted, and again by the workflow at run time. It also refuses a directory that is
+not a checkout, a checkout not on \`${SIDECAR_BRANCH}\` or tracking no upstream (the workflow triggers on
+\`push: branches: [${SIDECAR_BRANCH}]\`, so a push from anywhere else deploys nothing), a sidecar with uncommitted
+changes to tracked files (the commit stages \`fabrika.ref\` alone), and a pin already equal to \`--to\` —
+though a pin that is committed and NEVER PUSHED says so instead, because that is what a failed push
+leaves behind and no deploy happened.
+
+A tag lookup that FAILS is a third answer and never "no such tag": a rate limit or an expired \`gh\`
+login reported as a missing tag sends an operator to check the wrong repository.
+
+  --to=<tag>                        required   the published fabrika release to roll onto, e.g. v0.1.0
+  <installation>                               names the sidecar \`platform init\` created: the checkout
+                                               ./fabrika-zerops-<installation> under the current directory
+  --sidecar=<path>                             a checkout somewhere else — anything that is not shaped
+                                               \`<owner>/<name>\`, so ./owner/name names a directory
+  --sidecar=<owner>/<name>                     a GitHub repository, cloned into a temporary directory
+                                               whose path is printed
+  ${UPGRADE_DRY_RUN_FLAG}                                    report the roll it would commit and stop
+
+Name the installation or the sidecar; naming both is fine and the sidecar wins. This command holds no
+credential of its own: \`gh\` and \`git\` carry the operator's own login, which is also why it runs on a
+laptop and not in the pipeline it triggers.
 `
 
 /** No cancellation source exists behind a CLI invocation; the ports all take a signal regardless. */
@@ -253,9 +302,13 @@ const runPlatformInstall = async (argv: readonly string[]): Promise<void> => {
 	await runInstall(input, consoleInstallCollaborators(input, consoleSchemaReconciler))
 }
 
+const runPlatformUpgrade = async (argv: readonly string[]): Promise<void> => {
+	await runUpgrade(parsePlatformUpgradeArgs(argv), consoleUpgradeCollaborators())
+}
+
 export const installationCli: InstallationCli = {
 	provider: 'zerops',
-	commands: ['install', 'init', 'plan', 'deploy', 'admin'],
+	commands: ['install', 'init', 'plan', 'deploy', 'admin', 'upgrade'],
 	usage: USAGE,
 	run: async (command: InstallationCommand, argv: readonly string[]) => {
 		if (command === 'install') {
@@ -276,6 +329,10 @@ export const installationCli: InstallationCli = {
 		}
 		if (command === 'admin') {
 			await runAdmin(argv)
+			return
+		}
+		if (command === 'upgrade') {
+			await runPlatformUpgrade(argv)
 			return
 		}
 		throw new Error(`Zerops installation does not support \`platform ${command}\``)

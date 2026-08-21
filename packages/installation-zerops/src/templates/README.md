@@ -27,7 +27,7 @@ The whole ordered sequence lives inside `fabrika platform deploy --provider=zero
 ```
 resolve the project and its services
   → write every service's environment (the composed proxy manifest, the environment name, the origins)
-  → deploy iam → operations → source → proxy → control, waiting for each
+  → deploy iam + operations + source together, then proxy → control, waiting for each
   → reconcile the console's app schema with IAM
   → ensure the public entry point
 ```

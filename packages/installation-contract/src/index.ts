@@ -11,11 +11,17 @@
  * than a step of `install`, because it is the one command that is useful long after the bring-up: an
  * installation whose only administrator left needs it, and a bring-up that got as far as the console
  * does not need to be repeated to use it.
+ *
+ * `upgrade` rolls a RUNNING installation onto a newer published fabrika release. It is separate from
+ * `deploy` because the two run in different places: `deploy` runs inside the operator's own pipeline
+ * and brings an installation to the checkout it was handed, while `upgrade` runs on the operator's
+ * machine and moves the pin that pipeline reads. A provider whose operator edits no pin does not
+ * declare it.
  */
-export type InstallationCommand = 'init' | 'install' | 'plan' | 'deploy' | 'admin'
+export type InstallationCommand = 'init' | 'install' | 'plan' | 'deploy' | 'admin' | 'upgrade'
 
 export const isInstallationCommand = (value: unknown): value is InstallationCommand =>
-	value === 'init' || value === 'install' || value === 'plan' || value === 'deploy' || value === 'admin'
+	value === 'init' || value === 'install' || value === 'plan' || value === 'deploy' || value === 'admin' || value === 'upgrade'
 
 export interface InstallationCli {
 	readonly provider: string

@@ -13,6 +13,7 @@ Usage:
   fabrika platform plan --provider=<cloudflare|zerops> [provider options]
   fabrika platform deploy --provider=<cloudflare|zerops> [provider options]
   fabrika platform admin --provider=zerops --email=<address> [provider options]
+  fabrika platform upgrade --provider=zerops --to=<tag> [<installation>] [--sidecar=<path>|<owner>/<name>]
   fabrika app deploy [--provider=cloudflare] --env=<env> [--config=<path>] [--dry-run]
   fabrika app build [--provider=zerops] --env=<env> [--config=<path>] [--output=<path>]
   fabrika namespace <plan|create|adopt|reconcile> --provider=zerops [provider options]
@@ -27,8 +28,9 @@ provider-neutral, loads no installation package, and speaks the same typed API t
 
 Which platform commands exist, and how WIDE each one is, is the provider's own answer — Zerops'
 \`platform deploy\` owns the whole ordered sequence while Cloudflare's is one step of a scaffolded
-workflow (ADR-0027), and only Zerops offers \`platform install\`, the from-scratch bring-up, and
-\`platform admin\`, which admits the first human to what that bring-up created. Run
+workflow (ADR-0027), and only Zerops offers \`platform install\`, the from-scratch bring-up,
+\`platform admin\`, which admits the first human to what that bring-up created, and \`platform upgrade\`,
+which rolls a running installation onto a newer published release. Run
 \`fabrika platform <command> --provider=<name> --help\` for that surface.
 `
 

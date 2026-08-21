@@ -206,7 +206,9 @@ fabrika platform plan --provider=cloudflare --runner-config=<path> --worker-conf
 fabrika platform deploy --provider=cloudflare --runner-config=<path> --worker-config=<path>
 fabrika platform init --provider=zerops <installation> [--repo=<owner>/<name>]
 fabrika platform plan --provider=zerops
+fabrika platform install --provider=zerops --client-id=<id> --env=<name> [--project-id=<id> | --create-project [--project-name=<name>]]
 fabrika platform deploy --provider=zerops [options]
+fabrika platform upgrade --provider=zerops --to=<tag> [<installation>] [--sidecar=<path>|<owner>/<name>]
 ```
 
 Both providers support all three operations, and **how wide each one is, is the
@@ -215,9 +217,9 @@ Zerops' `plan` is mutation-free and validates the generated installation
 artifacts. Its `deploy` owns the whole ordered sequence, while Cloudflare's
 composes the runner/control pair and the scaffolded workflow keeps the order. Its
 `init` creates and maintains the operator's sidecar repository for an installation
-that already exists; on Zerops the first bring-up (import the topology without
-code, write every secret, deploy once) remains a hand sequence, because a proxy
-that has never been deployed publishes no hostname for the manifest to carry.
+that already exists; on Zerops the first bring-up is `platform install`, which can
+also create the project it installs into; it is two passes, because a proxy that
+has never been deployed publishes no hostname for the manifest to carry.
 `fabrika platform <command> --provider=<name> --help` prints the installation's own
 surface. The CLI maps the official `cloudflare` and `zerops` ids to their
 installation packages and treats any other provider value as an importable package

@@ -3,7 +3,8 @@
 //
 // Every method of `ZeropsApi` is present. The BOOTSTRAP surface — `importServices`, `getProcess` and
 // `createIntegrationToken` — throws unless the fixture opts into it, so a `platform deploy` that ever
-// reaches for one fails the suite instead of quietly working; a project-level write has no opt-in at
+// reaches for one fails the suite instead of quietly working; `importProject` has its own opt-in, so a
+// run given a project id that creates one anyway fails too; and a project-level write has no opt-in at
 // all, because nothing may ever make one (ADR-0004).
 
 import {
@@ -11,6 +12,7 @@ import {
 	ZeropsApiError,
 	type ZeropsAppVersion,
 	type ZeropsProjectMode,
+	type ZeropsProjectStatus,
 	type ZeropsService,
 	type ZeropsServiceEnv,
 	type ZeropsServiceStatus,
@@ -35,6 +37,21 @@ export interface FakeBootstrap {
 	readonly imported: readonly FakeServiceSpec[]
 }
 
+/**
+ * A project this account does NOT have yet: `importProject` creates it, and only then can it be read.
+ *
+ * Present only in the `--create-project` fixtures. Without it `importProject` still throws, so a run that
+ * was given a project id and creates one anyway fails the suite.
+ */
+export interface FakeProjectCreation {
+	readonly clientId: string
+	/**
+	 * What `getProject` answers, one status per read, the last one repeating.
+	 * Live (2026-08-21): `NEW` at t+1 s → `CREATING` → `ACTIVE` at about t+20 s.
+	 */
+	readonly statuses?: readonly ZeropsProjectStatus[]
+}
+
 export interface FakeZerops {
 	readonly api: ZeropsApi
 	/** Every effect, in the order it happened: `env:<service>:<KEY>`, `deploy:<service>`, … */
@@ -49,6 +66,8 @@ export interface FakeZerops {
 	readonly importedProcesses: string[]
 	/** Every import document applied, as the YAML text that was sent. */
 	readonly imports: string[]
+	/** Every PROJECT import document applied — kept apart, because it is a different endpoint. */
+	readonly projectImports: string[]
 	/** The plaintext of every integration token this fake minted, so a test can hunt for it in a log. */
 	readonly mintedTokens: string[]
 	env(service: string): Map<string, string>
@@ -71,11 +90,14 @@ export const fakeZerops = (options: {
 	readonly projectMode?: ZeropsProjectMode
 	readonly services: readonly FakeServiceSpec[]
 	readonly bootstrap?: FakeBootstrap
+	/** When set, the project does not exist until `importProject` creates it. */
+	readonly creates?: FakeProjectCreation
 }): FakeZerops => {
 	const calls: string[] = []
 	const timeline: string[] = []
 	const importedProcesses: string[] = []
 	const imports: string[] = []
+	const projectImports: string[] = []
 	const mintedTokens: string[] = []
 	const live: FakeServiceSpec[] = [...options.services]
 	const byName = new Map(live.map((service) => [service.name, service]))
@@ -115,6 +137,11 @@ export const fakeZerops = (options: {
 	/** Which service each in-flight import process belongs to, so the last one can settle it. */
 	const settles = new Map<string, FakeServiceSpec>()
 
+	const creates = options.creates
+	const projectStatuses: readonly ZeropsProjectStatus[] = creates?.statuses ?? ['ACTIVE']
+	let projectExists = creates === undefined
+	let projectReads = 0
+
 	const admit = (service: FakeServiceSpec): void => {
 		live.push(service)
 		byName.set(service.name, service)
@@ -134,7 +161,6 @@ export const fakeZerops = (options: {
 	}
 
 	const api: ZeropsApi = {
-		importProject: NEVER('importProject'),
 		createAppVersion: NEVER('createAppVersion'),
 		buildAndDeployAppVersion: NEVER('buildAndDeployAppVersion'),
 		deleteAppVersion: NEVER('deleteAppVersion'),
@@ -145,6 +171,23 @@ export const fakeZerops = (options: {
 		readBuildLog: NEVER('readBuildLog'),
 		listProjects: NEVER('listProjects'),
 		findService: NEVER('findService'),
+
+		/** `POST /client/{id}/project/import`. The project exists only after this, and only once. */
+		importProject: async ({ clientId, yaml }) => {
+			if (creates === undefined) {
+				return NEVER('importProject')()
+			}
+			if (clientId !== creates.clientId) {
+				throw new Error(`zerops: project import failed (404)`)
+			}
+			if (projectExists) {
+				throw new Error('zerops: a second project was imported for one installation')
+			}
+			effect(`project-import:${clientId}`)
+			projectImports.push(yaml)
+			projectExists = true
+			return { projectId: options.projectId, projectName: options.projectName, services: [] }
+		},
 
 		importServices: async ({ projectId, yaml }) => {
 			if (bootstrap === undefined) {
@@ -214,14 +257,16 @@ export const fakeZerops = (options: {
 		},
 
 		getProject: async ({ projectId }) => {
-			if (projectId !== options.projectId) {
+			if (projectId !== options.projectId || !projectExists) {
 				throw new Error(`zerops: get project failed (404)`)
 			}
-			observe(`project:${projectId}`)
+			const status = projectStatuses[Math.min(projectReads, projectStatuses.length - 1)] ?? 'ACTIVE'
+			projectReads += 1
+			observe(`project:${projectId}:${status}`)
 			return {
 				id: options.projectId,
 				name: options.projectName,
-				status: 'ACTIVE',
+				status,
 				...(options.projectMode === undefined ? {} : { mode: options.projectMode }),
 			}
 		},
@@ -315,6 +360,7 @@ export const fakeZerops = (options: {
 		timeline,
 		importedProcesses,
 		imports,
+		projectImports,
 		mintedTokens,
 		env: (service) => envOf(service),
 		subdomainAccess: (service) => published.get(service) === true,

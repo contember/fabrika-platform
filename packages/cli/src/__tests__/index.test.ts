@@ -83,6 +83,15 @@ describe('installation capabilities', () => {
 		)
 	})
 
+	test('routes `platform upgrade` the same way, and Cloudflare needs no code to refuse it', async () => {
+		// The contract gained a verb; Cloudflare's `commands` did not, so the router answers with that
+		// provider's usage and no Cloudflare code was written for `upgrade` at all.
+		await expect(runCli(['platform', 'upgrade', '--provider=zerops', '--to=main', 'test'])).rejects.toThrow('is not a published tag')
+		await expect(runCli(['platform', 'upgrade', '--provider=cloudflare'])).rejects.toThrow(
+			'cloudflare installation does not support `platform upgrade`',
+		)
+	})
+
 	test('forwards a value-less provider flag verbatim, `--yes` included', async () => {
 		expect(parseCliArgs(['platform', 'install', '--provider=zerops', '--yes'])).toEqual({
 			area: 'platform',

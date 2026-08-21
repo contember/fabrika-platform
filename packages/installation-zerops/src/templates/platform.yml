@@ -8,18 +8,20 @@ name: platform
 #
 # ONE step, deliberately. On Zerops `fabrika platform deploy` owns the whole ordered sequence: resolve
 # the project and its services, write every service's environment (including the composed proxy
-# manifest), deploy iam -> operations -> source -> proxy -> control waiting for each, reconcile the console's app
-# schema, and ensure the public entry point. That order carries a security property — since ADR-0022 the
-# application enforces nothing, so the enforcement point is deployed BEFORE the service whose gates just
-# widened — and it therefore lives in code with a test rather than in this file, which an operator owns
-# and may edit (ADR-0027). The Cloudflare sidecar keeps three steps here; the asymmetry is deliberate.
+# manifest), deploy iam + operations + source together and then proxy -> control waiting for each,
+# reconcile the console's app schema, and ensure the public entry point. That sequence carries a security
+# property — since ADR-0022 the application enforces nothing, so the enforcement point is deployed BEFORE
+# the service whose gates just widened — and it therefore lives in code with a test rather than in this
+# file, which an operator owns and may edit (ADR-0027). The Cloudflare sidecar keeps three steps here;
+# the asymmetry is deliberate.
 #
 # Generated and maintained by `fabrika platform init --provider=zerops {{INSTALLATION}}`. Secrets and
 # variables live in the `{{INSTALLATION}}` GitHub Environment (Settings -> Environments -> {{INSTALLATION}})
 # and are written there by that command — do not hand-edit them.
 #
 # contember/fabrika-platform is public and checked out tokenless at the TAG pinned in `fabrika.ref`.
-# Bump that tag and push to roll this installation forward.
+# Bump that tag and push to roll this installation forward — `fabrika platform upgrade --provider=zerops
+# --to=<tag> {{INSTALLATION}}` does exactly that and then follows the run this file starts.
 
 on:
   workflow_dispatch:
@@ -45,8 +47,10 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Five builds, one after another: ~20 minutes with a warm cache. The command itself polls each build
-    # for up to 70 minutes (Zerops caps a pipeline at one hour), so this is the outer guard, not the gate.
+    # MEASURED (2026-08-21, two warm-cache runs): ~9 min 35 s for five builds one after another. Now that
+    # iam, operations and source build at once the critical path PROJECTS to ~6 min from those same
+    # per-service timings — projected, not yet measured. The command itself polls each build for up to 70
+    # minutes (Zerops caps a pipeline at one hour), so this is the outer guard, not the gate.
     timeout-minutes: 90
     # Secrets + variables resolve from this GitHub Environment (created + populated by `fabrika platform init`).
     environment: {{INSTALLATION}}

@@ -26,7 +26,7 @@ const CONSOLE_HOST = 'proxy-292c-8082.prg1.zerops.app'
 const OPERATIONS_HOST = 'proxy-292c-8083.prg1.zerops.app'
 
 const input = (overrides: Partial<PlatformInstallInput> = {}): PlatformInstallInput => ({
-	projectId: PROJECT.projectId,
+	project: { kind: 'existing', projectId: PROJECT.projectId },
 	clientId: CLIENT_ID,
 	accessToken: 'zerops-personal-access-token-that-must-never-be-printed',
 	environment: 'stage',
@@ -664,7 +664,7 @@ describe('the argument surface', () => {
 				FABRIKA_ZEROPS_ACCESS_TOKEN: 'token',
 			}),
 		).toEqual({
-			projectId: 'p1',
+			project: { kind: 'existing', projectId: 'p1' },
 			clientId: 'c1',
 			accessToken: 'token',
 			environment: 'stage',

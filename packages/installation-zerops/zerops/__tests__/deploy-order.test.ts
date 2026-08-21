@@ -6,7 +6,7 @@
 // `zerops.yaml` declares, because `triggerPipeline` selects the setup by that name.
 
 import { describe, expect, test } from 'bun:test'
-import { PLATFORM_DEPLOY_ORDER, PLATFORM_PROXY_SERVICE } from '../../src/deploy'
+import { PLATFORM_CONCURRENT_DEPLOY, PLATFORM_DEPLOY_ORDER, PLATFORM_PROXY_SERVICE, PLATFORM_SEQUENTIAL_DEPLOY } from '../../src/deploy'
 import { platformProxyAppFor } from '../../src/proxy-manifest'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../generated/platform-proxy-manifest'
 import { PLATFORM_CONSOLE_APP_ID, PLATFORM_PROXY_APPS } from '../proxy-manifest'
@@ -34,14 +34,20 @@ describe('the five services a platform deploy touches', () => {
 		expect(new Set(PLATFORM_DEPLOY_ORDER)).toEqual(new Set([...PLATFORM_PROXY_APPS.map((app) => app.service), 'source', PROXY_HOSTNAME]))
 	})
 
-	test('and the ORDER puts the enforcement point ahead of the service whose gates it carries', () => {
+	test('and the SEQUENCE puts the enforcement point ahead of the service whose gates it carries', () => {
+		// Two stages, and only one of them is ordered. iam, operations and source order NOTHING against
+		// each other — no boot-time call between them, no readiness gate that leaves the service, and no
+		// variable one's deploy writes that another's build reads — so they build at once.
+		expect(PLATFORM_CONCURRENT_DEPLOY).toEqual(['iam', 'operations', 'source'])
+		for (const hostname of PLATFORM_CONCURRENT_DEPLOY) {
+			expect(PLATFORM_DEPLOY_ORDER.indexOf(hostname)).toBeLessThan(PLATFORM_DEPLOY_ORDER.indexOf(PLATFORM_PROXY_SERVICE))
+		}
 		// ADR-0027: the application enforces nothing (ADR-0022), so a control plane at HEAD behind a proxy
 		// still carrying the previous, more permissive manifest is an open `/api/*` for the deploy's length.
+		expect(PLATFORM_SEQUENTIAL_DEPLOY).toEqual(['proxy', 'control'])
 		expect(PLATFORM_DEPLOY_ORDER.indexOf('proxy')).toBeLessThan(PLATFORM_DEPLOY_ORDER.indexOf('control'))
-		// …without giving up the dependency order control's private Operations dependency needs.
-		expect(PLATFORM_DEPLOY_ORDER.indexOf('iam')).toBeLessThan(PLATFORM_DEPLOY_ORDER.indexOf('operations'))
-		expect(PLATFORM_DEPLOY_ORDER.indexOf('operations')).toBeLessThan(PLATFORM_DEPLOY_ORDER.indexOf('control'))
-		expect(PLATFORM_DEPLOY_ORDER.indexOf('source')).toBeLessThan(PLATFORM_DEPLOY_ORDER.indexOf('proxy'))
+		// Every service is in exactly one stage, so a service added to the deploy cannot fall out of both.
+		expect([...PLATFORM_CONCURRENT_DEPLOY, ...PLATFORM_SEQUENTIAL_DEPLOY]).toEqual([...PLATFORM_DEPLOY_ORDER])
 	})
 })
 
