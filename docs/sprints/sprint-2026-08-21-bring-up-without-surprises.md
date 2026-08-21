@@ -305,3 +305,28 @@ identifiers redacted where they are credentials.
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
      trim to a one-line pointer ("→ ADR-0007"). -->
+
+- 2026-08-21 — Wave 0 (read-only). WU3: no ordering reason exists among `iam`, `operations`, `source` —
+  none reads a sibling at boot (`iam` holds no sibling origin; `operations` constructs `HttpIamRpc`
+  without a request; `source` only imports a key), readiness checks hit each service's own `/healthz`,
+  and the deploy's write set is per service (`deploy.ts:239-294`); `source → proxy` in
+  `deploy-order.test.ts:44` has no stated reason but stays true by construction. The two rebuild rolls
+  measured **9 min 36 s and 9 min 32 s** for the five builds (iam 113 s · operations 113–123 s · source
+  113 s · proxy 93 s · control 134–139 s), not the 20 minutes this plan and `templates/platform.yml:48`
+  claim; the concurrent critical path is ~5 min 50 s. Nothing in `init` persists the sidecar location,
+  so `upgrade` takes `--sidecar`. WU1: 33 facts a client depends on; 6 probeable with a token alone,
+  16 with one imported service, 8 need a build, 3 are not probeable without account-level side effects.
+  The table lives in `packages/provider-zerops/src/__tests__/platform-facts.ts` (private-package tests
+  may import a public package's test helpers by relative path; the reverse direction is refused by
+  `release:validate`, and a root `tests/` directory is typechecked by nothing).
+- 2026-08-21 — Leader probes against the account (throwaway projects, created and deleted). WU4:
+  `POST /client/{id}/project/import` with a `project:` block and `services: []` creates an empty project
+  in ~1 s; it reads `mode: LIGHT` at once and `status` `NEW → CREATING → ACTIVE` in ~20 s. WU5: the
+  proxy's hosts are the SYSTEM env `zeropsSubdomain`, one URL per listening port, also present in the
+  service record's `userData`. WU7: the log service's `urlInfo` lists tags; `tags=zbuilder@<appVersionId>`
+  (without `serviceStackId`) selects one version's build log; runtime lines carry no version marker;
+  `from=` and unknown parameters are ignored silently; `format` accepts `rfc_3164|rfc_5424|raw`. WU1:
+  `DELETE /service-stack/{id}` answers 200 with a `stack.delete` process (FINISHED in ~21 s), after which
+  by-id, by-name and a second DELETE answer `400 serviceStackNotFound`; a successful user-data POST
+  answers 200 (the emulator said 201); user-data on an absent service is `400 serviceStackNotFound`
+  (the emulator said 404).
