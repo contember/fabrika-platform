@@ -19,4 +19,9 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- none — the last sprint, [cheap rebuild from scratch (2026-08-21)](../archive/sprint-2026-08-21-cheap-rebuild-from-scratch.md), shipped on 2026-08-21.
+- [`sprint-2026-08-21-bring-up-without-surprises`](sprint-2026-08-21-bring-up-without-surprises.md)
+  — make the next from-scratch Zerops bring-up a sequence of commands that say what they need and
+  refuse early: one platform-fact table checked against the account and the emulator, a catalog sync
+  that logs what it did, `platform upgrade` and `install --create-project`, registration that demands
+  the domain its deploy needs, help text that names the right origin, a release smoke that outlives
+  npm's lag, and the `source` memory reading the tarball rewrite still owes.
