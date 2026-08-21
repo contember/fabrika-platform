@@ -56,11 +56,12 @@ and a pin that pins half of what it claims.
 - [64](64-close-the-bootstrap-admission-hatch-automatically.md) — A Cloudflare installation comes up admitting on a standing admin list, and closing it is an instruction printed to a human.
 - [65](65-pin-a-zerops-build-to-a-revision.md) — A Zerops build source names a repository, not a revision, so `fabrika.ref` pins the pipeline but not the code Zerops builds.
 - [71](71-deliver-domain-audit-events-durably.md) — Add stable event ids, idempotent IAM acknowledgement and transactional producer outboxes for every domain mutation.
-- [75](75-a-running-installation-keeps-a-token-that-cannot-create-projects.md) — Installations minted before ADR-0034 hold a token that cannot create projects, and nothing says so.
+- [75](75-a-running-installation-keeps-a-token-that-cannot-create-projects.md) — No `fabrika` command can re-mint a pre-ADR-0034 integration token with `canCreateProjects`; the diagnosis half shipped.
 - [78](78-register-a-zerops-app-from-local-config-in-one-command.md) — Compose the existing local manifest build and Control registration into one command without executing application code in Control.
 - [79](79-a-namespace-target-cannot-be-changed-after-creation.md) — A namespace's provider target is written once; no API takes a new one, and a hand-edited one is refused against the live service.
 - [80](80-harmonize-the-admin-rpc-principal-inputs.md) — Two admin-RPC procedures name the same principal by two different keys, so the obvious call is refused.
 - [81](81-exercise-a-private-keyed-deploy-in-the-local-stack.md) — The local stack cannot exercise a keyed private deploy or a bound-app webhook: `source` mints installation tokens against real GitHub.
+- [82](82-a-duplicate-cross-app-grant-answers-500.md) — IAM answers 500, not 409, when the same cross-app grant is created twice.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.

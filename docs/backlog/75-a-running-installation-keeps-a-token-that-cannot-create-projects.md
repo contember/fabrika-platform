@@ -1,42 +1,45 @@
 ---
 id: 75
-title: A running installation keeps a token that cannot create projects
+title: Re-mint an installation's integration token in place
 blocked-by: []
 ---
 
-# 75 — A running installation keeps a token that cannot create projects
+# 75 — Re-mint an installation's integration token in place
 
-**Summary.** [ADR-0034](../decisions/0034-the-control-plane-creates-the-projects-it-owns.md) made
-`platform install` mint the integration token with `canCreateProjects`. Every installation minted
-before it still holds a token without the flag, and nothing tells its operator. Effort S.
+**Summary.** A Zerops integration token's grants are fixed at mint time. An installation minted before
+[ADR-0034](../decisions/0034-the-control-plane-creates-the-projects-it-owns.md) holds a token without
+`canCreateProjects`, and nothing in `fabrika` can give it one. Effort S.
 
 ## Problem
 
-A Zerops integration token's grants are fixed at mint time (`docs/reference/zerops-platform.md`, the
-2026-08-18 section), so the flag cannot be acquired later by the control plane itself. An installation
-that predates ADR-0034 therefore fails the first `namespaces create` with `403
-insufficientPermissions` on `POST /client/{id}/project/import` — the same wall the live installation
-hit, which took a manual `zops token integration update` to clear.
+`platform install` mints with `canCreateProjects` since ADR-0034 (`packages/installation-zerops/src/install.ts`),
+but a token minted earlier fails the first `namespaces create` at `POST /client/{id}/project/import` with
+`403 insufficientPermissions` — the wall the first live namespace hit, cleared by a manual
+`zops token integration update`. The repair must re-pass every existing project grant in the same call,
+because the update API replaces the grant set wholesale.
 
-Two things make it worse than a one-line release note. The repair must re-pass every existing project
-grant in the same call, because the update API replaces the grant set wholesale; and the failure it
-prevents is currently reported as a bare `namespace provision failed`
-([72](72-a-failed-namespace-reports-nothing-an-operator-can-act-on.md)), so the operator has nothing
-to connect to the note.
+The diagnosis half of this item is done: since the cheap-rebuild sprint, a failed namespace carries the
+platform's own code (`insufficientPermissions`) and message on its row, the console points at the
+token's grants, and the failure lands at the first call — before a project exists. What is left is the
+repair: no `fabrika` command re-mints or updates the token, and there is no pre-ADR-0034 installation
+left to exercise one against, so this ships only when one exists or when a fresh token can be
+deliberately under-granted for the test.
+
+A synchronous preflight (refusing `create` before enqueueing) was considered and not built: no
+introspection endpoint that reads a token's own capabilities is recorded in
+[`../reference/zerops-platform.md`](../reference/zerops-platform.md), and guessing one is not evidence.
+If the rebuild's live run finds such an endpoint, record it there first.
 
 ## Approach / acceptance
 
-Either a `fabrika platform` verb that re-mints or updates the installation's token in place, carrying
-the existing grants forward, or a preflight in `namespaces create` that names the missing capability
-before anything is provisioned. The second is cheaper and fixes the diagnosis; the first fixes the
-installation.
-
-Witness: an installation whose token lacks the flag is told so — by name, before or instead of a
-failed provision — and a documented single command restores it without dropping a grant.
+A `fabrika platform` verb that re-mints or updates the installation's token in place, carrying every
+existing project grant forward and writing the new value to the `control` service only. Witness: on an
+installation whose token lacks the flag, one documented command restores it without dropping a grant,
+and the next `namespaces create` reaches `ready`.
 
 ## Touch points
 
-`packages/installation-zerops/src/install.ts`, `packages/provider-zerops/src/api.ts`
-(`createIntegrationToken`), `packages/provider-zerops/src/namespace.ts`, `packages/cli/src/`.
+`packages/installation-zerops/src/`, `packages/provider-zerops/src/api.ts` (`createIntegrationToken`,
+and the update call once it is measured live), `packages/cli/src/`.
 
-<!-- Origin: found while provisioning the first live app namespace, 2026-08-18. -->
+<!-- Origin: found while provisioning the first live app namespace, 2026-08-18; rescoped by the cheap-rebuild sprint WU7, 2026-08-21. -->

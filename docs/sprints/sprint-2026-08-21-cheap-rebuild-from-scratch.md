@@ -345,7 +345,9 @@ onboarding (a keyed source connection, registration) stays a hand sequence in th
   survive, but their private keys live only as `GITHUB_APP_CREDENTIALS*` on the `source` service and
   die with it — plan to generate a fresh private key per App rather than recreating the Apps. Control's
   database is the light tier's shared `db` and dies with the project, taking the app registry, the
-  namespace targets, the vault and the run history. Confirm nothing else is wanted off the account
+  namespace targets, the vault and the run history. While the old token still exists, probe whether any Zerops endpoint reads a token's own
+  capabilities (`canCreateProjects`) and record the answer in `reference/zerops-platform.md` — backlog
+  75's synchronous preflight depends on it. Confirm nothing else is wanted off the account
   first; after this there is no live evidence base until the rebuild lands.
 - **Scope.** Delete `fabrika-notes-prod` and `fabrika-install-test`. Create one empty project. Run
   `platform install` → `platform init` → the sidecar's CI deploy → the WU3 first-administrator command,
@@ -362,7 +364,9 @@ onboarding (a keyed source connection, registration) stays a hand sequence in th
   defaults declare, and the project's reported 30-day cost is single-digit dollars; (6) no service
   carries an autoscaling value fabrika did not write — the hand-set 1 GB floor on `source` must not
   reappear. (7) A private repository owned by a SECOND connected organization deploys through its own
-  keyed connection — the witness the archived multi-connection sprint (2026-08-14) never collected.
+  keyed connection — the witness the archived multi-connection sprint (2026-08-14) never collected. (8) Against a deliberately under-granted integration token, `namespaces create` returns
+  `pending` and the row fails with `lastErrorCode: insufficientPermissions` and the platform's message,
+  with no project created — the live witness of WU5's projection, which is what WU7 settled on.
 - **Touch points.** No repository files. WU8 changes authorized live Zerops and GitHub state and
   returns redacted witness facts to WU0 for the run log. No credential value enters that report.
 
@@ -459,3 +463,11 @@ everything except WU6, which follows it.
   IAM defect worth its own item. (e) The local smoke cannot exercise a bound private deploy without a
   GitHub double (backlog 81); it now proves the scoped webhook signature and triggers the example
   deploy through the API. The 2026-08-14 sprint is archived; its second-organization deploy is WU8 (7).
+- 2026-08-21 — WU5+6 landed as one unit in `e1976e5` (shared files: `api/namespaces.ts`, the contract,
+  the namespace console). WU7 decided with the evidence: no introspection endpoint for a token's
+  capabilities is recorded, so a synchronous preflight cannot be built or tested without a live probe;
+  WU5's projection already names `insufficientPermissions` at the first call with nothing created.
+  Backlog 75 is rewritten down to the re-mint half; WU8 gains item (8) and a verify-first probe for the
+  endpoint. Backlog 82 records the IAM 500 on a duplicate cross-app grant found by WU3's contract test.
+  Gate after WU5+6: typecheck 35/35, `bun test` 2 782 pass / 9 skip / 0 fail with Postgres, lint and
+  format clean. Everything before WU8 is done; WU8 is the operator's live run.
