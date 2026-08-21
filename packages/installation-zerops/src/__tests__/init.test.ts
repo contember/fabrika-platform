@@ -17,10 +17,14 @@ import {
 	sourceConnectionSettingsUrl,
 } from '../init'
 import { recordingInitLog } from '../log'
+import { MACHINE_KEY_NEXT_STEP_TITLE } from '../machine-key'
 import { fakeZerops, platformServices } from './fake-zerops'
 
 const ACCESS_TOKEN = 'zerops-access-token-value-that-must-never-be-printed'
 const PROVISIONING_KEY = 'px_provisioning-key-value-that-must-never-be-printed'
+/** What the LIVE control service holds, so the closing block is asserted against a real-looking env. */
+const LIVE_RPC_KEY = 'rpc_live-value-that-must-never-be-printed'
+const LIVE_PROVISIONING_KEY = 'px_live-value-that-must-never-be-printed'
 const APP_PEM = `-----BEGIN PRIVATE KEY-----
 MAMCAQE=
 -----END PRIVATE KEY-----
@@ -54,11 +58,16 @@ const recorder = (options: {
 	const scaffolds: SidecarScaffoldInput[] = []
 	const sourceInputs: Parameters<InitCollaborators['effects']['configureSource']>[0][] = []
 	const derivedControlHost = 'proxy-292c-8082.prg1.zerops.app'
+	const derivedIamHost = 'proxy-292c-8080.prg1.zerops.app'
 	const sourceEnv = new Map([['FABRIKA_SOURCE_RPC_KEY', 'r'.repeat(32)], ...Object.entries(options.sourceEnvironment ?? {})])
 	const controlEnv = new Map([
 		['FABRIKA_ZEROPS_SOURCE_RPC_KEY', 'r'.repeat(32)],
 		['FABRIKA_ZEROPS_PROJECT_ID', 'project-id-1'],
 		['FABRIKA_CONTROL_DOMAIN', options.custom === true ? options.answers['Console hostname'] ?? '' : derivedControlHost],
+		['FABRIKA_IAM_ISSUER', `https://${options.custom === true ? options.answers['IAM hostname'] ?? '' : derivedIamHost}`],
+		// The live control service holds every platform credential; init reads its whole environment.
+		['FABRIKA_IAM_RPC_KEY', LIVE_RPC_KEY],
+		['FABRIKA_IAM_PROVISIONING_KEY', LIVE_PROVISIONING_KEY],
 		...Object.entries(options.controlEnvironment ?? {}),
 	])
 	const proxyEnv = new Map([[
@@ -309,6 +318,48 @@ describe('fabrika platform init --provider=zerops', () => {
 		expect(environment.effects).not.toContain('environment: test')
 		expect(environment.effects.some((effect) => effect.startsWith('trigger:'))).toBe(false)
 		await cleanCheckout(environment)
+	})
+
+	test('ends with the block `control key issue` needs, built from the live IAM origin and two NAMES', async () => {
+		const recorded = recorder({ answers: ANSWERS })
+		await runInit({ installation: 'test' }, recorded.collaborators)
+
+		const block = recorded.lines.filter((line) => line.startsWith('action: ')).join('\n')
+		expect(block).toContain(MACHINE_KEY_NEXT_STEP_TITLE)
+		expect(block).toContain('export FABRIKA_IAM_RPC_URL=https://proxy-292c-8080.prg1.zerops.app')
+		expect(block).toContain('FABRIKA_IAM_RPC_KEY')
+		expect(block).toContain("the sidecar's `test` Environment holds the copy the pipeline uses")
+		expect(block).toContain('fabrika control key issue')
+		// Init has just read control's whole environment, real keys included; the block is names only.
+		for (const value of [LIVE_RPC_KEY, LIVE_PROVISIONING_KEY, PROVISIONING_KEY, ACCESS_TOKEN, 'px_', 'rpc_', 'sk_']) {
+			expect(recorded.lines.join('\n')).not.toContain(value)
+		}
+		await cleanCheckout(recorded)
+	})
+
+	test('names where to read the origin rather than guessing one it cannot verify', async () => {
+		const older = recorder({ answers: ANSWERS, controlEnvironment: { FABRIKA_IAM_ISSUER: '' } })
+		await runInit({ installation: 'test' }, older.collaborators)
+		expect(older.lines.join('\n')).not.toContain('export FABRIKA_IAM_RPC_URL=')
+		expect(older.lines.join('\n')).toContain("read from: `control`'s own FABRIKA_IAM_ISSUER")
+		await cleanCheckout(older)
+
+		const answers = {
+			...ANSWERS,
+			'IAM hostname': 'iam.example.com',
+			'Console hostname': 'console.example.com',
+			'Operations ingest hostname': 'errors.example.com',
+		}
+		const mismatch = recorder({ custom: true, answers, controlEnvironment: { FABRIKA_IAM_ISSUER: 'https://iam.other.example.com' } })
+		await runInit({ installation: 'test' }, mismatch.collaborators)
+		expect(mismatch.lines.join('\n')).not.toContain('https://iam.other.example.com')
+		expect(mismatch.lines.join('\n')).not.toContain('export FABRIKA_IAM_RPC_URL=')
+		await cleanCheckout(mismatch)
+
+		const custom = recorder({ custom: true, answers })
+		await runInit({ installation: 'test' }, custom.collaborators)
+		expect(custom.lines.join('\n')).toContain('export FABRIKA_IAM_RPC_URL=https://iam.example.com')
+		await cleanCheckout(custom)
 	})
 
 	test('refuses branch pins, local environments, extra arguments, and credential flags before effects', async () => {

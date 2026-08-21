@@ -3,16 +3,20 @@
 The Zerops implementation of `@fabrika/installation-contract` plus the typed
 platform topology and generated installation artifacts.
 
-Five public commands. `fabrika platform plan --provider=zerops` validates the
+Six public commands. `fabrika platform plan --provider=zerops` validates the
 generated artifacts against Zerops' published schemas. `fabrika platform deploy
 --provider=zerops` brings an EXISTING installation to this checkout, unattended
 and idempotently — the full surface is in the `usage` string in `src/index.ts`,
 which is also what the generated workflow is written against. `fabrika platform
 init --provider=zerops <installation>` creates and maintains the operator's
 sidecar repository that calls it. `fabrika platform install --provider=zerops`
-CREATES one, in a project the operator made empty. `fabrika platform admin
+CREATES one — in a project the operator made empty (`--project-id`), or in one it
+creates itself (`--create-project`, optionally `--project-name`). `fabrika platform admin
 --provider=zerops --email=<address>` admits the first human to what that
-bring-up created.
+bring-up created. **`fabrika platform upgrade --provider=zerops --to=<tag>` is the
+roll:** it checks the tag exists on the public repository, writes `fabrika.ref`,
+commits it without `[skip ci]` (the push IS the trigger), pushes, prints the run
+URL and watches it. A published tag stays the only acceptable pin (ADR-0025).
 
 **`install` is the only command that creates an installation; `init` and `deploy`
 both refuse to.** It runs first and hands `init` the provisioning key it generated.
@@ -34,6 +38,7 @@ and is deliberate — someone reading only one path will guess wrong about the o
   `src/install-options.ts` — its flags. `src/secrets.ts` — the seven values it generates.
 - `src/init.ts` — the sidecar-repository flow, its prompts and its confirmed outward steps.
 - `src/admin.ts` — the first-administrator command. `src/admin-options.ts` — its flags.
+- `src/machine-key.ts` — the "next: mint a machine key" block `admin` and `init` both end with.
 - `src/sidecar.ts` — what the sidecar repository contains + the tag rule. `src/templates/` — its four files.
 - `src/manifest.ts` — composing the platform's apps with an installation's application entries.
 - `src/hosts.ts` — where one installation answers. `src/log.ts` — progress, with no secret-taking helper.
@@ -50,6 +55,11 @@ and is deliberate — someone reading only one path will guess wrong about the o
 
 - The generated root `zerops.yaml` is the only platform build specification.
   Do not add per-package `zerops.yaml` files.
+- **`--create-project` builds its project document from the SAME compiled topology as
+  the services import**, because `envIsolation` and `corePackage` are settable at project
+  CREATION only. It is a `project:` block with `services: []`, rendered by `renderYaml`
+  (`renderImportYaml` refuses a document with no services). The id is printed BEFORE the
+  wait for `ACTIVE`, so an interrupted run resumes with `--project-id=<id>`.
 - Keep credentials out of generated artifacts.
 - Do not claim real-account support from schema validation or dry runs.
 - Preserve the import-without-code → write service secrets → deploy bring-up
@@ -82,8 +92,11 @@ and is deliberate — someone reading only one path will guess wrong about the o
 - **`install` never restates the deploy order.** Pass 2 is `deployPlatform`, whole;
   pass 1 reuses `deployPlatformService` for the proxy alone. One service is not an
   order.
-- **`platform deploy`'s order is IAM → Operations → source → proxy → control, and the
-  proxy's position is a SECURITY property, not a dependency.** Since ADR-0022 the
+- **`platform deploy` builds iam, operations and source AT ONCE, then proxy, then
+  control — and the proxy's position is a SECURITY property, not a dependency.** The
+  three concurrent services order nothing against each other: none calls a sibling at
+  boot, each readiness gate hits its own `/healthz`, and no variable one's deploy
+  writes is read by another's build. Since ADR-0022 the
   application enforces nothing, so control at a new version behind the previous,
   more permissive manifest is an open `/api/*` for the length of the deploy.
   Operations owns separate `operationsdb` and `operationsstorage` services; only
@@ -139,6 +152,19 @@ and is deliberate — someone reading only one path will guess wrong about the o
   here seeds `IAM_BOOTSTRAP_ADMINS`. The mechanics are
   `@fabrika/installation-init`'s `ensureFirstAdministrator`; `src/admin.ts` holds
   only where this installation's IAM answers.
+- **`admin` and `init` both end with `src/machine-key.ts`'s block, and it is built
+  from an ORIGIN and variable NAMES only.** No function there takes a key, so a
+  verb holding the real values cannot leak one through it. `init` reads the origin
+  off the live `control` service's `FABRIKA_IAM_ISSUER` and prints NO origin when
+  that value is absent or disagrees with the hosts the operator named: a printed
+  origin is one an operator pastes without checking, so it is never a derivation
+  this command could get wrong.
+- **The block must survive being PASTED into a shell.** The origin is an `export`
+  (a bare `NAME=value` sets a shell variable no child process sees) and every other
+  line is a `#` comment — including the command line, whose `<name>` and
+  `<seconds>` placeholders are shell redirections. Keep both properties: the tests
+  assert the origin line starts with `export` and that nothing else is an
+  assignment.
 - **Every write is read-compare-write, so a re-run changes nothing.** `GET
   /service-stack/{id}/env` works on every service (`docs/reference/zerops-platform.md`),
   which is what makes the comparison possible; `putServiceEnv` stays write-first

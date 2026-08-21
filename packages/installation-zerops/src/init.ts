@@ -56,6 +56,7 @@ import { sourceServiceSpec } from '../zerops/topology'
 import { derivePlatformHosts, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
 import { FABRIKA_REPOSITORY_URL } from './install-options'
 import type { InitLog } from './log'
+import { MACHINE_KEY_NEXT_STEP_TITLE, machineKeyNextStepLines } from './machine-key'
 import { assertPinnedTag, defaultCheckoutDir, defaultSidecarRepo, materializeSidecarScaffold, readPinnedTag, SIDECAR_FILES } from './sidecar'
 
 /** The name every bypass in this platform is gated on, and therefore the one name an installation cannot take. */
@@ -395,6 +396,31 @@ const strictHttpsOrigin = (hostValue: string): string | undefined => {
 	}
 }
 
+/**
+ * IAM's PUBLIC origin as the installation itself records it, or nothing when init would have to guess.
+ *
+ * `platform install` writes it to `control` as `FABRIKA_IAM_ISSUER`, so this reads the live value
+ * rather than re-deriving one — and refuses it when the operator named a different IAM host, because
+ * a printed origin an operator then pastes into `FABRIKA_IAM_RPC_URL` must be the one that answers.
+ */
+export const platformIamOrigin = (placement: Placement, source: ConfigureSourceResult): string | undefined => {
+	const issuer = source.controlEnv.get('FABRIKA_IAM_ISSUER')
+	if (issuer === undefined) return undefined
+	let hostname: string
+	try {
+		const parsed = new URL(issuer.trim())
+		if (parsed.protocol !== 'https:' || parsed.port !== '' || parsed.username !== '' || parsed.password !== '') return undefined
+		if (parsed.pathname !== '/' || parsed.search !== '' || parsed.hash !== '') return undefined
+		hostname = parsed.hostname
+	} catch {
+		return undefined
+	}
+	const origin = strictHttpsOrigin(hostname)
+	if (origin === undefined) return undefined
+	if (placement.hosts !== undefined && placement.hosts.iam.trim().toLowerCase() !== hostname) return undefined
+	return origin
+}
+
 /** Return a verified live console URL, or no URL when init would have to guess. */
 export const sourceConnectionSettingsUrl = (placement: Placement, source: ConfigureSourceResult): string | undefined => {
 	const liveHost = source.controlEnv.get('FABRIKA_CONTROL_DOMAIN')
@@ -585,6 +611,13 @@ export const runInit = async (args: InitArguments, collaborators: InitCollaborat
 	log.ok(`Sidecar repository: ${collected.repo} (local checkout: ${dir})`)
 	log.info('Roll this installation forward by bumping fabrika.ref to a newer published tag and pushing.')
 	log.info("Who may administer the installation is IAM's to say: this repository holds no admission list to close later.")
+	// The origin comes off the live control service, never from what was typed here: an operator who
+	// pastes a guessed hostname into FABRIKA_IAM_RPC_URL gets "Unable to connect" and no explanation.
+	const iamOrigin = platformIamOrigin(collected.placement, source)
+	log.action(
+		MACHINE_KEY_NEXT_STEP_TITLE,
+		machineKeyNextStepLines({ sidecarEnvironment: args.installation, ...(iamOrigin === undefined ? {} : { iamOrigin }) }),
+	)
 }
 
 /** The real collaborators: a TTY, `gh`, git, and one read of the Zerops API. */

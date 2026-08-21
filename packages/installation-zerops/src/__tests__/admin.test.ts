@@ -4,6 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { type PlatformAdminCollaborators, runPlatformAdmin } from '../admin'
 import type { PlatformAdminInput } from '../admin-options'
 import { recordingInitLog } from '../log'
+import { MACHINE_KEY_NEXT_STEP_TITLE } from '../machine-key'
 
 const ENROLLMENT_URL = 'https://iam.example.test/auth/password/enroll?token=one-time'
 
@@ -216,6 +217,34 @@ describe('platform admin', () => {
 		const secure = collaborators(fakeApi().api)
 		await runPlatformAdmin(input(), secure)
 		expect(secure.lines.join('\n')).not.toContain('plain http')
+	})
+
+	test('ends with the block `control key issue` needs: this IAM origin and two variable NAMES', async () => {
+		const { api } = fakeApi()
+		const run = collaborators(api)
+
+		await runPlatformAdmin(input(), run)
+
+		const block = run.lines.filter((line) => line.startsWith('action: ')).join('\n')
+		expect(block).toContain(MACHINE_KEY_NEXT_STEP_TITLE)
+		expect(block).toContain('export FABRIKA_IAM_RPC_URL=https://iam.example.test')
+		expect(block).toContain('FABRIKA_IAM_RPC_KEY')
+		expect(block).toContain('FABRIKA_IAM_PROVISIONING_KEY')
+		expect(block).toContain('fabrika control key issue')
+		// The command is holding the provisioning key while it prints this; the whole run is names only.
+		for (const prefix of ['px_', 'rpc_', 'sk_']) {
+			expect([...run.lines, ...run.printed].join('\n')).not.toContain(prefix)
+		}
+	})
+
+	test('the closing block prints no origin the command was not given', async () => {
+		const { api } = fakeApi()
+		const run = collaborators(api)
+
+		await runPlatformAdmin(input({ iamHost: 'iam.other.test' }), run)
+
+		expect(run.lines.join('\n')).toContain('export FABRIKA_IAM_RPC_URL=https://iam.other.test')
+		expect(run.lines.join('\n')).not.toContain('https://iam.example.test')
 	})
 
 	test('a failure at the last step still prints no URL', async () => {

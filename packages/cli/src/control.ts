@@ -158,11 +158,22 @@ const positiveInteger = (raw: string, name: string): number => {
 	return parsed
 }
 
-/** An origin from the flag, else the environment. Trailing slashes are dropped so paths concatenate. */
-const origin = (flags: Flags, flag: string, variable: string, env: Readonly<Record<string, string | undefined>>): string => {
+/**
+ * An origin from the flag, else the environment. Trailing slashes are dropped so paths concatenate.
+ *
+ * `label` names WHICH origin is missing: `key issue` reaches IAM, not the control plane, and a message
+ * that says "Control origin" while asking for `--iam-url` sends the operator to the wrong variable.
+ */
+const origin = (
+	flags: Flags,
+	flag: string,
+	variable: string,
+	env: Readonly<Record<string, string | undefined>>,
+	label: string,
+): string => {
 	const value = flags.values.get(flag) ?? env[variable]
 	if (value === undefined || value.trim() === '') {
-		throw new Error(`Control origin is required. Pass --${flag}=<origin> or set ${variable}.`)
+		throw new Error(`${label} origin is required. Pass --${flag}=<origin> or set ${variable}.`)
 	}
 	return value.trim().replace(/\/+$/, '')
 }
@@ -177,7 +188,7 @@ const secret = (variable: string, env: Readonly<Record<string, string | undefine
 
 /** The console's client with a bearer instead of a cookie, and no SSO bounce: there is no browser to send. */
 const controlClient = (flags: Flags, env: Readonly<Record<string, string | undefined>>) => {
-	const base = origin(flags, 'url', 'FABRIKA_CONTROL_URL', env)
+	const base = origin(flags, 'url', 'FABRIKA_CONTROL_URL', env, 'Control')
 	const key = secret('FABRIKA_CONTROL_KEY', env)
 	return createRpcClient<ControlRpcContract>({
 		baseUrl: `${base}/api/rpc`,
@@ -240,17 +251,31 @@ const appLine = (app: AppDto): string => `${app.id}\t${app.repoUrl}\t${app.defau
 
 const runLine = (run: RunDto): string => `${run.id}\t${run.appId}\t${run.env}\t${run.status}\t${run.ref}`
 
+/** How the IAM origin was supplied, for a message that must not echo the value itself. */
+const IAM_ORIGIN_SOURCE = '--iam-url / FABRIKA_IAM_RPC_URL'
+
 /**
- * The one `key issue` failure whose cause is almost always the wrong KIND of address.
+ * The one `key issue` failure whose cause is almost always the address itself.
  *
  * `fetch` rejects only when the request never completed, so this reports what could not be reached and
- * the one mistake that produces it. The origin is not a credential and is named; the cause object may
- * quote anything, so only its short error code is.
+ * the mistake that produces it. Only the PARSED origin is named: an operator may put userinfo in the
+ * value, and `new URL().origin` drops it. A value that does not parse is not echoed at all — the
+ * variable is named instead. The cause object may quote anything, so only its short error code is.
  */
 const unreachableIam = (base: string, cause: unknown): string => {
 	const code = typeof cause === 'object' && cause !== null ? Reflect.get(cause, 'code') : undefined
 	const reason = typeof code === 'string' && code !== '' && code.length <= 40 ? code : 'the connection failed'
-	return `IAM could not be reached at ${base} (${reason}). FABRIKA_IAM_RPC_URL must be IAM's PUBLIC origin: `
+	let parsed: string | undefined
+	try {
+		parsed = new URL(base).origin
+	} catch {
+		parsed = undefined
+	}
+	if (parsed === undefined || parsed === 'null' || code === 'ERR_INVALID_URL') {
+		return `${IAM_ORIGIN_SOURCE} is not a URL — it needs the \`https://\` scheme and IAM's PUBLIC host, `
+			+ 'shaped `https://<iam-host>`.'
+	}
+	return `IAM could not be reached at ${parsed} (${reason}). ${IAM_ORIGIN_SOURCE} must be IAM's PUBLIC origin: `
 		+ "a private hostname such as `http://iam:3000` answers only inside the provider's project, never from this machine."
 }
 
@@ -268,7 +293,7 @@ const runKeyIssue = async (flags: Flags, env: Readonly<Record<string, string | u
 		label: required(flags, 'label'),
 		...(expiresIn === undefined ? {} : { expiresAt: Math.floor(Date.now() / 1000) + positiveInteger(expiresIn, 'expires-in') }),
 	}
-	const base = origin(flags, 'iam-url', 'FABRIKA_IAM_RPC_URL', env)
+	const base = origin(flags, 'iam-url', 'FABRIKA_IAM_RPC_URL', env, 'IAM')
 	const response = await fetch(`${base}/rpc/issueKey`, {
 		method: 'POST',
 		headers: { authorization: `Bearer ${secret('FABRIKA_IAM_RPC_KEY', env)}`, 'content-type': 'application/json' },

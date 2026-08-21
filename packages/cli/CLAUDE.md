@@ -23,6 +23,9 @@ label the envelope a registration carries.
 - `control key issue` is the bootstrap: a fresh installation's provisioning key is
   held in env and never in the DB, so the proxy — which resolves bearers through
   IAM's `mintFromKey` — cannot admit it. The command mints a DB-backed key instead.
+  `FABRIKA_IAM_RPC_URL` is IAM's PUBLIC origin; the private hostname services use
+  between themselves resolves only inside the provider's project, so the help text
+  and the unreachable-IAM message both say so.
 - `namespaces create` commits the plan it just read, never a second derivation —
   the console's two-step form has the same rule for the same reason.
 - `apps variables` writes an app's operator-set values, and a name the app's

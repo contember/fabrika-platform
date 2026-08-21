@@ -9,10 +9,17 @@
 // nothing for an operator to agree to, and `install`'s stdin rule (a non-terminal stdin is refused
 // without `--yes`) has nothing to guard here.
 
-import { createIamAdminClient, ensureFirstAdministrator, type FirstAdministratorApi, type FirstAdministratorResult } from '@fabrika/installation-init'
+import {
+	action as consoleAction,
+	createIamAdminClient,
+	ensureFirstAdministrator,
+	type FirstAdministratorApi,
+	type FirstAdministratorResult,
+} from '@fabrika/installation-init'
 import type { PlatformAdminInput } from './admin-options'
 import { REISSUE_FLAG } from './admin-options'
 import { platformOrigin } from './hosts'
+import { MACHINE_KEY_NEXT_STEP_TITLE, machineKeyNextStepLines } from './machine-key'
 
 /**
  * Where this command's progress goes.
@@ -28,9 +35,14 @@ export interface AdminLog {
 	ok(message: string): void
 }
 
+/** `AdminLog` plus the boxed hand-off the closing block uses — composed in below, not asked of the caller. */
+export interface AdminReportLog extends AdminLog {
+	action(title: string, lines: readonly string[]): void
+}
+
 export interface PlatformAdminCollaborators {
 	readonly client: FirstAdministratorApi
-	readonly log: AdminLog
+	readonly log: AdminReportLog
 	/** stdout, for the command's one piece of DATA: the enrollment URL, on a line of its own. */
 	readonly print: (line: string) => void
 }
@@ -38,7 +50,7 @@ export interface PlatformAdminCollaborators {
 /** The real collaborators: the typed admin client for this installation's public IAM, and the console. */
 export const consoleAdminCollaborators = (input: PlatformAdminInput, log: AdminLog): PlatformAdminCollaborators => ({
 	client: createIamAdminClient({ origin: platformOrigin(input.scheme, input.iamHost), provisioningKey: input.provisioningKey }),
-	log,
+	log: { ...log, action: (title, lines) => consoleAction(title, [...lines]) },
 	print: (line) => console.info(line),
 })
 
@@ -64,6 +76,9 @@ export const runPlatformAdmin = async (input: PlatformAdminInput, collaborators:
 	const result = await ensureFirstAdministrator(client, { email: input.email, reissueEnrollment: input.reissue })
 	report(result, log)
 	announceEnrollment(result, log, print)
+	// The next command an operator runs needs an origin this one already holds and two keys it must not
+	// print. Naming both places is the difference between one `key issue` and a guessed hostname.
+	log.action(MACHINE_KEY_NEXT_STEP_TITLE, machineKeyNextStepLines({ iamOrigin: origin }))
 }
 
 const report = (result: FirstAdministratorResult, log: AdminLog): void => {

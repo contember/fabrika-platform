@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { parseControlFlags, runControlCli } from '../control.js'
+import { CONTROL_USAGE, parseControlFlags, runControlCli } from '../control.js'
 
 const CONTROL_ENV = { FABRIKA_CONTROL_URL: 'https://control.example', FABRIKA_CONTROL_KEY: 'px_test' } as const
 
@@ -272,6 +272,77 @@ describe('control key issue', () => {
 		globalThis.fetch = asFetch(async () => new Response('px_leaked_in_an_error_page', { status: 500 }))
 		await expect(runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
 			.rejects.toThrow('IAM refused the issue request: HTTP 500')
+	})
+
+	test('a connection failure names the public origin and the private hostname that cannot serve it', async () => {
+		globalThis.fetch = asFetch(() =>
+			Promise.reject(Object.assign(new Error('Unable to connect. Is the computer able to access the url?'), { code: 'ConnectionRefused' }))
+		)
+		const failure = await runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, {
+			...ISSUE_ENV,
+			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
+		}).then(() => new Error('the run was expected to fail'), (cause: unknown) => (cause instanceof Error ? cause : new Error(String(cause))))
+
+		expect(failure.message).toContain('IAM could not be reached at http://iam:3000')
+		expect(failure.message).toContain('ConnectionRefused')
+		expect(failure.message).toContain("must be IAM's PUBLIC origin")
+		expect(failure.message).toContain('answers only inside the provider')
+		// The cause object is not passed through: only its short code is quoted.
+		expect(failure.message).not.toContain('Is the computer able to access the url?')
+		expect(failure.message).not.toContain('rpc-secret')
+		expect(failure.message).not.toContain('px_provisioning')
+	})
+
+	test('a cause with no usable code still gets the same one-line explanation', async () => {
+		globalThis.fetch = asFetch(() => Promise.reject(new Error('px_leaked_in_a_cause')))
+		await expect(runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
+			.rejects.toThrow('IAM could not be reached at https://iam.example (the connection failed)')
+	})
+
+	test('names the parsed origin only, so userinfo in the value is not echoed back', async () => {
+		globalThis.fetch = asFetch(() => Promise.reject(Object.assign(new Error('nope'), { code: 'ConnectionRefused' })))
+		const failure = await runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, {
+			...ISSUE_ENV,
+			FABRIKA_IAM_RPC_URL: 'https://operator:px_in_the_url@iam.example',
+		}).then(() => new Error('the run was expected to fail'), (cause: unknown) => (cause instanceof Error ? cause : new Error(String(cause))))
+
+		expect(failure.message).toContain('IAM could not be reached at https://iam.example')
+		expect(failure.message).not.toContain('px_in_the_url')
+		expect(failure.message).not.toContain('operator:')
+	})
+
+	test('a value with no scheme is reported as not a URL, not as the wrong kind of host', async () => {
+		globalThis.fetch = asFetch(() => Promise.reject(Object.assign(new TypeError('fetch() URL is invalid'), { code: 'ERR_INVALID_URL' })))
+		const failure = await runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, {
+			...ISSUE_ENV,
+			FABRIKA_IAM_RPC_URL: 'iam-with-no-scheme.invalid',
+		}).then(() => new Error('the run was expected to fail'), (cause: unknown) => (cause instanceof Error ? cause : new Error(String(cause))))
+
+		expect(failure.message).toContain('is not a URL')
+		expect(failure.message).toContain('it needs the `https://` scheme')
+		// The advice for a private hostname would be wrong here, and the unparsed value is not echoed.
+		expect(failure.message).not.toContain('http://iam:3000')
+		expect(failure.message).not.toContain('iam-with-no-scheme.invalid')
+	})
+
+	test('a missing origin on this path names the IAM variable, not the control one', async () => {
+		await expect(runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, {
+			FABRIKA_IAM_RPC_KEY: 'rpc-secret',
+			FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning',
+		})).rejects.toThrow('IAM origin is required. Pass --iam-url=<origin> or set FABRIKA_IAM_RPC_URL.')
+	})
+})
+
+describe('control --help', () => {
+	test('names LIGHT as the core-package default on every environment (ADR-0038)', () => {
+		expect(CONTROL_USAGE).toContain('--core-package=<LIGHT|SERIOUS>    defaults to LIGHT on every environment')
+		expect(CONTROL_USAGE).not.toContain('defaults to SERIOUS')
+	})
+
+	test('names the PUBLIC origin for FABRIKA_IAM_RPC_URL and says what is not one', () => {
+		expect(CONTROL_USAGE).toContain("FABRIKA_IAM_RPC_URL               required   IAM's PUBLIC origin, or --iam-url")
+		expect(CONTROL_USAGE).not.toContain("IAM's own origin")
+		expect(CONTROL_USAGE).toContain('http://iam:3000')
 	})
 })
 
