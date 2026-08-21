@@ -6,11 +6,16 @@
  * exist yet, generating and placing every credential it needs. Only Zerops declares it, because only
  * there is a from-scratch bring-up a sequence of API calls; on Cloudflare the same ground is covered by
  * `init` plus the workflow it scaffolds.
+ *
+ * `admin` admits the FIRST HUMAN to an installation that already runs. It is a verb of its own rather
+ * than a step of `install`, because it is the one command that is useful long after the bring-up: an
+ * installation whose only administrator left needs it, and a bring-up that got as far as the console
+ * does not need to be repeated to use it.
  */
-export type InstallationCommand = 'init' | 'install' | 'plan' | 'deploy'
+export type InstallationCommand = 'init' | 'install' | 'plan' | 'deploy' | 'admin'
 
 export const isInstallationCommand = (value: unknown): value is InstallationCommand =>
-	value === 'init' || value === 'install' || value === 'plan' || value === 'deploy'
+	value === 'init' || value === 'install' || value === 'plan' || value === 'deploy' || value === 'admin'
 
 export interface InstallationCli {
 	readonly provider: string

@@ -72,6 +72,17 @@ describe('installation capabilities', () => {
 		await expect(runCli(['platform', 'deploy', '--provider=zerops'])).rejects.toThrow('FABRIKA_ZEROPS_PROJECT_ID')
 	})
 
+	test('routes `platform admin` generically, and Cloudflare answers that it does not offer it', async () => {
+		// Routing is the contract's job, not this router's: `admin` reaches the Zerops installation because
+		// it declares the capability, and the same call against Cloudflare prints that provider's usage.
+		await expect(runCli(['platform', 'admin', '--provider=zerops', '--email=operator@example.test'])).rejects.toThrow(
+			'FABRIKA_PLATFORM_IAM_HOST',
+		)
+		await expect(runCli(['platform', 'admin', '--provider=cloudflare'])).rejects.toThrow(
+			'cloudflare installation does not support `platform admin`',
+		)
+	})
+
 	test('forwards a value-less provider flag verbatim, `--yes` included', async () => {
 		expect(parseCliArgs(['platform', 'install', '--provider=zerops', '--yes'])).toEqual({
 			area: 'platform',

@@ -46,6 +46,8 @@
 		"@fabrika/control": "workspace:*",
 		"@fabrika/engine": "workspace:*",
 		"@fabrika/example-zerops-app": "workspace:*",
+		"@fabrika/iam": "workspace:*",
+		"@fabrika/iam-contract": "workspace:*",
 		"@fabrika/operations": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",
 		"@fabrika/proxy": "workspace:*",

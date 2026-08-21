@@ -1,3 +1,14 @@
+export {
+	ADMIN_ROLE_KEY,
+	createIamAdminClient,
+	type EnrollmentOutcome,
+	ensureFirstAdministrator,
+	type FirstAdministratorApi,
+	type FirstAdministratorRequest,
+	type FirstAdministratorResult,
+	type IamAdminClient,
+	type IamAdminConnection,
+} from './admin'
 export { configureEnvironment, type EnvironmentConfig, triggerPlatformWorkflow } from './environment'
 export { ghRepoExists, hasGhCli } from './gh'
 export {

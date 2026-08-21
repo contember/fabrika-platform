@@ -2,10 +2,22 @@ import { describe, expect, test } from 'bun:test'
 import { installationCli } from '..'
 
 describe('Zerops installation capability', () => {
-	test('offers install, init, plan and deploy — and only ONE of them creates an installation', () => {
-		expect(installationCli.commands).toEqual(['install', 'init', 'plan', 'deploy'])
+	test('offers install, init, plan, deploy and admin — and only ONE of them creates an installation', () => {
+		expect(installationCli.commands).toEqual(['install', 'init', 'plan', 'deploy', 'admin'])
 		expect(installationCli.usage).toContain('UPDATE AN\nINSTALLATION THAT ALREADY EXISTS')
 		expect(installationCli.usage).toContain('`install` CREATES an installation in a project you created empty')
+	})
+
+	test('admin documents the first-administrator surface and refuses anything that could carry a credential', async () => {
+		// The cross-app grant is the trap this command exists to close; the usage text is where an operator
+		// reads why an app-scoped one would leave the Access plane refusing.
+		for (const flag of ['--email', '--iam-host', '--reissue']) {
+			expect(installationCli.usage).toContain(flag)
+		}
+		expect(installationCli.usage).toContain('FABRIKA_PLATFORM_ADMIN_EMAIL')
+		expect(installationCli.usage).toContain('cross-app (`app: null`)')
+		await expect(installationCli.run('admin', ['--key=nope'])).rejects.toThrow('unexpected argument')
+		await expect(installationCli.run('admin', [])).rejects.toThrow('--email=<value> or FABRIKA_PLATFORM_ADMIN_EMAIL is required')
 	})
 
 	test('install documents the whole from-scratch surface, credentials included', async () => {

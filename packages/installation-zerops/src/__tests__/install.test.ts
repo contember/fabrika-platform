@@ -456,11 +456,17 @@ describe('the hand-off', () => {
 
 		const provisioningKey = fixture.zerops.env('iam').get('FABRIKA_IAM_PROVISIONING_KEY') ?? 'none'
 		const occurrences = fixture.log.lines.filter((line) => line.includes(provisioningKey))
-		expect(occurrences).toHaveLength(1)
+		// Twice, and BOTH through `action` — the boxed path is the only one that ever carries the value,
+		// so the key still reaches no `info` line and no other helper.
+		expect(occurrences).toHaveLength(2)
 		expect(occurrences[0]).toStartWith('action: CAPTURE THIS NOW')
+		expect(occurrences[1]).toStartWith('action: ADMIT YOURSELF')
+		expect(occurrences.every((line) => line.startsWith('action: '))).toBe(true)
 		const transcript = fixture.log.lines.join('\n')
 		expect(transcript).toContain('FABRIKA_IAM_PROVISIONING_KEY')
 		expect(transcript).toContain('FABRIKA_ZEROPS_ACCESS_TOKEN')
+		// The command is ready to run: the host it needs is the one this install just read off the proxy.
+		expect(occurrences[1]).toContain(`fabrika platform admin --provider=zerops --email=<you> --iam-host=${IAM_HOST}`)
 	})
 
 	test('NO other secret value reaches the transcript — not one of them', async () => {

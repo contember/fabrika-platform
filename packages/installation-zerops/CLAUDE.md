@@ -3,14 +3,16 @@
 The Zerops implementation of `@fabrika/installation-contract` plus the typed
 platform topology and generated installation artifacts.
 
-Four public commands. `fabrika platform plan --provider=zerops` validates the
+Five public commands. `fabrika platform plan --provider=zerops` validates the
 generated artifacts against Zerops' published schemas. `fabrika platform deploy
 --provider=zerops` brings an EXISTING installation to this checkout, unattended
 and idempotently — the full surface is in the `usage` string in `src/index.ts`,
 which is also what the generated workflow is written against. `fabrika platform
 init --provider=zerops <installation>` creates and maintains the operator's
 sidecar repository that calls it. `fabrika platform install --provider=zerops`
-CREATES one, in a project the operator made empty.
+CREATES one, in a project the operator made empty. `fabrika platform admin
+--provider=zerops --email=<address>` admits the first human to what that
+bring-up created.
 
 **`install` is the only command that creates an installation; `init` and `deploy`
 both refuse to.** It runs first and hands `init` the provisioning key it generated.
@@ -31,6 +33,7 @@ and is deliberate — someone reading only one path will guess wrong about the o
 - `src/install.ts` — the from-scratch bring-up: the two passes and the whole environment matrix.
   `src/install-options.ts` — its flags. `src/secrets.ts` — the seven values it generates.
 - `src/init.ts` — the sidecar-repository flow, its prompts and its confirmed outward steps.
+- `src/admin.ts` — the first-administrator command. `src/admin-options.ts` — its flags.
 - `src/sidecar.ts` — what the sidecar repository contains + the tag rule. `src/templates/` — its four files.
 - `src/manifest.ts` — composing the platform's apps with an installation's application entries.
 - `src/hosts.ts` — where one installation answers. `src/log.ts` — progress, with no secret-taking helper.
@@ -125,6 +128,17 @@ and is deliberate — someone reading only one path will guess wrong about the o
 - **The sidecar Environment holds no admission list.** No bootstrap-admin variable
   is written, because the deploy neither reads nor writes one — so there is no
   escape hatch here for an operator to remember to close later.
+- **`platform admin` writes a CROSS-APP (`app: null`) `admin` grant and prints the
+  enrollment URL ONCE; a re-run invites nobody twice, grants nothing twice and
+  issues no second enrollment.** An app-scoped grant produces a console that is
+  two-thirds working — Delivery and Operations admit the session while the Access
+  plane refuses — which is harder to diagnose than one that fails outright. The URL
+  is a credential in transit: it goes to stdout on a line of its own and through no
+  logging helper. An outstanding enrollment is REPORTED, and `--reissue` is the only
+  way to replace one; a password already set is never re-enrolled. It is why nothing
+  here seeds `IAM_BOOTSTRAP_ADMINS`. The mechanics are
+  `@fabrika/installation-init`'s `ensureFirstAdministrator`; `src/admin.ts` holds
+  only where this installation's IAM answers.
 - **Every write is read-compare-write, so a re-run changes nothing.** `GET
   /service-stack/{id}/env` works on every service (`docs/reference/zerops-platform.md`),
   which is what makes the comparison possible; `putServiceEnv` stays write-first

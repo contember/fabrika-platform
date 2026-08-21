@@ -1,9 +1,12 @@
 import { reconcileSchema } from '@fabrika/auth'
 import type { InstallationCli, InstallationCommand } from '@fabrika/installation-contract'
+import { info as consoleInfo, ok as consoleOk, step as consoleStep, warn as consoleWarn } from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { createZeropsApi, defaultSleep } from '@fabrika/provider-zerops'
 import { generatedArtifacts } from '../zerops/artifacts'
 import { assertArtifactMatchesSchema } from '../zerops/validate'
+import { consoleAdminCollaborators, runPlatformAdmin } from './admin'
+import { parsePlatformAdminArgs, REISSUE_FLAG } from './admin-options'
 import { deployPlatform, PLATFORM_DEPLOY_ORDER } from './deploy'
 import { parsePlatformDeployArgs } from './deploy-options'
 import { consoleInitCollaborators, parseInitArgs, runInit } from './init'
@@ -18,10 +21,12 @@ Commands:
   fabrika platform init    --provider=zerops <installation> [--repo=<owner>/<name>]
   fabrika platform plan    --provider=zerops
   fabrika platform deploy  --provider=zerops [options]
+  fabrika platform admin   --provider=zerops --email=<address> --iam-host=<host> [--scheme=<http|https>] [${REISSUE_FLAG}]
 
 \`install\` CREATES an installation in a project you created empty; \`init\` and \`deploy\` UPDATE AN
 INSTALLATION THAT ALREADY EXISTS. Run them in that order: install generates the provisioning key that
-init then writes into the operator's GitHub Environment.
+init then writes into the operator's GitHub Environment. \`admin\` comes LAST, once the installation is
+serving: it admits the first human, and nothing before it can sign in.
 
 ── platform install ──────────────────────────────────────────────────────────────────────────────
 
@@ -160,6 +165,34 @@ process listing:
   FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
 
 This command writes NO credential. Every secret an installation holds is placed at bring-up.
+
+── platform admin ────────────────────────────────────────────────────────────────────────────────
+
+The first human. A fresh installation has none — nothing seeds an admission list, and this command is
+why it does not have to. It is unattended, prompts for nothing, and changes nothing on a re-run:
+
+  1. find the principal holding that mailbox, or invite one
+  2. grant it the CROSS-APP \`admin\` role, unless it already holds one
+  3. issue ONE password enrollment and print its URL
+
+The grant is cross-app (\`app: null\`) and that is load-bearing: grants filter to the calling app, so an
+\`admin\` grant scoped to the console's own app id leaves Delivery and Operations working while the
+Access plane refuses. A re-run invites nobody twice, grants nothing twice and issues no second
+enrollment — a password that is already set, or an enrollment already outstanding, is REPORTED. Pass
+\`${REISSUE_FLAG}\` to replace an outstanding one, which is the way out when the first expired unopened.
+
+The enrollment URL is a credential: it is printed once, on a line of its own, and stored nowhere.
+
+\`install\` reports the host this needs as \`✓ iam <host>\` and ends with this command ready to run.
+
+Options (a flag beats the environment variable beside it):
+
+  --email=<address>                 FABRIKA_PLATFORM_ADMIN_EMAIL    the administrator's mailbox
+  --iam-host=<host>                 FABRIKA_PLATFORM_IAM_HOST       IAM's public hostname, as \`deploy\` names it
+  --scheme=<http|https>             FABRIKA_PLATFORM_SCHEME         default https
+  ${REISSUE_FLAG}                                                         replace an outstanding enrollment
+
+  FABRIKA_IAM_PROVISIONING_KEY      required   the px_ admin key \`install\` printed, environment only
 `
 
 /** No cancellation source exists behind a CLI invocation; the ports all take a signal regardless. */
@@ -202,6 +235,19 @@ const runDeploy = async (argv: readonly string[]): Promise<void> => {
 	})
 }
 
+const runAdmin = async (argv: readonly string[]): Promise<void> => {
+	const input = parsePlatformAdminArgs(argv, process.env)
+	await runPlatformAdmin(
+		input,
+		consoleAdminCollaborators(input, {
+			step: (title) => consoleStep(title),
+			info: (message) => consoleInfo(message),
+			warn: (message) => consoleWarn(message),
+			ok: (message) => consoleOk(message),
+		}),
+	)
+}
+
 const runPlatformInstall = async (argv: readonly string[]): Promise<void> => {
 	const input = parsePlatformInstallArgs(argv, process.env)
 	await runInstall(input, consoleInstallCollaborators(input, consoleSchemaReconciler))
@@ -209,7 +255,7 @@ const runPlatformInstall = async (argv: readonly string[]): Promise<void> => {
 
 export const installationCli: InstallationCli = {
 	provider: 'zerops',
-	commands: ['install', 'init', 'plan', 'deploy'],
+	commands: ['install', 'init', 'plan', 'deploy', 'admin'],
 	usage: USAGE,
 	run: async (command: InstallationCommand, argv: readonly string[]) => {
 		if (command === 'install') {
@@ -226,6 +272,10 @@ export const installationCli: InstallationCli = {
 		}
 		if (command === 'deploy') {
 			await runDeploy(argv)
+			return
+		}
+		if (command === 'admin') {
+			await runAdmin(argv)
 			return
 		}
 		throw new Error(`Zerops installation does not support \`platform ${command}\``)

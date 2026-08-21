@@ -647,6 +647,12 @@ export const runInstall = async (input: PlatformInstallInput, collaborators: Ins
 	log.info('  FABRIKA_IAM_PROVISIONING_KEY   the key above')
 	log.info('  FABRIKA_ZEROPS_ACCESS_TOKEN    the integration token just minted — read it back from the `control` service, never printed here')
 	log.info(`The console answers at ${platformOrigin(input.scheme, hosts.control)}, once someone can sign in: nobody can yet.`)
+	// Through the SAME boxed path as the key above, deliberately: `action` is already the one output
+	// that carries a secret value, so the ready-to-run command does not become a second place one is
+	// printed. `platform admin` is idempotent, so re-running it is safe.
+	log.action('ADMIT YOURSELF — the console has no administrator until this runs', [
+		`FABRIKA_IAM_PROVISIONING_KEY=${secrets.provisioningKey} fabrika platform admin --provider=zerops --email=<you> --iam-host=${hosts.iam}`,
+	])
 }
 
 /**

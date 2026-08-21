@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { type InstallationCli, installationCliFromModule, isInstallationCli, supportsInstallationCommand } from '..'
+import { type InstallationCli, installationCliFromModule, isInstallationCli, isInstallationCommand, supportsInstallationCommand } from '..'
 
 const installationCli: InstallationCli = {
 	provider: 'cloudflare',
@@ -18,6 +18,13 @@ describe('installation CLI contract', () => {
 		expect(isInstallationCli({ ...installationCli, commands: ['plan', 'destroy'] })).toBe(false)
 		expect(isInstallationCli({ ...installationCli, commands: ['plan', 'plan'] })).toBe(false)
 		expect(isInstallationCli({ ...installationCli, commands: [] })).toBe(false)
+	})
+
+	test('`admin` is a command a provider may offer, and not offering it is the default', () => {
+		expect(isInstallationCommand('admin')).toBe(true)
+		// Cloudflare declares four commands and not this one, so the router prints its usage instead.
+		expect(supportsInstallationCommand(installationCli, 'admin')).toBe(false)
+		expect(isInstallationCli({ ...installationCli, commands: ['init', 'plan', 'deploy', 'admin'] })).toBe(true)
 	})
 
 	test('validates the provider selected by a built-in dispatcher', () => {

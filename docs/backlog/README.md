@@ -55,13 +55,13 @@ and a pin that pins half of what it claims.
 - [63](63-a-one-click-install-from-the-public-repository.md) — The second install shape: a running platform without creating a repository or a CI system.
 - [64](64-close-the-bootstrap-admission-hatch-automatically.md) — A Cloudflare installation comes up admitting on a standing admin list, and closing it is an instruction printed to a human.
 - [65](65-pin-a-zerops-build-to-a-revision.md) — A Zerops build source names a repository, not a revision, so `fabrika.ref` pins the pipeline but not the code Zerops builds.
-- [67](67-command-for-the-first-administrator.md) — A fresh installation comes up with nobody able to sign in, and the four RPC calls that fix that live in a throwaway script.
 - [71](71-deliver-domain-audit-events-durably.md) — Add stable event ids, idempotent IAM acknowledgement and transactional producer outboxes for every domain mutation.
 - [72](72-a-failed-namespace-reports-nothing-an-operator-can-act-on.md) — Every namespace failure looks the same: the provider's error is discarded, not redacted.
 - [73](73-a-failed-namespace-cannot-be-removed.md) — No delete, so a failed namespace holds its id forever and a retry must rename.
 - [75](75-a-running-installation-keeps-a-token-that-cannot-create-projects.md) — Installations minted before ADR-0034 hold a token that cannot create projects, and nothing says so.
 - [78](78-register-a-zerops-app-from-local-config-in-one-command.md) — Compose the existing local manifest build and Control registration into one command without executing application code in Control.
 - [79](79-a-namespace-target-cannot-be-changed-after-creation.md) — A namespace's provider target is written once; no API takes a new one, and a hand-edited one is refused against the live service.
+- [80](80-harmonize-the-admin-rpc-principal-inputs.md) — Two admin-RPC procedures name the same principal by two different keys, so the obvious call is refused.
 - [81](81-exercise-a-private-keyed-deploy-in-the-local-stack.md) — The local stack cannot exercise a keyed private deploy or a bound-app webhook: `source` mints installation tokens against real GitHub.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
