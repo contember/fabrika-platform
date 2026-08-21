@@ -211,6 +211,10 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 			artifact: input.artifact,
 		},
 	}
+	// Claimed from the REQUESTED registration, before the provider is called at all — the same order
+	// `register` uses. A registration the provider refuses on its face — a proxy target with no domain —
+	// must not reach `prepareRegistration`, which creates provider services.
+	const resourceClaims = registrationResourceClaims(c.provider, requested)
 	const preparation = c.provider.namespaces?.prepareRegistration
 	let registration: ProviderRegistration
 	if (preparation === undefined) {
@@ -224,7 +228,6 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 			return fail(502, preparationFailure(cause))
 		}
 	}
-	const resourceClaims = registrationResourceClaims(c.provider, registration)
 	const persistence = {
 		appId,
 		env,

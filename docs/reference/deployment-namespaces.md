@@ -32,7 +32,10 @@ versioned JSON envelope.
 The operator surface accepts provider-neutral coordinates plus an opaque JSON
 `options` value. A plan returns the complete namespace envelope that can be
 submitted unchanged for creation, together with safe display facts and operator
-instructions. Shared control validates that planning and normalization preserve
+instructions. A presentation may also name the public `hosts` the namespace
+serves, each with the listener port that publishes it. Only the provider knows
+how a host comes to exist, and only shared control knows which application
+environment claims one, so the provider names them and control marks them. Shared control validates that planning and normalization preserve
 the namespace id, environment, exclusive owner, and provider id.
 
 The namespace lifecycle reports durable provider checkpoints through
@@ -126,6 +129,7 @@ progress:
 - managed/adopted ownership and the Zerops project id;
 - resolved proxy and PostgreSQL service ids;
 - proxy configuration and app-version checkpoints;
+- the hosts the published proxy serves, one per HTTP port;
 - provider readiness.
 
 The application environment uses a separate Zerops app target envelope, version
@@ -196,6 +200,24 @@ Custom domains are bound to the namespace's `proxy` service manually in Zerops.
 App services do not receive public domains. Zerops subdomain access is available
 as the non-production `zerops-subdomain` namespace option.
 
+A `zerops-subdomain` namespace publishes one generated host per listening proxy
+port. The platform names them in the proxy service's READ_ONLY `zeropsSubdomain`
+variable as newline-separated URLs; provisioning and reconcile read that variable
+after the subdomain is published and record `{ host, port }` in the namespace
+target, so reading a namespace costs no platform call. A placement provisioned
+before the hosts were recorded lists none until its next reconcile. A
+`custom-domain` namespace records none either: its domains are bound out of band
+and the provider cannot see them. A listing that fails leaves the namespace ready
+with no hosts and one warning line — the proxy is already built, deployed and
+published, and a host listing is not worth failing a working placement over.
+
+Because the proxy routes by HOST, an application environment whose manifest
+carries a `target.proxy` must have a domain. Registration and
+`PUT /api/apps/:app/envs/:env` refuse one that does not, naming `--domain`, from
+the provider's synchronous claims hook — before any provider mutation, so nothing
+is created. Previously such a registration succeeded and its first deploy failed
+at proxy composition.
+
 The proxy `buildFromGit` URL is persisted in the namespace target and reused for
 proxy pipeline triggers. Public Zerops documentation does not establish that
 this source is an immutable content pin; operators must treat the configured URL
@@ -210,7 +232,7 @@ All namespace HTTP routes require the global `namespace.manage` action:
 | `GET /api/namespaces`                | List namespaces and provider-owned preset metadata |
 | `POST /api/namespaces/plan`          | Produce a mutation-free provider plan              |
 | `POST /api/namespaces`               | Persist claims and queue provisioning              |
-| `GET /api/namespaces/:id`            | Read lifecycle state and provider presentation     |
+| `GET /api/namespaces/:id`            | Read state, presentation, and served hosts         |
 | `POST /api/namespaces/:id/adopt`     | Adopt and reconcile an existing placement          |
 | `POST /api/namespaces/:id/reconcile` | Queue a reconcile of stored provider state         |
 | `DELETE /api/namespaces/:id`         | Remove an unused placement and free its id         |
@@ -227,6 +249,12 @@ resource: the control plane holds `OWNER` on the projects it creates
 so the response returns the removed row whole. A provider marks the presentation
 facts that name a live resource rather than a policy choice; the console and the
 CLI report exactly those as retained, and report nothing when none is marked.
+
+Reading one namespace also answers its `hosts`: for every host the provider
+names, the port that publishes it and, when a registered environment's domain
+already equals it, the `appId` and `environment` that took it. The match is on the
+domain the proxy manifest routes on, so a host reported free is exactly one the
+next `--domain` may claim. The field is absent where the provider names no host.
 
 Application onboarding and `PUT /api/apps/:app/envs/:env` accept `namespaceId`.
 The response exposes that assignment alongside opaque provider target and

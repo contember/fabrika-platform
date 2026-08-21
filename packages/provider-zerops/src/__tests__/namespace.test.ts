@@ -1,4 +1,9 @@
-import { type ProviderDeploymentNamespace, ProviderNamespaceError } from '@fabrika/provider-contract'
+import {
+	type ProviderDeploymentNamespace,
+	ProviderNamespaceError,
+	type ProviderNamespaceOperator,
+	type ProviderRegistration,
+} from '@fabrika/provider-contract'
 import { FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
 import { describe, expect, test } from 'bun:test'
 import {
@@ -12,7 +17,7 @@ import {
 	type ZeropsServiceEnv,
 } from '../api'
 import { useSharedPostgres } from '../authoring'
-import { compileFabrikaManifest, manifestServiceHostnames, type ZeropsArtifactSourceDescriptor } from '../manifest'
+import { compileFabrikaManifest, manifestServiceHostnames, zeropsArtifactCodec, type ZeropsArtifactSourceDescriptor } from '../manifest'
 import {
 	compileZeropsNamespaceTopology,
 	createZeropsNamespaceCapabilities,
@@ -20,6 +25,7 @@ import {
 	ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
 	ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
 	ZEROPS_NAMESPACE_LIFECYCLE,
+	ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE,
 	ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
 	ZEROPS_SUBDOMAIN_NOT_PUBLISHED,
 	type ZeropsNamespaceOptions,
@@ -47,6 +53,8 @@ interface FakeState {
 	importProjectError: ZeropsApiError | null
 	/** A platform refusal of a service-variable write, e.g. a value the platform rejects. */
 	serviceEnvError: ZeropsApiError | null
+	/** A platform refusal of the variable LISTING, armed only once the proxy subdomain is published. */
+	failServiceEnvListAfterPublish: boolean
 }
 
 const freshState = (): FakeState => ({
@@ -63,6 +71,7 @@ const freshState = (): FakeState => ({
 	subdomainStaysDisabled: false,
 	importProjectError: null,
 	serviceEnvError: null,
+	failServiceEnvListAfterPublish: false,
 })
 
 const projectId = 'project-1'
@@ -252,7 +261,13 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 	listProjects: async () => [...state.projects.values()],
 	findProjects: async ({ name }) => [...state.projects.values()].filter((candidate) => candidate.name === name),
 	listProjectServices: async ({ projectId: id }) => [...(state.services.get(id) ?? [])],
-	listServiceEnv: async ({ serviceId }) => [...ensureServiceEnv(state, serviceId).values()],
+	listServiceEnv: async ({ serviceId }) => {
+		const published = [...state.services.values()].flat().find((service) => service.id === serviceId)?.subdomainAccess === true
+		if (state.failServiceEnvListAfterPublish && published) {
+			throw new ZeropsApiError('zerops: list service env failed (403)', 403, 'insufficientPermissions')
+		}
+		return [...ensureServiceEnv(state, serviceId).values()]
+	},
 	createServiceEnv: async ({ serviceId, key, value }) => {
 		state.calls.push(`create:${serviceId}:${key}`)
 		const environment = ensureServiceEnv(state, serviceId)
@@ -780,6 +795,151 @@ describe('Zerops namespace presentation', () => {
 
 		expect(planned.presentation.facts.some((fact) => fact.resource === true)).toBe(false)
 		expect(planned.presentation.facts[0]).toEqual({ label: 'Project', value: 'apps-prod' })
+	})
+
+	// The hosts an operator has to name as `--domain`. Before this they were read by hand off the proxy
+	// service's `zeropsSubdomain` variable, which is exactly what provisioning now records for them.
+	const operator = (): ProviderNamespaceOperator =>
+		createZeropsNamespaceOperator({ proxyBuildFromGit: 'https://github.com/contember/fabrika-platform' })
+
+	const subdomainPlacement = (): ProviderDeploymentNamespace =>
+		namespace(zeropsNamespacePreset({
+			preset: 'mid',
+			env: 'prod',
+			projectName: 'apps-prod',
+			publicAccess: 'zerops-subdomain',
+			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+		}))
+
+	const publishSubdomains = (state: FakeState, content: string): void => {
+		ensureServiceEnv(state, proxyId).set(ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE, {
+			id: `${proxyId}:${ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE}`,
+			key: ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE,
+			content,
+			serviceStackId: proxyId,
+			type: 'SYSTEM',
+		})
+	}
+
+	test('lists one host per published proxy port, ordered by port and lowercased', async () => {
+		const state = freshState()
+		// One URL per listening port, newline-separated, exactly as the platform writes it.
+		publishSubdomains(
+			state,
+			'https://proxy-2ec8-8082.prg1.zerops.app\nhttps://PROXY-2EC8-8080.PRG1.zerops.app\n',
+		)
+
+		const provisioned = await run(createZeropsNamespaceCapabilities(options(state)), subdomainPlacement(), [])
+
+		// A host is what a Host header is matched against, so it is recorded the way the proxy compares it.
+		expect(operator().present(provisioned).hosts).toEqual([
+			{ host: 'proxy-2ec8-8080.prg1.zerops.app', port: 8080 },
+			{ host: 'proxy-2ec8-8082.prg1.zerops.app', port: 8082 },
+		])
+	})
+
+	test('lists no host when the variable is absent, portless, or unreadable', async () => {
+		const absent = freshState()
+		// A proxy that has never deployed still HAS the variable: one line, no port segment
+		// (`docs/reference/zerops-platform.md`). It names no listener, so it names no host.
+		const portless = freshState()
+		publishSubdomains(portless, 'https://proxy-2ec8.prg1.zerops.app\nnot a url at all\n')
+
+		const provisioned = await run(createZeropsNamespaceCapabilities(options(absent)), subdomainPlacement(), [])
+		const undeployed = await run(createZeropsNamespaceCapabilities(options(portless)), subdomainPlacement(), [])
+
+		expect(operator().present(provisioned).hosts).toBeUndefined()
+		expect(operator().present(undeployed).hosts).toBeUndefined()
+	})
+
+	test('stays ready when the host listing fails, because the proxy is already published', async () => {
+		const state = freshState()
+		publishSubdomains(state, 'https://proxy-2ec8-8080.prg1.zerops.app\n')
+		// Only the listing that follows the publish fails: everything the namespace exists for succeeded.
+		state.failServiceEnvListAfterPublish = true
+
+		const provisioned = await run(createZeropsNamespaceCapabilities(options(state)), subdomainPlacement(), [])
+
+		expect(zeropsNamespaceTargetCodec.decode(provisioned.target.payload).ready).toBe(true)
+		expect(operator().present(provisioned).hosts).toBeUndefined()
+		expect(state.calls).toContain(`enableSubdomain:${proxyId}`)
+	})
+
+	test('lists no host before the placement is ready, and none at all on a custom-domain placement', () => {
+		const recorded: ZeropsNamespaceTarget = {
+			projectId,
+			projectName: 'apps-prod',
+			corePackage: 'LIGHT',
+			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+			managed: true,
+			proxyServiceId: proxyId,
+			proxyHosts: [{ host: 'proxy-2ec8-8080.prg1.zerops.app', port: 8080 }],
+		}
+
+		expect(operator().present(namespace({ ...recorded, publicAccess: 'zerops-subdomain', ready: false })).hosts).toBeUndefined()
+		expect(operator().present(namespace({ ...recorded, publicAccess: 'custom-domain', ready: true })).hosts).toBeUndefined()
+	})
+
+	test('carries the recorded hosts through the target codec', () => {
+		const encoded = zeropsNamespaceTargetCodec.encode({ proxyHosts: [{ host: 'proxy-2ec8-8080.prg1.zerops.app', port: 8080 }] })
+
+		expect(zeropsNamespaceTargetCodec.decode(encoded).proxyHosts).toEqual([{ host: 'proxy-2ec8-8080.prg1.zerops.app', port: 8080 }])
+		expect(() => zeropsNamespaceTargetCodec.decode({ proxyHosts: [{ host: 'proxy-2ec8-8080.prg1.zerops.app', port: '8080' }] })).toThrow(
+			'port must be a positive integer',
+		)
+	})
+})
+
+// A `target.proxy` app is routed by Host: with no domain the namespace proxy has nothing to serve, and
+// before this the registration was accepted and the first deploy failed a second later.
+describe('Zerops proxy-target registration', () => {
+	const proxyRegistration = (domain?: string): ProviderRegistration => {
+		const config: ZeropsAppConfig = {
+			id: 'notes',
+			target: {
+				platform: 'zerops',
+				services: () => [{ hostname: 'notesapi', type: 'alpine/bun@1.3' }],
+				deployService: 'notesapi',
+				proxy: { upstream: 'notesapi:3000', gates: { rules: [] } },
+			},
+		}
+		return {
+			app: { id: 'notes', source: { repoUrl: 'https://github.com/example/notes', ref: 'main' } },
+			environment: {
+				appId: 'notes',
+				env: 'prod',
+				...(domain === undefined ? {} : { domain }),
+				namespace: namespace(
+					zeropsNamespacePreset({
+						preset: 'full',
+						env: 'prod',
+						projectName: 'apps-prod',
+						publicAccess: 'zerops-subdomain',
+						proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+					}),
+					{ exclusiveAppId: 'notes' },
+				),
+				target: { provider: 'zerops', version: 2, payload: { serviceId: 'notesapi-service' } },
+				artifact: {
+					provider: 'zerops',
+					version: zeropsArtifactCodec.version,
+					payload: zeropsArtifactCodec.encode(compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)),
+				},
+			},
+		}
+	}
+
+	test('refuses a proxy target with no domain, naming the flag that supplies one', () => {
+		const capabilities = createZeropsNamespaceCapabilities(options(freshState()))
+
+		expect(() => capabilities.registrationResourceClaims(proxyRegistration())).toThrow('--domain')
+		expect(() => capabilities.registrationResourceClaims(proxyRegistration('   '))).toThrow('requires a public domain')
+	})
+
+	test('claims the app services once a domain is given', () => {
+		const capabilities = createZeropsNamespaceCapabilities(options(freshState()))
+
+		expect(capabilities.registrationResourceClaims(proxyRegistration('proxy-2ec8-8080.prg1.zerops.app'))).toEqual(['service:notesapi'])
 	})
 })
 

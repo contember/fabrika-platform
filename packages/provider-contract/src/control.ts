@@ -212,12 +212,26 @@ export interface ProviderNamespaceFact {
 	readonly resource?: true
 }
 
+/**
+ * One public host this namespace's own entry point answers on, with the listener port that publishes it.
+ *
+ * Only the provider knows how a host comes to exist — Zerops generates one per published HTTP port — and
+ * core knows which of them an application environment already claims, so the provider names them and core
+ * marks them. A namespace whose domains are bound out of band names none: the provider cannot see them.
+ */
+export interface ProviderNamespaceHost {
+	readonly host: string
+	readonly port: number
+}
+
 /** Provider-owned operator copy for a planned or persisted namespace. */
 export interface ProviderNamespacePresentation {
 	readonly preset: string
 	readonly title: string
 	readonly facts: readonly ProviderNamespaceFact[]
 	readonly instructions: readonly string[]
+	/** The hosts this namespace can serve, so an operator can name one as an environment's domain. */
+	readonly hosts?: readonly ProviderNamespaceHost[]
 }
 
 /** A mutation-free preview that can be submitted unchanged to namespace creation. */

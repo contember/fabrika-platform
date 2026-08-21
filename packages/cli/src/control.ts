@@ -14,6 +14,7 @@ import type { IssueKeyInput, IssueKeyResult } from '@fabrika/auth-core'
 import type {
 	AppDto,
 	ControlRpcContract,
+	DeploymentNamespaceDetailDto,
 	DeploymentNamespaceDto,
 	JsonValue,
 	PlanDeploymentNamespaceRequest,
@@ -26,7 +27,7 @@ import type {
 const USAGE = `fabrika control — operate the Delivery control plane
 
 Usage:
-  fabrika control key issue --label=<name> --permissions=<a,b,c> [--expires-in=<seconds>]
+  fabrika control key issue --label=<name> --permissions=<a,b,c> [--expires-in=<seconds>] [--iam-url=<origin>]
   fabrika control apps list
   fabrika control apps get --app=<id>
   fabrika control apps environments list --app=<id>
@@ -53,6 +54,12 @@ Usage:
 manifest — a new \`zerops.yaml\`, a new import document — is \`apps environments put\`, which replaces
 one environment's envelopes and leaves the app row alone.
 
+A manifest that publishes the app through the namespace proxy is routed by HOST, so \`--domain\` is
+REQUIRED for it — on \`register\` and on \`apps environments put\` alike — and a registration without one is
+refused before anything is created. \`namespaces get\` lists the hosts a \`zerops-subdomain\` namespace
+serves and which of them are still free; a custom-domain namespace serves the domain you bound to its
+proxy. A manifest with no proxy target needs no domain.
+
 \`--installation-id\` has three states: omitted resolves the installation from the organization's
 connected GitHub App, \`none\` registers an anonymous PUBLIC repository source, and a number names one
 installation outright.
@@ -60,7 +67,8 @@ installation outright.
 Namespace placement options, each defaulting to what the preset would choose:
 
   --project=<name>                  the provider project the namespace owns
-  --core-package=<LIGHT|SERIOUS>    defaults to SERIOUS for \`prod\`, LIGHT elsewhere
+  --core-package=<LIGHT|SERIOUS>    defaults to LIGHT on every environment, \`prod\` included (ADR-0038).
+                                    SERIOUS is a deliberate choice: a project cannot be downgraded again
   --public-access=<custom-domain|zerops-subdomain>
   --exclusive-app=<id>              required by, and only by, the \`full\` preset
 
@@ -86,10 +94,15 @@ process listing:
 installation's IAM RPC key as transport authentication and its provisioning key as the ISSUING
 credential. Both are read from the environment only:
 
-  FABRIKA_IAM_RPC_URL               required   IAM's own origin (its \`/rpc\` surface), or --iam-url
+  FABRIKA_IAM_RPC_URL               required   IAM's PUBLIC origin, or --iam-url
   FABRIKA_IAM_RPC_KEY               required   the installation's IAM RPC key
   FABRIKA_IAM_PROVISIONING_KEY      required   the installation's seeded \`px_\` provisioning key
   FABRIKA_CONTROL_APP_ID            optional   the control app's IAM id (default \`vozka\`)
+
+The PUBLIC origin is the \`https://\` address the installation answers on — the one \`platform admin\`
+and \`platform init\` print in their closing block, and the value \`FABRIKA_IAM_ISSUER\` holds on the
+control service. It is NOT the private hostname the services use between themselves: \`http://iam:3000\`
+resolves inside the provider's project and nowhere else, so from here it only ever fails to connect.
 
 Connecting a GitHub source is NOT here and will not be: App creation is a browser flow whose
 authorization requires a human principal (ADR-0031). Use Settings → Source in the console.
@@ -227,6 +240,20 @@ const appLine = (app: AppDto): string => `${app.id}\t${app.repoUrl}\t${app.defau
 
 const runLine = (run: RunDto): string => `${run.id}\t${run.appId}\t${run.env}\t${run.status}\t${run.ref}`
 
+/**
+ * The one `key issue` failure whose cause is almost always the wrong KIND of address.
+ *
+ * `fetch` rejects only when the request never completed, so this reports what could not be reached and
+ * the one mistake that produces it. The origin is not a credential and is named; the cause object may
+ * quote anything, so only its short error code is.
+ */
+const unreachableIam = (base: string, cause: unknown): string => {
+	const code = typeof cause === 'object' && cause !== null ? Reflect.get(cause, 'code') : undefined
+	const reason = typeof code === 'string' && code !== '' && code.length <= 40 ? code : 'the connection failed'
+	return `IAM could not be reached at ${base} (${reason}). FABRIKA_IAM_RPC_URL must be IAM's PUBLIC origin: `
+		+ "a private hostname such as `http://iam:3000` answers only inside the provider's project, never from this machine."
+}
+
 const runKeyIssue = async (flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
 	const permissions = required(flags, 'permissions').split(',').map((entry) => entry.trim()).filter((entry) => entry !== '')
 	if (permissions.length === 0) {
@@ -246,6 +273,8 @@ const runKeyIssue = async (flags: Flags, env: Readonly<Record<string, string | u
 		method: 'POST',
 		headers: { authorization: `Bearer ${secret('FABRIKA_IAM_RPC_KEY', env)}`, 'content-type': 'application/json' },
 		body: JSON.stringify(body),
+	}).catch((cause: unknown) => {
+		throw new Error(unreachableIam(base, cause))
 	})
 	if (!response.ok) {
 		// The body can quote what came off the wire, so report the status and nothing else.
@@ -460,6 +489,12 @@ const runRuns = async (verb: string | undefined, flags: Flags, env: Readonly<Rec
 const namespaceLine = (namespace: DeploymentNamespaceDto): string =>
 	`${namespace.id}\t${namespace.env}\t${namespace.state}\t${namespace.exclusiveAppId ?? '-'}`
 
+/** One line per host the placement serves: a `free` one is exactly what the next `--domain` accepts. */
+const namespaceHostLines = (namespace: DeploymentNamespaceDetailDto): string[] =>
+	(namespace.hosts ?? []).map((entry) =>
+		`${entry.host}\t${entry.port}\t${entry.takenBy === undefined ? 'free' : `taken by ${entry.takenBy.appId}/${entry.takenBy.environment}`}`
+	)
+
 /** The failure is a DIAGNOSTIC, so it goes to stderr and leaves the data columns above untouched. */
 const warnNamespaceFailure = (namespace: DeploymentNamespaceDto): void => {
 	// Falsy, not `=== null`: a control plane that omits the field must not print an empty diagnostic.
@@ -496,7 +531,7 @@ const runNamespaces = async (verb: string | undefined, flags: Flags, env: Readon
 	if (verb === 'get') {
 		const result = await client.namespaces.get({ namespaceId: required(flags, 'namespace') })
 		warnNamespaceFailure(result)
-		emit(flags, result, () => namespaceLine(result))
+		emit(flags, result, () => [namespaceLine(result), ...namespaceHostLines(result)].join('\n'))
 		return
 	}
 	if (verb === 'plan') {

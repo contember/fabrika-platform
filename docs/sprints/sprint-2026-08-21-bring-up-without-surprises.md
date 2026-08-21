@@ -174,7 +174,7 @@ Re-read the load-bearing facts in the actual code before planning on them.
   `packages/provider-zerops/src/namespace.ts` (extract the create-and-wait step if it is not already a
   function), `packages/installation-zerops/CLAUDE.md`, `docs/reference/` install procedure.
 
-### WU5 — A proxy target registers with the domain its deploy needs (effort S) · backlog [`83`](../backlog/83-a-proxy-target-registers-without-the-domain-its-deploy-needs.md)
+### WU5 — A proxy target registers with the domain its deploy needs (effort S) · backlog `83` (deleted on close: shipped by this unit)
 
 - **Problem.** As backlog 83 states: registration accepts a `target.proxy` manifest with no `domain`,
   creates the service, and the first deploy fails in a second; nothing names the hosts a

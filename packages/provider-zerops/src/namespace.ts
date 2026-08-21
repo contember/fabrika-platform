@@ -6,6 +6,7 @@ import {
 	type ProviderNamespaceCapabilities,
 	ProviderNamespaceError,
 	type ProviderNamespaceFact,
+	type ProviderNamespaceHost,
 	type ProviderNamespaceMutationInput,
 	type ProviderNamespaceOperator,
 	type ProviderNamespacePlanInput,
@@ -35,6 +36,8 @@ export const ZEROPS_NAMESPACE_PROXY_HOSTNAME = 'proxy'
 export const ZEROPS_NAMESPACE_POSTGRES_HOSTNAME = 'postgres'
 export const ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE = 'FABRIKA_IAM_ISSUER'
 export const ZEROPS_NAMESPACE_IAM_KEY_VARIABLE = 'FABRIKA_IAM_KEY'
+/** The platform-owned variable naming one URL per published HTTP port. READ_ONLY, written by Zerops. */
+export const ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE = 'zeropsSubdomain'
 /**
  * How an app reaches the namespace-owned PostgreSQL service — port, database and TLS mode NAMED, not
  * defaulted. Every part settled against a live account, none of it safe to infer:
@@ -91,6 +94,8 @@ export interface ZeropsNamespaceTarget {
 	readonly proxyConfigured?: boolean
 	readonly proxyBaselineSequence?: number
 	readonly proxyAppVersionId?: string
+	/** The hosts the published proxy answers on, recorded once so a namespace read needs no platform call. */
+	readonly proxyHosts?: readonly ProviderNamespaceHost[]
 	readonly ready?: boolean
 }
 
@@ -221,6 +226,54 @@ const parsePostgres = (payload: JsonValue): ZeropsNamespacePostgres | undefined 
 	return profile === undefined ? { type } : { type, profile }
 }
 
+const parseProxyHosts = (payload: JsonValue): readonly ProviderNamespaceHost[] | undefined => {
+	const value = property(payload, 'proxyHosts')
+	if (value === undefined) return undefined
+	if (!Array.isArray(value)) {
+		throw new Error('Zerops namespace target proxyHosts must be an array')
+	}
+	return value.map((entry) => {
+		if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+			throw new Error('Zerops namespace target proxyHosts entry must be an object')
+		}
+		const host = property(entry, 'host')
+		const port = property(entry, 'port')
+		if (typeof host !== 'string' || host === '') {
+			throw new Error('Zerops namespace target proxyHosts host must be a non-empty string')
+		}
+		if (typeof port !== 'number' || !Number.isInteger(port) || port <= 0) {
+			throw new Error('Zerops namespace target proxyHosts port must be a positive integer')
+		}
+		return { host, port }
+	})
+}
+
+/**
+ * One host per published HTTP port, out of the newline-separated URLs the platform writes.
+ *
+ * The form is `<hostname>-<hash>-<port>.<region>.zerops.app` (e.g. `proxy-2ec8-8080`). Read as URLs
+ * rather than split on `-`, so a hostname whose own first label ends in digits cannot be misread; a line
+ * that is not a URL, or whose first label carries no trailing port — the single portless line a proxy
+ * that has never deployed publishes — is skipped rather than guessed at.
+ */
+const parseZeropsProxyHosts = (value: string): ProviderNamespaceHost[] => {
+	const hosts: ProviderNamespaceHost[] = []
+	for (const line of value.split('\n')) {
+		const trimmed = line.trim()
+		if (trimmed === '') continue
+		let hostname: string
+		try {
+			hostname = new URL(trimmed).hostname
+		} catch {
+			continue
+		}
+		const port = /-(\d+)$/.exec(hostname.split('.')[0] ?? '')?.[1]
+		if (port === undefined) continue
+		hosts.push({ host: hostname, port: Number.parseInt(port, 10) })
+	}
+	return hosts.sort((left, right) => left.port - right.port)
+}
+
 export const zeropsNamespaceTargetCodec: ProviderCodec<ZeropsNamespaceTarget> = {
 	version: 1,
 	encode: (target) => ({
@@ -238,6 +291,7 @@ export const zeropsNamespaceTargetCodec: ProviderCodec<ZeropsNamespaceTarget> = 
 		...(target.proxyConfigured !== undefined ? { proxyConfigured: target.proxyConfigured } : {}),
 		...(target.proxyBaselineSequence !== undefined ? { proxyBaselineSequence: target.proxyBaselineSequence } : {}),
 		...(target.proxyAppVersionId !== undefined ? { proxyAppVersionId: target.proxyAppVersionId } : {}),
+		...(target.proxyHosts === undefined ? {} : { proxyHosts: target.proxyHosts.map((entry) => ({ host: entry.host, port: entry.port })) }),
 		...(target.ready !== undefined ? { ready: target.ready } : {}),
 	}),
 	decode: (payload) => {
@@ -272,6 +326,7 @@ export const zeropsNamespaceTargetCodec: ProviderCodec<ZeropsNamespaceTarget> = 
 			...(optionalString(payload, 'proxyAppVersionId') !== undefined
 				? { proxyAppVersionId: optionalString(payload, 'proxyAppVersionId') }
 				: {}),
+			...(parseProxyHosts(payload) !== undefined ? { proxyHosts: parseProxyHosts(payload) } : {}),
 			...(optionalBoolean(payload, 'ready') !== undefined ? { ready: optionalBoolean(payload, 'ready') } : {}),
 		}
 	},
@@ -320,6 +375,14 @@ const registrationResourceClaims = (registration: ProviderRegistration): string[
 		appId: registration.app.id,
 		env: registration.environment.env,
 	})
+	// A proxy target is routed by HOST, so a registration with no domain has nothing the proxy can serve:
+	// refuse it here, where nothing has been created yet, instead of at the first deploy's manifest compile.
+	if (manifest.target.proxy !== undefined && (registration.environment.domain ?? '').trim() === '') {
+		throw new Error(
+			`Zerops proxy target \`${registration.app.id}/${registration.environment.env}\` requires a public domain: `
+				+ `pass --domain with a host this namespace serves (\`namespaces get ${namespace.id}\` lists them)`,
+		)
+	}
 	const namespaceClaims = new Set(namespaceResourceClaims(namespace))
 	for (const requirement of manifest.target.namespaceResources ?? []) {
 		if (!namespaceClaims.has(requirement.resourceKey)) {
@@ -503,10 +566,14 @@ const namespacePresentation = (
 	const postgres = target.postgres === undefined
 		? 'App-owned database services'
 		: `Shared ${target.postgres.type}${target.postgres.profile === undefined ? '' : ` (${target.postgres.profile})`}`
+	// Only a published subdomain namespace knows its own hosts; custom domains are bound out of band, so
+	// the provider names none and an operator reads them where they were bound.
+	const hosts = publicAccess === 'zerops-subdomain' && target.ready === true ? target.proxyHosts ?? [] : []
 	const instructions = [
 		...(publicAccess === 'custom-domain'
 			? [`Bind each application domain to the \`proxy\` service in Zerops project \`${projectName}\`; keep every app service private.`]
 			: ['Use the proxy Zerops subdomain only for non-production access; app services must remain private.']),
+		...(hosts.length === 0 ? [] : ['Register a proxy-target environment with one of the hosts below as its domain; each host serves one app.']),
 		...(target.postgres === undefined
 			? []
 			: ['Every app consuming the shared PostgreSQL binding shares its physical service and provider-issued credential.']),
@@ -528,6 +595,7 @@ const namespacePresentation = (
 			{ label: 'Public access', value: publicAccess },
 		],
 		instructions,
+		...(hosts.length === 0 ? {} : { hosts }),
 	}
 }
 
@@ -832,6 +900,38 @@ const ensureProxyConfiguration = async (
 	return deployRequired
 }
 
+/**
+ * The hosts the proxy publishes, off the platform-owned `zeropsSubdomain` variable.
+ *
+ * Read through the same `/env` listing every other namespace variable uses, and read AFTER the proxy is
+ * published: the variable names a host per DEPLOYED HTTP port, so a proxy that never deployed names none.
+ * Recording the answer in the target is what keeps `namespaces get` a database read.
+ */
+const readProxyHosts = async (
+	namespace: ProviderDeploymentNamespace,
+	target: NormalizedZeropsNamespaceTarget,
+	options: ZeropsNamespaceOptions,
+	signal: AbortSignal,
+): Promise<readonly ProviderNamespaceHost[]> => {
+	const proxyServiceId = target.proxyServiceId
+	if (proxyServiceId === undefined) {
+		throw new Error('Zerops namespace has no proxy service id')
+	}
+	try {
+		const variables = await options.api.listServiceEnv({ serviceId: proxyServiceId, signal })
+		const subdomains = variables.find((variable) => variable.key === ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE)
+		return subdomains === undefined ? [] : parseZeropsProxyHosts(subdomains.content)
+	} catch {
+		// A host listing is a convenience; the proxy is already built, deployed and published. Failing the
+		// namespace over it would report a placement that WORKS as broken. Never the cause: it can carry
+		// upstream text this provider has not redacted.
+		console.warn(
+			`Zerops namespace ${namespace.id}: reading the published proxy hosts failed; the placement is ready and lists none until its next reconcile`,
+		)
+		return []
+	}
+}
+
 const latestAfterBaseline = async (
 	target: NormalizedZeropsNamespaceTarget,
 	options: ZeropsNamespaceOptions,
@@ -1125,10 +1225,14 @@ const runNamespaceMutation = async (
 	if (target.publicAccess === 'zerops-subdomain') {
 		await ensureSubdomainAccess(target, options, input.signal)
 	}
+	const proxyHosts = target.publicAccess === 'zerops-subdomain' ? await readProxyHosts(namespace, target, options, input.signal) : []
 	target = {
 		...target,
 		proxyBaselineSequence: undefined,
 		proxyAppVersionId: undefined,
+		// Cleared when the proxy publishes none and on a custom-domain namespace, so the record never
+		// outlives what it describes.
+		proxyHosts: proxyHosts.length === 0 ? undefined : proxyHosts,
 		ready: true,
 	}
 	return checkpoint(input, namespace, target)

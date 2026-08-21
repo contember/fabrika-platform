@@ -5,7 +5,9 @@ import type {
 	CreateDeploymentNamespaceRequest,
 	DeploymentNamespaceDetailDto,
 	DeploymentNamespaceDto,
+	DeploymentNamespaceHostDto,
 	DeploymentNamespaceListResponse,
+	DeploymentNamespacePresentationDto,
 	PlanDeploymentNamespaceRequest,
 	PlanDeploymentNamespaceResponse,
 	RemoveDeploymentNamespaceResponse,
@@ -17,7 +19,9 @@ import {
 	type ProviderDeploymentNamespace,
 	type ProviderNamespaceCapabilities,
 	ProviderNamespaceError,
+	type ProviderNamespaceHost,
 	type ProviderNamespaceMutationInput,
+	type ProviderNamespacePresentation,
 } from '@fabrika/provider-contract'
 import { type ControlRepositories, type DeploymentNamespaceRow, NamespaceResourceClaimConflictError } from '../db'
 import { readJson } from '../http'
@@ -170,14 +174,54 @@ function namespaceFailure(cause: unknown, mutation: NamespaceJobMutation): { cod
  */
 const namespaceCheckpointInvariant = (message: string): ProviderNamespaceError => new ProviderNamespaceError(message, 'checkpointInvariant', false)
 
-function toNamespaceDetail(c: NamespaceUseCaseContext, row: DeploymentNamespaceRow): DeploymentNamespaceDetailDto {
+function namespacePresentation(c: NamespaceUseCaseContext, row: DeploymentNamespaceRow): ProviderNamespacePresentation | null {
 	const operator = c.provider.namespaces?.operator
-	if (operator === undefined) return { ...toNamespaceDto(row), presentation: null }
+	if (operator === undefined) return null
 	try {
-		return { ...toNamespaceDto(row), presentation: operator.present(toProviderNamespace(row)) }
+		return operator.present(toProviderNamespace(row))
 	} catch (cause) {
 		fail(400, cause instanceof Error ? cause.message : 'invalid namespace presentation')
 	}
+}
+
+/** Projected field by field: the hosts are answered joined with what takes them, not raw beside them. */
+function toPresentationDto(presentation: ProviderNamespacePresentation): DeploymentNamespacePresentationDto {
+	return {
+		preset: presentation.preset,
+		title: presentation.title,
+		facts: presentation.facts,
+		instructions: presentation.instructions,
+	}
+}
+
+function toNamespaceDetail(c: NamespaceUseCaseContext, row: DeploymentNamespaceRow): DeploymentNamespaceDetailDto {
+	const presentation = namespacePresentation(c, row)
+	return { ...toNamespaceDto(row), presentation: presentation === null ? null : toPresentationDto(presentation) }
+}
+
+/**
+ * What the namespace can serve, and what already sits on it.
+ *
+ * The provider names the hosts because only it knows how they come to exist; control marks the taken
+ * ones because only it knows the registrations. The join is by DOMAIN, which is exactly what the proxy
+ * manifest routes on, so a host reads `free` here precisely when it is available to the next `--domain`.
+ */
+async function namespaceHosts(
+	c: NamespaceUseCaseContext,
+	row: DeploymentNamespaceRow,
+	hosts: readonly ProviderNamespaceHost[] | undefined,
+): Promise<readonly DeploymentNamespaceHostDto[] | undefined> {
+	if (hosts === undefined || hosts.length === 0) return undefined
+	const takenBy = new Map<string, { appId: string; environment: string }>()
+	for (const environment of await c.repositories.registry.listAppEnvsByNamespace(row.id)) {
+		const domain = environment.domain
+		if (domain === null || domain === '') continue
+		takenBy.set(domain.toLowerCase(), { appId: environment.app_id, environment: environment.env })
+	}
+	return hosts.map((entry) => {
+		const taken = takenBy.get(entry.host.toLowerCase())
+		return { host: entry.host, port: entry.port, ...(taken === undefined ? {} : { takenBy: taken }) }
+	})
 }
 
 function toProviderNamespace(row: DeploymentNamespaceRow): ProviderDeploymentNamespace {
@@ -396,7 +440,14 @@ export async function getNamespaceUseCase(c: NamespaceUseCaseContext, id: string
 	const row = await c.repositories.registry.getDeploymentNamespace(id)
 	if (row === null) fail(404, 'deployment namespace not found')
 	if (row.provider !== c.provider.id) fail(409, `deployment namespace belongs to provider ${row.provider}`)
-	return toNamespaceDetail(c, row)
+	// The one read that answers "what can I pass as `--domain`", so it is the one that pays for the join.
+	const presentation = namespacePresentation(c, row)
+	const hosts = await namespaceHosts(c, row, presentation?.hosts)
+	return {
+		...toNamespaceDto(row),
+		presentation: presentation === null ? null : toPresentationDto(presentation),
+		...(hosts === undefined ? {} : { hosts }),
+	}
 }
 
 export async function planNamespace(c: NamespaceContext): Promise<Response> {

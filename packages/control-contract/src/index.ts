@@ -250,6 +250,22 @@ export interface DeploymentNamespaceDto {
 
 export interface DeploymentNamespaceDetailDto extends DeploymentNamespaceDto {
 	presentation: DeploymentNamespacePresentationDto | null
+	/**
+	 * The public hosts this namespace serves, with the environment that already claimed each one. Absent
+	 * where the provider names none — a placement whose domains are bound out of band, or one whose entry
+	 * point is not published yet.
+	 */
+	readonly hosts?: readonly DeploymentNamespaceHostDto[]
+}
+
+/** One host a namespace serves, and the application environment whose domain already takes it. */
+export interface DeploymentNamespaceHostDto {
+	readonly host: string
+	readonly port: number
+	readonly takenBy?: {
+		readonly appId: string
+		readonly environment: string
+	}
 }
 
 export interface CreateDeploymentNamespaceRequest {

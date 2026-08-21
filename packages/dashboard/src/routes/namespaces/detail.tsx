@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
 import { NamespaceSignature } from '../../components/NamespaceSignature'
+import { Table } from '../../components/Table'
 import { api, ApiError } from '../../lib/api'
 import { fmtDate } from '../../lib/format'
 import { isNamespaceSettling, namespaceFailure, retainedNamespaceResources, scheduleNamespacePoll } from '../../lib/namespaces'
@@ -23,6 +24,7 @@ export default createPage()
 		const settling = isNamespaceSettling(namespace.state)
 		const failure = namespaceFailure(namespace)
 		const retained = retainedNamespaceResources(namespace)
+		const hosts = namespace.hosts ?? []
 
 		useEffect(() => {
 			return scheduleNamespacePoll(namespace.state, invalidate, (callback, delayMs) => {
@@ -75,6 +77,40 @@ export default createPage()
 					state={namespace.state}
 					presentation={namespace.presentation}
 				/>
+
+				{/* Only a placement that publishes its own hosts has any; a custom-domain one names none. */}
+				{hosts.length > 0 && (
+					<section>
+						<div className="section-head">
+							<Icon name="globe" size={15} />
+							<h2>Served hosts</h2>
+						</div>
+						<Table
+							colSpan={3}
+							head={
+								<tr>
+									<th className="grow">Host</th>
+									<th>Port</th>
+									<th>Taken by</th>
+								</tr>
+							}
+						>
+							{hosts.map((entry) => (
+								<tr key={entry.host}>
+									<td>
+										<code>{entry.host}</code>
+									</td>
+									<td>{entry.port}</td>
+									<td>
+										{entry.takenBy === undefined
+											? <span className="muted">free</span>
+											: <Link to="apps/detail" params={{ id: entry.takenBy.appId }}>{entry.takenBy.appId}/{entry.takenBy.environment}</Link>}
+									</td>
+								</tr>
+							))}
+						</Table>
+					</section>
+				)}
 
 				{settling && (
 					<div className="notice">
