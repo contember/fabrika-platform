@@ -317,7 +317,9 @@ describe('deployment namespace API', () => {
 		expect(await drain()).toEqual([{ namespaceId: 'apps-prod', status: 'failed' }])
 		const row = await deps.repositories.registry.getDeploymentNamespace('apps-prod')
 		expect(row?.state).toBe('failed')
-		expect(row?.last_error).toBe('namespace provision failed')
+		// An untyped provider throw has no class to record: the row gets `internal` and a generic message,
+		// and what the cause actually said reaches the LOG instead of the row.
+		expect(row?.last_error).toBe('internal: namespace provision failed')
 		expect(JSON.parse(row?.provider_target_json ?? '{}')).toEqual(target('checkpoint'))
 		expect(audits.map((event) => event.action)).toEqual(['namespace.create'])
 	})

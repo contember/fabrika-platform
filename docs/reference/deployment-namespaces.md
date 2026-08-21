@@ -56,7 +56,18 @@ the provider target, because a job in flight may be checkpointing it.
 - id, environment, provider, and optional exclusive app id;
 - the provider target envelope;
 - lifecycle state: `pending`, `provisioning`, `ready`, or `failed`;
-- the last bounded lifecycle error.
+- the last bounded lifecycle error, as a stable code and a redacted message.
+
+A failed lifecycle records both halves of what the provider reported. Providers
+raise a `ProviderNamespaceError` carrying a stable `code` — a platform error code
+such as `insufficientPermissions`, or a provider-defined identifier for a
+lifecycle invariant — a short summary, and the upstream's own words as `detail`.
+Control stores `code` and a redacted, bounded message in one column as
+`<code>: <message>` and projects them as `lastErrorCode` and `lastError`. A
+failure that is not a typed provider error is recorded as `internal` with a
+generic message. The full cause is logged, redacted the same way: userinfo,
+signed query strings, API keys, and signed tokens never reach the row or the log.
+A row written before the codes existed carries a message and no code.
 
 An application environment may be assigned only to a namespace with the same
 provider and environment. An exclusive namespace accepts only its named app. A
@@ -202,6 +213,20 @@ All namespace HTTP routes require the global `namespace.manage` action:
 | `GET /api/namespaces/:id`            | Read lifecycle state and provider presentation     |
 | `POST /api/namespaces/:id/adopt`     | Adopt and reconcile an existing placement          |
 | `POST /api/namespaces/:id/reconcile` | Queue a reconcile of stored provider state         |
+| `DELETE /api/namespaces/:id`         | Remove an unused placement and free its id         |
+
+Removal is the narrow case only. It is refused while any application environment
+is registered in the namespace, naming the applications, and while a worker is
+still settling it; `pending`, `failed`, and `ready` namespaces without registered
+environments are removable. It deletes the row and releases its resource claims
+in one transaction, which frees the id for reuse — the same id the provider's own
+marker-based recovery is keyed to, so a failed first attempt is retried under its
+original name rather than stranding what it created. It deletes no provider
+resource: the control plane holds `OWNER` on the projects it creates
+([ADR-0034](../decisions/0034-the-control-plane-creates-the-projects-it-owns.md)),
+so the response returns the removed row whole. A provider marks the presentation
+facts that name a live resource rather than a policy choice; the console and the
+CLI report exactly those as retained, and report nothing when none is marked.
 
 Application onboarding and `PUT /api/apps/:app/envs/:env` accept `namespaceId`.
 The response exposes that assignment alongside opaque provider target and
@@ -221,8 +246,9 @@ and adopt submit the resulting envelope to the control API; reconcile invokes
 the stored lifecycle. CLI options cover project name, core package, public
 access, PostgreSQL type/profile, exclusive app, and proxy source.
 
-The dashboard exposes namespace list, plan/review/create, detail, and reconcile
-flows. Its namespace signature renders only provider-authored safe facts and
+The dashboard exposes namespace list, plan/review/create, detail, reconcile, and
+removal flows. A failed placement renders its failure code beside the message.
+Removal confirms against the provider facts it will leave behind. Its namespace signature renders only provider-authored safe facts and
 instructions. The app detail screen lists compatible `ready` namespaces and
 allows a pre-deploy assignment change without interpreting the app's provider
 envelopes.

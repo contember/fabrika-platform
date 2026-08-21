@@ -185,6 +185,17 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   nothing else refuses a redelivery and the lease must outlive the queue's visibility timeout.
   `reconcile` on a namespace that is still settling ONLY enqueues: it must never rewrite
   `provider_target_json`, or a checkpoint the running job just wrote is rolled back under it.
+- **A failure keeps its CLASS, redacted rather than discarded** (backlog 72). A provider raises
+  `ProviderNamespaceError` (stable `code`, safe summary, the upstream's words in `detail`); core stores
+  `<code>: <message>` in the one `last_error` column — redacted and bounded — and projects the two halves
+  as `lastErrorCode` + `lastError`. The FULL cause is logged, redacted the same way and UNcapped. An
+  untyped throw is `internal`. Core's own checkpoint invariants carry core's `checkpointInvariant` code,
+  never a provider's vocabulary. Never store or log the error OBJECT.
+- **Removal is the narrow case only** (backlog 73). `namespaces.remove` frees a namespace with no
+  registered app environment that no worker is settling; it deletes the row and its resource claims in ONE
+  guarded transaction (claims first — both FKs are `ON DELETE RESTRICT`) and frees the id for reuse, which
+  is the id the provider's own marker recovery is keyed to. It deletes NO provider resource (ADR-0034) and
+  answers with the row the DELETE returned, so the operator is told what is now unowned.
 - **Never log a secret/credential** (see root). The run row is written before the queue is touched (durable trigger).
 - **`fabrika.config.ts` is the source of truth** for fabrika's own resources; keep `oblaka.ts` a thin shim (see root).
 - **The Zerops executor is injected.** `createZeropsControlProvider` requires an `execute` collaborator.

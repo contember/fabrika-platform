@@ -1,6 +1,12 @@
 import { describe, expect, jest, test } from 'bun:test'
-import type { AppEnvDto, DeploymentNamespaceDto, DeploymentNamespaceState } from '../lib/api'
-import { compatibleNamespaces, namespaceAssignmentRequest, scheduleNamespacePoll } from '../lib/namespaces'
+import type { AppEnvDto, DeploymentNamespaceDetailDto, DeploymentNamespaceDto, DeploymentNamespaceState } from '../lib/api'
+import {
+	compatibleNamespaces,
+	namespaceAssignmentRequest,
+	namespaceFailure,
+	retainedNamespaceResources,
+	scheduleNamespacePoll,
+} from '../lib/namespaces'
 
 const envelope = { provider: 'zerops', version: 1, payload: {} }
 
@@ -25,6 +31,7 @@ const namespace = (patch: Partial<DeploymentNamespaceDto> = {}): DeploymentNames
 	target: envelope,
 	state: 'ready',
 	lastError: null,
+	lastErrorCode: null,
 	createdAt: 1,
 	...patch,
 })
@@ -106,5 +113,68 @@ describe('scheduleNamespacePoll', () => {
 		} finally {
 			jest.useRealTimers()
 		}
+	})
+})
+
+// Three genuinely different live failures used to render identically here (backlog 72). The console
+// tells them apart by the CLASS control recorded, not by matching the provider's prose.
+describe('namespaceFailure', () => {
+	const failed = (lastError: string, lastErrorCode: string | null): DeploymentNamespaceDto => namespace({ state: 'failed', lastError, lastErrorCode })
+
+	test('renders an authorization, a validation, and a routing failure distinguishably', () => {
+		const views = [
+			namespaceFailure(failed('zerops: project import failed (403) — client may not create projects', 'insufficientPermissions')),
+			namespaceFailure(failed('zerops: update service env failed (400) — content is not a valid value', 'invalidUserInput')),
+			namespaceFailure(failed('proxy proxy-1 exposes no deployed HTTP port', 'serviceStackIsNotHttp')),
+		]
+
+		expect(views.map((view) => view?.code)).toEqual(['insufficientPermissions', 'invalidUserInput', 'serviceStackIsNotHttp'])
+		expect(new Set(views.map((view) => JSON.stringify(view))).size).toBe(3)
+		expect(views[0]?.hint).toContain('token')
+		expect(views[2]?.hint).toContain('deploy')
+	})
+
+	test('offers no hint for a class it has nothing to add to', () => {
+		expect(namespaceFailure(failed('zerops: update service env failed (400)', 'invalidUserInput'))?.hint).toBeNull()
+	})
+
+	test('reads a row written before the codes existed, and a healthy placement', () => {
+		expect(namespaceFailure(failed('namespace provision failed', null))).toEqual({
+			code: null,
+			message: 'namespace provision failed',
+			hint: null,
+		})
+		expect(namespaceFailure(namespace())).toBeNull()
+	})
+})
+
+// Removal deletes nothing at the provider, so it has to name what stays. Only the provider knows which
+// of its facts is a live resource rather than a policy choice.
+describe('retainedNamespaceResources', () => {
+	const detail = (facts: DeploymentNamespaceDetailDto['presentation']): DeploymentNamespaceDetailDto => ({
+		...namespace(),
+		presentation: facts,
+	})
+
+	test("keeps only the facts the provider marked, in the provider's order", () => {
+		const view = detail({
+			preset: 'cheap',
+			title: 'Cheap namespace',
+			facts: [
+				{ label: 'Project', value: 'apps-prod (project-1)', resource: true },
+				{ label: 'Environment', value: 'prod' },
+				{ label: 'Core package', value: 'LIGHT' },
+			],
+			instructions: [],
+		})
+
+		expect(retainedNamespaceResources(view)).toEqual([{ label: 'Project', value: 'apps-prod (project-1)', resource: true }])
+	})
+
+	test('says nothing when the provider marked nothing, and when there is no presentation at all', () => {
+		const unmarked = detail({ preset: 'mid', title: 'Mid namespace', facts: [{ label: 'Project', value: 'apps-prod' }], instructions: [] })
+
+		expect(retainedNamespaceResources(unmarked)).toEqual([])
+		expect(retainedNamespaceResources(detail(null))).toEqual([])
 	})
 })

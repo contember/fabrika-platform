@@ -570,6 +570,35 @@ export class ControlRegistryRepository {
 			.first<DeploymentNamespaceRow>()
 	}
 
+	/**
+	 * Remove one namespace and release its reservations in ONE transaction, freeing the id for reuse
+	 * (backlog 73). Claims go first because both foreign keys are `ON DELETE RESTRICT`, and BOTH
+	 * statements carry the SAME guard, so a removal refused between the caller's check and this write
+	 * cannot strip the claims of a namespace it then leaves in place. NULL = refused; the caller re-reads
+	 * the row to say why. It deletes no provider resource — that stays with the operator (ADR-0034).
+	 */
+	async deleteDeploymentNamespaceWithResourceClaims(id: string): Promise<DeploymentNamespaceRow | null> {
+		const removable = `state <> 'provisioning' AND NOT EXISTS (SELECT 1 FROM app_envs WHERE namespace_id = ?)`
+		const results = await this.d1.batch<DeploymentNamespaceRow | NamespaceResourceClaimRow>([
+			this.d1
+				.prepare(`DELETE FROM namespace_resource_claims
+					WHERE namespace_id = ?
+						AND EXISTS (SELECT 1 FROM deployment_namespaces WHERE id = ? AND ${removable})`)
+				.bind(id, id, id),
+			this.d1
+				.prepare(`DELETE FROM deployment_namespaces WHERE id = ? AND ${removable} RETURNING *`)
+				.bind(id, id),
+		])
+		const removed = results[1]?.results[0]
+		if (removed === undefined) {
+			return null
+		}
+		if (!('state' in removed)) {
+			throw new Error('expected a deployment namespace row from a namespace delete')
+		}
+		return removed
+	}
+
 	async listNamespaceResourceClaims(namespaceId: string): Promise<NamespaceResourceClaimRow[]> {
 		const { results } = await this.d1
 			.prepare('SELECT * FROM namespace_resource_claims WHERE namespace_id = ? ORDER BY resource_key')

@@ -237,7 +237,14 @@ export interface DeploymentNamespaceDto {
 	exclusiveAppId: string | null
 	target: ProviderEnvelopeDto
 	state: DeploymentNamespaceState
+	/**
+	 * The last lifecycle failure, redacted and bounded, with its class in `lastErrorCode`: a stable
+	 * identifier — a provider error code such as `insufficientPermissions`, or `internal` when the cause
+	 * was not a typed provider failure — so a console can tell two failures apart without matching prose.
+	 * A row written before the codes existed carries a message and no code.
+	 */
 	lastError: string | null
+	lastErrorCode: string | null
 	createdAt: number
 }
 
@@ -261,6 +268,8 @@ export interface AdoptDeploymentNamespaceRequest {
 export interface DeploymentNamespaceFactDto {
 	readonly label: string
 	readonly value: string
+	/** Set when the value names a LIVE provider resource that outlives the namespace row (see removal). */
+	readonly resource?: boolean
 }
 
 export interface DeploymentNamespacePresentationDto {
@@ -284,6 +293,16 @@ export interface DeploymentNamespaceOperatorDto {
 export interface DeploymentNamespaceListResponse {
 	items: DeploymentNamespaceDto[]
 	operator: DeploymentNamespaceOperatorDto | null
+}
+
+/**
+ * What removal leaves behind. Fabrika deletes no provider resource: it holds OWNER on the projects it
+ * creates ([ADR-0034](../../../docs/decisions/0034-the-control-plane-creates-the-projects-it-owns.md)),
+ * so deleting one is a destructive act on live state that stays with the operator. The removed row is
+ * returned whole — its provider target and presentation name what is now unowned.
+ */
+export interface RemoveDeploymentNamespaceResponse {
+	readonly removed: DeploymentNamespaceDetailDto
 }
 
 export interface PlanDeploymentNamespaceRequest {

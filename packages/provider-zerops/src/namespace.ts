@@ -1,15 +1,17 @@
-import type {
-	JsonValue,
-	ProviderCodec,
-	ProviderDeploymentNamespace,
-	ProviderEnvelope,
-	ProviderNamespaceCapabilities,
-	ProviderNamespaceMutationInput,
-	ProviderNamespaceOperator,
-	ProviderNamespacePlanInput,
-	ProviderNamespacePresentation,
-	ProviderNamespacePreset,
-	ProviderRegistration,
+import {
+	type JsonValue,
+	type ProviderCodec,
+	type ProviderDeploymentNamespace,
+	type ProviderEnvelope,
+	type ProviderNamespaceCapabilities,
+	ProviderNamespaceError,
+	type ProviderNamespaceFact,
+	type ProviderNamespaceMutationInput,
+	type ProviderNamespaceOperator,
+	type ProviderNamespacePlanInput,
+	type ProviderNamespacePresentation,
+	type ProviderNamespacePreset,
+	type ProviderRegistration,
 } from '@fabrika/provider-contract'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
 import {
@@ -509,11 +511,16 @@ const namespacePresentation = (
 			? []
 			: ['Every app consuming the shared PostgreSQL binding shares its physical service and provider-issued credential.']),
 	]
+	// The project is the one fact that names a LIVE resource: it exists at the provider, it outlives the
+	// namespace row, and removal does not delete it (ADR-0034). Marked only once it actually exists.
+	const project: ProviderNamespaceFact = target.projectId === undefined
+		? { label: 'Project', value: projectName }
+		: { label: 'Project', value: `${projectName} (${target.projectId})`, resource: true }
 	return {
 		preset,
 		title: `${ZEROPS_NAMESPACE_PRESETS.find((candidate) => candidate.id === preset)?.label ?? preset} namespace`,
 		facts: [
-			{ label: 'Project', value: projectName },
+			project,
 			{ label: 'Environment', value: namespace.env },
 			{ label: 'Core package', value: corePackage },
 			{ label: 'Placement', value: namespace.exclusiveAppId === undefined ? 'Shared' : `Exclusive to ${namespace.exclusiveAppId}` },
@@ -842,8 +849,8 @@ const latestAfterBaseline = async (
 	return latest
 }
 
-const terminalFailure = (version: ZeropsAppVersion): Error =>
-	new Error(`Zerops namespace proxy deploy ${version.id} finished as ${version.status ?? 'unknown'}`)
+const terminalFailure = (version: ZeropsAppVersion): ProviderNamespaceError =>
+	namespaceError(ZEROPS_PROXY_DEPLOY_FAILED, `Zerops namespace proxy deploy ${version.id} finished as ${version.status ?? 'unknown'}`, false)
 
 const waitForProxy = async (
 	appVersionId: string,
@@ -853,14 +860,14 @@ const waitForProxy = async (
 	const deadline = Date.now() + POLL_TIMEOUT_MS
 	for (;;) {
 		if (signal.aborted) {
-			throw new Error('Zerops namespace provisioning was cancelled')
+			throw namespaceError(ZEROPS_NAMESPACE_CANCELLED, 'Zerops namespace provisioning was cancelled', true)
 		}
 		const version = await options.api.getAppVersion({ appVersionId, signal })
 		if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) {
 			return version
 		}
 		if (Date.now() > deadline) {
-			throw new Error(`Zerops namespace proxy deploy ${appVersionId} timed out`)
+			throw namespaceError(ZEROPS_PROXY_DEPLOY_TIMEOUT, `Zerops namespace proxy deploy ${appVersionId} timed out`, true)
 		}
 		await (options.sleep ?? defaultSleep)(POLL_INTERVAL_MS, signal)
 	}
@@ -928,6 +935,60 @@ const deployProxy = async (
 }
 
 /**
+ * Lifecycle codes this provider defines where the platform has none of its own. They are an
+ * operator-facing vocabulary, so they are stable identifiers rather than prose (backlog 72): a
+ * platform code such as `insufficientPermissions` and one of these read the same way downstream.
+ */
+export const ZEROPS_NAMESPACE_CANCELLED = 'namespaceCancelled'
+export const ZEROPS_NAMESPACE_LIFECYCLE = 'namespaceLifecycle'
+export const ZEROPS_PROXY_DEPLOY_TIMEOUT = 'proxyDeployTimeout'
+export const ZEROPS_PROXY_DEPLOY_FAILED = 'proxyDeployFailed'
+export const ZEROPS_SUBDOMAIN_NOT_PUBLISHED = 'subdomainNotPublished'
+
+const namespaceError = (code: string, message: string, retryable: boolean, detail?: string): ProviderNamespaceError =>
+	new ProviderNamespaceError(message, code, retryable, detail)
+
+/**
+ * `apiError` composes `zerops: <label> failed (<status>) — <code>: <server message>`. The half before the
+ * first separator is OURS (a literal label and the status); the half after is the platform's, and it
+ * REPEATS the code, which travels separately. Splitting them keeps the summary safe to show while the
+ * upstream words survive in `detail`, where the control plane redacts them before they are stored or
+ * logged — discarding them is what left three different live failures indistinguishable (backlog 72).
+ *
+ * A `redactDetail: true` call carries the code and nothing else, so it yields no detail at all.
+ */
+const splitApiMessage = (message: string, code: string): { summary: string; detail?: string } => {
+	const at = message.indexOf(' — ')
+	if (at === -1) return { summary: message }
+	const summary = message.slice(0, at)
+	const rest = message.slice(at + 3)
+	if (code === '' || rest === code) return rest === code ? { summary } : { summary, detail: rest }
+	const detail = rest.startsWith(`${code}: `) ? rest.slice(code.length + 2) : rest
+	return detail === '' ? { summary } : { summary, detail }
+}
+
+/** Every namespace lifecycle failure leaves this provider as one typed, coded error. */
+const asNamespaceError = (cause: unknown, mode: 'provision' | 'reconcile'): ProviderNamespaceError => {
+	if (cause instanceof ProviderNamespaceError) return cause
+	if (cause instanceof ZeropsApiError) {
+		const { summary, detail } = splitApiMessage(cause.message, cause.code)
+		return namespaceError(
+			cause.code === '' ? `zeropsHttp${cause.status}` : cause.code,
+			summary,
+			cause.status === 429 || cause.status >= 500,
+			detail,
+		)
+	}
+	if (cause instanceof Error && cause.name === 'AbortError') {
+		return namespaceError(ZEROPS_NAMESPACE_CANCELLED, `Zerops namespace ${mode} was cancelled`, true)
+	}
+	if (cause instanceof Error) {
+		return namespaceError(ZEROPS_NAMESPACE_LIFECYCLE, cause.message, false)
+	}
+	return namespaceError(ZEROPS_NAMESPACE_LIFECYCLE, `Zerops namespace ${mode} failed`, false)
+}
+
+/**
  * Publish the proxy on its `*.zerops.app` subdomain — the ONE thing the import document cannot do.
  *
  * `enableSubdomainAccess: true` is accepted by the import and then silently dropped, on a service the
@@ -960,29 +1021,46 @@ const ensureSubdomainAccess = async (
 		await options.api.enableSubdomainAccess({ serviceId: proxyServiceId, signal })
 	} catch (error) {
 		if (error instanceof ZeropsApiError && error.code === ZEROPS_SERVICE_NOT_HTTP) {
-			throw new Error(
+			throw namespaceError(
+				ZEROPS_SERVICE_NOT_HTTP,
 				`Zerops namespace proxy ${proxyServiceId} cannot be published on a zerops.app subdomain: it exposes no deployed HTTP port (${ZEROPS_SERVICE_NOT_HTTP})`,
+				false,
 			)
 		}
 		throw error
 	}
 	for (let attempt = 0;; attempt += 1) {
 		if (signal.aborted) {
-			throw new Error('Zerops namespace provisioning was cancelled')
+			throw namespaceError(ZEROPS_NAMESPACE_CANCELLED, 'Zerops namespace provisioning was cancelled', true)
 		}
 		if (await published()) {
 			return
 		}
 		if (attempt >= SUBDOMAIN_READBACK_ATTEMPTS) {
-			throw new Error(
+			throw namespaceError(
+				ZEROPS_SUBDOMAIN_NOT_PUBLISHED,
 				`Zerops namespace proxy ${proxyServiceId} accepted enable-subdomain-access but still reads subdomainAccess: false — the namespace has no public entry point`,
+				true,
 			)
 		}
 		await (options.sleep ?? defaultSleep)(POLL_INTERVAL_MS, signal)
 	}
 }
 
+/** Every exit from the lifecycle below is a `ProviderNamespaceError`, so a caller never has to guess. */
 const mutateNamespace = async (
+	input: ProviderNamespaceMutationInput,
+	options: ZeropsNamespaceOptions,
+	mode: 'provision' | 'reconcile',
+): Promise<ProviderDeploymentNamespace> => {
+	try {
+		return await runNamespaceMutation(input, options, mode)
+	} catch (cause) {
+		throw asNamespaceError(cause, mode)
+	}
+}
+
+const runNamespaceMutation = async (
 	input: ProviderNamespaceMutationInput,
 	options: ZeropsNamespaceOptions,
 	mode: 'provision' | 'reconcile',

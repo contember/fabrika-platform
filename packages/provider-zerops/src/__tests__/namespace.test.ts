@@ -1,4 +1,4 @@
-import type { ProviderDeploymentNamespace } from '@fabrika/provider-contract'
+import { type ProviderDeploymentNamespace, ProviderNamespaceError } from '@fabrika/provider-contract'
 import { FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
 import { describe, expect, test } from 'bun:test'
 import {
@@ -19,7 +19,9 @@ import {
 	createZeropsNamespaceOperator,
 	ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
 	ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
+	ZEROPS_NAMESPACE_LIFECYCLE,
 	ZEROPS_SHARED_POSTGRES_CONNECTION_STRING,
+	ZEROPS_SUBDOMAIN_NOT_PUBLISHED,
 	type ZeropsNamespaceOptions,
 	zeropsNamespacePreset,
 	type ZeropsNamespaceTarget,
@@ -41,6 +43,10 @@ interface FakeState {
 	subdomainNotHttp: boolean
 	/** The 2xx-then-nothing case: the call is accepted and the flag never moves. */
 	subdomainStaysDisabled: boolean
+	/** A platform refusal of the project import, e.g. a token that may not create projects. */
+	importProjectError: ZeropsApiError | null
+	/** A platform refusal of a service-variable write, e.g. a value the platform rejects. */
+	serviceEnvError: ZeropsApiError | null
 }
 
 const freshState = (): FakeState => ({
@@ -55,6 +61,8 @@ const freshState = (): FakeState => ({
 	failTriggerAfterMutation: false,
 	subdomainNotHttp: false,
 	subdomainStaysDisabled: false,
+	importProjectError: null,
+	serviceEnvError: null,
 })
 
 const projectId = 'project-1'
@@ -136,6 +144,7 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 	importProject: async ({ yaml }) => {
 		state.importProjectCount++
 		state.calls.push('importProject')
+		if (state.importProjectError !== null) throw state.importProjectError
 		const name = yaml.includes('name: cheap-prod') ? 'cheap-prod' : 'apps-prod'
 		const namespaceId = name
 		const description = `Managed by Fabrika namespace ${namespaceId} (prod).`
@@ -258,6 +267,7 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 	},
 	putServiceEnv: async ({ serviceId, key, value }) => {
 		state.calls.push(`put:${serviceId}:${key}`)
+		if (state.serviceEnvError !== null) throw state.serviceEnvError
 		ensureServiceEnv(state, serviceId).set(key, {
 			id: `${serviceId}:${key}`,
 			key,
@@ -739,5 +749,185 @@ describe('Zerops namespace lifecycle', () => {
 		custom.services.set(projectId, [proxy()])
 		await run(createZeropsNamespaceCapabilities(options(custom)), ready('custom-domain'), [], 'reconcile')
 		expect(custom.calls).not.toContain(`enableSubdomain:${proxyId}`)
+	})
+})
+
+// The three live failures that were indistinguishable before backlog 72: a denied project import, a
+// refused service-variable write, and a subdomain the platform will not publish. Each now leaves the
+// provider with its own code, and the platform's own words survive in `detail` — where the control
+// plane redacts them — instead of being thrown away.
+describe('Zerops namespace presentation', () => {
+	test('marks the project as a live resource and names its id once it exists', () => {
+		const operator = createZeropsNamespaceOperator({ proxyBuildFromGit: 'https://github.com/contember/fabrika-platform' })
+		const target: ZeropsNamespaceTarget = {
+			projectId,
+			projectName: 'apps-prod',
+			corePackage: 'SERIOUS',
+			publicAccess: 'custom-domain',
+			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+			managed: true,
+		}
+
+		const facts = operator.present(namespace(target)).facts
+
+		expect(facts.filter((fact) => fact.resource === true)).toEqual([{ label: 'Project', value: `apps-prod (${projectId})`, resource: true }])
+	})
+
+	test('marks nothing while the project is still a plan', () => {
+		const operator = createZeropsNamespaceOperator({ proxyBuildFromGit: 'https://github.com/contember/fabrika-platform' })
+
+		const planned = operator.plan({ id: 'apps-prod', env: 'prod', preset: 'mid' })
+
+		expect(planned.presentation.facts.some((fact) => fact.resource === true)).toBe(false)
+		expect(planned.presentation.facts[0]).toEqual({ label: 'Project', value: 'apps-prod' })
+	})
+})
+
+describe('Zerops namespace failure classes', () => {
+	const failure = async (promise: Promise<unknown>): Promise<ProviderNamespaceError> => {
+		try {
+			await promise
+		} catch (cause) {
+			if (cause instanceof ProviderNamespaceError) return cause
+			throw cause
+		}
+		throw new Error('expected the namespace mutation to fail')
+	}
+
+	const provisionNamespace = (publicAccess: 'custom-domain' | 'zerops-subdomain' = 'custom-domain'): ProviderDeploymentNamespace =>
+		namespace(zeropsNamespacePreset({
+			preset: 'mid',
+			env: 'prod',
+			projectName: 'apps-prod',
+			publicAccess,
+			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+		}))
+
+	test('keeps the platform code and the platform message apart on a denied project import', async () => {
+		const state = freshState()
+		// The real shape `apiError` composes: our label and status, then the platform's code AGAIN, then its message.
+		state.importProjectError = new ZeropsApiError(
+			'zerops: project import failed (403) — insufficientPermissions: client client-1 may not create projects with token px_denied_integration_token',
+			403,
+			'insufficientPermissions',
+		)
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+
+		const error = await failure(run(capabilities, provisionNamespace(), []))
+
+		expect(error.code).toBe('insufficientPermissions')
+		expect(error.retryable).toBe(false)
+		expect(error.message).toBe('zerops: project import failed (403)')
+		expect(error.message).not.toContain('px_denied_integration_token')
+		// The code travels in `code`; repeating it in the detail would say the same thing twice.
+		expect(error.detail).toBe('client client-1 may not create projects with token px_denied_integration_token')
+	})
+
+	test('reports a refused service-variable write as a validation failure, not as the import above', async () => {
+		const state = freshState()
+		state.serviceEnvError = new ZeropsApiError(
+			'zerops: update service env failed (400) — invalidUserInput: content is not a valid value',
+			400,
+			'invalidUserInput',
+		)
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+
+		const error = await failure(run(capabilities, provisionNamespace(), []))
+
+		expect(error.code).toBe('invalidUserInput')
+		expect(error.retryable).toBe(false)
+		expect(error.message).toBe('zerops: update service env failed (400)')
+		expect(error.detail).toBe('content is not a valid value')
+	})
+
+	test('yields no detail when the call redacted the platform message and sent only its code', async () => {
+		const state = freshState()
+		// What `redactDetail: true` produces: the code, and nothing of the server's message.
+		state.serviceEnvError = new ZeropsApiError('zerops: update service env failed (400) — invalidUserInput', 400, 'invalidUserInput')
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+
+		const error = await failure(run(capabilities, provisionNamespace(), []))
+
+		expect(error.code).toBe('invalidUserInput')
+		expect(error.message).toBe('zerops: update service env failed (400)')
+		expect(error.detail).toBeUndefined()
+	})
+
+	test('names the missing HTTP port with the platform code the subdomain call answered', async () => {
+		const state = freshState()
+		state.subdomainNotHttp = true
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+
+		const error = await failure(run(capabilities, provisionNamespace('zerops-subdomain'), []))
+
+		expect(error.code).toBe(ZEROPS_SERVICE_NOT_HTTP)
+		expect(error.message).toContain('no deployed HTTP port')
+		expect(error.detail).toBeUndefined()
+	})
+
+	test('distinguishes a subdomain that never publishes from one the platform refused outright', async () => {
+		const state = freshState()
+		state.subdomainStaysDisabled = true
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+
+		const error = await failure(run(capabilities, provisionNamespace('zerops-subdomain'), []))
+
+		expect(error.code).toBe(ZEROPS_SUBDOMAIN_NOT_PUBLISHED)
+		expect(error.retryable).toBe(true)
+		expect(error.message).toContain('no public entry point')
+	})
+
+	test('passes a typed error raised by the CALLER through untouched', async () => {
+		// Core's own checkpoint invariants are raised inside `events.checkpoint`, which runs in the middle of
+		// this lifecycle. They already carry core's code, and re-coding them as a Zerops failure would report
+		// core's bug under the platform's vocabulary.
+		const state = freshState()
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+		const raised = new ProviderNamespaceError('deployment namespace disappeared during checkpoint', 'checkpointInvariant', false)
+
+		const error = await failure(capabilities.provision({
+			namespace: provisionNamespace(),
+			signal: new AbortController().signal,
+			events: {
+				checkpoint: () => Promise.reject(raised),
+			},
+		}))
+
+		expect(error).toBe(raised)
+		expect(error.code).toBe('checkpointInvariant')
+	})
+
+	test('codes an unclassified lifecycle invariant without losing what it said', async () => {
+		const state = freshState()
+		state.projects.set(projectId, project(projectId, 'apps-prod', 'operator project'))
+		state.services.set(projectId, [proxy()])
+		const capabilities = createZeropsNamespaceCapabilities(options(state))
+
+		const error = await failure(run(
+			capabilities,
+			namespace({
+				projectId,
+				projectName: 'apps-prod',
+				corePackage: 'SERIOUS',
+				publicAccess: 'custom-domain',
+				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				managed: true,
+			}),
+			[],
+		))
+
+		expect(error.code).toBe(ZEROPS_NAMESPACE_LIFECYCLE)
+		expect(error.message).toContain('different Fabrika ownership marker')
+	})
+
+	test('marks a platform outage retryable and a refusal not', async () => {
+		const outage = freshState()
+		outage.importProjectError = new ZeropsApiError('zerops: project import failed (503)', 503, '')
+		const capabilities = createZeropsNamespaceCapabilities(options(outage))
+
+		const error = await failure(run(capabilities, provisionNamespace(), []))
+
+		expect(error.code).toBe('zeropsHttp503')
+		expect(error.retryable).toBe(true)
 	})
 })

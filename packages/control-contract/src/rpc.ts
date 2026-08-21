@@ -20,6 +20,7 @@ import type {
 	PutAppVarRequest,
 	RegisterAppRequest,
 	RegisterAppResponse,
+	RemoveDeploymentNamespaceResponse,
 	RunDto,
 	RunLogResponse,
 	RunTailResponse,
@@ -149,6 +150,8 @@ export interface ControlRpcContract {
 		create: RpcProcedure<CreateDeploymentNamespaceRequest, DeploymentNamespaceDetailDto>
 		adopt: RpcProcedure<AdoptNamespaceInput, DeploymentNamespaceDetailDto>
 		reconcile: RpcProcedure<NamespaceIdInput, DeploymentNamespaceDetailDto>
+		/** Free a namespace id. Refused while any app environment is registered in it (backlog 73). */
+		remove: RpcProcedure<NamespaceIdInput, RemoveDeploymentNamespaceResponse>
 	}
 	runs: {
 		list: RpcProcedure<RunListInput, CursorList<RunDto>>

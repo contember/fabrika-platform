@@ -280,7 +280,7 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 
 		const row = await harness.repositories.registry.getDeploymentNamespace('apps-prod')
 		expect(row?.state).toBe('failed')
-		expect(row?.last_error).toBe('namespace provision failed')
+		expect(row?.last_error).toBe('internal: namespace provision failed')
 		expect(JSON.parse(row?.provider_target_json ?? '{}')).toEqual(target('checkpoint'))
 	})
 

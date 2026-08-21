@@ -148,6 +148,22 @@ export interface ProviderManagedSecrets {
 	delete(input: ProviderSecretDeleteInput): Promise<void>
 }
 
+/**
+ * A namespace lifecycle failure an operator can act on.
+ *
+ * `code` is a STABLE identifier — a platform error code, or one this provider defines for a lifecycle
+ * invariant — so core can record and a console can render the CLASS of a failure instead of matching
+ * prose. `message` is the provider's own summary; `detail` carries the upstream's words VERBATIM.
+ * Neither is safe to persist as-is: core redacts both before they reach a row or a log, because only
+ * core knows what a credential looks like in this installation.
+ */
+export class ProviderNamespaceError extends Error {
+	constructor(message: string, readonly code: string, readonly retryable: boolean, readonly detail?: string) {
+		super(message)
+		this.name = 'ProviderNamespaceError'
+	}
+}
+
 /** Persist a canonical namespace target immediately after one external mutation succeeds. */
 export interface ProviderNamespaceEvents {
 	checkpoint(namespace: ProviderDeploymentNamespace): Promise<void>
@@ -187,6 +203,13 @@ export interface ProviderNamespacePlanInput {
 export interface ProviderNamespaceFact {
 	readonly label: string
 	readonly value: string
+	/**
+	 * Marks a fact that NAMES A LIVE PROVIDER RESOURCE, not a policy choice. Core deletes no provider
+	 * resource, so removal has to tell the operator what it stopped tracking — and only the provider
+	 * knows which of its facts is a real thing with an id. Absent means "not a resource"; a fact is
+	 * marked only when its value identifies something that outlives the namespace row.
+	 */
+	readonly resource?: true
 }
 
 /** Provider-owned operator copy for a planned or persisted namespace. */

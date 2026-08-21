@@ -20,6 +20,7 @@ import {
 	type NamespaceUseCaseContext,
 	planNamespaceUseCase,
 	reconcileNamespaceUseCase,
+	removeNamespaceUseCase,
 } from './api/namespaces'
 import { isJsonValue, readProviderEnvelope } from './api/provider-envelope'
 import {
@@ -244,6 +245,9 @@ export const controlRpcRouter: RpcRouterFor<ControlRpcContext, ControlRpcContrac
 		),
 		reconcile: rpc.procedure.input(namespaceId).require(ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
 			controlCall(() => reconcileNamespaceUseCase(namespaceContext(ctx), input.namespaceId))
+		),
+		remove: rpc.procedure.input(namespaceId).require(ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
+			controlCall(() => removeNamespaceUseCase(namespaceContext(ctx), input.namespaceId))
 		),
 	}),
 	runs: rpc.router({

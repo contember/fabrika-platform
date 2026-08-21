@@ -184,7 +184,11 @@ const namespaceIsReady = async (machineKey: string): Promise<void> => {
 		(value) => property(value, 'state') === 'ready' || property(value, 'state') === 'failed',
 	)
 	if (property(namespace, 'state') === 'failed') {
-		throw new Error(`deployment namespace apps-prod failed to provision: ${String(property(namespace, 'lastError') ?? 'no reason recorded')}`)
+		throw new Error(
+			`deployment namespace apps-prod failed to provision: ${String(property(namespace, 'lastErrorCode') ?? 'unknown')}: ${
+				String(property(namespace, 'lastError') ?? 'no reason recorded')
+			}`,
+		)
 	}
 }
 

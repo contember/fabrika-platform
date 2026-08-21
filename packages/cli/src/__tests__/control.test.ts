@@ -43,6 +43,18 @@ const captureStdout = async (run: () => Promise<void>): Promise<string> => {
 	return lines.join('\n')
 }
 
+const captureStderr = async (run: () => Promise<void>): Promise<string> => {
+	const lines: string[] = []
+	const real = console.warn
+	console.warn = (...args: unknown[]) => void lines.push(args.map((arg) => String(arg)).join(' '))
+	try {
+		await run()
+	} finally {
+		console.warn = real
+	}
+	return lines.join('\n')
+}
+
 afterEach(() => {
 	globalThis.fetch = realFetch
 })
@@ -301,6 +313,62 @@ describe('control namespaces', () => {
 		expect(captured.calls).toHaveLength(1)
 		expect(captured.calls[0]?.body).toEqual({ method: 'namespaces.reconcile', input: { namespaceId: 'notes-prod' } })
 		expect(out).toBe('notes-prod\tprod\tready\t-')
+	})
+
+	test('get reports the failure class on stderr and leaves the data columns alone', async () => {
+		const captured = captureFetch({
+			result: {
+				id: 'notes-prod',
+				env: 'prod',
+				state: 'failed',
+				exclusiveAppId: null,
+				lastError: 'zerops: project import failed (403) — client may not create projects',
+				lastErrorCode: 'insufficientPermissions',
+			},
+		})
+		let out = ''
+		const err = await captureStderr(async () => {
+			out = await captureStdout(() => runControlCli('namespaces', ['get', '--namespace=notes-prod'], undefined, CONTROL_ENV))
+		})
+
+		expect(captured.calls[0]?.body).toEqual({ method: 'namespaces.get', input: { namespaceId: 'notes-prod' } })
+		expect(out).toBe('notes-prod\tprod\tfailed\t-')
+		expect(err).toBe('insufficientPermissions: zerops: project import failed (403) — client may not create projects')
+	})
+
+	test('remove frees the id and names the provider resources it did not delete', async () => {
+		const captured = captureFetch({
+			result: {
+				removed: {
+					id: 'notes-prod',
+					env: 'prod',
+					state: 'failed',
+					exclusiveAppId: null,
+					lastError: 'zerops: project import failed (403)',
+					lastErrorCode: 'insufficientPermissions',
+					target: { provider: 'zerops', version: 1, payload: { projectId: 'project-1' } },
+					presentation: {
+						preset: 'mid',
+						title: 'Mid namespace',
+						facts: [
+							{ label: 'Project', value: 'notes-prod (project-1)', resource: true },
+							{ label: 'Environment', value: 'prod' },
+							{ label: 'Core package', value: 'LIGHT' },
+						],
+						instructions: [],
+					},
+				},
+			},
+		})
+		let out = ''
+		const err = await captureStderr(async () => {
+			out = await captureStdout(() => runControlCli('namespaces', ['remove', '--namespace=notes-prod'], undefined, CONTROL_ENV))
+		})
+
+		expect(captured.calls[0]?.body).toEqual({ method: 'namespaces.remove', input: { namespaceId: 'notes-prod' } })
+		expect(out).toBe('notes-prod\tprod\tfailed\t-')
+		// Only the facts the provider marked as live resources; the policy facts are not anyone's cleanup.
+		expect(err).toBe('retained\tProject\tnotes-prod (project-1)')
 	})
 
 	test('carries an exclusive app through both calls for the full preset', async () => {

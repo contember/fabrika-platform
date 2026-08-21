@@ -14,7 +14,16 @@ import { error } from '../http'
 import { appScope, authorize } from '../iam'
 import type { RepoEvents } from '../repo-source'
 import type { Vault } from '../vault'
-import { adoptNamespace, createNamespace, getNamespace, listNamespaces, type NamespaceContext, planNamespace, reconcileNamespace } from './namespaces'
+import {
+	adoptNamespace,
+	createNamespace,
+	getNamespace,
+	listNamespaces,
+	type NamespaceContext,
+	planNamespace,
+	reconcileNamespace,
+	removeNamespace,
+} from './namespaces'
 import {
 	createApp,
 	deleteApp,
@@ -227,7 +236,9 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 				return method === 'POST' ? planNamespace(c) : methodNotAllowed()
 			}
 			if (sub === undefined) {
-				return method === 'GET' ? getNamespace(c, id) : methodNotAllowed()
+				if (method === 'GET') return getNamespace(c, id)
+				if (method === 'DELETE') return removeNamespace(c, id)
+				return methodNotAllowed()
 			}
 			if (sub === 'adopt') {
 				return method === 'POST' ? adoptNamespace(c, id) : methodNotAllowed()

@@ -1,4 +1,5 @@
 import type { AuthContext } from '@fabrika/auth'
+import { API_KEY_PREFIX } from '@fabrika/auth-core'
 import type {
 	AdoptDeploymentNamespaceRequest,
 	CreateDeploymentNamespaceRequest,
@@ -7,14 +8,16 @@ import type {
 	DeploymentNamespaceListResponse,
 	PlanDeploymentNamespaceRequest,
 	PlanDeploymentNamespaceResponse,
+	RemoveDeploymentNamespaceResponse,
 } from '@fabrika/control-contract'
 import type { JobQueue } from '@fabrika/platform'
-import type {
-	ControlProvider,
-	JsonValue,
-	ProviderDeploymentNamespace,
-	ProviderNamespaceCapabilities,
-	ProviderNamespaceMutationInput,
+import {
+	type ControlProvider,
+	type JsonValue,
+	type ProviderDeploymentNamespace,
+	type ProviderNamespaceCapabilities,
+	ProviderNamespaceError,
+	type ProviderNamespaceMutationInput,
 } from '@fabrika/provider-contract'
 import { type ControlRepositories, type DeploymentNamespaceRow, NamespaceResourceClaimConflictError } from '../db'
 import { readJson } from '../http'
@@ -61,10 +64,111 @@ function toNamespaceDto(row: DeploymentNamespaceRow): DeploymentNamespaceDto {
 		exclusiveAppId: row.exclusive_app_id,
 		target: parseStoredEnvelope(row.provider_target_json, `target for namespace ${row.id}`),
 		state: row.state,
-		lastError: row.last_error,
+		...decodeNamespaceError(row.last_error),
 		createdAt: row.created_at,
 	}
 }
+
+// ── The operator-visible failure (backlog 72) ─────────────────────────────────
+
+const ERROR_MESSAGE_MAX_LENGTH = 300
+const ERROR_CODE_MAX_LENGTH = 64
+const ERROR_CODE_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]*$/
+const STORED_ERROR_PATTERN = /^([A-Za-z][A-Za-z0-9_.-]*): ([\s\S]+)$/
+/** The code for a failure that was not a typed provider one — the class is unknown, not absent. */
+const INTERNAL_ERROR_CODE = 'internal'
+
+/**
+ * `last_error` carries `<code>: <message>` in ONE column. The code charset excludes the separator and
+ * every space, so the parse below is unambiguous, and a row written before the codes existed decodes as
+ * a message with no code rather than as a mis-split one.
+ */
+export function encodeNamespaceError(code: string, message: string): string {
+	return `${code}: ${message}`
+}
+
+export function decodeNamespaceError(stored: string | null): { lastError: string | null; lastErrorCode: string | null } {
+	if (stored === null) return { lastError: null, lastErrorCode: null }
+	const match = STORED_ERROR_PATTERN.exec(stored)
+	const code = match?.[1]
+	const message = match?.[2]
+	if (code === undefined || message === undefined) return { lastError: stored, lastErrorCode: null }
+	return { lastError: message, lastErrorCode: code }
+}
+
+/**
+ * Make a provider failure safe to store and to log. Redaction, NOT deletion: the sentence an operator
+ * needs and a value that must never be persisted arrive in the same string, and discarding both is what
+ * made three different live failures indistinguishable (backlog 72).
+ *
+ * Five hazards, each seen in this repository: userinfo in a clone URL (`x-access-token:<token>@`), the
+ * signed query string of an upload URL, a `px_` credential, a signed token, and an environment
+ * assignment quoted back at us (`CLOUDFLARE_API_TOKEN=…`).
+ *
+ * `cap` bounds the result for the ROW, which is a column an operator reads; the LOG takes it uncapped,
+ * because truncating the cause is the failure mode this whole projection exists to end.
+ */
+export function redactNamespaceErrorText(text: string, options: { cap?: boolean } = {}): string {
+	const redacted = text
+		.replace(/\s+/g, ' ')
+		.trim()
+		.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*@/gi, '$1')
+		.replace(/(https?:\/\/[^\s?#]*)\?\S*/gi, '$1?***')
+		.replace(new RegExp(`${API_KEY_PREFIX}[A-Za-z0-9_-]+`, 'g'), `${API_KEY_PREFIX}***`)
+		.replace(/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '***')
+		.replace(/\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, '***')
+		.replace(/\b([A-Z][A-Z0-9_]{2,})=\S+/g, '$1=***')
+	if (options.cap === false || redacted.length <= ERROR_MESSAGE_MAX_LENGTH) return redacted
+	return `${redacted.slice(0, ERROR_MESSAGE_MAX_LENGTH)}…`
+}
+
+/** A provider code has to survive the round trip above; a malformed one is a provider bug, not a class. */
+const namespaceErrorCode = (code: string): string =>
+	code.length <= ERROR_CODE_MAX_LENGTH && ERROR_CODE_PATTERN.test(code) ? code : INTERNAL_ERROR_CODE
+
+/**
+ * Recognize the typed failure STRUCTURALLY as well as by identity. A duplicated
+ * `@fabrika/provider-contract` in one installation's module graph would make `instanceof` false for a
+ * genuine provider error and silently turn every failure back into `internal` — the exact blindness
+ * backlog 72 is about.
+ */
+function asProviderNamespaceError(cause: unknown): ProviderNamespaceError | null {
+	if (cause instanceof ProviderNamespaceError) return cause
+	if (!(cause instanceof Error) || cause.name !== 'ProviderNamespaceError') return null
+	const code = Reflect.get(cause, 'code')
+	if (typeof code !== 'string') return null
+	const detail = Reflect.get(cause, 'detail')
+	return new ProviderNamespaceError(cause.message, code, Reflect.get(cause, 'retryable') === true, typeof detail === 'string' ? detail : undefined)
+}
+
+/**
+ * What the row records and what the log records. The row gets a stable class and a bounded, redacted
+ * message; the log gets the same text UNCAPPED and, for an untyped cause, everything the cause said.
+ * Neither is ever the error OBJECT: a cause can carry a clone URL with an embedded token.
+ */
+function namespaceFailure(cause: unknown, mutation: NamespaceJobMutation): { code: string; message: string; log: string } {
+	const generic = `namespace ${mutation} failed`
+	const typed = asProviderNamespaceError(cause)
+	if (typed !== null) {
+		const detail = typed.detail === undefined || typed.detail.trim() === '' ? '' : ` — ${typed.detail}`
+		const full = `${typed.message}${detail}`
+		// Redaction can empty a message that was nothing but a credential; the encoding still has to be total.
+		const message = redactNamespaceErrorText(full) || generic
+		return {
+			code: namespaceErrorCode(typed.code),
+			message,
+			log: `${redactNamespaceErrorText(full, { cap: false })}${typed.retryable ? ' (retryable)' : ''}`,
+		}
+	}
+	const described = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)
+	return { code: INTERNAL_ERROR_CODE, message: generic, log: redactNamespaceErrorText(described, { cap: false }) }
+}
+
+/**
+ * Control's OWN namespace invariants, coded here so a broken checkpoint is never reported under a
+ * provider's vocabulary. The class is contract-level, so a provider passes it through untouched.
+ */
+const namespaceCheckpointInvariant = (message: string): ProviderNamespaceError => new ProviderNamespaceError(message, 'checkpointInvariant', false)
 
 function toNamespaceDetail(c: NamespaceUseCaseContext, row: DeploymentNamespaceRow): DeploymentNamespaceDetailDto {
 	const operator = c.provider.namespaces?.operator
@@ -209,7 +313,9 @@ async function mutateNamespace(
 		signal: c.signal,
 		events: {
 			checkpoint: async (namespace) => {
-				if (!sameCoordinates(namespace, current, c.provider.id)) throw new Error('provider checkpoint changed namespace coordinates')
+				if (!sameCoordinates(namespace, current, c.provider.id)) {
+					throw namespaceCheckpointInvariant('provider checkpoint changed namespace coordinates')
+				}
 				current = namespace
 				if (
 					await c.repositories.registry.updateDeploymentNamespace({
@@ -218,7 +324,7 @@ async function mutateNamespace(
 						state: 'provisioning',
 						lastError: null,
 					}) === null
-				) throw new Error('deployment namespace disappeared during checkpoint')
+				) throw namespaceCheckpointInvariant('deployment namespace disappeared during checkpoint')
 			},
 		},
 	})
@@ -233,13 +339,14 @@ async function mutateNamespace(
 			lastError: null,
 		})
 		return ready === null ? 'skipped' : 'ready'
-	} catch {
-		const message = `namespace ${mutation} failed`
+	} catch (cause) {
+		const failure = namespaceFailure(cause, mutation)
+		console.error(`namespace ${mutation} failed for ${row.id}: ${failure.code}: ${failure.log}`)
 		await c.repositories.registry.updateDeploymentNamespace({
 			id: row.id,
 			providerTargetJson: JSON.stringify(current.target),
 			state: 'failed',
-			lastError: message,
+			lastError: encodeNamespaceError(failure.code, failure.message),
 		})
 		return 'failed'
 	}
@@ -256,14 +363,15 @@ async function enqueueNamespaceJob(c: NamespaceUseCaseContext, row: DeploymentNa
 
 async function auditMutation(
 	c: NamespaceUseCaseContext,
-	action: 'namespace.create' | 'namespace.adopt' | 'namespace.reconcile',
+	action: 'namespace.create' | 'namespace.adopt' | 'namespace.reconcile' | 'namespace.remove',
 	row: DeploymentNamespaceRow,
+	extra: Readonly<Record<string, unknown>> = {},
 ): Promise<void> {
 	await c.auth.audit({
 		action,
 		resourceType: 'deployment_namespace',
 		resourceId: row.id,
-		metadata: { env: row.env, provider: row.provider, exclusiveAppId: row.exclusive_app_id, state: row.state },
+		metadata: { env: row.env, provider: row.provider, exclusiveAppId: row.exclusive_app_id, state: row.state, ...extra },
 	})
 }
 
@@ -402,6 +510,57 @@ export async function reconcileNamespaceUseCase(c: NamespaceUseCaseContext, id: 
 	await enqueueNamespaceJob(c, current, 'reconcile')
 	await auditMutation(c, 'namespace.reconcile', current)
 	return toNamespaceDetail(c, current)
+}
+
+export async function removeNamespace(c: NamespaceContext, id: string): Promise<Response> {
+	return jsonAdapter(() => removeNamespaceUseCase(useCaseContext(c), id))
+}
+
+/**
+ * Free a namespace id (backlog 73). The narrow case only: no app environment may be registered here, and
+ * a namespace a worker is settling is left to finish. It removes the ROW and releases its reservations —
+ * it deletes NO provider resource, because fabrika holds `OWNER` on the projects it creates (ADR-0034)
+ * and deleting one is a destructive act on live state. The removed row is returned whole so the operator
+ * can see the provider target and presentation naming what is now unowned.
+ */
+export async function removeNamespaceUseCase(c: NamespaceUseCaseContext, id: string): Promise<RemoveDeploymentNamespaceResponse> {
+	const row = await c.repositories.registry.getDeploymentNamespace(id)
+	if (row === null) fail(404, 'deployment namespace not found')
+	if (row.provider !== c.provider.id) fail(409, `deployment namespace belongs to provider ${row.provider}`)
+	await refuseNamespaceRemoval(c, row)
+	// Answer from the row the DELETE returned, not from the read above: the statement is the moment the
+	// namespace ceased to exist, and its `RETURNING *` is the only description of it that is certainly true.
+	const deleted = await c.repositories.registry.deleteDeploymentNamespaceWithResourceClaims(id)
+	if (deleted === null) {
+		// The same guard is in the statement, so a namespace claimed between the check above and the write
+		// keeps its claims. Re-read to answer with the reason rather than with a bare conflict.
+		await refuseNamespaceRemoval(c, await c.repositories.registry.getDeploymentNamespace(id))
+		fail(409, 'deployment namespace changed while it was being removed')
+	}
+	const removed = toRemovedDetail(c, deleted)
+	// The provider target is credential-free by contract (ADR-0014) and it is what names the resources this
+	// removal stopped tracking — an audit row without it cannot answer "what did we orphan, and where".
+	await auditMutation(c, 'namespace.remove', deleted, { target: removed.target })
+	return { removed }
+}
+
+async function refuseNamespaceRemoval(c: NamespaceUseCaseContext, row: DeploymentNamespaceRow | null): Promise<void> {
+	if (row === null) fail(404, 'deployment namespace not found')
+	if (row.state === 'provisioning') fail(409, 'deployment namespace provisioning is in progress')
+	const environments = await c.repositories.registry.listAppEnvsByNamespace(row.id)
+	if (environments.length > 0) {
+		const apps = [...new Set(environments.map((environment) => environment.app_id))].sort()
+		fail(409, `deployment namespace is registered to ${apps.join(', ')}`)
+	}
+}
+
+/** A namespace that failed early may hold a target its provider cannot present; that must not block removal. */
+function toRemovedDetail(c: NamespaceUseCaseContext, row: DeploymentNamespaceRow): DeploymentNamespaceDetailDto {
+	try {
+		return toNamespaceDetail(c, row)
+	} catch {
+		return { ...toNamespaceDto(row), presentation: null }
+	}
 }
 
 function parseCreate(body: unknown): CreateDeploymentNamespaceRequest {

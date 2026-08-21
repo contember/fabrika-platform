@@ -39,9 +39,11 @@ Usage:
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>]
                            [--namespace=<id>] [--installation-id=<n|none>]
   fabrika control namespaces list
+  fabrika control namespaces get     --namespace=<id>
   fabrika control namespaces plan   --namespace=<id> --env=<name> --preset=<cheap|mid|full> [placement]
   fabrika control namespaces create --namespace=<id> --env=<name> --preset=<cheap|mid|full> [placement]
   fabrika control namespaces reconcile --namespace=<id>
+  fabrika control namespaces remove --namespace=<id>
   fabrika control deploy --app=<id> --env=<name> [--ref=<ref>]
   fabrika control runs list [--app=<id>] [--env=<name>] [--limit=<n>]
   fabrika control runs get --run=<id>
@@ -62,8 +64,12 @@ Namespace placement options, each defaulting to what the preset would choose:
   --public-access=<custom-domain|zerops-subdomain>
   --exclusive-app=<id>              required by, and only by, the \`full\` preset
 
-\`namespaces plan\` is a preview and changes nothing; \`namespaces create\` plans and then commits
-that exact plan, which is what the console's two-step form does.
+\`namespaces plan\` is a preview and changes nothing. \`namespaces create\` commits that exact plan — the
+same two steps the console's form takes — and returns as soon as the placement is recorded: provisioning
+runs behind the control queue and takes minutes, so the state comes back \`pending\`. Follow it with
+\`namespaces get\` or \`namespaces list\`; nothing needs to stay connected. \`namespaces remove\` frees the id
+of a placement no application is registered in. It deletes nothing at the provider and prints, on stderr,
+the provider resources it stopped tracking.
 
 Every command accepts --json, which prints the procedure's result verbatim.
 
@@ -454,6 +460,13 @@ const runRuns = async (verb: string | undefined, flags: Flags, env: Readonly<Rec
 const namespaceLine = (namespace: DeploymentNamespaceDto): string =>
 	`${namespace.id}\t${namespace.env}\t${namespace.state}\t${namespace.exclusiveAppId ?? '-'}`
 
+/** The failure is a DIAGNOSTIC, so it goes to stderr and leaves the data columns above untouched. */
+const warnNamespaceFailure = (namespace: DeploymentNamespaceDto): void => {
+	// Falsy, not `=== null`: a control plane that omits the field must not print an empty diagnostic.
+	if (!namespace.lastError) return
+	console.warn(`${namespace.lastErrorCode ?? 'unknown'}: ${namespace.lastError}`)
+}
+
 /** Placement flags are the preset's overrides, so only the ones actually given are sent. */
 const namespacePlan = (flags: Flags): PlanDeploymentNamespaceRequest => {
 	const exclusiveAppId = optional(flags, 'exclusive-app')
@@ -480,16 +493,33 @@ const runNamespaces = async (verb: string | undefined, flags: Flags, env: Readon
 		emit(flags, result, () => result.items.map(namespaceLine).join('\n'))
 		return
 	}
+	if (verb === 'get') {
+		const result = await client.namespaces.get({ namespaceId: required(flags, 'namespace') })
+		warnNamespaceFailure(result)
+		emit(flags, result, () => namespaceLine(result))
+		return
+	}
 	if (verb === 'plan') {
 		const result = await client.namespaces.plan(namespacePlan(flags))
 		emit(flags, result, () => JSON.stringify(result.namespace.target.payload))
 		return
 	}
 	if (verb === 'reconcile') {
-		// Provisioning checkpoints its progress, so a namespace left `failed` by a timeout or a denied
-		// call is resumed by reconciling it again rather than by creating a second one.
+		// Provisioning checkpoints its progress, so a namespace left `failed` by a denied or interrupted
+		// call is resumed by re-queueing it here rather than by creating a second one under another id.
 		const result = await client.namespaces.reconcile({ namespaceId: required(flags, 'namespace') })
 		emit(flags, result, () => namespaceLine(result))
+		return
+	}
+	if (verb === 'remove') {
+		const result = await client.namespaces.remove({ namespaceId: required(flags, 'namespace') })
+		// Fabrika holds OWNER on the projects it creates and deletes none of them here (ADR-0034), so what
+		// it has just stopped tracking is named for the operator to remove by hand. Only the facts the
+		// provider MARKED as live resources: a policy fact is not something anyone has to go and delete.
+		for (const fact of (result.removed.presentation?.facts ?? []).filter((fact) => fact.resource === true)) {
+			console.warn(`retained\t${fact.label}\t${fact.value}`)
+		}
+		emit(flags, result, () => namespaceLine(result.removed))
 		return
 	}
 	if (verb === 'create') {
@@ -503,6 +533,7 @@ const runNamespaces = async (verb: string | undefined, flags: Flags, env: Readon
 			target: planned.namespace.target,
 			...(request.exclusiveAppId === undefined ? {} : { exclusiveAppId: request.exclusiveAppId }),
 		})
+		warnNamespaceFailure(result)
 		emit(flags, result, () => namespaceLine(result))
 		return
 	}
