@@ -43,7 +43,7 @@ them.
    entirely from an operator's CI
    ([archive](../archive/sprint-2026-08-07-zerops-from-scratch-install.md)).
    `fabrika-test` itself has not — it is still on the hand-chosen `zops push` order of
-   2026-08-05 → [`59`](./59-the-live-installation-calls-itself-local.md).
+   2026-08-05 → backlog 59 (closed: the installation now declares its environment name).
 4. **Human authentication is done on this tier.** Password enrollment, sign-in,
    throttling, admin disable and the audit trail were exercised live on 2026-08-04,
    and so was cross-host browser SSO between two `.zerops.app` hostnames

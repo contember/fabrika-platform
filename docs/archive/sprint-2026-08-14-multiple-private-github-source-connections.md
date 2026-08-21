@@ -1,3 +1,16 @@
+> **OUTCOME — closed 2026-08-21.** One Zerops installation connects and deploys private repositories
+> from several GitHub organizations through keyed v2 credentials and connection-scoped webhooks
+> (ADR-0032); `keyed-v2` scoped delivery, exact-commit private deploys, restart reconstruction and
+> keyed-slot recovery (ADR-0036) were all witnessed live between 2026-08-14 and 2026-08-20. The legacy
+> `legacy-v1` compatibility path this sprint preserved was retired with the account that held its only
+> credential (ADR-0039, `b1c0849`), which voids the legacy generic-delivery gate rather than meeting it.
+> Commit map (selected): v1/v2 rebinding `2cf6681`, `f668ff5`; scoped webhook URL `225e47b`; source
+> failure reasons `407ff66`; browser manifest handoff `7fe3bec`; webhook reconciliation `b7bc771`;
+> durable binding recovery `87aa2ed`; retirement `b1c0849`. Verification: the 2026-08-17 run-log gates
+> (full `bun test` with a dedicated PostgreSQL 17, `release:validate`, Zerops `gen:check`) and the
+> 2026-08-20 live witnesses recorded below. Deferred: a private deploy from a SECOND connected
+> organization was never witnessed live; it moves to the cheap-rebuild sprint as WU8 item (7).
+
 # Sprint — Multiple private GitHub source connections (2026-08-14)
 
 **Goal.** Let one Zerops Fabrika installation connect and deploy private repositories from multiple

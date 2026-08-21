@@ -25,14 +25,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
   asynchronous namespace provisioning, actionable namespace failures, removal of a failed namespace),
   and stand one installation back up on the cheap defaults landed in `3ecf86d`. The rebuild is the
   single live acceptance for all of it.
-- [`sprint-2026-08-14-multiple-private-github-source-connections`](sprint-2026-08-14-multiple-private-github-source-connections.md)
-  — extend the live Zerops source path from one installation-wide GitHub App to one private App per
-  organization. The additive design keeps the existing Zerops v1 credential and generic webhook route,
-  gives every new connection a create-only keyed v2 credential and scoped webhook, and binds app
-  registry entries on the Zerops private-source path to connection plus installation. Cloudflare keeps
-  its static-secret and installation-id webhook behavior. There is no explicit connection-count limit.
-  Deterministic local compatibility and isolation gates are complete. Live setup created and verified
-  Apps for two additional organizations, the source restarted with the legacy base credential plus
-  three keyed v2 slots, and a keyed-v2 scoped push deployed its bound private application. A private
-  deploy from a second organization and a genuine legacy-v1 generic delivery remain open
-  ([ADR-0032](../decisions/0032-support-multiple-private-github-source-connections.md)).

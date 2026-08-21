@@ -320,7 +320,8 @@ cores and 24 GB at idle. Fabrika now states both profiles: `db` keeps `oltp-prod
 control-plane latency is felt by every request), `operationsdb` takes `oltp-staging` (same redundancy,
 same ceiling, a 1-core/1-GB shared floor — error history is bursty and tolerant of jitter), which
 halves the idle floor of the data plane. The `light` tier is one `postgresql:single@18` at
-`oltp-staging`.
+`oltp-hobby` — a 1-core / 0.25 GB shared floor, the same ceiling
+([ADR-0038](../decisions/0038-size-namespaces-cheaply-by-default.md)).
 
 #### Probe durations: the published schema is wrong, and the platform bounds them
 
@@ -768,7 +769,7 @@ variable surface is the `usage` string in `packages/installation-zerops/src/inde
 Three behaviours worth knowing before reading that file:
 
 - **The manifest is MERGED.** On the light tier an application shares the project and therefore the
-  platform proxy's one `FABRIKA_PROXY_MANIFEST_JSON` — `fabrika-test` carries `notes` → `notesapi:3000`
+  platform proxy's one `FABRIKA_PROXY_MANIFEST_JSON` — the light-tier installation carried `notes` → `notesapi:3000`
   beside the three platform apps. Application entries are carried through unchanged; an entry standing
   on one of the platform's own public hosts is superseded and reported, because a host belongs to
   exactly one app.

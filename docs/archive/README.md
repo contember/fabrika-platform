@@ -9,6 +9,11 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Multiple private GitHub source connections (2026-08-14)](sprint-2026-08-14-multiple-private-github-source-connections.md)
+  — one installation, one private GitHub App per organization, keyed v2 credentials and
+  connection-scoped webhooks (ADR-0032), witnessed live through a keyed-v2 private deploy and a
+  keyed-slot recovery. Its legacy-v1 compatibility gate was retired by ADR-0039 instead of met; the
+  second-organization deploy moved to the cheap-rebuild sprint.
 - [A public and private GitHub application deployed on Zerops (2026-08-11)](sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md)
   — one exact application commit deployed first from a public repository and then from the same
   repository after it became private, through an operator-owned GitHub App and Fabrika's source-upload

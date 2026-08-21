@@ -361,7 +361,8 @@ onboarding (a keyed source connection, registration) stays a hand sequence in th
   no git binary ran on `source`, and its disk did not grow; (5) `zops scale get` on every service shows the cheap floors this sprint's
   defaults declare, and the project's reported 30-day cost is single-digit dollars; (6) no service
   carries an autoscaling value fabrika did not write — the hand-set 1 GB floor on `source` must not
-  reappear.
+  reappear. (7) A private repository owned by a SECOND connected organization deploys through its own
+  keyed connection — the witness the archived multi-connection sprint (2026-08-14) never collected.
 - **Touch points.** No repository files. WU8 changes authorized live Zerops and GitHub state and
   returns redacted witness facts to WU0 for the run log. No credential value enters that report.
 
@@ -441,3 +442,20 @@ everything except WU6, which follows it.
 - 2026-08-21 — WU1a landed locally in `40fa310`: `source-zerops` 127 pass / 0 fail, full typecheck,
   lint and format clean. Not yet exercised against a live GitHub tarball — WU8 item (4) stays its
   witness. WU1 may start.
+- 2026-08-21 — Wave 1 landed: WU0 `30251be`, WU2 `da77242`, WU4 `6fb69c5`, WU1 `b1c0849`, WU3 `ee3ec4d`.
+  Gate after WU1: `bun run typecheck` 35/35, `bun test` 2 733 pass / 9 skip (S3 only) / 0 fail with a
+  dedicated PostgreSQL 17, lint and format clean. Each unit had an independent review and one fix round.
+  Deviations from the plan text, all deliberate: (a) the generic `POST /webhooks/github` route and gate
+  STAY — the Cloudflare composition is configured with exactly that URL; a Zerops composition refuses it
+  with 401, so WU1's "404" and "grep returns nothing" acceptance read as "401 on Zerops" and "`legacy-v1`
+  only in shipped migrations"; `GITHUB_APP_ID`/`GITHUB_APP_PRIVATE_KEY` are the Cloudflare static-secret
+  path and were never legacy. (b) WU4 writes `pending` from the request and claims `pending →
+  provisioning` in the worker; a reconcile never rewrites `provider_target_json`; the Bun consumer is
+  sequential, so a namespace job delays deploys queued behind it — accepted, the second-queue change is
+  out. (c) WU2's `install` flag is `--yes`; a TTY keeps one readline per question (a persistent one
+  leaves the terminal raw for `git`/`gh` spawned between questions), a pipe gets one queued reader.
+  (d) WU3 is a new verb `platform admin` with a required `--iam-host` and an opt-in `--reissue`; its
+  contract test against the real IAM router showed a duplicate cross-app grant answers 500 — a latent
+  IAM defect worth its own item. (e) The local smoke cannot exercise a bound private deploy without a
+  GitHub double (backlog 81); it now proves the scoped webhook signature and triggers the example
+  deploy through the API. The 2026-08-14 sprint is archived; its second-organization deploy is WU8 (7).

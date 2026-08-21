@@ -34,7 +34,7 @@ cheap defaults. [ADR-0038](decisions/0038-size-namespaces-cheaply-by-default.md)
 `prod` stops buying three dedicated HA containers. The rebuild is the single live acceptance for the
 whole batch.
 
-[`multiple-private-github-source-connections`](sprints/sprint-2026-08-14-multiple-private-github-source-connections.md) —
+The archived [multi-connection sprint](archive/sprint-2026-08-14-multiple-private-github-source-connections.md) —
 extend the Zerops source path to one private GitHub App per organization and multiple connections per
 installation. [ADR-0032](decisions/0032-support-multiple-private-github-source-connections.md) gives
 every connection a keyed v2 credential and a scoped webhook, and binds every Zerops private app to a
@@ -88,9 +88,9 @@ backlog is empty; what is left of item 54 is a console architecture decision, no
   same exact application commit through the public and private source-upload paths, a private push
   webhook, fast failed-build detection, readable run logs, cross-host sign-in and release-correlated
   browser exception ingest. ADR-0029 owns the source transport and ADR-0031 the authenticated Control
-  setup. The active
-  [multi-connection sprint](sprints/sprint-2026-08-14-multiple-private-github-source-connections.md)
-  still owes its second-organization deploy; keyed-v2 scoped delivery is proven live, and
+  setup. The archived
+  [multi-connection sprint](archive/sprint-2026-08-14-multiple-private-github-source-connections.md)
+  handed its second-organization deploy to the cheap-rebuild sprint's WU8; keyed-v2 scoped delivery is proven live, and
   [ADR-0039](decisions/0039-retire-the-legacy-v1-source-credential-path.md) retired the legacy-v1
   generic delivery it used to owe. The
   production two-project shape and custom domains remain in

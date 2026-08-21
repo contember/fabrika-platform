@@ -25,7 +25,7 @@ short-circuits role resolution (`packages/iam/src/resolve.ts:20`, `packages/iam/
 It does not expire, it is not scoped, it leaves no grant row, and **nothing reports that it is open** —
 not a test, not a deploy, not the console.
 
-That is the same failure class as [59](./59-the-live-installation-calls-itself-local.md), which was
+That is the same failure class as the `ENVIRONMENT=local` drift (backlog 59, closed), which was
 found by reading a live account rather than by any check the repository runs, and which
 `sprint-2026-08-06-zerops-platform-deploy` named in advance: _"an escape hatch that is documented but
 never closed is 59 all over again — prefer a mechanism that closes itself."_
