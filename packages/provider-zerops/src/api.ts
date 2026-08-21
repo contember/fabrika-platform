@@ -784,6 +784,9 @@ export class ZeropsApiError extends Error {
 /** The platform's code for "this service stack already has a variable under that key". */
 const USER_DATA_DUPLICATE_KEY = 'userDataDuplicateKey'
 
+/** The platform's code for a service stack it cannot find — sent with a 400, not a 404. */
+const ZEROPS_SERVICE_STACK_NOT_FOUND = 'serviceStackNotFound'
+
 /**
  * The platform's code for "this service publishes no HTTP port", the answer `enableSubdomainAccess` gives
  * before a service's first deploy. Exported so a caller can say what is missing instead of relaying prose.
@@ -1124,8 +1127,9 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			try {
 				return readService(await request('find service', 'GET', `/service-stack-by-name/${projectId}/${encodeURIComponent(hostname)}`, { signal }))
 			} catch (error) {
-				// A missing service is an answer, not a failure; anything else propagates.
-				if (error instanceof Error && error.message.includes('(404)')) {
+				// A missing service is an answer, not a failure; anything else propagates. The live platform
+				// says it as 400 `serviceStackNotFound` (docs/reference/zerops-platform.md), not as a 404.
+				if (error instanceof ZeropsApiError && (error.status === 404 || error.code === ZEROPS_SERVICE_STACK_NOT_FOUND)) {
 					return null
 				}
 				throw error

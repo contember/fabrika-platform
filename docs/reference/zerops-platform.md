@@ -679,6 +679,21 @@ with `sensitive: field is required` (the CLI's update body omits it); the raw `P
 `stack.updateUserData` process. A token swapped that way is read by the service only after
 `service restart`.
 
+### Verified live (2026-08-21, account `prg1`, project `apps-test2`) — a missing service by name is a 400
+
+The first registration into a freshly provisioned namespace — one that holds only the proxy and the
+database, so the app's own service does not exist yet — answered `502 provider registration preparation
+failed`. The look-up that should have said "absent" had thrown instead.
+
+| Call                                                                  | Result                                                                                                                                |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /service-stack-by-name/{projectId}/{hostname}`, hostname present | **200**, the service record                                                                                                           |
+| `GET /service-stack-by-name/{projectId}/{hostname}`, hostname absent  | **`400 serviceStackNotFound`** — "Service stack not found." — on the namespace project and on the platform project alike, never a 404 |
+
+The same code the `user-data` LIST returns on every service (see 2026-08-03 above), here meaning what it
+says. A client deciding "present or absent" by HTTP status treats an absent service as a failure; the
+decision has to read the error code. The local emulator answers the same 400 since the same day.
+
 ### Verified live (2026-08-19, account `prg1`, project `fabrika-notes-prod`) — a user-data write is an asynchronous process
 
 The first app deploy into a namespace failed at `build-and-deploy` with a bare `400`, deterministically

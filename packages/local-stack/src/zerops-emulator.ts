@@ -569,7 +569,8 @@ class ZeropsEmulator {
 			const projectId = decodeURIComponent(serviceByName[1] ?? '')
 			const name = decodeURIComponent(serviceByName[2] ?? '')
 			const service = this.state.services.find((item) => item.projectId === projectId && item.name === name)
-			return service === undefined ? error(404, 'SERVICE_NOT_FOUND', 'service not found') : json(this.serviceResponse(service))
+			// The real platform answers a missing name with 400 `serviceStackNotFound`, not a 404.
+			return service === undefined ? error(400, 'serviceStackNotFound', 'Service stack not found.') : json(this.serviceResponse(service))
 		}
 
 		const service = path.match(/^\/service-stack\/([^/]+)$/)

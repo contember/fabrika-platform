@@ -59,6 +59,38 @@ describe('Zerops API discovery', () => {
 		expect(urls).toEqual(['https://zerops.test/client/client-1/projects-by-name/apps%20prod'])
 	})
 
+	test('findService reads a missing name as the platform says it: 400 serviceStackNotFound', async () => {
+		const urls: string[] = []
+		const fetchImpl: FetchLike = async (url) => {
+			urls.push(url)
+			return jsonResponse({ error: { code: 'serviceStackNotFound', message: 'Service stack not found.', meta: [] } }, 400)
+		}
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl })
+
+		await expect(api.findService({ projectId: 'project-1', hostname: 'notesapi', signal: signal() })).resolves.toBeNull()
+		expect(urls).toEqual(['https://zerops.test/service-stack-by-name/project-1/notesapi'])
+	})
+
+	test('findService still treats a 404 as missing and lets every other refusal propagate', async () => {
+		const notFound = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => jsonResponse({ error: { code: 'notFound', message: 'not found' } }, 404),
+		})
+		await expect(notFound.findService({ projectId: 'project-1', hostname: 'notesapi', signal: signal() })).resolves.toBeNull()
+
+		const forbidden = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => jsonResponse({ error: { code: 'insufficientPermissions', message: 'Insufficient permissions' } }, 403),
+		})
+		await expect(forbidden.findService({ projectId: 'project-1', hostname: 'notesapi', signal: signal() })).rejects.toMatchObject({
+			name: 'ZeropsApiError',
+			status: 403,
+			code: 'insufficientPermissions',
+		})
+	})
+
 	test('reads project details using the documented mode field', async () => {
 		const fetchImpl: FetchLike = async () =>
 			jsonResponse({

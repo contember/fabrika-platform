@@ -220,8 +220,8 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		// was and there is nothing to roll back.
 		try {
 			registration = await prepareRegistration(c, preparation, requested)
-		} catch {
-			return fail(502, 'provider registration preparation failed')
+		} catch (cause) {
+			return fail(502, preparationFailure(cause))
 		}
 	}
 	const resourceClaims = registrationResourceClaims(c.provider, registration)
@@ -468,10 +468,10 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 				providerTargetJson: JSON.stringify(registration.environment.target),
 				providerArtifactJson: JSON.stringify(registration.environment.artifact),
 			}, resourceClaims)).appEnv
-		} catch {
+		} catch (cause) {
 			if (namespace !== undefined) await c.repositories.registry.deleteNamespaceResourceClaimsForOwner(namespace.id, id, env)
 			await c.repositories.registry.deleteApp(id)
-			fail(502, 'provider registration preparation failed')
+			fail(502, preparationFailure(cause))
 		}
 	}
 	await c.auth.audit({
@@ -744,6 +744,13 @@ function parseRegisterApp(body: unknown): RegisterAppRequest {
 function queryLayer(url: URL): string | null {
 	const value = url.searchParams.get('env')
 	return value === null || value === '' ? null : value
+}
+
+/** The response stays opaque (provider detail must not escape); the log names the refusal so an operator can act. */
+function preparationFailure(cause: unknown): string {
+	const reason = cause instanceof Error && cause.message !== '' ? cause.message.slice(0, 300) : 'unknown error'
+	console.error(`provider registration preparation failed: ${reason}`)
+	return 'provider registration preparation failed'
 }
 
 function notifyCatalogChanged(c: RegistryUseCaseContext): void {
