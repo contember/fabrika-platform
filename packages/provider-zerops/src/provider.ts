@@ -170,23 +170,41 @@ const cleanupPreTriggerVersion = async (env: StepEnv, source: ZeropsRuntimeSourc
 }
 
 /**
- * Relay whatever build log Zerops will give us into the run's progress sink.
+ * Relay ONE app version's build log into the run's progress sink.
  *
- * Deliberately FAILURE-TOLERANT: the log service's protocol is the one shape in this driver nobody could
- * verify against a document (see `ZeropsApi.readBuildLog`). An unverified endpoint must never be able to
- * fail a deploy, so a broken guess degrades to "no lines relayed" and the run still succeeds or fails on
- * the platform's process and app-version statuses.
+ * Scoped to the version being deployed: the runtime service's log window mixes every version that ever ran
+ * on it, so an unscoped read stamps a run's log with lines from earlier releases. `appVersionId` selects
+ * the build lines and `since` — the version's pipeline start — cuts the runtime ones
+ * (see `ZeropsApi.readBuildLog`). Before the platform reports a pipeline start there is nothing to cut
+ * against, so no runtime line is relayed yet. The cut is by time, so the OUTGOING container's own lines
+ * still arrive until it is replaced; what it removes is every earlier version's history.
+ *
+ * Deliberately FAILURE-TOLERANT: a log service must never be able to fail a deploy, so an error degrades
+ * to "no lines relayed" and the run still succeeds or fails on the platform's process and app-version
+ * statuses.
  *
  * Relay is pull-based (ADR-0003), so each poll re-reads a window that overlaps the last one; `seen` keeps
  * the run log from repeating itself. Two genuinely identical lines with no timestamp collapse into one —
  * an acceptable trade for not printing the same window every three seconds.
  */
-const relayLog = async (env: StepEnv, access: ZeropsLogAccess | null, seen: Set<string>): Promise<void> => {
+const relayLog = async (
+	env: StepEnv,
+	access: ZeropsLogAccess | null,
+	seen: Set<string>,
+	appVersionId: string,
+	since: string | undefined,
+): Promise<void> => {
 	if (access === null) {
 		return
 	}
 	try {
-		const lines = await env.zerops.api.readBuildLog({ access, serviceId: env.run.target.serviceId, signal: env.signal })
+		const lines = await env.zerops.api.readBuildLog({
+			access,
+			serviceId: env.run.target.serviceId,
+			appVersionId,
+			...(since === undefined ? {} : { since }),
+			signal: env.signal,
+		})
 		for (const line of lines) {
 			const key = `${line.timestamp ?? ''}\u0000${line.message}`
 			if (seen.has(key)) {
@@ -248,7 +266,7 @@ const awaitVersion = async (env: StepEnv, appVersionId: string, processId: strin
 			log(`  ${appVersionId}: ${version.status ?? 'unknown'}`)
 			previous = version.status
 		}
-		await relayLog(env, access, seen)
+		await relayLog(env, access, seen, appVersionId, version.build?.pipelineStart)
 
 		if (process?.status !== undefined && ZEROPS_PROCESS_TERMINAL.has(process.status) && process.status !== ZEROPS_PROCESS_FINISHED) {
 			throw new Error(

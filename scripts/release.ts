@@ -61,6 +61,7 @@ interface Options {
 	readonly version: string
 	readonly artifactsDirectory: string
 	readonly dryRun: boolean
+	readonly positional: readonly string[]
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -198,20 +199,27 @@ const resolveTag = async (explicit: string | undefined): Promise<{ readonly tag:
 	return { tag, version: match[1] }
 }
 
-const parseOptions = async (argv: readonly string[]): Promise<Options> => {
+const COMMANDS: readonly string[] = ['validate', 'pack', 'smoke', 'publish', 'registry-smoke', 'example-pin']
+
+/** The one command that takes a path. Everywhere else a bare word is a typo, and `publish oops` must not publish. */
+const POSITIONAL_COMMAND = 'example-pin'
+
+export const parseOptions = async (argv: readonly string[]): Promise<Options> => {
 	const command = argv[0] ?? 'validate'
 	let tagArgument: string | undefined
 	let artifactsDirectory = join(ROOT, '.release')
 	let dryRun = false
+	const positional: string[] = []
 	for (const argument of argv.slice(1)) {
 		if (argument.startsWith('--tag=')) tagArgument = argument.slice('--tag='.length)
 		else if (argument.startsWith('--artifacts=')) artifactsDirectory = resolve(ROOT, argument.slice('--artifacts='.length))
 		else if (argument === '--dry-run') dryRun = true
+		else if (command === POSITIONAL_COMMAND && !argument.startsWith('-')) positional.push(argument)
 		else throw new Error(`Unknown option: ${argument}`)
 	}
-	if (!['validate', 'pack', 'smoke', 'publish', 'registry-smoke'].includes(command)) throw new Error(`Unknown release command: ${command}`)
+	if (!COMMANDS.includes(command)) throw new Error(`Unknown release command: ${command}`)
 	const { tag, version } = await resolveTag(tagArgument)
-	return { command, tag, version, artifactsDirectory, dryRun }
+	return { command, tag, version, artifactsDirectory, dryRun, positional }
 }
 
 const internalDependencies = (item: PackageInfo, publicNames: ReadonlySet<string>): readonly string[] => {
@@ -530,22 +538,207 @@ const distTagVersion = async (name: string, tag: string): Promise<string | undef
 	return value
 }
 
+/**
+ * How long the registry wait sleeps between rounds, the last value repeating.
+ *
+ * npm's replication, not the publish, is what is being waited on: `@fabrika/control-contract` reached the
+ * `latest` dist-tag about five minutes after publish on both v0.0.24 and v0.0.25, where the old fixed
+ * 6 x 2 s gave up after twelve seconds and every release needed a manual re-run.
+ */
+export const REGISTRY_BACKOFF_MS: readonly number[] = [5_000, 10_000, 20_000, 30_000]
+
+/** Total budget for the wait; past it the release job fails rather than holding a runner open. */
+export const REGISTRY_DEADLINE_MS = 600_000
+
+/** Everything the wait does to the outside world, so a test can assert its schedule without spending it. */
+export interface RegistryWaitDeps {
+	readonly lookup: (name: string) => Promise<string | undefined>
+	readonly sleep: (ms: number) => Promise<void>
+	readonly now: () => number
+	readonly report: (message: string) => void
+}
+
+/** One package the registry has not answered for yet, and what it answered instead. */
+interface RegistryMiss {
+	readonly name: string
+	readonly actual: string | undefined
+	readonly reason: string | undefined
+}
+
+/** One line of an error, capped: a registry failure goes into a build log, so it must not paste a page into it. */
+const shortReason = (error: unknown): string => {
+	const [first = ''] = (error instanceof Error ? error.message : 'unknown error').split('\n')
+	return first.length > 120 ? `${first.slice(0, 119)}…` : first
+}
+
+/** What the registry currently says about a package, in one phrase both the retry line and the failure use. */
+const missState = (miss: RegistryMiss): string => miss.actual ?? (miss.reason === undefined ? '(missing)' : `(lookup failed: ${miss.reason})`)
+
+/** Wait until every package's dist-tag is at `version` or newer, naming the ones still missing between rounds. */
+export const awaitRegistryTag = async (
+	names: readonly string[],
+	tag: string,
+	version: string,
+	deps: RegistryWaitDeps,
+): Promise<void> => {
+	const deadline = deps.now() + REGISTRY_DEADLINE_MS
+	let pending = [...names]
+	let missing: RegistryMiss[] = []
+	for (let attempt = 0;; attempt++) {
+		missing = []
+		const remaining: string[] = []
+		for (const name of pending) {
+			try {
+				const actual = await deps.lookup(name)
+				if (actual !== undefined && compareVersions(actual, version, `${name} dist-tag ${tag}`) >= 0) continue
+				missing.push({ name, actual, reason: undefined })
+			} catch (error) {
+				// A registry hiccup is not an answer. One 5xx must not end a ten-minute wait, so it counts as
+				// "still missing" and the deadline decides.
+				missing.push({ name, actual: undefined, reason: shortReason(error) })
+			}
+			remaining.push(name)
+		}
+		pending = remaining
+		if (missing.length === 0) return
+		const wait = REGISTRY_BACKOFF_MS[Math.min(attempt, REGISTRY_BACKOFF_MS.length - 1)] ?? 30_000
+		if (deps.now() + wait > deadline) break
+		deps.report(
+			`npm dist-tag ${tag} is not at ${version} yet for ${missing.length} package(s); retrying in ${wait / 1_000}s: ${
+				missing.map((miss) => `${miss.name}: ${missState(miss)}`).join(', ')
+			}`,
+		)
+		await deps.sleep(wait)
+	}
+	throw new Error(
+		missing.map((miss) => `${miss.name}: expected npm dist-tag ${tag} at ${version} or newer, received ${missState(miss)}`).join('\n'),
+	)
+}
+
 const registrySmoke = async (options: Options, expectedOrder: readonly PackageInfo[]): Promise<void> => {
 	const tag = releaseDistTag(options.version)
+	await awaitRegistryTag(expectedOrder.map((item) => item.name), tag, options.version, {
+		lookup: (name) => distTagVersion(name, tag),
+		sleep: (ms) => Bun.sleep(ms),
+		now: () => Date.now(),
+		report: (message) => console.info(message),
+	})
 	const dependencies: Record<string, string> = {}
-	for (const item of expectedOrder) {
-		let actual: string | undefined
-		for (let attempt = 1; attempt <= 6; attempt++) {
-			actual = await distTagVersion(item.name, tag)
-			if (actual !== undefined && compareVersions(actual, options.version, `${item.name} dist-tag ${tag}`) >= 0) break
-			if (attempt < 6) await Bun.sleep(2_000)
-		}
-		if (actual === undefined || compareVersions(actual, options.version, `${item.name} dist-tag ${tag}`) < 0) {
-			throw new Error(`${item.name}: expected npm dist-tag ${tag} at ${options.version} or newer, received ${actual ?? '(missing)'}`)
-		}
-		dependencies[item.name] = options.version
-	}
+	for (const item of expectedOrder) dependencies[item.name] = options.version
 	await runConsumerSmoke(dependencies, options.version, 'registry smoke')
+}
+
+// ── the example repository's pins ───────────────────────────────────────────────
+
+/** A `"@fabrika/x": "<range>"` manifest line. Line-for-line by design, so the rewrite's diff shows only pins. */
+const FABRIKA_PIN_LINE = /^(\s*"(?:@fabrika\/[A-Za-z0-9._-]+)"\s*:\s*")([^"]*)("\s*,?)$/
+
+/** Rewrite every `@fabrika/*` range in one manifest to the released version, one line for one line. */
+export const rewriteExamplePins = (text: string, version: string): { readonly text: string; readonly changed: number } => {
+	let changed = 0
+	const rewritten = text.split('\n').map((line) => {
+		const match = FABRIKA_PIN_LINE.exec(line)
+		const prefix = match?.[1]
+		const range = match?.[2]
+		const suffix = match?.[3]
+		if (prefix === undefined || range === undefined || suffix === undefined) return line
+		// A workspace range means the checkout is a monorepo member; rewriting it would unlink the package.
+		if (range.startsWith('workspace:') || range === `^${version}`) return line
+		changed++
+		return `${prefix}^${version}${suffix}`
+	})
+	return { text: rewritten.join('\n'), changed }
+}
+
+/**
+ * Refuse to rewrite a checkout inside this repository.
+ *
+ * `examples/*` are workspace members whose ranges match the workspace's own version ON PURPOSE, which is how
+ * bun links the local packages instead of installing them. Stamping a released range there is silent: the
+ * next install fetches those packages from npm and the example stops testing the working tree.
+ */
+export const assertStandaloneCheckout = (checkout: string, root: string): void => {
+	if (checkout !== root && !checkout.startsWith(`${root}/`)) return
+	throw new Error(
+		`${checkout} is inside this repository. Its package manifests are workspace members whose ranges keep bun linking the local packages; rewriting them to a released range makes the next install fetch from npm instead. Run example-pin against a standalone checkout of the example repository.`,
+	)
+}
+
+/** A unified diff of a LINE-PRESERVING rewrite, so an operator reviews the change before committing it. */
+export const unifiedDiff = (path: string, before: string, after: string, context = 3): string => {
+	if (before === after) return ''
+	const beforeLines = before.split('\n')
+	const afterLines = after.split('\n')
+	// The only caller substitutes in place, so an added or removed line means the rewrite is broken, not the diff.
+	if (beforeLines.length !== afterLines.length) throw new Error(`${path}: the pin rewrite changed the line count`)
+	const changed = beforeLines.flatMap((line, index) => line === afterLines[index] ? [] : [index])
+	const hunks: { start: number; end: number }[] = []
+	for (const index of changed) {
+		const start = Math.max(0, index - context)
+		const end = Math.min(beforeLines.length - 1, index + context)
+		const last = hunks[hunks.length - 1]
+		if (last !== undefined && start <= last.end + 1) last.end = Math.max(last.end, end)
+		else hunks.push({ start, end })
+	}
+	const out = [`--- a/${path}`, `+++ b/${path}`]
+	for (const hunk of hunks) {
+		const count = hunk.end - hunk.start + 1
+		out.push(`@@ -${hunk.start + 1},${count} +${hunk.start + 1},${count} @@`)
+		let index = hunk.start
+		while (index <= hunk.end) {
+			if (beforeLines[index] === afterLines[index]) {
+				out.push(` ${beforeLines[index] ?? ''}`)
+				index++
+				continue
+			}
+			const run = index
+			while (index <= hunk.end && beforeLines[index] !== afterLines[index]) index++
+			for (let cursor = run; cursor < index; cursor++) out.push(`-${beforeLines[cursor] ?? ''}`)
+			for (let cursor = run; cursor < index; cursor++) out.push(`+${afterLines[cursor] ?? ''}`)
+		}
+	}
+	return out.join('\n')
+}
+
+/** Every `package.json` in a checkout, skipping dependencies and anything hidden. */
+const findManifests = async (directory: string): Promise<readonly string[]> => {
+	const found: string[] = []
+	const walk = async (current: string): Promise<void> => {
+		const entries = await readdir(current, { withFileTypes: true })
+		for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+			if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'dist') continue
+			const path = join(current, entry.name)
+			if (entry.isDirectory()) await walk(path)
+			else if (entry.name === 'package.json') found.push(path)
+		}
+	}
+	await walk(directory)
+	return found
+}
+
+const examplePin = async (options: Options): Promise<void> => {
+	const argument = options.positional[0]
+	if (argument === undefined || options.positional.length > 1) {
+		throw new Error('Usage: bun scripts/release.ts example-pin <path-to-example-checkout> [--tag=v1.2.3]')
+	}
+	const checkout = resolve(process.cwd(), argument)
+	assertStandaloneCheckout(checkout, ROOT)
+	const manifests = await findManifests(checkout)
+	if (manifests.length === 0) throw new Error(`${checkout}: no package.json found`)
+	let changed = 0
+	for (const path of manifests) {
+		const before = await readFile(path, 'utf8')
+		const rewrite = rewriteExamplePins(before, options.version)
+		if (rewrite.changed === 0) continue
+		await writeFile(path, rewrite.text)
+		changed += rewrite.changed
+		console.info(unifiedDiff(path.slice(checkout.length + 1), before, rewrite.text))
+	}
+	console.info(
+		changed === 0
+			? `${manifests.length} manifest(s) already pin ^${options.version}`
+			: `rewrote ${changed} @fabrika/* range(s) to ^${options.version}; nothing was committed or pushed`,
+	)
 }
 
 const main = async (): Promise<void> => {
@@ -560,7 +753,9 @@ const main = async (): Promise<void> => {
 	if (options.command === 'pack') await pack(options, order)
 	else if (options.command === 'smoke') await smoke(options, order)
 	else if (options.command === 'publish') await publish(options, order)
+	else if (options.command === 'example-pin') await examplePin(options)
 	else await registrySmoke(options, order)
 }
 
-await main()
+// Guarded so the tests can import the pure pieces without running a release.
+if (import.meta.main) await main()

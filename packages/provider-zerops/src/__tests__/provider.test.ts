@@ -1,7 +1,15 @@
 import type { AppSchema } from '@fabrika/auth-core'
 import type { JsonValue, RuntimeProviderRun } from '@fabrika/provider-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
-import { type ZeropsApi, ZeropsApiError, type ZeropsAppVersion, type ZeropsLogAccess, type ZeropsProcess } from '../api'
+import {
+	createZeropsApi,
+	type FetchLike,
+	type ZeropsApi,
+	ZeropsApiError,
+	type ZeropsAppVersion,
+	type ZeropsLogAccess,
+	type ZeropsProcess,
+} from '../api'
 import { zeropsTargetCodec } from '../codec'
 import type { ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
@@ -61,6 +69,9 @@ interface Overrides {
 	versionErrors?: number
 	cancelMode?: 'throw' | 'hang'
 	importProcesses?: { id: string; status: ZeropsProcess['status'] }[]
+	pipelineStart?: string
+	/** Wire the REAL log reader to a canned window, so the relay's version scoping is exercised end to end. */
+	logFetch?: FetchLike
 }
 
 const LOG_ACCESS: ZeropsLogAccess = {
@@ -115,7 +126,7 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 			const statuses = overrides.statuses ?? ['ACTIVE']
 			const status = statuses[Math.min(poll, statuses.length - 1)]
 			poll++
-			return { id: appVersionId, status }
+			return { id: appVersionId, status, ...(overrides.pipelineStart === undefined ? {} : { build: { pipelineStart: overrides.pipelineStart } }) }
 		},
 		latestAppVersion: async () => overrides.latestVersion ?? { id: 'version-1', sequence: 1 },
 		cancelBuild: async () => {
@@ -150,7 +161,9 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		deleteServiceEnv: async () => {},
 		getProjectEnv: async ({ projectEnvId }) => ({ id: projectEnvId, key: 'KEY', content: 'value' }),
 		getLogAccess: async () => LOG_ACCESS,
-		readBuildLog: async () => [{ message: 'building' }],
+		readBuildLog: overrides.logFetch === undefined
+			? async () => [{ message: 'building' }]
+			: createZeropsApi({ token: 'unused', baseUrl: 'https://zerops.test', fetchImpl: overrides.logFetch }).readBuildLog,
 	}
 }
 
@@ -702,6 +715,34 @@ describe('Zerops provider', () => {
 		const provider = createZeropsProvider(() => makeCollaborators(recorded))
 		const run = runtimeRun(recorded, provider)
 		expect(provider.runtime.open({ ...run, appId: 'other' })).rejects.toThrow('artifact app drift')
+	})
+
+	test('relays only the deployed version, never a line an earlier release left in the runtime window', async () => {
+		const PIPELINE_START = '2026-08-21T10:00:00.000000000Z'
+		const windows: string[] = []
+		const logFetch: FetchLike = async (url) => {
+			windows.push(new URL(url).searchParams.get('tags') ?? `serviceStackId=${new URL(url).searchParams.get('serviceStackId')}`)
+			if (url.includes('zbuilder%40version-1')) return new Response('2026-08-21T09:20:00.000000000Z zbuilder@version-1 stale build line\n')
+			if (url.includes('zbuilder%40version-2')) return new Response('2026-08-21T10:00:02.000000000Z zbuilder@version-2 bun install\n')
+			return new Response(
+				[
+					'2026-08-21T09:21:00.000000000Z zerops@zerops stale boot line',
+					'2026-08-21T09:59:59.000000000Z init stale supervisor line',
+					'2026-08-21T10:00:12.000000000Z zerops@zerops notes-api listening',
+					'',
+				].join('\n'),
+			)
+		}
+		const provider = createZeropsProvider(() => makeCollaborators(recorded, { triggerVersionId: 'version-2', pipelineStart: PIPELINE_START, logFetch }))
+
+		await execute(runtimeRun(recorded, provider), provider)
+
+		expect(windows).toEqual(['zbuilder@version-2', 'serviceStackId=service-1'])
+		expect(recorded.logs.filter((line) => line.startsWith('  │ '))).toEqual([
+			'  │ 2026-08-21T10:00:02.000000000Z zbuilder@version-2 bun install',
+			'  │ 2026-08-21T10:00:12.000000000Z zerops@zerops notes-api listening',
+		])
+		expect(recorded.logs.some((line) => line.includes('stale'))).toBe(false)
 	})
 
 	test('rejects unknown runtime target fields and mutable source refs', () => {

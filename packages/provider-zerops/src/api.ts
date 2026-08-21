@@ -258,7 +258,7 @@ export interface ZeropsServiceEnv {
 
 /**
  * A short-lived grant for the project's LOG service. VERIFIED: `ResponseProjectLog` — the field names and
- * types are exactly these. What is NOT verified is what the URLs speak; see `readBuildLog`.
+ * types are exactly these. What the URLs speak was measured separately; see `readBuildLog`.
  */
 export interface ZeropsLogAccess {
 	url: string
@@ -271,10 +271,14 @@ export interface ZeropsLogAccess {
 	expiration: string
 }
 
+/** The RFC3339 stamp the plaintext log window puts first on every line. Anchored so a bare year cannot pass. */
+const LOG_LINE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
+
 /** One relayed build/runtime log line. Shape is fabrika's, not the platform's. */
 export interface ZeropsLogLine {
-	/** ISO timestamp when Zerops recorded the line, when it supplied one. */
+	/** RFC3339 stamp Zerops put at the head of the line, when the line carried one. */
 	timestamp?: string
+	/** The line as the log service wrote it, timestamp and tag included. */
 	message: string
 }
 
@@ -548,17 +552,42 @@ export interface ZeropsApi {
 	getLogAccess(input: { projectId: string; signal: AbortSignal }): Promise<ZeropsLogAccess>
 
 	/**
-	 * UNVERIFIED — THE ONE SHAPE NOBODY COULD CHECK. `GET /project/{id}/log` hands back URLs to a
-	 * SEPARATE log service, and that service's request/response contract appears in no published document
-	 * (it is not in the OpenAPI file, which stops at the grant). The default implementation's reading is:
-	 * GET `urlPlain` with the grant as a bearer, one plain-text line per log record, `limit`/`from` as
-	 * query params. Treat that as a guess.
+	 * One window of the project's log, narrowed to ONE app version.
 	 *
-	 * BECAUSE it is a guess, the driver treats a failure here as non-fatal: log relay degrades to "no
-	 * lines" and the deploy still succeeds or fails on `/app-version` status alone. An unverified endpoint
-	 * must never be able to fail a deploy.
+	 * VERIFIED 2026-08-21 by measurement, not by document: the OpenAPI file stops at the grant, so the
+	 * separate log service was read against a live project. `urlPlain` answers one
+	 * `<RFC3339 timestamp> <tag> <message>` line per record and accepts `serviceStackId`, `limit`, `tags`
+	 * and `desc`; `from` and unknown terms are accepted and silently ignored, so nothing may depend on them.
+	 *
+	 * ORDERING, also measured: `limit=N` without `desc` returns the NEWEST N records in ASCENDING timestamp
+	 * order (`limit=3` against a log starting 15:50 answered 17:00:00, 17:00:00, 17:15:00), and `desc=1`
+	 * returns the same newest N, newest first. So `desc` is needed neither for the `since` cut nor for a
+	 * build longer than the limit: each poll re-reads the newest window and the caller's dedupe streams it.
+	 *
+	 * A version's BUILD lines carry the tag `zbuilder@<appVersionId>` and are produced on a separate
+	 * builder stack, so they are selected by `tags` ALONE — combining that tag with the runtime
+	 * `serviceStackId` matches nothing. RUNTIME lines carry no version marker at all and the runtime
+	 * service's window mixes every version that ever ran, so they are selected by `serviceStackId` and cut
+	 * at `since` (the version's `build.pipelineStart`). Without `since` no runtime line is read: a line
+	 * from an earlier version is worse in a run log than a missing one. The cut is by TIME, not identity —
+	 * the outgoing container keeps logging until it is replaced, so its lines stamped after `since` still
+	 * pass, and only the earlier version's older history is excluded.
+	 *
+	 * The two windows are read INDEPENDENTLY: one failing must not discard what the other returned, and only
+	 * a failure of every window attempted is raised. The driver then treats that as non-fatal anyway — log
+	 * relay degrades to "no lines" and the deploy succeeds or fails on `/app-version` status alone. A log
+	 * service must never be able to fail a deploy.
 	 */
-	readBuildLog(input: { access: ZeropsLogAccess; serviceId: string; limit?: number; signal: AbortSignal }): Promise<ZeropsLogLine[]>
+	readBuildLog(input: {
+		access: ZeropsLogAccess
+		serviceId: string
+		/** Select this version's build lines by their `zbuilder@` tag; without it no build line is read. */
+		appVersionId?: string
+		/** RFC3339 lower bound for runtime lines, normally `build.pipelineStart`; without it none are read. */
+		since?: string
+		limit?: number
+		signal: AbortSignal
+	}): Promise<ZeropsLogLine[]>
 }
 
 // ── default (real) implementation ───────────────────────────────────────────────
@@ -1245,20 +1274,47 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			}
 		},
 
-		readBuildLog: async ({ access, serviceId, limit, signal }) => {
-			// UNVERIFIED (see the interface): this is a best reading of an undocumented log service, not a
-			// contract. It is written so a wrong guess degrades to "no lines" instead of failing a deploy.
+		readBuildLog: async ({ access, serviceId, appVersionId, since, limit, signal }) => {
 			if (access.urlPlain === '') {
 				return []
 			}
 			const separator = access.urlPlain.includes('?') ? '&' : '?'
-			const url = `${access.urlPlain}${separator}serviceStackId=${encodeURIComponent(serviceId)}&limit=${limit ?? 200}`
-			const response = await doFetch(url, { headers: { authorization: `Bearer ${access.accessToken}` }, signal })
-			if (!response.ok) {
-				throw new Error(`zerops: read build log failed (${response.status})`)
+			const readWindow = async (terms: string): Promise<{ lines: ZeropsLogLine[]; error: unknown }> => {
+				try {
+					const url = `${access.urlPlain}${separator}${terms}&limit=${limit ?? 200}`
+					const response = await doFetch(url, { headers: { authorization: `Bearer ${access.accessToken}` }, signal })
+					if (!response.ok) {
+						throw new Error(`zerops: read build log failed (${response.status})`)
+					}
+					const text = await response.text()
+					const lines = text.split('\n').filter((line) => line.trim() !== '').map((line) => {
+						const head = line.slice(0, Math.max(line.indexOf(' '), 0))
+						return LOG_LINE_TIMESTAMP.test(head) ? { timestamp: head, message: line } : { message: line }
+					})
+					return { lines, error: undefined }
+				} catch (error) {
+					return { lines: [], error }
+				}
 			}
-			const text = await response.text()
-			return text.split('\n').filter((line) => line.trim() !== '').map((line) => ({ message: line }))
+			// Selected by tag alone: the build runs on a builder stack, so pairing the tag with the runtime
+			// service id matches nothing (see the interface).
+			const build = appVersionId === undefined ? undefined : await readWindow(`tags=${encodeURIComponent(`zbuilder@${appVersionId}`)}`)
+			const runtime = since === undefined ? undefined : await readWindow(`serviceStackId=${encodeURIComponent(serviceId)}`)
+			const attempted = [build, runtime].filter((result) => result !== undefined)
+			if (attempted.length === 0) {
+				return []
+			}
+			// Independent windows: only a failure of every one attempted is worth raising.
+			const failure = attempted.find((result) => result.error !== undefined)
+			if (failure !== undefined && attempted.every((result) => result.error !== undefined)) {
+				throw failure.error
+			}
+			const boundary = since === undefined ? Number.NaN : Date.parse(since)
+			// The runtime window carries every version that ever ran, so a line the driver cannot date is dropped.
+			const runtimeLines = runtime === undefined || Number.isNaN(boundary)
+				? runtime?.lines ?? []
+				: runtime.lines.filter((line) => line.timestamp !== undefined && Date.parse(line.timestamp) >= boundary)
+			return [...build?.lines ?? [], ...runtimeLines]
 		},
 	}
 }

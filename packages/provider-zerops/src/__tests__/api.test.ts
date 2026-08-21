@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createZeropsApi, type FetchLike, waitForProcess, ZEROPS_SERVICE_NOT_HTTP, ZeropsApiError } from '../api'
+import { createZeropsApi, type FetchLike, waitForProcess, ZEROPS_SERVICE_NOT_HTTP, ZeropsApiError, type ZeropsLogAccess } from '../api'
 import type { Sleeper } from '../collaborators'
 
 const jsonResponse = (body: unknown, status = 200): Response =>
@@ -1085,5 +1085,152 @@ describe('Zerops processes', () => {
 			waitForProcess({ api, processId: 'process-1', sleep: recordingSleep([]), signal: controller.signal, intervalMs: 1 }),
 		).rejects.toThrow('zerops: waiting for process-1 was cancelled')
 		expect(urls).toEqual([])
+	})
+})
+
+const LOG_ACCESS: ZeropsLogAccess = {
+	url: 'https://logs.test/api/rest/log?accessToken=grant',
+	urlPlain: 'https://logs.test/api/rest/log/plaintext?accessToken=grant',
+	urlInfo: 'https://logs.test/api/rest/log/info?accessToken=grant',
+	urlUi: 'https://logs.test/ui',
+	accessToken: 'grant',
+	expiration: '2099-01-01T00:00:00Z',
+}
+
+const BUILD_LINES = [
+	'2026-08-21T10:00:02.100000000Z zbuilder@version-2 bun install --frozen-lockfile',
+	'2026-08-21T10:00:09.200000000Z zbuilder@version-2 build finished',
+].join('\n')
+
+const RUNTIME_LINES = [
+	'2026-08-21T09:30:00.000000000Z zerops@zerops notes-api listening (an earlier version)',
+	'2026-08-21T09:59:59.999000000Z init starting supervise-daemon (an earlier version)',
+	'2026-08-21T10:00:11.000000000Z zerops@zerops notes-api listening',
+	'an undated line the relay cannot place',
+].join('\n')
+
+const logFetch = (urls: string[]): FetchLike => async (url) => {
+	urls.push(url)
+	if (url.includes('tags=')) return new Response(url.includes('zbuilder%40version-2') ? `${BUILD_LINES}\n` : '')
+	return new Response(`${RUNTIME_LINES}\n`)
+}
+
+describe('Zerops build-log window', () => {
+	test('reads build lines by tag alone and cuts the runtime window at the pipeline start', async () => {
+		const urls: string[] = []
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: logFetch(urls) })
+
+		const lines = await api.readBuildLog({
+			access: LOG_ACCESS,
+			serviceId: 'service-1',
+			appVersionId: 'version-2',
+			since: '2026-08-21T10:00:00.000000000Z',
+			signal: signal(),
+		})
+
+		expect(urls).toEqual([
+			'https://logs.test/api/rest/log/plaintext?accessToken=grant&tags=zbuilder%40version-2&limit=200',
+			'https://logs.test/api/rest/log/plaintext?accessToken=grant&serviceStackId=service-1&limit=200',
+		])
+		expect(lines).toEqual([
+			{ timestamp: '2026-08-21T10:00:02.100000000Z', message: '2026-08-21T10:00:02.100000000Z zbuilder@version-2 bun install --frozen-lockfile' },
+			{ timestamp: '2026-08-21T10:00:09.200000000Z', message: '2026-08-21T10:00:09.200000000Z zbuilder@version-2 build finished' },
+			{ timestamp: '2026-08-21T10:00:11.000000000Z', message: '2026-08-21T10:00:11.000000000Z zerops@zerops notes-api listening' },
+		])
+	})
+
+	test('reads no runtime line at all until the platform reports a pipeline start', async () => {
+		const urls: string[] = []
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: logFetch(urls) })
+
+		const lines = await api.readBuildLog({ access: LOG_ACCESS, serviceId: 'service-1', appVersionId: 'version-2', limit: 50, signal: signal() })
+
+		expect(urls).toEqual(['https://logs.test/api/rest/log/plaintext?accessToken=grant&tags=zbuilder%40version-2&limit=50'])
+		expect(lines.map((line) => line.message)).toEqual(BUILD_LINES.split('\n'))
+	})
+
+	test('selects a different version by its own tag', async () => {
+		const urls: string[] = []
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: logFetch(urls) })
+
+		const lines = await api.readBuildLog({ access: LOG_ACCESS, serviceId: 'service-1', appVersionId: 'version-1', signal: signal() })
+
+		expect(urls).toEqual(['https://logs.test/api/rest/log/plaintext?accessToken=grant&tags=zbuilder%40version-1&limit=200'])
+		expect(lines).toEqual([])
+	})
+
+	test('relays an undatable runtime line only when the pipeline start is unusable', async () => {
+		const urls: string[] = []
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: logFetch(urls) })
+
+		const lines = await api.readBuildLog({ access: LOG_ACCESS, serviceId: 'service-1', since: 'not-a-date', signal: signal() })
+
+		expect(urls).toEqual(['https://logs.test/api/rest/log/plaintext?accessToken=grant&serviceStackId=service-1&limit=200'])
+		expect(lines.map((line) => line.timestamp)).toEqual([
+			'2026-08-21T09:30:00.000000000Z',
+			'2026-08-21T09:59:59.999000000Z',
+			'2026-08-21T10:00:11.000000000Z',
+			undefined,
+		])
+	})
+
+	test('asks for nothing when the grant carries no plaintext url', async () => {
+		const urls: string[] = []
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: logFetch(urls) })
+
+		await expect(
+			api.readBuildLog({ access: { ...LOG_ACCESS, urlPlain: '' }, serviceId: 'service-1', appVersionId: 'version-2', signal: signal() }),
+		).resolves.toEqual([])
+		expect(urls).toEqual([])
+	})
+
+	test('reports the status when every window it attempted was refused', async () => {
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => new Response('nope', { status: 400 }),
+		})
+
+		await expect(api.readBuildLog({ access: LOG_ACCESS, serviceId: 'service-1', appVersionId: 'version-2', signal: signal() }))
+			.rejects.toThrow('zerops: read build log failed (400)')
+		await expect(
+			api.readBuildLog({ access: LOG_ACCESS, serviceId: 'service-1', appVersionId: 'version-2', since: '2026-08-21T10:00:00Z', signal: signal() }),
+		).rejects.toThrow('zerops: read build log failed (400)')
+	})
+
+	test('keeps the build lines when only the runtime window fails, so a last poll does not lose them', async () => {
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async (url) => url.includes('tags=') ? new Response(`${BUILD_LINES}\n`) : new Response('nope', { status: 503 }),
+		})
+
+		const lines = await api.readBuildLog({
+			access: LOG_ACCESS,
+			serviceId: 'service-1',
+			appVersionId: 'version-2',
+			since: '2026-08-21T10:00:00.000000000Z',
+			signal: signal(),
+		})
+
+		expect(lines.map((line) => line.message)).toEqual(BUILD_LINES.split('\n'))
+	})
+
+	test('keeps the runtime lines when only the build window fails', async () => {
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async (url) => url.includes('tags=') ? new Response('nope', { status: 503 }) : new Response(`${RUNTIME_LINES}\n`),
+		})
+
+		const lines = await api.readBuildLog({
+			access: LOG_ACCESS,
+			serviceId: 'service-1',
+			appVersionId: 'version-2',
+			since: '2026-08-21T10:00:00.000000000Z',
+			signal: signal(),
+		})
+
+		expect(lines.map((line) => line.message)).toEqual(['2026-08-21T10:00:11.000000000Z zerops@zerops notes-api listening'])
 	})
 })

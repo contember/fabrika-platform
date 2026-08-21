@@ -23,7 +23,7 @@ The release set is derived from workspace manifests and checked against an expli
 - depend only on public workspace packages at its published boundary; and
 - participate in an acyclic dependency graph.
 
-`scripts/release.ts` validates these rules and computes the dependency-first order. The current set contains twenty-two packages.
+`scripts/release.ts` validates these rules and computes the dependency-first order. `release:validate` prints the set and its size; the inventory itself lives in the script.
 
 ## Local artifact verification
 
@@ -48,9 +48,27 @@ A `v<semver>` tag starts `.github/workflows/release.yml` on a GitHub-hosted runn
 
 Packages publish in dependency order. A prerelease version uses the `next` dist-tag. On retry, the tool compares the registry's `dist.integrity` with the local tarball's SHA-512 integrity. It accepts an existing version only when the contents match and fails closed on a mismatch.
 
-After publication, `release:registry-smoke` waits for the expected `latest` or `next` dist-tag on all twenty-two packages, installs every exact version from npm into a clean project, verifies the installed manifests, imports the representative application/provider surfaces, and executes the installed CLI.
+After publication, `release:registry-smoke` waits for the expected `latest` or `next` dist-tag on every public package, installs every exact version from npm into a clean project, verifies the installed manifests, imports the representative application/provider surfaces, and executes the installed CLI.
+
+The wait is for npm's replication, not for the publish. A package has been observed reaching its dist-tag about five minutes after `npm publish` answered, so the smoke polls with backoff — 5 s, 10 s, 20 s, then 30 s steps — for up to ten minutes, printing the packages still missing between rounds and asking only about those. Past the deadline it fails with one line per package, naming what the registry answered. A release should no longer need a manual re-run of this step.
 
 The workflow refuses to start publication while any package name is absent from npm. The one-time external activation procedure is tracked in [backlog 25](../backlog/25-bootstrap-npm-trusted-publishing.md).
+
+## Pinning the standalone example
+
+The standalone example repository described in [`examples/zerops-app/README.md`](../../examples/zerops-app/README.md) is a real consumer: it installs `@fabrika/*` from npm rather than from the workspace, so its `package.json` carries a version range that a release does not update by itself. A checkout pinned many releases back deploys many releases back.
+
+Updating it is an operator step, run after the release is on npm, against a checkout of that repository:
+
+```bash
+bun scripts/release.ts example-pin /path/to/example-checkout --tag=v0.0.26
+```
+
+It rewrites every `@fabrika/*` range in every `package.json` under the given path to `^<released version>`, prints a unified diff of exactly the lines it changed, and commits and pushes nothing. Review the diff, then commit in that repository.
+
+The command **refuses a path inside this repository**, and leaves a `workspace:` range alone wherever it finds one. Both guards exist for the same reason: `examples/*` are workspace members whose ranges match the workspace's own version so that bun links the local packages. Stamping a released range on them is silent — the next install fetches those packages from npm and the example stops exercising the working tree.
+
+Nothing in CI checks the example's pins. Reading another repository would need a credential this repository deliberately does not hold, so the bump stays an operator step.
 
 ## Deployment boundary
 
