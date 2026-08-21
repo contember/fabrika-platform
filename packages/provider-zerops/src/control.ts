@@ -418,17 +418,14 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			signal: input.signal,
 		}
 		let result: ZeropsSourceResolveResult
-		if (binding?.transportKind === 'keyed-v2') {
+		if (binding === undefined) {
+			result = await options.source.resolve(base)
+		} else {
 			const resolveV2 = options.source.resolveV2
 			if (resolveV2 === undefined) throw new Error('Zerops keyed source transport is unavailable')
 			result = await resolveV2.call(options.source, {
 				...base,
 				privateBinding: { connectionId: binding.connectionId, installationId: binding.installationId },
-			})
-		} else {
-			result = await options.source.resolve({
-				...base,
-				...(binding === undefined ? {} : { githubInstallationId: binding.installationId }),
 			})
 		}
 		if (

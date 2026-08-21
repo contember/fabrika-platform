@@ -3,21 +3,15 @@ export interface SourceConnectionPort {
 	readonly provider: string
 	inspect(signal: AbortSignal): Promise<SourceConnectionInspection>
 	prepareCredential(input: SourceCredentialInput): Promise<PreparedSourceCredential>
-	adoptExisting(input: { readonly signal: AbortSignal }): Promise<SourceCredentialActivation>
 	activate(input: SourceCredentialActivationInput): Promise<SourceCredentialActivation>
 	status(input: SourceConnectionBindingInput): Promise<SourceConnectionRuntimeStatus>
 	configureWebhook(input: SourceWebhookConfigurationInput): Promise<SourceWebhookConfiguration>
 	verifyInstallations(input: SourceInstallationVerificationInput): Promise<SourceInstallationVerification>
 }
 
-export type SourceConnectionTransportKind = 'legacy-v1' | 'keyed-v2'
-
 export type SourceConnectionInspection =
 	| { readonly state: 'unavailable' }
 	| { readonly state: 'anonymous' }
-	| { readonly state: 'legacy-complete' }
-	| { readonly state: 'legacy-partial' }
-	| { readonly state: 'durable'; readonly credentialSha256: string }
 
 export interface SourceCredentialInput {
 	readonly connectionId: string
@@ -32,7 +26,6 @@ export interface PreparedSourceCredential {
 
 export interface SourceConnectionBindingInput {
 	readonly connectionId: string
-	readonly transportKind: SourceConnectionTransportKind
 	readonly signal: AbortSignal
 }
 
@@ -97,7 +90,6 @@ export function unavailableSourceConnection(provider: string): SourceConnectionP
 		provider,
 		inspect: () => Promise.resolve({ state: 'unavailable' }),
 		prepareCredential: () => Promise.reject(new Error('source connection is unavailable')),
-		adoptExisting: () => Promise.reject(new Error('source connection is unavailable')),
 		activate: () => Promise.reject(new Error('source connection is unavailable')),
 		status: () => Promise.resolve({ state: 'unavailable' }),
 		configureWebhook: () => Promise.reject(new Error('source connection is unavailable')),

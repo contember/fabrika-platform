@@ -95,7 +95,6 @@ describe('source connection API DTOs', () => {
 		const states: readonly GitHubSourceConnectionStatusDto[] = [
 			{ provider: 'zerops', kind: 'github-app', state: 'anonymous' },
 			{ provider: 'legacy', kind: 'github-app', state: 'unavailable' },
-			{ provider: 'zerops', kind: 'github-app', state: 'adoption-required' },
 			{
 				provider: 'zerops',
 				kind: 'github-app',
@@ -125,7 +124,6 @@ describe('source connection API DTOs', () => {
 		expect(states.map((state) => state.state)).toEqual([
 			'anonymous',
 			'unavailable',
-			'adoption-required',
 			'setup-pending',
 			'installation-required',
 			'connected',

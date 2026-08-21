@@ -34,24 +34,6 @@ describe('the Zerops namespace process configuration', () => {
 		}
 		const admin: SourceConnectionAdmin = {
 			inspect: () => Promise.resolve({ state: 'anonymous' }),
-			adoptExisting: () =>
-				Promise.resolve({
-					protocolVersion: 1,
-					connectionId: 'legacy',
-					credentialVersion: 1,
-					credentialSha256: 'a'.repeat(64),
-					githubApp: identity,
-				}),
-			activate: (input) => {
-				calls.push('activate-v1')
-				return Promise.resolve({
-					protocolVersion: 1,
-					connectionId: input.connectionId,
-					credentialVersion: 1,
-					credentialSha256: input.credentialSha256,
-					githubApp: identity,
-				})
-			},
 			activateV2: (input) => {
 				calls.push('activate-v2')
 				return Promise.resolve({
@@ -61,10 +43,6 @@ describe('the Zerops namespace process configuration', () => {
 					credentialSha256: input.credentialSha256,
 					githubApp: identity,
 				})
-			},
-			status: () => {
-				calls.push('status-v1')
-				return Promise.resolve({ state: 'anonymous' })
 			},
 			statusV2: () => {
 				calls.push('status-v2')
@@ -96,34 +74,23 @@ describe('the Zerops namespace process configuration', () => {
 		})
 		await port.activate({
 			connectionId: 'connection-1',
-			transportKind: 'keyed-v2',
 			credentialBundle: prepared.bundle,
 			credentialSha256: prepared.sha256,
 			signal: new AbortController().signal,
 		})
-		await port.status({ connectionId: 'connection-1', transportKind: 'keyed-v2', signal: new AbortController().signal })
+		await port.status({ connectionId: 'connection-1', signal: new AbortController().signal })
 		expect(calls).toEqual(['activate-v2', 'status-v2'])
 	})
 
-	test('rebinds a restarted legacy runtime before connection-bound administration', async () => {
+	test('calls configureWebhook and verifyInstallations without a preflight status round trip', async () => {
 		const calls: string[] = []
 		const credentialSha256 = 'a'.repeat(64)
-		const identity: ZeropsSourceGitHubAppIdentityV1 = {
-			id: 123,
-			slug: 'fabrika-source',
-			htmlUrl: 'https://github.com/apps/fabrika-source',
-			public: false,
-			owner: { login: 'acme', type: 'Organization' },
-			permissions: { contents: 'read' },
-			events: ['push'],
-		}
 		const admin: SourceConnectionAdmin = {
 			inspect: () => Promise.resolve({ state: 'anonymous' }),
-			adoptExisting: () => Promise.reject(new Error('not called')),
-			activate: () => Promise.reject(new Error('not called')),
-			status: (input) => {
+			activateV2: () => Promise.reject(new Error('not called')),
+			statusV2: (input) => {
 				calls.push(`status:${input.connectionId}`)
-				return Promise.resolve({ state: 'active', credentialSha256, githubApp: identity })
+				return Promise.resolve({ state: 'unavailable' })
 			},
 			configureWebhook: (input) => {
 				calls.push(`configure:${input.connectionId}`)
@@ -148,30 +115,18 @@ describe('the Zerops namespace process configuration', () => {
 		const signal = new AbortController().signal
 		await port.configureWebhook({
 			connectionId: 'connection-1',
-			transportKind: 'legacy-v1',
 			credentialSha256,
-			url: 'https://control.example.test/webhooks/github',
+			url: 'https://control.example.test/webhooks/github/connection-1',
 			secret: 'webhook-secret-at-least-32-characters',
 			signal,
 		})
 		await port.verifyInstallations({
 			connectionId: 'connection-1',
-			transportKind: 'legacy-v1',
 			credentialSha256,
 			scope: { kind: 'organization', organization: 'acme' },
 			signal,
 		})
-		expect(calls).toEqual(['status:connection-1', 'configure:connection-1', 'status:connection-1', 'verify:connection-1'])
-
-		calls.length = 0
-		await port.verifyInstallations({
-			connectionId: 'connection-2',
-			transportKind: 'keyed-v2',
-			credentialSha256,
-			scope: { kind: 'organization', organization: 'acme' },
-			signal,
-		})
-		expect(calls).toEqual(['verify:connection-2'])
+		expect(calls).toEqual(['configure:connection-1', 'verify:connection-1'])
 	})
 
 	test('binds source connection administration to the exact configured platform project', async () => {
@@ -182,8 +137,8 @@ describe('the Zerops namespace process configuration', () => {
 				FABRIKA_ZEROPS_PROJECT_ID: 'platform-project-1',
 			},
 			{
-				activate: () => Promise.reject(new Error('not called')),
-				status: () => Promise.reject(new Error('not called')),
+				activateV2: () => Promise.reject(new Error('not called')),
+				statusV2: () => Promise.reject(new Error('not called')),
 				configureWebhook: () => Promise.reject(new Error('not called')),
 				verifyInstallations: () => Promise.reject(new Error('not called')),
 			},
@@ -204,8 +159,8 @@ describe('the Zerops namespace process configuration', () => {
 		const admin = zeropsSourceConnectionAdmin(
 			{ FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder' },
 			{
-				activate: () => Promise.reject(new Error('not called')),
-				status: () => Promise.reject(new Error('not called')),
+				activateV2: () => Promise.reject(new Error('not called')),
+				statusV2: () => Promise.reject(new Error('not called')),
 				configureWebhook: () => Promise.reject(new Error('not called')),
 				verifyInstallations: () => Promise.reject(new Error('not called')),
 			},
@@ -216,9 +171,9 @@ describe('the Zerops namespace process configuration', () => {
 			},
 		)
 		expect(await admin.inspect(new AbortController().signal)).toEqual({ state: 'unavailable' })
-		expect(await admin.status({ connectionId: 'connection-1', signal: new AbortController().signal })).toEqual({ state: 'unavailable' })
+		expect(await admin.statusV2({ connectionId: 'connection-1', signal: new AbortController().signal })).toEqual({ state: 'unavailable' })
 		await expect(
-			admin.activate({
+			admin.activateV2({
 				connectionId: 'connection-1',
 				credentialBundle: 'must-not-be-read',
 				credentialSha256: 'a'.repeat(64),

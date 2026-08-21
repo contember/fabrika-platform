@@ -9,7 +9,6 @@ import {
 	type GitHubSourceConnectionPageInput,
 } from '../github-connection-store'
 import {
-	adoptExistingSourceConnection,
 	manifestCallback,
 	manifestHandoff,
 	reconcileSourceConnection,
@@ -66,7 +65,6 @@ class FakeSourceConnection implements SourceConnectionPort {
 		repositorySelection: 'selected',
 	}
 	readonly calls: string[] = []
-	readonly transportKinds: string[] = []
 	readonly preparedConnectionIds: string[] = []
 	readonly credentialDigests = new Map<string, string>()
 	githubOwner = 'acme'
@@ -92,24 +90,16 @@ class FakeSourceConnection implements SourceConnectionPort {
 		return Promise.resolve({ bundle: 'bounded-credential-bundle', sha256: CREDENTIAL_DIGEST })
 	}
 
-	adoptExisting(): Promise<SourceCredentialActivation> {
-		this.calls.push('adopt')
-		this.abortAdoption?.()
-		return Promise.resolve(this.activation('adopted-connection'))
-	}
-
 	activate(input: SourceCredentialActivationInput): Promise<SourceCredentialActivation> {
 		this.calls.push('activate')
-		this.transportKinds.push(input.transportKind)
 		if (input.signal.aborted) return Promise.reject(new DOMException('aborted', 'AbortError'))
 		if (this.activateFails) return Promise.reject(new Error('activate failed with private material'))
 		this.credentialDigests.set(input.connectionId, input.credentialSha256)
 		return Promise.resolve({ ...this.activation(input.connectionId), credentialSha256: input.credentialSha256 })
 	}
 
-	status(input: { connectionId: string; transportKind: 'legacy-v1' | 'keyed-v2' }): Promise<SourceConnectionRuntimeStatus> {
+	status(input: { connectionId: string }): Promise<SourceConnectionRuntimeStatus> {
 		this.calls.push('status')
-		this.transportKinds.push(input.transportKind)
 		return Promise.resolve({
 			state: 'active',
 			credentialSha256: this.credentialDigests.get(input.connectionId) ?? CREDENTIAL_DIGEST,
@@ -119,7 +109,6 @@ class FakeSourceConnection implements SourceConnectionPort {
 
 	configureWebhook(input: SourceWebhookConfigurationInput): Promise<SourceWebhookConfiguration> {
 		this.calls.push('webhook')
-		this.transportKinds.push(input.transportKind)
 		if (input.signal.aborted) return Promise.reject(new DOMException('aborted', 'AbortError'))
 		if (this.webhookFailure !== undefined) return Promise.reject(this.webhookFailure)
 		this.webhookSecrets.push(input.secret)
@@ -134,7 +123,6 @@ class FakeSourceConnection implements SourceConnectionPort {
 
 	verifyInstallations(input: SourceInstallationVerificationInput): Promise<SourceInstallationVerification> {
 		this.calls.push('installation')
-		this.transportKinds.push(input.transportKind)
 		return Promise.resolve(this.installation)
 	}
 
@@ -453,49 +441,32 @@ describe('GitHub source connection workflow', () => {
 		expect(repair?.recoverySecretRef).toStartWith('vault:')
 	})
 
-	test('reports unavailable/adoption-required and adopts without exposing source credentials', async () => {
+	test('reports unavailable when the source service cannot be inspected', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
-		source.inspection = { state: 'durable', credentialSha256: CREDENTIAL_DIGEST }
-		expect(await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`)))).toMatchObject({ state: 'adoption-required' })
-		const adopted = await adoptExistingSourceConnection(deps(env, source, mutationRequest('/api/rpc')))
-		expect(adopted.state).toBe('installation-required')
-		expect(JSON.stringify(adopted)).not.toContain(CREDENTIAL_DIGEST)
-		expect(source.calls).toEqual(['inspect', 'adopt', 'webhook', 'status'])
-	})
-
-	test('leaves provider-owned adoption resumable when the caller aborts after the durable attempt begins', async () => {
-		const env = environment()
-		const source = new FakeSourceConnection()
-		const controller = new AbortController()
-		source.abortAdoption = () => controller.abort()
-		await expect(adoptExistingSourceConnection(deps(
-			env,
-			source,
-			new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers: { origin: ORIGIN }, signal: controller.signal }),
-		))).rejects.toMatchObject({ name: 'AbortError' })
-		const attempt = await env.REPOSITORIES.githubConnections.getAttempt('adopted-connection')
-		expect(attempt?.status).toBe('repair_required')
-		expect(attempt?.setupKind).toBe('adoption')
-		expect(source.calls).toEqual(['adopt', 'webhook'])
+		source.inspection = { state: 'unavailable' }
+		expect(await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`)))).toMatchObject({ state: 'unavailable' })
+		await expect(startSourceConnection(
+			deps(env, source, mutationRequest('/api/rpc')),
+			{ organization: 'acme', appName: 'fabrika-source', visibility: 'private', repositories: [] },
+		)).rejects.toMatchObject({ httpStatus: 503 })
+		expect(source.calls).toEqual(['inspect', 'inspect'])
 	})
 
 	test('publishes only an exact installation and verifies connected state remotely', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
-		source.inspection = { state: 'durable', credentialSha256: CREDENTIAL_DIGEST }
-		const adopted = await adoptExistingSourceConnection(deps(env, source, mutationRequest('/api/rpc')))
-		if (adopted.state !== 'installation-required') throw new Error('adoption did not reach installation')
-		const connected = await verifySourceInstallation(deps(env, source, mutationRequest('/api/rpc')), adopted.connectionId)
-		expect(connected.state).toBe('connected')
+		const connectionId = await connectKeyed(env, source)
+		const connected = await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`)))
+		expect(connected).toMatchObject({ state: 'connected', connectionId })
 		expect((await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`)))).state).toBe('connected')
 		source.installation = { status: 'missing' }
 	})
 
-	test('adds a private keyed organization beside the legacy connection and pages stable rows separately from workflow', async () => {
+	test('adds a second private organization and pages stable rows separately from workflow', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
-		const legacyId = await connectLegacy(env, source)
+		const firstId = await connectKeyed(env, source)
 		source.calls.splice(0)
 		source.githubOwner = 'beta'
 		source.githubAppId = 234
@@ -532,9 +503,8 @@ describe('GitHub source connection workflow', () => {
 		})
 		expect(callback.status).toBe(303)
 		expect(source.preparedConnectionIds).toContain(started.connectionId)
-		expect(source.transportKinds).toContain('keyed-v2')
 		const pendingPage = await sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`)), { limit: 10 })
-		expect(pendingPage.items.map((item) => item.connectionId)).toEqual([legacyId])
+		expect(pendingPage.items.map((item) => item.connectionId)).toEqual([firstId])
 		expect(pendingPage.workflow).toMatchObject({ state: 'installation-required', connectionId: started.connectionId })
 
 		const attemptBeforePublish = await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId)
@@ -566,7 +536,7 @@ describe('GitHub source connection workflow', () => {
 			cursor: first.nextCursor ?? '',
 			limit: 1,
 		})
-		expect([...first.items, ...second.items].map((item) => item.connectionId).sort()).toEqual([legacyId, started.connectionId].sort())
+		expect([...first.items, ...second.items].map((item) => item.connectionId).sort()).toEqual([firstId, started.connectionId].sort())
 		expect(first.workflow).toBeNull()
 		expect(second.workflow).toBeNull()
 		expect(await env.REPOSITORIES.githubConnections.getConnectionById(started.connectionId)).toMatchObject({
@@ -579,10 +549,10 @@ describe('GitHub source connection workflow', () => {
 		)).rejects.toMatchObject({ httpStatus: 409 })
 	})
 
-	test('repairs an interrupted second setup without changing the connected legacy row', async () => {
+	test('repairs an interrupted second setup without changing the first connected row', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
-		const legacyId = await connectLegacy(env, source)
+		const firstId = await connectKeyed(env, source)
 		source.githubOwner = 'beta'
 		source.githubAppId = 234
 		source.githubAppSlug = 'fabrika-beta'
@@ -598,13 +568,13 @@ describe('GitHub source connection workflow', () => {
 			})).status,
 		).toBe(303)
 		const interrupted = await sourceConnectionList(deps(env, source, new Request(`${ORIGIN}/api/rpc`)), {})
-		expect(interrupted.items.map((item) => item.connectionId)).toEqual([legacyId])
+		expect(interrupted.items.map((item) => item.connectionId)).toEqual([firstId])
 		expect(interrupted.workflow).toMatchObject({ state: 'repair-required', connectionId: started.connectionId })
 
 		source.activateFails = false
 		const repaired = await repairSourceConnection(deps(env, source, mutationRequest('/api/rpc')), started.connectionId)
 		expect(repaired).toMatchObject({ state: 'installation-required', connectionId: started.connectionId })
-		expect((await env.REPOSITORIES.githubConnections.getConnectionById(legacyId))?.transportKind).toBe('legacy-v1')
+		expect((await env.REPOSITORIES.githubConnections.getConnectionById(firstId))?.transportKind).toBe('keyed-v2')
 		expect((await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId))?.recoverySecretRef).toBeNull()
 		expect(JSON.stringify(await queryRowsFromEnv(env, `SELECT label FROM vault WHERE label LIKE '%:recovery'`))).toBe('[]')
 	})
@@ -612,7 +582,7 @@ describe('GitHub source connection workflow', () => {
 	test('reports why a repair stopped instead of answering 200 with the same red lamp', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
-		await connectLegacy(env, source)
+		await connectKeyed(env, source)
 		source.githubOwner = 'beta'
 		source.githubAppId = 234
 		source.githubAppSlug = 'fabrika-beta'
@@ -642,7 +612,6 @@ describe('GitHub source connection workflow', () => {
 		const setupSecret = source.webhookSecrets.at(-1)
 		if (before === null || setupSecret === undefined) throw new Error('keyed connection fixture is incomplete')
 		source.calls.splice(0)
-		source.transportKinds.splice(0)
 		source.webhookSecrets.splice(0)
 		source.webhookUrls.splice(0)
 		source.webhookCredentialDigests.splice(0)
@@ -652,7 +621,6 @@ describe('GitHub source connection workflow', () => {
 
 		expect(reconciled).toMatchObject({ state: 'connected', connectionId })
 		expect(source.calls).toEqual(['status', 'webhook'])
-		expect(source.transportKinds).toEqual(['keyed-v2', 'keyed-v2'])
 		expect(source.webhookSecrets).toEqual([setupSecret])
 		expect(source.webhookUrls).toEqual([`${ORIGIN}/webhooks/github/${connectionId}`])
 		expect(source.webhookCredentialDigests).toEqual([CREDENTIAL_DIGEST])
@@ -673,7 +641,6 @@ describe('GitHub source connection workflow', () => {
 		if (before === null) throw new Error('keyed connection fixture is incomplete')
 		source.credentialDigests.set(connectionId, replacementDigest)
 		source.calls.splice(0)
-		source.transportKinds.splice(0)
 		source.webhookCredentialDigests.splice(0)
 
 		const reconciled = await reconcileSourceConnection(deps(env, source, mutationRequest('/api/rpc')), connectionId)
@@ -734,7 +701,7 @@ describe('GitHub source connection workflow', () => {
 	test('rejects a same-owner publish race atomically without retaining an attempt or manifest secret', async () => {
 		const env = environment()
 		const source = new FakeSourceConnection()
-		await connectLegacy(env, source)
+		await connectKeyed(env, source)
 		const vaultBefore = await queryRowsFromEnv(env, 'SELECT id FROM vault')
 		source.inspection = { state: 'anonymous' }
 		const staleEnv: Env = {
@@ -767,15 +734,6 @@ describe('GitHub source connection workflow', () => {
 
 function mutationRequest(path: string): Request {
 	return new Request(`${ORIGIN}${path}`, { method: 'POST', headers: { origin: ORIGIN } })
-}
-
-async function connectLegacy(env: Env, source: FakeSourceConnection): Promise<string> {
-	source.inspection = { state: 'durable', credentialSha256: CREDENTIAL_DIGEST }
-	const adopted = await adoptExistingSourceConnection(deps(env, source, mutationRequest('/api/rpc')))
-	if (adopted.state !== 'installation-required') throw new Error('legacy adoption did not reach installation')
-	const connected = await verifySourceInstallation(deps(env, source, mutationRequest('/api/rpc')), adopted.connectionId)
-	if (connected.state !== 'connected') throw new Error('legacy adoption did not connect')
-	return connected.connectionId
 }
 
 async function connectKeyed(env: Env, source: FakeSourceConnection): Promise<string> {

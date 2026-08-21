@@ -79,14 +79,6 @@ describe('source connection collection components', () => {
 		expect(workflowMarkup(null, 2)).toContain('Add connection')
 	})
 
-	test('offers legacy adoption only while the stable collection is empty', () => {
-		const adoption: GitHubSourceConnectionWorkflowDto = { provider: 'zerops', kind: 'github-app', state: 'adoption-required' }
-		expect(workflowMarkup(adoption, 0)).toContain('Adopt existing GitHub App')
-		const blocked = workflowMarkup(adoption, 1)
-		expect(blocked).toContain('Legacy adoption unavailable')
-		expect(blocked).not.toContain('Adopt existing GitHub App')
-	})
-
 	test('renders pending setup separately without hiding stable rows and preserves callback resume', () => {
 		const stable = connectedMarkup([connection('connection-1', 'acme')])
 		const pending = workflowMarkup({

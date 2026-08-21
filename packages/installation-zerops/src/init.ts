@@ -43,12 +43,10 @@ import {
 import {
 	compileProvisioningYaml,
 	createZeropsApi,
-	decodeZeropsSourceCredentialBundle,
 	defaultSleep,
-	serializeZeropsSourceCredentialBundle,
 	type Sleeper,
 	waitForProcess,
-	ZEROPS_SOURCE_CREDENTIAL_ENV,
+	ZEROPS_SOURCE_CREDENTIAL_ENV_V2_PREFIX,
 	type ZeropsApi,
 	type ZeropsService,
 } from '@fabrika/provider-zerops'
@@ -368,33 +366,14 @@ export const configureSourceService = async (
 	}
 }
 
-export type ExistingGitHubCredentialState = 'anonymous' | 'adoption-required' | 'conflict'
+export type ExistingGitHubCredentialState = 'anonymous' | 'connected'
 
-/** Classify only remote source state. The CLI never materializes or writes a credential. */
+/** Classify only remote source state. The CLI never materializes, reads, or writes a credential. */
 export const classifyExistingGitHubCredentials = (sourceEnv: ReadonlyMap<string, string>): ExistingGitHubCredentialState => {
-	const durable = sourceEnv.get(ZEROPS_SOURCE_CREDENTIAL_ENV)
-	const legacyId = sourceEnv.get('GITHUB_APP_ID')
-	const legacyKey = sourceEnv.get('GITHUB_APP_PRIVATE_KEY')
-	if (durable === undefined && legacyId === undefined && legacyKey === undefined) return 'anonymous'
-	if ((legacyId === undefined) !== (legacyKey === undefined)) return 'conflict'
-	let durableBundle: ReturnType<typeof decodeZeropsSourceCredentialBundle> | undefined
-	if (durable !== undefined) {
-		try {
-			durableBundle = decodeZeropsSourceCredentialBundle(durable)
-		} catch {
-			return 'conflict'
-		}
+	for (const name of sourceEnv.keys()) {
+		if (name.startsWith(ZEROPS_SOURCE_CREDENTIAL_ENV_V2_PREFIX)) return 'connected'
 	}
-	if (legacyId !== undefined && legacyKey !== undefined) {
-		let legacy: string
-		try {
-			legacy = serializeZeropsSourceCredentialBundle({ version: 1, githubAppId: legacyId, privateKeyPem: legacyKey })
-		} catch {
-			return 'conflict'
-		}
-		if (durable !== undefined && legacy !== durable) return 'conflict'
-	}
-	return durableBundle === undefined && legacyId === undefined ? 'anonymous' : 'adoption-required'
+	return 'anonymous'
 }
 
 const strictHttpsOrigin = (hostValue: string): string | undefined => {
@@ -557,18 +536,15 @@ export const runInit = async (args: InitArguments, collaborators: InitCollaborat
 	)
 	if (source.writtenKeys.length > 0) log.ok(`Zerops variables written: ${source.writtenKeys.join(', ')}`)
 	const credentialState = classifyExistingGitHubCredentials(source.sourceEnv)
-	if (credentialState === 'conflict') {
-		throw new Error('source holds partial, invalid, or mismatched GitHub App credentials; no value was changed')
-	}
 	const settingsUrl = sourceConnectionSettingsUrl(collected.placement, source)
-	if (credentialState === 'adoption-required') {
-		log.info('source already holds a complete GitHub App credential set. Control must adopt it before private source is connected.')
+	if (credentialState === 'connected') {
+		log.info('source already holds at least one connected GitHub App credential. Public repositories keep working without one.')
 	} else {
 		log.info('source remains in anonymous public-repository mode. Connect private GitHub source later in Control.')
 	}
 	log.action(
-		credentialState === 'adoption-required'
-			? 'OPERATOR ACTION — adopt the existing GitHub App in Control'
+		credentialState === 'connected'
+			? 'OPERATOR ACTION — connect another GitHub source in Control'
 			: 'OPERATOR ACTION — connect GitHub source in Control',
 		settingsUrl === undefined
 			? ['Deploy the platform, then open Settings → Source in the authenticated Control console. No unverified URL was guessed.']

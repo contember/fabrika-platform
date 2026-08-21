@@ -61,8 +61,9 @@ export function replayOperationsCatalogProjection(env: Env): Promise<OperationsC
 	return replayOperationsCatalog(operationsCatalogDeps(env))
 }
 
+/** Installation lookup only — webhook verification is resolved per route, never from this instance. */
 export function repoEvents(env: Env): RepoEvents {
-	return env.GITHUB_WEBHOOK_SECRETS === undefined ? env.REPO_EVENTS : new LocalGitHubRepoEvents(env.GITHUB_WEBHOOK_SECRETS, env.REPO_EVENTS)
+	return env.REPO_EVENTS
 }
 
 export interface WebhookRoute {
@@ -70,29 +71,22 @@ export interface WebhookRoute {
 	readonly binding: WebhookBinding
 }
 
-/** Resolve one webhook route before its request body is read. */
-export async function webhookRoute(env: Env, connectionId?: string): Promise<WebhookRoute | null> {
-	if (connectionId !== undefined) {
-		if (env.GITHUB_WEBHOOK_SECRETS === undefined) return null
-		const secrets = new GitHubConnectionWebhookSecretProvider(
-			env.REPOSITORIES.githubConnections,
-			() => vault(env),
-			undefined,
-			connectionId,
-		)
-		return {
-			repoSource: new LocalGitHubRepoEvents(secrets, env.REPO_EVENTS),
-			binding: { kind: 'connection', connectionId },
-		}
+/**
+ * Resolve one webhook route before its request body is read.
+ *
+ * A Cloudflare composition has no connection rows, so it keeps its static secret on the unscoped path
+ * (ADR-0032). A Zerops composition selects one exact connection's vault secret and, since ADR-0039,
+ * has nothing the unscoped path could resolve — it refuses rather than trying any stored secret.
+ */
+export function webhookRoute(env: Env, connectionId?: string): WebhookRoute | null {
+	if (env.GITHUB_CONNECTION_WEBHOOKS === undefined) {
+		return connectionId === undefined ? { repoSource: env.REPO_EVENTS, binding: { kind: 'installation-only' } } : null
 	}
-	if (env.GITHUB_WEBHOOK_SECRETS === undefined) {
-		return { repoSource: env.REPO_EVENTS, binding: { kind: 'installation-only' } }
-	}
-	const legacy = await env.REPOSITORIES.githubConnections.getLegacyConnection()
-	if (legacy === null) return null
+	if (connectionId === undefined) return null
+	const secrets = new GitHubConnectionWebhookSecretProvider(env.REPOSITORIES.githubConnections, () => vault(env), connectionId)
 	return {
-		repoSource: new LocalGitHubRepoEvents(env.GITHUB_WEBHOOK_SECRETS, env.REPO_EVENTS),
-		binding: { kind: 'connection', connectionId: legacy.connectionId },
+		repoSource: new LocalGitHubRepoEvents(secrets, env.REPO_EVENTS),
+		binding: { kind: 'connection', connectionId },
 	}
 }
 

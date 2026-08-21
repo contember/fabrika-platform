@@ -42,7 +42,7 @@ describe('Zerops source resolve', () => {
 		])
 	})
 
-	test('mints one repository-scoped token and sends it only to api.github.com', async () => {
+	test('mints one repository-scoped token for the named connection and sends it only to api.github.com', async () => {
 		const fixture = await gitFixture()
 		const token = 'ghs_private_repository'
 		const mintCalls: unknown[] = []
@@ -62,14 +62,14 @@ describe('Zerops source resolve', () => {
 		}
 		let snapshots = 0
 		const github: SourceGitHubConnection = {
-			snapshot: () => {
+			snapshotV2: (connectionId) => {
 				snapshots++
-				return { client, appId: '123', credentialSha256: 'a'.repeat(64) }
+				return connectionId === 'connection-1' ? { client, appId: '123', credentialSha256: 'a'.repeat(64) } : undefined
 			},
-			activate: async () => {
+			activateV2: async () => {
 				throw new Error('activation not expected')
 			},
-			status: async () => {
+			statusV2: async () => {
 				throw new Error('status not expected')
 			},
 		}
@@ -79,20 +79,9 @@ describe('Zerops source resolve', () => {
 			onDownloadAuthorization: (url, value) => downloadAuthorizations.push([new URL(url).host, value]),
 		})
 		const signal = new AbortController().signal
-		await source.resolve({
-			repository,
-			requestedRef: fixture.commitSha,
-			githubInstallationId: 42,
-			descriptorSha256,
-			signal,
-		})
-		const archived = await runArchive(source, {
-			repository,
-			commitSha: fixture.commitSha,
-			githubInstallationId: 42,
-			descriptorSha256,
-			signal,
-		})
+		const privateBinding = { connectionId: 'connection-1', installationId: 42 }
+		await source.resolve({ repository, requestedRef: fixture.commitSha, privateBinding, descriptorSha256, signal })
+		const archived = await runArchive(source, { repository, commitSha: fixture.commitSha, privateBinding, descriptorSha256, signal })
 
 		expect(archived.summary?.commitSha).toBe(fixture.commitSha)
 		expect(mintCalls).toEqual([
@@ -104,7 +93,31 @@ describe('Zerops source resolve', () => {
 		expect(snapshots).toBe(2)
 	})
 
-	test('routes concurrent v2 private reads to the exact keyed client without consulting the v1 default', async () => {
+	test('refuses an unkeyed request that names an installation, because it names no credential', async () => {
+		// Since ADR-0039 only a keyed private binding selects a credential; a bare installation id
+		// cannot, so the request fails closed instead of falling through to an anonymous fetch.
+		const fixture = await gitFixture()
+		const github: SourceGitHubConnection = {
+			snapshotV2: () => undefined,
+			activateV2: async () => {
+				throw new Error('activation not expected')
+			},
+			statusV2: async () => {
+				throw new Error('status not expected')
+			},
+		}
+		await expect(
+			sourceFor(fixture, { github }).resolve({
+				repository,
+				requestedRef: 'main',
+				githubInstallationId: 42,
+				descriptorSha256,
+				signal: new AbortController().signal,
+			}),
+		).rejects.toMatchObject({ code: 'installation_not_found', status: 404 })
+	})
+
+	test('routes concurrent v2 private reads to the exact keyed client', async () => {
 		const fixture = await gitFixture()
 		const mintCalls: Array<{ connectionId: string; installationId: number }> = []
 		const clientFor = (connectionId: string): SourceGitHubClient => ({
@@ -124,17 +137,14 @@ describe('Zerops source resolve', () => {
 			['connection-2', clientFor('connection-2')],
 		])
 		const github: SourceGitHubConnection = {
-			snapshot: () => {
-				throw new Error('v1 snapshot must not serve v2 requests')
-			},
 			snapshotV2: (connectionId) => {
 				const selected = clients.get(connectionId)
 				return selected === undefined ? undefined : { client: selected, appId: '123', credentialSha256: 'a'.repeat(64) }
 			},
-			activate: async () => {
+			activateV2: async () => {
 				throw new Error('activation not expected')
 			},
-			status: async () => {
+			statusV2: async () => {
 				throw new Error('status not expected')
 			},
 		}

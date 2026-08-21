@@ -98,7 +98,7 @@ async function seedRun(
 
 function insertSourceConnection(
 	sqlite: ReturnType<typeof createHarness>['sqlite'],
-	input: { connectionId: string; installationId: number; transportKind: 'legacy-v1' | 'keyed-v2' },
+	input: { connectionId: string; installationId: number; transportKind: 'keyed-v2' },
 ): void {
 	sqlite.query(`INSERT INTO github_source_connections_keyed (
 		connection_id, transport_kind, app_id, app_slug, app_html_url, app_owner, app_name, app_public,
@@ -202,7 +202,7 @@ const requireRun = async (db: ControlRepositories, id: string): Promise<RunRow> 
 interface TestSourceBinding {
 	readonly connectionId: string
 	readonly installationId: number
-	readonly transportKind: 'legacy-v1' | 'keyed-v2'
+	readonly transportKind: 'keyed-v2'
 }
 
 interface TestBoundProvider extends ControlProvider {
@@ -266,7 +266,7 @@ describe('provider-neutral run lifecycle', () => {
 		const cases: Array<{
 			kind: string
 			appBinding?: { connectionId: string; installationId: number }
-			storedBinding?: { connectionId: string; installationId: number; transportKind: 'legacy-v1' | 'keyed-v2' }
+			storedBinding?: { connectionId: string; installationId: number; transportKind: 'keyed-v2' }
 		}> = [
 			{ kind: 'partial', appBinding: undefined, storedBinding: undefined },
 			{

@@ -2,21 +2,14 @@ import { describe, expect, test } from 'bun:test'
 import {
 	buildZeropsSourceCancelRequest,
 	buildZeropsSourceCancelResponse,
-	buildZeropsSourceCredentialActivateRequest,
 	buildZeropsSourceCredentialActivateRequestV2,
-	buildZeropsSourceCredentialActivateResponse,
 	buildZeropsSourceCredentialActivateResponseV2,
-	buildZeropsSourceCredentialBundle,
 	buildZeropsSourceCredentialBundleV2,
-	buildZeropsSourceCredentialStatusRequest,
 	buildZeropsSourceCredentialStatusRequestV2,
-	buildZeropsSourceCredentialStatusResponse,
 	buildZeropsSourceCredentialStatusResponseV2,
 	buildZeropsSourceErrorEnvelope,
 	buildZeropsSourceInstallationsVerifyRequest,
 	buildZeropsSourceInstallationsVerifyResponse,
-	buildZeropsSourceResolveInstallationRequest,
-	buildZeropsSourceResolveInstallationResponse,
 	buildZeropsSourceResolveRequest,
 	buildZeropsSourceResolveRequestV2,
 	buildZeropsSourceResolveResponse,
@@ -29,21 +22,14 @@ import {
 	buildZeropsSourceWebhookConfigureResponse,
 	decodeZeropsSourceCancelRequest,
 	decodeZeropsSourceCancelResponse,
-	decodeZeropsSourceCredentialActivateRequest,
 	decodeZeropsSourceCredentialActivateRequestV2,
-	decodeZeropsSourceCredentialActivateResponse,
 	decodeZeropsSourceCredentialActivateResponseV2,
-	decodeZeropsSourceCredentialBundle,
 	decodeZeropsSourceCredentialBundleV2,
-	decodeZeropsSourceCredentialStatusRequest,
 	decodeZeropsSourceCredentialStatusRequestV2,
-	decodeZeropsSourceCredentialStatusResponse,
 	decodeZeropsSourceCredentialStatusResponseV2,
 	decodeZeropsSourceErrorEnvelope,
 	decodeZeropsSourceInstallationsVerifyRequest,
 	decodeZeropsSourceInstallationsVerifyResponse,
-	decodeZeropsSourceResolveInstallationRequest,
-	decodeZeropsSourceResolveInstallationResponse,
 	decodeZeropsSourceResolveRequest,
 	decodeZeropsSourceResolveRequestV2,
 	decodeZeropsSourceResolveResponse,
@@ -55,36 +41,25 @@ import {
 	decodeZeropsSourceWebhookConfigureRequest,
 	decodeZeropsSourceWebhookConfigureResponse,
 	normalizeZeropsSourceRepository,
-	serializeZeropsSourceCredentialBundle,
 	serializeZeropsSourceCredentialBundleV2,
-	sha256ZeropsSourceCredentialBundle,
 	sha256ZeropsSourceCredentialBundleV2,
 	ZEROPS_SOURCE_CANCEL_PATH,
-	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2,
-	ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION,
 	ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION_V2,
-	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2,
 	ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH,
 	ZEROPS_SOURCE_PROTOCOL_VERSION,
 	ZEROPS_SOURCE_PROTOCOL_VERSION_V2,
-	ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH,
 	ZEROPS_SOURCE_RESOLVE_PATH,
 	ZEROPS_SOURCE_RESOLVE_PATH_V2,
 	ZEROPS_SOURCE_UPLOAD_PATH,
 	ZEROPS_SOURCE_UPLOAD_PATH_V2,
 	ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH,
 	type ZeropsSourceCancelRequestV1,
-	type ZeropsSourceCredentialActivateRequestV1,
 	type ZeropsSourceCredentialActivateRequestV2,
-	type ZeropsSourceCredentialActivateResponseV1,
 	type ZeropsSourceCredentialActivateResponseV2,
-	type ZeropsSourceCredentialBundleV1,
 	type ZeropsSourceCredentialBundleV2,
 	zeropsSourceCredentialEnvV2,
-	type ZeropsSourceCredentialStatusRequestV1,
-	type ZeropsSourceCredentialStatusResponseV1,
 	type ZeropsSourceCredentialStatusResponseV2,
 	type ZeropsSourceDescriptor,
 	type ZeropsSourceErrorEnvelope,
@@ -105,6 +80,14 @@ MAMCAQE=
 -----END PRIVATE KEY-----
 `
 
+const resolveRequestFor = (name: string): Record<string, unknown> => ({
+	protocolVersion: 1,
+	runId: 'run:0198',
+	repository: { owner: 'contember', name },
+	requestedRef: 'refs/heads/main',
+	descriptorSha256: descriptorSha,
+})
+
 const thrownMessage = (operation: () => void): string => {
 	try {
 		operation()
@@ -119,24 +102,26 @@ describe('Zerops source repository normalization', () => {
 		expect(normalizeZeropsSourceRepository('https://github.com/Contember/Fabrika-Platform.git')).toEqual(repository)
 		expect(normalizeZeropsSourceRepository('github.com/Contember/Fabrika-Platform.git')).toEqual(repository)
 		expect(normalizeZeropsSourceRepository('github.com/contember/fabrika-platform')).toEqual(repository)
-		expect(buildZeropsSourceResolveInstallationRequest('https://github.com/Contember/Fabrika-Platform')).toEqual({
-			protocolVersion: 1,
-			repository,
-		})
+		expect(
+			buildZeropsSourceResolveRequest({
+				runId: 'run:0198',
+				repository: normalizeZeropsSourceRepository('https://github.com/Contember/Fabrika-Platform'),
+				requestedRef: 'refs/heads/main',
+				descriptorSha256: descriptorSha,
+				signal: signal(),
+			}).repository,
+		).toEqual(repository)
 	})
 
 	test('allows normalized GitHub repository punctuation including the .github repository', () => {
 		expect(normalizeZeropsSourceRepository('https://github.com/Contember/.github')).toEqual({ owner: 'contember', name: '.github' })
 		for (const name of ['repo-name', 'repo_name', 'repo.name']) {
-			expect(decodeZeropsSourceResolveInstallationRequest({ protocolVersion: 1, repository: { owner: 'contember', name } })).toEqual({
-				protocolVersion: 1,
-				repository: { owner: 'contember', name },
-			})
+			expect(decodeZeropsSourceResolveRequest(resolveRequestFor(name)).repository).toEqual({ owner: 'contember', name })
 		}
 	})
 
 	test.each(['', '.', '..', 'nested/repo', 'repo\nname', 'Repo'])('rejects invalid or non-normalized repository name %p', (name) => {
-		expect(() => decodeZeropsSourceResolveInstallationRequest({ protocolVersion: 1, repository: { owner: 'contember', name } })).toThrow()
+		expect(() => decodeZeropsSourceResolveRequest(resolveRequestFor(name))).toThrow()
 	})
 
 	test.each([
@@ -157,9 +142,7 @@ describe('Zerops source repository normalization', () => {
 	})
 })
 
-describe('Zerops source credential bundle and management wire', () => {
-	const bundleObject = { version: 1, githubAppId: '123', privateKeyPem } satisfies ZeropsSourceCredentialBundleV1
-	const bundle = `{"version":1,"githubAppId":"123","privateKeyPem":"-----BEGIN PRIVATE KEY-----\\nMAMCAQE=\\n-----END PRIVATE KEY-----\\n"}`
+describe('Zerops source management wire', () => {
 	const identity = {
 		id: 123,
 		slug: 'fabrika-test',
@@ -170,123 +153,10 @@ describe('Zerops source credential bundle and management wire', () => {
 		events: ['push'],
 	} satisfies ZeropsSourceGitHubAppIdentityV1
 
-	test('builds one byte-canonical versioned id and PEM bundle', async () => {
-		expect(buildZeropsSourceCredentialBundle({ githubAppId: '123', privateKeyPem })).toEqual(bundleObject)
-		expect(serializeZeropsSourceCredentialBundle(bundleObject)).toBe(bundle)
-		expect(decodeZeropsSourceCredentialBundle(bundle)).toEqual(bundleObject)
-		expect(await sha256ZeropsSourceCredentialBundle(bundle)).toMatch(/^[a-f0-9]{64}$/)
-		expect(await sha256ZeropsSourceCredentialBundle(bundle)).not.toBe(
-			await sha256ZeropsSourceCredentialBundle(serializeZeropsSourceCredentialBundle({ ...bundleObject, githubAppId: '124' })),
-		)
-	})
-
-	test.each([
-		'',
-		'{}',
-		` {"version":1,"githubAppId":"123","privateKeyPem":${JSON.stringify(privateKeyPem)}}`,
-		`{"githubAppId":"123","privateKeyPem":${JSON.stringify(privateKeyPem)},"version":1}`,
-		`{"version":1,"githubAppId":"123","privateKeyPem":${JSON.stringify(privateKeyPem)},"token":"ghs_secret"}`,
-		`{"version":2,"githubAppId":"123","privateKeyPem":${JSON.stringify(privateKeyPem)}}`,
-		`{"version":1,"githubAppId":"0","privateKeyPem":${JSON.stringify(privateKeyPem)}}`,
-		`{"version":1,"githubAppId":"123","privateKeyPem":"not a key"}`,
-		`{"version":1,"githubAppId":"123","privateKeyPem":"-----BEGIN PRIVATE KEY-----\\r\\nMAMCAQE=\\r\\n-----END PRIVATE KEY-----"}`,
-	])('rejects a noncanonical or invalid credential bundle %#', (value) => {
-		expect(() => decodeZeropsSourceCredentialBundle(value)).toThrow()
-	})
-
-	test('binds activation to a connection, exact canonical bundle, digest, and verified identity', async () => {
-		const credentialSha256 = await sha256ZeropsSourceCredentialBundle(bundle)
-		const request = {
-			protocolVersion: 1,
-			connectionId: 'connection:0198',
-			credentialBundle: bundle,
-			credentialSha256,
-		} satisfies ZeropsSourceCredentialActivateRequestV1
-		expect(
-			buildZeropsSourceCredentialActivateRequest({ ...request, signal: signal() }),
-		).toEqual(request)
-		expect(decodeZeropsSourceCredentialActivateRequest(request)).toEqual(request)
-		const response = {
-			protocolVersion: 1,
-			connectionId: 'connection:0198',
-			credentialVersion: 1,
-			credentialSha256,
-			githubApp: identity,
-		} satisfies ZeropsSourceCredentialActivateResponseV1
-		expect(buildZeropsSourceCredentialActivateResponse(response)).toEqual(response)
-		expect(decodeZeropsSourceCredentialActivateResponse(response)).toEqual(response)
-		expect(ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH).toBe('/v1/source/credentials/activate')
-	})
-
-	test('decodes only anonymous or credential-redacted active status', async () => {
-		const credentialSha256 = await sha256ZeropsSourceCredentialBundle(bundle)
-		const request = { protocolVersion: 1, connectionId: 'connection-1' } satisfies ZeropsSourceCredentialStatusRequestV1
-		expect(buildZeropsSourceCredentialStatusRequest({ ...request, signal: signal() })).toEqual(request)
-		expect(decodeZeropsSourceCredentialStatusRequest(request)).toEqual(request)
-		expect(buildZeropsSourceCredentialStatusResponse({ connectionId: 'connection-1', state: 'anonymous' })).toEqual({
-			...request,
-			state: 'anonymous',
-		})
-		const active = {
-			protocolVersion: 1,
-			connectionId: 'connection-1',
-			state: 'active',
-			credentialVersion: 1,
-			credentialSha256,
-			githubApp: identity,
-		} satisfies ZeropsSourceCredentialStatusResponseV1
-		expect(decodeZeropsSourceCredentialStatusResponse(active)).toEqual(active)
-		expect(buildZeropsSourceCredentialStatusResponse(active)).toEqual(active)
-		expect(ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH).toBe('/v1/source/credentials/status')
-	})
-
-	test.each([
-		{ protocolVersion: 1, connectionId: 'connection-1', credentialBundle: bundle, credentialSha256: descriptorSha, privateKey: privateKeyPem },
-		{ protocolVersion: 1, connectionId: '', credentialBundle: bundle, credentialSha256: descriptorSha },
-		{ protocolVersion: 1, connectionId: 'connection-1', credentialBundle: `${bundle}\n`, credentialSha256: descriptorSha },
-		{ protocolVersion: 1, connectionId: 'connection-1', credentialBundle: bundle, credentialSha256: descriptorSha.toUpperCase() },
-	])('rejects malformed or credential-extended activation request %#', (value) => {
-		expect(() => decodeZeropsSourceCredentialActivateRequest(value)).toThrow()
-	})
-
-	test.each([
-		{
-			protocolVersion: 1,
-			connectionId: 'connection-1',
-			credentialVersion: 1,
-			credentialSha256: descriptorSha,
-			githubApp: { ...identity, owner: { login: 'Contember', type: 'User' } },
-		},
-		{
-			protocolVersion: 1,
-			connectionId: 'connection-1',
-			credentialVersion: 1,
-			credentialSha256: descriptorSha,
-			githubApp: { ...identity, permissions: { contents: 'write' } },
-		},
-		{
-			protocolVersion: 1,
-			connectionId: 'connection-1',
-			credentialVersion: 1,
-			credentialSha256: descriptorSha,
-			githubApp: { ...identity, events: ['push', 'issues'] },
-		},
-		{
-			protocolVersion: 1,
-			connectionId: 'connection-1',
-			credentialVersion: 1,
-			credentialSha256: descriptorSha,
-			githubApp: identity,
-			credentialBundle: bundle,
-		},
-	])('rejects unverified or credential-bearing activation response %#', (value) => {
-		expect(() => decodeZeropsSourceCredentialActivateResponse(value)).toThrow()
-	})
-
 	test('never echoes a secret-looking unknown management key', () => {
 		const secretKey = 'privateKey\nghs_must-not-leak'
 		const message = thrownMessage(() =>
-			decodeZeropsSourceCredentialStatusResponse({ protocolVersion: 1, connectionId: 'connection-1', state: 'anonymous', [secretKey]: true })
+			decodeZeropsSourceCredentialStatusResponseV2({ protocolVersion: 2, connectionId: 'connection-1', state: 'anonymous', [secretKey]: true })
 		)
 		expect(message).toContain('unknown field')
 		expect(message).not.toContain(secretKey)
@@ -297,7 +167,7 @@ describe('Zerops source credential bundle and management wire', () => {
 		const input = {
 			connectionId: 'connection-1',
 			credentialSha256: descriptorSha,
-			url: 'https://control.example.test/webhooks/github',
+			url: 'https://control.example.test/webhooks/github/connection-1',
 			secret: 'must-not-leak',
 			signal: signal(),
 		}
@@ -379,10 +249,8 @@ describe('Zerops source v2 credential bundle and management wire', () => {
 		)
 	})
 
-	test('keeps v1 and v2 credential bundles disjoint', () => {
-		const v1 = serializeZeropsSourceCredentialBundle({ githubAppId: '123', privateKeyPem, version: 1 })
-		expect(() => decodeZeropsSourceCredentialBundle(bundle)).toThrow()
-		expect(() => decodeZeropsSourceCredentialBundleV2(v1)).toThrow()
+	test('refuses an unversioned, reordered, or credential-extended bundle', () => {
+		expect(() => decodeZeropsSourceCredentialBundleV2(`{"version":1,"githubAppId":"123","privateKeyPem":${JSON.stringify(privateKeyPem)}}`)).toThrow()
 		expect(() =>
 			decodeZeropsSourceCredentialBundleV2(
 				`{"version":2,"githubAppId":"123","privateKeyPem":${JSON.stringify(privateKeyPem)},"connectionId":"${connectionId}"}`,
@@ -425,12 +293,8 @@ describe('Zerops source v2 credential bundle and management wire', () => {
 		expect(decodeZeropsSourceCredentialStatusResponseV2(active)).toEqual(active)
 	})
 
-	test('freezes the additive v2 paths while v1 paths stay unchanged', () => {
+	test('freezes the v2 credential paths and the anonymous v1 transfer paths that survive them', () => {
 		expect(ZEROPS_SOURCE_PROTOCOL_VERSION).toBe(1)
-		expect(ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION).toBe(1)
-		expect(ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH).toBe('/v1/source/credentials/activate')
-		expect(ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH).toBe('/v1/source/credentials/status')
-		expect(ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH).toBe('/v1/installations/resolve')
 		expect(ZEROPS_SOURCE_RESOLVE_PATH).toBe('/v1/source/resolve')
 		expect(ZEROPS_SOURCE_UPLOAD_PATH).toBe('/v1/source/upload')
 		expect(ZEROPS_SOURCE_CANCEL_PATH).toBe('/v1/source/cancel')
@@ -516,21 +380,6 @@ describe('Zerops source v2 resolve and upload wire contracts', () => {
 	test('keeps every v1 decoder closed to v2 messages', () => {
 		expect(() => decodeZeropsSourceResolveRequest(resolve)).toThrow()
 		expect(() => decodeZeropsSourceUploadRequest(upload)).toThrow()
-	})
-})
-
-describe('Zerops source resolve-installation wire contract', () => {
-	test('binds the normalized repository and nullable installation result', () => {
-		expect(decodeZeropsSourceResolveInstallationRequest({ protocolVersion: 1, repository })).toEqual({ protocolVersion: 1, repository })
-		expect(buildZeropsSourceResolveInstallationResponse(987)).toEqual({ protocolVersion: 1, githubInstallationId: 987 })
-		expect(decodeZeropsSourceResolveInstallationResponse({ protocolVersion: 1, githubInstallationId: null })).toEqual({
-			protocolVersion: 1,
-			githubInstallationId: null,
-		})
-	})
-
-	test.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '1'])('rejects invalid installation id %p', (githubInstallationId) => {
-		expect(() => decodeZeropsSourceResolveInstallationResponse({ protocolVersion: 1, githubInstallationId })).toThrow()
 	})
 })
 
@@ -748,25 +597,26 @@ describe('webhook configure URL grammar', () => {
 			webhook: { url, contentType: 'json', insecureSsl: '0' },
 		})
 
-	test('takes the legacy route and a connection-scoped one', () => {
-		expect(response('https://control.example.test/webhooks/github').webhook.url).toBe('https://control.example.test/webhooks/github')
+	test('takes only a connection-scoped route', () => {
 		// Every keyed connection appends its id; rejecting this shape broke `configureWebhook` for all of them.
 		expect(response('https://control.example.test/webhooks/github/01a01e55-9ee5-7035-862b-80b1548b6597').webhook.url)
 			.toBe('https://control.example.test/webhooks/github/01a01e55-9ee5-7035-862b-80b1548b6597')
 	})
 
-	test('still refuses anything that is not exactly one of those two', () => {
+	test('refuses anything else, the unscoped Cloudflare route included', () => {
 		for (
 			const url of [
-				'http://control.example.test/webhooks/github',
+				// Only a Cloudflare composition answers here, and it never reaches this wire (ADR-0039).
+				'https://control.example.test/webhooks/github',
+				'http://control.example.test/webhooks/github/01a01e55-9ee5-7035-862b-80b1548b6597',
 				'https://control.example.test/webhooks/github/one/two',
 				'https://control.example.test/webhooks/github/',
 				'https://control.example.test/webhooks/github/../admin',
 				'https://control.example.test/webhooks/github/a%2Fb',
-				'https://control.example.test/webhooks/github?x=1',
-				'https://control.example.test/webhooks/github#x',
-				'https://user:pass@control.example.test/webhooks/github',
-				'https://control.example.test:8443/webhooks/github',
+				'https://control.example.test/webhooks/github/01a01e55-9ee5-7035-862b-80b1548b6597?x=1',
+				'https://control.example.test/webhooks/github/01a01e55-9ee5-7035-862b-80b1548b6597#x',
+				'https://user:pass@control.example.test/webhooks/github/01a01e55-9ee5-7035-862b-80b1548b6597',
+				'https://control.example.test:8443/webhooks/github/01a01e55-9ee5-7035-862b-80b1548b6597',
 			]
 		) expect(() => response(url)).toThrow()
 	})

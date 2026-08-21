@@ -33,9 +33,6 @@ export async function createSourceRuntime(
 ): Promise<SourceRuntime> {
 	const env = options.env ?? process.env
 	const rpcKey = required(env, 'FABRIKA_SOURCE_RPC_KEY')
-	const credentialBundle = optional(env, 'GITHUB_APP_CREDENTIALS')
-	const legacyAppId = optional(env, 'GITHUB_APP_ID')
-	const legacyPrivateKeyPem = optional(env, 'GITHUB_APP_PRIVATE_KEY')
 	const credentialSlotsV2 = sourceCredentialSlotsV2(env)
 	const createGitHubClient = options.createGitHubClient ?? ((input) =>
 		GitHubAppClient.create({
@@ -43,9 +40,6 @@ export async function createSourceRuntime(
 			...(options.githubFetch === undefined ? {} : { fetch: options.githubFetch }),
 		}))
 	const github = await GitHubConnection.create({
-		...(credentialBundle === undefined ? {} : { credentialBundle }),
-		...(legacyAppId === undefined ? {} : { legacyAppId }),
-		...(legacyPrivateKeyPem === undefined ? {} : { legacyPrivateKeyPem }),
 		...(credentialSlotsV2.length === 0 ? {} : { credentialSlotsV2 }),
 		createClient: createGitHubClient,
 	})

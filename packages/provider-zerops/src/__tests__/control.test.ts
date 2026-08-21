@@ -195,7 +195,6 @@ const executeProvider: ZeropsProviderExecutor = async (provider, run) => {
 }
 
 const makeSource = (calls: string[] = []): ZeropsSourceClient => ({
-	resolveInstallationId: async () => null,
 	resolve: async (input) => {
 		calls.push(`resolve:${input.repository.owner}/${input.repository.name}:${input.requestedRef}`)
 		return {
@@ -533,19 +532,10 @@ describe('Zerops ControlProvider registration', () => {
 })
 
 describe('Zerops ControlProvider lifecycle', () => {
-	test('uses v1 immediately after a source restart when the durable row explicitly says legacy-v1', async () => {
-		const sourceCalls: string[] = []
-		const resolutions: Array<{
-			runId: string
-			repository: { owner: string; name: string }
-			requestedRef: string
-			expectedCommitSha?: string
-			githubInstallationId?: number
-			descriptorSha256: string
-			signal: AbortSignal
-		}> = []
+	test('refuses a descriptor that drifted after registration before it resolves the source', async () => {
+		const resolutions: unknown[] = []
 		const source: ZeropsSourceClient = {
-			...makeSource(sourceCalls),
+			...makeSource([]),
 			resolve: async (input) => {
 				resolutions.push(input)
 				return { runId: input.runId, commitSha: COMMIT_SHA, descriptorSha256: input.descriptorSha256 }
@@ -553,35 +543,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 		}
 		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded), source })
 		const signal = new AbortController().signal
-		const privateApp = { ...app, source: { ...app.source, githubConnectionId: 'legacy-connection', githubInstallationId: 42 } }
-
-		expect(
-			await control.resolveSourceWithBinding({
-				runId: 'run-1',
-				app: privateApp,
-				environment: environment(),
-				expectedCommitSha: COMMIT_SHA,
-				signal,
-				sourceBinding: { connectionId: 'legacy-connection', installationId: 42, transportKind: 'legacy-v1' },
-			}),
-		).toEqual({ commitSha: COMMIT_SHA })
-		expect(resolutions).toEqual([{
-			runId: 'run-1',
-			repository: { owner: 'acme', name: 'notes' },
-			requestedRef: COMMIT_SHA,
-			expectedCommitSha: COMMIT_SHA,
-			githubInstallationId: 42,
-			descriptorSha256: SOURCE_DESCRIPTOR.sha256,
-			signal,
-		}])
-		expect(recorded.calls).toEqual([])
-		await expect(control.deployWithBinding({
-			...deployInput(recorded),
-			app: privateApp,
-			sourceBinding: { connectionId: 'legacy-connection', installationId: 42, transportKind: 'legacy-v1' },
-		})).resolves.toMatchObject({ state: 'succeeded' })
-		expect(sourceCalls).toContain(`upload:run-1:version-1:${COMMIT_SHA}`)
-
 		const drifted = compileFabrikaManifest(config, 'prod', {
 			...SOURCE_DESCRIPTOR,
 			contents: `${SOURCE_DESCRIPTOR.contents}# changed after registration\n`,
@@ -600,7 +561,8 @@ describe('Zerops ControlProvider lifecycle', () => {
 			}),
 			signal,
 		})).rejects.toThrow('source descriptor digest')
-		expect(resolutions).toHaveLength(1)
+		expect(resolutions).toHaveLength(0)
+		expect(recorded.calls).toEqual([])
 	})
 
 	test('routes two keyed connections through exact v2 resolve and upload bindings', async () => {
@@ -664,7 +626,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 			app: privateApp,
 			environment: environment(),
 			signal,
-			sourceBinding: { connectionId: 'connection-2', installationId: 42, transportKind: 'legacy-v1' },
+			sourceBinding: { connectionId: 'connection-2', installationId: 42, transportKind: 'keyed-v2' },
 		})).rejects.toThrow('different application coordinates')
 		expect(calls).toEqual([])
 	})
@@ -753,7 +715,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(JSON.stringify(deployInput(recorded).environment)).not.toContain('zt-secret')
 	})
 
-	test('uses the same credential-free runtime coordinates for public and explicitly bound legacy repositories', async () => {
+	test('uses the same credential-free runtime coordinates for public and explicitly bound private repositories', async () => {
 		const observed: Array<ZeropsRuntimeTarget['source']> = []
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
@@ -777,11 +739,11 @@ describe('Zerops ControlProvider lifecycle', () => {
 					...app.source,
 					repoUrl: 'https://github.com/acme/notes',
 					ref: COMMIT_SHA,
-					githubConnectionId: 'legacy-connection',
+					githubConnectionId: 'connection-1',
 					githubInstallationId: 42,
 				},
 			},
-			sourceBinding: { connectionId: 'legacy-connection', installationId: 42, transportKind: 'legacy-v1' },
+			sourceBinding: { connectionId: 'connection-1', installationId: 42, transportKind: 'keyed-v2' },
 		})
 
 		expect(observed).toEqual([

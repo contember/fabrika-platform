@@ -1592,7 +1592,7 @@ interface ZeropsConnectionBindingRow {
 }
 
 function parseGitHubSourceTransportKind(value: string): GitHubSourceTransportKind {
-	if (value === 'legacy-v1' || value === 'keyed-v2') return value
+	if (value === 'keyed-v2') return value
 	throw new Error('invalid GitHub source transport kind')
 }
 

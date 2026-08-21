@@ -571,25 +571,24 @@ Source exposes
 only an unauthenticated private-network `/healthz` liveness endpoint, and authenticates every RPC before
 reading its bounded body. The shared RPC secret is `FABRIKA_SOURCE_RPC_KEY` on source and
 `FABRIKA_ZEROPS_SOURCE_RPC_KEY` on control. Source receives no Zerops token. Fresh source services
-start anonymously, so public repositories need no GitHub credential. The migrated App keeps one v1
-canonical id-and-private-key bundle in the create-only `GITHUB_APP_CREDENTIALS` source variable. Each
-new organization-owned private App gets a v2 canonical bundle in a separate create-only environment
-slot derived from its connection id. The slot name and bundle both bind that id; source validates the
-binding at startup and keeps immutable credential snapshots keyed by connection id. It activates a new
-SHA-256-bound bundle without restarting and routes v2 resolve and upload calls by the exact connection
-and installation pair. The immutable `legacy-v1` or `keyed-v2` marker selects the protocol; there is no
-fallback or credential search. Legacy all-or-none `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` values can
-be adopted into the v1 atomic bundle; partial or conflicting state fails closed. Fabrika sets no total
+start anonymously, so public repositories need no GitHub credential. Every organization-owned private
+App gets a v2 canonical bundle in its own create-only environment slot derived from its connection id.
+The slot name and bundle both bind that id; source validates the binding at startup and keeps immutable
+credential snapshots keyed by connection id. It activates a new SHA-256-bound bundle without restarting
+and routes v2 resolve and upload calls by the exact connection and installation pair. `keyed-v2` is the
+only transport (ADR-0039); there is no fallback and no credential search. A leftover unkeyed
+`GITHUB_APP_CREDENTIALS` bundle or split `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` pair is ignored
+entirely, and a request that names no connection resolves no credential at all. Fabrika sets no total
 connection limit. Request bodies, repository lists, environment responses and Control pages remain
 bounded.
 
-Each connection has an independent webhook secret encrypted in Control's platform vault. A new
-`keyed-v2` App receives `/webhooks/github/:connectionId`; Control resolves that exact connection and
-secret before reading and authenticating the bounded body, then requires the payload installation,
-repository and registered application pair to match it. The generic `/webhooks/github` route remains
-only for the migrated Zerops `legacy-v1` connection. It does not fall back to keyed connections.
-Cloudflare continues to use its generic static-secret and installation-id path without a source
-connection row.
+Each connection has an independent webhook secret encrypted in Control's platform vault. Every Zerops
+App receives `/webhooks/github/:connectionId`; Control resolves that exact connection and secret before
+reading and authenticating the bounded body, then requires the payload installation, repository and
+registered application pair to match it. A Zerops composition REFUSES the generic `/webhooks/github`
+route with 401 — since ADR-0039 it has nothing there to resolve, and it never falls back to a keyed
+connection. Cloudflare keeps that generic route, on its static secret and installation-id path, because
+it has no source connection row at all.
 
 Production origins are fixed to `api.github.com` and `codeload.github.com`. There is no operator-facing
 GitHub Enterprise or GitHub API-base setting; alternate origins are dependency-injected test seams only.
@@ -885,7 +884,7 @@ App identity and webhook configuration, then compare-and-set rebinds Control to 
 digest ([ADR-0036](../decisions/0036-recover-a-source-credential-binding.md)). It never reads or replaces
 the private key, changes the App, webhook secret, connection id or application binding, or adopts a
 credential from another App. This is the repair path for credential-binding and remote webhook drift
-after a completed setup; the generic webhook route remains reserved for the legacy connection.
+after a completed setup; the generic webhook route is reserved for Cloudflare and refused here.
 
 A Zerops private application is registered against the connection whose canonical organization owns
 its repository. Control persists both the connection id and GitHub installation id or neither. Deploy
@@ -904,22 +903,18 @@ reached that connection's scoped webhook route, passed HMAC verification and cre
 `source` service, waits for the returned Zerops processes, reconciles the two-sided RPC key and creates
 the nonsecret Control project binding. Equal valid RPC keys are reused; one valid side repairs an
 absent side; both absent generate one; invalid or mismatched values are refused. Normal init neither
-creates nor receives GitHub App credentials and never opens an XDG recovery file. It preserves a
-complete legacy or atomic remote credential set for Control's **Adopt existing GitHub App** action, and
-refuses partial or conflicting state. Adoption canonicalizes a complete legacy pair into the atomic
-source bundle with a deterministic project-and-digest connection id, activates it, and continues
-through the same Control webhook and installation verification phases.
+creates nor receives GitHub App credentials and never opens an XDG recovery file. It reports whether
+the remote source already holds a keyed credential and, since ADR-0039, ignores a leftover unkeyed or
+split value rather than offering to adopt it: a private source is connected only through Control's
+**Settings → Source**.
 
 Older ADR-0030 CLI recovery files are compatibility evidence only. This release does not discover,
-open or delete them. If the complete credentials are already remote, adopt them in Control and delete
-the old file only after the console reports connected. If the file is the only complete copy, use the
-last compatible CLI release to finish remote persistence before adoption. Source credentials never
-enter the sidecar checkout, repository or GitHub Environment.
+open or delete them. There is nothing left to adopt them into, so an operator holding one connects a
+new source in Control and deletes the file afterwards. Source credentials never enter the sidecar
+checkout, repository or GitHub Environment.
 
-Rollout proceeds source → proxy → Control/dashboard so the existing v1 client and generic webhook
-remain compatible before a keyed v2 connection is added. Rolling source back after a v2 slot exists is
-unsupported; recovery rolls forward because an old source must reject v2 calls. An App migrated as a
-`legacy-v1` connection stays on the generic `/webhooks/github` route, while each `keyed-v2` App uses
+Rollout proceeds source → proxy → Control/dashboard. Rolling source back after a v2 slot exists is
+unsupported; recovery rolls forward because an old source must reject v2 calls. Every Zerops App uses
 its scoped `/webhooks/github/:connectionId` route. One unavoidable orphan window remains after GitHub accepts
 manifest conversion but before the callback durably stores the response; such an App must be deleted
 and recreated. Multi-connection acceptance evidence is tracked in the

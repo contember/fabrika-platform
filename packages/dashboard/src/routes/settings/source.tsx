@@ -225,32 +225,6 @@ function SourceAction(
 			</section>
 		)
 	}
-	if (status.state === 'adoption-required') {
-		if (connectionCount > 0) {
-			return (
-				<section className="source-checkpoint source-checkpoint-failed">
-					<CheckpointHead lamp="stop" title="Legacy adoption unavailable" />
-					<p>The existing source credential can be adopted only before the first organization connection is recorded.</p>
-				</section>
-			)
-		}
-		return (
-			<section className="source-checkpoint">
-				<CheckpointHead lamp="run" title="Adopt the existing GitHub App" />
-				<p>
-					Fabrika found App credentials already stored on the private source. Adopt them into this connection and move webhook verification into the
-					Control vault. No new App or personal access token is needed.
-				</p>
-				<ConnectionMutation
-					primary
-					label="Adopt existing GitHub App"
-					pending="Adopting…"
-					action={() => api.sourceConnection.adoptExisting()}
-					onDone={invalidate}
-				/>
-			</section>
-		)
-	}
 	if (status.state === 'setup-pending') {
 		const continuePath = sourceManifestContinuePath(status)
 		return (

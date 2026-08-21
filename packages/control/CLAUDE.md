@@ -45,7 +45,9 @@ entrypoint reaches the other provider or runtime.
 
 ## Architecture
 
-`fetch` routes: `/api/health` → ok · `POST /webhooks/github` → webhook ·
+`fetch` routes: `/api/health` → ok · `POST /webhooks/github/:connectionId` → webhook ·
+the unscoped `POST /webhooks/github` exists for a Cloudflare composition only, and a Zerops
+composition refuses it with 401 (ADR-0039) ·
 `/iam/admin/*` → transport-only IAM gateway · `/operations/api/*` →
 transport-only Operations gateway · `/api/*` → ACL-gated control surface ·
 everything else → dashboard `ASSETS`. `/healthz` is a liveness-only route on

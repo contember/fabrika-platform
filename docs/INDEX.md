@@ -36,15 +36,15 @@ whole batch.
 
 [`multiple-private-github-source-connections`](sprints/sprint-2026-08-14-multiple-private-github-source-connections.md) —
 extend the Zerops source path to one private GitHub App per organization and multiple connections per
-installation. [ADR-0032](decisions/0032-support-multiple-private-github-source-connections.md) keeps
-the live Zerops v1 credential and generic webhook as a marker-selected compatibility path, gives new
-connections keyed v2 credentials and scoped webhooks, and binds every Zerops private app to a
+installation. [ADR-0032](decisions/0032-support-multiple-private-github-source-connections.md) gives
+every connection a keyed v2 credential and a scoped webhook, and binds every Zerops private app to a
 connection-and-installation pair. Cloudflare keeps its static-secret and installation-id webhook
 model. Fabrika sets no explicit connection-count limit. Deterministic local compatibility and isolation
-gates are complete. Live setup created and verified Apps for two additional organizations, the source
-restarted with the legacy base credential plus three keyed v2 slots, and a keyed-v2 scoped push
-deployed its bound private application. A private deploy from a second organization and a genuine
-legacy-v1 generic delivery remain open.
+gates are complete. Live setup created and verified Apps for two additional organizations, and a
+keyed-v2 scoped push deployed its bound private application. A private deploy from a second
+organization remains open; the legacy-v1 generic delivery no longer does —
+[ADR-0039](decisions/0039-retire-the-legacy-v1-source-credential-path.md) retired that path with the
+account that held its only credential.
 
 Two auth sprints shipped on 2026-08-05 —
 [hardening](archive/sprint-2026-08-04-auth-hardening.md), then
@@ -90,8 +90,9 @@ backlog is empty; what is left of item 54 is a console architecture decision, no
   browser exception ingest. ADR-0029 owns the source transport and ADR-0031 the authenticated Control
   setup. The active
   [multi-connection sprint](sprints/sprint-2026-08-14-multiple-private-github-source-connections.md)
-  still owes its second-organization deploy and a genuine legacy-v1 generic delivery; keyed-v2 scoped
-  delivery is proven live. The
+  still owes its second-organization deploy; keyed-v2 scoped delivery is proven live, and
+  [ADR-0039](decisions/0039-retire-the-legacy-v1-source-credential-path.md) retired the legacy-v1
+  generic delivery it used to owe. The
   production two-project shape and custom domains remain in
   [`05`](backlog/05-bring-up-on-a-real-zerops-account.md); one-command local registration is
   [`78`](backlog/78-register-a-zerops-app-from-local-config-in-one-command.md).

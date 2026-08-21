@@ -5,8 +5,8 @@ import { ACTIONS } from '../actions'
 import { controlApp } from '../app'
 import { projectSingletonSourceConnectionPage } from '../control-rpc'
 import type { Env } from '../env'
-import { GitHubConnectionWebhookSecretProvider, githubWebhookSecretLabel } from '../github-connection-store'
-import { FakeRepoSource, StaticWebhookSecretProvider } from '../repo-source'
+import { githubWebhookSecretLabel } from '../github-connection-store'
+import { FakeRepoSource } from '../repo-source'
 import { unavailableSourceConnection } from '../source-connection-port'
 import { Vault } from '../vault'
 import { createHarness, type Harness, pushWebhookRequest } from './helpers/harness'
@@ -251,39 +251,29 @@ describe('controlApp', () => {
 			})
 			await seedZeropsTrigger(harness, app.id)
 		}
-		const fetch = application({
-			FABRIKA_CONTROL_VAULT_KEY: vaultKey,
-			GITHUB_WEBHOOK_SECRETS: new StaticWebhookSecretProvider('legacy-fallback'),
-		}, harness)
+		const fetch = application({ FABRIKA_CONTROL_VAULT_KEY: vaultKey, GITHUB_CONNECTION_WEBHOOKS: true }, harness)
 		const exactA = await webhookRequest('/webhooks/github/connection-a', 'secret-a', 'github.com/acme/app', 42)
 		const exactB = await webhookRequest('/webhooks/github/connection-b', 'secret-b', 'github.com/beta/app', 43)
 		const crossConnection = await webhookRequest('/webhooks/github/connection-b', 'secret-a', 'github.com/acme/app', 42)
 		const swappedInstallation = await webhookRequest('/webhooks/github/connection-a', 'secret-a', 'github.com/acme/app', 43)
-		const unknownUsingFallback = await webhookRequest('/webhooks/github/unknown', 'legacy-fallback', 'github.com/acme/app', 42)
-		const genericUsingFallback = await webhookRequest('/webhooks/github', 'legacy-fallback', 'github.com/acme/app', 42)
+		// A real connection's secret on the wrong route: no route but its own may resolve it.
+		const unknownConnection = await webhookRequest('/webhooks/github/unknown', 'secret-a', 'github.com/acme/app', 42)
+		const unscoped = await webhookRequest('/webhooks/github', 'secret-a', 'github.com/acme/app', 42)
 
 		expect((await fetch(exactA)).status).toBe(200)
 		expect((await fetch(exactB)).status).toBe(200)
 		expect((await fetch(crossConnection)).status).toBe(401)
 		expect((await fetch(swappedInstallation)).status).toBe(204)
-		expect((await fetch(unknownUsingFallback)).status).toBe(401)
-		expect((await fetch(genericUsingFallback)).status).toBe(401)
+		expect((await fetch(unknownConnection)).status).toBe(401)
+		expect((await fetch(unscoped)).status).toBe(401)
 		expect(await harness.repositories.runs.listRuns({ limit: 10 })).toHaveLength(2)
 	})
 
-	test('keeps the generic Zerops route bound only to the legacy-v1 connection', async () => {
+	test('refuses the unscoped route in a Zerops composition, which has no connection to resolve', async () => {
 		const harness = createHarness()
 		const vaultKey = testVaultKey()
 		const vault = await Vault.create(harness.d1, vaultKey)
-		const legacyRef = await vault.putSecret('platform', githubWebhookSecretLabel('legacy'), 'legacy-secret')
 		const keyedRef = await vault.putSecret('platform', githubWebhookSecretLabel('keyed'), 'keyed-secret')
-		insertConnection(harness, {
-			connectionId: 'legacy',
-			transportKind: 'legacy-v1',
-			owner: 'acme',
-			installationId: 42,
-			webhookSecretRef: legacyRef,
-		})
 		insertConnection(harness, {
 			connectionId: 'keyed',
 			transportKind: 'keyed-v2',
@@ -291,34 +281,24 @@ describe('controlApp', () => {
 			installationId: 43,
 			webhookSecretRef: keyedRef,
 		})
-		for (
-			const app of [
-				{ id: 'legacy-app', repoUrl: 'github.com/acme/app', connectionId: 'legacy', installationId: 42 },
-				{ id: 'keyed-app', repoUrl: 'github.com/beta/app', connectionId: 'keyed', installationId: 43 },
-			]
-		) {
-			await harness.repositories.registry.createApp({
-				id: app.id,
-				repoUrl: app.repoUrl,
-				githubConnectionId: app.connectionId,
-				githubInstallationId: app.installationId,
-			})
-			await seedZeropsTrigger(harness, app.id)
-		}
-		const fetch = application({
-			FABRIKA_CONTROL_VAULT_KEY: vaultKey,
-			GITHUB_WEBHOOK_SECRETS: new GitHubConnectionWebhookSecretProvider(
-				harness.repositories.githubConnections,
-				vault,
-				new StaticWebhookSecretProvider('static-fallback'),
-			),
-		}, harness)
+		await harness.repositories.registry.createApp({
+			id: 'keyed-app',
+			repoUrl: 'github.com/beta/app',
+			githubConnectionId: 'keyed',
+			githubInstallationId: 43,
+		})
+		await seedZeropsTrigger(harness, 'keyed-app')
+		const fetch = application({ FABRIKA_CONTROL_VAULT_KEY: vaultKey, GITHUB_CONNECTION_WEBHOOKS: true }, harness)
 
-		expect((await fetch(await webhookRequest('/webhooks/github', 'legacy-secret', 'github.com/acme/app', 42))).status).toBe(200)
+		// Since ADR-0039 nothing keyed can be selected without a connection id, so the unscoped path is
+		// refused rather than trying a stored secret — even the one that would verify on its own route.
 		expect((await fetch(await webhookRequest('/webhooks/github', 'keyed-secret', 'github.com/beta/app', 43))).status).toBe(401)
+		expect(await harness.repositories.runs.listRuns({ limit: 10 })).toHaveLength(0)
+		// The scoped route still triggers its bound app.
+		expect((await fetch(await webhookRequest('/webhooks/github/keyed', 'keyed-secret', 'github.com/beta/app', 43))).status).toBe(200)
 		const runs = await harness.repositories.runs.listRuns({ limit: 10 })
 		expect(runs).toHaveLength(1)
-		expect(runs[0]?.app_id).toBe('legacy-app')
+		expect(runs[0]?.app_id).toBe('keyed-app')
 	})
 
 	test('keeps the Cloudflare generic route static-secret and installation-only', async () => {
@@ -349,7 +329,7 @@ describe('controlApp', () => {
 
 function insertConnection(harness: Harness, input: {
 	connectionId: string
-	transportKind: 'legacy-v1' | 'keyed-v2'
+	transportKind: 'keyed-v2'
 	owner: string
 	installationId: number
 	webhookSecretRef: string
@@ -369,7 +349,7 @@ function insertConnection(harness: Harness, input: {
 			input.owner,
 			`${input.connectionId}-app`,
 			'a'.repeat(64),
-			`https://control.test/webhooks/github${input.transportKind === 'keyed-v2' ? `/${input.connectionId}` : ''}`,
+			`https://control.test/webhooks/github/${input.connectionId}`,
 			input.webhookSecretRef,
 			input.installationId,
 			input.owner,

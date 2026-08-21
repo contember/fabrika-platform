@@ -1,10 +1,7 @@
 import type { GitHubAppIdentity, GitHubAppInstallation } from '@fabrika/github-app'
 import {
-	buildZeropsSourceCredentialBundle,
 	buildZeropsSourceCredentialBundleV2,
-	serializeZeropsSourceCredentialBundle,
 	serializeZeropsSourceCredentialBundleV2,
-	sha256ZeropsSourceCredentialBundle,
 	sha256ZeropsSourceCredentialBundleV2,
 	zeropsSourceCredentialEnvV2,
 } from '@fabrika/provider-zerops'
@@ -15,6 +12,8 @@ const PEM = `-----BEGIN PRIVATE KEY-----
 MAMCAQE=
 -----END PRIVATE KEY-----
 `
+const CONNECTION_1 = 'connection-1'
+const CONNECTION_2 = 'connection-2'
 
 const identity = (id = 123): GitHubAppIdentity => ({
 	id,
@@ -27,10 +26,14 @@ const identity = (id = 123): GitHubAppIdentity => ({
 })
 
 function client(app = identity()): SourceGitHubClient {
+	let configured = 'https://control.example.test/webhooks/github'
 	return {
 		getAuthenticatedApp: async () => app,
-		getWebhookConfig: async () => ({ url: 'https://control.example.test/webhooks/github', contentType: 'json', insecureSsl: '0' }),
-		updateWebhookConfig: async (input) => ({ url: input.url, contentType: 'json', insecureSsl: '0' }),
+		getWebhookConfig: async () => ({ url: configured, contentType: 'json', insecureSsl: '0' }),
+		updateWebhookConfig: async (input) => {
+			configured = input.url
+			return { url: input.url, contentType: 'json', insecureSsl: '0' }
+		},
 		resolveOrganizationInstallation: async () => installation(41),
 		resolveRepositoryInstallation: async () => installation(42),
 		resolveOrganizationInstallationId: async () => 41,
@@ -46,10 +49,6 @@ const installation = (id: number, accountLogin = 'contember'): GitHubAppInstalla
 	repositorySelection: 'selected',
 })
 
-function bundle(appId = '123', privateKeyPem = PEM): string {
-	return serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({ githubAppId: appId, privateKeyPem }))
-}
-
 function bundleV2(connectionId: string, appId = '123', privateKeyPem = PEM): string {
 	return serializeZeropsSourceCredentialBundleV2(buildZeropsSourceCredentialBundleV2({
 		connectionId,
@@ -58,8 +57,12 @@ function bundleV2(connectionId: string, appId = '123', privateKeyPem = PEM): str
 	}))
 }
 
+async function slot(connectionId: string, appId = '123'): Promise<{ readonly name: string; readonly credentialBundle: string }> {
+	return { name: await zeropsSourceCredentialEnvV2(connectionId), credentialBundle: bundleV2(connectionId, appId) }
+}
+
 describe('source GitHub connection startup', () => {
-	test('starts anonymous without atomic or legacy credentials', async () => {
+	test('starts anonymous without any credential slot', async () => {
 		let creates = 0
 		const connection = await GitHubConnection.create({
 			createClient: async () => {
@@ -67,77 +70,42 @@ describe('source GitHub connection startup', () => {
 				return client()
 			},
 		})
-		expect(connection.snapshot()).toBeUndefined()
-		expect(await connection.status('connection-1', new AbortController().signal)).toEqual({
-			protocolVersion: 1,
-			connectionId: 'connection-1',
+		expect(connection.snapshotV2(CONNECTION_1)).toBeUndefined()
+		expect(connection.hasAnySnapshot()).toBe(false)
+		expect(await connection.statusV2(CONNECTION_1, new AbortController().signal)).toEqual({
+			protocolVersion: 2,
+			connectionId: CONNECTION_1,
 			state: 'anonymous',
 		})
 		expect(creates).toBe(0)
 	})
 
-	test('locally imports canonical and legacy credentials without an online identity call', async () => {
-		for (
-			const options of [
-				{ credentialBundle: bundle() },
-				{ legacyAppId: '123', legacyPrivateKeyPem: PEM },
-				{ credentialBundle: bundle(), legacyAppId: '123', legacyPrivateKeyPem: PEM },
-			]
-		) {
-			let identityCalls = 0
-			const connection = await GitHubConnection.create({
-				...options,
-				createClient: async () => ({
-					...client(),
-					getAuthenticatedApp: async () => {
-						identityCalls++
-						return identity()
-					},
-				}),
-			})
-			expect(connection.snapshot()?.appId).toBe('123')
-			expect(identityCalls).toBe(0)
-		}
-	})
-
-	test.each([
-		{ legacyAppId: '123' },
-		{ legacyPrivateKeyPem: PEM },
-		{ credentialBundle: bundle('123'), legacyAppId: '124', legacyPrivateKeyPem: PEM },
-	])('rejects partial or conflicting startup state without leaking credentials %#', async (options) => {
-		const raised = await GitHubConnection.create({ ...options, createClient: async () => client() }).then(
-			() => undefined,
-			(error: unknown) => error,
-		)
-		expect(raised).toBeInstanceOf(Error)
-		expect(raised instanceof Error ? raised.message : PEM).not.toContain(PEM)
-	})
-
-	test('loads keyed v2 slots without replacing or exposing the legacy default', async () => {
-		const first = bundleV2('connection-1', '124')
-		const second = bundleV2('connection-2', '125')
+	test('loads keyed v2 slots locally without an online identity call', async () => {
+		let identityCalls = 0
 		const connection = await GitHubConnection.create({
-			credentialBundle: bundle('123'),
-			credentialSlotsV2: [
-				{ name: await zeropsSourceCredentialEnvV2('connection-1'), credentialBundle: first },
-				{ name: await zeropsSourceCredentialEnvV2('connection-2'), credentialBundle: second },
-			],
-			createClient: async (input) => client(identity(Number(input.appId))),
+			credentialSlotsV2: [await slot(CONNECTION_1, '124'), await slot(CONNECTION_2, '125')],
+			createClient: async (input) => ({
+				...client(identity(Number(input.appId))),
+				getAuthenticatedApp: async () => {
+					identityCalls++
+					return identity(Number(input.appId))
+				},
+			}),
 		})
-		expect(connection.snapshot()?.appId).toBe('123')
-		expect(connection.snapshotV2('connection-1')?.appId).toBe('124')
-		expect(connection.snapshotV2('connection-2')?.appId).toBe('125')
+		expect(connection.snapshotV2(CONNECTION_1)?.appId).toBe('124')
+		expect(connection.snapshotV2(CONNECTION_2)?.appId).toBe('125')
 		expect(connection.snapshotV2('missing')).toBeUndefined()
+		expect(identityCalls).toBe(0)
 	})
 
 	test('rejects mismatched and duplicate v2 slots without leaking their bundle', async () => {
-		const secret = bundleV2('connection-1')
+		const secret = bundleV2(CONNECTION_1)
 		for (
 			const slots of [
-				[{ name: await zeropsSourceCredentialEnvV2('connection-2'), credentialBundle: secret }],
+				[{ name: await zeropsSourceCredentialEnvV2(CONNECTION_2), credentialBundle: secret }],
 				[
-					{ name: await zeropsSourceCredentialEnvV2('connection-1'), credentialBundle: secret },
-					{ name: await zeropsSourceCredentialEnvV2('connection-1'), credentialBundle: secret },
+					{ name: await zeropsSourceCredentialEnvV2(CONNECTION_1), credentialBundle: secret },
+					{ name: await zeropsSourceCredentialEnvV2(CONNECTION_1), credentialBundle: secret },
 				],
 			]
 		) {
@@ -153,11 +121,10 @@ describe('source GitHub connection startup', () => {
 })
 
 describe('source GitHub connection activation', () => {
-	test('activates independent v2 connections atomically while leaving the v1 default untouched', async () => {
+	test('activates independent v2 connections atomically', async () => {
 		const release = Promise.withResolvers<void>()
 		let verifications = 0
 		const connection = await GitHubConnection.create({
-			credentialBundle: bundle(),
 			createClient: async (input) => ({
 				...client(identity(Number(input.appId))),
 				getAuthenticatedApp: async () => {
@@ -167,41 +134,41 @@ describe('source GitHub connection activation', () => {
 				},
 			}),
 		})
-		const first = bundleV2('connection-1', '124')
-		const second = bundleV2('connection-2', '125')
+		const first = bundleV2(CONNECTION_1, '124')
+		const second = bundleV2(CONNECTION_2, '125')
 		const activations = [
-			connection.activateV2('connection-1', first, await sha256ZeropsSourceCredentialBundleV2(first), new AbortController().signal),
-			connection.activateV2('connection-2', second, await sha256ZeropsSourceCredentialBundleV2(second), new AbortController().signal),
+			connection.activateV2(CONNECTION_1, first, await sha256ZeropsSourceCredentialBundleV2(first), new AbortController().signal),
+			connection.activateV2(CONNECTION_2, second, await sha256ZeropsSourceCredentialBundleV2(second), new AbortController().signal),
 		]
 		while (verifications < 2) await Bun.sleep(1)
 		release.resolve()
 		await expect(Promise.all(activations)).resolves.toHaveLength(2)
-		expect(connection.snapshot()?.appId).toBe('123')
-		expect(connection.snapshotV2('connection-1')?.appId).toBe('124')
-		expect(connection.snapshotV2('connection-2')?.appId).toBe('125')
+		expect(connection.snapshotV2(CONNECTION_1)?.appId).toBe('124')
+		expect(connection.snapshotV2(CONNECTION_2)?.appId).toBe('125')
 	})
 
 	test('binds v2 activation and status to the exact connection id and redacts credentials', async () => {
 		const connection = await GitHubConnection.create({ createClient: async () => client() })
-		const value = bundleV2('connection-1')
+		const value = bundleV2(CONNECTION_1)
 		const digest = await sha256ZeropsSourceCredentialBundleV2(value)
 		await expect(
-			connection.activateV2('connection-2', value, digest, new AbortController().signal),
+			connection.activateV2(CONNECTION_2, value, digest, new AbortController().signal),
 		).rejects.toMatchObject({ code: 'credentials_invalid', status: 400 })
-		const activated = await connection.activateV2('connection-1', value, digest, new AbortController().signal)
+		const activated = await connection.activateV2(CONNECTION_1, value, digest, new AbortController().signal)
 		expect(JSON.stringify(activated)).not.toContain('PRIVATE KEY')
-		expect(await connection.statusV2('connection-1', new AbortController().signal)).toMatchObject({
+		expect(await connection.statusV2(CONNECTION_1, new AbortController().signal)).toMatchObject({
 			protocolVersion: 2,
 			state: 'active',
-			connectionId: 'connection-1',
+			connectionId: CONNECTION_1,
 			credentialSha256: digest,
 		})
-		expect(await connection.statusV2('connection-2', new AbortController().signal)).toEqual({
+		expect(await connection.statusV2(CONNECTION_2, new AbortController().signal)).toEqual({
 			protocolVersion: 2,
-			connectionId: 'connection-2',
+			connectionId: CONNECTION_2,
 			state: 'anonymous',
 		})
 	})
+
 	test('imports and verifies before one atomic swap, then returns only bound identity and digest', async () => {
 		const calls: string[] = []
 		const connection = await GitHubConnection.create({
@@ -216,14 +183,14 @@ describe('source GitHub connection activation', () => {
 				}
 			},
 		})
-		const value = bundle()
-		const digest = await sha256ZeropsSourceCredentialBundle(value)
-		const response = await connection.activate('connection-1', value, digest, new AbortController().signal)
+		const value = bundleV2(CONNECTION_1)
+		const digest = await sha256ZeropsSourceCredentialBundleV2(value)
+		const response = await connection.activateV2(CONNECTION_1, value, digest, new AbortController().signal)
 		expect(calls).toEqual(['create:123', 'verify'])
 		expect(response).toEqual({
-			protocolVersion: 1,
-			connectionId: 'connection-1',
-			credentialVersion: 1,
+			protocolVersion: 2,
+			connectionId: CONNECTION_1,
+			credentialVersion: 2,
 			credentialSha256: digest,
 			githubApp: {
 				id: 123,
@@ -236,37 +203,37 @@ describe('source GitHub connection activation', () => {
 			},
 		})
 		expect(JSON.stringify(response)).not.toContain('PRIVATE KEY')
-		expect(connection.snapshot()?.credentialSha256).toBe(digest)
+		expect(connection.snapshotV2(CONNECTION_1)?.credentialSha256).toBe(digest)
 	})
 
 	test('is idempotent for one digest and rejects replacement with another digest', async () => {
 		const connection = await GitHubConnection.create({ createClient: async () => client() })
-		const first = bundle()
-		const firstDigest = await sha256ZeropsSourceCredentialBundle(first)
-		await connection.activate('connection-1', first, firstDigest, new AbortController().signal)
-		await expect(connection.activate('connection-1', first, firstDigest, new AbortController().signal)).resolves.toMatchObject({
+		const first = bundleV2(CONNECTION_1)
+		const firstDigest = await sha256ZeropsSourceCredentialBundleV2(first)
+		await connection.activateV2(CONNECTION_1, first, firstDigest, new AbortController().signal)
+		await expect(connection.activateV2(CONNECTION_1, first, firstDigest, new AbortController().signal)).resolves.toMatchObject({
 			credentialSha256: firstDigest,
 		})
-		const second = bundle('124')
-		const secondDigest = await sha256ZeropsSourceCredentialBundle(second)
-		await expect(connection.activate('connection-1', second, secondDigest, new AbortController().signal)).rejects.toMatchObject({
+		const second = bundleV2(CONNECTION_1, '124')
+		const secondDigest = await sha256ZeropsSourceCredentialBundleV2(second)
+		await expect(connection.activateV2(CONNECTION_1, second, secondDigest, new AbortController().signal)).rejects.toMatchObject({
 			code: 'credentials_conflict',
 			status: 409,
 		})
-		expect(connection.snapshot()?.credentialSha256).toBe(firstDigest)
+		expect(connection.snapshotV2(CONNECTION_1)?.credentialSha256).toBe(firstDigest)
 	})
 
-	test('rejects a wrong digest or identity without changing the active snapshot', async () => {
+	test('rejects a wrong digest or identity without adding a snapshot', async () => {
 		const connection = await GitHubConnection.create({ createClient: async () => client(identity(999)) })
-		const value = bundle()
-		await expect(connection.activate('connection-1', value, 'a'.repeat(64), new AbortController().signal)).rejects.toMatchObject({
+		const value = bundleV2(CONNECTION_1)
+		await expect(connection.activateV2(CONNECTION_1, value, 'a'.repeat(64), new AbortController().signal)).rejects.toMatchObject({
 			code: 'credentials_invalid',
 		})
-		expect(connection.snapshot()).toBeUndefined()
+		expect(connection.snapshotV2(CONNECTION_1)).toBeUndefined()
 		await expect(
-			connection.activate('connection-1', value, await sha256ZeropsSourceCredentialBundle(value), new AbortController().signal),
+			connection.activateV2(CONNECTION_1, value, await sha256ZeropsSourceCredentialBundleV2(value), new AbortController().signal),
 		).rejects.toMatchObject({ code: 'credentials_invalid' })
-		expect(connection.snapshot()).toBeUndefined()
+		expect(connection.snapshotV2(CONNECTION_1)).toBeUndefined()
 	})
 
 	test('preserves caller cancellation and does not swap an in-flight candidate', async () => {
@@ -285,16 +252,16 @@ describe('source GitHub connection activation', () => {
 				},
 			}),
 		})
-		const value = bundle()
+		const value = bundleV2(CONNECTION_1)
 		const controller = new AbortController()
-		const activation = connection.activate('connection-1', value, await sha256ZeropsSourceCredentialBundle(value), controller.signal)
+		const activation = connection.activateV2(CONNECTION_1, value, await sha256ZeropsSourceCredentialBundleV2(value), controller.signal)
 		await started.promise
 		controller.abort()
 		await expect(activation).rejects.toMatchObject({ code: 'cancelled', stage: 'credentials' })
-		expect(connection.snapshot()).toBeUndefined()
+		expect(connection.snapshotV2(CONNECTION_1)).toBeUndefined()
 	})
 
-	test('lets only one of two different concurrent activations win', async () => {
+	test('lets only one of two different concurrent activations of one connection win', async () => {
 		const release = Promise.withResolvers<void>()
 		let verifications = 0
 		const connection = await GitHubConnection.create({
@@ -307,10 +274,20 @@ describe('source GitHub connection activation', () => {
 				},
 			}),
 		})
-		const first = bundle('123')
-		const second = bundle('124')
-		const firstActivation = connection.activate('connection-1', first, await sha256ZeropsSourceCredentialBundle(first), new AbortController().signal)
-		const secondActivation = connection.activate('connection-2', second, await sha256ZeropsSourceCredentialBundle(second), new AbortController().signal)
+		const first = bundleV2(CONNECTION_1, '123')
+		const second = bundleV2(CONNECTION_1, '124')
+		const firstActivation = connection.activateV2(
+			CONNECTION_1,
+			first,
+			await sha256ZeropsSourceCredentialBundleV2(first),
+			new AbortController().signal,
+		)
+		const secondActivation = connection.activateV2(
+			CONNECTION_1,
+			second,
+			await sha256ZeropsSourceCredentialBundleV2(second),
+			new AbortController().signal,
+		)
 		while (verifications < 2) await Bun.sleep(1)
 		release.resolve()
 		const results = await Promise.allSettled([firstActivation, secondActivation])
@@ -318,10 +295,10 @@ describe('source GitHub connection activation', () => {
 		expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
 	})
 
-	test('lazily verifies a boot client and caches only its redacted identity', async () => {
+	test('lazily verifies a boot slot and caches only its redacted identity', async () => {
 		let calls = 0
 		const connection = await GitHubConnection.create({
-			credentialBundle: bundle(),
+			credentialSlotsV2: [await slot(CONNECTION_1)],
 			createClient: async () => ({
 				...client(),
 				getAuthenticatedApp: async () => {
@@ -330,19 +307,19 @@ describe('source GitHub connection activation', () => {
 				},
 			}),
 		})
-		const first = await connection.status('connection-1', new AbortController().signal)
-		const second = await connection.status('connection-1', new AbortController().signal)
+		const first = await connection.statusV2(CONNECTION_1, new AbortController().signal)
+		const second = await connection.statusV2(CONNECTION_1, new AbortController().signal)
 		expect(first.state).toBe('active')
 		expect(second.state).toBe('active')
 		expect(calls).toBe(1)
 		expect(JSON.stringify([first, second])).not.toContain('PRIVATE KEY')
 	})
 
-	test('binds only one connection id when concurrent status calls verify one boot snapshot', async () => {
+	test('publishes one identity when concurrent status calls verify the same boot slot', async () => {
 		const release = Promise.withResolvers<void>()
 		let calls = 0
 		const connection = await GitHubConnection.create({
-			credentialBundle: bundle(),
+			credentialSlotsV2: [await slot(CONNECTION_1)],
 			createClient: async () => ({
 				...client(),
 				getAuthenticatedApp: async () => {
@@ -352,37 +329,38 @@ describe('source GitHub connection activation', () => {
 				},
 			}),
 		})
-		const first = connection.status('connection-1', new AbortController().signal)
-		const second = connection.status('connection-2', new AbortController().signal)
+		const first = connection.statusV2(CONNECTION_1, new AbortController().signal)
+		const second = connection.statusV2(CONNECTION_1, new AbortController().signal)
 		while (calls < 2) await Bun.sleep(1)
 		release.resolve()
-		const results = await Promise.allSettled([first, second])
-		expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
-		expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
-		expect(results.find((result) => result.status === 'rejected')).toMatchObject({
-			status: 'rejected',
-			reason: { code: 'credentials_conflict' },
-		})
+		const results = await Promise.all([first, second])
+		expect(results.map((result) => result.state)).toEqual(['active', 'active'])
+		expect(connection.snapshotV2(CONNECTION_1)?.appId).toBe('123')
 	})
 
-	test('configures a structurally verified webhook and verifies installations on the bound active snapshot', async () => {
+	test('configures a structurally verified webhook and verifies installations on the bound slot', async () => {
 		const secrets: string[] = []
 		const connection = await GitHubConnection.create({
-			createClient: async () => ({
-				...client(),
-				updateWebhookConfig: async (input) => {
-					secrets.push(input.secret)
-					return { url: input.url, contentType: 'json', insecureSsl: '0' }
-				},
-			}),
+			createClient: async () => {
+				let configured = 'https://control.example.test/webhooks/github'
+				return {
+					...client(),
+					getWebhookConfig: async () => ({ url: configured, contentType: 'json', insecureSsl: '0' }),
+					updateWebhookConfig: async (input) => {
+						secrets.push(input.secret)
+						configured = input.url
+						return { url: input.url, contentType: 'json', insecureSsl: '0' }
+					},
+				}
+			},
 		})
-		const value = bundle()
-		const digest = await sha256ZeropsSourceCredentialBundle(value)
-		await connection.activate('connection-1', value, digest, new AbortController().signal)
+		const value = bundleV2(CONNECTION_1)
+		const digest = await sha256ZeropsSourceCredentialBundleV2(value)
+		await connection.activateV2(CONNECTION_1, value, digest, new AbortController().signal)
 		const webhook = await connection.configureWebhook(
-			'connection-1',
+			CONNECTION_1,
 			digest,
-			'https://control.example.test/webhooks/github',
+			'https://control.example.test/webhooks/github/connection-1',
 			'must-not-leak',
 			new AbortController().signal,
 		)
@@ -390,7 +368,7 @@ describe('source GitHub connection activation', () => {
 		expect(secrets).toEqual(['must-not-leak'])
 		expect(
 			await connection.verifyInstallations(
-				'connection-1',
+				CONNECTION_1,
 				digest,
 				{ kind: 'repositories', repositories: [{ owner: 'contember', name: 'fabrika-platform' }] },
 				new AbortController().signal,
@@ -401,104 +379,86 @@ describe('source GitHub connection activation', () => {
 	})
 
 	test('rebinds a restarted container so verification and webhook configuration survive a redeploy', async () => {
-		// A container that booted from `GITHUB_APP_CREDENTIALS` has the key and NOTHING else: no
-		// connection id, no App identity. It must still serve, because the service runs more than one
-		// container and every platform deploy replaces them — the console's `status` call can bind one
-		// while the operator's next click lands on another.
-		const value = bundle()
-		const digest = await sha256ZeropsSourceCredentialBundle(value)
+		// A slot restored from the environment carries the key and NOTHING else — no App identity. It
+		// must still serve, because the service runs more than one container and every platform deploy
+		// replaces them: the console's `statusV2` can bind one while the operator's next click lands on
+		// another.
+		const value = bundleV2(CONNECTION_1)
+		const digest = await sha256ZeropsSourceCredentialBundleV2(value)
 		const secrets: string[] = []
 		const restarted = await GitHubConnection.create({
-			credentialBundle: value,
-			createClient: async () => ({
-				...client(),
-				updateWebhookConfig: async (input) => {
-					secrets.push(input.secret)
-					return { url: input.url, contentType: 'json', insecureSsl: '0' }
-				},
-			}),
-		})
-		expect(
-			await restarted.verifyInstallations(
-				'connection-1',
-				digest,
-				{ kind: 'organization', organization: 'contember' },
-				new AbortController().signal,
-			),
-		).toMatchObject({ installation: { status: 'installed', accountLogin: 'contember' } })
-		expect(
-			await restarted.configureWebhook(
-				'connection-1',
-				digest,
-				'https://control.example.test/webhooks/github',
-				'must-not-leak',
-				new AbortController().signal,
-			),
-		).toBeDefined()
-		expect(secrets).toEqual(['must-not-leak'])
-		// The binding is to ONE connection: a second id may not borrow the credential it did not activate.
-		await expect(
-			restarted.verifyInstallations('connection-2', digest, { kind: 'organization', organization: 'contember' }, new AbortController().signal),
-		).rejects.toMatchObject({ code: 'credentials_conflict' })
-	})
-
-	test('binds a keyed slot restored from the environment instead of falling back to the legacy App', async () => {
-		// The live shape: a container boots holding BOTH a legacy `GITHUB_APP_CREDENTIALS` from an older
-		// connection and the keyed slot of the new one. A slot restored from the environment carries no
-		// App identity, and the legacy slot answers for a DIFFERENT App — so a keyed operation that falls
-		// back to it can only refuse. Every deploy replaces the container, so this is the normal state,
-		// not an edge case: without this the whole multi-connection setup works exactly once.
-		const legacy = bundle('123', PEM)
-		const keyed = bundleV2('01a01e55-9ee5-7035-862b-80b1548b6597', '456', PEM)
-		const keyedDigest = await sha256ZeropsSourceCredentialBundleV2(keyed)
-		const secrets: string[] = []
-		const restarted = await GitHubConnection.create({
-			credentialBundle: legacy,
-			credentialSlotsV2: [{ name: await zeropsSourceCredentialEnvV2('01a01e55-9ee5-7035-862b-80b1548b6597'), credentialBundle: keyed }],
-			createClient: async (input) => {
+			credentialSlotsV2: [{ name: await zeropsSourceCredentialEnvV2(CONNECTION_1), credentialBundle: value }],
+			createClient: async () => {
 				let configured = 'https://control.example.test/webhooks/github'
 				return {
-					...client(identity(Number(input.appId))),
+					...client(),
 					getWebhookConfig: async () => ({ url: configured, contentType: 'json', insecureSsl: '0' }),
-					updateWebhookConfig: async (update) => {
-						secrets.push(update.secret)
-						configured = update.url
-						return { url: update.url, contentType: 'json', insecureSsl: '0' }
+					updateWebhookConfig: async (input) => {
+						secrets.push(input.secret)
+						configured = input.url
+						return { url: input.url, contentType: 'json', insecureSsl: '0' }
 					},
 				}
 			},
 		})
 		expect(
-			await restarted.configureWebhook(
-				'01a01e55-9ee5-7035-862b-80b1548b6597',
-				keyedDigest,
-				'https://control.example.test/webhooks/github/01a01e55-9ee5-7035-862b-80b1548b6597',
-				'must-not-leak',
-				new AbortController().signal,
-			),
-		).toMatchObject({ connectionId: '01a01e55-9ee5-7035-862b-80b1548b6597', credentialSha256: keyedDigest })
-		expect(secrets).toEqual(['must-not-leak'])
-		// It bound the KEYED App (456), never the legacy one (123) sharing the container.
-		expect(
 			await restarted.verifyInstallations(
-				'01a01e55-9ee5-7035-862b-80b1548b6597',
-				keyedDigest,
+				CONNECTION_1,
+				digest,
 				{ kind: 'organization', organization: 'contember' },
 				new AbortController().signal,
 			),
 		).toMatchObject({ installation: { status: 'installed', accountLogin: 'contember' } })
-		expect(await restarted.statusV2('01a01e55-9ee5-7035-862b-80b1548b6597', new AbortController().signal))
-			.toMatchObject({ githubApp: { id: 456 } })
-		// A keyed slot still refuses a digest that is not its own, rather than borrowing the legacy one.
+		expect(
+			await restarted.configureWebhook(
+				CONNECTION_1,
+				digest,
+				'https://control.example.test/webhooks/github/connection-1',
+				'must-not-leak',
+				new AbortController().signal,
+			),
+		).toBeDefined()
+		expect(secrets).toEqual(['must-not-leak'])
+		// The binding is to ONE connection: a second id may not borrow a credential it does not own.
+		await expect(
+			restarted.verifyInstallations(CONNECTION_2, digest, { kind: 'organization', organization: 'contember' }, new AbortController().signal),
+		).rejects.toMatchObject({ code: 'credentials_conflict' })
+		// Nor may the right connection act through a digest that is not its slot's.
 		await expect(
 			restarted.configureWebhook(
-				'01a01e55-9ee5-7035-862b-80b1548b6597',
-				await sha256ZeropsSourceCredentialBundle(legacy),
-				'https://control.example.test/webhooks/github',
+				CONNECTION_1,
+				'f'.repeat(64),
+				'https://control.example.test/webhooks/github/connection-1',
 				'must-not-leak',
 				new AbortController().signal,
 			),
 		).rejects.toMatchObject({ code: 'credentials_conflict' })
+	})
+
+	test('selects the exact keyed App when several slots share the container', async () => {
+		// The normal live shape: one container holds every connected organization's slot. A keyed
+		// operation must answer through its OWN App, never a neighbouring one.
+		const keyed = bundleV2(CONNECTION_2, '456')
+		const keyedDigest = await sha256ZeropsSourceCredentialBundleV2(keyed)
+		const restarted = await GitHubConnection.create({
+			credentialSlotsV2: [
+				await slot(CONNECTION_1, '123'),
+				{ name: await zeropsSourceCredentialEnvV2(CONNECTION_2), credentialBundle: keyed },
+			],
+			createClient: async (input) => client(identity(Number(input.appId))),
+		})
+		expect(await restarted.statusV2(CONNECTION_2, new AbortController().signal)).toMatchObject({ githubApp: { id: 456 } })
+		expect(await restarted.statusV2(CONNECTION_1, new AbortController().signal)).toMatchObject({ githubApp: { id: 123 } })
+		await expect(
+			restarted.configureWebhook(
+				CONNECTION_2,
+				await sha256ZeropsSourceCredentialBundleV2(bundleV2(CONNECTION_1, '123')),
+				'https://control.example.test/webhooks/github/connection-2',
+				'must-not-leak',
+				new AbortController().signal,
+			),
+		).rejects.toMatchObject({ code: 'credentials_conflict' })
+		expect(await restarted.statusV2(CONNECTION_2, new AbortController().signal)).toMatchObject({ credentialSha256: keyedDigest })
 	})
 
 	test('rejects repository grants that resolve to different installations or accounts', async () => {
@@ -509,11 +469,11 @@ describe('source GitHub connection activation', () => {
 				resolveRepositoryInstallation: async () => call++ === 0 ? installation(42) : installation(43, 'attacker'),
 			}),
 		})
-		const value = bundle()
-		const digest = await sha256ZeropsSourceCredentialBundle(value)
-		await connection.activate('connection-1', value, digest, new AbortController().signal)
+		const value = bundleV2(CONNECTION_1)
+		const digest = await sha256ZeropsSourceCredentialBundleV2(value)
+		await connection.activateV2(CONNECTION_1, value, digest, new AbortController().signal)
 		await expect(connection.verifyInstallations(
-			'connection-1',
+			CONNECTION_1,
 			digest,
 			{
 				kind: 'repositories',
@@ -535,7 +495,7 @@ describe('source GitHub connection activation', () => {
 			}),
 		})
 		await expect(connection.verifyInstallations(
-			'connection-1',
+			CONNECTION_1,
 			'a'.repeat(64),
 			{ kind: 'organization', organization: 'contember' },
 			new AbortController().signal,
@@ -543,7 +503,7 @@ describe('source GitHub connection activation', () => {
 		expect(calls).toBe(0)
 	})
 
-	test('preserves cancellation during webhook mutation without replacing the active snapshot', async () => {
+	test('preserves cancellation during webhook mutation without replacing the bound slot', async () => {
 		const started = Promise.withResolvers<void>()
 		const connection = await GitHubConnection.create({
 			createClient: async () => ({
@@ -554,21 +514,21 @@ describe('source GitHub connection activation', () => {
 				},
 			}),
 		})
-		const value = bundle()
-		const digest = await sha256ZeropsSourceCredentialBundle(value)
-		await connection.activate('connection-1', value, digest, new AbortController().signal)
-		const before = connection.snapshot()
+		const value = bundleV2(CONNECTION_1)
+		const digest = await sha256ZeropsSourceCredentialBundleV2(value)
+		await connection.activateV2(CONNECTION_1, value, digest, new AbortController().signal)
+		const before = connection.snapshotV2(CONNECTION_1)
 		const controller = new AbortController()
 		const operation = connection.configureWebhook(
-			'connection-1',
+			CONNECTION_1,
 			digest,
-			'https://control.example.test/webhooks/github',
+			'https://control.example.test/webhooks/github/connection-1',
 			'must-not-leak',
 			controller.signal,
 		)
 		await started.promise
 		controller.abort('private reason')
 		await expect(operation).rejects.toMatchObject({ code: 'cancelled', stage: 'credentials' })
-		expect(connection.snapshot()).toBe(before)
+		expect(connection.snapshotV2(CONNECTION_1)).toBe(before)
 	})
 })

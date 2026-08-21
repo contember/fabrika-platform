@@ -94,7 +94,6 @@ describe('Delivery RPC client', () => {
 			visibility: 'private',
 			repositories: [{ owner: 'acme', name: 'api' }],
 		})
-		await client.sourceConnection.adoptExisting()
 		await client.sourceConnection.verifyInstallation({ connectionId: 'connection-1' })
 		await client.sourceConnection.repair({ connectionId: 'connection-1' })
 		await client.sourceConnection.reconcile({ connectionId: 'connection-1' })
@@ -110,7 +109,6 @@ describe('Delivery RPC client', () => {
 					repositories: [{ owner: 'acme', name: 'api' }],
 				},
 			},
-			{ method: 'sourceConnection.adoptExisting', input: null },
 			{ method: 'sourceConnection.verifyInstallation', input: { connectionId: 'connection-1' } },
 			{ method: 'sourceConnection.repair', input: { connectionId: 'connection-1' } },
 			{ method: 'sourceConnection.reconcile', input: { connectionId: 'connection-1' } },

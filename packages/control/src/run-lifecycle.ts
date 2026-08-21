@@ -28,6 +28,7 @@ import {
 	parseProviderJson,
 	type RunRow,
 } from './db'
+import type { GitHubSourceTransportKind } from './github-connection-store'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
 import { projectedReturnOrigins } from './return-origins'
 import type { SecretResolver } from './secret-resolver'
@@ -56,12 +57,10 @@ export interface RunDeps {
 	iamIssuer?: string
 }
 
-type SourceTransportKind = 'legacy-v1' | 'keyed-v2'
-
 interface SourceBinding {
 	readonly connectionId: string
 	readonly installationId: number
-	readonly transportKind: SourceTransportKind
+	readonly transportKind: GitHubSourceTransportKind
 }
 
 interface SourceBindingResolutionInput extends ProviderSourceResolutionInput {

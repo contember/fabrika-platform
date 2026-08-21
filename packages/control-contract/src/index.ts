@@ -55,10 +55,6 @@ export interface GitHubSourceConnectionUnavailableDto extends GitHubSourceConnec
 	readonly state: 'unavailable'
 }
 
-export interface GitHubSourceConnectionAdoptionRequiredDto extends GitHubSourceConnectionBaseDto {
-	readonly state: 'adoption-required'
-}
-
 export interface GitHubSourceConnectionSetupPendingDto extends GitHubSourceConnectionBaseDto {
 	readonly state: 'setup-pending'
 	readonly connectionId: string
@@ -136,7 +132,6 @@ export interface GitHubSourceConnectionRepairRequiredDto extends GitHubSourceCon
 export type GitHubSourceConnectionStatusDto =
 	| GitHubSourceConnectionAnonymousDto
 	| GitHubSourceConnectionUnavailableDto
-	| GitHubSourceConnectionAdoptionRequiredDto
 	| GitHubSourceConnectionSetupPendingDto
 	| GitHubSourceConnectionInstallationRequiredDto
 	| GitHubSourceConnectionConnectedDto

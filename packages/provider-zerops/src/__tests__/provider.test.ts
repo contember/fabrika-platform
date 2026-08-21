@@ -157,7 +157,6 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 const makeCollaborators = (recorded: Recorded, overrides: Overrides = {}): ZeropsCollaborators => ({
 	api: makeApi(recorded, overrides),
 	source: {
-		resolveInstallationId: async () => null,
 		resolve: async (input) => ({
 			runId: input.runId,
 			commitSha: input.expectedCommitSha ?? input.requestedRef,
@@ -283,12 +282,8 @@ beforeEach(() => {
 })
 
 describe('Zerops provider', () => {
-	test('routes uploads only from the explicit immutable transport kind', async () => {
-		let binding: ZeropsSourceTransportBinding = {
-			connectionId: 'legacy-connection',
-			installationId: 42,
-			transportKind: 'legacy-v1',
-		}
+	test('routes an upload through v2 only when a keyed binding names the connection', async () => {
+		let binding: ZeropsSourceTransportBinding | undefined
 		const routing: ZeropsSourceTransportRouting = {
 			bindingForRun: () => binding,
 			uploadV2: async (input) => {
@@ -304,6 +299,13 @@ describe('Zerops provider', () => {
 			},
 		}
 		const provider = createZeropsProvider(() => makeCollaborators(recorded), routing)
+		const publicTarget = target({
+			source: {
+				runId: 'run-1',
+				repository: { owner: 'acme', name: 'demo' },
+				commitSha: '0123456789abcdef0123456789abcdef01234567',
+			},
+		})
 		const privateTarget = target({
 			source: {
 				runId: 'run-1',
@@ -313,7 +315,8 @@ describe('Zerops provider', () => {
 			},
 		})
 
-		await execute(runtimeRun(recorded, provider, privateTarget), provider)
+		// No binding is the anonymous public-repository path, and it is the only remaining v1 upload.
+		await execute(runtimeRun(recorded, provider, publicTarget), provider)
 		expect(recorded.uploads).toHaveLength(1)
 		expect(recorded.v2Uploads).toHaveLength(0)
 

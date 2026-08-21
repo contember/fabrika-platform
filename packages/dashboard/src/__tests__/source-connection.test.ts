@@ -130,7 +130,7 @@ describe('source connection presentation', () => {
 				connectionId: 'connection-1',
 				phase,
 			})
-			const terminal: GitHubSourceConnectionStatusDto = { provider: 'zerops', kind: 'github-app', state: 'adoption-required' }
+			const terminal: GitHubSourceConnectionStatusDto = { provider: 'zerops', kind: 'github-app', state: 'anonymous' }
 			const responses: readonly GitHubSourceConnectionStatusDto[] = [
 				pending('starting'),
 				pending('awaiting-manifest-callback'),
@@ -194,11 +194,5 @@ describe('source connection presentation', () => {
 		])
 		const unavailable: GitHubSourceConnectionStatusDto = { provider: 'legacy', kind: 'github-app', state: 'unavailable' }
 		expect(sourceChain(unavailable).every((node) => node.lamp === 'idle')).toBe(true)
-		const adoption: GitHubSourceConnectionStatusDto = { provider: 'zerops', kind: 'github-app', state: 'adoption-required' }
-		expect(sourceChain(adoption).map((node) => [node.lamp, node.detail])).toEqual([
-			['ok', 'existing credentials'],
-			['ok', 'credentials present'],
-			['run', 'adoption required'],
-		])
 	})
 })

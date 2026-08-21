@@ -25,6 +25,7 @@ import {
 	type SourceConnectionZeropsApi,
 	type ZeropsSourceClient,
 	type ZeropsSourceCredentialManager,
+	type ZeropsSourceCredentialManagerV2,
 } from '@fabrika/provider-zerops'
 import type { Env } from '../env'
 import { repositories } from '../services'
@@ -67,7 +68,7 @@ export function zeropsSourceClient(source: Record<string, string | undefined>): 
 /** Compose the privileged installation connection seam without exposing it to provider-neutral core. */
 export function zeropsSourceConnectionAdmin(
 	source: Record<string, string | undefined>,
-	sourceClient: ZeropsSourceCredentialManager = zeropsSourceClient(source),
+	sourceClient: ZeropsSourceCredentialManager & ZeropsSourceCredentialManagerV2 = zeropsSourceClient(source),
 	api: SourceConnectionZeropsApi = createZeropsApi({
 		token: required(source, 'FABRIKA_ZEROPS_ACCESS_TOKEN'),
 		...((): { baseUrl?: string } => {
@@ -80,10 +81,7 @@ export function zeropsSourceConnectionAdmin(
 	if (projectId === undefined || projectId === '') {
 		return {
 			inspect: () => Promise.resolve({ state: 'unavailable' }),
-			adoptExisting: () => Promise.reject(new SourceConnectionAdminError('invalid_configuration')),
-			activate: () => Promise.reject(new SourceConnectionAdminError('invalid_configuration')),
 			activateV2: () => Promise.reject(new SourceConnectionAdminError('invalid_configuration')),
-			status: () => Promise.resolve({ state: 'unavailable' }),
 			statusV2: () => Promise.resolve({ state: 'unavailable' }),
 			configureWebhook: () => Promise.reject(new SourceConnectionAdminError('invalid_configuration')),
 			verifyInstallations: () => Promise.reject(new SourceConnectionAdminError('invalid_configuration')),

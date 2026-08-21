@@ -1,5 +1,10 @@
 import type { EnvironmentConfig, SidecarScaffoldInput, SidecarScaffoldResult } from '@fabrika/installation-init'
-import { serializeZeropsSourceCredentialBundle, type ZeropsApi } from '@fabrika/provider-zerops'
+import {
+	buildZeropsSourceCredentialBundleV2,
+	serializeZeropsSourceCredentialBundleV2,
+	type ZeropsApi,
+	zeropsSourceCredentialEnvV2,
+} from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { rm } from 'node:fs/promises'
 import {
@@ -20,7 +25,9 @@ const APP_PEM = `-----BEGIN PRIVATE KEY-----
 MAMCAQE=
 -----END PRIVATE KEY-----
 `
-const APP_BUNDLE = serializeZeropsSourceCredentialBundle({ version: 1, githubAppId: '123', privateKeyPem: APP_PEM })
+const APP_BUNDLE = serializeZeropsSourceCredentialBundleV2(
+	buildZeropsSourceCredentialBundleV2({ connectionId: 'connection-1', githubAppId: '123', privateKeyPem: APP_PEM }),
+)
 
 interface Recorder {
 	readonly collaborators: InitCollaborators
@@ -207,42 +214,42 @@ describe('fabrika platform init --provider=zerops', () => {
 		await cleanCheckout(mismatch)
 	})
 
-	test('reports complete legacy or durable source credentials as Control adoption only', async () => {
+	test('reports a connected keyed slot as another Control connection, never as a credential to adopt', async () => {
+		const recorded = recorder({
+			answers: ANSWERS,
+			sourceEnvironment: { [await zeropsSourceCredentialEnvV2('connection-1')]: APP_BUNDLE },
+		})
+		await runInit({ installation: 'test' }, recorded.collaborators)
+		const transcript = recorded.lines.join('\n')
+		expect(transcript).toContain('connect another GitHub source in Control')
+		expect(transcript).not.toContain(APP_PEM)
+		expect(transcript).not.toContain(APP_BUNDLE)
+		await cleanCheckout(recorded)
+	})
+
+	test('ignores a leftover unkeyed or split GitHub App value instead of offering to adopt it', async () => {
 		const states: ReadonlyArray<Readonly<Record<string, string>>> = [
 			{ GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: APP_PEM },
 			{ GITHUB_APP_CREDENTIALS: APP_BUNDLE },
-			{ GITHUB_APP_CREDENTIALS: APP_BUNDLE, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: APP_PEM },
+			{ GITHUB_APP_CREDENTIALS: 'not-json' },
 		]
 		for (const sourceEnvironment of states) {
 			const recorded = recorder({ answers: ANSWERS, sourceEnvironment })
 			await runInit({ installation: 'test' }, recorded.collaborators)
 			const transcript = recorded.lines.join('\n')
-			expect(transcript).toContain('adopt the existing GitHub App in Control')
+			expect(transcript).toContain('connect GitHub source in Control')
+			expect(transcript).not.toContain('another GitHub source')
 			expect(transcript).not.toContain(APP_PEM)
 			expect(transcript).not.toContain(APP_BUNDLE)
 			await cleanCheckout(recorded)
 		}
 	})
 
-	test('fails closed on partial, invalid, or mismatched credential state before touching GitHub', async () => {
-		const otherBundle = serializeZeropsSourceCredentialBundle({ version: 1, githubAppId: '124', privateKeyPem: APP_PEM })
-		const states: ReadonlyArray<Readonly<Record<string, string>>> = [
-			{ GITHUB_APP_ID: '123' },
-			{ GITHUB_APP_PRIVATE_KEY: APP_PEM },
-			{ GITHUB_APP_CREDENTIALS: 'not-json' },
-			{ GITHUB_APP_CREDENTIALS: otherBundle, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY: APP_PEM },
-		]
-		for (const sourceEnvironment of states) {
-			const recorded = recorder({ answers: ANSWERS, sourceEnvironment })
-			await expect(runInit({ installation: 'test' }, recorded.collaborators)).rejects.toThrow('partial, invalid, or mismatched')
-			expect(recorded.effects.some((effect) => effect.startsWith('exists:'))).toBe(false)
-		}
-	})
-
-	test('classifies remote credentials without exposing them', () => {
+	test('classifies remote credentials without exposing them', async () => {
 		expect(classifyExistingGitHubCredentials(new Map())).toBe('anonymous')
-		expect(classifyExistingGitHubCredentials(new Map([['GITHUB_APP_CREDENTIALS', APP_BUNDLE]]))).toBe('adoption-required')
-		expect(classifyExistingGitHubCredentials(new Map([['GITHUB_APP_ID', '123']]))).toBe('conflict')
+		expect(classifyExistingGitHubCredentials(new Map([[await zeropsSourceCredentialEnvV2('connection-1'), APP_BUNDLE]]))).toBe('connected')
+		expect(classifyExistingGitHubCredentials(new Map([['GITHUB_APP_CREDENTIALS', APP_BUNDLE]]))).toBe('anonymous')
+		expect(classifyExistingGitHubCredentials(new Map([['GITHUB_APP_ID', '123']]))).toBe('anonymous')
 		expect(sourceConnectionSettingsUrl({}, {
 			created: false,
 			reusedRpcKey: true,

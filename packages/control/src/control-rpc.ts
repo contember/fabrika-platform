@@ -54,7 +54,6 @@ import type { Env } from './env'
 import { appScope } from './iam'
 import { buildApiDeps } from './services'
 import {
-	adoptExistingSourceConnection,
 	reconcileSourceConnection,
 	repairSourceConnection,
 	sourceConnectionList,
@@ -159,9 +158,6 @@ export const controlRpcRouter: RpcRouterFor<ControlRpcContext, ControlRpcContrac
 		),
 		start: rpc.procedure.input(startSourceConnectionInput).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
 			controlCall(() => startSourceConnection(sourceConnectionContext(ctx), input))
-		),
-		adoptExisting: rpc.procedure.require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx }) =>
-			controlCall(() => adoptExistingSourceConnection(sourceConnectionContext(ctx)))
 		),
 		verifyInstallation: rpc.procedure.input(sourceConnectionId).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
 			controlCall(() => verifySourceInstallation(sourceConnectionContext(ctx), input.connectionId))

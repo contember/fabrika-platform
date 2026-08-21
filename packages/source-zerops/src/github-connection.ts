@@ -7,22 +7,14 @@ import type {
 	GitHubRepositoryTokenRequest,
 } from '@fabrika/github-app'
 import {
-	buildZeropsSourceCredentialActivateResponse,
 	buildZeropsSourceCredentialActivateResponseV2,
-	buildZeropsSourceCredentialBundle,
-	buildZeropsSourceCredentialStatusResponse,
 	buildZeropsSourceCredentialStatusResponseV2,
 	buildZeropsSourceInstallationsVerifyResponse,
 	buildZeropsSourceWebhookConfigureResponse,
-	decodeZeropsSourceCredentialBundle,
 	decodeZeropsSourceCredentialBundleV2,
-	serializeZeropsSourceCredentialBundle,
-	sha256ZeropsSourceCredentialBundle,
 	sha256ZeropsSourceCredentialBundleV2,
-	type ZeropsSourceCredentialActivateResponseV1,
 	type ZeropsSourceCredentialActivateResponseV2,
 	zeropsSourceCredentialEnvV2,
-	type ZeropsSourceCredentialStatusResponseV1,
 	type ZeropsSourceCredentialStatusResponseV2,
 	type ZeropsSourceGitHubAppIdentityV1,
 	type ZeropsSourceInstallationScopeV1,
@@ -49,30 +41,19 @@ export interface SourceGitHubSnapshot {
 }
 
 export interface GitHubConnectionOptions {
-	readonly credentialBundle?: string
 	readonly credentialSlotsV2?: readonly { readonly name: string; readonly credentialBundle: string }[]
-	readonly legacyAppId?: string
-	readonly legacyPrivateKeyPem?: string
 	readonly createClient: (input: { readonly appId: string; readonly privateKeyPem: string }) => Promise<SourceGitHubClient>
 }
 
 export interface SourceGitHubConnection {
-	snapshot(): SourceGitHubSnapshot | undefined
-	snapshotV2?(connectionId: string): SourceGitHubSnapshot | undefined
-	activate(
-		connectionId: string,
-		credentialBundle: string,
-		credentialSha256: string,
-		signal: AbortSignal,
-	): Promise<ZeropsSourceCredentialActivateResponseV1>
-	status(connectionId: string, signal: AbortSignal): Promise<ZeropsSourceCredentialStatusResponseV1>
-	activateV2?(
+	snapshotV2(connectionId: string): SourceGitHubSnapshot | undefined
+	activateV2(
 		connectionId: string,
 		credentialBundle: string,
 		credentialSha256: string,
 		signal: AbortSignal,
 	): Promise<ZeropsSourceCredentialActivateResponseV2>
-	statusV2?(connectionId: string, signal: AbortSignal): Promise<ZeropsSourceCredentialStatusResponseV2>
+	statusV2(connectionId: string, signal: AbortSignal): Promise<ZeropsSourceCredentialStatusResponseV2>
 	configureWebhook?(
 		connectionId: string,
 		credentialSha256: string,
@@ -88,15 +69,9 @@ export interface SourceGitHubConnection {
 	): Promise<ZeropsSourceInstallationsVerifyResponseV1>
 }
 
-interface ActiveSnapshot extends SourceGitHubSnapshot {
-	readonly githubApp?: ZeropsSourceGitHubAppIdentityV1
-	readonly connectionId?: string
-}
-
 /** A snapshot whose identity binding is known, which is the only kind an operation may act through. */
-interface BoundSnapshot extends ActiveSnapshot {
+interface BoundSnapshot extends KeyedSnapshot {
 	readonly githubApp: ZeropsSourceGitHubAppIdentityV1
-	readonly connectionId: string
 }
 
 interface KeyedSnapshot extends SourceGitHubSnapshot {
@@ -104,51 +79,18 @@ interface KeyedSnapshot extends SourceGitHubSnapshot {
 	readonly githubApp?: ZeropsSourceGitHubAppIdentityV1
 }
 
-/** Owns one legacy snapshot and an atomically replaced keyed snapshot map. */
+/** Owns the atomically replaced map of connection-keyed credential snapshots. */
 export class GitHubConnection implements SourceGitHubConnection {
-	private active: ActiveSnapshot | undefined
 	private keyed: ReadonlyMap<string, KeyedSnapshot>
 
 	private constructor(
 		private readonly createClient: GitHubConnectionOptions['createClient'],
-		initial: ActiveSnapshot | undefined,
 		keyed: ReadonlyMap<string, KeyedSnapshot>,
 	) {
-		this.active = initial
 		this.keyed = new Map(keyed)
 	}
 
 	static async create(options: GitHubConnectionOptions): Promise<GitHubConnection> {
-		const legacyComplete = options.legacyAppId !== undefined && options.legacyPrivateKeyPem !== undefined
-		const legacyPartial = (options.legacyAppId === undefined) !== (options.legacyPrivateKeyPem === undefined)
-		if (legacyPartial) throw new Error('GitHub App configuration is incomplete')
-
-		let credentialBundle = options.credentialBundle
-		if (legacyComplete) {
-			let legacyBundle: string
-			try {
-				legacyBundle = serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({
-					githubAppId: options.legacyAppId,
-					privateKeyPem: options.legacyPrivateKeyPem,
-				}))
-			} catch {
-				throw new Error('GitHub App configuration is invalid')
-			}
-			if (credentialBundle === undefined) credentialBundle = legacyBundle
-			else if (credentialBundle !== legacyBundle) throw new Error('GitHub App configuration conflicts')
-		}
-		let initial: ActiveSnapshot | undefined
-		if (credentialBundle !== undefined) {
-			try {
-				const bundle = decodeZeropsSourceCredentialBundle(credentialBundle)
-				const credentialSha256 = await sha256ZeropsSourceCredentialBundle(credentialBundle)
-				const client = await options.createClient({ appId: bundle.githubAppId, privateKeyPem: bundle.privateKeyPem })
-				initial = { client, appId: bundle.githubAppId, credentialSha256 }
-			} catch {
-				throw new Error('GitHub App configuration is invalid')
-			}
-		}
-
 		const keyed = new Map<string, KeyedSnapshot>()
 		for (const slot of options.credentialSlotsV2 ?? []) {
 			try {
@@ -168,11 +110,7 @@ export class GitHubConnection implements SourceGitHubConnection {
 				throw new Error('GitHub App configuration is invalid')
 			}
 		}
-		return new GitHubConnection(options.createClient, initial, keyed)
-	}
-
-	snapshot(): SourceGitHubSnapshot | undefined {
-		return this.active
+		return new GitHubConnection(options.createClient, keyed)
 	}
 
 	snapshotV2(connectionId: string): SourceGitHubSnapshot | undefined {
@@ -180,70 +118,7 @@ export class GitHubConnection implements SourceGitHubConnection {
 	}
 
 	hasAnySnapshot(): boolean {
-		return this.active !== undefined || this.keyed.size > 0
-	}
-
-	async activate(
-		connectionId: string,
-		credentialBundle: string,
-		credentialSha256: string,
-		signal: AbortSignal,
-	): Promise<ZeropsSourceCredentialActivateResponseV1> {
-		throwIfAborted(signal, 'credentials')
-		let bundle: ReturnType<typeof decodeZeropsSourceCredentialBundle>
-		let actualDigest: string
-		try {
-			bundle = decodeZeropsSourceCredentialBundle(credentialBundle)
-			actualDigest = await sha256ZeropsSourceCredentialBundle(credentialBundle)
-		} catch {
-			throw new SourceFailure('credentials_invalid', 'credentials', false, 400)
-		}
-		if (actualDigest !== credentialSha256) throw new SourceFailure('credentials_invalid', 'credentials', false, 400)
-		const before = this.active
-		if (before !== undefined && before.credentialSha256 !== actualDigest) {
-			throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
-		}
-
-		let client: SourceGitHubClient
-		let githubApp: ZeropsSourceGitHubAppIdentityV1
-		try {
-			client = await abortable(this.createClient({ appId: bundle.githubAppId, privateKeyPem: bundle.privateKeyPem }), signal)
-			throwIfAborted(signal, 'credentials')
-			githubApp = verifiedIdentity(await abortable(client.getAuthenticatedApp(signal), signal), bundle.githubAppId)
-			throwIfAborted(signal, 'credentials')
-		} catch (error) {
-			throw credentialFailure(error, signal)
-		}
-
-		const current = this.active
-		if (current !== undefined && current.credentialSha256 !== actualDigest) {
-			throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
-		}
-		if (current?.connectionId !== undefined && current.connectionId !== connectionId) {
-			throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
-		}
-		if (current === before || current === undefined || current.githubApp === undefined || current.connectionId === undefined) {
-			this.active = { client, appId: bundle.githubAppId, credentialSha256: actualDigest, githubApp, connectionId }
-		}
-		return buildZeropsSourceCredentialActivateResponse({
-			connectionId,
-			credentialVersion: 1,
-			credentialSha256: actualDigest,
-			githubApp: this.active?.githubApp ?? githubApp,
-		})
-	}
-
-	async status(connectionId: string, signal: AbortSignal): Promise<ZeropsSourceCredentialStatusResponseV1> {
-		throwIfAborted(signal, 'credentials')
-		if (this.active === undefined) return buildZeropsSourceCredentialStatusResponse({ connectionId, state: 'anonymous' })
-		const bound = await this.bindActive(connectionId, undefined, signal)
-		return buildZeropsSourceCredentialStatusResponse({
-			connectionId,
-			state: 'active',
-			credentialVersion: 1,
-			credentialSha256: bound.credentialSha256,
-			githubApp: bound.githubApp,
-		})
+		return this.keyed.size > 0
 	}
 
 	async activateV2(
@@ -390,20 +265,11 @@ export class GitHubConnection implements SourceGitHubConnection {
 	}
 
 	/**
-	 * Return the snapshot an operation may act through, REBINDING the legacy one when this container
-	 * has never seen an activation.
-	 *
-	 * The legacy bundle in `GITHUB_APP_CREDENTIALS` carries an App id and a private key and nothing
-	 * else — no `connectionId`, no App identity. Those are set only by `activate`, in memory. So every
-	 * operation must be able to recover them, not just `status`, and two things guarantee the need:
-	 * this service runs MORE THAN ONE CONTAINER, so a caller's `status` can bind container A while its
-	 * next request lands on B, and a platform deploy restarts all of them. When only `status` could
-	 * rebind, `verifyInstallations` and `configureWebhook` answered `credentials_conflict` at random,
-	 * which reached the console as a bare 502.
-	 *
-	 * `credentialSha256` is omitted by `status`, which authenticates the caller but carries no digest.
-	 * A CONFLICTING binding is still refused: a snapshot already bound to another connection, or one
-	 * whose digest does not match, is never rebound to the caller's.
+	 * Return the snapshot an operation may act through, binding a slot this container restored from the
+	 * environment but has never used. `source` runs more than one container and a platform deploy
+	 * restarts all of them, so every operation must be able to recover the App identity, not just
+	 * `statusV2` — otherwise `verifyInstallations` and `configureWebhook` answer `credentials_conflict`
+	 * at random. A digest that does not match the slot is still refused.
 	 */
 	private async bindActive(
 		connectionId: string,
@@ -411,42 +277,11 @@ export class GitHubConnection implements SourceGitHubConnection {
 		signal: AbortSignal,
 	): Promise<BoundSnapshot> {
 		const keyed = this.keyed.get(connectionId)
-		if (keyed !== undefined) {
-			if (credentialSha256 !== undefined && keyed.credentialSha256 !== credentialSha256) {
-				throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
-			}
-			// A keyed slot NEVER falls back to the legacy one: the legacy slot holds a different App, so
-			// binding through it would answer for the wrong connection instead of failing.
-			return keyed.githubApp === undefined ? await this.bindKeyed(keyed, signal) : { ...keyed, githubApp: keyed.githubApp }
-		}
-		const snapshot = this.active
-		if (
-			snapshot === undefined || (credentialSha256 !== undefined && snapshot.credentialSha256 !== credentialSha256)
-			|| (snapshot.connectionId !== undefined && snapshot.connectionId !== connectionId)
-		) throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
-		if (snapshot.githubApp !== undefined && snapshot.connectionId !== undefined) {
-			return { ...snapshot, githubApp: snapshot.githubApp, connectionId: snapshot.connectionId }
-		}
-		let githubApp: ZeropsSourceGitHubAppIdentityV1
-		try {
-			githubApp = snapshot.githubApp
-				?? verifiedIdentity(await abortable(snapshot.client.getAuthenticatedApp(signal), signal), snapshot.appId)
-			throwIfAborted(signal, 'credentials')
-		} catch (error) {
-			throw credentialFailure(error, signal)
-		}
-		const bound: BoundSnapshot = { ...snapshot, githubApp, connectionId }
-		// Only publish the binding if nothing replaced the snapshot while GitHub was answering; a
-		// concurrent activation owns `this.active` and its binding is the newer fact.
-		if (this.active === snapshot) {
-			this.active = bound
-			return bound
-		}
-		const current = this.active
-		if (current === undefined || current.connectionId !== connectionId || current.credentialSha256 !== snapshot.credentialSha256) {
+		if (keyed === undefined) throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
+		if (credentialSha256 !== undefined && keyed.credentialSha256 !== credentialSha256) {
 			throw new SourceFailure('credentials_conflict', 'credentials', false, 409)
 		}
-		return { ...current, githubApp: current.githubApp ?? githubApp, connectionId }
+		return keyed.githubApp === undefined ? await this.bindKeyed(keyed, signal) : { ...keyed, githubApp: keyed.githubApp }
 	}
 
 	/** A keyed slot restored from the environment carries no identity yet; bind it through its own client. */

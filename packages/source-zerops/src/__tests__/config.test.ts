@@ -1,9 +1,6 @@
 import {
-	buildZeropsSourceCredentialBundle,
 	buildZeropsSourceCredentialBundleV2,
-	buildZeropsSourceResolveInstallationRequest,
 	buildZeropsSourceUploadRequest,
-	serializeZeropsSourceCredentialBundle,
 	serializeZeropsSourceCredentialBundleV2,
 	zeropsSourceCredentialEnvV2,
 } from '@fabrika/provider-zerops'
@@ -21,49 +18,20 @@ describe('source runtime configuration', () => {
 		expect(runtime.githubEnabled).toBe(false)
 	})
 
-	test.each([
-		{ FABRIKA_SOURCE_RPC_KEY: rpcKey, GITHUB_APP_ID: '123' },
-		{ FABRIKA_SOURCE_RPC_KEY: rpcKey, GITHUB_APP_PRIVATE_KEY: 'private-key' },
-	])('rejects a partial GitHub App configuration', async (env) => {
-		await expect(createSourceRuntime({ env })).rejects.toThrow(
-			'GitHub App configuration is incomplete',
-		)
-	})
-
-	test('imports a complete RSA key before reporting GitHub mode enabled', async () => {
+	test('ignores an unkeyed or split GitHub App environment value entirely', async () => {
+		const privateKey = await privateKeyPem()
 		const runtime = await createSourceRuntime({
 			env: {
 				FABRIKA_SOURCE_RPC_KEY: rpcKey,
+				GITHUB_APP_CREDENTIALS: `{"version":1,"githubAppId":"123","privateKeyPem":${JSON.stringify(privateKey)}}`,
 				GITHUB_APP_ID: '123',
-				GITHUB_APP_PRIVATE_KEY: await privateKeyPem(),
+				GITHUB_APP_PRIVATE_KEY: privateKey,
 			},
 		})
-		expect(runtime.githubEnabled).toBe(true)
+		expect(runtime.githubEnabled).toBe(false)
 	})
 
-	test('boots the canonical atomic credential bundle and accepts matching legacy compatibility fields', async () => {
-		const privateKey = await privateKeyPem()
-		const credentials = serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({
-			githubAppId: '123',
-			privateKeyPem: privateKey,
-		}))
-		for (
-			const env of [
-				{ FABRIKA_SOURCE_RPC_KEY: rpcKey, GITHUB_APP_CREDENTIALS: credentials },
-				{
-					FABRIKA_SOURCE_RPC_KEY: rpcKey,
-					GITHUB_APP_CREDENTIALS: credentials,
-					GITHUB_APP_ID: '123',
-					GITHUB_APP_PRIVATE_KEY: privateKey,
-				},
-			]
-		) {
-			const runtime = await createSourceRuntime({ env })
-			expect(runtime.githubEnabled).toBe(true)
-		}
-	})
-
-	test('discovers every keyed v2 credential slot while keeping the legacy bundle optional', async () => {
+	test('discovers every keyed v2 credential slot and reports GitHub mode from them alone', async () => {
 		const privateKey = await privateKeyPem()
 		const env: Record<string, string> = { FABRIKA_SOURCE_RPC_KEY: rpcKey }
 		for (
@@ -96,53 +64,41 @@ describe('source runtime configuration', () => {
 		expect(raised instanceof Error ? raised.message : '').not.toContain(secret)
 	})
 
-	test('rejects atomic and legacy credentials that disagree', async () => {
-		const privateKey = await privateKeyPem()
-		const credentials = serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({
-			githubAppId: '123',
-			privateKeyPem: privateKey,
-		}))
-		await expect(createSourceRuntime({
-			env: {
-				FABRIKA_SOURCE_RPC_KEY: rpcKey,
-				GITHUB_APP_CREDENTIALS: credentials,
-				GITHUB_APP_ID: '124',
-				GITHUB_APP_PRIVATE_KEY: privateKey,
-			},
-		})).rejects.toThrow('configuration conflicts')
-	})
-
 	test('ignores arbitrary API-host environment input and sends the App JWT only to api.github.com', async () => {
 		const requests: string[] = []
+		const connectionId = 'connection-1'
 		const runtime = await createSourceRuntime({
 			env: {
 				FABRIKA_SOURCE_RPC_KEY: rpcKey,
-				GITHUB_APP_ID: '123',
-				GITHUB_APP_PRIVATE_KEY: await privateKeyPem(),
+				[await zeropsSourceCredentialEnvV2(connectionId)]: serializeZeropsSourceCredentialBundleV2(
+					buildZeropsSourceCredentialBundleV2({ connectionId, githubAppId: '123', privateKeyPem: await privateKeyPem() }),
+				),
 				GITHUB_API_BASE_URL: 'https://attacker.test/api/v3',
 			},
 			githubFetch: (input, init) => {
 				requests.push(input instanceof Request ? input.url : input.toString())
 				expect(new Headers(init?.headers).get('authorization')).toStartWith('Bearer ')
-				return Promise.resolve(Response.json({
-					id: 42,
-					app_id: 123,
-					target_type: 'Organization',
-					repository_selection: 'selected',
-					account: { login: 'contember', type: 'Organization' },
-				}))
+				return Promise.resolve(Response.json({ token: 'ghs_must-not-leak', expires_at: '2099-01-01T00:00:00Z' }))
 			},
+			metadataFetch: async () => new Response(null, { status: 500 }),
 		})
 		const response = await runtime.service.fetch(
-			new Request('http://source.test/v1/installations/resolve', {
+			new Request('http://source.test/v2/source/resolve', {
 				method: 'POST',
 				headers: { authorization: `Bearer ${rpcKey}`, 'content-type': 'application/json' },
-				body: JSON.stringify(buildZeropsSourceResolveInstallationRequest('github.com/contember/fabrika-platform')),
+				body: JSON.stringify({
+					protocolVersion: 2,
+					runId: 'run-1',
+					repository: { owner: 'contember', name: 'fabrika-platform' },
+					requestedRef: 'refs/heads/main',
+					privateBinding: { connectionId, installationId: 42 },
+					descriptorSha256: 'b'.repeat(64),
+				}),
 			}),
 		)
 
-		expect(response.status).toBe(200)
-		expect(requests).toEqual(['https://api.github.com/repos/contember/fabrika-platform/installation'])
+		expect(response.status).toBe(502)
+		expect(requests).toEqual(['https://api.github.com/app/installations/42/access_tokens'])
 		expect(requests.join('\n')).not.toContain('attacker.test')
 	})
 
@@ -182,13 +138,18 @@ describe('source runtime configuration', () => {
 
 	test('fails boot on malformed DER without echoing key material', async () => {
 		const secret = 'must-not-leak'
+		const connectionId = 'connection-1'
 		let message = ''
 		try {
 			await createSourceRuntime({
 				env: {
 					FABRIKA_SOURCE_RPC_KEY: rpcKey,
-					GITHUB_APP_ID: '123',
-					GITHUB_APP_PRIVATE_KEY: `-----BEGIN PRIVATE KEY-----\n${btoa(secret)}\n-----END PRIVATE KEY-----`,
+					[await zeropsSourceCredentialEnvV2(connectionId)]: JSON.stringify({
+						version: 2,
+						connectionId,
+						githubAppId: '123',
+						privateKeyPem: `-----BEGIN PRIVATE KEY-----\n${btoa(secret)}\n-----END PRIVATE KEY-----\n`,
+					}),
 				},
 			})
 		} catch (error) {

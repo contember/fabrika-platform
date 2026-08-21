@@ -131,7 +131,6 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 }
 
 const makeSource = (rec: Recorded): ZeropsSourceClient => ({
-	resolveInstallationId: () => Promise.resolve(null),
 	resolve: (input) => {
 		rec.calls.push('sourceResolve')
 		rec.resolves.push({ runId: input.runId, requestedRef: input.requestedRef, descriptorSha256: input.descriptorSha256 })

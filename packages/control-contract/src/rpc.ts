@@ -107,7 +107,6 @@ export interface GitHubSourceConnectionRpcContract {
 	status: RpcProcedure<void, GitHubSourceConnectionStatusDto>
 	list: RpcProcedure<GitHubSourceConnectionListInput, GitHubSourceConnectionListResponse>
 	start: RpcProcedure<StartGitHubSourceConnectionRequest, StartGitHubSourceConnectionResponse>
-	adoptExisting: RpcProcedure<void, GitHubSourceConnectionStatusDto>
 	verifyInstallation: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionStatusDto>
 	repair: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionStatusDto>
 	reconcile: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionStatusDto>

@@ -9,7 +9,7 @@ import { uuidv7 } from './uuid'
 import { type PreparedVaultSecret, type Vault, vaultRef } from './vault'
 
 export type GitHubSetupStatus = 'active' | 'repair_required' | 'completed' | 'failed'
-export type GitHubSourceTransportKind = 'legacy-v1' | 'keyed-v2'
+export type GitHubSourceTransportKind = 'keyed-v2'
 export type GitHubSetupErrorCode =
 	| 'callback_expired'
 	| 'manifest_exchange'
@@ -33,7 +33,6 @@ export type GitHubSetupPhase =
 
 export interface GitHubSetupAttempt {
 	id: string
-	setupKind: 'manifest' | 'adoption'
 	status: GitHubSetupStatus
 	phase: GitHubSetupPhase
 	version: number
@@ -121,7 +120,6 @@ export type GitHubConnectionState =
 
 interface GitHubSetupAttemptRow {
 	id: string
-	setup_kind: string
 	status: string
 	phase: string
 	version: number
@@ -208,19 +206,6 @@ export interface PublishGitHubConnectionInput {
 	installationSelection: 'all' | 'selected'
 	verifiedRepositories: readonly string[]
 	verifiedAt: number
-}
-
-export interface BeginGitHubAdoptionInput {
-	id: string
-	initiatedBy: string
-	expectedOrigin: string
-	appId: string
-	appSlug: string
-	appHtmlUrl: string
-	appOwner: string
-	appPublic: boolean
-	credentialSha256: string
-	expiresAt: number
 }
 
 export type GitHubSetupSecretKind = 'recovery' | 'webhook'
@@ -387,66 +372,14 @@ export class GitHubConnectionStore {
 		}
 	}
 
-	async beginAdoption(input: BeginGitHubAdoptionInput): Promise<GitHubSetupAttempt> {
-		const now = this.now()
-		validateConnectionId(input.id)
-		validateNonEmpty(input.initiatedBy, 'principal')
-		validateControlOrigin(input.expectedOrigin)
-		validateGitHubOwner(input.appOwner)
-		validateSha256(input.credentialSha256, 'credential digest')
-		if (!/^[1-9][0-9]*$/.test(input.appId) || !/^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/.test(input.appSlug)) {
-			throw new Error('invalid GitHub adoption App identity')
-		}
-		if (input.appHtmlUrl !== `https://github.com/apps/${input.appSlug}` || !Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now) {
-			throw new Error('invalid GitHub adoption App identity')
-		}
-		try {
-			const row = await this.db.prepare(`INSERT INTO github_source_setup_attempts (
-				id, setup_kind, status, phase, version, initiated_by, expected_origin, desired_owner,
-				desired_app_name, desired_public, requested_repositories_json, app_id, app_slug, app_html_url,
-				credential_sha256, created_at, updated_at, expires_at
-			) SELECT ?, 'adoption', 'active', 'source_activated', 1, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?
-			WHERE NOT EXISTS (SELECT 1 FROM github_source_connections_keyed) RETURNING *`)
-				.bind(
-					input.id,
-					input.initiatedBy,
-					input.expectedOrigin,
-					input.appOwner.toLowerCase(),
-					input.appSlug,
-					input.appPublic ? 1 : 0,
-					input.appId,
-					input.appSlug,
-					input.appHtmlUrl,
-					input.credentialSha256,
-					now,
-					now,
-					input.expiresAt,
-				)
-				.first<GitHubSetupAttemptRow>()
-			if (row === null) throw new Error('adoption did not return state')
-			return decodeAttempt(row)
-		} catch {
-			throw new Error('GitHub source adoption could not be started')
-		}
-	}
-
 	async getAttempt(id: string): Promise<GitHubSetupAttempt | null> {
 		const row = await this.db.prepare('SELECT * FROM github_source_setup_attempts WHERE id = ?').bind(id).first<GitHubSetupAttemptRow>()
 		return row === null ? null : decodeAttempt(row)
 	}
 
 	async getConnection(): Promise<GitHubSourceConnection | null> {
-		const legacy = await this.getLegacyConnection()
-		if (legacy !== null) return legacy
 		const page = await this.listConnections({ limit: 1 })
 		return page.items[0] ?? null
-	}
-
-	async getLegacyConnection(): Promise<GitHubSourceConnection | null> {
-		const row = await this.db.prepare(
-			`SELECT * FROM github_source_connections_keyed WHERE transport_kind = 'legacy-v1' LIMIT 1`,
-		).first<GitHubSourceConnectionRow>()
-		return row === null ? null : decodeConnection(row)
 	}
 
 	async getConnectionById(connectionId: string): Promise<GitHubSourceConnection | null> {
@@ -523,27 +456,14 @@ export class GitHubConnectionStore {
 		return row === null ? null : decodeAttempt(row)
 	}
 
-	async getWebhookSecretBinding(): Promise<GitHubWebhookSecretBinding | null> {
-		const connection = await this.getLegacyConnection()
-		if (connection !== null) return { connectionId: connection.connectionId, webhookSecretRef: connection.webhookSecretRef }
-		const row = await this.db.prepare(`SELECT * FROM github_source_setup_attempts
-			WHERE setup_kind = 'adoption' AND status IN ('active','repair_required') AND webhook_secret_ref IS NOT NULL
-				AND phase IN ('webhook_configured','configuration_verified','installation_required')
-			ORDER BY updated_at DESC LIMIT 1`).first<GitHubSetupAttemptRow>()
-		if (row === null) return null
-		const attempt = decodeAttempt(row)
-		if (attempt.webhookSecretRef === null) return null
-		return { connectionId: attempt.id, webhookSecretRef: attempt.webhookSecretRef }
-	}
-
 	async getWebhookSecretBindingByConnectionId(connectionId: string): Promise<GitHubWebhookSecretBinding | null> {
 		const connection = await this.getConnectionById(connectionId)
-		if (connection?.transportKind === 'keyed-v2') {
+		if (connection !== null) {
 			return { connectionId: connection.connectionId, webhookSecretRef: connection.webhookSecretRef }
 		}
 		const attempt = await this.getAttempt(connectionId)
 		if (
-			attempt === null || attempt.setupKind !== 'manifest' || !['active', 'repair_required'].includes(attempt.status)
+			attempt === null || !['active', 'repair_required'].includes(attempt.status)
 			|| attempt.webhookSecretRef === null
 			|| !['webhook_configured', 'configuration_verified', 'installation_required'].includes(attempt.phase)
 		) return null
@@ -561,7 +481,7 @@ export class GitHubConnectionStore {
 		if (attempt.phase === 'awaiting_manifest_callback' && attempt.manifestStateSecretRef !== null) {
 			return await this.expireManifestCallback(attempt, now)
 		}
-		if (attempt.recoverySecretRef === null && attempt.setupKind === 'manifest') {
+		if (attempt.recoverySecretRef === null) {
 			return await this.markExpired(attempt, now, 'failed', 'callback_expired')
 		}
 		return await this.markExpired(attempt, now, 'repair_required', errorForExpiredPhase(attempt.phase))
@@ -700,8 +620,7 @@ export class GitHubConnectionStore {
 	async resumeRepair(id: string, expectedVersion: number): Promise<GitHubSetupAttempt | null> {
 		const row = await this.db.prepare(`UPDATE github_source_setup_attempts SET
 			status = 'active', last_error_code = NULL, version = version + 1, updated_at = ?, expires_at = ?
-			WHERE id = ? AND version = ? AND status = 'repair_required'
-				AND (recovery_secret_ref IS NOT NULL OR setup_kind = 'adoption')
+			WHERE id = ? AND version = ? AND status = 'repair_required' AND recovery_secret_ref IS NOT NULL
 			RETURNING *`).bind(this.now(), this.leaseExpiresAt(), id, expectedVersion).first<GitHubSetupAttemptRow>()
 		return row === null ? null : decodeAttempt(row)
 	}
@@ -862,9 +781,7 @@ export class GitHubConnectionStore {
 			|| attempt.appId === null || attempt.appSlug === null || attempt.appHtmlUrl === null || attempt.credentialSha256 === null
 			|| attempt.webhookSecretRef === null || input.installationAccountLogin.toLowerCase() !== attempt.desiredOwner.toLowerCase()
 			|| JSON.stringify(verifiedRepositories) !== JSON.stringify(attempt.requestedRepositories)
-			|| input.webhookUrl !== (attempt.setupKind === 'adoption'
-					? `${attempt.expectedOrigin}/webhooks/github`
-					: `${attempt.expectedOrigin}/webhooks/github/${encodeURIComponent(attempt.id)}`)
+			|| input.webhookUrl !== `${attempt.expectedOrigin}/webhooks/github/${encodeURIComponent(attempt.id)}`
 		) return null
 		const webhookVaultId = attempt.webhookSecretRef.slice('vault:'.length)
 		const webhookLabel = githubWebhookSecretLabel(input.attemptId)
@@ -882,7 +799,7 @@ export class GitHubConnectionStore {
 			credential_sha256, webhook_url, webhook_secret_ref, installation_id,
 			installation_account_login, installation_selection, verified_repositories_json,
 			requested_repositories_json, connected_by, connected_at, verified_at, version
-		) SELECT id, CASE setup_kind WHEN 'adoption' THEN 'legacy-v1' ELSE 'keyed-v2' END,
+		) SELECT id, 'keyed-v2',
 			app_id, app_slug, app_html_url, desired_owner, desired_app_name, desired_public,
 			credential_sha256, ?, webhook_secret_ref, ?, ?, ?, ?, requested_repositories_json,
 			initiated_by, ?, ?, 1 FROM github_source_setup_attempts
@@ -1017,25 +934,19 @@ export class GitHubConnectionStore {
 	}
 }
 
-/** Reads the current connection on every delivery, so rotation takes effect without a restart. */
+/** Reads the named connection on every delivery, so rotation takes effect without a restart. */
 export class GitHubConnectionWebhookSecretProvider implements WebhookSecretProvider {
 	constructor(
 		private readonly store: GitHubConnectionStore,
 		private readonly vault: Vault | (() => Promise<Vault>),
-		private readonly fallback?: WebhookSecretProvider,
-		private readonly connectionId?: string,
+		private readonly connectionId: string,
 	) {}
 
 	async getSecret(signal?: AbortSignal): Promise<string | null> {
 		throwIfAborted(signal)
-		const binding = this.connectionId === undefined
-			? await this.store.getWebhookSecretBinding()
-			: await this.store.getWebhookSecretBindingByConnectionId(this.connectionId)
+		const binding = await this.store.getWebhookSecretBindingByConnectionId(this.connectionId)
 		throwIfAborted(signal)
-		if (binding === null) {
-			if (this.connectionId !== undefined) return null
-			return this.fallback?.getSecret(signal) ?? null
-		}
+		if (binding === null) return null
 		const secretVault = typeof this.vault === 'function' ? await this.vault() : this.vault
 		const secret = await secretVault.getSecretForPurpose(binding.webhookSecretRef, {
 			scope: 'platform',
@@ -1063,7 +974,6 @@ function decodeAttempt(row: GitHubSetupAttemptRow): GitHubSetupAttempt {
 	validatePhaseFields(row, phase)
 	return {
 		id: required(row.id, 'attempt id'),
-		setupKind: parseSetupKind(row.setup_kind),
 		status,
 		phase,
 		version: row.version,
@@ -1093,8 +1003,7 @@ function validatePhaseFields(row: GitHubSetupAttemptRow, phase: GitHubSetupPhase
 	const sourceWritten = phaseIndex(phase) >= phaseIndex('source_bundle_written')
 	const sourceActivated = phaseIndex(phase) >= phaseIndex('source_activated')
 	const webhookStored = phaseIndex(phase) >= phaseIndex('webhook_secret_stored')
-	const recoveryExpected = row.setup_kind === 'manifest'
-		&& phaseIndex(phase) >= phaseIndex('recovery_stored') && phaseIndex(phase) < phaseIndex('installation_required')
+	const recoveryExpected = phaseIndex(phase) >= phaseIndex('recovery_stored') && phaseIndex(phase) < phaseIndex('installation_required')
 	if (sourceWritten && row.credential_sha256 === null) throw new Error('invalid GitHub setup credential state')
 	if (sourceActivated && (row.app_id === null || row.app_slug === null || row.app_html_url === null)) {
 		throw new Error('invalid GitHub setup App state')
@@ -1156,18 +1065,13 @@ function decodeConnection(row: GitHubSourceConnectionRow): GitHubSourceConnectio
 }
 
 function parseTransportKind(value: string): GitHubSourceTransportKind {
-	if (value === 'legacy-v1' || value === 'keyed-v2') return value
+	if (value === 'keyed-v2') return value
 	throw new Error('invalid GitHub source transport kind')
 }
 
 function parseStatus(value: string): GitHubSetupStatus {
 	if (value === 'active' || value === 'repair_required' || value === 'completed' || value === 'failed') return value
 	throw new Error('invalid GitHub setup status')
-}
-
-function parseSetupKind(value: string): 'manifest' | 'adoption' {
-	if (value === 'manifest' || value === 'adoption') return value
-	throw new Error('invalid GitHub setup kind')
 }
 
 function parseInstallationSelection(value: string): 'all' | 'selected' {

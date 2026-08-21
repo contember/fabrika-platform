@@ -1,36 +1,27 @@
 import {
 	buildZeropsSourceCancelRequest,
-	buildZeropsSourceCredentialActivateRequest,
 	buildZeropsSourceCredentialActivateRequestV2,
-	buildZeropsSourceCredentialStatusRequest,
 	buildZeropsSourceCredentialStatusRequestV2,
 	buildZeropsSourceInstallationsVerifyRequest,
-	buildZeropsSourceResolveInstallationRequest,
 	buildZeropsSourceResolveRequest,
 	buildZeropsSourceResolveRequestV2,
 	buildZeropsSourceUploadRequest,
 	buildZeropsSourceUploadRequestV2,
 	buildZeropsSourceWebhookConfigureRequest,
 	decodeZeropsSourceCancelResponse,
-	decodeZeropsSourceCredentialActivateResponse,
 	decodeZeropsSourceCredentialActivateResponseV2,
-	decodeZeropsSourceCredentialStatusResponse,
 	decodeZeropsSourceCredentialStatusResponseV2,
 	decodeZeropsSourceErrorEnvelope,
 	decodeZeropsSourceInstallationsVerifyResponse,
-	decodeZeropsSourceResolveInstallationResponse,
 	decodeZeropsSourceResolveResponse,
 	decodeZeropsSourceResolveResponseV2,
 	decodeZeropsSourceUploadResponse,
 	decodeZeropsSourceUploadResponseV2,
 	decodeZeropsSourceWebhookConfigureResponse,
 	ZEROPS_SOURCE_CANCEL_PATH,
-	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2,
-	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2,
 	ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH,
-	ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH,
 	ZEROPS_SOURCE_RESOLVE_PATH,
 	ZEROPS_SOURCE_RESOLVE_PATH_V2,
 	ZEROPS_SOURCE_UPLOAD_PATH,
@@ -40,12 +31,10 @@ import {
 	type ZeropsSourceClient,
 	type ZeropsSourceClientV2,
 	type ZeropsSourceCredentialActivateInput,
-	type ZeropsSourceCredentialActivateResponseV1,
 	type ZeropsSourceCredentialActivateResponseV2,
 	type ZeropsSourceCredentialManager,
 	type ZeropsSourceCredentialManagerV2,
 	type ZeropsSourceCredentialStatusInput,
-	type ZeropsSourceCredentialStatusResponseV1,
 	type ZeropsSourceCredentialStatusResponseV2,
 	type ZeropsSourceErrorCode,
 	type ZeropsSourceErrorStage,
@@ -65,7 +54,6 @@ const MIN_RPC_KEY_LENGTH = 32
 const MALFORMED = Symbol('malformed source response')
 export const ZEROPS_SOURCE_RESPONSE_MAX_BYTES = 64 * 1024
 export const ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS = {
-	resolveInstallation: 45_000,
 	resolve: 5 * 60_000,
 	upload: 20 * 60_000,
 	cancel: 30_000,
@@ -81,14 +69,11 @@ interface SourceResponse {
 }
 
 export type ZeropsSourceClientOperation =
-	| 'resolve-installation'
 	| 'resolve'
 	| 'resolve-v2'
 	| 'upload'
 	| 'upload-v2'
 	| 'cancel'
-	| 'activate-credentials'
-	| 'credential-status'
 	| 'activate-credentials-v2'
 	| 'credential-status-v2'
 	| 'configure-webhook'
@@ -103,7 +88,6 @@ export interface HttpZeropsSourceClientOptions {
 	rpcKey: string
 	fetch?: ZeropsSourceFetch
 	timeoutsMs?: {
-		resolveInstallation?: number
 		resolve?: number
 		upload?: number
 		cancel?: number
@@ -144,7 +128,6 @@ export class HttpZeropsSourceClient
 		this.rpcKey = options.rpcKey
 		this.fetchImpl = options.fetch ?? globalThis.fetch
 		this.timeoutsMs = {
-			resolveInstallation: options.timeoutsMs?.resolveInstallation ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.resolveInstallation,
 			resolve: options.timeoutsMs?.resolve ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.resolve,
 			upload: options.timeoutsMs?.upload ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.upload,
 			cancel: options.timeoutsMs?.cancel ?? ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS.cancel,
@@ -160,15 +143,12 @@ export class HttpZeropsSourceClient
 		}
 	}
 
-	async resolveInstallationId(repoUrl: string, signal: AbortSignal = new AbortController().signal): Promise<number | null> {
-		const operation = 'resolve-installation'
-		const request = this.build(operation, () => buildZeropsSourceResolveInstallationRequest(repoUrl))
-		const result = await this.post(operation, ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH, request, signal)
-		try {
-			return decodeZeropsSourceResolveInstallationResponse(result.value).githubInstallationId
-		} catch {
-			throw invalidResponse(operation, result.status)
-		}
+	/**
+	 * Zerops selects a source credential by connection, not by installation id (ADR-0039), so `source`
+	 * has nothing to look up. Registration resolves the pair from the connected organization instead.
+	 */
+	resolveInstallationId(): Promise<number | null> {
+		return Promise.reject(new Error('the Zerops source service does not resolve GitHub installation ids; pass connectionId and installationId'))
 	}
 
 	async resolve(input: ZeropsSourceResolveInput): Promise<ZeropsSourceResolveResult> {
@@ -282,22 +262,6 @@ export class HttpZeropsSourceClient
 		}
 	}
 
-	async activate(input: ZeropsSourceCredentialActivateInput): Promise<ZeropsSourceCredentialActivateResponseV1> {
-		const operation = 'activate-credentials'
-		const request = this.build(operation, () => buildZeropsSourceCredentialActivateRequest(input))
-		const result = await this.post(operation, ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH, request, input.signal)
-		try {
-			const response = decodeZeropsSourceCredentialActivateResponse(result.value)
-			if (response.connectionId !== input.connectionId || response.credentialSha256 !== input.credentialSha256) {
-				throw invalidResponse(operation, result.status)
-			}
-			return response
-		} catch (error) {
-			if (error instanceof ZeropsSourceClientError) throw error
-			throw invalidResponse(operation, result.status)
-		}
-	}
-
 	async activateV2(input: ZeropsSourceCredentialActivateInput): Promise<ZeropsSourceCredentialActivateResponseV2> {
 		const operation = 'activate-credentials-v2'
 		const request = this.build(operation, () => buildZeropsSourceCredentialActivateRequestV2(input))
@@ -307,20 +271,6 @@ export class HttpZeropsSourceClient
 			if (response.connectionId !== input.connectionId || response.credentialSha256 !== input.credentialSha256) {
 				throw invalidResponse(operation, result.status)
 			}
-			return response
-		} catch (error) {
-			if (error instanceof ZeropsSourceClientError) throw error
-			throw invalidResponse(operation, result.status)
-		}
-	}
-
-	async status(input: ZeropsSourceCredentialStatusInput): Promise<ZeropsSourceCredentialStatusResponseV1> {
-		const operation = 'credential-status'
-		const request = this.build(operation, () => buildZeropsSourceCredentialStatusRequest(input))
-		const result = await this.post(operation, ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH, request, input.signal)
-		try {
-			const response = decodeZeropsSourceCredentialStatusResponse(result.value)
-			if (response.connectionId !== input.connectionId) throw invalidResponse(operation, result.status)
 			return response
 		} catch (error) {
 			if (error instanceof ZeropsSourceClientError) throw error
@@ -439,9 +389,8 @@ export class HttpZeropsSourceClient
 }
 
 const timeoutFor = (operation: ZeropsSourceClientOperation, timeouts: typeof ZEROPS_SOURCE_REQUEST_TIMEOUTS_MS): number => {
-	if (operation === 'resolve-installation') return timeouts.resolveInstallation
-	if (operation === 'activate-credentials' || operation === 'activate-credentials-v2') return timeouts.activateCredentials
-	if (operation === 'credential-status' || operation === 'credential-status-v2') return timeouts.credentialStatus
+	if (operation === 'activate-credentials-v2') return timeouts.activateCredentials
+	if (operation === 'credential-status-v2') return timeouts.credentialStatus
 	if (operation === 'configure-webhook') return timeouts.configureWebhook
 	if (operation === 'verify-installations') return timeouts.verifyInstallations
 	if (operation === 'resolve-v2') return timeouts.resolve
@@ -507,7 +456,6 @@ const transportError = (operation: ZeropsSourceClientOperation): ZeropsSourceCli
 const transportRetryable = (operation: ZeropsSourceClientOperation): boolean =>
 	operation !== 'upload'
 	&& operation !== 'upload-v2'
-	&& operation !== 'activate-credentials'
 	&& operation !== 'activate-credentials-v2'
 	&& operation !== 'configure-webhook'
 

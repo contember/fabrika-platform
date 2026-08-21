@@ -1,13 +1,9 @@
 export const ZEROPS_SOURCE_PROTOCOL_VERSION = 1
-export const ZEROPS_SOURCE_RESOLVE_INSTALLATION_PATH = '/v1/installations/resolve'
 export const ZEROPS_SOURCE_RESOLVE_PATH = '/v1/source/resolve'
 export const ZEROPS_SOURCE_UPLOAD_PATH = '/v1/source/upload'
 export const ZEROPS_SOURCE_CANCEL_PATH = '/v1/source/cancel'
-export const ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH = '/v1/source/credentials/activate'
-export const ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH = '/v1/source/credentials/status'
 export const ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH = '/v1/source/github/webhook/configure'
 export const ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH = '/v1/source/github/installations/verify'
-export const ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION = 1
 export const ZEROPS_SOURCE_PROTOCOL_VERSION_V2 = 2
 export const ZEROPS_SOURCE_RESOLVE_PATH_V2 = '/v2/source/resolve'
 export const ZEROPS_SOURCE_UPLOAD_PATH_V2 = '/v2/source/upload'
@@ -33,12 +29,6 @@ const GITHUB_APP_ID_PATTERN = /^[1-9][0-9]{0,31}$/
 const GITHUB_APP_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/
 const GITHUB_LOGIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,98}[A-Za-z0-9])?$/
 
-export interface ZeropsSourceCredentialBundleV1 {
-	readonly version: typeof ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION
-	readonly githubAppId: string
-	readonly privateKeyPem: string
-}
-
 export interface ZeropsSourceCredentialBundleV2 {
 	readonly version: typeof ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION_V2
 	readonly connectionId: string
@@ -60,41 +50,6 @@ export interface ZeropsSourceGitHubAppIdentityV1 {
 	}
 	readonly events: readonly ['push']
 }
-
-export interface ZeropsSourceCredentialActivateRequestV1 {
-	readonly protocolVersion: typeof ZEROPS_SOURCE_PROTOCOL_VERSION
-	readonly connectionId: string
-	/** Canonical JSON that is byte-identical to the durable source environment value. */
-	readonly credentialBundle: string
-	readonly credentialSha256: string
-}
-
-export interface ZeropsSourceCredentialActivateResponseV1 {
-	readonly protocolVersion: typeof ZEROPS_SOURCE_PROTOCOL_VERSION
-	readonly connectionId: string
-	readonly credentialVersion: typeof ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION
-	readonly credentialSha256: string
-	readonly githubApp: ZeropsSourceGitHubAppIdentityV1
-}
-
-export interface ZeropsSourceCredentialStatusRequestV1 {
-	readonly protocolVersion: typeof ZEROPS_SOURCE_PROTOCOL_VERSION
-	readonly connectionId: string
-}
-
-export interface ZeropsSourceCredentialAnonymousStatusResponseV1 {
-	readonly protocolVersion: typeof ZEROPS_SOURCE_PROTOCOL_VERSION
-	readonly connectionId: string
-	readonly state: 'anonymous'
-}
-
-export interface ZeropsSourceCredentialActiveStatusResponseV1 extends ZeropsSourceCredentialActivateResponseV1 {
-	readonly state: 'active'
-}
-
-export type ZeropsSourceCredentialStatusResponseV1 =
-	| ZeropsSourceCredentialAnonymousStatusResponseV1
-	| ZeropsSourceCredentialActiveStatusResponseV1
 
 export interface ZeropsSourceCredentialActivateRequestV2 {
 	readonly protocolVersion: typeof ZEROPS_SOURCE_PROTOCOL_VERSION_V2
@@ -196,16 +151,6 @@ export interface ZeropsSourceRepository {
 export interface ZeropsSourceDescriptor {
 	path: 'zerops.yaml'
 	sha256: string
-}
-
-export interface ZeropsSourceResolveInstallationRequestV1 {
-	protocolVersion: typeof ZEROPS_SOURCE_PROTOCOL_VERSION
-	repository: ZeropsSourceRepository
-}
-
-export interface ZeropsSourceResolveInstallationResponseV1 {
-	protocolVersion: typeof ZEROPS_SOURCE_PROTOCOL_VERSION
-	githubInstallationId: number | null
 }
 
 export interface ZeropsSourceResolveRequestV1 {
@@ -340,7 +285,6 @@ export const ZEROPS_SOURCE_ERROR_CODES: readonly ZeropsSourceErrorCode[] = [
 export type ZeropsSourceErrorStage =
 	| 'authenticate'
 	| 'validate'
-	| 'resolve-installation'
 	| 'resolve'
 	| 'archive'
 	| 'upload'
@@ -350,7 +294,6 @@ export type ZeropsSourceErrorStage =
 export const ZEROPS_SOURCE_ERROR_STAGES: readonly ZeropsSourceErrorStage[] = [
 	'authenticate',
 	'validate',
-	'resolve-installation',
 	'resolve',
 	'archive',
 	'upload',
@@ -428,13 +371,12 @@ export interface ZeropsSourceCancelInput {
 }
 
 export interface ZeropsSourceClient {
-	resolveInstallationId(repoUrl: string, signal: AbortSignal): Promise<number | null>
 	resolve(input: ZeropsSourceResolveInput): Promise<ZeropsSourceResolveResult>
 	upload(input: ZeropsSourceUploadInput): Promise<ZeropsSourceUploadResult>
 	cancel(input: ZeropsSourceCancelInput): Promise<void>
 }
 
-/** Keyed source operations are additive so legacy client implementations remain valid. */
+/** Keyed source operations; the unkeyed v1 wire remains the anonymous public-repository path. */
 export interface ZeropsSourceClientV2 {
 	resolveV2(input: ZeropsSourceResolveInputV2): Promise<ZeropsSourceResolveResult>
 	uploadV2(input: ZeropsSourceUploadInputV2): Promise<ZeropsSourceUploadResult>
@@ -454,13 +396,11 @@ export interface ZeropsSourceCredentialStatusInput {
 
 /** Credential management is separate from the deploy source client and is composed only in the authenticated admin flow. */
 export interface ZeropsSourceCredentialManager {
-	activate(input: ZeropsSourceCredentialActivateInput): Promise<ZeropsSourceCredentialActivateResponseV1>
-	status(input: ZeropsSourceCredentialStatusInput): Promise<ZeropsSourceCredentialStatusResponseV1>
 	configureWebhook(input: ZeropsSourceWebhookConfigureInput): Promise<ZeropsSourceWebhookConfigureResponseV1>
 	verifyInstallations(input: ZeropsSourceInstallationsVerifyInput): Promise<ZeropsSourceInstallationsVerifyResponseV1>
 }
 
-/** Keyed credential operations are additive so legacy credential managers remain valid. */
+/** Keyed credential operations — the only way a private credential reaches `source`. */
 export interface ZeropsSourceCredentialManagerV2 {
 	activateV2(input: ZeropsSourceCredentialActivateInput): Promise<ZeropsSourceCredentialActivateResponseV2>
 	statusV2(input: ZeropsSourceCredentialStatusInput): Promise<ZeropsSourceCredentialStatusResponseV2>
@@ -539,23 +479,6 @@ const sha256 = (value: unknown, label: string): string => {
 	return value
 }
 
-const sourceCredentialBundleValue = (value: unknown): ZeropsSourceCredentialBundleV1 => {
-	const parsed = record(value, 'source credential bundle')
-	exactKeys(parsed, ['version', 'githubAppId', 'privateKeyPem'], 'source credential bundle')
-	if (parsed['version'] !== ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION) {
-		throw new Error('source credential bundle has an unsupported version')
-	}
-	const githubAppId = boundedString(parsed['githubAppId'], 'source credential bundle.githubAppId', 32)
-	if (!GITHUB_APP_ID_PATTERN.test(githubAppId)) throw new Error('source credential bundle.githubAppId is invalid')
-	const privateKeyPem = boundedString(
-		parsed['privateKeyPem'],
-		'source credential bundle.privateKeyPem',
-		MAX_GITHUB_APP_PRIVATE_KEY_LENGTH,
-	)
-	if (!isCanonicalPrivateKeyPem(privateKeyPem)) throw new Error('source credential bundle.privateKeyPem is invalid')
-	return { version: ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION, githubAppId, privateKeyPem }
-}
-
 const sourceCredentialBundleValueV2 = (value: unknown): ZeropsSourceCredentialBundleV2 => {
 	const parsed = record(value, 'source credential bundle v2')
 	exactKeys(parsed, ['version', 'connectionId', 'githubAppId', 'privateKeyPem'], 'source credential bundle v2')
@@ -590,38 +513,6 @@ const isCanonicalPrivateKeyPem = (value: string): boolean => {
 	} catch {
 		return false
 	}
-}
-
-export function buildZeropsSourceCredentialBundle(
-	input: Omit<ZeropsSourceCredentialBundleV1, 'version'>,
-): ZeropsSourceCredentialBundleV1 {
-	return sourceCredentialBundleValue({ version: ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION, ...input })
-}
-
-export function serializeZeropsSourceCredentialBundle(bundle: ZeropsSourceCredentialBundleV1): string {
-	const parsed = sourceCredentialBundleValue(bundle)
-	return JSON.stringify({ version: parsed.version, githubAppId: parsed.githubAppId, privateKeyPem: parsed.privateKeyPem })
-}
-
-export function decodeZeropsSourceCredentialBundle(value: unknown): ZeropsSourceCredentialBundleV1 {
-	if (typeof value !== 'string' || new TextEncoder().encode(value).byteLength > MAX_SOURCE_CREDENTIAL_BUNDLE_BYTES) {
-		throw new Error('source credential bundle must be bounded canonical JSON')
-	}
-	let decoded: unknown
-	try {
-		decoded = JSON.parse(value)
-	} catch {
-		throw new Error('source credential bundle must be bounded canonical JSON')
-	}
-	const bundle = sourceCredentialBundleValue(decoded)
-	if (serializeZeropsSourceCredentialBundle(bundle) !== value) throw new Error('source credential bundle must be bounded canonical JSON')
-	return bundle
-}
-
-export async function sha256ZeropsSourceCredentialBundle(value: string): Promise<string> {
-	decodeZeropsSourceCredentialBundle(value)
-	const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
-	return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 export function buildZeropsSourceCredentialBundleV2(
@@ -810,115 +701,6 @@ export function normalizeZeropsSourceRepository(repoUrl: string): ZeropsSourceRe
 	return repository({ owner: owner.toLowerCase(), name: name.toLowerCase() }, 'source repository')
 }
 
-export function decodeZeropsSourceCredentialActivateRequest(value: unknown): ZeropsSourceCredentialActivateRequestV1 {
-	const parsed = record(value, 'source credential activate request')
-	exactKeys(
-		parsed,
-		['protocolVersion', 'connectionId', 'credentialBundle', 'credentialSha256'],
-		'source credential activate request',
-	)
-	const credentialBundle = boundedString(
-		parsed['credentialBundle'],
-		'source credential activate request.credentialBundle',
-		MAX_SOURCE_CREDENTIAL_BUNDLE_BYTES,
-	)
-	decodeZeropsSourceCredentialBundle(credentialBundle)
-	return {
-		protocolVersion: protocolVersion(parsed, 'source credential activate request'),
-		connectionId: identifier(parsed['connectionId'], 'source credential activate request.connectionId'),
-		credentialBundle,
-		credentialSha256: sha256(parsed['credentialSha256'], 'source credential activate request.credentialSha256'),
-	}
-}
-
-export function buildZeropsSourceCredentialActivateRequest(
-	input: ZeropsSourceCredentialActivateInput,
-): ZeropsSourceCredentialActivateRequestV1 {
-	return decodeZeropsSourceCredentialActivateRequest({
-		protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION,
-		connectionId: input.connectionId,
-		credentialBundle: input.credentialBundle,
-		credentialSha256: input.credentialSha256,
-	})
-}
-
-export function decodeZeropsSourceCredentialActivateResponse(value: unknown): ZeropsSourceCredentialActivateResponseV1 {
-	const parsed = record(value, 'source credential activate response')
-	exactKeys(
-		parsed,
-		['protocolVersion', 'connectionId', 'credentialVersion', 'credentialSha256', 'githubApp'],
-		'source credential activate response',
-	)
-	if (parsed['credentialVersion'] !== ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION) {
-		throw new Error('source credential activate response has an unsupported credentialVersion')
-	}
-	return {
-		protocolVersion: protocolVersion(parsed, 'source credential activate response'),
-		connectionId: identifier(parsed['connectionId'], 'source credential activate response.connectionId'),
-		credentialVersion: ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION,
-		credentialSha256: sha256(parsed['credentialSha256'], 'source credential activate response.credentialSha256'),
-		githubApp: githubAppIdentity(parsed['githubApp'], 'source credential activate response.githubApp'),
-	}
-}
-
-export function buildZeropsSourceCredentialActivateResponse(
-	input: Omit<ZeropsSourceCredentialActivateResponseV1, 'protocolVersion'>,
-): ZeropsSourceCredentialActivateResponseV1 {
-	return decodeZeropsSourceCredentialActivateResponse({ protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION, ...input })
-}
-
-export function decodeZeropsSourceCredentialStatusRequest(value: unknown): ZeropsSourceCredentialStatusRequestV1 {
-	const parsed = record(value, 'source credential status request')
-	exactKeys(parsed, ['protocolVersion', 'connectionId'], 'source credential status request')
-	return {
-		protocolVersion: protocolVersion(parsed, 'source credential status request'),
-		connectionId: identifier(parsed['connectionId'], 'source credential status request.connectionId'),
-	}
-}
-
-export function buildZeropsSourceCredentialStatusRequest(
-	input: ZeropsSourceCredentialStatusInput,
-): ZeropsSourceCredentialStatusRequestV1 {
-	return decodeZeropsSourceCredentialStatusRequest({
-		protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION,
-		connectionId: input.connectionId,
-	})
-}
-
-export function decodeZeropsSourceCredentialStatusResponse(value: unknown): ZeropsSourceCredentialStatusResponseV1 {
-	const parsed = record(value, 'source credential status response')
-	if (parsed['state'] === 'anonymous') {
-		exactKeys(parsed, ['protocolVersion', 'connectionId', 'state'], 'source credential status response')
-		return {
-			protocolVersion: protocolVersion(parsed, 'source credential status response'),
-			connectionId: identifier(parsed['connectionId'], 'source credential status response.connectionId'),
-			state: 'anonymous',
-		}
-	}
-	if (parsed['state'] !== 'active') throw new Error('source credential status response.state is invalid')
-	exactKeys(
-		parsed,
-		['protocolVersion', 'connectionId', 'state', 'credentialVersion', 'credentialSha256', 'githubApp'],
-		'source credential status response',
-	)
-	const active = decodeZeropsSourceCredentialActivateResponse({
-		protocolVersion: parsed['protocolVersion'],
-		connectionId: parsed['connectionId'],
-		credentialVersion: parsed['credentialVersion'],
-		credentialSha256: parsed['credentialSha256'],
-		githubApp: parsed['githubApp'],
-	})
-	return { ...active, state: 'active' }
-}
-
-export function buildZeropsSourceCredentialStatusResponse(
-	input:
-		| { readonly connectionId: string; readonly state: 'anonymous' }
-		| Omit<ZeropsSourceCredentialActiveStatusResponseV1, 'protocolVersion'>,
-): ZeropsSourceCredentialStatusResponseV1 {
-	return decodeZeropsSourceCredentialStatusResponse({ protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION, ...input })
-}
-
 export function decodeZeropsSourceCredentialActivateRequestV2(value: unknown): ZeropsSourceCredentialActivateRequestV2 {
 	const parsed = record(value, 'source credential activate request v2')
 	exactKeys(
@@ -1033,12 +815,11 @@ export function buildZeropsSourceCredentialStatusResponseV2(
 const WEBHOOK_PATH = '/webhooks/github'
 
 /**
- * `/webhooks/github` is the legacy single-connection route; every keyed connection appends its own id
- * so one App's deliveries cannot be replayed against another. Requiring the bare path rejected every
- * multi-connection setup at `configureWebhook`.
+ * Only the Zerops `source` configure wire reaches this, and every Zerops connection appends its own id
+ * so one App's deliveries cannot be replayed against another. The bare path is a Cloudflare URL and is
+ * refused here (ADR-0039).
  */
 const isWebhookPath = (pathname: string): boolean => {
-	if (pathname === WEBHOOK_PATH) return true
 	if (!pathname.startsWith(`${WEBHOOK_PATH}/`)) return false
 	const connectionId = pathname.slice(WEBHOOK_PATH.length + 1)
 	// `ID_PATTERN` has no `%`, so a percent-escape in the path fails here rather than round-tripping.
@@ -1186,37 +967,6 @@ export function buildZeropsSourceInstallationsVerifyResponse(
 	input: Omit<ZeropsSourceInstallationsVerifyResponseV1, 'protocolVersion'>,
 ): ZeropsSourceInstallationsVerifyResponseV1 {
 	return decodeZeropsSourceInstallationsVerifyResponse({ protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION, ...input })
-}
-
-export function decodeZeropsSourceResolveInstallationRequest(value: unknown): ZeropsSourceResolveInstallationRequestV1 {
-	const parsed = record(value, 'source resolve-installation request')
-	exactKeys(parsed, ['protocolVersion', 'repository'], 'source resolve-installation request')
-	return {
-		protocolVersion: protocolVersion(parsed, 'source resolve-installation request'),
-		repository: repository(parsed['repository'], 'source resolve-installation request.repository'),
-	}
-}
-
-export function buildZeropsSourceResolveInstallationRequest(repoUrl: string): ZeropsSourceResolveInstallationRequestV1 {
-	return decodeZeropsSourceResolveInstallationRequest({
-		protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION,
-		repository: normalizeZeropsSourceRepository(repoUrl),
-	})
-}
-
-export function decodeZeropsSourceResolveInstallationResponse(value: unknown): ZeropsSourceResolveInstallationResponseV1 {
-	const parsed = record(value, 'source resolve-installation response')
-	exactKeys(parsed, ['protocolVersion', 'githubInstallationId'], 'source resolve-installation response')
-	return {
-		protocolVersion: protocolVersion(parsed, 'source resolve-installation response'),
-		githubInstallationId: parsed['githubInstallationId'] === null
-			? null
-			: installationId(parsed['githubInstallationId'], 'source resolve-installation response.githubInstallationId'),
-	}
-}
-
-export function buildZeropsSourceResolveInstallationResponse(githubInstallationId: number | null): ZeropsSourceResolveInstallationResponseV1 {
-	return decodeZeropsSourceResolveInstallationResponse({ protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION, githubInstallationId })
 }
 
 export function decodeZeropsSourceResolveRequest(value: unknown): ZeropsSourceResolveRequestV1 {

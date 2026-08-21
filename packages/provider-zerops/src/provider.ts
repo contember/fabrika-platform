@@ -41,7 +41,7 @@ type ZeropsRun = TypedProviderRun<ZeropsRuntimeTarget, FabrikaManifest>
 export interface ZeropsSourceTransportBinding {
 	readonly connectionId: string
 	readonly installationId: number
-	readonly transportKind: 'legacy-v1' | 'keyed-v2'
+	readonly transportKind: 'keyed-v2'
 }
 
 export interface ZeropsSourceTransportRouting {
@@ -334,14 +334,14 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 					throw new Error('zerops: source transport binding has different installation coordinates')
 				}
 				let uploaded: ZeropsSourceUploadResult
-				if (binding?.transportKind === 'keyed-v2') {
+				if (binding === undefined) {
+					uploaded = await source.client.upload(uploadInput)
+				} else {
 					if (sourceTransport === undefined) throw new Error('zerops: keyed source transport is unavailable')
 					uploaded = await sourceTransport.uploadV2({
 						...uploadInput,
 						privateBinding: { connectionId: binding.connectionId, installationId: binding.installationId },
 					})
-				} else {
-					uploaded = await source.client.upload(uploadInput)
 				}
 				if (
 					uploaded.runId !== source.runtime.runId

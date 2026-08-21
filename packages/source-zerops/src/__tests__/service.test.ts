@@ -1,26 +1,18 @@
 import {
 	buildZeropsSourceCancelRequest,
-	buildZeropsSourceCredentialActivateRequest,
 	buildZeropsSourceCredentialActivateRequestV2,
-	buildZeropsSourceCredentialBundle,
 	buildZeropsSourceCredentialBundleV2,
-	buildZeropsSourceCredentialStatusRequest,
 	buildZeropsSourceCredentialStatusRequestV2,
 	buildZeropsSourceInstallationsVerifyRequest,
-	buildZeropsSourceResolveInstallationRequest,
 	buildZeropsSourceResolveRequest,
 	buildZeropsSourceResolveRequestV2,
 	buildZeropsSourceUploadRequest,
 	buildZeropsSourceUploadRequestV2,
 	buildZeropsSourceWebhookConfigureRequest,
 	decodeZeropsSourceErrorEnvelope,
-	serializeZeropsSourceCredentialBundle,
 	serializeZeropsSourceCredentialBundleV2,
-	sha256ZeropsSourceCredentialBundle,
 	sha256ZeropsSourceCredentialBundleV2,
-	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2,
-	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2,
 	ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH,
 	ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH,
@@ -128,7 +120,7 @@ describe('Zerops source RPC authentication and routing', () => {
 					events: ['push'],
 				}),
 				getWebhookConfig: async () => ({
-					url: 'https://control.example.test/webhooks/github',
+					url: 'https://control.example.test/webhooks/github/connection-1',
 					contentType: 'json',
 					insecureSsl: '0',
 				}),
@@ -152,19 +144,20 @@ describe('Zerops source RPC authentication and routing', () => {
 		})
 		const service = new ZeropsSourceService({ rpcKey, github, repository: resolvingRepository() })
 		const anonymous = await service.fetch(rpcRequest(
-			ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
-			buildZeropsSourceCredentialStatusRequest({ connectionId: 'connection-1', signal: new AbortController().signal }),
+			ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2,
+			buildZeropsSourceCredentialStatusRequestV2({ connectionId: 'connection-1', signal: new AbortController().signal }),
 		))
-		expect(await anonymous.json()).toEqual({ protocolVersion: 1, connectionId: 'connection-1', state: 'anonymous' })
+		expect(await anonymous.json()).toEqual({ protocolVersion: 2, connectionId: 'connection-1', state: 'anonymous' })
 
-		const credentialBundle = serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({
+		const credentialBundle = serializeZeropsSourceCredentialBundleV2(buildZeropsSourceCredentialBundleV2({
+			connectionId: 'connection-1',
 			githubAppId: '123',
 			privateKeyPem: credentialPem,
 		}))
-		const credentialSha256 = await sha256ZeropsSourceCredentialBundle(credentialBundle)
+		const credentialSha256 = await sha256ZeropsSourceCredentialBundleV2(credentialBundle)
 		const activated = await service.fetch(rpcRequest(
-			ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
-			buildZeropsSourceCredentialActivateRequest({
+			ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2,
+			buildZeropsSourceCredentialActivateRequestV2({
 				connectionId: 'connection-1',
 				credentialBundle,
 				credentialSha256,
@@ -178,8 +171,8 @@ describe('Zerops source RPC authentication and routing', () => {
 		expect(JSON.parse(activatedText)).toMatchObject({ connectionId: 'connection-1', credentialSha256 })
 
 		const active = await service.fetch(rpcRequest(
-			ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH,
-			buildZeropsSourceCredentialStatusRequest({ connectionId: 'connection-1', signal: new AbortController().signal }),
+			ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2,
+			buildZeropsSourceCredentialStatusRequestV2({ connectionId: 'connection-1', signal: new AbortController().signal }),
 		))
 		expect(await active.json()).toMatchObject({ state: 'active', connectionId: 'connection-1', credentialSha256 })
 
@@ -188,7 +181,7 @@ describe('Zerops source RPC authentication and routing', () => {
 			buildZeropsSourceWebhookConfigureRequest({
 				connectionId: 'connection-1',
 				credentialSha256,
-				url: 'https://control.example.test/webhooks/github',
+				url: 'https://control.example.test/webhooks/github/connection-1',
 				secret: 'must-not-leak',
 				signal: new AbortController().signal,
 			}),
@@ -211,16 +204,17 @@ describe('Zerops source RPC authentication and routing', () => {
 			installation: { status: 'installed', installationId: 41, accountLogin: 'contember', repositorySelection: 'all' },
 		})
 
-		const conflictingBundle = serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({
+		const conflictingBundle = serializeZeropsSourceCredentialBundleV2(buildZeropsSourceCredentialBundleV2({
+			connectionId: 'connection-1',
 			githubAppId: '124',
 			privateKeyPem: credentialPem,
 		}))
 		const conflict = await service.fetch(rpcRequest(
-			ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
-			buildZeropsSourceCredentialActivateRequest({
-				connectionId: 'connection-2',
+			ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2,
+			buildZeropsSourceCredentialActivateRequestV2({
+				connectionId: 'connection-1',
 				credentialBundle: conflictingBundle,
-				credentialSha256: await sha256ZeropsSourceCredentialBundle(conflictingBundle),
+				credentialSha256: await sha256ZeropsSourceCredentialBundleV2(conflictingBundle),
 				signal: new AbortController().signal,
 			}),
 		))
@@ -234,77 +228,22 @@ describe('Zerops source RPC authentication and routing', () => {
 		})
 	})
 
-	test('captures one GitHub client snapshot for an installation lookup while activation replaces later operations', async () => {
-		const firstStarted = Promise.withResolvers<void>()
-		const releaseFirst = Promise.withResolvers<void>()
-		const firstClient: SourceGitHubClient = {
-			getAuthenticatedApp: async () => ({
-				id: 123,
-				slug: 'fabrika-test',
-				htmlUrl: 'https://github.com/apps/fabrika-test',
-				public: false,
-				owner: { login: 'contember', type: 'Organization' },
-				permissions: { contents: 'read' },
-				events: ['push'],
-			}),
-			resolveInstallationId: async () => {
-				firstStarted.resolve()
-				await releaseFirst.promise
-				return 41
-			},
-			mintRepositoryToken: async () => ({ token: 'first', expiresAt: Date.now() + 60_000 }),
-		}
-		const secondClient: SourceGitHubClient = {
-			...firstClient,
-			resolveInstallationId: async () => 42,
-		}
-		let current = firstClient
-		let snapshots = 0
-		const github: SourceGitHubConnection = {
-			snapshot: () => {
-				snapshots++
-				return { client: current, appId: '123', credentialSha256: 'a'.repeat(64) }
-			},
-			activate: async () => {
-				throw new Error('activation not expected')
-			},
-			status: async () => {
-				throw new Error('status not expected')
-			},
-		}
-		const service = new ZeropsSourceService({ rpcKey, github, repository: resolvingRepository() })
-		const lookup = service.fetch(rpcRequest(
-			'/v1/installations/resolve',
-			buildZeropsSourceResolveInstallationRequest('github.com/contember/fabrika-platform'),
-		))
-		await firstStarted.promise
-		current = secondClient
-		releaseFirst.resolve()
-		expect(await (await lookup).json()).toMatchObject({ githubInstallationId: 41 })
-		const later = await service.fetch(rpcRequest(
-			'/v1/installations/resolve',
-			buildZeropsSourceResolveInstallationRequest('github.com/contember/fabrika-platform'),
-		))
-		expect(await later.json()).toMatchObject({ githubInstallationId: 42 })
-		expect(snapshots).toBe(2)
-	})
-
 	test('authenticates credential routes before reading bodies and applies the dedicated 128 KiB cap', async () => {
 		const service = new ZeropsSourceService({ rpcKey, repository: resolvingRepository() })
 		const unauthorized = await service.fetch(
-			new Request(`http://source.test${ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH}`, {
+			new Request(`http://source.test${ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2}`, {
 				method: 'POST',
 				body: '{ not json',
 			}),
 		)
 		expect(unauthorized.status).toBe(401)
 		const aboveDefaultLimit = await service.fetch(rpcRequest(
-			ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
+			ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2,
 			{ padding: 'x'.repeat(70 * 1024) },
 		))
 		expect(aboveDefaultLimit.status).toBe(400)
 
-		const oversized = await service.fetch(rpcRequest(ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH, { padding: 'x'.repeat(129 * 1024) }))
+		const oversized = await service.fetch(rpcRequest(ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2, { padding: 'x'.repeat(129 * 1024) }))
 		expect(oversized.status).toBe(413)
 		expect(decodeZeropsSourceErrorEnvelope(await oversized.json()).error).toEqual({
 			code: 'invalid_request',
@@ -344,7 +283,7 @@ describe('Zerops source RPC authentication and routing', () => {
 		const body = new TransformStream<Uint8Array, Uint8Array>()
 		const writer = body.writable.getWriter()
 		const responsePromise = service.fetch(
-			new Request(`http://source.test${ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH}`, {
+			new Request(`http://source.test${ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2}`, {
 				method: 'POST',
 				headers: { authorization: `Bearer ${rpcKey}`, 'content-type': 'application/json' },
 				body: body.readable,
@@ -369,7 +308,7 @@ describe('Zerops source RPC authentication and routing', () => {
 		const writer = body.writable.getWriter()
 		void writer.write(new TextEncoder().encode('{'))
 		const response = await service.fetch(
-			new Request(`http://source.test${ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH}`, {
+			new Request(`http://source.test${ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2}`, {
 				method: 'POST',
 				headers: { authorization: `Bearer ${rpcKey}`, 'content-type': 'application/json' },
 				body: body.readable,
@@ -398,16 +337,17 @@ describe('Zerops source RPC authentication and routing', () => {
 			repository: resolvingRepository(),
 			credentialTimeoutMs: 5,
 		})
-		const credentialBundle = serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({
+		const credentialBundle = serializeZeropsSourceCredentialBundleV2(buildZeropsSourceCredentialBundleV2({
+			connectionId: 'connection-1',
 			githubAppId: '123',
 			privateKeyPem: credentialPem,
 		}))
 		const responsePromise = service.fetch(rpcRequest(
-			ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH,
-			buildZeropsSourceCredentialActivateRequest({
+			ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2,
+			buildZeropsSourceCredentialActivateRequestV2({
 				connectionId: 'connection-1',
 				credentialBundle,
-				credentialSha256: await sha256ZeropsSourceCredentialBundle(credentialBundle),
+				credentialSha256: await sha256ZeropsSourceCredentialBundleV2(credentialBundle),
 				signal: new AbortController().signal,
 			}),
 		))
@@ -419,7 +359,7 @@ describe('Zerops source RPC authentication and routing', () => {
 			stage: 'credentials',
 			retryable: false,
 		})
-		expect(github.snapshot()).toBeUndefined()
+		expect(github.snapshotV2('connection-1')).toBeUndefined()
 		candidate.resolve({
 			getAuthenticatedApp: async () => ({
 				id: 123,
@@ -434,7 +374,7 @@ describe('Zerops source RPC authentication and routing', () => {
 			mintRepositoryToken: async () => ({ token: 'must-not-leak', expiresAt: Date.now() + 60_000 }),
 		})
 		await Bun.sleep(0)
-		expect(github.snapshot()).toBeUndefined()
+		expect(github.snapshotV2('connection-1')).toBeUndefined()
 	})
 
 	test('marks a timeout after webhook PATCH dispatch and hanging readback as non-retryable', async () => {
@@ -459,20 +399,21 @@ describe('Zerops source RPC authentication and routing', () => {
 				mintRepositoryToken: async () => ({ token: 'must-not-leak', expiresAt: Date.now() + 60_000 }),
 			}),
 		})
-		const credentialBundle = serializeZeropsSourceCredentialBundle(buildZeropsSourceCredentialBundle({
+		const credentialBundle = serializeZeropsSourceCredentialBundleV2(buildZeropsSourceCredentialBundleV2({
+			connectionId: 'connection-1',
 			githubAppId: '123',
 			privateKeyPem: credentialPem,
 		}))
-		const credentialSha256 = await sha256ZeropsSourceCredentialBundle(credentialBundle)
-		await github.activate('connection-1', credentialBundle, credentialSha256, new AbortController().signal)
-		const before = github.snapshot()
+		const credentialSha256 = await sha256ZeropsSourceCredentialBundleV2(credentialBundle)
+		await github.activateV2('connection-1', credentialBundle, credentialSha256, new AbortController().signal)
+		const before = github.snapshotV2('connection-1')
 		const service = new ZeropsSourceService({ rpcKey, github, repository: resolvingRepository(), credentialTimeoutMs: 5 })
 		const responsePromise = service.fetch(rpcRequest(
 			ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH,
 			buildZeropsSourceWebhookConfigureRequest({
 				connectionId: 'connection-1',
 				credentialSha256,
-				url: 'https://control.example.test/webhooks/github',
+				url: 'https://control.example.test/webhooks/github/connection-1',
 				secret: 'must-not-leak',
 				signal: new AbortController().signal,
 			}),
@@ -487,7 +428,7 @@ describe('Zerops source RPC authentication and routing', () => {
 			retryable: false,
 		})
 		expect(text).not.toContain('must-not-leak')
-		expect(github.snapshot()).toBe(before)
+		expect(github.snapshotV2('connection-1')).toBe(before)
 	})
 
 	test('authenticates before reading an untrusted body', async () => {
@@ -667,24 +608,11 @@ describe('Zerops source RPC authentication and routing', () => {
 		})
 	})
 
-	test('implements resolve-installation and resolve without GitHub credentials for a public repository', async () => {
+	test('implements resolve without GitHub credentials for a public repository', async () => {
 		const service = new ZeropsSourceService({
 			rpcKey,
 			repository: resolvingRepository(),
 		})
-		const installation = await service.fetch(
-			rpcRequest(
-				'/v1/installations/resolve',
-				buildZeropsSourceResolveInstallationRequest(
-					'github.com/contember/fabrika-platform',
-				),
-			),
-		)
-		expect(await installation.json()).toEqual({
-			protocolVersion: 1,
-			githubInstallationId: null,
-		})
-
 		const resolve = await service.fetch(
 			rpcRequest(
 				'/v1/source/resolve',

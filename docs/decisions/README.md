@@ -129,6 +129,13 @@ installation explicitly, and an immutable transport marker keeps the copied Zero
 v1 compatibility route. Cloudflare preserves its static-secret and installation-id webhook behavior.
 There is no Fabrika connection-count limit; individual payloads and pages remain bounded.
 
+**Zerops source credentials: 0032 is still the design, 0039 is the current scope.** ADR-0032 decided
+the multi-connection model _and_ a compatibility path for the one v1 credential that existed when it
+was written. [ADR-0039](0039-retire-the-legacy-v1-source-credential-path.md) supersedes that
+compatibility clause only — the account holding that credential was emptied, so `keyed-v2` is now the
+only transport, the unkeyed `GITHUB_APP_CREDENTIALS` bundle is no longer a credential, and there is no
+adoption path. Everything else 0032 decided stands.
+
 ADR-0038 removes the environment NAME from namespace sizing. Every environment now gets
 `postgresql:single@18` at `oltp-hobby`, `corePackage: LIGHT` and a one-container proxy floor, and the
 light tier's shared `db` moves to `oltp-hobby` — because a Zerops profile chooses the floor and the
@@ -170,10 +177,11 @@ tuning preset, never the cap. HA and larger floors stay reachable through `--pos
 - [0029](0029-an-operator-owned-github-app-delivers-zerops-sources.md) — An operator-owned GitHub App delivers Zerops application sources — accepted; packaging mechanism amended by 0037 (2026-08-11)
 - [0030](0030-persist-github-app-creation-before-success.md) — Persist GitHub App creation before success — accepted; amends 0029's init durability detail (2026-08-12)
 - [0031](0031-manage-zerops-github-source-from-control.md) — Manage the Zerops GitHub source connection from control — accepted; supersedes 0030 for normal Zerops setup (2026-08-13)
-- [0032](0032-support-multiple-private-github-source-connections.md) — Support one private GitHub source connection per organization — accepted; extends 0029 and 0031 (2026-08-14)
+- [0032](0032-support-multiple-private-github-source-connections.md) — Support one private GitHub source connection per organization — accepted; extends 0029 and 0031; compatibility clause superseded by 0039 (2026-08-14)
 - [0033](0033-operate-the-control-plane-from-the-cli.md) — Operate the control plane from the CLI — accepted (2026-08-18)
 - [0034](0034-the-control-plane-creates-the-projects-it-owns.md) — The control plane creates the projects it owns — accepted; amends 0025's token scope (2026-08-18)
 - [0035](0035-the-platform-owns-the-application-iam-issuer.md) — The platform owns the application's IAM issuer, and an undeclared variable is refused — accepted; renames `FABRIKA_IAM_URL` under 0024 (2026-08-19)
 - [0036](0036-recover-a-source-credential-binding.md) — Recover a source credential binding from durable state — accepted; amends 0032's rotation scope (2026-08-20)
 - [0037](0037-stream-github-tarballs-for-zerops-sources.md) — Stream GitHub tarballs for Zerops sources — accepted; amends 0029's packaging mechanism (2026-08-21)
 - [0038](0038-size-namespaces-cheaply-by-default.md) — Size namespaces cheaply by default; an environment name never chooses a size — accepted (2026-08-21)
+- [0039](0039-retire-the-legacy-v1-source-credential-path.md) — Retire the legacy v1 source credential path — accepted; supersedes 0032's compatibility clause (2026-08-21)

@@ -195,13 +195,6 @@ export function sourceChain(status: GitHubSourceConnectionStatusDto): readonly S
 			{ label: 'Webhook', detail: 'not verified', lamp: 'stop' },
 		]
 	}
-	if (status.state === 'adoption-required') {
-		return [
-			{ label: 'GitHub App', detail: 'existing credentials', lamp: 'ok' },
-			{ label: 'Private source', detail: 'credentials present', lamp: 'ok' },
-			{ label: 'Webhook', detail: 'adoption required', lamp: 'run' },
-		]
-	}
 	const detail = status.state === 'unavailable' ? 'unsupported setup' : 'not configured'
 	return [
 		{ label: 'GitHub App', detail, lamp: 'idle' },

@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { requireMachineKey } from './machine-key'
 import { COMPOSE_FILE, REPO_ROOT, STATE_DIR } from './prepare'
+import { LOCAL_SOURCE_CONNECTIONS } from './source-connection-fixture'
 
 const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
 const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
@@ -26,6 +27,9 @@ const NOTES_APP_ID = 'notes'
 const NOTES_ENVIRONMENT = 'prod'
 const NOTES_DEPLOY_SERVICE = 'notesapi'
 const SMOKE_COMMIT_SHA = '0123456789abcdef0123456789abcdef01234567'
+// The keyed connection the notes app is bound to; its scoped route is the only one that can trigger it.
+const NOTES_SOURCE_CONNECTION = LOCAL_SOURCE_CONNECTIONS[0]
+if (NOTES_SOURCE_CONNECTION === undefined) throw new Error('the local source connection fixture is empty')
 const EXTERNAL_ACTIVATION_WAIT_MS = 11_000
 const POLL_INTERVAL_MS = 200
 const POLL_TIMEOUT_MS = 30_000
@@ -254,14 +258,21 @@ const ensureNotesApp = async (machineKey: string): Promise<void> => {
 	})
 }
 
-const triggerNotesWebhook = async (webhookSecret: string): Promise<string> => {
+/**
+ * The scoped route resolves the connection's vault secret and verifies the HMAC before anything else,
+ * so a 204 proves the signature was accepted. It cannot prove more here: `notes` is registered
+ * anonymously because no local app can hold a keyed private binding (see backlog 81), so the delivery
+ * matches no application and `handleWebhook` acknowledges it with an empty body.
+ */
+const proveScopedWebhookSignature = async (webhookSecret: string): Promise<void> => {
 	const body = JSON.stringify({
 		ref: 'refs/heads/main',
 		after: SMOKE_COMMIT_SHA,
 		repository: { clone_url: 'https://github.com/contember/fabrika-platform.git' },
+		installation: { id: NOTES_SOURCE_CONNECTION.installationId },
 	})
 	const signature = createHmac('sha256', webhookSecret).update(body).digest('hex')
-	const response = await fetch(`${CONTROL_ORIGIN}/webhooks/github`, {
+	const response = await fetch(`${CONTROL_ORIGIN}/webhooks/github/${NOTES_SOURCE_CONNECTION.connectionId}`, {
 		method: 'POST',
 		headers: {
 			'content-type': 'application/json',
@@ -269,22 +280,18 @@ const triggerNotesWebhook = async (webhookSecret: string): Promise<string> => {
 		},
 		body,
 	})
-	if (!response.ok) {
-		throw new Error(`local webhook failed with status ${response.status}`)
+	if (response.status !== 204) {
+		throw new Error(`the scoped local webhook answered ${response.status}, not the expected 204`)
 	}
-	const value: unknown = await response.json()
-	const triggered = requiredArray(value, 'triggered')
-	if (triggered.length !== 1 || typeof triggered[0] !== 'string') {
-		throw new Error('local webhook did not trigger exactly one deploy')
-	}
-	return triggered[0]
+	console.info(`Scoped webhook ${NOTES_SOURCE_CONNECTION.connectionId} verified the delivery signature`)
 }
 
-const proveRestartReconciliation = async (
-	machineKey: string,
-	webhookSecret: string,
-): Promise<{ runId: string; commitSha: string }> => {
-	const runId = await triggerNotesWebhook(webhookSecret)
+const proveRestartReconciliation = async (machineKey: string): Promise<{ runId: string; commitSha: string }> => {
+	// Manual, not webhook-driven: triggering by delivery needs an app bound to a keyed connection.
+	const triggered = await controlRequest('/deploy', machineKey, {
+		body: { appId: NOTES_APP_ID, env: NOTES_ENVIRONMENT, ref: 'refs/heads/main' },
+	})
+	const runId = requiredString(triggered, 'id')
 	await poll(
 		'a provider-owned running deploy',
 		() => controlRequest(`/runs/${runId}`, machineKey),
@@ -301,8 +308,8 @@ const proveRestartReconciliation = async (
 	)
 	const completed = await controlRequest(`/runs/${runId}`, machineKey)
 	const commitSha = requiredString(completed, 'commitSha')
-	if (commitSha !== SMOKE_COMMIT_SHA) {
-		throw new Error('completed deploy did not preserve the webhook commit')
+	if (!/^[0-9a-f]{40}$/.test(commitSha)) {
+		throw new Error('completed deploy did not record the resolved commit')
 	}
 	return { runId, commitSha }
 }
@@ -710,7 +717,8 @@ const main = async (): Promise<void> => {
 	await ensureNamespace(machineKey)
 	await ensureNotesApp(machineKey)
 	const activeConfig = await activeOperationsConfig()
-	const deployment = await proveRestartReconciliation(machineKey, webhookSecret)
+	await proveScopedWebhookSignature(webhookSecret)
+	const deployment = await proveRestartReconciliation(machineKey)
 	const deployedConfig = await activeOperationsConfig()
 	if (
 		deployedConfig.dsn !== activeConfig.dsn
