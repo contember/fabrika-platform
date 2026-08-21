@@ -41,10 +41,13 @@ bun run release:validate   # publishability + dependency direction; also :pack :
 
 CPU-heavy runs (full typecheck, full test suite, docker builds) go through `cpu-lease run -n 4 -- …`.
 
-Suites that need a real backend **skip cleanly** when it is absent and print the variables and the
-docker command to get one: `FABRIKA_TEST_POSTGRES_URL` (the Postgres driver and the
-IAM/control/Operations schemas) and `FABRIKA_TEST_S3_*` (the S3 blob store). A green `bun test` with
-everything skipped does NOT mean the Postgres path works — run them before trusting that half.
+Suites that need a real backend **skip cleanly** when it is absent and say what to set to run them:
+`FABRIKA_TEST_POSTGRES_URL` (the Postgres driver and the IAM/control/Operations schemas) and
+`FABRIKA_TEST_S3_*` (the S3 blob store) each print the `docker run` that supplies one;
+`FABRIKA_LIVE_ZEROPS_TOKEN` + `FABRIKA_LIVE_ZEROPS_PROJECT_ID` run the platform-facts table against a
+real Zerops account, which no container can stand in for — it creates and deletes throwaway services in
+that project, and `FABRIKA_LIVE_ZEROPS_SLOW=1` adds the build-length rows. A green `bun test` with
+everything skipped proves nothing about any of the three — run them before trusting those halves.
 
 `release:validate` enforces that every package is either `private: true` or declares
 `publishConfig.access: "public"`, and that no public package depends on a private one.

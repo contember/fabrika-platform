@@ -1,5 +1,6 @@
 import { createZeropsApi, type FetchLike, type Sleeper, waitForProcess } from '@fabrika/provider-zerops'
-import { describe, expect, test } from 'bun:test'
+import { beforeAll, describe, expect, test } from 'bun:test'
+import { type FactContext, factsFor, type FactTransport, runFact } from '../../../provider-zerops/src/__tests__/platform-facts'
 import { createZeropsEmulator } from '../zerops-emulator'
 
 const token = 'local-test-token'
@@ -63,9 +64,11 @@ describe('local Zerops emulator', () => {
 				'  - hostname: proxy',
 				'    type: alpine@3.21',
 				'    envIsolation: service',
+				'    override: true',
 				'  - hostname: notesapi',
 				'    type: alpine/bun@1.3',
 				'    envIsolation: service',
+				'    override: true',
 			].join('\n'),
 			signal,
 		})
@@ -198,8 +201,10 @@ describe('local Zerops emulator', () => {
 				'services:',
 				'  - hostname: iam',
 				'    type: alpine/bun@1.3',
+				'    override: true',
 				'  - hostname: control',
 				'    type: alpine/bun@1.3',
+				'    override: true',
 			].join('\n'),
 			signal,
 		})
@@ -310,4 +315,59 @@ describe('local Zerops emulator', () => {
 		const response = await handler(new Request('http://zerops.local/api/rest/public/__local/state'))
 		expect(response.status).toBe(401)
 	})
+})
+
+/**
+ * The SAME table `@fabrika/provider-zerops`'s opt-in live suite runs against a real account
+ * (`platform-facts.live.test.ts`). A fact is a row there, and a row the double models is asserted here in
+ * the same change — which is what stops the emulator drifting from the platform unnoticed. A deliberately
+ * wrong row fails both sides, and that is the point.
+ *
+ * The rows run in table order and some depend on the row before, so `test` per row, no `test.each` reorder,
+ * and one shared context the capturing rows fill in.
+ */
+describe('the platform-facts table, against the double', () => {
+	const context: FactContext = new Map()
+	let transport: FactTransport
+
+	beforeAll(async () => {
+		const baseUrl = 'http://zerops.local/api/rest/public'
+		const handler = await createZeropsEmulator({ token })
+		transport = {
+			baseUrl,
+			token,
+			fetch: (url, init) => handler(new Request(url, init)),
+			// Nothing here is really asynchronous; the poll loop still has to turn.
+			sleep: async () => {},
+			signal: AbortSignal.timeout(30_000),
+		}
+		// The account gives the live suite a project; here one is imported, with a service the table never
+		// names so no row collides with it.
+		const created = await handler(
+			new Request(`${baseUrl}/client/local-client/project/import`, {
+				method: 'POST',
+				headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+				body: JSON.stringify({
+					yaml: ['project:', '  name: platformfacts', 'services:', '  - hostname: bootstrap', '    type: alpine@3.21'].join('\n'),
+				}),
+			}),
+		)
+		const projectId = stringField(await created.json(), 'projectId')
+		if (projectId === undefined) {
+			throw new Error('the emulator did not create a project for the fact table')
+		}
+		context.set('clientId', 'local-client')
+		context.set('projectId', projectId)
+		context.set('hostname', 'factsvc')
+		context.set('deleteHostname', 'factdel')
+		context.set('absentHostname', 'factabsent')
+		context.set('setupProbeHostname', 'factsetup')
+		context.set('absentAppVersionId', 'version-999999')
+	})
+
+	for (const fact of factsFor('emulator')) {
+		test(fact.id, async () => {
+			await runFact({ transport, fact, context })
+		})
+	}
 })

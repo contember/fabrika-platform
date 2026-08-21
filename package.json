@@ -9,6 +9,7 @@
 	"scripts": {
 		"typecheck": "bun run --filter '*' typecheck && tsc --project scripts/tsconfig.json",
 		"test": "bun test",
+		"test:live": "bun test packages/provider-zerops/src/__tests__/platform-facts.live.test.ts",
 		"lint": "biome lint .",
 		"format": "dprint fmt",
 		"format:check": "dprint check",

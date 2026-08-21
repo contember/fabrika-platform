@@ -5,6 +5,26 @@ The subset of Zerops behaviour that the decisions in
 Where a claim could **not** be confirmed in the public docs it says so — do not
 promote it to fact without checking.
 
+## How a fact here becomes verified
+
+The `### Verified live` sections below were produced by hand against a real account; the table in
+`packages/provider-zerops/src/__tests__/platform-facts.ts` is what re-checks them. It is the
+machine-readable half of this document: one row per fact — the request, the expected status and error
+code, and the section here it came from. Two consumers run that ONE table:
+
+- `packages/local-stack/src/__tests__/zerops-emulator.test.ts` runs every row marked `emulator: true`
+  against the local double, so a fact added for the platform is asserted of the emulator in the same
+  change.
+- `packages/provider-zerops/src/__tests__/platform-facts.live.test.ts` runs every row that is not
+  `not-probed` against a real account, behind `FABRIKA_LIVE_ZEROPS_TOKEN` and
+  `FABRIKA_LIVE_ZEROPS_PROJECT_ID` (plus `FABRIKA_LIVE_ZEROPS_SLOW=1` for the one build-length probe).
+  It creates throwaway services named with a run id and deletes them again.
+
+**Adding a fact means adding a row**, not only a line in a table here. A row marked `live:
+'not-probed'` carries the reason it cannot be probed — a second credential, a build, a race, or a
+network the suite cannot reach — and a row marked `emulator: false` carries the reason the double does
+not model it.
+
 ## Hierarchy and isolation
 
 `project → service → container`. A project is the top-level entity: a **VXLAN
@@ -70,7 +90,9 @@ destructive (logs and statistics are lost).
 ([import reference](https://docs.zerops.io/references/import))
 
 Fabrika sets `corePackage` per deployment namespace project. The provider default
-is `SERIOUS` for `prod` and `LIGHT` for other environments.
+is `LIGHT` on every environment, `prod` included
+([ADR-0038](../decisions/0038-size-namespaces-cheaply-by-default.md)); `SERIOUS` is
+an explicit `--core-package=SERIOUS`.
 
 ## The two config files
 
@@ -159,8 +181,8 @@ The OpenAPI document has these relevant limits:
 
 - **The log service itself.** `GET /project/{id}/log` returns URLs plus a bearer for a
   SEPARATE service; that service's own request/response contract appears in no
-  published document. fabrika's client marks `readBuildLog` unverified and treats a
-  failure there as non-fatal.
+  published document. What it does answer was measured live — see "the project log
+  service" below; fabrika's client (`readBuildLog`) treats a failure there as non-fatal.
 - **Project `envIsolation` is write-only through the relevant public shapes.** It
   is settable on `POST /client/{id}/project` and in the import `project:` section,
   absent from `RequestPutProject`, and absent from the project read response.
@@ -716,6 +738,33 @@ every directory before the first file inside it. The CLI's archive does exactly 
 file mtime `0` like ours), so nothing else in the header differs. The streamed PUT without a
 `Content-Length` was not the cause: the same flat archive failed with one.
 
+### Verified live (2026-08-21, account `prg1`, a throwaway project since deleted) — deleting a service, and what an absent id answers
+
+Measured while building the `platform-facts` suite, on one throwaway service created with
+`startWithoutCode: true` and then removed.
+
+| Call                                                           | Result                                                                                                                       |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `DELETE /service-stack/{id}`                                   | **200** with a PROCESS body — `{ id, status: PENDING, actionName: stack.delete, serviceStackId, projectId, … }`, not a `204` |
+| That process, polled                                           | **`FINISHED` after about 21 s**                                                                                              |
+| `GET /service-stack/{id}` afterwards                           | **400 `serviceStackNotFound`**                                                                                               |
+| `GET /service-stack-by-name/{projectId}/{hostname}` afterwards | **400 `serviceStackNotFound`** — the same answer a name that never existed gets                                              |
+| A second `DELETE /service-stack/{id}`                          | **400 `serviceStackNotFound`**                                                                                               |
+| `GET /service-stack/{id}` for an id that never existed         | **400 `serviceStackNotFound`**                                                                                               |
+| `GET /service-stack/{id}/user-data` for an absent id           | **400 `serviceStackNotFound`** — the same code that endpoint returns on every live service                                   |
+| `POST /service-stack/{id}/user-data` for an absent id          | **400 `serviceStackNotFound`**                                                                                               |
+| A SUCCESSFUL `POST /service-stack/{id}/user-data`              | **200**, not 201, with the `stack.updateUserData` process body                                                               |
+| `DELETE /project/{id}`                                         | **200** with a `project.delete` process                                                                                      |
+
+So the whole service-stack family says "absent" the same way — `400 serviceStackNotFound` — whether the
+id never existed, the hostname never existed, or the service was deleted a moment ago. This extends the
+by-name finding above rather than narrowing it: nothing in this family answers 404, so a client deciding
+"present or absent" by HTTP status is wrong in every one of those cases.
+
+A delete is asynchronous like every other service mutation: the 200 is the process starting, and only
+that process reaching `FINISHED` means the service is gone. A read taken BETWEEN the two was not
+measured, so the double removes the record at once and the suite reads only after the wait.
+
 ### Verified live (2026-08-19, account `prg1`, project `fabrika-notes-prod`) — a user-data write is an asynchronous process
 
 The first app deploy into a namespace failed at `build-and-deploy` with a bare `400`, deterministically
@@ -845,11 +894,16 @@ identically while replacing `iam-local` with `iam`.
 
 ### `fabrika platform install --provider=zerops`
 
-The from-scratch bring-up: `packages/installation-zerops/src/install.ts`. The operator creates an
-EMPTY project (core package `LIGHT`, `envIsolation: service` — a project-level setting the platform
-accepts at creation only and never hands back, so nothing can verify it), and this command does the
-rest. It is interactive and laptop-side, confirming before every step that leaves the operator's disk,
-and it is the only command that generates a credential for an installation.
+The from-scratch bring-up: `packages/installation-zerops/src/install.ts`. The operator either
+creates an EMPTY project (core package `LIGHT`, `envIsolation: service` — a project-level setting
+the platform accepts at creation only and never hands back, so nothing can verify it) and names it
+with `--project-id`, or passes `--create-project` and this command creates it from the same compiled
+declaration the services import comes from. A created project is polled to `ACTIVE` (`NEW` →
+`CREATING` → `ACTIVE`, about 20 s live) before the first service import, because whether a service
+import into a `CREATING` project succeeds has not been measured; its id is printed before the wait so
+an interrupted run resumes with `--project-id`. The command is interactive and laptop-side,
+confirming before every step that leaves the operator's disk, and it is the only command that
+generates a credential for an installation.
 
 Its shape is decided by three of the facts above:
 
@@ -977,6 +1031,30 @@ and recreated. Multi-connection acceptance evidence is tracked in the
 [active multi-connection sprint](../sprints/sprint-2026-08-14-multiple-private-github-source-connections.md).
 The single-connection public/private deployment gate is recorded by the archived
 [application deploy sprint](../archive/sprint-2026-08-11-fabrika-deploys-an-app-on-zerops.md).
+
+### Verified live (2026-08-21, account `prg1`, project `apps-test2`) — the project log service
+
+`GET /project/{id}/log` answers `{ accessToken, expiration, url, urlPlain, urlInfo, urlUi }`. The URLs
+point at a separate log service that takes the `accessToken` as a bearer.
+
+| Call                                                       | Result                                                                                                                                                                                 |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `urlPlain` (`…/api/rest/log/plaintext`)                    | one `<RFC3339 timestamp> <tag> <message>` line per record                                                                                                                              |
+| `url` (`…/api/rest/log`)                                   | `{ items: [{ id, timestamp, hostname, tag, content, message, client, appName, procId, msgId, structuredData, priority, severity, severityLabel, facility, facilityLabel, version }] }` |
+| `urlInfo`                                                  | `{ tags: [...] }` — the distinct tags in the project: `zerops@zerops`, `zerops@setup`, `init`, `supervise-daemon`, `crond`, and one `zbuilder@<appVersionId>` per build                |
+| `serviceStackId=<id>`, `limit=<n>`, `desc=1`, `tags=<tag>` | the query terms that work                                                                                                                                                              |
+| `format=<x>`                                               | accepts only `rfc_3164`, `rfc_5424`, `raw`; anything else is a **400**                                                                                                                 |
+| `from=<ts>` and any unknown term                           | **accepted and silently ignored** — the answer is the same as without it. Never rely on them                                                                                           |
+| `limit=N` without `desc`                                   | the NEWEST N records in ASCENDING timestamp order (`limit=3` on a log that starts 15:50 answered 17:00:00, 17:00:00, 17:15:00); `desc=1` returns the same newest N newest-first        |
+| `tags=zbuilder@<appVersionId>` WITHOUT `serviceStackId`    | exactly one app version's BUILD lines — the build runs on a separate builder stack, so combining the tag with the runtime `serviceStackId` returns nothing                             |
+| `serviceStackId=<runtime id>`                              | RUNTIME lines of every version that ever ran on that service; they carry no version marker                                                                                             |
+
+So a build log is selected by the version's tag, and a runtime window is cut client-side at the
+version's `build.pipelineStart` (`getAppVersion` / `activeAppVersion.build` carries `pipelineStart`,
+`startDate`, `endDate`, `pipelineFinish`, RFC3339 with nanoseconds). That cut is by time, not identity:
+the outgoing container keeps logging past the new `pipelineStart`, so its own later lines still pass.
+A build longer than `limit` needs no `desc` — each poll re-reads the newest window and the caller
+dedupes. Consumed by `ZeropsApi.readBuildLog`.
 
 ## Fabrika placement mapping
 

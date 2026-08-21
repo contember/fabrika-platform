@@ -68,7 +68,9 @@ bun run test:browser  # the opice suites in tests/browser/
   networks or add a convenience port publish to work around a connection failure.
 - **The Zerops emulator is a test double for the API, not for the platform.** It exists so a deploy
   can be driven end-to-end without an account; a behavior it fakes is not evidence about Zerops. See
-  `docs/reference/zerops-platform.md` for what is actually verified.
+  `docs/reference/zerops-platform.md` for what is actually verified. Its behaviour is pinned by the
+  shared `platform-facts` table (`packages/provider-zerops/src/__tests__/platform-facts.ts`), which
+  the opt-in live suite runs against a real account — change a fact there, not here.
 - **`local:smoke` is disruptive by design** — it hard-kills control mid-pipeline to prove startup
   reconciliation and exactly-once counting. Do not soften a step to make it pass; a failure there is
   a real finding.

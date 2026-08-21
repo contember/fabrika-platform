@@ -49,6 +49,8 @@ interface ProcessRecord {
 	id: string
 	actionName: string
 	serviceStackId?: string
+	/** Only a `stack.delete` process carries one live; nothing else here sets it. */
+	projectId?: string
 	appVersionId?: string
 	pendingReads: number
 }
@@ -102,6 +104,10 @@ interface ImportService {
 	hostname: string
 	type?: string
 	profile?: string
+	/** Without it the platform refuses a name that already exists — the WHOLE document, not just the entry. */
+	override?: boolean
+	zeropsSetup?: string
+	buildFromGit?: string
 }
 
 /** What one entry of an import document did. `process` is absent when the service was already there. */
@@ -179,10 +185,19 @@ const parseImportDocument = (yaml: string): ImportDocument => {
 		if (hostname === undefined || hostname === '') {
 			throw new Error('every imported service must have a hostname')
 		}
+		const zeropsSetup = stringProperty(entry, 'zeropsSetup')
+		const buildFromGit = stringProperty(entry, 'buildFromGit')
+		// A `zeropsSetup` names a pipeline config, and the platform takes one only beside a build source.
+		if (zeropsSetup !== undefined && buildFromGit === undefined) {
+			throw new PlatformRefusal(400, 'projectImportInvalidParameter', 'parameter is required for use of pipelineConfig')
+		}
 		return {
 			hostname,
 			...(stringProperty(entry, 'type') === undefined ? {} : { type: stringProperty(entry, 'type') }),
 			...(stringProperty(entry, 'profile') === undefined ? {} : { profile: stringProperty(entry, 'profile') }),
+			...(booleanProperty(entry, 'override') === undefined ? {} : { override: booleanProperty(entry, 'override') }),
+			...(zeropsSetup === undefined ? {} : { zeropsSetup }),
+			...(buildFromGit === undefined ? {} : { buildFromGit }),
 		}
 	})
 	const rawProject = property(value, 'project')
@@ -204,6 +219,17 @@ const parseImportDocument = (yaml: string): ImportDocument => {
 	}
 }
 
+/**
+ * A refusal the platform states with its own error code. `route`'s catch-all answers `400 BAD_REQUEST`,
+ * which is honest for a malformed request and useless for a fact a client branches on.
+ */
+class PlatformRefusal extends Error {
+	constructor(readonly status: number, readonly code: string, message: string) {
+		super(message)
+		this.name = 'PlatformRefusal'
+	}
+}
+
 const parseJsonBody = async (request: Request): Promise<unknown> => {
 	try {
 		return await request.json()
@@ -215,6 +241,15 @@ const parseJsonBody = async (request: Request): Promise<unknown> => {
 const json = (value: unknown, status = 200): Response => Response.json(value, { status, headers: { 'cache-control': 'no-store' } })
 
 const error = (status: number, code: string, message: string): Response => json({ error: { code, message } }, status)
+
+/** The one answer the whole service-stack family gives for "absent", whatever the reason. */
+const serviceStackNotFound = (): Response => error(400, 'serviceStackNotFound', 'Service stack not found.')
+
+/** The refusal every user-data write gets without `sensitive`, create and update alike. */
+const sensitiveIsRequired = (): Response => error(400, 'invalidUserInput', 'sensitive: field is required')
+
+/** Zerops owns this key prefix and refuses a custom variable that uses it. */
+const RESERVED_KEY_PREFIX = 'ZEROPS_'
 
 const id = (prefix: string, sequence: number): string => `${prefix}-${sequence.toString().padStart(6, '0')}`
 
@@ -351,6 +386,7 @@ const readProcessRecord = (value: unknown): ProcessRecord => {
 		actionName: requiredString(value, 'actionName'),
 		pendingReads,
 		...(stringProperty(value, 'serviceStackId') === undefined ? {} : { serviceStackId: stringProperty(value, 'serviceStackId') }),
+		...(stringProperty(value, 'projectId') === undefined ? {} : { projectId: stringProperty(value, 'projectId') }),
 		...(stringProperty(value, 'appVersionId') === undefined ? {} : { appVersionId: stringProperty(value, 'appVersionId') }),
 	}
 }
@@ -438,6 +474,9 @@ class ZeropsEmulator {
 		try {
 			return await this.route(request, path, url)
 		} catch (cause) {
+			if (cause instanceof PlatformRefusal) {
+				return error(cause.status, cause.code, cause.message)
+			}
 			const message = cause instanceof Error ? cause.message : 'invalid request'
 			return error(400, 'BAD_REQUEST', message)
 		}
@@ -476,9 +515,15 @@ class ZeropsEmulator {
 		if (trigger !== null && request.method === 'PUT') {
 			const service = this.service(decodeURIComponent(trigger[1] ?? ''))
 			if (service === undefined) {
-				return error(404, 'SERVICE_NOT_FOUND', 'service not found')
+				return serviceStackNotFound()
 			}
-			await parseJsonBody(request)
+			const triggerBody = await parseJsonBody(request)
+			// A build source is a property of an app VERSION, never of the service, so every trigger must carry
+			// one. The platform's refusal for an empty body reads "Service stack not found" — its wording, not a
+			// guess — and nothing recorded its code, which is why the row asserts the status alone.
+			if (stringProperty(triggerBody, 'buildFromGit') === undefined) {
+				return serviceStackNotFound()
+			}
 			const activationDelayMs = this.options.activationDelayMs ?? 0
 			const version: AppVersionRecord = {
 				id: id('version', this.state.nextVersion++),
@@ -517,7 +562,9 @@ class ZeropsEmulator {
 		if (appVersion !== null && request.method === 'GET') {
 			await this.activateDueVersions()
 			const version = this.version(decodeURIComponent(appVersion[1] ?? ''))
-			return version === undefined ? error(404, 'APP_VERSION_NOT_FOUND', 'app version not found') : json(version)
+			// The platform answers 400 rather than 404 here; its CODE was never read off the wire, so the double
+			// uses a deliberately synthetic SHOUTING_CASE one that could not be mistaken for the platform's.
+			return version === undefined ? error(400, 'APP_VERSION_NOT_FOUND', 'app version not found') : json(version)
 		}
 
 		const cancel = path.match(/^\/app-version\/([^/]+)\/cancel-build$/)
@@ -570,13 +617,31 @@ class ZeropsEmulator {
 			const name = decodeURIComponent(serviceByName[2] ?? '')
 			const service = this.state.services.find((item) => item.projectId === projectId && item.name === name)
 			// The real platform answers a missing name with 400 `serviceStackNotFound`, not a 404.
-			return service === undefined ? error(400, 'serviceStackNotFound', 'Service stack not found.') : json(this.serviceResponse(service))
+			return service === undefined ? serviceStackNotFound() : json(this.serviceResponse(service))
 		}
 
+		// The whole service-stack family says "absent" as 400 `serviceStackNotFound` — id, name, and a service
+		// deleted a moment ago alike (docs/reference/zerops-platform.md).
 		const service = path.match(/^\/service-stack\/([^/]+)$/)
 		if (service !== null && request.method === 'GET') {
 			const found = this.service(decodeURIComponent(service[1] ?? ''))
-			return found === undefined ? error(404, 'SERVICE_NOT_FOUND', 'service not found') : json(this.serviceResponse(found))
+			return found === undefined ? serviceStackNotFound() : json(this.serviceResponse(found))
+		}
+
+		// A delete answers a PENDING `stack.delete` process, not a 204, and the service is gone once it
+		// finishes. Whether a read taken BETWEEN the two still answers 200 was never measured, so the record
+		// goes at once and nothing here claims to know.
+		if (service !== null && request.method === 'DELETE') {
+			const found = this.service(decodeURIComponent(service[1] ?? ''))
+			if (found === undefined) {
+				return serviceStackNotFound()
+			}
+			this.state.services = this.state.services.filter((item) => item.id !== found.id)
+			this.state.serviceEnv = this.state.serviceEnv.filter((item) => item.serviceStackId !== found.id)
+			this.state.appVersions = this.state.appVersions.filter((item) => item.serviceStackId !== found.id)
+			const removing = this.createProcess('stack.delete', { serviceStackId: found.id, projectId: found.projectId })
+			await this.persist()
+			return json(this.processResponse(removing))
 		}
 
 		const project = path.match(/^\/project\/([^/]+)$/)
@@ -645,10 +710,11 @@ class ZeropsEmulator {
 			return json({ list: this.page(list, url), totalCount: list.length })
 		}
 
-		// The real platform answers 400 `serviceStackNotFound` here on EVERY service, deployed or not, so a
-		// client that lists before writing must fail against the double too (docs/reference/zerops-platform.md).
+		// The real platform answers 400 `serviceStackNotFound` here on EVERY service, deployed or not — and on
+		// an id that never existed — so a client that lists before writing must fail against the double too
+		// (docs/reference/zerops-platform.md).
 		if (/^\/service-stack\/[^/]+\/user-data$/.test(path) && request.method === 'GET') {
-			return error(400, 'serviceStackNotFound', 'Service stack not found.')
+			return serviceStackNotFound()
 		}
 
 		const serviceEnvList = path.match(/^\/service-stack\/([^/]+)\/env$/)
@@ -664,10 +730,18 @@ class ZeropsEmulator {
 		if (serviceEnv !== null && request.method === 'POST') {
 			const serviceId = decodeURIComponent(serviceEnv[1] ?? '')
 			if (this.service(serviceId) === undefined) {
-				return error(404, 'SERVICE_NOT_FOUND', 'service not found')
+				return serviceStackNotFound()
 			}
 			const body = await parseJsonBody(request)
 			const key = requiredString(body, 'key')
+			// `sensitive` is required on every write, create and update alike — omitting it is `invalidUserInput`
+			// with `{"sensitive":["field is required"]}`, which is what stopped a namespace provision dead.
+			if (booleanProperty(body, 'sensitive') === undefined) {
+				return sensitiveIsRequired()
+			}
+			if (key.startsWith(RESERVED_KEY_PREFIX)) {
+				return error(400, 'userDataZeropsPrefixForbidden', `UserData key '${key}' uses a reserved prefix.`)
+			}
 			if (this.state.serviceEnv.some((item) => item.serviceStackId === serviceId && item.key === key)) {
 				return error(400, 'userDataDuplicateKey', `UserData key '${key}' is not unique in service stack frame of reference.`)
 			}
@@ -681,9 +755,9 @@ class ZeropsEmulator {
 			this.state.serviceEnv.push(record)
 			const created = this.createProcess('stack.updateUserData', { serviceStackId: serviceId })
 			await this.persist()
-			// Live answers the PROCESS, not the record, and refuses the next operation on the service until
-			// it finishes (`400 userDataSyncRunning`) — see docs/reference/zerops-platform.md.
-			return json(this.processResponse(created), 201)
+			// Live answers the PROCESS, not the record, with a 200 rather than a 201 — and refuses the next
+			// operation on the service until it finishes (`400 userDataSyncRunning`).
+			return json(this.processResponse(created))
 		}
 
 		const env = path.match(/^\/user-data\/([^/]+)$/)
@@ -699,8 +773,17 @@ class ZeropsEmulator {
 				if (current === undefined) {
 					return error(404, 'USER_DATA_NOT_FOUND', 'user data not found')
 				}
-				current.key = requiredString(body, 'key')
-				current.content = requiredString(body, 'content')
+				// Both fields are required even when the key is unchanged, and so is `sensitive`.
+				const key = stringProperty(body, 'key')
+				const content = stringProperty(body, 'content')
+				if (key === undefined || content === undefined) {
+					return error(400, 'invalidUserInput', 'key and content are both required')
+				}
+				if (booleanProperty(body, 'sensitive') === undefined) {
+					return sensitiveIsRequired()
+				}
+				current.key = key
+				current.content = content
 				const replaced = this.createProcess('stack.updateUserData', { serviceStackId: current.serviceStackId })
 				await this.persist()
 				return json(this.processResponse(replaced))
@@ -752,11 +835,19 @@ class ZeropsEmulator {
 	}
 
 	private importServices(projectId: string, specs: ImportService[]): ImportOutcome[] {
+		// Without `override` a name that already exists fails the ENTIRE import, managed services included —
+		// so the refusal is decided before a single service is created.
+		const collision = specs.find((spec) =>
+			spec.override !== true && this.state.services.some((service) => service.projectId === projectId && service.name === spec.hostname)
+		)
+		if (collision !== undefined) {
+			throw new PlatformRefusal(400, 'serviceStackNameUnavailable', 'Project has already serviceStack with the same name')
+		}
 		return specs.map((spec) => {
 			const existing = this.state.services.find((service) => service.projectId === projectId && service.name === spec.hostname)
 			if (existing !== undefined) {
-				existing.base = spec.type
-				existing.autoscalingProfileId = spec.profile
+				// An `override` re-apply reconciles NOTHING live: a changed `type`, `profile`, `maxContainers` or
+				// `objectStorageSize` is silently ignored and the service is left exactly as it is.
 				return { service: existing }
 			}
 			// `subdomainAccess` starts false and no import ever moves it — see `ImportService`.
@@ -790,12 +881,13 @@ class ZeropsEmulator {
 		}
 	}
 
-	private createProcess(actionName: string, fields: { serviceStackId?: string; appVersionId?: string }): ProcessRecord {
+	private createProcess(actionName: string, fields: { serviceStackId?: string; projectId?: string; appVersionId?: string }): ProcessRecord {
 		const record: ProcessRecord = {
 			id: id('process', this.state.nextProcess++),
 			actionName,
 			pendingReads: 1,
 			...(fields.serviceStackId === undefined ? {} : { serviceStackId: fields.serviceStackId }),
+			...(fields.projectId === undefined ? {} : { projectId: fields.projectId }),
 			...(fields.appVersionId === undefined ? {} : { appVersionId: fields.appVersionId }),
 		}
 		this.state.processes.push(record)
@@ -808,6 +900,7 @@ class ZeropsEmulator {
 			status: record.pendingReads > 0 ? 'PENDING' : 'FINISHED',
 			actionName: record.actionName,
 			...(record.serviceStackId === undefined ? {} : { serviceStackId: record.serviceStackId }),
+			...(record.projectId === undefined ? {} : { projectId: record.projectId }),
 			...(record.appVersionId === undefined ? {} : { appVersion: { id: record.appVersionId } }),
 		}
 	}
