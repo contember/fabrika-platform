@@ -19,6 +19,7 @@ import type {
 import { operationsManagedEnvironmentCollisions } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
+import { isProxyHost } from '@fabrika/proxy-contract'
 import { type AppEnvRow, type AppRow, type AppSecretRow, type AppVarRow, type ControlRepositories, NamespaceResourceClaimConflictError } from '../db'
 import { readJson } from '../http'
 import type { Authorized } from '../iam'
@@ -26,6 +27,7 @@ import { booleanField, nullableStringField, numberField, prop, stringField } fro
 import { canonicalPublicOrigin, PublicOriginValidationError } from '../public-origin'
 import { normalizeRepoUrl, parseGitHubRepo, type RepoEvents } from '../repo-source'
 import { fail, jsonAdapter } from './domain'
+import { type NamespaceProxyChanged, syncChangedNamespaceProxies } from './namespaces'
 import { parseStoredEnvelope, readProviderEnvelope } from './provider-envelope'
 
 export interface RegistryContext {
@@ -36,6 +38,7 @@ export interface RegistryContext {
 	readonly provider: ControlProvider
 	readonly authorized: Authorized
 	readonly catalogChanged?: () => void
+	readonly namespaceProxyChanged?: NamespaceProxyChanged
 }
 
 export interface RegistryUseCaseContext {
@@ -45,6 +48,7 @@ export interface RegistryUseCaseContext {
 	readonly auth: AuthContext
 	readonly signal: AbortSignal
 	readonly catalogChanged?: () => void
+	readonly namespaceProxyChanged?: NamespaceProxyChanged
 }
 
 function useCaseContext(c: RegistryContext): RegistryUseCaseContext {
@@ -55,6 +59,45 @@ function useCaseContext(c: RegistryContext): RegistryUseCaseContext {
 		auth: c.authorized.auth,
 		signal: c.request.signal,
 		...(c.catalogChanged === undefined ? {} : { catalogChanged: c.catalogChanged }),
+		...(c.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: c.namespaceProxyChanged }),
+	}
+}
+
+/** The longest a variable value may be; it is spliced into provider configuration, not stored opaquely. */
+export const APP_VAR_VALUE_MAX_LENGTH = 4096
+
+/** Every C0 control character except tab, plus DEL — anything that could close or reopen a config token. */
+const isControlCharacter = (code: number): boolean => (code < 0x20 && code !== 0x09) || code === 0x7f
+
+/** Refuse a name the platform assigns itself, whichever surface writes it (ADR-0035). */
+export function assertUnmanagedName(kind: 'variable' | 'secret', name: string): void {
+	if (name === FABRIKA_RELEASE || name === FABRIKA_IAM_ISSUER || operationsManagedEnvironmentCollisions([name]).length > 0) {
+		fail(400, `application ${kind} "${name}" is managed by Fabrika`)
+	}
+}
+
+/** A vault value is created by `vault.set`; a hand-written `vault:` ref would address any row in the vault. */
+export function assertOwnedValueRef(valueRef: string): void {
+	if (valueRef.startsWith('vault:')) {
+		fail(400, 'a vault reference cannot be supplied — set the secret value instead, which creates and owns its vault entry')
+	}
+}
+
+/** Keep a variable value one bounded line: the Zerops import document interpolates it as raw text. */
+export function assertAppVarValue(value: string): void {
+	if (value.length > APP_VAR_VALUE_MAX_LENGTH) {
+		fail(400, `application variable value must be at most ${APP_VAR_VALUE_MAX_LENGTH} characters`)
+	}
+	if ([...value].some((character) => isControlCharacter(character.codePointAt(0) ?? 0))) {
+		fail(400, 'application variable value must be a single line (no line breaks or control characters)')
+	}
+}
+
+/** The proxy routes on a literal host, so an operator learns here rather than from a failed proxy build. */
+function assertProxyDomain(domain: string | null | undefined): void {
+	if (domain === undefined || domain === null) return
+	if (!isProxyHost(domain.toLowerCase())) {
+		fail(400, `domain "${domain}" must be a literal hostname — no wildcard, port, path, or placeholder`)
 	}
 }
 
@@ -170,10 +213,22 @@ export async function deleteApp(c: RegistryContext, id: string): Promise<Respons
 }
 
 export async function deleteAppUseCase(c: RegistryUseCaseContext, id: string): Promise<OkResponse> {
+	// Read the routed namespaces BEFORE the delete: afterwards the rows that name them are gone.
+	const namespaceIds = await routedNamespaceIds(c, id)
 	if (!(await c.repositories.registry.deleteApp(id))) fail(404, 'app not found')
 	await c.auth.audit({ action: 'app.delete', resourceType: 'app', resourceId: id })
 	notifyCatalogChanged(c)
+	await syncChangedNamespaceProxies(c.namespaceProxyChanged, namespaceIds)
 	return { ok: true }
+}
+
+/** The deployment namespaces whose proxy manifest lists this app (all of its environments). */
+async function routedNamespaceIds(c: RegistryUseCaseContext, appId: string): Promise<string[]> {
+	const ids: string[] = []
+	for (const row of await c.repositories.registry.listAppEnvs(appId)) {
+		if (row.namespace_id !== null) ids.push(row.namespace_id)
+	}
+	return ids
 }
 
 export async function listAppEnvs(c: RegistryContext, appId: string): Promise<Response> {
@@ -191,6 +246,7 @@ export async function putAppEnv(c: RegistryContext, appId: string, env: string):
 
 export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string, env: string, input: PutAppEnvRequest): Promise<AppEnvDto> {
 	const app = await requireApp(c, appId)
+	assertProxyDomain(input.domain)
 	const existing = await c.repositories.registry.getAppEnv(appId, env)
 	const publicOrigin = canonicalOrigin(input.publicOrigin, existing?.public_origin ?? null)
 	const namespace = await resolveRegistrationNamespace(c, input.namespaceId, appId, env, existing)
@@ -255,6 +311,18 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		metadata: { triggerRef: input.triggerRef ?? null, namespaceId: row.namespace_id, previousNamespaceId: existing?.namespace_id ?? null },
 	})
 	notifyCatalogChanged(c)
+	// The manifest carries the host, the namespace, and the artifact's own `upstream` + `gates` — and this
+	// call rewrites all three. A MOVE touches both proxies: the one losing the host and the one gaining it.
+	if (
+		(existing?.domain ?? null) !== row.domain
+		|| (existing?.namespace_id ?? null) !== row.namespace_id
+		|| existing?.provider_artifact_json !== persistence.providerArtifactJson
+	) {
+		await syncChangedNamespaceProxies(
+			c.namespaceProxyChanged,
+			[existing?.namespace_id ?? null, row.namespace_id].filter((id): id is string => id !== null),
+		)
+	}
 	return toAppEnvDto(row)
 }
 
@@ -263,9 +331,11 @@ export async function deleteAppEnv(c: RegistryContext, appId: string, env: strin
 }
 
 export async function deleteAppEnvUseCase(c: RegistryUseCaseContext, appId: string, env: string): Promise<OkResponse> {
+	const routed = (await c.repositories.registry.getAppEnv(appId, env))?.namespace_id ?? null
 	if (!(await c.repositories.registry.deleteAppEnv(appId, env))) fail(404, 'app env not found')
 	await c.auth.audit({ action: 'app.env.delete', resourceType: 'app_env', resourceId: `${appId}/${env}` })
 	notifyCatalogChanged(c)
+	await syncChangedNamespaceProxies(c.namespaceProxyChanged, routed === null ? [] : [routed])
 	return { ok: true }
 }
 
@@ -284,6 +354,8 @@ export async function putAppSecret(c: RegistryContext, appId: string): Promise<R
 
 export async function putAppSecretUseCase(c: RegistryUseCaseContext, appId: string, input: PutAppSecretRequest): Promise<AppSecretDto> {
 	await requireApp(c, appId)
+	assertUnmanagedName('secret', input.name)
+	assertOwnedValueRef(input.valueRef)
 	const env = input.env ?? null
 	const row = await c.repositories.registry.upsertAppSecret({ appId, env, name: input.name, valueRef: input.valueRef })
 	await c.auth.audit({
@@ -321,9 +393,8 @@ export async function putAppVar(c: RegistryContext, appId: string): Promise<Resp
 
 export async function putAppVarUseCase(c: RegistryUseCaseContext, appId: string, input: PutAppVarRequest): Promise<AppVarDto> {
 	await requireApp(c, appId)
-	if (input.name === FABRIKA_RELEASE || input.name === FABRIKA_IAM_ISSUER || operationsManagedEnvironmentCollisions([input.name]).length > 0) {
-		fail(400, `application variable "${input.name}" is managed by Fabrika`)
-	}
+	assertUnmanagedName('variable', input.name)
+	assertAppVarValue(input.value)
 	const env = input.env ?? null
 	await assertDeclaredVariable(c, appId, env, input.name)
 	const row = await c.repositories.registry.upsertAppVar({ appId, env, name: input.name, value: input.value })
@@ -388,6 +459,7 @@ export async function registerApp(c: RegistryContext): Promise<Response> {
 export async function registerAppUseCase(c: RegistryUseCaseContext, input: RegisterAppRequest): Promise<RegisterAppResponse> {
 	const { id, repoUrl, env } = input
 	if (await c.repositories.registry.getApp(id)) fail(409, 'an app with this id already exists')
+	assertProxyDomain(input.domain)
 	const normalized = normalizeRepoUrl(repoUrl)
 	const sourceBinding = await sourceBindingFields(c, input, normalized)
 	const publicOrigin = canonicalOrigin(input.publicOrigin, null)
@@ -722,7 +794,8 @@ function parsePutAppEnv(body: unknown): PutAppEnvRequest {
 function parsePutSecret(body: unknown): PutAppSecretRequest {
 	const name = stringField(body, 'name')
 	const valueRef = stringField(body, 'valueRef')
-	if (!name || !valueRef) fail(400, 'name and valueRef required (valueRef is a vault reference, never the value)')
+	if (!name || !valueRef) fail(400, 'name and valueRef required (valueRef is a backend reference, never the value)')
+	assertOwnedValueRef(valueRef)
 	const env = nullableStringField(body, 'env')
 	return { name, valueRef, ...(env === undefined ? {} : { env }) }
 }
@@ -731,6 +804,7 @@ function parsePutVar(body: unknown): PutAppVarRequest {
 	const name = stringField(body, 'name')
 	const value = stringField(body, 'value')
 	if (!name || !value) fail(400, 'name and value required (value is plaintext config — use a secret for sensitive values)')
+	assertAppVarValue(value)
 	const env = nullableStringField(body, 'env')
 	return { name, value, ...(env === undefined ? {} : { env }) }
 }

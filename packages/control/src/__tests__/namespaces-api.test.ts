@@ -1,7 +1,7 @@
 import type { AuthContext } from '@fabrika/auth'
 import type { ControlProvider, ProviderDeploymentNamespace, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import { type NamespaceJobResult, runNamespaceJob } from '../api/namespaces'
+import { type NamespaceJobResult, type NamespaceUseCaseContext, reconcileNamespaceUseCase, runNamespaceJob } from '../api/namespaces'
 import type { ApiDeps } from '../api/router'
 import { handleApi } from '../api/router'
 import { FakeRepoSource } from '../repo-source'
@@ -728,5 +728,69 @@ describe('app environment namespace assignment', () => {
 		expect(winner === 'alpha' || winner === 'beta').toBe(true)
 		const loser = winner === 'alpha' ? 'beta' : 'alpha'
 		expect(await deps.repositories.registry.getApp(loser)).toBeNull()
+	})
+})
+
+describe('reconcile is the operator’s repair verb for a stale proxy manifest', () => {
+	function context(harness: NamespaceHarness, synced: string[], fail = false): NamespaceUseCaseContext {
+		return {
+			repositories: harness.deps.repositories,
+			provider: harness.deps.provider,
+			auth: harness.deps.auth,
+			signal: new AbortController().signal,
+			queue: harness.deps.queue,
+			namespaceProxyChanged: (namespaceId) => {
+				synced.push(namespaceId)
+				return fail ? Promise.reject(new Error('platform said no')) : Promise.resolve()
+			},
+		}
+	}
+
+	async function readyNamespace(harness: NamespaceHarness, state: 'ready' | 'failed'): Promise<void> {
+		await harness.deps.repositories.registry.createDeploymentNamespaceWithResourceClaims({
+			id: 'apps-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(target('ready')),
+			state,
+		}, ['service:proxy'])
+	}
+
+	test('republishes a ready namespace before requeueing it, and still enqueues the provider reconcile', async () => {
+		const harness = makeDeps(namespacedProvider(providerRecording()))
+		await readyNamespace(harness, 'ready')
+		const synced: string[] = []
+
+		const reconciled = await reconcileNamespaceUseCase(context(harness, synced), 'apps-prod')
+
+		expect(synced).toEqual(['apps-prod'])
+		expect(reconciled.state).toBe('pending')
+		expect(harness.sent).toEqual([{ kind: 'namespace', namespaceId: 'apps-prod', mutation: 'reconcile' }])
+	})
+
+	test('a namespace that never became ready has no manifest to republish', async () => {
+		const harness = makeDeps(namespacedProvider(providerRecording()))
+		await readyNamespace(harness, 'failed')
+		const synced: string[] = []
+
+		await reconcileNamespaceUseCase(context(harness, synced), 'apps-prod')
+
+		expect(synced).toEqual([])
+	})
+
+	test('a failed republish is reported, but the provider reconcile is still queued', async () => {
+		// The one verb an operator has for a stale manifest must not stop working because the proxy is the
+		// thing that is unreachable — the reported 502 says the republish has to be retried, not that
+		// nothing happened.
+		const harness = makeDeps(namespacedProvider(providerRecording()))
+		await readyNamespace(harness, 'ready')
+		const synced: string[] = []
+
+		await expect(reconcileNamespaceUseCase(context(harness, synced, true), 'apps-prod')).rejects.toMatchObject({ httpStatus: 502 })
+		expect(synced).toEqual(['apps-prod'])
+		expect(harness.sent).toEqual([{ kind: 'namespace', namespaceId: 'apps-prod', mutation: 'reconcile' }])
+		expect(harness.audits.map((audit) => audit.action)).toContain('namespace.reconcile')
+		expect((await harness.deps.repositories.registry.getDeploymentNamespace('apps-prod'))?.state).toBe('pending')
 	})
 })

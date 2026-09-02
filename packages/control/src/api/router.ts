@@ -20,6 +20,7 @@ import {
 	getNamespace,
 	listNamespaces,
 	type NamespaceContext,
+	type NamespaceProxyChanged,
 	planNamespace,
 	reconcileNamespace,
 	removeNamespace,
@@ -66,6 +67,8 @@ export interface ApiDeps {
 	vault?: () => Promise<Vault>
 	/** Schedule a non-blocking full Operations catalog projection after registry mutations. */
 	catalogChanged?: () => void
+	/** Republish a namespace's proxy manifest after a registry change it routes on. */
+	namespaceProxyChanged?: NamespaceProxyChanged
 }
 
 /**
@@ -101,6 +104,7 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 			url,
 			authorized,
 			...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
+			...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
 		}
 	}
 	const runsCtx = (): RunsContext => ({
@@ -116,7 +120,14 @@ async function dispatch(request: Request, url: URL, deps: ApiDeps): Promise<Resp
 		if (!authorized.ok) {
 			return authorized.response
 		}
-		return { repositories: deps.repositories, provider: deps.provider, request, authorized, queue: deps.queue }
+		return {
+			repositories: deps.repositories,
+			provider: deps.provider,
+			request,
+			authorized,
+			queue: deps.queue,
+			...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
+		}
 	}
 	// Build a vault context (constructs the Vault via the factory; a missing/invalid master key is a
 	// clean 500 here, isolated to vault routes). Returns the error/Response otherwise.

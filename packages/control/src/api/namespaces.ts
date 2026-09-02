@@ -32,12 +32,21 @@ import { uuidv7 } from '../uuid'
 import { fail, jsonAdapter } from './domain'
 import { isJsonValue, parseStoredEnvelope, readProviderEnvelope } from './provider-envelope'
 
+/**
+ * Republish one deployment namespace's proxy manifest from the registry.
+ *
+ * The proxy is the only enforcement point (ADR-0022), so its manifest — not the registry — is the live
+ * authorization state; every registry change the manifest routes on has to reach it.
+ */
+export type NamespaceProxyChanged = (namespaceId: string) => Promise<void>
+
 export interface NamespaceContext {
 	readonly repositories: ControlRepositories
 	readonly request: Request
 	readonly provider: ControlProvider
 	readonly authorized: Authorized
 	readonly queue: JobQueue<ControlJobMessage>
+	readonly namespaceProxyChanged?: NamespaceProxyChanged
 }
 
 /**
@@ -54,10 +63,46 @@ export interface NamespaceJobContext {
 export interface NamespaceUseCaseContext extends NamespaceJobContext {
 	readonly auth: AuthContext
 	readonly queue: JobQueue<ControlJobMessage>
+	readonly namespaceProxyChanged?: NamespaceProxyChanged
 }
 
 function useCaseContext(c: NamespaceContext): NamespaceUseCaseContext {
-	return { repositories: c.repositories, provider: c.provider, auth: c.authorized.auth, signal: c.request.signal, queue: c.queue }
+	return {
+		repositories: c.repositories,
+		provider: c.provider,
+		auth: c.authorized.auth,
+		signal: c.request.signal,
+		queue: c.queue,
+		...(c.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: c.namespaceProxyChanged }),
+	}
+}
+
+/**
+ * Push the registry's current routing to each named namespace proxy.
+ *
+ * EVERY id is attempted before anything is reported: a move touches two proxies, and stopping at the
+ * first failure would leave the second silently stale — the exact shape of the bug this hook exists for.
+ * A failure leaves the registry change in place (the row is already the truth) and names only the
+ * namespaces; the cause is redacted before it reaches the log.
+ */
+export async function syncChangedNamespaceProxies(
+	hook: NamespaceProxyChanged | undefined,
+	namespaceIds: Iterable<string>,
+): Promise<void> {
+	if (hook === undefined) return
+	const failed: string[] = []
+	for (const namespaceId of new Set(namespaceIds)) {
+		try {
+			await hook(namespaceId)
+		} catch (cause) {
+			failed.push(namespaceId)
+			const described = cause instanceof Error ? cause.message : 'unknown error'
+			console.error(`namespace proxy sync failed for ${namespaceId}: ${redactNamespaceErrorText(described)}`)
+		}
+	}
+	if (failed.length > 0) {
+		fail(502, `the proxy manifest did not publish for deployment namespace ${failed.join(', ')} — reconcile the namespace`)
+	}
 }
 
 function toNamespaceDto(row: DeploymentNamespaceRow): DeploymentNamespaceDto {
@@ -550,6 +595,18 @@ export async function reconcileNamespaceUseCase(c: NamespaceUseCaseContext, id: 
 		if (cause instanceof NamespaceResourceClaimConflictError) fail(409, cause.message)
 		throw cause
 	}
+	// Republish BEFORE the requeue below, which takes the namespace out of `ready` — this is the operator's
+	// repair verb for a manifest a registry change could not reach. A republish that fails must NOT skip the
+	// queueing that follows, or the one verb an operator has stops working exactly when the proxy is down.
+	let republishFailed = false
+	if (row.state === 'ready') {
+		try {
+			await syncChangedNamespaceProxies(c.namespaceProxyChanged, [row.id])
+		} catch {
+			// `syncChangedNamespaceProxies` already logged the redacted cause.
+			republishFailed = true
+		}
+	}
 	// A SETTLED namespace goes back to `pending` so the worker's claim still means something. One that is
 	// already `pending`/`provisioning` is left completely alone — the request must not touch
 	// `provider_target_json`, or a checkpoint the running job just wrote would be rolled back under it.
@@ -560,6 +617,9 @@ export async function reconcileNamespaceUseCase(c: NamespaceUseCaseContext, id: 
 	if (current === null) fail(404, 'deployment namespace not found')
 	await enqueueNamespaceJob(c, current, 'reconcile')
 	await auditMutation(c, 'namespace.reconcile', current)
+	if (republishFailed) {
+		fail(502, `deployment namespace ${row.id}: the provider reconcile is queued, but the proxy manifest did not publish — retry the republish`)
+	}
 	return toNamespaceDetail(c, current)
 }
 

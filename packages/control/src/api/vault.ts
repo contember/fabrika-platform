@@ -6,8 +6,10 @@ import { readJson } from '../http'
 import type { Authorized } from '../iam'
 import { stringField } from '../json'
 import { providerEnvironment } from '../run-lifecycle'
-import { parseVaultRef, type SecretScope, type Vault } from '../vault'
+import { appSecretPurpose } from '../secret-resolver'
+import { parseVaultRef, type Vault, type VaultSecretPurpose } from '../vault'
 import { fail, jsonAdapter } from './domain'
+import { assertUnmanagedName } from './registry'
 
 export interface VaultContext {
 	readonly repositories: ControlRepositories
@@ -45,6 +47,7 @@ export async function setAppSecretValueUseCase(
 	input: SetSecretValueRequest,
 ): Promise<SecretValueResponse> {
 	await requireApp(c, appId)
+	assertUnmanagedName('secret', name)
 	const env = input.env ?? null
 	const target = await secretTarget(c, appId, env)
 	if (target.kind === 'provider') {
@@ -58,13 +61,35 @@ export async function setAppSecretValueUseCase(
 		return { ok: true, valueRef }
 	}
 	const vault = await requireVault(c)
-	const scope: SecretScope = env === null ? 'app' : 'app-env'
+	const purpose = appSecretPurpose(appId, env, name)
 	const prior = await findAppSecretRef(c.repositories, appId, env, name)
-	const valueRef = await vault.putSecret(scope, `${scope}:${appId}/${env ?? '*'}/${name}`, input.value)
+	// Ownership of the PRIOR row is settled before anything is written, so a ref this app does not own
+	// leaves both the vault and the registry exactly as they were.
+	if (prior !== null && parseVaultRef(prior) !== null) await assertVaultOwnership(vault, prior, purpose)
+	const valueRef = await vault.putSecret(purpose.scope, purpose.label, input.value)
 	await c.repositories.registry.upsertAppSecret({ appId, env, name, valueRef })
 	if (prior !== null) await deletePriorVaultEntry(vault, prior)
 	await audit(c, 'app.secret.set', appId, env, name, valueRef)
 	return { ok: true, valueRef }
+}
+
+/**
+ * Refuse a ref whose row belongs to another purpose, naming neither the row's scope nor its label.
+ *
+ * A vault that cannot ANSWER — missing KEK, tampered ciphertext, database down — must not read as "you
+ * do not own this", so the refusal is confirmed rather than assumed: if the ref resolves without the
+ * purpose, the vault is healthy and the row simply is not ours. Anything else propagates as a 500, which
+ * is also what a dangling ref has always done here.
+ */
+async function assertVaultOwnership(vault: Vault, ref: string, purpose: VaultSecretPurpose): Promise<void> {
+	try {
+		await vault.getSecretForPurpose(ref, purpose)
+		return
+	} catch {
+		// Decided by the probe below; the plaintext it may return is discarded and never logged.
+	}
+	await vault.getSecret(ref)
+	fail(403, 'the stored secret reference does not belong to this application secret')
 }
 
 export async function rotateAppSecretValue(c: VaultContext, appId: string, name: string): Promise<Response> {
@@ -78,6 +103,7 @@ export async function rotateAppSecretValueUseCase(
 	input: SetSecretValueRequest,
 ): Promise<OkResponse> {
 	await requireApp(c, appId)
+	assertUnmanagedName('secret', name)
 	const env = input.env ?? null
 	const valueRef = await findAppSecretRef(c.repositories, appId, env, name)
 	if (valueRef === null) fail(404, 'secret not found')
@@ -97,7 +123,9 @@ export async function rotateAppSecretValueUseCase(
 		return { ok: true }
 	}
 	if (parseVaultRef(valueRef) === null) fail(409, 'secret is not stored in the vault — set it first')
-	await (await requireVault(c)).rotate(valueRef, input.value)
+	const rotateVault = await requireVault(c)
+	await assertVaultOwnership(rotateVault, valueRef, appSecretPurpose(appId, env, name))
+	await rotateVault.rotate(valueRef, input.value)
 	await c.auth.audit({
 		action: 'app.secret.rotate',
 		resourceType: 'app_secret',
@@ -135,7 +163,9 @@ export async function deleteAppSecretValueUseCase(
 		return { ok: true }
 	}
 	if (parseVaultRef(valueRef) === null) fail(409, 'secret is not stored in the vault')
-	const removed = await (await requireVault(c)).delete(valueRef)
+	const deleteVault = await requireVault(c)
+	await assertVaultOwnership(deleteVault, valueRef, appSecretPurpose(appId, env, name))
+	const removed = await deleteVault.delete(valueRef)
 	await c.auth.audit({
 		action: 'app.secret.value.delete',
 		resourceType: 'app_secret',

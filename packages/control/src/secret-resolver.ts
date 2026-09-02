@@ -20,13 +20,27 @@
 //   * `literal:VALUE`      — return VALUE verbatim. Local/test only; never store in production.
 // An unknown / unresolvable ref throws (fail loud — never deploy with a missing/empty credential).
 
-import type { Vault } from './vault'
-import { parseVaultRef } from './vault'
+import type { SecretScope, Vault, VaultSecretPurpose } from './vault'
+
+/**
+ * The `{ scope, label }` an app secret's vault row is sealed under — the ONLY record of which app
+ * secret owns a `vault:` ref. Every path that follows one from `app_secrets` checks against this.
+ */
+export function appSecretPurpose(appId: string, env: string | null, name: string): VaultSecretPurpose {
+	const scope: SecretScope = env === null ? 'app' : 'app-env'
+	return { scope, label: `${scope}:${appId}/${env ?? '*'}/${name}` }
+}
 
 /** Turns the registry's opaque app-secret refs into the plaintext values a deploy needs. */
 export interface SecretResolver {
-	/** Resolve an app secret's value from its `value_ref`. */
-	resolveSecret(ref: string): Promise<string>
+	/**
+	 * Resolve an app secret's value from its `value_ref`.
+	 *
+	 * `purpose` is the (scope, label) the owning `app_secrets` row was written under. A `vault:` ref
+	 * names a row in the SHARED vault, so it is the only thing that proves the row belongs to this
+	 * app secret rather than to another app or to the platform.
+	 */
+	resolveSecret(ref: string, purpose: VaultSecretPurpose): Promise<string>
 }
 
 /**
@@ -46,7 +60,7 @@ export interface SecretStoreEntry {
  * The vault-backed, ref-dispatching resolver — the production `SecretResolver`.
  *
  * Dispatch by ref scheme:
- *   - `vault:<id>`         → the encrypted D1 vault (`vault`).
+ *   - `vault:<id>`         → the encrypted D1 vault (`vault`), only when the row's purpose matches.
  *   - `secretstore:<name>` → `secretStore[name].get()` (CF Secrets Store; degrades cleanly when the
  *                            binding map is absent — a clear error rather than a wrong/empty value).
  *   - `env:NAME`           → `env[NAME]` (dev/bootstrap, from the Worker's own secret bindings).
@@ -67,11 +81,11 @@ export class VaultSecretResolver implements SecretResolver {
 		},
 	) {}
 
-	resolveSecret(ref: string): Promise<string> {
-		return this.resolve(ref, 'secret')
+	resolveSecret(ref: string, purpose: VaultSecretPurpose): Promise<string> {
+		return this.resolve(ref, 'secret', purpose)
 	}
 
-	private async resolve(ref: string, kind: string): Promise<string> {
+	private async resolve(ref: string, kind: string, purpose: VaultSecretPurpose): Promise<string> {
 		const colon = ref.indexOf(':')
 		if (colon === -1) {
 			throw new Error(`unresolvable ${kind} ref (expected '<backend>:<id>')`)
@@ -83,9 +97,7 @@ export class VaultSecretResolver implements SecretResolver {
 			if (this.deps.vault === undefined) {
 				throw new Error(`cannot resolve ${kind}: vault backend not configured`)
 			}
-			// parseVaultRef keeps the prefix-stripping in one place; the vault re-validates the ref.
-			void parseVaultRef(ref)
-			return this.deps.vault.getSecret(ref)
+			return this.deps.vault.getSecretForPurpose(ref, purpose)
 		}
 
 		if (scheme === 'secretstore') {
@@ -130,7 +142,7 @@ export class EnvSecretResolver implements SecretResolver {
 		this.inner = new VaultSecretResolver({ env: source })
 	}
 
-	resolveSecret(ref: string): Promise<string> {
-		return this.inner.resolveSecret(ref)
+	resolveSecret(ref: string, purpose: VaultSecretPurpose): Promise<string> {
+		return this.inner.resolveSecret(ref, purpose)
 	}
 }

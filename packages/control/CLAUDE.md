@@ -134,6 +134,22 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
 - **Secrets resolve by ref scheme** (`src/secret-resolver.ts`): `vault:` / `secretstore:` / `env:` / `literal:`.
   An unknown / unresolvable ref THROWS — never deploy with an empty credential. The resolver handles ONLY
   per-app `pipeline.secrets`; platform creds are fabrika's own Worker config (below).
+- **A `vault:` ref is OWNED by the app secret that minted it.** The vault is one table shared with every
+  other app and with `scope='platform'` rows, and `app_secrets.value_ref` is the only pointer into it — so a
+  caller-supplied `vault:` ref is refused outright (`assertOwnedValueRef`), and every path that FOLLOWS a
+  stored one — resolve, rotate, delete, and the prior-ref delete inside `vault.set` — goes through
+  `getSecretForPurpose` with `appSecretPurpose(app, env, name)` (`src/secret-resolver.ts`), the same
+  `{scope,label}` the value was sealed under. A mismatch is a 403 that names neither, and changes nothing.
+  There is no AAD on the envelope, so the row's own scope+label is the whole ownership record; do not add a
+  second way to address a vault row.
+- **The platform's own environment names are refused on the SECRET surface too**, not only on `vars`:
+  `assertUnmanagedName` (`src/api/registry.ts`) guards `apps.secrets.put`, `vault.set` and `vault.rotate`, and
+  `executeDeploy` re-checks the resolved secret names beside the variable names, before any provider effect.
+  A Zerops managed-secret write reaches the live service at REQUEST time, so the API check is the only one
+  that runs in time there.
+- **A variable value is one bounded line and a domain is a literal host.** `assertAppVarValue` (4096 chars,
+  no control characters but tab) and `assertProxyDomain` (`isProxyHost`) refuse at the API on both transports.
+  The variable bound is the belt for the Zerops provider's text interpolation into finished YAML.
 - **One static provider per installation.** Core persists versioned target/artifact envelopes and calls
   `ControlProvider`; it has no provider registry and no provider-id branch. Cloudflare credentials live
   only in `WorkerBindings`; Zerops credentials live only in the process composition. Provider packages
@@ -194,6 +210,23 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   as `lastErrorCode` + `lastError`. The FULL cause is logged, redacted the same way and UNcapped. An
   untyped throw is `internal`. Core's own checkpoint invariants carry core's `checkpointInvariant` code,
   never a provider's vocabulary. Never store or log the error OBJECT.
+- **The namespace proxy FOLLOWS the registry.** The proxy manifest, not the registry, is the live
+  authorization state (ADR-0022), and `beforeDeploy` only republishes it when something in the namespace
+  deploys. So `deleteApp`, `deleteAppEnv`, a changed `domain` and a changed namespace assignment all await
+  `namespaceProxyChanged` (`src/api/namespaces.ts`), and `namespaces.reconcile` republishes a `ready`
+  namespace as the operator's repair verb. The hook is the `NAMESPACE_PROXY` PORT (`src/services.ts`),
+  filled by the process root alone (`src/node/runtime.ts` → `zeropsNamespaceProxySync`) because the shared
+  layer must not name a provider package. It waits for the manifest to PUBLISH and the roll to start, not
+  for the build — a proxy build takes minutes and this runs inside a request. Every affected namespace is
+  attempted before anything is reported; a republish failure is a 502 that LEAVES the registry change in
+  place (the row is already the truth), and `reconcile` still queues the provider mutation when its own
+  republish fails. Never log the IAM key or the manifest.
+  **The DELETE half is unreachable on Zerops today**: `namespace_resource_claims (owner_app_id, owner_env)`
+  is `ON DELETE RESTRICT` and every Zerops app env acquires claims, so `deleteApp` / `deleteAppEnv` on such
+  an env answers 500 before the hook runs. The republish is therefore reachable only for an environment
+  holding no claims until claim release is decided — releasing them is a USER decision, not a fix: fabrika
+  deletes no provider resource (ADR-0034), so a freed name makes an orphaned service adoptable by the next
+  app, carrying its old secrets.
 - **Removal is the narrow case only** (backlog 73). `namespaces.remove` frees a namespace with no
   registered app environment that no worker is settling; it deletes the row and its resource claims in ONE
   guarded transaction (claims first — both FKs are `ON DELETE RESTRICT`) and frees the id for reuse, which

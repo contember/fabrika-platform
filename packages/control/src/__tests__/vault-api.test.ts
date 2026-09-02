@@ -230,3 +230,86 @@ describe('vault not configured', () => {
 		expect(response.status).toBe(500)
 	})
 })
+
+describe('a vault ref is owned by the app secret that created it', () => {
+	async function seedTwoApps(deps: ApiDeps): Promise<void> {
+		for (const id of ['a', 'b']) {
+			await deps.repositories.registry.createApp({ id, repoUrl: `github.com/acme/${id}` })
+			await deps.repositories.registry.upsertAppEnv({ ...storedEnvironment(), appId: id })
+		}
+	}
+
+	test('app A cannot point a secret at app B’s vault ref', async () => {
+		const { deps } = makeDeps(secretManager())
+		await seedTwoApps(deps)
+		await handleApi(req('PUT', '/api/apps/b/secrets/API_KEY/value', { value: 'b-secret', env: 'prod' }), deps)
+		const victim = (await deps.repositories.registry.listAppSecrets('b'))[0]!.value_ref
+
+		const refused = await handleApi(req('PUT', '/api/apps/a/secrets', { name: 'STOLEN', valueRef: victim }), deps)
+
+		expect(refused.status).toBe(400)
+		expect(await deps.repositories.registry.listAppSecrets('a')).toEqual([])
+	})
+
+	test('a stored ref that names another purpose is refused on rotate, delete, set and resolve', async () => {
+		const { deps, vault } = makeDeps(secretManager())
+		await seedTwoApps(deps)
+		// A ref planted before this rule existed: a `platform`-scoped row addressed by an app secret.
+		const platformRef = await (await vault).putSecret('platform', 'github-app:recovery', 'platform-secret')
+		await deps.repositories.registry.upsertAppSecret({ appId: 'a', env: 'prod', name: 'API_KEY', valueRef: platformRef })
+
+		const rotate = await handleApi(req('PATCH', '/api/apps/a/secrets/API_KEY/value', { value: 'attacker', env: 'prod' }), deps)
+		expect(rotate.status).toBe(403)
+		const removed = await handleApi(req('DELETE', '/api/apps/a/secrets/API_KEY/value?env=prod'), deps)
+		expect(removed.status).toBe(403)
+		const overwritten = await handleApi(req('PUT', '/api/apps/a/secrets/API_KEY/value', { value: 'attacker', env: 'prod' }), deps)
+		expect(overwritten.status).toBe(403)
+
+		// Neither the refusal text nor the row gives anything away.
+		expect(await (await vault).getSecret(platformRef)).toBe('platform-secret')
+		expect((await deps.repositories.registry.listAppSecrets('a'))[0]?.value_ref).toBe(platformRef)
+		const body = (await overwritten.json()) as { error: string }
+		expect(body.error).not.toContain('platform')
+		expect(body.error).not.toContain('github-app')
+	})
+
+	test('a reserved name is refused on set and rotate, whichever target holds the value', async () => {
+		const { deps } = makeDeps(secretManager())
+		await seedTwoApps(deps)
+		for (const path of ['/api/apps/a/secrets/FABRIKA_IAM_ISSUER/value']) {
+			const set = await handleApi(req('PUT', path, { value: 'https://iam.attacker.example', env: 'prod' }), deps)
+			expect(set.status).toBe(400)
+			expect(((await set.json()) as { error: string }).error).toContain('managed by Fabrika')
+			expect((await handleApi(req('PATCH', path, { value: 'x', env: 'prod' }), deps)).status).toBe(400)
+		}
+		expect(await deps.repositories.registry.listAppSecrets('a')).toEqual([])
+	})
+
+	test('a vault that cannot answer is a 500, not a refusal — an outage must not read as “not yours”', async () => {
+		const { deps } = makeDeps(secretManager())
+		await seedTwoApps(deps)
+		await handleApi(req('PUT', '/api/apps/a/secrets/API_KEY/value', { value: 'v1', env: 'prod' }), deps)
+		// A real vault over a database that is down — the honest shape of "the vault cannot answer".
+		const broken = await Vault.create({
+			prepare: () => {
+				throw new Error('vault database is unavailable')
+			},
+		}, testKey())
+		deps.vault = () => Promise.resolve(broken)
+
+		const rotate = await handleApi(req('PATCH', '/api/apps/a/secrets/API_KEY/value', { value: 'v2', env: 'prod' }), deps)
+
+		expect(rotate.status).toBe(500)
+		expect(await rotate.text()).not.toContain('does not belong')
+	})
+
+	test('the app’s own ref still rotates and deletes', async () => {
+		const { deps, vault } = makeDeps(secretManager())
+		await seedTwoApps(deps)
+		await handleApi(req('PUT', '/api/apps/a/secrets/API_KEY/value', { value: 'v1', env: 'prod' }), deps)
+		expect((await handleApi(req('PATCH', '/api/apps/a/secrets/API_KEY/value', { value: 'v2', env: 'prod' }), deps)).status).toBe(200)
+		const ref = (await deps.repositories.registry.listAppSecrets('a'))[0]!.value_ref
+		expect(await (await vault).getSecret(ref)).toBe('v2')
+		expect((await handleApi(req('DELETE', '/api/apps/a/secrets/API_KEY/value?env=prod'), deps)).status).toBe(200)
+	})
+})

@@ -200,6 +200,26 @@ describe('the Zerops namespace process configuration', () => {
 		await runtime.shutdown()
 	})
 
+	test('the process composition fills the namespace-proxy port a Cloudflare composition leaves undefined', async () => {
+		const runtime = createRuntime({
+			...namespaceEnvironment(),
+			FABRIKA_CONTROL_DATABASE_URL: 'postgres://user:password@127.0.0.1:1/fabrika',
+			FABRIKA_CONTROL_RUN_LOGS_BUCKET: 'run-logs',
+			FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID: 'access-key',
+			FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY: 'secret-key',
+			FABRIKA_IAM_RPC_URL: 'http://iam:3000',
+			FABRIKA_IAM_RPC_KEY: 'iam-rpc-key-at-least-32-characters',
+			FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
+			FABRIKA_ZEROPS_SOURCE_URL: 'http://source:3000',
+			FABRIKA_ZEROPS_SOURCE_RPC_KEY: 'source-rpc-key-at-least-32-characters',
+			ENVIRONMENT: 'stage',
+		})
+		// Addressed by namespace id alone, and a namespace it cannot read is a refusal, never a silent no-op.
+		expect(typeof runtime.env.NAMESPACE_PROXY).toBe('function')
+		await expect(runtime.env.NAMESPACE_PROXY?.('nope')).rejects.toThrow()
+		await runtime.shutdown()
+	})
+
 	test('maps every explicit environment variable to the provider contract', () => {
 		expect(zeropsNamespaceProcessConfig(namespaceEnvironment())).toEqual(EXPECTED)
 	})

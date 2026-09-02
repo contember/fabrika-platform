@@ -32,7 +32,7 @@ import {
 import type { GitHubSourceTransportKind } from './github-connection-store'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
 import { projectedReturnOrigins } from './return-origins'
-import type { SecretResolver } from './secret-resolver'
+import { appSecretPurpose, type SecretResolver } from './secret-resolver'
 
 export type RunOutcome = ProviderTerminalOutcome
 
@@ -315,9 +315,25 @@ const resolveSecrets = async (
 	}
 	const secrets: Record<string, string> = {}
 	for (const row of await deps.repositories.registry.getAppSecretsForEnv(appId, env)) {
-		secrets[row.name] = await deps.secrets.resolveSecret(row.value_ref)
+		// The row's OWN layer, not the deploying env: an all-env secret was sealed under scope `app`.
+		secrets[row.name] = await deps.secrets.resolveSecret(row.value_ref, appSecretPurpose(appId, row.env, row.name))
 	}
 	return secrets
+}
+
+/** Refuse a platform-owned name before any provider effect, whichever surface let it in. */
+const assertUnmanagedNames = (kind: 'variable' | 'secret', names: readonly string[]): void => {
+	const collisions = operationsManagedEnvironmentCollisions(names)
+	if (collisions.length > 0) {
+		throw new Error(`application ${kind} "${collisions[0]}" is managed by Fabrika`)
+	}
+	// `FABRIKA_RELEASE` is only caught by the release-context loop below, and only when Operations is
+	// configured — an installation without it had no deploy-time guard at all.
+	for (const reserved of [FABRIKA_IAM_ISSUER, FABRIKA_RELEASE]) {
+		if (names.includes(reserved)) {
+			throw new Error(`application ${kind} "${reserved}" is managed by Fabrika`)
+		}
+	}
 }
 
 /**
@@ -431,13 +447,10 @@ export async function executeDeploy(
 			})
 
 		const vars = await resolveVars(deps.repositories.registry, app.id, appEnv.env)
-		const operationsCollisions = operationsManagedEnvironmentCollisions(Object.keys(vars))
-		if (operationsCollisions.length > 0) {
-			throw new Error(`application variable "${operationsCollisions[0]}" is managed by Fabrika`)
-		}
-		if (vars[FABRIKA_IAM_ISSUER] !== undefined) {
-			throw new Error(`application variable "${FABRIKA_IAM_ISSUER}" is managed by Fabrika`)
-		}
+		assertUnmanagedNames('variable', Object.keys(vars))
+		// Resolved here rather than at the provider call, so a reserved secret name fails before any effect.
+		const secrets = await resolveSecrets(deps, app.id, appEnv.env)
+		assertUnmanagedNames('secret', Object.keys(secrets))
 		const managedEnvironment: Record<string, string | null> = { [FABRIKA_RELEASE]: null, [FABRIKA_IAM_ISSUER]: null }
 		for (const key of OPERATIONS_MANAGED_ENVIRONMENT_KEYS) managedEnvironment[key] = null
 		// `null` means REMOVE, so an installation that cannot name its own issuer strips a stale one
@@ -463,6 +476,7 @@ export async function executeDeploy(
 		if (releaseContext !== null) {
 			for (const key of Object.keys(releaseContext.managedEnvironment)) {
 				if (vars[key] !== undefined) throw new Error(`application variable "${key}" is managed by Fabrika`)
+				if (secrets[key] !== undefined) throw new Error(`application secret "${key}" is managed by Fabrika`)
 			}
 			Object.assign(managedEnvironment, releaseContext.managedEnvironment)
 		}
@@ -480,7 +494,7 @@ export async function executeDeploy(
 				runId: run.id,
 				app: registration.app,
 				environment: registration.environment,
-				secrets: await resolveSecrets(deps, app.id, appEnv.env),
+				secrets,
 				vars,
 				managedEnvironment,
 				...(returnOrigins === undefined ? {} : { returnOrigins }),

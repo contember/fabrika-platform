@@ -7,6 +7,7 @@ import {
 	ZEROPS_TERMINAL,
 	type ZeropsApi,
 	zeropsArtifactCodec,
+	zeropsNamespaceTargetCodec,
 } from '@fabrika/provider-zerops'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifest } from '@fabrika/proxy-contract'
 import type { ControlRegistryRepository } from '../db'
@@ -25,7 +26,10 @@ const decodeEnvelope = <T>(kind: string, envelope: ProviderEnvelope, codec: Prov
 }
 
 /** Compile every public app assigned to one deployment namespace into its strict proxy manifest. */
-export async function compileNamespaceProxyManifest(db: ControlRegistryRepository, namespaceId: string): Promise<ProxyManifest> {
+export async function compileNamespaceProxyManifest(
+	db: Pick<ControlRegistryRepository, 'listAppEnvsByNamespace'>,
+	namespaceId: string,
+): Promise<ProxyManifest> {
 	const rows = await db.listAppEnvsByNamespace(namespaceId)
 	const apps: ProxyManifest['apps'] = []
 	const ids = new Set<string>()
@@ -64,7 +68,7 @@ export async function compileNamespaceProxyManifest(db: ControlRegistryRepositor
 }
 
 export interface SyncZeropsProxyInput {
-	db: ControlRegistryRepository
+	db: Pick<ControlRegistryRepository, 'listAppEnvsByNamespace'>
 	api: ProxyApi
 	namespaceId: string
 	proxyServiceId: string
@@ -73,6 +77,12 @@ export interface SyncZeropsProxyInput {
 	/** The public IAM origin this installation's proxies verify against. */
 	iamUrl: string
 	iamKey: string
+	/**
+	 * How far to follow the roll. `active` (the default) waits for the build to finish, which is what a
+	 * deploy needs before it hands the app its traffic. `started` returns once the manifest is published and
+	 * a pipeline holds an app-version — a build takes minutes and an HTTP request must not hold one open.
+	 */
+	wait?: 'active' | 'started'
 	signal?: AbortSignal
 	sleep?: (ms: number) => Promise<void>
 }
@@ -116,6 +126,7 @@ export async function syncZeropsProxy(input: SyncZeropsProxyInput): Promise<void
 	if (version === null || version.id === '') {
 		throw new Error('Zerops proxy deploy did not expose an app-version')
 	}
+	if (input.wait === 'started') return
 	const deadline = Date.now() + POLL_TIMEOUT_MS
 	for (;;) {
 		const current = await input.api.getAppVersion({ appVersionId: version.id, signal })
@@ -128,4 +139,70 @@ export async function syncZeropsProxy(input: SyncZeropsProxyInput): Promise<void
 		}
 		await (input.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms))))(POLL_INTERVAL_MS)
 	}
+}
+
+/** The registry reads one namespace republish needs. */
+export type NamespaceProxyRegistry = Pick<ControlRegistryRepository, 'listAppEnvsByNamespace' | 'getDeploymentNamespace'>
+
+export interface SyncNamespaceProxyInput {
+	db: NamespaceProxyRegistry
+	api: ProxyApi
+	namespaceId: string
+	/** The public IAM origin this installation's proxies verify against. */
+	iamUrl: string
+	iamKey: string
+	signal?: AbortSignal
+	sleep?: (ms: number) => Promise<void>
+}
+
+/**
+ * Republish one deployment namespace's proxy from the registry, addressed by namespace id alone.
+ *
+ * The proxy service and its build source come from the namespace's own stored target, exactly as the
+ * deploy path reads them; a namespace that has not finished provisioning has neither, so it is refused
+ * rather than published half-configured.
+ *
+ * This runs inside an HTTP request, so it waits only for the manifest to publish and the roll to START.
+ * A roll that fails after that is what `namespaces.reconcile` repairs.
+ */
+
+export async function syncNamespaceProxy(input: SyncNamespaceProxyInput): Promise<void> {
+	const row = await input.db.getDeploymentNamespace(input.namespaceId)
+	if (row === null) {
+		throw new Error(`deployment namespace \`${input.namespaceId}\` not found`)
+	}
+	if (row.provider !== 'zerops') {
+		throw new Error(`deployment namespace \`${row.id}\` belongs to provider ${row.provider}`)
+	}
+	if (row.state !== 'ready') {
+		throw new Error(`deployment namespace \`${row.id}\` is ${row.state}`)
+	}
+	const target = decodeEnvelope(
+		'namespace target',
+		parseProviderEnvelope(row.provider_target_json, `target for namespace ${row.id}`),
+		zeropsNamespaceTargetCodec,
+	)
+	if (target.ready !== true) {
+		throw new Error(`Zerops deployment namespace \`${row.id}\` is not ready`)
+	}
+	const proxyServiceId = target.proxyServiceId
+	if (proxyServiceId === undefined) {
+		throw new Error(`Zerops deployment namespace \`${row.id}\` has no proxy service id`)
+	}
+	const proxyBuildFromGit = target.proxyBuildFromGit
+	if (proxyBuildFromGit === undefined) {
+		throw new Error(`Zerops deployment namespace \`${row.id}\` has no proxy build source`)
+	}
+	await syncZeropsProxy({
+		db: input.db,
+		api: input.api,
+		namespaceId: row.id,
+		proxyServiceId,
+		proxyBuildFromGit,
+		iamUrl: input.iamUrl,
+		iamKey: input.iamKey,
+		wait: 'started',
+		...(input.signal === undefined ? {} : { signal: input.signal }),
+		...(input.sleep === undefined ? {} : { sleep: input.sleep }),
+	})
 }

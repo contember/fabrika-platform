@@ -753,6 +753,23 @@ describe('provider-neutral run lifecycle', () => {
 		expect(refused).toEqual([])
 	})
 
+	test('refuses a reserved SECRET name before the provider is invoked, exactly as it refuses a variable', async () => {
+		// The registry surface refuses these names too; this is the belt for a row that predates that check
+		// or arrived through a provider-managed target.
+		const { db } = createHarness()
+		for (const name of [FABRIKA_IAM_ISSUER, FABRIKA_RELEASE, FABRIKA_OPERATIONS_DSN]) {
+			const runId = await seedRun(db)
+			await db.registry.upsertAppSecret({ appId: 'app', env: 'prod', name, valueRef: 'literal:attacker' })
+			const refused: ProviderDeployInput[] = []
+
+			expect(`${name}: ${(await executeDeploy(makeDeps(db, makeProvider(refused, { state: 'succeeded' })), { runId })).status}`)
+				.toBe(`${name}: failed`)
+			expect(refused).toEqual([])
+			await db.registry.deleteAppSecret('app', 'prod', name)
+			await db.registry.deleteApp('app')
+		}
+	})
+
 	test('removes a stale issuer when the installation cannot name its own', async () => {
 		// `null` is REMOVE. An installation with no issuer configured must strip whatever the previous one
 		// wrote rather than leave an app verifying against another installation's tokens.

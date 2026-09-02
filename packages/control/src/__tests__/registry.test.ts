@@ -4,7 +4,14 @@ import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type { ControlProvider, JsonValue, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
 import { logsKey } from '@fabrika/runner-cloudflare'
 import { describe, expect, test } from 'bun:test'
-import { registerAppUseCase, updateAppUseCase } from '../api/registry'
+import {
+	deleteAppEnvUseCase,
+	deleteAppUseCase,
+	putAppEnvUseCase,
+	registerAppUseCase,
+	type RegistryUseCaseContext,
+	updateAppUseCase,
+} from '../api/registry'
 import type { ApiDeps } from '../api/router'
 import { handleApi } from '../api/router'
 import { uuidv7 } from '../db'
@@ -678,5 +685,248 @@ describe('run history API', () => {
 		// An unknown run is a 404.
 		const unknown = await handleApi(req('POST', '/api/runs/nope/cancel'), deps)
 		expect(unknown.status).toBe(404)
+	})
+})
+
+describe('platform-owned names, bounded values, and literal hosts', () => {
+	async function seededApp(): Promise<ReturnType<typeof makeDeps>> {
+		const made = makeDeps()
+		await handleApi(req('POST', '/api/apps', { id: 'app', repoUrl: 'https://github.com/acme/app' }), made.deps)
+		return made
+	}
+
+	test('a reserved name is refused on the SECRET surface, exactly as it is on the variable surface', async () => {
+		const { deps } = await seededApp()
+		for (const name of [FABRIKA_IAM_ISSUER, FABRIKA_RELEASE, ...OPERATIONS_MANAGED_ENVIRONMENT_KEYS]) {
+			const refused = await handleApi(req('PUT', '/api/apps/app/secrets', { name, valueRef: 'literal:x' }), deps)
+			expect(`${name}: ${refused.status}`).toBe(`${name}: 400`)
+			expect(((await refused.json()) as { error: string }).error).toContain('managed by Fabrika')
+		}
+		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
+	})
+
+	test('a caller-supplied vault: reference is refused — a vault value is created, never pointed at', async () => {
+		const { deps } = await seededApp()
+		const refused = await handleApi(
+			req('PUT', '/api/apps/app/secrets', { name: 'API_KEY', valueRef: 'vault:01a00000-0000-7000-8000-000000000000' }),
+			deps,
+		)
+		expect(refused.status).toBe(400)
+		expect(((await refused.json()) as { error: string }).error).toContain('vault reference')
+		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
+
+		// Every other scheme is unchanged.
+		expect((await handleApi(req('PUT', '/api/apps/app/secrets', { name: 'API_KEY', valueRef: 'literal:x' }), deps)).status).toBe(200)
+	})
+
+	test('a variable value must be one bounded line', async () => {
+		const { deps } = await seededApp()
+		const multiline = await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: 'v1"\n  hostname: evil' }), deps)
+		expect(multiline.status).toBe(400)
+		expect(((await multiline.json()) as { error: string }).error).toContain('single line')
+
+		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: `v\r1` }), deps)).status).toBe(400)
+		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: 'a'.repeat(4097) }), deps)).status).toBe(400)
+		// The bound itself, and a tab, are accepted.
+		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: 'a'.repeat(4096) }), deps)).status).toBe(200)
+		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: 'a\tb' }), deps)).status).toBe(200)
+	})
+
+	const BAD_DOMAINS = ['*', '*.apps.example.com', 'apps.example.com:8080', 'https://apps.example.com', 'apps.example.com/x']
+
+	test('a domain must be a literal host the proxy can route on', async () => {
+		const { deps } = await seededApp()
+		for (const domain of BAD_DOMAINS) {
+			const refused = await handleApi(req('PUT', '/api/apps/app/envs/prod', { domain }), deps)
+			expect(`${domain}: ${refused.status}`).toBe(`${domain}: 400`)
+			expect(((await refused.json()) as { error: string }).error).toContain('literal hostname')
+		}
+		expect((await handleApi(req('PUT', '/api/apps/app/envs/prod', { domain: 'Apps.Example.com' }), deps)).status).toBe(200)
+	})
+
+	test('the same refusal holds on the RPC path, which never reaches the REST parser', async () => {
+		// `/api/rpc` is what the dashboard and the CLI speak; its zod input types `domain` as any string,
+		// so the check has to live in the use case or `domain: "*"` lands unexamined.
+		const { deps } = await seededApp()
+		const context: RegistryUseCaseContext = {
+			repositories: deps.repositories,
+			repoSource: deps.repoSource,
+			provider: deps.provider,
+			auth: deps.auth,
+			signal: new AbortController().signal,
+		}
+		for (const domain of BAD_DOMAINS) {
+			await expect(putAppEnvUseCase(context, 'app', 'prod', { ...registrationEnvelopes(), domain }))
+				.rejects.toMatchObject({ httpStatus: 400 })
+			await expect(registerAppUseCase(context, {
+				id: `fresh-${BAD_DOMAINS.indexOf(domain)}`,
+				repoUrl: 'https://github.com/acme/app',
+				env: 'prod',
+				domain,
+				...registrationEnvelopes(),
+			})).rejects.toMatchObject({ httpStatus: 400 })
+		}
+		expect(await deps.repositories.registry.getAppEnv('app', 'prod')).toBeNull()
+		expect(await deps.repositories.registry.getApp('fresh-0')).toBeNull()
+	})
+})
+
+describe('the namespace proxy follows the registry', () => {
+	interface ProxyRecording {
+		synced: string[]
+		fail?: string
+	}
+
+	/** The default fake provider owns no namespaces; the proxy only exists where they do. */
+	const namespacedProvider: ControlProvider = {
+		...fakeProvider,
+		namespaces: {
+			normalize: (namespace) => namespace,
+			namespaceResourceClaims: () => ['service:proxy'],
+			registrationResourceClaims: (registration) => [`service:${registration.app.id}`],
+			provision: (input) => Promise.resolve(input.namespace),
+			reconcile: (input) => Promise.resolve(input.namespace),
+		},
+	}
+
+	function context(deps: ApiDeps, recording: ProxyRecording): RegistryUseCaseContext {
+		return {
+			repositories: deps.repositories,
+			repoSource: deps.repoSource,
+			provider: deps.provider,
+			auth: deps.auth,
+			signal: new AbortController().signal,
+			namespaceProxyChanged: (namespaceId) => {
+				recording.synced.push(namespaceId)
+				return recording.fail === namespaceId ? Promise.reject(new Error('platform said no')) : Promise.resolve()
+			},
+		}
+	}
+
+	/** One namespace per environment: the claim FK pins `(namespace, provider, env)` together. */
+	async function seedNamespaces(deps: ApiDeps): Promise<void> {
+		for (const env of ['prod', 'stage']) {
+			await deps.repositories.registry.createDeploymentNamespaceWithResourceClaims({
+				id: `apps-${env}`,
+				env,
+				provider: 'harbor',
+				exclusiveAppId: null,
+				providerTargetJson: JSON.stringify(registrationEnvelopes().target),
+				state: 'ready',
+			}, ['service:proxy'])
+		}
+	}
+
+	// Seeded WITHOUT resource claims: the claim's owner FK is `ON DELETE RESTRICT`, so an environment
+	// that holds one cannot be deleted at all today (see the note in this unit's report).
+	async function seedRoutedApp(deps: ApiDeps, appId: string, envs: string[]): Promise<void> {
+		await deps.repositories.registry.createApp({ id: appId, repoUrl: `github.com/acme/${appId}` })
+		for (const env of envs) {
+			await deps.repositories.registry.upsertAppEnv({
+				...storedEnvironment(appId, env, { domain: `${appId}-${env}.example.com` }),
+				namespaceId: `apps-${env}`,
+			})
+		}
+	}
+
+	test('deleting an app republishes every namespace that routed one of its environments', async () => {
+		const { deps } = makeDeps({ provider: namespacedProvider })
+		await seedNamespaces(deps)
+		await seedRoutedApp(deps, 'notes', ['prod', 'stage'])
+		const recording: ProxyRecording = { synced: [] }
+
+		expect(await deleteAppUseCase(context(deps, recording), 'notes')).toEqual({ ok: true })
+		expect(recording.synced.sort()).toEqual(['apps-prod', 'apps-stage'])
+	})
+
+	test('deleting one environment republishes only the namespace it sat in', async () => {
+		const { deps } = makeDeps({ provider: namespacedProvider })
+		await seedNamespaces(deps)
+		await seedRoutedApp(deps, 'notes', ['prod', 'stage'])
+		const recording: ProxyRecording = { synced: [] }
+
+		expect(await deleteAppEnvUseCase(context(deps, recording), 'notes', 'prod')).toEqual({ ok: true })
+		expect(recording.synced).toEqual(['apps-prod'])
+	})
+
+	test('a failed republish is reported, and the registry change stands', async () => {
+		const { deps } = makeDeps({ provider: namespacedProvider })
+		await seedNamespaces(deps)
+		await seedRoutedApp(deps, 'notes', ['prod'])
+		const recording: ProxyRecording = { synced: [], fail: 'apps-prod' }
+
+		await expect(deleteAppUseCase(context(deps, recording), 'notes')).rejects.toMatchObject({ httpStatus: 502 })
+		expect(await deps.repositories.registry.getApp('notes')).toBeNull()
+	})
+
+	test('moving an environment republishes the namespace that loses it AND the one that gains it', async () => {
+		const { deps } = makeDeps({ provider: namespacedProvider })
+		await seedNamespaces(deps)
+		// A second `prod` namespace, so the move is between two proxies rather than across environments.
+		await deps.repositories.registry.createDeploymentNamespaceWithResourceClaims({
+			id: 'spare-prod',
+			env: 'prod',
+			provider: 'harbor',
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify(registrationEnvelopes().target),
+			state: 'ready',
+		}, ['service:proxy'])
+		await seedRoutedApp(deps, 'notes', ['prod'])
+		const recording: ProxyRecording = { synced: [] }
+
+		await putAppEnvUseCase(context(deps, recording), 'notes', 'prod', {
+			...registrationEnvelopes(),
+			domain: 'notes-prod.example.com',
+			namespaceId: 'spare-prod',
+		})
+
+		expect(recording.synced.sort()).toEqual(['apps-prod', 'spare-prod'])
+		expect((await deps.repositories.registry.getAppEnv('notes', 'prod'))?.namespace_id).toBe('spare-prod')
+	})
+
+	test('a rewritten artifact republishes too — the manifest carries its upstream and gates', async () => {
+		const { deps } = makeDeps({ provider: namespacedProvider })
+		await seedNamespaces(deps)
+		await seedRoutedApp(deps, 'notes', ['prod'])
+		const recording: ProxyRecording = { synced: [] }
+
+		await putAppEnvUseCase(context(deps, recording), 'notes', 'prod', {
+			target: registrationEnvelopes().target,
+			artifact: { provider: 'harbor', version: 1, payload: { image: 'registry.example/app:v2' } },
+			domain: 'notes-prod.example.com',
+			namespaceId: 'apps-prod',
+		})
+
+		expect(recording.synced).toEqual(['apps-prod'])
+	})
+
+	test('every affected proxy is attempted, and the failures are reported together', async () => {
+		const { deps } = makeDeps({ provider: namespacedProvider })
+		await seedNamespaces(deps)
+		await seedRoutedApp(deps, 'notes', ['prod', 'stage'])
+		const recording: ProxyRecording = { synced: [], fail: 'apps-prod' }
+
+		await expect(deleteAppUseCase(context(deps, recording), 'notes')).rejects.toMatchObject({ httpStatus: 502 })
+		// The second namespace is still republished even though the first refused.
+		expect(recording.synced.sort()).toEqual(['apps-prod', 'apps-stage'])
+	})
+
+	test('a renamed host republishes; an edit the manifest does not read republishes nothing', async () => {
+		const { deps } = makeDeps({ provider: namespacedProvider })
+		await seedNamespaces(deps)
+		await seedRoutedApp(deps, 'notes', ['prod'])
+		const recording: ProxyRecording = { synced: [] }
+		const environment = { ...registrationEnvelopes(), namespaceId: 'apps-prod' }
+
+		await putAppEnvUseCase(context(deps, recording), 'notes', 'prod', { ...environment, domain: 'renamed.example.com' })
+		expect(recording.synced).toEqual(['apps-prod'])
+
+		recording.synced.length = 0
+		await putAppEnvUseCase(context(deps, recording), 'notes', 'prod', {
+			...environment,
+			domain: 'renamed.example.com',
+			triggerRef: 'refs/tags/v*',
+		})
+		expect(recording.synced).toEqual([])
 	})
 })

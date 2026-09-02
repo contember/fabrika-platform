@@ -24,6 +24,9 @@ import {
 } from './api/namespaces'
 import { isJsonValue, readProviderEnvelope } from './api/provider-envelope'
 import {
+	APP_VAR_VALUE_MAX_LENGTH,
+	assertAppVarValue,
+	assertOwnedValueRef,
 	createAppUseCase,
 	deleteAppEnvUseCase,
 	deleteAppSecretUseCase,
@@ -99,9 +102,17 @@ const appEnvironmentBody = z.object({
 	artifact: providerEnvelope,
 })
 const putEnvironmentInput = z.object({ appId: nonEmpty, env: nonEmpty, environment: appEnvironmentBody })
-const secretBody = z.object({ name: nonEmpty, valueRef: nonEmpty, env: nullableString })
+const secretBody = z.object({
+	name: nonEmpty,
+	valueRef: nonEmpty.refine(refuses(assertOwnedValueRef), 'valueRef must not be a vault reference'),
+	env: nullableString,
+})
 const putSecretInput = z.object({ appId: nonEmpty, secret: secretBody })
-const variableBody = z.object({ name: nonEmpty, value: nonEmpty, env: nullableString })
+const variableBody = z.object({
+	name: nonEmpty,
+	value: nonEmpty.refine(refuses(assertAppVarValue), `value must be a single line of at most ${APP_VAR_VALUE_MAX_LENGTH} characters`),
+	env: nullableString,
+})
 const putVariableInput = z.object({ appId: nonEmpty, variable: variableBody })
 const secretValueInput = z.object({ appId: nonEmpty, name: nonEmpty, env: nullableString, value: z.string() })
 const namespaceId = z.object({ namespaceId: nonEmpty })
@@ -280,6 +291,18 @@ function sourceConnectionContext(ctx: ControlRpcContext) {
 	return { env: ctx.env, source: ctx.sourceConnection, auth: ctx.auth, request: ctx.request }
 }
 
+/** Reuse the REST parser's own refusal as a zod predicate, so the two surfaces cannot drift apart. */
+function refuses(assert: (value: string) => void): (value: string) => boolean {
+	return (value) => {
+		try {
+			assert(value)
+			return true
+		} catch {
+			return false
+		}
+	}
+}
+
 function registryContext(ctx: ControlRpcContext): RegistryUseCaseContext {
 	const deps = buildApiDeps(ctx.env, ctx.provider, ctx.auth)
 	return {
@@ -289,12 +312,20 @@ function registryContext(ctx: ControlRpcContext): RegistryUseCaseContext {
 		auth: ctx.auth,
 		signal: ctx.request.signal,
 		...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
+		...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
 	}
 }
 
 function namespaceContext(ctx: ControlRpcContext): NamespaceUseCaseContext {
 	const deps = buildApiDeps(ctx.env, ctx.provider, ctx.auth)
-	return { repositories: deps.repositories, provider: deps.provider, auth: ctx.auth, signal: ctx.request.signal, queue: deps.queue }
+	return {
+		repositories: deps.repositories,
+		provider: deps.provider,
+		auth: ctx.auth,
+		signal: ctx.request.signal,
+		queue: deps.queue,
+		...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
+	}
 }
 
 function runsContext(ctx: ControlRpcContext): RunsUseCaseContext {

@@ -1,6 +1,7 @@
 import type { AuthContext } from '@fabrika/auth'
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
+import type { NamespaceProxyChanged } from './api/namespaces'
 import type { ApiDeps } from './api/router'
 import type { ControlRepositories, RunRow } from './db'
 import type { Env } from './env'
@@ -120,8 +121,17 @@ export async function cancelRun(env: Env, provider: ControlProvider, run: RunRow
 	await cancelDeploy({ repositories: repositories(env), provider, lock: locks(env) }, run)
 }
 
+/**
+ * The one runtime handle a Cloudflare composition never fills: republishing a deployment namespace's
+ * proxy manifest. It is a PORT for the same reason every other handle in `env.ts` is one — the shared
+ * layer must not name a provider package (ADR-0011), and the process composition root supplies it.
+ */
+export interface NamespaceProxyEnv {
+	NAMESPACE_PROXY?: NamespaceProxyChanged
+}
+
 /** Assemble the shared API dependencies around one statically selected provider. */
-export function buildApiDeps(env: Env, provider: ControlProvider, auth: AuthContext): ApiDeps {
+export function buildApiDeps(env: Env & NamespaceProxyEnv, provider: ControlProvider, auth: AuthContext): ApiDeps {
 	return {
 		repositories: repositories(env),
 		auth,
@@ -132,5 +142,6 @@ export function buildApiDeps(env: Env, provider: ControlProvider, auth: AuthCont
 		cancelRun: (run) => cancelRun(env, provider, run),
 		vault: () => vault(env),
 		catalogChanged: () => scheduleOperationsCatalogChange(env),
+		...(env.NAMESPACE_PROXY === undefined ? {} : { namespaceProxyChanged: env.NAMESPACE_PROXY }),
 	}
 }

@@ -24,10 +24,11 @@ import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
 import { LocalGitHubRepoEvents } from '../repo-source'
 import type { ControlJobMessage } from '../run-lifecycle'
+import type { NamespaceProxyEnv } from '../services'
 import type { SourceConnectionPort } from '../source-connection-port'
 import { HttpIamAdminGateway } from './iam-admin'
 import { HttpOperationsService } from './operations'
-import { zeropsControlProvider, zeropsSourceClient, zeropsSourceConnectionAdmin } from './provider'
+import { zeropsControlProvider, zeropsNamespaceProxySync, zeropsSourceClient, zeropsSourceConnectionAdmin } from './provider'
 import { zeropsSourceConnectionPort } from './source-connection'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
@@ -39,7 +40,7 @@ export interface ProcessConfig {
 }
 
 export interface Runtime {
-	env: Env
+	env: Env & NamespaceProxyEnv
 	/** The single provider selected by this process composition root. */
 	provider: ControlProvider
 	/** Privileged provider-owned GitHub connection lifecycle, consumed by the authenticated admin route. */
@@ -109,7 +110,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 	const sourceConnection = zeropsSourceConnectionPort(sourceConnectionAdmin)
 	const controlRepositories = createControlRepositories(db)
 
-	const env: Env = {
+	const env: Env & NamespaceProxyEnv = {
 		DB: db,
 		REPOSITORIES: controlRepositories,
 		// SPA fallback on: the dashboard is client-routed, so `/apps/foo` must serve index.html.
@@ -119,6 +120,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		WAIT_UNTIL: tasks.waitUntil,
 		REPO_EVENTS: new LocalGitHubRepoEvents(source['GITHUB_WEBHOOK_SECRET'], sourceClient),
 		GITHUB_CONNECTION_WEBHOOKS: true,
+		NAMESPACE_PROXY: zeropsNamespaceProxySync(source, controlRepositories.registry),
 		IAM: iamRpc(source),
 		IAM_ADMIN: new HttpIamAdminGateway(required(source, 'FABRIKA_IAM_RPC_URL')),
 		ENVIRONMENT: environment,
