@@ -74,6 +74,12 @@ describe('platform scaffold', () => {
 				workflow.indexOf('name: Deploy fabrika runner + control plane'),
 			)
 			expect(operationsStep).toContain('FABRIKA_IAM_ISSUER: ${{ vars.FABRIKA_IAM_ISSUER }}')
+			const platformStep = workflow.slice(workflow.indexOf('name: Deploy fabrika runner + control plane'), workflow.indexOf('name: Summary'))
+			// One value, one step — the step deploys both Workers, so both get the same runner key.
+			expect(platformStep).toContain('FABRIKA_RUNNER_KEY: ${{ secrets.FABRIKA_RUNNER_KEY }}')
+			expect(platformStep).toContain('--runner-config=packages/runner-cloudflare/fabrika-runner.config.ts')
+			expect(platformStep).toContain('--worker-config=packages/control/fabrika.config.ts')
+			expect(files['README.md']).toContain('FABRIKA_RUNNER_KEY')
 			expect(workflow).toContain('FABRIKA_CONTROL_VAULT_KEY: ${{ secrets.FABRIKA_CONTROL_VAULT_KEY }}')
 			expect(workflow).toContain('FABRIKA_CONTROL_DOMAIN: ${{ vars.FABRIKA_CONTROL_DOMAIN }}')
 			expect(workflow).toContain('FABRIKA_CONTROL_BOOTSTRAP_ADMINS: ${{ vars.FABRIKA_CONTROL_BOOTSTRAP_ADMINS }}')

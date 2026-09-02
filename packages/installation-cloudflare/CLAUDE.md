@@ -21,7 +21,7 @@ engine lives in `@fabrika/engine`.
   create/clone/commit/push mechanics are `@fabrika/installation-init`'s.
 - `@fabrika/installation-init` owns the shared GitHub App manifest handshake; this package decides its
   Cloudflare-specific homepage, webhook URL, visibility and installation prompt.
-- `cloudflare.ts` — CF API helpers. `envfile.ts` / `narrow.ts` — `.env` resume, runtime JSON narrowing.
+- `cloudflare.ts` — CF API helpers. `envfile.ts` / `narrow.ts` — env-file resume, runtime JSON narrowing.
 - TTY prompts, console formatting, child processes, `gh`, and the GitHub Environment write live in
   **`@fabrika/installation-init`**, shared with `@fabrika/installation-zerops`. The two inits are not
   mirror images (ADR-0027) — only the mechanics are shared, never the flow.
@@ -30,8 +30,14 @@ engine lives in `@fabrika/engine`.
 
 - **NEVER print a secret VALUE.** `@fabrika/installation-init`'s `log.ts` has no helper that takes one. The single intentional exception is
   the vault KEK, printed ONCE (the operator must capture it — unrecoverable if lost). Secret values flow only
-  into `.env`, `gh` over stdin, and the GitHub Environment.
-- **Idempotent + resumable.** Every captured value persists to `.env` (Bun auto-loads it next run); a re-run
+  into the env file, `gh` over stdin, and the GitHub Environment.
+- **The env file lives at `$XDG_CONFIG_HOME/fabrika/cloudflare/<account>/.env`** (0700 directory, 0600
+  file), never in the cwd — it holds the account API token, the vault KEK and IAM's signing key, and the
+  cwd is routinely an unrelated repository. `envPath()` is the single source of that path and
+  `openEnvFile(account)` binds it, loads it into `process.env` (Bun no longer auto-loads it) and must run
+  before any `persistEnv`. Never claim the file is gitignored. A `$PWD/.env` is warned about, because Bun
+  loaded it first and its values outrank the per-account file.
+- **Idempotent + resumable.** Every captured value persists to that file; a re-run
   reuses external resources (GitHub App, vault key) instead of orphaning them.
 - **App visibility is DERIVED:** public iff any install repo is in a different org than the App's owner org
   (GitHub forbids a private App installing cross-org). Same-org stays private.

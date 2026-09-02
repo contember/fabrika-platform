@@ -7,7 +7,12 @@
  * base); `platform.yml` / `README.md` / `.gitignore` are CLI-owned and refreshed every run.
  */
 
-import { INITIAL_SCAFFOLD_COMMIT_MESSAGE, REFRESH_SCAFFOLD_COMMIT_MESSAGE, scaffoldSidecarRepository } from '@fabrika/installation-init'
+import {
+	INITIAL_SCAFFOLD_COMMIT_MESSAGE,
+	type ProtectionOutcome,
+	REFRESH_SCAFFOLD_COMMIT_MESSAGE,
+	scaffoldSidecarRepository,
+} from '@fabrika/installation-init'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 
@@ -34,6 +39,8 @@ export interface ScaffoldInput {
 export interface ScaffoldResult {
 	dir: string
 	created: boolean
+	/** Set only for a repository this run created; absent means an existing repo was left as it is. */
+	branchProtection?: ProtectionOutcome
 }
 
 /** Render a template: replace every `{{ACCOUNT}}` token. (Account is the only placeholder today.) */

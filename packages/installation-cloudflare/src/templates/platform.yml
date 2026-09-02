@@ -156,6 +156,10 @@ jobs:
           # The seeded IAM provisioning key — the control plane reconciles its own schema with it (Bearer px_).
           FABRIKA_IAM_PROVISIONING_KEY: ${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}
           OPERATIONS_SYNC_KEY: ${{ secrets.OPERATIONS_SYNC_KEY }}
+          # `wrangler secret put FABRIKA_RUNNER_KEY` on BOTH Workers this step deploys: the control plane
+          # presents it to the deploy runner, and the runner rejects an RPC caller without it. One step,
+          # one value, because a mismatched pair breaks every deploy.
+          FABRIKA_RUNNER_KEY: ${{ secrets.FABRIKA_RUNNER_KEY }}
           # Non-secret config (Environment Variables).
           FABRIKA_CONTROL_DOMAIN: ${{ vars.FABRIKA_CONTROL_DOMAIN }}
           GITHUB_APP_ID: ${{ vars.GH_APP_ID }}

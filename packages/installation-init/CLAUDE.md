@@ -23,7 +23,9 @@ Public because both installation packages are, and
 - `shell.ts` — `run` / `capture` / `probe` over `Bun.spawn`; argv verbatim, never a shell.
 - `gh.ts` — `hasGhCli` / `ghRepoExists`.
 - `github-app-manifest.ts` — the loopback-only GitHub App manifest handshake and strict conversion decoder.
-- `environment.ts` — create the GitHub Environment, write its secrets over `gh` stdin and its variables.
+- `environment.ts` — create the GitHub Environment (carrying its deployment-branch policy), write its
+  secrets over `gh` stdin and its variables.
+- `protection.ts` — the two hardening PUTs and the commands that apply them by hand.
 - `scaffold.ts` — create or refresh a sidecar repository around a provider-supplied `materialize`.
 - `admin.ts` — the first administrator: a typed `/admin/rpc` client over the provisioning key, and
   `ensureFirstAdministrator` — list-or-invite the mailbox, ensure the CROSS-APP `admin` grant, issue one
@@ -43,6 +45,22 @@ Public because both installation packages are, and
   never the raw error object** — a clone URL can carry an embedded token.
 - **Scaffold commits skip CI** (`[skip ci]`), so a push cannot deploy before the
   GitHub Environment exists. `init` dispatches the workflow explicitly, afterwards.
+- **A repository this run created is hardened; an existing one is PROBED, never PUT
+  to.** The sidecar holds the installation's whole credential set, so a fresh `main`
+  gets branch protection (no force pushes, no deletions, `enforce_admins`, and NO
+  required review — `platform upgrade` pushes to `main`). A blind PUT on an existing
+  repository would replace stricter operator-set rules with ours, so that path only
+  reads and reports. GitHub Free offers neither rule on a private repository: a
+  403/404/422 WARNS, names the `gh api` command, and the install continues. Anything
+  else is a real error and is rethrown — degrade only on a plan limit.
+- **The Environment's deployment-branch policy is worth NOTHING without a branch
+  rule.** `protected_branches` admits any branch that carries no protection rule, so
+  the two outcomes are always reported together and the policy is never presented as
+  sufficient on its own.
+- **The environment PUT replaces the whole object**, so `createEnvironment` GETs it
+  first and merges any existing `reviewers` / `wait_timer` into the body. Losing a
+  reviewer an operator added by hand is a silent downgrade of the only rule that
+  gates a deploy on a human.
 - **A provider-neutral SEQUENCE over a published contract may live here; anything
   naming a provider's own coordinates may not.** `ensureFirstAdministrator` is a
   sequence — which `IamAdminRpcContract` procedures, in which order, and what makes a

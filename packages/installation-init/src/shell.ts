@@ -106,3 +106,26 @@ export async function probe(step: ShellStep): Promise<number> {
 	})
 	return proc.exited
 }
+
+/** What a step that is allowed to fail reported: its exit code plus everything it wrote. */
+export interface ShellAttempt {
+	readonly exitCode: number
+	readonly stdout: string
+	readonly stderr: string
+}
+
+/**
+ * Run a step WITHOUT throwing, capturing both pipes. For a call whose failure is an ANSWER rather than
+ * an error — a `gh api` PUT that GitHub refuses because the plan does not offer the feature.
+ */
+export async function attempt(step: ShellStep): Promise<ShellAttempt> {
+	const proc = Bun.spawn([step.command, ...step.args], {
+		cwd: step.cwd,
+		env: { ...process.env, ...step.env },
+		stdin: step.stdin !== undefined ? new TextEncoder().encode(step.stdin) : 'ignore',
+		stdout: 'pipe',
+		stderr: 'pipe',
+	})
+	const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+	return { exitCode: await proc.exited, stdout, stderr }
+}

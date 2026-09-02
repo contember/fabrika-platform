@@ -1,16 +1,17 @@
 /**
  * `fabrika platform init --provider=cloudflare <account>` — bring up a CF account's fabrika control-plane base from (ideally) just a
- * Cloudflare API token. Idempotent + resumable (every captured value lands in `.env`, which Bun
- * auto-loads on the next run). The REAL deploy runs in GitHub Actions (the scaffolded pipeline calls
+ * Cloudflare API token. Idempotent + resumable (every captured value lands in the per-account env file
+ * `openEnvFile` binds and reloads). The REAL deploy runs in GitHub Actions (the scaffolded pipeline calls
  * `fabrika platform deploy`), so this laptop never needs the CF toolchain or docker.
  *
- * Order: CF token → account + zones → smart-default prompts → vault key → provisioning key → GitHub App
- * (manifest) → scaffold the base repo → write the GitHub Environment → trigger. Secret VALUES flow only
- * into `.env`, `gh` over stdin, and child env — never through `log.ts`.
+ * Order: CF token → account + zones → smart-default prompts → vault key → provisioning key → runner key →
+ * GitHub App (manifest) → scaffold the base repo → write the GitHub Environment → trigger. Secret VALUES
+ * flow only into the env file, `gh` over stdin, and child env — never through `log.ts`.
  */
 
 import {
 	action,
+	branchProtectionCommand,
 	configureEnvironment,
 	confirm,
 	type CreatedGitHubApp,
@@ -19,6 +20,7 @@ import {
 	githubAppInstallationUrl,
 	info,
 	ok,
+	type ProtectionOutcome,
 	retry,
 	secret,
 	secretOrEnv,
@@ -31,11 +33,11 @@ import {
 } from '@fabrika/installation-init'
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto'
 import { findZone, listZones, resolveAccountId, verifyToken } from './cloudflare'
-import { fromEnv, persistEnv, persistEnvBundle } from './envfile'
+import { envPath, fromEnv, openEnvFile, persistEnv, persistEnvBundle } from './envfile'
 import { defaultCheckoutDir, readFabrikaRef, scaffoldPlatformRepo } from './scaffold'
 
 /** Everything collected before the scaffold + environment write. */
-interface Collected {
+export interface Collected {
 	account: string
 	accountId: string
 	apiToken: string
@@ -119,6 +121,9 @@ function parseBoolean(value: string, name: string): boolean {
 export async function runInit(account: string): Promise<void> {
 	console.log(`\nfabrika platform init — bring up the ${account} Cloudflare control-plane base\n`)
 
+	step('Open the installer env file')
+	info(`Every captured value is persisted here (0600, in a 0700 directory) so a re-run resumes: ${await openEnvFile(account)}`)
+
 	const collected = await collect(account)
 	const vaultKey = await ensureVaultKey()
 	const provisioning = await ensureProvisioningKey()
@@ -128,37 +133,88 @@ export async function runInit(account: string): Promise<void> {
 		? await ensureOidcClientSecret(collected.oidcClientId === PLACEHOLDER_OIDC_CLIENT_ID)
 		: undefined
 	const emailApiKey = collected.emailProvider === 'resend' ? await ensureResendApiKey() : undefined
+	const runnerKey = await ensureRunnerKey()
 	const app = await ensureGitHubApp(collected)
 
-	const { dir } = await scaffoldPlatformRepo({
+	const { dir, branchProtection } = await scaffoldPlatformRepo({
 		repo: collected.platformRepo,
 		account: collected.account,
 		dir: defaultCheckoutDir(collected.account),
 	})
+	let environmentPolicy: ProtectionOutcome | undefined
 
-	// GitHub RESERVES the `GITHUB_` prefix for secret + variable names in an Environment (the API rejects
-	// them, 422), so the App's key/secret/id ride under a `GH_` prefix here. platform.yml maps each back to
-	// the `GITHUB_*` env var the deploy + Worker bindings expect — that rename is GitHub-side only.
 	await configureEnvironment({
 		repo: collected.platformRepo,
 		environment: collected.account,
+		onProtection: (outcome) => {
+			environmentPolicy = outcome
+		},
+		...environmentPayload(collected, {
+			app,
+			vaultKey,
+			provisioning,
+			operationsSyncKey,
+			runnerKey,
+			signingKeys,
+			...(oidcClientSecret === undefined ? {} : { oidcClientSecret }),
+			...(emailApiKey === undefined ? {} : { emailApiKey }),
+		}),
+	})
+
+	await triggerDeploy(collected.platformRepo)
+	finalNotes({
+		repo: collected.platformRepo,
+		account: collected.account,
+		dir,
+		ref: await readFabrikaRef(dir),
+		passwordEnabled: collected.passwordEnabled,
+		...(branchProtection === undefined ? {} : { branchProtection }),
+		...(environmentPolicy === undefined ? {} : { environmentPolicy }),
+	})
+}
+
+/** Everything `init` generated or fetched, ready to be split into the Environment's two halves. */
+export interface GeneratedInstallation {
+	readonly app: CreatedGitHubApp
+	readonly vaultKey: string
+	readonly provisioning: string
+	readonly operationsSyncKey: string
+	readonly runnerKey: string
+	readonly signingKeys: string
+	readonly oidcClientSecret?: string
+	readonly emailApiKey?: string
+}
+
+/**
+ * What the GitHub Environment holds, split by the one rule: a credential is a SECRET, never a variable
+ * (a variable value reaches `gh` on argv). GitHub RESERVES the `GITHUB_` prefix for Environment names
+ * (422), so the App's key/secret/id ride under `GH_`; platform.yml maps each back to the `GITHUB_*` env
+ * var the deploy and the Worker bindings expect.
+ */
+export function environmentPayload(
+	collected: Collected,
+	generated: GeneratedInstallation,
+): { secrets: Record<string, string>; vars: Record<string, string> } {
+	return {
 		secrets: {
 			CLOUDFLARE_ACCOUNT_ID: collected.accountId,
 			CLOUDFLARE_API_TOKEN: collected.apiToken,
-			FABRIKA_CONTROL_VAULT_KEY: vaultKey,
-			GH_APP_PRIVATE_KEY: app.pem,
-			GH_WEBHOOK_SECRET: app.webhookSecret,
-			FABRIKA_IAM_PROVISIONING_KEY: provisioning,
-			OPERATIONS_SYNC_KEY: operationsSyncKey,
+			FABRIKA_CONTROL_VAULT_KEY: generated.vaultKey,
+			GH_APP_PRIVATE_KEY: generated.app.pem,
+			GH_WEBHOOK_SECRET: generated.app.webhookSecret,
+			FABRIKA_IAM_PROVISIONING_KEY: generated.provisioning,
+			OPERATIONS_SYNC_KEY: generated.operationsSyncKey,
+			// The shared key the control plane presents to the deploy runner; both Workers take the same value.
+			FABRIKA_RUNNER_KEY: generated.runnerKey,
 			// IAM Stage 1 native-auth secrets (pushed as IAM Worker secrets by the pipeline).
-			FABRIKA_IAM_SIGNING_KEYS: signingKeys,
-			...(oidcClientSecret === undefined ? {} : { FABRIKA_IAM_OIDC_CLIENT_SECRET: oidcClientSecret }),
-			...(emailApiKey === undefined ? {} : { FABRIKA_EMAIL_RESEND_API_KEY: emailApiKey }),
+			FABRIKA_IAM_SIGNING_KEYS: generated.signingKeys,
+			...(generated.oidcClientSecret === undefined ? {} : { FABRIKA_IAM_OIDC_CLIENT_SECRET: generated.oidcClientSecret }),
+			...(generated.emailApiKey === undefined ? {} : { FABRIKA_EMAIL_RESEND_API_KEY: generated.emailApiKey }),
 		},
 		vars: {
 			FABRIKA_CONTROL_DOMAIN: collected.controlPlaneDomain,
 			OPERATIONS_HOSTNAME: collected.operationsHostname,
-			GH_APP_ID: String(app.id),
+			GH_APP_ID: String(generated.app.id),
 			FABRIKA_IAM_ISSUER: collected.iamUrl,
 			FABRIKA_CONTROL_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
 			// IAM Stage 1 non-secret config (read by IAM's fabrika config).
@@ -177,10 +233,7 @@ export async function runInit(account: string): Promise<void> {
 			// The same first-admin emails admit the operator to IAM itself (its own bootstrap hatch).
 			FABRIKA_IAM_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
 		},
-	})
-
-	await triggerDeploy(collected.platformRepo)
-	finalNotes(collected.platformRepo, collected.account, dir, await readFabrikaRef(dir), collected.passwordEnabled)
+	}
 }
 
 /** Collect the CF token + account, then the smart-default prompts. */
@@ -258,7 +311,7 @@ async function collect(account: string): Promise<Collected> {
 		])
 	await persistEnv('FABRIKA_IAM_OIDC_ENABLED', String(methods.oidcEnabled))
 	await persistEnv('FABRIKA_IAM_PASSWORD_ENABLED', String(methods.passwordEnabled))
-	if (resumedMethods !== undefined) ok('Reusing IAM authentication methods from .env (resume).')
+	if (resumedMethods !== undefined) ok('Reusing IAM authentication methods from the installer env file (resume).')
 
 	let oidcIssuer = ''
 	let oidcClientId = ''
@@ -283,7 +336,7 @@ async function collect(account: string): Promise<Collected> {
 			{ label: 'Resend', value: 'resend' },
 		])
 	await persistEnv('FABRIKA_EMAIL_PROVIDER', emailProvider)
-	if (resumedEmailProvider !== undefined) ok('Reusing email transport from .env (resume).')
+	if (resumedEmailProvider !== undefined) ok('Reusing email transport from the installer env file (resume).')
 	const emailFrom = emailProvider === 'resend'
 		? fromEnv('FABRIKA_EMAIL_FROM')
 			?? await retry('Email sender', async () => {
@@ -339,12 +392,12 @@ export async function ensureVaultKey(dependencies: VaultKeyDependencies = vaultK
 	const existing = readResumeValue(dependencies.source, 'FABRIKA_CONTROL_VAULT_KEY')
 	if (existing !== undefined) {
 		await dependencies.persist('FABRIKA_CONTROL_VAULT_KEY', existing)
-		ok('Reusing FABRIKA_CONTROL_VAULT_KEY from .env (resume).')
+		ok('Reusing FABRIKA_CONTROL_VAULT_KEY from the installer env file (resume).')
 		return existing
 	}
 	const key = dependencies.generate()
 	await dependencies.persist('FABRIKA_CONTROL_VAULT_KEY', key)
-	dependencies.created('SAVED to .env (gitignored) — copy that file to your password manager; the vault KEK is unrecoverable if lost', [
+	dependencies.created('SAVED to the installer env file — copy it to your password manager; the vault KEK is unrecoverable if lost', [
 		"It is the master key for fabrika's encrypted secret vault.",
 		'The value is intentionally not printed.',
 	])
@@ -363,12 +416,12 @@ async function ensureProvisioningKey(): Promise<string> {
 	const existing = readResumeValue(ENVIRONMENT_SOURCE, 'FABRIKA_IAM_PROVISIONING_KEY')
 	if (existing !== undefined) {
 		await persistEnv('FABRIKA_IAM_PROVISIONING_KEY', existing)
-		ok('Reusing the provisioning key from .env (resume).')
+		ok('Reusing the provisioning key from the installer env file (resume).')
 		return existing
 	}
 	const key = `px_${randomBytes(20).toString('base64url')}`
 	await persistEnv('FABRIKA_IAM_PROVISIONING_KEY', key)
-	ok('Provisioning key generated + saved to .env.')
+	ok('Provisioning key generated + saved to the installer env file.')
 	detail('IAM Stage 1 seeds this as an admin credential; the control plane reconciles with it in Stage 2.')
 	return key
 }
@@ -378,12 +431,32 @@ async function ensureOperationsSyncKey(): Promise<string> {
 	const existing = fromEnv('OPERATIONS_SYNC_KEY')
 	if (existing !== undefined) {
 		if (existing.length < 32) throw new Error('OPERATIONS_SYNC_KEY must be at least 32 characters.')
-		ok('Reusing OPERATIONS_SYNC_KEY from .env (resume).')
+		ok('Reusing OPERATIONS_SYNC_KEY from the installer env file (resume).')
 		return existing
 	}
 	const key = randomBytes(32).toString('base64url')
 	await persistEnv('OPERATIONS_SYNC_KEY', key)
-	ok('Operations catalog key generated + saved to .env.')
+	ok('Operations catalog key generated + saved to the installer env file.')
+	return key
+}
+
+/**
+ * Generate the runner key: the shared 256-bit bearer the control plane presents to the deploy executor,
+ * whose service binding alone proves nothing about the caller. The SAME value is pushed to both Workers,
+ * so it must be durable — a resumed init reuses it rather than rolling half the pair.
+ */
+export async function ensureRunnerKey(): Promise<string> {
+	step('Runner key (FABRIKA_RUNNER_KEY)')
+	const existing = readResumeValue(ENVIRONMENT_SOURCE, 'FABRIKA_RUNNER_KEY')
+	if (existing !== undefined) {
+		await persistEnv('FABRIKA_RUNNER_KEY', existing)
+		ok('Reusing FABRIKA_RUNNER_KEY from the installer env file (resume).')
+		return existing
+	}
+	const key = randomBytes(32).toString('base64url')
+	await persistEnv('FABRIKA_RUNNER_KEY', key)
+	ok('Runner key generated + saved to the installer env file.')
+	detail('The pipeline pushes it to the control plane and the deploy runner as a Worker secret.')
 	return key
 }
 
@@ -408,17 +481,17 @@ async function ensureSigningKeys(): Promise<string> {
 	const existing = readResumeValue(ENVIRONMENT_SOURCE, 'FABRIKA_IAM_SIGNING_KEYS')
 	if (existing !== undefined) {
 		await persistEnv('FABRIKA_IAM_SIGNING_KEYS', existing)
-		ok('Reusing FABRIKA_IAM_SIGNING_KEYS from .env (resume).')
+		ok('Reusing FABRIKA_IAM_SIGNING_KEYS from the installer env file (resume).')
 		return existing
 	}
 	const keys = JSON.stringify([generateEs256Jwk()])
 	await persistEnv('FABRIKA_IAM_SIGNING_KEYS', keys)
-	ok('IAM signing key generated (1 × ES256) + saved to .env.')
+	ok('IAM signing key generated (1 × ES256) + saved to the installer env file.')
 	return keys
 }
 
 /**
- * Resolve IAM's OIDC client secret (Stage 1). Reused from `.env` on resume; otherwise a hidden
+ * Resolve IAM's OIDC client secret (Stage 1). Reused from the installer env file on resume; otherwise a hidden
  * prompt for a real provider, or the placeholder when SSO was deferred (blank client id). Always persisted
  * so a re-run reuses it. NEVER logged.
  */
@@ -427,12 +500,12 @@ async function ensureOidcClientSecret(placeholder: boolean): Promise<string> {
 	const existing = readResumeValue(ENVIRONMENT_SOURCE, 'FABRIKA_IAM_OIDC_CLIENT_SECRET')
 	if (existing !== undefined) {
 		await persistEnv('FABRIKA_IAM_OIDC_CLIENT_SECRET', existing)
-		ok('Reusing FABRIKA_IAM_OIDC_CLIENT_SECRET from .env (resume).')
+		ok('Reusing FABRIKA_IAM_OIDC_CLIENT_SECRET from the installer env file (resume).')
 		return existing
 	}
 	const value = placeholder ? PLACEHOLDER_OIDC_CLIENT_SECRET : await secret('IAM OIDC client secret')
 	await persistEnv('FABRIKA_IAM_OIDC_CLIENT_SECRET', value)
-	ok(placeholder ? 'Placeholder OIDC client secret saved to .env.' : 'OIDC client secret saved to .env.')
+	ok(placeholder ? 'Placeholder OIDC client secret saved to the installer env file.' : 'OIDC client secret saved to the installer env file.')
 	return value
 }
 
@@ -441,7 +514,7 @@ async function ensureResendApiKey(): Promise<string> {
 	step('Resend API key (FABRIKA_EMAIL_RESEND_API_KEY)')
 	const existing = fromEnv('FABRIKA_EMAIL_RESEND_API_KEY')
 	if (existing !== undefined) {
-		ok('Reusing FABRIKA_EMAIL_RESEND_API_KEY from .env (resume).')
+		ok('Reusing FABRIKA_EMAIL_RESEND_API_KEY from the installer env file (resume).')
 		return existing
 	}
 	const value = await retry('Resend API key', async () => {
@@ -450,12 +523,12 @@ async function ensureResendApiKey(): Promise<string> {
 		return entered
 	})
 	await persistEnv('FABRIKA_EMAIL_RESEND_API_KEY', value)
-	ok('Resend API key saved to .env.')
+	ok('Resend API key saved to the installer env file.')
 	return value
 }
 
-const GITHUB_APP_RESUME_ERROR =
-	'Stored GitHub App resume state is incomplete or invalid; restore all GitHub App values in .env or remove all five and rerun init'
+const githubAppResumeError = (): string =>
+	`Stored GitHub App resume state is incomplete or invalid; restore all GitHub App values in ${envPath()} or remove all five and rerun init`
 const GITHUB_APP_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/
 const GITHUB_APP_PEM = /^-----BEGIN (?:RSA )?PRIVATE KEY-----[\s\S]+-----END (?:RSA )?PRIVATE KEY-----\s*$/
 
@@ -468,14 +541,14 @@ const readGitHubAppResume = (source: Readonly<Record<string, string | undefined>
 	const values = [pem, webhookSecret, idText, slug, htmlUrl]
 	if (values.every((value) => value === undefined)) return undefined
 	if (pem === undefined || webhookSecret === undefined || idText === undefined || slug === undefined || htmlUrl === undefined) {
-		throw new Error(GITHUB_APP_RESUME_ERROR)
+		throw new Error(githubAppResumeError())
 	}
 	const id = Number(idText)
 	let parsedUrl: URL
 	try {
 		parsedUrl = new URL(htmlUrl)
 	} catch {
-		throw new Error(GITHUB_APP_RESUME_ERROR)
+		throw new Error(githubAppResumeError())
 	}
 	if (
 		!Number.isSafeInteger(id) || id <= 0 || String(id) !== idText || !GITHUB_APP_SLUG.test(slug)
@@ -485,7 +558,7 @@ const readGitHubAppResume = (source: Readonly<Record<string, string | undefined>
 		|| parsedUrl.username !== '' || parsedUrl.password !== '' || parsedUrl.search !== '' || parsedUrl.hash !== ''
 		|| parsedUrl.pathname !== `/apps/${slug}`
 	) {
-		throw new Error(GITHUB_APP_RESUME_ERROR)
+		throw new Error(githubAppResumeError())
 	}
 	return { id, slug, htmlUrl, pem, webhookSecret }
 }
@@ -523,7 +596,7 @@ export async function ensureGitHubApp(
 	step('Create the fabrika GitHub App (manifest flow)')
 	let app = readGitHubAppResume(dependencies.source)
 	if (app !== undefined) {
-		ok('Reusing the GitHub App from .env (resume) — skipping manifest creation.')
+		ok('Reusing the GitHub App from the installer env file (resume) — skipping manifest creation.')
 	} else {
 		const appName = await dependencies.appName(`fabrika-${collected.account}`)
 		const ownerOrg = collected.githubOrg.toLowerCase()
@@ -543,7 +616,7 @@ export async function ensureGitHubApp(
 			GITHUB_APP_SLUG: app.slug,
 			GITHUB_APP_URL: app.htmlUrl,
 		})
-		ok('GitHub App credentials saved to .env (resume-safe).')
+		ok('GitHub App credentials saved to the installer env file (resume-safe).')
 	}
 	if (collected.installRepos.length > 0) {
 		dependencies.installAction('OPERATOR ACTION — install the GitHub App', [
@@ -578,11 +651,27 @@ async function triggerDeploy(repo: string): Promise<void> {
 	detail(`Watch: ${url(`https://github.com/${repo}/actions`)}   (or: gh run watch --repo ${repo})`)
 }
 
-/** Closing notes: the local checkout, the escape hatch, and what runs in CI. */
-function finalNotes(repo: string, account: string, dir: string, ref: string, passwordEnabled: boolean): void {
+/** What the closing summary reports beyond the repository itself. */
+export interface FinalNotes {
+	readonly repo: string
+	readonly account: string
+	readonly dir: string
+	readonly ref: string
+	readonly passwordEnabled: boolean
+	/** Absent when the repository already existed, so this run did not touch its protection. */
+	readonly branchProtection?: ProtectionOutcome
+	readonly environmentPolicy?: ProtectionOutcome
+}
+
+/** Closing notes: the checkout, the env file, what is protected, the escape hatch, and what runs in CI. */
+export function finalNotes(notes: FinalNotes): void {
+	const { repo, account, dir, ref, passwordEnabled } = notes
 	step('Done')
 	ok(`Base repo: ${repo} (pinned fabrika ref: ${ref})`)
-	ok(`Local checkout + .env: ${dir}`)
+	ok(`Local checkout: ${dir}`)
+	ok(`Installer env file (0600): ${envPath()}`)
+	reportProtection('Branch protection on main', notes.branchProtection, 'not checked')
+	reportEnvironmentPolicy(repo, notes.environmentPolicy, notes.branchProtection)
 	info('The fabrika control plane came up with the bootstrap-admin escape hatch OPEN (FABRIKA_CONTROL_BOOTSTRAP_ADMINS set).')
 	action('OPERATOR ACTION — close the hatch after IAM grants you the fabrika admin role', [
 		`1. gh variable set FABRIKA_CONTROL_BOOTSTRAP_ADMINS --repo ${repo} --env ${account} --body '[]'`,
@@ -595,4 +684,32 @@ function finalNotes(repo: string, account: string, dir: string, ref: string, pas
 			'Use the IAM admin surface after the first provisioning-backed administrator is available.',
 		])
 	}
+}
+
+/** One line per hardening rule: applied, or what is open and the command that closes it. */
+function reportProtection(label: string, outcome: ProtectionOutcome | undefined, absent: string): void {
+	if (outcome === undefined) {
+		info(`${label}: ${absent}.`)
+		return
+	}
+	if (outcome.applied) {
+		ok(`${label}: applied.`)
+		return
+	}
+	warn(`${label}: NOT applied (${outcome.reason ?? 'refused'}).`)
+	detail(`Apply it later: ${outcome.command}`)
+}
+
+/**
+ * `protected_branches` admits every branch that carries no protection rule, so the Environment policy is
+ * worth nothing until `main` is protected. Never report the policy as sufficient on its own.
+ */
+function reportEnvironmentPolicy(repo: string, policy: ProtectionOutcome | undefined, branch: ProtectionOutcome | undefined): void {
+	const label = 'Environment deployment-branch policy'
+	if (policy?.applied === true && branch?.applied !== true) {
+		warn(`${label}: applied, but it restricts nothing until main carries a protection rule.`)
+		detail(`Protect main first: ${branch?.command ?? branchProtectionCommand(repo)}`)
+		return
+	}
+	reportProtection(label, policy, 'not attempted')
 }

@@ -9,7 +9,14 @@ export {
 	type IamAdminClient,
 	type IamAdminConnection,
 } from './admin'
-export { configureEnvironment, type EnvironmentConfig, triggerPlatformWorkflow } from './environment'
+export {
+	configureEnvironment,
+	type EnvironmentConfig,
+	type EnvironmentEffects,
+	type ExistingEnvironmentProtection,
+	existingEnvironmentProtection,
+	triggerPlatformWorkflow,
+} from './environment'
 export { ghRepoExists, hasGhCli } from './gh'
 export {
 	buildGitHubAppManifest,
@@ -24,10 +31,23 @@ export {
 export { action, detail, fail, info, ok, step, url, warn } from './log'
 export { confirm, required, retry, secret, secretOrEnv, select, text } from './prompt'
 export {
+	branchProtectionCommand,
+	DEPLOYMENT_BRANCH_POLICY,
+	environmentPolicyCommand,
+	environmentReviewerCommand,
+	type GhAttempt,
+	isPlanLimited,
+	PLAN_LIMITED,
+	probeSidecarBranchProtection,
+	type ProtectionOutcome,
+	protectSidecarBranch,
+} from './protection'
+export {
 	INITIAL_SCAFFOLD_COMMIT_MESSAGE,
 	REFRESH_SCAFFOLD_COMMIT_MESSAGE,
 	scaffoldSidecarRepository,
+	type SidecarScaffoldEffects,
 	type SidecarScaffoldInput,
 	type SidecarScaffoldResult,
 } from './scaffold'
-export { capture, probe, run, type ShellStep } from './shell'
+export { attempt, capture, probe, run, type ShellAttempt, type ShellStep } from './shell'

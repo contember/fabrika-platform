@@ -1,13 +1,78 @@
 import { action } from '@fabrika/installation-init'
 import { describe, expect, spyOn, test } from 'bun:test'
-import { ensureGitHubApp, ensureVaultKey, readInstallerAuthMethods, readInstallerEmailProvider, readResumeValue } from '../init'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { envPath, openEnvFile } from '../envfile'
+import {
+	type Collected,
+	ensureGitHubApp,
+	ensureRunnerKey,
+	ensureVaultKey,
+	environmentPayload,
+	finalNotes,
+	readInstallerAuthMethods,
+	readInstallerEmailProvider,
+	readResumeValue,
+} from '../init'
 
 const RESUMED_NAMES: readonly string[] = [
 	'FABRIKA_CONTROL_VAULT_KEY',
 	'FABRIKA_IAM_PROVISIONING_KEY',
 	'FABRIKA_IAM_SIGNING_KEYS',
 	'FABRIKA_IAM_OIDC_CLIENT_SECRET',
+	'FABRIKA_RUNNER_KEY',
 ]
+
+const COLLECTED: Collected = {
+	account: 'mangoweb',
+	accountId: 'cf-account-id',
+	apiToken: 'cf-api-token',
+	controlPlaneDomain: 'fabrika.example.com',
+	operationsHostname: 'errors.example.com',
+	githubOrg: 'acme',
+	platformRepo: 'acme/fabrika-platform',
+	iamUrl: 'https://iam.example.com',
+	iamHostname: 'iam.example.com',
+	oidcEnabled: false,
+	passwordEnabled: true,
+	oidcIssuer: '',
+	oidcClientId: '',
+	humanEmailDomains: [],
+	emailProvider: 'none',
+	emailFrom: '',
+	bootstrapAdmins: ['ops@example.com'],
+	installRepos: [],
+}
+
+/** Point XDG at a throwaway directory and open a real env file for the length of one test. */
+async function withOpenEnvFile(run: () => Promise<void>): Promise<void> {
+	const configHome = await mkdtemp(join(tmpdir(), 'fabrika-cloudflare-init-'))
+	const previous = process.env['XDG_CONFIG_HOME']
+	process.env['XDG_CONFIG_HOME'] = configHome
+	try {
+		await openEnvFile('mangoweb')
+		await run()
+	} finally {
+		if (previous === undefined) delete process.env['XDG_CONFIG_HOME']
+		else process.env['XDG_CONFIG_HOME'] = previous
+		await rm(configHome, { recursive: true, force: true })
+	}
+}
+
+/** Capture every console line one call writes. */
+async function captured(run: () => Promise<unknown> | unknown): Promise<string> {
+	const output: string[] = []
+	const stdout = spyOn(console, 'log').mockImplementation((...values) => {
+		output.push(values.map((value) => String(value)).join(' '))
+	})
+	try {
+		await run()
+	} finally {
+		stdout.mockRestore()
+	}
+	return output.join('\n')
+}
 
 describe('Cloudflare installer resume reads', () => {
 	for (const name of RESUMED_NAMES) {
@@ -136,38 +201,40 @@ describe('Cloudflare installer GitHub App resume', () => {
 		}])
 	})
 
-	test('partial or malformed stored state fails before creating a replacement App', async () => {
-		for (
-			const source of [
-				{ GITHUB_APP_PRIVATE_KEY: app.pem },
-				{
-					GITHUB_APP_PRIVATE_KEY: app.pem,
-					GITHUB_WEBHOOK_SECRET: app.webhookSecret,
-					GITHUB_APP_ID: 'not-an-id',
-					GITHUB_APP_SLUG: app.slug,
-					GITHUB_APP_URL: app.htmlUrl,
-				},
-			]
-		) {
-			let creations = 0
-			let confirmations = 0
-			await expect(ensureGitHubApp(context, {
-				source,
-				create: () => {
-					creations++
-					return Promise.resolve(app)
-				},
-				persist: () => Promise.resolve(),
-				appName: () => Promise.resolve('fabrika-test'),
-				confirmInstallation: () => {
-					confirmations++
-					return Promise.resolve(true)
-				},
-				installAction: () => {},
-			})).rejects.toThrow('restore all GitHub App values in .env or remove all five')
-			expect(creations).toBe(0)
-			expect(confirmations).toBe(0)
-		}
+	test('partial or malformed stored state fails before creating a replacement App, naming the real file', async () => {
+		await withOpenEnvFile(async () => {
+			for (
+				const source of [
+					{ GITHUB_APP_PRIVATE_KEY: app.pem },
+					{
+						GITHUB_APP_PRIVATE_KEY: app.pem,
+						GITHUB_WEBHOOK_SECRET: app.webhookSecret,
+						GITHUB_APP_ID: 'not-an-id',
+						GITHUB_APP_SLUG: app.slug,
+						GITHUB_APP_URL: app.htmlUrl,
+					},
+				]
+			) {
+				let creations = 0
+				let confirmations = 0
+				await expect(ensureGitHubApp(context, {
+					source,
+					create: () => {
+						creations++
+						return Promise.resolve(app)
+					},
+					persist: () => Promise.resolve(),
+					appName: () => Promise.resolve('fabrika-test'),
+					confirmInstallation: () => {
+						confirmations++
+						return Promise.resolve(true)
+					},
+					installAction: () => {},
+				})).rejects.toThrow(`restore all GitHub App values in ${envPath()} or remove all five`)
+				expect(creations).toBe(0)
+				expect(confirmations).toBe(0)
+			}
+		})
 	})
 
 	test('an interrupted installation confirmation is required again on resume', async () => {
@@ -199,5 +266,121 @@ describe('Cloudflare installer GitHub App resume', () => {
 		expect(await ensureGitHubApp(context, dependencies)).toEqual(app)
 		expect(confirmations).toBe(2)
 		expect(creations).toBe(0)
+	})
+})
+
+describe('Cloudflare installer runner key', () => {
+	test('generates one 256-bit key, persists it, and reuses it on a resume', async () => {
+		await withOpenEnvFile(async () => {
+			delete process.env['FABRIKA_RUNNER_KEY']
+			let key = ''
+			const printed = await captured(async () => {
+				key = await ensureRunnerKey()
+			})
+
+			expect(Buffer.from(key, 'base64url')).toHaveLength(32)
+			expect(process.env['FABRIKA_RUNNER_KEY']).toBe(key)
+			expect(await Bun.file(envPath()).text()).toContain(`FABRIKA_RUNNER_KEY='${key}'`)
+			expect(printed).not.toContain(key)
+
+			let resumed = ''
+			await captured(async () => {
+				resumed = await ensureRunnerKey()
+			})
+			expect(resumed).toBe(key)
+			delete process.env['FABRIKA_RUNNER_KEY']
+		})
+	})
+
+	test('reaches the GitHub Environment as a SECRET and never as a variable', () => {
+		const payload = environmentPayload(COLLECTED, {
+			app: { id: 7, slug: 'fabrika', htmlUrl: 'https://github.com/apps/fabrika', pem: 'pem', webhookSecret: 'hook' },
+			vaultKey: 'vault',
+			provisioning: 'px_key',
+			operationsSyncKey: 'ops',
+			runnerKey: 'runner-key-value',
+			signingKeys: '[]',
+		})
+
+		expect(payload.secrets['FABRIKA_RUNNER_KEY']).toBe('runner-key-value')
+		expect(Object.keys(payload.vars)).not.toContain('FABRIKA_RUNNER_KEY')
+		expect(Object.values(payload.vars)).not.toContain('runner-key-value')
+	})
+})
+
+describe('Cloudflare installer closing summary', () => {
+	test('names the absolute env-file path and claims nothing about gitignore', async () => {
+		await withOpenEnvFile(async () => {
+			const printed = await captured(() =>
+				finalNotes({
+					repo: 'acme/fabrika-platform',
+					account: 'mangoweb',
+					dir: '/tmp/checkout',
+					ref: 'v0.1.0',
+					passwordEnabled: false,
+					branchProtection: { applied: true, command: 'gh api …' },
+					environmentPolicy: { applied: false, reason: 'HTTP 403 — not offered on this plan', command: 'gh api …later…' },
+				})
+			)
+
+			expect(printed).toContain(envPath())
+			expect(envPath()).toContain('fabrika/cloudflare/mangoweb/.env')
+			expect(printed).not.toContain('gitignored')
+			expect(printed).toContain('Branch protection on main: applied.')
+			expect(printed).toContain('Environment deployment-branch policy: NOT applied (HTTP 403')
+			expect(printed).toContain('gh api …later…')
+		})
+	})
+})
+
+describe('Cloudflare installer env-file precedence', () => {
+	test('a stray .env in the cwd is called out, because Bun already loaded it and it wins', async () => {
+		const cwd = await mkdtemp(join(tmpdir(), 'fabrika-cloudflare-cwd-'))
+		const previousCwd = process.cwd()
+		process.chdir(cwd)
+		try {
+			await Bun.write(join(cwd, '.env'), "OTHER_ACCOUNT_KEY='leftover'\n")
+			const printed = await captured(() => withOpenEnvFile(() => Promise.resolve()))
+
+			expect(printed).toContain(join(cwd, '.env'))
+			expect(printed).toContain('OUTRANK')
+		} finally {
+			process.chdir(previousCwd)
+			await rm(cwd, { recursive: true, force: true })
+		}
+	})
+})
+
+describe('Cloudflare installer protection summary', () => {
+	const base = { repo: 'acme/fabrika-platform', account: 'mangoweb', dir: '/tmp/checkout', ref: 'v0.1.0', passwordEnabled: false }
+
+	test('an applied policy over an unprotected main is reported as restricting nothing', async () => {
+		await withOpenEnvFile(async () => {
+			const printed = await captured(() =>
+				finalNotes({
+					...base,
+					branchProtection: { applied: false, reason: 'HTTP 404 — no protection rule on main', command: 'gh api …protect main…' },
+					environmentPolicy: { applied: true, command: 'gh api …policy…' },
+				})
+			)
+
+			expect(printed).toContain('applied, but it restricts nothing until main carries a protection rule')
+			expect(printed).toContain('gh api …protect main…')
+		})
+	})
+
+	test('both applied reports the policy plainly', async () => {
+		await withOpenEnvFile(async () => {
+			const printed = await captured(() =>
+				finalNotes({
+					...base,
+					branchProtection: { applied: true, command: 'gh api …protect main…' },
+					environmentPolicy: { applied: true, command: 'gh api …policy…' },
+				})
+			)
+
+			expect(printed).toContain('Environment deployment-branch policy: applied.')
+			expect(printed).not.toContain('restricts nothing')
+		})
 	})
 })
