@@ -1161,6 +1161,19 @@ export class RunRepository {
 		return (result.meta.changes ?? 0) > 0
 	}
 
+	/**
+	 * The runner's `finishRun` records `succeeded` inside `startRun`, before control applies the IAM reconcile; this
+	 * is the one succeeded→failed correction that a later failure needs. Keeps `finished_at`, refuses a cancelled run.
+	 */
+	async markRunFailedAfterRunner(id: string): Promise<boolean> {
+		const result = await this.d1
+			.prepare(`UPDATE runs SET status = 'failed', exit_code = NULL
+				WHERE id = ? AND status = 'succeeded' AND cancel_requested_at IS NULL`)
+			.bind(id)
+			.run()
+		return (result.meta.changes ?? 0) > 0
+	}
+
 	/** Finish a run only after cancellation has durably claimed and completed provider cleanup. */
 	async markRunCancellationFinished(id: string): Promise<boolean> {
 		const result = await this.d1

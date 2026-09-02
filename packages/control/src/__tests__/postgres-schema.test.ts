@@ -579,6 +579,9 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(done?.status).toBe('succeeded')
 		expect(done?.exit_code).toBe(0)
 		expect(await db.runs.checkpointRunProviderState(first.id, { phase: 'late' })).toBe(false)
+		expect(await db.runs.markRunFailedAfterRunner(first.id)).toBe(true)
+		expect((await db.runs.getRun(first.id))?.status).toBe('failed')
+		expect(await db.runs.markRunFailedAfterRunner(first.id)).toBe(false)
 
 		const cancelled = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual' })
 		await db.runs.markRunStarted(cancelled.id, `runs/${cancelled.id}/logs.ndjson`)
@@ -589,6 +592,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(await db.runs.markRunFinished(cancelled.id, 'succeeded', 0)).toBe(false)
 		expect(await db.runs.markRunCancellationFinished(cancelled.id)).toBe(true)
 		expect((await db.runs.getRun(cancelled.id))?.status).toBe('failed')
+		expect(await db.runs.markRunFailedAfterRunner(cancelled.id)).toBe(false)
 
 		// The sweep only reaps genuinely aged pending/running rows — `second` is still pending and young.
 		expect(await db.runs.sweepStaleRuns(3600)).toBe(0)

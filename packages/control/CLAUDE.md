@@ -176,6 +176,14 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   admin surface per deploy; do not add a second lifecycle for this.
 - **Run lifecycle is status-guarded + idempotent** (`src/run-lifecycle.ts`): `markRunStarted` only moves
   pending→running, so a redelivered queue message is a no-op. ack handled runs; retry only on an unexpected throw.
+- **`markRunFailedAfterRunner` is the ONE succeeded→failed correction, and only the Cloudflare runner's
+  fast path earns it.** vozka-runner writes the terminal status from inside `startRun`, before the RPC
+  returns, so provider work that happens AFTER it — today the IAM schema reconcile — meets a row
+  `markRunFinished` will not move, and the run read green with one failed line in its log. When
+  `markRunFinished` returns false and the outcome is `failed`, `executeDeploy` applies the correction and
+  projects `failed`; a `succeeded` outcome over a terminal row stays `skipped`, because that is ordinary
+  redelivery and a second projection would double-count the release. It keeps the runner's `finished_at`
+  (that is when the work stopped) and refuses a cancelled run. Do not widen it into a general re-open.
 - **The Cloudflare provider owns the runner boundary.** `CloudflareRunnerJob` and its validator live in
   `@fabrika/provider-cloudflare`; `@fabrika/runner-contract` contains only transport types and endpoint
   constants, `@fabrika/runner-container` owns the Bun process and image, and

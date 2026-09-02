@@ -14,7 +14,7 @@ import type {
 import { describe, expect, test } from 'bun:test'
 import { getRunLogUseCase } from '../api/runs'
 import type { ControlRepositories, RunRow } from '../db'
-import { uuidv7 } from '../db'
+import { OperationsReleaseRepository, uuidv7 } from '../db'
 import { cancelDeploy, type DeployJobMessage, executeDeploy, parseProviderEnvelope, type RunDeps, type RunOutcome } from '../run-lifecycle'
 import { EnvSecretResolver, type SecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
@@ -768,6 +768,91 @@ describe('provider-neutral run lifecycle', () => {
 			await db.registry.deleteAppSecret('app', 'prod', name)
 			await db.registry.deleteApp('app')
 		}
+	})
+
+	// ── The runner writes the terminal status before the provider is done ──────────
+	//
+	// `@fabrika/runner-cloudflare` records `succeeded` from inside `startRun`, so the reconcile the
+	// provider applies afterwards fails against a row `markRunFinished` will no longer move.
+
+	/** Counts every terminal projection so a double-count is visible, not just the last payload. */
+	class RecordingReleases extends OperationsReleaseRepository {
+		readonly outcomes: string[] = []
+
+		override project(runId: string, payloadJson: string): Promise<number> {
+			const outcome = /"outcome":"(succeeded|failed)"/.exec(payloadJson)?.[1]
+			if (outcome !== undefined) this.outcomes.push(outcome)
+			return super.project(runId, payloadJson)
+		}
+	}
+
+	/** A provider whose runner half already wrote `succeeded` before its own half answers. */
+	const providerAfterRunnerSuccess = (
+		db: ControlRepositories,
+		runId: string,
+		answer: () => Promise<RunOutcome>,
+	): ControlProvider => ({
+		id: 'memory',
+		normalizeRegistration: (input) => normalize('memory', input),
+		deploy: async () => {
+			expect(await db.runs.markRunFinished(runId, 'succeeded', 0)).toBe(true)
+			return answer()
+		},
+	})
+
+	test('a provider failure after the runner already wrote succeeded lands the run failed, projected once', async () => {
+		const { db, d1 } = createHarness()
+		const runId = await seedRun(db)
+		const releases = new RecordingReleases(d1)
+		const deps = makeDeps(db, providerAfterRunnerSuccess(db, runId, () => Promise.resolve({ state: 'failed' })))
+
+		expect(await executeDeploy({ ...deps, operations: { repository: releases } }, { runId })).toEqual({ runId, status: 'failed' })
+
+		const run = await requireRun(db, runId)
+		expect(run.status).toBe('failed')
+		expect(run.exit_code).toBeNull()
+		// The runner's stamp is kept: it is when the work actually stopped.
+		expect(run.finished_at).not.toBeNull()
+		expect(releases.outcomes).toEqual(['failed'])
+	})
+
+	test('a provider THROW after the same runner write lands the run failed too', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const deps = makeDeps(db, providerAfterRunnerSuccess(db, runId, () => Promise.reject(new Error('reconcile-schema failed'))))
+
+		expect(await executeDeploy(deps, { runId })).toEqual({ runId, status: 'failed' })
+		expect((await requireRun(db, runId)).status).toBe('failed')
+	})
+
+	test('a succeeded outcome over an already-succeeded row stays skipped and projects nothing', async () => {
+		const { db, d1 } = createHarness()
+		const runId = await seedRun(db)
+		const releases = new RecordingReleases(d1)
+		const deps = makeDeps(db, providerAfterRunnerSuccess(db, runId, () => Promise.resolve({ state: 'succeeded' })))
+
+		expect(await executeDeploy({ ...deps, operations: { repository: releases } }, { runId })).toEqual({ runId, status: 'skipped' })
+		expect((await requireRun(db, runId)).status).toBe('succeeded')
+		expect(releases.outcomes).toEqual([])
+	})
+
+	test('the correction refuses a cancelled run, and refuses anything that is not `succeeded`', async () => {
+		// A cancelled row is unreachable through the repository (every terminal write already guards on
+		// `cancel_requested_at`), so the state is built directly — the guard is the point, not the route.
+		const { db, sqlite } = createHarness()
+		const runId = await seedRun(db)
+		expect(await db.runs.markRunFinished(runId, 'succeeded', 0)).toBe(true)
+		sqlite.run('UPDATE runs SET cancel_requested_at = 1700000000 WHERE id = ?', [runId])
+
+		expect(await db.runs.markRunFailedAfterRunner(runId)).toBe(false)
+		expect((await requireRun(db, runId)).status).toBe('succeeded')
+
+		// And a run that is not `succeeded` at all: `markRunFinished` owns those transitions.
+		const running = uuidv7()
+		await db.runs.createRun({ id: running, appId: 'app', env: 'prod', ref: 'refs/heads/deploy/prod', trigger: 'manual', commitSha: null })
+		await db.runs.markRunStarted(running, `runs/${running}/logs.ndjson`)
+		expect(await db.runs.markRunFailedAfterRunner(running)).toBe(false)
+		expect((await requireRun(db, running)).status).toBe('running')
 	})
 
 	test('removes a stale issuer when the installation cannot name its own', async () => {
