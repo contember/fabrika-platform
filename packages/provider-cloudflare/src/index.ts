@@ -12,6 +12,7 @@ export {
 	defaultCloudflareCollaborators,
 	type LoadedCloudflareConfig,
 	type OblakaProvisioner,
+	type OutcomeWriter,
 	type ProvisionInput,
 	type SchemaReconciler,
 } from './collaborators'
@@ -19,8 +20,9 @@ export { deployCloudflareConfig, loadCloudflareCommandConfig } from './command'
 export type { CloudflareCommandDeployOptions, LoadedCloudflareCommandConfig } from './command'
 export { cloudflareStoredTargetCodec, createCloudflareControlProvider, isCloudflareRunnerJob } from './control'
 export type { CloudflareControlOptions, CloudflareRunnerJob, CloudflareStoredTarget, ResolvedCloudflareSource } from './control'
-export { buildPlan, findMigratableDatabases } from './plan'
-export type { CloudflareJobSpec, CloudflarePlan, CloudflarePlanInput, CloudflareStepKind, MigratableDatabase } from './plan'
-export { cloudflareProvider, createCloudflareProvider } from './provider'
+export { assertAuthoredGraph, buildPlan, findMigratableDatabases, PLATFORM_RESOURCE_NAMES } from './plan'
+export type { AuthoredGraphLimits, CloudflareJobSpec, CloudflarePlan, CloudflarePlanInput, CloudflareStepKind, MigratableDatabase } from './plan'
+export { cloudflareProvider, type CloudflareProviderOptions, createCloudflareProvider } from './provider'
 export { createCloudflareProxyWorker } from './proxy'
 export type { CloudflareProxyWorkerOptions } from './proxy'
+export { type AppSchemaParse, parseAppSchema } from './schema'

@@ -2,7 +2,8 @@
 
 The Cloudflare deploy executor Worker. It owns the per-run `RunnerContainer` Durable Object, relays
 container logs and status to R2, and writes terminal run status to the control-plane database. It has
-no public route and is called through a service binding.
+no public route and is called through a service binding — but a binding is not a capability, so it
+also holds ONE credential, `FABRIKA_RUNNER_KEY`, and verifies it on every RPC.
 
 The Worker↔container protocol lives in `@fabrika/runner-contract`. The plain-Bun process and Docker
 image live in `@fabrika/runner-container`. `CloudflareRunnerJob` remains owned and validated by
@@ -18,6 +19,16 @@ bun run bootstrap
 
 ## Invariants
 
+- **Both RPC methods verify `FABRIKA_RUNNER_KEY` before any side effect** (`src/runner-key.ts`), and
+  `startRun` re-validates the job with `isCloudflareRunnerJob` first — RPC delivers a structured clone.
+  Any Worker on the account can bind `<env>-vozka-runner`, so "only the control plane holds the
+  binding" authenticates nobody. An unset key denies every call; the refusal names nothing.
+- **The key stops at this Worker.** The relay strips `runnerKey` from the job it POSTs to the container,
+  which runs the checkout's own code as root; `isCloudflareRunnerJob` therefore treats it as OPTIONAL.
+- **`RunnerContainer`'s `heartbeat` / `armBackstop` / `backstopCheck` are still UNAUTHENTICATED** — a
+  cross-script `durable_objects` binding would reach them (A6.md §5.2, open). Verifying the RPC methods
+  closes the service-binding half of A6-4, not that one; do not read the invariant above as "A6-4 closed".
+- The Worker publishes no hostname of its own: `routes: []`, `workers_dev: false`, `preview_urls: false`.
 - Never log credentials or secret values.
 - Keep the guarded `finishRun` update identical to the control plane's terminal-status write.
 - The Worker must stay separate from the control plane so self-deploys cannot reset active runs.

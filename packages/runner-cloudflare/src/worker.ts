@@ -9,16 +9,21 @@
 // SURFACE: two RPC methods invoked by the control plane over a service binding (`RUNNER_SVC`) —
 // `startRun(job)` boots a fresh container, relays its logs → R2, and writes the terminal status → D1
 // itself (the backstop that records the run even if the caller was reset — see finish-run.ts); and
-// `cancelRun(runId)` destroys an in-flight run's container and records it failed. There is no HTTP
-// surface; vozka-runner has no public route and is reachable ONLY via the binding.
+// `cancelRun(runId, runnerKey)` destroys an in-flight run's container and records it failed. There is
+// no HTTP surface; vozka-runner has no public route and is reachable ONLY via the binding — but the
+// binding is not a credential, so BOTH methods verify `FABRIKA_RUNNER_KEY` first (see runner-key.ts).
 
-import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
+import { type CloudflareRunnerJob, isCloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { finishRun } from './finish-run'
 import { type ContainerLike, type RelayResult, relayRun } from './relay'
+import { assertRunnerKey } from './runner-key'
 import type { Env } from './worker-env'
 
 export { RunnerContainer } from './RunnerContainer'
+
+/** The same run-id shape `isCloudflareRunnerJob` enforces — a cancel addresses a container by it too. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export class VozkaRunner extends WorkerEntrypoint<Env> {
 	/**
@@ -26,8 +31,21 @@ export class VozkaRunner extends WorkerEntrypoint<Env> {
 	 * to come up, relay the job through it (logs + status → R2), then record the terminal status → D1.
 	 * Returns the terminal status to the caller — best-effort, since the caller may have been reset
 	 * mid-deploy; the D1 write is what guarantees the run is recorded regardless.
+	 *
+	 * The shape check comes first because RPC delivers a structured clone: the argument is typed here
+	 * but arrives as whatever the caller sent, and `job.runnerKey` must be a string to be compared.
 	 */
 	async startRun(job: CloudflareRunnerJob): Promise<RelayResult> {
+		if (!isCloudflareRunnerJob(job)) {
+			throw new Error('runner: invalid job')
+		}
+		// The key is OPTIONAL to the validator, because the relay strips it before the container hop.
+		// It is not optional here: this is the hop it authenticates.
+		if (typeof job.runnerKey !== 'string') {
+			throw new Error('runner: unauthorized')
+		}
+		await assertRunnerKey(this.env.FABRIKA_RUNNER_KEY, job.runnerKey)
+
 		const id = this.env.RUNNER.idFromName(job.runId)
 		const container = this.env.RUNNER.get(id)
 		await container.startAndWaitForPorts()
@@ -59,9 +77,15 @@ export class VozkaRunner extends WorkerEntrypoint<Env> {
 	 * `startRun` relay then errors out and its `finishRun` no-ops on the guard) and record the run failed.
 	 * Idempotent — a run already terminal stays as-is (finishRun's `WHERE status IN ('pending','running')`).
 	 * Invoked by the control plane over `RUNNER_SVC` when an operator cancels a run. Returns whether THIS
-	 * call recorded the terminal status (false if the run was already finished).
+	 * call recorded the terminal status (false if the run was already finished). `runnerKey` is the same
+	 * shared secret a job carries — a cancel destroys a container and fails a run, so it is not weaker.
 	 */
-	async cancelRun(runId: string): Promise<boolean> {
+	async cancelRun(runId: string, runnerKey: string): Promise<boolean> {
+		await assertRunnerKey(this.env.FABRIKA_RUNNER_KEY, runnerKey)
+		if (typeof runId !== 'string' || !UUID.test(runId)) {
+			throw new Error('runner: invalid run id')
+		}
+
 		const container = this.env.RUNNER.get(this.env.RUNNER.idFromName(runId))
 		try {
 			await container.destroy()

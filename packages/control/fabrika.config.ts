@@ -158,6 +158,8 @@ export default defineApp({
 		//                               account → one token; same token that authenticated THIS deploy).
 		//   - FABRIKA_IAM_PROVISIONING_KEY — fabrika's seeded IAM provisioning `px_` key, injected into
 		//                               deploys that reconcile schema. Omit at deploy to run without reconcile.
+		//   - FABRIKA_RUNNER_KEY      — shared with vozka-runner, which refuses any RPC without it (the
+		//                               service binding alone authenticates nobody).
 		// Their VALUES are read from the environment by name at deploy time (never inlined here).
 		secrets: [
 			'FABRIKA_CONTROL_VAULT_KEY',
@@ -165,6 +167,7 @@ export default defineApp({
 			'GITHUB_WEBHOOK_SECRET',
 			'CLOUDFLARE_API_TOKEN',
 			'FABRIKA_IAM_PROVISIONING_KEY',
+			'FABRIKA_RUNNER_KEY',
 			'OPERATIONS_SYNC_KEY',
 		],
 	},

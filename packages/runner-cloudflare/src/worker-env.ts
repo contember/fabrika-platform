@@ -24,4 +24,12 @@ export interface Env {
 	// ── Vars ──────────────────────────────────────────────────────────────────
 	/** Deploy environment this worker runs in (e.g. `prod`) — for parity with the control plane; diagnostics only. */
 	ENVIRONMENT: string
+
+	// ── Secrets (provisioned out-of-band, never in `vars`) ─────────────────────
+	/**
+	 * Shared secret the control plane presents on every RPC. A service binding is not a capability —
+	 * any Worker on the account can bind `<env>-vozka-runner` — so this is what actually authenticates
+	 * the caller. Optional on the type only so an unset value can DENY at runtime (src/runner-key.ts).
+	 */
+	FABRIKA_RUNNER_KEY?: string
 }

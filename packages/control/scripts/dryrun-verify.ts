@@ -34,7 +34,8 @@ const collaborators: CloudflareCollaborators = {
 	},
 }
 
-const provider = createCloudflareProvider(collaborators)
+// `allow`: this script deploys fabrika's OWN config, the one caller permitted to name a platform resource.
+const provider = createCloudflareProvider(collaborators, { platformResources: 'allow' })
 const cwd = resolve(import.meta.dir, '..')
 const run: RuntimeProviderRun = {
 	appId: config.id,
@@ -43,8 +44,6 @@ const run: RuntimeProviderRun = {
 	target: provider.encodeTarget({
 		accountId: 'dummy-acc',
 		apiToken: 'dummy-tok',
-		propustkaUrl: 'https://iam.example.com',
-		adminKey: 'px_dummy-admin',
 	}),
 	artifact: provider.encodeArtifact(cloudflareArtifact(resolve(cwd, 'fabrika.config.ts'))),
 	// The runtime worker secrets fabrika.config declares in pipeline.secrets — dummy values offline.
@@ -54,6 +53,7 @@ const run: RuntimeProviderRun = {
 		GITHUB_WEBHOOK_SECRET: 'dummy-hmac',
 		CLOUDFLARE_API_TOKEN: 'dummy-tok',
 		FABRIKA_IAM_PROVISIONING_KEY: 'px_dummy-admin',
+		FABRIKA_RUNNER_KEY: 'dummy-runner-key',
 		OPERATIONS_SYNC_KEY: 'offline-dry-run-operations-sync-key',
 	},
 	vars: {},

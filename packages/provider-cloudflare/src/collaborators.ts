@@ -1,14 +1,17 @@
 import type { SchemaReconciler } from '@fabrika/provider-contract'
+import { RUNNER_OUTCOME_FILE_ENV, type RunnerOutcomeFile } from '@fabrika/runner-contract'
+import { writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { type Definition, deploy as oblakaDeploy, type DeployResult as OblakaDeployResult } from 'oblaka-iac'
 import { type CloudflareAppConfig, isCloudflareAppConfig } from './authoring'
-import { defaultReconcileSchema } from './schema'
 
 export interface CommandSpec {
 	readonly command: string
 	readonly args: string[]
 	readonly cwd: string
 	readonly env?: Record<string, string>
+	/** Names dropped from the INHERITED environment: a child that runs checkout code gets no platform credential. */
+	readonly omitEnv?: readonly string[]
 	readonly stdin?: string
 	readonly signal?: AbortSignal
 }
@@ -33,6 +36,9 @@ export interface ProvisionInput {
 
 export type OblakaProvisioner = (input: ProvisionInput) => Promise<OblakaDeployResult>
 
+/** Hand the run's outcome back to the runner, which folds it into the terminal status the control plane reads. */
+export type OutcomeWriter = (outcome: RunnerOutcomeFile) => Promise<void>
+
 export interface LoadedCloudflareConfig {
 	readonly config: CloudflareAppConfig
 	readonly cwd: string
@@ -44,7 +50,7 @@ export interface CloudflareCollaborators {
 	readonly loadConfig: CloudflareConfigLoader
 	readonly runCommand: CommandRunner
 	readonly provision: OblakaProvisioner
-	readonly reconcileSchema: SchemaReconciler
+	readonly writeOutcome: OutcomeWriter
 }
 
 const defaultLoadConfig: CloudflareConfigLoader = async (cwd, configPath) => {
@@ -56,10 +62,18 @@ const defaultLoadConfig: CloudflareConfigLoader = async (cwd, configPath) => {
 	return { config: loaded.default, cwd: resolve(absolute, '..') }
 }
 
+const childEnvironment = (spec: CommandSpec): Record<string, string | undefined> => {
+	const inherited: Record<string, string | undefined> = { ...process.env }
+	for (const name of spec.omitEnv ?? []) {
+		delete inherited[name]
+	}
+	return { ...inherited, ...spec.env }
+}
+
 const defaultRunCommand: CommandRunner = async (spec) => {
 	const proc = Bun.spawn([spec.command, ...spec.args], {
 		cwd: spec.cwd,
-		env: { ...process.env, ...spec.env },
+		env: childEnvironment(spec),
 		stdin: spec.stdin === undefined ? 'inherit' : new TextEncoder().encode(spec.stdin),
 		stdout: 'pipe',
 		stderr: 'pipe',
@@ -94,11 +108,19 @@ const defaultProvision: OblakaProvisioner = (input) =>
 		dryRun: input.dryRun,
 	})
 
+const defaultWriteOutcome: OutcomeWriter = async (outcome) => {
+	const path = process.env[RUNNER_OUTCOME_FILE_ENV]
+	if (path === undefined || path === '') {
+		throw new Error(`${RUNNER_OUTCOME_FILE_ENV} is not set: this run has nowhere to report its outcome`)
+	}
+	await writeFile(path, JSON.stringify(outcome), 'utf8')
+}
+
 export const defaultCloudflareCollaborators: CloudflareCollaborators = {
 	loadConfig: defaultLoadConfig,
 	runCommand: defaultRunCommand,
 	provision: defaultProvision,
-	reconcileSchema: defaultReconcileSchema,
+	writeOutcome: defaultWriteOutcome,
 }
 
 export type { SchemaReconciler }

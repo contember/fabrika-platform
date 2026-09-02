@@ -140,6 +140,8 @@ async function main(): Promise<void> {
 		configPath: resolve(cwd, 'fabrika.config.ts'),
 		cwd,
 		dryRun: DRY_RUN,
+		// This IS the platform deploying itself; an application deploy through the runner never gets this.
+		platformResources: 'allow',
 	})
 
 	console.log(`\n${result.appId} → ${result.env}: ${result.status}`)

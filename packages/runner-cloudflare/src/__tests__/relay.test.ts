@@ -56,6 +56,29 @@ const job: CloudflareRunnerJob = {
 const terminalStatus: RunnerStatus = { runId: 'run-relay-1', state: 'succeeded', exitCode: 0, startedAt: 1, finishedAt: 9 }
 
 describe('relayRun', () => {
+	test('the job it posts to the container carries no runner key', async () => {
+		const bodies: string[] = []
+		const inner = makeContainer(terminalStatus, sampleLines, { count: 0 })
+		const container: ContainerLike = {
+			containerFetch: (input, init) => {
+				if (init?.method === 'POST' && typeof init.body === 'string') {
+					bodies.push(init.body)
+				}
+				return inner.containerFetch(input, init)
+			},
+		}
+
+		await relayRun(container, new FakeR2(), job, { flushIntervalMs: 0 })
+
+		// Everything in the container runs the checkout's own code as root, so the secret that
+		// authenticates control to the runner Worker must not be in the process it can read.
+		expect(bodies).toHaveLength(1)
+		const posted: Record<string, unknown> = JSON.parse(bodies[0] ?? '{}')
+		expect(Object.hasOwn(posted, 'runnerKey')).toBe(false)
+		expect(posted.runId).toBe('run-relay-1')
+		expect(posted.credentials).toEqual({ CLOUDFLARE_ACCOUNT_ID: 'acc', CLOUDFLARE_API_TOKEN: 'tok' })
+	})
+
 	test('relays the streamed log to R2 and persists terminal status', async () => {
 		const bucket = new FakeR2()
 		const heartbeats = { count: 0 }

@@ -3,7 +3,8 @@ import type { ProviderDeployResult, ProviderRunEvents, RuntimeProviderRun } from
 import { resolve } from 'node:path'
 import { type CloudflareAppConfig, isCloudflareAppConfig } from './authoring'
 import { cloudflareArtifact } from './codec'
-import { cloudflareProvider } from './provider'
+import { defaultCloudflareCollaborators } from './collaborators'
+import { createCloudflareProvider } from './provider'
 
 const requiredEnvironmentValue = (name: string): string => {
 	const value = environmentValue(name)
@@ -67,6 +68,8 @@ export interface CloudflareCommandDeployOptions {
 	readonly dryRun?: boolean
 	readonly stateNamespace?: string
 	readonly managedVarNames?: readonly string[]
+	/** Defaults to `refuse`: only fabrika deploying its own components may name a platform resource. */
+	readonly platformResources?: 'refuse' | 'allow'
 	readonly signal?: AbortSignal
 	readonly log?: (line: string) => void
 }
@@ -80,9 +83,10 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 		externalId: async () => {},
 		checkpoint: async () => {},
 	}
+	const provider = createCloudflareProvider(defaultCloudflareCollaborators, {
+		platformResources: options.platformResources ?? 'refuse',
+	})
 	const domain = environmentValue('FABRIKA_CONTROL_DOMAIN')
-	const iamUrl = environmentValue('FABRIKA_IAM_ISSUER')
-	const iamProvisioningKey = environmentValue('FABRIKA_IAM_PROVISIONING_KEY')
 	const returnOrigins = parseReturnOrigins(environmentValue('FABRIKA_IAM_RETURN_ORIGINS'))
 	const run: RuntimeProviderRun = {
 		appId: loaded.config.id,
@@ -96,14 +100,12 @@ export const deployCloudflareConfig = async (options: CloudflareCommandDeployOpt
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
 		events,
-		target: cloudflareProvider.encodeTarget({
+		target: provider.encodeTarget({
 			accountId: requiredEnvironmentValue('CLOUDFLARE_ACCOUNT_ID'),
 			apiToken: requiredEnvironmentValue('CLOUDFLARE_API_TOKEN'),
 			...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
-			...(iamUrl === undefined ? {} : { propustkaUrl: iamUrl }),
-			...(iamProvisioningKey === undefined ? {} : { adminKey: iamProvisioningKey }),
 		}),
-		artifact: cloudflareProvider.encodeArtifact(cloudflareArtifact(loaded.absolutePath)),
+		artifact: provider.encodeArtifact(cloudflareArtifact(loaded.absolutePath)),
 	}
-	return deploy(cloudflareProvider.runtime, run)
+	return deploy(provider.runtime, run)
 }

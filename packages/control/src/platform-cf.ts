@@ -12,8 +12,9 @@ import type { IamRpc } from '@fabrika/auth'
 import { readEnvironmentName } from '@fabrika/auth-core'
 import type { BlobStore, HttpService, JobQueue } from '@fabrika/platform'
 import { type CloudflareRunnerJob, createCloudflareControlProvider } from '@fabrika/provider-cloudflare'
-import type { ControlProvider, ProviderSource, ProviderTerminalOutcome } from '@fabrika/provider-contract'
-import type { VozkaRunner } from '@fabrika/runner-cloudflare'
+import type { CloudflareRunOutcome } from '@fabrika/provider-cloudflare/runner'
+import type { ControlProvider, ProviderSource } from '@fabrika/provider-contract'
+import type { RelayResult, VozkaRunner } from '@fabrika/runner-cloudflare'
 import { createControlRepositories } from './db'
 import type { Env } from './env'
 import { controlPublicOrigin } from './iam'
@@ -118,7 +119,16 @@ export function cfJobQueue<T>(queue: Queue<T>): JobQueue<T> {
 	}
 }
 
-const runner = (bindings: WorkerBindings): Service<VozkaRunner> => {
+/**
+ * The slice of vozka-runner the control plane calls. A real `Service<VozkaRunner>` satisfies it
+ * structurally; naming it keeps the two adapters below reachable without a Workers RPC stub.
+ */
+export interface CloudflareRunnerService {
+	startRun(job: CloudflareRunnerJob): Promise<RelayResult>
+	cancelRun(runId: string, runnerKey: string): Promise<unknown>
+}
+
+const runner = (bindings: WorkerBindings): CloudflareRunnerService => {
 	if (bindings.RUNNER_SVC === undefined) {
 		throw new Error('Cloudflare provider requires the RUNNER_SVC service binding')
 	}
@@ -142,17 +152,28 @@ const resolveSource = async (bindings: WorkerBindings, source: ProviderSource, s
 	return { repoUrl: target.cloneUrl, ref: target.ref }
 }
 
-const startRun = async (
-	bindings: WorkerBindings,
+/** The executor's IAM reconcile rides back on the outcome: the container compiles the schema, the control plane applies it. */
+export const startRunOnRunner = async (
+	svc: CloudflareRunnerService,
 	job: CloudflareRunnerJob,
-): Promise<ProviderTerminalOutcome> => {
-	const result = await runner(bindings).startRun(job)
+): Promise<CloudflareRunOutcome> => {
+	const result = await svc.startRun(job)
 	const state = result.status.state === 'succeeded' ? 'succeeded' : 'failed'
 	return {
 		state,
 		...(result.status.exitCode === undefined ? {} : { exitCode: result.status.exitCode }),
 		...(result.status.artifactState === undefined ? {} : { artifactState: result.status.artifactState }),
+		...(result.status.iamReconcile === undefined ? {} : { iamReconcile: result.status.iamReconcile }),
 	}
+}
+
+/** A cancel destroys a container and fails a run, so it presents the same key a job carries — and refuses without one. */
+export const cancelRunOnRunner = async (
+	svc: CloudflareRunnerService,
+	runId: string,
+	runnerKey: string | undefined,
+): Promise<void> => {
+	await svc.cancelRun(runId, required(runnerKey, 'FABRIKA_RUNNER_KEY'))
 }
 
 /** Compose the only provider available in the Cloudflare installation. */
@@ -167,10 +188,8 @@ export function cloudflareControlProvider(bindings: WorkerBindings, env: Env): C
 			required(bindings.CLOUDFLARE_ACCOUNT_ID, 'CLOUDFLARE_ACCOUNT_ID')
 			required(bindings.CLOUDFLARE_API_TOKEN, 'CLOUDFLARE_API_TOKEN')
 			required(env.FABRIKA_RUNNER_KEY, 'FABRIKA_RUNNER_KEY')
-			return startRun(bindings, job)
+			return startRunOnRunner(runner(bindings), job)
 		},
-		cancelRun: async (runId) => {
-			await runner(bindings).cancelRun(runId)
-		},
+		cancelRun: (runId) => cancelRunOnRunner(runner(bindings), runId, env.FABRIKA_RUNNER_KEY),
 	})
 }

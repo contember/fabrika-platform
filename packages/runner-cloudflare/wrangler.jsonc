@@ -9,6 +9,8 @@
 	],
 	"compatibility_date": "2025-05-25",
 	"routes": [],
+	"workers_dev": false,
+	"preview_urls": false,
 	"observability": {
 		"enabled": true
 	},
@@ -30,7 +32,8 @@
 			"image": "../runner-container/Dockerfile",
 			"image_build_context": "../..",
 			"instance_type": "dev",
-			"max_instances": 3
+			"max_instances": 3,
+			"rollout_active_grace_period": 1200
 		}
 	],
 	"durable_objects": {

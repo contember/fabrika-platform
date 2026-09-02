@@ -8,9 +8,14 @@ import type {
 	ProviderRegistrationInput,
 	ProviderSource,
 	ProviderTerminalOutcome,
+	SchemaReconciler,
 } from '@fabrika/provider-contract'
+import { isProxyHost } from '@fabrika/proxy-contract'
 import type { RunnerIamReconcile } from '@fabrika/runner-contract'
 import { cloudflareArtifactCodec } from './codec'
+// `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
+// cannot typecheck (they do not relax the two strict flags the raw TS needs).
+import { defaultReconcileSchema, parseAppSchema } from './schema'
 
 /** Persisted Cloudflare target data. Installation credentials never enter this envelope. */
 export interface CloudflareStoredTarget {
@@ -58,13 +63,15 @@ export interface CloudflareRunnerJob {
 	/** Every origin IAM may hand this app a session at, projected by the control plane (ADR-0021). */
 	readonly returnOrigins?: readonly string[]
 	readonly dryRun?: boolean
-	/** Shared secret the runner verifies before it touches D1 or the container; the binding alone proves nothing. */
-	readonly runnerKey: string
+	/**
+	 * Shared secret the runner verifies before it touches D1 or the container; the binding alone proves
+	 * nothing. Optional in the type because the wire boundary may omit it — the Worker refuses it there.
+	 */
+	readonly runnerKey?: string
+	/** Exactly the Cloudflare account credential. IAM's admin key stays in the control plane (ADR-0022). */
 	readonly credentials: {
 		readonly CLOUDFLARE_ACCOUNT_ID: string
 		readonly CLOUDFLARE_API_TOKEN: string
-		readonly FABRIKA_IAM_ISSUER?: string
-		readonly FABRIKA_IAM_PROVISIONING_KEY?: string
 	}
 	readonly secrets?: Readonly<Record<string, string>>
 	readonly vars?: Readonly<Record<string, string>>
@@ -97,16 +104,40 @@ const isArtifactUpload = (value: unknown): boolean =>
 		return typeof field === 'string' && field !== ''
 	})
 
-/** Minimal structural validation for the Worker-to-runner JSON boundary. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const ENV_NAME = /^[a-z0-9-]+$/
+
+/** Whitespace or a control character in a value that becomes an argv element or a filesystem path. */
+const hasUnsafeChars = (value: string): boolean =>
+	/\s/.test(value) || [...value].some((char) => {
+		const code = char.codePointAt(0) ?? 0
+		return code < 0x20 || code === 0x7f
+	})
+
+const isHttpsUrl = (value: string): boolean => {
+	try {
+		return new URL(value).protocol === 'https:'
+	} catch {
+		return false
+	}
+}
+
+/** A path that stays inside the checkout: relative, and with no `..` segment to climb out of it. */
+const isContainedPath = (value: string): boolean =>
+	value !== '' && !value.startsWith('/') && !hasUnsafeChars(value) && !value.split('/').includes('..')
+
+/**
+ * Validate the Worker-to-runner JSON boundary by VALUE, not only by type: every field here becomes an
+ * argv element, a filesystem path or a hostname inside the deploy container.
+ */
 export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunnerJob => {
 	if (
 		typeof value !== 'object'
 		|| value === null
-		|| !('runId' in value && typeof value.runId === 'string')
-		|| !('repoUrl' in value && typeof value.repoUrl === 'string')
-		|| !('ref' in value && typeof value.ref === 'string')
-		|| !('env' in value && typeof value.env === 'string')
-		|| !('runnerKey' in value && typeof value.runnerKey === 'string' && value.runnerKey !== '')
+		|| !('runId' in value && typeof value.runId === 'string' && UUID.test(value.runId))
+		|| !('repoUrl' in value && typeof value.repoUrl === 'string' && !hasUnsafeChars(value.repoUrl) && isHttpsUrl(value.repoUrl))
+		|| !('ref' in value && typeof value.ref === 'string' && value.ref !== '' && !value.ref.startsWith('-') && !hasUnsafeChars(value.ref))
+		|| !('env' in value && typeof value.env === 'string' && ENV_NAME.test(value.env))
 		|| !('credentials' in value && typeof value.credentials === 'object' && value.credentials !== null)
 	) {
 		return false
@@ -118,18 +149,19 @@ export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunner
 		&& 'CLOUDFLARE_API_TOKEN' in credentials
 		&& typeof credentials.CLOUDFLARE_API_TOKEN === 'string'
 		&& credentials.CLOUDFLARE_API_TOKEN !== ''
-	if (!requiredCredentials) {
+	// Exactly these two: a job carrying any other credential is refused rather than forwarded into the
+	// child environment, which is where the container's own code would read it.
+	if (!requiredCredentials || Object.keys(credentials).length !== 2) {
 		return false
 	}
 	if (
-		('FABRIKA_IAM_ISSUER' in credentials && credentials.FABRIKA_IAM_ISSUER !== undefined && typeof credentials.FABRIKA_IAM_ISSUER !== 'string')
-		|| ('FABRIKA_IAM_PROVISIONING_KEY' in credentials
-			&& credentials.FABRIKA_IAM_PROVISIONING_KEY !== undefined
-			&& typeof credentials.FABRIKA_IAM_PROVISIONING_KEY !== 'string')
-		|| ('workerDir' in value && value.workerDir !== undefined && typeof value.workerDir !== 'string')
-		|| ('configPath' in value && value.configPath !== undefined && typeof value.configPath !== 'string')
-		|| ('stateNamespace' in value && value.stateNamespace !== undefined && typeof value.stateNamespace !== 'string')
-		|| ('domain' in value && value.domain !== undefined && typeof value.domain !== 'string')
+		// OPTIONAL: the runner Worker strips the key before the container hop, so a job that reaches the
+		// container carries none. Present means it must be usable; the Worker is what REQUIRES it.
+		('runnerKey' in value && value.runnerKey !== undefined && (typeof value.runnerKey !== 'string' || value.runnerKey === ''))
+		|| ('workerDir' in value && value.workerDir !== undefined && (typeof value.workerDir !== 'string' || !isContainedPath(value.workerDir)))
+		|| ('configPath' in value && value.configPath !== undefined && (typeof value.configPath !== 'string' || !isContainedPath(value.configPath)))
+		|| ('stateNamespace' in value && value.stateNamespace !== undefined && (typeof value.stateNamespace !== 'string' || value.stateNamespace === ''))
+		|| ('domain' in value && value.domain !== undefined && (typeof value.domain !== 'string' || !isProxyHost(value.domain.toLowerCase())))
 		|| ('returnOrigins' in value && value.returnOrigins !== undefined && !isStringArray(value.returnOrigins))
 		|| ('dryRun' in value && value.dryRun !== undefined && typeof value.dryRun !== 'boolean')
 		|| ('secrets' in value && value.secrets !== undefined && !isStringRecord(value.secrets))
@@ -156,6 +188,8 @@ export interface CloudflareControlOptions {
 	readonly propustkaUrl?: string
 	readonly propustkaProvisioningKey?: string
 	readonly runnerKey: string
+	/** Overridable for tests; production reconciles over HTTPS with the control plane's own admin key. */
+	readonly reconcileSchema?: SchemaReconciler
 	resolveSource(source: ProviderSource, signal: AbortSignal): Promise<ResolvedCloudflareSource>
 	startRun(job: CloudflareRunnerJob): Promise<CloudflareRunOutcome>
 	cancelRun(runId: string): Promise<void>
@@ -210,10 +244,6 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		credentials: {
 			CLOUDFLARE_ACCOUNT_ID: options.accountId,
 			CLOUDFLARE_API_TOKEN: options.apiToken,
-			...(options.propustkaUrl === undefined ? {} : { FABRIKA_IAM_ISSUER: options.propustkaUrl }),
-			...(options.propustkaProvisioningKey === undefined
-				? {}
-				: { FABRIKA_IAM_PROVISIONING_KEY: options.propustkaProvisioningKey }),
 		},
 		...(input.app.source.workerDir === undefined ? {} : { workerDir: input.app.source.workerDir }),
 		configPath: artifact.configPath,
@@ -228,13 +258,69 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 	}
 }
 
+/** A megabyte of vocabulary is already absurd; beyond it the control plane refuses to parse at all. */
+const MAX_SCHEMA_JSON_CHARS = 1024 * 1024
+
+/**
+ * Apply the schema the executor compiled, with the control plane's own IAM key. The container runs the
+ * checkout's code and nothing validates its `/status` body on the way, so every field of the report is
+ * type-checked, bounded and parsed here before IAM hears about it.
+ */
+const applyIamReconcile = async (
+	options: CloudflareControlOptions,
+	input: ProviderDeployInput,
+	reconcile: RunnerIamReconcile,
+): Promise<void> => {
+	// Typed, but not validated by any transport between the container and here.
+	if (typeof reconcile.app !== 'string' || typeof reconcile.schemaJson !== 'string') {
+		throw new Error('reported an authz schema whose app id or body is not a string')
+	}
+	if (reconcile.app !== input.app.id) {
+		throw new Error(`reported an authz schema for app "${reconcile.app}", expected "${input.app.id}"`)
+	}
+	if (reconcile.schemaJson.length > MAX_SCHEMA_JSON_CHARS) {
+		throw new Error(`reported an authz schema of ${reconcile.schemaJson.length} characters, over the ${MAX_SCHEMA_JSON_CHARS} limit`)
+	}
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(reconcile.schemaJson)
+	} catch {
+		throw new Error('reported an authz schema that is not valid JSON')
+	}
+	const schema = parseAppSchema(parsed)
+	if (!schema.ok) {
+		throw new Error(`reported a malformed authz schema: ${schema.message}`)
+	}
+	if (options.propustkaUrl === undefined) return
+	// Return origins ride this call because `apps.setReturnOrigins` 404s for an app IAM has never heard
+	// of, and the schema reconcile is what registers it. Separate call, same moment.
+	const returnOrigins = input.returnOrigins !== undefined && input.returnOrigins.length > 0 ? input.returnOrigins : undefined
+	await (options.reconcileSchema ?? defaultReconcileSchema)({
+		url: options.propustkaUrl,
+		app: input.app.id,
+		schema: schema.schema,
+		...(returnOrigins === undefined ? {} : { returnOrigins }),
+		...(options.propustkaProvisioningKey === undefined ? {} : { adminKey: options.propustkaProvisioningKey }),
+		signal: input.signal,
+	})
+}
+
 /** Build the Cloudflare control capability over its runner and source-resolution ports. */
 export const createCloudflareControlProvider = (options: CloudflareControlOptions): ControlProvider => ({
 	id: 'cloudflare',
 	normalizeRegistration,
 	deploy: async (input) => {
 		await input.events.externalId(input.runId)
-		return options.startRun(await buildJob(options, input))
+		const outcome = await options.startRun(await buildJob(options, input))
+		const reconcile = outcome.iamReconcile
+		if (reconcile === undefined || input.dryRun) return outcome
+		try {
+			await applyIamReconcile(options, input, reconcile)
+		} catch (error) {
+			input.events.log(`reconcile-schema failed: ${error instanceof Error ? error.message : 'unknown error'}`)
+			return { state: 'failed', ...(outcome.artifactState === undefined ? {} : { artifactState: outcome.artifactState }) }
+		}
+		return outcome
 	},
 	cancel: (input) => options.cancelRun(input.runId),
 })

@@ -62,9 +62,20 @@ describe('defineApp(vozka-runner config)', () => {
 		}
 	})
 
-	test('it is INFRA: no schema, no runtime secrets', () => {
+	test('it is INFRA: no schema, and the only runtime secret is the caller key', () => {
 		expect(config.schema).toBeUndefined()
-		expect(config.pipeline?.secrets).toBeUndefined()
+		// The Worker DOES hold one credential now — the shared key it verifies on every RPC. Anything
+		// else in this list would be a per-run credential that belongs in the job, not on the Worker.
+		expect(config.pipeline?.secrets).toEqual(['FABRIKA_RUNNER_KEY'])
 		expect(config.pipeline?.workerDir).toBe('.')
+	})
+
+	test('it publishes no hostname of its own — no workers.dev, no preview URLs', () => {
+		for (const env of ['local', 'stage', 'prod']) {
+			const worker = buildRunnerWorker({ env })
+			expect(worker.options.routes).toEqual([])
+			expect(worker.options.workers_dev).toBe(false)
+			expect(worker.options.preview_urls).toBe(false)
+		}
 	})
 })

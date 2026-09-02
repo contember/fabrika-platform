@@ -26,6 +26,8 @@ const main = async (): Promise<void> => {
 		configPath: resolve(cwd, 'fabrika-runner.config.ts'),
 		cwd,
 		dryRun,
+		// This IS the platform deploying itself; an application deploy through the runner never gets this.
+		platformResources: 'allow',
 	})
 	console.log(`\n${result.appId} → ${result.env}: ${result.status}`)
 	for (const step of result.steps) {

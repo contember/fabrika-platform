@@ -1,13 +1,13 @@
+import type { RunnerOutcomeFile } from '@fabrika/runner-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
-import { D1Database, Worker } from 'oblaka-iac'
+import { D1Database, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig, CloudflareAppConfigInput, CloudflareCollaborators, CommandResult, CommandSpec, ProvisionInput } from '..'
-import { cloudflareArtifact, createCloudflareProvider, defineApp } from '..'
+import { cloudflareArtifact, createCloudflareProvider, defaultCloudflareCollaborators, defineApp } from '..'
 
 interface Recorded {
 	readonly commands: CommandSpec[]
 	readonly provisions: ProvisionInput[]
-	readonly schemas: Array<{ url: string; app: string; adminKey?: string; returnOrigins?: readonly string[] }>
-	readonly schemaSignals: AbortSignal[]
+	readonly outcomes: RunnerOutcomeFile[]
 	readonly logs: string[]
 	readonly provisionedVars: Array<Record<string, unknown> | undefined>
 	readonly applicationVars: Array<Record<string, unknown> | undefined>
@@ -24,7 +24,6 @@ const makeCollaborators = (
 	rec: Recorded,
 	appConfig: CloudflareAppConfig,
 	commandResult: (spec: CommandSpec) => CommandResult = () => ({ exitCode: 0, stdout: '', stderr: '' }),
-	reconcile: CloudflareCollaborators['reconcileSchema'] | undefined = undefined,
 ): CloudflareCollaborators => ({
 	loadConfig: async (_cwd, configPath) => {
 		expect(configPath).toBe('fabrika.config.ts')
@@ -50,15 +49,8 @@ const makeCollaborators = (
 			wranglerConfig: { name: `${input.env}-demo` },
 		}
 	},
-	reconcileSchema: async (input) => {
-		rec.schemas.push({
-			url: input.url,
-			app: input.app,
-			adminKey: input.adminKey,
-			...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
-		})
-		rec.schemaSignals.push(input.signal)
-		await reconcile?.(input)
+	writeOutcome: async (outcome) => {
+		rec.outcomes.push(outcome)
 	},
 })
 
@@ -70,17 +62,21 @@ const open = (
 		readonly secrets?: Readonly<Record<string, string>>
 		readonly signal?: AbortSignal
 		readonly commandResult?: (spec: CommandSpec) => CommandResult
-		readonly reconcileSchema?: CloudflareCollaborators['reconcileSchema']
 		readonly appId?: string
 		readonly managedEnvironment?: Readonly<Record<string, string | null>>
 		readonly returnOrigins?: readonly string[]
+		readonly domain?: string
+		readonly platformResources?: 'refuse' | 'allow'
+		readonly stateNamespace?: string
 	} = {},
 ) => {
-	const provider = createCloudflareProvider(makeCollaborators(rec, appConfig, options.commandResult, options.reconcileSchema))
+	const provider = createCloudflareProvider(makeCollaborators(rec, appConfig, options.commandResult), {
+		...(options.platformResources === undefined ? {} : { platformResources: options.platformResources }),
+	})
 	return provider.runtime.open({
 		appId: options.appId ?? 'demo',
 		env: 'stage',
-		domain: 'stage.example.com',
+		domain: options.domain ?? 'stage.example.com',
 		...(options.returnOrigins === undefined ? {} : { returnOrigins: options.returnOrigins }),
 		cwd: '/repo',
 		secrets: options.secrets ?? {},
@@ -98,8 +94,7 @@ const open = (
 		target: provider.encodeTarget({
 			accountId: 'acc-1',
 			apiToken: 'tok-1',
-			propustkaUrl: 'https://iam.example.com',
-			adminKey: 'px_admin',
+			...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
 		}),
 		artifact: provider.encodeArtifact(cloudflareArtifact()),
 	})
@@ -113,7 +108,7 @@ const executePlan = async (session: Awaited<ReturnType<typeof open>>): Promise<v
 
 let rec: Recorded
 beforeEach(() => {
-	rec = { commands: [], provisions: [], schemas: [], schemaSignals: [], logs: [], provisionedVars: [], applicationVars: [] }
+	rec = { commands: [], provisions: [], outcomes: [], logs: [], provisionedVars: [], applicationVars: [] }
 })
 
 describe('Cloudflare provider', () => {
@@ -251,29 +246,22 @@ describe('Cloudflare provider', () => {
 			['wrangler', 'secret', 'put', 'API_KEY'],
 		])
 		expect(rec.commands[2]?.stdin).toBe('secret-value')
-		expect(rec.schemas).toEqual([{ url: 'https://iam.example.com', app: 'demo', adminKey: 'px_admin' }])
-		expect(rec.schemaSignals).toEqual([controller.signal])
+		expect(rec.outcomes).toEqual([{ iamReconcile: { app: 'demo', schemaJson: '{"scopes":[],"actions":[],"roles":{}}' } }])
 	})
 
-	test('carries the control plane return origins alongside the schema, never inside it', async () => {
-		const schema = { scopes: [], actions: [], roles: {} }
-		const session = await open(rec, config({ schema }), { returnOrigins: ['https://demo.example.com', 'https://stage.demo.example.com'] })
+	test('reports the authz schema for the control plane instead of calling IAM from the container', async () => {
+		const schema = { scopes: [{ type: 'team' }], actions: [{ action: 'notes.read' }], roles: {} }
+		const session = await open(rec, config({ schema }), { returnOrigins: ['https://demo.example.com'] })
 		await session.execute('reconcile-schema')
 
-		expect(rec.schemas).toEqual([{
-			url: 'https://iam.example.com',
-			app: 'demo',
-			adminKey: 'px_admin',
-			returnOrigins: ['https://demo.example.com', 'https://stage.demo.example.com'],
-		}])
+		expect(rec.outcomes).toEqual([{ iamReconcile: { app: 'demo', schemaJson: JSON.stringify(schema) } }])
+		expect(rec.commands).toHaveLength(0)
 	})
 
-	test('a run with no return origins leaves the registry alone', async () => {
-		const session = await open(rec, config({ schema: { scopes: [], actions: [], roles: {} } }))
-		await session.execute('reconcile-schema')
-
-		expect(rec.schemas).toHaveLength(1)
-		expect(rec.schemas[0]?.returnOrigins).toBeUndefined()
+	test('refuses to report an outcome once the run is cancelled', async () => {
+		const session = await open(rec, config({ schema: { scopes: [], actions: [], roles: {} } }), { signal: AbortSignal.abort() })
+		await expect(session.execute('reconcile-schema')).rejects.toThrow('deploy cancelled')
+		expect(rec.outcomes).toHaveLength(0)
 	})
 
 	test('dry-run keeps Oblaka in plan mode and skips every other mutation', async () => {
@@ -287,47 +275,19 @@ describe('Cloudflare provider', () => {
 		expect(rec.provisions).toHaveLength(1)
 		expect(rec.provisions[0]?.dryRun).toBe(true)
 		expect(rec.commands).toHaveLength(0)
-		expect(rec.schemas).toHaveLength(0)
+		expect(rec.outcomes).toHaveLength(0)
 		expect(rec.logs.some((line) => line.includes('would run build'))).toBe(true)
 		expect(rec.logs.some((line) => line.includes('wrangler secret put API_KEY'))).toBe(true)
 	})
 
 	test('fails closed when the loaded config belongs to another app', async () => {
-		expect(open(rec, config({ id: 'other' }))).rejects.toThrow('declares app "other", expected "demo"')
+		await expect(open(rec, config({ id: 'other' }))).rejects.toThrow('declares app "other", expected "demo"')
 	})
 
 	test('honours an already-aborted run before the first mutation', async () => {
 		const session = await open(rec, config(), { signal: AbortSignal.abort() })
-		expect(session.execute('provision-resources')).rejects.toThrow('deploy cancelled')
+		await expect(session.execute('provision-resources')).rejects.toThrow('deploy cancelled')
 		expect(rec.provisions).toHaveLength(0)
-	})
-
-	test('propagates cancellation into an active schema reconciliation', async () => {
-		const controller = new AbortController()
-		const started = Promise.withResolvers<void>()
-		const session = await open(rec, config({ schema: { scopes: [], actions: [], roles: {} } }), {
-			signal: controller.signal,
-			reconcileSchema: (input) =>
-				new Promise<void>((_resolve, reject) => {
-					const abort = (): void => {
-						reject(input.signal.reason)
-					}
-					if (input.signal.aborted) {
-						abort()
-						return
-					}
-					input.signal.addEventListener('abort', abort, { once: true })
-					started.resolve()
-				}),
-		})
-
-		const reconciliation = session.execute('reconcile-schema')
-		await started.promise
-		controller.abort()
-
-		const error = await reconciliation.catch((reason: unknown) => reason)
-		expect(error).toBe(controller.signal.reason)
-		expect(rec.schemaSignals).toEqual([controller.signal])
 	})
 
 	test('reports shell failures without leaking beyond the bounded command detail', async () => {
@@ -338,6 +298,148 @@ describe('Cloudflare provider', () => {
 					: { exitCode: 0, stdout: '', stderr: '' },
 		})
 		await session.execute('provision-resources')
-		expect(session.execute('deploy-worker')).rejects.toThrow('wrangler deploy failed (exit 1): deploy failed')
+		await expect(session.execute('deploy-worker')).rejects.toThrow('wrangler deploy failed (exit 1): deploy failed')
+	})
+
+	test('runs the checkout build with no platform credential in its environment', async () => {
+		const session = await open(rec, config({ pipeline: { build: 'bun run build' } }))
+		await session.execute('build')
+
+		expect(rec.commands[0]?.omitEnv).toContain('CLOUDFLARE_API_TOKEN')
+		expect(rec.commands[0]?.omitEnv).toContain('CLOUDFLARE_ACCOUNT_ID')
+		expect(rec.commands[0]?.omitEnv).toContain('FABRIKA_IAM_PROVISIONING_KEY')
+
+		process.env['CLOUDFLARE_API_TOKEN'] = 'tok-from-the-platform'
+		try {
+			const result = await defaultCloudflareCollaborators.runCommand({
+				command: 'sh',
+				args: ['-c', 'echo "[${CLOUDFLARE_API_TOKEN-}]"'],
+				cwd: import.meta.dir,
+				omitEnv: ['CLOUDFLARE_API_TOKEN'],
+			})
+			expect(result.stdout.trim()).toBe('[]')
+		} finally {
+			delete process.env['CLOUDFLARE_API_TOKEN']
+		}
+	})
+
+	test('refuses a config that names a platform resource, before any provisioning', async () => {
+		const platformWorker = config({
+			resources: () => new Worker({ dir: '.', name: 'vozka', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
+		})
+		await expect(open(rec, platformWorker)).rejects.toThrow('Worker `vozka` is a Fabrika platform resource')
+
+		const platformBucket = config({
+			resources: () =>
+				new Worker({
+					dir: '.',
+					name: 'demo',
+					compatibility_flags: [],
+					bindings: { LOGS: new R2Bucket({ name: 'vozka-run-logs' }), QUEUE: new Queue({ name: 'vozka-deploy' }) },
+					main: 'src/index.ts',
+				}),
+		})
+		await expect(open(rec, platformBucket)).rejects.toThrow('R2 bucket `vozka-run-logs` is a Fabrika platform resource')
+		expect(rec.provisions).toHaveLength(0)
+	})
+
+	test('lets fabrika deploy its own components under the explicit platform policy', async () => {
+		const platformWorker = config({
+			resources: () => new Worker({ dir: '.', name: 'vozka', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
+		})
+		const session = await open(rec, platformWorker, { platformResources: 'allow' })
+		expect(session.plan.steps[0]?.id).toBe('provision-resources')
+	})
+
+	test('refuses a route on a host this environment does not own', async () => {
+		const foreign = config({
+			resources: () =>
+				new Worker({
+					dir: '.',
+					name: 'demo',
+					compatibility_flags: [],
+					bindings: {},
+					main: 'src/index.ts',
+					routes: [{ pattern: 'other-app.example.com/*', zone_name: 'example.com' }],
+				}),
+		})
+		await expect(open(rec, foreign)).rejects.toThrow("routes `other-app.example.com`, which is not this environment's domain")
+
+		const own = config({
+			resources: () =>
+				new Worker({
+					dir: '.',
+					name: 'demo',
+					compatibility_flags: [],
+					bindings: {},
+					main: 'src/index.ts',
+					routes: [{ pattern: 'stage.example.com', custom_domain: true }],
+				}),
+		})
+		await expect(open(rec, own)).resolves.toBeDefined()
+	})
+
+	test('refuses a service binding to a platform service, but not the IAM front door every app binds', async () => {
+		const toRunner = config({
+			resources: () =>
+				new Worker({
+					dir: '.',
+					name: 'demo',
+					compatibility_flags: [],
+					bindings: { RUNNER_SVC: new ServiceReference('vozka-runner') },
+					main: 'src/index.ts',
+				}),
+		})
+		await expect(open(rec, toRunner)).rejects.toThrow('service binding to `vozka-runner` is a Fabrika platform service')
+
+		const toIam = config({
+			resources: () =>
+				new Worker({
+					dir: '.',
+					name: 'demo',
+					compatibility_flags: [],
+					bindings: { IAM: new ServiceReference('propustka-worker') },
+					main: 'src/index.ts',
+				}),
+		})
+		await expect(open(rec, toIam)).resolves.toBeDefined()
+	})
+
+	test("refuses a deploy whose oblaka state namespace is the platform's own", async () => {
+		await expect(open(rec, config(), { stateNamespace: 'propustka-state' })).rejects.toThrow(
+			'state namespace `propustka-state` is a Fabrika platform resource',
+		)
+		expect(rec.provisions).toHaveLength(0)
+	})
+
+	test('the platform policy relaxes resource names only — the route bound still holds', async () => {
+		const platformOffHost = config({
+			resources: () =>
+				new Worker({
+					dir: '.',
+					name: 'vozka',
+					compatibility_flags: [],
+					bindings: {},
+					main: 'src/index.ts',
+					routes: [{ pattern: 'other-app.example.com/*', zone_name: 'example.com' }],
+				}),
+		})
+		await expect(open(rec, platformOffHost, { platformResources: 'allow' })).rejects.toThrow(
+			"routes `other-app.example.com`, which is not this environment's domain",
+		)
+	})
+
+	test('refuses a Worker the deploy does not own, however it is bound', async () => {
+		const smuggled = config({
+			resources: () =>
+				new Worker({
+					dir: '.',
+					name: 'demo',
+					compatibility_flags: [],
+					bindings: { SIDECAR: new Worker({ dir: '.', name: 'demo-sidecar', compatibility_flags: [], bindings: {}, main: 'src/other.ts' }) },
+					main: 'src/index.ts',
+				}),
+		})
+		await expect(open(rec, smuggled)).rejects.toThrow('declares Worker `demo-sidecar`; only the application Worker and its proxy are deployable')
 	})
 })

@@ -363,6 +363,7 @@
       "version": "0.0.4",
       "dependencies": {
         "@fabrika/auth": "workspace:*",
+        "@fabrika/auth-core": "workspace:*",
         "@fabrika/engine": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",

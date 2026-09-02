@@ -86,11 +86,13 @@ export const relayRun = async (
 	const statusPollMs = options.statusPollMs ?? 500
 	const now = options.now ?? (() => Date.now())
 
-	// Kick off the run.
+	// Kick off the run — WITHOUT the runner key. It authenticates control to THIS Worker and stops here;
+	// the container runs the checkout's own code as root, so anything it receives is disclosed to it.
+	const { runnerKey: _runnerKey, ...containerJob } = job
 	const start = await container.containerFetch(`http://container${RUNNER_RUN_PATH}`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(job),
+		body: JSON.stringify(containerJob),
 	})
 	if (start.status !== 202) {
 		const detail = await start.text().catch(() => '')

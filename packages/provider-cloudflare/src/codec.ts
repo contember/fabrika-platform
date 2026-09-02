@@ -1,12 +1,10 @@
 import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
 
-/** Ephemeral credentials and handles used by one Cloudflare deploy. */
+/** Ephemeral credentials and handles used by one Cloudflare deploy. IAM's key is never among them (ADR-0022). */
 export interface CloudflareTarget {
 	readonly accountId: string
 	readonly apiToken: string
 	readonly stateNamespace?: string
-	readonly propustkaUrl?: string
-	readonly adminKey?: string
 }
 
 /** A checkout recipe. The Oblaka graph stays executable code in the referenced config module. */
@@ -53,8 +51,6 @@ export const cloudflareTargetCodec: ProviderCodec<CloudflareTarget> = {
 		accountId: target.accountId,
 		apiToken: target.apiToken,
 		...(target.stateNamespace === undefined ? {} : { stateNamespace: target.stateNamespace }),
-		...(target.propustkaUrl === undefined ? {} : { propustkaUrl: target.propustkaUrl }),
-		...(target.adminKey === undefined ? {} : { adminKey: target.adminKey }),
 	}),
 	decode: (payload) => ({
 		accountId: stringProperty(payload, 'accountId'),
@@ -62,10 +58,6 @@ export const cloudflareTargetCodec: ProviderCodec<CloudflareTarget> = {
 		...(optionalStringProperty(payload, 'stateNamespace') === undefined
 			? {}
 			: { stateNamespace: optionalStringProperty(payload, 'stateNamespace') }),
-		...(optionalStringProperty(payload, 'propustkaUrl') === undefined
-			? {}
-			: { propustkaUrl: optionalStringProperty(payload, 'propustkaUrl') }),
-		...(optionalStringProperty(payload, 'adminKey') === undefined ? {} : { adminKey: optionalStringProperty(payload, 'adminKey') }),
 	}),
 }
 

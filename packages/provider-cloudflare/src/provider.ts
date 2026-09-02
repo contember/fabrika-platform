@@ -4,11 +4,17 @@ import { type GeneratedConfig, Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
 import { type CloudflareArtifact, cloudflareArtifactCodec, type CloudflareTarget, cloudflareTargetCodec } from './codec'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
-import { buildPlan, type CloudflareJobSpec, findMigratableDatabases } from './plan'
+import { assertAuthoredGraph, buildPlan, type CloudflareJobSpec, findMigratableDatabases } from './plan'
 
 const CANCELLED = 'deploy cancelled'
 
+/** Every credential the platform hands the executor. The checkout's own build step must inherit none of them. */
+const PLATFORM_CREDENTIAL_NAMES: readonly string[] = ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'FABRIKA_IAM_PROVISIONING_KEY']
+
 const workerDir = (config: CloudflareAppConfig, cwd: string): string => resolve(cwd, config.pipeline?.workerDir ?? '.')
+
+/** The KV namespace oblaka keeps deploy state in. One definition, so the check and the call cannot drift. */
+const stateNamespace = (config: CloudflareAppConfig, target: CloudflareTarget): string => target.stateNamespace ?? `${config.id}-state`
 
 const wranglerEnv = (target: CloudflareTarget): Record<string, string> => ({
 	CLOUDFLARE_API_TOKEN: target.apiToken,
@@ -107,7 +113,7 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 				return
 			}
 			assertRunning(signal)
-			const result = await cf.runCommand({ command: 'sh', args: ['-c', build], cwd: dir, signal })
+			const result = await cf.runCommand({ command: 'sh', args: ['-c', build], cwd: dir, omitEnv: PLATFORM_CREDENTIAL_NAMES, signal })
 			if (result.exitCode !== 0) throw commandError(`build (\`${build}\`)`, result)
 			return
 		}
@@ -119,7 +125,7 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 				apiToken: target.apiToken,
 				env: run.env,
 				cwd: dir,
-				stateNamespace: target.stateNamespace ?? `${config.id}-state`,
+				stateNamespace: stateNamespace(config, target),
 				dryRun,
 			})
 			env.generatedConfigs = result.wranglerConfigs
@@ -173,26 +179,19 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 			return
 		}
 		case 'reconcile-schema': {
-			if (config.schema === undefined || target.propustkaUrl === undefined) return
-			// Return origins ride this step because `apps.setReturnOrigins` 404s for an app IAM has never
-			// heard of, and the schema reconcile is what registers it. Separate call, same moment.
+			if (config.schema === undefined) return
 			const returnOrigins = run.returnOrigins !== undefined && run.returnOrigins.length > 0 ? run.returnOrigins : undefined
 			if (dryRun) {
-				run.events.log(`  [dry-run] would reconcile schema for \`${config.id}\` against ${target.propustkaUrl}`)
+				run.events.log(`  [dry-run] would report the authz schema for \`${config.id}\` to the control plane`)
 				if (returnOrigins !== undefined) {
 					run.events.log(`  [dry-run] would register return origins for \`${config.id}\`: ${returnOrigins.join(', ')}`)
 				}
 				return
 			}
 			assertRunning(signal)
-			await cf.reconcileSchema({
-				url: target.propustkaUrl,
-				app: config.id,
-				schema: config.schema,
-				...(returnOrigins === undefined ? {} : { returnOrigins }),
-				adminKey: target.adminKey,
-				signal,
-			})
+			// The reconcile itself happens in the CONTROL plane, which holds IAM's admin key; this
+			// container runs the checkout's own code and never sees it (ADR-0022).
+			await cf.writeOutcome({ iamReconcile: { app: config.id, schemaJson: JSON.stringify(config.schema) } })
 			return
 		}
 		case 'sync-secrets': {
@@ -220,7 +219,18 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 	}
 }
 
-export const createCloudflareProvider = (cf: CloudflareCollaborators = defaultCloudflareCollaborators) =>
+export interface CloudflareProviderOptions {
+	/**
+	 * `refuse` (the default) rejects a config that names one of fabrika's own resources. Only the
+	 * operator deploying fabrika itself passes `allow`; a checkout is never trusted with it.
+	 */
+	readonly platformResources?: 'refuse' | 'allow'
+}
+
+export const createCloudflareProvider = (
+	cf: CloudflareCollaborators = defaultCloudflareCollaborators,
+	options: CloudflareProviderOptions = {},
+) =>
 	createProvider({
 		id: 'cloudflare',
 		target: cloudflareTargetCodec,
@@ -235,8 +245,13 @@ export const createCloudflareProvider = (cf: CloudflareCollaborators = defaultCl
 				loaded.config.resources({ env: run.env, domain: run.domain }),
 				run,
 			)
+			assertAuthoredGraph(worker, {
+				...(run.domain === undefined ? {} : { domain: run.domain }),
+				stateNamespace: stateNamespace(loaded.config, run.target),
+				platformResources: options.platformResources ?? 'refuse',
+			})
 			const dir = workerDir(loaded.config, loaded.cwd)
-			const plan = buildPlan(loaded.config, { appId: run.appId, env: run.env, propustkaUrl: run.target.propustkaUrl }, worker)
+			const plan = buildPlan(loaded.config, { appId: run.appId, env: run.env }, worker)
 			const byId = new Map(plan.steps.map((step): [string, CloudflareJobSpec] => [step.id, step]))
 			const env: StepEnv = { config: loaded.config, run, worker, dir, cf, generatedConfigs: [] }
 			return {

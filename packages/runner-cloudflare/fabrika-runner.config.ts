@@ -2,10 +2,11 @@
 // deploy of fabrika never resets the container running that deploy (see src/worker.ts for the why).
 //
 // vozka-runner is INFRA, not a registered app: no Cloudflare Access front door (it's reachable only via
-// fabrika's `RUNNER_SVC` service binding, never publicly), no propustka access/schema, no runtime secrets
-// (every credential arrives per-run in the provider job over the binding). It is deployed RARELY and
-// OUT-OF-BAND (scripts/bootstrap-runner.ts) — it can't deploy itself through itself (same self-reset),
-// and it only changes when the relay / container / runner image changes.
+// fabrika's `RUNNER_SVC` service binding, never publicly) and no propustka access/schema. Its ONE runtime
+// secret is FABRIKA_RUNNER_KEY, which authenticates that caller — the binding alone proves nothing; every
+// other credential still arrives per-run in the provider job. It is deployed RARELY and OUT-OF-BAND
+// (scripts/bootstrap-runner.ts) — it can't deploy itself through itself (same self-reset), and it only
+// changes when the relay / container / runner image changes.
 //
 // SHARED RESOURCES: RUN_LOGS (R2) + DB (D1) are the SAME bucket + database the control plane owns. oblaka
 // ADOPTS an existing resource by its remote name (`<env>-<name>`), so declaring the same names here binds
@@ -43,7 +44,11 @@ export const buildRunnerWorker = (ctx: ResourceContext): Worker => {
 		compatibility_flags: ['nodejs_compat'],
 		compatibility_date: '2025-05-25',
 		// No public route — vozka-runner is reachable ONLY via fabrika's RUNNER_SVC service binding.
+		// `routes: []` alone still publishes a workers.dev hostname and version preview URLs, so both are
+		// switched off explicitly, exactly as fabrika's own app Worker does.
 		routes: [],
+		workers_dev: false,
+		preview_urls: false,
 		observability: { enabled: true },
 		vars: {
 			ENVIRONMENT: env,
@@ -78,8 +83,10 @@ export default defineApp({
 	id: 'vozka-runner',
 	resources: buildRunnerWorker,
 	pipeline: {
-		// vozka-runner's Worker source lives alongside this config. No build step (no
-		// assets), and NO secrets — every credential arrives per-run in the provider job over the binding.
+		// vozka-runner's Worker source lives alongside this config. No build step (no assets).
 		workerDir: '.',
+		// The ONLY runtime secret: the shared key every RPC caller must present (src/runner-key.ts).
+		// Provisioned out-of-band with `wrangler secret put`, same value as fabrika's own.
+		secrets: ['FABRIKA_RUNNER_KEY'],
 	},
 })
