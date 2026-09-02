@@ -1,4 +1,5 @@
 import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
+import { RUNNER_OUTCOME_FILE_ENV } from '@fabrika/runner-contract'
 import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -46,7 +47,7 @@ describe('Runner pipeline', () => {
 
 		expect(rec.map((r) => r.spec.command)).toEqual(['git', 'bun', 'fabrika-cloudflare-executor'])
 		// clone into the run-keyed checkout dir
-		expect(rec[0]?.spec.args).toEqual(['clone', '--depth', '1', '--branch', 'main', 'https://github.com/acme/app.git', '/workspace/run-1'])
+		expect(rec[0]?.spec.args).toEqual(['clone', '--depth', '1', '--branch', 'main', '--', 'https://github.com/acme/app.git', '/workspace/run-1'])
 		// install + deploy run in workerDir
 		expect(rec[1]?.spec).toMatchObject({ command: 'bun', args: ['install'], cwd: '/workspace/run-1/worker' })
 		// deploy is faithful to M1's CLI contract
@@ -64,7 +65,7 @@ describe('Runner pipeline', () => {
 	test('strips refs/heads|tags/ from the ref for `git clone --branch` (a short name passes through)', async () => {
 		const recHeads: RecordedSpawn[] = []
 		await new Runner(baseJob({ ref: 'refs/heads/main', dryRun: true }), makeEnv(makeSpawner(recHeads, () => ({ exitCode: 0 })))).run()
-		expect(recHeads[0]?.spec.args).toEqual(['clone', '--depth', '1', '--branch', 'main', 'https://github.com/acme/app.git', '/workspace/run-1'])
+		expect(recHeads[0]?.spec.args).toEqual(['clone', '--depth', '1', '--branch', 'main', '--', 'https://github.com/acme/app.git', '/workspace/run-1'])
 
 		const recTags: RecordedSpawn[] = []
 		await new Runner(baseJob({ ref: 'refs/tags/v1.2.3', dryRun: true }), makeEnv(makeSpawner(recTags, () => ({ exitCode: 0 })))).run()
@@ -94,7 +95,7 @@ describe('Runner pipeline', () => {
 			returnOrigins: ['https://app.acme.com', 'https://stage.acme.com'],
 			stateNamespace: 'legacy-state',
 			runnerKey: 'test-runner-key',
-			credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef', FABRIKA_IAM_ISSUER: 'https://iam.acme.com' },
+			credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef' },
 			secrets: { SAMPLE_API_KEY: 'super-secret-value' },
 			vars: { PUBLIC_ORIGIN: 'public-value' },
 			managedEnvironment: {
@@ -108,7 +109,6 @@ describe('Runner pipeline', () => {
 		expect(deploy?.env).toMatchObject({
 			CLOUDFLARE_ACCOUNT_ID: 'acc-123456',
 			CLOUDFLARE_API_TOKEN: 'tok-abcdef',
-			FABRIKA_IAM_ISSUER: 'https://iam.acme.com',
 			FABRIKA_CONTROL_DOMAIN: 'stage.acme.com',
 			FABRIKA_IAM_RETURN_ORIGINS: 'https://app.acme.com,https://stage.acme.com',
 			CLOUDFLARE_STATE_NAMESPACE: 'legacy-state',
@@ -151,6 +151,76 @@ describe('Runner pipeline', () => {
 		expect(joined).not.toContain('public-value')
 		expect(joined).not.toContain('operations-public-key')
 		expect(joined).toContain('***')
+	})
+
+	test('a credential split across two stream chunks is redacted once the line is assembled', async () => {
+		const token = 'tok-abcdefghijklmnop'
+		const spawn = makeSpawner([], (spec, handlers) => {
+			if (spec.command === 'fabrika-cloudflare-executor') {
+				// One logical line delivered as two pipe reads, cut INSIDE the credential.
+				handlers.onStdout('error: token tok-abcdefgh')
+				handlers.onStdout('ijklmnop rejected\n')
+			}
+			return { exitCode: 0 }
+		})
+		const runner = new Runner(baseJob({ credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: token } }), makeEnv(spawn))
+		await runner.run()
+
+		const joined = runner.lines().map((l) => l.text).join('\n')
+		expect(joined).not.toContain(token)
+		expect(joined).not.toContain('tok-abcdefgh')
+		expect(joined).not.toContain('ijklmnop')
+		expect(joined).toContain('error: token *** rejected')
+	})
+
+	test('a final line without a trailing newline is emitted once, redacted', async () => {
+		const spawn = makeSpawner([], (spec, handlers) => {
+			if (spec.command === 'fabrika-cloudflare-executor') {
+				handlers.onStdout('last line with tok-abcdef')
+			}
+			return { exitCode: 0 }
+		})
+		const runner = new Runner(baseJob(), makeEnv(spawn))
+		await runner.run()
+
+		const texts = runner.lines().filter((l) => l.stream === 'stdout').map((l) => l.text)
+		expect(texts).toEqual(['last line with ***'])
+	})
+
+	test('a residual past the cap is emitted instead of growing without bound', async () => {
+		const overCap = 'y'.repeat(64 * 1024 + 1)
+		const spawn = makeSpawner([], (spec, handlers) => {
+			if (spec.command === 'fabrika-cloudflare-executor') {
+				handlers.onStdout(overCap)
+				handlers.onStdout('tail\n')
+			}
+			return { exitCode: 0 }
+		})
+		const runner = new Runner(baseJob(), makeEnv(spawn))
+		await runner.run()
+
+		const texts = runner.lines().filter((l) => l.stream === 'stdout').map((l) => l.text)
+		expect(texts).toEqual([overCap, 'tail'])
+	})
+
+	test('refuses a runId that is not a single safe path segment before spawning anything', async () => {
+		for (const runId of ['../x', 'a/b', '']) {
+			const rec: RecordedSpawn[] = []
+			const status = await new Runner(baseJob({ runId }), makeEnv(makeSpawner(rec, () => ({ exitCode: 0 })))).run()
+			expect(rec).toEqual([])
+			expect(status.state).toBe('failed')
+			expect(status.error).toContain('runId')
+		}
+	})
+
+	test('refuses an escaping workerDir or configPath before spawning anything', async () => {
+		for (const overrides of [{ workerDir: '../x' }, { workerDir: '/etc' }, { configPath: '/etc/passwd' }, { configPath: '../../evil.ts' }]) {
+			const rec: RecordedSpawn[] = []
+			const status = await new Runner(baseJob(overrides), makeEnv(makeSpawner(rec, () => ({ exitCode: 0 })))).run()
+			expect(rec).toEqual([])
+			expect(status.state).toBe('failed')
+			expect(status.error).toContain('inside the checkout')
+		}
 	})
 
 	test('clone failure stops the pipeline (no install/deploy) and fails the run', async () => {
@@ -265,5 +335,116 @@ describe('Runner pipeline', () => {
 		} finally {
 			await rm(root, { recursive: true, force: true })
 		}
+	})
+})
+
+describe('executor outcome file', () => {
+	/** A spawner that hands the executor's outcome file whatever `write` produces, in a real workspace. */
+	const runWithOutcome = async (
+		workspace: string,
+		write: (path: string) => Promise<void>,
+		deployExitCode = 0,
+	): Promise<{ status: Awaited<ReturnType<Runner['run']>>; outcomePath: string | undefined }> => {
+		let outcomePath: string | undefined
+		const spawn = async (spec: SpawnSpec): Promise<SpawnResult> => {
+			const path = spec.env?.[RUNNER_OUTCOME_FILE_ENV]
+			if (spec.command !== 'fabrika-cloudflare-executor') return { exitCode: 0 }
+			if (path !== undefined) {
+				outcomePath = path
+				await write(path)
+			}
+			return { exitCode: deployExitCode }
+		}
+		const status = await new Runner(baseJob(), { spawn, workspace }).run()
+		return { status, outcomePath }
+	}
+
+	const withWorkspace = async (body: (workspace: string) => Promise<void>): Promise<void> => {
+		const workspace = await mkdtemp(join(tmpdir(), 'fabrika-runner-outcome-'))
+		try {
+			await body(workspace)
+		} finally {
+			await rm(workspace, { recursive: true, force: true })
+		}
+	}
+
+	test('a valid iamReconcile lands in status(), outside the checkout, and the file is deleted', async () => {
+		await withWorkspace(async (workspace) => {
+			const reconcile = { app: 'shop', schemaJson: '{"roles":[]}' }
+			const { status, outcomePath } = await runWithOutcome(workspace, (path) => writeFile(path, JSON.stringify({ iamReconcile: reconcile })))
+
+			expect(status.state).toBe('succeeded')
+			expect(status.iamReconcile).toEqual(reconcile)
+			expect(outcomePath).toBe(join(workspace, 'run-1.outcome.json'))
+			expect(await Bun.file(join(workspace, 'run-1.outcome.json')).exists()).toBe(false)
+		})
+	})
+
+	test('no outcome file means no reconcile', async () => {
+		await withWorkspace(async (workspace) => {
+			const { status } = await runWithOutcome(workspace, () => Promise.resolve())
+			expect(status.state).toBe('succeeded')
+			expect(status.iamReconcile).toBeUndefined()
+		})
+	})
+
+	test('a stale outcome file from an earlier attempt is cleared before the executor runs', async () => {
+		await withWorkspace(async (workspace) => {
+			await writeFile(join(workspace, 'run-1.outcome.json'), JSON.stringify({ iamReconcile: { app: 'stale', schemaJson: '{}' } }))
+			const { status } = await runWithOutcome(workspace, () => Promise.resolve())
+			expect(status.state).toBe('succeeded')
+			expect(status.iamReconcile).toBeUndefined()
+		})
+	})
+
+	test('a malformed outcome file fails the run without quoting the file', async () => {
+		for (
+			const body of [
+				'not json',
+				'[]',
+				JSON.stringify({ iamReconcile: { app: '', schemaJson: '{}' } }),
+				JSON.stringify({ iamReconcile: { app: 'shop' } }),
+			]
+		) {
+			await withWorkspace(async (workspace) => {
+				const { status } = await runWithOutcome(workspace, (path) => writeFile(path, body))
+				expect(status.state).toBe('failed')
+				expect(status.error).toBe('runner outcome file is malformed')
+				expect(status.iamReconcile).toBeUndefined()
+			})
+		}
+	})
+
+	test('an outcome file that is not a regular file fails the run', async () => {
+		await withWorkspace(async (workspace) => {
+			// A fifo is the real hazard; a directory is the portable stand-in for "not a regular file".
+			const { status } = await runWithOutcome(workspace, (path) => mkdir(path))
+			expect(status.state).toBe('failed')
+			expect(status.error).toBe('runner outcome file is unreadable')
+		})
+	})
+
+	test('the outcome file is deleted after a failed deploy too', async () => {
+		await withWorkspace(async (workspace) => {
+			const { status } = await runWithOutcome(
+				workspace,
+				(path) => writeFile(path, JSON.stringify({ iamReconcile: { app: 'shop', schemaJson: '{}' } })),
+				1,
+			)
+			expect(status.state).toBe('failed')
+			expect(status.exitCode).toBe(1)
+			expect(status.iamReconcile).toBeUndefined()
+			expect(await Bun.file(join(workspace, 'run-1.outcome.json')).exists()).toBe(false)
+		})
+	})
+
+	test('an oversized outcome file fails the run', async () => {
+		await withWorkspace(async (workspace) => {
+			const oversized = JSON.stringify({ iamReconcile: { app: 'shop', schemaJson: 'x'.repeat(1024 * 1024 + 64) } })
+			const { status } = await runWithOutcome(workspace, (path) => writeFile(path, oversized))
+			expect(status.state).toBe('failed')
+			expect(status.error).toBe('runner outcome file exceeds the size limit')
+			expect(await Bun.file(join(workspace, 'run-1.outcome.json')).exists()).toBe(false)
+		})
 	})
 })

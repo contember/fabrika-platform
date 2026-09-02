@@ -8,7 +8,15 @@
 import type { RunLogLine } from '@fabrika/control-contract'
 import { OPERATIONS_ARTIFACT_HEADERS } from '@fabrika/operations-contract/releases'
 import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
-import type { RunnerState, RunnerStatus } from '@fabrika/runner-contract'
+import {
+	RUNNER_OUTCOME_FILE_ENV,
+	type RunnerIamReconcile,
+	type RunnerOutcomeFile,
+	type RunnerState,
+	type RunnerStatus,
+} from '@fabrika/runner-contract'
+import { readFile, rm, stat } from 'node:fs/promises'
+import { resolve } from 'node:path'
 
 /**
  * Upper bound on the in-memory log replay buffer. A pathologically chatty build (verbose installs,
@@ -17,6 +25,15 @@ import type { RunnerState, RunnerStatus } from '@fabrika/runner-contract'
  * subscriber's replay is bounded, never the durable R2 log.
  */
 const MAX_BUFFER_LINES = 10_000
+
+/** A residual this long is no longer a token awaiting its other half — emit it, keep memory bounded. */
+const MAX_RESIDUAL_CHARS = 64 * 1024
+
+const MAX_OUTCOME_FILE_BYTES = 1024 * 1024
+
+const OUTCOME_UNREADABLE = 'runner outcome file is unreadable'
+const OUTCOME_TOO_LARGE = 'runner outcome file exceeds the size limit'
+const OUTCOME_MALFORMED = 'runner outcome file is malformed'
 
 /** A spawned command's outcome plus its (already line-split, redacted) output. */
 export interface SpawnResult {
@@ -115,6 +132,42 @@ const makeRedactor = (job: CloudflareRunnerJob): (text: string) => string => {
 /** Strip any `user:pass@` userinfo from a URL for display — the clone URL may carry an install token. */
 const stripUserinfo = (url: string): string => url.replace(/(\/\/)[^@/]*@/, '$1')
 
+/** Resolve a job-supplied path under `base`, or `null` if it is absolute, walks up, or escapes. */
+const containedPath = (base: string, value: string | undefined): string | null => {
+	const root = resolve(base)
+	if (value === undefined) return root
+	if (value.startsWith('/') || value.split('/').includes('..')) return null
+	const resolved = resolve(root, value)
+	return resolved === root || resolved.startsWith(`${root}/`) ? resolved : null
+}
+
+/** Only our own fixed strings describe an outcome failure — a raw system error may quote a path or content. */
+const outcomeFailure = (err: unknown): string => {
+	const message = err instanceof Error ? err.message : ''
+	return message === OUTCOME_TOO_LARGE || message === OUTCOME_MALFORMED ? message : OUTCOME_UNREADABLE
+}
+
+const isFileNotFound = (err: unknown): boolean => typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 'ENOENT'
+
+/** Validate the executor's outcome report; every rejection message quotes nothing from the file. */
+const parseOutcomeFile = (raw: string): RunnerOutcomeFile => {
+	let value: unknown
+	try {
+		value = JSON.parse(raw)
+	} catch {
+		throw new Error(OUTCOME_MALFORMED)
+	}
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(OUTCOME_MALFORMED)
+	const reconcile = Reflect.get(value, 'iamReconcile')
+	if (reconcile === undefined) return {}
+	if (typeof reconcile !== 'object' || reconcile === null || Array.isArray(reconcile)) throw new Error(OUTCOME_MALFORMED)
+	const app = Reflect.get(reconcile, 'app')
+	const schemaJson = Reflect.get(reconcile, 'schemaJson')
+	if (typeof app !== 'string' || app === '') throw new Error(OUTCOME_MALFORMED)
+	if (typeof schemaJson !== 'string' || schemaJson.length > MAX_OUTCOME_FILE_BYTES) throw new Error(OUTCOME_MALFORMED)
+	return { iamReconcile: { app, schemaJson } }
+}
+
 /**
  * Drives one job to completion. Construct, subscribe to `onLine` (the Worker relays these to R2),
  * then `await run()`. The terminal `status()` carries the provider CLI exit code.
@@ -125,10 +178,12 @@ export class Runner {
 	private readonly redact: (text: string) => string
 	private readonly buffer: RunLogLine[] = []
 	private readonly subscribers = new Set<(line: RunLogLine) => void>()
+	private readonly residual: { stdout: string; stderr: string } = { stdout: '', stderr: '' }
 	private state: RunnerState = 'pending'
 	private exitCode: number | undefined
 	private error: string | undefined
 	private artifactState: RunnerStatus['artifactState']
+	private iamReconcile: RunnerIamReconcile | undefined
 	private readonly startedAt: number
 	private finishedAt: number | undefined
 	private done = false
@@ -150,6 +205,11 @@ export class Runner {
 		return `${this.env.workspace}/${this.job.runId}`
 	}
 
+	/** Where the executor reports its outcome — beside the checkout, never inside it. */
+	get outcomeFilePath(): string {
+		return `${this.env.workspace}/${this.job.runId}.outcome.json`
+	}
+
 	/** Append a line (redacted) to the buffer and fan it out to subscribers. */
 	private emit(stream: RunLogLine['stream'], rawText: string): void {
 		const text = this.redact(rawText)
@@ -164,12 +224,37 @@ export class Runner {
 		}
 	}
 
-	/** Split a streamed chunk into lines and emit each (chunks may contain partial trailing text). */
+	/**
+	 * Assemble lines across chunk boundaries before emitting: a pipe read may cut a credential in
+	 * half, and the redactor only recognises a value it sees whole.
+	 */
 	private emitChunk(stream: 'stdout' | 'stderr', chunk: string): void {
-		for (const line of chunk.split('\n')) {
+		let pending = this.residual[stream] + chunk
+		for (let newline = pending.indexOf('\n'); newline !== -1; newline = pending.indexOf('\n')) {
+			const line = pending.slice(0, newline)
 			if (line.length > 0) {
 				this.emit(stream, line)
 			}
+			pending = pending.slice(newline + 1)
+		}
+		if (pending.length > MAX_RESIDUAL_CHARS) {
+			this.emit(stream, pending)
+			pending = ''
+		}
+		this.residual[stream] = pending
+	}
+
+	/** Emit whatever a child left without a trailing newline; residuals never cross processes. */
+	private flushResiduals(): void {
+		this.flushResidual('stdout')
+		this.flushResidual('stderr')
+	}
+
+	private flushResidual(stream: 'stdout' | 'stderr'): void {
+		const pending = this.residual[stream]
+		this.residual[stream] = ''
+		if (pending.length > 0) {
+			this.emit(stream, pending)
 		}
 	}
 
@@ -199,6 +284,7 @@ export class Runner {
 			...(this.exitCode !== undefined ? { exitCode: this.exitCode } : {}),
 			...(this.error !== undefined ? { error: this.error } : {}),
 			...(this.artifactState === undefined ? {} : { artifactState: this.artifactState }),
+			...(this.iamReconcile === undefined ? {} : { iamReconcile: this.iamReconcile }),
 			startedAt: this.startedAt,
 			...(this.finishedAt !== undefined ? { finishedAt: this.finishedAt } : {}),
 		}
@@ -206,10 +292,14 @@ export class Runner {
 
 	/** Spawn a step, wiring its output into the log buffer. */
 	private async step(spec: SpawnSpec): Promise<SpawnResult> {
-		return this.env.spawn(spec, {
-			onStdout: (chunk) => this.emitChunk('stdout', chunk),
-			onStderr: (chunk) => this.emitChunk('stderr', chunk),
-		})
+		try {
+			return await this.env.spawn(spec, {
+				onStdout: (chunk) => this.emitChunk('stdout', chunk),
+				onStderr: (chunk) => this.emitChunk('stderr', chunk),
+			})
+		} finally {
+			this.flushResiduals()
+		}
 	}
 
 	/** Build the provider CLI environment without putting sensitive values on argv. */
@@ -243,6 +333,8 @@ export class Runner {
 		for (const [name, value] of Object.entries(this.job.managedEnvironment ?? {})) {
 			env[name] = value
 		}
+		// Last, so no job-supplied name can redirect where the executor reports its outcome.
+		env[RUNNER_OUTCOME_FILE_ENV] = this.outcomeFilePath
 		return env
 	}
 
@@ -259,6 +351,18 @@ export class Runner {
 	 * Run clone → install → provider deploy. Resolves once terminal; failures land in `status()`.
 	 */
 	async run(): Promise<RunnerStatus> {
+		// Both the checkout and the outcome file are named after the runId; keep them one path segment.
+		if (!/^[A-Za-z0-9-]+$/.test(this.job.runId)) {
+			return this.refuse('runId must contain only letters, digits and dashes')
+		}
+		const dir = containedPath(this.checkoutDir, this.job.workerDir)
+		if (dir === null) {
+			return this.refuse('workerDir must be a relative path inside the checkout')
+		}
+		if (containedPath(dir, this.job.configPath) === null) {
+			return this.refuse('configPath must be a relative path inside the checkout')
+		}
+
 		// ── clone ──
 		this.state = 'cloning'
 		this.emit('meta', `Cloning ${stripUserinfo(this.job.repoUrl)} @ ${this.job.ref}`)
@@ -267,7 +371,8 @@ export class Runner {
 		const branch = this.job.ref.replace(/^refs\/(heads|tags)\//, '')
 		const clone = await this.step({
 			command: 'git',
-			args: ['clone', '--depth', '1', '--branch', branch, this.job.repoUrl, this.checkoutDir],
+			// `--` so a repoUrl or ref starting with `-` cannot be parsed as a git option.
+			args: ['clone', '--depth', '1', '--branch', branch, '--', this.job.repoUrl, this.checkoutDir],
 			cwd: this.env.workspace,
 		})
 		if (clone.exitCode !== 0) {
@@ -275,8 +380,6 @@ export class Runner {
 			this.finish('failed', { error: `git clone failed (exit ${clone.exitCode})` })
 			return this.status()
 		}
-
-		const dir = this.job.workerDir !== undefined ? `${this.checkoutDir}/${this.job.workerDir}` : this.checkoutDir
 
 		// ── install ──
 		this.state = 'installing'
@@ -301,13 +404,58 @@ export class Runner {
 			deployArgs.push(`--managed-var=${name}`)
 		}
 		this.emit('meta', `Running: fabrika-cloudflare-executor ${deployArgs.join(' ')}`)
+		if (!(await this.clearOutcomeFile())) {
+			return this.refuse('could not clear the runner outcome file')
+		}
 		const deploy = await this.step({ command: 'fabrika-cloudflare-executor', args: deployArgs, cwd: dir, env: this.deployEnv() })
 		this.emit('meta', `fabrika-cloudflare-executor deploy exited with code ${deploy.exitCode}`)
+		let outcome: RunnerOutcomeFile | undefined
+		try {
+			if (deploy.exitCode === 0) outcome = await this.readOutcomeFile()
+		} catch (err) {
+			const message = outcomeFailure(err)
+			this.emit('meta', message)
+			this.finish('failed', { exitCode: deploy.exitCode, error: message })
+			return this.status()
+		} finally {
+			await this.clearOutcomeFile()
+		}
 		if (deploy.exitCode === 0) {
+			this.iamReconcile = outcome?.iamReconcile
 			await this.uploadArtifacts(dir)
 		}
 		this.finish(deploy.exitCode === 0 ? 'succeeded' : 'failed', { exitCode: deploy.exitCode })
 		return this.status()
+	}
+
+	/** Refuse the job before (or instead of) further work; nothing has been recorded but the reason. */
+	private refuse(reason: string): RunnerStatus {
+		this.emit('meta', reason)
+		this.finish('failed', { error: reason })
+		return this.status()
+	}
+
+	private async clearOutcomeFile(): Promise<boolean> {
+		try {
+			await rm(this.outcomeFilePath, { force: true })
+			return true
+		} catch {
+			return false
+		}
+	}
+
+	/** Read what the executor reported; absent means no reconcile, anything else unusable throws a fixed message. */
+	private async readOutcomeFile(): Promise<RunnerOutcomeFile | undefined> {
+		try {
+			const info = await stat(this.outcomeFilePath)
+			// A fifo the build left at this path would report size 0 and then block or read unbounded.
+			if (!info.isFile()) throw new Error(OUTCOME_UNREADABLE)
+			if (info.size > MAX_OUTCOME_FILE_BYTES) throw new Error(OUTCOME_TOO_LARGE)
+			return parseOutcomeFile(await readFile(this.outcomeFilePath, 'utf8'))
+		} catch (err) {
+			if (isFileNotFound(err)) return undefined
+			throw new Error(outcomeFailure(err))
+		}
 	}
 
 	private async uploadArtifacts(cwd: string): Promise<void> {

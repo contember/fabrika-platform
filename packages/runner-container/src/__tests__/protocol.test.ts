@@ -2,7 +2,7 @@ import { type CloudflareRunnerJob, isCloudflareRunnerJob } from '@fabrika/provid
 import { describe, expect, test } from 'bun:test'
 
 const validJob: CloudflareRunnerJob = {
-	runId: 'run-1',
+	runId: '0198c4a2-7b31-7e44-9a55-1f2e3d4c5b6a',
 	repoUrl: 'https://github.com/acme/app.git',
 	ref: 'main',
 	env: 'prod',

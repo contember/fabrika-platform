@@ -9,7 +9,7 @@ import { createServer } from '../server'
 // GET /logs (NDJSON), GET /status, and the 409-on-double-run guard.
 
 const job: CloudflareRunnerJob = {
-	runId: 'run-server-1',
+	runId: '0198c4a2-7b31-7e44-9a55-0b1c2d3e4f50',
 	repoUrl: 'https://github.com/acme/app.git',
 	ref: 'main',
 	env: 'stage',
@@ -49,7 +49,7 @@ describe('runner server protocol', () => {
 		const response = await server.handle(post(job))
 		expect(response.status).toBe(202)
 		const body: { runId: string; accepted: boolean } = await response.json()
-		expect(body).toEqual({ runId: 'run-server-1', accepted: true })
+		expect(body).toEqual({ runId: '0198c4a2-7b31-7e44-9a55-0b1c2d3e4f50', accepted: true })
 		expect(server.current()).toBeDefined()
 	})
 
@@ -76,7 +76,7 @@ describe('runner server protocol', () => {
 		const status: RunnerStatus = await (await server.handle(new Request('http://container/status'))).json()
 		expect(status.state).toBe('succeeded')
 		expect(status.exitCode).toBe(0)
-		expect(status.runId).toBe('run-server-1')
+		expect(status.runId).toBe('0198c4a2-7b31-7e44-9a55-0b1c2d3e4f50')
 	})
 
 	test('GET /logs streams redacted NDJSON lines', async () => {
