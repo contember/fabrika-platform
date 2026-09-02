@@ -129,6 +129,7 @@ function uploadRequest(input: {
 	release: string
 	body?: string
 	bearer?: string
+	appId?: string
 	environment?: string
 	path?: string
 	digest: string
@@ -138,7 +139,7 @@ function uploadRequest(input: {
 		headers: {
 			authorization: `Bearer ${input.bearer ?? BEARER}`,
 			'content-type': 'application/json',
-			[OPERATIONS_ARTIFACT_HEADERS.appId]: 'notes',
+			[OPERATIONS_ARTIFACT_HEADERS.appId]: input.appId ?? 'notes',
 			[OPERATIONS_ARTIFACT_HEADERS.environment]: input.environment ?? 'prod',
 			[OPERATIONS_ARTIFACT_HEADERS.serviceKey]: 'default',
 			[OPERATIONS_ARTIFACT_HEADERS.release]: input.release,
@@ -318,7 +319,7 @@ describe('authenticated source-map artifacts', () => {
 			})).status,
 		).toBe(200)
 		expect(logicalAssetPath('https://cdn.test/assets/admin/app.js?v=1')).toBe('assets/admin/app.js')
-		expect(await harness.repositories.artifacts.sourceMapKey(release.release.name, 'assets/admin/app.js')).toBe(
+		expect(await harness.repositories.artifacts.sourceMapKey('source-notes', release.release.name, 'assets/admin/app.js')).toBe(
 			`source-maps/objects/${digest.slice(0, 2)}/${digest}.map`,
 		)
 
@@ -404,9 +405,43 @@ describe('authenticated source-map artifacts', () => {
 				line: 1,
 				column: 1,
 			}],
+			'source-notes',
 			releaseName,
 			operationsSourceMapReader(harness.repositories, blobs),
 		)
 		expect(resolved[0]?.resolved).toBeTrue()
+	})
+
+	test("never resolves another source's map for the same release name and asset path", async () => {
+		const harness = createHarness(() => NOW_MS)
+		const blobs = new MemoryBlobs()
+		await seedSource(harness, 'source-notes', 'notes')
+		await seedSource(harness, 'source-shop', 'shop')
+		const release = projection({ runId: 'run-upload', appId: 'shop', verifier: await sha256Hex(BEARER) })
+		await reconcileOperationsRelease(harness.repositories, release)
+		if (release.release.kind !== 'available') throw new Error('expected release')
+		const releaseName = release.release.name
+		const digest = await sha256Hex(SOURCE_MAP)
+		expect(
+			(await handleSourceMapUploadRequest(uploadRequest({ appId: 'shop', release: releaseName, digest }), {
+				repositories: harness.repositories,
+				artifacts: blobs,
+				now: () => NOW_MS,
+			})).status,
+		).toBe(201)
+
+		expect(await harness.repositories.artifacts.sourceMapKey('source-shop', releaseName, 'assets/admin/app.js')).toBe(
+			`source-maps/objects/${digest.slice(0, 2)}/${digest}.map`,
+		)
+		expect(await harness.repositories.artifacts.sourceMapKey('source-notes', releaseName, 'assets/admin/app.js')).toBeNull()
+
+		const frames = [{ filename: 'https://cdn.test/assets/admin/app.js?v=1', line: 1, column: 1 }]
+		const reader = operationsSourceMapReader(harness.repositories, blobs)
+		const owner = await resolveFrames(frames, 'source-shop', releaseName, reader)
+		expect(owner[0]?.resolved).toBeTrue()
+		const foreign = await resolveFrames(frames, 'source-notes', releaseName, reader)
+		expect(foreign[0]?.resolved).toBeFalse()
+		expect(foreign[0]?.source).toBeUndefined()
+		expect(foreign[0]?.file).toBe('https://cdn.test/assets/admin/app.js?v=1')
 	})
 })

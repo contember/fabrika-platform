@@ -34,7 +34,7 @@ function reader(objects: Record<string, string>): ObjectReader {
 
 describe('event detail and source context', () => {
 	test('resolves a source map and gracefully falls back when absent', async () => {
-		const key = sourceMapKey('v1.2.3', 'https://app.test/app.min.js?v=1')
+		const key = sourceMapKey('source-a', 'v1.2.3', 'https://app.test/app.min.js?v=1')
 		const frames = [{
 			filename: 'https://app.test/app.min.js?v=1',
 			function: 't',
@@ -42,10 +42,10 @@ describe('event detail and source context', () => {
 			column: 1,
 			inApp: true,
 		}]
-		const resolved = await resolveFrames(frames, 'v1.2.3', reader({ [key]: map }))
+		const resolved = await resolveFrames(frames, 'source-a', 'v1.2.3', reader({ [key]: map }))
 		expect(resolved[0]?.resolved).toBeTrue()
 		expect(resolved[0]?.file).toBe('src/app.ts')
-		const fallback = await resolveFrames(frames, 'missing', reader({}))
+		const fallback = await resolveFrames(frames, 'source-a', 'missing', reader({}))
 		expect(fallback[0]).toMatchObject({ resolved: false, function: 't', line: 1, column: 1 })
 	})
 
@@ -88,7 +88,7 @@ describe('event detail and source context', () => {
 				],
 			},
 		})
-		const detail = await parseEventDetail(raw, reader({}))
+		const detail = await parseEventDetail(raw, 'source-a', reader({}))
 		expect(detail.exceptions.map((exception) => exception.type)).toEqual(['UpstreamError', 'SocketError'])
 		expect(detail.exceptions[0]?.handled).toBeFalse()
 		expect(detail.exceptions[0]?.frames[0]?.source).toEqual({
@@ -103,7 +103,7 @@ describe('event detail and source context', () => {
 	})
 
 	test('retains malformed event bytes for forensics', async () => {
-		const detail = await parseEventDetail('{broken', reader({}))
+		const detail = await parseEventDetail('{broken', 'source-a', reader({}))
 		expect(detail.rawEvent).toBe('{broken')
 		expect(detail.exceptions).toEqual([])
 	})

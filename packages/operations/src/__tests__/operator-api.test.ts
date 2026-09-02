@@ -141,7 +141,83 @@ function objectItems(value: unknown): Record<string, unknown>[] {
 	return items
 }
 
+function firstFrame(response: Record<string, unknown>): Record<string, unknown> {
+	const detail = response['detail']
+	if (typeof detail !== 'object' || detail === null || Array.isArray(detail)) throw new Error('expected event detail')
+	const exception = objectItems(Object.fromEntries(Object.entries(detail))['exceptions'])[0]
+	const frame = objectItems(exception?.['frames'])[0]
+	if (frame === undefined) throw new Error('expected a stack frame')
+	return frame
+}
+
 describe('Operations operator API', () => {
+	test("resolves stack frames only against the event source's own releases", async () => {
+		const harness = createHarness(() => 10_000)
+		const input = options(auth({ apps: ['app-a'] }), harness)
+		const releaseName = `fabrika/app-b/production/main/${'b'.repeat(40)}`
+		const mapKey = 'source-maps/objects/aa/foreign.map'
+		const secret = 'const victimSecret = 1'
+		for (const source of [{ id: 'source-a', appId: 'app-a' }, { id: 'source-b', appId: 'app-b' }]) {
+			await input.repositories.sources.upsert({
+				id: source.id,
+				appId: source.appId,
+				environment: 'production',
+				displayName: source.appId,
+				enabled: true,
+			})
+		}
+		const insertRelease = (id: string, sourceId: string, commit: string): void => {
+			harness.sqlite.query(
+				`INSERT INTO releases (id, source_id, run_id, commit_sha, state, created_at, release_name, artifact_state, updated_at)
+					VALUES (?, ?, ?, ?, 'succeeded', 1, ?, 'complete', 1)`,
+			).run(id, sourceId, `run-${id}`, commit, releaseName)
+			harness.sqlite.query(
+				'INSERT INTO source_maps (release_id, file_name, blob_key, uploaded_at, digest, byte_length) VALUES (?, ?, ?, 1, ?, 1)',
+			).run(id, 'assets/index-abc.js', mapKey, 'aa')
+		}
+		insertRelease('release-b', 'source-b', 'b'.repeat(40))
+		await input.payloads.put(
+			mapKey,
+			JSON.stringify({ version: 3, file: 'index-abc.js', sources: ['src/app.ts'], names: [], mappings: 'AAAA', sourcesContent: [secret] }),
+		)
+		await persistIngest(
+			{ repositories: input.repositories, payloads: input.payloads, ingestQueue: new EmptyQueue() },
+			{
+				projectId: 'source-a',
+				eventId: 'event-foreign-release',
+				fingerprint: 'foreign-release',
+				title: 'Error: boom',
+				culprit: 'assets/index-abc.js',
+				level: 'error',
+				release: releaseName,
+				environment: 'production',
+				receivedAt: 5_000,
+				payload: {
+					event_id: 'event-foreign-release',
+					release: releaseName,
+					exception: {
+						values: [{
+							type: 'Error',
+							value: 'boom',
+							stacktrace: { frames: [{ filename: 'https://cdn.test/assets/index-abc.js?v=1', lineno: 1, colno: 1, in_app: true }] },
+						}],
+					},
+				},
+			},
+		)
+		const issue = await input.repositories.operator.getIssueByCoordinate('source-a', 'foreign-release')
+		if (issue === null) throw new Error('ingested issue is missing')
+
+		const foreign = await responseObject(await call(`/api/issues/${issue.id}/events/latest`, input))
+		expect(firstFrame(foreign)).toMatchObject({ resolved: false, file: 'https://cdn.test/assets/index-abc.js?v=1' })
+		expect(firstFrame(foreign)['source']).toBeUndefined()
+		expect(JSON.stringify(foreign)).not.toContain(secret)
+
+		insertRelease('release-a', 'source-a', 'a'.repeat(40))
+		const own = await responseObject(await call(`/api/issues/${issue.id}/events/latest`, input))
+		expect(firstFrame(own)).toMatchObject({ resolved: true, file: 'src/app.ts' })
+	})
+
 	test('filters issue rows on the server and keyset-paginates every sort without skipping older rows', async () => {
 		const harness = createHarness(() => 10_000)
 		const input = options(auth({ apps: ['app-a'] }), harness)

@@ -205,7 +205,7 @@ function emptyDetail(rawEvent: string): EventDetail {
 	}
 }
 
-export async function parseEventDetail(rawText: string, reader: ObjectReader): Promise<EventDetail> {
+export async function parseEventDetail(rawText: string, sourceId: string, reader: ObjectReader): Promise<EventDetail> {
 	let parsed: unknown
 	try {
 		parsed = JSON.parse(rawText)
@@ -222,7 +222,7 @@ export async function parseEventDetail(rawText: string, reader: ObjectReader): P
 			type: exception.type,
 			value: exception.value,
 			handled: exception.handled,
-			frames: await resolveFrames(exception.frames, release, reader),
+			frames: await resolveFrames(exception.frames, sourceId, release, reader),
 		})),
 	)
 	return {

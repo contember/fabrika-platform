@@ -99,8 +99,8 @@ export function operationsSourceMapReader(
 ): ObjectReader {
 	return {
 		get: () => Promise.resolve(null),
-		async getSourceMap(releaseName, logicalPath) {
-			const key = await repositories.artifacts.sourceMapKey(releaseName, logicalPath)
+		async getSourceMap(sourceId, releaseName, logicalPath) {
+			const key = await repositories.artifacts.sourceMapKey(sourceId, releaseName, logicalPath)
 			return key === null ? null : artifacts.get(key)
 		},
 	}

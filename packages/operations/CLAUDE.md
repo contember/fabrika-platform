@@ -68,10 +68,13 @@ cancelled. DNS resolution and rebinding remain a production egress concern
 shared with active HTTP health checks; see
 [`backlog 38`](../../docs/backlog/38-add-dns-safe-operations-egress.md).
 
-Releases are unique by source and immutable commit. Every deploy attempt has a
-separate run link. The commit-level release row is a latest-observed summary:
-`observedAt` updates `run_id`, state, finish time, and artifact state as one
-tuple, and delayed older projections cannot roll it back.
+Releases are unique by source and immutable commit. A release name is therefore
+unique per source only, and the name that selects a source map comes from the
+stored raw event, so every source-map lookup is scoped by the event's own source
+id. Every deploy attempt has a separate run link. The commit-level release row
+is a latest-observed summary: `observedAt` updates `run_id`, state, finish time,
+and artifact state as one tuple, and delayed older projections cannot roll it
+back.
 
 `import/poplach-source-inventory.ts` pins and accounts for the Poplach source
 import at commit `8e0c79d662c187fe41eacd0fee9fe77fde668f1f`.

@@ -4,7 +4,7 @@ import type { RawSourceMap } from 'source-map-js'
 
 export interface ObjectReader {
 	get(key: string): Promise<{ text(): Promise<string> } | null>
-	getSourceMap?(releaseName: string, logicalPath: string): Promise<{ text(): Promise<string> } | null>
+	getSourceMap?(sourceId: string, releaseName: string, logicalPath: string): Promise<{ text(): Promise<string> } | null>
 }
 
 const CONTEXT_RADIUS = 5
@@ -73,8 +73,8 @@ export function logicalAssetPath(fileReference: string): string {
 	return normalized
 }
 
-export function sourceMapKey(release: string, file: string): string {
-	return `source-maps/index/${encodeURIComponent(release)}/${encodeURIComponent(logicalAssetPath(file))}.json`
+export function sourceMapKey(sourceId: string, release: string, file: string): string {
+	return `source-maps/index/${encodeURIComponent(sourceId)}/${encodeURIComponent(release)}/${encodeURIComponent(logicalAssetPath(file))}.json`
 }
 
 function frameFile(frame: StackFrame): string {
@@ -151,7 +151,12 @@ async function resolveOne(
 	}
 }
 
-export async function resolveFrames(frames: StackFrame[], release: string | undefined, reader: ObjectReader): Promise<DisplayFrame[]> {
+export async function resolveFrames(
+	frames: StackFrame[],
+	sourceId: string,
+	release: string | undefined,
+	reader: ObjectReader,
+): Promise<DisplayFrame[]> {
 	if (!release) return frames.map(minifiedDisplay)
 	const sourceMapRelease = release
 	const consumers = new Map<string, SourceMapConsumer | null>()
@@ -162,13 +167,13 @@ export async function resolveFrames(frames: StackFrame[], release: string | unde
 		} catch {
 			return null
 		}
-		const key = sourceMapKey(sourceMapRelease, logicalPath)
+		const key = sourceMapKey(sourceId, sourceMapRelease, logicalPath)
 		if (consumers.has(key)) return consumers.get(key) ?? null
 		let consumer: SourceMapConsumer | null = null
 		try {
 			const object = reader.getSourceMap === undefined
 				? await reader.get(key)
-				: await reader.getSourceMap(sourceMapRelease, logicalPath)
+				: await reader.getSourceMap(sourceId, sourceMapRelease, logicalPath)
 			if (object) {
 				const parsed: unknown = JSON.parse(await object.text())
 				const map = parseRawSourceMap(parsed)

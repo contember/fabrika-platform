@@ -1986,12 +1986,13 @@ export class ArtifactsRepository {
 		return existing.digest === input.digest ? 'unchanged' : 'conflict'
 	}
 
-	async sourceMapKey(releaseName: string, logicalPath: string): Promise<string | null> {
+	// A release name is unique per source only, so the event's own source has to scope the lookup.
+	async sourceMapKey(sourceId: string, releaseName: string, logicalPath: string): Promise<string | null> {
 		const row = await this.db
 			.prepare(`SELECT map.blob_key FROM source_maps map
 				JOIN releases release ON release.id = map.release_id
-				WHERE release.release_name = ? AND map.file_name = ?`)
-			.bind(releaseName, logicalPath)
+				WHERE release.source_id = ? AND release.release_name = ? AND map.file_name = ?`)
+			.bind(sourceId, releaseName, logicalPath)
 			.first<{ blob_key: string }>()
 		return row?.blob_key ?? null
 	}

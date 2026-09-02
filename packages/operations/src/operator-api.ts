@@ -465,10 +465,10 @@ async function issueEvent(issueId: string, occurrenceId: string, options: Operat
 async function eventDetail(occurrence: OperatorOccurrenceRow, options: OperationsOperatorOptions): Promise<OperationsEventDetailResponseDto> {
 	const object = await options.payloads.get(occurrence.blob_key)
 	if (object === null) return notFoundError()
-	const detail = await parseEventDetail(await object.text(), {
+	const detail = await parseEventDetail(await object.text(), occurrence.source_id, {
 		get: (key) => options.payloads.get(key),
-		getSourceMap: async (releaseName, logicalPath) => {
-			const key = await options.repositories.artifacts.sourceMapKey(releaseName, logicalPath)
+		getSourceMap: async (sourceId, releaseName, logicalPath) => {
+			const key = await options.repositories.artifacts.sourceMapKey(sourceId, releaseName, logicalPath)
 			return key === null ? null : options.payloads.get(key)
 		},
 	})

@@ -187,6 +187,7 @@ describe.skipIf(!hasS3)('Operations S3 integration', () => {
 		if (payload === null) throw new Error('persisted event payload is missing')
 		const detail = await parseEventDetail(
 			await payload.text(),
+			'source-notes',
 			operationsSourceMapReader(harness.repositories, blobs),
 		)
 		expect(detail.eventId).toBe(message.eventId)
@@ -199,6 +200,7 @@ describe.skipIf(!hasS3)('Operations S3 integration', () => {
 		})
 
 		const sourceMap = await operationsSourceMapReader(harness.repositories, blobs).getSourceMap?.(
+			'source-notes',
 			releaseName,
 			'assets/admin/app.js',
 		)
