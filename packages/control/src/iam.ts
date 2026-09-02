@@ -106,7 +106,9 @@ export function controlAuthMiddleware<Ctx extends AuthCarrier>(env: IamEnv): Mid
 	const bootstrapAdmins = parseBootstrapAdmins(env.FABRIKA_CONTROL_BOOTSTRAP_ADMINS)
 
 	return async (request, ctx, next) => {
-		const path = new URL(request.url).pathname
+		// As the ROUTER sees it — `matchRoutes` drops empty segments, so a raw `//api/rpc` would reach
+		// the RPC route while `startsWith('/api/')` is false for it (`packages/app/src/router.ts`).
+		const path = `/${new URL(request.url).pathname.split('/').filter((segment) => segment !== '').join('/')}`
 		if (!path.startsWith('/api/') || path === '/api/health') return next()
 
 		const result = await iam.authenticate(request)

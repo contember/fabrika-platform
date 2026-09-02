@@ -28,6 +28,7 @@ function application(overrides: Partial<Env> = {}, harness: Harness = createHarn
 		WAIT_UNTIL: () => {},
 		REPO_EVENTS,
 		ENVIRONMENT: 'local',
+		FABRIKA_CONTROL_DOMAIN: 'https://control.test',
 		...testIamEnv,
 		...rest,
 	}
@@ -381,7 +382,8 @@ function apiRequest(url: string, token: string): Request {
 function rpcRequest(method: string, input: unknown, token = adminToken): Request {
 	return new Request('https://control.test/api/rpc', {
 		method: 'POST',
-		headers: { 'content-type': 'application/json', [PROXY_TOKEN_HEADER]: token },
+		// The console's own origin: since the origin guard, a human's RPC POST without one is refused.
+		headers: { 'content-type': 'application/json', origin: 'https://control.test', [PROXY_TOKEN_HEADER]: token },
 		body: JSON.stringify({ method, input }),
 	})
 }

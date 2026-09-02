@@ -7,6 +7,7 @@ import { error } from './http'
 import { controlAuthMiddleware, controlPublicOrigin } from './iam'
 import { forwardIamAdmin } from './iam-admin'
 import { forwardOperationsApi } from './operations-gateway'
+import { controlOriginGuard } from './origin-guard'
 import { buildApiDeps, repositories, type WebhookRoute, webhookRoute } from './services'
 import { manifestCallback, manifestHandoff, SourceConnectionWorkflowError } from './source-connection'
 import type { SourceConnectionPort } from './source-connection-port'
@@ -37,7 +38,7 @@ export const controlApp = defineApp<ControlAppEnv, ControlAppContext>({
 		sourceConnection,
 		request,
 	}),
-	middleware: ({ env }) => [controlAuthMiddleware(env)],
+	middleware: ({ env }) => [controlAuthMiddleware(env), controlOriginGuard(env)],
 	routes: [
 		route.all('/healthz', () => Response.json({ status: 'ok' })),
 		route.all('/api/health', () => Response.json({ status: 'ok', service: 'vozka', milestone: 'M4' })),
