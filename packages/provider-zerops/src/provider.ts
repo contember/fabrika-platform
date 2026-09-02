@@ -9,7 +9,7 @@
 // the poll loop rechecks it, the sleep between polls is interruptible, and a cancelled run asks Zerops to
 // cancel the build it started rather than leaving it running.
 
-import { createProvider, type ProviderDeploySession, type ProviderModule, type TypedProviderRun } from '@fabrika/provider-contract'
+import { createProvider, type JsonValue, type ProviderDeploySession, type ProviderModule, type TypedProviderRun } from '@fabrika/provider-contract'
 import {
 	waitForProcess,
 	ZEROPS_ACTIVE,
@@ -23,14 +23,16 @@ import {
 } from './api'
 import { zeropsTargetCodec } from './codec'
 import { defaultSleep, defaultZeropsCollaborators, type ZeropsCollaboratorFactory, type ZeropsCollaborators } from './collaborators'
+import { assertZeropsInvariants, renderYaml } from './compile'
 import {
+	type FabrikaImportDocument,
 	type FabrikaManifest,
 	manifestServiceHostnames,
-	renderFabrikaImportYaml,
 	verifyZeropsArtifactSourceDescriptor,
 	zeropsArtifactCodec,
 } from './manifest'
 import { buildZeropsPlan, resolveDeployHostname, type ZeropsJobSpec, type ZeropsPlan } from './plan'
+import { allowedReferenceHosts, foreignReferenceHost } from './service-references'
 import type { ZeropsSourceUploadInputV2, ZeropsSourceUploadResult } from './source'
 import type { ZeropsRunState, ZeropsRuntimeSource, ZeropsRuntimeTarget } from './types'
 
@@ -70,19 +72,139 @@ const assertRunning = (signal: AbortSignal): void => {
 
 const PLACEHOLDER = /\$\{([A-Z][A-Z0-9_]*)\}/g
 
-/** Resolve only variables declared by the manifest. Unknown or missing placeholders fail the deploy. */
-export function interpolateManifest(source: string, declared: string[], values: Record<string, string>): string {
+/** Fields that decide WHAT a service is: a placeholder there would let a value redefine the service. */
+const STRUCTURAL_FIELDS: readonly string[] = ['hostname', 'type', 'envIsolation', 'override']
+
+/** Rebuild the tree with every string leaf resolved — arrays and nested objects included. */
+const substituteLeaves = (value: JsonValue, resolve: (text: string) => string): JsonValue => {
+	if (typeof value === 'string') {
+		return resolve(value)
+	}
+	if (Array.isArray(value)) {
+		return value.map((item) => substituteLeaves(item, resolve))
+	}
+	if (value !== null && typeof value === 'object') {
+		return substituteRecord(value, resolve)
+	}
+	return value
+}
+
+const substituteRecord = (
+	record: { readonly [key: string]: JsonValue },
+	resolve: (text: string) => string,
+): { [key: string]: JsonValue } => {
+	const substituted: { [key: string]: JsonValue } = {}
+	for (const [key, entry] of Object.entries(record)) {
+		const planted = key.match(PLACEHOLDER)
+		if (planted !== null) {
+			throw new Error(`zerops: placeholder \`${String(planted[0])}\` stands in an import document key; a variable may only fill a value`)
+		}
+		// Defined rather than assigned: a literal `__proto__` key would otherwise set the prototype.
+		Object.defineProperty(substituted, key, {
+			value: substituteLeaves(entry, resolve),
+			enumerable: true,
+			writable: true,
+			configurable: true,
+		})
+	}
+	return substituted
+}
+
+/** A structural field that moved means a placeholder sat where only the compiler may write. */
+const assertStructureUnchanged = (before: FabrikaImportDocument, after: FabrikaImportDocument): void => {
+	if (JSON.stringify(before.project) !== JSON.stringify(after.project)) {
+		throw new Error('zerops: variable substitution changed the project entry; a variable may not stand in the project fabrika creates')
+	}
+	for (const [index, service] of after.services.entries()) {
+		const original = before.services[index]
+		for (const field of STRUCTURAL_FIELDS) {
+			if (original?.[field] !== service[field]) {
+				throw new Error(`zerops: variable substitution changed service field \`${field}\`; a variable may not stand in a service's identity`)
+			}
+		}
+	}
+}
+
+/** Substitution is a single pass, so a placeholder left in the document came out of a variable's VALUE. */
+const assertNoPlaceholderLeft = (document: FabrikaImportDocument): void => {
+	const refuse = (text: string): void => {
+		const left = text.match(PLACEHOLDER)
+		if (left !== null) {
+			throw new Error(`zerops: placeholder \`${String(left[0])}\` survived substitution; a variable value may not carry one`)
+		}
+	}
+	const visitRecord = (record: { readonly [key: string]: JsonValue }): void => {
+		for (const [key, entry] of Object.entries(record)) {
+			refuse(key)
+			visit(entry)
+		}
+	}
+	const visit = (value: JsonValue): void => {
+		if (typeof value === 'string') {
+			refuse(value)
+			return
+		}
+		if (Array.isArray(value)) {
+			for (const item of value) visit(item)
+			return
+		}
+		if (value !== null && typeof value === 'object') {
+			visitRecord(value)
+		}
+	}
+	if (document.project !== undefined) {
+		visitRecord(document.project)
+	}
+	for (const service of document.services) {
+		visitRecord(service)
+	}
+}
+
+/**
+ * Resolve the manifest's declared variables INTO THE DOCUMENT — never into the rendered YAML, where a
+ * value carrying a quote or a newline would be read as structure and could add a service or turn
+ * `envIsolation` off. Only variables the manifest declares resolve; every other placeholder fails the
+ * deploy, and so does a value that names a service outside the app (Zerops resolves `${host_KEY}`
+ * regardless of isolation). The document is re-checked here because this is the last point it is an object.
+ */
+export function interpolateManifest(
+	document: FabrikaImportDocument,
+	declared: readonly string[],
+	values: Record<string, string>,
+	ownHostnames: readonly string[],
+): FabrikaImportDocument {
 	const allowed = new Set(declared)
-	return source.replace(PLACEHOLDER, (_placeholder, name: string) => {
-		if (!allowed.has(name)) {
-			throw new Error(`zerops: manifest uses undeclared variable \`${name}\``)
+	const hosts = allowedReferenceHosts(ownHostnames)
+	const resolve = (text: string): string => {
+		const substituted = text.replace(PLACEHOLDER, (_placeholder, name: string) => {
+			if (!allowed.has(name)) {
+				throw new Error(`zerops: manifest uses undeclared variable \`${name}\``)
+			}
+			const value = values[name]
+			if (value === undefined) {
+				throw new Error(`zerops: manifest variable \`${name}\` has no deploy-time value`)
+			}
+			const foreign = foreignReferenceHost(value, hosts)
+			if (foreign !== null) {
+				throw new Error(`zerops: manifest variable \`${name}\` references service \`${foreign}\`, which this app does not own`)
+			}
+			return value
+		})
+		// Adjacent values can spell a reference neither of them carries alone.
+		const foreign = substituted === text ? null : foreignReferenceHost(substituted, hosts)
+		if (foreign !== null) {
+			throw new Error(`zerops: a substituted value references service \`${foreign}\`, which this app does not own`)
 		}
-		const value = values[name]
-		if (value === undefined) {
-			throw new Error(`zerops: manifest variable \`${name}\` has no deploy-time value`)
-		}
-		return value
-	})
+		return substituted
+	}
+	const services = document.services.map((service) => substituteRecord(service, resolve))
+	const substituted: FabrikaImportDocument = document.project === undefined
+		? { services }
+		: { project: substituteRecord(document.project, resolve), services }
+	assertZeropsInvariants(substituted)
+	assertStructureUnchanged(document, substituted)
+	assertNoPlaceholderLeft(substituted)
+	return substituted
 }
 
 /** Human-readable failure for a version that finished in a non-`ACTIVE` state. */
@@ -488,10 +610,8 @@ export const createZeropsProvider = (
 				throw new Error(`zerops: artifact environment drift: expected \`${run.env}\`, got \`${run.artifact.app.env}\``)
 			}
 			const hostnames = manifestServiceHostnames(run.artifact)
-			const compiled = {
-				yaml: interpolateManifest(renderFabrikaImportYaml(run.artifact), run.artifact.app.pipeline.vars, run.vars),
-				hostnames,
-			}
+			const document = interpolateManifest(run.artifact.target.importDocument, run.artifact.app.pipeline.vars, run.vars, hostnames)
+			const compiled = { yaml: renderYaml(document), hostnames }
 			const deployHostname = resolveDeployHostname(run.artifact)
 			const plan: ZeropsPlan = buildZeropsPlan(run.artifact, run.target, run.env)
 			const env: StepEnv = {

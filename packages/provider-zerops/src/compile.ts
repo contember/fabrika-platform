@@ -18,6 +18,7 @@
 // credentials leak to app B. "Never write to project-level env" alone does not prevent that; the isolation
 // setting is the other half.
 
+import type { JsonValue } from '@fabrika/provider-contract'
 import type { ZeropsImportProject, ZeropsImportService } from './schema.generated'
 import type { ZeropsProjectSpec, ZeropsResourceContext, ZeropsServiceSpec, ZeropsSourceTarget } from './types'
 
@@ -35,6 +36,16 @@ export interface ZeropsImportDocument {
 	/** Present only when fabrika is creating/reconciling the project itself. */
 	project?: ZeropsImportProject
 	services: ZeropsImportService[]
+}
+
+/**
+ * The same document once it has been through JSON — a manifest's stored `importDocument`, or one whose
+ * values were substituted. Structurally identical, leaves typed as JSON, so `assertZeropsInvariants`
+ * checks it too rather than trusting whoever produced it.
+ */
+export interface ZeropsJsonImportDocument {
+	readonly project?: { readonly [key: string]: JsonValue }
+	readonly services: ReadonlyArray<{ readonly [key: string]: JsonValue }>
 }
 
 /** What the compiler needs beyond the app's declaration. */
@@ -185,14 +196,14 @@ const compileProject = (spec: ZeropsProjectSpec): ZeropsImportProject => {
  *
  * Deliberately checks the emitted document rather than the input: it is the document that reaches Zerops.
  */
-export const assertZeropsInvariants = (document: ZeropsImportDocument): void => {
+export const assertZeropsInvariants = (document: ZeropsImportDocument | ZeropsJsonImportDocument): void => {
 	const project = document.project
 	if (project !== undefined) {
-		if (project.envVariables !== undefined) {
+		if (project['envVariables'] !== undefined) {
 			throw new Error('zerops: refusing to write PROJECT-level env variables — they reach every service in the project (ADR-0004)')
 		}
-		if (project.envIsolation !== ENV_ISOLATION) {
-			throw new Error(`zerops: project envIsolation must be \`${ENV_ISOLATION}\`, got \`${String(project.envIsolation)}\` (ADR-0004)`)
+		if (project['envIsolation'] !== ENV_ISOLATION) {
+			throw new Error(`zerops: project envIsolation must be \`${ENV_ISOLATION}\`, got \`${String(project['envIsolation'])}\` (ADR-0004)`)
 		}
 	}
 	if (document.services.length === 0) {
@@ -200,23 +211,24 @@ export const assertZeropsInvariants = (document: ZeropsImportDocument): void => 
 	}
 	const seen = new Set<string>()
 	for (const service of document.services) {
-		if (service.envIsolation !== ENV_ISOLATION) {
+		const hostname = String(service['hostname'])
+		if (service['envIsolation'] !== ENV_ISOLATION) {
 			throw new Error(
-				`zerops: service \`${service.hostname}\` envIsolation must be \`${ENV_ISOLATION}\`, got \`${String(service.envIsolation)}\` (ADR-0004)`,
+				`zerops: service \`${hostname}\` envIsolation must be \`${ENV_ISOLATION}\`, got \`${String(service['envIsolation'])}\` (ADR-0004)`,
 			)
 		}
 		// Every service class, managed included. A document missing it anywhere cannot be re-applied at
 		// all: the platform answers `400 serviceStackNameUnavailable` on the first hostname that exists
 		// and rejects the whole import, so one omission breaks every later apply, not just that service.
-		if (service.override !== OVERRIDE) {
+		if (service['override'] !== OVERRIDE) {
 			throw new Error(
-				`zerops: service \`${service.hostname}\` must carry \`override: true\`; without it a re-apply is rejected as a name collision`,
+				`zerops: service \`${hostname}\` must carry \`override: true\`; without it a re-apply is rejected as a name collision`,
 			)
 		}
-		if (service.envSecrets !== undefined || service.dotEnvSecrets !== undefined) {
+		if (service['envSecrets'] !== undefined || service['dotEnvSecrets'] !== undefined) {
 			// Never assert on the VALUE — only that the field is present.
 			throw new Error(
-				`zerops: service \`${service.hostname}\` carries secrets in the import document; secrets are written through the env API (ADR-0004)`,
+				`zerops: service \`${hostname}\` carries secrets in the import document; secrets are written through the env API (ADR-0004)`,
 			)
 		}
 		// `zeropsSetup` is part of the import's pipeline configuration, and the platform rejects the WHOLE
@@ -230,15 +242,15 @@ export const assertZeropsInvariants = (document: ZeropsImportDocument): void => 
 		// Nothing is lost by dropping the setup name here: it is only redundant restatement of Zerops' own
 		// "setup name defaults to the hostname" rule, and a deploy that needs to say otherwise passes
 		// `zeropsSetup` at TRIGGER time, where no repository is required.
-		if (service.zeropsSetup !== undefined && service.buildFromGit === undefined) {
+		if (service['zeropsSetup'] !== undefined && service['buildFromGit'] === undefined) {
 			throw new Error(
-				`zerops: service \`${service.hostname}\` names \`zeropsSetup\` without \`buildFromGit\`; the platform rejects the import (pass the setup when triggering the pipeline instead)`,
+				`zerops: service \`${hostname}\` names \`zeropsSetup\` without \`buildFromGit\`; the platform rejects the import (pass the setup when triggering the pipeline instead)`,
 			)
 		}
-		if (seen.has(service.hostname)) {
-			throw new Error(`zerops: duplicate service hostname \`${service.hostname}\` in the import document`)
+		if (seen.has(hostname)) {
+			throw new Error(`zerops: duplicate service hostname \`${hostname}\` in the import document`)
 		}
-		seen.add(service.hostname)
+		seen.add(hostname)
 	}
 }
 
@@ -264,6 +276,24 @@ const scalar = (value: string): string => {
 		return value
 	}
 	return JSON.stringify(value)
+}
+
+/**
+ * A `|-` block reproduces the string only when the text owns its own lines. An indented or blank first
+ * line moves (or breaks) the block's own indentation, `\r` and a blank line do not survive it, and `-`
+ * eats a trailing newline. Everything else goes out as a JSON double-quoted scalar, which is exact YAML.
+ */
+const blockScalarSafe = (value: string): boolean => {
+	if (!value.includes('\n') || value.includes('\r')) {
+		return false
+	}
+	const lines = value.split('\n')
+	const first = lines[0] ?? ''
+	if (first === '' || first.startsWith(' ') || first.startsWith('\t')) {
+		return false
+	}
+	// A blank line loses its whitespace, and an empty last line is the trailing newline `-` strips.
+	return !lines.some((line, index) => line.trim() === '' && (line !== '' || index === lines.length - 1))
 }
 
 const isArray = (value: unknown): value is unknown[] => Array.isArray(value)
@@ -316,9 +346,8 @@ const emit = (value: unknown, indent: number): string[] => {
 		return lines
 	}
 	if (typeof value === 'string') {
-		if (value.includes('\n')) {
-			const body = value.replace(/\n$/, '').split('\n').map((line) => `${pad}  ${line}`)
-			return [`${pad}|-`, ...body]
+		if (blockScalarSafe(value)) {
+			return [`${pad}|-`, ...value.split('\n').map((line) => `${pad}  ${line}`)]
 		}
 		return [`${pad}${scalar(value)}`]
 	}

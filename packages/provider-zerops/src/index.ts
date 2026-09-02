@@ -49,7 +49,7 @@ export {
 	renderImportYaml,
 	renderYaml,
 } from './compile'
-export type { CompileInput, ZeropsImportDocument } from './compile'
+export type { CompileInput, ZeropsImportDocument, ZeropsJsonImportDocument } from './compile'
 export { createZeropsControlProvider, zeropsStoredTargetCodec } from './control'
 export type { ZeropsBeforeDeploy, ZeropsBeforeDeployInput, ZeropsControlProviderOptions, ZeropsProviderExecutor, ZeropsStoredTarget } from './control'
 export {

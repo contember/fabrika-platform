@@ -28,6 +28,15 @@ bun test
   construction site; and `assertZeropsInvariants` checks every document before serialization. The
   failure prevented is concrete — with `envIsolation: none` (legal, and not reliably the default)
   every service sees every other service's variables, so one app's credentials leak to another.
+- **Deploy-time variables are substituted into the DOCUMENT, never into rendered YAML.**
+  `interpolateManifest` (`src/provider.ts`) walks the import document's string leaves and returns a new
+  document; `renderYaml` runs after it, so a value carrying `"`, a newline or `- hostname:` is emitted as
+  a scalar and stays data — the `|-` block form is used ONLY for text that survives it (`blockScalarSafe`
+  in `src/compile.ts`), everything else is JSON double-quoted. Substitution then re-runs
+  `assertZeropsInvariants`, refuses a value that moved a service's `hostname`/`type`/`envIsolation`/
+  `override` or anything in `project`, refuses a placeholder in a key or one a value carried in, and
+  refuses a value naming a foreign service. Never splice a value into the YAML text: every structural
+  check in this package runs on the object.
 - **`override: true` goes on EVERY service, managed ones included, and it is not an update.** Live-verified:
   without it a re-apply is `400 serviceStackNameUnavailable` and the whole document fails; with it an
   existing service is left exactly as it is, so a changed `profile`/`maxContainers`/`objectStorageSize`
