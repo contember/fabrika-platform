@@ -63,7 +63,10 @@ issuer comparison correct. Each gateway performs its OWN same-origin check first
 `FABRIKA_CONTROL_DOMAIN` (`controlPublicOrigin`) rather than the reconstructed request URL, which is
 plain HTTP behind a TLS-terminating balancer. That check is the confused-deputy defense: a hostile
 page POSTing to the console's own origin with the victim's cookies is refused here, before the
-upstream is asked. Absent configuration fails CLOSED. A
+upstream is asked. Absent configuration fails CLOSED. The `/api/*` surface carries the same check
+(`controlOriginGuard`, `src/origin-guard.ts`, mounted after auth): an unsafe-method request from a
+cookie-borne person is refused unless same-origin, a bearer or a machine principal is exempt, and it is
+not a gate evaluator (ADR-0022). A
 trigger writes a `pending` run to the
 database then enqueues. ONE queue (`DEPLOY_QUEUE`) carries both kinds of work — deploy jobs and
 namespace provisioning jobs — as a discriminated union; a payload with no `kind` is a deploy job.
