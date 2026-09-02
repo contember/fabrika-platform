@@ -64,6 +64,9 @@ and a pin that pins half of what it claims.
 - [82](82-a-duplicate-cross-app-grant-answers-500.md) — IAM answers 500, not 409, when the same cross-app grant is created twice.
 - [84](84-a-catalog-projection-can-wait-out-a-dead-flush-holders-lease.md) — A catalog projection can wait out a lease left behind by a dead flush holder: every change and every maintenance replay coalesces until the 5-minute lease expires.
 - [85](85-the-maintenance-replays-outcome-never-reaches-the-service-log.md) — Control's cron replay prints its outcome to a process whose output the platform does not collect; the sync that repairs a stale lease is invisible.
+- [86](86-a-cloudflare-deploy-holds-the-account-token-beside-the-repositorys-code.md) — The Cloudflare deploy imports the checkout's config beside the account-wide token and no app owns its resource names there; the review mitigated it, the boundary and the ADR reconciling it with ADR-0005 are still owed.
+- [87](87-deleting-a-zerops-app-env-that-holds-claims-answers-500.md) — A Zerops app env's claims restrict its delete, so `deleteApp`/`deleteAppEnv` answer 500 and the proxy republish never runs; releasing the claims needs a decision first.
+- [88](88-a-control-self-deploy-loses-the-runs-iam-reconcile.md) — The IAM reconcile now rides back on the `startRun` RPC control awaits; a control self-deploy replaces the awaiting isolate and the schema is never applied.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.
