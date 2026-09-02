@@ -17,4 +17,10 @@ describe('service references', () => {
 		expect(foreignReferenceHost('${notesdb_user} ${proxy_FABRIKA_IAM_KEY}', allowed)).toBe('proxy')
 		expect(foreignReferenceHost('${aaanotesdb_user}', allowed)).toBe('aaanotesdb')
 	})
+
+	test('reads the `RUNTIME_` build-time bridge as a reference to the host it names', () => {
+		const allowed = allowedReferenceHosts(['notesapi'])
+		expect(foreignReferenceHost('${RUNTIME_proxy_FABRIKA_IAM_KEY}', allowed)).toBe('proxy')
+		expect(foreignReferenceHost('${RUNTIME_notesapi_PORT}', allowed)).toBeNull()
+	})
 })

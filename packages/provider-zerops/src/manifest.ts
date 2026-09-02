@@ -1,6 +1,7 @@
 import type { AppActionDef, AppGates, AppSchema, AppScopeDef, GateRule, RoleDef } from '@fabrika/auth-core'
 import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
+import { allowedReferenceHosts, foreignReferenceHost } from './service-references'
 import type { ZeropsAppConfig, ZeropsNamespaceResourceRequirement, ZeropsProxySpec, ZeropsSharedPostgresBinding } from './types'
 
 export const FABRIKA_MANIFEST_VERSION = 3
@@ -225,6 +226,36 @@ function parseProxy(value: unknown): ZeropsProxySpec | null {
 	return upstream === undefined || gates === null ? null : { upstream, gates }
 }
 
+/** The first foreign host referenced by any string leaf OR key of `value`, however deeply nested. */
+const foreignReferenceInValue = (value: unknown, allowed: ReadonlySet<string>): string | null => {
+	if (typeof value === 'string') {
+		return foreignReferenceHost(value, allowed)
+	}
+	if (Array.isArray(value)) {
+		for (const entry of value) {
+			const host = foreignReferenceInValue(entry, allowed)
+			if (host !== null) return host
+		}
+		return null
+	}
+	if (typeof value === 'object' && value !== null) {
+		for (const key of Object.keys(value)) {
+			const host = foreignReferenceHost(key, allowed) ?? foreignReferenceInValue(prop(value, key), allowed)
+			if (host !== null) return host
+		}
+	}
+	return null
+}
+
+/** Read the descriptor as the platform does. Text scanning misses what YAML folds, escapes or hides in a block scalar. */
+const parseDescriptorDocument = (contents: string): unknown => {
+	try {
+		return Bun.YAML.parse(contents)
+	} catch {
+		throw new Error('invalid fabrika manifest: zerops.yaml is not parseable YAML')
+	}
+}
+
 const parseImportDocument = (value: unknown): FabrikaImportDocument => {
 	if (value === undefined) {
 		throw new Error('invalid fabrika manifest Zerops import document')
@@ -238,7 +269,7 @@ const parseImportDocument = (value: unknown): FabrikaImportDocument => {
 	if (!Array.isArray(rawServices) || rawServices.length === 0) {
 		throw new Error('invalid fabrika manifest Zerops import services')
 	}
-	const services: Array<{ readonly [key: string]: JsonValue }> = []
+	const parsed: Array<[string, { readonly [key: string]: JsonValue }]> = []
 	const hostnames = new Set<string>()
 	for (const [index, rawService] of rawServices.entries()) {
 		const service = jsonObject(rawService, `Zerops import service ${index}`)
@@ -261,8 +292,19 @@ const parseImportDocument = (value: unknown): FabrikaImportDocument => {
 			throw new Error('invalid fabrika manifest: Zerops import contains a forbidden environment field')
 		}
 		hostnames.add(hostname)
-		services.push(service)
+		parsed.push([hostname, service])
 	}
+	// A `${host_KEY}` reference crosses `envIsolation: service` by design, so the declared hostnames are the
+	// boundary. They are never rewritten at deploy: a shared namespace's app prefix is authored INTO the
+	// hostname (`service-names.ts`), which `registrationResourceClaims` then enforces.
+	const allowed = allowedReferenceHosts([...hostnames])
+	for (const [hostname, service] of parsed) {
+		const foreign = foreignReferenceInValue(service, allowed)
+		if (foreign !== null) {
+			throw new Error(`invalid fabrika manifest: Zerops service \`${hostname}\` references service \`${foreign}\`, which this app does not own`)
+		}
+	}
+	const services = parsed.map(([, service]) => service)
 	const rawProject = raw['project']
 	let project: { readonly [key: string]: JsonValue } | undefined
 	if (rawProject !== undefined) {
@@ -385,6 +427,10 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	})
 	if (!serviceHostnames.includes(deployService)) {
 		throw new Error('invalid fabrika manifest Zerops deploy service')
+	}
+	const foreignInDescriptor = foreignReferenceInValue(parseDescriptorDocument(sourceDescriptor.contents), allowedReferenceHosts(serviceHostnames))
+	if (foreignInDescriptor !== null) {
+		throw new Error(`invalid fabrika manifest: zerops.yaml references service \`${foreignInDescriptor}\`, which this app does not own`)
 	}
 	const zeropsSetup = optionalString(rawTarget, 'zeropsSetup')
 	if (prop(rawTarget, 'zeropsSetup') !== undefined && zeropsSetup === null) {

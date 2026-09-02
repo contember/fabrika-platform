@@ -3,6 +3,8 @@ import {
 	compileFabrikaManifest,
 	createZeropsArtifactSourceDescriptor,
 	FABRIKA_MANIFEST_VERSION,
+	type FabrikaImportDocument,
+	type FabrikaManifest,
 	manifestServiceHostnames,
 	parseFabrikaManifest,
 	renderFabrikaImportYaml,
@@ -135,8 +137,101 @@ describe('Zerops static artifact', () => {
 	})
 
 	test('interpolates only declared variables', () => {
-		expect(interpolateManifest('image: ${IMAGE_TAG}', ['IMAGE_TAG'], { IMAGE_TAG: 'v2' })).toBe('image: v2')
-		expect(() => interpolateManifest('image: ${IMAGE_TAG}', ['IMAGE_TAG'], {})).toThrow('no deploy-time value')
-		expect(() => interpolateManifest('image: ${OTHER}', ['IMAGE_TAG'], { OTHER: 'x' })).toThrow('undeclared')
+		const document = (buildFromGit: string): FabrikaImportDocument => ({
+			services: [{ hostname: 'notes', type: 'alpine/bun@1.3', envIsolation: 'service', override: true, buildFromGit }],
+		})
+		expect(interpolateManifest(document('${IMAGE_TAG}'), ['IMAGE_TAG'], { IMAGE_TAG: 'v2' }, ['notes'])).toEqual(document('v2'))
+		expect(() => interpolateManifest(document('${IMAGE_TAG}'), ['IMAGE_TAG'], {}, ['notes'])).toThrow('no deploy-time value')
+		expect(() => interpolateManifest(document('${OTHER}'), ['IMAGE_TAG'], { OTHER: 'x' }, ['notes'])).toThrow('undeclared')
+	})
+})
+
+const notesConfig: ZeropsAppConfig = {
+	id: 'notes',
+	pipeline: { secrets: [], vars: [] },
+	target: {
+		platform: 'zerops',
+		services: () => [{ hostname: 'notesdb', type: 'postgresql:single@18' }, { hostname: 'notesapi', type: 'alpine/bun@1.3' }],
+		deployService: 'notesapi',
+	},
+}
+
+const sharedPostgresConfig: ZeropsAppConfig = {
+	...notesConfig,
+	target: { ...notesConfig.target, services: () => [{ hostname: 'notesapi', type: 'alpine/bun@1.3' }] },
+}
+
+const OWN_SETUP = 'zerops:\n  - setup: notesapi\n'
+
+const compileNotes = async (contents: string, config: ZeropsAppConfig = notesConfig): Promise<FabrikaManifest> =>
+	compileFabrikaManifest(config, 'prod', await createZeropsArtifactSourceDescriptor(contents))
+
+const withZeropsYaml = (manifest: FabrikaManifest, zeropsYaml: unknown): unknown => ({
+	...manifest,
+	target: {
+		...manifest.target,
+		importDocument: {
+			services: manifest.target.importDocument.services.map((service) => service['hostname'] === 'notesapi' ? { ...service, zeropsYaml } : service),
+		},
+	},
+})
+
+const exampleDescriptor = async (file: string): Promise<string> =>
+	await Bun.file(new URL(`../../../../examples/zerops-app/${file}`, import.meta.url)).text()
+
+describe('cross-service variable references', () => {
+	test('refuses an embedded zeropsYaml that reads a service the app does not own', async () => {
+		const manifest = await compileNotes(OWN_SETUP)
+		const zeropsYaml = { zerops: [{ setup: 'notesapi', run: { envVariables: { STOLEN: '${proxy_FABRIKA_IAM_KEY}' } } }] }
+		expect(() => parseFabrikaManifest(withZeropsYaml(manifest, zeropsYaml))).toThrow('Zerops service `notesapi` references service `proxy`')
+	})
+
+	test('finds a foreign reference at any depth, in an object or an array element', async () => {
+		const manifest = await compileNotes(OWN_SETUP)
+		const deep = { zerops: [{ setup: 'notesapi', run: { envVariables: { NESTED: { a: { b: '${proxy_FABRIKA_IAM_KEY}' } } } } }] }
+		const inArray = { zerops: [{ setup: 'notesapi', build: { buildCommands: ['bun install', 'echo ${proxy_FABRIKA_IAM_KEY}'] } }] }
+		expect(() => parseFabrikaManifest(withZeropsYaml(manifest, deep))).toThrow('references service `proxy`')
+		expect(() => parseFabrikaManifest(withZeropsYaml(manifest, inArray))).toThrow('references service `proxy`')
+	})
+
+	test('allows a reference to an own service and to the namespace-owned postgres', async () => {
+		const manifest = await compileNotes(`${OWN_SETUP}    run:\n      envVariables:\n        URL: \${notesdb_connectionTlsString}/\${notesdb_dbName}\n`)
+		const zeropsYaml = { zerops: [{ setup: 'notesapi', run: { envVariables: { URL: '${postgres_connectionTlsString}/${postgres_dbName}' } } }] }
+		expect(parseFabrikaManifest(withZeropsYaml(manifest, zeropsYaml))).toBeDefined()
+	})
+
+	test('refuses a source descriptor that reads a service the app does not own', async () => {
+		const descriptor = `${OWN_SETUP}    run:\n      envVariables:\n        STOLEN: \${proxy_FABRIKA_IAM_KEY}\n`
+		await expect(compileNotes(descriptor)).rejects.toThrow('zerops.yaml references service `proxy`')
+		const manifest = await compileNotes(OWN_SETUP)
+		const sourceDescriptor = await createZeropsArtifactSourceDescriptor(descriptor)
+		expect(() => parseFabrikaManifest({ ...manifest, target: { ...manifest.target, sourceDescriptor } })).toThrow(
+			'zerops.yaml references service `proxy`',
+		)
+	})
+
+	// Text scanning let all three through; each parses to the byte-identical `${proxy_FABRIKA_IAM_KEY}`.
+	test('refuses a reference the YAML text does not spell — block scalar, folded break, escaped `$`', async () => {
+		const value = (written: string): string => `${OWN_SETUP}    run:\n      envVariables:\n        STOLEN: ${written}\n`
+		const blockScalar = `${OWN_SETUP}    run:\n      envVariables:\n        STOLEN: |\n          # \${proxy_FABRIKA_IAM_KEY}\n`
+		const folded = value('"${proxy_FABRIKA_\\\n          IAM_KEY}"')
+		const escaped = value('"\\x24{proxy_FABRIKA_IAM_KEY}"')
+		for (const descriptor of [blockScalar, folded, escaped]) {
+			expect(JSON.stringify(Bun.YAML.parse(descriptor))).toContain('${proxy_FABRIKA_IAM_KEY}')
+			await expect(compileNotes(descriptor)).rejects.toThrow('zerops.yaml references service `proxy`')
+		}
+	})
+
+	test('refuses a descriptor it cannot parse rather than scanning it as text', async () => {
+		await expect(compileNotes('zerops:\n  - setup: notesapi\n   bad: [1,\n')).rejects.toThrow('zerops.yaml is not parseable YAML')
+	})
+
+	test('accepts both committed example descriptors unchanged', async () => {
+		const own = await compileNotes(await exampleDescriptor('zerops.yaml'))
+		const shared = await compileNotes(await exampleDescriptor('zerops.shared-postgres.yaml'), sharedPostgresConfig)
+		expect(own.target.sourceDescriptor.contents).toContain('${notesdb_connectionTlsString}')
+		expect(shared.target.sourceDescriptor.contents).toContain('${postgres_connectionTlsString}')
+		expect(manifestServiceHostnames(own)).toEqual(['notesdb', 'notesapi'])
+		expect(manifestServiceHostnames(shared)).toEqual(['notesapi'])
 	})
 })

@@ -62,6 +62,11 @@ bun test
   put it in an error message, never return it from a method.
 - **Service hostnames are constrained** (`^[a-z0-9]{1,25}$`). Shared-namespace names are derived
   deterministically from the app id (`src/service-names.ts`) — do not hand-build one.
+- **A `${host_KEY}` reference may name only the app's OWN declared hostnames plus the namespace's shared
+  services** (`src/service-references.ts`) — Zerops resolves one across services whatever `envIsolation`
+  says. `parseFabrikaManifest` refuses a foreign host anywhere in a declared service or in the PARSED
+  `sourceDescriptor`; never scan that as text, because a folded break, a `\x24` escape or a block scalar
+  hides a reference the text does not spell. Hostnames are never rewritten at deploy.
 - **Persisted target envelopes hold coordinates only.** Credentials are composed for a live run.
 - **The control provider requires an injected `execute` collaborator** (`@fabrika/engine` supplies
   it). Never add a provider-local fallback lifecycle.

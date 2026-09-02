@@ -1,5 +1,8 @@
-/** `${<host>_<KEY>}` — Zerops resolves it across services regardless of `envIsolation`, so the host is the boundary. */
-const SERVICE_REFERENCE = /\$\{([a-z0-9]{1,25})_[A-Za-z0-9_]+\}/g
+/**
+ * `${<host>_<KEY>}` — Zerops resolves it across services regardless of `envIsolation`, so the host is the boundary.
+ * `${RUNTIME_<host>_<KEY>}`, the build-time bridge, counts as a reference to that host until measured otherwise.
+ */
+const SERVICE_REFERENCE = /\$\{(?:RUNTIME_)?([a-z0-9]{1,25})_[A-Za-z0-9_]+\}/g
 
 /** Namespace services every app in it may reference; the proxy is deliberately not one of them. */
 const SHARED_NAMESPACE_HOSTNAMES: readonly string[] = ['postgres']
