@@ -161,10 +161,12 @@ export function cloudflareControlProvider(bindings: WorkerBindings, env: Env): C
 		accountId: bindings.CLOUDFLARE_ACCOUNT_ID ?? '',
 		apiToken: bindings.CLOUDFLARE_API_TOKEN ?? '',
 		...cloudflareIamControlOptions(env),
+		runnerKey: env.FABRIKA_RUNNER_KEY ?? '',
 		resolveSource: (source, signal) => resolveSource(bindings, source, signal),
 		startRun: (job) => {
 			required(bindings.CLOUDFLARE_ACCOUNT_ID, 'CLOUDFLARE_ACCOUNT_ID')
 			required(bindings.CLOUDFLARE_API_TOKEN, 'CLOUDFLARE_API_TOKEN')
+			required(env.FABRIKA_RUNNER_KEY, 'FABRIKA_RUNNER_KEY')
 			return startRun(bindings, job)
 		},
 		cancelRun: async (runId) => {

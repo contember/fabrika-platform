@@ -54,6 +54,7 @@ describe('Cloudflare control IAM options', () => {
 		const provider = createCloudflareControlProvider({
 			accountId: 'account-1',
 			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
 			...cloudflareIamControlOptions(env),
 			resolveSource: async (source) => ({ repoUrl: source.repoUrl, ref: source.ref }),
 			startRun: async (job) => {

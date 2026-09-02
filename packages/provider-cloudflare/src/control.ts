@@ -9,6 +9,7 @@ import type {
 	ProviderSource,
 	ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
+import type { RunnerIamReconcile } from '@fabrika/runner-contract'
 import { cloudflareArtifactCodec } from './codec'
 
 /** Persisted Cloudflare target data. Installation credentials never enter this envelope. */
@@ -57,6 +58,8 @@ export interface CloudflareRunnerJob {
 	/** Every origin IAM may hand this app a session at, projected by the control plane (ADR-0021). */
 	readonly returnOrigins?: readonly string[]
 	readonly dryRun?: boolean
+	/** Shared secret the runner verifies before it touches D1 or the container; the binding alone proves nothing. */
+	readonly runnerKey: string
 	readonly credentials: {
 		readonly CLOUDFLARE_ACCOUNT_ID: string
 		readonly CLOUDFLARE_API_TOKEN: string
@@ -103,6 +106,7 @@ export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunner
 		|| !('repoUrl' in value && typeof value.repoUrl === 'string')
 		|| !('ref' in value && typeof value.ref === 'string')
 		|| !('env' in value && typeof value.env === 'string')
+		|| !('runnerKey' in value && typeof value.runnerKey === 'string' && value.runnerKey !== '')
 		|| !('credentials' in value && typeof value.credentials === 'object' && value.credentials !== null)
 	) {
 		return false
@@ -143,13 +147,17 @@ export interface ResolvedCloudflareSource {
 	readonly ref: string
 }
 
+/** A run's terminal outcome plus the IAM reconcile the executor compiled, if the plan reached that step. */
+export type CloudflareRunOutcome = ProviderTerminalOutcome & { readonly iamReconcile?: RunnerIamReconcile }
+
 export interface CloudflareControlOptions {
 	readonly accountId: string
 	readonly apiToken: string
 	readonly propustkaUrl?: string
 	readonly propustkaProvisioningKey?: string
+	readonly runnerKey: string
 	resolveSource(source: ProviderSource, signal: AbortSignal): Promise<ResolvedCloudflareSource>
-	startRun(job: CloudflareRunnerJob): Promise<ProviderTerminalOutcome>
+	startRun(job: CloudflareRunnerJob): Promise<CloudflareRunOutcome>
 	cancelRun(runId: string): Promise<void>
 }
 
@@ -198,6 +206,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 		repoUrl: source.repoUrl,
 		ref: source.ref,
 		env: input.environment.env,
+		runnerKey: options.runnerKey,
 		credentials: {
 			CLOUDFLARE_ACCOUNT_ID: options.accountId,
 			CLOUDFLARE_API_TOKEN: options.apiToken,

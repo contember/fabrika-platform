@@ -90,6 +90,8 @@ export interface Env {
 	 * provider composition roots may also use it for schema reconciliation.
 	 */
 	FABRIKA_IAM_PROVISIONING_KEY?: string
+	/** Shared secret that authenticates control to the out-of-band Cloudflare runner; unset off Cloudflare. */
+	FABRIKA_RUNNER_KEY?: string
 	/** Private Control → Operations catalog bearer. Never exposed to the browser or logged. */
 	OPERATIONS_SYNC_KEY?: string
 	/** Public Operations origin used only for scoped release-artifact upload URLs. */

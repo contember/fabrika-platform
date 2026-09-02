@@ -27,6 +27,7 @@ const baseJob = (overrides: Partial<CloudflareRunnerJob> = {}): CloudflareRunner
 	repoUrl: 'https://github.com/acme/app.git',
 	ref: 'main',
 	env: 'stage',
+	runnerKey: 'test-runner-key',
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef' },
 	...overrides,
 })
@@ -92,6 +93,7 @@ describe('Runner pipeline', () => {
 			domain: 'stage.acme.com',
 			returnOrigins: ['https://app.acme.com', 'https://stage.acme.com'],
 			stateNamespace: 'legacy-state',
+			runnerKey: 'test-runner-key',
 			credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef', FABRIKA_IAM_ISSUER: 'https://iam.acme.com' },
 			secrets: { SAMPLE_API_KEY: 'super-secret-value' },
 			vars: { PUBLIC_ORIGIN: 'public-value' },

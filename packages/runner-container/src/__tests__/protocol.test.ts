@@ -6,6 +6,7 @@ const validJob: CloudflareRunnerJob = {
 	repoUrl: 'https://github.com/acme/app.git',
 	ref: 'main',
 	env: 'prod',
+	runnerKey: 'test-runner-key',
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'tok' },
 }
 

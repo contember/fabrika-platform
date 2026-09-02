@@ -63,6 +63,7 @@ describe('Cloudflare control provider', () => {
 		const provider = createCloudflareControlProvider({
 			accountId: 'account-1',
 			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
 			resolveSource: async (_source, signal) => {
 				observed.push(signal)
 				if (signal.aborted) throw new DOMException('private caller reason', 'AbortError')
@@ -93,6 +94,7 @@ describe('Cloudflare control provider', () => {
 		const provider = createCloudflareControlProvider({
 			accountId: 'account-1',
 			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
 			propustkaUrl: 'https://iam.example.com',
 			resolveSource: async (source) => ({ repoUrl: `${source.repoUrl}?token=short-lived`, ref: 'abc123' }),
 			startRun: async (job) => {
@@ -126,6 +128,7 @@ describe('Cloudflare control provider', () => {
 			stateNamespace: 'api-state',
 			domain: 'api.example.com',
 			dryRun: true,
+			runnerKey: 'test-runner-key',
 			credentials: {
 				CLOUDFLARE_ACCOUNT_ID: 'account-1',
 				CLOUDFLARE_API_TOKEN: 'token-1',
@@ -145,6 +148,7 @@ describe('Cloudflare control provider', () => {
 		const provider = createCloudflareControlProvider({
 			accountId: 'account-1',
 			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
 			resolveSource: async (source) => ({ repoUrl: source.repoUrl, ref: source.ref }),
 			startRun: async () => ({ state: 'failed' }),
 			cancelRun: async () => {},
@@ -167,6 +171,7 @@ describe('Cloudflare control provider', () => {
 			repoUrl: 'https://github.com/example/api.git',
 			ref: 'main',
 			env: 'prod',
+			runnerKey: 'test-runner-key',
 			credentials: {
 				CLOUDFLARE_ACCOUNT_ID: 'account-1',
 				CLOUDFLARE_API_TOKEN: 'token-1',
@@ -178,6 +183,7 @@ describe('Cloudflare control provider', () => {
 		expect(isCloudflareRunnerJob({ ...valid, credentials: { ...valid.credentials, FABRIKA_IAM_ISSUER: 42 } })).toBe(false)
 		expect(isCloudflareRunnerJob({
 			...valid,
+			runnerKey: 'test-runner-key',
 			credentials: { ...valid.credentials, FABRIKA_IAM_ISSUER: 'https://iam.example.com' },
 		})).toBe(true)
 		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: ['https://api.example.com'] })).toBe(true)
@@ -191,6 +197,7 @@ describe('Cloudflare control provider', () => {
 		const provider = createCloudflareControlProvider({
 			accountId: 'account-1',
 			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
 			resolveSource: async (source) => ({ repoUrl: source.repoUrl, ref: source.ref }),
 			startRun: async (job) => {
 				jobs.push(job)
