@@ -48,8 +48,10 @@ describe('platform scaffold', () => {
 			expect(files['.github/workflows/platform.yml']).toContain('repository: contember/fabrika-platform')
 			expect(files['.github/workflows/platform.yml']).toContain('working-directory: fabrika-platform/packages/iam')
 			expect(files['.github/workflows/platform.yml']).toContain('working-directory: fabrika-platform/packages/operations')
+			// Every stage names a platform resource, so none of them may go through `app deploy`.
+			expect(files['.github/workflows/platform.yml']).not.toContain('fabrika app deploy')
 			expect(files['.github/workflows/platform.yml']).toContain(
-				'fabrika app deploy --provider=cloudflare --env=prod --config=fabrika.config.ts',
+				'fabrika platform deploy --provider=cloudflare --env=prod --component-config=fabrika.config.ts',
 			)
 			expect(files['.github/workflows/platform.yml']).toContain('fabrika platform deploy --provider=cloudflare')
 			expect(files['.github/workflows/platform.yml']).toContain('--runner-config=packages/runner-cloudflare/fabrika-runner.config.ts')
@@ -63,6 +65,7 @@ describe('platform scaffold', () => {
 			expect(workflow.indexOf('name: Deploy IAM')).toBeLessThan(workflow.indexOf('name: Deploy Operations'))
 			expect(workflow.indexOf('name: Deploy Operations')).toBeLessThan(workflow.indexOf('name: Deploy fabrika runner + control plane'))
 			const iamStep = workflow.slice(workflow.indexOf('name: Deploy IAM'), workflow.indexOf('name: Deploy Operations'))
+			expect(iamStep).toContain('fabrika platform deploy --provider=cloudflare --env=prod --component-config=fabrika.config.ts')
 			expect(iamStep).toContain('FABRIKA_IAM_SIGNING_KEYS: ${{ secrets.FABRIKA_IAM_SIGNING_KEYS }}')
 			expect(iamStep).toContain('FABRIKA_IAM_PROVISIONING_KEY: ${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}')
 			expect(iamStep).toContain('FABRIKA_IAM_OIDC_ENABLED: ${{ vars.FABRIKA_IAM_OIDC_ENABLED }}')
@@ -74,6 +77,7 @@ describe('platform scaffold', () => {
 				workflow.indexOf('name: Deploy fabrika runner + control plane'),
 			)
 			expect(operationsStep).toContain('FABRIKA_IAM_ISSUER: ${{ vars.FABRIKA_IAM_ISSUER }}')
+			expect(operationsStep).toContain('fabrika platform deploy --provider=cloudflare --env=prod --component-config=fabrika.config.ts')
 			const platformStep = workflow.slice(workflow.indexOf('name: Deploy fabrika runner + control plane'), workflow.indexOf('name: Summary'))
 			// One value, one step — the step deploys both Workers, so both get the same runner key.
 			expect(platformStep).toContain('FABRIKA_RUNNER_KEY: ${{ secrets.FABRIKA_RUNNER_KEY }}')

@@ -202,8 +202,8 @@ checkpointed lifecycle.
 
 ```text
 fabrika platform init --provider=cloudflare <account>
-fabrika platform plan --provider=cloudflare --runner-config=<path> --worker-config=<path>
-fabrika platform deploy --provider=cloudflare --runner-config=<path> --worker-config=<path>
+fabrika platform plan --provider=cloudflare (--runner-config=<path> --worker-config=<path> | --component-config=<path>)
+fabrika platform deploy --provider=cloudflare (--runner-config=<path> --worker-config=<path> | --component-config=<path>)
 fabrika platform init --provider=zerops <installation> [--repo=<owner>/<name>]
 fabrika platform plan --provider=zerops
 fabrika platform install --provider=zerops --client-id=<id> --env=<name> [--project-id=<id> | --create-project [--project-name=<name>]]

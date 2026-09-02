@@ -28,9 +28,10 @@ Whatever the plan, add yourself as a **required reviewer** on the `{{ACCOUNT}}` 
 set it: it turns every deploy into an approval click, which is the operator's call and not the CLI's.
 
 `contember/fabrika-platform` is public and pinned in [`fabrika.ref`](./fabrika.ref). The pipeline checks it
-out once, builds and deploys IAM from `packages/iam-ui` and `packages/iam`, then runs
-`fabrika platform deploy --provider=cloudflare` for `packages/runner-cloudflare` and
-`packages/control`. The workflow builds the runner image from that same checkout into this account's
+out once, then runs `fabrika platform deploy --provider=cloudflare` three times: `--component-config` for
+IAM, `--component-config` for Operations, and the `--runner-config`/`--worker-config` pair for
+`packages/runner-cloudflare` and `packages/control`. Every stage is a PLATFORM deploy because each names a
+platform resource; `fabrika app deploy` is for applications and is refused one. The workflow builds the runner image from that same checkout into this account's
 registry. It never depends on an image published by upstream CI or another account. Re-running it is
 a safe redeploy.
 

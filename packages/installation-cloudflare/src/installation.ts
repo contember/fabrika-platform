@@ -9,19 +9,35 @@ Commands:
   fabrika platform init --provider=cloudflare <account>
   fabrika platform plan --provider=cloudflare --runner-config=<path> --worker-config=<path> [--env=<env>]
   fabrika platform deploy --provider=cloudflare --runner-config=<path> --worker-config=<path> [--env=<env>]
+  fabrika platform plan --provider=cloudflare --component-config=<path> [--env=<env>]
+  fabrika platform deploy --provider=cloudflare --component-config=<path> [--env=<env>]
+
+The pair form deploys the executor then the control plane. The single-component form deploys exactly
+one platform config (IAM, Operations) — the stages a pipeline runs before that pair exists. Both may
+name a platform resource; \`fabrika app deploy\` may not.
 `
 
 const deployPlatform = async (argv: readonly string[], forceDryRun: boolean): Promise<void> => {
 	const args = parseCloudflareArgs(['platform', 'deploy', ...argv, ...(forceDryRun ? ['--dry-run'] : [])])
 	const env = args.env ?? 'prod'
+	const stateNamespace = process.env['CLOUDFLARE_STATE_NAMESPACE']
 	const rootCwd = process.cwd()
-	for (const component of platformComponents(args.runnerConfig, args.workerConfig)) {
+	for (const component of platformComponents(args)) {
 		const absolute = resolve(rootCwd, component.configPath)
 		const cwd = resolve(absolute, '..')
 		process.chdir(cwd)
 		try {
 			console.info(`\n▸ ${component.label} → ${env}${args.dryRun ? ' (dry-run)' : ''}`)
-			const result = await deployCloudflareConfig({ env, configPath: absolute, cwd, dryRun: args.dryRun })
+			// This IS the platform deploying itself; an application deploy through the runner never gets this.
+			const result = await deployCloudflareConfig({
+				env,
+				configPath: absolute,
+				cwd,
+				dryRun: args.dryRun,
+				platformResources: 'allow',
+				// Honoured because the scaffolded workflow states it on the IAM stage; absent elsewhere.
+				...(stateNamespace === undefined ? {} : { stateNamespace }),
+			})
 			console.info(`${result.appId} → ${result.env}: ${result.status}`)
 			if (result.status === 'failed') {
 				throw new Error(`${component.label} deployment failed`)

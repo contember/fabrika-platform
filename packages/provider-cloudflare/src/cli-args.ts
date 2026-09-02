@@ -5,6 +5,8 @@ export interface ParsedCloudflareArgs {
 	readonly config: string
 	readonly runnerConfig: string | undefined
 	readonly workerConfig: string | undefined
+	/** The single-component form of `platform deploy|plan`: deploy exactly this one platform config. */
+	readonly componentConfig: string | undefined
 	readonly managedVarNames: readonly string[]
 	readonly dryRun: boolean
 	readonly help: boolean
@@ -17,6 +19,7 @@ export const parseCloudflareArgs = (argv: readonly string[]): ParsedCloudflareAr
 	let config = './fabrika.config.ts'
 	let runnerConfig: string | undefined
 	let workerConfig: string | undefined
+	let componentConfig: string | undefined
 	const managedVarNames: string[] = []
 	let dryRun = false
 	let help = false
@@ -34,6 +37,8 @@ export const parseCloudflareArgs = (argv: readonly string[]): ParsedCloudflareAr
 			runnerConfig = arg.slice('--runner-config='.length)
 		} else if (arg.startsWith('--worker-config=')) {
 			workerConfig = arg.slice('--worker-config='.length)
+		} else if (arg.startsWith('--component-config=')) {
+			componentConfig = arg.slice('--component-config='.length)
 		} else if (arg.startsWith('--managed-var=')) {
 			const name = arg.slice('--managed-var='.length)
 			if (!/^[A-Z][A-Z0-9_]*$/.test(name)) {
@@ -49,7 +54,7 @@ export const parseCloudflareArgs = (argv: readonly string[]): ParsedCloudflareAr
 		}
 	}
 
-	return { command, subcommand, env, config, runnerConfig, workerConfig, managedVarNames, dryRun, help }
+	return { command, subcommand, env, config, runnerConfig, workerConfig, componentConfig, managedVarNames, dryRun, help }
 }
 
 export interface PlatformComponent {
@@ -57,10 +62,23 @@ export interface PlatformComponent {
 	readonly configPath: string
 }
 
-/** The executor must exist before the control plane binds to it. */
-export const platformComponents = (runnerConfig: string | undefined, workerConfig: string | undefined): readonly PlatformComponent[] => {
+/** What `platformComponents` needs off a parsed command line. */
+export type PlatformComponentSelection = Pick<ParsedCloudflareArgs, 'runnerConfig' | 'workerConfig' | 'componentConfig'>
+
+/**
+ * One config (`--component-config`) or the executor-then-control pair, never mixed. Both run with
+ * `platformResources: 'allow'`, which is why the single form lives here and not on `app deploy`.
+ */
+export const platformComponents = (selection: PlatformComponentSelection): readonly PlatformComponent[] => {
+	const { runnerConfig, workerConfig, componentConfig } = selection
+	if (componentConfig !== undefined && componentConfig !== '') {
+		if (runnerConfig !== undefined || workerConfig !== undefined) {
+			throw new Error('`--component-config` deploys one component and cannot be combined with --runner-config/--worker-config')
+		}
+		return [{ label: componentConfig, configPath: componentConfig }]
+	}
 	if (runnerConfig === undefined || runnerConfig === '') {
-		throw new Error('Missing --runner-config=<path> for `platform deploy`')
+		throw new Error('Missing --runner-config=<path> (or --component-config=<path>) for `platform deploy`')
 	}
 	if (workerConfig === undefined || workerConfig === '') {
 		throw new Error('Missing --worker-config=<path> for `platform deploy`')

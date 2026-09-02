@@ -3,8 +3,10 @@
 The Cloudflare implementation of `@fabrika/installation-contract`.
 `fabrika platform init --provider=cloudflare <account>` stands up a Cloudflare
 account's Fabrika platform base. Init scaffolds a workflow that deploys IAM,
-Operations, then the runner/control pair. The `plan` and `deploy` commands
-themselves compose only that final runner/control pair. Assumes the root
+Operations, then the runner/control pair — every stage through `platform deploy`,
+because each names a platform resource. `plan` and `deploy` take either the
+runner/control pair (`--runner-config` + `--worker-config`) or one component
+(`--component-config`); the two forms are mutually exclusive. Assumes the root
 CLAUDE.md.
 
 The public executable and command routing live in `@fabrika/cli`. The deploy

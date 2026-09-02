@@ -126,7 +126,9 @@ jobs:
           OIDC_CLIENT_SECRET: ${{ secrets.FABRIKA_IAM_OIDC_CLIENT_SECRET }}
           FABRIKA_EMAIL_RESEND_API_KEY: ${{ secrets.FABRIKA_EMAIL_RESEND_API_KEY }}
           FABRIKA_IAM_PROVISIONING_KEY: ${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}
-        run: fabrika app deploy --provider=cloudflare --env=prod --config=fabrika.config.ts
+        # `platform deploy`, not `app deploy`: IAM's own Worker is a PLATFORM resource name, and only the
+        # platform verb may name one. The single-component form deploys just this config.
+        run: fabrika platform deploy --provider=cloudflare --env=prod --component-config=fabrika.config.ts
 
       # ── Stage 2 — Operations ────────────────────────────────────────────────────────────────────────
       # Operations must exist before control: control carries a private service binding to it.
@@ -139,7 +141,7 @@ jobs:
           FABRIKA_CONTROL_DOMAIN: ${{ vars.OPERATIONS_HOSTNAME }}
           FABRIKA_IAM_ISSUER: ${{ vars.FABRIKA_IAM_ISSUER }}
           OPERATIONS_SYNC_KEY: ${{ secrets.OPERATIONS_SYNC_KEY }}
-        run: fabrika app deploy --provider=cloudflare --env=prod --config=fabrika.config.ts
+        run: fabrika platform deploy --provider=cloudflare --env=prod --component-config=fabrika.config.ts
 
       # ── Stage 3 — fabrika platform (executor + control plane) ────────────────────────────────────────
       - name: Deploy fabrika runner + control plane
