@@ -39,6 +39,11 @@ export interface Config {
 	 * Empty = no browser may write; a machine caller presenting only a bearer is unaffected.
 	 */
 	readonly adminOrigins: readonly string[]
+	/**
+	 * App ids whose proxy-injected access token may administer `/admin/*` (`ADMIN_AUDIENCES`).
+	 * EMPTY means no JWT may administer at all, which is the fail-closed end of the same registry.
+	 */
+	readonly adminAudiences: ReadonlySet<string>
 	readonly environment: string
 	/** Create a real local admin session without contacting an external OIDC provider. */
 	readonly localDevLogin: boolean
@@ -78,6 +83,39 @@ function parseAdminOrigins(raw: string): string[] {
 		}
 	}
 	return origins
+}
+
+/**
+ * The console gateway's app id — the only first-party holder of a JWT that administers IAM, and so
+ * the audience an installation gets when it names none.
+ */
+export const DEFAULT_ADMIN_AUDIENCES: ReadonlySet<string> = new Set(['vozka'])
+
+/** An app id as every fabrika config writes one — the shape an `aud` claim can actually carry. */
+const APP_ID = /^[a-z0-9][a-z0-9-]*$/
+
+/**
+ * Parse `ADMIN_AUDIENCES` (comma-separated app ids). Unset = `DEFAULT_ADMIN_AUDIENCES`; explicitly
+ * empty = no JWT may administer. A malformed entry is REFUSED rather than skipped, like
+ * `ADMIN_ORIGINS`: an entry no `aud` can ever equal — a JSON array copied from `ADMIN_ORIGINS`, say —
+ * would otherwise read as a registry while admitting nobody.
+ */
+function parseAdminAudiences(raw: string | undefined): ReadonlySet<string> {
+	if (raw === undefined) {
+		return DEFAULT_ADMIN_AUDIENCES
+	}
+	if (raw.trim() === '') {
+		return new Set()
+	}
+	const audiences = new Set<string>()
+	for (const entry of raw.split(',')) {
+		const app = entry.trim()
+		if (!APP_ID.test(app)) {
+			throw new Error(`ADMIN_AUDIENCES holds a value that is not an app id: ${entry}`)
+		}
+		audiences.add(app)
+	}
+	return audiences
 }
 
 function parseBootstrapAdmins(raw: string): Set<string> {
@@ -120,6 +158,7 @@ export function buildServices(env: Env): Services {
 			},
 			bootstrapAdmins: parseBootstrapAdmins(env.IAM_BOOTSTRAP_ADMINS),
 			adminOrigins: parseAdminOrigins(env.ADMIN_ORIGINS),
+			adminAudiences: parseAdminAudiences(env.ADMIN_AUDIENCES),
 			environment,
 			localDevLogin: environment === LOCAL_ENVIRONMENT && env.LOCAL_DEV_LOGIN === 'true',
 			authentication: {

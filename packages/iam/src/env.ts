@@ -38,6 +38,16 @@ export interface Env {
 	 * default a machine caller (bearer, no cookie) is deliberately exempt from.
 	 */
 	ADMIN_ORIGINS: string
+	/**
+	 * Comma-separated app ids whose proxy-injected access token may administer `/admin/*` — the
+	 * console gateway, and nothing else. Deploy var `FABRIKA_IAM_ADMIN_AUDIENCES`. Unset means the
+	 * console's own app id; an explicitly empty value means no JWT may administer at all.
+	 *
+	 * A REGISTRY for the same reason `ADMIN_ORIGINS` is one: every application in the installation
+	 * receives the administrator's token in cleartext, so without a named audience any of them could
+	 * replay it here.
+	 */
+	ADMIN_AUDIENCES?: string
 	/** `local` / `stage` / `prod`. */
 	ENVIRONMENT: string
 	/** Explicit local-only human login bypass. Ignored unless `ENVIRONMENT=local`. */

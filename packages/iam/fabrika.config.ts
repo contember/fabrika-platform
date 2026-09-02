@@ -20,6 +20,8 @@ interface RemoteConfig {
 	domain: string
 	humanEmailDomains: string
 	adminOrigins: string
+	/** Absent when the deploy var is unset — IAM then defaults to the console's own app id. */
+	adminAudiences?: string
 	oidcEnabled: boolean
 	passwordEnabled: boolean
 	oidcIssuer: string
@@ -79,6 +81,7 @@ const remoteConfig = (env: string, domain: string | undefined, source: Environme
 	const oidcIssuer = source['FABRIKA_IAM_OIDC_ISSUER']
 	const oidcClientId = source['FABRIKA_IAM_OIDC_CLIENT_ID']
 	const signingKeys = source['FABRIKA_IAM_SIGNING_KEYS']
+	const adminAudiences = source['FABRIKA_IAM_ADMIN_AUDIENCES']
 	const missing: string[] = []
 	if (authentication.oidcEnabled) {
 		if (!humanEmailDomains) missing.push('FABRIKA_IAM_HUMAN_EMAIL_DOMAINS')
@@ -102,6 +105,7 @@ const remoteConfig = (env: string, domain: string | undefined, source: Environme
 		domain: requiredDomain(domain),
 		humanEmailDomains: humanEmailDomains ?? '[]',
 		adminOrigins: source['FABRIKA_IAM_ADMIN_ORIGINS'] ?? '[]',
+		...(adminAudiences === undefined ? {} : { adminAudiences }),
 		oidcEnabled: authentication.oidcEnabled,
 		passwordEnabled: authentication.passwordEnabled,
 		oidcIssuer: oidcIssuer ?? '',
@@ -141,6 +145,9 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 	return {
 		HUMAN_EMAIL_DOMAINS: config.humanEmailDomains,
 		ADMIN_ORIGINS: config.adminOrigins,
+		// Only when named: an empty ADMIN_AUDIENCES means "no JWT may administer", so a `?? ''`
+		// default would lock the console out of every install instead of falling back to its app id.
+		...(config.adminAudiences === undefined ? {} : { ADMIN_AUDIENCES: config.adminAudiences }),
 		HUMAN_EMAILS: source['FABRIKA_IAM_HUMAN_EMAILS'] ?? '[]',
 		IAM_BOOTSTRAP_ADMINS: source['FABRIKA_IAM_BOOTSTRAP_ADMINS'] ?? '[]',
 		ISSUER: `https://${config.domain}`,
@@ -160,6 +167,7 @@ export const iamPipelineVars = (source: EnvironmentSource): string[] => {
 	const email = emailConfig(source)
 	return [
 		'FABRIKA_IAM_ADMIN_ORIGINS',
+		'FABRIKA_IAM_ADMIN_AUDIENCES',
 		'FABRIKA_IAM_OIDC_ENABLED',
 		'FABRIKA_IAM_PASSWORD_ENABLED',
 		'FABRIKA_EMAIL_PROVIDER',

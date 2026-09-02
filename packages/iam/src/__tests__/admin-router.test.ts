@@ -5,6 +5,7 @@ import { createIamApp } from '../app'
 import type { Env, RequestContext } from '../env'
 import { prop } from '../json'
 import type { Services } from '../services'
+import { getSigner, verifyAccessToken } from '../signing'
 import { mintToken } from '../tokens'
 import { createHarness, type Harness, seedAppAction, seedGrant, seedRole, seedUser } from './helpers/harness'
 
@@ -111,12 +112,31 @@ function adminRequest(path: string, opts: RequestOptions = {}): Request {
 }
 
 // Services in 'stage' so the local-dev bypass precondition is off (the session path runs for real).
-function adminServices(h: Harness): Services {
-	return h.makeServices({ environment: 'stage', issuer: ORIGIN, adminOrigins: [ORIGIN] })
+// `adminAudiences` defaults to the console gateway; a test passes its own to drive another registry.
+function adminServices(h: Harness, adminAudiences?: ReadonlySet<string>): Services {
+	return h.makeServices({
+		environment: 'stage',
+		issuer: ORIGIN,
+		adminOrigins: [ORIGIN],
+		...(adminAudiences === undefined ? {} : { adminAudiences }),
+	})
 }
 
 async function run(h: Harness, request: Request): Promise<Response> {
-	return handleAdmin(request, adminServices(h), ADMIN_ENV, new FakeRequestContext())
+	return runAs(adminServices(h), request)
+}
+
+/** The same call against a services set the caller assembled. */
+async function runAs(services: Services, request: Request): Promise<Response> {
+	return handleAdmin(request, services, ADMIN_ENV, new FakeRequestContext())
+}
+
+/** Mint the proxy-injected access token an app's gateway would forward as a bearer. */
+async function proxyToken(h: Harness, app: string, principalId: string): Promise<string> {
+	const session = await h.signSession(principalId)
+	const minted = await mintToken(adminServices(h), ADMIN_ENV, { app, session, requestId: 'r1' })
+	if (!minted.result.ok) throw new Error(`token mint failed: ${minted.result.reason}`)
+	return minted.result.token
 }
 
 /** One `/admin/rpc` call as the session's admin. */
@@ -151,16 +171,13 @@ describe('handleAdmin — admin gate (scope-less iam.admin)', () => {
 		expect(res.status).toBe(200)
 	})
 
-	test('a proxy JWT for another app resolves IAM permissions live', async () => {
+	test('a proxy JWT from the REGISTERED gateway audience resolves IAM permissions live → 200', async () => {
 		const h = createHarness()
 		registerOpice(h)
 		const id = seedUser(h.sqlite, { sub: 'sub-proxy-admin', email: 'proxy-admin@example.com' })
 		seedGrant(h.sqlite, id, 'admin', null)
-		const session = await h.signSession(id)
-		const minted = await mintToken(adminServices(h), ADMIN_ENV, { app: 'vozka', session, requestId: 'r1' })
-		if (!minted.result.ok) throw new Error(`token mint failed: ${minted.result.reason}`)
 
-		const res = await run(h, adminRequest(READ_PATH, { bearer: minted.result.token }))
+		const res = await run(h, adminRequest(READ_PATH, { bearer: await proxyToken(h, 'vozka', id) }))
 
 		expect(res.status).toBe(200)
 	})
@@ -211,6 +228,63 @@ describe('handleAdmin — admin gate (scope-less iam.admin)', () => {
 
 		const session = await h.signSession(id)
 		const res = await run(h, adminRequest(READ_PATH, { session }))
+
+		expect(res.status).toBe(403)
+	})
+})
+
+describe('handleAdmin — the proxy JWT audience registry (SEC-A3-1)', () => {
+	test('a token minted for ANOTHER app → 403, even for a global admin', async () => {
+		// Every application receives the proxy-injected token in cleartext, so an unpinned `aud` let any
+		// of them replay an administrator's token here. `aud` must name a registered admin gateway.
+		const h = createHarness()
+		registerOpice(h)
+		const id = seedUser(h.sqlite, { sub: 'sub-other-app', email: 'other-app@example.com' })
+		seedGrant(h.sqlite, id, 'admin', null)
+
+		const res = await run(h, adminRequest(READ_PATH, { bearer: await proxyToken(h, 'some-other-app', id) }))
+
+		expect(res.status).toBe(403)
+	})
+
+	test('an installation registering NO gateway audience refuses even the console token', async () => {
+		const h = createHarness()
+		registerOpice(h)
+		const id = seedUser(h.sqlite, { sub: 'sub-closed', email: 'closed@example.com' })
+		seedGrant(h.sqlite, id, 'admin', null)
+		const bearer = await proxyToken(h, 'vozka', id)
+
+		const res = await runAs(adminServices(h, new Set()), adminRequest(READ_PATH, { bearer }))
+
+		expect(res.status).toBe(403)
+	})
+
+	test('a REGISTERED non-default audience is admitted → 200', async () => {
+		const h = createHarness()
+		registerOpice(h)
+		const id = seedUser(h.sqlite, { sub: 'sub-second-gw', email: 'second-gw@example.com' })
+		seedGrant(h.sqlite, id, 'admin', null)
+		const bearer = await proxyToken(h, 'second-gateway', id)
+
+		const services = adminServices(h, new Set(['second-gateway']))
+		const res = await runAs(services, adminRequest(READ_PATH, { bearer }))
+
+		expect(res.status).toBe(200)
+	})
+
+	test("the token's `perms` snapshot is never authority: `*` at the gateway, nothing at propustka → 403", async () => {
+		// The grant is scoped to the gateway's own app, so the minted token carries `*` while the caller
+		// holds nothing at propustka. IAM re-resolves live, so the snapshot buys the caller nothing.
+		const h = createHarness()
+		registerOpice(h)
+		const id = seedUser(h.sqlite, { sub: 'sub-vozka-only', email: 'vozka-only@example.com' })
+		seedGrant(h.sqlite, id, 'admin', null, 'vozka')
+		const bearer = await proxyToken(h, 'vozka', id)
+
+		const claims = await verifyAccessToken(await getSigner(ADMIN_ENV), bearer, { issuer: ORIGIN })
+		expect(claims?.perms.map((entry) => entry.action)).toContain('*')
+
+		const res = await run(h, adminRequest(READ_PATH, { bearer }))
 
 		expect(res.status).toBe(403)
 	})

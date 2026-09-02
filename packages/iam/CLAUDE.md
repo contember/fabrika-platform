@@ -106,6 +106,13 @@ fails if that stops being true — it is the guard, not documentation of one.
   (a browser never attaches one by itself), which is what keeps CI and the first-operator bootstrap
   working. The method list in `rejectCrossOrigin` is an ALLOWLIST of safe methods, so a method
   invented later is checked by default.
+- **WHICH APP'S PROXY TOKEN MAY ADMINISTER IS THE SAME KIND OF REGISTRY.** `ADMIN_AUDIENCES` (deploy
+  var `FABRIKA_IAM_ADMIN_AUDIENCES`, comma-separated app ids) is the `aud` allowlist `resolveAdmin`'s
+  JWT branch checks; unset means the console gateway's own app id (`vozka`), explicitly empty means
+  no JWT may administer at all. It has to be registered because EVERY application receives the injected
+  `X-Fabrika-Token` in cleartext, so an unpinned audience let any app replay an administrator's token
+  against `/admin/rpc` — and the bearer-only path is exempt from `rejectCrossOrigin`, so nothing else
+  stood in the way. A malformed entry is refused at boot, like `ADMIN_ORIGINS`.
 - **A `px_` CREDENTIAL IS BOUND TO AN APP.** `credentials.app` is what `resolveCredential` checks at
   every mint. It is REQUIRED on an anonymous credential (a share link): its inline grants are frozen
   at issue and were delegation-checked against one app, so without the binding authority granted at

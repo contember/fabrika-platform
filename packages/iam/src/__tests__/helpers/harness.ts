@@ -6,7 +6,7 @@ import { normalizeEmailIdentity } from '../../email-identity'
 import { OidcClient, type OidcMetadata } from '../../oidc'
 import { type PasswordHasher, WebCryptoPasswordHasher } from '../../password-crypto'
 import { hashToken } from '../../secret'
-import type { Config, Services } from '../../services'
+import { type Config, DEFAULT_ADMIN_AUDIENCES, type Services } from '../../services'
 import { allMigrations } from './migrations'
 
 /**
@@ -140,6 +140,8 @@ export interface MakeServicesOptions {
 	bootstrapAdmins?: ReadonlySet<string>
 	/** Browser origins allowed to drive `/admin/*` (`ADMIN_ORIGINS`). Defaults to none. */
 	adminOrigins?: readonly string[]
+	/** App ids whose proxy token may administer (`ADMIN_AUDIENCES`). Defaults to the console gateway. */
+	adminAudiences?: ReadonlySet<string>
 	/** Central human-admission allowlist. Defaults to `{ emailDomains: ['contember.com'], emails: [] }`. */
 	human?: { emailDomains?: readonly string[]; emails?: readonly string[] }
 	/** OIDC client. Defaults to one with injected (offline) discovery metadata; tests override for the callback flow. */
@@ -166,6 +168,7 @@ export function makeServicesFor(repositories: IamRepositories, options: MakeServ
 		},
 		bootstrapAdmins: new Set([...(options.bootstrapAdmins ?? [])].map(normalizeEmailIdentity)),
 		adminOrigins: options.adminOrigins ?? [],
+		adminAudiences: options.adminAudiences ?? DEFAULT_ADMIN_AUDIENCES,
 		environment,
 		localDevLogin: environment === 'local' && options.localDevLogin === true,
 		authentication: {

@@ -17,6 +17,7 @@ const REMOTE_DOMAIN = 'iam.example.com'
 const ENV_NAMES = [
 	...Object.keys(REMOTE_SOURCE),
 	'FABRIKA_IAM_HOSTNAME',
+	'FABRIKA_IAM_ADMIN_AUDIENCES',
 	'FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL',
 	'FABRIKA_EMAIL_FROM',
 	'FABRIKA_EMAIL_RESEND_API_KEY',
@@ -54,6 +55,7 @@ describe('IAM resource graph', () => {
 	test('declares only canonical IAM pipeline inputs', () => {
 		expect(iamPipelineVars(REMOTE_SOURCE)).toEqual([
 			'FABRIKA_IAM_ADMIN_ORIGINS',
+			'FABRIKA_IAM_ADMIN_AUDIENCES',
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',
 			'FABRIKA_EMAIL_PROVIDER',
@@ -120,6 +122,19 @@ describe('IAM resource graph', () => {
 		expect(worker.options.vars?.['PASSWORD_ENABLED']).toBe('false')
 	})
 
+	test('omits ADMIN_AUDIENCES unless the deploy var names one', () => {
+		// An empty value means "no JWT may administer", so the var must be ABSENT when unset —
+		// IAM then falls back to the console's own app id instead of refusing the console.
+		const unset = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, REMOTE_SOURCE)
+		expect(unset.options.vars?.['ADMIN_AUDIENCES']).toBeUndefined()
+
+		const named = buildPropustkaWorker({ env: 'stage', domain: REMOTE_DOMAIN }, {
+			...REMOTE_SOURCE,
+			FABRIKA_IAM_ADMIN_AUDIENCES: 'vozka,second-gateway',
+		})
+		expect(named.options.vars?.['ADMIN_AUDIENCES']).toBe('vozka,second-gateway')
+	})
+
 	test('supports password-only authentication without OIDC configuration', () => {
 		const source = {
 			FABRIKA_IAM_OIDC_ENABLED: 'false',
@@ -134,6 +149,7 @@ describe('IAM resource graph', () => {
 		expect(worker.options.vars?.['OIDC_ISSUER']).toBe('')
 		expect(iamPipelineVars(source)).toEqual([
 			'FABRIKA_IAM_ADMIN_ORIGINS',
+			'FABRIKA_IAM_ADMIN_AUDIENCES',
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',
 			'FABRIKA_EMAIL_PROVIDER',

@@ -171,7 +171,8 @@ export type AdminResolution =
 
 /**
  * Resolve the admin caller from propustka-native credentials (no Cloudflare Access):
- *   - an access JWT from a first-party app gateway → verify identity, then resolve IAM permissions;
+ *   - an access JWT whose `aud` is a REGISTERED admin gateway → verify identity, then resolve IAM
+ *     permissions;
  *   - an `Authorization: Bearer px_<key>` machine credential (CI / provisioning) → `resolveCaller`
  *     (which also covers the local-dev bypass when no credential is presented);
  *   - else the browser's `px_session` SSO cookie → session → principal → resolved permissions.
@@ -184,13 +185,16 @@ export async function resolveAdmin(
 	creds: { bearer: string | null; session: string | null; requestId: string },
 ): Promise<AdminResolution> {
 	// The control gateway receives a proxy-injected access JWT after the browser session has stopped
-	// at the proxy. Its audience names the calling app, so verify that signed audience without treating
-	// its app-specific permission snapshot as IAM authority; IAM permissions are resolved live below.
+	// at the proxy. Its signed audience names the calling app and MUST be a registered admin gateway:
+	// every app holds this token in cleartext, so an unpinned audience lets any of them replay it.
 	if (creds.bearer !== null && !creds.bearer.startsWith(API_KEY_PREFIX)) {
 		const signer = await getSigner(env)
 		const claims = await verifyAccessToken(signer, creds.bearer, { issuer: services.config.issuer })
 		if (claims === null) {
 			return { ok: false, status: 401, reason: 'invalid_token' }
+		}
+		if (!services.config.adminAudiences.has(claims.aud)) {
+			return { ok: false, status: 403, reason: 'not_allowed' }
 		}
 		if (claims.ptype === undefined) {
 			return { ok: false, status: 403, reason: 'not_allowed' }
