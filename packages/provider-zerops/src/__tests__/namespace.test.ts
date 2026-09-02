@@ -936,6 +936,16 @@ describe('Zerops proxy-target registration', () => {
 		expect(() => capabilities.registrationResourceClaims(proxyRegistration('   '))).toThrow('requires a public domain')
 	})
 
+	// One Caddy fronts every app in the namespace and its host matcher reads `*` as a wildcard label, so
+	// a pattern registered under one app id would answer for its siblings' hostnames.
+	test('refuses a domain that is a pattern rather than a literal hostname, naming the domain', () => {
+		const capabilities = createZeropsNamespaceCapabilities(options(freshState()))
+
+		expect(() => capabilities.registrationResourceClaims(proxyRegistration('*.apps.example.com'))).toThrow('*.apps.example.com')
+		expect(() => capabilities.registrationResourceClaims(proxyRegistration('*.apps.example.com'))).toThrow('is not a literal hostname')
+		expect(() => capabilities.registrationResourceClaims(proxyRegistration('notes.example.com:8080'))).toThrow('is not a literal hostname')
+	})
+
 	test('claims the app services once a domain is given', () => {
 		const capabilities = createZeropsNamespaceCapabilities(options(freshState()))
 

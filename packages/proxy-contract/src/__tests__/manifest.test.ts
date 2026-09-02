@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import { encodeProxyManifestJson, parseProxyManifest, parseProxyManifestJson } from '..'
+import { encodeProxyManifestJson, isProxyHost, parseProxyManifest, parseProxyManifestJson } from '..'
+
+const withHost = (host: string) => ({ apps: [{ id: 'a', hosts: [host], upstream: 'a:1', gates: { rules: [] } }] })
 
 const VALID = {
 	apps: [{
@@ -30,6 +32,12 @@ describe('parseProxyManifest — accepts', () => {
 	test('an empty rule list seals an app', () => {
 		expect(parseProxyManifest({ apps: [{ id: 'a', hosts: ['a.test'], upstream: 'a:1', gates: { rules: [] } }] })?.apps[0]?.gates.rules)
 			.toEqual([])
+	})
+
+	test('the literal hostnames a deployment actually names', () => {
+		for (const host of ['app.example.com', 'localhost', 'control.fabrika.localhost', 'proxy-292c-8080.prg1.zerops.app', '127.0.0.1', 'a'.repeat(63)]) {
+			expect(parseProxyManifest(withHost(host))?.apps[0]?.hosts).toEqual([host])
+		}
 	})
 
 	test('an empty app list', () => {
@@ -100,6 +108,19 @@ describe('parseProxyManifest — rejects', () => {
 		['a host carrying a port, which could never match', {
 			apps: [{ id: 'a', hosts: ['x.test:8080'], upstream: 'a:1', gates: { rules: [] } }],
 		}],
+		// Caddy's host matcher reads `*` as a wildcard LABEL, so any of these would answer for hosts this
+		// app never declared — every sibling app behind the same proxy included.
+		['a bare wildcard host', withHost('*')],
+		['a wildcard label', withHost('*.example.com')],
+		['a Caddy placeholder', withHost('{http.request.host}')],
+		['a host with a space', withHost('ex ample.com')],
+		['a host with a glob question mark', withHost('a?.example.com')],
+		['an empty label', withHost('a..b')],
+		['a label starting with a hyphen', withHost('-a.b')],
+		['a trailing dot', withHost('a.b.')],
+		['an IDN literal, which the wire carries as punycode or not at all', withHost('münchen.example')],
+		['a label over 63 characters', withHost(`${'a'.repeat(64)}.example.com`)],
+		['a host over 253 characters', withHost(Array.from({ length: 5 }, () => 'a'.repeat(50)).join('.'))],
 	]
 
 	for (const [name, value] of bad) {
@@ -117,5 +138,32 @@ describe('parseProxyManifest — rejects', () => {
 
 	test('malformed JSON', () => {
 		expect(parseProxyManifestJson('{')).toBeNull()
+	})
+})
+
+// The manifest is the authority on hosts (ADR-0022): both compositions load it, and on Zerops ONE Caddy
+// fronts every app in a namespace, so a host that is a pattern rather than a name is a hijack primitive.
+describe('isProxyHost', () => {
+	test('accepts a literal LDH hostname and the longest legal label', () => {
+		expect(isProxyHost('app.example.com')).toBe(true)
+		expect(isProxyHost('a-b.c-d.example')).toBe(true)
+		expect(isProxyHost('a'.repeat(63))).toBe(true)
+	})
+
+	test('refuses every character a matcher could read as a pattern', () => {
+		for (const host of ['*', '*.example.com', '{http.request.host}', 'a?.example.com', 'ex ample.com', 'a/b', 'a:1', 'a@b', 'a\tb']) {
+			expect(isProxyHost(host)).toBe(false)
+		}
+	})
+
+	test('refuses malformed labels and lengths', () => {
+		for (const host of ['', '.', 'a..b', '-a.b', 'a-.b', 'a.b.', `${'a'.repeat(64)}.b`, Array.from({ length: 5 }, () => 'a'.repeat(50)).join('.')]) {
+			expect(isProxyHost(host)).toBe(false)
+		}
+	})
+
+	test('judges the lower-cased form: the predicate refuses uppercase, the parser normalises before asking', () => {
+		expect(isProxyHost('EXAMPLE.com')).toBe(false)
+		expect(parseProxyManifest(withHost('EXAMPLE.com'))?.apps[0]?.hosts).toEqual(['example.com'])
 	})
 })

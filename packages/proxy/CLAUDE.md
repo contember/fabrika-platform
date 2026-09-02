@@ -76,10 +76,11 @@ bun test              # deny-matrix.test.ts is the authorization truth table —
   holds on the Bun path only.** The Cloudflare proxy Worker does not call `readProxyEnv`: it refuses
   a missing `IAM` binding and an empty manifest, but reads `FABRIKA_IAM_ISSUER ?? ''`, so a misconfigured
   issuer boots and fails every verification on `iss` instead.
-- **The manifest is the authority on hosts.** `parseProxyManifest` rejects two apps claiming one host
-  and a host carrying a `:port` — not just `buildCaddyConfig`, which only sees the manifests it
-  generates from. A pinned `?app=` is additionally cross-checked against that app's declared hosts,
-  because `X-Forwarded-Host` is client-controllable and then builds URLs.
+- **The manifest is the authority on hosts.** `parseProxyManifest` rejects two apps claiming one host,
+  a host carrying a `:port`, and any host that is not a literal LDH hostname (`isProxyHost`) — not just
+  `buildCaddyConfig`, which only sees the manifests it generates from. A pinned `?app=` is additionally
+  cross-checked against that app's declared hosts, because `X-Forwarded-Host` is client-controllable
+  and then builds URLs.
 - **If the auth service dies, Caddy answers 502 and every request is denied.** `start.sh` restarts it
   in a loop; that failure mode is by design, not a gap to paper over.
 

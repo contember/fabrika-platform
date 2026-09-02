@@ -14,7 +14,7 @@ import {
 	type ProviderNamespacePreset,
 	type ProviderRegistration,
 } from '@fabrika/provider-contract'
-import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
+import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON, isProxyHost } from '@fabrika/proxy-contract'
 import {
 	ZEROPS_ACTIVE,
 	ZEROPS_SERVICE_NOT_HTTP,
@@ -377,11 +377,22 @@ const registrationResourceClaims = (registration: ProviderRegistration): string[
 	})
 	// A proxy target is routed by HOST, so a registration with no domain has nothing the proxy can serve:
 	// refuse it here, where nothing has been created yet, instead of at the first deploy's manifest compile.
-	if (manifest.target.proxy !== undefined && (registration.environment.domain ?? '').trim() === '') {
-		throw new Error(
-			`Zerops proxy target \`${registration.app.id}/${registration.environment.env}\` requires a public domain: `
-				+ `pass --domain with a host this namespace serves (\`namespaces get ${namespace.id}\` lists them)`,
-		)
+	if (manifest.target.proxy !== undefined) {
+		const domain = registration.environment.domain ?? ''
+		if (domain.trim() === '') {
+			throw new Error(
+				`Zerops proxy target \`${registration.app.id}/${registration.environment.env}\` requires a public domain: `
+					+ `pass --domain with a host this namespace serves (\`namespaces get ${namespace.id}\` lists them)`,
+			)
+		}
+		// One Caddy fronts the whole namespace and its host matcher reads `*` as a wildcard label, so a
+		// pattern here would answer for every sibling app. The manifest parser refuses it either way.
+		if (!isProxyHost(domain.toLowerCase())) {
+			throw new Error(
+				`Zerops proxy target \`${registration.app.id}/${registration.environment.env}\` domain \`${domain}\` is not a literal hostname: `
+					+ 'use dot-separated labels of letters, digits and `-` (no wildcard, no port, no placeholder)',
+			)
+		}
 	}
 	const namespaceClaims = new Set(namespaceResourceClaims(namespace))
 	for (const requirement of manifest.target.namespaceResources ?? []) {

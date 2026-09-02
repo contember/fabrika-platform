@@ -8,7 +8,7 @@ export const FABRIKA_PROXY_MANIFEST_JSON = 'FABRIKA_PROXY_MANIFEST_JSON'
 export interface ProxyApp {
 	/** The IAM app id, used as the minted token audience. */
 	id: string
-	/** Public hostnames, lower-cased on parse and matched without a port. */
+	/** Public hostnames: literal, lower-cased on parse, no port and never a pattern (`isProxyHost`). */
 	hosts: string[]
 	/** Private upstream dial address, for example `app:3000`. */
 	upstream: string
@@ -29,8 +29,20 @@ export interface ProxyManifest {
 	apps: ProxyApp[]
 }
 
-/** A trailing `:<port>` on a declared host. Matches an IPv6 literal's port too (`[::1]:8080`). */
-const HOST_PORT_SUFFIX = /:\d+$/
+/** One DNS label: `[a-z0-9]` at both ends, `-` allowed only between them. */
+const HOST_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
+
+/**
+ * A literal lower-cased LDH hostname: labels of `[a-z0-9]` with interior `-`, 1–63 chars, ≤ 253 total.
+ * Everything else is refused — `*`, `?`, `{`, `}`, `:`, `/`, `@`, whitespace, any non-ASCII — because
+ * Caddy's host matcher reads `*` as a wildcard label, so one app's host could capture its neighbours'.
+ */
+export function isProxyHost(host: string): boolean {
+	if (host.length === 0 || host.length > 253) {
+		return false
+	}
+	return host.split('.').every((label) => label.length <= 63 && HOST_LABEL.test(label))
+}
 
 /** Parse a complete proxy manifest, rejecting the whole value when any field is malformed. */
 export function parseProxyManifest(value: unknown): ProxyManifest | null {
@@ -85,9 +97,11 @@ function parseProxyApp(value: unknown): ProxyApp | null {
 	if (id === undefined || id === '' || upstream === undefined || upstream === '' || hosts === undefined || gates === null) {
 		return null
 	}
-	// A `:port` can never match: Caddy strips the port before its host matcher runs and the proxy looks
-	// a host up without one. Refuse it rather than accept a host that silently gates nothing.
-	if (hosts.length === 0 || hosts.some((host) => host === '' || HOST_PORT_SUFFIX.test(host))) {
+	// Normalised first, because the manifest lower-cases and the rule judges the normalised form. A
+	// `:port` can never match (Caddy strips it), and a wildcard or a placeholder would match far too
+	// much: refuse the manifest rather than accept a host that gates nothing — or gates a neighbour.
+	const lowered = hosts.map((host) => host.toLowerCase())
+	if (lowered.length === 0 || !lowered.every(isProxyHost)) {
 		return null
 	}
 	// Absent means `https`, so an older manifest keeps working and the safe value is the one you get by
@@ -97,7 +111,7 @@ function parseProxyApp(value: unknown): ProxyApp | null {
 		return null
 	}
 	const scheme = rawScheme ?? 'https'
-	return { id, hosts: hosts.map((host) => host.toLowerCase()), upstream, gates, scheme }
+	return { id, hosts: lowered, upstream, gates, scheme }
 }
 
 function parseAppGates(value: unknown): AppGates | null {
