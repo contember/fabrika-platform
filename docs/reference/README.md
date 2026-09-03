@@ -11,7 +11,8 @@ behaviour.
 <!-- index the reference docs here, one line each -->
 
 - [`overview.md`](overview.md) — what fabrika-platform is, why it exists, the
-  three product planes, packages, and primary request flows. **Start here.**
+  three product planes, the services an installation actually runs, packages, and
+  primary request flows. **Start here.**
 - [`application-runtime.md`](application-runtime.md) — the `@fabrika/app` request
   pipeline, typed RPC, and authorization boundary.
 - [`core-application-composition.md`](core-application-composition.md) — how IAM,

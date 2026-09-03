@@ -72,6 +72,7 @@ packages/
   installation-{contract,cloudflare,zerops}   # `fabrika platform init/plan/deploy` per cloud
   installation-init               # the operator-side `init` mechanics both installations share
   runner-{contract,container,cloudflare}      # the Cloudflare out-of-band deploy executor
+  source-zerops github-app        # the Zerops `source` platform service · the shared GitHub App client
   proxy-core proxy proxy-contract  # the auth enforcement decision · its Caddy deployment · the wire contract
   cli email local-stack           # the `fabrika` command · outbound email · the Docker dev stack
 examples/app examples/zerops-app  # a worked app per provider
@@ -107,10 +108,13 @@ needed only when there is no app config. Platform commands load the provider's
   cast — ask first.
 - **NEVER log credentials or secret values.** They flow control-plane → `RunnerJob` → child env only;
   on error log a short message, never an error object that may carry a clone URL with an embedded token.
-- **The proxy is the ONLY thing that enforces authorization** (ADR-0022). App services are not
-  publicly routed; an application reads the proxy-injected `X-Fabrika-Token`, verifies it locally,
-  and enforces nothing. Never add a second gate evaluator — not in `@fabrika/auth`, not in Caddy
-  config, not in a provider package. There is exactly one gate matcher, in `@fabrika/auth-core`.
+- **The proxy is the ONLY enforcement point: exactly one gate evaluator, in `@fabrika/auth-core`,
+  and only the proxy runs it** (ADR-0022). App services are not publicly routed; an application
+  reads the proxy-injected `X-Fabrika-Token`, verifies it locally, and evaluates no gate. Never add
+  a second gate evaluator — not in `@fabrika/auth`, not in Caddy config, not in a provider package.
+  Two other layers refuse requests and are **not** gate evaluators: **authorization** (`.require`,
+  `can()`, control's `authorize`) and **admission** (the origin guards, `FABRIKA_IAM_ADMIN_ORIGINS`).
+  `docs/reference/overview.md` defines all three; keep the vocabulary.
 - **`fabrika.config.ts` is the single source of truth** for a worker's own resources; `oblaka.ts` is a
   thin shim over it. Never re-declare resources in `oblaka.ts`.
 - **Postgres migration identity is `(bundle, filename)` in a service-owned

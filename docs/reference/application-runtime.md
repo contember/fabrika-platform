@@ -41,10 +41,18 @@ there is no compatibility reader left to consult.
 ## Authorization boundary
 
 The proxy is the only enforcement point
-([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)). Zerops
-uses Caddy plus the shared TypeScript auth service. Cloudflare authoring creates a
-public proxy Worker with a private application Worker child and the same authorizer.
-No application evaluates a gate: `@fabrika/auth` exports nothing that can.
+([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)): one gate
+evaluator, in `@fabrika/auth-core`, and the proxy is the only thing that runs it.
+Zerops uses Caddy plus the shared TypeScript auth service. Cloudflare authoring
+creates a public proxy Worker with a private application Worker child and the same
+authorizer. No application evaluates a gate: `@fabrika/auth` exports nothing that
+can.
+
+Enforcement is one of three layers that refuse a request; [`overview.md`](overview.md)
+names all three. This section covers the first two — gates and object-level
+authorization. The third, admission, belongs to the services that accept browser
+sessions and is described in
+[`core-application-composition.md`](core-application-composition.md).
 
 Proxy gates and procedure requirements are complementary:
 

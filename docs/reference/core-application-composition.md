@@ -77,20 +77,27 @@ so it never imports IAM. How far that separation actually goes per provider is i
 ## Authorization boundary
 
 **The proxy is the only enforcement point**
-([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)). Delivery
-and Operations use the application-facing `@fabrika/auth` SDK, whose whole
+([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)): one gate
+evaluator, in `@fabrika/auth-core`, and the proxy is the only thing that runs it.
+Delivery and Operations use the application-facing `@fabrika/auth` SDK, whose whole
 request-time job is to read the proxy-injected `X-Fabrika-Token`, verify it locally
 against IAM's JWKS, and build the canonical `AuthContext`. It cannot evaluate a gate,
 exchange a session, or write a cookie. A procedure or shared use case then performs
 the action and object-scope check that depends on validated application data.
+
+That object-scope check is **authorization**, a separate layer from enforcement, and
+the gateway same-origin checks and the `FABRIKA_IAM_ADMIN_ORIGINS` registry above
+are a third one, **admission** ([`overview.md`](overview.md) names all three). A
+service that refuses a request is not thereby a second gate evaluator; only a
+component that evaluates the gate list would be, and only the proxy does.
 
 IAM is different only at the identity boundary: it authenticates its own admin
 callers before invoking the same typed RPC dispatcher. Every administration
 operation is a named `IamAdminRpcContract` procedure and has no second transport,
 so policy, audit, hidden-object behavior, and request correlation cannot diverge
 by transport for them. `/admin/*` REST retains four machine-provisioning
-operations only (below); they share the same use cases and the same admission
-code — `extractCredentials`, `rejectCrossOrigin`, `resolveAdmin`.
+operations only (below); they share the same use cases and the same admission and
+resolution code — `extractCredentials`, `rejectCrossOrigin`, `resolveAdmin`.
 
 On both providers, proxy gates run before application code and decide whether a
 request may reach a private service. Cloudflare authoring materializes a public

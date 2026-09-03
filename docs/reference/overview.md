@@ -39,6 +39,58 @@ Three constraints follow from it, and they are load-bearing:
 Consequence worth internalising: "multi-cloud" here means _fabrika runs on either
 platform_, never _an app runs on both_.
 
+## The services an installation runs
+
+The three planes say what the platform does. They are not the list of services an
+installation stands up, and that list differs per provider.
+
+A **Zerops** installation runs five platform services. `fabrika platform deploy`
+owns their order — `iam`, `operations` and `source` first, then `proxy`, then
+`control` — so the enforcement point is always ahead of the service whose gates
+just widened
+([ADR-0027](../decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)):
+
+| Service      | What it is                                                           |
+| ------------ | -------------------------------------------------------------------- |
+| `iam`        | the Access plane                                                     |
+| `operations` | the Operations plane                                                 |
+| `source`     | resolves a repository ref and streams the archive Zerops builds from |
+| `proxy`      | the enforcement point, one per deployment namespace                  |
+| `control`    | the Delivery plane, and the origin that serves the console           |
+
+A **Cloudflare** installation has no `source` service and no standalone proxy
+service. IAM and Operations each deploy as their own platform config, and the
+deploy executor and control deploy as a pair. The proxy is materialized per app
+environment instead: a public proxy Worker in front of a private application
+Worker.
+
+`source` exists because Zerops builds from an archive it is handed, and its
+native GitHub integration cannot be driven by an installation's project-scoped
+token
+([ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md)).
+It is a transporter, not an execution environment. It resolves the requested ref
+to an exact commit and to the SHA-256 of the repository-root `zerops.yaml`, then
+streams GitHub's `git archive` tarball to the presigned Zerops upload URL that
+control obtained — `gunzip → tar rewrite → gzip → PUT`, with no repository byte
+staged on disk
+([ADR-0037](../decisions/0037-stream-github-tarballs-for-zerops-sources.md)). The
+rewrite keeps regular files only and refuses symlinks, submodules, and trees
+above 50,000 entries or 512 MiB. `source` never executes repository code and
+never returns repository content. It has no public route, and its RPC
+authenticates control by key, because reachability on the project network is not
+authorization.
+
+Private repositories are read through operator-owned GitHub Apps — one App per
+GitHub organization, created and verified from the authenticated console
+([ADR-0031](../decisions/0031-manage-zerops-github-source-from-control.md),
+[ADR-0032](../decisions/0032-support-multiple-private-github-source-connections.md)).
+The App id and private key live only on `source`, one canonical bundle per
+connection in its own environment slot; control holds the identifiers that select
+it. `@fabrika/github-app` is the shared client both sides use: the least-authority
+manifest builder, the bounded manifest-code exchange, installation-token minting,
+and webhook configuration. A public repository is fetched anonymously and needs no
+App at all.
+
 ## The packages
 
 | Package                            | What it is                                                                                     |
@@ -64,13 +116,18 @@ platform_, never _an app runs on both_.
 | `@fabrika/installation-contract`   | Open contract for provider-specific platform `init`, `plan`, and `deploy` commands.            |
 | `@fabrika/installation-cloudflare` | Cloudflare account bring-up and platform plan/deploy composition.                              |
 | `@fabrika/installation-zerops`     | Zerops topology, generated installation artifacts, and platform plan validation.               |
+| `@fabrika/installation-init`       | The operator-side `init` mechanics both installations share.                                   |
 | `@fabrika/cli`                     | The single public `fabrika` command and provider-aware command router.                         |
 | `@fabrika/dashboard`               | Unified Delivery, Access, and Operations console served by control.                            |
 | `@fabrika/runner-contract`         | Provider-neutral Worker↔container transport types and endpoints.                               |
 | `@fabrika/runner-container`        | Plain-Bun process and container image that execute Cloudflare runner jobs.                     |
 | `@fabrika/runner-cloudflare`       | Out-of-band Cloudflare Worker that hosts and relays the deploy container.                      |
+| `@fabrika/source-zerops`           | The private Zerops `source` service: ref resolution and streamed repository upload.            |
+| `@fabrika/github-app`              | Published GitHub App client: manifest builder and exchange, installation tokens, webhooks.     |
 | `@fabrika/proxy-contract`          | Proxy manifest wire types, encoder, and fail-closed parser.                                    |
-| `@fabrika/proxy`                   | Shared auth enforcement service used by the provider-specific edge proxy.                      |
+| `@fabrika/proxy-core`              | The runtime-neutral enforcement decision both proxy deployments run.                           |
+| `@fabrika/proxy`                   | The Caddy deployment of that decision: generated config, Bun process, and binary.              |
+| `@fabrika/local-stack`             | The Docker development stack behind every `local:*` command.                                   |
 
 `@fabrika/auth` is the published application-facing IAM SDK; the rename from the
 predecessor packages was a deliberate, one-time break — see
@@ -86,7 +143,12 @@ The narrow contract packages keep wire types away from runtime entrypoints:
 - `@fabrika/operations`, `@fabrika/operations-ui`, and control's transport-only
   gateway share DTOs through `@fabrika/operations-contract`.
 - the Zerops provider and control composition produce
-  `@fabrika/proxy-contract` manifests; `@fabrika/proxy` parses and enforces them.
+  `@fabrika/proxy-contract` manifests; `@fabrika/proxy-core` parses and evaluates
+  them, and `@fabrika/proxy` is the Caddy deployment that runs it.
+- `@fabrika/control` and `@fabrika/source-zerops` share the source RPC paths, request
+  and response shapes, failure codes, and canonical credential bundle through
+  `@fabrika/provider-zerops` — the source protocol is provider-owned, not a separate
+  contract package.
 - `@fabrika/runner-cloudflare` and `@fabrika/runner-container` communicate only
   through `@fabrika/runner-contract`. Provider job semantics remain in
   `@fabrika/provider-cloudflare`.
@@ -217,9 +279,21 @@ for both service claims and the YAML sent to Zerops. The app target envelope
 version 2 stores only the app service id; the assigned deployment namespace
 supplies the Zerops project and proxy coordinates. A queued deploy never imports
 app TypeScript: the Bun control process applies the compiled import, triggers the
-service pipeline, polls its app-version, and reconciles the IAM schema. The Zerops
-control provider requires its composition root to inject `@fabrika/engine`; it has
-no fallback executor. It stores
+service pipeline, polls its app-version, and reconciles the IAM schema.
+
+The repository reaches Zerops through `source`. Before the Operations release
+context exists, control asks `source` to resolve the requested ref, and fails the
+run when the `zerops.yaml` digest at the resolved commit differs from the
+registered artifact. It then creates the Zerops app version, hands `source` that
+version's presigned upload URL to stream the archive to, and calls
+`build-and-deploy` with the registered descriptor. `source` receives no Zerops
+token, and control's Zerops token never leaves control. Each step commits a
+credential-free checkpoint before the next irreversible call, so a crashed run is
+reconciled from the recorded phase rather than guessed at
+([ADR-0029](../decisions/0029-an-operator-owned-github-app-delivers-zerops-sources.md)).
+
+The Zerops control provider requires its composition root to inject
+`@fabrika/engine`; it has no fallback executor. It stores
 the app-version id as soon as Zerops accepts the pipeline. Startup and scheduled
 maintenance call the provider reconciliation capability for unfinished
 platform-owned runs, so a self-deploy or restart does not lose the terminal state
@@ -240,6 +314,26 @@ and stores only a `zerops:` reference. It never writes an app secret at project
 scope.
 
 ## How auth works
+
+Three kinds of check refuse a request, and only the first is what ADR-0022 calls
+enforcement:
+
+- **Enforcement** — the ordered path gates. There is exactly one gate evaluator,
+  in `@fabrika/auth-core`, and the proxy is the only thing that runs it. It
+  decides whether a request reaches a private service at all.
+- **Authorization** — the action-and-scope check a service makes against an
+  application-owned object coordinate. A path gate cannot make it, because the
+  coordinate is known only once request data is validated. Every
+  `.require(action, scope)`, every `can()` call, and control's per-route
+  `authorize` is this layer.
+- **Admission** — the confused-deputy guards in front of ambient credentials:
+  control's origin guard on `/api/*`, the same-origin checks on the IAM and
+  Operations console gateways, and IAM's registry of admin origins. They decide
+  whether a cookie-bearing request is considered at all. They resolve no
+  principal and read no policy, so none of them is a second gate evaluator.
+
+A gate never replaces an authorization check, an authorization check never
+replaces a gate, and an admission check substitutes for neither.
 
 The **proxy is the only enforcement point**, on both providers
 ([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md)). Only the

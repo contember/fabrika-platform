@@ -66,8 +66,8 @@ page POSTing to the console's own origin with the victim's cookies is refused he
 upstream is asked. Absent configuration fails CLOSED. The `/api/*` surface carries the same check
 (`controlOriginGuard`, `src/origin-guard.ts`, mounted after auth): an unsafe-method request from a
 cookie-borne person is refused unless same-origin, a bearer or a machine principal is exempt, and it is
-not a gate evaluator (ADR-0022). A
-trigger writes a `pending` run to the
+ADMISSION — not enforcement, not authorization (`docs/reference/overview.md` names all three). A trigger
+writes a `pending` run to the
 database then enqueues. ONE queue (`DEPLOY_QUEUE`) carries both kinds of work — deploy jobs and
 namespace provisioning jobs — as a discriminated union; a payload with no `kind` is a deploy job.
 The consumer resolves the statically selected `ControlProvider` and calls its
