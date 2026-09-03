@@ -110,7 +110,90 @@ const applicationChain = (root: Worker): ReadonlySet<Worker> => {
 	return chain
 }
 
+/**
+ * The only `Worker` options an app may set. oblaka's `ResourceProcessor` spreads everything but
+ * `dir`/`bindings`/`deleteDurableObjectsOnRemoval` verbatim into the generated wrangler config, so any
+ * other key — `services`, `durable_objects`, `r2_buckets`, `build` — binds or runs something the typed
+ * `bindings` walk never sees. Fail closed: a new wrangler key is refused until reviewed.
+ */
+const APP_WORKER_OPTIONS: ReadonlySet<string> = new Set([
+	'assets',
+	'bindings',
+	'compatibility_date',
+	'compatibility_flags',
+	'deleteDurableObjectsOnRemoval',
+	'dir',
+	'main',
+	'name',
+	'observability',
+	'preview_urls',
+	'routes',
+	'triggers',
+	'vars',
+	'workers_dev',
+	// Every other key is deliberately absent: `build` runs a command, the rest bind a resource by raw name.
+])
+
+/** Everything wrangler reads out of `assets`. `directory` is the only one that names a path. */
+const APP_ASSETS_OPTIONS: ReadonlySet<string> = new Set(['binding', 'directory', 'html_handling', 'not_found_handling', 'run_worker_first'])
+
+/**
+ * `assets.directory` is resolved against the generated `wrangler.jsonc`'s own directory and uploaded
+ * PUBLICLY: wrangler walks it recursively and ignores only `.assetsignore`/`_redirects`/`_headers`, so
+ * `.` on a root `workerDir` would publish the checkout's `.git/config` and the clone token in it.
+ */
+const isContainedAssetDirectory = (value: unknown): value is string => {
+	if (typeof value !== 'string' || value.startsWith('/')) return false
+	const segments = value.split('/')
+	if (segments.includes('..') || segments.includes('.git')) return false
+	return segments.some((segment) => segment !== '' && segment !== '.')
+}
+
+/** `assets` is the one raw key that names a path, so it is bounded rather than refused outright. */
+const assertBoundedAssets = (worker: Worker): void => {
+	const assets: unknown = worker.options.assets
+	if (assets === undefined) return
+	if (typeof assets !== 'object' || assets === null || Array.isArray(assets)) {
+		throw new Error(`cloudflare: Worker \`${worker.options.name}\` sets \`assets\` to something that is not an object`)
+	}
+	for (const key of Object.keys(assets)) {
+		if (!APP_ASSETS_OPTIONS.has(key)) {
+			throw new Error(`cloudflare: Worker \`${worker.options.name}\` sets \`assets.${key}\`, which an app may not configure`)
+		}
+	}
+	const directory: unknown = Reflect.get(assets, 'directory')
+	if (!isContainedAssetDirectory(directory)) {
+		throw new Error(
+			`cloudflare: Worker \`${worker.options.name}\` sets \`assets.directory\` to \`${
+				typeof directory === 'string' ? directory : '(not a string)'
+			}\`; it must be a relative path strictly inside the worker directory, with no \`..\` or \`.git\` segment`,
+		)
+	}
+}
+
+interface PlatformAdoption {
+	readonly adopted: string
+	readonly platform: string
+}
+
+/**
+ * Every oblaka resource kind adopts the remote name `${env}-${name}`, and an env name may contain `-`
+ * (`ENV_NAME` in `control.ts`), so an app in env `prod-propustka` naming `worker` lands on IAM's
+ * `prod-propustka-worker`. Bound the ADOPTED name, which holds wherever the env/name boundary falls.
+ */
+const platformAdoption = (env: string, name: string): PlatformAdoption | null => {
+	const adopted = `${env}-${name}`
+	for (const platform of PLATFORM_RESOURCE_NAMES) {
+		if (adopted === platform || adopted.endsWith(`-${platform}`)) {
+			return { adopted, platform }
+		}
+	}
+	return null
+}
+
 export interface AuthoredGraphLimits {
+	/** The environment oblaka provisions into. Every remote name is `${env}-${name}`, so the bound is on that. */
+	readonly env: string
 	/** The one hostname this environment may route; a route on any other host belongs to another app. */
 	readonly domain?: string
 	/** The KV namespace oblaka keeps this deploy's state in; naming the platform's own would clobber it. */
@@ -125,7 +208,26 @@ export interface AuthoredGraphLimits {
  */
 export const assertAuthoredGraph = (root: Worker, limits: AuthoredGraphLimits): void => {
 	const deployable = applicationChain(root)
+	const refuse = limits.platformResources === 'refuse'
+	const assertAdoptable = (kind: string, name: string): void => {
+		const adoption = refuse ? platformAdoption(limits.env, name) : null
+		if (adoption !== null) {
+			throw new Error(
+				`cloudflare: ${kind} \`${name}\` becomes \`${adoption.adopted}\` on Cloudflare, which would take over the Fabrika platform resource \`${adoption.platform}\``,
+			)
+		}
+	}
 	const visit = (worker: Worker): void => {
+		for (const key of refuse ? Object.keys(worker.options) : []) {
+			if (!APP_WORKER_OPTIONS.has(key)) {
+				throw new Error(
+					`cloudflare: Worker \`${worker.options.name}\` sets \`${key}\`, which an app may not configure; declare resources in \`bindings\``,
+				)
+			}
+		}
+		if (refuse) {
+			assertBoundedAssets(worker)
+		}
 		for (const route of worker.options.routes ?? []) {
 			const host = routeHostname(route)
 			if (host === null || !isProxyHost(host) || host !== limits.domain?.toLowerCase()) {
@@ -134,17 +236,15 @@ export const assertAuthoredGraph = (root: Worker, limits: AuthoredGraphLimits): 
 		}
 		for (const value of Object.values(worker.options.bindings ?? {})) {
 			const resource = namedResource(value)
-			if (resource !== null && limits.platformResources === 'refuse' && PLATFORM_RESOURCE_NAMES.has(resource.name)) {
-				throw new Error(`cloudflare: ${resource.kind} \`${resource.name}\` is a Fabrika platform resource and cannot be declared by an app`)
+			if (resource !== null) {
+				assertAdoptable(resource.kind, resource.name)
 			}
 			const service = serviceReferenceTarget(value)
-			if (
-				service !== null
-				&& limits.platformResources === 'refuse'
-				&& service !== 'propustka-worker'
-				&& (PLATFORM_RESOURCE_NAMES.has(service) || service === '(unreadable)')
-			) {
-				throw new Error(`cloudflare: service binding to \`${service}\` is a Fabrika platform service and cannot be bound by an app`)
+			if (service !== null && refuse && service !== 'propustka-worker') {
+				if (service === '(unreadable)') {
+					throw new Error('cloudflare: service binding to `(unreadable)` cannot be checked against the Fabrika platform services')
+				}
+				assertAdoptable('service binding to', service)
 			}
 			if (value instanceof Worker) {
 				if (!deployable.has(value)) {
@@ -154,10 +254,9 @@ export const assertAuthoredGraph = (root: Worker, limits: AuthoredGraphLimits): 
 			}
 		}
 	}
-	if (limits.platformResources === 'refuse' && PLATFORM_RESOURCE_NAMES.has(root.options.name)) {
-		throw new Error(`cloudflare: Worker \`${root.options.name}\` is a Fabrika platform resource and cannot be declared by an app`)
-	}
-	if (limits.platformResources === 'refuse' && PLATFORM_RESOURCE_NAMES.has(limits.stateNamespace)) {
+	assertAdoptable('Worker', root.options.name)
+	// The state namespace is the ONE name oblaka uses verbatim (`KVStateStorage`), so no env prefix applies.
+	if (refuse && PLATFORM_RESOURCE_NAMES.has(limits.stateNamespace)) {
 		throw new Error(`cloudflare: state namespace \`${limits.stateNamespace}\` is a Fabrika platform resource and cannot be used by an app`)
 	}
 	visit(root)

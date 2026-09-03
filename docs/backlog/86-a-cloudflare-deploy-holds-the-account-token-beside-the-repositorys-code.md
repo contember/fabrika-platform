@@ -23,11 +23,15 @@ its names: `createCloudflareControlProvider` exposes no `namespaces` capability,
 
 What the review fixed (commit series of 2026-09-02): `job.credentials` is exactly the account id and
 token and nothing else, the `pipeline.build` child runs with those names removed from its
-environment, the authored graph is bounded before any Cloudflare call (`assertAuthoredGraph`: no
-platform resource name, no Worker off the `APP` chain, every route on the run's own domain), and the
-runner Worker authenticates its caller. Those close the cheapest routes — a build line that calls
-`wrangler` with the inherited token, a config that adopts `vozka` or `propustka-worker`, a route in
-front of another app's proxy.
+environment, the authored graph is bounded before any Cloudflare call (`assertAuthoredGraph`), and the
+runner Worker authenticates its caller. The closure validation of 2026-09-03 found the graph bound
+bypassable twice — raw wrangler keys on `Worker.options` (`services`, `durable_objects`, `r2_buckets`,
+`build`) were never inspected, and an env named `prod-propustka` with a Worker named `worker` adopted
+`prod-propustka-worker` — and tightened it: every Worker the graph reaches may carry only an allowlist
+of raw option keys, and the ADOPTED name `${env}-${name}` of every resource is refused when it equals
+or ends with a platform name. Those close the cheapest routes — a build line that calls `wrangler`
+with the inherited token, a config that adopts or binds `vozka` or `propustka-worker` under any
+env/name split, a route in front of another app's proxy.
 
 What is still open:
 
@@ -38,6 +42,9 @@ What is still open:
   to one Worker or one D1 database, so token scoping alone cannot express a per-app boundary.
 - A non-platform name that belongs to another app is still adoptable. The refusal is a platform
   denylist, not an ownership record: `${env}-otherapp-db` provisions fine from app `thisapp`.
+- The bound is a name rule, not an account fact. The suffix rule refuses a legitimate app name that
+  ends in a platform name (`crm-operations`), because without the platform's own env the two are
+  indistinguishable; an ownership record makes the rule exact and lifts that refusal.
 
 ## Approach / acceptance
 

@@ -1,6 +1,7 @@
 import { createProvider, type ProviderDeploySession, type TypedProviderRun } from '@fabrika/provider-contract'
 import { dirname, resolve } from 'node:path'
 import { type GeneratedConfig, Worker } from 'oblaka-iac'
+import { assertLiteralAssets } from './assets'
 import type { CloudflareAppConfig } from './authoring'
 import { type CloudflareArtifact, cloudflareArtifactCodec, type CloudflareTarget, cloudflareTargetCodec } from './codec'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
@@ -97,6 +98,7 @@ interface StepEnv {
 	readonly worker: Worker
 	readonly dir: string
 	readonly cf: CloudflareCollaborators
+	readonly platformResources: 'refuse' | 'allow'
 	generatedConfigs: readonly GeneratedConfig[]
 }
 
@@ -156,7 +158,12 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 		}
 		case 'deploy-worker': {
 			const configs = env.generatedConfigs
+			// The checkout's own build step has run by now, so this is the last moment the tree is still ours to check.
+			const assertAssets = async (configDir: string): Promise<void> => {
+				if (env.platformResources === 'refuse') await assertLiteralAssets(worker, dir, configDir)
+			}
 			if (configs.length === 0) {
+				await assertAssets(dir)
 				if (dryRun) {
 					run.events.log(`  [dry-run] would run: wrangler deploy in ${dir}`)
 					return
@@ -168,6 +175,7 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 			}
 			for (const generated of configs) {
 				const generatedDir = dirname(resolve(dir, generated.path))
+				await assertAssets(generatedDir)
 				if (dryRun) {
 					run.events.log(`  [dry-run] would run: wrangler deploy in ${generatedDir}`)
 					continue
@@ -245,15 +253,17 @@ export const createCloudflareProvider = (
 				loaded.config.resources({ env: run.env, domain: run.domain }),
 				run,
 			)
+			const platformResources = options.platformResources ?? 'refuse'
 			assertAuthoredGraph(worker, {
+				env: run.env,
 				...(run.domain === undefined ? {} : { domain: run.domain }),
 				stateNamespace: stateNamespace(loaded.config, run.target),
-				platformResources: options.platformResources ?? 'refuse',
+				platformResources,
 			})
 			const dir = workerDir(loaded.config, loaded.cwd)
 			const plan = buildPlan(loaded.config, { appId: run.appId, env: run.env }, worker)
 			const byId = new Map(plan.steps.map((step): [string, CloudflareJobSpec] => [step.id, step]))
-			const env: StepEnv = { config: loaded.config, run, worker, dir, cf, generatedConfigs: [] }
+			const env: StepEnv = { config: loaded.config, run, worker, dir, cf, platformResources, generatedConfigs: [] }
 			return {
 				plan,
 				execute: async (stepId): Promise<void> => {

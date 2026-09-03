@@ -34,6 +34,30 @@ this one import.
   `ServiceReference` target (IAM's `propustka-worker` is the one binding every app may keep) — no
   Worker off the `APP` chain, and every route on the run's own domain. `platformResources: 'allow'` exists for fabrika deploying its OWN components (the
   installation CLI and `dryrun-verify`); a checkout is never opened with it.
+- **The bound is on the name oblaka ADOPTS, `${env}-${name}`, not the authored one.** An env name may
+  contain `-`, so env `prod-propustka` + Worker `worker` lands on IAM's `prod-propustka-worker`. A
+  remote name that equals or ends with `-<platform name>` is refused, whatever the env/name split.
+  The state namespace is the one exception — `KVStateStorage` uses it verbatim, so it is matched exactly.
+- **`Worker.options` is an ALLOWLIST for an app (`APP_WORKER_OPTIONS`), not a denylist.** oblaka spreads
+  every option but `dir`/`bindings`/`deleteDurableObjectsOnRemoval` verbatim into the generated wrangler
+  config, so a raw `services`, `durable_objects`, `r2_buckets` or `build` key would bind or run what the
+  typed `bindings` walk never sees. Adding a key to the allowlist is a security decision: it must not be
+  able to name a resource, run a command, or publish a directory. Only `platformResources: 'allow'` skips it.
+- **`assets` is ALLOWED but BOUNDED** (`assertBoundedAssets`). Its `directory` is resolved against the
+  generated `wrangler.jsonc`'s own directory and uploaded publicly, and wrangler's walk ignores only
+  `.assetsignore`/`_redirects`/`_headers` — no dotfile or `.git` skip — so `.` on a root `workerDir` would
+  publish the checkout's `.git/config` and the clone token in it. It must be a relative path with no `..`,
+  no `.git` segment, and at least one real segment; sub-keys are their own allowlist (`APP_ASSETS_OPTIONS`).
+- **A contained `assets.directory` is then WALKED on disk** (`src/assets.ts`). wrangler `stat`s each asset
+  instead of `lstat`ing it, so a committed symlink to `/proc/self/environ` or to `.git/config` would upload
+  publicly; the walk uses `lstat` and refuses the first link, or anything that is neither a regular file nor
+  a directory, bounded at 50 000 entries. A missing directory is wrangler's own error and is left to it.
+  `platformResources: 'allow'` skips the walk.
+- **That walk runs in the `deploy-worker` step, immediately before each `wrangler deploy` spawn** — NOT in
+  `open()`, which stays pure of it. The checkout's own `pipeline.build` runs between the two, so a build
+  line `ln -s /proc/self/environ public/x` would defeat a check made any earlier. One check, at the only
+  moment the tree wrangler reads is final; never add an early duplicate, which would imply a guarantee
+  `open()` cannot give.
 - **Codecs validate on the way in.** A module default imported from a runner checkout is untrusted —
   narrow it with `isCloudflareAppConfig`, never assume the shape.
 - **This package is one of the four that relax two strict flags for oblaka** — see the root

@@ -1,6 +1,10 @@
 import type { RunnerOutcomeFile } from '@fabrika/runner-contract'
-import { beforeEach, describe, expect, test } from 'bun:test'
-import { D1Database, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { symlinkSync } from 'node:fs'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { D1Database, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig, CloudflareAppConfigInput, CloudflareCollaborators, CommandResult, CommandSpec, ProvisionInput } from '..'
 import { cloudflareArtifact, createCloudflareProvider, defaultCloudflareCollaborators, defineApp } from '..'
 
@@ -20,14 +24,23 @@ const config = (overrides: Partial<CloudflareAppConfigInput> = {}): CloudflareAp
 		...overrides,
 	})
 
+const appWorker = (): Worker => new Worker({ dir: '.', name: 'demo', compatibility_flags: [], bindings: {}, main: 'src/index.ts' })
+
+/** A checkout is plain JavaScript: its options object carries whatever raw wrangler keys it likes. */
+const withRawOptions = (worker: Worker, raw: Record<string, unknown>): Worker => {
+	Object.assign(worker.options, raw)
+	return worker
+}
+
 const makeCollaborators = (
 	rec: Recorded,
 	appConfig: CloudflareAppConfig,
 	commandResult: (spec: CommandSpec) => CommandResult = () => ({ exitCode: 0, stdout: '', stderr: '' }),
+	checkoutDir = '/repo/app',
 ): CloudflareCollaborators => ({
 	loadConfig: async (_cwd, configPath) => {
 		expect(configPath).toBe('fabrika.config.ts')
-		return { config: appConfig, cwd: '/repo/app' }
+		return { config: appConfig, cwd: checkoutDir }
 	},
 	runCommand: async (spec) => {
 		rec.commands.push(spec)
@@ -68,14 +81,16 @@ const open = (
 		readonly domain?: string
 		readonly platformResources?: 'refuse' | 'allow'
 		readonly stateNamespace?: string
+		readonly env?: string
+		readonly checkoutDir?: string
 	} = {},
 ) => {
-	const provider = createCloudflareProvider(makeCollaborators(rec, appConfig, options.commandResult), {
+	const provider = createCloudflareProvider(makeCollaborators(rec, appConfig, options.commandResult, options.checkoutDir), {
 		...(options.platformResources === undefined ? {} : { platformResources: options.platformResources }),
 	})
 	return provider.runtime.open({
 		appId: options.appId ?? 'demo',
-		env: 'stage',
+		env: options.env ?? 'stage',
 		domain: options.domain ?? 'stage.example.com',
 		...(options.returnOrigins === undefined ? {} : { returnOrigins: options.returnOrigins }),
 		cwd: '/repo',
@@ -106,9 +121,31 @@ const executePlan = async (session: Awaited<ReturnType<typeof open>>): Promise<v
 	}
 }
 
+const fixtures: string[] = []
+
+/** A real checkout on disk: the symlink bound is about what wrangler would follow, not about a config value. */
+const assetsCheckout = async (build: (assets: string) => Promise<void>): Promise<string> => {
+	const root = await mkdtemp(join(tmpdir(), 'fabrika-assets-'))
+	fixtures.push(root)
+	await writeFile(join(root, 'secret.txt'), 'not for the public')
+	const assets = join(root, 'public')
+	await mkdir(assets)
+	await build(assets)
+	return root
+}
+
+const assetsApp = (): CloudflareAppConfig =>
+	config({ resources: () => withRawOptions(appWorker(), { assets: { binding: 'ASSETS', directory: 'public' } }) })
+
 let rec: Recorded
 beforeEach(() => {
 	rec = { commands: [], provisions: [], outcomes: [], logs: [], provisionedVars: [], applicationVars: [] }
+})
+
+afterEach(async () => {
+	for (const root of fixtures.splice(0)) {
+		await rm(root, { recursive: true, force: true })
+	}
 })
 
 describe('Cloudflare provider', () => {
@@ -327,7 +364,9 @@ describe('Cloudflare provider', () => {
 		const platformWorker = config({
 			resources: () => new Worker({ dir: '.', name: 'vozka', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
 		})
-		await expect(open(rec, platformWorker)).rejects.toThrow('Worker `vozka` is a Fabrika platform resource')
+		await expect(open(rec, platformWorker)).rejects.toThrow(
+			'Worker `vozka` becomes `stage-vozka` on Cloudflare, which would take over the Fabrika platform resource `vozka`',
+		)
 
 		const platformBucket = config({
 			resources: () =>
@@ -339,7 +378,9 @@ describe('Cloudflare provider', () => {
 					main: 'src/index.ts',
 				}),
 		})
-		await expect(open(rec, platformBucket)).rejects.toThrow('R2 bucket `vozka-run-logs` is a Fabrika platform resource')
+		await expect(open(rec, platformBucket)).rejects.toThrow(
+			'R2 bucket `vozka-run-logs` becomes `stage-vozka-run-logs` on Cloudflare, which would take over the Fabrika platform resource `vozka-run-logs`',
+		)
 		expect(rec.provisions).toHaveLength(0)
 	})
 
@@ -390,7 +431,9 @@ describe('Cloudflare provider', () => {
 					main: 'src/index.ts',
 				}),
 		})
-		await expect(open(rec, toRunner)).rejects.toThrow('service binding to `vozka-runner` is a Fabrika platform service')
+		await expect(open(rec, toRunner)).rejects.toThrow(
+			'service binding to `vozka-runner` becomes `stage-vozka-runner` on Cloudflare, which would take over the Fabrika platform resource `vozka-runner`',
+		)
 
 		const toIam = config({
 			resources: () =>
@@ -441,5 +484,193 @@ describe('Cloudflare provider', () => {
 				}),
 		})
 		await expect(open(rec, smuggled)).rejects.toThrow('declares Worker `demo-sidecar`; only the application Worker and its proxy are deployable')
+	})
+
+	test('refuses every raw wrangler key that would bind a resource or run a command', async () => {
+		const smuggled: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+			['services', { services: [{ binding: 'CTRL', service: 'stage-vozka' }] }],
+			['durable_objects', { durable_objects: { bindings: [{ name: 'RC', class_name: 'RunnerContainer', script_name: 'stage-vozka-runner' }] } }],
+			['r2_buckets', { r2_buckets: [{ binding: 'LOGS', bucket_name: 'stage-vozka-run-logs' }] }],
+			['queues', { queues: { producers: [{ binding: 'Q', queue: 'stage-vozka-deploy' }] } }],
+			['build', { build: { command: 'cat /proc/self/environ' } }],
+			['site', { site: { bucket: '../..' } }],
+		]
+		for (const [key, raw] of smuggled) {
+			const authored = config({ resources: () => withRawOptions(appWorker(), raw) })
+			await expect(open(rec, authored)).rejects.toThrow(`Worker \`demo\` sets \`${key}\`, which an app may not configure`)
+		}
+		expect(rec.provisions).toHaveLength(0)
+	})
+
+	test('bounds the raw keys of every Worker in the graph, the proxy included', async () => {
+		const app = withRawOptions(appWorker(), { services: [{ binding: 'CTRL', service: 'stage-vozka' }] })
+		const proxy = new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: app }, main: 'proxy-worker.ts' })
+		await expect(open(rec, config({ resources: () => proxy }))).rejects.toThrow('Worker `demo` sets `services`, which an app may not configure')
+
+		const rawProxy = withRawOptions(
+			new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: appWorker() }, main: 'proxy-worker.ts' }),
+			{ build: { command: 'cat /proc/self/environ' } },
+		)
+		await expect(open(rec, config({ resources: () => rawProxy }))).rejects.toThrow('Worker `demo-proxy` sets `build`, which an app may not configure')
+	})
+
+	test('keeps the Worker options an application config legitimately sets', async () => {
+		const authored = config({
+			resources: () =>
+				new Worker({
+					dir: '.',
+					name: 'demo',
+					main: 'src/index.ts',
+					compatibility_flags: ['nodejs_compat_v2'],
+					compatibility_date: '2025-10-01',
+					workers_dev: false,
+					preview_urls: false,
+					observability: { enabled: true },
+					triggers: { crons: ['0 3 * * *'] },
+					assets: { binding: 'ASSETS', directory: 'dist', not_found_handling: 'single-page-application' },
+					vars: { ENVIRONMENT: 'stage' },
+					routes: [{ pattern: 'stage.example.com', custom_domain: true }],
+					bindings: { DB: new D1Database({ name: 'notes' }) },
+				}),
+		})
+		await expect(open(rec, authored)).resolves.toBeDefined()
+	})
+
+	test('bounds the name oblaka adopts, so an env name cannot split the platform prefix', async () => {
+		const worker = config({
+			resources: () => new Worker({ dir: '.', name: 'worker', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
+		})
+		await expect(open(rec, worker, { env: 'prod-propustka' })).rejects.toThrow(
+			'Worker `worker` becomes `prod-propustka-worker` on Cloudflare, which would take over the Fabrika platform resource `propustka-worker`',
+		)
+
+		const split: ReadonlyArray<readonly [string, string, Record<string, D1Database | KVNamespace | R2Bucket>, string]> = [
+			['prod-propustka', 'D1 database `worker`', { DB: new D1Database({ name: 'worker' }) }, 'propustka-worker'],
+			['prod-propustka', 'KV namespace `state`', { CACHE: new KVNamespace({ name: 'state' }) }, 'propustka-state'],
+			['prod-vozka', 'R2 bucket `run-logs`', { FILES: new R2Bucket({ name: 'run-logs' }) }, 'vozka-run-logs'],
+		]
+		for (const [env, described, bindings, platform] of split) {
+			const authored = config({ resources: () => new Worker({ dir: '.', name: 'demo', compatibility_flags: [], bindings, main: 'src/index.ts' }) })
+			await expect(open(rec, authored, { env })).rejects.toThrow(`${described} becomes \`${env}-`)
+			await expect(open(rec, authored, { env })).rejects.toThrow(`would take over the Fabrika platform resource \`${platform}\``)
+		}
+		expect(rec.provisions).toHaveLength(0)
+	})
+
+	test('serves an assets directory the app keeps inside its own worker directory', async () => {
+		for (const directory of ['public', 'dist/client', './public']) {
+			const authored = config({ resources: () => withRawOptions(appWorker(), { assets: { binding: 'ASSETS', directory } }) })
+			await expect(open(rec, authored)).resolves.toBeDefined()
+		}
+	})
+
+	test('refuses an assets directory that reaches outside the worker directory or into `.git`', async () => {
+		for (const directory of ['..', '../..', '/etc', '.', '', 'public/../..', '.git', 'dist/.git/x']) {
+			const authored = config({ resources: () => withRawOptions(appWorker(), { assets: { binding: 'ASSETS', directory } }) })
+			await expect(open(rec, authored)).rejects.toThrow(
+				`Worker \`demo\` sets \`assets.directory\` to \`${directory}\`; it must be a relative path strictly inside the worker directory`,
+			)
+		}
+		await expect(open(rec, config({ resources: () => withRawOptions(appWorker(), { assets: { binding: 'ASSETS' } }) }))).rejects.toThrow(
+			'sets `assets.directory` to `(not a string)`',
+		)
+		for (const assets of ['public', ['public'], null]) {
+			const authored = config({ resources: () => withRawOptions(appWorker(), { assets }) })
+			await expect(open(rec, authored)).rejects.toThrow('Worker `demo` sets `assets` to something that is not an object')
+		}
+		const unknownKey = config({ resources: () => withRawOptions(appWorker(), { assets: { directory: 'public', bucket: '../..' } }) })
+		await expect(open(rec, unknownKey)).rejects.toThrow('Worker `demo` sets `assets.bucket`, which an app may not configure')
+		expect(rec.provisions).toHaveLength(0)
+	})
+
+	test('deploys an assets directory that holds only regular files and directories', async () => {
+		const checkoutDir = await assetsCheckout(async (assets) => {
+			await mkdir(join(assets, 'nested'))
+			await writeFile(join(assets, 'index.html'), '<!doctype html>')
+			await writeFile(join(assets, 'nested', 'app.js'), 'export {}')
+		})
+		const session = await open(rec, assetsApp(), { checkoutDir })
+		await executePlan(session)
+		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([['wrangler', 'deploy']])
+	})
+
+	test('refuses the deploy when the assets directory holds a symbolic link, wherever it sits', async () => {
+		const cases: ReadonlyArray<readonly [string, (assets: string) => Promise<void>]> = [
+			['leak.txt', async (assets) => await symlink('../secret.txt', join(assets, 'leak.txt'))],
+			['etc', async (assets) => await symlink('/etc', join(assets, 'etc'))],
+			[
+				'a/b/c',
+				async (assets) => {
+					await mkdir(join(assets, 'a', 'b'), { recursive: true })
+					await writeFile(join(assets, 'a', 'b', 'ok.txt'), 'fine')
+					await symlink('/proc/self/environ', join(assets, 'a', 'b', 'c'))
+				},
+			],
+		]
+		for (const [path, build] of cases) {
+			const checkoutDir = await assetsCheckout(build)
+			const session = await open(rec, assetsApp(), { checkoutDir })
+			await session.execute('provision-resources')
+			await expect(session.execute('deploy-worker')).rejects.toThrow(
+				`Worker \`demo\` assets directory \`public\` contains \`${path}\`, which is a symbolic link; wrangler follows it and would publish its target`,
+			)
+		}
+		expect(rec.commands).toHaveLength(0)
+	})
+
+	test('refuses the deploy when the assets directory is itself a symbolic link', async () => {
+		const checkoutDir = await mkdtemp(join(tmpdir(), 'fabrika-assets-'))
+		fixtures.push(checkoutDir)
+		await symlink('/etc', join(checkoutDir, 'public'))
+		const session = await open(rec, assetsApp(), { checkoutDir })
+		await session.execute('provision-resources')
+		await expect(session.execute('deploy-worker')).rejects.toThrow(
+			'Worker `demo` assets directory `public` is a symbolic link; wrangler follows it and would publish its target',
+		)
+		expect(rec.commands).toHaveLength(0)
+	})
+
+	test('refuses a symbolic link the checkout plants in its own build step, after `open` has returned', async () => {
+		const checkoutDir = await assetsCheckout(async () => {})
+		const authored = config({
+			resources: () => withRawOptions(appWorker(), { assets: { binding: 'ASSETS', directory: 'public' } }),
+			pipeline: { build: 'ln -s /proc/self/environ public/x' },
+		})
+		const session = await open(rec, authored, {
+			checkoutDir,
+			commandResult: (spec) => {
+				if (spec.command === 'sh') symlinkSync('/proc/self/environ', join(checkoutDir, 'public', 'x'))
+				return { exitCode: 0, stdout: '', stderr: '' }
+			},
+		})
+		await session.execute('build')
+		await session.execute('provision-resources')
+		await expect(session.execute('deploy-worker')).rejects.toThrow(
+			'Worker `demo` assets directory `public` contains `x`, which is a symbolic link',
+		)
+		expect(rec.commands.map((command) => command.command)).toEqual(['sh'])
+	})
+
+	test('walks no assets directory when fabrika is deploying its own components', async () => {
+		const checkoutDir = await assetsCheckout(async (assets) => {
+			await symlink('../secret.txt', join(assets, 'leak.txt'))
+		})
+		const session = await open(rec, assetsApp(), { checkoutDir, platformResources: 'allow' })
+		await executePlan(session)
+		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([['wrangler', 'deploy']])
+	})
+
+	test('leaves a hyphenated environment that lands on no platform resource alone', async () => {
+		const authored = config({
+			resources: () =>
+				new Worker({
+					dir: '.',
+					name: 'notes',
+					compatibility_flags: [],
+					bindings: { DB: new D1Database({ name: 'notes' }), FILES: new R2Bucket({ name: 'notes-uploads' }) },
+					main: 'src/index.ts',
+				}),
+		})
+		await expect(open(rec, authored, { env: 'prod-eu', domain: 'notes.example.com' })).resolves.toBeDefined()
 	})
 })
