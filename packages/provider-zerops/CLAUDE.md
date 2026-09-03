@@ -32,7 +32,12 @@ bun test
   `interpolateManifest` (`src/provider.ts`) walks the import document's string leaves and returns a new
   document; `renderYaml` runs after it, so a value carrying `"`, a newline or `- hostname:` is emitted as
   a scalar and stays data — the `|-` block form is used ONLY for text that survives it (`blockScalarSafe`
-  in `src/compile.ts`), everything else is JSON double-quoted. Substitution then re-runs
+  in `src/compile.ts`), everything else is JSON double-quoted. **That guarantee is stated against a YAML
+  1.1 reader**, because Zerops parses with go-yaml: 1.1 ends a line on NEL/LS/PS and refuses a raw C1
+  control, and Bun's 1.2 reader does neither. So `isYamlHostileCodePoint` keeps those out of a block and
+  the double-quoted form escapes them `\uXXXX` (keys included — they share `scalar()`). Never certify the
+  emitter with `Bun.YAML.parse` alone: it cannot see the difference, so assert on the rendered TEXT.
+  Substitution then re-runs
   `assertZeropsInvariants`, refuses a value that moved a service's `hostname`/`type`/`envIsolation`/
   `override` or anything in `project`, refuses a placeholder in a key or one a value carried in, and
   refuses a value naming a foreign service. Never splice a value into the YAML text: every structural

@@ -147,9 +147,10 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   `executeDeploy` re-checks the resolved secret names beside the variable names, before any provider effect.
   A Zerops managed-secret write reaches the live service at REQUEST time, so the API check is the only one
   that runs in time there.
-- **A variable value is one bounded line and a domain is a literal host.** `assertAppVarValue` (4096 chars,
-  no control characters but tab) and `assertProxyDomain` (`isProxyHost`) refuse at the API on both transports.
-  The variable bound is the belt for the Zerops provider's text interpolation into finished YAML.
+- **A variable value is one bounded line and a domain is a literal host.** `assertAppVarValue` (4096 chars;
+  no C0/C1 control, DEL, NEL, LS or PS — the line breaks a YAML 1.1 reader honours, not only `\n`) and
+  `assertProxyDomain` (`isProxyHost`) refuse at the API on both transports. The variable bound is the belt;
+  the Zerops emitter's own escaping of those code points is the braces.
 - **One static provider per installation.** Core persists versioned target/artifact envelopes and calls
   `ControlProvider`; it has no provider registry and no provider-id branch. Cloudflare credentials live
   only in `WorkerBindings`; Zerops credentials live only in the process composition. Provider packages

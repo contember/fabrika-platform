@@ -269,22 +269,46 @@ export const compileImport = (input: CompileInput): ZeropsImportDocument => {
 /** Keys/scalars that are safe unquoted in YAML. Everything else gets a double-quoted, JSON-escaped form. */
 const PLAIN = /^[A-Za-z_][A-Za-z0-9_./@+-]*$/
 
+/**
+ * Code points a YAML 1.1 reader (go-yaml, which parses this on Zerops) ends a line on or refuses outright,
+ * while Bun's 1.2 reader takes them for ordinary text — so no test using Bun can see the difference. `\n`
+ * and `\r` are excluded: the block form owns one and `blockScalarSafe` refuses the other.
+ */
+const isYamlHostileCodePoint = (code: number): boolean =>
+	(code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d)
+	|| (code >= 0x7f && code <= 0x9f)
+	|| code === 0x2028
+	|| code === 0x2029
+	|| code === 0xfeff
+	|| (code >= 0xd800 && code <= 0xdfff)
+
+/** `JSON.stringify` leaves DEL, the C1 block, U+2028/9 and U+FEFF raw; YAML's own `\uXXXX` carries them. */
+const escapeYamlHostile = (quoted: string): string =>
+	[...quoted].map((character) => {
+		const code = character.codePointAt(0) ?? 0
+		return isYamlHostileCodePoint(code) ? `\\u${code.toString(16).padStart(4, '0')}` : character
+	}).join('')
+
 const scalar = (value: string): string => {
 	// Reserved plain scalars that YAML would read as booleans/null, plus anything with structure.
 	const reserved = new Set(['true', 'false', 'null', 'yes', 'no', 'on', 'off', '~'])
 	if (value !== '' && PLAIN.test(value) && !reserved.has(value.toLowerCase())) {
 		return value
 	}
-	return JSON.stringify(value)
+	return escapeYamlHostile(JSON.stringify(value))
 }
 
 /**
  * A `|-` block reproduces the string only when the text owns its own lines. An indented or blank first
  * line moves (or breaks) the block's own indentation, `\r` and a blank line do not survive it, and `-`
- * eats a trailing newline. Everything else goes out as a JSON double-quoted scalar, which is exact YAML.
+ * eats a trailing newline. A code point a YAML 1.1 reader breaks a line on cannot go in at all — the block
+ * is the one form with no escapes. Everything else goes out double-quoted, which is exact YAML.
  */
 const blockScalarSafe = (value: string): boolean => {
 	if (!value.includes('\n') || value.includes('\r')) {
+		return false
+	}
+	if ([...value].some((character) => isYamlHostileCodePoint(character.codePointAt(0) ?? 0))) {
 		return false
 	}
 	const lines = value.split('\n')

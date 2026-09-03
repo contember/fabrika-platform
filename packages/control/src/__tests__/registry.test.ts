@@ -727,9 +727,19 @@ describe('platform-owned names, bounded values, and literal hosts', () => {
 
 		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: `v\r1` }), deps)).status).toBe(400)
 		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: 'a'.repeat(4097) }), deps)).status).toBe(400)
-		// The bound itself, and a tab, are accepted.
+
+		// A YAML 1.1 reader ends a line on NEL/LS/PS and refuses a raw C1 control, so "one line" covers them too.
+		for (const character of ['\u0085', '\u2028', '\u2029', '\u0080', '\u009f', '\u007f']) {
+			const label = `U+${(character.codePointAt(0) ?? 0).toString(16).padStart(4, '0')}`
+			const refused = await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: `v1${character}  - hostname: evil` }), deps)
+			expect(`${label}: ${refused.status}`).toBe(`${label}: 400`)
+			expect(`${label}: ${((await refused.json()) as { error: string }).error}`).toContain('single line')
+		}
+
+		// The bound itself, a tab, and an ordinary non-ASCII space are accepted.
 		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: 'a'.repeat(4096) }), deps)).status).toBe(200)
 		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: 'a\tb' }), deps)).status).toBe(200)
+		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: 'a\u00a0b' }), deps)).status).toBe(200)
 	})
 
 	const BAD_DOMAINS = ['*', '*.apps.example.com', 'apps.example.com:8080', 'https://apps.example.com', 'apps.example.com/x']
