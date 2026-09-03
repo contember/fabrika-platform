@@ -69,6 +69,7 @@ and a pin that pins half of what it claims.
 - [88](88-a-control-self-deploy-loses-the-runs-iam-reconcile.md) — The IAM reconcile now rides back on the `startRun` RPC control awaits; a control self-deploy replaces the awaiting isolate and the schema is never applied.
 - [89](89-the-runner-containers-durable-object-methods-authenticate-nobody.md) — The runner Worker keys `startRun`/`cancelRun`, but the `RunnerContainer` Durable Object it exports verifies nothing; a cross-script DO binding from any Worker on the account drives a container directly.
 - [90](90-the-import-document-is-parsed-by-a-different-yaml-dialect-than-zerops-reads.md) — Fabrika checks the Zerops import document with a YAML 1.2 parser and Zerops reads it with a 1.1 one; line breaks are closed, tags (`!!binary`), anchors and duplicate keys are not.
+- [91](91-add-an-organizational-directory-to-iam.md) — Add a source-aware organizational-unit tree, access groups, and group role assignments without turning app scopes into a hierarchy.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.

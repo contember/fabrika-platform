@@ -60,7 +60,9 @@ account that held its only credential.
 Two auth sprints shipped on 2026-08-05 —
 [hardening](archive/sprint-2026-08-04-auth-hardening.md), then
 [track closeout](archive/sprint-2026-08-05-auth-track-closeout.md). The Access-plane
-backlog is empty; what is left of item 54 is a console architecture decision, not auth work.
+hardening backlog is closed; the later source-aware organizational directory and group-entitlement
+expansion is tracked in [item 91](backlog/91-add-an-organizational-directory-to-iam.md). What is left
+of item 54 is a console architecture decision, not auth work.
 
 ## What's hot
 
