@@ -111,6 +111,14 @@ provider resource inside one namespace. Its key is
 - Reconcile acquires missing reserved namespace claims before provider mutation.
 - Omitted claims are retained. A pre-deploy namespace move therefore leaves a
   historical reservation in the old namespace.
+- A claim outlives its owner's deletion. Deleting an application or an
+  application environment that still holds one answers **409**, naming the
+  namespace and the resource keys that hold it. The claim is not released:
+  fabrika deletes no provider resource
+  ([ADR-0034](../decisions/0034-the-control-plane-creates-the-projects-it-owns.md)),
+  so freeing the name would make the orphaned live service adoptable by the next
+  application, carrying its old secrets. Releasing a claim is an undecided
+  operator action, not a step the delete performs.
 
 Before a deploy calls the provider, shared lifecycle code rehydrates the stored
 namespace and verifies provider, environment, readiness, exclusivity, normalized
