@@ -230,12 +230,13 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   attempted before anything is reported; a republish failure is a 502 that LEAVES the registry change in
   place (the row is already the truth), and `reconcile` still queues the provider mutation when its own
   republish fails. Never log the IAM key or the manifest.
-  **The DELETE half is unreachable on Zerops today**: `namespace_resource_claims (owner_app_id, owner_env)`
-  is `ON DELETE RESTRICT` and every Zerops app env acquires claims, so `deleteApp` / `deleteAppEnv` on such
-  an env answers 500 before the hook runs. The republish is therefore reachable only for an environment
-  holding no claims until claim release is decided — releasing them is a USER decision, not a fix: fabrika
-  deletes no provider resource (ADR-0034), so a freed name makes an orphaned service adoptable by the next
-  app, carrying its old secrets.
+  **A CLAIMED environment is refused, not deleted**: `namespace_resource_claims (owner_app_id, owner_env)`
+  is `ON DELETE RESTRICT` and every Zerops app env acquires claims, so `deleteApp` / `deleteAppEnv` READ the
+  held claims first and answer 409 naming each namespace and its resource keys — before the row is touched,
+  audited, or the hook runs. The republish is therefore reachable only for an environment holding no claims
+  until claim release is decided — releasing them is a USER decision, not a fix: fabrika deletes no provider
+  resource (ADR-0034), so a freed name makes an orphaned service adoptable by the next app, carrying its old
+  secrets.
 - **Removal is the narrow case only** (backlog 73). `namespaces.remove` frees a namespace with no
   registered app environment that no worker is settling; it deletes the row and its resource claims in ONE
   guarded transaction (claims first — both FKs are `ON DELETE RESTRICT`) and frees the id for reuse, which

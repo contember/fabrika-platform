@@ -20,7 +20,15 @@ import { operationsManagedEnvironmentCollisions } from '@fabrika/operations-cont
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-contract'
-import { type AppEnvRow, type AppRow, type AppSecretRow, type AppVarRow, type ControlRepositories, NamespaceResourceClaimConflictError } from '../db'
+import {
+	type AppEnvRow,
+	type AppRow,
+	type AppSecretRow,
+	type AppVarRow,
+	type ControlRepositories,
+	NamespaceResourceClaimConflictError,
+	type NamespaceResourceClaimRow,
+} from '../db'
 import { readJson } from '../http'
 import type { Authorized } from '../iam'
 import { booleanField, nullableStringField, numberField, prop, stringField } from '../json'
@@ -218,6 +226,7 @@ export async function deleteApp(c: RegistryContext, id: string): Promise<Respons
 }
 
 export async function deleteAppUseCase(c: RegistryUseCaseContext, id: string): Promise<OkResponse> {
+	assertNoHeldResourceClaims(`app ${id}`, await c.repositories.registry.listNamespaceResourceClaimsForApp(id))
 	// Read the routed namespaces BEFORE the delete: afterwards the rows that name them are gone.
 	const namespaceIds = await routedNamespaceIds(c, id)
 	if (!(await c.repositories.registry.deleteApp(id))) fail(404, 'app not found')
@@ -225,6 +234,23 @@ export async function deleteAppUseCase(c: RegistryUseCaseContext, id: string): P
 	notifyCatalogChanged(c)
 	await syncChangedNamespaceProxies(c.namespaceProxyChanged, namespaceIds)
 	return { ok: true }
+}
+
+/**
+ * Refuse a delete a resource claim holds, naming what holds it. Releasing the claim is a user decision:
+ * fabrika deletes no provider resource (ADR-0034), so a freed name makes the orphaned live service
+ * adoptable by the next app, carrying its old secrets.
+ */
+function assertNoHeldResourceClaims(subject: string, claims: readonly NamespaceResourceClaimRow[]): void {
+	if (claims.length === 0) return
+	const byNamespace = new Map<string, string[]>()
+	for (const claim of claims) {
+		const keys = byNamespace.get(claim.namespace_id) ?? []
+		keys.push(claim.resource_key)
+		byNamespace.set(claim.namespace_id, keys)
+	}
+	const held = [...byNamespace].map(([namespaceId, keys]) => `${namespaceId} (${keys.join(', ')})`).join(', ')
+	fail(409, `${subject} still holds deployment namespace resource claims: ${held}`)
 }
 
 /** The deployment namespaces whose proxy manifest lists this app (all of its environments). */
@@ -336,6 +362,7 @@ export async function deleteAppEnv(c: RegistryContext, appId: string, env: strin
 }
 
 export async function deleteAppEnvUseCase(c: RegistryUseCaseContext, appId: string, env: string): Promise<OkResponse> {
+	assertNoHeldResourceClaims(`app env ${appId}/${env}`, await c.repositories.registry.listNamespaceResourceClaimsForApp(appId, env))
 	const routed = (await c.repositories.registry.getAppEnv(appId, env))?.namespace_id ?? null
 	if (!(await c.repositories.registry.deleteAppEnv(appId, env))) fail(404, 'app env not found')
 	await c.auth.audit({ action: 'app.env.delete', resourceType: 'app_env', resourceId: `${appId}/${env}` })

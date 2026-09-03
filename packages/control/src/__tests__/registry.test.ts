@@ -827,8 +827,8 @@ describe('the namespace proxy follows the registry', () => {
 		}
 	}
 
-	// Seeded WITHOUT resource claims: the claim's owner FK is `ON DELETE RESTRICT`, so an environment
-	// that holds one cannot be deleted at all today (see the note in this unit's report).
+	// Seeded WITHOUT resource claims: the environment a delete can actually remove. `seedClaimedApp` is
+	// the other half — the claim's owner FK is `ON DELETE RESTRICT`, so a claimed one is refused.
 	async function seedRoutedApp(deps: ApiDeps, appId: string, envs: string[]): Promise<void> {
 		await deps.repositories.registry.createApp({ id: appId, repoUrl: `github.com/acme/${appId}` })
 		for (const env of envs) {
@@ -836,6 +836,31 @@ describe('the namespace proxy follows the registry', () => {
 				...storedEnvironment(appId, env, { domain: `${appId}-${env}.example.com` }),
 				namespaceId: `apps-${env}`,
 			})
+		}
+	}
+
+	/** What a Zerops app environment is: the row plus the resource claims its registration acquired. */
+	async function seedClaimedApp(deps: ApiDeps, appId: string, envs: string[]): Promise<void> {
+		await deps.repositories.registry.createApp({ id: appId, repoUrl: `github.com/acme/${appId}` })
+		for (const env of envs) {
+			await deps.repositories.registry.upsertAppEnvWithNamespaceResourceClaims({
+				...storedEnvironment(appId, env, { domain: `${appId}-${env}.example.com` }),
+				namespaceId: `apps-${env}`,
+			}, [`service:${appId}`, `service:${appId}-db`])
+		}
+	}
+
+	/** A refused delete must audit nothing, so the audit calls are what proves the order. */
+	function auditing(base: RegistryUseCaseContext, audited: string[]): RegistryUseCaseContext {
+		return {
+			...base,
+			auth: {
+				...base.auth,
+				audit: (event) => {
+					audited.push(event.action)
+					return Promise.resolve()
+				},
+			},
 		}
 	}
 
@@ -919,6 +944,50 @@ describe('the namespace proxy follows the registry', () => {
 		await expect(deleteAppUseCase(context(deps, recording), 'notes')).rejects.toMatchObject({ httpStatus: 502 })
 		// The second namespace is still republished even though the first refused.
 		expect(recording.synced.sort()).toEqual(['apps-prod', 'apps-stage'])
+	})
+
+	test('deleting an app its resource claims hold is refused, naming every namespace and key', async () => {
+		const { deps } = makeDeps({ provider: namespacedProvider })
+		await seedNamespaces(deps)
+		await seedClaimedApp(deps, 'notes', ['prod', 'stage'])
+		const recording: ProxyRecording = { synced: [] }
+		const audited: string[] = []
+
+		await expect(deleteAppUseCase(auditing(context(deps, recording), audited), 'notes')).rejects.toMatchObject({
+			httpStatus: 409,
+			message: 'app notes still holds deployment namespace resource claims: '
+				+ 'apps-prod (service:notes, service:notes-db), apps-stage (service:notes, service:notes-db)',
+		})
+		expect(await deps.repositories.registry.getApp('notes')).not.toBeNull()
+		expect(recording.synced).toEqual([])
+		expect(audited).toEqual([])
+	})
+
+	test('deleting one environment its resource claims hold is refused, naming only that namespace', async () => {
+		const { deps } = makeDeps({ provider: namespacedProvider })
+		await seedNamespaces(deps)
+		await seedClaimedApp(deps, 'notes', ['prod', 'stage'])
+		const recording: ProxyRecording = { synced: [] }
+		const audited: string[] = []
+
+		await expect(deleteAppEnvUseCase(auditing(context(deps, recording), audited), 'notes', 'prod')).rejects.toMatchObject({
+			httpStatus: 409,
+			message: 'app env notes/prod still holds deployment namespace resource claims: apps-prod (service:notes, service:notes-db)',
+		})
+		expect(await deps.repositories.registry.getAppEnv('notes', 'prod')).not.toBeNull()
+		expect(recording.synced).toEqual([])
+		expect(audited).toEqual([])
+	})
+
+	test('the refusal leaves the unclaimed paths alone: an environment deletes, a missing app is 404', async () => {
+		const { deps } = makeDeps({ provider: namespacedProvider })
+		await seedNamespaces(deps)
+		await seedRoutedApp(deps, 'notes', ['prod', 'stage'])
+		const recording: ProxyRecording = { synced: [] }
+
+		expect(await deleteAppEnvUseCase(context(deps, recording), 'notes', 'prod')).toEqual({ ok: true })
+		expect(await deleteAppUseCase(context(deps, recording), 'notes')).toEqual({ ok: true })
+		await expect(deleteAppUseCase(context(deps, recording), 'ghost')).rejects.toMatchObject({ httpStatus: 404 })
 	})
 
 	test('a renamed host republishes; an edit the manifest does not read republishes nothing', async () => {

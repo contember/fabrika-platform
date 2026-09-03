@@ -607,6 +607,26 @@ export class ControlRegistryRepository {
 		return results
 	}
 
+	/**
+	 * Every claim one app — or one of its environments — still owns, in any namespace. Both owner
+	 * foreign keys are `ON DELETE RESTRICT`, so this is what a registry delete must read before it tries.
+	 */
+	async listNamespaceResourceClaimsForApp(appId: string, env?: string): Promise<NamespaceResourceClaimRow[]> {
+		const statement = env === undefined
+			? this.d1
+				.prepare(`SELECT * FROM namespace_resource_claims
+					WHERE owner_app_id = ?
+					ORDER BY namespace_id, resource_key`)
+				.bind(appId)
+			: this.d1
+				.prepare(`SELECT * FROM namespace_resource_claims
+					WHERE owner_app_id = ? AND owner_env = ?
+					ORDER BY namespace_id, resource_key`)
+				.bind(appId, env)
+		const { results } = await statement.all<NamespaceResourceClaimRow>()
+		return results
+	}
+
 	async createNamespaceResourceClaim(input: {
 		namespaceId: string
 		resourceKey: string
