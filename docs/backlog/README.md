@@ -67,6 +67,8 @@ and a pin that pins half of what it claims.
 - [86](86-a-cloudflare-deploy-holds-the-account-token-beside-the-repositorys-code.md) — The Cloudflare deploy imports the checkout's config beside the account-wide token and no app owns its resource names there; the review mitigated it, the boundary and the ADR reconciling it with ADR-0005 are still owed.
 - [87](87-deleting-a-zerops-app-env-that-holds-claims-answers-500.md) — A Zerops app env's claims restrict its delete, so `deleteApp`/`deleteAppEnv` answer 500 and the proxy republish never runs; releasing the claims needs a decision first.
 - [88](88-a-control-self-deploy-loses-the-runs-iam-reconcile.md) — The IAM reconcile now rides back on the `startRun` RPC control awaits; a control self-deploy replaces the awaiting isolate and the schema is never applied.
+- [89](89-the-runner-containers-durable-object-methods-authenticate-nobody.md) — The runner Worker keys `startRun`/`cancelRun`, but the `RunnerContainer` Durable Object it exports verifies nothing; a cross-script DO binding from any Worker on the account drives a container directly.
+- [90](90-the-import-document-is-parsed-by-a-different-yaml-dialect-than-zerops-reads.md) — Fabrika checks the Zerops import document with a YAML 1.2 parser and Zerops reads it with a 1.1 one; line breaks are closed, tags (`!!binary`), anchors and duplicate keys are not.
 - [09](09-confirm-multi-domain-per-service.md) — Near-settled: upstream's domain flow takes several domains per service. Confirm and document.
 - [10](10-app-scope-secrets-on-zerops.md) — Open: how the `app` secret scope is represented across separate Zerops projects.
 - [11](11-oblaka-rewrites-do-migration-history.md) — oblaka rewrites Durable Object migration history when a class is removed.
