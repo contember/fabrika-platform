@@ -71,7 +71,9 @@ bun test
   services** (`src/service-references.ts`) — Zerops resolves one across services whatever `envIsolation`
   says. `parseFabrikaManifest` refuses a foreign host anywhere in a declared service or in the PARSED
   `sourceDescriptor`; never scan that as text, because a folded break, a `\x24` escape or a block scalar
-  hides a reference the text does not spell. Hostnames are never rewritten at deploy.
+  hides a reference the text does not spell. Hostnames are never rewritten at deploy. The rule covers every
+  app-supplied path into a service's env — the manifest, `interpolateManifest`, and `secrets.put`
+  (`src/control.ts`), which lands on the same resolver.
 - **Persisted target envelopes hold coordinates only.** Credentials are composed for a live run.
 - **The control provider requires an injected `execute` collaborator** (`@fabrika/engine` supplies
   it). Never add a provider-local fallback lifecycle.

@@ -1385,4 +1385,39 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.envWrites).toEqual([{ serviceId: 'service-1', key: 'TOKEN', value: 'secret-value' }])
 		expect(recorded.envDeletes).toEqual(['env-1'])
 	})
+
+	test('refuses a secret value that references a service the app does not own, before anything is written', async () => {
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		if (control.secrets === undefined) {
+			throw new Error('expected Zerops managed secrets')
+		}
+		const secrets = control.secrets
+		const refusal = await secrets
+			.put({ environment: environment(), name: 'TOKEN', value: 'sk-live-leakage${proxy_FABRIKA_IAM_KEY}' })
+			.catch((cause: unknown) => cause)
+		expect(String(refusal)).toContain('references service `proxy`')
+		expect(String(refusal)).not.toContain('sk-live-leakage')
+		await expect(secrets.put({ environment: environment(), name: 'TOKEN', value: 'x ${RUNTIME_proxy_FABRIKA_IAM_KEY}' })).rejects.toThrow(
+			'references service `proxy`',
+		)
+		await expect(secrets.put({ environment: environment(), name: 'TOKEN', value: '${notesdb_password}' })).rejects.toThrow(
+			'references service `notesdb`',
+		)
+		expect(recorded.envWrites).toEqual([])
+	})
+
+	test('writes a secret that references only own services and the namespace postgres', async () => {
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		if (control.secrets === undefined) {
+			throw new Error('expected Zerops managed secrets')
+		}
+		await control.secrets.put({ environment: environment(), name: 'OWN', value: '${notes_PORT}' })
+		await control.secrets.put({ environment: environment(), name: 'DB', value: ZEROPS_SHARED_POSTGRES_CONNECTION_STRING })
+		await control.secrets.put({ environment: environment(), name: 'PLAIN', value: 'pa$$word $notes_PORT ${}' })
+		expect(recorded.envWrites).toEqual([
+			{ serviceId: 'service-1', key: 'OWN', value: '${notes_PORT}' },
+			{ serviceId: 'service-1', key: 'DB', value: ZEROPS_SHARED_POSTGRES_CONNECTION_STRING },
+			{ serviceId: 'service-1', key: 'PLAIN', value: 'pa$$word $notes_PORT ${}' },
+		])
+	})
 })

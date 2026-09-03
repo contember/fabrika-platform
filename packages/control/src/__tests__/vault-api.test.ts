@@ -1,5 +1,5 @@
 import type { AuthContext } from '@fabrika/auth'
-import type { ControlProvider, ProviderEnvelope } from '@fabrika/provider-contract'
+import { type ControlProvider, type ProviderEnvelope, ProviderSecretError } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import type { ApiDeps } from '../api/router'
 import { handleApi } from '../api/router'
@@ -209,6 +209,35 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		})
 		const response = await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { value: 'v1' }), deps)
 		expect(response.status).toBe(400)
+	})
+
+	test('a provider-typed refusal of the value surfaces as 422 on set and rotate, naming the host and never the value', async () => {
+		const { deps } = makeDeps(secretManager())
+		deps.provider = {
+			id: 'harbor',
+			normalizeRegistration: (input) => input,
+			deploy: async () => ({ state: 'succeeded' }),
+			secrets: {
+				put: async ({ name }) => {
+					throw new ProviderSecretError(`harbor: secret \`${name}\` references service \`proxy\`, which this app does not own`, 'foreignReference')
+				},
+				delete: async () => {},
+			},
+		}
+		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+		await deps.repositories.registry.upsertAppEnv({ ...storedEnvironment('harbor') })
+		const value = 'sk-live-leak${proxy_FABRIKA_IAM_KEY}'
+		const set = await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { value, env: 'prod' }), deps)
+		expect(set.status).toBe(422)
+		const setBody = await set.text()
+		expect(setBody).toContain('proxy')
+		expect(setBody).not.toContain('sk-live-leak')
+		expect((await deps.repositories.registry.listAppSecrets('app')).find((secret) => secret.name === 'API_KEY')).toBeUndefined()
+
+		await deps.repositories.registry.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'harbor:prod/API_KEY' })
+		const rotate = await handleApi(req('PATCH', '/api/apps/app/secrets/API_KEY/value', { value, env: 'prod' }), deps)
+		expect(rotate.status).toBe(422)
+		expect(await rotate.text()).not.toContain('sk-live-leak')
 	})
 })
 

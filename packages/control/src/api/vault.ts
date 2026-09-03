@@ -1,6 +1,12 @@
 import type { AuthContext } from '@fabrika/auth'
 import type { OkResponse, SecretValueResponse, SetSecretValueRequest } from '@fabrika/control-contract'
-import type { ControlProvider, ProviderManagedSecrets } from '@fabrika/provider-contract'
+import {
+	type ControlProvider,
+	type ProviderManagedSecrets,
+	ProviderSecretError,
+	type ProviderSecretPutInput,
+	type ProviderSecretPutResult,
+} from '@fabrika/provider-contract'
 import type { AppEnvRow, ControlRepositories } from '../db'
 import { readJson } from '../http'
 import type { Authorized } from '../iam'
@@ -51,7 +57,7 @@ export async function setAppSecretValueUseCase(
 	const env = input.env ?? null
 	const target = await secretTarget(c, appId, env)
 	if (target.kind === 'provider') {
-		const { valueRef } = await target.secrets.put({
+		const { valueRef } = await putProviderSecret(target.secrets, {
 			environment: await providerEnvironment(c.repositories.registry, target.appEnv),
 			name,
 			value: input.value,
@@ -109,7 +115,7 @@ export async function rotateAppSecretValueUseCase(
 	if (valueRef === null) fail(404, 'secret not found')
 	const target = await secretTarget(c, appId, env)
 	if (target.kind === 'provider') {
-		await target.secrets.put({
+		await putProviderSecret(target.secrets, {
 			environment: await providerEnvironment(c.repositories.registry, target.appEnv),
 			name,
 			value: input.value,
@@ -173,6 +179,16 @@ export async function deleteAppSecretValueUseCase(
 		metadata: { name, env },
 	})
 	return { ok: removed }
+}
+
+/** A provider's typed refusal of the value is the caller's to fix; any other failure stays a 500. */
+async function putProviderSecret(secrets: ProviderManagedSecrets, input: ProviderSecretPutInput): Promise<ProviderSecretPutResult> {
+	try {
+		return await secrets.put(input)
+	} catch (cause) {
+		if (cause instanceof ProviderSecretError || (cause instanceof Error && cause.name === 'ProviderSecretError')) fail(422, cause.message)
+		throw cause
+	}
 }
 
 function parseSecretValue(body: unknown): SetSecretValueRequest {

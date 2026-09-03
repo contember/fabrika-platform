@@ -164,6 +164,18 @@ export class ProviderNamespaceError extends Error {
 	}
 }
 
+/**
+ * A provider-managed secret write the provider refuses on the app's own terms — a value naming a
+ * service the app does not own, say. `message` carries the secret's name and the offending host,
+ * never the value, so core may hand it to the caller as a 4xx.
+ */
+export class ProviderSecretError extends Error {
+	constructor(message: string, readonly code: string) {
+		super(message)
+		this.name = 'ProviderSecretError'
+	}
+}
+
 /** Persist a canonical namespace target immediately after one external mutation succeeds. */
 export interface ProviderNamespaceEvents {
 	checkpoint(namespace: ProviderDeploymentNamespace): Promise<void>

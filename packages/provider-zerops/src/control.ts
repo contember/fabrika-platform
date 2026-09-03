@@ -17,6 +17,7 @@ import type {
 	RuntimeProviderRun,
 	SchemaReconciler,
 } from '@fabrika/provider-contract'
+import { ProviderSecretError } from '@fabrika/provider-contract'
 import {
 	createZeropsApi,
 	ZEROPS_ACTIVE,
@@ -40,6 +41,7 @@ import {
 } from './manifest'
 import { createZeropsNamespaceCapabilities, type ZeropsNamespaceTarget, zeropsNamespaceTargetCodec } from './namespace'
 import { createZeropsProvider, type ZeropsSourceTransportBinding } from './provider'
+import { allowedReferenceHosts, foreignReferenceHost, serviceReferenceHosts } from './service-references'
 import { normalizeZeropsSourceRepository, type ZeropsSourceClient, type ZeropsSourceClientV2, type ZeropsSourceResolveResult } from './source'
 import type { ZeropsRunState, ZeropsRuntimeTarget } from './types'
 
@@ -315,6 +317,20 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			decodeEnvelope('artifact', environment.artifact, zeropsArtifactCodec),
 			{ appId: environment.appId, env: environment.env },
 		)
+
+	/**
+	 * A variable written through the env API resolves `${host_KEY}` at container start like `run.envVariables`
+	 * does, across services whatever `envIsolation` says — so an unchecked secret reads the proxy's key.
+	 */
+	const assertOwnReferencesOnly = (environment: ProviderEnvironment, name: string, value: string): void => {
+		// A secret naming no service at all must not start failing on an artifact that no longer parses.
+		if (serviceReferenceHosts(name).length === 0 && serviceReferenceHosts(value).length === 0) return
+		const allowed = allowedReferenceHosts(manifestServiceHostnames(artifactFor(environment)))
+		const foreign = foreignReferenceHost(name, allowed) ?? foreignReferenceHost(value, allowed)
+		if (foreign !== null) {
+			throw new ProviderSecretError(`zerops: secret \`${name}\` references service \`${foreign}\`, which this app does not own`, 'foreignReference')
+		}
+	}
 
 	const cancelSourceBestEffort = async (runId: string, appVersionId: string): Promise<void> => {
 		const sourceController = new AbortController()
@@ -678,6 +694,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		},
 		secrets: {
 			put: async (input) => {
+				assertOwnReferencesOnly(input.environment, input.name, input.value)
 				const target = decodeEnvironment(input.environment).target
 				await api.putServiceEnv({
 					serviceId: target.serviceId,
