@@ -65,6 +65,7 @@
       "version": "0.0.4",
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/jwks": "workspace:*",
         "jose": "^5.9.0",
       },
       "devDependencies": {
@@ -279,6 +280,14 @@
         "@types/bun": "latest",
       },
     },
+    "packages/jwks": {
+      "name": "@fabrika/jwks",
+      "version": "0.0.4",
+      "dependencies": {
+        "@fabrika/auth-core": "workspace:*",
+        "jose": "^5.9.0",
+      },
+    },
     "packages/local-stack": {
       "name": "@fabrika/local-stack",
       "dependencies": {
@@ -427,6 +436,7 @@
       "version": "0.0.4",
       "dependencies": {
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/jwks": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
         "jose": "^5.9.0",
       },
@@ -682,6 +692,8 @@
     "@fabrika/installation-init": ["@fabrika/installation-init@workspace:packages/installation-init"],
 
     "@fabrika/installation-zerops": ["@fabrika/installation-zerops@workspace:packages/installation-zerops"],
+
+    "@fabrika/jwks": ["@fabrika/jwks@workspace:packages/jwks"],
 
     "@fabrika/local-stack": ["@fabrika/local-stack@workspace:packages/local-stack"],
 

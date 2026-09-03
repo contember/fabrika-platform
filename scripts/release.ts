@@ -22,6 +22,7 @@ const EXPECTED_PUBLIC_PACKAGES = [
 	'@fabrika/installation-contract',
 	'@fabrika/installation-init',
 	'@fabrika/installation-zerops',
+	'@fabrika/jwks',
 	'@fabrika/operations',
 	'@fabrika/operations-contract',
 	'@fabrika/platform',

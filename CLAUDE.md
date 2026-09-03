@@ -61,7 +61,7 @@ implementation set to one provider bundle.
 
 ```
 packages/
-  auth-core auth app              # authz kernel · app-facing IAM SDK (verify only) · application runtime
+  auth-core auth jwks app         # authz kernel · app-facing IAM SDK (verify only) · the shared token verifier · application runtime
   iam iam-contract iam-ui         # Access plane: login, token minting, /admin API, admin SPA
   operations operations-{contract,ui}  # Operations plane: ingest, grouping, triage, console views
   control control-contract        # Delivery control plane — Worker AND long-running Bun process

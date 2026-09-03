@@ -2,104 +2,37 @@
  * Local token verification — the warm path. Fetch the JWKS once, then verify every token with no
  * network call on the warm path.
  *
- * `verify` returns a three-state result, because "this token is bad" and "we could not check" are
- * different denials: the first is the caller's fault (401/403), the second is ours (503). Both deny.
+ * The verification itself is `@fabrika/jwks`, shared byte-for-byte with the app SDK. What this file
+ * owns is the proxy's construction shape: one long-lived process holding one verifier, so the key set
+ * is cached per instance, and the audience is the app the forwarded request resolved to — per call,
+ * not per verifier.
  */
 
-import { type AccessTokenClaims, type Jwks, parseAccessClaims } from '@fabrika/auth-core'
-import { createLocalJWKSet, errors as joseErrors, jwtVerify } from 'jose'
+import type { Jwks } from '@fabrika/auth-core'
+import { TokenVerifier as JwksVerifier, type VerifyResult } from '@fabrika/jwks'
 import { JWKS_REFETCH_COOLDOWN_SECONDS, JWKS_TTL_SECONDS } from './constants'
-import { IamUnavailableError } from './iam'
 
-export type VerifyResult =
-	| { ok: true; claims: AccessTokenClaims }
-	/** Signature, issuer, audience, expiry or claim-shape failure — the token is not trustworthy. */
-	| { ok: false; reason: 'invalid' }
-	/** The key set could not be obtained, so nothing can be verified. Deny, but say why. */
-	| { ok: false; reason: 'unavailable' }
-
-/** Sentinel distinguishing "no signing key matched (kid rotation)" from a real verification failure. */
-const NO_KEY = Symbol('no-matching-key')
+export type { VerifyResult }
 
 export class TokenVerifier {
-	private cached: { verifier: ReturnType<typeof createLocalJWKSet>; expiresAt: number } | null = null
-	/** When the last unknown-`kid` refetch was attempted. Null until one has been. */
-	private lastForcedAt: number | null = null
+	private readonly inner: JwksVerifier
 
 	constructor(
-		private readonly getJwks: () => Promise<Jwks>,
-		private readonly issuer: string,
-		private readonly now: () => number,
-		private readonly ttlSeconds: number = JWKS_TTL_SECONDS,
-		private readonly refetchCooldownSeconds: number = JWKS_REFETCH_COOLDOWN_SECONDS,
-	) {}
-
-	/**
-	 * Verify `token` for `audience` and narrow it to access claims. An unknown `kid` triggers one JWKS
-	 * refetch (a key rotated in), then a retry — but at most once per cooldown, because otherwise any
-	 * caller can turn every request into an IAM round trip just by inventing a `kid`.
-	 */
-	async verify(token: string, audience: string): Promise<VerifyResult> {
-		let payload: unknown
-		try {
-			payload = await this.verifyWith(token, audience, false)
-			if (payload === NO_KEY && this.mayForceRefetch()) {
-				payload = await this.verifyWith(token, audience, true)
-			}
-		} catch (err) {
-			if (err instanceof IamUnavailableError) {
-				return { ok: false, reason: 'unavailable' }
-			}
-			throw err
-		}
-		if (payload === NO_KEY || payload === null) {
-			return { ok: false, reason: 'invalid' }
-		}
-		const claims = parseAccessClaims(payload)
-		return claims === null ? { ok: false, reason: 'invalid' } : { ok: true, claims }
+		getJwks: () => Promise<Jwks>,
+		issuer: string,
+		now: () => number,
+		ttlSeconds: number = JWKS_TTL_SECONDS,
+		refetchCooldownSeconds: number = JWKS_REFETCH_COOLDOWN_SECONDS,
+	) {
+		this.inner = new JwksVerifier({ getJwks, issuer, now, ttlSeconds, refetchCooldownSeconds })
 	}
 
 	/**
-	 * May an unknown `kid` force a refetch right now? A rotation is rare and the token is denied either
-	 * way, so rate-limiting this costs a few seconds of rotation lag and removes an amplification
-	 * primitive: without it, N requests with N invented kids are N IAM fetches.
+	 * Verify `token` for `audience`. An unknown `kid` forces one JWKS refetch (a key rotated in), then a
+	 * retry — but at most once per cooldown, because otherwise any caller can turn every request into an
+	 * IAM round trip just by inventing a `kid`.
 	 */
-	private mayForceRefetch(): boolean {
-		const now = this.now()
-		if (this.lastForcedAt !== null && now - this.lastForcedAt < this.refetchCooldownSeconds) {
-			return false
-		}
-		this.lastForcedAt = now
-		return true
-	}
-
-	/** Returns the payload, `null` on a genuine verification failure, or `NO_KEY` on a kid miss. */
-	private async verifyWith(token: string, audience: string, force: boolean): Promise<unknown> {
-		const jwks = await this.jwks(force)
-		try {
-			const { payload } = await jwtVerify(token, jwks, { issuer: this.issuer, audience })
-			return payload
-		} catch (err) {
-			return err instanceof joseErrors.JWKSNoMatchingKey ? NO_KEY : null
-		}
-	}
-
-	private async jwks(force: boolean): Promise<ReturnType<typeof createLocalJWKSet>> {
-		const now = this.now()
-		if (!force && this.cached !== null && this.cached.expiresAt > now) {
-			return this.cached.verifier
-		}
-		let keys: Jwks
-		try {
-			keys = await this.getJwks()
-		} catch {
-			// Any JWKS failure is an IAM outage as far as we are concerned. Note that we do NOT fall
-			// back to a stale verifier here: the previous key set may have been rotated out precisely
-			// because it was compromised.
-			throw new IamUnavailableError('getJwks')
-		}
-		const verifier = createLocalJWKSet(keys)
-		this.cached = { verifier, expiresAt: now + this.ttlSeconds }
-		return verifier
+	verify(token: string, audience: string): Promise<VerifyResult> {
+		return this.inner.verify(token, audience)
 	}
 }

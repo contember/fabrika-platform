@@ -1,15 +1,15 @@
 /**
  * `TokenVerifier` conformance — one table, two implementations, identical verdicts.
  *
- * `packages/auth/src/verify.ts` and `packages/proxy/src/verifier.ts` are near-twins, and sharing the
- * code was considered and REJECTED: `@fabrika/auth-core` is deliberately jose-free and
- * dependency-free, the proxy must not depend on the app SDK, and a package existing to share ~90
- * lines between two consumers with genuinely different cache lifetimes is over-engineering.
+ * `packages/auth/src/verify.ts` and `packages/proxy-core/src/verifier.ts` are thin wrappers over the
+ * one verifier in `@fabrika/jwks`. Sharing it was rejected once and that call is reversed by
+ * [ADR-0040](../../../docs/decisions/0040-share-one-token-verifier.md); this table outlives the
+ * merge, because two wrappers over one core can still disagree.
  *
  * What must not drift is their THREE-STATE semantics — a decided negative ("this token is bad", 401),
  * versus "we could not consult IAM" (503), versus valid. Collapsing the first two would let a JWKS
  * outage read as a forged token, which is a silent incident on one side and a login loop on the
- * other. So the shared property is pinned here rather than in the code.
+ * other. The semantics live in one place now; this is the probe that they stay there.
  *
  * It lives OUTSIDE `src/`, like `proxy-gates.test.ts` and `console-access-plane.test.ts`:
  * `tsconfig.json` includes `src/**` only, so reaching across into two other packages never enters
@@ -163,11 +163,10 @@ for (const scenario of SCENARIOS) {
 // ── Where they differ, and why the difference is deliberate ───────────────────
 
 describe('the caching differs on purpose, and the difference is asserted rather than skipped', () => {
-	test('the proxy rate-limits unknown-kid refetches; the SDK does not, because it cannot be driven', async () => {
-		// The proxy is the only publicly-routed component: a client that invents a `kid` per request
-		// would turn every request into a JWKS round trip, so `mayForceRefetch` caps it. The SDK sees
-		// only the token the PROXY injected — the generated Caddy config strips the header off the
-		// inbound request — so the same input does not exist there and a cooldown would only add lag.
+	test('both sides bound the unknown-kid refetch, and each bounds it over its own cache lifetime', async () => {
+		// A client inventing a `kid` per request would otherwise turn every request into a JWKS round
+		// trip. The proxy is publicly routed, so it always needed the bound; the SDK has it since
+		// ADR-0040, because a published library cannot enforce that a proxy stripped the header.
 		const proxyKeys = keySource()
 		const proxyVerifier = new ProxyTokenVerifier(() => proxyKeys.getJwks(), ISSUER, now)
 		const authKeys = keySource()
@@ -178,10 +177,9 @@ describe('the caching differs on purpose, and the difference is asserted rather 
 			expect(verdict(await proxyVerifier.verify(token, APP))).toBe('invalid')
 			expect(verdict(await authVerifier.verify(token))).toBe('invalid')
 		}
-		// One warm fetch plus at most one forced refetch inside the cooldown window.
+		// One warm fetch plus at most one forced refetch inside the cooldown window, on both.
 		expect(proxyKeys.jwksCalls).toBeLessThanOrEqual(2)
-		// One warm fetch plus one forced refetch per attempt.
-		expect(authKeys.jwksCalls).toBe(11)
+		expect(authKeys.jwksCalls).toBeLessThanOrEqual(2)
 	})
 
 	test('the SDK caches per BINDING, so a second verifier over one binding makes no second fetch', async () => {

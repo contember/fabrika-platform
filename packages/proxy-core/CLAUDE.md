@@ -8,7 +8,8 @@ and mint or refuse. Nothing reaches an app until its gates pass
 There are two enforcement points and they run the same code from here: the Bun service answering
 Caddy's `forward_auth` subrequest on Zerops (`@fabrika/proxy`), and the Cloudflare proxy Worker
 calling it in-process (`@fabrika/provider-cloudflare`). The manifest wire contract and its strict
-parser are `@fabrika/proxy-contract`; the gate matcher and the token claims are `@fabrika/auth-core`.
+parser are `@fabrika/proxy-contract`; the gate matcher and the token claims are `@fabrika/auth-core`;
+the JWKS token verifier is `@fabrika/jwks`, the same class `@fabrika/auth` wraps.
 
 **The behavioural invariants live in [`../proxy/CLAUDE.md`](../proxy/CLAUDE.md)** — deny semantics,
 the three-state `verify`, the `human` gate's answer shape, the client-coordinate table, and the

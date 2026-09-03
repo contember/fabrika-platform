@@ -36,13 +36,8 @@ export const APP_QUERY_PARAM = 'app'
  */
 export const LOGIN_REDIRECT_PARAM = 'redirect'
 
-/** How long a fetched JWKS is reused before a refetch (a kid rotation also forces one on demand). */
-export const JWKS_TTL_SECONDS = 600
-/**
- * Minimum gap between two unknown-`kid` refetches. Bounds how often a token nobody can verify may
- * cost an IAM round trip — the token is denied either way, and a real rotation is picked up within it.
- */
-export const JWKS_REFETCH_COOLDOWN_SECONDS = 30
+/** The JWKS cache TTL and the unknown-`kid` refetch cooldown, owned by the verifier both planes share. */
+export { JWKS_REFETCH_COOLDOWN_SECONDS, JWKS_TTL_SECONDS } from '@fabrika/jwks'
 
 /** Default IAM request timeout. A hung IAM must deny, not hang every request behind it. */
 export const DEFAULT_IAM_TIMEOUT_MS = 5_000

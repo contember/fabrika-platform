@@ -27,6 +27,7 @@
 	},
 	"dependencies": {
 		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/jwks": "workspace:*",
 		"@fabrika/proxy-contract": "workspace:*",
 		"jose": "^5.9.0"
 	},

@@ -185,3 +185,4 @@ tuning preset, never the cap. HA and larger floors stay reachable through `--pos
 - [0037](0037-stream-github-tarballs-for-zerops-sources.md) — Stream GitHub tarballs for Zerops sources — accepted; amends 0029's packaging mechanism (2026-08-21)
 - [0038](0038-size-namespaces-cheaply-by-default.md) — Size namespaces cheaply by default; an environment name never chooses a size — accepted (2026-08-21)
 - [0039](0039-retire-the-legacy-v1-source-credential-path.md) — Retire the legacy v1 source credential path — accepted; supersedes 0032's compatibility clause (2026-08-21)
+- [0040](0040-share-one-token-verifier.md) — Share one token verifier between the SDK and the proxy — accepted; reverses a rejected option recorded in the 2026-08-04 auth-hardening sprint (2026-09-03)

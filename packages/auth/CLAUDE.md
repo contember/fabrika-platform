@@ -37,8 +37,10 @@ the service that owns identity.
   a `reason` that claims we checked. Neither method throws for either case.
 - **The JWKS cache is keyed by the BINDING OBJECT, in a module-level WeakMap** — not by the `Iam`
   instance. `@fabrika/app` calls its `middleware(env)` factory on every request, so an SDK object built
-  there is per-request while the binding lives for the isolate/process. An unknown `kid` triggers ONE
-  refetch; a fetch failure never falls back to the stale verifier.
+  there is per-request while the binding lives for the isolate/process. The unknown-`kid` refetch
+  cooldown lives in that same per-binding slot — a per-request verifier would otherwise reset it, and
+  the bound would do nothing. An unknown `kid` forces at most ONE refetch per cooldown; a fetch failure
+  never falls back to the stale key set.
 - **`redeemKey` is the ONE credential path that survives.** Share links are redeemed off the gate path:
   those requests hit a `public`/`service` gate and the app redeems the capability itself. There is no
   proxy equivalent by design. Its per-binding token cache is keyed by a SHA-256 digest (never the
@@ -81,6 +83,7 @@ the service that owns identity.
   (`fabrika.config.ts`). Nothing in this package reads them.
 - The authz vocabulary each app declares (`AppSchema`: scope dimensions, action catalog, roles) is the
   app's own; the first reconcile is also how it registers itself in IAM.
-- `src/verify.ts` is a deliberate near-twin of `@fabrika/proxy`'s `src/verifier.ts`. They cache
-  differently (per binding vs per process) and the proxy must not depend on the app SDK, so the two
-  stay separate; keep their three-state semantics identical.
+- `src/verify.ts` no longer verifies anything itself: `@fabrika/jwks` owns the one implementation and
+  `@fabrika/proxy-core` wraps the same class. The proxy must not depend on the app SDK and
+  `@fabrika/auth-core` is deliberately jose-free, which is why the shared code has its own package.
+  What stays here is the SDK's construction shape — a fixed audience and the per-binding cache.

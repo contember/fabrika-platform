@@ -97,6 +97,7 @@ App at all.
 | ---------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `@fabrika/auth-core`               | The authz kernel every auth component shares: policy model, gate matcher, token and RPC wire.  |
 | `@fabrika/auth`                    | The published app-facing SDK. Verifies the proxy-injected token; enforces nothing.             |
+| `@fabrika/jwks`                    | The one JWKS-backed token verifier the SDK and the proxy both wrap (ADR-0040).                 |
 | `@fabrika/app`                     | Fetch routing, middleware, typed RPC, object authorization, client, explicit runtime adapters. |
 | `@fabrika/iam`                     | The IAM service itself: human authentication, identity, keys, policies, and audit.             |
 | `@fabrika/iam-contract`            | Runtime-neutral IAM admin REST DTOs and typed RPC contract.                                    |

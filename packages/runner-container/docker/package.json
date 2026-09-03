@@ -5,6 +5,7 @@
 	"workspaces": [
 		"packages/app",
 		"packages/auth-core",
+		"packages/jwks",
 		"packages/auth",
 		"packages/provider-contract",
 		"packages/proxy-contract",

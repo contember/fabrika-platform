@@ -1,0 +1,32 @@
+{
+	"name": "@fabrika/jwks",
+	"version": "0.0.4",
+	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/contember/fabrika-platform.git",
+		"directory": "packages/jwks"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"src",
+		"!src/**/__tests__/**"
+	],
+	"exports": {
+		".": {
+			"bun": "./src/index.ts",
+			"types": "./src/index.ts",
+			"default": "./src/index.ts"
+		}
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@fabrika/auth-core": "workspace:*",
+		"jose": "^5.9.0"
+	}
+}
