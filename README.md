@@ -38,6 +38,10 @@ embedded in the Fabrika console).
 **Application runtime** — `@fabrika/app` (Fetch-based HTTP routing, middleware, typed RPC, structural
 errors, object-level authorization, a typed browser client, and Worker/Bun lifecycle adapters).
 
+**Agent interfaces** — `@fabrika/daemon-kit` (Bun daemon lifecycle, HTTP routing, WebSocket channels,
+and CLI waiters) · `@fabrika/annotations` (annotation state, editors, and text/block/region locators) ·
+`@fabrika/canvas-kernel` (JSX compilation, revisions, rendering, and interactive canvas components).
+
 **Operations** — `@fabrika/operations-contract` (browser/runtime-safe
 protocols) · `@fabrika/operations` (portable ingest, persistence, triage,
 release, source-map, alert, and health service) · `@fabrika/operations-ui`
@@ -74,7 +78,7 @@ Requires **[Bun](https://bun.sh)** (≥ 1.3).
 ```bash
 bun install
 bun run typecheck
-bun test
+bun run test
 bun run lint          # biome
 bun run format        # dprint
 ```

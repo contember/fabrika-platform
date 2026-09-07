@@ -8,7 +8,8 @@
 	],
 	"scripts": {
 		"typecheck": "bun run --filter '*' typecheck && tsc --project scripts/tsconfig.json",
-		"test": "bun test",
+		"test": "bun test --path-ignore-patterns='tests/browser/**' --path-ignore-patterns='packages/annotations/**' --path-ignore-patterns='packages/canvas-kernel/**' --path-ignore-patterns='packages/daemon-kit/**' && bun run test:agent-interfaces",
+		"test:agent-interfaces": "bun test --isolate packages/annotations packages/canvas-kernel packages/daemon-kit",
 		"test:live": "bun test packages/provider-zerops/src/__tests__/platform-facts.live.test.ts",
 		"lint": "biome lint .",
 		"format": "dprint fmt",

@@ -1,0 +1,18 @@
+// Components every canvas host provides. Hosts that ship extra components
+// compose their own `#canvas/components` barrel over this one.
+export { useFeedback } from '#canvas/runtime'
+export { Callout } from './Callout'
+export { Checklist } from './Checklist'
+export { Choice, MultiChoice } from './Choice'
+export { CodeBlock } from './CodeBlock'
+export { Diff } from './Diff'
+export { FilePreview } from './FilePreview'
+export { ImageView } from './Image'
+export { Markdown } from './Markdown'
+export { Mermaid } from './Mermaid'
+export { Note } from './Note'
+export { Priority } from './Priority'
+export { Section } from './Section'
+export { Table } from './Table'
+export { Item, Task } from './Task'
+export { RangeInput, UserInput } from './UserInput'

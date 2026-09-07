@@ -9,11 +9,14 @@ type DependencyField = 'dependencies' | 'optionalDependencies' | 'peerDependenci
 const DEPENDENCY_FIELDS: readonly DependencyField[] = ['dependencies', 'optionalDependencies', 'peerDependencies']
 const PACKED_DEPENDENCY_FIELDS: readonly string[] = [...DEPENDENCY_FIELDS, 'devDependencies']
 const EXPECTED_PUBLIC_PACKAGES = [
+	'@fabrika/annotations',
 	'@fabrika/app',
 	'@fabrika/auth',
 	'@fabrika/auth-core',
+	'@fabrika/canvas-kernel',
 	'@fabrika/cli',
 	'@fabrika/control-contract',
+	'@fabrika/daemon-kit',
 	'@fabrika/email',
 	'@fabrika/engine',
 	'@fabrika/github-app',
@@ -394,7 +397,7 @@ const runConsumerSmoke = async (dependencies: Readonly<Record<string, string>>, 
 		await writeFile(
 			join(consumer, 'smoke.ts'),
 			[
-				"const modules = await Promise.all([import('@fabrika/app'), import('@fabrika/provider-cloudflare'), import('@fabrika/provider-zerops')])",
+				"const modules = await Promise.all([import('@fabrika/annotations'), import('@fabrika/app'), import('@fabrika/canvas-kernel'), import('@fabrika/daemon-kit'), import('@fabrika/provider-cloudflare'), import('@fabrika/provider-zerops')])",
 				"if (modules.some((module) => Object.keys(module).length === 0)) throw new Error('A public entry point has no exports')",
 				"console.info('public entry points loaded')",
 				'',

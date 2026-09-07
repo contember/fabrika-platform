@@ -1,0 +1,61 @@
+{
+	"name": "@fabrika/annotations",
+	"version": "0.0.4",
+	"type": "module",
+	"description": "React annotation state, text/block/region locators, editor and feedback surface.",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/contember/fabrika-platform.git",
+		"directory": "packages/annotations"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"index.ts",
+		"src",
+		"!src/**/*.test.ts",
+		"!src/**/*.test.tsx"
+	],
+	"exports": {
+		".": {
+			"bun": "./index.ts",
+			"types": "./index.ts",
+			"default": "./index.ts"
+		},
+		"./runtime": {
+			"bun": "./src/runtime.ts",
+			"types": "./src/runtime.ts",
+			"default": "./src/runtime.ts"
+		},
+		"./styles.css": "./src/styles.css",
+		"./testing/dom.ts": {
+			"bun": "./src/testing/dom.ts",
+			"types": "./src/testing/dom.ts",
+			"default": "./src/testing/dom.ts"
+		}
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
+	},
+	"peerDependencies": {
+		"@happy-dom/global-registrator": "^20.11.2",
+		"react": ">=18",
+		"react-dom": ">=18"
+	},
+	"peerDependenciesMeta": {
+		"@happy-dom/global-registrator": {
+			"optional": true
+		}
+	},
+	"devDependencies": {
+		"@happy-dom/global-registrator": "^20.11.2",
+		"@types/bun": "latest",
+		"@types/react": "^19.0.0",
+		"@types/react-dom": "^19.0.0",
+		"react": "^19.0.0",
+		"react-dom": "^19.0.0"
+	}
+}

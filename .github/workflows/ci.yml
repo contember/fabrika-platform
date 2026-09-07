@@ -92,7 +92,7 @@ jobs:
             'mc alias set local http://127.0.0.1:9000 minioadmin minioadmin && mc mb local/fabrika-test'
 
       - name: Run full test suite
-        run: bun test
+        run: bun run test
 
   build:
     name: Build deployable artifacts

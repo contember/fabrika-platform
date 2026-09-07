@@ -27,7 +27,7 @@ facts settled against a real account, several of which contradict Zerops' publis
 ```bash
 bun install
 bun run typecheck          # every package + scripts/
-bun test                   # all tests; some suites skip without Postgres/S3 (see below)
+bun run test               # all tests; isolates DOM-heavy agent-interface suites
 bun test packages/engine/src/__tests__/deploy.test.ts   # a single file
 bun run lint               # biome
 bun run format             # dprint fmt  (format:check to verify only)
@@ -61,6 +61,7 @@ implementation set to one provider bundle.
 
 ```
 packages/
+  daemon-kit annotations canvas-kernel  # Reusable daemon, annotation, and interactive canvas foundations
   auth-core auth jwks app         # authz kernel · app-facing IAM SDK (verify only) · the shared token verifier · application runtime
   iam iam-contract iam-ui         # Access plane: login, token minting, /admin API, admin SPA
   operations operations-{contract,ui}  # Operations plane: ingest, grouping, triage, console views
@@ -134,6 +135,8 @@ contract note (`*-contract`), the substantial ones are:
   claims, `IamRpc`) · `packages/auth/` — the app-facing IAM SDK, which verifies the injected token
   and nothing else · `packages/app/` — the request pipeline, typed RPC, runtime adapters ·
   `packages/iam/` — the Access service, on both runtimes.
+- `packages/daemon-kit/` — reusable Bun daemon primitives · `packages/annotations/` — runtime-neutral
+  annotation state and UI · `packages/canvas-kernel/` — the Agent Canvas compiler, store, renderer, and components.
 - `packages/control/` — API/ACL, vault, secret resolution, run lifecycle, webhook (+ `DATABASE.md`
   for its SQL and migration rules) · `packages/engine/` — the provider-neutral executor.
 - `packages/platform/` + `packages/platform-node/` — the runtime ports and their Postgres/S3/Bun

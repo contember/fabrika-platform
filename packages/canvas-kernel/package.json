@@ -1,0 +1,77 @@
+{
+	"name": "@fabrika/canvas-kernel",
+	"version": "0.0.4",
+	"type": "module",
+	"description": "Canvas JSX compiler, session/revision store, renderer and interactive component library.",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/contember/fabrika-platform.git",
+		"directory": "packages/canvas-kernel"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"index.ts",
+		"src",
+		"!src/**/*.test.ts",
+		"!src/**/*.test.tsx"
+	],
+	"exports": {
+		".": {
+			"bun": "./index.ts",
+			"types": "./index.ts",
+			"default": "./index.ts"
+		},
+		"./server": {
+			"bun": "./index.ts",
+			"types": "./index.ts",
+			"default": "./index.ts"
+		},
+		"./client": {
+			"bun": "./src/client/index.ts",
+			"types": "./src/client/index.ts",
+			"default": "./src/client/index.ts"
+		},
+		"./components": {
+			"bun": "./src/client/components/index.ts",
+			"types": "./src/client/components/index.ts",
+			"default": "./src/client/components/index.ts"
+		},
+		"./runtime": {
+			"bun": "./src/client/runtime.ts",
+			"types": "./src/client/runtime.ts",
+			"default": "./src/client/runtime.ts"
+		},
+		"./styles.css": "./src/client/styles.css",
+		"./theme.css": "./src/client/theme.css"
+	},
+	"imports": {
+		"#canvas/components": "./src/client/components/index.ts",
+		"#canvas/runtime": "./src/client/runtime.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@fabrika/annotations": "workspace:*",
+		"@fabrika/daemon-kit": "workspace:*",
+		"marked": "^17.0.4",
+		"mermaid-parser-bundle": "^0.1.2",
+		"preact": "^10.25.0",
+		"preact-render-to-string": "^6.6.6"
+	},
+	"peerDependencies": {
+		"react": ">=18",
+		"react-dom": ">=18"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"@types/react": "^19.0.0",
+		"@types/react-dom": "^19.0.0",
+		"react": "^19.0.0",
+		"react-dom": "^19.0.0"
+	}
+}
