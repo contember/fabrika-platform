@@ -1,0 +1,70 @@
+#!/usr/bin/env bun
+
+import { mkdirSync, rmSync, writeFileSync } from 'fs'
+import { resolve } from 'path'
+import { startDaemon } from './index'
+import { PID_FILE, SESSIONS_DIR, TEMP_DIR } from './paths'
+
+const port = parseInt(process.env['FABRIKA_PORT'] || '19410', 10)
+
+interface ActiveDaemon {
+	ok?: boolean
+	sessionsDir?: string
+}
+
+function parseActiveDaemon(value: unknown): ActiveDaemon | null {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+	const ok = 'ok' in value ? value.ok : undefined
+	const sessionsDir = 'sessionsDir' in value ? value.sessionsDir : undefined
+	if (ok !== true || (sessionsDir !== undefined && typeof sessionsDir !== 'string')) return null
+	return { ok, ...(sessionsDir === undefined ? {} : { sessionsDir }) }
+}
+
+async function activeDaemon(): Promise<ActiveDaemon | null> {
+	try {
+		const res = await fetch(`http://localhost:${port}/health`, {
+			signal: AbortSignal.timeout(1000),
+		})
+		const data: unknown = await res.json()
+		return parseActiveDaemon(data)
+	} catch {
+		return null
+	}
+}
+
+const active = await activeDaemon()
+if (active) {
+	if (active.sessionsDir && resolve(active.sessionsDir) === resolve(SESSIONS_DIR)) {
+		console.log(`fabrika daemon already running on http://localhost:${port} — not starting a second.`)
+		process.exit(0)
+	}
+	console.error(
+		`fabrika daemon on :${port} uses ${active.sessionsDir ?? 'an unknown legacy data root'}; `
+			+ `requested ${SESSIONS_DIR}. Stop it before starting this daemon.`,
+	)
+	process.exit(1)
+}
+
+let server: ReturnType<typeof startDaemon>['server']
+try {
+	;({ server } = startDaemon({ port }))
+} catch (error: unknown) {
+	console.error(`fabrika daemon failed to bind :${port}: ${error instanceof Error ? error.message : String(error)}`)
+	process.exit(1)
+}
+
+mkdirSync(TEMP_DIR, { recursive: true })
+writeFileSync(PID_FILE, String(process.pid))
+
+console.log(`fabrika daemon listening on http://localhost:${server.port}`)
+
+function shutdown() {
+	try {
+		rmSync(PID_FILE, { force: true })
+	} catch {
+	}
+	process.exit(0)
+}
+
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)

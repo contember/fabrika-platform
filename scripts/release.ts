@@ -13,6 +13,7 @@ const EXPECTED_PUBLIC_PACKAGES = [
 	'@fabrika/app',
 	'@fabrika/auth',
 	'@fabrika/auth-core',
+	'@fabrika/builder',
 	'@fabrika/canvas-kernel',
 	'@fabrika/cli',
 	'@fabrika/control-contract',
@@ -250,6 +251,16 @@ const stagedManifest = (item: PackageInfo, version: string, publicNames: Readonl
 
 const tarballFilename = (name: string, version: string): string => `${name.replace(/^@/, '').replaceAll('/', '-')}-${version}.tgz`
 
+const preparesRelease = (manifest: Record<string, unknown>): boolean => {
+	const scripts = manifest['scripts']
+	return isRecord(scripts) && typeof scripts['release:prepare'] === 'string'
+}
+
+const includesDist = (manifest: Record<string, unknown>): boolean => {
+	const files = manifest['files']
+	return Array.isArray(files) && files.some((file) => typeof file === 'string' && file.split('/').includes('dist'))
+}
+
 const collectExportTargets = (value: unknown, source: string, targets: Set<string>): void => {
 	if (value === null) return
 	if (typeof value === 'string') {
@@ -339,12 +350,15 @@ const pack = async (options: Options, order: readonly PackageInfo[]): Promise<Re
 	const entries: ReleasePackage[] = []
 	try {
 		for (const item of order) {
+			if (preparesRelease(item.manifest)) await run(['bun', 'run', 'release:prepare'], { cwd: item.directory })
 			const stagingDirectory = join(stagingRoot, basename(item.directory))
+			const includeDist = includesDist(item.manifest)
 			await cp(item.directory, stagingDirectory, {
 				recursive: true,
 				filter: (source) => {
 					const parts = source.split('/')
-					return !parts.includes('node_modules') && !parts.includes('dist') && !parts.includes('__tests__') && !/\.(?:test|spec)\.[^.]+$/.test(source)
+					return !parts.includes('node_modules') && (includeDist || !parts.includes('dist')) && !parts.includes('__tests__')
+						&& !/\.(?:test|spec)\.[^.]+$/.test(source)
 				},
 			})
 			await writeFile(join(stagingDirectory, 'package.json'), `${JSON.stringify(stagedManifest(item, options.version, publicNames), null, '\t')}\n`)
@@ -397,8 +411,12 @@ const runConsumerSmoke = async (dependencies: Readonly<Record<string, string>>, 
 		await writeFile(
 			join(consumer, 'smoke.ts'),
 			[
-				"const modules = await Promise.all([import('@fabrika/annotations'), import('@fabrika/app'), import('@fabrika/canvas-kernel'), import('@fabrika/daemon-kit'), import('@fabrika/provider-cloudflare'), import('@fabrika/provider-zerops')])",
+				"const modules = await Promise.all([import('@fabrika/annotations'), import('@fabrika/app'), import('@fabrika/builder'), import('@fabrika/canvas-kernel'), import('@fabrika/daemon-kit'), import('@fabrika/provider-cloudflare'), import('@fabrika/provider-zerops')])",
 				"if (modules.some((module) => Object.keys(module).length === 0)) throw new Error('A public entry point has no exports')",
+				"const builder = await import('@fabrika/builder')",
+				"if (builder.resolveCatalogRoot() === null || builder.resolveSkillSource() === null) throw new Error('Builder resources are missing')",
+				"const builderRoot = new URL('.', import.meta.resolve('@fabrika/builder'))",
+				"if (!(await Bun.file(new URL('ui/dist/index.html', builderRoot)).exists())) throw new Error('Builder dashboard is missing')",
 				"console.info('public entry points loaded')",
 				'',
 			].join('\n'),
@@ -413,6 +431,7 @@ const runConsumerSmoke = async (dependencies: Readonly<Record<string, string>>, 
 		}
 		await run(['bun', 'run', 'smoke.ts'], { cwd: consumer })
 		await run([join(consumer, 'node_modules', '.bin', 'fabrika'), '--help'], { cwd: consumer })
+		await run([join(consumer, 'node_modules', '.bin', 'fabrika'), 'builder', '--help'], { cwd: consumer })
 		console.info(`${label} passed for ${Object.keys(dependencies).length} packages in an isolated consumer`)
 	} finally {
 		await rm(consumer, { recursive: true, force: true })

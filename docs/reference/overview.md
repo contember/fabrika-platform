@@ -118,6 +118,7 @@ App at all.
 | `@fabrika/installation-cloudflare` | Cloudflare account bring-up and platform plan/deploy composition.                              |
 | `@fabrika/installation-zerops`     | Zerops topology, generated installation artifacts, and platform plan validation.               |
 | `@fabrika/installation-init`       | The operator-side `init` mechanics both installations share.                                   |
+| `@fabrika/builder`                 | Guided specification, review, and agent-assisted implementation loop.                          |
 | `@fabrika/cli`                     | The single public `fabrika` command and provider-aware command router.                         |
 | `@fabrika/dashboard`               | Unified Delivery, Access, and Operations console served by control.                            |
 | `@fabrika/runner-contract`         | Provider-neutral Worker↔container transport types and endpoints.                               |
@@ -154,7 +155,8 @@ The narrow contract packages keep wire types away from runtime entrypoints:
   through `@fabrika/runner-contract`. Provider job semantics remain in
   `@fabrika/provider-cloudflare`.
 - `@fabrika/cli` invokes provider-specific installation packages through
-  `@fabrika/installation-contract`.
+  `@fabrika/installation-contract` and exposes the guided builder through
+  `@fabrika/builder` under `fabrika builder …`.
 
 ## Operator console
 

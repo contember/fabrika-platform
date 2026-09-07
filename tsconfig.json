@@ -9,6 +9,7 @@
 		{ "path": "./packages/provider-zerops" },
 		{ "path": "./packages/auth-core" },
 		{ "path": "./packages/auth" },
+		{ "path": "./packages/builder" },
 		{ "path": "./packages/canvas-kernel" },
 		{ "path": "./packages/github-app" },
 		{ "path": "./packages/source-zerops" },

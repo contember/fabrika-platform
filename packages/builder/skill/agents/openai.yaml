@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fabrika"
+  short_description: "Build reviewed apps through Fabrika phases"
+  default_prompt: "Use $fabrika to start or resume this application project."

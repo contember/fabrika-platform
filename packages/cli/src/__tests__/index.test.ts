@@ -24,6 +24,29 @@ describe('unified CLI parsing', () => {
 			help: false,
 		})
 	})
+
+	test('routes builder arguments through the builder namespace', () => {
+		expect(parseCliArgs(['builder', 'gate', 'open', 'vision', '--view', 'vision.jsx'])).toEqual({
+			area: 'builder',
+			command: 'gate',
+			provider: undefined,
+			rest: ['open', 'vision', '--view', 'vision.jsx'],
+			help: false,
+		})
+	})
+
+	test('shows builder-specific help', async () => {
+		const lines: string[] = []
+		const info = console.info
+		console.info = (message?: unknown): void => void lines.push(String(message))
+		try {
+			await runCli(['builder', '--help'])
+		} finally {
+			console.info = info
+		}
+		expect(lines.join('\n')).toContain('fabrika builder init')
+		expect(lines.join('\n')).not.toContain('fabrika platform install')
+	})
 })
 
 describe('provider inference', () => {

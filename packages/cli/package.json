@@ -31,6 +31,7 @@
 	"dependencies": {
 		"@fabrika/app": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/builder": "workspace:*",
 		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/installation-cloudflare": "workspace:*",
 		"@fabrika/installation-contract": "workspace:*",

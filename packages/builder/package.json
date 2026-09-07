@@ -1,0 +1,60 @@
+{
+	"name": "@fabrika/builder",
+	"version": "0.0.4",
+	"type": "module",
+	"description": "Local-first guided application design and agent-assisted implementation.",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/contember/fabrika-platform.git",
+		"directory": "packages/builder"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"index.ts",
+		"cli/src",
+		"daemon/src",
+		"ui/dist",
+		"skill",
+		"decisions",
+		"stacks",
+		"README.md",
+		"BUILD-CONTRACT.md",
+		"LICENSE"
+	],
+	"exports": {
+		".": {
+			"bun": "./index.ts",
+			"types": "./index.ts",
+			"default": "./index.ts"
+		},
+		"./daemon": {
+			"bun": "./daemon/src/index.ts",
+			"types": "./daemon/src/index.ts",
+			"default": "./daemon/src/index.ts"
+		}
+	},
+	"scripts": {
+		"build": "bun ui/build.ts",
+		"release:prepare": "bun run build",
+		"typecheck": "tsc --noEmit",
+		"test": "bun test --preload ./daemon/test/preload.ts cli/test daemon/test ui/test"
+	},
+	"dependencies": {
+		"@fabrika/annotations": "workspace:*",
+		"@fabrika/canvas-kernel": "workspace:*",
+		"@fabrika/daemon-kit": "workspace:*",
+		"preact": "^10.25.0"
+	},
+	"devDependencies": {
+		"@tailwindcss/cli": "4",
+		"@types/bun": "latest",
+		"@types/react": "^19.0.0",
+		"@types/react-dom": "^19.0.0",
+		"react": "^19.0.0",
+		"react-dom": "^19.0.0",
+		"tailwindcss": "4"
+	}
+}

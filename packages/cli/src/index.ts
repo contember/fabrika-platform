@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { BUILDER_USAGE, runBuilderCli } from '@fabrika/builder'
 import { installationCliFromModule, isInstallationCommand, supportsInstallationCommand } from '@fabrika/installation-contract'
 import { authoredAppProvider } from '@fabrika/provider-contract'
 import { resolve } from 'node:path'
@@ -18,6 +19,7 @@ Usage:
   fabrika app build [--provider=zerops] --env=<env> [--config=<path>] [--output=<path>]
   fabrika namespace <plan|create|adopt|reconcile> --provider=zerops [provider options]
   fabrika control <key|apps|namespaces|register|deploy|runs> [options]
+  fabrika builder <init|next|advance|gate|ensure-daemon|induce|build> [options]
 
 For app commands, the provider is read from the config returned by the selected provider's defineApp().
 An explicit --provider is required only when no app config is available.
@@ -187,6 +189,10 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 		console.info(CONTROL_USAGE)
 		return
 	}
+	if (parsed.help && parsed.area === 'builder') {
+		console.info(BUILDER_USAGE)
+		return
+	}
 	if (parsed.help || parsed.area === undefined) {
 		console.info(USAGE)
 		return
@@ -205,6 +211,11 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 	}
 	if (parsed.area === 'control') {
 		await runControlCli(parsed.command, parsed.rest, parsed.provider)
+		return
+	}
+	if (parsed.area === 'builder') {
+		const exitCode = await runBuilderCli(parsed.command === undefined ? [] : [parsed.command, ...parsed.rest])
+		if (exitCode !== 0) process.exitCode = exitCode
 		return
 	}
 	throw new Error(`Unknown command area: ${parsed.area}\n\n${USAGE}`)

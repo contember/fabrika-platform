@@ -42,6 +42,9 @@ errors, object-level authorization, a typed browser client, and Worker/Bun lifec
 and CLI waiters) · `@fabrika/annotations` (annotation state, editors, and text/block/region locators) ·
 `@fabrika/canvas-kernel` (JSX compilation, revisions, rendering, and interactive canvas components).
 
+**Application builder** — `@fabrika/builder` provides the guided specification, review, and
+agent-assisted implementation loop exposed through `fabrika builder …` by `@fabrika/cli`.
+
 **Operations** — `@fabrika/operations-contract` (browser/runtime-safe
 protocols) · `@fabrika/operations` (portable ingest, persistence, triage,
 release, source-map, alert, and health service) · `@fabrika/operations-ui`

@@ -1,0 +1,51 @@
+/* The fabrika dashboard CSS entry (Tailwind v4).
+ *
+ * Two layers stacked here:
+ *  1. The kernel's styles.css — pulls `@import "tailwindcss"`, the kernel
+ *     theme tokens, every canvas/annotation rule (inline marks, prose-canvas,
+ *     diff/range/plan-flash), AND a kernel-relative `@source` so Tailwind emits
+ *     the utility classes the reused kernel components reference. Without this
+ *     the mounted PlanRenderer + AnnotationSidebar would be unstyled.
+ *  2. The shell's own chrome — theme.css (its semantic token overrides, applied
+ *     AFTER the kernel theme so the dashboard chrome wins where they overlap)
+ *     plus the base/scrollbar rules below.
+ *
+ * `@import "tailwindcss"` is deduped by Tailwind v4, so importing it via the
+ * kernel styles is fine. We add an explicit `@source` for the shell's own src/
+ * (the kernel's @source only covers the kernel tree). */
+
+@import "@fabrika/canvas-kernel/styles.css";
+@import "./theme.css";
+
+@source "../src/**/*.{tsx,ts}";
+
+/* The shell's own base layer (dashboard chrome). */
+html,
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  background: var(--color-bg-base);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+}
+
+/* Thin, theme-matched scrollbars for the panes. */
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border-medium);
+  border-radius: 5px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-hover);
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
