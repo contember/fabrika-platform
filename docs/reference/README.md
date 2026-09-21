@@ -13,6 +13,8 @@ behaviour.
 - [`overview.md`](overview.md) — what fabrika-platform is, why it exists, the
   three product planes, the services an installation actually runs, packages, and
   primary request flows. **Start here.**
+- [`installing-on-zerops.md`](installing-on-zerops.md) — the operator's procedure from an empty
+  Zerops account to a serving application: prerequisites, the command order, and a check per step.
 - [`application-runtime.md`](application-runtime.md) — the `@fabrika/app` request
   pipeline, typed RPC, and authorization boundary.
 - [`core-application-composition.md`](core-application-composition.md) — how IAM,
