@@ -1,8 +1,9 @@
 import { createWebSocketManager, SessionManager, unwatchAll, type WSData } from '@fabrika/canvas-kernel/server'
 import { dispatch } from '@fabrika/daemon-kit'
 import { resolve } from 'path'
+import { admitRequest } from './admission'
 import { BuildStream } from './build-stream'
-import { corsHeaders, createHandlers } from './handlers'
+import { createHandlers } from './handlers'
 import { SESSIONS_DIR } from './paths'
 import { createStaticHandlers } from './static'
 
@@ -62,9 +63,11 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 		hostname: 'localhost',
 		fetch(req, server) {
 			const url = new URL(req.url)
+			const rejection = admitRequest(req, url, portRef.value)
+			if (rejection) return rejection
 
 			if (req.method === 'OPTIONS') {
-				return new Response(null, { status: 204, headers: corsHeaders(portRef.value) })
+				return new Response(null, { status: 204 })
 			}
 
 			const wsBrowser = url.pathname.match(/^\/ws\/session\/([^/]+)$/)
