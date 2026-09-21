@@ -32,6 +32,8 @@
 		"gen:schema": "bun scripts/generate-zerops-types.ts"
 	},
 	"dependencies": {
+		"@fabrika/app": "workspace:*",
+		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",

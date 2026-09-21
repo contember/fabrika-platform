@@ -1,3 +1,5 @@
+import { createRpcClient } from '@fabrika/app'
+import type { AdoptDeploymentNamespaceRequest, ControlRpcContract, CreateDeploymentNamespaceRequest } from '@fabrika/control-contract'
 import type { JsonValue, ProviderDeploymentNamespace, ProviderNamespacePlan } from '@fabrika/provider-contract'
 import type { ZeropsCliArgs } from './cli-args'
 import { createZeropsNamespaceOperator, type ZeropsNamespacePostgres, zeropsNamespaceTargetCodec } from './namespace'
@@ -86,22 +88,6 @@ const namespacePlan = (
 
 const outputJson = (value: unknown): string => `${JSON.stringify(value, null, '\t')}\n`
 
-const responseText = async (response: Response): Promise<string> => {
-	const text = await response.text()
-	if (response.ok) return text.trim() === '' ? 'null' : text
-	let message = `Control API request failed (${response.status})`
-	try {
-		const body: unknown = JSON.parse(text)
-		if (typeof body === 'object' && body !== null) {
-			const error = Reflect.get(body, 'error')
-			if (typeof error === 'string' && error !== '') message = error
-		}
-	} catch {
-		if (text.trim() !== '' && text.length < 500) message = text
-	}
-	throw new Error(message)
-}
-
 const controlCoordinates = (
 	args: ZeropsCliArgs,
 	source: Readonly<Record<string, string | undefined>>,
@@ -120,39 +106,44 @@ const controlCoordinates = (
 	return { baseUrl, token }
 }
 
-const callControl = async (
+const controlClient = (
 	deps: ZeropsNamespaceCommandDependencies,
 	coordinates: { baseUrl: URL; token: string },
-	path: string,
-	body?: unknown,
-): Promise<void> => {
-	const response = await deps.fetch(new URL(path, coordinates.baseUrl), {
-		method: 'POST',
-		headers: {
-			accept: 'application/json',
-			authorization: `Bearer ${coordinates.token}`,
-			...(body === undefined ? {} : { 'content-type': 'application/json' }),
+) =>
+	createRpcClient<ControlRpcContract>({
+		baseUrl: new URL('/api/rpc', coordinates.baseUrl).href,
+		fetch: async (input, init) => {
+			const headers = new Headers(init?.headers)
+			headers.set('authorization', `Bearer ${coordinates.token}`)
+			const response = await deps.fetch(input, { ...init, headers, redirect: 'manual' })
+			if (!response.ok) {
+				const body: unknown = await response.clone().json().catch(() => null)
+				if (typeof body !== 'object' || body === null || !('error' in body)) {
+					return Response.json({ error: { type: 'transport', message: `Control API request failed (${response.status})` } }, { status: response.status })
+				}
+			}
+			return response
 		},
-		...(body === undefined ? {} : { body: JSON.stringify(body) }),
 	})
-	const text = await responseText(response)
-	let parsed: unknown
-	try {
-		parsed = JSON.parse(text)
-	} catch {
-		parsed = text
+
+const writeNamespace = (deps: ZeropsNamespaceCommandDependencies, result: unknown): void => {
+	if (
+		typeof result !== 'object' || result === null || !('id' in result) || typeof result.id !== 'string' || !('state' in result)
+		|| typeof result.state !== 'string' || !['pending', 'provisioning', 'ready', 'failed'].includes(result.state)
+	) {
+		throw new Error('Control API returned an invalid namespace')
 	}
-	deps.write(outputJson(parsed))
+	deps.write(outputJson(result))
 }
 
-const createBody = (namespace: ProviderDeploymentNamespace): object => ({
+const createBody = (namespace: ProviderDeploymentNamespace): CreateDeploymentNamespaceRequest => ({
 	id: namespace.id,
 	env: namespace.env,
 	...(namespace.exclusiveAppId === undefined ? {} : { exclusiveAppId: namespace.exclusiveAppId }),
 	target: namespace.target,
 })
 
-const adoptBody = (namespace: ProviderDeploymentNamespace): object => ({
+const adoptBody = (namespace: ProviderDeploymentNamespace): AdoptDeploymentNamespaceRequest => ({
 	env: namespace.env,
 	...(namespace.exclusiveAppId === undefined ? {} : { exclusiveAppId: namespace.exclusiveAppId }),
 	target: namespace.target,
@@ -171,7 +162,7 @@ export const runZeropsNamespaceCommand = async (
 	if (subcommand === 'reconcile') {
 		const id = required(args.namespaceId, '--id')
 		const control = controlCoordinates(args, deps.source)
-		await callControl(deps, control, `/api/namespaces/${encodeURIComponent(id)}/reconcile`)
+		writeNamespace(deps, await controlClient(deps, control).namespaces.reconcile({ namespaceId: id }))
 		return
 	}
 	if (subcommand !== 'create' && subcommand !== 'adopt') {
@@ -181,7 +172,7 @@ export const runZeropsNamespaceCommand = async (
 	const planned = namespacePlan(args, deps.source)
 	const control = controlCoordinates(args, deps.source)
 	if (subcommand === 'create') {
-		await callControl(deps, control, '/api/namespaces', createBody(planned.namespace))
+		writeNamespace(deps, await controlClient(deps, control).namespaces.create(createBody(planned.namespace)))
 		return
 	}
 
@@ -200,10 +191,5 @@ export const runZeropsNamespaceCommand = async (
 			}),
 		},
 	}
-	await callControl(
-		deps,
-		control,
-		`/api/namespaces/${encodeURIComponent(namespace.id)}/adopt`,
-		adoptBody(namespace),
-	)
+	writeNamespace(deps, await controlClient(deps, control).namespaces.adopt({ namespaceId: namespace.id, namespace: adoptBody(namespace) }))
 }

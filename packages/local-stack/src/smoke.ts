@@ -467,7 +467,7 @@ const proveNamespaceIsolation = async (): Promise<void> => {
  * challenged by Operations' own envelope credential check.
  */
 const proveOperationsPublicBoundary = async (machineKey: string): Promise<void> => {
-	const denied = ['/healthz', '/private/catalog/reconcile', '/private/releases/reconcile', '/api/issues', '/api/rpc']
+	const denied = ['/healthz', '/private/catalog/reconcile', '/private/releases/reconcile', '/api/undeclared-path', '/api/rpc']
 	for (const path of denied) {
 		const anonymous = await fetch(`${OPERATIONS_ORIGIN}${path}`, { redirect: 'manual' })
 		if (anonymous.status !== 403) {
@@ -491,17 +491,17 @@ const proveOperationsPublicBoundary = async (machineKey: string): Promise<void> 
 	}
 }
 
-/** The console is fronted by the proxy: an anonymous `/api/*` call never reaches control. */
+/** A navigation to the RPC URL must be redirected by the proxy before control handles the method. */
 const proveControlIsGated = async (): Promise<void> => {
-	const response = await fetch(`${CONTROL_ORIGIN}/api/namespaces`, { headers: { accept: 'application/json' }, redirect: 'manual' })
+	const response = await fetch(`${CONTROL_ORIGIN}/api/rpc`, { headers: { accept: 'application/json' }, redirect: 'manual' })
 	if (response.status !== 302) {
-		throw new Error(`anonymous control /api/namespaces returned ${response.status}, expected a proxy login redirect`)
+		throw new Error(`anonymous control /api/rpc returned ${response.status}, expected a proxy login redirect`)
 	}
 	const location = new URL(response.headers.get('location') ?? '')
 	if (`${location.origin}${location.pathname}` !== `${IAM_ORIGIN}/auth/login`) {
-		throw new Error('anonymous control /api/namespaces was not sent to IAM')
+		throw new Error('anonymous control /api/rpc was not sent to IAM')
 	}
-	if (location.searchParams.get('app') !== 'vozka' || location.searchParams.get('redirect') !== `${CONTROL_ORIGIN}/api/namespaces`) {
+	if (location.searchParams.get('app') !== 'vozka' || location.searchParams.get('redirect') !== `${CONTROL_ORIGIN}/api/rpc`) {
 		throw new Error('control login redirect does not name the app and the original URL')
 	}
 }

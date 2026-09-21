@@ -13,6 +13,8 @@
  * The key is a secret. It lives in the ignored `.state/` directory and is never logged.
  */
 
+import { createRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
+import type { ControlRpcContract } from '@fabrika/control-contract'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { STATE_DIR } from './prepare'
@@ -50,13 +52,20 @@ const property = (value: unknown, key: string): unknown =>
 	typeof value === 'object' && value !== null && key in value ? Reflect.get(value, key) : undefined
 
 /** Does this key still buy an authorized control-plane call through the proxy? */
-const stillWorks = async (key: string): Promise<boolean> => {
+export const machineKeyStillWorks = async (key: string, request: RpcFetch = fetch): Promise<boolean> => {
 	try {
-		const response = await fetch(`${CONTROL_ORIGIN}/api/namespaces`, {
-			headers: { accept: 'application/json', authorization: `Bearer ${key}` },
-			redirect: 'manual',
+		const client = createRpcClient<ControlRpcContract>({
+			baseUrl: `${CONTROL_ORIGIN}/api/rpc`,
+			fetch: async (input, init) => {
+				const headers = new Headers(init?.headers)
+				headers.set('authorization', `Bearer ${key}`)
+				const response = await request(input, { ...init, headers, redirect: 'manual' })
+				if (!response.ok) throw new RpcError({ type: 'transport', message: 'Control readiness request failed', httpStatus: response.status })
+				return response
+			},
 		})
-		return response.ok
+		const result: unknown = await client.namespaces.list()
+		return Array.isArray(property(result, 'items'))
 	} catch {
 		return false
 	}
@@ -96,7 +105,7 @@ export const ensureMachineKey = async (): Promise<void> => {
 		throw new Error('FABRIKA_IAM_PROVISIONING_KEY is missing from the generated local credentials')
 	}
 	const existing = readMachineKey()
-	if (existing !== null && await stillWorks(existing)) {
+	if (existing !== null && await machineKeyStillWorks(existing)) {
 		return
 	}
 	const key = await provision(provisioningKey)

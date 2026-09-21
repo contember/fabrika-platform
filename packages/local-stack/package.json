@@ -22,6 +22,8 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"@fabrika/app": "workspace:*",
+		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/control": "workspace:*",

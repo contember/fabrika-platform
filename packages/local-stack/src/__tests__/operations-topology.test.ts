@@ -20,7 +20,7 @@ describe('local Operations topology', () => {
 		expect(firstGate(gates, '/api/artifacts/source-maps/')).toBe('public')
 		// Everything else matches NO rule, so the proxy denies it before Operations is asked. Health,
 		// private reconciliation and the operator API are all reached over the private network instead.
-		for (const path of ['/healthz', '/private/catalog/reconcile', '/private/releases/reconcile', '/api/issues', '/api/rpc']) {
+		for (const path of ['/healthz', '/private/catalog/reconcile', '/private/releases/reconcile', '/api/undeclared-path', '/api/rpc']) {
 			expect(applicableGates(gates, path)).toEqual([])
 		}
 	})
@@ -37,7 +37,7 @@ describe('local control topology', () => {
 		}
 		// A machine key first, a logged-in human otherwise — and the terminal `/*` rule keeps the fall
 		// through on the human path, so no anonymous request ever reaches these.
-		for (const path of ['/api/namespaces', '/iam/admin/rpc', '/operations/api/rpc']) {
+		for (const path of ['/api/rpc', '/iam/admin/rpc', '/operations/api/rpc']) {
 			const kinds = applicableGates(gates, path).map((gate) => gate.rule.kind)
 			expect(kinds[0]).toBe('service')
 			expect(kinds.slice(1).every((kind) => kind === 'human')).toBe(true)

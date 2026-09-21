@@ -7,6 +7,7 @@ interface Call {
 	readonly method: string
 	readonly authorization: string | null
 	readonly body: string | null
+	readonly redirect: RequestRedirect | undefined
 }
 
 const source = (): Record<string, string | undefined> => ({
@@ -22,16 +23,38 @@ const recorder = (calls: Call[], status = 200) => (input: string | URL | Request
 		method: init?.method ?? 'GET',
 		authorization: headers.get('authorization'),
 		body: typeof init?.body === 'string' ? init.body : null,
+		redirect: init?.redirect,
 	})
 	return Promise.resolve(
 		new Response(
-			status >= 400 ? JSON.stringify({ error: 'namespace request failed' }) : JSON.stringify({ state: 'ready' }),
+			status >= 400
+				? JSON.stringify({ error: { type: 'error', message: 'namespace request failed' } })
+				: JSON.stringify({ result: { id: 'namespace', state: 'ready' } }),
 			{ status, headers: { 'content-type': 'application/json' } },
 		),
 	)
 }
 
 describe('fabrika namespace commands', () => {
+	test('unwraps RPC results and rejects malformed success or HTTP failure', async () => {
+		const args = parseZeropsCliArgs(['namespace', 'reconcile', '--id=apps-prod'])
+		const output: string[] = []
+		await runZeropsNamespaceCommand(args, { source: source(), fetch: recorder([]), write: (value) => output.push(value) })
+		expect(JSON.parse(output.join(''))).toEqual({ id: 'namespace', state: 'ready' })
+		for (
+			const response of [
+				Response.json({}),
+				Response.json({ result: null }),
+				Response.json({ result: { id: 'x', state: 'bogus' } }),
+				Response.json({ result: { id: 'x', state: 'ready' } }, { status: 503 }),
+			]
+		) {
+			const failedOutput: string[] = []
+			await expect(runZeropsNamespaceCommand(args, { source: source(), fetch: async () => response, write: (value) => failedOutput.push(value) }))
+				.rejects.toThrow()
+			expect(failedOutput).toEqual([])
+		}
+	})
 	test('plans cheap topology offline with explicit provider fields', async () => {
 		const calls: Call[] = []
 		const output: string[] = []
@@ -69,13 +92,16 @@ describe('fabrika namespace commands', () => {
 
 		expect(calls).toHaveLength(1)
 		expect(calls[0]).toMatchObject({
-			url: 'https://control.example.test/api/namespaces',
+			url: 'https://control.example.test/api/rpc',
 			method: 'POST',
 			authorization: 'Bearer px_operator_secret',
+			redirect: 'manual',
 		})
-		const body: { id: string; env: string; exclusiveAppId: string; target: { payload: { postgres?: unknown } } } = JSON.parse(calls[0]?.body ?? '')
-		expect(body).toMatchObject({ id: 'billing-prod', env: 'prod', exclusiveAppId: 'billing' })
-		expect(body.target.payload.postgres).toBeUndefined()
+		const body: { method: string; input: { id: string; env: string; exclusiveAppId: string; target: { payload: { postgres?: unknown } } } } = JSON
+			.parse(calls[0]?.body ?? '')
+		expect(body.method).toBe('namespaces.create')
+		expect(body.input).toMatchObject({ id: 'billing-prod', env: 'prod', exclusiveAppId: 'billing' })
+		expect(body.input.target.payload.postgres).toBeUndefined()
 	})
 
 	test('adopts an existing project and reconciles by namespace id', async () => {
@@ -98,12 +124,17 @@ describe('fabrika namespace commands', () => {
 		)
 
 		expect(calls.map((call) => call.url)).toEqual([
-			'https://control.example.test/api/namespaces/legacy-prod/adopt',
-			'https://control.example.test/api/namespaces/legacy-prod/reconcile',
+			'https://control.example.test/api/rpc',
+			'https://control.example.test/api/rpc',
 		])
-		const adopted: { target: { payload: { managed: boolean; projectId: string } } } = JSON.parse(calls[0]?.body ?? '')
-		expect(adopted.target.payload).toMatchObject({ managed: false, projectId: 'project-1' })
-		expect(calls[1]?.body).toBeNull()
+		const adopted: { method: string; input: { namespaceId: string; namespace: { target: { payload: { managed: boolean; projectId: string } } } } } =
+			JSON.parse(
+				calls[0]?.body ?? '',
+			)
+		expect(adopted.method).toBe('namespaces.adopt')
+		expect(adopted.input.namespaceId).toBe('legacy-prod')
+		expect(adopted.input.namespace.target.payload).toMatchObject({ managed: false, projectId: 'project-1' })
+		expect(JSON.parse(calls[1]?.body ?? '')).toEqual({ method: 'namespaces.reconcile', input: { namespaceId: 'legacy-prod' } })
 	})
 
 	test('rejects missing coordinates and credentials before fetch', async () => {
