@@ -22,6 +22,17 @@ ensure daemon → fabrika builder next → do packet work → gate → advance �
 ```
 
 1. Bootstrap once.
+   - For an installed Zerops platform, run
+     `bunx fabrika builder init [dir] --url=https://control.example --no-open`.
+     This selects `zerops-app` for a new project. Open the returned local
+     dashboard and let the human sign in, create or select the application,
+     review its environment/namespace/domain, and approve access in the console.
+     Run `bunx fabrika builder status --json` until connected before scaffolding
+     application code. Read the selected application and placement in `next`.
+     Never request a credential or copy an approval URL into agent output.
+     For an existing `zerops-app` project, use
+     `bunx fabrika builder connect --url=https://control.example --no-open`.
+     Repeat initialization preserves the existing profile, binding and artifacts.
    - If `.fabrika/` is absent, run
      `bunx fabrika builder init [dir] [--profile cf-lightweight]`. It installs both
      Claude and Codex repo support by default, starts the daemon, and opens the
@@ -60,6 +71,29 @@ ensure daemon → fabrika builder next → do packet work → gate → advance �
    must own orchestration and spawn implementers directly; do not spawn a nested
    build-orchestrator that would need to spawn its own children. This keeps the
    workflow compatible with hosts whose default subagent depth is one.
+
+7. Run the app locally and publish its actual preview address with
+   `bunx fabrika builder preview --url=http://localhost:4321`. Use its configured
+   port; the example is not a default. Clear stale metadata with
+   `bunx fabrika builder preview --clear`.
+
+8. For a connected Zerops project only (`zerops-app` with a connection shown by
+   `bunx fabrika builder status --json`), use the deployment loop below.
+   Cloudflare presets and offline/unconnected Zerops projects follow their stack
+   preset's own deployment guidance instead; do not run `builder deploy` for them.
+   After local verification, ask the user to explicitly authorize a commit and
+   push, or have the user do them. Never commit or push automatically. Deployment
+   requires a clean repository and a remotely available commit. Then run
+   `bunx fabrika builder deploy --wait --timeout=600 --json`. The local daemon
+   performs deployment through the connected platform. A trigger is not success:
+   failed, cancelled or timed-out waits exit nonzero. Keep the returned run ID
+   and inspect `bunx fabrika builder status --json` and the local dashboard.
+
+9. For subsequent changes to a connected Zerops project, reuse the connection: build locally, review and test,
+   obtain explicit commit/push authorization, then deploy again. Do not create a
+   duplicate app. `bunx fabrika builder disconnect` removes local custody only;
+   the human revokes server authorization in the console. Keep coding agents
+   local; this workflow does not configure remote Claude or Codex environments.
 
 ## Invariants
 

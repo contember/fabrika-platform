@@ -1,7 +1,7 @@
-import { spawn } from 'child_process'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'fs'
-import { dirname, join, resolve } from 'path'
-import { fileURLToPath } from 'url'
+import { spawn } from 'node:child_process'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { DATA_DIR, PID_FILE, SESSIONS_DIR, TEMP_DIR } from './config'
 import { health, type HealthInfo, healthMatchesDataRoot, isDaemonRunning } from './daemon-client'
 
@@ -156,16 +156,18 @@ function isAlive(pid: number): boolean {
 	}
 }
 
-export function openBrowser(url: string): void {
+export function openBrowser(url: string, fallbackUrl: string = url): void {
 	const candidates = process.platform === 'darwin'
 		? ['open']
 		: ['xdg-open', 'wslview', 'sensible-browser']
 	for (const cmd of candidates) {
 		const which = Bun.spawnSync(['which', cmd])
 		if (which.exitCode === 0) {
-			spawn(cmd, [url], { detached: true, stdio: 'ignore' }).unref()
+			const child = spawn(cmd, [url], { detached: true, stdio: 'ignore' })
+			child.on('error', () => console.error(`Open this URL in your browser: ${fallbackUrl}`))
+			child.unref()
 			return
 		}
 	}
-	console.error(`Open this URL in your browser: ${url}`)
+	console.error(`Open this URL in your browser: ${fallbackUrl}`)
 }

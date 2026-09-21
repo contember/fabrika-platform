@@ -1,10 +1,12 @@
-import { join } from 'path'
+import { join } from 'node:path'
+import type { BuilderProjectConnection } from '../../shared'
 import { resolveStackPointer, type StackPointer } from './catalog'
 import type { PhaseState } from './derive'
 import { PHASE_COUNT, phaseById, type PhaseId, phaseIndex, PHASES } from './phases'
 
 export interface RenderOpts {
 	profile?: string
+	connection?: BuilderProjectConnection
 }
 
 const SHORT_LABEL: Record<PhaseId, string> = {
@@ -23,6 +25,7 @@ const CHECK = '✓' // ✓
 export function renderPacket(state: PhaseState, opts: RenderOpts = {}): string {
 	const phase = phaseById(state.current)
 	const lines: string[] = []
+	if (opts.connection) lines.push(`Platform: ${JSON.stringify(connectionContext(opts.connection))}`)
 
 	const done = state.completed.map((id) => `${SHORT_LABEL[id]} ${CHECK}`).join(', ')
 	const completedSuffix = done ? `   (${done})` : ''
@@ -85,11 +88,13 @@ export interface PacketJson {
 	completed: PhaseId[]
 	satisfied: boolean
 	stack: StackPointer | null
+	platform: ReturnType<typeof connectionContext> | null
 }
 
 export function packetJson(state: PhaseState, opts: RenderOpts = {}): PacketJson {
 	const phase = phaseById(state.current)
 	return {
+		platform: opts.connection ? connectionContext(opts.connection) : null,
 		phase: phase.id,
 		index: phaseIndex(phase.id),
 		number: phase.number,
@@ -106,3 +111,12 @@ export function packetJson(state: PhaseState, opts: RenderOpts = {}): PacketJson
 }
 
 export const PHASE_IDS: PhaseId[] = PHASES.map((p) => p.id)
+
+function connectionContext(connection: BuilderProjectConnection) {
+	return {
+		controlOrigin: connection.controlOrigin,
+		provider: connection.receipt.provider,
+		app: connection.receipt.app,
+		environment: connection.receipt.environment,
+	}
+}

@@ -1,4 +1,5 @@
-import { resolve } from 'path'
+import { resolve } from 'node:path'
+import type { BuilderProjectConnection } from '../../shared'
 import { getSessionId } from './config'
 import { fabrikaDir, findRepoRoot, readConfig } from './layout'
 
@@ -8,6 +9,7 @@ export interface CommandContext {
 	sessionId: string
 	profile: string
 	initialized: boolean
+	connection?: BuilderProjectConnection
 }
 
 export function resolveContext(opts: { dir?: string; session?: string } = {}): CommandContext {
@@ -24,5 +26,6 @@ export function resolveContext(opts: { dir?: string; session?: string } = {}): C
 		sessionId,
 		profile: config?.profile ?? 'cf-lightweight',
 		initialized: config !== null,
+		...(config?.connection ? { connection: config.connection } : {}),
 	}
 }

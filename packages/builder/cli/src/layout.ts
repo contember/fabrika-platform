@@ -1,6 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs'
-import { join, resolve } from 'path'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { type BuilderProjectConfig, parseBuilderProjectConfig } from '../../shared'
 import { FABRIKA_DIRNAME, hashRepoPath } from './config'
+import { BuilderCliError } from './errors'
 
 export const LAYER_DIRS = [
 	'intent',
@@ -14,19 +16,7 @@ export const LAYER_DIRS = [
 
 export const EXTERNAL_DIRS = ['tests/browser']
 
-export interface FabrikaConfig {
-	profile: string
-	sessionId: string
-	createdAt: string
-}
-
-function parseConfig(value: unknown): FabrikaConfig | null {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-	if (!('profile' in value) || !('sessionId' in value) || !('createdAt' in value)) return null
-	const { profile, sessionId, createdAt } = value
-	if (typeof profile !== 'string' || typeof sessionId !== 'string' || typeof createdAt !== 'string') return null
-	return { profile, sessionId, createdAt }
-}
+export type FabrikaConfig = BuilderProjectConfig
 
 export function fabrikaDir(repoRoot: string): string {
 	return join(resolve(repoRoot), FABRIKA_DIRNAME)
@@ -44,9 +34,9 @@ export function readConfig(repoRoot: string): FabrikaConfig | null {
 	const p = configPath(repoRoot)
 	if (!existsSync(p)) return null
 	try {
-		return parseConfig(JSON.parse(readFileSync(p, 'utf-8')))
+		return parseBuilderProjectConfig(JSON.parse(readFileSync(p, 'utf-8')))
 	} catch {
-		return null
+		throw new BuilderCliError('Invalid .fabrika/config.json; repair it before continuing.')
 	}
 }
 
@@ -69,6 +59,7 @@ export function scaffold(
 	const createdDirs: string[] = []
 
 	const alreadyInitialized = isInitialized(root)
+	const existing = readConfig(root)
 
 	for (const dir of ['.', ...LAYER_DIRS]) {
 		const abs = dir === '.' ? fdir : join(fdir, dir)
@@ -88,7 +79,6 @@ export function scaffold(
 
 	let config: FabrikaConfig
 	let createdConfig = false
-	const existing = readConfig(root)
 	if (existing) {
 		config = existing
 	} else {

@@ -1,4 +1,4 @@
-import { parseArgs } from 'util'
+import { parseArgs } from 'node:util'
 import { resolveContext } from '../context'
 import { packetJson, renderPacket } from '../packet'
 import { resolvePhaseState } from '../phase-state'
@@ -23,9 +23,9 @@ export async function cmdNext(argv: string[]): Promise<number> {
 	const { state, source } = await resolvePhaseState(ctx.repoRoot, ctx.fabrikaDir, ctx.sessionId)
 
 	if (values.json) {
-		console.log(JSON.stringify({ ...packetJson(state, { profile: ctx.profile }), source }))
+		console.log(JSON.stringify({ ...packetJson(state, { profile: ctx.profile, connection: ctx.connection }), source }))
 	} else {
-		process.stdout.write(renderPacket(state, { profile: ctx.profile }))
+		process.stdout.write(renderPacket(state, { profile: ctx.profile, connection: ctx.connection }))
 	}
 	return 0
 }
