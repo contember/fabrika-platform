@@ -27,7 +27,7 @@ import { bulkIssueStatus, issueDetail, issueEvent, issueLatestEvent, issueOccurr
 import { listReleases, releaseDetail } from './releases.js'
 import { listAssignees, listSources, sourceDetail } from './sources.js'
 
-/** Typed operator use-cases shared by the REST compatibility adapter and RPC. */
+/** Typed operator use cases behind the RPC boundary. */
 export class OperationsOperatorUseCases {
 	constructor(
 		private readonly request: Request,
@@ -63,14 +63,7 @@ export class OperationsOperatorUseCases {
 	}
 
 	mutateIssue(issueId: string, mutation: OperationsIssueMutationRequestDto): Promise<OperationsIssueDetailResponseDto> {
-		return mutateIssue(this.request, issueId, () => Promise.resolve(mutation), this.options)
-	}
-
-	mutateIssueAfterAuthorization(
-		issueId: string,
-		loadMutation: () => Promise<OperationsIssueMutationRequestDto>,
-	): Promise<OperationsIssueDetailResponseDto> {
-		return mutateIssue(this.request, issueId, loadMutation, this.options)
+		return mutateIssue(this.request, issueId, mutation, this.options)
 	}
 
 	bulkIssueStatus(input: { issueIds: string[]; status: IssueStatus }): Promise<OperationsBulkIssueStatusResponseDto> {
@@ -98,26 +91,11 @@ export class OperationsOperatorUseCases {
 	}
 
 	createHealthCheck(sourceId: string, input: OperationsHealthCheckUpsertRequestDto): Promise<{ id: string }> {
-		return createHealthCheck(sourceId, () => Promise.resolve(input), this.options)
-	}
-
-	createHealthCheckAfterAuthorization(
-		sourceId: string,
-		loadInput: () => Promise<OperationsHealthCheckUpsertRequestDto>,
-	): Promise<{ id: string }> {
-		return createHealthCheck(sourceId, loadInput, this.options)
+		return createHealthCheck(sourceId, input, this.options)
 	}
 
 	updateHealthCheck(sourceId: string, checkId: string, input: OperationsHealthCheckUpsertRequestDto): Promise<{ id: string }> {
-		return updateHealthCheck(sourceId, checkId, () => Promise.resolve(input), this.options)
-	}
-
-	updateHealthCheckAfterAuthorization(
-		sourceId: string,
-		checkId: string,
-		loadInput: () => Promise<OperationsHealthCheckUpsertRequestDto>,
-	): Promise<{ id: string }> {
-		return updateHealthCheck(sourceId, checkId, loadInput, this.options)
+		return updateHealthCheck(sourceId, checkId, input, this.options)
 	}
 
 	deleteHealthCheck(sourceId: string, checkId: string): Promise<null> {
@@ -129,49 +107,19 @@ export class OperationsOperatorUseCases {
 	}
 
 	updateSpikeAlert(sourceId: string, input: OperationsSpikeAlertRequestDto): Promise<{ threshold: number; enabled: boolean }> {
-		return updateSpikeAlert(sourceId, () => Promise.resolve(input), this.options)
-	}
-
-	updateSpikeAlertAfterAuthorization(
-		sourceId: string,
-		loadInput: () => Promise<OperationsSpikeAlertRequestDto>,
-	): Promise<{ threshold: number; enabled: boolean }> {
-		return updateSpikeAlert(sourceId, loadInput, this.options)
+		return updateSpikeAlert(sourceId, input, this.options)
 	}
 
 	updateAlertRule(sourceId: string, kind: OperationsAlertKind, input: { enabled: boolean }): Promise<{ kind: OperationsAlertKind; enabled: boolean }> {
-		return updateAlertRule(sourceId, () => Promise.resolve(kind), () => Promise.resolve(input), this.options)
-	}
-
-	updateAlertRuleAfterAuthorization(
-		sourceId: string,
-		loadKind: () => Promise<OperationsAlertKind>,
-		loadInput: () => Promise<{ enabled: boolean }>,
-	): Promise<{ kind: OperationsAlertKind; enabled: boolean }> {
-		return updateAlertRule(sourceId, loadKind, loadInput, this.options)
+		return updateAlertRule(sourceId, kind, input, this.options)
 	}
 
 	createAlertChannel(sourceId: string, input: OperationsNotificationChannelRequestDto): Promise<{ id: string }> {
-		return createAlertChannel(sourceId, () => Promise.resolve(input), this.options)
-	}
-
-	createAlertChannelAfterAuthorization(
-		sourceId: string,
-		loadInput: () => Promise<OperationsNotificationChannelRequestDto>,
-	): Promise<{ id: string }> {
-		return createAlertChannel(sourceId, loadInput, this.options)
+		return createAlertChannel(sourceId, input, this.options)
 	}
 
 	updateAlertChannel(sourceId: string, channelId: string, input: OperationsNotificationChannelRequestDto): Promise<{ id: string }> {
-		return updateAlertChannel(sourceId, channelId, () => Promise.resolve(input), this.options)
-	}
-
-	updateAlertChannelAfterAuthorization(
-		sourceId: string,
-		channelId: string,
-		loadInput: () => Promise<OperationsNotificationChannelRequestDto>,
-	): Promise<{ id: string }> {
-		return updateAlertChannel(sourceId, channelId, loadInput, this.options)
+		return updateAlertChannel(sourceId, channelId, input, this.options)
 	}
 
 	deleteAlertChannel(sourceId: string, channelId: string): Promise<null> {

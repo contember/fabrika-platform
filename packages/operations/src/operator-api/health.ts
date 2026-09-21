@@ -28,11 +28,10 @@ export async function sourceHealth(sourceId: string, options: OperationsOperator
 
 export async function createHealthCheck(
 	sourceId: string,
-	loadInput: () => Promise<OperationsHealthCheckUpsertRequestDto>,
+	input: OperationsHealthCheckUpsertRequestDto,
 	options: OperationsOperatorOptions,
 ): Promise<{ id: string }> {
 	await visibleSource(sourceId, 'operations.manage', options)
-	const input = await loadInput()
 	const checkId = uuidv7(now(options))
 	await options.health.upsertCheck({ id: checkId, sourceId, ...input })
 	await options.auth.audit({ action: 'operations.health_check.create', resourceType: 'operations_health_check', resourceId: checkId })
@@ -42,13 +41,12 @@ export async function createHealthCheck(
 export async function updateHealthCheck(
 	sourceId: string,
 	checkId: string,
-	loadInput: () => Promise<OperationsHealthCheckUpsertRequestDto>,
+	input: OperationsHealthCheckUpsertRequestDto,
 	options: OperationsOperatorOptions,
 ): Promise<{ id: string }> {
 	await visibleSource(sourceId, 'operations.manage', options)
 	const existing = await options.health.getCheck(checkId)
 	if (existing === null || existing.source_id !== sourceId) return notFoundError()
-	const input = await loadInput()
 	await options.health.upsertCheck({ id: checkId, sourceId, ...input })
 	await options.auth.audit({ action: 'operations.health_check.update', resourceType: 'operations_health_check', resourceId: checkId })
 	return { id: checkId }

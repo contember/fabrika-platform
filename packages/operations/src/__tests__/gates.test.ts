@@ -109,7 +109,7 @@ describe('every Operations gate rule describes a route the public hostname serve
 describe('the audience Operations accepts', () => {
 	test('is the app whose proxy fronts the operator surface, and no other', async () => {
 		const accepted = await iam.authenticate(
-			new Request('https://operations.internal/api/issues', { headers: { [PROXY_TOKEN_HEADER]: await signed(OPERATIONS_AUTH_APP_ID) } }),
+			new Request('https://operations.internal/api/rpc', { headers: { [PROXY_TOKEN_HEADER]: await signed(OPERATIONS_AUTH_APP_ID) } }),
 		)
 		expect(accepted.ok).toBe(true)
 
@@ -118,7 +118,7 @@ describe('the audience Operations accepts', () => {
 		// request the console makes, because the console's proxy is what minted the token.
 		expect(OPERATIONS_AUTH_APP_ID).not.toBe(OPERATIONS_APP_ID)
 		const refused = await iam.authenticate(
-			new Request('https://operations.internal/api/issues', { headers: { [PROXY_TOKEN_HEADER]: await signed(OPERATIONS_APP_ID) } }),
+			new Request('https://operations.internal/api/rpc', { headers: { [PROXY_TOKEN_HEADER]: await signed(OPERATIONS_APP_ID) } }),
 		)
 		expect(refused).toEqual({ ok: false, reason: 'invalid_token', status: 401 })
 	})

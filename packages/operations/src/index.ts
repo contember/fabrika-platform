@@ -58,7 +58,6 @@ export {
 export type { IngestAuthResult, ParsedEnvelope, ParsedEventEnvelope } from './ingest.js'
 export { OperationsMaintenance, WebhookNotificationSender } from './maintenance.js'
 export type { NotificationFetch, NotificationSender, OperationsLogger, OperationsMaintenanceOptions } from './maintenance.js'
-export { handleOperationsOperatorRequest } from './operator-api.js'
 export type { OperationsOperatorOptions, OperationsPrincipalDirectory } from './operator-api.js'
 export {
 	applyIssueMutation,

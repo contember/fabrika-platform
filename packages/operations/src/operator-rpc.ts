@@ -301,7 +301,7 @@ function alertChannelUpdateInput(value: unknown): {
 }
 
 function alertChannel(value: unknown, requireTarget: boolean): OperationsNotificationChannelRequestDto {
-	return channelInput(record(value), requireTarget, 'rpc')
+	return channelInput(record(value), requireTarget)
 }
 
 function issueLevel(value: unknown): OperationsIssueQuery['level'] {

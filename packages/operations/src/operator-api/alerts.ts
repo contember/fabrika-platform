@@ -66,11 +66,10 @@ export async function alertSettings(sourceId: string, options: OperationsOperato
 
 export async function updateSpikeAlert(
 	sourceId: string,
-	loadInput: () => Promise<OperationsSpikeAlertRequestDto>,
+	input: OperationsSpikeAlertRequestDto,
 	options: OperationsOperatorOptions,
 ): Promise<{ threshold: number; enabled: boolean }> {
 	await visibleSource(sourceId, 'operations.manage', options)
-	const input = await loadInput()
 	const { threshold, enabled } = input
 	await options.repositories.alerts.setConfig(sourceId, { threshold, enabled })
 	await options.auth.audit({ action: 'operations.alert.spike', resourceType: 'operations_source', resourceId: sourceId })
@@ -79,13 +78,11 @@ export async function updateSpikeAlert(
 
 export async function updateAlertRule(
 	sourceId: string,
-	loadKind: () => Promise<OperationsAlertKind>,
-	loadInput: () => Promise<{ enabled: boolean }>,
+	kind: OperationsAlertKind,
+	input: { enabled: boolean },
 	options: OperationsOperatorOptions,
 ): Promise<{ kind: OperationsAlertKind; enabled: boolean }> {
 	await visibleSource(sourceId, 'operations.manage', options)
-	const kind = await loadKind()
-	const input = await loadInput()
 	const { enabled } = input
 	await options.repositories.alerts.setRule(sourceId, kind, enabled)
 	await options.auth.audit({ action: 'operations.alert.rule', resourceType: 'operations_source', resourceId: sourceId })
@@ -94,11 +91,10 @@ export async function updateAlertRule(
 
 export async function createAlertChannel(
 	sourceId: string,
-	loadInput: () => Promise<OperationsNotificationChannelRequestDto>,
+	input: OperationsNotificationChannelRequestDto,
 	options: OperationsOperatorOptions,
 ): Promise<{ id: string }> {
 	await visibleSource(sourceId, 'operations.manage', options)
-	const input = await loadInput()
 	if (input.target === undefined) throw badRequest('target is required')
 	if (!isValidWebhookTarget(input.target)) throw badRequest('target must be a public HTTPS URL without credentials or a fragment')
 	const id = uuidv7(now(options))
@@ -110,13 +106,12 @@ export async function createAlertChannel(
 export async function updateAlertChannel(
 	sourceId: string,
 	channelId: string,
-	loadInput: () => Promise<OperationsNotificationChannelRequestDto>,
+	input: OperationsNotificationChannelRequestDto,
 	options: OperationsOperatorOptions,
 ): Promise<{ id: string }> {
 	await visibleSource(sourceId, 'operations.manage', options)
 	const existing = (await options.repositories.alerts.listChannels(sourceId)).find((channel) => channel.id === channelId)
 	if (existing === undefined) return notFoundError()
-	const input = await loadInput()
 	if (input.target !== undefined && !isValidWebhookTarget(input.target)) {
 		throw badRequest('target must be a public HTTPS URL without credentials or a fragment')
 	}

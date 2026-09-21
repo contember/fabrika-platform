@@ -20,14 +20,14 @@ entrypoints dispatch through this application; the Bun server uses
 `@fabrika/app/bun`.
 
 `src/operator-rpc.ts` implements `OperationsRpcContract` at `/api/rpc` for the
-console. It and the compatibility `/api/*` REST handlers share typed operator
-use cases. Keep public ingest, source-map upload, and private reconciliation as
+console. It calls typed operator use cases; administrative REST routes are not mounted.
+Keep public ingest, source-map upload, and private reconciliation as
 their protocol-specific HTTP surfaces.
 
 The public hostname accepts only Sentry-compatible
 `/api/:projectId/envelope/` ingest and the authenticated source-map upload path.
 `OPERATIONS_PROXY_GATES` (`src/gates.ts`) therefore declares exactly those two
-`public` rules; `/api/*` operator routes, `/private/catalog/reconcile`, and
+`public` rules; `/api/rpc`, `/private/catalog/reconcile`, and
 `/private/releases/reconcile` are 404 on that host and stay private, so they may
 not carry a rule there. Control's same-origin gateway
 transports operator requests; Operations owns authentication, scoped

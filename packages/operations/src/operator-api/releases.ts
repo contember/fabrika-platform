@@ -21,7 +21,7 @@ export async function listReleases(
 	let sources = await authorizedSources(options, 'operations.read')
 	if (queryInput.sourceId !== undefined) sources = sources.filter((source) => source.id === queryInput.sourceId)
 	const offset = offsetCursor(queryInput.cursor ?? null)
-	const limit = boundedLimit(queryInput.limit === undefined ? null : String(queryInput.limit))
+	const limit = boundedLimit(queryInput.limit)
 	const rows = await options.repositories.operator.listReleases({ sourceIds: sources.map((source) => source.id), offset, limit })
 	return {
 		items: rows.map(releaseSummary),

@@ -11,7 +11,7 @@ import {
 	operationsReleaseName,
 	type OperationsReleaseReconcileRequestV1,
 } from '@fabrika/operations-contract/releases'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { createOperationsIam } from '../auth.js'
 import { SqliteHealthRepository } from '../health-repository.js'
@@ -62,14 +62,6 @@ function rpcRequest(host: string, method: string, input: unknown, token?: string
 			...(token === undefined ? {} : { [PROXY_TOKEN_HEADER]: token }),
 		},
 		body: JSON.stringify({ method, input }),
-	})
-}
-
-function restMutation(path: string, method: string, body: unknown, token = OPERATOR_TOKEN): Request {
-	return new Request(`https://operations.internal${path}`, {
-		method,
-		headers: { 'content-type': 'application/json', [PROXY_TOKEN_HEADER]: token },
-		body: JSON.stringify(body),
 	})
 }
 
@@ -137,6 +129,70 @@ async function reconcileSource(fetch: (request: Request) => Promise<Response>, s
 }
 
 describe('Operations public/private HTTP isolation', () => {
+	test('removed administrative REST routes return 404 on both hosts with or without a token', async () => {
+		const fetch = handler()
+		const paths = [
+			'/api/sources',
+			'/api/sources/source-a',
+			'/api/sources/source-a/assignees',
+			'/api/issues',
+			'/api/issues/bulk',
+			'/api/issues/issue-a',
+			'/api/issues/issue-a/occurrences',
+			'/api/issues/issue-a/events/latest',
+			'/api/issues/issue-a/events/event-a',
+			'/api/releases',
+			'/api/releases/release-a',
+			'/api/health',
+			'/api/sources/source-a/health',
+			'/api/sources/source-a/health-checks',
+			'/api/sources/source-a/health-checks/check-a',
+			'/api/sources/source-a/alerts',
+			'/api/sources/source-a/alerts/spike',
+			'/api/sources/source-a/alerts/rules/new_issue',
+			'/api/sources/source-a/alerts/channels',
+			'/api/sources/source-a/alerts/channels/channel-a',
+		]
+		for (const host of [publicHost, 'operations.internal']) {
+			for (const token of [undefined, OPERATOR_TOKEN]) {
+				for (const path of paths) {
+					for (const method of ['GET', 'POST', 'PUT', 'DELETE']) {
+						const response = await fetch(
+							new Request(`https://${host}${path}`, {
+								method,
+								headers: token === undefined ? {} : { [PROXY_TOKEN_HEADER]: token },
+							}),
+						)
+						expect({ path, method, host, status: response.status }).toEqual({ path, method, host, status: 404 })
+					}
+				}
+			}
+		}
+	})
+
+	test('RPC never logs or returns dynamic error details from an operator failure', async () => {
+		const harness = createHarness()
+		await harness.repositories.sources.upsert({ id: 'source-a', appId: 'app', environment: 'prod', displayName: 'App', enabled: true })
+		const iam = createOperationsIam({
+			IAM: {
+				...sessionRpc('unused'),
+				listPrincipals: () => Promise.reject(new Error('https://secret.example.test/?credential=do-not-log')),
+			},
+			FABRIKA_IAM_ISSUER: issuer,
+		})
+		const log = spyOn(console, 'error').mockImplementation(() => undefined)
+		try {
+			const response = await handler(harness, iam)(rpcRequest('operations.internal', 'assignees', { sourceId: 'source-a' }, OPERATOR_TOKEN))
+			expect(response.status).toBe(500)
+			const body: unknown = await response.json()
+			expect(body).toEqual({ error: { type: 'internal', message: 'internal error' } })
+			expect(log).toHaveBeenCalledWith('operations operator RPC failed')
+			expect(JSON.stringify(log.mock.calls)).not.toContain('do-not-log')
+		} finally {
+			log.mockRestore()
+		}
+	})
+
 	test('the public ingest hostname does not expose health, catalog, or operator paths', async () => {
 		const fetch = handler()
 		for (const path of ['/healthz', '/private/catalog/reconcile', OPERATIONS_RELEASE_RECONCILE_PATH, '/api/issues', '/api/rpc']) {
@@ -235,10 +291,12 @@ describe('Operations public/private HTTP isolation', () => {
 		const fetch = handler()
 		expect((await reconcileSource(fetch, '0198a000-0000-7000-8000-000000000001')).status).toBe(200)
 		const sourcesResponse = await fetch(
-			new Request('https://operations.internal/api/sources', { headers: { [PROXY_TOKEN_HEADER]: VIEWER_TOKEN } }),
+			rpcRequest('operations.internal', 'sources', null, VIEWER_TOKEN),
 		)
 		expect(sourcesResponse.status).toBe(200)
-		const sourcesBody: unknown = await sourcesResponse.json()
+		const envelope: unknown = await sourcesResponse.json()
+		if (envelope === null || typeof envelope !== 'object' || !('result' in envelope)) throw new Error('expected RPC result')
+		const sourcesBody = envelope.result
 		if (sourcesBody === null || typeof sourcesBody !== 'object' || !('items' in sourcesBody) || !Array.isArray(sourcesBody.items)) {
 			throw new Error('expected an operator source list')
 		}
@@ -249,10 +307,9 @@ describe('Operations public/private HTTP isolation', () => {
 		const sourceId = source.id
 		const createCheck = (token: string) =>
 			fetch(
-				new Request(`https://operations.internal/api/sources/${sourceId}/health-checks`, {
-					method: 'POST',
-					headers: { 'content-type': 'application/json', [PROXY_TOKEN_HEADER]: token },
-					body: JSON.stringify({
+				rpcRequest('operations.internal', 'createHealthCheck', {
+					sourceId,
+					input: {
 						path: '/healthz',
 						enabled: true,
 						intervalMs: 60_000,
@@ -261,11 +318,11 @@ describe('Operations public/private HTTP isolation', () => {
 						failureThreshold: 3,
 						recoveryThreshold: 2,
 						staleAfterMs: 180_000,
-					}),
-				}),
+					},
+				}, token),
 			)
 		expect((await createCheck(VIEWER_TOKEN)).status).toBe(404)
-		expect((await createCheck(OPERATOR_TOKEN)).status).toBe(201)
+		expect((await createCheck(OPERATOR_TOKEN)).status).toBe(200)
 		expect((await fetch(new Request(`https://${publicHost}/api/sources`))).status).toBe(404)
 	})
 
@@ -331,7 +388,7 @@ describe('Operations public/private HTTP isolation', () => {
 		expect('loginUrl' in body.error).toBe(false)
 	})
 
-	test('REST and RPC reject equivalent payloads with their own error envelopes', async () => {
+	test('RPC rejects invalid operator payloads with validation envelopes and no writes', async () => {
 		const harness = createHarness()
 		await harness.repositories.sources.upsert({ id: 'source-a', appId: 'app', environment: 'prod', displayName: 'App', enabled: true })
 		const recorded = await harness.repositories.ingest.record({
@@ -348,7 +405,7 @@ describe('Operations public/private HTTP isolation', () => {
 		const issueId = recorded.issue.id
 		if (issueId === null) throw new Error('expected an issue id')
 		const fetch = handler(harness)
-		const cases: Array<{ path: string; verb: string; method: string; body: unknown; input: unknown; message: string }> = []
+		const cases: Array<{ method: string; input: unknown; message: string }> = []
 		const mutations: Array<[unknown, string]> = [
 			[{ kind: 'status', status: 'closed' }, 'invalid issue status'],
 			[{ kind: 'comment', text: '' }, 'text must be a non-empty string'],
@@ -360,7 +417,7 @@ describe('Operations public/private HTTP isolation', () => {
 			[{ kind: 'unknown' }, 'invalid issue mutation'],
 		]
 		for (const [body, message] of mutations) {
-			cases.push({ path: `/api/issues/${issueId}`, verb: 'PUT', method: 'mutateIssue', body, input: { issueId, mutation: body }, message })
+			cases.push({ method: 'mutateIssue', input: { issueId, mutation: body }, message })
 		}
 		const health = {
 			path: '/health',
@@ -385,27 +442,21 @@ describe('Operations public/private HTTP isolation', () => {
 		for (const [field, value, message] of healthFailures) {
 			const body = { ...health, [field]: value }
 			cases.push({
-				path: '/api/sources/source-a/health-checks',
-				verb: 'POST',
 				method: 'createHealthCheck',
-				body,
 				input: { sourceId: 'source-a', input: body },
 				message,
 			})
 		}
-		const settings: Array<[string, string, unknown, string]> = [
-			['spike', 'updateSpikeAlert', { threshold: 0, enabled: 'wrong' }, 'threshold must be a positive integer'],
-			['spike', 'updateSpikeAlert', { threshold: 5, enabled: null }, 'enabled must be a boolean'],
-			['rules/new_issue', 'updateAlertRule', { enabled: 1 }, 'enabled must be a boolean'],
-			['channels', 'createAlertChannel', { scope: 'new_issue', type: 'email' }, 'type must be webhook'],
-			['channels', 'createAlertChannel', { scope: 'new_issue', type: 'webhook', enabled: true }, 'target is required'],
+		const settings: Array<[string, unknown, string]> = [
+			['updateSpikeAlert', { threshold: 0, enabled: 'wrong' }, 'threshold must be a positive integer'],
+			['updateSpikeAlert', { threshold: 5, enabled: null }, 'enabled must be a boolean'],
+			['updateAlertRule', { enabled: 1 }, 'enabled must be a boolean'],
+			['createAlertChannel', { scope: 'new_issue', type: 'email' }, 'type must be webhook'],
+			['createAlertChannel', { scope: 'new_issue', type: 'webhook', enabled: true }, 'target is required'],
 		]
-		for (const [suffix, method, body, message] of settings) {
+		for (const [method, body, message] of settings) {
 			cases.push({
-				path: `/api/sources/source-a/alerts/${suffix}`,
-				verb: suffix === 'channels' ? 'POST' : 'PUT',
 				method,
-				body,
 				input: { sourceId: 'source-a', kind: 'new_issue', input: body },
 				message,
 			})
@@ -417,13 +468,9 @@ describe('Operations public/private HTTP isolation', () => {
 				[{ issueIds: [issueId], status: 'wrong' }, 'invalid issue status'],
 			] satisfies Array<[unknown, string]>
 		) {
-			cases.push({ path: '/api/issues/bulk', verb: 'PUT', method: 'bulkIssueStatus', body, input: body, message })
+			cases.push({ method: 'bulkIssueStatus', input: body, message })
 		}
 		for (const entry of cases) {
-			const rest = await fetch(restMutation(entry.path, entry.verb, entry.body))
-			expect(rest.status).toBe(400)
-			const restBody: unknown = await rest.json()
-			expect(restBody).toEqual({ error: entry.message })
 			const rpc = await fetch(rpcRequest('operations.internal', entry.method, entry.input, OPERATOR_TOKEN))
 			expect(rpc.status).toBe(400)
 			const rpcBody: unknown = await rpc.json()
@@ -436,24 +483,19 @@ describe('Operations public/private HTTP isolation', () => {
 		expect(await harness.repositories.alerts.listChannels('source-a')).toEqual([])
 	})
 
-	test('channel validation preserves transport-specific order and messages', async () => {
+	test('channel validation preserves RPC order and messages', async () => {
 		const harness = createHarness()
 		await harness.repositories.sources.upsert({ id: 'source-a', appId: 'app', environment: 'prod', displayName: 'App', enabled: true })
 		const fetch = handler(harness)
-		const cases: Array<[unknown, string, string]> = [
-			[{}, 'scope must be a non-empty string', 'type must be webhook'],
-			[{ scope: 'wrong', type: 'webhook', target: 'https://hooks.example.test', enabled: true }, 'invalid alert scope', 'invalid alert kind'],
+		const cases: Array<[unknown, string]> = [
+			[{}, 'type must be webhook'],
+			[{ scope: 'wrong', type: 'webhook', target: 'https://hooks.example.test', enabled: true }, 'invalid alert kind'],
 			[
 				{ scope: 'new_issue', type: 'webhook', target: 'http://localhost', enabled: 1 },
-				'target must be a public HTTPS URL without credentials or a fragment',
 				'enabled must be a boolean',
 			],
 		]
-		for (const [body, restMessage, rpcMessage] of cases) {
-			const rest = await fetch(restMutation('/api/sources/source-a/alerts/channels', 'POST', body))
-			expect(rest.status).toBe(400)
-			const restBody: unknown = await rest.json()
-			expect(restBody).toEqual({ error: restMessage })
+		for (const [body, rpcMessage] of cases) {
 			const rpc = await fetch(rpcRequest('operations.internal', 'createAlertChannel', { sourceId: 'source-a', input: body }, OPERATOR_TOKEN))
 			expect(rpc.status).toBe(400)
 			const rpcBody: unknown = await rpc.json()
@@ -461,115 +503,154 @@ describe('Operations public/private HTTP isolation', () => {
 		}
 	})
 
-	test('RPC validates before object authorization while REST keeps body loading lazy', async () => {
-		const fetch = handler()
-		const rest = await fetch(restMutation('/api/sources/missing/health-checks', 'POST', {}, VIEWER_TOKEN))
-		expect(rest.status).toBe(404)
-		const restBody: unknown = await rest.json()
-		expect(restBody).toEqual({ error: 'not found' })
-		const rpc = await fetch(rpcRequest('operations.internal', 'createHealthCheck', { sourceId: 'missing', input: {} }, VIEWER_TOKEN))
-		expect(rpc.status).toBe(400)
-		expect(await rpc.json()).toMatchObject({ error: { type: 'validation', message: 'path must be a non-empty string' } })
+	test('RPC validates before object authorization', async () => {
+		const harness = createHarness()
+		await harness.repositories.sources.upsert({ id: 'source-a', appId: 'app', environment: 'prod', displayName: 'App', enabled: true })
+		const recorded = await harness.repositories.ingest.record({
+			sourceId: 'source-a',
+			fingerprint: 'failure',
+			eventId: 'event-a',
+			title: 'Failure',
+			culprit: null,
+			level: 'error',
+			release: null,
+			receivedAt: 1_000,
+			blobKey: 'event-a',
+		})
+		let audits = 0
+		const iam = createOperationsIam({
+			IAM: {
+				...sessionRpc('unused'),
+				audit: async () => {
+					audits++
+				},
+			},
+			FABRIKA_IAM_ISSUER: issuer,
+		})
+		const fetch = handler(harness, iam)
+		for (const sourceId of ['source-a', 'missing']) {
+			const cases: Array<[string, unknown, string]> = [
+				['mutateIssue', { issueId: sourceId === 'missing' ? 'missing' : recorded.issue.id, mutation: {} }, 'invalid issue mutation'],
+				['createHealthCheck', { sourceId, input: {} }, 'path must be a non-empty string'],
+				['updateHealthCheck', { sourceId, checkId: 'check-a', input: {} }, 'path must be a non-empty string'],
+				['updateSpikeAlert', { sourceId, input: {} }, 'threshold must be a positive integer'],
+				['updateAlertRule', { sourceId, kind: 'new_issue', input: {} }, 'enabled must be a boolean'],
+				['createAlertChannel', { sourceId, input: {} }, 'type must be webhook'],
+				['updateAlertChannel', { sourceId, channelId: 'channel-a', input: {} }, 'type must be webhook'],
+			]
+			for (const [method, input, message] of cases) {
+				const response = await fetch(rpcRequest('operations.internal', method, input, VIEWER_TOKEN))
+				expect(response.status).toBe(400)
+				const body: unknown = await response.json()
+				expect(body).toMatchObject({ error: { type: 'validation', message } })
+			}
+		}
+		const malformed = await fetch(
+			new Request('https://operations.internal/api/rpc', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json', [PROXY_TOKEN_HEADER]: VIEWER_TOKEN },
+				body: '{',
+			}),
+		)
+		expect(malformed.status).toBe(400)
+		const body: unknown = await malformed.json()
+		expect(body).toEqual({ error: { type: 'validation', message: 'Invalid JSON body' } })
+		expect((await harness.repositories.issues.get('source-a', 'failure'))?.status).toBe('open')
+		expect(await new SqliteHealthRepository(harness.db).listChecks('source-a')).toEqual([])
+		expect(await harness.repositories.alerts.getConfig('source-a')).toBeNull()
+		expect(await harness.repositories.alerts.listRules('source-a')).toEqual([])
+		expect(await harness.repositories.alerts.listChannels('source-a')).toEqual([])
+		expect(audits).toBe(0)
 	})
 
-	test('both adapters strip untrusted health identity fields and preserve nullable mutations and omitted channel targets', async () => {
-		for (const transport of ['rest', 'rpc']) {
-			const harness = createHarness()
-			await harness.repositories.sources.upsert({ id: 'source-a', appId: 'app', environment: 'prod', displayName: 'App', enabled: true })
-			const recorded = await harness.repositories.ingest.record({
-				sourceId: 'source-a',
-				fingerprint: 'failure',
-				eventId: 'event-a',
-				title: 'Failure',
-				culprit: null,
-				level: 'error',
-				release: null,
-				receivedAt: 1_000,
-				blobKey: 'event-a',
-			})
-			const issueId = recorded.issue.id
-			if (issueId === null) throw new Error('expected an issue id')
-			const target = 'https://hooks.example.test/original'
-			await harness.repositories.alerts.upsertChannel({
-				id: 'channel-a',
-				sourceId: 'source-a',
-				scope: 'new_issue',
-				type: 'webhook',
-				target,
-				enabled: true,
-			})
-			const fetch = handler(harness)
-			const body = {
-				path: '/health',
-				enabled: true,
-				intervalMs: 60_000,
-				timeoutMs: 5_000,
-				expectedStatus: 200,
-				failureThreshold: 3,
-				recoveryThreshold: 2,
-				staleAfterMs: 180_000,
-				id: 'spoofed',
-				sourceId: 'foreign',
-				publicOrigin: 'https://attacker.invalid',
-			}
-			const created = await fetch(
-				transport === 'rest'
-					? restMutation('/api/sources/source-a/health-checks', 'POST', body)
-					: rpcRequest('operations.internal', 'createHealthCheck', { sourceId: 'source-a', input: body }, OPERATOR_TOKEN),
-			)
-			expect(created.status).toBe(transport === 'rest' ? 201 : 200)
-			const checks = await new SqliteHealthRepository(harness.db).listChecks('source-a')
-			expect(checks).toHaveLength(1)
-			expect(checks[0]?.id).not.toBe('spoofed')
-			expect(checks[0]).toMatchObject({
-				source_id: 'source-a',
-				path: '/health',
-				enabled: 1,
-				interval_ms: 60_000,
-				timeout_ms: 5_000,
-				expected_status: 200,
-				failure_threshold: 3,
-				recovery_threshold: 2,
-				stale_after_ms: 180_000,
-			})
-			for (const mutation of [{ kind: 'assign', principalId: null }, { kind: 'resolve_in_release', releaseId: null }]) {
-				const response = await fetch(
-					transport === 'rest'
-						? restMutation(`/api/issues/${issueId}`, 'PUT', mutation)
-						: rpcRequest('operations.internal', 'mutateIssue', { issueId, mutation }, OPERATOR_TOKEN),
-				)
-				expect(response.status).toBe(200)
-			}
-			const channel = { scope: 'regression', type: 'webhook', enabled: false, sourceId: 'foreign' }
-			const updated = await fetch(
-				transport === 'rest'
-					? restMutation('/api/sources/source-a/alerts/channels/channel-a', 'PUT', channel)
-					: rpcRequest('operations.internal', 'updateAlertChannel', { sourceId: 'source-a', channelId: 'channel-a', input: channel }, OPERATOR_TOKEN),
-			)
-			expect(updated.status).toBe(200)
-			expect(await harness.repositories.alerts.listChannels('source-a')).toEqual([
-				{ id: 'channel-a', source_id: 'source-a', scope: 'regression', type: 'webhook', target, enabled: 0 },
-			])
-			const invalidChannel = { ...channel, target: null }
-			const refused = await fetch(
-				transport === 'rest'
-					? restMutation('/api/sources/source-a/alerts/channels/channel-a', 'PUT', invalidChannel)
-					: rpcRequest(
-						'operations.internal',
-						'updateAlertChannel',
-						{ sourceId: 'source-a', channelId: 'channel-a', input: invalidChannel },
-						OPERATOR_TOKEN,
-					),
-			)
-			expect(refused.status).toBe(400)
-			expect((await harness.repositories.alerts.listChannels('source-a'))[0]?.target).toBe(target)
+	test('RPC strips untrusted health identity fields and preserves nullable mutations and omitted channel targets', async () => {
+		const harness = createHarness()
+		await harness.repositories.sources.upsert({ id: 'source-a', appId: 'app', environment: 'prod', displayName: 'App', enabled: true })
+		const recorded = await harness.repositories.ingest.record({
+			sourceId: 'source-a',
+			fingerprint: 'failure',
+			eventId: 'event-a',
+			title: 'Failure',
+			culprit: null,
+			level: 'error',
+			release: null,
+			receivedAt: 1_000,
+			blobKey: 'event-a',
+		})
+		const issueId = recorded.issue.id
+		if (issueId === null) throw new Error('expected an issue id')
+		const target = 'https://hooks.example.test/original'
+		await harness.repositories.alerts.upsertChannel({
+			id: 'channel-a',
+			sourceId: 'source-a',
+			scope: 'new_issue',
+			type: 'webhook',
+			target,
+			enabled: true,
+		})
+		const fetch = handler(harness)
+		const body = {
+			path: '/health',
+			enabled: true,
+			intervalMs: 60_000,
+			timeoutMs: 5_000,
+			expectedStatus: 200,
+			failureThreshold: 3,
+			recoveryThreshold: 2,
+			staleAfterMs: 180_000,
+			id: 'spoofed',
+			sourceId: 'foreign',
+			publicOrigin: 'https://attacker.invalid',
 		}
+		const created = await fetch(
+			rpcRequest('operations.internal', 'createHealthCheck', { sourceId: 'source-a', input: body }, OPERATOR_TOKEN),
+		)
+		expect(created.status).toBe(200)
+		const checks = await new SqliteHealthRepository(harness.db).listChecks('source-a')
+		expect(checks).toHaveLength(1)
+		expect(checks[0]?.id).not.toBe('spoofed')
+		expect(checks[0]).toMatchObject({
+			source_id: 'source-a',
+			path: '/health',
+			enabled: 1,
+			interval_ms: 60_000,
+			timeout_ms: 5_000,
+			expected_status: 200,
+			failure_threshold: 3,
+			recovery_threshold: 2,
+			stale_after_ms: 180_000,
+		})
+		for (const mutation of [{ kind: 'assign', principalId: null }, { kind: 'resolve_in_release', releaseId: null }]) {
+			const response = await fetch(
+				rpcRequest('operations.internal', 'mutateIssue', { issueId, mutation }, OPERATOR_TOKEN),
+			)
+			expect(response.status).toBe(200)
+		}
+		const channel = { scope: 'regression', type: 'webhook', enabled: false, sourceId: 'foreign' }
+		const updated = await fetch(
+			rpcRequest('operations.internal', 'updateAlertChannel', { sourceId: 'source-a', channelId: 'channel-a', input: channel }, OPERATOR_TOKEN),
+		)
+		expect(updated.status).toBe(200)
+		expect(await harness.repositories.alerts.listChannels('source-a')).toEqual([
+			{ id: 'channel-a', source_id: 'source-a', scope: 'regression', type: 'webhook', target, enabled: 0 },
+		])
+		const invalidChannel = { ...channel, target: null }
+		const refused = await fetch(
+			rpcRequest(
+				'operations.internal',
+				'updateAlertChannel',
+				{ sourceId: 'source-a', channelId: 'channel-a', input: invalidChannel },
+				OPERATOR_TOKEN,
+			),
+		)
+		expect(refused.status).toBe(400)
+		expect((await harness.repositories.alerts.listChannels('source-a'))[0]?.target).toBe(target)
 	})
 
 	test('the operator is resolved from the proxy-injected token, verified locally', async () => {
 		const fetch = handler()
 		const response = await fetch(
-			new Request('http://operations:3000/api/sources', { headers: { [PROXY_TOKEN_HEADER]: VIEWER_TOKEN } }),
+			rpcRequest('operations:3000', 'sources', null, VIEWER_TOKEN),
 		)
 
 		expect(response.status).toBe(200)
@@ -578,7 +659,7 @@ describe('Operations public/private HTTP isolation', () => {
 	test('a forged token in that header is refused — the app does not trust the proxy blindly', async () => {
 		const fetch = handler()
 		const response = await fetch(
-			new Request('http://operations:3000/api/sources', { headers: { [PROXY_TOKEN_HEADER]: 'not.a.jwt' } }),
+			rpcRequest('operations:3000', 'sources', null, 'not.a.jwt'),
 		)
 
 		expect(response.status).toBe(401)

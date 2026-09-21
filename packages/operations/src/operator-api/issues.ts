@@ -33,7 +33,7 @@ export async function listIssues(queryInput: OperationsIssueQuery, options: Oper
 	let assignee: { kind: 'principal'; id: string } | { kind: 'none' } | undefined
 	if (queryInput.assignee === 'none') assignee = { kind: 'none' }
 	if (queryInput.assignee === 'me') assignee = { kind: 'principal', id: options.auth.principal?.id ?? '' }
-	const limit = boundedLimit(queryInput.limit === undefined ? null : String(queryInput.limit))
+	const limit = boundedLimit(queryInput.limit)
 	const sourceIds = sources.map((source) => source.id)
 	await options.repositories.operator.ensureIssueIds(sourceIds)
 	const [rows, counts] = await Promise.all([
@@ -147,11 +147,10 @@ async function eventDetail(occurrence: OperatorOccurrenceRow, options: Operation
 export async function mutateIssue(
 	request: Request,
 	issueId: string,
-	loadMutation: () => Promise<OperationsIssueMutationRequestDto>,
+	mutationInput: OperationsIssueMutationRequestDto,
 	options: OperationsOperatorOptions,
 ): Promise<OperationsIssueDetailResponseDto> {
 	const issue = await visibleIssue(issueId, 'operations.triage', options)
-	const mutationInput = await loadMutation()
 	const mutation = await internalMutation(request, mutationInput, issue, options)
 	const principal = options.auth.principal
 	const updated = await options.repositories.issues.mutate({

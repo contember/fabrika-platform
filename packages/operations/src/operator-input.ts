@@ -6,12 +6,9 @@ import type {
 	OperationsNotificationChannelRequestDto,
 	OperationsSpikeAlertRequestDto,
 } from '@fabrika/operations-contract/operator-api'
-import { isValidWebhookTarget } from './webhook-target.js'
-
-export class OperatorPayloadError extends Error {}
 
 export function string(value: unknown, field: string): string {
-	if (typeof value !== 'string' || value === '') throw new OperatorPayloadError(`${field} must be a non-empty string`)
+	if (typeof value !== 'string' || value === '') throw new Error(`${field} must be a non-empty string`)
 	return value
 }
 
@@ -20,20 +17,20 @@ function nullableString(value: unknown, field: string): string | null {
 }
 
 function boolean(value: unknown, field: string): boolean {
-	if (typeof value !== 'boolean') throw new OperatorPayloadError(`${field} must be a boolean`)
+	if (typeof value !== 'boolean') throw new Error(`${field} must be a boolean`)
 	return value
 }
 
 function positiveInteger(value: unknown, field: string): number {
 	if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
-		throw new OperatorPayloadError(`${field} must be a positive integer`)
+		throw new Error(`${field} must be a positive integer`)
 	}
 	return value
 }
 
 export function issueStatus(value: unknown): IssueStatus {
 	if (value === 'open' || value === 'resolved' || value === 'ignored') return value
-	throw new OperatorPayloadError('invalid issue status')
+	throw new Error('invalid issue status')
 }
 
 export function issueMutation(body: Record<string, unknown>): OperationsIssueMutationRequestDto {
@@ -53,13 +50,13 @@ export function issueMutation(body: Record<string, unknown>): OperationsIssueMut
 		case 'merge':
 			return { kind: 'merge', targetIssueId: string(body['targetIssueId'], 'targetIssueId') }
 		default:
-			throw new OperatorPayloadError('invalid issue mutation')
+			throw new Error('invalid issue mutation')
 	}
 }
 
 export function bulkIssueStatusInput(body: Record<string, unknown>): { issueIds: string[]; status: IssueStatus } {
 	const ids = body['issueIds']
-	if (!Array.isArray(ids)) throw new OperatorPayloadError('issueIds must be an array')
+	if (!Array.isArray(ids)) throw new Error('issueIds must be an array')
 	const issueIds: string[] = []
 	for (const id of ids) issueIds.push(string(id, 'issueId'))
 	return { issueIds, status: issueStatus(body['status']) }
@@ -102,34 +99,22 @@ export function alertKind(value: unknown): OperationsAlertKind | null {
 
 export function requiredAlertKind(value: unknown): OperationsAlertKind {
 	const kind = alertKind(value)
-	if (kind === null) throw new OperatorPayloadError('invalid alert kind')
+	if (kind === null) throw new Error('invalid alert kind')
 	return kind
 }
 
 export function channelInput(
 	body: Record<string, unknown>,
 	requireTarget: boolean,
-	transport: 'rest' | 'rpc',
 ): OperationsNotificationChannelRequestDto {
-	// REST historically checks scope and URL syntax first; RPC defers URL syntax to the authorized use case.
-	const restScope = transport === 'rest' ? restChannelScope(body['scope']) : undefined
-	if (body['type'] !== 'webhook') throw new OperatorPayloadError('type must be webhook')
+	if (body['type'] !== 'webhook') throw new Error('type must be webhook')
 	const target = body['target']
-	if (requireTarget && typeof target !== 'string') throw new OperatorPayloadError('target is required')
-	if (target !== undefined && typeof target !== 'string') throw new OperatorPayloadError('target must be a string')
-	if (transport === 'rest' && typeof target === 'string' && !isValidWebhookTarget(target)) {
-		throw new OperatorPayloadError('target must be a public HTTPS URL without credentials or a fragment')
-	}
+	if (requireTarget && typeof target !== 'string') throw new Error('target is required')
+	if (target !== undefined && typeof target !== 'string') throw new Error('target must be a string')
 	return {
-		scope: restScope ?? requiredAlertKind(body['scope']),
+		scope: requiredAlertKind(body['scope']),
 		type: 'webhook',
 		...(typeof target === 'string' ? { target } : {}),
 		enabled: boolean(body['enabled'], 'enabled'),
 	}
-}
-
-function restChannelScope(value: unknown): OperationsAlertKind {
-	const scope = alertKind(string(value, 'scope'))
-	if (scope === null) throw new OperatorPayloadError('invalid alert scope')
-	return scope
 }

@@ -1,9 +1,10 @@
 import type { AuthContext, DomainEvent, PrincipalList } from '@fabrika/auth'
 import type { IngestMessage } from '@fabrika/operations-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
-import { describe, expect, spyOn, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { SqliteHealthRepository } from '../health-repository.js'
-import { handleOperationsOperatorRequest, type OperationsOperatorOptions } from '../operator-api.js'
+import { type OperationsOperatorOptions, OperationsOperatorUseCases } from '../operator-api.js'
+import { healthCheckInput, issueMutation } from '../operator-input.js'
 import { persistIngest } from '../pipeline.js'
 import { createHarness } from './helpers/sqlite.js'
 
@@ -117,18 +118,8 @@ function options(
 	}
 }
 
-function request(path: string, init?: RequestInit): Request {
-	return new Request(`https://operations.internal${path}`, init)
-}
-
-async function call(path: string, input: OperationsOperatorOptions, init?: RequestInit): Promise<Response> {
-	return handleOperationsOperatorRequest(request(path, init), input)
-}
-
-async function responseObject(response: Response): Promise<Record<string, unknown>> {
-	const value: unknown = await response.json()
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('expected response object')
-	return Object.fromEntries(Object.entries(value))
+function operations(input: OperationsOperatorOptions): OperationsOperatorUseCases {
+	return new OperationsOperatorUseCases(new Request('https://operations.internal/api/rpc'), input)
 }
 
 function objectItems(value: unknown): Record<string, unknown>[] {
@@ -141,8 +132,8 @@ function objectItems(value: unknown): Record<string, unknown>[] {
 	return items
 }
 
-function firstFrame(response: Record<string, unknown>): Record<string, unknown> {
-	const detail = response['detail']
+function firstFrame(response: { detail: unknown }): Record<string, unknown> {
+	const detail = response.detail
 	if (typeof detail !== 'object' || detail === null || Array.isArray(detail)) throw new Error('expected event detail')
 	const exception = objectItems(Object.fromEntries(Object.entries(detail))['exceptions'])[0]
 	const frame = objectItems(exception?.['frames'])[0]
@@ -150,7 +141,7 @@ function firstFrame(response: Record<string, unknown>): Record<string, unknown> 
 	return frame
 }
 
-describe('Operations operator API', () => {
+describe('Operations operator use cases', () => {
 	test("resolves stack frames only against the event source's own releases", async () => {
 		const harness = createHarness(() => 10_000)
 		const input = options(auth({ apps: ['app-a'] }), harness)
@@ -208,13 +199,13 @@ describe('Operations operator API', () => {
 		const issue = await input.repositories.operator.getIssueByCoordinate('source-a', 'foreign-release')
 		if (issue === null) throw new Error('ingested issue is missing')
 
-		const foreign = await responseObject(await call(`/api/issues/${issue.id}/events/latest`, input))
+		const foreign = await operations(input).latestEvent(issue.id)
 		expect(firstFrame(foreign)).toMatchObject({ resolved: false, file: 'https://cdn.test/assets/index-abc.js?v=1' })
 		expect(firstFrame(foreign)['source']).toBeUndefined()
 		expect(JSON.stringify(foreign)).not.toContain(secret)
 
 		insertRelease('release-a', 'source-a', 'a'.repeat(40))
-		const own = await responseObject(await call(`/api/issues/${issue.id}/events/latest`, input))
+		const own = await operations(input).latestEvent(issue.id)
 		expect(firstFrame(own)).toMatchObject({ resolved: true, file: 'src/app.ts' })
 	})
 
@@ -266,31 +257,34 @@ describe('Operations operator API', () => {
 			).get(),
 		).toEqual({ assigned_to: 'operator-id', last_seen: 39 * 24 * 60 * 60 * 1_000 })
 
-		const filtered = await responseObject(
-			await call('/api/issues?sourceId=source-a&window=7d&level=error&assignee=me&query=Failure&sort=new', input),
-		)
-		expect(objectItems(filtered['items']).map((item) => item['id'])).toEqual([recentId])
-		expect(filtered['summary']).toEqual({ total: 1, open: 1, resolved: 0, ignored: 0 })
-		const none = await responseObject(await call('/api/issues?sourceId=source-a&assignee=none&status=resolved', input))
-		expect(objectItems(none['items']).map((item) => item['id'])).toEqual([older.id])
-		const warning = await responseObject(await call('/api/issues?sourceId=source-a&level=warning&window=30d', input))
-		expect(objectItems(warning['items']).map((item) => item['id'])).toEqual([middle.id])
-		const literalQuery = await responseObject(await call('/api/issues?sourceId=source-a&query=%25_', input))
-		expect(objectItems(literalQuery['items']).map((item) => item['id'])).toEqual([older.id])
+		const filtered = await operations(input).issues({
+			sourceId: 'source-a',
+			window: '7d',
+			level: 'error',
+			assignee: 'me',
+			query: 'Failure',
+			sort: 'new',
+		})
+		expect(filtered.items.map((item) => item.id)).toEqual([recentId])
+		expect(filtered.summary).toEqual({ total: 1, open: 1, resolved: 0, ignored: 0 })
+		const none = await operations(input).issues({ sourceId: 'source-a', assignee: 'none', status: 'resolved' })
+		expect(none.items.map((item) => item.id)).toEqual([older.id])
+		const warning = await operations(input).issues({ sourceId: 'source-a', level: 'warning', window: '30d' })
+		expect(warning.items.map((item) => item.id)).toEqual([middle.id])
+		const literalQuery = await operations(input).issues({ sourceId: 'source-a', query: '%_' })
+		expect(literalQuery.items.map((item) => item.id)).toEqual([older.id])
 
-		for (const sort of ['recent', 'new', 'frequency']) {
-			const first = await responseObject(await call(`/api/issues?sourceId=source-a&sort=${sort}&limit=1`, input))
-			const firstItems = objectItems(first['items'])
-			const cursor = first['nextCursor']
+		for (const sort of ['recent', 'new', 'frequency'] satisfies Array<'recent' | 'new' | 'frequency'>) {
+			const first = await operations(input).issues({ sourceId: 'source-a', sort, limit: 1 })
+			const firstItems = first.items
+			const cursor = first.nextCursor
 			if (typeof cursor !== 'string') throw new Error('expected next cursor')
-			const second = await responseObject(
-				await call(`/api/issues?sourceId=source-a&sort=${sort}&limit=1&cursor=${encodeURIComponent(cursor)}`, input),
-			)
-			const secondItems = objectItems(second['items'])
+			const second = await operations(input).issues({ sourceId: 'source-a', sort, limit: 1, cursor })
+			const secondItems = second.items
 			expect(secondItems).toHaveLength(1)
-			const secondId = secondItems[0]?.['id']
+			const secondId = secondItems[0]?.id
 			if (typeof secondId !== 'string') throw new Error('expected second issue id')
-			expect(secondId).not.toBe(firstItems[0]?.['id'])
+			expect(secondId).not.toBe(firstItems[0]?.id)
 			expect(harnessIssueIds).toContain(secondId)
 		}
 	})
@@ -332,29 +326,27 @@ describe('Operations operator API', () => {
 		const target = await input.repositories.operator.getIssueByCoordinate('source-a', 'target')
 		if (target === null) throw new Error('target issue is missing')
 
-		const list = await responseObject(await call('/api/issues?sourceId=source-a', input))
-		const listed = objectItems(list['items'])
+		const list = await operations(input).issues({ sourceId: 'source-a' })
+		const listed = list.items
 		expect(listed).toHaveLength(2)
-		const targetSummary = listed.find((item) => item['id'] === target.id)
-		expect(targetSummary?.['count']).toBe(3)
-		expect(targetSummary?.['trend']).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3])
+		const targetSummary = listed.find((item) => item.id === target.id)
+		expect(targetSummary?.count).toBe(3)
+		expect(targetSummary?.trend).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3])
 
-		const first = await responseObject(await call(`/api/issues/${target.id}/occurrences?limit=1`, input))
-		const firstOccurrence = objectItems(first['items'])[0]
-		const occurrenceId = firstOccurrence?.['id']
-		const cursor = first['nextCursor']
+		const first = await operations(input).issueOccurrences(target.id, undefined, 1)
+		const firstOccurrence = first.items[0]
+		const occurrenceId = firstOccurrence?.id
+		const cursor = first.nextCursor
 		if (typeof occurrenceId !== 'string' || typeof cursor !== 'string') throw new Error('expected occurrence and cursor')
-		const selected = await responseObject(await call(`/api/issues/${target.id}/events/${occurrenceId}`, input))
-		expect(selected['occurrenceId']).toBe(occurrenceId)
-		const second = await responseObject(
-			await call(`/api/issues/${target.id}/occurrences?limit=1&cursor=${encodeURIComponent(cursor)}`, input),
-		)
-		expect(objectItems(second['items'])[0]?.['id']).not.toBe(occurrenceId)
+		const selected = await operations(input).event(target.id, occurrenceId)
+		expect(selected.occurrenceId).toBe(occurrenceId)
+		const second = await operations(input).issueOccurrences(target.id, cursor, 1)
+		expect(second.items[0]?.id).not.toBe(occurrenceId)
 		const other = await input.repositories.operator.getIssueByCoordinate('source-a', 'other')
 		if (other === null) throw new Error('other issue is missing')
 		const otherOccurrence = await input.repositories.operator.latestOccurrence(other)
 		if (otherOccurrence === null) throw new Error('other occurrence is missing')
-		expect((await call(`/api/issues/${target.id}/events/${otherOccurrence.id}`, input)).status).toBe(404)
+		await expect(operations(input).event(target.id, otherOccurrence.id)).rejects.toMatchObject({ httpStatus: 404, type: 'not_found' })
 	})
 
 	test('exposes notification delivery attempts only through their source alert settings', async () => {
@@ -388,11 +380,11 @@ describe('Operations operator API', () => {
 				...(notification.dedupKey === 'delivery-source-a' ? {} : { errorCode: 'rejected' }),
 			})
 		}
-		const response = await responseObject(await call('/api/sources/source-a/alerts', input))
-		const deliveries = objectItems(response['deliveries'])
+		const response = await operations(input).alerts('source-a')
+		const deliveries = response.deliveries
 		expect(deliveries).toHaveLength(1)
 		expect(deliveries[0]).toMatchObject({ kind: 'new_issue', status: 'delivered', attemptCount: 1 })
-		expect(deliveries[0]?.['attempts']).toEqual([expect.objectContaining({ delivered: true, errorCode: null })])
+		expect(deliveries[0]?.attempts).toEqual([expect.objectContaining({ delivered: true, errorCode: null })])
 		const serialized = JSON.stringify(response)
 		expect(serialized).not.toContain('source-b')
 		expect(serialized).not.toContain('target-secret')
@@ -404,17 +396,16 @@ describe('Operations operator API', () => {
 		const issueA = await seedSource(input, 'source-a', 'app-a', 'secret-fingerprint-a', 1_000)
 		await seedSource(input, 'source-b', 'app-b', 'secret-fingerprint-b', 2_000)
 
-		const response = await call('/api/issues', input)
-		expect(response.status).toBe(200)
-		const text = await response.text()
+		const response = await operations(input).issues({})
+		const text = JSON.stringify(response)
 		expect(text).toContain(issueA)
 		expect(text).toContain('app-a')
 		expect(text).not.toContain('app-b')
 		expect(text).not.toContain('secret-fingerprint')
 
 		input.repositories.operator.getIssueById(issueA)
-		const second = await call('/api/issues', input)
-		expect(await second.text()).toContain(issueA)
+		const second = await operations(input).issues({})
+		expect(JSON.stringify(second)).toContain(issueA)
 	})
 
 	test('backfills a stable caller-generated id for rows created before the operator migration', async () => {
@@ -436,26 +427,19 @@ describe('Operations operator API', () => {
 		await seedSource(input, 'source-a', 'app-a', 'fingerprint-a', 1_000)
 		const foreignId = await seedSource(input, 'source-b', 'app-b', 'fingerprint-b', 2_000)
 
-		const forbidden = await call(`/api/issues/${foreignId}`, input)
-		const missing = await call('/api/issues/does-not-exist', input)
-		expect(forbidden.status).toBe(404)
-		expect(await forbidden.text()).toBe(await missing.text())
+		for (const id of [foreignId, 'does-not-exist']) {
+			await expect(operations(input).issue(id)).rejects.toMatchObject({ httpStatus: 404, type: 'not_found', message: 'not found' })
+		}
 
-		const list = await call('/api/issues', input)
-		expect(await list.json()).toMatchObject({ summary: { total: 1, open: 1 } })
+		expect(await operations(input).issues({})).toMatchObject({ summary: { total: 1, open: 1 } })
 	})
 
 	test('derives assignment labels from IAM and audits with the opaque issue id', async () => {
 		const audits: DomainEvent[] = []
 		const input = options(auth({ audits }))
 		const issueId = await seedSource(input, 'source-a', 'app-a', 'fingerprint-a', 1_000)
-		const response = await call(`/api/issues/${issueId}`, input, {
-			method: 'PUT',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ kind: 'assign', principalId: 'owner-id', principalLabel: 'spoofed' }),
-		})
-		expect(response.status).toBe(200)
-		expect(await response.json()).toMatchObject({
+		const response = await operations(input).mutateIssue(issueId, issueMutation({ kind: 'assign', principalId: 'owner-id', principalLabel: 'spoofed' }))
+		expect(response).toMatchObject({
 			issue: { assignedTo: { id: 'owner-id', label: 'owner@example.test' } },
 		})
 		expect(audits).toEqual([{
@@ -471,23 +455,13 @@ describe('Operations operator API', () => {
 		const issueA = await seedSource(input, 'source-a', 'app-a', 'fingerprint-a', 1_000)
 		const issueB = await seedSource(input, 'source-b', 'app-b', 'fingerprint-b', 2_000)
 
-		const forbidden = await call('/api/issues/bulk', input, {
-			method: 'PUT',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ issueIds: [issueA, issueB], status: 'resolved' }),
-		})
-		expect(forbidden.status).toBe(404)
+		await expect(operations(input).bulkIssueStatus({ issueIds: [issueA, issueB], status: 'resolved' })).rejects.toMatchObject({ httpStatus: 404 })
 		expect((await input.repositories.operator.getIssueById(issueA))?.status).toBe('open')
 		expect((await input.repositories.operator.getIssueById(issueB))?.status).toBe('open')
 		expect(audits).toEqual([])
 
 		input.auth = auth({ audits })
-		const updated = await call('/api/issues/bulk', input, {
-			method: 'PUT',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ issueIds: [issueA, issueB], status: 'resolved' }),
-		})
-		expect(updated.status).toBe(200)
+		await operations(input).bulkIssueStatus({ issueIds: [issueA, issueB], status: 'resolved' })
 		expect((await input.repositories.operator.getIssueById(issueA))?.status).toBe('resolved')
 		expect((await input.repositories.operator.getIssueById(issueB))?.status).toBe('resolved')
 		expect(audits.map((event) => event.resourceId).sort()).toEqual([issueA, issueB].sort())
@@ -504,15 +478,14 @@ describe('Operations operator API', () => {
 			target: 'https://hooks.example.test/private?token=secret',
 			enabled: true,
 		})
-		const response = await call('/api/sources/source-a/alerts', input)
-		const text = await response.text()
-		expect(response.status).toBe(200)
+		const response = await operations(input).alerts('source-a')
+		const text = JSON.stringify(response)
 		expect(text).toContain('https://hooks.example.test/…')
 		expect(text).not.toContain('private')
 		expect(text).not.toContain('secret')
 
 		input.auth = auth({ apps: ['app-a'], actions: ['operations.read'] })
-		expect((await call('/api/sources/source-a/alerts', input)).status).toBe(404)
+		await expect(operations(input).alerts('source-a')).rejects.toMatchObject({ httpStatus: 404 })
 	})
 
 	test('rejects unsafe webhook targets and preserves a valid HTTPS path and query', async () => {
@@ -536,25 +509,16 @@ describe('Operations operator API', () => {
 			'https://single-label/hook',
 		]
 		for (const target of unsafeTargets) {
-			const response = await call('/api/sources/source-a/alerts/channels', input, {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ scope: 'new_issue', type: 'webhook', target, enabled: true }),
-			})
-			expect(response.status).toBe(400)
+			await expect(operations(input).createAlertChannel('source-a', { scope: 'new_issue', type: 'webhook', target, enabled: true }))
+				.rejects.toMatchObject({ httpStatus: 400 })
 		}
 
 		const target = 'https://hooks.example.test/private/path?token=value&kind=issue'
-		const accepted = await call('/api/sources/source-a/alerts/channels', input, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ scope: 'new_issue', type: 'webhook', target, enabled: true }),
-		})
-		expect(accepted.status).toBe(201)
+		await operations(input).createAlertChannel('source-a', { scope: 'new_issue', type: 'webhook', target, enabled: true })
 		expect((await input.repositories.alerts.listChannels('source-a'))[0]?.target).toBe(target)
 	})
 
-	test('object-scoped REST mutations hide forbidden resources before parsing malformed bodies', async () => {
+	test('object-scoped mutations hide forbidden resources without writes or audits', async () => {
 		const audits: DomainEvent[] = []
 		const input = options(auth({ apps: ['app-a'], audits }))
 		const issueId = await seedSource(input, 'source-b', 'app-b', 'fingerprint-b', 1_000)
@@ -574,25 +538,34 @@ describe('Operations operator API', () => {
 			target: 'https://hooks.example.test/original',
 			enabled: true,
 		})
-		const malformed: RequestInit = {
-			method: 'PUT',
-			headers: { 'content-type': 'application/json' },
-			body: '{',
+		const health = {
+			path: '/changed',
+			enabled: true,
+			intervalMs: 60_000,
+			timeoutMs: 5_000,
+			expectedStatus: 200,
+			failureThreshold: 3,
+			recoveryThreshold: 2,
+			staleAfterMs: 180_000,
 		}
-		const requests: Array<[string, RequestInit]> = [
-			[`/api/issues/${issueId}`, malformed],
-			['/api/sources/source-b/health-checks', { ...malformed, method: 'POST' }],
-			['/api/sources/source-b/health-checks/check-b', malformed],
-			['/api/sources/source-b/alerts/spike', malformed],
-			['/api/sources/source-b/alerts/rules/new_issue', malformed],
-			['/api/sources/source-b/alerts/channels', { ...malformed, method: 'POST' }],
-			['/api/sources/source-b/alerts/channels/channel-b', malformed],
+		const service = operations(input)
+		const requests: Array<() => Promise<unknown>> = [
+			() => service.mutateIssue(issueId, { kind: 'status', status: 'resolved' }),
+			() => service.createHealthCheck('source-b', health),
+			() => service.updateHealthCheck('source-b', 'check-b', health),
+			() => service.updateSpikeAlert('source-b', { threshold: 5, enabled: true }),
+			() => service.updateAlertRule('source-b', 'new_issue', { enabled: true }),
+			() => service.createAlertChannel('source-b', { scope: 'new_issue', type: 'webhook', target: 'https://hooks.example.test/changed', enabled: true }),
+			() =>
+				service.updateAlertChannel('source-b', 'channel-b', {
+					scope: 'new_issue',
+					type: 'webhook',
+					target: 'https://hooks.example.test/changed',
+					enabled: true,
+				}),
 		]
-		for (const [path, init] of requests) {
-			const response = await call(path, input, init)
-			expect(response.status).toBe(404)
-			const body: unknown = await response.json()
-			expect(body).toEqual({ error: 'not found' })
+		for (const run of requests) {
+			await expect(run()).rejects.toMatchObject({ httpStatus: 404, type: 'not_found', message: 'not found' })
 		}
 
 		expect((await input.repositories.operator.getIssueById(issueId))?.status).toBe('open')
@@ -607,10 +580,9 @@ describe('Operations operator API', () => {
 	test('creates and reads a source-scoped HTTP health check without accepting an arbitrary origin', async () => {
 		const input = options(auth({ apps: ['app-a'] }))
 		await seedSource(input, 'source-a', 'app-a', 'fingerprint-a', 1_000)
-		const create = await call('/api/sources/source-a/health-checks', input, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({
+		await operations(input).createHealthCheck(
+			'source-a',
+			healthCheckInput({
 				path: '/health',
 				enabled: true,
 				intervalMs: 60_000,
@@ -621,8 +593,7 @@ describe('Operations operator API', () => {
 				staleAfterMs: 1_000,
 				publicOrigin: 'https://attacker.invalid',
 			}),
-		})
-		expect(create.status).toBe(201)
+		)
 		const check = (await input.health.listChecks('source-a'))[0]
 		if (check === undefined) throw new Error('created health check is missing')
 		await input.health.recordHttpObservation({
@@ -643,28 +614,11 @@ describe('Operations operator API', () => {
 				transition: null,
 			},
 		})
-		const response = await call('/api/sources/source-a/health', input)
-		expect(await response.json()).toMatchObject({
+		const response = await operations(input).sourceHealth('source-a')
+		expect(response).toMatchObject({
 			source: { id: 'source-a', publicOrigin: 'https://app-a.example.test' },
 			httpChecks: [{ path: '/health', current: { state: 'stale' } }],
 			telemetryState: 'unavailable',
 		})
-	})
-
-	test('never logs a dynamic error detail from an operator request', async () => {
-		const input = options(auth({ apps: ['app-a'] }))
-		await seedSource(input, 'source-a', 'app-a', 'fingerprint-a', 1_000)
-		input.principals = {
-			listPrincipals: () => Promise.reject(new Error('https://secret.example.test/?credential=do-not-log')),
-		}
-		const log = spyOn(console, 'error').mockImplementation(() => undefined)
-		try {
-			const response = await call('/api/sources/source-a/assignees', input)
-			expect(response.status).toBe(500)
-			expect(log).toHaveBeenCalledWith('operations operator request failed')
-			expect(JSON.stringify(log.mock.calls)).not.toContain('do-not-log')
-		} finally {
-			log.mockRestore()
-		}
 	})
 })

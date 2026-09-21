@@ -1,11 +1,10 @@
-import { defineApp, type Middleware, route } from '@fabrika/app'
+import { defineApp, route } from '@fabrika/app'
 import { type AuthCarrier, type AuthContext, type Iam } from '@fabrika/auth'
 import { OPERATIONS_RELEASE_RECONCILE_PATH, OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'
 import { handleSourceMapUploadRequest } from './artifact-upload.js'
 import { handleOperationsCatalogRequest } from './catalog.js'
 import { handleDirectIngestRequest } from './direct-ingest.js'
 import type { HealthRepository } from './health-repository.js'
-import { handleOperationsOperatorRequest } from './operator-api.js'
 import { operationsRpcRouter } from './operator-rpc.js'
 import type { OperationsDataEnv } from './pipeline.js'
 import { handleOperationsReleaseRequest } from './releases.js'
@@ -31,7 +30,6 @@ interface OperationsAppContext extends AuthCarrier {
 /** Operations as the same runtime-neutral Fabrika application on Workers and Bun. */
 export const operationsApp = defineApp<OperationsAppEnv, OperationsAppContext>({
 	context: (env, request) => ({ env, request }),
-	middleware: (env) => [operatorAuthMiddleware(env)],
 	routes: [
 		route.all('/healthz', (ctx) =>
 			isPublicIngress(new URL(ctx.request.url), ctx.env.publicHost)
@@ -42,7 +40,6 @@ export const operationsApp = defineApp<OperationsAppEnv, OperationsAppContext>({
 		route.all('/private/catalog/reconcile', (ctx) => catalogReconcile(ctx)),
 		route.all(OPERATIONS_RELEASE_RECONCILE_PATH, (ctx) => releaseReconcile(ctx)),
 		route.rpc('/api/rpc', operationsRpcRouter, { use: [privateOperatorRoute] }),
-		route.all('/api/*path', (ctx) => operatorApi(ctx)),
 		route.all('/*path', () => notFound()),
 	],
 	onError() {
@@ -51,29 +48,15 @@ export const operationsApp = defineApp<OperationsAppEnv, OperationsAppContext>({
 	},
 })
 
-async function privateOperatorRoute(_request: Request, ctx: OperationsAppContext, next: () => Promise<Response>): Promise<Response> {
-	return isPublicIngress(new URL(ctx.request.url), ctx.env.publicHost) ? notFound() : await next()
-}
-
-/**
- * Resolve the operator from the proxy-injected token, verified locally. Public ingest and non-`/api/`
- * paths carry no operator identity and are left alone; everything else fails closed — an unresolved
- * caller never reaches a handler.
- */
-function operatorAuthMiddleware(env: OperationsAppEnv): Middleware<OperationsAppContext> {
-	return async (request, ctx, next) => {
-		const url = new URL(request.url)
-		if (isPublicIngress(url, env.publicHost) || !url.pathname.startsWith('/api/')) {
-			return next()
-		}
-		const result = await env.iam.authenticate(request)
-		if (!result.ok) {
-			const type = result.status === 401 ? 'auth' : result.status === 403 ? 'forbidden' : 'error'
-			return Response.json({ error: { type, message: 'authentication required' } }, { status: result.status })
-		}
-		ctx.auth = result.context
-		return next()
+async function privateOperatorRoute(request: Request, ctx: OperationsAppContext, next: () => Promise<Response>): Promise<Response> {
+	if (isPublicIngress(new URL(request.url), ctx.env.publicHost)) return notFound()
+	const result = await ctx.env.iam.authenticate(request)
+	if (!result.ok) {
+		const type = result.status === 401 ? 'auth' : result.status === 403 ? 'forbidden' : 'error'
+		return Response.json({ error: { type, message: 'authentication required' } }, { status: result.status })
 	}
+	ctx.auth = result.context
+	return next()
 }
 
 function directIngest(ctx: OperationsAppContext): Promise<Response> {
@@ -114,24 +97,6 @@ function releaseReconcile(ctx: OperationsAppContext): Promise<Response> {
 	return handleOperationsReleaseRequest(ctx.request, {
 		repositories: ctx.env.repositories,
 		syncKey: ctx.env.syncKey,
-	})
-}
-
-function operatorApi(ctx: OperationsAppContext): Promise<Response> {
-	const url = new URL(ctx.request.url)
-	if (isPublicIngress(url, ctx.env.publicHost) || url.pathname === '/api') {
-		return Promise.resolve(notFound())
-	}
-	const auth = ctx.auth
-	if (auth === undefined || auth === null) {
-		return Promise.resolve(Response.json({ error: 'authentication required' }, { status: 401 }))
-	}
-	return handleOperationsOperatorRequest(ctx.request, {
-		repositories: ctx.env.repositories,
-		health: ctx.env.health,
-		payloads: ctx.env.payloads,
-		auth,
-		principals: ctx.env.iam,
 	})
 }
 

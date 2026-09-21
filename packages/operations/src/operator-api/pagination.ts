@@ -8,11 +8,10 @@ import type {
 import { badRequest } from './errors.js'
 import { isRecord, numeric } from './values.js'
 
-export function boundedLimit(value: string | null): number {
-	if (value === null || value === '') return 50
-	const parsed = Number(value)
-	if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 100) throw badRequest('limit must be between 1 and 100')
-	return parsed
+export function boundedLimit(value: number | undefined): number {
+	if (value === undefined) return 50
+	if (!Number.isSafeInteger(value) || value < 1 || value > 100) throw badRequest('limit must be between 1 and 100')
+	return value
 }
 
 export function offsetCursor(value: string | null): number {
