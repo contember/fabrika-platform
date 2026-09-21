@@ -36,6 +36,8 @@ is a **starting point**, not a lock-in — add/drop decisions freely.
 
 ## Presets
 
+- **`zerops-app`** — local Bun + PostgreSQL + React/Buzola, Fabrika IAM and proxy access, deployed through an installed Fabrika Control plane.
+
 - **`cf-lightweight`** — buzola SPA + lopata + D1, **no SSR**. The preferred default and simplest end-to-end fabrika stack (bun/lopata path).
 - **`cf-internal-app`** — the full internal-app stack: Buzola SPA +
   Worker API, D1/R2/Queue/Cron/Workers AI, native Propustka login and Vozka deploy.
