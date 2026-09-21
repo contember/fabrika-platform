@@ -1,0 +1,783 @@
+import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
+import { type GitHubSourceTransportKind } from '../github-connection-store'
+import {
+	type AppEnvInput,
+	type AppEnvRow,
+	type AppInput,
+	type AppRow,
+	type AppSecretRow,
+	type AppVarRow,
+	type DeploymentNamespaceInput,
+	type DeploymentNamespaceRow,
+	type DeploymentNamespaceState,
+	NamespaceResourceClaimConflictError,
+	type NamespaceResourceClaimOwner,
+	type NamespaceResourceClaimRow,
+	type ZeropsSourceBinding,
+} from './registry-types'
+import { firstRow } from './returning'
+
+/** Portable registry persistence; a composition root may replace this complete capability. */
+export class ControlRegistryRepository {
+	/**
+	 * `now` is injectable so caller-stamped timestamps are deterministic in tests (same approach as
+	 * `SqlDeployLocks`); production passes the real clock. It returns unix SECONDS — the unit every
+	 * `*_at` column in this schema uses.
+	 */
+	constructor(protected readonly d1: SqlDatabase, protected readonly now: () => number = () => Math.floor(Date.now() / 1000)) {}
+
+	// ── Apps ────────────────────────────────────────────────────────────────────
+
+	async listApps(): Promise<AppRow[]> {
+		const { results } = await this.d1.prepare('SELECT * FROM apps ORDER BY id').all<AppRow>()
+		return results
+	}
+
+	async getApp(id: string): Promise<AppRow | null> {
+		return this.d1.prepare('SELECT * FROM apps WHERE id = ?').bind(id).first<AppRow>()
+	}
+
+	/**
+	 * The apps registered for a repo URL (the webhook narrows by repo first, then by ref). A repo can
+	 * back more than one app entry, so this returns all matches. Matched on the normalized URL (the
+	 * caller normalizes both the stored and the incoming URL the same way — see normalizeRepoUrl).
+	 */
+	async getAppsByRepoUrl(repoUrl: string): Promise<AppRow[]> {
+		const { results } = await this.d1.prepare('SELECT * FROM apps WHERE repo_url = ?').bind(repoUrl).all<AppRow>()
+		return results
+	}
+
+	/** Exact repository, connection and installation lookup for a scoped Zerops webhook. */
+	async getZeropsAppsByRepoUrlAndSourceBinding(
+		repoUrl: string,
+		connectionId: string,
+		installationId: number,
+	): Promise<AppRow[]> {
+		await this.validateZeropsSourceBinding(repoUrl, connectionId, installationId)
+		const { results } = await this.d1.prepare(`SELECT DISTINCT a.* FROM apps a
+			INNER JOIN app_envs e ON e.app_id = a.id AND e.provider = 'zerops'
+			INNER JOIN github_source_connections_keyed c
+				ON c.connection_id = a.github_connection_id
+				AND c.installation_id = a.github_installation_id
+			WHERE a.repo_url = ? AND a.github_connection_id = ? AND a.github_installation_id = ?
+			ORDER BY a.id`)
+			.bind(repoUrl, connectionId, installationId)
+			.all<AppRow>()
+		return results
+	}
+
+	/**
+	 * Resolve the credential selector for one Zerops app environment. Public source is represented by
+	 * neither coordinate. Partial, stale, cross-owner and cross-installation bindings fail closed.
+	 */
+	async getZeropsSourceBinding(appId: string, env: string): Promise<ZeropsSourceBinding | null> {
+		const row = await this.d1.prepare(`SELECT
+				a.repo_url, a.github_connection_id, a.github_installation_id,
+				e.provider, c.transport_kind, c.app_owner
+			FROM apps a
+			INNER JOIN app_envs e ON e.app_id = a.id AND e.env = ?
+			LEFT JOIN github_source_connections_keyed c
+				ON c.connection_id = a.github_connection_id
+				AND c.installation_id = a.github_installation_id
+			WHERE a.id = ?`).bind(env, appId).first<ZeropsSourceBindingRow>()
+		if (row === null || row.provider !== 'zerops') return null
+		const connectionId = row.github_connection_id
+		const installationId = row.github_installation_id
+		if (connectionId === null && installationId === null) return null
+		if (connectionId === null || installationId === null || row.transport_kind === null || row.app_owner === null) {
+			throw new Error('incomplete Zerops GitHub source binding')
+		}
+		const repositoryOwner = githubRepositoryOwner(row.repo_url)
+		if (repositoryOwner === null || repositoryOwner.toLowerCase() !== row.app_owner.toLowerCase()) {
+			throw new Error('Zerops GitHub source binding does not own the repository')
+		}
+		return {
+			connectionId,
+			installationId,
+			transportKind: parseGitHubSourceTransportKind(row.transport_kind),
+		}
+	}
+
+	/** Validate a proposed Zerops registration before the app row exists. */
+	async validateZeropsSourceBinding(
+		repoUrl: string,
+		githubConnectionId: string | null,
+		githubInstallationId: number | null,
+	): Promise<ZeropsSourceBinding | null> {
+		if (githubConnectionId === null && githubInstallationId === null) return null
+		if (githubConnectionId === null || githubInstallationId === null) throw new Error('incomplete Zerops GitHub source binding')
+		const row = await this.d1.prepare(`SELECT transport_kind, app_owner
+			FROM github_source_connections_keyed WHERE connection_id = ? AND installation_id = ?`)
+			.bind(githubConnectionId, githubInstallationId)
+			.first<ZeropsConnectionBindingRow>()
+		if (row === null) throw new Error('unknown Zerops GitHub source binding')
+		const repositoryOwner = githubRepositoryOwner(repoUrl)
+		if (repositoryOwner === null || repositoryOwner.toLowerCase() !== row.app_owner.toLowerCase()) {
+			throw new Error('Zerops GitHub source binding does not own the repository')
+		}
+		return {
+			connectionId: githubConnectionId,
+			installationId: githubInstallationId,
+			transportKind: parseGitHubSourceTransportKind(row.transport_kind),
+		}
+	}
+
+	async validateStoredZeropsSourceBinding(appId: string): Promise<ZeropsSourceBinding | null> {
+		const app = await this.getApp(appId)
+		if (app === null) return null
+		return this.validateZeropsSourceBinding(app.repo_url, app.github_connection_id, app.github_installation_id)
+	}
+
+	async createApp(input: AppInput): Promise<AppRow> {
+		return firstRow<AppRow>(this.appInsertStatement(input))
+	}
+
+	private appInsertStatement(input: AppInput): SqlStatement {
+		return this.d1
+			.prepare(`INSERT INTO apps (
+				id, repo_url, default_branch, worker_dir, build_cmd, config_path,
+				github_connection_id, github_installation_id
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`)
+			.bind(
+				input.id,
+				input.repoUrl,
+				input.defaultBranch ?? 'main',
+				input.workerDir ?? null,
+				input.buildCmd ?? null,
+				input.configPath ?? null,
+				input.githubConnectionId ?? null,
+				input.githubInstallationId ?? null,
+			)
+	}
+
+	async updateApp(id: string, patch: {
+		repoUrl?: string
+		defaultBranch?: string
+		workerDir?: string | null
+		buildCmd?: string | null
+		configPath?: string | null
+		githubConnectionId?: string | null
+		githubInstallationId?: number | null
+	}): Promise<AppRow | null> {
+		return this.d1
+			.prepare(`UPDATE apps SET
+				repo_url = COALESCE(?, repo_url),
+				default_branch = COALESCE(?, default_branch),
+				worker_dir = COALESCE(?, worker_dir),
+				build_cmd = COALESCE(?, build_cmd),
+				config_path = COALESCE(?, config_path),
+				github_connection_id = CASE WHEN ? = 1 THEN ? ELSE github_connection_id END,
+				github_installation_id = CASE WHEN ? = 1 THEN ? ELSE github_installation_id END
+				WHERE id = ? RETURNING *`)
+			.bind(
+				patch.repoUrl ?? null,
+				patch.defaultBranch ?? null,
+				patch.workerDir ?? null,
+				patch.buildCmd ?? null,
+				patch.configPath ?? null,
+				patch.githubConnectionId === undefined ? 0 : 1,
+				patch.githubConnectionId ?? null,
+				patch.githubInstallationId === undefined ? 0 : 1,
+				patch.githubInstallationId ?? null,
+				id,
+			)
+			.first<AppRow>()
+	}
+
+	/** Atomically replace or clear both GitHub source coordinates, including explicit NULL values. */
+	async replaceAppGitHubSourceBinding(
+		id: string,
+		binding: { readonly connectionId: string | null; readonly installationId: number | null },
+	): Promise<AppRow | null> {
+		if (binding.connectionId !== null && binding.connectionId.trim() === '') throw new Error('invalid GitHub source connection id')
+		if (binding.installationId !== null && (!Number.isSafeInteger(binding.installationId) || binding.installationId <= 0)) {
+			throw new Error('invalid GitHub installation id')
+		}
+		return this.updateApp(id, {
+			githubConnectionId: binding.connectionId,
+			githubInstallationId: binding.installationId,
+		})
+	}
+
+	async deleteApp(id: string): Promise<boolean> {
+		const result = await this.d1.prepare('DELETE FROM apps WHERE id = ?').bind(id).run()
+		return (result.meta.changes ?? 0) > 0
+	}
+
+	// ── Deployment namespaces ─────────────────────────────────────────────────
+
+	async listDeploymentNamespaces(): Promise<DeploymentNamespaceRow[]> {
+		const { results } = await this.d1
+			.prepare('SELECT * FROM deployment_namespaces ORDER BY env, id')
+			.all<DeploymentNamespaceRow>()
+		return results
+	}
+
+	async getDeploymentNamespace(id: string): Promise<DeploymentNamespaceRow | null> {
+		return this.d1.prepare('SELECT * FROM deployment_namespaces WHERE id = ?').bind(id).first<DeploymentNamespaceRow>()
+	}
+
+	async createDeploymentNamespace(input: DeploymentNamespaceInput): Promise<DeploymentNamespaceRow> {
+		return firstRow<DeploymentNamespaceRow>(this.deploymentNamespaceInsertStatement(input))
+	}
+
+	/** Create a namespace and reserve all provider-owned keys in one transaction. */
+	async createDeploymentNamespaceWithResourceClaims(
+		input: DeploymentNamespaceInput,
+		resourceKeys: readonly string[],
+	): Promise<DeploymentNamespaceRow> {
+		const results = await this.d1.batch<DeploymentNamespaceRow | NamespaceResourceClaimRow>([
+			this.deploymentNamespaceInsertStatement(input),
+			...this.namespaceResourceClaimStatements({
+				namespaceId: input.id,
+				ownerAppId: null,
+				ownerEnv: null,
+				resourceKeys,
+			}),
+		])
+		const namespace = results[0]?.results[0]
+		if (namespace === undefined || !('state' in namespace) || results[0]?.results.length !== 1) {
+			throw new Error('expected one row from a deployment namespace insert')
+		}
+		return namespace
+	}
+
+	private deploymentNamespaceInsertStatement(input: DeploymentNamespaceInput): SqlStatement {
+		return this.d1
+			.prepare(`INSERT INTO deployment_namespaces (
+					id, env, provider, exclusive_app_id, provider_target_json, state, last_error
+				)
+				VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`)
+			.bind(
+				input.id,
+				input.env,
+				input.provider,
+				input.exclusiveAppId,
+				input.providerTargetJson,
+				input.state ?? 'pending',
+				input.lastError ?? null,
+			)
+	}
+
+	/** Persist a provider checkpoint or a core-owned namespace lifecycle transition. */
+	async updateDeploymentNamespace(input: {
+		id: string
+		providerTargetJson: string
+		state: DeploymentNamespaceState
+		lastError: string | null
+	}): Promise<DeploymentNamespaceRow | null> {
+		return this.d1
+			.prepare(`UPDATE deployment_namespaces
+				SET provider_target_json = ?, state = ?, last_error = ?
+				WHERE id = ? RETURNING *`)
+			.bind(input.providerTargetJson, input.state, input.lastError, input.id)
+			.first<DeploymentNamespaceRow>()
+	}
+
+	/**
+	 * Queue a SETTLED namespace for another provider mutation. Guarded to the terminal states and it
+	 * never writes `provider_target_json`, so a request that arrives while a job is in flight cannot
+	 * overwrite a checkpoint the worker has just written. NULL = it was not settled; leave it alone.
+	 */
+	async requeueDeploymentNamespace(id: string): Promise<DeploymentNamespaceRow | null> {
+		return this.d1
+			.prepare(`UPDATE deployment_namespaces
+				SET state = 'pending', last_error = NULL
+				WHERE id = ? AND state IN ('ready', 'failed') RETURNING *`)
+			.bind(id)
+			.first<DeploymentNamespaceRow>()
+	}
+
+	/**
+	 * Remove one namespace and release its reservations in ONE transaction, freeing the id for reuse
+	 * (backlog 73). Claims go first because both foreign keys are `ON DELETE RESTRICT`, and BOTH
+	 * statements carry the SAME guard, so a removal refused between the caller's check and this write
+	 * cannot strip the claims of a namespace it then leaves in place. NULL = refused; the caller re-reads
+	 * the row to say why. It deletes no provider resource — that stays with the operator (ADR-0034).
+	 */
+	async deleteDeploymentNamespaceWithResourceClaims(id: string): Promise<DeploymentNamespaceRow | null> {
+		const removable = `state <> 'provisioning' AND NOT EXISTS (SELECT 1 FROM app_envs WHERE namespace_id = ?)`
+		const results = await this.d1.batch<DeploymentNamespaceRow | NamespaceResourceClaimRow>([
+			this.d1
+				.prepare(`DELETE FROM namespace_resource_claims
+					WHERE namespace_id = ?
+						AND EXISTS (SELECT 1 FROM deployment_namespaces WHERE id = ? AND ${removable})`)
+				.bind(id, id, id),
+			this.d1
+				.prepare(`DELETE FROM deployment_namespaces WHERE id = ? AND ${removable} RETURNING *`)
+				.bind(id, id),
+		])
+		const removed = results[1]?.results[0]
+		if (removed === undefined) {
+			return null
+		}
+		if (!('state' in removed)) {
+			throw new Error('expected a deployment namespace row from a namespace delete')
+		}
+		return removed
+	}
+
+	async listNamespaceResourceClaims(namespaceId: string): Promise<NamespaceResourceClaimRow[]> {
+		const { results } = await this.d1
+			.prepare('SELECT * FROM namespace_resource_claims WHERE namespace_id = ? ORDER BY resource_key')
+			.bind(namespaceId)
+			.all<NamespaceResourceClaimRow>()
+		return results
+	}
+
+	/**
+	 * Every claim one app — or one of its environments — still owns, in any namespace. Both owner
+	 * foreign keys are `ON DELETE RESTRICT`, so this is what a registry delete must read before it tries.
+	 */
+	async listNamespaceResourceClaimsForApp(appId: string, env?: string): Promise<NamespaceResourceClaimRow[]> {
+		const statement = env === undefined
+			? this.d1
+				.prepare(`SELECT * FROM namespace_resource_claims
+					WHERE owner_app_id = ?
+					ORDER BY namespace_id, resource_key`)
+				.bind(appId)
+			: this.d1
+				.prepare(`SELECT * FROM namespace_resource_claims
+					WHERE owner_app_id = ? AND owner_env = ?
+					ORDER BY namespace_id, resource_key`)
+				.bind(appId, env)
+		const { results } = await statement.all<NamespaceResourceClaimRow>()
+		return results
+	}
+
+	async createNamespaceResourceClaim(input: {
+		namespaceId: string
+		resourceKey: string
+		ownerAppId: string | null
+		ownerEnv: string | null
+	}): Promise<NamespaceResourceClaimRow> {
+		const [claim] = await this.acquireNamespaceResourceClaims({
+			namespaceId: input.namespaceId,
+			ownerAppId: input.ownerAppId,
+			ownerEnv: input.ownerEnv,
+			resourceKeys: [input.resourceKey],
+		})
+		if (claim === undefined) {
+			throw new Error('expected an acquired namespace resource claim')
+		}
+		return claim
+	}
+
+	/**
+	 * Atomically acquires every requested key for one owner. Existing keys owned by the same owner
+	 * are idempotent; the schema trigger aborts the whole batch when any key has another owner.
+	 */
+	async acquireNamespaceResourceClaims(input: NamespaceResourceClaimOwner): Promise<NamespaceResourceClaimRow[]> {
+		const statements = this.namespaceResourceClaimStatements(input)
+		if (statements.length === 0) {
+			return []
+		}
+		const results = await this.withNamespaceResourceClaimConflict(input, () => this.d1.batch<NamespaceResourceClaimRow>(statements))
+		const claims: NamespaceResourceClaimRow[] = []
+		for (const result of results) {
+			const [claim] = result.results
+			if (claim === undefined || result.results.length !== 1) {
+				throw new Error('expected one row from a namespace resource claim acquisition')
+			}
+			claims.push(claim)
+		}
+		return claims
+	}
+
+	/** Release only one app environment's claims during failed provider registration preparation. */
+	async deleteNamespaceResourceClaimsForOwner(namespaceId: string, ownerAppId: string, ownerEnv: string): Promise<void> {
+		await this.d1
+			.prepare(`DELETE FROM namespace_resource_claims
+				WHERE namespace_id = ? AND owner_app_id = ? AND owner_env = ?`)
+			.bind(namespaceId, ownerAppId, ownerEnv)
+			.run()
+	}
+
+	// ── App environments ──────────────────────────────────────────────────────
+
+	async listAppEnvs(appId: string): Promise<AppEnvRow[]> {
+		const { results } = await this.d1
+			.prepare('SELECT * FROM app_envs WHERE app_id = ? ORDER BY env')
+			.bind(appId)
+			.all<AppEnvRow>()
+		return results
+	}
+
+	async getAppEnv(appId: string, env: string): Promise<AppEnvRow | null> {
+		return this.d1.prepare('SELECT * FROM app_envs WHERE app_id = ? AND env = ?').bind(appId, env).first<AppEnvRow>()
+	}
+
+	/** Every app environment owned by one statically composed provider. */
+	async listAppEnvsByProvider(provider: string): Promise<AppEnvRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT * FROM app_envs
+				WHERE provider = ?
+				ORDER BY app_id, env`)
+			.bind(provider)
+			.all<AppEnvRow>()
+		return results
+	}
+
+	async listAppEnvsByNamespace(namespaceId: string): Promise<AppEnvRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT * FROM app_envs
+				WHERE namespace_id = ?
+				ORDER BY app_id, env`)
+			.bind(namespaceId)
+			.all<AppEnvRow>()
+		return results
+	}
+
+	/**
+	 * Find the (app, env) a push ref triggers by EXACT trigger_ref. Kept for exact lookups; the webhook
+	 * uses `listTriggerEnvs` + `refMatches` instead so a glob trigger_ref (`refs/tags/v*`) also matches.
+	 */
+	async getAppEnvByTriggerRef(appId: string, triggerRef: string): Promise<AppEnvRow | null> {
+		return this.d1
+			.prepare('SELECT * FROM app_envs WHERE app_id = ? AND trigger_ref = ?')
+			.bind(appId, triggerRef)
+			.first<AppEnvRow>()
+	}
+
+	/**
+	 * Every env of an app that has a trigger_ref (exact or glob). The webhook fetches these and matches
+	 * the pushed ref against each via `refMatches` (glob-aware) — the set per app is tiny, so matching in
+	 * TS keeps the glob logic pure + testable rather than encoding it in SQL.
+	 */
+	async listTriggerEnvs(appId: string): Promise<AppEnvRow[]> {
+		const { results } = await this.d1
+			.prepare('SELECT * FROM app_envs WHERE app_id = ? AND trigger_ref IS NOT NULL ORDER BY env')
+			.bind(appId)
+			.all<AppEnvRow>()
+		return results
+	}
+
+	/** Upsert an (app, env) target. ON CONFLICT (app_id, env) overwrites the mutable columns. */
+	async upsertAppEnv(input: AppEnvInput): Promise<AppEnvRow> {
+		if (input.provider === 'zerops') await this.validateStoredZeropsSourceBinding(input.appId)
+		return firstRow<AppEnvRow>(this.appEnvUpsertStatement(input))
+	}
+
+	/**
+	 * Atomically upsert an environment and acquire its current resource keys. Keys omitted by a
+	 * later call remain claimed; releasing a provider resource requires a separate explicit policy.
+	 */
+	async upsertAppEnvWithNamespaceResourceClaims(
+		input: AppEnvInput,
+		resourceKeys: readonly string[],
+	): Promise<{ appEnv: AppEnvRow; resourceClaims: NamespaceResourceClaimRow[] }> {
+		if (input.namespaceId === null) {
+			throw new Error('namespace resource claims require an environment namespace')
+		}
+		if (input.provider === 'zerops') await this.validateStoredZeropsSourceBinding(input.appId)
+		const owner: NamespaceResourceClaimOwner = {
+			namespaceId: input.namespaceId,
+			ownerAppId: input.appId,
+			ownerEnv: input.env,
+			resourceKeys,
+		}
+		const results = await this.withNamespaceResourceClaimConflict(owner, () =>
+			this.d1.batch<AppEnvRow | NamespaceResourceClaimRow>([
+				this.appEnvUpsertStatement(input),
+				...this.namespaceResourceClaimStatements(owner),
+			]))
+		const [appResult, ...claimResults] = results
+		const appEnv = appResult?.results[0]
+		if (appEnv === undefined || !('provider' in appEnv) || appResult?.results.length !== 1) {
+			throw new Error('expected one row from an app environment upsert')
+		}
+		const resourceClaims: NamespaceResourceClaimRow[] = []
+		for (const result of claimResults) {
+			const [claim] = result.results
+			if (claim === undefined || !('resource_key' in claim) || result.results.length !== 1) {
+				throw new Error('expected one row from a namespace resource claim acquisition')
+			}
+			resourceClaims.push(claim)
+		}
+		return { appEnv, resourceClaims }
+	}
+
+	/** Create an app, its first namespaced environment, and all claims in one transaction. */
+	async createAppWithEnvironmentAndNamespaceResourceClaims(
+		appInput: AppInput,
+		environmentInput: AppEnvInput,
+		resourceKeys: readonly string[],
+	): Promise<{ app: AppRow; appEnv: AppEnvRow; resourceClaims: NamespaceResourceClaimRow[] }> {
+		if (environmentInput.namespaceId === null) {
+			throw new Error('namespace resource claims require an environment namespace')
+		}
+		if (appInput.id !== environmentInput.appId) {
+			throw new Error('app and environment coordinates do not match')
+		}
+		if (environmentInput.provider === 'zerops') {
+			await this.validateZeropsSourceBinding(
+				appInput.repoUrl,
+				appInput.githubConnectionId ?? null,
+				appInput.githubInstallationId ?? null,
+			)
+		}
+		const owner: NamespaceResourceClaimOwner = {
+			namespaceId: environmentInput.namespaceId,
+			ownerAppId: environmentInput.appId,
+			ownerEnv: environmentInput.env,
+			resourceKeys,
+		}
+		const results = await this.withNamespaceResourceClaimConflict(owner, () =>
+			this.d1.batch<AppRow | AppEnvRow | NamespaceResourceClaimRow>([
+				this.appInsertStatement(appInput),
+				this.appEnvUpsertStatement(environmentInput),
+				...this.namespaceResourceClaimStatements(owner),
+			]))
+		const app = results[0]?.results[0]
+		const appEnv = results[1]?.results[0]
+		if (app === undefined || !('id' in app) || results[0]?.results.length !== 1) {
+			throw new Error('expected one row from an app insert')
+		}
+		if (appEnv === undefined || !('provider' in appEnv) || results[1]?.results.length !== 1) {
+			throw new Error('expected one row from an app environment upsert')
+		}
+		const resourceClaims: NamespaceResourceClaimRow[] = []
+		for (const result of results.slice(2)) {
+			const claim = result.results[0]
+			if (claim === undefined || !('resource_key' in claim) || result.results.length !== 1) {
+				throw new Error('expected one row from a namespace resource claim acquisition')
+			}
+			resourceClaims.push(claim)
+		}
+		return { app, appEnv, resourceClaims }
+	}
+
+	private appEnvUpsertStatement(input: AppEnvInput): SqlStatement {
+		return this.d1
+			.prepare(`INSERT INTO app_envs (
+					app_id, env, domain, public_origin, trigger_ref, namespace_id, provider,
+					provider_target_json, provider_artifact_json
+				)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT (app_id, env) DO UPDATE SET
+					domain = excluded.domain,
+					public_origin = excluded.public_origin,
+					trigger_ref = excluded.trigger_ref,
+					namespace_id = excluded.namespace_id,
+					provider = excluded.provider,
+					provider_target_json = excluded.provider_target_json,
+					provider_artifact_json = excluded.provider_artifact_json
+				RETURNING *`)
+			.bind(
+				input.appId,
+				input.env,
+				input.domain ?? null,
+				input.publicOrigin ?? null,
+				input.triggerRef ?? null,
+				input.namespaceId,
+				input.provider,
+				input.providerTargetJson,
+				input.providerArtifactJson,
+			)
+	}
+
+	private namespaceResourceClaimStatements(input: NamespaceResourceClaimOwner): SqlStatement[] {
+		if ((input.ownerAppId === null) !== (input.ownerEnv === null)) {
+			throw new Error('namespace resource claim owner app and environment must both be set or both be null')
+		}
+		return [...new Set(input.resourceKeys)].sort().map((resourceKey) =>
+			this.d1
+				.prepare(`INSERT INTO namespace_resource_claims (
+						namespace_id, resource_key, owner_app_id, owner_env
+					)
+					VALUES (?, ?, ?, ?)
+					ON CONFLICT (namespace_id, resource_key) DO UPDATE SET
+						owner_app_id = excluded.owner_app_id,
+						owner_env = excluded.owner_env
+					RETURNING *`)
+				.bind(input.namespaceId, resourceKey, input.ownerAppId, input.ownerEnv)
+		)
+	}
+
+	private async withNamespaceResourceClaimConflict<T>(
+		input: NamespaceResourceClaimOwner,
+		operation: () => Promise<T>,
+	): Promise<T> {
+		try {
+			return await operation()
+		} catch (cause) {
+			const claims = await this.listNamespaceResourceClaims(input.namespaceId)
+			const requested = new Set(input.resourceKeys)
+			const conflict = claims.find((claim) =>
+				requested.has(claim.resource_key)
+				&& (claim.owner_app_id !== input.ownerAppId || claim.owner_env !== input.ownerEnv)
+			)
+			if (conflict !== undefined) {
+				throw new NamespaceResourceClaimConflictError(input.namespaceId, conflict.resource_key)
+			}
+			throw cause
+		}
+	}
+
+	async deleteAppEnv(appId: string, env: string): Promise<boolean> {
+		const result = await this.d1.prepare('DELETE FROM app_envs WHERE app_id = ? AND env = ?').bind(appId, env).run()
+		return (result.meta.changes ?? 0) > 0
+	}
+
+	async hasSuccessfulRun(appId: string, env: string): Promise<boolean> {
+		const row = await this.d1
+			.prepare(`SELECT id FROM runs
+				WHERE app_id = ? AND env = ? AND status = 'succeeded'
+				LIMIT 1`)
+			.bind(appId, env)
+			.first<{ id: string }>()
+		return row !== null
+	}
+
+	async hasInFlightRun(appId: string, env: string): Promise<boolean> {
+		const row = await this.d1
+			.prepare(`SELECT id FROM runs
+				WHERE app_id = ? AND env = ? AND status IN ('pending', 'running')
+				LIMIT 1`)
+			.bind(appId, env)
+			.first<{ id: string }>()
+		return row !== null
+	}
+
+	// ── App secrets (the pipeline.secrets resolution seam; values live in the M4 vault) ──
+
+	/**
+	 * The secret rows that apply when deploying `app` to `env`: the all-env layer (env IS NULL) plus
+	 * the env-specific layer. The caller layers by iterating in order, so the ORDER BY must put the
+	 * WIDER (all-env) row of a name BEFORE the narrower one — last write wins. `ORDER BY name` alone
+	 * leaves that tie unordered, and the two dialects break it differently (SQLite falls back to rowid;
+	 * Postgres is free to return either, and its default NULLS LAST would invert it), so the layer is
+	 * ranked explicitly with a CASE rather than left to `env` sorting.
+	 */
+	async getAppSecretsForEnv(appId: string, env: string): Promise<AppSecretRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT * FROM app_secrets WHERE app_id = ? AND (env IS NULL OR env = ?)
+				ORDER BY name, CASE WHEN env IS NULL THEN 0 ELSE 1 END`)
+			.bind(appId, env)
+			.all<AppSecretRow>()
+		return results
+	}
+
+	async listAppSecrets(appId: string): Promise<AppSecretRow[]> {
+		const { results } = await this.d1
+			.prepare('SELECT * FROM app_secrets WHERE app_id = ? ORDER BY name, env')
+			.bind(appId)
+			.all<AppSecretRow>()
+		return results
+	}
+
+	/** Upsert a secret reference at its (app, env-or-all) layer. The value_ref points into the M4 vault. */
+	async upsertAppSecret(input: { appId: string; env: string | null; name: string; valueRef: string }): Promise<AppSecretRow> {
+		// NULL env is a distinct layer from a concrete env (partial unique indexes), so the conflict
+		// target differs. Two prepared variants keep the ON CONFLICT target correct for each layer.
+		if (input.env === null) {
+			return firstRow<AppSecretRow>(
+				this.d1
+					.prepare(`INSERT INTO app_secrets (app_id, env, name, value_ref) VALUES (?, NULL, ?, ?)
+						ON CONFLICT (app_id, name) WHERE env IS NULL DO UPDATE SET value_ref = excluded.value_ref
+						RETURNING *`)
+					.bind(input.appId, input.name, input.valueRef),
+			)
+		}
+		return firstRow<AppSecretRow>(
+			this.d1
+				.prepare(`INSERT INTO app_secrets (app_id, env, name, value_ref) VALUES (?, ?, ?, ?)
+					ON CONFLICT (app_id, env, name) WHERE env IS NOT NULL DO UPDATE SET value_ref = excluded.value_ref
+					RETURNING *`)
+				.bind(input.appId, input.env, input.name, input.valueRef),
+		)
+	}
+
+	async deleteAppSecret(appId: string, env: string | null, name: string): Promise<boolean> {
+		const result = input(env)
+			? await this.d1.prepare('DELETE FROM app_secrets WHERE app_id = ? AND env = ? AND name = ?').bind(appId, env, name).run()
+			: await this.d1.prepare('DELETE FROM app_secrets WHERE app_id = ? AND env IS NULL AND name = ?').bind(appId, name).run()
+		return (result.meta.changes ?? 0) > 0
+
+		// Local helper: NULL env needs `IS NULL` (a bound NULL never `= NULL`).
+		function input(value: string | null): value is string {
+			return value !== null
+		}
+	}
+
+	// ── App vars (non-secret deploy-time config; PLAINTEXT, mirrors app_secrets' env layering) ──
+
+	/**
+	 * Vars visible to a deploy of `env`: the all-env layer (NULL) PLUS this env's, narrower wins (caller
+	 * layers). Same explicit layer ranking as `getAppSecretsForEnv` — the all-env row must come first.
+	 */
+	async getAppVarsForEnv(appId: string, env: string): Promise<AppVarRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT * FROM app_vars WHERE app_id = ? AND (env IS NULL OR env = ?)
+				ORDER BY name, CASE WHEN env IS NULL THEN 0 ELSE 1 END`)
+			.bind(appId, env)
+			.all<AppVarRow>()
+		return results
+	}
+
+	async listAppVars(appId: string): Promise<AppVarRow[]> {
+		const { results } = await this.d1
+			.prepare('SELECT * FROM app_vars WHERE app_id = ? ORDER BY name, env')
+			.bind(appId)
+			.all<AppVarRow>()
+		return results
+	}
+
+	/** Upsert a plaintext var at its (app, env-or-all) layer. */
+	async upsertAppVar(input: { appId: string; env: string | null; name: string; value: string }): Promise<AppVarRow> {
+		// NULL env is a distinct layer from a concrete env (partial unique indexes), so the conflict
+		// target differs — two prepared variants keep the ON CONFLICT target correct for each layer.
+		if (input.env === null) {
+			return firstRow<AppVarRow>(
+				this.d1
+					.prepare(`INSERT INTO app_vars (app_id, env, name, value) VALUES (?, NULL, ?, ?)
+						ON CONFLICT (app_id, name) WHERE env IS NULL DO UPDATE SET value = excluded.value
+						RETURNING *`)
+					.bind(input.appId, input.name, input.value),
+			)
+		}
+		return firstRow<AppVarRow>(
+			this.d1
+				.prepare(`INSERT INTO app_vars (app_id, env, name, value) VALUES (?, ?, ?, ?)
+					ON CONFLICT (app_id, env, name) WHERE env IS NOT NULL DO UPDATE SET value = excluded.value
+					RETURNING *`)
+				.bind(input.appId, input.env, input.name, input.value),
+		)
+	}
+
+	async deleteAppVar(appId: string, env: string | null, name: string): Promise<boolean> {
+		const result = present(env)
+			? await this.d1.prepare('DELETE FROM app_vars WHERE app_id = ? AND env = ? AND name = ?').bind(appId, env, name).run()
+			: await this.d1.prepare('DELETE FROM app_vars WHERE app_id = ? AND env IS NULL AND name = ?').bind(appId, name).run()
+		return (result.meta.changes ?? 0) > 0
+
+		// Local helper: NULL env needs `IS NULL` (a bound NULL never `= NULL`).
+		function present(value: string | null): value is string {
+			return value !== null
+		}
+	}
+}
+
+interface ZeropsSourceBindingRow {
+	repo_url: string
+	github_connection_id: string | null
+	github_installation_id: number | null
+	provider: string
+	transport_kind: string | null
+	app_owner: string | null
+}
+
+interface ZeropsConnectionBindingRow {
+	transport_kind: string
+	app_owner: string
+}
+
+function parseGitHubSourceTransportKind(value: string): GitHubSourceTransportKind {
+	if (value === 'keyed-v2') return value
+	throw new Error('invalid GitHub source transport kind')
+}
+
+function githubRepositoryOwner(repoUrl: string): string | null {
+	const match = /^github\.com\/([^/]+)\/[^/]+$/.exec(repoUrl)
+	return match?.[1] ?? null
+}
