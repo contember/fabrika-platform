@@ -1,6 +1,5 @@
 import { type AuthContext, defineApp, type RequestExecutionContext, route } from '@fabrika/app'
 import type { ControlProvider } from '@fabrika/provider-contract'
-import { handleApi } from './api/router'
 import { controlRpcRouter } from './control-rpc'
 import type { Env } from './env'
 import { error } from './http'
@@ -8,7 +7,7 @@ import { controlAuthMiddleware, controlPublicOrigin } from './iam'
 import { forwardIamAdmin } from './iam-admin'
 import { forwardOperationsApi } from './operations-gateway'
 import { controlOriginGuard } from './origin-guard'
-import { buildApiDeps, repositories, type WebhookRoute, webhookRoute } from './services'
+import { repositories, type WebhookRoute, webhookRoute } from './services'
 import { manifestCallback, manifestHandoff, SourceConnectionWorkflowError } from './source-connection'
 import type { SourceConnectionPort } from './source-connection-port'
 import { handleWebhook } from './webhook'
@@ -51,10 +50,12 @@ export const controlApp = defineApp<ControlAppEnv, ControlAppContext>({
 		route.get('/api/source/github/callback', (ctx) => sourceConnectionBrowserCall(ctx, manifestCallback)),
 		route.all('/iam/admin', (ctx) => iamAdmin(ctx)),
 		route.all('/iam/admin/*path', (ctx) => iamAdmin(ctx)),
-		route.all('/operations/api', (ctx) => operationsApi(ctx)),
-		route.all('/operations/api/*path', (ctx) => operationsApi(ctx)),
+		route.all('/operations/api/rpc', (ctx) => operationsApi(ctx)),
+		route.all('/operations/api', () => error(404, 'not found')),
+		route.all('/operations/api/*path', () => error(404, 'not found')),
 		route.rpc('/api/rpc', controlRpcRouter),
-		route.all('/api/*path', (ctx) => controlApi(ctx)),
+		route.all('/api', () => error(404, 'not found')),
+		route.all('/api/*path', () => error(404, 'not found')),
 		route.all('/*path', (ctx) => ctx.env.ASSETS.fetch(ctx.request)),
 	],
 	onError(cause) {
@@ -107,17 +108,6 @@ function secureBrowserResponse(response: Response): Response {
 
 function withRequestExecution(env: Env, exec: RequestExecutionContext): Env {
 	return { ...env, WAIT_UNTIL: (promise) => exec.waitUntil(promise) }
-}
-
-function controlApi(ctx: ControlAppContext): Promise<Response> {
-	if (new URL(ctx.request.url).pathname === '/api') {
-		return ctx.env.ASSETS.fetch(ctx.request)
-	}
-	const auth = ctx.auth
-	if (auth === undefined || auth === null) {
-		return Promise.resolve(error(401, 'authentication required'))
-	}
-	return handleApi(ctx.request, buildApiDeps(ctx.env, ctx.provider, auth))
 }
 
 function iamAdmin(ctx: ControlAppContext): Promise<Response> {

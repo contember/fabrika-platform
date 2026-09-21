@@ -19,25 +19,31 @@ describe('Operations console gateway', () => {
 	test('strips the console prefix and preserves Operations-owned credentials', async () => {
 		const gateway = new RecordingGateway()
 		const response = await forwardOperationsApi(
-			new Request('https://console.test/operations/api/issues?status=open', {
-				headers: { cookie: '__Host-px_session=session-one' },
+			new Request('https://console.test/operations/api/rpc?trace=one', {
+				method: 'POST',
+				headers: { cookie: '__Host-px_session=session-one', 'X-Fabrika-Token': 'trusted-token', origin: CONSOLE },
+				body: JSON.stringify({ method: 'issues.list', input: {} }),
 			}),
-			{ gateway, publicIamUrl: 'https://iam.test' },
+			{ gateway, publicIamUrl: 'https://iam.test', publicOrigin: CONSOLE },
 		)
 
 		expect(response.status).toBe(200)
-		expect(gateway.requests[0]?.url).toBe('https://console.test/api/issues?status=open')
+		expect(gateway.requests[0]?.url).toBe('https://console.test/api/rpc?trace=one')
 		expect(gateway.requests[0]?.headers.get('cookie')).toBe('__Host-px_session=session-one')
+		expect(gateway.requests[0]?.headers.get('X-Fabrika-Token')).toBe('trusted-token')
+		expect(gateway.requests[0]?.headers.get('origin')).toBe(CONSOLE)
+		const forwardedBody: unknown = await gateway.requests[0]?.json()
+		expect(forwardedBody).toEqual({ method: 'issues.list', input: {} })
 	})
 
 	test('allows only safe methods without a same-origin proof, including guarding PUT', async () => {
 		const gateway = new RecordingGateway()
 		const missingOrigin = await forwardOperationsApi(
-			new Request('https://console.test/operations/api/issues/one', { method: 'PUT', body: '{}' }),
+			new Request('https://console.test/operations/api/rpc', { method: 'PUT', body: '{}' }),
 			{ gateway, publicOrigin: CONSOLE },
 		)
 		const crossOrigin = await forwardOperationsApi(
-			new Request('https://console.test/operations/api/issues/one', {
+			new Request('https://console.test/operations/api/rpc', {
 				method: 'PUT',
 				headers: { origin: 'https://attacker.test' },
 				body: '{}',
@@ -45,7 +51,7 @@ describe('Operations console gateway', () => {
 			{ gateway, publicOrigin: CONSOLE },
 		)
 		const sameOrigin = await forwardOperationsApi(
-			new Request('https://console.test/operations/api/issues/one', {
+			new Request('https://console.test/operations/api/rpc', {
 				method: 'PUT',
 				headers: { origin: 'https://console.test' },
 				body: '{}',
@@ -65,7 +71,7 @@ describe('Operations console gateway', () => {
 		// comparison refused every genuine operator write in exactly that shape.
 		const gateway = new RecordingGateway()
 		const behindBalancer = await forwardOperationsApi(
-			new Request('http://console.test/operations/api/issues/one', {
+			new Request('http://console.test/operations/api/rpc', {
 				method: 'PUT',
 				headers: { origin: CONSOLE },
 				body: '{}',
@@ -76,7 +82,7 @@ describe('Operations console gateway', () => {
 
 		// With nothing configured the guard fails closed rather than trusting the socket.
 		const unconfigured = await forwardOperationsApi(
-			new Request('https://console.test/operations/api/issues/one', {
+			new Request('https://console.test/operations/api/rpc', {
 				method: 'PUT',
 				headers: { origin: CONSOLE },
 				body: '{}',
@@ -86,10 +92,14 @@ describe('Operations console gateway', () => {
 		expect(unconfigured.status).toBe(403)
 	})
 
-	test('never transports direct ingest or artifact paths', async () => {
+	test('never transports removed operator REST, direct ingest, or artifact paths', async () => {
 		const gateway = new RecordingGateway()
 		for (
 			const path of [
+				'/operations/api',
+				'/operations/api/issues',
+				'/operations/api/issues/one',
+				'/operations/api/rpc/extra',
 				'/operations/api/ingest',
 				'/operations/api/projects/source/envelope',
 				'/operations/api/releases/one/artifacts',
@@ -104,17 +114,16 @@ describe('Operations console gateway', () => {
 	test('preserves IAM login bounce semantics and isolates transport outages', async () => {
 		const unauthorized = new RecordingGateway(Response.json({ error: 'unauthorized' }, { status: 401 }))
 		const response = await forwardOperationsApi(
-			new Request('https://console.test/operations/api/issues'),
+			new Request('https://console.test/operations/api/rpc'),
 			{ gateway: unauthorized, publicIamUrl: 'https://iam.test' },
 		)
 		const unauthorizedBody: unknown = await response.json()
 		expect(unauthorizedBody).toEqual({
-			error: 'authentication required',
-			loginUrl: 'https://iam.test/auth/login?redirect=https%3A%2F%2Fconsole.test',
+			error: { type: 'auth', message: 'authentication required', loginUrl: 'https://iam.test/auth/login?redirect=https%3A%2F%2Fconsole.test' },
 		})
 
 		const unavailable = await forwardOperationsApi(
-			new Request('https://console.test/operations/api/issues'),
+			new Request('https://console.test/operations/api/rpc'),
 			{ gateway: new RecordingGateway(Response.json({ ok: false }), true) },
 		)
 		expect(unavailable.status).toBe(503)

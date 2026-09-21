@@ -95,7 +95,7 @@ const PROCESS_ONLY = (specifier: string): boolean =>
 const PROVIDERS = new Set(['@fabrika/provider-cloudflare', '@fabrika/provider-zerops'])
 
 /** The layer both entrypoints sit on — every shared module either one enters through. */
-const SHARED = ['app.ts', 'consumer.ts', 'cron.ts', 'services.ts', 'db.ts', 'env.ts', 'iam.ts', 'api/router.ts', 'webhook.ts', 'repo-poll.ts']
+const SHARED = ['app.ts', 'consumer.ts', 'cron.ts', 'services.ts', 'db.ts', 'env.ts', 'iam.ts', 'control-rpc.ts', 'webhook.ts', 'repo-poll.ts']
 
 describe('entrypoint isolation', () => {
 	test('the Worker entrypoint reaches no Bun/Node-only module', () => {

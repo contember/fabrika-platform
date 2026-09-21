@@ -15,7 +15,6 @@ import type {
 import type { JobQueue } from '@fabrika/platform'
 import {
 	type ControlProvider,
-	type JsonValue,
 	type ProviderDeploymentNamespace,
 	type ProviderNamespaceCapabilities,
 	ProviderNamespaceError,
@@ -24,13 +23,10 @@ import {
 	type ProviderNamespacePresentation,
 } from '@fabrika/provider-contract'
 import { type ControlRepositories, type DeploymentNamespaceRow, NamespaceResourceClaimConflictError } from '../db'
-import { readJson } from '../http'
-import type { Authorized } from '../iam'
-import { nullableStringField, prop, stringField } from '../json'
 import type { ControlJobMessage, DeployLockGate, NamespaceJobMessage, NamespaceJobMutation } from '../run-lifecycle'
 import { uuidv7 } from '../uuid'
-import { fail, jsonAdapter } from './domain'
-import { isJsonValue, parseStoredEnvelope, readProviderEnvelope } from './provider-envelope'
+import { fail } from './domain'
+import { parseStoredEnvelope } from './provider-envelope'
 
 /**
  * Republish one deployment namespace's proxy manifest from the registry.
@@ -39,15 +35,6 @@ import { isJsonValue, parseStoredEnvelope, readProviderEnvelope } from './provid
  * authorization state; every registry change the manifest routes on has to reach it.
  */
 export type NamespaceProxyChanged = (namespaceId: string) => Promise<void>
-
-export interface NamespaceContext {
-	readonly repositories: ControlRepositories
-	readonly request: Request
-	readonly provider: ControlProvider
-	readonly authorized: Authorized
-	readonly queue: JobQueue<ControlJobMessage>
-	readonly namespaceProxyChanged?: NamespaceProxyChanged
-}
 
 /**
  * What the WORKER needs. No `auth` and no request signal: the mutation runs behind the queue, long
@@ -64,17 +51,6 @@ export interface NamespaceUseCaseContext extends NamespaceJobContext {
 	readonly auth: AuthContext
 	readonly queue: JobQueue<ControlJobMessage>
 	readonly namespaceProxyChanged?: NamespaceProxyChanged
-}
-
-function useCaseContext(c: NamespaceContext): NamespaceUseCaseContext {
-	return {
-		repositories: c.repositories,
-		provider: c.provider,
-		auth: c.authorized.auth,
-		signal: c.request.signal,
-		queue: c.queue,
-		...(c.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: c.namespaceProxyChanged }),
-	}
 }
 
 /**
@@ -464,10 +440,6 @@ async function auditMutation(
 	})
 }
 
-export async function listNamespaces(c: NamespaceContext): Promise<Response> {
-	return jsonAdapter(() => listNamespacesUseCase(useCaseContext(c)))
-}
-
 export async function listNamespacesUseCase(c: NamespaceUseCaseContext): Promise<DeploymentNamespaceListResponse> {
 	const rows = await c.repositories.registry.listDeploymentNamespaces()
 	const operator = c.provider.namespaces?.operator
@@ -475,10 +447,6 @@ export async function listNamespacesUseCase(c: NamespaceUseCaseContext): Promise
 		items: rows.filter((row) => row.provider === c.provider.id).map(toNamespaceDto),
 		operator: operator === undefined ? null : { presets: operator.presets },
 	}
-}
-
-export async function getNamespace(c: NamespaceContext, id: string): Promise<Response> {
-	return jsonAdapter(() => getNamespaceUseCase(useCaseContext(c), id))
 }
 
 export async function getNamespaceUseCase(c: NamespaceUseCaseContext, id: string): Promise<DeploymentNamespaceDetailDto> {
@@ -493,10 +461,6 @@ export async function getNamespaceUseCase(c: NamespaceUseCaseContext, id: string
 		presentation: presentation === null ? null : toPresentationDto(presentation),
 		...(hosts === undefined ? {} : { hosts }),
 	}
-}
-
-export async function planNamespace(c: NamespaceContext): Promise<Response> {
-	return jsonAdapter(async () => planNamespaceUseCase(useCaseContext(c), parsePlan(await readJson(c.request))))
 }
 
 export async function planNamespaceUseCase(
@@ -523,10 +487,6 @@ export async function planNamespaceUseCase(
 	}
 }
 
-export async function createNamespace(c: NamespaceContext): Promise<Response> {
-	return jsonAdapter(async () => createNamespaceUseCase(useCaseContext(c), parseCreate(await readJson(c.request))), { status: 201 })
-}
-
 export async function createNamespaceUseCase(
 	c: NamespaceUseCaseContext,
 	input: CreateDeploymentNamespaceRequest,
@@ -549,10 +509,6 @@ export async function createNamespaceUseCase(
 	return toNamespaceDetail(c, created)
 }
 
-export async function adoptNamespace(c: NamespaceContext, id: string): Promise<Response> {
-	return jsonAdapter(async () => adoptNamespaceUseCase(useCaseContext(c), id, parseAdopt(await readJson(c.request))), { status: 201 })
-}
-
 export async function adoptNamespaceUseCase(
 	c: NamespaceUseCaseContext,
 	id: string,
@@ -572,10 +528,6 @@ export async function adoptNamespaceUseCase(
 	await enqueueNamespaceJob(c, created, 'reconcile')
 	await auditMutation(c, 'namespace.adopt', created)
 	return toNamespaceDetail(c, created)
-}
-
-export async function reconcileNamespace(c: NamespaceContext, id: string): Promise<Response> {
-	return jsonAdapter(() => reconcileNamespaceUseCase(useCaseContext(c), id))
 }
 
 export async function reconcileNamespaceUseCase(c: NamespaceUseCaseContext, id: string): Promise<DeploymentNamespaceDetailDto> {
@@ -623,10 +575,6 @@ export async function reconcileNamespaceUseCase(c: NamespaceUseCaseContext, id: 
 	return toNamespaceDetail(c, current)
 }
 
-export async function removeNamespace(c: NamespaceContext, id: string): Promise<Response> {
-	return jsonAdapter(() => removeNamespaceUseCase(useCaseContext(c), id))
-}
-
 /**
  * Free a namespace id (backlog 73). The narrow case only: no app environment may be registered here, and
  * a namespace a worker is settling is left to finish. It removes the ROW and releases its reservations —
@@ -671,51 +619,6 @@ function toRemovedDetail(c: NamespaceUseCaseContext, row: DeploymentNamespaceRow
 		return toNamespaceDetail(c, row)
 	} catch {
 		return { ...toNamespaceDto(row), presentation: null }
-	}
-}
-
-function parseCreate(body: unknown): CreateDeploymentNamespaceRequest {
-	const id = stringField(body, 'id')
-	const common = parseAdopt(body)
-	if (!id) fail(400, 'id and env required')
-	return { id, ...common }
-}
-
-function parseAdopt(body: unknown): AdoptDeploymentNamespaceRequest {
-	const env = stringField(body, 'env')
-	if (!env) fail(400, 'id and env required')
-	const rawExclusiveAppId = prop(body, 'exclusiveAppId')
-	const exclusiveAppId = nullableStringField(body, 'exclusiveAppId')
-	if (rawExclusiveAppId !== undefined && (exclusiveAppId === undefined || exclusiveAppId === '')) {
-		fail(400, 'exclusiveAppId must be a non-empty string or null')
-	}
-	const target = readProviderEnvelope(prop(body, 'target'))
-	if (target === null) fail(400, 'target must be a versioned provider envelope')
-	return { env, target, ...(exclusiveAppId === undefined ? {} : { exclusiveAppId }) }
-}
-
-function parsePlan(body: unknown): PlanDeploymentNamespaceRequest {
-	const id = stringField(body, 'id')
-	const env = stringField(body, 'env')
-	const preset = stringField(body, 'preset')
-	if (!id?.trim() || !env?.trim() || !preset?.trim()) fail(400, 'id, env, and preset required')
-	const rawExclusiveAppId = prop(body, 'exclusiveAppId')
-	const exclusiveAppId = nullableStringField(body, 'exclusiveAppId')
-	if (rawExclusiveAppId !== undefined && (exclusiveAppId === undefined || exclusiveAppId === '')) {
-		fail(400, 'exclusiveAppId must be a non-empty string or null')
-	}
-	const rawOptions = prop(body, 'options')
-	let options: JsonValue | undefined
-	if (rawOptions !== undefined) {
-		if (!isJsonValue(rawOptions)) fail(400, 'options must be JSON')
-		options = rawOptions
-	}
-	return {
-		id,
-		env,
-		preset,
-		...(exclusiveAppId === undefined || exclusiveAppId === null ? {} : { exclusiveAppId }),
-		...(options === undefined ? {} : { options }),
 	}
 }
 

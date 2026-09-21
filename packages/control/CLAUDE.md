@@ -4,7 +4,7 @@ The control plane: registry + queue + encrypted vault, driving a deploy from a G
 trigger, or a repo poll. It runs on **two** targets — a Cloudflare `WorkerEntrypoint` and a long-running
 Bun process — from one shared body of code. Assumes the root CLAUDE.md.
 
-Public control REST DTOs and `RunLogLine` live in `@fabrika/control-contract`.
+The public `ControlRpcContract`, its DTOs, and `RunLogLine` live in `@fabrika/control-contract`.
 Keep browser and runner consumers on that package instead of importing this
 runtime package.
 
@@ -48,9 +48,10 @@ entrypoint reaches the other provider or runtime.
 `fetch` routes: `/api/health` → ok · `POST /webhooks/github/:connectionId` → webhook ·
 the unscoped `POST /webhooks/github` exists for a Cloudflare composition only, and a Zerops
 composition refuses it with 401 (ADR-0039) ·
-`/iam/admin/*` → transport-only IAM gateway · `/operations/api/*` →
-transport-only Operations gateway · `/api/*` → ACL-gated control surface ·
-everything else → dashboard `ASSETS`. `/healthz` is a liveness-only route on
+`/iam/admin/*` → transport-only IAM gateway · `/operations/api/rpc` →
+transport-only Operations RPC gateway · `/api/rpc` → ACL-gated control RPC surface.
+Unmatched `/api` and `/operations/api` paths return 404; they never reach dashboard `ASSETS`.
+Other paths fall back to `ASSETS`. `/healthz` is a liveness-only route on
 the shared app and is exposed by both the Cloudflare and Bun compositions.
 Neither gateway changes service ownership;
 IAM and Operations authenticate, authorize, and audit their own requests. Both preserve the browser's
@@ -92,10 +93,11 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
 
 ## Invariants
 
-- **ACL on every `/api/*` route.** `controlApp` authenticates once in `controlAuthMiddleware`
-  (`src/iam.ts`); each handler then calls `authorize` with that resolved context and its action/scope.
-  Actions/scopes live in `src/actions.ts`. The GitHub webhook (`src/webhook.ts`) is the ONLY
-  unauthenticated route — HMAC-gated instead.
+- **Administrative operations use `/api/rpc` only.** `controlApp` authenticates once in `controlAuthMiddleware`
+  (`src/iam.ts`); `src/control-rpc.ts` applies `.require()` with the action/scope. Run/deploy use cases
+  resolve coordinates before checking permissions and hide denied resources as 404. Actions/scopes
+  live in `src/actions.ts`. Keep webhook, health, and GitHub browser protocols as HTTP routes.
+  `runs.tail` is cursor-based RPC polling, not a separate streaming endpoint.
 - **The PROXY is the front door; `src/iam.ts` only verifies (ADR-0022).** The proxy matches
   `CONTROL_PROXY_GATES` (`fabrika.gates.ts` — a module deliberately free of the provider AND of
   `src/`, so `@fabrika/local-stack` can import it into a strict program), resolves the credential, and
@@ -149,7 +151,7 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   that runs in time there.
 - **A variable value is one bounded line and a domain is a literal host.** `assertAppVarValue` (4096 chars;
   no C0/C1 control, DEL, NEL, LS or PS — the line breaks a YAML 1.1 reader honours, not only `\n`) and
-  `assertProxyDomain` (`isProxyHost`) refuse at the API on both transports. The variable bound is the belt;
+  `assertProxyDomain` (`isProxyHost`) refuse invalid RPC/domain input. The variable bound is the belt;
   the Zerops emitter's own escaping of those code points is the braces.
 - **One static provider per installation.** Core persists versioned target/artifact envelopes and calls
   `ControlProvider`; it has no provider registry and no provider-id branch. Cloudflare credentials live
@@ -163,7 +165,7 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   fail before provider effects.
 - **`app_envs.public_origin` is explicit observation configuration, not provider
   routing.** It is a canonical HTTP(S) origin, remains independent of `domain`,
-  and is projected unchanged to Operations. PUT omission preserves the stored
+  and is projected unchanged to Operations. `apps.environments.put` omission preserves the stored
   value; explicit `null` clears it. Never derive it from a provider hostname.
 - **The same column is also what IAM trusts as a return origin (ADR-0022).**
   `projectedReturnOrigins` (`src/return-origins.ts`) collects it from EVERY
@@ -252,7 +254,8 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
 - **Database access, dialect rules, and migrations: read [`DATABASE.md`](./DATABASE.md)** before
   editing `src/db.ts`, `migrations/`, or `migrations-postgres/`. It covers the ADR-0015 repository
   seam, caller-stamped timestamps, the int4-vs-BIGINT row-shape rule, and the ADR-0017 ledger.
-- Errors via `src/http.ts` `error(status, msg)`; handlers return its Response. Unexpected throws → 500, never leak internals.
+- RPC use cases throw structural `ControlApiError` errors (`src/api/domain.ts`); the RPC dispatcher owns
+  the response envelope. Protocol routes use `src/http.ts` `error(status, msg)`. Unexpected throws → 500, never leak internals.
   On the Bun target that catch-all is NOT optional: `Bun.serve`'s default error page puts the exception
   AND the surrounding source lines in the response body, so `createFetchHandler` wraps every request and
   `Bun.serve`'s `error()` backstops anything raised outside it. Both answer a bare `internal error`.

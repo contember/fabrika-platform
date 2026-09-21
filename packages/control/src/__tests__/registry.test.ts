@@ -12,25 +12,25 @@ import {
 	type RegistryUseCaseContext,
 	updateAppUseCase,
 } from '../api/registry'
-import type { ApiDeps } from '../api/router'
-import { handleApi } from '../api/router'
 import { uuidv7 } from '../db'
 import { FakeRepoSource, type RepoEvents } from '../repo-source'
 import type { ControlJobMessage } from '../run-lifecycle'
+import type { ControlRpcDeps } from '../services'
 import { createHarness, type Harness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
+import { rpcRequest, rpcResult } from './helpers/rpc'
 
-// Registry + onboarding row creation, and run-history reads, driven through the real `handleApi`
-// router against the real schema (in-memory sqlite). An allow-all dev authenticator lets us focus on
+// Registry + onboarding row creation, and run-history reads, driven through the RPC
+// router against the real schema (in-memory sqlite). An allow-all test authenticator lets us focus on
 // the data path here; ACL is covered separately in acl.test.ts.
 
 function makeDeps(
 	opts: { installationId?: number | null; provider?: ControlProvider; catalogChanged?: () => void; repoSource?: RepoEvents } = {},
-): { deps: ApiDeps; queue: ControlJobMessage[]; logStore: Map<string, string>; sqlite: Harness['sqlite'] } {
+): { deps: ControlRpcDeps; queue: ControlJobMessage[]; logStore: Map<string, string>; sqlite: Harness['sqlite'] } {
 	const { db, sqlite } = createHarness()
 	const queue: ControlJobMessage[] = []
 	const logStore = new Map<string, string>()
-	const deps: ApiDeps = {
+	const deps: ControlRpcDeps = {
 		repositories: db,
 		auth: allowAllAuth(),
 		queue: {
@@ -168,24 +168,6 @@ const storedEnvironment = (
 	}
 }
 
-function req(method: string, path: string, body?: unknown): Request {
-	const withRegistration = (
-			(method === 'POST' && path === '/api/register-app')
-			|| (method === 'PUT' && /^\/api\/apps\/[^/]+\/envs\/[^/]+$/.test(path))
-		)
-			&& typeof body === 'object'
-			&& body !== null
-			&& !Array.isArray(body)
-		? { ...body, ...registrationEnvelopes() }
-		: body
-	return new Request(`https://vozka.example${path}`, {
-		method,
-		...(withRegistration !== undefined
-			? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(withRegistration) }
-			: {}),
-	})
-}
-
 describe('onboarding + registry CRUD', () => {
 	test('passes the registry request signal into delegated installation lookup', async () => {
 		let observed: AbortSignal | undefined
@@ -198,8 +180,8 @@ describe('onboarding + registry CRUD', () => {
 				},
 			},
 		})
-		const request = req('POST', '/api/apps', { id: 'signal-app', repoUrl: 'https://github.com/acme/signal-app', resolveInstallationId: true })
-		expect((await handleApi(request, deps)).status).toBe(201)
+		const request = rpcRequest('apps.create', { id: 'signal-app', repoUrl: 'https://github.com/acme/signal-app', resolveInstallationId: true })
+		expect((await rpcResult(request, deps)).status).toBe(200)
 		expect(observed).toBe(request.signal)
 	})
 
@@ -212,36 +194,38 @@ describe('onboarding + registry CRUD', () => {
 			},
 		})
 
-		expect((await handleApi(req('POST', '/api/apps', { id: 'app-a', repoUrl: 'https://github.com/acme/app-a' }), deps)).status).toBe(201)
-		expect((await handleApi(req('PATCH', '/api/apps/app-a', { defaultBranch: 'next' }), deps)).status).toBe(200)
-		expect((await handleApi(req('PUT', '/api/apps/app-a/envs/prod', {}), deps)).status).toBe(200)
-		expect((await handleApi(req('DELETE', '/api/apps/app-a/envs/prod'), deps)).status).toBe(200)
-		expect((await handleApi(req('DELETE', '/api/apps/app-a'), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('apps.create', { id: 'app-a', repoUrl: 'https://github.com/acme/app-a' }), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('apps.update', { appId: 'app-a', app: { defaultBranch: 'next' } }), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app-a', env: 'prod', environment: registrationEnvelopes() }), deps)).status)
+			.toBe(200)
+		expect((await rpcResult(rpcRequest('apps.environments.delete', { appId: 'app-a', env: 'prod' }), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('apps.delete', { appId: 'app-a' }), deps)).status).toBe(200)
 		expect(
-			(await handleApi(
-				req('POST', '/api/register-app', {
+			(await rpcResult(
+				rpcRequest('register', {
+					...registrationEnvelopes(),
 					id: 'app-b',
 					repoUrl: 'https://github.com/acme/app-b',
 					env: 'stage',
 				}),
 				deps,
 			)).status,
-		).toBe(201)
+		).toBe(200)
 		expect(scheduled).toBe(6)
 	})
 
 	test('normalizes and round-trips a third provider without a registry branch', async () => {
 		const { deps } = makeDeps()
-		await handleApi(req('POST', '/api/apps', { id: 'harbor-app', repoUrl: 'https://github.com/acme/harbor-app' }), deps)
-		const response = await handleApi(
-			new Request('https://vozka.example/api/apps/harbor-app/envs/prod', {
-				method: 'PUT',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
+		await rpcResult(rpcRequest('apps.create', { id: 'harbor-app', repoUrl: 'https://github.com/acme/harbor-app' }), deps)
+		const response = await rpcResult(
+			rpcRequest('apps.environments.put', {
+				appId: 'harbor-app',
+				env: 'prod',
+				environment: {
 					domain: 'app.example.com',
 					target: { provider: 'harbor', version: 1, payload: { region: ' EU-WEST ' } },
 					artifact: { provider: 'harbor', version: 1, payload: { image: ' registry.example/app:v4 ' } },
-				}),
+				},
 			}),
 			deps,
 		)
@@ -255,14 +239,14 @@ describe('onboarding + registry CRUD', () => {
 			JSON.stringify({ provider: 'harbor', version: 1, payload: { image: 'registry.example/app:v4' } }),
 		)
 
-		const foreign = await handleApi(
-			new Request('https://vozka.example/api/apps/harbor-app/envs/stage', {
-				method: 'PUT',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
+		const foreign = await rpcResult(
+			rpcRequest('apps.environments.put', {
+				appId: 'harbor-app',
+				env: 'stage',
+				environment: {
 					target: { provider: 'other', version: 1, payload: { region: 'eu' } },
 					artifact: { provider: 'harbor', version: 1, payload: { image: 'image' } },
-				}),
+				},
 			}),
 			deps,
 		)
@@ -273,8 +257,9 @@ describe('onboarding + registry CRUD', () => {
 	test('registerApp creates the app + its first app_env in one call', async () => {
 		const { deps } = makeDeps()
 
-		const response = await handleApi(
-			req('POST', '/api/register-app', {
+		const response = await rpcResult(
+			rpcRequest('register', {
+				...registrationEnvelopes(),
 				id: 'acme',
 				repoUrl: 'https://github.com/acme/App.git',
 				env: 'prod',
@@ -284,7 +269,7 @@ describe('onboarding + registry CRUD', () => {
 			}),
 			deps,
 		)
-		expect(response.status).toBe(201)
+		expect(response.status).toBe(200)
 
 		// App row exists with the NORMALIZED repo URL.
 		const app = await deps.repositories.registry.getApp('acme')
@@ -298,12 +283,17 @@ describe('onboarding + registry CRUD', () => {
 
 	test('validates publicOrigin independently from domain and supports PUT preserve and clear semantics', async () => {
 		const { deps } = makeDeps()
-		await handleApi(req('POST', '/api/apps', { id: 'origin-app', repoUrl: 'https://github.com/acme/origin-app' }), deps)
+		await rpcResult(rpcRequest('apps.create', { id: 'origin-app', repoUrl: 'https://github.com/acme/origin-app' }), deps)
 
-		const created = await handleApi(
-			req('PUT', '/api/apps/origin-app/envs/prod', {
-				domain: 'provider.example.test',
-				publicOrigin: 'http://localhost:18081',
+		const created = await rpcResult(
+			rpcRequest('apps.environments.put', {
+				appId: 'origin-app',
+				env: 'prod',
+				environment: {
+					...registrationEnvelopes(),
+					domain: 'provider.example.test',
+					publicOrigin: 'http://localhost:18081',
+				},
 			}),
 			deps,
 		)
@@ -313,18 +303,28 @@ describe('onboarding + registry CRUD', () => {
 			publicOrigin: 'http://localhost:18081',
 		})
 
-		const preserved = await handleApi(req('PUT', '/api/apps/origin-app/envs/prod', { domain: 'next.example.test' }), deps)
+		const preserved = await rpcResult(
+			rpcRequest('apps.environments.put', {
+				appId: 'origin-app',
+				env: 'prod',
+				environment: { ...registrationEnvelopes(), domain: 'next.example.test' },
+			}),
+			deps,
+		)
 		expect(preserved.status).toBe(200)
 		expect((await deps.repositories.registry.getAppEnv('origin-app', 'prod'))?.public_origin).toBe('http://localhost:18081')
 
-		const cleared = await handleApi(req('PUT', '/api/apps/origin-app/envs/prod', { publicOrigin: null }), deps)
+		const cleared = await rpcResult(
+			rpcRequest('apps.environments.put', { appId: 'origin-app', env: 'prod', environment: { ...registrationEnvelopes(), publicOrigin: null } }),
+			deps,
+		)
 		expect(cleared.status).toBe(200)
 		expect((await deps.repositories.registry.getAppEnv('origin-app', 'prod'))?.public_origin).toBeNull()
 	})
 
 	test('rejects malformed public origins without storing an environment', async () => {
 		const { deps } = makeDeps()
-		await handleApi(req('POST', '/api/apps', { id: 'invalid-origin', repoUrl: 'https://github.com/acme/invalid-origin' }), deps)
+		await rpcResult(rpcRequest('apps.create', { id: 'invalid-origin', repoUrl: 'https://github.com/acme/invalid-origin' }), deps)
 		const invalid = [
 			'https://user@example.com',
 			'https://example.com/path',
@@ -336,7 +336,10 @@ describe('onboarding + registry CRUD', () => {
 		]
 
 		for (const publicOrigin of invalid) {
-			const response = await handleApi(req('PUT', '/api/apps/invalid-origin/envs/prod', { publicOrigin }), deps)
+			const response = await rpcResult(
+				rpcRequest('apps.environments.put', { appId: 'invalid-origin', env: 'prod', environment: { ...registrationEnvelopes(), publicOrigin } }),
+				deps,
+			)
 			expect(response.status).toBe(400)
 			expect(await response.text()).not.toContain(publicOrigin)
 			expect(await deps.repositories.registry.getAppEnv('invalid-origin', 'prod')).toBeNull()
@@ -355,10 +358,14 @@ describe('onboarding + registry CRUD', () => {
 			}),
 		}
 		const { deps } = makeDeps({ provider })
-		await handleApi(req('POST', '/api/apps', { id: 'origin-drift', repoUrl: 'https://github.com/acme/origin-drift' }), deps)
+		await rpcResult(rpcRequest('apps.create', { id: 'origin-drift', repoUrl: 'https://github.com/acme/origin-drift' }), deps)
 
-		const response = await handleApi(
-			req('PUT', '/api/apps/origin-drift/envs/prod', { publicOrigin: 'https://public.example.test' }),
+		const response = await rpcResult(
+			rpcRequest('apps.environments.put', {
+				appId: 'origin-drift',
+				env: 'prod',
+				environment: { ...registrationEnvelopes(), publicOrigin: 'https://public.example.test' },
+			}),
 			deps,
 		)
 
@@ -368,18 +375,25 @@ describe('onboarding + registry CRUD', () => {
 
 	test('registerApp auto-detects the installation id when resolveInstallationId is set', async () => {
 		const { deps } = makeDeps({ installationId: 424242 })
-		const response = await handleApi(
-			req('POST', '/api/register-app', { id: 'auto', repoUrl: 'https://github.com/acme/private', env: 'prod', resolveInstallationId: true }),
+		const response = await rpcResult(
+			rpcRequest('register', {
+				...registrationEnvelopes(),
+				id: 'auto',
+				repoUrl: 'https://github.com/acme/private',
+				env: 'prod',
+				resolveInstallationId: true,
+			}),
 			deps,
 		)
-		expect(response.status).toBe(201)
+		expect(response.status).toBe(200)
 		expect((await deps.repositories.registry.getApp('auto'))?.github_installation_id).toBe(424242)
 	})
 
 	test('an explicit githubInstallationId overrides auto-detect', async () => {
 		const { deps } = makeDeps({ installationId: 424242 })
-		await handleApi(
-			req('POST', '/api/register-app', {
+		await rpcResult(
+			rpcRequest('register', {
+				...registrationEnvelopes(),
 				id: 'manual',
 				repoUrl: 'https://github.com/acme/private',
 				env: 'prod',
@@ -393,10 +407,10 @@ describe('onboarding + registry CRUD', () => {
 
 	test('updateApp can back-fill the installation id via Detect on an existing app', async () => {
 		const { deps } = makeDeps({ installationId: 555 })
-		await handleApi(req('POST', '/api/apps', { id: 'existing', repoUrl: 'https://github.com/acme/private' }), deps)
+		await rpcResult(rpcRequest('apps.create', { id: 'existing', repoUrl: 'https://github.com/acme/private' }), deps)
 		expect((await deps.repositories.registry.getApp('existing'))?.github_installation_id).toBe(null)
 
-		const patched = await handleApi(req('PATCH', '/api/apps/existing', { resolveInstallationId: true }), deps)
+		const patched = await rpcResult(rpcRequest('apps.update', { appId: 'existing', app: { resolveInstallationId: true } }), deps)
 		expect(patched.status).toBe(200)
 		expect((await deps.repositories.registry.getApp('existing'))?.github_installation_id).toBe(555)
 	})
@@ -489,70 +503,80 @@ describe('onboarding + registry CRUD', () => {
 
 	test('registerApp rejects a missing field (400) and a duplicate id (409)', async () => {
 		const { deps } = makeDeps()
-		const missing = await handleApi(req('POST', '/api/register-app', { id: 'x', repoUrl: 'r' }), deps)
+		const missing = await rpcResult(rpcRequest('register', { ...registrationEnvelopes(), id: 'x', repoUrl: 'r' }), deps)
 		expect(missing.status).toBe(400) // env required
 
-		await handleApi(req('POST', '/api/register-app', { id: 'dup', repoUrl: 'r', env: 'prod' }), deps)
-		const dup = await handleApi(req('POST', '/api/register-app', { id: 'dup', repoUrl: 'r', env: 'stage' }), deps)
+		await rpcResult(rpcRequest('register', { ...registrationEnvelopes(), id: 'dup', repoUrl: 'r', env: 'prod' }), deps)
+		const dup = await rpcResult(rpcRequest('register', { ...registrationEnvelopes(), id: 'dup', repoUrl: 'r', env: 'stage' }), deps)
 		expect(dup.status).toBe(409)
 	})
 
 	test('apps / app_envs / secrets CRUD round-trips', async () => {
 		const { deps } = makeDeps()
-		await handleApi(req('POST', '/api/apps', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
+		await rpcResult(rpcRequest('apps.create', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
 
 		// app_env upsert
-		const putEnv = await handleApi(req('PUT', '/api/apps/app/envs/prod', { triggerRef: 'refs/heads/deploy/prod' }), deps)
+		const putEnv = await rpcResult(
+			rpcRequest('apps.environments.put', {
+				appId: 'app',
+				env: 'prod',
+				environment: { ...registrationEnvelopes(), triggerRef: 'refs/heads/deploy/prod' },
+			}),
+			deps,
+		)
 		expect(putEnv.status).toBe(200)
 
 		// secret upsert (a vault REFERENCE, not a value)
-		const putSecret = await handleApi(req('PUT', '/api/apps/app/secrets', { name: 'API_KEY', valueRef: 'env:APP_API_KEY' }), deps)
+		const putSecret = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name: 'API_KEY', valueRef: 'env:APP_API_KEY' } }), deps)
 		expect(putSecret.status).toBe(200)
 		const secret = (await putSecret.json()) as { valueRef: string }
 		expect(secret.valueRef).toBe('env:APP_API_KEY')
 
 		// list secrets
-		const listSecrets = await handleApi(req('GET', '/api/apps/app/secrets'), deps)
+		const listSecrets = await rpcResult(rpcRequest('apps.secrets.list', { appId: 'app' }), deps)
 		const secrets = (await listSecrets.json()) as { items: unknown[] }
 		expect(secrets.items).toHaveLength(1)
 
 		// delete secret (all-env layer)
-		const delSecret = await handleApi(req('DELETE', '/api/apps/app/secrets/API_KEY'), deps)
+		const delSecret = await rpcResult(rpcRequest('apps.secrets.delete', { appId: 'app', name: 'API_KEY' }), deps)
 		expect(delSecret.status).toBe(200)
 		expect(await deps.repositories.registry.listAppSecrets('app')).toHaveLength(0)
 
 		// delete app cascades its env
-		const delApp = await handleApi(req('DELETE', '/api/apps/app'), deps)
+		const delApp = await rpcResult(rpcRequest('apps.delete', { appId: 'app' }), deps)
 		expect(delApp.status).toBe(200)
 		expect(await deps.repositories.registry.getAppEnv('app', 'prod')).toBeNull()
 	})
 
 	test('app_vars CRUD round-trips (plaintext value, readable — unlike secrets)', async () => {
 		const { deps } = makeDeps()
-		await handleApi(req('POST', '/api/apps', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
+		await rpcResult(rpcRequest('apps.create', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
 
 		// var upsert (plaintext config value — any name the app declares in `pipeline.vars`)
-		const putVar = await handleApi(req('PUT', '/api/apps/app/vars', { name: 'EXAMPLE_TEAM', value: 'https://contember.cloudflareaccess.com' }), deps)
+		const putVar = await rpcResult(
+			rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'EXAMPLE_TEAM', value: 'https://contember.cloudflareaccess.com' } }),
+			deps,
+		)
 		expect(putVar.status).toBe(200)
 		// UNLIKE secrets, the VALUE is returned (vars are non-secret config).
 		const v = (await putVar.json()) as { name: string; value: string }
 		expect(v.value).toBe('https://contember.cloudflareaccess.com')
 
 		// missing value → 400
-		const bad = await handleApi(req('PUT', '/api/apps/app/vars', { name: 'X' }), deps)
+		const bad = await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'X' } }), deps)
 		expect(bad.status).toBe(400)
 		for (const name of [...OPERATIONS_MANAGED_ENVIRONMENT_KEYS, FABRIKA_RELEASE]) {
-			const reserved = await handleApi(req('PUT', '/api/apps/app/vars', { name, value: 'user-owned' }), deps)
+			const reserved = await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable: { name, value: 'user-owned' } }), deps)
 			expect(reserved.status).toBe(400)
 		}
 
 		// list vars
-		const listVars = await handleApi(req('GET', '/api/apps/app/vars'), deps)
+		const listVars = await rpcResult(rpcRequest('apps.variables.list', { appId: 'app' }), deps)
 		const vars = (await listVars.json()) as { items: unknown[] }
 		expect(vars.items).toHaveLength(1)
 
 		// delete var (all-env layer)
-		const delVar = await handleApi(req('DELETE', '/api/apps/app/vars/EXAMPLE_TEAM'), deps)
+		const delVar = await rpcResult(rpcRequest('apps.variables.delete', { appId: 'app', name: 'EXAMPLE_TEAM' }), deps)
 		expect(delVar.status).toBe(200)
 		expect(await deps.repositories.registry.listAppVars('app')).toHaveLength(0)
 	})
@@ -561,33 +585,34 @@ describe('onboarding + registry CRUD', () => {
 		// ADR-0035: a variable is an input to the app's own config, so a name the config never reads is
 		// stored and then ignored. A provider that can read its artifact's declarations refuses it here.
 		const { deps } = makeDeps({ provider: declaringProvider })
-		await handleApi(req('POST', '/api/apps', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
+		await rpcResult(rpcRequest('apps.create', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
 
 		// Before any environment exists there is nothing to check against, so the write stands.
-		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'ANYTHING', value: 'v' }), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'ANYTHING', value: 'v' } }), deps)).status).toBe(200)
 
-		// Built directly: `req` substitutes its own envelopes into an env PUT, and this test is about the
-		// artifact's own payload.
-		const registered = await handleApi(
-			new Request('https://vozka.example/api/apps/app/envs/prod', {
-				method: 'PUT',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
+		const registered = await rpcResult(
+			rpcRequest('apps.environments.put', {
+				appId: 'app',
+				env: 'prod',
+				environment: {
 					target: { provider: 'harbor', version: 1, payload: { region: 'eu' } },
 					artifact: { provider: 'harbor', version: 1, payload: { image: 'registry.example/app:v1', declaredVars: ['TEAM'] } },
-				}),
+				},
 			}),
 			deps,
 		)
 		expect(registered.status).toBe(200)
 
-		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TEAM', value: 'core' }), deps)).status).toBe(200)
-		const refused = await handleApi(req('PUT', '/api/apps/app/vars', { name: 'UNDECLARED', value: 'v' }), deps)
+		expect((await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'TEAM', value: 'core' } }), deps)).status).toBe(200)
+		const refused = await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'UNDECLARED', value: 'v' } }), deps)
 		expect(refused.status).toBe(400)
 		expect(((await refused.json()) as { error: string }).error).toContain('pipeline.vars')
 
 		// The reserved issuer is refused as managed, not as undeclared.
-		const managed = await handleApi(req('PUT', '/api/apps/app/vars', { name: FABRIKA_IAM_ISSUER, value: 'https://attacker.example' }), deps)
+		const managed = await rpcResult(
+			rpcRequest('apps.variables.put', { appId: 'app', variable: { name: FABRIKA_IAM_ISSUER, value: 'https://attacker.example' } }),
+			deps,
+		)
 		expect(managed.status).toBe(400)
 		expect(((await managed.json()) as { error: string }).error).toContain('managed by Fabrika')
 	})
@@ -596,15 +621,19 @@ describe('onboarding + registry CRUD', () => {
 		// `undefined` is the honest answer for an artifact that names a config path in the repository;
 		// guessing an empty set there would refuse a variable that works.
 		const { deps } = makeDeps()
-		await handleApi(req('POST', '/api/apps', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
-		await handleApi(
-			req('PUT', '/api/apps/app/envs/prod', {
-				target: { provider: 'harbor', version: 1, payload: { region: 'eu' } },
-				artifact: { provider: 'harbor', version: 1, payload: { image: 'registry.example/app:v1' } },
+		await rpcResult(rpcRequest('apps.create', { id: 'app', repoUrl: 'https://github.com/acme/app' }), deps)
+		await rpcResult(
+			rpcRequest('apps.environments.put', {
+				appId: 'app',
+				env: 'prod',
+				environment: {
+					target: { provider: 'harbor', version: 1, payload: { region: 'eu' } },
+					artifact: { provider: 'harbor', version: 1, payload: { image: 'registry.example/app:v1' } },
+				},
 			}),
 			deps,
 		)
-		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'WHATEVER', value: 'v' }), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'WHATEVER', value: 'v' } }), deps)).status).toBe(200)
 	})
 })
 
@@ -620,14 +649,14 @@ describe('run history API', () => {
 		const r2 = uuidv7()
 		await deps.repositories.runs.createRun({ id: r2, appId: 'b', env: 'prod', ref: 'main', trigger: 'webhook' })
 
-		const all = await handleApi(req('GET', '/api/runs'), deps)
+		const all = await rpcResult(rpcRequest('runs.list', {}), deps)
 		const allBody = (await all.json()) as { items: { id: string }[] }
 		expect(allBody.items).toHaveLength(2)
 		// Returned in descending id order. UUIDv7 carries the RFC 9562 §6.2 monotonic counter, so r2 > r1
 		// even though the two were minted inside one millisecond — the exact order is assertable.
 		expect(allBody.items.map((i) => i.id)).toEqual([r2, r1])
 
-		const filtered = await handleApi(req('GET', '/api/runs?app=a'), deps)
+		const filtered = await rpcResult(rpcRequest('runs.list', { appId: 'a' }), deps)
 		const filteredBody = (await filtered.json()) as { items: { id: string }[] }
 		expect(filteredBody.items).toHaveLength(1)
 		expect(filteredBody.items[0]?.id).toBe(r1)
@@ -646,14 +675,14 @@ describe('run history API', () => {
 			[JSON.stringify({ ts: 1, stream: 'meta', text: 'Cloning' }), JSON.stringify({ ts: 2, stream: 'stdout', text: 'done' })].join('\n'),
 		)
 
-		const response = await handleApi(req('GET', `/api/runs/${runId}/log`), deps)
+		const response = await rpcResult(rpcRequest('runs.log', { runId }), deps)
 		expect(response.status).toBe(200)
 		const body = (await response.json()) as { lines: { text: string }[] }
 		expect(body.lines).toHaveLength(2)
 		expect(body.lines[1]?.text).toBe('done')
 
 		// tail with a cursor returns only the new lines + a done flag once terminal.
-		const tail = await handleApi(req('GET', `/api/runs/${runId}/tail?after=1`), deps)
+		const tail = await rpcResult(rpcRequest('runs.tail', { runId, after: 1 }), deps)
 		const tailBody = (await tail.json()) as { lines: unknown[]; cursor: number; done: boolean }
 		expect(tailBody.lines).toHaveLength(1)
 		expect(tailBody.cursor).toBe(2)
@@ -661,7 +690,7 @@ describe('run history API', () => {
 
 	test('getRun 404s an unknown id', async () => {
 		const { deps } = makeDeps()
-		const response = await handleApi(req('GET', '/api/runs/nope'), deps)
+		const response = await rpcResult(rpcRequest('runs.get', { runId: 'nope' }), deps)
 		expect(response.status).toBe(404)
 	})
 
@@ -673,17 +702,17 @@ describe('run history API', () => {
 		await deps.repositories.runs.createRun({ id: runId, appId: 'a', env: 'prod', ref: 'main', trigger: 'manual' })
 		await deps.repositories.runs.markRunStarted(runId, logsKey(runId))
 
-		const cancelled = await handleApi(req('POST', `/api/runs/${runId}/cancel`), deps)
+		const cancelled = await rpcResult(rpcRequest('runs.cancel', { runId }), deps)
 		expect(cancelled.status).toBe(200)
 		expect((await cancelled.json() as { status: string }).status).toBe('failed')
 		expect((await deps.repositories.runs.getRun(runId))?.status).toBe('failed')
 
 		// A second cancel on the now-terminal run is a 409.
-		const again = await handleApi(req('POST', `/api/runs/${runId}/cancel`), deps)
+		const again = await rpcResult(rpcRequest('runs.cancel', { runId }), deps)
 		expect(again.status).toBe(409)
 
 		// An unknown run is a 404.
-		const unknown = await handleApi(req('POST', '/api/runs/nope/cancel'), deps)
+		const unknown = await rpcResult(rpcRequest('runs.cancel', { runId: 'nope' }), deps)
 		expect(unknown.status).toBe(404)
 	})
 })
@@ -691,14 +720,14 @@ describe('run history API', () => {
 describe('platform-owned names, bounded values, and literal hosts', () => {
 	async function seededApp(): Promise<ReturnType<typeof makeDeps>> {
 		const made = makeDeps()
-		await handleApi(req('POST', '/api/apps', { id: 'app', repoUrl: 'https://github.com/acme/app' }), made.deps)
+		await rpcResult(rpcRequest('apps.create', { id: 'app', repoUrl: 'https://github.com/acme/app' }), made.deps)
 		return made
 	}
 
 	test('a reserved name is refused on the SECRET surface, exactly as it is on the variable surface', async () => {
 		const { deps } = await seededApp()
 		for (const name of [FABRIKA_IAM_ISSUER, FABRIKA_RELEASE, ...OPERATIONS_MANAGED_ENVIRONMENT_KEYS]) {
-			const refused = await handleApi(req('PUT', '/api/apps/app/secrets', { name, valueRef: 'literal:x' }), deps)
+			const refused = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name, valueRef: 'literal:x' } }), deps)
 			expect(`${name}: ${refused.status}`).toBe(`${name}: 400`)
 			expect(((await refused.json()) as { error: string }).error).toContain('managed by Fabrika')
 		}
@@ -707,8 +736,8 @@ describe('platform-owned names, bounded values, and literal hosts', () => {
 
 	test('a caller-supplied vault: reference is refused — a vault value is created, never pointed at', async () => {
 		const { deps } = await seededApp()
-		const refused = await handleApi(
-			req('PUT', '/api/apps/app/secrets', { name: 'API_KEY', valueRef: 'vault:01a00000-0000-7000-8000-000000000000' }),
+		const refused = await rpcResult(
+			rpcRequest('apps.secrets.put', { appId: 'app', secret: { name: 'API_KEY', valueRef: 'vault:01a00000-0000-7000-8000-000000000000' } }),
 			deps,
 		)
 		expect(refused.status).toBe(400)
@@ -716,30 +745,42 @@ describe('platform-owned names, bounded values, and literal hosts', () => {
 		expect(await deps.repositories.registry.listAppSecrets('app')).toEqual([])
 
 		// Every other scheme is unchanged.
-		expect((await handleApi(req('PUT', '/api/apps/app/secrets', { name: 'API_KEY', valueRef: 'literal:x' }), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('apps.secrets.put', { appId: 'app', secret: { name: 'API_KEY', valueRef: 'literal:x' } }), deps)).status).toBe(
+			200,
+		)
 	})
 
 	test('a variable value must be one bounded line', async () => {
 		const { deps } = await seededApp()
-		const multiline = await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: 'v1"\n  hostname: evil' }), deps)
+		const multiline = await rpcResult(
+			rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'TAG', value: 'v1"\n  hostname: evil' } }),
+			deps,
+		)
 		expect(multiline.status).toBe(400)
 		expect(((await multiline.json()) as { error: string }).error).toContain('single line')
 
-		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: `v\r1` }), deps)).status).toBe(400)
-		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: 'a'.repeat(4097) }), deps)).status).toBe(400)
+		expect((await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'TAG', value: `v\r1` } }), deps)).status).toBe(400)
+		expect((await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'TAG', value: 'a'.repeat(4097) } }), deps)).status).toBe(
+			400,
+		)
 
 		// A YAML 1.1 reader ends a line on NEL/LS/PS and refuses a raw C1 control, so "one line" covers them too.
 		for (const character of ['\u0085', '\u2028', '\u2029', '\u0080', '\u009f', '\u007f']) {
 			const label = `U+${(character.codePointAt(0) ?? 0).toString(16).padStart(4, '0')}`
-			const refused = await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: `v1${character}  - hostname: evil` }), deps)
+			const refused = await rpcResult(
+				rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'TAG', value: `v1${character}  - hostname: evil` } }),
+				deps,
+			)
 			expect(`${label}: ${refused.status}`).toBe(`${label}: 400`)
 			expect(`${label}: ${((await refused.json()) as { error: string }).error}`).toContain('single line')
 		}
 
 		// The bound itself, a tab, and an ordinary non-ASCII space are accepted.
-		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: 'a'.repeat(4096) }), deps)).status).toBe(200)
-		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: 'a\tb' }), deps)).status).toBe(200)
-		expect((await handleApi(req('PUT', '/api/apps/app/vars', { name: 'TAG', value: 'a\u00a0b' }), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'TAG', value: 'a'.repeat(4096) } }), deps)).status).toBe(
+			200,
+		)
+		expect((await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'TAG', value: 'a\tb' } }), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('apps.variables.put', { appId: 'app', variable: { name: 'TAG', value: 'a\u00a0b' } }), deps)).status).toBe(200)
 	})
 
 	const BAD_DOMAINS = ['*', '*.apps.example.com', 'apps.example.com:8080', 'https://apps.example.com', 'apps.example.com/x']
@@ -747,16 +788,22 @@ describe('platform-owned names, bounded values, and literal hosts', () => {
 	test('a domain must be a literal host the proxy can route on', async () => {
 		const { deps } = await seededApp()
 		for (const domain of BAD_DOMAINS) {
-			const refused = await handleApi(req('PUT', '/api/apps/app/envs/prod', { domain }), deps)
+			const refused = await rpcResult(
+				rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: { ...registrationEnvelopes(), domain } }),
+				deps,
+			)
 			expect(`${domain}: ${refused.status}`).toBe(`${domain}: 400`)
 			expect(((await refused.json()) as { error: string }).error).toContain('literal hostname')
 		}
-		expect((await handleApi(req('PUT', '/api/apps/app/envs/prod', { domain: 'Apps.Example.com' }), deps)).status).toBe(200)
+		expect(
+			(await rpcResult(
+				rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: { ...registrationEnvelopes(), domain: 'Apps.Example.com' } }),
+				deps,
+			)).status,
+		).toBe(200)
 	})
 
-	test('the same refusal holds on the RPC path, which never reaches the REST parser', async () => {
-		// `/api/rpc` is what the dashboard and the CLI speak; its zod input types `domain` as any string,
-		// so the check has to live in the use case or `domain: "*"` lands unexamined.
+	test('the domain use case independently refuses non-literal hosts', async () => {
 		const { deps } = await seededApp()
 		const context: RegistryUseCaseContext = {
 			repositories: deps.repositories,
@@ -799,7 +846,7 @@ describe('the namespace proxy follows the registry', () => {
 		},
 	}
 
-	function context(deps: ApiDeps, recording: ProxyRecording): RegistryUseCaseContext {
+	function context(deps: ControlRpcDeps, recording: ProxyRecording): RegistryUseCaseContext {
 		return {
 			repositories: deps.repositories,
 			repoSource: deps.repoSource,
@@ -814,7 +861,7 @@ describe('the namespace proxy follows the registry', () => {
 	}
 
 	/** One namespace per environment: the claim FK pins `(namespace, provider, env)` together. */
-	async function seedNamespaces(deps: ApiDeps): Promise<void> {
+	async function seedNamespaces(deps: ControlRpcDeps): Promise<void> {
 		for (const env of ['prod', 'stage']) {
 			await deps.repositories.registry.createDeploymentNamespaceWithResourceClaims({
 				id: `apps-${env}`,
@@ -829,7 +876,7 @@ describe('the namespace proxy follows the registry', () => {
 
 	// Seeded WITHOUT resource claims: the environment a delete can actually remove. `seedClaimedApp` is
 	// the other half — the claim's owner FK is `ON DELETE RESTRICT`, so a claimed one is refused.
-	async function seedRoutedApp(deps: ApiDeps, appId: string, envs: string[]): Promise<void> {
+	async function seedRoutedApp(deps: ControlRpcDeps, appId: string, envs: string[]): Promise<void> {
 		await deps.repositories.registry.createApp({ id: appId, repoUrl: `github.com/acme/${appId}` })
 		for (const env of envs) {
 			await deps.repositories.registry.upsertAppEnv({
@@ -840,7 +887,7 @@ describe('the namespace proxy follows the registry', () => {
 	}
 
 	/** What a Zerops app environment is: the row plus the resource claims its registration acquired. */
-	async function seedClaimedApp(deps: ApiDeps, appId: string, envs: string[]): Promise<void> {
+	async function seedClaimedApp(deps: ControlRpcDeps, appId: string, envs: string[]): Promise<void> {
 		await deps.repositories.registry.createApp({ id: appId, repoUrl: `github.com/acme/${appId}` })
 		for (const env of envs) {
 			await deps.repositories.registry.upsertAppEnvWithNamespaceResourceClaims({

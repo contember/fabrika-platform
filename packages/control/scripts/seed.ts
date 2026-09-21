@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 /**
  * Seed the control-plane registry with the durable `vozka` and `propustka` app IDs that let a GitHub push
- * self-deploy them. Runs AFTER fabrika is live (scripts/bootstrap.ts) — it talks to fabrika's own `/api/*`
- * HTTP surface, so it goes through the real ACL + audit path (it does NOT write D1 directly). The
+ * self-deploy them. Runs AFTER fabrika is live (scripts/bootstrap.ts) — it calls `register` at `/api/rpc`,
+ * so it goes through the real ACL + audit path (it does NOT write D1 directly). The
  * bootstrap admin (or an IAM-granted admin) is the caller.
  *
  * fabrika is SINGLE-ACCOUNT: there is no account registry to seed. The CF account/token + IAM
@@ -31,6 +31,9 @@
  *   bun run scripts/seed.ts             # POST the app rows to FABRIKA_CONTROL_API_URL
  *   bun run scripts/seed.ts --dry-run   # print the intended POSTs (app/env), call nothing
  */
+
+import { createRpcClient, RpcError } from '@fabrika/app'
+import type { ControlRpcContract, RegisterAppRequest } from '@fabrika/control-contract'
 
 const DRY_RUN = process.argv.includes('--dry-run')
 
@@ -65,25 +68,30 @@ interface SeedApp {
 	configPath: string
 }
 
-/** POST a JSON body to a control-plane route; 409 (already exists) reads as success (idempotent). */
-async function post(base: string, path: string, body: unknown): Promise<void> {
+/** An existing registry row (409) makes the seed idempotent. */
+async function register(base: string, input: RegisterAppRequest): Promise<void> {
 	if (DRY_RUN) {
-		console.log(`  [dry-run] POST ${path} ${JSON.stringify(body)}`)
+		console.log(`  [dry-run] register ${JSON.stringify(input)}`)
 		return
 	}
-	const response = await fetch(`${base}${path}`, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json', ...authHeaders() },
-		body: JSON.stringify(body),
+	const client = createRpcClient<ControlRpcContract>({
+		baseUrl: `${base}/api/rpc`,
+		fetch: (url, init) => {
+			const headers = new Headers(init?.headers)
+			for (const [name, value] of Object.entries(authHeaders())) headers.set(name, value)
+			return fetch(url, { ...init, headers })
+		},
 	})
-	if (response.status === 409) {
-		console.log(`  = ${path} already exists (409) — skipped`)
-		return
+	try {
+		await client.register(input)
+	} catch (cause) {
+		if (cause instanceof RpcError && cause.httpStatus === 409) {
+			console.log(`  = ${input.id} already exists (409) — skipped`)
+			return
+		}
+		throw cause
 	}
-	if (!response.ok) {
-		throw new Error(`POST ${path} → ${response.status}: ${(await response.text()).slice(0, 500)}`)
-	}
-	console.log(`  ✓ ${path} → ${response.status}`)
+	console.log(`  ✓ registered ${input.id}`)
 }
 
 async function main(): Promise<void> {
@@ -114,7 +122,7 @@ async function main(): Promise<void> {
 
 	console.log('Apps (+ first env via onboarding):')
 	for (const app of apps) {
-		await post(base, '/api/register-app', {
+		await register(base, {
 			id: app.id,
 			repoUrl: app.repoUrl,
 			env: app.env,

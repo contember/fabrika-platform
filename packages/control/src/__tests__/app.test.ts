@@ -48,18 +48,18 @@ describe('controlApp', () => {
 		expect(await (await fetch(new Request('https://control.test/apps/example'))).text()).toBe('dashboard')
 	})
 
-	test('authorizes /api/* from the proxy-injected token, and refuses a request that carries none', async () => {
+	test('authorizes RPC from the proxy-injected token, and refuses a request that carries none', async () => {
 		const fetch = application()
-		const viewer = await fetch(apiRequest('https://control.test/api/apps', viewerToken))
-		const admin = await fetch(apiRequest('https://control.test/api/apps', adminToken))
-		const anonymous = await fetch(new Request('https://control.test/api/apps'))
+		const viewer = await fetch(rpcRequest('apps.list', null, viewerToken))
+		const admin = await fetch(rpcRequest('apps.list', null, adminToken))
+		const anonymous = await fetch(new Request('https://control.test/api/rpc', { method: 'POST' }))
 
 		expect(viewer.status).toBe(403)
 		expect(admin.status).toBe(200)
 		expect(anonymous.status).toBe(401)
 	})
 
-	test('mounts the typed control RPC before REST and preserves authorization and errors', async () => {
+	test('serves typed control RPC with authorization and structural errors', async () => {
 		const fetch = application()
 		const viewer = await fetch(rpcRequest('apps.list', null, viewerToken))
 		expect(viewer.status).toBe(403)
@@ -70,8 +70,8 @@ describe('controlApp', () => {
 		expect(created.status).toBe(200)
 		expect(await created.json()).toMatchObject({ result: { id: 'rpc-app', repoUrl: 'github.com/acme/rpc-app' } })
 
-		const rest = await fetch(apiRequest('https://control.test/api/apps', adminToken))
-		expect(await rest.json()).toMatchObject({ items: [{ id: 'rpc-app' }] })
+		const listed = await fetch(rpcRequest('apps.list', null))
+		expect(await listed.json()).toMatchObject({ result: { items: [{ id: 'rpc-app' }] } })
 
 		const missing = await fetch(rpcRequest('apps.get', { appId: 'missing' }))
 		expect(missing.status).toBe(404)
@@ -84,7 +84,7 @@ describe('controlApp', () => {
 		expect(unknownBody).toEqual({ error: { type: 'method_not_found', message: 'Unknown method: apps.nope' } })
 	})
 
-	test('shares registry, secret, provider, and run behavior across RPC and REST', async () => {
+	test('serves registry, secret, provider, and run operations through RPC', async () => {
 		const fetch = application({ FABRIKA_CONTROL_VAULT_KEY: testVaultKey() })
 		const invalid = await fetch(rpcRequest('apps.create', { repoUrl: 'github.com/acme/missing-id' }))
 		expect(invalid.status).toBe(400)
@@ -113,8 +113,8 @@ describe('controlApp', () => {
 		const listedSecrets = await fetch(rpcRequest('apps.secrets.list', { appId: 'flow' }))
 		expect(await listedSecrets.text()).not.toContain(secretValue)
 
-		const restVars = await fetch(apiRequest('https://control.test/api/apps/flow/vars', adminToken))
-		expect(await restVars.text()).toContain('PUBLIC_MODE')
+		const variables = await fetch(rpcRequest('apps.variables.list', { appId: 'flow' }))
+		expect(await variables.text()).toContain('PUBLIC_MODE')
 
 		const deployed = await fetch(rpcRequest('deploy', { appId: 'flow', env: 'prod' }))
 		const runId = resultString(await deployed.json(), 'id')
@@ -134,8 +134,8 @@ describe('controlApp', () => {
 
 	test('elevates only listed authenticated users through the bootstrap-admin middleware', async () => {
 		const fetch = application({ FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["viewer@vozka.test"]' })
-		const listed = await fetch(apiRequest('https://control.test/api/apps', viewerToken))
-		const notListed = await fetch(apiRequest('https://control.test/api/apps', operatorToken))
+		const listed = await fetch(rpcRequest('apps.list', null, viewerToken))
+		const notListed = await fetch(rpcRequest('apps.list', null, operatorToken))
 
 		expect(listed.status).toBe(200)
 		expect(notListed.status).toBe(403)
@@ -149,12 +149,54 @@ describe('controlApp', () => {
 		const key = 'px_provision_secret_key_value'
 		const fetch = application({})
 		const bearer = await fetch(
-			new Request('https://control.test/api/apps', { headers: { Authorization: `Bearer ${key}` } }),
+			new Request('https://control.test/api/rpc', { method: 'POST', headers: { Authorization: `Bearer ${key}` } }),
 		)
-		const absent = await fetch(new Request('https://control.test/api/apps'))
+		const absent = await fetch(new Request('https://control.test/api/rpc', { method: 'POST' }))
 
 		expect(bearer.status).toBe(401)
 		expect(absent.status).toBe(401)
+	})
+
+	test('removed administrative routes never reach assets or the Operations gateway', async () => {
+		let forwarded = 0
+		const fetch = application({
+			OPERATIONS: {
+				fetch: () => {
+					forwarded++
+					return Promise.resolve(new Response('unexpected'))
+				},
+			},
+		})
+		for (
+			const path of [
+				'/api',
+				'/api/apps',
+				'/api/apps/app/envs/prod',
+				'/api/apps/app/secrets/KEY/value',
+				'/api/apps/app/vars',
+				'/api/register-app',
+				'/api/deploy',
+				'/api/runs',
+				'/api/runs/run/tail',
+				'/api/namespaces',
+				'/api/namespaces/ns/reconcile',
+				'/operations/api',
+				'/operations/api/issues',
+			]
+		) {
+			for (const method of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) {
+				const response = await fetch(
+					new Request(`https://control.test${path}`, {
+						method,
+						headers: { [PROXY_TOKEN_HEADER]: adminToken, origin: 'https://control.test' },
+					}),
+				)
+				expect(`${method} ${path}: ${response.status}`).toBe(`${method} ${path}: 404`)
+				expect(response.headers.get('content-type')).toContain('application/json')
+				expect(await response.text()).not.toContain('dashboard')
+			}
+		}
+		expect(forwarded).toBe(0)
 	})
 
 	test('keeps manifest and callback paths human-only and returns a browser-safe unavailable status', async () => {

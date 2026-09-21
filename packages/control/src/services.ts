@@ -2,7 +2,7 @@ import type { AuthContext } from '@fabrika/auth'
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import type { NamespaceProxyChanged } from './api/namespaces'
-import type { ApiDeps } from './api/router'
+import type { DeployQueue, LogReader } from './api/runs'
 import type { ControlRepositories, RunRow } from './db'
 import type { Env } from './env'
 import { GitHubConnectionWebhookSecretProvider } from './github-connection-store'
@@ -130,8 +130,21 @@ export interface NamespaceProxyEnv {
 	NAMESPACE_PROXY?: NamespaceProxyChanged
 }
 
-/** Assemble the shared API dependencies around one statically selected provider. */
-export function buildApiDeps(env: Env & NamespaceProxyEnv, provider: ControlProvider, auth: AuthContext): ApiDeps {
+export interface ControlRpcDeps {
+	repositories: ControlRepositories
+	auth: AuthContext
+	queue: DeployQueue
+	logs: LogReader
+	repoSource: RepoEvents
+	provider: ControlProvider
+	cancelRun: (run: RunRow) => Promise<void>
+	vault?: () => Promise<Vault>
+	catalogChanged?: () => void
+	namespaceProxyChanged?: NamespaceProxyChanged
+}
+
+/** Assemble RPC use-case dependencies around the installation's provider. Vault creation stays lazy. */
+export function buildControlRpcDeps(env: Env & NamespaceProxyEnv, provider: ControlProvider, auth: AuthContext): ControlRpcDeps {
 	return {
 		repositories: repositories(env),
 		auth,

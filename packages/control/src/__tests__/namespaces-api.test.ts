@@ -2,12 +2,12 @@ import type { AuthContext } from '@fabrika/auth'
 import type { ControlProvider, ProviderDeploymentNamespace, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { type NamespaceJobResult, type NamespaceUseCaseContext, reconcileNamespaceUseCase, runNamespaceJob } from '../api/namespaces'
-import type { ApiDeps } from '../api/router'
-import { handleApi } from '../api/router'
 import { FakeRepoSource } from '../repo-source'
 import type { ControlJobMessage } from '../run-lifecycle'
+import type { ControlRpcDeps } from '../services'
 import { createHarness } from './helpers/harness'
 import { makeFakeLock } from './helpers/lock'
+import { rpcRequest, rpcResult } from './helpers/rpc'
 
 const target = (phase: string): ProviderEnvelope => ({
 	provider: 'harbor',
@@ -129,7 +129,7 @@ function authContext(actions: string[], audits: AuditRecord[]): AuthContext {
 }
 
 interface NamespaceHarness {
-	deps: ApiDeps
+	deps: ControlRpcDeps
 	audits: AuditRecord[]
 	/** Everything the request path enqueued, in order. */
 	sent: ControlJobMessage[]
@@ -173,13 +173,6 @@ function makeDeps(
 	}
 }
 
-function request(method: string, path: string, body?: unknown): Request {
-	return new Request(`https://control.test/api${path}`, {
-		method,
-		...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
-	})
-}
-
 function namespaceBody(id: string, env = 'prod'): {
 	id: string
 	env: string
@@ -205,12 +198,12 @@ describe('deployment namespace API', () => {
 		const recording = providerRecording()
 		const { deps } = makeDeps(namespacedProvider(recording))
 
-		const listed = await handleApi(request('GET', '/namespaces'), deps)
+		const listed = await rpcResult(rpcRequest('namespaces.list'), deps)
 		const listBody: { operator: { presets: Array<{ id: string }> } } = await listed.json()
 		expect(listBody.operator.presets.map((preset) => preset.id)).toEqual(['shared'])
 
-		const planned = await handleApi(
-			request('POST', '/namespaces/plan', { id: 'apps-prod', env: 'prod', preset: 'shared' }),
+		const planned = await rpcResult(
+			rpcRequest('namespaces.plan', { id: 'apps-prod', env: 'prod', preset: 'shared' }),
 			deps,
 		)
 		expect(planned.status).toBe(200)
@@ -235,8 +228,8 @@ describe('deployment namespace API', () => {
 		const recording = providerRecording()
 		const { deps, audits, sent, drain } = makeDeps(namespacedProvider(recording))
 
-		const created = await handleApi(request('POST', '/namespaces', namespaceBody('apps-prod')), deps)
-		expect(created.status).toBe(201)
+		const created = await rpcResult(rpcRequest('namespaces.create', namespaceBody('apps-prod')), deps)
+		expect(created.status).toBe(200)
 		const createdBody: { id: string; state: string; target: ProviderEnvelope } = await created.json()
 		// The request records the placement and returns; the provider is not touched inside it.
 		expect(createdBody).toEqual(expect.objectContaining({ id: 'apps-prod', state: 'pending', target: target('requested') }))
@@ -248,25 +241,25 @@ describe('deployment namespace API', () => {
 		expect(recording.provisions).toEqual(['apps-prod'])
 		expect((await deps.repositories.registry.getDeploymentNamespace('apps-prod'))?.state).toBe('ready')
 
-		const listed = await handleApi(request('GET', '/namespaces'), deps)
+		const listed = await rpcResult(rpcRequest('namespaces.list'), deps)
 		const listBody: { items: Array<{ id: string }>; operator: { presets: Array<{ id: string }> } } = await listed.json()
 		expect(listBody.items.map((item) => item.id)).toEqual(['apps-prod'])
 		expect(listBody.operator.presets.map((preset) => preset.id)).toEqual(['shared'])
-		const got = await handleApi(request('GET', '/namespaces/apps-prod'), deps)
+		const got = await rpcResult(rpcRequest('namespaces.get', { namespaceId: 'apps-prod' }), deps)
 		expect(got.status).toBe(200)
 		const gotBody: { presentation: { title: string } } = await got.json()
 		expect(gotBody.presentation.title).toBe('Test namespace')
 
-		const adopted = await handleApi(
-			request('POST', '/namespaces/legacy/adopt', { env: 'prod', target: target('existing') }),
+		const adopted = await rpcResult(
+			rpcRequest('namespaces.adopt', { namespaceId: 'legacy', namespace: { env: 'prod', target: target('existing') } }),
 			deps,
 		)
-		expect(adopted.status).toBe(201)
+		expect(adopted.status).toBe(200)
 		expect(recording.reconciles).toEqual([])
 		expect(await drain()).toEqual([{ namespaceId: 'legacy', status: 'ready' }])
 		expect(recording.reconciles).toEqual(['legacy'])
 
-		const reconciled = await handleApi(request('POST', '/namespaces/apps-prod/reconcile'), deps)
+		const reconciled = await rpcResult(rpcRequest('namespaces.reconcile', { namespaceId: 'apps-prod' }), deps)
 		expect(reconciled.status).toBe(200)
 		const reconciledBody: { state: string } = await reconciled.json()
 		// A reconcile of a READY namespace goes back to `pending` so the worker's claim still means something.
@@ -292,7 +285,7 @@ describe('deployment namespace API', () => {
 			state: 'ready',
 		})
 
-		const reconciled = await handleApi(request('POST', '/namespaces/legacy/reconcile'), deps)
+		const reconciled = await rpcResult(rpcRequest('namespaces.reconcile', { namespaceId: 'legacy' }), deps)
 
 		expect(reconciled.status).toBe(200)
 		// Claims are reserved in the REQUEST, before the job the request enqueued has run.
@@ -310,10 +303,10 @@ describe('deployment namespace API', () => {
 		recording.failProvision = true
 		const { deps, audits, drain } = makeDeps(namespacedProvider(recording))
 
-		const response = await handleApi(request('POST', '/namespaces', namespaceBody('apps-prod')), deps)
+		const response = await rpcResult(rpcRequest('namespaces.create', namespaceBody('apps-prod')), deps)
 		// The caller is answered before the provider is asked, so a refusal is the JOB's outcome, not the
 		// request's — and it is a handled one, which is why the job returns rather than throwing.
-		expect(response.status).toBe(201)
+		expect(response.status).toBe(200)
 		expect(await drain()).toEqual([{ namespaceId: 'apps-prod', status: 'failed' }])
 		const row = await deps.repositories.registry.getDeploymentNamespace('apps-prod')
 		expect(row?.state).toBe('failed')
@@ -329,17 +322,17 @@ describe('deployment namespace API', () => {
 		const provider = namespacedProvider(recording)
 		const { deps } = makeDeps(provider)
 
-		expect((await handleApi(request('POST', '/namespaces', namespaceBody('apps-prod')), deps)).status).toBe(201)
-		expect((await handleApi(request('POST', '/namespaces', namespaceBody('apps-prod')), deps)).status).toBe(409)
+		expect((await rpcResult(rpcRequest('namespaces.create', namespaceBody('apps-prod')), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('namespaces.create', namespaceBody('apps-prod')), deps)).status).toBe(409)
 		expect(
-			(await handleApi(
-				request('POST', '/namespaces', { ...namespaceBody('exclusive'), exclusiveAppId: 'missing' }),
+			(await rpcResult(
+				rpcRequest('namespaces.create', { ...namespaceBody('exclusive'), exclusiveAppId: 'missing' }),
 				deps,
 			)).status,
 		).toBe(404)
 		expect(
-			(await handleApi(
-				request('POST', '/namespaces', {
+			(await rpcResult(
+				rpcRequest('namespaces.create', {
 					...namespaceBody('foreign'),
 					target: { provider: 'other', version: 1, payload: {} },
 				}),
@@ -353,10 +346,10 @@ describe('deployment namespace API', () => {
 			deploy: () => Promise.resolve({ state: 'succeeded' }),
 		}
 		const unsupported = makeDeps(withoutNamespaces)
-		expect((await handleApi(request('POST', '/namespaces', namespaceBody('unsupported')), unsupported.deps)).status).toBe(409)
+		expect((await rpcResult(rpcRequest('namespaces.create', namespaceBody('unsupported')), unsupported.deps)).status).toBe(409)
 		expect(
-			(await handleApi(
-				request('POST', '/namespaces/plan', { id: 'unsupported', env: 'prod', preset: 'shared' }),
+			(await rpcResult(
+				rpcRequest('namespaces.plan', { id: 'unsupported', env: 'prod', preset: 'shared' }),
 				unsupported.deps,
 			)).status,
 		).toBe(409)
@@ -365,11 +358,11 @@ describe('deployment namespace API', () => {
 	test('requires namespace.manage on every namespace route', async () => {
 		const recording = providerRecording()
 		const denied = makeDeps(namespacedProvider(recording), ['app.manage'])
-		expect((await handleApi(request('GET', '/namespaces'), denied.deps)).status).toBe(403)
-		expect((await handleApi(request('POST', '/namespaces', namespaceBody('apps-prod')), denied.deps)).status).toBe(403)
+		expect((await rpcResult(rpcRequest('namespaces.list'), denied.deps)).status).toBe(403)
+		expect((await rpcResult(rpcRequest('namespaces.create', namespaceBody('apps-prod')), denied.deps)).status).toBe(403)
 
 		const allowed = makeDeps(namespacedProvider(recording), ['namespace.manage'])
-		expect((await handleApi(request('GET', '/namespaces'), allowed.deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('namespaces.list'), allowed.deps)).status).toBe(200)
 	})
 })
 
@@ -396,8 +389,8 @@ describe('app environment namespace assignment', () => {
 			state: 'ready',
 		})
 
-		const shared = await handleApi(
-			request('PUT', '/apps/billing/envs/prod', registrationBody('apps-prod')),
+		const shared = await rpcResult(
+			rpcRequest('apps.environments.put', { appId: 'billing', env: 'prod', environment: registrationBody('apps-prod') }),
 			deps,
 		)
 		expect(shared.status).toBe(200)
@@ -408,15 +401,15 @@ describe('app environment namespace assignment', () => {
 			metadata: { triggerRef: null, namespaceId: 'apps-prod', previousNamespaceId: null },
 		}))
 
-		const exclusive = await handleApi(
-			request('PUT', '/apps/billing/envs/prod', registrationBody('billing-prod')),
+		const exclusive = await rpcResult(
+			rpcRequest('apps.environments.put', { appId: 'billing', env: 'prod', environment: registrationBody('billing-prod') }),
 			deps,
 		)
 		expect(exclusive.status).toBe(200)
 		expect((await deps.repositories.registry.getAppEnv('billing', 'prod'))?.namespace_id).toBe('billing-prod')
 
-		const wrongApp = await handleApi(
-			request('PUT', '/apps/other/envs/prod', registrationBody('billing-prod')),
+		const wrongApp = await rpcResult(
+			rpcRequest('apps.environments.put', { appId: 'other', env: 'prod', environment: registrationBody('billing-prod') }),
 			deps,
 		)
 		expect(wrongApp.status).toBe(409)
@@ -451,11 +444,20 @@ describe('app environment namespace assignment', () => {
 			state: 'pending',
 		})
 
-		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody()), deps)).status).toBe(400)
-		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('missing')), deps)).status).toBe(404)
-		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('apps-stage')), deps)).status).toBe(409)
-		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('foreign-prod')), deps)).status).toBe(409)
-		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('pending-prod')), deps)).status).toBe(409)
+		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody() }), deps)).status).toBe(
+			400,
+		)
+		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('missing') }), deps)).status)
+			.toBe(404)
+		expect(
+			(await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('apps-stage') }), deps)).status,
+		).toBe(409)
+		expect(
+			(await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('foreign-prod') }), deps)).status,
+		).toBe(409)
+		expect(
+			(await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('pending-prod') }), deps)).status,
+		).toBe(409)
 	})
 
 	test('keeps namespace-free providers working and rejects namespace ids they cannot interpret', async () => {
@@ -466,8 +468,12 @@ describe('app environment namespace assignment', () => {
 		}
 		const { deps } = makeDeps(provider)
 		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody()), deps)).status).toBe(200)
-		expect((await handleApi(request('PUT', '/apps/app/envs/stage', registrationBody('unsupported')), deps)).status).toBe(409)
+		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody() }), deps)).status).toBe(
+			200,
+		)
+		expect(
+			(await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'stage', environment: registrationBody('unsupported') }), deps)).status,
+		).toBe(409)
 	})
 
 	test('allows placement changes only without in-flight or successful deploys', async () => {
@@ -484,20 +490,26 @@ describe('app environment namespace assignment', () => {
 				state: 'ready',
 			})
 		}
-		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('first')), deps)).status).toBe(200)
-		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('second')), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('first') }), deps)).status)
+			.toBe(200)
+		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('second') }), deps)).status)
+			.toBe(200)
 		expect((await deps.repositories.registry.listNamespaceResourceClaims('first')).map((claim) => claim.resource_key)).toEqual(['service:app'])
 		expect((await deps.repositories.registry.listNamespaceResourceClaims('second')).map((claim) => claim.resource_key)).toEqual(['service:app'])
 
 		await deps.repositories.runs.createRun({ id: 'pending-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('first')), deps)).status).toBe(409)
+		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('first') }), deps)).status)
+			.toBe(409)
 		await deps.repositories.runs.markRunFinished('pending-run', 'failed', null)
-		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('first')), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('first') }), deps)).status)
+			.toBe(200)
 
 		await deps.repositories.runs.createRun({ id: 'successful-run', appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
 		await deps.repositories.runs.markRunFinished('successful-run', 'succeeded', 0)
-		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('second')), deps)).status).toBe(409)
-		expect((await handleApi(request('PUT', '/apps/app/envs/prod', registrationBody('first')), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('second') }), deps)).status)
+			.toBe(409)
+		expect((await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: registrationBody('first') }), deps)).status)
+			.toBe(200)
 	})
 
 	test('onboards directly into a shared namespace and leaves no app after invalid assignment', async () => {
@@ -511,8 +523,8 @@ describe('app environment namespace assignment', () => {
 			providerTargetJson: JSON.stringify(target('namespace')),
 			state: 'ready',
 		})
-		const onboard = await handleApi(
-			request('POST', '/register-app', {
+		const onboard = await rpcResult(
+			rpcRequest('register', {
 				id: 'billing',
 				repoUrl: 'github.com/acme/billing',
 				env: 'prod',
@@ -521,11 +533,11 @@ describe('app environment namespace assignment', () => {
 			}),
 			deps,
 		)
-		expect(onboard.status).toBe(201)
+		expect(onboard.status).toBe(200)
 		expect((await deps.repositories.registry.getAppEnv('billing', 'prod'))?.namespace_id).toBe('apps-prod')
 
-		const invalid = await handleApi(
-			request('POST', '/register-app', {
+		const invalid = await rpcResult(
+			rpcRequest('register', {
 				id: 'broken',
 				repoUrl: 'github.com/acme/broken',
 				env: 'prod',
@@ -580,8 +592,8 @@ describe('app environment namespace assignment', () => {
 			state: 'ready',
 		}, ['service:proxy'])
 
-		const response = await handleApi(
-			request('POST', '/register-app', {
+		const response = await rpcResult(
+			rpcRequest('register', {
 				id: 'billing',
 				repoUrl: 'github.com/acme/billing',
 				env: 'prod',
@@ -591,7 +603,7 @@ describe('app environment namespace assignment', () => {
 			deps,
 		)
 
-		expect(response.status).toBe(201)
+		expect(response.status).toBe(200)
 		expect(claimsPresentDuringPreparation).toBe(true)
 		expect((await deps.repositories.registry.getAppEnv('billing', 'prod'))?.provider_target_json).toBe(JSON.stringify(target('discovered')))
 	})
@@ -627,8 +639,8 @@ describe('app environment namespace assignment', () => {
 			providerTargetJson: JSON.stringify(target('namespace')),
 			state: 'ready',
 		}, ['service:proxy'])
-		const registered = await handleApi(
-			request('POST', '/register-app', {
+		const registered = await rpcResult(
+			rpcRequest('register', {
 				id: 'billing',
 				repoUrl: 'github.com/acme/billing',
 				env: 'prod',
@@ -637,10 +649,10 @@ describe('app environment namespace assignment', () => {
 			}),
 			deps,
 		)
-		expect(registered.status).toBe(201)
+		expect(registered.status).toBe(200)
 
-		const updated = await handleApi(
-			request('PUT', '/apps/billing/envs/prod', { namespaceId: 'apps-prod', ...registrationBody() }),
+		const updated = await rpcResult(
+			rpcRequest('apps.environments.put', { appId: 'billing', env: 'prod', environment: { namespaceId: 'apps-prod', ...registrationBody() } }),
 			deps,
 		)
 
@@ -672,8 +684,8 @@ describe('app environment namespace assignment', () => {
 			state: 'ready',
 		}, ['service:proxy'])
 
-		const response = await handleApi(
-			request('POST', '/register-app', {
+		const response = await rpcResult(
+			rpcRequest('register', {
 				id: 'broken',
 				repoUrl: 'github.com/acme/broken',
 				env: 'prod',
@@ -720,10 +732,10 @@ describe('app environment namespace assignment', () => {
 			...registrationBody(),
 		})
 
-		const alpha = await handleApi(request('POST', '/register-app', body('alpha')), deps)
-		const beta = await handleApi(request('POST', '/register-app', body('beta')), deps)
+		const alpha = await rpcResult(rpcRequest('register', body('alpha')), deps)
+		const beta = await rpcResult(rpcRequest('register', body('beta')), deps)
 
-		expect([alpha.status, beta.status].sort()).toEqual([201, 409])
+		expect([alpha.status, beta.status].sort()).toEqual([200, 409])
 		const winner = (await deps.repositories.registry.listAppEnvsByNamespace('apps-prod'))[0]?.app_id
 		expect(winner === 'alpha' || winner === 'beta').toBe(true)
 		const loser = winner === 'alpha' ? 'beta' : 'alpha'

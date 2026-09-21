@@ -8,42 +8,17 @@ import {
 	type ProviderSecretPutResult,
 } from '@fabrika/provider-contract'
 import type { AppEnvRow, ControlRepositories } from '../db'
-import { readJson } from '../http'
-import type { Authorized } from '../iam'
-import { stringField } from '../json'
 import { providerEnvironment } from '../run-lifecycle'
 import { appSecretPurpose } from '../secret-resolver'
 import { parseVaultRef, type Vault, type VaultSecretPurpose } from '../vault'
-import { fail, jsonAdapter } from './domain'
+import { fail } from './domain'
 import { assertUnmanagedName } from './registry'
-
-export interface VaultContext {
-	readonly repositories: ControlRepositories
-	readonly vault?: () => Promise<Vault>
-	readonly provider: ControlProvider
-	readonly request: Request
-	readonly url: URL
-	readonly authorized: Authorized
-}
 
 export interface VaultUseCaseContext {
 	readonly repositories: ControlRepositories
 	readonly vault?: () => Promise<Vault>
 	readonly provider: ControlProvider
 	readonly auth: AuthContext
-}
-
-function useCaseContext(c: VaultContext): VaultUseCaseContext {
-	return {
-		repositories: c.repositories,
-		provider: c.provider,
-		auth: c.authorized.auth,
-		...(c.vault === undefined ? {} : { vault: c.vault }),
-	}
-}
-
-export async function setAppSecretValue(c: VaultContext, appId: string, name: string): Promise<Response> {
-	return jsonAdapter(async () => setAppSecretValueUseCase(useCaseContext(c), appId, name, parseSecretValue(await readJson(c.request))))
 }
 
 export async function setAppSecretValueUseCase(
@@ -98,10 +73,6 @@ async function assertVaultOwnership(vault: Vault, ref: string, purpose: VaultSec
 	fail(403, 'the stored secret reference does not belong to this application secret')
 }
 
-export async function rotateAppSecretValue(c: VaultContext, appId: string, name: string): Promise<Response> {
-	return jsonAdapter(async () => rotateAppSecretValueUseCase(useCaseContext(c), appId, name, parseSecretValue(await readJson(c.request))))
-}
-
 export async function rotateAppSecretValueUseCase(
 	c: VaultUseCaseContext,
 	appId: string,
@@ -139,10 +110,6 @@ export async function rotateAppSecretValueUseCase(
 		metadata: { name, env },
 	})
 	return { ok: true }
-}
-
-export async function deleteAppSecretValue(c: VaultContext, appId: string, name: string): Promise<Response> {
-	return jsonAdapter(() => deleteAppSecretValueUseCase(useCaseContext(c), appId, name, queryLayer(c.url)))
 }
 
 export async function deleteAppSecretValueUseCase(
@@ -189,18 +156,6 @@ async function putProviderSecret(secrets: ProviderManagedSecrets, input: Provide
 		if (cause instanceof ProviderSecretError || (cause instanceof Error && cause.name === 'ProviderSecretError')) fail(422, cause.message)
 		throw cause
 	}
-}
-
-function parseSecretValue(body: unknown): SetSecretValueRequest {
-	const value = stringField(body, 'value')
-	if (value === undefined) fail(400, 'value required')
-	const env = stringField(body, 'env')
-	return { value, ...(env === undefined ? {} : { env }) }
-}
-
-function queryLayer(url: URL): string | null {
-	const value = url.searchParams.get('env')
-	return value === null || value === '' ? null : value
 }
 
 async function requireApp(c: VaultUseCaseContext, appId: string): Promise<void> {

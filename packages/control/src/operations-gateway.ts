@@ -1,9 +1,8 @@
 import type { HttpService } from '@fabrika/platform'
 import { error } from './http'
 
-const PREFIX = '/operations/api'
+const RPC_PATH = '/operations/api/rpc'
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
-const EXCLUDED_SEGMENTS = new Set(['ingest', 'envelope', 'artifacts', 'artifact', 'source-maps', 'source-map'])
 
 export interface OperationsGatewayOptions {
 	gateway: HttpService
@@ -24,11 +23,7 @@ export interface OperationsGatewayOptions {
  */
 export async function forwardOperationsApi(request: Request, options: OperationsGatewayOptions): Promise<Response> {
 	const url = new URL(request.url)
-	if (url.pathname !== PREFIX && !url.pathname.startsWith(`${PREFIX}/`)) {
-		return error(404, 'not found')
-	}
-	const suffix = url.pathname.slice(PREFIX.length)
-	if (excludedOperatorPath(suffix)) {
+	if (url.pathname !== RPC_PATH) {
 		return error(404, 'not found')
 	}
 	if (!sameOriginRequest(request, options.publicOrigin)) {
@@ -36,7 +31,7 @@ export async function forwardOperationsApi(request: Request, options: Operations
 	}
 
 	const target = new URL(url)
-	target.pathname = `/api${suffix}`
+	target.pathname = '/api/rpc'
 	let response: Response
 	try {
 		response = await options.gateway.fetch(new Request(target, request))
@@ -49,20 +44,10 @@ export async function forwardOperationsApi(request: Request, options: Operations
 
 	const login = new URL('/auth/login', options.publicIamUrl)
 	login.searchParams.set('redirect', url.origin)
-	if (suffix === '/rpc') {
-		return Response.json(
-			{ error: { type: 'auth', message: 'authentication required', loginUrl: login.toString() } },
-			{ status: 401, headers: { 'cache-control': 'no-store' } },
-		)
-	}
 	return Response.json(
-		{ error: 'authentication required', loginUrl: login.toString() },
+		{ error: { type: 'auth', message: 'authentication required', loginUrl: login.toString() } },
 		{ status: 401, headers: { 'cache-control': 'no-store' } },
 	)
-}
-
-function excludedOperatorPath(path: string): boolean {
-	return path.split('/').filter(Boolean).some((segment) => EXCLUDED_SEGMENTS.has(segment))
 }
 
 /**

@@ -136,7 +136,7 @@ describe('controlOriginGuard', () => {
 		}
 	})
 
-	test('shapes the refusal for the RPC client and for the REST client', async () => {
+	test('shapes the refusal for RPC and unmatched HTTP paths', async () => {
 		const guard = controlOriginGuard<{ auth?: AuthContext | null }>({ FABRIKA_CONTROL_DOMAIN: CONTROL_ORIGIN })
 		const forge = (path: string) => new Request(`${CONTROL_ORIGIN}${path}`, { method: 'POST', headers: { origin: 'https://evil.example' } })
 		const never = () => Promise.reject(new Error('handler must not run'))
@@ -148,10 +148,10 @@ describe('controlOriginGuard', () => {
 			expect(rpcBody).toEqual({ error: { type: 'forbidden', message: 'cross-origin request rejected' } })
 		}
 
-		const rest = await guard(forge('/api/apps'), { auth: principal('user') }, never)
-		expect(rest.status).toBe(403)
-		const restBody: unknown = await rest.json()
-		expect(restBody).toEqual({ error: 'cross-origin request rejected' })
+		const unmatched = await guard(forge('/api/apps'), { auth: principal('user') }, never)
+		expect(unmatched.status).toBe(403)
+		const body: unknown = await unmatched.json()
+		expect(body).toEqual({ error: 'cross-origin request rejected' })
 	})
 })
 
@@ -192,10 +192,18 @@ function createRequest(token: string | null, headers: Record<string, string>, id
 }
 
 async function appIds(fetch: (request: Request) => Promise<Response>): Promise<string[]> {
-	const listed: unknown = await (await fetch(new Request(`${CONTROL_ORIGIN}/api/apps`, { headers: { [PROXY_TOKEN_HEADER]: adminToken } })))
+	const listed: unknown = await (await fetch(
+		new Request(`${CONTROL_ORIGIN}/api/rpc`, {
+			method: 'POST',
+			headers: { [PROXY_TOKEN_HEADER]: adminToken, authorization: 'Bearer px_test_reader', 'content-type': 'application/json' },
+			body: JSON.stringify({ method: 'apps.list', input: null }),
+		}),
+	))
 		.json()
 	if (typeof listed !== 'object' || listed === null) throw new Error('app list must be an object')
-	const items = Reflect.get(listed, 'items')
+	const result: unknown = Reflect.get(listed, 'result')
+	if (typeof result !== 'object' || result === null) throw new Error('app list must carry a result')
+	const items = Reflect.get(result, 'items')
 	if (!Array.isArray(items)) throw new Error('app list must carry items')
 	return items.map((item: unknown) => {
 		const id = typeof item === 'object' && item !== null ? Reflect.get(item, 'id') : undefined
@@ -243,9 +251,9 @@ describe('controlApp under the origin guard', () => {
 
 		expect((await fetch(createRequest(adminToken, { referer: `${CONTROL_ORIGIN}/apps` }, 'referer-app'))).status).toBe(200)
 		const read = await fetch(
-			new Request(`${CONTROL_ORIGIN}/api/apps`, { headers: { [PROXY_TOKEN_HEADER]: adminToken, origin: 'https://evil.example' } }),
+			new Request(`${CONTROL_ORIGIN}/api/rpc`, { headers: { [PROXY_TOKEN_HEADER]: adminToken, origin: 'https://evil.example' } }),
 		)
-		expect(read.status).toBe(200)
+		expect(read.status).toBe(404)
 	})
 
 	test('refuses every human mutation when the public origin is unconfigured', async () => {

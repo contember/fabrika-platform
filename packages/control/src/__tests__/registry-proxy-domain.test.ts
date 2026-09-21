@@ -1,10 +1,10 @@
 import type { ControlProvider, ProviderEnvelope, ProviderRegistration } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import type { ApiDeps } from '../api/router'
-import { handleApi } from '../api/router'
 import { FakeRepoSource } from '../repo-source'
+import type { ControlRpcDeps } from '../services'
 import { createHarness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
+import { rpcRequest, rpcResult } from './helpers/rpc'
 
 // A namespaced provider refuses a registration whose manifest publishes the app but names no host, and
 // control has to make that refusal reach the caller BEFORE the provider creates anything. The second
@@ -73,9 +73,9 @@ function proxyAwareProvider(recording: Recording): ControlProvider {
 	}
 }
 
-function makeDeps(provider: ControlProvider): { deps: ApiDeps; repositories: ApiDeps['repositories'] } {
+function makeDeps(provider: ControlProvider): { deps: ControlRpcDeps; repositories: ControlRpcDeps['repositories'] } {
 	const { db } = createHarness()
-	const deps: ApiDeps = {
+	const deps: ControlRpcDeps = {
 		repositories: db,
 		auth: allowAllAuth(),
 		queue: { send: () => Promise.resolve() },
@@ -87,14 +87,7 @@ function makeDeps(provider: ControlProvider): { deps: ApiDeps; repositories: Api
 	return { deps, repositories: db }
 }
 
-function req(method: string, path: string, body?: unknown): Request {
-	return new Request(`https://control.test/api${path}`, {
-		method,
-		...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
-	})
-}
-
-async function readyNamespace(repositories: ApiDeps['repositories']): Promise<void> {
+async function readyNamespace(repositories: ControlRpcDeps['repositories']): Promise<void> {
 	await repositories.registry.createDeploymentNamespaceWithResourceClaims({
 		id: 'apps-prod',
 		env: 'prod',
@@ -111,8 +104,8 @@ describe('a proxy target registers with the domain its deploy needs', () => {
 		const { deps, repositories } = makeDeps(proxyAwareProvider(recording))
 		await readyNamespace(repositories)
 
-		const response = await handleApi(
-			req('POST', '/register-app', {
+		const response = await rpcResult(
+			rpcRequest('register', {
 				id: 'notes',
 				repoUrl: 'github.com/acme/notes',
 				env: 'prod',
@@ -134,8 +127,8 @@ describe('a proxy target registers with the domain its deploy needs', () => {
 		const { deps, repositories } = makeDeps(proxyAwareProvider(recording))
 		await readyNamespace(repositories)
 
-		const response = await handleApi(
-			req('POST', '/register-app', {
+		const response = await rpcResult(
+			rpcRequest('register', {
 				id: 'notes',
 				repoUrl: 'github.com/acme/notes',
 				env: 'prod',
@@ -147,7 +140,7 @@ describe('a proxy target registers with the domain its deploy needs', () => {
 			deps,
 		)
 
-		expect(response.status).toBe(201)
+		expect(response.status).toBe(200)
 		expect(recording.prepared).toEqual(['notes'])
 		expect((await repositories.registry.getAppEnv('notes', 'prod'))?.domain).toBe('proxy-2ec8-8080.prg1.zerops.app')
 	})
@@ -156,8 +149,8 @@ describe('a proxy target registers with the domain its deploy needs', () => {
 		const recording: Recording = { prepared: [] }
 		const { deps, repositories } = makeDeps(proxyAwareProvider(recording))
 		await readyNamespace(repositories)
-		await handleApi(
-			req('POST', '/register-app', {
+		await rpcResult(
+			rpcRequest('register', {
 				id: 'notes',
 				repoUrl: 'github.com/acme/notes',
 				env: 'prod',
@@ -170,8 +163,12 @@ describe('a proxy target registers with the domain its deploy needs', () => {
 		)
 		recording.prepared.length = 0
 
-		const response = await handleApi(
-			req('PUT', '/apps/notes/envs/prod', { namespaceId: 'apps-prod', domain: null, target: appTarget(), artifact: artifact(true) }),
+		const response = await rpcResult(
+			rpcRequest('apps.environments.put', {
+				appId: 'notes',
+				env: 'prod',
+				environment: { namespaceId: 'apps-prod', domain: null, target: appTarget(), artifact: artifact(true) },
+			}),
 			deps,
 		)
 
@@ -187,8 +184,8 @@ describe('a proxy target registers with the domain its deploy needs', () => {
 		const { deps, repositories } = makeDeps(proxyAwareProvider(recording))
 		await readyNamespace(repositories)
 
-		const response = await handleApi(
-			req('POST', '/register-app', {
+		const response = await rpcResult(
+			rpcRequest('register', {
 				id: 'worker',
 				repoUrl: 'github.com/acme/worker',
 				env: 'prod',
@@ -199,7 +196,7 @@ describe('a proxy target registers with the domain its deploy needs', () => {
 			deps,
 		)
 
-		expect(response.status).toBe(201)
+		expect(response.status).toBe(200)
 		expect(recording.prepared).toEqual(['worker'])
 	})
 })
@@ -209,8 +206,8 @@ describe('a namespace says which hosts it serves', () => {
 		const recording: Recording = { prepared: [] }
 		const { deps, repositories } = makeDeps(proxyAwareProvider(recording))
 		await readyNamespace(repositories)
-		await handleApi(
-			req('POST', '/register-app', {
+		await rpcResult(
+			rpcRequest('register', {
 				id: 'notes',
 				repoUrl: 'github.com/acme/notes',
 				env: 'prod',
@@ -223,7 +220,7 @@ describe('a namespace says which hosts it serves', () => {
 			deps,
 		)
 
-		const response = await handleApi(req('GET', '/namespaces/apps-prod'), deps)
+		const response = await rpcResult(rpcRequest('namespaces.get', { namespaceId: 'apps-prod' }), deps)
 
 		expect(response.status).toBe(200)
 		expect(await response.json()).toMatchObject({
@@ -252,7 +249,7 @@ describe('a namespace says which hosts it serves', () => {
 		})
 		await readyNamespace(repositories)
 
-		const body: unknown = await (await handleApi(req('GET', '/namespaces/apps-prod'), deps)).json()
+		const body: unknown = await (await rpcResult(rpcRequest('namespaces.get', { namespaceId: 'apps-prod' }), deps)).json()
 
 		expect(body).not.toHaveProperty('hosts')
 	})

@@ -1037,7 +1037,11 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		// The real ACL-gated control surface, against the real database. The admin token stands in for
 		// what the proxy injects, so this exercises the routing rather than the auth.
 		const apps: unknown = await (await handler(
-			new Request('http://localhost:18291/api/apps', { headers: { [PROXY_TOKEN_HEADER]: adminToken } }),
+			new Request('http://localhost:18291/api/rpc', {
+				method: 'POST',
+				headers: { [PROXY_TOKEN_HEADER]: adminToken, authorization: 'Bearer px_test_reader', 'content-type': 'application/json' },
+				body: JSON.stringify({ method: 'apps.list', input: null }),
+			}),
 		)).json()
 		expect(JSON.stringify(apps)).toContain('acme')
 

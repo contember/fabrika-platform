@@ -1,11 +1,3 @@
-// Run-history + manual-trigger handlers. These feed the M3b dashboard:
-//   - listRuns / getRun           — the run history table + detail.
-//   - getRunLog / tailRunLog      — read the streamed NDJSON log from R2 (full + live-ish tail).
-//   - triggerDeploy               — the manual "Deploy" button: create a pending run + enqueue it.
-//
-// The queue producer is injected (a `JobQueue`) so this stays testable without a real Queue. The
-// run row is created BEFORE the enqueue so a trigger is durable even if delivery is delayed.
-
 import type { AuthContext } from '@fabrika/auth'
 import type { CursorList, RunDto, RunListInput, RunLogLine, RunLogResponse, RunTailResponse, TriggerDeployRequest } from '@fabrika/control-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
@@ -13,12 +5,10 @@ import { logsKey } from '@fabrika/runner-cloudflare'
 import { ACTIONS } from '../actions'
 import type { ControlRepositories, RunRow } from '../db'
 import { uuidv7 } from '../db'
-import { error, readJson } from '../http'
 import { appScope, envScope } from '../iam'
-import { stringField } from '../json'
 import { isRefPattern } from '../ref-match'
 import type { ControlJobMessage } from '../run-lifecycle'
-import { fail, jsonAdapter } from './domain'
+import { fail } from './domain'
 
 /** The one control queue producer. This surface only ever sends the run pointer; namespaces share it. */
 export type DeployQueue = JobQueue<ControlJobMessage>
@@ -30,18 +20,14 @@ export type DeployQueue = JobQueue<ControlJobMessage>
  */
 export type LogReader = Pick<BlobStore, 'get'>
 
-export interface RunsContext {
+export interface RunsUseCaseContext {
 	repositories: ControlRepositories
 	queue: DeployQueue
 	logs: LogReader
 	/** Cancel seam: destroy the run's container (off-local) + mark it failed + free the deploy lock. */
 	cancel(run: RunRow): Promise<void>
-	request: Request
-	url: URL
 	auth: AuthContext
 }
-
-export type RunsUseCaseContext = Omit<RunsContext, 'request' | 'url'>
 
 function toRunDto(row: RunRow): RunDto {
 	return {
@@ -62,31 +48,6 @@ function toRunDto(row: RunRow): RunDto {
 }
 
 const DEFAULT_LIMIT = 50
-const MAX_LIMIT = 200
-
-function parseLimit(url: URL): number {
-	const raw = url.searchParams.get('limit')
-	if (!raw) {
-		return DEFAULT_LIMIT
-	}
-	const n = Number.parseInt(raw, 10)
-	if (!Number.isFinite(n) || n <= 0) {
-		return DEFAULT_LIMIT
-	}
-	return Math.min(n, MAX_LIMIT)
-}
-
-/** List runs, newest first, optionally filtered by `?app=` and/or `?env=`, keyset-paged by `?before=`. */
-export async function listRuns(c: RunsContext): Promise<Response> {
-	const p = c.url.searchParams
-	const input: RunListInput = {
-		...(p.get('app') === null ? {} : { appId: p.get('app') ?? undefined }),
-		...(p.get('env') === null ? {} : { env: p.get('env') ?? undefined }),
-		...(p.get('before') === null ? {} : { before: p.get('before') ?? undefined }),
-		limit: parseLimit(c.url),
-	}
-	return jsonAdapter(() => listRunsUseCase(c, input))
-}
 
 export async function listRunsUseCase(c: RunsUseCaseContext, input: RunListInput): Promise<CursorList<RunDto>> {
 	authorizeList(c.auth, input)
@@ -106,10 +67,6 @@ export async function listRunsUseCase(c: RunsUseCaseContext, input: RunListInput
 	return { items, nextCursor }
 }
 
-export async function getRun(c: RunsContext, id: string): Promise<Response> {
-	return jsonAdapter(() => getRunUseCase(c, id))
-}
-
 export async function getRunUseCase(c: RunsUseCaseContext, id: string): Promise<RunDto> {
 	const row = await requireVisibleRun(c, id, ACTIONS.DEPLOY_READ)
 	return toRunDto(row)
@@ -120,10 +77,6 @@ export async function getRunUseCase(c: RunsUseCaseContext, id: string): Promise<
  * the per-app-env lock (via the `cancel` seam). A run that already finished is a 409 (nothing to cancel).
  * The use case resolves the run before its scoped ACL check and hides denied rows as not found.
  */
-export async function cancelRun(c: RunsContext, id: string): Promise<Response> {
-	return jsonAdapter(() => cancelRunUseCase(c, id))
-}
-
 export async function cancelRunUseCase(c: RunsUseCaseContext, id: string): Promise<RunDto> {
 	const run = await requireVisibleRun(c, id, ACTIONS.DEPLOY_TRIGGER)
 	if (run.status !== 'pending' && run.status !== 'running') {
@@ -145,10 +98,6 @@ export async function cancelRunUseCase(c: RunsUseCaseContext, id: string): Promi
  * The full streamed log for a run, read from R2 (runs/<id>/logs.ndjson). Returns the parsed lines so
  * the dashboard renders them without re-parsing NDJSON. 404 when the run / its log doesn't exist yet.
  */
-export async function getRunLog(c: RunsContext, id: string): Promise<Response> {
-	return jsonAdapter(() => getRunLogUseCase(c, id))
-}
-
 export async function getRunLogUseCase(c: RunsUseCaseContext, id: string): Promise<RunLogResponse> {
 	const run = await requireVisibleRun(c, id, ACTIONS.DEPLOY_READ)
 	const object = await c.logs.get(run.log_key ?? logsKey(id))
@@ -161,16 +110,10 @@ export async function getRunLogUseCase(c: RunsUseCaseContext, id: string): Promi
 }
 
 /**
- * Live-ish log tail: the lines after byte/line cursor `?after=`. Polled by the dashboard while a run
+ * Live-ish log tail: the lines after the line cursor `after`. Polled by the dashboard while a run
  * is `running`. The relay re-flushes the whole accumulated NDJSON to one R2 object, so a "tail" is the
  * slice of lines past the cursor the dashboard already has. Returns the new lines + the next cursor.
  */
-export async function tailRunLog(c: RunsContext, id: string): Promise<Response> {
-	const afterRaw = c.url.searchParams.get('after')
-	const after = afterRaw !== null && /^\d+$/.test(afterRaw) ? Number.parseInt(afterRaw, 10) : 0
-	return jsonAdapter(() => tailRunLogUseCase(c, id, after))
-}
-
 export async function tailRunLogUseCase(c: RunsUseCaseContext, id: string, after: number): Promise<RunTailResponse> {
 	const run = await requireVisibleRun(c, id, ACTIONS.DEPLOY_READ)
 	const object = await c.logs.get(run.log_key ?? logsKey(id))
@@ -220,17 +163,6 @@ function isRunLogLine(value: unknown): value is RunLogLine {
  * `pending` run, then enqueue it. `ref` defaults to the env's trigger_ref (when set) else the app's
  * default branch. The use case checks deploy.trigger against the resolved app/environment coordinates.
  */
-export async function triggerDeploy(c: RunsContext): Promise<Response> {
-	const body = await readJson(c.request)
-	const appId = stringField(body, 'appId')
-	const env = stringField(body, 'env')
-	if (!appId || !env) {
-		return error(400, 'appId and env required')
-	}
-	const ref = stringField(body, 'ref')
-	return jsonAdapter(() => triggerDeployUseCase(c, { appId, env, ...(ref === undefined ? {} : { ref }) }), { status: 201 })
-}
-
 export async function triggerDeployUseCase(c: RunsUseCaseContext, input: TriggerDeployRequest): Promise<RunDto> {
 	const { appId, env } = input
 	const app = await c.repositories.registry.getApp(appId)

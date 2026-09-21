@@ -11,14 +11,14 @@ import { SqlDeployLocks } from '@fabrika/platform'
 import type { ControlProvider, ProviderDeploymentNamespace, ProviderEnvelope } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { type NamespaceJobDeps, runNamespaceJob } from '../api/namespaces'
-import type { ApiDeps } from '../api/router'
-import { handleApi } from '../api/router'
 import { decodeControlJobMessage, runControlJob } from '../consumer'
 import type { Env } from '../env'
 import { FakeRepoSource } from '../repo-source'
 import type { ControlJobMessage, NamespaceJobMessage } from '../run-lifecycle'
+import type { ControlRpcDeps } from '../services'
 import { createHarness, type Harness } from './helpers/harness'
 import { makeFakeLock } from './helpers/lock'
+import { rpcRequest, rpcResult } from './helpers/rpc'
 
 const target = (phase: string): ProviderEnvelope => ({ provider: 'harbor', version: 1, payload: { phase } })
 
@@ -87,7 +87,7 @@ const auth = (): AuthContext => ({
 	audit: () => Promise.resolve(),
 })
 
-function apiDeps(harness: Harness, provider: ControlProvider, sent: ControlJobMessage[]): ApiDeps {
+function apiDeps(harness: Harness, provider: ControlProvider, sent: ControlJobMessage[]): ControlRpcDeps {
 	return {
 		repositories: harness.repositories,
 		auth: auth(),
@@ -138,12 +138,7 @@ function decoded(message: ControlJobMessage): NamespaceJobMessage {
 }
 
 const createRequest = (signal: AbortSignal): Request =>
-	new Request('https://control.test/api/namespaces', {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify({ id: 'apps-prod', env: 'prod', target: target('requested') }),
-		signal,
-	})
+	rpcRequest('namespaces.create', { id: 'apps-prod', env: 'prod', target: target('requested') }, signal)
 
 describe('namespace provisioning outlives the request that asked for it', () => {
 	test('create answers while provisioning is still running, and finishes with no caller attached', async () => {
@@ -163,10 +158,10 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 		const deps = apiDeps(harness, provider, sent)
 		const caller = new AbortController()
 
-		const created = await handleApi(createRequest(caller.signal), deps)
+		const created = await rpcResult(createRequest(caller.signal), deps)
 
 		// Answered inside the request, with the provider not yet asked for anything.
-		expect(created.status).toBe(201)
+		expect(created.status).toBe(200)
 		const body: { id: string; state: string } = await created.json()
 		expect(body).toEqual(expect.objectContaining({ id: 'apps-prod', state: 'pending' }))
 		expect(record.provisions).toEqual([])
@@ -300,7 +295,7 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 			state: 'provisioning',
 		})
 
-		const response = await handleApi(new Request('https://control.test/api/namespaces/apps-prod/reconcile', { method: 'POST' }), deps)
+		const response = await rpcResult(rpcRequest('namespaces.reconcile', { namespaceId: 'apps-prod' }), deps)
 
 		expect(response.status).toBe(200)
 		const body: { state: string; target: ProviderEnvelope } = await response.json()
@@ -329,7 +324,7 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 			lastError: 'namespace provision failed',
 		})
 
-		const response = await handleApi(new Request('https://control.test/api/namespaces/apps-prod/reconcile', { method: 'POST' }), deps)
+		const response = await rpcResult(rpcRequest('namespaces.reconcile', { namespaceId: 'apps-prod' }), deps)
 
 		expect(response.status).toBe(200)
 		const row = await harness.repositories.registry.getDeploymentNamespace('apps-prod')

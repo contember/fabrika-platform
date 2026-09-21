@@ -56,7 +56,7 @@ import {
 import { deleteAppSecretValueUseCase, rotateAppSecretValueUseCase, setAppSecretValueUseCase, type VaultUseCaseContext } from './api/vault'
 import type { Env } from './env'
 import { appScope } from './iam'
-import { buildApiDeps } from './services'
+import { buildControlRpcDeps } from './services'
 import {
 	reconcileSourceConnection,
 	repairSourceConnection,
@@ -160,121 +160,165 @@ const startSourceConnectionInput = z.object({
 	repositories: z.array(z.object({ owner: githubOwner, name: githubRepositoryName }).strict()).max(100),
 }).strict()
 
-export const controlRpcRouter: RpcRouterFor<ControlRpcContext, ControlRpcContract> = rpc.router({
-	sourceConnection: rpc.router({
-		status: rpc.procedure.require(ACTIONS.SOURCE_CONNECTION_MANAGE).query(({ ctx }) =>
-			controlCall(() => sourceConnectionStatus(sourceConnectionContext(ctx)))
-		),
-		list: rpc.procedure.input(sourceConnectionListInput).require(ACTIONS.SOURCE_CONNECTION_MANAGE).query(({ ctx, input }) =>
-			controlCall(() => sourceConnectionList(sourceConnectionContext(ctx), input))
-		),
-		start: rpc.procedure.input(startSourceConnectionInput).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
-			controlCall(() => startSourceConnection(sourceConnectionContext(ctx), input))
-		),
-		verifyInstallation: rpc.procedure.input(sourceConnectionId).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
-			controlCall(() => verifySourceInstallation(sourceConnectionContext(ctx), input.connectionId))
-		),
-		repair: rpc.procedure.input(sourceConnectionId).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
-			controlCall(() => repairSourceConnection(sourceConnectionContext(ctx), input.connectionId))
-		),
-		reconcile: rpc.procedure.input(sourceConnectionId).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
-			controlCall(() => reconcileSourceConnection(sourceConnectionContext(ctx), input.connectionId))
-		),
-	}),
-	apps: rpc.router({
-		list: rpc.procedure.require(ACTIONS.APP_MANAGE).query(({ ctx }) => controlCall(() => listAppsUseCase(registryContext(ctx)))),
-		get: rpc.procedure.input(appId).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).query(({ ctx, input }) =>
-			controlCall(() => getAppUseCase(registryContext(ctx), input.appId))
-		),
-		create: rpc.procedure.input(createAppInput).require(ACTIONS.APP_MANAGE).mutation(({ ctx, input }) =>
-			controlCall(() => createAppUseCase(registryContext(ctx), input))
-		),
-		update: rpc.procedure.input(updateAppInput).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-			controlCall(() => updateAppUseCase(registryContext(ctx), input.appId, input.app))
-		),
-		delete: rpc.procedure.input(appId).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-			controlCall(() => deleteAppUseCase(registryContext(ctx), input.appId))
-		),
-		environments: rpc.router({
-			list: rpc.procedure.input(appId).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).query(({ ctx, input }) =>
-				controlCall(() => listAppEnvsUseCase(registryContext(ctx), input.appId))
+export const controlRpcRouter = createControlRpcRouter(buildControlRpcDeps)
+
+export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): RpcRouterFor<ControlRpcContext, ControlRpcContract> {
+	return rpc.router({
+		sourceConnection: rpc.router({
+			status: rpc.procedure.require(ACTIONS.SOURCE_CONNECTION_MANAGE).query(({ ctx }) =>
+				controlCall(() => sourceConnectionStatus(sourceConnectionContext(ctx)))
 			),
-			put: rpc.procedure.input(putEnvironmentInput).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-				controlCall(() => putAppEnvUseCase(registryContext(ctx), input.appId, input.env, input.environment))
+			list: rpc.procedure.input(sourceConnectionListInput).require(ACTIONS.SOURCE_CONNECTION_MANAGE).query(({ ctx, input }) =>
+				controlCall(() => sourceConnectionList(sourceConnectionContext(ctx), input))
 			),
-			delete: rpc.procedure.input(appEnvironment).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-				controlCall(() => deleteAppEnvUseCase(registryContext(ctx), input.appId, input.env))
+			start: rpc.procedure.input(startSourceConnectionInput).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
+				controlCall(() => startSourceConnection(sourceConnectionContext(ctx), input))
+			),
+			verifyInstallation: rpc.procedure.input(sourceConnectionId).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
+				controlCall(() => verifySourceInstallation(sourceConnectionContext(ctx), input.connectionId))
+			),
+			repair: rpc.procedure.input(sourceConnectionId).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
+				controlCall(() => repairSourceConnection(sourceConnectionContext(ctx), input.connectionId))
+			),
+			reconcile: rpc.procedure.input(sourceConnectionId).require(ACTIONS.SOURCE_CONNECTION_MANAGE).mutation(({ ctx, input }) =>
+				controlCall(() => reconcileSourceConnection(sourceConnectionContext(ctx), input.connectionId))
 			),
 		}),
-		secrets: rpc.router({
-			list: rpc.procedure.input(appId).require(ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).query(({ ctx, input }) =>
-				controlCall(() => listAppSecretsUseCase(registryContext(ctx), input.appId))
+		apps: rpc.router({
+			list: rpc.procedure.require(ACTIONS.APP_MANAGE).query(({ ctx }) => controlCall(() => listAppsUseCase(registryContext(ctx)))),
+			get: rpc.procedure.input(appId).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).query(({ ctx, input }) =>
+				controlCall(() => getAppUseCase(registryContext(ctx), input.appId))
 			),
-			put: rpc.procedure.input(putSecretInput).require(ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-				controlCall(() => putAppSecretUseCase(registryContext(ctx), input.appId, input.secret))
+			create: rpc.procedure.input(createAppInput).require(ACTIONS.APP_MANAGE).mutation(({ ctx, input }) =>
+				controlCall(() => createAppUseCase(registryContext(ctx), input))
+			),
+			update: rpc.procedure.input(updateAppInput).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
+				controlCall(() => updateAppUseCase(registryContext(ctx), input.appId, input.app))
+			),
+			delete: rpc.procedure.input(appId).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
+				controlCall(() => deleteAppUseCase(registryContext(ctx), input.appId))
+			),
+			environments: rpc.router({
+				list: rpc.procedure.input(appId).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).query(({ ctx, input }) =>
+					controlCall(() => listAppEnvsUseCase(registryContext(ctx), input.appId))
+				),
+				put: rpc.procedure.input(putEnvironmentInput).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
+					controlCall(() => putAppEnvUseCase(registryContext(ctx), input.appId, input.env, input.environment))
+				),
+				delete: rpc.procedure.input(appEnvironment).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
+					controlCall(() => deleteAppEnvUseCase(registryContext(ctx), input.appId, input.env))
+				),
+			}),
+			secrets: rpc.router({
+				list: rpc.procedure.input(appId).require(ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).query(({ ctx, input }) =>
+					controlCall(() => listAppSecretsUseCase(registryContext(ctx), input.appId))
+				),
+				put: rpc.procedure.input(putSecretInput).require(ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
+					controlCall(() => putAppSecretUseCase(registryContext(ctx), input.appId, input.secret))
+				),
+				delete: rpc.procedure.input(appNamedValue).require(ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
+					controlCall(() => deleteAppSecretUseCase(registryContext(ctx), input.appId, input.name, input.env ?? null))
+				),
+			}),
+			variables: rpc.router({
+				list: rpc.procedure.input(appId).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).query(({ ctx, input }) =>
+					controlCall(() => listAppVarsUseCase(registryContext(ctx), input.appId))
+				),
+				put: rpc.procedure.input(putVariableInput).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
+					controlCall(() => putAppVarUseCase(registryContext(ctx), input.appId, input.variable))
+				),
+				delete: rpc.procedure.input(appNamedValue).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
+					controlCall(() => deleteAppVarUseCase(registryContext(ctx), input.appId, input.name, input.env ?? null))
+				),
+			}),
+		}),
+		vault: rpc.router({
+			set: rpc.procedure.input(secretValueInput).require(ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
+				controlCall(() => setAppSecretValueUseCase(vaultContext(ctx), input.appId, input.name, { value: input.value, env: input.env ?? null }))
+			),
+			rotate: rpc.procedure.input(secretValueInput).require(ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
+				controlCall(() => rotateAppSecretValueUseCase(vaultContext(ctx), input.appId, input.name, { value: input.value, env: input.env ?? null }))
 			),
 			delete: rpc.procedure.input(appNamedValue).require(ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-				controlCall(() => deleteAppSecretUseCase(registryContext(ctx), input.appId, input.name, input.env ?? null))
+				controlCall(() => deleteAppSecretValueUseCase(vaultContext(ctx), input.appId, input.name, input.env ?? null))
 			),
 		}),
-		variables: rpc.router({
-			list: rpc.procedure.input(appId).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).query(({ ctx, input }) =>
-				controlCall(() => listAppVarsUseCase(registryContext(ctx), input.appId))
+		namespaces: rpc.router({
+			list: rpc.procedure.require(ACTIONS.NAMESPACE_MANAGE).query(({ ctx }) => controlCall(() => listNamespacesUseCase(namespaceContext(ctx)))),
+			get: rpc.procedure.input(namespaceId).require(ACTIONS.NAMESPACE_MANAGE).query(({ ctx, input }) =>
+				controlCall(() => getNamespaceUseCase(namespaceContext(ctx), input.namespaceId))
 			),
-			put: rpc.procedure.input(putVariableInput).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-				controlCall(() => putAppVarUseCase(registryContext(ctx), input.appId, input.variable))
+			plan: rpc.procedure.input(planNamespaceInput).require(ACTIONS.NAMESPACE_MANAGE).query(({ ctx, input }) =>
+				controlCall(() => planNamespaceUseCase(namespaceContext(ctx), input))
 			),
-			delete: rpc.procedure.input(appNamedValue).require(ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-				controlCall(() => deleteAppVarUseCase(registryContext(ctx), input.appId, input.name, input.env ?? null))
+			create: rpc.procedure.input(namespaceBody).require(ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
+				controlCall(() => createNamespaceUseCase(namespaceContext(ctx), input))
+			),
+			adopt: rpc.procedure.input(adoptNamespaceInput).require(ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
+				controlCall(() => adoptNamespaceUseCase(namespaceContext(ctx), input.namespaceId, input.namespace))
+			),
+			reconcile: rpc.procedure.input(namespaceId).require(ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
+				controlCall(() => reconcileNamespaceUseCase(namespaceContext(ctx), input.namespaceId))
+			),
+			remove: rpc.procedure.input(namespaceId).require(ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
+				controlCall(() => removeNamespaceUseCase(namespaceContext(ctx), input.namespaceId))
 			),
 		}),
-	}),
-	vault: rpc.router({
-		set: rpc.procedure.input(secretValueInput).require(ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-			controlCall(() => setAppSecretValueUseCase(vaultContext(ctx), input.appId, input.name, { value: input.value, env: input.env ?? null }))
+		runs: rpc.router({
+			list: rpc.procedure.input(runListInput).query(({ ctx, input }) => controlCall(() => listRunsUseCase(runsContext(ctx), input))),
+			get: rpc.procedure.input(runId).query(({ ctx, input }) => controlCall(() => getRunUseCase(runsContext(ctx), input.runId))),
+			log: rpc.procedure.input(runId).query(({ ctx, input }) => controlCall(() => getRunLogUseCase(runsContext(ctx), input.runId))),
+			tail: rpc.procedure.input(tailRunInput).query(({ ctx, input }) =>
+				controlCall(() => tailRunLogUseCase(runsContext(ctx), input.runId, input.after ?? 0))
+			),
+			cancel: rpc.procedure.input(runId).mutation(({ ctx, input }) => controlCall(() => cancelRunUseCase(runsContext(ctx), input.runId))),
+		}),
+		deploy: rpc.procedure.input(deployInput).mutation(({ ctx, input }) => controlCall(() => triggerDeployUseCase(runsContext(ctx), input))),
+		register: rpc.procedure.input(registerInput).require(ACTIONS.APP_MANAGE).mutation(({ ctx, input }) =>
+			controlCall(() => registerAppUseCase(registryContext(ctx), input))
 		),
-		rotate: rpc.procedure.input(secretValueInput).require(ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-			controlCall(() => rotateAppSecretValueUseCase(vaultContext(ctx), input.appId, input.name, { value: input.value, env: input.env ?? null }))
-		),
-		delete: rpc.procedure.input(appNamedValue).require(ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-			controlCall(() => deleteAppSecretValueUseCase(vaultContext(ctx), input.appId, input.name, input.env ?? null))
-		),
-	}),
-	namespaces: rpc.router({
-		list: rpc.procedure.require(ACTIONS.NAMESPACE_MANAGE).query(({ ctx }) => controlCall(() => listNamespacesUseCase(namespaceContext(ctx)))),
-		get: rpc.procedure.input(namespaceId).require(ACTIONS.NAMESPACE_MANAGE).query(({ ctx, input }) =>
-			controlCall(() => getNamespaceUseCase(namespaceContext(ctx), input.namespaceId))
-		),
-		plan: rpc.procedure.input(planNamespaceInput).require(ACTIONS.NAMESPACE_MANAGE).query(({ ctx, input }) =>
-			controlCall(() => planNamespaceUseCase(namespaceContext(ctx), input))
-		),
-		create: rpc.procedure.input(namespaceBody).require(ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
-			controlCall(() => createNamespaceUseCase(namespaceContext(ctx), input))
-		),
-		adopt: rpc.procedure.input(adoptNamespaceInput).require(ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
-			controlCall(() => adoptNamespaceUseCase(namespaceContext(ctx), input.namespaceId, input.namespace))
-		),
-		reconcile: rpc.procedure.input(namespaceId).require(ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
-			controlCall(() => reconcileNamespaceUseCase(namespaceContext(ctx), input.namespaceId))
-		),
-		remove: rpc.procedure.input(namespaceId).require(ACTIONS.NAMESPACE_MANAGE).mutation(({ ctx, input }) =>
-			controlCall(() => removeNamespaceUseCase(namespaceContext(ctx), input.namespaceId))
-		),
-	}),
-	runs: rpc.router({
-		list: rpc.procedure.input(runListInput).query(({ ctx, input }) => controlCall(() => listRunsUseCase(runsContext(ctx), input))),
-		get: rpc.procedure.input(runId).query(({ ctx, input }) => controlCall(() => getRunUseCase(runsContext(ctx), input.runId))),
-		log: rpc.procedure.input(runId).query(({ ctx, input }) => controlCall(() => getRunLogUseCase(runsContext(ctx), input.runId))),
-		tail: rpc.procedure.input(tailRunInput).query(({ ctx, input }) =>
-			controlCall(() => tailRunLogUseCase(runsContext(ctx), input.runId, input.after ?? 0))
-		),
-		cancel: rpc.procedure.input(runId).mutation(({ ctx, input }) => controlCall(() => cancelRunUseCase(runsContext(ctx), input.runId))),
-	}),
-	deploy: rpc.procedure.input(deployInput).mutation(({ ctx, input }) => controlCall(() => triggerDeployUseCase(runsContext(ctx), input))),
-	register: rpc.procedure.input(registerInput).require(ACTIONS.APP_MANAGE).mutation(({ ctx, input }) =>
-		controlCall(() => registerAppUseCase(registryContext(ctx), input))
-	),
-})
+	})
+
+	function registryContext(ctx: ControlRpcContext): RegistryUseCaseContext {
+		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		return {
+			repositories: deps.repositories,
+			repoSource: deps.repoSource,
+			provider: deps.provider,
+			auth: ctx.auth,
+			signal: ctx.request.signal,
+			...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
+			...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
+		}
+	}
+
+	function namespaceContext(ctx: ControlRpcContext): NamespaceUseCaseContext {
+		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		return {
+			repositories: deps.repositories,
+			provider: deps.provider,
+			auth: ctx.auth,
+			signal: ctx.request.signal,
+			queue: deps.queue,
+			...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
+		}
+	}
+
+	function runsContext(ctx: ControlRpcContext): RunsUseCaseContext {
+		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		return { repositories: deps.repositories, queue: deps.queue, logs: deps.logs, cancel: deps.cancelRun, auth: ctx.auth }
+	}
+
+	function vaultContext(ctx: ControlRpcContext): VaultUseCaseContext {
+		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		return {
+			repositories: deps.repositories,
+			provider: deps.provider,
+			auth: ctx.auth,
+			...(deps.vault === undefined ? {} : { vault: deps.vault }),
+		}
+	}
+}
 
 /** Frozen compatibility helper for older direct callers; the RPC list uses keyed persistence. */
 export function projectSingletonSourceConnectionPage(
@@ -291,7 +335,7 @@ function sourceConnectionContext(ctx: ControlRpcContext) {
 	return { env: ctx.env, source: ctx.sourceConnection, auth: ctx.auth, request: ctx.request }
 }
 
-/** Reuse the REST parser's own refusal as a zod predicate, so the two surfaces cannot drift apart. */
+/** Apply domain value constraints at the RPC input boundary. */
 function refuses(assert: (value: string) => void): (value: string) => boolean {
 	return (value) => {
 		try {
@@ -300,46 +344,6 @@ function refuses(assert: (value: string) => void): (value: string) => boolean {
 		} catch {
 			return false
 		}
-	}
-}
-
-function registryContext(ctx: ControlRpcContext): RegistryUseCaseContext {
-	const deps = buildApiDeps(ctx.env, ctx.provider, ctx.auth)
-	return {
-		repositories: deps.repositories,
-		repoSource: deps.repoSource,
-		provider: deps.provider,
-		auth: ctx.auth,
-		signal: ctx.request.signal,
-		...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
-		...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
-	}
-}
-
-function namespaceContext(ctx: ControlRpcContext): NamespaceUseCaseContext {
-	const deps = buildApiDeps(ctx.env, ctx.provider, ctx.auth)
-	return {
-		repositories: deps.repositories,
-		provider: deps.provider,
-		auth: ctx.auth,
-		signal: ctx.request.signal,
-		queue: deps.queue,
-		...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
-	}
-}
-
-function runsContext(ctx: ControlRpcContext): RunsUseCaseContext {
-	const deps = buildApiDeps(ctx.env, ctx.provider, ctx.auth)
-	return { repositories: deps.repositories, queue: deps.queue, logs: deps.logs, cancel: deps.cancelRun, auth: ctx.auth }
-}
-
-function vaultContext(ctx: ControlRpcContext): VaultUseCaseContext {
-	const deps = buildApiDeps(ctx.env, ctx.provider, ctx.auth)
-	return {
-		repositories: deps.repositories,
-		provider: deps.provider,
-		auth: ctx.auth,
-		...(deps.vault === undefined ? {} : { vault: deps.vault }),
 	}
 }
 

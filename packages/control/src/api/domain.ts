@@ -1,5 +1,3 @@
-import { json } from '../http'
-
 export class ControlApiError extends Error {
 	readonly httpStatus: number
 	readonly type: string
@@ -14,17 +12,6 @@ export class ControlApiError extends Error {
 
 export function fail(httpStatus: number, message: string): never {
 	throw new ControlApiError(httpStatus, message)
-}
-
-export async function jsonAdapter<T>(run: () => Promise<T>, init?: ResponseInit): Promise<Response> {
-	try {
-		return json(await run(), init)
-	} catch (cause) {
-		if (cause instanceof ControlApiError) {
-			return json({ error: cause.message }, { status: cause.httpStatus })
-		}
-		throw cause
-	}
 }
 
 function errorType(status: number): string {

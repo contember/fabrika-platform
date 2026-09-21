@@ -32,7 +32,7 @@ function canonicalPath(url: string): string {
 	return `/${new URL(url).pathname.split('/').filter((segment) => segment !== '').join('/')}`
 }
 
-/** Every authenticated `/api/*` route; `/api/health` is public and `/api` itself is the SPA. */
+/** Guard the authenticated API namespace; `/api/health` remains public. */
 function guarded(path: string): boolean {
 	return path.startsWith('/api/') && path !== '/api/health'
 }
@@ -74,7 +74,7 @@ function originOf(value: string | null): string | null {
 	}
 }
 
-/** The RPC surface's structural error shape, the REST surface's flat one — mirrors `iam.ts`. */
+/** RPC uses structural errors; protocol and unmatched paths use flat HTTP errors, as in `iam.ts`. */
 function refusal(path: string): Response {
 	return path === '/api/rpc'
 		? Response.json({ error: { type: 'forbidden', message: CROSS_ORIGIN } }, { status: 403 })

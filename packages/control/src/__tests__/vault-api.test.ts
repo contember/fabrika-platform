@@ -1,13 +1,13 @@
 import type { AuthContext } from '@fabrika/auth'
 import { type ControlProvider, type ProviderEnvelope, ProviderSecretError } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import type { ApiDeps } from '../api/router'
-import { handleApi } from '../api/router'
 import { FakeRepoSource } from '../repo-source'
 import type { ControlJobMessage } from '../run-lifecycle'
+import type { ControlRpcDeps } from '../services'
 import { parseVaultRef, Vault } from '../vault'
 import { createHarness } from './helpers/harness'
 import { authWithActions } from './helpers/iam'
+import { rpcRequest, rpcResult } from './helpers/rpc'
 
 // The vault MANAGEMENT API (M4): write-only set/rotate/delete of secret VALUES, gated by `secret.manage`
 // and audited. These assert: the value is stored in the vault + the ref written back to the row; the
@@ -43,11 +43,11 @@ const storedEnvironment = (provider = 'memory') => ({
 })
 
 /** Router deps over a real sqlite D1, a recording queue, and a vault factory bound to the SAME db. */
-function makeDeps(auth: AuthContext): { deps: ApiDeps; vault: Promise<Vault>; queue: ControlJobMessage[] } {
+function makeDeps(auth: AuthContext): { deps: ControlRpcDeps; vault: Promise<Vault>; queue: ControlJobMessage[] } {
 	const { db, d1 } = createHarness()
 	const queue: ControlJobMessage[] = []
 	const vault = Vault.create(d1, testKey())
-	const deps: ApiDeps = {
+	const deps: ControlRpcDeps = {
 		repositories: db,
 		auth,
 		queue: {
@@ -65,13 +65,6 @@ function makeDeps(auth: AuthContext): { deps: ApiDeps; vault: Promise<Vault>; qu
 	return { deps, vault, queue }
 }
 
-function req(method: string, path: string, body?: unknown): Request {
-	return new Request(`https://vozka.example${path}`, {
-		method,
-		...(body !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
-	})
-}
-
 /** A caller granted exactly `secret.manage` + `app.manage` globally (covers the app-secret values). */
 function secretManager(): AuthContext {
 	return authWithActions(['secret.manage', 'app.manage'], 'sm@vozka.test')
@@ -83,16 +76,16 @@ function noSecretManager(): AuthContext {
 }
 
 describe('app secret value endpoints (secret.manage, app-scoped)', () => {
-	async function seedApp(deps: ApiDeps): Promise<void> {
+	async function seedApp(deps: ControlRpcDeps): Promise<void> {
 		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
 		await deps.repositories.registry.upsertAppEnv(storedEnvironment())
 	}
 
-	test('PUT .../secrets/:name/value stores in the vault + upserts the ref; value not returned', async () => {
+	test('vault.set stores in the vault + upserts the ref; value not returned', async () => {
 		const { deps, vault } = makeDeps(secretManager())
 		await seedApp(deps)
 
-		const response = await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { value: 'the-real-key', env: 'prod' }), deps)
+		const response = await rpcResult(rpcRequest('vault.set', { appId: 'app', name: 'API_KEY', value: 'the-real-key', env: 'prod' }), deps)
 		expect(response.status).toBe(200)
 		expect(await response.text()).not.toContain('the-real-key')
 
@@ -103,24 +96,24 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		expect(await (await vault).getSecret(prod!.value_ref)).toBe('the-real-key')
 	})
 
-	test('all-env layer (no env) and PATCH rotate', async () => {
+	test('all-env layer (no env) and vault.rotate', async () => {
 		const { deps, vault } = makeDeps(secretManager())
 		await seedApp(deps)
-		await handleApi(req('PUT', '/api/apps/app/secrets/SHARED/value', { value: 'shared-v1' }), deps)
+		await rpcResult(rpcRequest('vault.set', { appId: 'app', name: 'SHARED', value: 'shared-v1' }), deps)
 		const allEnv = (await deps.repositories.registry.listAppSecrets('app')).find((s) => s.name === 'SHARED' && s.env === null)
 		expect(allEnv).toBeDefined()
 
-		const rotate = await handleApi(req('PATCH', '/api/apps/app/secrets/SHARED/value', { value: 'shared-v2' }), deps)
+		const rotate = await rpcResult(rpcRequest('vault.rotate', { appId: 'app', name: 'SHARED', value: 'shared-v2' }), deps)
 		expect(rotate.status).toBe(200)
 		expect(await (await vault).getSecret(allEnv!.value_ref)).toBe('shared-v2')
 	})
 
-	test('DELETE drops the vault entry', async () => {
+	test('vault.delete drops the vault entry', async () => {
 		const { deps, vault } = makeDeps(secretManager())
 		await seedApp(deps)
-		await handleApi(req('PUT', '/api/apps/app/secrets/GONE/value', { value: 'bye' }), deps)
+		await rpcResult(rpcRequest('vault.set', { appId: 'app', name: 'GONE', value: 'bye' }), deps)
 		const ref = (await deps.repositories.registry.listAppSecrets('app')).find((s) => s.name === 'GONE')!.value_ref
-		const del = await handleApi(req('DELETE', '/api/apps/app/secrets/GONE/value'), deps)
+		const del = await rpcResult(rpcRequest('vault.delete', { appId: 'app', name: 'GONE' }), deps)
 		expect(del.status).toBe(200)
 		await expect((await vault).getSecret(ref)).rejects.toThrow()
 	})
@@ -128,14 +121,14 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 	test('a caller denied secret.manage gets 403 (app secret value)', async () => {
 		const { deps } = makeDeps(noSecretManager())
 		await seedApp(deps)
-		const response = await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { value: 'x' }), deps)
+		const response = await rpcResult(rpcRequest('vault.set', { appId: 'app', name: 'API_KEY', value: 'x' }), deps)
 		expect(response.status).toBe(403)
 	})
 
 	test('missing value → 400', async () => {
 		const { deps } = makeDeps(secretManager())
 		await seedApp(deps)
-		const response = await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { env: 'prod' }), deps)
+		const response = await rpcResult(rpcRequest('vault.set', { appId: 'app', name: 'API_KEY', env: 'prod' }), deps)
 		expect(response.status).toBe(400)
 	})
 
@@ -156,7 +149,7 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 				},
 			},
 		}
-		const deps: ApiDeps = {
+		const deps: ControlRpcDeps = {
 			repositories: db,
 			auth: secretManager(),
 			queue: { send: () => Promise.resolve() },
@@ -179,12 +172,12 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 			namespaceId: 'apps-prod',
 		})
 
-		expect((await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { value: 'v1', env: 'prod' }), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('vault.set', { appId: 'app', name: 'API_KEY', value: 'v1', env: 'prod' }), deps)).status).toBe(200)
 		const stored = (await db.registry.listAppSecrets('app')).find((secret) => secret.name === 'API_KEY')
 		expect(stored?.value_ref).toBe('harbor:prod/API_KEY')
 		expect(parseVaultRef(stored?.value_ref ?? '')).toBeNull()
-		expect((await handleApi(req('PATCH', '/api/apps/app/secrets/API_KEY/value', { value: 'v2', env: 'prod' }), deps)).status).toBe(200)
-		expect((await handleApi(req('DELETE', '/api/apps/app/secrets/API_KEY/value?env=prod'), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('vault.rotate', { appId: 'app', name: 'API_KEY', value: 'v2', env: 'prod' }), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('vault.delete', { appId: 'app', name: 'API_KEY', env: 'prod' }), deps)).status).toBe(200)
 		expect(calls).toEqual([
 			'put:apps-prod:prod:API_KEY:v1',
 			'put:apps-prod:prod:API_KEY:v2',
@@ -207,7 +200,7 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		await deps.repositories.registry.upsertAppEnv({
 			...storedEnvironment('harbor'),
 		})
-		const response = await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { value: 'v1' }), deps)
+		const response = await rpcResult(rpcRequest('vault.set', { appId: 'app', name: 'API_KEY', value: 'v1' }), deps)
 		expect(response.status).toBe(400)
 	})
 
@@ -227,7 +220,7 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
 		await deps.repositories.registry.upsertAppEnv({ ...storedEnvironment('harbor') })
 		const value = 'sk-live-leak${proxy_FABRIKA_IAM_KEY}'
-		const set = await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { value, env: 'prod' }), deps)
+		const set = await rpcResult(rpcRequest('vault.set', { appId: 'app', name: 'API_KEY', value, env: 'prod' }), deps)
 		expect(set.status).toBe(422)
 		const setBody = await set.text()
 		expect(setBody).toContain('proxy')
@@ -235,7 +228,7 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 		expect((await deps.repositories.registry.listAppSecrets('app')).find((secret) => secret.name === 'API_KEY')).toBeUndefined()
 
 		await deps.repositories.registry.upsertAppSecret({ appId: 'app', env: 'prod', name: 'API_KEY', valueRef: 'harbor:prod/API_KEY' })
-		const rotate = await handleApi(req('PATCH', '/api/apps/app/secrets/API_KEY/value', { value, env: 'prod' }), deps)
+		const rotate = await rpcResult(rpcRequest('vault.rotate', { appId: 'app', name: 'API_KEY', value, env: 'prod' }), deps)
 		expect(rotate.status).toBe(422)
 		expect(await rotate.text()).not.toContain('sk-live-leak')
 	})
@@ -244,7 +237,7 @@ describe('app secret value endpoints (secret.manage, app-scoped)', () => {
 describe('vault not configured', () => {
 	test('vault routes 500 cleanly when no vault factory is wired', async () => {
 		const { db } = createHarness()
-		const deps: ApiDeps = {
+		const deps: ControlRpcDeps = {
 			repositories: db,
 			auth: secretManager(),
 			queue: { send: () => Promise.resolve() },
@@ -255,13 +248,13 @@ describe('vault not configured', () => {
 			// no `vault` factory
 		}
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
-		const response = await handleApi(req('PUT', '/api/apps/app/secrets/API_KEY/value', { value: 'x' }), deps)
+		const response = await rpcResult(rpcRequest('vault.set', { appId: 'app', name: 'API_KEY', value: 'x' }), deps)
 		expect(response.status).toBe(500)
 	})
 })
 
 describe('a vault ref is owned by the app secret that created it', () => {
-	async function seedTwoApps(deps: ApiDeps): Promise<void> {
+	async function seedTwoApps(deps: ControlRpcDeps): Promise<void> {
 		for (const id of ['a', 'b']) {
 			await deps.repositories.registry.createApp({ id, repoUrl: `github.com/acme/${id}` })
 			await deps.repositories.registry.upsertAppEnv({ ...storedEnvironment(), appId: id })
@@ -271,10 +264,10 @@ describe('a vault ref is owned by the app secret that created it', () => {
 	test('app A cannot point a secret at app B’s vault ref', async () => {
 		const { deps } = makeDeps(secretManager())
 		await seedTwoApps(deps)
-		await handleApi(req('PUT', '/api/apps/b/secrets/API_KEY/value', { value: 'b-secret', env: 'prod' }), deps)
+		await rpcResult(rpcRequest('vault.set', { appId: 'b', name: 'API_KEY', value: 'b-secret', env: 'prod' }), deps)
 		const victim = (await deps.repositories.registry.listAppSecrets('b'))[0]!.value_ref
 
-		const refused = await handleApi(req('PUT', '/api/apps/a/secrets', { name: 'STOLEN', valueRef: victim }), deps)
+		const refused = await rpcResult(rpcRequest('apps.secrets.put', { appId: 'a', secret: { name: 'STOLEN', valueRef: victim } }), deps)
 
 		expect(refused.status).toBe(400)
 		expect(await deps.repositories.registry.listAppSecrets('a')).toEqual([])
@@ -287,29 +280,29 @@ describe('a vault ref is owned by the app secret that created it', () => {
 		const platformRef = await (await vault).putSecret('platform', 'github-app:recovery', 'platform-secret')
 		await deps.repositories.registry.upsertAppSecret({ appId: 'a', env: 'prod', name: 'API_KEY', valueRef: platformRef })
 
-		const rotate = await handleApi(req('PATCH', '/api/apps/a/secrets/API_KEY/value', { value: 'attacker', env: 'prod' }), deps)
+		const rotate = await rpcResult(rpcRequest('vault.rotate', { appId: 'a', name: 'API_KEY', value: 'attacker', env: 'prod' }), deps)
 		expect(rotate.status).toBe(403)
-		const removed = await handleApi(req('DELETE', '/api/apps/a/secrets/API_KEY/value?env=prod'), deps)
+		const removed = await rpcResult(rpcRequest('vault.delete', { appId: 'a', name: 'API_KEY', env: 'prod' }), deps)
 		expect(removed.status).toBe(403)
-		const overwritten = await handleApi(req('PUT', '/api/apps/a/secrets/API_KEY/value', { value: 'attacker', env: 'prod' }), deps)
+		const overwritten = await rpcResult(rpcRequest('vault.set', { appId: 'a', name: 'API_KEY', value: 'attacker', env: 'prod' }), deps)
 		expect(overwritten.status).toBe(403)
 
 		// Neither the refusal text nor the row gives anything away.
 		expect(await (await vault).getSecret(platformRef)).toBe('platform-secret')
 		expect((await deps.repositories.registry.listAppSecrets('a'))[0]?.value_ref).toBe(platformRef)
-		const body = (await overwritten.json()) as { error: string }
-		expect(body.error).not.toContain('platform')
-		expect(body.error).not.toContain('github-app')
+		const body = await overwritten.text()
+		expect(body).not.toContain('platform')
+		expect(body).not.toContain('github-app')
 	})
 
 	test('a reserved name is refused on set and rotate, whichever target holds the value', async () => {
 		const { deps } = makeDeps(secretManager())
 		await seedTwoApps(deps)
-		for (const path of ['/api/apps/a/secrets/FABRIKA_IAM_ISSUER/value']) {
-			const set = await handleApi(req('PUT', path, { value: 'https://iam.attacker.example', env: 'prod' }), deps)
+		for (const name of ['FABRIKA_IAM_ISSUER']) {
+			const set = await rpcResult(rpcRequest('vault.set', { appId: 'a', name, value: 'https://iam.attacker.example', env: 'prod' }), deps)
 			expect(set.status).toBe(400)
-			expect(((await set.json()) as { error: string }).error).toContain('managed by Fabrika')
-			expect((await handleApi(req('PATCH', path, { value: 'x', env: 'prod' }), deps)).status).toBe(400)
+			expect(await set.text()).toContain('managed by Fabrika')
+			expect((await rpcResult(rpcRequest('vault.rotate', { appId: 'a', name, value: 'x', env: 'prod' }), deps)).status).toBe(400)
 		}
 		expect(await deps.repositories.registry.listAppSecrets('a')).toEqual([])
 	})
@@ -317,7 +310,7 @@ describe('a vault ref is owned by the app secret that created it', () => {
 	test('a vault that cannot answer is a 500, not a refusal — an outage must not read as “not yours”', async () => {
 		const { deps } = makeDeps(secretManager())
 		await seedTwoApps(deps)
-		await handleApi(req('PUT', '/api/apps/a/secrets/API_KEY/value', { value: 'v1', env: 'prod' }), deps)
+		await rpcResult(rpcRequest('vault.set', { appId: 'a', name: 'API_KEY', value: 'v1', env: 'prod' }), deps)
 		// A real vault over a database that is down — the honest shape of "the vault cannot answer".
 		const broken = await Vault.create({
 			prepare: () => {
@@ -326,7 +319,7 @@ describe('a vault ref is owned by the app secret that created it', () => {
 		}, testKey())
 		deps.vault = () => Promise.resolve(broken)
 
-		const rotate = await handleApi(req('PATCH', '/api/apps/a/secrets/API_KEY/value', { value: 'v2', env: 'prod' }), deps)
+		const rotate = await rpcResult(rpcRequest('vault.rotate', { appId: 'a', name: 'API_KEY', value: 'v2', env: 'prod' }), deps)
 
 		expect(rotate.status).toBe(500)
 		expect(await rotate.text()).not.toContain('does not belong')
@@ -335,10 +328,10 @@ describe('a vault ref is owned by the app secret that created it', () => {
 	test('the app’s own ref still rotates and deletes', async () => {
 		const { deps, vault } = makeDeps(secretManager())
 		await seedTwoApps(deps)
-		await handleApi(req('PUT', '/api/apps/a/secrets/API_KEY/value', { value: 'v1', env: 'prod' }), deps)
-		expect((await handleApi(req('PATCH', '/api/apps/a/secrets/API_KEY/value', { value: 'v2', env: 'prod' }), deps)).status).toBe(200)
+		await rpcResult(rpcRequest('vault.set', { appId: 'a', name: 'API_KEY', value: 'v1', env: 'prod' }), deps)
+		expect((await rpcResult(rpcRequest('vault.rotate', { appId: 'a', name: 'API_KEY', value: 'v2', env: 'prod' }), deps)).status).toBe(200)
 		const ref = (await deps.repositories.registry.listAppSecrets('a'))[0]!.value_ref
 		expect(await (await vault).getSecret(ref)).toBe('v2')
-		expect((await handleApi(req('DELETE', '/api/apps/a/secrets/API_KEY/value?env=prod'), deps)).status).toBe(200)
+		expect((await rpcResult(rpcRequest('vault.delete', { appId: 'a', name: 'API_KEY', env: 'prod' }), deps)).status).toBe(200)
 	})
 })

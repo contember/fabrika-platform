@@ -21,7 +21,7 @@ import {
 	type PrincipalIdentity,
 	type Scope,
 } from '@fabrika/auth'
-import { type ACTIONS, SCOPES, VOZKA_APP_ID } from './actions'
+import { SCOPES, VOZKA_APP_ID } from './actions'
 import { error } from './http'
 
 /** The bindings + vars the IAM factory needs (a subset of the Worker `Env`). */
@@ -178,26 +178,4 @@ export function appScope(appId: string): Scope {
 }
 export function envScope(env: string): Scope {
 	return { type: SCOPES.ENVIRONMENT, value: env }
-}
-
-/** The authenticated caller, surfaced to handlers so mutations can `auth.audit(...)`. */
-export interface Authorized {
-	ok: true
-	/** The authenticated caller's AuthContext — for `can`-gated handlers to `audit` + stamp rows. */
-	auth: AuthContext
-}
-
-/**
- * Check `action` within an optional `scope` against the context resolved by application middleware.
- * The router returns the 403 response verbatim; successful mutations receive the same context for audit.
- */
-export function authorize(
-	auth: AuthContext,
-	action: (typeof ACTIONS)[keyof typeof ACTIONS],
-	scope?: Scope,
-): Authorized | { ok: false; response: Response } {
-	if (!auth.can(action, scope)) {
-		return { ok: false, response: error(403, `not authorized: ${action}`) }
-	}
-	return { ok: true, auth }
 }
