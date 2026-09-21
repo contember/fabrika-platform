@@ -84,6 +84,8 @@
 
 ## Decisions
 
+- [ADR-0042](../decisions/0042-connect-local-builders-through-human-consent.md) records local execution, human consent, credential custody and Control receipt ownership.
+
 - The user approved browser pairing and human console confirmation of application creation/selection.
 - The user approved orchestration, independent review, local integration checks and atomic commits on the current branch.
 - Builder credentials use a separate service principal scoped to one app, with existing `app.manage`, `deploy.trigger` and `deploy.read` actions. `app.manage` also permits deletion and management of all app environments; consent must say so.
@@ -100,3 +102,128 @@ WU0 first; local admission is an independent prerequisite within that wave. Then
 - 2026-09-21: `bun run release:validate --tag=v0.2.0` passed for 28 public packages. Bare validation requires an explicit tag when HEAD is untagged.
 - 2026-09-21: Baseline builder test command timed out waiting for a CPU lease; no test result was produced. Retry under a lease during verification.
 - 2026-09-21: User approved the implementation gate. Protocol and console bootstrap specification review started; daemon admission implementation has a separate three-file territory.
+- 2026-09-21: Independent protocol review accepted the design with conditions incorporated below: public fragment-capture bootstrap, creator-bound Control receipt, fresh IAM permission resolution, atomic issuance and issuer-visible recovery.
+
+## Frozen technical seams
+
+### Installation discovery and browser bootstrap
+
+Control exposes exactly `GET /.well-known/fabrika-builder` publicly, returning `{version:1,controlOrigin,iamIssuer,provider}` from configured origins and the composed provider. No credential or request-header-derived origin is returned. The local client accepts HTTPS, or HTTP on loopback/`.localhost` development origins, validates the response, and pins the installation for the attempt. Credential-bearing fetches refuse redirects.
+
+Exactly `/builder/connect` is a public, self-contained bootstrap page. It captures `#attempt=<id>&approval=<verifier>&expires=<unix-seconds>` into tab-local sessionStorage, immediately strips the fragment, then navigates to a protected console route `/builder/authorize`. It loads no external script or analytics before capture. Storage failure, expiry, malformed or missing parameters fail closed. The protected page resumes from sessionStorage; it never copies the proof into a login redirect query. Proof state is cleared after approval, denial or expiry. Existing proxy login and same-origin administrative admission remain authoritative.
+
+### IAM device authorization
+
+Public POST endpoints: `/auth/device/start`, `/auth/device/poll`, `/auth/device/exchange`, `/auth/device/cancel`. Require bounded JSON, no-store responses and no cookie-derived authority. Start admits only configured console audiences, with a bounded action list. Control additionally requires exactly `app.manage`, `deploy.trigger`, `deploy.read`, audience `vozka`, and an application scope. The builder requests 30 days; IAM caps at 30 days and fixes attempt TTL at 600 seconds. Local code generates separate 32-byte approval/redemption verifiers; start sends only S256 challenges. Attempt IDs are UUIDv7.
+
+Shared types in auth-core:
+
+```ts
+interface StartDeviceAuthorizationInput {
+	app: string
+	label: string
+	permissions: string[]
+	keyLifetimeSeconds: number
+	redemptionChallenge: string
+	approvalChallenge: string
+}
+interface DeviceAuthorizationStarted {
+	attemptId: string
+	expiresAt: number
+	pollIntervalSeconds: 3
+}
+interface DeviceAuthorizationProof {
+	attemptId: string
+	redemptionVerifier: string
+}
+interface DeviceAuthorizationConsent {
+	consentId: string
+	app: string
+	label: string
+	permissions: string[]
+	scope: Scope
+	keyExpiresAt: number
+}
+interface DeviceAuthorizationReceipt {
+	attemptId: string
+	consent: DeviceAuthorizationConsent
+	credentialId: string
+	principalId: string
+	issuedAt: number
+	revokedAt: number | null
+}
+type DeviceAuthorizationStatus =
+	| { status: 'pending'; expiresAt: number }
+	| { status: 'approved'; consent: DeviceAuthorizationConsent }
+	| { status: 'issued'; receipt: DeviceAuthorizationReceipt }
+	| { status: 'denied' | 'cancelled' | 'expired' | 'authority_lost' }
+interface ExchangeDeviceAuthorizationInput extends DeviceAuthorizationProof {
+	consentId: string
+}
+type ExchangeDeviceAuthorizationResult =
+	| { ok: true; token: string; receipt: DeviceAuthorizationReceipt }
+	| { ok: false; reason: 'already_issued'; receipt: DeviceAuthorizationReceipt }
+	| {
+		ok: false
+		reason:
+			| 'invalid_attempt'
+			| 'pending'
+			| 'denied'
+			| 'cancelled'
+			| 'expired'
+			| 'authority_lost'
+			| 'consent_mismatch'
+	}
+interface DeviceAuthorizationCaller {
+	app: string
+	credential: string
+	requestId: string
+}
+interface InspectDeviceAuthorizationInput extends DeviceAuthorizationCaller {
+	attemptId: string
+	approvalVerifier: string
+}
+interface DeviceAuthorizationRequest {
+	attemptId: string
+	app: string
+	label: string
+	permissions: string[]
+	keyLifetimeSeconds: number
+	expiresAt: number
+}
+interface ApproveDeviceAuthorizationInput
+	extends InspectDeviceAuthorizationInput
+{
+	scope: Scope
+}
+interface ListOwnDeviceAuthorizationsInput extends DeviceAuthorizationCaller {
+	before?: string
+	limit?: number
+}
+```
+
+IamRpc adds `inspectDeviceAuthorization`, `approveDeviceAuthorization`, `denyDeviceAuthorization`, `listOwnDeviceAuthorizations`. Both runtime transports and the SDK HTTP client implement them together. Results follow existing `{ok:true,...}` / `{ok:false,reason}` conventions; request/consent/page fields are named `request`, `consent`, and `{items,nextCursor}` respectively. Private management methods require a verified active human of the requested console audience. Resolve LIVE audience permissions; neither `resolveCaller`'s JWT snapshot nor Control's bootstrap override satisfies this contract. Original-issuer listing/revocation does not require retained application grants.
+
+Approval is immutable and idempotent only for the same approver/scope/authorization. Polling never issues a key. Exchange takes the exact consentId observed by the daemon and resolves the active approver and current permissions again. One repository capability owns an atomic batch: conditional approval claim, guarded service-principal insert, grant insert, hash-only credential insert, audit insert and issued-receipt finalization. Every write uses the same fresh claim ID; final UPDATE RETURNING establishes the winner. No read-modify-write or separate finalization. Live authority is freshly resolved, not globally serialized against concurrent grant edits.
+
+Wrong proof is indistinguishable from unknown attempt and changes no state. Enforce a 3-second polling window via a proof-validated conditional update. Reuse the existing atomic password rate-limit repository primitive with a separate device-start purpose and the composition-root trusted client coordinate; never infer forwarding headers. Bound requests without a trusted coordinate with an installation-wide start bucket.
+
+Issued-state recovery precedes attempt expiry checks. A lost exchange response yields only the receipt, never another key. List receipts issued by the authenticated human with revocation status; reuse revokeKey with the original human as issued_by. Retain issued receipts until key expiry plus one day; expired unissued attempts need no long retention. Both migration histories, SQLite concurrency/rollback tests and real Postgres tests are required.
+
+### Control receipt and approval binding
+
+`BuilderConnectionEnvironmentDto` has explicit `{env,namespaceId,domain,publicOrigin,triggerRef}` fields; all but env are nullable. `BuilderConnectionReceiptDto` has `{version:1,attemptId,provider,app:AppDto,environment,createdAt}`. Store creator principal ID internally, not browser-supplied. A unique insert owns immutability; identical creator/selection retries return the original, different reuse returns 409. Cascade receipts on app deletion. A receipt is neither authorization nor a resource reservation.
+
+`builderConnections.createReceipt` is human-only, takes `{attemptId,approvalVerifier,appId,environment}`, verifies the approval proof via IAM inspect, validates the exact builder audience/actions and current app permissions, reads the app snapshot server-side, and persists creator identity. New placement uses the human's existing namespace.manage; existing placement must match the live row. No provider mutation or environment creation occurs. `getReceipt({attemptId})` resolves the stored app before app-scoped app.manage authorization and returns 404 for inaccessible records.
+
+Control `builderPairing.inspect/approve/deny/listOwn/revoke` use the existing protected RPC. Approve takes `{attemptId,approvalVerifier}` ONLY: load the receipt, require its creator to equal the verified human, derive app scope from the stored receipt, and call IAM. Never trust a browser-supplied app on this step. Revoke forwards the human credential to existing revokeKey and remains available after application permission removal.
+
+The console creates the bare app with existing apps.create before the receipt; source repo must already exist. Persist receipt BEFORE approving IAM. Partial failure leaves an explicit recoverable app/receipt, not an automatic deletion or implicit rebind. After redemption the daemon fetches the receipt at the original Control origin with its app-scoped key. A mismatched IAM scope/receipt is a failure.
+
+### Local API and deployment
+
+Builder shared DTOs live under `packages/builder/shared/`, included in the published package. Endpoints are `POST /api/project/:id/register`, `GET /api/project/:id/platform`, and POST suffixes `/connect`, `/disconnect`, `/deploy`, `/preview`. CLI and UI import these shared contracts, never daemon implementation. Registration works independently of canvas revisions. Config retains old profile/sessionId/createdAt and adds only a non-secret connection and optional preview URL.
+
+Credential storage is separate from sessions/artifacts and outside every registered project root, with private directory/file modes and symlink refusal. Pin credential origin independently of mutable project JSON. Config edits cannot redirect a retained key. Disconnect removes local custody and clearly directs the user to console revocation; it must not claim deletion revoked the server credential.
+
+Compilation runs a short-lived Bun process using the existing Zerops compiler, with an explicit environment allowlist excluding platform credentials, and writes its result outside the project. Validate Git root, tracked descriptor/config, clean source and remotely available full HEAD before remote writes; recheck after compilation. Never commit or push. First environment uses receipt placement; updates read the current environment and preserve all placement/trigger fields explicitly. Refuse unexpected app repository/provider identity changes. Serialize local app/environment operations, trigger exact SHA and compare the completed run's commitSha. Preserve run ID across restart. A successful run exposes configured app URL without claiming URL reachability was separately tested.

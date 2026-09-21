@@ -1,5 +1,7 @@
 # decisions (ADR)
 
+[ADR-0042](0042-connect-local-builders-through-human-consent.md) connects local builders through browser consent, app-scoped machine credentials and Control-owned deployment selection, while keeping coding agents local.
+
 One file per significant architectural/product decision: `NNNN-<slug>.md`
 (monotonic, never reused). Copy [`_template.md`](_template.md).
 
