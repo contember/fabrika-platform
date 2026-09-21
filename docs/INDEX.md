@@ -26,7 +26,9 @@ handoff amendment.
 
 ## Active sprints
 
-None. [Simplify existing boundaries](archive/sprint-2026-09-21-simplify-existing-boundaries.md) shipped on 2026-09-21: shared Operations input definitions, one bound-source provider contract, and decomposition of sixteen large source files.
+[Remove duplicate administrative REST](sprints/sprint-2026-09-21-remove-duplicate-rest.md) — RPC-only administration for Control and Operations, following [ADR-0041](decisions/0041-one-administrative-transport-for-control-and-operations.md).
+
+[Simplify existing boundaries](archive/sprint-2026-09-21-simplify-existing-boundaries.md) shipped on 2026-09-21: shared Operations input definitions, one bound-source provider contract, and decomposition of sixteen large source files.
 
 The [bring-up without surprises](archive/sprint-2026-08-21-bring-up-without-surprises.md)
 shipped on 2026-08-21: `platform install --create-project`, `platform upgrade --to=<tag>` with the

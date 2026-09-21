@@ -19,4 +19,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- None. [Simplify existing boundaries](../archive/sprint-2026-09-21-simplify-existing-boundaries.md) shipped on 2026-09-21.
+- [Remove duplicate administrative REST](sprint-2026-09-21-remove-duplicate-rest.md) — RPC-only administration for Control and Operations.
