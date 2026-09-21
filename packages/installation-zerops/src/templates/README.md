@@ -9,14 +9,11 @@ operators install from.
 ## This pipeline UPDATES an installation. It does not create one.
 
 Running it against a project that has no `iam`, `operations`, `source`, `proxy` and `control` service fails and
-changes nothing. The first bring-up is still a hand sequence, in this order:
-
-1. import the Zerops topology **without code** — `fabrika platform plan --provider=zerops` lists and
-   validates the generated `*.provision.zerops-import.yaml` documents; the operator applies the one for
-   their tier,
-2. write every secret each service holds — signing keys, the IAM RPC/proxy/provisioning keys, the
-   vault key, database and object-storage coordinates,
-3. deploy once, so the proxy has HTTP ports and therefore a public address.
+changes nothing. The first bring-up is `fabrika platform install --provider=zerops`, run once from the
+operator's machine: it imports the Zerops topology without code, generates and writes every secret each
+service holds, and deploys, so the proxy has HTTP ports and therefore a public address.
+`fabrika platform admin --provider=zerops` then admits the first administrator. The whole procedure is
+in [installing-on-zerops.md](https://github.com/contember/fabrika-platform/blob/main/docs/reference/installing-on-zerops.md).
 
 From then on, this pipeline owns the installation.
 
@@ -105,7 +102,8 @@ repository has to be closed off later.
 
 ## Roll forward, or redeploy
 
-- Bump [`fabrika.ref`](./fabrika.ref) to a newer published tag and push. That is the version bump.
+- Run `fabrika platform upgrade --provider=zerops --to=<tag> {{INSTALLATION}}`, or bump
+  [`fabrika.ref`](./fabrika.ref) to a newer published tag and push. That is the version bump.
 - Or run _Actions → platform → Run workflow_ for a redeploy at the same tag.
 - Tick **dry_run** on that manual run to read the installation and report what would change without
   writing or deploying anything. It is the safe first run after editing the Environment.
