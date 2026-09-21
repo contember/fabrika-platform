@@ -2,6 +2,8 @@
 
 Operations accepts Sentry envelopes, groups events into issues, correlates releases and source maps, drives issue triage, and delivers source-scoped alerts. The public ingest protocol and the authenticated operator API are separate surfaces.
 
+Operator administration uses `OperationsRpcContract` at private `/api/rpc`, reached by the console through `/operations/api/rpc`. There is no parallel operator REST API; see [core application composition](core-application-composition.md#administrative-rpc-and-protocol-http-surfaces).
+
 ## Ingest and grouping
 
 The direct ingest endpoint accepts the Sentry envelope protocol with query or header authentication. It binds the numeric project path to a managed source, limits envelope and event sizes, applies a per-source rate limit, and queues at most 32 events from one request.

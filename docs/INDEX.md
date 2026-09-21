@@ -26,7 +26,7 @@ handoff amendment.
 
 ## Active sprints
 
-[Remove duplicate administrative REST](sprints/sprint-2026-09-21-remove-duplicate-rest.md) — RPC-only administration for Control and Operations, following [ADR-0041](decisions/0041-one-administrative-transport-for-control-and-operations.md).
+None. [Remove duplicate administrative REST](archive/sprint-2026-09-21-remove-duplicate-rest.md) shipped on 2026-09-21: RPC-only administration for Control and Operations, following [ADR-0041](decisions/0041-one-administrative-transport-for-control-and-operations.md).
 
 [Simplify existing boundaries](archive/sprint-2026-09-21-simplify-existing-boundaries.md) shipped on 2026-09-21: shared Operations input definitions, one bound-source provider contract, and decomposition of sixteen large source files.
 

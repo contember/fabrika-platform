@@ -17,7 +17,7 @@ behaviour.
   pipeline, typed RPC, and authorization boundary.
 - [`core-application-composition.md`](core-application-composition.md) — how IAM,
   Delivery, and Operations share that runtime, RPC, auth, migrations, and
-  compatibility boundaries.
+  protocol boundaries.
 - [`human-authentication.md`](human-authentication.md) — independently configured
   OIDC/password login, enrollment, reset, sessions, and bootstrap behavior.
 - [`cross-host-sso.md`](cross-host-sso.md) — the session handoff: how a browser

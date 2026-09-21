@@ -46,7 +46,7 @@ The provider mutation does not run inside the request. `create`, `adopt`, and
 `reconcile` persist the row, enqueue a namespace job on the control queue, audit,
 and answer `pending`; a worker then claims `pending` to `provisioning`, runs the
 provider mutation with its own signal, and records `ready` or `failed`. A caller
-polls `GET /api/namespaces/:id` and may disconnect without affecting the outcome.
+polls the `namespaces.get` RPC procedure and may disconnect without affecting the outcome.
 A namespace left `provisioning` by a crashed worker is resumed from its
 checkpoints, and a job for a namespace that already settled is a no-op.
 `reconcile` on a namespace that is still settling only enqueues: it never rewrites
@@ -221,7 +221,7 @@ published, and a host listing is not worth failing a working placement over.
 
 Because the proxy routes by HOST, an application environment whose manifest
 carries a `target.proxy` must have a domain. Registration and
-`PUT /api/apps/:app/envs/:env` refuse one that does not, naming `--domain`, from
+`apps.environments.put` refuse one that does not, naming `--domain`, from
 the provider's synchronous claims hook — before any provider mutation, so nothing
 is created. Previously such a registration succeeded and its first deploy failed
 at proxy composition.
@@ -233,17 +233,17 @@ as the source identity rather than a publicly verified immutable revision.
 
 ## Operator interfaces
 
-All namespace HTTP routes require the global `namespace.manage` action:
+All namespace RPC procedures at `/api/rpc` require the global `namespace.manage` action:
 
-| Method and path                      | Operation                                          |
-| ------------------------------------ | -------------------------------------------------- |
-| `GET /api/namespaces`                | List namespaces and provider-owned preset metadata |
-| `POST /api/namespaces/plan`          | Produce a mutation-free provider plan              |
-| `POST /api/namespaces`               | Persist claims and queue provisioning              |
-| `GET /api/namespaces/:id`            | Read state, presentation, and served hosts         |
-| `POST /api/namespaces/:id/adopt`     | Adopt and reconcile an existing placement          |
-| `POST /api/namespaces/:id/reconcile` | Queue a reconcile of stored provider state         |
-| `DELETE /api/namespaces/:id`         | Remove an unused placement and free its id         |
+| RPC procedure          | Operation                                          |
+| ---------------------- | -------------------------------------------------- |
+| `namespaces.list`      | List namespaces and provider-owned preset metadata |
+| `namespaces.plan`      | Produce a mutation-free provider plan              |
+| `namespaces.create`    | Persist claims and queue provisioning              |
+| `namespaces.get`       | Read state, presentation, and served hosts         |
+| `namespaces.adopt`     | Adopt and reconcile an existing placement          |
+| `namespaces.reconcile` | Queue a reconcile of stored provider state         |
+| `namespaces.remove`    | Remove an unused placement and free its id         |
 
 Removal is the narrow case only. It is refused while any application environment
 is registered in the namespace, naming the applications, and while a worker is
@@ -264,7 +264,7 @@ already equals it, the `appId` and `environment` that took it. The match is on t
 domain the proxy manifest routes on, so a host reported free is exactly one the
 next `--domain` may claim. The field is absent where the provider names no host.
 
-Application onboarding and `PUT /api/apps/:app/envs/:env` accept `namespaceId`.
+Application onboarding and `apps.environments.put` accept `namespaceId`.
 The response exposes that assignment alongside opaque provider target and
 artifact envelopes.
 

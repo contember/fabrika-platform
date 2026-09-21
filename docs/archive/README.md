@@ -9,6 +9,9 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Remove duplicate administrative REST (2026-09-21)](sprint-2026-09-21-remove-duplicate-rest.md)
+  — Control and Operations use one administrative RPC transport; internal consumers migrated, behavioral coverage retained and integrated checks passed.
+
 - [Simplify existing boundaries (2026-09-21)](sprint-2026-09-21-simplify-existing-boundaries.md)
   — shared REST/RPC payload rules and bound-source provider capabilities, plus sixteen source-file decompositions; independent reviews and integrated checks passed.
 

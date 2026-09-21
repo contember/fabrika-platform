@@ -140,7 +140,8 @@ it before control sees the bearer.
 
 ```bash
 KEY=$(grep FABRIKA_LOCAL_MACHINE_KEY packages/local-stack/.state/machine.env | cut -d= -f2-)
-curl -H "Authorization: Bearer $KEY" http://control.fabrika.localhost:18080/api/namespaces
+curl -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  --data '{"method":"namespaces.list","input":null}' http://control.fabrika.localhost:18080/api/rpc
 ```
 
 The generated credentials, the machine key and the proxy manifests live under the

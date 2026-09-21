@@ -1,6 +1,6 @@
 # @fabrika/control-contract
 
-Runtime-neutral request and response DTOs for the control REST API and the typed
+Runtime-neutral request and response DTOs for the control API and the typed
 `ControlRpcContract`. It also owns `RunLogLine`, which is shared by the control
 API, dashboard, and runner transport.
 

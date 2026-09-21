@@ -126,7 +126,7 @@ on a public hostname cannot hold a session at all.
   hop rewrites `X-Forwarded-Proto` to what it received. Absent parses as `https`.
 - An app's return origins, registered in IAM — **written by the control plane, on every
   deploy.** The operator configures `publicOrigin` on the app's environment
-  (`PUT /api/apps/:app/envs/:env`); nobody calls `apps.setReturnOrigins` by hand.
+  (`apps.environments.put` on Control's `/api/rpc`); nobody calls `apps.setReturnOrigins` by hand.
 
 ### Who writes the registry
 

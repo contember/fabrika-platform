@@ -19,9 +19,8 @@ The only two verbs that carry a target are `namespaces.create` and `namespaces.a
 `409 deployment namespace already exists` (`packages/control/src/api/namespaces.ts`). The verb that
 re-applies an existing namespace, `namespaces.reconcile`, takes `NamespaceIdInput` — an id and nothing
 else. Its handler reads the row and rebuilds the provider namespace from the stored
-`provider_target_json`; the caller has no way to supply a different one. The REST router matches this:
-`POST /api/namespaces`, `POST /api/namespaces/:id/adopt`, `POST /api/namespaces/:id/reconcile`, and no
-update route at all (`packages/control/src/api/router.ts`).
+`provider_target_json`; the caller has no way to supply a different one. There is no target-update
+procedure in the RPC contract, the sole namespace administration transport (ADR-0041).
 
 Hand-editing the stored JSON does not rescue it either. On reconcile, `validateService`
 (`packages/provider-zerops/src/namespace.ts`) throws when the live service disagrees with the declared
@@ -57,7 +56,7 @@ end against the fake Zerops API.
 ## Touch points
 
 `packages/control-contract/src/rpc.ts`, `packages/control/src/api/namespaces.ts`,
-`packages/control/src/api/router.ts`, `packages/provider-zerops/src/namespace.ts`,
+`packages/control/src/control-rpc.ts`, `packages/provider-zerops/src/namespace.ts`,
 `packages/provider-contract/` (if the namespace capability grows a verb), `packages/dashboard/`.
 
 <!-- Origin: sprint-2026-08-21-cheap-rebuild-from-scratch, WU0 — found while recording ADR-0038. -->

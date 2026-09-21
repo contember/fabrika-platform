@@ -4,7 +4,7 @@ IAM, Delivery, and Operations are first-party reference applications for the
 same application model exposed to deployed apps. They share the
 `@fabrika/app` request pipeline, typed RPC transport, IAM SDK integration,
 runtime adapters, and process-side database wiring. Their product roles still
-require additional protocol and compatibility surfaces.
+require additional protocol-specific HTTP surfaces.
 
 ## Shared shape
 
@@ -106,36 +106,32 @@ deploys every generated Worker config. Application authorization then decides
 whether the resolved principal may perform the requested action on the specific
 object. Neither check replaces the other.
 
-## Compatibility HTTP surfaces
+## Administrative RPC and protocol HTTP surfaces
 
-Typed RPC is the browser-facing domain API, but it does not replace every HTTP
-surface:
+Typed RPC is the only administrative API for Control and Operations, for browser
+and machine callers alike ([ADR-0041](../decisions/0041-one-administrative-transport-for-control-and-operations.md)).
+Protocol-specific HTTP surfaces remain:
 
 | Application | Compatibility or protocol surface                   | Why it remains                                                                                                  |
 | ----------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| IAM         | `/admin/*` REST — four machine operations           | Provisioning callers that cannot make a browser-shaped RPC call; see below.                                     |
+| IAM         | `/admin/*` REST — four machine operations           | App-schema reconciliation and machine-key provisioning; outside the Control/Operations transport consolidation. |
 | IAM         | `/auth/*`, `/.well-known/jwks.json`                 | Login, callback, session, and JWKS are native identity protocols, not domain RPC calls.                         |
 | IAM         | service-binding `IamRpc` and Bun `/rpc/*` transport | Applications and Control use the process-to-process management contract; it is separate from browser admin RPC. |
 | IAM         | `/auth/mint/*`                                      | The proxy's own least-privilege surface — session mint, key mint, handoff redemption; see below.                |
-| Delivery    | `/api/*` REST                                       | CLI, integration, and established control API consumers retain their request and response contract.             |
 | Delivery    | `/webhooks/github`, health, and assets              | Webhooks, probes, and static files have protocol-specific HTTP semantics.                                       |
-| Operations  | `/api/*` operator REST                              | Existing operator consumers and the same-origin gateway remain compatible while the console uses typed RPC.     |
 | Operations  | Sentry envelope ingest and source-map upload        | SDK ingest and artifact upload are established streaming/binary HTTP protocols.                                 |
 | Operations  | private catalog and release reconciliation          | Control-to-Operations synchronization is a service protocol, not a browser domain API.                          |
 
-RPC routes are mounted before their REST wildcards. `route.all()` mounts the
-established Fetch handlers inside the shared pipeline without changing their
-accepted methods, response bodies, or status codes. This allows RPC and REST to
-share authentication and runtime composition while compatibility consumers
-migrate independently.
+Control serves `/api/rpc`; its Operations gateway forwards `/operations/api/rpc`
+to Operations' private `/api/rpc`. Administrative REST routes are removed, with
+no compatibility adapter. Protocol handlers remain mounted inside the shared
+authentication and runtime composition.
 
-Operations defines shared operator payload rules in
-`packages/operations/src/operator-input.ts`. Its REST and RPC adapters use those
-same parsers for issue mutations, health checks and alert configuration. Each
-adapter retains its envelope and error mapping. REST mutation handlers load the
-body lazily after the use case checks object visibility and authorization; RPC
-parses its input schema before invoking the use case. Query coercion and the
-existing transport-specific webhook validation order remain explicit.
+Operations defines operator payload rules in
+`packages/operations/src/operator-input.ts`. RPC validates its input schema
+before invoking typed use cases, which own object visibility, authorization and
+domain changes. Issue mutations, health checks and alert configuration follow
+one input contract and one transport error envelope.
 
 ### IAM's `/admin/*` REST surface is closed
 

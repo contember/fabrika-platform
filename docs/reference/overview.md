@@ -113,7 +113,7 @@ App at all.
 | `@fabrika/platform`                | Runtime ports shared by control, IAM, and Operations.                                          |
 | `@fabrika/platform-node`           | Bun/Postgres/S3 implementations of those runtime ports.                                        |
 | `@fabrika/control`                 | Shared control-plane core plus separate Cloudflare Worker and Zerops/Bun composition roots.    |
-| `@fabrika/control-contract`        | Runtime-neutral control REST DTOs, typed RPC contract, and deploy log line shape.              |
+| `@fabrika/control-contract`        | Runtime-neutral control DTOs, typed RPC contract, and deploy log line shape.                   |
 | `@fabrika/installation-contract`   | Open contract for provider-specific platform `init`, `plan`, and `deploy` commands.            |
 | `@fabrika/installation-cloudflare` | Cloudflare account bring-up and platform plan/deploy composition.                              |
 | `@fabrika/installation-zerops`     | Zerops topology, generated installation artifacts, and platform plan validation.               |
@@ -137,7 +137,7 @@ predecessor packages was a deliberate, one-time break — see
 
 The narrow contract packages keep wire types away from runtime entrypoints:
 
-- `@fabrika/control` and `@fabrika/dashboard` share REST DTOs through
+- `@fabrika/control` and `@fabrika/dashboard` share RPC DTOs through
   `@fabrika/control-contract`; its `RunLogLine` also crosses the runner boundary.
 - `@fabrika/iam` and `@fabrika/iam-ui` share admin REST DTOs through
   `@fabrika/iam-contract`. The `IamRpc` and policy domain stay in
@@ -198,9 +198,9 @@ The package root is runtime-neutral. Cloudflare and Bun lifecycle APIs live unde
 The platform's own IAM, Delivery, and Operations services use the same model.
 Each defines a runtime-neutral `app.ts` and keeps Cloudflare/Bun lifecycle code
 in its composition root. Delivery and Operations authenticate through the IAM SDK;
-IAM owns the identity boundary behind it. Their established REST and
-service-binding transports coexist with typed RPC in the same framework.
-The three concrete compositions, compatibility surfaces, and shared Postgres
+IAM owns the identity boundary behind it. Control and Operations expose typed
+RPC administration alongside protocol-specific HTTP and service bindings.
+The three concrete compositions, protocol surfaces, and shared Postgres
 migration wiring are documented in
 [`core-application-composition.md`](core-application-composition.md).
 

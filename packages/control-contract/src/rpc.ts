@@ -113,7 +113,7 @@ export interface GitHubSourceConnectionRpcContract {
 	reconcile: RpcProcedure<GitHubSourceConnectionInput, GitHubSourceConnectionStatusDto>
 }
 
-/** Portable Delivery control API, implemented alongside the backward-compatible REST transport. */
+/** Portable Delivery control API shared by browser and machine callers. */
 export interface ControlRpcContract {
 	sourceConnection: GitHubSourceConnectionRpcContract
 	apps: {

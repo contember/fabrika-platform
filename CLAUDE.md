@@ -115,7 +115,7 @@ needed only when there is no app config. Platform commands load the provider's
   reads the proxy-injected `X-Fabrika-Token`, verifies it locally, and evaluates no gate. Never add
   a second gate evaluator — not in `@fabrika/auth`, not in Caddy config, not in a provider package.
   Two other layers refuse requests and are **not** gate evaluators: **authorization** (`.require`,
-  `can()`, control's `authorize`) and **admission** (the origin guards, `FABRIKA_IAM_ADMIN_ORIGINS`).
+  `can()`, control's scoped use-case checks) and **admission** (the origin guards, `FABRIKA_IAM_ADMIN_ORIGINS`).
   `docs/reference/overview.md` defines all three; keep the vocabulary.
 - **`fabrika.config.ts` is the single source of truth** for a worker's own resources; `oblaka.ts` is a
   thin shim over it. Never re-declare resources in `oblaka.ts`.

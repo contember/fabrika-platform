@@ -30,7 +30,7 @@ IAM, Delivery, and Operations are first-party reference applications. They
 dispatch through the same application on Cloudflare and Bun while retaining the
 protocol surfaces required by their platform roles. See
 [`core-application-composition.md`](core-application-composition.md) for their
-RPC, authorization, persistence, compatibility, and environment boundaries.
+RPC, authorization, persistence, protocol, and environment boundaries.
 
 `@fabrika/auth` reads application identity from `FABRIKA_APP_ID` and the IAM
 origin from `FABRIKA_IAM_ISSUER`, straight off the `Env` it is handed. Those are the
