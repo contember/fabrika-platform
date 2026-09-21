@@ -9,6 +9,17 @@ import type {
 import type { OperationsIssueQuery, OperationsReleaseQuery, OperationsRpcContract } from '@fabrika/operations-contract/rpc'
 import type { OperationsAppEnv } from './app.js'
 import { OperationsOperatorUseCases } from './operator-api.js'
+import {
+	alertRuleInput as parseAlertRule,
+	bulkIssueStatusInput as parseBulkIssueStatus,
+	channelInput,
+	healthCheckInput as parseHealthCheck,
+	issueMutation as parseIssueMutation,
+	issueStatus,
+	requiredAlertKind as alertKind,
+	spikeAlertInput as parseSpikeAlert,
+	string,
+} from './operator-input.js'
 
 interface OperationsRpcContext {
 	readonly env: OperationsAppEnv
@@ -130,21 +141,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function stringField(input: Record<string, unknown>, field: string): string {
-	const value = input[field]
-	if (typeof value !== 'string' || value === '') throw new Error(`${field} must be a non-empty string`)
-	return value
-}
-
-function booleanField(input: Record<string, unknown>, field: string): boolean {
-	const value = input[field]
-	if (typeof value !== 'boolean') throw new Error(`${field} must be a boolean`)
-	return value
-}
-
-function positiveIntegerField(input: Record<string, unknown>, field: string): number {
-	const value = input[field]
-	if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) throw new Error(`${field} must be a positive integer`)
-	return value
+	return string(input[field], field)
 }
 
 function optionalStringField(input: Record<string, unknown>, field: string): string | undefined {
@@ -241,61 +238,15 @@ function mutateIssueInput(value: unknown): { issueId: string; mutation: Operatio
 }
 
 function issueMutation(value: unknown): OperationsIssueMutationRequestDto {
-	const input = record(value)
-	switch (input['kind']) {
-		case 'status':
-			return { kind: 'status', status: issueStatus(input['status']) }
-		case 'comment':
-			return { kind: 'comment', text: stringField(input, 'text') }
-		case 'assign': {
-			const principalId = input['principalId']
-			if (principalId !== null && (typeof principalId !== 'string' || principalId === '')) {
-				throw new Error('principalId must be a non-empty string')
-			}
-			return { kind: 'assign', principalId }
-		}
-		case 'snooze_until':
-			return { kind: 'snooze_until', until: positiveIntegerField(input, 'until') }
-		case 'snooze_count':
-			return { kind: 'snooze_count', additional: positiveIntegerField(input, 'additional') }
-		case 'resolve_in_release': {
-			const releaseId = input['releaseId']
-			if (releaseId !== null && (typeof releaseId !== 'string' || releaseId === '')) {
-				throw new Error('releaseId must be a non-empty string')
-			}
-			return { kind: 'resolve_in_release', releaseId }
-		}
-		case 'merge':
-			return { kind: 'merge', targetIssueId: stringField(input, 'targetIssueId') }
-		default:
-			throw new Error('invalid issue mutation')
-	}
+	return parseIssueMutation(record(value))
 }
 
 function bulkIssueStatusInput(value: unknown): { issueIds: string[]; status: 'open' | 'resolved' | 'ignored' } {
-	const input = record(value)
-	const ids = input['issueIds']
-	if (!Array.isArray(ids)) throw new Error('issueIds must be an array')
-	const issueIds: string[] = []
-	for (const id of ids) {
-		if (typeof id !== 'string' || id === '') throw new Error('issueId must be a non-empty string')
-		issueIds.push(id)
-	}
-	return { issueIds, status: issueStatus(input['status']) }
+	return parseBulkIssueStatus(record(value))
 }
 
 function healthCheck(value: unknown): OperationsHealthCheckUpsertRequestDto {
-	const input = record(value)
-	return {
-		path: stringField(input, 'path'),
-		enabled: booleanField(input, 'enabled'),
-		intervalMs: positiveIntegerField(input, 'intervalMs'),
-		timeoutMs: positiveIntegerField(input, 'timeoutMs'),
-		expectedStatus: positiveIntegerField(input, 'expectedStatus'),
-		failureThreshold: positiveIntegerField(input, 'failureThreshold'),
-		recoveryThreshold: positiveIntegerField(input, 'recoveryThreshold'),
-		staleAfterMs: positiveIntegerField(input, 'staleAfterMs'),
-	}
+	return parseHealthCheck(record(value))
 }
 
 function healthCheckMutationInput(value: unknown): { sourceId: string; input: OperationsHealthCheckUpsertRequestDto } {
@@ -317,7 +268,7 @@ function spikeAlertInput(value: unknown): { sourceId: string; input: { threshold
 	const alert = record(input['input'])
 	return {
 		sourceId: stringField(input, 'sourceId'),
-		input: { threshold: positiveIntegerField(alert, 'threshold'), enabled: booleanField(alert, 'enabled') },
+		input: parseSpikeAlert(alert),
 	}
 }
 
@@ -327,7 +278,7 @@ function alertRuleInput(value: unknown): { sourceId: string; kind: OperationsAle
 	return {
 		sourceId: stringField(input, 'sourceId'),
 		kind: alertKind(input['kind']),
-		input: { enabled: booleanField(rule, 'enabled') },
+		input: parseAlertRule(rule),
 	}
 }
 
@@ -350,22 +301,7 @@ function alertChannelUpdateInput(value: unknown): {
 }
 
 function alertChannel(value: unknown, requireTarget: boolean): OperationsNotificationChannelRequestDto {
-	const input = record(value)
-	if (input['type'] !== 'webhook') throw new Error('type must be webhook')
-	const target = input['target']
-	if (requireTarget && typeof target !== 'string') throw new Error('target is required')
-	if (target !== undefined && typeof target !== 'string') throw new Error('target must be a string')
-	return {
-		scope: alertKind(input['scope']),
-		type: 'webhook',
-		...(typeof target === 'string' ? { target } : {}),
-		enabled: booleanField(input, 'enabled'),
-	}
-}
-
-function issueStatus(value: unknown): 'open' | 'resolved' | 'ignored' {
-	if (value === 'open' || value === 'resolved' || value === 'ignored') return value
-	throw new Error('invalid issue status')
+	return channelInput(record(value), requireTarget, 'rpc')
 }
 
 function issueLevel(value: unknown): OperationsIssueQuery['level'] {
@@ -398,18 +334,6 @@ function optionalBoundedLimit(value: unknown): number | undefined {
 		throw new Error('limit must be between 1 and 100')
 	}
 	return value
-}
-
-function alertKind(value: unknown): OperationsAlertKind {
-	if (
-		value === 'new_issue'
-		|| value === 'regression'
-		|| value === 'spike'
-		|| value === 'failed_check'
-		|| value === 'recovery'
-		|| value === 'unhealthy_telemetry'
-	) return value
-	throw new Error('invalid alert kind')
 }
 
 function requestError(httpStatus: number, type: string, message: string): Error & { readonly httpStatus: number; readonly type: string } {
