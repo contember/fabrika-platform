@@ -9,6 +9,9 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Simplify existing boundaries (2026-09-21)](sprint-2026-09-21-simplify-existing-boundaries.md)
+  — shared REST/RPC payload rules and bound-source provider capabilities, plus sixteen source-file decompositions; independent reviews and integrated checks passed.
+
 - [A cheap installation, rebuilt from scratch (2026-08-21)](sprint-2026-08-21-cheap-rebuild-from-scratch.md)
   — emptied the account, retired the legacy v1 source path (ADR-0039), streamed GitHub tarballs in
   `source` (ADR-0037), sized namespaces cheaply (ADR-0038), fixed the bring-up defects, and stood one

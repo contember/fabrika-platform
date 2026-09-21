@@ -54,13 +54,13 @@ bun test
   `PUT /service-stack/{id}/enable-subdomain-access` does, and only once the service publishes a DEPLOYED
   HTTP port (`400 serviceStackIsNotHttp` before that). Its 2xx proves nothing — on an already-published
   service it returns a process that then fails — so decide by reading `subdomainAccess` back.
-  `ensureSubdomainAccess` in `src/namespace.ts` is the one place that does this; it runs after the proxy
+  `ensureSubdomainAccess` in `src/namespace/provisioning.ts` is the one place that does this; it runs after the proxy
   deploy, on reconcile too, and throws rather than leaving a namespace with no public entry point.
 - **The published `zerops.yaml` schema is wrong about the six probe durations** (`integer`; the platform
   wants a Go duration string in `[10s, 1h]`). `src/types.ts` carries the corrected `ZeropsDuration` and
   the `*Spec` authoring types — do NOT try to fix `schema.generated.ts`.
 - **The compiler is PURE** — no network, no filesystem, no clock.
-- **Unverified API behavior stays marked `UNVERIFIED:`.** Every shape in `src/api.ts` was read off
+- **Unverified API behavior stays marked `UNVERIFIED:`.** Every shape in `src/api/types.ts` was read off
   Zerops' published OpenAPI document; the log service and a handful of behaviors were not. Do not
   quietly promote one to fact — check it against a real account first.
 - **The API token is a PERSONAL ACCESS TOKEN with account-wide admin rights.** Never log it, never

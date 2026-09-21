@@ -52,11 +52,19 @@ The control plane receives one `ControlProvider`. Every provider implements:
 
 A provider may also implement:
 
+- `resolveSource` to resolve a requested source revision before deployment;
+- `resolveSourceWithBinding` and `deployWithBinding` for a persisted private-source binding;
 - `cancel` for platform-owned work;
 - `reconcile` for unfinished external operations;
 - `secrets` for immediate writes to provider-managed secret storage.
 - `namespaces` for provider-owned placement validation, resource claims,
   provisioning, reconciliation, and operator planning.
+
+The bound-source inputs and credential-free `ProviderSourceBinding` are declared
+once in `@fabrika/provider-contract`. Control loads the exact connection and
+installation coordinates from persistence; a bound operation refuses a missing
+capability or mismatched coordinates rather than using an unbound fallback.
+Zerops retains its provider-specific type names as aliases to this shared contract.
 
 Every deploy receives a provider-neutral `managedEnvironment` map assembled by
 control. The current reserved values are the source-scoped

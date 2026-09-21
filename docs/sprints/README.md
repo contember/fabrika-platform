@@ -19,4 +19,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- [Simplify existing boundaries (2026-09-21)](sprint-2026-09-21-simplify-existing-boundaries.md) — shared input/provider contracts and focused extraction of sixteen large source files.
+- None. [Simplify existing boundaries](../archive/sprint-2026-09-21-simplify-existing-boundaries.md) shipped on 2026-09-21.

@@ -26,7 +26,7 @@ handoff amendment.
 
 ## Active sprints
 
-Active: [simplify existing boundaries](sprints/sprint-2026-09-21-simplify-existing-boundaries.md) — shared Operations input definitions, one bound-source provider contract, and decomposition of sixteen large source files.
+None. [Simplify existing boundaries](archive/sprint-2026-09-21-simplify-existing-boundaries.md) shipped on 2026-09-21: shared Operations input definitions, one bound-source provider contract, and decomposition of sixteen large source files.
 
 The [bring-up without surprises](archive/sprint-2026-08-21-bring-up-without-surprises.md)
 shipped on 2026-08-21: `platform install --create-project`, `platform upgrade --to=<tag>` with the

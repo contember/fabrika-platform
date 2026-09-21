@@ -129,6 +129,14 @@ accepted methods, response bodies, or status codes. This allows RPC and REST to
 share authentication and runtime composition while compatibility consumers
 migrate independently.
 
+Operations defines shared operator payload rules in
+`packages/operations/src/operator-input.ts`. Its REST and RPC adapters use those
+same parsers for issue mutations, health checks and alert configuration. Each
+adapter retains its envelope and error mapping. REST mutation handlers load the
+body lazily after the use case checks object visibility and authorization; RPC
+parses its input schema before invoking the use case. Query coercion and the
+existing transport-specific webhook validation order remain explicit.
+
 ### IAM's `/admin/*` REST surface is closed
 
 It is a **provisioning** surface, not a second administration API. It serves

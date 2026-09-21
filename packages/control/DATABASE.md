@@ -1,12 +1,12 @@
 # @fabrika/control — database, SQL, and migrations
 
-Read this before editing `src/db.ts`, `migrations/`, or `migrations-postgres/`. It is the half of the
+Read this before editing `src/db.ts`, `src/db/`, `migrations/`, or `migrations-postgres/`. It is the half of the
 control plane's rules that only apply to persistence; the request pipeline, ACL, vault, and run
 lifecycle stay in `CLAUDE.md`.
 
 ## The portability seam
 
-- **All database access goes through the capability repositories in `src/db.ts`** — prepared
+- **All database access goes through the capability repositories in `src/db/`, exported by `src/db.ts`** — prepared
   statements, snake_case rows, caller-stamped UUIDv7. Portable operations take the `SqlDatabase` port
   (`@fabrika/platform`), which `D1Database` satisfies structurally.
 - **A composition root may replace a COMPLETE capability** when an operation needs dialect-specific
