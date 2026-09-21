@@ -156,6 +156,7 @@ export default function RootLayout() {
 							<span className="crumb-here">{here?.label ?? 'Console'}</span>
 						</div>
 						<div className="bar-actions">
+							<Link to="builder/authorize" className="btn small">Your builder connections</Link>
 							<ThemeToggle />
 						</div>
 					</div>

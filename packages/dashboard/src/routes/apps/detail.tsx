@@ -55,6 +55,16 @@ export default createPage()
 					</div>
 				</div>
 
+				<section className="panel">
+					<h2>Work locally with the builder</h2>
+					<p>
+						Open your existing checkout of <code>{app.repoUrl}</code>. Run <code>fabrika builder init --url=&lt;console-origin&gt;</code>{' '}
+						for a new builder project, or <code>fabrika builder connect --url=&lt;console-origin&gt;</code> to connect an existing one. Select application
+						{' '}
+						<strong>{app.id}</strong> during approval.
+					</p>
+					<Link to="builder/authorize">Connection instructions and your issued builder keys</Link>
+				</section>
 				<BuildConfigSection app={app} onDone={invalidate} />
 				<EnvironmentsSection appId={app.id} envs={envs} namespaces={namespaces} onDone={invalidate} />
 				<SecretsSection appId={app.id} secrets={secrets} envs={envs} onDone={invalidate} />
