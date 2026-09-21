@@ -34,7 +34,10 @@ and is deliberate — someone reading only one path will guess wrong about the o
 
 - `src/index.ts` — exported `installationCli`, the `usage` text, and the real collaborators.
 - `src/deploy.ts` — the ordered deploy sequence. `src/deploy-options.ts` — its flags and variables.
-- `src/install.ts` — the from-scratch bring-up: the two passes and the whole environment matrix.
+- `src/install.ts` — the from-scratch bring-up: the two passes, prompts, and stable exports.
+  `src/install-environment.ts` — the environment matrix, secret-key metadata, and writes.
+  `src/install-project.ts` — project creation and polling. `src/install-provisioning.ts` — topology and service provisioning.
+  `src/install-collaborators.ts` — the injected collaborators and cancellation check.
   `src/install-options.ts` — its flags. `src/secrets.ts` — the seven values it generates.
 - `src/init.ts` — the sidecar-repository flow, its prompts and its confirmed outward steps.
 - `src/admin.ts` — the first-administrator command. `src/admin-options.ts` — its flags.
