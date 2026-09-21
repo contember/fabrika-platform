@@ -1,5 +1,6 @@
 import { type AuthContext, defineApp, type RequestExecutionContext, route } from '@fabrika/app'
 import type { ControlProvider } from '@fabrika/provider-contract'
+import { builderPublicResponse } from './builder-bootstrap'
 import { controlRpcRouter } from './control-rpc'
 import type { Env } from './env'
 import { error } from './http'
@@ -37,7 +38,11 @@ export const controlApp = defineApp<ControlAppEnv, ControlAppContext>({
 		sourceConnection,
 		request,
 	}),
-	middleware: ({ env }) => [controlAuthMiddleware(env), controlOriginGuard(env)],
+	middleware: ({ env, provider }) => [
+		(request, _ctx, next) => Promise.resolve(builderPublicResponse(request, env, provider.id) ?? next()),
+		controlAuthMiddleware(env),
+		controlOriginGuard(env),
+	],
 	routes: [
 		route.all('/healthz', () => Response.json({ status: 'ok' })),
 		route.all('/api/health', () => Response.json({ status: 'ok', service: 'vozka', milestone: 'M4' })),

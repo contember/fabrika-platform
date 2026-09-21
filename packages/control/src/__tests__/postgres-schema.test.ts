@@ -155,6 +155,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0016_github_manifest_state.sql' },
 			{ bundle: 'control', name: '0017_keyed_github_source_connections.sql' },
 			{ bundle: 'control', name: '0018_retire_legacy_github_source.sql' },
+			{ bundle: 'control', name: '0019_builder_connection_receipts.sql' },
 		])
 	})
 
@@ -182,6 +183,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'operations_ingest_configs',
 				'github_source_setup_attempts',
 				'github_source_connections_keyed',
+				'builder_connection_receipts',
 			]
 		) {
 			expect(names).toContain(table)

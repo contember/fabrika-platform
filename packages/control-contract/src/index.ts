@@ -1,5 +1,9 @@
 import type { JsonValue, ProviderEnvelope } from '@fabrika/provider-contract'
 
+export * from './builder-bootstrap.js'
+export * from './builder-connections.js'
+export * from './builder-pairing.js'
+
 export type { JsonValue }
 
 /** A plain list response. */

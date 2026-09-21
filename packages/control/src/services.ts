@@ -1,6 +1,7 @@
 import type { AuthContext } from '@fabrika/auth'
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
+import type { BuilderPairingIam } from './api/builder-pairing'
 import type { NamespaceProxyChanged } from './api/namespaces'
 import type { DeployQueue, LogReader } from './api/runs'
 import type { ControlRepositories, RunRow } from './db'
@@ -131,6 +132,7 @@ export interface NamespaceProxyEnv {
 }
 
 export interface ControlRpcDeps {
+	builderPairingIam?: BuilderPairingIam
 	repositories: ControlRepositories
 	auth: AuthContext
 	queue: DeployQueue

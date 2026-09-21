@@ -16,6 +16,8 @@
 		"index.ts",
 		"cli/src",
 		"daemon/src",
+		"shared/index.ts",
+		"shared/urls.ts",
 		"ui/dist",
 		"skill",
 		"decisions",
@@ -40,12 +42,16 @@
 		"build": "bun ui/build.ts",
 		"release:prepare": "bun run build",
 		"typecheck": "tsc --noEmit",
-		"test": "bun test --preload ./daemon/test/preload.ts cli/test daemon/test ui/test"
+		"test": "bun test --preload ./daemon/test/preload.ts cli/test daemon/test ui/test shared"
 	},
 	"dependencies": {
 		"@fabrika/annotations": "workspace:*",
+		"@fabrika/app": "workspace:*",
+		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/canvas-kernel": "workspace:*",
+		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/daemon-kit": "workspace:*",
+		"@fabrika/provider-zerops": "workspace:*",
 		"preact": "^10.25.0"
 	},
 	"devDependencies": {

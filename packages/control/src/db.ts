@@ -1,3 +1,4 @@
+export { BuilderConnectionRepository } from './db/builder-connections'
 export { type ControlRepositories, createControlRepositories } from './db/composition'
 export {
 	type AppliedOperationsIngestConfig,

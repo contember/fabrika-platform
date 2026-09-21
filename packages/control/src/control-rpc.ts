@@ -1,6 +1,9 @@
 import { initRpc, type RpcRouterFor } from '@fabrika/app'
 import type { AuthContext } from '@fabrika/auth'
 import {
+	BUILDER_APPROVAL_VERIFIER,
+	BUILDER_CONNECTION_ATTEMPT_ID,
+	BUILDER_CONNECTION_IDENTIFIER,
 	type ControlRpcContract,
 	GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE,
 	GITHUB_SOURCE_CONNECTION_PAGE_CURSOR_MAX_LENGTH,
@@ -12,6 +15,16 @@ import {
 import type { ControlProvider, JsonValue } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { ACTIONS } from './actions'
+import { createBuilderConnectionReceipt, getBuilderConnectionReceipt } from './api/builder-connections'
+import {
+	approveBuilderPairing,
+	type BuilderPairingContext,
+	denyBuilderPairing,
+	inspectBuilderPairing,
+	listOwnBuilderPairings,
+	revokeBuilderPairing,
+} from './api/builder-pairing'
+import { fail } from './api/domain'
 import {
 	adoptNamespaceUseCase,
 	createNamespaceUseCase,
@@ -76,6 +89,24 @@ interface ControlRpcContext {
 }
 
 const rpc = initRpc<ControlRpcContext>()
+const receiptAttemptId = z.object({ attemptId: z.string().regex(BUILDER_CONNECTION_ATTEMPT_ID) }).strict()
+const pairingProof = receiptAttemptId.extend({ approvalVerifier: z.string().regex(BUILDER_APPROVAL_VERIFIER) })
+const pairingList = z.object({
+	before: z.string().regex(BUILDER_CONNECTION_ATTEMPT_ID).optional(),
+	limit: z.number().int().min(1).max(100).optional(),
+}).strict()
+const pairingRevoke = z.object({ credentialId: z.string().regex(BUILDER_CONNECTION_ATTEMPT_ID) }).strict()
+const receiptIdentifier = z.string().regex(BUILDER_CONNECTION_IDENTIFIER)
+const createReceiptInput = pairingProof.extend({
+	appId: receiptIdentifier,
+	environment: z.object({
+		env: receiptIdentifier,
+		namespaceId: receiptIdentifier.nullable(),
+		domain: z.string().min(1).max(253).nullable(),
+		publicOrigin: z.string().min(1).max(2048).nullable(),
+		triggerRef: z.string().min(1).max(1024).nullable(),
+	}).strict(),
+})
 const nonEmpty = z.string().min(1)
 const nullableString = z.string().nullable().optional()
 const providerEnvelope = z.custom<ProviderEnvelopeDto>((value) => readProviderEnvelope(value) !== null, 'expected a versioned provider envelope')
@@ -164,6 +195,21 @@ export const controlRpcRouter = createControlRpcRouter(buildControlRpcDeps)
 
 export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): RpcRouterFor<ControlRpcContext, ControlRpcContract> {
 	return rpc.router({
+		builderPairing: rpc.router({
+			inspect: rpc.procedure.input(pairingProof).query(({ ctx, input }) => controlCall(() => inspectBuilderPairing(pairingContext(ctx), input))),
+			approve: rpc.procedure.input(pairingProof).mutation(({ ctx, input }) => controlCall(() => approveBuilderPairing(pairingContext(ctx), input))),
+			deny: rpc.procedure.input(pairingProof).mutation(({ ctx, input }) => controlCall(() => denyBuilderPairing(pairingContext(ctx), input))),
+			listOwn: rpc.procedure.input(pairingList).query(({ ctx, input }) => controlCall(() => listOwnBuilderPairings(pairingContext(ctx), input))),
+			revoke: rpc.procedure.input(pairingRevoke).mutation(({ ctx, input }) => controlCall(() => revokeBuilderPairing(pairingContext(ctx), input))),
+		}),
+		builderConnections: rpc.router({
+			createReceipt: rpc.procedure.input(createReceiptInput).mutation(({ ctx, input }) =>
+				controlCall(() => createBuilderConnectionReceipt(registryContext(ctx), pairingContext(ctx), input))
+			),
+			getReceipt: rpc.procedure.input(receiptAttemptId).query(({ ctx, input }) =>
+				controlCall(() => getBuilderConnectionReceipt(registryContext(ctx), input.attemptId))
+			),
+		}),
 		sourceConnection: rpc.router({
 			status: rpc.procedure.require(ACTIONS.SOURCE_CONNECTION_MANAGE).query(({ ctx }) =>
 				controlCall(() => sourceConnectionStatus(sourceConnectionContext(ctx)))
@@ -278,6 +324,13 @@ export function createControlRpcRouter(buildDeps: typeof buildControlRpcDeps): R
 			controlCall(() => registerAppUseCase(registryContext(ctx), input))
 		),
 	})
+
+	function pairingContext(ctx: ControlRpcContext): BuilderPairingContext {
+		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		const iam = deps.builderPairingIam ?? ctx.env.IAM
+		if (iam === undefined) fail(503, 'builder pairing unavailable')
+		return { iam, auth: ctx.auth, request: ctx.request, repositories: deps.repositories }
+	}
 
 	function registryContext(ctx: ControlRpcContext): RegistryUseCaseContext {
 		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)

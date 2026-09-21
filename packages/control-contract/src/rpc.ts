@@ -1,4 +1,15 @@
 import type { RpcProcedureContract } from '@fabrika/app'
+import type { BuilderConnectionReceiptDto, CreateBuilderConnectionReceiptRequest, GetBuilderConnectionReceiptRequest } from './builder-connections.js'
+import type {
+	ApproveDeviceAuthorizationResult,
+	BuilderPairingProofRequest,
+	DenyDeviceAuthorizationResult,
+	InspectDeviceAuthorizationResult,
+	ListOwnBuilderPairingsRequest,
+	ListOwnDeviceAuthorizationsResult,
+	RevokeBuilderPairingRequest,
+	RevokeKeyResult,
+} from './builder-pairing.js'
 import type {
 	AdoptDeploymentNamespaceRequest,
 	AppDto,
@@ -115,6 +126,17 @@ export interface GitHubSourceConnectionRpcContract {
 
 /** Portable Delivery control API shared by browser and machine callers. */
 export interface ControlRpcContract {
+	builderPairing: {
+		inspect: RpcProcedure<BuilderPairingProofRequest, InspectDeviceAuthorizationResult>
+		approve: RpcProcedure<BuilderPairingProofRequest, ApproveDeviceAuthorizationResult>
+		deny: RpcProcedure<BuilderPairingProofRequest, DenyDeviceAuthorizationResult>
+		listOwn: RpcProcedure<ListOwnBuilderPairingsRequest, ListOwnDeviceAuthorizationsResult>
+		revoke: RpcProcedure<RevokeBuilderPairingRequest, RevokeKeyResult>
+	}
+	builderConnections: {
+		createReceipt: RpcProcedure<CreateBuilderConnectionReceiptRequest, BuilderConnectionReceiptDto>
+		getReceipt: RpcProcedure<GetBuilderConnectionReceiptRequest, BuilderConnectionReceiptDto>
+	}
 	sourceConnection: GitHubSourceConnectionRpcContract
 	apps: {
 		list: RpcProcedure<void, ListResponse<AppDto>>

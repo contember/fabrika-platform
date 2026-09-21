@@ -101,8 +101,12 @@
       "version": "0.0.4",
       "dependencies": {
         "@fabrika/annotations": "workspace:*",
+        "@fabrika/app": "workspace:*",
+        "@fabrika/auth-core": "workspace:*",
         "@fabrika/canvas-kernel": "workspace:*",
+        "@fabrika/control-contract": "workspace:*",
         "@fabrika/daemon-kit": "workspace:*",
+        "@fabrika/provider-zerops": "workspace:*",
         "preact": "^10.25.0",
       },
       "devDependencies": {
@@ -195,6 +199,7 @@
       "version": "0.0.4",
       "dependencies": {
         "@fabrika/app": "workspace:*",
+        "@fabrika/auth-core": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
       },
     },

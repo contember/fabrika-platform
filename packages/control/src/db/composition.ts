@@ -1,5 +1,6 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { GitHubConnectionStore } from '../github-connection-store'
+import { BuilderConnectionRepository } from './builder-connections'
 import { OperationsCatalogRepository } from './operations-catalog'
 import { OperationsReleaseRepository } from './operations-releases'
 import { RepoPollingRepository } from './polling'
@@ -8,6 +9,7 @@ import { RunRepository } from './runs'
 
 /** Control-plane persistence capabilities selected together by a runtime composition root. */
 export interface ControlRepositories {
+	builderConnections: BuilderConnectionRepository
 	registry: ControlRegistryRepository
 	runs: RunRepository
 	polling: RepoPollingRepository
@@ -27,6 +29,7 @@ export function createControlRepositories(
 	const now = options.now ?? (() => Math.floor(Date.now() / 1000))
 	const replacements = options.replacements ?? {}
 	return {
+		builderConnections: replacements.builderConnections ?? new BuilderConnectionRepository(db, now),
 		registry: replacements.registry ?? new ControlRegistryRepository(db, now),
 		runs: replacements.runs ?? new RunRepository(db, now),
 		polling: replacements.polling ?? new RepoPollingRepository(db),

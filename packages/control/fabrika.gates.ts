@@ -27,6 +27,8 @@ const CONTROL_GATES: AppGates = {
 export const CONTROL_PROXY_GATES: AppGates = {
 	rules: [
 		{ path: '/healthz', kind: 'public' },
+		{ path: '/.well-known/fabrika-builder', kind: 'public' },
+		{ path: '/builder/connect', kind: 'public' },
 		{ path: '/api/health', kind: 'public' },
 		{ path: '/webhooks/github', kind: 'public' },
 		{ path: '/webhooks/github/*', kind: 'public' },
