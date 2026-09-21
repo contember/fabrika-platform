@@ -1,0 +1,265 @@
+import { uuidv7 } from '@fabrika/auth-core'
+import { type SqlDatabase, type SqlStatement } from '@fabrika/platform'
+import { normalizeEmailIdentity } from '../email-identity'
+import { firstRow, unixNow } from './sql'
+
+export interface PrincipalRow {
+	id: string
+	type: 'user' | 'service'
+	external_id: string | null
+	/** THE NORMALIZED MAILBOX (`normalizeEmailIdentity`), never the display spelling — see `PrincipalRepository`. */
+	email: string | null
+	/** Display text: the mailbox as the IdP or the inviting admin spelled it. */
+	label: string
+	disabled_at: number | null
+	activated_at: number | null
+	created_at: number
+}
+
+/** Derived principal status — invited (not activated) → active → disabled. */
+export type PrincipalStatus = 'invited' | 'active' | 'disabled'
+
+export function principalStatus(row: PrincipalRow): PrincipalStatus {
+	if (row.disabled_at !== null) {
+		return 'disabled'
+	}
+	if (row.type === 'user' && row.activated_at === null) {
+		return 'invited'
+	}
+	return 'active'
+}
+
+/**
+ * IAM persistence capabilities over the `SqlDatabase` port — never a cloud-specific handle.
+ * Portable operations use prepared statements via `db.prepare(...).bind(...)`; a runtime composition
+ * root may replace one complete capability when its operation shape must differ by dialect.
+ *
+ * **ONE MAILBOX RULE.** `principals.email` holds the NORMALIZED mailbox and nothing else, so every
+ * comparison is plain equality and no query asks the engine to case-fold (SQLite's `LOWER()` is
+ * ASCII-only where Postgres's is full Unicode — the same input used to resolve differently per
+ * backend). This class is the single place that applies `normalizeEmailIdentity`: callers hand over
+ * whatever spelling they hold, the mailbox lands in `email` and the spelling in `label`.
+ */
+export class PrincipalRepository {
+	constructor(protected readonly db: SqlDatabase) {}
+
+	// ── Principals ──────────────────────────────────────────────────────────
+
+	async getUserByExternalId(sub: string): Promise<PrincipalRow | null> {
+		return this.db
+			.prepare(`SELECT * FROM principals WHERE type = 'user' AND external_id = ?`)
+			.bind(sub)
+			.first<PrincipalRow>()
+	}
+
+	async getServiceByExternalId(commonName: string): Promise<PrincipalRow | null> {
+		return this.db
+			.prepare(`SELECT * FROM principals WHERE type = 'service' AND external_id = ?`)
+			.bind(commonName)
+			.first<PrincipalRow>()
+	}
+
+	async getPrincipalById(id: string): Promise<PrincipalRow | null> {
+		return this.db.prepare('SELECT * FROM principals WHERE id = ?').bind(id).first<PrincipalRow>()
+	}
+
+	/** Resolve a user by mailbox. `email` is normalized here, so any spelling of it finds the same row. */
+	async getUserByEmail(email: string): Promise<PrincipalRow | null> {
+		return this.db
+			.prepare(`SELECT * FROM principals WHERE type = 'user' AND email = ?`)
+			.bind(normalizeEmailIdentity(email))
+			.first<PrincipalRow>()
+	}
+
+	/**
+	 * Refresh a returning user's mailbox/label if the token's email changed. No-op when unchanged.
+	 *
+	 * `IS DISTINCT FROM` is the null-safe `<>` — it must treat a NULL email as "different" so the
+	 * first login of an invited row still fills it in. SQLite's `IS NOT <expr>` means the same
+	 * thing but does not exist in Postgres (there `IS NOT` only takes NULL/TRUE/FALSE/UNKNOWN/
+	 * DISTINCT FROM/DOCUMENT/JSON); `IS DISTINCT FROM` is standard and valid in both (SQLite ≥ 3.39).
+	 *
+	 * The reservation moves WITH the mailbox: leaving a stale claim behind would let the next invite
+	 * of the new address create a second principal for the same human.
+	 */
+	async refreshUserLabel(id: string, email: string): Promise<void> {
+		const mailbox = normalizeEmailIdentity(email)
+		await this.db.batch([
+			this.db
+				.prepare('UPDATE principals SET email = ?, label = ? WHERE id = ? AND (email IS DISTINCT FROM ? OR label IS DISTINCT FROM ?)')
+				.bind(mailbox, email, id, mailbox, email),
+			this.claimMailboxStatement(mailbox, id),
+		])
+	}
+
+	/**
+	 * Claim an invited row in one statement: bind `external_id = sub`, activate it, and set the
+	 * display label, but only while still unclaimed (`external_id IS NULL`) to avoid a race claiming
+	 * a row twice. The mailbox is untouched — it is what matched this row in the first place.
+	 * Returns the claimed row, or null if the row was concurrently claimed / not found.
+	 */
+	async claimInvitedUser(id: string, sub: string, label: string): Promise<PrincipalRow | null> {
+		const now = unixNow()
+		return this.db
+			.prepare(`UPDATE principals SET external_id = ?, label = ?, activated_at = COALESCE(activated_at, ?)
+				WHERE id = ? AND type = 'user' AND external_id IS NULL
+				RETURNING *`)
+			.bind(sub, label, now, id)
+			.first<PrincipalRow>()
+	}
+
+	/** Lazy-create a user keyed by the verified `sub`, reserving its mailbox in the same transaction. */
+	async createUser(sub: string, email: string): Promise<PrincipalRow> {
+		const id = uuidv7()
+		const now = unixNow()
+		const mailbox = normalizeEmailIdentity(email)
+		return this.insertUser([
+			this.db
+				.prepare(`INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at)
+					VALUES (?, 'user', ?, ?, ?, ?, ?) RETURNING *`)
+				.bind(id, sub, mailbox, email, now, now),
+			this.claimMailboxStatement(mailbox, id),
+		])
+	}
+
+	/** Invite a user by mailbox (external_id NULL = unclaimed), reserving it in the same transaction. */
+	async inviteUser(email: string, label: string = email): Promise<PrincipalRow> {
+		const id = uuidv7()
+		const mailbox = normalizeEmailIdentity(email)
+		return this.insertUser([
+			this.db
+				.prepare(`INSERT INTO principals (id, type, external_id, email, label, created_at)
+					VALUES (?, 'user', NULL, ?, ?, ?) RETURNING *`)
+				.bind(id, mailbox, label, unixNow()),
+			this.claimMailboxStatement(mailbox, id),
+		])
+	}
+
+	/**
+	 * Reserve one mailbox for one principal. `principal_email_claims` is a second lock over the same
+	 * rule `idx_principals_uq_email` enforces, and it moves with a principal whose address changes —
+	 * every user row that carries a mailbox carries a claim for it.
+	 */
+	private claimMailboxStatement(mailbox: string, principalId: string): SqlStatement {
+		return this.db
+			.prepare(`INSERT INTO principal_email_claims (normalized_email, principal_id) VALUES (?, ?)
+				ON CONFLICT (principal_id) DO UPDATE SET normalized_email = excluded.normalized_email`)
+			.bind(mailbox, principalId)
+	}
+
+	/** Run a principal INSERT + its mailbox reservation as one transaction and return the new row. */
+	private async insertUser(statements: SqlStatement[]): Promise<PrincipalRow> {
+		const results = await this.db.batch<PrincipalRow>(statements)
+		const principal = results[0]?.results[0]
+		if (principal === undefined) throw new Error('expected a row from a RETURNING statement, got none')
+		return principal
+	}
+
+	/**
+	 * Create a native service (machine) principal. `external_id` is NULL — a native service is resolved
+	 * through its `px_` credential (credential.principal_id → principal), never an external id. (The
+	 * legacy CF service-token path still resolves existing services by their stored external_id.)
+	 */
+	async createService(label: string): Promise<PrincipalRow> {
+		const id = uuidv7()
+		const now = unixNow()
+		return firstRow<PrincipalRow>(
+			this.db
+				.prepare(`INSERT INTO principals (id, type, external_id, email, label, activated_at, created_at)
+					VALUES (?, 'service', NULL, NULL, ?, ?, ?) RETURNING *`)
+				.bind(id, label, now, now),
+		)
+	}
+
+	/**
+	 * One page of principals, newest first.
+	 *
+	 * `status` is evaluated in SQL rather than by filtering a full table in memory. It is derived from
+	 * exactly two columns (`disabled_at`, `activated_at` — see `principalStatus`), so expressing it
+	 * here costs nothing and is what makes the page a real page: filtering after the read returned a
+	 * short page from a long table and made `limit` mean nothing (SEC-22).
+	 *
+	 * Ordering is by `id DESC` alone. `created_at` is whole seconds, so rows written in the same second
+	 * have no order of their own; the id is a monotonic UUIDv7, so it both orders and paginates
+	 * (`before` is a keyset cursor that can neither skip nor repeat a row).
+	 */
+	async listPrincipals(filter: {
+		type?: 'user' | 'service'
+		status?: PrincipalStatus
+		q?: string
+		before?: string
+		limit: number
+	}): Promise<PrincipalRow[]> {
+		const where: string[] = []
+		const binds: (string | number)[] = []
+		if (filter.type) {
+			where.push('type = ?')
+			binds.push(filter.type)
+		}
+		if (filter.status === 'disabled') {
+			where.push('disabled_at IS NOT NULL')
+		} else if (filter.status === 'invited') {
+			where.push(`disabled_at IS NULL AND type = 'user' AND activated_at IS NULL`)
+		} else if (filter.status === 'active') {
+			where.push(`disabled_at IS NULL AND (type <> 'user' OR activated_at IS NOT NULL)`)
+		}
+		if (filter.q) {
+			// LOWER() on BOTH sides, deliberately: SQLite's LIKE case-folds ASCII, Postgres's does
+			// not, so a bare `label LIKE ?` would silently stop matching 'Alice' for 'alice' after
+			// the port. (`ILIKE` is Postgres-only, so it is not an option.)
+			where.push('(LOWER(label) LIKE LOWER(?) OR LOWER(email) LIKE LOWER(?))')
+			binds.push(`%${filter.q}%`, `%${filter.q}%`)
+		}
+		if (filter.before !== undefined) {
+			where.push('id < ?')
+			binds.push(filter.before)
+		}
+		binds.push(filter.limit)
+		const sql = `SELECT * FROM principals${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`
+		const { results } = await this.db.prepare(sql).bind(...binds).all<PrincipalRow>()
+		return results
+	}
+
+	/**
+	 * The USER principals who can access `app` — every user holding at least one non-expired
+	 * grant that applies to the app (the grant's `app` is NULL = cross-app, OR equals `app`).
+	 * `DISTINCT` collapses the per-grant duplicates a principal with several grants produces.
+	 * Services are excluded — this is the people directory (assignable users / actor labels),
+	 * not machine principals. Disabled users ARE returned (the caller decides whether to hide
+	 * them) so their labels still resolve. Ordered by label for a stable picker.
+	 */
+	async getPrincipalsForApp(app: string): Promise<PrincipalRow[]> {
+		const { results } = await this.db
+			.prepare(`SELECT DISTINCT p.* FROM principals p
+				JOIN grants g ON g.principal_id = p.id
+				WHERE p.type = 'user'
+					AND (g.app IS NULL OR g.app = ?)
+					AND (g.expires_at IS NULL OR g.expires_at > ?)
+				ORDER BY p.label`)
+			.bind(app, unixNow())
+			.all<PrincipalRow>()
+		return results
+	}
+
+	async disablePrincipal(id: string): Promise<boolean> {
+		const result = await this.db
+			.prepare('UPDATE principals SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL')
+			.bind(unixNow(), id)
+			.run()
+		return (result.meta.changes ?? 0) > 0
+	}
+
+	async enablePrincipal(id: string): Promise<boolean> {
+		const result = await this.db
+			.prepare('UPDATE principals SET disabled_at = NULL WHERE id = ? AND disabled_at IS NOT NULL')
+			.bind(id)
+			.run()
+		return (result.meta.changes ?? 0) > 0
+	}
+
+	/** Hard-delete a principal (cancels an unclaimed invite; cascades grants). */
+	async deletePrincipal(id: string): Promise<boolean> {
+		const result = await this.db.prepare('DELETE FROM principals WHERE id = ?').bind(id).run()
+		return (result.meta.changes ?? 0) > 0
+	}
+}

@@ -1,0 +1,211 @@
+import { API_KEY_PREFIX } from '@fabrika/auth-core'
+
+import {
+	type ApiKeyDto,
+	type CursorList,
+	type ListApiKeysInput,
+	type OkResponse,
+	type ProvisionApiKeyRequest,
+	type ProvisionApiKeyResponse,
+	type RotateApiKeyInput,
+	type RotateApiKeyResponse,
+} from '@fabrika/iam-contract'
+import { principalStatus } from '../db'
+import { arrayField, nullableStringField, numberField, stringField } from '../json'
+import { generateToken, hashToken } from '../secret'
+import { adminAudit, type AdminContext, fail } from './context'
+import { appField, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDtos } from './grant-support'
+import { cursorOf, groupBy, normalizeLimit } from './pagination'
+
+/**
+ * One page of service principals with their grants. TWO queries per page, whatever the page holds:
+ * the roster read, and one grants read for the page's ids. It used to be 1+N over an unbounded
+ * roster, with no pagination at all (SEC-22).
+ */
+export async function listApiKeysUseCase(c: AdminContext, input: ListApiKeysInput): Promise<CursorList<ApiKeyDto>> {
+	const limit = normalizeLimit(input.limit)
+	const principals = await c.services.repositories.principals.listPrincipals({
+		type: 'service',
+		...(input.before ? { before: input.before } : {}),
+		limit,
+	})
+	const grants = groupBy(await c.services.repositories.grants.listGrantsFor(principals.map((p) => p.id)), (row) => row.principal_id)
+	const cache = new RoleKnownCache(c.services)
+	const items: ApiKeyDto[] = []
+	for (const principal of principals) {
+		items.push({
+			principalId: principal.id,
+			label: principal.label,
+			status: principalStatus(principal),
+			grants: await toGrantDtos(grants.get(principal.id) ?? [], c.services, cache),
+			createdAt: principal.created_at,
+		})
+	}
+	return { items, nextCursor: cursorOf(items, limit, (item) => item.principalId) }
+}
+
+export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionApiKeyRequest): Promise<ProvisionApiKeyResponse> {
+	const body: unknown = input
+	const { label, type } = input
+	if (label.trim() === '' || type !== 'service') return fail(400, 'label and type=service required')
+	const appResult = await appField(c, body)
+	if (!appResult.ok) {
+		return fail(400, 'unknown app')
+	}
+	const app = appResult.app
+	const roleOrInline = await parseRoleOrInline(c, body, app)
+	if (!roleOrInline.ok) {
+		return fail(400, roleOrInline.message)
+	}
+	const scope = parseScope(body)
+	if (!scope.ok) {
+		return fail(400, 'scopeType and scopeValue must be both set or both omitted')
+	}
+	const expiresAt = numberField(body, 'expiresAt') ?? null
+	const nowSeconds = Math.floor(Date.now() / 1000)
+	if (expiresAt !== null && expiresAt <= nowSeconds) {
+		return fail(400, 'expiresAt must be in the future')
+	}
+
+	// Create the native service principal (external_id NULL — resolved by its `px_` key, not by a
+	// CF client_id) + its grant, then mint the bound credential. Shown once.
+	const principal = await c.services.repositories.principals.createService(label)
+	const grant = await c.services.repositories.grants.createGrant({
+		principalId: principal.id,
+		app,
+		roleKey: roleOrInline.roleKey,
+		permissions: roleOrInline.permissions,
+		scopeType: scope.scopeType,
+		scopeValue: scope.scopeValue,
+		grantedBy: c.admin.id,
+		expiresAt,
+	})
+	const apiKey = `${API_KEY_PREFIX}${generateToken()}`
+	await c.services.repositories.credentials.createCredential({
+		tokenHash: await hashToken(apiKey),
+		label,
+		principalId: principal.id,
+		// The credential is bound to the SAME app as the grant it was provisioned for. `null` here is
+		// the operator's explicit "every app" choice, which is legal for a principal-bound credential
+		// because its permissions still resolve per app through that cross-app grant (SEC-2).
+		app,
+		issuedBy: c.admin.id,
+		expiresAt,
+		grants: [],
+	})
+	await adminAudit(c, {
+		action: 'iam.apikey.create',
+		resourceType: 'principal',
+		resourceId: principal.id,
+		metadata: { label, roleKey: roleOrInline.roleKey, permissions: roleOrInline.permissions, app },
+	})
+	await adminAudit(c, {
+		action: 'iam.grant.create',
+		resourceType: 'grant',
+		resourceId: grant.id,
+		metadata: {
+			principalId: principal.id,
+			roleKey: roleOrInline.roleKey,
+			permissions: roleOrInline.permissions,
+			scopeType: scope.scopeType,
+			scopeValue: scope.scopeValue,
+			app,
+		},
+	})
+
+	const response: ProvisionApiKeyResponse = { principalId: principal.id, apiKey }
+	return response
+}
+
+export async function revokeApiKeyUseCase(c: AdminContext, input: { principalId: string }): Promise<OkResponse> {
+	const { principalId } = input
+	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
+	if (!principal || principal.type !== 'service') {
+		return fail(404, 'service principal not found')
+	}
+
+	await c.services.repositories.grants.deleteGrantsForPrincipal(principalId)
+	await c.services.repositories.principals.disablePrincipal(principalId)
+	await c.services.repositories.credentials.revokeCredentialsForPrincipal(principalId)
+	await adminAudit(c, {
+		action: 'iam.apikey.revoke',
+		resourceType: 'principal',
+		resourceId: principalId,
+		metadata: { label: principal.label },
+	})
+	return { ok: true }
+}
+
+/**
+ * Rotate: same principal, same grants, new secret. Effective immediately.
+ *
+ * Two things the old implementation got wrong. It DROPPED the credential's expiry — a key provisioned
+ * to die in 30 days came back immortal, and an operator rotating a key on schedule was quietly
+ * removing its bound (CORR-5); the replacement carries the old expiry forward unless the caller states
+ * a new one, and a stated one must be in the future exactly as provisioning requires. And it rotated a
+ * DISABLED principal's key, handing out a working secret for an account somebody had just revoked —
+ * the same guard `passwordUser` already applies.
+ */
+export async function rotateApiKeyUseCase(c: AdminContext, input: RotateApiKeyInput): Promise<RotateApiKeyResponse> {
+	const { principalId } = input
+	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
+	if (!principal || principal.type !== 'service') {
+		return fail(404, 'service principal not found')
+	}
+	if (principal.disabled_at !== null) {
+		return fail(409, 'principal is disabled')
+	}
+	const nowSeconds = Math.floor(Date.now() / 1000)
+	if (input.expiresAt !== undefined && input.expiresAt !== null && input.expiresAt <= nowSeconds) {
+		return fail(400, 'expiresAt must be in the future')
+	}
+	// The credential being replaced decides what the replacement inherits: its expiry and its app
+	// binding. `listCredentialsForPrincipal` is newest-first, so this is the live one.
+	const existing = (await c.services.repositories.credentials.listCredentialsForPrincipal(principalId)).find((row) => row.revoked_at === null)
+	const expiresAt = input.expiresAt !== undefined ? input.expiresAt : existing?.expires_at ?? null
+	await c.services.repositories.credentials.revokeCredentialsForPrincipal(principalId)
+	const apiKey = `${API_KEY_PREFIX}${generateToken()}`
+	await c.services.repositories.credentials.createCredential({
+		tokenHash: await hashToken(apiKey),
+		label: principal.label,
+		principalId,
+		app: existing?.app ?? null,
+		issuedBy: c.admin.id,
+		expiresAt,
+		grants: [],
+	})
+	await adminAudit(c, {
+		action: 'iam.apikey.rotate',
+		resourceType: 'principal',
+		resourceId: principalId,
+		metadata: { label: principal.label, expiresAt },
+	})
+	const response: RotateApiKeyResponse = { principalId, apiKey }
+	return response
+}
+
+/**
+ * The one surviving REST body parser: the bootstrap `POST /admin/api-keys`. Everything else that
+ * took a JSON body is an `/admin/rpc` procedure, and zod validates those from the contract.
+ */
+export function parseProvisionApiKeyRequest(body: unknown): ProvisionApiKeyRequest {
+	const label = stringField(body, 'label')
+	const type = stringField(body, 'type')
+	if (label === undefined || type !== 'service') return fail(400, 'label and type=service required')
+	const roleKey = stringField(body, 'roleKey')
+	const permissions = arrayField(body, 'permissions')
+	const scopeType = nullableStringField(body, 'scopeType')
+	const scopeValue = nullableStringField(body, 'scopeValue')
+	const app = nullableStringField(body, 'app')
+	const expiresAt = numberField(body, 'expiresAt')
+	return {
+		label,
+		type,
+		...(roleKey !== undefined ? { roleKey } : {}),
+		...(permissions !== undefined ? { permissions } : {}),
+		...(scopeType !== undefined ? { scopeType } : {}),
+		...(scopeValue !== undefined ? { scopeValue } : {}),
+		...(app !== undefined ? { app } : {}),
+		...(expiresAt !== undefined ? { expiresAt } : {}),
+	}
+}

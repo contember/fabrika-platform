@@ -1,8 +1,8 @@
 import { uuidv7 } from '@fabrika/auth-core'
 import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
-import type { PrincipalRow } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import type { StoredPasswordHash } from './password-crypto'
+import type { PrincipalRow } from './repositories/principals'
 
 export type PasswordActionPurpose = 'enrollment' | 'reset'
 export type PasswordAccountState = 'disabled' | 'pending' | 'enabled'
