@@ -19,4 +19,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- None. [Remove duplicate administrative REST](../archive/sprint-2026-09-21-remove-duplicate-rest.md) shipped on 2026-09-21.
+- [Connect the local builder to an installed platform](sprint-2026-09-21-local-builder-platform-flow.md) — browser pairing, local Zerops development and repeatable Control deployment.
