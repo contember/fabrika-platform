@@ -4,6 +4,7 @@ import { handleAdmin } from './admin/router'
 import { adminRpcAuth, adminRpcRouter } from './admin/rpc'
 import { handleAuth } from './auth/routes'
 import { readClientAddress } from './client-address'
+import { handleDeviceAuthorization } from './device-http'
 import type { Env } from './env'
 import { requestId } from './request-id'
 import { createIamRpc } from './rpc'
@@ -95,6 +96,9 @@ function anonymousAuth(): AuthContext {
 
 async function handleIamAuth(ctx: IamAppContext, options: IamAppOptions): Promise<Response> {
 	const pathname = new URL(ctx.request.url).pathname
+	if (pathname.startsWith('/auth/device/')) {
+		return handleDeviceAuthorization(ctx.request, ctx.services, ctx.clientAddress, ctx.requestId)
+	}
 	if (isMintPath(pathname)) {
 		return handleMintHttp(ctx.request, createIamRpc(ctx.env, ctx.exec), options.proxyKey ?? '')
 	}

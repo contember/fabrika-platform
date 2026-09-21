@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import { LOCAL_DEV_ADMIN_ID } from '../auth'
 import { createIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
+import { pkceChallenge, randomToken } from '../oidc'
+import { createIamRpc } from '../rpc'
+import { buildServices } from '../services'
+import { signAccessToken } from '../tokens'
+import { seedUser } from './helpers/harness'
 import { allMigrations } from './helpers/migrations'
 
 // TEST-4: the RPC entrypoint (`Propustka` in src/index.ts) wires several spec-mandated
@@ -255,6 +260,44 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 
 	beforeEach(() => {
 		db = freshDb()
+	})
+
+	test('device management on the Worker binding matches the shared RPC implementation', async () => {
+		const ctx = makeCtx()
+		const env = makeEnv(db)
+		const worker = makeEntrypoint(ctx, env)
+		const rpc = createIamRpc(env, ctx)
+		const principalId = seedUser(db, { sub: 'device-human', email: 'device@example.test' })
+		await env.REPOSITORIES.grants.createGrant({ principalId, app: 'vozka', permissions: ['deploy.read'], grantedBy: principalId })
+		const now = Math.floor(Date.now() / 1000)
+		const credential = await signAccessToken(buildServices(env), env, {
+			app: 'vozka',
+			subject: principalId,
+			type: 'user',
+			label: 'Device human',
+			permissions: [],
+			issuedAt: now,
+			expiresAt: now + 300,
+		})
+		const approvalVerifier = randomToken(32)
+		const started = await env.REPOSITORIES.device.start({
+			app: 'vozka',
+			label: 'Worker pairing',
+			permissions: ['deploy.read'],
+			keyLifetimeSeconds: 600,
+			approvalChallenge: await pkceChallenge(approvalVerifier),
+			redemptionChallenge: await pkceChallenge(randomToken(32)),
+		})
+		const input = { app: 'vozka', credential, requestId: 'worker-device', attemptId: started.attemptId, approvalVerifier }
+		const inspected = await worker.inspectDeviceAuthorization(input)
+		expect(inspected.ok).toBe(true)
+		expect(inspected).toEqual(await rpc.inspectDeviceAuthorization(input))
+		const approval = { ...input, scope: { type: 'app', value: 'delivery-id' } }
+		const approved = await worker.approveDeviceAuthorization(approval)
+		expect(approved.ok).toBe(true)
+		expect(approved).toEqual(await rpc.approveDeviceAuthorization(approval))
+		expect(await worker.denyDeviceAuthorization(input)).toEqual(await rpc.denyDeviceAuthorization(input))
+		expect(await worker.listOwnDeviceAuthorizations(input)).toEqual(await rpc.listOwnDeviceAuthorizations(input))
 	})
 
 	test('mintFromKey DENY (unknown key) writes one authenticate auth_log row, credential_id null', async () => {

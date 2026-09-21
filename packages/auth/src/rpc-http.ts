@@ -42,13 +42,20 @@
  */
 
 import type {
+	ApproveDeviceAuthorizationInput,
+	ApproveDeviceAuthorizationResult,
 	AuditInput,
+	DenyDeviceAuthorizationResult,
 	IamRpc,
+	InspectDeviceAuthorizationInput,
+	InspectDeviceAuthorizationResult,
 	IssueJwtInput,
 	IssueJwtResult,
 	IssueKeyInput,
 	IssueKeyResult,
 	Jwks,
+	ListOwnDeviceAuthorizationsInput,
+	ListOwnDeviceAuthorizationsResult,
 	ListPrincipalsInput,
 	ListPrincipalsResult,
 	MintFromKeyInput,
@@ -60,6 +67,12 @@ import type {
 	PublicJwk,
 	RevokeKeyInput,
 	RevokeKeyResult,
+} from '@fabrika/auth-core'
+import {
+	parseApproveDeviceAuthorizationResult,
+	parseDenyDeviceAuthorizationResult,
+	parseInspectDeviceAuthorizationResult,
+	parseListOwnDeviceAuthorizationsResult,
 } from '@fabrika/auth-core'
 import { booleanField, numberField, prop, stringField } from './json'
 
@@ -98,6 +111,26 @@ export class IamTransportError extends Error {
 }
 
 export class HttpIamRpc implements IamRpc {
+	async inspectDeviceAuthorization(input: InspectDeviceAuthorizationInput): Promise<InspectDeviceAuthorizationResult> {
+		const result = parseInspectDeviceAuthorizationResult(await this.call('inspectDeviceAuthorization', input))
+		if (!result) throw new IamTransportError('inspectDeviceAuthorization')
+		return result
+	}
+	async approveDeviceAuthorization(input: ApproveDeviceAuthorizationInput): Promise<ApproveDeviceAuthorizationResult> {
+		const result = parseApproveDeviceAuthorizationResult(await this.call('approveDeviceAuthorization', input))
+		if (!result) throw new IamTransportError('approveDeviceAuthorization')
+		return result
+	}
+	async denyDeviceAuthorization(input: InspectDeviceAuthorizationInput): Promise<DenyDeviceAuthorizationResult> {
+		const result = parseDenyDeviceAuthorizationResult(await this.call('denyDeviceAuthorization', input))
+		if (!result) throw new IamTransportError('denyDeviceAuthorization')
+		return result
+	}
+	async listOwnDeviceAuthorizations(input: ListOwnDeviceAuthorizationsInput): Promise<ListOwnDeviceAuthorizationsResult> {
+		const result = parseListOwnDeviceAuthorizationsResult(await this.call('listOwnDeviceAuthorizations', input))
+		if (!result) throw new IamTransportError('listOwnDeviceAuthorizations')
+		return result
+	}
 	private readonly origin: string
 	private readonly key: string
 	private readonly timeoutMs: number

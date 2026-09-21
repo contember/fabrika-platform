@@ -72,6 +72,7 @@ import type {
 	RevokeKeyInput,
 	Scope,
 } from '@fabrika/auth-core'
+import { parseApproveDeviceAuthorizationInput, parseInspectDeviceAuthorizationInput, parseListOwnDeviceAuthorizationsInput } from '@fabrika/auth-core'
 import { arrayField, numberField, prop, stringField } from './json'
 import { hashToken, timingSafeEqualHex } from './secret'
 
@@ -116,6 +117,14 @@ export async function handleRpcHttp(request: Request, rpc: IamRpc, rpcKey: strin
 
 	try {
 		switch (method) {
+			case 'inspectDeviceAuthorization':
+				return json(await rpc.inspectDeviceAuthorization(parseInspectDeviceAuthorizationInput(body) ?? invalid('device input')))
+			case 'approveDeviceAuthorization':
+				return json(await rpc.approveDeviceAuthorization(parseApproveDeviceAuthorizationInput(body) ?? invalid('device input')))
+			case 'denyDeviceAuthorization':
+				return json(await rpc.denyDeviceAuthorization(parseInspectDeviceAuthorizationInput(body) ?? invalid('device input')))
+			case 'listOwnDeviceAuthorizations':
+				return json(await rpc.listOwnDeviceAuthorizations(parseListOwnDeviceAuthorizationsInput(body) ?? invalid('device input')))
 			case 'mintToken':
 				return json(await rpc.mintToken(decodeMintToken(body)))
 			case 'mintFromKey':

@@ -29,6 +29,7 @@ export function runIamMaintenance(env: Env, ctx: RequestContext, now: number = D
 	const nowSeconds = Math.floor(now / 1000)
 	ctx.waitUntil(
 		Promise.all([
+			services.repositories.device.prune(nowSeconds),
 			services.repositories.audit.pruneAuthLog(nowSeconds - AUTH_LOG_RETENTION_SECONDS),
 			services.repositories.passwords.pruneActionTokens(nowSeconds - PASSWORD_TRANSIENT_RETENTION_SECONDS),
 			services.repositories.passwords.pruneLoginThrottles(nowSeconds - PASSWORD_TRANSIENT_RETENTION_SECONDS),

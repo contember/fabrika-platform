@@ -22,6 +22,18 @@ import type {
  * results and records every `audit` call so tests can assert the auto-attached fields.
  */
 export class IamRpcStub implements IamRpc {
+	inspectDeviceAuthorization(): ReturnType<IamRpc['inspectDeviceAuthorization']> {
+		return Promise.resolve({ ok: false, reason: 'not_allowed' })
+	}
+	approveDeviceAuthorization(): ReturnType<IamRpc['approveDeviceAuthorization']> {
+		return Promise.resolve({ ok: false, reason: 'not_allowed' })
+	}
+	denyDeviceAuthorization(): ReturnType<IamRpc['denyDeviceAuthorization']> {
+		return Promise.resolve({ ok: false, reason: 'not_allowed' })
+	}
+	listOwnDeviceAuthorizations(): ReturnType<IamRpc['listOwnDeviceAuthorizations']> {
+		return Promise.resolve({ ok: false, reason: 'not_allowed' })
+	}
 	readonly auditCalls: AuditInput[] = []
 	readonly revokeKeyInputs: RevokeKeyInput[] = []
 	readonly listPrincipalsInputs: ListPrincipalsInput[] = []

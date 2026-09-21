@@ -53,8 +53,12 @@ class TestSqlStatement implements SqlStatement {
 	}
 
 	all<T = Record<string, unknown>>(): Promise<SqlQueryResult<T>> {
+		return Promise.resolve(this.allSync<T>())
+	}
+
+	allSync<T>(): SqlQueryResult<T> {
 		const results = this.db.query<T, SQLQueryBindings[]>(this.sql).all(...this.params)
-		return Promise.resolve({ results })
+		return { results }
 	}
 
 	run(): Promise<SqlRunResult> {
@@ -75,7 +79,8 @@ class TestSqlDatabase implements SqlDatabase {
 		this.db.run('BEGIN')
 		try {
 			for (const stmt of statements) {
-				out.push(await stmt.all<T>())
+				if (!(stmt instanceof TestSqlStatement)) throw new Error('Expected a statement from this SQLite adapter')
+				out.push(stmt.allSync<T>())
 			}
 			this.db.run('COMMIT')
 		} catch (err) {

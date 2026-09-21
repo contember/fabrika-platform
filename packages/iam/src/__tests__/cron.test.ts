@@ -23,7 +23,7 @@ const NOW = Math.floor(NOW_MS / 1000)
 const DAY = 24 * 60 * 60
 
 /** The tables the sweep is responsible for, and how to count them. */
-const SWEPT_TABLES = ['auth_log', 'password_action_tokens', 'password_login_throttles', 'auth_codes', 'sessions'] as const
+const SWEPT_TABLES = ['auth_log', 'password_action_tokens', 'password_login_throttles', 'auth_codes', 'sessions', 'device_authorizations'] as const
 
 function counts(sqlite: Database): Record<string, number> {
 	const out: Record<string, number> = {}
@@ -69,6 +69,17 @@ function env(h: Harness): Env {
 /** Seed one doomed and one surviving row in every table the sweep touches. */
 async function seedBothSides(h: Harness): Promise<string> {
 	const principal = seedUser(h.sqlite, { sub: 'sub-cron', email: 'cron@example.com' })
+	for (const expiry of [NOW - 1, NOW + 1]) {
+		const attempt = await h.repositories.device.start({
+			app: 'vozka',
+			label: 'Cron device',
+			permissions: ['deploy.read'],
+			keyLifetimeSeconds: DAY,
+			approvalChallenge: 'a'.repeat(43),
+			redemptionChallenge: 'b'.repeat(43),
+		})
+		h.sqlite.run('UPDATE device_authorizations SET expires_at = ? WHERE id = ?', [expiry, attempt.attemptId])
+	}
 
 	// auth_log — cutoff is `created_at < now - 30d`.
 	for (const createdAt of [NOW - AUTH_LOG_RETENTION_SECONDS - DAY, NOW - AUTH_LOG_RETENTION_SECONDS + DAY]) {
@@ -157,6 +168,7 @@ describe('runIamMaintenance', () => {
 			password_login_throttles: 2,
 			auth_codes: 2,
 			sessions: 5,
+			device_authorizations: 2,
 		})
 
 		const settled: Promise<unknown>[] = []
@@ -172,6 +184,7 @@ describe('runIamMaintenance', () => {
 			password_login_throttles: 1,
 			auth_codes: 1,
 			sessions: 3,
+			device_authorizations: 1,
 		})
 	})
 
@@ -191,6 +204,7 @@ describe('runIamMaintenance', () => {
 			password_login_throttles: 1,
 			auth_codes: 1,
 			sessions: 3,
+			device_authorizations: 1,
 		})
 	})
 })

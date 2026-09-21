@@ -92,6 +92,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0005_one_mailbox_rule.sql' },
 			{ bundle: 'iam', name: '0006_credential_app.sql' },
 			{ bundle: 'iam', name: '0007_session_method_local_dev.sql' },
+			{ bundle: 'iam', name: '0008_device_authorizations.sql' },
 		])
 	})
 
@@ -126,6 +127,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'password_login_throttles',
 				'auth_codes',
 				'app_return_origins',
+				'device_authorizations',
 			]
 		) {
 			expect(names).toContain(table)

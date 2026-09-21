@@ -41,6 +41,7 @@ import type {
 	RevokeKeyResult,
 } from '@fabrika/auth-core'
 import { resolveCaller } from './auth'
+import { approveDeviceAuthorization, denyDeviceAuthorization, inspectDeviceAuthorization, listOwnDeviceAuthorizations } from './device'
 import type { Env, RequestContext } from './env'
 import { exchangeAuthCode } from './handoff'
 import { issueJwt, issueKey, revokeKey } from './issue'
@@ -57,6 +58,10 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 	// mint path, which the proxy hits on every cold request and which needs neither.
 	const services = buildServices(env)
 	return {
+		inspectDeviceAuthorization: (input) => inspectDeviceAuthorization(services, env, input),
+		approveDeviceAuthorization: (input) => approveDeviceAuthorization(services, env, input),
+		denyDeviceAuthorization: (input) => denyDeviceAuthorization(services, env, input),
+		listOwnDeviceAuthorizations: (input) => listOwnDeviceAuthorizations(services, env, input),
 		/**
 		 * Redeem a cross-host handoff code for an app-bound session (ADR-0021). Reached only over the
 		 * proxy's own surface — see `IamHandoffRpc` for why it is not part of `IamRpc`. Fails closed

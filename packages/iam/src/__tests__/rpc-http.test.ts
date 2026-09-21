@@ -50,6 +50,10 @@ function recorder(canned: Canned = {}): Recorder {
 	}
 	return {
 		calls,
+		inspectDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
+		approveDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
+		denyDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
+		listOwnDeviceAuthorizations: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 		mintToken(input: MintTokenInput): Promise<MintTokenResult> {
 			note('mintToken', input)
 			return Promise.resolve({ ok: true, token: 'px_token', expiresAt: 42 })

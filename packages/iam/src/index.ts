@@ -1,14 +1,21 @@
 import type {
+	ApproveDeviceAuthorizationInput,
+	ApproveDeviceAuthorizationResult,
 	AuditInput,
+	DenyDeviceAuthorizationResult,
 	ExchangeAuthCodeInput,
 	ExchangeAuthCodeResult,
 	IamHandoffRpc,
 	IamRpc,
+	InspectDeviceAuthorizationInput,
+	InspectDeviceAuthorizationResult,
 	IssueJwtInput,
 	IssueJwtResult,
 	IssueKeyInput,
 	IssueKeyResult,
 	Jwks,
+	ListOwnDeviceAuthorizationsInput,
+	ListOwnDeviceAuthorizationsResult,
 	ListPrincipalsInput,
 	ListPrincipalsResult,
 	MintFromKeyInput,
@@ -72,6 +79,18 @@ export function iamEnv(bindings: WorkerBindings): Env {
 }
 
 export class Propustka extends WorkerEntrypoint<WorkerBindings> implements IamRpc, IamHandoffRpc {
+	inspectDeviceAuthorization(input: InspectDeviceAuthorizationInput): Promise<InspectDeviceAuthorizationResult> {
+		return this.rpc.inspectDeviceAuthorization(input)
+	}
+	approveDeviceAuthorization(input: ApproveDeviceAuthorizationInput): Promise<ApproveDeviceAuthorizationResult> {
+		return this.rpc.approveDeviceAuthorization(input)
+	}
+	denyDeviceAuthorization(input: InspectDeviceAuthorizationInput): Promise<DenyDeviceAuthorizationResult> {
+		return this.rpc.denyDeviceAuthorization(input)
+	}
+	listOwnDeviceAuthorizations(input: ListOwnDeviceAuthorizationsInput): Promise<ListOwnDeviceAuthorizationsResult> {
+		return this.rpc.listOwnDeviceAuthorizations(input)
+	}
 	private get iam(): Env {
 		return iamEnv(this.env)
 	}

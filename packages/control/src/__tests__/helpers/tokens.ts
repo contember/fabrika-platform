@@ -36,6 +36,10 @@ const publicKey = {
  * ONE instance, because the SDK caches the JWKS in a WeakMap keyed by the binding object.
  */
 export const testIamBinding: IamRpc = {
+	inspectDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
+	approveDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
+	denyDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
+	listOwnDeviceAuthorizations: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 	mintToken: () => Promise.resolve({ ok: false, reason: 'no_session' }),
 	mintFromKey: () => Promise.resolve({ ok: false, reason: 'invalid_key' }),
 	issueKey: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),

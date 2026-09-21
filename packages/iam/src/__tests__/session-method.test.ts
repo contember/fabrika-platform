@@ -272,7 +272,7 @@ describe('the migration renames the sessions the bypass already minted', () => {
 					VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(id ?? '', hash ?? '', 'p1', sub ?? '', 'oidc', T, T + 100).run()
 			}
 
-			expect(await applyMigrations(db)).toEqual([POSTGRES_MIGRATION])
+			expect(await applyMigrations(db)).toEqual([POSTGRES_MIGRATION, '0008_device_authorizations.sql'])
 
 			const { results } = await db.prepare('SELECT id, authentication_method FROM sessions ORDER BY id')
 				.all<{ id: string; authentication_method: string }>()

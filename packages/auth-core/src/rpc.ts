@@ -1,3 +1,12 @@
+import type {
+	ApproveDeviceAuthorizationInput,
+	ApproveDeviceAuthorizationResult,
+	DenyDeviceAuthorizationResult,
+	InspectDeviceAuthorizationInput,
+	InspectDeviceAuthorizationResult,
+	ListOwnDeviceAuthorizationsInput,
+	ListOwnDeviceAuthorizationsResult,
+} from './device'
 import type { Jwks } from './token'
 import type { PermissionEntry, PrincipalType, Scope } from './types'
 
@@ -277,6 +286,10 @@ export type ListPrincipalsResult =
  * serializable objects (RPC-friendly).
  */
 export interface IamRpc {
+	inspectDeviceAuthorization(input: InspectDeviceAuthorizationInput): Promise<InspectDeviceAuthorizationResult>
+	approveDeviceAuthorization(input: ApproveDeviceAuthorizationInput): Promise<ApproveDeviceAuthorizationResult>
+	denyDeviceAuthorization(input: InspectDeviceAuthorizationInput): Promise<DenyDeviceAuthorizationResult>
+	listOwnDeviceAuthorizations(input: ListOwnDeviceAuthorizationsInput): Promise<ListOwnDeviceAuthorizationsResult>
 	/**
 	 * Mint a short-lived, per-app permission token from the browser's SSO session — the
 	 * propustka-native auth path. The SDK middleware calls this only when its cached permission

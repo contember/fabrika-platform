@@ -3,6 +3,7 @@ import { PasswordRepository } from './password-db'
 import { AppSchemaRepository } from './repositories/app-schema'
 import { AuditRepository } from './repositories/audit'
 import { CredentialRepository } from './repositories/credentials'
+import { DeviceAuthorizationRepository } from './repositories/device'
 import { GrantRepository } from './repositories/grants'
 import { HandoffRepository } from './repositories/handoff'
 import { PrincipalRepository } from './repositories/principals'
@@ -11,6 +12,7 @@ import { SessionRepository } from './repositories/sessions'
 export { type AppActionRow, AppSchemaRepository, type AppScopeRow, type RoleRow } from './repositories/app-schema'
 export { type AuditEventInput, type AuditEventRow, AuditRepository, type AuthLogInput, type AuthLogRow } from './repositories/audit'
 export { type CredentialGrantRow, CredentialRepository, type CredentialRow } from './repositories/credentials'
+export { DeviceAuthorizationRepository, type DeviceAuthorizationRow, type DeviceReceiptRow } from './repositories/device'
 export { GrantRepository, type GrantRow } from './repositories/grants'
 export { type AuthCodeRow, HandoffRepository } from './repositories/handoff'
 export { PrincipalRepository, type PrincipalRow, type PrincipalStatus, principalStatus } from './repositories/principals'
@@ -18,6 +20,7 @@ export { type AuthenticationMethod, SessionRepository, type SessionRow } from '.
 
 /** IAM persistence capabilities selected together by a runtime composition root. */
 export interface IamRepositories {
+	device: DeviceAuthorizationRepository
 	principals: PrincipalRepository
 	grants: GrantRepository
 	appSchema: AppSchemaRepository
@@ -31,6 +34,7 @@ export interface IamRepositories {
 /** The portable repository bundle. A composition root may replace one complete capability. */
 export function createIamRepositories(db: SqlDatabase, replacements: Partial<IamRepositories> = {}): IamRepositories {
 	return {
+		device: replacements.device ?? new DeviceAuthorizationRepository(db),
 		principals: replacements.principals ?? new PrincipalRepository(db),
 		grants: replacements.grants ?? new GrantRepository(db),
 		appSchema: replacements.appSchema ?? new AppSchemaRepository(db),

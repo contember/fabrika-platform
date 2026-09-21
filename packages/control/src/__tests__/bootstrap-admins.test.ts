@@ -67,6 +67,10 @@ async function token(input: { label: string; ptype: 'user' | 'service'; actions?
 }
 
 const serviceIam: IamRpc = {
+	inspectDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
+	approveDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
+	denyDeviceAuthorization: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
+	listOwnDeviceAuthorizations: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
 	mintToken: () => Promise.resolve({ ok: false, reason: 'no_session' }),
 	mintFromKey: () => Promise.resolve({ ok: false, reason: 'invalid_key' }),
 	issueKey: () => Promise.resolve({ ok: false, reason: 'not_allowed' }),
