@@ -62,6 +62,17 @@ export interface ProviderSourceResolution {
 	readonly commitSha: string
 }
 
+/** Credential-free coordinates loaded from the persisted private-source connection. */
+export interface ProviderSourceBinding {
+	readonly connectionId: string
+	readonly installationId: number
+	readonly transportKind: 'keyed-v2'
+}
+
+export interface ProviderBoundSourceResolutionInput extends ProviderSourceResolutionInput {
+	readonly sourceBinding: ProviderSourceBinding
+}
+
 /** One control-plane deploy invocation. */
 export interface ProviderDeployInput {
 	readonly runId: string
@@ -90,6 +101,10 @@ export interface ProviderDeployInput {
 	}
 	readonly signal: AbortSignal
 	readonly events: ProviderRunEvents
+}
+
+export interface ProviderBoundDeployInput extends ProviderDeployInput {
+	readonly sourceBinding: ProviderSourceBinding
 }
 
 /** A terminal provider operation result. */
@@ -286,7 +301,9 @@ export interface ControlProvider {
 	readonly id: string
 	normalizeRegistration(input: ProviderRegistrationInput): ProviderRegistration
 	resolveSource?(input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution>
+	resolveSourceWithBinding?(input: ProviderBoundSourceResolutionInput): Promise<ProviderSourceResolution>
 	deploy(input: ProviderDeployInput): Promise<ProviderTerminalOutcome>
+	deployWithBinding?(input: ProviderBoundDeployInput): Promise<ProviderTerminalOutcome>
 	cancel?(input: ProviderCancelInput): Promise<void>
 	reconcile?(input: ProviderReconcileInput): Promise<ProviderReconcileOutcome>
 	readonly secrets?: ProviderManagedSecrets

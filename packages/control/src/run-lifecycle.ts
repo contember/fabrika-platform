@@ -15,7 +15,6 @@ import type {
 	ProviderDeploymentNamespace,
 	ProviderEnvelope,
 	ProviderEnvironment,
-	ProviderSourceResolution,
 	ProviderSourceResolutionInput,
 	ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
@@ -29,7 +28,6 @@ import {
 	parseProviderJson,
 	type RunRow,
 } from './db'
-import type { GitHubSourceTransportKind } from './github-connection-store'
 import { type OperationsReleaseProjectionDeps, projectOperationsRun } from './operations-releases'
 import { projectedReturnOrigins } from './return-origins'
 import { appSecretPurpose, type SecretResolver } from './secret-resolver'
@@ -46,7 +44,7 @@ export interface DeployLockGate {
 export interface RunDeps {
 	repositories: ControlRepositories
 	secrets: SecretResolver
-	provider: SourceBindingControlProvider
+	provider: ControlProvider
 	lock: DeployLockGate
 	logs: Pick<BlobStore, 'put'>
 	operations?: OperationsReleaseProjectionDeps
@@ -56,25 +54,6 @@ export interface RunDeps {
 	 * service rather than left stale, and an app that requires it fails its own boot, loudly.
 	 */
 	iamIssuer?: string
-}
-
-interface SourceBinding {
-	readonly connectionId: string
-	readonly installationId: number
-	readonly transportKind: GitHubSourceTransportKind
-}
-
-interface SourceBindingResolutionInput extends ProviderSourceResolutionInput {
-	readonly sourceBinding: SourceBinding
-}
-
-interface SourceBindingDeployInput extends ProviderDeployInput {
-	readonly sourceBinding: SourceBinding
-}
-
-interface SourceBindingControlProvider extends ControlProvider {
-	resolveSourceWithBinding?(input: SourceBindingResolutionInput): Promise<ProviderSourceResolution>
-	deployWithBinding?(input: SourceBindingDeployInput): Promise<ProviderTerminalOutcome>
 }
 
 export interface DeployJobMessage {

@@ -1,6 +1,8 @@
 import type {
 	ControlProvider,
 	JsonValue,
+	ProviderBoundDeployInput,
+	ProviderBoundSourceResolutionInput,
 	ProviderCodec,
 	ProviderDeployInput,
 	ProviderDeploymentNamespace,
@@ -10,6 +12,7 @@ import type {
 	ProviderReconcileOutcome,
 	ProviderRegistration,
 	ProviderRegistrationInput,
+	ProviderSourceBinding,
 	ProviderSourceResolution,
 	ProviderSourceResolutionInput,
 	ProviderTerminalOutcome,
@@ -40,7 +43,7 @@ import {
 	zeropsArtifactCodec,
 } from './manifest'
 import { createZeropsNamespaceCapabilities, type ZeropsNamespaceTarget, zeropsNamespaceTargetCodec } from './namespace'
-import { createZeropsProvider, type ZeropsSourceTransportBinding } from './provider'
+import { createZeropsProvider } from './provider'
 import { allowedReferenceHosts, foreignReferenceHost, serviceReferenceHosts } from './service-references'
 import { normalizeZeropsSourceRepository, type ZeropsSourceClient, type ZeropsSourceClientV2, type ZeropsSourceResolveResult } from './source'
 import type { ZeropsRunState, ZeropsRuntimeTarget } from './types'
@@ -131,18 +134,11 @@ export interface ZeropsControlProviderOptions {
 	}
 }
 
-export interface ZeropsBoundSourceResolutionInput extends ProviderSourceResolutionInput {
-	readonly sourceBinding: ZeropsSourceTransportBinding
-}
+export type ZeropsBoundSourceResolutionInput = ProviderBoundSourceResolutionInput
 
-export interface ZeropsBoundDeployInput extends ProviderDeployInput {
-	readonly sourceBinding: ZeropsSourceTransportBinding
-}
+export type ZeropsBoundDeployInput = ProviderBoundDeployInput
 
-export interface ZeropsControlProvider extends ControlProvider {
-	resolveSourceWithBinding(input: ZeropsBoundSourceResolutionInput): Promise<ProviderSourceResolution>
-	deployWithBinding(input: ZeropsBoundDeployInput): Promise<ProviderTerminalOutcome>
-}
+export type ZeropsControlProvider = ControlProvider & Required<Pick<ControlProvider, 'resolveSourceWithBinding' | 'deployWithBinding'>>
 
 interface DecodedZeropsEnvironment {
 	readonly target: ZeropsStoredTarget
@@ -286,7 +282,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		throw new Error('Zerops access token must be a non-empty string')
 	}
 	const api = options.api ?? createZeropsApi({ token: options.accessToken, baseUrl: options.apiBaseUrl })
-	const sourceBindings = new Map<string, ZeropsSourceTransportBinding>()
+	const sourceBindings = new Map<string, ProviderSourceBinding>()
 	const runtimeProvider = createZeropsProvider((target) => {
 		const defaults = defaultZeropsCollaborators(target)
 		return {
@@ -402,7 +398,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 
 	const assertSourceBinding = (
 		input: Pick<ProviderDeployInput, 'app'>,
-		binding: ZeropsSourceTransportBinding | undefined,
+		binding: ProviderSourceBinding | undefined,
 	): void => {
 		const connectionId = input.app.source.githubConnectionId
 		const installationId = input.app.source.githubInstallationId
@@ -419,7 +415,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 
 	const resolveSource = async (
 		input: ProviderSourceResolutionInput,
-		binding?: ZeropsSourceTransportBinding,
+		binding?: ProviderSourceBinding,
 	): Promise<ProviderSourceResolution> => {
 		assertSourceBinding(input, binding)
 		const registration = normalizeRegistration({ app: input.app, environment: input.environment })

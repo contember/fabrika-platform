@@ -8,8 +8,7 @@ import type {
 	ProviderEnvelope,
 	ProviderRegistration,
 	ProviderRegistrationInput,
-	ProviderSourceResolution,
-	ProviderSourceResolutionInput,
+	ProviderSourceBinding,
 } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { getRunLogUseCase } from '../api/runs'
@@ -199,17 +198,6 @@ const requireRun = async (db: ControlRepositories, id: string): Promise<RunRow> 
 	return run
 }
 
-interface TestSourceBinding {
-	readonly connectionId: string
-	readonly installationId: number
-	readonly transportKind: 'keyed-v2'
-}
-
-interface TestBoundProvider extends ControlProvider {
-	resolveSourceWithBinding(input: ProviderSourceResolutionInput & { readonly sourceBinding: TestSourceBinding }): Promise<ProviderSourceResolution>
-	deployWithBinding(input: ProviderDeployInput & { readonly sourceBinding: TestSourceBinding }): Promise<RunOutcome>
-}
-
 describe('provider-neutral run lifecycle', () => {
 	test('loads and carries the exact keyed source binding through resolve and deploy', async () => {
 		const { db, sqlite } = createHarness()
@@ -218,8 +206,8 @@ describe('provider-neutral run lifecycle', () => {
 			provider: 'zerops',
 			sourceBinding: { connectionId: 'connection-1', installationId: 42 },
 		})
-		const seen: Array<{ phase: string; binding: TestSourceBinding; connectionId?: string; installationId?: number }> = []
-		const provider: TestBoundProvider = {
+		const seen: Array<{ phase: string; binding: ProviderSourceBinding; connectionId?: string; installationId?: number }> = []
+		const provider: ControlProvider = {
 			id: 'zerops',
 			normalizeRegistration: (input) => normalize('zerops', input),
 			resolveSource: () => Promise.reject(new Error('unbound resolution must not run')),
