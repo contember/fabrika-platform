@@ -178,8 +178,7 @@ function parseBuildEvent(value: unknown): BuildEvent | null {
 }
 
 function daemonOrigin(): string {
-	const override = new URLSearchParams(location.search).get('daemon')
-	return override ?? location.origin
+	return location.origin
 }
 
 export function sessionIdFromPath(): string | null {

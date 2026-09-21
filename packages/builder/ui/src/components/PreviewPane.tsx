@@ -147,7 +147,7 @@ function DesignPreview({ sessionId, live }: { sessionId: string; live: boolean }
 			if (!cancelled) setRootCss(extractRootCss(md))
 		})
 		daemon.artifact(sessionId, PROJECT_PREVIEW_PATH).then((html) => {
-			if (!cancelled) setProjectHtml(html && html.trim() ? html : null)
+			if (!cancelled) setProjectHtml(html?.trim() ? html : null)
 		}).catch(() => {})
 		return () => {
 			cancelled = true
@@ -188,18 +188,19 @@ function DesignPreview({ sessionId, live }: { sessionId: string; live: boolean }
 	)
 }
 
-function BuildPreview(): JSX.Element {
+export function BuildPreview({ previewUrl }: { previewUrl: string | null }): JSX.Element {
+	if (!previewUrl) return <p className="text-body text-text-tertiary">No local preview configured. Set a local preview URL in Deployment.</p>
 	return (
 		<>
-			<Chrome url="http://localhost:5173">
+			<Chrome url={previewUrl}>
 				<iframe
-					src="http://localhost:5173"
+					src={previewUrl}
 					className="min-h-0 flex-1 bg-white"
-					title="running app"
+					title="Local application preview"
 				/>
 			</Chrome>
 			<p className="mt-2 px-0.5 text-tiny text-text-tertiary">
-				The real app once an issue is in flight (localhost:5173). The element→source tagger lands here next.
+				Local development preview. This is separate from the deployed application.
 			</p>
 		</>
 	)
@@ -209,10 +210,12 @@ export function PreviewPane({
 	phase,
 	sessionId,
 	live,
+	previewUrl,
 }: {
 	phase: PhaseId
 	sessionId: string
 	live: boolean
+	previewUrl: string | null
 }): JSX.Element {
 	const badge = phase === 'build' ? 'app' : 'mockup'
 	return (
@@ -224,7 +227,7 @@ export function PreviewPane({
 				</span>
 			</div>
 			<div className="flex min-h-0 flex-1 flex-col p-3">
-				{phase === 'build' ? <BuildPreview /> : <DesignPreview sessionId={sessionId} live={live} />}
+				{phase === 'build' ? <BuildPreview previewUrl={previewUrl} /> : <DesignPreview sessionId={sessionId} live={live} />}
 			</div>
 		</aside>
 	)

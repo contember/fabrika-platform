@@ -1,6 +1,7 @@
 import type { JSX } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnnotationPanel } from './components/AnnotationPanel'
+import { DeploymentPanel } from './components/DeploymentPanel'
 import { Header } from './components/Header'
 import { PhaseRail } from './components/PhaseRail'
 import { PreviewPane } from './components/PreviewPane'
@@ -17,7 +18,9 @@ import {
 	type RevisionInfo,
 	SessionContext,
 } from './lib/kernel'
+import { platformClient } from './lib/platformClient'
 import type { CanvasFileInfo, ConnStatus, PhaseId, PhaseState, RevisionMeta, SessionMeta } from './lib/types'
+import { usePlatform } from './lib/usePlatform'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -69,6 +72,7 @@ export function App(): JSX.Element {
 	const sessionId = sessionIdFromPath() ?? FIXTURE_SESSION_ID
 
 	const [status, setStatus] = useState<ConnStatus>('connecting')
+	const platform = usePlatform(sessionId, status === 'live')
 	const [phaseState, setPhaseState] = useState<PhaseState>(EMPTY_PHASE_STATE)
 	const [meta, setMeta] = useState<SessionMeta | null>(null)
 	const [watching, setWatching] = useState(false)
@@ -84,13 +88,15 @@ export function App(): JSX.Element {
 			try {
 				await daemon.health()
 				if (cancelled) return
-				const m = await daemon.meta(sessionId).catch(() => null)
+				const root = new URLSearchParams(location.search).get('root')
+				if (root?.endsWith('/.fabrika')) await platformClient.register(sessionId, root.slice(0, -'/.fabrika'.length))
+				const m = await daemon.meta(sessionId)
 				if (cancelled) return
 				if (m) {
 					setMeta(m)
 					rootRef.current = m.projectRoot ? `${m.projectRoot}/.fabrika` : undefined
 				}
-				const ph = await daemon.phase(rootRef.current).catch(() => null)
+				const ph = await daemon.phase(rootRef.current)
 				if (cancelled) return
 				if (ph) {
 					setPhaseState(ph)
@@ -99,6 +105,10 @@ export function App(): JSX.Element {
 				setStatus('live')
 			} catch {
 				if (!cancelled) {
+					if (sessionIdFromPath()) {
+						setStatus('offline')
+						return
+					}
 					setMeta(FIXTURE_META)
 					setPhaseState(FIXTURE_PHASE_STATE)
 					if (!userFocused.current) setFocused(FIXTURE_PHASE_STATE.current)
@@ -112,8 +122,9 @@ export function App(): JSX.Element {
 		}
 	}, [sessionId])
 
+	const socketEnabled = meta !== null && (status === 'live' || status === 'offline')
 	useEffect(() => {
-		if (status !== 'live') return
+		if (!socketEnabled) return
 
 		let closed = false
 		let reconnect: ReturnType<typeof setTimeout> | null = null
@@ -160,7 +171,7 @@ export function App(): JSX.Element {
 			wsRef.current?.close()
 			wsRef.current = null
 		}
-	}, [status, sessionId])
+	}, [socketEnabled, sessionId])
 
 	const [activeView, setActiveView] = useState<ActiveView>({ type: 'overview' })
 
@@ -233,7 +244,7 @@ export function App(): JSX.Element {
 				sessionId={sessionId}
 				live={live}
 			/>
-			{showPreview && <PreviewPane phase={focused} sessionId={sessionId} live={live} />}
+			{showPreview && <PreviewPane phase={focused} sessionId={sessionId} live={live} previewUrl={platform.data?.previewUrl ?? null} />}
 			<AnnotationPanel
 				gateName={gateName}
 				hasGate={hasCanvas}
@@ -246,6 +257,10 @@ export function App(): JSX.Element {
 	return (
 		<div className="flex h-screen w-screen flex-col overflow-hidden bg-bg-base text-text-primary">
 			<Header sessionId={sessionId} status={status} watching={watching} />
+			<DeploymentPanel platform={platform} live={live} />
+			{status === 'offline' && (
+				<p role="alert" className="px-6 py-2 text-body text-accent-amber">Project unavailable. Check the local daemon, then reload this page.</p>
+			)}
 			{hasCanvas
 				? (
 					<SessionContext.Provider value={sessionId}>
