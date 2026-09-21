@@ -1,0 +1,95 @@
+import type { ProviderNamespaceHost } from '@fabrika/provider-contract'
+import type { ZeropsApi, ZeropsProjectMode } from '../api'
+import type { Sleeper } from '../collaborators'
+import type { ZeropsSourceTarget } from '../types'
+
+export type ZeropsNamespacePublicAccess = 'custom-domain' | 'zerops-subdomain'
+
+export type ZeropsNamespacePostgres =
+	| {
+		readonly type: 'postgresql:ha@18'
+		readonly profile?: 'oltp-staging' | 'oltp-production' | 'oltp-enterprise' | 'olap-production' | 'writeheavy-production'
+	}
+	| {
+		readonly type: 'postgresql:single@18'
+		readonly profile?: 'oltp-hobby' | 'oltp-staging' | 'oltp-production' | 'olap-production' | 'writeheavy-production'
+	}
+
+/**
+ * Provider-owned namespace state. Optional fields are durable progress checkpoints; values that are
+ * absent are resolved by `normalize()` before a mutation starts.
+ */
+export interface ZeropsNamespaceTarget {
+	readonly projectName?: string
+	readonly corePackage?: ZeropsProjectMode
+	readonly publicAccess?: ZeropsNamespacePublicAccess
+	readonly proxyBuildFromGit?: string
+	readonly postgres?: ZeropsNamespacePostgres
+	readonly managed?: boolean
+	readonly projectId?: string
+	readonly proxyServiceId?: string
+	readonly postgresServiceId?: string
+	readonly proxyConfigured?: boolean
+	readonly proxyBaselineSequence?: number
+	readonly proxyAppVersionId?: string
+	/** The hosts the published proxy answers on, recorded once so a namespace read needs no platform call. */
+	readonly proxyHosts?: readonly ProviderNamespaceHost[]
+	readonly ready?: boolean
+}
+
+export interface NormalizedZeropsNamespaceTarget extends ZeropsNamespaceTarget {
+	readonly projectName: string
+	readonly corePackage: ZeropsProjectMode
+	readonly publicAccess: ZeropsNamespacePublicAccess
+	readonly proxyBuildFromGit: string
+	readonly managed: boolean
+	readonly ready: boolean
+}
+
+export interface ZeropsNamespaceOptions {
+	readonly clientId: string
+	readonly proxyBuildFromGit: string
+	/** Public IAM origin reachable from an app project. */
+	readonly iamUrl: string
+	/** Same credential IAM receives as `FABRIKA_IAM_PROXY_KEY`. */
+	readonly iamKey: string
+	readonly api: ZeropsApi
+	readonly sleep?: Sleeper
+}
+
+export interface ZeropsNamespaceTopology {
+	readonly source: ZeropsSourceTarget
+	readonly createYaml: string
+	readonly servicesProvisionYaml: string
+	readonly servicesSteadyYaml: string
+}
+
+export interface ZeropsNamespacePresetInput {
+	readonly preset: 'cheap' | 'mid' | 'full'
+	readonly env: string
+	readonly projectName: string
+	readonly corePackage?: ZeropsProjectMode
+	readonly publicAccess?: ZeropsNamespacePublicAccess
+	readonly proxyBuildFromGit: string
+	readonly postgres?: ZeropsNamespacePostgres
+}
+
+export interface ZeropsNamespaceOperatorOptions {
+	readonly proxyBuildFromGit: string
+}
+
+export interface ZeropsNamespacePlanOptions {
+	readonly projectName?: string
+	readonly corePackage?: ZeropsProjectMode
+	readonly publicAccess?: ZeropsNamespacePublicAccess
+	readonly postgres?: ZeropsNamespacePostgres
+}
+
+export interface NamespaceProxyIamInput {
+	readonly api: Pick<ZeropsApi, 'listServiceEnv' | 'putServiceEnv'>
+	readonly proxyServiceId: string
+	/** The public IAM origin the proxy compares a token's `iss` against. */
+	readonly iamUrl: string
+	readonly iamKey: string
+	readonly signal: AbortSignal
+}

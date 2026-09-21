@@ -9,7 +9,14 @@
 // the poll loop rechecks it, the sleep between polls is interruptible, and a cancelled run asks Zerops to
 // cancel the build it started rather than leaving it running.
 
-import { createProvider, type JsonValue, type ProviderDeploySession, type ProviderModule, type TypedProviderRun } from '@fabrika/provider-contract'
+import {
+	createProvider,
+	type JsonValue,
+	type ProviderDeploySession,
+	type ProviderModule,
+	type ProviderSourceBinding,
+	type TypedProviderRun,
+} from '@fabrika/provider-contract'
 import {
 	waitForProcess,
 	ZEROPS_ACTIVE,
@@ -40,11 +47,7 @@ export const CANCELLED = 'deploy cancelled'
 
 type ZeropsRun = TypedProviderRun<ZeropsRuntimeTarget, FabrikaManifest>
 
-export interface ZeropsSourceTransportBinding {
-	readonly connectionId: string
-	readonly installationId: number
-	readonly transportKind: 'keyed-v2'
-}
+export type ZeropsSourceTransportBinding = ProviderSourceBinding
 
 export interface ZeropsSourceTransportRouting {
 	bindingForRun(runId: string): ZeropsSourceTransportBinding | undefined
