@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .release/
+.smellhunt/
 .lopata/
 *.tsbuildinfo
 **/buzola.gen.ts

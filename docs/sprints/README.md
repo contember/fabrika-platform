@@ -19,4 +19,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- none — the last sprint shipped 2026-08-21; see [`../archive/`](../archive/README.md).
+- [Simplify existing boundaries (2026-09-21)](sprint-2026-09-21-simplify-existing-boundaries.md) — shared input/provider contracts and focused extraction of sixteen large source files.
