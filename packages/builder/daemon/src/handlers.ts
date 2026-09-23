@@ -1,10 +1,12 @@
-import { type CanvasScope, compileJsx, type SessionManager, watchSession } from '@fabrika/canvas-kernel/server'
+import { type AssertReadable, type CanvasScope, compileJsx, type SessionManager, watchSession } from '@fabrika/canvas-kernel/server'
 import type { Route } from '@fabrika/daemon-kit'
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
-import { basename, dirname, extname, join, resolve, sep } from 'path'
+import { basename, dirname, extname, join } from 'path'
 import type { BuildEvent, BuildStream } from './build-stream'
 import { COMPILE_TEMP_DIR } from './paths'
 import { derivePhaseState, type GateOracle } from './phases'
+import { BuilderPlatform } from './platform'
+import { PlatformError } from './platform-storage'
 
 function jsonResponse(data: unknown, status = 200): Response {
 	return new Response(JSON.stringify(data), {
@@ -67,6 +69,7 @@ export interface HandlerContext {
 	sessionsDir: string
 	port: number
 	version: string
+	platform?: BuilderPlatform
 }
 
 function gateOracleFor(sm: SessionManager): GateOracle {
@@ -89,7 +92,16 @@ interface CanvasSelection {
 	scope: CanvasScope
 }
 
-function resolveCanvasSelection(body: Record<string, unknown>): CanvasSelection {
+function readCanvasFile(path: string, assertReadable: AssertReadable): string {
+	try {
+		assertReadable(path)
+		return readFileSync(path, 'utf-8')
+	} catch {
+		throw new Error('Canvas file access refused')
+	}
+}
+
+function resolveCanvasSelection(body: Record<string, unknown>, assertReadable: AssertReadable): CanvasSelection {
 	const view = typeof body['view'] === 'string' ? body['view'] : null
 	const directory = typeof body['directory'] === 'string' ? body['directory'] : null
 	if (!!view === !!directory) {
@@ -105,7 +117,7 @@ function resolveCanvasSelection(body: Record<string, unknown>): CanvasSelection 
 		}
 		const filename = basename(view)
 		return {
-			files: new Map([[filename, readFileSync(view, 'utf-8')]]),
+			files: new Map([[filename, readCanvasFile(view, assertReadable)]]),
 			scope: { kind: 'view', filename },
 		}
 	}
@@ -118,13 +130,15 @@ function resolveCanvasSelection(body: Record<string, unknown>): CanvasSelection 
 	if (filenames.length === 0) throw new Error('No .jsx files found in directory')
 	const files = new Map<string, string>()
 	for (const filename of filenames) {
-		files.set(filename, readFileSync(join(directory, filename), 'utf-8'))
+		files.set(filename, readCanvasFile(join(directory, filename), assertReadable))
 	}
 	return { files, scope: { kind: 'directory' } }
 }
 
 export function createHandlers(ctx: HandlerContext): Route[] {
 	const { sessionManager, broadcastPlanUpdate, broadcastRevisionUpdate, buildStream } = ctx
+	const platform = ctx.platform ?? new BuilderPlatform((id) => sessionManager.get(id)?.projectRoot)
+	const assertReadable: AssertReadable = (path) => platform.storage.assertPublicFile(path)
 
 	function handleHealth(): Response {
 		return jsonResponse({
@@ -138,10 +152,11 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 	}
 
 	function handlePhase(_req: Request, url: URL): Response {
-		const root = url.searchParams.get('root')
-		if (!root) return jsonResponse({ error: 'Missing ?root=<fabrikaDir>' }, 400)
 		const sessionId = url.searchParams.get('session') ?? ''
 		try {
+			const projectRoot = sessionId ? platform.projectRoot(sessionId) : undefined
+			const root = url.searchParams.get('root') ?? (projectRoot ? join(projectRoot, '.fabrika') : null)
+			if (!root) return jsonResponse({ error: 'Missing ?root=<fabrikaDir>' }, 400)
 			const state = derivePhaseState(root, sessionId, gateOracleFor(sessionManager))
 			return jsonResponse(state)
 		} catch (error: unknown) {
@@ -157,7 +172,7 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 			const body = parsedBody
 			let selection: CanvasSelection
 			try {
-				selection = resolveCanvasSelection(body)
+				selection = resolveCanvasSelection(body, assertReadable)
 			} catch (error) {
 				return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400)
 			}
@@ -177,7 +192,8 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 				)
 			}
 
-			const projectRoot = optionalString(body['projectRoot']) ?? process.cwd()
+			const boundRoot = platform.projectRoot(sessionId)
+			const projectRoot = platform.storage.assertProjectRoot(boundRoot ?? optionalString(body['projectRoot']) ?? process.cwd(), true)
 			const isNew = !sessionManager.get(sessionId)
 			const gate = optionalString(body['gate'])
 			const label = gate ?? optionalString(body['label'])
@@ -187,7 +203,7 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 			const errors: Record<string, string> = {}
 			await Promise.all(
 				[...canvasFiles.entries()].map(async ([filename, jsx]) => {
-					const result = await compileJsx(jsx, { projectRoot, tempDir: COMPILE_TEMP_DIR })
+					const result = await compileJsx(jsx, { projectRoot, tempDir: COMPILE_TEMP_DIR, assertReadable })
 					if (result.ok) compiled.set(filename, result.js)
 					else errors[filename] = result.error
 				}),
@@ -209,7 +225,7 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 			}
 
 			broadcastPlanUpdate(sessionId)
-			watchSession(sessionId, sessionManager, broadcastPlanUpdate)
+			watchSession(sessionId, sessionManager, broadcastPlanUpdate, { tempDir: COMPILE_TEMP_DIR, assertReadable })
 
 			const browserUrl = `http://localhost:${ctx.port}/s/${sessionId}`
 			return jsonResponse({
@@ -233,32 +249,42 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 		const revParam = url.searchParams.get('rev')
 		const rev = revParam ? parseInt(revParam, 10) : undefined
 
-		let compiled = sessionManager.getCompiled(sessionId, jsxFilename, rev)
-
-		if (!compiled && rev) {
-			const session = sessionManager.get(sessionId)
-			if (session) {
-				const jsx = sessionManager.readRevisionJsx(sessionId, rev, jsxFilename)
-				if (jsx) {
-					const result = await compileJsx(jsx, { projectRoot: session.projectRoot, tempDir: COMPILE_TEMP_DIR })
-					if (result.ok) {
-						sessionManager.saveCompiled(sessionId, jsxFilename, result.js, rev)
-						compiled = result.js
-					}
-				}
-			}
+		const session = sessionManager.get(sessionId)
+		const revision = rev ?? session?.currentRevision
+		if (!session || !revision || !session.revisions.some((r) => r.revision === revision && r.canvasFiles.some((f) => f.filename === jsxFilename))) {
+			return jsonResponse({ error: 'No compiled canvas' }, 404)
 		}
-
-		if (!compiled) return jsonResponse({ error: 'No compiled canvas' }, 404)
-		return new Response(compiled, {
-			headers: { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache' },
-		})
+		try {
+			const projectRoot = platform.storage.assertProjectRoot(session.projectRoot)
+			const jsx = readCanvasFile(sessionManager.getRevisionJsxPath(sessionId, revision, jsxFilename), assertReadable)
+			// Stored bundles predate admission and dependencies can change after a successful compile.
+			const result = await compileJsx(jsx, { projectRoot, tempDir: COMPILE_TEMP_DIR, assertReadable })
+			if (!result.ok) return jsonResponse({ error: 'Canvas compilation failed' }, 400)
+			sessionManager.saveCompiled(sessionId, jsxFilename, result.js, revision)
+			return new Response(result.js, {
+				headers: { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache' },
+			})
+		} catch {
+			return jsonResponse({ error: 'Canvas file access refused' }, 403)
+		}
 	}
 
 	function handleMeta(_req: Request, _url: URL, match: URLPatternResult): Response {
 		const sessionId = routeParam(match, 'id')
 		const session = sessionManager.get(sessionId)
-		if (!session) return jsonResponse({ error: 'Session not found' }, 404)
+		if (!session) {
+			const project = platform.storage.project(sessionId)
+			if (!project) return jsonResponse({ error: 'Session not found' }, 404)
+			const config = platform.storage.config(project)
+			return jsonResponse({
+				projectRoot: project.projectRoot,
+				currentRevision: 0,
+				revisions: [],
+				canvasFiles: [],
+				createdAt: config.createdAt,
+				updatedAt: config.createdAt,
+			})
+		}
 		return jsonResponse({
 			projectRoot: session.projectRoot,
 			currentRevision: session.currentRevision,
@@ -271,23 +297,20 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 
 	function handleArtifact(_req: Request, url: URL, match: URLPatternResult): Response {
 		const sessionId = routeParam(match, 'id')
-		const session = sessionManager.get(sessionId)
-		if (!session) return jsonResponse({ error: 'Session not found' }, 404)
+		const projectRoot = platform.projectRoot(sessionId)
+		if (!projectRoot) return jsonResponse({ error: 'Session not found' }, 404)
 
 		const rel = url.searchParams.get('path')
 		if (!rel) return jsonResponse({ error: 'Missing ?path=<relative path>' }, 400)
 
-		const root = resolve(session.projectRoot)
-		const target = resolve(root, rel)
-		if (target !== root && !target.startsWith(root + sep)) {
-			return jsonResponse({ error: 'Path escapes project root' }, 403)
-		}
 		try {
+			const target = platform.storage.artifact(projectRoot, rel)
+			platform.storage.assertPublicFile(target)
 			const st = statSync(target)
 			if (!st.isFile()) return jsonResponse({ error: 'Not a file' }, 404)
 			return jsonResponse({ path: rel, content: readFileSync(target, 'utf-8') })
-		} catch {
-			return jsonResponse({ error: 'Artifact not found' }, 404)
+		} catch (error) {
+			return jsonResponse({ error: 'Artifact not found or outside the project' }, error instanceof PlatformError ? 403 : 404)
 		}
 	}
 
@@ -317,6 +340,12 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 		const skeletons: unknown[] = []
 		for (const entry of readdirSync(dir).sort()) {
 			if (!/\.test\.ts$/.test(entry)) continue
+			try {
+				platform.storage.artifact(session.projectRoot, join('tests', 'browser', entry))
+				platform.storage.assertPublicFile(join(dir, entry))
+			} catch {
+				continue
+			}
 			const src = readFileSync(join(dir, entry), 'utf-8')
 			const re = /browserTest\s*\(/g
 			let mm: RegExpExecArray | null

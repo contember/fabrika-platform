@@ -1,11 +1,12 @@
-import { existsSync, readdirSync, readFileSync, watch } from 'fs'
-import { join } from 'path'
+import { existsSync, watch } from 'fs'
 import { type CanvasComponents, compileJsx } from './compiler'
+import { assertCanvasFileReadable, type AssertReadable, readCanvasFile } from './file-admission'
 import type { SessionManager } from './session'
 
 type BroadcastFn = (sessionId: string) => void
 
 export interface WatchOptions {
+	assertReadable?: AssertReadable
 	/** Scratch dir for recompiles, from `createCanvasPaths()`. */
 	tempDir?: string
 	/** Host components, same value the push path compiles with — a recompile
@@ -33,11 +34,16 @@ export function watchSession(
 
 	const fileWatchers: ReturnType<typeof watch>[] = []
 	const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
+	const sources: { filename: string; filePath: string }[] = []
 
 	for (const filename of canvasFiles) {
 		const filePath = sessionManager.getRevisionJsxPath(sessionId, rev, filename)
 		if (!existsSync(filePath)) continue
+		assertCanvasFileReadable(filePath, options.assertReadable)
+		sources.push({ filename, filePath })
+	}
 
+	for (const { filename, filePath } of sources) {
 		const watcher = watch(filePath, async (event) => {
 			if (event !== 'change') return
 
@@ -50,10 +56,11 @@ export function watchSession(
 				setTimeout(async () => {
 					debounceTimers.delete(filename)
 					try {
-						const jsx = readFileSync(filePath, 'utf-8')
+						const jsx = readCanvasFile(filePath, options.assertReadable)
 						const result = await compileJsx(jsx, {
 							projectRoot: session.projectRoot,
 							tempDir: options.tempDir,
+							assertReadable: options.assertReadable,
 							...(options.components ? { components: options.components } : {}),
 						})
 						if (result.ok) {

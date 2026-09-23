@@ -5,6 +5,8 @@ import { admitRequest } from './admission'
 import { BuildStream } from './build-stream'
 import { createHandlers } from './handlers'
 import { SESSIONS_DIR } from './paths'
+import { BuilderPlatform, type BuilderPlatformOptions } from './platform'
+import { createPlatformRoutes } from './platform-routes'
 import { createStaticHandlers } from './static'
 
 export type { BuildEvent } from './build-stream'
@@ -24,6 +26,7 @@ const VERSION = '0.0.0'
 export interface StartDaemonOptions {
 	port?: number
 	sessionsDir?: string
+	platform?: BuilderPlatformOptions
 }
 
 export interface RunningDaemon {
@@ -41,6 +44,7 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 	sessionManager.cleanupStale()
 	const wsManager = createWebSocketManager(sessionManager, { feedbackConsumption: 'external' })
 	const buildStream = new BuildStream()
+	const platform = new BuilderPlatform((id) => sessionManager.get(id)?.projectRoot, opts.platform)
 
 	const portRef = { value: port }
 
@@ -49,6 +53,7 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 		broadcastPlanUpdate: wsManager.broadcastPlanUpdate,
 		broadcastRevisionUpdate: wsManager.broadcastRevisionUpdate,
 		buildStream,
+		platform,
 		sessionsDir,
 		get port() {
 			return portRef.value
@@ -56,7 +61,7 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 		version: VERSION,
 	}
 
-	const routes = [...createHandlers(handlerCtx), ...createStaticHandlers()]
+	const routes = [...createPlatformRoutes(platform), ...createHandlers(handlerCtx), ...createStaticHandlers()]
 
 	const server = Bun.serve<WSData>({
 		port,
@@ -116,6 +121,7 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 		port: boundPort,
 		sessionManager,
 		stop() {
+			platform.stop()
 			try {
 				unwatchAll()
 			} catch {

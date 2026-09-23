@@ -2,9 +2,10 @@ import { randomUUID } from 'crypto'
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { parse as parseMermaid } from 'mermaid-parser-bundle'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { type ComponentChildren, Fragment, h } from 'preact'
 import renderToString from 'preact-render-to-string'
+import { assertCanvasFileReadable, type AssertReadable, CanvasFileAdmissionError, readCanvasFile } from './file-admission'
 
 export type CompileResult =
 	| { ok: true; js: string }
@@ -53,6 +54,8 @@ export const KERNEL_COMPONENTS: CanvasComponents = {
 }
 
 export interface CompileOptions {
+	/** Admission for static file reads, including resolved imports. Not a JavaScript sandbox. */
+	assertReadable?: AssertReadable
 	/** Resolves `<FilePreview>` / `<Markdown file>` references at compile time. */
 	projectRoot?: string
 	/** Scratch dir for the temp `.jsx` handed to Bun.build. Created on demand. */
@@ -268,8 +271,13 @@ export async function compileJsx(jsx: string, options: CompileOptions = {}): Pro
 
 	// Resolve file contents at compile time
 	if (projectRoot) {
-		jsx = resolveFilePreviews(jsx, projectRoot)
-		jsx = resolveMarkdownFiles(jsx, projectRoot)
+		try {
+			jsx = resolveFilePreviews(jsx, projectRoot, options.assertReadable)
+			jsx = resolveMarkdownFiles(jsx, projectRoot, options.assertReadable)
+		} catch (error) {
+			if (error instanceof CanvasFileAdmissionError) return { ok: false, error: error.message }
+			throw error
+		}
 	}
 
 	// Strip template literals and strings so `export default` inside CodeBlock
@@ -293,8 +301,11 @@ export async function compileJsx(jsx: string, options: CompileOptions = {}): Pro
 	// Pre-validate syntax with Bun.Transpiler — gives precise error positions,
 	// unlike Bun.build() which throws opaque "Bundle failed" for syntax errors.
 	try {
-		const transpiler = new Bun.Transpiler({ loader: 'jsx' })
-		transpiler.transformSync(source)
+		// Guarded builds validate each executable module in onLoad before Bun can run macros.
+		if (!options.assertReadable) {
+			const transpiler = new Bun.Transpiler({ loader: 'jsx' })
+			transpiler.transformSync(source)
+		}
 	} catch (syntaxError: any) {
 		return { ok: false, error: formatBuildError(syntaxError, lineOffset) }
 	}
@@ -302,19 +313,55 @@ export async function compileJsx(jsx: string, options: CompileOptions = {}): Pro
 	const compileDir = options.tempDir ?? FALLBACK_COMPILE_DIR
 	mkdirSync(compileDir, { recursive: true })
 	const tmpFile = join(compileDir, `plan-${randomUUID()}.jsx`)
+	const configFile = `${tmpFile}.json`
+	let admissionFailed = false
 
 	try {
 		writeFileSync(tmpFile, source)
 
 		try {
-			const result = await Bun.build({
+			if (options.assertReadable) writeFileSync(configFile, '{}')
+			const buildOptions: Bun.BuildConfig = {
 				entrypoints: [tmpFile],
 				format: 'esm',
 				external: ['react', 'react-dom', '#canvas/components', '#canvas/runtime'],
 				jsx: { runtime: 'automatic', importSource: 'react' },
-			})
+				...(options.assertReadable
+					? {
+						tsconfig: configFile,
+						plugins: [{
+							name: 'canvas-file-admission',
+							setup(build: Bun.PluginBuilder) {
+								build.onResolve({ filter: /^data:/i }, () => {
+									admissionFailed = true
+									throw new CanvasFileAdmissionError()
+								})
+								build.onLoad({ filter: /.*/, namespace: 'file' }, ({ path, loader }) => {
+									try {
+										assertCanvasFileReadable(path, options.assertReadable)
+									} catch {
+										admissionFailed = true
+										throw new CanvasFileAdmissionError()
+									}
+									if (loader === 'js' || loader === 'jsx' || loader === 'ts' || loader === 'tsx') {
+										const contents = readFileSync(path)
+										// Bun 1.3.14 supports macro:false, but its TranspilerOptions declaration omits false.
+										new Bun.Transpiler({ loader, macro: false } as unknown as Bun.TranspilerOptions).transformSync(contents)
+										return { contents, loader }
+									}
+									return undefined
+								})
+							},
+						}],
+					}
+					: {}),
+			}
+			const result = await Bun.build(buildOptions)
+			if (admissionFailed) return { ok: false, error: new CanvasFileAdmissionError().message }
 
 			if (!result.success) {
+				// Resolver metadata can bypass onLoad; its diagnostics may contain unadmitted source text.
+				if (options.assertReadable) return { ok: false, error: 'Canvas compilation failed' }
 				const errorLogs = result.logs.filter((l) => l.level === 'error')
 				const errors = errorLogs
 					.map((l) => formatBuildError(l, lineOffset))
@@ -332,6 +379,8 @@ export async function compileJsx(jsx: string, options: CompileOptions = {}): Pro
 			}
 			return { ok: true, js }
 		} catch (buildError: any) {
+			if (admissionFailed) return { ok: false, error: new CanvasFileAdmissionError().message }
+			if (options.assertReadable) return { ok: false, error: 'Canvas compilation failed' }
 			// A real syntax error surfaces as an AggregateError carrying BuildMessages
 			// (with positions) — format it precisely. The opaque "Unknown Error, TODO"
 			// corruption case (internal bundler state gets corrupted in long-running
@@ -345,10 +394,14 @@ export async function compileJsx(jsx: string, options: CompileOptions = {}): Pro
 			return { ok: false, error: buildError?.message || 'Unknown Error' }
 		}
 	} catch (e: any) {
+		if (options.assertReadable) return { ok: false, error: 'Canvas compilation failed' }
 		return { ok: false, error: e.message }
 	} finally {
 		try {
 			unlinkSync(tmpFile)
+		} catch {}
+		try {
+			unlinkSync(configFile)
 		} catch {}
 	}
 }
@@ -357,20 +410,21 @@ export async function compileJsx(jsx: string, options: CompileOptions = {}): Pro
  * Find <Markdown file="..." /> tags and inject __content with the file contents
  * resolved at compile time.
  */
-function resolveMarkdownFiles(jsx: string, projectRoot: string): string {
+function resolveMarkdownFiles(jsx: string, projectRoot: string, assertReadable?: AssertReadable): string {
 	return jsx.replace(
 		/<Markdown\b([^>]*?)\/>/g,
 		(match, attrs: string) => {
 			const filePath = attrs.match(/file=["']([^"']+)["']/)?.[1]
 			if (!filePath) return match
 
-			const absPath = join(projectRoot, filePath)
+			const absPath = assertReadable ? resolve(projectRoot, filePath) : join(projectRoot, filePath)
 
 			try {
-				const content = readFileSync(absPath, 'utf-8')
+				const content = readCanvasFile(absPath, assertReadable)
 				const escaped = JSON.stringify(content)
 				return `<Markdown${attrs} __content={${escaped}} />`
-			} catch {
+			} catch (error) {
+				if (error instanceof CanvasFileAdmissionError) throw error
 				return match
 			}
 		},
@@ -381,7 +435,7 @@ function resolveMarkdownFiles(jsx: string, projectRoot: string): string {
  * Find <FilePreview path="..." /> tags and inject __content with the file contents
  * resolved at compile time so the browser doesn't need to fetch.
  */
-function resolveFilePreviews(jsx: string, projectRoot: string): string {
+function resolveFilePreviews(jsx: string, projectRoot: string, assertReadable?: AssertReadable): string {
 	// Match <FilePreview ... /> (self-closing)
 	return jsx.replace(
 		/<FilePreview\b([^>]*?)\/>/g,
@@ -389,10 +443,10 @@ function resolveFilePreviews(jsx: string, projectRoot: string): string {
 			const filePath = attrs.match(/path=["']([^"']+)["']/)?.[1]
 			if (!filePath) return match
 
-			const absPath = join(projectRoot, filePath)
+			const absPath = assertReadable ? resolve(projectRoot, filePath) : join(projectRoot, filePath)
 
 			try {
-				let content = readFileSync(absPath, 'utf-8')
+				let content = readCanvasFile(absPath, assertReadable)
 
 				// Apply lines filter if present
 				const linesMatch = attrs.match(/lines=\{?\[(\d+)\s*,\s*(\d+)\]\}?/)
@@ -405,7 +459,8 @@ function resolveFilePreviews(jsx: string, projectRoot: string): string {
 				// Escape for embedding in JSX string
 				const escaped = JSON.stringify(content)
 				return `<FilePreview${attrs} __content={${escaped}} />`
-			} catch {
+			} catch (error) {
+				if (error instanceof CanvasFileAdmissionError) throw error
 				return match
 			}
 		},

@@ -18,6 +18,7 @@ export const paths = createCanvasPaths({
 	appName: 'fabrika',
 	dataDir: resolveDataDir(),
 	tempDir: join(tmpdir(), 'fabrika'),
+	ensure: false,
 })
 
 export const DATA_DIR = paths.dataDir
