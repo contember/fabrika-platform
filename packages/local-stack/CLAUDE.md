@@ -1,7 +1,7 @@
 # @fabrika/local-stack
 
 The Docker composition behind every root `local:*` and `browser:*` command: both Postgres instances,
-MinIO, a Zerops API emulator, and all three planes behind two Caddy proxies. It validates Fabrika
+SeaweedFS, a Zerops API emulator, and all three planes behind two Caddy proxies. It validates Fabrika
 behavior and network boundaries before a credentialed Zerops deploy — it does NOT validate Zerops
 infrastructure behavior. Assumes the root CLAUDE.md.
 

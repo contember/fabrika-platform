@@ -60,6 +60,25 @@ bun run local:reset
 This command removes only the `fabrika-local` Compose volumes and
 `packages/local-stack/.state/`. It then creates and starts a fresh stack.
 
+## Local object storage
+
+SeaweedFS `chrislusf/seaweedfs:4.42` runs in `mini` mode as `object-storage`.
+It creates `run-logs` and `operations-payloads` on startup. Health checks wait
+for both buckets in the filer, not just the S3 port. Telemetry and implicit
+bucket creation on upload are disabled.
+
+Preparation writes `.state/object-storage-identities.json` from the matching
+storage credentials in `control.env` and `operations.env`. Both buckets require
+signed requests; there is no anonymous identity. Existing credentials, including
+IAM keys, remain unchanged when this file is first generated or regenerated.
+Fresh stacks do not need or generate `minio.env`.
+
+SeaweedFS uses a new `object-storage` volume. The previous `minio` volume and
+`minio.env` file are retained but unused. Existing MinIO objects are **not
+migrated**: old run logs and Operations payloads are unavailable in the new store.
+`local:up` and `local:down` preserve both stores. Only an explicit `local:reset`
+discards all local data, including the retained MinIO volume and credentials.
+
 ## Endpoints
 
 | Component                | URL                                      |
@@ -155,7 +174,7 @@ The composition runs these real components:
 
 - IAM, Operations, control, and notes Bun servers;
 - their real PostgreSQL migrations and data stores;
-- MinIO through the production S3-compatible run-log and Operations blob-store
+- SeaweedFS through the production S3-compatible run-log and Operations blob-store
   adapters;
 - the Operations Postgres job consumer and scheduled health/notification
   maintenance;
@@ -173,7 +192,7 @@ services.
 
 Notes can reach the public IAM address through the narrow `iam-public` network
 to fetch JWKS. It cannot resolve or reach the private control, platform
-PostgreSQL, MinIO, IAM RPC, or Operations services.
+PostgreSQL, SeaweedFS, IAM RPC, or Operations services.
 
 The stateful Zerops emulator implements only the REST calls used by
 `@fabrika/provider-zerops`: projects, services, service variables, imports, and

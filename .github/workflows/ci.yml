@@ -59,8 +59,8 @@ jobs:
       FABRIKA_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       FABRIKA_TEST_S3_ENDPOINT: http://127.0.0.1:9000
       FABRIKA_TEST_S3_BUCKET: fabrika-test
-      FABRIKA_TEST_S3_ACCESS_KEY_ID: minioadmin
-      FABRIKA_TEST_S3_SECRET_ACCESS_KEY: minioadmin
+      FABRIKA_TEST_S3_ACCESS_KEY_ID: fabrika-test
+      FABRIKA_TEST_S3_SECRET_ACCESS_KEY: fabrika-test-secret
       FABRIKA_TEST_S3_REGION: us-east-1
     steps:
       - uses: actions/checkout@v6
@@ -72,24 +72,23 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Start MinIO
+      - name: Start SeaweedFS
         run: |
-          docker run --detach --name fabrika-test-minio --publish 9000:9000 \
-            --env MINIO_ROOT_USER=minioadmin \
-            --env MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          docker run --detach --name fabrika-test-s3 --publish 127.0.0.1:9000:9000 \
+            --env AWS_ACCESS_KEY_ID="$FABRIKA_TEST_S3_ACCESS_KEY_ID" \
+            --env AWS_SECRET_ACCESS_KEY="$FABRIKA_TEST_S3_SECRET_ACCESS_KEY" \
+            --env S3_BUCKET="$FABRIKA_TEST_S3_BUCKET" \
+            chrislusf/seaweedfs:4.42 mini -dir=/data -s3.port=9000 \
+            -s3.autoCreateBucket=false -master.telemetry=false
 
           for attempt in {1..30}; do
-            if curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null; then
+            if docker exec fabrika-test-s3 curl -fsS -o /dev/null 'http://127.0.0.1:8888/buckets/fabrika-test/?limit=1'; then
               break
             fi
-            echo "Waiting for MinIO (${attempt}/30)"
+            echo "Waiting for SeaweedFS bucket (${attempt}/30)"
             sleep 1
           done
-          curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null
-
-          docker run --rm --network host --entrypoint sh minio/mc:RELEASE.2025-08-13T08-35-41Z -c \
-            'mc alias set local http://127.0.0.1:9000 minioadmin minioadmin && mc mb local/fabrika-test'
+          docker exec fabrika-test-s3 curl -fsS -o /dev/null 'http://127.0.0.1:8888/buckets/fabrika-test/?limit=1'
 
       - name: Run full test suite
         run: bun run test

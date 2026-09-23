@@ -18,15 +18,7 @@ const IAM_ISSUER = 'http://iam.fabrika.localhost:18080'
 
 const statePath = (name: string): string => resolve(STATE_DIR, name)
 
-/**
- * A 256-bit secret in base64url, never starting with `-` or `_`.
- *
- * base64url may begin with either, and a credential that begins with `-` reads as a FLAG to anything
- * that takes it on a command line no matter how it is quoted: a rolled MinIO password beginning with
- * `-` made `mc alias set` print its usage and loop forever, and the whole composition came up without
- * an object store. Rerolling costs nothing and removes a bug that only appears about one reset in
- * sixteen.
- */
+// Avoid leading flag characters in credentials that may be passed to a CLI.
 const randomSecret = (): string => {
 	for (;;) {
 		const value = randomBytes(32).toString('base64url')
@@ -38,19 +30,19 @@ const randomSecret = (): string => {
 
 const randomBase64Key = (): string => randomBytes(32).toString('base64')
 
-const writeEnv = async (name: string, values: Record<string, string>): Promise<void> => {
+const writeEnv = async (directory: string, name: string, values: Record<string, string>): Promise<void> => {
 	const lines = Object.entries(values).map(([key, value]) => {
 		if (value.includes('\n') || value.includes('\r')) {
 			throw new Error(`${key} cannot contain a newline`)
 		}
 		return `${key}=${value}`
 	})
-	await Bun.write(statePath(name), `${lines.join('\n')}\n`)
+	await Bun.write(resolve(directory, name), `${lines.join('\n')}\n`)
 }
 
-const readEnv = async (name: string): Promise<Record<string, string>> => {
+const readEnv = async (directory: string, name: string): Promise<Record<string, string>> => {
 	const values: Record<string, string> = {}
-	for (const line of (await Bun.file(statePath(name)).text()).split('\n')) {
+	for (const line of (await Bun.file(resolve(directory, name)).text()).split('\n')) {
 		if (line === '') continue
 		const separator = line.indexOf('=')
 		if (separator <= 0) throw new Error(`${name} contains an invalid environment entry`)
@@ -63,11 +55,11 @@ const readEnv = async (name: string): Promise<Record<string, string>> => {
 
 const writeJson = (name: string, value: unknown): Promise<number> => Bun.write(statePath(name), `${JSON.stringify(value, null, '\t')}\n`)
 
-const generateSecrets = async (): Promise<void> => {
+export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promise<void> => {
+	mkdirSync(directory, { recursive: true, mode: 0o700 })
 	const requiredFiles = [
 		'platform-db.env',
 		'apps-db.env',
-		'minio.env',
 		'iam.env',
 		'control.env',
 		'operations.env',
@@ -76,14 +68,19 @@ const generateSecrets = async (): Promise<void> => {
 		'notes.env',
 		'emulator.env',
 	]
-	if (requiredFiles.every((file) => existsSync(statePath(file)))) {
-		await ensureSourceSecrets()
+	const existingFiles = requiredFiles.filter((file) => existsSync(resolve(directory, file)))
+	if (existingFiles.length === requiredFiles.length) {
+		await ensureObjectStorageSecrets(directory)
+		await ensureSourceSecrets(directory)
 		return
+	}
+	if (existingFiles.length > 0) {
+		throw new Error('local credentials are incomplete; restore the missing .state files or explicitly reset the stack')
 	}
 
 	const platformDatabasePassword = randomSecret()
 	const appsDatabasePassword = randomSecret()
-	const minioPassword = randomSecret()
+	const storagePassword = randomSecret()
 	const rpcKey = `px_${randomSecret()}`
 	const proxyKey = `px_${randomSecret()}`
 	const provisioningKey = `px_${randomSecret()}`
@@ -100,27 +97,26 @@ const generateSecrets = async (): Promise<void> => {
 	)
 
 	await Promise.all([
-		writeEnv('platform-db.env', { POSTGRES_PASSWORD: platformDatabasePassword }),
-		writeEnv('apps-db.env', { POSTGRES_DB: 'notes', POSTGRES_PASSWORD: appsDatabasePassword }),
-		writeEnv('minio.env', { MINIO_ROOT_USER: 'fabrika-local', MINIO_ROOT_PASSWORD: minioPassword }),
-		writeEnv('iam.env', {
+		writeEnv(directory, 'platform-db.env', { POSTGRES_PASSWORD: platformDatabasePassword }),
+		writeEnv(directory, 'apps-db.env', { POSTGRES_DB: 'notes', POSTGRES_PASSWORD: appsDatabasePassword }),
+		writeEnv(directory, 'iam.env', {
 			FABRIKA_IAM_DATABASE_URL: `postgres://postgres:${platformDatabasePassword}@platform-db:5432/iam`,
 			FABRIKA_IAM_SIGNING_KEYS: signingKeys,
 			FABRIKA_IAM_RPC_KEY: rpcKey,
 			FABRIKA_IAM_PROXY_KEY: proxyKey,
 			FABRIKA_IAM_PROVISIONING_KEY: provisioningKey,
 		}),
-		writeEnv('operations.env', {
+		writeEnv(directory, 'operations.env', {
 			FABRIKA_OPERATIONS_DATABASE_URL: `postgres://postgres:${platformDatabasePassword}@platform-db:5432/operations`,
 			FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID: 'fabrika-local',
-			FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY: minioPassword,
+			FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY: storagePassword,
 			OPERATIONS_SYNC_KEY: operationsSyncKey,
 			FABRIKA_IAM_RPC_KEY: rpcKey,
 		}),
-		writeEnv('control.env', {
+		writeEnv(directory, 'control.env', {
 			FABRIKA_CONTROL_DATABASE_URL: `postgres://postgres:${platformDatabasePassword}@platform-db:5432/control`,
 			FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID: 'fabrika-local',
-			FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY: minioPassword,
+			FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY: storagePassword,
 			FABRIKA_IAM_RPC_KEY: rpcKey,
 			FABRIKA_IAM_PROVISIONING_KEY: provisioningKey,
 			OPERATIONS_SYNC_KEY: operationsSyncKey,
@@ -130,20 +126,43 @@ const generateSecrets = async (): Promise<void> => {
 			FABRIKA_ZEROPS_ACCESS_TOKEN: emulatorToken,
 			FABRIKA_ZEROPS_PROXY_IAM_KEY: proxyKey,
 		}),
-		writeEnv('source.env', sourceCredentials),
-		writeEnv('platform-proxy.env', { FABRIKA_IAM_KEY: proxyKey }),
-		writeEnv('apps-proxy.env', { FABRIKA_IAM_KEY: proxyKey }),
-		writeEnv('notes.env', {
+		writeEnv(directory, 'source.env', sourceCredentials),
+		writeEnv(directory, 'platform-proxy.env', { FABRIKA_IAM_KEY: proxyKey }),
+		writeEnv(directory, 'apps-proxy.env', { FABRIKA_IAM_KEY: proxyKey }),
+		writeEnv(directory, 'notes.env', {
 			NOTES_DATABASE_URL: `postgres://postgres:${appsDatabasePassword}@apps-db:5432/notes`,
 		}),
-		writeEnv('emulator.env', { LOCAL_ZEROPS_TOKEN: emulatorToken }),
+		writeEnv(directory, 'emulator.env', { LOCAL_ZEROPS_TOKEN: emulatorToken }),
 	])
+	await ensureObjectStorageSecrets(directory)
+}
+
+async function ensureObjectStorageSecrets(directory: string): Promise<void> {
+	const control = await readEnv(directory, 'control.env')
+	const operations = await readEnv(directory, 'operations.env')
+	const accessKey = envValue(control, 'FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID')
+	const secretKey = envValue(control, 'FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY')
+	if (
+		!accessKey || !secretKey
+		|| accessKey !== envValue(operations, 'FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID')
+		|| secretKey !== envValue(operations, 'FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY')
+	) {
+		throw new Error('local control and Operations storage credentials must be present and match')
+	}
+	const config = {
+		identities: [{
+			name: 'fabrika-local',
+			credentials: [{ accessKey, secretKey }],
+			actions: ['Read:run-logs', 'Write:run-logs', 'List:run-logs', 'Read:operations-payloads', 'Write:operations-payloads', 'List:operations-payloads'],
+		}],
+	}
+	await Bun.write(resolve(directory, 'object-storage-identities.json'), `${JSON.stringify(config, null, '\t')}\n`)
 }
 
 /** Add the private source service to an existing local state without rotating its durable credentials. */
-async function ensureSourceSecrets(): Promise<void> {
-	const control = await readEnv('control.env')
-	const source = existsSync(statePath('source.env')) ? await readEnv('source.env') : null
+async function ensureSourceSecrets(directory: string): Promise<void> {
+	const control = await readEnv(directory, 'control.env')
+	const source = existsSync(resolve(directory, 'source.env')) ? await readEnv(directory, 'source.env') : null
 	const controlRpcKey = envValue(control, 'FABRIKA_ZEROPS_SOURCE_RPC_KEY')
 	const sourceRpcKey = source === null ? undefined : envValue(source, 'FABRIKA_SOURCE_RPC_KEY')
 	if (controlRpcKey !== undefined && sourceRpcKey !== undefined && controlRpcKey !== sourceRpcKey) {
@@ -153,13 +172,14 @@ async function ensureSourceSecrets(): Promise<void> {
 	if (source === null) {
 		const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 		await writeEnv(
+			directory,
 			'source.env',
 			await localSourceCredentialFixture(rpcKey, privateKey.export({ format: 'pem', type: 'pkcs8' }).toString()),
 		)
 	} else if (sourceRpcKey === undefined) {
 		throw new Error('the local source environment has no RPC credential')
 	}
-	if (controlRpcKey === undefined) await writeEnv('control.env', { ...control, FABRIKA_ZEROPS_SOURCE_RPC_KEY: rpcKey })
+	if (controlRpcKey === undefined) await writeEnv(directory, 'control.env', { ...control, FABRIKA_ZEROPS_SOURCE_RPC_KEY: rpcKey })
 }
 
 function envValue(values: Record<string, string>, key: string): string | undefined {
@@ -243,7 +263,7 @@ export const prepareLocalStack = async (): Promise<void> => {
 	// `prepare` script any more — as one it ran inside every `bun install`, spawning this nested build
 	// against a `node_modules` the outer install was still writing. See this package's CLAUDE.md.
 	await run(['bun', 'run', '--filter', '@fabrika/dashboard', 'build'])
-	await generateSecrets()
+	await prepareLocalSecrets()
 	await generateProxyConfigs()
 	console.info(`Local stack prepared for ${IAM_ISSUER}`)
 }

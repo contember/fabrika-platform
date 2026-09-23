@@ -1,7 +1,7 @@
 # Operations browser tests
 
 These Opice scenarios drive the built unified console and the Zerops notes
-example through the real local composition. They use PostgreSQL, MinIO, IAM,
+example through the real local composition. They use PostgreSQL, SeaweedFS, IAM,
 Control, Operations, both auth proxies, and the same-origin Operations gateway.
 
 Every request is authorized by the proxy against the same gates a deployed

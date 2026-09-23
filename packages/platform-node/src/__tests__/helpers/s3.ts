@@ -1,13 +1,16 @@
 // Opt-in setup for the S3-backed tests. Same rule as the Postgres helper: configure it and they run,
-// leave it unconfigured and they skip with a message. Point it at MinIO (what Zerops object storage
-// is) or at a real R2 bucket — the implementation under test is the same either way.
+// leave it unconfigured and they skip with a message. Point it at SeaweedFS or a real R2 bucket.
 //
-//   docker run --rm -d -p 59000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-//     quay.io/minio/minio server /data
-//   docker run --rm --network host --entrypoint sh quay.io/minio/mc -c \
-//     'mc alias set local http://127.0.0.1:59000 minioadmin minioadmin && mc mb local/fabrika-test'
+//   docker run --rm -d --name fabrika-test-s3 -p 127.0.0.1:59000:9000 \
+//     -e AWS_ACCESS_KEY_ID=fabrika-test -e AWS_SECRET_ACCESS_KEY=fabrika-test-secret -e S3_BUCKET=fabrika-test \
+//     --health-cmd="curl -fsS -o /dev/null 'http://127.0.0.1:8888/buckets/fabrika-test/?limit=1'" \
+//     --health-interval=2s --health-timeout=3s --health-retries=30 \
+//     chrislusf/seaweedfs:4.42 mini -dir=/data -s3.port=9000 -s3.autoCreateBucket=false -master.telemetry=false
+//   # Wait until `docker inspect -f '{{.State.Health.Status}}' fabrika-test-s3` reports healthy.
 //   FABRIKA_TEST_S3_ENDPOINT=http://127.0.0.1:59000 FABRIKA_TEST_S3_BUCKET=fabrika-test \
-//     FABRIKA_TEST_S3_ACCESS_KEY_ID=… FABRIKA_TEST_S3_SECRET_ACCESS_KEY=… bun test
+//     FABRIKA_TEST_S3_ACCESS_KEY_ID=fabrika-test FABRIKA_TEST_S3_SECRET_ACCESS_KEY=fabrika-test-secret \
+//     FABRIKA_TEST_S3_REGION=us-east-1 bun test packages/platform-node/src/__tests__/blob-s3.test.ts
+//   docker stop fabrika-test-s3
 //
 // The credentials are read here and passed straight into the client — never logged, never asserted on.
 
@@ -44,7 +47,7 @@ export function readS3Options(environment: S3TestEnvironment): S3BlobStoreOption
 		bucket: required(environment, `${PREFIX}BUCKET`),
 		accessKeyId: required(environment, `${PREFIX}ACCESS_KEY_ID`),
 		secretAccessKey: required(environment, `${PREFIX}SECRET_ACCESS_KEY`),
-		// MinIO defaults to path-style addressing; R2 and AWS accept it too, so it is the portable default.
+		// Path-style addressing works with local SeaweedFS, R2, and AWS.
 		virtualHostedStyle: false,
 		region: optional(environment[`${PREFIX}REGION`]) ?? 'auto',
 		...(endpoint !== undefined ? { endpoint } : {}),

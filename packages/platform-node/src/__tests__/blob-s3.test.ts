@@ -1,4 +1,4 @@
-// The blob store against a real S3-compatible endpoint (MinIO in CI/locally; R2 works unchanged).
+// The blob store against a real S3-compatible endpoint (SeaweedFS in CI/locally; R2 works unchanged).
 // The port's contract is small, and the one bit that is easy to get wrong is `get()` returning NULL
 // for a missing key rather than throwing — every call site branches on that.
 

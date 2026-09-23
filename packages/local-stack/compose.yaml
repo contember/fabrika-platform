@@ -36,32 +36,27 @@ services:
       timeout: 2s
       retries: 30
 
-  minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    command: server /data
-    env_file: .state/minio.env
+  object-storage:
+    image: chrislusf/seaweedfs:4.42
+    command: >-
+      mini -dir=/data -s3.port=9000 -s3.config=/etc/seaweedfs/identities.json
+      -s3.autoCreateBucket=false -master.telemetry=false
+    environment:
+      S3_BUCKET: run-logs,operations-payloads
     volumes:
-      - minio:/data
+      - object-storage:/data
+      - ./.state/object-storage-identities.json:/etc/seaweedfs/identities.json:ro
     networks: [platform]
     healthcheck:
-      test: [CMD, curl, -f, http://127.0.0.1:9000/minio/health/live]
+      # S3 accepts connections before startup bucket creation finishes.
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS -o /dev/null 'http://127.0.0.1:8888/buckets/run-logs/?limit=1' &&
+          curl -fsS -o /dev/null 'http://127.0.0.1:8888/buckets/operations-payloads/?limit=1'
       interval: 2s
-      timeout: 2s
+      timeout: 3s
       retries: 30
-
-  minio-init:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
-    env_file: .state/minio.env
-    entrypoint: [sh, -c]
-    command:
-      - >-
-        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 1; done;
-        mc mb --ignore-existing local/run-logs;
-        mc mb --ignore-existing local/operations-payloads
-    networks: [platform]
-    depends_on:
-      minio:
-        condition: service_healthy
 
   zerops-emulator:
     <<: *bun
@@ -143,7 +138,7 @@ services:
       FABRIKA_OPERATIONS_URL: http://operations:3000
       OPERATIONS_ARTIFACT_ORIGIN: http://errors.fabrika.localhost:18080
       FABRIKA_CONTROL_RUN_LOGS_BUCKET: run-logs
-      FABRIKA_CONTROL_RUN_LOGS_ENDPOINT: http://minio:9000
+      FABRIKA_CONTROL_RUN_LOGS_ENDPOINT: http://object-storage:9000
       FABRIKA_CONTROL_RUN_LOGS_REGION: us-east-1
       FABRIKA_ZEROPS_API_BASE_URL: http://zerops-emulator:3000/api/rest/public
       FABRIKA_ZEROPS_SOURCE_URL: http://source:3000
@@ -154,8 +149,8 @@ services:
     depends_on:
       platform-db:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
+      object-storage:
+        condition: service_healthy
       iam:
         condition: service_healthy
       operations:
@@ -179,7 +174,7 @@ services:
       ENVIRONMENT: local
       FABRIKA_OPERATIONS_PUBLIC_HOST: errors.fabrika.localhost
       FABRIKA_OPERATIONS_BLOB_BUCKET: operations-payloads
-      FABRIKA_OPERATIONS_BLOB_ENDPOINT: http://minio:9000
+      FABRIKA_OPERATIONS_BLOB_ENDPOINT: http://object-storage:9000
       FABRIKA_OPERATIONS_BLOB_REGION: us-east-1
       FABRIKA_IAM_RPC_URL: http://iam:18080
       FABRIKA_CONTROL_URL: http://control:3000
@@ -188,8 +183,8 @@ services:
     depends_on:
       platform-db:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
+      object-storage:
+        condition: service_healthy
       iam:
         condition: service_healthy
     healthcheck:
@@ -308,5 +303,7 @@ networks:
 volumes:
   platform-db: {}
   apps-db: {}
+  object-storage: {}
+  # Retained only so an explicit reset can remove the legacy volume too.
   minio: {}
   zerops-state: {}

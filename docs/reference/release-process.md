@@ -7,7 +7,7 @@ This repository verifies every pull request and `main` push. Version tags reuse 
 `.github/workflows/ci.yml` has four independent gates:
 
 1. **Quality** installs the frozen Bun lockfile, checks formatting and lint, typechecks every workspace package and the release tool, and verifies generated Zerops artifacts.
-2. **Backend tests** run the complete Bun suite with PostgreSQL 17 and an initialized MinIO bucket. `FABRIKA_TEST_POSTGRES_URL` and every required `FABRIKA_TEST_S3_*` value are present, so opt-in integration suites cannot become skips.
+2. **Backend tests** run the complete Bun suite with PostgreSQL 17 and an authenticated SeaweedFS 4.42 `mini` instance. Startup creates `fabrika-test`; readiness checks its filer directory. Telemetry and implicit bucket creation are disabled. `FABRIKA_TEST_POSTGRES_URL` and every required `FABRIKA_TEST_S3_*` value are present, so opt-in integration suites cannot become skips.
 3. **Deployable builds** build the unified dashboard and the Bun proxy executable. The proxy build uses a committed empty manifest, proving the binary and a fail-closed generated Caddy configuration without relying on local deployment state.
 4. **Release artifacts** stage, pack, install, import, and dry-run-publish every public package at a disposable prerelease version.
 

@@ -32,7 +32,7 @@ bun test packages/engine/src/__tests__/deploy.test.ts   # a single file
 bun run lint               # biome
 bun run format             # dprint fmt  (format:check to verify only)
 
-bun run local:up           # the Docker stack: both Postgres, MinIO, a Zerops emulator, all planes
+bun run local:up           # the Docker stack: both Postgres, SeaweedFS, a Zerops emulator, all planes
 bun run local:status       # …:smoke (disruptive end-to-end), :reset (wipes volumes), :down
 bun run test:browser       # opice suites in tests/browser/ (browser:up/reset/down manage the stack)
 
