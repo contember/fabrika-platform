@@ -9,6 +9,8 @@ blocked-by: []
 **Summary.** Compose the existing local manifest build and Control registration into one CLI command,
 without teaching Control to execute application code. Effort S–M.
 
+The [local Builder workflow](../reference/local-builder.md) covers human browser consent followed by local compilation and environment deployment. This item remains the separate operator-oriented, create-only command using the existing environment-supplied credential; it does not require Builder project state or browser pairing.
+
 ## Problem
 
 The secure pieces already exist, but the operator must compose them:

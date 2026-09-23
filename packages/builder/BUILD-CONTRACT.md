@@ -26,6 +26,14 @@ The phase is always derived from application files and gate state. No mutable ph
 
 The stable session ID identifies dashboard revisions. Persistent daemon state defaults to `~/.fabrika` and can be moved with `FABRIKA_DATA_DIR`.
 
+Project registration is independent of canvas revisions. Optional connection and preview fields are non-secret. Credentials are stored separately outside registered projects, and approved installation origins are pinned independently of project JSON.
+
+## Platform operations
+
+Shared parsed DTOs live in `shared/`. CLI and UI use `/api/project/:id/register`, `/platform`, `/connect`, `/disconnect`, `/deploy` and `/preview`. The daemon owns pairing, credential custody, isolated local compilation, Control RPC calls and run observation. No key enters browser state or compiler environment.
+
+The installed console owns human application creation/selection and initial placement approval. The daemon updates environments and triggers exact remotely available commits; it does not create repositories, commit, push or deploy directly to the provider. Disconnect is local deletion, not remote revocation.
+
 ## Gate protocol
 
 1. `gate open` sends one view or a directory of views to `POST /api/session/:id/plan`.

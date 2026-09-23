@@ -18,5 +18,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
    [`../INDEX.md`](../INDEX.md).
 
 ## Active
-
-- [Connect the local builder to an installed platform](sprint-2026-09-21-local-builder-platform-flow.md) — browser pairing, local Zerops development and repeatable Control deployment.

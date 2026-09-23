@@ -38,6 +38,13 @@ All commands:
 
 ```text
 fabrika builder init [dir] [--profile <stack>] [--agent all|claude|codex]
+fabrika builder init [dir] --url=<control-origin>
+fabrika builder connect --url=<control-origin> [--no-open] [--json]
+fabrika builder status [--json]
+fabrika builder disconnect [--json]
+fabrika builder deploy [--wait] [--timeout=<seconds>] [--json]
+fabrika builder preview --url=<preview-url>
+fabrika builder preview --clear
 fabrika builder next [--json]
 fabrika builder advance [--force]
 fabrika builder gate open <name> --view <file.jsx>
@@ -48,6 +55,8 @@ fabrika builder build [--issue <ID>] [--assisted]
 ```
 
 Use `--profile cf-internal-app` for the full Buzola, Propustka, and Vozka internal-app stack. The default is `cf-lightweight`.
+
+Connected initialization uses `zerops-app` for a new project. A person approves the application and environment in the installed console; the local daemon receives a thirty-day app-scoped credential. The agent and application stay local. Deployment requires a clean, remotely available Git revision and runs through Control. `disconnect` removes the local key only; revoke server access in the console. See [the connected workflow](../../docs/reference/local-builder.md) for prerequisites, custody and recovery.
 
 ## Generated application state
 

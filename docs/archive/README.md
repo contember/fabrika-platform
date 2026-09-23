@@ -9,6 +9,9 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Connect the local builder to an installed platform (2026-09-21)](sprint-2026-09-21-local-builder-platform-flow.md)
+  — completed 2026-09-23: human-approved local custody, exact-source and repeat deployment, CLI/UI preview, cross-plane verification and explicit recovery limits.
+
 - [Remove duplicate administrative REST (2026-09-21)](sprint-2026-09-21-remove-duplicate-rest.md)
   — Control and Operations use one administrative RPC transport; internal consumers migrated, behavioral coverage retained and integrated checks passed.
 

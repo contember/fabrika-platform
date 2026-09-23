@@ -15,6 +15,8 @@ that supersedes the four which decided it in stages — then
 [ADR-0026](decisions/0026-bind-session-handoffs-to-the-browser.md) for the browser-bound
 handoff amendment.
 
+For local application development connected to an installation, see [Local builder](reference/local-builder.md).
+
 ## Folders
 
 - [`reference/`](reference/README.md) — how the system works now.
@@ -26,7 +28,7 @@ handoff amendment.
 
 ## Active sprints
 
-[Connect the local builder to an installed platform](sprints/sprint-2026-09-21-local-builder-platform-flow.md): browser pairing, local Zerops development and repeatable Control deployment.
+[Connect the local builder to an installed platform](archive/sprint-2026-09-21-local-builder-platform-flow.md) completed on 2026-09-23: human consent, local Zerops development and repeated Control deployment, with in-process cross-plane verification and documented browser/recovery limits.
 
 [Remove duplicate administrative REST](archive/sprint-2026-09-21-remove-duplicate-rest.md) shipped on 2026-09-21: RPC-only administration for Control and Operations, following [ADR-0041](decisions/0041-one-administrative-transport-for-control-and-operations.md).
 

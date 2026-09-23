@@ -1,5 +1,43 @@
 # Sprint — Connect the local builder to an installed platform (2026-09-21)
 
+## OUTCOME — 2026-09-23
+
+Implemented the local-first Builder connection and deployment flow. The installed console records human application/placement consent; IAM issues an app-scoped credential directly to the local daemon. Local CLI/UI expose connection, preview and exact-source deployment, including repeated updates. No push, publication or production deployment was performed.
+
+### Commit map
+
+- `fca3840` — frozen contracts and ADR-0042.
+- `214cda7` — daemon HTTP/WebSocket admission.
+- `a35615c` — platform-managed Zerops catalog.
+- `b36799a` — IAM device authorization and scoped issuance.
+- `693213d` — Control receipts, pairing and shared local DTOs.
+- `c6ca94f` — console consent/revocation and generated proxy gates.
+- `883e9f7` — CLI commands and installed agent guidance.
+- `ad10beb` — local connection/deployment/preview UI and isolated tests.
+- `b27798e` — actual cross-plane consent and repeat-deployment witness.
+- `ec3a4b9` — daemon custody, deployment lifecycle and canvas read protection.
+
+### Verification
+
+- Main repository suite with real PostgreSQL: 3,232 passed, 46 skipped, zero failures.
+- Agent-interface suites: 310 passed, zero failures.
+- Final Builder suite: 164 passed, zero failures; includes a subprocess running eight real-kernel custody tests. An earlier run failed its macro witness; the final rerun passes after the native parser guard fix.
+- Cross-plane integration: non-admin human → real IAM/proxy/Control → two successful Control executions with a deterministic provider, distinct pushed SHAs, retained placement and revoked-key rejection (33 assertions).
+- Final full-repository typecheck passed. Dashboard and local Builder production builds passed. Formatting, generated Zerops checks, frozen installation and release validation passed. Root lint exits zero with existing unrelated warnings.
+- The user approved one explicit Bun declaration compatibility assertion at the native `macro: false` parser boundary. Runtime regression tests cover direct, transitive and data-URL macro attempts. No dependency patch was retained.
+
+### Limits and accepted deferrals
+
+- Real browser/login/Caddy verification was explicitly waived after Docker exhausted its address pools. The deterministic provider is not evidence of real Zerops behavior; no real deployment was authorized.
+- S3-backed tests remain skipped: the CI-pinned MinIO image pull was denied. Live-provider tests were not configured.
+- The user deferred credential replacement during an active run. Expiry/revocation leaves the saved run and target blocked. A lost submission response before saving a run ID also stays reserved without automatic reset or retrigger.
+- Deployment requires attached HEAD equal to its remote branch tip. The flow does not freeze a manifest against concurrent Control registry changes.
+- Backlog 78 remains the separate operator-oriented create-only command, not this human-consent Builder flow.
+
+Current usage and recovery limits: [local-builder reference](../reference/local-builder.md).
+
+## Original plan
+
 **Goal.** A person connects their local builder through browser consent, creates or selects an application in the installed console, builds locally, deploys through Control, and repeats the workflow without registering a duplicate application.
 
 **Theme.** Keep coding agents and application execution local while making application identity and deployment continuous with the installed platform. Initial delivery targets Zerops.
@@ -98,11 +136,32 @@ WU0 first; local admission is an independent prerequisite within that wave. Then
 
 ## Run log
 
+- 2026-09-23: Completed native macro admission, including transitive file modules and executable data URLs. The user approved the single compatibility assertion for Bun's incomplete `TranspilerOptions` declaration; a root-only dependency patch would not protect public-package consumers. Final Builder suite and full repository typecheck pass. Stopped the owned PostgreSQL container; the owned browser session was already closed. No unrelated Docker services or networks were changed.
+
+- 2026-09-21: Leader cross-plane witness passed (1 test, 33 assertions): non-admin human approval through real IAM/proxy/Control, two complete `runControlJob` executions with exact pushed revisions and preserved changed placement, other-app denial and fresh-mint rejection after human revocation. The provider is a deterministic test double; this is not real Zerops, Caddy networking, or browser evidence.
+
+- 2026-09-21: Leader verified the deployment lifecycle fix with 31 tests/152 assertions and built the local Builder dashboard. The CI-pinned MinIO image could not be pulled (`pull access denied`); S3-backed tests remain unverified. The disposable PostgreSQL fixture remains available. Root lint exits zero with 16 pre-existing warnings outside the changed lines.
+
+- 2026-09-21: Console consent and generated public gates landed as `c6ca94f`; CLI and connected-preset guidance as `883e9f7`; local platform/preview UI and isolated Builder test execution as `ad10beb`. Leader checks: dashboard 17 tests/169 assertions and production build; CLI 23 tests/210 assertions; UI 15 tests/44 assertions. Reviews found and corrected retry recovery, pending repeated init, and project-switch state retention.
+- 2026-09-21: Combined Builder failures were reproduced as Happy DOM global contamination (`WebSocket` and `AbortSignal`), not daemon admission regressions. `--isolate` follows the existing agent-interface suite convention. Cross-plane integration tests belong to Control's existing runtime test program to avoid importing Cloudflare ambient requirements into Builder.
+
+- 2026-09-21: The user explicitly deferred active-run credential recovery: if custody expires or is revoked while a run remains active, preserve the run/reservation and document the blocked state; do not add reconnect/reset behavior in this change. Unknown submission without a recorded run ID similarly remains fail-closed. Both limitations are stated in the local-builder reference.
+
 - 2026-09-21: Grounding completed by three read-only agents; initial working tree clean at `c154865`.
 - 2026-09-21: `bun run release:validate --tag=v0.2.0` passed for 28 public packages. Bare validation requires an explicit tag when HEAD is untagged.
 - 2026-09-21: Baseline builder test command timed out waiting for a CPU lease; no test result was produced. Retry under a lease during verification.
 - 2026-09-21: User approved the implementation gate. Protocol and console bootstrap specification review started; daemon admission implementation has a separate three-file territory.
 - 2026-09-21: Independent protocol review accepted the design with conditions incorporated below: public fragment-capture bootstrap, creator-bound Control receipt, fresh IAM permission resolution, atomic issuance and issuer-visible recovery.
+- 2026-09-21: Local admission landed as `214cda7` after independent review and a default-port normalization fix. Leader verification: 8 real HTTP/WebSocket/helper tests, 116 assertions, focused lint/format and leased builder typecheck passed.
+- 2026-09-21: Zerops catalog landed as `a35615c`; independent review clear, leader catalog checks passed (5 tests, 378 assertions). Final agent command guidance awaits the CLI.
+- 2026-09-21: Builder shared DTOs are implemented and independently reviewed without findings. Leader shared tests passed (7 tests, 46 assertions); commit awaits the Control receipt export dependency.
+- 2026-09-21: The initially queued builder suite eventually ran with admission changes: 105 tests passed. This is an early integrated checkpoint, not proof of the new pairing/deploy flow.
+- 2026-09-21: A disposable PostgreSQL 17 test container `fabrika-builder-pg-f3bb8251` is available on loopback port 32776 for the database witnesses. It is separate from existing services and must be stopped at closeout.
+- 2026-09-21: IAM pairing landed as `b36799a`; Control receipt/consent and shared local DTO seams landed as `693213d`. Both received independent reviews without findings. Leader backend verification passed 1,218 tests across 111 files with real PostgreSQL, plus typechecks for auth-core/auth/IAM/Control-contract/Control and Operations. Two exact migration-history expectations were updated after read-only triage; their original backfill/upgrade witnesses passed unchanged.
+- 2026-09-21: Shared runtime publication was verified with npm pack dry-run: both runtime modules included, test sources excluded. Release validation passed for 28 packages. Console authorization UI is implemented and under independent review; local CLI/daemon/UI integration remains active.
+- 2026-09-21: `local:up` built the console, then Docker refused to create `fabrika-local_platform`: its default address pools are exhausted. The user explicitly approved completion without the real browser test. Do not alter unrelated Docker networks. Cross-plane in-process integration still forms part of WU6; a browser/proxy/login witness remains unverified.
+- 2026-09-21: Console review found two recovery-state defects after confirmed rejected writes. The fix preserves uncertain/saved selections, permits explicit correction only after confirmed absence, and passed 17 leader-run tests (169 assertions).
+- 2026-09-21: Installation generation check exposed a stale committed proxy template after the new public bootstrap/discovery gates. Regenerated through the owner command; the diff contains exactly those two gate entries. Generation check and nine local/Cloudflare gate-composition tests passed.
 
 ## Frozen technical seams
 
@@ -227,3 +286,11 @@ Builder shared DTOs live under `packages/builder/shared/`, included in the publi
 Credential storage is separate from sessions/artifacts and outside every registered project root, with private directory/file modes and symlink refusal. Pin credential origin independently of mutable project JSON. Config edits cannot redirect a retained key. Disconnect removes local custody and clearly directs the user to console revocation; it must not claim deletion revoked the server credential.
 
 Compilation runs a short-lived Bun process using the existing Zerops compiler, with an explicit environment allowlist excluding platform credentials, and writes its result outside the project. Validate Git root, tracked descriptor/config, clean source and remotely available full HEAD before remote writes; recheck after compilation. Never commit or push. First environment uses receipt placement; updates read the current environment and preserve all placement/trigger fields explicitly. Refuse unexpected app repository/provider identity changes. Serialize local app/environment operations, trigger exact SHA and compare the completed run's commitSha. Preserve run ID across restart. A successful run exposes configured app URL without claiming URL reachability was separately tested.
+
+### CLI and local UI
+
+New commands remain under `fabrika builder`: `connect --url=<control-origin>`, `status`, `disconnect`, `deploy [--wait] [--timeout=<seconds>]`, and `preview --url=<url>` or `preview --clear`. Support `--json` for machine-readable sanitized results; progress and errors do not corrupt stdout. `connect --no-open` prints the local dashboard address rather than the approval proof. CLI registration uses the absolute project root and configured session ID. A successful trigger is not completion; `deploy --wait` exits nonzero on failure, cancellation or timeout, retaining the run ID for inspection.
+
+`init --url=<origin>` initializes the supported connected Zerops profile by default for a NEW project, registers the project with the daemon and begins pairing. Explicit profile and existing-project behavior must be validated; repeat init never silently replaces the profile or binding. `init --no-daemon` remains usable offline, but cannot also connect. Plain init retains its existing default. Shared config parsing replaces the lossy three-field parser; malformed existing config must not be overwritten. Agent task packets include the selected provider/app/environment and non-secret placement context so generated code matches the connection.
+
+The local deployment panel owns connection and deploy status, consent navigation, local preview configuration, errors and console/app links. It uses the shared parsed HTTP boundary. Never expose a Control client, key or redemption proof in the browser. Disable mutating controls in fixture/offline mode. Remove arbitrary daemon-origin overrides from privileged requests. Replace the hardcoded application preview port with the configured URL and an explicit unset state. Follow the existing builder visual conventions; no wholesale redesign.
