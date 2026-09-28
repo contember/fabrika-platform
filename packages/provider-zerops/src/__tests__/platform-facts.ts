@@ -139,6 +139,7 @@ const SECTION_POSTGRES_TLS = 'Verified live (2026-08-19) — PostgreSQL TLS is p
 const SECTION_REST_API = 'REST API — docs/reference/zerops-platform.md:149'
 const SECTION_HIERARCHY = 'Hierarchy and isolation — docs/reference/zerops-platform.md:28'
 const SECTION_CORRECTIONS = 'Verified live (2026-08-21) — what the first automated run corrected — docs/reference/zerops-platform.md:785'
+const SECTION_ENV_ACTIVATION = 'Verified live (2026-09-23) — service variables across activation and rollback — docs/reference/zerops-platform.md:874'
 
 /** The keys the rows write. Literals, not credentials — nothing here is a secret and nothing is printed. */
 const KEY_PROCESS = 'FABRIKA_FACT_PROCESS'
@@ -741,6 +742,87 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 	},
 
 	// ── recorded, deliberately not probed ────────────────────────────────────────
+	{
+		id: 'descriptor-env-references-follow-version-activation',
+		section: 'Verified live (2026-09-23) — version-selected environment references — docs/reference/zerops-platform.md',
+		request: { method: 'PUT', path: '/app-version/{appVersionId}/deploy', body: {} },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote:
+			'manually verified with immutable synthetic service values; init and HTTP runtime preserve version pairing after failed build/restart and rollback',
+		emulator: false,
+		emulatorNote: 'the double has no init or runtime environment resolution',
+	},
+	{
+		id: 'legacy-env-to-descriptor-reference-rollback-loses-canonical-values',
+		section: 'Verified live (2026-09-23) — version-selected environment references — docs/reference/zerops-platform.md',
+		request: { method: 'PUT', path: '/app-version/{appVersionId}/deploy', body: {} },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: 'manually verified; rollback from descriptor references to the legacy version left canonical release and DSN absent',
+		emulator: false,
+		emulatorNote: 'the double does not model canonical service-variable ownership transitions',
+	},
+	{
+		id: 'native-pipeline-env-secrets-do-not-provide-rollback-binding',
+		section: 'Verified live (2026-09-23) — version-selected environment references — docs/reference/zerops-platform.md',
+		request: { method: 'PUT', path: '/app-version/{appVersionId}/deploy', body: {} },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: 'manually verified; pipeline envSecretsFile persisted service values and rollback after a later upload build used newer values',
+		emulator: false,
+		emulatorNote: 'the double does not reproduce native pipeline environment snapshots',
+	},
+	{
+		id: 'build-from-git-at-suffix-does-not-pin-requested-revision',
+		section: 'Verified live (2026-09-28) — buildFromGit revision suffixes — docs/reference/zerops-platform.md',
+		request: { method: 'PUT', path: '/service-stack/{serviceId}/trigger-pipeline' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: 'manually verified with deployed file hashes; @tag and @SHA built default-branch content, including @SHA on a fresh service',
+		emulator: false,
+		emulatorNote: 'the double does not clone a repository or build its source',
+	},
+	{
+		id: 'service-env-write-does-not-restart-running-process',
+		section: SECTION_ENV_ACTIVATION,
+		request: { method: 'PUT', path: '/user-data/{userDataId}', body: { key: KEY_REPLACE, content: 'next-release' } },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: 'manually verified; needs a deployed HTTP probe to compare process boot time and environment before and after the write',
+		emulator: false,
+		emulatorNote: 'the double runs no application process and cannot observe its boot-time environment',
+	},
+	{
+		id: 'service-env-survives-failed-and-cancelled-builds',
+		section: SECTION_ENV_ACTIVATION,
+		request: { method: 'PUT', path: '/service-stack/{serviceId}/restart' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: 'manually verified; needs failed and cancelled builds plus HTTP observations proving old code boots with the new service values',
+		emulator: false,
+		emulatorNote: 'the double does not model application process environments across build failure, cancellation and restart',
+	},
+	{
+		id: 'successful-deploy-uses-current-service-env',
+		section: SECTION_ENV_ACTIVATION,
+		request: { method: 'PUT', path: '/app-version/{appVersionId}/build-and-deploy' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: 'manually verified; needs a successful build and an HTTP probe that reports both code version and process environment',
+		emulator: false,
+		emulatorNote: 'the double runs no built application and cannot observe which environment it receives',
+	},
+	{
+		id: 'archived-version-deploy-does-not-restore-service-env',
+		section: SECTION_ENV_ACTIVATION,
+		request: { method: 'PUT', path: '/app-version/{appVersionId}/deploy', body: {} },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: 'manually verified; needs two successful versions, changed service values and an HTTP probe after explicit rollback',
+		emulator: false,
+		emulatorNote: 'the double does not model archived-version activation or runtime environment snapshots',
+	},
 	{
 		id: 'import-returns-before-services-exist',
 		section: SECTION_SERVICES_IMPORT,

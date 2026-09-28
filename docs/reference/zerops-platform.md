@@ -878,6 +878,80 @@ number. On both service types the same connection kept its backend pid across st
 SESSION` value, and took and saw a session-level advisory lock — so the migration runner's lock is safe
 there.
 
+### Verified live (2026-09-23, account `prg1`) — service variables across activation and rollback
+
+Measured on a disposable `envprobe` service (`alpine/bun@1.3.9`, one container) in a fresh `LIGHT`
+project. The probe returned its hard-coded code version, process boot timestamp, `FABRIKA_RELEASE`
+and `FABRIKA_OPERATIONS_DSN` over HTTP. Both variables contained dummy labels, never credentials.
+Every env write waited for its `stack.updateUserData` process before the next operation.
+
+| Operation                                                             | Stored service variables | Running process                              |
+| --------------------------------------------------------------------- | ------------------------ | -------------------------------------------- |
+| Set v1 values and successfully push code v1                           | v1                       | Code v1, values v1                           |
+| Set v2 values without restarting                                      | v2                       | Code v1, values v1, unchanged boot timestamp |
+| Push code v2 with `buildCommands: [exit 1]`                           | v2                       | Code v1, values v1, unchanged boot timestamp |
+| Restart after that failed build                                       | v2                       | **Code v1, values v2**, new boot timestamp   |
+| Set v3 values and successfully push code v3                           | v3                       | Code v3, values v3                           |
+| Roll back to archived code v1                                         | v3                       | **Code v1, values v3**, new boot timestamp   |
+| Set v4 values, push code v4 with `sleep 180`, cancel while `BUILDING` | v4                       | Code v1, values v3, unchanged boot timestamp |
+| Restart after the version reaches `CANCELLED`                         | v4                       | **Code v1, values v4**, new boot timestamp   |
+
+Rollback used `zops version rollback` with the explicit v1 id: `PUT /app-version/{id}/deploy`
+with an empty body, completing as `stack.deploy.backup`. It did **not** restore service-API variables,
+including to v2 (the values v1 used at its last restart). This measurement does not cover
+`run.envVariables` or a different GUI restore operation.
+
+The sequence used versions `uNHefI8HRYSBAp1agKGT3w` (v1), `NNReduBGQTa3OMAikUdAOg` (failed v2),
+`wBQA9wZ7SdK6oHmyA9fbkw` (v3), and `dpkSuzAeSYeqa5qAvpQBAQ` (cancelled v4). The service was
+stopped after observation. The fact table records these as manually verified, not automated probes:
+the current suite does not observe a real application's process environment over HTTP.
+
+**Service-API variables are mutable service state, not an atomic release binding.** A failed or
+cancelled build leaves the values in place; a later restart exposes them to the old code. A successful
+deploy or archived-version deploy also boots with the current values. This is the live witness for
+[backlog 37](../backlog/37-activate-zerops-managed-environment-transactionally.md), not a proof of a
+replacement activation protocol or Control crash recovery.
+
+### Verified live (2026-09-23, account `prg1`) — version-selected environment references
+
+A separate one-container Bun probe used immutable synthetic service values such as
+`FABRIKA_SNAPSHOT_A_RELEASE`, referenced by canonical keys in `run.envVariables`.
+Both init commands and the HTTP process reported the resolved values.
+
+- Version A (`kReB9wcJRwK5tnHpBAZNbw`) used A values. Staging B values and failing B's build
+  (`ooeLoEZjSwAITUMaBSn2BQ`) did not change A's values after a service restart.
+- Successful B (`scye0w1iQ9uANPIUSnVgQw`) used B values. Its omitted optional descriptor key
+  was absent in init and runtime. Explicit rollback to A restored A values and its optional key.
+- On a legacy service, successful deployment of descriptor references replaced the canonical
+  service records with those references. Rolling back to the pre-reference version left its
+  canonical release and DSN absent. This is not a safe automatic legacy migration.
+
+These observations cover one container, not cancellation, concurrent reconciliation or Control
+crashes. They establish the reference-selection primitive, not a complete activation protocol.
+
+The native pipeline experiment used `envSecretsFile`. It changed service records even when its
+build failed. An old process retained A values on the measured restart, but after a later successful
+upload build, rollback to A used newer C values. Adding `envSecretsFile` to the upload endpoint's
+`build-and-deploy` body did not apply the requested D values. That field is absent from the endpoint's
+published schema. `trigger-pipeline` also created a separate GIT version rather than building the
+reserved uploaded version. These fields do not establish an atomic upload-and-configuration binding.
+
+### Verified live (2026-09-28, account `prg1`) — `buildFromGit` revision suffixes
+
+The `@v0.0.26` suffix and the `@829753baf1ba04c8907b16c91d6f4db890e18e43` suffix on
+`https://github.com/contember/fabrika-platform` did not select the requested source through
+`trigger-pipeline`. The tag experiment ran on September 23. The SHA experiment was repeated on
+September 28 on both an initialized service and a fresh service.
+
+The build copied the checked-out `package.json`; the deployed process hashed its bytes and returned
+a unique invocation nonce. The requested revision's file is 1766 bytes with SHA-256
+`605690c24a411e6ebfe5222406b2e0d2a31447acad9c47a031686fa1f02733b3`. Every observed file was
+2231 bytes with SHA-256 `50b56ac7caa1fc92e11529d1d655221c3c84f519c4d532aeb00b4e56215b205c`,
+matching the public default branch. The fresh-service process was `RjwPrEJpTiyqd7Z9jQPtDw`.
+
+This disproves pinning through the tested suffix syntax. It does not rule out a different Git-source
+API or selector. Request acceptance and source metadata alone do not prove which bytes were built.
+
 ### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — updating a running installation
 
 How the four platform services on `fabrika-test` were taken from a two-day-old build to `HEAD`. There

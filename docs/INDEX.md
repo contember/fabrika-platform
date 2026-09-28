@@ -28,6 +28,8 @@ For local application development connected to an installation, see [Local build
 
 ## Active sprints
 
+[Zerops production readiness](sprints/sprint-2026-09-23-zerops-production-readiness.md) prepares the next release for a small internal fleet: deployment/configuration identity, immutable installation revisions, descriptor validation, safe egress, automatic source maps and real authentication/recovery witnesses. The sprint is approved and starts with platform probes and contract design; production deployment is separate.
+
 [Connect the local builder to an installed platform](archive/sprint-2026-09-21-local-builder-platform-flow.md) completed on 2026-09-23: human consent, local Zerops development and repeated Control deployment, with in-process cross-plane verification and documented browser/recovery limits.
 
 [Remove duplicate administrative REST](archive/sprint-2026-09-21-remove-duplicate-rest.md) shipped on 2026-09-21: RPC-only administration for Control and Operations, following [ADR-0041](decisions/0041-one-administrative-transport-for-control-and-operations.md).

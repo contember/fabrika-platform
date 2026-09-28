@@ -18,10 +18,11 @@ pipeline. Zerops then builds and activates the version asynchronously. If that
 pipeline fails, the prior application version can remain active while its
 service variables already describe the failed release.
 
-The current API and published platform documentation do not establish whether
-these writes are snapshotted per app version, applied immediately to the active
-service, or can be staged atomically. Fabrika must not claim transactional
-activation until this is proven against Zerops.
+The [2026-09-23 live probe](../reference/zerops-platform.md#verified-live-2026-09-23-account-prg1--service-variables-across-activation-and-rollback)
+confirmed that these writes survive failed and cancelled builds. The running process keeps its old
+environment until restart, but then the old code boots with the failed or cancelled release's values.
+Successful deployment picks up the current values. An explicit archived-version deploy restores code
+but does not restore service-API variables. Fabrika must not claim transactional activation.
 
 Three documented facts constrain the protocol before any of that is settled:
 
@@ -35,14 +36,16 @@ Three documented facts constrain the protocol before any of that is settled:
   guarded against user collision (`packages/control/src/api/registry.ts:300`); the
   same rule has to hold against an app's own `zerops.yaml`, which fabrika does not
   author.
-- Restoring an archived app version also restores the variables to their state when
-  that version was last active — which is a compensating-rollback primitive worth
-  measuring before building one by hand.
+- The documented claim that restoring an archived version also restores its variables does **not**
+  hold for service-API variables through `PUT /app-version/{id}/deploy` with an empty body, as used
+  by `zops version rollback`. The live probe restored code v1 with v3's variables. `run.envVariables`
+  and any different GUI restore operation were not measured.
 
 ## Approach / acceptance
 
-- Establish the real Zerops activation semantics for service variables during a
-  successful build, failed build, cancellation, and control-process restart.
+- Preserve the live witnesses for successful build, failed build, cancellation, application restart
+  and archived-version deployment. Add automated coverage and measure recovery across a Control-process
+  restart; the isolated service probe did not run Control.
 - Choose an activation protocol that keeps the last successfully active
   version and its managed environment consistent. This may require staging,
   post-activation writes, compensating rollback, or a provider-native primitive.
