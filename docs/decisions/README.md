@@ -1,5 +1,7 @@
 # decisions (ADR)
 
+[ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md) validates a strict descriptor subset and renders its checked meaning while preserving original source identity.
+
 [ADR-0042](0042-connect-local-builders-through-human-consent.md) connects local builders through browser consent, app-scoped machine credentials and Control-owned deployment selection, while keeping coding agents local.
 
 One file per significant architectural/product decision: `NNNN-<slug>.md`

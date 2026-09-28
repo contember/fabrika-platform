@@ -122,7 +122,9 @@ describe('Zerops static artifact', () => {
 	})
 
 	test('applies the source descriptor limit to exact UTF-8 bytes', async () => {
-		const exact = await createZeropsArtifactSourceDescriptor('é'.repeat(ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES / 2))
+		const prefix = 'zerops: [{setup: notes}]\n# '
+		const padding = ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES - new TextEncoder().encode(prefix).byteLength
+		const exact = await createZeropsArtifactSourceDescriptor(prefix + 'é'.repeat(Math.floor(padding / 2)) + 'x'.repeat(padding % 2))
 		expect(new TextEncoder().encode(exact.contents).byteLength).toBe(ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES)
 		expect(parseFabrikaManifest(compileFabrikaManifest(config, 'prod', exact)).target.sourceDescriptor).toEqual(exact)
 		await expect(createZeropsArtifactSourceDescriptor(`${exact.contents}é`)).rejects.toThrow('exceeds')
@@ -134,6 +136,16 @@ describe('Zerops static artifact', () => {
 		await expect(verifyZeropsArtifactSourceDescriptor({ ...descriptor, contents: `${descriptor.contents}# tampered\n` })).rejects.toThrow(
 			'digest mismatch',
 		)
+	})
+	test('preserves original escaped noncharacters and their source digest', async () => {
+		for (const code of ['fffe', 'ffff']) {
+			const contents = `# original\r\nzerops: [{setup: notes, x: "a\\u${code}b"}]\r\n`
+			const descriptor = await createZeropsArtifactSourceDescriptor(contents)
+			const manifest = compileFabrikaManifest(config, 'prod', descriptor)
+			expect(manifest.target.sourceDescriptor).toEqual(descriptor)
+			expect(manifest.target.sourceDescriptor.contents).toBe(contents)
+			await expect(verifyZeropsArtifactSourceDescriptor(manifest.target.sourceDescriptor)).resolves.toBeUndefined()
+		}
 	})
 
 	test('interpolates only declared variables', () => {
@@ -180,6 +192,24 @@ const exampleDescriptor = async (file: string): Promise<string> =>
 	await Bun.file(new URL(`../../../../examples/zerops-app/${file}`, import.meta.url)).text()
 
 describe('cross-service variable references', () => {
+	test('checks decoded keys and unknown leaves in unselected setups', async () => {
+		for (const extra of ['{"\\x24{proxy_FABRIKA_IAM_KEY}": safe}', '{future: ["\\x24{proxy_FABRIKA_IAM_KEY}"]}']) {
+			const descriptor = await createZeropsArtifactSourceDescriptor(`zerops: [{setup: notes}, {setup: unused, extra: ${extra}}]`)
+			expect(() => compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'notes' } }, 'prod', descriptor)).toThrow(
+				'references service',
+			)
+		}
+	})
+	test('validates the selector at the manifest boundary while preserving original identity', async () => {
+		const descriptor = await createZeropsArtifactSourceDescriptor('# original\r\nzerops: [{setup: notes}, {setup: worker}]\r\n')
+		expect(() => compileFabrikaManifest(config, 'prod', descriptor)).toThrow('explicit setup selector')
+		expect(() => compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'missing' } }, 'prod', descriptor)).toThrow(
+			'selected setup',
+		)
+		const manifest = compileFabrikaManifest({ ...config, target: { ...config.target, zeropsSetup: 'worker' } }, 'prod', descriptor)
+		expect(manifest.target.sourceDescriptor).toEqual(descriptor)
+		await expect(verifyZeropsArtifactSourceDescriptor(manifest.target.sourceDescriptor)).resolves.toBeUndefined()
+	})
 	test('refuses an embedded zeropsYaml that reads a service the app does not own', async () => {
 		const manifest = await compileNotes(OWN_SETUP)
 		const zeropsYaml = { zerops: [{ setup: 'notesapi', run: { envVariables: { STOLEN: '${proxy_FABRIKA_IAM_KEY}' } } }] }

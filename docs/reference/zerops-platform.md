@@ -601,9 +601,16 @@ states with the exact API available to the project integration token. The servic
 Fabrika application deploys no longer use `buildFromGit`. Public and private GitHub repositories share
 one provider lifecycle: source resolves the exact commit and registered root `zerops.yaml` digest;
 control creates and records an application version; source streams the repository tarball for that
-exact commit into the upload; and control calls `build-and-deploy` with the registered descriptor and
+exact commit into the upload; and control calls `build-and-deploy` with the validated, canonically rendered descriptor and
 selected setup. Public `buildFromGit` remains in use for Fabrika-owned installation artifacts such as
 the proxy, not for an application deployment.
+
+The registered descriptor retains its original text and SHA-256. Validation accepts one mapping
+document with uniquely named setups and checks decoded keys and values across every setup for foreign
+service references. Multiple setups require an explicit selector. Tags, anchors/aliases, merge or
+duplicate keys, non-string keys, ambiguous plain scalars and unsupported raw Unicode are rejected;
+quoted equivalents of ambiguous scalars remain supported. The same canonicalization runs on recovered
+builds. See [ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md).
 
 The installation has a private `source` service on `http://source:3000`. It needs no `git` binary and no
 `run.prepareCommands`, which matters because package installation on a Zerops runtime requires `sudo`.

@@ -31,6 +31,7 @@ import {
 import { zeropsTargetCodec } from './codec'
 import { defaultSleep, defaultZeropsCollaborators, type ZeropsCollaboratorFactory, type ZeropsCollaborators } from './collaborators'
 import { assertZeropsInvariants, renderYaml } from './compile'
+import { prepareZeropsDescriptor } from './descriptor'
 import {
 	type FabrikaImportDocument,
 	type FabrikaManifest,
@@ -496,14 +497,15 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 				}
 				await run.events.checkpoint(runState(version.id, 'source_uploaded'))
 				await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
+				const descriptor = prepareZeropsDescriptor(artifact.target.sourceDescriptor.contents, artifact.target.zeropsSetup)
 				await run.events.checkpoint(runState(version.id, 'build_trigger_requested'))
 				buildTriggerRequested = true
 				let process: ZeropsProcess
 				try {
 					process = await zerops.api.buildAndDeployAppVersion({
 						appVersionId: version.id,
-						zeropsYaml: artifact.target.sourceDescriptor.contents,
-						...(artifact.target.zeropsSetup === undefined ? {} : { zeropsYamlSetup: artifact.target.zeropsSetup }),
+						zeropsYaml: descriptor.contents,
+						zeropsYamlSetup: descriptor.setup,
 						signal,
 					})
 				} catch (error) {

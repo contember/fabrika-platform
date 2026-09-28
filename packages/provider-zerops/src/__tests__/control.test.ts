@@ -13,12 +13,14 @@ import { type ZeropsApi, ZeropsApiError, type ZeropsAppVersionStatus } from '../
 import { useSharedPostgres } from '../authoring'
 import { zeropsTargetCodec } from '../codec'
 import { createZeropsControlProvider, type ZeropsControlProviderOptions, type ZeropsProviderExecutor, zeropsStoredTargetCodec } from '../control'
-import { compileFabrikaManifest, zeropsArtifactCodec, type ZeropsArtifactSourceDescriptor } from '../manifest'
+import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, zeropsArtifactCodec } from '../manifest'
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
 import type { ZeropsSourceTransportBinding } from '../provider'
 import { zeropsSharedServiceHostname } from '../service-names'
 import type { ZeropsSourceClient, ZeropsSourceClientV2 } from '../source'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget } from '../types'
+import { CANONICAL_DESCRIPTOR, SOURCE_DESCRIPTOR } from './fixtures/descriptor'
+import { rejectedDescriptorCorpus } from './fixtures/descriptor-corpus'
 
 interface Recorded {
 	calls: string[]
@@ -51,11 +53,6 @@ const config: ZeropsAppConfig = {
 }
 
 const SCHEMA: AppSchema = { scopes: [], actions: [], roles: {} }
-const SOURCE_DESCRIPTOR: ZeropsArtifactSourceDescriptor = {
-	path: 'zerops.yaml',
-	contents: 'zerops:\n  - setup: test\n',
-	sha256: '560802d669a116e27e5ce76af3312048e3e9e7743a4fb7d6e73f14d800dc46d1',
-}
 const COMMIT_SHA = '0123456789abcdef0123456789abcdef01234567'
 
 const app: ProviderApp = {
@@ -231,6 +228,31 @@ beforeEach(() => {
 })
 
 describe('Zerops ControlProvider registration', () => {
+	for (const [name, contents] of rejectedDescriptorCorpus) {
+		test(`rejects ${name} before registration, hooks, or provider effects`, async () => {
+			const manifest = compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)
+			const sourceDescriptor = await createZeropsArtifactSourceDescriptor(contents)
+			const invalidEnvironment = environment({
+				artifact: {
+					provider: 'zerops',
+					version: zeropsArtifactCodec.version,
+					payload: zeropsArtifactCodec.encode({ ...manifest, target: { ...manifest.target, sourceDescriptor } }),
+				},
+			})
+			const control = createTestControlProvider({
+				accessToken: 'zt-secret',
+				api: makeApi(recorded),
+				beforeDeploy: async () => {
+					recorded.beforeDeploy.push('called')
+				},
+			})
+			expect(() => control.normalizeRegistration({ app, environment: invalidEnvironment })).toThrow('zerops.yaml')
+			await expect(control.deploy({ ...deployInput(recorded), environment: invalidEnvironment })).rejects.toThrow('zerops.yaml')
+			expect(recorded.calls).toEqual([])
+			expect(recorded.envWrites).toEqual([])
+			expect(recorded.beforeDeploy).toEqual([])
+		})
+	}
 	test('normalizes a stored target and static artifact without persisting credentials', () => {
 		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
 		const normalized = control.normalizeRegistration({ app, environment: environment() })
@@ -1048,8 +1070,8 @@ describe('Zerops ControlProvider lifecycle', () => {
 			...makeApi(recorded),
 			buildAndDeployAppVersion: async ({ appVersionId, zeropsYaml, zeropsYamlSetup }) => {
 				timeline.push(`build:${appVersionId}`)
-				expect(zeropsYaml).toBe(SOURCE_DESCRIPTOR.contents)
-				expect(zeropsYamlSetup).toBeUndefined()
+				expect(zeropsYaml).toBe(CANONICAL_DESCRIPTOR)
+				expect(zeropsYamlSetup).toBe('api')
 				return { id: 'process-1', appVersionId }
 			},
 		}

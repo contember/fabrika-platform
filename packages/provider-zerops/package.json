@@ -37,7 +37,8 @@
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*",
-		"@fabrika/proxy-contract": "workspace:*"
+		"@fabrika/proxy-contract": "workspace:*",
+		"yaml": "^2.9.1"
 	},
 	"devDependencies": {
 		"@types/bun": "latest"

@@ -16,6 +16,8 @@ const HOSTILE: ReadonlyArray<readonly [string, string, string]> = [
 	['U+0080 C1', '\u0080', '\\u0080'],
 	['U+009F C1', '\u009f', '\\u009f'],
 	['U+007F DEL', '\u007f', '\\u007f'],
+	['U+FFFE noncharacter', '\ufffe', '\\ufffe'],
+	['U+FFFF noncharacter', '\uffff', '\\uffff'],
 ]
 
 const isRecord = (value: unknown): value is { [key: string]: unknown } => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -39,6 +41,11 @@ const documentWith = (service: { readonly [key: string]: unknown }): { services:
 })
 
 describe('the YAML emitter is exact for a YAML 1.1 reader too', () => {
+	test('quotes every spelling of single-letter YAML 1.1 booleans in keys and values', () => {
+		for (const value of ['y', 'Y', 'n', 'N']) {
+			expect(renderYaml({ [value]: value })).toBe(`"${value}": "${value}"\n`)
+		}
+	})
 	test('an ordinary multi-line value still goes out as a block', () => {
 		const yaml = renderYaml(documentWith({ nginxConfig: 'server {\n  listen 80;\n}' }))
 		expect(yaml).toContain('nginxConfig: |-')

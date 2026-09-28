@@ -13,10 +13,12 @@ import {
 import { zeropsTargetCodec } from '../codec'
 import type { ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
-import { compileFabrikaManifest, type ZeropsArtifactSourceDescriptor } from '../manifest'
+import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, zeropsArtifactCodec } from '../manifest'
 import { CANCELLED, createZeropsProvider, type ZeropsSourceTransportBinding, type ZeropsSourceTransportRouting } from '../provider'
 import type { ZeropsServiceType } from '../schema.generated'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget, ZeropsServiceSpec } from '../types'
+import { CANONICAL_DESCRIPTOR, SOURCE_DESCRIPTOR } from './fixtures/descriptor'
+import { rejectedDescriptorCorpus } from './fixtures/descriptor-corpus'
 
 interface Recorded {
 	calls: string[]
@@ -216,11 +218,6 @@ const makeCollaborators = (recorded: Recorded, overrides: Overrides = {}): Zerop
 const SCHEMA: AppSchema = { scopes: [], actions: [], roles: {} }
 const API: ZeropsServiceSpec = { hostname: 'api', type: 'alpine/bun@1.3' }
 const DB: ZeropsServiceSpec = { hostname: 'db', type: 'postgresql:single@18', priority: 10 }
-const SOURCE_DESCRIPTOR: ZeropsArtifactSourceDescriptor = {
-	path: 'zerops.yaml',
-	contents: 'zerops:\n  - setup: test\n',
-	sha256: '560802d669a116e27e5ce76af3312048e3e9e7743a4fb7d6e73f14d800dc46d1',
-}
 
 const app = (services: ZeropsServiceSpec[] = [API]): ZeropsAppConfig => ({
 	id: 'demo',
@@ -295,6 +292,19 @@ beforeEach(() => {
 })
 
 describe('Zerops provider', () => {
+	for (const [name, contents] of rejectedDescriptorCorpus) {
+		test(`rejects ${name} before opening a provider session`, async () => {
+			const provider = createZeropsProvider(() => makeCollaborators(recorded))
+			const run = runtimeRun(recorded, provider)
+			const manifest = compileFabrikaManifest(app([DB, API]), 'prod', SOURCE_DESCRIPTOR)
+			const sourceDescriptor = await createZeropsArtifactSourceDescriptor(contents)
+			await expect(provider.runtime.open({
+				...run,
+				artifact: { ...run.artifact, payload: zeropsArtifactCodec.encode({ ...manifest, target: { ...manifest.target, sourceDescriptor } }) },
+			})).rejects.toThrow('zerops.yaml')
+			expect(recorded.calls).toEqual([])
+		})
+	}
 	test('routes an upload through v2 only when a keyed binding names the connection', async () => {
 		let binding: ZeropsSourceTransportBinding | undefined
 		const routing: ZeropsSourceTransportRouting = {
@@ -418,7 +428,7 @@ describe('Zerops provider', () => {
 		}])
 		expect(recorded.builds).toEqual([{
 			appVersionId: 'version-1',
-			zeropsYaml: SOURCE_DESCRIPTOR.contents,
+			zeropsYaml: CANONICAL_DESCRIPTOR,
 			zeropsYamlSetup: 'api',
 		}])
 		expect(recorded.sleeps).toEqual([3000])

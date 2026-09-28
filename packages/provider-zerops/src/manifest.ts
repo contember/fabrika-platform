@@ -1,6 +1,7 @@
 import type { AppActionDef, AppGates, AppSchema, AppScopeDef, GateRule, RoleDef } from '@fabrika/auth-core'
 import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
+import { parseZeropsDescriptor, prepareZeropsDescriptor } from './descriptor'
 import { allowedReferenceHosts, foreignReferenceHost } from './service-references'
 import type { ZeropsAppConfig, ZeropsNamespaceResourceRequirement, ZeropsProxySpec, ZeropsSharedPostgresBinding } from './types'
 
@@ -247,15 +248,6 @@ const foreignReferenceInValue = (value: unknown, allowed: ReadonlySet<string>): 
 	return null
 }
 
-/** Read the descriptor as the platform does. Text scanning misses what YAML folds, escapes or hides in a block scalar. */
-const parseDescriptorDocument = (contents: string): unknown => {
-	try {
-		return Bun.YAML.parse(contents)
-	} catch {
-		throw new Error('invalid fabrika manifest: zerops.yaml is not parseable YAML')
-	}
-}
-
 const parseImportDocument = (value: unknown): FabrikaImportDocument => {
 	if (value === undefined) {
 		throw new Error('invalid fabrika manifest Zerops import document')
@@ -428,7 +420,10 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	if (!serviceHostnames.includes(deployService)) {
 		throw new Error('invalid fabrika manifest Zerops deploy service')
 	}
-	const foreignInDescriptor = foreignReferenceInValue(parseDescriptorDocument(sourceDescriptor.contents), allowedReferenceHosts(serviceHostnames))
+	const foreignInDescriptor = foreignReferenceInValue(
+		parseZeropsDescriptor(sourceDescriptor.contents).document,
+		allowedReferenceHosts(serviceHostnames),
+	)
 	if (foreignInDescriptor !== null) {
 		throw new Error(`invalid fabrika manifest: zerops.yaml references service \`${foreignInDescriptor}\`, which this app does not own`)
 	}
@@ -436,6 +431,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	if (prop(rawTarget, 'zeropsSetup') !== undefined && zeropsSetup === null) {
 		throw new Error('invalid fabrika manifest zeropsSetup')
 	}
+	prepareZeropsDescriptor(sourceDescriptor.contents, zeropsSetup ?? undefined)
 	const rawProxy = prop(rawTarget, 'proxy')
 	let proxy: ZeropsProxySpec | undefined
 	if (rawProxy !== undefined) {

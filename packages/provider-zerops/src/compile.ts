@@ -280,6 +280,8 @@ const isYamlHostileCodePoint = (code: number): boolean =>
 	|| code === 0x2028
 	|| code === 0x2029
 	|| code === 0xfeff
+	|| code === 0xfffe
+	|| code === 0xffff
 	|| (code >= 0xd800 && code <= 0xdfff)
 
 /** `JSON.stringify` leaves DEL, the C1 block, U+2028/9 and U+FEFF raw; YAML's own `\uXXXX` carries them. */
@@ -291,7 +293,7 @@ const escapeYamlHostile = (quoted: string): string =>
 
 const scalar = (value: string): string => {
 	// Reserved plain scalars that YAML would read as booleans/null, plus anything with structure.
-	const reserved = new Set(['true', 'false', 'null', 'yes', 'no', 'on', 'off', '~'])
+	const reserved = new Set(['true', 'false', 'null', 'yes', 'no', 'y', 'n', 'on', 'off', '~'])
 	if (value !== '' && PLAIN.test(value) && !reserved.has(value.toLowerCase())) {
 		return value
 	}

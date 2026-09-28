@@ -33,6 +33,7 @@ import {
 	type ZeropsProcess,
 } from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
+import { prepareZeropsDescriptor } from './descriptor'
 import {
 	type FabrikaManifest,
 	manifestServiceHostnames,
@@ -623,10 +624,11 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				}
 				let process: ZeropsProcess
 				try {
+					const descriptor = prepareZeropsDescriptor(artifact.target.sourceDescriptor.contents, artifact.target.zeropsSetup)
 					process = await api.buildAndDeployAppVersion({
 						appVersionId: state.appVersionId,
-						zeropsYaml: artifact.target.sourceDescriptor.contents,
-						...(artifact.target.zeropsSetup === undefined ? {} : { zeropsYamlSetup: artifact.target.zeropsSetup }),
+						zeropsYaml: descriptor.contents,
+						zeropsYamlSetup: descriptor.setup,
 						signal,
 					})
 				} catch (error) {
