@@ -81,6 +81,69 @@ describe.skipIf(!hasPostgres)('SqlDeployLocks', () => {
 		expect(await locks.acquire('app:prod', 'run-2', TTL_MS)).toBe(true)
 	})
 
+	test('renewal extends from now beyond the original deadline', async () => {
+		await clear()
+		const clock = { now: 1_700_000_000_000 }
+		const locks = locksWithClock(clock)
+		expect(await locks.acquire('app:prod', 'run-1', 5_000)).toBe(true)
+		clock.now += 4_000
+		expect(await locks.renew('app:prod', 'run-1', 3_000)).toBe(true)
+		clock.now += 2_999
+		expect(await locks.acquire('app:prod', 'run-2', 5_000)).toBe(false)
+		clock.now += 1
+		expect(await locks.acquire('app:prod', 'run-2', 5_000)).toBe(true)
+	})
+
+	test('renewal refuses foreign and missing holders without changing a live lease', async () => {
+		await clear()
+		const clock = { now: 1_700_000_000_000 }
+		const locks = locksWithClock(clock)
+		await locks.acquire('app:prod', 'run-1', 5_000)
+		clock.now += 1_000
+		expect(await locks.renew('app:prod', 'run-2', 10_000)).toBe(false)
+		expect(await locks.renew('missing', 'run-1', 10_000)).toBe(false)
+		expect(await locks.acquire('missing', 'run-2', 5_000)).toBe(true)
+		expect(await locks.acquire('app:prod', 'run-2', 5_000)).toBe(false)
+		clock.now += 4_000
+		expect(await locks.acquire('app:prod', 'run-2', 5_000)).toBe(true)
+	})
+
+	test('renewal cannot resurrect an expired lease or alter its replacement through stale renewal or release', async () => {
+		await clear()
+		const clock = { now: 1_700_000_000_000 }
+		const locks = locksWithClock(clock)
+		await locks.acquire('app:prod', 'old', 5_000)
+		clock.now += 5_000
+		expect(await locks.renew('app:prod', 'old', 10_000)).toBe(false)
+		expect(await locks.acquire('app:prod', 'new', 5_000)).toBe(true)
+		expect(await locks.renew('app:prod', 'old', 10_000)).toBe(false)
+		await locks.release('app:prod', 'old')
+		expect(await locks.acquire('app:prod', 'third', 5_000)).toBe(false)
+		clock.now += 5_000
+		expect(await locks.acquire('app:prod', 'third', 5_000)).toBe(true)
+	})
+
+	for (const elapsed of [4_999, 5_000]) {
+		test(`renewal racing acquisition at elapsed ${elapsed} keeps exactly one live holder`, async () => {
+			await clear()
+			const clock = { now: 1_700_000_000_000 }
+			const locks = locksWithClock(clock)
+			await locks.acquire('app:prod', 'old', 5_000)
+			clock.now += elapsed
+			const results = await Promise.all([
+				locks.renew('app:prod', 'old', 5_000),
+				locks.acquire('app:prod', 'new', 5_000),
+			])
+			expect(results).toEqual(elapsed < 5_000 ? [true, false] : [false, true])
+			const holder = elapsed < 5_000 ? 'old' : 'new'
+			const loser = elapsed < 5_000 ? 'new' : 'old'
+			expect(await locks.renew('app:prod', loser, 10_000)).toBe(false)
+			await locks.release('app:prod', loser)
+			expect(await locks.acquire('app:prod', 'third', 5_000)).toBe(false)
+			expect(await locks.renew('app:prod', holder, 5_000)).toBe(true)
+		})
+	}
+
 	test('release is HOLDER-CHECKED: a superseded run cannot free the new holder"s lease', async () => {
 		await clear()
 		const clock = { now: 1_000_000 }
@@ -128,11 +191,18 @@ describe.skipIf(!hasPostgres)('SqlDeployLocks', () => {
 		await db.prepare('CREATE TABLE IF NOT EXISTS other_locks (lock_key TEXT PRIMARY KEY, holder TEXT NOT NULL, expires_at BIGINT NOT NULL)').run()
 		await db.prepare('DELETE FROM other_locks').run()
 		await clear()
-		const primary = new SqlDeployLocks(db)
-		const secondary = new SqlDeployLocks(db, { table: 'other_locks' })
+		const clock = { now: 1_700_000_000_000 }
+		const primary = locksWithClock(clock)
+		const secondary = new SqlDeployLocks(db, { table: 'other_locks', now: () => clock.now })
 		expect(await primary.acquire('app:prod', 'run-1', TTL_MS)).toBe(true)
-		expect(await secondary.acquire('app:prod', 'run-2', TTL_MS)).toBe(true)
-		await secondary.release('app:prod', 'run-2')
+		expect(await secondary.acquire('app:prod', 'run-1', TTL_MS)).toBe(true)
+		clock.now += TTL_MS - 1
+		expect(await secondary.renew('app:prod', 'run-1', TTL_MS)).toBe(true)
+		clock.now += 1
+		expect(await primary.acquire('app:prod', 'run-2', TTL_MS)).toBe(true)
+		expect(await secondary.acquire('app:prod', 'run-2', TTL_MS)).toBe(false)
+		await secondary.release('app:prod', 'run-1')
+		expect(await secondary.acquire('app:prod', 'run-3', TTL_MS)).toBe(true)
 		expect(await primary.acquire('app:prod', 'run-3', TTL_MS)).toBe(false)
 	})
 })

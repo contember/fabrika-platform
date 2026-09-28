@@ -18,6 +18,10 @@ class AvailableLock implements DeployLocks {
 	release(): Promise<void> {
 		return Promise.resolve()
 	}
+
+	renew(): Promise<boolean> {
+		throw new Error('AvailableLock does not support renewal')
+	}
 }
 
 interface CapturedCatalogRequest {

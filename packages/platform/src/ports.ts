@@ -39,6 +39,8 @@ export interface JobQueue<T> {
 export interface DeployLocks {
 	/** Take the lease for `key`. `true` when acquired (free or expired), `false` when live elsewhere. */
 	acquire(key: string, holder: string, ttlMs: number): Promise<boolean>
+	/** Extend a live lease owned by `holder`; an expired or replaced lease cannot be renewed. */
+	renew(key: string, holder: string, ttlMs: number): Promise<boolean>
 	/** Release the lease iff `holder` still owns it. Idempotent; a stale holder's call is a no-op. */
 	release(key: string, holder: string): Promise<void>
 }

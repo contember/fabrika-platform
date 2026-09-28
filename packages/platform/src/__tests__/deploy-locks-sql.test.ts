@@ -60,6 +60,23 @@ describe('acquire — the statement', () => {
 	})
 })
 
+describe('renew — the statement', () => {
+	test('uses one holder- and expiry-checked UPDATE with a single clock reading', async () => {
+		const { db, issued } = recorder()
+		let now = 1_700_000_000_000
+		const locks = new SqlDeployLocks(db, { now: () => now++ })
+		expect(await locks.renew('app:prod', 'run-1', 5_000)).toBe(true)
+		expect(issued).toEqual([{
+			sql: 'UPDATE deploy_locks SET expires_at = ? WHERE lock_key = ? AND holder = ? AND expires_at > ?',
+			values: [1_700_000_005_000, 'app:prod', 'run-1', 1_700_000_000_000],
+		}])
+	})
+
+	test('returns false when the conditional UPDATE changes no row', async () => {
+		expect(await new SqlDeployLocks(recorder(0).db).renew('app:prod', 'run-1', 5_000)).toBe(false)
+	})
+})
+
 describe('release — the statement', () => {
 	test('is a holder-checked delete, so a superseded run cannot free a newer holder"s lease', async () => {
 		const { db, issued } = recorder()
@@ -72,15 +89,17 @@ describe('release — the statement', () => {
 })
 
 describe('the lease table is a parameter', () => {
-	test('a custom table is used by both statements, so two lease namespaces can coexist', async () => {
+	test('a custom table is used by all statements, so two lease namespaces can coexist', async () => {
 		const { db, issued } = recorder()
 		const locks = new SqlDeployLocks(db, { table: 'other_locks' })
 		await locks.acquire('app:prod', 'run-1', 60_000)
 		await locks.release('app:prod', 'run-1')
+		await locks.renew('app:prod', 'run-1', 60_000)
 
 		expect(issued[0]?.sql).toContain('INSERT INTO other_locks')
 		expect(issued[0]?.sql).toContain('other_locks.expires_at <= ?')
 		expect(issued[1]?.sql).toContain('DELETE FROM other_locks')
+		expect(issued[2]?.sql).toContain('UPDATE other_locks')
 	})
 
 	test('rejects anything that is not a bare identifier — the name is interpolated into SQL', () => {

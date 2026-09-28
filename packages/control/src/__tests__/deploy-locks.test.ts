@@ -113,6 +113,80 @@ describe('acquire — TTL self-heal', () => {
 	})
 })
 
+describe('renew — live holder only', () => {
+	test('extends from now beyond the original deadline, in one statement', async () => {
+		const { locks, advance, prepared } = makeLocks()
+		expect(await locks.acquire('app:prod', 'run-1', 5_000)).toBe(true)
+		advance(4_000)
+		prepared.length = 0
+		expect(await locks.renew('app:prod', 'run-1', 3_000)).toBe(true)
+		expect(prepared).toHaveLength(1)
+		advance(2_999)
+		expect(await locks.acquire('app:prod', 'run-2', 5_000)).toBe(false)
+		advance(1)
+		expect(await locks.acquire('app:prod', 'run-2', 5_000)).toBe(true)
+	})
+
+	test('refuses foreign and missing holders without changing a live lease', async () => {
+		const { locks, advance } = makeLocks()
+		await locks.acquire('app:prod', 'run-1', 5_000)
+		advance(1_000)
+		expect(await locks.renew('app:prod', 'run-2', 10_000)).toBe(false)
+		expect(await locks.renew('missing', 'run-1', 10_000)).toBe(false)
+		expect(await locks.acquire('missing', 'run-2', 5_000)).toBe(true)
+		expect(await locks.acquire('app:prod', 'run-2', 5_000)).toBe(false)
+		advance(4_000)
+		expect(await locks.acquire('app:prod', 'run-2', 5_000)).toBe(true)
+	})
+
+	test('cannot resurrect an expired lease or alter its replacement through stale renewal or release', async () => {
+		const { locks, advance } = makeLocks()
+		await locks.acquire('app:prod', 'old', 5_000)
+		advance(5_000)
+		expect(await locks.renew('app:prod', 'old', 10_000)).toBe(false)
+		expect(await locks.acquire('app:prod', 'new', 5_000)).toBe(true)
+		expect(await locks.renew('app:prod', 'old', 10_000)).toBe(false)
+		await locks.release('app:prod', 'old')
+		expect(await locks.acquire('app:prod', 'third', 5_000)).toBe(false)
+		advance(5_000)
+		expect(await locks.acquire('app:prod', 'third', 5_000)).toBe(true)
+	})
+
+	for (const elapsed of [4_999, 5_000]) {
+		test(`renewal racing acquisition at elapsed ${elapsed} keeps exactly one live holder`, async () => {
+			const { locks, advance } = makeLocks()
+			await locks.acquire('app:prod', 'old', 5_000)
+			advance(elapsed)
+			const results = await Promise.all([
+				locks.renew('app:prod', 'old', 5_000),
+				locks.acquire('app:prod', 'new', 5_000),
+			])
+			expect(results).toEqual(elapsed < 5_000 ? [true, false] : [false, true])
+			const holder = elapsed < 5_000 ? 'old' : 'new'
+			const loser = elapsed < 5_000 ? 'new' : 'old'
+			expect(await locks.renew('app:prod', loser, 10_000)).toBe(false)
+			await locks.release('app:prod', loser)
+			expect(await locks.acquire('app:prod', 'third', 5_000)).toBe(false)
+			expect(await locks.renew('app:prod', holder, 5_000)).toBe(true)
+		})
+	}
+
+	test('renews only the selected custom table', async () => {
+		const { d1 } = createHarness()
+		await d1.prepare('CREATE TABLE other_locks (lock_key TEXT PRIMARY KEY, holder TEXT NOT NULL, expires_at INTEGER NOT NULL)').run()
+		let now = 1_700_000_000_000
+		const primary = new SqlDeployLocks(d1, { now: () => now })
+		const secondary = new SqlDeployLocks(d1, { table: 'other_locks', now: () => now })
+		await primary.acquire('app:prod', 'run-1', 5_000)
+		await secondary.acquire('app:prod', 'run-1', 5_000)
+		now += 4_000
+		expect(await secondary.renew('app:prod', 'run-1', 5_000)).toBe(true)
+		now += 1_000
+		expect(await primary.acquire('app:prod', 'run-2', 5_000)).toBe(true)
+		expect(await secondary.acquire('app:prod', 'run-2', 5_000)).toBe(false)
+	})
+})
+
 describe('release — holder-checked', () => {
 	test('the owner frees the lease immediately, well before the TTL', async () => {
 		const { locks } = makeLocks()

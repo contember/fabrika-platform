@@ -42,6 +42,7 @@ const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 export class SqlDeployLocks implements DeployLocks {
 	private readonly acquireSql: string
+	private readonly renewSql: string
 	private readonly releaseSql: string
 	private readonly now: () => number
 
@@ -55,11 +56,18 @@ export class SqlDeployLocks implements DeployLocks {
 			ON CONFLICT (lock_key) DO UPDATE SET holder = excluded.holder, expires_at = excluded.expires_at
 			WHERE ${table}.expires_at <= ?`
 		this.releaseSql = `DELETE FROM ${table} WHERE lock_key = ? AND holder = ?`
+		this.renewSql = `UPDATE ${table} SET expires_at = ? WHERE lock_key = ? AND holder = ? AND expires_at > ?`
 	}
 
 	async acquire(key: string, holder: string, ttlMs: number): Promise<boolean> {
 		const now = this.now()
 		const result = await this.db.prepare(this.acquireSql).bind(key, holder, now + ttlMs, now).run()
+		return (result.meta.changes ?? 0) > 0
+	}
+
+	async renew(key: string, holder: string, ttlMs: number): Promise<boolean> {
+		const now = this.now()
+		const result = await this.db.prepare(this.renewSql).bind(now + ttlMs, key, holder, now).run()
 		return (result.meta.changes ?? 0) > 0
 	}
 

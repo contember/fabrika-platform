@@ -144,6 +144,12 @@ through the provider capability after restarts. Control then records the
 terminal run and projects its terminal release state to Operations before
 releasing the run lock.
 
+`@fabrika/platform` supplies the shared SQL lease implementation. Acquisition is non-reentrant;
+release matches the holder. `renew(key, holder, ttlMs)` extends only a still-live lease owned by that
+holder, using one conditional update and the injected clock. Renewal at or after expiry returns
+false, even before another holder acquires the key. The current deploy lifecycle acquires/releases
+leases but does not yet schedule renewal.
+
 `packages/control/src/__tests__/entrypoint-isolation.test.ts` walks both import
 graphs. It verifies that each root reaches only its selected provider and runtime,
 while shared control modules reach neither concrete provider.
