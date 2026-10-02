@@ -159,6 +159,8 @@ Isolation: current branch and shared working tree; strictly disjoint implementat
 
 ## Run log
 
+- 2026-10-02: User explicitly kept WU4 paused when asked whether to authorize an isolated npm Undici compatibility probe. No probe or dependency change is authorized; required webhook readiness remains blocked while Delivery completion continues.
+
 - 2026-10-02: Delivery prerequisites committed: raw environment observation (`676cdab`), managed-binding helpers and manifest policy (`f5d4a74`), shared run/namespace ownership and retained lookup (`5c01205`), installation namespace defaults (`2c105e8`). Independent re-review closed all three namespace findings. Leader verification: 58 helper/manifest/lookup tests, 90 API/proxy tests, 372 lifecycle tests, 108 adapter tests, 11 real PostgreSQL fencing tests and 81 affected installation tests passed. Affected package typechecks and scoped formatting/lint passed (lint reports informational index-access suggestions). Full #37 runtime integration resumed; these prerequisites do not establish its acceptance or full candidate installation.
 
 - 2026-10-02: User approved completion with Builder E2E and new correlation UI excluded. Close the current Delivery integration before starting another implementation workstream. Production topology remains measurement-led; complete-backup freshness is at most 24 hours and restore time at most four hours. WU4 remains paused pending its explicit transport decision.

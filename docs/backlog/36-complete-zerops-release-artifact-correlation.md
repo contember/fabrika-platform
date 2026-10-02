@@ -20,6 +20,10 @@ the corresponding Operations release and issue/regression evidence.
 
 ## Approach / acceptance
 
+The active [Zerops readiness sprint](../sprints/sprint-2026-09-23-zerops-production-readiness.md)
+includes automatic publication, completeness evidence and original-source frames. The user excluded
+new Delivery/Operations correlation UI from that release; the UI acceptance below remains deferred.
+
 - Define a Zerops-correct source-map publication path that runs where build
   artifacts exist and uses a run/release-scoped upload credential.
 - Preserve deployment success when artifact publication fails; mark release
