@@ -82,6 +82,10 @@ Implementation contract to freeze before delegating:
 
 ### WU3 — One validated YAML interpretation (M; backlog 90)
 
+Completed: `c5e917a` implements the strict subset and canonical execution descriptor. Focused tests,
+pinned Go-reader witnesses and the 2026-10-02 live canonical-descriptor build passed. Backlog 90 is removed;
+ADR-0043 and the platform reference retain the contract and live evidence.
+
 - **Problem.** Validation and execution use different YAML readers and the original text crosses the trust boundary.
 - **Verify first.** Reproduce tag, alias, duplicate-key and encoded-reference cases against both the local validator and a YAML-1.1/platform witness.
 - **Scope.** Establish one supported descriptor interpretation at the input boundary. Preserve supported descriptors, source identity and foreign-service reference restrictions. Parser dependencies or descriptor-contract changes need approval.
@@ -154,6 +158,26 @@ Isolation: current branch and shared working tree; strictly disjoint implementat
 - Select the source-map publisher's supported build runtime/distribution, scoped completion receipt and repair window. Existing upload credentials and receivers can be reused, but publishing maps alone does not prove a complete inventory.
 
 ## Run log
+
+- 2026-10-02: Exact-checkout installation transport landed in `6ac64f5` after 237 leader-run tests, package typecheck, formatting/lint and independent review. The snapshot test's concrete ArrayBuffer type was corrected. Native upload/build evidence is recorded in the platform reference. Namespace integration and full installation acceptance remain open.
+
+- 2026-10-02: Independent review found no defects in platform tar-link/protocol handling and ran 47 focused tests. Exact-commit Git tree preflight remains a separate review gate. The live installation witness proves native archive symlink extraction, not an end-to-end source-service platform upload.
+
+- 2026-10-02: Namespace recovery must retain ambiguous `build_trigger_requested` checkpoints even when the version remains `UPLOADING`; a read-only draft suggested timeout cleanup, which contradicts ADR-0044 and was rejected before implementation. Populated legacy namespace pin migration is not part of fresh-install readiness; unpinned targets remain inspectable but refuse proxy mutation.
+- 2026-10-02: Platform archive link support passed 222 focused author tests. Review remains pending. Marker-only submodule detection is insufficient for a platform archive; the source-service unit is adding bounded exact-commit Git tree validation rather than claiming `.gitmodules` proves completeness.
+
+- 2026-10-02: Snapshot helper landed in `83943dd`. Native upload/build witness passed and probe stopped; exact blob bytes and relative symlink were checked at runtime (see platform reference/fact table). Installation transport re-review accepted both fixes, independently running 52 tests. Full installation/upgrade acceptance remains pending.
+
+- 2026-10-02: Committed-source preparation passed 22 leader-run tests (49 assertions) and independent re-review after disabling Git checkout conversions in isolated archive attributes. Installation transport review fixes remove an obsolete init prompt and repair entrypoint coverage; all installation tests reported 237 passes. Native archive upload/build witness is running on a disposable probe; no platform installation was deployed.
+
+- 2026-10-02: The approved installation/namespace source decisions are recorded in [ADR-0045](../decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md). Implementation and live archive acceptance remain in progress.
+
+- 2026-10-02: User approved per-namespace immutable repository/commit/descriptor identity for provisioning, reconciliation and registry republish, using the existing source-service upload path with validated safe relative platform-archive symlinks. Legacy unpinned namespaces require an explicit pin; registry rebuild requests may wait for bounded upload before reporting started.
+- 2026-10-02: Runtime integration found that Cloudflare runner cancellation swallowed container-destroy failures and did not exclude a delayed start. User approved a narrow runner-boundary correction with failure/ordering regression tests, preserving the detached runner architecture.
+- 2026-10-02: Full typecheck executed after queued CPU capacity became available, during source/lifecycle signature changes, and failed on incomplete caller adaptations. This is an in-progress failure, not a verified repository gate; rerun after integration.
+
+- 2026-10-02: User chose mandatory `--source-dir` for both installation bring-up and deploy; mutable Git-source installation builds must be refused. The preparation unit freezes one committed checkout archive; the transport unit reuses it across both install passes and all five service builds. Namespace proxy source remains a separate design gate.
+- 2026-10-02: Run mutation fencing landed in `c603eb9`. Runtime integration uses explicit unresolved deploy/cancellation outcomes and distinguishes lease loss from user cancellation; provider contract signatures are frozen for that unit. The detached Cloudflare runner co-write remains independent of Control invocation ownership.
 
 - 2026-10-02: Fenced run-write review found no defects under acquire-before-mutate, unique invocation holders and fresh per-call timestamps. Real PostgreSQL tests confirmed checkpoint CAS and takeover waiting behind the mutation transaction; runtime adoption remains pending. Collision-safe provisioning landed in `f44d1af`.
 

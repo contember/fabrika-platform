@@ -49,6 +49,9 @@ bun test
   steady-state import as "reconciling"; change a live field through the API that owns it.
 - **`compileProvisioningYaml`'s output is first-bring-up only.** Re-applying it at a service that carries
   code activates an EMPTY app version and demotes the running one to `BACKUP`.
+- Application registration uses `renderFabrikaProvisioningYaml` with `override: false` to refuse
+  first-creation collisions (ADR-0044). Preserve `override: true` in the canonical manifest and
+  steady-state imports; await every returned import process before completing registration.
 - **An import document CANNOT establish a `.zerops.app` subdomain** — `enableSubdomainAccess` is accepted
   and dropped, on a service the document creates as much as on one `override` leaves alone. Only
   `PUT /service-stack/{id}/enable-subdomain-access` does, and only once the service publishes a DEPLOYED
