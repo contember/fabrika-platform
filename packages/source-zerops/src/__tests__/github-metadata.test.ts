@@ -1,11 +1,111 @@
 import { describe, expect, test } from 'bun:test'
 import { GitHubMetadataClient } from '../github-metadata'
+import { SOURCE_MAX_TREE_ENTRIES } from '../tar'
 
 const commitSha = 'a'.repeat(40)
 const descriptor = 'zerops:\n  - setup: app\n'
 const repository = { owner: 'contember', name: 'fabrika-platform' }
 
 const commitResponse = () => Response.json({ sha: commitSha })
+const treeSha = 'b'.repeat(40)
+const blob = { path: 'CLAUDE.md', mode: '100644', type: 'blob', sha: 'c'.repeat(40), size: 12 }
+const treeResponse = { sha: treeSha, truncated: false, tree: [blob] }
+
+describe('platform Git tree preflight', () => {
+	test('binds a complete recursive tree to the exact commit and accepts symlink blobs', async () => {
+		const calls: string[] = []
+		const client = new GitHubMetadataClient({
+			fetch: async (input, init) => {
+				calls.push(input.toString())
+				expect(new Headers(init?.headers).get('authorization')).toBeNull()
+				expect(init?.redirect).toBe('error')
+				return input.toString().includes('/commits/')
+					? Response.json({ sha: commitSha, commit: { tree: { sha: treeSha } } })
+					: Response.json({ ...treeResponse, tree: [blob, { ...blob, path: 'AGENTS.md', mode: '120000' }] })
+			},
+		})
+		await client.validatePlatformTree(repository, commitSha, new AbortController().signal)
+		expect(calls).toEqual([
+			`https://api.github.com/repos/contember/fabrika-platform/commits/${commitSha}`,
+			`https://api.github.com/repos/contember/fabrika-platform/git/trees/${treeSha}?recursive=1`,
+		])
+	})
+
+	test.each([
+		{ name: 'wrong commit', body: { sha: treeSha, commit: { tree: { sha: treeSha } } }, code: 'commit_mismatch' },
+		{ name: 'missing tree', body: { sha: commitSha }, code: 'archive_rejected' },
+		{ name: 'invalid tree sha', body: { sha: commitSha, commit: { tree: { sha: 'main' } } }, code: 'archive_rejected' },
+	])('rejects $name before requesting a tree', async ({ body, code }) => {
+		let calls = 0
+		const client = new GitHubMetadataClient({
+			fetch: async () => {
+				calls++
+				return Response.json(body)
+			},
+		})
+		await expect(client.validatePlatformTree(repository, commitSha, new AbortController().signal)).rejects.toMatchObject({ code, stage: 'archive' })
+		expect(calls).toBe(1)
+	})
+
+	test.each([
+		{ name: 'markerless gitlink', body: { ...treeResponse, tree: [{ ...blob, path: 'vendor', mode: '160000', type: 'commit' }] } },
+		{ name: 'gitlink mode with false blob type', body: { ...treeResponse, tree: [{ ...blob, mode: '160000' }] } },
+		{ name: 'commit type with false blob mode', body: { ...treeResponse, tree: [{ ...blob, type: 'commit' }] } },
+		{ name: 'truncated tree', body: { ...treeResponse, truncated: true } },
+		{ name: 'missing truncation flag', body: { sha: treeSha, tree: [blob] } },
+		{ name: 'wrong tree identity', body: { ...treeResponse, sha: commitSha } },
+		{ name: 'missing entries', body: { sha: treeSha, truncated: false } },
+		{ name: 'non-array entries', body: { ...treeResponse, tree: {} } },
+		{ name: 'invalid entry', body: { ...treeResponse, tree: [null] } },
+		{ name: 'unknown mode', body: { ...treeResponse, tree: [{ ...blob, mode: '100600' }] } },
+		{ name: 'invalid sha', body: { ...treeResponse, tree: [{ ...blob, sha: null }] } },
+		{ name: 'invalid size', body: { ...treeResponse, tree: [{ ...blob, size: -1 }] } },
+		{ name: 'invalid path', body: { ...treeResponse, tree: [{ ...blob, path: '../escape' }] } },
+		{ name: 'duplicate path', body: { ...treeResponse, tree: [blob, blob] } },
+		{ name: 'missing parent tree', body: { ...treeResponse, tree: [{ ...blob, path: 'dir/file' }] } },
+		{ name: 'blob parent', body: { ...treeResponse, tree: [blob, { ...blob, path: 'CLAUDE.md/file' }] } },
+	])('fails closed on $name', async ({ body }) => {
+		const client = platformClient(() => Response.json(body))
+		await expect(client.validatePlatformTree(repository, commitSha, new AbortController().signal)).rejects.toMatchObject({
+			code: 'archive_rejected',
+			stage: 'archive',
+			status: 422,
+			retryable: false,
+		})
+	})
+
+	test.each([
+		{
+			name: 'too many entries',
+			response: () => Response.json({ ...treeResponse, tree: Array.from({ length: SOURCE_MAX_TREE_ENTRIES + 1 }, () => blob) }),
+			status: 413,
+		},
+		{
+			name: 'announced oversized body',
+			response: () => new Response('{}', { headers: { 'content-length': String(7 * 1024 * 1024 + 1) } }),
+			status: 413,
+		},
+		{ name: 'streamed oversized body', response: () => new Response('x'.repeat(7 * 1024 * 1024 + 1)), status: 413 },
+		{ name: 'malformed JSON', response: () => new Response('{'), status: 422 },
+		{ name: 'invalid UTF-8', response: () => new Response(new Uint8Array([0xff])), status: 422 },
+	])('bounds and rejects $name', async ({ response, status }) => {
+		await expect(platformClient(response).validatePlatformTree(repository, commitSha, new AbortController().signal)).rejects.toMatchObject({
+			code: 'archive_rejected',
+			stage: 'archive',
+			status,
+			retryable: false,
+		})
+	})
+})
+
+function platformClient(tree: () => Response): GitHubMetadataClient {
+	return new GitHubMetadataClient({
+		fetch: async (input) =>
+			input.toString().includes('/commits/')
+				? Response.json({ sha: commitSha, commit: { tree: { sha: treeSha } } })
+				: tree(),
+	})
+}
 
 describe('GitHub repository metadata', () => {
 	test.each([

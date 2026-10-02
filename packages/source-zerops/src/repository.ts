@@ -32,6 +32,7 @@ export interface RepositoryResolveResult {
 }
 
 export interface RepositoryArchiveInput {
+	archiveKind?: 'platform'
 	repository: ZeropsSourceRepository
 	commitSha: string
 	githubInstallationId?: number
@@ -134,6 +135,9 @@ export class TarballRepositorySource implements RepositorySource {
 
 	async archive(input: RepositoryArchiveInput): Promise<RepositoryArchive> {
 		throwIfAborted(input.signal, 'archive')
+		if (input.archiveKind === 'platform' && (input.githubInstallationId !== undefined || input.privateBinding !== undefined)) {
+			throw new SourceFailure('invalid_request', 'archive', false, 400)
+		}
 		if (!OBJECT_ID_PATTERN.test(input.commitSha)) {
 			throw new SourceFailure('commit_mismatch', 'archive', false, 409)
 		}
@@ -141,6 +145,7 @@ export class TarballRepositorySource implements RepositorySource {
 			throw new SourceFailure('descriptor_mismatch', 'archive', false, 409)
 		}
 		const credentials = await this.credentials(input, 'archive')
+		if (input.archiveKind === 'platform') await this.metadata.validatePlatformTree(input.repository, input.commitSha, input.signal)
 		const download = linkedController(input.signal)
 		try {
 			const tarball = await this.tarball(
@@ -151,6 +156,7 @@ export class TarballRepositorySource implements RepositorySource {
 				input.signal,
 			)
 			const rewrite = createTarRewrite({
+				...(input.archiveKind !== undefined ? { archiveKind: input.archiveKind } : {}),
 				commitSha: input.commitSha,
 				descriptorSha256: input.descriptorSha256,
 			})

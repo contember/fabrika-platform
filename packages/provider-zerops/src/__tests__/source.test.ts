@@ -97,6 +97,26 @@ const thrownMessage = (operation: () => void): string => {
 	throw new Error('expected operation to throw')
 }
 
+test('platform upload mode survives the shared builder only for anonymous v1 requests', () => {
+	const request = buildZeropsSourceUploadRequest({
+		runId: 'run-1',
+		appVersionId: 'version-1',
+		repository,
+		commitSha: sha40,
+		uploadUrl: 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=private',
+		descriptor: { path: 'zerops.yaml', sha256: descriptorSha },
+		signal: signal(),
+		archiveKind: 'platform',
+	})
+	expect(request.archiveKind).toBe('platform')
+	expect(decodeZeropsSourceUploadRequest(request)).toEqual(request)
+	expect(() => decodeZeropsSourceUploadRequest({ ...request, githubInstallationId: 42 })).toThrow()
+	for (const archiveKind of ['app', '', null, true, 1, {}]) {
+		expect(() => decodeZeropsSourceUploadRequest({ ...request, archiveKind })).toThrow()
+	}
+	expect(() => decodeZeropsSourceUploadRequestV2({ ...request, protocolVersion: 2 })).toThrow()
+})
+
 describe('Zerops source repository normalization', () => {
 	test('normalizes the only accepted GitHub URL shape', () => {
 		expect(normalizeZeropsSourceRepository('https://github.com/Contember/Fabrika-Platform.git')).toEqual(repository)

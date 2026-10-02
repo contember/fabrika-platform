@@ -150,6 +150,8 @@ export interface ZeropsSourceUploadRequestV1 {
 	githubInstallationId?: number
 	uploadUrl: string
 	descriptor: ZeropsSourceDescriptor
+	/** Public platform sources may contain validated relative symlinks; application uploads stay strict. */
+	archiveKind?: 'platform'
 }
 
 export interface ZeropsSourceUploadResponseV1 {
@@ -304,6 +306,7 @@ export interface ZeropsSourceUploadInput {
 	githubInstallationId?: number
 	uploadUrl: string
 	descriptor: ZeropsSourceDescriptor
+	archiveKind?: 'platform'
 	signal: AbortSignal
 }
 

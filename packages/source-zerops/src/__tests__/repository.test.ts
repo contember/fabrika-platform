@@ -228,6 +228,182 @@ describe('Zerops source resolve', () => {
 })
 
 describe('Zerops source archive', () => {
+	test.each(['markerless', 'export-ignored-marker'])('rejects actual %s gitlinks before download or PUT', async (gitlink) => {
+		if (gitlink !== 'markerless' && gitlink !== 'export-ignored-marker') throw new Error('unexpected fixture')
+		const fixture = await gitFixture({ gitlink })
+		expect(new TextDecoder().decode(Bun.gunzipSync(fixture.tarball))).not.toContain('.gitmodules\0')
+		let downloads = 0
+		let puts = 0
+		const service = new ZeropsSourceService({
+			rpcKey: 'source-rpc-key-that-is-at-least-32-characters',
+			repository: sourceFor(fixture, { onDownloadAuthorization: () => downloads++ }),
+			uploadFetch: async () => {
+				puts++
+				return new Response(null, { status: 200 })
+			},
+		})
+		const response = await service.fetch(platformUploadRequest(fixture.commitSha))
+		expect(response.status).toBe(422)
+		expect(await response.json()).toEqual({ error: { code: 'archive_rejected', stage: 'archive', retryable: false } })
+		expect(downloads).toBe(0)
+		expect(puts).toBe(0)
+	})
+
+	test.each([
+		{ name: 'truncated', response: () => Response.json({ sha: 'b'.repeat(40), truncated: true, tree: [] }), status: 422 },
+		{ name: 'malformed', response: () => new Response('{'), status: 422 },
+		{ name: 'oversized', response: () => new Response('x'.repeat(7 * 1024 * 1024 + 1)), status: 413 },
+	])('refuses $name tree metadata before download or PUT', async ({ response: treeResponse, status }) => {
+		let downloads = 0
+		let puts = 0
+		const service = new ZeropsSourceService({
+			rpcKey: 'source-rpc-key-that-is-at-least-32-characters',
+			repository: handSource(handTarball([file(`${handPrefix}zerops.yaml`, descriptor)]), { treeResponse, onDownloadAuthorization: () => downloads++ }),
+			uploadFetch: async () => {
+				puts++
+				return new Response(null, { status: 200 })
+			},
+		})
+		expect((await service.fetch(platformUploadRequest(handCommitSha))).status).toBe(status)
+		expect(downloads).toBe(0)
+		expect(puts).toBe(0)
+	})
+
+	test('default application archives do not request tree metadata', async () => {
+		const requests: string[] = []
+		const source = handSource(handTarball([file(`${handPrefix}zerops.yaml`, descriptor)]), { onMetadataRequest: (url) => requests.push(url) })
+		const archived = await runArchive(source, { repository, commitSha: handCommitSha, descriptorSha256, signal: new AbortController().signal })
+		expect(archived.failure).toBeUndefined()
+		expect(requests).toEqual([])
+	})
+
+	test('a late platform namespace rejection prevents upload success even when PUT already started', async () => {
+		let putStarted = false
+		const service = new ZeropsSourceService({
+			rpcKey: 'source-rpc-key-that-is-at-least-32-characters',
+			repository: handSource(handTarball([file(`${handPrefix}zerops.yaml`, descriptor), link('AGENTS.md', 'missing')])),
+			uploadFetch: async (_destination, init) => {
+				putStarted = true
+				await new Response(init.body).arrayBuffer().catch(() => {})
+				return new Response(null, { status: 200 })
+			},
+		})
+		const response = await service.fetch(
+			new Request('http://source.test/v1/source/upload', {
+				method: 'POST',
+				headers: { authorization: 'Bearer source-rpc-key-that-is-at-least-32-characters', 'content-type': 'application/json' },
+				body: JSON.stringify(buildZeropsSourceUploadRequest({
+					runId: 'run-1',
+					appVersionId: 'version-1',
+					repository,
+					commitSha: handCommitSha,
+					uploadUrl,
+					descriptor: { path: 'zerops.yaml', sha256: descriptorSha256 },
+					signal: new AbortController().signal,
+					archiveKind: 'platform',
+				})),
+			}),
+		)
+		expect(putStarted).toBe(true)
+		expect(response.status).toBe(422)
+		expect(await response.json()).toEqual({ error: { code: 'archive_rejected', stage: 'archive', retryable: false } })
+	})
+
+	test('platform mode preserves safe chains and intermediate directory links', async () => {
+		const parts = [
+			file(`${handPrefix}zerops.yaml`, descriptor),
+			file(`${handPrefix}docs/CLAUDE.md`, 'instructions'),
+			link('AGENTS.md', 'alias/CLAUDE.md'),
+			link('alias', 'docs'),
+			link('chain', 'AGENTS.md'),
+			link('docs/parent', '../AGENTS.md'),
+		]
+		const archived = await platformArchive(parts)
+		expect(archived.failure).toBeUndefined()
+		expect(entries(archived).filter((part) => part.type === '2').map((part) => [part.path, part.linkpath])).toEqual([
+			['AGENTS.md', 'alias/CLAUDE.md'],
+			['alias', 'docs'],
+			['chain', 'AGENTS.md'],
+			['docs/parent', '../AGENTS.md'],
+		])
+	})
+
+	test('platform mode preserves long PAX link targets', async () => {
+		const target = `${'directory'.repeat(14)}/CLAUDE.md`
+		const archived = await platformArchive([
+			file(`${handPrefix}zerops.yaml`, descriptor),
+			paxed(`path=${handPrefix}${target}\n`, file(`${handPrefix}placeholder`, 'instructions')),
+			paxed(`linkpath=${target}\n`, link('AGENTS.md', 'placeholder')),
+		])
+		expect(archived.failure).toBeUndefined()
+		expect(entries(archived).find((part) => part.path === 'AGENTS.md')?.linkpath).toBe(target)
+	})
+
+	test.each([
+		{ name: 'escape', parts: [link('link', '../outside')] },
+		{ name: 'absolute target', parts: [link('link', '/outside')] },
+		{ name: 'backslash', parts: [link('link', 'dir\\file')] },
+		{ name: 'control', parts: [link('link', 'bad\nname')] },
+		{ name: 'dangling', parts: [link('link', 'missing')] },
+		{ name: 'cycle', parts: [link('one', 'two'), link('two', 'one')] },
+		{ name: 'escape through chain', parts: [link('one', 'two/../..'), link('two', 'dir'), entry({ name: `${handPrefix}dir/`, type: '5' })] },
+		{ name: 'file below earlier symlink', parts: [link('dir', '.'), file(`${handPrefix}dir/file`, 'x')] },
+		{ name: 'symlink replaces regenerated parent', parts: [file(`${handPrefix}dir/file`, 'x'), link('dir', '.')] },
+		{ name: 'directory below earlier symlink', parts: [link('dir', '.'), entry({ name: `${handPrefix}dir/sub/`, type: '5' })] },
+		{ name: 'symlink replaces directory parent', parts: [entry({ name: `${handPrefix}dir/sub/`, type: '5' }), link('dir', '.')] },
+		{ name: 'file-directory collision', parts: [file(`${handPrefix}dir`, 'x'), file(`${handPrefix}dir/file`, 'x')] },
+		{ name: 'directory-file collision', parts: [file(`${handPrefix}dir/file`, 'x'), file(`${handPrefix}dir`, 'x')] },
+		{ name: 'descriptor symlink', parts: [link('zerops.yaml', 'actual'), file(`${handPrefix}actual`, descriptor)] },
+		{ name: 'directory traversal', parts: [entry({ name: `${handPrefix}../escape/`, type: '5' })] },
+		{ name: 'nonzero link size', parts: [entry({ name: `${handPrefix}link`, type: '2', linkname: 'zerops.yaml', content: bytes('x') })] },
+		{ name: 'hardlink', parts: [entry({ name: `${handPrefix}link`, type: '1', linkname: 'zerops.yaml' })] },
+		...['3', '4', '6', 'L', 'K', 'S'].map((type) => ({ name: `special type ${type}`, parts: [entry({ name: `${handPrefix}special`, type })] })),
+		{ name: 'submodule marker', parts: [file(`${handPrefix}.gitmodules`, 'submodules')] },
+	])('platform mode rejects $name', async ({ parts }) => {
+		const archived = await platformArchive([...parts, file(`${handPrefix}zerops.yaml`, descriptor)])
+		expect(archived.failure).toMatchObject({ code: 'archive_rejected', stage: 'archive', status: 422 })
+		expect(archived.collected.ok).toBe(false)
+	})
+
+	test('shared builder and service forward platform mode for a real git AGENTS.md symlink', async () => {
+		const fixture = await gitFixture({ agentsLink: true })
+		let uploaded = new Uint8Array()
+		const service = new ZeropsSourceService({
+			rpcKey: 'source-rpc-key-that-is-at-least-32-characters',
+			repository: sourceFor(fixture),
+			uploadFetch: async (_destination, init) => {
+				uploaded = new Uint8Array(await new Response(init.body).arrayBuffer())
+				return new Response(null, { status: 200 })
+			},
+		})
+		const response = await service.fetch(
+			new Request('http://source.test/v1/source/upload', {
+				method: 'POST',
+				headers: { authorization: 'Bearer source-rpc-key-that-is-at-least-32-characters', 'content-type': 'application/json' },
+				body: JSON.stringify(buildZeropsSourceUploadRequest({
+					runId: 'run-1',
+					appVersionId: 'version-1',
+					repository,
+					commitSha: fixture.commitSha,
+					uploadUrl,
+					descriptor: { path: 'zerops.yaml', sha256: descriptorSha256 },
+					signal: new AbortController().signal,
+					archiveKind: 'platform',
+				})),
+			}),
+		)
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({
+			protocolVersion: 1,
+			runId: 'run-1',
+			appVersionId: 'version-1',
+			commitSha: fixture.commitSha,
+			descriptorSha256,
+		})
+		const delivered = parseTar(new Uint8Array(Bun.gunzipSync(uploaded)))
+		expect(delivered.find((part) => part.path === 'AGENTS.md')).toMatchObject({ type: '2', linkpath: 'CLAUDE.md', content: new Uint8Array() })
+	})
+
 	test('streams the tarball into an archive of regular files with fixed modes, each parent directory written once before its first file', async () => {
 		const fixture = await gitFixture()
 		const archived = await runArchive(sourceFor(fixture), {
@@ -546,6 +722,7 @@ describe('Zerops source archive', () => {
 })
 
 interface ArchivedEntry {
+	linkpath: string
 	path: string
 	mode: number
 	type: string
@@ -589,6 +766,7 @@ function parseTar(archive: SourceBytes): ArchivedEntry[] {
 	const parsed: ArchivedEntry[] = []
 	let offset = 0
 	let pendingPath: string | undefined
+	let pendingLinkpath: string | undefined
 	while (offset + 512 <= archive.byteLength) {
 		const block = archive.subarray(offset, offset + 512)
 		offset += 512
@@ -601,13 +779,15 @@ function parseTar(archive: SourceBytes): ArchivedEntry[] {
 		offset += size + ((512 - (size % 512)) % 512)
 		if (type === 'x') {
 			const record = new TextDecoder().decode(content)
-			const match = /^\d+ path=(.*)\n$/.exec(record)
-			if (match?.[1] === undefined) throw new Error('unreadable pax record')
-			pendingPath = match[1]
+			for (const match of record.matchAll(/\d+ (path|linkpath)=(.*)\n/g)) {
+				if (match[1] === 'path') pendingPath = match[2]
+				else pendingLinkpath = match[2]
+			}
 			continue
 		}
-		parsed.push({ path: pendingPath ?? name, mode, type, content })
+		parsed.push({ path: pendingPath ?? name, mode, type, content, linkpath: pendingLinkpath ?? field(block, 157, 100) })
 		pendingPath = undefined
+		pendingLinkpath = undefined
 	}
 	return parsed
 }
@@ -619,6 +799,8 @@ function field(block: SourceBytes, offset: number, length: number): string {
 }
 
 interface FixtureOptions {
+	gitlink?: 'markerless' | 'export-ignored-marker'
+	agentsLink?: boolean
 	longPath?: string
 	symlink?: boolean
 	exportIgnored?: boolean
@@ -626,6 +808,8 @@ interface FixtureOptions {
 
 interface Fixture {
 	commitSha: string
+	treeSha: string
+	tree: Array<{ path: string; mode: string; type: string; sha: string }>
 	tarball: SourceBytes
 }
 
@@ -653,10 +837,29 @@ async function gitFixture(options: FixtureOptions = {}): Promise<Fixture> {
 		await writeFile(join(working, options.longPath), 'long path contents')
 	}
 	if (options.symlink === true) await symlink('zerops.yaml', join(working, 'unsafe-link'))
+	if (options.agentsLink === true) {
+		await writeFile(join(working, 'CLAUDE.md'), 'instructions')
+		await symlink('CLAUDE.md', join(working, 'AGENTS.md'))
+	}
 	await command(['git', '-C', working, 'add', '.'])
+	if (options.gitlink !== undefined) {
+		await command(['git', '-C', working, 'update-index', '--add', '--cacheinfo', `160000,${handCommitSha},vendor`])
+		if (options.gitlink === 'export-ignored-marker') {
+			await writeFile(join(working, '.gitmodules'), '[submodule "vendor"]\n\tpath = vendor\n\turl = https://github.com/example/vendor\n')
+			await writeFile(join(working, '.gitattributes'), '.gitmodules export-ignore\n')
+			await command(['git', '-C', working, 'add', '.gitmodules', '.gitattributes'])
+		}
+	}
 	await command(['git', '-C', working, 'update-index', '--chmod=+x', 'bin/run'])
 	await command(['git', '-C', working, 'commit', '--quiet', '-m', 'fixture'])
 	const commitSha = (await commandText(['git', '-C', working, 'rev-parse', 'HEAD'])).trim()
+	const treeSha = (await commandText(['git', '-C', working, 'rev-parse', 'HEAD^{tree}'])).trim()
+	const tree = (await commandText(['git', '-C', working, 'ls-tree', '-r', '-t', '-z', 'HEAD'])).split('\0').filter(Boolean).map((line) => {
+		const match = /^(\d+) (\w+) ([a-f0-9]+)\t(.+)$/.exec(line)
+		const [, mode, type, sha, path] = match ?? []
+		if (mode === undefined || type === undefined || sha === undefined || path === undefined) throw new Error('invalid fixture tree')
+		return { mode, type, sha, path }
+	})
 	const tar = await commandBytes([
 		'git',
 		'-C',
@@ -666,10 +869,11 @@ async function gitFixture(options: FixtureOptions = {}): Promise<Fixture> {
 		`--prefix=contember-fixture-${commitSha.slice(0, 7)}/`,
 		commitSha,
 	])
-	return { commitSha, tarball: Bun.gzipSync(tar) }
+	return { commitSha, treeSha, tree, tarball: Bun.gzipSync(tar) }
 }
 
 interface SourceOptions {
+	treeResponse?: () => Response
 	github?: SourceGitHubConnection
 	location?: string
 	redirectResponse?: () => Response
@@ -688,7 +892,8 @@ function sourceFor(fixture: Fixture, options: SourceOptions = {}): TarballReposi
 				const url = input.toString()
 				options.onMetadataRequest?.(url)
 				options.onMetadataAuthorization?.(new Headers(init?.headers).get('authorization'))
-				if (url.includes('/commits/')) return Response.json({ sha: fixture.commitSha })
+				if (url.includes('/commits/')) return Response.json({ sha: fixture.commitSha, commit: { tree: { sha: fixture.treeSha } } })
+				if (url.includes('/git/trees/')) return options.treeResponse?.() ?? Response.json({ sha: fixture.treeSha, truncated: false, tree: fixture.tree })
 				if (url.includes('/contents/')) return options.descriptorResponse?.() ?? new Response(descriptor)
 				return new Response(null, { status: 404 })
 			},
@@ -698,7 +903,7 @@ function sourceFor(fixture: Fixture, options: SourceOptions = {}): TarballReposi
 }
 
 function handSource(tarball: SourceBytes, options: SourceOptions = {}): TarballRepositorySource {
-	return new TarballRepositorySource({ downloadFetch: downloadFetchFor(Bun.gzipSync(tarball), options) })
+	return sourceFor({ commitSha: handCommitSha, treeSha: 'b'.repeat(40), tree: [], tarball: Bun.gzipSync(tarball) }, options)
 }
 
 function downloadFetchFor(gzipped: SourceBytes, options: SourceOptions): SourceDownloadFetch {
@@ -750,6 +955,37 @@ function entry(options: EntryOptions): SourceBytes {
 
 function file(name: string, contents: string, mode = 0o644): SourceBytes {
 	return entry({ name, mode, content: bytes(contents) })
+}
+
+function link(path: string, target: string): SourceBytes {
+	return entry({ name: `${handPrefix}${path}`, type: '2', linkname: target })
+}
+
+function platformArchive(parts: SourceBytes[]): Promise<ArchiveRun> {
+	return runArchive(handSource(handTarball(parts)), {
+		repository,
+		commitSha: handCommitSha,
+		descriptorSha256,
+		signal: new AbortController().signal,
+		archiveKind: 'platform',
+	})
+}
+
+function platformUploadRequest(commitSha: string): Request {
+	return new Request('http://source.test/v1/source/upload', {
+		method: 'POST',
+		headers: { authorization: 'Bearer source-rpc-key-that-is-at-least-32-characters', 'content-type': 'application/json' },
+		body: JSON.stringify(buildZeropsSourceUploadRequest({
+			runId: 'run-1',
+			appVersionId: 'version-1',
+			repository,
+			commitSha,
+			uploadUrl,
+			descriptor: { path: 'zerops.yaml', sha256: descriptorSha256 },
+			signal: new AbortController().signal,
+			archiveKind: 'platform',
+		})),
+	})
 }
 
 function paxed(payload: string, next: SourceBytes): SourceBytes {

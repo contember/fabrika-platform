@@ -314,6 +314,7 @@ export class ZeropsSourceService {
 		let putStarted = false
 		try {
 			const archive = await this.repository.archive({
+				...(input.protocolVersion === 1 && input.archiveKind !== undefined ? { archiveKind: input.archiveKind } : {}),
 				repository: input.repository,
 				commitSha: input.commitSha,
 				...(input.protocolVersion === 1 && input.githubInstallationId !== undefined

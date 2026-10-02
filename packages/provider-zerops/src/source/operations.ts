@@ -95,14 +95,18 @@ export function decodeZeropsSourceUploadRequest(value: unknown): ZeropsSourceUpl
 	optionalFields(
 		parsed,
 		['protocolVersion', 'runId', 'appVersionId', 'repository', 'commitSha', 'uploadUrl', 'descriptor'],
-		['githubInstallationId'],
+		['githubInstallationId', 'archiveKind'],
 		'source upload request',
 	)
 	const installation = optionalInstallationId(parsed['githubInstallationId'], 'source upload request.githubInstallationId')
+	const archiveKind = parsed['archiveKind']
+	if (archiveKind !== undefined && archiveKind !== 'platform') throw new Error('source upload request.archiveKind is invalid')
+	if (archiveKind !== undefined && installation !== undefined) throw new Error('platform archives require anonymous source access')
 	return {
 		protocolVersion: protocolVersion(parsed, 'source upload request'),
 		runId: identifier(parsed['runId'], 'source upload request.runId'),
 		appVersionId: identifier(parsed['appVersionId'], 'source upload request.appVersionId'),
+		...(archiveKind !== undefined ? { archiveKind } : {}),
 		repository: repository(parsed['repository'], 'source upload request.repository'),
 		commitSha: commitSha(parsed['commitSha'], 'source upload request.commitSha'),
 		...(installation !== undefined ? { githubInstallationId: installation } : {}),
@@ -116,6 +120,7 @@ export function buildZeropsSourceUploadRequest(input: ZeropsSourceUploadInput): 
 		protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION,
 		runId: input.runId,
 		appVersionId: input.appVersionId,
+		...(input.archiveKind !== undefined ? { archiveKind: input.archiveKind } : {}),
 		repository: input.repository,
 		commitSha: input.commitSha,
 		...(input.githubInstallationId !== undefined ? { githubInstallationId: input.githubInstallationId } : {}),

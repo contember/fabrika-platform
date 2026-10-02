@@ -1,8 +1,9 @@
 import { ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES, type ZeropsSourceRepository } from '@fabrika/provider-zerops'
 import { cancelled, SourceFailure } from './failure'
-import { SOURCE_DESCRIPTOR_PATH } from './tar'
+import { safeRepositoryPath, SOURCE_DESCRIPTOR_PATH, SOURCE_MAX_TREE_ENTRIES } from './tar'
 
 const GITHUB_COMMIT_MAX_RESPONSE_BYTES = 1024 * 1024
+const GITHUB_TREE_MAX_RESPONSE_BYTES = 7 * 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 30_000
 const MAX_TIMEOUT_MS = 120_000
 const OBJECT_ID_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
@@ -53,27 +54,96 @@ export class GitHubMetadataClient {
 		signal: AbortSignal,
 		stage: GitHubMetadataStage,
 	): Promise<string> {
-		const body = await this.request(
+		return (await this.readCommit(repository, ref, token, signal, stage)).sha
+	}
+
+	/** Git trees retain gitlinks even when export attributes hide .gitmodules from the tarball. */
+	async validatePlatformTree(repository: ZeropsSourceRepository, commitSha: string, signal: AbortSignal): Promise<void> {
+		if (!OBJECT_ID_PATTERN.test(commitSha)) throw rejected('archive')
+		const commit = await this.readCommit(repository, commitSha, undefined, signal, 'archive')
+		if (commit.sha !== commitSha) throw new SourceFailure('commit_mismatch', 'archive', false, 409)
+		if (commit.treeSha === undefined) throw rejected('archive')
+		const parsed = await this.requestJson(
+			`${prefix(repository)}/git/trees/${commit.treeSha}?recursive=1`,
+			undefined,
+			signal,
+			'archive',
+			GITHUB_TREE_MAX_RESPONSE_BYTES,
+		)
+		if (!isObject(parsed) || parsed['sha'] !== commit.treeSha || parsed['truncated'] !== false || !Array.isArray(parsed['tree'])) {
+			throw rejected('archive')
+		}
+		const entries: unknown[] = parsed['tree']
+		if (entries.length > SOURCE_MAX_TREE_ENTRIES) throw new SourceFailure('archive_rejected', 'archive', false, 413)
+		const paths = new Map<string, 'blob' | 'tree'>()
+		for (const entry of entries) {
+			if (!isObject(entry)) throw rejected('archive')
+			const path = entry['path']
+			const mode = entry['mode']
+			const type = entry['type']
+			const sha = entry['sha']
+			const size = entry['size']
+			if (
+				typeof path !== 'string' || !safeRepositoryPath(path) || paths.has(path)
+				|| typeof sha !== 'string' || !OBJECT_ID_PATTERN.test(sha)
+				|| !((type === 'tree' && mode === '040000')
+					|| (type === 'blob' && (mode === '100644' || mode === '100755' || mode === '120000')))
+				|| (size !== undefined && (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0))
+			) throw rejected('archive')
+			paths.set(path, type)
+		}
+		for (const path of paths.keys()) {
+			const separator = path.lastIndexOf('/')
+			if (separator !== -1 && paths.get(path.slice(0, separator)) !== 'tree') throw rejected('archive')
+		}
+	}
+
+	private async readCommit(
+		repository: ZeropsSourceRepository,
+		ref: string,
+		token: string | undefined,
+		signal: AbortSignal,
+		stage: GitHubMetadataStage,
+	): Promise<{ sha: string; treeSha: string | undefined }> {
+		const parsed = await this.requestJson(
 			`${prefix(repository)}/commits/${encodeURIComponent(ref)}`,
-			GITHUB_ACCEPT,
 			token,
 			signal,
 			stage,
 			GITHUB_COMMIT_MAX_RESPONSE_BYTES,
-			() => new SourceFailure('archive_rejected', stage, false, 413),
 		)
-		let parsed: unknown
-		try {
-			parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
-		} catch {
-			throw rejected(stage)
-		}
 		if (!isObject(parsed)) throw rejected(stage)
 		const sha = parsed['sha']
 		if (typeof sha !== 'string' || !OBJECT_ID_PATTERN.test(sha)) {
 			throw rejected(stage)
 		}
-		return sha
+		const details = parsed['commit']
+		const tree = isObject(details) ? details['tree'] : undefined
+		const treeSha = isObject(tree) ? tree['sha'] : undefined
+		return { sha, treeSha: typeof treeSha === 'string' && OBJECT_ID_PATTERN.test(treeSha) ? treeSha : undefined }
+	}
+
+	private async requestJson(
+		path: string,
+		token: string | undefined,
+		signal: AbortSignal,
+		stage: GitHubMetadataStage,
+		maximumBytes: number,
+	): Promise<unknown> {
+		const body = await this.request(
+			path,
+			GITHUB_ACCEPT,
+			token,
+			signal,
+			stage,
+			maximumBytes,
+			() => new SourceFailure('archive_rejected', stage, false, 413),
+		)
+		try {
+			return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
+		} catch {
+			throw rejected(stage)
+		}
 	}
 
 	/** Read the repository-root descriptor at an exact commit, bounded, without any other repository content. */

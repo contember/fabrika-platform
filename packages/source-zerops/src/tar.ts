@@ -5,7 +5,7 @@ import { SourceFailure } from './failure'
 export const SOURCE_MAX_TREE_ENTRIES = 50_000
 export const SOURCE_MAX_EXPANDED_BYTES = 512 * 1024 * 1024
 export const SOURCE_DESCRIPTOR_PATH = 'zerops.yaml'
-/** A repository with submodules: `git archive` emits them as bare directories, so this file is the only signal. */
+/** The tar-only application path detects submodules by this marker; platform mode also checks the native Git tree. */
 export const SOURCE_SUBMODULE_MARKER = '.gitmodules'
 
 const BLOCK_BYTES = 512
@@ -25,6 +25,7 @@ export interface ArchiveSummary {
 }
 
 export interface TarRewriteInput {
+	archiveKind?: 'platform'
 	/** The exact commit the tarball must name in its pax global header. */
 	commitSha: string
 	descriptorSha256: string
@@ -41,7 +42,7 @@ export interface TarRewrite {
  * Rewrite a `git archive` tarball into the archive Zerops accepts, one 512-byte block at a time.
  *
  * The transform holds at most one header block plus one bounded pax record: file content is passed
- * through chunk by chunk, so nothing here scales with repository or file size.
+ * through chunk by chunk. Platform mode also retains bounded namespace metadata for link validation.
  */
 export function createTarRewrite(input: TarRewriteInput): TarRewrite {
 	if (!SHA256_PATTERN.test(input.descriptorSha256)) {
@@ -93,11 +94,14 @@ type Phase =
 	| { kind: 'trailer' }
 
 interface TarEntryHeader {
+	linkpath: string
 	path: string
 	mode: number
 	size: number
 	typeflag: string
 }
+
+type NamespaceEntry = { kind: 'file' | 'directory' } | { kind: 'symlink'; target: string }
 
 class TarRewriter {
 	private phase: Phase = { kind: 'header' }
@@ -106,6 +110,7 @@ class TarRewriter {
 	private prefix: string | undefined
 	private pendingPath: string | undefined
 	private pendingSize: number | undefined
+	private pendingLinkpath: string | undefined
 	private commitConfirmed = false
 	private started = false
 	private zeroBlocks = 0
@@ -116,6 +121,9 @@ class TarRewriter {
 	private descriptorDigest: string | undefined
 	private readonly paths = new Set<string>()
 	private readonly directories = new Set<string>()
+	private readonly namespace = new Map<string, NamespaceEntry>()
+	private readonly resolvedLinks = new Map<string, string>()
+	private metadataBytes = 0
 
 	constructor(private readonly input: TarRewriteInput) {}
 
@@ -181,6 +189,10 @@ class TarRewriter {
 			throw archiveRejected()
 		}
 		if (!this.commitConfirmed) throw commitMismatch()
+		if (this.pendingPath !== undefined || this.pendingSize !== undefined || this.pendingLinkpath !== undefined) throw archiveRejected()
+		for (const [path, entry] of this.namespace) {
+			if (entry.kind === 'symlink') this.validateLink(path)
+		}
 		const descriptorSha256 = this.descriptorDigest
 		if (descriptorSha256 === undefined) {
 			throw new SourceFailure('descriptor_missing', 'archive', false, 422)
@@ -216,6 +228,7 @@ class TarRewriter {
 				|| this.commitConfirmed
 				|| this.pendingPath !== undefined
 				|| this.pendingSize !== undefined
+				|| this.pendingLinkpath !== undefined
 			) {
 				throw archiveRejected()
 			}
@@ -229,13 +242,33 @@ class TarRewriter {
 		if (!this.commitConfirmed) throw commitMismatch()
 		const path = this.pendingPath ?? header.path
 		const size = this.pendingSize ?? header.size
+		const linkpath = this.pendingLinkpath ?? header.linkpath
+		if (this.pendingLinkpath !== undefined && header.typeflag !== '2') throw archiveRejected()
 		this.pendingPath = undefined
 		this.pendingSize = undefined
+		this.pendingLinkpath = undefined
 		this.started = true
 		const relative = this.strip(path)
 		// Directory entries are derived from file paths below, so the tarball's own are not needed.
 		if (header.typeflag === '5') {
+			const directory = relative.endsWith('/') ? relative.slice(0, -1) : relative
+			if (relative !== '' && !safeRepositoryPath(directory)) throw archiveRejected()
+			if (this.input.archiveKind === 'platform') {
+				if (size !== 0) throw archiveRejected()
+				if (directory !== '') {
+					this.registerPath(directory, { kind: 'directory' })
+					this.writeParentDirectories(`${directory}/`, controller)
+				}
+			}
 			this.phase = skipPhase(size)
+			return
+		}
+		if (header.typeflag === '2' && this.input.archiveKind === 'platform') {
+			if (size !== 0 || relative === SOURCE_DESCRIPTOR_PATH || !safeLinkTarget(linkpath)) throw archiveRejected()
+			this.registerPath(relative, { kind: 'symlink', target: linkpath })
+			this.entryCount++
+			this.writeParentDirectories(relative, controller)
+			this.writeHeader(relative, 0o777, 0, '2', controller, linkpath)
 			return
 		}
 		if (header.typeflag !== '0') throw archiveRejected()
@@ -247,6 +280,7 @@ class TarRewriter {
 			const boundary = path.indexOf('/')
 			if (boundary <= 0) throw archiveRejected()
 			this.prefix = path.slice(0, boundary + 1)
+			if (!safeRepositoryPath(path.slice(0, boundary))) throw archiveRejected()
 		}
 		if (!path.startsWith(this.prefix)) throw archiveRejected()
 		return path.slice(this.prefix.length)
@@ -262,6 +296,7 @@ class TarRewriter {
 			throw archiveRejected()
 		}
 		if (this.paths.has(path)) throw archiveRejected()
+		if (this.input.archiveKind === 'platform') this.registerPath(path, { kind: 'file' })
 		this.paths.add(path)
 		this.entryCount++
 		this.expandedBytes += size
@@ -298,6 +333,71 @@ class TarRewriter {
 		this.descriptorDigest = digest
 	}
 
+	private registerPath(path: string, entry: NamespaceEntry): void {
+		if (!safeRepositoryPath(path) || path === SOURCE_SUBMODULE_MARKER) throw archiveRejected()
+		const segments = path.split('/')
+		for (let depth = 1; depth < segments.length; depth++) {
+			this.registerNode(segments.slice(0, depth).join('/'), { kind: 'directory' })
+		}
+		this.registerNode(path, entry)
+	}
+
+	private registerNode(path: string, entry: NamespaceEntry): void {
+		const previous = this.namespace.get(path)
+		if (previous !== undefined) {
+			if (previous.kind === 'directory' && entry.kind === 'directory') return
+			throw archiveRejected()
+		}
+		this.metadataBytes += new TextEncoder().encode(path).byteLength
+			+ (entry.kind === 'symlink' ? new TextEncoder().encode(entry.target).byteLength : 0)
+		if (this.namespace.size >= SOURCE_MAX_TREE_ENTRIES || this.metadataBytes > SOURCE_MAX_EXPANDED_BYTES) {
+			throw new SourceFailure('archive_rejected', 'archive', false, 413)
+		}
+		this.namespace.set(path, entry)
+	}
+
+	private validateLink(path: string): void {
+		if (this.resolvedLinks.has(path)) return
+		const pending: (string | { end: string })[] = path.split('/').reverse()
+		let resolved: string[] = []
+		const active = new Set<string>()
+		let expansions = 0
+		while (pending.length > 0) {
+			const part = pending.pop()
+			if (part === undefined) break
+			if (typeof part !== 'string') {
+				const target = resolved.join('/')
+				this.metadataBytes += new TextEncoder().encode(target).byteLength
+				if (this.metadataBytes > SOURCE_MAX_EXPANDED_BYTES) throw new SourceFailure('archive_rejected', 'archive', false, 413)
+				this.resolvedLinks.set(part.end, target)
+				active.delete(part.end)
+				continue
+			}
+			const parent = this.namespace.get(resolved.join('/'))
+			if (resolved.length > 0 && parent?.kind !== 'directory') throw archiveRejected()
+			if (part === '.' || part === '') continue
+			if (part === '..') {
+				if (resolved.pop() === undefined) throw archiveRejected()
+				continue
+			}
+			const candidate = [...resolved, part].join('/')
+			const entry = this.namespace.get(candidate)
+			if (entry === undefined) throw archiveRejected()
+			if (entry.kind !== 'symlink') {
+				resolved.push(part)
+				continue
+			}
+			if (active.has(candidate) || ++expansions > SOURCE_MAX_TREE_ENTRIES) throw archiveRejected()
+			const cached = this.resolvedLinks.get(candidate)
+			if (cached !== undefined) {
+				resolved = cached === '' ? [] : cached.split('/')
+				continue
+			}
+			active.add(candidate)
+			pending.push({ end: candidate }, ...entry.target.split('/').reverse())
+		}
+	}
+
 	/**
 	 * The Zerops unpacker creates no directory it was not told about: an archive of regular files alone
 	 * fails its build at "unpacking" (docs/reference/zerops-platform.md). Each parent directory is
@@ -330,22 +430,29 @@ class TarRewriter {
 		path: string,
 		mode: number,
 		size: number,
-		type: '0' | '5',
+		type: '0' | '5' | '2',
 		controller: TransformStreamDefaultController<SourceBytes>,
+		linkpath = '',
 	): void {
 		let name = path
-		if (new TextEncoder().encode(path).byteLength > 100) {
-			const record = paxPathRecord(path)
+		const longPath = new TextEncoder().encode(path).byteLength > 100
+		const longLink = new TextEncoder().encode(linkpath).byteLength > 100
+		if (longPath || longLink) {
+			const record = new Uint8Array([
+				...(longPath ? paxRecord('path', path) : []),
+				...(longLink ? paxRecord('linkpath', linkpath) : []),
+			])
+			if (record.byteLength > MAX_PAX_PAYLOAD_BYTES) throw archiveRejected()
 			controller.enqueue(
 				tarHeader(`PaxHeaders/${this.paxIndex}`, 0o644, record.byteLength, 'x'),
 			)
 			controller.enqueue(record)
 			const padding = paddingFor(record.byteLength)
 			if (padding > 0) controller.enqueue(new Uint8Array(padding))
-			name = type === '5' ? `PaxEntry/${this.paxIndex}/` : `PaxEntry/${this.paxIndex}`
+			if (longPath) name = type === '5' ? `PaxEntry/${this.paxIndex}/` : `PaxEntry/${this.paxIndex}`
 			this.paxIndex++
 		}
-		controller.enqueue(tarHeader(name, mode, size, type))
+		controller.enqueue(tarHeader(name, mode, size, type, longLink ? '' : linkpath))
 	}
 
 	private beginPax(size: number, global: boolean): void {
@@ -361,12 +468,15 @@ class TarRewriter {
 
 	private applyPax(payload: SourceBytes, global: boolean): void {
 		const records = parsePaxRecords(payload)
+		const linkpath = records.get('linkpath')
+		if (linkpath !== undefined && (global || this.input.archiveKind !== 'platform' || !safeLinkTarget(linkpath))) throw archiveRejected()
 		if (global) {
 			if (records.get('comment') !== this.input.commitSha) throw commitMismatch()
 			this.commitConfirmed = true
 			return
 		}
 		const path = records.get('path')
+		if (linkpath !== undefined) this.pendingLinkpath = linkpath
 		if (path !== undefined) this.pendingPath = path
 		const size = records.get('size')
 		if (size === undefined) return
@@ -377,7 +487,6 @@ class TarRewriter {
 	}
 }
 
-/** Only `path` and `size` may reshape an entry; `linkpath` would make it something we refuse to carry. */
 function parsePaxRecords(payload: SourceBytes): Map<string, string> {
 	const records = new Map<string, string>()
 	let offset = 0
@@ -401,7 +510,6 @@ function parsePaxRecords(payload: SourceBytes): Map<string, string> {
 		const separator = record.indexOf('=')
 		if (separator <= 0) throw archiveRejected()
 		const keyword = record.slice(0, separator)
-		if (keyword === 'linkpath') throw archiveRejected()
 		records.set(keyword, record.slice(separator + 1))
 		offset += length
 	}
@@ -415,6 +523,7 @@ function parseHeader(block: Uint8Array): TarEntryHeader {
 	const prefix = headerText(block, 345, 155)
 	const typeflag = byteAt(block, 156)
 	return {
+		linkpath: headerText(block, 157, 100),
 		path: prefix === '' ? name : `${prefix}/${name}`,
 		mode: headerOctal(block, 100, 8),
 		size: headerOctal(block, 124, 12),
@@ -494,8 +603,15 @@ export function safeRepositoryPath(path: string): boolean {
 		.every((segment) => segment !== '' && segment !== '.' && segment !== '..')
 }
 
-function paxPathRecord(path: string): SourceBytes {
-	const body = `path=${path}\n`
+function safeLinkTarget(target: string): boolean {
+	return target !== '' && !target.startsWith('/') && !target.includes('\\')
+		&& !/^[a-z]:/i.test(target)
+		&& ![...target].some((character) => character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f)
+		&& new TextEncoder().encode(target).byteLength <= MAX_PAX_PAYLOAD_BYTES
+}
+
+function paxRecord(key: string, value: string): SourceBytes {
+	const body = `${key}=${value}\n`
 	let length = new TextEncoder().encode(body).byteLength + 3
 	while (true) {
 		const bytes = new TextEncoder().encode(`${length} ${body}`)
@@ -508,7 +624,8 @@ function tarHeader(
 	path: string,
 	mode: number,
 	size: number,
-	type: '0' | '5' | 'x',
+	type: '0' | '5' | '2' | 'x',
+	linkpath = '',
 ): SourceBytes {
 	const header = new Uint8Array(BLOCK_BYTES)
 	writeTarText(header, 0, 100, path)
@@ -519,6 +636,7 @@ function tarHeader(
 	writeTarOctal(header, 136, 12, 0)
 	header.fill(0x20, 148, 156)
 	header[156] = type.charCodeAt(0)
+	writeTarText(header, 157, 100, linkpath)
 	writeTarText(header, 257, 6, 'ustar')
 	writeTarText(header, 263, 2, '00')
 	let checksum = 0
