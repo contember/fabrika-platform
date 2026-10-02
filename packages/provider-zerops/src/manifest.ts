@@ -2,6 +2,7 @@ import type { AppActionDef, AppGates, AppSchema, AppScopeDef, GateRule, RoleDef 
 import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
 import { parseZeropsDescriptor, prepareZeropsDescriptor } from './descriptor'
+import { assertAuthoredManagedDocument, assertAuthoredManagedInputs } from './managed-environment/authored'
 import { allowedReferenceHosts, foreignReferenceHost } from './service-references'
 import type { ZeropsAppConfig, ZeropsNamespaceResourceRequirement, ZeropsProxySpec, ZeropsSharedPostgresBinding } from './types'
 
@@ -410,6 +411,11 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 		throw new Error('invalid fabrika manifest Zerops target')
 	}
 	const importDocument = parseImportDocument(rawImportDocument)
+	assertAuthoredManagedDocument(importDocument.services)
+	if (importDocument.project !== undefined) assertAuthoredManagedDocument(importDocument.project)
+	assertAuthoredManagedInputs({ variableNames: vars, secretNames: secrets })
+	const parsedDescriptor = parseZeropsDescriptor(sourceDescriptor.contents)
+	assertAuthoredManagedDocument(parsedDescriptor.document)
 	const serviceHostnames = importDocument.services.map((service) => {
 		const hostname = service['hostname']
 		if (typeof hostname !== 'string') {
@@ -421,7 +427,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 		throw new Error('invalid fabrika manifest Zerops deploy service')
 	}
 	const foreignInDescriptor = foreignReferenceInValue(
-		parseZeropsDescriptor(sourceDescriptor.contents).document,
+		parsedDescriptor.document,
 		allowedReferenceHosts(serviceHostnames),
 	)
 	if (foreignInDescriptor !== null) {
@@ -538,4 +544,17 @@ export const zeropsArtifactCodec: ProviderCodec<FabrikaManifest> = {
 	version: 3,
 	encode: jsonValue,
 	decode: (payload) => parseFabrikaManifest(payload),
+}
+
+/** Hash the original validated artifact, never an interpolated import or execution overlay. */
+export async function hashFabrikaManifest(manifest: FabrikaManifest): Promise<string> {
+	const canonical = (value: JsonValue): JsonValue => {
+		if (Array.isArray(value)) return value.map(canonical)
+		if (typeof value !== 'object' || value === null) return value
+		return Object.fromEntries(
+			Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, entry]) => [key, canonical(entry)]),
+		)
+	}
+	const bytes = new TextEncoder().encode(JSON.stringify(canonical(zeropsArtifactCodec.encode(manifest))))
+	return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (byte) => byte.toString(16).padStart(2, '0')).join('')
 }

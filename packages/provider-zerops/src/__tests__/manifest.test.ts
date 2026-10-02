@@ -1,10 +1,14 @@
 import { describe, expect, test } from 'bun:test'
+import { assertAuthoredManagedDocument } from '../managed-environment/authored'
+import { prepareManagedDescriptor } from '../managed-environment/descriptor'
+import { type ConfirmedManagedEntry, managedReferenceNames, mapManagedKeys } from '../managed-environment/protocol'
 import {
 	compileFabrikaManifest,
 	createZeropsArtifactSourceDescriptor,
 	FABRIKA_MANIFEST_VERSION,
 	type FabrikaImportDocument,
 	type FabrikaManifest,
+	hashFabrikaManifest,
 	manifestServiceHostnames,
 	parseFabrikaManifest,
 	renderFabrikaImportYaml,
@@ -204,6 +208,107 @@ const withZeropsYaml = (manifest: FabrikaManifest, zeropsYaml: unknown): unknown
 
 const exampleDescriptor = async (file: string): Promise<string> =>
 	await Bun.file(new URL(`../../../../examples/zerops-app/${file}`, import.meta.url)).text()
+
+describe('managed-environment manifest boundary', () => {
+	test('pure authored walk accepts frozen readonly structures without changing them', () => {
+		const services = Object.freeze([
+			Object.freeze({ hostname: 'notesapi', envVariables: Object.freeze({ APP_READ: '${FABRIKA_RELEASE}' }) }),
+		])
+		expect(() => assertAuthoredManagedDocument(services)).not.toThrow()
+		expect(services[0]?.envVariables.APP_READ).toBe('${FABRIKA_RELEASE}')
+	})
+
+	test('rejects internal and canonical managed definitions in pipeline declarations and import mappings', async () => {
+		const manifest = await compileNotes(OWN_SETUP)
+		for (const name of ['FABRIKA_MENV_PROTOCOL', 'FABRIKA_MENV_CUSTOM', 'FABRIKA_RELEASE', 'FABRIKA_OPERATIONS_DSN']) {
+			for (const kind of ['vars', 'secrets']) {
+				expect(() =>
+					parseFabrikaManifest({
+						...manifest,
+						app: { ...manifest.app, pipeline: { ...manifest.app.pipeline, [kind]: [name] } },
+					})
+				).toThrow('managed-environment')
+			}
+			expect(() =>
+				parseFabrikaManifest({
+					...manifest,
+					target: {
+						...manifest.target,
+						importDocument: {
+							services: manifest.target.importDocument.services.map((service) => ({ ...service, envVariables: { [name]: 'authored' } })),
+						},
+					},
+				})
+			).toThrow('managed-environment')
+		}
+		expect(() => parseFabrikaManifest(withZeropsYaml(manifest, { future: '${notesapi_FABRIKA_MENV_PROTOCOL}' }))).toThrow('managed-environment')
+	})
+
+	test('checks decoded descriptor policy in selected and unselected setups, including build/run mappings', async () => {
+		for (const phase of ['build', 'run']) {
+			for (const env of ['FABRIKA_RELEASE: authored', 'OTHER: "\\x24{notesapi_FABRIKA_MENV_PROTOCOL}"']) {
+				const descriptor = await createZeropsArtifactSourceDescriptor(
+					`zerops:\n  - setup: notesapi\n  - setup: other\n    ${phase}:\n      envVariables:\n        ${env}\n`,
+				)
+				expect(() => compileFabrikaManifest({ ...notesConfig, target: { ...notesConfig.target, zeropsSetup: 'notesapi' } }, 'prod', descriptor))
+					.toThrow('managed-environment')
+			}
+		}
+		const valid = await compileNotes('zerops:\n  - setup: notesapi\n    run:\n      start: echo ${FABRIKA_RELEASE}\n')
+		expect(parseFabrikaManifest(valid).target.sourceDescriptor).toEqual(valid.target.sourceDescriptor)
+	})
+
+	test('artifact digest ignores object insertion order but retains array order and original descriptor bytes', async () => {
+		const manifest = await compileNotes(`${OWN_SETUP}# original\r\n`)
+		const original = structuredClone(manifest)
+		const digest = await hashFabrikaManifest(manifest)
+		expect(digest).toMatch(/^[a-f0-9]{64}$/)
+		const reordered = parseFabrikaManifest({
+			target: {
+				...manifest.target,
+				importDocument: {
+					services: manifest.target.importDocument.services.map((service) => Object.fromEntries(Object.entries(service).reverse())),
+				},
+			},
+			app: manifest.app,
+			manifestVersion: manifest.manifestVersion,
+		})
+		expect(await hashFabrikaManifest(reordered)).toBe(digest)
+		const reversed = parseFabrikaManifest({
+			...manifest,
+			target: {
+				...manifest.target,
+				importDocument: { services: [...manifest.target.importDocument.services].reverse() },
+			},
+		})
+		expect(await hashFabrikaManifest(reversed)).not.toBe(digest)
+		const normalizedNewlines = await compileNotes(`${OWN_SETUP}# original\n`)
+		expect(await hashFabrikaManifest(normalizedNewlines)).not.toBe(digest)
+		expect(normalizedNewlines.target.sourceDescriptor.sha256).not.toBe(manifest.target.sourceDescriptor.sha256)
+		expect(manifest).toEqual(original)
+	})
+
+	test('interpolation and reference overlay leave the original artifact and descriptor identities intact', async () => {
+		const descriptor = await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: notes\n    run:\n      start: bun app.ts\n')
+		const manifest = compileFabrikaManifest(config, 'prod', descriptor)
+		const original = structuredClone(manifest)
+		const digest = await hashFabrikaManifest(manifest)
+		const document = interpolateManifest(manifest.target.importDocument, ['IMAGE_TAG'], { IMAGE_TAG: 'https://example.test/repo' }, ['notes'])
+		expect(document).not.toEqual(manifest.target.importDocument)
+		const names = await managedReferenceNames({ projectId: 'project', serviceId: 'service', appVersionId: 'version' })
+		const binding = mapManagedKeys((key): ConfirmedManagedEntry =>
+			key === 'FABRIKA_RELEASE'
+				? { state: 'confirmed', referenceName: names[key], backingRecordId: 'release-record' }
+				: { state: 'absent' }
+		)
+		const execution = prepareManagedDescriptor(descriptor.contents, undefined, binding)
+		expect(execution.contents).toContain(names.FABRIKA_RELEASE)
+		expect(descriptor.contents).not.toContain('FABRIKA_MENV_')
+		expect(await hashFabrikaManifest(manifest)).toBe(digest)
+		await expect(verifyZeropsArtifactSourceDescriptor(manifest.target.sourceDescriptor)).resolves.toBeUndefined()
+		expect(manifest).toEqual(original)
+	})
+})
 
 describe('cross-service variable references', () => {
 	test('checks decoded keys and unknown leaves in unselected setups', async () => {
