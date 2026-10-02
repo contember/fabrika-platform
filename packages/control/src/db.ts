@@ -25,5 +25,5 @@ export {
 	type NamespaceResourceClaimRow,
 	type ZeropsSourceBinding,
 } from './db/registry-types'
-export { parseProviderJson, RunRepository, type RunRow, type RunStatus, type RunTrigger } from './db/runs'
+export { parseProviderJson, type RunMutationGuard, RunRepository, type RunRow, type RunStatus, type RunTrigger } from './db/runs'
 export { uuidv7 } from './uuid'

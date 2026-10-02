@@ -150,6 +150,13 @@ holder, using one conditional update and the injected clock. Renewal at or after
 false, even before another holder acquires the key. The current deploy lifecycle acquires/releases
 leases but does not yet schedule renewal.
 
+The run repository accepts an optional `RunMutationGuard` for start, commit, external-id,
+checkpoint and terminal writes. Guarded writes lock the app/environment lease row and apply an
+exact checkpoint comparison within the same database transaction. The caller must acquire the
+lease first, use a unique invocation holder and supply a fresh millisecond timestamp per call.
+Guarded starts also refuse another running run for the target. Current lifecycle callers still use
+the unguarded methods; the repository primitive alone does not fence deployment execution.
+
 `packages/control/src/__tests__/entrypoint-isolation.test.ts` walks both import
 graphs. It verifies that each root reaches only its selected provider and runtime,
 while shared control modules reach neither concrete provider.

@@ -6,6 +6,13 @@ export type RunTrigger = 'webhook' | 'manual' | 'poll'
 
 export type RunStatus = 'pending' | 'running' | 'succeeded' | 'failed'
 
+/** Acquire the lease first with a unique invocation holder; sample nowMs anew for each mutation. */
+export interface RunMutationGuard {
+	readonly holder: string
+	readonly nowMs: number
+	readonly expectedProviderStateJson: string | null
+}
+
 export interface RunRow {
 	id: string
 	app_id: string
@@ -73,6 +80,27 @@ const serializeProviderJson = (value: JsonValue): string => {
 export class RunRepository {
 	constructor(protected readonly d1: SqlDatabase, protected readonly now: () => number = () => Math.floor(Date.now() / 1000)) {}
 
+	private async mutateRun(id: string, sql: string, values: (string | number | null)[], guard?: RunMutationGuard): Promise<boolean> {
+		if (guard === undefined) {
+			const result = await this.d1.prepare(sql).bind(...values).run()
+			return result.meta.changes > 0
+		}
+		const checkpointPredicate = guard.expectedProviderStateJson === null ? 'provider_state_json IS NULL' : 'provider_state_json = ?'
+		const checkpointValues = guard.expectedProviderStateJson === null ? [] : [guard.expectedProviderStateJson]
+		// The lease row must stay locked through the mutation: an EXISTS alone races takeover on Postgres.
+		const results = await this.d1.batch<{ id: string }>([
+			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
+				WHERE lock_key = (SELECT app_id || ':' || env FROM runs WHERE id = ?)
+					AND holder = ? AND expires_at > ?`).bind(id, guard.holder, guard.nowMs),
+			this.d1.prepare(`${sql}
+				AND ${checkpointPredicate}
+				AND EXISTS (SELECT 1 FROM deploy_locks
+					WHERE lock_key = runs.app_id || ':' || runs.env AND holder = ? AND expires_at > ?)
+				RETURNING id`).bind(...values, ...checkpointValues, guard.holder, guard.nowMs),
+		])
+		return (results[1]?.results.length ?? 0) > 0
+	}
+
 	/** Create a run row in `pending`, ready to be enqueued. Returns the inserted row. */
 	async createRun(input: {
 		id: string
@@ -95,29 +123,28 @@ export class RunRepository {
 	}
 
 	/** Persist a provider-owned operation id and optional resume state in one guarded write. */
-	async setRunExternalId(id: string, externalRunId: string, providerState?: JsonValue): Promise<boolean> {
-		const statement = providerState === undefined
-			? this.d1.prepare(`UPDATE runs SET external_run_id = ?
-				WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL
-					AND (external_run_id IS NULL OR external_run_id = ?)`)
-				.bind(externalRunId, id, externalRunId)
-			: this.d1
-				.prepare(`UPDATE runs SET external_run_id = ?, provider_state_json = ?
-					WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL
-						AND (external_run_id IS NULL OR external_run_id = ?)`)
-				.bind(externalRunId, serializeProviderJson(providerState), id, externalRunId)
-		const result = await statement.run()
-		return (result.meta.changes ?? 0) > 0
+	async setRunExternalId(id: string, externalRunId: string, providerState?: JsonValue, guard?: RunMutationGuard): Promise<boolean> {
+		const stateAssignment = providerState === undefined ? '' : ', provider_state_json = ?'
+		const stateValues = providerState === undefined ? [] : [serializeProviderJson(providerState)]
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET external_run_id = ?${stateAssignment}
+			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL
+				AND (external_run_id IS NULL OR external_run_id = ?)`,
+			[externalRunId, ...stateValues, id, externalRunId],
+			guard,
+		)
 	}
 
 	/** Replace provider resume state only while the run remains active. */
-	async checkpointRunProviderState(id: string, providerState: JsonValue): Promise<boolean> {
-		const result = await this.d1
-			.prepare(`UPDATE runs SET provider_state_json = ?
-				WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL AND external_run_id IS NOT NULL`)
-			.bind(serializeProviderJson(providerState), id)
-			.run()
-		return (result.meta.changes ?? 0) > 0
+	async checkpointRunProviderState(id: string, providerState: JsonValue, guard?: RunMutationGuard): Promise<boolean> {
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET provider_state_json = ?
+			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL AND external_run_id IS NOT NULL`,
+			[serializeProviderJson(providerState), id],
+			guard,
+		)
 	}
 
 	/** Pending/running runs whose work is owned by a provider and must survive process restarts. */
@@ -164,24 +191,28 @@ export class RunRepository {
 	 * status so a redelivered queue message can't re-start a run already past pending. Returns true
 	 * iff the row transitioned.
 	 */
-	async markRunStarted(id: string, logKey: string): Promise<boolean> {
-		const result = await this.d1
-			.prepare(`UPDATE runs SET status = 'running', started_at = ?, log_key = ?
-				WHERE id = ? AND status = 'pending' AND cancel_requested_at IS NULL`)
-			.bind(this.now(), logKey, id)
-			.run()
-		return (result.meta.changes ?? 0) > 0
+	async markRunStarted(id: string, logKey: string, guard?: RunMutationGuard): Promise<boolean> {
+		const runningPredicate = guard === undefined ? '' : `AND NOT EXISTS (SELECT 1 FROM runs active
+			WHERE active.app_id = runs.app_id AND active.env = runs.env AND active.status = 'running' AND active.id <> runs.id)`
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET status = 'running', started_at = ?, log_key = ?
+			WHERE id = ? AND status = 'pending' AND cancel_requested_at IS NULL ${runningPredicate}`,
+			[this.now(), logKey, id],
+			guard,
+		)
 	}
 
 	/** Record one resolved commit while the active run still accepts provider lifecycle writes. */
-	async setRunCommit(id: string, commitSha: string): Promise<boolean> {
-		const result = await this.d1
-			.prepare(`UPDATE runs SET commit_sha = ?
-				WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL
-					AND (commit_sha IS NULL OR LOWER(commit_sha) = ?)`)
-			.bind(commitSha, id, commitSha)
-			.run()
-		return (result.meta.changes ?? 0) > 0
+	async setRunCommit(id: string, commitSha: string, guard?: RunMutationGuard): Promise<boolean> {
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET commit_sha = ?
+			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL
+				AND (commit_sha IS NULL OR LOWER(commit_sha) = ?)`,
+			[commitSha, id, commitSha],
+			guard,
+		)
 	}
 
 	/** Atomically claim cancellation and return the latest active run snapshot. */
@@ -200,13 +231,14 @@ export class RunRepository {
 	 * The statement + bind order are DUPLICATED verbatim by `@fabrika/runner-cloudflare`'s `finishRun`, whose
 	 * co-write the `WHERE status IN ('pending','running')` guard makes idempotent. Change both together.
 	 */
-	async markRunFinished(id: string, status: 'succeeded' | 'failed', exitCode: number | null): Promise<boolean> {
-		const result = await this.d1
-			.prepare(`UPDATE runs SET status = ?, exit_code = ?, finished_at = ?
-				WHERE id = ? AND status IN ('pending','running') AND cancel_requested_at IS NULL`)
-			.bind(status, exitCode, this.now(), id)
-			.run()
-		return (result.meta.changes ?? 0) > 0
+	async markRunFinished(id: string, status: 'succeeded' | 'failed', exitCode: number | null, guard?: RunMutationGuard): Promise<boolean> {
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET status = ?, exit_code = ?, finished_at = ?
+			WHERE id = ? AND status IN ('pending','running') AND cancel_requested_at IS NULL`,
+			[status, exitCode, this.now(), id],
+			guard,
+		)
 	}
 
 	/**
@@ -223,13 +255,14 @@ export class RunRepository {
 	}
 
 	/** Finish a run only after cancellation has durably claimed and completed provider cleanup. */
-	async markRunCancellationFinished(id: string): Promise<boolean> {
-		const result = await this.d1
-			.prepare(`UPDATE runs SET status = 'failed', exit_code = NULL, finished_at = ?
-				WHERE id = ? AND status IN ('pending','running') AND cancel_requested_at IS NOT NULL`)
-			.bind(this.now(), id)
-			.run()
-		return (result.meta.changes ?? 0) > 0
+	async markRunCancellationFinished(id: string, guard?: RunMutationGuard): Promise<boolean> {
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET status = 'failed', exit_code = NULL, finished_at = ?
+			WHERE id = ? AND status IN ('pending','running') AND cancel_requested_at IS NOT NULL`,
+			[this.now(), id],
+			guard,
+		)
 	}
 
 	/**

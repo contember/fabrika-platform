@@ -155,6 +155,8 @@ Isolation: current branch and shared working tree; strictly disjoint implementat
 
 ## Run log
 
+- 2026-10-02: Fenced run-write review found no defects under acquire-before-mutate, unique invocation holders and fresh per-call timestamps. Real PostgreSQL tests confirmed checkpoint CAS and takeover waiting behind the mutation transaction; runtime adoption remains pending. Collision-safe provisioning landed in `f44d1af`.
+
 - 2026-10-02: User approved exact-checkout archive upload through the existing Zerops reserve/upload/build API for installation CI. Namespace proxy source ownership still needs its corresponding design before implementation.
 - 2026-10-02: Collision-rejecting application registration passed leader-run 100 tests, provider typecheck, formatting/lint and independent review. Fenced repository writes passed 65 leader-run tests including all six real PostgreSQL cases; lifecycle integration remains pending.
 
