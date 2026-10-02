@@ -8,6 +8,7 @@ import {
 	manifestServiceHostnames,
 	parseFabrikaManifest,
 	renderFabrikaImportYaml,
+	renderFabrikaProvisioningYaml,
 	verifyZeropsArtifactSourceDescriptor,
 	ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES,
 	zeropsArtifactCodec,
@@ -33,6 +34,19 @@ const config: ZeropsAppConfig = {
 }
 
 describe('Zerops static artifact', () => {
+	test('renders first registration as collision-refusing and codeless for every service without mutating the artifact', async () => {
+		const manifest = await compileNotes(OWN_SETUP)
+		const original = structuredClone(manifest)
+		const yaml = renderFabrikaProvisioningYaml(manifest)
+		expect(yaml.match(/override: false/g)).toHaveLength(2)
+		expect(yaml.match(/startWithoutCode: true/g)).toHaveLength(2)
+		expect(yaml).not.toContain('override: true')
+		expect(manifest).toEqual(original)
+		expect(renderFabrikaImportYaml(manifest).match(/override: true/g)).toHaveLength(2)
+		expect(renderFabrikaImportYaml(manifest)).not.toContain('startWithoutCode')
+		expect(parseFabrikaManifest(zeropsArtifactCodec.encode(manifest))).toEqual(original)
+	})
+
 	test('compiles environment-specific services, source descriptor, and declared vars as placeholders', async () => {
 		process.env['IMAGE_TAG'] = 'must-not-leak'
 		const sourceDescriptor = await createZeropsArtifactSourceDescriptor('zerops:\r\n  - setup: notes\r\n')

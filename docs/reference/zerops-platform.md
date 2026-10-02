@@ -330,6 +330,17 @@ Consequences:
   `startWithoutCode: true`; applying it a second time wipes every runtime service's code. It belongs to
   first bring-up only.
 
+**First application registration is collision-rejecting.** Its separate
+`renderFabrikaProvisioningYaml` emission sets `override: false` on every service, while preserving
+the canonical manifest's `override: true`. Registration waits for the reported import processes
+before returning the service. Steady-state registration emits the canonical import.
+
+On 2026-09-28, an explicit `override: false` import against an existing stopped probe returned
+`400 serviceStackNameUnavailable`. A mixed document listing a new service before that existing
+service also failed: the new service was absent afterwards, and the existing service stayed stopped.
+An `override: true` codeless re-import, in contrast, returned a new `stack.deploy` process.
+These are manual observations of those payloads, not a general transaction guarantee for all import failures.
+
 #### Autoscaling profiles — what a managed service gets when you say nothing
 
 `zops api GetClientSettingsStackType --param id=@client --param stackTypeId=postgresql` returns each
@@ -926,8 +937,13 @@ Both init commands and the HTTP process reported the resolved values.
   service records with those references. Rolling back to the pre-reference version left its
   canonical release and DSN absent. This is not a safe automatic legacy migration.
 
-These observations cover one container, not cancellation, concurrent reconciliation or Control
-crashes. They establish the reference-selection primitive, not a complete activation protocol.
+On September 28, a candidate using the retained B references was cancelled while `BUILDING`.
+After process `dU75YOf9Ri6nBo4AvNcoFQ` reported `CANCELED` and version
+`jFwUYGw4TtKsBlWR9g7SYw` reported `CANCELLED`, a service restart still ran code A with A values
+in both init commands and the HTTP process. This covers cancellation during build, not a race with activation.
+
+These observations cover one container, not concurrent reconciliation or Control crashes. They
+establish the reference-selection primitive, not a complete activation protocol.
 
 The native pipeline experiment used `envSecretsFile`. It changed service records even when its
 build failed. An old process retained A values on the measured restart, but after a later successful

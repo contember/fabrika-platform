@@ -56,15 +56,19 @@ Use the existing supported topology where possible; do not introduce a new insta
 - **Verify first.** WU0's live primitive and migration/absence behavior; control lease/reconciliation races.
 - **Scope.** Bind all platform-managed deployment keys to a specific version; preserve ordinary application-secret semantics. Recover the same binding after interrupted staging, lost responses, cancellation and Control restart. Prevent older/concurrent work from corrupting a newer binding.
 - **Approved boundary.** Use immutable version-scoped service values and descriptor references for new applications. Refuse automatic conversion of legacy canonical configuration before mutation; legacy migration is a separate, explicitly designed operation. The user approved this boundary after comparing native pipeline configuration with version-scoped references.
+- **Decision.** [ADR-0044](../decisions/0044-bind-zerops-managed-configuration-to-application-versions.md) records the binding and recovery contract, including collision-safe first provisioning approved by the user.
 - **Acceptance / witness.** Fault-injection tests at each durable boundary, duplicate delivery and concurrent reconciliation, a run longer than the current lease, and live failed-build/restart/rollback pairing. No secret values in durable provider envelopes or logs.
 - **Touch points.** Provider deploy/control/checkpoints/API and their tests; Control lifecycle/reconciliation and any approved lock changes. This is one combined territory, not separate agents editing either side of the same protocol.
 
 Implementation contract to freeze before delegating:
 
 - Establish a create-only protocol/ownership marker only during fresh provisioning. An existing unmarked service is not automatically adopted, even when its canonical variables appear absent.
+- Creation must be positively attributable to the provisioning operation; a pre-import absence check alone is not evidence because `override` can adopt a concurrently created service. Wait for import processes before any marker write.
+- A subsequent deploy admits the previous coherent version binding, including explicit absences. Canonical records may be returned as `USER` even when they contain descriptor references; classify by the exact owned binding, not the record type alone. Do not treat markers as protection against privileged platform edits.
 - Reserve the internal secret-key prefix against application writes. Stage values with create-only writes and exact in-memory read-back; checkpoints contain only coordinates, original artifact/descriptor digests, setup, reference names and confirmed record IDs.
 - Recovery never regenerates values from the current catalog. An incomplete unconfirmed staging set fails safely before submission. Once submission may have happened, observe the frozen external version rather than retrying submission or declaring terminal failure from a local timeout.
 - Use a renewable invocation lease with unique attempt holders, durable exclusion of newer runs while external work remains unresolved, and fenced compare-and-swap checkpoint/terminal writes. Deploy, reconciliation and cancellation share this discipline. The existing 30-minute TTL alone cannot cover a 70-minute build.
+- Repository mutations must serialize on the common lease row while checking ownership, sibling runs and prior checkpoint. A standalone PostgreSQL `NOT EXISTS` or lease `EXISTS` predicate is insufficient. Losing an invocation lease stops effects; it is not a request to cancel the external build.
 - Cancellation request acceptance is not external settlement. Retain staged secrets for rollback; do not claim a cancelled run restored old code if activation already won.
 - Shared seams include lock renewal, guarded run-repository mutations, unresolved provider outcomes and reconcile/cancel signals. Land and review those together before provider implementation; preserve Cloudflare behavior in mechanical contract updates.
 
@@ -150,6 +154,15 @@ Isolation: current branch and shared working tree; strictly disjoint implementat
 - Select the source-map publisher's supported build runtime/distribution, scoped completion receipt and repair window. Existing upload credentials and receivers can be reused, but publishing maps alone does not prove a complete inventory.
 
 ## Run log
+
+- 2026-10-02: User approved exact-checkout archive upload through the existing Zerops reserve/upload/build API for installation CI. Namespace proxy source ownership still needs its corresponding design before implementation.
+- 2026-10-02: Collision-rejecting application registration passed leader-run 100 tests, provider typecheck, formatting/lint and independent review. Fenced repository writes passed 65 leader-run tests including all six real PostgreSQL cases; lifecycle integration remains pending.
+
+- 2026-09-28: Lease renewal landed in `2e2a2a5`; runtime integration remains pending. User approved collision-rejecting initial provisioning. Live import with `override: false` refused an existing name, including a mixed new/existing document without creating the new service. The existing service remained stopped.
+
+- 2026-09-28: WU1 lease-renewal primitive passed independent review and leader-run SQLite/Postgres tests: 46 passed, none skipped. Runtime heartbeat and fenced repository mutations remain separate integration work.
+- 2026-09-28: Version-reference cancellation witness passed on live Zerops: candidate reached `CANCELLED`; after restart, code A and init retained A values. Probe stopped again. The reference and fact table record this manual witness.
+- 2026-09-28: Pre-implementation review tightened WU1 admission: canonical descriptor references can appear as USER records; fresh provisioning needs positive creation evidence; durable run admission must serialize against lease takeover inside the repository operation.
 
 - 2026-09-23: User selected small internal fleet, both password/OIDC, and prepared-release-only scope. Near-zero loss was clarified as a single-DB-node failure guarantee; last verified backup is acceptable after deletion/project loss.
 - 2026-09-23: Three independent read-only grounding passes covered activation, installation/delivery and Access/Operations. No implementation delegated.

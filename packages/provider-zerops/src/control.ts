@@ -23,6 +23,7 @@ import type {
 import { ProviderSecretError } from '@fabrika/provider-contract'
 import {
 	createZeropsApi,
+	waitForProcess,
 	ZEROPS_ACTIVE,
 	ZEROPS_PROCESS_FINISHED,
 	ZEROPS_PROCESS_TERMINAL,
@@ -738,12 +739,23 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 						if (present.length !== 0 && present.length !== observed.length) {
 							throw new Error(`Zerops registration found only ${present.length} of ${observed.length} declared services`)
 						}
-						// startWithoutCode is safe only before the namespace contains an application service.
+						// The first import refuses name collisions atomically, including services created after the lookup.
 						const imported = await api.importServices({
 							projectId,
 							yaml: present.length === 0 ? renderFabrikaProvisioningYaml(manifest) : renderFabrikaImportYaml(manifest),
 							signal: input.signal,
 						})
+						for (const service of imported.services) {
+							for (const process of service.processes) {
+								await waitForProcess({
+									api,
+									processId: process.id,
+									sleep: options.sleep ?? defaultSleep,
+									signal: input.signal,
+									label: `the ${service.name} import`,
+								})
+							}
+						}
 						const reported = imported.services.find((service) => service.name === manifest.target.deployService)
 						const observedDeployService = observed.find((entry) => entry.hostname === manifest.target.deployService)?.service
 						const discovered = reported ?? observedDeployService

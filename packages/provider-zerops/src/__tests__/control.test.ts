@@ -361,6 +361,141 @@ describe('Zerops ControlProvider registration', () => {
 		expect(recorded.imports).toHaveLength(1)
 		expect(recorded.imports[0]?.projectId).toBe('project-1')
 		expect(recorded.imports[0]?.yaml).toContain('startWithoutCode: true')
+		expect(recorded.imports[0]?.yaml).toContain('override: false')
+	})
+
+	test('refuses an import collision after an absent lookup without retrying or adopting the raced service', async () => {
+		let racedServiceExists = false
+		const collision = new ZeropsApiError('zerops: service name unavailable', 400, 'serviceStackNameUnavailable')
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: {
+				...makeApi(recorded),
+				findService: async ({ hostname }) => {
+					recorded.calls.push('findService')
+					return racedServiceExists ? { id: 'foreign-service', name: hostname } : null
+				},
+				importServices: async ({ projectId, yaml }) => {
+					recorded.calls.push('importServices')
+					recorded.imports.push({ projectId, yaml })
+					racedServiceExists = true
+					throw collision
+				},
+			},
+			namespaces: {
+				clientId: 'client-1',
+				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				iamUrl: 'https://iam.example.test',
+				iamKey: 'proxy-key',
+			},
+		})
+		const prepare = control.namespaces?.prepareRegistration
+		if (prepare === undefined) throw new Error('expected registration preparation')
+		await expect(prepare({ registration: { app, environment: environment() }, signal: new AbortController().signal })).rejects.toBe(collision)
+		expect(recorded.calls).toEqual(['findService', 'importServices'])
+		expect(recorded.imports).toHaveLength(1)
+		expect(recorded.imports[0]?.yaml).toContain('override: false')
+	})
+
+	for (const reportedDeployService of [true, false]) {
+		test(`awaits every import process before ${reportedDeployService ? 'returning the reported service' : 'discovering the deploy service'}`, async () => {
+			const sleeping = Promise.withResolvers<void>()
+			const release = Promise.withResolvers<void>()
+			let settled = false
+			let completed = false
+			let imported = false
+			const control = createTestControlProvider({
+				accessToken: 'zt-secret',
+				api: {
+					...makeApi(recorded),
+					findService: async () => {
+						recorded.calls.push('findService')
+						return imported ? { id: 'service-1', name: 'notes' } : null
+					},
+					importServices: async ({ projectId }) => {
+						imported = true
+						return {
+							projectId,
+							services: [
+								{ id: 'service-1', name: reportedDeployService ? 'notes' : 'notesdb', processes: [{ id: 'create' }, { id: 'deploy' }] },
+								{ id: 'service-2', name: 'notesworker', processes: [{ id: 'worker-create' }] },
+							],
+						}
+					},
+					getProcess: async ({ processId }) => {
+						recorded.calls.push(processId)
+						return { id: processId, status: processId === 'worker-create' && !settled ? 'RUNNING' : 'FINISHED' }
+					},
+				},
+				sleep: async () => {
+					sleeping.resolve()
+					await release.promise
+				},
+				namespaces: {
+					clientId: 'client-1',
+					proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+					iamUrl: 'https://iam.example.test',
+					iamKey: 'proxy-key',
+				},
+			})
+			const prepare = control.namespaces?.prepareRegistration
+			if (prepare === undefined) throw new Error('expected registration preparation')
+			const preparation = prepare({ registration: { app, environment: environment() }, signal: new AbortController().signal }).then((result) => {
+				completed = true
+				return result
+			})
+			await sleeping.promise
+			try {
+				expect(completed).toBe(false)
+				expect(recorded.calls).toEqual(['findService', 'create', 'deploy', 'worker-create'])
+			} finally {
+				settled = true
+				release.resolve()
+			}
+			const prepared = await preparation
+			expect(prepared.environment.target.payload).toEqual({ serviceId: 'service-1' })
+			expect(recorded.calls).toEqual([
+				'findService',
+				'create',
+				'deploy',
+				'worker-create',
+				'worker-create',
+				...(reportedDeployService ? [] : ['findService']),
+			])
+		})
+	}
+
+	test('fails registration when an import process fails without discovering a service', async () => {
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: {
+				...makeApi(recorded),
+				findService: async () => {
+					recorded.calls.push('findService')
+					return null
+				},
+				importServices: async ({ projectId }) => ({
+					projectId,
+					services: [{ id: 'service-1', name: 'notes', processes: [{ id: 'create' }, { id: 'deploy' }] }],
+				}),
+				getProcess: async ({ processId }) => {
+					recorded.calls.push(processId)
+					return { id: processId, status: processId === 'create' ? 'FINISHED' : 'FAILED' }
+				},
+			},
+			namespaces: {
+				clientId: 'client-1',
+				proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+				iamUrl: 'https://iam.example.test',
+				iamKey: 'proxy-key',
+			},
+		})
+		const prepare = control.namespaces?.prepareRegistration
+		if (prepare === undefined) throw new Error('expected registration preparation')
+		await expect(prepare({ registration: { app, environment: environment() }, signal: new AbortController().signal })).rejects.toThrow(
+			'the notes import finished as FAILED',
+		)
+		expect(recorded.calls).toEqual(['findService', 'create', 'deploy'])
 	})
 
 	test('uses the steady-state import when every declared service already exists', async () => {
@@ -388,6 +523,7 @@ describe('Zerops ControlProvider registration', () => {
 		expect(prepared.environment.target.payload).toEqual({ serviceId: 'service-1' })
 		expect(recorded.imports).toHaveLength(1)
 		expect(recorded.imports[0]?.yaml).not.toContain('startWithoutCode')
+		expect(recorded.imports[0]?.yaml).toContain('override: true')
 	})
 
 	test('refuses a partial declared-service set without importing anything', async () => {

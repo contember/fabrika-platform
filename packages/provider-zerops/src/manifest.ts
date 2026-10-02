@@ -367,7 +367,7 @@ export const renderFabrikaImportYaml = (manifest: FabrikaManifest): string => re
 export const renderFabrikaProvisioningYaml = (manifest: FabrikaManifest): string =>
 	renderYaml({
 		...(manifest.target.importDocument.project === undefined ? {} : { project: manifest.target.importDocument.project }),
-		services: manifest.target.importDocument.services.map((service) => ({ ...service, startWithoutCode: true })),
+		services: manifest.target.importDocument.services.map((service) => ({ ...service, override: false, startWithoutCode: true })),
 	})
 
 export function parseFabrikaManifest(value: unknown, expected: ManifestExpectation = {}): FabrikaManifest {

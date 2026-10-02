@@ -754,6 +754,27 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		emulatorNote: 'the double has no init or runtime environment resolution',
 	},
 	{
+		id: 'explicit-false-override-refuses-mixed-registration-collision',
+		section: SECTION_OVERRIDE,
+		request: { method: 'POST', path: '/project/{projectId}/service-stack/import' },
+		expect: { status: 400 },
+		live: 'not-probed',
+		liveNote:
+			'manually verified 2026-09-28; explicit override:false rejected a new/existing pair, left the new name absent and the existing service stopped',
+		emulator: false,
+		emulatorNote: 'manual collision witness is not automated',
+	},
+	{
+		id: 'descriptor-env-references-survive-cancelled-build-and-restart',
+		section: 'Verified live (2026-09-28) — version-selected environment references — docs/reference/zerops-platform.md',
+		request: { method: 'PUT', path: '/service-stack/{serviceId}/restart' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: 'manually verified; after cancellation settled during BUILDING, restarted code and init retained the previous version references',
+		emulator: false,
+		emulatorNote: 'the double has no application process or version-selected init environment',
+	},
+	{
 		id: 'legacy-env-to-descriptor-reference-rollback-loses-canonical-values',
 		section: 'Verified live (2026-09-23) — version-selected environment references — docs/reference/zerops-platform.md',
 		request: { method: 'PUT', path: '/app-version/{appVersionId}/deploy', body: {} },
