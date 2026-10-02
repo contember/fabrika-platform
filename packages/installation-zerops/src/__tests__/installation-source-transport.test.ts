@@ -1,4 +1,10 @@
-import { prepareZeropsDescriptor, ZeropsApiError, type ZeropsAppVersionStatus } from '@fabrika/provider-zerops'
+import {
+	decodeZeropsNamespaceProxySource,
+	prepareZeropsDescriptor,
+	verifyZeropsNamespaceProxySource,
+	ZeropsApiError,
+	type ZeropsAppVersionStatus,
+} from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { deployPlatform, deployPlatformService, type PlatformDeployCollaborators } from '../deploy'
 import { parsePlatformDeployArgs } from '../deploy-options'
@@ -7,7 +13,7 @@ import { parsePlatformInstallArgs } from '../install-options'
 import { prepareInstallationSource } from '../installation-source'
 import { recordingInitLog } from '../log'
 import { uploadPlatformArchive, validatePlatformUploadUrl } from '../platform-upload'
-import { fakePlatformSource, fakeSourceCollaborators } from './fake-platform-source'
+import { fakeNamespaceProxySource, fakePlatformSource, fakeSourceCollaborators } from './fake-platform-source'
 import { fakeZerops, importedLightServices, platformServices, SUBDOMAINS } from './fake-zerops'
 
 const deployInput = {
@@ -39,6 +45,9 @@ describe('exact installation source', () => {
 			expect(() => parse([], {})).toThrow('--source-dir')
 			expect(() => parse(['--source-dir=.', '--from-git=https://example.com'], {})).toThrow('Mutable installation Git sources are refused')
 			expect(() => parse(['--source-dir=.'], { FABRIKA_ZEROPS_BUILD_FROM_GIT: '' })).toThrow('unset FABRIKA_ZEROPS_BUILD_FROM_GIT')
+			expect(() => parse(['--source-dir=.'], { FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT: 'https://example.com/legacy' })).toThrow(
+				'Unset FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT',
+			)
 		})
 	}
 
@@ -96,6 +105,74 @@ describe('exact installation source', () => {
 		expect(zerops.calls).toEqual([])
 	})
 
+	test('deploy distributes the same snapshot as a public namespace planning default before builds', async () => {
+		const { zerops, collaborators } = fixture()
+		const log = recordingInitLog()
+		const commits: (string | undefined)[] = []
+		const source = fakePlatformSource()
+		let preparations = 0
+		const run = () =>
+			deployPlatform(deployInput, {
+				...collaborators,
+				log,
+				prepareSource: async () => {
+					preparations++
+					return source
+				},
+				api: {
+					...zerops.api,
+					createAppVersion: async (call) => {
+						const raw = zerops.env('control').get('FABRIKA_ZEROPS_PROXY_SOURCE_JSON') ?? ''
+						expect(source.descriptor.contents).toContain('${RUNTIME_FABRIKA_PROXY_MANIFEST_JSON}')
+						expect(raw).not.toContain('$')
+						expect(raw).toContain('\\u0024{x_y}')
+						const decoded = decodeZeropsNamespaceProxySource(JSON.parse(raw))
+						expect(decoded).toEqual({
+							...fakeNamespaceProxySource(),
+							commitSha: source.commitSha,
+						})
+						await verifyZeropsNamespaceProxySource(decoded)
+						commits.push(call.name)
+						return zerops.api.createAppVersion(call)
+					},
+				},
+			})
+		await run()
+		expect(preparations).toBe(1)
+		expect(commits).toEqual(Array(5).fill(source.commitSha))
+		expect(zerops.calls.filter((call) => call === 'env:control:FABRIKA_ZEROPS_PROXY_SOURCE_JSON')).toHaveLength(1)
+		await run()
+		expect(zerops.calls.filter((call) => call === 'env:control:FABRIKA_ZEROPS_PROXY_SOURCE_JSON')).toHaveLength(1)
+		source.commitSha = 'c'.repeat(40)
+		await run()
+		expect(zerops.calls.filter((call) => call === 'env:control:FABRIKA_ZEROPS_PROXY_SOURCE_JSON')).toHaveLength(2)
+		expect(log.lines.join('\n')).not.toContain(source.descriptor.contents)
+	})
+
+	test('descriptor digest disagreement fails before deploy environment writes or install project creation', async () => {
+		const { zerops, collaborators } = fixture()
+		const source = fakePlatformSource()
+		source.descriptor = { ...source.descriptor, sha256: 'b'.repeat(64) }
+		let disposed = 0
+		source.dispose = async () => {
+			disposed++
+		}
+		const invalid = { ...collaborators, prepareSource: async () => source }
+		await expect(deployPlatform(deployInput, invalid)).rejects.toThrow()
+		await expect(runInstall({
+			project: { kind: 'create', projectName: 'new' },
+			clientId: 'client',
+			accessToken: 'token',
+			environment: 'stage',
+			scheme: 'https',
+			sourceDir: '.',
+			tier: 'light',
+			unattended: true,
+		}, { ...invalid, log: recordingInitLog(), prompts: { confirm: async () => true } })).rejects.toThrow()
+		expect(zerops.calls).toEqual([])
+		expect(disposed).toBe(2)
+	})
+
 	test('install validates every setup before creating a project', async () => {
 		const { zerops, collaborators } = fixture()
 		const install: InstallCollaborators = {
@@ -114,7 +191,6 @@ describe('exact installation source', () => {
 			environment: 'stage',
 			scheme: 'https',
 			sourceDir: '.',
-			proxyBuildFromGit: 'legacy',
 			tier: 'light',
 			unattended: true,
 		}, install)).rejects.toThrow('selected setup')
@@ -140,7 +216,6 @@ describe('exact installation source', () => {
 			environment: 'stage',
 			scheme: 'https',
 			sourceDir: '.',
-			proxyBuildFromGit: 'legacy',
 			tier: 'light',
 			unattended: true,
 		}, {
@@ -162,6 +237,15 @@ describe('exact installation source', () => {
 					names.push(call.name)
 					return zerops.api.createAppVersion(call)
 				},
+				putServiceEnv: async (call) => {
+					if (call.key === 'FABRIKA_ZEROPS_PROXY_SOURCE_JSON') {
+						expect(call.value).not.toContain('$')
+						const decoded = decodeZeropsNamespaceProxySource(JSON.parse(call.value))
+						expect(decoded).toEqual(fakeNamespaceProxySource())
+						await verifyZeropsNamespaceProxySource(decoded)
+					}
+					return zerops.api.putServiceEnv(call)
+				},
 			},
 			uploadFetch: async (url, init) => {
 				readers.add(init.body)
@@ -170,7 +254,14 @@ describe('exact installation source', () => {
 		})
 		expect([preparations, disposals, readers.size]).toEqual([1, 1, 6])
 		expect(names).toEqual(Array(6).fill('a'.repeat(40)))
-		expect(zerops.env('control').get('FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT')).toBe('legacy')
+		expect(zerops.calls.filter((call) => call === 'env:control:FABRIKA_ZEROPS_PROXY_SOURCE_JSON')).toHaveLength(1)
+		const raw = zerops.env('control').get('FABRIKA_ZEROPS_PROXY_SOURCE_JSON') ?? ''
+		expect(raw).not.toContain('$')
+		expect(raw).toContain('\\u0024{FABRIKA_PROXY_MANIFEST_JSON}')
+		const decoded = decodeZeropsNamespaceProxySource(JSON.parse(raw))
+		expect(decoded).toEqual(fakeNamespaceProxySource())
+		await verifyZeropsNamespaceProxySource(decoded)
+		expect(zerops.env('control').has('FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT')).toBe(false)
 	})
 })
 

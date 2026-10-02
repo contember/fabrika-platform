@@ -146,7 +146,7 @@ describe('the generated Zerops sidecar repository', () => {
 			expect(readme).toContain('no bootstrap-admin variable')
 			// The one place the pin does not reach; an operator must not infer otherwise.
 			expect(readme).toContain('uploads one exact committed')
-			expect(readme).toContain('do not establish namespace source pinning')
+			expect(readme).toContain('Existing namespace pins are retained when that default changes')
 		})
 	})
 

@@ -41,14 +41,12 @@ export interface PlatformInstallInput {
 	/** The scheme a browser speaks to this installation. */
 	readonly scheme: 'http' | 'https'
 	readonly sourceDir: string
-	/** Legacy namespace proxy source, independent of installation source transport. */
-	readonly proxyBuildFromGit: string
 	readonly tier: InstallablePlatformTier
 	/** `--yes`: answer every confirmation yes, for a bring-up with nobody at the keyboard. */
 	readonly unattended: boolean
 }
 
-/** The legacy namespace proxy repository; independent of the installation's exact source. */
+/** The canonical public release repository used for namespace proxy source identities. */
 export const FABRIKA_REPOSITORY_URL = 'https://github.com/contember/fabrika-platform'
 
 const FLAGS = ['--project-id', '--project-name', '--client-id', '--env', '--scheme', '--source-dir', '--tier'] as const
@@ -193,7 +191,6 @@ export const parsePlatformInstallArgs = (
 		environment: readEnvironment(argv, env),
 		scheme: readScheme(argv, env),
 		sourceDir,
-		proxyBuildFromGit: readEnv(env, 'FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT') ?? FABRIKA_REPOSITORY_URL,
 		tier: assertInstallableTier(setting(argv, env, '--tier', 'FABRIKA_PLATFORM_TIER')),
 		unattended: argv.includes(UNATTENDED_FLAG),
 		...(apiBaseUrl === undefined ? {} : { apiBaseUrl }),

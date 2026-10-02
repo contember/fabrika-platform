@@ -53,9 +53,13 @@ archive for every installation build. The summary reports the resolved commit. I
 require a clean full checkout containing the executing CLI, generated manifest and console schema.
 They reject `--from-git` and `FABRIKA_ZEROPS_BUILD_FROM_GIT`; remove those settings before upgrading.
 
-Namespace proxy provisioning is a separate legacy path. Its existing
-`FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT` setting is preserved independently and remains **not
-production-ready**. Exact installation archives do not establish namespace source pinning.
+Install and deploy write `FABRIKA_ZEROPS_PROXY_SOURCE_JSON` on Control as the default for new
+namespace planning: the public `contember/fabrika-platform` repository, this snapshot's exact commit,
+and its verified descriptor. Existing namespace pins are retained when that default changes.
+Legacy unpinned namespace rows require an explicit future pin migration and are not changed.
+Remove `FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT` from the invoking environment; mutable namespace source
+configuration is refused. Namespace source resolution verifies public commit availability before its
+effects. Preparing a local snapshot does not publish its commit to GitHub.
 
 ## The `{{INSTALLATION}}` GitHub Environment
 

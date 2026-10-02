@@ -11,7 +11,7 @@ import {
 	warn as consoleWarn,
 } from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
-import { createZeropsApi, defaultSleep } from '@fabrika/provider-zerops'
+import { createZeropsApi, defaultSleep, type ZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../zerops/generated/platform-proxy-manifest'
 import {
 	deployPlatformService,
@@ -38,7 +38,7 @@ import {
 	resolvePlatformServices,
 	serviceOf,
 } from './install-provisioning'
-import { prepareInstallationSource, validateInstallationSetups } from './installation-source'
+import { prepareInstallationSource, prepareNamespaceProxySource, validateInstallationSetups } from './installation-source'
 import type { PreparedPlatformSource } from './platform-source'
 import { generateInstallationSecrets, type InstallationSecrets } from './secrets'
 
@@ -88,7 +88,8 @@ export const runInstall = async (input: PlatformInstallInput, collaborators: Ins
 	const source = await collaborators.prepareSource(input.sourceDir, collaborators.signal)
 	try {
 		validateInstallationSetups(source, PLATFORM_DEPLOY_ORDER)
-		await installPreparedPlatform(input, collaborators, source)
+		const proxySource = await prepareNamespaceProxySource(source)
+		await installPreparedPlatform(input, collaborators, source, proxySource)
 	} finally {
 		await source.dispose()
 	}
@@ -98,6 +99,7 @@ const installPreparedPlatform = async (
 	input: PlatformInstallInput,
 	collaborators: InstallCollaborators,
 	source: PreparedPlatformSource,
+	proxySource: ZeropsNamespaceProxySource,
 ): Promise<void> => {
 	const { log, prompts, signal } = collaborators
 	assertRunning(signal)
@@ -159,7 +161,7 @@ const installPreparedPlatform = async (
 		scheme: input.scheme,
 		hosts,
 		clientId: input.clientId,
-		buildFromGit: input.proxyBuildFromGit,
+		proxySource,
 		secrets,
 		zeropsAccessToken: token.token,
 		...(input.apiBaseUrl === undefined ? {} : { apiBaseUrl: input.apiBaseUrl }),

@@ -1,7 +1,9 @@
+import type { ZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
 import type { PlatformDeployService, ResolvedService } from './deploy'
 import { type PlatformHosts, platformOrigin } from './hosts'
 import { assertRunning, type InstallCollaborators } from './install-collaborators'
+import { FABRIKA_ZEROPS_PROXY_SOURCE_JSON, serializeNamespaceProxySource } from './installation-source'
 import type { InstallationSecrets } from './secrets'
 
 /** The private address the proxy dials IAM at inside the project, and pass 1's placeholder issuer. */
@@ -40,7 +42,7 @@ export interface InstallationEnvInput {
 	readonly scheme: 'http' | 'https'
 	readonly hosts: PlatformHosts
 	readonly clientId: string
-	readonly buildFromGit: string
+	readonly proxySource: ZeropsNamespaceProxySource
 	readonly apiBaseUrl?: string
 	readonly secrets: InstallationSecrets
 	/** The Zerops integration token minted for the control plane. Never logged, never printed. */
@@ -88,7 +90,7 @@ export const installationServiceEnv = (input: InstallationEnvInput): ReadonlyMap
 		['FABRIKA_CONTROL_VAULT_KEY', secrets.vaultKey],
 		['FABRIKA_IAM_PROVISIONING_KEY', secrets.provisioningKey],
 		['FABRIKA_ZEROPS_CLIENT_ID', input.clientId],
-		['FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT', input.buildFromGit],
+		[FABRIKA_ZEROPS_PROXY_SOURCE_JSON, serializeNamespaceProxySource(input.proxySource)],
 		// The PUBLIC IAM origin an application project's proxy reaches: there is no private network
 		// between Zerops projects (ADR-0006).
 		['FABRIKA_ZEROPS_PROXY_IAM_URL', iamOrigin],

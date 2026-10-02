@@ -15,7 +15,7 @@ import { GENERATED_SECRET_KEYS, installationServiceEnv, type InstallCollaborator
 import { parsePlatformInstallArgs as parseArgs, type PlatformInstallInput, UNATTENDED_FLAG } from '../install-options'
 import { recordingInitLog } from '../log'
 import { generateInstallationSecrets } from '../secrets'
-import { fakeSourceCollaborators } from './fake-platform-source'
+import { fakeNamespaceProxySource, fakeSourceCollaborators } from './fake-platform-source'
 import { type FakeServiceSpec, type FakeZerops, fakeZerops, importedLightServices } from './fake-zerops'
 
 const PROJECT = { projectId: 'proj-1', projectName: 'fabrika-fresh' }
@@ -34,7 +34,6 @@ const input = (overrides: Partial<PlatformInstallInput> = {}): PlatformInstallIn
 	environment: 'stage',
 	scheme: 'https',
 	sourceDir: '.',
-	proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 	tier: 'light',
 	unattended: false,
 	...overrides,
@@ -386,7 +385,7 @@ describe('what reaches which service', () => {
 			scheme: 'https',
 			hosts: { iam: IAM_HOST, control: CONSOLE_HOST, operations: OPERATIONS_HOST },
 			clientId: CLIENT_ID,
-			buildFromGit: 'https://github.com/contember/fabrika-platform',
+			proxySource: fakeNamespaceProxySource(),
 			secrets,
 			zeropsAccessToken: 'minted',
 		})
@@ -406,7 +405,7 @@ describe('what reaches which service', () => {
 			scheme: 'https',
 			hosts: { iam: IAM_HOST, control: CONSOLE_HOST, operations: OPERATIONS_HOST },
 			clientId: CLIENT_ID,
-			buildFromGit: 'https://github.com/contember/fabrika-platform',
+			proxySource: fakeNamespaceProxySource(),
 			secrets: generateInstallationSecrets(),
 			zeropsAccessToken: 'minted',
 			apiBaseUrl: 'https://api.app-brn1.zerops.io/api/rest/public',
@@ -421,7 +420,7 @@ describe('what reaches which service', () => {
 			scheme: 'https',
 			hosts: { iam: IAM_HOST, control: CONSOLE_HOST, operations: OPERATIONS_HOST },
 			clientId: CLIENT_ID,
-			buildFromGit: 'https://github.com/contember/fabrika-platform',
+			proxySource: fakeNamespaceProxySource(),
 			secrets: generateInstallationSecrets(),
 			zeropsAccessToken: 'minted',
 		})
@@ -677,7 +676,6 @@ describe('the argument surface', () => {
 			environment: 'stage',
 			scheme: 'https',
 			sourceDir: '.',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			tier: 'light',
 			unattended: false,
 		})

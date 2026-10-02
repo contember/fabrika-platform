@@ -19,9 +19,9 @@
 //
 // ── What this command writes, and what it deliberately does not ───────────────────────────────────
 //
-// It writes exactly two kinds of value: the composed proxy manifest, and the per-installation
-// configuration derived from the resolved public hosts (each service's own origin, the origins it must
-// know about, and the installation's environment name). **It writes no credential at all** — every
+// It writes the composed proxy manifest, the exact namespace planning source default, and the
+// per-installation configuration derived from the resolved public hosts (each service's own origin,
+// the origins it must know about, and the installation's environment name). **It writes no credential at all** — every
 // secret an installation holds is `platform init`'s to place, and a deploy that cannot write one cannot
 // leak one. The two credentials this command HOLDS are the Zerops access token and the IAM admin key,
 // both from the environment, neither ever logged.
@@ -44,6 +44,7 @@ import {
 	ZEROPS_TERMINAL,
 	type ZeropsApi,
 	ZeropsApiError,
+	type ZeropsNamespaceProxySource,
 	type ZeropsService,
 } from '@fabrika/provider-zerops'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
@@ -51,7 +52,13 @@ import { PLATFORM_CONSOLE_APP_SCHEMA } from '../zerops/generated/platform-consol
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../zerops/generated/platform-proxy-manifest'
 import type { PlatformDeployInput } from './deploy-options'
 import { derivePlatformHosts, platformOrigin, type PlatformPlacement, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
-import { type PlatformSourcePreparer, validateInstallationSetups } from './installation-source'
+import {
+	FABRIKA_ZEROPS_PROXY_SOURCE_JSON,
+	type PlatformSourcePreparer,
+	prepareNamespaceProxySource,
+	serializeNamespaceProxySource,
+	validateInstallationSetups,
+} from './installation-source'
 import type { DeployLog } from './log'
 import { mergePlatformProxyManifest, readLiveProxyManifest } from './manifest'
 import type { PreparedPlatformSource } from './platform-source'
@@ -258,13 +265,13 @@ const resolvePlacement = (input: PlatformDeployInput, proxyEnv: ReadonlyMap<stri
 /**
  * The per-installation configuration each service needs, derived from the resolved hosts.
  *
- * Every value here is a hostname, an origin or the environment name. Nothing in this map is a secret,
- * which is what lets the deploy compare each key against the live value before writing it.
+ * The namespace source default comes from the verified snapshot. Values are compared but never logged.
  */
 const desiredServiceEnv = (
 	environment: string,
 	placement: PlatformPlacement,
 	manifestJson: string,
+	proxySource: ZeropsNamespaceProxySource,
 ): ReadonlyMap<PlatformDeployService, ReadonlyMap<string, string>> => {
 	const iamOrigin = platformOrigin(placement.scheme, placement.hosts.iam)
 	const consoleOrigin = platformOrigin(placement.scheme, placement.hosts.control)
@@ -304,6 +311,7 @@ const desiredServiceEnv = (
 		[
 			'control',
 			new Map([
+				[FABRIKA_ZEROPS_PROXY_SOURCE_JSON, serializeNamespaceProxySource(proxySource)],
 				['ENVIRONMENT', environment],
 				['FABRIKA_IAM_ISSUER', iamOrigin],
 				// A bare host: `controlPublicOrigin` accepts either spelling, and this is also what the
@@ -563,6 +571,7 @@ export const deployPreparedPlatform = async (
 	const { log, signal } = collaborators
 	assertRunning(signal)
 	validateInstallationSetups(source, PLATFORM_DEPLOY_ORDER)
+	const proxySource = await prepareNamespaceProxySource(source)
 	log.info(`source commit ${source.commitSha}`)
 
 	log.step('Resolve the installation')
@@ -599,7 +608,7 @@ export const deployPreparedPlatform = async (
 	}
 
 	log.step('Write the service environment')
-	const desired = desiredServiceEnv(environment, placement, encodeProxyManifestJson(merged.manifest))
+	const desired = desiredServiceEnv(environment, placement, encodeProxyManifestJson(merged.manifest), proxySource)
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
 		const service = serviceOf(services, hostname)
 		const live = hostname === PLATFORM_PROXY_SERVICE ? proxyEnv : await readServiceEnv(service.id, collaborators)

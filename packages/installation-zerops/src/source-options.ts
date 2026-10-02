@@ -1,4 +1,9 @@
 export const readInstallationSourceDir = (argv: readonly string[], env: Record<string, string | undefined>): string => {
+	if (env['FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT'] !== undefined) {
+		throw new Error(
+			'Unset FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT. Namespace planning now uses the verified --source-dir snapshot from the public release repository; existing legacy namespace rows require an explicit future pin migration and are not changed.',
+		)
+	}
 	if (argv.some((arg) => arg === '--from-git' || arg.startsWith('--from-git=')) || env['FABRIKA_ZEROPS_BUILD_FROM_GIT'] !== undefined) {
 		throw new Error(
 			'Mutable installation Git sources are refused. Remove --from-git and unset FABRIKA_ZEROPS_BUILD_FROM_GIT; run the CLI from a clean full checkout with --source-dir=<checkout>.',

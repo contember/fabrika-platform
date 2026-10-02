@@ -31,7 +31,6 @@ const input = (overrides: Partial<PlatformInstallInput> = {}): PlatformInstallIn
 	environment: 'stage',
 	scheme: 'https',
 	sourceDir: '.',
-	proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 	tier: 'light',
 	unattended: false,
 	...overrides,

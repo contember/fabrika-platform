@@ -233,7 +233,7 @@ const iam: ZeropsYamlSetupSpec = {
  * platforms), `FABRIKA_CONTROL_RUN_LOGS_REGION`, `ENVIRONMENT`, `FABRIKA_CONTROL_DOMAIN`,
  * `FABRIKA_IAM_ISSUER` (the public IAM issuer),
  * `OPERATIONS_ARTIFACT_ORIGIN` (the public proxy origin for source-map upload), `CLOUDFLARE_ACCOUNT_ID`,
- * `FABRIKA_CONTROL_BOOTSTRAP_ADMINS`, `FABRIKA_ZEROPS_CLIENT_ID`, `FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT`, and
+ * `FABRIKA_CONTROL_BOOTSTRAP_ADMINS`, `FABRIKA_ZEROPS_CLIENT_ID`, `FABRIKA_ZEROPS_PROXY_SOURCE_JSON`, and
  * `FABRIKA_ZEROPS_PROXY_IAM_URL` (the public IAM origin reachable from application projects).
  *
  * The `FABRIKA_` prefix on that last group is not cosmetic: Zerops RESERVES the bare `ZEROPS_` prefix

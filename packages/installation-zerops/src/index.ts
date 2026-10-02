@@ -82,8 +82,6 @@ Options (a flag beats the environment variable beside it):
 
 	FABRIKA_ZEROPS_ACCESS_TOKEN       required   Zerops access token, environment only and no flag
 	FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
-	FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT optional legacy namespace proxy source, default public repository;
-	                                             independent of installation source and not production-ready
 
 ── platform init ─────────────────────────────────────────────────────────────────────────────────
 
@@ -185,8 +183,12 @@ This command writes NO credential. Every secret an installation holds is placed 
 Install and deploy require --source-dir explicitly. Run the CLI from that same clean full checkout;
 a packaged CLI cannot supply another revision's manifest or schema. --from-git and
 FABRIKA_ZEROPS_BUILD_FROM_GIT are refused; remove them. Every build uses one exact source archive.
-The separately configured FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT namespace source remains legacy and is
-not production-ready; installation source transport does not pin namespace builds.
+Unset FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT: mutable namespace source configuration is refused.
+Install and deploy write FABRIKA_ZEROPS_PROXY_SOURCE_JSON on Control from the same verified snapshot,
+using the public contember/fabrika-platform repository. This default is for NEW namespace planning;
+upgrading it does not replace persisted namespace pins. Existing legacy namespace rows require an
+explicit future pin migration and are not changed. Namespace source resolution checks public commit
+availability before its effects; a local commit is not thereby published to GitHub.
 
 ── platform admin ────────────────────────────────────────────────────────────────────────────────
 
