@@ -2,6 +2,7 @@ import type { Sleeper } from '../collaborators'
 import { apiError, ZeropsApiError } from './errors'
 import { waitForProcess } from './polling'
 import { arr, num, prop, readAppVersion, readIntegrationToken, readProcess, readProject, readService, readServiceEnv, str } from './readers'
+import { parseServiceEnvResponse } from './service-env-response'
 import type { ZeropsApi, ZeropsApiOptions, ZeropsAppVersion, ZeropsImportResult, ZeropsLogLine } from './types'
 
 /**
@@ -121,6 +122,8 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			signal: AbortSignal
 			redactDetail?: boolean
 			omitErrorResponseDetails?: boolean
+			/** Pretrigger reservation cleanup needs verified absence, never arbitrary response text or codes. */
+			preserveAppVersionNotFound?: boolean
 			responseMaxBytes?: number
 		},
 	): Promise<unknown> => {
@@ -155,6 +158,16 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 		}
 		if (!response.ok) {
 			if (init.omitErrorResponseDetails === true) {
+				if (init.preserveAppVersionNotFound === true && response.status === 400) {
+					const error = prop(payload, 'error')
+					const metadata = [...arr(payload, 'meta'), ...arr(error, 'meta')]
+					if (
+						str(error, 'code') === 'appVersionNotFound' || str(payload, 'code') === 'appVersionNotFound'
+						|| (metadata.length === 1 && str(metadata[0], 'code') === 'appVersionNotFound')
+					) {
+						throw new ZeropsApiError(`zerops: ${label} failed (400) — appVersionNotFound`, 400, 'appVersionNotFound')
+					}
+				}
 				throw new ZeropsApiError(`zerops: ${label} failed (${response.status})`, response.status, '')
 			}
 			throw apiError(label, response.status, payload, init.redactDetail === true)
@@ -219,9 +232,11 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			signal,
 			responseMaxBytes: SERVICE_ENV_RESPONSE_MAX_BYTES,
 		})
-		const items = prop(payload, 'items')
-		if (!Array.isArray(items)) throw invalidResponse('list service env')
-		return items.map(readServiceEnv)
+		try {
+			return parseServiceEnvResponse(payload, serviceId)
+		} catch {
+			throw invalidResponse('list service env')
+		}
 	}
 
 	const getProcess: ZeropsApi['getProcess'] = async ({ processId, signal }) =>
@@ -310,6 +325,7 @@ export const createZeropsApi = (options: ZeropsApiOptions): ZeropsApi => {
 			const payload = await request('delete app-version', 'DELETE', `/app-version/${appVersionId}`, {
 				signal,
 				omitErrorResponseDetails: true,
+				preserveAppVersionNotFound: true,
 			})
 			if (prop(payload, 'success') !== true) {
 				throw invalidResponse('delete app-version')

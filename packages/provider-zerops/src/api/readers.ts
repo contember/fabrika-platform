@@ -194,4 +194,5 @@ export const readServiceEnv = (value: unknown): ZeropsServiceEnv => ({
 	content: str(value, 'content') ?? '',
 	serviceStackId: str(value, 'serviceStackId'),
 	type: str(value, 'type'),
+	...(bool(value, 'sensitive') === undefined ? {} : { sensitive: bool(value, 'sensitive') }),
 })

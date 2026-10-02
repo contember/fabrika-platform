@@ -274,6 +274,25 @@ describe('Zerops API discovery', () => {
 		)
 	})
 
+	test('validates environment records before missing content can become an empty string', async () => {
+		const valid = { id: 'record', key: 'KEY', content: '', type: 'USER', sensitive: true }
+		const invalidRows = [
+			[{ id: 'record', key: 'KEY', sensitive: true }],
+			[{ ...valid, sensitive: 'true' }],
+			[{ ...valid, serviceStackId: 'another-service' }],
+			[valid, { ...valid, id: 'duplicate-key' }],
+		]
+		for (const items of invalidRows) {
+			const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: async () => jsonResponse({ items }) })
+			await expect(api.listServiceEnv({ serviceId: 'service-1', signal: signal() }))
+				.rejects.toThrow('zerops: list service env returned an invalid response')
+		}
+		const api = createZeropsApi({ token: 'secret', baseUrl: 'https://zerops.test', fetchImpl: async () => jsonResponse({ items: [valid] }) })
+		const records = await api.listServiceEnv({ serviceId: 'service-1', signal: signal() })
+		expect(records).toEqual([valid])
+		expect(records[0]).not.toHaveProperty('serviceStackId')
+	})
+
 	test('rejects an oversized declared service environment response before parsing its body', async () => {
 		let cancelled = false
 		const body = new ReadableStream<Uint8Array>({
@@ -897,6 +916,38 @@ describe('Zerops upload-backed app versions', () => {
 		}
 	})
 
+	test('preserves only the verified missing-version delete code without reflecting upstream details', async () => {
+		const secret = 'https://upload.test/archive?signature=must-not-leak'
+		for (const status of [400, 404]) {
+			const api = createZeropsApi({
+				token: 'zerops-secret',
+				baseUrl: 'https://zerops.test',
+				fetchImpl: async (url, init) => {
+					expect(url).toBe('https://zerops.test/app-version/version-1')
+					expect(init?.method).toBe('DELETE')
+					return jsonResponse({ message: secret, meta: [{ error: secret, code: 'appVersionNotFound', metadata: { token: secret } }] }, status)
+				},
+			})
+			const error = await api.deleteAppVersion({ appVersionId: 'version-1', signal: signal() }).catch((cause: unknown) => cause)
+			expect(error).toBeInstanceOf(ZeropsApiError)
+			if (!(error instanceof ZeropsApiError)) throw new Error('expected API error')
+			expect(error.status).toBe(status)
+			expect(error.code).toBe(status === 400 ? 'appVersionNotFound' : '')
+			expect(error.message).toBe(`zerops: delete app-version failed (${status})${status === 400 ? ' — appVersionNotFound' : ''}`)
+			expect(JSON.stringify(error)).not.toContain(secret)
+			expect(error.stack).not.toContain(secret)
+		}
+		const api = createZeropsApi({
+			token: 'zerops-secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () => jsonResponse({ code: secret, message: secret, meta: [{ error: secret, code: secret, metadata: secret }] }, 400),
+		})
+		const error = await api.deleteAppVersion({ appVersionId: 'version-1', signal: signal() }).catch((cause: unknown) => cause)
+		if (!(error instanceof ZeropsApiError)) throw new Error('expected API error')
+		expect(error.code).toBe('')
+		expect(error.message).toBe('zerops: delete app-version failed (400)')
+	})
+
 	test('requires an explicit successful delete response without exposing malformed content', async () => {
 		const responseSecret = 'delete-response-that-must-not-leak'
 		const responses = [{ success: false, message: responseSecret }, { message: responseSecret }, null]
@@ -971,7 +1022,7 @@ describe('Zerops upload-backed app versions', () => {
 			api.deleteAppVersion({ appVersionId: 'version-1', signal: signal() }).catch((cause: unknown) => cause),
 		])
 		// The build keeps the CODE — a refusal an operator can act on, `userDataSyncRunning` above all —
-		// and the delete keeps nothing, because its response is the one that can carry an upload URL.
+		// and the delete drops arbitrary codes; only the verified appVersionNotFound absence code survives.
 		expect(errors.map((error) => error instanceof Error ? error.message : '')).toEqual([
 			'zerops: build and deploy app-version failed (503) — platformCode',
 			'zerops: delete app-version failed (503)',

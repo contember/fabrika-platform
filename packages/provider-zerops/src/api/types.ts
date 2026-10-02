@@ -243,8 +243,10 @@ export interface ZeropsServiceEnv {
 	key: string
 	content: string
 	serviceStackId?: string
-	/** `READ_ONLY` | `EDITABLE` | `SECRET` | `INTERNAL` | `ENV` — VERIFIED as an enum, meaning inferred. */
+	/** Record classification, not a sensitivity or ownership guarantee; sensitive records can be USER. */
 	type?: string
+	/** Live service-env responses identify sensitive USER records independently of their type. */
+	sensitive?: boolean
 }
 
 /**
