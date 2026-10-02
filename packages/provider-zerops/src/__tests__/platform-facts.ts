@@ -276,8 +276,7 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		id: 'app-version-missing-id-is-400',
 		section: SECTION_USER_DATA_PROCESS,
 		request: { method: 'GET', path: '/app-version/{absentAppVersionId}' },
-		// Status only: the platform's code for this one was never recorded, and a bare 400 from this family
-		// identifies no condition — which is the fact.
+		// This automated row checks status only; the deleted-reservation code witness below is manual.
 		expect: { status: 400 },
 		live: 'fast',
 		emulator: true,
@@ -763,6 +762,49 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 			'manually verified native snapshot/PUT and canonical descriptor; runtime blob digest matched Git, LF and literal $Id$ survived attributes, relative symlink preserved',
 		emulator: false,
 		emulatorNote: 'the double does not unpack archives or execute uploaded source',
+	},
+	{
+		id: 'deleted-reservation-reports-app-version-not-found',
+		section: 'Deleted reservation absence witness, 2026-10-02 — docs/reference/zerops-platform.md',
+		request: { method: 'GET', path: '/app-version/{deletedAppVersionId}' },
+		expect: { status: 400 },
+		live: 'not-probed',
+		liveNote: 'manual reserve/delete witness: subsequent GET and DELETE both returned 400 with meta code appVersionNotFound',
+		emulator: false,
+		emulatorNote: 'manual absence-code witness is not covered by this fact runner',
+	},
+	{
+		id: 'fresh-import-creation-process-identifies-service',
+		section: 'Fresh creation provenance witness, 2026-10-02 — docs/reference/zerops-platform.md',
+		request: { method: 'POST', path: '/project/{projectId}/service-stack/import' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote:
+			'manual create-only import: serviceStacks process association and polled FINISHED stack.create retained exact serviceStackId and process ID',
+		emulator: false,
+		emulatorNote: 'creation provenance is a manual witness, not covered by this fact runner',
+	},
+	{
+		id: 'managed-sensitive-record-is-user-with-sensitive-flag',
+		section: 'Managed bootstrap and sensitive-record witness, 2026-10-02 — docs/reference/zerops-platform.md',
+		request: { method: 'GET', path: '/service-stack/{serviceId}/env' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote:
+			'manual create-only sensitive:true write with 63-character managed key: readback type USER, sensitive true, exact record/service IDs and dummy content',
+		emulator: false,
+		emulatorNote: 'sensitive record representation is a manual witness, not covered by this fact runner',
+	},
+	{
+		id: 'platform-source-stream-preserves-pinned-bytes-and-links',
+		section: 'Live source transport/extraction witness, 2026-10-02 — docs/reference/zerops-platform.md',
+		request: { method: 'PUT', path: '/app-version/{appVersionId}/build-and-deploy' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote:
+			'manual public-commit source stream/gzip/PUT witness: completed archive verdict before build, fresh runtime nonce, package and relative symlink content matched pinned Git blobs',
+		emulator: false,
+		emulatorNote: 'the double does not execute or unpack uploaded source archives',
 	},
 	{
 		id: 'explicit-false-override-refuses-mixed-registration-collision',

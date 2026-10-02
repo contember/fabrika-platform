@@ -74,8 +74,9 @@ streams GitHub's `git archive` tarball to the presigned Zerops upload URL that
 control obtained — `gunzip → tar rewrite → gzip → PUT`, with no repository byte
 staged on disk
 ([ADR-0037](../decisions/0037-stream-github-tarballs-for-zerops-sources.md)). The
-rewrite keeps regular files only and refuses symlinks, submodules, and trees
-above 50,000 entries or 512 MiB. `source` never executes repository code and
+rewrite keeps regular files only and refuses symlinks, `.gitmodules`, and trees
+above 50,000 entries or 512 MiB. Public platform uploads explicitly enable validated relative symlinks
+and check Git tree metadata to reject submodules even without their marker. `source` never executes repository code and
 never returns repository content. It has no public route, and its RPC
 authenticates control by key, because reachability on the project network is not
 authorization.

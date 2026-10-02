@@ -8,10 +8,10 @@
 
 - Small internal fleet, one organization; planned short outages are acceptable.
 - Prepare the release in this run. Production publication and deployment require a separate confirmation.
-- Recommend the topology from evidence before provisioning it.
+- Select the production topology after candidate resource measurements, and approve its cost before provisioning it.
 - Password and OIDC authentication are both required.
 - Automatic source-map publication from Zerops builds and original-source stack frames are required (backlog 36). Webhook notifications are required; email notifications are deferred.
-- Preserve acknowledged database writes through a single-node failure. For accidental deletion or loss of an entire project, the last verified backup is acceptable. This is not a promise of point-in-time disaster recovery.
+- Preserve acknowledged database writes through a single-node failure. For accidental deletion or loss of an entire project, restore within four hours from the last verified complete backup, no older than 24 hours. Point-in-time disaster recovery is not required.
 - Existing `fabrika-test` in `prg1` is the disposable live-test project. Its stopped `envprobe` holds only synthetic release/DSN labels. It is not a platform installation.
 
 ## Refs re-verified at HEAD (2026-09-23)
@@ -106,26 +106,26 @@ ADR-0043 and the platform reference retain the contract and live evidence.
 
 - **Problem.** The source-map receiver exists, but Zerops builds do not yet publish scoped artifacts automatically.
 - **Verify first.** Inspect the existing upload credential, artifact format and source-map lookup contracts; establish a build-side credential-delivery path without persisting secrets in manifests or logs.
-- **Scope.** Publish source maps from where Zerops build artifacts exist, using a run/release-scoped credential. Preserve deployment on artifact-publication failure, mark incomplete artifacts honestly and support repair. Connect Delivery runs and Operations evidence.
+- **Scope.** Publish source maps from where Zerops build artifacts exist, using a run/release-scoped credential. Preserve deployment on artifact-publication failure, mark incomplete artifacts honestly and support repair. Retain run/release correlation in the protocol; new correlation UI is excluded.
 - **Acceptance / witness.** Deploy a minified fixture through the actual Zerops path; ingest its error and resolve original source frames. Wrong application/environment/release credentials cannot publish or read another source's artifacts. Publication failure does not turn a successful application deploy into failure.
-- **Touch points.** Build-side artifact publisher, provider/source integration, Control/Operations artifact credential plumbing, and Delivery/Operations views. Freeze shared provider contracts in WU0; serialize provider integration after WU1 where file ownership intersects.
+- **Touch points.** Build-side artifact publisher, provider/source integration, and Control/Operations artifact credential plumbing. Freeze shared provider contracts in WU0; serialize provider integration after WU1 where file ownership intersects.
 
 ### WU6 — Full candidate rehearsal and recovery evidence (L elapsed)
 
 - **Problem.** Neither old CI nor deterministic providers prove current installation, authentication and recovery behavior.
 - **Verify first.** Fresh test backend readiness, domain/IdP/private-source prerequisites, selected topology, generated artifacts and release packaging.
-- **Scope.** Rehearse clean install, repeated upgrade, current-release public/private app deployments, keyed webhook, browser password and OIDC sign-in, scoped authorization, revocation, local Builder consent/repeated deployment, SDK ingest and triage, and Operations outage isolation. Test HA acknowledged-write survival and restore into an isolated target from a complete recovery set.
+- **Scope.** Rehearse clean install, repeated upgrade, current-release public/private app deployments, keyed webhook, browser password and OIDC sign-in, scoped authorization, revocation, SDK ingest and triage, and Operations outage isolation. Test HA acknowledged-write survival and restore into an isolated target from a complete recovery set. Builder E2E is excluded.
 - **Acceptance / witness.** Record exact source revisions and observed results. Recovery covers IAM/Control/Operations SQL including migration ledgers and queues, object payloads, and matching vault/signing/configuration secrets. Restored work cannot duplicate occurrences or accidentally dispatch stale notifications. After a roll, verify actual catalog/ingest convergence before accepting application deploys.
 - **Touch points.** Leader-owned integration fixtures, browser acceptance, release/restore runbook and evidence. No production publication, DNS cutover or deployment. Test-sidecar pushes or publication require separate explicit confirmation.
 
 ## Proposed sequencing and ownership
 
-The user approved the sprint, automatic Zerops source maps and webhook notifications. Architecture decisions remain gated on WU0's evidence. No implementation agent has been dispatched.
+The user approved the sprint, automatic Zerops source maps and webhook notifications. Architecture decisions remain gated on evidence. The completion order is to close the reviewed Delivery prerequisites, finish WU1/WU2 integration, then finish the remaining production requirements and rehearse one candidate. Do not open additional implementation workstreams while the shared Delivery integration remains unfinished.
 
 1. WU0: leader drives live probes and shared contracts, with independent read-only review.
 2. After decisions and exact file ownership are frozen: WU1, WU2, WU3 and WU4 may run concurrently, at most three implementers. If provider/descriptor files cannot be made disjoint, merge or sequence those units.
 3. Each implementation receives independent review, leader-run verification and an explicit-path atomic commit.
-4. WU5 integrates source-map publication after its shared deployment seams settle. Independent UI/artifact work can proceed earlier only with frozen contracts and disjoint files.
+4. WU5 integrates source-map publication after its shared deployment seams settle; new correlation UI is excluded.
 5. WU6 exercises the integrated candidate. Findings return to their owning unit; acceptance is never weakened to make the candidate green.
 
 Isolation: current branch and shared working tree; strictly disjoint implementation territories. The leader owns documentation, shared seams and generated integration artifacts. Existing unrelated work is preserved.
@@ -136,11 +136,12 @@ Isolation: current branch and shared working tree; strictly disjoint implementat
 - Repository dprint and Biome checks; generated Zerops artifacts and frozen installation checks.
 - Focused unit/integration regression checks, then full repository tests with real PostgreSQL and S3 configured, including isolated agent-interface/Builder suites.
 - Dashboard and proxy production builds, release validation/pack/import smoke using a disposable version label. No registry publication.
-- Existing browser suites plus the missing required login/Builder witnesses; local disruptive smoke only on its dedicated composition.
+- Existing browser suites plus the missing required login witnesses; no new Builder E2E gate. Local disruptive smoke only on its dedicated composition.
 - Real Zerops capability, installation, upgrade, private-source and selected-topology/HA/restore witnesses. Local emulation cannot substitute for these.
 
 ## Explicit deferrals proposed for the gate
 
+- Builder E2E and new Delivery/Operations correlation UI are excluded by user approval. Existing regression tests remain required.
 - Cloudflare-only runner/account-token/DO/self-deploy items: not part of this Zerops milestone.
 - Directory/groups (91), separate Operations host identity (54), one-command registration (78), one-click installation (63), old-token repair (75) for a fresh installation, and namespace resizing (79).
 - Best-effort domain audit (71) is not a database-replication guarantee. Lossless audit needs a separate decision and is not silently promised here.
@@ -153,11 +154,32 @@ Isolation: current branch and shared working tree; strictly disjoint implementat
 - Approve the selected production topology after its cost/resource readout; the bounded release gate is approved.
 - Finalize the approved version-scoped activation protocol's crash/concurrency contract and remaining live witnesses. Automatic legacy migration is not approved.
 - Supply or select test domains, real OIDC provider configuration and the non-production private-source organization/repository through the existing secure setup flow. Never place their credentials in this document.
-- Confirm allowable elapsed restore time and backup freshness separately from the node-failure guarantee.
-- Select #65's immutable installation source transport. Tested `@tag` and `@SHA` public-source suffixes built `main`, including on a fresh service. The existing reserve/upload/build API can use the sidecar's exact checkout, but adopting it changes installation delivery; namespace proxies need a compatible source owner too. Branch conventions alone are not immutable revision identity.
+- Immutable installation and namespace source transport is settled by ADR-0045; complete its integrated acceptance rather than reopen transport selection.
 - Select the source-map publisher's supported build runtime/distribution, scoped completion receipt and repair window. Existing upload credentials and receivers can be reused, but publishing maps alone does not prove a complete inventory.
 
 ## Run log
+
+- 2026-10-02: Delivery prerequisites committed: raw environment observation (`676cdab`), managed-binding helpers and manifest policy (`f5d4a74`), shared run/namespace ownership and retained lookup (`5c01205`), installation namespace defaults (`2c105e8`). Independent re-review closed all three namespace findings. Leader verification: 58 helper/manifest/lookup tests, 90 API/proxy tests, 372 lifecycle tests, 108 adapter tests, 11 real PostgreSQL fencing tests and 81 affected installation tests passed. Affected package typechecks and scoped formatting/lint passed (lint reports informational index-access suggestions). Full #37 runtime integration resumed; these prerequisites do not establish its acceptance or full candidate installation.
+
+- 2026-10-02: User approved completion with Builder E2E and new correlation UI excluded. Close the current Delivery integration before starting another implementation workstream. Production topology remains measurement-led; complete-backup freshness is at most 24 hours and restore time at most four hours. WU4 remains paused pending its explicit transport decision.
+
+- 2026-10-02: Live source pipeline upload/extraction passed using an explicit probe descriptor: pinned Git bytes and relative symlinks matched at runtime. Service stopped and verified; → platform reference/manual fact row. Full platform descriptor installation remains a separate gate. The immutable bootstrap-marker amendment passed independent review (34 helper tests).
+
+- 2026-10-02: Live managed bootstrap probe confirmed codeless process/active-version identity and accepted a 63-character backing name. It disproved the helper's `SECRET` type assumption: sensitive API-created records are `USER` with `sensitive: true`. Parser/types and helper checks are being corrected; → platform reference. Probe cleanup finished.
+
+- 2026-10-02: The stalled archive witness was isolated to Bun's stream-backed `Response` file consumer. Explicit-reader and production-style gzip/native-fetch witnesses completed for the public pinned commit; → platform reference. No production workaround was added. Managed-binding helpers passed 27 leader-run tests and independent review; runtime wiring remains pending.
+
+- 2026-10-02: Ownership re-review closed all four findings. Leader ran 77 lifecycle/fencing/recovery tests with real PostgreSQL and no skips. Source-service, installation and Control package typechecks subsequently passed after the namespace attempt public exports were connected. Scoped retained-checkpoint lookup passed three tests and independent review. The public source-archive witness stalled while consuming its stream and remains unverified; diagnosis is separate from the passing mocked source tests.
+
+- 2026-10-02: Fresh creation provenance was verified with a disposable collision-rejecting import: returned and finished creation processes preserve exact service/process identity. The probe service was deleted; evidence is in the platform reference/manual fact row. Managed-binding primitives are being implemented; scoped historical lookup and runtime wiring remain separate.
+
+- 2026-10-02: Leader reran the platform-source protocol/metadata/archive/service suites: 265 passes, 756 assertions, no failures; both independent reviews accepted the slice. Latest package typecheck reported only two namespace `Sleeper` typing errors outside source-service changes, assigned to the namespace integration owner. User authorized direct affected-package typechecks and focused verification suites while the CPU lease queue is blocked, excluding builds and benchmarks.
+
+- 2026-10-02: User approved exact-version, app/environment-scoped lookup of retained run checkpoints for managed-binding admission after rollback. User also approved shared durable namespace proxy attempts and renewable ownership across every rebuild path; → ADR-0046. Both integration seams remain under implementation.
+
+- 2026-10-02: Namespace provider review accepted the recovery fixes after the real API client preserved only verified `400 appVersionNotFound` during deletion. Leader ran 127 API/namespace tests (547 assertions), no failures. Installation default serialization now escapes `$` as JSON `\u0024`; independent re-review accepted exact descriptor/digest round-tripping. Remaining typechecks and source suites were resubmitted after the server restart.
+
+- 2026-10-02: A disposable reservation established the exact `400 appVersionNotFound` response on GET and repeat DELETE after confirmed deletion; see platform reference and manual fact row. Namespace recovery is adopting this narrow absence evidence. Re-review also found an adoption/readiness regression, now assigned for correction before acceptance.
 
 - 2026-10-02: Exact-checkout installation transport landed in `6ac64f5` after 237 leader-run tests, package typecheck, formatting/lint and independent review. The snapshot test's concrete ArrayBuffer type was corrected. Native upload/build evidence is recorded in the platform reference. Namespace integration and full installation acceptance remain open.
 

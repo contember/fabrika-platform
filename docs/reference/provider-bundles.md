@@ -147,15 +147,31 @@ releasing the run lock.
 `@fabrika/platform` supplies the shared SQL lease implementation. Acquisition is non-reentrant;
 release matches the holder. `renew(key, holder, ttlMs)` extends only a still-live lease owned by that
 holder, using one conditional update and the injected clock. Renewal at or after expiry returns
-false, even before another holder acquires the key. The current deploy lifecycle acquires/releases
-leases but does not yet schedule renewal.
+false, even before another holder acquires the key. Deploy, cancellation, recovery and stale-run
+settlement acquire a unique invocation holder and renew while working. Failed renewal or a missed
+confirmed deadline invalidates ownership. Lease loss stops the invocation; it does not request
+external cancellation.
 
 The run repository accepts an optional `RunMutationGuard` for start, commit, external-id,
 checkpoint and terminal writes. Guarded writes lock the app/environment lease row and apply an
 exact checkpoint comparison within the same database transaction. The caller must acquire the
 lease first, use a unique invocation holder and supply a fresh millisecond timestamp per call.
-Guarded starts also refuse another running run for the target. Current lifecycle callers still use
-the unguarded methods; the repository primitive alone does not fence deployment execution.
+Guarded starts also refuse another running run for the target. Lifecycle event writes are serialized
+with the accepted checkpoint as their next comparison value. The special initial identity write may
+record a reservation after a cancellation request, while still requiring the live owner and an empty
+external identity; this preserves cleanup evidence without permitting deployment to continue.
+
+An unresolved provider result keeps the run running after the invocation releases its lease. That row
+blocks a later deployment until recovery establishes settlement. Cancellation similarly remains
+requested until the provider returns `settled`; acknowledgement alone is insufficient. Cloudflare
+runner recovery fences delayed startup before settling a never-dispatched run, while dispatched work
+retains its detached completion backstop.
+
+Providers may read retained checkpoints through a Control-supplied callback scoped to the current
+app/environment and an exact external version ID. The repository refuses duplicate matches and does
+not filter by success status: rollback can activate an older version, including one whose Control run
+did not finish successfully. Persisted JSON is bounded and parsed before delivery to the provider,
+which remains responsible for its checkpoint schema and ownership checks.
 
 `packages/control/src/__tests__/entrypoint-isolation.test.ts` walks both import
 graphs. It verifies that each root reaches only its selected provider and runtime,

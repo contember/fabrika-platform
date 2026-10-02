@@ -119,9 +119,10 @@ private repos fail during clone
 go through the GitHub/GitLab integration instead
 ([GitHub integration](https://docs.zerops.io/references/github-integration)).
 
-Fabrika persists the proxy's public `buildFromGit` URL in the namespace target
-and reuses it for proxy pipeline triggers. The public documentation does not
-establish that this URL is an immutable content pin.
+Fabrika persists the proxy's public repository, exact commit and verified descriptor in the namespace
+target, then uploads that source to an explicitly reserved version (ADR-0045). Legacy targets carrying
+only `proxyBuildFromGit` remain readable but are unpinned and cannot start a proxy mutation. No commit
+is inferred from the legacy URL, and an installation-default change does not replace a namespace pin.
 
 ## Zerops has its own CI
 
@@ -661,7 +662,7 @@ and fetches that URL without the installation Authorization header — the codel
 short-lived token in its query and is treated as a credential in transit. The response is piped
 `gunzip → tar rewrite → gzip → PUT`, so no repository byte is staged on disk or buffered whole.
 
-The tar rewrite reads GitHub's `git archive` output 512 bytes at a time. It confirms the commit from
+The default application tar rewrite reads GitHub's `git archive` output 512 bytes at a time. It confirms the commit from
 the pax global header's `comment`, strips the single archive prefix, keeps regular files only and
 rewrites each header with mode `0755` or `0644`, uid and gid `0` and a fixed mtime. The tarball's own
 directory entries are dropped; instead each parent directory is written once, outermost first, before
@@ -674,6 +675,45 @@ file content, counted incrementally. It hashes the root `zerops.yaml` as it pass
 drifted descriptor fails the operation. Because the tarball is `git archive` output, `.gitattributes`
 `export-ignore` and `export-subst` apply. Archives are not byte-deterministic across runs and nothing
 depends on that.
+
+Public v1 uploads may explicitly select `archiveKind: 'platform'`. That mode rejects installation
+credentials; private v2 uploads do not accept the field. Before downloading a platform archive,
+source checks the exact commit's Git tree: the commit and root tree identities must match, the tree
+must explicitly be complete, and gitlinks are refused even without `.gitmodules`. Metadata is bounded
+to 7 MiB and 50,000 entries; truncated or malformed trees fail before download or upload.
+
+Platform mode preserves relative symbolic links after validating the full archive namespace. It
+refuses escapes, cycles, dangling targets, path-type collisions, entries beneath symlinks in either
+order, and symlink descriptors. Hard links and special entries remain refused. Contents stay streamed;
+bounded path/link metadata supports the final verdict. A PUT response alone is not upload success:
+the archive's validation verdict must succeed too. Omitted `archiveKind` retains strict application
+behavior, including rejection of symbolic links and PAX `linkpath` records.
+
+**Public platform archive witness, 2026-10-02.** Exact commit
+`9917992ad1a0a462e060064255d9a90a3a2ed968` passed live GitHub tree checks and streamed archive validation:
+1,394 entries, 9,202,153 expanded file bytes, descriptor SHA-256
+`12ea505cc6fe782871b350d5ac2e58d7bd1b2874ec7ee4da152b814f6a8c68b0`. Native tar inspection preserved
+both `packages/auth-core/AGENTS.md` and `packages/installation-init/AGENTS.md` as relative links to
+`CLAUDE.md`. The production-style gzip/native-fetch pipeline completed against a local HTTP sink.
+This is not a source-service-to-Zerops build witness.
+
+**Live source transport/extraction witness, 2026-10-02.** The production repository/archive,
+gzip and native PUT pipeline uploaded that same pinned commit to reserved version
+`2DrJGgXaT3Gt7zY0R9RDaw`. Both HTTP 200 and archive validation completed before build process
+`KsxeStQVQGy7jhLWwu8LXw` was submitted; the process finished successfully. An explicit small probe
+descriptor, SHA-256 `e5d0fdbf1aa1b9a5013b81dc468b73b537a8e284e81f3ff7bc9e22599f11d190`, selected
+`package.json` and the two link/target pairs for deployment. The runtime returned the fresh nonce
+`ba0e23f2-5f30-4292-bfc1-93f0e00eef17` and package hash
+`50b56ac7caa1fc92e11529d1d655221c3c84f519c4d532aeb00b4e56215b205c`, matching the pinned Git blob.
+Both links remained symbolic links to `CLAUDE.md`; their contents and adjacent targets matched the
+pinned blobs. Stop process `32ylCqGBQiuPRKtomiy1oQ` finished and the service was read back `STOPPED`.
+This proves transport, extraction and selected source bytes. The submitted descriptor was the probe,
+not the repository's platform descriptor, so it does not establish full platform installation acceptance.
+
+For local stream witnesses on Bun 1.3.14, consume the archive through a reader and incremental
+`FileSink`. `Bun.write(path, new Response(customStream))` stalled even for a network-free 2 KiB
+stream; an upstream HTTP abort did not unblock that consumer after download had completed.
+The service's native fetch consumer did not exhibit that failure.
 
 Measured 2026-08-21 on the test installation (`source` at its `0.125 GB` floor, read once a second
 through `GET /service-stack/{id}/container` → `currentHardwareResource`, the allocation vertical
@@ -859,6 +899,30 @@ which is why `putServiceEnv`, `createServiceEnv` and `deleteServiceEnv` now poll
 before returning. And an endpoint whose error CODE is dropped is undiagnosable: `build-and-deploy`
 keeps its code from now on, because nothing in that request or response is a secret.
 
+**Fresh creation provenance witness, 2026-10-02.** A collision-rejecting codeless import created
+disposable service `9YWl1QygSmGeGnmKvYISDw`. The response's `serviceStacks` entry identified its
+name and ID, and associated both processes with that same `serviceStackId`: creation
+`LBlWJpvIS76eqUGUekKYsg` (`stack.create`) and initial empty deployment
+`2iajEpXZSRG7t8kFOVjiBg` (`stack.deploy`). Polling each process returned the same ID, action and
+service association with status `FINISHED`. This supplies positive creation evidence for that
+specific import; service discovery alone does not. The disposable service was deleted afterwards.
+
+**Deleted reservation absence witness, 2026-10-02.** A disposable reservation
+`Dh42hIJ6SJW5psESpIlL9w` was deleted with `{ success: true }`. Subsequent GET and DELETE requests
+for that same app-version ID both returned HTTP `400` with the exact `meta` code
+`appVersionNotFound`. This identifies absence for pre-trigger cleanup recovery; an arbitrary `400`
+or `404` does not. It does not establish that an ambiguously submitted build is safe to delete.
+
+**Managed bootstrap and sensitive-record witness, 2026-10-02.** On disposable service
+`ePK3O6FASjWgkVVuldO4CQ`, the finished codeless deploy process `x3bqYIl6QlOx63xtHgi5sA` identified
+version `EtWO40wqRyCHjLAzuBPJuw`. The service's nested `activeAppVersion` identified that same version
+with status `ACTIVE` and source `NONE`; the raw response had no top-level `activeAppVersionId`.
+After a create-only `user-data` write with `sensitive: true` and completed synchronization,
+`GET /service-stack/{id}/env` returned the dummy record with **`type: USER`, `sensitive: true`**,
+its exact ID and service association, and the intended content. The 63-character
+`FABRIKA_MENV_<48 lowercase hex>_R` name was accepted. Record type `SECRET` is therefore not a valid
+requirement for confirming these API-created sensitive values. The service was deleted afterwards.
+
 ### Verified live (2026-08-19, account `prg1`, project `fabrika-notes-prod`) — PostgreSQL TLS is per service type
 
 The example app's first deploy into a namespace built and shipped, then failed its deploy gate in
@@ -1039,6 +1103,13 @@ that contains the executing installation module. They refuse `--from-git` and
 mutations; all five setups are checked before writes. Each service reserves its own app version,
 uploads that snapshot, builds the reserved version and polls its ID. No fallback selects a Git pipeline.
 The first-install proxy pass and subsequent full pass share the same snapshot.
+
+Install and deploy also derive Control's `FABRIKA_ZEROPS_PROXY_SOURCE_JSON` default from that snapshot's
+commit and original descriptor, with the canonical public release repository coordinates. The JSON
+environment representation escapes `$` as `\u0024` so Zerops does not interpolate references inside
+the embedded descriptor; JSON decoding restores the exact bytes covered by its digest. Updating this
+default does not modify existing namespace pins. An unpublished local commit cannot be fetched by the
+public source service; namespace source resolution must succeed before its provider mutations.
 
 An ambiguous build response is observed without another submission or deletion; an unresolved wait
 does not prove that the version failed. Namespace proxy sources are separately persisted and are not
