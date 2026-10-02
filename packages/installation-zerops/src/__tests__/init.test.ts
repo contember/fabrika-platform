@@ -195,11 +195,19 @@ describe('fabrika platform init --provider=zerops', () => {
 			FABRIKA_ZEROPS_PROJECT_ID: 'project-id-1',
 			FABRIKA_PLATFORM_ENVIRONMENT: 'test',
 			FABRIKA_PLATFORM_SCHEME: 'https',
-			FABRIKA_ZEROPS_BUILD_FROM_GIT: 'https://github.com/contember/fabrika-platform',
 		})
 		const transcript = recorded.lines.join('\n')
 		expect(transcript).not.toContain(ACCESS_TOKEN)
 		expect(transcript).not.toContain(PROVISIONING_KEY)
+		expect(recorded.asked.join('\n')).not.toContain('Public repository Zerops builds each service from')
+		const scaffold = recorded.scaffolds[0]
+		if (scaffold === undefined || written === undefined) throw new Error('init did not configure its sidecar')
+		const workflow = await Bun.file(`${scaffold.dir}/.github/workflows/platform.yml`).text()
+		for (const variable of Object.keys(written.vars ?? {})) {
+			expect(workflow).toContain(`vars.${variable}`)
+		}
+		expect(workflow).toContain('--source-dir=.')
+		expect(workflow).not.toContain('FABRIKA_ZEROPS_BUILD_FROM_GIT')
 		await cleanCheckout(recorded)
 	})
 

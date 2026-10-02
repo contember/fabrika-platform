@@ -14,8 +14,8 @@ import type { SchemaReconciler } from '@fabrika/provider-contract'
 import { createZeropsApi, defaultSleep } from '@fabrika/provider-zerops'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../zerops/generated/platform-proxy-manifest'
 import {
-	deployPlatform,
 	deployPlatformService,
+	deployPreparedPlatform,
 	PLATFORM_CONCURRENT_DEPLOY,
 	PLATFORM_DEPLOY_ORDER,
 	PLATFORM_PROXY_SERVICE,
@@ -38,6 +38,8 @@ import {
 	resolvePlatformServices,
 	serviceOf,
 } from './install-provisioning'
+import { prepareInstallationSource, validateInstallationSetups } from './installation-source'
+import type { PreparedPlatformSource } from './platform-source'
 import { generateInstallationSecrets, type InstallationSecrets } from './secrets'
 
 export type { InstallCollaborators, InstallPrompts } from './install-collaborators'
@@ -51,7 +53,7 @@ export { GENERATED_SECRET_KEYS, type InstallationEnvInput, installationServiceEn
  * nobody answers.
  */
 const passOne = async (
-	input: PlatformInstallInput,
+	source: PreparedPlatformSource,
 	proxy: ResolvedService,
 	secrets: InstallationSecrets,
 	collaborators: InstallCollaborators,
@@ -59,11 +61,11 @@ const passOne = async (
 	const { log, prompts } = collaborators
 	log.step('Pass 1 — build the proxy so the installation has public hostnames')
 	log.info('An empty manifest is a legal one: the proxy comes up answering 404 and publishes one hostname per HTTP port.')
-	if (!(await prompts.confirm(`Write 3 variables on \`proxy\` and build it from ${input.buildFromGit}? (about 4 minutes)`, true))) {
+	if (!(await prompts.confirm(`Write 3 variables on \`proxy\` and build commit ${source.commitSha}? (about 4 minutes)`, true))) {
 		throw new Error('declined: no variable was written, and re-running the install is safe')
 	}
 	await writeServiceEnv(proxy, passOneProxyEnv(secrets), collaborators)
-	await deployPlatformService(proxy, { buildFromGit: input.buildFromGit, dryRun: false }, collaborators)
+	await deployPlatformService(proxy, { source, dryRun: false }, collaborators)
 
 	const proxyEnv = await readServiceEnv(proxy.id, collaborators)
 	const subdomains = proxyEnv.get(ZEROPS_SUBDOMAIN_VARIABLE)
@@ -83,6 +85,20 @@ const passOne = async (
  * install leaves the project exactly as it was.
  */
 export const runInstall = async (input: PlatformInstallInput, collaborators: InstallCollaborators): Promise<void> => {
+	const source = await collaborators.prepareSource(input.sourceDir, collaborators.signal)
+	try {
+		validateInstallationSetups(source, PLATFORM_DEPLOY_ORDER)
+		await installPreparedPlatform(input, collaborators, source)
+	} finally {
+		await source.dispose()
+	}
+}
+
+const installPreparedPlatform = async (
+	input: PlatformInstallInput,
+	collaborators: InstallCollaborators,
+	source: PreparedPlatformSource,
+): Promise<void> => {
 	const { log, prompts, signal } = collaborators
 	assertRunning(signal)
 	// Refused HERE, before anything is contacted: `local` is the name every development bypass is gated
@@ -131,7 +147,7 @@ export const runInstall = async (input: PlatformInstallInput, collaborators: Ins
 	}
 	log.ok(`integration token ${token.id} minted, ${token.projects.length} project grant(s)`)
 
-	const hosts = await passOne(input, serviceOf(services, PLATFORM_PROXY_SERVICE), secrets, collaborators)
+	const hosts = await passOne(source, serviceOf(services, PLATFORM_PROXY_SERVICE), secrets, collaborators)
 	log.ok(`iam ${hosts.iam}`)
 	log.ok(`console ${hosts.control}`)
 	log.ok(`operations ${hosts.operations}`)
@@ -143,7 +159,7 @@ export const runInstall = async (input: PlatformInstallInput, collaborators: Ins
 		scheme: input.scheme,
 		hosts,
 		clientId: input.clientId,
-		buildFromGit: input.buildFromGit,
+		buildFromGit: input.proxyBuildFromGit,
 		secrets,
 		zeropsAccessToken: token.token,
 		...(input.apiBaseUrl === undefined ? {} : { apiBaseUrl: input.apiBaseUrl }),
@@ -164,19 +180,23 @@ export const runInstall = async (input: PlatformInstallInput, collaborators: Ins
 	)
 	if (!(await prompts.confirm('Deploy the installation now? (about 15 minutes)', true))) {
 		log.action('OPERATOR ACTION — every variable is placed; the installation is one command from running', [
-			`FABRIKA_ZEROPS_ACCESS_TOKEN=… FABRIKA_IAM_PROVISIONING_KEY=… fabrika platform deploy --provider=zerops --project-id=${project.id} --env=${environment}`,
+			`FABRIKA_ZEROPS_ACCESS_TOKEN=… FABRIKA_IAM_PROVISIONING_KEY=… fabrika platform deploy --provider=zerops --source-dir=. --project-id=${project.id} --env=${environment}`,
 		])
 	} else {
-		await deployPlatform({
-			project: { kind: 'id', projectId: project.id },
-			accessToken: input.accessToken,
-			environment,
-			scheme: input.scheme,
-			buildFromGit: input.buildFromGit,
-			iamAdminKey: secrets.provisioningKey,
-			dryRun: false,
-			...(input.apiBaseUrl === undefined ? {} : { apiBaseUrl: input.apiBaseUrl }),
-		}, collaborators)
+		await deployPreparedPlatform(
+			{
+				project: { kind: 'id', projectId: project.id },
+				accessToken: input.accessToken,
+				environment,
+				scheme: input.scheme,
+				sourceDir: input.sourceDir,
+				iamAdminKey: secrets.provisioningKey,
+				dryRun: false,
+				...(input.apiBaseUrl === undefined ? {} : { apiBaseUrl: input.apiBaseUrl }),
+			},
+			collaborators,
+			source,
+		)
 	}
 
 	log.step('Hand off')
@@ -238,6 +258,8 @@ export const consoleInstallCollaborators = (input: PlatformInstallInput, reconci
 	// First, before anything is built or contacted: a bring-up nobody can confirm does not start.
 	const prompts = installPrompts(input, process.stdin, (line) => consoleInfo(line))
 	return {
+		prepareSource: prepareInstallationSource,
+		uploadFetch: (url, init) => fetch(url, init),
 		api: createZeropsApi({
 			token: input.accessToken,
 			...(input.apiBaseUrl === undefined ? {} : { baseUrl: input.apiBaseUrl }),

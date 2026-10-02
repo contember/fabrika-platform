@@ -135,12 +135,11 @@ and is deliberate — someone reading only one path will guess wrong about the o
   the project, configuring source, creating or pushing the repository, writing
   the Environment, and triggering the run.
   Declining stops the outward steps and prints what to run; a re-run is safe.
-- **The sidecar pin is a published TAG and a branch is refused twice** — by
-  `assertPinnedTag` when init writes `fabrika.ref`, and by the generated workflow
-  at run time, because that file is operator-owned afterwards. What the tag pins is
-  what the pipeline DOES; it does not pin the revision Zerops BUILDS, because a
-  Zerops build source names a repository and not a revision. The generated README
-  says so; do not quietly imply otherwise.
+- **Keep the sidecar pin a published TAG**, checked by `assertPinnedTag` and the generated workflow.
+  Install and deploy require `--source-dir` for the clean checkout containing the executing installation
+  module. Prepare one committed archive before remote writes, share it across both install passes,
+  and build explicitly reserved version IDs. Reject mutable Git-source installation flags; never
+  fall back after upload failure. Namespace proxy source identity is a separate contract (ADR-0045).
 - **The sidecar Environment holds no admission list.** No bootstrap-admin variable
   is written, because the deploy neither reads nor writes one — so there is no
   escape hatch here for an operator to remember to close later.

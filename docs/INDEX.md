@@ -28,6 +28,8 @@ For local application development connected to an installation, see [Local build
 
 ## Active sprints
 
+[ADR-0045](decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md) defines exact-source installation uploads and per-namespace proxy pins.
+
 [ADR-0044](decisions/0044-bind-zerops-managed-configuration-to-application-versions.md) defines the approved new-application configuration binding, collision-safe provisioning and fenced recovery contract for Zerops readiness.
 
 [Zerops production readiness](sprints/sprint-2026-09-23-zerops-production-readiness.md) prepares the next release for a small internal fleet: deployment/configuration identity, immutable installation revisions, descriptor validation, safe egress, automatic source maps and real authentication/recovery witnesses. The sprint is approved and starts with platform probes and contract design; production deployment is separate.

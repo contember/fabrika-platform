@@ -11,6 +11,7 @@ import { describe, expect, test } from 'bun:test'
 import { deployPlatform, PLATFORM_CONCURRENT_DEPLOY, PLATFORM_SEQUENTIAL_DEPLOY } from '../deploy'
 import type { PlatformDeployInput } from '../deploy-options'
 import { recordingDeployLog } from '../log'
+import { fakeSourceCollaborators } from './fake-platform-source'
 import { type FakeZerops, fakeZerops, platformServices, SUBDOMAINS } from './fake-zerops'
 
 const PROJECT = { projectId: 'proj-1', projectName: 'fabrika-test' }
@@ -47,7 +48,7 @@ const input = (overrides: Partial<PlatformDeployInput> = {}): PlatformDeployInpu
 	environment: 'stage',
 	scheme: 'https',
 	iamAdminKey: 'px_admin',
-	buildFromGit: 'https://github.com/contember/fabrika-platform',
+	sourceDir: '.',
 	dryRun: false,
 	...overrides,
 })
@@ -72,6 +73,7 @@ const harness = (proxyEnv: Readonly<Record<string, string>> = {}): Harness => {
 		log,
 		run: (overrides = {}) =>
 			deployPlatform(input(overrides), {
+				...fakeSourceCollaborators,
 				api: zerops.api,
 				reconcileSchema: async (call) => void reconciled.push(call),
 				sleep: async () => {},
@@ -128,6 +130,7 @@ const gatedBuilds = (fixture: Harness, slowPolls = 0): ZeropsApi => {
 
 const runWithGatedBuilds = (fixture: Harness, slowPolls = 0): Promise<void> =>
 	deployPlatform(input(), {
+		...fakeSourceCollaborators,
 		api: gatedBuilds(fixture, slowPolls),
 		reconcileSchema: async (call) => void fixture.reconciled.push(call),
 		sleep: () => yieldToTimer(),
@@ -184,6 +187,7 @@ describe('the order', () => {
 		})
 		let publishedFirst: boolean | undefined
 		await deployPlatform(input(), {
+			...fakeSourceCollaborators,
 			api: zerops.api,
 			reconcileSchema: async () => void (publishedFirst = zerops.calls.includes('subdomain:proxy')),
 			sleep: async () => {},
@@ -272,6 +276,7 @@ describe('fail closed', () => {
 		})
 		await expect(
 			deployPlatform(input(), {
+				...fakeSourceCollaborators,
 				api: zerops.api,
 				reconcileSchema: async () => {},
 				sleep: async () => {},
@@ -310,6 +315,7 @@ describe('idempotence', () => {
 		})
 		await deployPlatform(input(), {
 			api: off.api,
+			...fakeSourceCollaborators,
 			reconcileSchema: async () => {},
 			sleep: async () => {},
 			log: recordingDeployLog(),
@@ -360,6 +366,7 @@ describe('what it writes', () => {
 			input({ hosts: { iam: 'iam.example.com', control: 'console.example.com', operations: 'errors.example.com' } }),
 			{
 				api: zerops.api,
+				...fakeSourceCollaborators,
 				reconcileSchema: async () => {},
 				sleep: async () => {},
 				log: recordingDeployLog(),
@@ -386,7 +393,7 @@ describe('the write→deploy race', () => {
 	test('but only a bounded number of times, so a genuine failure still fails', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: liveManifest })
 		fixture.zerops.blockTrigger('iam', 99)
-		await expect(fixture.run()).rejects.toThrow('trigger-pipeline failed')
+		await expect(fixture.run()).rejects.toThrow('variable synchronisation still running')
 		// Operations and source share iam's stage and are triggered whatever iam does — what a failure
 		// there must still stop is everything the sequence DOES order after it.
 		expect(fixture.zerops.calls).not.toContain('deploy:proxy')

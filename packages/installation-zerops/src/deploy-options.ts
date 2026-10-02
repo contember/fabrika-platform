@@ -12,6 +12,8 @@
 // The command is unattended by construction: nothing here prompts, and a missing required value is an
 // error naming both the flag and the variable that would supply it.
 
+import { readInstallationSourceDir } from './source-options'
+
 /** How the project this installation lives in is named. */
 export type ZeropsProjectSelector =
 	| { readonly kind: 'id'; readonly projectId: string }
@@ -30,8 +32,7 @@ export interface PlatformDeployInput {
 	readonly hosts?: { readonly iam: string; readonly control: string; readonly operations: string }
 	/** The scheme a browser speaks to this installation. `https` unless a local composition says otherwise. */
 	readonly scheme: 'http' | 'https'
-	/** Public Git URL to build every service from. Omitted uses each service's own Git integration. */
-	readonly buildFromGit?: string
+	readonly sourceDir: string
 	/** IAM-issued `px_` admin key, used only to reconcile the console's schema. Environment only. */
 	readonly iamAdminKey: string
 	/** Read everything, write nothing, trigger nothing. */
@@ -47,7 +48,7 @@ const FLAGS = [
 	'--console-host',
 	'--operations-host',
 	'--scheme',
-	'--from-git',
+	'--source-dir',
 ] as const
 
 const readFlag = (argv: readonly string[], name: string): string | undefined => {
@@ -158,10 +159,10 @@ export const parsePlatformDeployArgs = (
 	argv: readonly string[],
 	env: Record<string, string | undefined>,
 ): PlatformDeployInput => {
+	const sourceDir = readInstallationSourceDir(argv, env)
 	assertKnownArguments(argv)
 	const dryRun = argv.includes('--dry-run')
 	const hosts = readHosts(argv, env)
-	const buildFromGit = setting(argv, env, '--from-git', 'FABRIKA_ZEROPS_BUILD_FROM_GIT')
 	const apiBaseUrl = readEnv(env, 'FABRIKA_ZEROPS_API_URL')
 	return {
 		project: readProject(argv, env),
@@ -175,7 +176,7 @@ export const parsePlatformDeployArgs = (
 		scheme: readScheme(argv, env),
 		dryRun,
 		...(hosts === undefined ? {} : { hosts }),
-		...(buildFromGit === undefined ? {} : { buildFromGit }),
+		sourceDir,
 		...(apiBaseUrl === undefined ? {} : { apiBaseUrl }),
 	}
 }

@@ -9,7 +9,7 @@ name: platform
 # ONE step, deliberately. On Zerops `fabrika platform deploy` owns the whole ordered sequence: resolve
 # the project and its services, write every service's environment (including the composed proxy
 # manifest), deploy iam + operations + source together and then proxy -> control waiting for each,
-# reconcile the console's app schema, and ensure the public entry point. That sequence carries a security
+# ensure the public entry point, and reconcile the console's app schema. That sequence carries a security
 # property — since ADR-0022 the application enforces nothing, so the enforcement point is deployed BEFORE
 # the service whose gates just widened — and it therefore lives in code with a test rather than in this
 # file, which an operator owns and may edit (ADR-0027). The Cloudflare sidecar keeps three steps here;
@@ -57,11 +57,12 @@ jobs:
     steps:
       - name: Checkout this repository (the pinned ref and this workflow)
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Resolve the pinned fabrika tag
         id: ref
-        # A published TAG, never a branch. A namespace proxy and an installation both build from tags, so
-        # a moving ref would make "which version is this installation running" unanswerable (ADR-0025).
+        # A published TAG, never a branch, selects the installation checkout.
         run: |
           ref="$(tr -d '[:space:]' < fabrika.ref)"
           case "$ref" in
@@ -74,11 +75,17 @@ jobs:
           echo "fabrika=$ref" >> "$GITHUB_OUTPUT"
 
       - name: Checkout contember/fabrika-platform@${{ steps.ref.outputs.fabrika }}
-        uses: actions/checkout@v5
-        with:
-          repository: contember/fabrika-platform
-          ref: ${{ steps.ref.outputs.fabrika }}
-          path: fabrika-platform
+        env:
+          PINNED_REF: ${{ steps.ref.outputs.fabrika }}
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          git clone --no-checkout https://github.com/contember/fabrika-platform.git fabrika-platform
+          git -C fabrika-platform checkout --detach "refs/tags/$PINNED_REF"
+
+      - name: Record the resolved source commit
+        id: source
+        working-directory: fabrika-platform
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -120,12 +127,9 @@ jobs:
           FABRIKA_PLATFORM_IAM_HOST: ${{ vars.FABRIKA_PLATFORM_IAM_HOST }}
           FABRIKA_PLATFORM_CONSOLE_HOST: ${{ vars.FABRIKA_PLATFORM_CONSOLE_HOST }}
           FABRIKA_PLATFORM_OPERATIONS_HOST: ${{ vars.FABRIKA_PLATFORM_OPERATIONS_HOST }}
-          # Where Zerops builds the SERVICE code from. Read the README before changing it: this URL
-          # selects a repository, NOT a revision.
-          FABRIKA_ZEROPS_BUILD_FROM_GIT: ${{ vars.FABRIKA_ZEROPS_BUILD_FROM_GIT }}
           # Only for an installation outside the default region.
           FABRIKA_ZEROPS_API_URL: ${{ vars.FABRIKA_ZEROPS_API_URL }}
-        run: fabrika platform deploy --provider=zerops ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: fabrika platform deploy --provider=zerops --source-dir=. ${{ inputs.dry_run && '--dry-run' || '' }}
 
       - name: Summary
         if: always()
@@ -134,6 +138,7 @@ jobs:
             echo "### platform deploy → {{INSTALLATION}} (zerops)"
             echo ""
             echo "- fabrika tag: \`${{ steps.ref.outputs.fabrika || '(unresolved)' }}\`"
+            echo "- source commit: \`${{ steps.source.outputs.commit || '(unresolved)' }}\`"
             echo "- mode: \`${{ inputs.dry_run && 'dry-run' || 'deploy' }}\`"
             echo "- platform deploy: \`${{ steps.platform.outcome || 'not run' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1,6 +1,8 @@
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import type { Sleeper, ZeropsApi } from '@fabrika/provider-zerops'
+import type { PlatformSourcePreparer } from './installation-source'
 import type { InitLog } from './log'
+import type { PlatformUploadFetch } from './platform-upload'
 
 /** The one question this command asks. Injected so the flow can be exercised without a TTY. */
 export interface InstallPrompts {
@@ -9,6 +11,8 @@ export interface InstallPrompts {
 
 /** Everything `runInstall` reaches the outside world through. */
 export interface InstallCollaborators {
+	readonly prepareSource: PlatformSourcePreparer
+	readonly uploadFetch: PlatformUploadFetch
 	readonly api: ZeropsApi
 	readonly reconcileSchema: SchemaReconciler
 	readonly sleep: Sleeper

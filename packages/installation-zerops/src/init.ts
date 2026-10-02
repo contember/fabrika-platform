@@ -54,7 +54,6 @@ import { randomBytes } from 'node:crypto'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../zerops/generated/platform-proxy-manifest'
 import { sourceServiceSpec } from '../zerops/topology'
 import { derivePlatformHosts, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
-import { FABRIKA_REPOSITORY_URL } from './install-options'
 import type { InitLog } from './log'
 import { MACHINE_KEY_NEXT_STEP_TITLE, machineKeyNextStepLines } from './machine-key'
 import { assertPinnedTag, defaultCheckoutDir, defaultSidecarRepo, materializeSidecarScaffold, readPinnedTag, SIDECAR_FILES } from './sidecar'
@@ -156,7 +155,6 @@ interface Collected {
 	readonly projectId: string
 	readonly environmentName: string
 	readonly placement: Placement
-	readonly buildFromGit?: string
 	readonly apiBaseUrl?: string
 	readonly accessToken: string
 	readonly provisioningKey: string
@@ -222,10 +220,6 @@ const collect = async (args: InitArguments, { log, prompts }: InitCollaborators)
 		}
 		: {}
 
-	const buildFromGit = (await prompts.text(
-		"Public repository Zerops builds each service from (blank = the service's own repository integration)",
-		FABRIKA_REPOSITORY_URL,
-	)).trim()
 	const apiBaseUrl = (await prompts.text('Zerops region API base (blank = the default region)', '')).trim()
 
 	log.step('Credentials')
@@ -251,7 +245,6 @@ const collect = async (args: InitArguments, { log, prompts }: InitCollaborators)
 		placement,
 		accessToken: accessToken.trim(),
 		provisioningKey: provisioningKey.trim(),
-		...(buildFromGit === '' ? {} : { buildFromGit }),
 		...(apiBaseUrl === '' ? {} : { apiBaseUrl }),
 	}
 }
@@ -462,7 +455,6 @@ const environmentConfig = (installation: string, collected: Collected): Environm
 			FABRIKA_PLATFORM_CONSOLE_HOST: collected.placement.hosts.control,
 			FABRIKA_PLATFORM_OPERATIONS_HOST: collected.placement.hosts.operations,
 		}),
-		...(collected.buildFromGit === undefined ? {} : { FABRIKA_ZEROPS_BUILD_FROM_GIT: collected.buildFromGit }),
 		...(collected.apiBaseUrl === undefined ? {} : { FABRIKA_ZEROPS_API_URL: collected.apiBaseUrl }),
 	},
 })

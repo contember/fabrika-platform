@@ -12,12 +12,14 @@ import { describe, expect, test } from 'bun:test'
 import { generatedArtifacts } from '../../zerops/artifacts'
 import { PLATFORM_DEPLOY_ORDER, type PlatformDeployService } from '../deploy'
 import { GENERATED_SECRET_KEYS, installationServiceEnv, type InstallCollaborators, installPrompts, runInstall } from '../install'
-import { parsePlatformInstallArgs, type PlatformInstallInput, UNATTENDED_FLAG } from '../install-options'
+import { parsePlatformInstallArgs as parseArgs, type PlatformInstallInput, UNATTENDED_FLAG } from '../install-options'
 import { recordingInitLog } from '../log'
 import { generateInstallationSecrets } from '../secrets'
+import { fakeSourceCollaborators } from './fake-platform-source'
 import { type FakeServiceSpec, type FakeZerops, fakeZerops, importedLightServices } from './fake-zerops'
 
 const PROJECT = { projectId: 'proj-1', projectName: 'fabrika-fresh' }
+const parsePlatformInstallArgs: typeof parseArgs = (argv, env) => parseArgs(['--source-dir=.', ...argv], env)
 const CLIENT_ID = 'client-1'
 
 /** The hosts the proxy's six generated subdomains resolve to, keyed by the template's listener ports. */
@@ -31,7 +33,8 @@ const input = (overrides: Partial<PlatformInstallInput> = {}): PlatformInstallIn
 	accessToken: 'zerops-personal-access-token-that-must-never-be-printed',
 	environment: 'stage',
 	scheme: 'https',
-	buildFromGit: 'https://github.com/contember/fabrika-platform',
+	sourceDir: '.',
+	proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 	tier: 'light',
 	unattended: false,
 	...overrides,
@@ -61,6 +64,7 @@ const harness = (options: {
 	const log = recordingInitLog()
 	const asked: string[] = []
 	const collaborators: InstallCollaborators = {
+		...fakeSourceCollaborators,
 		api: zerops.api,
 		reconcileSchema: async (call) => void reconciled.push(call),
 		sleep: async () => {},
@@ -189,12 +193,13 @@ describe('pass 1', () => {
 		const api = fixture.zerops.api
 		const traced = {
 			...api,
-			triggerPipeline: async (call: Parameters<typeof api.triggerPipeline>[0]) => {
+			buildAndDeployAppVersion: async (call: Parameters<typeof api.buildAndDeployAppVersion>[0]) => {
 				seen.push(fixture.zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON) ?? '')
-				return api.triggerPipeline(call)
+				return api.buildAndDeployAppVersion(call)
 			},
 		}
 		await runInstall(input(), {
+			...fakeSourceCollaborators,
 			api: traced,
 			reconcileSchema: async () => {},
 			sleep: async () => {},
@@ -218,8 +223,8 @@ describe('pass 1', () => {
 		})
 		const noPorts = {
 			...zerops.api,
-			triggerPipeline: async (call: Parameters<typeof zerops.api.triggerPipeline>[0]) => {
-				const process = await zerops.api.triggerPipeline(call)
+			buildAndDeployAppVersion: async (call: Parameters<typeof zerops.api.buildAndDeployAppVersion>[0]) => {
+				const process = await zerops.api.buildAndDeployAppVersion(call)
 				zerops.env('proxy').set('zeropsSubdomain', 'https://proxy-292c.prg1.zerops.app')
 				return process
 			},
@@ -227,6 +232,7 @@ describe('pass 1', () => {
 
 		await expect(
 			runInstall(input(), {
+				...fakeSourceCollaborators,
 				api: noPorts,
 				reconcileSchema: async () => {},
 				sleep: async () => {},
@@ -507,6 +513,7 @@ describe('what it refuses', () => {
 
 		await runInstall(input(), {
 			api: zerops.api,
+			...fakeSourceCollaborators,
 			reconcileSchema: async () => {},
 			sleep: async () => {},
 			log,
@@ -592,7 +599,7 @@ describe('every outward step is confirmed', () => {
 		expect(fixture.asked[0]).toContain('Read Zerops project proj-1')
 		expect(fixture.asked[1]).toContain('Import 7 services')
 		expect(fixture.asked[2]).toContain('Mint an integration token')
-		expect(fixture.asked[3]).toContain('build it from https://github.com/contember/fabrika-platform')
+		expect(fixture.asked[3]).toContain(`build commit ${'a'.repeat(40)}`)
 		expect(fixture.asked[4]).toContain('variables across 5 services')
 		expect(fixture.asked[5]).toContain('Deploy the installation now')
 	})
@@ -621,7 +628,7 @@ describe('every outward step is confirmed', () => {
 		await fixture.run()
 
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))).toEqual(['deploy:proxy'])
-		expect(fixture.log.lines.join('\n')).toContain('fabrika platform deploy --provider=zerops --project-id=proj-1 --env=stage')
+		expect(fixture.log.lines.join('\n')).toContain('fabrika platform deploy --provider=zerops --source-dir=. --project-id=proj-1 --env=stage')
 		// The hand-off still happens: the key exists whether or not the deploy ran.
 		expect(fixture.log.lines.some((line) => line.startsWith('action: CAPTURE THIS NOW'))).toBe(true)
 	})
@@ -669,7 +676,8 @@ describe('the argument surface', () => {
 			accessToken: 'token',
 			environment: 'stage',
 			scheme: 'https',
-			buildFromGit: 'https://github.com/contember/fabrika-platform',
+			sourceDir: '.',
+			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 			tier: 'light',
 			unattended: false,
 		})

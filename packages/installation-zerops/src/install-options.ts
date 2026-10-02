@@ -8,6 +8,8 @@
 // operator's disk — but nothing here prompts: a missing required value is an error naming both the flag
 // and the variable that would supply it, so a mistyped install fails before it contacts anything.
 
+import { readInstallationSourceDir } from './source-options'
+
 /** The only tier a bootstrap can install. See `assertInstallableTier`. */
 export type InstallablePlatformTier = 'light'
 
@@ -38,17 +40,18 @@ export interface PlatformInstallInput {
 	readonly environment: string
 	/** The scheme a browser speaks to this installation. */
 	readonly scheme: 'http' | 'https'
-	/** Public Git URL every service builds from. Effectively mandatory here — see the usage text. */
-	readonly buildFromGit: string
+	readonly sourceDir: string
+	/** Legacy namespace proxy source, independent of installation source transport. */
+	readonly proxyBuildFromGit: string
 	readonly tier: InstallablePlatformTier
 	/** `--yes`: answer every confirmation yes, for a bring-up with nobody at the keyboard. */
 	readonly unattended: boolean
 }
 
-/** The public repository every installation is built from, and the default for `--from-git`. */
+/** The legacy namespace proxy repository; independent of the installation's exact source. */
 export const FABRIKA_REPOSITORY_URL = 'https://github.com/contember/fabrika-platform'
 
-const FLAGS = ['--project-id', '--project-name', '--client-id', '--env', '--scheme', '--from-git', '--tier'] as const
+const FLAGS = ['--project-id', '--project-name', '--client-id', '--env', '--scheme', '--source-dir', '--tier'] as const
 
 /**
  * The one way this command runs with nobody watching it.
@@ -178,6 +181,7 @@ export const parsePlatformInstallArgs = (
 	argv: readonly string[],
 	env: Record<string, string | undefined>,
 ): PlatformInstallInput => {
+	const sourceDir = readInstallationSourceDir(argv, env)
 	assertKnownArguments(argv)
 	const apiBaseUrl = readEnv(env, 'FABRIKA_ZEROPS_API_URL')
 	return {
@@ -188,7 +192,8 @@ export const parsePlatformInstallArgs = (
 		accessToken: required(readEnv(env, 'FABRIKA_ZEROPS_ACCESS_TOKEN'), '(no flag)', 'FABRIKA_ZEROPS_ACCESS_TOKEN'),
 		environment: readEnvironment(argv, env),
 		scheme: readScheme(argv, env),
-		buildFromGit: setting(argv, env, '--from-git', 'FABRIKA_ZEROPS_BUILD_FROM_GIT') ?? FABRIKA_REPOSITORY_URL,
+		sourceDir,
+		proxyBuildFromGit: readEnv(env, 'FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT') ?? FABRIKA_REPOSITORY_URL,
 		tier: assertInstallableTier(setting(argv, env, '--tier', 'FABRIKA_PLATFORM_TIER')),
 		unattended: argv.includes(UNATTENDED_FLAG),
 		...(apiBaseUrl === undefined ? {} : { apiBaseUrl }),

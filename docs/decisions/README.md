@@ -1,5 +1,7 @@
 # decisions (ADR)
 
+[ADR-0045](0045-upload-immutable-platform-and-namespace-proxy-sources.md) requires committed checkout uploads for installation builds and persisted immutable source identity for namespace proxies.
+
 [ADR-0044](0044-bind-zerops-managed-configuration-to-application-versions.md) binds new application versions to immutable managed service values and defines fenced recovery and collision-safe provisioning.
 
 [ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md) validates a strict descriptor subset and renders its checked meaning while preserving original source identity.

@@ -12,6 +12,7 @@ import { parsePlatformDeployArgs } from './deploy-options'
 import { consoleInitCollaborators, parseInitArgs, runInit } from './init'
 import { consoleInstallCollaborators, runInstall } from './install'
 import { parsePlatformInstallArgs, UNATTENDED_FLAG } from './install-options'
+import { prepareInstallationSource } from './installation-source'
 import { consoleDeployLog } from './log'
 import { consoleUpgradeCollaborators, FABRIKA_REPOSITORY, runUpgrade, SIDECAR_BRANCH } from './upgrade'
 import { parsePlatformUpgradeArgs, UPGRADE_DRY_RUN_FLAG } from './upgrade-options'
@@ -74,13 +75,15 @@ Options (a flag beats the environment variable beside it):
   --client-id=<id>                  FABRIKA_ZEROPS_CLIENT_ID        the client the token is minted on
   --env=<name>                      FABRIKA_PLATFORM_ENVIRONMENT    written to every service as ENVIRONMENT
   --scheme=<http|https>             FABRIKA_PLATFORM_SCHEME         default https
-  --from-git=<url>                  FABRIKA_ZEROPS_BUILD_FROM_GIT   public repository every service builds from
+  --source-dir=<checkout>           required                       clean full checkout running this CLI
   --tier=light                      FABRIKA_PLATFORM_TIER           default light, and the only value
   ${UNATTENDED_FLAG}                                                             answer every confirmation yes —
                                                                     required when stdin is not a terminal
 
 	FABRIKA_ZEROPS_ACCESS_TOKEN       required   Zerops access token, environment only and no flag
 	FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
+	FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT optional legacy namespace proxy source, default public repository;
+	                                             independent of installation source and not production-ready
 
 ── platform init ─────────────────────────────────────────────────────────────────────────────────
 
@@ -124,8 +127,7 @@ Each is read from a hidden prompt or from the environment variable of the same n
 over \`gh\` stdin, and never printed and never written to disk.
 
 The generated pipeline pins a published TAG of contember/fabrika-platform and refuses a branch, at
-init and again in the workflow. That tag decides what the pipeline DOES; it does not decide which
-revision Zerops BUILDS, because a Zerops build source names a repository and not a revision.
+init and again in the workflow. It uploads that checkout's exact committed archive to every installation service.
 
 ── platform deploy ───────────────────────────────────────────────────────────────────────────────
 
@@ -161,7 +163,7 @@ Options (a flag beats the environment variable beside it):
   --console-host=<host>             FABRIKA_PLATFORM_CONSOLE_HOST
   --operations-host=<host>          FABRIKA_PLATFORM_OPERATIONS_HOST
   --scheme=<http|https>             FABRIKA_PLATFORM_SCHEME         default https
-  --from-git=<url>                  FABRIKA_ZEROPS_BUILD_FROM_GIT   public repository to build from
+  --source-dir=<checkout>           required                       clean full checkout running this CLI
   --dry-run                                                         read everything, change nothing
 
 Naming NO host derives all three from the proxy service's Zerops subdomains and makes this a
@@ -179,6 +181,12 @@ process listing:
   FABRIKA_ZEROPS_API_URL            optional   region API base, when not the default
 
 This command writes NO credential. Every secret an installation holds is placed at bring-up.
+
+Install and deploy require --source-dir explicitly. Run the CLI from that same clean full checkout;
+a packaged CLI cannot supply another revision's manifest or schema. --from-git and
+FABRIKA_ZEROPS_BUILD_FROM_GIT are refused; remove them. Every build uses one exact source archive.
+The separately configured FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT namespace source remains legacy and is
+not production-ready; installation source transport does not pin namespace builds.
 
 ── platform admin ────────────────────────────────────────────────────────────────────────────────
 
@@ -273,6 +281,8 @@ const consoleSchemaReconciler: SchemaReconciler = (call) =>
 const runDeploy = async (argv: readonly string[]): Promise<void> => {
 	const input = parsePlatformDeployArgs(argv, process.env)
 	await deployPlatform(input, {
+		prepareSource: prepareInstallationSource,
+		uploadFetch: (url, init) => fetch(url, init),
 		api: createZeropsApi({
 			token: input.accessToken,
 			...(input.apiBaseUrl === undefined ? {} : { baseUrl: input.apiBaseUrl }),

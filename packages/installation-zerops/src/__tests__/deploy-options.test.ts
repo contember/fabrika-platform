@@ -4,7 +4,9 @@
 // unknown flag has to be an error rather than something the parser ignores.
 
 import { describe, expect, test } from 'bun:test'
-import { parsePlatformDeployArgs } from '../deploy-options'
+import { parsePlatformDeployArgs as parseArgs } from '../deploy-options'
+
+const parsePlatformDeployArgs: typeof parseArgs = (argv, env) => parseArgs(['--source-dir=.', ...argv], env)
 
 const ENV = {
 	FABRIKA_ZEROPS_ACCESS_TOKEN: 'zerops-token',

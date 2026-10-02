@@ -161,9 +161,15 @@ export const fakeZerops = (options: {
 	}
 
 	const api: ZeropsApi = {
-		createAppVersion: NEVER('createAppVersion'),
-		buildAndDeployAppVersion: NEVER('buildAndDeployAppVersion'),
-		deleteAppVersion: NEVER('deleteAppVersion'),
+		createAppVersion: async ({ serviceId }) => {
+			const name = nameOf(serviceId)
+			const next = (sequence.get(name) ?? 0) + 1
+			sequence.set(name, next)
+			return { id: `${name}-v${next}`, uploadUrl: 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=test' }
+		},
+		deleteAppVersion: async ({ appVersionId }) => {
+			effect(`delete:${appVersionId}`)
+		},
 		cancelBuild: NEVER('cancelBuild'),
 		deleteServiceEnv: NEVER('deleteServiceEnv'),
 		getProjectEnv: NEVER('getProjectEnv'),
@@ -313,8 +319,9 @@ export const fakeZerops = (options: {
 			envOf(name).set(key, value)
 		},
 
-		triggerPipeline: async ({ serviceId, zeropsSetup }) => {
-			const name = nameOf(serviceId)
+		triggerPipeline: NEVER('triggerPipeline'),
+		buildAndDeployAppVersion: async ({ appVersionId, zeropsYamlSetup: zeropsSetup }) => {
+			const name = appVersionId.slice(0, appVersionId.lastIndexOf('-v'))
 			const blocked = blockedTriggers.get(name) ?? 0
 			if (blocked > 0) {
 				blockedTriggers.set(name, blocked - 1)
@@ -325,8 +332,7 @@ export const fakeZerops = (options: {
 				throw new Error(`zerops: setup ${zeropsSetup ?? '(none)'} does not match service ${name}`)
 			}
 			effect(`deploy:${name}`)
-			const next = (sequence.get(name) ?? 0) + 1
-			sequence.set(name, next)
+			const next = sequence.get(name) ?? 0
 			// Live-observed (WU1): the six per-port lines appear with the version that publishes the ports,
 			// in the same poll that first reads ACTIVE. Before that the variable names one host with no port
 			// segment, which `derivePlatformHosts` correctly refuses.

@@ -23,13 +23,13 @@ describe('Zerops installation capability', () => {
 	test('install documents the whole from-scratch surface, credentials included', async () => {
 		// The bring-up is the one command an operator runs before anything exists, so its usage is the only
 		// place the sequence and its two-pass shape are written down for them.
-		for (const flag of ['--project-id', '--client-id', '--env', '--scheme', '--from-git', '--tier']) {
+		for (const flag of ['--project-id', '--client-id', '--env', '--scheme', '--source-dir', '--tier']) {
 			expect(installationCli.usage).toContain(flag)
 		}
 		expect(installationCli.usage).toContain('envIsolation: service')
 		expect(installationCli.usage).toContain('PASSWORD ONLY')
 		// Credentials are environment-only here too, so an unknown flag is an error rather than a value.
-		await expect(installationCli.run('install', ['--token=nope'])).rejects.toThrow('unexpected argument')
+		await expect(installationCli.run('install', ['--source-dir=.', '--token=nope'])).rejects.toThrow('unexpected argument')
 	})
 
 	test('init names one installation and refuses anything that could carry a credential', async () => {
@@ -49,7 +49,7 @@ describe('Zerops installation capability', () => {
 				'--iam-host',
 				'--console-host',
 				'--operations-host',
-				'--from-git',
+				'--source-dir',
 				'--dry-run',
 			]
 		) {
@@ -62,7 +62,16 @@ describe('Zerops installation capability', () => {
 	})
 
 	test('deploy refuses an unknown argument rather than ignoring it', async () => {
-		await expect(installationCli.run('deploy', ['--nope=1'])).rejects.toThrow('unexpected argument')
+		await expect(installationCli.run('deploy', ['--source-dir=.', '--nope=1'])).rejects.toThrow('unexpected argument')
+	})
+
+	test('install and deploy reject mutable Git sources at the CLI entrypoint', async () => {
+		await expect(installationCli.run('install', ['--source-dir=.', '--from-git=https://example.com/repo'])).rejects.toThrow(
+			'Mutable installation Git sources are refused',
+		)
+		await expect(installationCli.run('deploy', ['--source-dir=.', '--from-git=https://example.com/repo'])).rejects.toThrow(
+			'Mutable installation Git sources are refused',
+		)
 	})
 
 	test('upgrade documents the roll and refuses anything that is not a published tag', async () => {

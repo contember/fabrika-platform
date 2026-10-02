@@ -11,11 +11,13 @@ import { type ZeropsApi, ZeropsApiError, type ZeropsProjectStatus } from '@fabri
 import { describe, expect, test } from 'bun:test'
 import { compileTopology, platformTopology } from '../../zerops/topology'
 import { type InstallCollaborators, runInstall } from '../install'
-import { CREATE_PROJECT_FLAG, parsePlatformInstallArgs, type PlatformInstallInput } from '../install-options'
+import { CREATE_PROJECT_FLAG, parsePlatformInstallArgs as parseArgs, type PlatformInstallInput } from '../install-options'
 import { recordingInitLog } from '../log'
+import { fakeSourceCollaborators } from './fake-platform-source'
 import { type FakeZerops, fakeZerops, importedLightServices } from './fake-zerops'
 
 const PROJECT = { projectId: 'proj-created', projectName: 'fabrika-stage' }
+const parsePlatformInstallArgs: typeof parseArgs = (argv, env) => parseArgs(['--source-dir=.', ...argv], env)
 const CLIENT_ID = 'client-1'
 const TOKEN_ENV = { FABRIKA_ZEROPS_ACCESS_TOKEN: 'token' }
 
@@ -28,7 +30,8 @@ const input = (overrides: Partial<PlatformInstallInput> = {}): PlatformInstallIn
 	accessToken: 'zerops-personal-access-token-that-must-never-be-printed',
 	environment: 'stage',
 	scheme: 'https',
-	buildFromGit: 'https://github.com/contember/fabrika-platform',
+	sourceDir: '.',
+	proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
 	tier: 'light',
 	unattended: false,
 	...overrides,
@@ -77,6 +80,7 @@ const harness = (
 	const asked: string[] = []
 	const sleeps: number[] = []
 	const collaborators: InstallCollaborators = {
+		...fakeSourceCollaborators,
 		api: options.wrap === undefined ? zerops.api : options.wrap(zerops.api),
 		reconcileSchema: async () => {},
 		sleep: async (ms) => void sleeps.push(ms),
@@ -174,6 +178,7 @@ describe('what it prints', () => {
 		}
 
 		await runInstall(input(), {
+			...fakeSourceCollaborators,
 			api,
 			reconcileSchema: async () => {},
 			sleep: async () => {},

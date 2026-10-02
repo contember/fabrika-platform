@@ -15,7 +15,7 @@ async function git(...args: string[]): Promise<string> {
 	return new TextDecoder().decode(await gitBytes(...args)).trim()
 }
 
-async function gitBytes(...args: string[]): Promise<Uint8Array> {
+async function gitBytes(...args: string[]): Promise<Uint8Array<ArrayBuffer>> {
 	const child = Bun.spawn(['git', ...args], {
 		cwd: root,
 		env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },

@@ -9,7 +9,7 @@ operators install from.
 ## This pipeline UPDATES an installation. It does not create one.
 
 Running it against a project that has no `iam`, `operations`, `source`, `proxy` and `control` service fails and
-changes nothing. The first bring-up is `fabrika platform install --provider=zerops`, run once from the
+changes nothing. The first bring-up is `fabrika platform install --provider=zerops --source-dir=.`, run once from the
 operator's machine: it imports the Zerops topology without code, generates and writes every secret each
 service holds, and deploys, so the proxy has HTTP ports and therefore a public address.
 `fabrika platform admin --provider=zerops` then admits the first administrator. The whole procedure is
@@ -25,8 +25,8 @@ The whole ordered sequence lives inside `fabrika platform deploy --provider=zero
 resolve the project and its services
   → write every service's environment (the composed proxy manifest, the environment name, the origins)
   → deploy iam + operations + source together, then proxy → control, waiting for each
-  → reconcile the console's app schema with IAM
   → ensure the public entry point
+  → reconcile the console's app schema with IAM
 ```
 
 That order is a security property, not just a dependency: a fabrika application enforces nothing by
@@ -39,7 +39,7 @@ enables no subdomain that is already published, and reconciles the same schema. 
 apply the proxy manifest never reaches the deploy, so new code never ends up behind an older, more
 permissive manifest.
 
-## What `fabrika.ref` pins, and what it does not
+## What `fabrika.ref` pins
 
 [`fabrika.ref`](./fabrika.ref) pins a **published tag** of `contember/fabrika-platform` — never a
 branch. The workflow refuses anything that does not look like a tag.
@@ -48,11 +48,14 @@ That tag decides everything this pipeline DOES: the deploy order, the proxy mani
 gate rules that enforce the whole installation), the console schema it reconciles, and every variable
 it writes.
 
-It does **not** decide which revision Zerops BUILDS. A Zerops build takes its source from the service's
-own repository integration, or from the `FABRIKA_ZEROPS_BUILD_FROM_GIT` URL — and that URL selects a
-repository, not a revision. Until each service is connected to a repository with a tag trigger, treat
-the pinned tag and the built code as agreeing only when the tag is the tip of the branch Zerops
-builds. This is the one place where the pin does not reach.
+The workflow runs with `--source-dir=.` from the selected checkout and uploads one exact committed
+archive for every installation build. The summary reports the resolved commit. Install and deploy
+require a clean full checkout containing the executing CLI, generated manifest and console schema.
+They reject `--from-git` and `FABRIKA_ZEROPS_BUILD_FROM_GIT`; remove those settings before upgrading.
+
+Namespace proxy provisioning is a separate legacy path. Its existing
+`FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT` setting is preserved independently and remains **not
+production-ready**. Exact installation archives do not establish namespace source pinning.
 
 ## The `{{INSTALLATION}}` GitHub Environment
 
@@ -79,16 +82,15 @@ installation already holds.
 
 **Variables** — the rest of the configuration, all non-secret.
 
-| Variable                           | Required | What it is                                                                                               |
-| ---------------------------------- | -------- | -------------------------------------------------------------------------------------------------------- |
-| `FABRIKA_ZEROPS_PROJECT_ID`        | yes      | The Zerops project holding the five platform runtime services.                                           |
-| `FABRIKA_PLATFORM_ENVIRONMENT`     | yes      | The name this installation calls itself; written to every service as `ENVIRONMENT`. Never `local`.       |
-| `FABRIKA_PLATFORM_SCHEME`          | yes      | `https` for anything reachable from a browser.                                                           |
-| `FABRIKA_PLATFORM_IAM_HOST`        | no       | Where IAM answers publicly.                                                                              |
-| `FABRIKA_PLATFORM_CONSOLE_HOST`    | no       | Where the console answers publicly.                                                                      |
-| `FABRIKA_PLATFORM_OPERATIONS_HOST` | no       | Where Operations ingest answers publicly.                                                                |
-| `FABRIKA_ZEROPS_BUILD_FROM_GIT`    | no       | Public repository Zerops builds each service from. Empty uses each service's own repository integration. |
-| `FABRIKA_ZEROPS_API_URL`           | no       | Region API base, when this installation is not on the default one.                                       |
+| Variable                           | Required | What it is                                                                                         |
+| ---------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| `FABRIKA_ZEROPS_PROJECT_ID`        | yes      | The Zerops project holding the five platform runtime services.                                     |
+| `FABRIKA_PLATFORM_ENVIRONMENT`     | yes      | The name this installation calls itself; written to every service as `ENVIRONMENT`. Never `local`. |
+| `FABRIKA_PLATFORM_SCHEME`          | yes      | `https` for anything reachable from a browser.                                                     |
+| `FABRIKA_PLATFORM_IAM_HOST`        | no       | Where IAM answers publicly.                                                                        |
+| `FABRIKA_PLATFORM_CONSOLE_HOST`    | no       | Where the console answers publicly.                                                                |
+| `FABRIKA_PLATFORM_OPERATIONS_HOST` | no       | Where Operations ingest answers publicly.                                                          |
+| `FABRIKA_ZEROPS_API_URL`           | no       | Region API base, when this installation is not on the default one.                                 |
 
 The three host variables go together: **all three, or none.** Naming none derives them from the
 proxy's generated Zerops subdomains, and the deploy publishes that subdomain. Naming all three makes

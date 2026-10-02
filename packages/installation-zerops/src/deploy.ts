@@ -37,6 +37,7 @@
 import { readEnvironmentName } from '@fabrika/auth-core'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import {
+	prepareZeropsDescriptor,
 	type Sleeper,
 	ZEROPS_ACTIVE,
 	ZEROPS_SERVICE_NOT_HTTP,
@@ -50,8 +51,11 @@ import { PLATFORM_CONSOLE_APP_SCHEMA } from '../zerops/generated/platform-consol
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../zerops/generated/platform-proxy-manifest'
 import type { PlatformDeployInput } from './deploy-options'
 import { derivePlatformHosts, platformOrigin, type PlatformPlacement, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
+import { type PlatformSourcePreparer, validateInstallationSetups } from './installation-source'
 import type { DeployLog } from './log'
 import { mergePlatformProxyManifest, readLiveProxyManifest } from './manifest'
+import type { PreparedPlatformSource } from './platform-source'
+import { type PlatformUploadFetch, uploadPlatformArchive } from './platform-upload'
 import { platformProxyAppFor, resolvePlatformProxyManifest } from './proxy-manifest'
 
 /**
@@ -97,8 +101,6 @@ export const PLATFORM_PROXY_SERVICE = 'proxy'
 const POLL_INTERVAL_MS = 5_000
 /** Zerops caps a build pipeline at one hour; poll past that so the timeout is ours, not a coincidence. */
 const POLL_ATTEMPTS = (70 * 60_000) / POLL_INTERVAL_MS
-/** How long to wait for a triggered version to appear when the trigger response did not name one. */
-const VERSION_APPEARS_ATTEMPTS = 12
 /** One live run read `subdomainAccess: false` right after a successful enable and `true` 3 s later. */
 const SUBDOMAIN_READBACK_ATTEMPTS = 10
 
@@ -119,6 +121,7 @@ const TRIGGER_RETRY_ATTEMPTS = 6
  * without inventing an IAM reconciler it has no use for.
  */
 export interface PlatformServiceDeployCollaborators {
+	readonly uploadFetch: PlatformUploadFetch
 	readonly api: ZeropsApi
 	readonly sleep: Sleeper
 	readonly log: DeployLog
@@ -127,13 +130,13 @@ export interface PlatformServiceDeployCollaborators {
 
 /** Everything `deployPlatform` reaches the outside world through. */
 export interface PlatformDeployCollaborators extends PlatformServiceDeployCollaborators {
+	readonly prepareSource: PlatformSourcePreparer
 	readonly reconcileSchema: SchemaReconciler
 }
 
-/** What deploying ONE service needs from the caller's input. `PlatformDeployInput` satisfies it. */
+/** The prepared snapshot shared by every build in an installation run. */
 export interface PlatformServiceDeployInput {
-	/** Public Git repository URL for a one-time build. Omitted uses the service's own Git integration. */
-	readonly buildFromGit?: string
+	readonly source: PreparedPlatformSource
 	readonly dryRun: boolean
 }
 
@@ -338,49 +341,54 @@ const applyServiceEnv = async (
 	return written
 }
 
-/** Trigger one service's pipeline, riding out a userData synchronisation that has not settled yet. */
+/** Only a known rejection permits another request against the same reservation. */
 const triggerPipeline = async (
 	service: ResolvedService,
+	appVersionId: string,
 	input: PlatformServiceDeployInput,
 	{ api, sleep, log, signal }: PlatformServiceDeployCollaborators,
-): Promise<string | undefined> => {
-	for (let attempt = 0;; attempt += 1) {
-		assertRunning(signal)
-		try {
-			const process = await api.triggerPipeline({
-				serviceId: service.id,
-				zeropsSetup: service.hostname,
-				...(input.buildFromGit === undefined ? {} : { buildFromGit: input.buildFromGit }),
-				signal,
-			})
-			const appVersionId = process?.appVersionId
-			return appVersionId === undefined || appVersionId === '' ? undefined : appVersionId
-		} catch (error) {
-			if (attempt >= TRIGGER_RETRY_ATTEMPTS || !(error instanceof ZeropsApiError) || error.code !== USER_DATA_SYNC_RUNNING) {
-				throw error
+): Promise<void> => {
+	const descriptor = prepareZeropsDescriptor(input.source.descriptor.contents, service.hostname)
+	let mayHaveStarted = false
+	try {
+		for (let attempt = 0;; attempt += 1) {
+			assertRunning(signal)
+			try {
+				await api.buildAndDeployAppVersion({
+					appVersionId,
+					zeropsYaml: descriptor.contents,
+					zeropsYamlSetup: descriptor.setup,
+					signal,
+				})
+				mayHaveStarted = true
+				return
+			} catch (error) {
+				if (!(error instanceof ZeropsApiError) || error.code !== USER_DATA_SYNC_RUNNING) {
+					mayHaveStarted = true
+					log.warn(`${service.hostname}: build response unresolved; observing app-version ${appVersionId}`)
+					return
+				}
+				if (attempt >= TRIGGER_RETRY_ATTEMPTS) {
+					throw new Error(`${service.hostname}: variable synchronisation still running; app-version ${appVersionId} was not triggered`)
+				}
+				log.info(`${service.hostname}: the platform is still synchronising this service's variables — retrying the trigger`)
+				await sleep(POLL_INTERVAL_MS, signal)
 			}
-			log.info(`${service.hostname}: the platform is still synchronising this service's variables — retrying the trigger`)
-			await sleep(POLL_INTERVAL_MS, signal)
 		}
+	} finally {
+		if (!mayHaveStarted) await cleanupReservation(service, appVersionId, { api, log })
 	}
 }
 
-/** The version a trigger produced, when the trigger response did not name one (every field is optional). */
-const awaitNewVersion = async (
+const cleanupReservation = async (
 	service: ResolvedService,
-	baseline: number,
-	{ api, sleep, signal }: PlatformServiceDeployCollaborators,
-): Promise<string> => {
-	for (let attempt = 0;; attempt += 1) {
-		assertRunning(signal)
-		const latest = await api.latestAppVersion({ serviceId: service.id, signal })
-		if (latest !== null && latest.id !== '' && (latest.sequence ?? -1) > baseline) {
-			return latest.id
-		}
-		if (attempt >= VERSION_APPEARS_ATTEMPTS) {
-			throw new Error(`zerops: the \`${service.hostname}\` pipeline was triggered but no new app-version appeared`)
-		}
-		await sleep(POLL_INTERVAL_MS, signal)
+	appVersionId: string,
+	{ api, log }: Pick<PlatformServiceDeployCollaborators, 'api' | 'log'>,
+): Promise<void> => {
+	try {
+		await api.deleteAppVersion({ appVersionId, signal: AbortSignal.timeout(5_000) })
+	} catch {
+		log.warn(`${service.hostname}: cleanup unresolved for app-version ${appVersionId}`)
 	}
 }
 
@@ -405,11 +413,18 @@ export const deployPlatformService = async (
 		log.info(`${service.hostname}: would trigger its pipeline and wait for the new version to become ACTIVE`)
 		return
 	}
-	const prior = await api.latestAppVersion({ serviceId: service.id, signal })
-	const baseline = prior?.sequence ?? -1
-	const triggered = await triggerPipeline(service, input, collaborators)
-	const appVersionId = triggered ?? await awaitNewVersion(service, baseline, collaborators)
-	log.info(`${service.hostname}: app-version ${appVersionId} building`)
+	prepareZeropsDescriptor(input.source.descriptor.contents, service.hostname)
+	const reserved = await api.createAppVersion({ serviceId: service.id, name: input.source.commitSha, signal })
+	const appVersionId = reserved.id
+	log.info(`${service.hostname}: app-version ${appVersionId}, commit ${input.source.commitSha}, setup ${service.hostname}`)
+	try {
+		await uploadPlatformArchive(reserved.uploadUrl, input.source.archivePath, signal, collaborators.uploadFetch)
+		assertRunning(signal)
+	} catch {
+		await cleanupReservation(service, appVersionId, collaborators)
+		throw new Error(`${service.hostname}: archive upload failed before build for app-version ${appVersionId}`)
+	}
+	await triggerPipeline(service, appVersionId, input, collaborators)
 	for (let attempt = 0;; attempt += 1) {
 		assertRunning(signal)
 		const version = await api.getAppVersion({ appVersionId, signal })
@@ -423,7 +438,7 @@ export const deployPlatformService = async (
 			return
 		}
 		if (attempt >= POLL_ATTEMPTS) {
-			throw new Error(`zerops: the \`${service.hostname}\` deploy ${appVersionId} did not finish in time`)
+			throw new Error(`zerops: the \`${service.hostname}\` deploy ${appVersionId} is unresolved after timeout; no retry or deletion was attempted`)
 		}
 		await sleep(POLL_INTERVAL_MS, signal)
 	}
@@ -443,7 +458,7 @@ export const deployPlatformService = async (
  */
 const deployConcurrently = async (
 	services: ReadonlyMap<PlatformDeployService, ResolvedService>,
-	input: PlatformDeployInput,
+	input: PlatformServiceDeployInput,
 	collaborators: PlatformDeployCollaborators,
 ): Promise<void> => {
 	const outcomes = await Promise.allSettled(
@@ -531,8 +546,24 @@ export const deployPlatform = async (
 	input: PlatformDeployInput,
 	collaborators: PlatformDeployCollaborators,
 ): Promise<void> => {
+	const source = await collaborators.prepareSource(input.sourceDir, collaborators.signal)
+	try {
+		validateInstallationSetups(source, PLATFORM_DEPLOY_ORDER)
+		await deployPreparedPlatform(input, collaborators, source)
+	} finally {
+		await source.dispose()
+	}
+}
+
+export const deployPreparedPlatform = async (
+	input: PlatformDeployInput,
+	collaborators: PlatformDeployCollaborators,
+	source: PreparedPlatformSource,
+): Promise<void> => {
 	const { log, signal } = collaborators
 	assertRunning(signal)
+	validateInstallationSetups(source, PLATFORM_DEPLOY_ORDER)
+	log.info(`source commit ${source.commitSha}`)
 
 	log.step('Resolve the installation')
 	const project = await resolveProject(input, collaborators)
@@ -585,9 +616,10 @@ export const deployPlatform = async (
 	// command could not apply leaves the previous manifest in front of the previous code, never in front
 	// of new code — and `ENVIRONMENT` is in place before any service that refuses `local` restarts.
 	log.step(`Deploy ${PLATFORM_CONCURRENT_DEPLOY.join(' + ')} together, then ${PLATFORM_SEQUENTIAL_DEPLOY.join(' → ')}`)
-	await deployConcurrently(services, input, collaborators)
+	const buildInput = { source, dryRun: input.dryRun }
+	await deployConcurrently(services, buildInput, collaborators)
 	for (const hostname of PLATFORM_SEQUENTIAL_DEPLOY) {
-		await deployPlatformService(serviceOf(services, hostname), input, collaborators)
+		await deployPlatformService(serviceOf(services, hostname), buildInput, collaborators)
 	}
 
 	// BEFORE the console registration, not after: that step talks to IAM over its PUBLIC host, and on a

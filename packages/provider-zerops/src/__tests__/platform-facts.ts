@@ -754,6 +754,17 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		emulatorNote: 'the double has no init or runtime environment resolution',
 	},
 	{
+		id: 'native-committed-archive-preserves-bytes-and-relative-symlinks',
+		section: 'Native committed-archive witness, 2026-10-02 — docs/reference/zerops-platform.md',
+		request: { method: 'PUT', path: '/app-version/{appVersionId}/build-and-deploy' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote:
+			'manually verified native snapshot/PUT and canonical descriptor; runtime blob digest matched Git, LF and literal $Id$ survived attributes, relative symlink preserved',
+		emulator: false,
+		emulatorNote: 'the double does not unpack archives or execute uploaded source',
+	},
+	{
 		id: 'explicit-false-override-refuses-mixed-registration-collision',
 		section: SECTION_OVERRIDE,
 		request: { method: 'POST', path: '/project/{projectId}/service-stack/import' },

@@ -1012,16 +1012,37 @@ IAM's app id on a deployed installation is `iam`. The live document said `iam-lo
 generator replaced it, inherited from the local composition it was copied from at bring-up; the id is
 inert for an app whose every gate rule is `public`, so correcting it costs nothing.
 
-### `fabrika platform deploy --provider=zerops`
+### `fabrika platform deploy --provider=zerops --source-dir=.`
+
+**Native committed-archive witness, 2026-10-02.** The installation snapshot and native PUT helpers
+uploaded commit `3572422d78fa07a91c4496b2aba6ba31036adcd7` from a disposable fixture. Version
+`gO1pAdXHR0SVZu6QUv84pw`, built by process `iQ37tvRGSUOXh0oxIu3XbQ`, served the fixture payload
+with SHA-256 `0cd1e2e47908bb56d4b5ce7794a1f7ae5f187294cfd50a233b94fc74e4ec102b`, matching its
+committed blob. LF and literal `$Id$` survived committed `eol=crlf ident` attributes. The running
+process reported the relative alias as a symlink and read identical bytes through it. The build used
+the canonical descriptor renderer; original descriptor SHA-256 was
+`d8edc666b38188799ed6e29a2025dff8b7b7d4a61e49a10a90a5b870c6153650`. The probe was stopped afterwards.
+This proves the tested native archive/upload/extraction path, not full installation or upgrade acceptance.
 
 Both ordering rules above, plus the manifest composition, now live in code:
 `packages/installation-zerops/src/deploy.ts`. On Zerops the command owns the WHOLE ordered sequence —
-resolve the project and its services, write each service's environment, deploy
-IAM → Operations → source → proxy → control waiting for each, reconcile the console's schema, ensure the public
-entry point — so an operator's pipeline calls one step. On Cloudflare the same command stays narrow and
+prepare the committed source snapshot, resolve the project and its services, write each service's environment,
+deploy IAM + Operations + source concurrently, then proxy and then Control, ensure the public entry point,
+and reconcile the console's schema — so an operator's pipeline calls one step. On Cloudflare the same command stays narrow and
 the scaffolded workflow keeps the order. The asymmetry is deliberate
 ([ADR-0027](../decisions/0027-platform-deploy-is-as-wide-as-the-provider-needs.md)); its full flag and
 variable surface is the `usage` string in `packages/installation-zerops/src/index.ts`.
+
+Both `platform deploy` and `platform install` require `--source-dir` naming the clean full checkout
+that contains the executing installation module. They refuse `--from-git` and
+`FABRIKA_ZEROPS_BUILD_FROM_GIT`. The source is prepared once from a resolved commit before remote
+mutations; all five setups are checked before writes. Each service reserves its own app version,
+uploads that snapshot, builds the reserved version and polls its ID. No fallback selects a Git pipeline.
+The first-install proxy pass and subsequent full pass share the same snapshot.
+
+An ambiguous build response is observed without another submission or deletion; an unresolved wait
+does not prove that the version failed. Namespace proxy sources are separately persisted and are not
+pinned merely by selecting this installation checkout.
 
 Three behaviours worth knowing before reading that file:
 

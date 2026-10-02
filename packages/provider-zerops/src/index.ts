@@ -52,6 +52,7 @@ export {
 export type { CompileInput, ZeropsImportDocument, ZeropsJsonImportDocument } from './compile'
 export { createZeropsControlProvider, zeropsStoredTargetCodec } from './control'
 export type { ZeropsBeforeDeploy, ZeropsBeforeDeployInput, ZeropsControlProviderOptions, ZeropsProviderExecutor, ZeropsStoredTarget } from './control'
+export { type PreparedZeropsDescriptor, prepareZeropsDescriptor } from './descriptor'
 export {
 	compileFabrikaManifest,
 	createZeropsArtifactSourceDescriptor,
