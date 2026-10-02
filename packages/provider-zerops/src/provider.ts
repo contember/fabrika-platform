@@ -13,6 +13,7 @@ import {
 	createProvider,
 	type JsonValue,
 	type ProviderDeploySession,
+	ProviderInvocationAbort,
 	type ProviderModule,
 	type ProviderSourceBinding,
 	type TypedProviderRun,
@@ -70,6 +71,7 @@ const SOURCE_CANCEL_TIMEOUT_MS = 5000
 /** Abandon the step if the run was cancelled. Checked before every real mutation and each poll iteration. */
 const assertRunning = (signal: AbortSignal): void => {
 	if (signal.aborted) {
+		if (signal.reason instanceof ProviderInvocationAbort) throw signal.reason
 		throw new Error(CANCELLED)
 	}
 }
@@ -267,7 +269,13 @@ const cancelSourceBestEffort = async (env: StepEnv, source: ZeropsRuntimeSource,
 	const sourceController = new AbortController()
 	const timeoutController = new AbortController()
 	const cancel = Promise.resolve()
-		.then(() => client.cancel({ runId: source.runId, appVersionId, signal: sourceController.signal }))
+		.then(() =>
+			client.cancel({
+				runId: source.runId,
+				appVersionId,
+				signal: env.signal.aborted ? sourceController.signal : AbortSignal.any([env.signal, sourceController.signal]),
+			})
+		)
 		.catch(() => {})
 	const timeout = Promise.resolve()
 		.then(() => (env.zerops.sourceCancelSleep ?? defaultSleep)(SOURCE_CANCEL_TIMEOUT_MS, timeoutController.signal))
@@ -287,9 +295,14 @@ const cancelSourceBestEffort = async (env: StepEnv, source: ZeropsRuntimeSource,
  * gone. The leftover version is visible on the platform; the lost diagnosis was not.
  */
 const cleanupPreTriggerVersion = async (env: StepEnv, source: ZeropsRuntimeSource, appVersionId: string): Promise<void> => {
+	if (env.signal.reason instanceof ProviderInvocationAbort) return
 	await cancelSourceBestEffort(env, source, appVersionId)
+	if (env.signal.reason instanceof ProviderInvocationAbort) return
 	try {
-		await env.zerops.api.deleteAppVersion({ appVersionId, signal: AbortSignal.timeout(5000) })
+		await env.zerops.api.deleteAppVersion({
+			appVersionId,
+			signal: env.signal.aborted ? AbortSignal.timeout(5000) : AbortSignal.any([env.signal, AbortSignal.timeout(5000)]),
+		})
 	} catch (error) {
 		env.log(`  [warn] app-version ${appVersionId} was left behind: ${error instanceof Error ? error.message : 'unknown error'}`)
 	}
@@ -371,6 +384,7 @@ const awaitVersion = async (env: StepEnv, appVersionId: string, processId: strin
 
 	for (;;) {
 		if (signal.aborted) {
+			if (signal.reason instanceof ProviderInvocationAbort) throw signal.reason
 			// Best-effort: the run is already abandoned, so a failure to cancel must not mask the reason.
 			await zerops.api.cancelBuild({ appVersionId, signal: AbortSignal.timeout(5000) }).catch(() => {})
 			throw new Error(CANCELLED)
@@ -452,11 +466,13 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 			assertRunning(signal)
 			const source = requireSource(env)
 			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
+			assertRunning(signal)
 			const version = await zerops.api.createAppVersion({ serviceId: target.serviceId, name: source.runtime.runId, signal })
 			state.appVersionId = version.id
 			let buildTriggerRequested = false
 			try {
 				await run.events.externalId(version.id, runState(version.id, 'version_created'))
+				assertRunning(signal)
 				const uploadInput = {
 					runId: source.runtime.runId,
 					appVersionId: version.id,
@@ -499,6 +515,7 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 				await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
 				const descriptor = prepareZeropsDescriptor(artifact.target.sourceDescriptor.contents, artifact.target.zeropsSetup)
 				await run.events.checkpoint(runState(version.id, 'build_trigger_requested'))
+				assertRunning(signal)
 				buildTriggerRequested = true
 				let process: ZeropsProcess
 				try {
@@ -518,15 +535,12 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 						await zerops.sleep(BUILD_TRIGGER_CONSISTENCY_MS, signal)
 						observed = await zerops.api.getAppVersion({ appVersionId: version.id, signal })
 					} catch {
+						assertRunning(signal)
 						log(`  ${version.id}: build-trigger observation unavailable; continuing to poll`)
 						return
 					}
-					if (observed.id === version.id && observed.status === 'UPLOADING') {
-						await cleanupPreTriggerVersion(env, source.runtime, version.id)
-						throw error
-					}
-					if (observed.id === version.id && observed.status !== undefined) {
-						await run.events.checkpoint(buildTriggeredState(version.id)).catch(() => {})
+					if (observed.id === version.id && observed.status !== undefined && observed.status !== 'UPLOADING') {
+						await run.events.checkpoint(buildTriggeredState(version.id))
 						log(`  recovered accepted build trigger for app-version ${version.id}`)
 					} else {
 						log(`  ${version.id}: build-trigger state is not known yet; continuing to poll`)
@@ -534,7 +548,7 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 					return
 				}
 				state.processId = process.id
-				await run.events.checkpoint(buildTriggeredState(version.id, process.id)).catch(() => {})
+				await run.events.checkpoint(buildTriggeredState(version.id, process.id))
 				log(`  triggered: app-version ${version.id} (build+deploy is ONE platform-side operation)`)
 			} catch (error) {
 				if (!buildTriggerRequested) {

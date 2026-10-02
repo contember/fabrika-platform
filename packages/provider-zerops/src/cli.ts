@@ -35,11 +35,14 @@ Options:
   --public-access=<mode>         custom-domain or zerops-subdomain.
   --postgres-type=<type>         Cheap-tier PostgreSQL type.
   --postgres-profile=<profile>   Cheap-tier PostgreSQL profile.
-  --proxy-build-from-git=<url>   Public proxy source; or FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT.
   --control-url=<url>            Control origin; or FABRIKA_CONTROL_URL.
   -h, --help                     Show this help.
 
 Mutating namespace commands read the Bearer credential from FABRIKA_CONTROL_TOKEN.
+Plan/create/adopt require FABRIKA_ZEROPS_PROXY_SOURCE_JSON:
+  {"repository":{"owner":"...","name":"..."},"commitSha":"...","descriptor":{"path":"zerops.yaml","contents":"...","sha256":"..."}}
+Reconcile uses the persisted namespace source. Legacy sources are not automatically pinned.
+--proxy-build-from-git and FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT are no longer supported.
 `
 
 const property = (value: unknown, key: string): unknown => typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined

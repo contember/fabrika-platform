@@ -8,9 +8,10 @@
 // running that very deploy — the self-reset that previously orphaned fabrika's own runs.
 
 import { Container } from '@cloudflare/containers'
-import { RUNNER_LOGS_PATH, RUNNER_PORT, RUNNER_STATUS_PATH, type RunnerStatus } from '@fabrika/runner-contract'
+import { RUNNER_LOGS_PATH, RUNNER_PORT, RUNNER_RUN_PATH, RUNNER_STATUS_PATH, type RunnerStatus } from '@fabrika/runner-contract'
 import { backstopDecision, finishRun, isRunFinished } from './finish-run'
 import { logsKey, statusKey } from './relay'
+import { RunContainerGate } from './run-container-gate'
 import type { Env } from './worker-env'
 
 /** First backstop check, ~after a short deploy would normally finish (the relay handles the fast path). */
@@ -21,6 +22,35 @@ const BACKSTOP_POLL_S = 45
 const BACKSTOP_MAX_MS = 18 * 60 * 1000
 
 export class RunnerContainer extends Container<Env> {
+	private readonly runGate = new RunContainerGate({
+		read: async () => (await this.ctx.storage.get<boolean>('runCancelled')) === true,
+		write: () => this.ctx.storage.put('runCancelled', true),
+	})
+
+	async startDeploy(runId: string): Promise<void> {
+		await this.runGate.run(async () => {
+			await this.startAndWaitForPorts()
+			await this.armBackstop(runId)
+		})
+	}
+
+	deployFetch(input: string, init?: RequestInit): Promise<Response> {
+		return this.runGate.run(async () => {
+			if (new URL(input).pathname === RUNNER_RUN_PATH) await this.ctx.storage.put('runDispatched', true)
+			return this.containerFetch(input, init)
+		})
+	}
+
+	recoverDeploy(): Promise<'running' | 'failed'> {
+		return this.runGate.recover(
+			async () => (await this.ctx.storage.get<boolean>('runDispatched')) === true,
+			() => this.destroy(),
+		)
+	}
+
+	cancelDeploy(): Promise<void> {
+		return this.runGate.cancel(() => this.destroy())
+	}
 	// Must match the in-container Bun server's fixed port (and the oblaka Container image's EXPOSE).
 	override defaultPort = RUNNER_PORT
 
@@ -73,7 +103,7 @@ export class RunnerContainer extends Container<Env> {
 		// Read the container's status; null = unreachable (it may have been hard-killed).
 		let status: RunnerStatus | null = null
 		try {
-			const res = await this.containerFetch(`http://container${RUNNER_STATUS_PATH}`)
+			const res = await this.deployFetch(`http://container${RUNNER_STATUS_PATH}`)
 			status = await res.json()
 		} catch {
 			status = null
@@ -91,7 +121,7 @@ export class RunnerContainer extends Container<Env> {
 		// off mid-stream), then record the terminal status. Never log the error object (it may hold a token).
 		if (status !== null) {
 			try {
-				const logs = await this.containerFetch(`http://container${RUNNER_LOGS_PATH}`)
+				const logs = await this.deployFetch(`http://container${RUNNER_LOGS_PATH}`)
 				const text = await logs.text()
 				const lines = text.split('\n').filter((l) => l.length > 0)
 				if (lines.length > 0) {

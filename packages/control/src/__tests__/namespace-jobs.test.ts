@@ -124,7 +124,7 @@ function jobEnv(harness: Harness, sent: ControlJobMessage[]): Env {
 }
 
 function jobDeps(harness: Harness, provider: ControlProvider): NamespaceJobDeps {
-	return { repositories: harness.repositories, provider, lock: makeFakeLock() }
+	return { repositories: harness.repositories, provider, lock: makeFakeLock(harness.repositories) }
 }
 
 const provisionJob = (namespaceId: string): NamespaceJobMessage => ({ kind: 'namespace', namespaceId, mutation: 'provision' })
@@ -173,11 +173,12 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 		const job = runNamespaceJob(jobDeps(harness, provider), decoded(sent[0] ?? provisionJob('apps-prod')))
 		await provisionEntered
 		expect((await harness.repositories.registry.getDeploymentNamespace('apps-prod'))?.state).toBe('provisioning')
+		expect(record.signals[0]?.aborted).toBe(false)
 		release()
 
 		expect(await job).toEqual({ namespaceId: 'apps-prod', status: 'ready' })
-		// The worker owns the signal, so a lost caller cannot cancel the mutation it started.
-		expect(record.signals[0]?.aborted).toBe(false)
+		// Returning the lease invalidates the invocation, even after a successful terminal checkpoint.
+		expect(record.signals[0]?.aborted).toBe(true)
 		const row = await harness.repositories.registry.getDeploymentNamespace('apps-prod')
 		expect(row?.state).toBe('ready')
 		expect(row?.last_error).toBeNull()
@@ -350,6 +351,7 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 			repositories: harness.repositories,
 			provider,
 			lock: {
+				renew: lock.renew,
 				async acquire(key, holder) {
 					const acquired = await lock.acquire(key, holder)
 					// Another worker finished this namespace while we were waiting for the lease.

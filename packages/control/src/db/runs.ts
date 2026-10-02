@@ -31,7 +31,7 @@ export interface RunRow {
 	external_run_id: string | null
 	/** Credential-free provider-owned progress, validated before writes and reads. */
 	provider_state_json: string | null
-	/** Set while cancellation owns provider cleanup and blocks ordinary lifecycle writes. */
+	/** Durable cancellation request; blocks ordinary lifecycle writes until an invocation settles it. */
 	cancel_requested_at: number | null
 }
 
@@ -67,7 +67,7 @@ export const parseProviderJson = (raw: string, label: string): JsonValue => {
 	return value
 }
 
-const serializeProviderJson = (value: JsonValue): string => {
+export const serializeProviderJson = (value: JsonValue): string => {
 	if (!isJsonValue(value)) throw new Error('provider checkpoint is not a JSON value')
 	const serialized = JSON.stringify(value)
 	if (typeof serialized !== 'string') throw new Error('provider checkpoint is not serializable')
@@ -122,6 +122,14 @@ export class RunRepository {
 		return this.d1.prepare('SELECT * FROM runs WHERE id = ?').bind(id).first<RunRow>()
 	}
 
+	async getRunByExternalId(input: { appId: string; env: string; externalId: string }): Promise<RunRow | null> {
+		const result = await this.d1.prepare(`SELECT * FROM runs
+			WHERE app_id = ? AND env = ? AND external_run_id = ? LIMIT 2`)
+			.bind(input.appId, input.env, input.externalId).all<RunRow>()
+		if (result.results.length > 1) throw new Error('Provider version has ambiguous retained run state')
+		return result.results[0] ?? null
+	}
+
 	/** Persist a provider-owned operation id and optional resume state in one guarded write. */
 	async setRunExternalId(id: string, externalRunId: string, providerState?: JsonValue, guard?: RunMutationGuard): Promise<boolean> {
 		const stateAssignment = providerState === undefined ? '' : ', provider_state_json = ?'
@@ -132,6 +140,24 @@ export class RunRepository {
 			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL
 				AND (external_run_id IS NULL OR external_run_id = ?)`,
 			[externalRunId, ...stateValues, id, externalRunId],
+			guard,
+		)
+	}
+
+	/** Reservation evidence survives a cancellation request so the current owner can settle cleanup. */
+	async recordInitialRunExternalId(
+		id: string,
+		externalRunId: string,
+		providerState: JsonValue | undefined,
+		guard: RunMutationGuard,
+	): Promise<boolean> {
+		const stateAssignment = providerState === undefined ? '' : ', provider_state_json = ?'
+		const stateValues = providerState === undefined ? [] : [serializeProviderJson(providerState)]
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET external_run_id = ?${stateAssignment}
+			WHERE id = ? AND status = 'running' AND external_run_id IS NULL`,
+			[externalRunId, ...stateValues, id],
 			guard,
 		)
 	}
@@ -245,13 +271,14 @@ export class RunRepository {
 	 * The runner's `finishRun` records `succeeded` inside `startRun`, before control applies the IAM reconcile; this
 	 * is the one succeeded→failed correction that a later failure needs. Keeps `finished_at`, refuses a cancelled run.
 	 */
-	async markRunFailedAfterRunner(id: string): Promise<boolean> {
-		const result = await this.d1
-			.prepare(`UPDATE runs SET status = 'failed', exit_code = NULL
-				WHERE id = ? AND status = 'succeeded' AND cancel_requested_at IS NULL`)
-			.bind(id)
-			.run()
-		return (result.meta.changes ?? 0) > 0
+	async markRunFailedAfterRunner(id: string, guard?: RunMutationGuard): Promise<boolean> {
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET status = 'failed', exit_code = NULL
+			WHERE id = ? AND status = 'succeeded' AND cancel_requested_at IS NULL`,
+			[id],
+			guard,
+		)
 	}
 
 	/** Finish a run only after cancellation has durably claimed and completed provider cleanup. */
@@ -265,27 +292,17 @@ export class RunRepository {
 		)
 	}
 
-	/**
-	 * Sweep ORPHANED runs: mark any still `pending`/`running` past `maxAgeSeconds` as `failed`. vozka-runner's
-	 * per-run backstop (RunnerContainer DO) already records the terminal status within ~18 min even when the
-	 * relay is aborted (e.g. a fabrika self-deploy resets fabrika mid-run) — this cron-driven sweep is the
-	 * backstop-TO-the-backstop for the rare case the DO never fired at all (e.g. vozka-runner itself was
-	 * down). Aged on `started_at` (running) falling back to `created_at` (never-started pending). Returns
-	 * the count swept. `maxAgeSeconds` must comfortably exceed the container hard-kill (~15 min) + backstop
-	 * deadline (~18 min) so a genuinely in-flight run is never reaped.
-	 */
-	async sweepStaleRuns(maxAgeSeconds: number): Promise<number> {
-		// One clock read for both the cutoff and the stamp, so a sweep can never reap by a later `now`
-		// than the one it records.
+	/** Candidates only: the lifecycle acquires their lease and rechecks age and state before settlement. */
+	async listStaleRuns(maxAgeSeconds: number): Promise<RunRow[]> {
 		const now = this.now()
 		const result = await this.d1
-			.prepare(`UPDATE runs SET status = 'failed', finished_at = ?
+			.prepare(`SELECT * FROM runs
 				WHERE status IN ('pending','running')
 					AND cancel_requested_at IS NULL
 					AND COALESCE(started_at, created_at) < ?
 					AND external_run_id IS NULL`)
-			.bind(now, now - maxAgeSeconds)
-			.run()
-		return result.meta.changes ?? 0
+			.bind(now - maxAgeSeconds)
+			.all<RunRow>()
+		return result.results
 	}
 }

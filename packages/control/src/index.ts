@@ -4,7 +4,9 @@ import { controlJobLogLine, runControlJob } from './consumer'
 import { runMaintenance } from './cron'
 import type { Env } from './env'
 import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './platform-cf'
+import { reconcileProviderRuns } from './provider-reconcile'
 import type { ControlJobMessage } from './run-lifecycle'
+import { deployLock, operationsReleaseDeps } from './services'
 import { unavailableSourceConnection } from './source-connection-port'
 
 /**
@@ -58,7 +60,16 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 
 	/** The cron handler (`triggers.crons`, every 5 min): poll public repos, then sweep orphaned runs. */
 	override async scheduled(_controller: ScheduledController): Promise<void> {
-		await runMaintenance(this.control)
+		const env = this.control
+		await runMaintenance(env, {
+			reconcile: () =>
+				reconcileProviderRuns({
+					repositories: env.REPOSITORIES,
+					provider: cloudflareControlProvider(this.env, env),
+					lock: deployLock(env),
+					operations: operationsReleaseDeps(env),
+				}),
+		})
 	}
 }
 

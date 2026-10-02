@@ -7,13 +7,14 @@
 // overlapping run — the poll is a conditional GET whose only mutation is guarded by a changed head
 // sha, and the sweep is a guarded UPDATE by age.
 
+import { enqueueUnsettledNamespaces } from './api/namespaces'
 import type { Env } from './env'
 import type { OperationsCatalogSyncSummary } from './operations-catalog'
 import type { OperationsReleaseProjectionSummary } from './operations-releases'
 import { replayOperationsReleases } from './operations-releases'
-import type { ProviderReconcileSummary } from './provider-reconcile'
+import { type ProviderReconcileSummary, sweepStaleRuns } from './provider-reconcile'
 import { type FetchFn, pollPublicRepos, type PollSummary } from './repo-poll'
-import { operationsReleaseDeps, replayOperationsCatalogProjection, repositories, STALE_RUN_MAX_AGE_S } from './services'
+import { deployLock, operationsReleaseDeps, replayOperationsCatalogProjection, repositories, STALE_RUN_MAX_AGE_S } from './services'
 
 /** What one maintenance pass did. Returned for the tests + the log line; counts only, never a URL. */
 export interface MaintenanceSummary {
@@ -54,6 +55,7 @@ export interface MaintenanceOptions {
  */
 export async function runMaintenance(env: Env, options: MaintenanceOptions = {}): Promise<MaintenanceSummary> {
 	const persistence = repositories(env)
+	await enqueueUnsettledNamespaces(persistence.registry, env.DEPLOY_QUEUE)
 	const poll = await pollPublicRepos({
 		repositories: persistence,
 		fetch: options.fetch ?? fetch,
@@ -72,7 +74,7 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 				+ `in-progress=${reconcile.inProgress} waiting=${reconcile.waiting}`,
 		)
 	}
-	const swept = await persistence.runs.sweepStaleRuns(STALE_RUN_MAX_AGE_S)
+	const swept = await sweepStaleRuns({ repositories: persistence, lock: deployLock(env) }, STALE_RUN_MAX_AGE_S, options.now)
 	if (swept > 0) {
 		console.warn(`run sweep: marked ${swept} stale run(s) failed (> ${STALE_RUN_MAX_AGE_S}s in pending/running)`)
 	}

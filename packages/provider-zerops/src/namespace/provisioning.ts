@@ -1,47 +1,25 @@
 import {
 	type ProviderDeploymentNamespace,
 	type ProviderNamespaceCapabilities,
-	ProviderNamespaceError,
 	type ProviderNamespaceHost,
 	type ProviderNamespaceMutationInput,
 } from '@fabrika/provider-contract'
 import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-contract'
-import {
-	ZEROPS_ACTIVE,
-	ZEROPS_SERVICE_NOT_HTTP,
-	ZEROPS_TERMINAL,
-	ZeropsApiError,
-	type ZeropsAppVersion,
-	type ZeropsProject,
-	type ZeropsService,
-} from '../api'
+import { waitForProcess, ZEROPS_SERVICE_NOT_HTTP, ZEROPS_TERMINAL, ZeropsApiError, type ZeropsProject, type ZeropsService } from '../api'
 import { defaultSleep } from '../collaborators'
 import { namespaceResourceClaims, registrationResourceClaims } from './claims'
 import { checkpoint, decodeEnvelope, normalizedNamespace, normalizeTarget } from './codec'
-import {
-	ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
-	ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
-	ZEROPS_NAMESPACE_POSTGRES_HOSTNAME,
-	ZEROPS_NAMESPACE_PROXY_HOSTNAME,
-	ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE,
-} from './constants'
-import {
-	asNamespaceError,
-	namespaceError,
-	ZEROPS_NAMESPACE_CANCELLED,
-	ZEROPS_PROXY_DEPLOY_FAILED,
-	ZEROPS_PROXY_DEPLOY_TIMEOUT,
-	ZEROPS_SUBDOMAIN_NOT_PUBLISHED,
-} from './errors'
+import { ZEROPS_NAMESPACE_POSTGRES_HOSTNAME, ZEROPS_NAMESPACE_PROXY_HOSTNAME, ZEROPS_NAMESPACE_SUBDOMAIN_VARIABLE } from './constants'
+import { asNamespaceError, namespaceError, ZEROPS_NAMESPACE_CANCELLED, ZEROPS_SUBDOMAIN_NOT_PUBLISHED } from './errors'
 import { createZeropsNamespaceOperator } from './operator'
+import { runZeropsProxyAttempt } from './proxy-attempt'
+import { equalProxySources, verifyZeropsNamespaceProxySource } from './proxy-source'
 import { compileZeropsNamespaceTopology, projectMarker, PROXY_TYPE } from './topology'
-import type { NamespaceProxyIamInput, NormalizedZeropsNamespaceTarget, ZeropsNamespaceOptions } from './types'
+import type { NormalizedZeropsNamespaceTarget, ZeropsNamespaceOptions, ZeropsNamespaceProxySource } from './types'
 
 const EMPTY_PROXY_MANIFEST = encodeProxyManifestJson({ apps: [] })
 
 const POLL_INTERVAL_MS = 3000
-
-const POLL_TIMEOUT_MS = 70 * 60 * 1000
 
 /** The live enable finishes in under a second, but one run still read `false` once before flipping; ten reads is slack. */
 const SUBDOMAIN_READBACK_ATTEMPTS = 10
@@ -205,70 +183,6 @@ const resolveServices = async (
 }
 
 /**
- * Converge the two variables the namespace proxy's own CODE reads, and call this from everywhere that
- * code is replaced — not only where the namespace is created.
- *
- * `syncZeropsProxy` rebuilds the proxy from git on every app deploy, so a proxy can take new code
- * whose configuration nobody rewrote. That is not hypothetical: the `FABRIKA_IAM_URL` →
- * `FABRIKA_IAM_ISSUER` rename ([ADR-0035](../../../../docs/decisions/0035-the-platform-owns-the-application-iam-issuer.md))
- * left a live namespace proxy crash-looping on `FABRIKA_IAM_ISSUER is required`, because provisioning
- * had written the old name months earlier and the deploy path only ever wrote the manifest. Writing
- * these BEFORE the pipeline is triggered is what makes a rename a flag day rather than an outage
- * ([ADR-0024](../../../../docs/decisions/0024-retire-the-legacy-environment-name-fallback.md)).
- */
-export const ensureNamespaceProxyIam = async (input: NamespaceProxyIamInput): Promise<void> => {
-	const variables = await input.api.listServiceEnv({ serviceId: input.proxyServiceId, signal: input.signal })
-	const issuer = variables.find((variable) => variable.key === ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE)
-	if (issuer?.content !== input.iamUrl) {
-		await input.api.putServiceEnv({
-			serviceId: input.proxyServiceId,
-			key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
-			value: input.iamUrl,
-			signal: input.signal,
-		})
-	}
-	// Secret read-back is not trustworthy, so overwrite it idempotently without inspecting its value.
-	await input.api.putServiceEnv({
-		serviceId: input.proxyServiceId,
-		key: ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
-		value: input.iamKey,
-		signal: input.signal,
-	})
-}
-
-const ensureProxyConfiguration = async (
-	target: NormalizedZeropsNamespaceTarget,
-	options: ZeropsNamespaceOptions,
-	signal: AbortSignal,
-): Promise<boolean> => {
-	const proxyServiceId = target.proxyServiceId
-	if (proxyServiceId === undefined) {
-		throw new Error('Zerops namespace has no proxy service id')
-	}
-	const variables = await options.api.listServiceEnv({ serviceId: proxyServiceId, signal })
-	const byKey = new Map(variables.map((variable) => [variable.key, variable]))
-	let deployRequired = !target.ready
-	const manifest = byKey.get(FABRIKA_PROXY_MANIFEST_JSON)
-	if (!target.ready || manifest === undefined) {
-		await options.api.putServiceEnv({
-			serviceId: proxyServiceId,
-			key: FABRIKA_PROXY_MANIFEST_JSON,
-			value: EMPTY_PROXY_MANIFEST,
-			signal,
-		})
-		deployRequired = true
-	}
-	await ensureNamespaceProxyIam({
-		api: options.api,
-		proxyServiceId,
-		iamUrl: options.iamUrl,
-		iamKey: options.iamKey,
-		signal,
-	})
-	return deployRequired
-}
-
-/**
  * The hosts the proxy publishes, off the platform-owned `zeropsSubdomain` variable.
  *
  * Read through the same `/env` listing every other namespace variable uses, and read AFTER the proxy is
@@ -300,44 +214,20 @@ const readProxyHosts = async (
 	}
 }
 
-const latestAfterBaseline = async (
-	target: NormalizedZeropsNamespaceTarget,
-	options: ZeropsNamespaceOptions,
-	signal: AbortSignal,
-): Promise<ZeropsAppVersion | null> => {
-	const proxyServiceId = target.proxyServiceId
-	if (proxyServiceId === undefined) {
-		throw new Error('Zerops namespace has no proxy service id')
-	}
-	const latest = await options.api.latestAppVersion({ serviceId: proxyServiceId, signal })
-	const baseline = target.proxyBaselineSequence
-	if (latest === null || baseline === undefined || latest.sequence === undefined || latest.sequence <= baseline) {
-		return null
-	}
-	return latest
-}
-
-const terminalFailure = (version: ZeropsAppVersion): ProviderNamespaceError =>
-	namespaceError(ZEROPS_PROXY_DEPLOY_FAILED, `Zerops namespace proxy deploy ${version.id} finished as ${version.status ?? 'unknown'}`, false)
-
-const waitForProxy = async (
-	appVersionId: string,
-	options: ZeropsNamespaceOptions,
-	signal: AbortSignal,
-): Promise<ZeropsAppVersion> => {
-	const deadline = Date.now() + POLL_TIMEOUT_MS
-	for (;;) {
-		if (signal.aborted) {
-			throw namespaceError(ZEROPS_NAMESPACE_CANCELLED, 'Zerops namespace provisioning was cancelled', true)
-		}
-		const version = await options.api.getAppVersion({ appVersionId, signal })
-		if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) {
-			return version
-		}
-		if (Date.now() > deadline) {
-			throw namespaceError(ZEROPS_PROXY_DEPLOY_TIMEOUT, `Zerops namespace proxy deploy ${appVersionId} timed out`, true)
-		}
-		await (options.sleep ?? defaultSleep)(POLL_INTERVAL_MS, signal)
+const resolveProxySource = async (source: ZeropsNamespaceProxySource, options: ZeropsNamespaceOptions, signal: AbortSignal): Promise<void> => {
+	if (options.source === undefined) throw new Error('Zerops namespace source client is required')
+	signal.throwIfAborted()
+	const runId = crypto.randomUUID()
+	const resolved = await options.source.resolve({
+		runId,
+		repository: source.repository,
+		requestedRef: source.commitSha,
+		expectedCommitSha: source.commitSha,
+		descriptorSha256: source.descriptor.sha256,
+		signal,
+	})
+	if (resolved.runId !== runId || resolved.commitSha !== source.commitSha || resolved.descriptorSha256 !== source.descriptor.sha256) {
+		throw new Error('Proxy source resolution identity mismatch')
 	}
 }
 
@@ -348,58 +238,30 @@ const deployProxy = async (
 	options: ZeropsNamespaceOptions,
 ): Promise<{ namespace: ProviderDeploymentNamespace; target: NormalizedZeropsNamespaceTarget }> => {
 	let currentNamespace = namespace
-	let currentTarget = target
-	const proxyServiceId = currentTarget.proxyServiceId
+	const proxyServiceId = target.proxyServiceId
 	if (proxyServiceId === undefined) {
 		throw new Error('Zerops namespace has no proxy service id')
 	}
-	if (currentTarget.proxyAppVersionId !== undefined) {
-		const version = await waitForProxy(currentTarget.proxyAppVersionId, options, input.signal)
-		if (version.status === ZEROPS_ACTIVE) {
-			return { namespace: currentNamespace, target: currentTarget }
-		}
-		currentTarget = {
-			...currentTarget,
-			proxyAppVersionId: undefined,
-			proxyBaselineSequence: undefined,
-			ready: false,
-		}
-		currentNamespace = await checkpoint(input, currentNamespace, currentTarget)
-	}
-
-	let recovered: ZeropsAppVersion | null = null
-	if (currentTarget.proxyBaselineSequence !== undefined) {
-		recovered = await latestAfterBaseline(currentTarget, options, input.signal)
-	}
-	if (recovered === null) {
-		if (currentTarget.proxyBaselineSequence === undefined) {
-			const prior = await options.api.latestAppVersion({ serviceId: proxyServiceId, signal: input.signal })
-			currentTarget = {
-				...currentTarget,
-				proxyBaselineSequence: prior?.sequence ?? -1,
-			}
-			currentNamespace = await checkpoint(input, currentNamespace, currentTarget)
-		}
-		const process = await options.api.triggerPipeline({
-			serviceId: proxyServiceId,
-			buildFromGit: currentTarget.proxyBuildFromGit,
-			zeropsSetup: ZEROPS_NAMESPACE_PROXY_HOSTNAME,
-			signal: input.signal,
-		})
-		recovered = process?.appVersionId === undefined
-			? await latestAfterBaseline(currentTarget, options, input.signal)
-			: { id: process.appVersionId }
-	}
-	if (recovered === null || recovered.id === '') {
-		throw new Error('Zerops namespace proxy pipeline did not expose a new app-version')
-	}
-	currentTarget = { ...currentTarget, proxyAppVersionId: recovered.id }
-	currentNamespace = await checkpoint(input, currentNamespace, currentTarget)
-	const version = await waitForProxy(recovered.id, options, input.signal)
-	if (version.status !== ZEROPS_ACTIVE) {
-		throw terminalFailure(version)
-	}
-	return { namespace: currentNamespace, target: currentTarget }
+	const transporter = options.source
+	const manifest = options.proxyManifest === undefined
+		? (await options.api.listServiceEnv({ serviceId: proxyServiceId, signal: input.signal }))
+			.find(variable => variable.key === FABRIKA_PROXY_MANIFEST_JSON)?.content ?? EMPTY_PROXY_MANIFEST
+		: await options.proxyManifest(namespace.id)
+	const result = await runZeropsProxyAttempt({
+		refresh: target.proxyBuild === undefined,
+		target,
+		manifest,
+		source: transporter,
+		api: options.api,
+		iamUrl: options.iamUrl,
+		iamKey: options.iamKey,
+		signal: input.signal,
+		sleep: options.sleep ?? defaultSleep,
+		checkpoint: async next => {
+			currentNamespace = await checkpoint(input, currentNamespace, { ...target, ...next })
+		},
+	})
+	return { namespace: currentNamespace, target: { ...target, ...result } }
 }
 
 /**
@@ -468,7 +330,7 @@ const mutateNamespace = async (
 	mode: 'provision' | 'reconcile',
 ): Promise<ProviderDeploymentNamespace> => {
 	try {
-		return await runNamespaceMutation(input, options, mode)
+		return await runNamespaceMutation(input, options)
 	} catch (cause) {
 		throw asNamespaceError(cause, mode)
 	}
@@ -477,12 +339,37 @@ const mutateNamespace = async (
 const runNamespaceMutation = async (
 	input: ProviderNamespaceMutationInput,
 	options: ZeropsNamespaceOptions,
-	mode: 'provision' | 'reconcile',
 ): Promise<ProviderDeploymentNamespace> => {
 	const suppliedTarget = decodeEnvelope(input.namespace.target)
 	let namespace = normalizedNamespace(input.namespace, options)
 	let target = normalizeTarget(namespace, options)
-	const initiallyAdopted = target.projectId !== undefined && target.managed === false && !target.ready
+	if (target.proxySource === undefined) throw new Error('Zerops namespace proxy source is unpinned; explicit migration is required')
+	if (target.proxyBaselineSequence !== undefined || target.proxyAppVersionId !== undefined) {
+		throw new Error('Legacy proxy operational checkpoints require explicit migration')
+	}
+	if (target.proxyBuild !== undefined && !equalProxySources(target.proxySource, target.proxyBuild.source)) {
+		throw new Error('Proxy build source conflicts with namespace pin')
+	}
+	if (target.proxyBuild !== undefined && (target.projectId === undefined || target.proxyServiceId === undefined)) {
+		throw new Error('Proxy build is missing checkpointed project or service identity')
+	}
+	await verifyZeropsNamespaceProxySource(target.proxySource)
+	input.signal.throwIfAborted()
+	if (target.proxyBuild === undefined && target.proxyDeployment !== undefined) {
+		try {
+			const version = await options.api.getAppVersion({ appVersionId: target.proxyDeployment.appVersionId, signal: input.signal })
+			if (version.id !== target.proxyDeployment.appVersionId || version.status === undefined || !ZEROPS_TERMINAL.has(version.status)) {
+				throw new Error('unresolved')
+			}
+		} catch {
+			input.signal.throwIfAborted()
+			await checkpoint(input, namespace, { ...target, ready: false })
+			throw namespaceError('proxyAttemptUnresolved', `Proxy version ${target.proxyDeployment.appVersionId} remains unresolved`, true)
+		}
+	}
+	if (target.proxyBuild === undefined && target.proxyDeployment === undefined) await resolveProxySource(target.proxySource, options, input.signal)
+	const initiallyAdopted = target.projectId !== undefined && target.managed === false
+		&& target.proxyServiceId === undefined && target.proxyDeployment === undefined
 	const topology = compileZeropsNamespaceTopology(namespace, target)
 
 	if (target.projectId === undefined) {
@@ -495,6 +382,17 @@ const runNamespaceMutation = async (
 		}
 		target = { ...target, projectId: result.projectId, managed: true }
 		namespace = await checkpoint(input, namespace, target)
+		for (const service of result.services) {
+			for (const process of service.processes) {
+				await waitForProcess({
+					api: options.api,
+					processId: process.id,
+					sleep: options.sleep ?? defaultSleep,
+					signal: input.signal,
+					label: 'namespace import',
+				})
+			}
+		}
 	}
 
 	const projectId = target.projectId
@@ -512,12 +410,28 @@ const runNamespaceMutation = async (
 		// Validate before the first mutation; the import below then enforces service-level envIsolation.
 		await resolveServices(namespace, target, options, input.signal, true)
 	}
-	await options.api.importServices({
-		projectId,
-		yaml: mode === 'provision' && !target.ready ? topology.servicesProvisionYaml : topology.servicesSteadyYaml,
-		signal: input.signal,
-	})
+	if (target.proxyBuild === undefined) {
+		const imported = await options.api.importServices({
+			projectId,
+			yaml: topology.servicesSteadyYaml,
+			signal: input.signal,
+		})
+		for (const service of imported.services) {
+			for (const process of service.processes) {
+				await waitForProcess({
+					api: options.api,
+					processId: process.id,
+					sleep: options.sleep ?? defaultSleep,
+					signal: input.signal,
+					label: 'namespace import',
+				})
+			}
+		}
+	}
 	const resolved = await resolveServices(namespace, target, options, input.signal, false)
+	if (target.proxyServiceId !== undefined && target.proxyServiceId !== resolved.proxy.id) {
+		throw new Error('Checkpointed namespace proxy service identity changed')
+	}
 	target = {
 		...target,
 		proxyServiceId: resolved.proxy.id,
@@ -525,15 +439,9 @@ const runNamespaceMutation = async (
 	}
 	namespace = await checkpoint(input, namespace, target)
 
-	const deployRequired = await ensureProxyConfiguration(target, options, input.signal)
-	target = { ...target, proxyConfigured: true }
-	namespace = await checkpoint(input, namespace, target)
-
-	if (deployRequired || !target.ready) {
-		const deployed = await deployProxy(input, namespace, target, options)
-		namespace = deployed.namespace
-		target = deployed.target
-	}
+	const deployed = await deployProxy(input, namespace, target, options)
+	namespace = deployed.namespace
+	target = { ...deployed.target, proxyConfigured: true }
 	// After the deploy, because the platform refuses a service with no HTTP port — and never before `ready`
 	// is checkpointed, because a namespace with no public entry point is not ready.
 	if (target.publicAccess === 'zerops-subdomain') {
@@ -542,8 +450,7 @@ const runNamespaceMutation = async (
 	const proxyHosts = target.publicAccess === 'zerops-subdomain' ? await readProxyHosts(namespace, target, options, input.signal) : []
 	target = {
 		...target,
-		proxyBaselineSequence: undefined,
-		proxyAppVersionId: undefined,
+		proxyBuild: undefined,
 		// Cleared when the proxy publishes none and on a custom-domain namespace, so the record never
 		// outlives what it describes.
 		proxyHosts: proxyHosts.length === 0 ? undefined : proxyHosts,
@@ -560,7 +467,6 @@ export const createZeropsNamespaceCapabilities = (options: ZeropsNamespaceOption
 		}
 	}
 	required('clientId', options.clientId)
-	required('proxyBuildFromGit', options.proxyBuildFromGit)
 	required('iamUrl', options.iamUrl)
 	required('iamKey', options.iamKey)
 	return {
@@ -569,6 +475,9 @@ export const createZeropsNamespaceCapabilities = (options: ZeropsNamespaceOption
 		registrationResourceClaims,
 		provision: (input) => mutateNamespace(input, options, 'provision'),
 		reconcile: (input) => mutateNamespace(input, options, 'reconcile'),
-		operator: createZeropsNamespaceOperator({ proxyBuildFromGit: options.proxyBuildFromGit }),
+		operator: createZeropsNamespaceOperator({
+			proxyBuildFromGit: options.proxyBuildFromGit,
+			...(options.proxySource === undefined ? {} : { proxySource: options.proxySource }),
+		}),
 	}
 }

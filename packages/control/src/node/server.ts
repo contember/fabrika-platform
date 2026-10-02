@@ -23,7 +23,7 @@ import { controlJobLogLine, decodeControlJobMessage, runControlJob } from '../co
 import type { Env } from '../env'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import type { ControlJobMessage } from '../run-lifecycle'
-import { DEPLOY_LOCK_TTL_MS, locks, operationsReleaseDeps, repositories } from '../services'
+import { DEPLOY_LOCK_TTL_MS, deployLock, operationsReleaseDeps, repositories } from '../services'
 import type { SourceConnectionPort } from '../source-connection-port'
 import { createRuntime, type Runtime } from './runtime'
 
@@ -95,7 +95,7 @@ async function main(): Promise<void> {
 	const reconciliation = await reconcileProviderRuns({
 		repositories: repositories(runtime.env),
 		provider: runtime.provider,
-		releaseLock: (key, holder) => locks(runtime.env).release(key, holder),
+		lock: deployLock(runtime.env),
 		operations: operationsReleaseDeps(runtime.env),
 	})
 	console.info(

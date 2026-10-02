@@ -10,6 +10,7 @@ import type {
 	ProviderTerminalOutcome,
 	SchemaReconciler,
 } from '@fabrika/provider-contract'
+import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-contract'
 import type { RunnerIamReconcile } from '@fabrika/runner-contract'
 import { cloudflareArtifactCodec } from './codec'
@@ -193,6 +194,7 @@ export interface CloudflareControlOptions {
 	resolveSource(source: ProviderSource, signal: AbortSignal): Promise<ResolvedCloudflareSource>
 	startRun(job: CloudflareRunnerJob): Promise<CloudflareRunOutcome>
 	cancelRun(runId: string): Promise<void>
+	recoverRun?(runId: string): Promise<'running' | 'failed'>
 }
 
 const decodeEnvelope = <T>(kind: string, envelope: ProviderEnvelope, codec: ProviderCodec<T>): T => {
@@ -310,17 +312,55 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 	id: 'cloudflare',
 	normalizeRegistration,
 	deploy: async (input) => {
+		const job = await buildJob(options, input)
+		input.signal.throwIfAborted()
 		await input.events.externalId(input.runId)
-		const outcome = await options.startRun(await buildJob(options, input))
+		input.signal.throwIfAborted()
+		const interrupted = Promise.withResolvers<never>()
+		const abort = (): void => {
+			const reason: unknown = input.signal.reason
+			if (reason instanceof ProviderInvocationAbort && reason.kind === 'cancel_requested') {
+				void options.cancelRun(input.runId).catch(() => {})
+			}
+			interrupted.reject(reason)
+		}
+		input.signal.addEventListener('abort', abort, { once: true })
+		let outcome: CloudflareRunOutcome
+		try {
+			outcome = await Promise.race([options.startRun(job), interrupted.promise])
+		} finally {
+			input.signal.removeEventListener('abort', abort)
+		}
+		input.signal.throwIfAborted()
 		const reconcile = outcome.iamReconcile
 		if (reconcile === undefined || input.dryRun) return outcome
 		try {
 			await applyIamReconcile(options, input, reconcile)
 		} catch (error) {
+			input.signal.throwIfAborted()
 			input.events.log(`reconcile-schema failed: ${error instanceof Error ? error.message : 'unknown error'}`)
 			return { state: 'failed', ...(outcome.artifactState === undefined ? {} : { artifactState: outcome.artifactState }) }
 		}
 		return outcome
 	},
-	cancel: (input) => options.cancelRun(input.runId),
+	reconcile: async (input) => {
+		input.signal.throwIfAborted()
+		if (options.recoverRun === undefined) return { state: 'running' }
+		const state = await options.recoverRun(input.runId)
+		input.signal.throwIfAborted()
+		return { state }
+	},
+	cancel: async (input) => {
+		input.signal.throwIfAborted()
+		const interrupted = Promise.withResolvers<never>()
+		const abort = (): void => interrupted.reject(input.signal.reason)
+		input.signal.addEventListener('abort', abort, { once: true })
+		try {
+			await Promise.race([options.cancelRun(input.runId), interrupted.promise])
+			input.signal.throwIfAborted()
+			return { state: 'settled' }
+		} finally {
+			input.signal.removeEventListener('abort', abort)
+		}
+	},
 })

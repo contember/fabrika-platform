@@ -390,6 +390,30 @@ describe('HTTP Zerops source client requests', () => {
 		})
 		expect(body(calls[2] ?? missingCall())).toEqual({ protocolVersion: 1, runId: 'run-1', appVersionId: 'version-1' })
 	})
+
+	test('forwards public platform archive selection over the v1 upload transport', async () => {
+		const { client, calls } = harness(async () =>
+			jsonResponse({
+				protocolVersion: 1,
+				runId: 'run-1',
+				appVersionId: 'version-1',
+				commitSha: COMMIT,
+				descriptorSha256: DESCRIPTOR_SHA,
+			})
+		)
+		await client.upload({ ...uploadInput(new AbortController().signal), githubInstallationId: undefined, archiveKind: 'platform' })
+		expect(calls[0]?.url).toBe(`${ORIGIN}${ZEROPS_SOURCE_UPLOAD_PATH}`)
+		expect(body(calls[0] ?? missingCall())).toEqual({
+			protocolVersion: 1,
+			runId: 'run-1',
+			appVersionId: 'version-1',
+			repository: REPOSITORY,
+			commitSha: COMMIT,
+			uploadUrl: UPLOAD_URL,
+			descriptor: { path: 'zerops.yaml', sha256: DESCRIPTOR_SHA },
+			archiveKind: 'platform',
+		})
+	})
 })
 
 describe('HTTP Zerops source client response validation', () => {

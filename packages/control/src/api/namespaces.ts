@@ -23,10 +23,23 @@ import {
 	type ProviderNamespacePresentation,
 } from '@fabrika/provider-contract'
 import { type ControlRepositories, type DeploymentNamespaceRow, NamespaceResourceClaimConflictError } from '../db'
+import { NamespaceOwnership } from '../namespace-ownership'
 import type { ControlJobMessage, DeployLockGate, NamespaceJobMessage, NamespaceJobMutation } from '../run-lifecycle'
 import { uuidv7 } from '../uuid'
 import { fail } from './domain'
 import { parseStoredEnvelope } from './provider-envelope'
+
+export { namespaceLockKey } from '../namespace-ownership'
+
+/** Repairs the durable-checkpoint/queue-send crash gap; the namespace lease makes duplicate deliveries harmless. */
+export async function enqueueUnsettledNamespaces(
+	registry: Pick<ControlRepositories['registry'], 'listDeploymentNamespaces'>,
+	queue: JobQueue<ControlJobMessage>,
+): Promise<void> {
+	for (const namespace of await registry.listDeploymentNamespaces()) {
+		if (namespace.state === 'provisioning') await queue.send({ kind: 'namespace', namespaceId: namespace.id, mutation: 'reconcile' })
+	}
+}
 
 /**
  * Republish one deployment namespace's proxy manifest from the registry.
@@ -314,9 +327,6 @@ export interface NamespaceJobDeps {
 	readonly lock: DeployLockGate
 }
 
-/** One lease per namespace, in the same generic table the per-app-env deploy lock uses. */
-export const namespaceLockKey = (namespaceId: string): string => `namespace:${namespaceId}`
-
 /**
  * Run one queued namespace mutation.
  *
@@ -333,20 +343,18 @@ export async function runNamespaceJob(deps: NamespaceJobDeps, message: Namespace
 	const runnable = (row: DeploymentNamespaceRow | null): row is DeploymentNamespaceRow =>
 		row !== null && row.provider === deps.provider.id && (row.state === 'pending' || row.state === 'provisioning')
 	if (!runnable(await deps.repositories.registry.getDeploymentNamespace(message.namespaceId))) return skipped
-	const key = namespaceLockKey(message.namespaceId)
-	const holder = uuidv7()
-	if (!(await deps.lock.acquire(key, holder))) return { namespaceId: message.namespaceId, status: 'deferred' }
+	const owner = await NamespaceOwnership.acquire(deps.repositories.registry, deps.lock, message.namespaceId)
+	if (owner === null) return { namespaceId: message.namespaceId, status: 'deferred' }
 	try {
 		// Re-read UNDER the lease, as `executeDeploy` re-verifies its run: the first read raced whoever held
 		// it, so both the guard and the target handed to the provider have to come from after the acquire.
-		const row = await deps.repositories.registry.getDeploymentNamespace(message.namespaceId)
+		const row = owner.row
 		if (!runnable(row)) return skipped
 		// The signal belongs to the JOB, never to a request — a caller that hangs up must not cancel this.
-		const controller = new AbortController()
-		const context: NamespaceJobContext = { repositories: deps.repositories, provider: deps.provider, signal: controller.signal }
-		return { namespaceId: row.id, status: await mutateNamespace(context, row, message.mutation) }
+		const context: NamespaceJobContext = { repositories: deps.repositories, provider: deps.provider, signal: owner.signal }
+		return { namespaceId: row.id, status: await mutateNamespace(context, row, message.mutation, owner) }
 	} finally {
-		await deps.lock.release(key, holder)
+		await owner.close()
 	}
 }
 
@@ -361,18 +369,12 @@ async function mutateNamespace(
 	c: NamespaceJobContext,
 	row: DeploymentNamespaceRow,
 	mutation: NamespaceJobMutation,
+	owner: NamespaceOwnership,
 ): Promise<NamespaceMutationStatus> {
 	const capabilities = c.provider.namespaces
 	if (capabilities === undefined) return 'skipped'
 	let current = toProviderNamespace(row)
-	if (
-		await c.repositories.registry.updateDeploymentNamespace({
-			id: row.id,
-			providerTargetJson: JSON.stringify(current.target),
-			state: 'provisioning',
-			lastError: null,
-		}) === null
-	) return 'skipped'
+	await owner.checkpoint(JSON.stringify(current.target), 'provisioning')
 	const providerInput = (): ProviderNamespaceMutationInput => ({
 		namespace: current,
 		signal: c.signal,
@@ -382,14 +384,7 @@ async function mutateNamespace(
 					throw namespaceCheckpointInvariant('provider checkpoint changed namespace coordinates')
 				}
 				current = namespace
-				if (
-					await c.repositories.registry.updateDeploymentNamespace({
-						id: row.id,
-						providerTargetJson: JSON.stringify(current.target),
-						state: 'provisioning',
-						lastError: null,
-					}) === null
-				) throw namespaceCheckpointInvariant('deployment namespace disappeared during checkpoint')
+				await owner.checkpoint(JSON.stringify(current.target), 'provisioning')
 			},
 		},
 	})
@@ -397,22 +392,14 @@ async function mutateNamespace(
 		const result = mutation === 'provision' ? await capabilities.provision(providerInput()) : await capabilities.reconcile(providerInput())
 		if (!sameCoordinates(result, current, c.provider.id)) throw new Error('provider result changed namespace coordinates')
 		current = result
-		const ready = await c.repositories.registry.updateDeploymentNamespace({
-			id: row.id,
-			providerTargetJson: JSON.stringify(current.target),
-			state: 'ready',
-			lastError: null,
-		})
-		return ready === null ? 'skipped' : 'ready'
+		await owner.checkpoint(JSON.stringify(current.target), 'ready')
+		return 'ready'
 	} catch (cause) {
+		owner.assertOwned()
 		const failure = namespaceFailure(cause, mutation)
 		console.error(`namespace ${mutation} failed for ${row.id}: ${failure.code}: ${failure.log}`)
-		await c.repositories.registry.updateDeploymentNamespace({
-			id: row.id,
-			providerTargetJson: JSON.stringify(current.target),
-			state: 'failed',
-			lastError: encodeNamespaceError(failure.code, failure.message),
-		})
+		const state = asProviderNamespaceError(cause)?.retryable === true ? 'provisioning' : 'failed'
+		await owner.checkpoint(JSON.stringify(current.target), state, encodeNamespaceError(failure.code, failure.message))
 		return 'failed'
 	}
 }

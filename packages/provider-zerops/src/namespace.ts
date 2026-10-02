@@ -15,7 +15,9 @@ export {
 	ZEROPS_SUBDOMAIN_NOT_PUBLISHED,
 } from './namespace/errors'
 export { createZeropsNamespaceOperator } from './namespace/operator'
-export { createZeropsNamespaceCapabilities, ensureNamespaceProxyIam } from './namespace/provisioning'
+export { createZeropsNamespaceCapabilities } from './namespace/provisioning'
+export { ensureNamespaceProxyIam, runZeropsProxyAttempt, type ZeropsProxyAttemptApi, type ZeropsProxyAttemptInput } from './namespace/proxy-attempt'
+export { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from './namespace/proxy-source'
 export { compileZeropsNamespaceTopology, zeropsNamespacePreset } from './namespace/topology'
 export type {
 	NamespaceProxyIamInput,
@@ -24,6 +26,9 @@ export type {
 	ZeropsNamespacePlanOptions,
 	ZeropsNamespacePostgres,
 	ZeropsNamespacePresetInput,
+	ZeropsNamespaceProxyBuild,
+	ZeropsNamespaceProxyDeployment,
+	ZeropsNamespaceProxySource,
 	ZeropsNamespacePublicAccess,
 	ZeropsNamespaceTarget,
 	ZeropsNamespaceTopology,

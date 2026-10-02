@@ -49,6 +49,7 @@ export function namespaceJobDeps(env: Env, provider: ControlProvider): Namespace
 		provider,
 		lock: {
 			acquire: (key, holder) => locks(env).acquire(key, holder, NAMESPACE_LOCK_TTL_MS),
+			renew: (key, holder) => locks(env).renew(key, holder, NAMESPACE_LOCK_TTL_MS),
 			release: (key, holder) => locks(env).release(key, holder),
 		},
 	}

@@ -2,6 +2,9 @@ import { SqlDeployLocks } from '@fabrika/platform'
 import { PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createControlRepositories } from '../db'
+import { reconcileProviderRuns } from '../provider-reconcile'
+import { executeDeploy, type RunDeps } from '../run-lifecycle'
+import { EnvSecretResolver } from '../secret-resolver'
 import { createPostgres, hasPostgres, type PostgresFixture, postgresUrl, skipReason } from './helpers/postgres'
 import { runFencingContract } from './helpers/run-fencing'
 
@@ -17,6 +20,53 @@ afterAll(async () => {
 
 describe.skipIf(!hasPostgres)('run fencing on Postgres', () => {
 	runFencingContract(() => fixture.db)
+
+	test('runtime deploy and recovery share SQL ownership and retain exclusion across unresolved invocations', async () => {
+		const repositories = createControlRepositories(fixture.db)
+		const locks = new SqlDeployLocks(fixture.db)
+		const appId = 'runtime-ownership'
+		await repositories.registry.createApp({ id: appId, repoUrl: 'https://github.com/example/app' })
+		const envelope = JSON.stringify({ provider: 'runtime-test', version: 1, payload: {} })
+		await repositories.registry.upsertAppEnv({
+			appId,
+			env: 'prod',
+			namespaceId: null,
+			provider: 'runtime-test',
+			providerTargetJson: envelope,
+			providerArtifactJson: envelope,
+		})
+		for (const id of ['runtime-first', 'runtime-next']) {
+			await repositories.runs.createRun({ id, appId, env: 'prod', ref: 'main', trigger: 'manual' })
+		}
+		const deps: RunDeps = {
+			repositories,
+			lock: {
+				acquire: (key, holder) => locks.acquire(key, holder, 1800000),
+				renew: (key, holder) => locks.renew(key, holder, 1800000),
+				release: (key, holder) => locks.release(key, holder),
+			},
+			secrets: new EnvSecretResolver({}),
+			logs: { put: async () => {} },
+			provider: {
+				id: 'runtime-test',
+				normalizeRegistration: (input) => input,
+				deploy: async (input) => {
+					await input.events.externalId('external', { phase: 1 })
+					await input.events.checkpoint({ phase: 2 })
+					return { state: 'running' }
+				},
+				reconcile: async (input) => {
+					expect(input.providerState).toEqual({ phase: 2 })
+					await input.checkpoint({ phase: 3 })
+					return { state: 'succeeded' }
+				},
+			},
+		}
+		expect(await executeDeploy(deps, { runId: 'runtime-first' })).toEqual({ runId: 'runtime-first', status: 'running' })
+		expect(await executeDeploy(deps, { runId: 'runtime-next' })).toEqual({ runId: 'runtime-next', status: 'deferred' })
+		expect(await reconcileProviderRuns(deps)).toMatchObject({ succeeded: 1, waiting: 1 })
+		expect(await executeDeploy(deps, { runId: 'runtime-next' })).toEqual({ runId: 'runtime-next', status: 'running' })
+	})
 
 	test('concurrent checkpoint CAS attempts have exactly one winner', async () => {
 		if (postgresUrl === null) throw new Error('Postgres not configured')

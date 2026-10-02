@@ -259,6 +259,46 @@ export class ControlRegistryRepository {
 			)
 	}
 
+	async checkpointDeploymentNamespace(input: {
+		expected: DeploymentNamespaceRow
+		holder: string
+		nowMs: number
+		providerTargetJson: string
+		state: DeploymentNamespaceState
+		lastError: string | null
+	}): Promise<DeploymentNamespaceRow | null> {
+		const row = input.expected
+		const exclusive = row.exclusive_app_id === null ? 'exclusive_app_id IS NULL' : 'exclusive_app_id = ?'
+		const exclusiveValues = row.exclusive_app_id === null ? [] : [row.exclusive_app_id]
+		// Lock the lease row until the target CAS commits; EXISTS alone races Postgres takeover.
+		const results = await this.d1.batch<DeploymentNamespaceRow>([
+			this.d1.prepare(`UPDATE deploy_locks SET holder = holder
+				WHERE lock_key = ? AND holder = ? AND expires_at > ?`)
+				.bind(`namespace:${row.id}`, input.holder, input.nowMs),
+			this.d1.prepare(`UPDATE deployment_namespaces SET provider_target_json = ?, state = ?, last_error = ?
+				WHERE id = ? AND env = ? AND provider = ? AND ${exclusive}
+					AND created_at = ? AND state = ? AND provider_target_json = ?
+					AND EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
+				RETURNING *`)
+				.bind(
+					input.providerTargetJson,
+					input.state,
+					input.lastError,
+					row.id,
+					row.env,
+					row.provider,
+					...exclusiveValues,
+					row.created_at,
+					row.state,
+					row.provider_target_json,
+					`namespace:${row.id}`,
+					input.holder,
+					input.nowMs,
+				),
+		])
+		return results[1]?.results[0] ?? null
+	}
+
 	/** Persist a provider checkpoint or a core-owned namespace lifecycle transition. */
 	async updateDeploymentNamespace(input: {
 		id: string

@@ -2,7 +2,13 @@ import { createRpcClient } from '@fabrika/app'
 import type { AdoptDeploymentNamespaceRequest, ControlRpcContract, CreateDeploymentNamespaceRequest } from '@fabrika/control-contract'
 import type { JsonValue, ProviderDeploymentNamespace, ProviderNamespacePlan } from '@fabrika/provider-contract'
 import type { ZeropsCliArgs } from './cli-args'
-import { createZeropsNamespaceOperator, type ZeropsNamespacePostgres, zeropsNamespaceTargetCodec } from './namespace'
+import {
+	createZeropsNamespaceOperator,
+	decodeZeropsNamespaceProxySource,
+	verifyZeropsNamespaceProxySource,
+	type ZeropsNamespacePostgres,
+	zeropsNamespaceTargetCodec,
+} from './namespace'
 
 export interface ZeropsNamespaceCommandDependencies {
 	readonly source: Readonly<Record<string, string | undefined>>
@@ -65,17 +71,22 @@ const planOptions = (args: ZeropsCliArgs): { [key: string]: JsonValue } | undefi
 	return Object.keys(values).length === 0 ? undefined : values
 }
 
-const namespacePlan = (
+const namespacePlan = async (
 	args: ZeropsCliArgs,
 	source: Readonly<Record<string, string | undefined>>,
-): ProviderNamespacePlan => {
+): Promise<ProviderNamespacePlan> => {
 	// `FABRIKA_ZEROPS_*` because Zerops reserves the bare `ZEROPS_` prefix and refuses to store a custom
 	// variable using it (`userDataZeropsPrefixForbidden`).
-	const proxyBuildFromGit = required(
-		args.proxyBuildFromGit ?? source['FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT'],
-		'--proxy-build-from-git or FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT',
-	)
-	const operator = createZeropsNamespaceOperator({ proxyBuildFromGit })
+	const serialized = required(source['FABRIKA_ZEROPS_PROXY_SOURCE_JSON'], 'FABRIKA_ZEROPS_PROXY_SOURCE_JSON')
+	let value: unknown
+	try {
+		value = JSON.parse(serialized)
+	} catch {
+		throw new Error('FABRIKA_ZEROPS_PROXY_SOURCE_JSON must contain valid JSON')
+	}
+	const proxySource = decodeZeropsNamespaceProxySource(value)
+	await verifyZeropsNamespaceProxySource(proxySource)
+	const operator = createZeropsNamespaceOperator({ proxySource })
 	const options = planOptions(args)
 	return operator.plan({
 		id: required(args.namespaceId, '--id'),
@@ -155,8 +166,13 @@ export const runZeropsNamespaceCommand = async (
 	deps: ZeropsNamespaceCommandDependencies,
 ): Promise<void> => {
 	const subcommand = required(args.subcommand, 'namespace command')
+	if (args.proxyBuildFromGit !== undefined || deps.source['FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT'] !== undefined) {
+		throw new Error(
+			'--proxy-build-from-git and FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT are no longer supported; remove them and use FABRIKA_ZEROPS_PROXY_SOURCE_JSON for plan/create/adopt. Reconcile uses the persisted source; legacy sources are not automatically pinned.',
+		)
+	}
 	if (subcommand === 'plan') {
-		deps.write(outputJson(namespacePlan(args, deps.source)))
+		deps.write(outputJson(await namespacePlan(args, deps.source)))
 		return
 	}
 	if (subcommand === 'reconcile') {
@@ -169,7 +185,7 @@ export const runZeropsNamespaceCommand = async (
 		throw new Error(`Unknown namespace command: ${subcommand}`)
 	}
 
-	const planned = namespacePlan(args, deps.source)
+	const planned = await namespacePlan(args, deps.source)
 	const control = controlCoordinates(args, deps.source)
 	if (subcommand === 'create') {
 		writeNamespace(deps, await controlClient(deps, control).namespaces.create(createBody(planned.namespace)))

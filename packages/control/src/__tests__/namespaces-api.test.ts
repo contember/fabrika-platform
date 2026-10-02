@@ -144,7 +144,7 @@ function makeDeps(
 	const { db } = createHarness()
 	const audits: AuditRecord[] = []
 	const sent: ControlJobMessage[] = []
-	const lock = makeFakeLock()
+	const lock = makeFakeLock(db)
 	return {
 		deps: {
 			repositories: db,

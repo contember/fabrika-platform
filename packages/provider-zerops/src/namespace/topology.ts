@@ -2,6 +2,7 @@ import type { ProviderDeploymentNamespace } from '@fabrika/provider-contract'
 import { compileImportYaml, compileProvisioningYaml } from '../compile'
 import type { ZeropsServiceSpec, ZeropsSourceTarget } from '../types'
 import { ZEROPS_NAMESPACE_POSTGRES_HOSTNAME, ZEROPS_NAMESPACE_PROXY_HOSTNAME } from './constants'
+import { decodeZeropsNamespaceProxySource } from './proxy-source'
 import type {
 	ZeropsNamespacePostgres,
 	ZeropsNamespacePresetInput,
@@ -33,13 +34,13 @@ export const PROXY_TYPE = 'alpine@3.21'
 const defaultPostgres = (): ZeropsNamespacePostgres => ({ type: 'postgresql:single@18', profile: 'oltp-hobby' })
 
 export const zeropsNamespacePreset = (input: ZeropsNamespacePresetInput): ZeropsNamespaceTarget => ({
+	...(input.proxySource === undefined ? {} : { proxySource: decodeZeropsNamespaceProxySource(input.proxySource) }),
 	projectName: input.projectName,
 	// `LIGHT` on every environment. An APP namespace is not the platform project — the argument for
 	// `SERIOUS` in `installation-zerops` is that the platform repairs the apps project, which no app
 	// namespace does. `corePackage` is upgrade-only, so this stays the caller's explicit choice.
 	corePackage: input.corePackage ?? 'LIGHT',
 	publicAccess: input.publicAccess ?? 'custom-domain',
-	proxyBuildFromGit: input.proxyBuildFromGit,
 	managed: true,
 	ready: false,
 	...(input.preset === 'cheap' ? { postgres: input.postgres ?? defaultPostgres() } : {}),
@@ -47,10 +48,7 @@ export const zeropsNamespacePreset = (input: ZeropsNamespacePresetInput): Zerops
 
 export const projectMarker = (namespace: ProviderDeploymentNamespace): string => `Managed by Fabrika namespace ${namespace.id} (${namespace.env}).`
 
-// No `zeropsSetup`: the platform reads it as pipeline configuration and rejects the whole import unless
-// the service also names a `buildFromGit`, which an import that only PROVISIONS does not. The setup name
-// is supplied where it is actually needed — the `triggerPipeline` call in the namespace lifecycle below,
-// which passes both. `assertZeropsInvariants` refuses the invalid combination.
+// Imports provision services only. The reserved upload-backed build selects the proxy setup.
 //
 // `enableSubdomainAccess` is a DECLARATION here and not a mechanism: the platform accepts it and drops it,
 // including on the service this document creates. `ensureSubdomainAccess` below is what establishes the
@@ -104,7 +102,7 @@ export const compileZeropsNamespaceTopology = (
 	const serviceSource: ZeropsSourceTarget = { platform: 'zerops', services }
 	return {
 		source,
-		createYaml: compileProvisioningYaml({ target: source, ctx: { env: namespace.env } }).yaml,
+		createYaml: compileImportYaml({ target: source, ctx: { env: namespace.env } }).yaml,
 		servicesProvisionYaml: compileProvisioningYaml({ target: serviceSource, ctx: { env: namespace.env } }).yaml,
 		servicesSteadyYaml: compileImportYaml({ target: serviceSource, ctx: { env: namespace.env } }).yaml,
 	}

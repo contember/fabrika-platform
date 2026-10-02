@@ -70,7 +70,10 @@ export {
 	compileZeropsNamespaceTopology,
 	createZeropsNamespaceCapabilities,
 	createZeropsNamespaceOperator,
+	decodeZeropsNamespaceProxySource,
 	ensureNamespaceProxyIam,
+	runZeropsProxyAttempt,
+	verifyZeropsNamespaceProxySource,
 	ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
 	ZEROPS_NAMESPACE_IAM_KEY_VARIABLE,
 	ZEROPS_NAMESPACE_POSTGRES_HOSTNAME,
@@ -86,9 +89,14 @@ export type {
 	ZeropsNamespacePlanOptions,
 	ZeropsNamespacePostgres,
 	ZeropsNamespacePresetInput,
+	ZeropsNamespaceProxyBuild,
+	ZeropsNamespaceProxyDeployment,
+	ZeropsNamespaceProxySource,
 	ZeropsNamespacePublicAccess,
 	ZeropsNamespaceTarget,
 	ZeropsNamespaceTopology,
+	ZeropsProxyAttemptApi,
+	ZeropsProxyAttemptInput,
 } from './namespace'
 export { runZeropsNamespaceCommand } from './namespace-command'
 export type { ZeropsNamespaceCommandDependencies } from './namespace-command'

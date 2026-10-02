@@ -66,7 +66,7 @@ async function failWithProvider(provider: ControlProvider): Promise<{ row: Deplo
 	}
 	try {
 		const result = await runNamespaceJob(
-			{ repositories: db, provider, lock: makeFakeLock() },
+			{ repositories: db, provider, lock: makeFakeLock(db) },
 			{ kind: 'namespace', namespaceId: 'apps-prod', mutation: 'provision' },
 		)
 		expect(result.status).toBe('failed')
@@ -77,6 +77,11 @@ async function failWithProvider(provider: ControlProvider): Promise<{ row: Deplo
 }
 
 describe('namespace failure projection', () => {
+	test('retryable external ambiguity retains provisioning exclusion and its diagnostic', async () => {
+		const { row } = await failNamespace(new ProviderNamespaceError('version v1 remains unresolved', 'proxyAttemptUnresolved', true))
+		expect(row?.state).toBe('provisioning')
+		expect(row?.last_error).toBe('proxyAttemptUnresolved: version v1 remains unresolved')
+	})
 	test('records a denied import, a refused write, and an unpublishable subdomain as three different failures', async () => {
 		const denied = await failNamespace(
 			new ProviderNamespaceError('zerops: project import failed (403)', 'insufficientPermissions', false, 'client may not create projects'),

@@ -594,7 +594,7 @@ describe('Zerops provider', () => {
 		expect(recorded.checkpoints).not.toContainEqual({ appVersionId: 'version-1', phase: 'build_triggered' })
 	})
 
-	test('continues observing an accepted build when the result checkpoint fails', async () => {
+	test('propagates a rejected result checkpoint while preserving accepted work for recovery', async () => {
 		const provider = createZeropsProvider(() => makeCollaborators(recorded, { statuses: ['ACTIVE'] }))
 		const run = runtimeRun(recorded, provider)
 		const session = await provider.runtime.open({
@@ -609,10 +609,9 @@ describe('Zerops provider', () => {
 			},
 		})
 
-		await session.execute('trigger-deploy')
-		await session.execute('await-deploy')
+		await expect(session.execute('trigger-deploy')).rejects.toThrow('checkpoint unavailable')
 
-		expect(recorded.calls).toContain('getAppVersion')
+		expect(recorded.calls).not.toContain('getAppVersion')
 		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
 		expect(recorded.checkpoints).toContainEqual({ appVersionId: 'version-1', phase: 'build_trigger_requested' })
 	})

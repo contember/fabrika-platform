@@ -101,6 +101,8 @@ export interface ProviderDeployInput {
 	}
 	readonly signal: AbortSignal
 	readonly events: ProviderRunEvents
+	/** Read retained state for one exact external version, scoped by Control to this app/environment. */
+	readonly readRetainedCheckpoint?: (externalId: string) => Promise<JsonValue | null>
 }
 
 export interface ProviderBoundDeployInput extends ProviderDeployInput {
@@ -115,6 +117,20 @@ export interface ProviderTerminalOutcome {
 	readonly artifactState?: 'complete' | 'incomplete' | 'not_applicable'
 }
 
+/** Running means external settlement is unresolved, including an ambiguous submission response. */
+export type ProviderDeployOutcome = ProviderTerminalOutcome | { readonly state: 'running' }
+
+/** Settled does not imply rollback: activation may have won before cancellation. */
+export type ProviderCancelOutcome = { readonly state: 'pending' } | { readonly state: 'settled' }
+
+/** Losing invocation ownership must never be interpreted as permission to cancel external work. */
+export class ProviderInvocationAbort extends Error {
+	constructor(readonly kind: 'lease_lost' | 'cancel_requested') {
+		super(kind === 'lease_lost' ? 'provider invocation lost its lease' : 'provider cancellation requested')
+		this.name = 'ProviderInvocationAbort'
+	}
+}
+
 /** A platform-owned run that can be cancelled or reconciled. */
 export interface ProviderRunReference {
 	readonly runId: string
@@ -124,9 +140,12 @@ export interface ProviderRunReference {
 	readonly providerState?: JsonValue
 }
 
-export type ProviderCancelInput = ProviderRunReference
+export interface ProviderCancelInput extends ProviderRunReference {
+	readonly signal: AbortSignal
+}
 
 export interface ProviderReconcileInput extends ProviderRunReference {
+	readonly signal: AbortSignal
 	/** See `ProviderDeployInput.returnOrigins`; a provider that finishes a resumed deploy projects the same set. */
 	readonly returnOrigins?: readonly string[]
 	/** Persist a credential-free recovery checkpoint before the next irreversible provider call. */
@@ -205,6 +224,8 @@ export interface ProviderNamespaceMutationInput {
 
 /** One registration whose provider coordinates do not exist until namespace services are prepared. */
 export interface ProviderRegistrationPreparationInput {
+	/** Historical state is scoped to the requested registration's app/environment. */
+	readonly readRetainedCheckpoint?: (externalId: string) => Promise<JsonValue | null>
 	readonly registration: ProviderRegistration
 	readonly signal: AbortSignal
 }
@@ -302,9 +323,9 @@ export interface ControlProvider {
 	normalizeRegistration(input: ProviderRegistrationInput): ProviderRegistration
 	resolveSource?(input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution>
 	resolveSourceWithBinding?(input: ProviderBoundSourceResolutionInput): Promise<ProviderSourceResolution>
-	deploy(input: ProviderDeployInput): Promise<ProviderTerminalOutcome>
-	deployWithBinding?(input: ProviderBoundDeployInput): Promise<ProviderTerminalOutcome>
-	cancel?(input: ProviderCancelInput): Promise<void>
+	deploy(input: ProviderDeployInput): Promise<ProviderDeployOutcome>
+	deployWithBinding?(input: ProviderBoundDeployInput): Promise<ProviderDeployOutcome>
+	cancel?(input: ProviderCancelInput): Promise<ProviderCancelOutcome>
 	reconcile?(input: ProviderReconcileInput): Promise<ProviderReconcileOutcome>
 	readonly secrets?: ProviderManagedSecrets
 	readonly namespaces?: ProviderNamespaceCapabilities

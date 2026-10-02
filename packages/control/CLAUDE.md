@@ -207,6 +207,9 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   preserved). The lease is non-reentrant + TTL-bounded (self-heals if a consumer dies) + holder-checked on
   release; `acquire` is ONE conditional upsert (`meta.changes` is the answer) so there is no read-then-write
   race, which is why it works identically on SQLite and Postgres. Never split it into a read + a write.
+  Invocation ownership uses a unique holder, renewal and fenced checkpoint writes (`run-ownership.ts`).
+  Preserve unresolved running rows after lease release: they exclude later deployments until recovery
+  settles external work. Lease loss must never become external cancellation or terminal failure.
 - **Namespace provisioning is a JOB, not a request** (`src/api/namespaces.ts`, backlog 74). `create` /
   `adopt` / `reconcile` persist the row `pending`, enqueue, audit and return; the worker claims
   `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.

@@ -180,12 +180,21 @@ export function createHarnessThrough(filename: string, now?: () => number): Harn
 	return createHarnessWithMigrations(migrationsThrough(filename), now)
 }
 
+const databases = new WeakMap<ControlRepositories, D1Database>()
+
+export function harnessDatabase(repositories: ControlRepositories): D1Database {
+	const database = databases.get(repositories)
+	if (database === undefined) throw new Error('repositories do not belong to a test harness')
+	return database
+}
+
 function createHarnessWithMigrations(migrations: string, now?: () => number): Harness {
 	const sqlite = new Database(':memory:')
 	sqlite.exec('PRAGMA foreign_keys = ON')
 	sqlite.exec(migrations)
 	const d1 = new TestD1Database(sqlite)
 	const repositories = createControlRepositories(d1, { ...(now === undefined ? {} : { now }) })
+	databases.set(repositories, d1)
 	return { sqlite, repositories, db: repositories, d1 }
 }
 

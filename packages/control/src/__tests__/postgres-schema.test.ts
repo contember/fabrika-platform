@@ -540,7 +540,7 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(await db.registry.listAppVars('acme')).toHaveLength(1)
 	})
 
-	test('runs: create, the status-guarded transitions, keyset paging, and the stale sweep', async () => {
+	test('runs: create, status-guarded transitions, keyset paging, and stale candidates', async () => {
 		await reset()
 		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
 		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
@@ -596,10 +596,10 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect((await db.runs.getRun(cancelled.id))?.status).toBe('failed')
 		expect(await db.runs.markRunFailedAfterRunner(cancelled.id)).toBe(false)
 
-		// The sweep only reaps genuinely aged pending/running rows — `second` is still pending and young.
-		expect(await db.runs.sweepStaleRuns(3600)).toBe(0)
-		expect(await db.runs.sweepStaleRuns(-1)).toBe(1)
-		expect((await db.runs.getRun(second.id))?.status).toBe('failed')
+		// Candidate discovery leaves settlement to the invocation that acquires the lease.
+		expect(await db.runs.listStaleRuns(3600)).toHaveLength(0)
+		expect((await db.runs.listStaleRuns(-1)).map((run) => run.id)).toEqual([second.id])
+		expect((await db.runs.getRun(second.id))?.status).toBe('pending')
 	})
 
 	test('repo poll state: the join that selects pollable envs, and the upsert', async () => {

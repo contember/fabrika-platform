@@ -6,6 +6,7 @@ import type {
 	ProviderCodec,
 	ProviderDeployInput,
 	ProviderDeploymentNamespace,
+	ProviderDeployOutcome,
 	ProviderEnvelope,
 	ProviderEnvironment,
 	ProviderReconcileInput,
@@ -44,7 +45,13 @@ import {
 	verifyZeropsArtifactSourceDescriptor,
 	zeropsArtifactCodec,
 } from './manifest'
-import { createZeropsNamespaceCapabilities, type ZeropsNamespaceTarget, zeropsNamespaceTargetCodec } from './namespace'
+import {
+	createZeropsNamespaceCapabilities,
+	verifyZeropsNamespaceProxySource,
+	type ZeropsNamespaceProxySource,
+	type ZeropsNamespaceTarget,
+	zeropsNamespaceTargetCodec,
+} from './namespace'
 import { createZeropsProvider } from './provider'
 import { allowedReferenceHosts, foreignReferenceHost, serviceReferenceHosts } from './service-references'
 import { normalizeZeropsSourceRepository, type ZeropsSourceClient, type ZeropsSourceClientV2, type ZeropsSourceResolveResult } from './source'
@@ -101,8 +108,7 @@ export interface ZeropsBeforeDeployInput {
 	readonly target: ZeropsStoredTarget & {
 		readonly projectId: string
 		readonly proxyServiceId: string
-		/** The namespace proxy has no Git integration, so its pipeline must be told what to build. */
-		readonly proxyBuildFromGit: string
+		readonly proxySource: ZeropsNamespaceProxySource
 	}
 	readonly artifact: FabrikaManifest
 	readonly api: ZeropsApi
@@ -130,7 +136,9 @@ export interface ZeropsControlProviderOptions {
 	readonly beforeDeploy?: ZeropsBeforeDeploy
 	readonly namespaces?: {
 		readonly clientId: string
-		readonly proxyBuildFromGit: string
+		readonly proxySource?: ZeropsNamespaceProxySource
+		readonly proxyBuildFromGit?: string
+		readonly proxyManifest?: (namespaceId: string) => Promise<string>
 		readonly iamUrl: string
 		readonly iamKey: string
 	}
@@ -179,7 +187,7 @@ const decodeNamespace = (
 const resolvedEnvironment = (
 	environment: ProviderEnvironment,
 	options: { requireReady: boolean },
-): DecodedZeropsEnvironment & { projectId: string; proxyServiceId?: string; proxyBuildFromGit?: string } => {
+): DecodedZeropsEnvironment & { projectId: string; proxyServiceId?: string; proxySource?: ZeropsNamespaceProxySource } => {
 	const decoded = decodeEnvironment(environment)
 	const projectId = decoded.namespaceTarget.projectId
 	if (projectId === undefined) {
@@ -192,15 +200,15 @@ const resolvedEnvironment = (
 	if (options.requireReady && proxyServiceId === undefined) {
 		throw new Error(`Zerops deployment namespace \`${decoded.namespace.id}\` has no proxy service id`)
 	}
-	const proxyBuildFromGit = decoded.namespaceTarget.proxyBuildFromGit
-	if (options.requireReady && proxyBuildFromGit === undefined) {
-		throw new Error(`Zerops deployment namespace \`${decoded.namespace.id}\` has no proxy build source`)
+	const proxySource = decoded.namespaceTarget.proxySource
+	if (options.requireReady && proxySource === undefined) {
+		throw new Error(`Zerops deployment namespace \`${decoded.namespace.id}\` is unpinned; explicit migration is required`)
 	}
 	return {
 		...decoded,
 		projectId,
 		...(proxyServiceId === undefined ? {} : { proxyServiceId }),
-		...(proxyBuildFromGit === undefined ? {} : { proxyBuildFromGit }),
+		...(proxySource === undefined ? {} : { proxySource }),
 	}
 }
 
@@ -284,6 +292,26 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		throw new Error('Zerops access token must be a non-empty string')
 	}
 	const api = options.api ?? createZeropsApi({ token: options.accessToken, baseUrl: options.apiBaseUrl })
+	const isAbsentVersion = (error: unknown): boolean => error instanceof ZeropsApiError && error.status === 400 && error.code === 'appVersionNotFound'
+	const deleteVersion = async (input: { appVersionId: string; signal: AbortSignal }): Promise<void> => {
+		input.signal.throwIfAborted()
+		try {
+			await api.deleteAppVersion(input)
+		} catch (error) {
+			input.signal.throwIfAborted()
+			if (!isAbsentVersion(error)) throw error
+		}
+	}
+	const getVersion = async (input: { appVersionId: string; signal: AbortSignal }): Promise<ZeropsAppVersion | null> => {
+		input.signal.throwIfAborted()
+		try {
+			return await api.getAppVersion(input)
+		} catch (error) {
+			input.signal.throwIfAborted()
+			if (!isAbsentVersion(error)) throw error
+			return null
+		}
+	}
 	const sourceBindings = new Map<string, ProviderSourceBinding>()
 	const runtimeProvider = createZeropsProvider((target) => {
 		const defaults = defaultZeropsCollaborators(target)
@@ -306,6 +334,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		? undefined
 		: createZeropsNamespaceCapabilities({
 			...options.namespaces,
+			source: options.source,
 			api,
 			...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
 		})
@@ -330,11 +359,12 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		}
 	}
 
-	const cancelSourceBestEffort = async (runId: string, appVersionId: string): Promise<void> => {
+	const cancelSourceBestEffort = async (runId: string, appVersionId: string, signal: AbortSignal): Promise<void> => {
+		signal.throwIfAborted()
 		const sourceController = new AbortController()
 		const timeoutController = new AbortController()
 		const cancel = Promise.resolve()
-			.then(() => options.source.cancel({ runId, appVersionId, signal: sourceController.signal }))
+			.then(() => options.source.cancel({ runId, appVersionId, signal: AbortSignal.any([signal, sourceController.signal]) }))
 			.catch(() => {})
 		const timeout = Promise.resolve()
 			.then(() => (options.sourceCancelSleep ?? defaultSleep)(SOURCE_CANCEL_TIMEOUT_MS, timeoutController.signal))
@@ -343,6 +373,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		await Promise.race([cancel, timeout])
 		timeoutController.abort()
 		sourceController.abort()
+		signal.throwIfAborted()
 	}
 
 	const reconcileActiveSchema = async (
@@ -361,6 +392,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			...(options.adminKey !== undefined ? { adminKey: options.adminKey } : {}),
 		}
 		const reconcileSchema = options.reconcileSchema ?? defaultZeropsCollaborators(runtimeTarget).reconcileSchema
+		signal.throwIfAborted()
 		await reconcileSchema({
 			url: options.propustkaUrl,
 			app: artifact.app.id,
@@ -388,7 +420,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				return { state: 'failed' }
 			}
 		}
-		const version = await api.getAppVersion({ appVersionId: state.appVersionId, signal })
+		const version = await getVersion({ appVersionId: state.appVersionId, signal })
+		if (version === null) return { state: 'failed' }
 		if (version.id !== state.appVersionId) throw new Error('Zerops app-version response has different coordinates')
 		if (version.status === ZEROPS_ACTIVE) {
 			await reconcileActiveSchema(input, placement, signal)
@@ -468,7 +501,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		},
 		resolveSource: (input) => resolveSource(input),
 		resolveSourceWithBinding: (input) => resolveSource(input, input.sourceBinding),
-		deploy: async (input: ProviderDeployInput): Promise<ProviderTerminalOutcome> => {
+		deploy: async (input: ProviderDeployInput): Promise<ProviderDeployOutcome> => {
+			input.signal.throwIfAborted()
 			assertSourceBinding(input, sourceBindings.get(input.runId))
 			const registration = normalizeRegistration({ app: input.app, environment: input.environment })
 			const placement = resolvedEnvironment(registration.environment, { requireReady: true })
@@ -476,10 +510,11 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			if (proxyServiceId === undefined) {
 				throw new Error(`Zerops deployment namespace \`${placement.namespace.id}\` has no proxy service id`)
 			}
-			const proxyBuildFromGit = placement.proxyBuildFromGit
-			if (proxyBuildFromGit === undefined) {
-				throw new Error(`Zerops deployment namespace \`${placement.namespace.id}\` has no proxy build source`)
+			const proxySource = placement.proxySource
+			if (proxySource === undefined) {
+				throw new Error(`Zerops deployment namespace \`${placement.namespace.id}\` is unpinned; explicit migration is required`)
 			}
+			await verifyZeropsNamespaceProxySource(proxySource)
 			const artifact = decodeEnvelope('artifact', registration.environment.artifact, zeropsArtifactCodec)
 			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
 			let source: ZeropsRuntimeTarget['source']
@@ -505,7 +540,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 						serviceId: placement.target.serviceId,
 						projectId: placement.projectId,
 						proxyServiceId,
-						proxyBuildFromGit,
+						proxySource,
 					},
 					artifact,
 					api,
@@ -527,6 +562,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 					? []
 					: await api.listServiceEnv({ serviceId: placement.target.serviceId, signal: input.signal })
 				for (const [name, value] of managedEntries) {
+					input.signal.throwIfAborted()
 					if (value === null) {
 						for (const item of existing) {
 							if (item.key === name) await api.deleteServiceEnv({ envId: item.id, signal: input.signal })
@@ -550,7 +586,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				...(options.propustkaUrl !== undefined ? { propustkaUrl: options.propustkaUrl } : {}),
 				...(options.adminKey !== undefined ? { adminKey: options.adminKey } : {}),
 			}
-			return options.execute(runtimeProvider.runtime, {
+			const accepted: { id?: string; state?: JsonValue } = {}
+			const result = await options.execute(runtimeProvider.runtime, {
 				appId: input.app.id,
 				env: input.environment.env,
 				...(input.environment.domain !== undefined ? { domain: input.environment.domain } : {}),
@@ -561,10 +598,39 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				managedEnvironment: {},
 				dryRun: input.dryRun,
 				signal: input.signal,
-				events: input.events,
+				events: {
+					log: input.events.log,
+					externalId: async (id, state) => {
+						await input.events.externalId(id, state)
+						accepted.id = id
+						accepted.state = state
+					},
+					checkpoint: async (state) => {
+						await input.events.checkpoint(state)
+						accepted.state = state
+					},
+				},
 				target: runtimeProvider.encodeTarget(runtimeTarget),
 				artifact: registration.environment.artifact,
 			})
+			input.signal.throwIfAborted()
+			if (result.state === 'succeeded' || accepted.id === undefined) return result
+			try {
+				const reconcile = controlProvider.reconcile
+				if (reconcile === undefined) return { state: 'running' }
+				return await reconcile({
+					runId: input.runId,
+					externalId: accepted.id,
+					environment: input.environment,
+					signal: input.signal,
+					...(accepted.state === undefined ? {} : { providerState: accepted.state }),
+					...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
+					checkpoint: input.events.checkpoint,
+				})
+			} catch {
+				input.signal.throwIfAborted()
+				return { state: 'running' }
+			}
 		},
 		deployWithBinding: async (input) => {
 			const { sourceBinding, ...deployInput } = input
@@ -578,34 +644,35 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			}
 		},
 		cancel: async (input) => {
+			const signal = input.signal
+			signal.throwIfAborted()
 			resolvedEnvironment(input.environment, { requireReady: false })
 			const state = parseRunState(input.providerState, input.externalId)
-			await cancelSourceBestEffort(input.runId, state.appVersionId)
-			if (state.phase === 'build_triggered') {
-				await api.cancelBuild({ appVersionId: state.appVersionId, signal: abortSignal() })
-				return
+			await cancelSourceBestEffort(input.runId, state.appVersionId, signal)
+			if (state.phase === 'version_created' || state.phase === 'source_uploaded') {
+				await deleteVersion({ appVersionId: state.appVersionId, signal })
+				return { state: 'settled' }
 			}
-			if (state.phase === 'build_trigger_requested') {
-				await (options.sleep ?? defaultSleep)(BUILD_TRIGGER_CONSISTENCY_MS, abortSignal())
-				const version = await api.getAppVersion({ appVersionId: state.appVersionId, signal: abortSignal() })
-				if (version.id !== state.appVersionId) throw new Error('Zerops app-version response has different coordinates')
-				if (version.status === undefined) {
-					throw new Error('Zerops app-version status is not observable yet')
-				}
-				if (version.status !== 'UPLOADING') {
-					await api.cancelBuild({ appVersionId: state.appVersionId, signal: abortSignal() })
-					return
-				}
-			}
-			await api.deleteAppVersion({ appVersionId: state.appVersionId, signal: abortSignal() })
+			let version = await getVersion({ appVersionId: state.appVersionId, signal })
+			if (version === null) return { state: 'settled' }
+			if (version.id !== state.appVersionId) throw new Error('Zerops app-version response has different coordinates')
+			if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) return { state: 'settled' }
+			if (version.status === undefined || version.status === 'UPLOADING') return { state: 'pending' }
+			signal.throwIfAborted()
+			await api.cancelBuild({ appVersionId: state.appVersionId, signal })
+			version = await getVersion({ appVersionId: state.appVersionId, signal })
+			if (version === null) return { state: 'settled' }
+			if (version.id !== state.appVersionId) throw new Error('Zerops app-version response has different coordinates')
+			return { state: version.status !== undefined && ZEROPS_TERMINAL.has(version.status) ? 'settled' : 'pending' }
 		},
 		reconcile: async (input): Promise<ProviderReconcileOutcome> => {
-			const signal = abortSignal()
+			const signal = input.signal
+			signal.throwIfAborted()
 			const placement = resolvedEnvironment(input.environment, { requireReady: false })
 			const state = parseRunState(input.providerState, input.externalId)
 			if (state.phase === 'version_created') {
-				await cancelSourceBestEffort(input.runId, state.appVersionId)
-				await api.deleteAppVersion({ appVersionId: state.appVersionId, signal: abortSignal() })
+				await cancelSourceBestEffort(input.runId, state.appVersionId, signal)
+				await deleteVersion({ appVersionId: state.appVersionId, signal })
 				return { state: 'failed' }
 			}
 			if (state.phase === 'source_uploaded') {
@@ -614,8 +681,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 					artifact = artifactFor(input.environment)
 					await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
 				} catch {
-					await cancelSourceBestEffort(input.runId, state.appVersionId)
-					await api.deleteAppVersion({ appVersionId: state.appVersionId, signal: abortSignal() })
+					await cancelSourceBestEffort(input.runId, state.appVersionId, signal)
+					await deleteVersion({ appVersionId: state.appVersionId, signal })
 					return { state: 'failed' }
 				}
 				try {
@@ -625,6 +692,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				}
 				let process: ZeropsProcess
 				try {
+					signal.throwIfAborted()
 					const descriptor = prepareZeropsDescriptor(artifact.target.sourceDescriptor.contents, artifact.target.zeropsSetup)
 					process = await api.buildAndDeployAppVersion({
 						appVersionId: state.appVersionId,
@@ -634,23 +702,20 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 					})
 				} catch (error) {
 					if (error instanceof ZeropsApiError && error.status >= 400 && error.status < 500) {
-						await cancelSourceBestEffort(input.runId, state.appVersionId)
-						await api.deleteAppVersion({ appVersionId: state.appVersionId, signal: abortSignal() })
+						await cancelSourceBestEffort(input.runId, state.appVersionId, signal)
+						await deleteVersion({ appVersionId: state.appVersionId, signal })
 						return { state: 'failed' }
 					}
-					let observed: ZeropsAppVersion
+					let observed: ZeropsAppVersion | null
 					try {
 						await (options.sleep ?? defaultSleep)(BUILD_TRIGGER_CONSISTENCY_MS, signal)
-						observed = await api.getAppVersion({ appVersionId: state.appVersionId, signal })
+						observed = await getVersion({ appVersionId: state.appVersionId, signal })
 					} catch {
 						return { state: 'running' }
 					}
+					if (observed === null) return { state: 'failed' }
 					if (observed.id !== state.appVersionId || observed.status === undefined) return { state: 'running' }
-					if (observed.status === 'UPLOADING') {
-						await cancelSourceBestEffort(input.runId, state.appVersionId)
-						await api.deleteAppVersion({ appVersionId: state.appVersionId, signal: abortSignal() })
-						return { state: 'failed' }
-					}
+					if (observed.status === 'UPLOADING') return { state: 'running' }
 					const triggered = buildTriggeredState(state.appVersionId)
 					try {
 						await input.checkpoint(triggered)
@@ -668,19 +733,16 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				return reconcileTriggered(input, triggered, placement, signal)
 			}
 			if (state.phase === 'build_trigger_requested') {
-				let version: ZeropsAppVersion
+				let version: ZeropsAppVersion | null
 				try {
 					await (options.sleep ?? defaultSleep)(BUILD_TRIGGER_CONSISTENCY_MS, signal)
-					version = await api.getAppVersion({ appVersionId: state.appVersionId, signal })
+					version = await getVersion({ appVersionId: state.appVersionId, signal })
 				} catch {
 					return { state: 'running' }
 				}
+				if (version === null) return { state: 'failed' }
 				if (version.id !== state.appVersionId || version.status === undefined) return { state: 'running' }
-				if (version.status === 'UPLOADING') {
-					await cancelSourceBestEffort(input.runId, state.appVersionId)
-					await api.deleteAppVersion({ appVersionId: state.appVersionId, signal: abortSignal() })
-					return { state: 'failed' }
-				}
+				if (version.status === 'UPLOADING') return { state: 'running' }
 				const triggered = buildTriggeredState(state.appVersionId)
 				try {
 					await input.checkpoint(triggered)

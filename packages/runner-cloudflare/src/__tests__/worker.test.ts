@@ -201,3 +201,14 @@ describe('VozkaRunner.cancelRun', () => {
 		expect(touched).toEqual([`idFromName:${RUN_ID}`])
 	})
 })
+
+describe('VozkaRunner.recoverRun', () => {
+	test('recovery authenticates and validates coordinates before reading or fencing the container', async () => {
+		const { worker, touched } = harness(RUNNER_KEY)
+		await expect(worker.recoverRun(RUN_ID, 'guess')).rejects.toThrow('runner: unauthorized')
+		await expect(worker.recoverRun('../../etc', RUNNER_KEY)).rejects.toThrow('runner: invalid run id')
+		expect(touched).toEqual([])
+		await expect(worker.recoverRun(RUN_ID, RUNNER_KEY)).rejects.toThrow(REACHED_CONTAINER)
+		expect(touched).toEqual([`idFromName:${RUN_ID}`])
+	})
+})

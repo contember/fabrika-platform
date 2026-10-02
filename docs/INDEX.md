@@ -28,6 +28,8 @@ For local application development connected to an installation, see [Local build
 
 ## Active sprints
 
+[ADR-0046](decisions/0046-share-durable-namespace-proxy-attempt-ownership.md) defines shared ownership and recovery for namespace proxy rebuilds.
+
 [ADR-0045](decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md) defines exact-source installation uploads and per-namespace proxy pins.
 
 [ADR-0044](decisions/0044-bind-zerops-managed-configuration-to-application-versions.md) defines the approved new-application configuration binding, collision-safe provisioning and fenced recovery contract for Zerops readiness.

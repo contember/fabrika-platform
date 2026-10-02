@@ -144,6 +144,7 @@ function makeProvider(
 		cancel: async (input) => {
 			options.cancelled?.push(input.externalId)
 			options.cancelledNamespaces?.push(input.environment.namespace?.id ?? 'none')
+			return { state: 'settled' }
 		},
 		...(options.managedSecrets
 			? {
@@ -160,7 +161,7 @@ function makeDeps(
 	db: ControlRepositories,
 	provider: ControlProvider,
 	secrets: SecretResolver = new EnvSecretResolver({}),
-	lock = makeFakeLock(),
+	lock = makeFakeLock(db),
 ): RunDeps {
 	return { repositories: db, provider, secrets, lock, logs: { put: () => Promise.resolve() } }
 }
@@ -430,7 +431,7 @@ describe('provider-neutral run lifecycle', () => {
 			await resolutionFinished
 			return { commitSha: 'a'.repeat(40) }
 		}
-		const lock = makeFakeLock()
+		const lock = makeFakeLock(db)
 		const deps = makeDeps(db, provider, new EnvSecretResolver({}), lock)
 		deps.operations = { repository: db.operationsReleases }
 
@@ -468,9 +469,9 @@ describe('provider-neutral run lifecycle', () => {
 		}
 		provider.cancel = (input) => {
 			cancelledStates.push(input.providerState)
-			return Promise.resolve()
+			return Promise.resolve({ state: 'settled' })
 		}
-		const lock = makeFakeLock()
+		const lock = makeFakeLock(db)
 		const deps = makeDeps(db, provider, new EnvSecretResolver({}), lock)
 		deps.operations = { repository: db.operationsReleases }
 
@@ -491,7 +492,7 @@ describe('provider-neutral run lifecycle', () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db)
 		const inputs: ProviderDeployInput[] = []
-		const lock = makeFakeLock()
+		const lock = makeFakeLock(db)
 		const message: DeployJobMessage = { runId, dryRun: true }
 
 		const result = await executeDeploy(
@@ -1073,7 +1074,7 @@ describe('provider-neutral run lifecycle', () => {
 
 		const pendingId = uuidv7()
 		await db.runs.createRun({ id: pendingId, appId: 'app', env: 'prod', ref: 'main', trigger: 'manual' })
-		const lock = makeFakeLock()
+		const lock = makeFakeLock(db)
 		await lock.acquire('app:prod', 'other-run')
 		expect(
 			(await executeDeploy(makeDeps(db, makeProvider(inputs, { state: 'succeeded' }), new EnvSecretResolver({}), lock), {
@@ -1124,7 +1125,7 @@ describe('provider-neutral run lifecycle', () => {
 			providerTargetJson: appEnv.provider_target_json,
 			providerArtifactJson: appEnv.provider_artifact_json,
 		})
-		const lock = makeFakeLock()
+		const lock = makeFakeLock(db)
 		await lock.acquire('app:prod', runId)
 		const deps = makeDeps(
 			db,
@@ -1133,6 +1134,12 @@ describe('provider-neutral run lifecycle', () => {
 			lock,
 		)
 
+		await cancelDeploy(deps, await requireRun(db, runId))
+
+		expect(cancelled).toEqual([])
+		expect((await requireRun(db, runId)).status).toBe('running')
+		expect(lock.held.get('app:prod')).toBe(runId)
+		await lock.release('app:prod', runId)
 		await cancelDeploy(deps, await requireRun(db, runId))
 
 		expect(cancelled).toEqual(['provider-operation-1'])

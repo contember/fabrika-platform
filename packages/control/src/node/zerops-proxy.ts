@@ -1,22 +1,21 @@
+import type { JobQueue } from '@fabrika/platform'
 import type { ProviderCodec, ProviderEnvelope } from '@fabrika/provider-contract'
 import {
-	ensureNamespaceProxyIam,
 	type FabrikaManifest,
 	parseFabrikaManifest,
-	ZEROPS_ACTIVE,
-	ZEROPS_TERMINAL,
-	type ZeropsApi,
+	runZeropsProxyAttempt,
+	verifyZeropsNamespaceProxySource,
 	zeropsArtifactCodec,
+	type ZeropsNamespaceProxySource,
 	zeropsNamespaceTargetCodec,
+	type ZeropsProxyAttemptApi,
+	type ZeropsSourceClient,
 } from '@fabrika/provider-zerops'
-import { encodeProxyManifestJson, FABRIKA_PROXY_MANIFEST_JSON, type ProxyManifest } from '@fabrika/proxy-contract'
+import { encodeProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-contract'
 import type { ControlRegistryRepository } from '../db'
-import { parseProviderEnvelope } from '../run-lifecycle'
-
-const POLL_INTERVAL_MS = 3000
-const POLL_TIMEOUT_MS = 70 * 60 * 1000
-
-type ProxyApi = Pick<ZeropsApi, 'listServiceEnv' | 'putServiceEnv' | 'triggerPipeline' | 'latestAppVersion' | 'getAppVersion'>
+import { NamespaceOwnership } from '../namespace-ownership'
+import { type ControlJobMessage, parseProviderEnvelope } from '../run-lifecycle'
+import type { DeployLockGate } from '../run-ownership'
 
 const decodeEnvelope = <T>(kind: string, envelope: ProviderEnvelope, codec: ProviderCodec<T>): T => {
 	if (envelope.provider !== 'zerops' || envelope.version !== codec.version) {
@@ -68,92 +67,90 @@ export async function compileNamespaceProxyManifest(
 }
 
 export interface SyncZeropsProxyInput {
-	db: Pick<ControlRegistryRepository, 'listAppEnvsByNamespace'>
-	api: ProxyApi
+	db: NamespaceProxyRegistry
+	lock: DeployLockGate
+	queue?: JobQueue<ControlJobMessage>
+	source: ZeropsSourceClient
+	api: ZeropsProxyAttemptApi
 	namespaceId: string
-	proxyServiceId: string
-	/** The namespace proxy has no Git integration, so its pipeline must be told what to build. */
-	proxyBuildFromGit: string
+	proxySource?: ZeropsNamespaceProxySource
 	/** The public IAM origin this installation's proxies verify against. */
 	iamUrl: string
 	iamKey: string
-	/**
-	 * How far to follow the roll. `active` (the default) waits for the build to finish, which is what a
-	 * deploy needs before it hands the app its traffic. `started` returns once the manifest is published and
-	 * a pipeline holds an app-version — a build takes minutes and an HTTP request must not hold one open.
-	 */
+	/** `started` waits for the bounded upload and positive submission evidence; `active` also waits for activation. */
 	wait?: 'active' | 'started'
 	signal?: AbortSignal
-	sleep?: (ms: number) => Promise<void>
+	sleep?: (ms: number, signal: AbortSignal) => Promise<void>
 }
 
-/**
- * Converge every variable the namespace proxy reads, then roll the proxy so its build materializes
- * them. No project-level variable method exists on the API surface.
- *
- * The ORDER is the point. This rebuilds the proxy from git, so it is the step that can hand a
- * namespace proxy code newer than its configuration — which is exactly how the
- * `FABRIKA_IAM_URL` → `FABRIKA_IAM_ISSUER` rename took a live proxy down. Writing the identity
- * first makes the new code find what it expects; writing only the manifest, as this once did, does not.
- */
+/** Registry and application callbacks share the namespace job's lease and durable attempt ledger. */
 export async function syncZeropsProxy(input: SyncZeropsProxyInput): Promise<void> {
-	const signal = input.signal ?? new AbortController().signal
-	const manifest = await compileNamespaceProxyManifest(input.db, input.namespaceId)
-	await input.api.putServiceEnv({
-		serviceId: input.proxyServiceId,
-		key: FABRIKA_PROXY_MANIFEST_JSON,
-		value: encodeProxyManifestJson(manifest),
-		signal,
-	})
-	await ensureNamespaceProxyIam({
-		api: input.api,
-		proxyServiceId: input.proxyServiceId,
-		iamUrl: input.iamUrl,
-		iamKey: input.iamKey,
-		signal,
-	})
-	// WITHOUT `buildFromGit` the platform builds from the service's configured Git integration, and a
-	// namespace proxy has none — the call then answers 400 `projectImportInvalidParameter`.
-	const process = await input.api.triggerPipeline({
-		serviceId: input.proxyServiceId,
-		buildFromGit: input.proxyBuildFromGit,
-		zeropsSetup: 'proxy',
-		signal,
-	})
-	const version = process?.appVersionId === undefined
-		? await input.api.latestAppVersion({ serviceId: input.proxyServiceId, signal })
-		: { id: process.appVersionId }
-	if (version === null || version.id === '') {
-		throw new Error('Zerops proxy deploy did not expose an app-version')
-	}
-	if (input.wait === 'started') return
-	const deadline = Date.now() + POLL_TIMEOUT_MS
-	for (;;) {
-		const current = await input.api.getAppVersion({ appVersionId: version.id, signal })
-		if (current.status !== undefined && ZEROPS_TERMINAL.has(current.status)) {
-			if (current.status === ZEROPS_ACTIVE) return
-			throw new Error(`Zerops proxy deploy ${version.id} finished as ${current.status}`)
+	if (input.wait === 'started' && input.queue === undefined) throw new Error('Namespace proxy background settlement queue is required')
+	input.signal?.throwIfAborted()
+	const owner = await NamespaceOwnership.acquire(input.db, input.lock, input.namespaceId)
+	if (owner === null) throw new Error(`Namespace ${input.namespaceId} proxy is busy; retry or reconcile the namespace`)
+	try {
+		const row = owner.row
+		if (row.provider !== 'zerops') throw new Error(`deployment namespace ${row.id} belongs to another provider`)
+		const target = decodeEnvelope(
+			'namespace target',
+			parseProviderEnvelope(row.provider_target_json, `target for namespace ${row.id}`),
+			zeropsNamespaceTargetCodec,
+		)
+		if (target.proxySource === undefined) throw new Error('Zerops namespace proxy source is unpinned; explicit migration is required')
+		await verifyZeropsNamespaceProxySource(target.proxySource)
+		if (
+			input.proxySource !== undefined && (
+				input.proxySource.commitSha !== target.proxySource.commitSha
+				|| input.proxySource.repository.owner !== target.proxySource.repository.owner
+				|| input.proxySource.repository.name !== target.proxySource.repository.name
+				|| input.proxySource.descriptor.sha256 !== target.proxySource.descriptor.sha256
+			)
+		) throw new Error('Namespace proxy source changed since application placement was resolved')
+		if (target.proxyServiceId === undefined || (target.proxyBuild === undefined && (target.ready !== true || row.state === 'failed'))) {
+			throw new Error(`Namespace ${row.id} is not ready`)
 		}
-		if (Date.now() > deadline) {
-			throw new Error(`Zerops proxy deploy ${version.id} timed out`)
+		const signal = input.signal === undefined ? owner.signal : AbortSignal.any([owner.signal, input.signal])
+		signal.throwIfAborted()
+		const manifest = encodeProxyManifestJson(await compileNamespaceProxyManifest(input.db, row.id))
+		await owner.checkpoint(row.provider_target_json, 'provisioning')
+		const result = await runZeropsProxyAttempt({
+			target,
+			manifest,
+			api: input.api,
+			source: input.source,
+			iamUrl: input.iamUrl,
+			iamKey: input.iamKey,
+			signal,
+			ownershipSignal: owner.signal,
+			wait: input.wait ?? 'active',
+			...(input.sleep === undefined ? {} : { sleep: input.sleep }),
+			checkpoint: next =>
+				owner.checkpoint(
+					JSON.stringify({ provider: 'zerops', version: zeropsNamespaceTargetCodec.version, payload: zeropsNamespaceTargetCodec.encode(next) }),
+					'provisioning',
+				),
+		})
+		await owner.checkpoint(
+			JSON.stringify({ provider: 'zerops', version: zeropsNamespaceTargetCodec.version, payload: zeropsNamespaceTargetCodec.encode(result) }),
+			result.proxyBuild === undefined && result.ready === true ? 'ready' : 'provisioning',
+		)
+		if (result.proxyBuild !== undefined) {
+			if (input.queue === undefined) throw new Error('Namespace proxy background settlement queue is required')
+			await input.queue.send({ kind: 'namespace', namespaceId: row.id, mutation: 'reconcile' })
 		}
-		await (input.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms))))(POLL_INTERVAL_MS)
+	} finally {
+		await owner.close()
 	}
 }
 
 /** The registry reads one namespace republish needs. */
-export type NamespaceProxyRegistry = Pick<ControlRegistryRepository, 'listAppEnvsByNamespace' | 'getDeploymentNamespace'>
+export type NamespaceProxyRegistry = Pick<
+	ControlRegistryRepository,
+	'listAppEnvsByNamespace' | 'getDeploymentNamespace' | 'checkpointDeploymentNamespace'
+>
 
-export interface SyncNamespaceProxyInput {
-	db: NamespaceProxyRegistry
-	api: ProxyApi
-	namespaceId: string
-	/** The public IAM origin this installation's proxies verify against. */
-	iamUrl: string
-	iamKey: string
-	signal?: AbortSignal
-	sleep?: (ms: number) => Promise<void>
-}
+export type SyncNamespaceProxyInput = SyncZeropsProxyInput & { queue: JobQueue<ControlJobMessage> }
 
 /**
  * Republish one deployment namespace's proxy from the registry, addressed by namespace id alone.
@@ -167,42 +164,5 @@ export interface SyncNamespaceProxyInput {
  */
 
 export async function syncNamespaceProxy(input: SyncNamespaceProxyInput): Promise<void> {
-	const row = await input.db.getDeploymentNamespace(input.namespaceId)
-	if (row === null) {
-		throw new Error(`deployment namespace \`${input.namespaceId}\` not found`)
-	}
-	if (row.provider !== 'zerops') {
-		throw new Error(`deployment namespace \`${row.id}\` belongs to provider ${row.provider}`)
-	}
-	if (row.state !== 'ready') {
-		throw new Error(`deployment namespace \`${row.id}\` is ${row.state}`)
-	}
-	const target = decodeEnvelope(
-		'namespace target',
-		parseProviderEnvelope(row.provider_target_json, `target for namespace ${row.id}`),
-		zeropsNamespaceTargetCodec,
-	)
-	if (target.ready !== true) {
-		throw new Error(`Zerops deployment namespace \`${row.id}\` is not ready`)
-	}
-	const proxyServiceId = target.proxyServiceId
-	if (proxyServiceId === undefined) {
-		throw new Error(`Zerops deployment namespace \`${row.id}\` has no proxy service id`)
-	}
-	const proxyBuildFromGit = target.proxyBuildFromGit
-	if (proxyBuildFromGit === undefined) {
-		throw new Error(`Zerops deployment namespace \`${row.id}\` has no proxy build source`)
-	}
-	await syncZeropsProxy({
-		db: input.db,
-		api: input.api,
-		namespaceId: row.id,
-		proxyServiceId,
-		proxyBuildFromGit,
-		iamUrl: input.iamUrl,
-		iamKey: input.iamKey,
-		wait: 'started',
-		...(input.signal === undefined ? {} : { signal: input.signal }),
-		...(input.sleep === undefined ? {} : { sleep: input.sleep }),
-	})
+	await syncZeropsProxy({ ...input, wait: 'started' })
 }

@@ -69,7 +69,7 @@ function deps(db: ControlRepositories, logs: BlobStore, inputs: ProviderDeployIn
 			return Promise.resolve({ state: 'succeeded' })
 		},
 	}
-	return { repositories: db, provider, secrets: new EnvSecretResolver({}), lock: makeFakeLock(), logs }
+	return { repositories: db, provider, secrets: new EnvSecretResolver({}), lock: makeFakeLock(db), logs }
 }
 
 describe('deploy run log names a missing Operations ingest configuration', () => {
@@ -156,7 +156,7 @@ describe('deploy run log names a missing Operations ingest configuration', () =>
 
 		expect(
 			(await executeDeploy(
-				{ repositories: db, provider, secrets: new EnvSecretResolver({}), lock: makeFakeLock(), logs },
+				{ repositories: db, provider, secrets: new EnvSecretResolver({}), lock: makeFakeLock(db), logs },
 				{ runId },
 			)).status,
 		).toBe('succeeded')

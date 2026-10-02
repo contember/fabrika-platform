@@ -2,6 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import { parseZeropsCliArgs } from '../cli-args'
 
 describe('fabrika Zerops arguments', () => {
+	test('retains explicit legacy source input so namespace commands can reject it safely', () => {
+		expect(parseZeropsCliArgs(['namespace', 'plan', '--proxy-build-from-git=legacy-url']).proxyBuildFromGit).toBe('legacy-url')
+		expect(() => parseZeropsCliArgs(['namespace', 'plan', '--proxy-build-from-git', 'legacy-url'])).toThrow('FABRIKA_ZEROPS_PROXY_SOURCE_JSON')
+	})
+
 	test('parses the build command and its provider-specific artifact options', () => {
 		expect(parseZeropsCliArgs(['build', '--env=prod', '--config=app.ts', '--output=artifact.json'])).toEqual({
 			command: 'build',

@@ -1,8 +1,21 @@
 import type { ControlProvider, ProviderReconcileOutcome } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
+import type { ControlRepositories } from '../db'
 import { type ProviderReconcileSummary, reconcileProviderRuns } from '../provider-reconcile'
 import { createHarness } from './helpers/harness'
+import { makeFakeLock } from './helpers/lock'
 import { providerEnvironment, TEST_PROVIDER_ID } from './helpers/provider'
+
+function trackedLock(db: ControlRepositories, release: (key: string, holder: string) => Promise<void>) {
+	const lock = makeFakeLock(db)
+	return {
+		...lock,
+		release: async (key: string, holder: string) => {
+			await lock.release(key, holder)
+			await release(key, holder)
+		},
+	}
+}
 
 function provider(outcomes: Readonly<Record<string, ProviderReconcileOutcome>>, environments: string[]): ControlProvider {
 	return {
@@ -44,7 +57,7 @@ describe('reconcileProviderRuns', () => {
 				cancellationAttempts++
 				states.push(input.providerState)
 				if (cancellationAttempts === 1) return Promise.reject(new Error('temporary cancel failure'))
-				return Promise.resolve()
+				return Promise.resolve({ state: 'settled' })
 			},
 			reconcile: () => {
 				reconcileAttempts++
@@ -54,22 +67,23 @@ describe('reconcileProviderRuns', () => {
 		const deps = {
 			repositories: db,
 			provider: controlProvider,
-			releaseLock: (key: string, holder: string) => {
+			lock: trackedLock(db, (key, holder) => {
 				released.push(`${key}/${holder}`)
 				return Promise.resolve()
-			},
+			}),
 		}
 
 		expect(await reconcileProviderRuns(deps)).toMatchObject({ checked: 1, inProgress: 1 })
 		expect((await db.runs.getRun('cancelling'))?.status).toBe('running')
 		expect((await db.runs.getRun('cancelling'))?.cancel_requested_at).not.toBeNull()
-		expect(released).toEqual([])
+		expect(released).toHaveLength(1)
 
 		expect(await reconcileProviderRuns(deps)).toMatchObject({ checked: 1, failed: 1 })
 		expect((await db.runs.getRun('cancelling'))?.status).toBe('failed')
 		expect(states).toEqual([{ phase: 'uploaded' }, { phase: 'uploaded' }])
 		expect(reconcileAttempts).toBe(0)
-		expect(released).toEqual(['app:prod/cancelling'])
+		expect(released).toHaveLength(2)
+		expect(new Set(released).size).toBe(2)
 	})
 
 	test('hands persisted provider checkpoint state to reconciliation', async () => {
@@ -93,7 +107,7 @@ describe('reconcileProviderRuns', () => {
 						return Promise.resolve({ state: 'running' })
 					},
 				},
-				releaseLock: () => Promise.resolve(),
+				lock: makeFakeLock(db),
 			}),
 		).toMatchObject({ checked: 1, inProgress: 1 })
 		expect(states).toEqual([{ appVersionId: 'version-1', phase: 'uploaded' }])
@@ -118,7 +132,7 @@ describe('reconcileProviderRuns', () => {
 					return { state: 'running' }
 				},
 			},
-			releaseLock: () => Promise.resolve(),
+			lock: makeFakeLock(db),
 		})
 
 		expect(JSON.parse((await db.runs.getRun('resumed'))?.provider_state_json ?? '')).toEqual({
@@ -174,10 +188,10 @@ describe('reconcileProviderRuns', () => {
 				},
 				environments,
 			),
-			releaseLock: (key, holder) => {
+			lock: trackedLock(db, (key, holder) => {
 				released.push(`${key}/${holder}`)
 				return Promise.resolve()
-			},
+			}),
 		})
 
 		expect(summary).toEqual({
@@ -193,7 +207,8 @@ describe('reconcileProviderRuns', () => {
 		expect((await db.runs.getRun('building'))?.status).toBe('running')
 		expect((await db.runs.getRun('waiting'))?.status).toBe('pending')
 		expect((await db.runs.getRun('foreign'))?.status).toBe('running')
-		expect(released).toEqual(['app:prod/active', 'app:prod/failed'])
+		expect(released).toHaveLength(4)
+		expect(new Set(released).size).toBe(4)
 		expect(environments).toEqual([
 			'apps-prod:harbor:{"kind":"target"}',
 			'apps-prod:harbor:{"kind":"target"}',
@@ -237,17 +252,17 @@ describe('reconcileProviderRuns', () => {
 		const deps = {
 			repositories: db,
 			provider: controlProvider,
-			releaseLock: (key: string, holder: string) => {
+			lock: trackedLock(db, (key, holder) => {
 				released.push(`${key}/${holder}`)
 				return Promise.resolve()
-			},
+			}),
 			operations: { repository: db.operationsReleases },
 		}
 
 		expect(await reconcileProviderRuns(deps)).toMatchObject({ checked: 1, inProgress: 1 })
 		expect((await db.runs.getRun('recovering'))?.status).toBe('running')
 		expect(await db.operationsReleases.get('recovering')).toBeNull()
-		expect(released).toEqual([])
+		expect(released).toHaveLength(1)
 
 		expect(await reconcileProviderRuns(deps)).toEqual({
 			checked: 1,
@@ -260,7 +275,7 @@ describe('reconcileProviderRuns', () => {
 		const projection = await db.operationsReleases.get('recovering')
 		expect(projection?.payload_json).toContain('"phase":"terminal"')
 		expect(projection?.payload_json).toContain('"outcome":"succeeded"')
-		expect(released).toEqual(['app:prod/recovering'])
+		expect(released).toHaveLength(2)
 
 		expect(await reconcileProviderRuns(deps)).toEqual({
 			checked: 0,
@@ -294,7 +309,7 @@ describe('reconcileProviderRuns', () => {
 					return Promise.resolve({ state: 'succeeded' })
 				},
 			},
-			releaseLock: () => Promise.resolve(),
+			lock: makeFakeLock(db),
 		})
 
 		expect(projected).toEqual([['https://app.example.test', 'https://stage.app.example.test']])
@@ -316,7 +331,7 @@ describe('reconcileProviderRuns', () => {
 				normalizeRegistration: (input) => input,
 				deploy: () => Promise.resolve({ state: 'succeeded' }),
 			},
-			releaseLock: () => Promise.reject(new Error('release must not be called')),
+			lock: makeFakeLock(db),
 		})
 
 		expect(summary).toEqual({
@@ -357,7 +372,7 @@ describe('reconcileProviderRuns', () => {
 						return Promise.resolve({ state: 'succeeded' })
 					},
 				},
-				releaseLock: () => Promise.resolve(),
+				lock: makeFakeLock(db),
 			})
 		} finally {
 			console.error = originalError
@@ -397,17 +412,17 @@ describe('reconcileProviderRuns', () => {
 					id: TEST_PROVIDER_ID,
 					normalizeRegistration: (input) => input,
 					deploy: () => Promise.resolve({ state: 'succeeded' }),
-					cancel: () => Promise.resolve(),
+					cancel: () => Promise.resolve({ state: 'settled' }),
 					reconcile: (input) => Promise.resolve(input.runId === 'failed' ? { state: 'failed' } : { state: 'succeeded' }),
 				},
 				projectTerminal: (_deps, runId) => {
 					projected.push(runId)
 					return Promise.reject(new Error(projectionSecret))
 				},
-				releaseLock: (_key, runId) => {
-					releases.push(runId)
+				lock: trackedLock(db, (_key, holder) => {
+					releases.push(holder)
 					return Promise.reject(new Error(releaseSecret))
-				},
+				}),
 			})
 		} finally {
 			console.error = originalError
@@ -418,7 +433,8 @@ describe('reconcileProviderRuns', () => {
 		expect((await db.runs.getRun('failed'))?.status).toBe('failed')
 		expect((await db.runs.getRun('succeeded'))?.status).toBe('succeeded')
 		expect(projected).toEqual(['cancelling', 'failed', 'succeeded'])
-		expect(releases).toEqual(['cancelling', 'failed', 'succeeded'])
+		expect(releases).toHaveLength(3)
+		expect(new Set(releases).size).toBe(3)
 		expect(errors).toEqual([
 			'provider reconcile terminal projection failed for run cancelling',
 			'provider reconcile lock release failed for run cancelling',

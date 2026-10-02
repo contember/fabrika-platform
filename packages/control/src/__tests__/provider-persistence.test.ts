@@ -114,7 +114,7 @@ describe('generic provider persistence', () => {
 		expect(await db.runs.listInFlightRuns('other')).toHaveLength(0)
 
 		sqlite.query('UPDATE runs SET created_at = ?, started_at = ? WHERE id = ?').run(now - 7200, now - 7200, run.id)
-		expect(await db.runs.sweepStaleRuns(3600)).toBe(0)
+		expect(await db.runs.listStaleRuns(3600)).toHaveLength(0)
 		expect((await db.runs.getRun(run.id))?.status).toBe('running')
 	})
 

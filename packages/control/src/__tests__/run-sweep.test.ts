@@ -1,15 +1,17 @@
 import { describe, expect, test } from 'bun:test'
+import { sweepStaleRuns } from '../provider-reconcile'
 import { createHarness, queryRows } from './helpers/harness'
+import { makeFakeLock } from './helpers/lock'
 import { providerEnvironment } from './helpers/provider'
 
-// Db.sweepStaleRuns is the cron-driven backstop-to-the-backstop: it reaps runs left in pending/running
+// The leased sweep is the cron-driven backstop-to-the-backstop: it reaps runs left in pending/running
 // past the age threshold (the per-run DO backstop should have finished them within ~18 min). Driven
 // against the harness's real bun:sqlite with the production migrations, inserting runs at controlled ages.
 
 /** Fixed wall clock (unix SECONDS) — the sweep now stamps `finished_at` caller-side, so pin it. */
 const NOW = 1_700_000_000
 
-describe('Db.sweepStaleRuns', () => {
+describe('sweepStaleRuns', () => {
 	test('reaps stale pending/running runs, spares recent + already-terminal ones', async () => {
 		const { db, sqlite } = createHarness(() => NOW)
 		await db.registry.createApp({ id: 'app', repoUrl: 'github.com/o/app' })
@@ -25,7 +27,7 @@ describe('Db.sweepStaleRuns', () => {
 				('old-succeeded', 'app','prod','refs/heads/main','manual','succeeded', ${OLD},    ${OLD})
 		`)
 
-		const swept = await db.runs.sweepStaleRuns(30 * 60)
+		const swept = await sweepStaleRuns({ repositories: db, lock: makeFakeLock(db) }, 30 * 60, () => NOW)
 		expect(swept).toBe(2) // old-running + old-pending
 
 		const statusOf = (id: string): unknown => queryRows(sqlite, 'SELECT status FROM runs WHERE id = ?', id)[0]?.status
@@ -45,7 +47,7 @@ describe('Db.sweepStaleRuns', () => {
 			`INSERT INTO runs (id, app_id, env, ref, trigger, status, created_at)
 				VALUES ('fresh','app','prod','refs/heads/main','manual','running',${NOW})`,
 		)
-		expect(await db.runs.sweepStaleRuns(30 * 60)).toBe(0)
+		expect(await sweepStaleRuns({ repositories: db, lock: makeFakeLock(db) }, 30 * 60, () => NOW)).toBe(0)
 		expect(queryRows(sqlite, 'SELECT status FROM runs WHERE id = ?', 'fresh')[0]?.status).toBe('running')
 	})
 
@@ -63,7 +65,7 @@ describe('Db.sweepStaleRuns', () => {
 			)`,
 		)
 
-		expect(await db.runs.sweepStaleRuns(30 * 60)).toBe(0)
+		expect(await sweepStaleRuns({ repositories: db, lock: makeFakeLock(db) }, 30 * 60, () => NOW)).toBe(0)
 		expect(queryRows(sqlite, 'SELECT status FROM runs WHERE id = ?', 'platform-owned')[0]?.status).toBe('running')
 	})
 })

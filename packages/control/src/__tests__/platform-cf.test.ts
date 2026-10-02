@@ -87,7 +87,7 @@ describe('Cloudflare control IAM options', () => {
 // container, is what applies it with the IAM admin key.
 
 interface RunnerCall {
-	readonly method: 'startRun' | 'cancelRun'
+	readonly method: 'startRun' | 'cancelRun' | 'recoverRun'
 	readonly runId: string
 	readonly runnerKey: string | undefined
 }
@@ -101,6 +101,10 @@ function fakeRunner(calls: RunnerCall[], result: RelayResult): CloudflareRunnerS
 		cancelRun: async (runId, runnerKey) => {
 			calls.push({ method: 'cancelRun', runId, runnerKey })
 			return true
+		},
+		recoverRun: async (runId, runnerKey) => {
+			calls.push({ method: 'recoverRun', runId, runnerKey })
+			return 'running'
 		},
 	}
 }

@@ -1,4 +1,5 @@
 import type { ProviderDeployInput, ProviderEnvelope } from '@fabrika/provider-contract'
+import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import type { RunnerIamReconcile } from '@fabrika/runner-contract'
 import { describe, expect, test } from 'bun:test'
 import {
@@ -61,6 +62,139 @@ const deployInput = (): ProviderDeployInput => ({
 })
 
 describe('Cloudflare control provider', () => {
+	test('startup errors remain ambiguous until the runner recovery gate fences late starts', async () => {
+		let state: 'running' | 'failed' = 'running'
+		let unavailable = true
+		const provider = createCloudflareControlProvider({
+			accountId: 'account',
+			apiToken: 'token',
+			runnerKey: 'key',
+			resolveSource: async (source) => source,
+			startRun: async () => {
+				throw new Error('startup RPC unavailable')
+			},
+			cancelRun: async () => {},
+			recoverRun: async () => {
+				if (unavailable) throw new Error('recovery RPC unavailable')
+				return state
+			},
+		})
+		await expect(provider.deploy(deployInput())).rejects.toThrow('startup RPC unavailable')
+		if (provider.reconcile === undefined) throw new Error('missing recovery')
+		const input = {
+			runId: RUN_ID,
+			externalId: RUN_ID,
+			environment: deployInput().environment,
+			signal: new AbortController().signal,
+			checkpoint: async () => {},
+		}
+		await expect(provider.reconcile(input)).rejects.toThrow('recovery RPC unavailable')
+		unavailable = false
+		expect(await provider.reconcile(input)).toEqual({ state: 'running' })
+		state = 'failed'
+		expect(await provider.reconcile(input)).toEqual({ state: 'failed' })
+	})
+	for (const kind of ['cancel_requested', 'lease_lost']) {
+		test(`${kind} interrupts an outstanding runner RPC without conflating lease loss with cancellation`, async () => {
+			const entered = Promise.withResolvers<void>()
+			const controller = new AbortController()
+			let cancels = 0
+			const provider = createCloudflareControlProvider({
+				accountId: 'account',
+				apiToken: 'token',
+				runnerKey: 'key',
+				resolveSource: async (source) => source,
+				startRun: async () => {
+					entered.resolve()
+					return new Promise(() => {})
+				},
+				cancelRun: async () => {
+					cancels++
+				},
+			})
+			const deploying = provider.deploy({ ...deployInput(), signal: controller.signal })
+			await entered.promise
+			const reason = new ProviderInvocationAbort(kind === 'lease_lost' ? 'lease_lost' : 'cancel_requested')
+			controller.abort(reason)
+			await expect(deploying).rejects.toBe(reason)
+			expect(cancels).toBe(kind === 'lease_lost' ? 0 : 1)
+		})
+	}
+
+	test('cancellation arriving during async source preparation cannot start the runner', async () => {
+		const sourceReady = Promise.withResolvers<void>()
+		const controller = new AbortController()
+		let starts = 0
+		let accepted = 0
+		const provider = createCloudflareControlProvider({
+			accountId: 'account',
+			apiToken: 'token',
+			runnerKey: 'key',
+			resolveSource: async (source) => {
+				await sourceReady.promise
+				return source
+			},
+			startRun: async () => {
+				starts++
+				return { state: 'succeeded' }
+			},
+			cancelRun: async () => {},
+		})
+		const input = deployInput()
+		const deploying = provider.deploy({
+			...input,
+			signal: controller.signal,
+			events: {
+				...input.events,
+				externalId: async () => {
+					accepted++
+				},
+			},
+		})
+		controller.abort(new ProviderInvocationAbort('cancel_requested'))
+		sourceReady.resolve()
+		await expect(deploying).rejects.toThrow('cancellation requested')
+		expect(starts).toBe(0)
+		expect(accepted).toBe(0)
+	})
+
+	test('failed cancellation RPC cannot be reported as settled', async () => {
+		const provider = createCloudflareControlProvider({
+			accountId: 'account',
+			apiToken: 'token',
+			runnerKey: 'key',
+			resolveSource: async (source) => source,
+			startRun: async () => ({ state: 'succeeded' }),
+			cancelRun: async () => {
+				throw new Error('destroy unavailable')
+			},
+		})
+		if (provider.cancel === undefined) throw new Error('missing cancellation')
+		await expect(provider.cancel({ runId: RUN_ID, externalId: RUN_ID, environment: deployInput().environment, signal: new AbortController().signal }))
+			.rejects.toThrow('destroy unavailable')
+	})
+
+	test('lease loss interrupts a hanging cancellation RPC without claiming settlement', async () => {
+		const controller = new AbortController()
+		const entered = Promise.withResolvers<void>()
+		const provider = createCloudflareControlProvider({
+			accountId: 'account',
+			apiToken: 'token',
+			runnerKey: 'key',
+			resolveSource: async (source) => source,
+			startRun: async () => ({ state: 'succeeded' }),
+			cancelRun: async () => {
+				entered.resolve()
+				await new Promise(() => {})
+			},
+		})
+		if (provider.cancel === undefined) throw new Error('missing cancellation')
+		const cancelling = provider.cancel({ runId: RUN_ID, externalId: RUN_ID, environment: deployInput().environment, signal: controller.signal })
+		await entered.promise
+		const reason = new ProviderInvocationAbort('lease_lost')
+		controller.abort(reason)
+		await expect(cancelling).rejects.toBe(reason)
+	})
 	test('passes caller cancellation through source resolution', async () => {
 		const observed: AbortSignal[] = []
 		const provider = createCloudflareControlProvider({

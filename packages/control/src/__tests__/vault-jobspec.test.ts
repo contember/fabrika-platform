@@ -50,7 +50,7 @@ const deps = (db: ControlRepositories, vault: Vault, inputs: ProviderDeployInput
 	repositories: db,
 	provider: provider(inputs),
 	secrets: new VaultSecretResolver({ vault }),
-	lock: makeFakeLock(),
+	lock: makeFakeLock(db),
 	logs: { put: () => Promise.resolve() },
 })
 

@@ -1,4 +1,9 @@
-import { decodeZeropsSourceCredentialBundleV2, type SourceConnectionAdmin, type ZeropsSourceGitHubAppIdentityV1 } from '@fabrika/provider-zerops'
+import {
+	createZeropsArtifactSourceDescriptor,
+	decodeZeropsSourceCredentialBundleV2,
+	type SourceConnectionAdmin,
+	type ZeropsSourceGitHubAppIdentityV1,
+} from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
 import { zeropsControlProvider, zeropsNamespaceProcessConfig, zeropsSourceConnectionAdmin } from '../node/provider'
 import { createRuntime } from '../node/runtime'
@@ -6,21 +11,37 @@ import { zeropsSourceConnectionPort } from '../node/source-connection'
 import { FakeRepoSource } from '../repo-source'
 import { createHarness } from './helpers/harness'
 
+const PIN = {
+	repository: { owner: 'example', name: 'platform' },
+	commitSha: 'a'.repeat(40),
+	descriptor: { ...await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: proxy\n') },
+}
 const namespaceEnvironment = (): Record<string, string | undefined> => ({
 	FABRIKA_ZEROPS_CLIENT_ID: 'client-1',
-	FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT: 'https://github.com/contember/fabrika-platform',
+	FABRIKA_ZEROPS_PROXY_SOURCE_JSON: JSON.stringify(PIN),
 	FABRIKA_ZEROPS_PROXY_IAM_URL: 'https://iam.example.test',
 	FABRIKA_ZEROPS_PROXY_IAM_KEY: 'px_proxy_placeholder',
 })
 
 const EXPECTED = {
 	clientId: 'client-1',
-	proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+	proxySource: PIN,
 	iamUrl: 'https://iam.example.test',
 	iamKey: 'px_proxy_placeholder',
 }
 
 describe('the Zerops namespace process configuration', () => {
+	test('refuses malformed JSON without exposing its value and never falls back to the Git variable', () => {
+		const env = { ...namespaceEnvironment(), FABRIKA_ZEROPS_PROXY_SOURCE_JSON: 'credential-that-must-not-leak' }
+		expect(() => zeropsNamespaceProcessConfig(env)).toThrow('must contain a valid immutable proxy source')
+		expect(() =>
+			zeropsNamespaceProcessConfig({
+				...env,
+				FABRIKA_ZEROPS_PROXY_SOURCE_JSON: undefined,
+				FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT: 'https://github.com/example/platform',
+			})
+		).toThrow('FABRIKA_ZEROPS_PROXY_SOURCE_JSON is required')
+	})
 	test('builds connection-bound v2 credentials and routes keyed activation and status only through v2', async () => {
 		const calls: string[] = []
 		const identity: ZeropsSourceGitHubAppIdentityV1 = {
@@ -263,13 +284,13 @@ describe('the Zerops namespace process configuration', () => {
 		const normalized = provider.namespaces.normalize({
 			id: 'apps-prod',
 			env: 'prod',
-			target: { provider: 'zerops', version: 1, payload: {} },
+			target: { provider: 'zerops', version: 1, payload: { proxySource: PIN } },
 		})
 		expect(normalized.target.payload).toEqual({
 			projectName: 'apps-prod',
 			corePackage: 'LIGHT',
 			publicAccess: 'custom-domain',
-			proxyBuildFromGit: 'https://github.com/contember/fabrika-platform',
+			proxySource: PIN,
 			managed: true,
 			ready: false,
 		})
@@ -305,7 +326,7 @@ describe('the Zerops namespace process configuration', () => {
 	for (
 		const name of [
 			'FABRIKA_ZEROPS_CLIENT_ID',
-			'FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT',
+			'FABRIKA_ZEROPS_PROXY_SOURCE_JSON',
 			'FABRIKA_ZEROPS_PROXY_IAM_URL',
 			'FABRIKA_ZEROPS_PROXY_IAM_KEY',
 		]

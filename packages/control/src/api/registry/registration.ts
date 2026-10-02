@@ -2,6 +2,7 @@ import type { AppEnvDto, RegisterAppRequest, RegisterAppResponse } from '@fabrik
 import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
 import { type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
 import { normalizeRepoUrl } from '../../repo-source'
+import { retainedCheckpointReader } from '../../retained-run-checkpoints'
 import { fail } from '../domain'
 import { parseStoredEnvelope } from '../provider-envelope'
 import { sourceBindingFields, toAppDto } from './apps'
@@ -125,7 +126,14 @@ export async function prepareRegistration(
 	preparation: NonNullable<NonNullable<ControlProvider['namespaces']>['prepareRegistration']>,
 	requested: ProviderRegistration,
 ): Promise<ProviderRegistration> {
-	const prepared = await preparation({ registration: requested, signal: c.signal })
+	const prepared = await preparation({
+		registration: requested,
+		signal: c.signal,
+		readRetainedCheckpoint: retainedCheckpointReader(c.repositories.runs, {
+			appId: requested.app.id,
+			env: requested.environment.env,
+		}, c.signal),
+	})
 	if (
 		prepared.app.id !== requested.app.id
 		|| !sameGitHubSourceBinding(prepared.app, requested.app)

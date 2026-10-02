@@ -126,6 +126,7 @@ export function cfJobQueue<T>(queue: Queue<T>): JobQueue<T> {
 export interface CloudflareRunnerService {
 	startRun(job: CloudflareRunnerJob): Promise<RelayResult>
 	cancelRun(runId: string, runnerKey: string): Promise<unknown>
+	recoverRun(runId: string, runnerKey: string): Promise<'running' | 'failed'>
 }
 
 const runner = (bindings: WorkerBindings): CloudflareRunnerService => {
@@ -191,5 +192,9 @@ export function cloudflareControlProvider(bindings: WorkerBindings, env: Env): C
 			return startRunOnRunner(runner(bindings), job)
 		},
 		cancelRun: (runId) => cancelRunOnRunner(runner(bindings), runId, env.FABRIKA_RUNNER_KEY),
+		recoverRun: (runId) => {
+			const svc = runner(bindings)
+			return svc.recoverRun(runId, required(env.FABRIKA_RUNNER_KEY, 'FABRIKA_RUNNER_KEY'))
+		},
 	})
 }

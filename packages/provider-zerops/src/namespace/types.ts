@@ -1,9 +1,34 @@
 import type { ProviderNamespaceHost } from '@fabrika/provider-contract'
 import type { ZeropsApi, ZeropsProjectMode } from '../api'
 import type { Sleeper } from '../collaborators'
+import type { ZeropsArtifactSourceDescriptor } from '../manifest'
+import type { ZeropsSourceClient, ZeropsSourceRepository } from '../source'
 import type { ZeropsSourceTarget } from '../types'
 
 export type ZeropsNamespacePublicAccess = 'custom-domain' | 'zerops-subdomain'
+
+export interface ZeropsNamespaceProxySource {
+	readonly repository: ZeropsSourceRepository
+	readonly commitSha: string
+	readonly descriptor: ZeropsArtifactSourceDescriptor
+}
+
+export interface ZeropsNamespaceProxyBuild {
+	readonly manifestSha256?: string
+	readonly runId: string
+	readonly appVersionId: string
+	readonly source: ZeropsNamespaceProxySource
+	readonly phase: 'version_created' | 'source_uploaded' | 'build_trigger_requested' | 'build_triggered'
+	readonly processId?: string
+}
+
+export interface ZeropsNamespaceProxyDeployment {
+	readonly manifestSha256?: string
+	readonly appVersionId: string
+	readonly repository: ZeropsSourceRepository
+	readonly commitSha: string
+	readonly descriptorSha256: string
+}
 
 export type ZeropsNamespacePostgres =
 	| {
@@ -20,6 +45,9 @@ export type ZeropsNamespacePostgres =
  * absent are resolved by `normalize()` before a mutation starts.
  */
 export interface ZeropsNamespaceTarget {
+	readonly proxySource?: ZeropsNamespaceProxySource
+	readonly proxyBuild?: ZeropsNamespaceProxyBuild
+	readonly proxyDeployment?: ZeropsNamespaceProxyDeployment
 	readonly projectName?: string
 	readonly corePackage?: ZeropsProjectMode
 	readonly publicAccess?: ZeropsNamespacePublicAccess
@@ -47,8 +75,11 @@ export interface NormalizedZeropsNamespaceTarget extends ZeropsNamespaceTarget {
 }
 
 export interface ZeropsNamespaceOptions {
+	readonly proxyManifest?: (namespaceId: string) => Promise<string>
+	readonly proxySource?: ZeropsNamespaceProxySource
+	readonly source?: ZeropsSourceClient
 	readonly clientId: string
-	readonly proxyBuildFromGit: string
+	readonly proxyBuildFromGit?: string
 	/** Public IAM origin reachable from an app project. */
 	readonly iamUrl: string
 	/** Same credential IAM receives as `FABRIKA_IAM_PROXY_KEY`. */
@@ -65,17 +96,19 @@ export interface ZeropsNamespaceTopology {
 }
 
 export interface ZeropsNamespacePresetInput {
+	readonly proxySource?: ZeropsNamespaceProxySource
 	readonly preset: 'cheap' | 'mid' | 'full'
 	readonly env: string
 	readonly projectName: string
 	readonly corePackage?: ZeropsProjectMode
 	readonly publicAccess?: ZeropsNamespacePublicAccess
-	readonly proxyBuildFromGit: string
+	readonly proxyBuildFromGit?: string
 	readonly postgres?: ZeropsNamespacePostgres
 }
 
 export interface ZeropsNamespaceOperatorOptions {
-	readonly proxyBuildFromGit: string
+	readonly proxySource?: ZeropsNamespaceProxySource
+	readonly proxyBuildFromGit?: string
 }
 
 export interface ZeropsNamespacePlanOptions {

@@ -93,6 +93,12 @@ const namespacePresentation = (
 		preset,
 		title: `${ZEROPS_NAMESPACE_PRESETS.find((candidate) => candidate.id === preset)?.label ?? preset} namespace`,
 		facts: [
+			{
+				label: 'Proxy source',
+				value: target.proxySource === undefined
+					? 'Unpinned (mutations blocked)'
+					: `${target.proxySource.repository.owner}/${target.proxySource.repository.name}@${target.proxySource.commitSha} (zerops.yaml sha256:${target.proxySource.descriptor.sha256})`,
+			},
 			project,
 			{ label: 'Environment', value: namespace.env },
 			{ label: 'Core package', value: corePackage },
@@ -109,9 +115,6 @@ const namespacePresentation = (
 export const createZeropsNamespaceOperator = (
 	options: ZeropsNamespaceOperatorOptions,
 ): ProviderNamespaceOperator => {
-	if (options.proxyBuildFromGit.trim() === '') {
-		throw new Error('Zerops namespace proxyBuildFromGit must be a non-empty string')
-	}
 	return {
 		presets: ZEROPS_NAMESPACE_PRESETS,
 		plan(input: ProviderNamespacePlanInput) {
@@ -137,6 +140,7 @@ export const createZeropsNamespaceOperator = (
 				env: input.env,
 				projectName: planOptions.projectName ?? input.id,
 				proxyBuildFromGit: options.proxyBuildFromGit,
+				...(options.proxySource === undefined ? {} : { proxySource: options.proxySource }),
 				...(planOptions.corePackage === undefined ? {} : { corePackage: planOptions.corePackage }),
 				...(planOptions.publicAccess === undefined ? {} : { publicAccess: planOptions.publicAccess }),
 				...(planOptions.postgres === undefined ? {} : { postgres: planOptions.postgres }),

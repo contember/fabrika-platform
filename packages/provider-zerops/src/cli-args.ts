@@ -64,6 +64,8 @@ export const parseZeropsCliArgs = (argv: readonly string[]): ZeropsCliArgs => {
 			postgresType = arg.slice('--postgres-type='.length)
 		} else if (arg.startsWith('--postgres-profile=')) {
 			postgresProfile = arg.slice('--postgres-profile='.length)
+		} else if (arg === '--proxy-build-from-git') {
+			throw new Error('--proxy-build-from-git is no longer supported; use FABRIKA_ZEROPS_PROXY_SOURCE_JSON for plan/create/adopt')
 		} else if (arg.startsWith('--proxy-build-from-git=')) {
 			proxyBuildFromGit = arg.slice('--proxy-build-from-git='.length)
 		} else if (arg.startsWith('--control-url=')) {

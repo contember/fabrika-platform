@@ -48,14 +48,9 @@ export class VozkaRunner extends WorkerEntrypoint<Env> {
 
 		const id = this.env.RUNNER.idFromName(job.runId)
 		const container = this.env.RUNNER.get(id)
-		await container.startAndWaitForPorts()
-		// Arm the backstop BEFORE the long relay: the container DO will record the terminal status on its
-		// own (caller-independent) schedule if this RPC is aborted mid-deploy — which is exactly what a
-		// fabrika self-deploy does (it resets fabrika, killing this RPC). The relay's fast path still wins when
-		// it survives; the backstop's write is idempotent (see RunnerContainer.armBackstop / finish-run).
-		await container.armBackstop(job.runId)
+		await container.startDeploy(job.runId)
 		const relayable: ContainerLike = {
-			containerFetch: (input, init) => container.containerFetch(input, init),
+			containerFetch: (input, init) => container.deployFetch(input, init),
 			heartbeat: () => container.heartbeat(),
 		}
 		const result = await relayRun(relayable, this.env.RUN_LOGS, job)
@@ -87,13 +82,14 @@ export class VozkaRunner extends WorkerEntrypoint<Env> {
 		}
 
 		const container = this.env.RUNNER.get(this.env.RUNNER.idFromName(runId))
-		try {
-			await container.destroy()
-		} catch (err) {
-			// The container may already be gone (hard-killed / never booted) — cancel still records the run.
-			console.error('vozka-runner: cancel destroy failed', err instanceof Error ? err.message : 'unknown error')
-		}
+		await container.cancelDeploy()
 		return finishRun(this.env.DB, runId, 'failed', null)
+	}
+
+	async recoverRun(runId: string, runnerKey: string): Promise<'running' | 'failed'> {
+		await assertRunnerKey(this.env.FABRIKA_RUNNER_KEY, runnerKey)
+		if (typeof runId !== 'string' || !UUID.test(runId)) throw new Error('runner: invalid run id')
+		return this.env.RUNNER.get(this.env.RUNNER.idFromName(runId)).recoverDeploy()
 	}
 
 	// vozka-runner is RPC-only (invoked via the RUNNER_SVC service binding). It has no public route;

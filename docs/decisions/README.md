@@ -1,5 +1,7 @@
 # decisions (ADR)
 
+[ADR-0046](0046-share-durable-namespace-proxy-attempt-ownership.md) shares durable attempt state and renewable ownership across every namespace proxy rebuild path.
+
 [ADR-0045](0045-upload-immutable-platform-and-namespace-proxy-sources.md) requires committed checkout uploads for installation builds and persisted immutable source identity for namespace proxies.
 
 [ADR-0044](0044-bind-zerops-managed-configuration-to-application-versions.md) binds new application versions to immutable managed service values and defines fenced recovery and collision-safe provisioning.

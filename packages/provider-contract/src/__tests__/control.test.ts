@@ -80,6 +80,7 @@ describe('ControlProvider', () => {
 			},
 			cancel: async (input) => {
 				cancelled.push(input.externalId)
+				return { state: 'settled' }
 			},
 			reconcile: async () => ({ state: 'running' }),
 			secrets: {
@@ -101,12 +102,14 @@ describe('ControlProvider', () => {
 			throw new Error('expected all optional harbor capabilities')
 		}
 		const reconciliation = await harbor.reconcile({
+			signal: input.signal,
 			runId: input.runId,
 			externalId: 'harbor-run-9',
 			environment: registration.environment,
 			checkpoint: () => Promise.resolve(),
 		})
 		await harbor.cancel({
+			signal: input.signal,
 			runId: input.runId,
 			externalId: 'harbor-run-9',
 			environment: registration.environment,

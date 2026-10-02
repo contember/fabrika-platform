@@ -16,11 +16,12 @@ import {
 import type { OperationsReleaseProjectionDeps } from './operations-releases'
 import { LocalGitHubRepoEvents, type RepoEvents } from './repo-source'
 import { cancelDeploy, type RunDeps } from './run-lifecycle'
+import { DEPLOY_LEASE_TTL_MS, type DeployLockGate } from './run-ownership'
 import { VaultSecretResolver } from './secret-resolver'
 import { Vault } from './vault'
 import type { WebhookBinding } from './webhook'
 
-export const DEPLOY_LOCK_TTL_MS = 30 * 60 * 1000
+export const DEPLOY_LOCK_TTL_MS = DEPLOY_LEASE_TTL_MS
 export const DEPLOY_LOCK_REQUEUE_DELAY_S = 30
 export const STALE_RUN_MAX_AGE_S = 30 * 60
 
@@ -30,6 +31,15 @@ export function repositories(env: Env): ControlRepositories {
 
 export function locks(env: Env): DeployLocks {
 	return new SqlDeployLocks(env.DB)
+}
+
+export function deployLock(env: Env): DeployLockGate {
+	const store = locks(env)
+	return {
+		acquire: (key, holder) => store.acquire(key, holder, DEPLOY_LOCK_TTL_MS),
+		renew: (key, holder) => store.renew(key, holder, DEPLOY_LOCK_TTL_MS),
+		release: (key, holder) => store.release(key, holder),
+	}
 }
 
 export function operationsCatalogDeps(env: Env): OperationsCatalogSyncDeps {
@@ -107,10 +117,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 		secrets: new VaultSecretResolver({
 			...(env.FABRIKA_CONTROL_VAULT_KEY !== undefined ? { vault: await vault(env) } : {}),
 		}),
-		lock: {
-			acquire: (key, holder) => locks(env).acquire(key, holder, DEPLOY_LOCK_TTL_MS),
-			release: (key, holder) => locks(env).release(key, holder),
-		},
+		lock: deployLock(env),
 		logs: env.RUN_LOGS,
 		operations: operationsReleaseDeps(env),
 		// The installation's own IAM issuer, which every application it deploys verifies against (ADR-0035).
@@ -119,7 +126,7 @@ export async function buildRunDeps(env: Env, provider: ControlProvider): Promise
 }
 
 export async function cancelRun(env: Env, provider: ControlProvider, run: RunRow): Promise<void> {
-	await cancelDeploy({ repositories: repositories(env), provider, lock: locks(env) }, run)
+	await cancelDeploy({ repositories: repositories(env), provider, lock: deployLock(env) }, run)
 }
 
 /**

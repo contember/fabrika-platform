@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { parseZeropsCliArgs } from '../cli-args'
+import { createZeropsArtifactSourceDescriptor } from '../manifest'
 import { runZeropsNamespaceCommand } from '../namespace-command'
 
 interface Call {
@@ -10,8 +11,14 @@ interface Call {
 	readonly redirect: RequestRedirect | undefined
 }
 
+const proxySource = {
+	repository: { owner: 'contember', name: 'fabrika-platform' },
+	commitSha: 'a'.repeat(40),
+	descriptor: await createZeropsArtifactSourceDescriptor('zerops:\n  - setup: proxy\n    run:\n      start: ./proxy\n'),
+}
+
 const source = (): Record<string, string | undefined> => ({
-	FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT: 'https://github.com/contember/fabrika-platform',
+	FABRIKA_ZEROPS_PROXY_SOURCE_JSON: JSON.stringify(proxySource),
 	FABRIKA_CONTROL_URL: 'https://control.example.test',
 	FABRIKA_CONTROL_TOKEN: 'px_operator_secret',
 })
@@ -72,6 +79,7 @@ describe('fabrika namespace commands', () => {
 			projectName: 'apps-prod',
 			corePackage: 'LIGHT',
 			postgres: { type: 'postgresql:single@18' },
+			proxySource,
 		})
 		expect(plan.presentation.preset).toBe('cheap')
 	})
@@ -102,6 +110,7 @@ describe('fabrika namespace commands', () => {
 		expect(body.method).toBe('namespaces.create')
 		expect(body.input).toMatchObject({ id: 'billing-prod', env: 'prod', exclusiveAppId: 'billing' })
 		expect(body.input.target.payload.postgres).toBeUndefined()
+		expect(body.input.target.payload).toMatchObject({ proxySource })
 	})
 
 	test('adopts an existing project and reconciles by namespace id', async () => {
@@ -133,7 +142,7 @@ describe('fabrika namespace commands', () => {
 			)
 		expect(adopted.method).toBe('namespaces.adopt')
 		expect(adopted.input.namespaceId).toBe('legacy-prod')
-		expect(adopted.input.namespace.target.payload).toMatchObject({ managed: false, projectId: 'project-1' })
+		expect(adopted.input.namespace.target.payload).toMatchObject({ managed: false, projectId: 'project-1', proxySource })
 		expect(JSON.parse(calls[1]?.body ?? '')).toEqual({ method: 'namespaces.reconcile', input: { namespaceId: 'legacy-prod' } })
 	})
 
@@ -144,8 +153,78 @@ describe('fabrika namespace commands', () => {
 			source: {},
 			fetch: recorder(calls),
 			write: () => {},
-		})).rejects.toThrow('--proxy-build-from-git or FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT is required')
+		})).rejects.toThrow('FABRIKA_ZEROPS_PROXY_SOURCE_JSON is required')
 		expect(calls).toEqual([])
+	})
+
+	test('rejects malformed or mismatched immutable sources before output or network', async () => {
+		for (const command of ['plan', 'create', 'adopt']) {
+			for (
+				const serialized of [
+					'{"secret-input":',
+					'null',
+					JSON.stringify({ ...proxySource, commitSha: 'main' }),
+					JSON.stringify({ ...proxySource, descriptor: { ...proxySource.descriptor, sha256: '0'.repeat(64) } }),
+				]
+			) {
+				const calls: Call[] = []
+				const output: string[] = []
+				const args = parseZeropsCliArgs(['namespace', command, '--id=apps-prod', '--env=prod', '--preset=cheap', '--project-id=project-1'])
+				await expect(runZeropsNamespaceCommand(args, {
+					source: { ...source(), FABRIKA_ZEROPS_PROXY_SOURCE_JSON: serialized },
+					fetch: recorder(calls),
+					write: (value) => output.push(value),
+				})).rejects.toThrow()
+				expect(calls).toEqual([])
+				expect(output).toEqual([])
+			}
+		}
+	})
+
+	test('rejects legacy source inputs with actionable errors that omit their values', async () => {
+		for (const command of ['plan', 'create', 'adopt', 'reconcile']) {
+			for (const legacy of ['flag', 'environment']) {
+				const calls: Call[] = []
+				const output: string[] = []
+				const args = parseZeropsCliArgs([
+					'namespace',
+					command,
+					'--id=apps-prod',
+					'--env=prod',
+					'--preset=cheap',
+					...(legacy === 'flag' ? ['--proxy-build-from-git=secret-legacy-url'] : []),
+				])
+				let failure: unknown
+				try {
+					await runZeropsNamespaceCommand(args, {
+						source: { ...source(), ...(legacy === 'environment' ? { FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT: 'secret-legacy-url' } : {}) },
+						fetch: recorder(calls),
+						write: (value) => output.push(value),
+					})
+				} catch (error) {
+					failure = error
+				}
+				expect(failure).toBeInstanceOf(Error)
+				if (!(failure instanceof Error)) throw new Error('Expected legacy source rejection')
+				expect(failure.message).toContain('FABRIKA_ZEROPS_PROXY_SOURCE_JSON')
+				expect(failure.message).not.toContain('secret-legacy-url')
+				expect(calls).toEqual([])
+				expect(output).toEqual([])
+			}
+		}
+	})
+
+	test('reconciles the persisted target without selecting a local source', async () => {
+		for (const serialized of [undefined, 'invalid unused JSON']) {
+			const calls: Call[] = []
+			await runZeropsNamespaceCommand(parseZeropsCliArgs(['namespace', 'reconcile', '--id=apps-prod']), {
+				source: { ...source(), FABRIKA_ZEROPS_PROXY_SOURCE_JSON: serialized },
+				fetch: recorder(calls),
+				write: () => {},
+			})
+			expect(calls).toHaveLength(1)
+			expect(JSON.parse(calls[0]?.body ?? '')).toEqual({ method: 'namespaces.reconcile', input: { namespaceId: 'apps-prod' } })
+		}
 	})
 
 	test('does not include the Bearer credential in API failures', async () => {

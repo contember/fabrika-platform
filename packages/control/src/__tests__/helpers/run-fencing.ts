@@ -23,6 +23,25 @@ export function runFencingContract(database: () => SqlDatabase): void {
 		return { sql, runs, first, second, stage, locks, guard, key: `${appId}:prod` }
 	}
 
+	test('initial reservation after cancellation requires the exact live owner and checkpoint, never a stale same-id retry', async () => {
+		const { runs, first, locks, guard, key } = await seed('cancel-reservation')
+		await locks(100).acquire(key, guard.holder, 100)
+		await runs.markRunStarted(first, 'log', guard)
+		await runs.beginRunCancellation(first)
+		expect(await runs.recordInitialRunExternalId(first, 'version', { phase: 'reserved' }, { ...guard, holder: 'stale' })).toBe(false)
+		expect(await runs.recordInitialRunExternalId(first, 'version', { phase: 'reserved' }, { ...guard, expectedProviderStateJson: '{}' })).toBe(false)
+		await locks(200).acquire(key, 'takeover', 100)
+		expect(await runs.recordInitialRunExternalId(first, 'version', { phase: 'reserved' }, guard)).toBe(false)
+		const takeover = { ...guard, holder: 'takeover', nowMs: 200 }
+		expect(await runs.recordInitialRunExternalId(first, 'version', { phase: 'reserved' }, takeover)).toBe(true)
+		const current = { ...takeover, expectedProviderStateJson: '{"phase":"reserved"}' }
+		expect(await runs.recordInitialRunExternalId(first, 'version', { phase: 'later' }, current)).toBe(false)
+		expect(await runs.recordInitialRunExternalId(first, 'version', { phase: 'later' }, guard)).toBe(false)
+		expect(await runs.checkpointRunProviderState(first, { phase: 'submitted' }, current)).toBe(false)
+		expect(await runs.setRunExternalId(first, 'version', { phase: 'submitted' }, current)).toBe(false)
+		expect(await runs.markRunCancellationFinished(first, current)).toBe(true)
+	})
+
 	test('start requires a live exact owner, never creates or renews a lease, and refuses another running run after takeover', async () => {
 		const { sql, runs, first, second, stage, locks, guard, key } = await seed('start-fence')
 		expect(await runs.markRunStarted(first, 'log', guard)).toBe(false)
@@ -101,5 +120,21 @@ export function runFencingContract(database: () => SqlDatabase): void {
 		await runs.beginRunCancellation(second)
 		expect(await runs.markRunStarted(second, 'log', guard)).toBe(false)
 		expect(await runs.markRunCancellationFinished(second, guard)).toBe(true)
+	})
+
+	test('runner-success correction requires the current holder, expiry and exact checkpoint', async () => {
+		const { runs, first, locks, guard, key } = await seed('runner-correction')
+		await locks(100).acquire(key, guard.holder, 100)
+		await runs.markRunStarted(first, 'log', guard)
+		await runs.setRunExternalId(first, 'runner', { phase: 'accepted' }, guard)
+		await runs.markRunFinished(first, 'succeeded', 0)
+		const current = { ...guard, expectedProviderStateJson: '{"phase":"accepted"}' }
+		expect(await runs.markRunFailedAfterRunner(first, guard)).toBe(false)
+		expect(await runs.markRunFailedAfterRunner(first, { ...current, nowMs: 200 })).toBe(false)
+		await locks(200).acquire(key, 'recovery', 100)
+		expect(await runs.markRunFailedAfterRunner(first, current)).toBe(false)
+		expect((await runs.getRun(first))?.status).toBe('succeeded')
+		expect(await runs.markRunFailedAfterRunner(first, { ...current, holder: 'recovery', nowMs: 200 })).toBe(true)
+		expect((await runs.getRun(first))?.finished_at).toBe(42)
 	})
 }

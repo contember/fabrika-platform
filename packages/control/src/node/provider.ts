@@ -15,23 +15,29 @@
 // works everywhere.
 
 import { deploy } from '@fabrika/engine'
+import type { JobQueue } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import {
 	createZeropsApi,
 	createZeropsControlProvider,
 	createZeropsSourceConnectionAdmin,
+	decodeZeropsNamespaceProxySource,
 	type SourceConnectionAdmin,
 	SourceConnectionAdminError,
 	type SourceConnectionZeropsApi,
+	type ZeropsNamespaceProxySource,
 	type ZeropsSourceClient,
 	type ZeropsSourceCredentialManager,
 	type ZeropsSourceCredentialManagerV2,
 } from '@fabrika/provider-zerops'
+import { encodeProxyManifestJson } from '@fabrika/proxy-contract'
 import type { NamespaceProxyChanged } from '../api/namespaces'
 import type { Env } from '../env'
-import { repositories } from '../services'
+import type { ControlJobMessage } from '../run-lifecycle'
+import type { DeployLockGate } from '../run-ownership'
+import { deployLock, repositories } from '../services'
 import { HttpZeropsSourceClient } from './source-client'
-import { type NamespaceProxyRegistry, syncNamespaceProxy, syncZeropsProxy } from './zerops-proxy'
+import { compileNamespaceProxyManifest, type NamespaceProxyRegistry, syncNamespaceProxy, syncZeropsProxy } from './zerops-proxy'
 
 const required = (source: Record<string, string | undefined>, name: string): string => {
 	const value = source[name]
@@ -43,7 +49,7 @@ const required = (source: Record<string, string | undefined>, name: string): str
 
 export interface ZeropsNamespaceProcessConfig {
 	readonly clientId: string
-	readonly proxyBuildFromGit: string
+	readonly proxySource: ZeropsNamespaceProxySource
 	readonly iamUrl: string
 	readonly iamKey: string
 }
@@ -53,10 +59,21 @@ export const zeropsNamespaceProcessConfig = (
 	source: Record<string, string | undefined>,
 ): ZeropsNamespaceProcessConfig => ({
 	clientId: required(source, 'FABRIKA_ZEROPS_CLIENT_ID'),
-	proxyBuildFromGit: required(source, 'FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT'),
+	proxySource: readProxySource(required(source, 'FABRIKA_ZEROPS_PROXY_SOURCE_JSON')),
 	iamUrl: required(source, 'FABRIKA_ZEROPS_PROXY_IAM_URL'),
 	iamKey: required(source, 'FABRIKA_ZEROPS_PROXY_IAM_KEY'),
 })
+
+function readProxySource(raw: string): ZeropsNamespaceProxySource {
+	try {
+		const value: unknown = JSON.parse(raw)
+		return decodeZeropsNamespaceProxySource(value)
+	} catch {
+		throw new Error(
+			'FABRIKA_ZEROPS_PROXY_SOURCE_JSON must contain a valid immutable proxy source; upgrade the installation configuration before starting Control',
+		)
+	}
+}
 
 /** Construct and validate the one source transport shared by Zerops provider and onboarding. */
 export function zeropsSourceClient(source: Record<string, string | undefined>): HttpZeropsSourceClient {
@@ -111,11 +128,20 @@ const zeropsApi = (source: Record<string, string | undefined>) =>
  * the live authorization state). Built lazily so a misconfigured value still fails at the same boot
  * check `zeropsControlProvider` performs.
  */
-export function zeropsNamespaceProxySync(source: Record<string, string | undefined>, db: NamespaceProxyRegistry): NamespaceProxyChanged {
+export function zeropsNamespaceProxySync(
+	source: Record<string, string | undefined>,
+	db: NamespaceProxyRegistry,
+	lock: DeployLockGate,
+	queue: JobQueue<ControlJobMessage>,
+	sourceClient: ZeropsSourceClient = zeropsSourceClient(source),
+): NamespaceProxyChanged {
 	return async (namespaceId) => {
 		const namespaces = zeropsNamespaceProcessConfig(source)
 		await syncNamespaceProxy({
 			db,
+			lock,
+			queue,
+			source: sourceClient,
 			api: zeropsApi(source),
 			namespaceId,
 			iamUrl: namespaces.iamUrl,
@@ -142,7 +168,10 @@ export function zeropsControlProvider(
 		...(env.FABRIKA_IAM_PROVISIONING_KEY === undefined
 			? {}
 			: { adminKey: env.FABRIKA_IAM_PROVISIONING_KEY }),
-		namespaces,
+		namespaces: {
+			...namespaces,
+			proxyManifest: async namespaceId => encodeProxyManifestJson(await compileNamespaceProxyManifest(repositories(env).registry, namespaceId)),
+		},
 		execute: async (provider, run) => {
 			const result = await deploy(provider, run)
 			return { state: result.status === 'succeeded' ? 'succeeded' : 'failed' }
@@ -150,10 +179,11 @@ export function zeropsControlProvider(
 		beforeDeploy: async (input) => {
 			await syncZeropsProxy({
 				db: repositories(env).registry,
+				lock: deployLock(env),
+				source: sourceClient,
 				api: input.api,
 				namespaceId: input.namespaceId,
-				proxyServiceId: input.target.proxyServiceId,
-				proxyBuildFromGit: input.target.proxyBuildFromGit,
+				proxySource: input.target.proxySource,
 				iamUrl: namespaces.iamUrl,
 				iamKey: namespaces.iamKey,
 				signal: input.signal,
