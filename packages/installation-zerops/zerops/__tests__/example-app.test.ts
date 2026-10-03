@@ -32,8 +32,11 @@ import {
 import { buildCaddyConfig } from '@fabrika/proxy'
 import { encodeProxyManifestJson, parseProxyManifestJson, type ProxyManifest } from '@fabrika/proxy-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { parseZeropsDescriptor } from '../../../provider-zerops/src/descriptor'
+import { hashFabrikaManifest } from '../../../provider-zerops/src/manifest'
 import { REPO_ROOT } from '../artifacts'
 import { assertOnlyPublicService, assertZeropsHostnames } from '../invariants'
 import { validateYaml } from '../validate'
@@ -110,7 +113,14 @@ const makeApi = (rec: Recorded, statuses: ZeropsAppVersionStatus[]): ZeropsApi =
 		listProjects: () => Promise.resolve(record('listProjects', [])),
 		findProjects: () => Promise.resolve(record('findProjects', [])),
 		listProjectServices: () => Promise.resolve(record('listProjectServices', [])),
-		listServiceEnv: () => Promise.resolve(record('listServiceEnv', [])),
+		listServiceEnv: () =>
+			Promise.resolve(record('listServiceEnv', [{
+				id: 'marker-1',
+				key: 'FABRIKA_MENV_PROTOCOL',
+				content: JSON.stringify({ ...MANAGED_OWNER, creationProcessId: 'creation-1', initialCodelessAppVersionId: 'bootstrap-1' }),
+				sensitive: true,
+				type: 'USER',
+			}])),
 		createServiceEnv: () => Promise.resolve(record('createServiceEnv', undefined)),
 		putServiceEnv: () => Promise.resolve(record('putServiceEnv', undefined)),
 		deleteServiceEnv: () => Promise.resolve(record('deleteServiceEnv', undefined)),
@@ -181,7 +191,17 @@ const TARGET: ZeropsRuntimeTarget = {
 	adminKey: 'px_admin_placeholder',
 }
 
-const SOURCE_DESCRIPTOR = await createZeropsArtifactSourceDescriptor(readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zerops.yaml'), 'utf8'))
+const MANAGED_OWNER: NonNullable<ZeropsRuntimeTarget['managedAdmission']>['owner'] = {
+	protocol: 1,
+	appId: NOTES_APP_ID,
+	environment: 'prod',
+	namespaceId: 'namespace-apps-prod',
+	projectId: TARGET.projectId,
+	serviceId: TARGET.serviceId,
+	hostname: NOTES_SERVICE,
+}
+const SOURCE_CONTENTS = readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zerops.yaml'), 'utf8')
+const SOURCE_DESCRIPTOR = await createZeropsArtifactSourceDescriptor(SOURCE_CONTENTS)
 const MANIFEST = compileFabrikaManifest(notesConfig, 'prod', SOURCE_DESCRIPTOR)
 const RUN_ID = 'run-example-1'
 const COMMIT_SHA = '0123456789abcdef0123456789abcdef01234567'
@@ -199,7 +219,14 @@ const makeRun = (
 	artifact: provider.encodeArtifact(MANIFEST),
 	secrets: {},
 	vars: {},
-	managedEnvironment: {},
+	managedEnvironment: {
+		FABRIKA_RELEASE: null,
+		FABRIKA_OPERATIONS_DSN: null,
+		FABRIKA_IAM_ISSUER: null,
+		FABRIKA_APP_ID: null,
+		FABRIKA_ENVIRONMENT: null,
+		FABRIKA_SERVICE_KEY: null,
+	},
 	cwd: '/repo',
 	dryRun: false,
 	signal: new AbortController().signal,
@@ -240,6 +267,7 @@ const deployExample = (
 			provider.runtime,
 			makeRun(provider, recorded, {
 				...TARGET,
+				managedAdmission: { owner: MANAGED_OWNER, markerRecordId: 'marker-1' },
 				source: { runId: RUN_ID, repository: REPOSITORY, commitSha: resolved.commitSha },
 			}, overrides),
 		)
@@ -250,6 +278,23 @@ let rec: Recorded
 beforeEach(() => {
 	rec = fresh()
 })
+
+const assertSubmittedDescriptor = (recorded: Recorded): void => {
+	expect(recorded.builds.map(({ zeropsYaml, ...coordinates }) => ({
+		...coordinates,
+		document: parseZeropsDescriptor(zeropsYaml).document,
+	}))).toEqual([{
+		appVersionId: 'ver-1',
+		zeropsYamlSetup: NOTES_SERVICE,
+		document: parseZeropsDescriptor(SOURCE_CONTENTS).document,
+	}])
+	expect(MANIFEST.target.sourceDescriptor).toEqual({
+		path: 'zerops.yaml',
+		contents: SOURCE_CONTENTS,
+		sha256: createHash('sha256').update(SOURCE_CONTENTS).digest('hex'),
+	})
+	expect(recorded.uploads.map(({ descriptorSha256 }) => descriptorSha256)).toEqual([SOURCE_DESCRIPTOR.sha256])
+}
 
 // ── the compiled import ───────────────────────────────────────────────────────────────────────────
 
@@ -358,6 +403,7 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 			// 3. reserve an app version, upload the exact snapshot, and ask Zerops to build that version.
 			'createAppVersion',
 			'sourceUpload',
+			'listServiceEnv',
 			'buildAndDeployAppVersion',
 			// 4-N. Watch it. Build and deploy are ONE platform-side operation.
 			'getLogAccess',
@@ -383,13 +429,32 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 			commitSha: COMMIT_SHA,
 			descriptorSha256: SOURCE_DESCRIPTOR.sha256,
 		}])
-		expect(rec.builds).toEqual([{ appVersionId: 'ver-1', zeropsYaml: SOURCE_DESCRIPTOR.contents, zeropsYamlSetup: NOTES_SERVICE }])
+		assertSubmittedDescriptor(rec)
 		expect(rec.externalIds).toEqual(['ver-1'])
-		expect(rec.externalStates).toEqual([{ appVersionId: 'ver-1', phase: 'version_created' }])
+		const checkpoint = {
+			...MANAGED_OWNER,
+			markerRecordId: 'marker-1',
+			runId: RUN_ID,
+			appVersionId: 'ver-1',
+			originalArtifactSha256: await hashFabrikaManifest(MANIFEST),
+			descriptorSha256: SOURCE_DESCRIPTOR.sha256,
+			setup: NOTES_SERVICE,
+			sourceCommitSha: COMMIT_SHA,
+			binding: {
+				FABRIKA_RELEASE: { state: 'absent' },
+				FABRIKA_OPERATIONS_DSN: { state: 'absent' },
+				FABRIKA_IAM_ISSUER: { state: 'absent' },
+				FABRIKA_APP_ID: { state: 'absent' },
+				FABRIKA_ENVIRONMENT: { state: 'absent' },
+				FABRIKA_SERVICE_KEY: { state: 'absent' },
+			},
+		}
+		expect(rec.externalStates).toEqual([{ ...checkpoint, phase: 'managed_env_staging' }])
 		expect(rec.checkpoints).toEqual([
-			{ appVersionId: 'ver-1', phase: 'source_uploaded' },
-			{ appVersionId: 'ver-1', phase: 'build_trigger_requested' },
-			{ appVersionId: 'ver-1', phase: 'build_triggered', processId: 'proc-1' },
+			{ ...checkpoint, phase: 'managed_env_staged' },
+			{ ...checkpoint, phase: 'source_uploaded' },
+			{ ...checkpoint, phase: 'build_trigger_requested' },
+			{ ...checkpoint, phase: 'build_triggered', processId: 'proc-1' },
 		])
 	})
 
@@ -401,10 +466,10 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 		expect(validateYaml('import', rec.imports[0]?.yaml ?? '')).toEqual([])
 	})
 
-	test("the upload-backed build selects the app's named setup and exact repository-root zerops.yaml", async () => {
+	test("the upload-backed build preserves the repository-root descriptor's meaning and selects the app's named setup", async () => {
 		const result = await deployExample(rec)
 		expect(result.status).toBe('succeeded')
-		expect(rec.builds).toEqual([{ appVersionId: 'ver-1', zeropsYaml: SOURCE_DESCRIPTOR.contents, zeropsYamlSetup: NOTES_SERVICE }])
+		assertSubmittedDescriptor(rec)
 	})
 
 	test("the schema reconcile names the app id the token's `aud` will carry", async () => {
@@ -420,6 +485,8 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 		// On Zerops the platform is the system of record; a deploy-time write would silently correct a
 		// client's GUI edit (ADR-0004). So: no env write, and no `sync-secrets` step to make one.
 		expect(rec.calls).not.toContain('putServiceEnv')
+		expect(rec.calls).not.toContain('createServiceEnv')
+		expect(rec.calls).not.toContain('deleteServiceEnv')
 	})
 
 	test('a failed build fails the run and SKIPS the reconcile — a broken build never touches IAM', async () => {

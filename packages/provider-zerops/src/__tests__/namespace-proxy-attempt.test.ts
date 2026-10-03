@@ -1,6 +1,6 @@
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { expect, test } from 'bun:test'
-import type { ZeropsAppVersionStatus } from '../api'
+import { ZeropsApiError, type ZeropsAppVersionStatus } from '../api'
 import { createZeropsArtifactSourceDescriptor } from '../manifest'
 import { zeropsNamespaceTargetCodec } from '../namespace/codec'
 import { runZeropsProxyAttempt, type ZeropsProxyAttemptApi, type ZeropsProxyAttemptInput } from '../namespace/proxy-attempt'
@@ -21,6 +21,7 @@ function fixture() {
 	let target: ZeropsNamespaceTarget = { proxyServiceId: 'proxy', projectId: 'project', proxySource: pin, ready: true }
 	let status: ZeropsAppVersionStatus = 'ACTIVE'
 	let sequence = 0
+	const deleted = new Set<string>()
 	const api: ZeropsProxyAttemptApi = {
 		listServiceEnv: async () => [],
 		putServiceEnv: async input => {
@@ -33,6 +34,7 @@ function fixture() {
 		},
 		deleteAppVersion: async input => {
 			calls.push(`delete:${input.appVersionId}`)
+			deleted.add(input.appVersionId)
 		},
 		buildAndDeployAppVersion: async input => {
 			calls.push(`build:${input.appVersionId}`)
@@ -42,6 +44,7 @@ function fixture() {
 		},
 		getAppVersion: async input => {
 			calls.push(`observe:${input.appVersionId}`)
+			if (deleted.has(input.appVersionId)) throw new ZeropsApiError('absent', 400, 'appVersionNotFound')
 			return { id: input.appVersionId, status }
 		},
 		cancelBuild: async input => {
@@ -240,12 +243,12 @@ test('upload failure cancels source before deleting the inert version and never 
 			},
 		},
 	})).rejects.toThrow('upload failed')
-	expect(f.calls.slice(-2)).toEqual(['cancelSource:v1', 'delete:v1'])
+	expect(f.calls.slice(-3)).toEqual(['cancelSource:v1', 'delete:v1', 'observe:v1'])
 	expect(f.calls).not.toContain('build:v1')
 	expect(f.target().proxyBuild).toBeUndefined()
 })
 
-test('failed source cancellation retains inert checkpoint and refuses deletion', async () => {
+test('failed source cancellation does not prevent exact inert deletion settlement', async () => {
 	const f = fixture()
 	await expect(runZeropsProxyAttempt({
 		...f.input(),
@@ -258,9 +261,74 @@ test('failed source cancellation retains inert checkpoint and refuses deletion',
 				throw new Error('cancellation lost')
 			},
 		},
-	})).rejects.toThrow('remains unresolved')
-	expect(f.calls).not.toContain('delete:v1')
-	expect(f.target().proxyBuild?.phase).toBe('version_created')
+	})).rejects.toThrow('upload failed')
+	expect(f.calls.slice(-2)).toEqual(['delete:v1', 'observe:v1'])
+	expect(f.target().proxyBuild).toBeUndefined()
+})
+
+for (const failure of ['delete-response', 'read-response', 'still-present', 'unverified-absence']) {
+	test(`inert cleanup retains its checkpoint after ${failure}`, async () => {
+		const f = fixture()
+		if (failure === 'delete-response') {
+			f.api.deleteAppVersion = async () => {
+				throw new Error('unknown delete result')
+			}
+		}
+		if (failure === 'read-response') {
+			f.api.getAppVersion = async () => {
+				throw new Error('unknown read result')
+			}
+		}
+		if (failure === 'still-present') f.api.getAppVersion = async ({ appVersionId }) => ({ id: appVersionId, status: 'UPLOADING' })
+		if (failure === 'unverified-absence') {
+			f.api.getAppVersion = async () => {
+				throw new ZeropsApiError('absent', 404, 'appVersionNotFound')
+			}
+		}
+		await expect(runZeropsProxyAttempt({
+			...f.input(),
+			source: {
+				...f.source,
+				upload: async () => {
+					throw new Error('upload failed')
+				},
+			},
+		})).rejects.toThrow('remains unresolved')
+		expect(f.target().proxyBuild?.phase).toBe('version_created')
+		expect(f.calls).not.toContain('build:v1')
+	})
+}
+
+test('a delayed successful upload cannot trigger the deleted inert reservation', async () => {
+	const f = fixture()
+	const lateUpload = Promise.withResolvers<void>()
+	let completed = false
+	const late = lateUpload.promise.then(() => {
+		completed = true
+	})
+	await expect(runZeropsProxyAttempt({
+		...f.input(),
+		source: {
+			...f.source,
+			upload: async () => {
+				throw new Error('upload response lost')
+			},
+			cancel: async () => {
+				throw new Error('cancellation lost')
+			},
+		},
+	})).rejects.toThrow('upload response lost')
+	expect(f.target().proxyBuild).toBeUndefined()
+	lateUpload.resolve()
+	await late
+	expect(completed).toBe(true)
+	await expect(f.api.getAppVersion({ appVersionId: 'v1', signal: new AbortController().signal })).rejects.toMatchObject({
+		status: 400,
+		code: 'appVersionNotFound',
+	})
+	await runZeropsProxyAttempt(f.input())
+	expect(f.calls).not.toContain('build:v1')
+	expect(f.calls).toContain('build:v2')
 })
 
 test('lease loss during upload preserves checkpoint without cancellation, deletion or build', async () => {
@@ -308,7 +376,7 @@ test('caller cancellation during reservation records its identity and cleans onl
 	}
 	await expect(runZeropsProxyAttempt(f.input())).rejects.toThrow()
 	expect(f.target().proxyBuild).toBeUndefined()
-	expect(f.calls.slice(-2)).toEqual(['cancelSource:v1', 'delete:v1'])
+	expect(f.calls.slice(-3)).toEqual(['cancelSource:v1', 'delete:v1', 'observe:v1'])
 	expect(f.calls.some(call => /build:|upload:/.test(call))).toBe(false)
 })
 
@@ -325,7 +393,7 @@ for (const phase of ['source_uploaded', 'build_trigger_requested']) {
 				if (next.proxyBuild?.phase === phase) f.controller.abort(new ProviderInvocationAbort('cancel_requested'))
 			},
 		})).rejects.toThrow()
-		expect(f.calls.slice(-2)).toEqual(['cancelSource:v1', 'delete:v1'])
+		expect(f.calls.slice(-3)).toEqual(['cancelSource:v1', 'delete:v1', 'observe:v1'])
 		expect(f.calls).not.toContain('build:v1')
 		expect(f.target().proxyBuild).toBeUndefined()
 		await runZeropsProxyAttempt({ ...f.input(), signal: new AbortController().signal, ownershipSignal: ownership.signal })

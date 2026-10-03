@@ -1,4 +1,5 @@
 import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
+import { parseManagedOwner } from './managed-environment/protocol'
 import type { ZeropsRuntimeSource, ZeropsRuntimeTarget } from './types'
 
 const field = (payload: JsonValue, key: string): JsonValue | undefined => {
@@ -74,6 +75,12 @@ export const zeropsTargetCodec: ProviderCodec<ZeropsRuntimeTarget> = {
 		projectId: target.projectId,
 		serviceId: target.serviceId,
 		accessToken: target.accessToken,
+		...(target.managedAdmission === undefined ? {} : {
+			managedAdmission: {
+				owner: { ...target.managedAdmission.owner },
+				markerRecordId: target.managedAdmission.markerRecordId,
+			},
+		}),
 		...(target.source === undefined
 			? {}
 			: {
@@ -90,15 +97,28 @@ export const zeropsTargetCodec: ProviderCodec<ZeropsRuntimeTarget> = {
 	}),
 	decode: (payload) => {
 		const target = object(payload, 'Zerops target')
-		const allowedKeys = ['projectId', 'serviceId', 'accessToken', 'source', 'apiBaseUrl', 'propustkaUrl', 'adminKey']
+		const allowedKeys = ['projectId', 'serviceId', 'accessToken', 'source', 'apiBaseUrl', 'propustkaUrl', 'adminKey', 'managedAdmission']
 		if (Object.keys(target).some((key) => !allowedKeys.includes(key))) {
 			throw new Error('Zerops target contains an unknown field')
 		}
 		const source = runtimeSource(payload)
+		let managedAdmission: ZeropsRuntimeTarget['managedAdmission']
+		if (target['managedAdmission'] !== undefined) {
+			const admission = object(target['managedAdmission'], 'Zerops managed admission')
+			if (Object.keys(admission).some((key) => key !== 'owner' && key !== 'markerRecordId')) {
+				throw new Error('Zerops managed admission contains an unknown field')
+			}
+			const owner = parseManagedOwner(admission['owner'])
+			if (owner.projectId !== target['projectId'] || owner.serviceId !== target['serviceId']) {
+				throw new Error('Zerops managed admission has different coordinates')
+			}
+			managedAdmission = { owner, markerRecordId: requiredString(admission, 'markerRecordId') }
+		}
 		return {
 			projectId: requiredString(payload, 'projectId'),
 			serviceId: requiredString(payload, 'serviceId'),
 			accessToken: requiredString(payload, 'accessToken'),
+			...(managedAdmission === undefined ? {} : { managedAdmission }),
 			...(source === undefined ? {} : { source }),
 			...(optionalString(payload, 'apiBaseUrl') !== undefined ? { apiBaseUrl: optionalString(payload, 'apiBaseUrl') } : {}),
 			...(optionalString(payload, 'propustkaUrl') !== undefined ? { propustkaUrl: optionalString(payload, 'propustkaUrl') } : {}),

@@ -1,5 +1,6 @@
 import type { AppSchema } from '@fabrika/auth-core'
 import type { JsonValue, RuntimeProviderRun } from '@fabrika/provider-contract'
+import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import {
 	createZeropsApi,
@@ -9,16 +10,28 @@ import {
 	type ZeropsAppVersion,
 	type ZeropsLogAccess,
 	type ZeropsProcess,
+	type ZeropsServiceEnv,
 } from '../api'
 import { zeropsTargetCodec } from '../codec'
 import type { ZeropsCollaborators } from '../collaborators'
 import { assertZeropsInvariants, compileImportYaml, compileProvisioningYaml } from '../compile'
-import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, zeropsArtifactCodec } from '../manifest'
+import { type ManagedOwner, mapManagedKeys, serializeManagedMarker, verifyManagedCheckpoint } from '../managed-environment/protocol'
+import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, hashFabrikaManifest, zeropsArtifactCodec } from '../manifest'
 import { CANCELLED, createZeropsProvider, type ZeropsSourceTransportBinding, type ZeropsSourceTransportRouting } from '../provider'
 import type { ZeropsServiceType } from '../schema.generated'
 import type { ZeropsAppConfig, ZeropsRuntimeTarget, ZeropsServiceSpec } from '../types'
 import { CANONICAL_DESCRIPTOR, SOURCE_DESCRIPTOR } from './fixtures/descriptor'
 import { rejectedDescriptorCorpus } from './fixtures/descriptor-corpus'
+
+const managedOwner: ManagedOwner = {
+	protocol: 1,
+	appId: 'demo',
+	environment: 'prod',
+	namespaceId: 'apps-prod',
+	projectId: 'project-1',
+	serviceId: 'service-1',
+	hostname: 'api',
+}
 
 interface Recorded {
 	calls: string[]
@@ -89,6 +102,13 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 	let poll = 0
 	let processPoll = 0
 	let versionErrors = overrides.versionErrors ?? 0
+	const deleted = new Set<string>()
+	const records: ZeropsServiceEnv[] = [{
+		id: 'marker-1',
+		key: 'FABRIKA_MENV_PROTOCOL',
+		content: serializeManagedMarker({ ...managedOwner, creationProcessId: 'creation-1', initialCodelessAppVersionId: 'bootstrap-1' }),
+		sensitive: true,
+	}]
 	return {
 		importServices: async ({ projectId, yaml }) => {
 			recorded.calls.push('importServices')
@@ -118,9 +138,11 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 			recorded.calls.push(`deleteAppVersion:${appVersionId}`)
 			recorded.deleteSignals.push(signal)
 			if (overrides.deleteError !== undefined) throw overrides.deleteError
+			deleted.add(appVersionId)
 		},
 		getAppVersion: async ({ appVersionId }) => {
 			recorded.calls.push('getAppVersion')
+			if (deleted.has(appVersionId)) throw new ZeropsApiError('absent', 400, 'appVersionNotFound')
 			if (versionErrors > 0) {
 				versionErrors--
 				throw new Error('status observation unavailable')
@@ -153,8 +175,10 @@ const makeApi = (recorded: Recorded, overrides: Overrides = {}): ZeropsApi => {
 		listProjects: async () => [],
 		findProjects: async () => [],
 		listProjectServices: async () => [],
-		listServiceEnv: async () => [],
-		createServiceEnv: async () => {
+		listServiceEnv: async () => records.map((record) => ({ ...record })),
+		createServiceEnv: async ({ key, value }) => {
+			if (records.some((record) => record.key === key)) throw new ZeropsApiError('duplicate', 400, 'userDataDuplicateKey')
+			records.push({ id: `backing-${records.length}`, key, content: value, sensitive: true, type: 'USER' })
 			recorded.calls.push('createServiceEnv')
 		},
 		putServiceEnv: async () => {
@@ -235,6 +259,7 @@ const target = (overrides: Partial<ZeropsRuntimeTarget> = {}): ZeropsRuntimeTarg
 	projectId: 'project-1',
 	serviceId: 'service-1',
 	accessToken: 'zt-secret',
+	managedAdmission: { owner: managedOwner, markerRecordId: 'marker-1' },
 	source: {
 		runId: 'run-1',
 		repository: { owner: 'acme', name: 'demo' },
@@ -257,7 +282,7 @@ const runtimeRun = (
 	cwd: '/repo',
 	secrets: {},
 	vars: { IMAGE: 'registry.test/demo:v2' },
-	managedEnvironment: {},
+	managedEnvironment: mapManagedKeys(() => null),
 	dryRun,
 	signal,
 	events: {
@@ -292,6 +317,107 @@ beforeEach(() => {
 })
 
 describe('Zerops provider', () => {
+	test('stages immutable records with durable per-key progress and overlays references without values', async () => {
+		const collaborators = makeCollaborators(recorded)
+		const provider = createZeropsProvider(() => collaborators)
+		const values = mapManagedKeys((key) => key === 'FABRIKA_IAM_ISSUER' ? null : key === 'FABRIKA_SERVICE_KEY' ? '' : `private-${key}`)
+		await execute({ ...runtimeRun(recorded, provider), managedEnvironment: values }, provider)
+		const initial = await verifyManagedCheckpoint(recorded.externalStates[0])
+		expect(initial.phase).toBe('managed_env_staging')
+		expect(Object.values(initial.binding).filter((entry) => entry.state === 'pending')).toHaveLength(5)
+		const checkpoints = await Promise.all(recorded.checkpoints.map(verifyManagedCheckpoint))
+		expect(checkpoints.map((state) => state.phase)).toEqual([
+			'managed_env_staging',
+			'managed_env_staging',
+			'managed_env_staging',
+			'managed_env_staging',
+			'managed_env_staging',
+			'managed_env_staged',
+			'source_uploaded',
+			'build_trigger_requested',
+			'build_triggered',
+		])
+		for (let index = 0; index < 5; index++) {
+			const state = checkpoints[index]
+			if (state === undefined) throw new Error('missing checkpoint')
+			expect(Object.values(state.binding).filter((entry) => entry.state === 'confirmed')).toHaveLength(index + 1)
+		}
+		const final = checkpoints.at(-1)
+		if (final === undefined) throw new Error('missing final binding')
+		const records = await collaborators.api.listServiceEnv({ serviceId: 'service-1', signal: new AbortController().signal })
+		for (const [key, entry] of Object.entries(final.binding)) {
+			if (entry.state === 'absent') {
+				expect(recorded.builds[0]?.zeropsYaml).not.toContain(key)
+				continue
+			}
+			if (entry.state !== 'confirmed') throw new Error('unconfirmed final binding')
+			expect(records.find((record) => record.id === entry.backingRecordId)?.key).toBe(entry.referenceName)
+			expect(recorded.builds[0]?.zeropsYaml).toContain(`\${${entry.referenceName}}`)
+		}
+		expect(JSON.stringify(recorded.checkpoints)).not.toContain('private-')
+		expect(recorded.builds[0]?.zeropsYaml).not.toContain('private-')
+		expect(recorded.logs.join('\n')).not.toContain('private-')
+		expect(recorded.calls).not.toContain('putServiceEnv')
+		expect(recorded.uploads[0]?.descriptorSha256).toBe(SOURCE_DESCRIPTOR.sha256)
+	})
+
+	for (const failure of ['checkpoint', 'lease']) {
+		test(`interrupted staging at ${failure} never uploads or submits and retains created backing records`, async () => {
+			const controller = new AbortController()
+			const collaborators = makeCollaborators(recorded)
+			const provider = createZeropsProvider(() => collaborators)
+			const run = runtimeRun(recorded, provider, target(), false, controller.signal)
+			const reason = new ProviderInvocationAbort('lease_lost')
+			const session = await provider.runtime.open({
+				...run,
+				managedEnvironment: mapManagedKeys(() => 'private-value'),
+				events: {
+					...run.events,
+					checkpoint: async () => {
+						if (failure === 'lease') controller.abort(reason)
+						throw reason
+					},
+				},
+			})
+			await expect(session.execute('trigger-deploy')).rejects.toBe(reason)
+			expect(recorded.uploads).toEqual([])
+			expect(recorded.builds).toEqual([])
+			const entries = await collaborators.api.listServiceEnv({ serviceId: 'service-1', signal: new AbortController().signal })
+			expect(entries.filter((entry) => entry.key !== 'FABRIKA_MENV_PROTOCOL')).toHaveLength(1)
+			if (failure === 'lease') {
+				expect(recorded.calls).not.toContain('sourceCancel:version-1')
+				expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
+			}
+		})
+	}
+
+	test('recovers a lost create response by exact readback and never uses mutable writes', async () => {
+		const collaborators = makeCollaborators(recorded)
+		const create = collaborators.api.createServiceEnv
+		collaborators.api.createServiceEnv = async (input) => {
+			await create(input)
+			throw new Error('response lost')
+		}
+		const provider = createZeropsProvider(() => collaborators)
+		await execute(
+			{ ...runtimeRun(recorded, provider), managedEnvironment: { ...mapManagedKeys(() => null), FABRIKA_RELEASE: 'private-release' } },
+			provider,
+		)
+		expect(recorded.builds).toHaveLength(1)
+		expect(recorded.calls.filter((call) => call === 'createServiceEnv')).toHaveLength(1)
+		expect(recorded.calls).not.toContain('putServiceEnv')
+	})
+
+	test('runtime target roundtrip preserves admission and rejects foreign or extra coordinates', () => {
+		const payload = zeropsTargetCodec.encode(target())
+		expect(zeropsTargetCodec.decode(payload).managedAdmission).toEqual({ owner: managedOwner, markerRecordId: 'marker-1' })
+		if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('expected target object')
+		for (const owner of [{ ...managedOwner, serviceId: 'foreign' }, { ...managedOwner, projectId: 'foreign' }, { ...managedOwner, unexpected: true }]) {
+			expect(() => zeropsTargetCodec.decode({ ...payload, managedAdmission: { owner, markerRecordId: 'marker-1' } })).toThrow()
+		}
+		expect(() => zeropsTargetCodec.decode({ ...payload, managedAdmission: { owner: { ...managedOwner }, markerRecordId: '' } })).toThrow()
+	})
+
 	for (const [name, contents] of rejectedDescriptorCorpus) {
 		test(`rejects ${name} before opening a provider session`, async () => {
 			const provider = createZeropsProvider(() => makeCollaborators(recorded))
@@ -404,15 +530,28 @@ describe('Zerops provider', () => {
 			'reconcileSchema',
 		])
 		expect(recorded.externalIds).toEqual(['version-1'])
-		expect(recorded.externalStates).toEqual([{ appVersionId: 'version-1', phase: 'version_created' }])
+		const frozen = {
+			...managedOwner,
+			runId: 'run-1',
+			appVersionId: 'version-1',
+			markerRecordId: 'marker-1',
+			originalArtifactSha256: await hashFabrikaManifest(compileFabrikaManifest(app([DB, API]), 'prod', SOURCE_DESCRIPTOR)),
+			descriptorSha256: SOURCE_DESCRIPTOR.sha256,
+			setup: 'api',
+			sourceCommitSha: '0123456789abcdef0123456789abcdef01234567',
+			binding: mapManagedKeys(() => ({ state: 'absent' })),
+		}
+		expect(recorded.externalStates).toEqual([{ ...frozen, phase: 'managed_env_staging' }])
 		expect(recorded.checkpoints).toEqual([
-			{ appVersionId: 'version-1', phase: 'source_uploaded' },
-			{ appVersionId: 'version-1', phase: 'build_trigger_requested' },
-			{ appVersionId: 'version-1', phase: 'build_triggered', processId: 'process-1' },
+			{ ...frozen, phase: 'managed_env_staged' },
+			{ ...frozen, phase: 'source_uploaded' },
+			{ ...frozen, phase: 'build_trigger_requested' },
+			{ ...frozen, phase: 'build_triggered', processId: 'process-1' },
 		])
 		expect(recorded.timeline).toEqual([
 			'create',
 			'external-id',
+			'checkpoint:managed_env_staged',
 			'upload',
 			'checkpoint:source_uploaded',
 			'checkpoint:build_trigger_requested',
@@ -428,7 +567,7 @@ describe('Zerops provider', () => {
 		}])
 		expect(recorded.builds).toEqual([{
 			appVersionId: 'version-1',
-			zeropsYaml: CANONICAL_DESCRIPTOR,
+			zeropsYaml: 'zerops:\n  - setup: api\n    run:\n      envVariables: {}\n',
 			zeropsYamlSetup: 'api',
 		}])
 		expect(recorded.sleeps).toEqual([3000])
@@ -514,44 +653,44 @@ describe('Zerops provider', () => {
 			'sourceUpload:version-1',
 			'sourceCancel:version-1',
 			'deleteAppVersion:version-1',
+			'getAppVersion',
 		])
-		expect(recorded.timeline).toEqual(['create', 'external-id', 'upload'])
+		expect(recorded.timeline).toEqual(['create', 'external-id', 'checkpoint:managed_env_staged', 'upload'])
 		expect(recorded.logs.join('\n')).not.toContain('signature=test')
 	})
 
-	test('deletes a pre-trigger version when Zerops rejects build-and-deploy', async () => {
+	test('observes the frozen version after a build refusal without deleting or resubmitting', async () => {
 		const provider = createZeropsProvider(() =>
-			makeCollaborators(recorded, { buildError: new ZeropsApiError('zerops: build rejected', 400, 'invalidBuild') })
+			makeCollaborators(recorded, { buildError: new ZeropsApiError('zerops: build rejected', 400, 'invalidBuild'), statuses: ['UPLOADING'] })
 		)
 		const session = await provider.runtime.open(runtimeRun(recorded, provider))
 
-		await expect(session.execute('trigger-deploy')).rejects.toThrow('zerops: build rejected')
+		await session.execute('trigger-deploy')
 
 		expect(recorded.calls).toEqual([
 			'createAppVersion:service-1',
 			'sourceUpload:version-1',
 			'buildAndDeployAppVersion:version-1',
-			'sourceCancel:version-1',
-			'deleteAppVersion:version-1',
+			'getAppVersion',
 		])
-		expect(recorded.checkpoints).toContainEqual({ appVersionId: 'version-1', phase: 'build_trigger_requested' })
+		expect((await verifyManagedCheckpoint(recorded.checkpoints.at(-1))).phase).toBe('build_trigger_requested')
 	})
 
-	test('keeps the build refusal when the cleanup delete fails too', async () => {
-		// Live, a real `trigger-deploy` failure surfaced as `delete app-version failed (400)`: the cleanup
-		// threw over the cause and the reason the deploy failed was gone.
+	test('does not attempt cleanup after a synchronization refusal at the submission boundary', async () => {
 		const provider = createZeropsProvider(() =>
 			makeCollaborators(recorded, {
 				buildError: new ZeropsApiError('zerops: build and deploy app-version failed (400) — userDataSyncRunning', 400, 'userDataSyncRunning'),
 				deleteError: new ZeropsApiError('zerops: delete app-version failed (400)', 400, ''),
+				statuses: ['UPLOADING'],
 			})
 		)
 		const session = await provider.runtime.open(runtimeRun(recorded, provider))
 
-		await expect(session.execute('trigger-deploy')).rejects.toThrow('userDataSyncRunning')
+		await session.execute('trigger-deploy')
 
-		expect(recorded.calls).toContain('deleteAppVersion:version-1')
-		expect(recorded.logs.join('\n')).toContain('app-version version-1 was left behind')
+		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
+		expect(recorded.calls).not.toContain('sourceCancel:version-1')
+		expect((await verifyManagedCheckpoint(recorded.checkpoints.at(-1))).phase).toBe('build_trigger_requested')
 	})
 
 	test('keeps an ambiguous build trigger observable when its first status read fails', async () => {
@@ -591,7 +730,7 @@ describe('Zerops provider', () => {
 		await session.execute('await-deploy')
 
 		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
-		expect(recorded.checkpoints).not.toContainEqual({ appVersionId: 'version-1', phase: 'build_triggered' })
+		expect((await verifyManagedCheckpoint(recorded.checkpoints.at(-1))).phase).toBe('build_trigger_requested')
 	})
 
 	test('propagates a rejected result checkpoint while preserving accepted work for recovery', async () => {
@@ -613,7 +752,7 @@ describe('Zerops provider', () => {
 
 		expect(recorded.calls).not.toContain('getAppVersion')
 		expect(recorded.calls).not.toContain('deleteAppVersion:version-1')
-		expect(recorded.checkpoints).toContainEqual({ appVersionId: 'version-1', phase: 'build_trigger_requested' })
+		expect((await verifyManagedCheckpoint(recorded.checkpoints.at(-2))).phase).toBe('build_trigger_requested')
 	})
 
 	test('bounds a hanging source cancellation before deleting the version', async () => {
@@ -627,6 +766,7 @@ describe('Zerops provider', () => {
 			'sourceCancel:version-1',
 			'sourceCancelTimeout',
 			'deleteAppVersion:version-1',
+			'getAppVersion',
 		])
 		expect(recorded.sourceCancelSignals[0]?.aborted).toBe(true)
 		expect(recorded.deleteSignals[0]?.aborted).toBe(false)

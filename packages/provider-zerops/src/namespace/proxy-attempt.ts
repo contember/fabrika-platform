@@ -135,23 +135,40 @@ export async function runZeropsProxyAttempt(input: ZeropsProxyAttemptInput): Pro
 	const discardInert = async (): Promise<void> => {
 		const build = target.proxyBuild
 		if (build === undefined) return
-		// Cancellation must confirm that the source uploader stopped before the reserved version is deleted.
+		// Source cancellation is best effort; only exact version absence settles an inert reservation.
 		if (leaseLost()) throw new ProviderInvocationAbort('lease_lost')
 		// Persist cleanup intent before deletion, so a crash cannot leave a deleted version marked as submitted.
 		if (build.phase !== 'version_created') await save({ ...target, proxyBuild: { ...build, phase: 'version_created', processId: undefined } }, true)
-		const signal = cleanupSignal(30_000)
 		if (input.source === undefined) throw unresolved(build.appVersionId)
+		const cancellation = new AbortController()
+		const timeout = new AbortController()
 		try {
-			await input.source.cancel({ runId: build.runId, appVersionId: build.appVersionId, signal })
-		} catch {
-			throw unresolved(build.appVersionId)
+			const source = input.source
+			await Promise.race([
+				Promise.resolve().then(() =>
+					source.cancel({ runId: build.runId, appVersionId: build.appVersionId, signal: AbortSignal.any([cleanupSignal(5000), cancellation.signal]) })
+				).catch(() => {}),
+				sleep(5000, timeout.signal).catch(() => {}),
+			])
+		} finally {
+			timeout.abort()
+			cancellation.abort()
 		}
 		if (leaseLost()) throw new ProviderInvocationAbort('lease_lost')
+		const signal = cleanupSignal(30_000)
 		try {
 			await input.api.deleteAppVersion({ appVersionId: build.appVersionId, signal })
 		} catch (cause) {
 			if (!(cause instanceof ZeropsApiError && cause.status === 400 && cause.code === 'appVersionNotFound')) throw unresolved(build.appVersionId)
 		}
+		if (leaseLost()) throw new ProviderInvocationAbort('lease_lost')
+		let absent = false
+		try {
+			await input.api.getAppVersion({ appVersionId: build.appVersionId, signal })
+		} catch (cause) {
+			absent = cause instanceof ZeropsApiError && cause.status === 400 && cause.code === 'appVersionNotFound'
+		}
+		if (!absent) throw unresolved(build.appVersionId)
 		await save({ ...target, proxyBuild: undefined }, true)
 	}
 

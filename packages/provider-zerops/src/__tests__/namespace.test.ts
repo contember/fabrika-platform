@@ -53,6 +53,7 @@ interface FakeState {
 	calls: string[]
 	importProjectCount: number
 	triggerCount: number
+	uploadSequence: number
 	failImportAfterMutation: boolean
 	failTriggerAfterMutation: boolean
 	/** The platform's answer before a service has deployed an HTTP port. */
@@ -75,6 +76,7 @@ const freshState = (): FakeState => ({
 	calls: [],
 	importProjectCount: 0,
 	triggerCount: 0,
+	uploadSequence: 0,
 	failImportAfterMutation: false,
 	failTriggerAfterMutation: false,
 	subdomainNotHttp: false,
@@ -206,8 +208,9 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 	},
 	createAppVersion: async ({ serviceId }) => {
 		const versions = state.versions.get(serviceId) ?? []
+		state.uploadSequence++
 		const version: ZeropsAppVersion = {
-			id: `uploaded-version-${versions.length + 1}`,
+			id: `uploaded-version-${state.uploadSequence}`,
 			status: 'UPLOADING',
 			sequence: versions.length + 1,
 			serviceStackId: serviceId,
@@ -244,7 +247,7 @@ const makeApi = (state: FakeState): ZeropsApi => ({
 			const version = versions.find((candidate) => candidate.id === appVersionId)
 			if (version !== undefined) return version
 		}
-		throw new Error(`missing version ${appVersionId}`)
+		throw new ZeropsApiError('App version not found', 400, 'appVersionNotFound')
 	},
 	latestAppVersion: async ({ serviceId }) => {
 		const versions = state.versions.get(serviceId) ?? []
@@ -518,7 +521,7 @@ describe('immutable namespace proxy sources', () => {
 		expect(zeropsNamespaceTargetCodec.decode(checkpoints.at(-1)?.target.payload ?? {}).proxyBuild).toBeUndefined()
 	})
 
-	test('does not delete or reserve again until source cancellation confirms pretrigger cleanup', async () => {
+	test('source cancellation failure permits cleanup but new reservation waits for exact GET absence', async () => {
 		const state = freshState()
 		const base = options(state)
 		const source = base.source
@@ -528,20 +531,33 @@ describe('immutable namespace proxy sources', () => {
 		const saved = checkpoints.find((entry) => zeropsNamespaceTargetCodec.decode(entry.target.payload).proxyBuild?.phase === 'version_created')
 		if (saved === undefined) throw new Error('checkpoint missing')
 		state.calls.length = 0
-		await expect(run(
-			createZeropsNamespaceCapabilities({
-				...base,
-				source: {
-					...source,
-					cancel: async () => {
-						throw new Error('source cancellation unresolved')
-					},
+		let uncertain = true
+		const capabilities = createZeropsNamespaceCapabilities({
+			...base,
+			api: {
+				...base.api,
+				getAppVersion: async (input) => {
+					state.calls.push(`getAppVersion:${input.appVersionId}`)
+					if (uncertain) throw new Error('observation unavailable')
+					return base.api.getAppVersion(input)
 				},
-			}),
-			saved,
-			[],
-		)).rejects.toThrow('remains unresolved')
-		expect(state.calls).toEqual([])
+			},
+			source: {
+				...source,
+				cancel: async () => {
+					throw new Error('source cancellation unresolved')
+				},
+			},
+		})
+		await expect(run(capabilities, saved, [])).rejects.toThrow('remains unresolved')
+		expect(state.calls).toEqual(['deleteAppVersion:uploaded-version-1', 'getAppVersion:uploaded-version-1'])
+		uncertain = false
+		state.calls.length = 0
+		const result = await run(capabilities, saved, [])
+		expect(state.calls.slice(0, 2)).toEqual(['deleteAppVersion:uploaded-version-1', 'getAppVersion:uploaded-version-1'])
+		expect(state.calls.indexOf(`createAppVersion:${proxyId}`)).toBeGreaterThan(1)
+		expect(state.calls).not.toContain('buildAndDeployAppVersion:uploaded-version-1')
+		expect(zeropsNamespaceTargetCodec.decode(result.target.payload).proxyDeployment?.appVersionId).toBe('uploaded-version-2')
 	})
 
 	test('an ambiguous UPLOADING version times out unresolved without deletion or resubmission', async () => {

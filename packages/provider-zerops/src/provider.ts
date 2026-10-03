@@ -24,7 +24,6 @@ import {
 	ZEROPS_PROCESS_FINISHED,
 	ZEROPS_PROCESS_TERMINAL,
 	ZEROPS_TERMINAL,
-	ZeropsApiError,
 	type ZeropsAppVersion,
 	type ZeropsLogAccess,
 	type ZeropsProcess,
@@ -33,9 +32,23 @@ import { zeropsTargetCodec } from './codec'
 import { defaultSleep, defaultZeropsCollaborators, type ZeropsCollaboratorFactory, type ZeropsCollaborators } from './collaborators'
 import { assertZeropsInvariants, renderYaml } from './compile'
 import { prepareZeropsDescriptor } from './descriptor'
+import { confirmStagedManagedBinding } from './managed-environment/admission'
+import { assertAuthoredManagedDocument, assertAuthoredManagedInputs } from './managed-environment/authored'
+import { cleanupManagedReservation } from './managed-environment/cleanup'
+import { prepareManagedDescriptor } from './managed-environment/descriptor'
+import {
+	createPendingBinding,
+	encodeManagedCheckpoint,
+	MANAGED_KEYS,
+	type ManagedValues,
+	parseManagedValues,
+	requireConfirmedBinding,
+} from './managed-environment/protocol'
+import { createManagedRecord } from './managed-environment/staging'
 import {
 	type FabrikaImportDocument,
 	type FabrikaManifest,
+	hashFabrikaManifest,
 	manifestServiceHostnames,
 	verifyZeropsArtifactSourceDescriptor,
 	zeropsArtifactCodec,
@@ -66,7 +79,6 @@ const POLL_TIMEOUT_MS = 70 * 60 * 1000
 const BUILD_TRIGGER_CONSISTENCY_MS = 10_000
 
 /** Source cancellation cannot hold Zerops cleanup hostage. */
-const SOURCE_CANCEL_TIMEOUT_MS = 5000
 
 /** Abandon the step if the run was cancelled. Checked before every real mutation and each poll iteration. */
 const assertRunning = (signal: AbortSignal): void => {
@@ -179,6 +191,8 @@ export function interpolateManifest(
 	values: Record<string, string>,
 	ownHostnames: readonly string[],
 ): FabrikaImportDocument {
+	assertAuthoredManagedDocument(document.services)
+	assertAuthoredManagedInputs({ variableNames: declared, secretNames: [], variableValues: values })
 	const allowed = new Set(declared)
 	const hosts = allowedReferenceHosts(ownHostnames)
 	const resolve = (text: string): string => {
@@ -210,6 +224,7 @@ export function interpolateManifest(
 	assertZeropsInvariants(substituted)
 	assertStructureUnchanged(document, substituted)
 	assertNoPlaceholderLeft(substituted)
+	assertAuthoredManagedDocument(substituted.services)
 	return substituted
 }
 
@@ -238,21 +253,9 @@ interface StepEnv {
 	sourceTransport?: ZeropsSourceTransportRouting
 	/** Set by `trigger-deploy`, read by `await-deploy` — the only state that crosses a step boundary. */
 	state: { appVersionId?: string; processId?: string }
+	managedValues: ManagedValues
+	originalArtifactSha256: string
 }
-
-const runState = (
-	appVersionId: string,
-	phase: Exclude<ZeropsRunState['phase'], 'build_triggered'>,
-): Exclude<ZeropsRunState, { phase: 'build_triggered' }> => ({ appVersionId, phase })
-
-const buildTriggeredState = (
-	appVersionId: string,
-	processId?: string,
-): Extract<ZeropsRunState, { phase: 'build_triggered' }> => ({
-	appVersionId,
-	phase: 'build_triggered',
-	...(processId === undefined ? {} : { processId }),
-})
 
 const requireSource = (env: StepEnv): { runtime: ZeropsRuntimeSource; client: NonNullable<ZeropsCollaborators['source']> } => {
 	const runtime = env.run.target.source
@@ -261,29 +264,6 @@ const requireSource = (env: StepEnv): { runtime: ZeropsRuntimeSource; client: No
 		throw new Error('zerops: upload-backed deploy requires source coordinates and a source client')
 	}
 	return { runtime, client }
-}
-
-const cancelSourceBestEffort = async (env: StepEnv, source: ZeropsRuntimeSource, appVersionId: string): Promise<void> => {
-	const client = env.zerops.source
-	if (client === undefined) return
-	const sourceController = new AbortController()
-	const timeoutController = new AbortController()
-	const cancel = Promise.resolve()
-		.then(() =>
-			client.cancel({
-				runId: source.runId,
-				appVersionId,
-				signal: env.signal.aborted ? sourceController.signal : AbortSignal.any([env.signal, sourceController.signal]),
-			})
-		)
-		.catch(() => {})
-	const timeout = Promise.resolve()
-		.then(() => (env.zerops.sourceCancelSleep ?? defaultSleep)(SOURCE_CANCEL_TIMEOUT_MS, timeoutController.signal))
-		.then(() => sourceController.abort())
-		.catch(() => {})
-	await Promise.race([cancel, timeout])
-	timeoutController.abort()
-	sourceController.abort()
 }
 
 /**
@@ -295,17 +275,16 @@ const cancelSourceBestEffort = async (env: StepEnv, source: ZeropsRuntimeSource,
  * gone. The leftover version is visible on the platform; the lost diagnosis was not.
  */
 const cleanupPreTriggerVersion = async (env: StepEnv, source: ZeropsRuntimeSource, appVersionId: string): Promise<void> => {
-	if (env.signal.reason instanceof ProviderInvocationAbort) return
-	await cancelSourceBestEffort(env, source, appVersionId)
-	if (env.signal.reason instanceof ProviderInvocationAbort) return
-	try {
-		await env.zerops.api.deleteAppVersion({
-			appVersionId,
-			signal: env.signal.aborted ? AbortSignal.timeout(5000) : AbortSignal.any([env.signal, AbortSignal.timeout(5000)]),
-		})
-	} catch (error) {
-		env.log(`  [warn] app-version ${appVersionId} was left behind: ${error instanceof Error ? error.message : 'unknown error'}`)
-	}
+	if (env.signal.aborted || env.zerops.source === undefined) return
+	const settled = await cleanupManagedReservation({
+		api: env.zerops.api,
+		source: env.zerops.source,
+		runId: source.runId,
+		appVersionId,
+		signal: env.signal,
+		sleep: env.zerops.sourceCancelSleep ?? defaultSleep,
+	})
+	if (!settled) env.log(`  [warn] app-version ${appVersionId} cleanup is unresolved`)
 }
 
 /**
@@ -402,6 +381,14 @@ const awaitVersion = async (env: StepEnv, appVersionId: string, processId: strin
 			await zerops.sleep(POLL_INTERVAL_MS, signal)
 			continue
 		}
+		assertRunning(signal)
+		if (
+			version.id !== appVersionId || (version.serviceStackId !== undefined && version.serviceStackId !== env.run.target.serviceId)
+			|| (processId !== undefined && process?.id !== processId)
+			|| (process?.appVersionId !== undefined && process.appVersionId !== appVersionId)
+		) {
+			throw new Error('zerops: status observation has different coordinates')
+		}
 		if (version.status !== previous) {
 			log(`  ${appVersionId}: ${version.status ?? 'unknown'}`)
 			previous = version.status
@@ -465,13 +452,46 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 			}
 			assertRunning(signal)
 			const source = requireSource(env)
+			const admission = target.managedAdmission
+			if (admission === undefined) throw new Error('zerops: managed admission is required before reserving a version')
 			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
 			assertRunning(signal)
 			const version = await zerops.api.createAppVersion({ serviceId: target.serviceId, name: source.runtime.runId, signal })
 			state.appVersionId = version.id
 			let buildTriggerRequested = false
 			try {
-				await run.events.externalId(version.id, runState(version.id, 'version_created'))
+				let staging: Extract<ZeropsRunState, { phase: 'managed_env_staging' }> = {
+					...admission.owner,
+					markerRecordId: admission.markerRecordId,
+					runId: source.runtime.runId,
+					appVersionId: version.id,
+					originalArtifactSha256: env.originalArtifactSha256,
+					descriptorSha256: artifact.target.sourceDescriptor.sha256,
+					setup: prepareZeropsDescriptor(artifact.target.sourceDescriptor.contents, artifact.target.zeropsSetup).setup,
+					sourceCommitSha: source.runtime.commitSha,
+					phase: 'managed_env_staging',
+					binding: await createPendingBinding({ projectId: target.projectId, serviceId: target.serviceId, appVersionId: version.id }, env.managedValues),
+				}
+				assertRunning(signal)
+				await run.events.externalId(version.id, encodeManagedCheckpoint(staging))
+				for (const key of MANAGED_KEYS) {
+					const entry = staging.binding[key]
+					const value = env.managedValues[key]
+					if (entry.state === 'absent' || value === null) continue
+					const confirmed = await createManagedRecord({
+						api: zerops.api,
+						serviceId: target.serviceId,
+						key: entry.referenceName,
+						value,
+						signal,
+						sleep: zerops.sleep,
+					})
+					staging = { ...staging, binding: { ...staging.binding, [key]: { state: 'confirmed', ...confirmed } } }
+					assertRunning(signal)
+					await run.events.checkpoint(encodeManagedCheckpoint(staging))
+				}
+				const staged: ZeropsRunState = { ...staging, phase: 'managed_env_staged', binding: requireConfirmedBinding(staging.binding) }
+				await run.events.checkpoint(encodeManagedCheckpoint(staged))
 				assertRunning(signal)
 				const uploadInput = {
 					runId: source.runtime.runId,
@@ -511,10 +531,16 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 				) {
 					throw new Error('zerops: source upload returned different coordinates')
 				}
-				await run.events.checkpoint(runState(version.id, 'source_uploaded'))
+				const uploadedState: ZeropsRunState = { ...staged, phase: 'source_uploaded' }
+				assertRunning(signal)
+				await run.events.checkpoint(encodeManagedCheckpoint(uploadedState))
 				await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
-				const descriptor = prepareZeropsDescriptor(artifact.target.sourceDescriptor.contents, artifact.target.zeropsSetup)
-				await run.events.checkpoint(runState(version.id, 'build_trigger_requested'))
+				assertRunning(signal)
+				confirmStagedManagedBinding(uploadedState, await zerops.api.listServiceEnv({ serviceId: target.serviceId, signal }))
+				const descriptor = prepareManagedDescriptor(artifact.target.sourceDescriptor.contents, staged.setup, staged.binding)
+				const requested: ZeropsRunState = { ...staged, phase: 'build_trigger_requested' }
+				assertRunning(signal)
+				await run.events.checkpoint(encodeManagedCheckpoint(requested))
 				assertRunning(signal)
 				buildTriggerRequested = true
 				let process: ZeropsProcess
@@ -525,11 +551,8 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 						zeropsYamlSetup: descriptor.setup,
 						signal,
 					})
-				} catch (error) {
-					if (error instanceof ZeropsApiError && error.status >= 400 && error.status < 500) {
-						await cleanupPreTriggerVersion(env, source.runtime, version.id)
-						throw error
-					}
+				} catch {
+					assertRunning(signal)
 					let observed: ZeropsAppVersion | undefined
 					try {
 						await zerops.sleep(BUILD_TRIGGER_CONSISTENCY_MS, signal)
@@ -540,7 +563,7 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 						return
 					}
 					if (observed.id === version.id && observed.status !== undefined && observed.status !== 'UPLOADING') {
-						await run.events.checkpoint(buildTriggeredState(version.id))
+						await run.events.checkpoint(encodeManagedCheckpoint({ ...requested, phase: 'build_triggered' }))
 						log(`  recovered accepted build trigger for app-version ${version.id}`)
 					} else {
 						log(`  ${version.id}: build-trigger state is not known yet; continuing to poll`)
@@ -548,7 +571,9 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 					return
 				}
 				state.processId = process.id
-				await run.events.checkpoint(buildTriggeredState(version.id, process.id))
+				assertRunning(signal)
+				if (process.appVersionId !== undefined && process.appVersionId !== version.id) throw new Error('zerops: build response has different coordinates')
+				await run.events.checkpoint(encodeManagedCheckpoint({ ...requested, phase: 'build_triggered', processId: process.id }))
 				log(`  triggered: app-version ${version.id} (build+deploy is ONE platform-side operation)`)
 			} catch (error) {
 				if (!buildTriggerRequested) {
@@ -621,12 +646,26 @@ export const createZeropsProvider = (
 		id: 'zerops',
 		target: zeropsTargetCodec,
 		artifact: zeropsArtifactCodec,
-		open: (run): Promise<ProviderDeploySession> => {
+		open: async (run): Promise<ProviderDeploySession> => {
 			if (run.artifact.app.id !== run.appId) {
 				throw new Error(`zerops: artifact app drift: expected \`${run.appId}\`, got \`${run.artifact.app.id}\``)
 			}
 			if (run.artifact.app.env !== run.env) {
 				throw new Error(`zerops: artifact environment drift: expected \`${run.env}\`, got \`${run.artifact.app.env}\``)
+			}
+			assertAuthoredManagedInputs({
+				variableNames: Object.keys(run.vars),
+				secretNames: Object.keys(run.secrets),
+				variableValues: run.vars,
+				secretValues: run.secrets,
+			})
+			const managedValues = parseManagedValues(run.managedEnvironment)
+			if (!run.dryRun) {
+				const admission = run.target.managedAdmission
+				if (
+					admission === undefined || admission.owner.appId !== run.appId || admission.owner.environment !== run.env
+					|| admission.owner.hostname !== run.artifact.target.deployService
+				) throw new Error('zerops: runtime requires matching managed admission')
 			}
 			const hostnames = manifestServiceHostnames(run.artifact)
 			const document = interpolateManifest(run.artifact.target.importDocument, run.artifact.app.pipeline.vars, run.vars, hostnames)
@@ -643,6 +682,8 @@ export const createZeropsProvider = (
 				dryRun: run.dryRun,
 				...(sourceTransport === undefined ? {} : { sourceTransport }),
 				state: {},
+				managedValues,
+				originalArtifactSha256: await hashFabrikaManifest(run.artifact),
 			}
 			const byId = new Map(plan.steps.map((step): [string, ZeropsJobSpec] => [step.id, step]))
 

@@ -5,6 +5,7 @@ import {
 	type ConfirmedManagedBinding,
 	MANAGED_ENVIRONMENT_MARKER,
 	MANAGED_KEYS,
+	type ManagedCheckpoint,
 	type ManagedOwner,
 	managedOwnerCoordinates,
 	mapManagedKeys,
@@ -17,6 +18,23 @@ import {
 
 const refuse = (): never => {
 	throw new Error('zerops: managed-environment ownership could not be established')
+}
+
+/** Recovery confirms retained record identities; it never reconstructs or compares secret values from today's catalog. */
+export function confirmStagedManagedBinding(state: ManagedCheckpoint, observed: readonly ZeropsServiceEnv[]): void {
+	const records = parseServiceEnvResponse({ items: observed }, state.serviceId)
+	const marker = records.find((entry) => entry.key === MANAGED_ENVIRONMENT_MARKER)
+	if (marker === undefined || marker.id !== state.markerRecordId || marker.sensitive !== true) return refuse()
+	if (serializeManagedOwner(managedOwnerCoordinates(parseManagedMarker(marker.content))) !== serializeManagedOwner(managedOwnerCoordinates(state))) {
+		return refuse()
+	}
+	for (const key of MANAGED_KEYS) {
+		const entry = state.binding[key]
+		if (entry.state === 'pending') return refuse()
+		if (entry.state === 'absent') continue
+		const backing = records.find((record) => record.key === entry.referenceName)
+		if (backing === undefined || backing.id !== entry.backingRecordId || backing.sensitive !== true) return refuse()
+	}
 }
 
 export interface FreshManagedServiceEvidence {

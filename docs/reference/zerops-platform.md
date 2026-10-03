@@ -1381,9 +1381,28 @@ The full lifecycle, isolation presets, shared PostgreSQL trust domain, and
 operator interfaces are described in
 [`deployment-namespaces.md`](deployment-namespaces.md).
 
-Before each application deploy, control writes managed
-`FABRIKA_OPERATIONS_DSN` and `FABRIKA_RELEASE` values at service scope. Those
-values are not part of the app's static import document or provider envelope.
+New application services use the immutable managed-environment protocol (ADR-0044). Fresh registration
+establishes a sensitive ownership marker only after attributable creation and completed import processes.
+Its bootstrap evidence records the initial codeless version; an existing unmarked service is not adopted.
+
+Before a real deploy, the provider admits the currently active owned binding, using an exact
+app/environment-scoped retained checkpoint when the active version is not the bootstrap version.
+Each new version receives a complete six-key map: `FABRIKA_RELEASE`, `FABRIKA_OPERATIONS_DSN`,
+`FABRIKA_IAM_ISSUER`, `FABRIKA_APP_ID`, `FABRIKA_ENVIRONMENT` and `FABRIKA_SERVICE_KEY`.
+Non-null values are create-only sensitive service records under `FABRIKA_MENV_` version-specific names.
+The selected execution descriptor references those records; null omits the canonical runtime key.
+Ordinary application-secret rotation remains mutable. The reserved internal prefix is refused on
+application-authored inputs and secret writes.
+
+Checkpoints retain coordinates, original artifact/descriptor identity, explicit absences and confirmed
+record IDs, never values or upload URLs. Interrupted recovery uses that frozen binding rather than
+today's secret catalog. Original descriptor bytes and digest remain unchanged by the execution overlay.
+Backing records remain available for rollback; no garbage collection is performed.
+
+Pre-trigger cleanup requires exact-version deletion and verified absence (ADR-0047). Source abort is
+best effort, not proof of transport termination. Potentially submitted builds remain unresolved until
+external settlement; lease loss does not authorize deletion or cancellation. Dry runs validate the
+complete six-key representation but require neither live admission nor provider calls.
 
 ## Alpine custom runtime
 
