@@ -28,6 +28,8 @@ For local application development connected to an installation, see [Local build
 
 ## Active sprints
 
+[ADR-0047](decisions/0047-settle-pretrigger-cancellation-by-confirmed-version-deletion.md) defines deletion-based settlement for pre-trigger cancellation.
+
 [ADR-0046](decisions/0046-share-durable-namespace-proxy-attempt-ownership.md) defines shared ownership and recovery for namespace proxy rebuilds.
 
 [ADR-0045](decisions/0045-upload-immutable-platform-and-namespace-proxy-sources.md) defines exact-source installation uploads and per-namespace proxy pins.

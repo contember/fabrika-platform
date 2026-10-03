@@ -913,6 +913,40 @@ for that same app-version ID both returned HTTP `400` with the exact `meta` code
 `appVersionNotFound`. This identifies absence for pre-trigger cleanup recovery; an arbitrary `400`
 or `404` does not. It does not establish that an ambiguously submitted build is safe to delete.
 
+### Deleted-version upload race witness, 2026-10-03
+
+Two disposable reservations on service `AdqxuK7UTk2rDAwMvqQCjQ` tested deletion before and during
+upload. The original codeless active version was `fTIgjl3lSn6XxInSq9vIrA`.
+
+| Observation                           | Delete before PUT        | Delete during held-open PUT |
+| ------------------------------------- | ------------------------ | --------------------------- |
+| Reserved version                      | `ry2VKjOsQgAZcMqpe8Vg7A` | `PSAQCKapS9GzCc2ycCUgqw`    |
+| Initial status                        | `UPLOADING`              | `UPLOADING`                 |
+| DELETE                                | `success: true`          | `success: true`             |
+| Exact GET immediately after deletion  | `400 appVersionNotFound` | `400 appVersionNotFound`    |
+| Original signed upload PUT completion | HTTP 200                 | HTTP 200                    |
+| Exact GET after PUT                   | `400 appVersionNotFound` | `400 appVersionNotFound`    |
+| Build request against deleted ID      | `400 appVersionNotFound` | `400 appVersionNotFound`    |
+
+Both version lists retained only the original active version. Both process lists retained only the
+two baseline creation/empty-deployment processes. The active version did not change. Exact GETs about
+three seconds after the rejected build still reported absence.
+
+The payload was a valid 131,275-byte tar.gz containing harmless random data. For the in-flight case,
+the endpoint returned HTTP 100 Continue, then the client sent 65,536 body bytes and withheld the rest.
+Linux TCP acknowledgement counters increased by 65,624 bytes before deletion. After confirmed deletion,
+the client sent the remaining bytes and received HTTP 200. This proves remote TCP acknowledgement of
+transmitted encrypted body bytes, not application-handler or backing-store consumption before deletion.
+
+The observations support exact-version deletion as a pre-trigger activation barrier (ADR-0047).
+They do not prove physical blob cleanup, upload-URL revocation, transport termination, indefinite
+non-resurrection or safe deletion after ambiguous build submission. The probe used the existing
+operator credential, not a separately tested project-scoped integration credential.
+
+Cleanup process `okhd1eDPSvmVVgwTQc8RPw` finished; service GET then returned
+`400 serviceStackNotFound`. Two earlier disposable setup attempts failed before version reservation
+and were also deleted with absence confirmed. This is a manual witness, not automated live-test coverage.
+
 **Managed bootstrap and sensitive-record witness, 2026-10-02.** On disposable service
 `ePK3O6FASjWgkVVuldO4CQ`, the finished codeless deploy process `x3bqYIl6QlOx63xtHgi5sA` identified
 version `EtWO40wqRyCHjLAzuBPJuw`. The service's nested `activeAppVersion` identified that same version
