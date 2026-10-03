@@ -65,7 +65,7 @@ function makeHarness(): Harness {
 	const audits: AuditRecord[] = []
 	const sent: ControlJobMessage[] = []
 	const control = provider()
-	const lock = makeFakeLock()
+	const lock = makeFakeLock(db)
 	const auth: AuthContext = {
 		ok: true,
 		principal: { id: 'operator', type: 'user', label: 'operator@test' },

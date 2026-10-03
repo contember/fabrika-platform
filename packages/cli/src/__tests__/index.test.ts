@@ -92,7 +92,7 @@ describe('installation capabilities', () => {
 		// which is what proves the routing reached it. `init` scaffolds the operator's sidecar repository
 		// and `deploy` runs the whole ordered sequence; neither creates an installation.
 		await expect(runCli(['platform', 'init', '--provider=zerops'])).rejects.toThrow('requires an installation name')
-		await expect(runCli(['platform', 'deploy', '--provider=zerops'])).rejects.toThrow('FABRIKA_ZEROPS_PROJECT_ID')
+		await expect(runCli(['platform', 'deploy', '--provider=zerops', '--source-dir=fixture-checkout'])).rejects.toThrow('FABRIKA_ZEROPS_PROJECT_ID')
 	})
 
 	test('routes `platform admin` generically, and Cloudflare answers that it does not offer it', async () => {
@@ -125,7 +125,9 @@ describe('installation capabilities', () => {
 		})
 		// And the installation accepts it: this rejection is the missing project id, not `--yes` being
 		// refused as an unknown option, which is what an unrouted flag would produce.
-		await expect(runCli(['platform', 'install', '--provider=zerops', '--yes'])).rejects.toThrow('FABRIKA_ZEROPS_PROJECT_ID')
+		await expect(runCli(['platform', 'install', '--provider=zerops', '--yes', '--source-dir=fixture-checkout'])).rejects.toThrow(
+			'FABRIKA_ZEROPS_PROJECT_ID',
+		)
 	})
 
 	test('`--help` on a platform command shows the INSTALLATION surface, not this router', async () => {

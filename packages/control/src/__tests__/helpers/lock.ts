@@ -3,7 +3,7 @@ import type { ControlRepositories } from '../../db'
 import type { DeployLockGate } from '../../run-lifecycle'
 import { harnessDatabase } from './harness'
 
-/** Run tests use real SQL fencing; namespace tests may use just the inspectable in-memory gate. */
+/** Run and namespace tests that checkpoint require repositories for real SQL fencing. */
 export function makeFakeLock(repositories?: ControlRepositories): DeployLockGate & { held: Map<string, string> } {
 	const held = new Map<string, string>()
 	const sql = repositories === undefined ? undefined : new SqlDeployLocks(harnessDatabase(repositories))
