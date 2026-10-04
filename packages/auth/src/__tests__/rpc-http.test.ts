@@ -7,7 +7,9 @@
 // 200) must come back as a result, and only a transport fault may throw.
 
 import { describe, expect, test } from 'bun:test'
+import { APP, ISSUER, PUBLIC_JWKS, signToken } from '../../../jwks/src/__tests__/helpers'
 import { HttpIamRpc, IamTransportError } from '../rpc-http'
+import { TokenVerifier } from '../verify'
 
 interface Call {
 	url: string
@@ -51,6 +53,9 @@ describe('the wire', () => {
 		const jwks = await rpc.getJwks()
 
 		expect(calls[0]?.url).toBe('http://iam:3000/rpc/getJwks')
+		expect(calls[0]?.init.method).toBe('POST')
+		expect(calls[0]?.init.body).toBe('{}')
+		expect(new Headers(calls[0]?.init.headers).get('authorization')).toBe('Bearer transport-key-0123456789abcdef')
 		expect(jwks.keys).toEqual([{ kty: 'EC', crv: 'P-256', x: 'x', y: 'y', kid: 'k1', alg: 'ES256', use: 'sig' }])
 	})
 
@@ -68,6 +73,51 @@ describe('the wire', () => {
 		})
 
 		expect(calls[0]?.url).toBe('http://iam:3000/rpc/audit')
+	})
+})
+
+describe('JWKS response boundary', () => {
+	test('preserves optional EC fields and ignores fields outside PublicJwk', async () => {
+		const keys = [{ kty: 'EC', crv: 'P-256', x: 'x', y: 'y' }, { kty: 'EC', kid: '', alg: 'ES256', use: 'sig' }]
+		const { rpc } = stub(200, { keys: keys.map(key => ({ ...key, extra: true })), extra: true })
+		expect(await rpc.getJwks()).toStrictEqual({ keys })
+		expect(await stub(200, { keys: [] }).rpc.getJwks()).toStrictEqual({ keys: [] })
+	})
+
+	const malformed: [string, unknown][] = [
+		['missing keys', {}],
+		['keys is not an array', { keys: 'nope' }],
+		['missing kty', { keys: [{ crv: 'P-256' }] }],
+		['a null member', { keys: [null] }],
+		['a malformed EC field', { keys: [...PUBLIC_JWKS.keys, { kty: 'EC', x: 42 }] }],
+		['mixed EC and RSA', { keys: [...PUBLIC_JWKS.keys, { kty: 'RSA', n: 'modulus', e: 'AQAB', kid: 'r1', alg: 'RS256', use: 'sig' }] }],
+	]
+	for (const [name, body] of malformed) {
+		test(`${name} raises IamTransportError`, async () => {
+			await expect(stub(200, body).rpc.getJwks()).rejects.toThrow(IamTransportError)
+		})
+	}
+
+	test('invalid JSON raises IamTransportError', async () => {
+		const rpc = new HttpIamRpc({ origin: ISSUER, key: 'rpc-key', fetch: async () => new Response('{') })
+		await expect(rpc.getJwks()).rejects.toThrow(IamTransportError)
+	})
+
+	test('the verifier reports an unsupported set as unavailable even when its EC member could verify', async () => {
+		const body = { keys: [...PUBLIC_JWKS.keys, { kty: 'RSA', n: 'modulus', e: 'AQAB' }] }
+		const { rpc, calls } = stub(200, body)
+		const verifier = new TokenVerifier(rpc, ISSUER, APP)
+		expect(await verifier.verify(await signToken())).toEqual({ ok: false, reason: 'unavailable' })
+		expect(calls).toHaveLength(1)
+	})
+
+	test('a parsed EC set still verifies locally and caches per binding', async () => {
+		const { rpc, calls } = stub(200, { keys: PUBLIC_JWKS.keys.map(key => ({ ...key, extra: true })) })
+		const token = await signToken()
+		expect((await new TokenVerifier(rpc, ISSUER, APP).verify(token)).ok).toBe(true)
+		expect((await new TokenVerifier(rpc, ISSUER, APP).verify(token)).ok).toBe(true)
+		expect(await new TokenVerifier(rpc, ISSUER, 'other-app').verify(token)).toEqual({ ok: false, reason: 'invalid' })
+		expect(calls).toHaveLength(1)
 	})
 })
 

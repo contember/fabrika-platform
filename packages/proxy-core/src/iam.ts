@@ -19,8 +19,8 @@ import type {
 	MintFromKeyResult,
 	MintTokenInput,
 	MintTokenResult,
-	PublicJwk,
 } from '@fabrika/auth-core'
+import { parseJwks } from '@fabrika/jwks'
 import { DEFAULT_IAM_TIMEOUT_MS } from './constants'
 import { numberField, prop, stringField } from './json'
 
@@ -224,34 +224,4 @@ function reasonOf<T extends string>(value: string, allowed: readonly T[], fallba
 		}
 	}
 	return fallback
-}
-
-/**
- * Read a key set, rejecting one we cannot fully represent. `PublicJwk` carries only the EC members,
- * so a key of any other type would be copied into a shape missing the material that verifies it — a
- * silently short key set, which reads as "this token is invalid" (a client problem) instead of "we
- * could not check" (an incident). IAM signs ES256 only, so anything else means we are not reading the
- * key set we think we are: refuse the whole fetch and let the caller raise `IamUnavailableError`.
- */
-function parseJwks(body: unknown): Jwks | null {
-	const rawKeys = prop(body, 'keys')
-	if (!Array.isArray(rawKeys)) {
-		return null
-	}
-	const keys: PublicJwk[] = []
-	for (const raw of rawKeys) {
-		const kty = stringField(raw, 'kty')
-		if (kty !== 'EC') {
-			return null
-		}
-		const key: PublicJwk = { kty }
-		for (const field of ['crv', 'x', 'y', 'kid', 'alg', 'use'] as const) {
-			const value = stringField(raw, field)
-			if (value !== undefined) {
-				key[field] = value
-			}
-		}
-		keys.push(key)
-	}
-	return { keys }
 }

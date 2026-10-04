@@ -6,5 +6,6 @@
 // the code because it is deliberately dependency-free (no `jose`) for its browser-side consumers.
 // So the implementation lives here and both wrap it with their own construction shape.
 
+export { parseJwks } from './parse'
 export { createJwksCache, JWKS_REFETCH_COOLDOWN_SECONDS, JWKS_TTL_SECONDS, TokenVerifier } from './verifier'
 export type { JwksCache, TokenVerifierOptions, VerifyResult } from './verifier'

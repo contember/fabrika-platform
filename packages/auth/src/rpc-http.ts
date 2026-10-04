@@ -64,7 +64,6 @@ import type {
 	MintTokenResult,
 	PrincipalListItem,
 	PrincipalType,
-	PublicJwk,
 	RevokeKeyInput,
 	RevokeKeyResult,
 } from '@fabrika/auth-core'
@@ -74,6 +73,7 @@ import {
 	parseInspectDeviceAuthorizationResult,
 	parseListOwnDeviceAuthorizationsResult,
 } from '@fabrika/auth-core'
+import { parseJwks } from '@fabrika/jwks'
 import { booleanField, numberField, prop, stringField } from './json'
 
 /** Default per-call timeout. A hung IAM must fail the request, not hold a connection open forever. */
@@ -239,27 +239,11 @@ export class HttpIamRpc implements IamRpc {
 		// `getJwks` takes no input, so an empty object body is the natural call (the server tolerates a
 		// wholly empty body too). It goes through `/rpc/*` like every other method rather than the public
 		// `/.well-known/jwks.json`, so ONE key and ONE surface serve the whole contract.
-		const body = await this.call('getJwks', {})
-		const rawKeys = prop(body, 'keys')
-		if (!Array.isArray(rawKeys)) {
+		const jwks = parseJwks(await this.call('getJwks', {}))
+		if (jwks === null) {
 			throw new IamTransportError('getJwks')
 		}
-		const keys: PublicJwk[] = []
-		for (const raw of rawKeys) {
-			const kty = stringField(raw, 'kty')
-			if (kty === undefined) {
-				throw new IamTransportError('getJwks')
-			}
-			const key: PublicJwk = { kty }
-			for (const field of ['crv', 'x', 'y', 'kid', 'alg', 'use'] as const) {
-				const value = stringField(raw, field)
-				if (value !== undefined) {
-					key[field] = value
-				}
-			}
-			keys.push(key)
-		}
-		return { keys }
+		return jwks
 	}
 
 	async audit(event: AuditInput): Promise<void> {

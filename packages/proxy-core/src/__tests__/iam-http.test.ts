@@ -6,7 +6,8 @@
 
 import { describe, expect, test } from 'bun:test'
 import { type FetchLike, HttpIamGateway, IamUnavailableError } from '../iam'
-import { PUBLIC_JWKS } from './helpers'
+import { TokenVerifier } from '../verifier'
+import { APP, ISSUER, PUBLIC_JWKS, signToken } from './helpers'
 
 interface Recorded {
 	url: string
@@ -67,9 +68,11 @@ describe('happy path', () => {
 
 	test('getJwks reads the standard well-known endpoint', async () => {
 		const { gateway, recorded } = gatewayReturning(200, PUBLIC_JWKS)
-		expect((await gateway.getJwks()).keys).toHaveLength(1)
+		expect(await gateway.getJwks()).toStrictEqual(PUBLIC_JWKS)
 		expect(recorded[0]?.url).toBe('https://iam.test/.well-known/jwks.json')
 		expect(recorded[0]?.method).toBe('GET')
+		expect(recorded[0]?.body).toBeNull()
+		expect(recorded[0]?.headers.get('authorization')).toBeNull()
 	})
 })
 
@@ -200,6 +203,8 @@ describe('a hostile or broken IAM always denies', () => {
 	test('a malformed JWKS raises rather than yielding an empty key set', async () => {
 		await expect(gatewayReturning(200, { keys: [{ crv: 'P-256' }] }).gateway.getJwks()).rejects.toThrow(IamUnavailableError)
 		await expect(gatewayReturning(200, { keys: 'nope' }).gateway.getJwks()).rejects.toThrow(IamUnavailableError)
+		await expect(gatewayReturning(200, { keys: [null] }).gateway.getJwks()).rejects.toThrow(IamUnavailableError)
+		await expect(gatewayReturning(200, { keys: [...PUBLIC_JWKS.keys, { kty: 'EC', x: 42 }] }).gateway.getJwks()).rejects.toThrow(IamUnavailableError)
 	})
 
 	test('a key we cannot represent raises rather than silently shrinking the key set', async () => {
@@ -207,5 +212,51 @@ describe('a hostile or broken IAM always denies', () => {
 		// verifier missing it — reported as "this token is invalid" instead of "we could not check".
 		const withRsa = { keys: [...PUBLIC_JWKS.keys, { kty: 'RSA', n: 'modulus', e: 'AQAB', kid: 'r1', alg: 'RS256', use: 'sig' }] }
 		await expect(gatewayReturning(200, withRsa).gateway.getJwks()).rejects.toThrow(IamUnavailableError)
+	})
+})
+
+describe('JWKS response boundary', () => {
+	test('preserves optional EC fields and ignores fields outside PublicJwk', async () => {
+		const keys = [{ kty: 'EC', crv: 'P-256', x: 'x', y: 'y' }, { kty: 'EC', kid: '', alg: 'ES256', use: 'sig' }]
+		const { gateway } = gatewayReturning(200, { keys: keys.map(key => ({ ...key, extra: true })), extra: true })
+		expect(await gateway.getJwks()).toStrictEqual({ keys })
+		expect(await gatewayReturning(200, { keys: [] }).gateway.getJwks()).toStrictEqual({ keys: [] })
+	})
+
+	test('invalid JSON raises IamUnavailableError', async () => {
+		const gateway = new HttpIamGateway({ origin: ISSUER, fetch: async () => new Response('{') })
+		await expect(gateway.getJwks()).rejects.toThrow(IamUnavailableError)
+	})
+
+	test('the verifier reports an unsupported set as unavailable even when its EC member could verify', async () => {
+		const body = { keys: [...PUBLIC_JWKS.keys, { kty: 'RSA', n: 'modulus', e: 'AQAB' }] }
+		const { gateway, recorded } = gatewayReturning(200, body)
+		const verifier = new TokenVerifier(() => gateway.getJwks(), ISSUER, () => Math.floor(Date.now() / 1000))
+		expect(await verifier.verify(await signToken(), APP)).toEqual({ ok: false, reason: 'unavailable' })
+		expect(recorded).toHaveLength(1)
+	})
+
+	test('a parsed EC set still verifies locally with the audience checked on each call', async () => {
+		const { gateway, recorded } = gatewayReturning(200, { keys: PUBLIC_JWKS.keys.map(key => ({ ...key, extra: true })) })
+		const verifier = new TokenVerifier(() => gateway.getJwks(), ISSUER, () => Math.floor(Date.now() / 1000))
+		const token = await signToken()
+		expect((await verifier.verify(token, APP)).ok).toBe(true)
+		expect((await verifier.verify(token, APP)).ok).toBe(true)
+		expect(await verifier.verify(token, 'other-app')).toEqual({ ok: false, reason: 'invalid' })
+		expect(recorded).toHaveLength(1)
+	})
+
+	test('the JWKS request retains its configured transport bearer', async () => {
+		let headers = new Headers()
+		const gateway = new HttpIamGateway({
+			origin: ISSUER,
+			key: 'proxy-key',
+			fetch: async (_input, init) => {
+				headers = new Headers(init.headers)
+				return Response.json(PUBLIC_JWKS)
+			},
+		})
+		await gateway.getJwks()
+		expect(headers.get('authorization')).toBe('Bearer proxy-key')
 	})
 })
