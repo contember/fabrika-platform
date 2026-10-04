@@ -8,8 +8,10 @@ import {
 	type OperationsReleaseAvailabilityV1,
 	operationsReleaseName,
 	type OperationsReleasePhase,
+	type OperationsReleaseProjectionPayloadV1,
 	type OperationsReleaseReconcileRequestV1,
 	operationsSourceMapUploadUrl,
+	parseOperationsReleasePayload,
 } from '@fabrika/operations-contract/releases'
 import type { HttpService } from '@fabrika/platform'
 import type { OperationsReleaseRepository, OperationsReleaseSyncRow, RunRow } from './db'
@@ -18,8 +20,6 @@ const REQUEST_TIMEOUT_MS = 15_000
 const MIN_SYNC_KEY_LENGTH = 32
 const UPLOAD_LIFETIME_MS = 2 * 60 * 60 * 1_000
 const REPLAY_BATCH_SIZE = 100
-
-type ReleaseProjectionPayload = Omit<OperationsReleaseReconcileRequestV1, 'protocolVersion' | 'revision'>
 
 export interface OperationsReleaseProjectionDeps {
 	repository: OperationsReleaseRepository
@@ -75,7 +75,7 @@ export async function projectOperationsRun(
 			verifier: await sha256Hex(context.artifactUpload.bearer),
 			expiresAt: uploadExpiresAt,
 		}
-	const payload: ReleaseProjectionPayload = {
+	const payload: OperationsReleaseProjectionPayloadV1 = {
 		runId: run.id,
 		coordinate: { appId: run.app_id, environment: run.env },
 		phase: input.phase,
@@ -118,12 +118,13 @@ export async function replayOperationsReleases(
 }
 
 async function flushOne(deps: OperationsReleaseProjectionDeps, row: OperationsReleaseSyncRow): Promise<boolean> {
-	const revision = integer(row.desired_revision)
 	try {
+		const revision = integer(row.desired_revision)
 		if (deps.service === undefined || deps.syncKey === undefined || deps.syncKey.length < MIN_SYNC_KEY_LENGTH) {
 			throw new ReleaseProjectionError('operations release transport is not configured')
 		}
 		const payload = parseStoredPayload(row.payload_json)
+		if (payload.runId !== row.run_id) throw new ReleaseProjectionError('operations release run does not match its outbox key')
 		const request: OperationsReleaseReconcileRequestV1 = {
 			protocolVersion: OPERATIONS_RELEASE_PROTOCOL_VERSION,
 			revision,
@@ -207,9 +208,9 @@ function hex(bytes: Uint8Array): string {
 	return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-function parseStoredPayload(raw: string): ReleaseProjectionPayload {
-	const decoded: { payload: ReleaseProjectionPayload } = JSON.parse(JSON.stringify({ payload: JSON.parse(raw) }))
-	return decoded.payload
+function parseStoredPayload(raw: string): OperationsReleaseProjectionPayloadV1 {
+	const decoded: unknown = JSON.parse(raw)
+	return parseOperationsReleasePayload(decoded)
 }
 
 function validResponse(value: unknown, revision: number): boolean {
