@@ -307,6 +307,47 @@ beforeEach(() => {
 })
 
 describe('Zerops ControlProvider registration', () => {
+	for (const coordinates of [{ id: 'other', env: 'prod' }, { id: 'notes', env: 'stage' }]) {
+		test(`rejects decoded artifact coordinate drift ${coordinates.id}/${coordinates.env} before effects`, async () => {
+			const control = createTestControlProvider({
+				accessToken: 'zt-secret',
+				api: makeApi(recorded),
+				namespaces: { clientId: 'client-1', iamUrl: 'https://iam.example.test', iamKey: 'proxy-key' },
+			})
+			const invalidEnvironment = environment({
+				artifact: {
+					provider: 'zerops',
+					version: zeropsArtifactCodec.version,
+					payload: zeropsArtifactCodec.encode(compileFabrikaManifest({ ...config, id: coordinates.id }, coordinates.env, SOURCE_DESCRIPTOR)),
+				},
+			})
+			const registration = { app, environment: invalidEnvironment }
+			const error = coordinates.id === 'notes'
+				? 'manifest environment drift: expected `prod`, got `stage`'
+				: 'manifest app drift: expected `notes`, got `other`'
+			expect(() => control.normalizeRegistration(registration)).toThrow(error)
+			await expect(control.deploy({ ...deployInput(recorded), environment: invalidEnvironment })).rejects.toThrow(error)
+			const capabilities = control.namespaces
+			if (capabilities?.prepareRegistration === undefined) throw new Error('expected registration capabilities')
+			const secrets = control.secrets
+			if (secrets === undefined) throw new Error('expected secret capabilities')
+			expect(() => capabilities.registrationResourceClaims(registration)).toThrow(error)
+			await expect(capabilities.prepareRegistration({ registration, signal: new AbortController().signal })).rejects.toThrow(error)
+			await expect(secrets.put({ environment: invalidEnvironment, name: 'TOKEN', value: '${notes_PORT}' })).rejects.toThrow(error)
+			expect(recorded.calls).toEqual([])
+			expect(recorded.envWrites).toEqual([])
+		})
+	}
+
+	test('returns declared variables from a fresh decode and retains undefined for invalid artifacts', () => {
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		const manifest = compileFabrikaManifest({ ...config, pipeline: { vars: ['IMAGE_TAG'] } }, 'prod', SOURCE_DESCRIPTOR)
+		const artifact = { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) }
+		expect(control.declaredVariables?.({ artifact })).toEqual(['IMAGE_TAG'])
+		expect(control.declaredVariables?.({ artifact: { ...artifact, payload: {} } })).toBeUndefined()
+		expect(control.declaredVariables?.({ artifact: { ...artifact, version: 0 } })).toBeUndefined()
+	})
+
 	for (const [name, contents] of rejectedDescriptorCorpus) {
 		test(`rejects ${name} before registration, hooks, or provider effects`, async () => {
 			const manifest = compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)

@@ -1,6 +1,6 @@
 import type { ProviderDeploymentNamespace, ProviderRegistration } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-contract'
-import { manifestServiceHostnames, parseFabrikaManifest, zeropsArtifactCodec } from '../manifest'
+import { assertFabrikaManifestCoordinates, manifestServiceHostnames, zeropsArtifactCodec } from '../manifest'
 import { zeropsSharedServicePrefix } from '../service-names'
 import { decodeEnvelope } from './codec'
 import { ZEROPS_NAMESPACE_POSTGRES_HOSTNAME, ZEROPS_NAMESPACE_PROXY_HOSTNAME } from './constants'
@@ -28,7 +28,8 @@ export const registrationResourceClaims = (registration: ProviderRegistration): 
 	if (artifactEnvelope.provider !== 'zerops' || artifactEnvelope.version !== zeropsArtifactCodec.version) {
 		throw new Error('Zerops registration artifact envelope is not supported')
 	}
-	const manifest = parseFabrikaManifest(zeropsArtifactCodec.decode(artifactEnvelope.payload), {
+	const manifest = zeropsArtifactCodec.decode(artifactEnvelope.payload)
+	assertFabrikaManifestCoordinates(manifest.app, {
 		appId: registration.app.id,
 		env: registration.environment.env,
 	})

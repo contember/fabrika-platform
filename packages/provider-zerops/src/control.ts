@@ -40,10 +40,10 @@ import {
 } from './managed-environment/protocol'
 import { createManagedMarker } from './managed-environment/staging'
 import {
+	assertFabrikaManifestCoordinates,
 	type FabrikaManifest,
 	hashFabrikaManifest,
 	manifestServiceHostnames,
-	parseFabrikaManifest,
 	renderFabrikaImportYaml,
 	renderFabrikaProvisioningYaml,
 	verifyZeropsArtifactSourceDescriptor,
@@ -224,10 +224,8 @@ const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegist
 		throw new Error('Zerops private source requires both connection and installation coordinates')
 	}
 	const decoded = decodeEnvironment(input.environment)
-	const artifact = parseFabrikaManifest(
-		decodeEnvelope('artifact', input.environment.artifact, zeropsArtifactCodec),
-		{ appId: input.app.id, env: input.environment.env },
-	)
+	const artifact = decodeEnvelope('artifact', input.environment.artifact, zeropsArtifactCodec)
+	assertFabrikaManifestCoordinates(artifact.app, { appId: input.app.id, env: input.environment.env })
 	return {
 		app: input.app,
 		environment: {
@@ -302,11 +300,11 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
 		})
 
-	const artifactFor = (environment: ProviderEnvironment): FabrikaManifest =>
-		parseFabrikaManifest(
-			decodeEnvelope('artifact', environment.artifact, zeropsArtifactCodec),
-			{ appId: environment.appId, env: environment.env },
-		)
+	const artifactFor = (environment: ProviderEnvironment): FabrikaManifest => {
+		const artifact = decodeEnvelope('artifact', environment.artifact, zeropsArtifactCodec)
+		assertFabrikaManifestCoordinates(artifact.app, { appId: environment.appId, env: environment.env })
+		return artifact
+	}
 
 	const ownerFor = (environment: ProviderEnvironment, artifact: FabrikaManifest, serviceId: string): ManagedOwner => {
 		const { namespace, namespaceTarget } = decodeNamespace(environment)
@@ -506,7 +504,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		 */
 		declaredVariables: ({ artifact }) => {
 			try {
-				return parseFabrikaManifest(decodeEnvelope('artifact', artifact, zeropsArtifactCodec)).app.pipeline.vars
+				return decodeEnvelope('artifact', artifact, zeropsArtifactCodec).app.pipeline.vars
 			} catch {
 				return undefined
 			}
@@ -744,13 +742,11 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 							throw new Error(`Zerops deployment namespace \`${namespace.id}\` is not ready`)
 						}
 						const projectId = namespaceTarget.projectId
-						const manifest = parseFabrikaManifest(
-							decodeEnvelope('artifact', input.registration.environment.artifact, zeropsArtifactCodec),
-							{
-								appId: input.registration.app.id,
-								env: input.registration.environment.env,
-							},
-						)
+						const manifest = decodeEnvelope('artifact', input.registration.environment.artifact, zeropsArtifactCodec)
+						assertFabrikaManifestCoordinates(manifest.app, {
+							appId: input.registration.app.id,
+							env: input.registration.environment.env,
+						})
 						const hostnames = manifestServiceHostnames(manifest)
 						const observed = await Promise.all(hostnames.map(async (hostname) => ({
 							hostname,

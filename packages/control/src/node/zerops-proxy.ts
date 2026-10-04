@@ -1,8 +1,7 @@
 import type { JobQueue } from '@fabrika/platform'
 import type { ProviderCodec, ProviderEnvelope } from '@fabrika/provider-contract'
 import {
-	type FabrikaManifest,
-	parseFabrikaManifest,
+	assertFabrikaManifestCoordinates,
 	runZeropsProxyAttempt,
 	verifyZeropsNamespaceProxySource,
 	zeropsArtifactCodec,
@@ -37,12 +36,12 @@ export async function compileNamespaceProxyManifest(
 		if (row.provider !== 'zerops') {
 			throw new Error(`deployment namespace ${namespaceId} contains an app owned by provider ${row.provider}`)
 		}
-		const artifact = decodeEnvelope(
+		const manifest = decodeEnvelope(
 			'artifact',
 			parseProviderEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
 			zeropsArtifactCodec,
 		)
-		const manifest: FabrikaManifest = parseFabrikaManifest(artifact, { appId: row.app_id, env: row.env })
+		assertFabrikaManifestCoordinates(manifest.app, { appId: row.app_id, env: row.env })
 		const proxy = manifest.target.proxy
 		if (proxy === undefined) {
 			continue

@@ -54,6 +54,7 @@ export { createZeropsControlProvider, zeropsStoredTargetCodec } from './control'
 export type { ZeropsBeforeDeploy, ZeropsBeforeDeployInput, ZeropsControlProviderOptions, ZeropsProviderExecutor, ZeropsStoredTarget } from './control'
 export { type PreparedZeropsDescriptor, prepareZeropsDescriptor } from './descriptor'
 export {
+	assertFabrikaManifestCoordinates,
 	compileFabrikaManifest,
 	createZeropsArtifactSourceDescriptor,
 	FABRIKA_MANIFEST_VERSION,

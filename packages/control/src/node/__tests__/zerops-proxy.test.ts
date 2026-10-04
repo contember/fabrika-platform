@@ -76,6 +76,27 @@ const envelope = <T>(codec: { version: number; encode(value: T): unknown }, valu
 })
 
 describe('Zerops proxy manifest delivery', () => {
+	for (const coordinates of [{ id: 'beta', env: 'prod' }, { id: 'alpha', env: 'stage' }]) {
+		test(`rejects decoded artifact coordinate drift ${coordinates.id}/${coordinates.env}`, async () => {
+			const { db } = createHarness()
+			await db.registry.createApp({ id: 'alpha', repoUrl: 'github.com/acme/alpha' })
+			const row = await db.registry.upsertAppEnv({
+				appId: 'alpha',
+				env: 'prod',
+				namespaceId: null,
+				domain: 'alpha.example.test',
+				provider: 'zerops',
+				providerTargetJson: JSON.stringify(envelope(zeropsStoredTargetCodec, { serviceId: 'alpha-service' })),
+				providerArtifactJson: JSON.stringify(envelope(zeropsArtifactCodec, appManifest(coordinates.id, coordinates.env, `${coordinates.id}:3000`))),
+			})
+			await expect(compileNamespaceProxyManifest({ listAppEnvsByNamespace: async () => [row] }, 'apps-prod')).rejects.toThrow(
+				coordinates.id === 'alpha'
+					? 'manifest environment drift: expected `prod`, got `stage`'
+					: 'manifest app drift: expected `alpha`, got `beta`',
+			)
+		})
+	}
+
 	test('groups manifests by namespace and rolls the selected namespace proxy directly', async () => {
 		const { db, d1 } = createHarness()
 		for (const id of ['alpha', 'beta', 'gamma']) {

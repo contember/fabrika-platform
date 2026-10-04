@@ -1,7 +1,7 @@
 import type { AppActionDef, AppGates, AppSchema, AppScopeDef, GateRule, RoleDef } from '@fabrika/auth-core'
 import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
 import { compileImport, ENV_ISOLATION, OVERRIDE, renderYaml } from './compile'
-import { parseZeropsDescriptor, prepareZeropsDescriptor } from './descriptor'
+import { parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'
 import { assertAuthoredManagedDocument, assertAuthoredManagedInputs } from './managed-environment/authored'
 import { allowedReferenceHosts, foreignReferenceHost } from './service-references'
 import type { ZeropsAppConfig, ZeropsNamespaceResourceRequirement, ZeropsProxySpec, ZeropsSharedPostgresBinding } from './types'
@@ -60,6 +60,15 @@ export interface FabrikaManifest {
 export interface ManifestExpectation {
 	appId?: string
 	env?: string
+}
+
+export const assertFabrikaManifestCoordinates = (app: Pick<FabrikaManifest['app'], 'id' | 'env'>, expected: ManifestExpectation): void => {
+	if (expected.appId !== undefined && expected.appId !== app.id) {
+		throw new Error(`manifest app drift: expected \`${expected.appId}\`, got \`${app.id}\``)
+	}
+	if (expected.env !== undefined && expected.env !== app.env) {
+		throw new Error(`manifest environment drift: expected \`${expected.env}\`, got \`${app.env}\``)
+	}
 }
 
 const prop = (value: unknown, key: string): unknown => typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined
@@ -384,12 +393,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	if (id === undefined || env === undefined || secrets === undefined || vars === undefined) {
 		throw new Error('invalid fabrika manifest app metadata')
 	}
-	if (expected.appId !== undefined && expected.appId !== id) {
-		throw new Error(`manifest app drift: expected \`${expected.appId}\`, got \`${id}\``)
-	}
-	if (expected.env !== undefined && expected.env !== env) {
-		throw new Error(`manifest environment drift: expected \`${expected.env}\`, got \`${env}\``)
-	}
+	assertFabrikaManifestCoordinates({ id, env }, expected)
 	const rawSchema = prop(rawApp, 'schema')
 	let schema: AppSchema | undefined
 	if (rawSchema !== undefined) {
@@ -437,7 +441,7 @@ export function parseFabrikaManifest(value: unknown, expected: ManifestExpectati
 	if (prop(rawTarget, 'zeropsSetup') !== undefined && zeropsSetup === null) {
 		throw new Error('invalid fabrika manifest zeropsSetup')
 	}
-	prepareZeropsDescriptor(sourceDescriptor.contents, zeropsSetup ?? undefined)
+	selectZeropsDescriptorSetup(parsedDescriptor, zeropsSetup ?? undefined)
 	const rawProxy = prop(rawTarget, 'proxy')
 	let proxy: ZeropsProxySpec | undefined
 	if (rawProxy !== undefined) {

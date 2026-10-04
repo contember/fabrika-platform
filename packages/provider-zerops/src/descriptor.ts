@@ -102,10 +102,15 @@ export const parseZeropsDescriptor = (contents: string): ZeropsDescriptor => {
 	return { document, setups }
 }
 
-export const prepareZeropsDescriptor = (contents: string, setup?: string): PreparedZeropsDescriptor => {
-	const parsed = parseZeropsDescriptor(contents)
+export const selectZeropsDescriptorSetup = (parsed: ZeropsDescriptor, setup?: string): string => {
 	const selected = setup ?? (parsed.setups.length === 1 ? parsed.setups[0] : undefined)
 	if (selected === undefined) return invalid('requires an explicit setup selector for multiple setups')
 	if (!parsed.setups.includes(selected)) return invalid('does not contain the selected setup')
+	return selected
+}
+
+export const prepareZeropsDescriptor = (contents: string, setup?: string): PreparedZeropsDescriptor => {
+	const parsed = parseZeropsDescriptor(contents)
+	const selected = selectZeropsDescriptorSetup(parsed, setup)
 	return { contents: renderYaml(parsed.document), setup: selected }
 }

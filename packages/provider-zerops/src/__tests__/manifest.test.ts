@@ -3,6 +3,7 @@ import { assertAuthoredManagedDocument } from '../managed-environment/authored'
 import { prepareManagedDescriptor } from '../managed-environment/descriptor'
 import { type ConfirmedManagedEntry, managedReferenceNames, mapManagedKeys } from '../managed-environment/protocol'
 import {
+	assertFabrikaManifestCoordinates,
 	compileFabrikaManifest,
 	createZeropsArtifactSourceDescriptor,
 	FABRIKA_MANIFEST_VERSION,
@@ -38,6 +39,38 @@ const config: ZeropsAppConfig = {
 }
 
 describe('Zerops static artifact', () => {
+	test('retains the original descriptor and artifact hashes without materializing an implicit selector or optional fields', async () => {
+		const contents = '# original\r\nzerops: [{setup: notes}]\r\n'
+		const descriptor = await createZeropsArtifactSourceDescriptor(contents)
+		const manifest = compileFabrikaManifest(
+			{ id: 'notes', target: { platform: 'zerops', services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }] } },
+			'prod',
+			descriptor,
+		)
+		const decoded = zeropsArtifactCodec.decode(zeropsArtifactCodec.encode(manifest))
+		expect(decoded).toEqual(manifest)
+		expect(decoded.target.sourceDescriptor.contents).toBe(contents)
+		expect(decoded.target.sourceDescriptor.sha256).toBe('e68d0432c77f44ce072ee36fdbef256816d8e589021ca0e84fc21961c94bdc59')
+		expect(await hashFabrikaManifest(decoded)).toBe('6d4914f2c99e3c353f930a8e44fa4b831f6fac03002a8c5e6da59e34902e2e1e')
+		expect(Object.keys(decoded.app)).toEqual(['id', 'env', 'pipeline'])
+		expect(Object.keys(decoded.target)).toEqual(['platform', 'sourceDescriptor', 'importDocument', 'deployService'])
+		expect(Object.keys(decoded.target.importDocument)).toEqual(['services'])
+	})
+
+	test('checks decoded coordinates with exact drift errors and keeps parser validation order', async () => {
+		const manifest = await compileNotes(OWN_SETUP)
+		const decoded = zeropsArtifactCodec.decode(zeropsArtifactCodec.encode(manifest))
+		expect(() => assertFabrikaManifestCoordinates(decoded.app, {})).not.toThrow()
+		expect(() => assertFabrikaManifestCoordinates(decoded.app, { appId: 'notes', env: 'prod' })).not.toThrow()
+		for (const expected of [{ appId: 'other', env: 'stage' }, { env: 'stage' }]) {
+			const error = expected.appId === undefined
+				? 'manifest environment drift: expected `stage`, got `prod`'
+				: 'manifest app drift: expected `other`, got `notes`'
+			expect(() => assertFabrikaManifestCoordinates(decoded.app, expected)).toThrow(error)
+			expect(() => parseFabrikaManifest({ ...manifest, target: {} }, expected)).toThrow(error)
+		}
+	})
+
 	test('renders first registration as collision-refusing and codeless for every service without mutating the artifact', async () => {
 		const manifest = await compileNotes(OWN_SETUP)
 		const original = structuredClone(manifest)
