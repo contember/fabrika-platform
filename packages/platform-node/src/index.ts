@@ -20,7 +20,14 @@
 
 export { FileSystemAssetServer, type FileSystemAssetServerOptions } from './asset-server-fs'
 export { S3BlobStore, type S3BlobStoreOptions } from './blob-s3'
-export { type Job, PostgresJobConsumer, type PostgresJobConsumerOptions, PostgresJobQueue, type PostgresJobQueueOptions } from './job-queue-postgres'
+export {
+	decodeJob,
+	type Job,
+	PostgresJobConsumer,
+	type PostgresJobConsumerOptions,
+	PostgresJobQueue,
+	type PostgresJobQueueOptions,
+} from './job-queue-postgres'
 export { rewritePlaceholders, type RewrittenSql } from './placeholders'
 export {
 	applyPostgresMigrations,

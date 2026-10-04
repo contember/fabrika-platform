@@ -1,6 +1,6 @@
 import type { IngestMessage } from '@fabrika/operations-contract'
 import type { SqlDatabase } from '@fabrika/platform'
-import { type Job, PostgresJobQueue } from '@fabrika/platform-node'
+import { decodeJob, type Job, PostgresJobQueue } from '@fabrika/platform-node'
 import { OperationsAlertProducer } from '../alerts.js'
 import type { OperationsDataEnv } from '../pipeline.js'
 import { archiveDeadEvent, persistIngest } from '../pipeline.js'
@@ -30,6 +30,8 @@ export function createOperationsIngestQueue(
 
 export interface OperationsIngestJobQueue {
 	claim(options: { limit: number; visibilityTimeoutMs: number; decode: (payload: unknown) => IngestMessage }): Promise<Job<IngestMessage>[]>
+	/** Built-in queues expose raw deliveries; decoded-only external adapters remain supported. */
+	claimRaw?(options: { limit: number; visibilityTimeoutMs: number }): Promise<Job<string>[]>
 	ack(id: string): Promise<void>
 	defer(id: string, delayMs: number): Promise<void>
 }
@@ -101,12 +103,29 @@ export class PostgresOperationsConsumer {
 	}
 
 	async poll(): Promise<number> {
+		if (this.queue.claimRaw) {
+			const jobs = await this.queue.claimRaw({ limit: this.batchSize, visibilityTimeoutMs: this.visibilityTimeoutMs })
+			for (const job of jobs) {
+				try {
+					await this.handleRaw(job)
+				} catch {
+					this.log('operations ingest settlement failed')
+				}
+			}
+			return jobs.length
+		}
 		const jobs = await this.queue.claim({
 			limit: this.batchSize,
 			visibilityTimeoutMs: this.visibilityTimeoutMs,
 			decode: decodeIngestMessage,
 		})
-		for (const job of jobs) await this.handle(job)
+		for (const job of jobs) {
+			try {
+				await this.handle(job)
+			} catch {
+				this.log('operations ingest settlement failed')
+			}
+		}
 		return jobs.length
 	}
 
@@ -138,11 +157,28 @@ export class PostgresOperationsConsumer {
 		await this.task
 	}
 
+	private async handleRaw(raw: Job<string>): Promise<void> {
+		let job: Job<IngestMessage>
+		try {
+			job = decodeJob(raw, decodeIngestMessage)
+		} catch {
+			if (raw.attempts >= raw.maxAttempts) {
+				await this.queue.ack(raw.id)
+				this.log(
+					`operations undecodable ingest job abandoned id=${JSON.stringify(raw.id)} attempts=${raw.attempts} maxAttempts=${raw.maxAttempts}`,
+				)
+			} else {
+				await this.queue.defer(raw.id, this.retryDelayMs(raw.attempts))
+			}
+			return
+		}
+		await this.handle(job)
+	}
+
 	private async handle(job: Job<IngestMessage>): Promise<void> {
 		try {
 			const result = await persistIngest(this.env, job.payload)
 			await new OperationsAlertProducer(this.env.repositories.alerts, this.env.repositories.ingest).produceIngest([job.payload], [result])
-			await this.queue.ack(job.id)
 		} catch {
 			if (job.attempts >= job.maxAttempts) {
 				try {
@@ -152,12 +188,15 @@ export class PostgresOperationsConsumer {
 					})
 					await this.queue.ack(job.id)
 				} catch {
+					this.log('operations ingest dead-event settlement failed')
 					await this.queue.defer(job.id, this.retryDelayMs(job.attempts))
 				}
 				return
 			}
 			await this.queue.defer(job.id, this.retryDelayMs(job.attempts))
+			return
 		}
+		await this.queue.ack(job.id)
 	}
 }
 

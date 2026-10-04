@@ -3,8 +3,8 @@
 // be visible early, and a consumer that dies mid-job must not strand it forever.
 
 import type { SqlDatabase } from '@fabrika/platform'
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { type Job, PostgresJobConsumer, PostgresJobQueue } from '../job-queue-postgres'
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
+import { decodeJob, type Job, PostgresJobConsumer, PostgresJobQueue } from '../job-queue-postgres'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
 
 if (!hasPostgres) {
@@ -52,6 +52,15 @@ function makeQueue(name: string, clock: Clock, maxAttempts = 5): PostgresJobQueu
 }
 
 const CLAIM = { limit: 10, visibilityTimeoutMs: 30_000, decode: decodeDeploy }
+
+async function insertStoredJob(queue: string, clock: Clock, payload: string, attempts = 0, maxAttempts = 2): Promise<string> {
+	const id = `000-${queue}-invalid`
+	await db
+		.prepare('INSERT INTO jobs (id, queue, payload, visible_at, attempts, max_attempts, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+		.bind(id, queue, payload, clock.now, attempts, maxAttempts, clock.now)
+		.run()
+	return id
+}
 
 describe.skipIf(!hasPostgres)('PostgresJobQueue — send and claim', () => {
 	test('a sent message is claimable and round-trips its payload', async () => {
@@ -161,6 +170,30 @@ describe.skipIf(!hasPostgres)('PostgresJobQueue — send and claim', () => {
 			.bind('bad-1', 'q-bad', '{"nope":1}', clock.now, clock.now)
 			.run()
 		await expect(queue.claim(CLAIM)).rejects.toThrow('job payload has no runId')
+		expect(await db.prepare('SELECT attempts FROM jobs WHERE id = ?').bind('bad-1').first<{ attempts: number }>()).toEqual({ attempts: 1 })
+	})
+
+	test('legacy claim rejects malformed JSON without deleting its row', async () => {
+		const clock: Clock = { now: 1_000_000 }
+		const queue = makeQueue('q-bad-json', clock)
+		const id = await insertStoredJob('q-bad-json', clock, '{private')
+		await expect(queue.claim(CLAIM)).rejects.toThrow()
+		expect(await db.prepare('SELECT attempts FROM jobs WHERE id = ?').bind(id).first<{ attempts: number }>()).toEqual({ attempts: 1 })
+	})
+
+	test('raw claim retains invalid text and metadata while typed decoding remains per delivery', async () => {
+		const clock: Clock = { now: 1_000_000 }
+		const queue = makeQueue('q-raw', clock)
+		const id = await insertStoredJob('q-raw', clock, '{private')
+		await queue.send({ runId: 'peer' })
+		const jobs = await queue.claimRaw(CLAIM)
+		expect(jobs).toHaveLength(2)
+		const invalid = jobs.find((job) => job.id === id)
+		const valid = jobs.find((job) => job.id !== id)
+		if (!invalid || !valid) throw new Error('missing claimed delivery')
+		expect(invalid).toEqual({ id, payload: '{private', attempts: 1, maxAttempts: 2 })
+		expect(() => decodeJob(invalid, decodeDeploy)).toThrow()
+		expect(decodeJob(valid, decodeDeploy)).toEqual({ ...valid, payload: { runId: 'peer' } })
 	})
 
 	test('rejects a table name that is not a bare identifier', () => {
@@ -185,6 +218,188 @@ describe.skipIf(!hasPostgres)('PostgresJobQueue — SKIP LOCKED', () => {
 })
 
 describe.skipIf(!hasPostgres)('PostgresJobConsumer', () => {
+	test.each(['{private', '{"nope":"private"}'])('invalid delivery %s retries to its budget without losing valid peers', async (payload) => {
+		const name = payload.startsWith('{"') ? 'c-shape' : 'c-json'
+		const clock: Clock = { now: 1_000_000 }
+		const queue = makeQueue(name, clock)
+		const id = await insertStoredJob(name, clock, payload)
+		await queue.send({ runId: 'peer' })
+		const handled: string[] = []
+		const errors: Job<DeployMessage>[] = []
+		const abandoned: Job<DeployMessage>[] = []
+		const delays: number[] = []
+		const warning = spyOn(console, 'warn').mockImplementation(() => {})
+		try {
+			const consumer = new PostgresJobConsumer(queue, {
+				decode: decodeDeploy,
+				batchSize: 10,
+				handler: async (job) => {
+					handled.push(job.payload.runId)
+				},
+				retryDelayMs: (attempts) => {
+					delays.push(attempts)
+					return 1_000
+				},
+				onError: (_error, job) => {
+					errors.push(job)
+				},
+				onAbandoned: (job) => {
+					abandoned.push(job)
+				},
+			})
+			expect(await consumer.poll()).toBe(2)
+			expect(handled).toEqual(['peer'])
+			expect(warning).not.toHaveBeenCalled()
+			expect(delays).toEqual([1])
+			clock.now += 999
+			expect(await consumer.poll()).toBe(0)
+			clock.now++
+			expect(await consumer.poll()).toBe(1)
+			expect(warning).toHaveBeenCalledWith('undecodable job abandoned', { id, attempts: 2, maxAttempts: 2 })
+			expect(errors).toEqual([])
+			expect(abandoned).toEqual([])
+			expect(await db.prepare('SELECT id FROM jobs WHERE queue = ?').bind(name).all()).toEqual({ results: [] })
+			clock.now += 3_600_000
+			expect(await consumer.poll()).toBe(0)
+		} finally {
+			warning.mockRestore()
+		}
+	})
+
+	test('invalid delivery already beyond budget is deleted without typed callbacks', async () => {
+		const clock: Clock = { now: 1_000_000 }
+		const queue = makeQueue('c-overbudget', clock)
+		const id = await insertStoredJob('c-overbudget', clock, '{}', 7, 2)
+		const warning = spyOn(console, 'warn').mockImplementation(() => {})
+		const callbacks: string[] = []
+		try {
+			const consumer = new PostgresJobConsumer(queue, {
+				decode: decodeDeploy,
+				handler: async () => {
+					callbacks.push('handler')
+				},
+				onError: () => {
+					callbacks.push('error')
+				},
+				onAbandoned: () => {
+					callbacks.push('abandoned')
+				},
+			})
+			expect(await consumer.poll()).toBe(1)
+			expect(callbacks).toEqual([])
+			expect(warning).toHaveBeenCalledWith('undecodable job abandoned', { id, attempts: 8, maxAttempts: 2 })
+			clock.now += 3_600_000
+			expect(await consumer.poll()).toBe(0)
+		} finally {
+			warning.mockRestore()
+		}
+	})
+
+	test.each(['ack', 'defer'])('failed invalid %s settlement leaves visibility retry and processes peers', async (settlement) => {
+		const name = `c-failed-${settlement}`
+		const clock: Clock = { now: 1_000_000 }
+		const id = await insertStoredJob(name, clock, '{private', settlement === 'ack' ? 2 : 0, 2)
+		class FailingSettlementQueue extends PostgresJobQueue<DeployMessage> {
+			fail = true
+			override async ack(jobId: string): Promise<void> {
+				if (this.fail && jobId === id && settlement === 'ack') throw new Error('private settlement error')
+				await super.ack(jobId)
+			}
+			override async defer(jobId: string, delayMs: number): Promise<void> {
+				if (this.fail && jobId === id && settlement === 'defer') throw new Error('private settlement error')
+				await super.defer(jobId, delayMs)
+			}
+		}
+		const queue = new FailingSettlementQueue(db, { queue: name, now: () => clock.now })
+		await queue.send({ runId: 'peer' })
+		const handled: string[] = []
+		const warning = spyOn(console, 'warn').mockImplementation(() => {})
+		const errorLog = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const consumer = new PostgresJobConsumer(queue, {
+				decode: decodeDeploy,
+				batchSize: 10,
+				visibilityTimeoutMs: 30_000,
+				handler: async (job) => {
+					handled.push(job.payload.runId)
+				},
+			})
+			expect(await consumer.poll()).toBe(2)
+			expect(handled).toEqual(['peer'])
+			expect(errorLog).toHaveBeenCalledTimes(1)
+			expect(errorLog).toHaveBeenCalledWith('job settlement failed')
+			expect(warning).not.toHaveBeenCalled()
+			queue.fail = false
+			clock.now += 29_999
+			expect(await consumer.poll()).toBe(0)
+			clock.now++
+			expect(await consumer.poll()).toBe(1)
+			expect(warning).toHaveBeenCalledTimes(1)
+			clock.now += 30_000
+			expect(await consumer.poll()).toBe(0)
+		} finally {
+			warning.mockRestore()
+			errorLog.mockRestore()
+		}
+	})
+
+	test('successful exhausted handler with a failed ack retries on visibility without blocking its peer or calling failure callbacks', async () => {
+		const clock: Clock = { now: 1_000_000 }
+		class FailOnceQueue extends PostgresJobQueue<DeployMessage> {
+			failedId: string | null = null
+			override async ack(id: string): Promise<void> {
+				if (this.failedId === null) {
+					this.failedId = id
+					throw new Error('private ack failure')
+				}
+				await super.ack(id)
+			}
+		}
+		const queue = new FailOnceQueue(db, { queue: 'c-success-ack-failure', maxAttempts: 1, now: () => clock.now })
+		await queue.send({ runId: 'first' })
+		await queue.send({ runId: 'peer' })
+		const handled: { runId: string; attempts: number }[] = []
+		const callbacks: string[] = []
+		const errorLog = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const consumer = new PostgresJobConsumer(queue, {
+				decode: decodeDeploy,
+				batchSize: 10,
+				visibilityTimeoutMs: 30_000,
+				handler: async (job) => {
+					handled.push({ runId: job.payload.runId, attempts: job.attempts })
+				},
+				onError: () => {
+					callbacks.push('error')
+				},
+				onAbandoned: () => {
+					callbacks.push('abandoned')
+				},
+				retryDelayMs: () => {
+					callbacks.push('backoff')
+					return 1_000
+				},
+			})
+			expect(await consumer.poll()).toBe(2)
+			expect(handled).toEqual([{ runId: 'first', attempts: 1 }, { runId: 'peer', attempts: 1 }])
+			expect((await db.prepare('SELECT id, attempts FROM jobs WHERE queue = ?').bind('c-success-ack-failure').all()).results)
+				.toEqual([{ id: queue.failedId, attempts: 1 }])
+			expect(errorLog).toHaveBeenCalledTimes(1)
+			expect(errorLog).toHaveBeenCalledWith('job settlement failed')
+			clock.now += 29_999
+			expect(await consumer.poll()).toBe(0)
+			clock.now++
+			expect(await consumer.poll()).toBe(1)
+			expect(handled).toEqual([{ runId: 'first', attempts: 1 }, { runId: 'peer', attempts: 1 }, { runId: 'first', attempts: 2 }])
+			expect(callbacks).toEqual([])
+			expect(errorLog).toHaveBeenCalledTimes(1)
+			clock.now += 30_000
+			expect(await consumer.poll()).toBe(0)
+		} finally {
+			errorLog.mockRestore()
+		}
+	})
+
 	test('poll() handles a due job and acks it', async () => {
 		const clock: Clock = { now: 1_000_000 }
 		const queue = makeQueue('c-basic', clock)

@@ -28,7 +28,7 @@
 import type { JobQueue, SqlDatabase } from '@fabrika/platform'
 import { uuidv7 } from './uuid'
 
-/** A claimed job, as handed to a handler. `payload` has been through the caller's `decode`. */
+/** A claimed delivery. Raw claims carry stored JSON text; typed claims carry the caller's decoded payload. */
 export interface Job<T> {
 	id: string
 	payload: T
@@ -36,6 +36,12 @@ export interface Job<T> {
 	attempts: number
 	/** Claims allowed before the job is abandoned. */
 	maxAttempts: number
+}
+
+/** Parse and narrow one stored delivery without losing its settlement metadata. */
+export function decodeJob<T>(job: Job<string>, decode: (payload: unknown) => T): Job<T> {
+	const parsed: unknown = JSON.parse(job.payload)
+	return { ...job, payload: decode(parsed) }
 }
 
 export interface PostgresJobQueueOptions {
@@ -121,6 +127,12 @@ export class PostgresJobQueue<T> implements JobQueue<T> {
 	 * than reaching a handler that assumes a shape.
 	 */
 	async claim(options: { limit: number; visibilityTimeoutMs: number; decode: (payload: unknown) => T }): Promise<Job<T>[]> {
+		const jobs = await this.claimRaw(options)
+		return jobs.map((job) => decodeJob(job, options.decode))
+	}
+
+	/** Claim stored JSON text so consumers can decode and settle each delivery independently. */
+	async claimRaw(options: { limit: number; visibilityTimeoutMs: number }): Promise<Job<string>[]> {
 		const now = this.now()
 		const { results } = await this.db
 			.prepare(this.claimSql)
@@ -131,10 +143,7 @@ export class PostgresJobQueue<T> implements JobQueue<T> {
 		// restores enqueue order, because ids are monotonic UUIDv7 and therefore strictly time-ordered.
 		return results
 			.sort((left, right) => (left.id < right.id ? -1 : 1))
-			.map((row) => {
-				const parsed: unknown = JSON.parse(row.payload)
-				return { id: row.id, payload: options.decode(parsed), attempts: row.attempts, maxAttempts: row.max_attempts }
-			})
+			.map((row) => ({ id: row.id, payload: row.payload, attempts: row.attempts, maxAttempts: row.max_attempts }))
 	}
 
 	/** The job is done (or permanently abandoned) — drop the row. Idempotent. */
@@ -149,7 +158,7 @@ export class PostgresJobQueue<T> implements JobQueue<T> {
 }
 
 export interface PostgresJobConsumerOptions<T> {
-	/** Narrow the stored JSON to the message type. Throwing here abandons the job as undecodable. */
+	/** Narrow the stored JSON to the message type. Invalid deliveries retry until their budget is spent. */
 	decode: (payload: unknown) => T
 	/** Handle one job. A throw schedules a retry until `maxAttempts` is spent. */
 	handler: (job: Job<T>) => Promise<void>
@@ -196,23 +205,26 @@ export class PostgresJobConsumer<T> {
 			visibilityTimeoutMs: options.visibilityTimeoutMs ?? DEFAULT_VISIBILITY_TIMEOUT_MS,
 			retryDelayMs: options.retryDelayMs ?? ((attempts) => Math.min(60_000, 1_000 * 2 ** attempts)),
 		}
-		this.onError = options.onError ?? ((error) => {
-			console.error('job handler failed:', error instanceof Error ? error.message : 'unknown error')
+		this.onError = options.onError ?? (() => {
+			console.error('job handler failed')
 		})
 		this.onAbandoned = options.onAbandoned ?? ((job) => {
 			console.warn(`job ${job.id} abandoned after ${job.attempts} attempt(s)`)
 		})
 	}
 
-	/** Run one pass. Returns how many jobs were handled — 0 means the queue was empty. Exposed for tests. */
+	/** Run one pass. Returns the raw claimed count, including invalid deliveries. Exposed for tests. */
 	async poll(): Promise<number> {
-		const jobs = await this.queue.claim({
+		const jobs = await this.queue.claimRaw({
 			limit: this.options.batchSize,
 			visibilityTimeoutMs: this.options.visibilityTimeoutMs,
-			decode: this.options.decode,
 		})
 		for (const job of jobs) {
-			await this.handle(job)
+			try {
+				await this.handleRaw(job)
+			} catch {
+				console.error('job settlement failed')
+			}
 		}
 		return jobs.length
 	}
@@ -249,19 +261,34 @@ export class PostgresJobConsumer<T> {
 		let handled = 0
 		try {
 			handled = await this.poll()
-		} catch (error) {
+		} catch {
 			// A claim failure is usually the database being unreachable — log short and back off.
-			console.error('job poll failed:', error instanceof Error ? error.message : 'unknown error')
+			console.error('job poll failed')
 		}
 		if (this.running) {
 			this.schedule(handled > 0 ? 0 : this.options.pollIntervalMs)
 		}
 	}
 
+	private async handleRaw(raw: Job<string>): Promise<void> {
+		let job: Job<T>
+		try {
+			job = decodeJob(raw, this.options.decode)
+		} catch {
+			if (raw.attempts >= raw.maxAttempts) {
+				await this.queue.ack(raw.id)
+				console.warn('undecodable job abandoned', { id: raw.id, attempts: raw.attempts, maxAttempts: raw.maxAttempts })
+			} else {
+				await this.queue.defer(raw.id, this.options.retryDelayMs(raw.attempts))
+			}
+			return
+		}
+		await this.handle(job)
+	}
+
 	private async handle(job: Job<T>): Promise<void> {
 		try {
 			await this.options.handler(job)
-			await this.queue.ack(job.id)
 		} catch (error) {
 			this.onError(error, job)
 			if (job.attempts >= job.maxAttempts) {
@@ -270,6 +297,8 @@ export class PostgresJobConsumer<T> {
 				return
 			}
 			await this.queue.defer(job.id, this.options.retryDelayMs(job.attempts))
+			return
 		}
+		await this.queue.ack(job.id)
 	}
 }

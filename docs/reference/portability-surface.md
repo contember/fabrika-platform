@@ -43,6 +43,16 @@ Missing measurements keep aggregate telemetry health unavailable unless known
 failures take precedence; error silence is not a liveness test. Unavailable
 observations preserve durable failure/recovery alert provenance.
 
+The Bun queue consumers claim raw deliveries and decode each message separately.
+Invalid JSON or message shapes retry with the existing backoff and are
+acknowledged at the configured attempt limit. Diagnostics contain delivery
+metadata, never payloads or parser errors. Other deliveries in the batch continue.
+The decoded `claim()` API and decoded-only Operations adapters remain supported.
+
+Validated exhausted Operations ingest failures are archived before acknowledgement.
+Archive failure defers the delivery. Acknowledgement failure after successful
+persistence leaves visibility-timeout recovery intact and creates no dead event.
+
 ## Deploy layers — how portable each one actually is
 
 Provider packages own the per-cloud implementations behind the open contract in
