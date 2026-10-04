@@ -93,10 +93,6 @@ const recorder = (options: {
 					asked.push(`text: ${question}`)
 					return options.answers[question] ?? fallback ?? ''
 				},
-				setting: async (variable, question, fallback) => {
-					asked.push(`setting: ${variable}`)
-					return options.answers[question] ?? fallback ?? ''
-				},
 				confirm: async (question, defaultYes) => {
 					asked.push(`confirm: ${question}`)
 					return options.confirms?.[question] ?? defaultYes ?? false

@@ -56,11 +56,17 @@ is not consent.
      HTTP port; the three platform hosts are then READ off those, never composed
   5. write every remaining variable on all five runtime services
   6. pass 2: hand the whole ordered sequence to \`platform deploy\`
-  7. print the provisioning key ONCE — it is stored nowhere else
+  7. print the provisioning key — the CLI keeps no copy; it is held by iam and control in Zerops
 
 It REFUSES a project that already holds an installation's generated secrets: a second bring-up would
 roll a new vault key over the old one, which is unrecoverable, and new signing keys, which logs
-everyone out. Update an existing installation with \`platform deploy\`.
+everyone out. Once every bootstrap variable is placed, \`platform deploy\` can update the installation
+or finish a failed pass 2. Read FABRIKA_IAM_PROVISIONING_KEY from iam or control and
+FABRIKA_ZEROPS_ACCESS_TOKEN from control in Zerops if the handoff was interrupted.
+Neither deploy nor init completes a partial bootstrap. If interrupted after a generated secret was
+placed but before every bootstrap variable was placed, preserve the existing keys and arrange
+operator-owned recovery, or start a fresh installation in a separate empty project.
+Re-running install after any generated secret was placed is refused.
 
 Only the LIGHT tier can be installed this way — it is the one topology that emits a services-only
 import document. Authentication is PASSWORD ONLY; no administrator exists yet when this finishes.

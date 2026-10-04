@@ -10,7 +10,7 @@ import type { SchemaReconcileInput } from '@fabrika/provider-contract'
 import { FABRIKA_PROXY_MANIFEST_JSON, parseProxyManifestJson } from '@fabrika/proxy-contract'
 import { describe, expect, test } from 'bun:test'
 import { generatedArtifacts } from '../../zerops/artifacts'
-import { PLATFORM_DEPLOY_ORDER, type PlatformDeployService } from '../deploy'
+import { deployPlatform, PLATFORM_DEPLOY_ORDER, type PlatformDeployService } from '../deploy'
 import { GENERATED_SECRET_KEYS, installationServiceEnv, type InstallCollaborators, installPrompts, runInstall } from '../install'
 import { parsePlatformInstallArgs as parseArgs, type PlatformInstallInput, UNATTENDED_FLAG } from '../install-options'
 import { recordingInitLog } from '../log'
@@ -443,7 +443,7 @@ describe('the hand-off', () => {
 		// The ONLY thing pass 2 has left to write is the manifest it composes — every origin the deploy
 		// derives was written from the same hosts one step earlier.
 		const afterPassOne = fixture.zerops.calls.slice(fixture.zerops.calls.indexOf('deploy:proxy') + 1)
-		const passTwoWrites = afterPassOne.slice(afterPassOne.findIndex((call) => call === 'deploy:iam') - 1)
+		const passTwoWrites = afterPassOne.slice(afterPassOne.indexOf('deploy:iam') - 1)
 		expect(passTwoWrites.filter((call) => call.startsWith('env:'))).toEqual([`env:proxy:${FABRIKA_PROXY_MANIFEST_JSON}`])
 
 		expect(fixture.reconciled).toHaveLength(1)
@@ -470,6 +470,9 @@ describe('the hand-off', () => {
 		const transcript = fixture.log.lines.join('\n')
 		expect(transcript).toContain('FABRIKA_IAM_PROVISIONING_KEY')
 		expect(transcript).toContain('FABRIKA_ZEROPS_ACCESS_TOKEN')
+		expect(transcript).toContain('recover it from the `iam` or `control` service environment in Zerops')
+		expect(transcript).not.toContain('stored nowhere else')
+		expect(transcript).not.toContain('cannot be recovered')
 		// The command is ready to run: the host it needs is the one this install just read off the proxy.
 		expect(occurrences[1]).toContain(`fabrika platform admin --provider=zerops --email=<you> --iam-host=${IAM_HOST}`)
 	})
@@ -589,6 +592,103 @@ describe('a project that already has the services', () => {
 })
 
 describe('every outward step is confirmed', () => {
+	test('declining before pass-one writes still permits a fresh bring-up', async () => {
+		const confirms = { [`Write 3 variables on \`proxy\` and build commit ${'a'.repeat(40)}? (about 4 minutes)`]: false }
+		const fixture = harness({ confirms })
+		await expect(fixture.run()).rejects.toThrow('no variable was written, and re-running the install is safe')
+		expect(fixture.zerops.calls.filter((call) => call.startsWith('env:'))).toEqual([])
+		confirms[`Write 3 variables on \`proxy\` and build commit ${'a'.repeat(40)}? (about 4 minutes)`] = true
+		await fixture.run()
+		expect(fixture.zerops.imports).toHaveLength(1)
+		expect(fixture.zerops.calls).toContain('deploy:control')
+	})
+
+	test('declining after pass one reports unsupported partial bootstrap and refuses to reroll on retry', async () => {
+		const fixture = harness({ confirms: { 'Write 44 variables across 5 services?': false } })
+		await expect(fixture.run()).rejects.toThrow('Neither `platform deploy` nor `platform init` completes a partial bootstrap')
+		const key = fixture.zerops.env('proxy').get('FABRIKA_IAM_KEY')
+		expect(key).toBeDefined()
+		expect(fixture.zerops.calls.filter((call) => call.startsWith('env:'))).toEqual([
+			'env:proxy:FABRIKA_PROXY_MANIFEST_JSON',
+			'env:proxy:FABRIKA_IAM_ISSUER',
+			'env:proxy:FABRIKA_IAM_KEY',
+		])
+		fixture.zerops.calls.length = 0
+		await expect(fixture.run()).rejects.toThrow('Neither deploy nor init completes a partial bootstrap')
+		expect(fixture.zerops.calls).toEqual([])
+		expect(fixture.zerops.env('proxy').get('FABRIKA_IAM_KEY')).toBe(key)
+	})
+
+	test('a failed remaining-variable write preserves its exact prefix and blocks a new bring-up', async () => {
+		const fixture = harness()
+		fixture.zerops.failWrite('operations', 'FABRIKA_OPERATIONS_BLOB_ENDPOINT')
+		await expect(fixture.run()).rejects.toThrow('create service env failed')
+		expect(fixture.zerops.calls.filter((call) => call.startsWith('env:'))).toEqual([
+			'env:proxy:FABRIKA_PROXY_MANIFEST_JSON',
+			'env:proxy:FABRIKA_IAM_ISSUER',
+			'env:proxy:FABRIKA_IAM_KEY',
+			'env:iam:FABRIKA_IAM_DATABASE_URL',
+			'env:iam:ENVIRONMENT',
+			'env:iam:ISSUER',
+			'env:iam:FABRIKA_IAM_ADMIN_ORIGINS',
+			'env:iam:FABRIKA_IAM_OIDC_ENABLED',
+			'env:iam:FABRIKA_IAM_PASSWORD_ENABLED',
+			'env:iam:FABRIKA_IAM_SIGNING_KEYS',
+			'env:iam:FABRIKA_IAM_RPC_KEY',
+			'env:iam:FABRIKA_IAM_PROXY_KEY',
+			'env:iam:FABRIKA_IAM_PROVISIONING_KEY',
+			'env:operations:FABRIKA_OPERATIONS_DATABASE_URL',
+			'env:operations:FABRIKA_OPERATIONS_BLOB_BUCKET',
+			'env:operations:FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID',
+			'env:operations:FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY',
+		])
+		const keys = writtenSecrets(fixture.zerops)
+		fixture.zerops.calls.length = 0
+		await expect(fixture.run()).rejects.toThrow('For partial bootstrap, preserve the existing keys')
+		expect(fixture.zerops.calls).toEqual([])
+		expect(writtenSecrets(fixture.zerops)).toEqual(keys)
+	})
+
+	test('a fully configured pass-two failure can be repaired by deploy with the remote credentials', async () => {
+		const fixture = harness()
+		fixture.zerops.failDeploy('iam')
+		await expect(fixture.run()).rejects.toThrow('finished as DEPLOY_FAILED')
+		expect(fixture.log.lines.join('\n')).toContain('If this deploy fails, read FABRIKA_IAM_PROVISIONING_KEY from `iam` or `control`')
+		expect(fixture.log.lines.some((line) => line.startsWith('action: CAPTURE THIS NOW'))).toBe(false)
+		const iamAdminKey = fixture.zerops.env('iam').get('FABRIKA_IAM_PROVISIONING_KEY')
+		const accessToken = fixture.zerops.env('control').get('FABRIKA_ZEROPS_ACCESS_TOKEN')
+		if (iamAdminKey === undefined || accessToken === undefined) throw new Error('bootstrap credentials were not placed')
+		const credentials = writtenSecrets(fixture.zerops)
+		fixture.zerops.calls.length = 0
+		const api = fixture.zerops.api
+		await deployPlatform({
+			project: { kind: 'id', projectId: PROJECT.projectId },
+			accessToken,
+			iamAdminKey,
+			environment: 'stage',
+			scheme: 'https',
+			sourceDir: '.',
+			dryRun: false,
+		}, {
+			...fakeSourceCollaborators,
+			api: { ...api, getAppVersion: async (call) => ({ ...await api.getAppVersion(call), status: 'ACTIVE' }) },
+			reconcileSchema: async (call) => void fixture.reconciled.push(call),
+			sleep: async () => {},
+			log: fixture.log,
+			signal: new AbortController().signal,
+		})
+		expect(fixture.zerops.calls.filter((call) => call.startsWith('env:') || call.startsWith('import:') || call.startsWith('token:'))).toEqual([])
+		expect(fixture.zerops.calls.filter((call) => call.startsWith('deploy:'))).toEqual([
+			'deploy:iam',
+			'deploy:operations',
+			'deploy:source',
+			'deploy:proxy',
+			'deploy:control',
+		])
+		expect(writtenSecrets(fixture.zerops)).toEqual(credentials)
+		expect(fixture.reconciled[0]?.adminKey).toBe(iamAdminKey)
+	})
+
 	test('in order, and each one gates what follows it', async () => {
 		const fixture = harness()
 

@@ -168,13 +168,21 @@ const installPreparedPlatform = async (
 	})
 	const total = [...desired.values()].reduce((sum, keys) => sum + keys.size, 0)
 	if (!(await prompts.confirm(`Write ${total} variables across ${desired.size} services?`, true))) {
-		throw new Error('declined: the proxy is built but the installation is not configured; re-running the install is safe')
+		throw new Error(
+			'declined: the proxy is built but the installation is not configured. Its generated proxy key is already placed, so '
+				+ 're-running `platform install` is refused. Neither `platform deploy` nor `platform init` completes a partial bootstrap. '
+				+ 'Preserve the existing keys and arrange operator-owned recovery, or start a fresh installation in a separate empty project',
+		)
 	}
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
 		await writeServiceEnv(serviceOf(services, hostname), desired.get(hostname) ?? new Map<string, string>(), collaborators)
 	}
 
 	log.step('Pass 2 — deploy the installation')
+	log.info(
+		'Every bootstrap variable is placed. If this deploy fails, read FABRIKA_IAM_PROVISIONING_KEY from `iam` or `control` '
+			+ 'and FABRIKA_ZEROPS_ACCESS_TOKEN from `control` in Zerops, then run `fabrika platform deploy --provider=zerops` with this project and source checkout.',
+	)
 	log.info(
 		`\`platform deploy\` owns the whole ordered sequence: ${PLATFORM_CONCURRENT_DEPLOY.join(' + ')} together, then ${
 			PLATFORM_SEQUENTIAL_DEPLOY.join(' → ')
@@ -202,10 +210,8 @@ const installPreparedPlatform = async (
 	}
 
 	log.step('Hand off')
-	// THE ONE INTENTIONAL EXCEPTION to "never log a secret value", and the reason it exists: this key is
-	// stored nowhere — there is no `.env` on the Zerops path — and `platform init` cannot invent it,
-	// because IAM would not admit a value it was not seeded with. Printed once, at the end, in a box.
-	log.action('CAPTURE THIS NOW — it is stored nowhere else and cannot be recovered', [
+	// The intentional secret-output exception: init needs the key IAM was seeded with, never a new value.
+	log.action('CAPTURE THIS NOW — the CLI keeps no copy; recover it from the `iam` or `control` service environment in Zerops', [
 		`FABRIKA_IAM_PROVISIONING_KEY=${secrets.provisioningKey}`,
 	])
 	log.info('`fabrika platform init --provider=zerops <installation>` asks for two required deployment secrets:')

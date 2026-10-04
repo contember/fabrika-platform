@@ -64,8 +64,6 @@ const LOCAL_ENVIRONMENT = 'local'
 /** Everything `runInit` asks the operator. Injected so the flow can be exercised without a TTY. */
 export interface InitPrompts {
 	text(question: string, fallback?: string): Promise<string>
-	/** A non-secret prompt with an environment-variable fallback. */
-	setting(variable: string, question: string, fallback?: string): Promise<string>
 	confirm(question: string, defaultYes?: boolean): Promise<boolean>
 	select<T>(question: string, options: { label: string; value: T }[]): Promise<T>
 	/** A hidden prompt, or the named environment variable when it is already set. NEVER echoed. */
@@ -623,7 +621,6 @@ export const consoleInitCollaborators = (): InitCollaborators => ({
 	},
 	prompts: {
 		text: (question, fallback) => promptText(question, fallback),
-		setting: (variable, question, fallback) => promptText(question, process.env[variable] ?? fallback),
 		confirm: (question, defaultYes) => promptConfirm(question, defaultYes),
 		select: (question, options) => promptSelect(question, options),
 		secret: (variable, question) => secretOrEnv(variable, question),

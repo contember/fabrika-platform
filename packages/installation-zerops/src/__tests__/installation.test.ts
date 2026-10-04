@@ -28,6 +28,10 @@ describe('Zerops installation capability', () => {
 		}
 		expect(installationCli.usage).toContain('envIsolation: service')
 		expect(installationCli.usage).toContain('PASSWORD ONLY')
+		expect(installationCli.usage).toContain('Neither deploy nor init completes a partial bootstrap')
+		expect(installationCli.usage).toContain('finish a failed pass 2')
+		expect(installationCli.usage).toContain('the CLI keeps no copy; it is held by iam and control in Zerops')
+		expect(installationCli.usage).not.toContain('it is stored nowhere else')
 		// Credentials are environment-only here too, so an unknown flag is an error rather than a value.
 		await expect(installationCli.run('install', ['--source-dir=.', '--token=nope'])).rejects.toThrow('unexpected argument')
 	})

@@ -70,8 +70,8 @@ and is deliberate — someone reading only one path will guess wrong about the o
 - **`platform install` GENERATES credentials, which is why it is a third command
   and not a flag on either of the other two.** It writes seven generated secrets plus
   a minted Zerops integration token, and prints exactly ONE value — the provisioning
-  key, once, at the end, because it is stored nowhere else and `platform init` asks
-  the operator for it. That is the only exception to the no-secret-in-a-log rule on
+  key, once, at the end, because `platform init` asks the operator for it. IAM and
+  Control retain remote copies for operator recovery. That is the only exception to the no-secret-in-a-log rule on
   this path; `src/log.ts` still has no helper that takes a value.
 - **`install` REFUSES a stdin that is not a terminal unless `--yes` is passed.**
   Every confirmation defaults to yes, so a pipe carrying blank lines answers all
