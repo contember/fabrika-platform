@@ -102,18 +102,31 @@ export const relayRun = async (
 	// Tail logs, accumulating the full NDJSON and re-flushing it to R2 periodically.
 	const accumulated: string[] = []
 	let lastFlush = 0
-	let dirty = false
-	const flush = async (force: boolean): Promise<void> => {
-		if (!dirty && !force) {
-			return
+	let pendingFlush = false
+	let writer: Promise<void> | undefined
+	let writeFailure: { error: unknown } | undefined
+	const writeSnapshots = async (): Promise<void> => {
+		try {
+			while (pendingFlush) {
+				pendingFlush = false
+				try {
+					await bucket.put(logsKey(job.runId), accumulated.join('\n'))
+				} catch (error) {
+					writeFailure ??= { error }
+				}
+			}
+		} finally {
+			writer = undefined
 		}
+	}
+	const requestFlush = (force: boolean): void => {
 		const ts = now()
 		if (!force && ts - lastFlush < flushIntervalMs) {
 			return
 		}
 		lastFlush = ts
-		dirty = false
-		await bucket.put(logsKey(job.runId), accumulated.join('\n'))
+		pendingFlush = true
+		writer ??= Promise.resolve().then(writeSnapshots)
 	}
 
 	// Heartbeat on a timer so even an output-quiet step (e.g. `bun install`) renews the activity
@@ -127,15 +140,20 @@ export const relayRun = async (
 		const logs = await container.containerFetch(`http://container${RUNNER_LOGS_PATH}`)
 		await streamLines(logs, (line) => {
 			accumulated.push(JSON.stringify(line))
-			dirty = true
 			heartbeat()
-			void flush(false)
+			requestFlush(false)
 		})
 	} finally {
 		clearInterval(heartbeatTimer)
+		await writer
 	}
 	// Final log flush once the stream closes (the container closes /logs at terminal state).
-	await flush(true)
+	requestFlush(true)
+	await writer
+	// A recovered final snapshot must not hide an earlier persistence failure from the caller.
+	if (writeFailure !== undefined) {
+		throw writeFailure.error
+	}
 
 	// Read the terminal status (poll in case the stream closed a hair before status settled).
 	let status: RunnerStatus | undefined

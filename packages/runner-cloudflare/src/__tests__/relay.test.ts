@@ -55,6 +55,22 @@ const job: CloudflareRunnerJob = {
 
 const terminalStatus: RunnerStatus = { runId: 'run-relay-1', state: 'succeeded', exitCode: 0, startedAt: 1, finishedAt: 9 }
 
+const makeStreamingContainer = async (heartbeat: () => void = () => {}): Promise<{
+	container: ContainerLike
+	logs: ReadableStreamDefaultController<Uint8Array>
+}> => {
+	const controller = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>()
+	const stream = new ReadableStream<Uint8Array>({ start: controller.resolve })
+	const inner = makeContainer(terminalStatus, [], { count: 0 })
+	return {
+		container: {
+			heartbeat,
+			containerFetch: (input, init) => new URL(input).pathname === '/logs' ? Promise.resolve(new Response(stream)) : inner.containerFetch(input, init),
+		},
+		logs: await controller.promise,
+	}
+}
+
 describe('relayRun', () => {
 	test('the job it posts to the container carries no runner key', async () => {
 		const bodies: string[] = []
@@ -130,5 +146,197 @@ describe('relayRun', () => {
 			containerFetch: async () => new Response('busy', { status: 409 }),
 		}
 		await expect(relayRun(container, bucket, job)).rejects.toThrow('runner rejected /run')
+	})
+
+	test('joins a delayed upload, coalesces overlapping requests, and awaits the complete final snapshot before status', async () => {
+		const started = Array.from({ length: 3 }, () => Promise.withResolvers<void>())
+		const uploads = Array.from({ length: 3 }, () => Promise.withResolvers<void>())
+		const snapshots: string[] = []
+		const bucket = new FakeR2()
+		const allLinesSeen = Promise.withResolvers<void>()
+		let lineCount = 0
+		const { container, logs } = await makeStreamingContainer(() => {
+			if (++lineCount === sampleLines.length) allLinesSeen.resolve()
+		})
+		const delayedBucket: R2Like = {
+			put: async (key, value) => {
+				if (key === logsKey(job.runId)) {
+					const index = snapshots.length
+					snapshots.push(value)
+					started[index]?.resolve()
+					await uploads[index]?.promise
+				}
+				await bucket.put(key, value)
+			},
+		}
+		const relay = relayRun(container, delayedBucket, job, { flushIntervalMs: 0 })
+		try {
+			logs.enqueue(new TextEncoder().encode(ndjson(sampleLines.slice(0, 1))))
+			await started[0]?.promise
+			logs.enqueue(new TextEncoder().encode(ndjson(sampleLines.slice(1))))
+			logs.close()
+			await allLinesSeen.promise
+			await Bun.sleep(0)
+
+			expect(snapshots).toEqual([JSON.stringify(sampleLines[0])])
+			expect(bucket.objects.has(statusKey(job.runId))).toBe(false)
+			uploads[0]?.resolve()
+			await started[1]?.promise
+			expect(snapshots).toHaveLength(2)
+			expect(snapshots[1]).toBe(ndjson(sampleLines).trimEnd())
+			uploads[1]?.resolve()
+			await started[2]?.promise
+			expect(snapshots).toHaveLength(3)
+			expect(snapshots[2]).toBe(ndjson(sampleLines).trimEnd())
+			expect(bucket.objects.has(statusKey(job.runId))).toBe(false)
+			uploads[2]?.resolve()
+			const result = await relay
+			expect(result.lineCount).toBe(sampleLines.length)
+			expect(bucket.objects.get(logsKey(job.runId))).toBe(ndjson(sampleLines).trimEnd())
+			expect(bucket.objects.get(statusKey(job.runId))).toBe(JSON.stringify(terminalStatus))
+		} finally {
+			for (const upload of uploads) upload.resolve()
+			await relay
+		}
+	})
+
+	test('awaits an empty final log object before publishing status', async () => {
+		const started = Promise.withResolvers<void>()
+		const upload = Promise.withResolvers<void>()
+		const bucket = new FakeR2()
+		const snapshots: string[] = []
+		const delayedBucket: R2Like = {
+			put: async (key, value) => {
+				if (key === logsKey(job.runId)) {
+					snapshots.push(value)
+					started.resolve()
+					await upload.promise
+				}
+				await bucket.put(key, value)
+			},
+		}
+		const relay = relayRun(makeContainer(terminalStatus, [], { count: 0 }), delayedBucket, job)
+		try {
+			await started.promise
+			expect(snapshots).toEqual([''])
+			expect(bucket.objects.has(statusKey(job.runId))).toBe(false)
+			upload.resolve()
+			expect((await relay).lineCount).toBe(0)
+			expect(bucket.objects.get(logsKey(job.runId))).toBe('')
+			expect(bucket.objects.get(statusKey(job.runId))).toBe(JSON.stringify(terminalStatus))
+		} finally {
+			upload.resolve()
+			await relay
+		}
+	})
+
+	test.each([false, true])('observes an intermediate rejection and propagates it after the final attempt (final fails: %s)', async (finalFails) => {
+		const firstStarted = Promise.withResolvers<void>()
+		const firstUpload = Promise.withResolvers<void>()
+		const firstError = new Error('intermediate upload failed')
+		const bucket = new FakeR2()
+		const snapshots: string[] = []
+		const unhandled: unknown[] = []
+		const onUnhandled = (error: unknown): void => {
+			unhandled.push(error)
+		}
+		const { container, logs } = await makeStreamingContainer()
+		const failingBucket: R2Like = {
+			put: async (key, value) => {
+				if (key === logsKey(job.runId)) {
+					snapshots.push(value)
+					if (snapshots.length === 1) {
+						firstStarted.resolve()
+						await firstUpload.promise
+					} else if (finalFails) {
+						throw new Error('final upload failed')
+					}
+				}
+				await bucket.put(key, value)
+			},
+		}
+		process.on('unhandledRejection', onUnhandled)
+		const outcome = relayRun(container, failingBucket, job, { flushIntervalMs: 100, now: () => 100 }).then(
+			() => undefined,
+			(error: unknown) => error,
+		)
+		try {
+			logs.enqueue(new TextEncoder().encode(ndjson(sampleLines.slice(0, 1))))
+			await firstStarted.promise
+			firstUpload.reject(firstError)
+			await Bun.sleep(0)
+			expect(unhandled).toEqual([])
+			logs.enqueue(new TextEncoder().encode(ndjson(sampleLines.slice(1))))
+			logs.close()
+			expect(await outcome).toBe(firstError)
+			expect(snapshots).toEqual([JSON.stringify(sampleLines[0]), ndjson(sampleLines).trimEnd()])
+			expect(bucket.objects.get(logsKey(job.runId))).toBe(finalFails ? undefined : ndjson(sampleLines).trimEnd())
+			expect(bucket.objects.has(statusKey(job.runId))).toBe(false)
+			expect(unhandled).toEqual([])
+		} finally {
+			process.off('unhandledRejection', onUnhandled)
+		}
+	})
+
+	test.each([false, true])('propagates a final upload failure without publishing status (empty: %s)', async (empty) => {
+		const error = new Error('final upload failed')
+		const bucket = new FakeR2()
+		const snapshots: string[] = []
+		const failingBucket: R2Like = {
+			put: async (key, value) => {
+				if (key === logsKey(job.runId)) {
+					snapshots.push(value)
+					throw error
+				}
+				await bucket.put(key, value)
+			},
+		}
+		const lines = empty ? [] : sampleLines
+		const outcome = relayRun(makeContainer(terminalStatus, lines, { count: 0 }), failingBucket, job, { now: () => 0 }).then(
+			() => undefined,
+			(error: unknown) => error,
+		)
+		expect(await outcome).toBe(error)
+		expect(snapshots).toEqual([empty ? '' : ndjson(sampleLines).trimEnd()])
+		expect(bucket.objects.has(statusKey(job.runId))).toBe(false)
+	})
+
+	test('settles an owned upload before propagating a stream error', async () => {
+		const started = Promise.withResolvers<void>()
+		const upload = Promise.withResolvers<void>()
+		const error = new Error('log stream disconnected')
+		const bucket = new FakeR2()
+		const { container, logs } = await makeStreamingContainer()
+		let settled = false
+		const delayedBucket: R2Like = {
+			put: async (key, value) => {
+				started.resolve()
+				await upload.promise
+				await bucket.put(key, value)
+			},
+		}
+		const outcome = relayRun(container, delayedBucket, job, { flushIntervalMs: 0 }).then(
+			() => {
+				settled = true
+			},
+			(error: unknown) => {
+				settled = true
+				return error
+			},
+		)
+		try {
+			logs.enqueue(new TextEncoder().encode(ndjson(sampleLines.slice(0, 1))))
+			await started.promise
+			logs.error(error)
+			await Bun.sleep(0)
+			expect(settled).toBe(false)
+			upload.resolve()
+			expect(await outcome).toBe(error)
+			expect(bucket.objects.get(logsKey(job.runId))).toBe(JSON.stringify(sampleLines[0]))
+			expect(bucket.objects.has(statusKey(job.runId))).toBe(false)
+		} finally {
+			upload.resolve()
+			await outcome
+		}
 	})
 })
