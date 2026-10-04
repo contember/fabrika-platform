@@ -7,7 +7,7 @@ export {
 	type OperationsCatalogSyncState,
 	type OperationsIngestConfigRow,
 } from './db/operations-catalog'
-export { OperationsReleaseRepository, type OperationsReleaseSyncRow } from './db/operations-releases'
+export { OperationsReleaseRepository, type OperationsReleaseSyncRow, type TerminalOperationsReleaseRow } from './db/operations-releases'
 export { RepoPollingRepository, type RepoPollStateRow } from './db/polling'
 export { ControlRegistryRepository } from './db/registry'
 export {

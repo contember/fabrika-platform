@@ -1,5 +1,6 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { firstRow } from './returning'
+import type { RunMutationGuard, RunRow } from './runs'
 
 export interface OperationsReleaseSyncRow {
 	run_id: string
@@ -10,6 +11,10 @@ export interface OperationsReleaseSyncRow {
 	last_success_at: number | string | null
 	last_error: string | null
 }
+
+export interface TerminalOperationsReleaseRow extends OperationsReleaseSyncRow, RunRow {}
+
+export const TERMINAL_RELEASE_REPAIR_DIAGNOSTIC = 'operations terminal release repair requires valid frozen context'
 
 /** Durable per-run outbox for the private Delivery → Operations release projection. */
 export class OperationsReleaseRepository {
@@ -44,6 +49,66 @@ export class OperationsReleaseRepository {
 		return this.db.prepare('SELECT * FROM operations_release_sync WHERE run_id = ?').bind(runId).first<OperationsReleaseSyncRow>()
 	}
 
+	async terminalScanBoundary(): Promise<string | null> {
+		const row = await this.db.prepare(`SELECT MAX(s.run_id) AS boundary FROM operations_release_sync s
+			JOIN runs r ON r.id = s.run_id WHERE r.status IN ('succeeded', 'failed')`).first<{ boundary: string | null }>()
+		return row?.boundary ?? null
+	}
+
+	async listTerminalPage(after: string, boundary: string, limit: number): Promise<TerminalOperationsReleaseRow[]> {
+		const { results } = await this.db.prepare(`SELECT s.*, r.* FROM operations_release_sync s
+			JOIN runs r ON r.id = s.run_id
+			WHERE r.status IN ('succeeded', 'failed') AND s.run_id > ? AND s.run_id <= ?
+			ORDER BY s.run_id LIMIT ?`).bind(after, boundary, limit).all<TerminalOperationsReleaseRow>()
+		return results
+	}
+
+	async getTerminal(runId: string): Promise<TerminalOperationsReleaseRow | null> {
+		return this.db.prepare(`SELECT s.*, r.* FROM operations_release_sync s JOIN runs r ON r.id = s.run_id
+			WHERE s.run_id = ? AND r.status IN ('succeeded', 'failed')`).bind(runId).first<TerminalOperationsReleaseRow>()
+	}
+
+	async repairTerminal(
+		expected: TerminalOperationsReleaseRow,
+		payloadJson: string | null,
+		guard: RunMutationGuard,
+	): Promise<boolean> {
+		const assignment = payloadJson === null
+			? 'last_error = ?'
+			: 'payload_json = ?, desired_revision = desired_revision + 1, last_error = NULL'
+		const externalPredicate = expected.external_run_id === null ? 'r.external_run_id IS NULL' : 'r.external_run_id = ?'
+		const externalValues = expected.external_run_id === null ? [] : [expected.external_run_id]
+		const finishedPredicate = expected.finished_at === null ? 'r.finished_at IS NULL' : 'r.finished_at = ?'
+		const finishedValues = expected.finished_at === null ? [] : [expected.finished_at]
+		// Hold the lease row through the CAS; an EXISTS alone does not fence Postgres takeover.
+		const results = await this.db.batch<{ run_id: string }>([
+			this.db.prepare(`UPDATE deploy_locks SET holder = holder
+				WHERE lock_key = ? AND holder = ? AND expires_at > ?`)
+				.bind(`${expected.app_id}:${expected.env}`, guard.holder, guard.nowMs),
+			this.db.prepare(`UPDATE operations_release_sync SET ${assignment}
+				WHERE run_id = ? AND desired_revision = ? AND payload_json = ?
+					AND EXISTS (SELECT 1 FROM runs r WHERE r.id = operations_release_sync.run_id
+						AND r.app_id = ? AND r.env = ? AND r.status = ? AND r.status IN ('succeeded', 'failed')
+						AND ${finishedPredicate} AND ${externalPredicate})
+					AND EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
+				RETURNING run_id`).bind(
+				payloadJson ?? TERMINAL_RELEASE_REPAIR_DIAGNOSTIC,
+				expected.run_id,
+				expected.desired_revision,
+				expected.payload_json,
+				expected.app_id,
+				expected.env,
+				expected.status,
+				...finishedValues,
+				...externalValues,
+				`${expected.app_id}:${expected.env}`,
+				guard.holder,
+				guard.nowMs,
+			),
+		])
+		return (results[1]?.results.length ?? 0) > 0
+	}
+
 	async markAttempt(runId: string, revision: number): Promise<void> {
 		await this.db
 			.prepare(`UPDATE operations_release_sync SET last_attempt_at = ?
@@ -63,10 +128,10 @@ export class OperationsReleaseRepository {
 			.run()
 	}
 
-	async markFailed(runId: string, message: string): Promise<void> {
+	async markFailed(row: OperationsReleaseSyncRow, message: string): Promise<void> {
 		await this.db
-			.prepare('UPDATE operations_release_sync SET last_error = ? WHERE run_id = ?')
-			.bind(message.slice(0, 200), runId)
+			.prepare('UPDATE operations_release_sync SET last_error = ? WHERE run_id = ? AND desired_revision = ? AND payload_json = ?')
+			.bind(message.slice(0, 200), row.run_id, row.desired_revision, row.payload_json)
 			.run()
 	}
 }

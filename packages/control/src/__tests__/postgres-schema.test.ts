@@ -13,6 +13,7 @@
 // Skips cleanly (with a reason) when FABRIKA_TEST_POSTGRES_URL is unset — see helpers/postgres.ts.
 
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
+import { type OperationsReleaseReconcileRequestV1, parseOperationsReleaseRequest } from '@fabrika/operations-contract/releases'
 import { type BlobStore, type SqlDatabase, SqlDeployLocks, type SqlQueryResult, type SqlStatement } from '@fabrika/platform'
 import { PostgresDatabase, PostgresJobQueue } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -1100,6 +1101,48 @@ describe.skipIf(!hasPostgres)('the Bun entrypoint, end to end on Postgres', () =
 		expect((await db.runs.listRuns({ limit: 10, appId: 'acme' })).filter((r) => r.trigger === 'poll')).toHaveLength(1)
 		expect((await raw.prepare('SELECT count(*)::int AS n FROM jobs').first<{ n: number }>())?.n).toBe(1)
 		expect((await db.polling.getRepoPollState('acme', 'prod'))?.last_seen_sha).toBe('a'.repeat(40))
+	})
+
+	test('maintenance repairs a clean swept release through the production dependency wiring', async () => {
+		await reset()
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
+		const stale = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual' })
+		await raw.prepare('UPDATE runs SET created_at = ? WHERE id = ?').bind(now() - 86_400, stale.id).run()
+		await db.operationsReleases.project(
+			stale.id,
+			JSON.stringify({
+				runId: stale.id,
+				coordinate: { appId: 'acme', environment: 'prod' },
+				phase: 'started',
+				providerRunId: null,
+				outcome: null,
+				artifactState: 'not_applicable',
+				release: { kind: 'unavailable', reason: 'missing_commit' },
+				observedAt: (now() - 86_400) * 1000,
+			}),
+		)
+		await db.operationsReleases.markApplied(stale.id, 1)
+		const absent = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual' })
+		await db.runs.markRunFinished(absent.id, 'succeeded', 0)
+		const requests: OperationsReleaseReconcileRequestV1[] = []
+		const summary = await runMaintenance({
+			...env(),
+			OPERATIONS_SYNC_KEY: 'maintenance-release-key-with-at-least-32-bytes',
+			OPERATIONS: {
+				async fetch(request) {
+					const decoded: unknown = await request.json()
+					const payload = parseOperationsReleaseRequest(decoded)
+					requests.push(payload)
+					return Response.json({ protocolVersion: 1, revision: payload.revision, outcome: 'applied' })
+				},
+			},
+		}, { operations: async () => ({ outcome: 'disabled', revision: null }) })
+		expect(summary.swept).toBe(1)
+		expect(summary.releases).toEqual({ applied: 1, failed: 0, pending: 0 })
+		expect(requests).toHaveLength(1)
+		expect(requests[0]).toMatchObject({ runId: stale.id, phase: 'terminal', outcome: 'failed', revision: 2 })
+		expect(await db.operationsReleases.get(absent.id)).toBeNull()
 	})
 })
 

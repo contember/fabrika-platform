@@ -57,6 +57,7 @@ export function operationsReleaseDeps(env: Env): OperationsReleaseProjectionDeps
 	const artifactOrigin = env.OPERATIONS_ARTIFACT_ORIGIN?.trim()
 	return {
 		repository: repositories(env).operationsReleases,
+		terminalRepair: { runs: repositories(env).runs, lock: deployLock(env) },
 		...(env.OPERATIONS === undefined ? {} : { service: env.OPERATIONS }),
 		...(env.OPERATIONS_SYNC_KEY === undefined ? {} : { syncKey: env.OPERATIONS_SYNC_KEY }),
 		...(artifactOrigin === undefined || artifactOrigin === '' ? {} : { artifactOrigin }),

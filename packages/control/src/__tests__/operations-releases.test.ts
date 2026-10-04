@@ -112,6 +112,38 @@ function provider(inputs: ProviderDeployInput[]): ControlProvider {
 }
 
 describe('Control release projection', () => {
+	test('a delayed HTTP failure cannot replace the diagnostic of newer payload bytes or revision', async () => {
+		for (const advanceRevision of [false, true]) {
+			const harness = createHarness(() => NOW_S)
+			await seed(harness)
+			await queuePayload(harness, 'delayed', JSON.stringify(storedPayload('delayed')))
+			const entered = Promise.withResolvers<void>()
+			const response = Promise.withResolvers<Response>()
+			const replay = replayOperationsReleases({
+				repository: harness.repositories.operationsReleases,
+				syncKey: SYNC_KEY,
+				service: {
+					fetch: () => {
+						entered.resolve()
+						return response.promise
+					},
+				},
+			})
+			await entered.promise
+			const replacement = JSON.stringify({ ...storedPayload('delayed'), artifactState: 'complete' })
+			if (advanceRevision) await harness.repositories.operationsReleases.project('delayed', replacement)
+			else harness.sqlite.query('UPDATE operations_release_sync SET payload_json = ? WHERE run_id = ?').run(replacement, 'delayed')
+			harness.sqlite.query('UPDATE operations_release_sync SET last_error = ? WHERE run_id = ?').run('newer diagnostic', 'delayed')
+			response.resolve(new Response(null, { status: 503 }))
+			await replay
+			expect(await harness.repositories.operationsReleases.get('delayed')).toMatchObject({
+				payload_json: replacement,
+				desired_revision: advanceRevision ? 2 : 1,
+				last_error: 'newer diagnostic',
+			})
+		}
+	})
+
 	test('rejects corrupt stored JSON and structures per row while valid peers replay', async () => {
 		const harness = createHarness(() => NOW_S)
 		await seed(harness)

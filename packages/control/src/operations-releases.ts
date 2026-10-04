@@ -14,7 +14,8 @@ import {
 	parseOperationsReleasePayload,
 } from '@fabrika/operations-contract/releases'
 import type { HttpService } from '@fabrika/platform'
-import type { OperationsReleaseRepository, OperationsReleaseSyncRow, RunRow } from './db'
+import type { OperationsReleaseRepository, OperationsReleaseSyncRow, RunRepository, RunRow, TerminalOperationsReleaseRow } from './db'
+import { type DeployLockGate, type OwnershipTiming, RunOwnership } from './run-ownership'
 
 const REQUEST_TIMEOUT_MS = 15_000
 const MIN_SYNC_KEY_LENGTH = 32
@@ -27,6 +28,7 @@ export interface OperationsReleaseProjectionDeps {
 	syncKey?: string
 	artifactOrigin?: string
 	now?: () => number
+	terminalRepair?: { runs: RunRepository; lock: DeployLockGate; timing?: OwnershipTiming }
 }
 
 export interface OperationsReleaseContext {
@@ -108,13 +110,110 @@ export async function replayOperationsReleases(
 ): Promise<OperationsReleaseProjectionSummary> {
 	let applied = 0
 	let failed = 0
+	await repairTerminalReleases(deps)
 	const rows = await deps.repository.listPending(REPLAY_BATCH_SIZE)
 	for (const row of rows) {
-		if (await flushOne(deps, row)) applied++
+		let delivery = row
+		if (deps.terminalRepair !== undefined) {
+			const terminal = await deps.repository.getTerminal(row.run_id)
+			if (terminal !== null) {
+				delivery = terminal
+				try {
+					if (terminalPayload(terminal) !== null) {
+						failed++
+						continue
+					}
+				} catch {
+					failed++
+					continue
+				}
+			}
+		}
+		if (await flushOne(deps, delivery)) applied++
 		else failed++
 	}
 	const pending = (await deps.repository.listPending(REPLAY_BATCH_SIZE)).length
 	return { applied, failed, pending }
+}
+
+async function repairTerminalReleases(deps: OperationsReleaseProjectionDeps): Promise<void> {
+	const repair = deps.terminalRepair
+	if (repair === undefined) return
+	const boundary = await deps.repository.terminalScanBoundary()
+	if (boundary === null) return
+	let after = ''
+	while (true) {
+		const page = await deps.repository.listTerminalPage(after, boundary, REPLAY_BATCH_SIZE)
+		if (page.length === 0) break
+		for (const candidate of page) {
+			after = candidate.run_id
+			if (validatedTerminalSnapshotAgrees(candidate)) continue
+			const owner = await RunOwnership.acquire(repair.runs, repair.lock, candidate, repair.timing)
+			if (owner === null) continue
+			try {
+				const current = await deps.repository.getTerminal(candidate.run_id)
+				if (current === null || current.app_id !== owner.row.app_id || current.env !== owner.row.env) continue
+				let payload: OperationsReleaseProjectionPayloadV1 | null
+				try {
+					integer(current.desired_revision)
+					payload = terminalPayload(current)
+				} catch {
+					await owner.mutate((guard) => deps.repository.repairTerminal(current, null, guard))
+					continue
+				}
+				if (payload !== null) {
+					await owner.mutate((guard) => deps.repository.repairTerminal(current, JSON.stringify(payload), guard))
+				}
+			} catch {
+				console.warn(`operations terminal release repair failed for run ${candidate.run_id}`)
+			} finally {
+				await owner.close()
+			}
+		}
+	}
+}
+
+function validatedTerminalSnapshotAgrees(row: TerminalOperationsReleaseRow): boolean {
+	if (
+		row.id !== row.run_id || row.finished_at === null || row.finished_at < 0
+		|| !Number.isSafeInteger(row.finished_at) || !Number.isSafeInteger(row.finished_at * 1_000)
+		|| (row.external_run_id !== null && (typeof row.external_run_id !== 'string' || row.external_run_id.length > 256))
+	) return false
+	try {
+		integer(row.desired_revision)
+		return terminalPayload(row) === null
+	} catch {
+		return false
+	}
+}
+
+function terminalPayload(row: TerminalOperationsReleaseRow): OperationsReleaseProjectionPayloadV1 | null {
+	const payload = parseStoredPayload(row.payload_json)
+	if (
+		payload.runId !== row.run_id || payload.coordinate.appId !== row.app_id || payload.coordinate.environment !== row.env
+		|| (payload.release.kind === 'available' && payload.release.name !== operationsReleaseName({
+					...payload.coordinate,
+					commitSha: payload.release.commitSha,
+				}))
+	) throw new Error('incompatible frozen release context')
+	if (payload.phase === 'terminal' && payload.outcome === row.status) return null
+	if (
+		(row.status !== 'succeeded' && row.status !== 'failed')
+		|| (payload.phase === 'terminal' && (payload.outcome !== 'succeeded' || row.status !== 'failed'))
+		|| row.finished_at === null || !Number.isSafeInteger(row.finished_at) || row.finished_at < 0
+	) throw new Error('insufficient terminal release context')
+	return parseOperationsReleasePayload({
+		...payload,
+		phase: 'terminal',
+		providerRunId: row.external_run_id,
+		outcome: row.status,
+		artifactState: payload.release.kind === 'unavailable'
+			? 'not_applicable'
+			: payload.artifactState === 'pending'
+			? 'incomplete'
+			: payload.artifactState,
+		observedAt: Math.max(row.finished_at * 1_000, payload.observedAt),
+	})
 }
 
 async function flushOne(deps: OperationsReleaseProjectionDeps, row: OperationsReleaseSyncRow): Promise<boolean> {
@@ -149,7 +248,7 @@ async function flushOne(deps: OperationsReleaseProjectionDeps, row: OperationsRe
 		return true
 	} catch (error) {
 		const message = error instanceof ReleaseProjectionError ? error.message : 'operations release request failed'
-		await deps.repository.markFailed(row.run_id, message).catch(() => {})
+		await deps.repository.markFailed(row, message).catch(() => {})
 		return false
 	}
 }

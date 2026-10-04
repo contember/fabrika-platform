@@ -40,4 +40,19 @@ Unavailable observations remain visible in current state and bounded history. Th
 
 ## Runtime evidence
 
+Control's release replay repairs existing frozen contexts when their runs have
+become terminal, including contexts whose earlier revision was already applied.
+It uses the deployment's app/environment ownership and a fenced conditional
+update; it releases ownership before delivering to Operations. A validated matching terminal
+context needs no ownership mutation. Discovery scans a captured key range in
+100-row pages, so memory is bounded while total scan work grows with retained history.
+
+Repair preserves the original release identity and upload verifier/expiry. It
+uses the historical finish time, retains known artifact outcomes, and marks
+unfinished available-release artifacts incomplete. Invalid, mismatched or
+newly expiry-invalid contexts remain unchanged with a fixed diagnostic. Absent
+contexts and exact artifact results that were never persisted cannot be recovered
+from current configuration; the required decisions are tracked in
+[backlog 95](../backlog/95-close-release-recovery-without-frozen-context.md).
+
 Cloudflare and Bun/Postgres compositions use the same domain producers and outbox. Cloudflare Cron Triggers and Zerops `crontab` both invoke maintenance once per minute. SQLite tests cover the complete error workflow. Real Postgres and S3 suites require the `FABRIKA_TEST_POSTGRES_URL` and `FABRIKA_TEST_S3_*` variables; absent variables produce explicit skips rather than simulated coverage.
