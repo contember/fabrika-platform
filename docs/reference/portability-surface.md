@@ -38,6 +38,10 @@ Processed and dead-event facts come from durable Operations stores. Per-source
 provider queue depth and reject counters are currently explicit `unavailable`
 telemetry values in both compositions; the health contract does not fabricate
 zeros when those facts cannot be obtained.
+Processing facts use applied occurrences and their `applied_at` timestamps.
+Missing measurements keep aggregate telemetry health unavailable unless known
+failures take precedence; error silence is not a liveness test. Unavailable
+observations preserve durable failure/recovery alert provenance.
 
 ## Deploy layers — how portable each one actually is
 

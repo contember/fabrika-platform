@@ -212,7 +212,8 @@ export interface TelemetryHealthObservation {
 }
 
 export interface TelemetryThresholds {
-	freshnessMs: number
+	/** Legacy option; error silence does not diagnose pipeline health. */
+	freshnessMs?: number
 	maxDlq: number
 	maxRejectRate: number
 	minRejectVolume: number
@@ -240,14 +241,7 @@ export function evaluateTelemetryHealth(
 	thresholds: TelemetryThresholds,
 ): EvaluatedTelemetryHealth {
 	const reasons: string[] = []
-	const available = [observation.processed, observation.dlq, observation.rejects, observation.queue].filter((metric) => metric.available).length
-	if (available === 0) return { state: 'unavailable', observedAt: observation.observedAt, reasons: ['adapter_unavailable'], observation }
-
 	if (observation.dlq.available && observation.dlq.value.count > thresholds.maxDlq) reasons.push('dead_letters')
-	if (observation.processed.available) {
-		const last = observation.processed.value.lastProcessedAt
-		if (last === null || observation.observedAt - last > thresholds.freshnessMs) reasons.push('stale_processing')
-	}
 	if (observation.rejects.available) {
 		const volume = observation.rejects.value.accepted + observation.rejects.value.rejected
 		if (volume >= thresholds.minRejectVolume && observation.rejects.value.rejected / volume > thresholds.maxRejectRate) {
@@ -260,13 +254,15 @@ export function evaluateTelemetryHealth(
 		if (oldest !== null && oldest > thresholds.maxQueueAgeMs) reasons.push('queue_age')
 	}
 
+	const measurementsAvailable = [observation.processed, observation.dlq, observation.rejects, observation.queue].every((metric) => metric.available)
 	const state: HealthState = reasons.includes('dead_letters')
 		? 'failed'
-		: reasons.includes('stale_processing')
-		? 'stale'
 		: reasons.length > 0
 		? 'degraded'
-		: 'healthy'
+		: measurementsAvailable
+		? 'healthy'
+		: 'unavailable'
+	if (state === 'unavailable') reasons.push('adapter_unavailable')
 	return { state, observedAt: observation.observedAt, reasons, observation }
 }
 
@@ -276,9 +272,9 @@ export function decideTelemetryTransition(
 	current: EvaluatedTelemetryHealth,
 	transitionId: string,
 ): HealthTransition | null {
-	if (prior === current.state) return null
+	if (prior === current.state || current.state === 'unavailable') return null
 	if (current.state === 'healthy') {
-		if (prior === null || prior === 'healthy') return null
+		if (prior !== 'failed' && prior !== 'degraded') return null
 		return { id: transitionId, sourceId, checkId: null, kind: 'recovery', from: prior, to: current.state, at: current.observedAt }
 	}
 	return {

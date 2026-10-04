@@ -17,7 +17,6 @@ const LEASE_OVERHEAD_MS = 30_000
 const DEFAULT_ERROR_RETRY_MS = 30_000
 
 const DEFAULT_TELEMETRY_THRESHOLDS: TelemetryThresholds = {
-	freshnessMs: 15 * 60_000,
 	maxDlq: 0,
 	maxRejectRate: 0.2,
 	minRejectVolume: 20,
@@ -31,6 +30,7 @@ type HealthStore = Pick<
 	| 'completeLease'
 	| 'enqueueTransitionAlerts'
 	| 'getCurrent'
+	| 'getLastConclusiveTelemetryAlertState'
 	| 'getTelemetryState'
 	| 'listEnabledSourceIds'
 	| 'recordHttpObservation'
@@ -213,7 +213,8 @@ export class OperationsHealthExecution {
 			try {
 				const observation = await adapter.observe({ sourceId, ...(signal === undefined ? {} : { signal }) })
 				const evaluated = evaluateTelemetryHealth(observation, this.telemetryThresholds)
-				const prior = await this.store.getTelemetryState(sourceId)
+				const latest = await this.store.getTelemetryState(sourceId)
+				const prior = latest === 'stale' || latest === 'unavailable' ? await this.store.getLastConclusiveTelemetryAlertState(sourceId) : latest
 				const transition = decideTelemetryTransition(sourceId, prior, evaluated, this.id(observation.observedAt))
 				await this.store.recordTelemetryObservation({
 					id: this.id(observation.observedAt),

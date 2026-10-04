@@ -41,7 +41,7 @@ export class StoredOperationsTelemetryAdapter implements TelemetryHealthAdapter 
 	private async processed(sourceId: string): Promise<TelemetryHealthObservation['processed']> {
 		try {
 			const row = await this.db
-				.prepare('SELECT COUNT(*) AS count, MAX(received_at) AS last_at FROM occurrences WHERE source_id = ?')
+				.prepare('SELECT COUNT(*) AS count, MAX(applied_at) AS last_at FROM occurrences WHERE source_id = ? AND applied_at IS NOT NULL')
 				.bind(sourceId)
 				.first<CountRow>()
 			return {

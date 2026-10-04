@@ -8,9 +8,11 @@ import {
 	EMAIL_DELIVERY_SUPPORT,
 	evaluateTelemetryHealth,
 	healthAlertDedupKey,
+	type HealthState,
 	type HttpCheckAttempt,
 	resolveHealthCheckUrl,
 	runHttpHealthCheck,
+	type TelemetryHealthObservation,
 	unavailableTelemetryValue,
 	visibleHealthState,
 } from '../health.js'
@@ -156,7 +158,7 @@ describe('telemetry health', () => {
 		expect(evaluated.reasons).toEqual(['adapter_unavailable'])
 	})
 
-	test('derives freshness, DLQ, reject, and queue observations deterministically', () => {
+	test('derives DLQ, reject, and queue failures without inferring failure from error silence', () => {
 		const evaluated = evaluateTelemetryHealth({
 			observedAt: 100_000,
 			processed: { available: true, value: { count: 30, lastProcessedAt: 10_000 } },
@@ -165,7 +167,44 @@ describe('telemetry health', () => {
 			queue: { available: true, value: { backlog: 101, oldestAgeMs: 31_000 } },
 		}, thresholds)
 		expect(evaluated.state).toBe('failed')
-		expect(evaluated.reasons).toEqual(['dead_letters', 'stale_processing', 'reject_rate', 'queue_backlog', 'queue_age'])
+		expect(evaluated.reasons).toEqual(['dead_letters', 'reject_rate', 'queue_backlog', 'queue_age'])
+	})
+
+	test('keeps empty and quiet sources healthy when all measurements are available', () => {
+		for (const processed of [{ count: 0, lastProcessedAt: null }, { count: 30, lastProcessedAt: 10_000 }]) {
+			const evaluated = evaluateTelemetryHealth({
+				observedAt: 100_000,
+				processed: { available: true, value: processed },
+				dlq: { available: true, value: { count: 0 } },
+				rejects: { available: true, value: { accepted: 0, rejected: 0 } },
+				queue: { available: true, value: { backlog: 0, oldestAgeMs: null } },
+			}, thresholds)
+			expect(evaluated.state).toBe('healthy')
+			expect(evaluated.reasons).toEqual([])
+			expect(decideTelemetryTransition('source-a', null, evaluated, 'initial')).toBeNull()
+		}
+	})
+
+	test('never claims missing measurements healthy or alerts unavailability as failure or recovery', () => {
+		const observation: TelemetryHealthObservation = {
+			observedAt: 100_000,
+			processed: { available: true, value: { count: 30, lastProcessedAt: 10_000 } },
+			dlq: { available: true, value: { count: 0 } },
+			rejects: { available: true, value: { accepted: 0, rejected: 0 } },
+			queue: { available: true, value: { backlog: 0, oldestAgeMs: null } },
+		}
+		const priors: (HealthState | null)[] = [null, 'healthy', 'degraded', 'failed', 'stale', 'unavailable']
+		for (const metric of ['processed', 'dlq', 'rejects', 'queue']) {
+			const evaluated = evaluateTelemetryHealth({ ...observation, [metric]: unavailableTelemetryValue('missing measurement') }, thresholds)
+			expect(evaluated.state).toBe('unavailable')
+			expect(evaluated.reasons).toEqual(['adapter_unavailable'])
+			for (const prior of priors) {
+				expect(decideTelemetryTransition('source-a', prior, evaluated, 'unavailable')).toBeNull()
+			}
+		}
+		const healthy = evaluateTelemetryHealth(observation, thresholds)
+		expect(decideTelemetryTransition('source-a', 'unavailable', healthy, 'available')).toBeNull()
+		expect(decideTelemetryTransition('source-a', 'stale', healthy, 'quiet')).toBeNull()
 	})
 
 	test('emits one unhealthy transition and includes the channel in dedup identity', () => {
@@ -181,6 +220,28 @@ describe('telemetry health', () => {
 		expect(transition.kind).toBe('unhealthy_telemetry')
 		expect(decideTelemetryTransition('source-a', evaluated.state, evaluated, 'transition-b')).toBeNull()
 		expect(healthAlertDedupKey(transition, 'channel-a')).not.toBe(healthAlertDedupKey(transition, 'channel-b'))
+	})
+
+	test('keeps known failures visible even when other measurements are unavailable', () => {
+		const missing: TelemetryHealthObservation = {
+			observedAt: 100_000,
+			processed: unavailableTelemetryValue('store unavailable'),
+			dlq: unavailableTelemetryValue('store unavailable'),
+			rejects: unavailableTelemetryValue('adapter unavailable'),
+			queue: unavailableTelemetryValue('adapter unavailable'),
+		}
+		const observations: TelemetryHealthObservation[] = [
+			{ ...missing, dlq: { available: true, value: { count: 1 } } },
+			{ ...missing, rejects: { available: true, value: { accepted: 20, rejected: 10 } } },
+			{ ...missing, queue: { available: true, value: { backlog: 101, oldestAgeMs: null } } },
+			{ ...missing, queue: { available: true, value: { backlog: 1, oldestAgeMs: 31_000 } } },
+		]
+		for (const observation of observations) {
+			const evaluated = evaluateTelemetryHealth(observation, thresholds)
+			expect(['failed', 'degraded']).toContain(evaluated.state)
+			expect(evaluated.reasons).not.toContain('adapter_unavailable')
+			expect(decideTelemetryTransition('source-a', 'unavailable', evaluated, 'failure')?.kind).toBe('unhealthy_telemetry')
+		}
 	})
 
 	test('keeps email delivery explicitly deferred', () => {

@@ -341,6 +341,20 @@ export abstract class HealthRepository {
 		return row === null ? null : healthState(row.state)
 	}
 
+	async getLastConclusiveTelemetryAlertState(sourceId: string): Promise<HealthState | null> {
+		const row = await this.db
+			.prepare(`SELECT transition.to_state FROM health_transitions transition
+				JOIN current_telemetry_health current ON current.source_id = transition.source_id
+				WHERE transition.source_id = ? AND transition.check_id IS NULL
+					AND transition.kind IN ('unhealthy_telemetry', 'recovery')
+					AND transition.to_state IN ('healthy', 'degraded', 'failed')
+					AND transition.occurred_at <= current.observed_at
+				ORDER BY transition.occurred_at DESC, transition.id DESC LIMIT 1`)
+			.bind(sourceId)
+			.first<{ to_state: string }>()
+		return row === null ? null : healthState(row.to_state)
+	}
+
 	async listEnabledSourceIds(): Promise<string[]> {
 		const { results } = await this.db
 			.prepare('SELECT id FROM sources WHERE enabled = 1 ORDER BY id')
