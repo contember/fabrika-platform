@@ -1,4 +1,4 @@
-import { action } from '@fabrika/installation-init'
+import { action, type GitHubAppManifestInput, type GitHubAppManifestRuntime } from '@fabrika/installation-init'
 import { describe, expect, spyOn, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -169,9 +169,10 @@ describe('Cloudflare installer GitHub App resume', () => {
 		let confirmations = 0
 		const dependencies = {
 			source,
-			create: () => {
+			create: async (_input: GitHubAppManifestInput, runtime?: GitHubAppManifestRuntime) => {
 				creations++
-				return Promise.resolve(app)
+				await runtime?.onCreated?.(app, new AbortController().signal)
+				return app
 			},
 			persist: (values: Readonly<Record<string, string>>) => {
 				persisted.push(values)

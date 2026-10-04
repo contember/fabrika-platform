@@ -602,20 +602,25 @@ export async function ensureGitHubApp(
 		const ownerOrg = collected.githubOrg.toLowerCase()
 		const isPublic = collected.installRepos.some((repo) => (repo.split('/')[0] ?? '').toLowerCase() !== ownerOrg)
 		const controlOrigin = `https://${collected.controlPlaneDomain}`
-		app = await dependencies.create({
-			organization: collected.githubOrg,
-			appName,
-			homepageUrl: controlOrigin,
-			webhookUrl: `${controlOrigin}/webhooks/github`,
-			public: isPublic,
-		})
-		await dependencies.persist({
-			GITHUB_APP_PRIVATE_KEY: app.pem,
-			GITHUB_WEBHOOK_SECRET: app.webhookSecret,
-			GITHUB_APP_ID: String(app.id),
-			GITHUB_APP_SLUG: app.slug,
-			GITHUB_APP_URL: app.htmlUrl,
-		})
+		app = await dependencies.create(
+			{
+				organization: collected.githubOrg,
+				appName,
+				homepageUrl: controlOrigin,
+				webhookUrl: `${controlOrigin}/webhooks/github`,
+				public: isPublic,
+			},
+			{
+				onCreated: (createdApp) =>
+					dependencies.persist({
+						GITHUB_APP_PRIVATE_KEY: createdApp.pem,
+						GITHUB_WEBHOOK_SECRET: createdApp.webhookSecret,
+						GITHUB_APP_ID: String(createdApp.id),
+						GITHUB_APP_SLUG: createdApp.slug,
+						GITHUB_APP_URL: createdApp.htmlUrl,
+					}),
+			},
+		)
 		ok('GitHub App credentials saved to the installer env file (resume-safe).')
 	}
 	if (collected.installRepos.length > 0) {
