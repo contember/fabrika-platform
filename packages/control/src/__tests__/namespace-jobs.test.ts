@@ -346,22 +346,17 @@ describe('namespace provisioning outlives the request that asked for it', () => 
 			exclusiveAppId: null,
 			providerTargetJson: JSON.stringify(target('requested')),
 		})
-		const lock = makeFakeLock()
+		const lock = makeFakeLock(harness.repositories)
 		const deps: NamespaceJobDeps = {
 			repositories: harness.repositories,
 			provider,
 			lock: {
 				renew: lock.renew,
 				async acquire(key, holder) {
-					const acquired = await lock.acquire(key, holder)
 					// Another worker finished this namespace while we were waiting for the lease.
-					await harness.repositories.registry.updateDeploymentNamespace({
-						id: 'apps-prod',
-						providerTargetJson: JSON.stringify(target('ready')),
-						state: 'ready',
-						lastError: null,
-					})
-					return acquired
+					expect(await runNamespaceJob(jobDeps(harness, namespacedProvider(recording())), provisionJob('apps-prod')))
+						.toEqual({ namespaceId: 'apps-prod', status: 'ready' })
+					return lock.acquire(key, holder)
 				},
 				release: (key, holder) => lock.release(key, holder),
 			},

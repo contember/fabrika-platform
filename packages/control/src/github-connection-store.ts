@@ -1,7 +1,6 @@
 export {
 	type BeginGitHubSetupInput,
 	GitHubConnectionCasError,
-	type GitHubConnectionState,
 	type GitHubSetupAttempt,
 	type GitHubSetupErrorCode,
 	type GitHubSetupPatch,

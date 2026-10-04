@@ -10,6 +10,7 @@ import {
 	githubWebhookSecretLabel,
 	type PublishGitHubConnectionInput,
 } from '../github-connection-store'
+import { connectionDto, workflowDto } from '../source-connection/status'
 import { Vault } from '../vault'
 import { createHarness, createHarnessThrough, type Harness, migrationsAfter, queryRows } from './helpers/harness'
 
@@ -299,7 +300,7 @@ describe('GitHubConnectionStore', () => {
 			expiresAt: 110,
 		}, stateSecret)
 		clock = 110
-		expect(await store.getState()).toEqual({ state: 'anonymous' })
+		expect(await store.getWorkflowAttempt()).toBeNull()
 		const expired = await store.getAttempt('expired')
 		expect(expired).toMatchObject({ status: 'failed', lastErrorCode: 'callback_expired', manifestStateSecretRef: null })
 		await expect(vault.getSecret(stateSecret.ref)).rejects.toThrow()
@@ -336,7 +337,7 @@ describe('GitHubConnectionStore', () => {
 		}, secret)
 		sqlite.query(`UPDATE vault SET scope = 'app' WHERE id = ?`).run(secret.id)
 		clock = 110
-		expect(await store.getState()).toEqual({ state: 'anonymous' })
+		expect(await store.getWorkflowAttempt()).toBeNull()
 		expect(await store.getAttempt('tampered')).toMatchObject({ status: 'failed', manifestStateSecretRef: null })
 		expect(queryRows(sqlite, 'SELECT id FROM vault WHERE id = ?', secret.id)).toHaveLength(1)
 	})
@@ -361,9 +362,9 @@ describe('GitHubConnectionStore', () => {
 		const claimed = await store.claimCallback(STATE_DIGEST, 'alice')
 		expect(claimed).toMatchObject({ phase: 'exchange_claimed', expiresAt: 110 })
 		clock = 101
-		expect(await store.getState()).toMatchObject({ state: 'setup_pending', phase: 'exchange_claimed' })
+		expect(await store.getWorkflowAttempt()).toMatchObject({ status: 'active', phase: 'exchange_claimed' })
 		clock = 110
-		expect(await store.getState()).toEqual({ state: 'anonymous' })
+		expect(await store.getWorkflowAttempt()).toBeNull()
 		expect(await store.getAttempt('claimed')).toMatchObject({ status: 'failed', phase: 'exchange_claimed' })
 	})
 
@@ -397,14 +398,14 @@ describe('GitHubConnectionStore', () => {
 		)
 		if (recovered === null) throw new Error('recovery failed')
 		clock = 110
-		expect(await store.getState()).toMatchObject({ state: 'repair_required', attemptId: 'manifest-crash', phase: 'recovery_stored' })
+		expect(await store.getWorkflowAttempt()).toMatchObject({ status: 'repair_required', id: 'manifest-crash', phase: 'recovery_stored' })
 
 		const { d1: activatedDb } = createHarness(() => clock)
 		const activatedStore = new GitHubConnectionStore(activatedDb, () => clock, 10)
 		const activatedVault = await Vault.create(activatedDb, testKey(), () => clock)
 		await attemptAtSourceActivated(activatedStore, activatedVault, 'activation-crash', 120)
 		clock = 120
-		expect(await activatedStore.getState()).toMatchObject({ state: 'repair_required', attemptId: 'activation-crash', phase: 'source_activated' })
+		expect(await activatedStore.getWorkflowAttempt()).toMatchObject({ status: 'repair_required', id: 'activation-crash', phase: 'source_activated' })
 
 		let writtenClock = 100
 		const { d1: writtenDb } = createHarness(() => writtenClock)
@@ -443,7 +444,7 @@ describe('GitHubConnectionStore', () => {
 		)
 		if (written === null) throw new Error('source checkpoint failed')
 		writtenClock = 110
-		expect(await writtenStore.getState()).toMatchObject({ state: 'repair_required', attemptId: 'written-crash', phase: 'source_bundle_written' })
+		expect(await writtenStore.getWorkflowAttempt()).toMatchObject({ status: 'repair_required', id: 'written-crash', phase: 'source_bundle_written' })
 	})
 
 	test('reaps every post-activation checkpoint, including remote-call-before-checkpoint windows', async () => {
@@ -475,7 +476,7 @@ describe('GitHubConnectionStore', () => {
 				attempt = verified
 			}
 			clock = 110
-			expect(await store.getState()).toMatchObject({ state: 'repair_required', attemptId: attempt.id, phase: target })
+			expect(await store.getWorkflowAttempt()).toMatchObject({ status: 'repair_required', id: attempt.id, phase: target })
 		}
 	})
 
@@ -504,8 +505,11 @@ describe('GitHubConnectionStore', () => {
 
 	test('expires callback capabilities and permits only one active setup', async () => {
 		let clock = 100
-		const { repositories } = createHarness(() => clock)
+		const { repositories, d1, sqlite } = createHarness(() => clock)
 		const store = repositories.githubConnections
+		const vault = await Vault.create(d1, testKey(), () => clock)
+		const firstState = await vault.prepareSecret('platform', githubManifestStateSecretLabel('a'), 'first-state')
+		const nextState = await vault.prepareSecret('platform', githubManifestStateSecretLabel('b'), 'next-state')
 		const input = {
 			id: 'a',
 			stateHash: STATE_DIGEST,
@@ -517,14 +521,19 @@ describe('GitHubConnectionStore', () => {
 			requestedRepositories: [],
 			expiresAt: 200,
 		}
-		const started = await store.beginAttempt(input)
-		await expect(store.beginAttempt({ ...input, id: 'b', stateHash: OTHER_STATE_DIGEST })).rejects.toThrow('could not be started')
+		const started = await store.beginAttemptWithManifestState(input, firstState)
+		await expect(store.beginAttemptWithManifestState({ ...input, id: 'b', stateHash: OTHER_STATE_DIGEST }, nextState)).rejects.toThrow(
+			'could not be started',
+		)
+		expect(await store.getAttempt('b')).toBeNull()
+		expect(queryRows(sqlite, 'SELECT id FROM vault WHERE id = ?', nextState.id)).toEqual([])
 		clock = 200
 		expect(await store.claimCallback(STATE_DIGEST, 'alice')).toBeNull()
 		const failed = await store.markFailed(started.id, started.version, 'callback_expired')
 		expect(failed?.status).toBe('failed')
 		expect(failed?.stateHash).toBeNull()
-		await expect(store.beginAttempt({ ...input, id: 'b', stateHash: OTHER_STATE_DIGEST, expiresAt: 300 })).resolves.toMatchObject({ id: 'b' })
+		await expect(store.beginAttemptWithManifestState({ ...input, id: 'b', stateHash: OTHER_STATE_DIGEST, expiresAt: 300 }, nextState))
+			.resolves.toMatchObject({ id: 'b' })
 	})
 
 	test('uses CAS transitions and commits a platform secret with its checkpoint', async () => {
@@ -548,13 +557,17 @@ describe('GitHubConnectionStore', () => {
 		const ready = await flow.store.discardRecoveryAndCheckpoint(flow.started.id, flow.verified.version)
 		if (ready === null) throw new Error('recovery discard failed')
 		await expect(flow.vault.getSecret(flow.recovery.ref)).rejects.toThrow()
-		const installationState = await flow.store.getState()
+		const installationAttempt = await flow.store.getWorkflowAttempt()
+		if (installationAttempt === null) throw new Error('installation workflow missing')
+		const installationState = workflowDto('harbor', installationAttempt)
 		expect(installationState).toMatchObject({
-			state: 'installation_required',
-			attemptId: flow.started.id,
+			state: 'installation-required',
+			connectionId: flow.started.id,
 			installationUrl: 'https://github.com/apps/fabrika-source/installations/new',
 		})
 		expect(JSON.stringify(installationState)).not.toContain('vault:')
+		expect(JSON.stringify(installationState)).not.toContain(STATE_DIGEST)
+		expect(JSON.stringify(installationState)).not.toContain(CREDENTIAL_DIGEST)
 		const connection = await flow.store.publishConnection({
 			attemptId: flow.started.id,
 			expectedVersion: ready.version,
@@ -566,7 +579,9 @@ describe('GitHubConnectionStore', () => {
 			verifiedAt: 1_000,
 		})
 		expect(connection).toMatchObject({ appOwner: 'acme', transportKind: 'keyed-v2' })
-		const state = await flow.store.getState()
+		const published = await flow.store.getConnectionById(flow.started.id)
+		if (published === null) throw new Error('published connection missing')
+		const state = connectionDto('harbor', published)
 		expect(state.state).toBe('connected')
 		const serialized = JSON.stringify(state)
 		expect(serialized).not.toContain('vault:')
@@ -601,7 +616,9 @@ describe('GitHubConnectionStore', () => {
 		if (waiting === null) throw new Error('installation checkpoint failed')
 
 		clock = 1_000
-		expect(await store.getState()).toMatchObject({ state: 'installation_required', attemptId: adopted.id })
+		const workflow = await store.getWorkflowAttempt()
+		if (workflow === null) throw new Error('installation workflow missing')
+		expect(workflowDto('harbor', workflow)).toMatchObject({ state: 'installation-required', connectionId: adopted.id })
 		expect(await store.getAttempt(adopted.id)).toMatchObject({ status: 'active', phase: 'installation_required' })
 		// The scoped webhook is already configured at this phase, so deliveries must keep verifying while
 		// the attempt waits for the human to install the App.
@@ -609,8 +626,10 @@ describe('GitHubConnectionStore', () => {
 	})
 
 	test('rejects malformed durable state instead of guessing a phase', async () => {
-		const { repositories, sqlite } = createHarness(() => 100)
-		await repositories.githubConnections.beginAttempt({
+		const { repositories, sqlite, d1 } = createHarness(() => 100)
+		const vault = await Vault.create(d1, testKey(), () => 100)
+		const state = await vault.prepareSecret('platform', githubManifestStateSecretLabel('a'), 'opaque-state')
+		await repositories.githubConnections.beginAttemptWithManifestState({
 			id: 'a',
 			stateHash: STATE_DIGEST,
 			initiatedBy: 'alice',
@@ -620,7 +639,7 @@ describe('GitHubConnectionStore', () => {
 			desiredPublic: false,
 			requestedRepositories: [],
 			expiresAt: 200,
-		})
+		}, state)
 		sqlite.exec('PRAGMA ignore_check_constraints = ON')
 		sqlite.query(`UPDATE github_source_setup_attempts SET phase = 'made_up' WHERE id = 'a'`).run()
 		await expect(repositories.githubConnections.getAttempt('a')).rejects.toThrow('invalid GitHub setup phase')

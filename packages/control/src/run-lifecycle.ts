@@ -649,8 +649,3 @@ export async function cancelDeploy(
 		await owner.close()
 	}
 }
-
-/** Map a pushed git ref to the app environment it triggers. */
-export async function refToEnv(db: ControlRegistryRepository, appId: string, ref: string): Promise<AppEnvRow | null> {
-	return db.getAppEnvByTriggerRef(appId, ref)
-}

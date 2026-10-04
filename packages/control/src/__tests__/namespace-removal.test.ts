@@ -11,6 +11,7 @@ import type { ControlProvider, ProviderDeploymentNamespace, ProviderEnvelope } f
 import { describe, expect, test } from 'bun:test'
 import { runNamespaceJob } from '../api/namespaces'
 import type { ControlRepositories } from '../db'
+import { NamespaceOwnership } from '../namespace-ownership'
 import { FakeRepoSource } from '../repo-source'
 import type { ControlJobMessage } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'
@@ -112,12 +113,13 @@ describe('deployment namespace removal', () => {
 	test('frees the id of a failed namespace, releases its claims, and audits the removal', async () => {
 		const harness = makeHarness()
 		expect((await createNamespace(harness, 'apps-prod')).status).toBe(200)
-		await harness.db.registry.updateDeploymentNamespace({
-			id: 'apps-prod',
-			providerTargetJson: JSON.stringify(target('project-1')),
-			state: 'failed',
-			lastError: 'insufficientPermissions: zerops: project import failed (403)',
-		})
+		const owner = await NamespaceOwnership.acquire(harness.db.registry, makeFakeLock(harness.db), 'apps-prod')
+		if (owner === null) throw new Error('namespace lease unavailable')
+		try {
+			await owner.checkpoint(JSON.stringify(target('project-1')), 'failed', 'insufficientPermissions: zerops: project import failed (403)')
+		} finally {
+			await owner.close()
+		}
 		harness.sent.splice(0)
 
 		const removed = await rpcResult(rpcRequest('namespaces.remove', { namespaceId: 'apps-prod' }), harness.deps)
@@ -203,12 +205,13 @@ describe('deployment namespace removal', () => {
 	test('refuses a namespace a worker is still settling', async () => {
 		const harness = makeHarness()
 		await createNamespace(harness, 'apps-prod')
-		await harness.db.registry.updateDeploymentNamespace({
-			id: 'apps-prod',
-			providerTargetJson: JSON.stringify(target('project-1')),
-			state: 'provisioning',
-			lastError: null,
-		})
+		const owner = await NamespaceOwnership.acquire(harness.db.registry, makeFakeLock(harness.db), 'apps-prod')
+		if (owner === null) throw new Error('namespace lease unavailable')
+		try {
+			await owner.checkpoint(JSON.stringify(target('project-1')), 'provisioning')
+		} finally {
+			await owner.close()
+		}
 
 		const refused = await rpcResult(rpcRequest('namespaces.remove', { namespaceId: 'apps-prod' }), harness.deps)
 

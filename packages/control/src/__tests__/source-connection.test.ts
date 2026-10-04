@@ -325,8 +325,8 @@ describe('GitHub source connection workflow', () => {
 				})
 			},
 		})).rejects.toMatchObject({ name: 'AbortError' })
-		const state = await env.REPOSITORIES.githubConnections.getState()
-		expect(state.state).toBe('repair_required')
+		const state = await sourceConnectionStatus(deps(env, source, new Request(`${ORIGIN}/api/rpc`), caller))
+		expect(state.state).toBe('repair-required')
 		const attempt = await env.REPOSITORIES.githubConnections.getAttempt(started.connectionId)
 		expect(attempt?.stateHash).toBeNull()
 		expect(attempt?.manifestStateSecretRef).toBeNull()
@@ -404,7 +404,8 @@ describe('GitHub source connection workflow', () => {
 			{ organization: 'acme', appName: 'source\nname', visibility: 'private', repositories: [] },
 		)).rejects.toMatchObject({ httpStatus: 400 })
 		expect(source.calls).toEqual([])
-		expect(await env.REPOSITORIES.githubConnections.getState()).toEqual({ state: 'anonymous' })
+		expect(await env.REPOSITORIES.githubConnections.getWorkflowAttempt()).toBeNull()
+		expect(await env.REPOSITORIES.githubConnections.getConnection()).toBeNull()
 		expect((await queryRowsFromEnv(env, 'SELECT * FROM vault')).length).toBe(0)
 	})
 

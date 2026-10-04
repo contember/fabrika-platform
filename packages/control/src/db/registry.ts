@@ -299,21 +299,6 @@ export class ControlRegistryRepository {
 		return results[1]?.results[0] ?? null
 	}
 
-	/** Persist a provider checkpoint or a core-owned namespace lifecycle transition. */
-	async updateDeploymentNamespace(input: {
-		id: string
-		providerTargetJson: string
-		state: DeploymentNamespaceState
-		lastError: string | null
-	}): Promise<DeploymentNamespaceRow | null> {
-		return this.d1
-			.prepare(`UPDATE deployment_namespaces
-				SET provider_target_json = ?, state = ?, last_error = ?
-				WHERE id = ? RETURNING *`)
-			.bind(input.providerTargetJson, input.state, input.lastError, input.id)
-			.first<DeploymentNamespaceRow>()
-	}
-
 	/**
 	 * Queue a SETTLED namespace for another provider mutation. Guarded to the terminal states and it
 	 * never writes `provider_target_json`, so a request that arrives while a job is in flight cannot

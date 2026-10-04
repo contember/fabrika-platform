@@ -750,7 +750,9 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 			await expect(upgraded.registry.getZeropsSourceBinding('zerops-match', 'prod')).rejects.toThrow('incomplete')
 			expect(await upgraded.registry.getZeropsSourceBinding('cloudflare-only', 'prod')).toBeNull()
 			// 0018 removes only adoption attempts; repair evidence survives and still blocks a new setup.
-			await expect(upgraded.githubConnections.beginAttempt({
+			const vault = await Vault.create(upgrade, kek())
+			const manifestState = await vault.prepareSecret('platform', githubManifestStateSecretLabel('blocked-by-repair'), 'opaque-state')
+			await expect(upgraded.githubConnections.beginAttemptWithManifestState({
 				id: 'blocked-by-repair',
 				stateHash: 'a'.repeat(64),
 				initiatedBy: 'principal-1',
@@ -760,7 +762,10 @@ describe.skipIf(!hasPostgres)('GitHub source connection persistence on Postgres'
 				desiredPublic: false,
 				requestedRepositories: [],
 				expiresAt: now() + 60,
-			})).rejects.toThrow('could not be started')
+			}, manifestState)).rejects.toThrow('could not be started')
+			expect(await upgraded.githubConnections.getAttempt('blocked-by-repair')).toBeNull()
+			expect((await upgraded.githubConnections.getWorkflowAttempt())?.id).toBe('repair')
+			await expect(vault.getSecret(manifestState.ref)).rejects.toThrow('unresolvable vault ref')
 
 			const insertKeyedConnection = (connectionId: string, owner: string, installationId: number) =>
 				upgradeDatabase.prepare(`INSERT INTO github_source_connections_keyed (

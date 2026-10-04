@@ -78,39 +78,6 @@ export interface GitHubWebhookSecretBinding {
 	webhookSecretRef: string
 }
 
-/** Safe projection for authenticated state queries. It excludes capability hashes and vault refs. */
-export type GitHubConnectionState =
-	| { state: 'anonymous' }
-	| { state: 'setup_pending'; attemptId: string; phase: GitHubSetupPhase; owner: string; appName: string; updatedAt: number }
-	| {
-		state: 'installation_required'
-		attemptId: string
-		appId: string
-		appSlug: string
-		appHtmlUrl: string
-		appOwner: string
-		appName: string
-		appPublic: boolean
-		installationUrl: string
-	}
-	| { state: 'repair_required'; attemptId: string; phase: GitHubSetupPhase; errorCode: GitHubSetupErrorCode | null; updatedAt: number }
-	| {
-		state: 'connected'
-		connectionId: string
-		appId: string
-		appSlug: string
-		appHtmlUrl: string
-		appOwner: string
-		appName: string
-		appPublic: boolean
-		installationId: number
-		installationAccountLogin: string
-		installationSelection: 'all' | 'selected'
-		verifiedRepositories: string[]
-		requestedRepositories: string[]
-		verifiedAt: number
-	}
-
 export interface GitHubSetupAttemptRow {
 	id: string
 	status: string

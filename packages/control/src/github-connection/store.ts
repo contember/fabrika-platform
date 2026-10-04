@@ -21,7 +21,6 @@ import {
 import {
 	type BeginGitHubSetupInput,
 	GitHubConnectionCasError,
-	type GitHubConnectionState,
 	type GitHubSetupAttempt,
 	type GitHubSetupAttemptRow,
 	type GitHubSetupErrorCode,
@@ -48,46 +47,6 @@ export class GitHubConnectionStore {
 	) {
 		if (!Number.isSafeInteger(operationLeaseSeconds) || operationLeaseSeconds <= 0 || operationLeaseSeconds > 24 * 60 * 60) {
 			throw new Error('invalid GitHub setup operation lease')
-		}
-	}
-
-	async beginAttempt(input: BeginGitHubSetupInput): Promise<GitHubSetupAttempt> {
-		const id = input.id ?? uuidv7()
-		const now = this.now()
-		validateSha256(input.stateHash, 'state hash')
-		validateNonEmpty(input.initiatedBy, 'principal')
-		validateControlOrigin(input.expectedOrigin)
-		validateGitHubOwner(input.desiredOwner)
-		validateNonEmpty(input.desiredAppName, 'desired app name')
-		if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now) throw new Error('invalid setup expiry')
-		const repositories = canonicalRepositories(input.requestedRepositories)
-		try {
-			const row = await this.db.prepare(`INSERT INTO github_source_setup_attempts (
-				id, status, phase, version, state_hash, initiated_by, expected_origin, desired_owner,
-				desired_app_name, desired_public, requested_repositories_json, created_at, updated_at, expires_at
-			) SELECT ?, 'active', 'awaiting_manifest_callback', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-			WHERE NOT EXISTS (
-				SELECT 1 FROM github_source_connections_keyed WHERE lower(app_owner) = lower(?)
-			) RETURNING *`)
-				.bind(
-					id,
-					input.stateHash,
-					input.initiatedBy,
-					input.expectedOrigin,
-					input.desiredOwner,
-					input.desiredAppName,
-					input.desiredPublic ? 1 : 0,
-					JSON.stringify(repositories),
-					now,
-					now,
-					input.expiresAt,
-					input.desiredOwner,
-				)
-				.first<GitHubSetupAttemptRow>()
-			if (row === null) throw new Error('setup write did not return state')
-			return decodeAttempt(row)
-		} catch {
-			throw new Error('GitHub source setup could not be started')
 		}
 	}
 
@@ -281,67 +240,6 @@ export class GitHubConnectionStore {
 			return await this.markExpired(attempt, now, 'failed', 'callback_expired')
 		}
 		return await this.markExpired(attempt, now, 'repair_required', errorForExpiredPhase(attempt.phase))
-	}
-
-	async getState(): Promise<GitHubConnectionState> {
-		await this.reapExpiredAttempt()
-		const connection = await this.getConnection()
-		if (connection !== null) {
-			return {
-				state: 'connected',
-				connectionId: connection.connectionId,
-				appId: connection.appId,
-				appSlug: connection.appSlug,
-				appHtmlUrl: connection.appHtmlUrl,
-				appOwner: connection.appOwner,
-				appName: connection.appName,
-				appPublic: connection.appPublic,
-				installationId: connection.installationId,
-				installationAccountLogin: connection.installationAccountLogin,
-				installationSelection: connection.installationSelection,
-				verifiedRepositories: connection.verifiedRepositories,
-				requestedRepositories: connection.requestedRepositories,
-				verifiedAt: connection.verifiedAt,
-			}
-		}
-		const row = await this.db.prepare(
-			`SELECT * FROM github_source_setup_attempts WHERE status IN ('active','repair_required') ORDER BY updated_at DESC LIMIT 1`,
-		).first<GitHubSetupAttemptRow>()
-		if (row === null) return { state: 'anonymous' }
-		const attempt = decodeAttempt(row)
-		if (attempt.status === 'repair_required') {
-			return {
-				state: 'repair_required',
-				attemptId: attempt.id,
-				phase: attempt.phase,
-				errorCode: attempt.lastErrorCode,
-				updatedAt: attempt.updatedAt,
-			}
-		}
-		if (attempt.phase === 'installation_required') {
-			if (attempt.appId === null || attempt.appSlug === null || attempt.appHtmlUrl === null) {
-				throw new Error('invalid installation-required GitHub setup state')
-			}
-			return {
-				state: 'installation_required',
-				attemptId: attempt.id,
-				appId: attempt.appId,
-				appSlug: attempt.appSlug,
-				appHtmlUrl: attempt.appHtmlUrl,
-				appOwner: attempt.desiredOwner,
-				appName: attempt.desiredAppName,
-				appPublic: attempt.desiredPublic,
-				installationUrl: `${attempt.appHtmlUrl}/installations/new`,
-			}
-		}
-		return {
-			state: 'setup_pending',
-			attemptId: attempt.id,
-			phase: attempt.phase,
-			owner: attempt.desiredOwner,
-			appName: attempt.desiredAppName,
-			updatedAt: attempt.updatedAt,
-		}
 	}
 
 	async claimCallback(stateHash: string, principalId: string): Promise<GitHubSetupAttempt | null> {
