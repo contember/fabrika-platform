@@ -4,6 +4,7 @@ import type { RunnerStatus } from '@fabrika/runner-contract'
 import { describe, expect, test } from 'bun:test'
 import type { RunnerEnv, SpawnHandlers, SpawnResult, SpawnSpec } from '../runner'
 import { createServer } from '../server'
+import { createSpawner } from '../spawn'
 
 // Drive the job protocol through the server's request handler — no real socket. Proves POST /run,
 // GET /logs (NDJSON), GET /status, and the 409-on-double-run guard.
@@ -67,6 +68,88 @@ describe('runner server protocol', () => {
 		})
 		expect((await server.handle(post(job))).status).toBe(202)
 		expect((await server.handle(post(job))).status).toBe(409)
+	})
+
+	test('a rejected spawn closes live /logs even when the error observer throws', async () => {
+		const failure = Promise.withResolvers<SpawnResult>()
+		const server = createServer({ workspace: '/workspace', spawn: () => failure.promise })
+		await server.handle(post(job))
+		let observedTerminal = false
+		server.current()?.subscribe((line) => {
+			if (line.text === 'runner execution failed unexpectedly') {
+				observedTerminal = server.current()?.isDone() === true
+				throw new Error('observer contains super-secret-value')
+			}
+		})
+		const logs = await server.handle(new Request('http://container/logs'))
+		const text = logs.text()
+		failure.reject(new Error('spawn failed https://x-access-token:unknown-private-token@host/app tok-abcdef'))
+		await waitTerminal(server)
+		const status: RunnerStatus = await (await server.handle(new Request('http://container/status'))).json()
+		expect(status.state).toBe('failed')
+		expect(status.error).toBe('runner execution failed unexpectedly')
+		expect(typeof status.finishedAt).toBe('number')
+		expect(observedTerminal).toBe(true)
+		const finishedLogs = await text
+		expect(finishedLogs).toContain('runner execution failed unexpectedly')
+		for (const sensitive of ['super-secret-value', 'unknown-private-token', 'tok-abcdef']) {
+			expect(JSON.stringify(status) + finishedLogs).not.toContain(sensitive)
+		}
+		expect((await server.handle(post({ ...job, runId: '0198c4a2-7b31-7e44-9a55-0b1c2d3e4f51' }))).status).toBe(202)
+		await waitTerminal(server)
+	})
+
+	test('failed termination keeps /run excluded until the child exits and its pumps finish', async () => {
+		const exit = Promise.withResolvers<number>()
+		const cancellation = Promise.withResolvers<void>()
+		let failPipe: (() => void) | undefined
+		let killAttempted = false
+		let children = 0
+		const spawn = createSpawner(() => {
+			children++
+			if (children > 1) {
+				return {
+					stdout: new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }),
+					stderr: new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }),
+					exited: Promise.resolve(0),
+					kill: () => {},
+				}
+			}
+			return {
+				stdout: new ReadableStream<Uint8Array>({
+					start(controller) {
+						failPipe = () => controller.error(new Error('pipe error tok-abcdef'))
+					},
+				}),
+				stderr: new ReadableStream<Uint8Array>({ cancel: () => cancellation.promise }),
+				exited: exit.promise,
+				kill() {
+					killAttempted = true
+					throw new Error('cannot kill child super-secret-value')
+				},
+			}
+		})
+		const server = createServer({ workspace: '/workspace', spawn })
+		await server.handle(post(job))
+		const text = (await server.handle(new Request('http://container/logs'))).text()
+		if (failPipe === undefined) throw new Error('child pipe not initialized')
+		failPipe()
+		await Bun.sleep(10)
+		expect(killAttempted).toBe(true)
+		expect(server.current()?.isDone()).toBe(false)
+		expect((await server.handle(post({ ...job, runId: '0198c4a2-7b31-7e44-9a55-0b1c2d3e4f51' }))).status).toBe(409)
+		expect(children).toBe(1)
+		exit.resolve(137)
+		await Bun.sleep(10)
+		expect(server.current()?.isDone()).toBe(false)
+		expect((await server.handle(post({ ...job, runId: '0198c4a2-7b31-7e44-9a55-0b1c2d3e4f51' }))).status).toBe(409)
+		cancellation.resolve()
+		await waitTerminal(server)
+		expect(server.current()?.status().error).toBe('runner execution failed unexpectedly')
+		expect(await text).toContain('runner execution failed unexpectedly')
+		expect((await server.handle(post({ ...job, runId: '0198c4a2-7b31-7e44-9a55-0b1c2d3e4f51' }))).status).toBe(202)
+		await waitTerminal(server)
+		expect(server.current()?.status().state).toBe('succeeded')
 	})
 
 	test('GET /status reports terminal succeeded + exit 0', async () => {

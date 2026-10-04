@@ -34,6 +34,7 @@ const MAX_OUTCOME_FILE_BYTES = 1024 * 1024
 const OUTCOME_UNREADABLE = 'runner outcome file is unreadable'
 const OUTCOME_TOO_LARGE = 'runner outcome file exceeds the size limit'
 const OUTCOME_MALFORMED = 'runner outcome file is malformed'
+const UNEXPECTED_FAILURE = 'runner execution failed unexpectedly'
 
 /** A spawned command's outcome plus its (already line-split, redacted) output. */
 export interface SpawnResult {
@@ -54,7 +55,7 @@ export interface SpawnSpec {
 	env?: Record<string, string>
 }
 
-/** Spawns a child process, streaming its output through `handlers`; resolves with the exit code. */
+/** Streams child output; settles only after the child stops and both output pumps finish, including on rejection. */
 export type Spawner = (spec: SpawnSpec, handlers: SpawnHandlers) => Promise<SpawnResult>
 
 /** The collaborators a `Runner` needs — substituted by tests, defaulted to a real Bun spawn. */
@@ -219,9 +220,15 @@ export class Runner {
 			// Drop the oldest 10% in one splice (amortized O(1) per line) — those lines are already in R2.
 			this.buffer.splice(0, Math.floor(MAX_BUFFER_LINES * 0.1))
 		}
+		let observerFailed = false
 		for (const sub of this.subscribers) {
-			sub(line)
+			try {
+				sub(line)
+			} catch {
+				observerFailed = true
+			}
 		}
+		if (observerFailed) throw new Error(UNEXPECTED_FAILURE)
 	}
 
 	/**
@@ -351,6 +358,20 @@ export class Runner {
 	 * Run clone → install → provider deploy. Resolves once terminal; failures land in `status()`.
 	 */
 	async run(): Promise<RunnerStatus> {
+		try {
+			return await this.execute()
+		} catch {
+			this.finish('failed', { error: UNEXPECTED_FAILURE })
+			try {
+				this.emit('meta', UNEXPECTED_FAILURE)
+			} catch {
+				// A failed observer must not prevent terminal status or log-stream completion.
+			}
+			return this.status()
+		}
+	}
+
+	private async execute(): Promise<RunnerStatus> {
 		// Both the checkout and the outcome file are named after the runId; keep them one path segment.
 		if (!/^[A-Za-z0-9-]+$/.test(this.job.runId)) {
 			return this.refuse('runId must contain only letters, digits and dashes')
@@ -376,8 +397,8 @@ export class Runner {
 			cwd: this.env.workspace,
 		})
 		if (clone.exitCode !== 0) {
-			this.emit('meta', `Clone failed (exit ${clone.exitCode})`)
 			this.finish('failed', { error: `git clone failed (exit ${clone.exitCode})` })
+			this.emit('meta', `Clone failed (exit ${clone.exitCode})`)
 			return this.status()
 		}
 
@@ -386,8 +407,8 @@ export class Runner {
 		this.emit('meta', `Installing dependencies in ${dir}`)
 		const install = await this.step({ command: 'bun', args: ['install'], cwd: dir })
 		if (install.exitCode !== 0) {
-			this.emit('meta', `Install failed (exit ${install.exitCode})`)
 			this.finish('failed', { error: `bun install failed (exit ${install.exitCode})` })
+			this.emit('meta', `Install failed (exit ${install.exitCode})`)
 			return this.status()
 		}
 
@@ -407,16 +428,19 @@ export class Runner {
 		if (!(await this.clearOutcomeFile())) {
 			return this.refuse('could not clear the runner outcome file')
 		}
-		const deploy = await this.step({ command: 'fabrika-cloudflare-executor', args: deployArgs, cwd: dir, env: this.deployEnv() })
-		this.emit('meta', `fabrika-cloudflare-executor deploy exited with code ${deploy.exitCode}`)
+		let deploy: SpawnResult
 		let outcome: RunnerOutcomeFile | undefined
 		try {
-			if (deploy.exitCode === 0) outcome = await this.readOutcomeFile()
-		} catch (err) {
-			const message = outcomeFailure(err)
-			this.emit('meta', message)
-			this.finish('failed', { exitCode: deploy.exitCode, error: message })
-			return this.status()
+			deploy = await this.step({ command: 'fabrika-cloudflare-executor', args: deployArgs, cwd: dir, env: this.deployEnv() })
+			this.emit('meta', `fabrika-cloudflare-executor deploy exited with code ${deploy.exitCode}`)
+			try {
+				if (deploy.exitCode === 0) outcome = await this.readOutcomeFile()
+			} catch (err) {
+				const message = outcomeFailure(err)
+				this.finish('failed', { exitCode: deploy.exitCode, error: message })
+				this.emit('meta', message)
+				return this.status()
+			}
 		} finally {
 			await this.clearOutcomeFile()
 		}
@@ -430,8 +454,8 @@ export class Runner {
 
 	/** Refuse the job before (or instead of) further work; nothing has been recorded but the reason. */
 	private refuse(reason: string): RunnerStatus {
-		this.emit('meta', reason)
 		this.finish('failed', { error: reason })
+		this.emit('meta', reason)
 		return this.status()
 	}
 
@@ -465,8 +489,10 @@ export class Runner {
 			this.artifactState = 'not_applicable'
 			return
 		}
+		let uploaded = 0
 		try {
 			const collection = await this.env.collectSourceMaps(cwd)
+			uploaded = collection.artifacts.length
 			let incomplete = collection.incomplete
 			for (const artifact of collection.artifacts) {
 				const response = await this.env.fetch(destination.url, {
@@ -488,11 +514,12 @@ export class Runner {
 				await response.body?.cancel().catch(() => {})
 			}
 			this.artifactState = incomplete ? 'incomplete' : 'complete'
-			this.emit('meta', `Operations source maps: ${collection.artifacts.length} uploaded, state=${this.artifactState}`)
 		} catch {
 			this.artifactState = 'incomplete'
 			this.emit('meta', 'Operations source maps: upload incomplete')
+			return
 		}
+		this.emit('meta', `Operations source maps: ${uploaded} uploaded, state=${this.artifactState}`)
 	}
 }
 

@@ -234,6 +234,61 @@ describe('Runner pipeline', () => {
 		expect(status.exitCode).toBeUndefined()
 	})
 
+	test('a rejected clone, install or deploy becomes a credential-safe terminal failure', async () => {
+		for (const command of ['git', 'bun', 'fabrika-cloudflare-executor']) {
+			const rec: RecordedSpawn[] = []
+			const spawn = makeSpawner(rec, (spec) => {
+				if (spec.command === command) throw new Error('spawn rejected: https://x-access-token:private-token@host/app tok-abcdef')
+				return { exitCode: 0 }
+			})
+			const runner = new Runner(baseJob(), makeEnv(spawn))
+			const status = await runner.run()
+			expect(status.state).toBe('failed')
+			expect(status.error).toBe('runner execution failed unexpectedly')
+			expect(status.exitCode).toBeUndefined()
+			expect(typeof status.finishedAt).toBe('number')
+			expect(runner.isDone()).toBe(true)
+			expect(rec.at(-1)?.spec.command).toBe(command)
+			const diagnostics = JSON.stringify({ status, lines: runner.lines() })
+			expect(diagnostics).not.toContain('private-token')
+			expect(diagnostics).not.toContain('tok-abcdef')
+			expect(diagnostics).not.toContain('spawn rejected')
+		}
+	})
+
+	test('observer failures in progress, child output or residuals cannot defeat terminal failure', async () => {
+		for (const failureAt of ['progress', 'output', 'residual']) {
+			const rec: RecordedSpawn[] = []
+			const runner = new Runner(
+				baseJob(),
+				makeEnv(makeSpawner(rec, (_spec, handlers) => {
+					handlers.onStdout(failureAt === 'residual' ? 'child output' : 'child output\n')
+					return { exitCode: 0 }
+				})),
+			)
+			let terminalDiagnosticSeen = false
+			runner.subscribe((line) => {
+				if (line.text === 'runner execution failed unexpectedly') {
+					expect(runner.isDone()).toBe(true)
+					expect(runner.status().state).toBe('failed')
+					terminalDiagnosticSeen = true
+					throw new Error('diagnostic observer private-token')
+				}
+				if ((failureAt === 'progress' && line.stream === 'meta') || line.stream === 'stdout') {
+					throw new Error('observer private-token')
+				}
+			})
+			const seen: string[] = []
+			runner.subscribe((line) => seen.push(line.text))
+			const status = await runner.run()
+			expect(status.error).toBe('runner execution failed unexpectedly')
+			expect(terminalDiagnosticSeen).toBe(true)
+			expect(seen).toContain('runner execution failed unexpectedly')
+			expect(rec.map(({ spec }) => spec.command)).toEqual(failureAt === 'progress' ? [] : ['git'])
+			expect(JSON.stringify(runner.lines())).not.toContain('private-token')
+		}
+	})
+
 	test('non-zero provider deploy exit fails the run and carries the exit code', async () => {
 		const spawn = makeSpawner([], (spec) => ({ exitCode: spec.command === 'fabrika-cloudflare-executor' ? 1 : 0 }))
 		const status = await new Runner(baseJob(), makeEnv(spawn)).run()
@@ -315,6 +370,34 @@ describe('Runner pipeline', () => {
 		}).run()
 		expect(status.state).toBe('succeeded')
 		expect(status.artifactState).toBe('incomplete')
+	})
+
+	test('an artifact diagnostic observer failure is owned by run(), not mistaken for optional upload failure', async () => {
+		const runner = new Runner(
+			baseJob({
+				artifactUpload: {
+					url: 'https://operations.test/api/artifacts/source-maps/',
+					bearer: 'a'.repeat(64),
+					appId: 'app',
+					environment: 'stage',
+					serviceKey: 'default',
+					release: `fabrika/app/stage/default/${'b'.repeat(40)}`,
+					runId: 'run-1',
+				},
+			}),
+			{
+				...makeEnv(makeSpawner([], () => ({ exitCode: 0 }))),
+				collectSourceMaps: () => Promise.resolve({ artifacts: [], incomplete: false }),
+			},
+		)
+		runner.subscribe((line) => {
+			if (line.text.startsWith('Operations source maps:')) throw new Error('observer private-token')
+		})
+		const status = await runner.run()
+		expect(status.state).toBe('failed')
+		expect(status.error).toBe('runner execution failed unexpectedly')
+		expect(status.artifactState).toBe('complete')
+		expect(runner.isDone()).toBe(true)
 	})
 
 	test('real discovery requires a public logical path and never guesses from a nested basename', async () => {
@@ -435,6 +518,25 @@ describe('executor outcome file', () => {
 			expect(status.exitCode).toBe(1)
 			expect(status.iamReconcile).toBeUndefined()
 			expect(await Bun.file(join(workspace, 'run-1.outcome.json')).exists()).toBe(false)
+		})
+	})
+
+	test('the outcome file is deleted after a rejected deploy', async () => {
+		await withWorkspace(async (workspace) => {
+			const runner = new Runner(baseJob(), {
+				workspace,
+				spawn: async (spec) => {
+					if (spec.command === 'fabrika-cloudflare-executor') {
+						await writeFile(join(workspace, 'run-1.outcome.json'), '{"iamReconcile":{"app":"shop","schemaJson":"{}"}}')
+						throw new Error('pipe failed with tok-abcdef')
+					}
+					return { exitCode: 0 }
+				},
+			})
+			const status = await runner.run()
+			expect(status.error).toBe('runner execution failed unexpectedly')
+			expect(status.iamReconcile).toBeUndefined()
+			expect(await Bun.file(runner.outcomeFilePath).exists()).toBe(false)
 		})
 	})
 
