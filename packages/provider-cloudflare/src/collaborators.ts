@@ -53,13 +53,18 @@ export interface CloudflareCollaborators {
 	readonly writeOutcome: OutcomeWriter
 }
 
-const defaultLoadConfig: CloudflareConfigLoader = async (cwd, configPath) => {
-	const absolute = resolve(cwd, configPath)
-	const loaded: unknown = await import(absolute)
+export const loadCloudflareConfig = async (cwd: string, configPath: string): Promise<LoadedCloudflareConfig & { readonly absolutePath: string }> => {
+	const absolutePath = resolve(cwd, configPath)
+	const loaded: unknown = await import(absolutePath)
 	if (typeof loaded !== 'object' || loaded === null || !('default' in loaded) || !isCloudflareAppConfig(loaded.default)) {
-		throw new Error(`Cloudflare config at ${absolute} must export a valid default defineApp(...) value`)
+		throw new Error(`Cloudflare config at ${absolutePath} must export a valid default defineApp(...) value`)
 	}
-	return { config: loaded.default, cwd: resolve(absolute, '..') }
+	return { config: loaded.default, absolutePath, cwd: resolve(absolutePath, '..') }
+}
+
+const defaultLoadConfig: CloudflareConfigLoader = async (cwd, configPath) => {
+	const loaded = await loadCloudflareConfig(cwd, configPath)
+	return { config: loaded.config, cwd: loaded.cwd }
 }
 
 const childEnvironment = (spec: CommandSpec): Record<string, string | undefined> => {

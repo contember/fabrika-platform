@@ -1,9 +1,8 @@
 import { deploy } from '@fabrika/engine'
 import type { ProviderDeployResult, ProviderRunEvents, RuntimeProviderRun } from '@fabrika/provider-contract'
-import { resolve } from 'node:path'
-import { type CloudflareAppConfig, isCloudflareAppConfig } from './authoring'
+import type { CloudflareAppConfig } from './authoring'
 import { cloudflareArtifact } from './codec'
-import { defaultCloudflareCollaborators } from './collaborators'
+import { defaultCloudflareCollaborators, loadCloudflareConfig } from './collaborators'
 import { createCloudflareProvider } from './provider'
 
 const requiredEnvironmentValue = (name: string): string => {
@@ -52,14 +51,8 @@ export interface LoadedCloudflareCommandConfig {
 	readonly cwd: string
 }
 
-export const loadCloudflareCommandConfig = async (configPath: string, cwd: string): Promise<LoadedCloudflareCommandConfig> => {
-	const absolutePath = resolve(cwd, configPath)
-	const loaded: unknown = await import(absolutePath)
-	if (typeof loaded !== 'object' || loaded === null || !('default' in loaded) || !isCloudflareAppConfig(loaded.default)) {
-		throw new Error(`Cloudflare config at ${absolutePath} must export a valid default defineApp(...) value`)
-	}
-	return { config: loaded.default, absolutePath, cwd: resolve(absolutePath, '..') }
-}
+export const loadCloudflareCommandConfig = async (configPath: string, cwd: string): Promise<LoadedCloudflareCommandConfig> =>
+	loadCloudflareConfig(cwd, configPath)
 
 export interface CloudflareCommandDeployOptions {
 	readonly env: string
