@@ -4,6 +4,7 @@
 	"private": true,
 	"type": "module",
 	"exports": {
+		"./console": "./src/components/console.ts",
 		"./format": "./src/lib/format.ts",
 		"./icon": "./src/components/Icon.tsx",
 		"./route-error": "./src/components/RouteError.tsx",

@@ -1,6 +1,6 @@
+import { RpcError } from '@fabrika/app'
 import type { ReactNode } from 'react'
 import { useState } from 'react'
-import { ApiError } from '../lib/api'
 import { Modal } from './Modal'
 
 interface ConfirmDialogProps {
@@ -24,7 +24,7 @@ export function ConfirmDialog({ title, body, confirmLabel = 'Confirm', onConfirm
 			await onConfirm()
 			onClose()
 		} catch (cause) {
-			setError(cause instanceof ApiError ? cause.message : 'Action failed.')
+			setError(cause instanceof RpcError ? cause.message : 'Action failed.')
 			setBusy(false)
 		}
 	}

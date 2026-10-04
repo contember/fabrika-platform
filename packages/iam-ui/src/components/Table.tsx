@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { Icon, type IconName } from './Icon'
 
 interface TableProps {
 	head: ReactNode
@@ -30,19 +31,17 @@ export function Table({ head, children, empty, isEmpty, colSpan = 1 }: TableProp
 }
 
 interface EmptyStateProps {
+	icon?: IconName
 	title: string
 	body?: ReactNode
 	/** The one thing to do about it — a link or button, not a list of options. */
 	action?: ReactNode
 }
 
-/**
- * An empty table should say what belongs there and what to do about it. Mirrors the console's
- * `EmptyState`; the shared stylesheet owns `.empty-state`.
- */
-export function EmptyState({ title, body, action }: EmptyStateProps) {
+export function EmptyState({ icon, title, body, action }: EmptyStateProps) {
 	return (
 		<div className="empty-state">
+			{icon !== undefined && <Icon name={icon} size={22} />}
 			<div className="empty-title">{title}</div>
 			{body !== undefined && <div className="empty-body">{body}</div>}
 			{action !== undefined && <div className="empty-actions">{action}</div>}
