@@ -28,4 +28,4 @@ The release parser also requires `uploadCredential.expiresAt > observedAt`. A te
 - `packages/operations-contract/src/releases.ts` and Operations release/artifact handling
 - Runner outcome and terminal co-write boundaries
 
-Origin: [platform simplification sprint](../sprints/sprint-2026-10-04-platform-simplification.md).
+Origin: [platform simplification sprint](../archive/sprint-2026-10-04-platform-simplification.md).

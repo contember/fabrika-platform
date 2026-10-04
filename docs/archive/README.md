@@ -9,6 +9,9 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Platform simplification (2026-10-04)](sprint-2026-10-04-platform-simplification.md)
+  — full product retained; fourteen independently reviewed implementation commits, real PostgreSQL fencing/queue witnesses and integrated checks; durable missing-context release recovery remains backlog 95.
+
 - [Connect the local builder to an installed platform (2026-09-21)](sprint-2026-09-21-local-builder-platform-flow.md)
   — completed 2026-09-23: human-approved local custody, exact-source and repeat deployment, CLI/UI preview, cross-plane verification and explicit recovery limits.
 

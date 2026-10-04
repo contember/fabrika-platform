@@ -28,7 +28,7 @@ For local application development connected to an installation, see [Local build
 
 ## Active sprints
 
-[Platform simplification](sprints/sprint-2026-10-04-platform-simplification.md) preserves the full product while removing unused internal APIs, duplicate work and unowned deployment/Operations failure paths.
+[Platform simplification](archive/sprint-2026-10-04-platform-simplification.md) completed on 2026-10-04: fourteen reviewed and verified implementation commits preserve the complete product, remove unused/shared code, and repair deployment/Operations completion ownership. Missing release context requires the decisions in [backlog 95](backlog/95-close-release-recovery-without-frozen-context.md).
 
 [ADR-0047](decisions/0047-settle-pretrigger-cancellation-by-confirmed-version-deletion.md) defines deletion-based settlement for pre-trigger cancellation.
 

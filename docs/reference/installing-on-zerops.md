@@ -81,6 +81,12 @@ command. All five runtime services read `ACTIVE` in the Zerops GUI.
 partial set of services. Update an existing installation through the sidecar pipeline (step 3), never
 with a second `install`.
 
+If bootstrap stops after services or secrets were created but before full
+configuration, retrying `install` is refused. `init` and `deploy` do not complete
+that partial bootstrap. After full configuration, a pass-two deployment failure
+can be retried with `platform deploy` using the printed project/environment and
+the existing credentials; do not generate replacement secrets.
+
 ## 2. Admit the first administrator
 
 Nobody can sign in until this runs. Authentication is password only after a fresh install.
