@@ -15,6 +15,7 @@ import {
 	decodeZeropsSourceUploadRequest,
 	decodeZeropsSourceUploadRequestV2,
 	decodeZeropsSourceWebhookConfigureRequest,
+	isZeropsUploadDestination,
 	ZEROPS_SOURCE_CANCEL_PATH,
 	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2,
 	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2,
@@ -45,9 +46,6 @@ export const SOURCE_OPERATION_TIMEOUTS_MS = {
 	resolve: 4 * 60_000,
 	upload: 15 * 60_000,
 }
-const UPLOAD_HOST = 'proxy.app-prg1.zerops.io'
-const UPLOAD_PATH = '/api/rest/object-storage/upload'
-const UPLOAD_PREFIX = `https://${UPLOAD_HOST}${UPLOAD_PATH}?`
 
 export interface SourceUploadRequestInit extends RequestInit {
 	duplex: 'half'
@@ -488,25 +486,7 @@ function validateOperationTimeout(timeout: number, maximum: number): void {
 }
 
 export function validateUploadUrl(value: string): void {
-	if (!value.startsWith(UPLOAD_PREFIX)) {
-		throw new SourceFailure('upload_rejected', 'validate', false, 400)
-	}
-	let url: URL
-	try {
-		url = new URL(value)
-	} catch {
-		throw new SourceFailure('upload_rejected', 'validate', false, 400)
-	}
-	if (
-		url.protocol !== 'https:'
-		|| url.hostname !== UPLOAD_HOST
-		|| url.port !== ''
-		|| url.pathname !== UPLOAD_PATH
-		|| url.search === ''
-		|| url.username !== ''
-		|| url.password !== ''
-		|| url.hash !== ''
-	) {
+	if (!isZeropsUploadDestination(value)) {
 		throw new SourceFailure('upload_rejected', 'validate', false, 400)
 	}
 }

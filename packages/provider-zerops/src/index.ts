@@ -147,6 +147,7 @@ export {
 	decodeZeropsSourceUploadResponseV2,
 	decodeZeropsSourceWebhookConfigureRequest,
 	decodeZeropsSourceWebhookConfigureResponse,
+	isZeropsUploadDestination,
 	normalizeZeropsSourceRepository,
 	serializeZeropsSourceCredentialBundleV2,
 	sha256ZeropsSourceCredentialBundleV2,

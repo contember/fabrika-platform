@@ -159,6 +159,24 @@ export const uploadUrl = (value: unknown, label: string): string => {
 	return candidate
 }
 
+export const isZeropsUploadDestination = (value: string): boolean => {
+	if (!value.startsWith('https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?')) return false
+	let url: URL
+	try {
+		url = new URL(value)
+	} catch {
+		return false
+	}
+	return url.protocol === 'https:'
+		&& url.hostname === 'proxy.app-prg1.zerops.io'
+		&& url.pathname === '/api/rest/object-storage/upload'
+		&& url.username === ''
+		&& url.password === ''
+		&& url.port === ''
+		&& url.hash === ''
+		&& url.search !== ''
+}
+
 export function normalizeZeropsSourceRepository(repoUrl: string): ZeropsSourceRepository {
 	if (/\s/u.test(repoUrl) || /\p{Cc}/u.test(repoUrl)) {
 		throw new Error('source repository URL must be a canonical GitHub repository URL')

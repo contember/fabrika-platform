@@ -5,7 +5,7 @@ import {
 	ZeropsApiError,
 	type ZeropsAppVersionStatus,
 } from '@fabrika/provider-zerops'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { deployPlatform, deployPlatformService, type PlatformDeployCollaborators } from '../deploy'
 import { parsePlatformDeployArgs } from '../deploy-options'
 import { type InstallCollaborators, runInstall } from '../install'
@@ -346,22 +346,56 @@ describe('reserved version lifecycle', () => {
 		expect([builds, deletes]).toEqual([1, 0])
 	})
 
-	test('upload destination policy rejects credentials, redirects targets and unsigned URLs', () => {
-		for (
-			const url of [
-				'http://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=secret',
-				'https://proxy.app-prg1.zerops.io:443/api/rest/object-storage/upload?signature=secret',
-				'https://user:secret@proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=secret',
-				'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload',
-				'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=secret#fragment',
-				'https://proxy.app-prg1.zerops.io/other?signature=secret',
-			]
-		) expect(() => validatePlatformUploadUrl(url)).toThrow('destination rejected')
+	test('upload destination policy rejects before opening the archive or issuing PUT with a fixed error', async () => {
+		const file = spyOn(Bun, 'file')
+		let puts = 0
+		try {
+			for (
+				const url of [
+					'not a URL?signature=secret',
+					'http://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=secret',
+					'HTTPS://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=secret',
+					'https://PROXY.APP-PRG1.ZEROPS.IO/api/rest/object-storage/upload?signature=secret',
+					'https://proxy.app-prg1.zerops.io:443/api/rest/object-storage/upload?signature=secret',
+					'https://user:secret@proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=secret',
+					'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload',
+					'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?',
+					'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=secret#fragment',
+					'https://proxy.app-prg1.zerops.io/other?signature=secret',
+				]
+			) {
+				let failure: unknown
+				try {
+					validatePlatformUploadUrl(url)
+				} catch (error) {
+					failure = error
+				}
+				expect(failure).toBeInstanceOf(Error)
+				expect(failure).toMatchObject({ name: 'Error', message: 'Zerops archive upload destination rejected' })
+				await expect(uploadPlatformArchive(url, '/missing-archive', new AbortController().signal, async () => {
+					puts++
+					return new Response(null)
+				})).rejects.toThrow('Zerops archive upload destination rejected')
+			}
+			expect(file).not.toHaveBeenCalled()
+			expect(puts).toBe(0)
+		} finally {
+			file.mockRestore()
+		}
 	})
 
-	test('PUT carries only the archive, rejects redirects and uses a bounded signal', async () => {
+	test.each([
+		{ name: 'signed query', query: 'signature=secret' },
+		{ name: 'opaque query', query: 'x' },
+		{ name: 'ampersand query', query: '&' },
+		{ name: 'empty fragment', query: 'signature=secret#' },
+		{ name: 'query space', query: 'signature=sec ret' },
+		{ name: 'query tab', query: 'signature=sec\tret' },
+		{ name: 'long query', query: `signature=${'x'.repeat(4096)}` },
+	])('PUT preserves original $name, carries only archive, rejects redirects and uses a bounded signal', async ({ query }) => {
 		const signal = new AbortController().signal
-		const url = 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=secret'
+		const url = `https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?${query}`
+		let responseCancelled = false
 		await uploadPlatformArchive(url, '/dev/null', signal, async (destination, init) => {
 			expect(destination).toBe(url)
 			expect(init.method).toBe('PUT')
@@ -369,8 +403,15 @@ describe('reserved version lifecycle', () => {
 			expect(init.headers).toBeUndefined()
 			expect(init.signal).not.toBe(signal)
 			await new Response(init.body).arrayBuffer()
-			return new Response(null)
+			return new Response(
+				new ReadableStream({
+					cancel: () => {
+						responseCancelled = true
+					},
+				}),
+			)
 		})
+		expect(responseCancelled).toBe(true)
 	})
 
 	for (const rejectedUrl of [false, true]) {

@@ -21,7 +21,7 @@ import { describe, expect, test } from 'bun:test'
 import { SourceFailure } from '../failure'
 import { GitHubConnection, type SourceGitHubClient, type SourceGitHubConnection } from '../github-connection'
 import type { RepositoryArchive, RepositorySource } from '../repository'
-import { ZeropsSourceService } from '../service'
+import { validateUploadUrl, ZeropsSourceService } from '../service'
 import type { ArchiveSummary, SourceBytes } from '../tar'
 
 const rpcKey = 'source-rpc-key-that-is-at-least-32-characters'
@@ -729,6 +729,38 @@ describe('Zerops source RPC authentication and routing', () => {
 })
 
 describe('Zerops source upload', () => {
+	test.each([
+		'not a URL?secret',
+		'https://attacker.test/api/rest/object-storage/upload?signature=secret',
+		uploadUrl.replace('https:', 'HTTPS:'),
+		uploadUrl.replace('.io/', '.io:443/'),
+		uploadUrl.replace('https://', 'https://user:secret@'),
+		`${uploadUrl}#fragment`,
+		'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?',
+	])('native wrapper rejects %p with only its fixed failure contract', (destination) => {
+		let failure: unknown
+		try {
+			validateUploadUrl(destination)
+		} catch (error) {
+			failure = error
+		}
+		expect(failure).toBeInstanceOf(SourceFailure)
+		expect(failure).toMatchObject({
+			name: 'SourceFailure',
+			message: 'source operation failed',
+			code: 'upload_rejected',
+			stage: 'validate',
+			retryable: false,
+			status: 400,
+		})
+	})
+
+	test('native wrapper retains inputs that the RPC wire rejects', () => {
+		for (const destination of [`${uploadUrl}#`, `${uploadUrl} space`, `${uploadUrl}\tquery`, `${uploadUrl}${'x'.repeat(4096)}`]) {
+			expect(() => validateUploadUrl(destination)).not.toThrow()
+		}
+	})
+
 	test('routes v2 upload binding and lets the v1 cancel endpoint stop it', async () => {
 		const prepared = preparedArchive()
 		const archiveInputs: unknown[] = []
@@ -781,15 +813,16 @@ describe('Zerops source upload', () => {
 		expect(prepared.disposed()).toBe(true)
 	})
 	test.each([
-		'https://attacker.test/api/rest/object-storage/upload?signature=x',
-		'http://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=x',
-		'https://user@proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=x',
-		'https://proxy.app-prg1.zerops.io:443/api/rest/object-storage/upload?signature=x',
-		'https://proxy.app-prg1.zerops.io/api/rest/object-storage/other?signature=x',
-		'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload',
+		{ destination: 'https://attacker.test/api/rest/object-storage/upload?signature=x', code: 'upload_rejected' },
+		{ destination: 'http://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=x', code: 'invalid_request' },
+		{ destination: 'https://user@proxy.app-prg1.zerops.io/api/rest/object-storage/upload?signature=x', code: 'invalid_request' },
+		{ destination: 'https://proxy.app-prg1.zerops.io:443/api/rest/object-storage/upload?signature=x', code: 'upload_rejected' },
+		{ destination: 'https://PROXY.APP-PRG1.ZEROPS.IO/api/rest/object-storage/upload?signature=x', code: 'upload_rejected' },
+		{ destination: 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/other?signature=x', code: 'upload_rejected' },
+		{ destination: 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload', code: 'invalid_request' },
 	])(
-		'rejects destination %s before preparing or uploading bytes',
-		async (destination) => {
+		'rejects destination $destination before preparing or uploading bytes',
+		async ({ destination, code }) => {
 			let prepares = 0
 			let uploads = 0
 			const repositorySource: RepositorySource = {
@@ -812,49 +845,59 @@ describe('Zerops source upload', () => {
 				rpcRequest('/v1/source/upload', input),
 			)
 			expect(response.status).toBe(400)
+			const text = await response.text()
+			expect(decodeZeropsSourceErrorEnvelope(JSON.parse(text)).error).toEqual({
+				code,
+				stage: 'validate',
+				retryable: false,
+			})
+			expect(text).not.toContain(destination)
 			expect(prepares).toBe(0)
 			expect(uploads).toBe(0)
 		},
 	)
 
-	test('streams gzip(tar), refuses redirects, and cleans the staged repository', async () => {
-		const prepared = preparedArchive('verified tar payload')
-		let compressed = new Uint8Array()
-		const repositorySource: RepositorySource = {
-			resolve: async () => ({ commitSha, descriptorSha256 }),
-			archive: async () => prepared.archive,
-		}
-		const service = new ZeropsSourceService({
-			rpcKey,
-			repository: repositorySource,
-			uploadFetch: async (destination, init) => {
-				expect(destination).toBe(uploadUrl)
-				expect(init.method).toBe('PUT')
-				expect(init.redirect).toBe('error')
-				expect(init.duplex).toBe('half')
-				compressed = new Uint8Array(
-					await new Response(init.body).arrayBuffer(),
-				)
-				return new Response('ignored upstream body', { status: 200 })
-			},
-		})
-		const response = await service.fetch(
-			rpcRequest('/v1/source/upload', uploadRequest()),
-		)
+	test.each([uploadUrl, uploadUrl.replace('signature=private', 'x'), uploadUrl.replace('signature=private', '&')])(
+		'streams gzip(tar) to the original %s, refuses redirects, and cleans the staged repository',
+		async (destinationUrl) => {
+			const prepared = preparedArchive('verified tar payload')
+			let compressed = new Uint8Array()
+			const repositorySource: RepositorySource = {
+				resolve: async () => ({ commitSha, descriptorSha256 }),
+				archive: async () => prepared.archive,
+			}
+			const service = new ZeropsSourceService({
+				rpcKey,
+				repository: repositorySource,
+				uploadFetch: async (destination, init) => {
+					expect(destination).toBe(destinationUrl)
+					expect(init.method).toBe('PUT')
+					expect(init.redirect).toBe('error')
+					expect(init.duplex).toBe('half')
+					compressed = new Uint8Array(
+						await new Response(init.body).arrayBuffer(),
+					)
+					return new Response('ignored upstream body', { status: 200 })
+				},
+			})
+			const response = await service.fetch(
+				rpcRequest('/v1/source/upload', { ...uploadRequest(), uploadUrl: destinationUrl }),
+			)
 
-		expect(response.status).toBe(200)
-		expect(await response.json()).toEqual({
-			protocolVersion: 1,
-			runId: 'run-1',
-			appVersionId: 'version-1',
-			commitSha,
-			descriptorSha256,
-		})
-		expect(new TextDecoder().decode(Bun.gunzipSync(compressed))).toBe(
-			'verified tar payload',
-		)
-		expect(prepared.disposed()).toBe(true)
-	})
+			expect(response.status).toBe(200)
+			expect(await response.json()).toEqual({
+				protocolVersion: 1,
+				runId: 'run-1',
+				appVersionId: 'version-1',
+				commitSha,
+				descriptorSha256,
+			})
+			expect(new TextDecoder().decode(Bun.gunzipSync(compressed))).toBe(
+				'verified tar payload',
+			)
+			expect(prepared.disposed()).toBe(true)
+		},
+	)
 
 	test('bounds archive preparation plus PUT with one overall non-retryable post-PUT deadline', async () => {
 		const prepared = preparedArchive()

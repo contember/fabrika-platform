@@ -1,20 +1,9 @@
+import { isZeropsUploadDestination } from '@fabrika/provider-zerops'
+
 export type PlatformUploadFetch = (url: string, init: RequestInit) => Promise<Response>
 
-const UPLOAD_HOST = 'proxy.app-prg1.zerops.io'
-const UPLOAD_PATH = '/api/rest/object-storage/upload'
-
-// Keep this native destination policy aligned with source-zerops/service.ts (a private package).
 export const validatePlatformUploadUrl = (value: string): void => {
-	let url: URL
-	try {
-		url = new URL(value)
-	} catch {
-		throw new Error('Zerops archive upload destination rejected')
-	}
-	if (
-		!value.startsWith(`https://${UPLOAD_HOST}${UPLOAD_PATH}?`) || url.protocol !== 'https:' || url.hostname !== UPLOAD_HOST
-		|| url.port !== '' || url.pathname !== UPLOAD_PATH || url.search === '' || url.username !== '' || url.password !== '' || url.hash !== ''
-	) {
+	if (!isZeropsUploadDestination(value)) {
 		throw new Error('Zerops archive upload destination rejected')
 	}
 }

@@ -112,4 +112,4 @@ export {
 	type ZeropsSourceWebhookConfigureRequestV1,
 	type ZeropsSourceWebhookConfigureResponseV1,
 } from './source/types'
-export { normalizeZeropsSourceRepository } from './source/validation'
+export { isZeropsUploadDestination, normalizeZeropsSourceRepository } from './source/validation'

@@ -40,6 +40,7 @@ import {
 	decodeZeropsSourceUploadResponseV2,
 	decodeZeropsSourceWebhookConfigureRequest,
 	decodeZeropsSourceWebhookConfigureResponse,
+	isZeropsUploadDestination,
 	normalizeZeropsSourceRepository,
 	serializeZeropsSourceCredentialBundleV2,
 	sha256ZeropsSourceCredentialBundleV2,
@@ -96,6 +97,55 @@ const thrownMessage = (operation: () => void): string => {
 	}
 	throw new Error('expected operation to throw')
 }
+
+describe('native Zerops upload destination policy', () => {
+	const prefix = 'https://proxy.app-prg1.zerops.io/api/rest/object-storage/upload?'
+	const request = (uploadUrl: string) => ({
+		protocolVersion: 1,
+		runId: 'run-1',
+		appVersionId: 'version-1',
+		repository,
+		commitSha: sha40,
+		uploadUrl,
+		descriptor: { path: 'zerops.yaml', sha256: descriptorSha },
+	})
+	const cases = [
+		{ name: 'signed query', url: `${prefix}signature=secret`, native: true, wire: true },
+		{ name: 'opaque query', url: `${prefix}x`, native: true, wire: true },
+		{ name: 'ampersand query', url: `${prefix}&`, native: true, wire: true },
+		{ name: 'bare query', url: prefix, native: false, wire: false },
+		{ name: 'no query', url: prefix.slice(0, -1), native: false, wire: false },
+		{ name: 'empty fragment', url: `${prefix}signature=secret#`, native: true, wire: false },
+		{ name: 'nonempty fragment', url: `${prefix}signature=secret#fragment`, native: false, wire: false },
+		{ name: 'space in query', url: `${prefix}signature=sec ret`, native: true, wire: false },
+		{ name: 'tab in query', url: `${prefix}signature=sec\tret`, native: true, wire: false },
+		{ name: 'long query', url: `${prefix}signature=${'x'.repeat(4096)}`, native: true, wire: false },
+		{ name: 'uppercase protocol', url: prefix.replace('https:', 'HTTPS:') + 'x', native: false, wire: true },
+		{ name: 'uppercase host', url: prefix.replace('proxy.app-prg1.zerops.io', 'PROXY.APP-PRG1.ZEROPS.IO') + 'x', native: false, wire: true },
+		{ name: 'explicit HTTPS port', url: prefix.replace('.io/', '.io:443/') + 'x', native: false, wire: true },
+		{ name: 'nondefault port', url: prefix.replace('.io/', '.io:8443/') + 'x', native: false, wire: true },
+		{ name: 'HTTP', url: prefix.replace('https:', 'http:') + 'x', native: false, wire: false },
+		{ name: 'foreign host', url: prefix.replace('proxy.app-prg1.zerops.io', 'attacker.test') + 'x', native: false, wire: true },
+		{ name: 'host suffix', url: prefix.replace('.io/', '.io.attacker.test/') + 'x', native: false, wire: true },
+		{ name: 'userinfo', url: prefix.replace('https://', 'https://user:secret@') + 'x', native: false, wire: false },
+		{ name: 'empty userinfo', url: prefix.replace('https://', 'https://@') + 'x', native: false, wire: true },
+		{ name: 'other path', url: prefix.replace('/upload?', '/other?') + 'x', native: false, wire: true },
+		{ name: 'trailing slash', url: prefix.replace('/upload?', '/upload/?') + 'x', native: false, wire: true },
+		{ name: 'encoded path', url: prefix.replace('/upload?', '/%75pload?') + 'x', native: false, wire: true },
+		{ name: 'leading whitespace', url: ` ${prefix}x`, native: false, wire: false },
+		{ name: 'malformed URL', url: 'https://[invalid?secret', native: false, wire: false },
+		{ name: 'empty value', url: '', native: false, wire: false },
+	]
+
+	test.each(cases)('$name preserves distinct native and wire acceptance', ({ url, native, wire }) => {
+		expect(isZeropsUploadDestination(url)).toBe(native)
+		for (const decode of [decodeZeropsSourceUploadRequest, decodeZeropsSourceUploadRequestV2]) {
+			const input = { ...request(url), protocolVersion: decode === decodeZeropsSourceUploadRequest ? 1 : 2 }
+			if (wire) expect(decode(input).uploadUrl).toBe(url)
+			else expect(() => decode(input)).toThrow()
+		}
+	})
+})
 
 test('platform upload mode survives the shared builder only for anonymous v1 requests', () => {
 	const request = buildZeropsSourceUploadRequest({
