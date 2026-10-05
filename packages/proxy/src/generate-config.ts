@@ -14,6 +14,7 @@
  */
 
 import { parseProxyManifest } from '@fabrika/proxy-contract'
+import { z } from 'zod'
 import { buildCaddyConfig, type CaddyBuildOptions } from './caddy'
 
 interface Args {
@@ -21,6 +22,8 @@ interface Args {
 	out: string
 	options: CaddyBuildOptions
 }
+
+const sessionOwnerSchema = z.object({ issuer: z.string(), upstream: z.string() }).strict().nullable()
 
 function parseArgs(argv: string[]): Args {
 	const positional: string[] = []
@@ -42,6 +45,11 @@ function parseArgs(argv: string[]): Args {
 		positional.push(arg)
 	}
 	const options: CaddyBuildOptions = { authUpstream: flags.get('auth-upstream') ?? '127.0.0.1:9000' }
+	const ownerJson = Bun.env['FABRIKA_PROXY_SESSION_OWNER_JSON']
+	if (ownerJson !== undefined) {
+		const owner = sessionOwnerSchema.parse(JSON.parse(ownerJson))
+		if (owner !== null) options.iamSessionOwner = owner
+	}
 	const listen = flags.get('listen')
 	if (listen !== undefined) {
 		options.listen = listen.split(',')

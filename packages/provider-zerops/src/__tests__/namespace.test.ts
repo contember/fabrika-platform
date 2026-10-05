@@ -1052,6 +1052,10 @@ describe('Zerops namespace lifecycle', () => {
 		expect(state.calls.indexOf(`wait:import-${proxyId}`)).toBeLessThan(state.calls.indexOf(`put:${proxyId}:${FABRIKA_PROXY_MANIFEST_JSON}`))
 		expect(state.env.get(proxyId)?.get(FABRIKA_PROXY_MANIFEST_JSON)?.content).toBe('{"apps":[]}')
 		expect(state.env.get(proxyId)?.get(ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE)?.content).toBe('https://iam.example.test')
+		expect(state.env.get(proxyId)?.get('FABRIKA_PROXY_SESSION_OWNER_JSON')?.content).toBe('null')
+		expect(state.calls.indexOf(`put:${proxyId}:FABRIKA_PROXY_SESSION_OWNER_JSON`)).toBeLessThan(
+			state.calls.indexOf('buildAndDeployAppVersion:uploaded-version-1'),
+		)
 		expect(JSON.stringify(checkpoints)).not.toContain('proxy-key-that-must-never-be-persisted')
 	})
 
@@ -1207,7 +1211,7 @@ describe('Zerops namespace lifecycle', () => {
 		await expect(run(capabilities, adopted, [])).rejects.toThrow('contains unmanaged service')
 	})
 
-	test('reconciles namespace-owned services without replacing an existing app proxy manifest', async () => {
+	test('reconciles namespace-owned services and disables session ownership without replacing an existing app proxy manifest', async () => {
 		const state = freshState()
 		const manifest = JSON.stringify({
 			apps: [{ id: 'notes', hosts: ['notes.example.test'], upstream: 'notes:3000', gates: { rules: [{ path: '/*', kind: 'human' }] }, scheme: 'https' }],
@@ -1223,6 +1227,11 @@ describe('Zerops namespace lifecycle', () => {
 			id: 'iam-url',
 			key: ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE,
 			content: 'https://iam.example.test',
+		})
+		ensureServiceEnv(state, proxyId).set('FABRIKA_PROXY_SESSION_OWNER_JSON', {
+			id: 'session-owner',
+			key: 'FABRIKA_PROXY_SESSION_OWNER_JSON',
+			content: JSON.stringify({ issuer: 'https://iam.example.test', upstream: 'iam:3000' }),
 		})
 		const capabilities = createZeropsNamespaceCapabilities(options(state))
 		const ready = namespace({
@@ -1241,8 +1250,16 @@ describe('Zerops namespace lifecycle', () => {
 
 		expect(zeropsNamespaceTargetCodec.decode(result.target.payload).ready).toBe(true)
 		expect(state.env.get(proxyId)?.get(FABRIKA_PROXY_MANIFEST_JSON)?.content).toBe(manifest)
+		expect(state.env.get(proxyId)?.get('FABRIKA_PROXY_SESSION_OWNER_JSON')?.content).toBe('null')
+		expect(state.calls.indexOf(`put:${proxyId}:FABRIKA_PROXY_SESSION_OWNER_JSON`)).toBeLessThan(
+			state.calls.indexOf('buildAndDeployAppVersion:uploaded-version-1'),
+		)
 		expect(state.triggerCount).toBe(1)
 		expect(state.calls).toContain(`importServices:${projectId}`)
+
+		state.calls.length = 0
+		await run(capabilities, result, [], 'reconcile')
+		expect(state.calls).not.toContain(`put:${proxyId}:FABRIKA_PROXY_SESSION_OWNER_JSON`)
 	})
 
 	// The import cannot establish a `.zerops.app` subdomain — the platform accepts `enableSubdomainAccess`

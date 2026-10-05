@@ -118,6 +118,12 @@ deployed proxy carries — `CONTROL_PROXY_GATES` (`packages/control/fabrika.gate
 for the console, `OPERATIONS_PROXY_GATES` (`packages/operations/src/gates.ts`) for the
 public Operations host, imported rather than copied — and IAM is `public` because it
 authenticates itself.
+The platform Caddy generator receives IAM's trusted issuer and private upstream
+as `iamSessionOwner`. Only that exact route retains IAM's `__Host-px_session`;
+all other Fabrika cookies are removed, including handoff verifiers. Application
+upstreams retain no Fabrika cookies. Zerops builds receive the same owner through
+`FABRIKA_PROXY_SESSION_OWNER_JSON`; namespace proxies and first-pass installation
+explicitly supply `null`.
 Nothing reaches an application until a gate passes, and the application only ever
 verifies the token the proxy injected. There is no second way in: `@fabrika/auth`
 has one code path and no local mode, so no synthetic persona exists anywhere.

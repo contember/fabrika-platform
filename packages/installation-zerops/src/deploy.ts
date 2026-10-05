@@ -52,6 +52,7 @@ import { PLATFORM_CONSOLE_APP_SCHEMA } from '../zerops/generated/platform-consol
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '../zerops/generated/platform-proxy-manifest'
 import type { PlatformDeployInput } from './deploy-options'
 import { derivePlatformHosts, platformOrigin, type PlatformPlacement, ZEROPS_SUBDOMAIN_VARIABLE } from './hosts'
+import { PRIVATE_IAM_UPSTREAM } from './install-environment'
 import {
 	FABRIKA_ZEROPS_PROXY_SOURCE_JSON,
 	type PlatformSourcePreparer,
@@ -306,6 +307,7 @@ const desiredServiceEnv = (
 				// private `iam:3000` the manifest dials — `readProxyEnv` canonicalizes it to an origin.
 				['FABRIKA_IAM_ISSUER', iamOrigin],
 				[FABRIKA_PROXY_MANIFEST_JSON, manifestJson],
+				['FABRIKA_PROXY_SESSION_OWNER_JSON', JSON.stringify({ issuer: iamOrigin, upstream: PRIVATE_IAM_UPSTREAM })],
 			]),
 		],
 		[

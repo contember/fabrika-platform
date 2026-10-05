@@ -424,11 +424,11 @@ const proxy: ZeropsYamlSetupSpec = {
 		// database, a stronger supply-chain guarantee than a release tarball with a hand-copied hash — and
 		// the toolchain floats. If a future Go release breaks the build, this is the line that moved.
 		base: ['alpine/go@latest', 'alpine/bun@1.3'],
-		// The ONE variable this build reads that is not a constant, lifted out of the runtime store because
-		// a build container cannot see the runtime store any other way (see the header). Same name on both
-		// sides is safe here and is not the `FOO: ${FOO}` self-shadow trap: the `RUNTIME_` prefix makes the
-		// right-hand side a different key from the left.
-		envVariables: { [FABRIKA_PROXY_MANIFEST_JSON]: `\${RUNTIME_${FABRIKA_PROXY_MANIFEST_JSON}}` },
+		// Runtime values reach the build only through the explicit RUNTIME_ bridge.
+		envVariables: {
+			[FABRIKA_PROXY_MANIFEST_JSON]: `\${RUNTIME_${FABRIKA_PROXY_MANIFEST_JSON}}`,
+			FABRIKA_PROXY_SESSION_OWNER_JSON: '${RUNTIME_FABRIKA_PROXY_SESSION_OWNER_JSON}',
+		},
 		// CGO off makes the binary static, which is what lets it run on Alpine/musl.
 		prepareCommands: ['CGO_ENABLED=0 GOBIN=/tmp/gobin go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.10.2'],
 		buildCommands: [

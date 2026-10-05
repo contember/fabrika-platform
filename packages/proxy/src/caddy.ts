@@ -33,8 +33,8 @@
  */
 
 import type { GateRule } from '@fabrika/auth-core'
-import { API_KEY_PREFIX, AUTH_CODE_PARAM, FABRIKA_COOKIE_PREFIX } from '@fabrika/auth-core'
-import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-contract'
+import { API_KEY_PREFIX, AUTH_CODE_PARAM, FABRIKA_COOKIE_PREFIX, SESSION_COOKIE } from '@fabrika/auth-core'
+import { isProxyHost, type ProxyApp, type ProxyManifest } from '@fabrika/proxy-contract'
 import {
 	APP_QUERY_PARAM,
 	CLIENT_ADDRESS_HEADER,
@@ -163,6 +163,8 @@ export interface CaddyConfig {
 export interface CaddyBuildOptions {
 	/** Where the auth service listens, e.g. `127.0.0.1:9000`. Loopback: it must never be routable. */
 	authUpstream: string
+	/** Trusted composition coordinate; only IAM's own route may receive its login cookie. */
+	iamSessionOwner?: { issuer: string; upstream: string }
 	/** Public listener. The Zerops L7 balancer terminates TLS, so this is plain HTTP. */
 	listen?: string[]
 	/** Internal listener carrying only the health route, so no health path shadows an app path. */
@@ -194,15 +196,54 @@ export class CaddyConfigError extends Error {
 	}
 }
 
+function readIamSessionOwner(owner: CaddyBuildOptions['iamSessionOwner']) {
+	if (owner === undefined) return undefined
+	let issuer: URL
+	try {
+		issuer = new URL(owner.issuer)
+	} catch {
+		throw new CaddyConfigError('IAM session owner issuer must be an HTTP(S) origin')
+	}
+	if (
+		owner.issuer !== owner.issuer.trim()
+		|| (issuer.protocol !== 'http:' && issuer.protocol !== 'https:')
+		|| issuer.username !== '' || issuer.password !== ''
+		|| issuer.pathname !== '/' || issuer.search !== '' || issuer.hash !== ''
+		|| !isProxyHost(issuer.hostname)
+	) {
+		throw new CaddyConfigError('IAM session owner issuer must be an HTTP(S) origin with a proxy hostname')
+	}
+	const upstream = /^([^:/\s]+|\[[0-9a-fA-F:]+\]):([0-9]+)$/.exec(owner.upstream)
+	const hostname = upstream?.[1]
+	const port = Number(upstream?.[2])
+	if (hostname === undefined || (!hostname.startsWith('[') && !isProxyHost(hostname)) || !Number.isInteger(port) || port < 1 || port > 65535) {
+		throw new CaddyConfigError('IAM session owner upstream must be a host:port dial address')
+	}
+	try {
+		new URL(`http://${owner.upstream}`)
+	} catch {
+		throw new CaddyConfigError('IAM session owner upstream must be a host:port dial address')
+	}
+	return { hostname: issuer.hostname, scheme: issuer.protocol.slice(0, -1), upstream: owner.upstream }
+}
+
 export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOptions): CaddyConfig {
 	const listen = options.listen ?? [':8080']
 	const healthListen = options.healthListen ?? [':8081']
 	const healthPath = options.healthPath ?? '/healthz'
 
 	assertUniqueHosts(manifest)
+	const iamOwner = readIamSessionOwner(options.iamSessionOwner)
 
 	const trustedProxies = (options.trustedProxies ?? []).map((range) => range.trim()).filter((range) => range !== '')
-	const routes = manifest.apps.map((app) => appRoute(app, options.authUpstream))
+	const routes = manifest.apps.map((app) => {
+		const ownsIamSession = iamOwner !== undefined
+			&& app.hosts.length === 1
+			&& app.hosts[0] === iamOwner.hostname
+			&& app.scheme === iamOwner.scheme
+			&& app.upstream === iamOwner.upstream
+		return appRoute(app, options.authUpstream, ownsIamSession)
+	})
 	// Nothing falls off the end: an unmatched Host is a 404, never a pass-through to anything.
 	routes.push({ handle: [{ handler: 'static_response', status_code: 404, body: 'not found' }] })
 
@@ -277,9 +318,14 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
  *      describes the request as the EDGE saw it, and no inner hop gets a vote.
  *   2. `reverse_proxy` to the auth service — the `forward_auth` expansion.
  *   3. `reverse_proxy` to the app. Reached only when step 2 answered 2xx; it strips every
- *      `__Host-px_*` cookie on that upstream hop while preserving application cookies.
+ *      `__Host-px_*` cookie on that upstream hop, except IAM's login cookie on its owning route.
  */
-function appRoute(app: ProxyApp, authUpstream: string): CaddyRoute {
+function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean): CaddyRoute {
+	const fabrikaCookiePattern = `(?:^|;[ \\t]*)${escapeRe2(FABRIKA_COOKIE_PREFIX)}[^=;]*=[^;]*`
+	// RE2 has no lookahead: the first alternative retains the exact login cookie, including its separator.
+	const cookiePattern = ownsIamSession
+		? `((?:^|;[ \\t]*)${escapeRe2(SESSION_COOKIE)}=[^;]*)|${fabrikaCookiePattern}`
+		: fabrikaCookiePattern
 	return {
 		match: [{ host: app.hosts }],
 		terminal: true,
@@ -305,8 +351,8 @@ function appRoute(app: ProxyApp, authUpstream: string): CaddyRoute {
 								replace: {
 									Cookie: [
 										{
-											search_regexp: `(?:^|;[ \\t]*)${escapeRe2(FABRIKA_COOKIE_PREFIX)}[^=;]*=[^;]*`,
-											replace: '',
+											search_regexp: cookiePattern,
+											replace: ownsIamSession ? '$1' : '',
 										},
 										{ search_regexp: '^[; \\t]+', replace: '' },
 									],

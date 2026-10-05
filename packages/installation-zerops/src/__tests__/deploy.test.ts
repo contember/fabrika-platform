@@ -347,6 +347,10 @@ describe('what it writes', () => {
 		expect(fixture.zerops.env('operations').get('FABRIKA_OPERATIONS_PUBLIC_HOST')).toBe(OPERATIONS_HOST)
 		// The proxy compares this byte-for-byte against a token's `iss`, so it is the PUBLIC issuer.
 		expect(fixture.zerops.env('proxy').get('FABRIKA_IAM_ISSUER')).toBe(`https://${IAM_HOST}`)
+		expect(fixture.zerops.env('proxy').get('FABRIKA_PROXY_SESSION_OWNER_JSON')).toBe(
+			JSON.stringify({ issuer: `https://${IAM_HOST}`, upstream: 'iam:3000' }),
+		)
+		expect(fixture.zerops.calls.indexOf('env:proxy:FABRIKA_PROXY_SESSION_OWNER_JSON')).toBeLessThan(fixture.zerops.calls.indexOf('deploy:proxy'))
 		for (const service of ['iam', 'operations', 'control', 'proxy']) {
 			expect(fixture.zerops.env(service).get('ENVIRONMENT')).toBe('stage')
 		}

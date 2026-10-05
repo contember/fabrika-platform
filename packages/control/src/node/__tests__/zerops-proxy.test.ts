@@ -186,6 +186,7 @@ describe('Zerops proxy manifest delivery', () => {
 		// Every variable the proxy's code reads is written BEFORE the pipeline that replaces that code.
 		expect(calls).toEqual([
 			`put:proxy-shared:${FABRIKA_PROXY_MANIFEST_JSON}`,
+			'put:proxy-shared:FABRIKA_PROXY_SESSION_OWNER_JSON',
 			`put:proxy-shared:${ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE}`,
 			`put:proxy-shared:${ZEROPS_NAMESPACE_IAM_KEY_VARIABLE}`,
 			'trigger:version-1',
@@ -358,6 +359,7 @@ describe('a namespace republish addressed by id alone', () => {
 		// Everything the proxy's code reads is published, the pipeline is told to build — and no poll.
 		expect(recorded.calls).toEqual([
 			`put:proxy-shared:${FABRIKA_PROXY_MANIFEST_JSON}`,
+			'put:proxy-shared:FABRIKA_PROXY_SESSION_OWNER_JSON',
 			`put:proxy-shared:${ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE}`,
 			`put:proxy-shared:${ZEROPS_NAMESPACE_IAM_KEY_VARIABLE}`,
 			'trigger',

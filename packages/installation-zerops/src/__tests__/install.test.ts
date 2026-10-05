@@ -173,7 +173,7 @@ describe('the sequence', () => {
 })
 
 describe('pass 1', () => {
-	test('writes exactly three variables on the proxy and nothing anywhere else, before the build', async () => {
+	test('writes exactly four variables on the proxy and nothing anywhere else, before the build', async () => {
 		const fixture = harness()
 
 		await fixture.run()
@@ -183,17 +183,20 @@ describe('pass 1', () => {
 			'env:proxy:FABRIKA_PROXY_MANIFEST_JSON',
 			'env:proxy:FABRIKA_IAM_ISSUER',
 			'env:proxy:FABRIKA_IAM_KEY',
+			'env:proxy:FABRIKA_PROXY_SESSION_OWNER_JSON',
 		])
 	})
 
 	test('the manifest it builds with is the legal EMPTY one, and the deploy replaces it', async () => {
 		const fixture = harness()
 		const seen: string[] = []
+		const owners: Array<string | undefined> = []
 		const api = fixture.zerops.api
 		const traced = {
 			...api,
 			buildAndDeployAppVersion: async (call: Parameters<typeof api.buildAndDeployAppVersion>[0]) => {
 				seen.push(fixture.zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON) ?? '')
+				if (call.zeropsYamlSetup === 'proxy') owners.push(fixture.zerops.env('proxy').get('FABRIKA_PROXY_SESSION_OWNER_JSON'))
 				return api.buildAndDeployAppVersion(call)
 			},
 		}
@@ -208,6 +211,7 @@ describe('pass 1', () => {
 		})
 
 		expect(seen[0]).toBe('{"apps":[]}')
+		expect(owners).toEqual(['null', JSON.stringify({ issuer: `https://${IAM_HOST}`, upstream: 'iam:3000' })])
 		const final = parseProxyManifestJson(fixture.zerops.env('proxy').get(FABRIKA_PROXY_MANIFEST_JSON) ?? '')
 		expect(final?.apps.map((app) => app.id)).toEqual(['iam', 'vozka', 'operations'])
 	})
@@ -429,6 +433,9 @@ describe('what reaches which service', () => {
 		expect(matrix.get('source')?.has('GITHUB_APP_PRIVATE_KEY')).toBe(false)
 		expect(matrix.get('source')?.has('GITHUB_WEBHOOK_SECRET')).toBe(false)
 		expect(matrix.get('control')?.get('FABRIKA_ZEROPS_PROJECT_ID')).toBe(PROJECT.projectId)
+		expect(matrix.get('proxy')?.get('FABRIKA_PROXY_SESSION_OWNER_JSON')).toBe(
+			JSON.stringify({ issuer: `https://${IAM_HOST}`, upstream: 'iam:3000' }),
+		)
 		expect(matrix.get('control')?.has('GITHUB_WEBHOOK_SECRET')).toBe(false)
 		expect(matrix.get('control')?.has('GITHUB_APP_PRIVATE_KEY')).toBe(false)
 	})
@@ -593,18 +600,18 @@ describe('a project that already has the services', () => {
 
 describe('every outward step is confirmed', () => {
 	test('declining before pass-one writes still permits a fresh bring-up', async () => {
-		const confirms = { [`Write 3 variables on \`proxy\` and build commit ${'a'.repeat(40)}? (about 4 minutes)`]: false }
+		const confirms = { [`Write 4 variables on \`proxy\` and build commit ${'a'.repeat(40)}? (about 4 minutes)`]: false }
 		const fixture = harness({ confirms })
 		await expect(fixture.run()).rejects.toThrow('no variable was written, and re-running the install is safe')
 		expect(fixture.zerops.calls.filter((call) => call.startsWith('env:'))).toEqual([])
-		confirms[`Write 3 variables on \`proxy\` and build commit ${'a'.repeat(40)}? (about 4 minutes)`] = true
+		confirms[`Write 4 variables on \`proxy\` and build commit ${'a'.repeat(40)}? (about 4 minutes)`] = true
 		await fixture.run()
 		expect(fixture.zerops.imports).toHaveLength(1)
 		expect(fixture.zerops.calls).toContain('deploy:control')
 	})
 
 	test('declining after pass one reports unsupported partial bootstrap and refuses to reroll on retry', async () => {
-		const fixture = harness({ confirms: { 'Write 44 variables across 5 services?': false } })
+		const fixture = harness({ confirms: { 'Write 45 variables across 5 services?': false } })
 		await expect(fixture.run()).rejects.toThrow('Neither `platform deploy` nor `platform init` completes a partial bootstrap')
 		const key = fixture.zerops.env('proxy').get('FABRIKA_IAM_KEY')
 		expect(key).toBeDefined()
@@ -612,6 +619,7 @@ describe('every outward step is confirmed', () => {
 			'env:proxy:FABRIKA_PROXY_MANIFEST_JSON',
 			'env:proxy:FABRIKA_IAM_ISSUER',
 			'env:proxy:FABRIKA_IAM_KEY',
+			'env:proxy:FABRIKA_PROXY_SESSION_OWNER_JSON',
 		])
 		fixture.zerops.calls.length = 0
 		await expect(fixture.run()).rejects.toThrow('Neither deploy nor init completes a partial bootstrap')
@@ -627,6 +635,7 @@ describe('every outward step is confirmed', () => {
 			'env:proxy:FABRIKA_PROXY_MANIFEST_JSON',
 			'env:proxy:FABRIKA_IAM_ISSUER',
 			'env:proxy:FABRIKA_IAM_KEY',
+			'env:proxy:FABRIKA_PROXY_SESSION_OWNER_JSON',
 			'env:iam:FABRIKA_IAM_DATABASE_URL',
 			'env:iam:ENVIRONMENT',
 			'env:iam:ISSUER',

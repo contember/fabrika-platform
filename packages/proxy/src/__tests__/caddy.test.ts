@@ -10,11 +10,12 @@
  */
 
 import type { AppGates } from '@fabrika/auth-core'
-import type { ProxyManifest } from '@fabrika/proxy-contract'
+import type { ProxyApp, ProxyManifest } from '@fabrika/proxy-contract'
 import { CLIENT_ADDRESS_HEADER, PROXY_TOKEN_HEADER, REQUEST_ID_HEADER, UNTRUSTED_FORWARD_HEADERS } from '@fabrika/proxy-core'
 import { describe, expect, test } from 'bun:test'
 import {
 	buildCaddyConfig,
+	type CaddyBuildOptions,
 	CaddyConfigError,
 	type CaddyReverseProxyHandler,
 	type CaddyRoute,
@@ -198,6 +199,94 @@ describe('the per-app chain is fail-closed by construction', () => {
 	test('the app id is pinned in the auth URI, never inferred from a client header', () => {
 		expect(proxyHandler(subrouteOf(routes[0] as CaddyRoute).routes[1]).rewrite?.uri).toBe('/verify?app=app-one')
 		expect(proxyHandler(subrouteOf(routes[1] as CaddyRoute).routes[1]).rewrite?.uri).toBe('/verify?app=app-two')
+	})
+})
+
+describe('IAM login cookie ownership', () => {
+	const owner = { issuer: 'https://iam.example.com', upstream: 'iam:3000' }
+	const iam: ProxyApp = {
+		id: 'identity-service',
+		hosts: ['iam.example.com'],
+		upstream: 'iam:3000',
+		scheme: 'https',
+		gates: { rules: [{ path: '/*', kind: 'public' }] },
+	}
+
+	function upstreamCookie(app: ProxyApp, cookie: string, iamSessionOwner?: CaddyBuildOptions['iamSessionOwner']): string {
+		const config = buildCaddyConfig({ apps: [app] }, { ...OPTIONS, ...(iamSessionOwner === undefined ? {} : { iamSessionOwner }) })
+		const route = config.apps.http.servers['proxy']?.routes[0]
+		if (route === undefined) throw new Error('expected an app route')
+		const upstream = proxyHandler(subrouteOf(route).routes[2])
+		for (const replacement of upstream.headers?.request?.replace?.['Cookie'] ?? []) {
+			cookie = cookie.replace(new RegExp(replacement.search_regexp, 'g'), replacement.replace)
+		}
+		return cookie
+	}
+
+	test.each([
+		'__Host-px_session=login; app-cookie=kept; __Host-px_handoff_state=verifier',
+		'__Host-px_handoff_state=verifier; __Host-px_session=login; app-cookie=kept',
+		'__Host-px_unknown=secret; __Host-px_session=login; __Host-px_session_extra=secret; app-cookie=kept',
+		'__Host-px_session_extra=secret; __Host-px_session=login; app-cookie=kept; __Host-px_=secret',
+	])('only the exact login cookie and application cookies reach the owner: %s', (cookie) => {
+		expect(upstreamCookie(iam, cookie, owner)).toBe('__Host-px_session=login; app-cookie=kept')
+	})
+
+	test('retains separators when the login cookie follows an application cookie', () => {
+		expect(upstreamCookie(iam, 'app-cookie=kept;\t__Host-px_session=login; __Host-px_handoff_state=verifier; theme=dark', owner))
+			.toBe('app-cookie=kept;\t__Host-px_session=login; theme=dark')
+	})
+
+	test('strips every Fabrika cookie when no owner was configured', () => {
+		expect(upstreamCookie(iam, '__Host-px_session=login; app-cookie=kept; __Host-px_handoff_state=verifier')).toBe('app-cookie=kept')
+	})
+
+	const nonOwners: { name: string; app: ProxyApp }[] = [
+		{ name: 'a public app named iam at another host', app: { ...iam, id: 'iam', hosts: ['other.example.com'] } },
+		{ name: 'the IAM host routed to another private upstream', app: { ...iam, id: 'iam', upstream: 'other:3000' } },
+		{ name: 'the IAM host with an additional alias', app: { ...iam, hosts: ['iam.example.com', 'alias.example.com'] } },
+		{ name: 'the IAM host under the wrong scheme', app: { ...iam, scheme: 'http' } },
+	]
+	for (const { name, app } of nonOwners) {
+		test(`does not preserve a login cookie for ${name}`, () => {
+			expect(upstreamCookie(app, '__Host-px_session=login; app-cookie=kept; __Host-px_handoff_state=verifier', owner)).toBe('app-cookie=kept')
+		})
+	}
+
+	test('accepts the local HTTP issuer with a non-default port', () => {
+		const localOwner = { issuer: 'http://iam.fabrika.localhost:18080/', upstream: 'iam:18080' }
+		expect(upstreamCookie({ ...iam, hosts: ['iam.fabrika.localhost'], scheme: 'http', upstream: 'iam:18080' }, '__Host-px_session=login', localOwner))
+			.toBe('__Host-px_session=login')
+	})
+
+	test.each([
+		'',
+		'iam.example.com',
+		'ftp://iam.example.com',
+		'https://user:password@iam.example.com',
+		'https://iam.example.com/auth',
+		'https://iam.example.com?query=value',
+		'https://iam.example.com#fragment',
+		' https://iam.example.com',
+		'https://*.example.com',
+	])('rejects an invalid owner issuer: %s', (issuer) => {
+		expect(() => buildCaddyConfig({ apps: [iam] }, { ...OPTIONS, iamSessionOwner: { ...owner, issuer } })).toThrow(CaddyConfigError)
+	})
+
+	test.each([
+		'',
+		'iam',
+		'iam:0',
+		'iam:65536',
+		'iam:NaN',
+		'iam:3000/path',
+		'user@iam:3000',
+		' iam:3000',
+		'iam:3000 ',
+		'https://iam:3000',
+		'[::::]:3000',
+	])('rejects an invalid owner upstream: %s', (upstream) => {
+		expect(() => buildCaddyConfig({ apps: [iam] }, { ...OPTIONS, iamSessionOwner: { ...owner, upstream } })).toThrow(CaddyConfigError)
 	})
 })
 

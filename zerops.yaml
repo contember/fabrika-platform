@@ -143,6 +143,7 @@ zerops:
         - alpine/bun@1.3
       envVariables:
         FABRIKA_PROXY_MANIFEST_JSON: "${RUNTIME_FABRIKA_PROXY_MANIFEST_JSON}"
+        FABRIKA_PROXY_SESSION_OWNER_JSON: "${RUNTIME_FABRIKA_PROXY_SESSION_OWNER_JSON}"
       prepareCommands:
         - "CGO_ENABLED=0 GOBIN=/tmp/gobin go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.10.2"
       buildCommands:

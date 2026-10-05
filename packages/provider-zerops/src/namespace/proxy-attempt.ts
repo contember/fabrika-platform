@@ -40,8 +40,13 @@ const digest = async (text: string): Promise<string> =>
 		'',
 	)
 
+const SESSION_OWNER_VARIABLE = 'FABRIKA_PROXY_SESSION_OWNER_JSON'
+
 export const ensureNamespaceProxyIam = async (input: NamespaceProxyIamInput): Promise<void> => {
 	const variables = await input.api.listServiceEnv({ serviceId: input.proxyServiceId, signal: input.signal })
+	if (variables.find(variable => variable.key === SESSION_OWNER_VARIABLE)?.content !== 'null') {
+		await input.api.putServiceEnv({ serviceId: input.proxyServiceId, key: SESSION_OWNER_VARIABLE, value: 'null', signal: input.signal })
+	}
 	const issuer = variables.find(variable => variable.key === ZEROPS_NAMESPACE_IAM_ISSUER_VARIABLE)
 	if (issuer?.content !== input.iamUrl) {
 		await input.api.putServiceEnv({

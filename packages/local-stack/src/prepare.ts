@@ -253,6 +253,7 @@ const generateProxyConfigs = async (): Promise<void> => {
 		writeJson(
 			'platform-caddy.json',
 			buildCaddyConfig(platformManifest, {
+				iamSessionOwner: { issuer: IAM_ISSUER, upstream: 'iam:18080' },
 				authUpstream: '127.0.0.1:9000',
 				listen: [':18080'],
 				healthListen: [':19080'],
