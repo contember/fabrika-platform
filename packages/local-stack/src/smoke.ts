@@ -70,6 +70,8 @@ if (NOTES_SOURCE_CONNECTION === undefined) throw new Error('the local source con
 const EXTERNAL_ACTIVATION_WAIT_MS = 11_000
 const POLL_INTERVAL_MS = 200
 const POLL_TIMEOUT_MS = 30_000
+// Six sequential user-data syncs follow proxy synchronization and import; build submission can retry sync conflicts.
+export const DURABLE_BUILD_WAIT_MS = 120_000
 
 const parseJson = (text: string, description: string): unknown => {
 	try {
@@ -185,14 +187,21 @@ const postgresOutput = (database: 'control' | 'operations', sql: string): Promis
 		sql,
 	])
 
-const poll = async <T>(description: string, read: () => Promise<T>, done: (value: T) => boolean): Promise<T> => {
-	const deadline = Date.now() + POLL_TIMEOUT_MS
-	while (Date.now() < deadline) {
+export const poll = async <T>(
+	description: string,
+	read: () => Promise<T>,
+	done: (value: T) => boolean,
+	options: { timeoutMs?: number; now?: () => number; sleep?: (ms: number) => Promise<unknown> } = {},
+): Promise<T> => {
+	const now = options.now ?? Date.now
+	const sleep = options.sleep ?? Bun.sleep
+	const deadline = now() + (options.timeoutMs ?? POLL_TIMEOUT_MS)
+	while (now() < deadline) {
 		const value = await read()
 		if (done(value)) {
 			return value
 		}
-		await Bun.sleep(POLL_INTERVAL_MS)
+		await sleep(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - now())))
 	}
 	throw new Error(`timed out waiting for ${description}`)
 }
@@ -420,6 +429,7 @@ const proveRestartReconciliation = async (
 			return checkpoint
 		},
 		(value) => value?.phase === 'build_triggered',
+		{ timeoutMs: DURABLE_BUILD_WAIT_MS },
 	)
 	if (
 		checkpoint?.phase !== 'build_triggered' || checkpoint.processId === undefined
