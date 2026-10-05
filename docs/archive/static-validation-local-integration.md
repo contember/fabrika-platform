@@ -1,5 +1,14 @@
 # Static validation — local immutable-source integration
 
+## OUTCOME — completed 2026-10-05
+
+All four units, platform wiring and approved browser corrections are complete.
+The final Docker smoke reached its terminal success after the natural lease wait;
+all ten extended browser walkthroughs passed. Full integrated checks and focused
+reviews passed; see the parent sprint for counts and commit mapping. Original
+stack restored with all 14 services running and all 12 configured health checks
+healthy. No production validation was relaxed or live platform operation performed.
+
 Parent: [static validation sprint](sprint-2026-10-05-static-validation.md).
 
 ## Goal and approved boundary

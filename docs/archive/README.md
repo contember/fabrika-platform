@@ -9,6 +9,9 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Static validation and parser simplification (2026-10-05)](sprint-2026-10-05-static-validation.md)
+  — owner-local schemas, static installation validation and drift detection; 5,056 passing tests, ten browser walkthroughs and same-version recovery after natural lease expiry. Includes retained-boundary, territory and local-integration ledgers.
+
 - [Source identity and provider cleanup (2026-10-05)](sprint-2026-10-05-source-identity-and-provider-cleanup.md)
   — exact Cloudflare commit/checkout/release/map identity, protocol admission and bounded provider cleanup; 4,615 tests passed with PostgreSQL/S3; C2 and live operator acceptance deferred.
 

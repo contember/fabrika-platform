@@ -28,7 +28,7 @@ For local application development connected to an installation, see [Local build
 
 ## Active sprints
 
-[Static validation and parser simplification](sprints/sprint-2026-10-05-static-validation.md) implements owner-local Zod schemas, static Zerops installation validation, disjoint parallel work units and three focused migration reviews. Execution and incremental commits are approved.
+[Static validation and parser simplification](archive/sprint-2026-10-05-static-validation.md) is complete: owner-local schemas, static Zerops installation validation, 5,056 passing tests, ten browser walkthroughs and natural-lease Docker recovery. Public Zerops type-generator replacement remains deferred.
 
 [Source identity and provider cleanup](archive/sprint-2026-10-05-source-identity-and-provider-cleanup.md) completed on 2026-10-05: verified Cloudflare commit/checkout/release/map identity and bounded provider cleanup; 4,615 tests passed with PostgreSQL/S3. C2 normalization reuse and operator-owned live acceptance remain deferred.
 

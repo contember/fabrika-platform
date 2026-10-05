@@ -19,6 +19,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- [Static validation and parser simplification](sprint-2026-10-05-static-validation.md) — approved migration with disjoint work units, incremental commits and three focused review batches.
-
 - [Zerops production readiness](sprint-2026-09-23-zerops-production-readiness.md) — approved release-readiness sprint for a small internal fleet; platform probes and contract design in progress.

@@ -1,5 +1,47 @@
 # Sprint — static validation and parser simplification (2026-10-05)
 
+## OUTCOME — completed 2026-10-05
+
+All selected WU00–WU20 work is integrated and committed. WU09 remains deliberately
+deferred: the public Zerops authoring types and generator need a separate public-API
+decision. The installation interpreter is removed; supported static schemas and
+read-only upstream drift detection replace it. All 205 inventory candidates are
+accounted for (123 changed/deleted, 82 intentional retained boundaries).
+
+Verification at integrated source `438820d`: **5,056 tests passed**, no failures;
+39 skips comprise 37 opt-in live Zerops cases and two SQLite-only CAS cases.
+PostgreSQL and S3 were enabled. Full typecheck, lint, format, release validation
+for 28 public packages, and the 11-artifact generation check passed. Runner Docker
+build and dry-run smoke passed. **All ten extended browser walkthroughs passed.**
+
+The final Docker smoke completed run `01a10d3b-fdf1-70ff-abcf-b52bf7a26e2d`:
+durable immutable build submission → hard-kill Control → natural 30-minute lease
+expiry → same-version recovery, followed by managed-environment, Operations,
+IAM/Notes and network-isolation assertions. No lease mutation or timing override.
+The original stack was restored: 14 running services, all 12 configured health
+checks healthy; data retained. The separately approved generator repair remains
+uncommitted in its already-dirty worktree, isolated in the recorded patch.
+
+R1/R2/R3 and the approved integration follow-up reviews are closed with no
+unresolved findings. Review found and verified fixes for Canvas partial recovery,
+release metadata own-key preservation, and emulator deletion races. Production
+review, live Zerops writes, push, deployment and publication were not performed.
+
+### Commit map
+
+| Work                                                                              | Commits                                                                                           |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Shared contracts, source wire, IAM, Operations, SDK/JWKS                          | `89d3f7c`, `2f3751d`, `1e67d74`, `32b7c2c`, `a22dc0c`                                             |
+| Zerops provider/install, Control, Cloudflare/runners, GitHub, other installations | `342d6b6`, `db9541b`, `fafb3c2`, `090b30a`, `0bdeb39`, `cad9752`                                  |
+| Canvas/Builder, consoles, CLI/examples, runtime/email, local stack, tooling       | `0dec6ad`, `a2769b4`, `a07e461`, `90bfe60`, `a22024a`, `c3591f6`, `5b694a7`, `52b7f4d`, `097feab` |
+| Local source fixtures, transport, wiring and emulator                             | `a754706`, `518cb3d`, `1e7cd62`, `5a4c901`, `7f60c82`, `ba4f836`, `a188d05`                       |
+| Recovery smoke and execution corrections                                          | `da5f26c`, `fbc7750`, `59fbe6a`, `438820d`                                                        |
+| Trusted IAM cookie owner and browser transport correction                         | `5caa7cf`, `197db1f`                                                                              |
+
+The supporting ledgers below preserve the approved ownership, retained boundaries,
+and additional local-integration decisions. Concurrent test-cleanup commits are
+explicitly excluded from this migration's attribution in the run log.
+
 **Goal.** Replace application-owned structural parsers with static schemas, remove duplicate validation, and replace the installation's Zerops JSON Schema interpreter with explicit schemas and an upstream drift check.
 
 **Theme.** One readable definition per owned contract; parse once at each untrusted boundary and preserve existing behavior. Execution approved on 2026-10-05, including incremental commits and the proposed exceptions. The later platform-wide production review is separate.
