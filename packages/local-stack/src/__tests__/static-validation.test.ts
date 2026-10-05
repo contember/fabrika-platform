@@ -73,6 +73,36 @@ describe('legacy emulator snapshots', () => {
 			]
 		) expect(() => parseSnapshot({ ...emptySnapshot(), ...patch })).toThrow()
 	})
+
+	test('round-trips upload tombstones and expanded version states without weakening legacy decoding', () => {
+		const statuses: EmulatorSnapshot['appVersions'][number]['status'][] = ['UPLOADING', 'BUILDING', 'ACTIVE', 'BACKUP', 'BUILD_FAILED', 'CANCELLED']
+		const snapshot: EmulatorSnapshot = {
+			...emptySnapshot(),
+			serviceEnv: [{ id: 'e', serviceStackId: 's', key: 'VALUE', content: 'x', type: 'USER', sensitive: false }],
+			appVersions: statuses.map((status, index) => ({
+				id: `v${index}`,
+				projectId: 'p',
+				serviceStackId: 's',
+				status,
+				sequence: index + 1,
+				hasHttpPorts: false,
+			})),
+			uploadGrants: [{
+				appVersionId: 'gone',
+				capabilitySha256: 'a'.repeat(64),
+				deleted: true,
+				receipt: { compressedBytes: 10, compressedSha256: 'b'.repeat(64) },
+			}],
+		}
+		expect(parseSnapshot(JSON.parse(JSON.stringify(snapshot)))).toEqual(snapshot)
+		for (
+			const grant of [
+				{ appVersionId: 'v', capabilitySha256: 'invalid', deleted: false },
+				{ appVersionId: 'v', capabilitySha256: 'a'.repeat(64), deleted: false, capability: 'secret' },
+				{ appVersionId: 'v', capabilitySha256: 'a'.repeat(64), deleted: false, receipt: { compressedBytes: 0, compressedSha256: 'b'.repeat(64) } },
+			]
+		) expect(() => parseSnapshot({ ...emptySnapshot(), uploadGrants: [grant] })).toThrow()
+	})
 })
 
 describe('emulator request boundaries', () => {

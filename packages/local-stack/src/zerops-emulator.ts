@@ -1,3 +1,13 @@
+import { randomBytes } from 'node:crypto'
+import { rename } from 'node:fs/promises'
+import {
+	LOCAL_SOURCE_EMULATOR_ORIGIN,
+	LOCAL_SOURCE_UPLOAD_PATH,
+	LOCAL_SOURCE_UPLOAD_URL,
+	type LocalSourceUploadCapability,
+	localSourceUploadSearch,
+	parseLocalSourceUploadSearch,
+} from './local-source-contract'
 import {
 	type AppVersionRecord,
 	emptySnapshot,
@@ -23,7 +33,16 @@ import {
 	sensitiveIsRequired,
 	serviceStackNotFound,
 } from './zerops-emulator/protocol'
-import { integrationTokenRequestSchema, parseImportRequest, triggerRequestSchema, userDataRequestSchema } from './zerops-emulator/requests'
+import {
+	buildRequestSchema,
+	descriptorHasHttpPorts,
+	integrationTokenRequestSchema,
+	parseImportRequest,
+	reservationRequestSchema,
+	triggerRequestSchema,
+	userDataRequestSchema,
+} from './zerops-emulator/requests'
+import { capabilityDigest, matchesCapability, readUploadReceipt } from './zerops-emulator/upload'
 
 export interface ZeropsEmulatorOptions {
 	token: string
@@ -33,6 +52,8 @@ export interface ZeropsEmulatorOptions {
 }
 
 class ZeropsEmulator {
+	private readonly uploading = new Set<string>()
+	private persistence: Promise<void> = Promise.resolve()
 	private constructor(
 		private readonly options: ZeropsEmulatorOptions,
 		private state: EmulatorSnapshot,
@@ -50,6 +71,9 @@ class ZeropsEmulator {
 
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url)
+		if (url.pathname === LOCAL_SOURCE_UPLOAD_PATH) {
+			return this.upload(request, url)
+		}
 		const path = url.pathname.replace(/^\/api\/rest\/public/, '')
 		if (path === '/healthz' && request.method === 'GET') {
 			return json({ ok: true })
@@ -77,6 +101,39 @@ class ZeropsEmulator {
 	}
 
 	private async route(request: Request, path: string, url: URL): Promise<Response> {
+		const reservation = path.match(/^\/service-stack\/([^/]+)\/app-version$/)
+		if (reservation !== null && request.method === 'POST') {
+			const service = this.service(decodeURIComponent(reservation[1] ?? ''))
+			if (service === undefined) return serviceStackNotFound()
+			reservationRequestSchema.parse(await parseJsonBody(request))
+			const version = this.createVersion(service, 'UPLOADING', false)
+			const capability = randomBytes(32).toString('hex')
+			this.state.uploadGrants.push({ appVersionId: version.id, capabilitySha256: capabilityDigest(capability), deleted: false })
+			await this.persist()
+			return json({ ...version, uploadUrl: LOCAL_SOURCE_UPLOAD_URL + localSourceUploadSearch({ appVersionId: version.id, capability }) })
+		}
+
+		const build = path.match(/^\/app-version\/([^/]+)\/build-and-deploy$/)
+		if (build !== null && request.method === 'PUT') {
+			const version = this.version(decodeURIComponent(build[1] ?? ''))
+			if (version === undefined) return this.versionNotFound()
+			const body = buildRequestSchema.parse(await parseJsonBody(request))
+			const hasHttpPorts = descriptorHasHttpPorts(body.zeropsYaml, body.zeropsYamlSetup)
+			const grant = this.state.uploadGrants.find((entry) => entry.appVersionId === version.id)
+			delete version.activateAt
+			if (grant?.receipt === undefined || grant.deleted) {
+				// Synthetic terminal outcome: live accepts submission without an uploaded archive too.
+				version.status = 'BUILD_FAILED'
+				version.syntheticFailure = 'LOCAL_MISSING_UPLOAD'
+			} else {
+				delete version.syntheticFailure
+				version.hasHttpPorts = hasHttpPorts
+				this.startVersion(version)
+			}
+			const process = this.createProcess('stack.build', { serviceStackId: version.serviceStackId, appVersionId: version.id })
+			await this.persist()
+			return json(this.processResponse(process))
+		}
 		const projectImport = path.match(/^\/client\/([^/]+)\/project\/import$/)
 		if (projectImport !== null && request.method === 'POST') {
 			const clientId = decodeURIComponent(projectImport[1] ?? '')
@@ -118,19 +175,9 @@ class ZeropsEmulator {
 			if (!triggerBody.success) {
 				return serviceStackNotFound()
 			}
-			const activationDelayMs = this.options.activationDelayMs ?? 0
-			const version: AppVersionRecord = {
-				id: id('version', this.state.nextVersion++),
-				serviceStackId: service.id,
-				projectId: service.projectId,
-				status: activationDelayMs === 0 ? 'ACTIVE' : 'BUILDING',
-				sequence: this.state.appVersions.filter((item) => item.serviceStackId === service.id).length + 1,
-				...(activationDelayMs === 0 ? {} : { activateAt: this.now() + activationDelayMs }),
-			}
-			this.state.appVersions.push(version)
-			if (version.status === 'ACTIVE') {
-				service.activeAppVersionId = version.id
-			}
+			// Legacy Git triggers model an HTTP deployment without fetching or executing the repository.
+			const version = this.createVersion(service, 'BUILDING', true)
+			this.startVersion(version)
 			// `stack.deploy` is the platform's own name for this one (docs/reference/zerops-platform.md).
 			const started = this.createProcess('stack.deploy', { serviceStackId: service.id, appVersionId: version.id })
 			await this.persist()
@@ -156,16 +203,21 @@ class ZeropsEmulator {
 		if (appVersion !== null && request.method === 'GET') {
 			await this.activateDueVersions()
 			const version = this.version(decodeURIComponent(appVersion[1] ?? ''))
-			// The platform answers 400 rather than 404 here; its CODE was never read off the wire, so the double
-			// uses a deliberately synthetic SHOUTING_CASE one that could not be mistaken for the platform's.
-			return version === undefined ? error(400, 'APP_VERSION_NOT_FOUND', 'app version not found') : json(version)
+			return version === undefined ? this.versionNotFound() : json(version)
+		}
+		if (appVersion !== null && request.method === 'DELETE') {
+			const version = this.version(decodeURIComponent(appVersion[1] ?? ''))
+			if (version === undefined) return this.versionNotFound()
+			this.deleteVersion(version)
+			await this.persist()
+			return json({ success: true })
 		}
 
 		const cancel = path.match(/^\/app-version\/([^/]+)\/cancel-build$/)
 		if (cancel !== null && request.method === 'PUT') {
 			const version = this.version(decodeURIComponent(cancel[1] ?? ''))
 			if (version === undefined) {
-				return error(404, 'APP_VERSION_NOT_FOUND', 'app version not found')
+				return this.versionNotFound()
 			}
 			version.status = 'CANCELLED'
 			delete version.activateAt
@@ -185,8 +237,7 @@ class ZeropsEmulator {
 		}
 
 		// The precondition is real: the platform answers 400 `serviceStackIsNotHttp` until the service has
-		// deployed an HTTP port, which is why an import alone can never establish a subdomain. An active
-		// app version stands in for "has a deployed port" here. The double is idempotent where the platform
+		// deployed an HTTP port, which is why a codeless import cannot establish a subdomain. The double is idempotent where the platform
 		// hands back a process that then fails; the client decides on the read-back either way. Note the
 		// consequence for the process too: the one this returns always reaches FINISHED, where the
 		// platform's FAILS on a service that already has a subdomain.
@@ -196,7 +247,9 @@ class ZeropsEmulator {
 			if (found === undefined) {
 				return error(404, 'SERVICE_NOT_FOUND', 'service not found')
 			}
-			if (found.activeAppVersionId === undefined) {
+			await this.activateDueVersions()
+			const active = found.activeAppVersionId === undefined ? undefined : this.version(found.activeAppVersionId)
+			if (active === undefined || active.hasHttpPorts !== true) {
 				return error(400, 'serviceStackIsNotHttp', 'Service stack is not http or https')
 			}
 			found.subdomainAccess = true
@@ -218,6 +271,7 @@ class ZeropsEmulator {
 		// deleted a moment ago alike (docs/reference/zerops-platform.md).
 		const service = path.match(/^\/service-stack\/([^/]+)$/)
 		if (service !== null && request.method === 'GET') {
+			await this.activateDueVersions()
 			const found = this.service(decodeURIComponent(service[1] ?? ''))
 			return found === undefined ? serviceStackNotFound() : json(this.serviceResponse(found))
 		}
@@ -232,7 +286,7 @@ class ZeropsEmulator {
 			}
 			this.state.services = this.state.services.filter((item) => item.id !== found.id)
 			this.state.serviceEnv = this.state.serviceEnv.filter((item) => item.serviceStackId !== found.id)
-			this.state.appVersions = this.state.appVersions.filter((item) => item.serviceStackId !== found.id)
+			for (const version of this.state.appVersions.filter((item) => item.serviceStackId === found.id)) this.deleteVersion(version)
 			const removing = this.createProcess('stack.delete', { serviceStackId: found.id, projectId: found.projectId })
 			await this.persist()
 			return json(this.processResponse(removing))
@@ -355,7 +409,8 @@ class ZeropsEmulator {
 				serviceStackId: serviceId,
 				key,
 				content: body.content,
-				type: 'SECRET',
+				type: 'USER',
+				sensitive: body.sensitive,
 			}
 			this.state.serviceEnv.push(record)
 			const created = this.createProcess('stack.updateUserData', { serviceStackId: serviceId })
@@ -389,6 +444,8 @@ class ZeropsEmulator {
 				}
 				current.key = key
 				current.content = content
+				current.type = 'USER'
+				current.sensitive = body.sensitive
 				const replaced = this.createProcess('stack.updateUserData', { serviceStackId: current.serviceStackId })
 				await this.persist()
 				return json(this.processResponse(replaced))
@@ -451,15 +508,9 @@ class ZeropsEmulator {
 		return specs.map((spec) => {
 			const existing = this.state.services.find((service) => service.projectId === projectId && service.name === spec.hostname)
 			if (existing !== undefined) {
-				// An `override` re-apply reconciles NOTHING live: a changed `type`, `profile`, `maxContainers` or
-				// `objectStorageSize` is silently ignored and the service is left exactly as it is.
-				//
-				// One exception, and it is not a reconcile: `startWithoutCode` asks for an EMPTY deploy every time
-				// the document is applied, so a document carrying it is never a no-op (measured 2026-08-21). No app
-				// version is activated here — live the empty version publishes no HTTP port either, which is why
-				// `enable-subdomain-access` still refuses afterwards.
+				// Override preserves service configuration, but startWithoutCode activates a new empty version.
 				return spec.startWithoutCode === true
-					? { service: existing, process: this.createProcess('stack.deploy', { serviceStackId: existing.id }) }
+					? { service: existing, deployment: this.deployCodeless(existing) }
 					: { service: existing }
 			}
 			// `subdomainAccess` starts false and no import ever moves it — see `ImportService`.
@@ -475,7 +526,11 @@ class ZeropsEmulator {
 			this.state.services.push(service)
 			// UNVERIFIED NAME: nothing records what the platform calls an import's own processes. The
 			// existence of one per created service is the verified half.
-			return { service, process: this.createProcess('stack.create', { serviceStackId: service.id }) }
+			return {
+				service,
+				process: this.createProcess('stack.create', { serviceStackId: service.id }),
+				...(spec.startWithoutCode === true ? { deployment: this.deployCodeless(service) } : {}),
+			}
 		})
 	}
 
@@ -488,7 +543,7 @@ class ZeropsEmulator {
 				name: entry.service.name,
 				// A service this import CREATED gets one, and a re-applied `startWithoutCode` one gets its empty
 				// deploy; re-applying anything else is a complete no-op live (docs/reference/zerops-platform.md).
-				processes: entry.process === undefined ? [] : [this.processResponse(entry.process)],
+				processes: [entry.process, entry.deployment].filter((process) => process !== undefined).map((process) => this.processResponse(process)),
 			})),
 		}
 	}
@@ -550,12 +605,7 @@ class ZeropsEmulator {
 			if (version.status !== 'BUILDING' || version.activateAt === undefined || version.activateAt > this.now()) {
 				continue
 			}
-			version.status = 'ACTIVE'
-			delete version.activateAt
-			const service = this.service(version.serviceStackId)
-			if (service !== undefined) {
-				service.activeAppVersionId = version.id
-			}
+			this.activateVersion(version)
 			changed = true
 		}
 		if (changed) {
@@ -569,9 +619,105 @@ class ZeropsEmulator {
 		return items.slice(offset, offset + limit)
 	}
 
-	private async persist(): Promise<void> {
-		if (this.options.stateFile !== undefined) {
-			await Bun.write(this.options.stateFile, `${JSON.stringify(this.state, null, 2)}\n`)
+	private persist(): Promise<void> {
+		const path = this.options.stateFile
+		if (path === undefined) return Promise.resolve()
+		const contents = `${JSON.stringify(this.state, null, 2)}\n`
+		const write = this.persistence.then(async () => {
+			await Bun.write(`${path}.tmp`, contents)
+			await rename(`${path}.tmp`, path)
+		})
+		this.persistence = write.catch(() => {})
+		return write
+	}
+
+	private versionNotFound(): Response {
+		return error(400, 'appVersionNotFound', 'app version not found')
+	}
+
+	private createVersion(service: ServiceRecord, status: AppVersionRecord['status'], hasHttpPorts: boolean): AppVersionRecord {
+		const sequence = this.state.nextVersion++
+		const version: AppVersionRecord = {
+			id: id('version', sequence),
+			serviceStackId: service.id,
+			projectId: service.projectId,
+			status,
+			sequence,
+			hasHttpPorts,
+		}
+		this.state.appVersions.push(version)
+		return version
+	}
+
+	private startVersion(version: AppVersionRecord): void {
+		const delay = this.options.activationDelayMs ?? 0
+		version.status = 'BUILDING'
+		if (delay === 0) this.activateVersion(version)
+		else version.activateAt = this.now() + delay
+	}
+
+	private activateVersion(version: AppVersionRecord): void {
+		const service = this.service(version.serviceStackId)
+		if (service === undefined) return
+		for (const previous of this.state.appVersions) {
+			if (previous.serviceStackId === service.id && previous.status === 'ACTIVE') previous.status = 'BACKUP'
+		}
+		version.status = 'ACTIVE'
+		delete version.activateAt
+		service.activeAppVersionId = version.id
+	}
+
+	private deployCodeless(service: ServiceRecord): ProcessRecord {
+		const version = this.createVersion(service, 'ACTIVE', false)
+		this.activateVersion(version)
+		return this.createProcess('stack.deploy', { serviceStackId: service.id, appVersionId: version.id })
+	}
+
+	private deleteVersion(version: AppVersionRecord): void {
+		this.state.appVersions = this.state.appVersions.filter((entry) => entry.id !== version.id)
+		const grant = this.state.uploadGrants.find((entry) => entry.appVersionId === version.id)
+		if (grant !== undefined) grant.deleted = true
+		const service = this.service(version.serviceStackId)
+		if (service?.activeAppVersionId === version.id) delete service.activeAppVersionId
+	}
+
+	private async upload(request: Request, url: URL): Promise<Response> {
+		if (
+			url.origin !== LOCAL_SOURCE_EMULATOR_ORIGIN || url.username !== '' || url.password !== '' || url.hash !== '' || request.method !== 'PUT'
+			|| request.headers.has('authorization')
+		) {
+			return error(400, 'LOCAL_INVALID_UPLOAD', 'invalid local upload request')
+		}
+		let capability: LocalSourceUploadCapability
+		try {
+			capability = parseLocalSourceUploadSearch(url.search)
+		} catch {
+			return error(400, 'LOCAL_INVALID_UPLOAD', 'invalid local upload request')
+		}
+		const grant = this.state.uploadGrants.find((entry) => entry.appVersionId === capability.appVersionId)
+		if (grant === undefined || !matchesCapability(grant, capability.capability)) {
+			return error(403, 'LOCAL_INVALID_CAPABILITY', 'invalid local upload capability')
+		}
+		if (this.uploading.has(grant.appVersionId)) return error(409, 'LOCAL_UPLOAD_IN_PROGRESS', 'local upload already in progress')
+		this.uploading.add(grant.appVersionId)
+		try {
+			const receipt = await readUploadReceipt(request)
+			if (
+				grant.receipt !== undefined
+				&& (grant.receipt.compressedBytes !== receipt.compressedBytes || grant.receipt.compressedSha256 !== receipt.compressedSha256)
+			) {
+				return error(409, 'LOCAL_UPLOAD_MISMATCH', 'local upload does not match completed receipt')
+			}
+			// A deleted grant may finish transport but never regains a version or activation capability.
+			if (this.state.uploadGrants.includes(grant)) {
+				grant.receipt ??= receipt
+				await this.persist()
+			}
+			return json({ success: true })
+		} catch {
+			return error(400, 'LOCAL_INCOMPLETE_UPLOAD', 'incomplete local source upload')
+		} finally {
+			this.uploading.delete(grant.appVersionId)
 		}
 	}
 }

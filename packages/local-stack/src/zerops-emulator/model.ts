@@ -1,3 +1,5 @@
+import type { LocalSourceUploadGrant } from '../local-source-contract'
+
 export interface ProjectRecord {
 	id: string
 	clientId: string
@@ -24,14 +26,17 @@ export interface ServiceEnvRecord {
 	serviceStackId: string
 	key: string
 	content: string
-	type: 'SECRET'
+	type: 'SECRET' | 'USER'
+	sensitive?: boolean
 }
 
 export interface AppVersionRecord {
 	id: string
 	serviceStackId: string
 	projectId: string
-	status: 'BUILDING' | 'ACTIVE' | 'CANCELLED'
+	status: 'UPLOADING' | 'BUILDING' | 'ACTIVE' | 'BACKUP' | 'BUILD_FAILED' | 'CANCELLED'
+	hasHttpPorts?: boolean
+	syntheticFailure?: 'LOCAL_MISSING_UPLOAD'
 	sequence: number
 	activateAt?: number
 }
@@ -92,6 +97,7 @@ export interface EmulatorSnapshot {
 	appVersions: AppVersionRecord[]
 	processes: ProcessRecord[]
 	integrationTokens: IntegrationTokenRecord[]
+	uploadGrants: LocalSourceUploadGrant[]
 }
 
 /**
@@ -116,6 +122,7 @@ export interface ImportService {
 export interface ImportOutcome {
 	service: ServiceRecord
 	process?: ProcessRecord
+	deployment?: ProcessRecord
 }
 
 export interface ImportDocument {
@@ -141,4 +148,5 @@ export const emptySnapshot = (): EmulatorSnapshot => ({
 	appVersions: [],
 	processes: [],
 	integrationTokens: [],
+	uploadGrants: [],
 })

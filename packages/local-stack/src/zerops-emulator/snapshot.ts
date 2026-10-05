@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { localSourceUploadGrantSchema } from '../local-source-contract'
 import type { EmulatorSnapshot } from './model'
 
 const text = z.string().optional().catch(undefined)
@@ -50,17 +51,25 @@ const envSchema = z.object({
 	serviceStackId: z.string(),
 	key: z.string(),
 	content: z.string(),
-	type: z.unknown().transform((): 'SECRET' => 'SECRET'),
-})
+	type: z.unknown().transform((value): 'SECRET' | 'USER' => value === 'USER' ? 'USER' : 'SECRET'),
+	sensitive: z.boolean().optional(),
+}).transform(({ sensitive, ...env }) => ({ ...env, ...(sensitive === undefined ? {} : { sensitive }) }))
 const versionSchema = z.object({
-	status: z.enum(['BUILDING', 'ACTIVE', 'CANCELLED']),
+	status: z.enum(['UPLOADING', 'BUILDING', 'ACTIVE', 'BACKUP', 'BUILD_FAILED', 'CANCELLED']),
+	hasHttpPorts: z.boolean().optional(),
+	syntheticFailure: z.literal('LOCAL_MISSING_UPLOAD').optional(),
 	// Non-numeric legacy values were ignored; numeric values must still be valid times.
 	activateAt: z.number().optional().catch(undefined).pipe(z.number().finite().min(0).optional()),
 	id: z.string(),
 	serviceStackId: z.string(),
 	projectId: z.string(),
 	sequence: counter,
-}).transform(({ activateAt, ...version }) => ({ ...version, ...(activateAt === undefined ? {} : { activateAt }) }))
+}).transform(({ activateAt, hasHttpPorts, syntheticFailure, ...version }) => ({
+	...version,
+	...(activateAt === undefined ? {} : { activateAt }),
+	...(hasHttpPorts === undefined ? {} : { hasHttpPorts }),
+	...(syntheticFailure === undefined ? {} : { syntheticFailure }),
+}))
 const processSchema = z.object({
 	pendingReads: z.number().int().min(0),
 	id: z.string(),
@@ -97,6 +106,7 @@ const snapshotSchema = z.object({
 	appVersions: z.array(versionSchema),
 	processes: z.array(processSchema).default([]),
 	integrationTokens: z.array(tokenSchema).default([]),
+	uploadGrants: z.array(localSourceUploadGrantSchema).default([]),
 })
 
 export function parseSnapshot(value: unknown): EmulatorSnapshot {
