@@ -103,9 +103,11 @@ class ZeropsEmulator {
 	private async route(request: Request, path: string, url: URL): Promise<Response> {
 		const reservation = path.match(/^\/service-stack\/([^/]+)\/app-version$/)
 		if (reservation !== null && request.method === 'POST') {
-			const service = this.service(decodeURIComponent(reservation[1] ?? ''))
-			if (service === undefined) return serviceStackNotFound()
+			const serviceId = decodeURIComponent(reservation[1] ?? '')
+			if (this.service(serviceId) === undefined) return serviceStackNotFound()
 			reservationRequestSchema.parse(await parseJsonBody(request))
+			const service = this.service(serviceId)
+			if (service === undefined) return serviceStackNotFound()
 			const version = this.createVersion(service, 'UPLOADING', false)
 			const capability = randomBytes(32).toString('hex')
 			this.state.uploadGrants.push({ appVersionId: version.id, capabilitySha256: capabilityDigest(capability), deleted: false })
@@ -115,9 +117,11 @@ class ZeropsEmulator {
 
 		const build = path.match(/^\/app-version\/([^/]+)\/build-and-deploy$/)
 		if (build !== null && request.method === 'PUT') {
-			const version = this.version(decodeURIComponent(build[1] ?? ''))
-			if (version === undefined) return this.versionNotFound()
+			const appVersionId = decodeURIComponent(build[1] ?? '')
+			if (this.version(appVersionId) === undefined) return this.versionNotFound()
 			const body = buildRequestSchema.parse(await parseJsonBody(request))
+			const version = this.version(appVersionId)
+			if (version === undefined) return this.versionNotFound()
 			const hasHttpPorts = descriptorHasHttpPorts(body.zeropsYaml, body.zeropsYamlSetup)
 			const grant = this.state.uploadGrants.find((entry) => entry.appVersionId === version.id)
 			delete version.activateAt

@@ -120,6 +120,63 @@ test('a held upload finishing after deletion and after restart cannot resurrect 
 	expect((await restarted.state()).appVersions).toHaveLength(1)
 })
 
+test('held build body cannot submit a deleted version or mutate the deletion snapshot', async () => {
+	const path = await stateFile()
+	const f = await fixture({ stateFile: path })
+	const reservation = await f.api.createAppVersion({ serviceId: f.serviceId, signal: signal() })
+	await f.upload(reservation.uploadUrl)
+	const stream = new TransformStream<Uint8Array, Uint8Array>()
+	const writer = stream.writable.getWriter()
+	const pending = f.handler(
+		new Request(`${LOCAL_SOURCE_EMULATOR_ORIGIN}/app-version/${reservation.id}/build-and-deploy`, {
+			method: 'PUT',
+			headers: { authorization: 'Bearer test' },
+			body: stream.readable,
+		}),
+	)
+	const body = new TextEncoder().encode(JSON.stringify({ zeropsYaml: descriptor }))
+	await writer.write(body.subarray(0, 1))
+	await f.api.deleteAppVersion({ appVersionId: reservation.id, signal: signal() })
+	const deleted = await f.state()
+	await writer.write(body.subarray(1))
+	await writer.close()
+	const response = await pending
+	expect(response.status).toBe(400)
+	expect(await response.json()).toMatchObject({ error: { code: 'appVersionNotFound' } })
+	expect(await f.state()).toEqual(deleted)
+	expect(await (await client({ stateFile: path })).state()).toEqual(deleted)
+})
+
+test('held reservation body cannot create an orphan version or grant after service deletion', async () => {
+	const path = await stateFile()
+	const f = await fixture({ stateFile: path })
+	const stream = new TransformStream<Uint8Array, Uint8Array>()
+	const writer = stream.writable.getWriter()
+	const pending = f.handler(
+		new Request(`${LOCAL_SOURCE_EMULATOR_ORIGIN}/service-stack/${f.serviceId}/app-version`, {
+			method: 'POST',
+			headers: { authorization: 'Bearer test' },
+			body: stream.readable,
+		}),
+	)
+	await writer.write(new TextEncoder().encode('{'))
+	const deletion = await f.handler(
+		new Request(`${LOCAL_SOURCE_EMULATOR_ORIGIN}/service-stack/${f.serviceId}`, {
+			method: 'DELETE',
+			headers: { authorization: 'Bearer test' },
+		}),
+	)
+	expect(deletion.status).toBe(200)
+	const deleted = await f.state()
+	await writer.write(new TextEncoder().encode('}'))
+	await writer.close()
+	const response = await pending
+	expect(response.status).toBe(400)
+	expect(await response.json()).toMatchObject({ error: { code: 'serviceStackNotFound' } })
+	expect(await f.state()).toEqual(deleted)
+	expect(await (await client({ stateFile: path })).state()).toEqual(deleted)
+})
+
 test('receipt publication requires bounded nonempty EOF; failed and conflicting retries preserve prior receipt', async () => {
 	const f = await fixture()
 	const reservation = await f.api.createAppVersion({ serviceId: f.serviceId, signal: signal() })
