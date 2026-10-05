@@ -24,9 +24,8 @@ describe('defineApp(vozka-runner config)', () => {
 		const worker = buildRunnerWorker({ env: 'stage' })
 		const container = binding(worker, 'RUNNER')
 		expect(container).toBeInstanceOf(Container)
-		if (container instanceof Container) {
-			expect(container.options.className).toBe('RunnerContainer')
-		}
+		if (!(container instanceof Container)) throw new Error('RUNNER must be a Container')
+		expect(container.options.className).toBe('RunnerContainer')
 		expect(binding(worker, 'RUN_LOGS')).toBeInstanceOf(R2Bucket)
 		expect(binding(worker, 'DB')).toBeInstanceOf(D1Database)
 	})
@@ -35,31 +34,20 @@ describe('defineApp(vozka-runner config)', () => {
 		const worker = buildRunnerWorker({ env: 'stage' })
 		const logs = binding(worker, 'RUN_LOGS')
 		const db = binding(worker, 'DB')
-		if (logs instanceof R2Bucket) {
-			expect(logs.options.name).toBe('vozka-run-logs')
-		}
-		if (db instanceof D1Database) {
-			expect(db.options.name).toBe('vozka')
-			// fabrika owns the schema + migrations — vozka-runner only writes the runs row's terminal status.
-			expect(db.options.migrationsDir).toBeUndefined()
-		}
+		if (!(logs instanceof R2Bucket)) throw new Error('RUN_LOGS must be an R2Bucket')
+		if (!(db instanceof D1Database)) throw new Error('DB must be a D1Database')
+		expect(logs.options.name).toBe('vozka-run-logs')
+		expect(db.options.name).toBe('vozka')
+		// The control plane owns the shared schema and its migrations.
+		expect(db.options.migrationsDir).toBeUndefined()
 	})
 
-	test('all environments build the account-owned image from this checkout', () => {
-		const local = buildRunnerWorker({ env: 'local' })
-		const localContainer = binding(local, 'RUNNER')
-		if (localContainer instanceof Container) {
-			expect(localContainer.options.image).toBe('../runner-container/Dockerfile')
-			expect(localContainer.options.imageBuildContext).toBe('../..')
-			expect(localContainer.options.rolloutActiveGracePeriod).toBe(1_200)
-		}
-		const stage = buildRunnerWorker({ env: 'stage' })
-		const stageContainer = binding(stage, 'RUNNER')
-		if (stageContainer instanceof Container) {
-			expect(stageContainer.options.image).toBe('../runner-container/Dockerfile')
-			expect(stageContainer.options.imageBuildContext).toBe('../..')
-			expect(stageContainer.options.rolloutActiveGracePeriod).toBe(1_200)
-		}
+	test.each(['local', 'stage', 'prod'])('%s builds the account-owned image from this checkout', (env) => {
+		const container = binding(buildRunnerWorker({ env }), 'RUNNER')
+		if (!(container instanceof Container)) throw new Error(`${env}: RUNNER must be a Container`)
+		expect(container.options.image).toBe('../runner-container/Dockerfile')
+		expect(container.options.imageBuildContext).toBe('../..')
+		expect(container.options.rolloutActiveGracePeriod).toBe(1_200)
 	})
 
 	test('it is INFRA: no schema, and the only runtime secret is the caller key', () => {
