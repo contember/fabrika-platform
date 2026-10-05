@@ -2,6 +2,7 @@ import { useNavigate } from '@buzola/router'
 import { useState } from 'react'
 import { api, ApiError, type AppEnvDto, type DeploymentNamespaceDto, type PutAppEnvRequest, type TriggerDeployRequest } from '../../lib/api'
 import { shortRef } from '../../lib/format'
+import { cloudflareArtifactWithConfigPath, cloudflareConfigPath } from '../../lib/manifest-editor'
 import { compatibleNamespaces, namespaceAssignmentRequest } from '../../lib/namespaces'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { Icon } from '../Icon'
@@ -214,33 +215,6 @@ function NamespaceAssignment(
 			{error && <div className="error-text small" role="alert">{error}</div>}
 		</div>
 	)
-}
-
-function cloudflareConfigPath(envelope: AppEnvDto['artifact']): string | null {
-	if (
-		envelope.provider !== 'cloudflare'
-		|| envelope.version !== 1
-		|| typeof envelope.payload !== 'object'
-		|| envelope.payload === null
-		|| Array.isArray(envelope.payload)
-	) {
-		return null
-	}
-	const configPath = envelope.payload['configPath']
-	return typeof configPath === 'string' ? configPath : null
-}
-
-function cloudflareArtifactWithConfigPath(envelope: AppEnvDto['artifact'], configPath: string): AppEnvDto['artifact'] {
-	if (
-		envelope.provider !== 'cloudflare'
-		|| envelope.version !== 1
-		|| typeof envelope.payload !== 'object'
-		|| envelope.payload === null
-		|| Array.isArray(envelope.payload)
-	) {
-		return envelope
-	}
-	return { ...envelope, payload: { ...envelope.payload, configPath } }
 }
 
 /** Shared env editor — an inline table row form for both edit and add. */

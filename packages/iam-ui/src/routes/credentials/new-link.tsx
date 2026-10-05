@@ -4,14 +4,7 @@ import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { SecretModal } from '../../components/SecretModal'
 import { api, ApiError } from '../../lib/api'
-import { parseDateTimeLocal } from '../../lib/format'
-
-interface GrantRow {
-	action: string
-	/** Scope dimension; both-or-neither with `scopeValue` (both empty = global). */
-	scopeType: string
-	scopeValue: string
-}
+import { type GrantRow, parseShareLinkForm } from '../../lib/share-link-form'
 
 const EMPTY_ROW: GrantRow = { action: '', scopeType: '', scopeValue: '' }
 
@@ -49,40 +42,12 @@ export default createPage()
 			e.preventDefault()
 			setError(null)
 
-			const grants = rows
-				.map((row) => ({
-					action: row.action.trim(),
-					scopeType: row.scopeType.trim(),
-					scopeValue: row.scopeValue.trim(),
-				}))
-				.filter((row) => row.action !== '' || row.scopeType !== '' || row.scopeValue !== '')
-			if (grants.length === 0) {
-				setError('Add at least one grant.')
+			let body: IssueShareLinkRequest
+			try {
+				body = parseShareLinkForm({ rows, app, label, expiry })
+			} catch (cause) {
+				setError(cause instanceof Error ? cause.message : 'Issue failed.')
 				return
-			}
-			if (grants.some((g) => g.action === '')) {
-				setError('Each grant needs an action.')
-				return
-			}
-			if (grants.some((g) => (g.scopeType === '') !== (g.scopeValue === ''))) {
-				setError('A scope needs both a dimension and a value, or leave both empty for a global grant.')
-				return
-			}
-
-			if (app === '') {
-				setError('Choose the app this link is for.')
-				return
-			}
-
-			const expiresAt = parseDateTimeLocal(expiry)
-			const body: IssueShareLinkRequest = {
-				app,
-				grants: grants.map((g) => ({
-					action: g.action,
-					scope: g.scopeType === '' ? null : { type: g.scopeType, value: g.scopeValue },
-				})),
-				...(label.trim() === '' ? {} : { label: label.trim() }),
-				...(expiresAt === null ? {} : { expiresAt }),
 			}
 
 			setBusy(true)

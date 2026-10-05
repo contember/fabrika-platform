@@ -1,7 +1,8 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
-import { api, ApiError, type JsonValue, type RegisterAppRequest } from '../../lib/api'
+import { api, ApiError, type RegisterAppRequest } from '../../lib/api'
+import { parseManifestEditor } from '../../lib/manifest-editor'
 
 // Onboarding. "Paste a GitHub repo URL + domain, pick an env" creates the app and its first env in one
 // `register-app` call. The built manifest is provider-owned input; control reserves its service names,
@@ -33,20 +34,11 @@ export default createPage()
 		async function submit(e: React.FormEvent) {
 			e.preventDefault()
 			setError(null)
-			let manifestPayload: JsonValue
+			let parsedManifest: ReturnType<typeof parseManifestEditor>
 			try {
-				const parsed: unknown = JSON.parse(manifest)
-				if (!isJsonValue(parsed)) {
-					throw new Error('manifest is not JSON')
-				}
-				manifestPayload = parsed
-			} catch {
-				setError('Paste a valid fabrika.manifest.json.')
-				return
-			}
-			const manifestVersion = readManifestVersion(manifestPayload)
-			if (manifestVersion === null) {
-				setError('That file declares no manifestVersion — paste the fabrika.manifest.json that `fabrika app build` wrote.')
+				parsedManifest = parseManifestEditor(manifest)
+			} catch (cause) {
+				setError(cause instanceof Error ? cause.message : 'Paste a valid fabrika.manifest.json.')
 				return
 			}
 			const installTrimmed = installationId.trim()
@@ -64,8 +56,8 @@ export default createPage()
 				namespaceId,
 				// The pasted manifest declares the version its provider's codec accepts. A literal here goes
 				// stale the moment that codec moves, and registration then refuses every artifact.
-				target: { provider: 'zerops', version: manifestVersion, payload: {} },
-				artifact: { provider: 'zerops', version: manifestVersion, payload: manifestPayload },
+				target: { provider: 'zerops', version: parsedManifest.version, payload: {} },
+				artifact: { provider: 'zerops', version: parsedManifest.version, payload: parsedManifest.payload },
 				...installField,
 			}
 			setBusy(true)
@@ -213,25 +205,3 @@ export default createPage()
 			</>
 		)
 	})
-
-/** `fabrika app build` writes `manifestVersion`; it is the version the provider's artifact codec accepts. */
-function readManifestVersion(manifest: JsonValue): number | null {
-	if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
-		return null
-	}
-	const version = Reflect.get(manifest, 'manifestVersion')
-	return typeof version === 'number' && Number.isSafeInteger(version) && version > 0 ? version : null
-}
-
-function isJsonValue(value: unknown): value is JsonValue {
-	if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-		return true
-	}
-	if (Array.isArray(value)) {
-		return value.every(isJsonValue)
-	}
-	if (typeof value !== 'object') {
-		return false
-	}
-	return Object.values(value).every((entry) => entry !== undefined && isJsonValue(entry))
-}

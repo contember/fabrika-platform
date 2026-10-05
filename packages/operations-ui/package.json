@@ -25,7 +25,6 @@
 		"test": "bun test src/__tests__"
 	},
 	"dependencies": {
-		"zod": "^3.25.76",
 		"@buzola/router": "^0.0.16",
 		"@fabrika/app": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",
