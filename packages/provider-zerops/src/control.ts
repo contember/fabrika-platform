@@ -22,6 +22,7 @@ import type {
 	SchemaReconciler,
 } from '@fabrika/provider-contract'
 import { decodeEnvelope, ProviderSecretError } from '@fabrika/provider-contract'
+import { z } from 'zod'
 import { createZeropsApi, waitForProcess, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi, type ZeropsAppVersion, type ZeropsProcess } from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
 import { prepareZeropsDescriptor } from './descriptor'
@@ -66,27 +67,16 @@ export interface ZeropsStoredTarget {
 	serviceId: string
 }
 
-const property = (payload: JsonValue, key: string): JsonValue | undefined => {
-	if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
-		throw new Error('Zerops stored target must be an object')
-	}
-	return payload[key]
-}
-
-const requiredString = (payload: JsonValue, key: string): string => {
-	const value = property(payload, key)
-	if (typeof value !== 'string' || value === '') {
-		throw new Error(`Zerops stored target ${key} must be a non-empty string`)
-	}
-	return value
-}
+const storedTargetSchema = z.object({ serviceId: z.string().min(1) })
 
 export const zeropsStoredTargetCodec: ProviderCodec<ZeropsStoredTarget> = {
 	version: 2,
 	encode: (target) => ({ serviceId: target.serviceId }),
-	decode: (payload) => ({
-		serviceId: requiredString(payload, 'serviceId'),
-	}),
+	decode: (payload) => {
+		const result = storedTargetSchema.safeParse(payload)
+		if (!result.success) throw new Error('Zerops stored target serviceId must be a non-empty string')
+		return result.data
+	},
 }
 
 const envelope = <T>(codec: ProviderCodec<T>, value: T): ProviderEnvelope => ({

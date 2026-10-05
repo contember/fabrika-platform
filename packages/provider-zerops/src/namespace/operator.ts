@@ -7,7 +7,8 @@ import type {
 	ProviderNamespacePresentation,
 	ProviderNamespacePreset,
 } from '@fabrika/provider-contract'
-import { decodeEnvelope, envelope, optionalString, parsePostgres } from './codec'
+import { z } from 'zod'
+import { decodeEnvelope, envelope, postgresSchema } from './codec'
 import { zeropsNamespacePreset } from './topology'
 import type { ZeropsNamespaceOperatorOptions, ZeropsNamespacePlanOptions, ZeropsNamespaceTarget } from './types'
 
@@ -32,33 +33,25 @@ const ZEROPS_NAMESPACE_PRESETS: readonly ProviderNamespacePreset[] = [
 	},
 ]
 
+const planOptionsSchema = z.object({
+	projectName: z.string().min(1).optional(),
+	corePackage: z.enum(['LIGHT', 'SERIOUS']).optional(),
+	publicAccess: z.enum(['custom-domain', 'zerops-subdomain']).optional(),
+	postgres: postgresSchema.optional(),
+}).strict().transform((options) => {
+	for (const key of Object.keys(options)) {
+		if (Reflect.get(options, key) === undefined) Reflect.deleteProperty(options, key)
+	}
+	return options
+})
 const parsePlanOptions = (value: JsonValue | undefined): ZeropsNamespacePlanOptions => {
-	if (value === undefined) return {}
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-		throw new Error('Zerops namespace plan options must be an object')
+	const result = planOptionsSchema.safeParse(value === undefined ? {} : value)
+	if (!result.success) {
+		const issue = result.error.issues[0]
+		if (issue?.code === 'unrecognized_keys') throw new Error(`Zerops namespace plan option ${issue.keys[0]} is not supported`)
+		throw new Error(`Zerops namespace plan ${issue?.path.join('.') ?? 'options'} is not supported`)
 	}
-	const supported = new Set(['projectName', 'corePackage', 'publicAccess', 'postgres'])
-	for (const key of Object.keys(value)) {
-		if (!supported.has(key)) {
-			throw new Error(`Zerops namespace plan option ${key} is not supported`)
-		}
-	}
-	const projectName = optionalString(value, 'projectName')
-	const corePackage = optionalString(value, 'corePackage')
-	if (corePackage !== undefined && corePackage !== 'LIGHT' && corePackage !== 'SERIOUS') {
-		throw new Error('Zerops namespace plan corePackage must be LIGHT or SERIOUS')
-	}
-	const publicAccess = optionalString(value, 'publicAccess')
-	if (publicAccess !== undefined && publicAccess !== 'custom-domain' && publicAccess !== 'zerops-subdomain') {
-		throw new Error('Zerops namespace plan publicAccess is not supported')
-	}
-	const postgres = parsePostgres(value)
-	return {
-		...(projectName === undefined ? {} : { projectName }),
-		...(corePackage === undefined ? {} : { corePackage }),
-		...(publicAccess === undefined ? {} : { publicAccess }),
-		...(postgres === undefined ? {} : { postgres }),
-	}
+	return result.data
 }
 
 const namespacePresentation = (

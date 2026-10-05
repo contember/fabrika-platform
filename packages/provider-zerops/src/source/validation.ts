@@ -37,21 +37,6 @@ export const rejectExplicitUndefined = (value: object, context: z.RefinementCtx)
 	}
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
-
-export const record = (value: unknown, label: string): Record<string, unknown> => {
-	if (!isRecord(value)) throw new Error(`${label} must be an object`)
-	return value
-}
-
-export const exactKeys = (value: Record<string, unknown>, allowed: readonly string[], label: string): void => {
-	const allowedKeys = new Set(allowed)
-	const unknownKey = Object.keys(value).find((key) => !allowedKeys.has(key))
-	if (unknownKey !== undefined) throw new Error(`${label} contains an unknown field`)
-	const missingKey = allowed.find((key) => !(key in value))
-	if (missingKey !== undefined) throw new Error(`${label} is missing field ${missingKey}`)
-}
-
 export const identifier = (value: unknown, label: string): string => parseSourceWire(identifierSchema, value, label)
 
 export const refSchema = z.string().min(1).max(MAX_REF_LENGTH).refine((parsed) => {
@@ -76,20 +61,7 @@ export const refSchema = z.string().min(1).max(MAX_REF_LENGTH).refine((parsed) =
 	return true
 }, 'must be a safe Git ref or lowercase commit digest')
 
-export const commitSha = (value: unknown, label: string): string => parseSourceWire(commitShaSchema, value, label)
-export const sha256 = (value: unknown, label: string): string => parseSourceWire(sha256Schema, value, label)
 export const repository = (value: unknown, label: string): ZeropsSourceRepository => parseSourceWire(repositorySchema, value, label)
-
-export const optionalFields = (value: Record<string, unknown>, required: readonly string[], optional: readonly string[], label: string): void => {
-	const allowed = [...required, ...optional]
-	const unknownKey = Object.keys(value).find((key) => !allowed.includes(key))
-	if (unknownKey !== undefined) throw new Error(`${label} contains an unknown field`)
-	const missingKey = required.find((key) => !(key in value))
-	if (missingKey !== undefined) throw new Error(`${label} is missing field ${missingKey}`)
-	for (const key of optional) {
-		if (key in value && value[key] === undefined) throw new Error(`${label}.${key} must be omitted instead of undefined`)
-	}
-}
 
 /** Validate only credential-safe URL structure; the source runtime owns the exact Zerops destination allowlist. */
 export const uploadUrlSchema = z.string().min(1).max(MAX_UPLOAD_URL_LENGTH).refine((candidate) => {

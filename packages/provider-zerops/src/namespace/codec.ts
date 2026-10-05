@@ -3,20 +3,12 @@ import type {
 	ProviderCodec,
 	ProviderDeploymentNamespace,
 	ProviderEnvelope,
-	ProviderNamespaceHost,
 	ProviderNamespaceMutationInput,
 } from '@fabrika/provider-contract'
-import { commitSha, identifier, optionalFields, record, repository, sha256 } from '../source/validation'
-import { decodeZeropsNamespaceProxySource } from './proxy-source'
-import type {
-	NormalizedZeropsNamespaceTarget,
-	ZeropsNamespaceOptions,
-	ZeropsNamespacePostgres,
-	ZeropsNamespaceProxyBuild,
-	ZeropsNamespaceProxyDeployment,
-	ZeropsNamespaceProxySource,
-	ZeropsNamespaceTarget,
-} from './types'
+import { z } from 'zod'
+import { commitShaSchema, identifierSchema, rejectExplicitUndefined, repositorySchema, sha256Schema } from '../source/validation'
+import { namespaceProxySourceSchema } from './proxy-source'
+import type { NormalizedZeropsNamespaceTarget, ZeropsNamespaceOptions, ZeropsNamespaceProxySource, ZeropsNamespaceTarget } from './types'
 
 const encodeSource = (source: ZeropsNamespaceProxySource): JsonValue => ({
 	repository: { ...source.repository },
@@ -24,137 +16,64 @@ const encodeSource = (source: ZeropsNamespaceProxySource): JsonValue => ({
 	descriptor: { ...source.descriptor },
 })
 
-const decodeBuild = (value: unknown): ZeropsNamespaceProxyBuild => {
-	const raw = record(value, 'proxy build')
-	optionalFields(raw, ['runId', 'appVersionId', 'source', 'phase'], ['processId', 'manifestSha256'], 'proxy build')
-	const { phase, processId, runId, appVersionId, source } = raw
-	if (phase !== 'version_created' && phase !== 'source_uploaded' && phase !== 'build_trigger_requested' && phase !== 'build_triggered') {
-		throw new Error('Invalid proxy build phase')
-	}
-	if (processId !== undefined && phase !== 'build_triggered') throw new Error('Proxy process conflicts with build phase')
-	return {
-		...(raw['manifestSha256'] === undefined ? {} : { manifestSha256: sha256(raw['manifestSha256'], 'proxy manifest digest') }),
-		runId: identifier(runId, 'proxy run'),
-		appVersionId: identifier(appVersionId, 'proxy version'),
-		source: decodeZeropsNamespaceProxySource(source),
-		phase,
-		...(processId === undefined ? {} : { processId: identifier(processId, 'proxy process') }),
-	}
-}
+const proxyBuildSchema = z.object({
+	manifestSha256: sha256Schema.optional(),
+	runId: identifierSchema,
+	appVersionId: identifierSchema,
+	source: namespaceProxySourceSchema,
+	phase: z.enum(['version_created', 'source_uploaded', 'build_trigger_requested', 'build_triggered']),
+	processId: identifierSchema.optional(),
+}).strict().superRefine(rejectExplicitUndefined).refine(
+	(value) => value.processId === undefined || value.phase === 'build_triggered',
+	'Proxy process conflicts with build phase',
+)
 
-const decodeDeployment = (value: unknown): ZeropsNamespaceProxyDeployment => {
-	const raw = record(value, 'proxy deployment')
-	optionalFields(raw, ['appVersionId', 'repository', 'commitSha', 'descriptorSha256'], ['manifestSha256'], 'proxy deployment')
-	const { appVersionId, repository: coordinates, commitSha: commit, descriptorSha256 } = raw
-	return {
-		...(raw['manifestSha256'] === undefined ? {} : { manifestSha256: sha256(raw['manifestSha256'], 'proxy manifest digest') }),
-		appVersionId: identifier(appVersionId, 'proxy deployment version'),
-		repository: repository(coordinates, 'proxy deployment repository'),
-		commitSha: commitSha(commit, 'proxy deployment commit'),
-		descriptorSha256: sha256(descriptorSha256, 'proxy deployment descriptor digest'),
-	}
-}
+const proxyDeploymentSchema = z.object({
+	manifestSha256: sha256Schema.optional(),
+	appVersionId: identifierSchema,
+	repository: repositorySchema,
+	commitSha: commitShaSchema,
+	descriptorSha256: sha256Schema,
+}).strict().superRefine(rejectExplicitUndefined)
 
-const property = (payload: JsonValue, key: string): JsonValue | undefined => {
-	if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
-		throw new Error('Zerops namespace target must be an object')
-	}
-	return payload[key]
-}
-
-export const optionalString = (payload: JsonValue, key: string): string | undefined => {
-	const value = property(payload, key)
-	if (value === undefined) return undefined
-	if (typeof value !== 'string' || value === '') {
-		throw new Error(`Zerops namespace target ${key} must be a non-empty string`)
-	}
+export const postgresSchema = z.discriminatedUnion('type', [
+	z.object({
+		type: z.literal('postgresql:ha@18'),
+		profile: z.enum(['oltp-staging', 'oltp-production', 'oltp-enterprise', 'olap-production', 'writeheavy-production']).optional(),
+	}),
+	z.object({
+		type: z.literal('postgresql:single@18'),
+		profile: z.enum(['oltp-hobby', 'oltp-staging', 'oltp-production', 'olap-production', 'writeheavy-production']).optional(),
+	}),
+]).transform((value) => {
+	if (value.profile === undefined) delete value.profile
 	return value
-}
+})
 
-const optionalBoolean = (payload: JsonValue, key: string): boolean | undefined => {
-	const value = property(payload, key)
-	if (value === undefined) return undefined
-	if (typeof value !== 'boolean') {
-		throw new Error(`Zerops namespace target ${key} must be a boolean`)
+const namespaceTargetSchema = z.object({
+	proxyDeployment: proxyDeploymentSchema.optional(),
+	proxySource: namespaceProxySourceSchema.optional(),
+	proxyBuild: proxyBuildSchema.optional(),
+	projectName: z.string().min(1).optional(),
+	corePackage: z.enum(['LIGHT', 'SERIOUS']).optional(),
+	publicAccess: z.enum(['custom-domain', 'zerops-subdomain']).optional(),
+	proxyBuildFromGit: z.string().min(1).optional(),
+	postgres: postgresSchema.optional(),
+	managed: z.boolean().optional(),
+	projectId: z.string().min(1).optional(),
+	proxyServiceId: z.string().min(1).optional(),
+	postgresServiceId: z.string().min(1).optional(),
+	proxyConfigured: z.boolean().optional(),
+	proxyBaselineSequence: z.number().int().min(-1).optional(),
+	proxyAppVersionId: z.string().min(1).optional(),
+	proxyHosts: z.array(z.object({ host: z.string().min(1), port: z.number().int().positive() })).optional(),
+	ready: z.boolean().optional(),
+}).transform((target) => {
+	for (const key of Object.keys(target)) {
+		if (Reflect.get(target, key) === undefined) Reflect.deleteProperty(target, key)
 	}
-	return value
-}
-
-const optionalInteger = (payload: JsonValue, key: string): number | undefined => {
-	const value = property(payload, key)
-	if (value === undefined) return undefined
-	if (typeof value !== 'number' || !Number.isInteger(value) || value < -1) {
-		throw new Error(`Zerops namespace target ${key} must be an integer greater than or equal to -1`)
-	}
-	return value
-}
-
-const postgresProfiles = {
-	'postgresql:ha@18': new Set(['oltp-staging', 'oltp-production', 'oltp-enterprise', 'olap-production', 'writeheavy-production']),
-	'postgresql:single@18': new Set(['oltp-hobby', 'oltp-staging', 'oltp-production', 'olap-production', 'writeheavy-production']),
-}
-
-export const parsePostgres = (payload: JsonValue): ZeropsNamespacePostgres | undefined => {
-	const value = property(payload, 'postgres')
-	if (value === undefined) return undefined
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-		throw new Error('Zerops namespace target postgres must be an object')
-	}
-	const type = property(value, 'type')
-	const profile = property(value, 'profile')
-	if (type !== 'postgresql:ha@18' && type !== 'postgresql:single@18') {
-		throw new Error('Zerops namespace PostgreSQL type must be postgresql:ha@18 or postgresql:single@18')
-	}
-	if (profile !== undefined && (typeof profile !== 'string' || !postgresProfiles[type].has(profile))) {
-		throw new Error(`Zerops namespace PostgreSQL profile is not supported by ${type}`)
-	}
-	if (type === 'postgresql:ha@18') {
-		if (
-			profile !== undefined
-			&& profile !== 'oltp-staging'
-			&& profile !== 'oltp-production'
-			&& profile !== 'oltp-enterprise'
-			&& profile !== 'olap-production'
-			&& profile !== 'writeheavy-production'
-		) {
-			throw new Error(`Zerops namespace PostgreSQL profile is not supported by ${type}`)
-		}
-		return profile === undefined ? { type } : { type, profile }
-	}
-	if (
-		profile !== undefined
-		&& profile !== 'oltp-hobby'
-		&& profile !== 'oltp-staging'
-		&& profile !== 'oltp-production'
-		&& profile !== 'olap-production'
-		&& profile !== 'writeheavy-production'
-	) {
-		throw new Error(`Zerops namespace PostgreSQL profile is not supported by ${type}`)
-	}
-	return profile === undefined ? { type } : { type, profile }
-}
-
-const parseProxyHosts = (payload: JsonValue): readonly ProviderNamespaceHost[] | undefined => {
-	const value = property(payload, 'proxyHosts')
-	if (value === undefined) return undefined
-	if (!Array.isArray(value)) {
-		throw new Error('Zerops namespace target proxyHosts must be an array')
-	}
-	return value.map((entry) => {
-		if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-			throw new Error('Zerops namespace target proxyHosts entry must be an object')
-		}
-		const host = property(entry, 'host')
-		const port = property(entry, 'port')
-		if (typeof host !== 'string' || host === '') {
-			throw new Error('Zerops namespace target proxyHosts host must be a non-empty string')
-		}
-		if (typeof port !== 'number' || !Number.isInteger(port) || port <= 0) {
-			throw new Error('Zerops namespace target proxyHosts port must be a positive integer')
-		}
-		return { host, port }
-	})
-}
+	return target
+})
 
 export const zeropsNamespaceTargetCodec: ProviderCodec<ZeropsNamespaceTarget> = {
 	version: 1,
@@ -199,43 +118,17 @@ export const zeropsNamespaceTargetCodec: ProviderCodec<ZeropsNamespaceTarget> = 
 		...(target.ready !== undefined ? { ready: target.ready } : {}),
 	}),
 	decode: (payload) => {
-		const corePackage = optionalString(payload, 'corePackage')
-		if (corePackage !== undefined && corePackage !== 'LIGHT' && corePackage !== 'SERIOUS') {
-			throw new Error('Zerops namespace target corePackage must be LIGHT or SERIOUS')
+		const result = namespaceTargetSchema.safeParse(payload)
+		if (!result.success) {
+			const path = result.error.issues[0]?.path ?? []
+			if (path[0] === 'postgres') {
+				if (path[1] === 'type') throw new Error('Zerops namespace PostgreSQL type must be postgresql:ha@18 or postgresql:single@18')
+				throw new Error('Zerops namespace PostgreSQL profile is not supported')
+			}
+			if (path[0] === 'proxyHosts' && path.at(-1) === 'port') throw new Error('Zerops namespace target proxyHosts port must be a positive integer')
+			throw new Error(`Zerops namespace target ${path.join('.')} is invalid`)
 		}
-		const publicAccess = optionalString(payload, 'publicAccess')
-		if (publicAccess !== undefined && publicAccess !== 'custom-domain' && publicAccess !== 'zerops-subdomain') {
-			throw new Error('Zerops namespace target publicAccess is not supported')
-		}
-		return {
-			...(property(payload, 'proxyDeployment') === undefined ? {} : { proxyDeployment: decodeDeployment(property(payload, 'proxyDeployment')) }),
-			...(property(payload, 'proxySource') === undefined ? {} : { proxySource: decodeZeropsNamespaceProxySource(property(payload, 'proxySource')) }),
-			...(property(payload, 'proxyBuild') === undefined ? {} : { proxyBuild: decodeBuild(property(payload, 'proxyBuild')) }),
-			...(optionalString(payload, 'projectName') !== undefined ? { projectName: optionalString(payload, 'projectName') } : {}),
-			...(corePackage !== undefined ? { corePackage } : {}),
-			...(publicAccess !== undefined ? { publicAccess } : {}),
-			...(optionalString(payload, 'proxyBuildFromGit') !== undefined
-				? { proxyBuildFromGit: optionalString(payload, 'proxyBuildFromGit') }
-				: {}),
-			...(parsePostgres(payload) !== undefined ? { postgres: parsePostgres(payload) } : {}),
-			...(optionalBoolean(payload, 'managed') !== undefined ? { managed: optionalBoolean(payload, 'managed') } : {}),
-			...(optionalString(payload, 'projectId') !== undefined ? { projectId: optionalString(payload, 'projectId') } : {}),
-			...(optionalString(payload, 'proxyServiceId') !== undefined ? { proxyServiceId: optionalString(payload, 'proxyServiceId') } : {}),
-			...(optionalString(payload, 'postgresServiceId') !== undefined
-				? { postgresServiceId: optionalString(payload, 'postgresServiceId') }
-				: {}),
-			...(optionalBoolean(payload, 'proxyConfigured') !== undefined
-				? { proxyConfigured: optionalBoolean(payload, 'proxyConfigured') }
-				: {}),
-			...(optionalInteger(payload, 'proxyBaselineSequence') !== undefined
-				? { proxyBaselineSequence: optionalInteger(payload, 'proxyBaselineSequence') }
-				: {}),
-			...(optionalString(payload, 'proxyAppVersionId') !== undefined
-				? { proxyAppVersionId: optionalString(payload, 'proxyAppVersionId') }
-				: {}),
-			...(parseProxyHosts(payload) !== undefined ? { proxyHosts: parseProxyHosts(payload) } : {}),
-			...(optionalBoolean(payload, 'ready') !== undefined ? { ready: optionalBoolean(payload, 'ready') } : {}),
-		}
+		return result.data
 	},
 }
 

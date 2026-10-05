@@ -1,5 +1,6 @@
 import type { JsonValue } from '@fabrika/provider-contract'
 import { isAlias, isMap, isNode, isScalar, isSeq, parseAllDocuments } from 'yaml'
+import { z } from 'zod'
 import { renderYaml } from './compile'
 
 export interface ZeropsDescriptor {
@@ -16,8 +17,31 @@ const invalid = (reason: string): never => {
 	throw new Error(`invalid fabrika manifest: zerops.yaml ${reason}`)
 }
 
-const isMapping = (value: JsonValue | undefined): value is { readonly [key: string]: JsonValue } =>
-	typeof value === 'object' && value !== null && !Array.isArray(value)
+const descriptorJsonSchema: z.ZodType<JsonValue, z.ZodTypeDef, unknown> = z.lazy(() =>
+	z.union([
+		z.string(),
+		z.number(),
+		z.boolean(),
+		z.null(),
+		z.array(descriptorJsonSchema),
+		descriptorMappingSchema,
+	])
+)
+// Zod records drop __proto__; descriptor mappings must preserve every decoded key and its order.
+const descriptorMappingSchema: z.ZodType<{ [key: string]: JsonValue }, z.ZodTypeDef, unknown> = z.preprocess(
+	(value) => typeof value === 'object' && value !== null && !Array.isArray(value) ? Object.entries(value) : null,
+	z.array(z.tuple([z.string(), descriptorJsonSchema])).transform((entries) => Object.fromEntries(entries)),
+)
+const phaseSchema = z.intersection(descriptorMappingSchema, z.object({ envVariables: z.record(z.string()).optional() }))
+const setupSchema = z.intersection(
+	descriptorMappingSchema,
+	z.object({
+		setup: z.string().refine((value) => value.trim() !== ''),
+		build: phaseSchema.optional(),
+		run: phaseSchema.optional(),
+	}),
+)
+const descriptorDocumentSchema = z.intersection(descriptorMappingSchema, z.object({ zerops: z.array(setupSchema).min(1) }))
 
 // Compare decimal significands, not binary floats: parsing must not silently round source digits.
 const decimalIdentity = (source: string): string => {
@@ -81,25 +105,20 @@ export const parseZeropsDescriptor = (contents: string): ZeropsDescriptor => {
 	const document = parseDocument(contents, 'core')
 	const legacy = parseDocument(contents, 'yaml-1.1')
 	if (JSON.stringify(document) !== JSON.stringify(legacy)) return invalid('contains ambiguous plain scalars; quote them explicitly')
-	if (!isMapping(document)) return invalid('requires a mapping document')
-	const entries = document['zerops']
-	if (!Array.isArray(entries) || entries.length === 0) return invalid('requires a nonempty zerops sequence')
-	const setups: string[] = []
-	for (const entry of entries) {
-		if (!isMapping(entry) || typeof entry['setup'] !== 'string' || entry['setup'].trim() === '') return invalid('requires string setup names')
-		if (setups.includes(entry['setup'])) return invalid('must not contain duplicate setup names')
-		setups.push(entry['setup'])
-		for (const phase of ['build', 'run']) {
-			const config = entry[phase]
-			if (config === undefined) continue
-			if (!isMapping(config)) return invalid('requires build and run mappings')
-			const env = config['envVariables']
-			if (env !== undefined && (!isMapping(env) || Object.values(env).some((value) => typeof value !== 'string'))) {
-				return invalid('requires envVariables string mappings')
-			}
-		}
+	const result = descriptorDocumentSchema.safeParse(document)
+	if (!result.success) {
+		const path = result.error.issues[0]?.path ?? []
+		if (path.includes('envVariables')) return invalid('requires envVariables string mappings')
+		if (path.includes('build') || path.includes('run')) return invalid('requires build and run mappings')
+		if (path.length > 1) return invalid('requires string setup names')
+		return invalid(path.length === 0 ? 'requires a mapping document' : 'requires a nonempty zerops sequence')
 	}
-	return { document, setups }
+	const setups: string[] = []
+	for (const entry of result.data.zerops) {
+		if (setups.includes(entry.setup)) return invalid('must not contain duplicate setup names')
+		setups.push(entry.setup)
+	}
+	return { document: result.data, setups }
 }
 
 export const selectZeropsDescriptorSetup = (parsed: ZeropsDescriptor, setup?: string): string => {

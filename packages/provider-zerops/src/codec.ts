@@ -1,73 +1,39 @@
-import type { JsonValue, ProviderCodec } from '@fabrika/provider-contract'
+import type { ProviderCodec } from '@fabrika/provider-contract'
+import { z } from 'zod'
 import { parseManagedOwner } from './managed-environment/protocol'
-import type { ZeropsRuntimeSource, ZeropsRuntimeTarget } from './types'
-
-const field = (payload: JsonValue, key: string): JsonValue | undefined => {
-	if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
-		throw new Error('Zerops target must be an object')
-	}
-	return payload[key]
-}
-
-const requiredString = (payload: JsonValue, key: string): string => {
-	const value = field(payload, key)
-	if (typeof value !== 'string' || value === '') {
-		throw new Error(`Zerops target ${key} must be a non-empty string`)
-	}
-	return value
-}
-
-const optionalString = (payload: JsonValue, key: string): string | undefined => {
-	const value = field(payload, key)
-	if (value === undefined) {
-		return undefined
-	}
-	if (typeof value !== 'string' || value === '') {
-		throw new Error(`Zerops target ${key} must be a non-empty string when present`)
-	}
-	return value
-}
+import type { ZeropsRuntimeTarget } from './types'
 
 const IMMUTABLE_GIT_OBJECT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
-
-const object = (value: JsonValue | undefined, label: string): { readonly [key: string]: JsonValue } => {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-		throw new Error(`${label} must be an object`)
-	}
-	return value
-}
-
-const runtimeSource = (payload: JsonValue): ZeropsRuntimeSource | undefined => {
-	const value = field(payload, 'source')
-	if (value === undefined) return undefined
-	const source = object(value, 'Zerops target source')
-	const repository = object(source['repository'], 'Zerops target source repository')
-	const allowedSourceKeys = ['runId', 'repository', 'commitSha', 'githubInstallationId']
-	const allowedRepositoryKeys = ['owner', 'name']
-	if (Object.keys(source).some((key) => !allowedSourceKeys.includes(key))) {
-		throw new Error('Zerops target source contains an unknown field')
-	}
-	if (Object.keys(repository).some((key) => !allowedRepositoryKeys.includes(key))) {
-		throw new Error('Zerops target source repository contains an unknown field')
-	}
-	const installation = source['githubInstallationId']
-	if (installation !== undefined && (typeof installation !== 'number' || !Number.isSafeInteger(installation) || installation <= 0)) {
-		throw new Error('Zerops target source githubInstallationId must be a positive safe integer')
-	}
-	const commitSha = requiredString(source, 'commitSha')
-	if (!IMMUTABLE_GIT_OBJECT.test(commitSha)) {
-		throw new Error('Zerops target source commitSha must be an exact lowercase Git object id')
-	}
-	return {
-		runId: requiredString(source, 'runId'),
-		repository: {
-			owner: requiredString(repository, 'owner'),
-			name: requiredString(repository, 'name'),
-		},
-		commitSha,
-		...(installation === undefined ? {} : { githubInstallationId: installation }),
-	}
-}
+const runtimeSourceSchema = z.object({
+	runId: z.string().min(1),
+	repository: z.object({ owner: z.string().min(1), name: z.string().min(1) }).strict(),
+	commitSha: z.string().regex(IMMUTABLE_GIT_OBJECT),
+	githubInstallationId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+}).strict().transform((source) => {
+	if (source.githubInstallationId === undefined) delete source.githubInstallationId
+	return source
+})
+const runtimeTargetSchema = z.object({
+	projectId: z.string().min(1),
+	serviceId: z.string().min(1),
+	accessToken: z.string().min(1),
+	managedAdmission: z.object({
+		owner: z.unknown().transform(parseManagedOwner),
+		markerRecordId: z.string().min(1),
+	}).strict().optional(),
+	source: runtimeSourceSchema.optional(),
+	apiBaseUrl: z.string().min(1).optional(),
+	propustkaUrl: z.string().min(1).optional(),
+	adminKey: z.string().min(1).optional(),
+}).strict().refine((target) =>
+	target.managedAdmission === undefined || (
+		target.managedAdmission.owner.projectId === target.projectId && target.managedAdmission.owner.serviceId === target.serviceId
+	), 'Zerops managed admission has different coordinates').transform((target) => {
+		for (const key of Object.keys(target)) {
+			if (Reflect.get(target, key) === undefined) Reflect.deleteProperty(target, key)
+		}
+		return target
+	})
 
 export const zeropsTargetCodec: ProviderCodec<ZeropsRuntimeTarget> = {
 	version: 2,
@@ -96,33 +62,12 @@ export const zeropsTargetCodec: ProviderCodec<ZeropsRuntimeTarget> = {
 		...(target.adminKey !== undefined ? { adminKey: target.adminKey } : {}),
 	}),
 	decode: (payload) => {
-		const target = object(payload, 'Zerops target')
-		const allowedKeys = ['projectId', 'serviceId', 'accessToken', 'source', 'apiBaseUrl', 'propustkaUrl', 'adminKey', 'managedAdmission']
-		if (Object.keys(target).some((key) => !allowedKeys.includes(key))) {
-			throw new Error('Zerops target contains an unknown field')
-		}
-		const source = runtimeSource(payload)
-		let managedAdmission: ZeropsRuntimeTarget['managedAdmission']
-		if (target['managedAdmission'] !== undefined) {
-			const admission = object(target['managedAdmission'], 'Zerops managed admission')
-			if (Object.keys(admission).some((key) => key !== 'owner' && key !== 'markerRecordId')) {
-				throw new Error('Zerops managed admission contains an unknown field')
-			}
-			const owner = parseManagedOwner(admission['owner'])
-			if (owner.projectId !== target['projectId'] || owner.serviceId !== target['serviceId']) {
-				throw new Error('Zerops managed admission has different coordinates')
-			}
-			managedAdmission = { owner, markerRecordId: requiredString(admission, 'markerRecordId') }
-		}
-		return {
-			projectId: requiredString(payload, 'projectId'),
-			serviceId: requiredString(payload, 'serviceId'),
-			accessToken: requiredString(payload, 'accessToken'),
-			...(managedAdmission === undefined ? {} : { managedAdmission }),
-			...(source === undefined ? {} : { source }),
-			...(optionalString(payload, 'apiBaseUrl') !== undefined ? { apiBaseUrl: optionalString(payload, 'apiBaseUrl') } : {}),
-			...(optionalString(payload, 'propustkaUrl') !== undefined ? { propustkaUrl: optionalString(payload, 'propustkaUrl') } : {}),
-			...(optionalString(payload, 'adminKey') !== undefined ? { adminKey: optionalString(payload, 'adminKey') } : {}),
-		}
+		const result = runtimeTargetSchema.safeParse(payload)
+		if (result.success) return result.data
+		const issue = result.error.issues[0]
+		if (issue?.code === 'unrecognized_keys') throw new Error('Zerops target contains an unknown field')
+		if (issue?.code === 'custom') throw new Error(issue.message)
+		if (issue?.path.join('.') === 'source.commitSha') throw new Error('Zerops target source commitSha must be an exact lowercase Git object id')
+		throw new Error(`Zerops target ${issue?.path.join('.') ?? ''} is invalid`)
 	},
 }

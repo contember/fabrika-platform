@@ -21,18 +21,22 @@ const failed = (): never => {
 	throw new Error('zerops: managed-environment create-only confirmation failed')
 }
 
+const confirmationSchema = z.object({
+	attempts: z.number().int().min(1).max(30),
+	intervalMs: z.number().min(0).max(10_000),
+	serviceId: z.string().refine((value) => value.trim() !== ''),
+	expectedRecordId: z.string().refine((value) => value.trim() !== '').optional(),
+	key: z.union([z.literal(MANAGED_ENVIRONMENT_MARKER), z.string().regex(/^FABRIKA_MENV_[a-f0-9]{48}_[RDIAES]$/)]),
+})
+
 /** A lost response is confirmable only while the original intended value remains in this invocation. */
 async function createAndConfirmManagedRecord(input: ManagedCreateOnlyInput): Promise<{ referenceName: string; backingRecordId: string }> {
-	const attempts = input.attempts ?? 5
-	const intervalMs = input.intervalMs ?? 1000
-	if (!Number.isInteger(attempts) || attempts < 1 || attempts > 30 || !Number.isFinite(intervalMs) || intervalMs < 0 || intervalMs > 10_000) {
-		return failed()
-	}
-	if (input.serviceId.trim() === '' || (input.expectedRecordId !== undefined && input.expectedRecordId.trim() === '')) return failed()
-	if (input.key !== MANAGED_ENVIRONMENT_MARKER && !/^FABRIKA_MENV_[a-f0-9]{48}_[RDIAES]$/.test(input.key)) return failed()
+	const result = confirmationSchema.safeParse({ ...input, attempts: input.attempts ?? 5, intervalMs: input.intervalMs ?? 1000 })
+	if (!result.success) return failed()
+	const { attempts, intervalMs, serviceId, key, expectedRecordId } = result.data
 	input.signal.throwIfAborted()
 	try {
-		await input.api.createServiceEnv({ serviceId: input.serviceId, key: input.key, value: input.value, signal: input.signal })
+		await input.api.createServiceEnv({ serviceId, key, value: input.value, signal: input.signal })
 	} catch {
 		input.signal.throwIfAborted()
 	}
@@ -40,19 +44,19 @@ async function createAndConfirmManagedRecord(input: ManagedCreateOnlyInput): Pro
 		input.signal.throwIfAborted()
 		let listed: ZeropsServiceEnv[] | undefined
 		try {
-			listed = await input.api.listServiceEnv({ serviceId: input.serviceId, signal: input.signal })
+			listed = await input.api.listServiceEnv({ serviceId, signal: input.signal })
 		} catch {
 			input.signal.throwIfAborted()
 		}
 		input.signal.throwIfAborted()
 		if (listed !== undefined) {
-			const records = parseServiceEnvResponse({ items: listed }, input.serviceId)
-			const found = records.find((entry) => entry.key === input.key)
+			const records = parseServiceEnvResponse({ items: listed }, serviceId)
+			const found = records.find((entry) => entry.key === key)
 			if (found !== undefined) {
-				if (found.sensitive !== true || found.content !== input.value || (input.expectedRecordId !== undefined && found.id !== input.expectedRecordId)) {
+				if (found.sensitive !== true || found.content !== input.value || (expectedRecordId !== undefined && found.id !== expectedRecordId)) {
 					return failed()
 				}
-				return { referenceName: input.key, backingRecordId: found.id }
+				return { referenceName: key, backingRecordId: found.id }
 			}
 		}
 		if (attempt + 1 < attempts) {
@@ -108,3 +112,4 @@ export async function createManagedMarker(
 	})
 	return { markerRecordId: confirmed.backingRecordId }
 }
+import { z } from 'zod'

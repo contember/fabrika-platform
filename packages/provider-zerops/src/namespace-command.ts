@@ -1,6 +1,7 @@
 import { createRpcClient } from '@fabrika/app'
 import type { AdoptDeploymentNamespaceRequest, ControlRpcContract, CreateDeploymentNamespaceRequest } from '@fabrika/control-contract'
 import type { JsonValue, ProviderDeploymentNamespace, ProviderNamespacePlan } from '@fabrika/provider-contract'
+import { z } from 'zod'
 import type { ZeropsCliArgs } from './cli-args'
 import {
 	createZeropsNamespaceOperator,
@@ -9,6 +10,7 @@ import {
 	type ZeropsNamespacePostgres,
 	zeropsNamespaceTargetCodec,
 } from './namespace'
+import { postgresSchema } from './namespace/codec'
 
 export interface ZeropsNamespaceCommandDependencies {
 	readonly source: Readonly<Record<string, string | undefined>>
@@ -30,33 +32,10 @@ const postgres = (args: ZeropsCliArgs): ZeropsNamespacePostgres | undefined => {
 	if (type === undefined) {
 		throw new Error('--postgres-type is required with --postgres-profile')
 	}
-	if (type === 'postgresql:ha@18') {
-		if (
-			profile !== undefined
-			&& profile !== 'oltp-staging'
-			&& profile !== 'oltp-production'
-			&& profile !== 'oltp-enterprise'
-			&& profile !== 'olap-production'
-			&& profile !== 'writeheavy-production'
-		) {
-			throw new Error(`--postgres-profile ${profile} is not supported by ${type}`)
-		}
-		return profile === undefined ? { type } : { type, profile }
-	}
-	if (type === 'postgresql:single@18') {
-		if (
-			profile !== undefined
-			&& profile !== 'oltp-hobby'
-			&& profile !== 'oltp-staging'
-			&& profile !== 'oltp-production'
-			&& profile !== 'olap-production'
-			&& profile !== 'writeheavy-production'
-		) {
-			throw new Error(`--postgres-profile ${profile} is not supported by ${type}`)
-		}
-		return profile === undefined ? { type } : { type, profile }
-	}
-	throw new Error('--postgres-type must be postgresql:ha@18 or postgresql:single@18')
+	const result = postgresSchema.safeParse({ type, profile })
+	if (result.success) return result.data
+	if (result.error.issues[0]?.path[0] === 'type') throw new Error('--postgres-type must be postgresql:ha@18 or postgresql:single@18')
+	throw new Error(`--postgres-profile ${profile} is not supported by ${type}`)
 }
 
 const planOptions = (args: ZeropsCliArgs): { [key: string]: JsonValue } | undefined => {
@@ -137,14 +116,13 @@ const controlClient = (
 		},
 	})
 
+const namespaceResponseSchema = z.object({ id: z.string(), state: z.enum(['pending', 'provisioning', 'ready', 'failed']) }).passthrough()
 const writeNamespace = (deps: ZeropsNamespaceCommandDependencies, result: unknown): void => {
-	if (
-		typeof result !== 'object' || result === null || !('id' in result) || typeof result.id !== 'string' || !('state' in result)
-		|| typeof result.state !== 'string' || !['pending', 'provisioning', 'ready', 'failed'].includes(result.state)
-	) {
+	const parsed = namespaceResponseSchema.safeParse(result)
+	if (!parsed.success) {
 		throw new Error('Control API returned an invalid namespace')
 	}
-	deps.write(outputJson(result))
+	deps.write(outputJson(parsed.data))
 }
 
 const createBody = (namespace: ProviderDeploymentNamespace): CreateDeploymentNamespaceRequest => ({

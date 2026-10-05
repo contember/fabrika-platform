@@ -1,4 +1,5 @@
 import type { JsonValue } from '@fabrika/provider-contract'
+import { z } from 'zod'
 
 export const MANAGED_ENVIRONMENT_PREFIX = 'FABRIKA_MENV_'
 export const MANAGED_ENVIRONMENT_MARKER = 'FABRIKA_MENV_PROTOCOL'
@@ -83,59 +84,83 @@ export function mapManagedKeys<T>(read: (key: ManagedKey) => T): Record<ManagedK
 const invalid = (): never => {
 	throw new Error('zerops: invalid managed-environment protocol data')
 }
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
-const record = (value: unknown): Record<string, unknown> => {
-	if (!isRecord(value)) return invalid()
+// Check the raw object before Zod copies it, so hidden fields and custom prototypes cannot disappear.
+const protocolObjectSchema = z.unknown().superRefine((value, ctx) => {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+		ctx.addIssue({ code: 'custom', message: 'invalid protocol object', fatal: true })
+		return
+	}
 	const prototype: unknown = Object.getPrototypeOf(value)
-	if (prototype !== Object.prototype && prototype !== null) return invalid()
-	return value
-}
-
-const exactFields = (value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): void => {
-	if (Reflect.ownKeys(value).length !== Object.keys(value).length) invalid()
-	if (required.some((key) => !Object.hasOwn(value, key))) invalid()
-	if (Reflect.ownKeys(value).some((key) => typeof key !== 'string' || (!required.includes(key) && !optional.includes(key)))) invalid()
-}
-
-const text = (value: unknown): string => {
-	if (typeof value !== 'string' || value.trim() === '') return invalid()
-	for (let index = 0; index < value.length; index++) {
-		const code = value.charCodeAt(index)
-		if (code < 32 || (code >= 127 && code <= 159)) return invalid()
+	if ((prototype !== Object.prototype && prototype !== null) || Reflect.ownKeys(value).length !== Object.keys(value).length) {
+		ctx.addIssue({ code: 'custom', message: 'invalid protocol object', fatal: true })
 	}
-	return value
-}
-
-const digest = (value: unknown): string => {
-	if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)) return invalid()
-	return value
-}
-
-const ownerFields = ['protocol', 'appId', 'environment', 'namespaceId', 'projectId', 'serviceId', 'hostname']
-
-const readOwner = (value: Record<string, unknown>): ManagedOwner => {
-	if (value['protocol'] !== 1) return invalid()
-	const hostname = text(value['hostname'])
-	if (!/^[a-z0-9]{1,25}$/.test(hostname)) return invalid()
-	return {
-		protocol: 1,
-		appId: text(value['appId']),
-		environment: text(value['environment']),
-		namespaceId: text(value['namespaceId']),
-		projectId: text(value['projectId']),
-		serviceId: text(value['serviceId']),
-		hostname,
+})
+const textSchema = z.string().refine((value) => value.trim() !== '' && !/\p{Cc}/u.test(value))
+const digestSchema = z.string().regex(/^[a-f0-9]{64}$/)
+const referenceCoordinatesSchema = z.object({ projectId: textSchema, serviceId: textSchema, appVersionId: textSchema })
+const ownerSchema = z.object({
+	protocol: z.literal(1),
+	appId: textSchema,
+	environment: textSchema,
+	namespaceId: textSchema,
+	projectId: textSchema,
+	serviceId: textSchema,
+	hostname: z.string().regex(/^[a-z0-9]{1,25}$/),
+}).strict()
+const managedOwnerSchema = protocolObjectSchema.pipe(ownerSchema)
+const markerSchema = protocolObjectSchema.pipe(ownerSchema.extend({
+	creationProcessId: textSchema,
+	initialCodelessAppVersionId: textSchema,
+}))
+const managedValuesSchema = protocolObjectSchema.pipe(z.object(mapManagedKeys(() => z.string().nullable())).strict())
+const managedEntrySchema = protocolObjectSchema.pipe(z.discriminatedUnion('state', [
+	z.object({ state: z.literal('absent') }).strict(),
+	z.object({ state: z.literal('pending'), referenceName: textSchema }).strict(),
+	z.object({ state: z.literal('confirmed'), referenceName: textSchema, backingRecordId: textSchema }).strict(),
+]))
+const managedBindingSchema = protocolObjectSchema.pipe(z.object(mapManagedKeys(() => managedEntrySchema)).strict()).superRefine((binding, ctx) => {
+	const names = new Set<string>()
+	const ids = new Set<string>()
+	for (const key of MANAGED_KEYS) {
+		const entry = binding[key]
+		if (entry.state === 'absent') continue
+		if (
+			!/^FABRIKA_MENV_[a-f0-9]{48}_[RDIAES]$/.test(entry.referenceName) || !entry.referenceName.endsWith(`_${slots[key]}`)
+			|| names.has(entry.referenceName)
+		) {
+			ctx.addIssue({ code: 'custom', message: 'invalid managed reference' })
+		}
+		names.add(entry.referenceName)
+		if (entry.state !== 'confirmed') continue
+		if (ids.has(entry.backingRecordId)) ctx.addIssue({ code: 'custom', message: 'duplicate managed record' })
+		ids.add(entry.backingRecordId)
 	}
-}
+})
+const checkpointSchema = protocolObjectSchema.pipe(ownerSchema.extend({
+	runId: textSchema,
+	appVersionId: textSchema,
+	markerRecordId: textSchema,
+	originalArtifactSha256: digestSchema,
+	descriptorSha256: digestSchema,
+	setup: textSchema,
+	sourceCommitSha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+	phase: z.enum(['managed_env_staging', 'managed_env_staged', 'source_uploaded', 'build_trigger_requested', 'build_triggered']),
+	binding: managedBindingSchema,
+	processId: textSchema.optional(),
+})).superRefine((value, ctx) => {
+	if (Object.hasOwn(value, 'processId') && (value.phase !== 'build_triggered' || value.processId === undefined)) {
+		ctx.addIssue({ code: 'custom', message: 'invalid process field' })
+	}
+})
 
 const bounded = (value: unknown): void => {
 	if (new TextEncoder().encode(JSON.stringify(value)).byteLength > MANAGED_CHECKPOINT_MAX_BYTES) invalid()
 }
 
 export function parseManagedOwner(value: unknown): ManagedOwner {
-	const raw = record(value)
-	exactFields(raw, ownerFields)
-	const owner = readOwner(raw)
+	const result = managedOwnerSchema.safeParse(value)
+	if (!result.success) return invalid()
+	const owner = result.data
 	bounded(owner)
 	return owner
 }
@@ -152,13 +177,8 @@ export function parseManagedMarker(contents: string): ManagedMarker {
 	} catch {
 		return invalid()
 	}
-	const value = record(raw)
-	exactFields(value, [...ownerFields, 'creationProcessId', 'initialCodelessAppVersionId'])
-	return {
-		...readOwner(value),
-		creationProcessId: text(value['creationProcessId']),
-		initialCodelessAppVersionId: text(value['initialCodelessAppVersionId']),
-	}
+	const result = markerSchema.safeParse(raw)
+	return result.success ? result.data : invalid()
 }
 
 export function serializeManagedMarker(value: ManagedMarker): string {
@@ -178,43 +198,16 @@ export function managedOwnerCoordinates(value: ManagedOwner): ManagedOwner {
 }
 
 export function parseManagedValues(value: unknown): ManagedValues {
-	const raw = record(value)
-	exactFields(raw, MANAGED_KEYS)
-	return mapManagedKeys((key) => {
-		const entry = raw[key]
-		if (entry !== null && typeof entry !== 'string') return invalid()
-		return entry
-	})
+	const result = managedValuesSchema.safeParse(value)
+	return result.success ? result.data : invalid()
 }
 
 export function parseManagedBinding(value: unknown): ManagedBinding {
-	const raw = record(value)
-	exactFields(raw, MANAGED_KEYS)
-	const names = new Set<string>()
-	const ids = new Set<string>()
-	return mapManagedKeys((key): ManagedEntry => {
-		const entry = record(raw[key])
-		if (entry['state'] === 'absent') {
-			exactFields(entry, ['state'])
-			return { state: 'absent' }
-		}
-		const state = entry['state']
-		if (state !== 'pending' && state !== 'confirmed') return invalid()
-		exactFields(entry, state === 'pending' ? ['state', 'referenceName'] : ['state', 'referenceName', 'backingRecordId'])
-		const referenceName = text(entry['referenceName'])
-		if (!/^FABRIKA_MENV_[a-f0-9]{48}_[RDIAES]$/.test(referenceName) || !referenceName.endsWith(`_${slots[key]}`)) return invalid()
-		if (names.has(referenceName)) return invalid()
-		names.add(referenceName)
-		if (state === 'pending') return { state, referenceName }
-		const backingRecordId = text(entry['backingRecordId'])
-		if (ids.has(backingRecordId)) return invalid()
-		ids.add(backingRecordId)
-		return { state, referenceName, backingRecordId }
-	})
+	const result = managedBindingSchema.safeParse(value)
+	return result.success ? result.data : invalid()
 }
 
-export function requireConfirmedBinding(value: ManagedBinding): ConfirmedManagedBinding {
-	const binding = parseManagedBinding(value)
+function confirmedBinding(binding: ManagedBinding): ConfirmedManagedBinding {
 	return mapManagedKeys((key) => {
 		const entry = binding[key]
 		if (entry.state === 'pending') return invalid()
@@ -222,49 +215,29 @@ export function requireConfirmedBinding(value: ManagedBinding): ConfirmedManaged
 	})
 }
 
+export function requireConfirmedBinding(value: ManagedBinding): ConfirmedManagedBinding {
+	return confirmedBinding(parseManagedBinding(value))
+}
+
 /** This parser checks shape and slot grammar; verifyManagedCheckpoint also checks coordinate-derived names. */
 export function parseManagedCheckpoint(value: unknown): ManagedCheckpoint {
-	const raw = record(value)
-	const phase = raw['phase']
-	exactFields(raw, [
-		...ownerFields,
-		'runId',
-		'appVersionId',
-		'markerRecordId',
-		'originalArtifactSha256',
-		'descriptorSha256',
-		'setup',
-		'sourceCommitSha',
-		'phase',
-		'binding',
-	], phase === 'build_triggered' ? ['processId'] : [])
-	const sourceCommitSha = text(raw['sourceCommitSha'])
-	if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sourceCommitSha)) return invalid()
-	const coordinates: ManagedCheckpointCoordinates = {
-		...readOwner(raw),
-		runId: text(raw['runId']),
-		appVersionId: text(raw['appVersionId']),
-		markerRecordId: text(raw['markerRecordId']),
-		originalArtifactSha256: digest(raw['originalArtifactSha256']),
-		descriptorSha256: digest(raw['descriptorSha256']),
-		setup: text(raw['setup']),
-		sourceCommitSha,
-	}
-	const binding = parseManagedBinding(raw['binding'])
+	const result = checkpointSchema.safeParse(value)
+	if (!result.success) return invalid()
+	const { phase, binding, processId, ...coordinates } = result.data
 	if (
 		MANAGED_KEYS.some((key) => {
 			const entry = binding[key]
 			return entry.state === 'confirmed' && entry.backingRecordId === coordinates.markerRecordId
 		})
 	) return invalid()
-	bounded(raw)
+	bounded(value)
 	if (phase === 'managed_env_staging') return { ...coordinates, phase, binding }
-	const confirmed = requireConfirmedBinding(binding)
+	const confirmed = confirmedBinding(binding)
 	if (phase === 'managed_env_staged' || phase === 'source_uploaded' || phase === 'build_trigger_requested') {
 		return { ...coordinates, phase, binding: confirmed }
 	}
 	if (phase !== 'build_triggered') return invalid()
-	return { ...coordinates, phase, binding: confirmed, ...(Object.hasOwn(raw, 'processId') ? { processId: text(raw['processId']) } : {}) }
+	return { ...coordinates, phase, binding: confirmed, ...(processId === undefined ? {} : { processId }) }
 }
 
 export function encodeManagedCheckpoint(value: ManagedCheckpoint): JsonValue {
@@ -275,7 +248,9 @@ export function encodeManagedCheckpoint(value: ManagedCheckpoint): JsonValue {
 export async function managedReferenceNames(
 	coordinates: { projectId: string; serviceId: string; appVersionId: string },
 ): Promise<Record<ManagedKey, string>> {
-	const tuple = [1, text(coordinates.projectId), text(coordinates.serviceId), text(coordinates.appVersionId)]
+	const result = referenceCoordinatesSchema.safeParse(coordinates)
+	if (!result.success) return invalid()
+	const tuple = [1, result.data.projectId, result.data.serviceId, result.data.appVersionId]
 	const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(tuple))))
 	const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('').slice(0, 48)
 	return mapManagedKeys((key) => `${MANAGED_ENVIRONMENT_PREFIX}${hex}_${slots[key]}`)

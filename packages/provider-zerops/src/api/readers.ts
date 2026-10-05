@@ -18,33 +18,10 @@ export const prop = (
 	key: string,
 ): unknown => (typeof value === 'object' && value !== null && key in value ? Reflect.get(value, key) : undefined)
 
-export const str = (value: unknown, key: string): string | undefined => {
-	const found = prop(value, key)
-	return typeof found === 'string' ? found : undefined
-}
-
-export const num = (value: unknown, key: string): number | undefined => {
-	const found = prop(value, key)
-	return typeof found === 'number' ? found : undefined
-}
-
-const bool = (value: unknown, key: string): boolean | undefined => {
-	const found = prop(value, key)
-	return typeof found === 'boolean' ? found : undefined
-}
-
-export const arr = (value: unknown, key: string): unknown[] => {
-	const found = prop(value, key)
-	return Array.isArray(found) ? found : []
-}
-
-const stringList = (value: unknown, key: string): string[] | undefined => {
-	const found = prop(value, key)
-	if (!Array.isArray(found) || found.some((entry) => typeof entry !== 'string')) {
-		return undefined
-	}
-	return found.filter((entry): entry is string => typeof entry === 'string')
-}
+const optionalTextSchema = z.string().optional().catch(undefined)
+const textSchema = z.string().catch('')
+const optionalNumberSchema = z.union([z.number(), z.nan()]).optional().catch(undefined)
+const optionalBooleanSchema = z.boolean().optional().catch(undefined)
 
 /** Every valid `ZeropsAppVersionStatus`, in pipeline order. The array's element type keeps it exhaustive. */
 const STATUSES: readonly ZeropsAppVersionStatus[] = [
@@ -127,72 +104,160 @@ const asProjectMode = (value: unknown): ZeropsProjectMode | undefined => PROJECT
 
 const asServiceStatus = (value: unknown): ZeropsServiceStatus | undefined => SERVICE_STATUSES.find((status) => status === value)
 
-export const readAppVersion = (value: unknown): ZeropsAppVersion => ({
-	id: str(value, 'id') ?? '',
-	status: asAppVersionStatus(prop(value, 'status')),
-	serviceStackId: str(value, 'serviceStackId'),
-	projectId: str(value, 'projectId'),
-	sequence: num(value, 'sequence'),
-	build: typeof prop(value, 'build') === 'object' && prop(value, 'build') !== null
-		? {
-			startDate: str(prop(value, 'build'), 'startDate'),
-			endDate: str(prop(value, 'build'), 'endDate'),
-			pipelineStart: str(prop(value, 'build'), 'pipelineStart'),
-			pipelineFinish: str(prop(value, 'build'), 'pipelineFinish'),
-			pipelineFailed: str(prop(value, 'build'), 'pipelineFailed'),
-		}
-		: undefined,
-})
+const buildSchema = z.preprocess(
+	(value) =>
+		typeof value !== 'object' || value === null ? undefined : {
+			startDate: prop(value, 'startDate'),
+			endDate: prop(value, 'endDate'),
+			pipelineStart: prop(value, 'pipelineStart'),
+			pipelineFinish: prop(value, 'pipelineFinish'),
+			pipelineFailed: prop(value, 'pipelineFailed'),
+		},
+	z.object({
+		startDate: optionalTextSchema,
+		endDate: optionalTextSchema,
+		pipelineStart: optionalTextSchema,
+		pipelineFinish: optionalTextSchema,
+		pipelineFailed: optionalTextSchema,
+	}).optional(),
+)
+const appVersionSchema = z.preprocess(
+	(value) => ({
+		id: prop(value, 'id'),
+		status: prop(value, 'status'),
+		serviceStackId: prop(value, 'serviceStackId'),
+		projectId: prop(value, 'projectId'),
+		sequence: prop(value, 'sequence'),
+		build: prop(value, 'build'),
+	}),
+	z.object({
+		id: textSchema,
+		status: z.unknown().transform(asAppVersionStatus),
+		serviceStackId: optionalTextSchema,
+		projectId: optionalTextSchema,
+		sequence: optionalNumberSchema,
+		build: buildSchema,
+	}),
+)
+export const readAppVersion = (value: unknown): ZeropsAppVersion => appVersionSchema.parse(value)
 
-export const readProcess = (value: unknown): ZeropsProcess => ({
-	id: str(value, 'id') ?? '',
-	status: str(value, 'status'),
-	actionName: str(value, 'actionName'),
-	serviceStackId: str(value, 'serviceStackId'),
-	appVersionId: str(prop(value, 'appVersion'), 'id'),
-})
+const processSchema = z.preprocess(
+	(value) => ({
+		id: prop(value, 'id'),
+		status: prop(value, 'status'),
+		actionName: prop(value, 'actionName'),
+		serviceStackId: prop(value, 'serviceStackId'),
+		appVersionId: prop(prop(value, 'appVersion'), 'id'),
+	}),
+	z.object({
+		id: textSchema,
+		status: optionalTextSchema,
+		actionName: optionalTextSchema,
+		serviceStackId: optionalTextSchema,
+		appVersionId: optionalTextSchema,
+	}),
+)
+export const readProcess = (value: unknown): ZeropsProcess => processSchema.parse(value)
 
-export const readService = (value: unknown): ZeropsService => ({
-	id: str(value, 'id') ?? '',
-	name: str(value, 'name') ?? '',
-	projectId: str(value, 'projectId'),
-	status: asServiceStatus(prop(value, 'status')),
-	base: str(value, 'base'),
-	activeAppVersionId: str(prop(value, 'activeAppVersion'), 'id'),
-	...(bool(value, 'subdomainAccess') !== undefined ? { subdomainAccess: bool(value, 'subdomainAccess') } : {}),
-	...(str(value, 'autoscalingProfileId') !== undefined ? { autoscalingProfileId: str(value, 'autoscalingProfileId') } : {}),
-})
+const serviceSchema = z.preprocess(
+	(value) => ({
+		id: prop(value, 'id'),
+		name: prop(value, 'name'),
+		projectId: prop(value, 'projectId'),
+		status: prop(value, 'status'),
+		base: prop(value, 'base'),
+		activeAppVersionId: prop(prop(value, 'activeAppVersion'), 'id'),
+		subdomainAccess: prop(value, 'subdomainAccess'),
+		autoscalingProfileId: prop(value, 'autoscalingProfileId'),
+	}),
+	z.object({
+		id: textSchema,
+		name: textSchema,
+		projectId: optionalTextSchema,
+		status: z.unknown().transform(asServiceStatus),
+		base: optionalTextSchema,
+		activeAppVersionId: optionalTextSchema,
+		subdomainAccess: optionalBooleanSchema,
+		autoscalingProfileId: optionalTextSchema,
+	}).transform((service) => {
+		if (service.subdomainAccess === undefined) delete service.subdomainAccess
+		if (service.autoscalingProfileId === undefined) delete service.autoscalingProfileId
+		return service
+	}),
+)
+export const readService = (value: unknown): ZeropsService => serviceSchema.parse(value)
 
-export const readProject = (value: unknown): ZeropsProject => ({
-	id: str(value, 'id') ?? '',
-	name: str(value, 'name') ?? '',
-	status: asProjectStatus(prop(value, 'status')),
-	mode: asProjectMode(prop(value, 'mode')),
-	...(str(value, 'description') !== undefined ? { description: str(value, 'description') } : {}),
-	...(stringList(value, 'tagList') !== undefined ? { tagList: stringList(value, 'tagList') } : {}),
-})
+const projectSchema = z.preprocess(
+	(value) => ({
+		id: prop(value, 'id'),
+		name: prop(value, 'name'),
+		status: prop(value, 'status'),
+		mode: prop(value, 'mode'),
+		description: prop(value, 'description'),
+		tagList: prop(value, 'tagList'),
+	}),
+	z.object({
+		id: textSchema,
+		name: textSchema,
+		status: z.unknown().transform(asProjectStatus),
+		mode: z.unknown().transform(asProjectMode),
+		description: optionalTextSchema,
+		tagList: z.array(z.string()).optional().catch(undefined),
+	}).transform((project) => {
+		if (project.description === undefined) delete project.description
+		if (project.tagList === undefined) delete project.tagList
+		return project
+	}),
+)
+export const readProject = (value: unknown): ZeropsProject => projectSchema.parse(value)
 
 const ROLE_CODES: readonly ZeropsRoleCode[] = ['OWNER', 'ADMIN', 'BASIC_USER', 'READ_ONLY', 'NO_ACCESS']
 
 /** `undefined` means Zerops sent a role this build does not know — reported as absent, never as a guess. */
 const asRoleCode = (value: unknown): ZeropsRoleCode | undefined => ROLE_CODES.find((role) => role === value)
 
-export const readIntegrationToken = (value: unknown): ZeropsIntegrationToken => ({
-	id: str(value, 'id') ?? '',
-	name: str(value, 'name') ?? '',
-	token: str(value, 'token') ?? '',
-	projects: arr(value, 'projects').map((entry) => ({
-		projectId: str(entry, 'projectId') ?? '',
-		roleCode: asRoleCode(prop(entry, 'roleCode')),
-	})),
-	roleCode: asRoleCode(prop(value, 'roleCode')),
-})
+const integrationGrantSchema = z.preprocess(
+	(value) => ({ projectId: prop(value, 'projectId'), roleCode: prop(value, 'roleCode') }),
+	z.object({ projectId: textSchema, roleCode: z.unknown().transform(asRoleCode) }),
+)
+const integrationTokenSchema = z.preprocess(
+	(value) => ({
+		id: prop(value, 'id'),
+		name: prop(value, 'name'),
+		token: prop(value, 'token'),
+		projects: prop(value, 'projects'),
+		roleCode: prop(value, 'roleCode'),
+	}),
+	z.object({
+		id: textSchema,
+		name: textSchema,
+		token: textSchema,
+		projects: z.array(integrationGrantSchema).catch([]),
+		roleCode: z.unknown().transform(asRoleCode),
+	}),
+)
+export const readIntegrationToken = (value: unknown): ZeropsIntegrationToken => integrationTokenSchema.parse(value)
 
-export const readServiceEnv = (value: unknown): ZeropsServiceEnv => ({
-	id: str(value, 'id') ?? '',
-	key: str(value, 'key') ?? '',
-	content: str(value, 'content') ?? '',
-	serviceStackId: str(value, 'serviceStackId'),
-	type: str(value, 'type'),
-	...(bool(value, 'sensitive') === undefined ? {} : { sensitive: bool(value, 'sensitive') }),
-})
+const serviceEnvSchema = z.preprocess(
+	(value) => ({
+		id: prop(value, 'id'),
+		key: prop(value, 'key'),
+		content: prop(value, 'content'),
+		serviceStackId: prop(value, 'serviceStackId'),
+		type: prop(value, 'type'),
+		sensitive: prop(value, 'sensitive'),
+	}),
+	z.object({
+		id: textSchema,
+		key: textSchema,
+		content: textSchema,
+		serviceStackId: optionalTextSchema,
+		type: optionalTextSchema,
+		sensitive: optionalBooleanSchema,
+	}).transform((entry) => {
+		if (entry.sensitive === undefined) delete entry.sensitive
+		return entry
+	}),
+)
+export const readServiceEnv = (value: unknown): ZeropsServiceEnv => serviceEnvSchema.parse(value)
+import { z } from 'zod'

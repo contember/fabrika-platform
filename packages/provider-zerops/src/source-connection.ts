@@ -93,18 +93,27 @@ interface DurableInspectionV2 {
 	readonly bundle?: string
 }
 
+const sourceConnectionConfigSchema = z.object({
+	projectId: z.string().regex(PROJECT_ID_PATTERN),
+	attempts: z.number().int().min(1).max(20),
+	delayMs: z.number().int().min(0).max(5_000),
+})
+
 export function createZeropsSourceConnectionAdmin(options: ZeropsSourceConnectionAdminOptions): SourceConnectionAdmin {
-	if (!PROJECT_ID_PATTERN.test(options.projectId)) throw new SourceConnectionAdminError('invalid_configuration')
-	const attempts = options.reread?.attempts ?? DEFAULT_REREAD_ATTEMPTS
-	const delayMs = options.reread?.delayMs ?? DEFAULT_REREAD_DELAY_MS
-	if (!Number.isSafeInteger(attempts) || attempts <= 0 || attempts > 20 || !Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > 5_000) {
+	const config = sourceConnectionConfigSchema.safeParse({
+		projectId: options.projectId,
+		attempts: options.reread?.attempts ?? DEFAULT_REREAD_ATTEMPTS,
+		delayMs: options.reread?.delayMs ?? DEFAULT_REREAD_DELAY_MS,
+	})
+	if (!config.success) {
 		throw new SourceConnectionAdminError('invalid_configuration')
 	}
+	const { projectId, attempts, delayMs } = config.data
 	const sleep = options.reread?.sleep ?? defaultSleep
 
 	const readEnvironment = async (signal: AbortSignal): Promise<{ service: ZeropsService; environment: ZeropsServiceEnv[] }> => {
 		throwIfAborted(signal)
-		const service = await exactSourceService(options.api, options.projectId, signal)
+		const service = await exactSourceService(options.api, projectId, signal)
 		let environment: ZeropsServiceEnv[]
 		try {
 			environment = await options.api.listServiceEnv({ serviceId: service.id, signal })
@@ -342,3 +351,4 @@ const throwIfAborted = (signal: AbortSignal): void => {
 const isAbort = (error: unknown, signal: AbortSignal): boolean => signal.aborted || (error instanceof Error && error.name === 'AbortError')
 
 const abortError = (): DOMException => new DOMException('Source connection administration was aborted', 'AbortError')
+import { z } from 'zod'
