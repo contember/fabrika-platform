@@ -30,6 +30,37 @@ const publicManifest = {
 }
 
 describe('release package boundaries', () => {
+	test('preserves own prototype-named JSON metadata and dependency keys through staging and manifest boundaries', () => {
+		const text =
+			'{"name":"@fabrika/example","version":"0.0.4","publishConfig":{"access":"public"},"__proto__":{"custom":true},"dependencies":{"__proto__":"workspace:*","constructor":"^1"},"optionalDependencies":{"__proto__":"^2"},"peerDependencies":{"__proto__":"^3"}}'
+		const info = packageInfo(text, '/fixture')
+		const staged = stagedManifest(info, '1.2.3', new Set(['__proto__']))
+		for (
+			const manifest of [
+				parsePackageManifest(text, 'source'),
+				info.manifest,
+				staged,
+				parsePackedManifest(text, 'packed'),
+				parseInstalledManifest(text, 'installed'),
+			]
+		) {
+			expect(Object.hasOwn(manifest, '__proto__')).toBe(true)
+			expect(Object.entries(manifest).find(([key]) => key === '__proto__')).toEqual(['__proto__', { custom: true }])
+			expect(Object.getPrototypeOf(manifest)).toBe(Object.prototype)
+		}
+		expect(JSON.stringify(staged)).toContain('"dependencies":{"__proto__":"^1.2.3","constructor":"^1"}')
+		expect(JSON.stringify(staged)).toContain('"optionalDependencies":{"__proto__":"^2"}')
+		expect(JSON.stringify(staged)).toContain('"peerDependencies":{"__proto__":"^3"}')
+		const packed = parsePackedManifest('{"name":"x","version":"1","devDependencies":{"__proto__":"^4"}}', 'packed')
+		expect(Object.entries(packed.devDependencies ?? {})).toEqual([['__proto__', '^4']])
+	})
+
+	test('validates prototype-named dependency values rather than restoring unvalidated data', () => {
+		for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies', 'devDependencies']) {
+			const text = `{"name":"x","version":"1","${field}":{"__proto__":false}}`
+			expect(() => parsePackedManifest(text, 'packed')).toThrow()
+		}
+	})
 	test('staging preserves extensions and targets, rewrites only internal ranges, and leaves its input untouched', () => {
 		const source = JSON.stringify(publicManifest)
 		const info = packageInfo(source, '/fixture')
@@ -88,6 +119,25 @@ describe('release package boundaries', () => {
 })
 
 describe('packed entry point traversal', () => {
+	test('visits own prototype-named JSON export conditions and bin commands', () => {
+		const manifest = parsePackedManifest(
+			'{"name":"x","version":"1","exports":{".":{"default":"./index.js","__proto__":"./custom.js"}},"bin":{"__proto__":"./cli.js"}}',
+			'packed',
+		)
+		const targets = new Set<string>()
+		collectExportTargets(manifest['exports'], 'fixture.exports', targets)
+		collectBinTargets(manifest['bin'], 'fixture.bin', targets)
+		expect([...targets]).toEqual(['./index.js', './custom.js', './cli.js'])
+	})
+
+	test('rejects invalid targets under prototype-named JSON keys', () => {
+		const manifest = parsePackedManifest(
+			'{"name":"x","version":"1","exports":{".":{"default":"./index.js","__proto__":"missing-prefix.js"}},"bin":{"__proto__":false}}',
+			'packed',
+		)
+		expect(() => collectExportTargets(manifest['exports'], 'fixture.exports', new Set())).toThrow()
+		expect(() => collectBinTargets(manifest['bin'], 'fixture.bin', new Set())).toThrow()
+	})
 	test('visits every conditional and fallback target, retains null exclusions, and deduplicates files', () => {
 		const targets = new Set<string>()
 		collectExportTargets(

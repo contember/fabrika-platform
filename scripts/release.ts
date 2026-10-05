@@ -74,21 +74,37 @@ interface Options {
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
 const nonEmptyString = z.string().min(1)
+// Zod 3 object/record outputs omit __proto__; entry tuples retain every own JSON key.
+const recordEntriesSchema = z.unknown().transform((value, context) => {
+	if (!isRecord(value)) {
+		context.addIssue({ code: z.ZodIssueCode.invalid_type, expected: 'object', received: z.getParsedType(value) })
+		return z.NEVER
+	}
+	return Object.entries(value)
+})
+const manifestFieldsSchema = recordEntriesSchema.transform((entries) => Object.fromEntries(entries))
+const stringRecordSchema = recordEntriesSchema.pipe(z.array(z.tuple([z.string(), z.string()])))
+	.transform((entries) => Object.fromEntries(entries))
 const dependencyMapsSchema = z.object({
-	dependencies: z.record(z.string()).optional(),
-	optionalDependencies: z.record(z.string()).optional(),
-	peerDependencies: z.record(z.string()).optional(),
+	dependencies: stringRecordSchema.optional(),
+	optionalDependencies: stringRecordSchema.optional(),
+	peerDependencies: stringRecordSchema.optional(),
 })
 type DependencyMaps = z.infer<typeof dependencyMapsSchema>
 const packageManifestSchema = z.object({ name: nonEmptyString }).passthrough()
 const packageIdentitySchema = packageManifestSchema.extend({ version: nonEmptyString })
 const publicManifestSchema = packageIdentitySchema.merge(dependencyMapsSchema).passthrough()
-const packedManifestSchema = publicManifestSchema.extend({ devDependencies: z.record(z.string()).optional() })
+const packedManifestSchema = publicManifestSchema.extend({ devDependencies: stringRecordSchema.optional() })
 type ExportTarget = string | null | ExportTarget[] | { [key: string]: ExportTarget }
-const exportTargetSchema: z.ZodType<ExportTarget> = z.lazy(() =>
-	z.union([z.string(), z.null(), z.array(exportTargetSchema), z.record(exportTargetSchema)])
+const exportTargetSchema: z.ZodType<ExportTarget, z.ZodTypeDef, unknown> = z.lazy(() =>
+	z.union([
+		z.string(),
+		z.null(),
+		z.array(exportTargetSchema),
+		recordEntriesSchema.pipe(z.array(z.tuple([z.string(), exportTargetSchema]))).transform((entries) => Object.fromEntries(entries)),
+	])
 )
-const binTargetsSchema = z.union([z.string(), z.record(z.string())]).optional()
+const binTargetsSchema = z.union([z.string(), stringRecordSchema]).optional()
 const releaseManifestSchema = z.object({
 	tag: nonEmptyString,
 	version: nonEmptyString,
@@ -107,9 +123,18 @@ const parseJson = (text: string, source: string): unknown => {
 	}
 }
 
-export const parsePackageManifest = (text: string, source: string) => packageManifestSchema.parse(parseJson(text, source), { path: [source] })
-export const parsePackedManifest = (text: string, source: string) => packedManifestSchema.parse(parseJson(text, source), { path: [source] })
-export const parseInstalledManifest = (text: string, source: string) => packageIdentitySchema.parse(parseJson(text, source), { path: [source] })
+export const parsePackageManifest = (text: string, source: string) => {
+	const fields = manifestFieldsSchema.parse(parseJson(text, source), { path: [source] })
+	return { ...fields, ...packageManifestSchema.parse(fields, { path: [source] }) }
+}
+export const parsePackedManifest = (text: string, source: string) => {
+	const fields = manifestFieldsSchema.parse(parseJson(text, source), { path: [source] })
+	return { ...fields, ...packedManifestSchema.parse(fields, { path: [source] }) }
+}
+export const parseInstalledManifest = (text: string, source: string) => {
+	const fields = manifestFieldsSchema.parse(parseJson(text, source), { path: [source] })
+	return { ...fields, ...packageIdentitySchema.parse(fields, { path: [source] }) }
+}
 export const parseReleaseManifest = (text: string, source: string): ReleaseManifest =>
 	releaseManifestSchema.parse(parseJson(text, source), { path: [source] })
 
@@ -127,7 +152,7 @@ export const packageInfo = (text: string, directory: string): PackageInfo => {
 	if (isPrivate && publishable) throw new Error(`${name}: private package must not declare public publishing`)
 	if (!publishable) return { name, directory, manifest, dependencies: {}, publishable }
 	const validated = publicManifestSchema.parse(manifest, { path: [manifestPath] })
-	return { name, directory, manifest: validated, dependencies: validated, publishable }
+	return { name, directory, manifest: { ...manifest, ...validated }, dependencies: validated, publishable }
 }
 
 const readPackages = async (): Promise<readonly PackageInfo[]> => {
@@ -266,9 +291,9 @@ export const stagedManifest = (item: PackageInfo, version: string, publicNames: 
 	for (const field of DEPENDENCY_FIELDS) {
 		const dependencies = dependencyMap(item, field)
 		if (dependencies.size === 0) continue
-		const rewritten: Record<string, string> = {}
-		for (const [name, range] of dependencies) rewritten[name] = publicNames.has(name) && range.startsWith('workspace:') ? `^${version}` : range
-		manifest[field] = rewritten
+		manifest[field] = Object.fromEntries(
+			[...dependencies].map(([name, range]) => [name, publicNames.has(name) && range.startsWith('workspace:') ? `^${version}` : range]),
+		)
 	}
 	return manifest
 }
