@@ -2,12 +2,13 @@ import { createHash } from 'node:crypto'
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
+import { z } from 'zod'
 
 const ROOT = resolve(import.meta.dir, '..')
 type DependencyField = 'dependencies' | 'optionalDependencies' | 'peerDependencies'
 
 const DEPENDENCY_FIELDS: readonly DependencyField[] = ['dependencies', 'optionalDependencies', 'peerDependencies']
-const PACKED_DEPENDENCY_FIELDS: readonly string[] = [...DEPENDENCY_FIELDS, 'devDependencies']
+const PACKED_DEPENDENCY_FIELDS: readonly (DependencyField | 'devDependencies')[] = [...DEPENDENCY_FIELDS, 'devDependencies']
 const EXPECTED_PUBLIC_PACKAGES = [
 	'@fabrika/annotations',
 	'@fabrika/app',
@@ -45,6 +46,7 @@ interface PackageInfo {
 	readonly name: string
 	readonly directory: string
 	readonly manifest: Record<string, unknown>
+	readonly dependencies: DependencyMaps
 	readonly publishable: boolean
 }
 
@@ -71,33 +73,61 @@ interface Options {
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
-const requiredString = (record: Record<string, unknown>, key: string, source: string): string => {
-	const value = record[key]
-	if (typeof value !== 'string' || value === '') throw new Error(`${source}: ${key} must be a non-empty string`)
-	return value
-}
+const nonEmptyString = z.string().min(1)
+const dependencyMapsSchema = z.object({
+	dependencies: z.record(z.string()).optional(),
+	optionalDependencies: z.record(z.string()).optional(),
+	peerDependencies: z.record(z.string()).optional(),
+})
+type DependencyMaps = z.infer<typeof dependencyMapsSchema>
+const packageManifestSchema = z.object({ name: nonEmptyString }).passthrough()
+const packageIdentitySchema = packageManifestSchema.extend({ version: nonEmptyString })
+const publicManifestSchema = packageIdentitySchema.merge(dependencyMapsSchema).passthrough()
+const packedManifestSchema = publicManifestSchema.extend({ devDependencies: z.record(z.string()).optional() })
+type ExportTarget = string | null | ExportTarget[] | { [key: string]: ExportTarget }
+const exportTargetSchema: z.ZodType<ExportTarget> = z.lazy(() =>
+	z.union([z.string(), z.null(), z.array(exportTargetSchema), z.record(exportTargetSchema)])
+)
+const binTargetsSchema = z.union([z.string(), z.record(z.string())]).optional()
+const releaseManifestSchema = z.object({
+	tag: nonEmptyString,
+	version: nonEmptyString,
+	packages: z.array(z.object({
+		name: nonEmptyString,
+		filename: nonEmptyString,
+		dependencies: z.array(z.string()),
+	})),
+})
 
-const dependencyMap = (manifest: Record<string, unknown>, field: DependencyField, source: string): ReadonlyMap<string, string> => {
-	const value = manifest[field]
-	if (value === undefined) return new Map()
-	if (!isRecord(value)) throw new Error(`${source}: ${field} must be an object`)
-	const dependencies = new Map<string, string>()
-	for (const [name, range] of Object.entries(value)) {
-		if (typeof range !== 'string') throw new Error(`${source}: ${field}.${name} must be a string`)
-		dependencies.set(name, range)
-	}
-	return dependencies
-}
-
-const parseJsonObject = (text: string, source: string): Record<string, unknown> => {
-	let parsed: unknown
+const parseJson = (text: string, source: string): unknown => {
 	try {
-		parsed = JSON.parse(text)
+		return JSON.parse(text)
 	} catch (error) {
 		throw new Error(`${source}: invalid JSON`, { cause: error })
 	}
-	if (!isRecord(parsed)) throw new Error(`${source}: expected a JSON object`)
-	return parsed
+}
+
+export const parsePackageManifest = (text: string, source: string) => packageManifestSchema.parse(parseJson(text, source), { path: [source] })
+export const parsePackedManifest = (text: string, source: string) => packedManifestSchema.parse(parseJson(text, source), { path: [source] })
+export const parseInstalledManifest = (text: string, source: string) => packageIdentitySchema.parse(parseJson(text, source), { path: [source] })
+export const parseReleaseManifest = (text: string, source: string): ReleaseManifest =>
+	releaseManifestSchema.parse(parseJson(text, source), { path: [source] })
+
+const dependencyMap = (item: PackageInfo, field: DependencyField): ReadonlyMap<string, string> =>
+	new Map(Object.entries(item.dependencies[field] ?? {}))
+
+export const packageInfo = (text: string, directory: string): PackageInfo => {
+	const manifestPath = join(directory, 'package.json')
+	const manifest = parsePackageManifest(text, manifestPath)
+	const name = manifest.name
+	const isPrivate = manifest['private'] === true
+	const publishConfig = manifest['publishConfig']
+	const publishable = isRecord(publishConfig) && publishConfig['access'] === 'public'
+	if (!isPrivate && !publishable) throw new Error(`${name}: package must be private or declare publishConfig.access as public`)
+	if (isPrivate && publishable) throw new Error(`${name}: private package must not declare public publishing`)
+	if (!publishable) return { name, directory, manifest, dependencies: {}, publishable }
+	const validated = publicManifestSchema.parse(manifest, { path: [manifestPath] })
+	return { name, directory, manifest: validated, dependencies: validated, publishable }
 }
 
 const readPackages = async (): Promise<readonly PackageInfo[]> => {
@@ -108,19 +138,12 @@ const readPackages = async (): Promise<readonly PackageInfo[]> => {
 		const directory = join(ROOT, 'packages', entry.name)
 		const manifestPath = join(directory, 'package.json')
 		if (!(await Bun.file(manifestPath).exists())) continue
-		const manifest = parseJsonObject(await readFile(manifestPath, 'utf8'), manifestPath)
-		const name = requiredString(manifest, 'name', manifestPath)
-		const isPrivate = manifest['private'] === true
-		const publishConfig = manifest['publishConfig']
-		const publishable = isRecord(publishConfig) && publishConfig['access'] === 'public'
-		if (!isPrivate && !publishable) throw new Error(`${name}: package must be private or declare publishConfig.access as public`)
-		if (isPrivate && publishable) throw new Error(`${name}: private package must not declare public publishing`)
-		packages.push({ name, directory, manifest, publishable })
+		packages.push(packageInfo(await readFile(manifestPath, 'utf8'), directory))
 	}
 	return packages
 }
 
-const packageGraph = (
+export const packageGraph = (
 	packages: readonly PackageInfo[],
 ): { readonly publicPackages: readonly PackageInfo[]; readonly order: readonly PackageInfo[] } => {
 	const byName = new Map(packages.map((item) => [item.name, item]))
@@ -133,11 +156,12 @@ const packageGraph = (
 	const sourceVersions = new Set<string>()
 	for (const item of publicPackages) {
 		if (!item.name.startsWith('@fabrika/')) throw new Error(`${item.name}: public package must use the @fabrika scope`)
-		const sourceVersion = requiredString(item.manifest, 'version', item.name)
+		const sourceVersion = item.manifest['version']
+		if (typeof sourceVersion !== 'string') throw new Error(`${item.name}: version must be a non-empty string`)
 		if (!TAG_PATTERN.test(`v${sourceVersion}`)) throw new Error(`${item.name}: version must be valid semver`)
 		sourceVersions.add(sourceVersion)
 		for (const field of DEPENDENCY_FIELDS) {
-			for (const [dependency, range] of dependencyMap(item.manifest, field, item.name)) {
+			for (const [dependency, range] of dependencyMap(item, field)) {
 				if (!range.startsWith('workspace:')) continue
 				const target = byName.get(dependency)
 				if (target === undefined) throw new Error(`${item.name}: ${field}.${dependency} refers to a missing workspace package`)
@@ -147,7 +171,7 @@ const packageGraph = (
 			}
 		}
 		for (const field of DEPENDENCY_FIELDS) {
-			for (const [dependency, range] of dependencyMap(item.manifest, field, item.name)) {
+			for (const [dependency, range] of dependencyMap(item, field)) {
 				if (byName.has(dependency) && !range.startsWith('workspace:')) {
 					throw new Error(`${item.name}: local ${field}.${dependency} must use the workspace protocol`)
 				}
@@ -165,7 +189,7 @@ const packageGraph = (
 		if (visiting.has(item.name)) throw new Error(`Public package dependency cycle: ${[...path, item.name].join(' -> ')}`)
 		visiting.add(item.name)
 		for (const field of DEPENDENCY_FIELDS) {
-			for (const dependency of dependencyMap(item.manifest, field, item.name).keys()) {
+			for (const dependency of dependencyMap(item, field).keys()) {
 				const target = publicByName.get(dependency)
 				if (target !== undefined) visit(target, [...path, item.name])
 			}
@@ -230,17 +254,17 @@ export const parseOptions = async (argv: readonly string[]): Promise<Options> =>
 const internalDependencies = (item: PackageInfo, publicNames: ReadonlySet<string>): readonly string[] => {
 	const names = new Set<string>()
 	for (const field of DEPENDENCY_FIELDS) {
-		for (const name of dependencyMap(item.manifest, field, item.name).keys()) if (publicNames.has(name)) names.add(name)
+		for (const name of dependencyMap(item, field).keys()) if (publicNames.has(name)) names.add(name)
 	}
 	return [...names].sort()
 }
 
-const stagedManifest = (item: PackageInfo, version: string, publicNames: ReadonlySet<string>): Record<string, unknown> => {
+export const stagedManifest = (item: PackageInfo, version: string, publicNames: ReadonlySet<string>): Record<string, unknown> => {
 	const manifest = structuredClone(item.manifest)
 	manifest['version'] = version
 	delete manifest['devDependencies']
 	for (const field of DEPENDENCY_FIELDS) {
-		const dependencies = dependencyMap(manifest, field, item.name)
+		const dependencies = dependencyMap(item, field)
 		if (dependencies.size === 0) continue
 		const rewritten: Record<string, string> = {}
 		for (const [name, range] of dependencies) rewritten[name] = publicNames.has(name) && range.startsWith('workspace:') ? `^${version}` : range
@@ -261,7 +285,11 @@ const includesDist = (manifest: Record<string, unknown>): boolean => {
 	return Array.isArray(files) && files.some((file) => typeof file === 'string' && file.split('/').includes('dist'))
 }
 
-const collectExportTargets = (value: unknown, source: string, targets: Set<string>): void => {
+export const collectExportTargets = (value: unknown, source: string, targets: Set<string>): void => {
+	visitExportTargets(exportTargetSchema.parse(value, { path: [source] }), source, targets)
+}
+
+const visitExportTargets = (value: ExportTarget, source: string, targets: Set<string>): void => {
 	if (value === null) return
 	if (typeof value === 'string') {
 		if (!value.startsWith('./') || value.includes('*') || value.endsWith('/')) {
@@ -272,10 +300,9 @@ const collectExportTargets = (value: unknown, source: string, targets: Set<strin
 	}
 	if (Array.isArray(value)) {
 		if (value.length === 0) throw new Error(`${source}: export fallback array must not be empty`)
-		for (const [index, target] of value.entries()) collectExportTargets(target, `${source}[${index}]`, targets)
+		for (const [index, target] of value.entries()) visitExportTargets(target, `${source}[${index}]`, targets)
 		return
 	}
-	if (!isRecord(value)) throw new Error(`${source}: unsupported export target`)
 	const entries = Object.entries(value)
 	if (entries.length === 0) throw new Error(`${source}: export map must not be empty`)
 	const subpathKeys = entries.filter(([key]) => key.startsWith('.'))
@@ -286,20 +313,21 @@ const collectExportTargets = (value: unknown, source: string, targets: Set<strin
 		if (key === '' || (subpathKeys.length > 0 && key !== '.' && !key.startsWith('./'))) {
 			throw new Error(`${source}: invalid export key ${JSON.stringify(key)}`)
 		}
-		collectExportTargets(target, `${source}.${key}`, targets)
+		visitExportTargets(target, `${source}.${key}`, targets)
 	}
 }
 
-const collectBinTargets = (value: unknown, source: string, targets: Set<string>): void => {
+export const collectBinTargets = (input: unknown, source: string, targets: Set<string>): void => {
+	const value = binTargetsSchema.parse(input, { path: [source] })
 	if (value === undefined) return
 	if (typeof value === 'string') {
 		if (!value.startsWith('./') || value.endsWith('/')) throw new Error(`${source}: bin target must be a package-relative file`)
 		targets.add(value)
 		return
 	}
-	if (!isRecord(value) || Object.keys(value).length === 0) throw new Error(`${source}: bin must be a non-empty string or object`)
+	if (Object.keys(value).length === 0) throw new Error(`${source}: bin must be a non-empty string or object`)
 	for (const [name, target] of Object.entries(value)) {
-		if (name === '' || typeof target !== 'string' || !target.startsWith('./') || target.endsWith('/')) {
+		if (name === '' || !target.startsWith('./') || target.endsWith('/')) {
 			throw new Error(`${source}.${name}: bin target must be a package-relative file`)
 		}
 		targets.add(target)
@@ -318,17 +346,15 @@ const assertSafeTarball = async (path: string, expectedName: string, expectedVer
 	if (forbidden !== undefined) throw new Error(`${basename(path)} contains forbidden file ${forbidden}`)
 	if (!files.has('package/package.json')) throw new Error(`${basename(path)} does not contain package/package.json`)
 	const packedManifestText = (await run(['tar', '-xOzf', path, 'package/package.json'])).stdout
-	const packedManifest = parseJsonObject(packedManifestText, `${basename(path)}:package.json`)
-	if (requiredString(packedManifest, 'name', basename(path)) !== expectedName) throw new Error(`${basename(path)} contains the wrong package name`)
-	if (requiredString(packedManifest, 'version', basename(path)) !== expectedVersion) {
+	const packedManifest = parsePackedManifest(packedManifestText, `${basename(path)}:package.json`)
+	if (packedManifest.name !== expectedName) throw new Error(`${basename(path)} contains the wrong package name`)
+	if (packedManifest.version !== expectedVersion) {
 		throw new Error(`${basename(path)} contains the wrong package version`)
 	}
 	for (const field of PACKED_DEPENDENCY_FIELDS) {
 		const dependencies = packedManifest[field]
 		if (dependencies === undefined) continue
-		if (!isRecord(dependencies)) throw new Error(`${expectedName}: packed ${field} must be an object`)
 		for (const [name, range] of Object.entries(dependencies)) {
-			if (typeof range !== 'string') throw new Error(`${expectedName}: packed ${field}.${name} must be a string`)
 			if (range.includes('workspace:')) throw new Error(`${expectedName}: packed ${field}.${name} contains unresolved workspace protocol`)
 		}
 	}
@@ -381,20 +407,8 @@ const pack = async (options: Options, order: readonly PackageInfo[]): Promise<Re
 
 const readReleaseManifest = async (options: Options): Promise<ReleaseManifest> => {
 	const path = join(options.artifactsDirectory, 'release-manifest.json')
-	const manifest = parseJsonObject(await readFile(path, 'utf8'), path)
-	const tag = requiredString(manifest, 'tag', path)
-	const version = requiredString(manifest, 'version', path)
-	const entries = manifest['packages']
+	const { tag, version, packages } = parseReleaseManifest(await readFile(path, 'utf8'), path)
 	if (tag !== options.tag || version !== options.version) throw new Error(`${path}: release does not match ${options.tag}`)
-	if (!Array.isArray(entries)) throw new Error(`${path}: packages must be an array`)
-	const packages: ReleasePackage[] = entries.map((entry, index) => {
-		if (!isRecord(entry)) throw new Error(`${path}: packages[${index}] must be an object`)
-		const dependencies = entry['dependencies']
-		if (!Array.isArray(dependencies) || !dependencies.every((value) => typeof value === 'string')) {
-			throw new Error(`${path}: packages[${index}].dependencies must be an array of strings`)
-		}
-		return { name: requiredString(entry, 'name', path), filename: requiredString(entry, 'filename', path), dependencies }
-	})
 	for (const item of packages) {
 		if (!(await Bun.file(join(options.artifactsDirectory, item.filename)).exists())) throw new Error(`Missing ${item.filename}`)
 	}
@@ -424,8 +438,8 @@ const runConsumerSmoke = async (dependencies: Readonly<Record<string, string>>, 
 		await run(['npm', 'install', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: consumer })
 		for (const name of Object.keys(dependencies)) {
 			const installedPath = join(consumer, 'node_modules', ...name.split('/'), 'package.json')
-			const installed = parseJsonObject(await readFile(installedPath, 'utf8'), installedPath)
-			if (requiredString(installed, 'name', installedPath) !== name || requiredString(installed, 'version', installedPath) !== expectedVersion) {
+			const installed = parseInstalledManifest(await readFile(installedPath, 'utf8'), installedPath)
+			if (installed.name !== name || installed.version !== expectedVersion) {
 				throw new Error(`${name}: isolated consumer installed an unexpected package identity`)
 			}
 		}
@@ -449,18 +463,26 @@ const smoke = async (options: Options, expectedOrder: readonly PackageInfo[]): P
 	await runConsumerSmoke(dependencies, options.version, 'tarball smoke')
 }
 
+export const parseRegistryIntegrity = (text: string, source: string): string => {
+	let value: unknown
+	try {
+		value = JSON.parse(text)
+	} catch (error) {
+		throw new Error(`${source}: npm returned invalid integrity metadata`, { cause: error })
+	}
+	const parsed = nonEmptyString.safeParse(value)
+	if (!parsed.success) throw new Error(`${source}: npm did not return dist.integrity`)
+	return parsed.data
+}
+
+export const parseRegistryPackageName = (text: string, source: string): string => nonEmptyString.parse(parseJson(text, source), { path: [source] })
+
 const published = async (name: string, version: string, path: string): Promise<boolean> => {
 	const command = ['npm', 'view', `${name}@${version}`, 'dist.integrity', '--json']
 	const child = Bun.spawn(command, { cwd: ROOT, stdout: 'pipe', stderr: 'pipe', env: processEnv() })
 	const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
 	if (exitCode === 0) {
-		let registryIntegrity: unknown
-		try {
-			registryIntegrity = JSON.parse(stdout)
-		} catch (error) {
-			throw new Error(`${name}@${version}: npm returned invalid integrity metadata`, { cause: error })
-		}
-		if (typeof registryIntegrity !== 'string' || registryIntegrity === '') throw new Error(`${name}@${version}: npm did not return dist.integrity`)
+		const registryIntegrity = parseRegistryIntegrity(stdout, `${name}@${version}`)
 		const localIntegrity = `sha512-${createHash('sha512').update(await readFile(path)).digest('base64')}`
 		if (registryIntegrity !== localIntegrity) {
 			throw new Error(`${name}@${version} already exists with different content; refusing to treat this release as complete`)
@@ -475,7 +497,7 @@ const packageExists = async (name: string): Promise<boolean> => {
 	const command = ['npm', 'view', name, 'name', '--json']
 	const child = Bun.spawn(command, { cwd: ROOT, stdout: 'pipe', stderr: 'pipe', env: processEnv() })
 	const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
-	if (exitCode === 0) return stdout.includes(name)
+	if (exitCode === 0) return parseRegistryPackageName(stdout, name) === name
 	if (stderr.includes('E404') || stdout.includes('E404')) return false
 	throw new Error(`${command.join(' ')} failed (${exitCode})\n${stderr || stdout}`)
 }
@@ -549,16 +571,20 @@ const publish = async (options: Options, expectedOrder: readonly PackageInfo[]):
 
 const distTagVersion = async (name: string, tag: string): Promise<string | undefined> => {
 	const { stdout } = await run(['npm', 'view', name, `dist-tags.${tag}`, '--json'])
-	if (stdout.trim() === '') return undefined
+	return parseRegistryDistTag(stdout, name, tag)
+}
+
+export const parseRegistryDistTag = (text: string, name: string, tag: string): string | undefined => {
+	if (text.trim() === '') return undefined
 	let value: unknown
 	try {
-		value = JSON.parse(stdout)
+		value = JSON.parse(text)
 	} catch (error) {
 		throw new Error(`${name}: npm returned invalid ${tag} dist-tag metadata`, { cause: error })
 	}
-	if (value === null) return undefined
-	if (typeof value !== 'string' || value === '') throw new Error(`${name}: npm returned malformed ${tag} dist-tag metadata`)
-	return value
+	const parsed = nonEmptyString.nullable().safeParse(value)
+	if (!parsed.success) throw new Error(`${name}: npm returned malformed ${tag} dist-tag metadata`)
+	return parsed.data ?? undefined
 }
 
 /**
