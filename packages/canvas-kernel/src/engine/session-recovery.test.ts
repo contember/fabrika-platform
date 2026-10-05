@@ -91,3 +91,28 @@ test('remote feedback recovers valid entries and keeps stable ids, attachments a
 	manager.appendRemoteFeedback('session', 1, [entry])
 	expect(manager.getRemoteFeedback('session', 1)).toEqual([entry])
 })
+
+test('partially malformed annotations retain their submission through read, append and reload', () => {
+	const root = directory()
+	const manager = new SessionManager(root)
+	manager.upsert('session', new Map([['plan.jsx', '<Section />']]), '/project')
+	const file = join(root, 'session', 'revisions', '1', 'remote_feedback.json')
+	const first = { id: 'first', snippet: 'text', note: 'first note', createdAt: 'old', extra: { anchor: 'stable' } }
+	const second = { id: 'second', snippet: 'other text', note: 'second note', createdAt: 'old', attachments: [{ url: '/image' }] }
+	const entry = {
+		id: 'entry',
+		shareId: 'share',
+		revision: 1,
+		submittedAt: 'old',
+		author: { id: 'person', name: 'Person' },
+		annotations: [first, second],
+		generalNote: 'Keep this review',
+		extra: { retained: true },
+	}
+	writeFileSync(file, JSON.stringify([{ ...entry, annotations: [first, null, { id: 'broken' }, second] }]))
+	expect(manager.getRemoteFeedback('session', 1)).toEqual([entry])
+	const appended = { ...entry, id: 'new-entry', annotations: [], generalNote: 'Another review' }
+	manager.appendRemoteFeedback('session', 1, [appended])
+	expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([entry, appended])
+	expect(new SessionManager(root).getRemoteFeedback('session', 1)).toEqual([entry, appended])
+})

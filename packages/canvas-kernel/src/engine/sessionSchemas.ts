@@ -68,7 +68,8 @@ export const remoteFeedbackEntrySchema = z.object({
 	revision: z.number().int(),
 	submittedAt: z.string(),
 	author: annotationAuthorSchema,
-	annotations: z.array(annotationSchema.omit({ images: true, source: true, author: true })),
+	annotations: z.array(annotationSchema.omit({ images: true, source: true, author: true }).optional().catch(undefined))
+		.transform(annotations => annotations.filter(annotation => annotation !== undefined)),
 	generalNote: z.string().optional(),
 }).passthrough()
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { annotationDraftKey, carryUnsubmittedDraft, clearPersistedDraft } from './annotationDraft'
+import { parsePersistedState } from './persistenceSchemas'
 
 class MemoryStorage {
 	private readonly values = new Map<string, string>()
@@ -22,6 +23,20 @@ const key = (revision: number) => annotationDraftKey(sessionId, revision)
 const nextKey = (revision: number) => annotationDraftKey(sessionId, revision, 'next')
 
 describe('carryUnsubmittedDraft', () => {
+	test('hydrates a carried legacy response tuple without losing its answer or extensions', () => {
+		const storage = new MemoryStorage()
+		const response = { id: 'answer', type: 'text', label: 'Question', value: 'keep this answer', extension: { retained: true } }
+		const draft = { responses: [['stable-key', response, 'legacy-tail']], extension: { future: true } }
+		storage.setItem(key(1), JSON.stringify(draft))
+		expect(carryUnsubmittedDraft(storage, sessionId, 2, [{ revision: 1, hasFeedback: false }])).toBe(1)
+		const carried: unknown = JSON.parse(storage.getItem(key(2)) ?? 'null')
+		expect(carried).toEqual({ ...draft, feedbackEntries: [] })
+		const hydrated = parsePersistedState(carried)
+		expect(hydrated?.responses).toEqual([['stable-key', { ...response, type: 'text' }]])
+		expect(new Map(hydrated?.responses).get('stable-key')).toEqual({ ...response, type: 'text' })
+		expect(hydrated).toMatchObject({ extension: { future: true }, feedbackEntries: [] })
+	})
+
 	test('carries tolerant legacy draft fields without dropping extensions or unknown response values', () => {
 		const storage = new MemoryStorage()
 		const draft = { responses: [['answer', { value: false, custom: 1 }, 'legacy-tail']], extension: { future: true } }

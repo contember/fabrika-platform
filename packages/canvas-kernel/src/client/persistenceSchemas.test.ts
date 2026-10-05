@@ -10,8 +10,8 @@ test('recover persisted answers independently while retaining keys, values and e
 	expect(parsePersistedState({
 		annotations: [],
 		generalNote: 'note',
-		responses: [['stable-key', response], ['broken', {}], null],
-		feedbackEntries: [['stable-feedback', entry], [12, entry]],
+		responses: [['stable-key', response, 'legacy-tail'], ['broken', {}, 'legacy-tail'], null],
+		feedbackEntries: [['stable-feedback', entry, 'legacy-tail'], [12, entry]],
 		hostField: 'preserved',
 	})).toEqual({
 		annotations: [],
