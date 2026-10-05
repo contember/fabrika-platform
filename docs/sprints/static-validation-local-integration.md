@@ -200,6 +200,12 @@ Verification and exact dispatch readiness are reported to the leader in chat.
 
 ## Run log
 
+- Browser completion: `OPICE_TIER=extended ... bun run test:browser` executed all ten walkthroughs successfully with zero failures/tier exclusions. IAM owner fix `5caa7cf` and native anonymous HTTP test `197db1f` reviewed without findings, including 1,296 Go/RE2 probes. Owner wiring suite: 804 tests pass; full typecheck and generated-artifact check pass.
+- Smoke RPC omission fixed in `fbc7750`. An early process exit did not constitute a smoke pass; entrypoint now awaits completion. The first immutable deploy did succeed, but the emulator discarded selected descriptor runtime references, making the second managed admission fail. Emulator correction must expose each version's references only on activation; fresh local fixture state will be used, without reconstructing ownership.
+
+- Integrated extension unit suite: 5,016 pass, 39 unchanged opt-in/SQLite skips, zero failures. Emulator deletion fix `ba4f836` reviewed and closed.
+- User approved explicit optional `iamSessionOwner: { issuer, upstream }` from trusted platform composition, including generated installation wiring. User selected natural expiry of the production 30-minute deploy lease for the hard-kill smoke; no lease-row mutation or timing override.
+
 - User approved fixing two baseline browser blockers: IAM's own login cookie is removed by generated Caddy upstream rules, and Playwright's Bun HTTP response handling rejects relative response URLs. The correction must identify IAM from trusted composition coordinates, preserve stripping on application upstreams, and retain all browser assertions. Final browser run must use `extended` and execute all ten walkthroughs.
 - Emulator review found two held-body deletion races: reservation/build retained resource references across body parsing. Corrective round assigned with deletion-during-read witnesses; preserve initial existence/error ordering and recheck before allocation/mutation.
 
