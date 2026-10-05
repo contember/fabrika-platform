@@ -10,7 +10,7 @@
 // they are never echoed back and (via the Runner) never reach a log line verbatim.
 
 import type { RunLogLine } from '@fabrika/control-contract'
-import { CLOUDFLARE_SOURCE_PROTOCOL, isCloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
+import { CLOUDFLARE_SOURCE_PROTOCOL, cloudflareRunnerJobSchema } from '@fabrika/provider-cloudflare/runner'
 import { RUNNER_HEALTH_PATH, RUNNER_LOGS_PATH, RUNNER_PORT, RUNNER_RUN_PATH, RUNNER_STATUS_PATH } from '@fabrika/runner-contract'
 import { Runner, type RunnerEnv } from './runner'
 
@@ -44,15 +44,16 @@ export const createServer = (env: RunnerEnv): RunnerServer => {
 		} catch {
 			return json({ error: 'invalid JSON body' }, 400)
 		}
-		if (!isCloudflareRunnerJob(body)) {
+		const parsed = cloudflareRunnerJobSchema.safeParse(body)
+		if (!parsed.success) {
 			return json({ error: 'body is not a valid CloudflareRunnerJob' }, 400)
 		}
-		const active = new Runner(body, env)
+		const active = new Runner(parsed.data, env)
 		runner = active
 		// Kick off the pipeline; the client tails /logs and polls /status. Errors are captured into
 		// status() by Runner.run(), so this never rejects.
 		void active.run()
-		return json({ runId: body.runId, accepted: true }, 202)
+		return json({ runId: parsed.data.runId, accepted: true }, 202)
 	}
 
 	const handleLogs = (): Response => {

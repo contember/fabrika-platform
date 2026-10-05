@@ -75,6 +75,47 @@ const makeStreamingContainer = async (heartbeat: () => void = () => {}): Promise
 }
 
 describe('relayRun', () => {
+	for (
+		const raw of [
+			'{private-token',
+			'{"state":"succeeded"}',
+			JSON.stringify({ ...terminalStatus, runId: 'another-run' }),
+			JSON.stringify({ ...terminalStatus, exitCode: '0' }),
+		]
+	) {
+		test(`refuses malformed or foreign status without persisting it: ${raw}`, async () => {
+			const inner = makeContainer(terminalStatus, [], { count: 0 })
+			const bucket = new FakeR2()
+			await expect(relayRun(
+				{
+					containerFetch: (input, init) =>
+						new URL(input).pathname === '/status'
+							? Promise.resolve(new Response(raw))
+							: inner.containerFetch(input, init),
+				},
+				bucket,
+				job,
+			)).rejects.toThrow('runner returned malformed status')
+			expect(bucket.objects.has(statusKey(job.runId))).toBe(false)
+		})
+	}
+	for (const raw of ['{"ts":1,"stream":"private-token","text":"line"}\n', '{private-token', '{"ts":1,"stream":"stdout"}']) {
+		test('malformed NDJSON has a secret-safe diagnostic, including the final unterminated line', async () => {
+			const inner = makeContainer(terminalStatus, [], { count: 0 })
+			const bucket = new FakeR2()
+			await expect(relayRun(
+				{
+					containerFetch: (input, init) =>
+						new URL(input).pathname === '/logs'
+							? Promise.resolve(new Response(raw))
+							: inner.containerFetch(input, init),
+				},
+				bucket,
+				job,
+			)).rejects.toThrow('runner returned malformed log line')
+			expect([...bucket.objects.values()].join('\n')).not.toContain('private-token')
+		})
+	}
 	test('requests manual redirect handling and refuses a redirect before the DO response can lose its history', async () => {
 		const paths: string[] = []
 		const bucket = new FakeR2()

@@ -15,6 +15,7 @@ import type {
 import { decodeEnvelope, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-contract'
 import type { RunnerIamReconcile } from '@fabrika/runner-contract'
+import { z } from 'zod'
 import { cloudflareArtifactCodec } from './codec'
 // `./runner` is this module: keep every import here clear of `oblaka-iac`, which the runner packages
 // cannot typecheck (they do not relax the two strict flags the raw TS needs).
@@ -25,19 +26,7 @@ export interface CloudflareStoredTarget {
 	readonly stateNamespace?: string
 }
 
-const optionalString = (payload: ProviderEnvelope['payload'], key: string): string | undefined => {
-	if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
-		throw new Error('Cloudflare target must be an object')
-	}
-	const value = payload[key]
-	if (value === undefined) {
-		return undefined
-	}
-	if (typeof value !== 'string' || value === '') {
-		throw new Error(`Cloudflare target ${key} must be a non-empty string when present`)
-	}
-	return value
-}
+const storedTargetSchema = z.object({ stateNamespace: z.string().min(1).optional() })
 
 export const cloudflareStoredTargetCodec: ProviderCodec<CloudflareStoredTarget> = {
 	version: 1,
@@ -48,7 +37,7 @@ export const cloudflareStoredTargetCodec: ProviderCodec<CloudflareStoredTarget> 
 		return { stateNamespace: target.stateNamespace }
 	},
 	decode: (payload) => {
-		const stateNamespace = optionalString(payload, 'stateNamespace')
+		const { stateNamespace } = storedTargetSchema.parse(payload)
 		return stateNamespace === undefined ? {} : { stateNamespace }
 	},
 }
@@ -92,23 +81,6 @@ export interface CloudflareRunnerJob {
 	}
 }
 
-const isStringArray = (value: unknown): boolean => Array.isArray(value) && value.every((entry) => typeof entry === 'string' && entry !== '')
-
-const isStringRecord = (value: unknown): boolean =>
-	typeof value === 'object'
-	&& value !== null
-	&& !Array.isArray(value)
-	&& Object.values(value).every((entry) => typeof entry === 'string')
-
-const isArtifactUpload = (value: unknown): boolean =>
-	typeof value === 'object'
-	&& value !== null
-	&& !Array.isArray(value)
-	&& ['url', 'bearer', 'appId', 'environment', 'serviceKey', 'release', 'runId'].every((key) => {
-		const field = Reflect.get(value, key)
-		return typeof field === 'string' && field !== ''
-	})
-
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ENV_NAME = /^[a-z0-9-]+$/
 const COMMIT_SHA = /^[0-9a-f]{40}$/
@@ -133,56 +105,44 @@ const isHttpsUrl = (value: string): boolean => {
 const isContainedPath = (value: string): boolean =>
 	value !== '' && !value.startsWith('/') && !hasUnsafeChars(value) && !value.split('/').includes('..')
 
+// Entries preserve own environment names such as `__proto__`, which Zod's record parser drops.
+const stringRecordSchema = z.preprocess(
+	(value) => typeof value === 'object' && value !== null && !Array.isArray(value) ? Object.entries(value) : undefined,
+	z.array(z.tuple([z.string(), z.string()])).transform((entries) => Object.fromEntries(entries)),
+)
+
 /**
  * Validate the Worker-to-runner JSON boundary by VALUE, not only by type: every field here becomes an
  * argv element, a filesystem path or a hostname inside the deploy container.
  */
-export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunnerJob => {
-	if (
-		typeof value !== 'object'
-		|| value === null
-		|| !('runId' in value && typeof value.runId === 'string' && UUID.test(value.runId))
-		|| !('repoUrl' in value && typeof value.repoUrl === 'string' && !hasUnsafeChars(value.repoUrl) && isHttpsUrl(value.repoUrl))
-		|| !('ref' in value && typeof value.ref === 'string' && value.ref !== '' && !value.ref.startsWith('-') && !hasUnsafeChars(value.ref))
-		|| !('env' in value && typeof value.env === 'string' && ENV_NAME.test(value.env))
-		|| !('credentials' in value && typeof value.credentials === 'object' && value.credentials !== null)
-	) {
-		return false
-	}
-	const credentials = value.credentials
-	if (!('dryRun' in value && value.dryRun === true) && !isCanonicalCommit(value.ref)) {
-		return false
-	}
-	const requiredCredentials = 'CLOUDFLARE_ACCOUNT_ID' in credentials
-		&& typeof credentials.CLOUDFLARE_ACCOUNT_ID === 'string'
-		&& credentials.CLOUDFLARE_ACCOUNT_ID !== ''
-		&& 'CLOUDFLARE_API_TOKEN' in credentials
-		&& typeof credentials.CLOUDFLARE_API_TOKEN === 'string'
-		&& credentials.CLOUDFLARE_API_TOKEN !== ''
-	// Exactly these two: a job carrying any other credential is refused rather than forwarded into the
-	// child environment, which is where the container's own code would read it.
-	if (!requiredCredentials || Object.keys(credentials).length !== 2) {
-		return false
-	}
-	if (
-		// OPTIONAL: the runner Worker strips the key before the container hop, so a job that reaches the
-		// container carries none. Present means it must be usable; the Worker is what REQUIRES it.
-		('runnerKey' in value && value.runnerKey !== undefined && (typeof value.runnerKey !== 'string' || value.runnerKey === ''))
-		|| ('workerDir' in value && value.workerDir !== undefined && (typeof value.workerDir !== 'string' || !isContainedPath(value.workerDir)))
-		|| ('configPath' in value && value.configPath !== undefined && (typeof value.configPath !== 'string' || !isContainedPath(value.configPath)))
-		|| ('stateNamespace' in value && value.stateNamespace !== undefined && (typeof value.stateNamespace !== 'string' || value.stateNamespace === ''))
-		|| ('domain' in value && value.domain !== undefined && (typeof value.domain !== 'string' || !isProxyHost(value.domain.toLowerCase())))
-		|| ('returnOrigins' in value && value.returnOrigins !== undefined && !isStringArray(value.returnOrigins))
-		|| ('dryRun' in value && value.dryRun !== undefined && typeof value.dryRun !== 'boolean')
-		|| ('secrets' in value && value.secrets !== undefined && !isStringRecord(value.secrets))
-		|| ('vars' in value && value.vars !== undefined && !isStringRecord(value.vars))
-		|| ('managedEnvironment' in value && value.managedEnvironment !== undefined && !isStringRecord(value.managedEnvironment))
-		|| ('artifactUpload' in value && value.artifactUpload !== undefined && !isArtifactUpload(value.artifactUpload))
-	) {
-		return false
-	}
-	return true
-}
+export const cloudflareRunnerJobSchema = z.object({
+	runId: z.string().regex(UUID),
+	repoUrl: z.string().refine((value) => !hasUnsafeChars(value) && isHttpsUrl(value)),
+	ref: z.string().min(1).refine((value) => !value.startsWith('-') && !hasUnsafeChars(value)),
+	env: z.string().regex(ENV_NAME),
+	credentials: z.object({ CLOUDFLARE_ACCOUNT_ID: z.string().min(1), CLOUDFLARE_API_TOKEN: z.string().min(1) }).strict(),
+	runnerKey: z.string().min(1).optional(),
+	workerDir: z.string().refine(isContainedPath).optional(),
+	configPath: z.string().refine(isContainedPath).optional(),
+	stateNamespace: z.string().min(1).optional(),
+	domain: z.string().refine((value) => isProxyHost(value.toLowerCase())).optional(),
+	returnOrigins: z.array(z.string().min(1)).optional(),
+	dryRun: z.boolean().optional(),
+	secrets: stringRecordSchema.optional(),
+	vars: stringRecordSchema.optional(),
+	managedEnvironment: stringRecordSchema.optional(),
+	artifactUpload: z.object({
+		url: z.string().min(1),
+		bearer: z.string().min(1),
+		appId: z.string().min(1),
+		environment: z.string().min(1),
+		serviceKey: z.string().min(1),
+		release: z.string().min(1),
+		runId: z.string().min(1),
+	}).passthrough().optional(),
+}).passthrough().refine((job) => job.dryRun === true || isCanonicalCommit(job.ref))
+
+export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunnerJob => cloudflareRunnerJobSchema.safeParse(value).success
 
 export interface CloudflareCloneSource {
 	readonly repoUrl: string
@@ -289,21 +249,22 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 
 /** A megabyte of vocabulary is already absurd; beyond it the control plane refuses to parse at all. */
 const MAX_SCHEMA_JSON_CHARS = 1024 * 1024
+const iamReconcileSchema = z.object({ app: z.string(), schemaJson: z.string() })
 
 /**
- * Apply the schema the executor compiled, with the control plane's own IAM key. The container runs the
- * checkout's code and nothing validates its `/status` body on the way, so every field of the report is
- * type-checked, bounded and parsed here before IAM hears about it.
+ * Apply the schema the executor compiled, with the control plane's own IAM key. The control port may
+ * have implementations other than the runner relay, so validate and bound its report before IAM hears it.
  */
 const applyIamReconcile = async (
 	options: CloudflareControlOptions,
 	input: ProviderDeployInput,
-	reconcile: RunnerIamReconcile,
+	report: RunnerIamReconcile,
 ): Promise<void> => {
-	// Typed, but not validated by any transport between the container and here.
-	if (typeof reconcile.app !== 'string' || typeof reconcile.schemaJson !== 'string') {
+	const parsedReport = iamReconcileSchema.safeParse(report)
+	if (!parsedReport.success) {
 		throw new Error('reported an authz schema whose app id or body is not a string')
 	}
+	const reconcile = parsedReport.data
 	if (reconcile.app !== input.app.id) {
 		throw new Error(`reported an authz schema for app "${reconcile.app}", expected "${input.app.id}"`)
 	}

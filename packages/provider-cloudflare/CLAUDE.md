@@ -22,7 +22,7 @@ this one import.
   environment (`CommandSpec.omitEnv`). IAM's provisioning key never leaves the control plane.
 - **`reconcile-schema` REPORTS, it does not call IAM.** The step writes `RunnerOutcomeFile`
   (`$FABRIKA_RUNNER_OUTCOME_FILE`) with the app id and the schema as JSON; the control-side `deploy`
-  type-checks both fields (nothing validates the container's `/status` body on the way), requires the
+  validates both fields after the runner validates the container's `/status` envelope, requires the
   reported app to be the deploying app, bounds and parses the JSON with `parseAppSchema` — which
   applies IAM's own `isActionAllowed` rule to every role permission — and only then calls the
   `SchemaReconciler` with its own key and the projected return origins.

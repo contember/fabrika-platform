@@ -13,7 +13,7 @@
 // no HTTP surface; vozka-runner has no public route and is reachable ONLY via the binding — but the
 // binding is not a credential, so every method verifies `FABRIKA_RUNNER_KEY` first (see runner-key.ts).
 
-import { CLOUDFLARE_SOURCE_PROTOCOL, type CloudflareRunnerJob, isCloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
+import { CLOUDFLARE_SOURCE_PROTOCOL, type CloudflareRunnerJob, cloudflareRunnerJobSchema } from '@fabrika/provider-cloudflare/runner'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { finishRun } from './finish-run'
 import { type ContainerLike, type RelayResult, relayRun } from './relay'
@@ -40,10 +40,12 @@ export class VozkaRunner extends WorkerEntrypoint<Env> {
 	 * The shape check comes first because RPC delivers a structured clone: the argument is typed here
 	 * but arrives as whatever the caller sent, and `job.runnerKey` must be a string to be compared.
 	 */
-	async startRun(job: CloudflareRunnerJob): Promise<RelayResult> {
-		if (!isCloudflareRunnerJob(job)) {
+	async startRun(input: CloudflareRunnerJob): Promise<RelayResult> {
+		const parsed = cloudflareRunnerJobSchema.safeParse(input)
+		if (!parsed.success) {
 			throw new Error('runner: invalid job')
 		}
+		const job = parsed.data
 		// The key is OPTIONAL to the validator, because the relay strips it before the container hop.
 		// It is not optional here: this is the hop it authenticates.
 		if (typeof job.runnerKey !== 'string') {

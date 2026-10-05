@@ -10,6 +10,7 @@
 import { Container } from '@cloudflare/containers'
 import { RUNNER_LOGS_PATH, RUNNER_PORT, RUNNER_RUN_PATH, RUNNER_STATUS_PATH, type RunnerStatus } from '@fabrika/runner-contract'
 import { backstopDecision, finishRun, isRunFinished } from './finish-run'
+import { backstopPayloadSchema, parseRunLogLine, parseRunnerStatus } from './protocol'
 import { logsKey, statusKey } from './relay'
 import { RunContainerGate } from './run-container-gate'
 import type { Env } from './worker-env'
@@ -97,14 +98,16 @@ export class RunnerContainer extends Container<Env> {
 
 	/** Scheduled backstop tick — records the run's terminal status if the relay didn't. Re-schedules itself while in flight. */
 	async backstopCheck(payload: { runId: string; deadline: number }): Promise<void> {
-		const { runId, deadline } = payload
+		const parsed = backstopPayloadSchema.safeParse(payload)
+		if (!parsed.success) throw new Error('runner: invalid backstop payload')
+		const { runId, deadline } = parsed.data
 		const expired = Date.now() > deadline
 
 		// Read the container's status; null = unreachable (it may have been hard-killed).
 		let status: RunnerStatus | null = null
 		try {
 			const res = await this.deployFetch(`http://container${RUNNER_STATUS_PATH}`)
-			status = await res.json()
+			status = parseRunnerStatus(await res.json(), runId)
 		} catch {
 			status = null
 		}
@@ -123,7 +126,7 @@ export class RunnerContainer extends Container<Env> {
 			try {
 				const logs = await this.deployFetch(`http://container${RUNNER_LOGS_PATH}`)
 				const text = await logs.text()
-				const lines = text.split('\n').filter((l) => l.length > 0)
+				const lines = text.split('\n').filter((l) => l.length > 0).map((line) => JSON.stringify(parseRunLogLine(line)))
 				if (lines.length > 0) {
 					await this.env.RUN_LOGS.put(logsKey(runId), lines.join('\n'))
 				}

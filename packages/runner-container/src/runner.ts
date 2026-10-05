@@ -17,6 +17,7 @@ import {
 } from '@fabrika/runner-contract'
 import { mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { z } from 'zod'
 
 /**
  * Upper bound on the in-memory log replay buffer. A pathologically chatty build (verbose installs,
@@ -233,6 +234,10 @@ const outcomeFailure = (err: unknown): string => {
 const isFileNotFound = (err: unknown): boolean => typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 'ENOENT'
 
 /** Validate the executor's outcome report; every rejection message quotes nothing from the file. */
+const outcomeFileSchema = z.object({
+	iamReconcile: z.object({ app: z.string().min(1), schemaJson: z.string().max(MAX_OUTCOME_FILE_BYTES) }).optional(),
+})
+
 const parseOutcomeFile = (raw: string): RunnerOutcomeFile => {
 	let value: unknown
 	try {
@@ -240,15 +245,9 @@ const parseOutcomeFile = (raw: string): RunnerOutcomeFile => {
 	} catch {
 		throw new Error(OUTCOME_MALFORMED)
 	}
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(OUTCOME_MALFORMED)
-	const reconcile = Reflect.get(value, 'iamReconcile')
-	if (reconcile === undefined) return {}
-	if (typeof reconcile !== 'object' || reconcile === null || Array.isArray(reconcile)) throw new Error(OUTCOME_MALFORMED)
-	const app = Reflect.get(reconcile, 'app')
-	const schemaJson = Reflect.get(reconcile, 'schemaJson')
-	if (typeof app !== 'string' || app === '') throw new Error(OUTCOME_MALFORMED)
-	if (typeof schemaJson !== 'string' || schemaJson.length > MAX_OUTCOME_FILE_BYTES) throw new Error(OUTCOME_MALFORMED)
-	return { iamReconcile: { app, schemaJson } }
+	const parsed = outcomeFileSchema.safeParse(value)
+	if (!parsed.success) throw new Error(OUTCOME_MALFORMED)
+	return parsed.data
 }
 
 /**
@@ -703,6 +702,8 @@ export async function collectSourceMaps(cwd: string): Promise<SourceMapCollectio
 	return { artifacts, incomplete }
 }
 
+const sourceMapFileSchema = z.object({ file: z.string().min(1) })
+
 function sourceMapLogicalPath(raw: string, mapPath: string): string | null {
 	let value: unknown
 	try {
@@ -710,9 +711,9 @@ function sourceMapLogicalPath(raw: string, mapPath: string): string | null {
 	} catch {
 		return null
 	}
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-	const file = Reflect.get(value, 'file')
-	if (typeof file !== 'string' || file === '') return null
+	const parsed = sourceMapFileSchema.safeParse(value)
+	if (!parsed.success) return null
+	const { file } = parsed.data
 	const explicitlyRooted = file.startsWith('/') || file.startsWith('~/') || URL.canParse(file)
 	if (!explicitlyRooted && !file.includes('/') && mapPath.includes('/')) {
 		// A nested map with only `file: "app.js"` does not reveal its public build root.

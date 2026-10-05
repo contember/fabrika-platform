@@ -20,7 +20,7 @@ bun run bootstrap
 ## Invariants
 
 - **Both RPC methods verify `FABRIKA_RUNNER_KEY` before any side effect** (`src/runner-key.ts`), and
-  `startRun` re-validates the job with `isCloudflareRunnerJob` first — RPC delivers a structured clone.
+  `startRun` parses the job with `cloudflareRunnerJobSchema` first and consumes its output — RPC delivers a structured clone.
   Any Worker on the account can bind `<env>-vozka-runner`, so "only the control plane holds the
   binding" authenticates nobody. An unset key denies every call; the refusal names nothing.
 - **The key stops at this Worker.** The relay strips `runnerKey` from the job it POSTs to the container,

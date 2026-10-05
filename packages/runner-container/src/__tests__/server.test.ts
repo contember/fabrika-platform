@@ -45,6 +45,17 @@ const waitTerminal = async (server: ReturnType<typeof createServer>): Promise<vo
 }
 
 describe('runner server protocol', () => {
+	test('the active run owns the parsed job rather than the mutable request object', async () => {
+		const gate = Promise.withResolvers<SpawnResult>()
+		const server = createServer({ workspace: '/workspace', spawn: () => gate.promise })
+		const input = { ...job }
+		const request = Object.assign(post(job), { json: async () => input })
+		expect((await server.handle(request)).status).toBe(202)
+		input.runId = 'mutated-after-admission'
+		expect(server.current()?.status().runId).toBe(job.runId)
+		gate.resolve({ exitCode: 1 })
+		await waitTerminal(server)
+	})
 	test('POST /run accepts a job (202) and starts it', async () => {
 		const server = createServer(makeEnv())
 		const response = await server.handle(post(job))

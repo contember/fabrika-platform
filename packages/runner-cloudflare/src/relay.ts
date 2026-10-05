@@ -6,8 +6,10 @@
 // run-keyed object), then polls `/status` for the terminal outcome and persists that too.
 
 import type { RunLogLine } from '@fabrika/control-contract'
-import { CLOUDFLARE_SOURCE_PROTOCOL, type CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
-import { RUNNER_HEALTH_PATH, RUNNER_LOGS_PATH, RUNNER_PORT, RUNNER_RUN_PATH, RUNNER_STATUS_PATH, type RunnerStatus } from '@fabrika/runner-contract'
+import { type CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
+import { RUNNER_HEALTH_PATH, RUNNER_LOGS_PATH, RUNNER_RUN_PATH, RUNNER_STATUS_PATH, type RunnerStatus } from '@fabrika/runner-contract'
+import { z } from 'zod'
+import { parseRunLogLine, parseRunnerStatus, runnerHealthSchema } from './protocol'
 
 /** The slice of a Cloudflare R2 bucket the relay needs. Real `R2Bucket` satisfies this. */
 export interface R2Like {
@@ -45,20 +47,7 @@ export interface RelayOptions {
 
 const MAX_HEALTH_BYTES = 4096
 const SOURCE_PROTOCOL_FAILURE = 'runner source protocol is unavailable or not supported'
-
-interface RunnerHealth {
-	readonly status: 'ok'
-	readonly port: typeof RUNNER_PORT
-	readonly sourceProtocol: typeof CLOUDFLARE_SOURCE_PROTOCOL
-}
-
-const isRunnerHealth = (value: unknown): value is RunnerHealth =>
-	typeof value === 'object'
-	&& value !== null
-	&& !Array.isArray(value)
-	&& 'status' in value && value.status === 'ok'
-	&& 'port' in value && value.port === RUNNER_PORT
-	&& 'sourceProtocol' in value && value.sourceProtocol === CLOUDFLARE_SOURCE_PROTOCOL
+const healthTimeoutSchema = z.number().finite().positive().max(120_000)
 
 const assertImageSourceProtocol = async (container: ContainerLike, timeoutMs: number): Promise<void> => {
 	const expired = Promise.withResolvers<never>()
@@ -94,7 +83,7 @@ const assertImageSourceProtocol = async (container: ContainerLike, timeoutMs: nu
 		}
 		body += decoder.decode()
 		const health: unknown = JSON.parse(body)
-		if (Date.now() >= deadline || !isRunnerHealth(health)) throw new Error(SOURCE_PROTOCOL_FAILURE)
+		if (Date.now() >= deadline || !runnerHealthSchema.safeParse(health).success) throw new Error(SOURCE_PROTOCOL_FAILURE)
 	} catch {
 		if (reader !== undefined) void reader.cancel().catch(() => {})
 		else void response?.body?.cancel().catch(() => {})
@@ -124,14 +113,14 @@ const streamLines = async (response: Response, onLine: (line: RunLogLine) => voi
 			const raw = pending.slice(0, newline)
 			pending = pending.slice(newline + 1)
 			if (raw.length > 0) {
-				const line: RunLogLine = JSON.parse(raw)
+				const line = parseRunLogLine(raw)
 				onLine(line)
 			}
 			newline = pending.indexOf('\n')
 		}
 	}
 	if (pending.trim().length > 0) {
-		const line: RunLogLine = JSON.parse(pending)
+		const line = parseRunLogLine(pending)
 		onLine(line)
 	}
 }
@@ -150,7 +139,7 @@ export const relayRun = async (
 	const statusPollMs = options.statusPollMs ?? 500
 	const now = options.now ?? (() => Date.now())
 	const healthTimeoutMs = options.healthTimeoutMs ?? 15_000
-	if (!Number.isFinite(healthTimeoutMs) || healthTimeoutMs <= 0 || healthTimeoutMs > 120_000) {
+	if (!healthTimeoutSchema.safeParse(healthTimeoutMs).success) {
 		throw new Error('runner health timeout must be greater than 0 and at most 120000 milliseconds')
 	}
 	const startedAt = now()
@@ -248,7 +237,7 @@ export const relayRun = async (
 	let status: RunnerStatus | undefined
 	for (;;) {
 		const response = await container.containerFetch(`http://container${RUNNER_STATUS_PATH}`)
-		const parsed: RunnerStatus = await response.json()
+		const parsed = parseRunnerStatus(await response.json().catch(() => undefined), job.runId)
 		if (parsed.state === 'succeeded' || parsed.state === 'failed') {
 			status = parsed
 			break
