@@ -13,6 +13,7 @@ import {
 import { randomBytes, randomUUID } from 'node:crypto'
 import { chmodSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { catalogIngestSchema } from './browser-fixture-schemas'
 
 const INTERNAL_ORIGIN = 'http://127.0.0.1:3000'
 const OUTPUT_DIR = resolve(import.meta.dir, '..', '.state')
@@ -30,17 +31,8 @@ const source = (appId: string, environment: string, displayName: string): Operat
 	},
 })
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function stringProperty(value: unknown, key: string): string {
-	if (!isRecord(value) || typeof value[key] !== 'string' || value[key] === '') throw new Error(`fixture response is missing ${key}`)
-	return value[key]
-}
-
 async function postPrivate(path: string, body: unknown): Promise<unknown> {
-	const syncKey = process.env['OPERATIONS_SYNC_KEY']
+	const { OPERATIONS_SYNC_KEY: syncKey } = process.env
 	if (syncKey === undefined || syncKey.length < 32) throw new Error('OPERATIONS_SYNC_KEY is required')
 	const response = await fetch(`${INTERNAL_ORIGIN}${path}`, {
 		method: 'POST',
@@ -155,19 +147,13 @@ async function uploadSourceMap(
 }
 
 function parseCatalogIngest(value: unknown): OperationsCatalogReconcileResponseV2['ingest'] {
-	if (!isRecord(value) || !Array.isArray(value['ingest'])) throw new Error('catalog fixture response is invalid')
-	return value['ingest'].map((entry) => {
-		if (!isRecord(entry) || !isRecord(entry['coordinate'])) throw new Error('catalog fixture response is invalid')
-		return {
-			coordinate: {
-				appId: stringProperty(entry['coordinate'], 'appId'),
-				environment: stringProperty(entry['coordinate'], 'environment'),
-				serviceKey: stringProperty(entry['coordinate'], 'serviceKey'),
-			},
-			credentialId: stringProperty(entry, 'credentialId'),
-			ingestProjectId: stringProperty(entry, 'ingestProjectId'),
-		}
-	})
+	const parsed = catalogIngestSchema.safeParse(value)
+	if (!parsed.success) {
+		const path = parsed.error.issues[0]?.path ?? []
+		if (path.length < 3 || (path.length === 3 && path[2] === 'coordinate')) throw new Error('catalog fixture response is invalid')
+		throw new Error(`fixture response is missing ${path.at(-1)}`)
+	}
+	return parsed.data.ingest
 }
 
 function fixtureSource(

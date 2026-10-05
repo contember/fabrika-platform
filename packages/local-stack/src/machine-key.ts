@@ -18,6 +18,7 @@ import type { ControlRpcContract } from '@fabrika/control-contract'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { STATE_DIR } from './prepare'
+import { itemsResponseSchema, machineKeyResponseSchema } from './response-schemas'
 
 const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
 const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
@@ -48,9 +49,6 @@ export const requireMachineKey = (): string => {
 	return key
 }
 
-const property = (value: unknown, key: string): unknown =>
-	typeof value === 'object' && value !== null && key in value ? Reflect.get(value, key) : undefined
-
 /** Does this key still buy an authorized control-plane call through the proxy? */
 export const machineKeyStillWorks = async (key: string, request: RpcFetch = fetch): Promise<boolean> => {
 	try {
@@ -65,7 +63,7 @@ export const machineKeyStillWorks = async (key: string, request: RpcFetch = fetc
 			},
 		})
 		const result: unknown = await client.namespaces.list()
-		return Array.isArray(property(result, 'items'))
+		return itemsResponseSchema.safeParse(result).success
 	} catch {
 		return false
 	}
@@ -88,11 +86,11 @@ const provision = async (provisioningKey: string): Promise<string> => {
 		throw new Error(`IAM refused to provision the local machine key (${response.status})`)
 	}
 	const body: unknown = await response.json()
-	const apiKey = property(body, 'apiKey')
-	if (typeof apiKey !== 'string' || apiKey === '') {
+	const parsed = machineKeyResponseSchema.safeParse(body)
+	if (!parsed.success) {
 		throw new Error('IAM did not return a local machine key')
 	}
-	return apiKey
+	return parsed.data.apiKey
 }
 
 /**

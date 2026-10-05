@@ -11,16 +11,7 @@ import {
 	type ServiceEnvRecord,
 	type ServiceRecord,
 } from './zerops-emulator/model'
-import {
-	asRoleCode,
-	booleanProperty,
-	parseImportDocument,
-	property,
-	readGrant,
-	readSnapshot,
-	requiredString,
-	stringProperty,
-} from './zerops-emulator/parsing'
+import { asRoleCode, parseImportDocument, readGrant, readSnapshot } from './zerops-emulator/parsing'
 import {
 	error,
 	fakeIntegrationTokenValue,
@@ -32,6 +23,7 @@ import {
 	sensitiveIsRequired,
 	serviceStackNotFound,
 } from './zerops-emulator/protocol'
+import { integrationTokenRequestSchema, parseImportRequest, triggerRequestSchema, userDataRequestSchema } from './zerops-emulator/requests'
 
 export interface ZeropsEmulatorOptions {
 	token: string
@@ -88,7 +80,7 @@ class ZeropsEmulator {
 		const projectImport = path.match(/^\/client\/([^/]+)\/project\/import$/)
 		if (projectImport !== null && request.method === 'POST') {
 			const clientId = decodeURIComponent(projectImport[1] ?? '')
-			const yaml = requiredString(await parseJsonBody(request), 'yaml')
+			const yaml = parseImportRequest(await parseJsonBody(request))
 			const document = parseImportDocument(yaml)
 			if (document.project === undefined) {
 				return error(400, 'PROJECT_REQUIRED', 'project import requires a project section')
@@ -106,7 +98,7 @@ class ZeropsEmulator {
 			if (project === undefined) {
 				return error(404, 'PROJECT_NOT_FOUND', 'project not found')
 			}
-			const yaml = requiredString(await parseJsonBody(request), 'yaml')
+			const yaml = parseImportRequest(await parseJsonBody(request))
 			const document = parseImportDocument(yaml)
 			const services = this.importServices(project.id, document.services)
 			await this.persist()
@@ -119,11 +111,11 @@ class ZeropsEmulator {
 			if (service === undefined) {
 				return serviceStackNotFound()
 			}
-			const triggerBody = await parseJsonBody(request)
+			const triggerBody = triggerRequestSchema.safeParse(await parseJsonBody(request))
 			// A build source is a property of an app VERSION, never of the service, so every trigger must carry
 			// one. The platform's refusal for an empty body reads "Service stack not found" — its wording, not a
 			// guess — and nothing recorded its code, which is why the row asserts the status alone.
-			if (stringProperty(triggerBody, 'buildFromGit') === undefined) {
+			if (!triggerBody.success) {
 				return serviceStackNotFound()
 			}
 			const activationDelayMs = this.options.activationDelayMs ?? 0
@@ -266,17 +258,19 @@ class ZeropsEmulator {
 		// project grant is unverified against a real account, so none of it is refused here either.
 		const integrationToken = path.match(/^\/client\/([^/]+)\/integration-token$/)
 		if (integrationToken !== null && request.method === 'POST') {
-			const body = await parseJsonBody(request)
-			const grants = property(body, 'projects')
-			if (!Array.isArray(grants)) {
+			const body = integrationTokenRequestSchema.parse(await parseJsonBody(request))
+			const grants = body.projects
+			if (grants === undefined) {
 				return error(400, 'invalidUserInput', 'projects is required')
 			}
-			const roleCode = property(body, 'roleCode')
+			const roleCode = body.roleCode
 			const timestamp = new Date(this.now()).toISOString()
+			const tokenId = id('token', this.state.nextIntegrationToken++)
+			if (body.name === undefined) throw new Error('invalid state field name')
 			const record: IntegrationTokenRecord = {
-				id: id('token', this.state.nextIntegrationToken++),
+				id: tokenId,
 				clientId: decodeURIComponent(integrationToken[1] ?? ''),
-				name: requiredString(body, 'name'),
+				name: body.name,
 				created: timestamp,
 				lastUpdate: timestamp,
 				projects: grants.map(readGrant),
@@ -340,11 +334,12 @@ class ZeropsEmulator {
 			if (this.service(serviceId) === undefined) {
 				return serviceStackNotFound()
 			}
-			const body = await parseJsonBody(request)
-			const key = requiredString(body, 'key')
+			const body = userDataRequestSchema.parse(await parseJsonBody(request))
+			const key = body.key
+			if (key === undefined) throw new Error('invalid state field key')
 			// `sensitive` is required on every write, create and update alike — omitting it is `invalidUserInput`
 			// with `{"sensitive":["field is required"]}`, which is what stopped a namespace provision dead.
-			if (booleanProperty(body, 'sensitive') === undefined) {
+			if (body.sensitive === undefined) {
 				return sensitiveIsRequired()
 			}
 			if (key.startsWith(RESERVED_KEY_PREFIX)) {
@@ -353,11 +348,13 @@ class ZeropsEmulator {
 			if (this.state.serviceEnv.some((item) => item.serviceStackId === serviceId && item.key === key)) {
 				return error(400, 'userDataDuplicateKey', `UserData key '${key}' is not unique in service stack frame of reference.`)
 			}
+			const envId = id('env', this.state.nextEnv++)
+			if (body.content === undefined) throw new Error('invalid state field content')
 			const record: ServiceEnvRecord = {
-				id: id('env', this.state.nextEnv++),
+				id: envId,
 				serviceStackId: serviceId,
 				key,
-				content: requiredString(body, 'content'),
+				content: body.content,
 				type: 'SECRET',
 			}
 			this.state.serviceEnv.push(record)
@@ -376,18 +373,18 @@ class ZeropsEmulator {
 				return error(404, 'USER_DATA_NOT_FOUND', 'user data not found')
 			}
 			if (request.method === 'PUT') {
-				const body = await parseJsonBody(request)
+				const body = userDataRequestSchema.parse(await parseJsonBody(request))
 				const current = this.state.serviceEnv[index]
 				if (current === undefined) {
 					return error(404, 'USER_DATA_NOT_FOUND', 'user data not found')
 				}
 				// Both fields are required even when the key is unchanged, and so is `sensitive`.
-				const key = stringProperty(body, 'key')
-				const content = stringProperty(body, 'content')
+				const key = body.key
+				const content = body.content
 				if (key === undefined || content === undefined) {
 					return error(400, 'invalidUserInput', 'key and content are both required')
 				}
-				if (booleanProperty(body, 'sensitive') === undefined) {
+				if (body.sensitive === undefined) {
 					return sensitiveIsRequired()
 				}
 				current.key = key

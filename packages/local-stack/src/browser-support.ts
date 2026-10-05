@@ -3,10 +3,22 @@ import { buildOperationsDsn, operationsEnvelopeUrl } from '@fabrika/operations-c
 import { randomUUID } from 'node:crypto'
 import { readFileSync, rmSync, unlinkSync } from 'node:fs'
 import { resolve } from 'node:path'
+import type { z } from 'zod'
 import { registerLocalApps } from './app-registration'
+import { type browserFixtureSourceSchema, type browserIdentitySchema, parseBrowserFixtures, parseBrowserIdentity } from './browser-fixture-schemas'
 import { compose } from './compose'
 import { ensureMachineKey } from './machine-key'
 import { prepareLocalStack, STATE_DIR } from './prepare'
+import {
+	alertChannelFixtureSchema,
+	alertsFixtureSchema,
+	healthCheckFixtureSchema,
+	healthFixtureSchema,
+	idResponseSchema,
+	itemsResponseSchema,
+	rpcResponseSchema,
+	sourceFixtureSchema,
+} from './response-schemas'
 
 const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
 const OPERATIONS_ORIGIN = 'http://errors.fabrika.localhost:18080'
@@ -21,82 +33,13 @@ function hostUser(): string {
 	return `${getuid()}:${getgid()}`
 }
 
-export type BrowserIdentityRole = 'admin' | 'operations-notes'
+export type BrowserIdentity = z.infer<typeof browserIdentitySchema>
+export type BrowserIdentityRole = BrowserIdentity['role']
+type BrowserFixtureSource = z.infer<typeof browserFixtureSourceSchema>
 
-export interface BrowserIdentity {
-	role: BrowserIdentityRole
-	principalId: string
-	label: string
-	session: string
-	expiresAt: number
-}
-
-interface BrowserFixtureSource {
-	appId: string
-	environment: string
-	serviceKey: string
-	displayName: string
-	credentialId: string
-	publicKey: string
-	ingestProjectId: string
-	release: { name: string; runId: string; uploadBearer: string }
-}
-
-interface BrowserFixtures {
-	version: 1
-	visible: BrowserFixtureSource
-	hidden: BrowserFixtureSource
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function stringProperty(value: unknown, key: string): string {
-	if (!isRecord(value) || typeof value[key] !== 'string' || value[key] === '') throw new Error(`browser fixture is missing ${key}`)
-	return value[key]
-}
-
-function numberProperty(value: unknown, key: string): number {
-	if (!isRecord(value) || typeof value[key] !== 'number') throw new Error(`browser fixture is missing ${key}`)
-	return value[key]
-}
-
-function parseIdentity(value: unknown): BrowserIdentity {
-	const role = stringProperty(value, 'role')
-	if (role !== 'admin' && role !== 'operations-notes') throw new Error('browser identity has an invalid role')
-	return {
-		role,
-		principalId: stringProperty(value, 'principalId'),
-		label: stringProperty(value, 'label'),
-		session: stringProperty(value, 'session'),
-		expiresAt: numberProperty(value, 'expiresAt'),
-	}
-}
-
-function parseFixtureSource(value: unknown): BrowserFixtureSource {
-	if (!isRecord(value)) throw new Error('browser fixture source is invalid')
-	const release = value['release']
-	return {
-		appId: stringProperty(value, 'appId'),
-		environment: stringProperty(value, 'environment'),
-		serviceKey: stringProperty(value, 'serviceKey'),
-		displayName: stringProperty(value, 'displayName'),
-		credentialId: stringProperty(value, 'credentialId'),
-		publicKey: stringProperty(value, 'publicKey'),
-		ingestProjectId: stringProperty(value, 'ingestProjectId'),
-		release: {
-			name: stringProperty(release, 'name'),
-			runId: stringProperty(release, 'runId'),
-			uploadBearer: stringProperty(release, 'uploadBearer'),
-		},
-	}
-}
-
-function readFixtures(): BrowserFixtures {
+function readFixtures() {
 	const value: unknown = JSON.parse(readFileSync(FIXTURES_FILE, 'utf8'))
-	if (!isRecord(value) || value['version'] !== 1) throw new Error('browser fixtures have an unsupported version')
-	return { version: 1, visible: parseFixtureSource(value['visible']), hidden: parseFixtureSource(value['hidden']) }
+	return parseBrowserFixtures(value)
 }
 
 export async function createBrowserIdentity(role: BrowserIdentityRole): Promise<BrowserIdentity> {
@@ -108,7 +51,7 @@ export async function createBrowserIdentity(role: BrowserIdentityRole): Promise<
 	)
 	try {
 		const value: unknown = JSON.parse(readFileSync(output, 'utf8'))
-		return parseIdentity(value)
+		return parseBrowserIdentity(value)
 	} finally {
 		unlinkSync(output)
 	}
@@ -212,19 +155,21 @@ async function seedOperatorConfiguration(source: BrowserFixtureSource, session: 
 		recoveryThreshold: 1,
 		staleAfterMs: 180_000,
 	}
-	const health = await operationsRpc(session, 'sourceHealth', { sourceId: id })
-	const checks = isRecord(health) && Array.isArray(health['httpChecks']) ? health['httpChecks'] : []
-	const existingCheck = checks.find((check) => isRecord(check) && check['path'] === healthInput.path)
-	await operationsRpc(session, existingCheck === undefined ? 'createHealthCheck' : 'updateHealthCheck', {
+	const health = healthFixtureSchema.parse(await operationsRpc(session, 'sourceHealth', { sourceId: id }))
+	const existingCheck = health.httpChecks.map((check) => healthCheckFixtureSchema.safeParse(check))
+		.find((check) => check.success && check.data.path === healthInput.path)
+	const check = existingCheck?.success ? existingCheck.data : undefined
+	await operationsRpc(session, check === undefined ? 'createHealthCheck' : 'updateHealthCheck', {
 		sourceId: id,
-		...(existingCheck === undefined ? {} : { checkId: stringProperty(existingCheck, 'id') }),
+		...(check === undefined ? {} : { checkId: fixtureId(check) }),
 		input: healthInput,
 	})
 	await operationsRpc(session, 'updateSpikeAlert', { sourceId: id, input: { threshold: 25, enabled: true } })
 	await operationsRpc(session, 'updateAlertRule', { sourceId: id, kind: 'new_issue', input: { enabled: true } })
-	const alerts = await operationsRpc(session, 'alerts', { sourceId: id })
-	const channels = isRecord(alerts) && Array.isArray(alerts['channels']) ? alerts['channels'] : []
-	const existingChannel = channels.find((channel) => isRecord(channel) && channel['targetDisplay'] === 'https://alerts.example.test/…')
+	const alerts = alertsFixtureSchema.parse(await operationsRpc(session, 'alerts', { sourceId: id }))
+	const matchedChannel = alerts.channels.map((channel) => alertChannelFixtureSchema.safeParse(channel))
+		.find((channel) => channel.success && channel.data.targetDisplay === 'https://alerts.example.test/…')
+	const existingChannel = matchedChannel?.success ? matchedChannel.data : undefined
 	if (existingChannel === undefined) {
 		await operationsRpc(session, 'createAlertChannel', {
 			sourceId: id,
@@ -233,7 +178,7 @@ async function seedOperatorConfiguration(source: BrowserFixtureSource, session: 
 	} else {
 		await operationsRpc(session, 'updateAlertChannel', {
 			sourceId: id,
-			channelId: stringProperty(existingChannel, 'id'),
+			channelId: fixtureId(existingChannel),
 			input: { scope: 'new_issue', enabled: false },
 		})
 	}
@@ -241,11 +186,17 @@ async function seedOperatorConfiguration(source: BrowserFixtureSource, session: 
 
 async function sourceId(session: string, source: BrowserFixtureSource): Promise<string> {
 	const result = await operationsRpc(session, 'sources', null)
-	if (!isRecord(result) || !Array.isArray(result['items'])) throw new Error('Operations source list fixture response is invalid')
-	const item = result['items'].find((candidate) =>
-		isRecord(candidate) && candidate['appId'] === source.appId && candidate['environment'] === source.environment
-	)
-	return stringProperty(item, 'id')
+	const parsed = itemsResponseSchema.safeParse(result)
+	if (!parsed.success) throw new Error('Operations source list fixture response is invalid')
+	const item = parsed.data.items.map((candidate) => sourceFixtureSchema.safeParse(candidate))
+		.find((candidate) => candidate.success && candidate.data.appId === source.appId && candidate.data.environment === source.environment)
+	return fixtureId(item?.success ? item.data : undefined)
+}
+
+function fixtureId(value: unknown): string {
+	const parsed = idResponseSchema.safeParse(value)
+	if (!parsed.success) throw new Error('browser fixture is missing id')
+	return parsed.data.id
 }
 
 async function operationsRpc(session: string, method: string, input: unknown): Promise<unknown> {
@@ -259,8 +210,9 @@ async function operationsRpc(session: string, method: string, input: unknown): P
 		body: JSON.stringify({ method, input }),
 	})
 	const value: unknown = await response.json()
-	if (!response.ok || !isRecord(value) || value['error'] !== undefined) {
+	const parsed = rpcResponseSchema.safeParse(value)
+	if (!response.ok || !parsed.success) {
 		throw new Error(`Operations RPC fixture ${method} failed with status ${response.status}`)
 	}
-	return value['result']
+	return parsed.data.result
 }

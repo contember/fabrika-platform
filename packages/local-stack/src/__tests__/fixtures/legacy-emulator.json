@@ -1,0 +1,24 @@
+{
+	"nextProject": 2,
+	"nextService": 2,
+	"nextEnv": 2,
+	"nextVersion": 2,
+	"nextProcess": 1,
+	"projects": [
+		{
+			"id": "p",
+			"clientId": "c",
+			"name": "legacy",
+			"mode": "LIGHT",
+			"status": "OLD",
+			"description": 42,
+			"tagList": ["ok", 1]
+		}
+	],
+	"services": [{ "id": "s", "projectId": "p", "name": "api", "status": "OLD", "base": null, "subdomainAccess": false }],
+	"serviceEnv": [{ "id": "e", "serviceStackId": "s", "key": "VALUE", "content": "", "type": "OLD" }],
+	"appVersions": [
+		{ "id": "v", "serviceStackId": "s", "projectId": "p", "status": "BUILDING", "sequence": 1, "activateAt": "ignored" }
+	],
+	"extension": { "opaque": true }
+}

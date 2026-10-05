@@ -17,6 +17,25 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { requireMachineKey } from './machine-key'
 import { COMPOSE_FILE, REPO_ROOT, STATE_DIR } from './prepare'
+import { idResponseSchema, itemsResponseSchema, rpcResponseSchema } from './response-schemas'
+import {
+	activeOperationsConfigSchema,
+	completedRunSchema,
+	createdNoteSchema,
+	environmentViewSchema,
+	errorResponseSchema,
+	iamSchemaResponseSchema,
+	issueListSchema,
+	keyPrincipalSchema,
+	managedSnapshotSchema,
+	namespacePlanSchema,
+	namespaceViewSchema,
+	notesListSchema,
+	publicStatusSchema,
+	runViewSchema,
+	storageIdentitySchema,
+	storageRowsSchema,
+} from './smoke-schemas'
 import { LOCAL_SOURCE_CONNECTIONS } from './source-connection-fixture'
 
 const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
@@ -33,25 +52,6 @@ if (NOTES_SOURCE_CONNECTION === undefined) throw new Error('the local source con
 const EXTERNAL_ACTIVATION_WAIT_MS = 11_000
 const POLL_INTERVAL_MS = 200
 const POLL_TIMEOUT_MS = 30_000
-
-const property = (value: unknown, key: string): unknown =>
-	typeof value === 'object' && value !== null && key in value ? Reflect.get(value, key) : undefined
-
-const requiredString = (value: unknown, key: string): string => {
-	const found = property(value, key)
-	if (typeof found !== 'string' || found === '') {
-		throw new Error(`response is missing ${key}`)
-	}
-	return found
-}
-
-const requiredArray = (value: unknown, key: string): unknown[] => {
-	const found = property(value, key)
-	if (!Array.isArray(found)) {
-		throw new Error(`response is missing ${key}`)
-	}
-	return found
-}
 
 const parseJson = (text: string, description: string): unknown => {
 	try {
@@ -103,8 +103,8 @@ const requestJson = async (
 		}
 	}
 	if (!response.ok) {
-		const message = property(body, 'error')
-		throw new Error(`${method} ${path} failed (${response.status}): ${typeof message === 'string' ? message : text}`)
+		const failure = errorResponseSchema.safeParse(body)
+		throw new Error(`${method} ${path} failed (${response.status}): ${failure.success ? failure.data.error : text}`)
 	}
 	return body
 }
@@ -180,13 +180,13 @@ const poll = async <T>(description: string, read: () => Promise<T>, done: (value
 const namespaceIsReady = async (machineKey: string): Promise<void> => {
 	const namespace = await poll(
 		'deployment namespace apps-prod to become ready',
-		() => controlRequest('/namespaces/apps-prod', machineKey),
-		(value) => property(value, 'state') === 'ready' || property(value, 'state') === 'failed',
+		async () => namespaceViewSchema.parse(await controlRequest('/namespaces/apps-prod', machineKey)),
+		(value) => value.state === 'ready' || value.state === 'failed',
 	)
-	if (property(namespace, 'state') === 'failed') {
+	if (namespace.state === 'failed') {
 		throw new Error(
-			`deployment namespace apps-prod failed to provision: ${String(property(namespace, 'lastErrorCode') ?? 'unknown')}: ${
-				String(property(namespace, 'lastError') ?? 'no reason recorded')
+			`deployment namespace apps-prod failed to provision: ${String(namespace.lastErrorCode ?? 'unknown')}: ${
+				String(namespace.lastError ?? 'no reason recorded')
 			}`,
 		)
 	}
@@ -194,8 +194,8 @@ const namespaceIsReady = async (machineKey: string): Promise<void> => {
 
 const ensureNamespace = async (machineKey: string): Promise<void> => {
 	const namespaces = await controlRequest('/namespaces', machineKey)
-	const existing = requiredArray(namespaces, 'items').find((item) => property(item, 'id') === 'apps-prod')
-	if (property(existing, 'state') === 'ready') {
+	const existing = itemsResponseSchema.parse(namespaces).items.map((item) => namespaceViewSchema.parse(item)).find((item) => item.id === 'apps-prod')
+	if (existing?.state === 'ready') {
 		return
 	}
 	if (existing !== undefined) {
@@ -206,7 +206,7 @@ const ensureNamespace = async (machineKey: string): Promise<void> => {
 	const plan = await controlRequest('/namespaces/plan', machineKey, {
 		body: { id: 'apps-prod', env: 'prod', preset: 'cheap' },
 	})
-	const namespace = property(plan, 'namespace')
+	const namespace = namespacePlanSchema.parse(plan).namespace
 	if (namespace === undefined) {
 		throw new Error('namespace plan is missing namespace')
 	}
@@ -224,22 +224,22 @@ const ensureNotesApp = async (machineKey: string): Promise<void> => {
 		version: zeropsArtifactCodec.version,
 		payload: zeropsArtifactCodec.encode(manifest),
 	}
-	if (requiredArray(apps, 'items').some((item) => property(item, 'id') === 'notes')) {
+	if (itemsResponseSchema.parse(apps).items.some((item) => namespaceViewSchema.parse(item).id === 'notes')) {
 		const environments = await controlRequest('/apps/notes/envs', machineKey)
-		const existing = requiredArray(environments, 'items').find((item) => property(item, 'env') === 'prod')
+		const existing = itemsResponseSchema.parse(environments).items.map((item) => environmentViewSchema.parse(item)).find((item) => item.env === 'prod')
 		if (
-			property(existing, 'domain') !== 'notes.fabrika.localhost'
-			|| property(existing, 'publicOrigin') !== 'http://notes.fabrika.localhost:18081'
+			existing?.domain !== 'notes.fabrika.localhost'
+			|| existing?.publicOrigin !== 'http://notes.fabrika.localhost:18081'
 		) {
 			await controlRequest('/apps/notes/envs/prod', machineKey, {
 				method: 'PUT',
 				body: {
 					domain: 'notes.fabrika.localhost',
 					publicOrigin: 'http://notes.fabrika.localhost:18081',
-					triggerRef: property(existing, 'triggerRef') ?? 'refs/heads/main',
-					namespaceId: property(existing, 'namespaceId') ?? 'apps-prod',
-					target: property(existing, 'target') ?? target,
-					artifact: property(existing, 'artifact') ?? artifact,
+					triggerRef: existing?.triggerRef ?? 'refs/heads/main',
+					namespaceId: existing?.namespaceId ?? 'apps-prod',
+					target: existing?.target ?? target,
+					artifact: existing?.artifact ?? artifact,
 				},
 			})
 		}
@@ -295,11 +295,11 @@ const proveRestartReconciliation = async (machineKey: string): Promise<{ runId: 
 	const triggered = await controlRequest('/deploy', machineKey, {
 		body: { appId: NOTES_APP_ID, env: NOTES_ENVIRONMENT, ref: 'refs/heads/main' },
 	})
-	const runId = requiredString(triggered, 'id')
+	const runId = idResponseSchema.parse(triggered).id
 	await poll(
 		'a provider-owned running deploy',
-		() => controlRequest(`/runs/${runId}`, machineKey),
-		(value) => property(value, 'status') === 'running' && typeof property(value, 'externalRunId') === 'string',
+		async () => runViewSchema.parse(await controlRequest(`/runs/${runId}`, machineKey)),
+		(value) => value.status === 'running' && value.externalRunId !== undefined,
 	)
 	console.info(`Deploy ${runId} reached the external Zerops pipeline; killing control`)
 	await compose(['kill', 'control'])
@@ -307,11 +307,11 @@ const proveRestartReconciliation = async (machineKey: string): Promise<{ runId: 
 	await compose(['up', '--detach', '--wait', 'control'])
 	await poll(
 		'startup reconciliation',
-		() => controlRequest(`/runs/${runId}`, machineKey),
-		(value) => property(value, 'status') === 'succeeded',
+		async () => runViewSchema.parse(await controlRequest(`/runs/${runId}`, machineKey)),
+		(value) => value.status === 'succeeded',
 	)
 	const completed = await controlRequest(`/runs/${runId}`, machineKey)
-	const commitSha = requiredString(completed, 'commitSha')
+	const commitSha = completedRunSchema.parse(completed).commitSha
 	if (!/^[0-9a-f]{40}$/.test(commitSha)) {
 		throw new Error('completed deploy did not record the resolved commit')
 	}
@@ -342,11 +342,7 @@ const readActiveOperationsConfig = async (): Promise<ActiveOperationsConfig | nu
 	)).trim()
 	if (output === '') return null
 	const value = parseJson(output, 'Control Operations ingest configuration query')
-	return {
-		dsn: requiredString(value, 'dsn'),
-		ingestProjectId: requiredString(value, 'ingestProjectId'),
-		serviceKey: requiredString(value, 'serviceKey'),
-	}
+	return activeOperationsConfigSchema.parse(value)
 }
 
 const activeOperationsConfig = async (): Promise<ActiveOperationsConfig> => {
@@ -363,18 +359,18 @@ const proveManagedOperationsEnvironment = async (
 	config: ActiveOperationsConfig,
 	release: string,
 ): Promise<void> => {
-	const snapshot = parseJson(
+	const snapshot = managedSnapshotSchema.parse(parseJson(
 		await composeOutput(['exec', '-T', 'zerops-emulator', 'cat', '/state/zerops.json']),
 		'Zerops emulator state',
-	)
-	const services = requiredArray(snapshot, 'services').filter((service) => property(service, 'name') === NOTES_DEPLOY_SERVICE)
+	))
+	const services = snapshot.services.filter((service) => service.name === NOTES_DEPLOY_SERVICE)
 	if (services.length !== 1) {
 		throw new Error('Zerops emulator does not contain exactly one notes deploy service')
 	}
-	const serviceId = requiredString(services[0], 'id')
+	const serviceId = idResponseSchema.parse(services[0]).id
 	const managedKeys = new Set<string>([...OPERATIONS_MANAGED_ENVIRONMENT_KEYS, FABRIKA_RELEASE])
-	const managed = requiredArray(snapshot, 'serviceEnv').filter(
-		(record) => property(record, 'serviceStackId') === serviceId && managedKeys.has(String(property(record, 'key'))),
+	const managed = snapshot.serviceEnv.filter(
+		(record) => record.serviceStackId === serviceId && managedKeys.has(String(record.key)),
 	)
 	const expected = new Map<string, string>([
 		[FABRIKA_OPERATIONS_DSN, config.dsn],
@@ -387,16 +383,16 @@ const proveManagedOperationsEnvironment = async (
 		throw new Error('Zerops emulator contains missing, duplicate, or stale managed Operations values')
 	}
 	for (const [key, expectedValue] of expected) {
-		const matches = managed.filter((record) => property(record, 'key') === key)
-		if (matches.length !== 1 || property(matches[0], 'content') !== expectedValue) {
+		const matches = managed.filter((record) => record.key === key)
+		if (matches.length !== 1 || matches[0]?.content !== expectedValue) {
 			throw new Error(`Zerops emulator managed value ${key} does not match the deploy projection`)
 		}
 	}
 }
 
 const proveIamAndNotes = async (provisioningKey: string): Promise<void> => {
-	const schema = await requestJson(IAM_ORIGIN, '/admin/apps/notes/schema', { bearer: provisioningKey })
-	if (requiredArray(schema, 'actions').length !== 4 || requiredArray(schema, 'scopes').length !== 1) {
+	const schema = iamSchemaResponseSchema.parse(await requestJson(IAM_ORIGIN, '/admin/apps/notes/schema', { bearer: provisioningKey }))
+	if (schema.actions.length !== 4 || schema.scopes.length !== 1) {
 		throw new Error('notes IAM schema was not reconciled')
 	}
 	const keyResponse = await requestJson(IAM_ORIGIN, '/admin/api-keys', {
@@ -410,11 +406,10 @@ const proveIamAndNotes = async (provisioningKey: string): Promise<void> => {
 			scopeValue: 'local',
 		},
 	})
-	const apiKey = requiredString(keyResponse, 'apiKey')
-	const principalId = requiredString(keyResponse, 'principalId')
+	const { apiKey, principalId } = keyPrincipalSchema.parse(keyResponse)
 	try {
 		const publicResponse = await requestJson(NOTES_ORIGIN, '/public/status')
-		if (property(publicResponse, 'app') !== 'notes') {
+		if (publicStatusSchema.parse(publicResponse).app !== 'notes') {
 			throw new Error('public notes route returned the wrong app')
 		}
 		const title = `local smoke ${Date.now()}`
@@ -422,11 +417,11 @@ const proveIamAndNotes = async (provisioningKey: string): Promise<void> => {
 			bearer: apiKey,
 			body: { title },
 		})
-		if (property(property(created, 'note'), 'title') !== title) {
+		if (createdNoteSchema.parse(created).note.title !== title) {
 			throw new Error('authenticated note creation returned the wrong title')
 		}
 		const listed = await requestJson(NOTES_ORIGIN, '/api/notes?workspace=local', { bearer: apiKey })
-		if (!requiredArray(listed, 'notes').some((note) => property(note, 'title') === title)) {
+		if (!notesListSchema.parse(listed).notes.some((note) => note.title === title)) {
 			throw new Error('authenticated note was not persisted')
 		}
 	} finally {
@@ -514,30 +509,21 @@ const proveControlIsGated = async (): Promise<void> => {
  */
 const operationsRpc = async (machineKey: string, method: string, input: unknown): Promise<unknown> => {
 	const body = await requestJson(CONTROL_ORIGIN, '/operations/api/rpc', { bearer: machineKey, body: { method, input } })
-	const failure = property(body, 'error')
-	const result = property(body, 'result')
-	if (failure !== undefined || result === undefined) {
+	const parsed = rpcResponseSchema.safeParse(body)
+	if (!parsed.success || parsed.data.result === undefined) {
 		throw new Error(`Operations RPC ${method} was refused`)
 	}
-	return result
+	return parsed.data.result
 }
 
-const matchingIssues = (value: unknown, marker: string): unknown[] =>
-	requiredArray(value, 'items').filter((issue) => {
-		const title = property(issue, 'title')
-		return typeof title === 'string' && title.includes(marker)
-	})
+const matchingIssues = (value: unknown, marker: string) => issueListSchema.parse(value).items.filter((issue) => issue.title?.includes(marker))
 
-const pollMarkerIssue = async (machineKey: string, marker: string, expectedCount: number): Promise<unknown> => {
-	const response = await poll(
+const pollMarkerIssue = async (machineKey: string, marker: string, expectedCount: number) => {
+	const issues = await poll(
 		`Operations issue ${marker} count ${expectedCount}`,
-		() => operationsRpc(machineKey, 'issues', { query: marker, limit: 100 }),
-		(value) => {
-			const issues = matchingIssues(value, marker)
-			return issues.length === 1 && property(issues[0], 'count') === expectedCount
-		},
+		async () => matchingIssues(await operationsRpc(machineKey, 'issues', { query: marker, limit: 100 }), marker),
+		(issues) => issues.length === 1 && issues[0]?.count === expectedCount,
 	)
-	const issues = matchingIssues(response, marker)
 	const issue = issues[0]
 	if (issue === undefined) throw new Error('Operations issue disappeared after polling')
 	return issue
@@ -549,7 +535,7 @@ const sentryEvent = (input: {
 	eventId: string
 	marker: string
 	release: string
-}): Record<string, unknown> => ({
+}) => ({
 	event_id: input.eventId,
 	level: 'error',
 	platform: 'javascript',
@@ -573,8 +559,8 @@ const sentryEvent = (input: {
 	},
 })
 
-const sentryEnvelope = (event: Record<string, unknown>): string =>
-	`${JSON.stringify({ event_id: property(event, 'event_id'), sent_at: new Date().toISOString() })}\n${JSON.stringify({ type: 'event' })}\n${
+const sentryEnvelope = (event: ReturnType<typeof sentryEvent>): string =>
+	`${JSON.stringify({ event_id: event.event_id, sent_at: new Date().toISOString() })}\n${JSON.stringify({ type: 'event' })}\n${
 		JSON.stringify(event)
 	}\n`
 
@@ -611,14 +597,11 @@ const readIssueStorageIdentity = async (issueId: string): Promise<{ sourceId: st
 			FROM issues
 			WHERE id IS NOT NULL`,
 	)).trim()
-	const rows = parseJson(output, 'Operations issue storage query')
-	if (!Array.isArray(rows)) throw new Error('Operations issue storage query returned an invalid result')
-	const row = rows.find((candidate) => property(candidate, 'id') === issueId)
+	const rows = storageRowsSchema.safeParse(parseJson(output, 'Operations issue storage query'))
+	if (!rows.success) throw new Error('Operations issue storage query returned an invalid result')
+	const row = rows.data.find((candidate) => candidate.id === issueId)
 	if (row === undefined) throw new Error('operator issue is missing from Operations storage')
-	return {
-		sourceId: requiredString(row, 'sourceId'),
-		fingerprint: requiredString(row, 'fingerprint'),
-	}
+	return storageIdentitySchema.parse(row)
 }
 
 const hex = (value: string): string => [...new TextEncoder().encode(value)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
@@ -673,12 +656,12 @@ const proveOperationsIngestPersistence = async (
 	}
 
 	const firstIssue = await pollMarkerIssue(machineKey, marker, 1)
-	const issueId = requiredString(firstIssue, 'id')
-	const source = property(firstIssue, 'source')
+	const issueId = idResponseSchema.parse(firstIssue).id
+	const source = firstIssue.source
 	if (
-		property(source, 'appId') !== NOTES_APP_ID
-		|| property(source, 'environment') !== NOTES_ENVIRONMENT
-		|| property(source, 'serviceKey') !== DEFAULT_OPERATIONS_SERVICE_KEY
+		source.appId !== NOTES_APP_ID
+		|| source.environment !== NOTES_ENVIRONMENT
+		|| source.serviceKey !== DEFAULT_OPERATIONS_SERVICE_KEY
 	) {
 		throw new Error('Operations issue has incorrect source coordinates')
 	}
@@ -703,7 +686,7 @@ const proveOperationsIngestPersistence = async (
 	await compose(['up', '--detach', '--wait', 'operations'])
 
 	const repeatedIssue = await pollMarkerIssue(machineKey, marker, 2)
-	if (requiredString(repeatedIssue, 'id') !== issueId) {
+	if (idResponseSchema.parse(repeatedIssue).id !== issueId) {
 		throw new Error('duplicate delivery changed the Operations issue identity')
 	}
 	await poll('the Operations ingest queue to drain', operationsQueueDepth, (depth) => depth === 0)
