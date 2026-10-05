@@ -7,28 +7,46 @@ import {
 	FABRIKA_RELEASE,
 	FABRIKA_SERVICE_KEY,
 	type IngestMessage,
-	OPERATIONS_MANAGED_ENVIRONMENT_KEYS,
 	operationsEnvelopeUrl,
 	operationsReleaseName,
 } from '@fabrika/operations-contract'
-import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, zeropsArtifactCodec } from '@fabrika/provider-zerops'
+import {
+	compileFabrikaManifest,
+	createZeropsArtifactSourceDescriptor,
+	zeropsArtifactCodec,
+	zeropsNamespaceTargetCodec,
+} from '@fabrika/provider-zerops'
 import { createHmac, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
+import { normalizeRepoUrl } from '../../control/src/repo-source'
+import { DEPLOY_LEASE_TTL_MS } from '../../control/src/run-ownership'
+import { confirmStagedManagedBinding } from '../../provider-zerops/src/managed-environment/admission'
+import { type ManagedCheckpoint, type ManagedKey, verifyManagedCheckpoint } from '../../provider-zerops/src/managed-environment/protocol'
+import {
+	LOCAL_SOURCE_APPLICATION_REPOSITORY_URL,
+	LOCAL_SOURCE_FIXTURE_DIRECTORY,
+	LOCAL_SOURCE_PLATFORM_REPOSITORY,
+	type LocalSourceManifest,
+} from './local-source-contract'
+import { loadLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { requireMachineKey } from './machine-key'
 import { COMPOSE_FILE, REPO_ROOT, STATE_DIR } from './prepare'
 import { idResponseSchema, itemsResponseSchema, rpcResponseSchema } from './response-schemas'
 import {
 	activeOperationsConfigSchema,
+	appSourceSchema,
 	completedRunSchema,
 	createdNoteSchema,
+	deployLeaseSchema,
 	environmentViewSchema,
 	errorResponseSchema,
 	iamSchemaResponseSchema,
 	issueListSchema,
 	keyPrincipalSchema,
-	managedSnapshotSchema,
 	namespacePlanSchema,
+	namespaceTargetViewSchema,
 	namespaceViewSchema,
 	notesListSchema,
 	publicStatusSchema,
@@ -37,6 +55,7 @@ import {
 	storageRowsSchema,
 } from './smoke-schemas'
 import { LOCAL_SOURCE_CONNECTIONS } from './source-connection-fixture'
+import { parseSnapshot } from './zerops-emulator/snapshot'
 
 const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
 const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
@@ -45,7 +64,6 @@ const OPERATIONS_ORIGIN = 'http://errors.fabrika.localhost:18080'
 const NOTES_APP_ID = 'notes'
 const NOTES_ENVIRONMENT = 'prod'
 const NOTES_DEPLOY_SERVICE = 'notesapi'
-const SMOKE_COMMIT_SHA = '0123456789abcdef0123456789abcdef01234567'
 // The keyed connection the notes app is bound to; its scoped route is the only one that can trigger it.
 const NOTES_SOURCE_CONNECTION = LOCAL_SOURCE_CONNECTIONS[0]
 if (NOTES_SOURCE_CONNECTION === undefined) throw new Error('the local source connection fixture is empty')
@@ -114,8 +132,11 @@ const requestJson = async (
  * because that is the only machine credential the `service` gate can exchange — the provisioning key
  * has no `credentials` row and the proxy refuses it before control sees it.
  */
-const controlRequest = (path: string, machineKey: string, options: { body?: unknown; method?: string } = {}): Promise<unknown> =>
-	requestJson(CONTROL_ORIGIN, `/api${path}`, { bearer: machineKey, ...options })
+const controlRequest = async (method: string, machineKey: string, input: unknown = {}): Promise<unknown> => {
+	const response = rpcResponseSchema.parse(await requestJson(CONTROL_ORIGIN, '/api/rpc', { bearer: machineKey, body: { method, input } }))
+	if (response.result === undefined) throw new Error(`Control RPC ${method} was refused`)
+	return response.result
+}
 
 const compose = async (args: string[], expectSuccess = true, showOutput = true): Promise<number> => {
 	const process = Bun.spawn(
@@ -180,7 +201,7 @@ const poll = async <T>(description: string, read: () => Promise<T>, done: (value
 const namespaceIsReady = async (machineKey: string): Promise<void> => {
 	const namespace = await poll(
 		'deployment namespace apps-prod to become ready',
-		async () => namespaceViewSchema.parse(await controlRequest('/namespaces/apps-prod', machineKey)),
+		async () => namespaceViewSchema.parse(await controlRequest('namespaces.get', machineKey, { namespaceId: 'apps-prod' })),
 		(value) => value.state === 'ready' || value.state === 'failed',
 	)
 	if (namespace.state === 'failed') {
@@ -193,30 +214,28 @@ const namespaceIsReady = async (machineKey: string): Promise<void> => {
 }
 
 const ensureNamespace = async (machineKey: string): Promise<void> => {
-	const namespaces = await controlRequest('/namespaces', machineKey)
+	const namespaces = await controlRequest('namespaces.list', machineKey)
 	const existing = itemsResponseSchema.parse(namespaces).items.map((item) => namespaceViewSchema.parse(item)).find((item) => item.id === 'apps-prod')
 	if (existing?.state === 'ready') {
 		return
 	}
 	if (existing !== undefined) {
-		await controlRequest('/namespaces/apps-prod/reconcile', machineKey, { body: {} })
+		await controlRequest('namespaces.reconcile', machineKey, { namespaceId: 'apps-prod' })
 		await namespaceIsReady(machineKey)
 		return
 	}
-	const plan = await controlRequest('/namespaces/plan', machineKey, {
-		body: { id: 'apps-prod', env: 'prod', preset: 'cheap' },
-	})
+	const plan = await controlRequest('namespaces.plan', machineKey, { id: 'apps-prod', env: 'prod', preset: 'cheap' })
 	const namespace = namespacePlanSchema.parse(plan).namespace
 	if (namespace === undefined) {
 		throw new Error('namespace plan is missing namespace')
 	}
-	await controlRequest('/namespaces', machineKey, { body: namespace })
+	await controlRequest('namespaces.create', machineKey, namespace)
 	await namespaceIsReady(machineKey)
 }
 
-const ensureNotesApp = async (machineKey: string): Promise<void> => {
-	const apps = await controlRequest('/apps', machineKey)
-	const sourceDescriptor = await createZeropsArtifactSourceDescriptor(readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zerops.yaml'), 'utf8'))
+const ensureNotesApp = async (machineKey: string, fixtures: LocalSourceManifest): Promise<void> => {
+	const apps = await controlRequest('apps.list', machineKey)
+	const sourceDescriptor = await createZeropsArtifactSourceDescriptor(fixtures.application.descriptorContents)
 	const manifest = compileFabrikaManifest(cheapNotesConfig, 'prod', sourceDescriptor)
 	const target = { provider: 'zerops', version: 2, payload: {} }
 	const artifact = {
@@ -225,15 +244,23 @@ const ensureNotesApp = async (machineKey: string): Promise<void> => {
 		payload: zeropsArtifactCodec.encode(manifest),
 	}
 	if (itemsResponseSchema.parse(apps).items.some((item) => namespaceViewSchema.parse(item).id === 'notes')) {
-		const environments = await controlRequest('/apps/notes/envs', machineKey)
+		const app = appSourceSchema.parse(await controlRequest('apps.get', machineKey, { appId: NOTES_APP_ID }))
+		if (app.repoUrl !== normalizeRepoUrl(LOCAL_SOURCE_APPLICATION_REPOSITORY_URL) || app.workerDir !== '.') {
+			throw new Error('Local notes source uses legacy coordinates; reset the local stack explicitly')
+		}
+		const environments = await controlRequest('apps.environments.list', machineKey, { appId: NOTES_APP_ID })
 		const existing = itemsResponseSchema.parse(environments).items.map((item) => environmentViewSchema.parse(item)).find((item) => item.env === 'prod')
+		if (!isDeepStrictEqual(existing?.artifact, artifact)) {
+			throw new Error('Local notes artifact differs from the verified fixture; reset the local stack explicitly')
+		}
 		if (
 			existing?.domain !== 'notes.fabrika.localhost'
 			|| existing?.publicOrigin !== 'http://notes.fabrika.localhost:18081'
 		) {
-			await controlRequest('/apps/notes/envs/prod', machineKey, {
-				method: 'PUT',
-				body: {
+			await controlRequest('apps.environments.put', machineKey, {
+				appId: NOTES_APP_ID,
+				env: NOTES_ENVIRONMENT,
+				environment: {
 					domain: 'notes.fabrika.localhost',
 					publicOrigin: 'http://notes.fabrika.localhost:18081',
 					triggerRef: existing?.triggerRef ?? 'refs/heads/main',
@@ -245,20 +272,18 @@ const ensureNotesApp = async (machineKey: string): Promise<void> => {
 		}
 		return
 	}
-	await controlRequest('/register-app', machineKey, {
-		body: {
-			id: 'notes',
-			repoUrl: 'https://github.com/contember/fabrika-platform.git',
-			defaultBranch: 'main',
-			workerDir: 'examples/zerops-app',
-			env: 'prod',
-			triggerRef: 'refs/heads/main',
-			domain: 'notes.fabrika.localhost',
-			publicOrigin: 'http://notes.fabrika.localhost:18081',
-			namespaceId: 'apps-prod',
-			target,
-			artifact,
-		},
+	await controlRequest('register', machineKey, {
+		id: 'notes',
+		repoUrl: LOCAL_SOURCE_APPLICATION_REPOSITORY_URL,
+		defaultBranch: 'main',
+		workerDir: '.',
+		env: 'prod',
+		triggerRef: 'refs/heads/main',
+		domain: 'notes.fabrika.localhost',
+		publicOrigin: 'http://notes.fabrika.localhost:18081',
+		namespaceId: 'apps-prod',
+		target,
+		artifact,
 	})
 }
 
@@ -268,11 +293,11 @@ const ensureNotesApp = async (machineKey: string): Promise<void> => {
  * anonymously because no local app can hold a keyed private binding (see backlog 81), so the delivery
  * matches no application and `handleWebhook` acknowledges it with an empty body.
  */
-const proveScopedWebhookSignature = async (webhookSecret: string): Promise<void> => {
+const proveScopedWebhookSignature = async (webhookSecret: string, commitSha: string): Promise<void> => {
 	const body = JSON.stringify({
 		ref: 'refs/heads/main',
-		after: SMOKE_COMMIT_SHA,
-		repository: { clone_url: 'https://github.com/contember/fabrika-platform.git' },
+		after: commitSha,
+		repository: { clone_url: LOCAL_SOURCE_APPLICATION_REPOSITORY_URL },
 		installation: { id: NOTES_SOURCE_CONNECTION.installationId },
 	})
 	const signature = createHmac('sha256', webhookSecret).update(body).digest('hex')
@@ -290,32 +315,147 @@ const proveScopedWebhookSignature = async (webhookSecret: string): Promise<void>
 	console.info(`Scoped webhook ${NOTES_SOURCE_CONNECTION.connectionId} verified the delivery signature`)
 }
 
-const proveRestartReconciliation = async (machineKey: string): Promise<{ runId: string; commitSha: string }> => {
+const emulatorSnapshot = async () =>
+	parseSnapshot(parseJson(
+		await composeOutput(['exec', '-T', 'zerops-emulator', 'cat', '/state/zerops.json']),
+		'Zerops emulator state',
+	))
+
+const readRunCheckpoint = async (runId: string): Promise<ManagedCheckpoint | null> => {
+	const output =
+		(await postgresOutput('control', `SELECT provider_state_json FROM runs WHERE id = convert_from(decode('${hex(runId)}', 'hex'), 'UTF8')`)).trim()
+	return output === '' ? null : verifyManagedCheckpoint(parseJson(output, 'provider checkpoint'))
+}
+
+export const waitForDeployLeaseExpiry = async (
+	read: () => Promise<{ expiresAt: number } | null>,
+	timing: { now: () => number; sleep: (ms: number) => Promise<unknown> } = { now: Date.now, sleep: Bun.sleep },
+): Promise<void> => {
+	const deadline = timing.now() + DEPLOY_LEASE_TTL_MS + 60_000
+	let announced = false
+	for (;;) {
+		const lease = await read()
+		const now = timing.now()
+		if (lease === null || lease.expiresAt <= now) return
+		if (now >= deadline) throw new Error('Timed out waiting for the killed Control invocation’s deploy lease to expire naturally')
+		if (!announced) {
+			console.info(
+				`Waiting for persisted deploy lease expiry at ${new Date(lease.expiresAt).toISOString()} (timeout in ${
+					Math.ceil((deadline - now) / 60_000)
+				} minutes; no lease mutation)`,
+			)
+			announced = true
+		}
+		await timing.sleep(Math.min(30_000, lease.expiresAt - now + 1000, deadline - now))
+	}
+}
+
+const readNotesDeployLease = async () =>
+	deployLeaseSchema.parse(parseJson(
+		(await postgresOutput(
+			'control',
+			`SELECT COALESCE(
+		(SELECT json_build_object('expiresAt', expires_at) FROM deploy_locks WHERE lock_key = '${NOTES_APP_ID}:${NOTES_ENVIRONMENT}'),
+		'null'::json
+	)`,
+		)).trim(),
+		'Control deploy lease query',
+	))
+
+const proveNamespaceSource = async (machineKey: string, fixtures: LocalSourceManifest): Promise<void> => {
+	const view = namespaceTargetViewSchema.parse(await controlRequest('namespaces.get', machineKey, { namespaceId: 'apps-prod' }))
+	if (view.target.provider !== 'zerops' || view.target.version !== zeropsNamespaceTargetCodec.version) {
+		throw new Error('Unexpected namespace target version')
+	}
+	const target = zeropsNamespaceTargetCodec.decode(view.target.payload)
+	const expected = {
+		repository: LOCAL_SOURCE_PLATFORM_REPOSITORY,
+		commitSha: fixtures.platform.commitSha,
+		descriptor: await createZeropsArtifactSourceDescriptor(fixtures.platform.descriptorContents),
+	}
+	if (!isDeepStrictEqual(target.proxySource, expected)) throw new Error('Namespace source pin differs from verified fixture; explicit reset required')
+	const deployed = target.proxyDeployment
+	if (
+		deployed === undefined || target.proxyBuild !== undefined || deployed.commitSha !== expected.commitSha
+		|| deployed.descriptorSha256 !== expected.descriptor.sha256 || !isDeepStrictEqual(deployed.repository, expected.repository)
+	) {
+		throw new Error('Namespace proxy deployment does not match its immutable source pin')
+	}
+	const snapshot = await emulatorSnapshot()
+	const version = snapshot.appVersions.find(item => item.id === deployed.appVersionId)
+	const grant = snapshot.uploadGrants.find(item => item.appVersionId === deployed.appVersionId)
+	if (
+		version?.status !== 'ACTIVE' || version.serviceStackId !== target.proxyServiceId || version.projectId !== target.projectId
+		|| grant?.deleted !== false || grant.receipt === undefined
+		|| snapshot.services.find(item => item.id === target.proxyServiceId)?.activeAppVersionId !== deployed.appVersionId
+		|| snapshot.processes.filter(item => item.actionName === 'stack.build' && item.appVersionId === deployed.appVersionId).length !== 1
+	) {
+		throw new Error('Namespace proxy lacks exact-version upload and build evidence')
+	}
+}
+
+const proveRestartReconciliation = async (
+	machineKey: string,
+	fixtures: LocalSourceManifest,
+): Promise<{ runId: string; commitSha: string; checkpoint: ManagedCheckpoint }> => {
 	// Manual, not webhook-driven: triggering by delivery needs an app bound to a keyed connection.
-	const triggered = await controlRequest('/deploy', machineKey, {
-		body: { appId: NOTES_APP_ID, env: NOTES_ENVIRONMENT, ref: 'refs/heads/main' },
-	})
+	const triggered = await controlRequest('deploy', machineKey, { appId: NOTES_APP_ID, env: NOTES_ENVIRONMENT, ref: fixtures.application.commitSha })
 	const runId = idResponseSchema.parse(triggered).id
-	await poll(
-		'a provider-owned running deploy',
-		async () => runViewSchema.parse(await controlRequest(`/runs/${runId}`, machineKey)),
-		(value) => value.status === 'running' && value.externalRunId !== undefined,
+	const checkpoint = await poll(
+		'a durable build_triggered checkpoint',
+		() => readRunCheckpoint(runId),
+		(value) => value?.phase === 'build_triggered',
 	)
+	if (
+		checkpoint?.phase !== 'build_triggered' || checkpoint.processId === undefined
+		|| checkpoint.runId !== runId || checkpoint.sourceCommitSha !== fixtures.application.commitSha
+		|| checkpoint.descriptorSha256 !== fixtures.application.descriptorSha256
+		|| checkpoint.appId !== NOTES_APP_ID || checkpoint.environment !== NOTES_ENVIRONMENT || checkpoint.namespaceId !== 'apps-prod'
+		|| checkpoint.hostname !== NOTES_DEPLOY_SERVICE || checkpoint.setup !== NOTES_DEPLOY_SERVICE
+	) throw new Error('Submitted run source identity mismatch')
+	const running = runViewSchema.parse(await controlRequest('runs.get', machineKey, { runId }))
+	if (running.status !== 'running' || running.externalRunId !== checkpoint.appVersionId) {
+		throw new Error('Run version differs from submitted checkpoint')
+	}
+	const submitted = await emulatorSnapshot()
+	const receipt = submitted.uploadGrants.find(item => item.appVersionId === checkpoint.appVersionId)
+	const version = submitted.appVersions.find(item => item.id === checkpoint.appVersionId)
+	if (
+		receipt?.deleted !== false || receipt.receipt === undefined
+		|| version?.status !== 'BUILDING' || version.serviceStackId !== checkpoint.serviceId || version.projectId !== checkpoint.projectId
+		|| !submitted.processes.some(item =>
+			item.id === checkpoint.processId && item.appVersionId === checkpoint.appVersionId && item.actionName === 'stack.build'
+		)
+	) {
+		throw new Error('Submitted run has no completed upload or matching build process')
+	}
 	console.info(`Deploy ${runId} reached the external Zerops pipeline; killing control`)
 	await compose(['kill', 'control'])
+	await waitForDeployLeaseExpiry(readNotesDeployLease)
 	await Bun.sleep(EXTERNAL_ACTIVATION_WAIT_MS)
 	await compose(['up', '--detach', '--wait', 'control'])
 	await poll(
 		'startup reconciliation',
-		async () => runViewSchema.parse(await controlRequest(`/runs/${runId}`, machineKey)),
+		async () => runViewSchema.parse(await controlRequest('runs.get', machineKey, { runId })),
 		(value) => value.status === 'succeeded',
 	)
-	const completed = await controlRequest(`/runs/${runId}`, machineKey)
+	const completed = await controlRequest('runs.get', machineKey, { runId })
 	const commitSha = completedRunSchema.parse(completed).commitSha
-	if (!/^[0-9a-f]{40}$/.test(commitSha)) {
+	if (commitSha !== fixtures.application.commitSha) {
 		throw new Error('completed deploy did not record the resolved commit')
 	}
-	return { runId, commitSha }
+	const recovered = await readRunCheckpoint(runId)
+	const snapshot = await emulatorSnapshot()
+	if (
+		!isDeepStrictEqual(recovered, checkpoint) || snapshot.nextVersion !== submitted.nextVersion
+		|| snapshot.processes.filter(item => item.actionName === 'stack.build').length
+			!== submitted.processes.filter(item => item.actionName === 'stack.build').length
+		|| !isDeepStrictEqual(snapshot.uploadGrants.find(item => item.appVersionId === checkpoint.appVersionId), receipt)
+		|| snapshot.services.find(item => item.id === checkpoint.serviceId)?.activeAppVersionId !== checkpoint.appVersionId
+	) {
+		throw new Error('Recovery changed the submitted version, receipt, checkpoint, or build count')
+	}
+	return { runId, commitSha, checkpoint }
 }
 
 interface ActiveOperationsConfig {
@@ -358,33 +498,30 @@ const activeOperationsConfig = async (): Promise<ActiveOperationsConfig> => {
 const proveManagedOperationsEnvironment = async (
 	config: ActiveOperationsConfig,
 	release: string,
+	checkpoint: ManagedCheckpoint,
 ): Promise<void> => {
-	const snapshot = managedSnapshotSchema.parse(parseJson(
-		await composeOutput(['exec', '-T', 'zerops-emulator', 'cat', '/state/zerops.json']),
-		'Zerops emulator state',
-	))
+	const snapshot = await emulatorSnapshot()
 	const services = snapshot.services.filter((service) => service.name === NOTES_DEPLOY_SERVICE)
 	if (services.length !== 1) {
 		throw new Error('Zerops emulator does not contain exactly one notes deploy service')
 	}
 	const serviceId = idResponseSchema.parse(services[0]).id
-	const managedKeys = new Set<string>([...OPERATIONS_MANAGED_ENVIRONMENT_KEYS, FABRIKA_RELEASE])
-	const managed = snapshot.serviceEnv.filter(
-		(record) => record.serviceStackId === serviceId && managedKeys.has(String(record.key)),
-	)
-	const expected = new Map<string, string>([
+	confirmStagedManagedBinding(checkpoint, snapshot.serviceEnv.filter(record => record.serviceStackId === serviceId))
+	const expected = new Map<ManagedKey, string>([
 		[FABRIKA_OPERATIONS_DSN, config.dsn],
 		[FABRIKA_APP_ID, NOTES_APP_ID],
 		[FABRIKA_ENVIRONMENT, NOTES_ENVIRONMENT],
 		[FABRIKA_SERVICE_KEY, DEFAULT_OPERATIONS_SERVICE_KEY],
 		[FABRIKA_RELEASE, release],
 	])
-	if (managed.length !== expected.size) {
-		throw new Error('Zerops emulator contains missing, duplicate, or stale managed Operations values')
-	}
 	for (const [key, expectedValue] of expected) {
-		const matches = managed.filter((record) => record.key === key)
-		if (matches.length !== 1 || matches[0]?.content !== expectedValue) {
+		const binding = checkpoint.binding[key]
+		if (binding.state !== 'confirmed') throw new Error(`Managed value ${key} has no confirmed version binding`)
+		const backing = snapshot.serviceEnv.filter(record => record.serviceStackId === serviceId && record.id === binding.backingRecordId)
+		if (
+			serviceId !== checkpoint.serviceId || backing.length !== 1 || backing[0]?.key !== binding.referenceName
+			|| backing[0]?.content !== expectedValue || backing[0]?.sensitive !== true
+		) {
 			throw new Error(`Zerops emulator managed value ${key} does not match the deploy projection`)
 		}
 	}
@@ -693,6 +830,7 @@ const proveOperationsIngestPersistence = async (
 }
 
 const main = async (): Promise<void> => {
+	const fixtures = await loadLocalSourceFixtures(resolve(STATE_DIR, LOCAL_SOURCE_FIXTURE_DIRECTORY))
 	const provisioningKey = envValue(resolve(STATE_DIR, 'iam.env'), 'FABRIKA_IAM_PROVISIONING_KEY')
 	const machineKey = requireMachineKey()
 	const webhookSecret = envValue(resolve(STATE_DIR, 'control.env'), 'GITHUB_WEBHOOK_SECRET')
@@ -702,10 +840,11 @@ const main = async (): Promise<void> => {
 	await proveOperationsPublicBoundary(machineKey)
 	await proveControlIsGated()
 	await ensureNamespace(machineKey)
-	await ensureNotesApp(machineKey)
+	await proveNamespaceSource(machineKey, fixtures)
+	await ensureNotesApp(machineKey, fixtures)
 	const activeConfig = await activeOperationsConfig()
-	await proveScopedWebhookSignature(webhookSecret)
-	const deployment = await proveRestartReconciliation(machineKey)
+	await proveScopedWebhookSignature(webhookSecret, fixtures.application.commitSha)
+	const deployment = await proveRestartReconciliation(machineKey, fixtures)
 	const deployedConfig = await activeOperationsConfig()
 	if (
 		deployedConfig.dsn !== activeConfig.dsn
@@ -720,14 +859,16 @@ const main = async (): Promise<void> => {
 		serviceKey: DEFAULT_OPERATIONS_SERVICE_KEY,
 		commitSha: deployment.commitSha,
 	})
-	await proveManagedOperationsEnvironment(deployedConfig, release)
+	await proveManagedOperationsEnvironment(deployedConfig, release, deployment.checkpoint)
 	await proveOperationsIngestPersistence(machineKey, deployedConfig, release)
 	await proveIamAndNotes(provisioningKey)
 	await proveNamespaceIsolation()
-	console.info(`Local stack smoke passed (run ${deployment.runId})`)
+	console.info(`Local stack smoke passed (run ${deployment.runId}); Notes behavior uses the separately composed container, not archive-built code`)
 }
 
-main().catch((error: unknown) => {
-	console.error(error instanceof Error ? error.message : 'local stack smoke failed')
-	process.exit(1)
-})
+if (import.meta.main) {
+	main().catch((error: unknown) => {
+		console.error(error instanceof Error ? error.message : 'local stack smoke failed')
+		process.exit(1)
+	})
+}
