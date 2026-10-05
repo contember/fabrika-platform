@@ -191,6 +191,12 @@ The upstream check needs offline unchanged/changed fixtures; network failure is 
 
 ## Run log
 
+- Concurrent work: commits `76d42cb`, `dab5b73`, `4ea388d` removed self-asserting/vacuous tests while this sprint ran. They are separate work, preserved and excluded from this migration's change accounting. Integrated checks include their resulting test suite.
+- R3 WU15 passed; WU19 found own `__proto__` key loss in package metadata and export traversal. One corrective round assigned to preserve all own JSON keys and add staging/target witnesses. CLI/example dependency integrated centrally; WU16 verification next.
+
+- WU05 `fafb3c2`: leader 830 Control tests pass, 2 SQLite-only CAS skips with Postgres enabled. WU10 `090b30a`: leader 253 Cloudflare/runner tests pass; runner Docker build and dry-run smoke pass. R2 is closed with no unresolved findings across all selected delivery/persistence units.
+- WU15 `90bfe60`: leader 83 console tests pass; form parsing preserves field errors and opaque provider extensions. Removed unused Operations UI Zod. WU19 `52b7f4d`: leader 85 release-tooling tests pass; metadata/registry schemas, native publication/domain policy retained. No publication executed. R3 remaining slices pending.
+
 - WU18 `c3591f6`: leader reran 223 tests with real Postgres/S3, no skips. Resend response schemas migrated; driver/migration/runtime identity and typed domain validators retained, unused Platform Node dependency removed. R3 coverage preparation accounted for all 205 original primary/supplemental candidates at `1ccc6cc` (122 completed, 75 pending, 8 architectural exceptions); no missed completed-unit boundary or newly dead helper found.
 
 - R1 completed with no unresolved findings across WU01–WU04/WU06, including independent frozen-snapshot tests and differential probes. R2 WU07/WU08 slice found no issue; further R2 units pending.

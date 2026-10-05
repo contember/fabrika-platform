@@ -40,6 +40,22 @@ stream identity. Mailbox grammar and typed-message rules stay in Email. Only
 Resend response DTOs needed schemas; Platform remains dependency-free and the
 unused Platform Node Zod dependency was removed.
 
+WU05 keeps checkpoint byte/cycle/prototype protection, GitHub state transitions,
+identity and timestamp rules, domain authorization and DB numeric conversion.
+WU10 keeps executable configuration/resource graph identity, authored graph
+admission, Git/path/URL restrictions, scalar environment parsing and guarded
+terminal writes. Parsed transport jobs and status/log shapes use schemas.
+
+WU15 keeps typed grant/scope/policy checks, native date/ID conversion, alert
+request construction and tolerant activity projections. Manifest editor opaque
+payloads preserve arbitrary keys and unsupported envelopes. WU19 retains graph,
+publishability, path, artifact, integrity and SemVer policy after parsing metadata.
+
+WU16 keeps native flag collection/precedence, typed option construction, executable
+configuration branding, scalar environment/workspace checks, SQL delete-result
+presence, browser session markers and DOM element guards. Note-create bodies,
+SQL rows, browser configuration and CLI manifest/IAM responses use schemas.
+
 The dependency-free auth-core parsers, Standard Schema-neutral app runtime,
 and dynamically imported installation module/function recognition retain their
 existing architectural contracts. The shared approval parser stays embeddable.
