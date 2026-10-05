@@ -191,6 +191,12 @@ The upstream check needs offline unchanged/changed fixtures; network failure is 
 
 ## Run log
 
+Retained boundary dispositions are recorded in the [exception ledger](static-validation-exceptions.md); remaining units add their dispositions when integrated.
+
+- WU02 committed `32b7c2c`; leader reran 167 Operations tests with Postgres/S3, no skips. WU04 committed `a22dc0c`; leader reran 439 auth/JWKS/proxy tests, no skips; unused proxy Zod dependency removed. Both retain domain/security/scalar checks; R1 final slices pending.
+- WU07 committed `342d6b6`; leader reran provider tests (745 pass, 37 live skips), typecheck; removed obsolete source structural helpers after namespace migration. Runtime alias-preserving refinements, YAML AST/source checks and canonical/hash/domain checks remain. R2 first slice includes WU07/WU08.
+- WU13 committed `a07e461`; leader reran 180 isolated Builder tests and typecheck. WU14 review fixes committed `a2769b4`, regression tests verified before/after. R3 confirmed both fixes and no Builder findings after 960 differential comparisons; remaining consumer units pending.
+
 - WU08 integrated: replaced generic JSON Schema interpretation with static installation schemas and explicit duration string fields; added read-only `check:schemas` with offline drift/error fixtures. Leader reran 455 tests, package typecheck, lint and generation check (11 unchanged artifacts). Interpreter keyword tests were replaced with domain rejection witnesses; diagnostics now correctly name the supported installation subset. Full provider type catalog and inline import `zeropsYaml` remain outside this installation schema. Initial verification attempts timed out waiting for CPU leases; subsequent leased runs passed.
 
 - WU02 decision: user explicitly approved retaining a small Operations-local Standard Schema diagnostic adapter to preserve the existing HTTP 400/type/message/issues contract. Structural validation remains static Zod; the four exact compatibility assertions stay intact. This overrides the plan's unconditional removal of that error adapter.
