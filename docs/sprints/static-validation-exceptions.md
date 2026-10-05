@@ -56,6 +56,11 @@ configuration branding, scalar environment/workspace checks, SQL delete-result
 presence, browser session markers and DOM element guards. Note-create bodies,
 SQL rows, browser configuration and CLI manifest/IAM responses use schemas.
 
+WU17 retains syntax decoding, scalar environment parsing, emulator authorization,
+resource/domain checks, partial-selection predicates and smoke deployment/DSN/count/
+network assertions. Static schemas own requests, snapshots, fixtures and response
+structures. The separate immutable-source emulator gap predates this migration.
+
 The dependency-free auth-core parsers, Standard Schema-neutral app runtime,
 and dynamically imported installation module/function recognition retain their
 existing architectural contracts. The shared approval parser stays embeddable.

@@ -191,6 +191,13 @@ The upstream check needs offline unchanged/changed fixtures; network failure is 
 
 ## Run log
 
+- All selected schema units implemented; WU17 `5b694a7` and WU19 own-key fix `097feab` integrated. R3 closed with both regression fixes verified. Final inventory: 205 paths, 123 changed/deleted and 82 intentional retained boundaries; 114 Zod importers across 29 owning manifests, all dependencies correctly declared.
+- Integrated gates: 4,979 passing tests, 39 skips (37 opt-in live Zerops, 2 SQLite-only CAS); full typecheck/lint/format passed. PostgreSQL and S3 were enabled. Scripts/local-stack final delta: 196 tests pass. Docker runner build and dry-run smoke passed.
+- Local integration blocked by pre-existing stack drift: old volumes failed IAM migration, user approved `local:reset`; clean reset passed IAM then Control refused missing `FABRIKA_ZEROPS_PROXY_SOURCE_JSON`. Baseline `ab534ea` already required it and local-stack supplied none. Investigation also proved emulator reserve/upload/build endpoints and local source transport composition absent.
+- User approved extending integration scope to implement that local immutable-source protocol/composition after a minimal design. Also approved diagnosing original `fabrika-builder-spike` restoration: its data is intact; DB/IAM/Control/Operations/source restarted, but builder and platform proxy rejected existing configuration. Restore remains an explicit obligation. No production validation bypass is authorized.
+
+- WU16 `a22024a`: leader reran 114 CLI/example tests, example runtime dependency declared. Shared engine/app consumers pass 73 tests. Direct Zod dependency audit found no missing or unused declarations; release validation still passes for 28 public packages after dependency cleanup.
+
 - Concurrent work: commits `76d42cb`, `dab5b73`, `4ea388d` removed self-asserting/vacuous tests while this sprint ran. They are separate work, preserved and excluded from this migration's change accounting. Integrated checks include their resulting test suite.
 - R3 WU15 passed; WU19 found own `__proto__` key loss in package metadata and export traversal. One corrective round assigned to preserve all own JSON keys and add staging/target witnesses. CLI/example dependency integrated centrally; WU16 verification next.
 
