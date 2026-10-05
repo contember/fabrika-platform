@@ -191,6 +191,9 @@ The upstream check needs offline unchanged/changed fixtures; network failure is 
 
 ## Run log
 
+- R1 completed with no unresolved findings across WU01–WU04/WU06, including independent frozen-snapshot tests and differential probes. R2 WU07/WU08 slice found no issue; further R2 units pending.
+- WU11 `0bdeb39`: leader reran 251 GitHub/source tests; static response projections preserve permissions, association, metadata tolerance and secret-safe errors. WU12 `cad9752`: leader reran 94 installation tests; resumed credentials and CF/protection projections migrated, unused narrowing module removed. Scalar config/domain checks retained in both.
+
 Retained boundary dispositions are recorded in the [exception ledger](static-validation-exceptions.md); remaining units add their dispositions when integrated.
 
 - WU02 committed `32b7c2c`; leader reran 167 Operations tests with Postgres/S3, no skips. WU04 committed `a22dc0c`; leader reran 439 auth/JWKS/proxy tests, no skips; unused proxy Zod dependency removed. Both retain domain/security/scalar checks; R1 final slices pending.

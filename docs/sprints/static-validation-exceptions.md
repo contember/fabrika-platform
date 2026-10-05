@@ -28,6 +28,16 @@ opaque payload rather than a fixed DTO.
 | WU14      | Compiler prop validation, diagnostics, React/DOM recognition                                    | Executable objects and branded/runtime identity must not be cloned.                                          |
 | WU14      | Opaque host response storage and meaningful-content predicates                                  | Host owns payload shape; content checks operate after structural parsing.                                    |
 
+WU11 source request and credential structures already delegate to WU06. Dynamic
+slot discovery, URL/identity association, signing/PEM and archive topology/digest
+admission remain domain/native checks. WU12 keeps installer auth/email pairing,
+account paths, timeouts and CLI/env tokenization as small native scalar checks
+with existing diagnostic order and defaults.
+
+The dependency-free auth-core parsers, Standard Schema-neutral app runtime,
+and dynamically imported installation module/function recognition retain their
+existing architectural contracts. The shared approval parser stays embeddable.
+
 All units retain native JSON/YAML syntax decoding. A native decoder is not a
 duplicate structural validator. No gate evaluator moved, and `@fabrika/app`
 remains Standard Schema-neutral.
