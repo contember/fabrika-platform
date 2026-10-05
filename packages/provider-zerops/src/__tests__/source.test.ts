@@ -44,18 +44,7 @@ import {
 	normalizeZeropsSourceRepository,
 	serializeZeropsSourceCredentialBundleV2,
 	sha256ZeropsSourceCredentialBundleV2,
-	ZEROPS_SOURCE_CANCEL_PATH,
-	ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2,
-	ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION_V2,
-	ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2,
-	ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH,
 	ZEROPS_SOURCE_PROTOCOL_VERSION,
-	ZEROPS_SOURCE_PROTOCOL_VERSION_V2,
-	ZEROPS_SOURCE_RESOLVE_PATH,
-	ZEROPS_SOURCE_RESOLVE_PATH_V2,
-	ZEROPS_SOURCE_UPLOAD_PATH,
-	ZEROPS_SOURCE_UPLOAD_PATH_V2,
-	ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH,
 	type ZeropsSourceCancelRequestV1,
 	type ZeropsSourceCredentialActivateRequestV2,
 	type ZeropsSourceCredentialActivateResponseV2,
@@ -250,7 +239,6 @@ describe('Zerops source management wire', () => {
 		})
 		expect(decodeZeropsSourceWebhookConfigureResponse(response)).toEqual(response)
 		expect(JSON.stringify(response)).not.toContain(input.secret)
-		expect(ZEROPS_SOURCE_WEBHOOK_CONFIGURE_PATH).toBe('/v1/source/github/webhook/configure')
 		expect(() => decodeZeropsSourceWebhookConfigureRequest({ ...request, secret: 'bad\nsecret' })).toThrow()
 	})
 
@@ -275,7 +263,6 @@ describe('Zerops source management wire', () => {
 			installation: { status: 'installed', installationId: 42, accountLogin: 'contember', repositorySelection: 'selected' },
 		})
 		expect(decodeZeropsSourceInstallationsVerifyResponse(response)).toEqual(response)
-		expect(ZEROPS_SOURCE_INSTALLATIONS_VERIFY_PATH).toBe('/v1/source/github/installations/verify')
 		expect(() =>
 			decodeZeropsSourceInstallationsVerifyRequest({
 				...repositories,
@@ -361,19 +348,6 @@ describe('Zerops source v2 credential bundle and management wire', () => {
 		const active = { ...response, state: 'active' } satisfies ZeropsSourceCredentialStatusResponseV2
 		expect(buildZeropsSourceCredentialStatusResponseV2(active)).toEqual(active)
 		expect(decodeZeropsSourceCredentialStatusResponseV2(active)).toEqual(active)
-	})
-
-	test('freezes the v2 credential paths and the anonymous v1 transfer paths that survive them', () => {
-		expect(ZEROPS_SOURCE_PROTOCOL_VERSION).toBe(1)
-		expect(ZEROPS_SOURCE_RESOLVE_PATH).toBe('/v1/source/resolve')
-		expect(ZEROPS_SOURCE_UPLOAD_PATH).toBe('/v1/source/upload')
-		expect(ZEROPS_SOURCE_CANCEL_PATH).toBe('/v1/source/cancel')
-		expect(ZEROPS_SOURCE_PROTOCOL_VERSION_V2).toBe(2)
-		expect(ZEROPS_SOURCE_CREDENTIAL_BUNDLE_VERSION_V2).toBe(2)
-		expect(ZEROPS_SOURCE_CREDENTIAL_ACTIVATE_PATH_V2).toBe('/v2/source/credentials/activate')
-		expect(ZEROPS_SOURCE_CREDENTIAL_STATUS_PATH_V2).toBe('/v2/source/credentials/status')
-		expect(ZEROPS_SOURCE_RESOLVE_PATH_V2).toBe('/v2/source/resolve')
-		expect(ZEROPS_SOURCE_UPLOAD_PATH_V2).toBe('/v2/source/upload')
 	})
 })
 

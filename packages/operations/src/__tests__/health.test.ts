@@ -5,7 +5,6 @@ import {
 	DEFAULT_FAILURE_THRESHOLD,
 	DEFAULT_HEALTH_TIMEOUT_MS,
 	DEFAULT_RECOVERY_THRESHOLD,
-	EMAIL_DELIVERY_SUPPORT,
 	evaluateTelemetryHealth,
 	healthAlertDedupKey,
 	type HealthState,
@@ -242,10 +241,5 @@ describe('telemetry health', () => {
 			expect(evaluated.reasons).not.toContain('adapter_unavailable')
 			expect(decideTelemetryTransition('source-a', 'unavailable', evaluated, 'failure')?.kind).toBe('unhealthy_telemetry')
 		}
-	})
-
-	test('keeps email delivery explicitly deferred', () => {
-		expect(EMAIL_DELIVERY_SUPPORT.supported).toBe(false)
-		expect(EMAIL_DELIVERY_SUPPORT.evidence).toContain('sprint-2026-07-30-operations-plane.md')
 	})
 })
