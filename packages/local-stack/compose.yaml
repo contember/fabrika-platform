@@ -78,7 +78,7 @@ services:
 
   source:
     <<: *bun
-    command: bun packages/source-zerops/src/server.ts
+    command: bun packages/local-stack/src/local-source-runtime/server.ts
     env_file: .state/source.env
     environment:
       PORT: "3000"
@@ -143,7 +143,6 @@ services:
       FABRIKA_ZEROPS_API_BASE_URL: http://zerops-emulator:3000/api/rest/public
       FABRIKA_ZEROPS_SOURCE_URL: http://source:3000
       FABRIKA_ZEROPS_CLIENT_ID: local-client
-      FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT: https://github.com/contember/fabrika-platform
       FABRIKA_ZEROPS_PROXY_IAM_URL: http://iam.fabrika.localhost:18080
     networks: [platform]
     depends_on:

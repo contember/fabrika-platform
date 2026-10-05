@@ -1,4 +1,5 @@
 import { notesGates } from '@fabrika/example-zerops-app/gates'
+import { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
 import { buildCaddyConfig } from '@fabrika/proxy'
 import type { ProxyManifest } from '@fabrika/proxy-contract'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
@@ -7,6 +8,8 @@ import { resolve } from 'node:path'
 // A relative import, because the module it names is dev-time only and therefore outside
 // `@fabrika/installation-zerops`'s published surface — see its header for why it cannot be exported.
 import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '../../installation-zerops/zerops/proxy-manifest'
+import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY } from './local-source-contract'
+import { prepareLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { localSourceCredentialFixture } from './source-connection-fixture'
 
 export const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..')
@@ -186,6 +189,27 @@ function envValue(values: Record<string, string>, key: string): string | undefin
 	return values[key]
 }
 
+export async function prepareLocalSourceConfiguration(directory: string = STATE_DIR): Promise<void> {
+	const fixtures = await prepareLocalSourceFixtures(resolve(directory, LOCAL_SOURCE_FIXTURE_DIRECTORY))
+	const source = decodeZeropsNamespaceProxySource({
+		repository: LOCAL_SOURCE_PLATFORM_REPOSITORY,
+		commitSha: fixtures.platform.commitSha,
+		descriptor: {
+			path: 'zerops.yaml',
+			contents: fixtures.platform.descriptorContents,
+			sha256: fixtures.platform.descriptorSha256,
+		},
+	})
+	await verifyZeropsNamespaceProxySource(source)
+	const serialized = JSON.stringify(source)
+	const control = await readEnv(directory, 'control.env')
+	const existing = control['FABRIKA_ZEROPS_PROXY_SOURCE_JSON']
+	if (existing !== undefined && existing !== serialized) {
+		throw new Error('local proxy source pin differs from the fixture; explicitly reset the local stack')
+	}
+	if (existing === undefined) await writeEnv(directory, 'control.env', { ...control, FABRIKA_ZEROPS_PROXY_SOURCE_JSON: serialized })
+}
+
 /**
  * The local platform proxy fronts the same three apps a real installation does, generated from the same
  * declaration — `platformProxyManifestTemplate()` in `@fabrika/installation-zerops` — so this
@@ -264,6 +288,7 @@ export const prepareLocalStack = async (): Promise<void> => {
 	// against a `node_modules` the outer install was still writing. See this package's CLAUDE.md.
 	await run(['bun', 'run', '--filter', '@fabrika/dashboard', 'build'])
 	await prepareLocalSecrets()
+	await prepareLocalSourceConfiguration()
 	await generateProxyConfigs()
 	console.info(`Local stack prepared for ${IAM_ISSUER}`)
 }

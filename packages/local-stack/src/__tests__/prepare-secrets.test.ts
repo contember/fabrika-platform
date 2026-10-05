@@ -1,8 +1,11 @@
+import { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { COMPOSE_FILE, prepareLocalSecrets } from '../prepare'
+import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY } from '../local-source-contract'
+import { loadLocalSourceFixtures } from '../local-source-fixtures/fixture'
+import { COMPOSE_FILE, prepareLocalSecrets, prepareLocalSourceConfiguration } from '../prepare'
 
 let directory: string
 
@@ -105,6 +108,29 @@ describe('local storage preparation', () => {
 		const before = await snapshotEnvironment()
 		await expect(prepareLocalSecrets(directory)).rejects.toThrow('local credentials are incomplete')
 		expect(await snapshotEnvironment()).toEqual(before)
+	})
+
+	test('adds the fixture pin without rotating existing credentials and refuses a conflicting pin', async () => {
+		await seedExistingState()
+		const before = await snapshotEnvironment()
+		await prepareLocalSourceConfiguration(directory)
+		const after = await snapshotEnvironment()
+		const serialized = after['control.env']?.split('\n').find(line => line.startsWith('FABRIKA_ZEROPS_PROXY_SOURCE_JSON='))
+			?.slice('FABRIKA_ZEROPS_PROXY_SOURCE_JSON='.length)
+		if (serialized === undefined) throw new Error('missing fixture pin')
+		const pin = decodeZeropsNamespaceProxySource(JSON.parse(serialized))
+		await verifyZeropsNamespaceProxySource(pin)
+		const fixtures = await loadLocalSourceFixtures(resolve(directory, LOCAL_SOURCE_FIXTURE_DIRECTORY))
+		expect(pin.repository).toEqual(LOCAL_SOURCE_PLATFORM_REPOSITORY)
+		expect(pin.commitSha).toBe(fixtures.platform.commitSha)
+		expect(pin.descriptor.sha256).toBe(fixtures.platform.descriptorSha256)
+		expect(after).toEqual({ ...before, 'control.env': `${control}FABRIKA_ZEROPS_PROXY_SOURCE_JSON=${serialized}\n` })
+		await prepareLocalSourceConfiguration(directory)
+		expect(await snapshotEnvironment()).toEqual(after)
+		await Bun.write(resolve(directory, 'control.env'), `${control}FABRIKA_ZEROPS_PROXY_SOURCE_JSON={}\n`)
+		const conflicting = await snapshotEnvironment()
+		await expect(prepareLocalSourceConfiguration(directory)).rejects.toThrow('explicitly reset')
+		expect(await snapshotEnvironment()).toEqual(conflicting)
 	})
 
 	test('waits for both native startup buckets before starting storage consumers', async () => {
