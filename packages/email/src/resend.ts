@@ -1,7 +1,10 @@
+import { z } from 'zod'
 import { EmailDeliveryError, type EmailDeliveryResult, type EmailMessage, type EmailSender } from './email.js'
 import { isValidEmailFrom, validateEmailMessage } from './validation.js'
 
 const RESEND_EMAILS_URL = 'https://api.resend.com/emails'
+const resendSuccessSchema = z.object({ id: z.string().min(1) })
+const resendErrorSchema = z.object({ name: z.string() })
 
 export type EmailFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
@@ -103,17 +106,13 @@ async function responseError(response: Response): Promise<EmailDeliveryError> {
 }
 
 async function readMessageId(response: Response): Promise<string | undefined> {
-	const body = await readJson(response)
-	if (!isRecord(body)) return undefined
-	const id: unknown = Reflect.get(body, 'id')
-	return typeof id === 'string' && id.length > 0 ? id : undefined
+	const parsed = resendSuccessSchema.safeParse(await readJson(response))
+	return parsed.success ? parsed.data.id : undefined
 }
 
 async function readProviderError(response: Response): Promise<string | undefined> {
-	const body = await readJson(response)
-	if (!isRecord(body)) return undefined
-	const name: unknown = Reflect.get(body, 'name')
-	return typeof name === 'string' ? name : undefined
+	const parsed = resendErrorSchema.safeParse(await readJson(response))
+	return parsed.success ? parsed.data.name : undefined
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -122,10 +121,6 @@ async function readJson(response: Response): Promise<unknown> {
 	} catch {
 		return undefined
 	}
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function validApiKey(value: string): boolean {

@@ -129,6 +129,54 @@ describe('ResendEmailSender', () => {
 	})
 
 	test.each([
+		{ id: 'email-123', extra: { future: true }, name: 42 },
+		{ id: ' ' },
+	])('preserves provider ids without trimming and tolerates unrelated fields', async (body) => {
+		const sender = new ResendEmailSender({
+			apiKey: 're_secret',
+			from: 'auth@example.test',
+			fetch: async () => jsonResponse(body, 200),
+		})
+		await expect(sender.send(validMessage)).resolves.toEqual({ status: 'accepted', provider: 'resend', messageId: body.id })
+	})
+
+	test.each([null, [], [{ id: 'email-123' }], 'email-123', 123, { id: null }, { id: 123 }, { id: false }].map((body) => ({ body })))(
+		'rejects invalid success shapes with the safe delivery error',
+		async ({ body }) => {
+			const sender = new ResendEmailSender({
+				apiKey: 're_secret',
+				from: 'auth@example.test',
+				fetch: async () => jsonResponse(body, 202),
+			})
+			const error = await caught(sender.send(validMessage))
+			expect(error.message).toBe('Resend returned an invalid success response')
+			expect(error.code).toBe('malformed_response')
+			expect(error.httpStatus).toBe(202)
+			expect(error.retryable).toBe(true)
+		},
+	)
+
+	test.each(
+		[null, [], ['concurrent_idempotent_requests'], 'concurrent_idempotent_requests', {}, { name: null }, { name: 42 }, { name: '' }].map((body) => ({
+			body,
+		})),
+	)(
+		'keeps malformed or unknown conflict responses permanent',
+		async ({ body }) => {
+			const sender = new ResendEmailSender({
+				apiKey: 're_secret',
+				from: 'auth@example.test',
+				fetch: async () => jsonResponse(body, 409),
+			})
+			const error = await caught(sender.send(validMessage))
+			expect(error.message).toBe('Resend rejected the request (409)')
+			expect(error.code).toBe('provider_rejected')
+			expect(error.httpStatus).toBe(409)
+			expect(error.retryable).toBe(false)
+		},
+	)
+
+	test.each([
 		{ ...validMessage, to: 'invalid' },
 		{ ...validMessage, subject: '' },
 		{ ...validMessage, subject: 'Bad\nsubject' },
@@ -150,7 +198,8 @@ describe('ResendEmailSender', () => {
 	})
 
 	test('treats a concurrent idempotent request as retryable', async () => {
-		const fetch: EmailFetch = async () => jsonResponse({ name: 'concurrent_idempotent_requests' }, 409)
+		const fetch: EmailFetch = async () =>
+			jsonResponse({ name: 'concurrent_idempotent_requests', message: 'private provider detail', future: { supported: true } }, 409)
 		const sender = new ResendEmailSender({ apiKey: 're_secret', from: 'auth@example.test', fetch })
 
 		const error = await caught(sender.send(validMessage))
