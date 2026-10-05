@@ -237,7 +237,7 @@ export type ZeropsSourceErrorCode =
 	| 'cancelled'
 	| 'internal'
 
-export const ZEROPS_SOURCE_ERROR_CODES: readonly ZeropsSourceErrorCode[] = [
+export const ZEROPS_SOURCE_ERROR_CODES: readonly [ZeropsSourceErrorCode, ...ZeropsSourceErrorCode[]] = [
 	'invalid_request',
 	'unauthorized',
 	'repository_not_found',
@@ -264,7 +264,7 @@ export type ZeropsSourceErrorStage =
 	| 'cancel'
 	| 'credentials'
 
-export const ZEROPS_SOURCE_ERROR_STAGES: readonly ZeropsSourceErrorStage[] = [
+export const ZEROPS_SOURCE_ERROR_STAGES: readonly [ZeropsSourceErrorStage, ...ZeropsSourceErrorStage[]] = [
 	'authenticate',
 	'validate',
 	'resolve',

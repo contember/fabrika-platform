@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import { ZEROPS_SOURCE_PROTOCOL_VERSION, ZEROPS_SOURCE_PROTOCOL_VERSION_V2 } from './constants'
 import {
 	ZEROPS_SOURCE_ERROR_CODES,
@@ -25,42 +26,80 @@ import {
 	type ZeropsSourceUploadResult,
 } from './types'
 import {
-	commitSha,
-	descriptor,
-	exactKeys,
-	identifier,
-	optionalCommitSha,
-	optionalFields,
-	optionalInstallationId,
-	optionalPrivateBindingV2,
-	protocolVersion,
-	protocolVersionV2,
-	record,
-	ref,
-	repository,
-	sha256,
-	uploadUrl,
+	commitShaSchema,
+	descriptorSchema,
+	identifierSchema,
+	installationIdSchema,
+	parseSourceWire,
+	privateBindingV2Schema,
+	refSchema,
+	rejectExplicitUndefined,
+	repositorySchema,
+	sha256Schema,
+	uploadUrlSchema,
 } from './validation'
 
+const resolveRequestSchema = z.object({
+	protocolVersion: z.literal(ZEROPS_SOURCE_PROTOCOL_VERSION),
+	runId: identifierSchema,
+	repository: repositorySchema,
+	requestedRef: refSchema,
+	expectedCommitSha: commitShaSchema.optional(),
+	githubInstallationId: installationIdSchema.optional(),
+	descriptorSha256: sha256Schema,
+}).strict()
+
+const resolveRequestV2Schema = resolveRequestSchema.omit({ githubInstallationId: true }).extend({
+	protocolVersion: z.literal(ZEROPS_SOURCE_PROTOCOL_VERSION_V2),
+	privateBinding: privateBindingV2Schema.optional(),
+}).superRefine(rejectExplicitUndefined)
+const resolveRequestV1Schema = resolveRequestSchema.superRefine(rejectExplicitUndefined)
+
+const resolveResponseSchema = z.object({
+	protocolVersion: z.literal(ZEROPS_SOURCE_PROTOCOL_VERSION),
+	runId: identifierSchema,
+	commitSha: commitShaSchema,
+	descriptorSha256: sha256Schema,
+}).strict()
+const resolveResponseV2Schema = resolveResponseSchema.extend({ protocolVersion: z.literal(ZEROPS_SOURCE_PROTOCOL_VERSION_V2) })
+
+const uploadRequestSchema = z.object({
+	protocolVersion: z.literal(ZEROPS_SOURCE_PROTOCOL_VERSION),
+	runId: identifierSchema,
+	appVersionId: identifierSchema,
+	archiveKind: z.literal('platform').optional(),
+	repository: repositorySchema,
+	commitSha: commitShaSchema,
+	githubInstallationId: installationIdSchema.optional(),
+	uploadUrl: uploadUrlSchema,
+	descriptor: descriptorSchema,
+}).strict()
+const uploadRequestV1Schema = uploadRequestSchema.superRefine(rejectExplicitUndefined).refine(
+	(value) => value.archiveKind === undefined || value.githubInstallationId === undefined,
+	'platform archives require anonymous source access',
+)
+const uploadRequestV2Schema = uploadRequestSchema.omit({ archiveKind: true, githubInstallationId: true }).extend({
+	protocolVersion: z.literal(ZEROPS_SOURCE_PROTOCOL_VERSION_V2),
+	privateBinding: privateBindingV2Schema.optional(),
+}).superRefine(rejectExplicitUndefined)
+
+const uploadResponseSchema = resolveResponseSchema.extend({ appVersionId: identifierSchema })
+const uploadResponseV2Schema = uploadResponseSchema.extend({ protocolVersion: z.literal(ZEROPS_SOURCE_PROTOCOL_VERSION_V2) })
+const cancelSchema = z.object({
+	protocolVersion: z.literal(ZEROPS_SOURCE_PROTOCOL_VERSION),
+	runId: identifierSchema,
+	appVersionId: identifierSchema,
+}).strict()
+const errorEnvelopeSchema = z.object({
+	error: z.object({
+		code: z.enum(ZEROPS_SOURCE_ERROR_CODES),
+		stage: z.enum(ZEROPS_SOURCE_ERROR_STAGES),
+		retryable: z.boolean(),
+	}).strict(),
+}).strict()
+
 export function decodeZeropsSourceResolveRequest(value: unknown): ZeropsSourceResolveRequestV1 {
-	const parsed = record(value, 'source resolve request')
-	optionalFields(
-		parsed,
-		['protocolVersion', 'runId', 'repository', 'requestedRef', 'descriptorSha256'],
-		['expectedCommitSha', 'githubInstallationId'],
-		'source resolve request',
-	)
-	const expected = optionalCommitSha(parsed['expectedCommitSha'], 'source resolve request.expectedCommitSha')
-	const installation = optionalInstallationId(parsed['githubInstallationId'], 'source resolve request.githubInstallationId')
-	return {
-		protocolVersion: protocolVersion(parsed, 'source resolve request'),
-		runId: identifier(parsed['runId'], 'source resolve request.runId'),
-		repository: repository(parsed['repository'], 'source resolve request.repository'),
-		requestedRef: ref(parsed['requestedRef'], 'source resolve request.requestedRef'),
-		...(expected !== undefined ? { expectedCommitSha: expected } : {}),
-		...(installation !== undefined ? { githubInstallationId: installation } : {}),
-		descriptorSha256: sha256(parsed['descriptorSha256'], 'source resolve request.descriptorSha256'),
-	}
+	return parseSourceWire(resolveRequestV1Schema, value, 'source resolve request')
 }
 
 export function buildZeropsSourceResolveRequest(input: ZeropsSourceResolveInput): ZeropsSourceResolveRequestV1 {
@@ -76,14 +115,7 @@ export function buildZeropsSourceResolveRequest(input: ZeropsSourceResolveInput)
 }
 
 export function decodeZeropsSourceResolveResponse(value: unknown): ZeropsSourceResolveResponseV1 {
-	const parsed = record(value, 'source resolve response')
-	exactKeys(parsed, ['protocolVersion', 'runId', 'commitSha', 'descriptorSha256'], 'source resolve response')
-	return {
-		protocolVersion: protocolVersion(parsed, 'source resolve response'),
-		runId: identifier(parsed['runId'], 'source resolve response.runId'),
-		commitSha: commitSha(parsed['commitSha'], 'source resolve response.commitSha'),
-		descriptorSha256: sha256(parsed['descriptorSha256'], 'source resolve response.descriptorSha256'),
-	}
+	return parseSourceWire(resolveResponseSchema, value, 'source resolve response')
 }
 
 export function buildZeropsSourceResolveResponse(result: ZeropsSourceResolveResult): ZeropsSourceResolveResponseV1 {
@@ -91,28 +123,7 @@ export function buildZeropsSourceResolveResponse(result: ZeropsSourceResolveResu
 }
 
 export function decodeZeropsSourceUploadRequest(value: unknown): ZeropsSourceUploadRequestV1 {
-	const parsed = record(value, 'source upload request')
-	optionalFields(
-		parsed,
-		['protocolVersion', 'runId', 'appVersionId', 'repository', 'commitSha', 'uploadUrl', 'descriptor'],
-		['githubInstallationId', 'archiveKind'],
-		'source upload request',
-	)
-	const installation = optionalInstallationId(parsed['githubInstallationId'], 'source upload request.githubInstallationId')
-	const archiveKind = parsed['archiveKind']
-	if (archiveKind !== undefined && archiveKind !== 'platform') throw new Error('source upload request.archiveKind is invalid')
-	if (archiveKind !== undefined && installation !== undefined) throw new Error('platform archives require anonymous source access')
-	return {
-		protocolVersion: protocolVersion(parsed, 'source upload request'),
-		runId: identifier(parsed['runId'], 'source upload request.runId'),
-		appVersionId: identifier(parsed['appVersionId'], 'source upload request.appVersionId'),
-		...(archiveKind !== undefined ? { archiveKind } : {}),
-		repository: repository(parsed['repository'], 'source upload request.repository'),
-		commitSha: commitSha(parsed['commitSha'], 'source upload request.commitSha'),
-		...(installation !== undefined ? { githubInstallationId: installation } : {}),
-		uploadUrl: uploadUrl(parsed['uploadUrl'], 'source upload request.uploadUrl'),
-		descriptor: descriptor(parsed['descriptor'], 'source upload request.descriptor'),
-	}
+	return parseSourceWire(uploadRequestV1Schema, value, 'source upload request')
 }
 
 export function buildZeropsSourceUploadRequest(input: ZeropsSourceUploadInput): ZeropsSourceUploadRequestV1 {
@@ -130,15 +141,7 @@ export function buildZeropsSourceUploadRequest(input: ZeropsSourceUploadInput): 
 }
 
 export function decodeZeropsSourceUploadResponse(value: unknown): ZeropsSourceUploadResponseV1 {
-	const parsed = record(value, 'source upload response')
-	exactKeys(parsed, ['protocolVersion', 'runId', 'appVersionId', 'commitSha', 'descriptorSha256'], 'source upload response')
-	return {
-		protocolVersion: protocolVersion(parsed, 'source upload response'),
-		runId: identifier(parsed['runId'], 'source upload response.runId'),
-		appVersionId: identifier(parsed['appVersionId'], 'source upload response.appVersionId'),
-		commitSha: commitSha(parsed['commitSha'], 'source upload response.commitSha'),
-		descriptorSha256: sha256(parsed['descriptorSha256'], 'source upload response.descriptorSha256'),
-	}
+	return parseSourceWire(uploadResponseSchema, value, 'source upload response')
 }
 
 export function buildZeropsSourceUploadResponse(result: ZeropsSourceUploadResult): ZeropsSourceUploadResponseV1 {
@@ -146,24 +149,7 @@ export function buildZeropsSourceUploadResponse(result: ZeropsSourceUploadResult
 }
 
 export function decodeZeropsSourceResolveRequestV2(value: unknown): ZeropsSourceResolveRequestV2 {
-	const parsed = record(value, 'source resolve request v2')
-	optionalFields(
-		parsed,
-		['protocolVersion', 'runId', 'repository', 'requestedRef', 'descriptorSha256'],
-		['expectedCommitSha', 'privateBinding'],
-		'source resolve request v2',
-	)
-	const expected = optionalCommitSha(parsed['expectedCommitSha'], 'source resolve request v2.expectedCommitSha')
-	const binding = optionalPrivateBindingV2(parsed['privateBinding'], 'source resolve request v2.privateBinding')
-	return {
-		protocolVersion: protocolVersionV2(parsed, 'source resolve request v2'),
-		runId: identifier(parsed['runId'], 'source resolve request v2.runId'),
-		repository: repository(parsed['repository'], 'source resolve request v2.repository'),
-		requestedRef: ref(parsed['requestedRef'], 'source resolve request v2.requestedRef'),
-		...(expected !== undefined ? { expectedCommitSha: expected } : {}),
-		...(binding !== undefined ? { privateBinding: binding } : {}),
-		descriptorSha256: sha256(parsed['descriptorSha256'], 'source resolve request v2.descriptorSha256'),
-	}
+	return parseSourceWire(resolveRequestV2Schema, value, 'source resolve request v2')
 }
 
 export function buildZeropsSourceResolveRequestV2(input: ZeropsSourceResolveInputV2): ZeropsSourceResolveRequestV2 {
@@ -179,14 +165,7 @@ export function buildZeropsSourceResolveRequestV2(input: ZeropsSourceResolveInpu
 }
 
 export function decodeZeropsSourceResolveResponseV2(value: unknown): ZeropsSourceResolveResponseV2 {
-	const parsed = record(value, 'source resolve response v2')
-	exactKeys(parsed, ['protocolVersion', 'runId', 'commitSha', 'descriptorSha256'], 'source resolve response v2')
-	return {
-		protocolVersion: protocolVersionV2(parsed, 'source resolve response v2'),
-		runId: identifier(parsed['runId'], 'source resolve response v2.runId'),
-		commitSha: commitSha(parsed['commitSha'], 'source resolve response v2.commitSha'),
-		descriptorSha256: sha256(parsed['descriptorSha256'], 'source resolve response v2.descriptorSha256'),
-	}
+	return parseSourceWire(resolveResponseV2Schema, value, 'source resolve response v2')
 }
 
 export function buildZeropsSourceResolveResponseV2(result: ZeropsSourceResolveResult): ZeropsSourceResolveResponseV2 {
@@ -194,24 +173,7 @@ export function buildZeropsSourceResolveResponseV2(result: ZeropsSourceResolveRe
 }
 
 export function decodeZeropsSourceUploadRequestV2(value: unknown): ZeropsSourceUploadRequestV2 {
-	const parsed = record(value, 'source upload request v2')
-	optionalFields(
-		parsed,
-		['protocolVersion', 'runId', 'appVersionId', 'repository', 'commitSha', 'uploadUrl', 'descriptor'],
-		['privateBinding'],
-		'source upload request v2',
-	)
-	const binding = optionalPrivateBindingV2(parsed['privateBinding'], 'source upload request v2.privateBinding')
-	return {
-		protocolVersion: protocolVersionV2(parsed, 'source upload request v2'),
-		runId: identifier(parsed['runId'], 'source upload request v2.runId'),
-		appVersionId: identifier(parsed['appVersionId'], 'source upload request v2.appVersionId'),
-		repository: repository(parsed['repository'], 'source upload request v2.repository'),
-		commitSha: commitSha(parsed['commitSha'], 'source upload request v2.commitSha'),
-		...(binding !== undefined ? { privateBinding: binding } : {}),
-		uploadUrl: uploadUrl(parsed['uploadUrl'], 'source upload request v2.uploadUrl'),
-		descriptor: descriptor(parsed['descriptor'], 'source upload request v2.descriptor'),
-	}
+	return parseSourceWire(uploadRequestV2Schema, value, 'source upload request v2')
 }
 
 export function buildZeropsSourceUploadRequestV2(input: ZeropsSourceUploadInputV2): ZeropsSourceUploadRequestV2 {
@@ -228,15 +190,7 @@ export function buildZeropsSourceUploadRequestV2(input: ZeropsSourceUploadInputV
 }
 
 export function decodeZeropsSourceUploadResponseV2(value: unknown): ZeropsSourceUploadResponseV2 {
-	const parsed = record(value, 'source upload response v2')
-	exactKeys(parsed, ['protocolVersion', 'runId', 'appVersionId', 'commitSha', 'descriptorSha256'], 'source upload response v2')
-	return {
-		protocolVersion: protocolVersionV2(parsed, 'source upload response v2'),
-		runId: identifier(parsed['runId'], 'source upload response v2.runId'),
-		appVersionId: identifier(parsed['appVersionId'], 'source upload response v2.appVersionId'),
-		commitSha: commitSha(parsed['commitSha'], 'source upload response v2.commitSha'),
-		descriptorSha256: sha256(parsed['descriptorSha256'], 'source upload response v2.descriptorSha256'),
-	}
+	return parseSourceWire(uploadResponseV2Schema, value, 'source upload response v2')
 }
 
 export function buildZeropsSourceUploadResponseV2(result: ZeropsSourceUploadResult): ZeropsSourceUploadResponseV2 {
@@ -244,49 +198,23 @@ export function buildZeropsSourceUploadResponseV2(result: ZeropsSourceUploadResu
 }
 
 export function decodeZeropsSourceCancelRequest(value: unknown): ZeropsSourceCancelRequestV1 {
-	const parsed = record(value, 'source cancel request')
-	exactKeys(parsed, ['protocolVersion', 'runId', 'appVersionId'], 'source cancel request')
-	return {
-		protocolVersion: protocolVersion(parsed, 'source cancel request'),
-		runId: identifier(parsed['runId'], 'source cancel request.runId'),
-		appVersionId: identifier(parsed['appVersionId'], 'source cancel request.appVersionId'),
-	}
+	return parseSourceWire(cancelSchema, value, 'source cancel request')
 }
 
 export function buildZeropsSourceCancelRequest(input: ZeropsSourceCancelInput): ZeropsSourceCancelRequestV1 {
-	return decodeZeropsSourceCancelRequest({
-		protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION,
-		runId: input.runId,
-		appVersionId: input.appVersionId,
-	})
+	return decodeZeropsSourceCancelRequest({ protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION, runId: input.runId, appVersionId: input.appVersionId })
 }
 
 export function decodeZeropsSourceCancelResponse(value: unknown): ZeropsSourceCancelResponseV1 {
-	const parsed = record(value, 'source cancel response')
-	exactKeys(parsed, ['protocolVersion', 'runId', 'appVersionId'], 'source cancel response')
-	return {
-		protocolVersion: protocolVersion(parsed, 'source cancel response'),
-		runId: identifier(parsed['runId'], 'source cancel response.runId'),
-		appVersionId: identifier(parsed['appVersionId'], 'source cancel response.appVersionId'),
-	}
+	return parseSourceWire(cancelSchema, value, 'source cancel response')
 }
 
 export function buildZeropsSourceCancelResponse(result: ZeropsSourceCancelResult): ZeropsSourceCancelResponseV1 {
 	return decodeZeropsSourceCancelResponse({ protocolVersion: ZEROPS_SOURCE_PROTOCOL_VERSION, ...result })
 }
 
-const includesString = <T extends string>(values: readonly T[], value: unknown): value is T =>
-	typeof value === 'string' && values.some((entry) => entry === value)
-
 export function decodeZeropsSourceErrorEnvelope(value: unknown): ZeropsSourceErrorEnvelope {
-	const parsed = record(value, 'source error response')
-	exactKeys(parsed, ['error'], 'source error response')
-	const error = record(parsed['error'], 'source error response.error')
-	exactKeys(error, ['code', 'stage', 'retryable'], 'source error response.error')
-	if (!includesString(ZEROPS_SOURCE_ERROR_CODES, error['code'])) throw new Error('source error response.error.code is invalid')
-	if (!includesString(ZEROPS_SOURCE_ERROR_STAGES, error['stage'])) throw new Error('source error response.error.stage is invalid')
-	if (typeof error['retryable'] !== 'boolean') throw new Error('source error response.error.retryable must be boolean')
-	return { error: { code: error['code'], stage: error['stage'], retryable: error['retryable'] } }
+	return parseSourceWire(errorEnvelopeSchema, value, 'source error response')
 }
 
 export function buildZeropsSourceErrorEnvelope(
