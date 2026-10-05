@@ -45,6 +45,7 @@
 		"test": "bun test --isolate --preload ./daemon/test/preload.ts cli/test daemon/test ui/test shared"
 	},
 	"dependencies": {
+		"zod": "^3.25.76",
 		"@fabrika/annotations": "workspace:*",
 		"@fabrika/app": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",

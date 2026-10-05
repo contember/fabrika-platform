@@ -24,6 +24,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"zod": "^3.25.76",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/app": "workspace:*",
 		"@fabrika/provider-contract": "workspace:*"

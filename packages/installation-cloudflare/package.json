@@ -26,6 +26,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"zod": "^3.25.76",
 		"@fabrika/installation-contract": "workspace:*",
 		"@fabrika/installation-init": "workspace:*",
 		"@fabrika/provider-cloudflare": "workspace:*"

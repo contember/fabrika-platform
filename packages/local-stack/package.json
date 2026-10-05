@@ -22,6 +22,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"zod": "^3.25.76",
 		"@fabrika/app": "workspace:*",
 		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/auth": "workspace:*",

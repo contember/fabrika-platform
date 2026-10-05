@@ -32,6 +32,7 @@
 		"test:browser": "bun run --filter @fabrika/local-stack browser:test"
 	},
 	"devDependencies": {
+		"zod": "^3.25.76",
 		"@biomejs/biome": "^2.5.6",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/cli": "workspace:*",

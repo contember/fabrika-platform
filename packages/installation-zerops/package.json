@@ -34,6 +34,7 @@
 		"gen:schemas": "bun zerops/schemas/refresh.ts"
 	},
 	"dependencies": {
+		"zod": "^3.25.76",
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/installation-contract": "workspace:*",

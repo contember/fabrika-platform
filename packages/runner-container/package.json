@@ -18,6 +18,7 @@
 		"docker:smoke": "docker run --rm --entrypoint fabrika-cloudflare-executor vozka-runner --help && docker run --rm -e CLOUDFLARE_ACCOUNT_ID=smoke-account -e CLOUDFLARE_API_TOKEN=smoke-token --entrypoint fabrika-cloudflare-executor vozka-runner deploy --env=smoke --config=/opt/fabrika/packages/runner-container/docker/smoke/fabrika.config.ts --dry-run"
 	},
 	"dependencies": {
+		"zod": "^3.25.76",
 		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/operations-contract": "workspace:*",
 		"@fabrika/provider-cloudflare": "workspace:*",

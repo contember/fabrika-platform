@@ -50,6 +50,9 @@
 			"optional": true
 		}
 	},
+	"dependencies": {
+		"zod": "^3.25.76"
+	},
 	"devDependencies": {
 		"@happy-dom/global-registrator": "^20.11.2",
 		"@types/bun": "latest",

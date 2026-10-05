@@ -56,6 +56,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"zod": "^3.25.76",
 		"@fabrika/annotations": "workspace:*",
 		"@fabrika/daemon-kit": "workspace:*",
 		"marked": "^17.0.4",

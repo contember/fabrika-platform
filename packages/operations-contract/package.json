@@ -59,6 +59,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"zod": "^3.25.76",
 		"@fabrika/app": "workspace:*"
 	}
 }

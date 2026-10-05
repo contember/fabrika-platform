@@ -26,6 +26,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"zod": "^3.25.76",
 		"@fabrika/auth-core": "workspace:*",
 		"@fabrika/jwks": "workspace:*",
 		"@fabrika/proxy-contract": "workspace:*",
