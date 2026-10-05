@@ -170,6 +170,11 @@ a shortcut past the proxy, and every request the suite makes is still gated and
 answered with an IAM-minted token. With the bypass off, the suite can also drive an
 unauthenticated browser and observe the proxy's `302` to IAM.
 
+`bun run test:browser` uses the configured critical tier. For every browser
+scenario, run `OPICE_TIER=extended cpu-lease run -n 4 -- bun run test:browser`.
+Entries named `skipped (tier)` did not execute their walkthroughs, even when the
+test runner displays them as passing.
+
 ## Calling the API from a script
 
 `/api/*` admits either a logged-in human or a `px_` **service key**, so a script
