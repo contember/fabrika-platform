@@ -182,10 +182,4 @@ export const resolvePlatformServices = async (
 	return resolved
 }
 
-export const serviceOf = (services: ReadonlyMap<PlatformDeployService, ResolvedService>, hostname: PlatformDeployService): ResolvedService => {
-	const service = services.get(hostname)
-	if (service === undefined) {
-		throw new Error(`the \`${hostname}\` service was not resolved`)
-	}
-	return service
-}
+export { serviceOf } from './deploy'

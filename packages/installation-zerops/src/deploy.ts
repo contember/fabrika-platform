@@ -222,7 +222,7 @@ const resolveServices = async (
 	return resolved
 }
 
-const serviceOf = (services: ReadonlyMap<PlatformDeployService, ResolvedService>, hostname: PlatformDeployService): ResolvedService => {
+export const serviceOf = (services: ReadonlyMap<PlatformDeployService, ResolvedService>, hostname: PlatformDeployService): ResolvedService => {
 	const service = services.get(hostname)
 	if (service === undefined) {
 		throw new Error(`the \`${hostname}\` service was not resolved`)
