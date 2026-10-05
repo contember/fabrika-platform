@@ -2,6 +2,7 @@ import { createHash } from 'crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { dirname, join, relative, resolve } from 'path'
 import { fileURLToPath } from 'url'
+import { z } from 'zod'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const MANIFEST_VERSION = 1
@@ -13,9 +14,8 @@ export interface InjectOptions {
 	hosts?: AgentHost[]
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
+const managedFileSchema = z.object({ installedHash: z.string(), host: z.enum(['claude', 'codex']) })
+const managedManifestSchema = z.object({ files: z.record(managedFileSchema.nullable().catch(null)) })
 
 function isAgentHost(value: string): value is AgentHost {
 	return value === 'claude' || value === 'codex'
@@ -273,16 +273,11 @@ function installManagedFile(
 function readManifest(path: string): ManagedManifest {
 	if (!existsSync(path)) return { version: MANIFEST_VERSION, files: {} }
 	try {
-		const parsed: unknown = JSON.parse(readFileSync(path, 'utf-8'))
-		if (!isRecord(parsed) || !isRecord(parsed['files'])) return { version: MANIFEST_VERSION, files: {} }
+		const parsed = managedManifestSchema.safeParse(JSON.parse(readFileSync(path, 'utf-8')))
+		if (!parsed.success) return { version: MANIFEST_VERSION, files: {} }
 		const files: ManagedManifest['files'] = {}
-		for (const [relativePath, candidate] of Object.entries(parsed['files'])) {
-			if (!isRecord(candidate)) continue
-			const installedHash = candidate['installedHash']
-			const host = candidate['host']
-			if (typeof installedHash === 'string' && typeof host === 'string' && isAgentHost(host)) {
-				files[relativePath] = { installedHash, host }
-			}
+		for (const [relativePath, candidate] of Object.entries(parsed.data.files)) {
+			if (candidate !== null) files[relativePath] = candidate
 		}
 		return {
 			version: MANIFEST_VERSION,

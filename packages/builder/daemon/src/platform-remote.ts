@@ -1,7 +1,51 @@
 import { createRpcClient, type RpcFetch } from '@fabrika/app'
 import type { AppEnvDto, ControlRpcContract, JsonValue, ProviderEnvelopeDto, RunStatus } from '@fabrika/control-contract'
+import { z } from 'zod'
 import { parseBuilderOrigin } from '../../shared'
-import { integer, PlatformError, record, type StoredCredential, text } from './platform-storage'
+import { PlatformError, type StoredCredential, storedIntegerSchema, storedTextSchema } from './platform-storage'
+
+const discoveryInputSchema = z.object({ version: z.literal(1), controlOrigin: z.unknown(), iamIssuer: z.unknown(), provider: z.unknown() })
+	.strict().refine(value => Object.keys(value).length === 4)
+const rpcResultSchema = z.object({ result: z.unknown() }).passthrough().refine(value =>
+	Object.hasOwn(value, 'result') && !Object.hasOwn(value, 'error')
+)
+const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+	z.union([
+		z.null(),
+		z.string(),
+		z.boolean(),
+		z.number().finite(),
+		z.array(jsonValueSchema),
+		z.record(jsonValueSchema),
+	])
+)
+const envelopeSchema: z.ZodType<ProviderEnvelopeDto> = z.object({
+	provider: storedTextSchema,
+	version: storedIntegerSchema,
+	payload: jsonValueSchema,
+})
+const environmentsSchema = z.object({
+	items: z.array(z.object({
+		appId: storedTextSchema,
+		env: storedTextSchema,
+		domain: storedTextSchema.nullable(),
+		publicOrigin: storedTextSchema.nullable(),
+		triggerRef: storedTextSchema.nullable(),
+		namespaceId: storedTextSchema.nullable(),
+		provider: storedTextSchema,
+		target: envelopeSchema,
+		artifact: envelopeSchema,
+		createdAt: storedIntegerSchema,
+	})),
+})
+const runSchema = z.object({
+	id: storedTextSchema,
+	appId: storedTextSchema,
+	env: storedTextSchema,
+	ref: storedTextSchema,
+	commitSha: storedTextSchema.nullable(),
+	status: z.enum(['pending', 'running', 'succeeded', 'failed']),
+})
 
 export async function boundedJson(response: Response): Promise<unknown> {
 	if (!response.ok) {
@@ -46,14 +90,13 @@ export class PlatformRemote {
 	}
 
 	async discover(origin: string): Promise<{ controlOrigin: string; iamIssuer: string }> {
-		const discovery = record(await this.json(`${origin}/.well-known/fabrika-builder`))
-		if (Object.keys(discovery).sort().join(',') !== 'controlOrigin,iamIssuer,provider,version' || discovery['version'] !== 1) {
-			throw new PlatformError('Unsupported builder discovery response')
-		}
-		const controlOrigin = parseBuilderOrigin(discovery['controlOrigin'], 'Control origin')
-		const iamIssuer = parseBuilderOrigin(discovery['iamIssuer'], 'IAM issuer')
+		const result = discoveryInputSchema.safeParse(await this.json(`${origin}/.well-known/fabrika-builder`))
+		if (!result.success) throw new PlatformError('Unsupported builder discovery response')
+		const discovery = result.data
+		const controlOrigin = parseBuilderOrigin(discovery.controlOrigin, 'Control origin')
+		const iamIssuer = parseBuilderOrigin(discovery.iamIssuer, 'IAM issuer')
 		if (controlOrigin !== origin) throw new PlatformError('Discovery Control origin does not match the requested installation')
-		if (discovery['provider'] !== 'zerops') throw new PlatformError('Unsupported provider: this builder release supports Zerops only')
+		if (discovery.provider !== 'zerops') throw new PlatformError('Unsupported provider: this builder release supports Zerops only')
 		return { controlOrigin, iamIssuer }
 	}
 
@@ -76,62 +119,28 @@ export class PlatformRemote {
 					redirect: 'error',
 					signal: AbortSignal.any([this.signal, AbortSignal.timeout(30_000)]),
 				})
-				const data = record(await boundedJson(response))
-				if (Object.hasOwn(data, 'error') || !Object.hasOwn(data, 'result')) throw new PlatformError('Control refused the request')
-				return Response.json({ result: data['result'] })
+				const data = rpcResultSchema.safeParse(await boundedJson(response))
+				if (!data.success) throw new PlatformError('Control refused the request')
+				return Response.json({ result: data.data.result })
 			},
 		})
 	}
 }
 
-function jsonValue(value: unknown): JsonValue {
-	if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
-	if (typeof value === 'number' && Number.isFinite(value)) return value
-	if (Array.isArray(value)) return value.map(jsonValue)
-	return Object.fromEntries(Object.entries(record(value)).map(([key, item]) => [key, jsonValue(item)]))
-}
-
-function nullableText(value: unknown): string | null {
-	return value === null ? null : text(value)
-}
-
-function envelope(value: unknown): ProviderEnvelopeDto {
-	const input = record(value)
-	return { provider: text(input['provider']), version: integer(input['version']), payload: jsonValue(input['payload']) }
-}
-
 export function parseEnvironments(value: unknown): AppEnvDto[] {
-	const items = record(value)['items']
-	if (!Array.isArray(items)) throw new PlatformError('Invalid environment list')
-	return items.map((item: unknown) => {
-		const input = record(item)
-		return {
-			appId: text(input['appId']),
-			env: text(input['env']),
-			domain: nullableText(input['domain']),
-			publicOrigin: nullableText(input['publicOrigin']),
-			triggerRef: nullableText(input['triggerRef']),
-			namespaceId: nullableText(input['namespaceId']),
-			provider: text(input['provider']),
-			target: envelope(input['target']),
-			artifact: envelope(input['artifact']),
-			createdAt: integer(input['createdAt']),
-		}
-	})
+	const result = environmentsSchema.safeParse(value)
+	if (!result.success) {
+		const invalidList = result.error.issues.some(issue => issue.path.length === 1 && issue.path[0] === 'items')
+		throw new PlatformError(invalidList ? 'Invalid environment list' : 'Invalid stored or upstream data')
+	}
+	return result.data.items
 }
 
 export function parseRun(value: unknown): { id: string; appId: string; env: string; ref: string; commitSha: string | null; status: RunStatus } {
-	const run = record(value)
-	const status = run['status']
-	if (status !== 'pending' && status !== 'running' && status !== 'succeeded' && status !== 'failed') {
-		throw new PlatformError('Invalid deploy run status')
+	const result = runSchema.safeParse(value)
+	if (!result.success) {
+		const invalidStatus = result.error.issues.some(issue => issue.path[0] === 'status')
+		throw new PlatformError(invalidStatus ? 'Invalid deploy run status' : 'Invalid stored or upstream data')
 	}
-	return {
-		id: text(run['id']),
-		appId: text(run['appId']),
-		env: text(run['env']),
-		ref: text(run['ref']),
-		commitSha: nullableText(run['commitSha']),
-		status,
-	}
+	return result.data
 }

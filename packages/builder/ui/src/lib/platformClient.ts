@@ -1,4 +1,5 @@
 import {
+	builderPlatformErrorSchema,
 	type BuilderPlatformStatus,
 	builderProjectPath,
 	parseBuilderOrigin,
@@ -37,15 +38,8 @@ export function createPlatformClient(request: typeof fetch = fetch) {
 			throw new PlatformClientError('Local builder returned an invalid response. Refresh status before continuing.')
 		}
 		if (!response.ok) {
-			if (typeof value === 'object' && value !== null && 'error' in value) {
-				const error = value.error
-				if (
-					typeof error === 'object' && error !== null && 'code' in error && error.code === 'builder_platform'
-					&& 'message' in error && typeof error.message === 'string' && error.message.length <= 1000
-				) {
-					throw new PlatformClientError(error.message)
-				}
-			}
+			const result = builderPlatformErrorSchema.safeParse(value)
+			if (result.success) throw new PlatformClientError(result.data.error.message)
 			throw new PlatformClientError('Local builder rejected the request. Refresh status before continuing.')
 		}
 		try {

@@ -2,6 +2,7 @@
 
 import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { resolve } from 'path'
+import { activeDaemonSchema } from '../../shared'
 import { startDaemon } from './index'
 import { PID_FILE, SESSIONS_DIR, TEMP_DIR } from './paths'
 
@@ -13,11 +14,8 @@ interface ActiveDaemon {
 }
 
 function parseActiveDaemon(value: unknown): ActiveDaemon | null {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-	const ok = 'ok' in value ? value.ok : undefined
-	const sessionsDir = 'sessionsDir' in value ? value.sessionsDir : undefined
-	if (ok !== true || (sessionsDir !== undefined && typeof sessionsDir !== 'string')) return null
-	return { ok, ...(sessionsDir === undefined ? {} : { sessionsDir }) }
+	const result = activeDaemonSchema.safeParse(value)
+	return result.success ? result.data : null
 }
 
 async function activeDaemon(): Promise<ActiveDaemon | null> {

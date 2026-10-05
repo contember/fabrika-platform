@@ -1,4 +1,5 @@
-import { type BuilderConnectionReceiptDto, parseBuilderConnectionReceipt } from '@fabrika/control-contract'
+import { type BuilderConnectionReceiptDto, builderConnectionReceiptSchema } from '@fabrika/control-contract'
+import { z } from 'zod'
 import { parseBuilderOrigin, parseBuilderPreviewUrl } from './urls'
 
 export { parseBuilderOrigin, parseBuilderPreviewUrl } from './urls'
@@ -62,135 +63,303 @@ export interface BuilderErrorResponse {
 	error: { code: string; message: string }
 }
 
-function object(value: unknown, fields: readonly string[], label: string): object {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(`${label} must be an object`)
-	for (const key of Object.keys(value)) {
-		if (!fields.includes(key)) throw new Error(`${label} contains an unknown field`)
+// These legacy daemon projections deliberately recover malformed optional fields.
+const wireNumberSchema = z.union([z.number(), z.nan()])
+const optionalTextSchema = z.string().optional().catch(undefined)
+const phaseIdSchema = z.enum(['intake', 'vision', 'flows', 'tech', 'design', 'skeletons', 'issues', 'build'])
+export const phaseStateSchema = z.object({
+	current: phaseIdSchema,
+	index: wireNumberSchema,
+	completed: z.array(phaseIdSchema),
+	reads: z.array(z.string()),
+	produces: z.array(z.string()),
+	gate: z.boolean(),
+	satisfied: z.boolean(),
+})
+export const uiPhaseStateSchema = phaseStateSchema.extend({ gateName: z.string().nullable().optional().catch(undefined) })
+	.transform(({ gateName, ...state }) => ({ ...state, ...(gateName === undefined ? {} : { gateName }) }))
+export const healthInfoSchema = z.object({
+	ok: z.literal(true),
+	version: optionalTextSchema,
+	pid: wireNumberSchema.optional().catch(undefined),
+	dataDir: optionalTextSchema,
+	sessionsDir: optionalTextSchema,
+	sessions: z.union([wireNumberSchema, z.array(z.string())]).optional().catch(undefined),
+}).transform(({ ok, version, pid, dataDir, sessionsDir, sessions }) => ({
+	ok,
+	...(version === undefined ? {} : { version }),
+	...(pid === undefined ? {} : { pid }),
+	...(dataDir === undefined ? {} : { dataDir }),
+	...(sessionsDir === undefined ? {} : { sessionsDir }),
+	...(sessions === undefined ? {} : { sessions }),
+}))
+export const uiHealthSchema = z.object({
+	ok: z.literal(true),
+	version: optionalTextSchema,
+	sessions: z.array(z.string()).optional().catch(undefined),
+})
+	.transform(({ ok, version, sessions }) => ({ ok, ...(version === undefined ? {} : { version }), ...(sessions === undefined ? {} : { sessions }) }))
+export const activeDaemonSchema = z.object({ ok: z.literal(true), sessionsDir: z.string().optional() })
+	.transform(({ ok, sessionsDir }) => ({ ok, ...(sessionsDir === undefined ? {} : { sessionsDir }) }))
+export const builderPlatformErrorSchema = z.object({ error: z.object({ code: z.literal('builder_platform'), message: z.string().max(1000) }) })
+export const planResultSchema = z.object({
+	ok: z.boolean(),
+	browserUrl: optionalTextSchema,
+	revision: wireNumberSchema.optional().catch(undefined),
+	isNew: z.boolean().optional().catch(undefined),
+	canvasFiles: z.array(z.string()).optional().catch(undefined),
+	gate: optionalTextSchema,
+	error: optionalTextSchema,
+	errors: z.record(z.string()).optional().catch(undefined),
+}).transform(({ ok, browserUrl, revision, isNew, canvasFiles, gate, error, errors }) => ({
+	ok,
+	...(browserUrl === undefined ? {} : { browserUrl }),
+	...(revision === undefined ? {} : { revision }),
+	...(isNew === undefined ? {} : { isNew }),
+	...(canvasFiles === undefined ? {} : { canvasFiles }),
+	...(gate === undefined ? {} : { gate }),
+	...(error === undefined ? {} : { error }),
+	...(errors === undefined ? {} : { errors }),
+}))
+export const buildEventSchema = z.object({
+	status: z.enum(['queued', 'running', 'passed', 'failed', 'blocked', 'info']),
+	issue: optionalTextSchema,
+	message: optionalTextSchema,
+	at: optionalTextSchema,
+	data: z.record(z.unknown()).optional().catch(undefined),
+}).transform(({ status, issue, message, at, data }) => ({
+	status,
+	...(issue === undefined ? {} : { issue }),
+	...(message === undefined ? {} : { message }),
+	...(at === undefined ? {} : { at }),
+	...(data === undefined ? {} : { data }),
+}))
+export const planInputSchema = z.object({
+	view: optionalTextSchema,
+	directory: optionalTextSchema,
+	projectRoot: optionalTextSchema,
+	gate: optionalTextSchema,
+	label: optionalTextSchema,
+	response: optionalTextSchema,
+})
+export const feedbackTextSchema = z.object({ feedback: z.string().catch('') })
+export const consumedFeedbackSchema = feedbackTextSchema.extend({ found: z.literal(true) })
+export const submitFeedbackSchema = feedbackTextSchema.extend({ type: z.literal('submit') })
+export const feedbackRevisionSchema = z.object({
+	revision: wireNumberSchema,
+	hasFeedback: z.unknown().transform(value => value === true),
+	feedbackConsumed: z.unknown().transform(value => value === true),
+})
+export const feedbackMetaSchema = z.object({
+	revisions: z.array(feedbackRevisionSchema.nullable().catch(null)).transform(items => items.filter(item => item !== null)),
+})
+export const canvasFileSchema = z.union([
+	z.string().transform(filename => ({ filename })),
+	z.object({
+		filename: z.string(),
+		label: optionalTextSchema,
+		diffStats: z.object({ added: wireNumberSchema, removed: wireNumberSchema }).optional().catch(undefined),
+	}).transform(({ filename, label, diffStats }) => ({
+		filename,
+		...(label === undefined ? {} : { label }),
+		...(diffStats === undefined ? {} : { diffStats }),
+	})),
+]).refine(value => value.filename.length > 0)
+export const canvasFilesSchema = z.array(canvasFileSchema.nullable().catch(null))
+	.transform(items => items.filter(item => item !== null)).catch([])
+const canvasScopeSchema = z.discriminatedUnion('kind', [
+	z.object({ kind: z.literal('directory') }),
+	z.object({ kind: z.literal('view'), filename: z.string() }),
+])
+export const revisionMetaSchema = feedbackRevisionSchema.extend({
+	label: z.string().nullable().catch(null),
+	canvasFiles: canvasFilesSchema,
+	createdAt: optionalTextSchema,
+	canvasScope: canvasScopeSchema.optional().catch(undefined),
+}).transform(({ createdAt, canvasScope, ...revision }) => ({
+	...revision,
+	...(createdAt === undefined ? {} : { createdAt }),
+	...(canvasScope === undefined ? {} : { canvasScope }),
+})).refine(value => value.revision > 0)
+export const sessionMetaSchema = z.object({
+	projectRoot: optionalTextSchema,
+	label: optionalTextSchema,
+	gate: z.string().nullable().catch(null),
+	currentRevision: wireNumberSchema.catch(0),
+	canvasFiles: canvasFilesSchema,
+	revisions: z.array(revisionMetaSchema.nullable().catch(null)).transform(items => items.filter(item => item !== null)).catch([]),
+}).transform(({ projectRoot, label, ...meta }) => ({
+	...meta,
+	...(projectRoot === undefined ? {} : { projectRoot }),
+	...(label === undefined ? {} : { label }),
+}))
+export const sessionSummarySchema = z.object({ id: z.string(), label: optionalTextSchema })
+	.transform(({ id, label }) => ({ id, ...(label === undefined ? {} : { label }) }))
+export const sessionsSchema = z.array(sessionSummarySchema.nullable().catch(null)).transform(items => items.filter(item => item !== null)).catch([])
+export const skeletonSchema = z.object({
+	file: z.string(),
+	name: z.string(),
+	seeds: z.array(z.string()),
+	roles: z.array(z.string()),
+	steps: wireNumberSchema,
+	invariants: wireNumberSchema,
+	pending: wireNumberSchema,
+	url: optionalTextSchema,
+	feature: optionalTextSchema,
+}).transform(({ url, feature, ...skeleton }) => ({
+	...skeleton,
+	...(url === undefined ? {} : { url }),
+	...(feature === undefined ? {} : { feature }),
+}))
+export const skeletonsSchema = z.object({
+	skeletons: z.array(skeletonSchema.nullable().catch(null)).transform(items => items.filter(item => item !== null)),
+})
+export const artifactResponseSchema = z.object({ content: z.string() })
+export const responsesEnvelopeSchema = z.object({ responses: z.unknown() })
+export const wsMessageSchema = z.discriminatedUnion('type', [
+	z.object({
+		type: z.literal('plan-updated'),
+		currentRevision: wireNumberSchema,
+		canvasFiles: z.array(z.unknown()).transform(value => canvasFilesSchema.parse(value)).optional().catch(undefined),
+		gate: z.string().nullable().optional().catch(undefined),
+	}),
+	z.object({ type: z.literal('revision-updated'), currentRevision: wireNumberSchema }),
+	z.object({ type: z.literal('watcher-status'), watching: z.boolean() }),
+	z.object({ type: z.literal('phase-updated') }),
+	z.object({ type: z.literal('submit-ack'), revision: wireNumberSchema }),
+]).transform(message => {
+	if (message.type !== 'plan-updated') return message
+	const { canvasFiles, gate, ...rest } = message
+	return { ...rest, ...(canvasFiles === undefined ? {} : { canvasFiles }), ...(gate === undefined ? {} : { gate }) }
+})
+
+const nonemptyStringSchema = z.string().refine(value => value.trim().length > 0)
+const timestampSchema = z.number().finite().nonnegative()
+const originSchema = z.string().transform((value, ctx) => {
+	try {
+		return parseBuilderOrigin(value)
+	} catch {
+		ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid builder origin' })
+		return z.NEVER
 	}
-	return value
-}
-
-function field(value: object, key: string): unknown {
-	return Object.hasOwn(value, key) ? Reflect.get(value, key) : undefined
-}
-
-function string(value: unknown, label: string): string {
-	if (typeof value !== 'string' || value.trim().length === 0) throw new Error(`${label} must be a non-empty string`)
-	return value
-}
-
-function timestamp(value: unknown, label: string): number {
-	if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error(`${label} must be a non-negative finite number`)
-	return value
-}
-
-function nullableString(value: unknown, label: string): string | null {
-	return value === null ? null : string(value, label)
-}
-
-function nullableUrl(value: unknown): string | null {
-	return value === null ? null : parseBuilderPreviewUrl(value)
-}
+})
+const previewUrlSchema = z.string().transform((value, ctx) => {
+	try {
+		return parseBuilderPreviewUrl(value)
+	} catch {
+		ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid preview URL' })
+		return z.NEVER
+	}
+})
+export const builderProjectConnectionSchema = z.object({
+	controlOrigin: originSchema,
+	iamIssuer: originSchema,
+	receipt: builderConnectionReceiptSchema,
+}).strict()
+export const builderProjectConfigSchema = z.object({
+	profile: nonemptyStringSchema,
+	sessionId: nonemptyStringSchema,
+	createdAt: nonemptyStringSchema.refine(value => Number.isFinite(Date.parse(value))),
+	connection: builderProjectConnectionSchema.optional(),
+	previewUrl: previewUrlSchema.optional(),
+}).strict().superRefine((value, ctx) => {
+	for (const key of ['connection', 'previewUrl']) {
+		if (Object.hasOwn(value, key) && Reflect.get(value, key) === undefined) {
+			ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: 'Present field must not be undefined' })
+		}
+	}
+})
+export const builderPairingStateSchema = z.discriminatedUnion('status', [
+	z.object({
+		status: z.literal('pending'),
+		authorizationUrl: previewUrlSchema.refine(value => {
+			try {
+				parseBuilderOrigin(new URL(value).origin)
+				return true
+			} catch {
+				return false
+			}
+		}),
+		expiresAt: timestampSchema,
+	}).strict(),
+	z.object({ status: z.literal('approved') }).strict(),
+	z.object({ status: z.literal('failed'), message: nonemptyStringSchema }).strict(),
+	z.object({ status: z.literal('expired') }).strict(),
+	z.object({ status: z.literal('cancelled') }).strict(),
+	z.object({ status: z.literal('recovery_required'), message: nonemptyStringSchema }).strict(),
+	z.object({ status: z.literal('connected') }).strict(),
+])
+export const builderDeploymentStateSchema = z.object({
+	status: z.enum(['preparing', 'pending', 'running', 'succeeded', 'failed', 'cancelled']),
+	runId: nonemptyStringSchema.nullable(),
+	commitSha: nonemptyStringSchema.nullable(),
+	message: nonemptyStringSchema.nullable(),
+	appUrl: previewUrlSchema.nullable(),
+	consoleUrl: previewUrlSchema.nullable(),
+}).strict()
+export const builderPlatformStatusSchema = z.object({
+	sessionId: nonemptyStringSchema,
+	projectRoot: nonemptyStringSchema,
+	connection: builderProjectConnectionSchema.nullable(),
+	credential: z.object({ available: z.boolean(), expiresAt: timestampSchema.nullable() }).strict(),
+	pairing: builderPairingStateSchema.nullable(),
+	previewUrl: previewUrlSchema.nullable(),
+	deployment: builderDeploymentStateSchema.nullable(),
+}).strict()
+export const registerProjectInputSchema = z.object({ projectRoot: nonemptyStringSchema }).strict()
+export const connectProjectInputSchema = z.object({ controlOrigin: originSchema }).strict()
+export const previewProjectInputSchema = z.object({ url: previewUrlSchema.nullable() }).strict()
 
 export function parseBuilderProjectConnection(value: unknown): BuilderProjectConnection {
-	const input = object(value, ['controlOrigin', 'iamIssuer', 'receipt'], 'project connection')
-	return {
-		controlOrigin: parseBuilderOrigin(field(input, 'controlOrigin'), 'control origin'),
-		iamIssuer: parseBuilderOrigin(field(input, 'iamIssuer'), 'IAM issuer'),
-		receipt: parseBuilderConnectionReceipt(field(input, 'receipt')),
-	}
+	const result = builderProjectConnectionSchema.safeParse(value)
+	if (!result.success) throw new Error('Invalid project connection')
+	return result.data
 }
 
 export function parseBuilderProjectConfig(value: unknown): BuilderProjectConfig {
-	const input = object(value, ['profile', 'sessionId', 'createdAt', 'connection', 'previewUrl'], 'project config')
-	const createdAt = string(field(input, 'createdAt'), 'createdAt')
-	if (!Number.isFinite(Date.parse(createdAt))) throw new Error('createdAt must be a date-time string')
-	return {
-		profile: string(field(input, 'profile'), 'profile'),
-		sessionId: string(field(input, 'sessionId'), 'sessionId'),
-		createdAt,
-		...(Object.hasOwn(input, 'connection') ? { connection: parseBuilderProjectConnection(field(input, 'connection')) } : {}),
-		...(Object.hasOwn(input, 'previewUrl') ? { previewUrl: parseBuilderPreviewUrl(field(input, 'previewUrl')) } : {}),
-	}
+	const result = builderProjectConfigSchema.safeParse(value)
+	if (!result.success) throw new Error('Invalid project config')
+	return result.data
 }
 
 export function parseBuilderPairingState(value: unknown): BuilderPairingState {
-	const input = object(value, ['status', 'authorizationUrl', 'expiresAt', 'message'], 'pairing state')
-	const status = field(input, 'status')
-	switch (status) {
-		case 'pending': {
-			object(value, ['status', 'authorizationUrl', 'expiresAt'], 'pending pairing')
-			const authorizationUrl = parseBuilderPreviewUrl(field(input, 'authorizationUrl'))
-			parseBuilderOrigin(new URL(authorizationUrl).origin, 'authorization origin')
-			return { status, authorizationUrl, expiresAt: timestamp(field(input, 'expiresAt'), 'pairing expiresAt') }
-		}
-		case 'failed':
-		case 'recovery_required':
-			object(value, ['status', 'message'], 'pairing state')
-			return { status, message: string(field(input, 'message'), 'pairing message') }
-		case 'approved':
-		case 'expired':
-		case 'cancelled':
-		case 'connected':
-			object(value, ['status'], 'pairing state')
-			return { status }
-		default:
-			throw new Error('pairing status is invalid')
-	}
+	const result = builderPairingStateSchema.safeParse(value)
+	if (!result.success) throw new Error('Invalid pairing state')
+	return result.data
 }
 
 export function parseBuilderDeploymentState(value: unknown): BuilderDeploymentState {
-	const input = object(value, ['status', 'runId', 'commitSha', 'message', 'appUrl', 'consoleUrl'], 'deployment state')
-	const status = field(input, 'status')
-	if (
-		status !== 'preparing' && status !== 'pending' && status !== 'running' && status !== 'succeeded' && status !== 'failed' && status !== 'cancelled'
-	) {
-		throw new Error('deployment status is invalid')
-	}
-	return {
-		status,
-		runId: nullableString(field(input, 'runId'), 'runId'),
-		commitSha: nullableString(field(input, 'commitSha'), 'commitSha'),
-		message: nullableString(field(input, 'message'), 'deployment message'),
-		appUrl: nullableUrl(field(input, 'appUrl')),
-		consoleUrl: nullableUrl(field(input, 'consoleUrl')),
-	}
+	const result = builderDeploymentStateSchema.safeParse(value)
+	if (!result.success) throw new Error('Invalid deployment state')
+	return result.data
 }
 
 export function parseBuilderPlatformStatus(value: unknown): BuilderPlatformStatus {
-	const input = object(value, ['sessionId', 'projectRoot', 'connection', 'credential', 'pairing', 'previewUrl', 'deployment'], 'platform status')
-	const credential = object(field(input, 'credential'), ['available', 'expiresAt'], 'credential status')
-	const available = field(credential, 'available')
-	if (typeof available !== 'boolean') throw new Error('credential available must be a boolean')
-	return {
-		sessionId: string(field(input, 'sessionId'), 'sessionId'),
-		projectRoot: string(field(input, 'projectRoot'), 'projectRoot'),
-		connection: field(input, 'connection') === null ? null : parseBuilderProjectConnection(field(input, 'connection')),
-		credential: {
-			available,
-			expiresAt: field(credential, 'expiresAt') === null ? null : timestamp(field(credential, 'expiresAt'), 'credential expiresAt'),
-		},
-		pairing: field(input, 'pairing') === null ? null : parseBuilderPairingState(field(input, 'pairing')),
-		previewUrl: nullableUrl(field(input, 'previewUrl')),
-		deployment: field(input, 'deployment') === null ? null : parseBuilderDeploymentState(field(input, 'deployment')),
-	}
+	const result = builderPlatformStatusSchema.safeParse(value)
+	if (!result.success) throw new Error('Invalid platform status')
+	return result.data
 }
 
 export function parseRegisterProjectInput(value: unknown): RegisterProjectInput {
-	const input = object(value, ['projectRoot'], 'register input')
-	return { projectRoot: string(field(input, 'projectRoot'), 'projectRoot') }
+	const result = registerProjectInputSchema.safeParse(value)
+	if (!result.success) throw new Error('Invalid register input')
+	return result.data
 }
 
 export function parseConnectProjectInput(value: unknown): ConnectProjectInput {
-	const input = object(value, ['controlOrigin'], 'connect input')
-	return { controlOrigin: parseBuilderOrigin(field(input, 'controlOrigin'), 'control origin') }
+	const result = connectProjectInputSchema.safeParse(value)
+	if (!result.success) throw new Error('Invalid connect input')
+	return result.data
 }
 
 export function parsePreviewProjectInput(value: unknown): PreviewProjectInput {
-	const input = object(value, ['url'], 'preview input')
-	return { url: nullableUrl(field(input, 'url')) }
+	const result = previewProjectInputSchema.safeParse(value)
+	if (!result.success) throw new Error('Invalid preview input')
+	return result.data
 }
 
 export function builderProjectPath(id: string, suffix: 'register' | 'platform' | 'connect' | 'disconnect' | 'deploy' | 'preview'): string {
-	return `/api/project/${encodeURIComponent(string(id, 'project id'))}/${suffix}`
+	const result = nonemptyStringSchema.safeParse(id)
+	if (!result.success) throw new Error('project id must be a non-empty string')
+	return `/api/project/${encodeURIComponent(result.data)}/${suffix}`
 }

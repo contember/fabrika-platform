@@ -1,8 +1,11 @@
 import type { Route } from '@fabrika/daemon-kit'
+import { z } from 'zod'
 import { type BuilderPlatformStatus, parseConnectProjectInput, parsePreviewProjectInput, parseRegisterProjectInput } from '../../shared'
 import type { BuilderPlatform } from './platform'
 import { boundedJson } from './platform-remote'
-import { PlatformError, record } from './platform-storage'
+import { PlatformError } from './platform-storage'
+
+const emptyActionSchema = z.object({}).strict()
 
 export function createPlatformRoutes(platform: BuilderPlatform): Route[] {
 	return ['register', 'platform', 'connect', 'disconnect', 'deploy', 'preview'].map((action) => ({
@@ -26,7 +29,7 @@ export function createPlatformRoutes(platform: BuilderPlatform): Route[] {
 						status = platform.preview(id, parsePreviewProjectInput(body).url)
 						break
 					default:
-						if (Object.keys(record(body)).length !== 0) throw new PlatformError('Action expects an empty JSON object')
+						if (!emptyActionSchema.safeParse(body).success) throw new PlatformError('Action expects an empty JSON object')
 						status = action === 'deploy' ? platform.deploy(id) : platform.disconnect(id)
 				}
 				return Response.json(status, { headers: { 'cache-control': 'no-store' } })

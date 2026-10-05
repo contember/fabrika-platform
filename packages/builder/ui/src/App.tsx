@@ -9,48 +9,11 @@ import { Workspace } from './components/Workspace'
 import { canvasFilesForRevision } from './lib/canvasSelection'
 import { daemon, sessionIdFromPath } from './lib/daemonClient'
 import { FIXTURE_ARTIFACTS, FIXTURE_META, FIXTURE_PHASE_STATE, FIXTURE_SESSION_ID } from './lib/fixture'
-import {
-	type ActiveView,
-	ActiveViewContext,
-	AnnotationProvider,
-	type PersistedState,
-	RevisionContext,
-	type RevisionInfo,
-	SessionContext,
-} from './lib/kernel'
+import { type ActiveView, ActiveViewContext, AnnotationProvider, RevisionContext, type RevisionInfo, SessionContext } from './lib/kernel'
+import { parseBuilderPersistedState } from './lib/persistedState'
 import { platformClient } from './lib/platformClient'
 import type { CanvasFileInfo, ConnStatus, PhaseId, PhaseState, RevisionMeta, SessionMeta } from './lib/types'
 import { usePlatform } from './lib/usePlatform'
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function isStringRecord(value: unknown, required: readonly string[]): boolean {
-	return isRecord(value) && required.every((key) => typeof value[key] === 'string')
-}
-
-function isResponseEntry(value: unknown): boolean {
-	return Array.isArray(value) && value.length === 2 && typeof value[0] === 'string'
-		&& isStringRecord(value[1], ['id', 'type', 'label'])
-}
-
-function isFeedbackEntry(value: unknown): boolean {
-	return Array.isArray(value) && value.length === 2 && typeof value[0] === 'string'
-		&& isStringRecord(value[1], ['id', 'markdown'])
-}
-
-function isPersistedState(value: unknown): value is PersistedState {
-	if (!isRecord(value) || typeof value['generalNote'] !== 'string') return false
-	if (
-		!Array.isArray(value['annotations']) || !value['annotations'].every((item: unknown) => isStringRecord(item, ['id', 'snippet', 'note', 'createdAt']))
-	) {
-		return false
-	}
-	if (!Array.isArray(value['responses']) || !value['responses'].every(isResponseEntry)) return false
-	const feedbackEntries = value['feedbackEntries']
-	return feedbackEntries === undefined || (Array.isArray(feedbackEntries) && feedbackEntries.every(isFeedbackEntry))
-}
 
 function phaseHasPreview(phase: PhaseId): boolean {
 	return phase === 'design' || phase === 'build'
@@ -291,7 +254,7 @@ export function App(): JSX.Element {
 									revision={focusedRevision}
 									isReadOnly={gateReadOnly}
 									draftPhase="current"
-									loadState={(sid, rev) => daemon.getResponses(sid, rev, isPersistedState)}
+									loadState={(sid, rev) => daemon.getResponses(sid, rev, parseBuilderPersistedState)}
 									saveState={(sid, rev, state) => {
 										void daemon.saveResponses(sid, rev, state)
 									}}

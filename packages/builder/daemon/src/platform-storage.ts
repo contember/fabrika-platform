@@ -16,13 +16,14 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
+import { z } from 'zod'
 import {
 	type BuilderDeploymentState,
+	builderDeploymentStateSchema,
 	type BuilderProjectConfig,
 	type BuilderProjectConnection,
-	parseBuilderDeploymentState,
+	builderProjectConnectionSchema,
 	parseBuilderProjectConfig,
-	parseBuilderProjectConnection,
 } from '../../shared'
 
 export class PlatformError extends Error {}
@@ -32,20 +33,19 @@ export function within(root: string, path: string): boolean {
 	return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel))
 }
 
-export function record(value: unknown): Record<string, unknown> {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new PlatformError('Invalid stored or upstream data')
-	return Object.fromEntries(Object.entries(value))
-}
-
-export function text(value: unknown): string {
-	if (typeof value !== 'string' || !value || value.length > 8192) throw new PlatformError('Invalid stored or upstream data')
-	return value
-}
-
-export function integer(value: unknown): number {
-	if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new PlatformError('Invalid stored or upstream data')
-	return value
-}
+export const storedTextSchema = z.string().min(1).max(8192)
+export const storedIntegerSchema = z.number().int().safe().nonnegative()
+const projectRecordSchema = z.object({
+	sessionId: storedTextSchema,
+	projectRoot: storedTextSchema,
+	deployment: builderDeploymentStateSchema.nullable(),
+	recoveryRequired: z.boolean(),
+})
+const storedCredentialSchema = z.object({
+	connection: builderProjectConnectionSchema,
+	token: storedTextSchema,
+	expiresAt: storedIntegerSchema,
+})
 
 export function noSymlinks(path: string): void {
 	const absolute = resolve(path)
@@ -152,15 +152,16 @@ export class PlatformStorage {
 	}
 
 	private readProject(path: string): ProjectRecord {
-		const value = record(readJson(path, true))
-		const recoveryRequired = value['recoveryRequired']
-		if (typeof recoveryRequired !== 'boolean') throw new PlatformError('Invalid project recovery state')
-		return {
-			sessionId: text(value['sessionId']),
-			projectRoot: text(value['projectRoot']),
-			deployment: value['deployment'] === null ? null : parseBuilderDeploymentState(value['deployment']),
-			recoveryRequired,
+		const result = projectRecordSchema.safeParse(readJson(path, true))
+		if (!result.success) {
+			if (result.error.issues.some(issue => issue.path[0] === 'recoveryRequired')) throw new PlatformError('Invalid project recovery state')
+			if (result.error.issues.some(issue => issue.path[0] === 'sessionId' || issue.path[0] === 'projectRoot')) {
+				throw new PlatformError('Invalid stored or upstream data')
+			}
+			if (result.error.issues.some(issue => issue.path[0] === 'deployment')) throw new Error('Invalid deployment state')
+			throw new PlatformError('Invalid stored or upstream data')
 		}
+		return result.data
 	}
 
 	saveProject(project: ProjectRecord): void {
@@ -182,8 +183,12 @@ export class PlatformStorage {
 	credential(id: string): StoredCredential | null {
 		const path = this.path(this.credentialDir, id)
 		if (!existsSync(path)) return null
-		const value = record(readJson(path, true))
-		return { connection: parseBuilderProjectConnection(value['connection']), token: text(value['token']), expiresAt: integer(value['expiresAt']) }
+		const result = storedCredentialSchema.safeParse(readJson(path, true))
+		if (!result.success) {
+			if (result.error.issues.some(issue => issue.path[0] === 'connection')) throw new Error('Invalid project connection')
+			throw new PlatformError('Invalid stored or upstream data')
+		}
+		return result.data
 	}
 
 	saveCredential(id: string, credential: StoredCredential): void {

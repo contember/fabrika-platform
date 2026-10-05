@@ -88,11 +88,16 @@ describe('dual-host installation', () => {
 			installedHash: createHash('sha256').update(simulatedOldGenerated).digest('hex'),
 			host: 'codex',
 		}
+		manifest['version'] = 'legacy-version-is-ignored'
+		files['broken-entry'] = { installedHash: 42, host: 'future-host' }
 		writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
 
 		const result = injectAgentSupport(fixture.root)
 		expect(result.updated).toContain(targetPath)
 		expect(readFileSync(targetPath, 'utf-8')).toContain('name = "fabrika-flows-author"')
+		const recovered = record(JSON.parse(readFileSync(manifestPath, 'utf-8')))
+		expect(recovered['version']).toBe(1)
+		expect(record(recovered['files'])['broken-entry']).toBeUndefined()
 	})
 
 	test('can install Codex support without touching Claude layout', () => {

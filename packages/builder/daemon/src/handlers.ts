@@ -2,6 +2,8 @@ import { type AssertReadable, type CanvasScope, compileJsx, type SessionManager,
 import type { Route } from '@fabrika/daemon-kit'
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { basename, dirname, extname, join } from 'path'
+import type { z } from 'zod'
+import { buildEventSchema, planInputSchema } from '../../shared'
 import type { BuildEvent, BuildStream } from './build-stream'
 import { COMPILE_TEMP_DIR } from './paths'
 import { derivePhaseState, type GateOracle } from './phases'
@@ -15,10 +17,6 @@ function jsonResponse(data: unknown, status = 200): Response {
 	})
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error)
 }
@@ -27,30 +25,6 @@ function routeParam(match: URLPatternResult, name: string): string {
 	const value = match.pathname.groups[name]
 	if (value === undefined) throw new Error(`Missing route parameter: ${name}`)
 	return value
-}
-
-function optionalString(value: unknown): string | undefined {
-	return typeof value === 'string' ? value : undefined
-}
-
-function isBuildStatus(value: unknown): value is BuildEvent['status'] {
-	return value === 'queued' || value === 'running' || value === 'passed' || value === 'failed' || value === 'blocked'
-		|| value === 'info'
-}
-
-function parseBuildEvent(value: unknown): BuildEvent | null {
-	if (!isRecord(value) || !isBuildStatus(value['status'])) return null
-	const issue = optionalString(value['issue'])
-	const message = optionalString(value['message'])
-	const at = optionalString(value['at'])
-	const data = isRecord(value['data']) ? value['data'] : undefined
-	return {
-		status: value['status'],
-		...(issue === undefined ? {} : { issue }),
-		...(message === undefined ? {} : { message }),
-		...(at === undefined ? {} : { at }),
-		...(data === undefined ? {} : { data }),
-	}
 }
 
 export function corsHeaders(port: number): Record<string, string> {
@@ -101,9 +75,9 @@ function readCanvasFile(path: string, assertReadable: AssertReadable): string {
 	}
 }
 
-function resolveCanvasSelection(body: Record<string, unknown>, assertReadable: AssertReadable): CanvasSelection {
-	const view = typeof body['view'] === 'string' ? body['view'] : null
-	const directory = typeof body['directory'] === 'string' ? body['directory'] : null
+function resolveCanvasSelection(body: z.infer<typeof planInputSchema>, assertReadable: AssertReadable): CanvasSelection {
+	const view = body.view ?? null
+	const directory = body.directory ?? null
 	if (!!view === !!directory) {
 		throw new Error('Provide exactly one of view or directory')
 	}
@@ -167,9 +141,9 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 	async function handlePlanPost(req: Request, _url: URL, match: URLPatternResult): Promise<Response> {
 		const sessionId = routeParam(match, 'id')
 		try {
-			const parsedBody: unknown = await req.json()
-			if (!isRecord(parsedBody)) return jsonResponse({ error: 'Expected a JSON object' }, 400)
-			const body = parsedBody
+			const parsedBody = planInputSchema.safeParse(await req.json())
+			if (!parsedBody.success) return jsonResponse({ error: 'Expected a JSON object' }, 400)
+			const body = parsedBody.data
 			let selection: CanvasSelection
 			try {
 				selection = resolveCanvasSelection(body, assertReadable)
@@ -193,11 +167,11 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 			}
 
 			const boundRoot = platform.projectRoot(sessionId)
-			const projectRoot = platform.storage.assertProjectRoot(boundRoot ?? optionalString(body['projectRoot']) ?? process.cwd(), true)
+			const projectRoot = platform.storage.assertProjectRoot(boundRoot ?? body.projectRoot ?? process.cwd(), true)
 			const isNew = !sessionManager.get(sessionId)
-			const gate = optionalString(body['gate'])
-			const label = gate ?? optionalString(body['label'])
-			const response = optionalString(body['response'])
+			const gate = body.gate
+			const label = gate ?? body.label
+			const response = body.response
 
 			const compiled = new Map<string, string>()
 			const errors: Record<string, string> = {}
@@ -444,9 +418,9 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 	async function handleBuildEvent(req: Request): Promise<Response> {
 		try {
 			const body: unknown = await req.json()
-			const event = parseBuildEvent(body)
-			if (event === null) return jsonResponse({ error: 'Invalid or missing status' }, 400)
-			const ev = buildStream.append(event)
+			const event = buildEventSchema.safeParse(body)
+			if (!event.success) return jsonResponse({ error: 'Invalid or missing status' }, 400)
+			const ev = buildStream.append(event.data)
 			return jsonResponse({ ok: true, event: ev })
 		} catch (error: unknown) {
 			return jsonResponse({ error: errorMessage(error) }, 500)

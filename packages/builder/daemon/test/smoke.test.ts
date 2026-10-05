@@ -170,6 +170,19 @@ describe('daemon http endpoints', () => {
 		expect(body.ok).toBe(true)
 		expect(body.event.status).toBe('running')
 		expect(typeof body.event.at).toBe('string')
+		const recovered = await fetch(`${base}/api/build/event`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ status: 'info', issue: 42, message: null, at: 'legacy time', data: { extension: true }, ignored: true }),
+		})
+		expect(await recovered.json()).toEqual({ ok: true, event: { status: 'info', at: 'legacy time', data: { extension: true } } })
+		const rejected = await fetch(`${base}/api/build/event`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ status: 'credential-secret' }),
+		})
+		expect(rejected.status).toBe(400)
+		expect(await rejected.json()).toEqual({ error: 'Invalid or missing status' })
 	})
 
 	test('GET /api/sessions lists the created session', async () => {
@@ -281,7 +294,13 @@ describe('daemon http endpoints', () => {
 		const empty = await (await fetch(`${base}/api/session/${sessionId}/revision/1/responses`)).json()
 		expect(empty.responses).toBeNull()
 
-		const payload = { annotations: [], generalNote: 'hi', responses: [['k', { id: 'k', value: 'v' }]], feedbackEntries: [] }
+		const payload = {
+			annotations: [],
+			generalNote: 'hi',
+			responses: [['k', { id: 'k', type: 'future-widget', value: { extension: ['v'] }, custom: true }]],
+			feedbackEntries: [],
+			futureDraft: { nested: ['preserve', null] },
+		}
 		const put = await fetch(`${base}/api/session/${sessionId}/revision/1/responses`, {
 			method: 'PUT',
 			headers: { 'Content-Type': 'application/json' },
@@ -292,6 +311,7 @@ describe('daemon http endpoints', () => {
 		const got = await (await fetch(`${base}/api/session/${sessionId}/revision/1/responses`)).json()
 		expect(got.responses.generalNote).toBe('hi')
 		expect(got.responses.responses[0][0]).toBe('k')
+		expect(got.responses).toEqual(payload)
 
 		const ghost = await fetch(`${base}/api/session/ghost/revision/1/responses`, {
 			method: 'PUT',

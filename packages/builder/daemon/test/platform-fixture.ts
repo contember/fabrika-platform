@@ -4,8 +4,11 @@ import type { AppDto, BuilderConnectionReceiptDto } from '@fabrika/control-contr
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { z } from 'zod'
 import { BuilderPlatform, type BuilderPlatformOptions } from '../src/platform'
-import { record, text } from '../src/platform-storage'
+
+const record = z.record(z.unknown()).parse
+const text = z.string().min(1).max(8192).parse
 
 export const ATTEMPT = '01996a7a-1111-7111-8111-111111111111'
 export const TOKEN = 'px_builder-fixture-machine-secret'

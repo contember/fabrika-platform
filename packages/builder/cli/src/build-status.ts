@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
+import { z } from 'zod'
 import type { Issue } from './issues'
 
 export type IssueStatus = 'done' | 'blocked'
@@ -12,23 +13,14 @@ export interface BuildRecord {
 
 export type BuildBoard = Record<string, BuildRecord>
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
+const buildBoardSchema = z.record(
+	z.object({ status: z.enum(['done', 'blocked']), at: z.string(), reason: z.string().optional() })
+		.transform(({ status, at, reason }) => ({ status, at, ...(reason === undefined ? {} : { reason }) })),
+)
 
 function parseBoard(value: unknown): BuildBoard | null {
-	if (!isRecord(value)) return null
-	const board: BuildBoard = {}
-	for (const [id, candidate] of Object.entries(value)) {
-		if (!isRecord(candidate)) return null
-		const status = candidate['status']
-		const at = candidate['at']
-		const reason = candidate['reason']
-		if ((status !== 'done' && status !== 'blocked') || typeof at !== 'string') return null
-		if (reason !== undefined && typeof reason !== 'string') return null
-		board[id] = { status, at, ...(reason === undefined ? {} : { reason }) }
-	}
-	return board
+	const result = buildBoardSchema.safeParse(value)
+	return result.success ? result.data : null
 }
 
 function boardPath(fabrikaDir: string): string {
