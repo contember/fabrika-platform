@@ -21,7 +21,7 @@ import type {
 	RuntimeProviderRun,
 	SchemaReconciler,
 } from '@fabrika/provider-contract'
-import { ProviderSecretError } from '@fabrika/provider-contract'
+import { decodeEnvelope, ProviderSecretError } from '@fabrika/provider-contract'
 import { createZeropsApi, waitForProcess, ZEROPS_ACTIVE, ZEROPS_TERMINAL, type ZeropsApi, type ZeropsAppVersion, type ZeropsProcess } from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
 import { prepareZeropsDescriptor } from './descriptor'
@@ -89,16 +89,6 @@ export const zeropsStoredTargetCodec: ProviderCodec<ZeropsStoredTarget> = {
 	}),
 }
 
-const decodeEnvelope = <T>(kind: string, envelope: ProviderEnvelope, codec: ProviderCodec<T>): T => {
-	if (envelope.provider !== 'zerops') {
-		throw new Error(`${kind} belongs to provider "${envelope.provider}", expected "zerops"`)
-	}
-	if (envelope.version !== codec.version) {
-		throw new Error(`${kind} schema version ${envelope.version} is not supported by provider "zerops"`)
-	}
-	return codec.decode(envelope.payload)
-}
-
 const envelope = <T>(codec: ProviderCodec<T>, value: T): ProviderEnvelope => ({
 	provider: 'zerops',
 	version: codec.version,
@@ -161,7 +151,7 @@ interface DecodedZeropsEnvironment {
 }
 
 const decodeEnvironment = (environment: ProviderEnvironment): DecodedZeropsEnvironment => {
-	const target = decodeEnvelope('target', environment.target, zeropsStoredTargetCodec)
+	const target = decodeEnvelope('target', 'zerops', environment.target, zeropsStoredTargetCodec)
 	const placement = decodeNamespace(environment)
 	return {
 		target,
@@ -184,7 +174,7 @@ const decodeNamespace = (
 	}
 	return {
 		namespace,
-		namespaceTarget: decodeEnvelope('namespace target', namespace.target, zeropsNamespaceTargetCodec),
+		namespaceTarget: decodeEnvelope('namespace target', 'zerops', namespace.target, zeropsNamespaceTargetCodec),
 	}
 }
 
@@ -224,7 +214,7 @@ const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegist
 		throw new Error('Zerops private source requires both connection and installation coordinates')
 	}
 	const decoded = decodeEnvironment(input.environment)
-	const artifact = decodeEnvelope('artifact', input.environment.artifact, zeropsArtifactCodec)
+	const artifact = decodeEnvelope('artifact', 'zerops', input.environment.artifact, zeropsArtifactCodec)
 	assertFabrikaManifestCoordinates(artifact.app, { appId: input.app.id, env: input.environment.env })
 	return {
 		app: input.app,
@@ -301,7 +291,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		})
 
 	const artifactFor = (environment: ProviderEnvironment): FabrikaManifest => {
-		const artifact = decodeEnvelope('artifact', environment.artifact, zeropsArtifactCodec)
+		const artifact = decodeEnvelope('artifact', 'zerops', environment.artifact, zeropsArtifactCodec)
 		assertFabrikaManifestCoordinates(artifact.app, { appId: environment.appId, env: environment.env })
 		return artifact
 	}
@@ -464,7 +454,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 	): Promise<ProviderSourceResolution> => {
 		assertSourceBinding(input, binding)
 		const registration = normalizeRegistration({ app: input.app, environment: input.environment })
-		const artifact = decodeEnvelope('artifact', registration.environment.artifact, zeropsArtifactCodec)
+		const artifact = decodeEnvelope('artifact', 'zerops', registration.environment.artifact, zeropsArtifactCodec)
 		await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
 		const base = {
 			runId: input.runId,
@@ -504,7 +494,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		 */
 		declaredVariables: ({ artifact }) => {
 			try {
-				return decodeEnvelope('artifact', artifact, zeropsArtifactCodec).app.pipeline.vars
+				return decodeEnvelope('artifact', 'zerops', artifact, zeropsArtifactCodec).app.pipeline.vars
 			} catch {
 				return undefined
 			}
@@ -532,7 +522,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				throw new Error(`Zerops deployment namespace \`${placement.namespace.id}\` is unpinned; explicit migration is required`)
 			}
 			await verifyZeropsNamespaceProxySource(proxySource)
-			const artifact = decodeEnvelope('artifact', registration.environment.artifact, zeropsArtifactCodec)
+			const artifact = decodeEnvelope('artifact', 'zerops', registration.environment.artifact, zeropsArtifactCodec)
 			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
 			let source: ZeropsRuntimeTarget['source']
 			if (!input.dryRun) {
@@ -742,7 +732,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 							throw new Error(`Zerops deployment namespace \`${namespace.id}\` is not ready`)
 						}
 						const projectId = namespaceTarget.projectId
-						const manifest = decodeEnvelope('artifact', input.registration.environment.artifact, zeropsArtifactCodec)
+						const manifest = decodeEnvelope('artifact', 'zerops', input.registration.environment.artifact, zeropsArtifactCodec)
 						assertFabrikaManifestCoordinates(manifest.app, {
 							appId: input.registration.app.id,
 							env: input.registration.environment.env,

@@ -6,6 +6,7 @@ import type {
 	ProviderDeploymentNamespace,
 	ProviderEnvironment,
 	ProviderReconcileOutcome,
+	ProviderRegistrationInput,
 	RuntimeProviderRun,
 } from '@fabrika/provider-contract'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
@@ -23,7 +24,13 @@ import {
 	serializeManagedMarker,
 	verifyManagedCheckpoint,
 } from '../managed-environment/protocol'
-import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, hashFabrikaManifest, zeropsArtifactCodec } from '../manifest'
+import {
+	compileFabrikaManifest,
+	createZeropsArtifactSourceDescriptor,
+	hashFabrikaManifest,
+	renderFabrikaImportYaml,
+	zeropsArtifactCodec,
+} from '../manifest'
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
 import type { ZeropsSourceTransportBinding } from '../provider'
 import { zeropsSharedServiceHostname } from '../service-names'
@@ -383,38 +390,56 @@ describe('Zerops ControlProvider registration', () => {
 		expect(JSON.stringify(normalized.environment)).not.toContain('zt-secret')
 	})
 
-	test('rejects foreign, unsupported, and identity-drifted envelopes', () => {
-		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
-		expect(() =>
-			control.normalizeRegistration({
-				app,
-				environment: environment({ target: { provider: 'other', version: 1, payload: {} } }),
-			})
-		).toThrow('belongs to provider')
-		expect(() =>
-			control.normalizeRegistration({
-				app,
-				environment: environment({ target: { provider: 'zerops', version: 1, payload: {} } }),
-			})
-		).toThrow('schema version')
-		expect(() => control.normalizeRegistration({ app: { ...app, id: 'other' }, environment: environment() })).toThrow('belongs to app')
-		expect(() =>
-			control.normalizeRegistration({
-				app,
-				environment: environment({
-					env: 'stage',
-				}),
-			})
-		).toThrow('different environment coordinates')
-		expect(() => control.normalizeRegistration({ app, environment: environment({ namespace: undefined }) })).toThrow(
-			'requires a deployment namespace',
-		)
-		expect(() =>
-			control.normalizeRegistration({
-				app,
-				environment: environment({ namespace: { ...readyNamespace(), exclusiveAppId: 'other' } }),
-			})
-		).toThrow('exclusive')
+	test('rejects foreign, unsupported, and identity-drifted envelopes before source, hooks, or API effects', async () => {
+		const sourceCalls: string[] = []
+		const control = createTestControlProvider({
+			accessToken: 'zt-secret',
+			api: makeApi(recorded),
+			source: makeSource(sourceCalls),
+			beforeDeploy: async () => {
+				recorded.beforeDeploy.push('called')
+			},
+		})
+		const failures: Array<{ input: ProviderRegistrationInput; message: string }> = [
+			{ input: { app: { ...app, id: 'other' }, environment: environment() }, message: 'Zerops environment belongs to app `notes`, expected `other`' },
+			{ input: { app, environment: environment({ env: 'stage' }) }, message: 'Zerops deployment namespace has different environment coordinates' },
+			{ input: { app, environment: environment({ namespace: undefined }) }, message: 'Zerops environment requires a deployment namespace' },
+			{
+				input: { app, environment: environment({ namespace: { ...readyNamespace(), exclusiveAppId: 'other' } }) },
+				message: 'Zerops deployment namespace is exclusive to app `other`',
+			},
+		]
+		for (const kind of ['target', 'artifact', 'namespace target']) {
+			for (const provider of ['other', 'zerops']) {
+				const invalid = { provider, version: 0, payload: {} }
+				failures.push({
+					input: {
+						app,
+						environment: environment(
+							kind === 'namespace target'
+								? { namespace: { ...readyNamespace(), target: invalid } }
+								: kind === 'target'
+								? { target: invalid }
+								: { artifact: invalid },
+						),
+					},
+					message: provider === 'other'
+						? `${kind} belongs to provider "other", expected "zerops"`
+						: `${kind} schema version 0 is not supported by provider "zerops"`,
+				})
+			}
+		}
+		const resolve = control.resolveSource
+		if (resolve === undefined) throw new Error('expected source resolution')
+		for (const { input, message } of failures) {
+			expect(() => control.normalizeRegistration(input)).toThrow(new Error(message))
+			await expect(control.deploy({ ...deployInput(recorded), ...input })).rejects.toThrow(new Error(message))
+			await expect(resolve({ ...input, runId: 'run-1', signal: new AbortController().signal })).rejects.toThrow(new Error(message))
+		}
+		expect(sourceCalls).toEqual([])
+		expect(recorded.calls).toEqual([])
+		expect(recorded.envWrites).toEqual([])
+		expect(recorded.beforeDeploy).toEqual([])
 	})
 
 	test('exposes namespace lifecycle only when its installation configuration is composed', () => {
@@ -856,6 +881,70 @@ describe('Zerops ControlProvider registration', () => {
 })
 
 describe('Zerops ControlProvider lifecycle', () => {
+	test('preserves baseline hook aliasing: detached import edits and shared pipeline edits in runtime artifact identity', async () => {
+		const manifest = compileFabrikaManifest(
+			{
+				...config,
+				pipeline: { secrets: ['TOKEN'], vars: ['IMAGE_TAG'] },
+				target: { ...config.target, services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3', verticalAutoscaling: { minRam: 0.25 } }] },
+			},
+			'prod',
+			SOURCE_DESCRIPTOR,
+		)
+		const input = {
+			...deployInput(recorded),
+			environment: environment({
+				artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) },
+			}),
+		}
+		const originalPayload = structuredClone(input.environment.artifact.payload)
+		const originalHash = await hashFabrikaManifest(manifest)
+		let runtimeHash: string | undefined
+		let checkpoint: JsonValue | undefined
+		let hookCalls = 0
+		const control = createTestControlProvider({
+			accessToken: 'token',
+			api: makeApi(recorded),
+			beforeDeploy: async ({ artifact }) => {
+				hookCalls++
+				expect(artifact).toEqual(manifest)
+				expect(await hashFabrikaManifest(artifact)).toBe(originalHash)
+				artifact.app.pipeline.secrets.push('HOOK_SECRET')
+				artifact.app.pipeline.vars.push('HOOK_VAR')
+				const sizing: unknown = Reflect.get(artifact.target.importDocument.services[0] ?? {}, 'verticalAutoscaling')
+				if (typeof sizing !== 'object' || sizing === null || Array.isArray(sizing)) throw new Error('expected service sizing')
+				Reflect.set(sizing, 'minRam', 1)
+			},
+			execute: async (provider, run) => {
+				const artifact = zeropsArtifactCodec.decode(run.artifact.payload)
+				expect(artifact.app.pipeline).toEqual({ secrets: ['TOKEN', 'HOOK_SECRET'], vars: ['IMAGE_TAG', 'HOOK_VAR'] })
+				expect(artifact.target).toEqual(manifest.target)
+				runtimeHash = await hashFabrikaManifest(artifact)
+				expect(runtimeHash).not.toBe(originalHash)
+				return executeProvider(provider, run)
+			},
+		})
+		const separatelyNormalizedArtifact = control.normalizeRegistration(input).environment.artifact
+		expect(
+			await control.deploy({
+				...input,
+				events: {
+					...input.events,
+					checkpoint: async (value) => {
+						checkpoint = value
+					},
+				},
+			}),
+		).toEqual({ state: 'succeeded' })
+		expect(hookCalls).toBe(1)
+		expect(input.environment.artifact.payload).toEqual(originalPayload)
+		expect(separatelyNormalizedArtifact.payload).toEqual(originalPayload)
+		expect(recorded.imports[0]?.yaml).toBe(renderFabrikaImportYaml(manifest))
+		const state = await verifyManagedCheckpoint(checkpoint)
+		if (runtimeHash === undefined) throw new Error('expected runtime artifact hash')
+		expect(state.originalArtifactSha256).toBe(runtimeHash)
+		expect(state.descriptorSha256).toBe(SOURCE_DESCRIPTOR.sha256)
+	})
 	for (const active of ['older-version', 'all-absent-version']) {
 		test(`admits exact retained ${active} after rollback without selecting the latest run`, async () => {
 			const base = makeApi(recorded)
