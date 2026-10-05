@@ -245,8 +245,6 @@ interface StepEnv {
 	zerops: ZeropsCollaborators
 	/** The compiled import document + its YAML text, materialized once in `open()`. */
 	compiled: { yaml: string; hostnames: string[] }
-	/** Hostname of the service the app's code deploys to. */
-	deployHostname: string
 	log: (line: string) => void
 	signal: AbortSignal
 	dryRun: boolean
@@ -670,13 +668,12 @@ export const createZeropsProvider = (
 			const hostnames = manifestServiceHostnames(run.artifact)
 			const document = interpolateManifest(run.artifact.target.importDocument, run.artifact.app.pipeline.vars, run.vars, hostnames)
 			const compiled = { yaml: renderYaml(document), hostnames }
-			const deployHostname = resolveDeployHostname(run.artifact)
+			resolveDeployHostname(run.artifact)
 			const plan: ZeropsPlan = buildZeropsPlan(run.artifact, run.target, run.env)
 			const env: StepEnv = {
 				run,
 				zerops: collaborators(run.target),
 				compiled,
-				deployHostname,
 				log: run.events.log,
 				signal: run.signal,
 				dryRun: run.dryRun,
