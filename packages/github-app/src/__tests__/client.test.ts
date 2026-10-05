@@ -150,6 +150,21 @@ describe('GitHubAppClient boot and JWT', () => {
 })
 
 describe('GitHubAppClient requests', () => {
+	test('projects installation and token responses without returning upstream extensions', async () => {
+		const capture = capturingFetch([
+			Response.json({ ...installation(77, 'CONTEMBER'), account: { login: 'CONTEMBER', type: 'Organization', extra: 'ignored' }, extra: SECRET_BODY }),
+			Response.json({ token: SECRET_TOKEN, expires_at: EXPIRES_AT, permissions: { contents: 'read' }, extra: SECRET_BODY }),
+		])
+		const github = await client(capture.fetch)
+		expect(await github.resolveRepositoryInstallation('contember', 'fabrika')).toEqual({
+			id: 77,
+			accountLogin: 'CONTEMBER',
+			accountType: 'Organization',
+			repositorySelection: 'selected',
+		})
+		expect(await github.mintRepositoryToken(tokenInput())).toEqual({ token: SECRET_TOKEN, expiresAt: Date.parse(EXPIRES_AT) })
+	})
+
 	test('uses exact lookup path and a repository-scoped read-only token request', async () => {
 		const capture = capturingFetch([
 			Response.json(installation(77)),

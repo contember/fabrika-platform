@@ -14,10 +14,11 @@ import type {
 import {
 	decodeAppIdentity,
 	decodeWebhookConfig,
+	installationSchema,
+	installationTokenSchema,
 	isPositiveSafeInteger,
 	normalizeApiBaseUrl,
 	normalizeWebhookUrl,
-	objectField,
 	sameAppIdentity,
 	validateRepositoryComponent,
 	validateWebhookSecret,
@@ -159,13 +160,10 @@ export class GitHubAppClient {
 		if (body === NOT_FOUND) {
 			throw responseError()
 		}
-		const token = objectField(body, 'token')
-		const expiresAtValue = objectField(body, 'expires_at')
-		const expiresAt = typeof expiresAtValue === 'string' ? Date.parse(expiresAtValue) : Number.NaN
-		if (
-			typeof token !== 'string' || token.length === 0 || token.length > 4096 || /\s/.test(token) || !Number.isFinite(expiresAt)
-			|| expiresAt <= this.now()
-		) {
+		const result = installationTokenSchema.safeParse(body)
+		if (!result.success) throw responseError()
+		const { token, expires_at: expiresAt } = result.data
+		if (!Number.isFinite(expiresAt) || expiresAt <= this.now()) {
 			throw responseError()
 		}
 		return { token, expiresAt }
@@ -222,19 +220,13 @@ export class GitHubAppClient {
 	}
 
 	private decodeInstallation(body: unknown, accountLogin: string, requiredType?: 'Organization' | 'User'): GitHubAppInstallation {
-		const id = objectField(body, 'id')
-		const appId = objectField(body, 'app_id')
-		const targetType = objectField(body, 'target_type')
-		const account = objectField(body, 'account')
-		const login = objectField(account, 'login')
-		const accountType = objectField(account, 'type')
-		const repositorySelection = objectField(body, 'repository_selection')
+		const result = installationSchema.safeParse(body)
+		if (!result.success) throw responseError()
+		const { id, app_id: appId, target_type: targetType, account: { login, type: accountType }, repository_selection: repositorySelection } = result.data
 		if (
-			typeof id !== 'number' || !isPositiveSafeInteger(id) || typeof appId !== 'number' || !isPositiveSafeInteger(appId)
-			|| String(appId) !== this.appId || (targetType !== 'Organization' && targetType !== 'User') || accountType !== targetType
-			|| (requiredType !== undefined && targetType !== requiredType) || typeof login !== 'string'
+			String(appId) !== this.appId || accountType !== targetType
+			|| (requiredType !== undefined && targetType !== requiredType)
 			|| login.toLowerCase() !== accountLogin.toLowerCase()
-			|| (repositorySelection !== 'all' && repositorySelection !== 'selected')
 		) {
 			throw responseError()
 		}

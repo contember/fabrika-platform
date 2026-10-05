@@ -12,6 +12,20 @@ const blob = { path: 'CLAUDE.md', mode: '100644', type: 'blob', sha: 'c'.repeat(
 const treeResponse = { sha: treeSha, truncated: false, tree: [blob] }
 
 describe('platform Git tree preflight', () => {
+	test('accepts response extensions and absent sizes on both directories and blobs', async () => {
+		const client = platformClient(() =>
+			Response.json({
+				...treeResponse,
+				url: 'ignored',
+				tree: [
+					{ path: 'dir', mode: '040000', type: 'tree', sha: treeSha, extension: true },
+					{ path: 'dir/file', mode: '100755', type: 'blob', sha: 'c'.repeat(64), extension: true },
+				],
+			})
+		)
+		await expect(client.validatePlatformTree(repository, commitSha, new AbortController().signal)).resolves.toBeUndefined()
+	})
+
 	test('binds a complete recursive tree to the exact commit and accepts symlink blobs', async () => {
 		const calls: string[] = []
 		const client = new GitHubMetadataClient({
@@ -108,6 +122,27 @@ function platformClient(tree: () => Response): GitHubMetadataClient {
 }
 
 describe('GitHub repository metadata', () => {
+	test.each([
+		{ name: 'absent', commit: undefined },
+		{ name: 'null', commit: null },
+		{ name: 'array', commit: [] },
+		{ name: 'string', commit: 'ignored' },
+		{ name: 'missing tree', commit: {} },
+		{ name: 'null tree', commit: { tree: null } },
+		{ name: 'invalid sha', commit: { tree: { sha: 'invalid' } } },
+	])(
+		'resolves the commit while tolerating unusable optional tree metadata: $name',
+		async ({ commit }) => {
+			const client = new GitHubMetadataClient({ fetch: async () => Response.json({ sha: commitSha, commit, extension: 'ignored' }) })
+			expect(await client.commit(repository, 'main', undefined, new AbortController().signal, 'resolve')).toBe(commitSha)
+			await expect(client.validatePlatformTree(repository, commitSha, new AbortController().signal)).rejects.toMatchObject({
+				code: 'archive_rejected',
+				stage: 'archive',
+				status: 422,
+			})
+		},
+	)
+
 	test.each([
 		{ token: undefined, authorization: null },
 		{ token: 'ghs_private_repository', authorization: 'Bearer ghs_private_repository' },

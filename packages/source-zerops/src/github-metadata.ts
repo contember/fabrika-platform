@@ -1,4 +1,5 @@
 import { ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES, type ZeropsSourceRepository } from '@fabrika/provider-zerops'
+import { z } from 'zod'
 import { cancelled, SourceFailure } from './failure'
 import { safeRepositoryPath, SOURCE_DESCRIPTOR_PATH, SOURCE_MAX_TREE_ENTRIES } from './tar'
 
@@ -11,6 +12,22 @@ const GITHUB_ACCEPT = 'application/vnd.github+json'
 const GITHUB_RAW_ACCEPT = 'application/vnd.github.raw+json'
 const GITHUB_API_VERSION = '2022-11-28'
 const GITHUB_USER_AGENT = 'fabrika-source-zerops'
+
+const objectIdSchema = z.string().regex(OBJECT_ID_PATTERN)
+const commitSchema = z.object({
+	sha: objectIdSchema,
+	// Ref resolution needs only the commit; platform archive admission separately requires its tree.
+	commit: z.object({ tree: z.object({ sha: objectIdSchema }) }).optional().catch(undefined),
+})
+const treeResponseSchema = z.object({ sha: z.string(), truncated: z.literal(false), tree: z.array(z.unknown()) })
+const treeEntrySchema = z.object({
+	path: z.string(),
+	sha: objectIdSchema,
+	size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+}).and(z.discriminatedUnion('type', [
+	z.object({ type: z.literal('tree'), mode: z.literal('040000') }),
+	z.object({ type: z.literal('blob'), mode: z.enum(['100644', '100755', '120000']) }),
+]))
 
 export type GitHubMetadataFetch = (
 	input: string | URL | Request,
@@ -70,26 +87,18 @@ export class GitHubMetadataClient {
 			'archive',
 			GITHUB_TREE_MAX_RESPONSE_BYTES,
 		)
-		if (!isObject(parsed) || parsed['sha'] !== commit.treeSha || parsed['truncated'] !== false || !Array.isArray(parsed['tree'])) {
+		const result = treeResponseSchema.safeParse(parsed)
+		if (!result.success || result.data.sha !== commit.treeSha) {
 			throw rejected('archive')
 		}
-		const entries: unknown[] = parsed['tree']
+		const entries = result.data.tree
 		if (entries.length > SOURCE_MAX_TREE_ENTRIES) throw new SourceFailure('archive_rejected', 'archive', false, 413)
 		const paths = new Map<string, 'blob' | 'tree'>()
 		for (const entry of entries) {
-			if (!isObject(entry)) throw rejected('archive')
-			const path = entry['path']
-			const mode = entry['mode']
-			const type = entry['type']
-			const sha = entry['sha']
-			const size = entry['size']
-			if (
-				typeof path !== 'string' || !safeRepositoryPath(path) || paths.has(path)
-				|| typeof sha !== 'string' || !OBJECT_ID_PATTERN.test(sha)
-				|| !((type === 'tree' && mode === '040000')
-					|| (type === 'blob' && (mode === '100644' || mode === '100755' || mode === '120000')))
-				|| (size !== undefined && (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0))
-			) throw rejected('archive')
+			const result = treeEntrySchema.safeParse(entry)
+			if (!result.success) throw rejected('archive')
+			const { path, type } = result.data
+			if (!safeRepositoryPath(path) || paths.has(path)) throw rejected('archive')
 			paths.set(path, type)
 		}
 		for (const path of paths.keys()) {
@@ -112,15 +121,9 @@ export class GitHubMetadataClient {
 			stage,
 			GITHUB_COMMIT_MAX_RESPONSE_BYTES,
 		)
-		if (!isObject(parsed)) throw rejected(stage)
-		const sha = parsed['sha']
-		if (typeof sha !== 'string' || !OBJECT_ID_PATTERN.test(sha)) {
-			throw rejected(stage)
-		}
-		const details = parsed['commit']
-		const tree = isObject(details) ? details['tree'] : undefined
-		const treeSha = isObject(tree) ? tree['sha'] : undefined
-		return { sha, treeSha: typeof treeSha === 'string' && OBJECT_ID_PATTERN.test(treeSha) ? treeSha : undefined }
+		const result = commitSchema.safeParse(parsed)
+		if (!result.success) throw rejected(stage)
+		return { sha: result.data.sha, treeSha: result.data.commit?.tree.sha }
 	}
 
 	private async requestJson(
@@ -288,10 +291,6 @@ async function readNext(
 		if (callerSignal.aborted) throw cancelled(stage)
 		throw new SourceFailure('internal', stage, true, timeout.aborted ? 504 : 502)
 	}
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function normalizedApiBaseUrl(value: string): string {

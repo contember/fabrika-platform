@@ -63,7 +63,7 @@ describe('GitHub App manifest contract', () => {
 		const calls: Array<{ readonly url: string; readonly init?: RequestInit }> = []
 		const fetchImplementation: GitHubAppFetch = (input, init) => {
 			calls.push({ url: String(input), ...(init === undefined ? {} : { init }) })
-			return Promise.resolve(Response.json(conversion()))
+			return Promise.resolve(Response.json(conversion({ client_secret: 'unused-secret', owner: { login: 'example' } })))
 		}
 		expect(await exchangeGitHubAppManifestCode('one-time-code', { fetch: fetchImplementation })).toEqual({
 			id: 123,

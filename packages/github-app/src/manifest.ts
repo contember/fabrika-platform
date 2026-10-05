@@ -1,6 +1,7 @@
+import { z } from 'zod'
 import { GITHUB_ACCEPT, GITHUB_API_VERSION } from './transport'
 import type { CreatedGitHubApp, GitHubAppManifestExchangeOptions, GitHubAppManifestInput } from './types'
-import { APP_SLUG_PATTERN, hasAsciiControl, isPositiveSafeInteger, objectField } from './validation'
+import { appReferenceSchema, hasAsciiControl } from './validation'
 
 const GITHUB_MANIFEST_USER_AGENT = 'fabrika'
 const ORGANIZATION_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
@@ -8,6 +9,11 @@ const MANIFEST_CODE_PATTERN = /^[A-Za-z0-9_-]{1,256}$/
 const MANIFEST_CONVERSION_TIMEOUT_MS = 30_000
 const MAX_MANIFEST_CONVERSION_BYTES = 128 * 1024
 const MAX_MANIFEST_URL_LENGTH = 2048
+
+const manifestConversionSchema = appReferenceSchema.extend({
+	pem: z.string().min(1).max(64 * 1024),
+	webhook_secret: z.string().min(1).max(4096).refine((secret) => !hasAsciiControl(secret)),
+})
 
 /** Build the one least-authority App manifest used by Fabrika repository source. */
 export function buildGitHubAppManifest(input: GitHubAppManifestInput): Readonly<Record<string, unknown>> {
@@ -199,19 +205,9 @@ function validateManifestUrl(value: string): void {
 }
 
 function decodeManifestConversion(value: unknown): CreatedGitHubApp | null {
-	const id = objectField(value, 'id')
-	const slug = objectField(value, 'slug')
-	const htmlUrl = objectField(value, 'html_url')
-	const pem = objectField(value, 'pem')
-	const webhookSecret = objectField(value, 'webhook_secret')
-	if (
-		typeof id !== 'number' || !isPositiveSafeInteger(id) || typeof slug !== 'string' || !APP_SLUG_PATTERN.test(slug)
-		|| typeof htmlUrl !== 'string' || typeof pem !== 'string' || typeof webhookSecret !== 'string'
-		|| pem.length === 0 || pem.length > 64 * 1024 || webhookSecret.length === 0 || webhookSecret.length > 4096
-		|| hasAsciiControl(webhookSecret)
-	) {
-		return null
-	}
+	const result = manifestConversionSchema.safeParse(value)
+	if (!result.success) return null
+	const { id, slug, html_url: htmlUrl, pem, webhook_secret: webhookSecret } = result.data
 	let parsedHtmlUrl: URL
 	try {
 		parsedHtmlUrl = new URL(htmlUrl)
