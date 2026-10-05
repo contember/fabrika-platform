@@ -35,13 +35,14 @@ import {
 } from './zerops-emulator/protocol'
 import {
 	buildRequestSchema,
-	descriptorHasHttpPorts,
 	integrationTokenRequestSchema,
 	parseImportRequest,
+	readDescriptorRuntime,
 	reservationRequestSchema,
 	triggerRequestSchema,
 	userDataRequestSchema,
 } from './zerops-emulator/requests'
+import { activateManagedRuntimeReferences } from './zerops-emulator/runtime-environment'
 import { capabilityDigest, matchesCapability, readUploadReceipt } from './zerops-emulator/upload'
 
 export interface ZeropsEmulatorOptions {
@@ -122,7 +123,8 @@ class ZeropsEmulator {
 			const body = buildRequestSchema.parse(await parseJsonBody(request))
 			const version = this.version(appVersionId)
 			if (version === undefined) return this.versionNotFound()
-			const hasHttpPorts = descriptorHasHttpPorts(body.zeropsYaml, body.zeropsYamlSetup)
+			const runtime = readDescriptorRuntime(body.zeropsYaml, body.zeropsYamlSetup)
+			version.managedRuntimeReferences = runtime.managedRuntimeReferences
 			const grant = this.state.uploadGrants.find((entry) => entry.appVersionId === version.id)
 			delete version.activateAt
 			if (grant?.receipt === undefined || grant.deleted) {
@@ -131,7 +133,7 @@ class ZeropsEmulator {
 				version.syntheticFailure = 'LOCAL_MISSING_UPLOAD'
 			} else {
 				delete version.syntheticFailure
-				version.hasHttpPorts = hasHttpPorts
+				version.hasHttpPorts = runtime.hasHttpPorts
 				this.startVersion(version)
 			}
 			const process = this.createProcess('stack.build', { serviceStackId: version.serviceStackId, appVersionId: version.id })
@@ -379,6 +381,7 @@ class ZeropsEmulator {
 
 		const serviceEnvList = path.match(/^\/service-stack\/([^/]+)\/env$/)
 		if (serviceEnvList !== null && request.method === 'GET') {
+			await this.activateDueVersions()
 			const serviceId = decodeURIComponent(serviceEnvList[1] ?? '')
 			if (this.service(serviceId) === undefined) {
 				return error(404, 'SERVICE_NOT_FOUND', 'service not found')
@@ -669,6 +672,7 @@ class ZeropsEmulator {
 		version.status = 'ACTIVE'
 		delete version.activateAt
 		service.activeAppVersionId = version.id
+		activateManagedRuntimeReferences(this.state, service, version.managedRuntimeReferences ?? [])
 	}
 
 	private deployCodeless(service: ServiceRecord): ProcessRecord {

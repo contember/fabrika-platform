@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { localSourceUploadGrantSchema } from '../local-source-contract'
 import type { EmulatorSnapshot } from './model'
+import { managedRuntimeReferencesSchema } from './runtime-environment'
 
 const text = z.string().optional().catch(undefined)
 const flag = z.boolean().optional().catch(undefined)
@@ -57,6 +58,7 @@ const envSchema = z.object({
 const versionSchema = z.object({
 	status: z.enum(['UPLOADING', 'BUILDING', 'ACTIVE', 'BACKUP', 'BUILD_FAILED', 'CANCELLED']),
 	hasHttpPorts: z.boolean().optional(),
+	managedRuntimeReferences: managedRuntimeReferencesSchema.optional(),
 	syntheticFailure: z.literal('LOCAL_MISSING_UPLOAD').optional(),
 	// Non-numeric legacy values were ignored; numeric values must still be valid times.
 	activateAt: z.number().optional().catch(undefined).pipe(z.number().finite().min(0).optional()),
@@ -64,10 +66,11 @@ const versionSchema = z.object({
 	serviceStackId: z.string(),
 	projectId: z.string(),
 	sequence: counter,
-}).transform(({ activateAt, hasHttpPorts, syntheticFailure, ...version }) => ({
+}).transform(({ activateAt, hasHttpPorts, managedRuntimeReferences, syntheticFailure, ...version }) => ({
 	...version,
 	...(activateAt === undefined ? {} : { activateAt }),
 	...(hasHttpPorts === undefined ? {} : { hasHttpPorts }),
+	...(managedRuntimeReferences === undefined ? {} : { managedRuntimeReferences }),
 	...(syntheticFailure === undefined ? {} : { syntheticFailure }),
 }))
 const processSchema = z.object({

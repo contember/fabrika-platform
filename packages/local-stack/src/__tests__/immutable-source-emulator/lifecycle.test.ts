@@ -3,7 +3,15 @@ import { afterEach, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { admitManagedEnvironment, confirmCodelessManagedService } from '../../../../provider-zerops/src/managed-environment/admission'
-import { MANAGED_ENVIRONMENT_MARKER, type ManagedOwner, serializeManagedMarker } from '../../../../provider-zerops/src/managed-environment/protocol'
+import { prepareManagedDescriptor } from '../../../../provider-zerops/src/managed-environment/descriptor'
+import {
+	MANAGED_ENVIRONMENT_MARKER,
+	type ManagedCheckpoint,
+	type ManagedOwner,
+	managedReferenceNames,
+	mapManagedKeys,
+	serializeManagedMarker,
+} from '../../../../provider-zerops/src/managed-environment/protocol'
 import {
 	LOCAL_SOURCE_EMULATOR_ORIGIN,
 	LOCAL_SOURCE_MAX_COMPRESSED_BYTES,
@@ -52,6 +60,122 @@ async function stateFile() {
 	directories.push(directory)
 	return `${directory}/state.json`
 }
+
+test('managed second-deploy admission follows activated references, preserving the previous version while pending and across restart', async () => {
+	const path = await stateFile()
+	let now = 100
+	const f = await fixture({ stateFile: path, activationDelayMs: 100, now: () => now })
+	const owner: ManagedOwner = {
+		protocol: 1,
+		appId: 'demo',
+		environment: 'test',
+		namespaceId: 'namespace',
+		projectId: f.imported.projectId,
+		serviceId: f.serviceId,
+		hostname: 'api',
+	}
+	const finishedProcesses = await Promise.all(
+		f.imported.services.flatMap((entry) => entry.processes).map((process) =>
+			waitForProcess({ api: f.api, processId: process.id, signal: signal(), sleep: async () => {} })
+		),
+	)
+	const service = await f.api.getService({ serviceId: f.serviceId, signal: signal() })
+	const evidence = confirmCodelessManagedService({
+		owner,
+		provisioningDocument: { services: [{ hostname: 'api', override: false, startWithoutCode: true }] },
+		imported: f.imported,
+		finishedProcesses,
+		service,
+	})
+	await f.api.putServiceEnv({
+		serviceId: f.serviceId,
+		key: MANAGED_ENVIRONMENT_MARKER,
+		value: serializeManagedMarker({
+			...owner,
+			creationProcessId: evidence.creationProcessId,
+			initialCodelessAppVersionId: evidence.codelessAppVersionId,
+		}),
+		signal: signal(),
+	})
+	const marker = (await f.api.listServiceEnv({ serviceId: f.serviceId, signal: signal() })).find((entry) => entry.key === MANAGED_ENVIRONMENT_MARKER)
+	if (marker === undefined) throw new Error('missing marker')
+	const stage = async (release: string, withDsn: boolean) => {
+		const reservation = await f.api.createAppVersion({ serviceId: f.serviceId, signal: signal() })
+		const names = await managedReferenceNames({ ...owner, appVersionId: reservation.id })
+		await f.api.putServiceEnv({ serviceId: f.serviceId, key: names.FABRIKA_RELEASE, value: release, signal: signal() })
+		if (withDsn) await f.api.putServiceEnv({ serviceId: f.serviceId, key: names.FABRIKA_OPERATIONS_DSN, value: 'synthetic-dsn', signal: signal() })
+		const records = await f.api.listServiceEnv({ serviceId: f.serviceId, signal: signal() })
+		const checkpoint: ManagedCheckpoint = {
+			...owner,
+			runId: release,
+			appVersionId: reservation.id,
+			markerRecordId: marker.id,
+			originalArtifactSha256: 'a'.repeat(64),
+			descriptorSha256: 'b'.repeat(64),
+			sourceCommitSha: 'c'.repeat(40),
+			setup: 'api',
+			phase: 'build_triggered',
+			binding: mapManagedKeys((key) => {
+				if (key !== 'FABRIKA_RELEASE' && !(withDsn && key === 'FABRIKA_OPERATIONS_DSN')) return { state: 'absent' }
+				const record = records.find((entry) => entry.key === names[key])
+				if (record === undefined) throw new Error('missing backing record')
+				return { state: 'confirmed', referenceName: names[key], backingRecordId: record.id }
+			}),
+		}
+		// The unselected setup and ordinary application variable are outside the modeled canonical references.
+		const source = `${descriptor}      envVariables:\n        APP_LABEL: unmodeled\n`
+		const prepared = prepareManagedDescriptor(source, 'api', checkpoint.binding)
+		const selected = prepared.contents + '\n  - setup: other\n    run:\n      envVariables:\n        FABRIKA_RELEASE: unselected\n'
+		await f.upload(reservation.uploadUrl)
+		return { reservation, checkpoint, selected }
+	}
+	const first = await stage('release-a', true)
+	await f.api.buildAndDeployAppVersion({ appVersionId: first.reservation.id, zeropsYaml: first.selected, zeropsYamlSetup: 'api', signal: signal() })
+	now = 200
+	const recordsA = await f.api.listServiceEnv({ serviceId: f.serviceId, signal: signal() })
+	const admit = (api: typeof f.api, checkpoint: ManagedCheckpoint) =>
+		Promise.all([
+			api.listServiceEnv({ serviceId: f.serviceId, signal: signal() }),
+			api.getService({ serviceId: f.serviceId, signal: signal() }),
+		]).then(([records, current]) =>
+			admitManagedEnvironment({
+				owner,
+				records,
+				observedActiveAppVersionId: current.activeAppVersionId ?? null,
+				prior: { kind: 'retained', checkpoint },
+			})
+		)
+	await expect(admit(f.api, first.checkpoint)).resolves.toHaveProperty('markerRecordId', marker.id)
+	expect(recordsA.find((entry) => entry.key === 'FABRIKA_RELEASE')).toMatchObject({ type: 'USER', sensitive: false })
+	const second = await stage('release-b', false)
+	const beforeSubmission = await f.api.listServiceEnv({ serviceId: f.serviceId, signal: signal() })
+	await f.api.buildAndDeployAppVersion({ appVersionId: second.reservation.id, zeropsYaml: second.selected, zeropsYamlSetup: 'api', signal: signal() })
+	expect(await f.api.listServiceEnv({ serviceId: f.serviceId, signal: signal() })).toEqual(beforeSubmission)
+	await expect(admit(f.api, first.checkpoint)).resolves.toHaveProperty('markerRecordId', marker.id)
+	const restarted = await client({ stateFile: path, now: () => now })
+	expect(await restarted.api.listServiceEnv({ serviceId: f.serviceId, signal: signal() })).toEqual(beforeSubmission)
+	await expect(admit(restarted.api, first.checkpoint)).resolves.toHaveProperty('markerRecordId', marker.id)
+	now = 300
+	await expect(admit(restarted.api, second.checkpoint)).resolves.toHaveProperty('markerRecordId', marker.id)
+	const recordsB = await restarted.api.listServiceEnv({ serviceId: f.serviceId, signal: signal() })
+	const binding = second.checkpoint.binding.FABRIKA_RELEASE
+	if (binding.state !== 'confirmed') throw new Error('missing release binding')
+	expect(recordsB.find((entry) => entry.key === 'FABRIKA_RELEASE')).toMatchObject({
+		content: `\${${binding.referenceName}}`,
+		type: 'USER',
+		sensitive: false,
+	})
+	expect(recordsB.some((entry) => entry.key === 'FABRIKA_OPERATIONS_DSN')).toBe(false)
+	expect(recordsB.some((entry) => entry.key === 'APP_LABEL')).toBe(false)
+	expect(recordsB.find((entry) => entry.key === binding.referenceName)?.content).toBe('release-b')
+	const firstBinding = first.checkpoint.binding.FABRIKA_RELEASE
+	if (firstBinding.state !== 'confirmed') throw new Error('missing first release binding')
+	expect(recordsB.find((entry) => entry.id === firstBinding.backingRecordId)).toEqual(
+		recordsA.find((entry) => entry.id === firstBinding.backingRecordId),
+	)
+	const final = await client({ stateFile: path })
+	await expect(admit(final.api, second.checkpoint)).resolves.toHaveProperty('markerRecordId', marker.id)
+})
 
 test('real client reserves exactly one version, persists a hash-only grant and receipt, and activates it after restart', async () => {
 	const path = await stateFile()

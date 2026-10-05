@@ -1,4 +1,5 @@
 import type { LocalSourceUploadGrant } from '../local-source-contract'
+import type { ManagedRuntimeReference } from './runtime-environment'
 
 export interface ProjectRecord {
 	id: string
@@ -36,6 +37,7 @@ export interface AppVersionRecord {
 	projectId: string
 	status: 'UPLOADING' | 'BUILDING' | 'ACTIVE' | 'BACKUP' | 'BUILD_FAILED' | 'CANCELLED'
 	hasHttpPorts?: boolean
+	managedRuntimeReferences?: ManagedRuntimeReference[]
 	syntheticFailure?: 'LOCAL_MISSING_UPLOAD'
 	sequence: number
 	activateAt?: number

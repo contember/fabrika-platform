@@ -95,6 +95,22 @@ describe('legacy emulator snapshots', () => {
 			}],
 		}
 		expect(parseSnapshot(JSON.parse(JSON.stringify(snapshot)))).toEqual(snapshot)
+		const version: EmulatorSnapshot['appVersions'][number] = {
+			id: 'managed',
+			projectId: 'p',
+			serviceStackId: 's',
+			status: 'BUILDING',
+			sequence: 1,
+			managedRuntimeReferences: [{ key: 'FABRIKA_RELEASE', content: `\${FABRIKA_MENV_${'a'.repeat(48)}_R}` }],
+		}
+		expect(parseSnapshot({ ...emptySnapshot(), appVersions: [version] }).appVersions).toEqual([version])
+		for (
+			const references of [
+				[{ key: 'APP_LABEL', content: `\${FABRIKA_MENV_${'a'.repeat(48)}_R}` }],
+				[{ key: 'FABRIKA_RELEASE', content: 'expanded-secret-value' }],
+				[...version.managedRuntimeReferences ?? [], ...version.managedRuntimeReferences ?? []],
+			]
+		) expect(() => parseSnapshot({ ...emptySnapshot(), appVersions: [{ ...version, managedRuntimeReferences: references }] })).toThrow()
 		for (
 			const grant of [
 				{ appVersionId: 'v', capabilitySha256: 'invalid', deleted: false },
