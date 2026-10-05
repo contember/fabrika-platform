@@ -381,6 +381,46 @@ describe('Operations public/private HTTP isolation', () => {
 		}
 	})
 
+	test('static RPC schemas retain first-error precedence across malformed fields', async () => {
+		const cases: Array<[string, unknown, string]> = [
+			['source', [], 'input must be an object'],
+			['issues', { sourceId: null, query: 1, status: 'invalid' }, 'sourceId must be a string'],
+			['issues', { query: 1, cursor: false, status: 'invalid' }, 'query must be a string'],
+			['issues', { cursor: false, status: 'invalid' }, 'cursor must be a string'],
+			['issues', { status: 'invalid', level: 'invalid' }, 'invalid issue status'],
+			['issues', { level: 'invalid', window: 'invalid' }, 'invalid issue level'],
+			['issues', { window: 'invalid', assignee: 'invalid' }, 'invalid issue window'],
+			['issues', { assignee: 'invalid', sort: 'invalid' }, 'invalid issue assignee'],
+			['issues', { sort: 'invalid', limit: 0 }, 'invalid issue sort'],
+			['issueOccurrences', { issueId: '', cursor: false, limit: 0 }, 'cursor must be a string'],
+			['issueOccurrences', { issueId: '', limit: 0 }, 'limit must be between 1 and 100'],
+			['releases', { sourceId: null, cursor: false, limit: 0 }, 'sourceId must be a string'],
+			['mutateIssue', { issueId: '', mutation: null }, 'issueId must be a non-empty string'],
+			['mutateIssue', { issueId: 'issue-a', mutation: null }, 'input must be an object'],
+			['createHealthCheck', { sourceId: '', input: null }, 'sourceId must be a non-empty string'],
+			['updateSpikeAlert', { sourceId: '', input: null }, 'input must be an object'],
+			['updateSpikeAlert', { sourceId: '', input: {} }, 'sourceId must be a non-empty string'],
+			['updateAlertRule', { sourceId: '', kind: 'invalid', input: null }, 'input must be an object'],
+			['updateAlertRule', { sourceId: 'source-a', kind: 'invalid', input: {} }, 'invalid alert kind'],
+			['createAlertChannel', { sourceId: '', input: {} }, 'sourceId must be a non-empty string'],
+			['createAlertChannel', { sourceId: 'source-a', input: { type: 'webhook', scope: 'invalid', target: 4 } }, 'target is required'],
+			['updateAlertChannel', { sourceId: 'source-a', channelId: '', input: {} }, 'channelId must be a non-empty string'],
+			[
+				'updateAlertChannel',
+				{ sourceId: 'source-a', channelId: 'channel-a', input: { type: 'webhook', scope: 'invalid', target: null } },
+				'target must be a string',
+			],
+			['updateAlertChannel', { sourceId: 'source-a', channelId: 'channel-a', input: { type: 'webhook', scope: 'invalid' } }, 'invalid alert kind'],
+		]
+		const fetch = handler()
+		for (const [method, input, message] of cases) {
+			const response = await fetch(rpcRequest('operations.internal', method, input, VIEWER_TOKEN))
+			expect(response.status).toBe(400)
+			const body: unknown = await response.json()
+			expect(body).toEqual({ error: { type: 'validation', message, issues: [{ message }] } })
+		}
+	})
+
 	test('an RPC request with no proxy-injected token is a flat 401 auth envelope (the proxy owns the bounce)', async () => {
 		const response = await handler()(rpcRequest('operations.internal', 'sources', null))
 		expect(response.status).toBe(401)

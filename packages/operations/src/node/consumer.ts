@@ -1,6 +1,7 @@
 import type { IngestMessage } from '@fabrika/operations-contract'
 import type { SqlDatabase } from '@fabrika/platform'
 import { decodeJob, type Job, PostgresJobQueue } from '@fabrika/platform-node'
+import { z } from 'zod'
 import { OperationsAlertProducer } from '../alerts.js'
 import type { OperationsDataEnv } from '../pipeline.js'
 import { archiveDeadEvent, persistIngest } from '../pipeline.js'
@@ -36,47 +37,28 @@ export interface OperationsIngestJobQueue {
 	defer(id: string, delayMs: number): Promise<void>
 }
 
-function decodeIngestMessage(payload: unknown): IngestMessage {
-	if (!isRecord(payload)) throw new Error('ingest job is not an object')
-	const sourceId = Reflect.get(payload, 'projectId')
-	const fingerprint = Reflect.get(payload, 'fingerprint')
-	const eventId = Reflect.get(payload, 'eventId')
-	const title = Reflect.get(payload, 'title')
-	const culprit = Reflect.get(payload, 'culprit')
-	const level = Reflect.get(payload, 'level')
-	const receivedAt = Reflect.get(payload, 'receivedAt')
-	const body = Reflect.get(payload, 'payload')
-	if (
-		typeof sourceId !== 'string'
-		|| typeof fingerprint !== 'string'
-		|| typeof eventId !== 'string'
-		|| typeof title !== 'string'
-		|| (typeof culprit !== 'string' && culprit !== null)
-		|| typeof level !== 'string'
-		|| typeof receivedAt !== 'number'
-		|| !isRecord(body)
-	) {
-		throw new Error('ingest job has an invalid shape')
-	}
-	const message: IngestMessage = {
-		projectId: sourceId,
-		fingerprint,
-		eventId,
-		title,
-		culprit,
-		level,
-		receivedAt,
-		payload: body,
-	}
-	const release = Reflect.get(payload, 'release')
-	const environment = Reflect.get(payload, 'environment')
-	if (typeof release === 'string') message.release = release
-	if (typeof environment === 'string') message.environment = environment
-	return message
-}
+const ingestMessageSchema = z.object({
+	projectId: z.string(),
+	fingerprint: z.string(),
+	eventId: z.string(),
+	title: z.string(),
+	culprit: z.string().nullable(),
+	level: z.string(),
+	receivedAt: z.number(),
+	// The event is opaque here: preserve extension keys instead of cloning through an object schema.
+	payload: z.unknown().refine((value): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)),
+	release: z.string().optional().catch(undefined),
+	environment: z.string().optional().catch(undefined),
+}).transform(({ release, environment, ...message }) => ({
+	...message,
+	...(release === undefined ? {} : { release }),
+	...(environment === undefined ? {} : { environment }),
+}))
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
+function decodeIngestMessage(payload: unknown): IngestMessage {
+	const result = ingestMessageSchema.safeParse(payload)
+	if (!result.success) throw new Error(result.error.issues[0]?.path.length === 0 ? 'ingest job is not an object' : 'ingest job has an invalid shape')
+	return result.data
 }
 
 export class PostgresOperationsConsumer {

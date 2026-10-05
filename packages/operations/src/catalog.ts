@@ -4,8 +4,8 @@ import {
 	type OperationsCatalogReconcileRequestV2,
 	type OperationsCatalogReconcileResponseV2,
 	operationsCatalogSnapshotHash,
-	type OperationsCatalogSourceV2,
 } from '@fabrika/operations-contract/catalog'
+import { z } from 'zod'
 import { reconcileSourceIngestCredential } from './credentials.js'
 import type { OperationsRepositories } from './repositories.js'
 import { CatalogRevisionConflictError } from './repositories.js'
@@ -15,6 +15,27 @@ const MAX_CATALOG_SOURCES = 10_000
 const COORDINATE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const SERVICE_KEY_PATTERN = /^[a-z0-9][a-z0-9._-]{0,62}$/
 const HASH_PATTERN = /^[0-9a-f]{64}$/
+
+const coordinateSchema = z.object({
+	appId: z.string().regex(COORDINATE_PATTERN),
+	environment: z.string().regex(COORDINATE_PATTERN),
+	serviceKey: z.string().regex(SERVICE_KEY_PATTERN).optional(),
+}).transform(({ appId, environment, serviceKey }) => ({ appId, environment, ...(serviceKey === undefined ? {} : { serviceKey }) }))
+const catalogSourceSchema = z.object({
+	coordinate: coordinateSchema,
+	displayName: z.string().max(256).refine((value) => value.trim() !== ''),
+	publicOrigin: z.string().max(2_048).refine(validPublicOrigin).nullable().optional(),
+	ingestCredential: z.object({
+		id: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+		publicKey: z.string().regex(/^[0-9a-f]{32}$/),
+	}),
+}).transform(({ publicOrigin, ...source }) => ({ ...source, ...(publicOrigin === undefined ? {} : { publicOrigin }) }))
+const catalogRequestSchema = z.object({
+	protocolVersion: z.literal(OPERATIONS_CATALOG_PROTOCOL_VERSION),
+	revision: z.number().int().safe().min(1),
+	snapshotHash: z.string().regex(HASH_PATTERN),
+	sources: z.array(catalogSourceSchema).max(MAX_CATALOG_SOURCES),
+})
 
 export interface CatalogHandlerOptions {
 	repositories: OperationsRepositories
@@ -90,90 +111,22 @@ export async function handleOperationsCatalogRequest(request: Request, options: 
 }
 
 export function parseCatalogRequest(value: unknown): OperationsCatalogReconcileRequestV2 {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-		throw new CatalogRequestError(400, 'invalid catalog request')
+	const result = catalogRequestSchema.safeParse(value)
+	if (!result.success) {
+		const issue = result.error.issues[0]
+		const field = issue?.path[0]
+		let message = 'invalid catalog request'
+		if (field === 'protocolVersion') message = 'unsupported catalog protocol version'
+		else if (field === 'revision') message = 'invalid catalog revision'
+		else if (field === 'snapshotHash') message = 'invalid catalog snapshot hash'
+		else if (field === 'sources') {
+			message = issue.path.length === 1 ? 'invalid catalog sources' : 'invalid catalog source'
+			if (issue.path.length === 3 && issue.path[2] === 'coordinate') message = 'invalid source coordinate'
+		}
+		throw new CatalogRequestError(400, message)
 	}
-	const protocolVersion = Reflect.get(value, 'protocolVersion')
-	const revision = Reflect.get(value, 'revision')
-	const snapshotHash = Reflect.get(value, 'snapshotHash')
-	const rawSources = Reflect.get(value, 'sources')
-	if (protocolVersion !== OPERATIONS_CATALOG_PROTOCOL_VERSION) {
-		throw new CatalogRequestError(400, 'unsupported catalog protocol version')
-	}
-	if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) {
-		throw new CatalogRequestError(400, 'invalid catalog revision')
-	}
-	if (typeof snapshotHash !== 'string' || !HASH_PATTERN.test(snapshotHash)) {
-		throw new CatalogRequestError(400, 'invalid catalog snapshot hash')
-	}
-	if (!Array.isArray(rawSources) || rawSources.length > MAX_CATALOG_SOURCES) {
-		throw new CatalogRequestError(400, 'invalid catalog sources')
-	}
-	const sources = rawSources.map(parseCatalogSource)
-	assertUniqueCoordinates(canonicalOperationsCatalogSources(sources))
-	return {
-		protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
-		revision,
-		snapshotHash,
-		sources,
-	}
-}
-
-function parseCatalogSource(value: unknown): OperationsCatalogSourceV2 {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-		throw new CatalogRequestError(400, 'invalid catalog source')
-	}
-	const coordinate = Reflect.get(value, 'coordinate')
-	const displayName = Reflect.get(value, 'displayName')
-	const publicOrigin = Reflect.get(value, 'publicOrigin')
-	const ingestCredential = Reflect.get(value, 'ingestCredential')
-	if (typeof coordinate !== 'object' || coordinate === null || Array.isArray(coordinate)) {
-		throw new CatalogRequestError(400, 'invalid source coordinate')
-	}
-	const appId = Reflect.get(coordinate, 'appId')
-	const environment = Reflect.get(coordinate, 'environment')
-	const serviceKey = Reflect.get(coordinate, 'serviceKey')
-	if (
-		typeof appId !== 'string'
-		|| !COORDINATE_PATTERN.test(appId)
-		|| typeof environment !== 'string'
-		|| !COORDINATE_PATTERN.test(environment)
-		|| (serviceKey !== undefined && (typeof serviceKey !== 'string' || !SERVICE_KEY_PATTERN.test(serviceKey)))
-		|| typeof displayName !== 'string'
-		|| displayName.trim() === ''
-		|| displayName.length > 256
-		|| (publicOrigin !== undefined && publicOrigin !== null && !validPublicOrigin(publicOrigin))
-		|| typeof ingestCredential !== 'object'
-		|| ingestCredential === null
-		|| Array.isArray(ingestCredential)
-		|| !validCredentialId(Reflect.get(ingestCredential, 'id'))
-		|| !validPublicKey(Reflect.get(ingestCredential, 'publicKey'))
-	) {
-		throw new CatalogRequestError(400, 'invalid catalog source')
-	}
-	const credentialId = Reflect.get(ingestCredential, 'id')
-	const publicKey = Reflect.get(ingestCredential, 'publicKey')
-	if (typeof credentialId !== 'string' || typeof publicKey !== 'string') {
-		throw new CatalogRequestError(400, 'invalid catalog source')
-	}
-	return {
-		coordinate: {
-			appId,
-			environment,
-			...(serviceKey === undefined ? {} : { serviceKey }),
-		},
-		displayName,
-		...(publicOrigin === undefined ? {} : { publicOrigin }),
-		ingestCredential: { id: credentialId, publicKey },
-	}
-}
-
-function validCredentialId(value: unknown): boolean {
-	return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
-}
-
-function validPublicKey(value: unknown): boolean {
-	return typeof value === 'string' && /^[0-9a-f]{32}$/.test(value)
+	assertUniqueCoordinates(canonicalOperationsCatalogSources(result.data.sources))
+	return result.data
 }
 
 function validPublicOrigin(value: unknown): boolean {

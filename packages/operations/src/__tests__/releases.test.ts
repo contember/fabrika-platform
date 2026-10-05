@@ -444,6 +444,31 @@ describe('Operations release projection', () => {
 })
 
 describe('authenticated source-map artifacts', () => {
+	test('accepts opaque upload fields without rewriting bytes while the consumer falls back', async () => {
+		const harness = createHarness(() => NOW_MS)
+		const blobs = new MemoryBlobs()
+		await seedSource(harness, 'source-notes', 'notes')
+		const release = projection({ runId: 'run-upload', verifier: await sha256Hex(BEARER) })
+		await reconcileOperationsRelease(harness.repositories, release)
+		if (release.release.kind !== 'available') throw new Error('expected release')
+		const body = '{ "version": null, "sources": [null, 42], "mappings": "AAAA", "extension": true }\n'
+		const digest = await sha256Hex(body)
+		const response = await handleSourceMapUploadRequest(uploadRequest({ release: release.release.name, body, digest }), {
+			repositories: harness.repositories,
+			artifacts: blobs,
+			now: () => NOW_MS,
+		})
+		expect(response.status).toBe(201)
+		expect([...blobs.values.values()].map((bytes) => new TextDecoder().decode(bytes))).toEqual([body])
+		const frames = await resolveFrames(
+			[{ filename: 'assets/admin/app.js', line: 1, column: 1 }],
+			'source-notes',
+			release.release.name,
+			operationsSourceMapReader(harness.repositories, blobs),
+		)
+		expect(frames[0]?.resolved).toBe(false)
+	})
+
 	test('binds scope, digest and full logical path without overwrite', async () => {
 		const harness = createHarness(() => NOW_MS)
 		const blobs = new MemoryBlobs()

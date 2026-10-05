@@ -1,9 +1,5 @@
 import type { OperationsOperatorOptions } from './context.js'
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 export function numeric(value: number | string): number {
 	const parsed = typeof value === 'number' ? value : Number(value)
 	if (!Number.isSafeInteger(parsed)) throw new Error('invalid stored numeric value')

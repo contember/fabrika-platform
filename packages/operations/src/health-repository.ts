@@ -1,4 +1,5 @@
 import type { SqlDatabase } from '@fabrika/platform'
+import { z } from 'zod'
 import {
 	DEFAULT_FAILURE_THRESHOLD,
 	DEFAULT_HEALTH_HISTORY_LIMIT,
@@ -548,21 +549,19 @@ function healthObservationRow(row: HealthObservationDatabaseRow): HealthObservat
 	}
 }
 
+const healthStateSchema = z.enum(['healthy', 'degraded', 'failed', 'stale', 'unavailable'])
+const detailCodeSchema = z.enum(['ok', 'unexpected_status', 'redirect', 'timeout', 'cancelled', 'network_error'])
+
 function healthState(value: string): HealthState {
-	if (value === 'healthy' || value === 'degraded' || value === 'failed' || value === 'stale' || value === 'unavailable') return value
-	throw new Error('invalid stored health state')
+	const result = healthStateSchema.safeParse(value)
+	if (!result.success) throw new Error('invalid stored health state')
+	return result.data
 }
 
 function detailCode(value: string): HttpCheckDetailCode {
-	if (
-		value === 'ok'
-		|| value === 'unexpected_status'
-		|| value === 'redirect'
-		|| value === 'timeout'
-		|| value === 'cancelled'
-		|| value === 'network_error'
-	) return value
-	throw new Error('invalid stored health detail code')
+	const result = detailCodeSchema.safeParse(value)
+	if (!result.success) throw new Error('invalid stored health detail code')
+	return result.data
 }
 
 function positiveInteger(value: number, label: string): number {

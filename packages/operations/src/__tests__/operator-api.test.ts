@@ -4,7 +4,7 @@ import type { BlobStore, JobQueue } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import { SqliteHealthRepository } from '../health-repository.js'
 import { type OperationsOperatorOptions, OperationsOperatorUseCases } from '../operator-api.js'
-import { healthCheckInput, issueMutation } from '../operator-input.js'
+import { healthCheckSchema, issueMutationSchema } from '../operator-input.js'
 import { persistIngest } from '../pipeline.js'
 import { createHarness } from './helpers/sqlite.js'
 
@@ -438,7 +438,10 @@ describe('Operations operator use cases', () => {
 		const audits: DomainEvent[] = []
 		const input = options(auth({ audits }))
 		const issueId = await seedSource(input, 'source-a', 'app-a', 'fingerprint-a', 1_000)
-		const response = await operations(input).mutateIssue(issueId, issueMutation({ kind: 'assign', principalId: 'owner-id', principalLabel: 'spoofed' }))
+		const response = await operations(input).mutateIssue(
+			issueId,
+			issueMutationSchema.parse({ kind: 'assign', principalId: 'owner-id', principalLabel: 'spoofed' }),
+		)
 		expect(response).toMatchObject({
 			issue: { assignedTo: { id: 'owner-id', label: 'owner@example.test' } },
 		})
@@ -582,7 +585,7 @@ describe('Operations operator use cases', () => {
 		await seedSource(input, 'source-a', 'app-a', 'fingerprint-a', 1_000)
 		await operations(input).createHealthCheck(
 			'source-a',
-			healthCheckInput({
+			healthCheckSchema.parse({
 				path: '/health',
 				enabled: true,
 				intervalMs: 60_000,

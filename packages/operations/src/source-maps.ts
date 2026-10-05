@@ -1,6 +1,7 @@
 import type { DisplayFrame, SourceContext, StackFrame } from '@fabrika/operations-contract'
 import { SourceMapConsumer } from 'source-map-js'
 import type { RawSourceMap } from 'source-map-js'
+import { z } from 'zod'
 
 export interface ObjectReader {
 	get(key: string): Promise<{ text(): Promise<string> } | null>
@@ -9,37 +10,19 @@ export interface ObjectReader {
 
 const CONTEXT_RADIUS = 5
 
-function readStringArray(value: unknown): string[] | null {
-	if (!Array.isArray(value)) return null
-	const strings: string[] = []
-	for (const item of value) {
-		if (typeof item !== 'string') return null
-		strings.push(item)
-	}
-	return strings
-}
+const rawSourceMapSchema = z.object({
+	version: z.union([z.string(), z.number()]).transform(String),
+	sources: z.array(z.string()),
+	names: z.array(z.string()),
+	mappings: z.string(),
+	file: z.string().optional().catch(undefined),
+	sourceRoot: z.string().optional().catch(undefined),
+	sourcesContent: z.array(z.string()).optional(),
+})
 
 function parseRawSourceMap(value: unknown): RawSourceMap | null {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-	if (!('sources' in value) || !('names' in value) || !('mappings' in value) || !('version' in value)) return null
-	const sources = readStringArray(value.sources)
-	const names = readStringArray(value.names)
-	if (!sources || !names || typeof value.mappings !== 'string') return null
-	if (typeof value.version !== 'string' && typeof value.version !== 'number') return null
-	const result: RawSourceMap = {
-		version: String(value.version),
-		sources,
-		names,
-		mappings: value.mappings,
-	}
-	if ('file' in value && typeof value.file === 'string') result.file = value.file
-	if ('sourceRoot' in value && typeof value.sourceRoot === 'string') result.sourceRoot = value.sourceRoot
-	if ('sourcesContent' in value) {
-		const sourcesContent = readStringArray(value.sourcesContent)
-		if (!sourcesContent) return null
-		result.sourcesContent = sourcesContent
-	}
-	return result
+	const result = rawSourceMapSchema.safeParse(value)
+	return result.success ? result.data : null
 }
 
 export function frameBasename(fileReference: string): string {

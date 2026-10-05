@@ -266,6 +266,19 @@ describe.skipIf(postgresUrl === null)('Postgres Operations raw deliveries', () =
 			.run()
 	}
 
+	test('decodes tolerant queue metadata and preserves opaque payload keys in persisted bytes', async () => {
+		const rawPayload = '{"message":"kept","__proto__":{"extension":true},"nested":[null,42]}'
+		const rawJob =
+			`{"projectId":"source-a","fingerprint":"fp-opaque","eventId":"opaque-event","title":"Error","culprit":null,"level":"error","receivedAt":1000,"release":42,"environment":null,"ignored":true,"payload":${rawPayload}}`
+		await insertInvalid('opaque-job', rawJob, 1_000_000, 0)
+		const queue = createOperationsIngestQueue(db, { now: () => 1_000_000 })
+		const blobs = new MemoryBlobs()
+		const consumer = new PostgresOperationsConsumer(queue, { repositories, payloads: blobs, ingestQueue: queue })
+		expect(await consumer.poll()).toBe(1)
+		expect([...blobs.values.values()]).toEqual([rawPayload])
+		expect((await db.prepare('SELECT id FROM jobs').all()).results).toEqual([])
+	})
+
 	test.each(['{private', '{"payload":"private"}'])('invalid %s retries below budget and abandons at six while persisting peers', async (payload) => {
 		let now = 1_000_000
 		const kind = payload.startsWith('{"') ? 'shape' : 'json'

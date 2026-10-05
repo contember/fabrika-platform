@@ -1,5 +1,6 @@
 import { HttpIamRpc } from '@fabrika/auth'
 import { PostgresDatabase, S3BlobStore } from '@fabrika/platform-node'
+import { z } from 'zod'
 import { OperationsAlertProducer } from '../alerts.js'
 import { createOperationsIam } from '../auth.js'
 import { PostgresHealthRepository } from '../health-repository.js'
@@ -90,16 +91,22 @@ export function resolveOperationsIamProcessConfig(source: Record<string, string 
 }
 
 function required(source: Record<string, string | undefined>, name: string): string {
-	const value = optional(source, name)
-	if (value === undefined) throw new Error(`${name} is required`)
-	return value
+	const result = requiredEnvironmentValue.safeParse(source[name])
+	if (!result.success) throw new Error(`${name} is required`)
+	return result.data
 }
 
 function requiredSecret(source: Record<string, string | undefined>, name: string): string {
 	const value = required(source, name)
-	if (value.length < 32) throw new Error(`${name} must be at least 32 characters`)
-	return value
+	const result = secretEnvironmentValue.safeParse(value)
+	if (!result.success) throw new Error(`${name} must be at least 32 characters`)
+	return result.data
 }
+
+const requiredEnvironmentValue = z.string().refine((value) => value.trim() !== '')
+const secretEnvironmentValue = requiredEnvironmentValue.pipe(z.string().min(32))
+const portSchema = z.string().optional().transform((value) => value === undefined || value === '' ? 3000 : Number(value))
+	.pipe(z.number().int().min(1).max(65_535))
 
 function optional(source: Record<string, string | undefined>, name: string): string | undefined {
 	const value = source[name]
@@ -107,8 +114,7 @@ function optional(source: Record<string, string | undefined>, name: string): str
 }
 
 function parsePort(value: string | undefined): number {
-	if (value === undefined || value === '') return 3000
-	const port = Number(value)
-	if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error('PORT must be an integer between 1 and 65535')
-	return port
+	const result = portSchema.safeParse(value)
+	if (!result.success) throw new Error('PORT must be an integer between 1 and 65535')
+	return result.data
 }

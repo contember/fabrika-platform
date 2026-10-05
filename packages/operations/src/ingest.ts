@@ -1,4 +1,5 @@
 import type { ParsedEvent, ParsedException, StackFrame } from '@fabrika/operations-contract/ingest'
+import { envelopeItemSchema, sentryExceptionSchema } from './event-schemas.js'
 
 export interface ParsedEnvelope {
 	eventPayload: Record<string, unknown> | null
@@ -27,70 +28,13 @@ function readString(record: Record<string, unknown>, key: string): string | unde
 	return typeof value === 'string' ? value : undefined
 }
 
-function readNumber(record: Record<string, unknown>, key: string): number | undefined {
-	const value = record[key]
-	return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
-	const value = record[key]
-	return typeof value === 'boolean' ? value : undefined
-}
-
-function readStringArray(value: unknown): string[] | undefined {
-	if (!Array.isArray(value)) return undefined
-	const strings: string[] = []
-	for (const item of value) {
-		if (typeof item !== 'string') return undefined
-		strings.push(item)
-	}
-	return strings
-}
-
-function parseFrame(value: unknown): StackFrame | null {
-	if (!isRecord(value)) return null
-	const frame: StackFrame = {}
-	const functionName = readString(value, 'function')
-	const filename = readString(value, 'filename')
-	const module = readString(value, 'module')
-	const absPath = readString(value, 'abs_path')
-	const line = readNumber(value, 'lineno')
-	const column = readNumber(value, 'colno')
-	const inApp = readBoolean(value, 'in_app')
-	const preContext = readStringArray(value['pre_context'])
-	const contextLine = readString(value, 'context_line')
-	const postContext = readStringArray(value['post_context'])
-	if (functionName !== undefined) frame.function = functionName
-	if (filename !== undefined) frame.filename = filename
-	if (module !== undefined) frame.module = module
-	if (absPath !== undefined) frame.absPath = absPath
-	if (line !== undefined) frame.line = line
-	if (column !== undefined) frame.column = column
-	if (inApp !== undefined) frame.inApp = inApp
-	if (preContext !== undefined) frame.preContext = preContext
-	if (contextLine !== undefined) frame.contextLine = contextLine
-	if (postContext !== undefined) frame.postContext = postContext
-	return frame
-}
-
-function parseFrames(value: unknown): StackFrame[] {
-	if (!Array.isArray(value)) return []
-	const frames: StackFrame[] = []
-	for (const item of value) {
-		const frame = parseFrame(item)
-		if (frame) frames.push(frame)
-	}
-	return frames
-}
-
 function parseExceptionValue(value: unknown): ParsedException | null {
-	if (!isRecord(value)) return null
-	const stacktrace = value['stacktrace']
-	const frames = isRecord(stacktrace) ? parseFrames(stacktrace['frames']) : []
+	const parsed = sentryExceptionSchema.safeParse(value)
+	if (!parsed.success) return null
 	return {
-		type: readString(value, 'type') ?? 'Error',
-		value: readString(value, 'value') ?? '',
-		frames,
+		type: parsed.data.type ?? 'Error',
+		value: parsed.data.value ?? '',
+		frames: parsed.data.stacktrace?.frames ?? [],
 	}
 }
 
@@ -201,13 +145,9 @@ export function parseEventEnvelope(body: Uint8Array, maxEventItems = 32): Parsed
 		if (!itemHeaderLine) throw new EnvelopeParseError('missing item header terminator')
 		offset = itemHeaderLine.next
 		if (itemHeaderLine.bytes.length === 0) continue
-		const itemHeader = parseJsonRecord(itemHeaderLine.bytes, 'invalid item header')
-		const type = itemHeader['type']
-		if (typeof type !== 'string' || type.length === 0) throw new EnvelopeParseError('invalid item type')
-		const length = itemHeader['length']
-		if (length !== undefined && (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0)) {
-			throw new EnvelopeParseError('invalid item length')
-		}
+		const itemHeader = envelopeItemSchema.safeParse(parseJsonRecord(itemHeaderLine.bytes, 'invalid item header'))
+		if (!itemHeader.success) throw new EnvelopeParseError(itemHeader.error.issues[0]?.path[0] === 'type' ? 'invalid item type' : 'invalid item length')
+		const { type, length } = itemHeader.data
 
 		let payload: Uint8Array
 		if (typeof length === 'number') {

@@ -1,4 +1,5 @@
 import type { EventBreadcrumb, EventDetail, EventException, StackFrame } from '@fabrika/operations-contract'
+import { sentryBreadcrumbSchema, sentryExceptionSchema, sentryRequestSchema, sentryRuntimeSchema, sentryUserSchema } from './event-schemas.js'
 import type { ObjectReader } from './source-maps.js'
 import { resolveFrames } from './source-maps.js'
 
@@ -11,62 +12,6 @@ function readString(record: Record<string, unknown>, key: string): string | unde
 	return typeof value === 'string' ? value : undefined
 }
 
-function readNumber(record: Record<string, unknown>, key: string): number | undefined {
-	const value = record[key]
-	return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
-	const value = record[key]
-	return typeof value === 'boolean' ? value : undefined
-}
-
-function readStringArray(value: unknown): string[] | undefined {
-	if (!Array.isArray(value)) return undefined
-	const result: string[] = []
-	for (const item of value) {
-		if (typeof item !== 'string') return undefined
-		result.push(item)
-	}
-	return result
-}
-
-function parseFrame(value: unknown): StackFrame | null {
-	if (!isRecord(value)) return null
-	const frame: StackFrame = {}
-	const functionName = readString(value, 'function')
-	const filename = readString(value, 'filename')
-	const module = readString(value, 'module')
-	const absPath = readString(value, 'abs_path')
-	const line = readNumber(value, 'lineno')
-	const column = readNumber(value, 'colno')
-	const inApp = readBoolean(value, 'in_app')
-	const preContext = readStringArray(value['pre_context'])
-	const contextLine = readString(value, 'context_line')
-	const postContext = readStringArray(value['post_context'])
-	if (functionName !== undefined) frame.function = functionName
-	if (filename !== undefined) frame.filename = filename
-	if (module !== undefined) frame.module = module
-	if (absPath !== undefined) frame.absPath = absPath
-	if (line !== undefined) frame.line = line
-	if (column !== undefined) frame.column = column
-	if (inApp !== undefined) frame.inApp = inApp
-	if (preContext !== undefined) frame.preContext = preContext
-	if (contextLine !== undefined) frame.contextLine = contextLine
-	if (postContext !== undefined) frame.postContext = postContext
-	return frame
-}
-
-function parseFrames(value: unknown): StackFrame[] {
-	if (!Array.isArray(value)) return []
-	const frames: StackFrame[] = []
-	for (const candidate of value) {
-		const frame = parseFrame(candidate)
-		if (frame) frames.push(frame)
-	}
-	return frames
-}
-
 interface RawException {
 	type: string | null
 	value: string | null
@@ -75,15 +20,13 @@ interface RawException {
 }
 
 function parseException(value: unknown): RawException | null {
-	if (!isRecord(value)) return null
-	const mechanism = value['mechanism']
-	const handled = isRecord(mechanism) && typeof mechanism['handled'] === 'boolean' ? mechanism['handled'] : null
-	const stacktrace = value['stacktrace']
+	const parsed = sentryExceptionSchema.safeParse(value)
+	if (!parsed.success) return null
 	return {
-		type: readString(value, 'type') ?? null,
-		value: readString(value, 'value') ?? null,
-		handled,
-		frames: isRecord(stacktrace) ? parseFrames(stacktrace['frames']) : [],
+		type: parsed.data.type ?? null,
+		value: parsed.data.value ?? null,
+		handled: parsed.data.mechanism?.handled ?? null,
+		frames: parsed.data.stacktrace?.frames ?? [],
 	}
 }
 
@@ -132,11 +75,11 @@ function extractTags(payload: Record<string, unknown>): { key: string; value: st
 function extractRequest(payload: Record<string, unknown>): EventDetail['request'] {
 	const request = payload['request']
 	const context = payload['context']
-	const requestRecord = isRecord(request) ? request : null
-	const contextRecord = isRecord(context) ? context : null
-	const url = requestRecord ? readString(requestRecord, 'url') : undefined
-	const contextUrl = contextRecord ? readString(contextRecord, 'url') : undefined
-	const method = requestRecord ? readString(requestRecord, 'method') : undefined
+	const requestRecord = sentryRequestSchema.safeParse(request)
+	const contextRecord = sentryRequestSchema.safeParse(context)
+	const url = requestRecord.success ? requestRecord.data.url : undefined
+	const contextUrl = contextRecord.success ? contextRecord.data.url : undefined
+	const method = requestRecord.success ? requestRecord.data.method : undefined
 	if (!url && !contextUrl && !method) return null
 	return { url: url ?? contextUrl ?? null, method: method ?? null }
 }
@@ -147,12 +90,7 @@ function extractUser(payload: Record<string, unknown>): EventDetail['user'] {
 	const contextUser = isRecord(context) ? context['user'] : undefined
 	const user = isRecord(direct) ? direct : isRecord(contextUser) ? contextUser : null
 	if (!user) return null
-	const rawId = user['id']
-	return {
-		id: typeof rawId === 'string' || typeof rawId === 'number' ? String(rawId) : null,
-		email: readString(user, 'email') ?? null,
-		username: readString(user, 'username') ?? null,
-	}
+	return sentryUserSchema.parse(user)
 }
 
 function extractBreadcrumbs(payload: Record<string, unknown>): EventBreadcrumb[] {
@@ -161,28 +99,17 @@ function extractBreadcrumbs(payload: Record<string, unknown>): EventBreadcrumb[]
 	if (!Array.isArray(values)) return []
 	const result: EventBreadcrumb[] = []
 	for (const value of values) {
-		if (!isRecord(value)) continue
-		const breadcrumb: EventBreadcrumb = {}
-		const timestamp = value['timestamp']
-		if (typeof timestamp === 'number' || typeof timestamp === 'string') breadcrumb.timestamp = timestamp
-		const type = readString(value, 'type')
-		const category = readString(value, 'category')
-		const level = readString(value, 'level')
-		const message = readString(value, 'message')
-		if (type !== undefined) breadcrumb.type = type
-		if (category !== undefined) breadcrumb.category = category
-		if (level !== undefined) breadcrumb.level = level
-		if (message !== undefined) breadcrumb.message = message
-		result.push(breadcrumb)
+		const parsed = sentryBreadcrumbSchema.safeParse(value)
+		if (parsed.success) result.push(parsed.data)
 	}
 	return result
 }
 
 function formatRuntime(value: unknown): string | null {
-	if (!isRecord(value)) return null
-	const name = readString(value, 'name')
+	const parsed = sentryRuntimeSchema.safeParse(value)
+	if (!parsed.success) return null
+	const { name, version } = parsed.data
 	if (!name) return null
-	const version = readString(value, 'version')
 	return version ? `${name} ${version}` : name
 }
 

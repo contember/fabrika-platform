@@ -1,5 +1,6 @@
 import { OPERATIONS_ARTIFACT_HEADERS, OPERATIONS_SOURCE_MAP_UPLOAD_PATH } from '@fabrika/operations-contract'
 import type { BlobStore } from '@fabrika/platform'
+import { z } from 'zod'
 import { sha256Hex } from './ingest.js'
 import type { ArtifactUploadCredentialResolution, OperationsRepositories } from './repositories.js'
 import { logicalAssetPath, type ObjectReader } from './source-maps.js'
@@ -139,6 +140,10 @@ async function readLimitedBody(request: Request, limit: number): Promise<Limited
 	return { kind: 'ok', bytes }
 }
 
+// Upload accepts opaque source entries; the resolver has a stricter consumer contract.
+const uploadedSourceMapSchema = z.object({ version: z.unknown(), mappings: z.string(), sources: z.array(z.unknown()) })
+	.refine((value) => Object.hasOwn(value, 'version'))
+
 function validSourceMap(bytes: Uint8Array): boolean {
 	let parsed: unknown
 	try {
@@ -146,14 +151,7 @@ function validSourceMap(bytes: Uint8Array): boolean {
 	} catch {
 		return false
 	}
-	return typeof parsed === 'object'
-		&& parsed !== null
-		&& !Array.isArray(parsed)
-		&& 'version' in parsed
-		&& 'mappings' in parsed
-		&& typeof parsed.mappings === 'string'
-		&& 'sources' in parsed
-		&& Array.isArray(parsed.sources)
+	return uploadedSourceMapSchema.safeParse(parsed).success
 }
 
 function parseBearer(header: string | null): string | null {

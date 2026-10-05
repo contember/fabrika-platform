@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import type {
 	IdentifiedOperatorIssueRow,
 	OperatorIssueCursor,
@@ -6,7 +7,10 @@ import type {
 	OperatorOccurrenceRow,
 } from '../repositories.js'
 import { badRequest } from './errors.js'
-import { isRecord, numeric } from './values.js'
+import { numeric } from './values.js'
+
+const issueCursorSchema = z.object({ sort: z.enum(['new', 'frequency', 'recent']), value: z.number().int().safe(), id: z.string().min(1) })
+const occurrenceCursorSchema = z.object({ receivedAt: z.number().int().safe(), id: z.string().min(1) })
 
 export function boundedLimit(value: number | undefined): number {
 	if (value === undefined) return 50
@@ -23,12 +27,9 @@ export function offsetCursor(value: string | null): number {
 
 export function issueCursor(value: string | undefined, sort: OperatorIssueSort): OperatorIssueCursor | undefined {
 	if (value === undefined || value === '') return undefined
-	const parsed = decodedCursor(value)
-	if (parsed['sort'] !== sort || typeof parsed['value'] !== 'number' || !Number.isSafeInteger(parsed['value'])) {
-		throw badRequest('invalid cursor')
-	}
-	if (typeof parsed['id'] !== 'string' || parsed['id'] === '') throw badRequest('invalid cursor')
-	return { value: parsed['value'], id: parsed['id'] }
+	const parsed = issueCursorSchema.safeParse(decodedCursor(value))
+	if (!parsed.success || parsed.data.sort !== sort) throw badRequest('invalid cursor')
+	return { value: parsed.data.value, id: parsed.data.id }
 }
 
 export function encodeIssueCursor(row: IdentifiedOperatorIssueRow, sort: OperatorIssueSort): string {
@@ -42,23 +43,21 @@ export function encodeIssueCursor(row: IdentifiedOperatorIssueRow, sort: Operato
 
 export function occurrenceCursor(value: string | undefined): OperatorOccurrenceCursor | undefined {
 	if (value === undefined || value === '') return undefined
-	const parsed = decodedCursor(value)
-	if (typeof parsed['receivedAt'] !== 'number' || !Number.isSafeInteger(parsed['receivedAt'])) throw badRequest('invalid cursor')
-	if (typeof parsed['id'] !== 'string' || parsed['id'] === '') throw badRequest('invalid cursor')
-	return { receivedAt: parsed['receivedAt'], id: parsed['id'] }
+	const parsed = occurrenceCursorSchema.safeParse(decodedCursor(value))
+	if (!parsed.success) throw badRequest('invalid cursor')
+	return parsed.data
 }
 
 export function encodeOccurrenceCursor(row: OperatorOccurrenceRow): string {
 	return encodeURIComponent(JSON.stringify({ receivedAt: numeric(row.received_at), id: row.id }))
 }
 
-function decodedCursor(value: string): Record<string, unknown> {
+function decodedCursor(value: string): unknown {
 	let parsed: unknown
 	try {
 		parsed = JSON.parse(decodeURIComponent(value))
 	} catch {
 		throw badRequest('invalid cursor')
 	}
-	if (!isRecord(parsed)) throw badRequest('invalid cursor')
 	return parsed
 }
