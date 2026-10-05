@@ -37,6 +37,8 @@ Before dispatch, the leader uses the question tool to confirm dependency changes
 
 ## Ownership and dispatch
 
+The pinned [execution territory ledger](static-validation-territories.md) defines baseline allowlists and their exclusions.
+
 Paths below are relative to the repository root. Package territories include tests, except explicit exclusions. The leader expands them into exact file allowlists and checks pairwise intersections before dispatch.
 
 **Leader-only:** `package.json` files, `bun.lock`, export barrels, tool/TypeScript/CI configuration, generated artifacts, `CLAUDE.md` files and `docs/**`. Runtime entrypoints named `index.ts` are not automatically barrels. Pause a territory before leader edits there. Implementers report missing exports/dependencies rather than changing them.
@@ -188,6 +190,10 @@ The upstream check needs offline unchanged/changed fixtures; network failure is 
 - Push, deployment, publication and the platform-wide production review.
 
 ## Run log
+
+- User approved temporarily stopping `fabrika-builder-spike` for final smoke/browser tests, preserving its data and restarting the original containers afterwards. No stack has been stopped yet.
+
+- Integration preparation: created dedicated `fabrika-validation-pg` (loopback port 55439) and `fabrika-validation-s3` (59009) test containers using the repository's documented fixtures; both healthy and SQL/S3 probe tests pass. Existing test DB on 55433 did not accept the documented fixture credentials and was left untouched. An existing stack occupies browser ports 18080/18081; do not stop it or run disruptive smoke against it. Full typecheck during active edits observed unfinished source exports and pending annotation schema exports, so it is not a baseline or final result; rerun after units settle.
 
 - WU00: Standard Schema dispatch witness passed (17 tests / 39 assertions). Installed Zod 3.25.76 exposes Standard Schema. Root lint passed with existing warnings/informational diagnostics. Release validation requires an explicit tag off a release commit; `--tag=v0.0.4` passed for all 28 public packages. Dependency manifests are reserved centrally; final integration removes any dependency unused by a retained boundary. WU01/WU03/WU06/WU14 dispatched into disjoint territories.
 
