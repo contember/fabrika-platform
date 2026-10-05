@@ -44,12 +44,12 @@ The implementation specifications were prepared by four independent agents. Exis
 - **Acceptance / witness.** Existing install/deploy tests retain service resolution, error behavior and effect ordering.
 - **Touch points.** `packages/installation-zerops/src/deploy.ts`, `packages/installation-zerops/src/install-provisioning.ts`.
 
-### WU4 — Reuse decoded Zerops registration values (M)
+### WU4 — Reuse the shared decoder in Zerops (S; C2 deferred)
 
-- **Problem.** Adjacent codec cycles obscure validated data flow.
-- **Verify first.** Establish normalization/codec fixed points, optional-field ownership, hashes and alias detachment through public entrypoints.
-- **Scope.** Use the shared decoder; retain typed canonical parts inside one invocation. Keep independent entrypoint/recovery validation. Use native cloning only where it preserves the old artifact detachment.
-- **Acceptance / witness.** Canonical envelopes, descriptor/manifest identity, hook isolation, exact errors and no-effect refusal remain equivalent. A failed codec fixed-point witness blocks removal of that cycle.
+- **Problem.** The local decoder repeats the neutral implementation. The proposed adjacent-cycle removal had an incorrect artifact-detachment assumption.
+- **Verify first.** Check all eight decoder callers and independently characterize current hook/runtime reference sharing.
+- **Scope.** Use the shared decoder with the same kind strings, codecs, validation order and errors. Keep all normalization codec cycles; the user deferred C2 after reviewing its compatibility and complexity tradeoffs.
+- **Acceptance / witness.** Existing provider behavior and exact-error/refusal tests pass. The hook characterization records baseline selective sharing, not successful C2 isolation.
 - **Touch points.** `packages/provider-zerops/src/control.ts`, `packages/provider-zerops/src/__tests__/control.test.ts`.
 
 ### WU5 — Bind Cloudflare delivery to the selected commit (L)
@@ -65,6 +65,7 @@ The implementation specifications were prepared by four independent agents. Exis
 - Installation pin policy and `plan/admin/upgrade` UX need separate product decisions and an operator-owned live installation.
 - Retain public `dependsOn` metadata, third-party installation loading, bound method shapes and current runtime-session APIs.
 - No stateless registration move, new scheduler, provider registry, source service or dependency.
+- C2 registration-cycle removal is deferred: hook pipeline arrays currently share runtime artifact identity while import-tree edits are detached. Placement-only reuse adds private seams for two fewer decodes without a demonstrated net simplicity benefit.
 - No live-cloud mutation, push, deployment, publication or closure of the existing Zerops readiness sprint.
 - Cloudflare readiness backlog 64/88/89 and Zerops readiness WU4/WU5/WU6 retain their existing owners and gates.
 
@@ -80,6 +81,7 @@ The durable source-identity and admission decision is [ADR-0048](../decisions/00
 - Control checks an authenticated read-only Worker protocol capability before submission. The Worker checks the image's health capability before POSTing a job.
 - The detached runner/image must precede Control in a future operator-owned CI rollout.
 - Both providers retain the same observable source/release guarantees and their native execution mechanics.
+- After the verify-first witness and independent review disproved full artifact detachment, the user approved deferring C2. Preserve current hook behavior and artifact/hash timing; isolate the hook only through a separate explicit contract decision.
 
 ## Sequencing
 
@@ -100,3 +102,5 @@ CPU-heavy checks use `cpu-lease`. Local Git witnesses need no cloud credentials.
 - 2026-10-05: User approved the bounded wave and exact-source contract after specification review. Four completed specifications were preserved across the server restart; implementation started from the unchanged baseline.
 - 2026-10-05: WU1 → `4cbbe3a`, WU2 → `c3111d5`, WU3 → `f46752d`. Each passed independent review. Leader verification: provider-contract 13/13; Zerops provider and installation install/deploy 143/143; root typecheck, scoped formatting and lint passed. Consumer packaging and the final full suite remain open.
 - 2026-10-05: Dedicated ephemeral PostgreSQL 17 and SeaweedFS backends are ready. Leader backend setup check: S3 blob and real-PostgreSQL run-fencing suites, 17 passed, zero failures or prerequisite skips. These backends are isolated from other local stacks and will be removed after final checks.
+- 2026-10-05: Independent Cloudflare step review confirmed exact native Git checkout and the old runner's SHA-named-branch counterexample. Plan corrections: settle known pre-POST image refusal through the existing failed runner outcome; preserve original deployment abort reasons on rejected awaits; put the joined witness in Control's existing typechecked test program. No API or scope change.
+- 2026-10-05: C2 verify-first witness and independent review confirmed selective aliasing: hook pipeline edits reach the runtime artifact/checkpoint hash, while import-tree edits do not. No C2 production changes were made. The user weighed the options and approved deferral; WU4 now lands only shared decoder consumption and bounded regression evidence. Leader ran the pre-trim Control suite: 114 passed, zero failures.
