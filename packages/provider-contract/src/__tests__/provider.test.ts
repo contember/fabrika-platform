@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test'
-import { createProvider, decodeEnvelope, type JsonValue, type ProviderCodec, type ProviderDeployResult } from '..'
+import { createProvider, decodeEnvelope, type JsonValue, type ProviderCodec } from '..'
 
 interface HarborTarget {
 	region: string
@@ -137,17 +137,6 @@ describe('createProvider', () => {
 		})
 
 		await session.execute('rollout')
-		const firstStep = session.plan.steps[0]
-		if (firstStep === undefined) {
-			throw new Error('expected a rollout step')
-		}
-		const result: ProviderDeployResult = {
-			appId: 'api',
-			env: 'production',
-			status: 'succeeded',
-			plan: session.plan,
-			steps: [{ spec: firstStep, status: 'succeeded' }],
-		}
 
 		expect(harbor.id).toBe('harbor')
 		expect(target).toEqual({ provider: 'harbor', version: 3, payload: { region: 'eu-west' } })
@@ -158,7 +147,6 @@ describe('createProvider', () => {
 		})
 		expect(externalIds).toEqual(['harbor:eu-west'])
 		expect(executed).toEqual(['rollout'])
-		expect(result.status).toBe('succeeded')
 	})
 
 	test('rejects an envelope owned by another provider before decoding it', async () => {

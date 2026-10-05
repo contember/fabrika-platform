@@ -3,7 +3,6 @@ import {
 	decodeGitHubSourceConnectionListInput,
 	GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE,
 	GITHUB_SOURCE_CONNECTION_PAGE_CURSOR_MAX_LENGTH,
-	type GitHubSourceConnectionListResponse,
 } from '../index'
 
 describe('GitHub source connection collection contract', () => {
@@ -29,18 +28,5 @@ describe('GitHub source connection collection contract', () => {
 			return
 		}
 		throw new Error('expected decoder to reject an unknown field')
-	})
-
-	test('projects stable connections separately from the one global workflow', () => {
-		const page: GitHubSourceConnectionListResponse = {
-			items: [],
-			nextCursor: null,
-			workflow: { provider: 'zerops', kind: 'github-app', state: 'anonymous' },
-		}
-		expect(page).toEqual({
-			items: [],
-			nextCursor: null,
-			workflow: { provider: 'zerops', kind: 'github-app', state: 'anonymous' },
-		})
 	})
 })
