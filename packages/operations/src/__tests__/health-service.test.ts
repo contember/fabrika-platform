@@ -131,7 +131,7 @@ describe('Operations health execution', () => {
 	})
 
 	test('bounds concurrency and refuses a lease shorter than the worst-case batch duration', async () => {
-		let now = 0
+		const now = 0
 		const { health } = await setup(() => now)
 		await health.upsertCheck({
 			id: 'check-b',
@@ -153,7 +153,13 @@ describe('Operations health execution', () => {
 			})
 		).toThrow('health lease must be at least 90000ms')
 
-		const starts: number[] = []
+		const firstStarted = Promise.withResolvers<void>()
+		const secondStarted = Promise.withResolvers<void>()
+		const firstResponse = Promise.withResolvers<Response>()
+		const secondResponse = Promise.withResolvers<Response>()
+		let started = 0
+		let active = 0
+		let peak = 0
 		let nextId = 0
 		const execution = new OperationsHealthExecution(health, {
 			now: () => now,
@@ -161,15 +167,41 @@ describe('Operations health execution', () => {
 			httpBatchSize: 2,
 			httpConcurrency: 1,
 			leaseMs: 90_000,
-			fetch: () => {
-				starts.push(now)
-				now += 30_000
-				return Promise.resolve(new Response(null, { status: 200 }))
+			fetch: async () => {
+				started++
+				active++
+				peak = Math.max(peak, active)
+				const response = started === 1 ? firstResponse : secondResponse
+				const entered = started === 1 ? firstStarted : secondStarted
+				entered.resolve()
+				try {
+					return await response.promise
+				} finally {
+					active--
+				}
 			},
 		})
-		expect(await execution.run()).toMatchObject({ claimedChecks: 2, recordedChecks: 2, errors: 0 })
-		expect(starts).toEqual([0, 30_000])
-		expect(starts.every((startedAt) => startedAt < 90_000)).toBe(true)
+		const running = execution.run()
+		const deadline = Promise.withResolvers<never>()
+		const timer = setTimeout(() => deadline.reject(new Error('health checks did not complete')), 1_000)
+		try {
+			await Promise.race([firstStarted.promise, deadline.promise])
+			expect(started).toBe(1)
+			expect(active).toBe(1)
+			firstResponse.resolve(new Response(null, { status: 200 }))
+			await Promise.race([secondStarted.promise, deadline.promise])
+			expect(active).toBe(1)
+			secondResponse.resolve(new Response(null, { status: 200 }))
+			expect(await Promise.race([running, deadline.promise])).toMatchObject({ claimedChecks: 2, recordedChecks: 2, errors: 0 })
+			expect(started).toBe(2)
+			expect(peak).toBe(1)
+			expect(active).toBe(0)
+		} finally {
+			clearTimeout(timer)
+			firstResponse.resolve(new Response(null, { status: 200 }))
+			secondResponse.resolve(new Response(null, { status: 200 }))
+			await running
+		}
 	})
 
 	test('scheduler cancellation releases the lease without recording an application failure', async () => {

@@ -86,17 +86,32 @@ describe('deploy', () => {
 		expect(result.steps[1]?.error).toBe('release rejected')
 	})
 
-	test('owns cancellation transitions independently of provider implementation', async () => {
+	test('abandons an in-flight provider wait on cancellation without starting the next step', async () => {
 		const controller = new AbortController()
-		const provider = fakeProvider(plan('release', 'verify'), async () => {
-			controller.abort()
+		const started = Promise.withResolvers<void>()
+		const providerFinished = Promise.withResolvers<void>()
+		const executed: string[] = []
+		const provider = fakeProvider(plan('release', 'verify'), (stepId) => {
+			executed.push(stepId)
+			started.resolve()
+			return providerFinished.promise
 		})
-
-		const result = await deploy(provider, makeRun({ signal: controller.signal }))
-
-		expect(result.status).toBe('failed')
-		expect(result.steps.map((step) => step.status)).toEqual(['failed', 'skipped'])
-		expect(result.steps[0]?.error).toBe(CANCELLED)
+		const deadline = Promise.withResolvers<never>()
+		const timer = setTimeout(() => deadline.reject(new Error('engine did not abandon the provider wait')), 1_000)
+		const deploying = deploy(provider, makeRun({ signal: controller.signal }))
+		try {
+			await Promise.race([started.promise, deadline.promise])
+			controller.abort()
+			const result = await Promise.race([deploying, deadline.promise])
+			expect(result.status).toBe('failed')
+			expect(result.steps.map((step) => step.status)).toEqual(['failed', 'skipped'])
+			expect(result.steps[0]?.error).toBe(CANCELLED)
+			expect(executed).toEqual(['release'])
+		} finally {
+			clearTimeout(timer)
+			providerFinished.resolve()
+			await deploying
+		}
 	})
 
 	test('rejects a provider plan for different run coordinates', async () => {
