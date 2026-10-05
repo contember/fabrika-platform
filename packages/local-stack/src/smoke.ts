@@ -399,11 +399,26 @@ const proveRestartReconciliation = async (
 	fixtures: LocalSourceManifest,
 ): Promise<{ runId: string; commitSha: string; checkpoint: ManagedCheckpoint }> => {
 	// Manual, not webhook-driven: triggering by delivery needs an app bound to a keyed connection.
+	console.info(`Submitting immutable Notes deploy for ${fixtures.application.commitSha}`)
 	const triggered = await controlRequest('deploy', machineKey, { appId: NOTES_APP_ID, env: NOTES_ENVIRONMENT, ref: fixtures.application.commitSha })
 	const runId = idResponseSchema.parse(triggered).id
+	console.info(`Deploy ${runId} accepted; waiting for its durable build_triggered checkpoint`)
+	let observedPhase: string | undefined
 	const checkpoint = await poll(
 		'a durable build_triggered checkpoint',
-		() => readRunCheckpoint(runId),
+		async () => {
+			const checkpoint = await readRunCheckpoint(runId)
+			const phase = checkpoint?.phase ?? 'no checkpoint yet'
+			if (phase !== observedPhase) {
+				console.info(`Deploy ${runId}: ${phase}`)
+				observedPhase = phase
+			}
+			const run = runViewSchema.parse(await controlRequest('runs.get', machineKey, { runId }))
+			if (run.status === 'failed' || run.status === 'cancelled') {
+				throw new Error(`Deploy ${runId} became ${run.status} before the hard-kill witness (${phase})`)
+			}
+			return checkpoint
+		},
 		(value) => value?.phase === 'build_triggered',
 	)
 	if (
@@ -867,7 +882,7 @@ const main = async (): Promise<void> => {
 }
 
 if (import.meta.main) {
-	main().catch((error: unknown) => {
+	await main().catch((error: unknown) => {
 		console.error(error instanceof Error ? error.message : 'local stack smoke failed')
 		process.exit(1)
 	})
