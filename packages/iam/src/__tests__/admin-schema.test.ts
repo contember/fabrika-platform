@@ -1,6 +1,7 @@
 import type { AppSchemaDto, GrantDto, PolicyDto, RoleDto } from '@fabrika/iam-contract'
 import type { SqlDatabase } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
+import { z } from 'zod'
 import { handleAdmin } from '../admin/router'
 import { createIamApp } from '../app'
 import type { Env, RequestContext } from '../env'
@@ -125,53 +126,36 @@ async function failure(h: Harness, session: string, method: string, input: unkno
 }
 
 function asPolicies(value: unknown): PolicyDto[] {
-	if (value === null || typeof value !== 'object' || !('items' in value) || !Array.isArray(value.items)) {
-		throw new Error('expected a policy list')
-	}
-	const items: PolicyDto[] = []
-	for (const item of value.items) {
-		if (item === null || typeof item !== 'object' || !('key' in item) || typeof item.key !== 'string') {
-			throw new Error('expected a policy item')
-		}
-		const permissions = 'permissions' in item && Array.isArray(item.permissions) ? item.permissions.map(String) : []
-		const name = 'name' in item && typeof item.name === 'string' ? item.name : ''
-		const app = 'app' in item && typeof item.app === 'string' ? item.app : ''
-		const createdAt = 'createdAt' in item && typeof item.createdAt === 'number' ? item.createdAt : 0
-		items.push({ app, key: item.key, name, permissions, createdAt })
-	}
-	return items
+	return z.object({
+		items: z.array(z.object({
+			app: z.string(),
+			key: z.string(),
+			name: z.string(),
+			permissions: z.array(z.string()),
+			createdAt: z.number(),
+		})),
+	}).parse(value).items
 }
 
 function asRoles(value: unknown): RoleDto[] {
-	if (value === null || typeof value !== 'object' || !('items' in value) || !Array.isArray(value.items)) {
-		throw new Error('expected a role list')
-	}
-	const items: RoleDto[] = []
-	for (const item of value.items) {
-		if (item === null || typeof item !== 'object' || !('key' in item) || typeof item.key !== 'string') {
-			throw new Error('expected a role item')
-		}
-		const origin = 'origin' in item && (item.origin === 'builtin' || item.origin === 'app' || item.origin === 'custom') ? item.origin : 'app'
-		const name = 'name' in item && typeof item.name === 'string' ? item.name : ''
-		const permissions = 'permissions' in item && Array.isArray(item.permissions) ? item.permissions.map(String) : []
-		items.push({ key: item.key, name, permissions, origin })
-	}
-	return items
+	return z.object({
+		items: z.array(z.object({
+			key: z.string(),
+			name: z.string(),
+			permissions: z.array(z.string()),
+			origin: z.enum(['builtin', 'app', 'custom']),
+		})),
+	}).parse(value).items
 }
 
 function asGrant(value: unknown): Pick<GrantDto, 'roleKey' | 'permissions' | 'scopeType' | 'scopeValue' | 'dangling'> {
-	if (value === null || typeof value !== 'object') {
-		throw new Error('expected a grant')
-	}
-	const read = (key: string): unknown => (key in value ? Reflect.get(value, key) : null)
-	const permissions = read('permissions')
-	return {
-		roleKey: typeof read('roleKey') === 'string' ? String(read('roleKey')) : null,
-		permissions: Array.isArray(permissions) ? permissions.map(String) : null,
-		scopeType: typeof read('scopeType') === 'string' ? String(read('scopeType')) : null,
-		scopeValue: typeof read('scopeValue') === 'string' ? String(read('scopeValue')) : null,
-		dangling: read('dangling') === true,
-	}
+	return z.object({
+		roleKey: z.string().nullable(),
+		permissions: z.array(z.string()).nullable(),
+		scopeType: z.string().nullable(),
+		scopeValue: z.string().nullable(),
+		dangling: z.boolean(),
+	}).parse(value)
 }
 
 const SCHEMA = {

@@ -11,6 +11,7 @@
 import type { SessionDto } from '@fabrika/iam-contract'
 import type { SqlDatabase } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
+import { z } from 'zod'
 import { createIamApp } from '../app'
 import type { Env } from '../env'
 import { prop } from '../json'
@@ -93,23 +94,19 @@ async function ok(h: Harness, session: string, method: string, input: unknown): 
 }
 
 function sessionItems(result: unknown): SessionDto[] {
-	const items = prop(result, 'items')
-	if (!Array.isArray(items)) throw new Error('expected a session list')
-	return items.map((item) => {
-		const method = prop(item, 'authenticationMethod')
-		const status = prop(item, 'status')
-		return {
-			id: String(prop(item, 'id')),
-			principalId: String(prop(item, 'principalId')),
-			authenticationMethod: method === 'password' ? 'password' : 'oidc',
-			app: typeof prop(item, 'app') === 'string' ? String(prop(item, 'app')) : null,
-			parentSessionId: typeof prop(item, 'parentSessionId') === 'string' ? String(prop(item, 'parentSessionId')) : null,
-			status: status === 'revoked' ? 'revoked' : status === 'expired' ? 'expired' : 'active',
-			createdAt: Number(prop(item, 'createdAt')),
-			expiresAt: Number(prop(item, 'expiresAt')),
-			revokedAt: typeof prop(item, 'revokedAt') === 'number' ? Number(prop(item, 'revokedAt')) : null,
-		}
-	})
+	return z.object({
+		items: z.array(z.object({
+			id: z.string(),
+			principalId: z.string(),
+			authenticationMethod: z.enum(['oidc', 'password', 'local_dev']),
+			app: z.string().nullable(),
+			parentSessionId: z.string().nullable(),
+			status: z.enum(['active', 'revoked', 'expired']),
+			createdAt: z.number(),
+			expiresAt: z.number(),
+			revokedAt: z.number().nullable(),
+		})),
+	}).parse(result).items
 }
 
 describe('sessions.list', () => {
