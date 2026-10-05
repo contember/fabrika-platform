@@ -127,9 +127,12 @@ the state — IAM — keys its per-client abuse bucket on what arrives. Backlog 
   named `__Host-px_handoff_<state>` so parallel tabs do not overwrite each other; the callback clears
   it on every terminal outcome. IAM receives only its S256 challenge. A callback without the matching
   state and verifier cannot redeem or replace a browser's session.
-- **Fabrika cookies stop at the proxy.** Caddy and the Cloudflare proxy Worker remove every
+- **Fabrika cookies stop before application upstreams.** Caddy and the Cloudflare proxy Worker remove every
   `__Host-px_*` cookie only from the request sent upstream. Application-owned cookies remain intact;
   the app receives identity through the verified `X-Fabrika-Token` header only.
+  Caddy preserves only IAM's exact login cookie on the trusted `iamSessionOwner` route (sole host,
+  scheme and upstream must match). Supply the owner through platform composition, never app IDs or
+  gates; namespace builds set `FABRIKA_PROXY_SESSION_OWNER_JSON` to `null`.
 - **The session cookie's attributes are fixed by its `__Host-` prefix**: `Secure`, `Path=/`, no
   `Domain`. `Secure` is UNCONDITIONAL and no longer follows `ProxyApp.scheme` — the prefix requires
   it, so a conditional could only emit a cookie the browser discards. It is right behind a
