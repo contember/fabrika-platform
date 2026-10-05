@@ -30,6 +30,8 @@ For local application development connected to an installation, see [Local build
 
 [Source identity and provider cleanup](sprints/sprint-2026-10-05-source-identity-and-provider-cleanup.md) repairs Cloudflare application commit identity and removes verified local duplication while preserving both provider paths.
 
+[ADR-0048](decisions/0048-bind-cloudflare-delivery-to-the-recorded-commit.md) defines verified Cloudflare checkout identity and pre-submission Worker/image compatibility admission.
+
 [Platform simplification](archive/sprint-2026-10-04-platform-simplification.md) completed on 2026-10-04: fourteen reviewed and verified implementation commits preserve the complete product, remove unused/shared code, and repair deployment/Operations completion ownership. Missing release context requires the decisions in [backlog 95](backlog/95-close-release-recovery-without-frozen-context.md).
 
 [ADR-0047](decisions/0047-settle-pretrigger-cancellation-by-confirmed-version-deletion.md) defines deletion-based settlement for pre-trigger cancellation.

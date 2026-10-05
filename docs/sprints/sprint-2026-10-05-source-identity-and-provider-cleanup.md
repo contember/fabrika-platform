@@ -72,6 +72,8 @@ The implementation specifications were prepared by four independent agents. Exis
 
 The user approved this bounded wave and the Cloudflare public contract change on 2026-10-05:
 
+The durable source-identity and admission decision is [ADR-0048](../decisions/0048-bind-cloudflare-delivery-to-the-recorded-commit.md).
+
 - `resolveSource` means immutable commit resolution; `prepareClone` means ephemeral clone authorization.
 - Non-dry jobs use complete GitHub SHA-1 commits. Dry mutable-ref previews retain their separate release-unavailable behavior.
 - Bare names resolve heads first, then tags only on not-found; qualified refs preserve namespaces. Recorded non-commit objects fail rather than silently changing recorded identity.
@@ -96,3 +98,5 @@ CPU-heavy checks use `cpu-lease`. Local Git witnesses need no cloud credentials.
 ## Run log
 
 - 2026-10-05: User approved the bounded wave and exact-source contract after specification review. Four completed specifications were preserved across the server restart; implementation started from the unchanged baseline.
+- 2026-10-05: WU1 → `4cbbe3a`, WU2 → `c3111d5`, WU3 → `f46752d`. Each passed independent review. Leader verification: provider-contract 13/13; Zerops provider and installation install/deploy 143/143; root typecheck, scoped formatting and lint passed. Consumer packaging and the final full suite remain open.
+- 2026-10-05: Dedicated ephemeral PostgreSQL 17 and SeaweedFS backends are ready. Leader backend setup check: S3 blob and real-PostgreSQL run-fencing suites, 17 passed, zero failures or prerequisite skips. These backends are isolated from other local stacks and will be removed after final checks.

@@ -1,5 +1,7 @@
 # decisions (ADR)
 
+[ADR-0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md) binds Cloudflare run/release identity to a verified pre-install checkout and requires compatible Worker/image admission.
+
 [ADR-0047](0047-settle-pretrigger-cancellation-by-confirmed-version-deletion.md) settles pre-trigger cancellation through build exclusion and confirmed exact-version deletion, without promising source transport termination.
 
 [ADR-0046](0046-share-durable-namespace-proxy-attempt-ownership.md) shares durable attempt state and renewable ownership across every namespace proxy rebuild path.
@@ -199,3 +201,4 @@ tuning preset, never the cap. HA and larger floors stay reachable through `--pos
 - [0039](0039-retire-the-legacy-v1-source-credential-path.md) — Retire the legacy v1 source credential path — accepted; supersedes 0032's compatibility clause (2026-08-21)
 - [0040](0040-share-one-token-verifier.md) — Share one token verifier between the SDK and the proxy — accepted; reverses a rejected option recorded in the 2026-08-04 auth-hardening sprint (2026-09-03)
 - [0041](0041-one-administrative-transport-for-control-and-operations.md) — One administrative transport for Control and Operations — accepted (2026-09-21)
+- [0048](0048-bind-cloudflare-delivery-to-the-recorded-commit.md) — Bind Cloudflare delivery to the recorded application commit — accepted (2026-10-05)
