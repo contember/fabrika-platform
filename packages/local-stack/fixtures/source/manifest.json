@@ -1,0 +1,28 @@
+{
+	"version": 1,
+	"platform": {
+		"commitSha": "b4573753308ef30c4b4075caaf01ffa20e62874e",
+		"treeSha": "3e3e3a525da12cc27449580d1de153511ff473d7",
+		"tree": [
+			{ "path": "marker-link", "sha": "908ba65a00a6752c7fa11a5e5f8b77eb78b89e86", "type": "blob", "mode": "120000" },
+			{ "path": "marker.txt", "sha": "cfb58f6c54e5d563927cedd9891d1c0e9d84d491", "type": "blob", "mode": "100644" },
+			{ "path": "zerops.yaml", "sha": "db20ac26d1ee72286931e9cb7981a258d3134ec1", "type": "blob", "mode": "100644" }
+		],
+		"descriptorContents": "zerops:\n  - setup: proxy\n    build:\n      base: alpine@3.21\n      buildCommands:\n        - test -f marker.txt\n      deployFiles:\n        - marker.txt\n        - marker-link\n    run:\n      base: alpine@3.21\n      start: cat marker.txt\n",
+		"descriptorSha256": "25a8f81f3f949900a656497f7643652004fbdf20478d5908ee82a1468888c818",
+		"archiveBytes": 430,
+		"archiveSha256": "2040d69c8da442a88817c841359ece578e36fd25e1421cb4fdc7f781a95c9858"
+	},
+	"application": {
+		"commitSha": "0556a35b05c0e200ca7da6631f8aae07ff3c4b4c",
+		"treeSha": "aa81b603f0138de061d0dd9a6a8b3204bbef1e46",
+		"tree": [
+			{ "path": "marker.txt", "sha": "ee03212f6ee3a7af04ed2c4faf65c172c0939ee1", "type": "blob", "mode": "100644" },
+			{ "path": "zerops.yaml", "sha": "3e1d6d644485be041bacf9dd906f90949c0ad763", "type": "blob", "mode": "100644" }
+		],
+		"descriptorContents": "zerops:\n  - setup: notesapi\n    build:\n      base: alpine@3.21\n      buildCommands:\n        - test -f marker.txt\n      deployFiles:\n        - marker.txt\n    run:\n      base: alpine@3.21\n      start: cat marker.txt\n",
+		"descriptorSha256": "cfbe4d5f6096aba1ff89cb6d85013db2c5f515405e759fd7fba4f542ef5c9dfd",
+		"archiveBytes": 400,
+		"archiveSha256": "c23705b5c9673d2bcca36f045e81200cbbecf576ec6bc615223694f61180a067"
+	}
+}

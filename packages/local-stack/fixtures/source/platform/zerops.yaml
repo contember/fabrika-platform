@@ -1,0 +1,12 @@
+zerops:
+  - setup: proxy
+    build:
+      base: alpine@3.21
+      buildCommands:
+        - test -f marker.txt
+      deployFiles:
+        - marker.txt
+        - marker-link
+    run:
+      base: alpine@3.21
+      start: cat marker.txt
