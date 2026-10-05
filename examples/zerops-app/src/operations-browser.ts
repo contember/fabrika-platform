@@ -1,15 +1,13 @@
 import * as Sentry from '@sentry/browser'
+import { parseOperationsConfig } from './operations-config'
 
 const configResponse = await fetch('/operations-sdk/config')
 if (!configResponse.ok) throw new Error('Operations SDK configuration is unavailable')
-const config: unknown = await configResponse.json()
-if (!isRecord(config) || typeof config['dsn'] !== 'string' || typeof config['release'] !== 'string') {
-	throw new Error('Operations SDK configuration is invalid')
-}
+const config = parseOperationsConfig(await configResponse.json())
 
 Sentry.init({
-	dsn: config['dsn'],
-	release: config['release'],
+	dsn: config.dsn,
+	release: config.release,
 	defaultIntegrations: false,
 })
 
@@ -47,8 +45,4 @@ function sessionMarker(): string {
 	const created = crypto.randomUUID()
 	sessionStorage.setItem('fabrika-operations-sdk-marker', created)
 	return created
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

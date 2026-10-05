@@ -43,6 +43,7 @@
         "@fabrika/provider-zerops": "^0.0.4",
         "@sentry/browser": "10.69.0",
         "jose": "^5.9.0",
+        "zod": "^3.25.76",
       },
       "devDependencies": {
         "@fabrika/cli": "^0.0.4",

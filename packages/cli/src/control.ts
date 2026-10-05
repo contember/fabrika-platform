@@ -23,6 +23,24 @@ import type {
 	RegisterAppRequest,
 	RunDto,
 } from '@fabrika/control-contract'
+import { z } from 'zod'
+
+const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+	z.union([z.null(), z.string(), z.number(), z.boolean(), z.array(jsonValueSchema), z.record(jsonValueSchema)])
+)
+const manifestHeaderSchema = z.object({ manifestVersion: z.number().int().safe().positive() })
+const issueKeyResultSchema = z.union([
+	z.object({
+		ok: z.literal(false),
+		reason: z.enum(['missing_token', 'invalid_token', 'unknown_principal', 'disabled', 'not_allowed']).catch('not_allowed'),
+	}),
+	z.object({
+		ok: z.literal(true),
+		token: z.string(),
+		id: z.string(),
+		principalId: z.string().optional().catch(undefined),
+	}).transform(({ principalId, ...result }) => ({ ...result, ...(principalId === undefined ? {} : { principalId }) })),
+])
 
 const USAGE = `fabrika control — operate the Delivery control plane
 
@@ -208,28 +226,12 @@ const readJsonFile = async (path: string): Promise<JsonValue> => {
 	const text = await file.text()
 	try {
 		const parsed: unknown = JSON.parse(text)
-		return asJsonValue(parsed, path)
+		const result = jsonValueSchema.safeParse(parsed)
+		if (!result.success) throw new Error(`${path} contains a value JSON cannot carry`)
+		return result.data
 	} catch (error) {
 		throw error instanceof SyntaxError ? new Error(`${path} is not valid JSON`) : error
 	}
-}
-
-/** `JSON.parse` returns `unknown`; narrow it to the contract's own JSON type without a cast. */
-const asJsonValue = (value: unknown, path: string): JsonValue => {
-	if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-		return value
-	}
-	if (Array.isArray(value)) {
-		return value.map((entry) => asJsonValue(entry, path))
-	}
-	if (typeof value === 'object') {
-		const out: Record<string, JsonValue> = {}
-		for (const [key, entry] of Object.entries(value)) {
-			out[key] = asJsonValue(entry, path)
-		}
-		return out
-	}
-	throw new Error(`${path} contains a value JSON cannot carry`)
 }
 
 const emit = (flags: Flags, result: unknown, render: () => string): void => {
@@ -238,13 +240,11 @@ const emit = (flags: Flags, result: unknown, render: () => string): void => {
 
 /** `fabrika app build` writes `manifestVersion`; it is the version the provider's artifact codec accepts. */
 const manifestVersion = (manifest: JsonValue, path: string): number => {
-	const version = typeof manifest === 'object' && manifest !== null && !Array.isArray(manifest)
-		? Reflect.get(manifest, 'manifestVersion')
-		: undefined
-	if (typeof version !== 'number' || !Number.isSafeInteger(version) || version <= 0) {
+	const result = manifestHeaderSchema.safeParse(manifest)
+	if (!result.success) {
 		throw new Error(`${path} declares no manifestVersion — run \`fabrika app build\` to produce one`)
 	}
-	return version
+	return result.data.manifestVersion
 }
 
 const appLine = (app: AppDto): string => `${app.id}\t${app.repoUrl}\t${app.defaultBranch}`
@@ -317,27 +317,12 @@ const runKeyIssue = async (flags: Flags, env: Readonly<Record<string, string | u
 }
 
 const decodeIssueKeyResult = (value: unknown): IssueKeyResult => {
-	if (typeof value !== 'object' || value === null) {
+	const result = issueKeyResultSchema.safeParse(value)
+	if (!result.success) {
 		throw new Error('IAM returned an unreadable issueKey result')
 	}
-	const ok = Reflect.get(value, 'ok')
-	if (ok === false) {
-		const reason = Reflect.get(value, 'reason')
-		return { ok: false, reason: isIssueKeyDenial(reason) ? reason : 'not_allowed' }
-	}
-	const token = Reflect.get(value, 'token')
-	const id = Reflect.get(value, 'id')
-	const principalId = Reflect.get(value, 'principalId')
-	if (ok !== true || typeof token !== 'string' || typeof id !== 'string') {
-		throw new Error('IAM returned an unreadable issueKey result')
-	}
-	return { ok: true, token, id, ...(typeof principalId === 'string' ? { principalId } : {}) }
+	return result.data
 }
-
-const ISSUE_KEY_DENIALS = ['missing_token', 'invalid_token', 'unknown_principal', 'disabled', 'not_allowed'] as const
-
-const isIssueKeyDenial = (value: unknown): value is (typeof ISSUE_KEY_DENIALS)[number] =>
-	typeof value === 'string' && ISSUE_KEY_DENIALS.some((denial) => denial === value)
 
 const runRegister = async (flags: Flags, provider: string | undefined, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
 	if (provider === undefined || provider === '') {

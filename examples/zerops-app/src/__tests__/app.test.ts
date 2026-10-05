@@ -91,6 +91,29 @@ const handlerFor = (
 const withToken = (url: string, token: string, init: RequestInit = {}): Request =>
 	new Request(url, { ...init, headers: { ...(init.headers ?? {}), [PROXY_TOKEN_HEADER]: token } })
 
+describe('note request body', () => {
+	test.each(['null', '[]', '{}', '{"title":1}', '{"title":""}', 'not json'])(
+		'rejects an invalid title with the same response: %s',
+		async (body) => {
+			const token = await sign({ aud: APP_ID, iss: ISSUER, perms: [grant('notes.write', 'acme')] })
+			const response = await handlerFor()(withToken('https://notes.test/api/notes?workspace=acme', token, { method: 'POST', body }))
+			expect(response.status).toBe(400)
+			expect(await response.json()).toEqual({ error: 'title is required' })
+		},
+	)
+	test('preserves title whitespace and excludes request extensions from the stored note', async () => {
+		const notes = new MemoryNotes()
+		const token = await sign({ aud: APP_ID, iss: ISSUER, perms: [grant('notes.write', 'acme')] })
+		const response = await handlerFor(notes)(withToken('https://notes.test/api/notes?workspace=acme', token, {
+			method: 'POST',
+			body: JSON.stringify({ title: '  ', id: 'untrusted', workspace: 'other' }),
+		}))
+		expect(response.status).toBe(201)
+		expect(await response.json()).toEqual({ note: { id: 'note-1', workspace: 'acme', title: '  ' } })
+		expect(await notes.list('acme')).toEqual([{ id: 'note-1', workspace: 'acme', title: '  ' }])
+	})
+})
+
 describe('public routes need no credential at all', () => {
 	test('/healthz answers without a token — the platform health check carries none', async () => {
 		const response = await handlerFor()(new Request('https://notes.test/healthz'))

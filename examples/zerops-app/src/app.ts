@@ -10,9 +10,12 @@
 // perform THIS action on THAT workspace.
 
 import { defineApp, type Middleware, route } from '@fabrika/app'
+import { z } from 'zod'
 import type { Caller } from './authz'
 import { ANONYMOUS } from './authz'
 import type { Note, NotesStore } from './notes'
+
+const createNoteSchema = z.object({ title: z.string().min(1) })
 
 export interface HandlerDeps {
 	/** Verifies the proxy-injected token. Returns null when there is none, or it does not verify. */
@@ -136,11 +139,11 @@ const create = async (deps: HandlerDeps, caller: Caller, request: Request): Prom
 		return json({ error: 'forbidden' }, 403)
 	}
 	const body: unknown = await request.json().catch(() => null)
-	const title = typeof body === 'object' && body !== null && 'title' in body && typeof body.title === 'string' ? body.title : null
-	if (title === null || title === '') {
+	const parsed = createNoteSchema.safeParse(body)
+	if (!parsed.success) {
 		return json({ error: 'title is required' }, 400)
 	}
-	const note: Note = { id: deps.newId?.() ?? crypto.randomUUID(), workspace, title }
+	const note: Note = { id: deps.newId?.() ?? crypto.randomUUID(), workspace, title: parsed.data.title }
 	await deps.notes.create(note)
 	return json({ note }, 201)
 }

@@ -31,6 +31,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"zod": "^3.25.76",
 		"@fabrika/app": "^0.0.4",
 		"@fabrika/auth-core": "^0.0.4",
 		"@fabrika/provider-zerops": "^0.0.4",

@@ -3,6 +3,7 @@
 // needs Postgres to prove a `can()` check is a test nobody runs.
 
 import { SQL } from 'bun'
+import { z } from 'zod'
 
 export interface Note {
 	id: string
@@ -16,32 +17,17 @@ export interface NotesStore {
 	remove(workspace: string, id: string): Promise<boolean>
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
+const noteSchema = z.object({ id: z.string(), workspace: z.string(), title: z.string() })
+const notesRowsSchema = z.array(noteSchema.nullable().catch(null)).catch([])
 
-/** Narrow a driver row structurally rather than trusting its shape. */
-const toNote = (row: unknown): Note | null => {
-	if (!isRecord(row)) {
-		return null
-	}
-	const { id, workspace, title } = row
-	if (typeof id !== 'string' || typeof workspace !== 'string' || typeof title !== 'string') {
-		return null
-	}
-	return { id, workspace, title }
-}
+export const parseNotesRows = (rows: unknown): Note[] => notesRowsSchema.parse(rows).filter((note) => note !== null)
 
 export class PostgresNotes implements NotesStore {
 	constructor(private readonly sql: SQL) {}
 
 	async list(workspace: string): Promise<Note[]> {
 		const rows: unknown = await this.sql`SELECT id, workspace, title FROM notes WHERE workspace = ${workspace} ORDER BY title LIMIT 200`
-		if (!Array.isArray(rows)) {
-			return []
-		}
-		return rows.flatMap((row) => {
-			const note = toNote(row)
-			return note === null ? [] : [note]
-		})
+		return parseNotesRows(rows)
 	}
 
 	async create(note: Note): Promise<void> {

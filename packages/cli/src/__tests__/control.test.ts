@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { CONTROL_USAGE, parseControlFlags, runControlCli } from '../control.js'
 
 const CONTROL_ENV = { FABRIKA_CONTROL_URL: 'https://control.example', FABRIKA_CONTROL_KEY: 'px_test' } as const
@@ -268,6 +271,35 @@ describe('control key issue', () => {
 			.rejects.toThrow('IAM denied the issue request: not_allowed')
 	})
 
+	test.each(['missing_token', 'invalid_token', 'unknown_principal', 'disabled', 'not_allowed', 'future_reason', null, 42])(
+		'preserves known denial reasons and safely defaults unknown ones: %j',
+		async (reason) => {
+			captureFetch({ ok: false, reason, token: 'must-not-print' })
+			const expected = typeof reason === 'string' && reason !== 'future_reason' ? reason : 'not_allowed'
+			await expect(runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
+				.rejects.toThrow(`IAM denied the issue request: ${expected}`)
+		},
+	)
+
+	test.each(
+		[null, [], {}, { ok: true, token: 1, id: 'cred' }, { ok: true, token: 'secret' }, { ok: 'true', token: 'secret', id: 'cred' }].map(result => ({
+			result,
+		})),
+	)(
+		'rejects malformed success responses without exposing their fields: %j',
+		async ({ result }) => {
+			captureFetch(result)
+			await expect(runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
+				.rejects.toThrow('IAM returned an unreadable issueKey result')
+		},
+	)
+
+	test.each([null, 12, {}, undefined])('omits malformed optional principal ids from JSON output: %j', async (principalId) => {
+		captureFetch({ ok: true, token: '', id: '', principalId, extra: 'private' })
+		const out = await captureStdout(() => runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage', '--json'], undefined, ISSUE_ENV))
+		expect(JSON.parse(out)).toEqual({ ok: true, token: '', id: '' })
+	})
+
 	test('never quotes an upstream body back at the operator', async () => {
 		globalThis.fetch = asFetch(async () => new Response('px_leaked_in_an_error_page', { status: 500 }))
 		await expect(runControlCli('key', ['issue', '--label=agent', '--permissions=app.manage'], undefined, ISSUE_ENV))
@@ -459,6 +491,51 @@ describe('control register source binding', () => {
 		'--env=prod',
 		...extra,
 	]
+
+	test('carries nested JSON extensions through registration without normalizing their values', async () => {
+		const directory = await mkdtemp(join(tmpdir(), 'fabrika-cli-manifest-'))
+		try {
+			const manifest = { manifestVersion: 3, extension: [null, true, 1.5, '  text  ', { enabled: false, nested: [] }] }
+			const path = join(directory, 'manifest.json')
+			await Bun.write(path, JSON.stringify(manifest))
+			const captured = captureFetch({ result: { app: { id: 'notes' }, env: { env: 'prod', provider: 'zerops' } } })
+			await captureStdout(() => runControlCli('register', registerArgs([`--manifest=${path}`]), 'zerops', CONTROL_ENV))
+			expect(captured.calls[0]?.body).toMatchObject({ input: { artifact: { provider: 'zerops', version: 3, payload: manifest } } })
+		} finally {
+			await rm(directory, { recursive: true, force: true })
+		}
+	})
+
+	test.each(['null', '[]', '{"manifestVersion":"3"}', '{"manifestVersion":0}', '{"manifestVersion":1.5}', '{"manifestVersion":9007199254740992}'])(
+		'rejects invalid manifest headers before making a request: %s',
+		async (text) => {
+			const directory = await mkdtemp(join(tmpdir(), 'fabrika-cli-manifest-'))
+			try {
+				const path = join(directory, 'manifest.json')
+				await Bun.write(path, text)
+				const captured = captureFetch({})
+				await expect(runControlCli('register', registerArgs([`--manifest=${path}`]), 'zerops', CONTROL_ENV))
+					.rejects.toThrow(`${path} declares no manifestVersion — run \`fabrika app build\` to produce one`)
+				expect(captured.calls).toEqual([])
+			} finally {
+				await rm(directory, { recursive: true, force: true })
+			}
+		},
+	)
+
+	test('keeps syntax and missing-file diagnostics distinct', async () => {
+		const directory = await mkdtemp(join(tmpdir(), 'fabrika-cli-manifest-'))
+		try {
+			const path = join(directory, 'manifest.json')
+			await expect(runControlCli('register', registerArgs([`--manifest=${path}`]), 'zerops', CONTROL_ENV))
+				.rejects.toThrow(`No such file: ${path}`)
+			await Bun.write(path, '{')
+			await expect(runControlCli('register', registerArgs([`--manifest=${path}`]), 'zerops', CONTROL_ENV))
+				.rejects.toThrow(`${path} is not valid JSON`)
+		} finally {
+			await rm(directory, { recursive: true, force: true })
+		}
+	})
 
 	test('--installation-id=none registers the anonymous public-repository source', async () => {
 		const captured = captureFetch({ result: { app: { id: 'notes' }, env: { env: 'prod', provider: 'zerops' } } })
