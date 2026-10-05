@@ -268,6 +268,53 @@ describe('Cloudflare installer GitHub App resume', () => {
 		expect(confirmations).toBe(2)
 		expect(creations).toBe(0)
 	})
+
+	test('resumed bundles reject noncanonical ids and unsafe credentials without exposing values', async () => {
+		await withOpenEnvFile(async () => {
+			const valid = {
+				GITHUB_APP_PRIVATE_KEY: app.pem,
+				GITHUB_WEBHOOK_SECRET: app.webhookSecret,
+				GITHUB_APP_ID: String(app.id),
+				GITHUB_APP_SLUG: app.slug,
+				GITHUB_APP_URL: app.htmlUrl,
+			}
+			const invalid: Record<string, string>[] = [
+				{ GITHUB_APP_ID: '01' },
+				{ GITHUB_APP_ID: '1e2' },
+				{ GITHUB_APP_ID: '9007199254740992' },
+				{ GITHUB_APP_ID: '0' },
+				{ GITHUB_APP_PRIVATE_KEY: 'sensitive-invalid-key' },
+				{ GITHUB_WEBHOOK_SECRET: 'sensitive\nsecret' },
+				{ GITHUB_WEBHOOK_SECRET: 'x'.repeat(4097) },
+				{ GITHUB_APP_SLUG: 'Invalid' },
+				{ GITHUB_APP_URL: `https://github.com/apps/${app.slug}?secret=value` },
+				{ GITHUB_APP_URL: 'https://github.com/apps/other-app' },
+				{ GITHUB_APP_URL: `https://operator:secret@github.com/apps/${app.slug}` },
+			]
+			for (const override of invalid) {
+				await expect(ensureGitHubApp(context, {
+					source: { ...valid, ...override },
+					create: () => {
+						throw new Error('must not create')
+					},
+					persist: () => {
+						throw new Error('must not persist')
+					},
+					appName: () => {
+						throw new Error('must not prompt')
+					},
+					confirmInstallation: () => {
+						throw new Error('must not confirm')
+					},
+					installAction: () => {
+						throw new Error('must not print credentials')
+					},
+				})).rejects.toThrow(
+					`Stored GitHub App resume state is incomplete or invalid; restore all GitHub App values in ${envPath()} or remove all five and rerun init`,
+				)
+			}
+		})
+	})
 })
 
 describe('Cloudflare installer runner key', () => {

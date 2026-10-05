@@ -23,7 +23,7 @@ engine lives in `@fabrika/engine`.
   create/clone/commit/push mechanics are `@fabrika/installation-init`'s.
 - `@fabrika/installation-init` owns the shared GitHub App manifest handshake; this package decides its
   Cloudflare-specific homepage, webhook URL, visibility and installation prompt.
-- `cloudflare.ts` — CF API helpers. `envfile.ts` / `narrow.ts` — env-file resume, runtime JSON narrowing.
+- `cloudflare.ts` — CF API helpers and response schemas. `envfile.ts` — env-file resume.
 - TTY prompts, console formatting, child processes, `gh`, and the GitHub Environment write live in
   **`@fabrika/installation-init`**, shared with `@fabrika/installation-zerops`. The two inits are not
   mirror images (ADR-0027) — only the mechanics are shared, never the flow.

@@ -32,6 +32,7 @@ import {
 	warn,
 } from '@fabrika/installation-init'
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto'
+import { z } from 'zod'
 import { findZone, listZones, resolveAccountId, verifyToken } from './cloudflare'
 import { envPath, fromEnv, openEnvFile, persistEnv, persistEnvBundle } from './envfile'
 import { defaultCheckoutDir, readFabrikaRef, scaffoldPlatformRepo } from './scaffold'
@@ -531,6 +532,25 @@ const githubAppResumeError = (): string =>
 	`Stored GitHub App resume state is incomplete or invalid; restore all GitHub App values in ${envPath()} or remove all five and rerun init`
 const GITHUB_APP_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/
 const GITHUB_APP_PEM = /^-----BEGIN (?:RSA )?PRIVATE KEY-----[\s\S]+-----END (?:RSA )?PRIVATE KEY-----\s*$/
+const githubAppResumeSchema = z.object({
+	id: z.string().refine((value) => Number.isSafeInteger(Number(value)) && Number(value) > 0 && String(Number(value)) === value)
+		.transform(Number),
+	slug: z.string().regex(GITHUB_APP_SLUG),
+	pem: z.string().max(64 * 1024).regex(GITHUB_APP_PEM),
+	webhookSecret: z.string().min(1).max(4096).refine((value) =>
+		![...value].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+	),
+	htmlUrl: z.string(),
+}).refine(({ htmlUrl, slug }) => {
+	try {
+		const url = new URL(htmlUrl)
+		return url.protocol === 'https:' && url.hostname === 'github.com' && url.port === ''
+			&& url.username === '' && url.password === '' && url.search === '' && url.hash === ''
+			&& url.pathname === `/apps/${slug}`
+	} catch {
+		return false
+	}
+})
 
 const readGitHubAppResume = (source: Readonly<Record<string, string | undefined>>): CreatedGitHubApp | undefined => {
 	const pem = readResumeValue(source, 'GITHUB_APP_PRIVATE_KEY')
@@ -540,27 +560,11 @@ const readGitHubAppResume = (source: Readonly<Record<string, string | undefined>
 	const htmlUrl = readResumeValue(source, 'GITHUB_APP_URL')
 	const values = [pem, webhookSecret, idText, slug, htmlUrl]
 	if (values.every((value) => value === undefined)) return undefined
-	if (pem === undefined || webhookSecret === undefined || idText === undefined || slug === undefined || htmlUrl === undefined) {
+	const parsed = githubAppResumeSchema.safeParse({ id: idText, slug, htmlUrl, pem, webhookSecret })
+	if (!parsed.success) {
 		throw new Error(githubAppResumeError())
 	}
-	const id = Number(idText)
-	let parsedUrl: URL
-	try {
-		parsedUrl = new URL(htmlUrl)
-	} catch {
-		throw new Error(githubAppResumeError())
-	}
-	if (
-		!Number.isSafeInteger(id) || id <= 0 || String(id) !== idText || !GITHUB_APP_SLUG.test(slug)
-		|| !GITHUB_APP_PEM.test(pem) || pem.length > 64 * 1024 || webhookSecret.length === 0 || webhookSecret.length > 4096
-		|| [...webhookSecret].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
-		|| parsedUrl.protocol !== 'https:' || parsedUrl.hostname !== 'github.com' || parsedUrl.port !== ''
-		|| parsedUrl.username !== '' || parsedUrl.password !== '' || parsedUrl.search !== '' || parsedUrl.hash !== ''
-		|| parsedUrl.pathname !== `/apps/${slug}`
-	) {
-		throw new Error(githubAppResumeError())
-	}
-	return { id, slug, htmlUrl, pem, webhookSecret }
+	return parsed.data
 }
 
 interface GitHubAppInitContext {

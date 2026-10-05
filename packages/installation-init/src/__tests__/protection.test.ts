@@ -285,4 +285,22 @@ describe('GitHub Environment protection merge', () => {
 		expect(existingEnvironmentProtection({ exitCode: 0, stdout: '{"protection_rules":[{"type":"branch_policy"}]}', stderr: '' })).toEqual({})
 		expect(existingEnvironmentProtection(NOT_FOUND)).toEqual({})
 	})
+
+	test('filters each rule and reviewer independently and keeps the last usable protection', () => {
+		const protection_rules = [
+			null,
+			{ type: 'wait_timer', wait_timer: 5 },
+			{ type: 'wait_timer', wait_timer: '20' },
+			{
+				type: 'required_reviewers',
+				reviewers: [null, { type: 'User', reviewer: { id: 7, login: 'operator' } }, { type: 'User', reviewer: { id: '8' } }],
+			},
+			{ type: 'required_reviewers', reviewers: [false] },
+			{ type: 'wait_timer', wait_timer: -0.5 },
+		]
+		expect(existingEnvironmentProtection({ exitCode: 0, stdout: JSON.stringify({ protection_rules }), stderr: '' })).toEqual({
+			reviewers: [{ type: 'User', id: 7 }],
+			wait_timer: -0.5,
+		})
+	})
 })

@@ -7,6 +7,7 @@
  * that restricts nothing until `main` itself carries a branch-protection rule.
  */
 
+import { z } from 'zod'
 import { detail, ok, step, warn } from './log'
 import {
 	DEPLOYMENT_BRANCH_POLICY,
@@ -118,7 +119,11 @@ export interface ExistingEnvironmentProtection {
 	readonly wait_timer?: number
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
+const protectionSchema = z.object({ protection_rules: z.array(z.unknown()) })
+const waitTimerSchema = z.object({ type: z.literal('wait_timer'), wait_timer: z.number() })
+const reviewersSchema = z.object({ type: z.literal('required_reviewers'), reviewers: z.array(z.unknown()) })
+const reviewerSchema = z.object({ type: z.string(), reviewer: z.object({ id: z.number() }) })
+	.transform(({ type, reviewer }) => ({ type, id: reviewer.id }))
 
 /**
  * Translate a GET's `protection_rules` into the shape a PUT takes. Anything unrecognised is dropped:
@@ -132,18 +137,19 @@ export function existingEnvironmentProtection(result: ShellAttempt): ExistingEnv
 	} catch {
 		return {}
 	}
-	if (!isRecord(parsed) || !Array.isArray(parsed['protection_rules'])) return {}
+	const protection = protectionSchema.safeParse(parsed)
+	if (!protection.success) return {}
 	const merged: { reviewers?: EnvironmentReviewer[]; wait_timer?: number } = {}
-	for (const rule of parsed['protection_rules']) {
-		if (!isRecord(rule)) continue
-		if (rule['type'] === 'wait_timer' && typeof rule['wait_timer'] === 'number') {
-			merged.wait_timer = rule['wait_timer']
+	for (const rule of protection.data.protection_rules) {
+		const timer = waitTimerSchema.safeParse(rule)
+		if (timer.success) {
+			merged.wait_timer = timer.data.wait_timer
 		}
-		if (rule['type'] === 'required_reviewers' && Array.isArray(rule['reviewers'])) {
-			const reviewers = rule['reviewers'].flatMap((entry: unknown): EnvironmentReviewer[] => {
-				if (!isRecord(entry) || typeof entry['type'] !== 'string' || !isRecord(entry['reviewer'])) return []
-				const id = entry['reviewer']['id']
-				return typeof id === 'number' ? [{ type: entry['type'], id }] : []
+		const required = reviewersSchema.safeParse(rule)
+		if (required.success) {
+			const reviewers = required.data.reviewers.flatMap((entry): EnvironmentReviewer[] => {
+				const reviewer = reviewerSchema.safeParse(entry)
+				return reviewer.success ? [reviewer.data] : []
 			})
 			if (reviewers.length > 0) merged.reviewers = reviewers
 		}

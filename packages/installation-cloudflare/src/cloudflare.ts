@@ -3,16 +3,28 @@
  * These run from the operator's laptop against the public CF API with the token the operator just
  * pasted; the token VALUE is never logged here (only pass/fail + names).
  *
- * Every response shape is a minimal local `interface` narrowed with runtime checks (no `as`, no
- * `any`) — the CF API returns a uniform `{ success, result, errors }` envelope we validate before
- * trusting any field.
+ * Local schemas validate the consumed fields while tolerating upstream additions.
  */
 
 import { required, select } from '@fabrika/installation-init'
+import { z } from 'zod'
 import { fromEnv } from './envfile'
-import { isRecord, prop, stringProp } from './narrow'
 
 const CF_API = 'https://api.cloudflare.com/client/v4'
+const envelopeSchema = z.object({ success: z.boolean(), result: z.unknown(), errors: z.unknown() })
+const errorSchema = z.object({ message: z.string() })
+const tokenSchema = z.object({ status: z.literal('active') })
+const namedResourceSchema = z.object({ id: z.string(), name: z.string() })
+const entriesSchema = z.array(z.unknown())
+
+function namedResources(value: unknown): CfAccount[] {
+	const entries = entriesSchema.safeParse(value)
+	if (!entries.success) return []
+	return entries.data.flatMap((entry) => {
+		const parsed = namedResourceSchema.safeParse(entry)
+		return parsed.success ? [parsed.data] : []
+	})
+}
 
 /** The CF account picked for this deploy (id + human name, for display). */
 export interface CfAccount {
@@ -27,15 +39,15 @@ export interface CfZone {
 }
 
 /** The first `errors[].message` from a CF envelope, or undefined — for a readable failure message. */
-function firstErrorMessage(body: unknown): string | undefined {
-	const errors = prop(body, 'errors')
-	if (!Array.isArray(errors)) {
+function firstErrorMessage(value: unknown): string | undefined {
+	const errors = entriesSchema.safeParse(value)
+	if (!errors.success) {
 		return undefined
 	}
-	for (const entry of errors) {
-		const message = stringProp(entry, 'message')
-		if (message !== undefined) {
-			return message
+	for (const entry of errors.data) {
+		const parsed = errorSchema.safeParse(entry)
+		if (parsed.success) {
+			return parsed.data.message
 		}
 	}
 	return undefined
@@ -47,14 +59,15 @@ function firstErrorMessage(body: unknown): string | undefined {
  * narrow. All field access is runtime-checked — no casts.
  */
 async function cfJson(response: Response, what: string): Promise<unknown> {
-	const body: unknown = await response.json().catch(() => null)
-	if (!isRecord(body) || typeof prop(body, 'success') !== 'boolean') {
+	const parsed = envelopeSchema.safeParse(await response.json().catch(() => null))
+	if (!parsed.success) {
 		throw new Error(`${what}: unexpected Cloudflare response (HTTP ${response.status}).`)
 	}
-	if (!response.ok || prop(body, 'success') !== true) {
-		throw new Error(`${what} failed: ${firstErrorMessage(body) ?? `HTTP ${response.status}`}`)
+	const body = parsed.data
+	if (!response.ok || !body.success) {
+		throw new Error(`${what} failed: ${firstErrorMessage(body.errors) ?? `HTTP ${response.status}`}`)
 	}
-	return prop(body, 'result')
+	return body.result
 }
 
 /** Authorization header for the token. Kept local so the value never leaks into a log statement. */
@@ -77,7 +90,7 @@ export async function verifyToken(token: string, accountId?: string): Promise<bo
 		try {
 			const response = await fetch(endpoint, { headers: authHeaders(token) })
 			const result = await cfJson(response, 'Token verification')
-			if (stringProp(result, 'status') === 'active') {
+			if (tokenSchema.safeParse(result).success) {
 				return true
 			}
 		} catch {
@@ -91,18 +104,7 @@ export async function verifyToken(token: string, accountId?: string): Promise<bo
 export async function listAccounts(token: string): Promise<CfAccount[]> {
 	const response = await fetch(`${CF_API}/accounts`, { headers: authHeaders(token) })
 	const result = await cfJson(response, 'Listing accounts')
-	if (!Array.isArray(result)) {
-		return []
-	}
-	const accounts: CfAccount[] = []
-	for (const entry of result) {
-		const id = stringProp(entry, 'id')
-		const name = stringProp(entry, 'name')
-		if (id !== undefined && name !== undefined) {
-			accounts.push({ id, name })
-		}
-	}
-	return accounts
+	return namedResources(result)
 }
 
 /**
@@ -148,18 +150,7 @@ export async function listZones(token: string, accountId: string): Promise<CfZon
 			headers: authHeaders(token),
 		})
 		const result = await cfJson(response, 'Listing zones')
-		if (!Array.isArray(result)) {
-			return []
-		}
-		const zones: CfZone[] = []
-		for (const entry of result) {
-			const id = stringProp(entry, 'id')
-			const name = stringProp(entry, 'name')
-			if (id !== undefined && name !== undefined) {
-				zones.push({ id, name })
-			}
-		}
-		return zones
+		return namedResources(result)
 	} catch {
 		return []
 	}
@@ -175,16 +166,12 @@ export async function findZone(token: string, hostname: string): Promise<CfZone 
 	const domain = registrableDomain(hostname)
 	const response = await fetch(`${CF_API}/zones?name=${encodeURIComponent(domain)}`, { headers: authHeaders(token) })
 	const result = await cfJson(response, 'Zone lookup')
-	if (!Array.isArray(result) || result.length === 0) {
+	const entries = entriesSchema.safeParse(result)
+	if (!entries.success) {
 		return null
 	}
-	const first = result[0]
-	const id = stringProp(first, 'id')
-	const name = stringProp(first, 'name')
-	if (id !== undefined && name !== undefined) {
-		return { id, name }
-	}
-	return null
+	const first = namedResourceSchema.safeParse(entries.data[0])
+	return first.success ? first.data : null
 }
 
 /** Naive registrable-domain derivation: the last two dot-labels of a hostname. */
