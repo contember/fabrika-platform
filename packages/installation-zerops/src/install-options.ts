@@ -8,6 +8,7 @@
 // operator's disk — but nothing here prompts: a missing required value is an error naming both the flag
 // and the variable that would supply it, so a mistyped install fails before it contacts anything.
 
+import { parsePlatformScheme } from './placement-options'
 import { readInstallationSourceDir } from './source-options'
 
 /** The only tier a bootstrap can install. See `assertInstallableTier`. */
@@ -130,13 +131,7 @@ const assertInstallableTier = (raw: string | undefined): InstallablePlatformTier
 
 const readScheme = (argv: readonly string[], env: Record<string, string | undefined>): 'http' | 'https' => {
 	const raw = setting(argv, env, '--scheme', 'FABRIKA_PLATFORM_SCHEME')
-	if (raw === undefined || raw === 'https') {
-		return 'https'
-	}
-	if (raw === 'http') {
-		return 'http'
-	}
-	throw new Error('--scheme must be http or https')
+	return parsePlatformScheme(raw)
 }
 
 const readEnvironment = (argv: readonly string[], env: Record<string, string | undefined>): string =>

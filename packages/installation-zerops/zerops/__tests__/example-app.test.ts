@@ -301,7 +301,7 @@ const assertSubmittedDescriptor = (recorded: Recorded): void => {
 describe('the app compiles to an import that is applied INTO an existing project', () => {
 	const { document, yaml } = compileImportYaml({ target: notesConfig.target, ctx: { env: 'prod' } })
 
-	test('it validates against the published JSON schema — zero errors', () => {
+	test('it validates against the supported installation schema — zero errors', () => {
 		expect(validateYaml('import', yaml)).toEqual([])
 	})
 

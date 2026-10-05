@@ -12,6 +12,7 @@
 // The command is unattended by construction: nothing here prompts, and a missing required value is an
 // error naming both the flag and the variable that would supply it.
 
+import { parsePlatformHosts, parsePlatformScheme } from './placement-options'
 import { readInstallationSourceDir } from './source-options'
 
 /** How the project this installation lives in is named. */
@@ -102,40 +103,12 @@ const readHosts = (
 	const iam = setting(argv, env, '--iam-host', 'FABRIKA_PLATFORM_IAM_HOST')
 	const control = setting(argv, env, '--console-host', 'FABRIKA_PLATFORM_CONSOLE_HOST')
 	const operations = setting(argv, env, '--operations-host', 'FABRIKA_PLATFORM_OPERATIONS_HOST')
-	const named = [iam, control, operations].filter((host) => host !== undefined)
-	if (named.length === 0) {
-		return undefined
-	}
-	if (named.length !== 3) {
-		// A partial set cannot say which installation this is: the missing hosts would be derived from the
-		// Zerops subdomain, and the deploy would then also publish one — on an installation that named
-		// custom domains precisely so it would not have one.
-		throw new Error(
-			'name every platform host or none: --iam-host, --console-host and --operations-host go together '
-				+ "(omitting all three derives them from the proxy's Zerops subdomains)",
-		)
-	}
-	for (const host of named) {
-		if (host !== undefined && (host.includes('/') || host.includes(':'))) {
-			throw new Error(`\`${host}\` is not a bare hostname — a platform host carries no scheme and no port`)
-		}
-	}
-	// Narrowed by the length check above; restated so the type says what the check proved.
-	if (iam === undefined || control === undefined || operations === undefined) {
-		throw new Error('name every platform host or none')
-	}
-	return { iam, control, operations }
+	return parsePlatformHosts({ iam, control, operations })
 }
 
 const readScheme = (argv: readonly string[], env: Record<string, string | undefined>): 'http' | 'https' => {
 	const raw = setting(argv, env, '--scheme', 'FABRIKA_PLATFORM_SCHEME')
-	if (raw === undefined || raw === 'https') {
-		return 'https'
-	}
-	if (raw === 'http') {
-		return 'http'
-	}
-	throw new Error('--scheme must be http or https')
+	return parsePlatformScheme(raw)
 }
 
 const readProject = (argv: readonly string[], env: Record<string, string | undefined>): ZeropsProjectSelector => {

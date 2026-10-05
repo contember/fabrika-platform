@@ -4,7 +4,7 @@ The Zerops implementation of `@fabrika/installation-contract` plus the typed
 platform topology and generated installation artifacts.
 
 Six public commands. `fabrika platform plan --provider=zerops` validates the
-generated artifacts against Zerops' published schemas. `fabrika platform deploy
+generated artifacts against the static supported installation schemas. `fabrika platform deploy
 --provider=zerops` brings an EXISTING installation to this checkout, unattended
 and idempotently — the full surface is in the `usage` string in `src/index.ts`,
 which is also what the generated workflow is written against. `fabrika platform
@@ -52,7 +52,8 @@ and is deliberate — someone reading only one path will guess wrong about the o
 - `zerops/console-schema.ts` — the console's `AppSchema`, copied from `@fabrika/control`. **Dev-time only.**
 - `zerops/render.ts` — generated artifact writer and `--check` verifier.
 - `zerops/generated/` — committed installation artifacts.
-- `zerops/schemas/` — pinned published schemas and refresh script.
+- `zerops/installation-schemas.ts` — static supported installation schemas.
+- `zerops/schemas/` — pinned upstream documents, manual refresh and read-only drift check (`bun run check:schemas`).
 
 ## Invariants
 
@@ -175,9 +176,9 @@ and is deliberate — someone reading only one path will guess wrong about the o
   one afterwards, and omitting it silently buys `oltp-production` on HA.
 - Every setup declares both `run.healthCheck` (liveness) and
   `deploy.readinessCheck` (the deploy gate), with every duration written as a
-  quoted Go duration inside `[10s, 1h]`. `zerops/validate.ts` retypes the six
-  duration properties the published schema gets wrong; do not widen that list
-  without a live observation.
+  quoted Go duration inside `[10s, 1h]`. `zerops/installation-schemas.ts` declares the six
+  probe-duration fields as strings; generated-artifact tests enforce the interval.
+  Run `bun run check:schemas` to report upstream drift without changing pinned documents.
 - A PostgreSQL URL is always
   `${<host>_connectionTlsString}/${<host>_dbName}?sslmode=require` — the TLS
   port, because `postgresql:ha@18` offers TLS on no other, and it keeps the

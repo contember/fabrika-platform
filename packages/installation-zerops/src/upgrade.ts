@@ -40,6 +40,7 @@ import { join, resolve } from 'node:path'
 import { consoleDeployLog, type DeployLog } from './log'
 import { FABRIKA_REF_FILE, readPinnedTag } from './sidecar'
 import type { PlatformUpgradeInput } from './upgrade-options'
+import { carriesTag, firstRun } from './upgrade-output'
 
 /** The public repository whose tags an installation may be pinned to. */
 export const FABRIKA_REPOSITORY = 'contember/fabrika-platform'
@@ -285,55 +286,6 @@ export const runUpgrade = async (input: PlatformUpgradeInput, collaborators: Upg
 	log.info(`run ${run.id} is ${run.status} — the sidecar workflow queues behind an earlier roll rather than cancelling it`)
 	await effects.watchRun({ repo, runId: run.id })
 	log.step(`${repo} is running fabrika ${input.to}`)
-}
-
-/**
- * Is `<tag>` among the refs `git/matching-refs/tags/<tag>` answered with?
- *
- * That endpoint is a PREFIX match — `tags/v0.0.2` answers with `v0.0.2`, `v0.0.20`, `v0.0.21` and the
- * rest — so membership is decided by an exact `refs/tags/<tag>` comparison and never by the list being
- * non-empty. It is used INSTEAD of `git/ref/tags/<tag>` precisely because a missing tag is a 200 with
- * an empty list there: every non-zero exit is then a real failure rather than an answer.
- */
-const carriesTag = (raw: string, tag: string): boolean => {
-	const parsed: unknown = readJson(raw)
-	if (!Array.isArray(parsed)) {
-		return false
-	}
-	return parsed.some((entry: unknown) => typeof entry === 'object' && entry !== null && Reflect.get(entry, 'ref') === `refs/tags/${tag}`)
-}
-
-/** Another program's stdout: unreadable output is "no answer", never a crash. */
-const readJson = (raw: string): unknown => {
-	try {
-		return JSON.parse(raw)
-	} catch {
-		return undefined
-	}
-}
-
-/**
- * The one run `gh run list` reported, read without trusting its shape.
- *
- * `--json` output is another program's, so every field is checked rather than assumed; an answer this
- * build cannot read is "no run yet", which the bounded wait turns into a message naming the repository.
- */
-const firstRun = (raw: string): UpgradeRun | undefined => {
-	const parsed: unknown = readJson(raw)
-	if (!Array.isArray(parsed)) {
-		return undefined
-	}
-	const first: unknown = parsed[0]
-	if (typeof first !== 'object' || first === null) {
-		return undefined
-	}
-	const id: unknown = Reflect.get(first, 'databaseId')
-	const url: unknown = Reflect.get(first, 'url')
-	const status: unknown = Reflect.get(first, 'status')
-	if ((typeof id !== 'number' && typeof id !== 'string') || typeof url !== 'string' || url === '') {
-		return undefined
-	}
-	return { id: String(id), url, status: typeof status === 'string' && status !== '' ? status : 'unknown' }
 }
 
 /** A short reason for a failed shell-out. `run`/`capture` throw the command + exit code and no value. */

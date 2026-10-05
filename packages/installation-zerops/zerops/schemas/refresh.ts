@@ -15,12 +15,7 @@
 
 import { writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-
-/** The two documents, by the URL each is served from. `zerops.yaml`'s is the one its own `$id` names. */
-export const SCHEMA_SOURCES: Record<string, string> = {
-	'import-project-yml-json-schema.json': 'https://api.app-prg1.zerops.io/api/rest/public/settings/import-project-yml-json-schema.json',
-	'zerops-yaml-json-schema.json': 'https://api.app-prg1.zerops.io/api/rest/public/settings/zerops-yaml-json-schema.json',
-}
+import { SCHEMA_SOURCES } from './check'
 
 const main = async (): Promise<void> => {
 	for (const [file, url] of Object.entries(SCHEMA_SOURCES)) {

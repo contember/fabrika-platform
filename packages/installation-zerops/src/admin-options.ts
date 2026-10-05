@@ -8,6 +8,8 @@
 // and prompts for nothing — and a missing required value is an error naming both the flag and the
 // variable that would supply it.
 
+import { parsePlatformHostname, parsePlatformScheme } from './placement-options'
+
 /** Every input `runPlatformAdmin` takes from the operator. */
 export interface PlatformAdminInput {
 	/** The mailbox that identifies the first administrator. */
@@ -80,13 +82,7 @@ const assertKnownArguments = (argv: readonly string[]): void => {
 
 const readScheme = (argv: readonly string[], env: Record<string, string | undefined>): 'http' | 'https' => {
 	const raw = setting(argv, env, '--scheme', 'FABRIKA_PLATFORM_SCHEME')
-	if (raw === undefined || raw === 'https') {
-		return 'https'
-	}
-	if (raw === 'http') {
-		return 'http'
-	}
-	throw new Error('--scheme must be http or https')
+	return parsePlatformScheme(raw)
 }
 
 /**
@@ -97,10 +93,7 @@ const readScheme = (argv: readonly string[], env: Record<string, string | undefi
  */
 const readIamHost = (argv: readonly string[], env: Record<string, string | undefined>): string => {
 	const host = required(setting(argv, env, '--iam-host', 'FABRIKA_PLATFORM_IAM_HOST'), '--iam-host', 'FABRIKA_PLATFORM_IAM_HOST')
-	if (host.includes('/') || host.includes(':')) {
-		throw new Error(`\`${host}\` is not a bare hostname — a platform host carries no scheme and no port`)
-	}
-	return host
+	return parsePlatformHostname(host)
 }
 
 /**

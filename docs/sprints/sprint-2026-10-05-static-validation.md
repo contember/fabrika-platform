@@ -191,6 +191,12 @@ The upstream check needs offline unchanged/changed fixtures; network failure is 
 
 ## Run log
 
+- WU08 integrated: replaced generic JSON Schema interpretation with static installation schemas and explicit duration string fields; added read-only `check:schemas` with offline drift/error fixtures. Leader reran 455 tests, package typecheck, lint and generation check (11 unchanged artifacts). Interpreter keyword tests were replaced with domain rejection witnesses; diagnostics now correctly name the supported installation subset. Full provider type catalog and inline import `zeropsYaml` remain outside this installation schema. Initial verification attempts timed out waiting for CPU leases; subsequent leased runs passed.
+
+- WU02 decision: user explicitly approved retaining a small Operations-local Standard Schema diagnostic adapter to preserve the existing HTTP 400/type/message/issues contract. Structural validation remains static Zod; the four exact compatibility assertions stay intact. This overrides the plan's unconditional removal of that error adapter.
+
+- R3 first slice found two WU14 recovery regressions: exact-length saved-response tuples drop legacy trailing data during hydration; one malformed remote annotation drops its entire otherwise valid submission. Queue one WU14 fix round with carry→hydrate and read→append→reload witnesses before review completion. Both are pending, not accepted deferrals.
+
 - WU03 integrated: IAM-owned HTTP/REST/OIDC/JWK/password/persisted/config-list schemas and duplicate admin parsing removal. Leader ran IAM suite with dedicated Postgres: 522 pass, no skips/failures; typecheck and scoped lint/format pass. Auth-core-owned device/access parsers, proof/state/domain checks, scalar config, numeric conversion and audit payloads remain intentional exceptions. R1 first slice reviewed frozen WU01/WU06 with no findings (107 tests and 213 differential release probes); remaining R1 units pending.
 
 - WU06 integrated: static strict source protocol schemas, secret-safe diagnostics and 55 additional compatibility cases including exact credential digest. Leader reran 322 wire/client/service tests successfully. Namespace compatibility helpers remain until WU07 migrates their callers; R1 pending.

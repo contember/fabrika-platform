@@ -1,7 +1,7 @@
 // What the two generated topologies are asserted to be.
 //
 // Read the boundary carefully, because it is the whole value of this file: these tests prove the
-// documents are WELL-FORMED against Zerops' published contract and that every invariant the ADRs
+// documents are WELL-FORMED against the supported installation contract and that every invariant the ADRs
 // require holds in them. They prove NOTHING about whether the platform accepts them, whether the
 // services boot, or whether anything is reachable. Nobody has run this against a real account.
 
@@ -50,7 +50,7 @@ const SHARED_POSTGRES_DESCRIPTOR = await createZeropsArtifactSourceDescriptor(
 	readFileSync(resolve(REPO_ROOT, 'examples/zerops-app/zerops.shared-postgres.yaml'), 'utf8'),
 )
 
-describe('every generated import document validates against the PUBLISHED JSON schema', () => {
+describe('every generated import document validates against the supported installation schema', () => {
 	for (const artifact of importArtifacts()) {
 		test(`${artifact.path} — zero errors`, () => {
 			expect(validateYaml('import', artifact.content)).toEqual([])

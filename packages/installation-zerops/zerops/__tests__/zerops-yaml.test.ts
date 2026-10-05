@@ -1,4 +1,4 @@
-// Every live `zerops.yaml` in the repository, checked against Zerops' published JSON schema.
+// Every live `zerops.yaml` in the repository, checked against the supported installation schema.
 // The generated repository-root file owns fabrika's three setups; the example app owns its fixture.
 
 import notesConfig from '@fabrika/example-zerops-app'
@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { generatedArtifacts, REPO_ROOT } from '../artifacts'
 import { compileTopology, fabrikaTopologies } from '../topology'
-import { correctedSchemaPointers, parseYaml, validateYaml } from '../validate'
+import { parseYaml, validateYaml } from '../validate'
 
 const read = (path: string): string => readFileSync(resolve(REPO_ROOT, path), 'utf8')
 
@@ -25,7 +25,7 @@ const setupNames = (path: string): string[] => {
 	) => (typeof entry === 'object' && entry !== null && 'setup' in entry && typeof entry.setup === 'string' ? [entry.setup] : []))
 }
 
-describe('the live files are valid against the published contract', () => {
+describe('the live files are valid against the supported installation contract', () => {
 	test('the repository-root zerops.yaml — zero errors', () => {
 		expect(errorsIn('zerops.yaml')).toEqual([])
 	})
@@ -262,13 +262,7 @@ describe('every deploy is gated, and every duration says what it means', () => {
 		})
 	}
 
-	test('the corrected schema is the reason the durations validate — and the correction is still needed', () => {
-		// The vendored schema still publishes `integer` for all six. When Zerops fixes that, `loadSchema`
-		// throws rather than silently accepting whatever it now says; this test names the pointers so the
-		// correction cannot quietly grow.
-		expect(correctedSchemaPointers('zerops-yaml')).toHaveLength(6)
-		expect(correctedSchemaPointers('import')).toEqual([])
-		// And the correction really is what lets a string through: an integer must still fail.
+	test('the installation schema rejects integer probe durations', () => {
 		const withInteger = read('zerops.yaml').replace('execPeriod: "10s"', 'execPeriod: 10')
 		expect(validateYaml('zerops-yaml', withInteger).length).toBeGreaterThan(0)
 	})

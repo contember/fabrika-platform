@@ -384,10 +384,12 @@ which calls `POST /service-stack/zerops-yaml-validation` — the same check the 
 | Any of the six outside **[10s, 1h]**                                 | **Refused.** `invalid execPeriod <10s, 1h0m0s>` — `5s` and `2h` both fail, `10s` and `1h` pass |
 
 The six are `deploy.readinessCheck.{failureTimeout,retryPeriod}` and
-`run.healthCheck.{failureTimeout,disconnectTimeout,recoveryTimeout,execPeriod}`. **A document that
-satisfies the published schema is undeployable**, so `installation-zerops/zerops/validate.ts` retypes
-exactly those six pointers to `string` before validating, and throws if the published schema ever stops
-saying `integer`. `provider-zerops/src/types.ts` carries the matching `ZeropsDuration` type.
+`run.healthCheck.{failureTimeout,disconnectTimeout,recoveryTimeout,execPeriod}`.
+The installation's static schemas declare these fields as strings; generated-artifact tests enforce
+the observed `[10s, 1h]` interval. The separately invoked
+`packages/installation-zerops/zerops/schemas/check.ts` compares both pinned upstream documents
+without modifying them and distinguishes drift from unavailable responses.
+`provider-zerops/src/types.ts` retains the matching `ZeropsDuration` type.
 
 #### A deploy is genuinely gated by `deploy.readinessCheck`
 
