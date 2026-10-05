@@ -191,6 +191,10 @@ The upstream check needs offline unchanged/changed fixtures; network failure is 
 
 ## Run log
 
+- Final integrated source at `438820d`: 5,056 tests pass, 39 skips (37 live Zerops, two SQLite CAS), no failures; PostgreSQL/S3 enabled. Full typecheck, lint, format check and release validation pass. All ten browser walkthroughs passed after the IAM fix. All migration and approved extension reviews are closed without unresolved findings. Natural-expiry Docker recovery smoke is running; archive/closure and restoring the original stack remain pending its result.
+
+- Approved browser follow-up shipped as `5caa7cf` (trusted IAM cookie owner and explicit platform/namespace build wiring), `197db1f` (native anonymous HTTP assertion transport), and `c3462cd` (owner invariant). All ten extended browser walkthroughs pass; focused auth delta review found no issue. Integrated tests after that change: 5,054 pass, 39 unchanged skips, zero failures. Full typecheck/lint and release validation pass. Docker source-recovery smoke remains the final unfinished witness; follow-up detail lives in the local-integration log.
+
 - Local integration extension approved: see [the frozen seam and implementation units](static-validation-local-integration.md). Genuine synthetic Git fixtures, local-only injected upload transport and minimal emulator evidence are approved; production policies remain unchanged.
 - Original builder stack restored: all 14 services running, all 12 configured health checks healthy. The user approved missing default binding and OAuth resource metadata repair, including its generator. Other 11 container identities/start times and all volumes preserved. Generator-only patch remains uncommitted in the separate, already-dirty worktree; isolated patch at `/tmp/opencode/fabrika-restoration-generator.patch`.
 

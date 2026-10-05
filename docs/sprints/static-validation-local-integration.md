@@ -200,6 +200,8 @@ Verification and exact dispatch readiness are reported to the leader in chat.
 
 ## Run log
 
+- Activation evidence fix `a188d05`, awaited smoke entrypoint `59fbe6a`, and bounded immutable staging wait `438820d` reviewed and verified. Real staging took 42 seconds, so its old 30-second budget was insufficient; only that phase now allows 120 seconds and still returns immediately at durable submission. Final unit integration: 5,056 pass, 39 skips; typecheck/lint/format/release checks pass. Docker recovery retains the user-approved natural 30-minute lease expiry.
+
 - Browser completion: `OPICE_TIER=extended ... bun run test:browser` executed all ten walkthroughs successfully with zero failures/tier exclusions. IAM owner fix `5caa7cf` and native anonymous HTTP test `197db1f` reviewed without findings, including 1,296 Go/RE2 probes. Owner wiring suite: 804 tests pass; full typecheck and generated-artifact check pass.
 - Smoke RPC omission fixed in `fbc7750`. An early process exit did not constitute a smoke pass; entrypoint now awaits completion. The first immutable deploy did succeed, but the emulator discarded selected descriptor runtime references, making the second managed admission fail. Emulator correction must expose each version's references only on activation; fresh local fixture state will be used, without reconstructing ownership.
 
