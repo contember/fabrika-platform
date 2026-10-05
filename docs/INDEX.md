@@ -28,7 +28,7 @@ For local application development connected to an installation, see [Local build
 
 ## Active sprints
 
-[Source identity and provider cleanup](sprints/sprint-2026-10-05-source-identity-and-provider-cleanup.md) repairs Cloudflare application commit identity and removes verified local duplication while preserving both provider paths.
+[Source identity and provider cleanup](archive/sprint-2026-10-05-source-identity-and-provider-cleanup.md) completed on 2026-10-05: verified Cloudflare commit/checkout/release/map identity and bounded provider cleanup; 4,615 tests passed with PostgreSQL/S3. C2 normalization reuse and operator-owned live acceptance remain deferred.
 
 [ADR-0048](decisions/0048-bind-cloudflare-delivery-to-the-recorded-commit.md) defines verified Cloudflare checkout identity and pre-submission Worker/image compatibility admission.
 

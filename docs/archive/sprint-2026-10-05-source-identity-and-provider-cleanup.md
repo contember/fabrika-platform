@@ -1,5 +1,30 @@
 # Sprint — source identity and bounded provider cleanup (2026-10-05)
 
+## OUTCOME — completed 2026-10-05
+
+The approved implementation wave is complete on `main`. Both providers retain their native execution boundaries. Cloudflare verifies the selected commit before repository commands and binds the run, checkout, runtime release and source-map scope to that identity. Independent implementation, fix and reference reviews passed.
+
+| Unit | Commit    | Result                                                                                                                          |
+| ---- | --------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| WU1  | `4cbbe3a` | Export the existing neutral envelope decoder.                                                                                   |
+| WU2  | `c3111d5` | Remove unread Zerops hostname state while retaining validation.                                                                 |
+| WU3  | `f46752d` | Share the existing installation service lookup.                                                                                 |
+| WU4  | `5ddf08d` | Consume the shared decoder in Zerops; retain codec cycles.                                                                      |
+| WU5  | `bbbb8c1` | Resolve immutable Cloudflare source, admit compatible consumers, verify fresh exact checkout and preserve credential isolation. |
+
+Final leader verification:
+
+- Full suite with dedicated PostgreSQL 17 and SeaweedFS: **4,615 passed, 39 skipped, zero failures** (core 4,141; agent interfaces 310; builder 164).
+- The skips are 37 opt-in live Zerops cases and two PostgreSQL-only concurrency cases skipped for the SQLite variant. PostgreSQL/S3 prerequisites were present.
+- Root typecheck, formatting/check and lint passed. Lint retains the baseline 15 warnings and 1,305 informational diagnostics.
+- All 11 generated Zerops artifacts are current. Release validation, packing and isolated-consumer smoke passed for all 28 public packages at disposable `v0.0.0-source-identity.0`.
+- Native Git witnesses cover moved branches, SHA-named branches, unavailable objects, repeated-checkout refusal and dry previews. Joined lifecycle witnesses observe persistence, checkout bytes, runtime release and map upload scope for webhook, poll and manual runs.
+- Both run-owned disposable backend containers were removed after verification.
+
+C2 normalization reuse was explicitly deferred after selective hook/runtime aliasing disproved its isolation assumption. No codec cycle was removed, and the characterization is baseline compatibility evidence. Installation pin policy/UX and existing readiness work retain their separate decisions and owners. Public anonymous GitHub tag resolution was probed; private GitHub authorization, live Cloudflare RPC/image execution, Docker deployment and live provider parity were not established. No push, deployment or publication occurred.
+
+## Original plan and execution record
+
 **Goal.** Make Cloudflare application delivery use the recorded commit, and remove verified local duplication while retaining both provider paths.
 
 **Theme.** Source selection, checkout, runtime release and source maps must agree. The accompanying cleanup keeps existing boundary validation and execution ownership.
@@ -104,3 +129,13 @@ CPU-heavy checks use `cpu-lease`. Local Git witnesses need no cloud credentials.
 - 2026-10-05: Dedicated ephemeral PostgreSQL 17 and SeaweedFS backends are ready. Leader backend setup check: S3 blob and real-PostgreSQL run-fencing suites, 17 passed, zero failures or prerequisite skips. These backends are isolated from other local stacks and will be removed after final checks.
 - 2026-10-05: Independent Cloudflare step review confirmed exact native Git checkout and the old runner's SHA-named-branch counterexample. Plan corrections: settle known pre-POST image refusal through the existing failed runner outcome; preserve original deployment abort reasons on rejected awaits; put the joined witness in Control's existing typechecked test program. No API or scope change.
 - 2026-10-05: C2 verify-first witness and independent review confirmed selective aliasing: hook pipeline edits reach the runtime artifact/checkpoint hash, while import-tree edits do not. No C2 production changes were made. The user weighed the options and approved deferral; WU4 now lands only shared decoder consumption and bounded regression evidence. Leader ran the pre-trim Control suite: 114 passed, zero failures.
+- 2026-10-05: WU4 → `5ddf08d`. After user-approved C2 deferral, removed seven new fixed-point/phase cases and retained bounded decoder rejection and baseline hook-sharing witnesses. Independent final review passed. Leader verification: 107 Control tests, zero failures; package typecheck, formatting, lint and diff checks passed (one existing informational lint diagnostic).
+- 2026-10-05: Cloudflare source, checkout and joined witness implementations are ready for independent review. Leader focused check: 233 tests across source/lifecycle/joined/runner/spawner/real-Git suites, zero failures. The joined witness observes stored A, moved branch B, detached HEAD A, runtime release A and map bytes/upload scope A for webhook, branch poll and manual runs; removed selected objects fail before repository commands. Final integration/typecheck and review remain open.
+- 2026-10-05: Joined witness independent review passed. Source/runner reviews found four local defects: an uncooperative token-fetch wait, intermediate ref-component trailing dots, reused checkout contents, and the combined-redactor regex size limit. Original implementers own the bounded fix round. The source reviewer also verified anonymous public GitHub tag peeling and refusal of a recorded tag object; no private/cloud acceptance was exercised.
+- 2026-10-05: Leader integration check: 120 tests across provider/composition/Worker/relay/server/protocol suites, zero failures. Generated Zerops artifacts and release validation for 28 public packages passed. Consumer-facing source-contract and rollout reference updates are prepared; final integration review and post-fix root gates remain open.
+- 2026-10-05: Source/runner fixes passed leader verification: 240 focused tests, zero failures, including native repeated-job refusal and admitted large-secret redaction. Final fix reviews remain open. Integration review found three bounded admission defects: DO RPC loses redirect history, diagnostic R2 failures can bypass known-undispatched terminal settlement, and Control's capability wait lacks a finite deadline. U0 owns the local fixes.
+- 2026-10-05: All 28 public packages packed at disposable `v0.0.0-source-identity.0` and passed isolated-consumer smoke. Documentation review required qualifying the exact-source guarantee as non-dry; the reference updates now do so. No publication or account deployment occurred.
+- 2026-10-05: U0 admission and U2 checkout/redaction final reviews passed. Cached literal occurrences remove the confirmed second-scale short-token log stall without a regex, dependency or new API. Source review identified a final queued-abort body-handoff race; its fix remains local to deployment token preparation. Leader source/admission check: 287 passed, zero failures.
+- 2026-10-05: First integrated root gates passed: typecheck; formatter/check; lint (the baseline 15 warnings and 1,305 informational diagnostics); full tests with PostgreSQL/S3, 4,613 passed, 39 skipped, zero failures. Skips are 37 live Zerops cases and two SQLite concurrency cases. Final source-handoff correction and its post-fix verification remain open.
+- 2026-10-05: Final source-handoff correction retains response cleanup through SDK token settlement using an invocation-local client and native abort listener. Its package checks passed (156 tests, zero failures); independent confirmation and repeated root gates are running. All other implementation and reference reviews passed.
+- 2026-10-05: Final source review passed, including the queued-abort reproducer and listener cleanup. Repeated root gates passed: 4,615 tests passed, 39 expected skips, zero failures; typecheck, formatting and lint passed. WU5 and consumer references → `bbbb8c1`. Both disposable backend containers were removed. Sprint closed with C2 and live/operator-only evidence explicitly deferred above.

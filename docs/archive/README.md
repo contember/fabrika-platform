@@ -9,6 +9,9 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 
 <!-- optional: group by date or theme as it grows; one line per entry -->
 
+- [Source identity and provider cleanup (2026-10-05)](sprint-2026-10-05-source-identity-and-provider-cleanup.md)
+  — exact Cloudflare commit/checkout/release/map identity, protocol admission and bounded provider cleanup; 4,615 tests passed with PostgreSQL/S3; C2 and live operator acceptance deferred.
+
 - [Platform simplification (2026-10-04)](sprint-2026-10-04-platform-simplification.md)
   — full product retained; fourteen independently reviewed implementation commits, real PostgreSQL fencing/queue witnesses and integrated checks; durable missing-context release recovery remains backlog 95.
 

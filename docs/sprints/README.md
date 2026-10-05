@@ -19,5 +19,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-- [Source identity and provider cleanup](sprint-2026-10-05-source-identity-and-provider-cleanup.md) — approved Cloudflare exact-source repair and bounded behavior-preserving provider cleanup.
 - [Zerops production readiness](sprint-2026-09-23-zerops-production-readiness.md) — approved release-readiness sprint for a small internal fleet; platform probes and contract design in progress.
