@@ -264,10 +264,18 @@ provider opens or delegates an explicit runtime session. `@fabrika/engine`
 executes the provider-supplied ordered plan without interpreting provider target
 data, artifact data, or step kinds.
 
-On Cloudflare, `@fabrika/runner-cloudflare` starts a Cloudflare Container. The
-`@fabrika/runner-container` process clones the repository, installs dependencies,
-and invokes the internal `fabrika-cloudflare-executor` to execute the Cloudflare
-plan. `@fabrika/runner-contract` is the transport-only boundary between them.
+For non-dry Cloudflare deployments, Control verifies the recorded GitHub commit or resolves a concrete
+ref, then persists the selected commit before freezing its release context. It
+checks the detached Worker's authenticated source-protocol capability before
+submitting work. `@fabrika/runner-cloudflare` starts a Cloudflare Container and
+checks the image's health capability before POSTing the job. The
+`@fabrika/runner-container` process fetches the exact commit, detaches HEAD and
+compares it before installing dependencies or invoking the internal
+`fabrika-cloudflare-executor`. Unavailable or mismatched source fails before
+repository commands; there is no mutable-ref fallback. The run commit, checkout,
+runtime release and source-map scope identify the same source
+([ADR-0048](../decisions/0048-bind-cloudflare-delivery-to-the-recorded-commit.md)).
+`@fabrika/runner-contract` is the transport-only boundary between Worker and image.
 Keeping the runner Worker separate lets the control plane deploy itself without
 resetting the container that owns the run.
 

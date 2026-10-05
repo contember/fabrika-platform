@@ -6,14 +6,14 @@
 // relay and orphaning the run. Hosting the container DO + relay in this SEPARATE worker means a deploy
 // of fabrika never touches vozka-runner: the container survives, the relay finishes, the status lands.
 //
-// SURFACE: two RPC methods invoked by the control plane over a service binding (`RUNNER_SVC`) —
+// The control plane calls authenticated RPC methods over the `RUNNER_SVC` service binding:
 // `startRun(job)` boots a fresh container, relays its logs → R2, and writes the terminal status → D1
 // itself (the backstop that records the run even if the caller was reset — see finish-run.ts); and
 // `cancelRun(runId, runnerKey)` destroys an in-flight run's container and records it failed. There is
 // no HTTP surface; vozka-runner has no public route and is reachable ONLY via the binding — but the
-// binding is not a credential, so BOTH methods verify `FABRIKA_RUNNER_KEY` first (see runner-key.ts).
+// binding is not a credential, so every method verifies `FABRIKA_RUNNER_KEY` first (see runner-key.ts).
 
-import { type CloudflareRunnerJob, isCloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
+import { CLOUDFLARE_SOURCE_PROTOCOL, type CloudflareRunnerJob, isCloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { finishRun } from './finish-run'
 import { type ContainerLike, type RelayResult, relayRun } from './relay'
@@ -26,6 +26,11 @@ export { RunnerContainer } from './RunnerContainer'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export class VozkaRunner extends WorkerEntrypoint<Env> {
+	async sourceProtocol(runnerKey: string): Promise<typeof CLOUDFLARE_SOURCE_PROTOCOL> {
+		await assertRunnerKey(this.env.FABRIKA_RUNNER_KEY, runnerKey)
+		return CLOUDFLARE_SOURCE_PROTOCOL
+	}
+
 	/**
 	 * Execute one deploy run: address a fresh container instance for this `runId`, wait for its server
 	 * to come up, relay the job through it (logs + status → R2), then record the terminal status → D1.

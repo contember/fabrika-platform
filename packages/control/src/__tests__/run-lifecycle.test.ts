@@ -1,6 +1,6 @@
 import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
 import { FABRIKA_APP_ID, FABRIKA_ENVIRONMENT, FABRIKA_OPERATIONS_DSN, FABRIKA_SERVICE_KEY } from '@fabrika/operations-contract/ingest'
-import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
+import { FABRIKA_RELEASE, parseOperationsReleasePayload } from '@fabrika/operations-contract/releases'
 import type { BlobStore } from '@fabrika/platform'
 import type {
 	ControlProvider,
@@ -11,6 +11,7 @@ import type {
 	ProviderSourceBinding,
 } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
+import { type CloudflareRunnerJob, createCloudflareControlProvider } from '../../../provider-cloudflare/src/control'
 import { getRunLogUseCase } from '../api/runs'
 import type { ControlRepositories, RunRow } from '../db'
 import { OperationsReleaseRepository, uuidv7 } from '../db'
@@ -67,8 +68,12 @@ async function seedRun(
 		publicOrigin: 'https://public.example.com',
 		namespaceId: null,
 		provider,
-		providerTargetJson: JSON.stringify(envelope(provider, 'target')),
-		providerArtifactJson: JSON.stringify(envelope(provider, 'artifact')),
+		providerTargetJson: JSON.stringify(provider === 'cloudflare' ? { provider, version: 1, payload: {} } : envelope(provider, 'target')),
+		providerArtifactJson: JSON.stringify(
+			provider === 'cloudflare'
+				? { provider, version: 1, payload: { configPath: 'fabrika.config.ts' } }
+				: envelope(provider, 'artifact'),
+		),
 	})
 	await db.registry.upsertAppSecret({
 		appId: 'app',
@@ -293,14 +298,101 @@ describe('provider-neutral run lifecycle', () => {
 		}
 	})
 
-	test('preserves Cloudflare installation-only source coordinates', async () => {
-		const { db } = createHarness()
+	test('Cloudflare persists a manual commit before release projection and preserves installation-only source coordinates', async () => {
+		const { db, d1, sqlite } = createHarness()
 		const runId = await seedRun(db, { provider: 'cloudflare' })
-		const inputs: ProviderDeployInput[] = []
-		const provider = makeProvider(inputs, { state: 'succeeded' }, { id: 'cloudflare' })
-		expect((await executeDeploy(makeDeps(db, provider), { runId })).status).toBe('succeeded')
-		expect(inputs[0]?.app.source).toMatchObject({ githubInstallationId: 42 })
-		expect(inputs[0]?.app.source.githubConnectionId).toBeUndefined()
+		const commitSha = 'a'.repeat(40)
+		const jobs: CloudflareRunnerJob[] = []
+		const phases: string[] = []
+		const persistedAtProjection: Array<string | null> = []
+		const projectedCommits: Array<string | null> = []
+		const releases = new class extends OperationsReleaseRepository {
+			override async project(id: string, raw: string): Promise<number> {
+				const payload = parseOperationsReleasePayload(JSON.parse(raw))
+				phases.push(payload.phase)
+				persistedAtProjection.push((await requireRun(db, id)).commit_sha)
+				projectedCommits.push(payload.release.kind === 'available' ? payload.release.commitSha : null)
+				return super.project(id, raw)
+			}
+		}(d1)
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			resolveSource: async (input) => {
+				expect(input.expectedCommitSha).toBeUndefined()
+				expect(input.app.source).toMatchObject({ ref: 'refs/heads/deploy/prod', githubInstallationId: 42 })
+				expect(input.app.source.githubConnectionId).toBeUndefined()
+				return { commitSha }
+			},
+			prepareClone: async (source) => {
+				expect(source.ref).toBe(commitSha)
+				expect(source.githubInstallationId).toBe(42)
+				return { repoUrl: source.repoUrl }
+			},
+			assertRunnerSourceProtocol: async () => {},
+			startRun: async (job) => {
+				jobs.push(job)
+				return { state: 'succeeded' }
+			},
+			cancelRun: async () => {},
+		})
+		try {
+			expect((await executeDeploy({ ...makeDeps(db, provider), operations: { repository: releases } }, { runId })).status).toBe('succeeded')
+			expect(phases).toEqual(['started', 'provider_accepted', 'terminal'])
+			expect(persistedAtProjection).toEqual([commitSha, commitSha, commitSha])
+			expect(projectedCommits).toEqual([commitSha, commitSha, commitSha])
+			expect(jobs).toHaveLength(1)
+			expect(jobs[0]?.ref).toBe(commitSha)
+			expect(jobs[0]?.managedEnvironment?.[FABRIKA_RELEASE]).toContain(commitSha)
+			expect((await requireRun(db, runId)).ref).toBe('refs/heads/deploy/prod')
+		} finally {
+			sqlite.close()
+		}
+	})
+
+	test('Cloudflare refuses a resolved commit that differs from recorded history before clone, admission, or runner submission', async () => {
+		const { db, d1, sqlite } = createHarness()
+		const commitSha = 'a'.repeat(40)
+		const runId = await seedRun(db, { provider: 'cloudflare', commitSha })
+		const effects: string[] = []
+		const phases: string[] = []
+		const releases = new class extends OperationsReleaseRepository {
+			override project(id: string, raw: string): Promise<number> {
+				phases.push(parseOperationsReleasePayload(JSON.parse(raw)).phase)
+				return super.project(id, raw)
+			}
+		}(d1)
+		const provider = createCloudflareControlProvider({
+			accountId: 'account-1',
+			apiToken: 'token-1',
+			runnerKey: 'test-runner-key',
+			resolveSource: async (input) => {
+				expect(input.expectedCommitSha).toBe(commitSha)
+				return { commitSha: 'b'.repeat(40) }
+			},
+			prepareClone: async (source) => {
+				effects.push('clone')
+				return { repoUrl: source.repoUrl }
+			},
+			assertRunnerSourceProtocol: async () => {
+				effects.push('admission')
+			},
+			startRun: async () => {
+				effects.push('runner')
+				return { state: 'succeeded' }
+			},
+			cancelRun: async () => {},
+		})
+		try {
+			expect((await executeDeploy({ ...makeDeps(db, provider), operations: { repository: releases } }, { runId })).status).toBe('failed')
+			expect(effects).toEqual([])
+			expect(phases).toEqual(['terminal'])
+			const failed = await requireRun(db, runId)
+			expect(failed).toMatchObject({ status: 'failed', ref: 'refs/heads/deploy/prod', commit_sha: commitSha, external_run_id: null })
+		} finally {
+			sqlite.close()
+		}
 	})
 
 	test('resolves and persists an exact source revision before provider deploy', async () => {

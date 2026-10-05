@@ -9,7 +9,7 @@
 // in `src/index.ts` `scheduled`. Polling lives there (standalone — no webhook HMAC applies to a public
 // feed), not as a `RepoSource` method; this interface stays focused on clone + webhook verification.
 
-import { GitHubAppClient, type GitHubAppFetch, pemToPkcs8 } from '@fabrika/github-app'
+import { GitHubAppClient, type GitHubAppClientConfig, type GitHubAppFetch, pemToPkcs8 } from '@fabrika/github-app'
 import { prop, stringField } from './json'
 
 export { pemToPkcs8 }
@@ -236,6 +236,7 @@ export class GitHubAppRepoSource implements RepoSource {
 	constructor(private readonly config: GitHubAppConfig) {}
 
 	async clone(repoUrl: string, ref: string, installationId?: number | null, signal?: AbortSignal): Promise<CloneTarget> {
+		signal?.throwIfAborted()
 		const repository = parseCanonicalGitHubRepository(repoUrl)
 		if (repository === null) {
 			throw new Error('invalid canonical GitHub repository')
@@ -245,17 +246,51 @@ export class GitHubAppRepoSource implements RepoSource {
 		if (installationId === undefined || installationId === null) {
 			return { cloneUrl: httpsUrl, ref }
 		}
-		const token = await (await this.githubClient()).mintRepositoryToken({
-			installationId,
-			owner: repository.owner,
-			repository: repository.repo,
-			...(signal === undefined ? {} : { signal }),
-		})
+		const token = await this.repositoryToken(repository, installationId, signal)
 		// x-access-token is GitHub's documented installation-token clone scheme.
 		const url = new URL(httpsUrl)
 		url.username = 'x-access-token'
-		url.password = token.token
+		url.password = token
+		signal?.throwIfAborted()
 		return { cloneUrl: url.toString(), ref }
+	}
+
+	async resolveCommit(repoUrl: string, ref: string, installationId?: number | null, signal?: AbortSignal): Promise<{ commitSha: string }> {
+		signal?.throwIfAborted()
+		const repository = parseCanonicalGitHubRepository(repoUrl)
+		if (repository === null) throw new Error('invalid canonical GitHub repository')
+		const selected = parseGitHubSourceRef(ref)
+		const transport = sourceTransport(this.config)
+		const token = installationId === undefined || installationId === null ? undefined : await this.repositoryToken(repository, installationId, signal)
+		const baseUrl = `${transport.apiBaseUrl}/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/git`
+		const request: GitHubSourceRequest = (path, allowNotFound = false) =>
+			requestGitHubSourceJson(`${baseUrl}/${path}`, transport, token, signal, allowNotFound)
+		let commitSha: string
+		if (selected.kind === 'commit') {
+			commitSha = await verifyGitHubCommit(request, selected.sha)
+		} else {
+			let namespace = selected.kind === 'bare' ? 'heads' : selected.namespace
+			const name = selected.name.split('/').map(encodeURIComponent).join('/')
+			let body = await request(`ref/${namespace}/${name}`, selected.kind === 'bare')
+			if (body === SOURCE_NOT_FOUND) {
+				namespace = 'tags'
+				body = await request(`ref/tags/${name}`)
+			}
+			if (stringField(body, 'ref') !== `refs/${namespace}/${selected.name}`) throw invalidSourceResponse()
+			let object = parseGitHubSourceObject(prop(body, 'object'))
+			if (namespace === 'heads' && object.type !== 'commit') throw invalidSourceResponse()
+			const seen = new Set<string>()
+			while (object.type === 'tag') {
+				if (seen.size >= 8 || seen.has(object.sha)) throw invalidSourceResponse()
+				seen.add(object.sha)
+				const tag = await request(`tags/${object.sha}`)
+				if (parseGitHubObjectSha(tag) !== object.sha) throw invalidSourceResponse()
+				object = parseGitHubSourceObject(prop(tag, 'object'))
+			}
+			commitSha = await verifyGitHubCommit(request, object.sha)
+		}
+		signal?.throwIfAborted()
+		return { commitSha }
 	}
 
 	/**
@@ -286,16 +321,281 @@ export class GitHubAppRepoSource implements RepoSource {
 	}
 
 	private githubClient(): Promise<GitHubAppClient> {
-		this.client ??= GitHubAppClient.create({
+		this.client ??= GitHubAppClient.create(this.githubClientConfig())
+		return this.client
+	}
+
+	private githubClientConfig(): GitHubAppClientConfig {
+		return {
 			appId: this.config.appId,
 			privateKeyPem: this.config.privateKeyPem,
 			...(this.config.apiBaseUrl === undefined ? {} : { apiBaseUrl: this.config.apiBaseUrl }),
 			...(this.config.fetch === undefined ? {} : { fetch: this.config.fetch }),
 			...(this.config.now === undefined ? {} : { now: this.config.now }),
 			...(this.config.timeoutMs === undefined ? {} : { timeoutMs: this.config.timeoutMs }),
-		})
-		return this.client
+		}
 	}
+
+	private async repositoryToken(repository: { owner: string; repo: string }, installationId: number, signal?: AbortSignal): Promise<string> {
+		signal?.throwIfAborted()
+		const deadline = createSourceDeadline(signal, sourceTimeoutMs(this.config))
+		const fetchImplementation = this.config.fetch ?? fetch
+		let response: Response | undefined
+		let responseSignal: AbortSignal | undefined
+		let settled = false
+		const cancelBody = (): void => {
+			const body = response?.body
+			if (body !== undefined && body !== null && !body.locked) void body.cancel().catch(() => {})
+		}
+		try {
+			const client = await awaitSourceOperation(
+				GitHubAppClient.create({
+					...this.githubClientConfig(),
+					fetch: (input, init) =>
+						fetchImplementation(input, init).then((received) => {
+							response = received
+							const requestSignal = init?.signal
+							if (settled || requestSignal?.aborted) {
+								cancelBody()
+								requestSignal?.throwIfAborted()
+								throw new Error('GitHub source authorization failed')
+							}
+							// Token minting makes one request; retain body ownership through the SDK handoff.
+							responseSignal = requestSignal ?? undefined
+							responseSignal?.addEventListener('abort', cancelBody, { once: true })
+							return received
+						}),
+				}),
+				deadline.signal,
+			)
+			deadline.signal.throwIfAborted()
+			const token = await awaitSourceOperation(
+				client.mintRepositoryToken({
+					installationId,
+					owner: repository.owner,
+					repository: repository.repo,
+					signal: deadline.signal,
+				}),
+				deadline.signal,
+			)
+			deadline.signal.throwIfAborted()
+			return token.token
+		} catch {
+			// The shared client's onboarding AbortError must not replace deployment ownership reasons.
+			signal?.throwIfAborted()
+			throw new Error('GitHub source authorization failed')
+		} finally {
+			settled = true
+			responseSignal?.removeEventListener('abort', cancelBody)
+			cancelBody()
+			deadline.dispose()
+		}
+	}
+}
+
+const SOURCE_NOT_FOUND = Symbol('source-not-found')
+const SOURCE_MAX_RESPONSE_BYTES = 64 * 1024
+
+type GitHubSourceRef = { kind: 'commit'; sha: string } | { kind: 'ref'; namespace: 'heads' | 'tags'; name: string } | { kind: 'bare'; name: string }
+type GitHubSourceObject = { type: 'commit' | 'tag'; sha: string }
+type GitHubSourceRequest = (path: string, allowNotFound?: boolean) => Promise<unknown>
+
+interface GitHubSourceTransport {
+	apiBaseUrl: string
+	fetch: GitHubAppFetch
+	timeoutMs: number
+}
+
+function parseGitHubSourceRef(ref: string): GitHubSourceRef {
+	if (/^[0-9a-f]{64}$/i.test(ref)) throw new Error('GitHub source does not support 64-hex commit IDs')
+	if (/^[0-9a-f]{40}$/i.test(ref)) return { kind: 'commit', sha: ref.toLowerCase() }
+	let namespace: 'heads' | 'tags' | undefined
+	let name = ref
+	if (ref.startsWith('refs/heads/')) {
+		namespace = 'heads'
+		name = ref.slice('refs/heads/'.length)
+	} else if (ref.startsWith('refs/tags/')) {
+		namespace = 'tags'
+		name = ref.slice('refs/tags/'.length)
+	} else if (ref.startsWith('refs/')) {
+		throw new Error('invalid GitHub source ref')
+	}
+	if (
+		name.length === 0 || name.length > 1024 || name.startsWith('-') || name.endsWith('.') || name === '@' || name.includes('..') || name.includes('@{')
+		|| /[\s\p{Cc}\p{Cs}~^:?*[\\]/u.test(name)
+		|| name.split('/').some((part) => part === '' || part.startsWith('.') || part.endsWith('.lock'))
+	) {
+		throw new Error('invalid GitHub source ref')
+	}
+	return namespace === undefined ? { kind: 'bare', name } : { kind: 'ref', namespace, name }
+}
+
+function parseGitHubObjectSha(body: unknown): string {
+	const sha = stringField(body, 'sha')
+	if (sha === undefined || !/^[0-9a-f]{40}$/i.test(sha)) throw invalidSourceResponse()
+	return sha.toLowerCase()
+}
+
+function parseGitHubSourceObject(body: unknown): GitHubSourceObject {
+	const type = stringField(body, 'type')
+	if (type !== 'commit' && type !== 'tag') throw invalidSourceResponse()
+	return { type, sha: parseGitHubObjectSha(body) }
+}
+
+async function verifyGitHubCommit(request: GitHubSourceRequest, expectedSha: string): Promise<string> {
+	const sha = parseGitHubObjectSha(await request(`commits/${expectedSha}`))
+	if (sha !== expectedSha) throw invalidSourceResponse()
+	return sha
+}
+
+function invalidSourceResponse(): Error {
+	return new Error('GitHub source response is invalid')
+}
+
+function sourceTimeoutMs(config: GitHubAppConfig): number {
+	const timeoutMs = config.timeoutMs ?? 15_000
+	if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 120_000) throw new Error('GitHub source configuration is invalid')
+	return timeoutMs
+}
+
+function sourceTransport(config: GitHubAppConfig): GitHubSourceTransport {
+	const timeoutMs = sourceTimeoutMs(config)
+	let apiBaseUrl: URL
+	try {
+		apiBaseUrl = new URL(config.apiBaseUrl ?? 'https://api.github.com')
+	} catch {
+		throw new Error('GitHub source configuration is invalid')
+	}
+	if (
+		apiBaseUrl.protocol !== 'https:' || apiBaseUrl.username !== '' || apiBaseUrl.password !== '' || apiBaseUrl.search !== '' || apiBaseUrl.hash !== ''
+	) {
+		throw new Error('GitHub source configuration is invalid')
+	}
+	return { apiBaseUrl: apiBaseUrl.toString().replace(/\/$/, ''), fetch: config.fetch ?? fetch, timeoutMs }
+}
+
+function createSourceDeadline(callerSignal: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; dispose(): void } {
+	const controller = new AbortController()
+	const abortFromCaller = (): void => controller.abort(callerSignal?.reason)
+	if (callerSignal?.aborted) abortFromCaller()
+	else callerSignal?.addEventListener('abort', abortFromCaller, { once: true })
+	const timer = setTimeout(() => controller.abort(new DOMException('GitHub source request timed out', 'TimeoutError')), timeoutMs)
+	return {
+		signal: controller.signal,
+		dispose() {
+			clearTimeout(timer)
+			callerSignal?.removeEventListener('abort', abortFromCaller)
+		},
+	}
+}
+
+async function requestGitHubSourceJson(
+	url: string,
+	transport: GitHubSourceTransport,
+	token: string | undefined,
+	callerSignal: AbortSignal | undefined,
+	allowNotFound: boolean,
+): Promise<unknown> {
+	const deadline = createSourceDeadline(callerSignal, transport.timeoutMs)
+	const signal = deadline.signal
+	let response: Response | undefined
+	try {
+		signal.throwIfAborted()
+		const headers = new Headers({ accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'vozka' })
+		if (token !== undefined) headers.set('authorization', `Bearer ${token}`)
+		const receivedResponse = await awaitSourceOperation(
+			transport.fetch(url, { headers, redirect: 'error', signal }).then((received) => {
+				if (signal.aborted) {
+					void received.body?.cancel().catch(() => {})
+					signal.throwIfAborted()
+				}
+				return received
+			}),
+			signal,
+		)
+		response = receivedResponse
+		if (receivedResponse.redirected || (receivedResponse.status >= 300 && receivedResponse.status < 400)) throw invalidSourceResponse()
+		if (allowNotFound && receivedResponse.status === 404) return SOURCE_NOT_FOUND
+		if (!receivedResponse.ok) throw invalidSourceResponse()
+		return await readSourceJson(receivedResponse, signal)
+	} catch {
+		callerSignal?.throwIfAborted()
+		deadline.signal.throwIfAborted()
+		throw new Error('GitHub source request failed')
+	} finally {
+		deadline.dispose()
+		void response?.body?.cancel().catch(() => {})
+	}
+}
+
+async function readSourceJson(response: Response, signal: AbortSignal): Promise<unknown> {
+	const declaredLength = response.headers.get('content-length')
+	if (declaredLength !== null && /^[0-9]+$/.test(declaredLength) && Number(declaredLength) > SOURCE_MAX_RESPONSE_BYTES) throw invalidSourceResponse()
+	const reader = response.body?.getReader()
+	if (reader === undefined) throw invalidSourceResponse()
+	const chunks: Uint8Array[] = []
+	let length = 0
+	try {
+		while (true) {
+			signal.throwIfAborted()
+			const result = await awaitSourceOperation(reader.read(), signal)
+			if (result.done) break
+			length += result.value.byteLength
+			if (length > SOURCE_MAX_RESPONSE_BYTES) throw invalidSourceResponse()
+			chunks.push(result.value)
+		}
+	} catch (error) {
+		void reader.cancel().catch(() => {})
+		throw error
+	} finally {
+		reader.releaseLock()
+	}
+	const bytes = new Uint8Array(length)
+	let offset = 0
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset)
+		offset += chunk.byteLength
+	}
+	signal.throwIfAborted()
+	const body: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+	signal.throwIfAborted()
+	return body
+}
+
+function awaitSourceOperation<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const aborted = (): void => {
+			cleanup()
+			try {
+				signal.throwIfAborted()
+			} catch (error) {
+				reject(error)
+			}
+		}
+		const cleanup = (): void => signal.removeEventListener('abort', aborted)
+		signal.addEventListener('abort', aborted, { once: true })
+		operation.then(
+			(value) => {
+				cleanup()
+				try {
+					signal.throwIfAborted()
+					resolve(value)
+				} catch (error) {
+					reject(error)
+				}
+			},
+			(error: unknown) => {
+				cleanup()
+				try {
+					signal.throwIfAborted()
+					reject(error)
+				} catch (reason) {
+					reject(reason)
+				}
+			},
+		)
+		if (signal.aborted) aborted()
+	})
 }
 
 const verifyPushWebhook = async (request: Request, secret: string): Promise<PushEvent | null> => {

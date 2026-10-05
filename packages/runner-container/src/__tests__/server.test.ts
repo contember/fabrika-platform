@@ -1,5 +1,5 @@
 import type { RunLogLine } from '@fabrika/control-contract'
-import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
+import { CLOUDFLARE_SOURCE_PROTOCOL, type CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
 import type { RunnerStatus } from '@fabrika/runner-contract'
 import { describe, expect, test } from 'bun:test'
 import type { RunnerEnv, SpawnHandlers, SpawnResult, SpawnSpec } from '../runner'
@@ -58,6 +58,20 @@ describe('runner server protocol', () => {
 		const server = createServer(makeEnv())
 		const response = await server.handle(post({ not: 'a job' }))
 		expect(response.status).toBe(400)
+	})
+
+	test('a legacy mutable non-dry job is refused before creating a runner or spawning Git', async () => {
+		const commands: string[] = []
+		const server = createServer({
+			workspace: '/workspace',
+			spawn: async (spec) => {
+				commands.push(spec.command)
+				return { exitCode: 0 }
+			},
+		})
+		expect((await server.handle(post({ ...job, dryRun: false }))).status).toBe(400)
+		expect(server.current()).toBeUndefined()
+		expect(commands).toEqual([])
 	})
 
 	test('a second concurrent /run → 409', async () => {
@@ -182,8 +196,9 @@ describe('runner server protocol', () => {
 		const server = createServer(makeEnv())
 		const response = await server.handle(new Request('http://container/health'))
 		expect(response.status).toBe(200)
-		const body: { status: string } = await response.json()
-		expect(body.status).toBe('ok')
+		const body: unknown = await response.json()
+		expect(body).toEqual({ status: 'ok', port: 8080, sourceProtocol: CLOUDFLARE_SOURCE_PROTOCOL })
+		expect(server.current()).toBeUndefined()
 	})
 
 	test('GET /status before any run → 404', async () => {

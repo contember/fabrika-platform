@@ -1,6 +1,6 @@
 // The in-container run engine — pure of HTTP, so it's unit-testable with a fake command runner.
 //
-// A `Runner` drives one job through clone → install → `fabrika-cloudflare-executor deploy`, narrating progress and
+// A `Runner` drives one job through verified checkout → install → `fabrika-cloudflare-executor deploy`, narrating progress and
 // streaming child stdout/stderr line-by-line into an in-memory log buffer. Secret values and
 // credentials are redacted from every line before it lands in the buffer; they only ever reach
 // the `fabrika` child through its environment, never argv, never a log.
@@ -15,7 +15,7 @@ import {
 	type RunnerState,
 	type RunnerStatus,
 } from '@fabrika/runner-contract'
-import { readFile, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 /**
@@ -26,8 +26,9 @@ import { resolve } from 'node:path'
  */
 const MAX_BUFFER_LINES = 10_000
 
-/** A residual this long is no longer a token awaiting its other half — emit it, keep memory bounded. */
 const MAX_RESIDUAL_CHARS = 64 * 1024
+const MAX_HEAD_BYTES = 128
+const COMMIT_SHA = /^[0-9a-f]{40}$/
 
 const MAX_OUTCOME_FILE_BYTES = 1024 * 1024
 
@@ -35,6 +36,9 @@ const OUTCOME_UNREADABLE = 'runner outcome file is unreadable'
 const OUTCOME_TOO_LARGE = 'runner outcome file exceeds the size limit'
 const OUTCOME_MALFORMED = 'runner outcome file is malformed'
 const UNEXPECTED_FAILURE = 'runner execution failed unexpectedly'
+const HEAD_FAILED = 'git HEAD verification failed'
+const HEAD_TOO_LARGE = 'git HEAD output exceeds the size limit'
+const HEAD_MALFORMED = 'git HEAD output is malformed'
 
 /** A spawned command's outcome plus its (already line-split, redacted) output. */
 export interface SpawnResult {
@@ -85,8 +89,63 @@ export interface SourceMapCollection {
 	incomplete: boolean
 }
 
-/** Build the redactor: a function that masks every sensitive value found in a line. */
-const makeRedactor = (job: CloudflareRunnerJob): (text: string) => string => {
+interface GitSource {
+	url: string
+	env: Record<string, string>
+	sensitive: string[]
+}
+
+const parseGitSource = (repoUrl: string): GitSource | null => {
+	try {
+		const url = new URL(repoUrl)
+		if (url.protocol !== 'https:') return null
+		const sensitive: string[] = []
+		if (url.username !== '' || url.password !== '') {
+			const username = decodeURIComponent(url.username)
+			const password = decodeURIComponent(url.password)
+			const userinfo = `${username}:${password}`
+			const basic = Buffer.from(userinfo).toString('base64')
+			const header = `Authorization: Basic ${basic}`
+			sensitive.push(
+				repoUrl,
+				url.href,
+				decodeURIComponent(repoUrl),
+				url.username,
+				url.password,
+				username,
+				password,
+				encodeURIComponent(username),
+				encodeURIComponent(password),
+				userinfo,
+				basic,
+				`Basic ${basic}`,
+				header,
+			)
+			url.username = ''
+			url.password = ''
+			return {
+				url: url.href,
+				sensitive,
+				env: {
+					GIT_TERMINAL_PROMPT: '0',
+					GIT_CONFIG_COUNT: '1',
+					GIT_CONFIG_KEY_0: `http.${url.href}.extraHeader`,
+					GIT_CONFIG_VALUE_0: header,
+				},
+			}
+		}
+		return { url: url.href, env: { GIT_TERMINAL_PROMPT: '0' }, sensitive }
+	} catch {
+		return null
+	}
+}
+
+interface Redactor {
+	redact: (text: string) => string
+	prefixLength: (text: string) => number
+}
+
+const makeRedactor = (job: CloudflareRunnerJob, gitSource: GitSource | null): Redactor => {
 	const sensitive = new Set<string>()
 	for (const value of Object.values(job.credentials)) {
 		if (typeof value === 'string' && value.length >= 4) {
@@ -109,29 +168,52 @@ const makeRedactor = (job: CloudflareRunnerJob): (text: string) => string => {
 		}
 	}
 	if (job.artifactUpload?.bearer !== undefined) sensitive.add(job.artifactUpload.bearer)
-	// The clone URL may embed a short-lived installation token as userinfo (`x-access-token:<token>@…`
-	// for a private repo); redact it like any other credential so it never lands in a persisted log line.
-	try {
-		const password = new URL(job.repoUrl).password
-		if (password.length >= 4) {
-			sensitive.add(password)
-		}
-	} catch {
-		// repoUrl isn't a parseable absolute URL (e.g. a fake/test value) — nothing to extract.
+	for (const value of gitSource?.sensitive ?? []) {
+		if (value !== '') sensitive.add(value)
 	}
 	// Longest-first so a value that contains another is masked before its substring.
-	const values = [...sensitive].sort((a, b) => b.length - a.length)
-	return (text: string): string => {
-		let out = text
-		for (const value of values) {
-			out = out.split(value).join('***')
+	const values = [...sensitive].filter((value) => value !== '').sort((a, b) => b.length - a.length)
+	const overlap = Math.max(0, (values[0]?.length ?? 1) - 1)
+	const matchesIn = (text: string) => {
+		const occurrences = values.map((value) => ({ value, index: text.indexOf(value) }))
+		return (start: number): { index: number; length: number } | undefined => {
+			let match: { index: number; length: number } | undefined
+			for (const occurrence of occurrences) {
+				if (occurrence.index !== -1 && occurrence.index < start) occurrence.index = text.indexOf(occurrence.value, start)
+				if (occurrence.index !== -1 && (match === undefined || occurrence.index < match.index)) {
+					match = { index: occurrence.index, length: occurrence.value.length }
+				}
+				if (occurrence.index === start) break
+			}
+			return match
 		}
-		return out
+	}
+	return {
+		redact: (text) => {
+			const nextMatch = matchesIn(text)
+			let out = ''
+			let cursor = 0
+			for (let match = nextMatch(cursor); match !== undefined; match = nextMatch(cursor)) {
+				out += `${text.slice(cursor, match.index)}***`
+				cursor = match.index + match.length
+			}
+			return out + text.slice(cursor)
+		},
+		prefixLength: (text) => {
+			const nextMatch = matchesIn(text)
+			let end = Math.max(0, text.length - overlap)
+			let cursor = 0
+			for (let match = nextMatch(cursor); match !== undefined && match.index < end; match = nextMatch(cursor)) {
+				if (match.index + match.length > end) {
+					end = match.index
+					break
+				}
+				cursor = match.index + match.length
+			}
+			return end
+		},
 	}
 }
-
-/** Strip any `user:pass@` userinfo from a URL for display — the clone URL may carry an install token. */
-const stripUserinfo = (url: string): string => url.replace(/(\/\/)[^@/]*@/, '$1')
 
 /** Resolve a job-supplied path under `base`, or `null` if it is absolute, walks up, or escapes. */
 const containedPath = (base: string, value: string | undefined): string | null => {
@@ -176,10 +258,12 @@ const parseOutcomeFile = (raw: string): RunnerOutcomeFile => {
 export class Runner {
 	private readonly job: CloudflareRunnerJob
 	private readonly env: RunnerEnv & { now: () => number; collectSourceMaps: (cwd: string) => Promise<SourceMapCollection>; fetch: ArtifactFetch }
-	private readonly redact: (text: string) => string
+	private readonly gitSource: GitSource | null
+	private readonly redactor: Redactor
 	private readonly buffer: RunLogLine[] = []
 	private readonly subscribers = new Set<(line: RunLogLine) => void>()
 	private readonly residual: { stdout: string; stderr: string } = { stdout: '', stderr: '' }
+	private readonly discarded: { stdout: boolean; stderr: boolean } = { stdout: false, stderr: false }
 	private state: RunnerState = 'pending'
 	private exitCode: number | undefined
 	private error: string | undefined
@@ -197,7 +281,8 @@ export class Runner {
 			fetch,
 			...env,
 		}
-		this.redact = makeRedactor(job)
+		this.gitSource = parseGitSource(job.repoUrl)
+		this.redactor = makeRedactor(job, this.gitSource)
 		this.startedAt = this.env.now()
 	}
 
@@ -213,7 +298,7 @@ export class Runner {
 
 	/** Append a line (redacted) to the buffer and fan it out to subscribers. */
 	private emit(stream: RunLogLine['stream'], rawText: string): void {
-		const text = this.redact(rawText)
+		const text = this.redactor.redact(rawText)
 		const line: RunLogLine = { ts: this.env.now(), stream, text }
 		this.buffer.push(line)
 		if (this.buffer.length > MAX_BUFFER_LINES) {
@@ -236,6 +321,12 @@ export class Runner {
 	 * half, and the redactor only recognises a value it sees whole.
 	 */
 	private emitChunk(stream: 'stdout' | 'stderr', chunk: string): void {
+		if (this.discarded[stream]) {
+			const newline = chunk.indexOf('\n')
+			if (newline === -1) return
+			this.discarded[stream] = false
+			chunk = chunk.slice(newline + 1)
+		}
 		let pending = this.residual[stream] + chunk
 		for (let newline = pending.indexOf('\n'); newline !== -1; newline = pending.indexOf('\n')) {
 			const line = pending.slice(0, newline)
@@ -245,8 +336,15 @@ export class Runner {
 			pending = pending.slice(newline + 1)
 		}
 		if (pending.length > MAX_RESIDUAL_CHARS) {
-			this.emit(stream, pending)
-			pending = ''
+			// Keep enough original suffix to recognize a credential completed by the next pipe read.
+			const end = this.redactor.prefixLength(pending)
+			if (end > 0) this.emit(stream, pending.slice(0, end))
+			pending = pending.slice(end)
+			if (pending.length > MAX_RESIDUAL_CHARS) {
+				this.emit(stream, '*** [unfinished log line exceeds the size limit]')
+				pending = ''
+				this.discarded[stream] = true
+			}
 		}
 		this.residual[stream] = pending
 	}
@@ -260,6 +358,7 @@ export class Runner {
 	private flushResidual(stream: 'stdout' | 'stderr'): void {
 		const pending = this.residual[stream]
 		this.residual[stream] = ''
+		this.discarded[stream] = false
 		if (pending.length > 0) {
 			this.emit(stream, pending)
 		}
@@ -298,15 +397,43 @@ export class Runner {
 	}
 
 	/** Spawn a step, wiring its output into the log buffer. */
-	private async step(spec: SpawnSpec): Promise<SpawnResult> {
+	private async step(spec: SpawnSpec, handlers: SpawnHandlers = {
+		onStdout: (chunk) => this.emitChunk('stdout', chunk),
+		onStderr: (chunk) => this.emitChunk('stderr', chunk),
+	}): Promise<SpawnResult> {
 		try {
-			return await this.env.spawn(spec, {
-				onStdout: (chunk) => this.emitChunk('stdout', chunk),
-				onStderr: (chunk) => this.emitChunk('stderr', chunk),
-			})
+			return await this.env.spawn(spec, handlers)
 		} finally {
 			this.flushResiduals()
 		}
+	}
+
+	private async verifyCheckout(git: GitSource, expected: string): Promise<RunnerStatus | undefined> {
+		let head = ''
+		let bytes = 0
+		let overflowed = false
+		let result: SpawnResult
+		try {
+			result = await this.step({ command: 'git', args: ['log', '-1', '--format=%H', '--'], cwd: this.checkoutDir, env: git.env }, {
+				onStdout: (chunk) => {
+					bytes += Buffer.byteLength(chunk)
+					if (bytes > MAX_HEAD_BYTES) {
+						overflowed = true
+						throw new Error(HEAD_TOO_LARGE)
+					}
+					head += chunk
+				},
+				onStderr: () => {},
+			})
+		} catch {
+			return this.refuse(overflowed ? HEAD_TOO_LARGE : HEAD_FAILED)
+		}
+		if (result.exitCode !== 0) return this.refuse(HEAD_FAILED)
+		if (!/^[0-9a-f]{40}\r?\n$/.test(head)) return this.refuse(HEAD_MALFORMED)
+		const actual = head.slice(0, 40)
+		if (actual !== expected) return this.refuse('git checkout HEAD does not match the expected commit')
+		this.emit('meta', `Git checkout verified: expected=${expected} actual=${actual}`)
+		return undefined
 	}
 
 	/** Build the provider CLI environment without putting sensitive values on argv. */
@@ -384,22 +511,43 @@ export class Runner {
 			return this.refuse('configPath must be a relative path inside the checkout')
 		}
 
-		// ── clone ──
+		if (!COMMIT_SHA.test(this.job.ref) && this.job.dryRun !== true) return this.refuse('non-dry ref must be a complete lowercase 40-hex commit SHA')
+		const expected = this.job.ref.toLowerCase()
+		const exact = COMMIT_SHA.test(expected)
+		if (/^[0-9a-f]{64}$/i.test(this.job.ref)) return this.refuse('unsupported commit SHA format')
+		const git = this.gitSource
+		if (git === null) return this.refuse('repository URL is invalid')
 		this.state = 'cloning'
-		this.emit('meta', `Cloning ${stripUserinfo(this.job.repoUrl)} @ ${this.job.ref}`)
-		// `git clone --branch` wants a short branch/tag NAME, not a fully-qualified ref — strip the
-		// `refs/heads/` or `refs/tags/` prefix the trigger carries (a bare name/sha passes through).
-		const branch = this.job.ref.replace(/^refs\/(heads|tags)\//, '')
-		const clone = await this.step({
-			command: 'git',
-			// `--` so a repoUrl or ref starting with `-` cannot be parsed as a git option.
-			args: ['clone', '--depth', '1', '--branch', branch, '--', this.job.repoUrl, this.checkoutDir],
-			cwd: this.env.workspace,
-		})
-		if (clone.exitCode !== 0) {
-			this.finish('failed', { error: `git clone failed (exit ${clone.exitCode})` })
-			this.emit('meta', `Clone failed (exit ${clone.exitCode})`)
-			return this.status()
+		if (exact) {
+			try {
+				// mkdir is exclusive: never admit bytes left by an earlier execution with this run ID.
+				await mkdir(this.checkoutDir)
+			} catch (error) {
+				const exists = typeof error === 'object' && error !== null && Reflect.get(error, 'code') === 'EEXIST'
+				return this.refuse(exists ? 'checkout directory already exists' : 'could not create a fresh checkout directory')
+			}
+			this.emit('meta', `Checking out ${git.url} @ ${expected}`)
+			const steps: SpawnSpec[] = [
+				{ command: 'git', args: ['init', '--', this.checkoutDir], cwd: this.env.workspace, env: git.env },
+				{ command: 'git', args: ['fetch', '--depth=1', '--no-tags', '--', git.url, expected], cwd: this.checkoutDir, env: git.env },
+				{ command: 'git', args: ['switch', '--detach', '--', expected], cwd: this.checkoutDir, env: git.env },
+			]
+			for (const spec of steps) {
+				const result = await this.step(spec)
+				if (result.exitCode !== 0) return this.refuse(`git ${spec.args[0]} failed (exit ${result.exitCode})`)
+			}
+			const failure = await this.verifyCheckout(git, expected)
+			if (failure !== undefined) return failure
+		} else {
+			this.emit('meta', `Cloning ${git.url} @ ${this.job.ref}`)
+			const branch = this.job.ref.replace(/^refs\/(heads|tags)\//, '')
+			const clone = await this.step({
+				command: 'git',
+				args: ['clone', '--depth', '1', '--branch', branch, '--', git.url, this.checkoutDir],
+				cwd: this.env.workspace,
+				env: git.env,
+			})
+			if (clone.exitCode !== 0) return this.refuse(`git clone failed (exit ${clone.exitCode})`)
 		}
 
 		// ── install ──

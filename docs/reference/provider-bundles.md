@@ -134,6 +134,54 @@ protocol, `@fabrika/runner-container` executes the job, and
 `@fabrika/runner-cloudflare` hosts and relays the container. None of the runner
 packages owns provider plan semantics.
 
+### Cloudflare source and runner admission
+
+`createCloudflareControlProvider` requires three separate collaborators:
+
+| Option                               | Contract                                                                                                                             |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `resolveSource(input)`               | Return the verified immutable `commitSha` through the neutral `ProviderSourceResolutionInput` / `ProviderSourceResolution` contract. |
+| `prepareClone(source, signal)`       | Return `CloudflareCloneSource`, containing only the ephemeral `repoUrl`. It cannot replace the selected ref.                         |
+| `assertRunnerSourceProtocol(signal)` | Verify the authenticated Worker capability before external acceptance or runner submission.                                          |
+
+Custom compositions use `CloudflareCloneSource` for clone authorization. The
+`resolveSource` option selects source identity; it does not return a clone URL.
+`startRun`, cancellation and recovery retain their separate execution roles.
+
+The GitHub composition verifies a recorded commit directly. Without one, it
+resolves the requested concrete ref once. Qualified heads and tags preserve their
+namespaces; bare names try the exact branch first and the exact tag only after
+404. Ref-selected annotated tags peel to commits. Recorded non-commit objects
+fail. Public resolution uses anonymous GitHub data requests; private resolution
+uses the recorded installation's repository-scoped read-only token.
+
+Control persists the selected commit under its ownership fence before creating
+the release context. The original requested ref remains in run history. Non-dry
+`CloudflareRunnerJob.ref` must contain a complete lowercase 40-hex GitHub commit.
+The runner fetches that object, detaches HEAD and compares the observed commit
+before installing dependencies or running repository commands. It logs the
+expected/actual commit witness. Git authorization stays in the Git child's
+environment, outside argv, persisted Git configuration and repository children.
+Runtime release and source-map upload scope use Control's frozen release for
+that same commit. Missing or mismatched objects fail without a branch fallback.
+
+`CLOUDFLARE_SOURCE_PROTOCOL = 'git-commit-v1'` is exported by the provider root
+and `/runner` entrypoint. Control checks `sourceProtocol(runnerKey)` on the
+detached Worker. The Worker checks the image's `/health` capability before
+POSTing `/run`. A known pre-POST image refusal produces a persisted failed
+outcome and the existing terminal database co-write. Errors after submission
+retain recovery semantics because work may already have started.
+
+Dry mutable-ref previews retain branch/tag cloning and release-unavailable
+semantics. A dry full-SHA preview uses exact checkout verification. Dry previews
+do not upload source maps.
+
+The contract decision is [ADR-0048](../decisions/0048-bind-cloudflare-delivery-to-the-recorded-commit.md).
+The detached runner/image precedes Control in an operator-owned rollout; see
+[`release-process.md`](release-process.md#deployment-boundary).
+
+### Zerops composition
+
 The Zerops installation starts at `packages/control/src/node/server.ts`.
 `node/provider.ts` composes `@fabrika/provider-zerops` with the neutral engine,
 Zerops credentials, and the proxy-manifest synchronization hook. Deploy
@@ -143,6 +191,8 @@ provider-local fallback lifecycle. Accepted app-version ids are reconciled
 through the provider capability after restarts. Control then records the
 terminal run and projects its terminal release state to Operations before
 releasing the run lock.
+
+### Shared lifecycle ownership
 
 `@fabrika/platform` supplies the shared SQL lease implementation. Acquisition is non-reentrant;
 release matches the holder. `renew(key, holder, ttlMs)` extends only a still-live lease owned by that

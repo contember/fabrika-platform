@@ -7,10 +7,12 @@ import type {
 	ProviderRegistration,
 	ProviderRegistrationInput,
 	ProviderSource,
+	ProviderSourceResolution,
+	ProviderSourceResolutionInput,
 	ProviderTerminalOutcome,
 	SchemaReconciler,
 } from '@fabrika/provider-contract'
-import { ProviderInvocationAbort } from '@fabrika/provider-contract'
+import { decodeEnvelope, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-contract'
 import type { RunnerIamReconcile } from '@fabrika/runner-contract'
 import { cloudflareArtifactCodec } from './codec'
@@ -50,6 +52,8 @@ export const cloudflareStoredTargetCodec: ProviderCodec<CloudflareStoredTarget> 
 		return stateNamespace === undefined ? {} : { stateNamespace }
 	},
 }
+
+export const CLOUDFLARE_SOURCE_PROTOCOL = 'git-commit-v1'
 
 /** Cloudflare-specific request carried from the control plane to the deploy runner. */
 export interface CloudflareRunnerJob {
@@ -107,6 +111,8 @@ const isArtifactUpload = (value: unknown): boolean =>
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ENV_NAME = /^[a-z0-9-]+$/
+const COMMIT_SHA = /^[0-9a-f]{40}$/
+const isCanonicalCommit = (value: string): boolean => value.length === 40 && COMMIT_SHA.test(value)
 
 /** Whitespace or a control character in a value that becomes an argv element or a filesystem path. */
 const hasUnsafeChars = (value: string): boolean =>
@@ -144,6 +150,9 @@ export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunner
 		return false
 	}
 	const credentials = value.credentials
+	if (!('dryRun' in value && value.dryRun === true) && !isCanonicalCommit(value.ref)) {
+		return false
+	}
 	const requiredCredentials = 'CLOUDFLARE_ACCOUNT_ID' in credentials
 		&& typeof credentials.CLOUDFLARE_ACCOUNT_ID === 'string'
 		&& credentials.CLOUDFLARE_ACCOUNT_ID !== ''
@@ -175,9 +184,8 @@ export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunner
 	return true
 }
 
-export interface ResolvedCloudflareSource {
+export interface CloudflareCloneSource {
 	readonly repoUrl: string
-	readonly ref: string
 }
 
 /** A run's terminal outcome plus the IAM reconcile the executor compiled, if the plan reached that step. */
@@ -191,20 +199,12 @@ export interface CloudflareControlOptions {
 	readonly runnerKey: string
 	/** Overridable for tests; production reconciles over HTTPS with the control plane's own admin key. */
 	readonly reconcileSchema?: SchemaReconciler
-	resolveSource(source: ProviderSource, signal: AbortSignal): Promise<ResolvedCloudflareSource>
+	resolveSource(input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution>
+	prepareClone(source: ProviderSource, signal: AbortSignal): Promise<CloudflareCloneSource>
+	assertRunnerSourceProtocol(signal: AbortSignal): Promise<void>
 	startRun(job: CloudflareRunnerJob): Promise<CloudflareRunOutcome>
 	cancelRun(runId: string): Promise<void>
 	recoverRun?(runId: string): Promise<'running' | 'failed'>
-}
-
-const decodeEnvelope = <T>(kind: string, envelope: ProviderEnvelope, codec: ProviderCodec<T>): T => {
-	if (envelope.provider !== 'cloudflare') {
-		throw new Error(`${kind} belongs to provider "${envelope.provider}", expected "cloudflare"`)
-	}
-	if (envelope.version !== codec.version) {
-		throw new Error(`${kind} schema version ${envelope.version} is not supported by provider "cloudflare"`)
-	}
-	return codec.decode(envelope.payload)
 }
 
 const encodeEnvelope = <T>(codec: ProviderCodec<T>, value: T): ProviderEnvelope => ({
@@ -213,12 +213,16 @@ const encodeEnvelope = <T>(codec: ProviderCodec<T>, value: T): ProviderEnvelope 
 	payload: codec.encode(value),
 })
 
-const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegistration => {
+const assertRegistrationApp = (input: ProviderRegistrationInput): void => {
 	if (input.app.id !== input.environment.appId) {
 		throw new Error(`Cloudflare environment belongs to app "${input.environment.appId}", expected "${input.app.id}"`)
 	}
-	const target = decodeEnvelope('target', input.environment.target, cloudflareStoredTargetCodec)
-	const artifact = decodeEnvelope('artifact', input.environment.artifact, cloudflareArtifactCodec)
+}
+
+const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegistration => {
+	assertRegistrationApp(input)
+	const target = decodeEnvelope('target', 'cloudflare', input.environment.target, cloudflareStoredTargetCodec)
+	const artifact = decodeEnvelope('artifact', 'cloudflare', input.environment.artifact, cloudflareArtifactCodec)
 	return {
 		app: input.app,
 		environment: {
@@ -229,10 +233,33 @@ const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegist
 	}
 }
 
+const awaitWithSignal = async <T>(signal: AbortSignal, invoke: () => Promise<T>): Promise<T> => {
+	signal.throwIfAborted()
+	const interrupted = Promise.withResolvers<never>()
+	const abort = (): void => interrupted.reject(signal.reason)
+	signal.addEventListener('abort', abort, { once: true })
+	try {
+		const result = await Promise.race([invoke(), interrupted.promise])
+		signal.throwIfAborted()
+		return result
+	} catch (error) {
+		signal.throwIfAborted()
+		throw error
+	} finally {
+		signal.removeEventListener('abort', abort)
+	}
+}
+
 const buildJob = async (options: CloudflareControlOptions, input: ProviderDeployInput): Promise<CloudflareRunnerJob> => {
-	const source = await options.resolveSource(input.app.source, input.signal)
-	const storedTarget = decodeEnvelope('target', input.environment.target, cloudflareStoredTargetCodec)
-	const artifact = decodeEnvelope('artifact', input.environment.artifact, cloudflareArtifactCodec)
+	input.signal.throwIfAborted()
+	assertRegistrationApp(input)
+	const storedTarget = decodeEnvelope('target', 'cloudflare', input.environment.target, cloudflareStoredTargetCodec)
+	const artifact = decodeEnvelope('artifact', 'cloudflare', input.environment.artifact, cloudflareArtifactCodec)
+	const ref = input.app.source.ref
+	if (!input.dryRun && !isCanonicalCommit(ref)) {
+		throw new Error('Cloudflare deploy requires a canonical 40-character commit SHA')
+	}
+	const source = await awaitWithSignal(input.signal, () => options.prepareClone(input.app.source, input.signal))
 	const managedEnvironment: Record<string, string> = {}
 	for (const [name, value] of Object.entries(input.managedEnvironment)) {
 		if (value !== null) managedEnvironment[name] = value
@@ -240,7 +267,7 @@ const buildJob = async (options: CloudflareControlOptions, input: ProviderDeploy
 	return {
 		runId: input.runId,
 		repoUrl: source.repoUrl,
-		ref: source.ref,
+		ref,
 		env: input.environment.env,
 		runnerKey: options.runnerKey,
 		credentials: {
@@ -311,9 +338,14 @@ const applyIamReconcile = async (
 export const createCloudflareControlProvider = (options: CloudflareControlOptions): ControlProvider => ({
 	id: 'cloudflare',
 	normalizeRegistration,
+	resolveSource: async (input) => {
+		input.signal.throwIfAborted()
+		const registration = normalizeRegistration(input)
+		return awaitWithSignal(input.signal, () => options.resolveSource({ ...input, ...registration }))
+	},
 	deploy: async (input) => {
 		const job = await buildJob(options, input)
-		input.signal.throwIfAborted()
+		await awaitWithSignal(input.signal, () => options.assertRunnerSourceProtocol(input.signal))
 		await input.events.externalId(input.runId)
 		input.signal.throwIfAborted()
 		const interrupted = Promise.withResolvers<never>()
@@ -328,6 +360,9 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 		let outcome: CloudflareRunOutcome
 		try {
 			outcome = await Promise.race([options.startRun(job), interrupted.promise])
+		} catch (error) {
+			input.signal.throwIfAborted()
+			throw error
 		} finally {
 			input.signal.removeEventListener('abort', abort)
 		}

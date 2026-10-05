@@ -11,14 +11,14 @@
 import type { IamRpc } from '@fabrika/auth'
 import { readEnvironmentName } from '@fabrika/auth-core'
 import type { BlobStore, HttpService, JobQueue } from '@fabrika/platform'
-import { type CloudflareRunnerJob, createCloudflareControlProvider } from '@fabrika/provider-cloudflare'
+import { CLOUDFLARE_SOURCE_PROTOCOL, type CloudflareRunnerJob, createCloudflareControlProvider } from '@fabrika/provider-cloudflare'
 import type { CloudflareRunOutcome } from '@fabrika/provider-cloudflare/runner'
 import type { ControlProvider, ProviderSource } from '@fabrika/provider-contract'
 import type { RelayResult, VozkaRunner } from '@fabrika/runner-cloudflare'
 import { createControlRepositories } from './db'
 import type { Env } from './env'
 import { controlPublicOrigin } from './iam'
-import { GitHubAppRepoSource, type RepoSource } from './repo-source'
+import { GitHubAppRepoSource } from './repo-source'
 import type { ControlJobMessage } from './run-lifecycle'
 
 /**
@@ -87,7 +87,9 @@ export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL'
 	}
 }
 
-function cloudflareRepoSource(bindings: Pick<WorkerBindings, 'GITHUB_APP_ID' | 'GITHUB_APP_PRIVATE_KEY' | 'GITHUB_WEBHOOK_SECRET'>): RepoSource {
+function cloudflareRepoSource(
+	bindings: Pick<WorkerBindings, 'GITHUB_APP_ID' | 'GITHUB_APP_PRIVATE_KEY' | 'GITHUB_WEBHOOK_SECRET'>,
+): GitHubAppRepoSource {
 	return new GitHubAppRepoSource({
 		appId: bindings.GITHUB_APP_ID ?? '',
 		privateKeyPem: bindings.GITHUB_APP_PRIVATE_KEY ?? '',
@@ -124,6 +126,7 @@ export function cfJobQueue<T>(queue: Queue<T>): JobQueue<T> {
  * structurally; naming it keeps the two adapters below reachable without a Workers RPC stub.
  */
 export interface CloudflareRunnerService {
+	sourceProtocol(runnerKey: string): Promise<typeof CLOUDFLARE_SOURCE_PROTOCOL>
 	startRun(job: CloudflareRunnerJob): Promise<RelayResult>
 	cancelRun(runId: string, runnerKey: string): Promise<unknown>
 	recoverRun(runId: string, runnerKey: string): Promise<'running' | 'failed'>
@@ -143,14 +146,40 @@ const required = (value: string | undefined, name: string): string => {
 	return value
 }
 
-const resolveSource = async (bindings: WorkerBindings, source: ProviderSource, signal: AbortSignal) => {
+const prepareClone = async (bindings: WorkerBindings, source: ProviderSource, signal: AbortSignal) => {
 	const target = await cloudflareRepoSource(bindings).clone(
 		source.repoUrl,
 		source.ref,
 		source.githubInstallationId,
 		signal,
 	)
-	return { repoUrl: target.cloneUrl, ref: target.ref }
+	return { repoUrl: target.cloneUrl }
+}
+
+export const assertRunnerSourceProtocol = async (
+	svc: CloudflareRunnerService,
+	runnerKey: string | undefined,
+	signal: AbortSignal,
+): Promise<void> => {
+	signal.throwIfAborted()
+	const key = required(runnerKey, 'FABRIKA_RUNNER_KEY')
+	const interrupted = Promise.withResolvers<never>()
+	const abort = (): void => interrupted.reject(signal.reason)
+	signal.addEventListener('abort', abort, { once: true })
+	const timer = setTimeout(() => interrupted.reject(new Error('Cloudflare runner source protocol request timed out')), 15_000)
+	try {
+		const protocol = await Promise.race([svc.sourceProtocol(key), interrupted.promise])
+		signal.throwIfAborted()
+		if (protocol !== CLOUDFLARE_SOURCE_PROTOCOL) {
+			throw new Error('Cloudflare runner source protocol is not supported')
+		}
+	} catch {
+		signal.throwIfAborted()
+		throw new Error('Cloudflare runner source protocol is unavailable or not supported')
+	} finally {
+		clearTimeout(timer)
+		signal.removeEventListener('abort', abort)
+	}
 }
 
 /** The executor's IAM reconcile rides back on the outcome: the container compiles the schema, the control plane applies it. */
@@ -184,7 +213,17 @@ export function cloudflareControlProvider(bindings: WorkerBindings, env: Env): C
 		apiToken: bindings.CLOUDFLARE_API_TOKEN ?? '',
 		...cloudflareIamControlOptions(env),
 		runnerKey: env.FABRIKA_RUNNER_KEY ?? '',
-		resolveSource: (source, signal) => resolveSource(bindings, source, signal),
+		resolveSource: (input) => {
+			const source = input.app.source
+			return cloudflareRepoSource(bindings).resolveCommit(
+				source.repoUrl,
+				input.expectedCommitSha ?? source.ref,
+				source.githubInstallationId,
+				input.signal,
+			)
+		},
+		prepareClone: (source, signal) => prepareClone(bindings, source, signal),
+		assertRunnerSourceProtocol: (signal) => assertRunnerSourceProtocol(runner(bindings), env.FABRIKA_RUNNER_KEY, signal),
 		startRun: (job) => {
 			required(bindings.CLOUDFLARE_ACCOUNT_ID, 'CLOUDFLARE_ACCOUNT_ID')
 			required(bindings.CLOUDFLARE_API_TOKEN, 'CLOUDFLARE_API_TOKEN')

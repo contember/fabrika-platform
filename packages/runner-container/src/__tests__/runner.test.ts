@@ -1,13 +1,18 @@
 import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
+import { isCloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
 import { RUNNER_OUTCOME_FILE_ENV } from '@fabrika/runner-contract'
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdtempSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { collectSourceMaps, Runner, type RunnerEnv, type SpawnHandlers, type SpawnResult, type SpawnSpec } from '../runner'
+import { bunSpawner, createSpawner } from '../spawn'
 
 // The Runner routes every child process through an injected `Spawner`, so these tests drive a full
-// clone → install → fabrika-deploy pipeline with a fake — no git, no network, no real deploy.
+// checkout → install → fabrika-deploy pipeline with a fake. Real Git evidence lives in exact-source-git.test.ts.
+
+const COMMIT = '0123456789abcdef0123456789abcdef01234567'
 
 interface RecordedSpawn {
 	spec: SpawnSpec
@@ -20,41 +25,366 @@ const makeSpawner = (
 ) =>
 async (spec: SpawnSpec, handlers: SpawnHandlers): Promise<SpawnResult> => {
 	rec.push({ spec })
-	return script(spec, handlers)
+	const result = script(spec, handlers)
+	if (spec.command === 'git' && spec.args[0] === 'log' && result.exitCode === 0) handlers.onStdout(`${COMMIT}\n`)
+	return result
 }
 
 const baseJob = (overrides: Partial<CloudflareRunnerJob> = {}): CloudflareRunnerJob => ({
 	runId: 'run-1',
 	repoUrl: 'https://github.com/acme/app.git',
-	ref: 'main',
+	ref: COMMIT,
 	env: 'stage',
 	runnerKey: 'test-runner-key',
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc-123456', CLOUDFLARE_API_TOKEN: 'tok-abcdef' },
 	...overrides,
 })
 
-const makeEnv = (spawn: RunnerEnv['spawn']): RunnerEnv => ({ spawn, workspace: '/workspace' })
+const workspaces = new Set<string>()
+
+afterEach(async () => {
+	await Promise.all([...workspaces].map((workspace) => rm(workspace, { recursive: true, force: true })))
+	workspaces.clear()
+})
+
+const makeEnv = (spawn: RunnerEnv['spawn']): RunnerEnv => {
+	const workspace = mkdtempSync('/tmp/opencode/fabrika-runner-unit-')
+	workspaces.add(workspace)
+	return { spawn, workspace }
+}
 
 describe('Runner pipeline', () => {
+	test('exact checkout verifies HEAD before installing and does not log raw HEAD output', async () => {
+		const rec: RecordedSpawn[] = []
+		const env = makeEnv(makeSpawner(rec, () => ({ exitCode: 0 })))
+		const runner = new Runner(baseJob(), env)
+		const states: string[] = []
+		runner.subscribe((line) => {
+			if (line.text.startsWith('Git checkout verified:')) states.push(runner.status().state)
+		})
+		const status = await runner.run()
+		expect(status.state).toBe('succeeded')
+		expect(rec.slice(0, 4).map(({ spec }) => spec.args)).toEqual([
+			['init', '--', runner.checkoutDir],
+			['fetch', '--depth=1', '--no-tags', '--', 'https://github.com/acme/app.git', COMMIT],
+			['switch', '--detach', '--', COMMIT],
+			['log', '-1', '--format=%H', '--'],
+		])
+		expect(rec.slice(0, 4).map(({ spec }) => spec.cwd)).toEqual([env.workspace, runner.checkoutDir, runner.checkoutDir, runner.checkoutDir])
+		expect(states).toEqual(['cloning'])
+		const texts = runner.lines().map((line) => line.text)
+		const witness = `Git checkout verified: expected=${COMMIT} actual=${COMMIT}`
+		expect(texts).toContain(witness)
+		expect(texts.indexOf(witness)).toBeLessThan(texts.indexOf(`Installing dependencies in ${runner.checkoutDir}`))
+		expect(runner.lines().filter((line) => line.stream === 'stdout')).toEqual([])
+	})
+
+	test('non-dry mutable, abbreviated, uppercase and malformed refs are refused before Git', async () => {
+		for (const ref of ['main', 'refs/heads/main', COMMIT.slice(0, 12), COMMIT.toUpperCase(), 'a'.repeat(64), `${COMMIT}\n`, `--${COMMIT}`, '']) {
+			const rec: RecordedSpawn[] = []
+			const status = await new Runner(baseJob({ ref }), makeEnv(makeSpawner(rec, () => ({ exitCode: 0 })))).run()
+			expect(status.state).toBe('failed')
+			expect(status.error).toBe('non-dry ref must be a complete lowercase 40-hex commit SHA')
+			expect(rec).toEqual([])
+		}
+	})
+
+	test('HEAD capture accepts chunked LF and CRLF and rejects malformed, mismatched or oversized output before Bun', async () => {
+		const cases = [
+			{ chunks: [COMMIT.slice(0, 17), `${COMMIT.slice(17)}\n`], exitCode: 0, error: undefined },
+			{ chunks: [COMMIT, '\r', '\n'], exitCode: 0, error: undefined },
+			{ chunks: [], exitCode: 0, error: 'git HEAD output is malformed' },
+			{ chunks: [COMMIT], exitCode: 0, error: 'git HEAD output is malformed' },
+			{ chunks: [`${COMMIT}\n${COMMIT}\n`], exitCode: 0, error: 'git HEAD output is malformed' },
+			{ chunks: [` ${COMMIT}\n`], exitCode: 0, error: 'git HEAD output is malformed' },
+			{ chunks: [`${COMMIT.toUpperCase()}\n`], exitCode: 0, error: 'git HEAD output is malformed' },
+			{ chunks: ['b'.repeat(40) + '\n'], exitCode: 0, error: 'git checkout HEAD does not match the expected commit' },
+			{ chunks: ['private-head-output\n'], exitCode: 0, error: 'git HEAD output is malformed' },
+			{ chunks: [COMMIT + '\n'], exitCode: 128, error: 'git HEAD verification failed' },
+			{ chunks: ['x'.repeat(128)], exitCode: 0, error: 'git HEAD output is malformed' },
+			{ chunks: ['x'.repeat(64), 'x'.repeat(65)], exitCode: 0, error: 'git HEAD output exceeds the size limit' },
+			{ chunks: ['é'.repeat(65)], exitCode: 0, error: 'git HEAD output exceeds the size limit' },
+		]
+		for (const input of cases) {
+			const rec: SpawnSpec[] = []
+			const runner = new Runner(
+				baseJob(),
+				makeEnv(async (spec, handlers) => {
+					rec.push(spec)
+					if (spec.command === 'git' && spec.args[0] === 'log') {
+						for (const chunk of input.chunks) handlers.onStdout(chunk)
+						handlers.onStderr('private-head-stderr\n')
+						return { exitCode: input.exitCode }
+					}
+					return { exitCode: 0 }
+				}),
+			)
+			const status = await runner.run()
+			expect(status.state).toBe(input.error === undefined ? 'succeeded' : 'failed')
+			expect(status.error).toBe(input.error)
+			expect(rec.some((spec) => spec.command === 'bun')).toBe(input.error === undefined)
+			const diagnostics = JSON.stringify({ status, lines: runner.lines() })
+			expect(diagnostics).not.toContain('private-head-output')
+			expect(diagnostics).not.toContain('private-head-stderr')
+		}
+	})
+
+	test('a HEAD capture overflow waits for child termination and pipe cleanup before terminal failure', async () => {
+		const killed = Promise.withResolvers<void>()
+		const exit = Promise.withResolvers<number>()
+		const drain = Promise.withResolvers<void>()
+		const cancelling = Promise.withResolvers<void>()
+		const stdout = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode('x'.repeat(129)))
+			},
+		})
+		const stderr = new ReadableStream<Uint8Array>({
+			cancel() {
+				cancelling.resolve()
+				return drain.promise
+			},
+		})
+		const headSpawner = createSpawner(() => ({
+			stdout,
+			stderr,
+			exited: exit.promise,
+			kill(signal) {
+				expect(signal).toBe('SIGKILL')
+				killed.resolve()
+			},
+		}))
+		const rec: SpawnSpec[] = []
+		const runner = new Runner(
+			baseJob(),
+			makeEnv(async (spec, handlers) => {
+				rec.push(spec)
+				return spec.args[0] === 'log' ? headSpawner(spec, handlers) : { exitCode: 0 }
+			}),
+		)
+		const run = runner.run()
+		await killed.promise
+		await cancelling.promise
+		expect(runner.isDone()).toBe(false)
+		expect(runner.status().state).toBe('cloning')
+		exit.resolve(137)
+		drain.resolve()
+		const status = await run
+		expect(status.error).toBe('git HEAD output exceeds the size limit')
+		expect(rec.every((spec) => spec.command === 'git')).toBe(true)
+		expect(stdout.locked).toBe(false)
+		expect(stderr.locked).toBe(false)
+	})
+
+	test('each exact Git step failure refuses installation and artifact work without fallback', async () => {
+		for (const failedStep of ['init', 'fetch', 'switch']) {
+			const rec: RecordedSpawn[] = []
+			let maps = false
+			const runner = new Runner(baseJob(), {
+				...makeEnv(makeSpawner(rec, (spec) => ({ exitCode: spec.args[0] === failedStep ? 128 : 0 }))),
+				collectSourceMaps: async () => {
+					maps = true
+					return { artifacts: [], incomplete: false }
+				},
+			})
+			const status = await runner.run()
+			expect(status.error).toBe(`git ${failedStep} failed (exit 128)`)
+			expect(rec.at(-1)?.spec.args[0]).toBe(failedStep)
+			expect(rec.every(({ spec }) => spec.command === 'git')).toBe(true)
+			expect(maps).toBe(false)
+		}
+	})
+
+	test('Git userinfo authorization is URL-scoped child env for both fetch and mutable dry clone', async () => {
+		const token = 'private/%:@+value'
+		const clean = 'https://github.com/acme/app.git'
+		const header = `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`
+		const originalEnv = { ...process.env }
+		for (const preview of [false, true]) {
+			const rec: RecordedSpawn[] = []
+			const runner = new Runner(
+				baseJob({
+					repoUrl: `https://x-access-token:${encodeURIComponent(token)}@github.com/acme/app.git`,
+					...(preview ? { dryRun: true, ref: 'main' } : {}),
+				}),
+				makeEnv(makeSpawner(rec, () => ({ exitCode: 0 }))),
+			)
+			expect((await runner.run()).state).toBe('succeeded')
+			const gitSpecs = rec.filter(({ spec }) => spec.command === 'git').map(({ spec }) => spec)
+			for (const spec of gitSpecs) {
+				expect(spec.env).toEqual({
+					GIT_TERMINAL_PROMPT: '0',
+					GIT_CONFIG_COUNT: '1',
+					GIT_CONFIG_KEY_0: `http.${clean}.extraHeader`,
+					GIT_CONFIG_VALUE_0: header,
+				})
+				expect(spec.args).not.toContain('-c')
+			}
+			expect(gitSpecs.find((spec) => spec.args[0] === (preview ? 'clone' : 'fetch'))?.args).toContain(clean)
+			for (const { spec } of rec) {
+				expect(spec.args.join(' ')).not.toContain(token)
+				expect(spec.args.join(' ')).not.toContain(encodeURIComponent(token))
+				expect(spec.args.join(' ')).not.toContain(header)
+				if (spec.command !== 'git') {
+					expect(Object.keys(spec.env ?? {}).some((key) => key.startsWith('GIT_'))).toBe(false)
+					expect(JSON.stringify(spec.env ?? {})).not.toContain(token)
+				}
+			}
+		}
+		expect(process.env).toEqual(originalEnv)
+	})
+
+	test('raw, encoded, decoded and derived Git credentials, including short tokens, are redacted across chunks and residual boundaries', async () => {
+		for (const token of ['private/%:@+value', 'q!', 'q']) {
+			const encoded = encodeURIComponent(token)
+			const basic = Buffer.from(`x-access-token:${token}`).toString('base64')
+			const header = `Authorization: Basic ${basic}`
+			const values = [token, encoded, `x-access-token:${token}`, basic, `Basic ${basic}`, header]
+			const rec: RecordedSpawn[] = []
+			const runner = new Runner(
+				baseJob({ repoUrl: `https://x-access-token:${encoded}@github.com/acme/app.git` }),
+				makeEnv(makeSpawner(rec, (spec, handlers) => {
+					if (spec.args[0] === 'fetch') {
+						for (const value of values) {
+							const cut = Math.max(1, Math.floor(value.length / 2))
+							handlers.onStderr(`credential=${value.slice(0, cut)}`)
+							handlers.onStderr(`${value.slice(cut)} rejected\n`)
+							for (const emit of [handlers.onStdout, handlers.onStderr]) {
+								emit('y'.repeat(64 * 1024) + value.slice(0, cut))
+								emit(`${value.slice(cut)} end\n`)
+							}
+						}
+						handlers.onStderr(`residual=${header}`)
+					}
+					return { exitCode: 0 }
+				})),
+			)
+			expect((await runner.run()).state).toBe('succeeded')
+			const diagnostics = JSON.stringify({ status: runner.status(), lines: runner.lines() })
+			for (const value of values) expect(diagnostics).not.toContain(value)
+			expect(runner.lines().filter((line) => line.stream === 'stdout').map((line) => line.text).join(''))
+				.toBe(('y'.repeat(64 * 1024) + '*** end').repeat(values.length))
+			expect(runner.lines().filter((line) => line.stream === 'stderr').map((line) => line.text).join('')).toContain('residual=***')
+		}
+	})
+
+	test('an unfinished credential longer than the logging cap cannot grow the residual or leak its prefix', async () => {
+		const token = 's'.repeat(128 * 1024)
+		const runner = new Runner(
+			baseJob({ secrets: { LONG_SECRET: token } }),
+			makeEnv(makeSpawner([], (spec, handlers) => {
+				if (spec.command === 'fabrika-cloudflare-executor') {
+					handlers.onStdout(token.slice(0, 64 * 1024 + 1))
+					handlers.onStdout(token.slice(64 * 1024 + 1) + '\nnext line\n')
+				}
+				return { exitCode: 0 }
+			})),
+		)
+		expect((await runner.run()).state).toBe('succeeded')
+		expect(runner.lines().filter((line) => line.stream === 'stdout').map((line) => line.text)).toEqual([
+			'*** [unfinished log line exceeds the size limit]',
+			'next line',
+		])
+	})
+
+	test('32 admitted 32-KiB secrets construct a Runner, reach a real child env and are all redacted', async () => {
+		const secrets: Record<string, string> = {}
+		for (let index = 0; index < 32; index++) {
+			const prefix = `large-secret-${index}-`
+			secrets[`LARGE_SECRET_${index}`] = prefix + 'v'.repeat(32 * 1024 - prefix.length)
+		}
+		const job = baseJob({ runId: '0198d922-06f6-7000-8000-000000000002', secrets })
+		expect(isCloudflareRunnerJob(job)).toBe(true)
+		let children = 0
+		const runner = new Runner(
+			job,
+			makeEnv(async (spec, handlers) => {
+				if (spec.command === 'git' && spec.args[0] === 'log') handlers.onStdout(`${COMMIT}\n`)
+				if (spec.command !== 'fabrika-cloudflare-executor') return { exitCode: 0 }
+				children++
+				return bunSpawner({
+					command: process.execPath,
+					args: [
+						'-e',
+						`
+					const keys = Object.keys(process.env).filter(key => key.startsWith('LARGE_SECRET_'))
+					if (keys.length !== 32) process.exit(2)
+					for (const key of keys) console.log('secret=' + process.env[key])
+				`,
+					],
+					cwd: spec.cwd,
+					env: spec.env,
+				}, handlers)
+			}),
+		)
+		const status = await runner.run()
+		expect(status.state).toBe('succeeded')
+		expect(children).toBe(1)
+		expect(runner.isDone()).toBe(true)
+		expect(runner.lines().filter((line) => line.stream === 'stdout').map((line) => line.text)).toEqual(Array.from({ length: 32 }, () => 'secret=***'))
+		const diagnostics = JSON.stringify({ status, lines: runner.lines() })
+		for (const value of Object.values(secrets)) expect(diagnostics).not.toContain(value)
+	})
+
+	test('literal redaction preserves the leftmost match and chooses the longest value at that position', async () => {
+		const runner = new Runner(
+			baseJob({ secrets: { LONG: 'abcde', SHORT: 'abcd', SHIFTED: 'bcdefg' } }),
+			makeEnv(makeSpawner([], (spec, handlers) => {
+				if (spec.command === 'fabrika-cloudflare-executor') handlers.onStdout('abcde abcd bcdefg abcdefg\n')
+				return { exitCode: 0 }
+			})),
+		)
+		expect((await runner.run()).state).toBe('succeeded')
+		expect(runner.lines().filter((line) => line.stream === 'stdout').map((line) => line.text)).toEqual(['*** *** *** ***fg'])
+	})
+
+	test('a real child with chatty 128-KiB lines redacts a one-character Git token with absent large secrets', async () => {
+		const secrets: Record<string, string> = {}
+		for (let index = 0; index < 32; index++) secrets[`ABSENT_SECRET_${index}`] = `absent-${index}-` + 'v'.repeat(32 * 1024)
+		const job = baseJob({
+			runId: '0198d922-06f6-7000-8000-000000000003',
+			repoUrl: 'https://x-access-token:q@github.com/acme/app.git',
+			secrets,
+		})
+		expect(isCloudflareRunnerJob(job)).toBe(true)
+		const runner = new Runner(
+			job,
+			makeEnv(async (spec, handlers) => {
+				if (spec.command === 'git' && spec.args[0] === 'log') handlers.onStdout(`${COMMIT}\n`)
+				if (spec.command !== 'fabrika-cloudflare-executor') return { exitCode: 0 }
+				return bunSpawner({
+					command: process.execPath,
+					args: ['-e', "process.stdout.write('q'.repeat(128 * 1024) + '\\n'); process.stderr.write('q'.repeat(128 * 1024))"],
+					cwd: spec.cwd,
+					env: spec.env,
+				}, handlers)
+			}),
+		)
+		expect((await runner.run()).state).toBe('succeeded')
+		for (const stream of ['stdout', 'stderr']) {
+			expect(runner.lines().filter((line) => line.stream === stream).map((line) => line.text).join('')).toBe('***'.repeat(128 * 1024))
+		}
+	})
+
 	test('clone → install → deploy: faithful argv + cwd, success status with exit 0', async () => {
 		const rec: RecordedSpawn[] = []
 		const spawn = makeSpawner(rec, (spec, handlers) => {
 			handlers.onStdout(`ran ${spec.command}\n`)
 			return { exitCode: 0 }
 		})
-		const runner = new Runner(baseJob({ workerDir: 'worker', configPath: 'fabrika.config.ts', dryRun: true }), makeEnv(spawn))
+		const runner = new Runner(baseJob({ ref: 'main', workerDir: 'worker', configPath: 'fabrika.config.ts', dryRun: true }), makeEnv(spawn))
 		const status = await runner.run()
 
 		expect(rec.map((r) => r.spec.command)).toEqual(['git', 'bun', 'fabrika-cloudflare-executor'])
 		// clone into the run-keyed checkout dir
-		expect(rec[0]?.spec.args).toEqual(['clone', '--depth', '1', '--branch', 'main', '--', 'https://github.com/acme/app.git', '/workspace/run-1'])
+		expect(rec[0]?.spec.args).toEqual(['clone', '--depth', '1', '--branch', 'main', '--', 'https://github.com/acme/app.git', runner.checkoutDir])
 		// install + deploy run in workerDir
-		expect(rec[1]?.spec).toMatchObject({ command: 'bun', args: ['install'], cwd: '/workspace/run-1/worker' })
+		expect(rec[1]?.spec).toMatchObject({ command: 'bun', args: ['install'], cwd: `${runner.checkoutDir}/worker` })
 		// deploy is faithful to M1's CLI contract
 		expect(rec[2]?.spec).toMatchObject({
 			command: 'fabrika-cloudflare-executor',
 			args: ['deploy', '--env=stage', '--config=fabrika.config.ts', '--dry-run'],
-			cwd: '/workspace/run-1/worker',
+			cwd: `${runner.checkoutDir}/worker`,
 		})
 
 		expect(status.state).toBe('succeeded')
@@ -64,8 +394,9 @@ describe('Runner pipeline', () => {
 
 	test('strips refs/heads|tags/ from the ref for `git clone --branch` (a short name passes through)', async () => {
 		const recHeads: RecordedSpawn[] = []
-		await new Runner(baseJob({ ref: 'refs/heads/main', dryRun: true }), makeEnv(makeSpawner(recHeads, () => ({ exitCode: 0 })))).run()
-		expect(recHeads[0]?.spec.args).toEqual(['clone', '--depth', '1', '--branch', 'main', '--', 'https://github.com/acme/app.git', '/workspace/run-1'])
+		const runner = new Runner(baseJob({ ref: 'refs/heads/main', dryRun: true }), makeEnv(makeSpawner(recHeads, () => ({ exitCode: 0 }))))
+		await runner.run()
+		expect(recHeads[0]?.spec.args).toEqual(['clone', '--depth', '1', '--branch', 'main', '--', 'https://github.com/acme/app.git', runner.checkoutDir])
 
 		const recTags: RecordedSpawn[] = []
 		await new Runner(baseJob({ ref: 'refs/tags/v1.2.3', dryRun: true }), makeEnv(makeSpawner(recTags, () => ({ exitCode: 0 })))).run()
@@ -79,7 +410,10 @@ describe('Runner pipeline', () => {
 			handlers.onStderr(`fatal: could not read from https://x-access-token:${token}@github.com/acme/app\n`)
 			return { exitCode: 0 }
 		})
-		const runner = new Runner(baseJob({ repoUrl: `https://x-access-token:${token}@github.com/acme/app.git`, dryRun: true }), makeEnv(spawn))
+		const runner = new Runner(
+			baseJob({ ref: 'main', repoUrl: `https://x-access-token:${token}@github.com/acme/app.git`, dryRun: true }),
+			makeEnv(spawn),
+		)
 		await runner.run()
 		const lines = runner.lines()
 		expect(lines.map((l) => l.text).join('\n')).not.toContain(token)
@@ -200,7 +534,8 @@ describe('Runner pipeline', () => {
 		await runner.run()
 
 		const texts = runner.lines().filter((l) => l.stream === 'stdout').map((l) => l.text)
-		expect(texts).toEqual([overCap, 'tail'])
+		expect(texts.join('')).toBe(`${overCap}tail`)
+		expect(texts.length).toBeGreaterThan(1)
 	})
 
 	test('refuses a runId that is not a single safe path segment before spawning anything', async () => {
@@ -226,7 +561,7 @@ describe('Runner pipeline', () => {
 	test('clone failure stops the pipeline (no install/deploy) and fails the run', async () => {
 		const rec: RecordedSpawn[] = []
 		const spawn = makeSpawner(rec, (spec) => ({ exitCode: spec.command === 'git' ? 128 : 0 }))
-		const status = await new Runner(baseJob(), makeEnv(spawn)).run()
+		const status = await new Runner(baseJob({ ref: 'main', dryRun: true }), makeEnv(spawn)).run()
 
 		expect(rec.map((r) => r.spec.command)).toEqual(['git'])
 		expect(status.state).toBe('failed')
@@ -429,7 +764,8 @@ describe('executor outcome file', () => {
 		deployExitCode = 0,
 	): Promise<{ status: Awaited<ReturnType<Runner['run']>>; outcomePath: string | undefined }> => {
 		let outcomePath: string | undefined
-		const spawn = async (spec: SpawnSpec): Promise<SpawnResult> => {
+		const spawn = async (spec: SpawnSpec, handlers: SpawnHandlers): Promise<SpawnResult> => {
+			if (spec.command === 'git' && spec.args[0] === 'log') handlers.onStdout(`${COMMIT}\n`)
 			const path = spec.env?.[RUNNER_OUTCOME_FILE_ENV]
 			if (spec.command !== 'fabrika-cloudflare-executor') return { exitCode: 0 }
 			if (path !== undefined) {
@@ -525,7 +861,8 @@ describe('executor outcome file', () => {
 		await withWorkspace(async (workspace) => {
 			const runner = new Runner(baseJob(), {
 				workspace,
-				spawn: async (spec) => {
+				spawn: async (spec, handlers) => {
+					if (spec.command === 'git' && spec.args[0] === 'log') handlers.onStdout(`${COMMIT}\n`)
 					if (spec.command === 'fabrika-cloudflare-executor') {
 						await writeFile(join(workspace, 'run-1.outcome.json'), '{"iamReconcile":{"app":"shop","schemaJson":"{}"}}')
 						throw new Error('pipe failed with tok-abcdef')

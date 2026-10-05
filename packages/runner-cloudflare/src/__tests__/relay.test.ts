@@ -1,7 +1,7 @@
 import type { RunLogLine } from '@fabrika/control-contract'
-import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
+import { CLOUDFLARE_SOURCE_PROTOCOL, type CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
 import type { RunnerStatus } from '@fabrika/runner-contract'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { type ContainerLike, logsKey, type R2Like, relayRun, statusKey } from '../relay'
 
 // The relay is the testable core of vozka-runner's `startRun`. These tests drive it against a FAKE
@@ -31,6 +31,9 @@ const makeContainer = (status: RunnerStatus, lines: RunLogLine[], heartbeats: { 
 	},
 	containerFetch: async (input: string, init?: RequestInit): Promise<Response> => {
 		const url = new URL(input)
+		if (url.pathname === '/health') {
+			return new Response(JSON.stringify({ status: 'ok', port: 8080, sourceProtocol: CLOUDFLARE_SOURCE_PROTOCOL }))
+		}
 		if (init?.method === 'POST' && url.pathname === '/run') {
 			return new Response(JSON.stringify({ runId: status.runId, accepted: true }), { status: 202 })
 		}
@@ -47,7 +50,7 @@ const makeContainer = (status: RunnerStatus, lines: RunLogLine[], heartbeats: { 
 const job: CloudflareRunnerJob = {
 	runId: 'run-relay-1',
 	repoUrl: 'https://github.com/acme/app.git',
-	ref: 'main',
+	ref: 'abcdef1234567890abcdef1234567890abcdef12',
 	env: 'stage',
 	runnerKey: 'test-runner-key',
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'acc', CLOUDFLARE_API_TOKEN: 'tok' },
@@ -72,6 +75,289 @@ const makeStreamingContainer = async (heartbeat: () => void = () => {}): Promise
 }
 
 describe('relayRun', () => {
+	test('requests manual redirect handling and refuses a redirect before the DO response can lose its history', async () => {
+		const paths: string[] = []
+		const bucket = new FakeR2()
+		const result = await relayRun(
+			{
+				containerFetch: async (input, init) => {
+					paths.push(new URL(input).pathname)
+					expect(init).toEqual({ redirect: 'manual' })
+					expect(new Request(input, init).redirect).toBe('manual')
+					const response = new Response(JSON.stringify({ status: 'ok', port: 8080, sourceProtocol: CLOUDFLARE_SOURCE_PROTOCOL }), {
+						status: 302,
+						headers: { location: 'http://container/capable' },
+					})
+					expect(response.redirected).toBe(false)
+					return response
+				},
+			},
+			bucket,
+			job,
+		)
+		expect(result.status.state).toBe('failed')
+		expect(paths).toEqual(['/health'])
+		expect(bucket.objects.get(statusKey(job.runId))).toBe(JSON.stringify(result.status))
+	})
+
+	for (const failedWrites of [[logsKey(job.runId)], [statusKey(job.runId)], [logsKey(job.runId), statusKey(job.runId)]]) {
+		test(`known image refusal survives diagnostic persistence failure: ${failedWrites.join(', ')}`, async () => {
+			const paths: string[] = []
+			const attempts: string[] = []
+			const bucket = new FakeR2()
+			const diagnostic = spyOn(console, 'error').mockImplementation(() => {})
+			try {
+				const result = await relayRun({
+					containerFetch: async (input) => {
+						paths.push(new URL(input).pathname)
+						return new Response(JSON.stringify({ status: 'ok', port: 8080 }))
+					},
+				}, {
+					put: async (key, value) => {
+						attempts.push(key)
+						if (failedWrites.includes(key)) throw new Error('R2 error contains private-storage-token')
+						await bucket.put(key, value)
+					},
+				}, job)
+				expect(paths).toEqual(['/health'])
+				expect(attempts).toEqual([logsKey(job.runId), statusKey(job.runId)])
+				expect(result.status.state).toBe('failed')
+				expect(result.status.error).toBe('runner source protocol is unavailable or not supported')
+				expect(result.lineCount).toBe(1)
+				expect(diagnostic.mock.calls).toEqual(failedWrites.map((key) => [
+					`runner: failed to persist source protocol refusal ${key === logsKey(job.runId) ? 'log' : 'status'}`,
+				]))
+				expect(JSON.stringify(result) + JSON.stringify(diagnostic.mock.calls) + [...bucket.objects.values()].join('\n'))
+					.not.toContain('private-storage-token')
+			} finally {
+				diagnostic.mockRestore()
+			}
+		})
+	}
+
+	for (
+		const body of [
+			JSON.stringify({ status: 'ok', port: 8080 }),
+			JSON.stringify({ status: 'ok', port: 8080, sourceProtocol: 'branch-v0' }),
+			JSON.stringify({ status: 'ok', port: 8080, sourceProtocol: 1 }),
+			JSON.stringify({ status: 'ok', port: '8080', sourceProtocol: CLOUDFLARE_SOURCE_PROTOCOL }),
+			JSON.stringify({ status: false, port: 8080, sourceProtocol: CLOUDFLARE_SOURCE_PROTOCOL }),
+			JSON.stringify([CLOUDFLARE_SOURCE_PROTOCOL]),
+			'null',
+			'{ malformed health: private-image-token',
+		]
+	) {
+		test(`refuses unsupported or malformed image health before POST: ${body}`, async () => {
+			const paths: string[] = []
+			const bucket = new FakeR2()
+			const result = await relayRun(
+				{
+					containerFetch: async (input, init) => {
+						paths.push(new URL(input).pathname)
+						expect(init).toEqual({ redirect: 'manual' })
+						return new Response(body)
+					},
+				},
+				bucket,
+				job,
+				{ now: () => 10 },
+			)
+			expect(paths).toEqual(['/health'])
+			expect(result).toEqual({
+				status: { runId: job.runId, state: 'failed', error: 'runner source protocol is unavailable or not supported', startedAt: 10, finishedAt: 10 },
+				lineCount: 1,
+			})
+			expect(bucket.objects.get(statusKey(job.runId))).toBe(JSON.stringify(result.status))
+			expect(bucket.objects.get(logsKey(job.runId))).toBe(JSON.stringify({ ts: 10, stream: 'meta', text: result.status.error }))
+			expect([...bucket.objects.values()].join('\n')).not.toContain('private-image-token')
+		})
+	}
+
+	test('unavailable image health settles known undispatched failure with a fixed persisted summary', async () => {
+		for (const failure of ['reject', 'status']) {
+			const paths: string[] = []
+			const bucket = new FakeR2()
+			const result = await relayRun(
+				{
+					containerFetch: async (input) => {
+						paths.push(new URL(input).pathname)
+						if (failure === 'reject') throw new Error('transport contains private-image-token')
+						return new Response('private-image-token', { status: 503 })
+					},
+				},
+				bucket,
+				job,
+			)
+			expect(paths).toEqual(['/health'])
+			expect(result.status.state).toBe('failed')
+			expect([...bucket.objects.values()].join('\n')).not.toContain('private-image-token')
+			expect(bucket.objects.size).toBe(2)
+		}
+	})
+
+	test('bounds an outstanding read-only DO RPC locally without passing an AbortSignal', async () => {
+		const response = Promise.withResolvers<Response>()
+		const paths: string[] = []
+		const bucket = new FakeR2()
+		const result = await relayRun(
+			{
+				containerFetch: (input, init) => {
+					paths.push(new URL(input).pathname)
+					expect(init).toEqual({ redirect: 'manual' })
+					return response.promise
+				},
+			},
+			bucket,
+			job,
+			{ healthTimeoutMs: 10 },
+		)
+		expect(result.status.state).toBe('failed')
+		expect(paths).toEqual(['/health'])
+		let cancelled = false
+		response.resolve(
+			new Response(
+				new ReadableStream<Uint8Array>({
+					cancel: () => {
+						cancelled = true
+					},
+				}),
+			),
+		)
+		await Bun.sleep(0)
+		expect(cancelled).toBe(true)
+		expect(paths).toEqual(['/health'])
+		expect(bucket.objects.get(statusKey(job.runId))).toBe(JSON.stringify(result.status))
+	})
+
+	test('the deadline includes a stalled health body, even when cancelling that body never completes', async () => {
+		const paths: string[] = []
+		let cancelled = false
+		const bucket = new FakeR2()
+		const stream = new ReadableStream<Uint8Array>({
+			start: (controller) =>
+				controller.enqueue(new TextEncoder().encode(JSON.stringify({ status: 'ok', port: 8080, sourceProtocol: CLOUDFLARE_SOURCE_PROTOCOL }))),
+			cancel: () => {
+				cancelled = true
+				return new Promise(() => {})
+			},
+		})
+		const result = await relayRun(
+			{
+				containerFetch: async (input) => {
+					paths.push(new URL(input).pathname)
+					return new Response(stream)
+				},
+			},
+			bucket,
+			job,
+			{ healthTimeoutMs: 10 },
+		)
+		expect(result.status.state).toBe('failed')
+		expect(cancelled).toBe(true)
+		expect(paths).toEqual(['/health'])
+		expect(bucket.objects.get(statusKey(job.runId))).toBe(JSON.stringify(result.status))
+	})
+
+	test('caps actual health bytes across chunks, independent of Content-Length', async () => {
+		const paths: string[] = []
+		const bucket = new FakeR2()
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode(' '.repeat(2048)))
+				controller.enqueue(new TextEncoder().encode(' '.repeat(2049)))
+				controller.close()
+			},
+		})
+		const result = await relayRun(
+			{
+				containerFetch: async (input) => {
+					paths.push(new URL(input).pathname)
+					return new Response(stream, { headers: { 'content-length': '1' } })
+				},
+			},
+			bucket,
+			job,
+		)
+		expect(result.status.state).toBe('failed')
+		expect(paths).toEqual(['/health'])
+		expect(bucket.objects.get(statusKey(job.runId))).toBe(JSON.stringify(result.status))
+	})
+
+	test('the health byte cap counts UTF-8 bytes, not decoded characters', async () => {
+		const paths: string[] = []
+		const body = JSON.stringify({ status: 'ok', port: 8080, sourceProtocol: CLOUDFLARE_SOURCE_PROTOCOL, padding: '€'.repeat(2000) })
+		expect(body.length).toBeLessThan(4096)
+		const result = await relayRun(
+			{
+				containerFetch: async (input) => {
+					paths.push(new URL(input).pathname)
+					return new Response(body)
+				},
+			},
+			new FakeR2(),
+			job,
+		)
+		expect(result.status.state).toBe('failed')
+		expect(paths).toEqual(['/health'])
+	})
+
+	test('continuously ready empty chunks cannot starve the health deadline', async () => {
+		const paths: string[] = []
+		const body = new ReadableStream<Uint8Array>({ pull: (controller) => controller.enqueue(new Uint8Array()) })
+		const result = await relayRun(
+			{
+				containerFetch: async (input) => {
+					paths.push(new URL(input).pathname)
+					return new Response(body)
+				},
+			},
+			new FakeR2(),
+			job,
+			{ healthTimeoutMs: 10 },
+		)
+		expect(result.status.state).toBe('failed')
+		expect(paths).toEqual(['/health'])
+	})
+
+	test('a complete typed health body at the byte limit admits the job', async () => {
+		const inner = makeContainer(terminalStatus, [], { count: 0 })
+		const health = JSON.stringify({ status: 'ok', port: 8080, sourceProtocol: CLOUDFLARE_SOURCE_PROTOCOL })
+		const paths: string[] = []
+		const result = await relayRun(
+			{
+				containerFetch: (input, init) => {
+					const path = new URL(input).pathname
+					paths.push(path)
+					return path === '/health' ? Promise.resolve(new Response(health + ' '.repeat(4096 - health.length))) : inner.containerFetch(input, init)
+				},
+			},
+			new FakeR2(),
+			job,
+		)
+		expect(result.status.state).toBe('succeeded')
+		expect(paths).toEqual(['/health', '/run', '/logs', '/status'])
+	})
+
+	test('a lost response after POST remains ambiguous rather than writing a failed outcome', async () => {
+		const bucket = new FakeR2()
+		const error = new Error('POST response lost')
+		const inner = makeContainer(terminalStatus, [], { count: 0 })
+		const paths: string[] = []
+		await expect(relayRun(
+			{
+				containerFetch: (input, init) => {
+					paths.push(new URL(input).pathname)
+					if (init?.method === 'POST') throw error
+					return inner.containerFetch(input, init)
+				},
+			},
+			bucket,
+			job,
+		)).rejects.toBe(error)
+		expect(paths).toEqual(['/health', '/run'])
+		expect(bucket.objects.size).toBe(0)
+	})
+
 	test('the job it posts to the container carries no runner key', async () => {
 		const bodies: string[] = []
 		const inner = makeContainer(terminalStatus, sampleLines, { count: 0 })
@@ -142,8 +428,10 @@ describe('relayRun', () => {
 
 	test('throws when the container rejects /run', async () => {
 		const bucket = new FakeR2()
+		const inner = makeContainer(terminalStatus, [], { count: 0 })
 		const container: ContainerLike = {
-			containerFetch: async () => new Response('busy', { status: 409 }),
+			containerFetch: (input, init) =>
+				init?.method === 'POST' ? Promise.resolve(new Response('busy', { status: 409 })) : inner.containerFetch(input, init),
 		}
 		await expect(relayRun(container, bucket, job)).rejects.toThrow('runner rejected /run')
 	})

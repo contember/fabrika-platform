@@ -76,6 +76,27 @@ The upstream repository verifies and distributes Fabrika. It does not deploy cus
 
 Cloudflare installation creates a per-account repository whose workflow checks out the exact `fabrika.ref`. That workflow builds the runner image into the target account's own registry, then deploys IAM, Operations, the runner, and control. Active runner containers receive a 20-minute rollout grace before they become eligible for replacement.
 
+The detached runner Worker and its image must be rolled forward before Control
+when introducing the exact-source protocol
+([ADR-0048](../decisions/0048-bind-cloudflare-delivery-to-the-recorded-commit.md)).
+Both come from the operator's pinned checkout. Custom Control compositions must
+supply immutable `resolveSource`, URL-only `prepareClone` and mandatory
+`assertRunnerSourceProtocol` collaborators. The clone result type is
+`CloudflareCloneSource`; non-dry runner refs are complete lowercase 40-hex commits.
+
+Source admission refuses incompatible combinations before repository execution:
+
+| Combination                                        | Outcome                                                                                    |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| New Control, old runner Worker                     | Missing or incompatible authenticated capability stops external acceptance and submission. |
+| New Control/Worker, old image                      | Health capability refusal stops `/run` and immediately records a failed terminal outcome.  |
+| Old Control, new Worker/image, mutable non-dry job | Job validation refuses the request before container startup.                               |
+| Matching Control/Worker/image, non-dry job         | Exact fetch, detached HEAD comparison, then dependency installation.                       |
+
+Local Git and package checks verify offline source identity and consumer contracts.
+Live GitHub authorization, Cloudflare RPC/image exchange and account rollout
+require separate operator-owned acceptance evidence.
+
 A Zerops installation rolls forward with one command: `fabrika platform upgrade --provider=zerops --to=<tag>` verifies the tag exists on this repository, writes `fabrika.ref` in the sidecar checkout, commits and pushes it, prints the workflow run URL and watches the run to its end. The sidecar builds `iam`, `operations` and `source` concurrently, then `proxy`, then `control`.
 
 Scaffold commits skip push CI because the GitHub Environment does not exist yet. `fabrika platform init` writes the account secrets and variables first, then explicitly dispatches the platform workflow.

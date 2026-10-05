@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test'
 const validJob: CloudflareRunnerJob = {
 	runId: '0198c4a2-7b31-7e44-9a55-1f2e3d4c5b6a',
 	repoUrl: 'https://github.com/acme/app.git',
-	ref: 'main',
+	ref: 'abcdef1234567890abcdef1234567890abcdef12',
 	env: 'prod',
 	runnerKey: 'test-runner-key',
 	credentials: { CLOUDFLARE_ACCOUNT_ID: 'acct', CLOUDFLARE_API_TOKEN: 'tok' },
@@ -13,6 +13,19 @@ const validJob: CloudflareRunnerJob = {
 describe('isCloudflareRunnerJob', () => {
 	test('accepts a well-formed job', () => {
 		expect(isCloudflareRunnerJob(validJob)).toBe(true)
+	})
+
+	test('non-dry jobs require a canonical full commit, while dry previews accept safe mutable refs', () => {
+		for (const ref of ['main', 'refs/heads/main', 'refs/tags/v1', 'abc123', validJob.ref.toUpperCase(), 'a'.repeat(64)]) {
+			expect(isCloudflareRunnerJob({ ...validJob, ref })).toBe(false)
+			expect(isCloudflareRunnerJob({ ...validJob, ref, dryRun: false })).toBe(false)
+		}
+		for (const ref of ['main', 'refs/heads/main', 'refs/tags/v1', validJob.ref]) {
+			expect(isCloudflareRunnerJob({ ...validJob, ref, dryRun: true })).toBe(true)
+		}
+		for (const ref of ['', '--upload-pack=x', 'main branch', 'main\n', `a${'b'.repeat(38)}\u0000`]) {
+			expect(isCloudflareRunnerJob({ ...validJob, ref, dryRun: true })).toBe(false)
+		}
 	})
 
 	test('rejects non-objects and missing top-level fields', () => {

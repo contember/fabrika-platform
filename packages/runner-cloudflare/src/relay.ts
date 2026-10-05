@@ -6,8 +6,8 @@
 // run-keyed object), then polls `/status` for the terminal outcome and persists that too.
 
 import type { RunLogLine } from '@fabrika/control-contract'
-import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
-import { RUNNER_LOGS_PATH, RUNNER_RUN_PATH, RUNNER_STATUS_PATH, type RunnerStatus } from '@fabrika/runner-contract'
+import { CLOUDFLARE_SOURCE_PROTOCOL, type CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
+import { RUNNER_HEALTH_PATH, RUNNER_LOGS_PATH, RUNNER_PORT, RUNNER_RUN_PATH, RUNNER_STATUS_PATH, type RunnerStatus } from '@fabrika/runner-contract'
 
 /** The slice of a Cloudflare R2 bucket the relay needs. Real `R2Bucket` satisfies this. */
 export interface R2Like {
@@ -37,8 +37,72 @@ export interface RelayOptions {
 	flushIntervalMs?: number
 	/** Poll `/status` until terminal, at this interval (ms). Defaults to 500. */
 	statusPollMs?: number
+	/** Deadline for the read-only image probe, including its response body. Defaults to 15 seconds. */
+	healthTimeoutMs?: number
 	/** Clock, injectable for tests. Defaults to `Date.now`. */
 	now?: () => number
+}
+
+const MAX_HEALTH_BYTES = 4096
+const SOURCE_PROTOCOL_FAILURE = 'runner source protocol is unavailable or not supported'
+
+interface RunnerHealth {
+	readonly status: 'ok'
+	readonly port: typeof RUNNER_PORT
+	readonly sourceProtocol: typeof CLOUDFLARE_SOURCE_PROTOCOL
+}
+
+const isRunnerHealth = (value: unknown): value is RunnerHealth =>
+	typeof value === 'object'
+	&& value !== null
+	&& !Array.isArray(value)
+	&& 'status' in value && value.status === 'ok'
+	&& 'port' in value && value.port === RUNNER_PORT
+	&& 'sourceProtocol' in value && value.sourceProtocol === CLOUDFLARE_SOURCE_PROTOCOL
+
+const assertImageSourceProtocol = async (container: ContainerLike, timeoutMs: number): Promise<void> => {
+	const expired = Promise.withResolvers<never>()
+	const deadline = Date.now() + timeoutMs
+	let timedOut = false
+	const timer = setTimeout(() => {
+		timedOut = true
+		expired.reject(new Error(SOURCE_PROTOCOL_FAILURE))
+	}, timeoutMs)
+	let response: Response | undefined
+	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+	try {
+		// deployFetch is a DO RPC: bound its read-only wait here, without serializing an AbortSignal.
+		const request = container.containerFetch(`http://container${RUNNER_HEALTH_PATH}`, { redirect: 'manual' })
+		void request.then((late) => {
+			if (timedOut) void late.body?.cancel().catch(() => {})
+		}, () => {})
+		response = await Promise.race([request, expired.promise])
+		if (response.status !== 200 || response.redirected || response.body === null) {
+			throw new Error(SOURCE_PROTOCOL_FAILURE)
+		}
+		reader = response.body.getReader()
+		const decoder = new TextDecoder('utf-8', { fatal: true })
+		let bytes = 0
+		let body = ''
+		for (;;) {
+			if (Date.now() >= deadline) throw new Error(SOURCE_PROTOCOL_FAILURE)
+			const chunk = await Promise.race([reader.read(), expired.promise])
+			if (chunk.done) break
+			bytes += chunk.value.byteLength
+			if (bytes > MAX_HEALTH_BYTES) throw new Error(SOURCE_PROTOCOL_FAILURE)
+			body += decoder.decode(chunk.value, { stream: true })
+		}
+		body += decoder.decode()
+		const health: unknown = JSON.parse(body)
+		if (Date.now() >= deadline || !isRunnerHealth(health)) throw new Error(SOURCE_PROTOCOL_FAILURE)
+	} catch {
+		if (reader !== undefined) void reader.cancel().catch(() => {})
+		else void response?.body?.cancel().catch(() => {})
+		throw new Error(SOURCE_PROTOCOL_FAILURE)
+	} finally {
+		clearTimeout(timer)
+		reader?.releaseLock()
+	}
 }
 
 /** Parse a newline-delimited JSON log stream chunk-by-chunk, invoking `onLine` per complete line. */
@@ -85,6 +149,31 @@ export const relayRun = async (
 	const flushIntervalMs = options.flushIntervalMs ?? 2000
 	const statusPollMs = options.statusPollMs ?? 500
 	const now = options.now ?? (() => Date.now())
+	const healthTimeoutMs = options.healthTimeoutMs ?? 15_000
+	if (!Number.isFinite(healthTimeoutMs) || healthTimeoutMs <= 0 || healthTimeoutMs > 120_000) {
+		throw new Error('runner health timeout must be greater than 0 and at most 120000 milliseconds')
+	}
+	const startedAt = now()
+	try {
+		await assertImageSourceProtocol(container, healthTimeoutMs)
+	} catch {
+		const finishedAt = now()
+		const status: RunnerStatus = { runId: job.runId, state: 'failed', error: SOURCE_PROTOCOL_FAILURE, startedAt, finishedAt }
+		const line: RunLogLine = { ts: finishedAt, stream: 'meta', text: SOURCE_PROTOCOL_FAILURE }
+		for (
+			const diagnostic of [
+				{ key: logsKey(job.runId), value: JSON.stringify(line), kind: 'log' },
+				{ key: statusKey(job.runId), value: JSON.stringify(status), kind: 'status' },
+			]
+		) {
+			try {
+				await bucket.put(diagnostic.key, diagnostic.value)
+			} catch {
+				console.error(`runner: failed to persist source protocol refusal ${diagnostic.kind}`)
+			}
+		}
+		return { status, lineCount: 1 }
+	}
 
 	// Kick off the run — WITHOUT the runner key. It authenticates control to THIS Worker and stops here;
 	// the container runs the checkout's own code as root, so anything it receives is disclosed to it.
