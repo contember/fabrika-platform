@@ -191,6 +191,9 @@ The upstream check needs offline unchanged/changed fixtures; network failure is 
 
 ## Run log
 
+- Local integration extension approved: see [the frozen seam and implementation units](static-validation-local-integration.md). Genuine synthetic Git fixtures, local-only injected upload transport and minimal emulator evidence are approved; production policies remain unchanged.
+- Original builder stack restored: all 14 services running, all 12 configured health checks healthy. The user approved missing default binding and OAuth resource metadata repair, including its generator. Other 11 container identities/start times and all volumes preserved. Generator-only patch remains uncommitted in the separate, already-dirty worktree; isolated patch at `/tmp/opencode/fabrika-restoration-generator.patch`.
+
 - All selected schema units implemented; WU17 `5b694a7` and WU19 own-key fix `097feab` integrated. R3 closed with both regression fixes verified. Final inventory: 205 paths, 123 changed/deleted and 82 intentional retained boundaries; 114 Zod importers across 29 owning manifests, all dependencies correctly declared.
 - Integrated gates: 4,979 passing tests, 39 skips (37 opt-in live Zerops, 2 SQLite-only CAS); full typecheck/lint/format passed. PostgreSQL and S3 were enabled. Scripts/local-stack final delta: 196 tests pass. Docker runner build and dry-run smoke passed.
 - Local integration blocked by pre-existing stack drift: old volumes failed IAM migration, user approved `local:reset`; clean reset passed IAM then Control refused missing `FABRIKA_ZEROPS_PROXY_SOURCE_JSON`. Baseline `ab534ea` already required it and local-stack supplied none. Investigation also proved emulator reserve/upload/build endpoints and local source transport composition absent.

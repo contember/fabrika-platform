@@ -402,6 +402,7 @@
         "@fabrika/proxy": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
         "@fabrika/proxy-core": "workspace:*",
+        "@fabrika/source-zerops": "workspace:*",
         "zod": "^3.25.76",
       },
       "devDependencies": {

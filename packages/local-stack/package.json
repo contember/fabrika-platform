@@ -22,6 +22,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"@fabrika/source-zerops": "workspace:*",
 		"zod": "^3.25.76",
 		"@fabrika/app": "workspace:*",
 		"@fabrika/control-contract": "workspace:*",
