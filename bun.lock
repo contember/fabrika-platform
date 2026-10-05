@@ -81,7 +81,7 @@
       },
       "devDependencies": {
         "@types/bun": "latest",
-        "zod": "^3.24.0",
+        "zod": "^3.25.76",
       },
     },
     "packages/auth": {
@@ -191,7 +191,7 @@
         "@fabrika/provider-zerops": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
         "@fabrika/runner-cloudflare": "workspace:*",
-        "zod": "^3.24.0",
+        "zod": "^3.25.76",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "^4.20260702.1",
@@ -287,7 +287,7 @@
         "@fabrika/platform-node": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
         "jose": "^5.9.0",
-        "zod": "^3.24.0",
+        "zod": "^3.25.76",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "^4.20260702.1",

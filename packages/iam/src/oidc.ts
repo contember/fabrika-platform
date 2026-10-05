@@ -15,7 +15,25 @@
  */
 
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose'
-import { booleanField, prop, stringField } from './json'
+import { z } from 'zod'
+
+const tokenResponseSchema = z.object({ id_token: z.string() })
+const identitySchema = z.object({
+	sub: z.string(),
+	email: z.string(),
+	email_verified: z.union([z.boolean(), z.enum(['true', 'false']).transform((value) => value === 'true')]).optional().catch(undefined),
+})
+const metadataSchema = z.object({
+	issuer: z.string(),
+	authorization_endpoint: z.string(),
+	token_endpoint: z.string(),
+	jwks_uri: z.string(),
+}).transform((value) => ({
+	issuer: value.issuer,
+	authorizationEndpoint: value.authorization_endpoint,
+	tokenEndpoint: value.token_endpoint,
+	jwksUri: value.jwks_uri,
+}))
 
 export interface OidcConfig {
 	/** The provider's issuer URL — the discovery base AND the `iss` an id_token must carry. */
@@ -118,7 +136,8 @@ export class OidcClient {
 			return null
 		}
 		const json: unknown = await response.json().catch(() => null)
-		return stringField(json, 'id_token') ?? null
+		const parsed = tokenResponseSchema.safeParse(json)
+		return parsed.success ? parsed.data.id_token : null
 	}
 
 	/** The x-www-form-urlencoded body for the code→token exchange (separated so it's unit-testable). */
@@ -154,12 +173,11 @@ export class OidcClient {
 		} catch {
 			return null
 		}
-		const sub = stringField(payload, 'sub')
-		const email = stringField(payload, 'email')
-		const verified = readEmailVerified(payload)
-		if (sub === undefined || email === undefined) {
+		const identity = identitySchema.safeParse(payload)
+		if (!identity.success) {
 			return null
 		}
+		const { sub, email, email_verified: verified } = identity.data
 		// require=true → must be explicitly verified; require=false → only an EXPLICIT false is refused.
 		if (this.config.requireVerifiedEmail ? verified !== true : verified === false) {
 			return null
@@ -219,28 +237,6 @@ const metadataCache = new Map<string, { metadata: OidcMetadata; expiresAt: numbe
 const jwksResolvers = new Map<string, JWTVerifyGetKey>()
 
 function parseMetadata(doc: unknown): OidcMetadata | null {
-	const issuer = stringField(doc, 'issuer')
-	const authorizationEndpoint = stringField(doc, 'authorization_endpoint')
-	const tokenEndpoint = stringField(doc, 'token_endpoint')
-	const jwksUri = stringField(doc, 'jwks_uri')
-	if (issuer === undefined || authorizationEndpoint === undefined || tokenEndpoint === undefined || jwksUri === undefined) {
-		return null
-	}
-	return { issuer, authorizationEndpoint, tokenEndpoint, jwksUri }
-}
-
-/** Read `email_verified` as a boolean — providers send a boolean or (legacy) the string form. */
-function readEmailVerified(payload: unknown): boolean | undefined {
-	const asBool = booleanField(payload, 'email_verified')
-	if (asBool !== undefined) {
-		return asBool
-	}
-	const raw = prop(payload, 'email_verified')
-	if (raw === 'true') {
-		return true
-	}
-	if (raw === 'false') {
-		return false
-	}
-	return undefined
+	const parsed = metadataSchema.safeParse(doc)
+	return parsed.success ? parsed.data : null
 }

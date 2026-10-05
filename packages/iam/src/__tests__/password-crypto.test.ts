@@ -2,6 +2,40 @@ import { describe, expect, test } from 'bun:test'
 import { PBKDF2_SHA256_ALGORITHM, PBKDF2_SHA256_OUTPUT_BYTES, PBKDF2_SHA256_SALT_BYTES, WebCryptoPasswordHasher } from '../password-crypto'
 
 describe('WebCryptoPasswordHasher', () => {
+	test('verifies a legacy PBKDF2 vector with extended parameters and requests a rehash', async () => {
+		const hasher = new WebCryptoPasswordHasher()
+		expect(
+			await hasher.verify('password', {
+				algorithm: PBKDF2_SHA256_ALGORITHM,
+				parameters: '{"iterations":1,"outputBytes":32,"extension":true}',
+				salt: '73616c74',
+				passwordHash: '120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b',
+			}),
+		).toEqual({ valid: true, needsRehash: true })
+	})
+
+	test.each([
+		'null',
+		'[]',
+		'{',
+		'{"iterations":"1","outputBytes":32}',
+		'{"iterations":0,"outputBytes":32}',
+		'{"iterations":1.5,"outputBytes":32}',
+		'{"iterations":10000001,"outputBytes":32}',
+		'{"iterations":1,"outputBytes":0}',
+		'{"iterations":1,"outputBytes":129}',
+		'{"iterations":1,"outputBytes":1.5}',
+	])('fails closed on malformed persisted parameters %s', async (parameters) => {
+		expect(
+			await new WebCryptoPasswordHasher().verify('password', {
+				algorithm: PBKDF2_SHA256_ALGORITHM,
+				parameters,
+				salt: '73616c74',
+				passwordHash: '',
+			}),
+		).toEqual({ valid: false, needsRehash: false })
+	})
+
 	test('hashes and verifies without storing the password', async () => {
 		const hasher = new WebCryptoPasswordHasher()
 		const stored = await hasher.hash('correct horse battery staple')

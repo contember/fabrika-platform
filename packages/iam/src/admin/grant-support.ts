@@ -1,18 +1,14 @@
 import { isActionAllowed, type RoleDef } from '@fabrika/auth-core'
-import { type GrantDto } from '@fabrika/iam-contract'
+import { type CreateGrantRequest, type GrantDto } from '@fabrika/iam-contract'
 import { type GrantRow, type RoleRow } from '../db'
-import { arrayField, nullableStringField, parseJsonOrNull, stringField } from '../json'
 import { BUILTIN_ROLES, isKnownRole } from '../roles'
 import { type Services } from '../services'
+import { parseStoredPermissions } from '../stored-permissions'
 import { type AdminContext } from './context'
 
 /** Parse a `roles` row's JSON permissions into a string array (fail-closed on junk, incl. unparseable text). */
 export function rolePermissions(json: string): string[] {
-	const parsed = parseJsonOrNull(json)
-	if (!Array.isArray(parsed)) {
-		return []
-	}
-	return parsed.filter((p): p is string => typeof p === 'string')
+	return parseStoredPermissions(json)
 }
 
 /**
@@ -80,8 +76,8 @@ export function knownApps(c: AdminContext): Promise<string[]> {
 }
 
 /** Validate an admin-supplied `app`: null (all apps) or a known (registered) app. */
-export async function appField(c: AdminContext, body: unknown): Promise<{ ok: true; app: string | null } | { ok: false }> {
-	const app = nullableStringField(body, 'app') ?? null
+export async function appField(c: AdminContext, body: Pick<CreateGrantRequest, 'app'>): Promise<{ ok: true; app: string | null } | { ok: false }> {
+	const app = body.app ?? null
 	if (app !== null && !(await knownApps(c)).includes(app)) {
 		return { ok: false }
 	}
@@ -112,9 +108,11 @@ async function loadAppRoleMap(c: AdminContext, app: string | null): Promise<Reco
  * Validate the scope coordinate on a grant/key request: `scopeType`/`scopeValue` are
  * both-or-neither (both null = global). A half-set pair is a 400.
  */
-export function parseScope(body: unknown): { ok: true; scopeType: string | null; scopeValue: string | null } | { ok: false } {
-	const scopeType = nullableStringField(body, 'scopeType') ?? null
-	const scopeValue = nullableStringField(body, 'scopeValue') ?? null
+export function parseScope(
+	body: Pick<CreateGrantRequest, 'scopeType' | 'scopeValue'>,
+): { ok: true; scopeType: string | null; scopeValue: string | null } | { ok: false } {
+	const scopeType = body.scopeType ?? null
+	const scopeValue = body.scopeValue ?? null
 	if ((scopeType === null) !== (scopeValue === null)) {
 		return { ok: false }
 	}
@@ -129,11 +127,10 @@ export function parseScope(body: unknown): { ok: true; scopeType: string | null;
  */
 export async function parseRoleOrInline(
 	c: AdminContext,
-	body: unknown,
+	body: Pick<CreateGrantRequest, 'roleKey' | 'permissions'>,
 	app: string | null,
 ): Promise<{ ok: true; roleKey: string | null; permissions: string[] | null } | { ok: false; message: string }> {
-	const roleKey = stringField(body, 'roleKey')
-	const permissions = arrayField(body, 'permissions')
+	const { roleKey, permissions } = body
 	if ((roleKey === undefined) === (permissions === undefined)) {
 		return { ok: false, message: 'exactly one of roleKey or permissions is required' }
 	}

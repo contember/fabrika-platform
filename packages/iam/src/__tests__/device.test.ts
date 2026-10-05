@@ -109,6 +109,12 @@ function count(table: string) {
 }
 
 describe('device authorization', () => {
+	test('stored requests use the canonical permission parser and reject corrupted permissions', async () => {
+		const setup = await attempt()
+		h.sqlite.run('UPDATE device_authorizations SET permissions = ? WHERE id = ?', ['["app.manage",1]', setup.started.attemptId])
+		await expect(inspectDeviceAuthorization(services, env, setup.caller)).rejects.toThrow('Invalid stored device request')
+	})
+
 	test('delegates only the live app scope, stores hashes, issues once and recovers receipts after expiry', async () => {
 		const setup = await approved()
 		const first = await exchangeDeviceAuthorization(services, setup.exchange, 'exchange')

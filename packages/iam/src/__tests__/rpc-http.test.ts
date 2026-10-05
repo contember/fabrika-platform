@@ -27,11 +27,68 @@ import type {
 	RevokeKeyResult,
 } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
+import { z } from 'zod'
 import { prop } from '../json'
 import { handleMintHttp, handleRpcHttp, isMintPath, isRpcPath, MINT_EXCHANGE_PATH, MINT_KEY_PATH, MINT_SESSION_PATH } from '../rpc-http'
 
 const KEY = 'rpc-test-key-0123456789abcdefghij'
 const BASE = 'https://iam.test'
+
+describe('RPC input normalization', () => {
+	test('optional null fields disappear and nested grant extensions are stripped', async () => {
+		const { rpc, response } = call('issueKey', {
+			app: '',
+			credential: null,
+			requestId: '',
+			service: null,
+			principalId: null,
+			label: null,
+			expiresAt: null,
+			permissions: [{ action: '', extra: true }, { action: 'read', scope: null }, { action: 'read', scope: { type: '', value: '', extra: true } }],
+			extra: true,
+		})
+		expect((await response).status).toBe(200)
+		expect(rpc.calls).toEqual([{
+			method: 'issueKey',
+			input: {
+				app: '',
+				credential: null,
+				requestId: '',
+				permissions: [{ action: '' }, { action: 'read', scope: null }, { action: 'read', scope: { type: '', value: '' } }],
+			},
+		}])
+	})
+
+	test.each([
+		{ method: 'issueKey', body: { service: { label: 'secret', permissions: [1], scope: 1 } }, field: 'service' },
+		{ method: 'issueKey', body: { service: { label: 'secret', permissions: [], scope: 1 } }, field: 'service.scope' },
+		{ method: 'issueKey', body: { permissions: [{ action: 'read', scope: { type: 'team' } }], label: 1 }, field: 'permissions[].scope' },
+		{ method: 'issueJwt', body: { label: 1, permissions: [] }, field: 'label' },
+		{ method: 'issueJwt', body: { permissions: [null] }, field: 'app' },
+		{ method: 'audit', body: { resourceId: 1 }, field: 'resourceId' },
+	])('preserves first-error ordering for $method / $field', async ({ method, body, field }) => {
+		const { rpc, response } = call(method, body)
+		const result = await response
+		expect(result.status).toBe(400)
+		const decoded: unknown = await result.json()
+		expect(decoded).toEqual({ error: `invalid or missing field '${field}'` })
+		expect(rpc.calls).toEqual([])
+	})
+
+	test('a downstream schema error is an internal fault, not invalid transport input', async () => {
+		const rpc = recorder()
+		rpc.mintToken = () => Promise.reject(new z.ZodError([]))
+		const request = new Request(`${BASE}/rpc/mintToken`, {
+			method: 'POST',
+			headers: { authorization: `Bearer ${KEY}` },
+			body: JSON.stringify({ app: 'example', session: null, requestId: 'request' }),
+		})
+		const response = await handleRpcHttp(request, rpc, KEY)
+		expect(response.status).toBe(500)
+		const decoded: unknown = await response.json()
+		expect(decoded).toEqual({ error: 'internal error' })
+	})
+})
 
 /** Records the last input each method received, and answers with a canned result. */
 interface Recorder extends IamRpc, IamHandoffRpc {

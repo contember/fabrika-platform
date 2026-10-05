@@ -1,4 +1,5 @@
 import { AUTH_HANDOFF_CHALLENGE_PARAM, AUTH_HANDOFF_STATE_PARAM } from '@fabrika/auth-core'
+import { z } from 'zod'
 import { normalizeEmailIdentity } from '../email-identity'
 
 import { type RequestContext } from '../env'
@@ -34,6 +35,10 @@ const RECOVERY_GLOBAL_MAX_ATTEMPTS = 100
 const LOGIN_CLIENT_MAX_ATTEMPTS = 100
 
 const RECOVERY_CLIENT_MAX_ATTEMPTS = 30
+
+const emailSchema = z.string().transform(normalizeEmailIdentity).pipe(z.string().min(1).max(254).includes('@'))
+const loginFormSchema = z.object({ email: emailSchema, password: z.string().transform((value) => value.normalize('NFC')) })
+const passwordActionFormSchema = z.object({ token: z.string().max(512).regex(/^[A-Za-z0-9_-]{32,}$/), password: z.string() })
 
 /**
  * The per-client bucket, and the reason it is shaped differently from the other two.
@@ -79,8 +84,7 @@ export async function handlePasswordLogin(
 	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
 	const form = await readForm(request)
 	if (form === null) return authError('invalid form', 400)
-	const email = normalizeEmail(form.get('email'))
-	const rawPassword = stringValue(form.get('password'))
+	const login = loginFormSchema.safeParse({ email: form.get('email'), password: form.get('password') })
 	// The form is a hint, not a permission: `readHandoff` re-checks the return URL against what the app
 	// has registered, so a hand-edited field buys nothing.
 	const reading = await readHandoff(
@@ -101,10 +105,10 @@ export async function handlePasswordLogin(
 		forgotEnabled: services.email !== null,
 		...loginHandoffFields(handoff),
 	}
-	if (email === null || rawPassword === null) {
+	if (!login.success) {
 		return loginPage({ ...retry, error: 'Invalid email or password.' })
 	}
-	const password = rawPassword.normalize('NFC')
+	const { email, password } = login.data
 	const passwordWithinLimit = Array.from(password).length <= PASSWORD_MAX_CODE_POINTS
 
 	const accountKey = await hashToken(`password-login:account:${email}`)
@@ -189,8 +193,9 @@ export async function handleForgotPassword(
 	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
 	const form = await readForm(request)
 	if (form === null) return authError('invalid form', 400)
-	const email = normalizeEmail(form.get('email'))
-	if (services.email === null || email === null) return forgotPasswordPage({ sent: true })
+	const parsedEmail = emailSchema.safeParse(form.get('email'))
+	if (services.email === null || !parsedEmail.success) return forgotPasswordPage({ sent: true })
+	const email = parsedEmail.data
 	const accountKey = await hashToken(`password-recovery:account:${email}`)
 	const globalKey = await hashToken('password-recovery:global')
 	const [accountThrottle, globalThrottle, clientOverLimit] = await Promise.all([
@@ -265,9 +270,9 @@ export async function handlePasswordAction(
 	if (!sameOrigin(request, services.config)) return authError('invalid request origin', 403)
 	const form = await readForm(request)
 	if (form === null) return authError('invalid form', 400)
-	const submittedToken = stringValue(form.get('token'))
-	const password = stringValue(form.get('password'))
-	if (!validActionToken(submittedToken) || password === null) return invalidActionPage()
+	const submitted = passwordActionFormSchema.safeParse({ token: form.get('token'), password: form.get('password') })
+	if (!submitted.success) return invalidActionPage()
+	const { token: submittedToken, password } = submitted.data
 	const tokenHash = await hashToken(submittedToken)
 	const action = await services.repositories.passwords.inspectActionToken(tokenHash, purpose)
 	if (action === null) return invalidActionPage()
@@ -292,18 +297,7 @@ export async function handlePasswordAction(
 	})
 }
 
-function normalizeEmail(value: string | null): string | null {
-	if (typeof value !== 'string') return null
-	const normalized = normalizeEmailIdentity(value)
-	if (normalized.length === 0 || normalized.length > 254 || !normalized.includes('@')) return null
-	return normalized
-}
-
 function matchingBootstrapEmail(email: string, config: Config): string | null {
 	const normalized = normalizeEmailIdentity(email)
 	return config.bootstrapAdmins.has(normalized) ? normalized : null
-}
-
-function validActionToken(token: string | null): token is string {
-	return token !== null && token.length <= 512 && /^[A-Za-z0-9_-]{32,}$/.test(token)
 }

@@ -142,6 +142,31 @@ describe('password login modes and CSRF', () => {
 })
 
 describe('password credential login', () => {
+	test('uses normalized email and NFC password while preserving handoff-error precedence', async () => {
+		const { h, hasher, services } = passwordServices()
+		const ctx = new TestContext()
+		try {
+			const principalId = seedUser(h.sqlite, { sub: 'unicode-password', email: 'person@example.test' })
+			await h.repositories.passwords.enableEnrollment(principalId)
+			await h.repositories.passwords.upsertCredential(principalId, await hasher.hash('long café password'))
+			const response = await handleAuth(
+				post('/auth/login', { email: ' PERSON@EXAMPLE.TEST ', password: 'long cafe\u0301 password' }),
+				services,
+				AUTH_ENV,
+				ctx,
+			)
+			expect(response.status).toBe(302)
+			expect(hasher.verifyCalls).toBe(1)
+			const refused = await handleAuth(post('/auth/login', { email: 'invalid', app: 'example' }), services, AUTH_ENV, ctx)
+			expect(refused.status).toBe(400)
+			expect(await refused.text()).toContain('no return address was given for this app')
+			expect(hasher.verifyCalls).toBe(1)
+		} finally {
+			await ctx.drain()
+			h.sqlite.close()
+		}
+	})
+
 	test('issues a method-tagged 30-day session', async () => {
 		const { h, hasher, services } = passwordServices()
 		const principalId = seedUser(h.sqlite, { sub: 'existing-idp', email: 'person@example.test' })

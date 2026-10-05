@@ -1,4 +1,4 @@
-import { type IssueKeyInput, type KeyGrant, type PermissionEntry, type RoleDef } from '@fabrika/auth-core'
+import { type IssueKeyInput, type PermissionEntry, type RoleDef } from '@fabrika/auth-core'
 
 import {
 	type CursorList,
@@ -11,7 +11,6 @@ import {
 import { type CredentialGrantRow, type CredentialRow } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 import { issueKey } from '../issue'
-import { prop, stringField } from '../json'
 import { computePermissions } from '../resolve'
 import { makeRoleSource } from '../roles'
 import { adminAudit, type AdminContext, fail } from './context'
@@ -65,8 +64,8 @@ export async function listShareLinksUseCase(c: AdminContext, input: ListShareLin
  * that app, which is the same question the credential will later ask.
  */
 export async function createShareLinkUseCase(c: AdminContext, input: IssueShareLinkRequest): Promise<IssuedShareLinkResponse> {
-	const grants = parseShareLinkGrants(input.grants)
-	if (grants === undefined || grants.length === 0) return fail(400, 'grants required (each: { action, scope? })')
+	if (input.grants.length === 0 || input.grants.some((grant) => !grant.action)) return fail(400, 'grants required (each: { action, scope? })')
+	const grants = input.grants.map(({ action, scope }) => ({ action, scope: scope == null ? null : { type: scope.type, value: scope.value } }))
 	const { app, label, expiresAt } = input
 	if (!(await knownApps(c)).includes(app)) return fail(404, 'unknown app')
 
@@ -118,37 +117,6 @@ async function effectiveIssuerPermissions(c: AdminContext, app: string): Promise
 		appRoles[dbRole.role_key] = dbRoleToDef(dbRole)
 	}
 	return computePermissions({ app, grants, isBootstrapAdmin }, makeRoleSource(appRoles))
-}
-
-/**
- * Parse the `grants` array from a share-link issue request; undefined when malformed. Each grant is
- * an `action` + an optional `scope` ({ type, value }) — the credential's frozen inline grant, matched
- * by `permits` at use time. A `scope` present but not a well-formed coordinate fails the whole parse
- * (undefined → 400) rather than silently dropping it.
- */
-function parseShareLinkGrants(value: unknown): KeyGrant[] | undefined {
-	if (!Array.isArray(value)) {
-		return undefined
-	}
-	const out: KeyGrant[] = []
-	for (const item of value) {
-		const action = stringField(item, 'action')
-		if (!action) {
-			return undefined
-		}
-		const scopeRaw = prop(item, 'scope')
-		if (scopeRaw === undefined || scopeRaw === null) {
-			out.push({ action, scope: null })
-			continue
-		}
-		const type = stringField(scopeRaw, 'type')
-		const scopeValue = stringField(scopeRaw, 'value')
-		if (type === undefined || scopeValue === undefined) {
-			return undefined
-		}
-		out.push({ action, scope: { type, value: scopeValue } })
-	}
-	return out
 }
 
 export async function revokeShareLinkUseCase(c: AdminContext, input: { id: string }): Promise<OkResponse> {

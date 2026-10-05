@@ -2,7 +2,6 @@ import { isActionAllowed } from '@fabrika/auth-core'
 
 import { type AppInput, type CreatePolicyInput, type OkResponse, type PolicyDto, type UpdatePolicyInput } from '@fabrika/iam-contract'
 import { type RoleRow } from '../db'
-import { arrayField, stringField } from '../json'
 import { BUILTIN_ROLES } from '../roles'
 import { adminAudit, type AdminContext, fail } from './context'
 import { knownApps, rolePermissions } from './grant-support'
@@ -35,17 +34,12 @@ export async function listPoliciesUseCase(c: AdminContext, input: AppInput): Pro
 async function parsePolicyBody(
 	c: AdminContext,
 	app: string,
-	body: unknown,
+	body: UpdatePolicyInput['policy'] & { key?: string },
 	requireKey: boolean,
 ): Promise<{ ok: true; key: string | undefined; name: string; description: string | null; permissions: string[] } | { ok: false; message: string }> {
-	const key = stringField(body, 'key')
-	const name = stringField(body, 'name')
-	const permissions = arrayField(body, 'permissions')
+	const { key, name, permissions } = body
 	if (requireKey && key === undefined) {
 		return { ok: false, message: 'key required' }
-	}
-	if (name === undefined || permissions === undefined) {
-		return { ok: false, message: 'name and permissions (array) required' }
 	}
 	if (permissions.length === 0) {
 		return { ok: false, message: 'permissions must be a non-empty array of action patterns' }
@@ -60,7 +54,7 @@ async function parsePolicyBody(
 			return { ok: false, message: `unknown action pattern: ${pattern}` }
 		}
 	}
-	const description = stringField(body, 'description') ?? null
+	const description = body.description ?? null
 	return { ok: true, key, name, description, permissions }
 }
 
@@ -104,7 +98,7 @@ export async function updatePolicyUseCase(c: AdminContext, input: UpdatePolicyIn
 		return fail(404, 'unknown app')
 	}
 	const existing = await c.services.repositories.appSchema.getRole(app, key)
-	if (!existing || existing.origin !== 'custom') {
+	if (existing?.origin !== 'custom') {
 		return fail(404, 'custom policy not found')
 	}
 	const parsed = await parsePolicyBody(c, app, body, false)
@@ -135,7 +129,7 @@ export async function deletePolicyUseCase(c: AdminContext, input: { app: string;
 		return fail(404, 'unknown app')
 	}
 	const existing = await c.services.repositories.appSchema.getRole(app, key)
-	if (!existing || existing.origin !== 'custom') {
+	if (existing?.origin !== 'custom') {
 		return fail(404, 'custom policy not found')
 	}
 	await c.services.repositories.appSchema.deleteRole(app, key)

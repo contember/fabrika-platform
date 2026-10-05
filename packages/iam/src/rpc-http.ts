@@ -57,23 +57,19 @@
 // Each key is independent, and each unset key 404s only its own surface: a deployment with a proxy
 // and no control plane sets `proxyKey` alone, and vice versa.
 
-import type {
-	AuditInput,
-	ExchangeAuthCodeInput,
-	IamHandoffRpc,
-	IamRpc,
-	IssueJwtInput,
-	IssueKeyInput,
-	IssueKeyServiceSpec,
-	KeyGrant,
-	ListPrincipalsInput,
-	MintFromKeyInput,
-	MintTokenInput,
-	RevokeKeyInput,
-	Scope,
-} from '@fabrika/auth-core'
+import type { IamHandoffRpc, IamRpc } from '@fabrika/auth-core'
 import { parseApproveDeviceAuthorizationInput, parseInspectDeviceAuthorizationInput, parseListOwnDeviceAuthorizationsInput } from '@fabrika/auth-core'
-import { arrayField, numberField, prop, stringField } from './json'
+import {
+	auditSchema,
+	exchangeAuthCodeSchema,
+	issueJwtSchema,
+	issueKeySchema,
+	listPrincipalsSchema,
+	mintFromKeySchema,
+	mintTokenSchema,
+	revokeKeySchema,
+	RpcInputError,
+} from './rpc-inputs'
 import { hashToken, timingSafeEqualHex } from './secret'
 
 /** The path everything here is mounted under. `/rpc/<method>`, one segment, no nesting. */
@@ -126,28 +122,28 @@ export async function handleRpcHttp(request: Request, rpc: IamRpc, rpcKey: strin
 			case 'listOwnDeviceAuthorizations':
 				return json(await rpc.listOwnDeviceAuthorizations(parseListOwnDeviceAuthorizationsInput(body) ?? invalid('device input')))
 			case 'mintToken':
-				return json(await rpc.mintToken(decodeMintToken(body)))
+				return json(await rpc.mintToken(mintTokenSchema.parse(body)))
 			case 'mintFromKey':
-				return json(await rpc.mintFromKey(decodeMintFromKey(body)))
+				return json(await rpc.mintFromKey(mintFromKeySchema.parse(body)))
 			case 'issueKey':
-				return json(await rpc.issueKey(decodeIssueKey(body)))
+				return json(await rpc.issueKey(issueKeySchema.parse(body)))
 			case 'issueJwt':
-				return json(await rpc.issueJwt(decodeIssueJwt(body)))
+				return json(await rpc.issueJwt(issueJwtSchema.parse(body)))
 			case 'revokeKey':
-				return json(await rpc.revokeKey(decodeRevokeKey(body)))
+				return json(await rpc.revokeKey(revokeKeySchema.parse(body)))
 			case 'listPrincipals':
-				return json(await rpc.listPrincipals(decodeListPrincipals(body)))
+				return json(await rpc.listPrincipals(listPrincipalsSchema.parse(body)))
 			case 'getJwks':
 				return json(await rpc.getJwks())
 			case 'audit':
-				await rpc.audit(decodeAudit(body))
+				await rpc.audit(auditSchema.parse(body))
 				// `audit` returns void over the binding, so there is no result to encode.
 				return new Response(null, { status: 204 })
 			default:
 				return problem(404, 'not found')
 		}
 	} catch (err) {
-		if (err instanceof DecodeError) {
+		if (err instanceof RpcInputError) {
 			return problem(400, err.message)
 		}
 		// The RPC methods fail closed and return a result rather than throwing; anything reaching here
@@ -227,19 +223,17 @@ export async function handleMintHttp(request: Request, rpc: IamRpc & IamHandoffR
 	try {
 		const path = new URL(request.url).pathname
 		if (path === MINT_SESSION_PATH) {
-			return json(await rpc.mintToken(decodeMintToken(body)))
+			return json(await rpc.mintToken(mintTokenSchema.parse(body)))
 		}
 		if (path === MINT_KEY_PATH) {
-			return json(await rpc.mintFromKey(decodeMintFromKey(body)))
+			return json(await rpc.mintFromKey(mintFromKeySchema.parse(body)))
 		}
 		if (path === MINT_EXCHANGE_PATH) {
-			return json(await rpc.exchangeAuthCode(decodeExchangeAuthCode(body)))
+			return json(await rpc.exchangeAuthCode(exchangeAuthCodeSchema.parse(body)))
 		}
 		return problem(404, 'not found')
 	} catch (err) {
-		if (err instanceof DecodeError) {
-			return problem(400, err.message)
-		}
+		if (err instanceof RpcInputError) return problem(400, err.message)
 		// Both mint methods fail closed and return a result rather than throwing, so this is unreachable
 		// in practice. Log a message only — the body carried a credential.
 		console.error('mint failed', err instanceof Error ? err.message : 'unknown error')
@@ -293,201 +287,6 @@ async function readJsonBody(request: Request): Promise<unknown> {
 	}
 }
 
-// ── Decoding ──────────────────────────────────────────────────────────────────
-//
-// Every input is reconstructed field by field from `unknown`, using the structural readers in
-// `json.ts`. Nothing is cast: a body that does not match the contract raises `DecodeError` and
-// becomes a 400, rather than reaching a handler as a half-typed object. Messages name the FIELD and
-// never quote its value — a rejected `credential` or `key` must not end up in a log line.
-
-class DecodeError extends Error {}
-
 function invalid(field: string): never {
-	throw new DecodeError(`invalid or missing field '${field}'`)
-}
-
-/** A required string field. */
-function requiredString(value: unknown, key: string): string {
-	const found = stringField(value, key)
-	return found === undefined ? invalid(key) : found
-}
-
-/** A required field that is a string or an explicit `null` (`credential`, `session`, `principalId`). */
-function requiredNullableString(value: unknown, key: string): string | null {
-	const raw = prop(value, key)
-	if (raw === null) {
-		return null
-	}
-	return typeof raw === 'string' ? raw : invalid(key)
-}
-
-/** An optional string field. Absent and explicit `null` both read as absent. */
-function optionalString(value: unknown, key: string): string | undefined {
-	const raw = prop(value, key)
-	if (raw === undefined || raw === null) {
-		return undefined
-	}
-	return typeof raw === 'string' ? raw : invalid(key)
-}
-
-/** An optional finite-number field. Absent and explicit `null` both read as absent. */
-function optionalNumber(value: unknown, key: string): number | undefined {
-	const raw = prop(value, key)
-	if (raw === undefined || raw === null) {
-		return undefined
-	}
-	return numberField(value, key) ?? invalid(key)
-}
-
-/**
- * `{ type, value }`, or null/absent for a global grant. `label` is only for the error message — the
- * property read is always `scope`, and conflating the two silently makes every nested scope invisible.
- */
-function optionalScope(value: unknown, label: string): Scope | null | undefined {
-	const raw = prop(value, 'scope')
-	if (raw === undefined) {
-		return undefined
-	}
-	if (raw === null) {
-		return null
-	}
-	const type = stringField(raw, 'type')
-	const scopeValue = stringField(raw, 'value')
-	if (type === undefined || scopeValue === undefined) {
-		invalid(label)
-	}
-	return { type, value: scopeValue }
-}
-
-function decodeKeyGrant(raw: unknown, key: string): KeyGrant {
-	const action = stringField(raw, 'action')
-	if (action === undefined) {
-		invalid(`${key}[].action`)
-	}
-	const scope = optionalScope(raw, `${key}[].scope`)
-	return { action, ...(scope === undefined ? {} : { scope }) }
-}
-
-function requiredKeyGrants(value: unknown, key: string): KeyGrant[] {
-	const raw = prop(value, key)
-	if (!Array.isArray(raw)) {
-		invalid(key)
-	}
-	return raw.map((item) => decodeKeyGrant(item, key))
-}
-
-function optionalKeyGrants(value: unknown, key: string): KeyGrant[] | undefined {
-	const raw = prop(value, key)
-	if (raw === undefined || raw === null) {
-		return undefined
-	}
-	return requiredKeyGrants(value, key)
-}
-
-function optionalServiceSpec(value: unknown, key: string): IssueKeyServiceSpec | undefined {
-	const raw = prop(value, key)
-	if (raw === undefined || raw === null) {
-		return undefined
-	}
-	const label = stringField(raw, 'label')
-	const permissions = arrayField(raw, 'permissions')
-	if (label === undefined || permissions === undefined) {
-		invalid(key)
-	}
-	const scope = optionalScope(raw, `${key}.scope`)
-	return { label, permissions, ...(scope === undefined ? {} : { scope }) }
-}
-
-function decodeMintToken(body: unknown): MintTokenInput {
-	return {
-		app: requiredString(body, 'app'),
-		session: requiredNullableString(body, 'session'),
-		requestId: requiredString(body, 'requestId'),
-	}
-}
-
-function decodeMintFromKey(body: unknown): MintFromKeyInput {
-	return {
-		app: requiredString(body, 'app'),
-		key: requiredString(body, 'key'),
-		requestId: requiredString(body, 'requestId'),
-	}
-}
-
-function decodeExchangeAuthCode(body: unknown): ExchangeAuthCodeInput {
-	return {
-		app: requiredString(body, 'app'),
-		code: requiredString(body, 'code'),
-		verifier: requiredString(body, 'verifier'),
-		requestId: requiredString(body, 'requestId'),
-	}
-}
-
-function decodeIssueKey(body: unknown): IssueKeyInput {
-	const service = optionalServiceSpec(body, 'service')
-	const principalId = optionalString(body, 'principalId')
-	const permissions = optionalKeyGrants(body, 'permissions')
-	const label = optionalString(body, 'label')
-	const expiresAt = optionalNumber(body, 'expiresAt')
-	return {
-		app: requiredString(body, 'app'),
-		credential: requiredNullableString(body, 'credential'),
-		requestId: requiredString(body, 'requestId'),
-		...(service === undefined ? {} : { service }),
-		...(principalId === undefined ? {} : { principalId }),
-		...(permissions === undefined ? {} : { permissions }),
-		...(label === undefined ? {} : { label }),
-		...(expiresAt === undefined ? {} : { expiresAt }),
-	}
-}
-
-function decodeIssueJwt(body: unknown): IssueJwtInput {
-	const label = optionalString(body, 'label')
-	const ttl = optionalNumber(body, 'ttl')
-	return {
-		app: requiredString(body, 'app'),
-		credential: requiredNullableString(body, 'credential'),
-		requestId: requiredString(body, 'requestId'),
-		permissions: requiredKeyGrants(body, 'permissions'),
-		...(label === undefined ? {} : { label }),
-		...(ttl === undefined ? {} : { ttl }),
-	}
-}
-
-function decodeRevokeKey(body: unknown): RevokeKeyInput {
-	return {
-		app: requiredString(body, 'app'),
-		credential: requiredNullableString(body, 'credential'),
-		requestId: requiredString(body, 'requestId'),
-		id: requiredString(body, 'id'),
-	}
-}
-
-function decodeListPrincipals(body: unknown): ListPrincipalsInput {
-	return {
-		app: requiredString(body, 'app'),
-		credential: requiredNullableString(body, 'credential'),
-		requestId: requiredString(body, 'requestId'),
-	}
-}
-
-function decodeAudit(body: unknown): AuditInput {
-	const credentialId = optionalString(body, 'credentialId')
-	const resourceId = optionalString(body, 'resourceId')
-	// `diff`/`metadata` are `unknown` by contract — the app decides their shape and the DB stores the
-	// JSON verbatim — so they pass through unvalidated, exactly as the binding does.
-	const diff = prop(body, 'diff')
-	const metadata = prop(body, 'metadata')
-	return {
-		app: requiredString(body, 'app'),
-		requestId: requiredString(body, 'requestId'),
-		principalId: requiredNullableString(body, 'principalId'),
-		principalLabel: requiredString(body, 'principalLabel'),
-		action: requiredString(body, 'action'),
-		resourceType: requiredString(body, 'resourceType'),
-		...(credentialId === undefined ? {} : { credentialId }),
-		...(resourceId === undefined ? {} : { resourceId }),
-		...(diff === undefined ? {} : { diff }),
-		...(metadata === undefined ? {} : { metadata }),
-	}
+	throw new RpcInputError(`invalid or missing field '${field}'`)
 }

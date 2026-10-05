@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 export const PBKDF2_SHA256_ALGORITHM = 'pbkdf2-sha256'
 export const PBKDF2_SHA256_ITERATIONS = 600_000
 export const PBKDF2_SHA256_SALT_BYTES = 16
@@ -53,6 +55,11 @@ function decodeHex(value: string): Uint8Array<ArrayBuffer> | null {
 	return bytes
 }
 
+const parametersSchema = z.object({
+	iterations: z.number().int().positive().max(10_000_000),
+	outputBytes: z.number().int().positive().max(128),
+})
+
 function parseParameters(value: string): Pbkdf2Parameters | null {
 	let parsed: unknown
 	try {
@@ -60,18 +67,8 @@ function parseParameters(value: string): Pbkdf2Parameters | null {
 	} catch {
 		return null
 	}
-	if (typeof parsed !== 'object' || parsed === null) {
-		return null
-	}
-	const iterations = Reflect.get(parsed, 'iterations')
-	const outputBytes = Reflect.get(parsed, 'outputBytes')
-	if (!Number.isSafeInteger(iterations) || typeof iterations !== 'number' || iterations <= 0 || iterations > 10_000_000) {
-		return null
-	}
-	if (!Number.isSafeInteger(outputBytes) || typeof outputBytes !== 'number' || outputBytes <= 0 || outputBytes > 128) {
-		return null
-	}
-	return { iterations, outputBytes }
+	const parameters = parametersSchema.safeParse(parsed)
+	return parameters.success ? parameters.data : null
 }
 
 async function derive(password: string, salt: Uint8Array<ArrayBuffer>, parameters: Pbkdf2Parameters): Promise<Uint8Array<ArrayBuffer>> {

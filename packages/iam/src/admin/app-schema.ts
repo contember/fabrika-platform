@@ -9,8 +9,8 @@ import {
 	type RoleDto,
 	type SetReturnOriginsRequest,
 } from '@fabrika/iam-contract'
+import { z } from 'zod'
 import { normalizeOrigin } from '../handoff'
-import { arrayField, prop, stringField } from '../json'
 import { BUILTIN_ROLES } from '../roles'
 import { adminAudit, type AdminContext, fail } from './context'
 import { dbRoleToDef, knownApps, rolePermissions } from './grant-support'
@@ -64,56 +64,50 @@ export async function listRolesUseCase(c: AdminContext, input: ListRolesInput): 
  * permission patterns are validated against the body's OWN action catalog via
  * `isActionAllowed` — an unknown action is a 400.
  */
+const vocabularyEnvelopeSchema = z.object({ scopes: z.array(z.unknown()), actions: z.array(z.unknown()), roles: z.record(z.unknown()) })
+const scopesSchema = z.array(
+	z.object({ type: z.string(), label: z.string().optional().catch(undefined) }).transform(({ type, label }) => ({
+		type,
+		...(label === undefined ? {} : { label }),
+	})),
+)
+const actionsSchema = z.array(
+	z.object({ action: z.string(), description: z.string().optional().catch(undefined) }).transform(({ action, description }) => ({
+		action,
+		...(description === undefined ? {} : { description }),
+	})),
+)
+const roleSchema = z.object({ name: z.string(), permissions: z.array(z.string()), description: z.string().optional().catch(undefined) })
+
 function parseAppSchema(body: unknown): { ok: true; schema: AppSchema } | { ok: false; message: string } {
-	const scopesRaw = prop(body, 'scopes')
-	const actionsRaw = prop(body, 'actions')
-	const rolesRaw = prop(body, 'roles')
-	if (!Array.isArray(scopesRaw) || !Array.isArray(actionsRaw)) {
-		return { ok: false, message: 'scopes and actions must be arrays' }
-	}
-	if (typeof rolesRaw !== 'object' || rolesRaw === null || Array.isArray(rolesRaw)) {
-		return { ok: false, message: 'roles must be an object (role_key -> def)' }
-	}
-
-	const scopes: AppSchema['scopes'] = []
-	for (const item of scopesRaw) {
-		const type = stringField(item, 'type')
-		if (type === undefined) {
-			return { ok: false, message: 'each scope needs a string `type`' }
+	const envelope = vocabularyEnvelopeSchema.safeParse(body)
+	if (!envelope.success) {
+		return {
+			ok: false,
+			message: envelope.error.issues[0]?.path[0] === 'roles' ? 'roles must be an object (role_key -> def)' : 'scopes and actions must be arrays',
 		}
-		const label = stringField(item, 'label')
-		scopes.push({ type, ...(label !== undefined ? { label } : {}) })
 	}
-
-	const actions: AppSchema['actions'] = []
-	const catalog: string[] = []
-	for (const item of actionsRaw) {
-		const action = stringField(item, 'action')
-		if (action === undefined) {
-			return { ok: false, message: 'each action needs a string `action`' }
-		}
-		const description = stringField(item, 'description')
-		actions.push({ action, ...(description !== undefined ? { description } : {}) })
-		catalog.push(action)
-	}
-
+	const scopes = scopesSchema.safeParse(envelope.data.scopes)
+	if (!scopes.success) return { ok: false, message: 'each scope needs a string `type`' }
+	const actions = actionsSchema.safeParse(envelope.data.actions)
+	if (!actions.success) return { ok: false, message: 'each action needs a string `action`' }
+	const catalog = actions.data.map(({ action }) => action)
 	const roles: AppSchema['roles'] = {}
-	for (const [key, defRaw] of Object.entries(rolesRaw)) {
-		const name = stringField(defRaw, 'name')
-		const permissions = arrayField(defRaw, 'permissions')
-		if (name === undefined || permissions === undefined) {
+	for (const [key, defRaw] of Object.entries(envelope.data.roles)) {
+		const parsed = roleSchema.safeParse(defRaw)
+		if (!parsed.success) {
 			return { ok: false, message: `role '${key}' needs a string name and a permissions array` }
 		}
+		const { name, permissions, description } = parsed.data
 		for (const pattern of permissions) {
 			if (!isActionAllowed(pattern, catalog)) {
 				return { ok: false, message: `role '${key}' references unknown action: ${pattern}` }
 			}
 		}
-		const description = stringField(defRaw, 'description')
 		roles[key] = { name, permissions, ...(description !== undefined ? { description } : {}) }
 	}
 
-	return { ok: true, schema: { scopes, actions, roles } }
+	return { ok: true, schema: { scopes: scopes.data, actions: actions.data, roles } }
 }
 
 /**

@@ -25,8 +25,8 @@ import {
 	type KeyLike,
 	SignJWT,
 } from 'jose'
+import { z } from 'zod'
 import type { Env } from './env'
-import { stringField } from './json'
 
 /** A key jose can sign with (a CryptoKey-like `KeyLike` or a raw secret). */
 type SignKey = KeyLike | Uint8Array
@@ -163,25 +163,26 @@ export function parseSigningKeys(raw: string): JWK[] {
 	} catch {
 		throw new Error('FABRIKA_IAM_SIGNING_KEYS is not valid JSON')
 	}
-	if (!Array.isArray(parsed)) {
-		throw new Error('FABRIKA_IAM_SIGNING_KEYS must be a JSON array of private JWKs')
+	const keys = signingKeysSchema.safeParse(parsed)
+	if (!keys.success) {
+		const index = keys.error.issues[0]?.path[0]
+		if (typeof index !== 'number') throw new Error('FABRIKA_IAM_SIGNING_KEYS must be a JSON array of private JWKs')
+		throw new Error(`FABRIKA_IAM_SIGNING_KEYS[${index}] must be an EC P-256 private JWK (kty=EC, crv=P-256, x, y, d)`)
 	}
-	return parsed.map((item, index) => parseEcPrivateJwk(item, index))
+	return keys.data
 }
 
 /** Build a typed EC P-256 private JWK from an untrusted object (no `as`); reject anything else. */
-function parseEcPrivateJwk(value: unknown, index: number): JWK {
-	const kty = stringField(value, 'kty')
-	const crv = stringField(value, 'crv')
-	const x = stringField(value, 'x')
-	const y = stringField(value, 'y')
-	const d = stringField(value, 'd')
-	const kid = stringField(value, 'kid')
-	if (kty !== 'EC' || crv !== 'P-256' || x === undefined || y === undefined || d === undefined) {
-		throw new Error(`FABRIKA_IAM_SIGNING_KEYS[${index}] must be an EC P-256 private JWK (kty=EC, crv=P-256, x, y, d)`)
-	}
-	return { kty, crv, x, y, d, alg: TOKEN_ALG, use: 'sig', ...(kid === undefined ? {} : { kid }) }
-}
+const privateJwkSchema = z.object({
+	kty: z.literal('EC'),
+	crv: z.literal('P-256'),
+	x: z.string(),
+	y: z.string(),
+	d: z.string(),
+	kid: z.string().optional().catch(undefined),
+}).transform(({ kid, ...key }) => ({ ...key, alg: TOKEN_ALG, use: 'sig', ...(kid === undefined ? {} : { kid }) }))
+
+const signingKeysSchema = z.array(privateJwkSchema)
 
 // ── Per-isolate memoisation ────────────────────────────────────────────────────
 

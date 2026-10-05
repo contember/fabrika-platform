@@ -86,6 +86,18 @@ describe('tokenRequestBody', () => {
 })
 
 describe('verifyIdToken', () => {
+	test('optional verification claims retain legacy tolerance but never override an invalid identity', async () => {
+		for (const email_verified of [null, 1, 'TRUE', {}]) {
+			const token = await signIdToken({ sub: '', email: '', email_verified, extra: true })
+			expect(await oidc({ requireVerifiedEmail: false }).verifyIdToken(token)).toEqual({ sub: '', email: '' })
+			expect(await oidc().verifyIdToken(token)).toBeNull()
+		}
+		const explicitFalse = await signIdToken({ sub: 's', email: 'e', email_verified: 'false' })
+		expect(await oidc({ requireVerifiedEmail: false }).verifyIdToken(explicitFalse)).toBeNull()
+		const malformedEmail = await signIdToken({ sub: 's', email: 42, email_verified: true })
+		expect(await oidc().verifyIdToken(malformedEmail)).toBeNull()
+	})
+
 	test('accepts a valid, email-verified token', async () => {
 		const token = await signIdToken({ sub: 's-1', email: 'a@b.cz', email_verified: true })
 		expect(await oidc().verifyIdToken(token)).toEqual({ sub: 's-1', email: 'a@b.cz' })
@@ -130,6 +142,27 @@ describe('verifyIdToken', () => {
 })
 
 describe('discovery', () => {
+	test('discovery and token responses validate consumed fields and tolerate provider extensions', async () => {
+		let responseBody: unknown = null
+		const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => Response.json(responseBody) })
+		const issuer = server.url.origin
+		try {
+			const client = new OidcClient({ ...CONFIG, issuer })
+			responseBody = { issuer, authorization_endpoint: '', token_endpoint: 42, jwks_uri: '', extension: true }
+			await expect(client.metadata()).rejects.toThrow('missing required fields')
+			responseBody = { issuer, authorization_endpoint: '', token_endpoint: `${issuer}/token`, jwks_uri: '', extension: true }
+			expect(await client.metadata()).toEqual({ issuer, authorizationEndpoint: '', tokenEndpoint: `${issuer}/token`, jwksUri: '' })
+			responseBody = { id_token: '', access_token: 'unused', extension: true }
+			expect(await client.exchangeCode('code', 'verifier')).toBe('')
+			responseBody = { id_token: 42 }
+			expect(await client.exchangeCode('code', 'verifier')).toBeNull()
+			responseBody = [{ id_token: 'not-an-object' }]
+			expect(await client.exchangeCode('code', 'verifier')).toBeNull()
+		} finally {
+			await server.stop(true)
+		}
+	})
+
 	test('returns the injected metadata without a network call', async () => {
 		expect(await oidc().metadata()).toEqual(METADATA)
 	})

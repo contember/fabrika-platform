@@ -10,8 +10,8 @@ import {
 	type RotateApiKeyInput,
 	type RotateApiKeyResponse,
 } from '@fabrika/iam-contract'
+import { z } from 'zod'
 import { principalStatus } from '../db'
-import { arrayField, nullableStringField, numberField, stringField } from '../json'
 import { generateToken, hashToken } from '../secret'
 import { adminAudit, type AdminContext, fail } from './context'
 import { appField, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDtos } from './grant-support'
@@ -45,23 +45,22 @@ export async function listApiKeysUseCase(c: AdminContext, input: ListApiKeysInpu
 }
 
 export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionApiKeyRequest): Promise<ProvisionApiKeyResponse> {
-	const body: unknown = input
 	const { label, type } = input
 	if (label.trim() === '' || type !== 'service') return fail(400, 'label and type=service required')
-	const appResult = await appField(c, body)
+	const appResult = await appField(c, input)
 	if (!appResult.ok) {
 		return fail(400, 'unknown app')
 	}
 	const app = appResult.app
-	const roleOrInline = await parseRoleOrInline(c, body, app)
+	const roleOrInline = await parseRoleOrInline(c, input, app)
 	if (!roleOrInline.ok) {
 		return fail(400, roleOrInline.message)
 	}
-	const scope = parseScope(body)
+	const scope = parseScope(input)
 	if (!scope.ok) {
 		return fail(400, 'scopeType and scopeValue must be both set or both omitted')
 	}
-	const expiresAt = numberField(body, 'expiresAt') ?? null
+	const expiresAt = Number.isFinite(input.expiresAt) ? input.expiresAt ?? null : null
 	const nowSeconds = Math.floor(Date.now() / 1000)
 	if (expiresAt !== null && expiresAt <= nowSeconds) {
 		return fail(400, 'expiresAt must be in the future')
@@ -120,7 +119,7 @@ export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionAp
 export async function revokeApiKeyUseCase(c: AdminContext, input: { principalId: string }): Promise<OkResponse> {
 	const { principalId } = input
 	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
-	if (!principal || principal.type !== 'service') {
+	if (principal?.type !== 'service') {
 		return fail(404, 'service principal not found')
 	}
 
@@ -149,7 +148,7 @@ export async function revokeApiKeyUseCase(c: AdminContext, input: { principalId:
 export async function rotateApiKeyUseCase(c: AdminContext, input: RotateApiKeyInput): Promise<RotateApiKeyResponse> {
 	const { principalId } = input
 	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
-	if (!principal || principal.type !== 'service') {
+	if (principal?.type !== 'service') {
 		return fail(404, 'service principal not found')
 	}
 	if (principal.disabled_at !== null) {
@@ -184,20 +183,17 @@ export async function rotateApiKeyUseCase(c: AdminContext, input: RotateApiKeyIn
 	return response
 }
 
-/**
- * The one surviving REST body parser: the bootstrap `POST /admin/api-keys`. Everything else that
- * took a JSON body is an `/admin/rpc` procedure, and zod validates those from the contract.
- */
-export function parseProvisionApiKeyRequest(body: unknown): ProvisionApiKeyRequest {
-	const label = stringField(body, 'label')
-	const type = stringField(body, 'type')
-	if (label === undefined || type !== 'service') return fail(400, 'label and type=service required')
-	const roleKey = stringField(body, 'roleKey')
-	const permissions = arrayField(body, 'permissions')
-	const scopeType = nullableStringField(body, 'scopeType')
-	const scopeValue = nullableStringField(body, 'scopeValue')
-	const app = nullableStringField(body, 'app')
-	const expiresAt = numberField(body, 'expiresAt')
+// Bootstrap REST omits malformed optional values; admin RPC rejects them instead.
+const provisionApiKeyRequestSchema = z.object({
+	label: z.string(),
+	type: z.literal('service'),
+	roleKey: z.string().optional().catch(undefined),
+	permissions: z.array(z.string()).optional().catch(undefined),
+	scopeType: z.string().nullable().optional().catch(undefined),
+	scopeValue: z.string().nullable().optional().catch(undefined),
+	app: z.string().nullable().optional().catch(undefined),
+	expiresAt: z.number().finite().optional().catch(undefined),
+}).transform(({ label, type, roleKey, permissions, scopeType, scopeValue, app, expiresAt }) => {
 	return {
 		label,
 		type,
@@ -208,4 +204,10 @@ export function parseProvisionApiKeyRequest(body: unknown): ProvisionApiKeyReque
 		...(app !== undefined ? { app } : {}),
 		...(expiresAt !== undefined ? { expiresAt } : {}),
 	}
+})
+
+export function parseProvisionApiKeyRequest(body: unknown): ProvisionApiKeyRequest {
+	const parsed = provisionApiKeyRequestSchema.safeParse(body)
+	if (!parsed.success) return fail(400, 'label and type=service required')
+	return parsed.data
 }

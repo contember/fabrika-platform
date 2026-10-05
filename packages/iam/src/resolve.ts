@@ -1,9 +1,9 @@
 import type { PermissionEntry, PermissionSource, RoleDef, RoleSource, Scope } from '@fabrika/auth-core'
 import type { GrantRow, IamRepositories, PrincipalRow, RoleRow } from './db'
 import { normalizeEmailIdentity } from './email-identity'
-import { parseJsonOrNull } from './json'
 import { logWarn } from './log'
 import { makeRoleSource } from './roles'
+import { parseStoredPermissions } from './stored-permissions'
 
 // ── Pure resolution (no I/O) — testable with in-memory rows ───────────────────
 
@@ -28,20 +28,6 @@ export interface ResolutionInputs {
  */
 function rowScope(scopeType: string | null, scopeValue: string | null): Scope | null {
 	return scopeType === null || scopeValue === null ? null : { type: scopeType, value: scopeValue }
-}
-
-/**
- * Parse a grant's inline `permissions` JSON into an array of action patterns. Fail-closed
- * twice over: unparseable text and JSON that isn't a string array both yield no patterns.
- * The DB no longer guarantees validity (the `json_valid` CHECK was SQLite-only — see
- * `parseJsonOrNull`), and this runs on the authz path, so it must never throw.
- */
-function inlinePatterns(json: string): string[] {
-	const parsed = parseJsonOrNull(json)
-	if (!Array.isArray(parsed)) {
-		return []
-	}
-	return parsed.filter((p): p is string => typeof p === 'string')
 }
 
 /**
@@ -87,7 +73,7 @@ export function computePermissions(inputs: ResolutionInputs, roles: RoleSource):
 		if (grant.role_key !== null) {
 			expandRole(grant.role_key, scope, 'grant')
 		} else if (grant.permissions !== null) {
-			for (const pattern of inlinePatterns(grant.permissions)) {
+			for (const pattern of parseStoredPermissions(grant.permissions)) {
 				add(pattern, scope, 'grant')
 			}
 		}
@@ -236,7 +222,7 @@ function toRoleDef(row: RoleRow): RoleDef {
 	return {
 		name: row.name,
 		...(row.description !== null ? { description: row.description } : {}),
-		permissions: inlinePatterns(row.permissions),
+		permissions: parseStoredPermissions(row.permissions),
 	}
 }
 

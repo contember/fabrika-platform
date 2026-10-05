@@ -86,6 +86,11 @@ describe('Signer.ephemeral', () => {
 })
 
 describe('parseSigningKeys', () => {
+	test('drops unsupported members and a malformed optional kid, retaining empty coordinate strings', () => {
+		expect(parseSigningKeys(JSON.stringify([{ kty: 'EC', crv: 'P-256', x: '', y: '', d: '', kid: 4, alg: 'RS256', use: 'enc', extra: true }])))
+			.toEqual([{ kty: 'EC', crv: 'P-256', x: '', y: '', d: '', alg: 'ES256', use: 'sig' }])
+	})
+
 	test('empty string → no keys', () => {
 		expect(parseSigningKeys('')).toEqual([])
 		expect(parseSigningKeys('   ')).toEqual([])

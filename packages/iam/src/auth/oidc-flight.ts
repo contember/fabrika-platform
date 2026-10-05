@@ -1,5 +1,5 @@
+import { z } from 'zod'
 import { type Env } from '../env'
-import { stringField } from '../json'
 import { getSigner, verifyInternal } from '../signing'
 
 import { clearCookie } from './cookies'
@@ -41,23 +41,29 @@ export async function encodeFlight(env: AuthEnv, flight: Flight): Promise<string
 	return signer.signInternal({ ...flight }, OIDC_FLIGHT_AUDIENCE, OIDC_TTL_SECONDS)
 }
 
+const flightSchema = z.object({
+	state: z.string(),
+	verifier: z.string(),
+	redirect: z.string(),
+	app: z.string().optional().catch(undefined),
+	handoffState: z.string().optional().catch(undefined),
+	handoffChallenge: z.string().optional().catch(undefined),
+}).transform(({ state, verifier, redirect, app, handoffState, handoffChallenge }, ctx) => {
+	if (app === undefined || app === '') return { state, verifier, redirect }
+	if (handoffState === undefined || handoffChallenge === undefined) {
+		ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Incomplete handoff' })
+		return z.NEVER
+	}
+	return { state, verifier, redirect, app, handoffState, handoffChallenge }
+})
+
 export async function decodeFlight(env: AuthEnv, raw: string | null): Promise<Flight | null> {
 	if (!raw) {
 		return null
 	}
 	const payload = await verifyInternal(await getSigner(env), raw, OIDC_FLIGHT_AUDIENCE)
-	const state = stringField(payload, 'state')
-	const verifier = stringField(payload, 'verifier')
-	const redirect = stringField(payload, 'redirect')
-	const app = stringField(payload, 'app')
-	const handoffState = stringField(payload, 'handoffState')
-	const handoffChallenge = stringField(payload, 'handoffChallenge')
-	if (state === undefined || verifier === undefined || redirect === undefined) {
-		return null
-	}
-	if (app === undefined || app === '') return { state, verifier, redirect }
-	if (handoffState === undefined || handoffChallenge === undefined) return null
-	return { state, verifier, redirect, app, handoffState, handoffChallenge }
+	const parsed = flightSchema.safeParse(payload)
+	return parsed.success ? parsed.data : null
 }
 
 /** `authError` that also spends the OIDC flight — every terminal callback outcome goes through here. */

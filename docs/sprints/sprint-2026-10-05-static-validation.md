@@ -191,6 +191,8 @@ The upstream check needs offline unchanged/changed fixtures; network failure is 
 
 ## Run log
 
+- WU03 integrated: IAM-owned HTTP/REST/OIDC/JWK/password/persisted/config-list schemas and duplicate admin parsing removal. Leader ran IAM suite with dedicated Postgres: 522 pass, no skips/failures; typecheck and scoped lint/format pass. Auth-core-owned device/access parsers, proof/state/domain checks, scalar config, numeric conversion and audit payloads remain intentional exceptions. R1 first slice reviewed frozen WU01/WU06 with no findings (107 tests and 213 differential release probes); remaining R1 units pending.
+
 - WU06 integrated: static strict source protocol schemas, secret-safe diagnostics and 55 additional compatibility cases including exact credential digest. Leader reran 322 wire/client/service tests successfully. Namespace compatibility helpers remain until WU07 migrates their callers; R1 pending.
 - WU14 integrated: annotation/session/frame/response schemas, legacy recovery and per-entry filtering. Added annotations schema subpath and Canvas client schema exports. Leader reran isolated interface suite (321 pass, no skips), both package typechecks and scoped lint/format. Identity-sensitive compiler/runtime checks and opaque host response storage retained deliberately; R3 pending.
 

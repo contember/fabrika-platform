@@ -1,6 +1,7 @@
 import { LOCAL_ENVIRONMENT, readEnvironmentName } from '@fabrika/auth-core'
 import type { EmailSender } from '@fabrika/email'
 import { ResendEmailSender } from '@fabrika/email/resend'
+import { z } from 'zod'
 import type { IamRepositories } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import type { Env } from './env'
@@ -57,10 +58,12 @@ export interface Config {
 }
 
 /** Parse a JSON array of strings (the central human-domain/email lists); [] on anything malformed. */
+const stringArraySchema = z.array(z.unknown()).transform((values) => values.filter((value): value is string => typeof value === 'string'))
+
 function parseStringArray(raw: string): string[] {
 	try {
-		const parsed: unknown = JSON.parse(raw)
-		return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : []
+		const parsed = stringArraySchema.safeParse(JSON.parse(raw))
+		return parsed.success ? parsed.data : []
 	} catch {
 		return []
 	}
@@ -119,20 +122,7 @@ function parseAdminAudiences(raw: string | undefined): ReadonlySet<string> {
 }
 
 function parseBootstrapAdmins(raw: string): Set<string> {
-	try {
-		const parsed: unknown = JSON.parse(raw)
-		if (!Array.isArray(parsed)) {
-			return new Set()
-		}
-		return new Set(
-			parsed
-				.filter((v): v is string => typeof v === 'string')
-				.map(normalizeEmailIdentity)
-				.filter((value) => value !== ''),
-		)
-	} catch {
-		return new Set()
-	}
+	return new Set(parseStringArray(raw).map(normalizeEmailIdentity).filter((value) => value !== ''))
 }
 
 export function buildServices(env: Env): Services {

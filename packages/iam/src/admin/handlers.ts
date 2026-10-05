@@ -1,4 +1,3 @@
-import { stringField } from '../json'
 import { listApiKeysUseCase, parseProvisionApiKeyRequest, provisionApiKeyUseCase, revokeApiKeyUseCase, rotateApiKeyUseCase } from './api-keys'
 import {
 	clearReturnOriginsUseCase,
@@ -11,7 +10,7 @@ import {
 import { listAuditUseCase, listAuthLogUseCase } from './audit'
 import { type AdminContext } from './context'
 import { createGrantUseCase, deleteGrantUseCase } from './grants'
-import { error, json, readJson } from './http'
+import { json, readJson } from './http'
 import { disablePasswordUseCase, issuePasswordEnrollmentUseCase, issuePasswordResetUseCase } from './passwords'
 import { createPolicyUseCase, deletePolicyUseCase, listPoliciesUseCase, updatePolicyUseCase } from './policies'
 import { deletePrincipalUseCase, getPrincipalUseCase, invitePrincipalUseCase, listPrincipalsUseCase, me, updatePrincipalUseCase } from './principals'
@@ -34,11 +33,6 @@ export async function getAppSchema(c: AdminContext, app: string): Promise<Respon
  */
 export async function provisionApiKey(c: AdminContext): Promise<Response> {
 	const body = await readJson(c.request)
-	const label = stringField(body, 'label')
-	const type = stringField(body, 'type')
-	if (!label || type !== 'service') {
-		return error(400, 'label and type=service required')
-	}
 	return json(await adminUseCases.provisionApiKey(c, parseProvisionApiKeyRequest(body)), { status: 201 })
 }
 
