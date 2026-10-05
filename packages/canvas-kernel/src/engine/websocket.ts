@@ -4,7 +4,8 @@
  * so a delivery closes it.
  */
 
-import { browserFrame, type ChannelSocket, createNotificationChannel, type TopicChannel } from '@fabrika/daemon-kit'
+import { type ChannelSocket, createNotificationChannel, type TopicChannel } from '@fabrika/daemon-kit'
+import { z } from 'zod'
 import type { RemoteFeedbackEntry, SessionManager } from './session'
 
 export type WSData = { type: 'browser' | 'wait'; sessionId: string }
@@ -31,26 +32,19 @@ interface RenderErrorFrame {
 	error: CanvasRenderError
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function isCanvasRenderError(value: unknown): value is CanvasRenderError {
-	return typeof value === 'object' && value !== null
-		&& 'revision' in value && Number.isInteger(value.revision)
-		&& 'filename' in value && typeof value.filename === 'string'
-		&& 'message' in value && typeof value.message === 'string'
-		&& (!('stack' in value) || value.stack === undefined || typeof value.stack === 'string')
-		&& (!('componentStack' in value) || value.componentStack === undefined || typeof value.componentStack === 'string')
-}
-
-function isSubmitFrame(value: unknown): value is SubmitFrame {
-	return isRecord(value) && value['type'] === 'submit' && typeof value['feedback'] === 'string'
-}
-
-function isRenderErrorFrame(value: unknown): value is RenderErrorFrame {
-	return isRecord(value) && value['type'] === 'render-error' && isCanvasRenderError(value['error'])
-}
+const browserFrameSchema = z.discriminatedUnion('type', [
+	z.object({ type: z.literal('submit'), feedback: z.string() }).passthrough(),
+	z.object({
+		type: z.literal('render-error'),
+		error: z.object({
+			revision: z.number().int(),
+			filename: z.string(),
+			message: z.string(),
+			stack: z.string().optional(),
+			componentStack: z.string().optional(),
+		}).passthrough(),
+	}).passthrough(),
+])
 
 export interface WebSocketManagerOptions {
 	/**
@@ -118,8 +112,14 @@ export function createWebSocketManager(
 			deliverPendingRenderError(topic.topic)
 		},
 		frames: [
-			browserFrame(isSubmitFrame, submit),
-			browserFrame(isRenderErrorFrame, renderError),
+			{
+				bind(frame, topic) {
+					const parsed = browserFrameSchema.safeParse(frame)
+					if (!parsed.success) return undefined
+					const data = parsed.data
+					return () => data.type === 'submit' ? submit(data, topic) : renderError(data, topic)
+				},
+			},
 		],
 	})
 

@@ -8,6 +8,7 @@ import { ActiveViewContext, RevisionContext } from './appContext'
 import { FileIcon } from './FileIcon'
 import { generateMarkdown, getMissingRequiredLabels, hasValue } from './generateMarkdown'
 import { useCanvasHost } from './hostContext'
+import { feedbackResponseSchema } from './persistenceSchemas'
 import { MarkdownPreview } from './ResponsePreview'
 import { ResponsePreview } from './ResponsePreview'
 
@@ -202,8 +203,8 @@ function FeedbackDisplayContent({ sessionId, revision }: { sessionId: string; re
 		}
 		fetch(`/api/session/${sessionId}/revision/${revision}/feedback`)
 			.then((r) => r.json())
-			.then((data: any) => {
-				setFeedback(data.feedback || null)
+			.then((data: unknown) => {
+				setFeedback(feedbackResponseSchema.parse(data).feedback || null)
 				setLoading(false)
 			})
 			.catch(() => {

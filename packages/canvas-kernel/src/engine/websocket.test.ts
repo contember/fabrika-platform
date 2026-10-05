@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'fs'
-import { tmpdir } from 'os'
-import { join } from 'path'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { SessionManager } from './session'
 import { type CanvasSocket, createWebSocketManager, type WSData } from './websocket'
 
@@ -43,6 +43,30 @@ function createSessionManager(): SessionManager {
 }
 
 describe('canvas render errors', () => {
+	test('rejects malformed frames and keeps render error extension fields on delivery', () => {
+		const manager = createSessionManager()
+		const websocket = createWebSocketManager(manager)
+		const browser = new FakeSocket({ type: 'browser', sessionId: 'session' })
+		const waiter = new FakeSocket({ type: 'wait', sessionId: 'session' })
+		websocket.handlers.open(browser)
+		websocket.handlers.open(waiter)
+		for (
+			const frame of [
+				null,
+				[],
+				{ type: 'submit', feedback: 42 },
+				{ type: 'render-error', error: { revision: 1.5, filename: 'architecture.jsx', message: 'bad' } },
+				{ type: 'render-error', error: { revision: 1, filename: 'architecture.jsx', message: 'bad', stack: null } },
+				{ type: 'render-error', error: { revision: 2, filename: 'architecture.jsx', message: 'stale' } },
+				{ type: 'render-error', error: { revision: 1, filename: 'foreign.jsx', message: 'foreign' } },
+			]
+		) websocket.handlers.message(browser, JSON.stringify(frame))
+		expect(waiter.sent).toEqual([])
+		expect(manager.getFeedback('session', 1)).toBeNull()
+		const error = { revision: 1, filename: 'architecture.jsx', message: 'failed', diagnostic: { code: 'future' } }
+		websocket.handlers.message(browser, JSON.stringify({ type: 'render-error', error }))
+		expect(waiter.sent).toEqual([JSON.stringify({ type: 'render-error', error })])
+	})
 	test('delivers an error that arrived before the CLI watcher connected', () => {
 		const sessionManager = createSessionManager()
 		const websocket = createWebSocketManager(sessionManager)

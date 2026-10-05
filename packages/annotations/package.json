@@ -29,6 +29,11 @@
 			"types": "./src/runtime.ts",
 			"default": "./src/runtime.ts"
 		},
+		"./schemas": {
+			"bun": "./src/schemas.ts",
+			"types": "./src/schemas.ts",
+			"default": "./src/schemas.ts"
+		},
 		"./styles.css": "./src/styles.css",
 		"./testing/dom.ts": {
 			"bun": "./src/testing/dom.ts",

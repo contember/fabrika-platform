@@ -1,3 +1,17 @@
+import { z } from 'zod'
+
+// Carry old and host-extended drafts intact; hydration owns validation of individual entries.
+const carriedDraftSchema = z.object({}).passthrough()
+const draftContentSchema = z.object({
+	annotations: z.array(z.unknown()).catch([]),
+	generalNote: z.string().catch(''),
+	responses: z.array(z.unknown()).catch([]),
+})
+const responseContentSchema = z.tuple([
+	z.unknown(),
+	z.object({ note: z.unknown(), value: z.unknown() }),
+]).rest(z.unknown())
+
 interface RevisionState {
 	revision: number
 	hasFeedback: boolean
@@ -43,23 +57,19 @@ function parseState(raw: string | null): object | null {
 	if (!raw) return null
 	try {
 		const value: unknown = JSON.parse(raw)
-		return typeof value === 'object' && value !== null && !Array.isArray(value)
-			? value
-			: null
+		const result = carriedDraftSchema.safeParse(value)
+		return result.success ? result.data : null
 	} catch {
 		return null
 	}
 }
 
 function hasResponseValue(entry: unknown): boolean {
-	if (!Array.isArray(entry) || entry.length < 2) return false
-	const response: unknown = entry[1]
-	if (typeof response !== 'object' || response === null || Array.isArray(response)) return false
-
-	const note = Reflect.get(response, 'note')
+	const parsed = responseContentSchema.safeParse(entry)
+	if (!parsed.success) return false
+	const { note, value } = parsed.data[1]
 	if (typeof note === 'string' && note.trim().length > 0) return true
 
-	const value = Reflect.get(response, 'value')
 	if (typeof value === 'string') return value.trim().length > 0
 	if (Array.isArray(value)) return value.length > 0
 	return value !== null && value !== undefined
@@ -67,14 +77,8 @@ function hasResponseValue(entry: unknown): boolean {
 
 function hasDraftContent(state: object | null): boolean {
 	if (!state) return false
-	const annotations = Reflect.get(state, 'annotations')
-	if (Array.isArray(annotations) && annotations.length > 0) return true
-
-	const generalNote = Reflect.get(state, 'generalNote')
-	if (typeof generalNote === 'string' && generalNote.trim().length > 0) return true
-
-	const responses = Reflect.get(state, 'responses')
-	return Array.isArray(responses) && responses.some(hasResponseValue)
+	const { annotations, generalNote, responses } = draftContentSchema.parse(state)
+	return annotations.length > 0 || generalNote.trim().length > 0 || responses.some(hasResponseValue)
 }
 
 /** Carry an unsent draft forward without crossing submitted revisions. */

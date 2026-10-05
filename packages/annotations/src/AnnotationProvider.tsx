@@ -1,6 +1,7 @@
 import { AnnotationCtx, SessionContext, useAnnotationHost } from '@fabrika/annotations/runtime'
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import type { Annotation, AnnotationState } from './runtime'
+import { annotationStateSchema } from './schemas'
 import { useAnnotationState } from './useAnnotationState'
 
 export { useAnnotations } from '@fabrika/annotations/runtime'
@@ -24,6 +25,7 @@ function AnnotationDraft({ scope, isReadOnly = false, remoteAnnotations, loadSta
 	const [annotations, setAnnotations] = useState<Annotation[]>([])
 	const [generalNote, setGeneralNote] = useState('')
 	const [hydrated, setHydrated] = useState(false)
+	const savedState = useRef<AnnotationState | null>(null)
 	const value = useAnnotationState({
 		annotations,
 		setAnnotations,
@@ -39,8 +41,10 @@ function AnnotationDraft({ scope, isReadOnly = false, remoteAnnotations, loadSta
 		setHydrated(false)
 		loadState(scope).then((saved) => {
 			if (cancelled) return
-			setAnnotations(saved?.annotations ?? [])
-			setGeneralNote(saved?.generalNote ?? '')
+			const result = annotationStateSchema.safeParse(saved)
+			savedState.current = result.success ? result.data : null
+			setAnnotations(result.success ? result.data.annotations : [])
+			setGeneralNote(result.success ? result.data.generalNote : '')
 			setHydrated(true)
 		})
 		return () => {
@@ -50,7 +54,7 @@ function AnnotationDraft({ scope, isReadOnly = false, remoteAnnotations, loadSta
 
 	useEffect(() => {
 		if (!hydrated || isReadOnly) return
-		const timer = setTimeout(() => saveState(scope, { annotations, generalNote }), 300)
+		const timer = setTimeout(() => saveState(scope, { ...savedState.current, annotations, generalNote }), 300)
 		return () => clearTimeout(timer)
 	}, [scope, annotations, generalNote, hydrated, isReadOnly, saveState])
 

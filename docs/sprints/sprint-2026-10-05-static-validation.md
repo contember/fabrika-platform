@@ -191,6 +191,9 @@ The upstream check needs offline unchanged/changed fixtures; network failure is 
 
 ## Run log
 
+- WU06 integrated: static strict source protocol schemas, secret-safe diagnostics and 55 additional compatibility cases including exact credential digest. Leader reran 322 wire/client/service tests successfully. Namespace compatibility helpers remain until WU07 migrates their callers; R1 pending.
+- WU14 integrated: annotation/session/frame/response schemas, legacy recovery and per-entry filtering. Added annotations schema subpath and Canvas client schema exports. Leader reran isolated interface suite (321 pass, no skips), both package typechecks and scoped lint/format. Identity-sensitive compiler/runtime checks and opaque host response storage retained deliberately; R3 pending.
+
 - WU01 integrated: shared release, proxy and builder/list schemas; public barrels switched and unused proxy string readers removed. Leader verification: 83 tests pass with Postgres enabled (no skips), three package typechecks pass, scoped lint/format pass. Existing receipt/release serialization and embedded approval witnesses remain green. R1 batch review pending.
 
 - User approved temporarily stopping `fabrika-builder-spike` for final smoke/browser tests, preserving its data and restarting the original containers afterwards. No stack has been stopped yet.

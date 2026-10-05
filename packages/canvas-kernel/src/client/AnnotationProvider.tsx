@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { annotationDraftKey, type AnnotationDraftPhase, clearPersistedDraft } from './annotationDraft'
 import { canPruneResponses, pruneStaleResponses } from './generateMarkdown'
 import { useCanvasHost } from './hostContext'
+import { parsePersistedState } from './persistenceSchemas'
 
 // Re-export types for convenience
 export type { Annotation, AnnotationContext, AnnotationContextValue, FeedbackEntry, PlanResponse }
@@ -42,7 +43,7 @@ function loadPersisted(sessionId: string, revision: number, phase: AnnotationDra
 	try {
 		const raw = localStorage.getItem(annotationDraftKey(sessionId, revision, phase))
 		if (!raw) return null
-		return JSON.parse(raw)
+		return parsePersistedState(JSON.parse(raw))
 	} catch {
 		return null
 	}
@@ -75,6 +76,7 @@ export function AnnotationProvider(
 	// empty and hydrates in an effect. localStorage mode seeds synchronously.
 	const serverMode = !!loadState
 	const seed = serverMode ? null : loadPersisted(sessionId, revision, draftPhase)
+	const savedState = useRef<PersistedState | null>(seed)
 
 	const [localAnnotations, setAnnotations] = useState<Annotation[]>(() =>
 		(seed?.annotations ?? []).map((a) => ({ ...a, source: a.source ?? 'local' as const }))
@@ -99,6 +101,7 @@ export function AnnotationProvider(
 	const [hydrated, setHydrated] = useState(!serverMode)
 	useEffect(() => {
 		const apply = (saved: PersistedState | null) => {
+			savedState.current = saved
 			setAnnotations((saved?.annotations ?? []).map((a) => ({ ...a, source: a.source ?? 'local' as const })))
 			setGeneralNote(saved?.generalNote ?? '')
 			setResponses(saved?.responses ? new Map(saved.responses) : new Map())
@@ -110,7 +113,7 @@ export function AnnotationProvider(
 			setHydrated(false)
 			loadState!(sessionId, revision, draftPhase).then((saved) => {
 				if (cancelled) return
-				apply(saved)
+				apply(parsePersistedState(saved))
 				setHydrated(true)
 			})
 			return () => {
@@ -129,6 +132,7 @@ export function AnnotationProvider(
 		if (!hydrated) return
 		if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
 		const state: PersistedState = {
+			...savedState.current,
 			// Persist only local annotations — remote ones are re-fetched on load.
 			annotations: localAnnotations,
 			generalNote,

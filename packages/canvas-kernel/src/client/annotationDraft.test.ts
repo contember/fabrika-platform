@@ -22,6 +22,23 @@ const key = (revision: number) => annotationDraftKey(sessionId, revision)
 const nextKey = (revision: number) => annotationDraftKey(sessionId, revision, 'next')
 
 describe('carryUnsubmittedDraft', () => {
+	test('carries tolerant legacy draft fields without dropping extensions or unknown response values', () => {
+		const storage = new MemoryStorage()
+		const draft = { responses: [['answer', { value: false, custom: 1 }, 'legacy-tail']], extension: { future: true } }
+		storage.setItem(key(1), JSON.stringify(draft))
+		expect(carryUnsubmittedDraft(storage, sessionId, 2, [{ revision: 1, hasFeedback: false }])).toBe(1)
+		expect(JSON.parse(storage.getItem(key(2)) ?? '')).toEqual({ ...draft, feedbackEntries: [] })
+	})
+
+	test('malformed draft containers and response tuples do not block an older recoverable draft', () => {
+		const storage = new MemoryStorage()
+		storage.setItem(key(1), JSON.stringify({ generalNote: 'recover me' }))
+		storage.setItem(key(2), JSON.stringify({ responses: [null, ['key'], ['key', []]], annotations: {}, generalNote: 4 }))
+		expect(carryUnsubmittedDraft(storage, sessionId, 3, [
+			{ revision: 1, hasFeedback: false },
+			{ revision: 2, hasFeedback: false },
+		])).toBe(1)
+	})
 	test('clears a submitted draft and its carry marker', () => {
 		const storage = new MemoryStorage()
 		storage.setItem(key(2), JSON.stringify({ generalNote: 'Submitted' }))

@@ -1,5 +1,6 @@
 import { ActiveViewCtx, SessionContext } from '#canvas/runtime'
 import React, { useContext, useEffect, useRef, useState } from 'react'
+import { filePreviewResponseSchema } from '../persistenceSchemas'
 
 interface FilePreviewProps {
 	path: string
@@ -52,8 +53,9 @@ export function FilePreview({ path, lines, __content }: FilePreviewProps) {
 		setError(null)
 		fetch(`/api/file?session=${sessionId}&path=${encodeURIComponent(path)}`)
 			.then((r) => r.json())
-			.then((data: any) => {
-				if (data.error) {
+			.then((value: unknown) => {
+				const data = filePreviewResponseSchema.parse(value)
+				if ('error' in data) {
 					setError(data.error)
 				} else {
 					let text = data.content

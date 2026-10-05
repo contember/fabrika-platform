@@ -1,5 +1,6 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
-import { join } from 'path'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { legacyFlatMetadataSchema, remoteFeedbackSchema, savedSessionMetadataSchema } from './sessionSchemas'
 
 export interface DiffStats {
 	added: number
@@ -123,18 +124,6 @@ interface LegacyMeta {
 	version: number
 }
 
-// Previous format (single sourceFile per revision)
-interface LegacyRevisionInfo {
-	revision: number
-	label?: string
-	sourceFile?: string
-	createdAt: string
-	hasFeedback: boolean
-	feedbackConsumed: boolean
-	response?: string
-	diffStats?: DiffStats
-}
-
 function computeLineDiffStats(oldText: string, newText: string): DiffStats {
 	const oldLines = oldText.split('\n')
 	const newLines = newText.split('\n')
@@ -216,15 +205,17 @@ export class SessionManager {
 			if (!existsSync(metaPath)) continue
 
 			try {
-				const raw = JSON.parse(readFileSync(metaPath, 'utf-8'))
+				const raw: unknown = JSON.parse(readFileSync(metaPath, 'utf-8'))
 
 				// Detect and migrate legacy flat-file format
-				if ('version' in raw && !('currentRevision' in raw)) {
-					this.migrateLegacy(name.name, raw as LegacyMeta)
-					const migrated: SessionMeta = JSON.parse(readFileSync(metaPath, 'utf-8'))
+				const legacy = legacyFlatMetadataSchema.safeParse(raw)
+				if (legacy.success) {
+					this.migrateLegacy(name.name, legacy.data)
+					const { meta: migrated } = savedSessionMetadataSchema.parse(JSON.parse(readFileSync(metaPath, 'utf-8')))
 					const canvasFiles = this.getRevisionCanvasFiles(name.name, migrated.currentRevision)
 					if (canvasFiles.length === 0) continue
 					this.sessions.set(name.name, {
+						...migrated,
 						id: name.name,
 						projectRoot: migrated.projectRoot,
 						canvasFiles,
@@ -236,23 +227,8 @@ export class SessionManager {
 					continue
 				}
 
-				let meta = raw as SessionMeta
-
-				// Migrate single-sourceFile revision format to canvasFiles
-				const [firstRevision] = meta.revisions
-				if (firstRevision && !('canvasFiles' in firstRevision)) {
-					meta = {
-						...meta,
-						revisions: (meta.revisions as unknown as LegacyRevisionInfo[]).map(r => ({
-							revision: r.revision,
-							label: r.label,
-							canvasFiles: [{ filename: r.sourceFile || 'plan.jsx', diffStats: r.diffStats }],
-							createdAt: r.createdAt,
-							hasFeedback: r.hasFeedback,
-							feedbackConsumed: r.feedbackConsumed,
-							response: r.response,
-						})),
-					}
+				const { meta, migrated } = savedSessionMetadataSchema.parse(raw)
+				if (migrated) {
 					writeFileSync(metaPath, JSON.stringify(meta, null, 2))
 				}
 
@@ -262,6 +238,7 @@ export class SessionManager {
 				const canvasFiles = this.deriveFileOrder(meta.revisions, diskFiles)
 
 				this.sessions.set(name.name, {
+					...meta,
 					id: name.name,
 					projectRoot: meta.projectRoot,
 					canvasFiles,
@@ -296,7 +273,7 @@ export class SessionManager {
 			const files = readdirSync(historyDir)
 				.filter((f) => f.endsWith('.jsx'))
 				.map((file) => ({ file, num: parseInt(file.replace('.jsx', ''), 10) }))
-				.filter(({ num }) => !isNaN(num))
+				.filter(({ num }) => !Number.isNaN(num))
 				.sort((a, b) => a.num - b.num)
 			for (const { file, num } of files) {
 				const revDir = this.revisionDir(id, num)
@@ -330,7 +307,9 @@ export class SessionManager {
 			feedbackConsumed: false,
 		})
 
+		const { version: _version, ...legacyFields } = legacy
 		const meta: SessionMeta = {
+			...legacyFields,
 			projectRoot: legacy.projectRoot,
 			createdAt: legacy.createdAt,
 			updatedAt: legacy.updatedAt,
@@ -406,6 +385,7 @@ export class SessionManager {
 		]
 
 		const session: SessionData = {
+			...existing,
 			id,
 			// A session belongs to the project it was created in. Callers send their
 			// cwd, so a later push from elsewhere must not repoint it — that would
@@ -427,7 +407,9 @@ export class SessionManager {
 	}
 
 	private persistMeta(session: SessionData) {
+		const { id: _id, canvasFiles: _canvasFiles, ...fields } = session
 		const meta: SessionMeta = {
+			...fields,
 			projectRoot: session.projectRoot,
 			createdAt: session.createdAt,
 			updatedAt: session.updatedAt,
@@ -593,7 +575,7 @@ export class SessionManager {
 		const session = this.sessions.get(id)
 		if (!session) return
 		const ri = session.revisions.find((r) => r.revision === rev)
-		if (!ri || !ri.hasFeedback || ri.feedbackConsumed) return
+		if (!ri?.hasFeedback || ri.feedbackConsumed) return
 		ri.feedbackConsumed = true
 		this.persistMeta(session)
 	}
@@ -625,10 +607,7 @@ export class SessionManager {
 		const revDir = this.revisionDir(id, rev)
 		mkdirSync(revDir, { recursive: true })
 		const file = join(revDir, 'remote_feedback.json')
-		let existing: RemoteFeedbackEntry[] = []
-		try {
-			existing = JSON.parse(readFileSync(file, 'utf-8'))
-		} catch {}
+		const existing = this.getRemoteFeedback(id, rev)
 		const seen = new Set(existing.map((e) => e.id))
 		const merged = [...existing]
 		for (const e of entries) if (!seen.has(e.id)) merged.push(e)
@@ -645,7 +624,7 @@ export class SessionManager {
 
 	getRemoteFeedback(id: string, rev: number): RemoteFeedbackEntry[] {
 		try {
-			return JSON.parse(readFileSync(join(this.revisionDir(id, rev), 'remote_feedback.json'), 'utf-8'))
+			return remoteFeedbackSchema.parse(JSON.parse(readFileSync(join(this.revisionDir(id, rev), 'remote_feedback.json'), 'utf-8')))
 		} catch {
 			return []
 		}

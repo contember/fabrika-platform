@@ -1,5 +1,6 @@
 import { type AnnotationHost, useAnnotationHost } from '@fabrika/annotations/runtime'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { localUploadResponseSchema, sharedUploadResponseSchema } from './schemas'
 import { autoResizeTextarea, hostAcceptsUploads } from './utils'
 
 interface AnnotationEditorProps {
@@ -44,11 +45,11 @@ async function uploadImage(host: AnnotationHost, file: File): Promise<string | n
 	formData.append('image', file)
 	try {
 		const resp = await fetch(endpoint(), { method: 'POST', body: formData })
-		const data = await resp.json()
+		const data: unknown = await resp.json()
 		// Local daemon returns { path }; worker returns { url }. Normalise to
 		// a single string that `imageToUrl` can resolve.
-		if (host.isShared) return data.url || null
-		return data.path || null
+		if (host.isShared) return sharedUploadResponseSchema.parse(data).url || null
+		return localUploadResponseSchema.parse(data).path || null
 	} catch {
 		return null
 	}
