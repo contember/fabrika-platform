@@ -132,7 +132,7 @@ const requestJson = async (
  * because that is the only machine credential the `service` gate can exchange — the provisioning key
  * has no `credentials` row and the proxy refuses it before control sees it.
  */
-const controlRequest = async (method: string, machineKey: string, input: unknown = {}): Promise<unknown> => {
+export const controlRequest = async (method: string, machineKey: string, input?: unknown): Promise<unknown> => {
 	const response = rpcResponseSchema.parse(await requestJson(CONTROL_ORIGIN, '/api/rpc', { bearer: machineKey, body: { method, input } }))
 	if (response.result === undefined) throw new Error(`Control RPC ${method} was refused`)
 	return response.result
