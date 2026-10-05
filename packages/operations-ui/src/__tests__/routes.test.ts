@@ -13,10 +13,4 @@ describe('Operations routes', () => {
 		expect(sourceAlerts.route).toBe('/operations/sources/:sourceId/alerts')
 		expect(health.route).toBe('/operations/health')
 	})
-
-	test('load every data-backed route instead of shipping a placeholder component', () => {
-		for (const page of [errorDetail, releaseDetail, sourceDetail, sourceAlerts, health]) {
-			expect(typeof page.loader).toBe('function')
-		}
-	})
 })

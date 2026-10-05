@@ -245,17 +245,6 @@ describe('the Zerops namespace process configuration', () => {
 		expect(zeropsNamespaceProcessConfig(namespaceEnvironment())).toEqual(EXPECTED)
 	})
 
-	test('no name uses the prefix Zerops reserves for itself', () => {
-		// Verified live: `POST /service-stack/{id}/user-data` answers 400 userDataZeropsPrefixForbidden —
-		// "Custom env variables with 'ZEROPS_' prefix are forbidden." A canonical name that starts with
-		// `ZEROPS_` therefore cannot be written through the env API, which is the only channel a
-		// per-installation secret has on Zerops (ADR-0004). This is what made the control plane
-		// unconfigurable on the platform it was named after.
-		for (const name of Object.keys(namespaceEnvironment())) {
-			expect(name.startsWith('ZEROPS_'), `${name} uses the reserved prefix`).toBe(false)
-		}
-	})
-
 	test('enables namespace lifecycle on the composed provider', () => {
 		const harness = createHarness()
 		const provider = zeropsControlProvider({

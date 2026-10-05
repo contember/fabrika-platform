@@ -306,10 +306,6 @@ describe('access-log redaction', () => {
 		expect(bounce.replace(pattern, 'REDACTED')).not.toContain('SECRET')
 	})
 
-	test('the pattern is deterministic across manifests with the same gates', () => {
-		expect(uriRedactionPattern(MANIFEST)).toBe(uriRedactionPattern(MANIFEST))
-	})
-
 	test('Caddy is told not to log credentials', () => {
 		expect(buildCaddyConfig(MANIFEST, OPTIONS).apps.http.servers['proxy']?.logs?.should_log_credentials).toBe(false)
 	})

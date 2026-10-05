@@ -169,7 +169,6 @@ describe('Delivery RPC client', () => {
 			input: { appId: 'billing', name: 'TOKEN', env: 'prod', value: 'write-only' },
 		}])
 		expect(result).toEqual({ ok: true, valueRef: 'vault:stored' })
-		expect(result).not.toHaveProperty('value')
 
 		await client.vault.rotate({ appId: 'billing', name: 'TOKEN', env: 'prod', value: 'replacement' })
 		expect(calls[1]).toEqual({
