@@ -27,9 +27,9 @@ browserTest(
 			intent: 'the refusal is the enforcement point matching a `human` gate, not the app answering for itself',
 			manual: 'Request the Operations console URL without following redirects. Verify that it answers 302 to IAM.',
 		}, async () => {
-			const response = await getContext().request.get(`${BASE_URL}/operations/errors`, { failOnStatusCode: false, maxRedirects: 0 })
-			expect(response.status()).toBe(302)
-			const location = new URL(response.headers()['location'] ?? '')
+			const response = await fetch(`${BASE_URL}/operations/errors`, { redirect: 'manual' })
+			expect(response.status).toBe(302)
+			const location = new URL(response.headers.get('location') ?? '')
 			expect(`${location.origin}${location.pathname}`).toBe(`${IAM_URL}/auth/login`)
 			expect(location.searchParams.get('app')).toBe('vozka')
 			expect(location.searchParams.get('redirect')).toBe(`${BASE_URL}/operations/errors`)
@@ -53,13 +53,13 @@ browserTest(
 			async () => {
 				// 302, not 401: gates are path-only, so the proxy answers an anonymous RPC the same way it
 				// answers an anonymous page — and either way the request stops there.
-				const response = await getContext().request.post(`${BASE_URL}/operations/api/rpc`, {
-					data: { method: 'sources', input: {} },
-					headers: { origin: BASE_URL },
-					failOnStatusCode: false,
-					maxRedirects: 0,
+				const response = await fetch(`${BASE_URL}/operations/api/rpc`, {
+					method: 'POST',
+					body: JSON.stringify({ method: 'sources', input: {} }),
+					headers: { origin: BASE_URL, 'content-type': 'application/json' },
+					redirect: 'manual',
 				})
-				expect(response.status()).toBe(302)
+				expect(response.status).toBe(302)
 				const responseBody = await response.text()
 				const pageBody = getPage().locator('body')
 				for (const protectedText of PROTECTED_FIXTURE_TEXT) {
