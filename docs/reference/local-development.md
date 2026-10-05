@@ -79,6 +79,28 @@ migrated**: old run logs and Operations payloads are unavailable in the new stor
 `local:up` and `local:down` preserve both stores. Only an explicit `local:reset`
 discards all local data, including the retained MinIO volume and credentials.
 
+## Immutable source fixtures
+
+Local preparation creates two deterministic Git repositories from
+`packages/local-stack/fixtures/source/` and stores their manifests and archives
+under `.state/source-fixtures/`. Their commits do not depend on the enclosing
+checkout's HEAD, index, or uncommitted files. Control receives the platform
+fixture's immutable proxy source pin. Conflicting existing pins require an
+explicit reset; preparation does not silently change a persisted namespace's source.
+
+The local source entrypoint uses the real source runtime and archive admission.
+Injected metadata/download transports serve only these exact fixture coordinates.
+The upload transport maps a capability-bearing logical Zerops HTTPS URL to the
+private emulator endpoint. Production destination validation is unchanged, and
+unknown coordinates or destinations have no network fallback.
+
+The emulator models reservation, upload completion, build submission, activation
+and cleanup for one version identity. Its persisted upload receipt stores byte
+count and digest, not archive contents or bearer capability. Deleted reservations
+cannot be resurrected by late uploads. It does not compile uploaded code: the
+separately composed Notes container tests application and access behavior, while
+the source fixture tests commit/digest/archive and lifecycle behavior.
+
 ## Endpoints
 
 | Component                | URL                                      |

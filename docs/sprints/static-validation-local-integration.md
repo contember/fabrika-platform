@@ -197,3 +197,12 @@ any live-only Zerops extraction, runtime environment or infrastructure fact.
 
 Only this document and `local-source-contract.ts` are written by the seam owner.
 Verification and exact dispatch readiness are reported to the leader in chat.
+
+## Run log
+
+- WU2 `7f60c82`: leader reran 58 emulator/snapshot/lifecycle tests; codeless/sensitive admission, capability uploads, restart receipts and deleted-version barriers pass. Local Docker startup now passes.
+- First browser run booted and seeded successfully, then failed three seeded handoffs and one relative-URL request. Six other scenarios were excluded by the configured critical tier. Wrapper cleaned its stack/volumes. Read-only triage is separating harness/pre-existing issues from migration regressions; no assertion or gate has been weakened.
+
+- Wave 0 `a754706`: shared schemas and capability query frozen; leader round-trip and malformed-query probes passed.
+- WU1 `518cb3d`: deterministic real Git fixtures and integrity-checked loader implemented. WU3 `1e7cd62`: real source runtime composed with local-only transports. Leader ran fixture/runtime/preparation tests: 31 pass, no failures.
+- Wiring `5a4c901`: source entrypoint and immutable proxy pin prepared without rotating credentials; a conflicting pin refuses preparation. Local-stack typecheck and scoped formatting/lint passed. WU2 emulator and WU4 smoke remain pending.
