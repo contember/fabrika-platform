@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import {
 	type GitHubSetupAttempt,
 	type GitHubSetupAttemptRow,
@@ -21,6 +22,65 @@ const ACTIVE_PHASES: readonly GitHubSetupPhase[] = [
 	'installation_required',
 ]
 
+const storedText = z.string().refine(value => value.trim() !== '')
+const storedDigest = z.string().regex(/^[0-9a-f]{64}$/)
+const storedVaultRef = z.string().startsWith('vault:').min(7)
+const storedBoolean = z.union([z.literal(0), z.literal(1)]).transform(value => value === 1)
+const attemptFieldsSchema = z.object({
+	id: storedText,
+	state_hash: storedDigest.nullable(),
+	manifest_state_secret_ref: storedVaultRef.nullable(),
+	initiated_by: storedText,
+	expected_origin: storedText,
+	desired_owner: storedText,
+	desired_app_name: storedText,
+	desired_public: storedBoolean,
+	app_id: storedText.nullable(),
+	app_slug: storedText.nullable(),
+	app_html_url: storedText.nullable(),
+	credential_sha256: storedDigest.nullable(),
+	recovery_secret_ref: storedVaultRef.nullable(),
+	webhook_secret_ref: storedVaultRef.nullable(),
+})
+const connectionFieldsSchema = z.object({
+	connection_id: storedText,
+	app_id: storedText,
+	app_slug: storedText,
+	app_html_url: storedText,
+	app_owner: storedText,
+	app_name: storedText,
+	app_public: storedBoolean,
+	credential_sha256: storedDigest,
+	webhook_url: storedText,
+	webhook_secret_ref: storedVaultRef,
+	installation_account_login: storedText,
+	connected_by: storedText,
+})
+
+const storedFieldLabels: Readonly<Record<string, string>> = {
+	id: 'attempt id',
+	state_hash: 'state hash',
+	manifest_state_secret_ref: 'vault ref',
+	initiated_by: 'initiating principal',
+	expected_origin: 'expected origin',
+	desired_owner: 'desired owner',
+	desired_app_name: 'desired app name',
+	desired_public: 'desired public',
+	app_id: 'app id',
+	app_slug: 'app slug',
+	app_html_url: 'app HTML URL',
+	credential_sha256: 'credential digest',
+	recovery_secret_ref: 'vault ref',
+	webhook_secret_ref: 'vault ref',
+	connection_id: 'connection id',
+	app_owner: 'app owner',
+	app_name: 'app name',
+	app_public: 'app public',
+	webhook_url: 'webhook URL',
+	installation_account_login: 'installation account',
+	connected_by: 'connected principal',
+}
+
 export function decodeAttempt(row: GitHubSetupAttemptRow): GitHubSetupAttempt {
 	const status = parseStatus(row.status)
 	const phase = parsePhase(row.phase)
@@ -36,25 +96,28 @@ export function decodeAttempt(row: GitHubSetupAttemptRow): GitHubSetupAttempt {
 	}
 	if (status === 'active' && !ACTIVE_PHASES.includes(phase)) throw new Error('invalid active GitHub setup phase')
 	validatePhaseFields(row, phase)
+	const parsed = attemptFieldsSchema.safeParse(row)
+	if (!parsed.success) throw new Error(`invalid GitHub setup ${storedFieldLabels[String(parsed.error.issues[0]?.path[0])] ?? 'state'}`)
+	const fields = parsed.data
 	return {
-		id: required(row.id, 'attempt id'),
+		id: fields.id,
 		status,
 		phase,
 		version: row.version,
-		stateHash: optionalSha256(row.state_hash, 'state hash'),
-		manifestStateSecretRef: optionalVaultRef(row.manifest_state_secret_ref),
-		initiatedBy: required(row.initiated_by, 'initiating principal'),
-		expectedOrigin: required(row.expected_origin, 'expected origin'),
-		desiredOwner: required(row.desired_owner, 'desired owner'),
-		desiredAppName: required(row.desired_app_name, 'desired app name'),
-		desiredPublic: parseBoolean(row.desired_public, 'desired public'),
+		stateHash: fields.state_hash,
+		manifestStateSecretRef: fields.manifest_state_secret_ref,
+		initiatedBy: fields.initiated_by,
+		expectedOrigin: fields.expected_origin,
+		desiredOwner: fields.desired_owner,
+		desiredAppName: fields.desired_app_name,
+		desiredPublic: fields.desired_public,
 		requestedRepositories: parseRepositories(row.requested_repositories_json),
-		appId: optionalNonEmpty(row.app_id, 'app id'),
-		appSlug: optionalNonEmpty(row.app_slug, 'app slug'),
-		appHtmlUrl: optionalNonEmpty(row.app_html_url, 'app HTML URL'),
-		credentialSha256: optionalSha256(row.credential_sha256, 'credential digest'),
-		recoverySecretRef: optionalVaultRef(row.recovery_secret_ref),
-		webhookSecretRef: optionalVaultRef(row.webhook_secret_ref),
+		appId: fields.app_id,
+		appSlug: fields.app_slug,
+		appHtmlUrl: fields.app_html_url,
+		credentialSha256: fields.credential_sha256,
+		recoverySecretRef: fields.recovery_secret_ref,
+		webhookSecretRef: fields.webhook_secret_ref,
 		lastErrorCode: parseOptionalErrorCode(row.last_error_code),
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
@@ -104,24 +167,27 @@ export function decodeConnection(row: GitHubSourceConnectionRow): GitHubSourceCo
 	validateSafePositive(row.installation_id, 'installation id')
 	validateSafeNonNegative(row.connected_at, 'connected timestamp')
 	validateSafeNonNegative(row.verified_at, 'verified timestamp')
+	const parsed = connectionFieldsSchema.safeParse(row)
+	if (!parsed.success) throw new Error(`invalid GitHub setup ${storedFieldLabels[String(parsed.error.issues[0]?.path[0])] ?? 'state'}`)
+	const fields = parsed.data
 	return {
-		connectionId: required(row.connection_id, 'connection id'),
+		connectionId: fields.connection_id,
 		transportKind: parseTransportKind(row.transport_kind),
-		appId: required(row.app_id, 'app id'),
-		appSlug: required(row.app_slug, 'app slug'),
-		appHtmlUrl: required(row.app_html_url, 'app HTML URL'),
-		appOwner: required(row.app_owner, 'app owner'),
-		appName: required(row.app_name, 'app name'),
-		appPublic: parseBoolean(row.app_public, 'app public'),
-		credentialSha256: requiredSha256(row.credential_sha256, 'credential digest'),
-		webhookUrl: required(row.webhook_url, 'webhook URL'),
-		webhookSecretRef: requiredVaultRef(row.webhook_secret_ref),
+		appId: fields.app_id,
+		appSlug: fields.app_slug,
+		appHtmlUrl: fields.app_html_url,
+		appOwner: fields.app_owner,
+		appName: fields.app_name,
+		appPublic: fields.app_public,
+		credentialSha256: fields.credential_sha256,
+		webhookUrl: fields.webhook_url,
+		webhookSecretRef: fields.webhook_secret_ref,
 		installationId: row.installation_id,
-		installationAccountLogin: required(row.installation_account_login, 'installation account'),
+		installationAccountLogin: fields.installation_account_login,
 		installationSelection: parseInstallationSelection(row.installation_selection),
 		verifiedRepositories: parseRepositories(row.verified_repositories_json),
 		requestedRepositories: parseRepositories(row.requested_repositories_json),
-		connectedBy: required(row.connected_by, 'connected principal'),
+		connectedBy: fields.connected_by,
 		connectedAt: row.connected_at,
 		verifiedAt: row.verified_at,
 		version: row.version,
@@ -129,26 +195,37 @@ export function decodeConnection(row: GitHubSourceConnectionRow): GitHubSourceCo
 }
 
 function parseTransportKind(value: string): GitHubSourceTransportKind {
-	if (value === 'keyed-v2') return value
+	const parsed = z.literal('keyed-v2').safeParse(value)
+	if (parsed.success) return parsed.data
 	throw new Error('invalid GitHub source transport kind')
 }
 
 function parseStatus(value: string): GitHubSetupStatus {
-	if (value === 'active' || value === 'repair_required' || value === 'completed' || value === 'failed') return value
+	const parsed = z.enum(['active', 'repair_required', 'completed', 'failed']).safeParse(value)
+	if (parsed.success) return parsed.data
 	throw new Error('invalid GitHub setup status')
 }
 
 function parseInstallationSelection(value: string): 'all' | 'selected' {
-	if (value === 'all' || value === 'selected') return value
+	const parsed = z.enum(['all', 'selected']).safeParse(value)
+	if (parsed.success) return parsed.data
 	throw new Error('invalid GitHub installation selection')
 }
 
 function parsePhase(value: string): GitHubSetupPhase {
-	if (
-		value === 'awaiting_manifest_callback' || value === 'exchange_claimed' || value === 'recovery_stored' || value === 'source_bundle_written'
-		|| value === 'source_activated' || value === 'webhook_secret_stored' || value === 'webhook_configured'
-		|| value === 'configuration_verified' || value === 'installation_required' || value === 'connected'
-	) return value
+	const parsed = z.enum([
+		'awaiting_manifest_callback',
+		'exchange_claimed',
+		'recovery_stored',
+		'source_bundle_written',
+		'source_activated',
+		'webhook_secret_stored',
+		'webhook_configured',
+		'configuration_verified',
+		'installation_required',
+		'connected',
+	]).safeParse(value)
+	if (parsed.success) return parsed.data
 	throw new Error('invalid GitHub setup phase')
 }
 
@@ -182,23 +259,15 @@ function parseRepositories(json: string): string[] {
 	} catch {
 		throw new Error('invalid GitHub setup repository state')
 	}
-	if (!Array.isArray(parsed) || !parsed.every((value) => typeof value === 'string' && value !== '')) {
+	const result = z.array(z.string().min(1)).safeParse(parsed)
+	if (!result.success) {
 		throw new Error('invalid GitHub setup repository state')
 	}
-	const repositories: string[] = []
-	for (const value of parsed) {
-		if (typeof value !== 'string') throw new Error('invalid GitHub setup repository state')
-		repositories.push(value)
-	}
+	const repositories = result.data
 	if (JSON.stringify(canonicalRepositories(repositories)) !== JSON.stringify(repositories)) {
 		throw new Error('non-canonical GitHub setup repository state')
 	}
 	return repositories
-}
-
-function required(value: string, field: string): string {
-	validateNonEmpty(value, field)
-	return value
 }
 
 export function validateNonEmpty(value: string, field: string): void {
@@ -225,39 +294,8 @@ export function validateConnectionId(value: string): void {
 	if (!/^[A-Za-z0-9._:-]{1,128}$/.test(value)) throw new Error('invalid GitHub setup connection id')
 }
 
-function optionalNonEmpty(value: string | null, field: string): string | null {
-	if (value === null) return null
-	return required(value, field)
-}
-
-function optionalSha256(value: string | null, field: string): string | null {
-	if (value === null) return null
-	return requiredSha256(value, field)
-}
-
-function requiredSha256(value: string, field: string): string {
-	validateSha256(value, field)
-	return value
-}
-
 export function validateSha256(value: string, field: string): void {
 	if (!/^[0-9a-f]{64}$/.test(value)) throw new Error(`invalid GitHub setup ${field}`)
-}
-
-function optionalVaultRef(value: string | null): string | null {
-	if (value === null) return null
-	return requiredVaultRef(value)
-}
-
-function requiredVaultRef(value: string): string {
-	if (!value.startsWith('vault:') || value.length === 'vault:'.length) throw new Error('invalid GitHub setup vault ref')
-	return value
-}
-
-function parseBoolean(value: number, field: string): boolean {
-	if (value === 0) return false
-	if (value === 1) return true
-	throw new Error(`invalid GitHub setup ${field}`)
 }
 
 export function validateSafePositive(value: number, field: string): void {
@@ -269,11 +307,16 @@ function validateSafeNonNegative(value: number, field: string): void {
 }
 
 function parseOptionalErrorCode(value: string | null): GitHubSetupErrorCode | null {
-	if (value === null) return null
-	if (
-		value === 'callback_expired' || value === 'manifest_exchange' || value === 'credential_persistence'
-		|| value === 'credential_activation' || value === 'webhook_configuration' || value === 'configuration_verification'
-		|| value === 'installation_verification' || value === 'configuration_conflict'
-	) return value
+	const parsed = z.enum([
+		'callback_expired',
+		'manifest_exchange',
+		'credential_persistence',
+		'credential_activation',
+		'webhook_configuration',
+		'configuration_verification',
+		'installation_verification',
+		'configuration_conflict',
+	]).nullable().safeParse(value)
+	if (parsed.success) return parsed.data
 	throw new Error('invalid GitHub setup error code')
 }

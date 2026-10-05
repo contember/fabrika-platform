@@ -35,6 +35,7 @@ export interface RunRow {
 	cancel_requested_at: number | null
 }
 
+// Serialization must reject cycles, non-plain objects and hidden keys before JSON.stringify can erase them.
 const isJsonValue = (value: unknown, seen: WeakSet<object> = new WeakSet()): value is JsonValue => {
 	if (value === null || typeof value === 'string' || typeof value === 'boolean') return true
 	if (typeof value === 'number') return Number.isFinite(value)

@@ -8,6 +8,7 @@ import {
 } from '@fabrika/operations-contract/catalog'
 import { buildOperationsDsn } from '@fabrika/operations-contract/ingest'
 import type { DeployLocks, HttpService } from '@fabrika/platform'
+import { z } from 'zod'
 import type { OperationsCatalogRepository, OperationsCatalogSyncState } from './db'
 import { canonicalPublicOrigin, PublicOriginValidationError } from './public-origin'
 import { uuidv7 } from './uuid'
@@ -259,66 +260,48 @@ async function sendCatalog(
 	} catch {
 		throw new CatalogSyncError('operations catalog returned an invalid response')
 	}
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+	const parsed = catalogResponseSchema.safeParse(value)
+	if (!parsed.success) {
 		throw new CatalogSyncError('operations catalog returned an invalid response')
 	}
-	const protocolVersion = Reflect.get(value, 'protocolVersion')
-	const revision = Reflect.get(value, 'revision')
-	const outcome = Reflect.get(value, 'outcome')
-	const ingest = Reflect.get(value, 'ingest')
-	if (
-		protocolVersion !== OPERATIONS_CATALOG_PROTOCOL_VERSION
-		|| typeof revision !== 'number'
-		|| !Number.isSafeInteger(revision)
-		|| revision < 1
-		|| (outcome !== 'applied' && outcome !== 'unchanged' && outcome !== 'stale')
-		|| !Array.isArray(ingest)
-	) {
-		throw new CatalogSyncError('operations catalog returned an invalid response')
-	}
+	const { revision, outcome, ingest } = parsed.data
 	const parsedIngest = ingest.map(parseIngestResult)
 	if (outcome !== 'stale') assertCompleteIngestResponse(payload, parsedIngest)
+	const counts = catalogCountsSchema.safeParse(value)
+	if (!counts.success) throw new CatalogSyncError('operations catalog returned an invalid response')
 	return {
 		protocolVersion: OPERATIONS_CATALOG_PROTOCOL_VERSION,
 		revision,
 		outcome,
-		created: responseCount(value, 'created'),
-		updated: responseCount(value, 'updated'),
-		disabled: responseCount(value, 'disabled'),
-		reenabled: responseCount(value, 'reenabled'),
-		unchanged: responseCount(value, 'unchanged'),
+		...counts.data,
 		ingest: parsedIngest,
 	}
 }
 
+const catalogResponseSchema = z.object({
+	protocolVersion: z.literal(OPERATIONS_CATALOG_PROTOCOL_VERSION),
+	revision: z.number().int().safe().positive(),
+	outcome: z.enum(['applied', 'unchanged', 'stale']),
+	ingest: z.array(z.unknown()),
+})
+const catalogCount = z.number().int().safe().nonnegative()
+const catalogCountsSchema = z.object({
+	created: catalogCount,
+	updated: catalogCount,
+	disabled: catalogCount,
+	reenabled: catalogCount,
+	unchanged: catalogCount,
+})
+const catalogIngestSchema = z.object({
+	coordinate: z.object({ appId: z.string(), environment: z.string(), serviceKey: z.string() }),
+	credentialId: z.string(),
+	ingestProjectId: z.string().regex(/^[1-9][0-9]{0,18}$/),
+})
+
 function parseIngestResult(value: unknown): OperationsCatalogReconcileResponseV2['ingest'][number] {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-		throw new CatalogSyncError('operations catalog returned an invalid ingest configuration')
-	}
-	const coordinate = Reflect.get(value, 'coordinate')
-	const credentialId = Reflect.get(value, 'credentialId')
-	const ingestProjectId = Reflect.get(value, 'ingestProjectId')
-	if (typeof coordinate !== 'object' || coordinate === null || Array.isArray(coordinate)) {
-		throw new CatalogSyncError('operations catalog returned an invalid ingest configuration')
-	}
-	const appId = Reflect.get(coordinate, 'appId')
-	const environment = Reflect.get(coordinate, 'environment')
-	const serviceKey = Reflect.get(coordinate, 'serviceKey')
-	if (
-		typeof appId !== 'string'
-		|| typeof environment !== 'string'
-		|| typeof serviceKey !== 'string'
-		|| typeof credentialId !== 'string'
-		|| typeof ingestProjectId !== 'string'
-		|| !/^[1-9][0-9]{0,18}$/.test(ingestProjectId)
-	) {
-		throw new CatalogSyncError('operations catalog returned an invalid ingest configuration')
-	}
-	return {
-		coordinate: { appId, environment, serviceKey },
-		credentialId,
-		ingestProjectId,
-	}
+	const parsed = catalogIngestSchema.safeParse(value)
+	if (!parsed.success) throw new CatalogSyncError('operations catalog returned an invalid ingest configuration')
+	return parsed.data
 }
 
 function assertCompleteIngestResponse(
@@ -348,14 +331,6 @@ function assertCompleteIngestResponse(
 
 function coordinateKey(appId: string, environment: string, serviceKey: string): string {
 	return JSON.stringify([appId, environment, serviceKey])
-}
-
-function responseCount(value: object, key: string): number {
-	const count = Reflect.get(value, key)
-	if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
-		throw new CatalogSyncError('operations catalog returned an invalid response')
-	}
-	return count
 }
 
 async function recordCatalogFailure(catalog: OperationsCatalogRepository, message: string): Promise<void> {

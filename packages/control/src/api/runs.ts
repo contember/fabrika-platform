@@ -2,6 +2,7 @@ import type { AuthContext } from '@fabrika/auth'
 import type { CursorList, RunDto, RunListInput, RunLogLine, RunLogResponse, RunTailResponse, TriggerDeployRequest } from '@fabrika/control-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
 import { logsKey } from '@fabrika/runner-cloudflare'
+import { z } from 'zod'
 import { ACTIONS } from '../actions'
 import type { ControlRepositories, RunRow } from '../db'
 import { uuidv7 } from '../db'
@@ -136,8 +137,9 @@ function parseNdjsonLogs(text: string): RunLogLine[] {
 		}
 		try {
 			const parsed: unknown = JSON.parse(raw)
-			if (isRunLogLine(parsed)) {
-				out.push(parsed)
+			const line = runLogLineSchema.safeParse(parsed)
+			if (line.success) {
+				out.push(line.data)
 			}
 		} catch {
 			// A trailing partial line (mid-flush) is skipped, not fatal.
@@ -146,17 +148,11 @@ function parseNdjsonLogs(text: string): RunLogLine[] {
 	return out
 }
 
-function isRunLogLine(value: unknown): value is RunLogLine {
-	if (typeof value !== 'object' || value === null) {
-		return false
-	}
-	const ts = Reflect.get(value, 'ts')
-	const stream = Reflect.get(value, 'stream')
-	const text = Reflect.get(value, 'text')
-	return typeof ts === 'number'
-		&& (stream === 'stdout' || stream === 'stderr' || stream === 'meta')
-		&& typeof text === 'string'
-}
+const runLogLineSchema = z.object({
+	ts: z.number(),
+	stream: z.enum(['stdout', 'stderr', 'meta']),
+	text: z.string(),
+}).passthrough()
 
 /**
  * Manual deploy trigger (the "Deploy" button / `triggerDeploy` RPC): resolve the app + env, create a

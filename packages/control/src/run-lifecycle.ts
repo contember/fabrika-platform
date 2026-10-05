@@ -9,7 +9,6 @@ import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type { BlobStore } from '@fabrika/platform'
 import type {
 	ControlProvider,
-	JsonValue,
 	ProviderApp,
 	ProviderDeployInput,
 	ProviderDeploymentNamespace,
@@ -19,6 +18,7 @@ import type {
 	ProviderSourceResolutionInput,
 	ProviderTerminalOutcome,
 } from '@fabrika/provider-contract'
+import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import {
 	type AppEnvRow,
 	type AppRow,
@@ -113,19 +113,6 @@ class RunLogWriter {
 	}
 }
 
-const isJsonValue = (value: unknown): value is JsonValue => {
-	if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-		return true
-	}
-	if (Array.isArray(value)) {
-		return value.every(isJsonValue)
-	}
-	if (typeof value !== 'object') {
-		return false
-	}
-	return Object.values(value).every(isJsonValue)
-}
-
 /** Parse a persisted provider envelope without trusting database text. */
 export const parseProviderEnvelope = (raw: string, label: string): ProviderEnvelope => {
 	let value: unknown
@@ -134,16 +121,11 @@ export const parseProviderEnvelope = (raw: string, label: string): ProviderEnvel
 	} catch {
 		throw new Error(`${label} is not valid JSON`)
 	}
-	if (
-		typeof value !== 'object'
-		|| value === null
-		|| !('provider' in value && typeof value.provider === 'string' && value.provider !== '')
-		|| !('version' in value && typeof value.version === 'number' && Number.isInteger(value.version))
-		|| !('payload' in value && isJsonValue(value.payload))
-	) {
+	const parsed = lifecycleEnvelopeSchema.safeParse(value)
+	if (!parsed.success) {
 		throw new Error(`${label} is not a provider envelope`)
 	}
-	return { provider: value.provider, version: value.version, payload: value.payload }
+	return parsed.data
 }
 
 const providerApp = (app: AppRow, run: RunRow): ProviderApp => ({

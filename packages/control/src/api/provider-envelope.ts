@@ -1,37 +1,21 @@
-import type { JsonValue, ProviderEnvelope } from '@fabrika/provider-contract'
-import { error } from '../http'
-import { numberField, prop, stringField } from '../json'
+import type { ProviderEnvelope } from '@fabrika/provider-contract'
+import { z } from 'zod'
+import { jsonValueSchema } from '../json-value'
 
-export const isJsonValue = (value: unknown): value is JsonValue => {
-	if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
-		return true
-	}
-	if (Array.isArray(value)) {
-		return value.every(isJsonValue)
-	}
-	return typeof value === 'object' && Object.values(value).every(isJsonValue)
-}
+export const providerEnvelopeSchema = z.object({
+	provider: z.string(),
+	version: z.number().int().min(1),
+	payload: jsonValueSchema,
+})
+
+export const lifecycleEnvelopeSchema = providerEnvelopeSchema.extend({
+	provider: z.string().min(1),
+	version: z.number().int(),
+})
 
 export function readProviderEnvelope(value: unknown): ProviderEnvelope | null {
-	const provider = stringField(value, 'provider')
-	const version = numberField(value, 'version')
-	const payload = prop(value, 'payload')
-	if (
-		provider === undefined
-		|| version === undefined
-		|| !Number.isInteger(version)
-		|| version < 1
-		|| payload === undefined
-		|| !isJsonValue(payload)
-	) {
-		return null
-	}
-	return { provider, version, payload }
-}
-
-export function envelopeField(body: unknown, name: string): ProviderEnvelope | Response {
-	const envelope = readProviderEnvelope(prop(body, name))
-	return envelope ?? error(400, `${name} must be a versioned provider envelope`)
+	const parsed = providerEnvelopeSchema.safeParse(value)
+	return parsed.success ? parsed.data : null
 }
 
 export function parseStoredEnvelope(value: string, label: string): ProviderEnvelope {

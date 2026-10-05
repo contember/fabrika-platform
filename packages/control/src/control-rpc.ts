@@ -5,14 +5,12 @@ import {
 	BUILDER_CONNECTION_ATTEMPT_ID,
 	BUILDER_CONNECTION_IDENTIFIER,
 	type ControlRpcContract,
-	GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE,
-	GITHUB_SOURCE_CONNECTION_PAGE_CURSOR_MAX_LENGTH,
 	type GitHubSourceConnectionListInput,
+	githubSourceConnectionListInputSchema,
 	type GitHubSourceConnectionListResponse,
 	type GitHubSourceConnectionStatusDto,
-	type ProviderEnvelopeDto,
 } from '@fabrika/control-contract'
-import type { ControlProvider, JsonValue } from '@fabrika/provider-contract'
+import type { ControlProvider } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { ACTIONS } from './actions'
 import { createBuilderConnectionReceipt, getBuilderConnectionReceipt } from './api/builder-connections'
@@ -35,7 +33,7 @@ import {
 	reconcileNamespaceUseCase,
 	removeNamespaceUseCase,
 } from './api/namespaces'
-import { isJsonValue, readProviderEnvelope } from './api/provider-envelope'
+import { providerEnvelopeSchema } from './api/provider-envelope'
 import {
 	APP_VAR_VALUE_MAX_LENGTH,
 	assertAppVarValue,
@@ -69,6 +67,7 @@ import {
 import { deleteAppSecretValueUseCase, rotateAppSecretValueUseCase, setAppSecretValueUseCase, type VaultUseCaseContext } from './api/vault'
 import type { Env } from './env'
 import { appScope } from './iam'
+import { jsonValueSchema } from './json-value'
 import { buildControlRpcDeps } from './services'
 import {
 	reconcileSourceConnection,
@@ -109,8 +108,8 @@ const createReceiptInput = pairingProof.extend({
 })
 const nonEmpty = z.string().min(1)
 const nullableString = z.string().nullable().optional()
-const providerEnvelope = z.custom<ProviderEnvelopeDto>((value) => readProviderEnvelope(value) !== null, 'expected a versioned provider envelope')
-const jsonValue = z.custom<JsonValue>(isJsonValue, 'expected JSON')
+const providerEnvelope = providerEnvelopeSchema.passthrough()
+const jsonValue = jsonValueSchema
 const appOptionalFields = {
 	defaultBranch: z.string().optional(),
 	workerDir: nullableString,
@@ -180,10 +179,7 @@ const registerInput = z.object({
 const githubOwner = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/)
 const githubRepositoryName = z.string().regex(/^[A-Za-z0-9._-]{1,100}$/)
 const sourceConnectionId = z.object({ connectionId: z.string().min(1).max(128) }).strict()
-const sourceConnectionListInput = z.object({
-	cursor: z.string().min(1).max(GITHUB_SOURCE_CONNECTION_PAGE_CURSOR_MAX_LENGTH).optional(),
-	limit: z.number().int().min(1).max(GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE).optional(),
-}).strict()
+const sourceConnectionListInput = githubSourceConnectionListInputSchema
 const startSourceConnectionInput = z.object({
 	organization: githubOwner,
 	appName: z.string().min(1).max(100),

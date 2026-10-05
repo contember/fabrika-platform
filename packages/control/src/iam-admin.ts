@@ -1,5 +1,6 @@
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import type { HttpService } from '@fabrika/platform'
+import { z } from 'zod'
 import { error } from './http'
 
 const PREFIX = '/iam/admin'
@@ -58,19 +59,20 @@ export async function forwardIamAdmin(request: Request, options: IamAdminGateway
 async function readRpcError(response: Response): Promise<Record<string, unknown>> {
 	try {
 		const body: unknown = await response.json()
-		if (isRecord(body) && isRecord(body['error'])) {
-			const message = typeof body['error']['message'] === 'string' ? body['error']['message'] : 'authentication required'
-			return { ...body['error'], message }
-		}
+		const parsed = rpcErrorSchema.safeParse(body)
+		if (parsed.success) return parsed.data.error
 	} catch {
 		// The gateway supplies the structural fallback below.
 	}
 	return { message: 'authentication required' }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === 'object'
-}
+const rpcErrorSchema = z.object({
+	error: z.preprocess(
+		value => Array.isArray(value) ? { ...value } : value,
+		z.object({ message: z.string().catch('authentication required') }).passthrough(),
+	),
+})
 
 /**
  * The gateway's own CSRF check, mirroring IAM's (`packages/iam/src/admin/router.ts`).

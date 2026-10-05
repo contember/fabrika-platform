@@ -21,6 +21,7 @@
 //   * a THROW means something unexpected happened before/around the lifecycle — retry it.
 
 import type { ControlProvider } from '@fabrika/provider-contract'
+import { z } from 'zod'
 import { type NamespaceJobDeps, type NamespaceJobResult, runNamespaceJob } from './api/namespaces'
 import type { Env } from './env'
 import { type ControlJobMessage, type DeployJobMessage, executeDeploy, type NamespaceJobMessage } from './run-lifecycle'
@@ -120,22 +121,31 @@ export function decodeDeployJobMessage(payload: unknown): DeployJobMessage {
 	if (typeof payload !== 'object' || payload === null) {
 		throw new Error('deploy job payload is not an object')
 	}
-	const runId: unknown = Reflect.get(payload, 'runId')
-	if (typeof runId !== 'string' || runId === '') {
+	const parsed = deployJobSchema.safeParse(payload)
+	if (!parsed.success) {
 		throw new Error('deploy job payload has no runId')
 	}
-	const dryRun: unknown = Reflect.get(payload, 'dryRun')
-	return { runId, ...(dryRun === true ? { dryRun: true } : {}) }
+	return parsed.data
 }
 
+const deployJobSchema = z.object({
+	runId: z.string().min(1),
+	dryRun: z.unknown(),
+}).transform(({ runId, dryRun }): DeployJobMessage => ({ runId, ...(dryRun === true ? { dryRun: true } : {}) }))
+
+const namespaceJobSchema = z.object({
+	namespaceId: z.string().min(1),
+	mutation: z.enum(['provision', 'reconcile']),
+}).transform((value): NamespaceJobMessage => ({ kind: 'namespace', ...value }))
+
 function decodeNamespaceJobMessage(payload: object): NamespaceJobMessage {
-	const namespaceId: unknown = Reflect.get(payload, 'namespaceId')
-	if (typeof namespaceId !== 'string' || namespaceId === '') {
-		throw new Error('namespace job payload has no namespaceId')
+	const parsed = namespaceJobSchema.safeParse(payload)
+	if (!parsed.success) {
+		throw new Error(
+			parsed.error.issues.some(issue => issue.path[0] === 'namespaceId')
+				? 'namespace job payload has no namespaceId'
+				: 'namespace job payload has no mutation',
+		)
 	}
-	const mutation: unknown = Reflect.get(payload, 'mutation')
-	if (mutation !== 'provision' && mutation !== 'reconcile') {
-		throw new Error('namespace job payload has no mutation')
-	}
-	return { kind: 'namespace', namespaceId, mutation }
+	return parsed.data
 }

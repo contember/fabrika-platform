@@ -10,7 +10,7 @@
 // feed), not as a `RepoSource` method; this interface stays focused on clone + webhook verification.
 
 import { GitHubAppClient, type GitHubAppClientConfig, type GitHubAppFetch, pemToPkcs8 } from '@fabrika/github-app'
-import { prop, stringField } from './json'
+import { z } from 'zod'
 
 export { pemToPkcs8 }
 
@@ -191,20 +191,22 @@ export function parseGitHubRepo(repoUrl: string): { owner: string; repo: string 
 
 /** Decode a verified GitHub push payload into our `PushEvent` (structural, no casts). */
 export function decodePushEvent(body: unknown): PushEvent | null {
-	const ref = stringField(body, 'ref')
-	if (ref === undefined) {
-		return null
-	}
-	const repository = prop(body, 'repository')
-	const repoUrl = stringField(repository, 'clone_url') ?? stringField(repository, 'html_url')
+	const parsed = pushPayloadSchema.safeParse(body)
+	if (!parsed.success) return null
+	const { ref, repository, after, installation } = parsed.data
+	const repoUrl = repository.clone_url ?? repository.html_url
 	if (repoUrl === undefined) {
 		return null
 	}
-	const commitSha = stringField(body, 'after') ?? null
-	const installationRaw = prop(prop(body, 'installation'), 'id')
-	const installationId = typeof installationRaw === 'number' && Number.isSafeInteger(installationRaw) && installationRaw > 0 ? installationRaw : null
-	return { ref, repoUrl, commitSha, installationId }
+	return { ref, repoUrl, commitSha: after ?? null, installationId: installation?.id ?? null }
 }
+
+const pushPayloadSchema = z.object({
+	ref: z.string(),
+	repository: z.object({ clone_url: z.string().optional().catch(undefined), html_url: z.string().optional().catch(undefined) }),
+	after: z.string().optional().catch(undefined),
+	installation: z.object({ id: z.number().int().safe().positive().optional().catch(undefined) }).optional().catch(undefined),
+})
 
 // ── GitHubAppRepoSource (v1) ───────────────────────────────────────────────────
 
@@ -276,16 +278,18 @@ export class GitHubAppRepoSource implements RepoSource {
 				namespace = 'tags'
 				body = await request(`ref/tags/${name}`)
 			}
-			if (stringField(body, 'ref') !== `refs/${namespace}/${selected.name}`) throw invalidSourceResponse()
-			let object = parseGitHubSourceObject(prop(body, 'object'))
+			const resolvedRef = gitHubRefSchema.safeParse(body)
+			if (!resolvedRef.success || resolvedRef.data.ref !== `refs/${namespace}/${selected.name}`) throw invalidSourceResponse()
+			let object = resolvedRef.data.object
 			if (namespace === 'heads' && object.type !== 'commit') throw invalidSourceResponse()
 			const seen = new Set<string>()
 			while (object.type === 'tag') {
 				if (seen.size >= 8 || seen.has(object.sha)) throw invalidSourceResponse()
 				seen.add(object.sha)
 				const tag = await request(`tags/${object.sha}`)
-				if (parseGitHubObjectSha(tag) !== object.sha) throw invalidSourceResponse()
-				object = parseGitHubSourceObject(prop(tag, 'object'))
+				const resolvedTag = gitHubTagSchema.safeParse(tag)
+				if (!resolvedTag.success || resolvedTag.data.sha !== object.sha) throw invalidSourceResponse()
+				object = resolvedTag.data.object
 			}
 			commitSha = await verifyGitHubCommit(request, object.sha)
 		}
@@ -397,7 +401,6 @@ const SOURCE_NOT_FOUND = Symbol('source-not-found')
 const SOURCE_MAX_RESPONSE_BYTES = 64 * 1024
 
 type GitHubSourceRef = { kind: 'commit'; sha: string } | { kind: 'ref'; namespace: 'heads' | 'tags'; name: string } | { kind: 'bare'; name: string }
-type GitHubSourceObject = { type: 'commit' | 'tag'; sha: string }
 type GitHubSourceRequest = (path: string, allowNotFound?: boolean) => Promise<unknown>
 
 interface GitHubSourceTransport {
@@ -431,16 +434,15 @@ function parseGitHubSourceRef(ref: string): GitHubSourceRef {
 }
 
 function parseGitHubObjectSha(body: unknown): string {
-	const sha = stringField(body, 'sha')
-	if (sha === undefined || !/^[0-9a-f]{40}$/i.test(sha)) throw invalidSourceResponse()
-	return sha.toLowerCase()
+	const parsed = gitHubObjectSchema.safeParse(body)
+	if (!parsed.success) throw invalidSourceResponse()
+	return parsed.data.sha
 }
 
-function parseGitHubSourceObject(body: unknown): GitHubSourceObject {
-	const type = stringField(body, 'type')
-	if (type !== 'commit' && type !== 'tag') throw invalidSourceResponse()
-	return { type, sha: parseGitHubObjectSha(body) }
-}
+const gitHubObjectSchema = z.object({ sha: z.string().regex(/^[0-9a-f]{40}$/i).transform(value => value.toLowerCase()) })
+const gitHubSourceObjectSchema = gitHubObjectSchema.extend({ type: z.enum(['commit', 'tag']) })
+const gitHubRefSchema = z.object({ ref: z.string(), object: gitHubSourceObjectSchema })
+const gitHubTagSchema = gitHubObjectSchema.extend({ object: gitHubSourceObjectSchema })
 
 async function verifyGitHubCommit(request: GitHubSourceRequest, expectedSha: string): Promise<string> {
 	const sha = parseGitHubObjectSha(await request(`commits/${expectedSha}`))

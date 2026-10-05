@@ -14,6 +14,7 @@ import {
 	parseOperationsReleasePayload,
 } from '@fabrika/operations-contract/releases'
 import type { HttpService } from '@fabrika/platform'
+import { z } from 'zod'
 import type { OperationsReleaseRepository, OperationsReleaseSyncRow, RunRepository, RunRow, TerminalOperationsReleaseRow } from './db'
 import { type DeployLockGate, type OwnershipTiming, RunOwnership } from './run-ownership'
 
@@ -313,11 +314,15 @@ function parseStoredPayload(raw: string): OperationsReleaseProjectionPayloadV1 {
 }
 
 function validResponse(value: unknown, revision: number): boolean {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-	return Reflect.get(value, 'protocolVersion') === OPERATIONS_RELEASE_PROTOCOL_VERSION
-		&& Reflect.get(value, 'revision') === revision
-		&& ['applied', 'unchanged', 'stale'].includes(String(Reflect.get(value, 'outcome')))
+	const parsed = releaseResponseSchema.safeParse(value)
+	return parsed.success && parsed.data.revision === revision
 }
+
+const releaseResponseSchema = z.object({
+	protocolVersion: z.literal(OPERATIONS_RELEASE_PROTOCOL_VERSION),
+	revision: z.number(),
+	outcome: z.coerce.string().pipe(z.enum(['applied', 'unchanged', 'stale'])),
+})
 
 function integer(value: number | string): number {
 	const parsed = typeof value === 'number' ? value : Number(value)

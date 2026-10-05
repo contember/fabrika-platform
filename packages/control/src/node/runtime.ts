@@ -19,6 +19,7 @@ import { readEnvironmentName } from '@fabrika/auth-core'
 import { createBackgroundTasks, FileSystemAssetServer, PostgresDatabase, PostgresJobQueue, S3BlobStore } from '@fabrika/platform-node'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import type { SourceConnectionAdmin } from '@fabrika/provider-zerops'
+import { z } from 'zod'
 import { createControlRepositories } from '../db'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
@@ -160,17 +161,23 @@ interface OperationsProcessConfig {
 	syncKey: string
 }
 
+const operationsProcessConfigSchema = z.object({
+	origin: z.string().refine(value => value.trim() !== ''),
+	syncKey: z.string().min(MIN_RPC_KEY_LENGTH),
+})
+
 function operationsConfig(source: Record<string, string | undefined>): OperationsProcessConfig | null {
 	const origin = source['FABRIKA_OPERATIONS_URL']
 	const syncKey = source['OPERATIONS_SYNC_KEY']
 	if ((origin === undefined || origin === '') && (syncKey === undefined || syncKey === '')) {
 		return null
 	}
-	if (origin === undefined || origin.trim() === '' || syncKey === undefined || syncKey.length < MIN_RPC_KEY_LENGTH) {
+	const parsed = operationsProcessConfigSchema.safeParse({ origin, syncKey })
+	if (!parsed.success) {
 		throw new Error(`FABRIKA_OPERATIONS_URL and an OPERATIONS_SYNC_KEY of at least ${MIN_RPC_KEY_LENGTH} characters must be configured together`)
 	}
-	new URL(origin)
-	return { origin, syncKey }
+	new URL(parsed.data.origin)
+	return parsed.data
 }
 
 /**
