@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 export const BUILDER_APPROVAL_STORAGE_KEY = 'fabrika.builder.approval.v1'
 export const BUILDER_AUTHORIZE_PATH = '/builder/authorize'
 
@@ -43,19 +45,27 @@ export function parseBuilderPublicOrigin(value: unknown): string | null {
 }
 
 export function parseBuilderInstallationDiscovery(value: unknown): BuilderInstallationDiscoveryDto | null {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-	if (Object.keys(value).length !== 4 || Object.keys(value).some((key) => !['version', 'controlOrigin', 'iamIssuer', 'provider'].includes(key))) {
-		return null
-	}
-	const version: unknown = Reflect.get(value, 'version')
-	const controlOrigin = parseBuilderPublicOrigin(Reflect.get(value, 'controlOrigin'))
-	const iamIssuer = parseBuilderPublicOrigin(Reflect.get(value, 'iamIssuer'))
-	const provider: unknown = Reflect.get(value, 'provider')
-	if (
-		version !== 1 || controlOrigin === null || iamIssuer === null || typeof provider !== 'string'
-		|| !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(provider)
-	) {
-		return null
-	}
-	return { version: 1, controlOrigin, iamIssuer, provider }
+	const result = builderInstallationDiscoverySchema.safeParse(value)
+	return result.success ? result.data : null
 }
+
+export const builderPublicOriginSchema = z.string().transform((value, ctx) => {
+	const origin = parseBuilderPublicOrigin(value)
+	if (origin !== null) return origin
+	ctx.addIssue({ code: 'custom', message: 'invalid builder public origin' })
+	return z.NEVER
+})
+
+export const builderInstallationDiscoverySchema = z.preprocess(
+	(value) => {
+		// Discovery requires four own fields, even when a prototype supplies otherwise valid values.
+		if (typeof value === 'object' && value !== null && Object.keys(value).length !== 4) return undefined
+		return value
+	},
+	z.object({
+		version: z.literal(1),
+		controlOrigin: builderPublicOriginSchema,
+		iamIssuer: builderPublicOriginSchema,
+		provider: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
+	}).strict(),
+)

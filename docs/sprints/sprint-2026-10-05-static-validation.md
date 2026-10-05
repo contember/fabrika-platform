@@ -191,6 +191,8 @@ The upstream check needs offline unchanged/changed fixtures; network failure is 
 
 ## Run log
 
+- WU01 integrated: shared release, proxy and builder/list schemas; public barrels switched and unused proxy string readers removed. Leader verification: 83 tests pass with Postgres enabled (no skips), three package typechecks pass, scoped lint/format pass. Existing receipt/release serialization and embedded approval witnesses remain green. R1 batch review pending.
+
 - User approved temporarily stopping `fabrika-builder-spike` for final smoke/browser tests, preserving its data and restarting the original containers afterwards. No stack has been stopped yet.
 
 - Integration preparation: created dedicated `fabrika-validation-pg` (loopback port 55439) and `fabrika-validation-s3` (59009) test containers using the repository's documented fixtures; both healthy and SQL/S3 probe tests pass. Existing test DB on 55433 did not accept the documented fixture credentials and was left untouched. An existing stack occupies browser ports 18080/18081; do not stop it or run disruptive smoke against it. Full typecheck during active edits observed unfinished source exports and pending annotation schema exports, so it is not a baseline or final result; rerun after units settle.

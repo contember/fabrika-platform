@@ -1,6 +1,15 @@
 /** Versioned private Delivery → Operations release and artifact protocol. */
 
 import { DEFAULT_OPERATIONS_SERVICE_KEY } from './catalog.js'
+import { operationsReleaseIssueMessage, operationsReleasePayloadSchema, operationsReleaseRequestSchema } from './release-schemas.js'
+
+export {
+	operationsArtifactUploadCredentialSchema,
+	operationsReleaseAvailabilitySchema,
+	operationsReleaseCoordinateSchema,
+	operationsReleasePayloadSchema,
+	operationsReleaseRequestSchema,
+} from './release-schemas.js'
 
 export const OPERATIONS_RELEASE_PROTOCOL_VERSION = 1
 export const FABRIKA_RELEASE = 'FABRIKA_RELEASE'
@@ -64,110 +73,15 @@ export type OperationsReleaseProjectionPayloadV1 = Omit<OperationsReleaseReconci
 export class OperationsReleaseDecodeError extends Error {}
 
 export function parseOperationsReleaseRequest(value: unknown): OperationsReleaseReconcileRequestV1 {
-	if (!record(value)) throw new OperationsReleaseDecodeError('invalid release request')
-	const protocolVersion = value['protocolVersion']
-	const revision = value['revision']
-	if (
-		protocolVersion !== OPERATIONS_RELEASE_PROTOCOL_VERSION
-		|| typeof revision !== 'number'
-		|| !Number.isSafeInteger(revision)
-		|| revision < 1
-	) {
-		throw new OperationsReleaseDecodeError('invalid release request')
-	}
-	return { protocolVersion, revision, ...parseOperationsReleasePayload(value) }
+	const result = operationsReleaseRequestSchema.safeParse(value)
+	if (!result.success) throw new OperationsReleaseDecodeError(operationsReleaseIssueMessage(result.error.issues))
+	return result.data
 }
 
 export function parseOperationsReleasePayload(value: unknown): OperationsReleaseProjectionPayloadV1 {
-	if (!record(value)) throw new OperationsReleaseDecodeError('invalid release request')
-	const runId = value['runId']
-	const coordinate = value['coordinate']
-	const phase = value['phase']
-	const providerRunId = value['providerRunId']
-	const outcome = value['outcome']
-	const artifactState = value['artifactState']
-	const release = value['release']
-	const uploadCredential = value['uploadCredential']
-	const observedAt = value['observedAt']
-	if (
-		typeof runId !== 'string'
-		|| !RUN_ID_PATTERN.test(runId)
-		|| !record(coordinate)
-		|| !releasePhase(phase)
-		|| (providerRunId !== null && (typeof providerRunId !== 'string' || providerRunId.length > 256))
-		|| (outcome !== null && outcome !== 'succeeded' && outcome !== 'failed')
-		|| !artifactStatus(artifactState)
-		|| !record(release)
-		|| typeof observedAt !== 'number'
-		|| !Number.isSafeInteger(observedAt)
-		|| observedAt < 0
-	) {
-		throw new OperationsReleaseDecodeError('invalid release request')
-	}
-	const appId = coordinate['appId']
-	const environment = coordinate['environment']
-	const serviceKey = coordinate['serviceKey']
-	if (
-		typeof appId !== 'string'
-		|| !COORDINATE_PATTERN.test(appId)
-		|| typeof environment !== 'string'
-		|| !COORDINATE_PATTERN.test(environment)
-		|| (serviceKey !== undefined && (typeof serviceKey !== 'string' || !SERVICE_KEY_PATTERN.test(serviceKey)))
-	) {
-		throw new OperationsReleaseDecodeError('invalid release coordinates')
-	}
-	const releaseKind = release['kind']
-	let parsedRelease: OperationsReleaseAvailabilityV1
-	if (releaseKind === 'available') {
-		const name = release['name']
-		const commitSha = release['commitSha']
-		const normalizedCommit = typeof commitSha === 'string' ? normalizeOperationsCommit(commitSha) : null
-		if (typeof name !== 'string' || name.length > 512 || normalizedCommit === null) {
-			throw new OperationsReleaseDecodeError('invalid available release')
-		}
-		parsedRelease = { kind: 'available', name, commitSha: normalizedCommit }
-	} else if (releaseKind === 'unavailable') {
-		const reason = release['reason']
-		if (reason !== 'dry_run' && reason !== 'missing_commit') {
-			throw new OperationsReleaseDecodeError('invalid unavailable release')
-		}
-		parsedRelease = { kind: 'unavailable', reason }
-	} else {
-		throw new OperationsReleaseDecodeError('invalid release availability')
-	}
-	let parsedCredential: OperationsArtifactUploadCredentialV1 | undefined
-	if (uploadCredential !== undefined) {
-		if (!record(uploadCredential)) throw new OperationsReleaseDecodeError('invalid upload credential')
-		const verifier = uploadCredential['verifier']
-		const expiresAt = uploadCredential['expiresAt']
-		if (
-			typeof verifier !== 'string'
-			|| !HASH_PATTERN.test(verifier)
-			|| typeof expiresAt !== 'number'
-			|| !Number.isSafeInteger(expiresAt)
-			|| expiresAt <= observedAt
-		) {
-			throw new OperationsReleaseDecodeError('invalid upload credential')
-		}
-		parsedCredential = { verifier, expiresAt }
-	}
-	if (parsedRelease.kind === 'unavailable' && parsedCredential !== undefined) {
-		throw new OperationsReleaseDecodeError('unavailable releases cannot accept artifacts')
-	}
-	if (phase === 'terminal' && outcome === null) throw new OperationsReleaseDecodeError('terminal release has no outcome')
-	if (phase !== 'terminal' && outcome !== null) throw new OperationsReleaseDecodeError('non-terminal release has an outcome')
-	// Field order and optional-field omission preserve historical receiver projection hashes.
-	return {
-		runId,
-		coordinate: { appId, environment, ...(serviceKey === undefined ? {} : { serviceKey }) },
-		phase,
-		providerRunId,
-		outcome,
-		artifactState,
-		release: parsedRelease,
-		...(parsedCredential === undefined ? {} : { uploadCredential: parsedCredential }),
-		observedAt,
-	}
+	const result = operationsReleasePayloadSchema.safeParse(value)
+	if (!result.success) throw new OperationsReleaseDecodeError(operationsReleaseIssueMessage(result.error.issues))
+	return result.data
 }
 
 export type OperationsReleaseReconcileOutcome = 'applied' | 'unchanged' | 'stale'
@@ -190,22 +104,6 @@ export interface OperationsArtifactUploadConfiguration {
 }
 
 const COMMIT_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
-const COORDINATE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
-const SERVICE_KEY_PATTERN = /^[a-z0-9][a-z0-9._-]{0,62}$/
-const HASH_PATTERN = /^[0-9a-f]{64}$/
-const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
-
-function releasePhase(value: unknown): value is OperationsReleasePhase {
-	return value === 'started' || value === 'provider_accepted' || value === 'terminal'
-}
-
-function artifactStatus(value: unknown): value is OperationsArtifactState {
-	return value === 'pending' || value === 'complete' || value === 'incomplete' || value === 'not_applicable'
-}
-
-function record(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 export function normalizeOperationsCommit(value: string | null | undefined): string | null {
 	if (value === null || value === undefined) return null

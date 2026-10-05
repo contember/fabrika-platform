@@ -83,9 +83,7 @@ export interface GitHubSourceConnectionConnectedDto extends GitHubSourceConnecti
 
 export type GitHubSourceConnectionWorkflowDto = Exclude<GitHubSourceConnectionStatusDto, GitHubSourceConnectionConnectedDto>
 
-export const GITHUB_SOURCE_CONNECTION_DEFAULT_PAGE_SIZE = 50
-export const GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE = 100
-export const GITHUB_SOURCE_CONNECTION_PAGE_CURSOR_MAX_LENGTH = 512
+export * from './source-connection-list.js'
 
 export interface GitHubSourceConnectionListInput {
 	readonly cursor?: string
@@ -97,32 +95,6 @@ export interface GitHubSourceConnectionListResponse {
 	readonly nextCursor: string | null
 	/** The one global non-connected workflow state, when present. */
 	readonly workflow: GitHubSourceConnectionWorkflowDto | null
-}
-
-export function decodeGitHubSourceConnectionListInput(value: unknown): GitHubSourceConnectionListInput {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-		throw new Error('source connection list input must be an object')
-	}
-	const unknownField = Object.keys(value).find((key) => key !== 'cursor' && key !== 'limit')
-	if (unknownField !== undefined) throw new Error('source connection list input contains an unknown field')
-	const cursorValue = Reflect.get(value, 'cursor')
-	if (
-		cursorValue !== undefined
-		&& (typeof cursorValue !== 'string' || cursorValue.length === 0 || cursorValue.length > GITHUB_SOURCE_CONNECTION_PAGE_CURSOR_MAX_LENGTH)
-	) {
-		throw new Error(`source connection list cursor must be a non-empty string of at most ${GITHUB_SOURCE_CONNECTION_PAGE_CURSOR_MAX_LENGTH} characters`)
-	}
-	const limitValue = Reflect.get(value, 'limit')
-	if (
-		limitValue !== undefined
-		&& (typeof limitValue !== 'number' || !Number.isSafeInteger(limitValue) || limitValue < 1 || limitValue > GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE)
-	) {
-		throw new Error(`source connection list limit must be an integer from 1 to ${GITHUB_SOURCE_CONNECTION_MAX_PAGE_SIZE}`)
-	}
-	return {
-		...(cursorValue !== undefined ? { cursor: cursorValue } : {}),
-		...(limitValue !== undefined ? { limit: limitValue } : {}),
-	}
 }
 
 export interface GitHubSourceConnectionRepairRequiredDto extends GitHubSourceConnectionBaseDto {

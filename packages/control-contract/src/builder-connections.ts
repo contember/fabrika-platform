@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import type { AppDto } from './index.js'
 
 export const BUILDER_CONNECTION_ATTEMPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -34,82 +35,52 @@ export interface GetBuilderConnectionReceiptRequest {
 
 /** Decode the persisted/wire snapshot without accepting provider envelopes or credential fields. */
 export function parseBuilderConnectionReceipt(value: unknown): BuilderConnectionReceiptDto {
-	const receipt = object(value, ['version', 'attemptId', 'provider', 'app', 'environment', 'createdAt'])
-	if (field(receipt, 'version') !== 1) throw new Error('unsupported builder connection receipt version')
-	const app = object(field(receipt, 'app'), [
-		'id',
-		'repoUrl',
-		'defaultBranch',
-		'workerDir',
-		'buildCmd',
-		'configPath',
-		'githubConnectionId',
-		'githubInstallationId',
-		'createdAt',
-	])
-	const environment = object(field(receipt, 'environment'), ['env', 'namespaceId', 'domain', 'publicOrigin', 'triggerRef'])
-	const installation = field(app, 'githubInstallationId')
-	if (installation !== null && (typeof installation !== 'number' || !Number.isSafeInteger(installation) || installation < 0)) {
-		throw new Error('invalid githubInstallationId')
-	}
-	return {
-		version: 1,
-		attemptId: matching(receipt, 'attemptId', BUILDER_CONNECTION_ATTEMPT_ID),
-		provider: matching(receipt, 'provider', BUILDER_CONNECTION_IDENTIFIER),
-		app: {
-			id: matching(app, 'id', BUILDER_CONNECTION_IDENTIFIER),
-			repoUrl: string(app, 'repoUrl'),
-			defaultBranch: string(app, 'defaultBranch'),
-			workerDir: nullableString(app, 'workerDir'),
-			buildCmd: nullableString(app, 'buildCmd'),
-			configPath: nullableString(app, 'configPath'),
-			...(field(app, 'githubConnectionId') === undefined ? {} : { githubConnectionId: nullableString(app, 'githubConnectionId') }),
-			githubInstallationId: installation,
-			createdAt: timestamp(app),
-		},
-		environment: {
-			env: matching(environment, 'env', BUILDER_CONNECTION_IDENTIFIER),
-			namespaceId: nullableString(environment, 'namespaceId', 128),
-			domain: nullableString(environment, 'domain', 253),
-			publicOrigin: nullableString(environment, 'publicOrigin', 2048),
-			triggerRef: nullableString(environment, 'triggerRef', 1024),
-		},
-		createdAt: timestamp(receipt),
-	}
+	const result = builderConnectionReceiptSchema.safeParse(value)
+	if (result.success) return result.data
+	const issues = result.error.issues
+	const objectIssue = (path: string) =>
+		issues.some((issue) => issue.path.join('.') === path && (issue.code === 'invalid_type' || issue.code === 'unrecognized_keys'))
+	if (objectIssue('')) throw new Error('invalid builder connection receipt object')
+	if (issues.some((issue) => issue.path[0] === 'version')) throw new Error('unsupported builder connection receipt version')
+	if (objectIssue('app') || objectIssue('environment')) throw new Error('invalid builder connection receipt object')
+	if (issues.some((issue) => issue.path.join('.') === 'app.githubInstallationId')) throw new Error('invalid githubInstallationId')
+	const issue = issues[0]
+	throw new Error(`invalid receipt ${issue?.path.at(-1) ?? 'object'}`)
 }
 
-function object(value: unknown, keys: readonly string[]): object {
-	if (typeof value !== 'object' || value === null || Array.isArray(value) || Object.keys(value).some((key) => !keys.includes(key))) {
-		throw new Error('invalid builder connection receipt object')
-	}
-	return value
-}
+const receiptTimestampSchema = z.number().int().safe().nonnegative()
+const receiptIdentifierSchema = z.string().regex(BUILDER_CONNECTION_IDENTIFIER)
 
-function field(value: object, key: string): unknown {
-	return Reflect.get(value, key)
-}
+export const builderConnectionAppSchema = z.object({
+	id: receiptIdentifierSchema,
+	repoUrl: z.string(),
+	defaultBranch: z.string(),
+	workerDir: z.string().nullable(),
+	buildCmd: z.string().nullable(),
+	configPath: z.string().nullable(),
+	githubConnectionId: z.string().nullable().optional(),
+	githubInstallationId: receiptTimestampSchema.nullable(),
+	createdAt: receiptTimestampSchema,
+}).strict().transform(({ githubConnectionId, githubInstallationId, createdAt, ...app }) => ({
+	...app,
+	...(githubConnectionId === undefined ? {} : { githubConnectionId }),
+	githubInstallationId,
+	createdAt,
+}))
 
-function string(value: object, key: string): string {
-	const result = field(value, key)
-	if (typeof result !== 'string') throw new Error(`invalid receipt ${key}`)
-	return result
-}
+export const builderConnectionEnvironmentSchema = z.object({
+	env: receiptIdentifierSchema,
+	namespaceId: z.string().min(1).max(128).nullable(),
+	domain: z.string().min(1).max(253).nullable(),
+	publicOrigin: z.string().min(1).max(2048).nullable(),
+	triggerRef: z.string().min(1).max(1024).nullable(),
+}).strict()
 
-function matching(value: object, key: string, pattern: RegExp): string {
-	const result = string(value, key)
-	if (!pattern.test(result)) throw new Error(`invalid receipt ${key}`)
-	return result
-}
-
-function nullableString(value: object, key: string, maxLength?: number): string | null {
-	if (field(value, key) === null) return null
-	const result = string(value, key)
-	if (maxLength !== undefined && (result.length === 0 || result.length > maxLength)) throw new Error(`invalid receipt ${key}`)
-	return result
-}
-
-function timestamp(value: object): number {
-	const result = field(value, 'createdAt')
-	if (typeof result !== 'number' || !Number.isSafeInteger(result) || result < 0) throw new Error('invalid receipt createdAt')
-	return result
-}
+export const builderConnectionReceiptSchema = z.object({
+	version: z.literal(1),
+	attemptId: z.string().regex(BUILDER_CONNECTION_ATTEMPT_ID),
+	provider: receiptIdentifierSchema,
+	app: builderConnectionAppSchema,
+	environment: builderConnectionEnvironmentSchema,
+	createdAt: receiptTimestampSchema,
+}).strict()

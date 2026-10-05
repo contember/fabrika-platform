@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { encodeProxyManifestJson, isProxyHost, parseProxyManifest, parseProxyManifestJson } from '..'
+import { encodeProxyManifestJson, isProxyHost, parseProxyManifest, parseProxyManifestJson } from '../manifest'
 
 const withHost = (host: string) => ({ apps: [{ id: 'a', hosts: [host], upstream: 'a:1', gates: { rules: [] } }] })
 
@@ -68,6 +68,12 @@ describe('scheme — the scheme the BROWSER speaks, which no header can supply',
 		// Load-bearing for ADR-0021: this scheme builds the login bounce and the handoff callback.
 		expect(parseProxyManifest(withScheme('ftp'))).toBeNull()
 		expect(parseProxyManifest(withScheme('HTTPS'))).toBeNull()
+	})
+
+	test('legacy non-string scheme values default to https', () => {
+		for (const scheme of [null, false, 1, {}, []]) {
+			expect(parseProxyManifest(withScheme(scheme))?.apps[0]?.scheme).toBe('https')
+		}
 	})
 })
 
@@ -138,6 +144,21 @@ describe('parseProxyManifest — rejects', () => {
 
 	test('malformed JSON', () => {
 		expect(parseProxyManifestJson('{')).toBeNull()
+	})
+
+	test('uses only own fields, strips extensions and omits absent service credentials', () => {
+		expect(parseProxyManifest(Object.create(VALID))).toBeNull()
+		const app = { id: 'a', hosts: ['a'], upstream: 'a:1', gates: { rules: [] } }
+		expect(parseProxyManifest({ apps: [Object.create(app)] })).toBeNull()
+		for (const credential of [undefined, null]) {
+			const result = parseProxyManifest({
+				apps: [{ ...app, extra: true, gates: { extra: true, rules: [{ kind: 'service', path: '/*', credential, extra: true }] } }],
+				extra: true,
+			})
+			expect(JSON.stringify(result)).toBe(
+				'{"apps":[{"id":"a","hosts":["a"],"upstream":"a:1","gates":{"rules":[{"path":"/*","kind":"service"}]},"scheme":"https"}]}',
+			)
+		}
 	})
 })
 
