@@ -200,6 +200,9 @@ Verification and exact dispatch readiness are reported to the leader in chat.
 
 ## Run log
 
+- User approved fixing two baseline browser blockers: IAM's own login cookie is removed by generated Caddy upstream rules, and Playwright's Bun HTTP response handling rejects relative response URLs. The correction must identify IAM from trusted composition coordinates, preserve stripping on application upstreams, and retain all browser assertions. Final browser run must use `extended` and execute all ten walkthroughs.
+- Emulator review found two held-body deletion races: reservation/build retained resource references across body parsing. Corrective round assigned with deletion-during-read witnesses; preserve initial existence/error ordering and recheck before allocation/mutation.
+
 - WU2 `7f60c82`: leader reran 58 emulator/snapshot/lifecycle tests; codeless/sensitive admission, capability uploads, restart receipts and deleted-version barriers pass. Local Docker startup now passes.
 - First browser run booted and seeded successfully, then failed three seeded handoffs and one relative-URL request. Six other scenarios were excluded by the configured critical tier. Wrapper cleaned its stack/volumes. Read-only triage is separating harness/pre-existing issues from migration regressions; no assertion or gate has been weakened.
 
