@@ -26,7 +26,7 @@ export interface ProviderModule<TId extends string, TTarget, TArtifact> {
 	readonly runtime: RuntimeProvider
 }
 
-const decodeEnvelope = <T>(kind: string, provider: string, envelope: ProviderEnvelope, codec: ProviderCodec<T>): T => {
+export const decodeEnvelope = <T>(kind: string, provider: string, envelope: ProviderEnvelope, codec: ProviderCodec<T>): T => {
 	if (envelope.provider !== provider) {
 		throw new Error(`${kind} belongs to provider "${envelope.provider}", expected "${provider}"`)
 	}

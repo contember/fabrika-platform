@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test'
-import { createProvider, type JsonValue, type ProviderCodec, type ProviderDeployResult } from '..'
+import { describe, expect, mock, test } from 'bun:test'
+import { createProvider, decodeEnvelope, type JsonValue, type ProviderCodec, type ProviderDeployResult } from '..'
 
 interface HarborTarget {
 	region: string
@@ -51,6 +51,40 @@ const artifactCodec: ProviderCodec<HarborArtifact> = {
 		replicas: numberProperty(payload, 'replicas'),
 	}),
 }
+
+describe('decodeEnvelope', () => {
+	test('checks provider ownership before schema version without invoking the codec', () => {
+		const decode = mock(targetCodec.decode)
+		const codec = { ...targetCodec, decode }
+		const envelope = { provider: 'other', version: 2, payload: { region: 'eu-west' } }
+
+		expect(() => decodeEnvelope('target', 'harbor', envelope, codec)).toThrow('target belongs to provider "other", expected "harbor"')
+		expect(decode).not.toHaveBeenCalled()
+		expect(() => decodeEnvelope('target', 'harbor', { ...envelope, provider: 'harbor' }, codec)).toThrow(
+			'target schema version 2 is not supported by provider "harbor"',
+		)
+		expect(decode).not.toHaveBeenCalled()
+	})
+
+	test('propagates the codec exception unchanged', () => {
+		const failure = new Error('invalid target payload')
+		const codec: ProviderCodec<HarborTarget> = {
+			...targetCodec,
+			decode: () => {
+				throw failure
+			},
+		}
+		let caught: unknown
+
+		try {
+			decodeEnvelope('target', 'harbor', { provider: 'harbor', version: 3, payload: {} }, codec)
+		} catch (error) {
+			caught = error
+		}
+
+		expect(caught).toBe(failure)
+	})
+})
 
 describe('createProvider', () => {
 	test('adapts a third provider to the opaque runtime without a central registry', async () => {
