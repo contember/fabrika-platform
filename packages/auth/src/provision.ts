@@ -21,6 +21,11 @@
 // re-sending the same return-origin set.
 
 import type { AppSchema } from '@fabrika/auth-core'
+import { z } from 'zod'
+
+const adminErrorSchema = z.object({
+	error: z.union([z.string(), z.object({ message: z.string() }).transform(value => value.message)]),
+})
 
 export interface ReconcileSchemaOptions {
 	/** The IAM Worker's admin origin, e.g. `https://iam.example.com` (trailing slash ok). */
@@ -64,17 +69,8 @@ export class ReconcileSchemaError extends Error {
  * `/admin/rpc` answers `{ error: { type, message } }`. Null when neither shape is present.
  */
 function errorMessage(value: unknown): string | null {
-	if (typeof value !== 'object' || value === null || !('error' in value)) {
-		return null
-	}
-	const message = value.error
-	if (typeof message === 'string') {
-		return message
-	}
-	if (typeof message === 'object' && message !== null && 'message' in message && typeof message.message === 'string') {
-		return message.message
-	}
-	return null
+	const result = adminErrorSchema.safeParse(value)
+	return result.success ? result.data.error : null
 }
 
 /**

@@ -3,6 +3,16 @@ import { parseJwks } from '../index'
 import { PUBLIC_JWKS } from './helpers'
 
 describe('parseJwks', () => {
+	test('requires own keys and kty, ignores inherited optional fields, and rejects own undefined', () => {
+		expect(parseJwks(Object.create({ keys: [{ kty: 'EC' }] }))).toBeNull()
+		expect(parseJwks({ keys: [Object.create({ kty: 'EC' })] })).toBeNull()
+		const key: object = Object.create({ kid: 'inherited', x: 42 })
+		Object.defineProperty(key, 'kty', { value: 'EC' })
+		expect(parseJwks({ keys: [key] })).toStrictEqual({ keys: [{ kty: 'EC' }] })
+		Object.defineProperty(key, 'kid', { value: undefined })
+		expect(parseJwks({ keys: [key] })).toBeNull()
+	})
+
 	test('preserves EC values, key order and optional property presence while dropping extra fields', () => {
 		const keys = [
 			...PUBLIC_JWKS.keys,

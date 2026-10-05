@@ -21,8 +21,18 @@ import type {
 	MintTokenResult,
 } from '@fabrika/auth-core'
 import { parseJwks } from '@fabrika/jwks'
+import { z } from 'zod'
 import { DEFAULT_IAM_TIMEOUT_MS } from './constants'
-import { numberField, prop, stringField } from './json'
+
+const denialSchema = z.object({ ok: z.literal(false), reason: z.string() })
+const mintResultSchema = z.discriminatedUnion('ok', [
+	z.object({ ok: z.literal(true), token: z.string().min(1), expiresAt: z.number().finite() }),
+	denialSchema,
+])
+const exchangeResultSchema = z.discriminatedUnion('ok', [
+	z.object({ ok: z.literal(true), session: z.string().min(1), returnUrl: z.string().min(1), expiresAt: z.number().finite() }),
+	denialSchema,
+])
 
 /**
  * What the proxy needs of IAM. IAM's entrypoints satisfy it structurally — the CF binding drops
@@ -103,10 +113,11 @@ export class HttpIamGateway implements IamGateway {
 	}
 
 	async mintToken(input: MintTokenInput): Promise<MintTokenResult> {
-		const parsed = parseMintResult(await this.post('/auth/mint/session', input, 'mintToken'))
-		if (parsed === null) {
+		const result = mintResultSchema.safeParse(await this.post('/auth/mint/session', input, 'mintToken'))
+		if (!result.success) {
 			throw new IamUnavailableError('mintToken')
 		}
+		const parsed = result.data
 		if (parsed.ok) {
 			return parsed
 		}
@@ -114,10 +125,11 @@ export class HttpIamGateway implements IamGateway {
 	}
 
 	async mintFromKey(input: MintFromKeyInput): Promise<MintFromKeyResult> {
-		const parsed = parseMintResult(await this.post('/auth/mint/key', input, 'mintFromKey'))
-		if (parsed === null) {
+		const result = mintResultSchema.safeParse(await this.post('/auth/mint/key', input, 'mintFromKey'))
+		if (!result.success) {
 			throw new IamUnavailableError('mintFromKey')
 		}
+		const parsed = result.data
 		if (parsed.ok) {
 			return parsed
 		}
@@ -125,27 +137,18 @@ export class HttpIamGateway implements IamGateway {
 	}
 
 	async exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {
-		const body = await this.post('/auth/mint/exchange', input, 'exchangeAuthCode')
-		const ok = prop(body, 'ok')
-		if (ok === true) {
-			const session = stringField(body, 'session')
-			const returnUrl = stringField(body, 'returnUrl')
-			const expiresAt = numberField(body, 'expiresAt')
-			if (session === undefined || session === '' || returnUrl === undefined || returnUrl === '' || expiresAt === undefined) {
-				throw new IamUnavailableError('exchangeAuthCode')
-			}
-			return { ok: true, session, returnUrl, expiresAt }
-		}
-		if (ok !== false) {
+		const result = exchangeResultSchema.safeParse(await this.post('/auth/mint/exchange', input, 'exchangeAuthCode'))
+		if (!result.success) {
 			throw new IamUnavailableError('exchangeAuthCode')
 		}
-		const reason = stringField(body, 'reason')
-		if (reason === undefined) {
-			throw new IamUnavailableError('exchangeAuthCode')
-		}
+		if (result.data.ok) return result.data
 		return {
 			ok: false,
-			reason: reasonOf(reason, ['invalid_code', 'expired_code', 'wrong_app', 'invalid_verifier', 'unknown_principal', 'disabled'], 'invalid_code'),
+			reason: reasonOf(
+				result.data.reason,
+				['invalid_code', 'expired_code', 'wrong_app', 'invalid_verifier', 'unknown_principal', 'disabled'],
+				'invalid_code',
+			),
 		}
 	}
 
@@ -190,26 +193,6 @@ export class HttpIamGateway implements IamGateway {
 		}
 		return response
 	}
-}
-
-/** The shared `{ok:true,token,expiresAt} | {ok:false,reason}` wire shape, read structurally. */
-type ParsedMint = { ok: true; token: string; expiresAt: number } | { ok: false; reason: string }
-
-function parseMintResult(body: unknown): ParsedMint | null {
-	const ok = prop(body, 'ok')
-	if (ok === true) {
-		const token = stringField(body, 'token')
-		const expiresAt = numberField(body, 'expiresAt')
-		if (token === undefined || token === '' || expiresAt === undefined) {
-			return null
-		}
-		return { ok: true, token, expiresAt }
-	}
-	if (ok === false) {
-		const reason = stringField(body, 'reason')
-		return reason === undefined ? null : { ok: false, reason }
-	}
-	return null
 }
 
 /**

@@ -33,6 +33,29 @@ function gatewayReturning(status: number, payload: unknown, recorded: Recorded[]
 }
 
 describe('happy path', () => {
+	test('success strips extensions without tightening expiry or return URL semantics', async () => {
+		const { gateway } = gatewayReturning(200, { ok: true, session: 's', returnUrl: 'opaque', expiresAt: -0.5, extra: true })
+		expect(await gateway.exchangeAuthCode({ app: 'a', code: 'c', verifier: 'v', requestId: 'r' })).toStrictEqual({
+			ok: true,
+			session: 's',
+			returnUrl: 'opaque',
+			expiresAt: -0.5,
+		})
+	})
+
+	test('unlike the SDK, success requires literal true and denial requires a string reason', async () => {
+		for (const ok of [undefined, null, 'true', 0, false]) {
+			const { gateway } = gatewayReturning(200, { ok, token: 'jwt', expiresAt: 10 })
+			await expect(gateway.mintToken({ app: 'a', session: 's', requestId: 'r' })).rejects.toThrow(IamUnavailableError)
+		}
+		for (const reason of [undefined, null, 42, {}]) {
+			const { gateway } = gatewayReturning(200, { ok: false, reason })
+			await expect(gateway.mintFromKey({ app: 'a', key: 'px_k', requestId: 'r' })).rejects.toThrow(IamUnavailableError)
+		}
+		const { gateway } = gatewayReturning(200, { ok: false, reason: '', extra: true })
+		expect(await gateway.mintFromKey({ app: 'a', key: 'px_k', requestId: 'r' })).toStrictEqual({ ok: false, reason: 'invalid_key' })
+	})
+
 	test('mintToken posts to the session endpoint and reads the result', async () => {
 		const { gateway, recorded } = gatewayReturning(200, { ok: true, token: 'signed.jwt.here', expiresAt: 1234 })
 		const result = await gateway.mintToken({ app: 'a', session: 'sess', requestId: 'r' })

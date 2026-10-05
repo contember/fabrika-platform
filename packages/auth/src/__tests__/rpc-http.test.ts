@@ -177,6 +177,38 @@ describe('a TRANSPORT fault throws, and says nothing about the request', () => {
 })
 
 describe('successful results decode field by field', () => {
+	test('success fields do not require an ok discriminator and strip extensions', async () => {
+		for (const ok of [undefined, null, 'true', 0, true]) {
+			const { rpc } = stub(200, { ok, token: 'jwt', expiresAt: -0.5, extra: 'ignored' })
+			expect(await rpc.mintToken({ app: 'a', session: 's', requestId: 'r' })).toStrictEqual({ ok: true, token: 'jwt', expiresAt: -0.5 })
+		}
+	})
+
+	test('literal false takes precedence over success fields even with a malformed reason', async () => {
+		for (const reason of [undefined, null, 42, {}, '']) {
+			const { rpc } = stub(200, { ok: false, reason, token: 'jwt', expiresAt: 10 })
+			expect(await rpc.mintFromKey({ app: 'a', key: 'px_k', requestId: 'r' })).toStrictEqual({ ok: false, reason: 'invalid_key' })
+		}
+	})
+
+	test('malformed optional key identity is omitted, while empty required strings remain valid', async () => {
+		for (const principalId of [undefined, null, 42, {}]) {
+			expect(await stub(200, { token: '', id: '', principalId }).rpc.issueKey({ app: 'a', credential: null, requestId: 'r' }))
+				.toStrictEqual({ ok: true, token: '', id: '' })
+		}
+	})
+
+	test('principal optional fields default by type and one malformed required field rejects the whole list', async () => {
+		const input = { app: 'a', credential: null, requestId: 'r' }
+		const principal = { id: '', label: '', type: 'service', email: 42, disabled: 'true', extra: true }
+		expect(await stub(200, { principals: [principal] }).rpc.listPrincipals(input)).toStrictEqual({
+			ok: true,
+			principals: [{ id: '', label: '', type: 'service', email: null, disabled: false }],
+		})
+		await expect(stub(200, { principals: [principal, { ...principal, type: null }] }).rpc.listPrincipals(input))
+			.rejects.toThrow(IamTransportError)
+	})
+
 	test('issueKey carries the optional principalId only when present', async () => {
 		const bound = stub(200, { ok: true, token: 'px_k', id: 'cred-1', principalId: 'p1' })
 		expect(await bound.rpc.issueKey({ app: 'vozka', credential: null, requestId: 'r' })).toEqual({

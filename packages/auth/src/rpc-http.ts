@@ -62,8 +62,6 @@ import type {
 	MintFromKeyResult,
 	MintTokenInput,
 	MintTokenResult,
-	PrincipalListItem,
-	PrincipalType,
 	RevokeKeyInput,
 	RevokeKeyResult,
 } from '@fabrika/auth-core'
@@ -74,7 +72,26 @@ import {
 	parseListOwnDeviceAuthorizationsResult,
 } from '@fabrika/auth-core'
 import { parseJwks } from '@fabrika/jwks'
-import { booleanField, numberField, prop, stringField } from './json'
+import { z } from 'zod'
+
+const mintSuccessSchema = z.object({ token: z.string().min(1), expiresAt: z.number().finite() })
+const issueKeySuccessSchema = z.object({
+	token: z.string(),
+	id: z.string(),
+	principalId: z.string().optional().catch(undefined),
+}).transform(({ principalId, ...result }) => ({ ...result, ...(principalId === undefined ? {} : { principalId }) }))
+const issueJwtSuccessSchema = z.object({ token: z.string(), expiresAt: z.number().finite(), id: z.string() })
+const revokeSuccessSchema = z.object({ revoked: z.boolean() })
+const principalsSuccessSchema = z.object({
+	principals: z.array(z.object({
+		id: z.string(),
+		label: z.string(),
+		type: z.string().transform((value): 'service' | 'user' => value === 'service' ? 'service' : 'user'),
+		email: z.string().nullable().catch(null),
+		disabled: z.boolean().catch(false),
+	})),
+})
+const failureSchema = z.object({ ok: z.literal(false), reason: z.string().catch('') })
 
 /** Default per-call timeout. A hung IAM must fail the request, not hold a connection open forever. */
 const DEFAULT_TIMEOUT_MS = 5_000
@@ -167,13 +184,11 @@ export class HttpIamRpc implements IamRpc {
 		if (failure !== null) {
 			return { ok: false, reason: oneOf(failure, ISSUE_REASONS, 'not_allowed') }
 		}
-		const token = stringField(body, 'token')
-		const id = stringField(body, 'id')
-		if (token === undefined || id === undefined) {
+		const result = issueKeySuccessSchema.safeParse(body)
+		if (!result.success) {
 			throw new IamTransportError('issueKey')
 		}
-		const principalId = stringField(body, 'principalId')
-		return { ok: true, token, id, ...(principalId === undefined ? {} : { principalId }) }
+		return { ok: true, ...result.data }
 	}
 
 	async issueJwt(input: IssueJwtInput): Promise<IssueJwtResult> {
@@ -182,13 +197,11 @@ export class HttpIamRpc implements IamRpc {
 		if (failure !== null) {
 			return { ok: false, reason: oneOf(failure, ISSUE_REASONS, 'not_allowed') }
 		}
-		const token = stringField(body, 'token')
-		const expiresAt = numberField(body, 'expiresAt')
-		const id = stringField(body, 'id')
-		if (token === undefined || expiresAt === undefined || id === undefined) {
+		const result = issueJwtSuccessSchema.safeParse(body)
+		if (!result.success) {
 			throw new IamTransportError('issueJwt')
 		}
-		return { ok: true, token, expiresAt, id }
+		return { ok: true, ...result.data }
 	}
 
 	async revokeKey(input: RevokeKeyInput): Promise<RevokeKeyResult> {
@@ -197,11 +210,11 @@ export class HttpIamRpc implements IamRpc {
 		if (failure !== null) {
 			return { ok: false, reason: oneOf(failure, [...ISSUE_REASONS, 'not_found'], 'not_allowed') }
 		}
-		const revoked = booleanField(body, 'revoked')
-		if (revoked === undefined) {
+		const result = revokeSuccessSchema.safeParse(body)
+		if (!result.success) {
 			throw new IamTransportError('revokeKey')
 		}
-		return { ok: true, revoked }
+		return { ok: true, ...result.data }
 	}
 
 	async listPrincipals(input: ListPrincipalsInput): Promise<ListPrincipalsResult> {
@@ -210,29 +223,11 @@ export class HttpIamRpc implements IamRpc {
 		if (failure !== null) {
 			return { ok: false, reason: oneOf(failure, ISSUE_REASONS, 'not_allowed') }
 		}
-		const raw = prop(body, 'principals')
-		if (!Array.isArray(raw)) {
+		const result = principalsSuccessSchema.safeParse(body)
+		if (!result.success) {
 			throw new IamTransportError('listPrincipals')
 		}
-		const principals: PrincipalListItem[] = []
-		for (const item of raw) {
-			const id = stringField(item, 'id')
-			const label = stringField(item, 'label')
-			const type = stringField(item, 'type')
-			if (id === undefined || label === undefined || type === undefined) {
-				throw new IamTransportError('listPrincipals')
-			}
-			const email = prop(item, 'email')
-			principals.push({
-				id,
-				label,
-				// Anything but the literal 'service' is a user — the same narrowing the binding transport does.
-				type: principalType(type),
-				email: typeof email === 'string' ? email : null,
-				disabled: booleanField(item, 'disabled') ?? false,
-			})
-		}
-		return { ok: true, principals }
+		return { ok: true, ...result.data }
 	}
 
 	async getJwks(): Promise<Jwks> {
@@ -295,25 +290,21 @@ const ISSUE_REASONS = ['missing_token', 'invalid_token', 'unknown_principal', 'd
 const MALFORMED = Symbol('malformed')
 
 /**
- * The `reason` of a decided negative, or null when the body is an `ok: true` result. A body that is
- * neither (no `ok`, or `ok: false` with no reason) is a contract violation, not a denial — the caller
- * then fails its own success decode and raises `IamTransportError`, which is the fail-closed answer.
+ * Only literal false selects denial; missing or malformed reasons use the operation's deny fallback.
+ * Success fields are decoded independently of `ok`, preserving the SDK's tolerant wire contract.
  */
 function readFailure(body: unknown): string | null {
-	if (prop(body, 'ok') !== false) {
-		return null
-	}
-	return stringField(body, 'reason') ?? ''
+	const result = failureSchema.safeParse(body)
+	return result.success ? result.data.reason : null
 }
 
 /** The `{ ok: true, token, expiresAt }` half both mint methods share. */
 function readMintSuccess(body: unknown, method: string): { ok: true; token: string; expiresAt: number } {
-	const token = stringField(body, 'token')
-	const expiresAt = numberField(body, 'expiresAt')
-	if (token === undefined || token === '' || expiresAt === undefined) {
+	const result = mintSuccessSchema.safeParse(body)
+	if (!result.success) {
 		throw new IamTransportError(method)
 	}
-	return { ok: true, token, expiresAt }
+	return { ok: true, ...result.data }
 }
 
 /**
@@ -328,8 +319,4 @@ function oneOf<T extends string>(value: string, allowed: readonly T[], fallback:
 		}
 	}
 	return fallback
-}
-
-function principalType(value: string): PrincipalType {
-	return value === 'service' ? 'service' : 'user'
 }
