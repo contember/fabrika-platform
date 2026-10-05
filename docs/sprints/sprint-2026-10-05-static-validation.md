@@ -191,6 +191,8 @@ The upstream check needs offline unchanged/changed fixtures; network failure is 
 
 ## Run log
 
+- WU18 `c3591f6`: leader reran 223 tests with real Postgres/S3, no skips. Resend response schemas migrated; driver/migration/runtime identity and typed domain validators retained, unused Platform Node dependency removed. R3 coverage preparation accounted for all 205 original primary/supplemental candidates at `1ccc6cc` (122 completed, 75 pending, 8 architectural exceptions); no missed completed-unit boundary or newly dead helper found.
+
 - R1 completed with no unresolved findings across WU01–WU04/WU06, including independent frozen-snapshot tests and differential probes. R2 WU07/WU08 slice found no issue; further R2 units pending.
 - WU11 `0bdeb39`: leader reran 251 GitHub/source tests; static response projections preserve permissions, association, metadata tolerance and secret-safe errors. WU12 `cad9752`: leader reran 94 installation tests; resumed credentials and CF/protection projections migrated, unused narrowing module removed. Scalar config/domain checks retained in both.
 

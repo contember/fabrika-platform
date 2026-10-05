@@ -34,6 +34,12 @@ admission remain domain/native checks. WU12 keeps installer auth/email pairing,
 account paths, timeouts and CLI/env tokenization as small native scalar checks
 with existing diagnostic order and defaults.
 
+WU18 preserves Bun SQL result arrays with attached metadata, typed migration-plan
+identity/order/relationship checks, caller-owned queue decoders and native client
+stream identity. Mailbox grammar and typed-message rules stay in Email. Only
+Resend response DTOs needed schemas; Platform remains dependency-free and the
+unused Platform Node Zod dependency was removed.
+
 The dependency-free auth-core parsers, Standard Schema-neutral app runtime,
 and dynamically imported installation module/function recognition retain their
 existing architectural contracts. The shared approval parser stays embeddable.
