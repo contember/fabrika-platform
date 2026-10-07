@@ -74,7 +74,7 @@ export interface NamespaceJobMessage {
 /** Everything the ONE control queue carries. A payload without `kind` is a deploy job. */
 export type ControlJobMessage = DeployJobMessage | NamespaceJobMessage
 
-const logsKey = (runId: string): string => `runs/${runId}/logs.ndjson`
+export const logsKey = (runId: string): string => `runs/${runId}/logs.ndjson`
 
 const immutableGitObjectId = (value: string, label: string): string => {
 	const normalized = value.toLowerCase()

@@ -27,13 +27,13 @@
 		"@fabrika/iam-contract": "workspace:*",
 		"@fabrika/platform": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",
-		"@fabrika/provider-cloudflare": "workspace:*",
 		"jose": "^5.9.0",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260702.1",
 		"@fabrika/cli": "workspace:*",
+		"@fabrika/provider-cloudflare": "workspace:*",
 		"@types/bun": "latest",
 		"lopata": "^0.21.0",
 		"oblaka-iac": "^0.0.18",

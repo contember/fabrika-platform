@@ -10,39 +10,18 @@ import {
 	manifestServiceHostnames,
 	ZEROPS_SOURCE_DESCRIPTOR_MAX_BYTES,
 } from './manifest'
-import { runZeropsNamespaceCommand } from './namespace-command'
 import type { ZeropsAppConfig } from './types'
 
 const USAGE = `Zerops app tools
 
 Usage:
   fabrika app build --provider=zerops --env=<env> [--config=<path>] [--output=<path>]
-  fabrika namespace plan --provider=zerops --id=<id> --env=<env> --preset=<cheap|mid|full> [namespace options]
-  fabrika namespace create --provider=zerops --id=<id> --env=<env> --preset=<cheap|mid|full> [namespace options] [--control-url=<url>]
-  fabrika namespace adopt --provider=zerops --id=<id> --env=<env> --preset=<cheap|mid|full> --project-id=<id> [namespace options] [--control-url=<url>]
-  fabrika namespace reconcile --provider=zerops --id=<id> [--control-url=<url>]
 
 Options:
   --env=<env>                    Environment.
   --config=<path>                App config (default: ./fabrika.config.ts).
   --output=<path>                Artifact path (default: ./fabrika.manifest.json).
-  --id=<id>                      Namespace id.
-  --preset=<cheap|mid|full>      Provider-owned namespace preset.
-  --exclusive-app=<id>           App reserved by a full namespace.
-  --project-id=<id>              Existing Zerops project id for adoption.
-  --project-name=<name>          Zerops project name (default: namespace id).
-  --core-package=<tier>          LIGHT or SERIOUS.
-  --public-access=<mode>         custom-domain or zerops-subdomain.
-  --postgres-type=<type>         Cheap-tier PostgreSQL type.
-  --postgres-profile=<profile>   Cheap-tier PostgreSQL profile.
-  --control-url=<url>            Control origin; or FABRIKA_CONTROL_URL.
   -h, --help                     Show this help.
-
-Mutating namespace commands read the Bearer credential from FABRIKA_CONTROL_TOKEN.
-Plan/create/adopt require FABRIKA_ZEROPS_PROXY_SOURCE_JSON:
-  {"repository":{"owner":"...","name":"..."},"commitSha":"...","descriptor":{"path":"zerops.yaml","contents":"...","sha256":"..."}}
-Reconcile uses the persisted namespace source. Legacy sources are not automatically pinned.
---proxy-build-from-git and FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT are no longer supported.
 `
 
 const property = (value: unknown, key: string): unknown => typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined
@@ -93,14 +72,6 @@ export const runZeropsCli = async (argv: readonly string[]): Promise<void> => {
 	const args = parseZeropsCliArgs(argv)
 	if (args.help || args.command === undefined) {
 		console.info(USAGE)
-		return
-	}
-	if (args.command === 'namespace') {
-		await runZeropsNamespaceCommand(args, {
-			source: process.env,
-			fetch: globalThis.fetch,
-			write: (value) => console.info(value.trimEnd()),
-		})
 		return
 	}
 	if (args.command !== 'build') {

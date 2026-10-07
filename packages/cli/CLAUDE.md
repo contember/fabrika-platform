@@ -3,7 +3,9 @@
 The single public `fabrika` executable. It parses the top-level `platform`,
 `app`, `namespace`, and `control` command areas, resolves one provider where a
 command has one, then delegates to an installation or provider package. It
-contains no provider implementation.
+contains no provider implementation. The one exception is `src/namespace.ts`:
+`fabrika namespace` is a Control RPC client over the Zerops namespace planner,
+so it lives here and `provider-zerops` does not depend on `control-contract`.
 
 ## The `control` area
 
@@ -37,7 +39,7 @@ label the envelope a registration carries.
   which replaces one environment's envelopes and clears every placement field
   left out. Both are one procedure of the contract, so neither invents a merge.
 - **Do not add source-connection verbs.** Creating a GitHub App connection needs a
-  human principal (ADR-0031); the console owns it.
+  human principal (ADR-0029); the console owns it.
 
 ## Provider selection
 

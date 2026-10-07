@@ -173,8 +173,8 @@ const runNamespace = async (parsed: ParsedCommand): Promise<void> => {
 	if (parsed.command === undefined) {
 		throw new Error('Namespace command is required')
 	}
-	const runZeropsCli = await appCliRunner('@fabrika/provider-zerops/cli', 'runZeropsCli')
-	await runZeropsCli(['namespace', parsed.command, ...parsed.rest])
+	const { runZeropsNamespaceCli } = await import('./namespace.js')
+	await runZeropsNamespaceCli(parsed.command, parsed.rest)
 }
 
 export const runCli = async (argv: readonly string[]): Promise<void> => {
@@ -187,6 +187,11 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 	}
 	if (parsed.help && parsed.area === 'control') {
 		console.info(CONTROL_USAGE)
+		return
+	}
+	if (parsed.help && parsed.area === 'namespace') {
+		const { NAMESPACE_USAGE } = await import('./namespace.js')
+		console.info(NAMESPACE_USAGE)
 		return
 	}
 	if (parsed.help && parsed.area === 'builder') {

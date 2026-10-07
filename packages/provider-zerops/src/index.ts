@@ -99,8 +99,7 @@ export type {
 	ZeropsProxyAttemptApi,
 	ZeropsProxyAttemptInput,
 } from './namespace'
-export { runZeropsNamespaceCommand } from './namespace-command'
-export type { ZeropsNamespaceCommandDependencies } from './namespace-command'
+export { postgresSchema as zeropsNamespacePostgresSchema } from './namespace/codec'
 export { buildZeropsPlan, resolveDeployHostname } from './plan'
 export type { ZeropsJobSpec, ZeropsPlan, ZeropsStepKind } from './plan'
 export { CANCELLED, createZeropsProvider, interpolateManifest, zeropsProvider } from './provider'

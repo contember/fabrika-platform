@@ -188,22 +188,6 @@ export interface PutAppEnvRequest {
 	artifact: ProviderEnvelopeDto
 }
 
-export interface CloudflareTargetEnvelope extends ProviderEnvelopeDto {
-	provider: 'cloudflare'
-	version: 1
-	payload: {
-		stateNamespace?: string
-	}
-}
-
-export interface CloudflareArtifactEnvelope extends ProviderEnvelopeDto {
-	provider: 'cloudflare'
-	version: 1
-	payload: {
-		configPath: string
-	}
-}
-
 export type DeploymentNamespaceState = 'pending' | 'provisioning' | 'ready' | 'failed'
 
 export interface DeploymentNamespaceDto {

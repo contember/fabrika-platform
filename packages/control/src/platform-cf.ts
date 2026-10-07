@@ -11,8 +11,12 @@
 import type { IamRpc } from '@fabrika/auth'
 import { readEnvironmentName } from '@fabrika/auth-core'
 import type { BlobStore, HttpService, JobQueue } from '@fabrika/platform'
-import { CLOUDFLARE_SOURCE_PROTOCOL, type CloudflareRunnerJob, createCloudflareControlProvider } from '@fabrika/provider-cloudflare'
-import type { CloudflareRunOutcome } from '@fabrika/provider-cloudflare/runner'
+import {
+	CLOUDFLARE_SOURCE_PROTOCOL,
+	type CloudflareRunnerJob,
+	type CloudflareRunOutcome,
+	createCloudflareControlProvider,
+} from '@fabrika/provider-cloudflare/runner'
 import type { ControlProvider, ProviderSource } from '@fabrika/provider-contract'
 import type { RelayResult, VozkaRunner } from '@fabrika/runner-cloudflare'
 import { createControlRepositories } from './db'

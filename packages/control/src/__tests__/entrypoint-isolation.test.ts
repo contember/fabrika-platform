@@ -94,6 +94,10 @@ const PROCESS_ONLY = (specifier: string): boolean =>
 
 const PROVIDERS = new Set(['@fabrika/provider-cloudflare', '@fabrika/provider-zerops'])
 
+/** The package a specifier names, so a subpath import (`@fabrika/provider-cloudflare/runner`) still counts. */
+const packageOf = (specifier: string): string => specifier.split('/').slice(0, specifier.startsWith('@') ? 2 : 1).join('/')
+const packagesOf = (graph: Graph): string[] => [...graph.externals].map(packageOf)
+
 /** The layer both entrypoints sit on — every shared module either one enters through. */
 const SHARED = ['app.ts', 'consumer.ts', 'cron.ts', 'services.ts', 'db.ts', 'env.ts', 'iam.ts', 'control-rpc.ts', 'webhook.ts', 'repo-poll.ts']
 
@@ -110,8 +114,8 @@ describe('entrypoint isolation', () => {
 		expect(graph.files).toContain('db.ts')
 		expect(graph.files).toContain('platform-cf.ts')
 		expect([...graph.externals]).toContain('cloudflare:workers')
-		expect([...graph.externals]).toContain('@fabrika/provider-cloudflare')
-		expect([...graph.externals]).not.toContain('@fabrika/provider-zerops')
+		expect(packagesOf(graph)).toContain('@fabrika/provider-cloudflare')
+		expect(packagesOf(graph)).not.toContain('@fabrika/provider-zerops')
 	})
 
 	test('the Bun entrypoint reaches no Cloudflare-only module', () => {
@@ -129,8 +133,8 @@ describe('entrypoint isolation', () => {
 		expect(graph.files).toContain('services.ts')
 		expect(graph.files).toContain('db.ts')
 		expect([...graph.externals]).toContain('@fabrika/platform-node')
-		expect([...graph.externals]).toContain('@fabrika/provider-zerops')
-		expect([...graph.externals]).not.toContain('@fabrika/provider-cloudflare')
+		expect(packagesOf(graph)).toContain('@fabrika/provider-zerops')
+		expect(packagesOf(graph)).not.toContain('@fabrika/provider-cloudflare')
 	})
 
 	test('the cron command and the migration runner stay on the process side too', () => {
@@ -166,7 +170,7 @@ describe('entrypoint isolation', () => {
 
 	test('the shared layer reaches no concrete provider package', () => {
 		for (const entry of SHARED) {
-			expect(`${entry}: ${[...walk(entry).externals].filter((specifier) => PROVIDERS.has(specifier)).join(',')}`).toBe(`${entry}: `)
+			expect(`${entry}: ${packagesOf(walk(entry)).filter((name) => PROVIDERS.has(name)).join(',')}`).toBe(`${entry}: `)
 		}
 	})
 

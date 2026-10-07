@@ -1,7 +1,6 @@
+import { createZeropsArtifactSourceDescriptor, parseZeropsCliArgs } from '@fabrika/provider-zerops'
 import { describe, expect, test } from 'bun:test'
-import { parseZeropsCliArgs } from '../cli-args'
-import { createZeropsArtifactSourceDescriptor } from '../manifest'
-import { runZeropsNamespaceCommand } from '../namespace-command'
+import { runZeropsNamespaceCommand } from '../namespace'
 
 interface Call {
 	readonly url: string

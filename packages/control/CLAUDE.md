@@ -47,7 +47,7 @@ entrypoint reaches the other provider or runtime.
 
 `fetch` routes: `/api/health` → ok · `POST /webhooks/github/:connectionId` → webhook ·
 the unscoped `POST /webhooks/github` exists for a Cloudflare composition only, and a Zerops
-composition refuses it with 401 (ADR-0039) ·
+composition refuses it with 401 (ADR-0029) ·
 `/iam/admin/*` → transport-only IAM gateway · `/operations/api/rpc` →
 transport-only Operations RPC gateway · `/api/rpc` → ACL-gated control RPC surface.
 Unmatched `/api` and `/operations/api` paths return 404; they never reach dashboard `ASSETS`.
@@ -215,7 +215,7 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   `pending`→`provisioning`, runs the provider mutation with its OWN signal, and records `ready`/`failed`.
   The job holds a `namespace:<id>` lease in the same `deploy_locks` table, on `NAMESPACE_LOCK_TTL_MS`
   (double the deploy TTL) — a namespace left `provisioning` is deliberately RESUMABLE, so unlike a run
-  nothing else refuses a redelivery and the lease must outlive the queue's visibility timeout.
+  nothing else refuses a redelivery and the renewed lease is the only guard against one.
   `reconcile` on a namespace that is still settling ONLY enqueues: it must never rewrite
   `provider_target_json`, or a checkpoint the running job just wrote is rolled back under it.
 - **A failure keeps its CLASS, redacted rather than discarded** (backlog 72). A provider raises

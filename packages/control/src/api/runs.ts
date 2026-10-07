@@ -1,14 +1,13 @@
 import type { AuthContext } from '@fabrika/auth'
 import type { CursorList, RunDto, RunListInput, RunLogLine, RunLogResponse, RunTailResponse, TriggerDeployRequest } from '@fabrika/control-contract'
 import type { BlobStore, JobQueue } from '@fabrika/platform'
-import { logsKey } from '@fabrika/runner-cloudflare'
 import { z } from 'zod'
 import { ACTIONS } from '../actions'
 import type { ControlRepositories, RunRow } from '../db'
 import { uuidv7 } from '../db'
 import { appScope, envScope } from '../iam'
 import { isRefPattern } from '../ref-match'
-import type { ControlJobMessage } from '../run-lifecycle'
+import { type ControlJobMessage, logsKey } from '../run-lifecycle'
 import { fail } from './domain'
 
 /** The one control queue producer. This surface only ever sends the run pointer; namespaces share it. */

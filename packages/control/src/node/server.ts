@@ -23,7 +23,7 @@ import { controlJobLogLine, decodeControlJobMessage, runControlJob } from '../co
 import type { Env } from '../env'
 import { reconcileProviderRuns } from '../provider-reconcile'
 import type { ControlJobMessage } from '../run-lifecycle'
-import { DEPLOY_LOCK_TTL_MS, deployLock, operationsReleaseDeps, repositories } from '../services'
+import { deployLock, operationsReleaseDeps, repositories } from '../services'
 import type { SourceConnectionPort } from '../source-connection-port'
 import { createRuntime, type Runtime } from './runtime'
 
@@ -44,6 +44,8 @@ function createControlBunHandler(env: Env, provider: Runtime['provider'], source
 	})
 }
 
+const CONTROL_JOB_VISIBILITY_TIMEOUT_MS = 30 * 60 * 1000
+
 /**
  * Build the in-process control consumer — the replacement for the Worker's `queue()` handler.
  *
@@ -58,11 +60,7 @@ function createControlBunHandler(env: Env, provider: Runtime['provider'], source
  * that a namespace provision holds this loop for its duration; namespaces are provisioned a handful of
  * times per installation, so clarity beats throughput here.
  *
- * The visibility timeout is the DEPLOY LOCK's TTL on purpose: a redelivered deploy is already harmless
- * (`executeDeploy` is status-guarded), and matching the two windows means the message can only come back
- * once the app-env lease it would contend for is also stale. A NAMESPACE is the opposite case — a row
- * left `provisioning` is deliberately resumable, so nothing refuses the redelivery and the lease is the
- * only guard. That is why it runs on `NAMESPACE_LOCK_TTL_MS`, which outlives this window on purpose.
+ * A redelivery while the handler still runs is harmless: the renewed lease, not visibility, provides exclusion.
  */
 export function createConsumer(runtime: Runtime): PostgresJobConsumer<ControlJobMessage> {
 	return new PostgresJobConsumer(runtime.queue, {
@@ -72,7 +70,7 @@ export function createConsumer(runtime: Runtime): PostgresJobConsumer<ControlJob
 			// handled message, so nothing here branches on it (see the contract in src/consumer.ts).
 			console.info(controlJobLogLine(await runControlJob(runtime.env, runtime.provider, job.payload)))
 		},
-		visibilityTimeoutMs: DEPLOY_LOCK_TTL_MS,
+		visibilityTimeoutMs: CONTROL_JOB_VISIBILITY_TIMEOUT_MS,
 		// Never log the error object: it can carry a clone URL with an embedded installation token.
 		onError: (error, job) => {
 			console.error(

@@ -2,7 +2,7 @@ import { type JsonValue, ProviderInvocationAbort } from '@fabrika/provider-contr
 import { type RunMutationGuard, type RunRepository, type RunRow, serializeProviderJson } from './db/runs'
 import { uuidv7 } from './uuid'
 
-export const DEPLOY_LEASE_TTL_MS = 30 * 60 * 1000
+export const DEPLOY_LEASE_TTL_MS = 90 * 1000
 
 export interface DeployLockGate {
 	acquire(key: string, holder: string): Promise<boolean>

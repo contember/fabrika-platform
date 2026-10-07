@@ -1,16 +1,46 @@
 import { createRpcClient } from '@fabrika/app'
 import type { AdoptDeploymentNamespaceRequest, ControlRpcContract, CreateDeploymentNamespaceRequest } from '@fabrika/control-contract'
 import type { JsonValue, ProviderDeploymentNamespace, ProviderNamespacePlan } from '@fabrika/provider-contract'
-import { z } from 'zod'
-import type { ZeropsCliArgs } from './cli-args'
 import {
 	createZeropsNamespaceOperator,
 	decodeZeropsNamespaceProxySource,
+	parseZeropsCliArgs,
 	verifyZeropsNamespaceProxySource,
+	type ZeropsCliArgs,
 	type ZeropsNamespacePostgres,
+	zeropsNamespacePostgresSchema,
 	zeropsNamespaceTargetCodec,
-} from './namespace'
-import { postgresSchema } from './namespace/codec'
+} from '@fabrika/provider-zerops'
+import { z } from 'zod'
+
+export const NAMESPACE_USAGE = `fabrika namespace — Zerops deployment namespaces
+
+Usage:
+  fabrika namespace plan --provider=zerops --id=<id> --env=<env> --preset=<cheap|mid|full> [namespace options]
+  fabrika namespace create --provider=zerops --id=<id> --env=<env> --preset=<cheap|mid|full> [namespace options] [--control-url=<url>]
+  fabrika namespace adopt --provider=zerops --id=<id> --env=<env> --preset=<cheap|mid|full> --project-id=<id> [namespace options] [--control-url=<url>]
+  fabrika namespace reconcile --provider=zerops --id=<id> [--control-url=<url>]
+
+Options:
+  --id=<id>                      Namespace id.
+  --env=<env>                    Environment.
+  --preset=<cheap|mid|full>      Provider-owned namespace preset.
+  --exclusive-app=<id>           App reserved by a full namespace.
+  --project-id=<id>              Existing Zerops project id for adoption.
+  --project-name=<name>          Zerops project name (default: namespace id).
+  --core-package=<tier>          LIGHT or SERIOUS.
+  --public-access=<mode>         custom-domain or zerops-subdomain.
+  --postgres-type=<type>         Cheap-tier PostgreSQL type.
+  --postgres-profile=<profile>   Cheap-tier PostgreSQL profile.
+  --control-url=<url>            Control origin; or FABRIKA_CONTROL_URL.
+  -h, --help                     Show this help.
+
+Mutating namespace commands read the Bearer credential from FABRIKA_CONTROL_TOKEN.
+Plan/create/adopt require FABRIKA_ZEROPS_PROXY_SOURCE_JSON:
+  {"repository":{"owner":"...","name":"..."},"commitSha":"...","descriptor":{"path":"zerops.yaml","contents":"...","sha256":"..."}}
+Reconcile uses the persisted namespace source. Legacy sources are not automatically pinned.
+--proxy-build-from-git and FABRIKA_ZEROPS_PROXY_BUILD_FROM_GIT are no longer supported.
+`
 
 export interface ZeropsNamespaceCommandDependencies {
 	readonly source: Readonly<Record<string, string | undefined>>
@@ -32,7 +62,7 @@ const postgres = (args: ZeropsCliArgs): ZeropsNamespacePostgres | undefined => {
 	if (type === undefined) {
 		throw new Error('--postgres-type is required with --postgres-profile')
 	}
-	const result = postgresSchema.safeParse({ type, profile })
+	const result = zeropsNamespacePostgresSchema.safeParse({ type, profile })
 	if (result.success) return result.data
 	if (result.error.issues[0]?.path[0] === 'type') throw new Error('--postgres-type must be postgresql:ha@18 or postgresql:single@18')
 	throw new Error(`--postgres-profile ${profile} is not supported by ${type}`)
@@ -187,3 +217,10 @@ export const runZeropsNamespaceCommand = async (
 	}
 	writeNamespace(deps, await controlClient(deps, control).namespaces.adopt({ namespaceId: namespace.id, namespace: adoptBody(namespace) }))
 }
+
+export const runZeropsNamespaceCli = (subcommand: string, argv: readonly string[]): Promise<void> =>
+	runZeropsNamespaceCommand(parseZeropsCliArgs(['namespace', subcommand, ...argv]), {
+		source: process.env,
+		fetch: globalThis.fetch,
+		write: (value) => console.info(value.trimEnd()),
+	})

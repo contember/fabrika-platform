@@ -1,6 +1,6 @@
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import type { ControlRegistryRepository, DeploymentNamespaceRow, DeploymentNamespaceState } from './db'
-import type { DeployLockGate, OwnershipTiming } from './run-ownership'
+import { DEPLOY_LEASE_TTL_MS, type DeployLockGate, type OwnershipTiming } from './run-ownership'
 import { uuidv7 } from './uuid'
 
 export const namespaceLockKey = (namespaceId: string): string => `namespace:${namespaceId}`
@@ -19,8 +19,8 @@ const wait = (ms: number, signal: AbortSignal): Promise<void> =>
 		signal.addEventListener('abort', abort, { once: true })
 	})
 
-// Conservative for both the 30-minute request lease and the longer namespace-job lease.
-const defaultTiming: OwnershipTiming = { now: Date.now, wait, ttlMs: 30 * 60 * 1000, pollMs: 1000 }
+// The shorter request lease bounds the local deadline; the namespace-job lease is longer.
+const defaultTiming: OwnershipTiming = { now: Date.now, wait, ttlMs: DEPLOY_LEASE_TTL_MS, pollMs: 1000 }
 export type NamespaceOwnershipRepository = Pick<ControlRegistryRepository, 'getDeploymentNamespace' | 'checkpointDeploymentNamespace'>
 
 export class NamespaceOwnership {

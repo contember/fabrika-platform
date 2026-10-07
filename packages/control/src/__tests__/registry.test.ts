@@ -2,7 +2,6 @@ import { FABRIKA_IAM_ISSUER } from '@fabrika/auth-core'
 import { OPERATIONS_MANAGED_ENVIRONMENT_KEYS } from '@fabrika/operations-contract/ingest'
 import { FABRIKA_RELEASE } from '@fabrika/operations-contract/releases'
 import type { ControlProvider, JsonValue, ProviderEnvelope, ProviderRegistrationInput } from '@fabrika/provider-contract'
-import { logsKey } from '@fabrika/runner-cloudflare'
 import { describe, expect, test } from 'bun:test'
 import {
 	deleteAppEnvUseCase,
@@ -14,7 +13,7 @@ import {
 } from '../api/registry'
 import { uuidv7 } from '../db'
 import { FakeRepoSource, type RepoEvents } from '../repo-source'
-import type { ControlJobMessage } from '../run-lifecycle'
+import { type ControlJobMessage, logsKey } from '../run-lifecycle'
 import type { ControlRpcDeps } from '../services'
 import { createHarness, type Harness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'

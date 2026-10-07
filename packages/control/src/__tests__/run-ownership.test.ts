@@ -3,7 +3,7 @@ import { type ControlProvider, ProviderInvocationAbort } from '@fabrika/provider
 import { expect, test } from 'bun:test'
 import { reconcileProviderRuns, sweepStaleRuns } from '../provider-reconcile'
 import { cancelDeploy, executeDeploy, type RunDeps } from '../run-lifecycle'
-import { type DeployLockGate, type OwnershipTiming, RunOwnership } from '../run-ownership'
+import { DEPLOY_LEASE_TTL_MS, type DeployLockGate, type OwnershipTiming, RunOwnership } from '../run-ownership'
 import { EnvSecretResolver } from '../secret-resolver'
 import { createHarness } from './helpers/harness'
 import { providerEnvironment, TEST_PROVIDER_ID } from './helpers/provider'
@@ -82,6 +82,31 @@ for (const result of ['resolve', 'reject']) {
 		expect(owner.work.signal.reason.kind).toBe('lease_lost')
 	})
 }
+
+test("a dead holder's lease is re-acquirable within the production TTL plus one renew period", async () => {
+	const { db, clock, row, lock } = await fixture()
+	clock.ttlMs = DEPLOY_LEASE_TTL_MS
+	const renewedAt: number[] = []
+	const recording: DeployLockGate = {
+		...lock,
+		renew: (key, holder) => {
+			renewedAt.push(clock.now())
+			return lock.renew(key, holder)
+		},
+	}
+	const start = clock.now()
+	const owner = await RunOwnership.acquire(db.runs, recording, row, clock)
+	if (owner === null) throw new Error('owner missing')
+	for (let i = 0; i < 6; i++) await clock.advance(10_000)
+	expect(DEPLOY_LEASE_TTL_MS).toBe(90_000)
+	expect(renewedAt).toEqual([start + 30_000, start + 60_000])
+	// A dead process stops renewing without releasing its row.
+	owner.invalidate()
+	expect(await lock.acquire('app:prod', 'replacement')).toBe(false)
+	await clock.advance(DEPLOY_LEASE_TTL_MS + DEPLOY_LEASE_TTL_MS / 3)
+	expect(await lock.acquire('app:prod', 'replacement')).toBe(true)
+	await owner.close()
+})
 
 test('cancellation during reservation records initial identity and cleans it without submitting work', async () => {
 	const { db, deps, row } = await fixture()

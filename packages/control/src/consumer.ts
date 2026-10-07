@@ -36,9 +36,8 @@ export type ControlJobResult =
 	| ({ kind: 'namespace' } & NamespaceJobResult)
 
 /**
- * The namespace lease MUST outlive the queue's visibility timeout, which the deploy lease deliberately
- * matches. A redelivered deploy message is refused by `markRunStarted`'s status guard, but a namespace
- * left `provisioning` is deliberately RESUMABLE — so the lease is the only thing standing between a
+ * A redelivered deploy message is refused by `markRunStarted`'s status guard, but a namespace left
+ * `provisioning` is deliberately RESUMABLE — so the renewed lease is the only thing standing between a
  * redelivery and two workers mutating one namespace at once.
  */
 export const NAMESPACE_LOCK_TTL_MS = 2 * DEPLOY_LOCK_TTL_MS

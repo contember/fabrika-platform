@@ -111,11 +111,11 @@
 		"@fabrika/operations-contract": "workspace:*",
 		"@fabrika/platform": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",
-		"@fabrika/provider-cloudflare": "workspace:*",
 		"source-map-js": "^1.2.1"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260702.1",
+		"@fabrika/provider-cloudflare": "workspace:*",
 		"@types/bun": "latest",
 		"jose": "^5.9.0",
 		"oblaka-iac": "^0.0.18",
