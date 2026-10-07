@@ -4,6 +4,7 @@ import { ResendEmailSender } from '@fabrika/email/resend'
 import type { IamRepositories } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import type { Env } from './env'
+import { type OAuthConfig, parseOAuthConfig } from './oauth-config'
 import { OidcClient } from './oidc'
 import { type PasswordHasher, WebCryptoPasswordHasher } from './password-crypto'
 
@@ -45,6 +46,8 @@ export interface Config {
 		readonly oidc: { readonly enabled: boolean }
 		readonly password: { readonly enabled: boolean }
 	}
+	/** The OAuth authorization server for MCP clients; null = off. */
+	readonly oauth: OAuthConfig | null
 	// ── propustka-native auth ──
 	/** propustka's own origin — the `iss` of minted tokens and the OIDC redirect base. */
 	readonly issuer: string
@@ -115,6 +118,7 @@ export function buildServices(env: Env): Services {
 				oidc: { enabled: oidcEnabled },
 				password: { enabled: passwordEnabled },
 			},
+			oauth: parseOAuthConfig(env.OAUTH_CONFIG),
 			issuer: env.ISSUER,
 		},
 	}

@@ -35,6 +35,11 @@ export interface Env {
 	 * cleartext, so without a named audience any of them could replay it here.
 	 */
 	ADMIN_AUDIENCES?: string
+	/**
+	 * JSON: the OAuth 2.1 authorization server for MCP clients (`src/oauth-config.ts`). Absent or empty
+	 * means OAuth is off and its routes 404. Deploy var `FABRIKA_IAM_OAUTH_CONFIG`. Malformed fails the boot.
+	 */
+	OAUTH_CONFIG?: string
 	/** `local` / `stage` / `prod`. */
 	ENVIRONMENT: string
 	/** Explicit local-only human login bypass. Ignored unless `ENVIRONMENT=local`. */

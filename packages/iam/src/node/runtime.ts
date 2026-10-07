@@ -14,6 +14,7 @@ import { readEnvironmentName } from '@fabrika/auth-core'
 import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
 import { createIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
+import { parseOAuthConfig } from '../oauth-config'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
 export interface ProcessConfig {
@@ -79,6 +80,9 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		? required(source, 'FABRIKA_EMAIL_RESEND_API_KEY')
 		: source['FABRIKA_EMAIL_RESEND_API_KEY'] ?? ''
 
+	// Parsed here as well as per request in `buildServices`, for the same readiness-probe reason as above.
+	parseOAuthConfig(source['FABRIKA_IAM_OAUTH_CONFIG'])
+
 	const config: ProcessConfig = {
 		port: parsePort(source['PORT']),
 		rpcKey: sharedSecret(source, 'FABRIKA_IAM_RPC_KEY'),
@@ -97,6 +101,7 @@ export function createRuntime(source: Record<string, string | undefined> = proce
 		// Which app's proxy token may administer. Passed through undefined so "unset" (the console
 		// gateway default) stays distinguishable from an explicit empty value (no JWT may administer).
 		ADMIN_AUDIENCES: source['FABRIKA_IAM_ADMIN_AUDIENCES'],
+		OAUTH_CONFIG: source['FABRIKA_IAM_OAUTH_CONFIG'] ?? '',
 		ENVIRONMENT: environment,
 		LOCAL_DEV_LOGIN: source['LOCAL_DEV_LOGIN'] ?? '',
 		ISSUER: issuer,

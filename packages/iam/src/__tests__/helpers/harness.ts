@@ -5,6 +5,7 @@ import { Database, type SQLQueryBindings } from 'bun:sqlite'
 import { exportJWK, generateKeyPair } from 'jose'
 import { type AuthenticationMethod, createIamRepositories, type IamRepositories } from '../../db'
 import { normalizeEmailIdentity } from '../../email-identity'
+import type { OAuthConfig } from '../../oauth-config'
 import { OidcClient, type OidcMetadata } from '../../oidc'
 import { type PasswordHasher, WebCryptoPasswordHasher } from '../../password-crypto'
 import { hashToken } from '../../secret'
@@ -182,6 +183,8 @@ export interface MakeServicesOptions {
 	email?: EmailSender | null
 	/** propustka's own origin (token `iss` + OIDC redirect base). */
 	issuer?: string
+	/** The OAuth authorization server config (`OAUTH_CONFIG`). Defaults to off. */
+	oauth?: OAuthConfig | null
 }
 
 /**
@@ -206,6 +209,7 @@ export function makeServicesFor(repositories: IamRepositories, options: MakeServ
 			oidc: { enabled: options.authentication?.oidc ?? true },
 			password: { enabled: options.authentication?.password ?? false },
 		},
+		oauth: options.oauth ?? null,
 		issuer,
 	}
 	return {

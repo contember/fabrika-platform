@@ -12,7 +12,7 @@
  * One Signer per isolate, memoised like the `JwtValidator` (jose imports the key once).
  */
 
-import { type AccessTokenClaims, type Jwks, parseAccessClaims, type PublicJwk, TOKEN_ALG } from '@fabrika/auth-core'
+import { type AccessTokenClaims, type Jwks, parseAccessClaims, type PublicJwk, RESOURCE_ACCESS_TOKEN_TYP, TOKEN_ALG } from '@fabrika/auth-core'
 import {
 	calculateJwkThumbprint,
 	createLocalJWKSet,
@@ -53,6 +53,20 @@ export class Signer {
 		}
 		return new SignJWT({ ...claims })
 			.setProtectedHeader({ alg: TOKEN_ALG, kid: active.kid })
+			.sign(active.key)
+	}
+
+	/**
+	 * Sign an OAuth resource access token (`buildResourceAccessClaims`). `typ: at+jwt` (RFC 9068) is what
+	 * keeps it from passing as a native app token, whose header carries no `typ`.
+	 */
+	signResourceToken(claims: Record<string, unknown>): Promise<string> {
+		const active = this.keys[0]
+		if (!active) {
+			throw new Error('Signer has no keys')
+		}
+		return new SignJWT(claims)
+			.setProtectedHeader({ alg: TOKEN_ALG, kid: active.kid, typ: RESOURCE_ACCESS_TOKEN_TYP })
 			.sign(active.key)
 	}
 
@@ -103,23 +117,44 @@ export class Signer {
 }
 
 /**
- * Verify a propustka-issued access token (`px_token`) against THIS signer's own public keys and
+ * Verify a propustka-issued NATIVE access token (`px_token`) against THIS signer's own public keys and
  * narrow it to access claims; null on any failure. The server-side mirror of the SDK's local verify
  * (`session.ts`) — propustka issued the token, so it trusts the `perms`/`ptype`/`aud` it signed. The
  * signer already holds the current + rotation public keys, so there is no JWKS fetch or kid-miss retry.
+ *
+ * An OAuth resource token is REFUSED here: it was minted for an MCP client and one resource, and must
+ * never act as a native credential for IAM itself (`verifyResourceAccessToken` is its only reader).
  */
 export async function verifyAccessToken(
 	signer: Signer,
 	token: string,
 	opts: { issuer: string; audience?: string },
 ): Promise<AccessTokenClaims | null> {
-	const jwks = createLocalJWKSet(signer.jwks())
+	const verified = await verifySigned(signer, token, opts)
+	if (verified === null || verified.typ !== undefined || verified.claims.oauth !== undefined) return null
+	return verified.claims
+}
+
+/** Verify an OAuth resource token (`typ: at+jwt`, OAuth claims present); null for anything else. */
+export async function verifyResourceAccessToken(signer: Signer, token: string, opts: { issuer: string }): Promise<AccessTokenClaims | null> {
+	const verified = await verifySigned(signer, token, opts)
+	if (verified === null || verified.typ !== RESOURCE_ACCESS_TOKEN_TYP || verified.claims.oauth === undefined) return null
+	return verified.claims
+}
+
+async function verifySigned(
+	signer: Signer,
+	token: string,
+	opts: { issuer: string; audience?: string },
+): Promise<{ claims: AccessTokenClaims; typ: string | undefined } | null> {
 	try {
-		const { payload } = await jwtVerify(token, jwks, {
+		const { payload, protectedHeader } = await jwtVerify(token, createLocalJWKSet(signer.jwks()), {
+			algorithms: [TOKEN_ALG],
 			issuer: opts.issuer,
 			...(opts.audience === undefined ? {} : { audience: opts.audience }),
 		})
-		return parseAccessClaims(payload)
+		const claims = parseAccessClaims(payload)
+		return claims === null ? null : { claims, typ: protectedHeader.typ }
 	} catch {
 		return null
 	}

@@ -204,6 +204,20 @@ fails if that stops being true — it is the guard, not documentation of one.
   `OIDC_ISSUER`/`OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET` whenever the method is enabled. The Bun path
   always did; the Worker substituted empty strings and served a method that could only fail at the
   redirect. Refusing to boot beats booting misconfigured — so a local `wrangler dev` is password-only.
+- **IAM IS THE OAUTH 2.1 AUTHORIZATION SERVER FOR MCP CLIENTS, AND ONLY FOR REGISTERED ONES (ADR-0049).**
+  `OAUTH_CONFIG` (deploy var `FABRIKA_IAM_OAUTH_CONFIG`; unset = every OAuth path 404s, malformed
+  fails the boot) lists the Claude/ChatGPT CIMD client ids with their exact redirect URIs, and the
+  resources with their scope ceilings. An unregistered client id is refused before any fetch, and a
+  fetched metadata document can never add a redirect URI. A scope grant is a CEILING: the token's
+  `perms` are the user's LIVE permissions at the resource's app narrowed by it (`narrowPermissions`),
+  re-resolved at every code exchange and refresh together with the grant, its IAM session, and the
+  principal. A grant expires with the session it was given under and cascades with its row. One code
+  per grant, so the grant IS the refresh-token family: a replayed code or a reused rotated refresh
+  token revokes it. Resource tokens are signed with `typ: at+jwt` (`Signer.signResourceToken`).
+- **REVOCATION STOPS REFRESH, NOT AN ISSUED ACCESS TOKEN.** Revoking an OAuth grant or ending its
+  session refuses the next code exchange or refresh; an access token already minted stays valid until
+  its `exp`, at most `DEFAULT_TOKEN_TTL_SECONDS`. `verifyAccessToken` (every native caller) refuses a
+  resource token; only `verifyResourceAccessToken` reads one, and only for `/oauth/revoke`.
 
 ## Patterns
 

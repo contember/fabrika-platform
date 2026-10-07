@@ -123,6 +123,7 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 			HUMAN_EMAIL_DOMAINS: '[]',
 			HUMAN_EMAILS: '[]',
 			IAM_BOOTSTRAP_ADMINS: '[]',
+			OAUTH_CONFIG: source['FABRIKA_IAM_OAUTH_CONFIG'] ?? '',
 			ISSUER: 'http://localhost:18191',
 			// Password-only locally. OIDC is now FATAL when half-configured (one rule on both engines),
 			// and a `wrangler dev` has no client id or secret to give it.
@@ -139,6 +140,7 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 
 	return {
 		HUMAN_EMAIL_DOMAINS: config.humanEmailDomains,
+		OAUTH_CONFIG: source['FABRIKA_IAM_OAUTH_CONFIG'] ?? '',
 		// Only when named: an empty ADMIN_AUDIENCES means "no JWT may administer", so a `?? ''`
 		// default would lock the console out of every install instead of falling back to its app id.
 		...(config.adminAudiences === undefined ? {} : { ADMIN_AUDIENCES: config.adminAudiences }),
@@ -161,6 +163,7 @@ export const iamPipelineVars = (source: EnvironmentSource): string[] => {
 	const email = emailConfig(source)
 	return [
 		'FABRIKA_IAM_ADMIN_AUDIENCES',
+		'FABRIKA_IAM_OAUTH_CONFIG',
 		'FABRIKA_IAM_OIDC_ENABLED',
 		'FABRIKA_IAM_PASSWORD_ENABLED',
 		'FABRIKA_EMAIL_PROVIDER',

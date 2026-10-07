@@ -6,6 +6,7 @@ import { CredentialRepository } from './repositories/credentials'
 import { DeviceAuthorizationRepository } from './repositories/device'
 import { GrantRepository } from './repositories/grants'
 import { HandoffRepository } from './repositories/handoff'
+import { OAuthRepository } from './repositories/oauth'
 import { PrincipalRepository } from './repositories/principals'
 import { SessionRepository } from './repositories/sessions'
 
@@ -15,6 +16,7 @@ export { type CredentialGrantRow, CredentialRepository, type CredentialRow } fro
 export { DeviceAuthorizationRepository, type DeviceAuthorizationRow, type DeviceReceiptRow } from './repositories/device'
 export { GrantRepository, type GrantRow } from './repositories/grants'
 export { type AuthCodeRow, HandoffRepository } from './repositories/handoff'
+export { type OAuthCodeRow, type OAuthGrantRow, type OAuthRefreshTokenRow, OAuthRepository } from './repositories/oauth'
 export { PrincipalRepository, type PrincipalRow, type PrincipalStatus, principalStatus } from './repositories/principals'
 export { type AuthenticationMethod, SessionRepository, type SessionRow } from './repositories/sessions'
 
@@ -28,6 +30,7 @@ export interface IamRepositories {
 	sessions: SessionRepository
 	passwords: PasswordRepository
 	handoff: HandoffRepository
+	oauth: OAuthRepository
 	audit: AuditRepository
 }
 
@@ -42,6 +45,7 @@ export function createIamRepositories(db: SqlDatabase, replacements: Partial<Iam
 		sessions: replacements.sessions ?? new SessionRepository(db),
 		passwords: replacements.passwords ?? new PasswordRepository(db),
 		handoff: replacements.handoff ?? new HandoffRepository(db),
+		oauth: replacements.oauth ?? new OAuthRepository(db),
 		audit: replacements.audit ?? new AuditRepository(db),
 	}
 }

@@ -23,7 +23,17 @@ const NOW = Math.floor(NOW_MS / 1000)
 const DAY = 24 * 60 * 60
 
 /** The tables the sweep is responsible for, and how to count them. */
-const SWEPT_TABLES = ['auth_log', 'password_action_tokens', 'password_login_throttles', 'auth_codes', 'sessions', 'device_authorizations'] as const
+const SWEPT_TABLES = [
+	'auth_log',
+	'password_action_tokens',
+	'password_login_throttles',
+	'auth_codes',
+	'sessions',
+	'device_authorizations',
+	'oauth_grants',
+	'oauth_codes',
+	'oauth_refresh_tokens',
+] as const
 
 function counts(sqlite: Database): Record<string, number> {
 	const out: Record<string, number> = {}
@@ -128,7 +138,7 @@ async function seedBothSides(h: Harness): Promise<string> {
 	)
 
 	// sessions — expired and revoked go, live stays. (Two more live ones exist as the codes' parents.)
-	await h.repositories.sessions.createSession({
+	const expiredSession = await h.repositories.sessions.createSession({
 		tokenHash: await hashToken('session-expired'),
 		principalId: principal,
 		idpSub: 'sub-cron',
@@ -137,12 +147,41 @@ async function seedBothSides(h: Harness): Promise<string> {
 	const revoked = await hashToken('session-revoked')
 	await h.repositories.sessions.createSession({ tokenHash: revoked, principalId: principal, idpSub: 'sub-cron', expiresAt: NOW + DAY })
 	await h.repositories.sessions.revokeSessionByHash(revoked)
-	await h.repositories.sessions.createSession({
+	const liveSessionId = await h.repositories.sessions.createSession({
 		tokenHash: await hashToken('session-live'),
 		principalId: principal,
 		idpSub: 'sub-cron',
 		expiresAt: NOW + DAY,
 	})
+
+	// oauth_grants go with their session row; codes and refresh tokens go at their own expiry.
+	for (const [grantId, sessionId] of [['grant-doomed', expiredSession], ['grant-live', liveSessionId]] as const) {
+		await h.repositories.oauth.createGrant(
+			{
+				id: grantId,
+				principal_id: principal,
+				session_id: sessionId,
+				client_id: 'https://claude.example.test/cimd',
+				app: 'control',
+				resource: 'https://control.example.test/mcp',
+				scopes: '["authoring"]',
+				created_at: NOW - DAY,
+				expires_at: NOW + DAY,
+				revoked_at: null,
+			},
+			{ token_hash: `code-${grantId}`, redirect_uri: 'https://claude.example.test/cb', challenge: 'c'.repeat(43), expires_at: NOW + 60 },
+		)
+	}
+	h.sqlite.run(`UPDATE oauth_codes SET expires_at = ? WHERE token_hash = 'code-grant-live'`, [NOW - 1])
+	h.sqlite.run(
+		`INSERT INTO oauth_codes (token_hash, grant_id, redirect_uri, challenge, expires_at) VALUES ('code-fresh', 'grant-live', 'x', 'c', ?)`,
+		[
+			NOW + 60,
+		],
+	)
+	for (const [hash, expiresAt] of [['refresh-old', NOW - 1], ['refresh-live', NOW + DAY]] as const) {
+		await h.repositories.oauth.insertRefreshToken({ token_hash: hash, grant_id: 'grant-live', expires_at: expiresAt })
+	}
 
 	return principal
 }
@@ -168,6 +207,9 @@ describe('runIamMaintenance', () => {
 			auth_codes: 2,
 			sessions: 5,
 			device_authorizations: 2,
+			oauth_grants: 2,
+			oauth_codes: 3,
+			oauth_refresh_tokens: 2,
 		})
 
 		const settled: Promise<unknown>[] = []
@@ -184,6 +226,9 @@ describe('runIamMaintenance', () => {
 			auth_codes: 1,
 			sessions: 3,
 			device_authorizations: 1,
+			oauth_grants: 1,
+			oauth_codes: 1,
+			oauth_refresh_tokens: 1,
 		})
 	})
 
@@ -204,6 +249,9 @@ describe('runIamMaintenance', () => {
 			auth_codes: 1,
 			sessions: 3,
 			device_authorizations: 1,
+			oauth_grants: 1,
+			oauth_codes: 1,
+			oauth_refresh_tokens: 1,
 		})
 	})
 })

@@ -18,6 +18,7 @@ const ENV_NAMES = [
 	...Object.keys(REMOTE_SOURCE),
 	'FABRIKA_IAM_HOSTNAME',
 	'FABRIKA_IAM_ADMIN_AUDIENCES',
+	'FABRIKA_IAM_OAUTH_CONFIG',
 	'FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL',
 	'FABRIKA_EMAIL_FROM',
 	'FABRIKA_EMAIL_RESEND_API_KEY',
@@ -55,6 +56,7 @@ describe('IAM resource graph', () => {
 	test('declares only canonical IAM pipeline inputs', () => {
 		expect(iamPipelineVars(REMOTE_SOURCE)).toEqual([
 			'FABRIKA_IAM_ADMIN_AUDIENCES',
+			'FABRIKA_IAM_OAUTH_CONFIG',
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',
 			'FABRIKA_EMAIL_PROVIDER',
@@ -148,6 +150,7 @@ describe('IAM resource graph', () => {
 		expect(worker.options.vars?.['OIDC_ISSUER']).toBe('')
 		expect(iamPipelineVars(source)).toEqual([
 			'FABRIKA_IAM_ADMIN_AUDIENCES',
+			'FABRIKA_IAM_OAUTH_CONFIG',
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',
 			'FABRIKA_EMAIL_PROVIDER',

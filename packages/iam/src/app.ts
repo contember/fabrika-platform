@@ -6,6 +6,7 @@ import { handleAuth } from './auth/routes'
 import { readClientAddress } from './client-address'
 import { handleDeviceAuthorization } from './device-http'
 import type { Env } from './env'
+import { handleOAuth, OAUTH_METADATA_PATH } from './oauth-http'
 import { requestId } from './request-id'
 import { createIamRpc } from './rpc'
 import { handleMintHttp, handleRpcHttp, isMintPath, isRpcPath } from './rpc-http'
@@ -61,6 +62,8 @@ export function createIamApp(options: IamAppOptions = {}) {
 				? [route.all<IamAppContext, '/healthz'>('/healthz', () => Response.json({ status: 'ok' }))]
 				: []),
 			route.all('/.well-known/jwks.json', (ctx) => handleAuth(ctx.request, ctx.services, ctx.env, ctx.exec, ctx.clientAddress)),
+			route.all(OAUTH_METADATA_PATH, (ctx) => handleOAuth(ctx.request, ctx.services, ctx.env)),
+			route.all('/oauth/*path', (ctx) => handleOAuth(ctx.request, ctx.services, ctx.env)),
 			route.all('/auth', (ctx) => handleIamAuth(ctx, options)),
 			route.all('/auth/*path', (ctx) => handleIamAuth(ctx, options)),
 			route.rpc('/admin/rpc', adminRpcRouter, { use: [adminRpcAuth] }),

@@ -86,6 +86,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			.all<{ bundle: string; name: string }>()
 		expect(results).toEqual([
 			{ bundle: 'iam', name: '0001_init.sql' },
+			{ bundle: 'iam', name: '0002_oauth.sql' },
 		])
 	})
 
@@ -121,6 +122,9 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'auth_codes',
 				'app_return_origins',
 				'device_authorizations',
+				'oauth_grants',
+				'oauth_codes',
+				'oauth_refresh_tokens',
 			]
 		) {
 			expect(names).toContain(table)

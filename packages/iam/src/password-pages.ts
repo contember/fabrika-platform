@@ -113,7 +113,7 @@ function message(value: string | undefined): string {
  * It must already be an origin (scheme + host + optional port, no spaces, no `;`) — `normalizeOrigin`
  * produces exactly that and is the only supplier — so it cannot inject a second directive.
  */
-function htmlPage(title: string, content: string, status = 200, formActionOrigin?: string): Response {
+export function htmlPage(title: string, content: string, status = 200, formActionOrigin?: string): Response {
 	const formAction = formActionOrigin === undefined ? `'self'` : `'self' ${formActionOrigin}`
 	const nonce = randomNonce()
 	const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${
