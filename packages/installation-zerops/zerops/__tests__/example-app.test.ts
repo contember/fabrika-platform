@@ -1,7 +1,7 @@
 // The example app, driven through the REAL Zerops driver.
 //
 // Nothing here is a stand-in for the config: `examples/zerops-app/fabrika.config.ts` is imported as a
-// package and handed to `deploy()` exactly as the control plane would hand it over. What is faked is the
+// package and handed to the Zerops deployer exactly as the control plane would hand it over. What is faked is the
 // single collaborator interface the driver's effects go through (`ZeropsCollaborators`) — which is the
 // whole point of that seam, and the only way to exercise the path with no account.
 //
@@ -12,7 +12,6 @@
 // NOT PROVEN: that Zerops accepts any of it. No request in this file leaves the process.
 
 import { applicableGates, compileGates, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
-import { deploy, type RuntimeProviderRun } from '@fabrika/engine'
 import notesConfig, { NOTES_DATABASE_SERVICE, NOTES_SERVICE, NOTES_UPSTREAM } from '@fabrika/example-zerops-app'
 import { notesGates } from '@fabrika/example-zerops-app/gates'
 import { NOTES_APP_ID } from '@fabrika/example-zerops-app/schema'
@@ -21,11 +20,11 @@ import {
 	compileImport,
 	compileImportYaml,
 	createZeropsArtifactSourceDescriptor,
-	createZeropsProvider,
+	createZeropsDeployer,
 	type ZeropsApi,
 	type ZeropsAppVersionStatus,
 	type ZeropsCollaborators,
-	type ZeropsProvider,
+	type ZeropsDeployRun,
 	type ZeropsRuntimeTarget,
 	type ZeropsSourceClient,
 } from '@fabrika/provider-zerops'
@@ -208,15 +207,14 @@ const COMMIT_SHA = '0123456789abcdef0123456789abcdef01234567'
 const REPOSITORY = { owner: 'contember', name: 'fabrika-platform' }
 
 const makeRun = (
-	provider: ZeropsProvider,
 	recorded: Recorded,
 	target: ZeropsRuntimeTarget,
-	overrides: Partial<RuntimeProviderRun> = {},
-): RuntimeProviderRun => ({
+	overrides: Partial<ZeropsDeployRun> = {},
+): ZeropsDeployRun => ({
 	appId: notesConfig.id,
 	env: 'prod',
-	target: provider.encodeTarget(target),
-	artifact: provider.encodeArtifact(MANIFEST),
+	target,
+	artifact: MANIFEST,
 	secrets: {},
 	vars: {},
 	managedEnvironment: {
@@ -227,7 +225,6 @@ const makeRun = (
 		FABRIKA_ENVIRONMENT: null,
 		FABRIKA_SERVICE_KEY: null,
 	},
-	cwd: '/repo',
 	dryRun: false,
 	signal: new AbortController().signal,
 	events: {
@@ -250,11 +247,11 @@ const makeRun = (
 const deployExample = (
 	recorded: Recorded,
 	statuses: ZeropsAppVersionStatus[] = ['ACTIVE'],
-	overrides: Partial<RuntimeProviderRun> = {},
+	overrides: Partial<ZeropsDeployRun> = {},
 ) => {
 	const source = makeSource(recorded)
-	const provider = createZeropsProvider(() => makeCollaborators(recorded, statuses, source))
-	if (overrides.dryRun === true) return deploy(provider.runtime, makeRun(provider, recorded, TARGET, overrides))
+	const deploy = createZeropsDeployer(() => makeCollaborators(recorded, statuses, source))
+	if (overrides.dryRun === true) return deploy(makeRun(recorded, TARGET, overrides))
 	return source.resolve({
 		runId: RUN_ID,
 		repository: REPOSITORY,
@@ -264,8 +261,7 @@ const deployExample = (
 		signal: overrides.signal ?? new AbortController().signal,
 	}).then((resolved) =>
 		deploy(
-			provider.runtime,
-			makeRun(provider, recorded, {
+			makeRun(recorded, {
 				...TARGET,
 				managedAdmission: { owner: MANAGED_OWNER, markerRecordId: 'marker-1' },
 				source: { runId: RUN_ID, repository: REPOSITORY, commitSha: resolved.commitSha },
@@ -351,10 +347,7 @@ describe('dryRun makes NO call at all, and says what each step would have done',
 	test('the plan is Zerops-shaped: no build, no migrate, no sync-secrets', async () => {
 		const result = await deployExample(rec, ['ACTIVE'], { dryRun: true })
 		expect(result.status).toBe('succeeded')
-		expect(result.plan.steps.map((step) => step.id)).toEqual(['apply-import', 'trigger-deploy', 'await-deploy', 'reconcile-schema'])
-		expect(result.plan.steps.map((step) => step.kind)).toEqual(['apply-import', 'trigger-deploy', 'await-deploy', 'reconcile-schema'])
-		// Every step depends on the previous one.
-		expect(result.plan.steps.map((step) => step.dependsOn ?? [])).toEqual([[], ['apply-import'], ['trigger-deploy'], ['await-deploy']])
+		expect(result.steps.map((step) => step.id)).toEqual(['apply-import', 'trigger-deploy', 'await-deploy', 'reconcile-schema'])
 	})
 
 	test('not one collaborator call is made', async () => {
@@ -492,7 +485,7 @@ describe('a real run makes exactly these calls, in exactly this order', () => {
 	test('a failed build fails the run and SKIPS the reconcile — a broken build never touches IAM', async () => {
 		const result = await deployExample(rec, ['BUILDING', 'BUILD_FAILED'])
 		expect(result.status).toBe('failed')
-		expect(result.steps.find((step) => step.spec.id === 'reconcile-schema')?.status).toBe('skipped')
+		expect(result.steps.find((step) => step.id === 'reconcile-schema')?.status).toBe('skipped')
 		expect(rec.calls).not.toContain('reconcileSchema')
 	})
 })

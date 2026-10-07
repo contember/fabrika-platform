@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 
-import type { ProviderDeployResult } from '@fabrika/provider-contract'
+import type { DeployStepResult } from '@fabrika/provider-contract'
 import { parseCloudflareArgs } from './cli-args'
 import { deployCloudflareConfig } from './command'
+import type { CloudflareDeployResult } from './provider'
 
 const USAGE = `Internal Cloudflare app executor
 
@@ -23,32 +24,30 @@ const die = (message: string): never => {
 	throw new Error(message)
 }
 
-const formatDuration = (step: ProviderDeployResult['steps'][number]): string => {
+const formatDuration = (step: DeployStepResult): string => {
 	if (step.startedAt === undefined || step.finishedAt === undefined) {
 		return ''
 	}
 	return ` (${step.finishedAt - step.startedAt}ms)`
 }
 
-const ICON: Readonly<Record<string, string>> = {
-	pending: '·',
-	running: '…',
+const ICON: Readonly<Record<DeployStepResult['status'], string>> = {
 	succeeded: '✓',
 	failed: '✗',
 	skipped: '∅',
 }
 
-const printResult = (result: ProviderDeployResult): void => {
+const printResult = (result: CloudflareDeployResult): void => {
 	console.log(`\n${result.appId} → ${result.env}: ${result.status}`)
 	for (const step of result.steps) {
-		console.log(`  ${ICON[step.status] ?? '?'} ${step.spec.id} — ${step.status}${formatDuration(step)}`)
+		console.log(`  ${ICON[step.status]} ${step.id} — ${step.status}${formatDuration(step)}`)
 		if (step.error !== undefined) {
 			console.log(`      ${step.error}`)
 		}
 	}
 }
 
-const requireSuccessful = (result: ProviderDeployResult): void => {
+const requireSuccessful = (result: CloudflareDeployResult): void => {
 	printResult(result)
 	if (result.status === 'failed') {
 		throw new Error('Cloudflare deployment failed')

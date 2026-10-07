@@ -22,7 +22,6 @@
 		{ "path": "./packages/operations-contract" },
 		{ "path": "./packages/operations" },
 		{ "path": "./packages/operations-ui" },
-		{ "path": "./packages/engine" },
 		{ "path": "./packages/control-contract" },
 		{ "path": "./packages/control" },
 		{ "path": "./packages/daemon-kit" },

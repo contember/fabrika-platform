@@ -182,7 +182,6 @@
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
-        "@fabrika/engine": "workspace:*",
         "@fabrika/github-app": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
         "@fabrika/platform": "workspace:*",
@@ -251,16 +250,6 @@
       "version": "0.0.4",
       "dependencies": {
         "zod": "^3.25.76",
-      },
-      "devDependencies": {
-        "@types/bun": "latest",
-      },
-    },
-    "packages/engine": {
-      "name": "@fabrika/engine",
-      "version": "0.0.4",
-      "dependencies": {
-        "@fabrika/provider-contract": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -368,7 +357,6 @@
       },
       "devDependencies": {
         "@fabrika/control": "workspace:*",
-        "@fabrika/engine": "workspace:*",
         "@fabrika/example-zerops-app": "workspace:*",
         "@fabrika/iam": "workspace:*",
         "@fabrika/iam-contract": "workspace:*",
@@ -479,7 +467,6 @@
       "dependencies": {
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
-        "@fabrika/engine": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "@fabrika/proxy-contract": "workspace:*",
         "@fabrika/proxy-core": "workspace:*",
@@ -793,8 +780,6 @@
     "@fabrika/dashboard": ["@fabrika/dashboard@workspace:packages/dashboard"],
 
     "@fabrika/email": ["@fabrika/email@workspace:packages/email"],
-
-    "@fabrika/engine": ["@fabrika/engine@workspace:packages/engine"],
 
     "@fabrika/example-app": ["@fabrika/example-app@workspace:examples/app"],
 
@@ -1296,8 +1281,6 @@
 
     "@fabrika/email/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
-    "@fabrika/engine/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
-
     "@fabrika/example-zerops-app/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
     "@fabrika/github-app/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
@@ -1385,8 +1368,6 @@
     "@fabrika/daemon-kit/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "@fabrika/email/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
-
-    "@fabrika/engine/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "@fabrika/example-zerops-app/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 

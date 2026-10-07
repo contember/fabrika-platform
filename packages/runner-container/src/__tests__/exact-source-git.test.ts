@@ -1,5 +1,5 @@
 import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
-import { isCloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
+import { cloudflareRunnerJobSchema } from '@fabrika/provider-cloudflare/runner'
 import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -142,7 +142,7 @@ const runCheckout = async (fixture: OriginFixture, dryRun = false, ref = fixture
 			}
 			: {}),
 	}
-	expect(isCloudflareRunnerJob(job)).toBe(true)
+	expect(cloudflareRunnerJobSchema.safeParse(job).success).toBe(true)
 	const specs: SpawnSpec[] = []
 	const observed: { command: string; head: string; sentinel: string; map: string; detached: boolean; config: string; witnessed: boolean }[] = []
 	const originalEnv = { ...process.env }
@@ -219,7 +219,7 @@ describe('real exact-source Git checkout', () => {
 	test('a repeated completed job refuses the checkout before Git or Bun and preserves tracked and untracked edits', async () => {
 		await withOrigin(async (fixture) => {
 			const job: CloudflareRunnerJob = { ...makeJob(fixture.commitA), configPath: 'fabrika.config.ts' }
-			expect(isCloudflareRunnerJob(job)).toBe(true)
+			expect(cloudflareRunnerJobSchema.safeParse(job).success).toBe(true)
 			const commands: SpawnSpec[] = []
 			const env: RunnerEnv = {
 				workspace: fixture.workspace,
@@ -301,7 +301,7 @@ describe('real exact-source Git checkout', () => {
 					runId: '0198d922-06f6-7000-8000-000000000001',
 				},
 			}
-			expect(isCloudflareRunnerJob(job)).toBe(true)
+			expect(cloudflareRunnerJobSchema.safeParse(job).success).toBe(true)
 			let repositoryWork = false
 			let artifacts = false
 			const gitSpecs: SpawnSpec[] = []

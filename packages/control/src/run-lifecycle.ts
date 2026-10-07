@@ -363,24 +363,8 @@ export async function executeDeploy(
 		const sourceBinding = await loadSourceBinding(deps, app)
 		const appInput = providerApp(app, run)
 		const environmentInput = await providerEnvironment(deps.repositories.registry, appEnv, { requireReadyNamespace: true })
-		let registration = deps.provider.normalizeRegistration({
-			app: appInput,
-			environment: environmentInput,
-		})
-		if (
-			registration.app.id !== app.id
-			|| registration.environment.appId !== app.id
-			|| registration.environment.env !== appEnv.env
-			|| registration.environment.publicOrigin !== environmentInput.publicOrigin
-			|| registration.environment.target.provider !== deps.provider.id
-			|| registration.environment.artifact.provider !== deps.provider.id
-			|| registration.environment.namespace?.id !== environmentInput.namespace?.id
-			|| registration.environment.namespace?.env !== environmentInput.namespace?.env
-			|| registration.environment.namespace?.exclusiveAppId !== environmentInput.namespace?.exclusiveAppId
-			|| registration.environment.namespace?.target.provider !== environmentInput.namespace?.target.provider
-		) {
-			throw new Error('provider returned a deploy registration for different coordinates')
-		}
+		let registration = deps.provider.normalizeRegistration?.({ app: appInput, environment: environmentInput })
+			?? { app: appInput, environment: environmentInput }
 		await assertNamespaceResourceClaims(deps.repositories.registry, deps.provider, registration)
 		const abortController = owner.work
 		const resolveSource = deps.provider.resolveSource

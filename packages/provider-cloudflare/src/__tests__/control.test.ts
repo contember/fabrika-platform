@@ -1,5 +1,11 @@
 import { ReconcileSchemaError } from '@fabrika/auth'
-import type { ProviderDeployInput, ProviderEnvelope } from '@fabrika/provider-contract'
+import type {
+	ControlProvider,
+	ProviderDeployInput,
+	ProviderEnvelope,
+	ProviderRegistration,
+	ProviderRegistrationInput,
+} from '@fabrika/provider-contract'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import type { RunnerIamReconcile } from '@fabrika/runner-contract'
 import { describe, expect, test } from 'bun:test'
@@ -10,9 +16,13 @@ import {
 	type CloudflareRunnerJob,
 	cloudflareStoredTargetCodec,
 	createCloudflareControlProvider,
-	isCloudflareRunnerJob,
 } from '..'
-import type { CloudflareRunRecovery } from '../control'
+import { cloudflareRunnerJobSchema, type CloudflareRunRecovery } from '../control'
+
+const normalizeRegistration = (provider: ControlProvider, input: ProviderRegistrationInput): ProviderRegistration => {
+	if (provider.normalizeRegistration === undefined) throw new Error('the Cloudflare provider normalizes registrations')
+	return provider.normalizeRegistration(input)
+}
 
 const envelope = <T>(codec: { version: number; encode(value: T): ProviderEnvelope['payload'] }, value: T): ProviderEnvelope => ({
 	provider: 'cloudflare',
@@ -139,7 +149,7 @@ describe('Cloudflare control provider', () => {
 		})
 		expect(order).toEqual(['clone', 'admission', 'accepted', 'start'])
 		expect(jobs[0]?.ref).toBe(COMMIT_SHA)
-		expect(isCloudflareRunnerJob(jobs[0])).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})
 
 	test('mutable non-dry refs fail before clone authorization; dry previews retain their requested ref', async () => {
@@ -483,7 +493,7 @@ describe('Cloudflare control provider', () => {
 			cancelRun: async () => {},
 		})
 		const input = deployInput()
-		const normalized = provider.normalizeRegistration({ app: input.app, environment: input.environment })
+		const normalized = normalizeRegistration(provider, { app: input.app, environment: input.environment })
 		const outcome = await provider.deploy({
 			...input,
 			environment: normalized.environment,
@@ -519,7 +529,7 @@ describe('Cloudflare control provider', () => {
 		}])
 		expect(externalIds).toEqual([RUN_ID])
 		expect(outcome).toEqual({ state: 'succeeded', exitCode: 0 })
-		expect(isCloudflareRunnerJob(jobs[0])).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 	})
 
 	test('rejects another provider before registration is stored', () => {
@@ -534,7 +544,7 @@ describe('Cloudflare control provider', () => {
 		})
 		const input = deployInput()
 		expect(() =>
-			provider.normalizeRegistration({
+			normalizeRegistration(provider, {
 				app: input.app,
 				environment: {
 					...input.environment,
@@ -556,21 +566,24 @@ describe('Cloudflare control provider', () => {
 				CLOUDFLARE_API_TOKEN: 'token-1',
 			},
 		}
-		expect(isCloudflareRunnerJob(valid)).toBe(true)
-		expect(isCloudflareRunnerJob({ ...valid, dryRun: 'yes' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, secrets: { API_KEY: 42 } })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, managedEnvironment: { FABRIKA_RELEASE: 42 } })).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse(valid).success).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, dryRun: 'yes' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, secrets: { API_KEY: 42 } }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, managedEnvironment: { FABRIKA_RELEASE: 42 } }).success).toBe(false)
 		// An IAM credential on the job is refused outright: it would reach the checkout's own build.
-		expect(isCloudflareRunnerJob({ ...valid, credentials: { ...valid.credentials, FABRIKA_IAM_PROVISIONING_KEY: 'px_admin' } })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, credentials: { ...valid.credentials, FABRIKA_IAM_ISSUER: 'https://iam.example.com' } })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: ['https://api.example.com'] })).toBe(true)
-		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: 'https://api.example.com' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: [42] })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, returnOrigins: [''] })).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, credentials: { ...valid.credentials, FABRIKA_IAM_PROVISIONING_KEY: 'px_admin' } }).success)
+			.toBe(false)
+		expect(
+			cloudflareRunnerJobSchema.safeParse({ ...valid, credentials: { ...valid.credentials, FABRIKA_IAM_ISSUER: 'https://iam.example.com' } }).success,
+		).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: ['https://api.example.com'] }).success).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: 'https://api.example.com' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: [42] }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, returnOrigins: [''] }).success).toBe(false)
 		for (const ref of ['main', COMMIT_SHA.toUpperCase(), `${COMMIT_SHA}\n`, COMMIT_SHA.slice(1)]) {
-			expect(isCloudflareRunnerJob({ ...valid, ref })).toBe(false)
+			expect(cloudflareRunnerJobSchema.safeParse({ ...valid, ref }).success).toBe(false)
 		}
-		expect(isCloudflareRunnerJob({ ...valid, ref: 'main', dryRun: true })).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, ref: 'main', dryRun: true }).success).toBe(true)
 	})
 
 	test('rejects job values that would become an option, a path or a foreign host in the container', () => {
@@ -582,30 +595,32 @@ describe('Cloudflare control provider', () => {
 			runnerKey: 'test-runner-key',
 			credentials: { CLOUDFLARE_ACCOUNT_ID: 'account-1', CLOUDFLARE_API_TOKEN: 'token-1' },
 		}
-		expect(isCloudflareRunnerJob({ ...valid, runId: 'run-1' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, repoUrl: 'ext::sh -c id' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, repoUrl: 'http://github.com/example/api.git' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, repoUrl: 'https://x-access-token:ghs_secret@github.com/example/api.git' })).toBe(true)
-		expect(isCloudflareRunnerJob({ ...valid, ref: '--upload-pack=x' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, ref: 'main branch' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, ref: '' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, dryRun: true, ref: 'refs/heads/release/1.0' })).toBe(true)
-		expect(isCloudflareRunnerJob({ ...valid, env: 'Prod' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, env: '' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, workerDir: '../x' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, workerDir: '/opt/fabrika' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, workerDir: 'packages/worker' })).toBe(true)
-		expect(isCloudflareRunnerJob({ ...valid, configPath: '../../opt/fabrika/fabrika.config.ts' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, configPath: 'deploy/fabrika.config.ts' })).toBe(true)
-		expect(isCloudflareRunnerJob({ ...valid, domain: 'api.example.com' })).toBe(true)
-		expect(isCloudflareRunnerJob({ ...valid, domain: '*.example.com' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, domain: '' })).toBe(false)
-		expect(isCloudflareRunnerJob({ ...valid, runnerKey: '' })).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, runId: 'run-1' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, repoUrl: 'ext::sh -c id' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, repoUrl: 'http://github.com/example/api.git' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, repoUrl: 'https://x-access-token:ghs_secret@github.com/example/api.git' }).success).toBe(
+			true,
+		)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, ref: '--upload-pack=x' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, ref: 'main branch' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, ref: '' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, dryRun: true, ref: 'refs/heads/release/1.0' }).success).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, env: 'Prod' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, env: '' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, workerDir: '../x' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, workerDir: '/opt/fabrika' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, workerDir: 'packages/worker' }).success).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, configPath: '../../opt/fabrika/fabrika.config.ts' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, configPath: 'deploy/fabrika.config.ts' }).success).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, domain: 'api.example.com' }).success).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, domain: '*.example.com' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, domain: '' }).success).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, runnerKey: '' }).success).toBe(false)
 		// Absent is accepted at this boundary on purpose: `vozka-runner` re-checks the key itself and refuses.
 		const { runnerKey: _omit, ...noKey } = valid
-		expect(isCloudflareRunnerJob(noKey)).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse(noKey).success).toBe(true)
 		// (7) a newline survives the URL parser and would reach git's argv and the "Cloning …" line.
-		expect(isCloudflareRunnerJob({ ...valid, repoUrl: 'https://github.com/example/api.git\n--upload-pack=x' })).toBe(false)
+		expect(cloudflareRunnerJobSchema.safeParse({ ...valid, repoUrl: 'https://github.com/example/api.git\n--upload-pack=x' }).success).toBe(false)
 	})
 
 	test("applies the reported schema with the control plane's own key, return origins beside it", async () => {
@@ -891,7 +906,7 @@ describe('Cloudflare control provider', () => {
 
 		await provider.deploy({ ...input, returnOrigins: ['https://api.example.com', 'https://stage.api.example.com'] })
 		expect(jobs[0]?.returnOrigins).toEqual(['https://api.example.com', 'https://stage.api.example.com'])
-		expect(isCloudflareRunnerJob(jobs[0])).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
 
 		// No projected set → the field is absent, so the runner never asks IAM to change anything.
 		await provider.deploy(input)

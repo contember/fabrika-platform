@@ -50,8 +50,8 @@ protocols) · `@fabrika/operations` (portable ingest, persistence, triage,
 release, source-map, alert, and health service) · `@fabrika/operations-ui`
 (Operations feature routes embedded in the Fabrika console).
 
-**Deploy contract and core** — `@fabrika/provider-contract` (open provider interfaces and versioned
-JSON envelopes) · `@fabrika/engine` (provider-neutral plan executor) · `@fabrika/control` (registry,
+**Deploy contract and core** — `@fabrika/provider-contract` (open provider interfaces, versioned
+JSON envelopes for persisted data, and the shared step loop) · `@fabrika/control` (registry,
 run lifecycle, and composition roots) · `@fabrika/control-contract` (runtime-neutral control API DTOs
 and run-log shape) · `@fabrika/platform` (runtime ports) · `@fabrika/platform-node`
 (Bun/Postgres/S3 adapters).

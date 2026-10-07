@@ -1,5 +1,5 @@
 import type { CloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
-import { isCloudflareRunnerJob } from '@fabrika/provider-cloudflare/runner'
+import { cloudflareRunnerJobSchema } from '@fabrika/provider-cloudflare/runner'
 import { RUNNER_OUTCOME_FILE_ENV } from '@fabrika/runner-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'
@@ -294,7 +294,7 @@ describe('Runner pipeline', () => {
 			secrets[`LARGE_SECRET_${index}`] = prefix + 'v'.repeat(32 * 1024 - prefix.length)
 		}
 		const job = baseJob({ runId: '0198d922-06f6-7000-8000-000000000002', secrets })
-		expect(isCloudflareRunnerJob(job)).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse(job).success).toBe(true)
 		let children = 0
 		const runner = new Runner(
 			job,
@@ -346,7 +346,7 @@ describe('Runner pipeline', () => {
 			repoUrl: 'https://x-access-token:q@github.com/acme/app.git',
 			secrets,
 		})
-		expect(isCloudflareRunnerJob(job)).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse(job).success).toBe(true)
 		const runner = new Runner(
 			job,
 			makeEnv(async (spec, handlers) => {

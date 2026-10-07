@@ -11,7 +11,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { type CloudflareRunnerJob, createCloudflareControlProvider, isCloudflareRunnerJob } from '../../../provider-cloudflare/src/control'
+import { type CloudflareRunnerJob, cloudflareRunnerJobSchema, createCloudflareControlProvider } from '../../../provider-cloudflare/src/control'
 import { type ArtifactFetch, Runner, type SpawnSpec } from '../../../runner-container/src/runner'
 import { bunSpawner } from '../../../runner-container/src/spawn'
 import { type ControlRepositories, type RunTrigger, uuidv7 } from '../db'
@@ -276,7 +276,7 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 		expect(jobs).toHaveLength(1)
 		const job = jobs[0]
 		if (job === undefined || job.artifactUpload === undefined) throw new Error('missing runner artifact destination')
-		expect(isCloudflareRunnerJob(job)).toBe(true)
+		expect(cloudflareRunnerJobSchema.safeParse(job).success).toBe(true)
 		expect(job).toMatchObject({ runId, repoUrl: REPO_URL, ref: commitA, workerDir: 'worker', configPath: 'fabrika.config.ts' })
 		expect(job.credentials).toEqual({ CLOUDFLARE_ACCOUNT_ID: 'offline-account', CLOUDFLARE_API_TOKEN: 'offline-account-token' })
 		const storedRun = await db.runs.getRun(runId)

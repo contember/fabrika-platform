@@ -16,8 +16,8 @@ facts settled against a real account, several of which contradict Zerops' publis
 - **TypeScript** strict, ESM (`"type": "module"`) everywhere.
 - **Cloudflare Workers** — Worker + Durable Objects + Containers + D1 + Queues + R2. **Zerops** is the
   second target: it uses its platform API directly and has no runner (ADR-0003). Each installation
-  statically composes ONE provider bundle; the shared engine and control core depend only on
-  `@fabrika/provider-contract` (ADR-0011).
+  statically composes ONE provider bundle; each provider runs its own deploy steps, and the shared
+  control core depends only on `@fabrika/provider-contract` (ADR-0011).
 - `oblaka-iac` (CF provisioning DSL), `@buzola/*` (SPA router), `jose` (token signing).
 
 ## Commands
@@ -26,7 +26,7 @@ facts settled against a real account, several of which contradict Zerops' publis
 bun install
 bun run typecheck          # every package + scripts/
 bun run test               # all tests; isolates DOM-heavy agent-interface suites
-bun test packages/engine/src/__tests__/deploy.test.ts   # a single file
+bun test packages/provider-contract/src/__tests__/steps.test.ts   # a single file
 bun run lint               # biome
 bun run format             # dprint fmt  (format:check to verify only)
 
@@ -66,7 +66,6 @@ packages/
   operations operations-{contract,ui}  # Operations plane: ingest, grouping, triage, console views
   control control-contract        # Delivery control plane — Worker AND long-running Bun process
   dashboard                       # the unified console SPA (all three planes)
-  engine                          # provider-neutral deploy executor
   platform platform-node          # runtime PORTS · the Postgres/S3/Bun implementation set
   provider-{contract,cloudflare,zerops}       # authoring, deploy, and control per cloud
   installation-{contract,cloudflare,zerops}   # `fabrika platform init/plan/deploy` per cloud
@@ -139,7 +138,7 @@ contract note (`*-contract`), the substantial ones are:
 - `packages/builder/` — the guided application builder behind `fabrika builder …`, including its
   deterministic phase machine, local daemon/dashboard, agent skill, and stack decision catalog.
 - `packages/control/` — API/ACL, vault, secret resolution, run lifecycle, webhook (+ `DATABASE.md`
-  for its SQL and migration rules) · `packages/engine/` — the provider-neutral executor.
+  for its SQL and migration rules).
 - `packages/platform/` + `packages/platform-node/` — the runtime ports and their Postgres/S3/Bun
   implementations · `packages/provider-cloudflare/` + `packages/provider-zerops/` — the provider bundles.
 - `packages/installation-cloudflare/` + `packages/installation-zerops/` — platform installation, each

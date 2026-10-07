@@ -8,14 +8,12 @@ import type {
 	ProviderReconcileOutcome,
 	ProviderRegistrationInput,
 	ProviderSourceBinding,
-	RuntimeProviderRun,
 } from '@fabrika/provider-contract'
 import { ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { type ZeropsApi, ZeropsApiError, type ZeropsAppVersionStatus, type ZeropsServiceEnv } from '../api'
 import { useSharedPostgres } from '../authoring'
-import { zeropsTargetCodec } from '../codec'
-import { createZeropsControlProvider, type ZeropsControlProviderOptions, type ZeropsProviderExecutor, zeropsStoredTargetCodec } from '../control'
+import { createZeropsControlProvider, type ZeropsControlProviderOptions, zeropsStoredTargetCodec } from '../control'
 import {
 	encodeManagedCheckpoint,
 	type ManagedCheckpoint,
@@ -35,7 +33,7 @@ import {
 import { ZEROPS_SHARED_POSTGRES_CONNECTION_STRING, zeropsNamespacePreset, zeropsNamespaceTargetCodec } from '../namespace'
 import { zeropsSharedServiceHostname } from '../service-names'
 import type { ZeropsSourceClient, ZeropsSourceClientV2 } from '../source'
-import type { ZeropsAppConfig, ZeropsRuntimeTarget } from '../types'
+import type { ZeropsAppConfig } from '../types'
 import { CANONICAL_DESCRIPTOR, SOURCE_DESCRIPTOR } from './fixtures/descriptor'
 import { rejectedDescriptorCorpus } from './fixtures/descriptor-corpus'
 
@@ -265,18 +263,6 @@ const makeApi = (
 	}
 }
 
-const executeProvider: ZeropsProviderExecutor = async (provider, run) => {
-	const session = await provider.open(run)
-	try {
-		for (const step of session.plan.steps) {
-			await session.execute(step.id)
-		}
-		return { state: 'succeeded' }
-	} catch {
-		return { state: 'failed' }
-	}
-}
-
 const makeSource = (calls: string[] = []): ZeropsSourceClient => ({
 	resolve: async (input) => {
 		calls.push(`resolve:${input.repository.owner}/${input.repository.name}:${input.requestedRef}`)
@@ -300,13 +286,16 @@ const makeSource = (calls: string[] = []): ZeropsSourceClient => ({
 	},
 })
 
-type TestControlProviderOptions = Omit<ZeropsControlProviderOptions, 'execute' | 'source'> & {
-	readonly execute?: ZeropsProviderExecutor
+type TestControlProviderOptions = Omit<ZeropsControlProviderOptions, 'source'> & {
 	readonly source?: ZeropsSourceClient & Partial<ZeropsSourceClientV2>
 }
 
-const createTestControlProvider = (options: TestControlProviderOptions) =>
-	createZeropsControlProvider({ ...options, source: options.source ?? makeSource(), execute: options.execute ?? executeProvider })
+const createTestControlProvider = (options: TestControlProviderOptions) => {
+	const provider = createZeropsControlProvider({ ...options, source: options.source ?? makeSource() })
+	const normalize = provider.normalizeRegistration
+	if (normalize === undefined) throw new Error('the Zerops provider normalizes registrations')
+	return { ...provider, normalizeRegistration: normalize }
+}
 
 let recorded: Recorded
 beforeEach(() => {
@@ -899,7 +888,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 		}
 		const originalPayload = structuredClone(input.environment.artifact.payload)
 		const originalHash = await hashFabrikaManifest(manifest)
-		let runtimeHash: string | undefined
 		let checkpoint: JsonValue | undefined
 		let hookCalls = 0
 		const control = createTestControlProvider({
@@ -914,14 +902,6 @@ describe('Zerops ControlProvider lifecycle', () => {
 				const sizing: unknown = Reflect.get(artifact.target.importDocument.services[0] ?? {}, 'verticalAutoscaling')
 				if (typeof sizing !== 'object' || sizing === null || Array.isArray(sizing)) throw new Error('expected service sizing')
 				Reflect.set(sizing, 'minRam', 1)
-			},
-			execute: async (provider, run) => {
-				const artifact = zeropsArtifactCodec.decode(run.artifact.payload)
-				expect(artifact.app.pipeline).toEqual({ secrets: ['TOKEN'], vars: ['IMAGE_TAG'] })
-				expect(artifact.target).toEqual(manifest.target)
-				runtimeHash = await hashFabrikaManifest(artifact)
-				expect(runtimeHash).toBe(originalHash)
-				return executeProvider(provider, run)
 			},
 		})
 		const separatelyNormalizedArtifact = control.normalizeRegistration(input).environment.artifact
@@ -941,8 +921,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(separatelyNormalizedArtifact.payload).toEqual(originalPayload)
 		expect(recorded.imports[0]?.yaml).toBe(renderFabrikaImportYaml(manifest))
 		const state = await verifyManagedCheckpoint(checkpoint)
-		if (runtimeHash === undefined) throw new Error('expected runtime artifact hash')
-		expect(state.originalArtifactSha256).toBe(runtimeHash)
+		expect(state.originalArtifactSha256).toBe(originalHash)
 		expect(state.descriptorSha256).toBe(SOURCE_DESCRIPTOR.sha256)
 	})
 	for (const active of ['older-version', 'all-absent-version']) {
@@ -1176,18 +1155,16 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(recorded.calls.filter((call) => call.startsWith('cancelBuild'))).toHaveLength(1)
 	})
 
-	test('a failed engine wait with durable submission intent remains unresolved while UPLOADING', async () => {
+	test('a failed deploy wait with durable submission intent remains unresolved while UPLOADING', async () => {
 		const control = createTestControlProvider({
 			accessToken: 'token',
-			api: makeApi(recorded, () => 'UPLOADING'),
+			api: { ...makeApi(recorded, () => 'UPLOADING'), getProcess: async ({ processId }) => ({ id: processId, status: 'FAILED' }) },
 			sleep: async () => {},
-			execute: async (_provider, run) => {
-				await run.events.externalId('version-1', await checkpointFor('build_trigger_requested'))
-				return { state: 'failed' }
-			},
 		})
 		expect(await control.deploy(deployInput(recorded))).toEqual({ state: 'running' })
-		expect(recorded.calls).toEqual(['getAppVersion:version-1'])
+		expect(recorded.logs).toContain('✗ await-deploy: zerops: pipeline process process-1 is FAILED while app-version version-1 is UPLOADING')
+		expect(recorded.calls.slice(-2)).toEqual(['getAppVersion:version-1', 'getAppVersion:version-1'])
+		recorded.calls = []
 		if (control.cancel === undefined) throw new Error('missing cancellation')
 		expect(
 			await control.cancel({
@@ -1198,7 +1175,7 @@ describe('Zerops ControlProvider lifecycle', () => {
 				providerState: await checkpointFor('build_trigger_requested'),
 			}),
 		).toEqual({ state: 'pending' })
-		expect(recorded.calls).toEqual(['getAppVersion:version-1', 'getAppVersion:version-1'])
+		expect(recorded.calls).toEqual(['getAppVersion:version-1'])
 	})
 	test('refuses a descriptor that drifted after registration before it resolves the source', async () => {
 		const resolutions: unknown[] = []
@@ -1320,66 +1297,71 @@ describe('Zerops ControlProvider lifecycle', () => {
 	})
 
 	test('composes ephemeral credentials, runs beforeDeploy, and routes run events', async () => {
-		let observedRun: RuntimeProviderRun | undefined
+		const uploads: unknown[] = []
+		const reconciles: unknown[] = []
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			apiBaseUrl: 'https://api.test',
 			propustkaUrl: 'https://iam.test',
 			adminKey: 'px-secret',
 			api: makeApi(recorded),
+			source: {
+				...makeSource(),
+				upload: async (input) => {
+					uploads.push({ runId: input.runId, repository: input.repository, commitSha: input.commitSha })
+					return { runId: input.runId, appVersionId: input.appVersionId, commitSha: input.commitSha, descriptorSha256: input.descriptor.sha256 }
+				},
+			},
+			reconcileSchema: async ({ url, app, adminKey }) => {
+				reconciles.push({ url, app, adminKey })
+			},
 			beforeDeploy: async ({ appId, namespaceId, target }) => {
 				recorded.beforeDeploy.push(`${appId}:${namespaceId}:${target.projectId}:${target.proxyServiceId}`)
 				recorded.calls.push('beforeDeploy')
 			},
-			execute: async (provider, run) => {
-				observedRun = run
-				const session = await provider.open(run)
-				for (const step of session.plan.steps) {
-					await session.execute(step.id)
-				}
-				return { state: 'succeeded' }
-			},
 		})
-		const outcome = await control.deploy(deployInput(recorded))
-		if (observedRun === undefined) {
-			throw new Error('expected execute to observe a runtime run')
-		}
-		const runtimeTarget = zeropsTargetCodec.decode(observedRun.target.payload)
-		expect(runtimeTarget).toEqual({
-			managedAdmission: { owner: managedOwner, markerRecordId: 'marker-1' },
-			projectId: 'project-1',
-			serviceId: 'service-1',
-			accessToken: 'zt-secret',
-			source: {
-				runId: 'run-1',
-				repository: { owner: 'acme', name: 'notes' },
-				commitSha: COMMIT_SHA,
-			},
-			apiBaseUrl: 'https://api.test',
-			propustkaUrl: 'https://iam.test',
-			adminKey: 'px-secret',
+		const withSchema = compileFabrikaManifest({ ...config, schema: SCHEMA }, 'prod', SOURCE_DESCRIPTOR)
+		const outcome = await control.deploy({
+			...deployInput(recorded),
+			environment: environment({
+				artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(withSchema) },
+			}),
 		})
 		expect(outcome).toEqual({ state: 'succeeded' })
+		expect(recorded.imports.map((entry) => entry.projectId)).toEqual(['project-1'])
+		expect(uploads).toEqual([{ runId: 'run-1', repository: { owner: 'acme', name: 'notes' }, commitSha: COMMIT_SHA }])
+		expect(reconciles).toEqual([{ url: 'https://iam.test', app: 'notes', adminKey: 'px-secret' }])
 		expect(recorded.beforeDeploy).toEqual(['notes:apps-prod:project-1:proxy-service-1'])
 		expect(recorded.externalIds).toEqual(['version-1'])
 		expect(recorded.triggers).toEqual([])
 		expect(recorded.calls).toContain('createAppVersion:service-1')
 		expect(recorded.calls).toContain('buildAndDeployAppVersion:version-1')
 		expect(recorded.calls.indexOf('beforeDeploy')).toBeLessThan(recorded.calls.indexOf('importServices'))
-		expect(observedRun.cwd).toBe('apps/notes')
 		expect(recorded.logs.join('\n')).not.toContain('zt-secret')
 		expect(JSON.stringify(deployInput(recorded).environment)).not.toContain('zt-secret')
 	})
 
 	test('uses the same credential-free runtime coordinates for public and explicitly bound private repositories', async () => {
-		const observed: Array<ZeropsRuntimeTarget['source']> = []
+		const observed: unknown[] = []
+		const uploaded = (input: { runId: string; appVersionId: string; commitSha: string; descriptor: { sha256: string } }) => ({
+			runId: input.runId,
+			appVersionId: input.appVersionId,
+			commitSha: input.commitSha,
+			descriptorSha256: input.descriptor.sha256,
+		})
 		const control = createTestControlProvider({
 			accessToken: 'zt-secret',
 			api: makeApi(recorded),
-			execute: async (_provider, run) => {
-				const target = zeropsTargetCodec.decode(run.target.payload)
-				observed.push(target.source)
-				return { state: 'succeeded' }
+			source: {
+				...makeSource(),
+				upload: async (input) => {
+					observed.push({ runId: input.runId, repository: input.repository, commitSha: input.commitSha })
+					return uploaded(input)
+				},
+				uploadV2: async (input) => {
+					observed.push({ runId: input.runId, repository: input.repository, commitSha: input.commitSha, privateBinding: input.privateBinding })
+					return uploaded(input)
+				},
 			},
 		})
 

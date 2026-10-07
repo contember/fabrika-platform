@@ -8,7 +8,7 @@
 # docker build -f packages/runner-container/Dockerfile -t vozka-runner <repo-root>
 #
 # Only oblaka-iac and wrangler resolve from npm. oblaka-iac is pinned in docker/package.json to the
-# version that ships the programmatic `deploy()` the engine calls.
+# version that ships the programmatic `deploy()` the Cloudflare provider calls.
 
 FROM ubuntu:24.04
 
@@ -50,7 +50,6 @@ COPY packages/provider-contract ./packages/provider-contract
 COPY packages/proxy-contract ./packages/proxy-contract
 COPY packages/proxy-core ./packages/proxy-core
 COPY packages/provider-cloudflare ./packages/provider-cloudflare
-COPY packages/engine ./packages/engine
 COPY packages/platform ./packages/platform
 COPY packages/control-contract ./packages/control-contract
 COPY packages/operations-contract ./packages/operations-contract

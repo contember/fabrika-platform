@@ -1,16 +1,13 @@
-import type { ProviderDeployPlan, ProviderJobSpec } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-contract'
 import { Container, D1Database, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
 
 export type CloudflareStepKind = 'build' | 'provision-resources' | 'migrate' | 'deploy-worker' | 'reconcile-schema' | 'sync-secrets'
 
-export interface CloudflareJobSpec extends ProviderJobSpec {
+export interface CloudflareStep {
+	readonly id: string
 	readonly kind: CloudflareStepKind
-}
-
-export interface CloudflarePlan extends ProviderDeployPlan {
-	readonly steps: readonly CloudflareJobSpec[]
+	readonly description: string
 }
 
 export interface MigratableDatabase {
@@ -262,43 +259,36 @@ export const assertAuthoredGraph = (root: Worker, limits: AuthoredGraphLimits): 
 	visit(root)
 }
 
-export interface CloudflarePlanInput {
-	readonly appId: string
-	readonly env: string
-}
-
-export const buildPlan = (
-	config: CloudflareAppConfig,
-	input: CloudflarePlanInput,
-	worker: Worker,
-): CloudflarePlan => {
-	const steps: CloudflareJobSpec[] = []
-	let previous: string | undefined
-
-	const add = (spec: Omit<CloudflareJobSpec, 'dependsOn'>): void => {
-		steps.push(previous === undefined ? spec : { ...spec, dependsOn: [previous] })
-		previous = spec.id
-	}
+export const buildPlan = (config: CloudflareAppConfig, worker: Worker): readonly CloudflareStep[] => {
+	const steps: CloudflareStep[] = []
 
 	if (config.pipeline?.build !== undefined) {
-		add({ id: 'build', kind: 'build', description: `Build the Worker (\`${config.pipeline.build}\`)` })
+		steps.push({ id: 'build', kind: 'build', description: `Build the Worker (\`${config.pipeline.build}\`)` })
 	}
 
-	add({ id: 'provision-resources', kind: 'provision-resources', description: 'Provision Cloudflare resources via oblaka' })
+	steps.push({ id: 'provision-resources', kind: 'provision-resources', description: 'Provision Cloudflare resources via oblaka' })
 
 	for (const database of findMigratableDatabases(worker)) {
-		add({ id: `migrate:${database.binding}`, kind: 'migrate', description: `Apply D1 migrations for \`${database.binding}\` (${database.name})` })
+		steps.push({
+			id: `migrate:${database.binding}`,
+			kind: 'migrate',
+			description: `Apply D1 migrations for \`${database.binding}\` (${database.name})`,
+		})
 	}
 
-	add({ id: 'deploy-worker', kind: 'deploy-worker', description: 'Deploy the Worker (`wrangler deploy`)' })
+	steps.push({ id: 'deploy-worker', kind: 'deploy-worker', description: 'Deploy the Worker (`wrangler deploy`)' })
 
 	if (config.schema !== undefined) {
-		add({ id: 'reconcile-schema', kind: 'reconcile-schema', description: 'Report the authz schema for the control plane to reconcile into IAM' })
+		steps.push({ id: 'reconcile-schema', kind: 'reconcile-schema', description: 'Report the authz schema for the control plane to reconcile into IAM' })
 	}
 
 	if (config.pipeline?.secrets !== undefined && config.pipeline.secrets.length > 0) {
-		add({ id: 'sync-secrets', kind: 'sync-secrets', description: `Sync ${config.pipeline.secrets.length} secret(s) via \`wrangler secret put\`` })
+		steps.push({
+			id: 'sync-secrets',
+			kind: 'sync-secrets',
+			description: `Sync ${config.pipeline.secrets.length} secret(s) via \`wrangler secret put\``,
+		})
 	}
 
-	return { appId: input.appId, env: input.env, steps }
+	return steps
 }

@@ -144,8 +144,6 @@ export const cloudflareRunnerJobSchema = z.object({
 	}).optional(),
 }).refine((job) => job.dryRun === true || isCanonicalCommit(job.ref))
 
-export const isCloudflareRunnerJob = (value: unknown): value is CloudflareRunnerJob => cloudflareRunnerJobSchema.safeParse(value).success
-
 export interface CloudflareCloneSource {
 	readonly repoUrl: string
 }

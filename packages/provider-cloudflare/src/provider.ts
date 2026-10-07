@@ -1,11 +1,10 @@
-import { createProvider, type ProviderDeploySession, type TypedProviderRun } from '@fabrika/provider-contract'
+import { type DeployStepResult, type ProviderManagedEnvironment, runSteps } from '@fabrika/provider-contract'
 import { dirname, resolve } from 'node:path'
 import { type GeneratedConfig, Worker } from 'oblaka-iac'
 import { assertLiteralAssets } from './assets'
 import type { CloudflareAppConfig } from './authoring'
-import { type CloudflareArtifact, cloudflareArtifactCodec, type CloudflareTarget, cloudflareTargetCodec } from './codec'
 import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
-import { assertAuthoredGraph, buildPlan, type CloudflareJobSpec, findMigratableDatabases } from './plan'
+import { assertAuthoredGraph, buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 
 const CANCELLED = 'deploy cancelled'
 
@@ -15,11 +14,13 @@ const PLATFORM_CREDENTIAL_NAMES: readonly string[] = ['CLOUDFLARE_API_TOKEN', 'C
 const workerDir = (config: CloudflareAppConfig, cwd: string): string => resolve(cwd, config.pipeline?.workerDir ?? '.')
 
 /** The KV namespace oblaka keeps deploy state in. One definition, so the check and the call cannot drift. */
-const stateNamespace = (config: CloudflareAppConfig, target: CloudflareTarget): string => target.stateNamespace ?? `${config.id}-state`
+// An empty CLOUDFLARE_STATE_NAMESPACE means unset, never an empty oblaka state namespace.
+const stateNamespace = (config: CloudflareAppConfig, run: CloudflareDeployRun): string =>
+	run.stateNamespace === undefined || run.stateNamespace === '' ? `${config.id}-state` : run.stateNamespace
 
-const wranglerEnv = (target: CloudflareTarget): Record<string, string> => ({
-	CLOUDFLARE_API_TOKEN: target.apiToken,
-	CLOUDFLARE_ACCOUNT_ID: target.accountId,
+const wranglerEnv = (credentials: CloudflareCredentials): Record<string, string> => ({
+	CLOUDFLARE_API_TOKEN: credentials.apiToken,
+	CLOUDFLARE_ACCOUNT_ID: credentials.accountId,
 })
 
 const commandError = (label: string, result: { exitCode: number; stdout: string; stderr: string }): Error => {
@@ -33,9 +34,7 @@ const assertRunning = (signal: AbortSignal): void => {
 	}
 }
 
-type CloudflareRun = TypedProviderRun<CloudflareTarget, CloudflareArtifact>
-
-const withManagedEnvironment = (config: CloudflareAppConfig, authored: Worker, run: CloudflareRun): Worker => {
+const withManagedEnvironment = (config: CloudflareAppConfig, authored: Worker, run: CloudflareDeployRun): Worker => {
 	const managed = run.managedEnvironment
 	const present: Record<string, string> = {}
 	const declared = new Set(config.pipeline?.vars ?? [])
@@ -94,7 +93,8 @@ const migrationBinding = (binding: string): string => {
 
 interface StepEnv {
 	readonly config: CloudflareAppConfig
-	readonly run: CloudflareRun
+	readonly run: CloudflareDeployRun
+	readonly credentials: CloudflareCredentials
 	readonly worker: Worker
 	readonly dir: string
 	readonly cf: CloudflareCollaborators
@@ -102,16 +102,16 @@ interface StepEnv {
 	generatedConfigs: readonly GeneratedConfig[]
 }
 
-const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => {
-	const { config, run, worker, dir, cf } = env
-	const { target, signal, dryRun } = run
+const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
+	const { config, run, credentials, worker, dir, cf } = env
+	const { signal, dryRun } = run
 
 	switch (spec.kind) {
 		case 'build': {
 			const build = config.pipeline?.build
 			if (build === undefined) return
 			if (dryRun) {
-				run.events.log(`  [dry-run] would run build: \`${build}\` in ${dir}`)
+				run.log(`  [dry-run] would run build: \`${build}\` in ${dir}`)
 				return
 			}
 			assertRunning(signal)
@@ -123,16 +123,16 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 			assertRunning(signal)
 			const result = await cf.provision({
 				definition: worker,
-				accountId: target.accountId,
-				apiToken: target.apiToken,
+				accountId: credentials.accountId,
+				apiToken: credentials.apiToken,
 				env: run.env,
 				cwd: dir,
-				stateNamespace: stateNamespace(config, target),
+				stateNamespace: stateNamespace(config, run),
 				dryRun,
 			})
 			env.generatedConfigs = result.wranglerConfigs
 			const names = result.wranglerConfigs.map((item) => item.config.name ?? '(unnamed)').join(', ')
-			run.events.log(dryRun ? `  [dry-run] provisioned (plan-only): ${names}` : `  provisioned: ${names}`)
+			run.log(dryRun ? `  [dry-run] provisioned (plan-only): ${names}` : `  provisioned: ${names}`)
 			return
 		}
 		case 'migrate': {
@@ -142,7 +142,7 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 			const commandBinding = migrationBinding(database.binding)
 			const migrationDir = databaseOwnerDir(worker, database.binding, dir)
 			if (dryRun) {
-				run.events.log(`  [dry-run] would run: wrangler d1 migrations apply ${commandBinding} --remote in ${migrationDir}`)
+				run.log(`  [dry-run] would run: wrangler d1 migrations apply ${commandBinding} --remote in ${migrationDir}`)
 				return
 			}
 			assertRunning(signal)
@@ -150,7 +150,7 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 				command: 'wrangler',
 				args: ['d1', 'migrations', 'apply', commandBinding, '--remote'],
 				cwd: migrationDir,
-				env: wranglerEnv(target),
+				env: wranglerEnv(credentials),
 				signal,
 			})
 			if (result.exitCode !== 0) throw commandError(`wrangler d1 migrations apply ${commandBinding}`, result)
@@ -165,11 +165,11 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 			if (configs.length === 0) {
 				await assertAssets(dir)
 				if (dryRun) {
-					run.events.log(`  [dry-run] would run: wrangler deploy in ${dir}`)
+					run.log(`  [dry-run] would run: wrangler deploy in ${dir}`)
 					return
 				}
 				assertRunning(signal)
-				const result = await cf.runCommand({ command: 'wrangler', args: ['deploy'], cwd: dir, env: wranglerEnv(target), signal })
+				const result = await cf.runCommand({ command: 'wrangler', args: ['deploy'], cwd: dir, env: wranglerEnv(credentials), signal })
 				if (result.exitCode !== 0) throw commandError('wrangler deploy', result)
 				return
 			}
@@ -177,11 +177,11 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 				const generatedDir = dirname(resolve(dir, generated.path))
 				await assertAssets(generatedDir)
 				if (dryRun) {
-					run.events.log(`  [dry-run] would run: wrangler deploy in ${generatedDir}`)
+					run.log(`  [dry-run] would run: wrangler deploy in ${generatedDir}`)
 					continue
 				}
 				assertRunning(signal)
-				const result = await cf.runCommand({ command: 'wrangler', args: ['deploy'], cwd: generatedDir, env: wranglerEnv(target), signal })
+				const result = await cf.runCommand({ command: 'wrangler', args: ['deploy'], cwd: generatedDir, env: wranglerEnv(credentials), signal })
 				if (result.exitCode !== 0) throw commandError('wrangler deploy', result)
 			}
 			return
@@ -190,9 +190,9 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 			if (config.schema === undefined) return
 			const returnOrigins = run.returnOrigins !== undefined && run.returnOrigins.length > 0 ? run.returnOrigins : undefined
 			if (dryRun) {
-				run.events.log(`  [dry-run] would report the authz schema for \`${config.id}\` to the control plane`)
+				run.log(`  [dry-run] would report the authz schema for \`${config.id}\` to the control plane`)
 				if (returnOrigins !== undefined) {
-					run.events.log(`  [dry-run] would register return origins for \`${config.id}\`: ${returnOrigins.join(', ')}`)
+					run.log(`  [dry-run] would register return origins for \`${config.id}\`: ${returnOrigins.join(', ')}`)
 				}
 				return
 			}
@@ -208,7 +208,7 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 				const value = run.secrets[name]
 				if (value === undefined) throw new Error(`sync-secrets: missing value for secret \`${name}\` (not in run.secrets)`)
 				if (dryRun) {
-					run.events.log(`  [dry-run] would run: wrangler secret put ${name} (value piped from run.secrets)`)
+					run.log(`  [dry-run] would run: wrangler secret put ${name} (value piped from run.secrets)`)
 					continue
 				}
 				assertRunning(signal)
@@ -216,7 +216,7 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 					command: 'wrangler',
 					args: ['secret', 'put', name],
 					cwd: secretsDir,
-					env: wranglerEnv(target),
+					env: wranglerEnv(credentials),
 					stdin: value,
 					signal,
 				})
@@ -227,7 +227,12 @@ const runStep = async (spec: CloudflareJobSpec, env: StepEnv): Promise<void> => 
 	}
 }
 
-export interface CloudflareProviderOptions {
+type CloudflareCredentials = Pick<CloudflareDeployerOptions, 'accountId' | 'apiToken'>
+
+export interface CloudflareDeployerOptions {
+	readonly accountId: string
+	readonly apiToken: string
+	readonly collaborators?: CloudflareCollaborators
 	/**
 	 * `refuse` (the default) rejects a config that names one of fabrika's own resources. Only the
 	 * operator deploying fabrika itself passes `allow`; a checkout is never trusted with it.
@@ -235,44 +240,59 @@ export interface CloudflareProviderOptions {
 	readonly platformResources?: 'refuse' | 'allow'
 }
 
-export const createCloudflareProvider = (
-	cf: CloudflareCollaborators = defaultCloudflareCollaborators,
-	options: CloudflareProviderOptions = {},
-) =>
-	createProvider({
-		id: 'cloudflare',
-		target: cloudflareTargetCodec,
-		artifact: cloudflareArtifactCodec,
-		open: async (run): Promise<ProviderDeploySession> => {
-			const loaded = await cf.loadConfig(run.cwd, run.artifact.configPath)
-			if (loaded.config.id !== run.appId) {
-				throw new Error(`Cloudflare config declares app "${loaded.config.id}", expected "${run.appId}"`)
-			}
-			const worker = withManagedEnvironment(
-				loaded.config,
-				loaded.config.resources({ env: run.env, domain: run.domain }),
-				run,
-			)
-			const platformResources = options.platformResources ?? 'refuse'
-			assertAuthoredGraph(worker, {
-				env: run.env,
-				...(run.domain === undefined ? {} : { domain: run.domain }),
-				stateNamespace: stateNamespace(loaded.config, run.target),
-				platformResources,
-			})
-			const dir = workerDir(loaded.config, loaded.cwd)
-			const plan = buildPlan(loaded.config, { appId: run.appId, env: run.env }, worker)
-			const byId = new Map(plan.steps.map((step): [string, CloudflareJobSpec] => [step.id, step]))
-			const env: StepEnv = { config: loaded.config, run, worker, dir, cf, platformResources, generatedConfigs: [] }
-			return {
-				plan,
-				execute: async (stepId): Promise<void> => {
-					const spec = byId.get(stepId)
-					if (spec === undefined) throw new Error(`cloudflare: no step \`${stepId}\` in this plan`)
-					await runStep(spec, env)
-				},
-			}
-		},
-	})
+export interface CloudflareDeployRun {
+	readonly appId: string
+	readonly env: string
+	readonly domain?: string
+	/** Every origin IAM may hand this app a session at; app-wide, because IAM's registry is keyed by app id. */
+	readonly returnOrigins?: readonly string[]
+	readonly cwd: string
+	readonly configPath: string
+	readonly stateNamespace?: string
+	readonly secrets: Readonly<Record<string, string>>
+	readonly vars: Readonly<Record<string, string>>
+	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
+	readonly managedEnvironment: ProviderManagedEnvironment
+	readonly dryRun: boolean
+	readonly signal: AbortSignal
+	readonly log: (line: string) => void
+}
 
-export const cloudflareProvider = createCloudflareProvider()
+export interface CloudflareDeployResult {
+	readonly appId: string
+	readonly env: string
+	readonly status: 'succeeded' | 'failed'
+	readonly steps: readonly DeployStepResult[]
+}
+
+export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => async (run: CloudflareDeployRun): Promise<CloudflareDeployResult> => {
+	const cf = options.collaborators ?? defaultCloudflareCollaborators
+	const loaded = await cf.loadConfig(run.cwd, run.configPath)
+	if (loaded.config.id !== run.appId) {
+		throw new Error(`Cloudflare config declares app "${loaded.config.id}", expected "${run.appId}"`)
+	}
+	const worker = withManagedEnvironment(
+		loaded.config,
+		loaded.config.resources({ env: run.env, domain: run.domain }),
+		run,
+	)
+	const platformResources = options.platformResources ?? 'refuse'
+	assertAuthoredGraph(worker, {
+		env: run.env,
+		...(run.domain === undefined ? {} : { domain: run.domain }),
+		stateNamespace: stateNamespace(loaded.config, run),
+		platformResources,
+	})
+	const env: StepEnv = {
+		config: loaded.config,
+		run,
+		credentials: { accountId: options.accountId, apiToken: options.apiToken },
+		worker,
+		dir: workerDir(loaded.config, loaded.cwd),
+		cf,
+		platformResources,
+		generatedConfigs: [],
+	}
+	const result = await runSteps(buildPlan(loaded.config, worker), run, (step) => runStep(step, env))
+	return { appId: run.appId, env: run.env, ...result }
+}

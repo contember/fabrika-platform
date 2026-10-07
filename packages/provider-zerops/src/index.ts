@@ -35,7 +35,6 @@ export { defineApp, isZeropsAppConfig, useSharedPostgres, zeropsSharedServiceHos
 export type { ZeropsAuthoredAppConfig } from './authoring'
 export { parseZeropsCliArgs } from './cli-args'
 export type { ZeropsCliArgs } from './cli-args'
-export { zeropsTargetCodec } from './codec'
 export { defaultSleep, defaultZeropsCollaborators } from './collaborators'
 export type { Sleeper, ZeropsCollaboratorFactory, ZeropsCollaborators } from './collaborators'
 export {
@@ -50,7 +49,7 @@ export {
 } from './compile'
 export type { CompileInput, ZeropsImportDocument, ZeropsJsonImportDocument } from './compile'
 export { createZeropsControlProvider, zeropsStoredTargetCodec } from './control'
-export type { ZeropsBeforeDeploy, ZeropsBeforeDeployInput, ZeropsControlProviderOptions, ZeropsProviderExecutor, ZeropsStoredTarget } from './control'
+export type { ZeropsBeforeDeploy, ZeropsBeforeDeployInput, ZeropsControlProviderOptions, ZeropsStoredTarget } from './control'
 export { type PreparedZeropsDescriptor, prepareZeropsDescriptor } from './descriptor'
 export {
 	assertFabrikaManifestCoordinates,
@@ -100,9 +99,9 @@ export type {
 } from './namespace'
 export { postgresSchema as zeropsNamespacePostgresSchema } from './namespace/codec'
 export { buildZeropsPlan, resolveDeployHostname } from './plan'
-export type { ZeropsJobSpec, ZeropsPlan, ZeropsStepKind } from './plan'
-export { CANCELLED, createZeropsProvider, interpolateManifest, zeropsProvider } from './provider'
-export type { ZeropsProvider } from './provider'
+export type { ZeropsStep, ZeropsStepKind } from './plan'
+export { CANCELLED, createZeropsDeployer, interpolateManifest } from './provider'
+export type { ZeropsDeployResult, ZeropsDeployRun } from './provider'
 export type * from './schema.generated'
 export {
 	buildZeropsSourceCancelRequest,

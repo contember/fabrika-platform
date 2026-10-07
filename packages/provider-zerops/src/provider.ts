@@ -10,12 +10,12 @@
 // cancel the build it started rather than leaving it running.
 
 import {
-	createProvider,
+	type DeployStepResult,
 	type JsonValue,
-	type ProviderDeploySession,
 	ProviderInvocationAbort,
-	type ProviderModule,
-	type TypedProviderRun,
+	type ProviderManagedEnvironment,
+	type ProviderRunEvents,
+	runSteps,
 } from '@fabrika/provider-contract'
 import {
 	waitForProcess,
@@ -27,7 +27,6 @@ import {
 	type ZeropsLogAccess,
 	type ZeropsProcess,
 } from './api'
-import { zeropsTargetCodec } from './codec'
 import { defaultSleep, defaultZeropsCollaborators, type ZeropsCollaboratorFactory, type ZeropsCollaborators } from './collaborators'
 import { assertZeropsInvariants, renderYaml } from './compile'
 import { prepareZeropsDescriptor } from './descriptor'
@@ -50,16 +49,36 @@ import {
 	hashFabrikaManifest,
 	manifestServiceHostnames,
 	verifyZeropsArtifactSourceDescriptor,
-	zeropsArtifactCodec,
 } from './manifest'
-import { buildZeropsPlan, resolveDeployHostname, type ZeropsJobSpec, type ZeropsPlan } from './plan'
+import { buildZeropsPlan, resolveDeployHostname, type ZeropsStep } from './plan'
 import { allowedReferenceHosts, foreignReferenceHost } from './service-references'
 import type { ZeropsSourceUploadInputV2, ZeropsSourceUploadResult } from './source'
 import type { ZeropsRunState, ZeropsRuntimeSource, ZeropsRuntimeTarget } from './types'
 
 export const CANCELLED = 'deploy cancelled'
 
-type ZeropsRun = TypedProviderRun<ZeropsRuntimeTarget, FabrikaManifest>
+export interface ZeropsDeployRun {
+	readonly appId: string
+	readonly env: string
+	/** Every origin IAM may hand this app a session at; app-wide, because IAM's registry is keyed by app id. */
+	readonly returnOrigins?: readonly string[]
+	readonly secrets: Readonly<Record<string, string>>
+	readonly vars: Readonly<Record<string, string>>
+	/** Platform-owned runtime configuration, separate from operator-managed application vars. */
+	readonly managedEnvironment: ProviderManagedEnvironment
+	readonly target: ZeropsRuntimeTarget
+	readonly artifact: FabrikaManifest
+	readonly dryRun: boolean
+	readonly signal: AbortSignal
+	readonly events: ProviderRunEvents
+}
+
+export interface ZeropsDeployResult {
+	readonly appId: string
+	readonly env: string
+	readonly status: 'succeeded' | 'failed'
+	readonly steps: readonly DeployStepResult[]
+}
 
 /** The keyed upload a private source takes; the binding itself rides on the run's runtime source. */
 export interface ZeropsSourceTransportRouting {
@@ -238,7 +257,7 @@ const terminalFailure = (version: ZeropsAppVersion): string => {
 
 /** Everything one step's executor needs, bundled so the per-kind handlers stay small. */
 interface StepEnv {
-	run: ZeropsRun
+	run: ZeropsDeployRun
 	zerops: ZeropsCollaborators
 	/** The compiled import document + its YAML text, materialized once in `open()`. */
 	compiled: { yaml: string; hostnames: string[] }
@@ -408,8 +427,8 @@ const awaitVersion = async (env: StepEnv, appVersionId: string, processId: strin
 	}
 }
 
-/** Run one step's effect. Resolves on success, throws on failure (caught + recorded by the engine). */
-const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
+/** Run one step's effect. Resolves on success, throws on failure (caught + recorded by `runSteps`). */
+const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 	const { run, zerops, compiled, log, signal, dryRun, state } = env
 	const { target, artifact } = run
 
@@ -618,74 +637,55 @@ const runStep = async (spec: ZeropsJobSpec, env: StepEnv): Promise<void> => {
 }
 
 /**
- * Build a Zerops driver over a specific collaborator FACTORY. Production passes the real one; tests pass
+ * Build a Zerops deployer over a specific collaborator FACTORY. Production passes the real one; tests pass
  * `() => fakes`, which is the whole testability property — one seam, all of this driver's effects.
  *
  * A factory rather than a bundle because the Zerops client is authenticated with a token that lives on the
  * run's target, so it cannot be constructed once at module load the way Cloudflare's bundle is.
  */
-export type ZeropsProvider = ProviderModule<'zerops', ZeropsRuntimeTarget, FabrikaManifest>
-
-/** Construct an independently testable Zerops provider against one collaborator factory. */
-export const createZeropsProvider = (
+export const createZeropsDeployer = (
 	collaborators: ZeropsCollaboratorFactory = defaultZeropsCollaborators,
 	sourceTransport?: ZeropsSourceTransportRouting,
-): ZeropsProvider =>
-	createProvider({
-		id: 'zerops',
-		target: zeropsTargetCodec,
-		artifact: zeropsArtifactCodec,
-		open: async (run): Promise<ProviderDeploySession> => {
-			if (run.artifact.app.id !== run.appId) {
-				throw new Error(`zerops: artifact app drift: expected \`${run.appId}\`, got \`${run.artifact.app.id}\``)
-			}
-			if (run.artifact.app.env !== run.env) {
-				throw new Error(`zerops: artifact environment drift: expected \`${run.env}\`, got \`${run.artifact.app.env}\``)
-			}
-			assertAuthoredManagedInputs({
-				variableNames: Object.keys(run.vars),
-				secretNames: Object.keys(run.secrets),
-				variableValues: run.vars,
-				secretValues: run.secrets,
-			})
-			const managedValues = parseManagedValues(run.managedEnvironment)
-			if (!run.dryRun) {
-				const admission = run.target.managedAdmission
-				if (
-					admission === undefined || admission.owner.appId !== run.appId || admission.owner.environment !== run.env
-					|| admission.owner.hostname !== run.artifact.target.deployService
-				) throw new Error('zerops: runtime requires matching managed admission')
-			}
-			const hostnames = manifestServiceHostnames(run.artifact)
-			const document = interpolateManifest(run.artifact.target.importDocument, run.artifact.app.pipeline.vars, run.vars, hostnames)
-			const compiled = { yaml: renderYaml(document), hostnames }
-			resolveDeployHostname(run.artifact)
-			const plan: ZeropsPlan = buildZeropsPlan(run.artifact, run.target, run.env)
-			const env: StepEnv = {
-				run,
-				zerops: collaborators(run.target),
-				compiled,
-				log: run.events.log,
-				signal: run.signal,
-				dryRun: run.dryRun,
-				...(sourceTransport === undefined ? {} : { sourceTransport }),
-				state: {},
-				managedValues,
-				originalArtifactSha256: await hashFabrikaManifest(run.artifact),
-			}
-			const byId = new Map(plan.steps.map((step): [string, ZeropsJobSpec] => [step.id, step]))
-
-			return Promise.resolve({
-				plan,
-				execute: async (stepId: string): Promise<void> => {
-					const spec = byId.get(stepId)
-					if (spec === undefined) {
-						throw new Error(`zerops: no step \`${stepId}\` in this plan`)
-					}
-					await runStep(spec, env)
-				},
-			})
-		},
+) =>
+async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
+	if (run.artifact.app.id !== run.appId) {
+		throw new Error(`zerops: artifact app drift: expected \`${run.appId}\`, got \`${run.artifact.app.id}\``)
+	}
+	if (run.artifact.app.env !== run.env) {
+		throw new Error(`zerops: artifact environment drift: expected \`${run.env}\`, got \`${run.artifact.app.env}\``)
+	}
+	assertAuthoredManagedInputs({
+		variableNames: Object.keys(run.vars),
+		secretNames: Object.keys(run.secrets),
+		variableValues: run.vars,
+		secretValues: run.secrets,
 	})
-
-export const zeropsProvider: ZeropsProvider = createZeropsProvider()
+	const managedValues = parseManagedValues(run.managedEnvironment)
+	if (!run.dryRun) {
+		const admission = run.target.managedAdmission
+		if (
+			admission === undefined || admission.owner.appId !== run.appId || admission.owner.environment !== run.env
+			|| admission.owner.hostname !== run.artifact.target.deployService
+		) throw new Error('zerops: runtime requires matching managed admission')
+	}
+	const hostnames = manifestServiceHostnames(run.artifact)
+	const document = interpolateManifest(run.artifact.target.importDocument, run.artifact.app.pipeline.vars, run.vars, hostnames)
+	const compiled = { yaml: renderYaml(document), hostnames }
+	resolveDeployHostname(run.artifact)
+	const env: StepEnv = {
+		run,
+		zerops: collaborators(run.target),
+		compiled,
+		log: run.events.log,
+		signal: run.signal,
+		dryRun: run.dryRun,
+		...(sourceTransport === undefined ? {} : { sourceTransport }),
+		state: {},
+		managedValues,
+		originalArtifactSha256: await hashFabrikaManifest(run.artifact),
+	}
+	const steps = buildZeropsPlan(run.artifact, run.target)
+	const options = { appId: run.appId, env: run.env, dryRun: run.dryRun, signal: run.signal, log: run.events.log }
+	const result = await runSteps(steps, options, (step) => runStep(step, env))
+	return { appId: run.appId, env: run.env, ...result }
+}

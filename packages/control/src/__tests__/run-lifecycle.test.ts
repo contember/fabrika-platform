@@ -617,6 +617,23 @@ describe('provider-neutral run lifecycle', () => {
 		expect(lock.held.size).toBe(0)
 	})
 
+	test('deploys the stored registration unchanged when the provider does not normalize registrations', async () => {
+		const { db } = createHarness()
+		const runId = await seedRun(db)
+		const inputs: ProviderDeployInput[] = []
+		const { normalizeRegistration: _normalize, ...provider } = makeProvider(inputs, { state: 'succeeded', exitCode: 0 })
+
+		expect(await executeDeploy(makeDeps(db, provider), { runId, dryRun: true })).toEqual({ runId, status: 'succeeded' })
+		expect(inputs.map((input) => input.environment)).toEqual([{
+			appId: 'app',
+			env: 'prod',
+			domain: 'app.example.com',
+			publicOrigin: 'https://public.example.com',
+			target: envelope('memory', 'target'),
+			artifact: envelope('memory', 'artifact'),
+		}])
+	})
+
 	test('persists provider log lines as ordered NDJSON readable through the run log use case', async () => {
 		const { db } = createHarness()
 		const runId = await seedRun(db)

@@ -1,5 +1,16 @@
-import type { ProviderManagedEnvironment, ProviderRunEvents } from './deploy'
 import type { JsonValue, ProviderEnvelope } from './json'
+
+/** Events whose persistence and presentation belong to the control plane. */
+export interface ProviderRunEvents {
+	log(line: string): void
+	/** Atomically persist the external operation id and, when supplied, its credential-free resume state. */
+	externalId(id: string, state?: JsonValue): Promise<void>
+	/** Replace the credential-free resume state while this run remains active. */
+	checkpoint(state: JsonValue): Promise<void>
+}
+
+/** Complete platform-owned runtime state. A null value removes the key from persistent targets. */
+export type ProviderManagedEnvironment = Readonly<Record<string, string | null>>
 
 /** Provider-neutral coordinates for obtaining one app revision. */
 export interface ProviderSource {
@@ -326,7 +337,8 @@ export interface ProviderNamespaceCapabilities {
  */
 export interface ControlProvider {
 	readonly id: string
-	normalizeRegistration(input: ProviderRegistrationInput): ProviderRegistration
+	/** Absent means core stores the registration as submitted. */
+	normalizeRegistration?(input: ProviderRegistrationInput): ProviderRegistration
 	resolveSource?(input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution>
 	deploy(input: ProviderDeployInput): Promise<ProviderDeployOutcome>
 	cancel?(input: ProviderCancelInput): Promise<ProviderCancelOutcome>

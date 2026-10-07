@@ -14,3 +14,13 @@ export interface ProviderCodec<T> {
 	encode(value: T): JsonValue
 	decode(payload: JsonValue): T
 }
+
+export const decodeEnvelope = <T>(kind: string, provider: string, envelope: ProviderEnvelope, codec: ProviderCodec<T>): T => {
+	if (envelope.provider !== provider) {
+		throw new Error(`${kind} belongs to provider "${envelope.provider}", expected "${provider}"`)
+	}
+	if (envelope.version !== codec.version) {
+		throw new Error(`${kind} schema version ${envelope.version} is not supported by provider "${provider}"`)
+	}
+	return codec.decode(envelope.payload)
+}

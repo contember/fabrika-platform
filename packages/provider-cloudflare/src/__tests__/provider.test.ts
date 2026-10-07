@@ -5,8 +5,16 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { D1Database, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
-import type { CloudflareAppConfig, CloudflareAppConfigInput, CloudflareCollaborators, CommandResult, CommandSpec, ProvisionInput } from '..'
-import { cloudflareArtifact, createCloudflareProvider, defaultCloudflareCollaborators, defineApp } from '..'
+import type {
+	CloudflareAppConfig,
+	CloudflareAppConfigInput,
+	CloudflareCollaborators,
+	CommandResult,
+	CommandRunner,
+	CommandSpec,
+	ProvisionInput,
+} from '..'
+import { createCloudflareDeployer, defaultCloudflareCollaborators, defineApp } from '..'
 
 interface Recorded {
 	readonly commands: CommandSpec[]
@@ -37,6 +45,7 @@ const makeCollaborators = (
 	appConfig: CloudflareAppConfig,
 	commandResult: (spec: CommandSpec) => CommandResult = () => ({ exitCode: 0, stdout: '', stderr: '' }),
 	checkoutDir = '/repo/app',
+	runCommand?: CommandRunner,
 ): CloudflareCollaborators => ({
 	loadConfig: async (_cwd, configPath) => {
 		expect(configPath).toBe('fabrika.config.ts')
@@ -44,7 +53,7 @@ const makeCollaborators = (
 	},
 	runCommand: async (spec) => {
 		rec.commands.push(spec)
-		return commandResult(spec)
+		return runCommand === undefined ? commandResult(spec) : runCommand(spec)
 	},
 	provision: async (input) => {
 		rec.provisions.push(input)
@@ -67,7 +76,7 @@ const makeCollaborators = (
 	},
 })
 
-const open = (
+const deploy = (
 	rec: Recorded,
 	appConfig: CloudflareAppConfig,
 	options: {
@@ -75,6 +84,7 @@ const open = (
 		readonly secrets?: Readonly<Record<string, string>>
 		readonly signal?: AbortSignal
 		readonly commandResult?: (spec: CommandSpec) => CommandResult
+		readonly runCommand?: CommandRunner
 		readonly appId?: string
 		readonly managedEnvironment?: Readonly<Record<string, string | null>>
 		readonly returnOrigins?: readonly string[]
@@ -84,42 +94,31 @@ const open = (
 		readonly env?: string
 		readonly checkoutDir?: string
 	} = {},
-) => {
-	const provider = createCloudflareProvider(makeCollaborators(rec, appConfig, options.commandResult, options.checkoutDir), {
+) =>
+	createCloudflareDeployer({
+		accountId: 'acc-1',
+		apiToken: 'tok-1',
+		collaborators: makeCollaborators(rec, appConfig, options.commandResult, options.checkoutDir, options.runCommand),
 		...(options.platformResources === undefined ? {} : { platformResources: options.platformResources }),
-	})
-	return provider.runtime.open({
+	})({
 		appId: options.appId ?? 'demo',
 		env: options.env ?? 'stage',
 		domain: options.domain ?? 'stage.example.com',
 		...(options.returnOrigins === undefined ? {} : { returnOrigins: options.returnOrigins }),
 		cwd: '/repo',
+		configPath: 'fabrika.config.ts',
+		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
 		secrets: options.secrets ?? {},
 		vars: {},
 		managedEnvironment: options.managedEnvironment ?? {},
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
-		events: {
-			log: (line) => {
-				rec.logs.push(line)
-			},
-			externalId: async () => {},
-			checkpoint: async () => {},
+		log: (line) => {
+			rec.logs.push(line)
 		},
-		target: provider.encodeTarget({
-			accountId: 'acc-1',
-			apiToken: 'tok-1',
-			...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
-		}),
-		artifact: provider.encodeArtifact(cloudflareArtifact()),
 	})
-}
 
-const executePlan = async (session: Awaited<ReturnType<typeof open>>): Promise<void> => {
-	for (const step of session.plan.steps) {
-		await session.execute(step.id)
-	}
-}
+const stepError = (result: Awaited<ReturnType<typeof deploy>>, id: string): string | undefined => result.steps.find((step) => step.id === id)?.error
 
 const fixtures: string[] = []
 
@@ -149,23 +148,9 @@ afterEach(async () => {
 })
 
 describe('Cloudflare provider', () => {
-	test('encodes the target and checkout recipe as versioned provider envelopes', () => {
-		const provider = createCloudflareProvider(makeCollaborators(rec, config()))
-		expect(provider.encodeTarget({ accountId: 'acc', apiToken: 'tok', stateNamespace: 'legacy' })).toEqual({
-			provider: 'cloudflare',
-			version: 1,
-			payload: { accountId: 'acc', apiToken: 'tok', stateNamespace: 'legacy' },
-		})
-		expect(provider.encodeArtifact(cloudflareArtifact('deploy/fabrika.config.ts'))).toEqual({
-			provider: 'cloudflare',
-			version: 1,
-			payload: { configPath: 'deploy/fabrika.config.ts' },
-		})
-	})
-
 	test('merges platform-managed values into the root Worker without exposing them in logs', async () => {
 		const dsn = 'https://operations-public-key@errors.test/1'
-		const session = await open(rec, config(), {
+		await deploy(rec, config(), {
 			dryRun: true,
 			managedEnvironment: {
 				FABRIKA_OPERATIONS_DSN: dsn,
@@ -173,7 +158,6 @@ describe('Cloudflare provider', () => {
 				FABRIKA_SERVICE_KEY: null,
 			},
 		})
-		await session.execute('provision-resources')
 		expect(rec.provisionedVars[0]).toMatchObject({
 			FABRIKA_OPERATIONS_DSN: dsn,
 			FABRIKA_RELEASE: 'fabrika/demo/stage/default/commit',
@@ -195,7 +179,7 @@ describe('Cloudflare provider', () => {
 					vars: { FABRIKA_OPERATIONS_DSN: 'authored' },
 				}),
 		})
-		await expect(open(rec, authored, { managedEnvironment: { FABRIKA_OPERATIONS_DSN: dsn } })).rejects.toThrow(
+		await expect(deploy(rec, authored, { managedEnvironment: { FABRIKA_OPERATIONS_DSN: dsn } })).rejects.toThrow(
 			'application variable `FABRIKA_OPERATIONS_DSN` is managed by Fabrika',
 		)
 		expect(rec.logs.join('\n')).not.toContain(dsn)
@@ -206,8 +190,7 @@ describe('Cloudflare provider', () => {
 		const proxy = new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: app }, main: 'proxy-worker.ts' })
 		const authored = config({ resources: () => proxy })
 		const dsn = 'https://operations-public-key@errors.test/1'
-		const session = await open(rec, authored, { dryRun: true, managedEnvironment: { FABRIKA_OPERATIONS_DSN: dsn } })
-		await session.execute('provision-resources')
+		await deploy(rec, authored, { dryRun: true, managedEnvironment: { FABRIKA_OPERATIONS_DSN: dsn } })
 		expect(rec.provisionedVars[0]).not.toHaveProperty('FABRIKA_OPERATIONS_DSN')
 		expect(rec.applicationVars[0]).toMatchObject({ FABRIKA_OPERATIONS_DSN: dsn })
 	})
@@ -222,9 +205,9 @@ describe('Cloudflare provider', () => {
 		})
 		const proxy = new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: app }, main: 'proxy-worker.ts' })
 		const authored = config({ resources: () => proxy, pipeline: { workerDir: 'worker', build: 'bun run build', secrets: ['API_KEY'] } })
-		const session = await open(rec, authored, { secrets: { API_KEY: 'secret-value' } })
-		expect(session.plan.steps.map((step) => step.id)).toEqual(['build', 'provision-resources', 'migrate:APP.DB', 'deploy-worker', 'sync-secrets'])
-		await executePlan(session)
+		const result = await deploy(rec, authored, { secrets: { API_KEY: 'secret-value' } })
+		expect(result.steps.map((step) => step.id)).toEqual(['build', 'provision-resources', 'migrate:APP.DB', 'deploy-worker', 'sync-secrets'])
+		expect(result.status).toBe('succeeded')
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
 			['sh', '-c', 'bun run build'],
 			['wrangler', 'd1', 'migrations', 'apply', 'DB', '--remote'],
@@ -251,18 +234,16 @@ describe('Cloudflare provider', () => {
 					bindings: { DB: new D1Database({ name: 'main', migrationsDir: './migrations' }) },
 				}),
 		})
-		const session = await open(rec, app, { secrets: { API_KEY: 'secret' } })
+		const result = await deploy(rec, app, { secrets: { API_KEY: 'secret' } })
 
-		expect(session.plan.steps.map((step) => step.kind)).toEqual([
+		expect(result.steps.map((step) => step.id)).toEqual([
 			'build',
 			'provision-resources',
-			'migrate',
+			'migrate:DB',
 			'deploy-worker',
 			'reconcile-schema',
 			'sync-secrets',
 		])
-		expect(session.plan.steps[1]?.dependsOn).toEqual(['build'])
-		expect(session.plan.steps[3]?.dependsOn).toEqual(['migrate:DB'])
 	})
 
 	test('executes the plan through the provider collaborator bundle', async () => {
@@ -271,10 +252,11 @@ describe('Cloudflare provider', () => {
 			schema: { scopes: [], actions: [], roles: {} },
 			pipeline: { workerDir: 'worker', build: 'bun run build', secrets: ['API_KEY'] },
 		})
-		const session = await open(rec, app, { secrets: { API_KEY: 'secret-value' }, signal: controller.signal })
-		await executePlan(session)
+		await deploy(rec, app, { secrets: { API_KEY: 'secret-value' }, signal: controller.signal })
 
 		expect(rec.provisions).toHaveLength(1)
+		expect(rec.provisions[0]?.accountId).toBe('acc-1')
+		expect(rec.provisions[0]?.apiToken).toBe('tok-1')
 		expect(rec.provisions[0]?.cwd).toBe('/repo/app/worker')
 		expect(rec.provisions[0]?.stateNamespace).toBe('demo-state')
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([
@@ -282,22 +264,30 @@ describe('Cloudflare provider', () => {
 			['wrangler', 'deploy'],
 			['wrangler', 'secret', 'put', 'API_KEY'],
 		])
+		expect(rec.commands[1]?.env).toEqual({ CLOUDFLARE_API_TOKEN: 'tok-1', CLOUDFLARE_ACCOUNT_ID: 'acc-1' })
 		expect(rec.commands[2]?.stdin).toBe('secret-value')
 		expect(rec.outcomes).toEqual([{ iamReconcile: { app: 'demo', schemaJson: '{"scopes":[],"actions":[],"roles":{}}' } }])
 	})
 
 	test('reports the authz schema for the control plane instead of calling IAM from the container', async () => {
 		const schema = { scopes: [{ type: 'team' }], actions: [{ action: 'notes.read' }], roles: {} }
-		const session = await open(rec, config({ schema }), { returnOrigins: ['https://demo.example.com'] })
-		await session.execute('reconcile-schema')
+		await deploy(rec, config({ schema }), { returnOrigins: ['https://demo.example.com'] })
 
 		expect(rec.outcomes).toEqual([{ iamReconcile: { app: 'demo', schemaJson: JSON.stringify(schema) } }])
-		expect(rec.commands).toHaveLength(0)
+		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([['wrangler', 'deploy']])
 	})
 
 	test('refuses to report an outcome once the run is cancelled', async () => {
-		const session = await open(rec, config({ schema: { scopes: [], actions: [], roles: {} } }), { signal: AbortSignal.abort() })
-		await expect(session.execute('reconcile-schema')).rejects.toThrow('deploy cancelled')
+		const controller = new AbortController()
+		const result = await deploy(rec, config({ schema: { scopes: [], actions: [], roles: {} } }), {
+			signal: controller.signal,
+			commandResult: () => {
+				controller.abort()
+				return { exitCode: 0, stdout: '', stderr: '' }
+			},
+		})
+		expect(result.steps.map((step) => step.status)).toEqual(['succeeded', 'failed', 'skipped'])
+		expect(stepError(result, 'deploy-worker')).toBe('deploy cancelled')
 		expect(rec.outcomes).toHaveLength(0)
 	})
 
@@ -306,8 +296,9 @@ describe('Cloudflare provider', () => {
 			schema: { scopes: [], actions: [], roles: {} },
 			pipeline: { build: 'bun run build', secrets: ['API_KEY'] },
 		})
-		const session = await open(rec, app, { dryRun: true, secrets: { API_KEY: 'secret-value' } })
-		await executePlan(session)
+		const result = await deploy(rec, app, { dryRun: true, secrets: { API_KEY: 'secret-value' } })
+		expect(result.status).toBe('succeeded')
+		expect(rec.logs[0]).toBe('Deploy demo → stage (dry-run) — 5 step(s):')
 
 		expect(rec.provisions).toHaveLength(1)
 		expect(rec.provisions[0]?.dryRun).toBe(true)
@@ -318,29 +309,51 @@ describe('Cloudflare provider', () => {
 	})
 
 	test('fails closed when the loaded config belongs to another app', async () => {
-		await expect(open(rec, config({ id: 'other' }))).rejects.toThrow('declares app "other", expected "demo"')
+		await expect(deploy(rec, config({ id: 'other' }))).rejects.toThrow('declares app "other", expected "demo"')
 	})
 
 	test('honours an already-aborted run before the first mutation', async () => {
-		const session = await open(rec, config(), { signal: AbortSignal.abort() })
-		await expect(session.execute('provision-resources')).rejects.toThrow('deploy cancelled')
+		const result = await deploy(rec, config(), { signal: AbortSignal.abort() })
+		expect(result.status).toBe('failed')
+		expect(result.steps.map((step) => step.status)).toEqual(['skipped', 'skipped'])
+		expect(rec.logs).toContain('∅ provision-resources: deploy cancelled')
 		expect(rec.provisions).toHaveLength(0)
 	})
 
+	test('abandons a step that ignores the cancellation and starts no later step', async () => {
+		const controller = new AbortController()
+		const result = await deploy(rec, config({ pipeline: { build: 'bun run build', secrets: ['API_KEY'] } }), {
+			secrets: { API_KEY: 'secret-value' },
+			signal: controller.signal,
+			runCommand: () => {
+				controller.abort()
+				return new Promise<never>(() => {})
+			},
+		})
+		expect(result.steps.map((step) => step.status)).toEqual(['failed', 'skipped', 'skipped', 'skipped'])
+		expect(stepError(result, 'build')).toBe('deploy cancelled')
+		expect(rec.provisions).toHaveLength(0)
+		expect(rec.commands.map((command) => command.command)).toEqual(['sh'])
+	})
+
 	test('reports shell failures without leaking beyond the bounded command detail', async () => {
-		const session = await open(rec, config(), {
+		const result = await deploy(rec, config({ pipeline: { secrets: ['API_KEY'] } }), {
+			secrets: { API_KEY: 'secret-value' },
 			commandResult: (spec) =>
 				spec.command === 'wrangler'
 					? { exitCode: 1, stdout: '', stderr: 'deploy failed' }
 					: { exitCode: 0, stdout: '', stderr: '' },
 		})
-		await session.execute('provision-resources')
-		await expect(session.execute('deploy-worker')).rejects.toThrow('wrangler deploy failed (exit 1): deploy failed')
+		expect(result.status).toBe('failed')
+		expect(result.steps.map((step) => step.status)).toEqual(['succeeded', 'failed', 'skipped'])
+		expect(stepError(result, 'deploy-worker')).toBe('wrangler deploy failed (exit 1): deploy failed')
+		expect(rec.logs).toContain('  • deploy-worker — Deploy the Worker (`wrangler deploy`)')
+		expect(rec.logs).toContain('✗ deploy-worker: wrangler deploy failed (exit 1): deploy failed')
+		expect(rec.commands.map((command) => command.args[0])).toEqual(['deploy'])
 	})
 
 	test('runs the checkout build with no platform credential in its environment', async () => {
-		const session = await open(rec, config({ pipeline: { build: 'bun run build' } }))
-		await session.execute('build')
+		await deploy(rec, config({ pipeline: { build: 'bun run build' } }))
 
 		expect(rec.commands[0]?.omitEnv).toContain('CLOUDFLARE_API_TOKEN')
 		expect(rec.commands[0]?.omitEnv).toContain('CLOUDFLARE_ACCOUNT_ID')
@@ -364,7 +377,7 @@ describe('Cloudflare provider', () => {
 		const platformWorker = config({
 			resources: () => new Worker({ dir: '.', name: 'vozka', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
 		})
-		await expect(open(rec, platformWorker)).rejects.toThrow(
+		await expect(deploy(rec, platformWorker)).rejects.toThrow(
 			'Worker `vozka` becomes `stage-vozka` on Cloudflare, which would take over the Fabrika platform resource `vozka`',
 		)
 
@@ -378,7 +391,7 @@ describe('Cloudflare provider', () => {
 					main: 'src/index.ts',
 				}),
 		})
-		await expect(open(rec, platformBucket)).rejects.toThrow(
+		await expect(deploy(rec, platformBucket)).rejects.toThrow(
 			'R2 bucket `vozka-run-logs` becomes `stage-vozka-run-logs` on Cloudflare, which would take over the Fabrika platform resource `vozka-run-logs`',
 		)
 		expect(rec.provisions).toHaveLength(0)
@@ -388,8 +401,9 @@ describe('Cloudflare provider', () => {
 		const platformWorker = config({
 			resources: () => new Worker({ dir: '.', name: 'vozka', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
 		})
-		const session = await open(rec, platformWorker, { platformResources: 'allow' })
-		expect(session.plan.steps[0]?.id).toBe('provision-resources')
+		const result = await deploy(rec, platformWorker, { platformResources: 'allow' })
+		expect(result.steps[0]?.id).toBe('provision-resources')
+		expect(result.status).toBe('succeeded')
 	})
 
 	test('refuses a route on a host this environment does not own', async () => {
@@ -404,7 +418,7 @@ describe('Cloudflare provider', () => {
 					routes: [{ pattern: 'other-app.example.com/*', zone_name: 'example.com' }],
 				}),
 		})
-		await expect(open(rec, foreign)).rejects.toThrow("routes `other-app.example.com`, which is not this environment's domain")
+		await expect(deploy(rec, foreign)).rejects.toThrow("routes `other-app.example.com`, which is not this environment's domain")
 
 		const own = config({
 			resources: () =>
@@ -417,7 +431,7 @@ describe('Cloudflare provider', () => {
 					routes: [{ pattern: 'stage.example.com', custom_domain: true }],
 				}),
 		})
-		await expect(open(rec, own)).resolves.toBeDefined()
+		await expect(deploy(rec, own)).resolves.toMatchObject({ status: 'succeeded' })
 	})
 
 	test('refuses a service binding to a platform service, but not the IAM front door every app binds', async () => {
@@ -431,7 +445,7 @@ describe('Cloudflare provider', () => {
 					main: 'src/index.ts',
 				}),
 		})
-		await expect(open(rec, toRunner)).rejects.toThrow(
+		await expect(deploy(rec, toRunner)).rejects.toThrow(
 			'service binding to `vozka-runner` becomes `stage-vozka-runner` on Cloudflare, which would take over the Fabrika platform resource `vozka-runner`',
 		)
 
@@ -445,11 +459,11 @@ describe('Cloudflare provider', () => {
 					main: 'src/index.ts',
 				}),
 		})
-		await expect(open(rec, toIam)).resolves.toBeDefined()
+		await expect(deploy(rec, toIam)).resolves.toMatchObject({ status: 'succeeded' })
 	})
 
 	test("refuses a deploy whose oblaka state namespace is the platform's own", async () => {
-		await expect(open(rec, config(), { stateNamespace: 'propustka-state' })).rejects.toThrow(
+		await expect(deploy(rec, config(), { stateNamespace: 'propustka-state' })).rejects.toThrow(
 			'state namespace `propustka-state` is a Fabrika platform resource',
 		)
 		expect(rec.provisions).toHaveLength(0)
@@ -467,7 +481,7 @@ describe('Cloudflare provider', () => {
 					routes: [{ pattern: 'other-app.example.com/*', zone_name: 'example.com' }],
 				}),
 		})
-		await expect(open(rec, platformOffHost, { platformResources: 'allow' })).rejects.toThrow(
+		await expect(deploy(rec, platformOffHost, { platformResources: 'allow' })).rejects.toThrow(
 			"routes `other-app.example.com`, which is not this environment's domain",
 		)
 	})
@@ -483,7 +497,7 @@ describe('Cloudflare provider', () => {
 					main: 'src/index.ts',
 				}),
 		})
-		await expect(open(rec, smuggled)).rejects.toThrow('declares Worker `demo-sidecar`; only the application Worker and its proxy are deployable')
+		await expect(deploy(rec, smuggled)).rejects.toThrow('declares Worker `demo-sidecar`; only the application Worker and its proxy are deployable')
 	})
 
 	test('refuses every raw wrangler key that would bind a resource or run a command', async () => {
@@ -497,7 +511,7 @@ describe('Cloudflare provider', () => {
 		]
 		for (const [key, raw] of smuggled) {
 			const authored = config({ resources: () => withRawOptions(appWorker(), raw) })
-			await expect(open(rec, authored)).rejects.toThrow(`Worker \`demo\` sets \`${key}\`, which an app may not configure`)
+			await expect(deploy(rec, authored)).rejects.toThrow(`Worker \`demo\` sets \`${key}\`, which an app may not configure`)
 		}
 		expect(rec.provisions).toHaveLength(0)
 	})
@@ -505,13 +519,13 @@ describe('Cloudflare provider', () => {
 	test('bounds the raw keys of every Worker in the graph, the proxy included', async () => {
 		const app = withRawOptions(appWorker(), { services: [{ binding: 'CTRL', service: 'stage-vozka' }] })
 		const proxy = new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: app }, main: 'proxy-worker.ts' })
-		await expect(open(rec, config({ resources: () => proxy }))).rejects.toThrow('Worker `demo` sets `services`, which an app may not configure')
+		await expect(deploy(rec, config({ resources: () => proxy }))).rejects.toThrow('Worker `demo` sets `services`, which an app may not configure')
 
 		const rawProxy = withRawOptions(
 			new Worker({ dir: '/repo/proxy', name: 'demo-proxy', compatibility_flags: [], bindings: { APP: appWorker() }, main: 'proxy-worker.ts' }),
 			{ build: { command: 'cat /proc/self/environ' } },
 		)
-		await expect(open(rec, config({ resources: () => rawProxy }))).rejects.toThrow('Worker `demo-proxy` sets `build`, which an app may not configure')
+		await expect(deploy(rec, config({ resources: () => rawProxy }))).rejects.toThrow('Worker `demo-proxy` sets `build`, which an app may not configure')
 	})
 
 	test('keeps the Worker options an application config legitimately sets', async () => {
@@ -533,14 +547,14 @@ describe('Cloudflare provider', () => {
 					bindings: { DB: new D1Database({ name: 'notes' }) },
 				}),
 		})
-		await expect(open(rec, authored)).resolves.toBeDefined()
+		await expect(deploy(rec, authored)).resolves.toMatchObject({ status: 'succeeded' })
 	})
 
 	test('bounds the name oblaka adopts, so an env name cannot split the platform prefix', async () => {
 		const worker = config({
 			resources: () => new Worker({ dir: '.', name: 'worker', compatibility_flags: [], bindings: {}, main: 'src/index.ts' }),
 		})
-		await expect(open(rec, worker, { env: 'prod-propustka' })).rejects.toThrow(
+		await expect(deploy(rec, worker, { env: 'prod-propustka' })).rejects.toThrow(
 			'Worker `worker` becomes `prod-propustka-worker` on Cloudflare, which would take over the Fabrika platform resource `propustka-worker`',
 		)
 
@@ -551,8 +565,8 @@ describe('Cloudflare provider', () => {
 		]
 		for (const [env, described, bindings, platform] of split) {
 			const authored = config({ resources: () => new Worker({ dir: '.', name: 'demo', compatibility_flags: [], bindings, main: 'src/index.ts' }) })
-			await expect(open(rec, authored, { env })).rejects.toThrow(`${described} becomes \`${env}-`)
-			await expect(open(rec, authored, { env })).rejects.toThrow(`would take over the Fabrika platform resource \`${platform}\``)
+			await expect(deploy(rec, authored, { env })).rejects.toThrow(`${described} becomes \`${env}-`)
+			await expect(deploy(rec, authored, { env })).rejects.toThrow(`would take over the Fabrika platform resource \`${platform}\``)
 		}
 		expect(rec.provisions).toHaveLength(0)
 	})
@@ -560,26 +574,26 @@ describe('Cloudflare provider', () => {
 	test('serves an assets directory the app keeps inside its own worker directory', async () => {
 		for (const directory of ['public', 'dist/client', './public']) {
 			const authored = config({ resources: () => withRawOptions(appWorker(), { assets: { binding: 'ASSETS', directory } }) })
-			await expect(open(rec, authored)).resolves.toBeDefined()
+			await expect(deploy(rec, authored)).resolves.toMatchObject({ status: 'succeeded' })
 		}
 	})
 
 	test('refuses an assets directory that reaches outside the worker directory or into `.git`', async () => {
 		for (const directory of ['..', '../..', '/etc', '.', '', 'public/../..', '.git', 'dist/.git/x']) {
 			const authored = config({ resources: () => withRawOptions(appWorker(), { assets: { binding: 'ASSETS', directory } }) })
-			await expect(open(rec, authored)).rejects.toThrow(
+			await expect(deploy(rec, authored)).rejects.toThrow(
 				`Worker \`demo\` sets \`assets.directory\` to \`${directory}\`; it must be a relative path strictly inside the worker directory`,
 			)
 		}
-		await expect(open(rec, config({ resources: () => withRawOptions(appWorker(), { assets: { binding: 'ASSETS' } }) }))).rejects.toThrow(
+		await expect(deploy(rec, config({ resources: () => withRawOptions(appWorker(), { assets: { binding: 'ASSETS' } }) }))).rejects.toThrow(
 			'sets `assets.directory` to `(not a string)`',
 		)
 		for (const assets of ['public', ['public'], null]) {
 			const authored = config({ resources: () => withRawOptions(appWorker(), { assets }) })
-			await expect(open(rec, authored)).rejects.toThrow('Worker `demo` sets `assets` to something that is not an object')
+			await expect(deploy(rec, authored)).rejects.toThrow('Worker `demo` sets `assets` to something that is not an object')
 		}
 		const unknownKey = config({ resources: () => withRawOptions(appWorker(), { assets: { directory: 'public', bucket: '../..' } }) })
-		await expect(open(rec, unknownKey)).rejects.toThrow('Worker `demo` sets `assets.bucket`, which an app may not configure')
+		await expect(deploy(rec, unknownKey)).rejects.toThrow('Worker `demo` sets `assets.bucket`, which an app may not configure')
 		expect(rec.provisions).toHaveLength(0)
 	})
 
@@ -589,8 +603,7 @@ describe('Cloudflare provider', () => {
 			await writeFile(join(assets, 'index.html'), '<!doctype html>')
 			await writeFile(join(assets, 'nested', 'app.js'), 'export {}')
 		})
-		const session = await open(rec, assetsApp(), { checkoutDir })
-		await executePlan(session)
+		await deploy(rec, assetsApp(), { checkoutDir })
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([['wrangler', 'deploy']])
 	})
 
@@ -609,9 +622,8 @@ describe('Cloudflare provider', () => {
 		]
 		for (const [path, build] of cases) {
 			const checkoutDir = await assetsCheckout(build)
-			const session = await open(rec, assetsApp(), { checkoutDir })
-			await session.execute('provision-resources')
-			await expect(session.execute('deploy-worker')).rejects.toThrow(
+			const result = await deploy(rec, assetsApp(), { checkoutDir })
+			expect(stepError(result, 'deploy-worker')).toContain(
 				`Worker \`demo\` assets directory \`public\` contains \`${path}\`, which is a symbolic link; wrangler follows it and would publish its target`,
 			)
 		}
@@ -622,9 +634,8 @@ describe('Cloudflare provider', () => {
 		const checkoutDir = await mkdtemp(join(tmpdir(), 'fabrika-assets-'))
 		fixtures.push(checkoutDir)
 		await symlink('/etc', join(checkoutDir, 'public'))
-		const session = await open(rec, assetsApp(), { checkoutDir })
-		await session.execute('provision-resources')
-		await expect(session.execute('deploy-worker')).rejects.toThrow(
+		const result = await deploy(rec, assetsApp(), { checkoutDir })
+		expect(stepError(result, 'deploy-worker')).toContain(
 			'Worker `demo` assets directory `public` is a symbolic link; wrangler follows it and would publish its target',
 		)
 		expect(rec.commands).toHaveLength(0)
@@ -636,18 +647,14 @@ describe('Cloudflare provider', () => {
 			resources: () => withRawOptions(appWorker(), { assets: { binding: 'ASSETS', directory: 'public' } }),
 			pipeline: { build: 'ln -s /proc/self/environ public/x' },
 		})
-		const session = await open(rec, authored, {
+		const result = await deploy(rec, authored, {
 			checkoutDir,
 			commandResult: (spec) => {
 				if (spec.command === 'sh') symlinkSync('/proc/self/environ', join(checkoutDir, 'public', 'x'))
 				return { exitCode: 0, stdout: '', stderr: '' }
 			},
 		})
-		await session.execute('build')
-		await session.execute('provision-resources')
-		await expect(session.execute('deploy-worker')).rejects.toThrow(
-			'Worker `demo` assets directory `public` contains `x`, which is a symbolic link',
-		)
+		expect(stepError(result, 'deploy-worker')).toContain('Worker `demo` assets directory `public` contains `x`, which is a symbolic link')
 		expect(rec.commands.map((command) => command.command)).toEqual(['sh'])
 	})
 
@@ -655,8 +662,7 @@ describe('Cloudflare provider', () => {
 		const checkoutDir = await assetsCheckout(async (assets) => {
 			await symlink('../secret.txt', join(assets, 'leak.txt'))
 		})
-		const session = await open(rec, assetsApp(), { checkoutDir, platformResources: 'allow' })
-		await executePlan(session)
+		await deploy(rec, assetsApp(), { checkoutDir, platformResources: 'allow' })
 		expect(rec.commands.map((command) => [command.command, ...command.args])).toEqual([['wrangler', 'deploy']])
 	})
 
@@ -671,6 +677,6 @@ describe('Cloudflare provider', () => {
 					main: 'src/index.ts',
 				}),
 		})
-		await expect(open(rec, authored, { env: 'prod-eu', domain: 'notes.example.com' })).resolves.toBeDefined()
+		await expect(deploy(rec, authored, { env: 'prod-eu', domain: 'notes.example.com' })).resolves.toMatchObject({ status: 'succeeded' })
 	})
 })

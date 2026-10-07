@@ -141,7 +141,7 @@ export async function prepareRegistration(
 
 export function normalizeRegistration(provider: ControlProvider, app: ProviderApp, environment: ProviderEnvironment): ProviderRegistration {
 	try {
-		const registration = provider.normalizeRegistration({ app, environment })
+		const registration = provider.normalizeRegistration?.({ app, environment }) ?? { app, environment }
 		if (
 			registration.app.id !== app.id
 			|| registration.environment.appId !== app.id

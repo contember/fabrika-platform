@@ -1,9 +1,6 @@
-import { deploy } from '@fabrika/engine'
-import type { ProviderDeployResult, ProviderRunEvents, RuntimeProviderRun } from '@fabrika/provider-contract'
 import type { CloudflareAppConfig } from './authoring'
-import { cloudflareArtifact } from './codec'
-import { defaultCloudflareCollaborators, loadCloudflareConfig } from './collaborators'
-import { createCloudflareProvider } from './provider'
+import { loadCloudflareConfig } from './collaborators'
+import { type CloudflareDeployResult, createCloudflareDeployer } from './provider'
 
 const requiredEnvironmentValue = (name: string): string => {
 	const value = environmentValue(name)
@@ -67,38 +64,30 @@ export interface CloudflareCommandDeployOptions {
 	readonly log?: (line: string) => void
 }
 
-/** Build an opaque provider run from one config and execute it through the neutral engine. */
-export const deployCloudflareConfig = async (options: CloudflareCommandDeployOptions): Promise<ProviderDeployResult> => {
+/** Deploy one config with the account credentials, declared secrets and vars read from the environment. */
+export const deployCloudflareConfig = async (options: CloudflareCommandDeployOptions): Promise<CloudflareDeployResult> => {
 	const cwd = options.cwd ?? process.cwd()
 	const loaded = await loadCloudflareCommandConfig(options.configPath ?? './fabrika.config.ts', cwd)
-	const events: ProviderRunEvents = {
-		log: options.log ?? ((line) => console.log(line)),
-		externalId: async () => {},
-		checkpoint: async () => {},
-	}
-	const provider = createCloudflareProvider(defaultCloudflareCollaborators, {
+	const deploy = createCloudflareDeployer({
+		accountId: requiredEnvironmentValue('CLOUDFLARE_ACCOUNT_ID'),
+		apiToken: requiredEnvironmentValue('CLOUDFLARE_API_TOKEN'),
 		platformResources: options.platformResources ?? 'refuse',
 	})
 	const domain = environmentValue('FABRIKA_CONTROL_DOMAIN')
 	const returnOrigins = parseReturnOrigins(environmentValue('FABRIKA_IAM_RETURN_ORIGINS'))
-	const run: RuntimeProviderRun = {
+	return deploy({
 		appId: loaded.config.id,
 		env: options.env,
 		...(domain === undefined ? {} : { domain }),
 		...(returnOrigins === undefined ? {} : { returnOrigins }),
 		cwd: loaded.cwd,
+		configPath: loaded.absolutePath,
+		...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
 		secrets: declaredValues(loaded.config.pipeline?.secrets),
 		vars: declaredValues(loaded.config.pipeline?.vars),
 		managedEnvironment: requiredValues(options.managedVarNames),
 		dryRun: options.dryRun ?? false,
 		signal: options.signal ?? new AbortController().signal,
-		events,
-		target: provider.encodeTarget({
-			accountId: requiredEnvironmentValue('CLOUDFLARE_ACCOUNT_ID'),
-			apiToken: requiredEnvironmentValue('CLOUDFLARE_API_TOKEN'),
-			...(options.stateNamespace === undefined ? {} : { stateNamespace: options.stateNamespace }),
-		}),
-		artifact: provider.encodeArtifact(cloudflareArtifact(loaded.absolutePath)),
-	}
-	return deploy(provider.runtime, run)
+		log: options.log ?? ((line) => console.log(line)),
+	})
 }

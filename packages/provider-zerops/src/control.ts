@@ -1,6 +1,7 @@
 import type {
 	ControlProvider,
 	JsonValue,
+	ProviderApp,
 	ProviderCodec,
 	ProviderDeployInput,
 	ProviderDeploymentNamespace,
@@ -14,9 +15,6 @@ import type {
 	ProviderSourceBinding,
 	ProviderSourceResolution,
 	ProviderSourceResolutionInput,
-	ProviderTerminalOutcome,
-	RuntimeProvider,
-	RuntimeProviderRun,
 	SchemaReconciler,
 } from '@fabrika/provider-contract'
 import { decodeEnvelope, ProviderSecretError } from '@fabrika/provider-contract'
@@ -55,7 +53,7 @@ import {
 	type ZeropsNamespaceTarget,
 	zeropsNamespaceTargetCodec,
 } from './namespace'
-import { createZeropsProvider } from './provider'
+import { createZeropsDeployer } from './provider'
 import { allowedReferenceHosts, foreignReferenceHost, serviceReferenceHosts } from './service-references'
 import {
 	normalizeZeropsSourceRepository,
@@ -105,11 +103,6 @@ export interface ZeropsBeforeDeployInput {
 
 export type ZeropsBeforeDeploy = (input: ZeropsBeforeDeployInput) => Promise<void>
 
-export type ZeropsProviderExecutor = (
-	provider: RuntimeProvider,
-	run: RuntimeProviderRun,
-) => Promise<ProviderTerminalOutcome>
-
 export interface ZeropsControlProviderOptions {
 	readonly accessToken: string
 	readonly apiBaseUrl?: string
@@ -120,7 +113,6 @@ export interface ZeropsControlProviderOptions {
 	readonly reconcileSchema?: SchemaReconciler
 	readonly sleep?: Sleeper
 	readonly sourceCancelSleep?: Sleeper
-	readonly execute: ZeropsProviderExecutor
 	readonly beforeDeploy?: ZeropsBeforeDeploy
 	readonly namespaces?: {
 		readonly clientId: string
@@ -194,10 +186,14 @@ const resolvedEnvironment = (
 	}
 }
 
-const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegistration => {
-	if (input.app.id !== input.environment.appId) {
-		throw new Error(`Zerops environment belongs to app \`${input.environment.appId}\`, expected \`${input.app.id}\``)
+const assertEnvironmentOfApp = (app: ProviderApp, environment: ProviderEnvironment): void => {
+	if (app.id !== environment.appId) {
+		throw new Error(`Zerops environment belongs to app \`${environment.appId}\`, expected \`${app.id}\``)
 	}
+}
+
+const normalizeRegistration = (input: ProviderRegistrationInput): ProviderRegistration => {
+	assertEnvironmentOfApp(input.app, input.environment)
 	const decoded = decodeEnvironment(input.environment)
 	const artifact = decodeEnvelope('artifact', 'zerops', input.environment.artifact, zeropsArtifactCodec)
 	assertFabrikaManifestCoordinates(artifact.app, { appId: input.app.id, env: input.environment.env })
@@ -255,7 +251,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			return null
 		}
 	}
-	const runtimeProvider = createZeropsProvider((target) => {
+	const deployRun = createZeropsDeployer((target) => {
 		const defaults = defaultZeropsCollaborators(target)
 		return {
 			api,
@@ -423,13 +419,14 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 
 	const resolveSource = async (input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution> => {
 		const binding = privateBinding(input.sourceBinding)
-		const registration = normalizeRegistration({ app: input.app, environment: input.environment })
-		const artifact = decodeEnvelope('artifact', 'zerops', registration.environment.artifact, zeropsArtifactCodec)
+		assertEnvironmentOfApp(input.app, input.environment)
+		decodeEnvironment(input.environment)
+		const artifact = artifactFor(input.environment)
 		await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
 		const base = {
 			runId: input.runId,
-			repository: normalizeZeropsSourceRepository(registration.app.source.repoUrl),
-			requestedRef: registration.app.source.ref,
+			repository: normalizeZeropsSourceRepository(input.app.source.repoUrl),
+			requestedRef: input.app.source.ref,
 			...(input.expectedCommitSha === undefined ? {} : { expectedCommitSha: input.expectedCommitSha }),
 			descriptorSha256: artifact.target.sourceDescriptor.sha256,
 			signal: input.signal,
@@ -481,8 +478,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			})
 			const managedEnvironment = parseManagedValues(input.managedEnvironment)
 			const binding = privateBinding(input.sourceBinding)
-			const registration = normalizeRegistration({ app: input.app, environment: input.environment })
-			const placement = resolvedEnvironment(registration.environment, { requireReady: true })
+			assertEnvironmentOfApp(input.app, input.environment)
+			const placement = resolvedEnvironment(input.environment, { requireReady: true })
 			const proxyServiceId = placement.proxyServiceId
 			if (proxyServiceId === undefined) {
 				throw new Error(`Zerops deployment namespace \`${placement.namespace.id}\` has no proxy service id`)
@@ -492,7 +489,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				throw new Error(`Zerops deployment namespace \`${placement.namespace.id}\` is unpinned; explicit migration is required`)
 			}
 			await verifyZeropsNamespaceProxySource(proxySource)
-			const artifact = decodeEnvelope('artifact', 'zerops', registration.environment.artifact, zeropsArtifactCodec)
+			const artifact = artifactFor(input.environment)
 			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
 			let source: ZeropsRuntimeTarget['source']
 			if (!input.dryRun) {
@@ -508,7 +505,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			}
 			let managedAdmission: ZeropsRuntimeTarget['managedAdmission']
 			if (!input.dryRun) {
-				const owner = ownerFor(registration.environment, artifact, placement.target.serviceId)
+				const owner = ownerFor(input.environment, artifact, placement.target.serviceId)
 				const admitted = await admit(owner, input.signal, input.readRetainedCheckpoint)
 				managedAdmission = { owner, markerRecordId: admitted.markerRecordId }
 				input.signal.throwIfAborted()
@@ -522,7 +519,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 						proxyServiceId,
 						proxySource,
 					},
-					artifact,
+					// A clone: what the hook sees must not reach the import document or the artifact hash.
+					artifact: structuredClone(artifact),
 					api,
 					signal: input.signal,
 				})
@@ -538,15 +536,15 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				...(options.adminKey !== undefined ? { adminKey: options.adminKey } : {}),
 			}
 			const accepted: { id?: string; state?: JsonValue } = {}
-			const result = await options.execute(runtimeProvider.runtime, {
+			const result = await deployRun({
 				appId: input.app.id,
 				env: input.environment.env,
-				...(input.environment.domain !== undefined ? { domain: input.environment.domain } : {}),
 				...(input.returnOrigins === undefined ? {} : { returnOrigins: input.returnOrigins }),
-				cwd: input.app.source.workerDir ?? '.',
 				secrets: input.secrets,
 				vars: input.vars,
 				managedEnvironment,
+				target: runtimeTarget,
+				artifact,
 				dryRun: input.dryRun,
 				signal: input.signal,
 				events: {
@@ -561,11 +559,10 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 						accepted.state = state
 					},
 				},
-				target: runtimeProvider.encodeTarget(runtimeTarget),
-				artifact: registration.environment.artifact,
 			})
 			input.signal.throwIfAborted()
-			if (result.state === 'succeeded' || accepted.id === undefined) return result
+			if (result.status === 'succeeded') return { state: 'succeeded' }
+			if (accepted.id === undefined) return { state: 'failed' }
 			try {
 				const reconcile = controlProvider.reconcile
 				if (reconcile === undefined) return { state: 'running' }

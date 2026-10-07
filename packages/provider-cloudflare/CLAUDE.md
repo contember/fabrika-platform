@@ -2,8 +2,8 @@
 
 The Cloudflare provider bundle: app authoring (`defineApp`), the deploy plan and its executor, the
 control-side provider, and the proxy topology. Assumes the root CLAUDE.md. Implements the open
-contracts in `@fabrika/provider-contract`; the deploy executor that runs the plan is
-`@fabrika/engine`.
+contracts in `@fabrika/provider-contract`; `createCloudflareDeployer` runs the plan through the
+contract's `runSteps`.
 
 It re-exports `oblaka-iac` wholesale, so an app's `fabrika.config.ts` gets its resource types from
 this one import.
@@ -14,10 +14,10 @@ this one import.
   only transport types and endpoint constants; `@fabrika/runner-container` owns the Bun process and
   image; `@fabrika/runner-cloudflare` owns the executor Worker. Provider job semantics stay here.
 - **Installation credentials never enter a persisted envelope.** `CloudflareStoredTarget` holds
-  coordinates only; `CloudflareTarget` carries the ephemeral credentials for ONE run and is composed
-  at run time.
+  coordinates only; the account credentials go to `createCloudflareDeployer` when it is constructed,
+  and never into a `CloudflareDeployRun`.
 - **The container gets the Cloudflare account credential and NOTHING else.** `job.credentials` is
-  exactly `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`, `isCloudflareRunnerJob` refuses any other
+  exactly `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`, `cloudflareRunnerJobSchema` refuses any other
   key, and the checkout's own `pipeline.build` child runs with those names removed from its
   environment (`CommandSpec.omitEnv`). IAM's provisioning key never leaves the control plane.
 - **`reconcile-schema` REPORTS, it does not call IAM.** The step writes `RunnerOutcomeFile`
@@ -26,7 +26,7 @@ this one import.
   reported app to be the deploying app, bounds and parses the JSON with `parseAppSchema` — which
   applies IAM's own `isActionAllowed` rule to every role permission — and only then calls the
   `SchemaReconciler` with its own key and the projected return origins.
-- **`isCloudflareRunnerJob` validates VALUES.** UUID run id, `https:` repo URL, a ref with no leading
+- **`cloudflareRunnerJobSchema` validates VALUES.** UUID run id, `https:` repo URL, a ref with no leading
   `-` and no whitespace, `[a-z0-9-]` env, contained relative `workerDir`/`configPath`, literal
   `domain`. Every field becomes an argv element, a path or a hostname inside the container.
 - **The authored graph is bounded before any Cloudflare call** (`assertAuthoredGraph`): no
@@ -54,17 +54,17 @@ this one import.
   a directory, bounded at 50 000 entries. A missing directory is wrangler's own error and is left to it.
   `platformResources: 'allow'` skips the walk.
 - **That walk runs in the `deploy-worker` step, immediately before each `wrangler deploy` spawn** — NOT in
-  `open()`, which stays pure of it. The checkout's own `pipeline.build` runs between the two, so a build
+  the deployer's checks before the first step, which stay pure of it. The checkout's own `pipeline.build` runs between the two, so a build
   line `ln -s /proc/self/environ public/x` would defeat a check made any earlier. One check, at the only
   moment the tree wrangler reads is final; never add an early duplicate, which would imply a guarantee
-  `open()` cannot give.
+  those checks cannot give.
 - **Codecs validate on the way in.** A module default imported from a runner checkout is untrusted —
   narrow it with `isCloudflareAppConfig`, never assume the shape.
 - **This package is one of the four that relax two strict flags for oblaka** — see the root
   CLAUDE.md. Keep our own code strict; never work around oblaka with a cast.
 - **The plan is ordered step kinds**, not free-form work: `build` → `provision-resources` →
-  `migrate` → `deploy-worker` → `reconcile-schema` → `sync-secrets`. The engine executes steps by id
-  in the order supplied and never interprets a `ProviderJobSpec.kind`.
+  `migrate` → `deploy-worker` → `reconcile-schema` → `sync-secrets`. `runSteps` executes them in the
+  order supplied and never interprets a step's `kind`.
 - **The proxy topology is: public Worker owns the route, private application Worker is bound to it.**
   IAM remains a global service binding. See ADR-0022.
 - **Proxy invocation logs stay disabled.** The reserved handoff callback carries a one-time code in

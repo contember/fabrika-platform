@@ -78,5 +78,6 @@ bun test
   app-supplied path into a service's env — the manifest, `interpolateManifest`, and `secrets.put`
   (`src/control.ts`), which lands on the same resolver.
 - **Persisted target envelopes hold coordinates only.** Credentials are composed for a live run.
-- **The control provider requires an injected `execute` collaborator** (`@fabrika/engine` supplies
-  it). Never add a provider-local fallback lifecycle.
+- **The control provider's `deploy` decodes the artifact ONCE and runs `createZeropsDeployer` in-process**
+  on that typed value. `beforeDeploy` gets a `structuredClone`, so a hook cannot change what is imported
+  or hashed into the checkpoint.

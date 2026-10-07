@@ -14,7 +14,6 @@
 // the local stack read the same code and are not subject to the platform's reservation, so one name
 // works everywhere.
 
-import { deploy } from '@fabrika/engine'
 import type { JobQueue } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import {
@@ -171,10 +170,6 @@ export function zeropsControlProvider(
 		namespaces: {
 			...namespaces,
 			proxyManifest: async namespaceId => encodeProxyManifestJson(await compileNamespaceProxyManifest(repositories(env).registry, namespaceId)),
-		},
-		execute: async (provider, run) => {
-			const result = await deploy(provider, run)
-			return { state: result.status === 'succeeded' ? 'succeeded' : 'failed' }
 		},
 		beforeDeploy: async (input) => {
 			await syncZeropsProxy({

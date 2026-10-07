@@ -9,8 +9,8 @@ runner/control pair (`--runner-config` + `--worker-config`) or one component
 (`--component-config`); the two forms are mutually exclusive. Assumes the root
 CLAUDE.md.
 
-The public executable and command routing live in `@fabrika/cli`. The deploy
-engine lives in `@fabrika/engine`.
+The public executable and command routing live in `@fabrika/cli`. Each component
+deploys through `deployCloudflareConfig` from `@fabrika/provider-cloudflare`.
 
 ## Layout
 
@@ -52,7 +52,7 @@ engine lives in `@fabrika/engine`.
   IAM issuer. The Operations hostname exposes only ingest and source-map upload;
   control reaches catalog and operator surfaces through a private service
   binding.
-- **`@fabrika/engine` owns plan execution.** `platform init` triggers the scaffolded GitHub Actions
+- **`@fabrika/provider-cloudflare` owns plan execution.** `platform init` triggers the scaffolded GitHub Actions
   pipeline; it does not deploy from the laptop. `platform plan` and `platform deploy` execute the
   provider-owned runner and control configs and remain distinct from app deployment.
 - **Runner images are account-owned.** Every scaffolded workflow run builds the image from the exact

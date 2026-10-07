@@ -24,7 +24,7 @@ bun run bootstrap
   Any Worker on the account can bind `<env>-vozka-runner`, so "only the control plane holds the
   binding" authenticates nobody. An unset key denies every call; the refusal names nothing.
 - **The key stops at this Worker.** The relay strips `runnerKey` from the job it POSTs to the container,
-  which runs the checkout's own code as root; `isCloudflareRunnerJob` therefore treats it as OPTIONAL.
+  which runs the checkout's own code as root; `cloudflareRunnerJobSchema` therefore treats it as OPTIONAL.
 - **`RunnerContainer`'s `heartbeat` / `armBackstop` / `backstopCheck` are still UNAUTHENTICATED** — a
   cross-script `durable_objects` binding would reach them (A6.md §5.2, open). Verifying the RPC methods
   closes the service-binding half of A6-4, not that one; do not read the invariant above as "A6-4 closed".

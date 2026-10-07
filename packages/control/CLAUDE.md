@@ -36,7 +36,7 @@ Migration commands and the Postgres-backed test setup are in [`DATABASE.md`](./D
 | job consumer | `queue()` → `runControlJob`                    | `PostgresJobConsumer` → `runControlJob`                             |
 | cron         | `scheduled()` → `runMaintenance`               | `run.crontab` → `src/node/cron.ts` → `runMaintenance`               |
 | migrations   | `wrangler d1 migrations apply` (`migrations/`) | `run.initCommands` → `src/node/migrate.ts` (`migrations-postgres/`) |
-| provider     | `@fabrika/provider-cloudflare` + `RUNNER_SVC`  | `@fabrika/provider-zerops` + neutral engine                         |
+| provider     | `@fabrika/provider-cloudflare` + `RUNNER_SVC`  | `@fabrika/provider-zerops`, deploying in-process                    |
 
 The shared layer is `app.ts` · `consumer.ts` · `cron.ts` · `services.ts` and everything they reach.
 It imports only `@fabrika/provider-contract`. `src/index.ts` statically selects Cloudflare;
@@ -72,8 +72,8 @@ writes a `pending` run to the
 database then enqueues. ONE queue (`DEPLOY_QUEUE`) carries both kinds of work — deploy jobs and
 namespace provisioning jobs — as a discriminated union; a payload with no `kind` is a deploy job.
 The consumer resolves the statically selected `ControlProvider` and calls its
-capabilities. Cloudflare hands the provider-owned job to vozka-runner. Zerops executes its provider
-session in process. Core owns registry/run writes, locking, secret resolution, and generic envelopes.
+capabilities. Cloudflare hands the provider-owned job to vozka-runner. Zerops runs the
+whole deploy in process. Core owns registry/run writes, locking, secret resolution, and generic envelopes.
 
 Runtime surface: `src/env.ts` (ports + vars) · `src/platform-cf.ts` (the raw CF bindings + their
 adapters) · `src/services.ts` (how every dependency bag is built). Persistence capabilities live in
@@ -249,8 +249,6 @@ a glob trigger_ref falls back to the default branch for a no-ref manual deploy.
   answers with the row the DELETE returned, so the operator is told what is now unowned.
 - **Never log a secret/credential** (see root). The run row is written before the queue is touched (durable trigger).
 - **`fabrika.config.ts` is the source of truth** for fabrika's own resources; keep `oblaka.ts` a thin shim (see root).
-- **The Zerops executor is injected.** `createZeropsControlProvider` requires an `execute` collaborator.
-  `src/node/provider.ts` supplies `@fabrika/engine`; never add a provider-local fallback lifecycle.
 
 ## Patterns
 

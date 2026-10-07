@@ -31,7 +31,7 @@ const main = async (): Promise<void> => {
 	})
 	console.log(`\n${result.appId} → ${result.env}: ${result.status}`)
 	for (const step of result.steps) {
-		console.log(`  ${step.status.padEnd(10)} ${step.spec.id}${step.error === undefined ? '' : ` — ${step.error}`}`)
+		console.log(`  ${step.status.padEnd(10)} ${step.id}${step.error === undefined ? '' : ` — ${step.error}`}`)
 	}
 	if (result.status === 'failed') {
 		process.exit(1)
